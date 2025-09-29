@@ -1,0 +1,13 @@
+[package]
+name = "oxideui-timing"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Display link, timers, and frame pacing for OxideUI"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+oxideui-platform-api = { path = "../platform-api" }
+once_cell = "1.19"

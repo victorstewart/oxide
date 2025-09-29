@@ -1,0 +1,18 @@
+# General
+.DS_Store
+*.swp
+*.swo
+*.log
+
+# Rust/Cargo
+**/target/
+
+# Xcode
+**/DerivedData/
+**/*.xcuserdatad/
+**/*.xcworkspace/xcuserdata/
+**/*.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings
+**/*.xcodeproj/xcuserdata/
+
+# Node (if any tooling later)
+node_modules/

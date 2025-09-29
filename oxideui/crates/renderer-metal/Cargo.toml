@@ -1,0 +1,29 @@
+[package]
+name = "oxideui-renderer-metal"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Metal renderer implementation for OxideUI"
+
+[dependencies]
+oxideui-renderer-api = { path = "../renderer-api" }
+libc = "0.2"
+thiserror = "1.0"
+metal = "0.32"
+objc = "0.2"
+block = "0.1"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[build-dependencies]
+anyhow = "1.0"
+
+[features]
+ios-edr = []
+msaa-4x = []
+snapshot-tests = []
+
+[dev-dependencies]
+png = "0.17"

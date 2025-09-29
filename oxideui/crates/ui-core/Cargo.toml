@@ -1,0 +1,22 @@
+[package]
+name = "oxideui-ui-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "UI core (layout, drawlist, routing) for OxideUI"
+
+[dependencies]
+oxideui-platform-api = { path = "../platform-api" }
+oxideui-renderer-api = { path = "../renderer-api" }
+oxideui-utils = { path = "../utils" }
+oxideui-text = { path = "../text" }
+oxideui-timing = { path = "../timing" }
+oxideui-permissions = { path = "../permissions" }
+oxideui-telemetry = { path = "../telemetry" }
+once_cell = "1.18"
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+proptest = "1"

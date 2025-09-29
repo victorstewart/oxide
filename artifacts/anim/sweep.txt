@@ -1,0 +1,141 @@
+## RUN suite=anim component=spinner variant=default state=default time_ms=0 width=800 height=600 scale=2
+summary suite=anim component=spinner variant=default state=default time_ms=0 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=spinner variant=default state=default time_ms=0
+## RUN suite=anim component=spinner variant=default state=default time_ms=33 width=800 height=600 scale=2
+summary suite=anim component=spinner variant=default state=default time_ms=33 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=spinner variant=default state=default time_ms=33
+## RUN suite=anim component=spinner variant=default state=default time_ms=100 width=800 height=600 scale=2
+summary suite=anim component=spinner variant=default state=default time_ms=100 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=spinner variant=default state=default time_ms=100
+## RUN suite=anim component=spinner variant=default state=default time_ms=250 width=800 height=600 scale=2
+summary suite=anim component=spinner variant=default state=default time_ms=250 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=spinner variant=default state=default time_ms=250
+## RUN suite=anim component=spinner variant=default state=default time_ms=500 width=800 height=600 scale=2
+summary suite=anim component=spinner variant=default state=default time_ms=500 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=spinner variant=default state=default time_ms=500
+## RUN suite=anim component=spinner variant=default state=default time_ms=1000 width=800 height=600 scale=2
+summary suite=anim component=spinner variant=default state=default time_ms=1000 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=spinner variant=default state=default time_ms=1000
+## RUN suite=anim component=progressbar variant=determinate state=indeterminate time_ms=0 width=800 height=600 scale=2
+summary suite=anim component=progressbar variant=determinate state=indeterminate time_ms=0 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=progressbar variant=determinate state=indeterminate time_ms=0
+## RUN suite=anim component=progressbar variant=determinate state=indeterminate time_ms=33 width=800 height=600 scale=2
+summary suite=anim component=progressbar variant=determinate state=indeterminate time_ms=33 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=progressbar variant=determinate state=indeterminate time_ms=33
+## RUN suite=anim component=progressbar variant=determinate state=indeterminate time_ms=100 width=800 height=600 scale=2
+summary suite=anim component=progressbar variant=determinate state=indeterminate time_ms=100 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=progressbar variant=determinate state=indeterminate time_ms=100
+## RUN suite=anim component=progressbar variant=determinate state=indeterminate time_ms=250 width=800 height=600 scale=2
+summary suite=anim component=progressbar variant=determinate state=indeterminate time_ms=250 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=progressbar variant=determinate state=indeterminate time_ms=250
+## RUN suite=anim component=progressbar variant=determinate state=indeterminate time_ms=500 width=800 height=600 scale=2
+summary suite=anim component=progressbar variant=determinate state=indeterminate time_ms=500 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=progressbar variant=determinate state=indeterminate time_ms=500
+## RUN suite=anim component=progressbar variant=determinate state=indeterminate time_ms=1000 width=800 height=600 scale=2
+summary suite=anim component=progressbar variant=determinate state=indeterminate time_ms=1000 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=progressbar variant=determinate state=indeterminate time_ms=1000
+## RUN suite=anim component=animtimeline variant=default state=default time_ms=0 width=800 height=600 scale=2
+summary suite=anim component=animtimeline variant=default state=default time_ms=0 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=animtimeline variant=default state=default time_ms=0
+## RUN suite=anim component=animtimeline variant=default state=default time_ms=33 width=800 height=600 scale=2
+summary suite=anim component=animtimeline variant=default state=default time_ms=33 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=animtimeline variant=default state=default time_ms=33
+## RUN suite=anim component=animtimeline variant=default state=default time_ms=100 width=800 height=600 scale=2
+summary suite=anim component=animtimeline variant=default state=default time_ms=100 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=animtimeline variant=default state=default time_ms=100
+## RUN suite=anim component=animtimeline variant=default state=default time_ms=250 width=800 height=600 scale=2
+summary suite=anim component=animtimeline variant=default state=default time_ms=250 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=animtimeline variant=default state=default time_ms=250
+## RUN suite=anim component=animtimeline variant=default state=default time_ms=500 width=800 height=600 scale=2
+summary suite=anim component=animtimeline variant=default state=default time_ms=500 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=animtimeline variant=default state=default time_ms=500
+## RUN suite=anim component=animtimeline variant=default state=default time_ms=1000 width=800 height=600 scale=2
+summary suite=anim component=animtimeline variant=default state=default time_ms=1000 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=animtimeline variant=default state=default time_ms=1000
+## RUN suite=anim component=button_press variant=default state=default time_ms=0 width=800 height=600 scale=2
+summary suite=anim component=button_press variant=default state=default time_ms=0 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=button_press variant=default state=default time_ms=0
+## RUN suite=anim component=button_press variant=default state=default time_ms=100 width=800 height=600 scale=2
+summary suite=anim component=button_press variant=default state=default time_ms=100 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=button_press variant=default state=default time_ms=100
+## RUN suite=anim component=button_press variant=default state=default time_ms=250 width=800 height=600 scale=2
+summary suite=anim component=button_press variant=default state=default time_ms=250 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=button_press variant=default state=default time_ms=250
+## RUN suite=anim component=button_press variant=default state=default time_ms=500 width=800 height=600 scale=2
+summary suite=anim component=button_press variant=default state=default time_ms=500 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=button_press variant=default state=default time_ms=500
+## RUN suite=anim component=button_press variant=default state=default time_ms=1000 width=800 height=600 scale=2
+summary suite=anim component=button_press variant=default state=default time_ms=1000 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=button_press variant=default state=default time_ms=1000
+## RUN suite=anim component=toggle_anim variant=default state=to_on time_ms=0 width=800 height=600 scale=2
+summary suite=anim component=toggle_anim variant=default state=to_on time_ms=0 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=toggle_anim variant=default state=to_on time_ms=0
+## RUN suite=anim component=toggle_anim variant=default state=to_on time_ms=33 width=800 height=600 scale=2
+summary suite=anim component=toggle_anim variant=default state=to_on time_ms=33 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=toggle_anim variant=default state=to_on time_ms=33
+## RUN suite=anim component=toggle_anim variant=default state=to_on time_ms=100 width=800 height=600 scale=2
+summary suite=anim component=toggle_anim variant=default state=to_on time_ms=100 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=toggle_anim variant=default state=to_on time_ms=100
+## RUN suite=anim component=toggle_anim variant=default state=to_on time_ms=250 width=800 height=600 scale=2
+summary suite=anim component=toggle_anim variant=default state=to_on time_ms=250 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=toggle_anim variant=default state=to_on time_ms=250
+## RUN suite=anim component=toggle_anim variant=default state=to_on time_ms=500 width=800 height=600 scale=2
+summary suite=anim component=toggle_anim variant=default state=to_on time_ms=500 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=toggle_anim variant=default state=to_on time_ms=500
+## RUN suite=anim component=toggle_anim variant=default state=to_on time_ms=1000 width=800 height=600 scale=2
+summary suite=anim component=toggle_anim variant=default state=to_on time_ms=1000 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=toggle_anim variant=default state=to_on time_ms=1000
+## RUN suite=anim component=slider_move variant=default state=default time_ms=0 width=800 height=600 scale=2
+summary suite=anim component=slider_move variant=default state=default time_ms=0 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=slider_move variant=default state=default time_ms=0
+## RUN suite=anim component=slider_move variant=default state=default time_ms=33 width=800 height=600 scale=2
+summary suite=anim component=slider_move variant=default state=default time_ms=33 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=slider_move variant=default state=default time_ms=33
+## RUN suite=anim component=slider_move variant=default state=default time_ms=100 width=800 height=600 scale=2
+summary suite=anim component=slider_move variant=default state=default time_ms=100 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=slider_move variant=default state=default time_ms=100
+## RUN suite=anim component=slider_move variant=default state=default time_ms=250 width=800 height=600 scale=2
+summary suite=anim component=slider_move variant=default state=default time_ms=250 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=slider_move variant=default state=default time_ms=250
+## RUN suite=anim component=slider_move variant=default state=default time_ms=500 width=800 height=600 scale=2
+summary suite=anim component=slider_move variant=default state=default time_ms=500 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=slider_move variant=default state=default time_ms=500
+## RUN suite=anim component=slider_move variant=default state=default time_ms=1000 width=800 height=600 scale=2
+summary suite=anim component=slider_move variant=default state=default time_ms=1000 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=slider_move variant=default state=default time_ms=1000
+## RUN suite=anim component=collection_grid_scroll variant=default state=default time_ms=0 width=800 height=600 scale=2
+summary suite=anim component=collection_grid_scroll variant=default state=default time_ms=0 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=collection_grid_scroll variant=default state=default time_ms=0
+## RUN suite=anim component=collection_row_scroll variant=default state=default time_ms=0 width=800 height=600 scale=2
+summary suite=anim component=collection_row_scroll variant=default state=default time_ms=0 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=collection_row_scroll variant=default state=default time_ms=0
+## RUN suite=anim component=collection_grid_scroll variant=default state=default time_ms=33 width=800 height=600 scale=2
+summary suite=anim component=collection_grid_scroll variant=default state=default time_ms=33 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=collection_grid_scroll variant=default state=default time_ms=33
+## RUN suite=anim component=collection_row_scroll variant=default state=default time_ms=33 width=800 height=600 scale=2
+summary suite=anim component=collection_row_scroll variant=default state=default time_ms=33 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=collection_row_scroll variant=default state=default time_ms=33
+## RUN suite=anim component=collection_grid_scroll variant=default state=default time_ms=100 width=800 height=600 scale=2
+summary suite=anim component=collection_grid_scroll variant=default state=default time_ms=100 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=collection_grid_scroll variant=default state=default time_ms=100
+## RUN suite=anim component=collection_row_scroll variant=default state=default time_ms=100 width=800 height=600 scale=2
+summary suite=anim component=collection_row_scroll variant=default state=default time_ms=100 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=collection_row_scroll variant=default state=default time_ms=100
+## RUN suite=anim component=collection_grid_scroll variant=default state=default time_ms=250 width=800 height=600 scale=2
+summary suite=anim component=collection_grid_scroll variant=default state=default time_ms=250 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=collection_grid_scroll variant=default state=default time_ms=250
+## RUN suite=anim component=collection_row_scroll variant=default state=default time_ms=250 width=800 height=600 scale=2
+summary suite=anim component=collection_row_scroll variant=default state=default time_ms=250 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=collection_row_scroll variant=default state=default time_ms=250
+## RUN suite=anim component=collection_grid_scroll variant=default state=default time_ms=500 width=800 height=600 scale=2
+summary suite=anim component=collection_grid_scroll variant=default state=default time_ms=500 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=collection_grid_scroll variant=default state=default time_ms=500
+## RUN suite=anim component=collection_row_scroll variant=default state=default time_ms=500 width=800 height=600 scale=2
+summary suite=anim component=collection_row_scroll variant=default state=default time_ms=500 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=collection_row_scroll variant=default state=default time_ms=500
+## RUN suite=anim component=collection_grid_scroll variant=default state=default time_ms=1000 width=800 height=600 scale=2
+summary suite=anim component=collection_grid_scroll variant=default state=default time_ms=1000 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=collection_grid_scroll variant=default state=default time_ms=1000
+## RUN suite=anim component=collection_row_scroll variant=default state=default time_ms=1000 width=800 height=600 scale=2
+summary suite=anim component=collection_row_scroll variant=default state=default time_ms=1000 pixdiff=0 max_err=0 mse=0.000000
+## END suite=anim component=collection_row_scroll variant=default state=default time_ms=1000

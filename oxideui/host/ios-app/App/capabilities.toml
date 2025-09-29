@@ -1,0 +1,16 @@
+# capabilities.toml (example; adjust per app needs)
+[usage_strings]
+NSBluetoothAlwaysUsageDescription = "Connect to nearby accessories."
+NSBluetoothPeripheralUsageDescription = "Advertise to nearby accessories."
+NSLocationWhenInUseUsageDescription = "Show nearby devices."
+NSLocationAlwaysAndWhenInUseUsageDescription = "Enable geofenced features."
+
+[entitlements]
+push_notifications = false
+bluetooth_central = false
+bluetooth_peripheral = false
+background_fetch = false
+background_remote_notification = false
+background_processing = false
+location = "none"        # "none" | "when_in_use" | "always"
+

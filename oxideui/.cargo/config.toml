@@ -1,0 +1,6 @@
+[build]
+rustdocflags = ["-Dwarnings"]
+
+[term]
+verbose = false
+

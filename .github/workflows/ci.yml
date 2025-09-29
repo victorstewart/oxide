@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      update_golds:
+        description: 'Regenerate goldens (does not commit)'
+        required: false
+        default: 'false'
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: oxideui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            oxideui/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('oxideui/Cargo.lock') }}
+
+      - name: Download OFL Inter Regular
+        run: |
+          mkdir -p fonts
+          curl -L -o fonts/Inter-Regular.ttf https://github.com/rsms/inter/releases/download/v4.0/Inter-Regular.ttf || true
+
+      - name: Unit tests (ui-core, timing)
+        run: cargo test -p oxideui-ui-core -p oxideui-timing
+
+      - name: Perf sweep
+        run: |
+          just --justfile ../Justfile sweep
+          just --justfile ../Justfile aggregate
+
+      - name: Static goldens
+        env:
+          SNAPSHOT_FONT_PATH: ../fonts/Inter-Regular.ttf
+        run: just --justfile ../Justfile golden
+
+      - name: Anim frames
+        env:
+          SNAPSHOT_FONT_PATH: ../fonts/Inter-Regular.ttf
+        run: |
+          just --justfile ../Justfile anim
+          just --justfile ../Justfile aggregate-anim
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts
+          path: |
+            sweep.txt
+            ../sweep.csv
+            ../sweep.json
+            artifacts/static
+            artifacts/anim
+
+  update-goldens:
+    if: ${{ github.event.inputs.update_golds == 'true' }}
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: oxideui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Download OFL Inter Regular
+        run: |
+          mkdir -p fonts
+          curl -L -o fonts/Inter-Regular.ttf https://github.com/rsms/inter/releases/download/v4.0/Inter-Regular.ttf || true
+
+      - name: Regenerate goldens
+        env:
+          UPDATE_GOLDENS: 1
+          SNAPSHOT_FONT_PATH: ../fonts/Inter-Regular.ttf
+        run: |
+          just --justfile ../Justfile golden
+          just --justfile ../Justfile anim
+
+      - name: Upload updated goldens
+        uses: actions/upload-artifact@v4
+        with:
+          name: updated-goldens
+          path: |
+            goldens/static
+            goldens/anim

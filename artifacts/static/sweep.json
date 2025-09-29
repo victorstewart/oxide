@@ -1,0 +1,114 @@
+[
+  {
+    "component": "progressbar",
+    "variant": "determinate",
+    "state": "default",
+    "pixdiff": 0,
+    "max_err": 0,
+    "mse": 0.0
+  },
+  {
+    "component": "progressbar",
+    "variant": "determinate",
+    "state": "indeterminate",
+    "pixdiff": 0,
+    "max_err": 0,
+    "mse": 0.0
+  },
+  {
+    "component": "spinner",
+    "variant": "default",
+    "state": "default",
+    "pixdiff": 0,
+    "max_err": 0,
+    "mse": 0.0
+  },
+  {
+    "component": "imageview",
+    "variant": "contain",
+    "state": "default",
+    "pixdiff": 0,
+    "max_err": 0,
+    "mse": 0.0
+  },
+  {
+    "component": "button",
+    "variant": "default",
+    "state": "default",
+    "pixdiff": 0,
+    "max_err": 0,
+    "mse": 0.0
+  },
+  {
+    "component": "button",
+    "variant": "default",
+    "state": "pressed",
+    "pixdiff": 0,
+    "max_err": 0,
+    "mse": 0.0
+  },
+  {
+    "component": "button",
+    "variant": "default",
+    "state": "disabled",
+    "pixdiff": 0,
+    "max_err": 0,
+    "mse": 0.0
+  },
+  {
+    "component": "toggle",
+    "variant": "default",
+    "state": "default",
+    "pixdiff": 0,
+    "max_err": 0,
+    "mse": 0.0
+  },
+  {
+    "component": "toggle",
+    "variant": "default",
+    "state": "on",
+    "pixdiff": 0,
+    "max_err": 0,
+    "mse": 0.0
+  },
+  {
+    "component": "slider",
+    "variant": "default",
+    "state": "default",
+    "pixdiff": 0,
+    "max_err": 0,
+    "mse": 0.0
+  },
+  {
+    "component": "slider",
+    "variant": "default",
+    "state": "low",
+    "pixdiff": 0,
+    "max_err": 0,
+    "mse": 0.0
+  },
+  {
+    "component": "slider",
+    "variant": "default",
+    "state": "high",
+    "pixdiff": 0,
+    "max_err": 0,
+    "mse": 0.0
+  },
+  {
+    "component": "collection_grid",
+    "variant": "default",
+    "state": "default",
+    "pixdiff": 0,
+    "max_err": 0,
+    "mse": 0.0
+  },
+  {
+    "component": "collection_row",
+    "variant": "default",
+    "state": "default",
+    "pixdiff": 0,
+    "max_err": 0,
+    "mse": 0.0
+  }
+]

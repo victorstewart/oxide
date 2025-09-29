@@ -1,0 +1,14 @@
+{
+  "frames": 47,
+  "failures": 0,
+  "by_component": {
+    "toggle_anim": 6,
+    "animtimeline": 6,
+    "slider_move": 6,
+    "collection_grid_scroll": 6,
+    "button_press": 5,
+    "collection_row_scroll": 6,
+    "progressbar": 6,
+    "spinner": 6
+  }
+}

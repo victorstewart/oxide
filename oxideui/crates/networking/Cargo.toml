@@ -1,0 +1,9 @@
+[package]
+name = "oxideui-networking"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+oxideui-platform-api = { path = "../platform-api" }
+parking_lot = "0.12"

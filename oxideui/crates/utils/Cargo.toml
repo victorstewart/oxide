@@ -1,0 +1,15 @@
+[package]
+name = "oxideui-utils"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Utilities and helpers for OxideUI"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+oxideui-renderer-api = { path = "../renderer-api" }
+
+[dev-dependencies]
+proptest = "1.4"

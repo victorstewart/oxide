@@ -1,0 +1,31 @@
+[package]
+name = "oxideui-host-ios"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Staticlib host bridge for iOS app"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["staticlib", "rlib"]
+
+[build-dependencies]
+cc = "1.0"
+
+[dependencies]
+oxideui-platform-ios = { path = "../../../crates/platform-ios", features = ["tokio-runtime"] }
+oxideui-renderer-metal = { path = "../../../crates/renderer-metal" }
+oxideui-renderer-api = { path = "../../../crates/renderer-api" }
+oxideui-ui-core = { path = "../../../crates/ui-core" }
+oxideui-test-scenes = { path = "../../../crates/test-scenes" }
+oxideui-timing = { path = "../../../crates/timing" }
+oxideui-text = { path = "../../../crates/text" }
+oxideui-permissions = { path = "../../../crates/permissions" }
+oxideui-platform-api = { path = "../../../crates/platform-api" }
+oxideui-networking = { path = "../../../crates/networking" }
+oxideui-telemetry = { path = "../../../crates/telemetry" }
+png = "0.17"
+libc = "0.2"
+[features]
+ios-edr = []
+tokio-runtime = []

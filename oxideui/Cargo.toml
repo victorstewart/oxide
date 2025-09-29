@@ -1,0 +1,47 @@
+[workspace]
+members = [
+    "crates/platform-api",
+    "crates/renderer-api",
+    "crates/ui-core",
+    "crates/platform-ios",
+    "crates/networking",
+    "crates/telemetry",
+    "crates/permissions",
+    "crates/renderer-metal",
+    "crates/text",
+    "crates/input",
+    "crates/timing",
+    "crates/utils",
+    "host/ios-app/oxideui-host-ios",
+    "host/macos-app/oxideui-host-macos",
+    "host/macos-app/app-runner",
+    "crates/perf-runner",
+    "crates/snapshot-runner",
+    "crates/harness-registry",
+    "xtask", "crates/test-scenes",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[workspace.metadata.oxideui]
+rust_version = "1.80"
+os_targets = ["aarch64-apple-ios", "aarch64-apple-ios-sim", "x86_64-apple-ios"]
+
+[profile.dev]
+debug-assertions = true
+overflow-checks = true
+panic = "unwind"
+lto = false
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+codegen-units = 1
+lto = "thin"
+
+# Host staticlib prefers code-size in release
+[profile.release.package."oxideui-host-ios"]
+opt-level = "z"

@@ -1,0 +1,12 @@
+[package]
+name = "oxideui-perf-runner"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+oxideui-renderer-metal = { path = "../renderer-metal" }
+oxideui-renderer-api = { path = "../renderer-api" }
+oxideui-ui-core = { path = "../ui-core" }
+oxideui-text = { path = "../text" }
+oxideui-timing = { path = "../timing" }
+

@@ -1,0 +1,10 @@
+[package]
+name = "oxideui-renderer-api"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Renderer traits and types for OxideUI"
+
+[lib]
+path = "src/lib.rs"
+

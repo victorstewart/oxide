@@ -1,0 +1,15 @@
+component,variant,state,pixdiff,max_err,mse
+progressbar,determinate,default,0,0,0
+progressbar,determinate,indeterminate,0,0,0
+spinner,default,default,0,0,0
+imageview,contain,default,0,0,0
+button,default,default,0,0,0
+button,default,pressed,0,0,0
+button,default,disabled,0,0,0
+toggle,default,default,0,0,0
+toggle,default,on,0,0,0
+slider,default,default,0,0,0
+slider,default,low,0,0,0
+slider,default,high,0,0,0
+collection_grid,default,default,0,0,0
+collection_row,default,default,0,0,0

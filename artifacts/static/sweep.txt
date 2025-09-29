@@ -1,0 +1,69 @@
+## RUN suite=static component=progressbar variant=determinate state=default width=800 height=600 scale=2
+summary suite=static component=progressbar variant=determinate state=default pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=progressbar variant=determinate state=default
+## RUN suite=static component=progressbar variant=determinate state=indeterminate width=800 height=600 scale=2
+summary suite=static component=progressbar variant=determinate state=indeterminate pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=progressbar variant=determinate state=indeterminate
+## RUN suite=static component=spinner variant=default state=default width=800 height=600 scale=2
+summary suite=static component=spinner variant=default state=default pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=spinner variant=default state=default
+## RUN suite=static component=imageview variant=contain state=default width=800 height=600 scale=2
+summary suite=static component=imageview variant=contain state=default pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=imageview variant=contain state=default
+## RUN suite=static component=imageview_zoom variant=default state=default width=800 height=600 scale=2
+summary suite=static component=imageview_zoom variant=default state=default pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=imageview_zoom variant=default state=default
+## RUN suite=static component=nine_slice variant=default state=default width=800 height=600 scale=2
+summary suite=static component=nine_slice variant=default state=default pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=nine_slice variant=default state=default
+## RUN suite=static component=scene_controls variant=default state=default width=800 height=600 scale=2
+summary suite=static component=scene_controls variant=default state=default pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=scene_controls variant=default state=default
+## RUN suite=static component=scene_text variant=default state=default width=800 height=600 scale=2
+summary suite=static component=scene_text variant=default state=default pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=scene_text variant=default state=default
+## RUN suite=static component=scene_zoom variant=default state=default width=800 height=600 scale=2
+summary suite=static component=scene_zoom variant=default state=default pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=scene_zoom variant=default state=default
+## RUN suite=static component=scene_collection variant=default state=default width=800 height=600 scale=2
+summary suite=static component=scene_collection variant=default state=default pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=scene_collection variant=default state=default
+## RUN suite=static component=text_unicode variant=default state=default width=800 height=600 scale=2
+summary suite=static component=text_unicode variant=default state=default pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=text_unicode variant=default state=default
+## RUN suite=static component=style_effects variant=default state=default width=800 height=600 scale=2
+summary suite=static component=style_effects variant=default state=default pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=style_effects variant=default state=default
+## RUN suite=static component=layer_composite variant=default state=default width=800 height=600 scale=2
+summary suite=static component=layer_composite variant=default state=default pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=layer_composite variant=default state=default
+## RUN suite=static component=button variant=default state=default width=800 height=600 scale=2
+summary suite=static component=button variant=default state=default pixdiff=45 max_err=131 mse=0.483797
+## END suite=static component=button variant=default state=default
+## RUN suite=static component=button variant=default state=pressed width=800 height=600 scale=2
+summary suite=static component=button variant=default state=pressed pixdiff=45 max_err=137 mse=0.545953
+## END suite=static component=button variant=default state=pressed
+## RUN suite=static component=button variant=default state=disabled width=800 height=600 scale=2
+summary suite=static component=button variant=default state=disabled pixdiff=45 max_err=37 mse=0.066680
+## END suite=static component=button variant=default state=disabled
+## RUN suite=static component=toggle variant=default state=default width=800 height=600 scale=2
+summary suite=static component=toggle variant=default state=default pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=toggle variant=default state=default
+## RUN suite=static component=toggle variant=default state=on width=800 height=600 scale=2
+summary suite=static component=toggle variant=default state=on pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=toggle variant=default state=on
+## RUN suite=static component=slider variant=default state=default width=800 height=600 scale=2
+summary suite=static component=slider variant=default state=default pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=slider variant=default state=default
+## RUN suite=static component=slider variant=default state=low width=800 height=600 scale=2
+summary suite=static component=slider variant=default state=low pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=slider variant=default state=low
+## RUN suite=static component=slider variant=default state=high width=800 height=600 scale=2
+summary suite=static component=slider variant=default state=high pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=slider variant=default state=high
+## RUN suite=static component=collection_grid variant=default state=default width=800 height=600 scale=2
+summary suite=static component=collection_grid variant=default state=default pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=collection_grid variant=default state=default
+## RUN suite=static component=collection_row variant=default state=default width=800 height=600 scale=2
+summary suite=static component=collection_row variant=default state=default pixdiff=0 max_err=0 mse=0.000000
+## END suite=static component=collection_row variant=default state=default

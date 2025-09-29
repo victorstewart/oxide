@@ -1,0 +1,24 @@
+[package]
+name = "oxideui-host-macos"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Staticlib host bridge for macOS AppKit app"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["staticlib", "rlib"]
+
+[build-dependencies]
+cc = "1.0"
+
+[dependencies]
+libc = "0.2"
+oxideui-renderer-metal = { path = "../../../crates/renderer-metal" }
+oxideui-renderer-api = { path = "../../../crates/renderer-api" }
+oxideui-ui-core = { path = "../../../crates/ui-core" }
+oxideui-test-scenes = { path = "../../../crates/test-scenes" }
+oxideui-timing = { path = "../../../crates/timing" }
+oxideui-text = { path = "../../../crates/text" }
+oxideui-telemetry = { path = "../../../crates/telemetry" }
+png = "0.17"

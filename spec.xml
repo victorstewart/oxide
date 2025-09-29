@@ -1,0 +1,1266 @@
+<!-- 
+
+A) will Tokio be able to compile and run on iOS though?
+B) are you sure we need CoreVideo?
+C) 
+
+Q)
+R)
+S)
+T)
+U)
+V)
+
+-->
+<?xml version="1.0" encoding="UTF-8"?>
+<spec app="OxideUI" version="1.2">
+  <section number="0" title="Scope and assumptions">
+    <item>Goal: Rust-first iOS UI runtime with a Metal renderer and a thin UIKit shell. Zero Swift. Android deferred but anticipated by all abstractions.</item>
+    <item>Minimum iOS: 25.0. Targets: aarch64-apple-ios (device), aarch64-apple-ios-sim and x86_64-apple-ios (sim).</item>
+    <item>UIKit is used only for lifecycle, surface hosting, input/IME. All layout, state, and rendering live in Rust.</item>
+    <item>Mandatory: multithreaded command encoding, triple buffering, high‑refresh on ProMotion, full IME composition.</item>
+    <item>Security: no private APIs, no background clipboard reads, no network IO in the runtime.</item>
+    <outOfScope>Navigation, styling system, advanced widget sets beyond the base controls below, persistence, networking.</outOfScope>
+  </section>
+
+  <section number="1" title="Workspace layout and reproducible build">
+    <workspaceRoot>oxideui/</workspaceRoot>
+    <layout>
+      <dir>oxideui/Cargo.toml (workspace)</dir>
+      <dir>oxideui/crates/ui-core/</dir>
+      <dir>oxideui/crates/platform-api/</dir>
+      <dir>oxideui/crates/platform-ios/</dir>
+      <dir>oxideui/crates/renderer-api/</dir>
+      <dir>oxideui/crates/renderer-metal/</dir>
+      <dir>oxideui/crates/text/</dir>
+      <dir>oxideui/crates/input/</dir>
+      <dir>oxideui/crates/timing/</dir>
+      <dir>oxideui/crates/utils/</dir>
+      <dir>oxideui/host/ios-app/</dir>
+      <dir>oxideui/crates/platform-android/ (stub)</dir>
+      <dir>oxideui/crates/renderer-vulkan/ (stub)</dir>
+      <dir>oxideui/host/android-app/ (stub)</dir>
+    </layout>
+    <cargo>
+      <rustVersion>1.80+ stable</rustVersion>
+      <profiles>
+        <profile name="dev">debug-assertions on, overflow-checks on, panic=unwind, lto=off</profile>
+        <profile name="release">panic=abort, opt-level=3 (renderer), opt-level=z (host), codegen-units=1, lto=thin</profile>
+      </profiles>
+      <features>
+        <feature name="ios-edr" default="off">EDR/HDR path with RGBA16F targets and Display‑P3.</feature>
+        <feature name="ios-coretext-fallback" default="off">System font fallback via CoreText.</feature>
+        <feature name="msaa-4x" default="off">Enable 4x MSAA and resolve step.</feature>
+        <feature name="trace" default="on">Tracing/log instrumentation.</feature>
+        <feature name="snapshot-tests" default="off">Enable GPU readbacks in tests.</feature>
+        <feature name="tokio-runtime" default="off">Enable Tokio runtime integration for background tasks.</feature>
+        <feature name="android" default="off">Reserved. No implementation in this release.</feature>
+      </features>
+      <crateTypes>
+        <crate name="platform-ios">rlib</crate>
+        <crate name="renderer-metal">rlib</crate>
+        <crate name="oxideui-host-ios">staticlib</crate>
+      </crateTypes>
+    </cargo>
+    <dependencies>
+      <crate>objc2, icrate (UIKit, QuartzCore, Metal, Foundation, AVFoundation, CoreVideo, CoreMedia, CoreLocation, UserNotifications, Contacts, CoreBluetooth, BackgroundTasks, CoreMotion)</crate>
+      <crate>tokio (optional, feature="tokio-runtime", with rt-multi-thread,time,macros)</crate>
+      <crate>block2, dispatch</crate>
+      <crate>rustybuzz, swash, ttf-parser</crate>
+      <crate>bytemuck, smallvec, bitflags, thiserror</crate>
+      <crate>parking_lot, thingbuf</crate>
+      <crate>tracing or log (choose one; wire to env filter)</crate>
+    </dependencies>
+    <hostProject>
+      <file>oxideui/host/ios-app/App/OxideHost.xcodeproj</file>
+      <file>oxideui/host/ios-app/App/Info.plist</file>
+      <file>oxideui/host/ios-app/App/Assets.xcassets</file>
+      <file>oxideui/host/ios-app/App/main.m</file>
+      <file>oxideui/host/ios-app/App/App.entitlements</file>
+      <linker>
+        <flag>-ObjC</flag>
+        <setting>Embed Swift Standard Libraries = NO</setting>
+      </linker>
+      <framework>AVFoundation</framework>
+      <framework>CoreVideo</framework>
+      <framework>CoreMedia</framework>
+      <framework>CoreLocation</framework>
+      <framework>UserNotifications</framework>
+      <framework>Contacts</framework>
+      <framework>CoreBluetooth</framework>
+      <framework>CoreMotion</framework>
+      <framework>BackgroundTasks</framework>
+      <signing>Automatic signing; capabilities are opt‑in via a generated App.entitlements.</signing>
+      <entitlements>
+        <key>aps-environment</key><string>development</string>
+        <key>com.apple.developer.background-modes</key>
+        <array>
+          <string>remote-notification</string>
+          <string>fetch</string>
+          <string>processing</string>
+          <string>bluetooth-central</string>
+          <string>bluetooth-peripheral</string>
+        </array>
+      </entitlements>
+    </hostProject>
+    <reproducibility>
+      <item>Pin Rust crates via Cargo.lock committed.</item>
+      <item>Pin Xcode toolchain version in CI and export MTLArchive schema version in build logs.</item>
+    </reproducibility>
+  </section>
+
+  <section number="2" title="Public API surface (stable)">
+    <traits>
+      <code language="rust"><![CDATA[
+pub trait App
+{
+   fn init(&mut self, ctx: &mut InitContext);
+   fn event(&mut self, e: AppEvent, ctx: &mut UpdateContext);
+   fn draw(&mut self, r: &mut RenderContext);
+}
+      ]]></code>
+      <code language="rust"><![CDATA[
+pub trait Platform
+{
+   fn run<T: App + 'static>(&self, app: T) -> !;
+   fn request_redraw(&self) -> ();
+   fn set_high_refresh(&self, enable: bool) -> ();
+   fn set_idle_timer_disabled(&self, disabled: bool) -> ();
+   fn clipboard_get(&self) -> Option<String>;
+   fn clipboard_set(&self, s: &str) -> ();
+   fn ime_show(&self) -> ();
+   fn ime_hide(&self) -> ();
+   fn permissions(&self) -> &dyn Permissions;
+   fn camera(&self) -> &dyn CameraManager;
+   fn bluetooth(&self) -> &dyn Bluetooth;
+   fn push(&self) -> &dyn PushManager;
+   fn capabilities(&self) -> Capabilities;
+}
+      ]]></code>
+      <code language="rust"><![CDATA[
+pub trait Renderer
+{
+   fn device_caps(&self) -> DeviceCaps;
+   fn begin_frame(&mut self, fb: &FrameTarget) -> FrameToken;
+   fn encode_pass(&mut self, list: &DrawList) -> ();
+   fn submit(&mut self, token: FrameToken) -> ();
+   fn resize(&mut self, w: u32, h: u32, scale: f32) -> ();
+}
+      ]]></code>
+      <code language="rust"><![CDATA[
+pub fn run_app<T: App + 'static>(target: MobileTarget, app: T) -> !
+{
+   // dispatch to platform-specific runner
+}
+      ]]></code>
+    </traits>
+    <types>
+      <code language="rust"><![CDATA[
+pub enum MobileTarget { Ios, Android /* future */ }
+
+pub struct InitContext
+{
+   pub fonts: FontLoader,
+   pub device: DeviceCaps,
+   pub platform: Box<dyn Platform>,
+}
+
+pub struct UpdateContext
+{
+   pub post_task: Box<dyn Fn(Box<dyn FnOnce() + Send>) + Send + Sync>,
+   pub timers: Timers,
+   pub haptics: Box<dyn Haptics>,
+}
+impl UpdateContext
+{
+   #[cfg(feature = "tokio-runtime")]
+   pub fn spawn<F>(&self, fut: F) -> ()
+   where F: core::future::Future<Output = ()> + Send + 'static
+   {
+      /* engine-provided */
+   }
+}
+pub enum HapticPattern
+{
+   ImpactLight, ImpactMedium, ImpactHeavy,
+   Selection,
+   NotificationSuccess, NotificationWarning, NotificationError
+}
+
+pub trait Haptics
+{
+   fn play(&self, p: HapticPattern) -> ();
+}
+pub struct RenderContext
+{
+   pub frame_id: u64,
+   pub encoder: Box<dyn RenderEncoder>,
+}
+
+pub struct DeviceCaps
+{
+   pub max_framerate_hz: u32,
+   pub supports_edr: bool,
+   pub supports_msaa4x: bool,
+   pub native_scale: f32,
+   pub color_space: ColorSpace, // see ColorSpace
+   pub a11y_reduce_motion: bool,
+}
+pub enum ColorSpace
+{
+   Srgb,
+   DisplayP3Linear,
+   ScRGBLinear,
+   Bt2020PQ
+}
+pub enum AppEvent
+{
+   Lifecycle(Lifecycle),
+   Window(WindowEvent),
+   Input(InputEvent),
+   Text(TextEvent),
+}
+bitflags::bitflags!
+{
+   pub struct Capabilities: u64
+   {
+      const CAMERA          = 1 << 0;
+      const BLUETOOTH       = 1 << 1;
+      const PUSH            = 1 << 2;
+      const HOVER_POINTER   = 1 << 3;
+      const MOTION          = 1 << 4;
+   }
+}
+pub enum Lifecycle { WillEnterForeground, DidEnterBackground, WillTerminate }
+
+pub enum WindowEvent
+{
+   Resized { w: u32, h: u32, scale: f32, safe: Insets },
+   OrientationChanged { portrait: bool }
+}
+
+pub enum InputEvent
+{
+   Touch(TouchEvent),
+   Pointer(PointerEvent),
+   Key(KeyEvent),
+}
+
+pub enum TextEvent
+{
+   Commit { text: String },
+   Composition { range: std::ops::Range<u32>, text: String },
+   SelectionChanged { range: std::ops::Range<u32> },
+   IMEShown(Rect), IMEHidden,
+}
+      ]]></code>
+      <code language="rust"><![CDATA[
+/* Common renderer/platform types (renderer-api / platform-api) */
+pub struct FrameTarget { /* opaque */ }
+pub struct FrameToken(pub u64);
+
+#[repr(C)]
+pub struct Vertex
+{
+   pub x:f32, pub y:f32, pub u:f32, pub v:f32, pub rgba: u32
+}
+
+pub struct VertexSpan { pub offset: u32, pub len: u32 }
+pub struct IndexSpan  { pub offset: u32, pub len: u32 }
+
+#[repr(transparent)]
+pub struct ImageHandle(pub u32);
+
+pub struct GlyphRun { pub opaque: u64 }
+
+pub struct Insets { pub left:f32, pub top:f32, pub right:f32, pub bottom:f32 }
+pub struct RectF  { pub x:f32, pub y:f32, pub w:f32, pub h:f32 }
+pub struct RectI  { pub x:i32, pub y:i32, pub w:i32, pub h:i32 }
+
+pub struct Color { pub r:f32, pub g:f32, pub b:f32, pub a:f32 }
+      ]]></code>
+    </types>
+    <code language="rust"><![CDATA[
+pub enum PermissionDomain { Notifications, Location, Camera, Contacts, Bluetooth, Motion }
+pub enum PermissionStatus { NotDetermined, Denied, Limited, Authorized }
+pub trait Permissions
+{
+   fn request(&self, domain: PermissionDomain) -> ();
+   fn status(&self, domain: PermissionDomain) -> PermissionStatus;
+   fn subscribe<F: Fn(PermissionDomain, PermissionStatus) + Send + 'static>(&self, f: F) -> ();
+}
+pub type PeripheralId = u128;
+
+#[derive(Clone, Copy)]
+pub struct BleUuid(pub [u8; 16]);
+
+pub struct PeripheralInfo
+{
+   pub id: PeripheralId, pub name: Option<String>, pub rssi_dbm: i16
+}
+
+pub struct GattChar
+{
+   pub service: BleUuid, pub characteristic: BleUuid
+}
+
+pub enum BluetoothEvent
+{
+   StateChanged { powered_on: bool },
+   Discovered(PeripheralInfo),
+   Connected(PeripheralId),
+   Disconnected(PeripheralId),
+   Notified { id: PeripheralId, chr: GattChar, data: Vec<u8> },
+}
+
+pub trait Bluetooth
+{
+   // Central role
+   fn powered_on(&self) -> bool;
+   fn subscribe_events<F: Fn(BluetoothEvent) + Send + 'static>(&self, f: F) -> ();
+   fn start_scan(&self, services: &[BleUuid]) -> ();
+   fn stop_scan(&self) -> ();
+   fn connect(&self, id: PeripheralId) -> ();
+   fn disconnect(&self, id: PeripheralId) -> ();
+   fn read(&self, id: PeripheralId, chr: GattChar) -> Result<Vec<u8>, PlatformError>;
+   fn write(&self, id: PeripheralId, chr: GattChar, data: &[u8], with_response: bool) -> Result<(), PlatformError>;
+   fn notify(&self, id: PeripheralId, chr: GattChar, enable: bool) -> Result<(), PlatformError>;
+
+   // Peripheral role
+   fn advertise_start(&self, name: &str, services: &[BleUuid]) -> ();
+   fn advertise_stop(&self) -> ();
+}
+pub struct PushNotification
+{
+   pub user_info: std::collections::BTreeMap<String, String>,
+   pub badge: Option<i32>,
+   pub sound: Option<String>
+}
+
+pub enum PushProvider { Apns, Fcm }
+
+pub struct PushToken
+{
+   pub provider: PushProvider,
+   pub value: String
+}
+
+pub trait PushManager
+{
+   fn register(&self) -> ();
+   fn device_token(&self) -> Option<PushToken>;
+   fn subscribe<F: Fn(PushNotification) + Send + 'static>(&self, f: F) -> ();
+   fn set_badge(&self, count: i32) -> ();
+   fn clear_badge(&self) -> ();
+}
+pub struct CameraConfig
+{
+   pub device: CameraDevice, // Front or Back
+   pub fps: u32,             // hint
+   pub resolution: (u32, u32) // hint
+}
+pub enum CameraDevice { Front, Back }
+pub struct CameraFrame { pub tex: ImageHandle, pub size: (u32,u32), pub timestamp_ns: u64, pub rotation_deg: u16 }
+pub trait CameraStream { fn stop(&self) -> (); }
+pub trait CameraManager
+{
+   fn start_stream<F>(&self, cfg: CameraConfig, on_frame: F) -> Box<dyn CameraStream>
+      where F: Fn(CameraFrame) + Send + 'static;
+}
+    ]]></code>
+    <code language="rust"><![CDATA[
+pub type AnimId = u64;
+
+pub enum EaseKind
+{
+   Linear, QuadIn, QuadOut, QuadInOut, CubicIn, CubicOut, CubicInOut, BackInOut, ElasticOut, BounceOut
+}
+
+pub struct Ease
+{
+   pub kind: EaseKind
+}
+
+pub struct SpringParams
+{
+   pub stiffness: f32, pub damping: f32, pub mass: f32, pub eps: f32
+}
+
+pub enum AnimCurve
+{
+   Ease { ease: Ease },
+   Spring { sp: SpringParams }
+}
+
+pub enum AnimProp
+{
+   Opacity,
+   Transform2D,   // tx, ty, sx, sy, rot_rad
+   ColorRGBA,
+   CornerRadius,
+   ShadowAlpha
+}
+
+pub struct Transform2D
+{
+   pub tx: f32, pub ty: f32, pub sx: f32, pub sy: f32, pub rot_rad: f32
+}
+
+pub enum AnimValue
+{
+   F32(f32),
+   Vec2([f32; 2]),
+   Vec4([f32; 4]),
+   Mat3([f32; 9]),
+   Xform2D(Transform2D)
+}
+
+pub enum Repeat
+{
+   Once,
+   Count(u32),
+   Forever
+}
+
+pub struct AnimDesc
+{
+   pub id: AnimId,
+   pub prop: AnimProp,
+   pub from: AnimValue,
+   pub to: AnimValue,
+   pub curve: AnimCurve,
+   pub duration_ms: u32,
+   pub delay_ms: u32,
+   pub repeat: Repeat
+}
+
+impl UpdateContext
+{
+   pub fn anim_start(&mut self, desc: AnimDesc) -> AnimId { /* engine-provided */ }
+   pub fn anim_cancel(&mut self, id: AnimId) -> () { /* engine-provided */ }
+   pub fn anim_cancel_prop(&mut self, prop: AnimProp) -> () { /* engine-provided */ }
+}
+    ]]></code>
+    <code language="rust"><![CDATA[
+pub enum FitPolicy { Contain, Cover }
+
+pub struct CanvasMetrics
+{
+   pub design_w: f32, pub design_h: f32,
+   pub scale: f32, pub offset_x: f32, pub offset_y: f32,
+   pub device_scale: f32
+}
+
+// Helper to compute canonical canvas transform
+pub fn compute_canvas(view_w: f32, view_h: f32, design_w: f32, design_h: f32, device_scale: f32, fit: FitPolicy) -> CanvasMetrics
+{
+   let sx = view_w / design_w; let sy = view_h / design_h;
+   let s = match fit { FitPolicy::Contain => sx.min(sy), FitPolicy::Cover => sx.max(sy) };
+   let ox = ((view_w - design_w * s) * 0.5).floor(); let oy = ((view_h - design_h * s) * 0.5).floor();
+   CanvasMetrics { design_w, design_h, scale: s, offset_x: ox, offset_y: oy, device_scale }
+}
+      ]]></code>
+    <coordinates>Positions are logical points. Multiply by scale for GPU. Pixel snapping: snap glyph and 1‑px strokes to nearest device pixel boundary after scale. See §26 Canvas normalization for aspect handling and input mapping.</coordinates>
+    <errorModel>
+      <item>Use Result&lt;T, PlatformError&gt; and Result&lt;T, RenderError&gt; with exhaustive enums and Display impls.</item>
+      <item>No panics across FFI. All FFI entrypoints return int codes and log errors.</item>
+    </errorModel>
+    <semver>
+      <item>ui-core, platform-api, renderer-api are semver’d. Breaking changes require minor/major bumps.</item>
+    </semver>
+  </section>
+
+  <section number="3" title="Crate responsibilities and layering">
+    <rules>
+      <item>ui-core depends only on platform-api and renderer-api. It must not import platform-ios or renderer-metal.</item>
+      <item>renderer-metal depends on renderer-api only; no UIKit symbols.</item>
+      <item>platform-ios owns all Objective‑C and UIKit/QuartzCore interactions.</item>
+    </rules>
+    <modules>
+      <module name="ui-core">Widget tree, layout, event routing, draw list builder, text layout, a11y mapping.</module>
+      <module name="platform-api">Traits, events, units, feature flags, error enums, device caps.</module>
+      <module name="platform-ios">Delegates, MetalView, DisplayLink, IME, a11y, clipboard, haptics, memory warnings.</module>
+      <module name="renderer-api">Renderer trait, RenderEncoder, DrawList, resource handles.</module>
+      <module name="renderer-metal">Device/queue/pipelines, parallel encoding, atlases, present, EDR.</module>
+      <module name="text">rustybuzz, swash, SDF/MSDF bake, atlas, bidi, grapheme clusters.</module>
+      <module name="input">Touch/pointer/keyboard/IME mapping, Rust gesture helpers (tap, long‑press, pan).</module>
+      <module name="timing">Display link, monotonic clock, timers, frame pacing.</module>
+      <module name="utils">Arenas, ring buffers, scratch allocators, slabs.</module>
+    </modules>
+  </section>
+
+  <section number="4" title="iOS host and lifecycle">
+    <entry>
+      <file>oxideui/host/ios-app/App/main.m</file>
+      <content language="objc"><![CDATA[
+@import Foundation;
+int rust_entry(void);
+int main(int argc, char **argv)
+{
+   @autoreleasepool { return rust_entry(); }
+}
+      ]]></content>
+    </entry>
+    <rustEntry>
+      <item>#[no_mangle] extern "C" fn rust_entry() -> libc::c_int registers classes and calls UIApplicationMain.</item>
+      <item>Autorelease pool scopes: around UIApplicationMain and around each CADisplayLink tick callback.</item>
+      <item>Classes: RustAppDelegate:UIResponder&lt;UIApplicationDelegate&gt;, RustSceneDelegate:UIResponder&lt;UIWindowSceneDelegate&gt;, MetalView:UIView.</item>
+    </rustEntry>
+    <sceneLifecycle>
+      <callback>application:configurationForConnectingSceneSession:options:</callback>
+      <callback>scene:willConnectToSession:options:</callback>
+      <callback>sceneDidBecomeActive / sceneWillResignActive</callback>
+      <callback>sceneWillEnterForeground / sceneDidEnterBackground</callback>
+      <mapping>Each maps to Lifecycle events emitted to App in deterministic order.</mapping>
+    </sceneLifecycle>
+    <infoPlist>
+      <key>UIApplicationSceneManifest</key>
+      <key>UISceneConfigurations.UIWindowSceneSessionRoleApplication</key>
+      <key>CADisableMinimumFrameDurationOnPhone = true</key>
+      <key>UISupportedInterfaceOrientations</key>
+      <key>UIRequiredDeviceCapabilities</key>
+    </infoPlist>
+  </section>
+
+  <section number="5" title="MetalView and CAMetalLayer">
+    <view>
+      <item>MetalView overrides +layerClass to [CAMetalLayer class]; contentScaleFactor mirrors UIScreen.scale.</item>
+      <config>
+        <entry>device = MTLCreateSystemDefaultDevice()</entry>
+        <entry>pixelFormat = BGRA8Unorm_sRGB; RGBA16Float when ios-edr enabled and supported.</entry>
+        <entry>framebufferOnly = YES</entry>
+        <entry>presentsWithTransaction = NO</entry>
+        <entry>maximumDrawableCount = 3</entry>
+        <entry>allowsNextDrawableTimeout = NO</entry>
+        <entry>colorspace = sRGB; Display‑P3 linear when ios-edr</entry>
+        <entry>wantsExtendedDynamicRangeContent = YES when ios-edr</entry>
+      </config>
+      <layout>
+        <item>On layoutSubviews: layer.drawableSize = bounds * scale; emit WindowEvent::Resized with safe insets and scale.</item>
+        <item>On traitCollectionDidChange: re‑emit Resized if scale changed; relay appearance changes if needed.</item>
+      </layout>
+      <memoryPressure>
+        <item>Observe UIApplicationDidReceiveMemoryWarning; flush atlases and caches in renderer-metal and text crates.</item>
+      </memoryPressure>
+    </view>
+  </section>
+
+  <section number="6" title="Frame pacing and event order">
+    <displayLink>
+      <item>CADisplayLink targets a block. iOS 15+: preferredFrameRateRange = {{min:30, max:device_max, preferred:device_max}}.</item>
+      <item>Invalidate on resignActive; recreate on becomeActive.</item>
+      <item>Use CACurrentMediaTime for monotonic timestamps.</item>
+      <item>When Low Power Mode is enabled, drop preferred to 60 and suspend optional background animations.</item>
+    </displayLink>
+    <order>
+      <step>Drain UIKit input → enqueue AppEvent(s) with timestamps.</step>
+      <step>On tick: coalesce input → App::event → advance animations → layout/diff → DrawList → Renderer::begin_frame → encode_pass (parallel) → submit → present.</step>
+    </order>
+    <budget>
+      <item>If update+encode exceeds budget for 120 consecutive frames, lower preferredFrameRateRange one tier; restore after 240 stable frames.</item>
+    </budget>
+  </section>
+
+  <section number="7" title="Renderer-Metal: device, resources, pipelines">
+    <device>
+      <item>MTLDevice from layer.device. One MTLCommandQueue for render. Optional compute queue for async uploads.</item>
+      <item>Buffers: StorageModeShared for dynamic; Textures: StorageModePrivate; Atlases in Private.</item>
+      <item>Uniform alignment: 256‑byte aligned constant blocks.</item>
+    </device>
+    <buffers>
+      <item>Triple-buffered rings for vertices/indices/uniforms with hysteresis growth (factor 1.5, max cap configurable).</item>
+      <item>Per‑worker non‑overlapping slices reserved at frame start; no CPU fences within a frame.</item>
+      <item>Ring buffers use MTLResourceOptions(StorageModeShared | HazardTrackingModeUntracked | CPUCacheModeWriteCombined); the engine guarantees no read‑after‑write within a frame; validation builds may enable tracked mode.</item>
+    </buffers>
+    <atlases>
+      <item>Glyph atlas: LRU paging. Staging via Shared buffer → blit to Private. Evict on memory warnings.</item>
+      <item>Image atlas: LRU with subrect updates; copy‑on‑write handles for regions.</item>
+    </atlases>
+    <pipelines>
+      <pipeline id="solid">Premultiplied alpha; sRGB‑aware output.</pipeline>
+      <pipeline id="image">Sampled textures; optional Y‑flip uniform.</pipeline>
+      <pipeline id="text">SDF/MSDF; gamma‑correct compositing; per‑glyph subpixel offset.</pipeline>
+      <pipeline id="backdrop_blur">Two-pass separable Gaussian blur (downsample chain) with configurable sigma and a tint/alpha composite.</pipeline>
+      <pipeline id="rrect">Analytic rounded-rect fill with per-corner radii; optional stroke in a second pass.</pipeline>
+      <pipeline id="nine_slice">Nine-slice image rendering using a quad grid; vertex shader expands center region without sampling distortion.</pipeline>
+      <msaa>Default off; msaa-4x toggles sample count and resolve.</msaa>
+      <psoCache>MTLBinaryArchive persisted in Library/Application Support keyed by device+OS+features; rebuild on mismatch.</psoCache>
+    </pipelines>
+    <color>
+      <item>CPU colors in linear floats. Convert to sRGB on BGRA8_sRGB outputs. Keep linear Display‑P3 on RGBA16F.</item>
+    </color>
+  </section>
+
+  <section number="8" title="Renderer-Metal: frame graph and multithreading">
+    <frame>
+      <step>Acquire drawable late.</step>
+      <step>Create command buffer.</step>
+      <step>Backdrop pre-pass (conditional): if any DrawCmd::Backdrop exists, render the “below‑backdrop” sublist into an offscreen color target, then run separable blur to produce a backdrop texture.</step>
+      <step>Create MTLParallelRenderCommandEncoder for the main color pass.</step>
+      <step>Partition DrawList into W work chunks by state/texture/clip; assign to workers.</step>
+      <step>Each worker uses its child MTLRenderCommandEncoder to encode draws; Backdrop items sample the pre‑blurred texture.</step>
+      <step>End children → end parallel encoder → optional resolve → present → commit.</step>
+      <step>Attach completion handler to recycle per‑frame resources.</step>
+    </frame>
+    <sync>
+      <item>No encoder shared across threads. Parallelism only via MTLParallelRenderCommandEncoder children.</item>
+      <item>Pre-pass and main pass are encoded on the SAME MTLCommandBuffer in this order: blit/compute pre-pass → parallel render pass → present. Encoder order enforces GPU execution; no GPU fence required.</item>
+      <item>If an optional async-blur uses a SECOND command buffer or compute queue, order via MTLSharedEvent: pre_cb.signal(event,v); main_cb.wait(event,v). Present from main_cb only.</item>
+      <item>Atlas uploads occur on a blit encoder before the main pass in the same command buffer; writes are visible to the main pass without extra barriers.</item>
+      <item>Ring buffers use HazardTrackingModeUntracked; per-frame slices are unique; never read from the slice written in the same frame.</item>
+      <item>Prefer a single command buffer per frame. If multiple are used, attach the completion handler to the LAST buffer to recycle per‑frame resources.</item>
+      <item>Avoid stalls: set maximumDrawableCount=3; obtain nextDrawable AFTER pre-pass encoding and immediately before starting the main render pass.</item>
+    </sync>
+  </section>
+  <section number="9" title="Draw list, vertex formats, encoder API">
+    <formats>
+      <item>Indices: u16 by default; auto‑upgrade to u32 when vertex count exceeds 65535.</item>
+      <item>Vertices: 2×f32 position, 2×f32 uv, 4×unorm8 color packed, optional f32 depth.</item>
+    </formats>
+    <structures>
+      <code language="rust"><![CDATA[
+pub struct DrawList
+{
+   pub items: Vec<DrawCmd>,
+}
+
+pub enum DrawCmd
+{
+   Solid { vb: VertexSpan, ib: IndexSpan, color: Color },
+   Image { tex: ImageHandle, dst: RectF, src: RectF, alpha: f32 },
+   GlyphRun { run: GlyphRun },
+   RRect { rect: RectF, radii: [f32; 4], color: Color },
+   NineSlice { tex: ImageHandle, rect: RectF, slice: Insets, alpha: f32 },
+   Backdrop { rect: RectF, sigma: f32, tint: Color, alpha: f32 },
+   Spinner { center: [f32;2], radius: f32, thickness: f32, phase: f32, alpha: f32 },
+   ClipPush { rect: RectI },
+   ClipPop,
+}
+      ]]></code>
+      <code language="rust"><![CDATA[
+pub trait RenderEncoder
+{
+   fn set_viewport(&mut self, vp: RectF) -> ();
+   fn set_clip(&mut self, scissor: RectI) -> ();
+   fn draw_solid(&mut self, verts: &[Vertex], color: Color) -> ();
+   fn draw_image(&mut self, img: ImageHandle, dst: RectF, src: RectF) -> ();
+   fn draw_rrect(&mut self, rect: RectF, radii: [f32; 4], color: Color) -> ();
+   fn draw_nine_slice(&mut self, img: ImageHandle, rect: RectF, slice: Insets, alpha: f32) -> ();
+   fn draw_backdrop(&mut self, rect: RectF, sigma: f32, tint: Color, alpha: f32) -> ();
+   fn draw_spinner(&mut self, center: [f32;2], radius: f32, thickness: f32, phase: f32, alpha: f32) -> ();
+   fn draw_glyph_run(&mut self, run: &GlyphRun) -> ();
+}
+      ]]></code>
+    </structures>
+    <batching>
+      <item>Stable sort by PSO → texture → clip id; merge adjacent compatible draws.</item>
+      <item>Clip stack lowered to scissor rectangles with intersected region per nesting.</item>
+      <item>Pixel snapping for hairlines and glyph origins after scale transform.</item>
+    </batching>
+  </section>
+
+  <section number="10" title="Input ingestion, ordering, and mapping">
+    <ordering>
+      <item>All input events carry a monotonic timestamp and are delivered to App::event before draw of the same tick.</item>
+      <item>Touch/pointer order per tick: Start → Move* → End/Cancel; pointer ids are stable for a contact’s lifetime.</item>
+    </ordering>
+    <touch>
+      <item>InputEvent::Touch contains { id, phase:{Start,Move,End,Cancel}, x, y, pressure?, tilt?, device:{Finger,Pencil,Mouse} }.</item>
+      <item>System‑level gesture preemption maps to phase=Cancel immediately.</item>
+    </touch>
+    <pointer>
+      <item>InputEvent::Pointer delivers hover/mouse movement with delta and button/modifier state where available.</item>
+    </pointer>
+    <gestures>
+      <item>Pinch and pan are synthesized in ui-core from raw contacts: Pinch { scale, velocity }, Pan { dx, dy, velocity }.</item>
+      <item>Double‑tap and long‑press are synthesized with platform‑neutral thresholds.</item>
+    </gestures>
+    <keyboard>
+      <item>InputEvent::Key { code, modifiers, phase:{Down,Repeat,Up} } with repeat cadence supplied by the platform.</item>
+    </keyboard>
+    <textInput>
+      <item>TextEvent::Composition / Commit / SelectionChanged model IME composition uniformly (CJK, etc.).</item>
+      <item>IME show/hide reported via TextEvent::IMEShown/IMEHidden and mirrored by Platform::ime_show/ime_hide.</item>
+    </textInput>
+    <clipboard>
+      <item>Clipboard access is via Platform::clipboard_get/set; events are not generated for clipboard changes.</item>
+    </clipboard>
+    <dragDrop optional="true">
+      <item>High‑level DragStart/DragOver/Drop events are exposed; platform mapping defined per backend.</item>
+    </dragDrop>
+  </section>
+
+  <section number="11" title="Accessibility">
+    <container>
+      <item>MetalView conforms to UIAccessibilityContainer.</item>
+      <nodeProps>label, traits, value?, hint?, activation point, frame (screen coords), enabled, selected</nodeProps>
+      <item>platform-ios creates/updates UIAccessibilityElement objects per frame; updates frames on layout/scale changes.</item>
+      <activation>Activation invokes ui-core callback to perform action.</activation>
+    </container>
+    <dynamicType>
+      <item>Observe UIContentSizeCategoryDidChange; expose category to ui-core; app decides scaling policy.</item>
+    </dynamicType>
+    <focus>
+      <item>Maintain focused node id across layout changes where frame intersection remains.</item>
+    </focus>
+  </section>
+
+  <section number="12" title="Text system">
+    <shaping>rustybuzz with bidi and complex scripts; cache per‑font per‑size shaping plans.</shaping>
+    <raster>swash; SDF/MSDF bake; atlas updates batched per frame; grayscale fallback permitted.</raster>
+    <fallback>
+      <item>Embedded fonts via manifest. If ios-coretext-fallback, query system families and extend fallback chain.</item>
+    </fallback>
+    <composition>Marked ranges drawn underlined; caret follows selection; system candidate bar is used.</composition>
+    <rtl>Right‑to‑left layout supported; glyph runs honor bidi embedding levels.</rtl>
+  </section>
+
+  <section number="13" title="Timing, scheduling, determinism">
+    <clock>timing::now() uses CACurrentMediaTime → Duration.</clock>
+    <tick>
+      <item>Tick order: input coalesce → App::event → layout/diff → DrawList → render submit.</item>
+      <item>Timers fire before App::event for deterministic ordering. Timer resolution ≥ 1 ms.</item>
+    </tick>
+    <threadPool>
+      <item>Pool size = min(num_cpus, 6); override via env OXIDEUI_WORKERS. Work stealing enabled.</item>
+    </threadPool>
+    <determinism>
+      <item>Provide a deterministic PRNG seed for any noncritical animations in samples; core engine must be deterministic for same input stream.</item>
+    </determinism>
+  </section>
+
+  <section number="14" title="Performance and memory targets">
+    <targets>
+      <item>Cold start &lt; 600 ms to first frame on A15+.</item>
+      <item>Trivial scene ≥ 118 fps on ProMotion; ≥ 58 fps on 60 Hz devices.</item>
+      <item>No nextDrawable timeouts with triple buffering under normal load.</item>
+    </targets>
+    <guidelines>
+      <item>Acquire drawable late; keep triple buffering; minimize PSO/texture switches.</item>
+      <item>Use MTLBinaryArchive to avoid PSO creation hitches; prewarm on first launch.</item>
+      <item>Flush atlases on memory warnings; rebuild lazily.</item>
+    </guidelines>
+  </section>
+
+  <section number="15" title="Safety, FFI, and error reporting">
+    <ffi>
+      <item>All Objective‑C messaging wrapped in safe Rust with documented preconditions and thread affinity.</item>
+      <item>All UIKit/QuartzCore/Metal calls on main thread unless documented thread‑safe.</item>
+      <item>Opaque handle types guard Objective‑C lifetimes. No raw pointers escape API.</item>
+      <item>No panics cross FFI. FFI functions return int codes; errors logged via tracing.</item>
+    </ffi>
+    <logging>
+      <item>TRACE/DEBUG/INFO/WARN/ERROR levels. Env filter OXIDEUI_LOG. Redact PII in a11y logs.</item>
+    </logging>
+  </section>
+
+  <section number="16" title="Testing and tooling">
+    <unit>
+      <item>ui-core: event routing, layout, batching determinism.</item>
+      <item>input: synthetic UITouch/UIKey shims; IME sequences for Japanese and Chinese.</item>
+    </unit>
+    <snapshot>
+      <item>Readback PNGs behind snapshot-tests feature. Tolerance ≤ 1 LSB per channel.</item>
+    </snapshot>
+    <automation>
+      <item>XCUITest for lifecycle, IME show/hide, rotation, background/foreground traversal.</item>
+      <item>Animation determinism test: seeded timeline reproduces identical keyframe snapshots across runs.</item>
+      <item>Control harness: tap/drag scripts for button/toggle/slider/scroll to verify state and performance counters.</item>
+      <item>Push token smoke: register and assert device_token callback within 10 s on device build.</item>
+      <item>BLE loopback lab test: scan for known peripheral, connect, read/write characteristic, receive notify.</item>
+      <item>Background fetch/processing: schedule BGTask in test host and verify handler invocation on device.</item>
+    </automation>
+    <profiling>
+      <item>Xcode GPU Capture and Metal System Trace on device; CI stores captures for perf baselines.</item>
+    </profiling>
+  </section>
+
+  <section number="17" title="Deliverables and acceptance criteria">
+    <deliverables>
+      <item>Device and simulator builds succeed. No Swift. One staticlib exports rust_entry.</item>
+      <item>Host app renders a test scene at device max Hz with on‑screen frame counter.</item>
+      <item>Input: multi‑touch, hover (iPad), hardware keys, IME composition, clipboard verified.</item>
+      <item>Accessibility: ≥ 5 interactive nodes traversable and activatable by VoiceOver.</item>
+      <item>Performance: 1000‑rect stress scene without present stalls; CPU &lt; 6 ms/frame on A15.</item>
+    </deliverables>
+  </section>
+
+  <section number="18" title="Info.plist required keys">
+    <usageDescriptions>
+      <key>NSCameraUsageDescription</key><string>${OXIDEUI_NS_CAMERA}</string>
+      <key>NSBluetoothAlwaysUsageDescription</key><string>${OXIDEUI_NS_BLUETOOTH_ALWAYS}</string>
+      <key>NSBluetoothPeripheralUsageDescription</key><string>${OXIDEUI_NS_BLUETOOTH_PERIPHERAL}</string>
+      <key>NSLocationWhenInUseUsageDescription</key><string>${OXIDEUI_NS_LOCATION_WHEN_IN_USE}</string>
+      <key>NSLocationAlwaysAndWhenInUseUsageDescription</key><string>${OXIDEUI_NS_LOCATION_ALWAYS}</string>
+      <key>NSContactsUsageDescription</key><string>${OXIDEUI_NS_CONTACTS}</string>
+      <key>NSMotionUsageDescription</key><string>${OXIDEUI_NS_MOTION}</string>
+    </usageDescriptions>
+    <plist>
+      <key>UIApplicationSceneManifest</key>
+      <key>UISceneConfigurations.UIWindowSceneSessionRoleApplication</key>
+      <key>CADisableMinimumFrameDurationOnPhone</key>
+      <key>UISupportedInterfaceOrientations</key>
+      <key>UIRequiredDeviceCapabilities</key>
+    </plist>
+    <snippet language="xml"><![CDATA[
+<key>UIApplicationSceneManifest</key>
+<dict>
+  <key>UIApplicationSupportsMultipleScenes</key><true/>
+  <key>UISceneConfigurations</key>
+  <dict>
+    <key>UIWindowSceneSessionRoleApplication</key>
+    <array>
+      <dict>
+        <key>UISceneDelegateClassName</key>
+        <string>RustSceneDelegate</string>
+      </dict>
+    </array>
+  </dict>
+</dict>
+<key>CADisableMinimumFrameDurationOnPhone</key><true/>
+    ]]></snippet>
+    <snippet language="xml"><![CDATA[
+<!-- Background modes + Bluetooth usage strings -->
+<key>UIBackgroundModes</key>
+<array>
+  <string>remote-notification</string>
+  <string>fetch</string>
+  <string>processing</string>
+  <string>bluetooth-central</string>
+  <string>bluetooth-peripheral</string>
+</array>
+<key>NSBluetoothAlwaysUsageDescription</key>
+<string>Allows OxideUI to discover and connect to nearby Bluetooth devices.</string>
+<key>NSBluetoothPeripheralUsageDescription</key>
+<string>Allows OxideUI to advertise services to nearby Bluetooth devices.</string>
+    ]]></snippet>
+  </section>
+
+  <section number="19" title="Shader build and assets">
+    <shaders>
+      <item>.metal sources under renderer-metal/shaders.</item>
+      <item>build.rs uses xcrun metal + metallib to produce default.metallib; fallback Xcode build phase allowed.</item>
+      <command>metal -c solid.metal -o solid.air; metallib solid.air -o default.metallib</command>
+      <validation>Fail build if metallib missing; embed in app bundle; path provided to renderer-metal at init.</validation>
+    </shaders>
+    <fonts>
+      <item>Fonts under oxideui/host/ios-app/App/Fonts/ with a manifest consumed by InitContext::fonts.</item>
+      <license>Integrator responsible for font licenses.</license>
+    </fonts>
+    <resources>
+      <item>Bundle path lookup helper in platform-ios for all resources.</item>
+    </resources>
+  </section>
+
+  <section number="20" title="Android reserved (future)">
+    <note>Do not implement now. Keep API stable to allow drop‑in Android support later.</note>
+    <future>
+      <platform crate="platform-android">GameActivity + Choreographer + ANativeWindow + IME bridge</platform>
+      <renderer crate="renderer-vulkan">Vulkan swapchain; timeline semaphores; secondary command buffers</renderer>
+      <compat>Must implement the same Platform and Renderer traits and AppEvent types. ui-core unchanged.</compat>
+    </future>
+  </section>
+
+  <section number="21" title="Example code: minimal app">
+    <code language="rust"><![CDATA[
+use oxideui::prelude::*;
+
+struct Demo;
+
+impl App for Demo
+{
+   fn init(&mut self, _ctx: &mut InitContext) { }
+
+   fn event(&mut self, _e: AppEvent, _ctx: &mut UpdateContext) { }
+
+   fn draw(&mut self, r: &mut RenderContext)
+   {
+      let mut enc = &mut *r.encoder;
+      enc.set_viewport(RectF::new(0.0, 0.0, 400.0, 800.0));
+      let verts = vec![
+         Vertex { x: 10.0, y: 10.0 }, Vertex { x: 390.0, y: 10.0 }, Vertex { x: 200.0, y: 300.0 }
+      ];
+      enc.draw_solid(&verts, Color::rgba(0.2, 0.6, 0.9, 1.0));
+   }
+}
+
+fn main()
+{
+   run_app(MobileTarget::Ios, Demo);
+}
+    ]]></code>
+  </section>
+
+  <section number="22" title="Work packages and DoD">
+    <wp id="1" name="platform-ios bootstrap">
+      <task>Define RustAppDelegate, RustSceneDelegate, MetalView; register classes; UIApplicationMain via rust_entry; autorelease pools.</task>
+      <ac>Scene shows clear background; deterministic lifecycle logs.</ac>
+    </wp>
+    <wp id="2" name="display link and resize">
+      <task>CADisplayLink wrapper with preferredFrameRateRange; resize + safe area propagation; LPM handling.</task>
+      <ac>Frame counter at device max Hz; rotations correct; LPM drops to 60.</ac>
+    </wp>
+    <wp id="3" name="renderer-metal device and PSOs">
+      <task>Device/queue init; shader compile; PSOs; ring buffers; error paths.</task>
+      <ac>Solid triangle renders; no validation errors; metallib packaged.</ac>
+    </wp>
+    <wp id="4" name="parallel encoding">
+      <task>ParallelRenderCommandEncoder; partitioning; present; completion handlers.</task>
+      <ac>1000 quads &lt; 4 ms CPU on A15 test.</ac>
+    </wp>
+    <wp id="5" name="input: touch + keyboard + IME">
+      <task>Touch mapping; pressesBegan/Ended; UIKeyInput then UITextInput with composition; keyboard frame notifications.</task>
+      <ac>Japanese/CJK composition verified; hardware repeat works.</ac>
+    </wp>
+    <wp id="6" name="clipboard and haptics">
+      <task>UIPasteboard + UIImpactFeedbackGenerator wrappers.</task>
+      <ac>Copy/paste and haptics verified.</ac>
+    </wp>
+    <wp id="7" name="text system">
+      <task>rustybuzz + swash; glyph atlas; marked text rendering; RTL paragraphs.</task>
+      <ac>Latin and CJK paragraphs crisp at 1x–3x; RTL order correct.</ac>
+    </wp>
+    <wp id="8" name="tests and profiling">
+      <task>Unit + snapshot + XCUITest; GPU capture scripts; perf baselines saved.</task>
+      <ac>CI green on device+sim; captures stored.</ac>
+    </wp>
+  </section>
+
+  <section number="23" title="Acceptance tests">
+    <item>High‑refresh: ≥ 118 fps on ProMotion trivial scene.</item>
+    <item>No present stalls with CPU 5 ms/frame and 3 drawables.</item>
+    <item>Five concurrent touches tracked with stable ids and correct phases.</item>
+    <item>Animation: button press/release timings 80 ms down, 120 ms up within ±8 ms; toggle spring settles &lt; 220 ms without overshoot in Reduce Motion ON.</item>
+    <item>IME: marked text displayed; commit/selection delivered; keyboard rect correct.</item>
+    <item>Hardware keys: modifiers and repeats handled.</item>
+    <item>Accessibility: rotor enumerates elements; activate triggers Rust handler.</item>
+    <item>Snapshots: 1000‑rect scene within 1 LSB tolerance to baseline.</item>
+    <item>Memory warning: atlases flushed; app remains responsive; rebuild on demand.</item>
+    <item>Push: PushToken present and stable across launches; foreground notification delivered to PushManager subscriber.</item>
+    <item>Bluetooth: discover target peripheral in ≤ 10 s; connect and round‑trip 32‑byte write→notify.</item>
+    <item>Background: BGAppRefreshTask and BGProcessingTask handlers invoked on device; tasks complete and reschedule.</item>
+  </section>
+
+  <section number="24" title="Coding standards">
+    <rustfmt>Follow repository rustfmt.toml for Rust formatting.</rustfmt>
+    <clangformat>Follow repository .clang-format for Objective‑C files.</clangformat>
+    <lint>Enable clippy:pedantic for ui-core and renderer crates; CI treats warnings as errors.</lint>
+  </section>
+
+  <section number="25" title="Docs, licensing, CI">
+    <docs>
+      <item>Crate‑level README per crate; /docs with architecture diagrams and API guides.</item>
+      <item>Doc tests for public API examples; cargo doc published as CI artifact.</item>
+    </docs>
+    <license>MIT or Apache‑2.0 dual; /THIRD_PARTY includes all notices.</license>
+    <ci>
+      <matrix>macOS latest; fixed Xcode; device tests on farm; simulator tests on iOS 18 sim.</matrix>
+      <steps>build, unit, snapshot (sim), XCUITest (sim), package host, perf smoke on device.</steps>
+    </ci>
+  </section>
+  <section number="26" title="Canvas normalization and aspect handling">
+    <designCanvas>
+      <size points="390x844">All widget geometry authored in this canonical logical space.</size>
+    </designCanvas>
+    <fitPolicy default="Contain">
+      <mode id="Contain">Uniform scale to fit within safe-area bounds; center; letterbox surplus.</mode>
+      <mode id="Cover">Uniform scale to fill and bleed for decorative layers only.</mode>
+    </fitPolicy>
+    <math>
+      <eq>s = min(view_w/design_w, view_h/design_h)</eq>
+      <eq>ox = floor((view_w - design_w*s)/2)</eq>
+      <eq>oy = floor((view_h - design_h*s)/2)</eq>
+      <eq>M = T(ox, oy) • S(s)</eq>
+      <eq>design_pt = ((device_pt - (ox,oy)) / s)</eq>
+    </math>
+    <pixelSnapping>
+      <rule>Snap edges/hairlines post-transform: snap(v) = round(v*device_scale)/device_scale.</rule>
+      <rule>Do not snap filled interior vertices; snap glyph origins only.</rule>
+    </pixelSnapping>
+    <strokes>
+      <rule>Stroke widths specified in physical pixels; convert each frame: stroke_pt = 1 / (device_scale * s).</rule>
+    </strokes>
+    <typography>
+      <policy id="Locked">font_pt = base_pt * s</policy>
+      <policy id="Dynamic">font_pt = base_pt * s * clamp(cs_mult, k_min, k_max)</policy>
+      <baseline>Align cap-height to an N‑pt baseline grid in design space before scaling.</baseline>
+    </typography>
+    <breakpoints>
+      <range compact="&lt;375w" regular="375–428w" tablet="≥768w">Outside range, keep core canvas unchanged; use letterbox rails for secondary UI.</range>
+    </breakpoints>
+    <safeAreas>
+      <rule>Compute view_w/view_h from safe-area rect. Background layers may draw outside the canvas.</rule>
+    </safeAreas>
+    <assets>
+      <rule>Icons via SDF/MSDF; panels via 9‑slice; avoid bitmap scaling for chrome.</rule>
+    </assets>
+  </section>
+  <section number="27" title="Animation system">
+    <timebase>Monotonic from CACurrentMediaTime; engine supplies dt per tick; animations update before layout.</timebase>
+    <curves>
+      <ease>Support EaseKind values: Linear, QuadIn, QuadOut, QuadInOut, CubicIn, CubicOut, CubicInOut, BackInOut, ElasticOut, BounceOut.</ease>
+      <spring>Second‑order critically‑damped or under‑damped per SpringParams { stiffness, damping, mass, eps } with stable integration; clamp to target when |velocity| &lt; eps and |delta| &lt; eps.</spring>
+    </curves>
+    <properties>AnimProp: Opacity, Transform2D, ColorRGBA, CornerRadius, ShadowAlpha. Multiple props may run in parallel on the same node.</properties>
+    <lifecycle>
+      <item>Schedule via UpdateContext::anim_start(desc). Returns AnimId. Cancel via anim_cancel or anim_cancel_prop.</item>
+      <item>Repeat: Once, Count(n), or Forever. Delay honored per desc.delay_ms.</item>
+      <item>Finish events are delivered to App::event as AppEvent::Lifecycle if requested by the caller (optional flag in AnimDesc reserved for future).</item>
+    </lifecycle>
+    <defaults>
+      <item>Default ease: CubicOut, duration=150 ms, delay=0, repeat=Once.</item>
+      <item>Respect motion reduction: if device_caps.a11y_reduce_motion, durations become 0 except essential affordances (focus, text caret).</item>
+    </defaults>
+    <mapping>
+      <item>ui-core applies animated values to node styles before building DrawList.</item>
+      <item>Renderer stores animated per‑instance data in ring‑buffered uniform blocks; no heap allocations per frame.</item>
+    </mapping>
+    <limits>Target ≥ 10k concurrent property animations on A15‑class devices without CPU spikes.</limits>
+    <determinism>Given the same input stream and seed, results are bit‑stable across runs.</determinism>
+  </section>
+  <section number="28" title="Base UI elements (ui-core)">
+    <label>
+      <props>text:String, font:FontRef, color:Color, align:{Start,Center,End}, wrap:{NoWrap,Word,Char}</props>
+      <a11y>Static text; exposes label; no action.</a11y>
+    </label>
+    <button>
+      <props>content:Node, on_tap:Callback, disabled:bool=false</props>
+      <states>normal, pressed, disabled</states>
+      <animations>press down: Transform2D scale 0.98 for 80 ms Ease(CubicOut); release to 1.0 for 120 ms Ease(CubicOut)</animations>
+      <a11y>Trait=button; activates on double‑tap.</a11y>
+    </button>
+    <imageView>
+      <props>image:ImageHandle, fit:{Contain,Cover,Stretch}, nine_slice:Option<Insets></props>
+      <zoom enabled="true">
+        <props>min=1.0, max=4.0, doubleTapStep=2.0, decel=enabled</props>
+        <gestures>pinch to zoom (scale up/down), two-finger double-tap zoom out, pan when zoomed</gestures>
+      </zoom>
+      <render>Image/NineSlice DrawCmd; zoom uses container Transform2D + clip.</render>
+      <a11y>Trait=image; zoom not exposed to VoiceOver.</a11y>
+    </imageView>
+    <progressBar>
+      <props>value:Option<f32> // None = indeterminate</props>
+      <render>Determinate: filled track; Indeterminate: looping bar</render>
+      <a11y>Announces percentage or “in progress”.</a11y>
+    </progressBar>
+    <spinner>
+      <props>size:f32=20.0, thickness:f32=2.0, alpha:f32=1.0</props>
+      <render>DrawCmd::Spinner with phase advanced per tick</render>
+      <a11y>Trait=progress indicator</a11y>
+    </spinner>
+    <collectionView>
+      <axis>{Vertical, Horizontal}</axis>
+      <layout>
+        <grid columns="n" spacing="f32" rowSpacing="f32">For Vertical axis. Cells must fit horizontal width; vertical scroll only.</grid>
+        <row itemSpacing="f32">For Horizontal axis. Exactly 1 row; horizontal scroll.</row>
+      </layout>
+      <cells>Reusable cell type: <cell id="CollectionCell">content:Node</cell></cells>
+      <virtualization>measurement + culling; stable IDs; diff-driven updates</virtualization>
+      <a11y>Scrollable container exposes cells in order</a11y>
+    </collectionView>
+    <toggle>
+      <props>value:bool, on_change:Callback</props>
+      <gestures>tap toggles; drag along track snaps at 0.5</gestures>
+      <animations>knob spring to target with SpringParams { stiffness: 280.0, damping: 26.0, mass: 1.0, eps: 0.001 }</animations>
+      <a11y>Trait=switch; adjustable.</a11y>
+    </toggle>
+    <slider>
+      <props>value:f32 in [0,1], on_change:Callback, step:Option&lt;f32&gt;</props>
+      <gestures>drag horizontal; keyboard arrows adjust by step or 0.01</gestures>
+      <a11y>Trait=adjustable; increments/decrements via rotor.</a11y>
+    </slider>
+    <textField>
+      <props>text:String, on_change:Callback, placeholder:String?, secure:bool=false, style:{Inline, Floating}</props>
+      <ime>Uses UITextInput; caret + marked underline. Platform keyboard shown on focus; Platform::ime_show/ime_hide available.</ime>
+      <animations>Floating: placeholder animates to label above on first input; Ease(CubicOut) 120 ms</animations>
+      <a11y>Trait=textfield; selection announced.</a11y>
+    </textField>
+    <stack>
+      <kinds>HStack, VStack, ZStack</kinds>
+      <props>spacing:f32, align:{Start,Center,End,Baseline}</props>
+    </stack>
+    <scrollView>
+      <axes>{Vertical, Horizontal}</axes>
+      <physics>deceleration with velocity carry; bounds clamped; overscroll glow optional</physics>
+      <virtualization>child measurement + culling when children &gt; 200</virtualization>
+      <a11y>Scrollable container; exposes children in order; adjustable actions for page up/down.</a11y>
+    </scrollView>
+    <panel>
+      <props>background:Color, corner_radii:[f32;4], shadow_alpha:f32</props>
+      <render>RRect + optional shadow draw; content in ZStack above.</render>
+    </panel>
+    <backdrop>
+      <props>rect:RectF, blur_sigma:f32, tint:Color, alpha:f32</props>
+      <render>DrawCmd::Backdrop; uses renderer backdrop pass; tint overlays blur</render>
+      <a11y>Decorative; no trait</a11y>
+    </backdrop>
+    <haptics>
+      <props>pattern:{ImpactLight,ImpactMedium,ImpactHeavy,Selection,NotificationSuccess,NotificationWarning,NotificationError}</props>
+      <binding>Controls may trigger haptics on tap/commit/change via UpdateContext::haptics</binding>
+    </haptics>
+    <acceptance>
+      <item>All controls hit‑test correctly in design space and under canvas scaling.</item>
+      <item>Button/toggle/slider respond at 120 Hz with no dropped frames in test scenes.</item>
+      <item>TextField supports selection, composition, delete, and paste; caret blinks at 0.5 Hz.</item>
+      <item>ScrollView maintains ≥ 58 fps with 1k virtualized children on A15‑class devices.</item>
+      <item>All controls expose correct accessibility traits and labels.</item>
+    </acceptance>
+  </section>
+  <section number="29" title="Camera (AVFoundation)">
+    <permissions>Use Permissions::request(Camera) before starting stream.</permissions>
+    <session>
+      <item>platform-ios creates AVCaptureSession + AVCaptureDevice for Front/Back, adds video input, sets preferred format near cfg.resolution/fps.</item>
+      <item>Use AVCaptureVideoDataOutput (BGRA) on a dedicated queue; convert CVPixelBuffer via CVMetalTextureCache to MTLTexture.</item>
+      <item>Emit CameraFrame with tex, size, timestamp_ns, rotation_deg corrected for orientation; caller composites in UI.</item>
+      <item>Stop via CameraStream::stop(); session and outputs torn down on main thread.</item>
+    </session>
+    <latency>Target &lt; 2 frames end-to-end at 60 fps.</latency>
+  </section>
+    <section number="30" title="Permissions service">
+    <domains>
+      <domain id="Notifications">UNUserNotificationCenter request/observe; statuses map to PermissionStatus.</domain>
+      <domain id="Location">CLLocationManager requestWhenInUse; subscribe to authorizationStatus changes.</domain>
+      <domain id="Camera">AVCaptureDevice authorizationStatusFor: .video; subscribe via notification.</domain>
+      <domain id="Contacts">CNContactStore requestAccess; no change subscriptions.</domain>
+      <domain id="Bluetooth">CBManagerAuthorization mapping; request via CBCentralManager on iOS; no change subscriptions.</domain>
+      <domain id="Motion">CMMotionActivity authorization (Core Motion). Gate access by NSMotionUsageDescription; no entitlement. No change subscriptions.</domain>
+    </domains>
+    <api>Platform::permissions() → trait Permissions with request/status/subscribe; callbacks fire on main thread.</api>
+    <storage>No silent auto-requests; caller drives UX; statuses cached in memory.</storage>
+  </section>
+  <section number="31" title="Async runtime (Tokio)">
+    <feature>Enabled by cargo feature tokio-runtime.</feature>
+    <model>
+      <item>platform-ios starts a Tokio multi-thread runtime on first use; threads = min(4, num_cpus).</item>
+      <item>UpdateContext exposes Handle via UpdateContext::spawn(async { ... }).</item>
+      <item>No UI work off main thread; UI mutations dispatched back to main via a main-thread executor.</item>
+    </model>
+    <shutdown>Runtime lives for process lifetime; tasks must be cancellation-safe.</shutdown>
+  </section>
+  <section number="32" title="Bluetooth (CoreBluetooth)">
+    <roles>Central and Peripheral. Background eligible via UIBackgroundModes bluetooth-central / bluetooth-peripheral.</roles>
+    <central>
+      <item>Use CBCentralManager. Start scan with service filters; deliver Discovered with RSSI and name.</item>
+      <item>Connect, discover services/characteristics lazily; reads/writes/notify routed to Bluetooth trait.</item>
+      <limits>In background, scan/connection rates are throttled by iOS; discovery payload is limited.</limits>
+    </central>
+    <peripheral>
+      <item>Use CBPeripheralManager. Advertise name + service UUIDs only in background; characteristics are not in adv payload.</item>
+      <item>Handle write requests and update value for subscribed centrals.</item>
+    </peripheral>
+    <privacy>Require NSBluetoothAlwaysUsageDescription (+ PeripheralUsageDescription if advertising).</privacy>
+    <threading>All CoreBluetooth delegate calls marshalled to main thread before crossing FFI.</threading>
+  </section>
+  <section number="33" title="Push notifications (APNs)">
+    <registration>
+      <item>On PushManager::register: request UNAuthorization (alert, sound, badge) then call UIApplication.registerForRemoteNotifications.</item>
+      <item>Capture device token in application:didRegisterForRemoteNotificationsWithDeviceToken: and expose via PushManager::device_token.</item>
+      <item>Report failures via didFailToRegister… to logs and a transient error.</item>
+    </registration>
+    <delivery>
+      <item>Foreground: userNotificationCenter:willPresent:withCompletionHandler: → PushNotification to subscribers.</item>
+      <item>Background: enable “remote‑notification” mode; content‑available=1 wakes app to process.</item>
+      <item>Badge APIs exposed via PushManager.</item>
+    </delivery>
+    <entitlements>aps-environment present in App.entitlements; value set by build configuration.</entitlements>
+  </section>
+  <section number="34" title="Background runtime">
+    <modes>
+      <item>Remote notifications, fetch, processing, bluetooth-central, bluetooth-peripheral enabled.</item>
+    </modes>
+    <bgTasks>
+      <item>Use BGTaskScheduler for refresh (BGAppRefreshTask) and processing (BGProcessingTask). Add identifiers under BGTaskSchedulerPermittedIdentifiers in Info.plist.</item>
+      <item>platform-ios exposes register_bg_task(id, kind) and schedule_bg_task(id, earliest_ms) helpers.</item>
+      <item>All BG task handlers must call setTaskCompleted(success:) and schedule next run.</item>
+    </bgTasks>
+    <lifecycle>When entering background, renderer pauses; network or BLE work continues only if an eligible mode is active.</lifecycle>
+  </section>
+  <section number="35" title="Host capability manifest and codegen">
+    <goal>Only ship entitlements and usage descriptions that the host app opts into.</goal>
+    <files>
+      <file>oxideui/host/ios-app/App/capabilities.toml</file>
+      <file>xtask/src/main.rs</file>
+    </files>
+    <manifest language="toml"><![CDATA[
+# capabilities.toml
+[usage_strings]
+NSCameraUsageDescription = "Needed to scan documents."
+NSBluetoothAlwaysUsageDescription = "Connect to nearby accessories."
+NSBluetoothPeripheralUsageDescription = "Advertise to nearby accessories."
+NSLocationWhenInUseUsageDescription = "Show nearby devices."
+NSLocationAlwaysAndWhenInUseUsageDescription = "Enable geofenced features."
+NSContactsUsageDescription = "Invite friends from contacts."
+NSMotionUsageDescription = "Enable motion-based interactions."
+
+[entitlements]
+push_notifications = false
+bluetooth_central = false
+bluetooth_peripheral = false
+background_fetch = false
+background_remote_notification = false
+background_processing = false
+location = "none"        # "none" | "when_in_use" | "always"
+
+]]></manifest>
+    <codegen>
+      <step>`cargo xtask ios prepare` reads capabilities.toml.</step>
+      <step>Generates/merges App.entitlements with:
+        - aps-environment = "development" when push_notifications=true (CI can swap to "production").
+        - com.apple.developer.background-modes array entries per background_* flags.
+        - Bluetooth roles per bluetooth_* flags.
+      </step>
+      <step>Generates an Info.plist fragment adding only the nonempty usage strings above; merges into App/Info.plist by keys.</step>
+      <step>Errors if a required usage string is missing for an enabled domain (e.g., camera=true but no NSCameraUsageDescription).</step>
+    </codegen>
+    <build>
+      <item>CI step runs `cargo xtask ios prepare` before Xcode build; artifacts: App.entitlements, Info.plist merged.</item>
+    </build>
+    <runtimeGuards>
+      <item>platform-ios compiles all bridges; APIs return PlatformError::CapabilityDisabled if the host did not opt in via manifest.</item>
+    </runtimeGuards>
+    <acceptance>
+      <item>With empty manifest, no extra usage keys or background modes appear; app passes App Store validation for capabilities.</item>
+      <item>Enabling each flag injects exactly the corresponding keys; no unrelated keys present.</item>
+    </acceptance>
+  </section>
+  <section number="36" title="iOS input mapping (UIKit)">
+    <touch>
+      <item>Override touchesBegan/Moved/Ended/Cancelled; map UITouch to InputEvent::Touch with id, phase, x, y, force, altitude/azimuth (pencil).</item>
+      <item>System gesture steals produce Cancelled immediately.</item>
+    </touch>
+    <hover iPadOS="true">
+      <item>UIHoverGestureRecognizer supplies hover deltas; UIPointerInteraction optional for visuals only.</item>
+    </hover>
+    <gestures>
+      <item>UIPinchGestureRecognizer → Pinch; UIPanGestureRecognizer → Pan; two‑finger double‑tap → zoom out.</item>
+    </gestures>
+    <hardwareKeyboard>
+      <item>pressesBegan/Changed/Ended map UIKey to KeyEvent with modifiers; repeat cadence matches UIKit.</item>
+    </hardwareKeyboard>
+    <textInput>
+      <item>UIKeyInput implements hasText/insertText:/deleteBackward → TextEvent::Commit.</item>
+      <item>UITextInput implements selection/marked text → Composition and SelectionChanged; keyboardWillChangeFrame → IMEShown/IMEHidden.</item>
+    </textInput>
+    <clipboard>
+      <item>UIPasteboard general pasteboard for UTF‑8 strings via Platform::clipboard_get/set.</item>
+    </clipboard>
+    <dragDrop optional="true">
+      <item>UIDragInteraction / UIDropInteraction on MetalView mapped to high‑level events.</item>
+    </dragDrop>
+  </section>
+  <section number="37" title="Android host scaffold (placeholder)">
+    <layout>
+      <item>Surface provider: ANativeWindow via GameActivity.</item>
+      <item>Choreographer for frame timing; mirrored to timing crate.</item>
+      <item>Swapchain: Vulkan (renderer-vulkan stub).</item>
+    </layout>
+    <permissions>
+      <item>Placeholders only; no Android manifest keys generated in this release.</item>
+    </permissions>
+    <mapping>
+      <item>Input events map to the same InputEvent / TextEvent enums; IME via AInputMethod (TBD).</item>
+      <item>Haptics maps to VibrationEffect primitives.</item>
+      <item>Push uses FCM; PushToken.provider=Fcm.</item>
+    </mapping>
+  </section>
+</spec>
