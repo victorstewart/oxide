@@ -1,0 +1,11 @@
+[package]
+name = "oxide-harness-registry"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "oxide_harness_registry"
+path = "src/lib.rs"
+
+[dependencies]
+

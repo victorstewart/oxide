@@ -13,11 +13,11 @@
     self.continueAfterFailure = NO;
     self.app = [[XCUIApplication alloc] init];
     self.app.launchEnvironment = @{
-        @"OXIDEUI_UI_LOG": @"1",
-        @"OXIDEUI_RUST_LOG": @"1",
-        @"OXIDEUI_RENDER_IN_TEST": @"1",
-        @"OXIDEUI_CAPTURE_METAL": @"0",
-        @"OXIDEUI_DELAY_RELEASE_MS": @"0",
+        @"OXIDE_UI_LOG": @"1",
+        @"OXIDE_RUST_LOG": @"1",
+        @"OXIDE_RENDER_IN_TEST": @"1",
+        @"OXIDE_CAPTURE_METAL": @"0",
+        @"OXIDE_DELAY_RELEASE_MS": @"0",
         @"NSUnbufferedIO": @"YES"
     };
     [self.app launch];

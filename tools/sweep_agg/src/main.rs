@@ -1,6 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::error::Error;
 use std::fs;
+use std::io::{Error as IoError, ErrorKind};
 use std::path::PathBuf;
 
 use regex::Regex;
@@ -59,18 +61,18 @@ fn quantile(vals: &mut [f64], q: f64) -> f64
    (1.0 - w) * vals[lo] + w * vals[hi]
 }
 
-fn main()
+fn run() -> Result<(), Box<dyn Error>>
 {
    let (input, csv_out, json_out) = parse_args();
-   let data = fs::read_to_string(&input).expect("read sweep.txt");
+   let data = fs::read_to_string(&input)?;
 
-   let re_begin = Regex::new(r"^##\s*RUN\s+use=([0-9.]+)\s+prefilter=([0-9.]+)").unwrap();
-   let re_end = Regex::new(r"^##\s*END\s+use=([0-9.]+)\s+prefilter=([0-9.]+)").unwrap();
+   let re_begin = Regex::new(r"^##\s*RUN\s+use=([0-9.]+)\s+prefilter=([0-9.]+)")?;
+   let re_end = Regex::new(r"^##\s*END\s+use=([0-9.]+)\s+prefilter=([0-9.]+)")?;
 
    // Common metric patterns; extend if your runner prints different keys.
-   let re_fps = Regex::new(r"(?i)\bfps\s*=\s*([0-9]+(?:\.[0-9]+)?)").unwrap();
-   let re_p95 = Regex::new(r"(?i)\bp95(?:_?ms)?\s*=\s*([0-9]+(?:\.[0-9]+)?)").unwrap();
-   let re_ms = Regex::new(r"(?i)\b(?:frame[_\s-]?time|encode_ms|enc_ms|ms)\s*=\s*([0-9]+(?:\.[0-9]+)?)").unwrap();
+   let re_fps = Regex::new(r"(?i)\bfps\s*=\s*([0-9]+(?:\.[0-9]+)?)")?;
+   let re_p95 = Regex::new(r"(?i)\bp95(?:_?ms)?\s*=\s*([0-9]+(?:\.[0-9]+)?)")?;
+   let re_ms = Regex::new(r"(?i)\b(?:frame[_\s-]?time|encode_ms|enc_ms|ms)\s*=\s*([0-9]+(?:\.[0-9]+)?)")?;
 
    #[derive(Default)]
    struct Acc { fps_vals: Vec<f64>, ms_vals: Vec<f64> }
@@ -91,9 +93,27 @@ fn main()
       if re_end.is_match(line) { cur = None; continue; }
       if let Some((u, p)) = cur.clone()
       {
-         if let Some(cap) = re_fps.captures(line) { runs.get_mut(&(u.clone(), p.clone())).unwrap().fps_vals.push(cap[1].parse().unwrap_or(f64::NAN)); }
-         if let Some(cap) = re_p95.captures(line) { runs.get_mut(&(u.clone(), p.clone())).unwrap().ms_vals.push(cap[1].parse().unwrap_or(f64::NAN)); }
-         if let Some(cap) = re_ms.captures(line) { runs.get_mut(&(u, p)).unwrap().ms_vals.push(cap[1].parse().unwrap_or(f64::NAN)); }
+         if let Some(cap) = re_fps.captures(line)
+         {
+            if let Some(acc) = runs.get_mut(&(u.clone(), p.clone()))
+            {
+               acc.fps_vals.push(cap[1].parse().unwrap_or(f64::NAN));
+            }
+         }
+         if let Some(cap) = re_p95.captures(line)
+         {
+            if let Some(acc) = runs.get_mut(&(u.clone(), p.clone()))
+            {
+               acc.ms_vals.push(cap[1].parse().unwrap_or(f64::NAN));
+            }
+         }
+         if let Some(cap) = re_ms.captures(line)
+         {
+            if let Some(acc) = runs.get_mut(&(u, p))
+            {
+               acc.ms_vals.push(cap[1].parse().unwrap_or(f64::NAN));
+            }
+         }
       }
    }
 
@@ -132,7 +152,7 @@ fn main()
       {
          w.push_str(&format!("{:.6},{:.6},{},{:.6},{},{:.6}\n", s.use_thresh, s.prefilter, s.n_fps, s.avg_fps, s.n_ms, s.p95_ms));
       }
-      fs::write(csv_path, w).expect("write csv");
+      fs::write(csv_path, w)?;
    }
 
    if let Some(best) = stats.first()
@@ -141,13 +161,26 @@ fn main()
       let summary = Summary { best_use: best.use_thresh, best_prefilter: best.prefilter, basis };
       if let Some(json_path) = json_out.clone()
       {
-         fs::write(json_path, serde_json::to_string_pretty(&summary).unwrap()).expect("write json");
+         let json = serde_json::to_string_pretty(&summary)?;
+         fs::write(json_path, json)?;
       }
       println!("best_use={:.6} best_prefilter={:.6} basis={}", summary.best_use, summary.best_prefilter, summary.basis);
    }
    else
    {
-      eprintln!("no runs found; check markers in sweep.txt");
+      return Err(Box::new(IoError::new(
+         ErrorKind::InvalidData,
+         "no runs found; check markers in sweep.txt",
+      )));
+   }
+   Ok(())
+}
+
+fn main()
+{
+   if let Err(err) = run()
+   {
+      eprintln!("{}", err);
       std::process::exit(2);
    }
 }

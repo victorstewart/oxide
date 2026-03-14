@@ -1,0 +1,15 @@
+[package]
+name = "oxide-utils"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Utilities and helpers for Oxide"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+oxide-renderer-api = { path = "../renderer-api" }
+
+[dev-dependencies]
+proptest = "1.4"

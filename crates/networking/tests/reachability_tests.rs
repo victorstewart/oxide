@@ -1,4 +1,4 @@
-use oxideui_networking::{NetworkPath, ReachabilityManager, ReachabilityState};
+use oxide_networking::{NetworkPath, ReachabilityManager, ReachabilityState};
 use std::sync::{atomic::{AtomicU64, AtomicUsize, Ordering}, Arc, Mutex};
 
 fn test_clock() -> (Arc<AtomicU64>, Arc<dyn Fn() -> u64 + Send + Sync>)

@@ -1,0 +1,16 @@
+[package]
+name = "oxide-platform-macos"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "macOS platform bindings for Oxide (AppKit/Metal bridge)"
+
+[dependencies]
+oxide-platform-api = { path = "../platform-api" }
+once_cell = "1.19"
+libc = "0.2"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["rlib"]
+

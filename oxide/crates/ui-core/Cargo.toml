@@ -1,0 +1,25 @@
+[package]
+name = "oxide-ui-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "UI core (layout, drawlist, routing) for Oxide"
+
+[dependencies]
+oxide-platform-api = { path = "../platform-api" }
+oxide-renderer-api = { path = "../renderer-api" }
+oxide-utils = { path = "../utils" }
+oxide-text = { path = "../text" }
+oxide-timing = { path = "../timing" }
+oxide-permissions = { path = "../permissions" }
+oxide-telemetry = { path = "../telemetry" }
+once_cell = "1.18"
+font8x8 = "0.3"
+fontdue = "0.9"
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+proptest = "1"
+oxide-test-scenes = { path = "../test-scenes" }

@@ -1,0 +1,12 @@
+[package]
+name = "oxide-perf-runner"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+oxide-renderer-metal = { path = "../renderer-metal" }
+oxide-renderer-api = { path = "../renderer-api" }
+oxide-ui-core = { path = "../ui-core" }
+oxide-text = { path = "../text" }
+oxide-timing = { path = "../timing" }
+oxide-test-scenes = { path = "../test-scenes" }

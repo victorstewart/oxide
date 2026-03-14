@@ -1,4 +1,4 @@
-use oxideui_telemetry::{TelemetryHub, TelemetrySnapshot};
+use oxide_telemetry::{TelemetryHub, TelemetrySnapshot};
 use std::sync::Arc;
 
 #[derive(Clone)]

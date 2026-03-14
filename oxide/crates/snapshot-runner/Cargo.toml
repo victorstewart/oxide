@@ -1,0 +1,21 @@
+[package]
+name = "oxide-snapshot-runner"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+oxide-renderer-metal = { path = "../renderer-metal" }
+oxide-renderer-api = { path = "../renderer-api" }
+oxide-ui-core = { path = "../ui-core" }
+oxide-timing = { path = "../timing" }
+oxide-text = { path = "../text" }
+oxide-platform-api = { path = "../platform-api" }
+oxide-test-scenes = { path = "../test-scenes" }
+clap = { version = "4", features = ["derive"] }
+png = "0.17"
+anyhow = "1.0"
+
+
+[[bin]]
+name = "oxide-snapshot-runner"
+path = "src/main.rs"

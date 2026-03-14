@@ -1,10 +1,10 @@
-//! Overlay and popup window management for OxideUI surfaces.
+//! Overlay and popup window management for Oxide surfaces.
 
 use crate::{DrawListBuilder, NodeId, UiSurface};
 use alloc::vec::Vec;
 use core::cmp::Ordering;
-use oxideui_renderer_api as gfx;
-use oxideui_timing as timing;
+use oxide_renderer_api as gfx;
+use oxide_timing as timing;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct OverlayHandle(pub u64);

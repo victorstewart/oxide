@@ -1,6 +1,6 @@
-//! View capture helpers for OxideUI surfaces.
+//! View capture helpers for Oxide surfaces.
 
-use oxideui_renderer_api as gfx;
+use oxide_renderer_api as gfx;
 
 pub struct SurfaceCapture
 {

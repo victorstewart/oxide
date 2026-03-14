@@ -1,7 +1,7 @@
-use oxideui_networking::{NetworkPath, QuicSessionMetrics, ReachabilitySnapshot, ReachabilityState, SessionPhase};
-use oxideui_permissions::{sensors::{BluetoothSnapshot, LocationSnapshot, MotionSnapshot, PushSnapshot, SensorSnapshot}, PermissionState};
-use oxideui_platform_api::{LocationReading, MotionSample, PermissionDomain, PermissionStatus, PushProvider, PushToken};
-use oxideui_telemetry::{TelemetryEvent, TelemetryHealth, TelemetryHub, TelemetryUpdateKind};
+use oxide_networking::{NetworkPath, QuicSessionMetrics, ReachabilitySnapshot, ReachabilityState, SessionPhase};
+use oxide_permissions::{sensors::{BluetoothSnapshot, LocationSnapshot, MotionSnapshot, PushSnapshot, SensorSnapshot}, PermissionState};
+use oxide_platform_api::{LocationReading, MotionSample, PermissionDomain, PermissionStatus, PushProvider, PushToken};
+use oxide_telemetry::{TelemetryEvent, TelemetryHealth, TelemetryHub, TelemetryUpdateKind};
 use std::sync::{Arc, Mutex};
 
 fn sample_permissions(status: PermissionStatus) -> Vec<PermissionState>

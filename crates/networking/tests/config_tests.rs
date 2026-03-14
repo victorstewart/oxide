@@ -1,11 +1,11 @@
-use oxideui_networking::{ConnectionConfig, ConnectionConfigError, Endpoint};
+use oxide_networking::{ConnectionConfig, ConnectionConfigError, Endpoint};
 
 #[test]
 fn config_roundtrip_serialization()
 {
    let config = ConnectionConfig {
-      application_id: "oxideui.test".to_owned(),
-      endpoint: Endpoint { host: "edge.oxideui.dev".to_owned(), port: 4433 },
+      application_id: "oxide.test".to_owned(),
+      endpoint: Endpoint { host: "edge.oxide.dev".to_owned(), port: 4433 },
       alpn: vec!["hq-interop".to_owned(), "hq-29".to_owned()],
       idle_timeout_ms: 30_000,
       max_datagram_size: 1_200,
@@ -21,8 +21,8 @@ fn config_roundtrip_serialization()
 fn config_decode_rejects_truncated_payload()
 {
    let config = ConnectionConfig {
-      application_id: "oxideui.test".to_owned(),
-      endpoint: Endpoint { host: "edge.oxideui.dev".to_owned(), port: 4433 },
+      application_id: "oxide.test".to_owned(),
+      endpoint: Endpoint { host: "edge.oxide.dev".to_owned(), port: 4433 },
       alpn: vec!["hq-interop".to_owned()],
       idle_timeout_ms: 10_000,
       max_datagram_size: 1_200,

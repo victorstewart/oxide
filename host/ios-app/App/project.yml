@@ -23,7 +23,7 @@ targets:
       - Resources
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.oxideui.host
+        PRODUCT_BUNDLE_IDENTIFIER: com.oxide.host
         SWIFT_VERSION: 5.0
         TARGETED_DEVICE_FAMILY: "1,2"
         ENABLE_BITCODE: NO
@@ -66,17 +66,17 @@ targets:
           mkdir -p "${BUILT_PRODUCTS_DIR}"
           case "${PLATFORM_NAME}" in
             iphoneos)
-              cargo build --package oxideui-host-ios --release --target aarch64-apple-ios
-              cp "${CARGO_TARGET_DIR}/aarch64-apple-ios/release/liboxideui_host_ios.a" "${BUILT_PRODUCTS_DIR}/liboxideui_host_ios.a"
+              cargo build --package oxide-host-ios --release --target aarch64-apple-ios
+              cp "${CARGO_TARGET_DIR}/aarch64-apple-ios/release/liboxide_host_ios.a" "${BUILT_PRODUCTS_DIR}/liboxide_host_ios.a"
               ;;
             iphonesimulator)
-              cargo build --package oxideui-host-ios --release --target aarch64-apple-ios-sim
-              cargo build --package oxideui-host-ios --release --target x86_64-apple-ios
-              lipo -create                 "${CARGO_TARGET_DIR}/aarch64-apple-ios-sim/release/liboxideui_host_ios.a"                 "${CARGO_TARGET_DIR}/x86_64-apple-ios/release/liboxideui_host_ios.a"                 -output "${BUILT_PRODUCTS_DIR}/liboxideui_host_ios.a"
+              cargo build --package oxide-host-ios --release --target aarch64-apple-ios-sim
+              cargo build --package oxide-host-ios --release --target x86_64-apple-ios
+              lipo -create                 "${CARGO_TARGET_DIR}/aarch64-apple-ios-sim/release/liboxide_host_ios.a"                 "${CARGO_TARGET_DIR}/x86_64-apple-ios/release/liboxide_host_ios.a"                 -output "${BUILT_PRODUCTS_DIR}/liboxide_host_ios.a"
               ;;
             *)
-              cargo build --package oxideui-host-ios --release --target aarch64-apple-ios-sim
-              cp "${CARGO_TARGET_DIR}/aarch64-apple-ios-sim/release/liboxideui_host_ios.a" "${BUILT_PRODUCTS_DIR}/liboxideui_host_ios.a"
+              cargo build --package oxide-host-ios --release --target aarch64-apple-ios-sim
+              cp "${CARGO_TARGET_DIR}/aarch64-apple-ios-sim/release/liboxide_host_ios.a" "${BUILT_PRODUCTS_DIR}/liboxide_host_ios.a"
               ;;
           esac
     scheme:
@@ -89,7 +89,7 @@ targets:
       - path: OxideHostUITests
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.oxideui.host.UITests
+        PRODUCT_BUNDLE_IDENTIFIER: com.oxide.host.UITests
         INFOPLIST_FILE: OxideHostUITests/Info.plist
         SWIFT_VERSION: 5.0
         TARGETED_DEVICE_FAMILY: "1,2"

@@ -1,0 +1,18 @@
+[package]
+name = "oxide-macos-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+oxide_host_macos = { package = "oxide-host-macos", path = "../oxide-host-macos" }
+libc = "0.2"
+
+[[bin]]
+name = "oxide-macos-app"
+path = "src/main.rs"
+
+[package.metadata.bundle]
+name = "Oxide Test"
+identifier = "dev.oxide.macos-app"
+osx_minimum_system_version = "12.0"
+resources = ["../Resources"]

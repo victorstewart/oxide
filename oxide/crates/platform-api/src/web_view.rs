@@ -2,6 +2,7 @@
 
 use crate::PlatformError;
 use core::future::Future;
+use core::pin::Pin;
 
 #[derive(Debug, Clone)]
 pub enum WebViewEvent {
@@ -17,7 +18,9 @@ pub trait WebView: Send + Sync {
     fn execute_script(
         &self,
         script: &str,
-    ) -> impl Future<Output = Result<Option<String>, PlatformError>> + Send;
+    ) -> Pin<
+        alloc::boxed::Box<dyn Future<Output = Result<Option<String>, PlatformError>> + Send + '_>,
+    >;
 
     /// Closes and destroys the web view.
     fn close(&self);

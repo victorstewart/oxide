@@ -13,7 +13,7 @@ V)
 
 -->
 <?xml version="1.0" encoding="UTF-8"?>
-<spec app="OxideUI" version="1.2">
+<spec app="Oxide" version="1.2">
   <section number="0" title="Scope and assumptions">
     <item>Goal: Rust-first iOS UI runtime with a Metal renderer and a thin UIKit shell. Zero Swift. Android deferred but anticipated by all abstractions.</item>
     <item>Minimum iOS: 25.0. Targets: aarch64-apple-ios (device), aarch64-apple-ios-sim and x86_64-apple-ios (sim).</item>
@@ -24,22 +24,22 @@ V)
   </section>
 
   <section number="1" title="Workspace layout and reproducible build">
-    <workspaceRoot>oxideui/</workspaceRoot>
+    <workspaceRoot>oxide/</workspaceRoot>
     <layout>
-      <dir>oxideui/Cargo.toml (workspace)</dir>
-      <dir>oxideui/crates/ui-core/</dir>
-      <dir>oxideui/crates/platform-api/</dir>
-      <dir>oxideui/crates/platform-ios/</dir>
-      <dir>oxideui/crates/renderer-api/</dir>
-      <dir>oxideui/crates/renderer-metal/</dir>
-      <dir>oxideui/crates/text/</dir>
-      <dir>oxideui/crates/input/</dir>
-      <dir>oxideui/crates/timing/</dir>
-      <dir>oxideui/crates/utils/</dir>
-      <dir>oxideui/host/ios-app/</dir>
-      <dir>oxideui/crates/platform-android/ (stub)</dir>
-      <dir>oxideui/crates/renderer-vulkan/ (stub)</dir>
-      <dir>oxideui/host/android-app/ (stub)</dir>
+      <dir>oxide/Cargo.toml (workspace)</dir>
+      <dir>oxide/crates/ui-core/</dir>
+      <dir>oxide/crates/platform-api/</dir>
+      <dir>oxide/crates/platform-ios/</dir>
+      <dir>oxide/crates/renderer-api/</dir>
+      <dir>oxide/crates/renderer-metal/</dir>
+      <dir>oxide/crates/text/</dir>
+      <dir>oxide/crates/input/</dir>
+      <dir>oxide/crates/timing/</dir>
+      <dir>oxide/crates/utils/</dir>
+      <dir>oxide/host/ios-app/</dir>
+      <dir>oxide/crates/platform-android/ (stub)</dir>
+      <dir>oxide/crates/renderer-vulkan/ (stub)</dir>
+      <dir>oxide/host/android-app/ (stub)</dir>
     </layout>
     <cargo>
       <rustVersion>1.80+ stable</rustVersion>
@@ -59,7 +59,7 @@ V)
       <crateTypes>
         <crate name="platform-ios">rlib</crate>
         <crate name="renderer-metal">rlib</crate>
-        <crate name="oxideui-host-ios">staticlib</crate>
+        <crate name="oxide-host-ios">staticlib</crate>
       </crateTypes>
     </cargo>
     <dependencies>
@@ -72,11 +72,11 @@ V)
       <crate>tracing or log (choose one; wire to env filter)</crate>
     </dependencies>
     <hostProject>
-      <file>oxideui/host/ios-app/App/OxideHost.xcodeproj</file>
-      <file>oxideui/host/ios-app/App/Info.plist</file>
-      <file>oxideui/host/ios-app/App/Assets.xcassets</file>
-      <file>oxideui/host/ios-app/App/main.m</file>
-      <file>oxideui/host/ios-app/App/App.entitlements</file>
+      <file>oxide/host/ios-app/App/OxideHost.xcodeproj</file>
+      <file>oxide/host/ios-app/App/Info.plist</file>
+      <file>oxide/host/ios-app/App/Assets.xcassets</file>
+      <file>oxide/host/ios-app/App/main.m</file>
+      <file>oxide/host/ios-app/App/App.entitlements</file>
       <linker>
         <flag>-ObjC</flag>
         <setting>Embed Swift Standard Libraries = NO</setting>
@@ -491,7 +491,7 @@ pub fn compute_canvas(view_w: f32, view_h: f32, design_w: f32, design_h: f32, de
 
   <section number="4" title="iOS host and lifecycle">
     <entry>
-      <file>oxideui/host/ios-app/App/main.m</file>
+      <file>oxide/host/ios-app/App/main.m</file>
       <content language="objc"><![CDATA[
 @import Foundation;
 int rust_entry(void);
@@ -722,7 +722,7 @@ pub trait RenderEncoder
       <item>Timers fire before App::event for deterministic ordering. Timer resolution ≥ 1 ms.</item>
     </tick>
     <threadPool>
-      <item>Pool size = min(num_cpus, 6); override via env OXIDEUI_WORKERS. Work stealing enabled.</item>
+      <item>Pool size = min(num_cpus, 6); override via env OXIDE_WORKERS. Work stealing enabled.</item>
     </threadPool>
     <determinism>
       <item>Provide a deterministic PRNG seed for any noncritical animations in samples; core engine must be deterministic for same input stream.</item>
@@ -750,7 +750,7 @@ pub trait RenderEncoder
       <item>No panics cross FFI. FFI functions return int codes; errors logged via tracing.</item>
     </ffi>
     <logging>
-      <item>TRACE/DEBUG/INFO/WARN/ERROR levels. Env filter OXIDEUI_LOG. Redact PII in a11y logs.</item>
+      <item>TRACE/DEBUG/INFO/WARN/ERROR levels. Env filter OXIDE_LOG. Redact PII in a11y logs.</item>
     </logging>
   </section>
 
@@ -787,13 +787,13 @@ pub trait RenderEncoder
 
   <section number="18" title="Info.plist required keys">
     <usageDescriptions>
-      <key>NSCameraUsageDescription</key><string>${OXIDEUI_NS_CAMERA}</string>
-      <key>NSBluetoothAlwaysUsageDescription</key><string>${OXIDEUI_NS_BLUETOOTH_ALWAYS}</string>
-      <key>NSBluetoothPeripheralUsageDescription</key><string>${OXIDEUI_NS_BLUETOOTH_PERIPHERAL}</string>
-      <key>NSLocationWhenInUseUsageDescription</key><string>${OXIDEUI_NS_LOCATION_WHEN_IN_USE}</string>
-      <key>NSLocationAlwaysAndWhenInUseUsageDescription</key><string>${OXIDEUI_NS_LOCATION_ALWAYS}</string>
-      <key>NSContactsUsageDescription</key><string>${OXIDEUI_NS_CONTACTS}</string>
-      <key>NSMotionUsageDescription</key><string>${OXIDEUI_NS_MOTION}</string>
+      <key>NSCameraUsageDescription</key><string>${OXIDE_NS_CAMERA}</string>
+      <key>NSBluetoothAlwaysUsageDescription</key><string>${OXIDE_NS_BLUETOOTH_ALWAYS}</string>
+      <key>NSBluetoothPeripheralUsageDescription</key><string>${OXIDE_NS_BLUETOOTH_PERIPHERAL}</string>
+      <key>NSLocationWhenInUseUsageDescription</key><string>${OXIDE_NS_LOCATION_WHEN_IN_USE}</string>
+      <key>NSLocationAlwaysAndWhenInUseUsageDescription</key><string>${OXIDE_NS_LOCATION_ALWAYS}</string>
+      <key>NSContactsUsageDescription</key><string>${OXIDE_NS_CONTACTS}</string>
+      <key>NSMotionUsageDescription</key><string>${OXIDE_NS_MOTION}</string>
     </usageDescriptions>
     <plist>
       <key>UIApplicationSceneManifest</key>
@@ -830,9 +830,9 @@ pub trait RenderEncoder
   <string>bluetooth-peripheral</string>
 </array>
 <key>NSBluetoothAlwaysUsageDescription</key>
-<string>Allows OxideUI to discover and connect to nearby Bluetooth devices.</string>
+<string>Allows Oxide to discover and connect to nearby Bluetooth devices.</string>
 <key>NSBluetoothPeripheralUsageDescription</key>
-<string>Allows OxideUI to advertise services to nearby Bluetooth devices.</string>
+<string>Allows Oxide to advertise services to nearby Bluetooth devices.</string>
     ]]></snippet>
   </section>
 
@@ -844,7 +844,7 @@ pub trait RenderEncoder
       <validation>Fail build if metallib missing; embed in app bundle; path provided to renderer-metal at init.</validation>
     </shaders>
     <fonts>
-      <item>Fonts under oxideui/host/ios-app/App/Fonts/ with a manifest consumed by InitContext::fonts.</item>
+      <item>Fonts under oxide/host/ios-app/App/Fonts/ with a manifest consumed by InitContext::fonts.</item>
       <license>Integrator responsible for font licenses.</license>
     </fonts>
     <resources>
@@ -863,7 +863,7 @@ pub trait RenderEncoder
 
   <section number="21" title="Example code: minimal app">
     <code language="rust"><![CDATA[
-use oxideui::prelude::*;
+use oxide::prelude::*;
 
 struct Demo;
 
@@ -1178,7 +1178,7 @@ fn main()
   <section number="35" title="Host capability manifest and codegen">
     <goal>Only ship entitlements and usage descriptions that the host app opts into.</goal>
     <files>
-      <file>oxideui/host/ios-app/App/capabilities.toml</file>
+      <file>oxide/host/ios-app/App/capabilities.toml</file>
       <file>xtask/src/main.rs</file>
     </files>
     <manifest language="toml"><![CDATA[

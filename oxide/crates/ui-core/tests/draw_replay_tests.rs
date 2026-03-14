@@ -1,0 +1,208 @@
+use oxide_renderer_api::{
+    self as gfx, Color, DrawCmd, DrawList, GlyphRun, ImageHandle, IndexSpan, Insets, RectF, RectI,
+    Vertex, VertexSpan,
+};
+use oxide_ui_core::draw_replay::replay_drawlist;
+
+#[derive(Default)]
+struct RecordingEncoder {
+    clips: Vec<RectI>,
+    solids: Vec<Vec<Vertex>>,
+    images: Vec<(ImageHandle, RectF, RectF)>,
+    rrects: Vec<(RectF, [f32; 4], Color)>,
+    nine_slices: Vec<(ImageHandle, RectF, Insets, f32)>,
+    backdrops: Vec<(RectF, f32, Color, f32)>,
+    spinners: Vec<([f32; 2], f32, f32, f32, f32)>,
+    glyph_runs: usize,
+}
+
+impl gfx::RenderEncoder for RecordingEncoder {
+    fn set_viewport(&mut self, _vp: RectF) {}
+
+    fn set_clip(&mut self, scissor: RectI) {
+        self.clips.push(scissor);
+    }
+
+    fn draw_solid(&mut self, verts: &[Vertex], _color: Color) {
+        self.solids.push(verts.to_vec());
+    }
+
+    fn draw_image(&mut self, img: ImageHandle, dst: RectF, src: RectF) {
+        self.images.push((img, dst, src));
+    }
+
+    fn draw_rrect(&mut self, rect: RectF, radii: [f32; 4], color: Color) {
+        self.rrects.push((rect, radii, color));
+    }
+
+    fn draw_nine_slice(&mut self, img: ImageHandle, rect: RectF, slice: Insets, alpha: f32) {
+        self.nine_slices.push((img, rect, slice, alpha));
+    }
+
+    fn draw_backdrop(&mut self, rect: RectF, sigma: f32, tint: Color, alpha: f32) {
+        self.backdrops.push((rect, sigma, tint, alpha));
+    }
+
+    fn draw_spinner(
+        &mut self,
+        center: [f32; 2],
+        radius: f32,
+        thickness: f32,
+        phase: f32,
+        alpha: f32,
+    ) {
+        self.spinners.push((center, radius, thickness, phase, alpha));
+    }
+
+    fn draw_glyph_run(&mut self, _run: &GlyphRun) {
+        self.glyph_runs = self.glyph_runs.saturating_add(1);
+    }
+}
+
+fn build_test_drawlist() -> DrawList {
+    let mut list = DrawList::default();
+    list.vertices.extend_from_slice(&[
+        Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: u32::MAX },
+        Vertex { x: 2.0, y: 0.0, u: 1.0, v: 0.0, rgba: u32::MAX },
+        Vertex { x: 0.0, y: 2.0, u: 0.0, v: 1.0, rgba: u32::MAX },
+        Vertex { x: 2.0, y: 2.0, u: 1.0, v: 1.0, rgba: u32::MAX },
+    ]);
+    list.items.push(DrawCmd::ClipPush { rect: RectI::new(1, 2, 30, 40) });
+    list.items.push(DrawCmd::Solid {
+        vb: VertexSpan { offset: 0, len: 4 },
+        ib: IndexSpan { offset: 0, len: 6 },
+        color: Color::rgba(1.0, 0.0, 0.0, 1.0),
+    });
+    list.items.push(DrawCmd::Image {
+        tex: ImageHandle(7),
+        dst: RectF::new(3.0, 4.0, 5.0, 6.0),
+        src: RectF::new(0.0, 0.0, 1.0, 1.0),
+        alpha: 0.75,
+    });
+    list.items.push(DrawCmd::RRect {
+        rect: RectF::new(10.0, 11.0, 12.0, 13.0),
+        radii: [1.0, 2.0, 3.0, 4.0],
+        color: Color::rgba(0.2, 0.3, 0.4, 0.5),
+    });
+    list.items.push(DrawCmd::NineSlice {
+        tex: ImageHandle(8),
+        rect: RectF::new(20.0, 21.0, 22.0, 23.0),
+        slice: Insets::new(1.0, 2.0, 3.0, 4.0),
+        alpha: 0.25,
+    });
+    list.items.push(DrawCmd::Backdrop {
+        rect: RectF::new(30.0, 31.0, 32.0, 33.0),
+        sigma: 5.0,
+        tint: Color::rgba(0.1, 0.2, 0.3, 0.4),
+        alpha: 0.8,
+    });
+    list.items.push(DrawCmd::Spinner {
+        center: [40.0, 41.0],
+        radius: 7.0,
+        thickness: 2.0,
+        phase: 0.4,
+        alpha: 0.6,
+    });
+    list.items.push(DrawCmd::CameraBg {
+        rect: RectF::new(50.0, 51.0, 52.0, 53.0),
+        tint: Color::rgba(0.6, 0.5, 0.4, 0.3),
+        alpha: 0.2,
+        grayscale: true,
+        blur: true,
+        sigma: 4.0,
+    });
+    list.items.push(DrawCmd::GlyphRun {
+        run: GlyphRun {
+            atlas: ImageHandle(9),
+            vb: VertexSpan { offset: 0, len: 0 },
+            ib: IndexSpan { offset: 0, len: 0 },
+            sdf: false,
+            color: Color::rgba(0.9, 0.8, 0.7, 1.0),
+        },
+    });
+    list.items.push(DrawCmd::ClipPop);
+    list
+}
+
+fn approx_eq(a: f32, b: f32) -> bool {
+    (a - b).abs() <= 0.001
+}
+
+#[test]
+fn replay_translates_primitives_and_restores_fallback_clip() {
+    let list = build_test_drawlist();
+    let fallback = RectI::new(0, 0, 100, 100);
+    let mut encoder = RecordingEncoder::default();
+    replay_drawlist(&list, &mut encoder, fallback, [5.0, -3.0]);
+
+    assert_eq!(encoder.clips.len(), 3);
+    assert_eq!(encoder.clips[0], RectI::new(5, -3, 100, 100));
+    assert_eq!(encoder.clips[1], RectI::new(6, -1, 30, 40));
+    assert_eq!(encoder.clips[2], RectI::new(5, -3, 100, 100));
+
+    assert_eq!(encoder.solids.len(), 1);
+    let solid = &encoder.solids[0];
+    assert_eq!(solid.len(), 4);
+    assert!(approx_eq(solid[0].x, 5.0));
+    assert!(approx_eq(solid[0].y, -3.0));
+    assert!(approx_eq(solid[3].x, 7.0));
+    assert!(approx_eq(solid[3].y, -1.0));
+
+    assert_eq!(encoder.images.len(), 1);
+    let (_, image_dst, _) = encoder.images[0];
+    assert!(approx_eq(image_dst.x, 8.0));
+    assert!(approx_eq(image_dst.y, 1.0));
+
+    assert_eq!(encoder.rrects.len(), 1);
+    let (rrect_rect, _, _) = encoder.rrects[0];
+    assert!(approx_eq(rrect_rect.x, 15.0));
+    assert!(approx_eq(rrect_rect.y, 8.0));
+
+    assert_eq!(encoder.nine_slices.len(), 1);
+    let (_, nine_slice_rect, _, _) = encoder.nine_slices[0];
+    assert!(approx_eq(nine_slice_rect.x, 25.0));
+    assert!(approx_eq(nine_slice_rect.y, 18.0));
+
+    assert_eq!(encoder.backdrops.len(), 2);
+    let (first_backdrop_rect, _, _, _) = encoder.backdrops[0];
+    assert!(approx_eq(first_backdrop_rect.x, 35.0));
+    assert!(approx_eq(first_backdrop_rect.y, 28.0));
+    let (camera_fallback_rect, _, _, _) = encoder.backdrops[1];
+    assert!(approx_eq(camera_fallback_rect.x, 55.0));
+    assert!(approx_eq(camera_fallback_rect.y, 48.0));
+
+    assert_eq!(encoder.spinners.len(), 1);
+    let (center, _, _, _, _) = encoder.spinners[0];
+    assert!(approx_eq(center[0], 45.0));
+    assert!(approx_eq(center[1], 38.0));
+
+    assert_eq!(encoder.glyph_runs, 1);
+}
+
+#[test]
+fn replay_skips_invalid_solid_vertex_span() {
+    let mut list = DrawList::default();
+    list.items.push(DrawCmd::Solid {
+        vb: VertexSpan { offset: 999, len: 4 },
+        ib: IndexSpan { offset: 0, len: 6 },
+        color: Color::rgba(1.0, 1.0, 1.0, 1.0),
+    });
+    let mut encoder = RecordingEncoder::default();
+    replay_drawlist(&list, &mut encoder, RectI::new(0, 0, 10, 10), [0.0, 0.0]);
+
+    assert!(encoder.solids.is_empty());
+    assert_eq!(encoder.clips, vec![RectI::new(0, 0, 10, 10)]);
+}
+
+#[test]
+fn replay_recovers_from_unbalanced_clip_stack() {
+    let mut list = DrawList::default();
+    list.items.push(DrawCmd::ClipPush { rect: RectI::new(2, 3, 4, 5) });
+    let mut encoder = RecordingEncoder::default();
+    replay_drawlist(&list, &mut encoder, RectI::new(10, 20, 30, 40), [1.0, 2.0]);
+
+    assert_eq!(encoder.clips.len(), 3);
+    assert_eq!(encoder.clips[0], RectI::new(11, 22, 30, 40));
+    assert_eq!(encoder.clips[1], RectI::new(3, 5, 4, 5));
+    assert_eq!(encoder.clips[2], RectI::new(11, 22, 30, 40));
+}

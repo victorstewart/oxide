@@ -1,0 +1,2960 @@
+//! Basic UI elements: Label, ProgressBar, Spinner
+#![allow(clippy::module_name_repetitions)]
+
+use crate::DrawListBuilder;
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::cmp;
+use core::ops::Range;
+use oxide_platform_api::{
+    clipboard, AutoCapitalization, KeyCode, KeyEvent, KeyboardAppearance, Modifiers, ReturnKeyType,
+    TextContentType, TextEvent, TextInputConfig,
+};
+use oxide_renderer_api as gfx;
+use oxide_text as text;
+use oxide_timing as timing;
+
+// ----- Text integration -----
+
+pub trait ImageUploader {
+    fn create_a8(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize) -> gfx::ImageHandle;
+    fn update_a8(
+        &mut self,
+        handle: gfx::ImageHandle,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        data: &[u8],
+        row_bytes: usize,
+    );
+}
+
+pub struct TextCtx {
+    pub fonts: text::FontDb,
+    pub shaper: text::TextShaper,
+    pub atlas: text::Atlas,
+    pub atlas_handle: Option<gfx::ImageHandle>,
+    atlas_gpu_size: Option<(u32, u32)>,
+}
+
+impl Default for TextCtx {
+    fn default() -> Self {
+        Self {
+            fonts: text::FontDb::default(),
+            shaper: text::TextShaper::default(),
+            atlas: text::Atlas::new(1024, 1024),
+            atlas_handle: None,
+            atlas_gpu_size: None,
+        }
+    }
+}
+
+impl TextCtx {
+    pub fn ensure_gpu<U: ImageUploader>(&mut self, up: &mut U) -> gfx::ImageHandle {
+        let (data, w, h) = self.atlas.image();
+        if let Some(hdl) = self.atlas_handle {
+            if self.atlas_gpu_size == Some((w, h)) {
+                up.update_a8(hdl, 0, 0, w, h, data, w as usize);
+                return hdl;
+            }
+        }
+        let hdl = up.create_a8(w, h, data, w as usize);
+        self.atlas_handle = Some(hdl);
+        self.atlas_gpu_size = Some((w, h));
+        hdl
+    }
+
+    pub fn trim_memory(&mut self) {
+        self.atlas.reset();
+        self.atlas_handle = None;
+        self.atlas_gpu_size = None;
+    }
+}
+
+// ----- Label -----
+
+#[derive(Clone, Copy, Debug)]
+pub enum Align {
+    Left,
+    Center,
+    Right,
+}
+
+pub struct Label {
+    pub text: alloc::string::String,
+    pub color: gfx::Color,
+    pub align: Align,
+    pub wrap: bool,
+    pub font_id: usize,
+    pub font_px: f32,
+}
+
+impl Default for Label {
+    fn default() -> Self {
+        Self {
+            text: alloc::string::String::new(),
+            color: gfx::Color::rgba(0.1, 0.1, 0.1, 1.0),
+            align: Align::Left,
+            wrap: false,
+            font_id: 0,
+            font_px: 14.0,
+        }
+    }
+}
+
+impl Label {
+    pub fn encode<U: ImageUploader>(
+        &self,
+        rect: gfx::RectF,
+        device_scale: f32,
+        txt: &mut TextCtx,
+        up: &mut U,
+        b: &mut DrawListBuilder,
+    ) {
+        if txt.fonts.font(self.font_id).is_none() {
+            return;
+        }
+        let mut handle = txt.ensure_gpu(up);
+
+        let scale = if device_scale > 0.0 { device_scale } else { 1.0 };
+        let ox = (rect.x * scale).round() / scale;
+        let mut oy = (rect.y * scale).round() / scale;
+        let line_h = (self.font_px * 1.25).ceil();
+        let max_w = if self.wrap { rect.w.max(0.0) } else { f32::INFINITY };
+
+        // Build wrapped lines by measuring partial strings
+        let mut lines: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
+        if !self.wrap {
+            lines.push(self.text.clone());
+        } else {
+            let words: alloc::vec::Vec<&str> = self.text.split_inclusive(' ').collect();
+            let mut cur = alloc::string::String::new();
+            for w in words {
+                let trial = if cur.is_empty() {
+                    alloc::string::String::from(w)
+                } else {
+                    let mut t = cur.clone();
+                    t.push_str(w);
+                    t
+                };
+                let Some(font) = txt.fonts.font(self.font_id) else { continue };
+                let Ok(shape) = txt.shaper.shape(font, self.font_id, &trial, self.font_px) else {
+                    continue;
+                };
+                let width = shape.width();
+                if width <= max_w || cur.is_empty() {
+                    cur = trial;
+                } else {
+                    lines.push(cur.trim_end().to_string());
+                    cur = w.to_string();
+                }
+            }
+            if !cur.is_empty() {
+                lines.push(cur.trim_end().to_string());
+            }
+        }
+
+        for line in &lines {
+            let Some(font) = txt.fonts.font(self.font_id) else { continue };
+            let Ok(shape) = txt.shaper.shape(font, self.font_id, line, self.font_px) else {
+                continue;
+            };
+            // Measure width for alignment via public API
+            let width = shape.width();
+            let dx = match self.align {
+                Align::Left => 0.0,
+                Align::Center => (rect.w - width) * 0.5,
+                Align::Right => rect.w - width,
+            };
+            // Borrow drawlist once to safely access both vertices and indices
+            let dl = b.drawlist_mut();
+            let run = shape.bake_into(
+                &mut txt.atlas,
+                &mut dl.vertices,
+                &mut dl.indices,
+                self.color,
+                handle,
+                ox + dx,
+                oy,
+                scale,
+            );
+            b.glyph_run(run);
+            oy += line_h;
+            handle = txt.ensure_gpu(up);
+        }
+
+        let _ = handle;
+    }
+}
+
+// ----- ProgressBar -----
+
+pub struct ProgressBar {
+    pub value: Option<f32>, // None -> indeterminate
+    pub track: gfx::Color,
+    pub fill: gfx::Color,
+    pub corner: f32,
+}
+
+impl Default for ProgressBar {
+    fn default() -> Self {
+        Self {
+            value: Some(0.0),
+            track: gfx::Color::rgba(0.85, 0.85, 0.85, 1.0),
+            fill: gfx::Color::rgba(0.2, 0.5, 1.0, 1.0),
+            corner: 4.0,
+        }
+    }
+}
+
+impl ProgressBar {
+    pub fn encode(&self, rect: gfx::RectF, phase: f32, b: &mut DrawListBuilder) {
+        // Track
+        b.rrect(rect, [self.corner; 4], self.track);
+        // Draw determinate or indeterminate fill
+        match self.value {
+            Some(mut v) => {
+                v = v.clamp(0.0, 1.0);
+                let w = rect.w * v;
+                if w > 0.5 {
+                    b.rrect(
+                        gfx::RectF::new(rect.x, rect.y, w, rect.h),
+                        [self.corner; 4],
+                        self.fill,
+                    );
+                }
+            }
+            None => {
+                // Indeterminate: moving segment ~30% width looping with phase 0..1
+                let seg = (rect.w * 0.3).max(8.0);
+                let t = (phase.fract() + 1.0).fract();
+                let x = rect.x + (rect.w - seg) * t;
+                let mut c = self.fill;
+                c.a *= 0.9;
+                b.rrect(gfx::RectF::new(x, rect.y, seg, rect.h), [self.corner; 4], c);
+            }
+        }
+    }
+}
+
+// ----- Camera background -----
+
+pub struct UICameraView {
+    pub tint: gfx::Color,
+    pub alpha: f32,
+    pub grayscale: bool,
+    pub blur: bool,
+    pub sigma: f32,
+}
+
+impl Default for UICameraView {
+    fn default() -> Self {
+        Self {
+            tint: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
+            alpha: 1.0,
+            grayscale: false,
+            blur: true,
+            sigma: 6.0,
+        }
+    }
+}
+
+impl UICameraView {
+    pub fn encode(&self, rect: gfx::RectF, b: &mut DrawListBuilder) {
+        b.camera_bg(rect, self.tint, self.alpha, self.grayscale, self.blur, self.sigma);
+    }
+}
+
+// ----- Spinner -----
+
+pub struct Spinner {
+    pub thickness: f32,
+    pub alpha: f32,
+}
+
+impl Default for Spinner {
+    fn default() -> Self {
+        Self { thickness: 2.5, alpha: 1.0 }
+    }
+}
+
+impl Spinner {
+    pub fn encode(&self, rect: gfx::RectF, phase: f32, b: &mut DrawListBuilder) {
+        let cx = rect.x + rect.w * 0.5;
+        let cy = rect.y + rect.h * 0.5;
+        let radius = 0.5 * rect.w.min(rect.h) - self.thickness.max(1.0);
+        let alpha = self.alpha.clamp(0.0, 1.0);
+        b.spinner([cx, cy], radius.max(2.0), self.thickness, phase, alpha);
+    }
+}
+
+// ----- helpers -----
+
+// =============================
+// Button, Toggle, Slider (UI II)
+// =============================
+
+// ----- Button -----
+
+#[derive(Clone, Copy, Debug)]
+pub struct ButtonStyle {
+    pub corner: f32,
+    pub pad_x: f32,
+    pub pad_y: f32,
+    pub color: gfx::Color,
+    pub color_pressed: gfx::Color,
+    pub color_disabled: gfx::Color,
+    pub text_px: f32,
+    pub text_color: gfx::Color,
+    pub press_animation_ms: u32,
+}
+
+impl Default for ButtonStyle {
+    fn default() -> Self {
+        Self {
+            corner: 6.0,
+            pad_x: 10.0,
+            pad_y: 6.0,
+            color: gfx::Color::rgba(0.20, 0.55, 1.0, 1.0),
+            color_pressed: gfx::Color::rgba(0.18, 0.50, 0.95, 1.0),
+            color_disabled: gfx::Color::rgba(0.70, 0.75, 0.80, 1.0),
+            text_px: 14.0,
+            text_color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
+            press_animation_ms: 100,
+        }
+    }
+}
+
+pub struct Button {
+    pub text: alloc::string::String,
+    pub style: ButtonStyle,
+}
+
+impl Default for Button {
+    fn default() -> Self {
+        Self { text: alloc::string::String::from("Button"), style: ButtonStyle::default() }
+    }
+}
+
+pub struct ButtonState {
+    pub disabled: bool,
+    pressed: bool,
+    anim_from: f32,
+    anim_to: f32,
+    anim_start_ms: u64,
+    anim_dur_ms: u32,
+}
+
+impl Default for ButtonState {
+    fn default() -> Self {
+        Self {
+            disabled: false,
+            pressed: false,
+            anim_from: 1.0,
+            anim_to: 1.0,
+            anim_start_ms: timing::now_ms(),
+            anim_dur_ms: 0,
+        }
+    }
+}
+
+impl ButtonState {
+    #[inline]
+    pub fn is_pressed(&self) -> bool {
+        self.pressed
+    }
+
+    fn current_scale(&self, now: u64) -> f32 {
+        let t_ms = now.saturating_sub(self.anim_start_ms) as u32;
+        if self.anim_dur_ms == 0 {
+            return self.anim_to;
+        }
+        let k = (t_ms as f32 / self.anim_dur_ms as f32).clamp(0.0, 1.0);
+        self.anim_from + (self.anim_to - self.anim_from) * k
+    }
+
+    pub fn on_pointer_down(&mut self) {
+        if self.disabled {
+            return;
+        }
+        self.pressed = true;
+        self.anim_from = self.current_scale(timing::now_ms());
+        self.anim_to = 0.98;
+        self.anim_start_ms = timing::now_ms();
+        self.anim_dur_ms = 80;
+    }
+
+    pub fn on_pointer_cancel(&mut self) {
+        if self.disabled {
+            return;
+        }
+        self.pressed = false;
+        self.anim_from = self.current_scale(timing::now_ms());
+        self.anim_to = 1.0;
+        self.anim_start_ms = timing::now_ms();
+        self.anim_dur_ms = 120;
+    }
+
+    /// Returns true if this was a tap (released while pressed)
+    pub fn on_pointer_up(&mut self) -> bool {
+        if self.disabled {
+            return false;
+        }
+        let was_pressed = self.pressed;
+        self.pressed = false;
+        self.anim_from = self.current_scale(timing::now_ms());
+        self.anim_to = 1.0;
+        self.anim_start_ms = timing::now_ms();
+        self.anim_dur_ms = 120;
+        was_pressed
+    }
+}
+
+impl Button {
+    pub fn encode<U: ImageUploader>(
+        &self,
+        rect: gfx::RectF,
+        device_scale: f32,
+        txt: &mut TextCtx,
+        up: &mut U,
+        state: &ButtonState,
+        b: &mut DrawListBuilder,
+    ) {
+        // Determine scale from animation
+        let s = state.current_scale(timing::now_ms()).clamp(0.9, 1.0);
+        let color = if state.disabled {
+            self.style.color_disabled
+        } else if state.pressed {
+            self.style.color_pressed
+        } else {
+            self.style.color
+        };
+        // Scale about center
+        let cx = rect.x + rect.w * 0.5;
+        let cy = rect.y + rect.h * 0.5;
+        let w = rect.w * s;
+        let h = rect.h * s;
+        let r = gfx::RectF::new(cx - w * 0.5, cy - h * 0.5, w, h);
+        b.rrect(r, [self.style.corner; 4], color);
+
+        // Label centered
+        if !self.text.is_empty() {
+            let label = Label {
+                text: self.text.clone(),
+                color: self.style.text_color,
+                align: Align::Center,
+                wrap: false,
+                font_id: 0,
+                font_px: self.style.text_px,
+            };
+            label.encode(r, device_scale, txt, up, b);
+        }
+    }
+}
+
+// ----- Toggle -----
+
+#[derive(Clone, Copy, Debug)]
+pub struct ToggleStyle {
+    pub corner: f32,
+    pub track_on: gfx::Color,
+    pub track_off: gfx::Color,
+    pub thumb: gfx::Color,
+    pub pad: f32,
+    pub animation_ms: u32,
+}
+
+impl Default for ToggleStyle {
+    fn default() -> Self {
+        Self {
+            corner: 12.0,
+            track_on: gfx::Color::rgba(0.20, 0.65, 0.25, 1.0),
+            track_off: gfx::Color::rgba(0.75, 0.78, 0.82, 1.0),
+            thumb: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
+            pad: 2.0,
+            animation_ms: 200,
+        }
+    }
+}
+
+pub struct Toggle {
+    pub style: ToggleStyle,
+}
+
+impl Default for Toggle {
+    fn default() -> Self {
+        Self { style: ToggleStyle::default() }
+    }
+}
+
+pub struct ToggleState {
+    pub on: bool,
+    dragging: bool,
+    drag_start_x: f32,
+    anim_t: f32,      // 0..1 visual position
+    anim_target: f32, // 0..1
+    anim_v: f32,      // velocity for simple spring
+}
+
+impl Default for ToggleState {
+    fn default() -> Self {
+        Self {
+            on: false,
+            dragging: false,
+            drag_start_x: 0.0,
+            anim_t: 0.0,
+            anim_target: 0.0,
+            anim_v: 0.0,
+        }
+    }
+}
+
+impl ToggleState {
+    pub fn set_on(&mut self, on: bool) {
+        self.on = on;
+        self.anim_target = if on { 1.0 } else { 0.0 };
+    }
+    pub fn on_tap(&mut self) -> bool {
+        self.on = !self.on;
+        self.anim_target = if self.on { 1.0 } else { 0.0 };
+        true
+    }
+    pub fn begin_drag(&mut self, x: f32) {
+        self.dragging = true;
+        self.drag_start_x = x;
+    }
+    pub fn drag_to(&mut self, x: f32, rect: gfx::RectF) {
+        if self.dragging {
+            let t = ((x - rect.x) / rect.w).clamp(0.0, 1.0);
+            self.anim_target = t;
+            self.on = t >= 0.5;
+        }
+    }
+    pub fn end_drag(&mut self) {
+        self.dragging = false;
+        self.anim_target = if self.on { 1.0 } else { 0.0 };
+    }
+
+    pub fn step(&mut self, dt_ms: u32) {
+        // Critically damped spring toward anim_target
+        let target = self.anim_target;
+        let k: f32 = 20.0;
+        let c = 2.0 * (k).sqrt();
+        let dt = (dt_ms as f32 / 1000.0).min(0.05);
+        let a = k * (target - self.anim_t) - c * self.anim_v;
+        self.anim_v += a * dt;
+        self.anim_t += self.anim_v * dt;
+        // Clamp
+        if (self.anim_t - target).abs() < 0.001 && self.anim_v.abs() < 0.001 {
+            self.anim_t = target;
+            self.anim_v = 0.0;
+        }
+    }
+}
+
+impl Toggle {
+    pub fn encode(&self, rect: gfx::RectF, state: &ToggleState, b: &mut DrawListBuilder) {
+        // Track color interpolated
+        let t = state.anim_t.clamp(0.0, 1.0);
+        let lerp = |a: gfx::Color, b_: gfx::Color, k: f32| {
+            gfx::Color::rgba(
+                a.r + (b_.r - a.r) * k,
+                a.g + (b_.g - a.g) * k,
+                a.b + (b_.b - a.b) * k,
+                a.a + (b_.a - a.a) * k,
+            )
+        };
+        let track_c = lerp(self.style.track_off, self.style.track_on, t);
+        b.rrect(rect, [self.style.corner; 4], track_c);
+        // Thumb position
+        let r = rect;
+        let thumb_r = (r.h * 0.5 - self.style.pad).max(2.0);
+        let x0 = r.x + self.style.pad + thumb_r;
+        let x1 = r.x + r.w - self.style.pad - thumb_r;
+        let cx = x0 + (x1 - x0) * t;
+        let cy = r.y + r.h * 0.5;
+        // Draw thumb as a rounded rect approximated by rrect with equal radii
+        let d = thumb_r;
+        let thumb = gfx::RectF::new(cx - d, cy - d, d * 2.0, d * 2.0);
+        b.rrect(thumb, [d; 4], self.style.thumb);
+    }
+}
+
+// ----- Slider -----
+
+#[derive(Clone, Copy, Debug)]
+pub struct SliderStyle {
+    pub corner: f32,
+    pub track: gfx::Color,
+    pub fill: gfx::Color,
+    pub thumb: gfx::Color,
+    pub pad: f32,
+}
+
+impl Default for SliderStyle {
+    fn default() -> Self {
+        Self {
+            corner: 3.0,
+            track: gfx::Color::rgba(0.80, 0.82, 0.86, 1.0),
+            fill: gfx::Color::rgba(0.25, 0.55, 1.0, 1.0),
+            thumb: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
+            pad: 4.0,
+        }
+    }
+}
+
+pub struct Slider {
+    pub style: SliderStyle,
+    pub step: Option<f32>,
+}
+
+impl Default for Slider {
+    fn default() -> Self {
+        Self { style: SliderStyle::default(), step: None }
+    }
+}
+
+pub struct SliderState {
+    pub value: f32, // 0..1
+    dragging: bool,
+    drag_start_x: f32,
+    value_at_start: f32,
+}
+
+impl Default for SliderState {
+    fn default() -> Self {
+        Self { value: 0.0, dragging: false, drag_start_x: 0.0, value_at_start: 0.0 }
+    }
+}
+
+impl SliderState {
+    pub fn set(&mut self, v: f32, step: Option<f32>) -> bool {
+        let nv = apply_step(v.clamp(0.0, 1.0), step);
+        let changed = (nv - self.value).abs() > 1e-6;
+        self.value = nv;
+        changed
+    }
+
+    pub fn begin_drag(&mut self, x: f32) {
+        self.dragging = true;
+        self.drag_start_x = x;
+        self.value_at_start = self.value;
+    }
+    pub fn drag_to(&mut self, x: f32, rect: gfx::RectF, step: Option<f32>) -> bool {
+        if !self.dragging {
+            return false;
+        }
+        let t = ((x - rect.x) / rect.w).clamp(0.0, 1.0);
+        self.set(t, step)
+    }
+    pub fn end_drag(&mut self) {
+        self.dragging = false;
+    }
+
+    pub fn arrow_left(&mut self, step: Option<f32>) -> bool {
+        let s = step.unwrap_or(0.01);
+        self.set(self.value - s, step)
+    }
+    pub fn arrow_right(&mut self, step: Option<f32>) -> bool {
+        let s = step.unwrap_or(0.01);
+        self.set(self.value + s, step)
+    }
+}
+
+impl Slider {
+    pub fn encode(&self, rect: gfx::RectF, state: &SliderState, b: &mut DrawListBuilder) {
+        // Track
+        b.rrect(rect, [self.style.corner; 4], self.style.track);
+        // Fill
+        let w = (rect.w * state.value.clamp(0.0, 1.0)).max(0.0);
+        if w > 0.5 {
+            b.rrect(
+                gfx::RectF::new(rect.x, rect.y, w, rect.h),
+                [self.style.corner; 4],
+                self.style.fill,
+            );
+        }
+        // Thumb
+        let r = rect;
+        let thumb_r = (r.h * 0.5 - self.style.pad).max(2.0);
+        let cx = r.x + r.w * state.value;
+        let cy = r.y + r.h * 0.5;
+        let d = thumb_r;
+        let thumb = gfx::RectF::new(cx - d, cy - d, d * 2.0, d * 2.0);
+        b.rrect(thumb, [d; 4], self.style.thumb);
+    }
+}
+
+fn apply_step(v: f32, step: Option<f32>) -> f32 {
+    if let Some(s) = step {
+        (v / s).round() * s
+    } else {
+        v
+    }
+}
+
+// =============================
+// ImageView (+ Zoom) and Nine-Slice
+// =============================
+
+#[derive(Clone, Copy, Debug)]
+pub enum ImageFit {
+    Contain,
+    Cover,
+    Stretch,
+}
+
+pub struct ImageView {
+    pub image: gfx::ImageHandle,
+    pub natural_w: u32,
+    pub natural_h: u32,
+    pub fit: ImageFit,
+    pub alpha: f32,
+}
+
+impl Default for ImageView {
+    fn default() -> Self {
+        Self {
+            image: gfx::ImageHandle(0),
+            natural_w: 1,
+            natural_h: 1,
+            fit: ImageFit::Contain,
+            alpha: 1.0,
+        }
+    }
+}
+
+pub struct ImageZoomState {
+    pub scale: f32,       // additional zoom multiplier
+    pub offset: [f32; 2], // pan in pixels in destination space
+}
+
+impl Default for ImageZoomState {
+    fn default() -> Self {
+        Self { scale: 1.0, offset: [0.0, 0.0] }
+    }
+}
+
+impl ImageZoomState {
+    pub fn reset(&mut self) {
+        self.scale = 1.0;
+        self.offset = [0.0, 0.0];
+    }
+    pub fn pinch(&mut self, delta: f32, center: [f32; 2]) {
+        let s = (self.scale * (1.0 + delta)).clamp(0.5, 8.0);
+        self.scale = s;
+        let _ = center;
+    }
+    pub fn pan(&mut self, dx: f32, dy: f32) {
+        self.offset[0] += dx;
+        self.offset[1] += dy;
+    }
+    pub fn double_tap_zoom_out(&mut self) {
+        self.reset();
+    }
+}
+
+impl ImageView {
+    pub fn encode(&self, rect: gfx::RectF, zoom: Option<&ImageZoomState>, b: &mut DrawListBuilder) {
+        if self.image.0 == 0 {
+            return;
+        }
+        let iw = self.natural_w.max(1) as f32;
+        let ih = self.natural_h.max(1) as f32;
+        // Base fit scale
+        let sx = rect.w / iw;
+        let sy = rect.h / ih;
+        let base = match self.fit {
+            ImageFit::Contain => sx.min(sy),
+            ImageFit::Cover => sx.max(sy),
+            ImageFit::Stretch => 1.0,
+        };
+        let scale = base * zoom.map(|z| z.scale).unwrap_or(1.0);
+        let dw = if matches!(self.fit, ImageFit::Stretch) { rect.w } else { iw * scale };
+        let dh = if matches!(self.fit, ImageFit::Stretch) { rect.h } else { ih * scale };
+        let mut dx = rect.x + (rect.w - dw) * 0.5;
+        let mut dy = rect.y + (rect.h - dh) * 0.5;
+        if let Some(z) = zoom {
+            dx += z.offset[0];
+            dy += z.offset[1];
+        }
+        let dst = gfx::RectF::new(dx, dy, dw, dh);
+        // Use nine-slice with zero slices as a general image draw (maps full texture)
+        b.nine_slice(
+            self.image,
+            dst,
+            gfx::Insets::new(0.0, 0.0, 0.0, 0.0),
+            self.alpha.clamp(0.0, 1.0),
+        );
+    }
+}
+
+pub struct NineSliceImage {
+    pub tex: gfx::ImageHandle,
+    pub slice: gfx::Insets,
+    pub alpha: f32,
+}
+
+impl NineSliceImage {
+    pub fn encode(&self, rect: gfx::RectF, b: &mut DrawListBuilder) {
+        b.nine_slice(self.tex, rect, self.slice, self.alpha);
+    }
+}
+
+// ----- Text Input, Overlay, Picker -----
+
+#[derive(Clone, Copy, Debug)]
+pub struct TextInputStyle {
+    pub padding: gfx::Insets,
+    pub font_id: usize,
+    pub font_px: f32,
+    pub placeholder_font_px: f32,
+    pub placeholder_offset: f32,
+    pub background: gfx::Color,
+    pub background_focus: gfx::Color,
+    pub background_invalid: gfx::Color,
+    pub border: gfx::Color,
+    pub border_focus: gfx::Color,
+    pub border_invalid: gfx::Color,
+    pub text: gfx::Color,
+    pub placeholder: gfx::Color,
+    pub caret: gfx::Color,
+    pub selection: gfx::Color,
+    pub composition: gfx::Color,
+}
+
+impl Default for TextInputStyle {
+    fn default() -> Self {
+        Self {
+            padding: gfx::Insets::new(10.0, 12.0, 10.0, 12.0),
+            font_id: 0,
+            font_px: 16.0,
+            placeholder_font_px: 14.0,
+            placeholder_offset: 12.0,
+            background: gfx::Color::rgba(0.98, 0.99, 1.0, 1.0),
+            background_focus: gfx::Color::rgba(0.94, 0.97, 1.0, 1.0),
+            background_invalid: gfx::Color::rgba(1.0, 0.96, 0.96, 1.0),
+            border: gfx::Color::rgba(0.82, 0.85, 0.89, 1.0),
+            border_focus: gfx::Color::rgba(0.35, 0.55, 1.0, 1.0),
+            border_invalid: gfx::Color::rgba(0.90, 0.30, 0.30, 1.0),
+            text: gfx::Color::rgba(0.14, 0.14, 0.18, 1.0),
+            placeholder: gfx::Color::rgba(0.48, 0.51, 0.56, 1.0),
+            caret: gfx::Color::rgba(0.22, 0.36, 0.82, 1.0),
+            selection: gfx::Color::rgba(0.25, 0.52, 0.95, 0.20),
+            composition: gfx::Color::rgba(0.25, 0.52, 0.95, 0.38),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextValidation {
+    Pending,
+    Valid,
+    Invalid,
+}
+
+#[derive(Clone, Debug)]
+struct CompositionRange {
+    range: Range<usize>,
+}
+
+#[derive(Clone)]
+enum TextFilter {
+    Any,
+    Digits,
+    Alphanumeric,
+    Custom(Arc<dyn Fn(char) -> bool + Send + Sync>),
+}
+
+impl TextFilter {
+    fn allows(&self, ch: char) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Digits => ch.is_ascii_digit(),
+            Self::Alphanumeric => ch.is_alphanumeric(),
+            Self::Custom(filter) => filter(ch),
+        }
+    }
+}
+
+impl Default for TextFilter {
+    fn default() -> Self {
+        Self::Any
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AccessoryButton {
+    pub id: u32,
+    pub title: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct OtpConfig {
+    length: usize,
+    gap: f32,
+    placeholder: char,
+}
+
+pub struct TextInputState {
+    text: String,
+    placeholder: String,
+    secure: bool,
+    focused: bool,
+    cursor: usize,
+    selection: Option<Range<usize>>,
+    composition: Option<CompositionRange>,
+    validator: Option<Box<dyn Fn(&str) -> bool + Send + Sync>>,
+    validation: TextValidation,
+    placeholder_t: f32,
+    caret_timer: u32,
+    caret_on: bool,
+    keyboard: TextInputConfig,
+    max_len_chars: Option<usize>,
+    filter: TextFilter,
+    otp: Option<OtpConfig>,
+    accessories: Vec<AccessoryButton>,
+    submit: bool,
+    ime_rect: Option<gfx::RectF>,
+}
+
+impl TextInputState {
+    pub fn new(placeholder: impl Into<String>) -> Self {
+        Self {
+            text: String::new(),
+            placeholder: placeholder.into(),
+            secure: false,
+            focused: false,
+            cursor: 0,
+            selection: None,
+            composition: None,
+            validator: None,
+            validation: TextValidation::Pending,
+            placeholder_t: 0.0,
+            caret_timer: 0,
+            caret_on: true,
+            keyboard: TextInputConfig::default(),
+            max_len_chars: None,
+            filter: TextFilter::default(),
+            otp: None,
+            accessories: Vec::new(),
+            submit: false,
+            ime_rect: None,
+        }
+    }
+
+    pub fn with_secure(placeholder: impl Into<String>, secure: bool) -> Self {
+        let mut s = Self::new(placeholder);
+        s.secure = secure;
+        s.keyboard.autocorrect = false;
+        s.keyboard.autocapitalization = AutoCapitalization::None;
+        s.keyboard.content_type =
+            if secure { TextContentType::Password } else { TextContentType::Plain };
+        s
+    }
+
+    pub fn set_validator<F>(&mut self, validator: F)
+    where
+        F: Fn(&str) -> bool + Send + Sync + 'static,
+    {
+        self.validator = Some(Box::new(validator));
+        self.revalidate();
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn set_text(&mut self, value: impl Into<String>) {
+        self.text = value.into();
+        self.selection = None;
+        self.apply_constraints();
+        self.cursor = clamp_index(&self.text, self.cursor);
+        self.revalidate();
+        self.reset_caret();
+    }
+
+    pub fn secure(&self) -> bool {
+        self.secure
+    }
+
+    pub fn set_secure(&mut self, secure: bool) {
+        self.secure = secure;
+        if secure {
+            self.keyboard.autocorrect = false;
+            self.keyboard.autocapitalization = AutoCapitalization::None;
+            self.keyboard.content_type = TextContentType::Password;
+        } else if self.keyboard.content_type == TextContentType::Password {
+            self.keyboard.content_type = TextContentType::Plain;
+        }
+    }
+
+    pub fn keyboard_config(&self) -> &TextInputConfig {
+        &self.keyboard
+    }
+
+    pub fn set_keyboard_config(&mut self, config: TextInputConfig) {
+        self.keyboard = config;
+    }
+
+    pub fn set_autocorrect(&mut self, enabled: bool) {
+        self.keyboard.autocorrect = enabled;
+    }
+
+    pub fn set_autocapitalization(&mut self, mode: AutoCapitalization) {
+        self.keyboard.autocapitalization = mode;
+    }
+
+    pub fn set_keyboard_appearance(&mut self, appearance: KeyboardAppearance) {
+        self.keyboard.keyboard = appearance;
+    }
+
+    pub fn set_return_key(&mut self, key: ReturnKeyType) {
+        self.keyboard.return_key = key;
+    }
+
+    pub fn set_content_type(&mut self, ty: TextContentType) {
+        self.keyboard.content_type = ty;
+    }
+
+    pub fn max_length(&self) -> Option<usize> {
+        self.max_len_chars
+    }
+
+    pub fn set_max_length(&mut self, len: Option<usize>) {
+        self.max_len_chars = len;
+        self.apply_constraints();
+        self.revalidate();
+        self.reset_caret();
+    }
+
+    pub fn set_filter_digits(&mut self) {
+        self.filter = TextFilter::Digits;
+        self.apply_constraints();
+        self.revalidate();
+        self.reset_caret();
+    }
+
+    pub fn set_filter_alphanumeric(&mut self) {
+        self.filter = TextFilter::Alphanumeric;
+        self.apply_constraints();
+        self.revalidate();
+        self.reset_caret();
+    }
+
+    pub fn set_filter_custom<F>(&mut self, filter: F)
+    where
+        F: Fn(char) -> bool + Send + Sync + 'static,
+    {
+        self.filter = TextFilter::Custom(Arc::new(filter));
+        self.apply_constraints();
+        self.revalidate();
+        self.reset_caret();
+    }
+
+    pub fn clear_filter(&mut self) {
+        self.filter = TextFilter::Any;
+        self.apply_constraints();
+        self.revalidate();
+        self.reset_caret();
+    }
+
+    pub fn configure_one_time_code(&mut self, length: usize) {
+        self.secure = false;
+        self.keyboard.autocorrect = false;
+        self.keyboard.autocapitalization = AutoCapitalization::None;
+        self.keyboard.content_type = TextContentType::OneTimeCode;
+        self.max_len_chars = Some(length);
+        self.filter = TextFilter::Digits;
+        self.otp = Some(OtpConfig { length, gap: 12.0, placeholder: '–' });
+        self.apply_constraints();
+        self.revalidate();
+        self.reset_caret();
+    }
+
+    pub fn clear_one_time_code(&mut self) {
+        self.otp = None;
+        if self.keyboard.content_type == TextContentType::OneTimeCode {
+            self.keyboard.content_type = TextContentType::Plain;
+        }
+        self.apply_constraints();
+        self.revalidate();
+        self.reset_caret();
+    }
+
+    pub fn otp_config(&self) -> Option<OtpConfig> {
+        self.otp
+    }
+
+    pub fn add_accessory_button(&mut self, title: impl Into<String>) -> u32 {
+        let id = self.accessories.len() as u32;
+        self.accessories.push(AccessoryButton { id, title: title.into() });
+        id
+    }
+
+    pub fn clear_accessory_buttons(&mut self) {
+        self.accessories.clear();
+    }
+
+    pub fn accessory_buttons(&self) -> &[AccessoryButton] {
+        &self.accessories
+    }
+
+    pub fn validation(&self) -> TextValidation {
+        self.validation
+    }
+
+    pub fn focused(&self) -> bool {
+        self.focused
+    }
+
+    pub fn focus(&mut self) {
+        if !self.focused {
+            self.focused = true;
+            self.reset_caret();
+        }
+    }
+
+    pub fn blur(&mut self) {
+        if self.focused {
+            self.focused = false;
+            self.selection = None;
+            self.composition = None;
+        }
+    }
+
+    pub fn set_selection(&mut self, start: usize, end: usize) {
+        if start >= end {
+            self.selection = None;
+            self.cursor = clamp_index(&self.text, end);
+        } else {
+            let s = clamp_index(&self.text, start);
+            let e = clamp_index(&self.text, end);
+            self.selection = Some(s..e);
+            self.cursor = e;
+        }
+        self.reset_caret();
+    }
+
+    pub fn move_cursor_to_end(&mut self) {
+        self.cursor = self.text.chars().count();
+        self.selection = None;
+        self.reset_caret();
+    }
+
+    pub fn copy_selection_to_clipboard(&self) -> bool {
+        if let Some(sel) = &self.selection {
+            if sel.start < sel.end {
+                let s = char_to_byte(&self.text, sel.start);
+                let e = char_to_byte(&self.text, sel.end);
+                if let Some(slice) = self.text.get(s..e) {
+                    return clipboard::write_string(slice);
+                }
+            }
+        }
+        false
+    }
+
+    pub fn cut_selection_to_clipboard(&mut self) -> bool {
+        if let Some(sel) = self.selection.clone() {
+            if sel.start < sel.end {
+                let s = char_to_byte(&self.text, sel.start);
+                let e = char_to_byte(&self.text, sel.end);
+                let success =
+                    self.text.get(s..e).map_or(false, |slice| clipboard::write_string(slice));
+                self.erase(sel.clone());
+                self.cursor = sel.start.min(self.text.chars().count());
+                self.reset_caret();
+                return success;
+            }
+        }
+        false
+    }
+
+    pub fn paste_from_clipboard(&mut self) -> bool {
+        if let Some(data) = clipboard::read_string() {
+            if data.is_empty() {
+                return false;
+            }
+            let before = self.text.chars().count();
+            let _ = self.insert(&data);
+            return self.text.chars().count() != before;
+        }
+        false
+    }
+
+    pub fn tick(&mut self, dt_ms: u32) {
+        let target = if self.focused || !self.text.is_empty() { 1.0 } else { 0.0 };
+        let step = ((target - self.placeholder_t) * (dt_ms as f32 / 140.0)).clamp(-0.08, 0.08);
+        self.placeholder_t = (self.placeholder_t + step).clamp(0.0, 1.0);
+        if self.focused && self.selection.is_none() {
+            self.caret_timer = self.caret_timer.saturating_add(dt_ms);
+            if self.caret_timer >= 520 {
+                self.caret_timer = 0;
+                self.caret_on = !self.caret_on;
+            }
+        } else {
+            self.caret_timer = 0;
+            self.caret_on = true;
+        }
+    }
+
+    pub fn take_submit(&mut self) -> bool {
+        if self.submit {
+            self.submit = false;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn ime_rect(&self) -> Option<gfx::RectF> {
+        self.ime_rect
+    }
+
+    pub fn handle_pointer(
+        &mut self,
+        local: [f32; 2],
+        style: &TextInputStyle,
+        text_ctx: &mut TextCtx,
+    ) {
+        self.focus();
+        self.selection = None;
+        self.cursor = self.pick_cursor(local[0], style, text_ctx);
+        self.reset_caret();
+    }
+
+    pub fn handle_key(&mut self, key: &KeyEvent) {
+        if !self.focused {
+            return;
+        }
+        match key.code {
+            KeyCode::Backspace => self.backspace(),
+            KeyCode::Delete => self.delete_forward(),
+            KeyCode::ArrowLeft => {
+                if self.cursor > 0 {
+                    self.cursor -= 1;
+                }
+                self.selection = None;
+                self.reset_caret();
+            }
+            KeyCode::ArrowRight => {
+                let end = self.text.chars().count();
+                if self.cursor < end {
+                    self.cursor += 1;
+                }
+                self.selection = None;
+                self.reset_caret();
+            }
+            KeyCode::Enter => {
+                self.submit = true;
+            }
+            KeyCode::Letter('A') if key.modifiers.contains(Modifiers::META) => {
+                let len = self.text.chars().count();
+                if len > 0 {
+                    self.selection = Some(0..len);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn handle_text_event(&mut self, event: &TextEvent) {
+        match event {
+            TextEvent::Commit { text } => {
+                if text == "\n" {
+                    self.submit = true;
+                } else {
+                    let _ = self.insert(text);
+                }
+            }
+            TextEvent::Composition { range, text } => {
+                if text.is_empty() || range.start >= range.end {
+                    self.composition = None;
+                } else {
+                    let start = clamp_index(&self.text, range.start as usize);
+                    let end = clamp_index(&self.text, range.end as usize);
+                    self.composition = Some(CompositionRange { range: start..end });
+                }
+            }
+            TextEvent::SelectionChanged { range } => {
+                let start = clamp_index(&self.text, range.start as usize);
+                let end = clamp_index(&self.text, range.end as usize);
+                if start >= end {
+                    self.selection = None;
+                    self.cursor = end;
+                } else {
+                    self.selection = Some(start..end);
+                    self.cursor = end;
+                }
+                self.reset_caret();
+            }
+            TextEvent::IMEShown(rect) => {
+                self.ime_rect = Some(*rect);
+            }
+            TextEvent::IMEHidden => {
+                self.ime_rect = None;
+                self.composition = None;
+            }
+        }
+    }
+
+    fn backspace(&mut self) {
+        if let Some(range) = self.selection.take() {
+            self.erase(range.clone());
+            self.cursor = range.start;
+        } else if self.cursor > 0 {
+            let start = self.cursor - 1;
+            self.erase(start..self.cursor);
+            self.cursor = start;
+        }
+        self.reset_caret();
+    }
+
+    fn delete_forward(&mut self) {
+        if let Some(range) = self.selection.take() {
+            self.erase(range.clone());
+            self.cursor = range.start;
+        } else {
+            let len = self.text.chars().count();
+            if self.cursor < len {
+                self.erase(self.cursor..self.cursor + 1);
+            }
+        }
+        self.reset_caret();
+    }
+
+    fn insert(&mut self, value: &str) -> bool {
+        if !self.focused {
+            return false;
+        }
+        if let Some(range) = self.selection.take() {
+            self.erase(range.clone());
+            self.cursor = range.start;
+        }
+        let current_len = self.text.chars().count();
+        let sanitized = self.sanitize_input(value, current_len);
+        if sanitized.is_empty() {
+            self.reset_caret();
+            return false;
+        }
+        let byte = char_to_byte(&self.text, self.cursor);
+        self.text.insert_str(byte, &sanitized);
+        self.cursor += sanitized.chars().count();
+        self.apply_constraints();
+        self.revalidate();
+        self.reset_caret();
+        true
+    }
+
+    fn erase(&mut self, range: Range<usize>) {
+        let start = char_to_byte(&self.text, range.start);
+        let end = char_to_byte(&self.text, range.end);
+        if start < end {
+            self.text.drain(start..end);
+            self.apply_constraints();
+            self.revalidate();
+        }
+    }
+
+    fn revalidate(&mut self) {
+        self.validation = if let Some(v) = &self.validator {
+            if self.text.is_empty() {
+                TextValidation::Pending
+            } else if v(&self.text) {
+                TextValidation::Valid
+            } else {
+                TextValidation::Invalid
+            }
+        } else if self.text.is_empty() {
+            TextValidation::Pending
+        } else {
+            TextValidation::Valid
+        };
+    }
+
+    fn reset_caret(&mut self) {
+        self.caret_timer = 0;
+        self.caret_on = true;
+    }
+
+    fn sanitize_input(&self, value: &str, current_len: usize) -> String {
+        let mut out = String::new();
+        if value.is_empty() {
+            return out;
+        }
+        let mut added = 0usize;
+        for ch in value.chars() {
+            if !self.filter.allows(ch) {
+                continue;
+            }
+            if let Some(max) = self.max_len_chars {
+                if current_len + added >= max {
+                    break;
+                }
+            }
+            out.push(ch);
+            added += 1;
+        }
+        out
+    }
+
+    fn apply_constraints(&mut self) {
+        let mut filtered = String::new();
+        let mut count = 0usize;
+        for ch in self.text.chars() {
+            if !self.filter.allows(ch) {
+                continue;
+            }
+            if let Some(max) = self.max_len_chars {
+                if count >= max {
+                    break;
+                }
+            }
+            filtered.push(ch);
+            count += 1;
+        }
+        if filtered != self.text {
+            self.text = filtered;
+        }
+        let len = self.text.chars().count();
+        self.cursor = self.cursor.min(len);
+        if let Some(sel) = &mut self.selection {
+            let start = sel.start.min(len);
+            let end = sel.end.min(len);
+            if start >= end {
+                self.selection = None;
+            } else {
+                sel.start = start;
+                sel.end = end;
+            }
+        }
+        if let Some(comp) = &mut self.composition {
+            comp.range.start = comp.range.start.min(len);
+            comp.range.end = comp.range.end.min(len);
+            if comp.range.start >= comp.range.end {
+                self.composition = None;
+            }
+        }
+    }
+
+    fn pick_cursor(&self, x: f32, style: &TextInputStyle, text_ctx: &mut TextCtx) -> usize {
+        let display = self.display_text();
+        let mut best = 0usize;
+        let mut best_dist = f32::MAX;
+        for idx in 0..=display.chars().count() {
+            let width = measure_prefix(text_ctx, style.font_id, style.font_px, &display, idx)
+                .unwrap_or(0.0);
+            let caret = style.padding.left + width;
+            let d = (caret - x).abs();
+            if d < best_dist {
+                best_dist = d;
+                best = idx;
+            }
+        }
+        best
+    }
+
+    fn display_text(&self) -> String {
+        if self.otp.is_some() {
+            return self.text.clone();
+        }
+        if !self.secure {
+            self.text.clone()
+        } else {
+            core::iter::repeat('•').take(self.text.chars().count()).collect()
+        }
+    }
+}
+
+pub struct TextInput {
+    pub style: TextInputStyle,
+    pub corner_radius: f32,
+}
+
+impl Default for TextInput {
+    fn default() -> Self {
+        Self { style: TextInputStyle::default(), corner_radius: 10.0 }
+    }
+}
+
+impl TextInput {
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode<U: ImageUploader>(
+        &self,
+        state: &TextInputState,
+        rect: gfx::RectF,
+        device_scale: f32,
+        text_ctx: &mut TextCtx,
+        uploader: &mut U,
+        builder: &mut DrawListBuilder,
+    ) {
+        let style = &self.style;
+        let bg = match state.validation {
+            TextValidation::Invalid => style.background_invalid,
+            _ => {
+                if state.focused {
+                    style.background_focus
+                } else {
+                    style.background
+                }
+            }
+        };
+        let border = match state.validation {
+            TextValidation::Invalid => style.border_invalid,
+            _ => {
+                if state.focused {
+                    style.border_focus
+                } else {
+                    style.border
+                }
+            }
+        };
+        builder.rrect(rect, [self.corner_radius; 4], border);
+        let inner = gfx::RectF::new(rect.x + 1.5, rect.y + 1.5, rect.w - 3.0, rect.h - 3.0);
+        builder.rrect(inner, [self.corner_radius - 1.5; 4], bg);
+
+        let content = gfx::RectF::new(
+            inner.x + style.padding.left,
+            inner.y + style.padding.top,
+            inner.w - style.padding.left - style.padding.right,
+            inner.h - style.padding.top - style.padding.bottom,
+        );
+
+        let handle = text_ctx.ensure_gpu(uploader);
+        let display = state.display_text();
+
+        if let Some(cfg) = state.otp_config() {
+            self.encode_otp(
+                state,
+                style,
+                cfg,
+                content,
+                device_scale,
+                text_ctx,
+                uploader,
+                builder,
+                handle,
+                &display,
+            );
+            let (atlas_data, aw, ah) = text_ctx.atlas.image();
+            uploader.update_a8(handle, 0, 0, aw, ah, atlas_data, aw as usize);
+            return;
+        }
+
+        if let Some(sel) = &state.selection {
+            if sel.start < sel.end {
+                let sx = content.x
+                    + measure_prefix(text_ctx, style.font_id, style.font_px, &display, sel.start)
+                        .unwrap_or(0.0);
+                let ex = content.x
+                    + measure_prefix(text_ctx, style.font_id, style.font_px, &display, sel.end)
+                        .unwrap_or(sx);
+                let highlight =
+                    gfx::RectF::new(sx, content.y - 2.0, (ex - sx).max(1.0), style.font_px + 6.0);
+                builder.rrect(highlight, [4.0; 4], style.selection);
+            }
+        }
+
+        if let Some(comp) = &state.composition {
+            if comp.range.start < comp.range.end {
+                let sx = content.x
+                    + measure_prefix(
+                        text_ctx,
+                        style.font_id,
+                        style.font_px,
+                        &display,
+                        comp.range.start,
+                    )
+                    .unwrap_or(0.0);
+                let ex = content.x
+                    + measure_prefix(
+                        text_ctx,
+                        style.font_id,
+                        style.font_px,
+                        &display,
+                        comp.range.end,
+                    )
+                    .unwrap_or(sx);
+                let underline =
+                    gfx::RectF::new(sx, content.y + style.font_px + 2.0, (ex - sx).max(1.0), 2.0);
+                builder.rrect(underline, [1.0; 4], style.composition);
+            }
+        }
+
+        if let Some(font) = text_ctx.fonts.font(style.font_id) {
+            if let Ok(shape) = text_ctx.shaper.shape(font, style.font_id, &display, style.font_px) {
+                let dl = builder.drawlist_mut();
+                let run = shape.bake_into(
+                    &mut text_ctx.atlas,
+                    &mut dl.vertices,
+                    &mut dl.indices,
+                    style.text,
+                    handle,
+                    content.x,
+                    content.y,
+                    device_scale,
+                );
+                let _ = dl;
+                builder.glyph_run(run);
+            } else {
+                return;
+            }
+        } else {
+            return;
+        }
+
+        if state.focused && state.caret_on {
+            let caret_w =
+                measure_prefix(text_ctx, style.font_id, style.font_px, &display, state.cursor)
+                    .unwrap_or(0.0);
+            let caret_rect =
+                gfx::RectF::new(content.x + caret_w, content.y - 1.0, 1.5, style.font_px + 4.0);
+            builder.rrect(caret_rect, [0.8; 4], style.caret);
+        }
+
+        if state.text.is_empty() {
+            let offset = style.placeholder_offset * (1.0 - state.placeholder_t);
+            let px = style.placeholder_font_px
+                + (style.font_px - style.placeholder_font_px) * state.placeholder_t;
+            let ph_rect = gfx::RectF::new(content.x, content.y - offset, content.w, px + 2.0);
+            let label = Label {
+                text: state.placeholder.clone(),
+                color: style.placeholder,
+                align: Align::Left,
+                wrap: false,
+                font_id: style.font_id,
+                font_px: px,
+            };
+            label.encode(ph_rect, device_scale, text_ctx, uploader, builder);
+        }
+
+        let (atlas_data, aw, ah) = text_ctx.atlas.image();
+        uploader.update_a8(handle, 0, 0, aw, ah, atlas_data, aw as usize);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn encode_otp<U: ImageUploader>(
+        &self,
+        state: &TextInputState,
+        style: &TextInputStyle,
+        cfg: OtpConfig,
+        content: gfx::RectF,
+        device_scale: f32,
+        text_ctx: &mut TextCtx,
+        _uploader: &mut U,
+        builder: &mut DrawListBuilder,
+        handle: gfx::ImageHandle,
+        display: &str,
+    ) {
+        if cfg.length == 0 {
+            return;
+        }
+        let length = cfg.length;
+        let chars: Vec<char> = display.chars().collect();
+        let total_gap = cfg.gap * (length.saturating_sub(1) as f32);
+        let slot_w = ((content.w - total_gap).max(0.0)) / (length as f32);
+        let slot_h = content.h;
+        let mut x = content.x;
+        for idx in 0..length {
+            let slot_rect = gfx::RectF::new(x, content.y, slot_w, slot_h);
+            let inner = gfx::RectF::new(
+                slot_rect.x + 2.0,
+                slot_rect.y + 4.0,
+                slot_rect.w - 4.0,
+                slot_rect.h - 8.0,
+            );
+            let focus = state.focused && state.cursor.min(length) == idx;
+            let border_color = if focus { style.border_focus } else { style.border };
+            builder.rrect(
+                slot_rect,
+                [6.0; 4],
+                gfx::Color::rgba(border_color.r, border_color.g, border_color.b, 0.18),
+            );
+
+            if let Some(font) = text_ctx.fonts.font(style.font_id) {
+                let glyph_char = chars
+                    .get(idx)
+                    .copied()
+                    .filter(|c| !c.is_whitespace())
+                    .unwrap_or(cfg.placeholder);
+                let glyph = glyph_char.to_string();
+                if let Ok(shape) = text_ctx.shaper.shape(font, style.font_id, &glyph, style.font_px)
+                {
+                    let width = shape.width();
+                    let text_x = inner.x + (inner.w - width).max(0.0) * 0.5;
+                    let text_y = inner.y + (inner.h - style.font_px).max(0.0) * 0.5;
+                    let color =
+                        if chars.get(idx).is_some() { style.text } else { style.placeholder };
+                    let dl = builder.drawlist_mut();
+                    let run = shape.bake_into(
+                        &mut text_ctx.atlas,
+                        &mut dl.vertices,
+                        &mut dl.indices,
+                        color,
+                        handle,
+                        text_x,
+                        text_y,
+                        device_scale,
+                    );
+                    builder.glyph_run(run);
+                }
+            }
+
+            x += slot_w + cfg.gap;
+        }
+
+        if state.focused && state.caret_on {
+            let caret_index = state.cursor.min(length);
+            let caret_base = if caret_index == length {
+                content.x + (length.saturating_sub(1) as f32) * (slot_w + cfg.gap) + slot_w
+            } else {
+                content.x + (caret_index as f32) * (slot_w + cfg.gap)
+            };
+            let caret_rect = gfx::RectF::new(caret_base - 0.75, content.y + 4.0, 1.5, slot_h - 8.0);
+            builder.rrect(caret_rect, [0.8; 4], style.caret);
+        }
+    }
+}
+
+fn measure_prefix(
+    text_ctx: &mut TextCtx,
+    font_id: usize,
+    font_px: f32,
+    text: &str,
+    count: usize,
+) -> Option<f32> {
+    let slice: String = text.chars().take(count).collect();
+    if slice.is_empty() {
+        return Some(0.0);
+    }
+    let font = text_ctx.fonts.font(font_id)?;
+    let shape = text_ctx.shaper.shape(font, font_id, &slice, font_px).ok()?;
+    Some(shape.width())
+}
+
+fn char_to_byte(s: &str, idx: usize) -> usize {
+    if idx == 0 {
+        return 0;
+    }
+    let mut byte = s.len();
+    for (i, (b, _)) in s.char_indices().enumerate() {
+        if i == idx {
+            byte = b;
+            break;
+        }
+    }
+    byte
+}
+
+fn clamp_index(s: &str, idx: usize) -> usize {
+    cmp::min(idx, s.chars().count())
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct OverlayStyle {
+    pub tint: gfx::Color,
+    pub alpha: f32,
+    pub blur_sigma: f32,
+}
+
+impl Default for OverlayStyle {
+    fn default() -> Self {
+        Self { tint: gfx::Color::rgba(0.0, 0.08, 0.20, 1.0), alpha: 0.35, blur_sigma: 18.0 }
+    }
+}
+
+pub struct OverlayState {
+    visible: bool,
+    t: f32,
+    vel: f32,
+}
+
+impl OverlayState {
+    pub fn new() -> Self {
+        Self { visible: false, t: 0.0, vel: 0.0 }
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.visible || self.t > 0.01
+    }
+
+    pub fn open(&mut self) {
+        self.visible = true;
+    }
+
+    pub fn close(&mut self) {
+        self.visible = false;
+    }
+
+    pub fn toggle(&mut self) {
+        if self.visible {
+            self.close();
+        } else {
+            self.open();
+        }
+    }
+
+    pub fn tick(&mut self, dt_ms: u32) {
+        let target = if self.visible { 1.0 } else { 0.0 };
+        let dt = dt_ms as f32 / 16.0;
+        let diff = target - self.t;
+        self.vel += diff * 0.12 * dt;
+        self.vel *= 0.82_f32.powf(dt);
+        self.t = (self.t + self.vel).clamp(0.0, 1.0);
+        if !self.visible && self.t < 0.01 {
+            self.t = 0.0;
+            self.vel = 0.0;
+        }
+    }
+
+    pub fn progress(&self) -> f32 {
+        self.t
+    }
+}
+
+pub struct Overlay {
+    pub style: OverlayStyle,
+}
+
+impl Default for Overlay {
+    fn default() -> Self {
+        Self { style: OverlayStyle::default() }
+    }
+}
+
+impl Overlay {
+    pub fn encode(
+        &self,
+        state: &OverlayState,
+        viewport: gfx::RectF,
+        builder: &mut DrawListBuilder,
+    ) -> bool {
+        if !state.is_visible() {
+            return false;
+        }
+        let alpha = self.style.alpha * state.progress();
+        if alpha <= f32::EPSILON {
+            return false;
+        }
+        builder.backdrop(viewport, self.style.blur_sigma, self.style.tint, alpha);
+        true
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PopupStyle {
+    pub radius: f32,
+    pub body: gfx::Color,
+    pub outline: gfx::Color,
+}
+
+impl Default for PopupStyle {
+    fn default() -> Self {
+        Self {
+            radius: 14.0,
+            body: gfx::Color::rgba(1.0, 1.0, 1.0, 0.97),
+            outline: gfx::Color::rgba(0.26, 0.46, 0.86, 0.35),
+        }
+    }
+}
+
+pub struct PopupWindow {
+    pub style: PopupStyle,
+}
+
+impl Default for PopupWindow {
+    fn default() -> Self {
+        Self { style: PopupStyle::default() }
+    }
+}
+
+impl PopupWindow {
+    pub fn encode(&self, rect: gfx::RectF, builder: &mut DrawListBuilder) {
+        builder.rrect(rect, [self.style.radius; 4], self.style.body);
+        let outline = gfx::RectF::new(rect.x - 1.0, rect.y - 1.0, rect.w + 2.0, rect.h + 2.0);
+        builder.rrect(outline, [self.style.radius + 1.0; 4], self.style.outline);
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PickerState {
+    items: Vec<String>,
+    offset: f32,
+    velocity: f32,
+    selection: usize,
+}
+
+impl PickerState {
+    pub fn new(items: Vec<String>) -> Self {
+        let selection = 0;
+        Self { items, offset: selection as f32, velocity: 0.0, selection }
+    }
+
+    pub fn set_items(&mut self, items: Vec<String>) {
+        self.items = items;
+        if self.items.is_empty() {
+            self.offset = 0.0;
+            self.selection = 0;
+        } else {
+            self.selection = self.selection.min(self.items.len() - 1);
+            self.offset = self.selection as f32;
+        }
+        self.velocity = 0.0;
+    }
+
+    pub fn selection(&self) -> usize {
+        self.selection
+    }
+
+    pub fn selection_label(&self) -> Option<&str> {
+        self.items.get(self.selection).map(|s| s.as_str())
+    }
+
+    pub fn scroll(&mut self, delta: f32) {
+        if self.items.is_empty() {
+            return;
+        }
+        self.offset -= delta;
+        let max = (self.items.len() - 1) as f32;
+        self.offset = self.offset.clamp(0.0, max);
+        self.selection = self.offset.round() as usize;
+    }
+
+    pub fn fling(&mut self, velocity: f32) {
+        self.velocity = velocity;
+    }
+
+    pub fn tick(&mut self, dt_ms: u32) {
+        if self.items.is_empty() {
+            return;
+        }
+        let dt = dt_ms as f32 / 1000.0;
+        self.offset += self.velocity * dt;
+        self.velocity *= 0.9_f32.powf(dt_ms as f32 / 16.0);
+        if self.velocity.abs() < 0.02 {
+            self.velocity = 0.0;
+        }
+        let max = (self.items.len() - 1) as f32;
+        self.offset = self.offset.clamp(0.0, max);
+        if self.velocity.abs() < 0.02 {
+            self.offset = self.offset.round();
+        }
+        self.selection = self.offset.round() as usize;
+    }
+
+    pub fn encode<U: ImageUploader>(
+        &self,
+        style: &PickerStyle,
+        rect: gfx::RectF,
+        device_scale: f32,
+        text_ctx: &mut TextCtx,
+        uploader: &mut U,
+        builder: &mut DrawListBuilder,
+    ) {
+        if self.items.is_empty() {
+            return;
+        }
+        let highlight = gfx::RectF::new(
+            rect.x + style.padding_x,
+            rect.y + rect.h * 0.5 - style.item_height * 0.5,
+            rect.w - style.padding_x * 2.0,
+            style.item_height,
+        );
+        builder.rrect(highlight, [style.corner_radius; 4], style.highlight);
+
+        let center = rect.y + rect.h * 0.5;
+        let visible = cmp::min(self.items.len(), 9);
+        let start = self.selection.saturating_sub(visible / 2);
+        let end = cmp::min(self.items.len(), start + visible);
+        let handle = text_ctx.ensure_gpu(uploader);
+        let Some(font) = text_ctx.fonts.font(style.font_id) else {
+            return;
+        };
+
+        for idx in start..end {
+            let rel = idx as f32 - self.offset;
+            let dy = rel * style.item_height;
+            let y = center + dy - style.item_height * 0.5;
+            let fade = (1.0 - rel.abs() / visible as f32).clamp(0.2, 1.0);
+            let color = if idx == self.selection {
+                style.text_focus
+            } else {
+                gfx::Color::rgba(style.text_dim.r, style.text_dim.g, style.text_dim.b, fade)
+            };
+            let label = &self.items[idx];
+            let Ok(shape) = text_ctx.shaper.shape(font, style.font_id, label, style.font_px) else {
+                continue;
+            };
+            let dl = builder.drawlist_mut();
+            let run = shape.bake_into(
+                &mut text_ctx.atlas,
+                &mut dl.vertices,
+                &mut dl.indices,
+                color,
+                handle,
+                rect.x + style.padding_x + 8.0,
+                y + style.baseline_shift,
+                device_scale,
+            );
+            let _ = dl;
+            builder.glyph_run(run);
+        }
+
+        let (data, w, h) = text_ctx.atlas.image();
+        uploader.update_a8(handle, 0, 0, w, h, data, w as usize);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PickerStyle {
+    pub item_height: f32,
+    pub font_id: usize,
+    pub font_px: f32,
+    pub corner_radius: f32,
+    pub highlight: gfx::Color,
+    pub text_focus: gfx::Color,
+    pub text_dim: gfx::Color,
+    pub padding_x: f32,
+    pub baseline_shift: f32,
+}
+
+impl Default for PickerStyle {
+    fn default() -> Self {
+        Self {
+            item_height: 38.0,
+            font_id: 0,
+            font_px: 16.0,
+            corner_radius: 9.0,
+            highlight: gfx::Color::rgba(0.82, 0.91, 1.0, 0.45),
+            text_focus: gfx::Color::rgba(0.12, 0.24, 0.60, 1.0),
+            text_dim: gfx::Color::rgba(0.28, 0.32, 0.40, 0.6),
+            padding_x: 12.0,
+            baseline_shift: 4.0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn camera_view_encodes_draw_cmd() {
+        let mut dl = DrawListBuilder::new();
+        let rect = gfx::RectF::new(0.0, 0.0, 320.0, 240.0);
+        let cam = UICameraView {
+            tint: gfx::Color::rgba(0.8, 0.7, 0.6, 0.5),
+            alpha: 0.75,
+            grayscale: true,
+            blur: true,
+            sigma: 8.0,
+        };
+        cam.encode(rect, &mut dl);
+        let items = dl.drawlist().items.clone();
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            gfx::DrawCmd::CameraBg { rect: r, tint, alpha, grayscale, blur, sigma } => {
+                assert_eq!(r.x, rect.x);
+                assert_eq!(r.y, rect.y);
+                assert_eq!(r.w, rect.w);
+                assert_eq!(r.h, rect.h);
+                assert!((*alpha - 0.75).abs() < 1e-6);
+                assert!(*grayscale);
+                assert!(*blur);
+                assert!((*sigma - 8.0).abs() < 1e-6);
+                // basic sanity for tint
+                assert!((*tint).r > 0.79 && (*tint).g > 0.69 && (*tint).b > 0.59);
+            }
+            _ => panic!("expected CameraBg draw command"),
+        }
+    }
+
+    #[test]
+    fn button_press_release_tap() {
+        let mut st = ButtonState::default();
+        st.on_pointer_down();
+        assert!(st.pressed);
+        let tapped = st.on_pointer_up();
+        assert!(tapped);
+        assert!(!st.pressed);
+    }
+
+    #[test]
+    fn toggle_drag_and_tap() {
+        let mut st = ToggleState::default();
+        st.begin_drag(0.0);
+        st.drag_to(50.0, gfx::RectF::new(0.0, 0.0, 100.0, 20.0));
+        st.end_drag();
+        assert!(st.on);
+        st.on_tap();
+        assert!(!st.on);
+    }
+
+    #[test]
+    fn slider_keyboard_adjust() {
+        let mut st = SliderState::default();
+        st.set(0.5, Some(0.1));
+        st.arrow_right(Some(0.1));
+        assert!((st.value - 0.6).abs() < 1e-6);
+        st.arrow_left(Some(0.1));
+        assert!((st.value - 0.5).abs() < 1e-6);
+    }
+}
+
+// ----- Badge -----
+
+#[derive(Clone, Copy, Debug)]
+pub struct BadgeStyle {
+    pub color: gfx::Color,
+    pub text_color: gfx::Color,
+    pub font_px: f32,
+    pub corner: f32,
+    pub min_size: f32,
+    pub bounce_duration_ms: u32,
+}
+
+impl Default for BadgeStyle {
+    fn default() -> Self {
+        Self {
+            color: gfx::Color::rgba(0.96, 0.14, 0.35, 1.0), // Nametag red
+            text_color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
+            font_px: 10.0,
+            corner: 8.0,
+            min_size: 16.0,
+            bounce_duration_ms: 450,
+        }
+    }
+}
+
+pub struct Badge {
+    pub count: u32,
+    pub style: BadgeStyle,
+}
+
+impl Default for Badge {
+    fn default() -> Self {
+        Self { count: 0, style: BadgeStyle::default() }
+    }
+}
+
+pub struct BadgeState {
+    bounce_anim_start_ms: u64,
+    bounce_anim_duration_ms: u32,
+    bounce_from_scale: f32,
+    bounce_to_scale: f32,
+}
+
+impl Default for BadgeState {
+    fn default() -> Self {
+        Self {
+            bounce_anim_start_ms: 0,
+            bounce_anim_duration_ms: 0,
+            bounce_from_scale: 1.0,
+            bounce_to_scale: 1.0,
+        }
+    }
+}
+
+impl BadgeState {
+    /// Trigger bounce animation (3.0x scale with bounce easing)
+    pub fn bounce(&mut self, style: &BadgeStyle) {
+        self.bounce_from_scale = self.current_scale();
+        self.bounce_to_scale = 3.0;
+        self.bounce_anim_start_ms = timing::now_ms();
+        self.bounce_anim_duration_ms = style.bounce_duration_ms;
+    }
+
+    fn current_scale(&self) -> f32 {
+        if self.bounce_anim_duration_ms == 0 {
+            return 1.0;
+        }
+        let elapsed = timing::now_ms().saturating_sub(self.bounce_anim_start_ms) as u32;
+        if elapsed >= self.bounce_anim_duration_ms {
+            return 1.0; // Animation complete, return to normal
+        }
+        let t = elapsed as f32 / self.bounce_anim_duration_ms as f32;
+        // Bounce out easing with overshoot then settle
+        let scale = if t < 0.5 {
+            // First half: scale up to 3.0x with elastic
+            let local = t * 2.0;
+            self.bounce_from_scale
+                + (self.bounce_to_scale - self.bounce_from_scale) * ease_out_back(local)
+        } else {
+            // Second half: settle back to 1.0 with bounce
+            let local = (t - 0.5) * 2.0;
+            self.bounce_to_scale + (1.0 - self.bounce_to_scale) * ease_out_bounce(local)
+        };
+        scale.max(0.1)
+    }
+}
+
+impl Badge {
+    pub fn encode<U: ImageUploader>(
+        &self,
+        rect: gfx::RectF,
+        device_scale: f32,
+        txt: &mut TextCtx,
+        up: &mut U,
+        state: &BadgeState,
+        b: &mut DrawListBuilder,
+    ) {
+        if self.count == 0 {
+            return; // Auto-hide when count is 0
+        }
+
+        let scale = state.current_scale();
+        let text = if self.count <= 99 {
+            alloc::format!("{}", self.count)
+        } else {
+            alloc::string::String::from("99+")
+        };
+
+        // Measure text to determine badge width
+        let label = Label {
+            text: text.clone(),
+            color: self.style.text_color,
+            align: Align::Center,
+            wrap: false,
+            font_id: 0,
+            font_px: self.style.font_px,
+        };
+
+        // Estimate text width (rough calculation for badge sizing)
+        let text_width = self.style.font_px * text.len() as f32 * 0.6;
+        let badge_width = (text_width + self.style.font_px).max(self.style.min_size);
+        let badge_height = self.style.min_size;
+
+        // Scale about center
+        let cx = rect.x + rect.w * 0.5;
+        let cy = rect.y + rect.h * 0.5;
+        let w = badge_width * scale;
+        let h = badge_height * scale;
+        let badge_rect = gfx::RectF::new(cx - w * 0.5, cy - h * 0.5, w, h);
+
+        // Draw badge background
+        b.rrect(badge_rect, [self.style.corner; 4], self.style.color);
+
+        // Draw count text
+        label.encode(badge_rect, device_scale, txt, up, b);
+    }
+}
+
+fn ease_out_back(t: f32) -> f32 {
+    let c1 = 1.70158;
+    let c3 = c1 + 1.0;
+    let t2 = t - 1.0;
+    1.0 + c3 * t2.powi(3) + c1 * t2.powi(2)
+}
+
+fn ease_out_bounce(t: f32) -> f32 {
+    const N1: f32 = 7.5625;
+    const D1: f32 = 2.75;
+    if t < 1.0 / D1 {
+        N1 * t * t
+    } else if t < 2.0 / D1 {
+        let t2 = t - 1.5 / D1;
+        N1 * t2 * t2 + 0.75
+    } else if t < 2.5 / D1 {
+        let t2 = t - 2.25 / D1;
+        N1 * t2 * t2 + 0.9375
+    } else {
+        let t2 = t - 2.625 / D1;
+        N1 * t2 * t2 + 0.984375
+    }
+}
+
+// ----- CountNode -----
+
+pub struct CountNode {
+    pub count: u64,
+    pub label: alloc::string::String,
+    pub count_font_px: f32,
+    pub label_font_px: f32,
+    pub count_color: gfx::Color,
+    pub label_color: gfx::Color,
+}
+
+impl Default for CountNode {
+    fn default() -> Self {
+        Self {
+            count: 0,
+            label: alloc::string::String::new(),
+            count_font_px: 18.0,
+            label_font_px: 7.0,
+            count_color: gfx::Color::rgba(0.92, 0.94, 0.95, 1.0), // ColorMaster::base
+            label_color: gfx::Color::rgba(0.92, 0.94, 0.95, 1.0),
+        }
+    }
+}
+
+impl CountNode {
+    /// Format large numbers with K/M suffixes
+    fn format_count(count: u64) -> alloc::string::String {
+        if count < 1000 {
+            alloc::format!("{}", count)
+        } else if count < 1_000_000 {
+            alloc::format!("{:.1}K", count as f64 / 1000.0)
+        } else {
+            alloc::format!("{:.1}M", count as f64 / 1_000_000.0)
+        }
+    }
+
+    pub fn encode<U: ImageUploader>(
+        &self,
+        rect: gfx::RectF,
+        device_scale: f32,
+        txt: &mut TextCtx,
+        up: &mut U,
+        b: &mut DrawListBuilder,
+    ) {
+        let count_text = Self::format_count(self.count);
+
+        // Vertical stack: count on top, label below
+        let count_height = self.count_font_px * 1.25;
+        let label_height = self.label_font_px * 1.25;
+        let total_height = count_height + label_height;
+        let start_y = rect.y + (rect.h - total_height) * 0.5;
+
+        // Draw count
+        let count_label = Label {
+            text: count_text,
+            color: self.count_color,
+            align: Align::Center,
+            wrap: false,
+            font_id: 0,
+            font_px: self.count_font_px,
+        };
+        let count_rect = gfx::RectF::new(rect.x, start_y, rect.w, count_height);
+        count_label.encode(count_rect, device_scale, txt, up, b);
+
+        // Draw label
+        if !self.label.is_empty() {
+            let label_label = Label {
+                text: self.label.clone(),
+                color: self.label_color,
+                align: Align::Center,
+                wrap: false,
+                font_id: 0,
+                font_px: self.label_font_px,
+            };
+            let label_rect = gfx::RectF::new(rect.x, start_y + count_height, rect.w, label_height);
+            label_label.encode(label_rect, device_scale, txt, up, b);
+        }
+    }
+}
+
+// ----- RecordButton -----
+
+#[derive(Clone, Copy, Debug)]
+pub struct RecordButtonStyle {
+    pub border_width: f32,
+    pub border_color: gfx::Color,
+    pub fill_color: gfx::Color,
+    pub progress_color: gfx::Color,
+    pub progress_track_color: gfx::Color,
+    pub recording_timeout_ms: u32,
+    pub press_animation_ms: u32,
+}
+
+impl Default for RecordButtonStyle {
+    fn default() -> Self {
+        Self {
+            border_width: 1.5,
+            border_color: gfx::Color::rgba(0.92, 0.94, 0.95, 1.0), // ColorMaster::base
+            fill_color: gfx::Color::rgba(0.0, 0.0, 0.0, 0.0),      // Transparent
+            progress_color: gfx::Color::rgba(0.96, 0.14, 0.35, 1.0), // Nametag red
+            progress_track_color: gfx::Color::rgba(0.85, 0.85, 0.85, 0.3),
+            recording_timeout_ms: 9000,
+            press_animation_ms: 100,
+        }
+    }
+}
+
+pub struct RecordButton {
+    pub style: RecordButtonStyle,
+}
+
+impl Default for RecordButton {
+    fn default() -> Self {
+        Self { style: RecordButtonStyle::default() }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RecordButtonMode {
+    Idle,
+    Recording,
+}
+
+pub struct RecordButtonState {
+    pub mode: RecordButtonMode,
+    pressed: bool,
+    recording_start_ms: u64,
+    recording_duration_ms: u32,
+    press_anim_start_ms: u64,
+    press_anim_from: f32,
+    press_anim_to: f32,
+}
+
+impl Default for RecordButtonState {
+    fn default() -> Self {
+        Self {
+            mode: RecordButtonMode::Idle,
+            pressed: false,
+            recording_start_ms: 0,
+            recording_duration_ms: 0, // Will be set from style when starting recording
+            press_anim_start_ms: 0,
+            press_anim_from: 1.0,
+            press_anim_to: 1.0,
+        }
+    }
+}
+
+impl RecordButtonState {
+    pub fn is_recording(&self) -> bool {
+        self.mode == RecordButtonMode::Recording
+    }
+
+    pub fn on_pointer_down(&mut self, style: &RecordButtonStyle) {
+        self.pressed = true;
+        self.press_anim_from = self.current_scale(style);
+        self.press_anim_to = 0.80;
+        self.press_anim_start_ms = timing::now_ms();
+    }
+
+    pub fn on_pointer_up(&mut self, style: &RecordButtonStyle) -> bool {
+        let was_pressed = self.pressed;
+        self.pressed = false;
+        self.press_anim_from = self.current_scale(style);
+        self.press_anim_to = 1.0;
+        self.press_anim_start_ms = timing::now_ms();
+        was_pressed
+    }
+
+    pub fn start_recording(&mut self, style: &RecordButtonStyle) {
+        self.mode = RecordButtonMode::Recording;
+        self.recording_start_ms = timing::now_ms();
+        self.recording_duration_ms = style.recording_timeout_ms;
+    }
+
+    pub fn stop_recording(&mut self) {
+        self.mode = RecordButtonMode::Idle;
+        self.recording_start_ms = 0;
+    }
+
+    fn current_scale(&self, style: &RecordButtonStyle) -> f32 {
+        let elapsed = timing::now_ms().saturating_sub(self.press_anim_start_ms);
+        let duration = style.press_animation_ms as u64;
+        if elapsed > duration {
+            return self.press_anim_to;
+        }
+        let t = elapsed as f32 / duration as f32;
+        self.press_anim_from + (self.press_anim_to - self.press_anim_from) * t
+    }
+
+    fn recording_progress(&self) -> f32 {
+        if self.mode != RecordButtonMode::Recording {
+            return 0.0;
+        }
+        let elapsed = timing::now_ms().saturating_sub(self.recording_start_ms);
+        (elapsed as f32 / self.recording_duration_ms as f32).clamp(0.0, 1.0)
+    }
+
+    pub fn is_timeout(&self) -> bool {
+        self.recording_progress() >= 1.0
+    }
+}
+
+impl RecordButton {
+    pub fn encode(&self, rect: gfx::RectF, state: &RecordButtonState, b: &mut DrawListBuilder) {
+        let scale = state.current_scale(&self.style);
+        let cx = rect.x + rect.w * 0.5;
+        let cy = rect.y + rect.h * 0.5;
+        let radius = rect.w.min(rect.h) * 0.5 * scale;
+
+        // Draw outer circle (border)
+        let outer_rect = gfx::RectF::new(cx - radius, cy - radius, radius * 2.0, radius * 2.0);
+        b.rrect(outer_rect, [radius; 4], self.style.border_color);
+
+        // Draw inner circle (fill)
+        let inner_radius = radius - self.style.border_width;
+        if inner_radius > 0.0 {
+            let inner_rect = gfx::RectF::new(
+                cx - inner_radius,
+                cy - inner_radius,
+                inner_radius * 2.0,
+                inner_radius * 2.0,
+            );
+            b.rrect(inner_rect, [inner_radius; 4], self.style.fill_color);
+        }
+
+        // Draw progress indicator when recording
+        if state.mode == RecordButtonMode::Recording {
+            let progress = state.recording_progress();
+            let progress_bar_rect = gfx::RectF::new(rect.x, rect.y + rect.h + 8.0, rect.w, 4.0);
+
+            // Track
+            b.rrect(progress_bar_rect, [2.0; 4], self.style.progress_track_color);
+
+            // Progress
+            let progress_width = progress_bar_rect.w * progress;
+            if progress_width > 0.5 {
+                let progress_rect = gfx::RectF::new(
+                    progress_bar_rect.x,
+                    progress_bar_rect.y,
+                    progress_width,
+                    progress_bar_rect.h,
+                );
+                b.rrect(progress_rect, [2.0; 4], self.style.progress_color);
+            }
+        }
+    }
+}
+
+// ----- ShiftingTextInput -----
+
+/// Character filter for text input validation
+#[derive(Clone)]
+pub enum CharFilter {
+    /// Allow all characters
+    None,
+    /// Only allow characters that pass the predicate
+    Custom(Arc<dyn Fn(char) -> bool + Send + Sync>),
+    /// Only letters
+    Alphabetic,
+    /// Only letters and hyphen
+    AlphabeticHyphen,
+    /// Only digits
+    Digits,
+    /// Letters, numbers, underscore
+    Alphanumeric,
+    /// Alphanumeric plus specific chars
+    AlphanumericPlus(String),
+}
+
+impl core::fmt::Debug for CharFilter {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            CharFilter::None => write!(f, "CharFilter::None"),
+            CharFilter::Custom(_) => write!(f, "CharFilter::Custom(<fn>)"),
+            CharFilter::Alphabetic => write!(f, "CharFilter::Alphabetic"),
+            CharFilter::AlphabeticHyphen => write!(f, "CharFilter::AlphabeticHyphen"),
+            CharFilter::Digits => write!(f, "CharFilter::Digits"),
+            CharFilter::Alphanumeric => write!(f, "CharFilter::Alphanumeric"),
+            CharFilter::AlphanumericPlus(s) => write!(f, "CharFilter::AlphanumericPlus({:?})", s),
+        }
+    }
+}
+
+impl CharFilter {
+    pub fn allows(&self, ch: char) -> bool {
+        match self {
+            CharFilter::None => true,
+            CharFilter::Custom(f) => f(ch),
+            CharFilter::Alphabetic => ch.is_alphabetic(),
+            CharFilter::AlphabeticHyphen => ch.is_alphabetic() || ch == '-',
+            CharFilter::Digits => ch.is_ascii_digit(),
+            CharFilter::Alphanumeric => ch.is_alphanumeric(),
+            CharFilter::AlphanumericPlus(chars) => ch.is_alphanumeric() || chars.contains(ch),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ShiftingTextInputStyle {
+    pub font_px: f32,
+    pub prompt_font_px: f32,
+    pub text_color: gfx::Color,
+    pub placeholder_color: gfx::Color,
+    pub prompt_color: gfx::Color,
+    pub background: gfx::Color,
+    pub background_focus: gfx::Color,
+    pub background_invalid: gfx::Color,
+    pub corner: f32,
+    pub padding: gfx::Insets,
+}
+
+impl Default for ShiftingTextInputStyle {
+    fn default() -> Self {
+        Self {
+            font_px: 17.0,
+            prompt_font_px: 10.0,
+            text_color: gfx::Color::rgba(0.92, 0.94, 0.95, 1.0),
+            placeholder_color: gfx::Color::rgba(0.92, 0.94, 0.95, 0.5),
+            prompt_color: gfx::Color::rgba(0.92, 0.94, 0.95, 0.5),
+            background: gfx::Color::rgba(0.95, 0.95, 0.95, 0.1),
+            background_focus: gfx::Color::rgba(0.95, 0.95, 0.95, 0.15),
+            background_invalid: gfx::Color::rgba(0.96, 0.14, 0.35, 0.2),
+            corner: 8.0,
+            padding: gfx::Insets { left: 12.0, top: 8.0, right: 12.0, bottom: 8.0 },
+        }
+    }
+}
+
+pub struct ShiftingTextInput {
+    pub placeholder: String,
+    pub prompt: Option<String>,
+    pub max_length: Option<usize>,
+    pub filter: CharFilter,
+    pub style: ShiftingTextInputStyle,
+}
+
+impl Default for ShiftingTextInput {
+    fn default() -> Self {
+        Self {
+            placeholder: String::from("text"),
+            prompt: None,
+            max_length: None,
+            filter: CharFilter::None,
+            style: ShiftingTextInputStyle::default(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ShiftingTextValidation {
+    Valid,
+    Invalid,
+}
+
+pub struct ShiftingTextInputState {
+    pub text: String,
+    pub focused: bool,
+    pub validation: ShiftingTextValidation,
+    prompt_anim_t: f32, // 0.0 = centered placeholder, 1.0 = shifted prompt above
+    shake_anim_start_ms: u64,
+    shake_anim_cycles: u32,
+}
+
+impl Default for ShiftingTextInputState {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            focused: false,
+            validation: ShiftingTextValidation::Valid,
+            prompt_anim_t: 0.0,
+            shake_anim_start_ms: 0,
+            shake_anim_cycles: 0,
+        }
+    }
+}
+
+impl ShiftingTextInputState {
+    pub fn set_text(&mut self, text: String, filter: &CharFilter, max_length: Option<usize>) {
+        // Filter invalid characters
+        let filtered: String = text.chars().filter(|&ch| filter.allows(ch)).collect();
+
+        // Apply max length
+        if let Some(max) = max_length {
+            self.text = filtered.chars().take(max).collect();
+        } else {
+            self.text = filtered;
+        }
+    }
+
+    pub fn on_focus(&mut self) {
+        self.focused = true;
+    }
+
+    pub fn on_blur(&mut self) {
+        self.focused = false;
+    }
+
+    /// Trigger fail mode with shake animation
+    pub fn fail(&mut self) {
+        self.validation = ShiftingTextValidation::Invalid;
+        self.shake_anim_start_ms = timing::now_ms();
+        self.shake_anim_cycles = 6;
+    }
+
+    pub fn clear_fail(&mut self) {
+        self.validation = ShiftingTextValidation::Valid;
+        self.shake_anim_cycles = 0;
+    }
+
+    fn shake_offset(&self) -> f32 {
+        if self.shake_anim_cycles == 0 {
+            return 0.0;
+        }
+        let elapsed = timing::now_ms().saturating_sub(self.shake_anim_start_ms);
+        let cycle_ms = 35;
+        let total_duration = cycle_ms * self.shake_anim_cycles as u64 * 2;
+        if elapsed >= total_duration {
+            return 0.0;
+        }
+        let t = (elapsed % (cycle_ms * 2)) as f32 / (cycle_ms * 2) as f32;
+        let amplitude = 2.0;
+        if t < 0.5 {
+            amplitude * (t * 4.0 - 1.0)
+        } else {
+            amplitude * (3.0 - t * 4.0)
+        }
+    }
+
+    pub fn tick(&mut self) {
+        // Update prompt animation
+        let target = if self.focused || !self.text.is_empty() { 1.0 } else { 0.0 };
+        let delta = target - self.prompt_anim_t;
+        if delta.abs() > 0.01 {
+            self.prompt_anim_t += delta * 0.15; // Smooth transition
+        } else {
+            self.prompt_anim_t = target;
+        }
+    }
+}
+
+impl ShiftingTextInput {
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode<U: ImageUploader>(
+        &self,
+        state: &ShiftingTextInputState,
+        rect: gfx::RectF,
+        device_scale: f32,
+        text_ctx: &mut TextCtx,
+        uploader: &mut U,
+        builder: &mut DrawListBuilder,
+    ) {
+        let style = &self.style;
+
+        // Apply shake offset
+        let shake_x = state.shake_offset();
+        let adjusted_rect = gfx::RectF::new(rect.x + shake_x, rect.y, rect.w, rect.h);
+
+        // Background
+        let bg = match state.validation {
+            ShiftingTextValidation::Invalid => style.background_invalid,
+            _ => {
+                if state.focused {
+                    style.background_focus
+                } else {
+                    style.background
+                }
+            }
+        };
+        builder.rrect(adjusted_rect, [style.corner; 4], bg);
+
+        // Determine prompt position
+        let prompt_height = style.prompt_font_px * 1.25;
+        let prompt_offset = state.prompt_anim_t * prompt_height;
+
+        // Draw prompt above if animating up
+        if let Some(prompt_text) = &self.prompt {
+            if state.prompt_anim_t > 0.01 {
+                let prompt_label = Label {
+                    text: prompt_text.clone(),
+                    color: gfx::Color {
+                        r: style.prompt_color.r,
+                        g: style.prompt_color.g,
+                        b: style.prompt_color.b,
+                        a: style.prompt_color.a * state.prompt_anim_t,
+                    },
+                    align: Align::Center,
+                    wrap: false,
+                    font_id: 0,
+                    font_px: style.prompt_font_px,
+                };
+                let prompt_rect = gfx::RectF::new(
+                    adjusted_rect.x + style.padding.left,
+                    adjusted_rect.y + style.padding.top,
+                    adjusted_rect.w - style.padding.left - style.padding.right,
+                    prompt_height,
+                );
+                prompt_label.encode(prompt_rect, device_scale, text_ctx, uploader, builder);
+            }
+        }
+
+        // Draw placeholder or text
+        let text_y = adjusted_rect.y + style.padding.top + prompt_offset;
+        let text_rect = gfx::RectF::new(
+            adjusted_rect.x + style.padding.left,
+            text_y,
+            adjusted_rect.w - style.padding.left - style.padding.right,
+            adjusted_rect.h - style.padding.top - style.padding.bottom - prompt_offset,
+        );
+
+        if state.text.is_empty() {
+            // Show placeholder
+            let placeholder = Label {
+                text: self.placeholder.clone(),
+                color: style.placeholder_color,
+                align: Align::Center,
+                wrap: false,
+                font_id: 0,
+                font_px: style.font_px,
+            };
+            placeholder.encode(text_rect, device_scale, text_ctx, uploader, builder);
+        } else {
+            // Show text
+            let text_label = Label {
+                text: state.text.clone(),
+                color: style.text_color,
+                align: Align::Center,
+                wrap: false,
+                font_id: 0,
+                font_px: style.font_px,
+            };
+            text_label.encode(text_rect, device_scale, text_ctx, uploader, builder);
+        }
+    }
+}
+
+// ----- SlidingSwitch -----
+
+#[derive(Clone, Copy, Debug)]
+pub struct SlidingSwitchStyle {
+    pub background_color: gfx::Color,
+    pub knob_color: gfx::Color,
+    pub corner: f32,
+    pub inactive_timeout_ms: u64,
+}
+
+impl Default for SlidingSwitchStyle {
+    fn default() -> Self {
+        Self {
+            background_color: gfx::Color::rgba(0.96, 0.14, 0.35, 1.0), // Nametag red
+            knob_color: gfx::Color::rgba(0.96, 0.14, 0.35, 1.0),
+            corner: 0.0, // Will be set to height/2
+            inactive_timeout_ms: 2000,
+        }
+    }
+}
+
+pub struct SlidingSwitch {
+    pub style: SlidingSwitchStyle,
+}
+
+impl Default for SlidingSwitch {
+    fn default() -> Self {
+        Self { style: SlidingSwitchStyle::default() }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SlidingSwitchMode {
+    Idle,
+    Dragging,
+    Triggered,
+}
+
+pub struct SlidingSwitchState {
+    pub mode: SlidingSwitchMode,
+    drag_start_x: f32,
+    knob_offset_x: f32,
+    inactive_timer_ms: u64,
+    last_interaction_ms: u64,
+}
+
+impl Default for SlidingSwitchState {
+    fn default() -> Self {
+        Self {
+            mode: SlidingSwitchMode::Idle,
+            drag_start_x: 0.0,
+            knob_offset_x: 0.0,
+            inactive_timer_ms: 0, // Will be set from style when needed
+            last_interaction_ms: 0,
+        }
+    }
+}
+
+impl SlidingSwitchState {
+    /// Start the inactive timer
+    pub fn start(&mut self, style: &SlidingSwitchStyle) {
+        self.last_interaction_ms = timing::now_ms();
+        self.inactive_timer_ms = style.inactive_timeout_ms;
+    }
+
+    /// Check if inactive timeout has been reached
+    pub fn is_inactive(&self) -> bool {
+        if self.mode == SlidingSwitchMode::Idle {
+            return false;
+        }
+        let elapsed = timing::now_ms().saturating_sub(self.last_interaction_ms);
+        elapsed >= self.inactive_timer_ms
+    }
+
+    /// Begin drag (requires long press - check externally)
+    pub fn begin_drag(&mut self, x: f32) {
+        self.mode = SlidingSwitchMode::Dragging;
+        self.drag_start_x = x;
+        self.knob_offset_x = 0.0;
+        self.last_interaction_ms = timing::now_ms();
+    }
+
+    /// Update drag position
+    /// Returns true if fully slid (triggered)
+    pub fn drag_to(&mut self, x: f32, bounds: gfx::RectF) -> bool {
+        if self.mode != SlidingSwitchMode::Dragging {
+            return false;
+        }
+
+        self.last_interaction_ms = timing::now_ms();
+
+        let delta = x - self.drag_start_x;
+        let max_offset = bounds.w - bounds.h; // Width minus knob size
+
+        // Only allow left-to-right sliding
+        if delta < 0.0 {
+            self.knob_offset_x = 0.0;
+            return false;
+        }
+
+        self.knob_offset_x = delta.min(max_offset);
+
+        // Check if fully slid
+        if self.knob_offset_x >= max_offset {
+            self.mode = SlidingSwitchMode::Triggered;
+            return true;
+        }
+
+        false
+    }
+
+    /// End drag gesture
+    pub fn end_drag(&mut self) {
+        if self.mode == SlidingSwitchMode::Dragging {
+            self.reset();
+        }
+    }
+
+    /// Reset to idle
+    pub fn reset(&mut self) {
+        self.mode = SlidingSwitchMode::Idle;
+        self.knob_offset_x = 0.0;
+        self.drag_start_x = 0.0;
+    }
+
+    /// Get current slide progress (0.0 to 1.0)
+    pub fn progress(&self, bounds: gfx::RectF) -> f32 {
+        let max_offset = bounds.w - bounds.h;
+        if max_offset <= 0.0 {
+            return 0.0;
+        }
+        (self.knob_offset_x / max_offset).clamp(0.0, 1.0)
+    }
+}
+
+impl SlidingSwitch {
+    pub fn encode(&self, rect: gfx::RectF, state: &SlidingSwitchState, b: &mut DrawListBuilder) {
+        let corner = if self.style.corner > 0.0 {
+            self.style.corner
+        } else {
+            rect.h * 0.5 // Default: circular ends
+        };
+
+        // Background (fades in based on progress)
+        let progress = state.progress(rect);
+        let mut bg_color = self.style.background_color;
+        bg_color.a *= progress;
+        b.rrect(rect, [corner; 4], bg_color);
+
+        // Knob
+        let knob_size = rect.h;
+        let knob_x = rect.x + state.knob_offset_x;
+        let knob_rect = gfx::RectF::new(knob_x, rect.y, knob_size, knob_size);
+        b.rrect(knob_rect, [knob_size * 0.5; 4], self.style.knob_color);
+    }
+}

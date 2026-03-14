@@ -1,6 +1,8 @@
 use regex::Regex;
 use serde::Serialize;
+use std::error::Error;
 use std::fs;
+use std::io::{Error as IoError, ErrorKind};
 use std::path::PathBuf;
 
 #[derive(Serialize, Clone, Debug)]
@@ -29,10 +31,12 @@ fn parse_args() -> (PathBuf, Option<PathBuf>, Option<PathBuf>) {
     (input.unwrap_or_else(|| PathBuf::from("artifacts/static/sweep.txt")), csv, json)
 }
 
-fn main() {
+fn run() -> Result<(), Box<dyn Error>> {
     let (input, csv_out, json_out) = parse_args();
-    let data = fs::read_to_string(&input).expect("read sweep.txt");
-    let re = Regex::new(r"(?m)^summary\s+suite=static\s+component=([^\s]+)\s+variant=([^\s]+)(?:\s+state=([^\s]+))?\s+pixdiff=([0-9]+)\s+max_err=([0-9]+)\s+mse=([0-9.]+)").unwrap();
+    let data = fs::read_to_string(&input)?;
+    let re = Regex::new(
+        r"(?m)^summary\s+suite=static\s+component=([^\s]+)\s+variant=([^\s]+)(?:\s+state=([^\s]+))?\s+pixdiff=([0-9]+)\s+max_err=([0-9]+)\s+mse=([0-9.]+)",
+    )?;
     let mut rows: Vec<SnapRow> = Vec::new();
     for cap in re.captures_iter(&data) {
         rows.push(SnapRow {
@@ -45,19 +49,30 @@ fn main() {
         });
     }
     if rows.is_empty() {
-        eprintln!("no summary lines found in {}", input.display());
-        std::process::exit(2);
+        return Err(Box::new(IoError::new(
+            ErrorKind::InvalidData,
+            format!("no summary lines found in {}", input.display()),
+        )));
     }
     if let Some(csv_path) = csv_out.clone() {
         let mut w = String::from("component,variant,state,pixdiff,max_err,mse\n");
         for r in &rows {
             w.push_str(&format!("{},{},{},{},{},{}\n", r.component, r.variant, r.state, r.pixdiff, r.max_err, r.mse));
         }
-        fs::write(csv_path, w).expect("write csv");
+        fs::write(csv_path, w)?;
     }
     if let Some(json_path) = json_out.clone() {
-        fs::write(json_path, serde_json::to_string_pretty(&rows).unwrap()).expect("write json");
+        let json = serde_json::to_string_pretty(&rows)?;
+        fs::write(json_path, json)?;
     }
     let fails = rows.iter().filter(|r| r.pixdiff > 0).count();
     println!("failures={} total={}", fails, rows.len());
+    Ok(())
+}
+
+fn main() {
+    if let Err(err) = run() {
+        eprintln!("{}", err);
+        std::process::exit(2);
+    }
 }

@@ -41,9 +41,9 @@ jobs:
           override: true
       - name: Build renderer-metal with snapshot tests gated
         run: |
-          cargo build -p oxideui-renderer-metal --features snapshot-tests
+          cargo build -p oxide-renderer-metal --features snapshot-tests
       - name: Host iOS bridge unit tests
-        run: cargo test -p oxideui-host-ios --lib --tests
+        run: cargo test -p oxide-host-ios --lib --tests
       - name: macOS host smoke build
-        run: cargo build -p oxideui-host-macos
+        run: cargo build -p oxide-host-macos
 

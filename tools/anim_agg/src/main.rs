@@ -1,7 +1,9 @@
 use regex::Regex;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::error::Error;
 use std::fs;
+use std::io::{Error as IoError, ErrorKind};
 use std::path::PathBuf;
 
 #[derive(Serialize, Clone, Debug)]
@@ -42,10 +44,12 @@ fn parse_args() -> (PathBuf, Option<PathBuf>, Option<PathBuf>) {
     )
 }
 
-fn main() {
+fn run() -> Result<(), Box<dyn Error>> {
     let (input, csv_out, json_out) = parse_args();
-    let data = fs::read_to_string(&input).expect("read sweep.txt");
-    let re = Regex::new(r"(?m)^summary\s+suite=anim\s+component=([^\s]+)\s+variant=([^\s]+)\s+state=([^\s]+)\s+time_ms=([0-9]+)\s+pixdiff=([0-9]+)\s+max_err=([0-9]+)\s+mse=([0-9.]+)").unwrap();
+    let data = fs::read_to_string(&input)?;
+    let re = Regex::new(
+        r"(?m)^summary\s+suite=anim\s+component=([^\s]+)\s+variant=([^\s]+)\s+state=([^\s]+)\s+time_ms=([0-9]+)\s+pixdiff=([0-9]+)\s+max_err=([0-9]+)\s+mse=([0-9.]+)",
+    )?;
     let mut rows: Vec<FrameRow> = Vec::new();
     for cap in re.captures_iter(&data) {
         rows.push(FrameRow {
@@ -59,8 +63,10 @@ fn main() {
         });
     }
     if rows.is_empty() {
-        eprintln!("no summary lines found in {}", input.display());
-        std::process::exit(2);
+        return Err(Box::new(IoError::new(
+            ErrorKind::InvalidData,
+            format!("no summary lines found in {}", input.display()),
+        )));
     }
     rows.sort_by_key(|r| (r.component.clone(), r.variant.clone(), r.state.clone(), r.time_ms));
     if let Some(csv_path) = csv_out.clone() {
@@ -68,7 +74,7 @@ fn main() {
         for r in &rows {
             w.push_str(&format!("{},{},{},{},{},{},{}\n", r.component, r.variant, r.state, r.time_ms, r.pixdiff, r.max_err, r.mse));
         }
-        fs::write(csv_path, w).expect("write csv");
+        fs::write(csv_path, w)?;
     }
     let mut by_component: HashMap<String, usize> = HashMap::new();
     let failures = rows.iter().filter(|r| r.pixdiff > 0).count();
@@ -77,8 +83,16 @@ fn main() {
     }
     let summary = Summary { frames: rows.len(), failures, by_component };
     if let Some(json_path) = json_out.clone() {
-        fs::write(json_path, serde_json::to_string_pretty(&summary).unwrap()).expect("write json");
+        let json = serde_json::to_string_pretty(&summary)?;
+        fs::write(json_path, json)?;
     }
     println!("frames={} failures={}", summary.frames, summary.failures);
+    Ok(())
 }
 
+fn main() {
+    if let Err(err) = run() {
+        eprintln!("{}", err);
+        std::process::exit(2);
+    }
+}

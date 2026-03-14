@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 
-use oxideui_networking::{QuicSessionMetrics, ReachabilitySnapshot, ReachabilityState, SessionPhase};
-use oxideui_permissions::{sensors::SensorSnapshot, PermissionState};
-use oxideui_platform_api::{PermissionDomain, PermissionStatus};
+use oxide_networking::{QuicSessionMetrics, ReachabilitySnapshot, ReachabilityState, SessionPhase};
+use oxide_permissions::{sensors::SensorSnapshot, PermissionState};
+use oxide_platform_api::{PermissionDomain, PermissionStatus};
 use parking_lot::Mutex;
 use std::{collections::HashMap, sync::Arc};
 

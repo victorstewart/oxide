@@ -16,7 +16,7 @@ jobs:
     runs-on: macos-latest
     defaults:
       run:
-        working-directory: oxideui
+        working-directory: oxide
     steps:
       - uses: actions/checkout@v4
 
@@ -31,8 +31,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            oxideui/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('oxideui/Cargo.lock') }}
+            oxide/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('oxide/Cargo.lock') }}
 
       - name: Download OFL Inter Regular
         run: |
@@ -40,7 +40,7 @@ jobs:
           curl -L -o fonts/Inter-Regular.ttf https://github.com/rsms/inter/releases/download/v4.0/Inter-Regular.ttf || true
 
       - name: Unit tests (ui-core, timing)
-        run: cargo test -p oxideui-ui-core -p oxideui-timing
+        run: cargo test -p oxide-ui-core -p oxide-timing
 
       - name: Perf sweep
         run: |
@@ -76,7 +76,7 @@ jobs:
     runs-on: macos-latest
     defaults:
       run:
-        working-directory: oxideui
+        working-directory: oxide
     steps:
       - uses: actions/checkout@v4
 
