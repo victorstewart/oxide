@@ -6,6 +6,9 @@
 
 # Rust/Cargo
 **/target/
+artifacts/
+oxide/artifacts/
+**/*.xcresult/
 
 # Xcode
 **/DerivedData/
