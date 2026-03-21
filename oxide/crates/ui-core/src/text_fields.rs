@@ -37,10 +37,7 @@ impl Default for TextFieldPolicy {
 impl TextFieldPolicy {
     #[must_use]
     pub fn new(filter: CharFilter) -> Self {
-        Self {
-            filter,
-            ..Self::default()
-        }
+        Self { filter, ..Self::default() }
     }
 
     #[must_use]
@@ -95,8 +92,7 @@ impl TextFieldPolicy {
 
     #[must_use]
     pub fn accept_edit(&self, input: &str) -> Option<String> {
-        self.accepts_edit(input)
-            .then(|| self.normalize_case(input))
+        self.accepts_edit(input).then(|| self.normalize_case(input))
     }
 
     #[must_use]
@@ -173,11 +169,7 @@ impl core::fmt::Debug for HorizontalShiftingText {
 impl Clone for HorizontalShiftingText {
     fn clone(&self) -> Self {
         let mut state = ShiftingTextInputState::default();
-        state.set_text(
-            self.state.text.clone(),
-            self.policy.filter(),
-            self.policy.max_length(),
-        );
+        state.set_text(self.state.text.clone(), self.policy.filter(), self.policy.max_length());
         if self.state.focused {
             state.on_focus();
         } else {
@@ -246,8 +238,7 @@ impl HorizontalShiftingText {
 
     pub fn clear(&mut self) {
         self.cancel_fail_mode();
-        self.state
-            .set_text(String::new(), self.policy.filter(), self.policy.max_length());
+        self.state.set_text(String::new(), self.policy.filter(), self.policy.max_length());
         self.caret_index = 0;
         self.state.tick();
     }
@@ -341,9 +332,7 @@ impl HorizontalShiftingText {
 
     #[must_use]
     pub fn display_text(&self) -> &str {
-        self.fail_state
-            .as_ref()
-            .map_or(self.text(), |state| state.message.as_str())
+        self.fail_state.as_ref().map_or(self.text(), |state| state.message.as_str())
     }
 
     #[must_use]
@@ -423,9 +412,7 @@ impl HorizontalShiftingText {
 
     #[must_use]
     pub fn display_text_before_caret(&self) -> &str {
-        self.fail_state
-            .as_ref()
-            .map_or(self.text_before_caret(), |state| state.message.as_str())
+        self.fail_state.as_ref().map_or(self.text_before_caret(), |state| state.message.as_str())
     }
 
     #[must_use]
@@ -578,10 +565,7 @@ pub struct EditableText {
 impl EditableText {
     #[must_use]
     pub fn new(policy: TextFieldPolicy) -> Self {
-        Self {
-            policy,
-            value: String::new(),
-        }
+        Self { policy, value: String::new() }
     }
 
     #[must_use]
@@ -663,10 +647,7 @@ impl SecureText {
 
     #[must_use]
     pub fn from_horizontal_shifting_text(password: HorizontalShiftingText) -> Self {
-        Self {
-            inner: password,
-            revealed_ms_remaining: 0,
-        }
+        Self { inner: password, revealed_ms_remaining: 0 }
     }
 
     #[must_use]
@@ -843,9 +824,5 @@ fn byte_index_for_char(input: &str, char_index: usize) -> usize {
     if char_index == 0 {
         return 0;
     }
-    input
-        .char_indices()
-        .nth(char_index)
-        .map(|(idx, _)| idx)
-        .unwrap_or(input.len())
+    input.char_indices().nth(char_index).map(|(idx, _)| idx).unwrap_or(input.len())
 }

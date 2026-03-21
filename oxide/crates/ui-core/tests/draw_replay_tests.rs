@@ -12,6 +12,7 @@ struct RecordingEncoder {
     rrects: Vec<(RectF, [f32; 4], Color)>,
     nine_slices: Vec<(ImageHandle, RectF, Insets, f32)>,
     backdrops: Vec<(RectF, f32, Color, f32)>,
+    camera_bgs: Vec<(RectF, Color, f32, bool, bool, f32)>,
     spinners: Vec<([f32; 2], f32, f32, f32, f32)>,
     glyph_runs: usize,
 }
@@ -41,6 +42,18 @@ impl gfx::RenderEncoder for RecordingEncoder {
 
     fn draw_backdrop(&mut self, rect: RectF, sigma: f32, tint: Color, alpha: f32) {
         self.backdrops.push((rect, sigma, tint, alpha));
+    }
+
+    fn draw_camera_bg(
+        &mut self,
+        rect: RectF,
+        tint: Color,
+        alpha: f32,
+        grayscale: bool,
+        blur: bool,
+        sigma: f32,
+    ) {
+        self.camera_bgs.push((rect, tint, alpha, grayscale, blur, sigma));
     }
 
     fn draw_spinner(
@@ -163,13 +176,18 @@ fn replay_translates_primitives_and_restores_fallback_clip() {
     assert!(approx_eq(nine_slice_rect.x, 25.0));
     assert!(approx_eq(nine_slice_rect.y, 18.0));
 
-    assert_eq!(encoder.backdrops.len(), 2);
+    assert_eq!(encoder.backdrops.len(), 1);
     let (first_backdrop_rect, _, _, _) = encoder.backdrops[0];
     assert!(approx_eq(first_backdrop_rect.x, 35.0));
     assert!(approx_eq(first_backdrop_rect.y, 28.0));
-    let (camera_fallback_rect, _, _, _) = encoder.backdrops[1];
-    assert!(approx_eq(camera_fallback_rect.x, 55.0));
-    assert!(approx_eq(camera_fallback_rect.y, 48.0));
+
+    assert_eq!(encoder.camera_bgs.len(), 1);
+    let (camera_rect, _, _, grayscale, blur, sigma) = encoder.camera_bgs[0];
+    assert!(approx_eq(camera_rect.x, 55.0));
+    assert!(approx_eq(camera_rect.y, 48.0));
+    assert!(grayscale);
+    assert!(blur);
+    assert!(approx_eq(sigma, 4.0));
 
     assert_eq!(encoder.spinners.len(), 1);
     let (center, _, _, _, _) = encoder.spinners[0];

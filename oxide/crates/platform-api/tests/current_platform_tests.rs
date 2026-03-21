@@ -213,6 +213,9 @@ impl Platform for RecordingPlatform {
     fn set_high_refresh(&self, _enable: bool) {}
     fn set_idle_timer_disabled(&self, _disabled: bool) {}
     fn open_system_settings(&self) {}
+    fn open_external_url(&self, _url: &str) -> Result<(), PlatformError> {
+        Ok(())
+    }
     fn clipboard_get(&self) -> Option<String> {
         None
     }

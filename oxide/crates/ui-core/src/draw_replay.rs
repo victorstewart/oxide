@@ -81,12 +81,15 @@ pub fn replay_drawlist(
                 *phase,
                 *alpha,
             ),
-            DrawCmd::CameraBg { rect, sigma, tint, alpha, .. } => encoder.draw_backdrop(
-                RectF::new(rect.x + offset_x, rect.y + offset_y, rect.w, rect.h),
-                *sigma,
-                *tint,
-                *alpha,
-            ),
+            DrawCmd::CameraBg { rect, sigma, tint, alpha, grayscale, blur } => encoder
+                .draw_camera_bg(
+                    RectF::new(rect.x + offset_x, rect.y + offset_y, rect.w, rect.h),
+                    *tint,
+                    *alpha,
+                    *grayscale,
+                    *blur,
+                    *sigma,
+                ),
             DrawCmd::ClipPush { rect } => {
                 let translated = RectI::new(rect.x + offset_ix, rect.y + offset_iy, rect.w, rect.h);
                 clip_stack.push(translated);

@@ -10,6 +10,10 @@
 - App crates such as Nametag depend on these implementations through Oxide instead of duplicating iOS service code locally.
 
 ## Entry points list
+- `IosCameraManager`
+  Generic iOS camera manager for preview, photo capture, recording, and camera-scene texture export. When the optional `native-camera-bridge` feature is enabled, the crate also compiles the Objective-C camera bridge it binds to.
+- Shared native bridges
+  `src/ios/bluetooth.m`, `src/ios/host_services.m`, `src/ios/network.m`, and `src/ios/push.m` now provide the shared Objective-C ownership for generic BLE, clipboard/haptics/permissions/open-URL helpers, QUIC/reachability, and APNs plumbing used by both Oxide host apps and downstream apps such as Nametag.
 - `IosMediaLibraryManager`
   Generic Photos asset query/load bridge, including raw BGRA image extraction for app-specific post-processing.
 - `IosTelephonyService`
@@ -20,6 +24,8 @@
   Monotonic clock bridge for animation/runtime timing.
 
 ## Logic narrative
+- `IosCameraManager` now owns the shared iOS camera bridge that downstream apps such as Nametag consume, so app crates should only keep app-specific review/policy hooks above this layer instead of duplicating AVFoundation camera control code locally.
+- `host_services.m` now owns the shared clipboard, haptics, and permission/update plumbing so host apps can keep only app-shell behavior locally instead of carrying parallel Objective-C utility bridges.
 - Each service owns the platform-specific FFI contract and converts host return codes into `PlatformError`.
 - `IosSecureStorage` exposes sync helper methods plus the async `SecureStorage` trait adapter so both direct platform usage and callback-registry compatibility shims share one implementation.
 - `IosMediaLibraryManager` keeps the generic asset query/load path in Oxide, while app crates can still layer app-specific crop/runtime-image logic above the raw BGRA helper.
@@ -36,4 +42,7 @@
 - Validated indirectly through downstream workspace builds/tests that consume these services.
 
 ## Changelog
+- 2026-03-20: absorbed shared iOS clipboard, haptics, permissions, and open-URL/settings Objective-C helpers into `src/ios/host_services.m`, deleting the parallel host-local copies from both Oxide host-app and downstream Nametag host code.
+- 2026-03-20: absorbed shared iOS Bluetooth, push, and QUIC/reachability Objective-C shims so Oxide and downstream apps stop carrying parallel host-local copies of the same platform bridges.
+- 2026-03-20: absorbed the shared iOS camera bridge from Nametag behind the optional `native-camera-bridge` feature so downstream apps can delete duplicated camera host code and use Oxide ownership directly.
 - 2026-03-12: absorbed generic iOS media-library, telephony, and secure-storage ownership from Nametag host code, leaving only app-specific media staging in the app layer.

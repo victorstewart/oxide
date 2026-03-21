@@ -1,7 +1,7 @@
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
-scheme := "oxideui-perf-runner"
-manifest := "oxideui/Cargo.toml"
+scheme := "oxide-perf-runner"
+manifest := "oxide/Cargo.toml"
 use_vals := "0.6,0.7,0.75,0.8,0.9"
 pref_vals := "0.15,0.25,0.33"
 
@@ -28,7 +28,7 @@ aggregate-anim:
     ./tools/anim_agg/target/release/anim_agg --input artifacts/anim/sweep.txt --csv artifacts/anim/sweep.csv --json artifacts/anim/summary.json
 
 test:
-    cd oxideui && cargo test -p oxideui-ui-core -p oxideui-timing -p oxideui-platform-ios
+    cd oxide && cargo test -p oxide-ui-core -p oxide-timing -p oxide-platform-ios
 
 test-camera:
-    cd oxideui && cargo test -p oxideui-platform-ios
+    cd oxide && cargo test -p oxide-platform-ios

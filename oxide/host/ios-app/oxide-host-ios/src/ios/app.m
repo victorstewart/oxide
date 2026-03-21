@@ -1,9 +1,6 @@
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <Contacts/Contacts.h>
-#import <CoreBluetooth/CBCharacteristic.h>
-#import <CoreBluetooth/CBPeripheral.h>
-#import <CoreBluetooth/CBUUID.h>
 #import <CoreBluetooth/CoreBluetooth.h>
 #import <CoreLocation/CoreLocation.h>
 #import <CoreMedia/CoreMedia.h>
@@ -11,7 +8,6 @@
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
-#import <Network/Network.h>
 #import <Photos/Photos.h>
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
@@ -47,15 +43,10 @@ static inline void OxLogImpl(NSString *msg) {
   OxLogImpl([NSString stringWithFormat:(fmt), ##__VA_ARGS__])
 #endif
 
-static void (*gReachabilityCallback)(uint32_t status, uint32_t iface,
-                                     uint8_t expensive) = NULL;
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 120000
-static nw_path_monitor_t gReachabilityMonitor = NULL;
-static dispatch_queue_t gReachabilityQueue = NULL;
-#endif
-
 // ===== Structs =====
-// OxBleScanConfig and OxBleScanInfo moved to bluetooth.m
+// OxBleScanConfig moved to shared platform-ios bluetooth.m
+
+typedef struct OxBleScanConfig OxBleScanConfig;
 
 typedef struct {
   const uint8_t *y_plane;
@@ -80,10 +71,6 @@ typedef struct {
   uint32_t sample_rate_hz;
   uint64_t timestamp_ns;
 } OxCameraAudio;
-
-// ===== Forward Declarations =====
-static void EmitPermissionAsync(uint32_t domain, uint32_t status);
-static uint32_t StatusFromBluetoothAuthorization(void);
 
 // ===== Rust FFI declarations (Objective-C -> Rust) =====
 void oxide_host_ble_emit_state(uint32_t state);
@@ -145,6 +132,10 @@ void oxide_host_push_register(void);
 int oxide_host_push_get_device_token(char **out_ptr, size_t *out_len);
 void oxide_host_push_set_badge(int32_t count);
 void oxide_host_push_clear_badge(void);
+void oxide_host_push_bootstrap(void);
+void oxide_host_push_application_did_register(NSData *deviceToken);
+void oxide_host_push_application_did_fail(NSError *error);
+void oxide_host_push_application_did_receive(NSDictionary *userInfo);
 void oxide_host_input_log(const char *utf8, size_t len);
 int32_t oxide_host_set_camera_running(uint8_t running);
 uint8_t oxide_ble_is_supported(void);
@@ -460,98 +451,8 @@ static void EnsureHostInitialized(UIView *view) {
   }
 }
 
-// ===== Clipboard / utility exports =====
-
-void oxide_host_clipboard_set(const char *utf8, size_t len) {
-  NSString *s = StringFromUtf8(utf8, len);
-  dispatch_on_main(^{
-    [UIPasteboard generalPasteboard].string = s;
-  });
-}
-
-int oxide_host_clipboard_get(char **out_ptr, size_t *out_len) {
-  if (!out_ptr || !out_len) {
-    return 0;
-  }
-  __block NSString *value = nil;
-  dispatch_on_main(^{
-    value = [UIPasteboard generalPasteboard].string ?: @"";
-  });
-  if (!value) {
-    *out_ptr = NULL;
-    *out_len = 0;
-    return 0;
-  }
-  NSData *data = [value dataUsingEncoding:NSUTF8StringEncoding];
-  if (!data) {
-    *out_ptr = NULL;
-    *out_len = 0;
-    return 0;
-  }
-  void *buf = malloc(data.length);
-  if (!buf) {
-    *out_ptr = NULL;
-    *out_len = 0;
-    return 0;
-  }
-  memcpy(buf, data.bytes, data.length);
-  *out_ptr = buf;
-  *out_len = data.length;
-  return 1;
-}
-
-void oxide_host_string_free(char *p) {
-  if (p) {
-    free(p);
-  }
-}
-
-void oxide_host_haptics_play(uint32_t pattern) {
-  dispatch_on_main(^{
-    if (pattern <= 2) {
-      UIImpactFeedbackStyle style = UIImpactFeedbackStyleLight;
-      if (pattern == 1)
-        style = UIImpactFeedbackStyleMedium;
-      else if (pattern == 2)
-        style = UIImpactFeedbackStyleHeavy;
-      UIImpactFeedbackGenerator *gen =
-          [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
-      [gen impactOccurred];
-    } else if (pattern == 3) {
-      UISelectionFeedbackGenerator *sel = [UISelectionFeedbackGenerator new];
-      [sel selectionChanged];
-    } else {
-      UINotificationFeedbackGenerator *note =
-          [UINotificationFeedbackGenerator new];
-      UINotificationFeedbackType t = UINotificationFeedbackTypeSuccess;
-      if (pattern == 5)
-        t = UINotificationFeedbackTypeWarning;
-      else if (pattern == 6)
-        t = UINotificationFeedbackTypeError;
-      [note notificationOccurred:t];
-    }
-  });
-}
-
-// ===== Permissions =====
-
-enum {
-  kOxPermStatusNotDetermined = 0,
-  kOxPermStatusDenied = 1,
-  kOxPermStatusLimited = 2,
-  kOxPermStatusAuthorized = 3,
-};
-
-enum {
-  kOxPermDomainNotifications = 0,
-  kOxPermDomainLocation = 1,
-  kOxPermDomainCamera = 2,
-  kOxPermDomainContacts = 3,
-  kOxPermDomainBluetooth = 4,
-  kOxPermDomainMotion = 5,
-  kOxPermDomainMicrophone = 6,
-  kOxPermDomainMediaLibrary = 7,
-};
+// Shared clipboard, haptics, and permissions live in platform-ios
+// host_services.m.
 
 typedef struct {
   uint32_t kind;
@@ -662,626 +563,10 @@ void oxide_host_set_camera_record_callback(
   gCameraRecordCallback = cb;
 }
 
-// Bluetooth logic moved to bluetooth.m
-
-static void EmitPermissionAsync(uint32_t domain, uint32_t status) {
-  dispatch_async(dispatch_get_main_queue(), ^{
-    oxide_host_emit_perm(domain, status);
-  });
-}
-
-static uint32_t StatusFromAVAuthorization(AVAuthorizationStatus status) {
-  switch (status) {
-  case AVAuthorizationStatusAuthorized:
-    return kOxPermStatusAuthorized;
-
-  case AVAuthorizationStatusDenied:
-  case AVAuthorizationStatusRestricted:
-    return kOxPermStatusDenied;
-  case AVAuthorizationStatusNotDetermined:
-  default:
-    return kOxPermStatusNotDetermined;
-  }
-}
-
-static uint32_t
-StatusFromRecordPermission(AVAudioSessionRecordPermission perm) {
-  switch (perm) {
-  case AVAudioSessionRecordPermissionGranted:
-    return kOxPermStatusAuthorized;
-  case AVAudioSessionRecordPermissionDenied:
-    return kOxPermStatusDenied;
-  case AVAudioSessionRecordPermissionUndetermined:
-  default:
-    return kOxPermStatusNotDetermined;
-  }
-}
-
-static uint32_t StatusFromPhotoAuthorization(PHAuthorizationStatus status) {
-  switch (status) {
-  case PHAuthorizationStatusAuthorized:
-    return kOxPermStatusAuthorized;
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 140000
-  case PHAuthorizationStatusLimited:
-    return kOxPermStatusLimited;
-#endif
-  case PHAuthorizationStatusDenied:
-  case PHAuthorizationStatusRestricted:
-    return kOxPermStatusDenied;
-  case PHAuthorizationStatusNotDetermined:
-  default:
-    return kOxPermStatusNotDetermined;
-  }
-}
-
-static uint32_t StatusFromContactAuthorization(CNAuthorizationStatus status) {
-  switch (status) {
-  case CNAuthorizationStatusAuthorized:
-    return kOxPermStatusAuthorized;
-  case CNAuthorizationStatusDenied:
-  case CNAuthorizationStatusRestricted:
-    return kOxPermStatusDenied;
-  case CNAuthorizationStatusNotDetermined:
-  default:
-    return kOxPermStatusNotDetermined;
-  }
-}
-
-static uint32_t
-StatusFromNotificationSettings(UNNotificationSettings *settings) {
-  switch (settings.authorizationStatus) {
-  case UNAuthorizationStatusAuthorized: {
-    if (settings.alertSetting == UNNotificationSettingEnabled ||
-        settings.badgeSetting == UNNotificationSettingEnabled ||
-        settings.soundSetting == UNNotificationSettingEnabled) {
-      return kOxPermStatusAuthorized;
-    }
-    return kOxPermStatusLimited;
-  }
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 120000
-  case UNAuthorizationStatusProvisional:
-#endif
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 130000
-  case UNAuthorizationStatusEphemeral:
-#endif
-    return kOxPermStatusLimited;
-  case UNAuthorizationStatusDenied:
-    return kOxPermStatusDenied;
-  case UNAuthorizationStatusNotDetermined:
-  default:
-    return kOxPermStatusNotDetermined;
-  }
-}
-
-static uint32_t CurrentNotificationStatus(void) {
-  __block uint32_t status = kOxPermStatusNotDetermined;
-  dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-  void (^query)(void) = ^{
-    [[UNUserNotificationCenter currentNotificationCenter]
-        getNotificationSettingsWithCompletionHandler:^(
-            UNNotificationSettings *settings) {
-          status = StatusFromNotificationSettings(settings);
-          dispatch_semaphore_signal(sem);
-        }];
-  };
-  if ([NSThread isMainThread]) {
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), query);
-  } else {
-    query();
-  }
-  int64_t timeout = (int64_t)(0.5 * NSEC_PER_SEC);
-  dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, timeout);
-  if (dispatch_semaphore_wait(sem, deadline) != 0) {
-    status = kOxPermStatusNotDetermined;
-  }
-  return status;
-}
-
-static uint32_t StatusFromBluetoothAuthorization(void) {
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 130000
-  if (@available(iOS 13.0, *)) {
-    switch ([CBManager authorization]) {
-    case CBManagerAuthorizationAllowedAlways:
-      return kOxPermStatusAuthorized;
-    case CBManagerAuthorizationDenied:
-      return kOxPermStatusDenied;
-    case CBManagerAuthorizationRestricted:
-      return kOxPermStatusDenied;
-    case CBManagerAuthorizationNotDetermined:
-    default:
-      return kOxPermStatusNotDetermined;
-    }
-  }
-#endif
-  return kOxPermStatusAuthorized;
-}
-
-static uint32_t StatusFromMotionAuthorization(void) {
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 110000
-  if (@available(iOS 11.0, *)) {
-    switch ([CMMotionActivityManager authorizationStatus]) {
-    case CMAuthorizationStatusAuthorized:
-      return kOxPermStatusAuthorized;
-    case CMAuthorizationStatusDenied:
-      return kOxPermStatusDenied;
-    case CMAuthorizationStatusRestricted:
-      return kOxPermStatusDenied;
-    case CMAuthorizationStatusNotDetermined:
-    default:
-      return kOxPermStatusNotDetermined;
-    }
-  }
-#endif
-  return kOxPermStatusAuthorized;
-}
-
-@interface OxPermLocationDelegate : NSObject <CLLocationManagerDelegate>
-@end
-
-@implementation OxPermLocationDelegate
-- (void)locationManagerDidChangeAuthorization:(CLLocationManager *)manager {
-  EmitPermissionAsync(kOxPermDomainLocation,
-                      oxide_host_perm_status(kOxPermDomainLocation));
-}
-- (void)locationManager:(CLLocationManager *)manager
-    didChangeAuthorizationStatus:(CLAuthorizationStatus)status {
-  (void)status;
-  EmitPermissionAsync(kOxPermDomainLocation,
-                      oxide_host_perm_status(kOxPermDomainLocation));
-}
-@end
-
-static CLLocationManager *CurrentLocationManager(void) {
-  static CLLocationManager *manager = nil;
-  static OxPermLocationDelegate *delegate = nil;
-  static dispatch_once_t onceToken;
-  dispatch_once(&onceToken, ^{
-    delegate = [OxPermLocationDelegate new];
-    manager = [CLLocationManager new];
-    manager.delegate = delegate;
-  });
-  return manager;
-}
-
-static uint32_t StatusFromLocationAuthorization(void) {
-  CLLocationManager *manager = CurrentLocationManager();
-  CLAuthorizationStatus status;
-  if (@available(iOS 14.0, *)) {
-    status = manager.authorizationStatus;
-  } else {
-    status = [CLLocationManager authorizationStatus];
-  }
-  switch (status) {
-  case kCLAuthorizationStatusAuthorizedAlways:
-  case kCLAuthorizationStatusAuthorizedWhenInUse: {
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 140000
-    if (@available(iOS 14.0, *)) {
-      if (manager.accuracyAuthorization ==
-          CLAccuracyAuthorizationReducedAccuracy) {
-        return kOxPermStatusLimited;
-      }
-    }
-#endif
-    return kOxPermStatusAuthorized;
-  }
-  case kCLAuthorizationStatusDenied:
-  case kCLAuthorizationStatusRestricted:
-    return kOxPermStatusDenied;
-  case kCLAuthorizationStatusNotDetermined:
-  default:
-    return kOxPermStatusNotDetermined;
-  }
-}
-
-static CBCentralManager *CurrentBluetoothManager(void) {
-  return BleContext().central;
-}
-
-uint32_t oxide_host_perm_status(uint32_t domain) {
-  switch (domain) {
-  case kOxPermDomainNotifications:
-    return CurrentNotificationStatus();
-  case kOxPermDomainLocation:
-    return StatusFromLocationAuthorization();
-  case kOxPermDomainCamera:
-    return StatusFromAVAuthorization(
-        [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo]);
-  case kOxPermDomainContacts:
-    return StatusFromContactAuthorization(
-        [CNContactStore authorizationStatusForEntityType:CNEntityTypeContacts]);
-  case kOxPermDomainBluetooth:
-    (void)CurrentBluetoothManager();
-    return StatusFromBluetoothAuthorization();
-  case kOxPermDomainMotion:
-    return StatusFromMotionAuthorization();
-  case kOxPermDomainMicrophone:
-    return StatusFromRecordPermission(
-        [AVAudioSession sharedInstance].recordPermission);
-  case kOxPermDomainMediaLibrary: {
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 140000
-    if (@available(iOS 14.0, *)) {
-      return StatusFromPhotoAuthorization([PHPhotoLibrary
-          authorizationStatusForAccessLevel:PHAccessLevelReadWrite]);
-    }
-#endif
-    return StatusFromPhotoAuthorization([PHPhotoLibrary authorizationStatus]);
-  }
-  default:
-    return kOxPermStatusDenied;
-  }
-}
-
-void oxide_host_perm_request(uint32_t domain) {
-  switch (domain) {
-  case kOxPermDomainNotifications: {
-    UNAuthorizationOptions opts = UNAuthorizationOptionAlert |
-                                  UNAuthorizationOptionBadge |
-                                  UNAuthorizationOptionSound;
-    [[UNUserNotificationCenter currentNotificationCenter]
-        requestAuthorizationWithOptions:opts
-                      completionHandler:^(BOOL granted, NSError *error) {
-                        (void)granted;
-                        (void)error;
-                        [[UNUserNotificationCenter currentNotificationCenter]
-                            getNotificationSettingsWithCompletionHandler:^(
-                                UNNotificationSettings *settings) {
-                              EmitPermissionAsync(
-                                  kOxPermDomainNotifications,
-                                  StatusFromNotificationSettings(settings));
-                            }];
-                      }];
-    break;
-  }
-  case kOxPermDomainLocation: {
-    dispatch_async(dispatch_get_main_queue(), ^{
-      [CurrentLocationManager() requestWhenInUseAuthorization];
-    });
-    EmitPermissionAsync(kOxPermDomainLocation,
-                        StatusFromLocationAuthorization());
-    break;
-  }
-  case kOxPermDomainCamera: {
-    [AVCaptureDevice
-        requestAccessForMediaType:AVMediaTypeVideo
-                completionHandler:^(BOOL granted) {
-                  (void)granted;
-                  EmitPermissionAsync(
-                      kOxPermDomainCamera,
-                      StatusFromAVAuthorization([AVCaptureDevice
-                          authorizationStatusForMediaType:AVMediaTypeVideo]));
-                }];
-    break;
-  }
-  case kOxPermDomainContacts: {
-    CNContactStore *store = [CNContactStore new];
-    [store requestAccessForEntityType:CNEntityTypeContacts
-                    completionHandler:^(BOOL granted, NSError *error) {
-                      (void)granted;
-                      (void)error;
-                      EmitPermissionAsync(
-                          kOxPermDomainContacts,
-                          StatusFromContactAuthorization(
-                              [CNContactStore authorizationStatusForEntityType:
-                                                  CNEntityTypeContacts]));
-                    }];
-    break;
-  }
-  case kOxPermDomainBluetooth: {
-    (void)CurrentBluetoothManager();
-    EmitPermissionAsync(kOxPermDomainBluetooth,
-                        StatusFromBluetoothAuthorization());
-    break;
-  }
-  case kOxPermDomainMotion: {
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 110000
-    if (@available(iOS 11.0, *)) {
-      EmitPermissionAsync(kOxPermDomainMotion, StatusFromMotionAuthorization());
-    } else {
-      EmitPermissionAsync(kOxPermDomainMotion, StatusFromMotionAuthorization());
-    }
-#else
-    EmitPermissionAsync(kOxPermDomainMotion, StatusFromMotionAuthorization());
-#endif
-    break;
-  }
-  case kOxPermDomainMicrophone: {
-    [[AVAudioSession sharedInstance] requestRecordPermission:^(BOOL granted) {
-      (void)granted;
-      EmitPermissionAsync(
-          kOxPermDomainMicrophone,
-          StatusFromRecordPermission(
-              [AVAudioSession sharedInstance].recordPermission));
-    }];
-    break;
-  }
-  case kOxPermDomainMediaLibrary: {
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 140000
-    if (@available(iOS 14.0, *)) {
-      [PHPhotoLibrary
-          requestAuthorizationForAccessLevel:PHAccessLevelReadWrite
-                                     handler:^(PHAuthorizationStatus status) {
-                                       EmitPermissionAsync(
-                                           kOxPermDomainMediaLibrary,
-                                           StatusFromPhotoAuthorization(
-                                               status));
-                                     }];
-      break;
-    }
-#endif
-    [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus status) {
-      EmitPermissionAsync(kOxPermDomainMediaLibrary,
-                          StatusFromPhotoAuthorization(status));
-    }];
-    break;
-  }
-  default:
-    EmitPermissionAsync(domain, kOxPermStatusDenied);
-    break;
-  }
-}
-
-// ===== Push stubs =====
-
-void oxide_host_push_register(void) {}
-
-int oxide_host_push_get_device_token(char **out_ptr, size_t *out_len) {
-  if (out_ptr)
-    *out_ptr = NULL;
-  if (out_len)
-    *out_len = 0;
-  return 0;
-}
-
-void oxide_host_push_set_badge(int32_t count) {
-  dispatch_on_main(^{
-    if (@available(iOS 17.0, *)) {
-      [[UNUserNotificationCenter currentNotificationCenter] setBadgeCount:count
-                                                    withCompletionHandler:nil];
-    } else {
-      UIApplication.sharedApplication.applicationIconBadgeNumber = count;
-    }
-  });
-}
-
-void oxide_host_push_clear_badge(void) { oxide_host_push_set_badge(0); }
-
-// ===== Reachability bridge =====
-
-static uint32_t ReachabilityInterfaceForPath(nw_path_t path) {
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 120000
-  __block uint32_t iface = 3;
-  nw_path_enumerate_interfaces(path, ^bool(nw_interface_t interface) {
-    nw_interface_type_t type = nw_interface_get_type(interface);
-    switch (type) {
-    case nw_interface_type_wifi:
-      iface = 0;
-      return false;
-    case nw_interface_type_cellular:
-      iface = 1;
-      return false;
-#if defined(nw_interface_type_wiredEthernet)
-    case nw_interface_type_wiredEthernet:
-      iface = 2;
-      return false;
-#endif
-#if defined(nw_interface_type_wired)
-    case nw_interface_type_wired:
-      iface = 2;
-      return false;
-#endif
-    default:
-      break;
-    }
-    return true;
-  });
-  return iface;
-#else
-  (void)path;
-  return 3;
-#endif
-}
-
-static void ReachabilityEmit(nw_path_t path) {
-  if (!gReachabilityCallback) {
-    return;
-  }
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 120000
-  if (!path) {
-    gReachabilityCallback(0, 3, 0);
-    return;
-  }
-  nw_path_status_t status = nw_path_get_status(path);
-  if (status == nw_path_status_satisfied) {
-    uint32_t iface = ReachabilityInterfaceForPath(path);
-    uint8_t expensive = nw_path_is_expensive(path) ? 1 : 0;
-    gReachabilityCallback(1, iface, expensive);
-  } else {
-    gReachabilityCallback(0, 3, 0);
-  }
-#else
-  (void)path;
-  gReachabilityCallback(0, 3, 0);
-#endif
-}
-
-void oxide_host_net_set_reachability_callback(void (*cb)(uint32_t status,
-                                                           uint32_t iface,
-                                                           uint8_t expensive)) {
-  gReachabilityCallback = cb;
-}
-
-int32_t oxide_host_net_start_reachability(void) {
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 120000
-  if (!@available(iOS 12.0, *)) {
-    return -1;
-  }
-  if (gReachabilityMonitor) {
-    return 0;
-  }
-  gReachabilityMonitor = nw_path_monitor_create();
-  if (!gReachabilityMonitor) {
-    return -1;
-  }
-  gReachabilityQueue =
-      dispatch_queue_create("com.oxide.reachability", DISPATCH_QUEUE_SERIAL);
-  nw_path_monitor_set_queue(gReachabilityMonitor, gReachabilityQueue);
-  nw_path_monitor_set_update_handler(gReachabilityMonitor, ^(nw_path_t path) {
-    ReachabilityEmit(path);
-  });
-  nw_path_monitor_start(gReachabilityMonitor);
-  return 0;
-#else
-  (void)gReachabilityCallback;
-  return -1;
-#endif
-}
-
-void oxide_host_net_stop_reachability(void) {
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 120000
-  if (@available(iOS 12.0, *)) {
-    if (gReachabilityMonitor) {
-      nw_path_monitor_cancel(gReachabilityMonitor);
-      gReachabilityMonitor = nil;
-      gReachabilityMonitor = NULL;
-    }
-    gReachabilityQueue = NULL;
-  }
-#endif
-}
+// Bluetooth, push, reachability, clipboard, haptics, and permissions now
+// live in shared platform-ios shims.
 
 // ===== BLE bridge =====
-
-static NSUUID *NSUUIDFromBytes(const uint8_t *bytes, size_t len) {
-  if (!bytes || len < 16) {
-    return nil;
-  }
-  uuid_t uuidBytes;
-  memcpy(uuidBytes, bytes, 16);
-  return [[NSUUID alloc] initWithUUIDBytes:uuidBytes];
-}
-
-uint8_t oxide_ble_is_supported(void) {
-  return [CBCentralManager class] ? 1 : 0;
-}
-
-void oxide_ble_init(void) {
-  dispatch_on_main(^{
-    (void)BleContext();
-  });
-}
-
-uint8_t oxide_ble_powered_on(void) {
-  __block uint8_t on = 0;
-  dispatch_sync(dispatch_get_main_queue(), ^{
-    CBCentralManager *mgr = BleContext().central;
-    on = (mgr.state == CBManagerStatePoweredOn) ? 1 : 0;
-  });
-  return on;
-}
-
-void oxide_ble_shutdown(void) {
-  dispatch_on_main(^{
-    OxBleCentral *ctx = BleContext();
-    if (ctx.central.isScanning) {
-      [ctx.central stopScan];
-    }
-    for (CBPeripheral *peripheral in ctx.peripherals.allValues) {
-      if (peripheral.state == CBPeripheralStateConnected ||
-          peripheral.state == CBPeripheralStateConnecting) {
-        [ctx.central cancelPeripheralConnection:peripheral];
-      }
-    }
-    [ctx.peripherals removeAllObjects];
-  });
-}
-
-void oxide_ble_start_scan(const OxBleScanConfig *cfg) {
-  dispatch_on_main(^{
-    OxBleCentral *ctx = BleContext();
-    if (!ctx.central || ctx.central.state != CBManagerStatePoweredOn) {
-      return;
-    }
-    NSArray<CBUUID *> *services = BleServicesFromConfig(cfg);
-    NSDictionary *options = @{
-      CBCentralManagerScanOptionAllowDuplicatesKey :
-          @((cfg && cfg->allow_duplicates) ? YES : NO)
-    };
-    [ctx.central scanForPeripheralsWithServices:services options:options];
-  });
-}
-
-void oxide_ble_stop_scan(void) {
-  dispatch_on_main(^{
-    OxBleCentral *ctx = BleContext();
-    if (ctx.central.isScanning) {
-      [ctx.central stopScan];
-    }
-  });
-}
-
-void oxide_ble_connect(const uint8_t *addr, size_t addr_len) {
-  NSUUID *uuid = NSUUIDFromBytes(addr, addr_len);
-  if (!uuid) {
-    return;
-  }
-  dispatch_on_main(^{
-    OxBleCentral *ctx = BleContext();
-    CBPeripheral *peripheral = ctx.peripherals[uuid];
-    if (!peripheral) {
-      NSArray<CBPeripheral *> *retrieved =
-          [ctx.central retrievePeripheralsWithIdentifiers:@[ uuid ]];
-      peripheral = retrieved.firstObject;
-      if (peripheral) {
-        ctx.peripherals[uuid] = peripheral;
-      }
-    }
-    if (peripheral) {
-      [ctx.central connectPeripheral:peripheral options:nil];
-    }
-  });
-}
-
-void oxide_ble_disconnect(const uint8_t *addr, size_t addr_len) {
-  NSUUID *uuid = NSUUIDFromBytes(addr, addr_len);
-  if (!uuid) {
-    return;
-  }
-  dispatch_on_main(^{
-    OxBleCentral *ctx = BleContext();
-    CBPeripheral *peripheral = ctx.peripherals[uuid];
-    if (peripheral) {
-      [ctx.central cancelPeripheralConnection:peripheral];
-    }
-  });
-}
-
-int oxide_ble_read_char(const uint8_t *addr, size_t addr_len,
-                          const uint16_t *uuid16) {
-  (void)addr;
-  (void)addr_len;
-  (void)uuid16;
-  return -1;
-}
-
-int oxide_ble_write_char(const uint8_t *addr, size_t addr_len,
-                           const uint16_t *uuid16, const uint8_t *data,
-                           size_t len) {
-  (void)addr;
-  (void)addr_len;
-  (void)uuid16;
-  (void)data;
-  (void)len;
-  return -1;
-}
-
-int oxide_ble_subscribe(const uint8_t *addr, size_t addr_len,
-                          const uint16_t *uuid16, uint8_t on) {
-  (void)addr;
-  (void)addr_len;
-  (void)uuid16;
-  (void)on;
-  return -1;
-}
 
 // ===== Resource loading =====
 
@@ -1347,6 +632,38 @@ void oxide_host_ime_hide(void) {
     UIView *view = gMetalView;
     if (view) {
       [view resignFirstResponder];
+    }
+  });
+}
+
+void nametag_ios_set_ime_content_type(int32_t content_type) {
+  dispatch_on_main(^{
+    MetalView *view = (MetalView *)gMetalView;
+    if (!view || ![view isKindOfClass:[MetalView class]]) {
+      return;
+    }
+
+    switch (content_type) {
+    case 1:
+      view.keyboardType = UIKeyboardTypeNumberPad;
+      view.autocorrectionType = UITextAutocorrectionTypeNo;
+      view.autocapitalizationType = UITextAutocapitalizationTypeNone;
+      if (@available(iOS 12.0, *)) {
+        view.textContentType = UITextContentTypeOneTimeCode;
+      } else {
+        view.textContentType = nil;
+      }
+      break;
+    default:
+      view.keyboardType = UIKeyboardTypeDefault;
+      view.textContentType = nil;
+      view.autocorrectionType = UITextAutocorrectionTypeDefault;
+      view.autocapitalizationType = UITextAutocapitalizationTypeSentences;
+      break;
+    }
+
+    if (view.isFirstResponder) {
+      [view reloadInputViews];
     }
   });
 }
@@ -1680,18 +997,18 @@ void oxide_host_release_drawable(void *drawable_ptr) {
     return;
   }
   AVAudioSession *audioSession = [AVAudioSession sharedInstance];
-  if ([audioSession respondsToSelector:@selector(recordPermission)]) {
-    AVAudioSessionRecordPermission perm = audioSession.recordPermission;
-    if (perm == AVAudioSessionRecordPermissionUndetermined) {
-      [audioSession requestRecordPermission:^(BOOL granted) {
-        if (granted) {
-          dispatch_async(dispatch_get_main_queue(), ^{
-            [self start];
-          });
-        }
-      }];
-      return;
-    }
+  AVAudioApplicationRecordPermission perm =
+      AVAudioApplication.sharedInstance.recordPermission;
+  if (perm == AVAudioApplicationRecordPermissionUndetermined) {
+    [AVAudioApplication requestRecordPermissionWithCompletionHandler:^(
+                          BOOL granted) {
+      if (granted) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          [self start];
+        });
+      }
+    }];
+    return;
   }
   NSError *audioErr = nil;
   [audioSession setCategory:AVAudioSessionCategoryPlayAndRecord
@@ -2523,10 +1840,14 @@ int32_t oxide_host_thermal_state(void) {
 
 // ===== Metal view =====
 
-@interface MetalView : UIView <UIKeyInput>
+@interface MetalView : UIView <UIKeyInput, UITextInputTraits>
 @property(nonatomic) CGPoint lastHover;
 @property(nonatomic, strong)
     NSMutableDictionary<NSValue *, NSNumber *> *touchIds;
+@property(nonatomic) UIKeyboardType keyboardType;
+@property(nonatomic, copy, nullable) UITextContentType textContentType;
+@property(nonatomic) UITextAutocorrectionType autocorrectionType;
+@property(nonatomic) UITextAutocapitalizationType autocapitalizationType;
 @end
 
 @implementation MetalView
@@ -2542,6 +1863,10 @@ int32_t oxide_host_thermal_state(void) {
     self.multipleTouchEnabled = YES;
     self.backgroundColor = [UIColor whiteColor];
     self.accessibilityIdentifier = @"metalView";
+    self.keyboardType = UIKeyboardTypeDefault;
+    self.textContentType = nil;
+    self.autocorrectionType = UITextAutocorrectionTypeDefault;
+    self.autocapitalizationType = UITextAutocapitalizationTypeSentences;
 
     CAMetalLayer *layer = (CAMetalLayer *)self.layer;
     // Bind a device and align format with renderer (sRGB)
@@ -3787,6 +3112,7 @@ int32_t oxide_host_thermal_state(void) {
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
   (void)application;
   (void)launchOptions;
+  oxide_host_push_bootstrap();
   return YES;
 }
 
@@ -3817,6 +3143,29 @@ int32_t oxide_host_thermal_state(void) {
 - (void)applicationWillTerminate:(UIApplication *)application {
   (void)application;
   oxide_host_app_will_terminate();
+}
+
+- (void)application:(UIApplication *)application
+    didRegisterForRemoteNotificationsWithDeviceToken:(NSData *)deviceToken {
+  (void)application;
+  oxide_host_push_application_did_register(deviceToken);
+}
+
+- (void)application:(UIApplication *)application
+    didFailToRegisterForRemoteNotificationsWithError:(NSError *)error {
+  (void)application;
+  oxide_host_push_application_did_fail(error);
+}
+
+- (void)application:(UIApplication *)application
+    didReceiveRemoteNotification:(NSDictionary *)userInfo
+          fetchCompletionHandler:
+              (void (^)(UIBackgroundFetchResult result))completionHandler {
+  (void)application;
+  oxide_host_push_application_did_receive(userInfo);
+  if (completionHandler != nil) {
+    completionHandler(UIBackgroundFetchResultNoData);
+  }
 }
 
 @end

@@ -65,10 +65,12 @@ fn sample_keyframed_offset_interpolates_and_clamps_to_zero_after_duration() {
 #[test]
 fn required_field_shake_offset_matches_shared_profile_and_clamps_negative_scale() {
     assert_eq!(anim::helpers::required_field_shake_offset(0, 1.0), 0.0);
-    assert!(anim::helpers::required_field_shake_offset(
-        anim::helpers::REQUIRED_FIELD_SHAKE_PHASE_DURATION_MS / 2,
-        1.0,
-    ) < 0.0);
+    assert!(
+        anim::helpers::required_field_shake_offset(
+            anim::helpers::REQUIRED_FIELD_SHAKE_PHASE_DURATION_MS / 2,
+            1.0,
+        ) < 0.0
+    );
     assert_eq!(anim::helpers::required_field_shake_offset(0, -1.0), 0.0);
     assert_eq!(
         anim::helpers::required_field_shake_offset(

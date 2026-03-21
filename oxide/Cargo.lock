@@ -696,6 +696,7 @@ dependencies = [
 name = "oxide-platform-ios"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "libc",
  "mach2",
  "num_cpus",

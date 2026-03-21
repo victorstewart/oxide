@@ -12,6 +12,8 @@
 use oxide_networking::{NetworkPath, NetworkPathKind, ReachabilityManager, ReachabilityState};
 #[cfg(feature = "tokio-runtime")]
 use oxide_platform_api::runtime;
+use oxide_platform_api::secure_storage::SecureStorage;
+use oxide_platform_api::telephony::{normalize_country_iso, TelephonyService};
 use oxide_platform_api::{
     AdvertisementData, AudioSample, AudioSessionMode, BleCacheEntry, BleUuid, Bluetooth,
     BluetoothEvent, CameraConfig, CameraDevice, CameraFrame, CameraImage, CameraManager,
@@ -27,8 +29,6 @@ use oxide_platform_api::{
 use oxide_platform_api::{HapticPattern, Haptics as HapticsTrait};
 use oxide_platform_api::{PermissionDomain, PermissionStatus, Permissions};
 use oxide_platform_api::{PushManager, PushNotification, PushProvider, PushToken};
-use oxide_platform_api::secure_storage::SecureStorage;
-use oxide_platform_api::telephony::{TelephonyService, normalize_country_iso};
 
 use core::time::Duration;
 use once_cell::sync::Lazy;
@@ -2724,22 +2724,21 @@ pub struct IosSecureStorage;
 
 impl IosSecureStorage {
     pub fn save_sync(&self, key: &str, data: &[u8]) -> Result<(), PlatformError> {
-        let result =
-            unsafe { oxide_secure_storage_save(key.as_ptr(), key.len(), data.as_ptr(), data.len()) };
+        let result = unsafe {
+            oxide_secure_storage_save(key.as_ptr(), key.len(), data.as_ptr(), data.len())
+        };
         match result {
             0 => Ok(()),
-            code => Err(PlatformError::Unknown(format!(
-                "secure storage save failed: {}",
-                code
-            ))),
+            code => Err(PlatformError::Unknown(format!("secure storage save failed: {}", code))),
         }
     }
 
     pub fn load_sync(&self, key: &str) -> Result<Option<alloc::vec::Vec<u8>>, PlatformError> {
         let mut data_ptr: *const u8 = std::ptr::null();
         let mut data_len: usize = 0;
-        let result =
-            unsafe { oxide_secure_storage_load(key.as_ptr(), key.len(), &mut data_ptr, &mut data_len) };
+        let result = unsafe {
+            oxide_secure_storage_load(key.as_ptr(), key.len(), &mut data_ptr, &mut data_len)
+        };
         match result {
             0 => {
                 if data_ptr.is_null() || data_len == 0 {
@@ -2752,10 +2751,7 @@ impl IosSecureStorage {
                 Ok(Some(data))
             }
             1 => Ok(None),
-            code => Err(PlatformError::Unknown(format!(
-                "secure storage load failed: {}",
-                code
-            ))),
+            code => Err(PlatformError::Unknown(format!("secure storage load failed: {}", code))),
         }
     }
 
@@ -2763,10 +2759,7 @@ impl IosSecureStorage {
         let result = unsafe { oxide_secure_storage_delete(key.as_ptr(), key.len()) };
         match result {
             0 | 1 => Ok(()),
-            code => Err(PlatformError::Unknown(format!(
-                "secure storage delete failed: {}",
-                code
-            ))),
+            code => Err(PlatformError::Unknown(format!("secure storage delete failed: {}", code))),
         }
     }
 }

@@ -6,8 +6,7 @@ use core::pin::Pin;
 use std::sync::{Arc, OnceLock, RwLock};
 
 type SaveFn = dyn Fn(&str, &[u8]) -> Result<(), PlatformError> + Send + Sync;
-type LoadFn =
-    dyn Fn(&str) -> Result<Option<alloc::vec::Vec<u8>>, PlatformError> + Send + Sync;
+type LoadFn = dyn Fn(&str) -> Result<Option<alloc::vec::Vec<u8>>, PlatformError> + Send + Sync;
 type DeleteFn = dyn Fn(&str) -> Result<(), PlatformError> + Send + Sync;
 
 pub trait SecureStorage: Send + Sync {
@@ -49,14 +48,11 @@ impl SecureStorageCallbacks {
     pub fn new<Save, Load, Delete>(save: Save, load: Load, delete: Delete) -> Self
     where
         Save: Fn(&str, &[u8]) -> Result<(), PlatformError> + Send + Sync + 'static,
-        Load: Fn(&str) -> Result<Option<alloc::vec::Vec<u8>>, PlatformError> + Send + Sync + 'static,
+        Load:
+            Fn(&str) -> Result<Option<alloc::vec::Vec<u8>>, PlatformError> + Send + Sync + 'static,
         Delete: Fn(&str) -> Result<(), PlatformError> + Send + Sync + 'static,
     {
-        Self {
-            save: Arc::new(save),
-            load: Arc::new(load),
-            delete: Arc::new(delete),
-        }
+        Self { save: Arc::new(save), load: Arc::new(load), delete: Arc::new(delete) }
     }
 }
 
@@ -65,8 +61,7 @@ fn callbacks_cell() -> &'static RwLock<Option<SecureStorageCallbacks>> {
     CALLBACKS.get_or_init(|| RwLock::new(None))
 }
 
-fn callbacks_write_guard() -> std::sync::RwLockWriteGuard<'static, Option<SecureStorageCallbacks>>
-{
+fn callbacks_write_guard() -> std::sync::RwLockWriteGuard<'static, Option<SecureStorageCallbacks>> {
     match callbacks_cell().write() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),

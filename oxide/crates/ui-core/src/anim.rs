@@ -12,9 +12,8 @@ pub mod helpers {
     use super::*;
 
     pub const REQUIRED_FIELD_SHAKE_PHASE_DURATION_MS: u32 = 35;
-    const REQUIRED_FIELD_SHAKE_PHASE_TARGETS: [f32; 12] = [
-        -2.0, 2.0, -2.0, 2.0, -2.0, 2.0, -2.0, 2.0, -2.0, 2.0, -2.0, 0.0,
-    ];
+    const REQUIRED_FIELD_SHAKE_PHASE_TARGETS: [f32; 12] =
+        [-2.0, 2.0, -2.0, 2.0, -2.0, 2.0, -2.0, 2.0, -2.0, 2.0, -2.0, 0.0];
     pub const REQUIRED_FIELD_SHAKE_DURATION_MS: u32 =
         REQUIRED_FIELD_SHAKE_PHASE_DURATION_MS * REQUIRED_FIELD_SHAKE_PHASE_TARGETS.len() as u32;
 
@@ -189,11 +188,7 @@ pub mod helpers {
 
         let phase_index = (elapsed_ms / phase_duration) as usize;
         let phase_progress = (elapsed_ms % phase_duration) as f32 / phase_duration as f32;
-        let phase_start = if phase_index == 0 {
-            0.0
-        } else {
-            phase_targets[phase_index - 1]
-        };
+        let phase_start = if phase_index == 0 { 0.0 } else { phase_targets[phase_index - 1] };
         let phase_end = phase_targets[phase_index];
         lerp(phase_start, phase_end, phase_progress)
     }

@@ -7,7 +7,6 @@ fn main() {
         b.file("src/ios/app.m")
             .file("src/ios/location.m")
             .file("src/ios/motion.m")
-            .file("src/ios/bluetooth.m")
             .flag("-fobjc-arc")
             .flag("-fmodules")
             .flag("-fcxx-modules");

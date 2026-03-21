@@ -6,85 +6,59 @@ This is a Rust workspace. Load exactly this profile:
 - Do not load any other language profile.
 
 ## Local overrides (optional, narrow)
-- Use only when a task explicitly opts into a subfolder‑specific behavior.
+- Use only when a task explicitly opts into a subfolder-specific behavior.
 - Document any local override at the top of the PR description.
 
 ## Formatting
-- Source of truth: the repo‑root `rustfmt.toml`. Always use this file to format Rust sources.
-- Always read repo‑level `AGENTS.md` and `rustfmt.toml` before doing any work, even when operating only in a subfolder.
-- Apply formatting before proposing patches. Use: `cargo fmt --all`.
-- If a subfolder contains another `rustfmt.toml`, prefer the repo‑root rules unless a task explicitly opts into the subfolder override.
-- Use the `rustfmt` version pinned by the repo (e.g., via `rust-toolchain.toml` or CI). If your local version differs, do not reformat. Open an issue to align versions.
-- When `rustfmt.toml` changes, perform a repo‑wide reformat in a single standalone commit titled `style: reformat for new rustfmt.toml`.
-- Style is enforced by `rustfmt`. It targets 3‑space indentation and Allman braces per this repo’s policy. If `rustfmt` cannot encode a choice, use the Style canon below after formatting.
-
-### Style canon (spacing where `rustfmt` is silent)
-When `rustfmt` does not enforce a choice, match the spacing shown here.
+- **NEVER run `cargo fmt` or `cargo clippy` in this repository.** Our manual style cannot be expressed via rustfmt; automated formatting will churn every file.
+- Mirror the canonical snippet below for indentation (3 spaces), brace placement (Allman), and import grouping/wrapping.
 
 ```rust
-// Canonical spacing example.
+use databento::dbn;
+use databento::{HistoricalClient, Symbols};
+use dbn::{Dataset, HasRType, SType, Schema};
+use std::sync::Arc;
+use thingbuf::ThingBuf;
+use time::{Duration, OffsetDateTime, Time};
 
-use std::{fmt::Display, ops::Add};
+use super::frontier::{frontier_merge, spawn_batched, Ring, WorkerEvt};
+use super::handlers::{batches, ContinuousRolled, CorpRow, HasTimestamp, ProcessMessage};
+use super::helpers::{ring_pair, symbols_len};
+use super::limits::{DEF_HIST_CONN_SEM, HIST_CONN_SEM, HIST_WM_GROUP_SIZE, LIVE_CONN_SEM, LIVE_WM_GROUP_SIZE, PayloadBatchSpec, WORKER_RING_CAP};
+use super::workers::{hist_worker, live_worker};
+use crate::types::Span;
 
-pub struct Canon<T>
+pub type Sender<P> = Arc<ThingBuf<P>>;
+pub type Receiver<P> = Arc<ThingBuf<P>>;
+
+#[allow(dead_code)]
+pub trait RxExt
 {
-   data: Vec<T>
+   fn is_finished(&self) -> bool;
 }
 
-impl<T> Canon<T>
-where
-   T: Display + Clone + From<i32> + Copy + Add<Output = T>
+#[allow(dead_code)]
+impl<T> RxExt for Receiver<T>
 {
-   pub fn add(a: i32, b: i32) -> i32
+   #[inline]
+   fn is_finished(&self) -> bool
    {
-      a + b
-   }
-
-   pub fn demo(&mut self, x: i32)
-   {
-      let r: &Vec<T> = &self.data;
-      let first: T = *r.get(0).unwrap_or(&T::from(0));
-
-      self.data.push(T::from(x + 1));
-
-      if x > 0
-      {
-         for i in 0..x
-         {
-            self.log(i);
-         }
-      }
-
-      let y: i32 = if x > 1 { x + (first as i32) } else { 0 };
-
-      println!("y={}", y);
-   }
-
-   fn log(&self, i: i32)
-   {
-      println!("{}", i);
+      Arc::strong_count(self) == 1 && self.is_empty()
    }
 }
 
-pub enum E
+#[derive(Clone)]
+pub struct Databento
 {
-   A,
-   B(i32)
+   pub key: String,
+   pub historical: HistoricalClient,
 }
+```
 
-pub fn match_demo(e: E) -> i32
-{
-   match e
-   {
-      E::A => 0,
-      E::B(v) => v * v
-   }
-}
+- Functions and impl blocks use one-line signatures, braces on their own lines, and 3-space indentation inside the block.
+- Imports are grouped and wrapped exactly as shown (std → external crates → crate-local).
+- Manual edits only—review diffs carefully to preserve legibility.
 
-pub fn map_demo<I, F>(iter: I, f: F) -> Vec<i32>
-where
-   I: IntoIterator<Item = i32>,
-   F: Fn(i32) -> i32
-{
-   iter.into_iter().map(|v| f(v) + 1).collect()
-}
+## Tooling
+- Manual formatting fixes must maintain the style canon above; no automated formatter may be used.
+- Deprecation warnings are blockers: whenever a deprecated API is observed in touched code or command output, replace it with the upstream-recommended supported API in the same change.

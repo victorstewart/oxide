@@ -1164,6 +1164,9 @@ pub trait Platform: Send + Sync {
     fn open_system_settings(&self) {
         panic!("platform open_system_settings not implemented")
     }
+    fn open_external_url(&self, _url: &str) -> Result<(), PlatformError> {
+        Err(PlatformError::Unsupported("platform open_external_url not implemented"))
+    }
     fn clipboard_get(&self) -> Option<alloc::string::String>;
     fn clipboard_set(&self, s: &str);
     fn ime_show(&self);
@@ -1304,6 +1307,10 @@ impl Platform for SharedPlatform {
 
     fn open_system_settings(&self) {
         self.inner.open_system_settings();
+    }
+
+    fn open_external_url(&self, url: &str) -> Result<(), PlatformError> {
+        self.inner.open_external_url(url)
     }
 
     fn clipboard_get(&self) -> Option<alloc::string::String> {

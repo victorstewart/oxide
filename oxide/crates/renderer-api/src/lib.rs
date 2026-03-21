@@ -189,6 +189,16 @@ pub trait RenderEncoder {
     fn draw_rrect(&mut self, rect: RectF, radii: [f32; 4], color: Color);
     fn draw_nine_slice(&mut self, img: ImageHandle, rect: RectF, slice: Insets, alpha: f32);
     fn draw_backdrop(&mut self, rect: RectF, sigma: f32, tint: Color, alpha: f32);
+    fn draw_camera_bg(
+        &mut self,
+        _rect: RectF,
+        _tint: Color,
+        _alpha: f32,
+        _grayscale: bool,
+        _blur: bool,
+        _sigma: f32,
+    ) {
+    }
     fn draw_spinner(
         &mut self,
         center: [f32; 2],

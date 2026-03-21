@@ -5,12 +5,10 @@ use oxide_ui_core::{
 use std::sync::Arc;
 
 fn username_policy() -> TextFieldPolicy {
-    TextFieldPolicy::new(CharFilter::Custom(Arc::new(|ch| {
-        ch.is_ascii_alphanumeric() || ch == '_'
-    })))
-    .with_max_length(Some(15))
-    .with_lowercase(true)
-    .with_first_token_only_on_set(true)
+    TextFieldPolicy::new(CharFilter::Custom(Arc::new(|ch| ch.is_ascii_alphanumeric() || ch == '_')))
+        .with_max_length(Some(15))
+        .with_lowercase(true)
+        .with_first_token_only_on_set(true)
 }
 
 fn login_username_policy() -> TextFieldPolicy {
@@ -28,9 +26,7 @@ fn bio_policy() -> TextFieldPolicy {
 }
 
 fn login_password_policy() -> TextFieldPolicy {
-    TextFieldPolicy::new(CharFilter::None)
-        .with_max_length(Some(30))
-        .with_lowercase(true)
+    TextFieldPolicy::new(CharFilter::None).with_max_length(Some(30)).with_lowercase(true)
 }
 
 #[test]
@@ -62,7 +58,8 @@ fn text_fields_editable_set_keeps_generic_sanitization_without_external_token_sp
 
 #[test]
 fn text_fields_horizontal_blur_trims_finished_text_and_clears_blank_values() {
-    let mut trimmed = HorizontalShiftingText::new(bio_policy(), 32.0, 1_200).with_text("  build labs  ");
+    let mut trimmed =
+        HorizontalShiftingText::new(bio_policy(), 32.0, 1_200).with_text("  build labs  ");
     trimmed.focus();
     trimmed.blur();
     assert_eq!(trimmed.value(), "build labs");
@@ -77,7 +74,8 @@ fn text_fields_horizontal_blur_trims_finished_text_and_clears_blank_values() {
 
 #[test]
 fn text_fields_horizontal_fail_modes_clear_and_restore_value() {
-    let mut cleared = HorizontalShiftingText::new(username_policy(), 32.0, 1_200).with_text("pilot");
+    let mut cleared =
+        HorizontalShiftingText::new(username_policy(), 32.0, 1_200).with_text("pilot");
     cleared.focus();
     cleared.fail_with_message("taken", FieldFailRestoreMode::Clear);
     assert_eq!(cleared.display_text(), "taken");
@@ -86,7 +84,8 @@ fn text_fields_horizontal_fail_modes_clear_and_restore_value() {
     assert_eq!(cleared.value(), "");
     assert!(!cleared.is_in_fail_mode());
 
-    let mut restored = HorizontalShiftingText::new(username_policy(), 32.0, 1_200).with_text("pilot");
+    let mut restored =
+        HorizontalShiftingText::new(username_policy(), 32.0, 1_200).with_text("pilot");
     restored.fail_with_message("checking", FieldFailRestoreMode::RestoreValue);
     restored.advance(HorizontalShiftingText::fail_duration_ms());
     assert_eq!(restored.value(), "pilot");

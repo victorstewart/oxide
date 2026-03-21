@@ -1,9 +1,9 @@
-use oxide_platform_api::PlatformError;
 use oxide_platform_api::secure_storage::{
-    CallbackSecureStorage, SecureStorage, SecureStorageCallbacks, clear_secure_storage_callbacks,
-    delete_secret, has_secure_storage_callbacks, load_secret, register_secure_storage_callbacks,
-    save_secret,
+    clear_secure_storage_callbacks, delete_secret, has_secure_storage_callbacks, load_secret,
+    register_secure_storage_callbacks, save_secret, CallbackSecureStorage, SecureStorage,
+    SecureStorageCallbacks,
 };
+use oxide_platform_api::PlatformError;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
@@ -67,24 +67,15 @@ fn callback_secure_storage_round_trips_registered_callbacks() {
 
     assert!(has_secure_storage_callbacks());
     save_secret("token", b"abc").expect("save through callbacks");
-    assert_eq!(
-        load_secret("token").expect("load through callbacks"),
-        Some(b"abc".to_vec())
-    );
+    assert_eq!(load_secret("token").expect("load through callbacks"), Some(b"abc".to_vec()));
     delete_secret("token").expect("delete through callbacks");
     assert_eq!(load_secret("token").expect("load after delete"), None);
 
     let storage = CallbackSecureStorage;
     poll_ready(storage.save("session", b"value")).expect("service save");
-    assert_eq!(
-        poll_ready(storage.load("session")).expect("service load"),
-        Some(b"value".to_vec())
-    );
+    assert_eq!(poll_ready(storage.load("session")).expect("service load"), Some(b"value".to_vec()));
     poll_ready(storage.delete("session")).expect("service delete");
-    assert_eq!(
-        poll_ready(storage.load("session")).expect("service load after delete"),
-        None
-    );
+    assert_eq!(poll_ready(storage.load("session")).expect("service load after delete"), None);
 
     clear_secure_storage_callbacks();
 }
