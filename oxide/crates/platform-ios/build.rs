@@ -26,25 +26,23 @@ fn main() {
 
     build.compile("oxide_platform_ios_native");
 
-    for framework in
-        [
-            "AVFoundation",
-            "Contacts",
-            "CoreBluetooth",
-            "CoreLocation",
-            "CoreMedia",
-            "CoreMotion",
-            "CoreVideo",
-            "Foundation",
-            "Metal",
-            "Network",
-            "Photos",
-            "QuartzCore",
-            "Security",
-            "UIKit",
-            "UserNotifications",
-        ]
-    {
+    for framework in [
+        "AVFoundation",
+        "Contacts",
+        "CoreBluetooth",
+        "CoreLocation",
+        "CoreMedia",
+        "CoreMotion",
+        "CoreVideo",
+        "Foundation",
+        "Metal",
+        "Network",
+        "Photos",
+        "QuartzCore",
+        "Security",
+        "UIKit",
+        "UserNotifications",
+    ] {
         println!("cargo:rustc-link-lib=framework={framework}");
     }
     println!("cargo:rustc-link-lib=objc");

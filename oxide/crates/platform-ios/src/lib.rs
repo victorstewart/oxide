@@ -2433,6 +2433,12 @@ extern "C" {
         out_image: *mut OxideImageData,
     ) -> i32;
 
+    fn oxide_media_load_full_image_rgba_if_available(
+        identifier_ptr: *const u8,
+        identifier_len: usize,
+        out_image: *mut OxideImageData,
+    ) -> i32;
+
     fn oxide_media_free_image_data(data_ptr: *const u8, data_len: usize);
 }
 
@@ -2552,6 +2558,54 @@ impl IosMediaLibraryManager {
             row_bytes: image_data.row_bytes,
             bgra,
         })
+    }
+
+    pub fn load_display_image_bgra_data_if_available(
+        &self,
+        id: &AssetId,
+    ) -> Result<Option<IosRawImageData>, PlatformError> {
+        let identifier = id.0.as_bytes();
+        let mut image_data = OxideImageData {
+            data_ptr: std::ptr::null(),
+            data_len: 0,
+            width: 0,
+            height: 0,
+            row_bytes: 0,
+        };
+
+        let result = unsafe {
+            oxide_media_load_full_image_rgba_if_available(
+                identifier.as_ptr(),
+                identifier.len(),
+                &mut image_data,
+            )
+        };
+
+        if result == -1 {
+            return Err(PlatformError::PermissionDenied("media_library"));
+        }
+        if result < 0 {
+            return Err(PlatformError::Unknown(format!(
+                "media image cached rgba request failed: {}",
+                result
+            )));
+        }
+        if result == 0 || image_data.data_ptr.is_null() || image_data.data_len == 0 {
+            return Ok(None);
+        }
+
+        let bgra = unsafe {
+            std::slice::from_raw_parts(image_data.data_ptr, image_data.data_len).to_vec()
+        };
+        unsafe {
+            oxide_media_free_image_data(image_data.data_ptr, image_data.data_len);
+        }
+        Ok(Some(IosRawImageData {
+            width: image_data.width,
+            height: image_data.height,
+            row_bytes: image_data.row_bytes,
+            bgra,
+        }))
     }
 }
 
