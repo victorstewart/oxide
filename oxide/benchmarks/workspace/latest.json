@@ -1,0 +1,3571 @@
+{
+  "version": 1,
+  "suite": "full",
+  "generated_label": "2026-03-27",
+  "cases": [
+    {
+      "id": "cpu.system.prepare_draws.current",
+      "family": "system",
+      "layer": "engine",
+      "scenario": "system",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 3.8971443142361117,
+      "p95": 3.9425955810546873,
+      "p99": 3.9438577880859373,
+      "min": 3.8491032986111113,
+      "max": 3.94417333984375,
+      "mean": 3.8982945827907987,
+      "samples": 12,
+      "ops_per_sample": 256,
+      "notes": [
+        "Current ui-core clip lowering path."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.system.prepare_draws.legacy",
+      "family": "audit-baseline",
+      "layer": "engine",
+      "scenario": "audit-baseline",
+      "variant": "legacy-baseline",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": false,
+      "threshold_pct": 0.0,
+      "median": 4.936558314732142,
+      "p95": 5.067386300223214,
+      "p99": 5.075028599330357,
+      "min": 4.828473772321429,
+      "max": 5.076939174107143,
+      "mean": 4.94315978422619,
+      "samples": 12,
+      "ops_per_sample": 256,
+      "notes": [
+        "Legacy ClipPop recompute path kept for A/B audit context."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.system.coalesce_adjacent_draws.current",
+      "family": "system",
+      "layer": "engine",
+      "scenario": "system",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 4.191938948567708,
+      "p95": 4.5827468950320505,
+      "p99": 4.833556590544871,
+      "min": 4.062845703124999,
+      "max": 4.896259014423077,
+      "mean": 4.24363323818109,
+      "samples": 12,
+      "ops_per_sample": 128,
+      "notes": [
+        "Current linear ui-core merge path."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.system.coalesce_adjacent_draws.legacy",
+      "family": "audit-baseline",
+      "layer": "engine",
+      "scenario": "audit-baseline",
+      "variant": "legacy-baseline",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": false,
+      "threshold_pct": 0.0,
+      "median": 173.42269140625,
+      "p95": 177.170930078125,
+      "p99": 177.414129765625,
+      "min": 170.26790625,
+      "max": 177.4749296875,
+      "mean": 173.89746158854166,
+      "samples": 12,
+      "ops_per_sample": 128,
+      "notes": [
+        "Legacy Vec::remove merge path kept for A/B audit context."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.system.gesture_sequence",
+      "family": "system",
+      "layer": "engine",
+      "scenario": "system",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 0.2758567708333334,
+      "p95": 0.30445712087820237,
+      "p99": 0.32415776532147383,
+      "min": 0.26740701789529914,
+      "max": 0.32908292643229164,
+      "mean": 0.2799106544212135,
+      "samples": 12,
+      "ops_per_sample": 384,
+      "notes": [
+        "Tap, long-press, pan, and double-tap sequence."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.system.text_shape_bake",
+      "family": "system",
+      "layer": "engine",
+      "scenario": "system",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 19.762408088235297,
+      "p95": 20.434605147058825,
+      "p99": 20.44166024509804,
+      "min": 19.338444444444445,
+      "max": 20.443424019607843,
+      "mean": 19.872089324618738,
+      "samples": 12,
+      "ops_per_sample": 24,
+      "notes": [
+        "Mixed Latin+CJK shaping and atlas bake."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.label.encode",
+      "family": "component",
+      "layer": "engine",
+      "scenario": "component",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 42.6135,
+      "p95": 44.063552343750004,
+      "p99": 44.40090630208334,
+      "min": 42.00434375,
+      "max": 44.48524479166667,
+      "mean": 42.805519965277774,
+      "samples": 12,
+      "ops_per_sample": 32,
+      "notes": [
+        "Representative wrapped label encode."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.progress_bar.encode",
+      "family": "component",
+      "layer": "engine",
+      "scenario": "component",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.005500621438185339,
+      "p95": 0.005667934349726583,
+      "p99": 0.005712961225984241,
+      "min": 0.005458543258733624,
+      "max": 0.005724217945048655,
+      "mean": 0.005531234951281358,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Representative determinate progress encode."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.spinner.encode",
+      "family": "component",
+      "layer": "engine",
+      "scenario": "component",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.0021396299906387543,
+      "p95": 0.002171452913554494,
+      "p99": 0.0021746588823976375,
+      "min": 0.0021195975519287835,
+      "max": 0.0021754603746084234,
+      "mean": 0.0021429395268636616,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Representative spinner encode."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.button.encode",
+      "family": "component",
+      "layer": "engine",
+      "scenario": "component",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 2.8497350852272727,
+      "p95": 2.8631880859375,
+      "p99": 2.8654407421875,
+      "min": 2.786487152777778,
+      "max": 2.86600390625,
+      "mean": 2.8402849384085465,
+      "samples": 12,
+      "ops_per_sample": 32,
+      "notes": [
+        "Representative enabled button encode."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.toggle.encode",
+      "family": "component",
+      "layer": "engine",
+      "scenario": "component",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.006085192949691549,
+      "p95": 0.007414319377051893,
+      "p99": 0.008324020681155935,
+      "min": 0.005994110375209782,
+      "max": 0.008551446007181943,
+      "mean": 0.006308395170414645,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Representative toggle encode."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.slider.encode",
+      "family": "component",
+      "layer": "engine",
+      "scenario": "component",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.007420930173208641,
+      "p95": 0.007571100524829235,
+      "p99": 0.007611549780320213,
+      "min": 0.007291666666666666,
+      "max": 0.0076216620941929585,
+      "mean": 0.007421125804785766,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Representative slider encode."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.image_view.encode",
+      "family": "component",
+      "layer": "engine",
+      "scenario": "component",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.002736042268626772,
+      "p95": 0.002785758850699669,
+      "p99": 0.0027976396160008053,
+      "min": 0.0027000563610346134,
+      "max": 0.002800609807326089,
+      "mean": 0.0027398113989735317,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Representative contain image encode."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.nine_slice_image.encode",
+      "family": "component",
+      "layer": "engine",
+      "scenario": "component",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.0025710689219540085,
+      "p95": 0.0026393194904100656,
+      "p99": 0.002662288421853424,
+      "min": 0.0024601269987699877,
+      "max": 0.002668030654714263,
+      "mean": 0.0025601661948470617,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Representative nine-slice encode."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.collection_view.encode",
+      "family": "component",
+      "layer": "engine",
+      "scenario": "component",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 2.645963254593176,
+      "p95": 2.7140455623306234,
+      "p99": 2.7163185975609756,
+      "min": 2.5780983974358973,
+      "max": 2.7168868563685638,
+      "mean": 2.6488166173591385,
+      "samples": 12,
+      "ops_per_sample": 24,
+      "notes": [
+        "Representative virtualized collection layout+render."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.animation.spinner_spin",
+      "family": "animation",
+      "layer": "engine",
+      "scenario": "animation",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.005615570877072994,
+      "p95": 0.0056767509873510875,
+      "p99": 0.005687390479673222,
+      "min": 0.005549264787481967,
+      "max": 0.005690050352753755,
+      "mean": 0.005614613634687703,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Registry animation sample for SpinnerSpin."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.animation.progress_indeterminate",
+      "family": "animation",
+      "layer": "engine",
+      "scenario": "animation",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.006677076486773479,
+      "p95": 0.006770331170713587,
+      "p99": 0.006799291526819004,
+      "min": 0.006546693342498037,
+      "max": 0.006806531615845358,
+      "mean": 0.006674007073370036,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Registry animation sample for ProgressIndeterminate."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.animation.button_press_scale",
+      "family": "animation",
+      "layer": "engine",
+      "scenario": "animation",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 2.5661923829141937,
+      "p95": 2.642913240131579,
+      "p99": 2.6472010690789474,
+      "min": 2.4894415222772275,
+      "max": 2.6482730263157896,
+      "mean": 2.5733816653774872,
+      "samples": 12,
+      "ops_per_sample": 32,
+      "notes": [
+        "Registry animation sample for ButtonPressScale."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.animation.toggle_thumb_spring",
+      "family": "animation",
+      "layer": "engine",
+      "scenario": "animation",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.007165966966140488,
+      "p95": 0.007321971252682932,
+      "p99": 0.0073225601606259115,
+      "min": 0.006977792701646665,
+      "max": 0.007322707387611657,
+      "mean": 0.007168559665935918,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Registry animation sample for ToggleThumbSpring."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.animation.slider_thumb_move",
+      "family": "animation",
+      "layer": "engine",
+      "scenario": "animation",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.008388248057539531,
+      "p95": 0.008573274504549512,
+      "p99": 0.008686705266891082,
+      "min": 0.008140108660263714,
+      "max": 0.008715062957476472,
+      "mean": 0.008359819313645147,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Registry animation sample for SliderThumbMove."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.animation.image_zoom_pan",
+      "family": "animation",
+      "layer": "engine",
+      "scenario": "animation",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.006955366921105998,
+      "p95": 0.007150943050902062,
+      "p99": 0.00715801292289519,
+      "min": 0.006851941456563441,
+      "max": 0.007159780390893471,
+      "mean": 0.007002019478466168,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Registry animation sample for ImageZoomPan."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.animation.anim_timeline_bars",
+      "family": "animation",
+      "layer": "engine",
+      "scenario": "animation",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 8.383723958333334,
+      "p95": 8.665649698196114,
+      "p99": 8.697984722247918,
+      "min": 8.217517346938775,
+      "max": 8.70606847826087,
+      "mean": 8.418049880259497,
+      "samples": 12,
+      "ops_per_sample": 20,
+      "notes": [
+        "Registry animation sample for AnimTimelineBars."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.launch.simple_home.cold_launch",
+      "family": "journey",
+      "layer": "flow",
+      "scenario": "launch-lifecycle",
+      "variant": "oxide",
+      "cache_state": "cold",
+      "refresh_mode": "offscreen",
+      "unit": "us/journey",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 126.417,
+      "p95": 184.60799999999995,
+      "p99": 196.488,
+      "min": 112.083,
+      "max": 199.458,
+      "mean": 137.0709,
+      "samples": 10,
+      "ops_per_sample": 1,
+      "notes": [
+        "Offscreen Oxide bootstrap into the Controls scene and first presented frame."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.launch.heavy_home.cold_launch",
+      "family": "journey",
+      "layer": "flow",
+      "scenario": "launch-lifecycle",
+      "variant": "oxide",
+      "cache_state": "cold",
+      "refresh_mode": "offscreen",
+      "unit": "us/journey",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 78.2715,
+      "p95": 92.61045,
+      "p99": 94.75569,
+      "min": 65.792,
+      "max": 95.292,
+      "mean": 79.11269999999999,
+      "samples": 10,
+      "ops_per_sample": 1,
+      "notes": [
+        "Offscreen Oxide bootstrap into the Collection Stress scene and first presented frame."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.launch.detail.deep_link_launch",
+      "family": "journey",
+      "layer": "flow",
+      "scenario": "launch-lifecycle",
+      "variant": "oxide",
+      "cache_state": "cold",
+      "refresh_mode": "offscreen",
+      "unit": "us/journey",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 387.45799999999997,
+      "p95": 426.87514999999996,
+      "p99": 433.47503,
+      "min": 363.791,
+      "max": 435.125,
+      "mean": 393.4792,
+      "samples": 10,
+      "ops_per_sample": 1,
+      "notes": [
+        "Route-driven offscreen Oxide bootstrap into the Integration scene as the current detail-launch proxy."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.launch.simple_home.warm_resume",
+      "family": "journey",
+      "layer": "flow",
+      "scenario": "launch-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/journey",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 142.39600000000002,
+      "p95": 165.89724999999999,
+      "p99": 169.81224999999998,
+      "min": 126.375,
+      "max": 170.791,
+      "mean": 142.3666,
+      "samples": 10,
+      "ops_per_sample": 1,
+      "notes": [
+        "Warm resume proxy over the Controls scene after one prior Oxide frame has already been prepared."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.launch.heavy_home.foreground_after_background",
+      "family": "journey",
+      "layer": "flow",
+      "scenario": "launch-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/journey",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 86.354,
+      "p95": 94.0962,
+      "p99": 95.38644000000001,
+      "min": 68.208,
+      "max": 95.709,
+      "mean": 84.39989999999997,
+      "samples": 10,
+      "ops_per_sample": 1,
+      "notes": [
+        "Foreground-after-background proxy over the Collection Stress scene after one prior Oxide frame has already been prepared."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.empty_root.mount",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 23.088162760416665,
+      "p95": 27.02729596354166,
+      "p99": 28.303261970486112,
+      "min": 20.366145833333334,
+      "max": 28.62225347222222,
+      "mean": 23.402299551504626,
+      "samples": 12,
+      "ops_per_sample": 96,
+      "notes": [
+        "Retained-tree empty-root mount slice for control-free surface setup."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.flat_rects.10.mount",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 22.494534809027776,
+      "p95": 25.7080857257326,
+      "p99": 26.683924837454214,
+      "min": 19.665441176470587,
+      "max": 26.927884615384617,
+      "mean": 22.57998425290923,
+      "samples": 12,
+      "ops_per_sample": 24,
+      "notes": [
+        "Retained-tree flat-rect grid mount case at 10 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.flat_rects.100.mount",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 28.463395833333337,
+      "p95": 30.712854545454547,
+      "p99": 31.101534545454548,
+      "min": 24.120163690476193,
+      "max": 31.198704545454547,
+      "mean": 28.189437346378465,
+      "samples": 12,
+      "ops_per_sample": 12,
+      "notes": [
+        "Retained-tree flat-rect grid mount case at 100 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.flat_rects.1000.mount",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 66.27616845238094,
+      "p95": 70.22978201754387,
+      "p99": 71.37519850877194,
+      "min": 63.04450757575758,
+      "max": 71.66155263157896,
+      "mean": 66.54030832415636,
+      "samples": 12,
+      "ops_per_sample": 6,
+      "notes": [
+        "Retained-tree flat-rect grid mount case at 1000 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.flat_rects.10.mutate_fill",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 0.08688949437724436,
+      "p95": 0.08806146594149292,
+      "p99": 0.08820299373532522,
+      "min": 0.0863550030216697,
+      "max": 0.0882383756837833,
+      "mean": 0.0870281024894873,
+      "samples": 12,
+      "ops_per_sample": 24,
+      "notes": [
+        "Retained-tree flat-rect grid mutate case at 10 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.flat_rects.100.mutate_fill",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 0.6897944674250258,
+      "p95": 0.7026989318551695,
+      "p99": 0.7090405318449423,
+      "min": 0.6850580082135523,
+      "max": 0.7106259318423855,
+      "mean": 0.6919260943063604,
+      "samples": 12,
+      "ops_per_sample": 12,
+      "notes": [
+        "Retained-tree flat-rect grid mutate case at 100 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.flat_rects.1000.mutate_fill",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 8.982312639821028,
+      "p95": 15.165008333333331,
+      "p99": 16.668530884773666,
+      "min": 8.65385376344086,
+      "max": 17.044411522633748,
+      "mean": 10.033166297025776,
+      "samples": 12,
+      "ops_per_sample": 6,
+      "notes": [
+        "Retained-tree flat-rect grid mutate case at 1000 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.flat_rects.100.remove_all",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 15.012615740740742,
+      "p95": 15.383893560606062,
+      "p99": 15.451463560606058,
+      "min": 14.537455673758865,
+      "max": 15.468356060606059,
+      "mean": 15.038605737263294,
+      "samples": 12,
+      "ops_per_sample": 12,
+      "notes": [
+        "Retained-tree flat-rect grid remove-all case at 100 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.flat_rects.100.remount",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 15.658429263565893,
+      "p95": 16.524912515262514,
+      "p99": 17.03048164835165,
+      "min": 15.153488636363635,
+      "max": 17.15687393162393,
+      "mean": 15.770372300597225,
+      "samples": 12,
+      "ops_per_sample": 12,
+      "notes": [
+        "Retained-tree flat-rect grid remount case at 100 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.labels.10.mount",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 145.45104166666667,
+      "p95": 147.6994425,
+      "p99": 147.74710183333335,
+      "min": 142.18403333333336,
+      "max": 147.75901666666667,
+      "mean": 145.36805416666667,
+      "samples": 12,
+      "ops_per_sample": 12,
+      "notes": [
+        "Multiline retained-label mount case at 10 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.labels.100.mount",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 1466.7221666666665,
+      "p95": 2088.3145583333326,
+      "p99": 2581.3406450000007,
+      "min": 1424.0903333333335,
+      "max": 2704.597166666667,
+      "mean": 1570.313055555556,
+      "samples": 12,
+      "ops_per_sample": 6,
+      "notes": [
+        "Multiline retained-label mount case at 100 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.labels.1000.mount",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 14832.937750000001,
+      "p95": 15319.533349999998,
+      "p99": 15453.439869999998,
+      "min": 14615.458499999999,
+      "max": 15486.9165,
+      "mean": 14912.831666666667,
+      "samples": 12,
+      "ops_per_sample": 2,
+      "notes": [
+        "Multiline retained-label mount case at 1000 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.labels.10.mutate_text",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 146.66666666666669,
+      "p95": 148.64809583333334,
+      "p99": 149.19351249999997,
+      "min": 143.49166666666667,
+      "max": 149.32986666666665,
+      "mean": 146.50874166666668,
+      "samples": 12,
+      "ops_per_sample": 12,
+      "notes": [
+        "Multiline retained-label mutate case at 10 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.labels.100.mutate_text",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 1484.6944999999998,
+      "p95": 1520.0489833333331,
+      "p99": 1521.29873,
+      "min": 1436.8680000000002,
+      "max": 1521.6111666666666,
+      "mean": 1480.5359027777777,
+      "samples": 12,
+      "ops_per_sample": 6,
+      "notes": [
+        "Multiline retained-label mutate case at 100 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.labels.1000.mutate_text",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 14687.63575,
+      "p95": 14972.806175000002,
+      "p99": 15014.844434999999,
+      "min": 14508.4165,
+      "max": 15025.354,
+      "mean": 14716.437458333332,
+      "samples": 12,
+      "ops_per_sample": 2,
+      "notes": [
+        "Multiline retained-label mutate case at 1000 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.cards.10.mount",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 0.05491819083551115,
+      "p95": 0.055852275659067675,
+      "p99": 0.05593309919581711,
+      "min": 0.05421364394031793,
+      "max": 0.05595330508000447,
+      "mean": 0.05493132233761355,
+      "samples": 12,
+      "ops_per_sample": 18,
+      "notes": [
+        "Rounded shadow-card mount case at 10 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.cards.100.mount",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 0.5036050834388783,
+      "p95": 0.5099488104144714,
+      "p99": 0.5123722236213558,
+      "min": 0.49727542267528596,
+      "max": 0.512978076923077,
+      "mean": 0.5032730816180936,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Rounded shadow-card mount case at 100 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.cards.10.mutate_palette",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 0.05453699188366419,
+      "p95": 0.05522875930640417,
+      "p99": 0.055303262994520125,
+      "min": 0.05408633487466537,
+      "max": 0.05532188891654911,
+      "mean": 0.05464697209386426,
+      "samples": 12,
+      "ops_per_sample": 18,
+      "notes": [
+        "Rounded shadow-card mutate case at 10 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.cards.100.mutate_palette",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 0.5075276786870337,
+      "p95": 0.5114865251643373,
+      "p99": 0.5121632374099166,
+      "min": 0.49877132169576066,
+      "max": 0.5123324154713115,
+      "mean": 0.5068604733741316,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Rounded shadow-card mutate case at 100 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.images.10.mount",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 0.058780351934972316,
+      "p95": 0.059857944407712485,
+      "p99": 0.059978729274264085,
+      "min": 0.05823276853428826,
+      "max": 0.06000892549090199,
+      "mean": 0.0588984098760329,
+      "samples": 12,
+      "ops_per_sample": 18,
+      "notes": [
+        "Bitmap image-view mount case at 10 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.images.100.mount",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 0.37187540556597787,
+      "p95": 0.3782968161475157,
+      "p99": 0.3814936522203289,
+      "min": 0.3600405867530598,
+      "max": 0.3822928612385322,
+      "mean": 0.37088541668090186,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Bitmap image-view mount case at 100 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.images.10.mutate_alpha",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 0.030333798160060686,
+      "p95": 0.03055061317187124,
+      "p99": 0.03061675070430785,
+      "min": 0.029920715060398673,
+      "max": 0.030633285087417004,
+      "mean": 0.03032674523340308,
+      "samples": 12,
+      "ops_per_sample": 18,
+      "notes": [
+        "Bitmap image-view mutate case at 10 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.images.100.mutate_alpha",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 0.2851907888891193,
+      "p95": 0.2891529661650897,
+      "p99": 0.29003097048200227,
+      "min": 0.2794993364068175,
+      "max": 0.2902504715612304,
+      "mean": 0.28508291927351376,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Bitmap image-view mutate case at 100 visible nodes."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.control_set.mount",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.14,
+      "median": 50.150784375,
+      "p95": 51.1306921875,
+      "p99": 51.216973437499995,
+      "min": 49.09939062499999,
+      "max": 51.23854375,
+      "mean": 50.19782621527778,
+      "samples": 12,
+      "ops_per_sample": 32,
+      "notes": [
+        "Representative control-set slice using the shared controls showcase workload."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.primitive.control_set.mutate_state",
+      "family": "primitive-lifecycle",
+      "layer": "engine",
+      "scenario": "primitive-lifecycle",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.14,
+      "median": 10.891417798913043,
+      "p95": 11.115172010869564,
+      "p99": 11.149348532608695,
+      "min": 10.628092447916666,
+      "max": 11.157892663043476,
+      "mean": 10.876685938443538,
+      "samples": 12,
+      "ops_per_sample": 32,
+      "notes": [
+        "Representative control-set slice using the shared controls showcase workload."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.controls.frame",
+      "family": "scene-cpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 23.802761524086378,
+      "p95": 24.07857142857143,
+      "p99": 24.133571428571425,
+      "min": 23.00461647727273,
+      "max": 24.147321428571427,
+      "mean": 23.762110423955082,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Router update + draw + coalesce for Controls"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.text_layout.frame",
+      "family": "scene-cpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 143.4873046875,
+      "p95": 145.93032589285713,
+      "p99": 146.04916517857143,
+      "min": 138.949875,
+      "max": 146.078875,
+      "mean": 143.08223437499998,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Router update + draw + coalesce for Text Layout"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.zoom_image.frame",
+      "family": "scene-cpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 13.232592927631579,
+      "p95": 13.436806166666667,
+      "p99": 13.4435279,
+      "min": 12.801292721518989,
+      "max": 13.445208333333333,
+      "mean": 13.219375604702984,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Router update + draw + coalesce for Zoom Image"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.anim_timeline.frame",
+      "family": "scene-cpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 24.629574695121953,
+      "p95": 25.20842646722561,
+      "p99": 25.38824779344512,
+      "min": 23.871032738095238,
+      "max": 25.433203125,
+      "mean": 24.56931901646583,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Router update + draw + coalesce for Animations"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.collection.frame",
+      "family": "scene-cpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 13.784068493150688,
+      "p95": 13.968027256944444,
+      "p99": 14.017042951388888,
+      "min": 13.361875,
+      "max": 14.029296874999998,
+      "mean": 13.74695321777257,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Router update + draw + coalesce for Collection Stress"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.damage_lab.frame",
+      "family": "scene-cpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 78.59395192307693,
+      "p95": 81.22497932692309,
+      "p99": 81.34468048076924,
+      "min": 76.98677884615384,
+      "max": 81.37460576923078,
+      "mean": 78.87086137820512,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Router update + draw + coalesce for Damage Lab"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.input_lab.frame",
+      "family": "scene-cpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 103.82916875,
+      "p95": 105.25169687500002,
+      "p99": 105.31700937500001,
+      "min": 102.0322875,
+      "max": 105.33333750000001,
+      "mean": 103.82543333333335,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Router update + draw + coalesce for Input & Haptics"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.nine_slice.frame",
+      "family": "scene-cpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 16.764930208333332,
+      "p95": 17.091997245762713,
+      "p99": 17.186267245762714,
+      "min": 16.442366803278688,
+      "max": 17.209834745762713,
+      "mean": 16.798863894870486,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Router update + draw + coalesce for Nine Slice"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.sdf_text.frame",
+      "family": "scene-cpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 31.439455078125,
+      "p95": 32.13323901839718,
+      "p99": 32.29438973916331,
+      "min": 31.01515151515152,
+      "max": 32.33467741935484,
+      "mean": 31.51831500393298,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Router update + draw + coalesce for SDF Text"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.snapshot.frame",
+      "family": "scene-cpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 48.18216666666667,
+      "p95": 48.99169166666667,
+      "p99": 49.2350430952381,
+      "min": 46.47088068181818,
+      "max": 49.295880952380955,
+      "mean": 47.99560551948051,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Router update + draw + coalesce for Snapshot"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.camera.frame",
+      "family": "scene-cpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 29.03214285714286,
+      "p95": 29.54610919117647,
+      "p99": 29.674171838235292,
+      "min": 28.28414583333333,
+      "max": 29.7061875,
+      "mean": 28.93246154246421,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Router update + draw + coalesce for Camera"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.elements_extended.frame",
+      "family": "scene-cpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 82.35056250000001,
+      "p95": 84.97432187499999,
+      "p99": 85.37784770833332,
+      "min": 79.62220192307693,
+      "max": 85.47872916666665,
+      "mean": 82.16695980235042,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Router update + draw + coalesce for Elements Extended"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.animation_config.frame",
+      "family": "scene-cpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 167.70703125,
+      "p95": 171.08532604166666,
+      "p99": 172.01498187500002,
+      "min": 164.40028571428573,
+      "max": 172.24739583333334,
+      "mean": 167.61859126984123,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Router update + draw + coalesce for Animation Timings"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.orchestration.frame",
+      "family": "scene-cpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 101.32551874999999,
+      "p95": 102.34107187500001,
+      "p99": 102.44488437500002,
+      "min": 100.03385,
+      "max": 102.47083750000002,
+      "mean": 101.27569905303032,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Router update + draw + coalesce for UI Orchestration"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.permissions.frame",
+      "family": "scene-cpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 212.1796875,
+      "p95": 276.89254749999986,
+      "p99": 336.90350950000004,
+      "min": 210.115625,
+      "max": 351.90625,
+      "mean": 223.94114374999995,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Router update + draw + coalesce for Permissions"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.integration.frame",
+      "family": "scene-cpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 120.64120833333334,
+      "p95": 123.09507847222221,
+      "p99": 123.21068236111111,
+      "min": 118.12037500000002,
+      "max": 123.23958333333333,
+      "mean": 120.88768518518519,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Router update + draw + coalesce for Integration"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.stress.frame",
+      "family": "scene-cpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 108.23229375000001,
+      "p95": 110.65492437500001,
+      "p99": 111.70829598611111,
+      "min": 106.57916250000001,
+      "max": 111.97163888888889,
+      "mean": 108.45011053240741,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Router update + draw + coalesce for Stress Test"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "gpu.scene.controls.frame",
+      "family": "scene-gpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.35,
+      "median": 1.9401875000000002,
+      "p95": 6.013692,
+      "p99": 7.212371230000002,
+      "min": 1.449125,
+      "max": 8.239457999999999,
+      "mean": 3.288194437499999,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Controls"
+      ],
+      "metrics": {
+        "culled_avg": 0.0,
+        "damage_pct_avg": 25.020000338554382,
+        "draw_ms_median": 0.889521,
+        "draws_avg": 22.0,
+        "encode_ms_median": 0.08439550000000001,
+        "instanced_avg": 3.0
+      }
+    },
+    {
+      "id": "gpu.scene.text_layout.frame",
+      "family": "scene-gpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.35,
+      "median": 3.2904999999999998,
+      "p95": 6.44841065,
+      "p99": 6.72384427,
+      "min": 2.012709,
+      "max": 6.754375,
+      "mean": 4.072994791666665,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Text Layout"
+      ],
+      "metrics": {
+        "culled_avg": 6.0,
+        "damage_pct_avg": 3.2999999821186066,
+        "draw_ms_median": 1.405687,
+        "draws_avg": 6.0,
+        "encode_ms_median": 0.0850835,
+        "instanced_avg": 1.0
+      }
+    },
+    {
+      "id": "gpu.scene.zoom_image.frame",
+      "family": "scene-gpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.35,
+      "median": 2.0119165,
+      "p95": 6.23655045,
+      "p99": 6.689650750000001,
+      "min": 0.880417,
+      "max": 6.999792,
+      "mean": 3.0759679374999997,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Zoom Image"
+      ],
+      "metrics": {
+        "culled_avg": 0.0,
+        "damage_pct_avg": 80.95999956130981,
+        "draw_ms_median": 0.753312,
+        "draws_avg": 4.0,
+        "encode_ms_median": 0.09818750000000001,
+        "instanced_avg": 3.0
+      }
+    },
+    {
+      "id": "gpu.scene.anim_timeline.frame",
+      "family": "scene-gpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.45,
+      "median": 2.2083329999999997,
+      "p95": 6.27631435,
+      "p99": 6.49366498,
+      "min": 1.602666,
+      "max": 6.592207999999999,
+      "mean": 3.753124062499998,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Animations"
+      ],
+      "metrics": {
+        "culled_avg": 0.0,
+        "damage_pct_avg": 41.21333360671997,
+        "draw_ms_median": 1.0473750000000002,
+        "draws_avg": 16.0,
+        "encode_ms_median": 0.08172950000000001,
+        "instanced_avg": 1.0
+      }
+    },
+    {
+      "id": "gpu.scene.collection.frame",
+      "family": "scene-gpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.45,
+      "median": 0.903917,
+      "p95": 5.16433355,
+      "p99": 5.30378153,
+      "min": 0.7701669999999999,
+      "max": 5.372167,
+      "mean": 1.8903497916666663,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Collection Stress"
+      ],
+      "metrics": {
+        "culled_avg": 0.0,
+        "damage_pct_avg": 100.0,
+        "draw_ms_median": 0.2917085,
+        "draws_avg": 4.0,
+        "encode_ms_median": 0.0655625,
+        "instanced_avg": 1.0
+      }
+    },
+    {
+      "id": "gpu.scene.damage_lab.frame",
+      "family": "scene-gpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.35,
+      "median": 1.783917,
+      "p95": 6.0246522,
+      "p99": 6.502916750000001,
+      "min": 1.354917,
+      "max": 6.8165830000000005,
+      "mean": 3.0960971874999994,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Damage Lab"
+      ],
+      "metrics": {
+        "culled_avg": 2.0,
+        "damage_pct_avg": 3.2999999821186066,
+        "draw_ms_median": 0.791604,
+        "draws_avg": 6.0,
+        "encode_ms_median": 0.084083,
+        "instanced_avg": 1.0
+      }
+    },
+    {
+      "id": "gpu.scene.input_lab.frame",
+      "family": "scene-gpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.45,
+      "median": 7.6742915,
+      "p95": 8.355841550000001,
+      "p99": 9.135213990000002,
+      "min": 3.403917,
+      "max": 9.764583,
+      "mean": 6.412769979166666,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Input & Haptics"
+      ],
+      "metrics": {
+        "culled_avg": 42.0,
+        "damage_pct_avg": 3.2999999821186066,
+        "draw_ms_median": 2.7686669999999998,
+        "draws_avg": 6.0,
+        "encode_ms_median": 0.08031250000000001,
+        "instanced_avg": 1.0
+      }
+    },
+    {
+      "id": "gpu.scene.nine_slice.frame",
+      "family": "scene-gpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.35,
+      "median": 0.8974584999999999,
+      "p95": 6.2068,
+      "p99": 8.975418990000003,
+      "min": 0.741708,
+      "max": 10.232708,
+      "mean": 2.3269053750000004,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Nine Slice"
+      ],
+      "metrics": {
+        "culled_avg": 2.0,
+        "damage_pct_avg": 3.2999999821186066,
+        "draw_ms_median": 0.2707915,
+        "draws_avg": 2.0,
+        "encode_ms_median": 0.0560625,
+        "instanced_avg": 1.0
+      }
+    },
+    {
+      "id": "gpu.scene.sdf_text.frame",
+      "family": "scene-gpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.35,
+      "median": 1.152583,
+      "p95": 5.3553522,
+      "p99": 6.689170970000002,
+      "min": 1.031334,
+      "max": 7.687333,
+      "mean": 2.1955329791666665,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for SDF Text"
+      ],
+      "metrics": {
+        "culled_avg": 0.0,
+        "damage_pct_avg": 3.2999999821186066,
+        "draw_ms_median": 0.5479375,
+        "draws_avg": 4.0,
+        "encode_ms_median": 0.06343750000000001,
+        "instanced_avg": 1.0
+      }
+    },
+    {
+      "id": "gpu.scene.snapshot.frame",
+      "family": "scene-gpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.35,
+      "median": 1.233667,
+      "p95": 5.2550704,
+      "p99": 5.737370240000001,
+      "min": 1.040333,
+      "max": 5.792458,
+      "mean": 2.3450642499999996,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Snapshot"
+      ],
+      "metrics": {
+        "culled_avg": 0.0,
+        "damage_pct_avg": 3.2999999821186066,
+        "draw_ms_median": 0.558125,
+        "draws_avg": 4.0,
+        "encode_ms_median": 0.060688,
+        "instanced_avg": 1.0
+      }
+    },
+    {
+      "id": "gpu.scene.camera.frame",
+      "family": "scene-gpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.35,
+      "median": 0.8435204999999999,
+      "p95": 5.19745045,
+      "p99": 5.31932625,
+      "min": 0.770125,
+      "max": 5.3214999999999995,
+      "mean": 1.7431077083333328,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Camera"
+      ],
+      "metrics": {
+        "culled_avg": 0.0,
+        "damage_pct_avg": 100.0,
+        "draw_ms_median": 0.2766875,
+        "draws_avg": 8.0,
+        "encode_ms_median": 0.04652100000000001,
+        "instanced_avg": 1.0
+      }
+    },
+    {
+      "id": "gpu.scene.elements_extended.frame",
+      "family": "scene-gpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.35,
+      "median": 5.5143335,
+      "p95": 8.18876875,
+      "p99": 8.36168575,
+      "min": 3.143583,
+      "max": 8.400167,
+      "mean": 5.917055604166666,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Elements Extended"
+      ],
+      "metrics": {
+        "culled_avg": 0.0,
+        "damage_pct_avg": 100.0,
+        "draw_ms_median": 2.7480624999999996,
+        "draws_avg": 36.0,
+        "encode_ms_median": 0.0777915,
+        "instanced_avg": 1.0
+      }
+    },
+    {
+      "id": "gpu.scene.animation_config.frame",
+      "family": "scene-gpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.35,
+      "median": 8.3179585,
+      "p95": 8.53679945,
+      "p99": 8.60324375,
+      "min": 8.063792,
+      "max": 8.61,
+      "mean": 8.3215703125,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Animation Timings"
+      ],
+      "metrics": {
+        "culled_avg": 0.0,
+        "damage_pct_avg": 100.0,
+        "draw_ms_median": 7.4753335,
+        "draws_avg": 130.0,
+        "encode_ms_median": 0.0740625,
+        "instanced_avg": 1.0
+      }
+    },
+    {
+      "id": "gpu.scene.orchestration.frame",
+      "family": "scene-gpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.35,
+      "median": 8.350583499999999,
+      "p95": 8.82427895,
+      "p99": 8.90492923,
+      "min": 7.345,
+      "max": 8.948541,
+      "mean": 8.334562395833336,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for UI Orchestration"
+      ],
+      "metrics": {
+        "culled_avg": 0.0,
+        "damage_pct_avg": 100.0,
+        "draw_ms_median": 3.7204794999999997,
+        "draws_avg": 56.0,
+        "encode_ms_median": 0.0632295,
+        "instanced_avg": 1.0
+      }
+    },
+    {
+      "id": "gpu.scene.permissions.frame",
+      "family": "scene-gpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.35,
+      "median": 10.065312500000001,
+      "p95": 14.413662599999999,
+      "p99": 14.4511755,
+      "min": 9.524625,
+      "max": 14.466332999999999,
+      "mean": 11.459983395833333,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Permissions"
+      ],
+      "metrics": {
+        "culled_avg": 0.0,
+        "damage_pct_avg": 100.0,
+        "draw_ms_median": 8.9634585,
+        "draws_avg": 178.0,
+        "encode_ms_median": 0.09008350000000001,
+        "instanced_avg": 1.0
+      }
+    },
+    {
+      "id": "gpu.scene.integration.frame",
+      "family": "scene-gpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.45,
+      "median": 7.910521,
+      "p95": 8.64358135,
+      "p99": 9.02003724,
+      "min": 3.640084,
+      "max": 9.251375,
+      "mean": 6.930423583333334,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Integration"
+      ],
+      "metrics": {
+        "culled_avg": 0.0,
+        "damage_pct_avg": 100.0,
+        "draw_ms_median": 3.039958,
+        "draws_avg": 41.0,
+        "encode_ms_median": 0.0624995,
+        "instanced_avg": 2.0
+      }
+    },
+    {
+      "id": "gpu.scene.stress.frame",
+      "family": "scene-gpu",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.35,
+      "median": 8.268979000000002,
+      "p95": 9.144341449999999,
+      "p99": 9.21958875,
+      "min": 5.1980830000000005,
+      "max": 9.237625,
+      "mean": 8.154061687500002,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Stress Test"
+      ],
+      "metrics": {
+        "culled_avg": 0.0,
+        "damage_pct_avg": 100.0,
+        "draw_ms_median": 4.5639795,
+        "draws_avg": 64.0,
+        "encode_ms_median": 0.073292,
+        "instanced_avg": 1.0
+      }
+    },
+    {
+      "id": "cpu.journey.input_form_submit",
+      "family": "journey",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/journey",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 493.0625,
+      "p95": 553.66235,
+      "p99": 554.53247,
+      "min": 445.25,
+      "max": 554.75,
+      "mean": 493.93739999999997,
+      "samples": 10,
+      "ops_per_sample": 1,
+      "notes": [
+        "Input & Haptics scene boot, text entry, picker movement, keyboard submit, and composed redraw."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.journey.collection_navigation",
+      "family": "journey",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/journey",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 127.08349999999999,
+      "p95": 136.76425,
+      "p99": 137.61925,
+      "min": 119.79199999999999,
+      "max": 137.833,
+      "mean": 127.80409999999999,
+      "samples": 10,
+      "ops_per_sample": 1,
+      "notes": [
+        "Collection Stress scene boot plus focus navigation across a virtualized grid."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.journey.zoom_image_gesture_cycle",
+      "family": "journey",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/journey",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 115.083,
+      "p95": 147.97849999999994,
+      "p99": 165.5285,
+      "min": 108.792,
+      "max": 169.916,
+      "mean": 120.33319999999999,
+      "samples": 10,
+      "ops_per_sample": 1,
+      "notes": [
+        "Zoom Image scene boot plus pinch, pan, and double-tap reset gestures."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.journey.orchestration_transition_modal",
+      "family": "journey",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/journey",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 978.3335,
+      "p95": 1016.0753,
+      "p99": 1019.0150600000001,
+      "min": 954.083,
+      "max": 1019.75,
+      "mean": 984.1792000000002,
+      "samples": 10,
+      "ops_per_sample": 1,
+      "notes": [
+        "Orchestration scene boot, transition trigger, animated frames, dismissable modal, and overlay dismissal."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.journey.feed_scroll_matrix",
+      "family": "journey",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/journey",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 124.56300000000002,
+      "p95": 124.86495,
+      "p99": 124.94019,
+      "min": 121.08300000000001,
+      "max": 124.959,
+      "mean": 124.271,
+      "samples": 10,
+      "ops_per_sample": 1,
+      "notes": [
+        "Feed scroll matrix using collection virtualization across slow scroll, medium scroll, hard fling, reverse, and focus movement."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.journey.thumbnail_grid_scroll_matrix",
+      "family": "journey",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/journey",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 144.1455,
+      "p95": 149.34199999999998,
+      "p99": 150.60199999999998,
+      "min": 143.375,
+      "max": 150.917,
+      "mean": 145.3625,
+      "samples": 10,
+      "ops_per_sample": 1,
+      "notes": [
+        "Thumbnail grid scroll matrix using collection virtualization across slow scroll, medium scroll, hard fling, reverse, and focus movement."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.journey.chat_thread_scroll_matrix",
+      "family": "journey",
+      "layer": "flow",
+      "scenario": "screen-flow",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/journey",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 233.72899999999998,
+      "p95": 241.3045,
+      "p99": 241.3945,
+      "min": 233.5,
+      "max": 241.417,
+      "mean": 235.5583,
+      "samples": 10,
+      "ops_per_sample": 1,
+      "notes": [
+        "Chat thread scroll matrix using collection virtualization across slow scroll, medium scroll, hard fling, reverse, and focus movement."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.authoring.text_fields.edit_cycle",
+      "family": "authoring",
+      "layer": "engine",
+      "scenario": "authoring",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 0.8431822390572392,
+      "p95": 0.855742748528423,
+      "p99": 0.858716505032145,
+      "min": 0.8350825000000001,
+      "max": 0.8594599441580755,
+      "mean": 0.8439635833230409,
+      "samples": 12,
+      "ops_per_sample": 24,
+      "notes": [
+        "Public text-field state engines covering policy normalization, caret edits, fail states, and secure remasking."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.authoring.popup_wheel_picker.interaction",
+      "family": "authoring",
+      "layer": "engine",
+      "scenario": "authoring",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.0005386678084418079,
+      "p95": 0.00056683444964346,
+      "p99": 0.0005876508730869561,
+      "min": 0.0005333471602876006,
+      "max": 0.0005928549789478302,
+      "mean": 0.0005432349354513076,
+      "samples": 12,
+      "ops_per_sample": 72,
+      "notes": [
+        "Popup panel classification plus wheel drag/tap lifecycle through the public picker state API."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.authoring.burst_emitter.sample",
+      "family": "authoring",
+      "layer": "engine",
+      "scenario": "authoring",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.6676197916666666,
+      "p95": 0.6718257256711408,
+      "p99": 0.6720441384228187,
+      "min": 0.6617402640264026,
+      "max": 0.6720987416107382,
+      "mean": 0.6670367862140173,
+      "samples": 12,
+      "ops_per_sample": 40,
+      "notes": [
+        "Deterministic CAEmitter-style particle sampling through the public burst-emitter API."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.authoring.surface_router.compose",
+      "family": "authoring",
+      "layer": "engine",
+      "scenario": "authoring",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 114.00477604166667,
+      "p95": 116.48936666666665,
+      "p99": 116.61731499999999,
+      "min": 108.05381249999999,
+      "max": 116.64930208333332,
+      "mean": 112.98325347222222,
+      "samples": 12,
+      "ops_per_sample": 32,
+      "notes": [
+        "Surface composition, overlay/popup wiring, scatter transition, encode, capture, and pointer routing through the public surface APIs."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.layout.flat_grid.rotation_relayout",
+      "family": "layout",
+      "layer": "engine",
+      "scenario": "layout-invalidation",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 40.44751682692308,
+      "p95": 42.02276380208333,
+      "p99": 42.17955276041667,
+      "min": 38.61899038461539,
+      "max": 42.21875,
+      "mean": 40.28753028178419,
+      "samples": 12,
+      "ops_per_sample": 16,
+      "notes": [
+        "Retained-tree flat grid relayout under alternating portrait and landscape widths."
+      ],
+      "metrics": {
+        "dirty_nodes": 240.0,
+        "layout_passes": 2.0
+      }
+    },
+    {
+      "id": "cpu.layout.deep_stack.theme_swap",
+      "family": "layout",
+      "layer": "engine",
+      "scenario": "layout-invalidation",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 28.12868923611111,
+      "p95": 30.228538602941175,
+      "p99": 30.356737132352944,
+      "min": 25.603125,
+      "max": 30.388786764705884,
+      "mean": 28.1199805955094,
+      "samples": 12,
+      "ops_per_sample": 16,
+      "notes": [
+        "Deeply nested container stack relayout while alternating theme colors and spacing."
+      ],
+      "metrics": {
+        "dirty_nodes": 60.0,
+        "layout_passes": 2.0
+      }
+    },
+    {
+      "id": "cpu.layout.grid.safe_area_swap",
+      "family": "layout",
+      "layer": "engine",
+      "scenario": "layout-invalidation",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 37.61802455357143,
+      "p95": 39.307381971153845,
+      "p99": 39.476699471153836,
+      "min": 36.588169642857146,
+      "max": 39.51902884615384,
+      "mean": 37.79881928228022,
+      "samples": 12,
+      "ops_per_sample": 16,
+      "notes": [
+        "Retained grid relayout while alternating root insets to mimic safe-area changes."
+      ],
+      "metrics": {
+        "dirty_nodes": 180.0,
+        "layout_passes": 3.0
+      }
+    },
+    {
+      "id": "cpu.text_input.large_editor.keystroke_burst",
+      "family": "text-input",
+      "layer": "engine",
+      "scenario": "text-input",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 1215.145875,
+      "p95": 1236.78468125,
+      "p99": 1237.00693625,
+      "min": 1200.244875,
+      "max": 1237.0625,
+      "mean": 1216.3958541666668,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Large-editor typing burst using the public text-input state engine on a multiline document."
+      ],
+      "metrics": {
+        "dirty_nodes": 1.0
+      }
+    },
+    {
+      "id": "cpu.text_input.large_editor.paste_10kb",
+      "family": "text-input",
+      "layer": "engine",
+      "scenario": "text-input",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 10.696614361702126,
+      "p95": 10.83100383064516,
+      "p99": 10.83327065860215,
+      "min": 10.60011052631579,
+      "max": 10.833837365591398,
+      "mean": 10.711292033831933,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Large-editor 10 KB paste path through clipboard-backed public text-input APIs."
+      ],
+      "metrics": {
+        "dirty_nodes": 1.0
+      }
+    },
+    {
+      "id": "cpu.text_input.large_editor.selection_replace",
+      "family": "text-input",
+      "layer": "engine",
+      "scenario": "text-input",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 83.61827083333333,
+      "p95": 85.64114583333333,
+      "p99": 85.79697916666666,
+      "min": 82.45913461538461,
+      "max": 85.8359375,
+      "mean": 83.99958954326924,
+      "samples": 12,
+      "ops_per_sample": 8,
+      "notes": [
+        "Large-editor selection, cut, replace, and submit flow through the public text-input APIs."
+      ],
+      "metrics": {
+        "dirty_nodes": 1.0
+      }
+    },
+    {
+      "id": "cpu.image_pipeline.png.decode",
+      "family": "image-pipeline",
+      "layer": "engine",
+      "scenario": "image-pipeline",
+      "variant": "oxide",
+      "cache_state": "cold",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 50.74491666666667,
+      "p95": 52.14783653846154,
+      "p99": 52.19366987179487,
+      "min": 49.708083333333335,
+      "max": 52.205128205128204,
+      "mean": 50.8936282051282,
+      "samples": 12,
+      "ops_per_sample": 12,
+      "notes": [
+        "Dedicated PNG decode phase over the shared checker payload before any renderer upload work."
+      ],
+      "metrics": {
+        "encoded_bytes": 6797.0,
+        "texture_bytes": 65536.0
+      }
+    },
+    {
+      "id": "gpu.image_pipeline.png.upload",
+      "family": "image-pipeline",
+      "layer": "engine",
+      "scenario": "image-pipeline",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/upload",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 15.156744047619046,
+      "p95": 15.719168750000001,
+      "p99": 15.791848035714287,
+      "min": 13.9875,
+      "max": 15.810017857142858,
+      "mean": 15.023425634920637,
+      "samples": 10,
+      "ops_per_sample": 12,
+      "notes": [
+        "Dedicated Metal texture-upload phase over the same decoded checker payload used by the decode and first-visible image cases."
+      ],
+      "metrics": {
+        "encoded_bytes": 6797.0,
+        "texture_bytes": 65536.0
+      }
+    },
+    {
+      "id": "gpu.image_pipeline.png.first_visible",
+      "family": "image-pipeline",
+      "layer": "engine",
+      "scenario": "image-pipeline",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 0.44808349999999997,
+      "p95": 2.590956399999997,
+      "p99": 3.7370912800000005,
+      "min": 0.29091700000000004,
+      "max": 4.023625,
+      "mean": 0.8503833000000001,
+      "samples": 10,
+      "ops_per_sample": 1,
+      "notes": [
+        "Dedicated first-visible image phase: upload the shared PNG payload, encode one retained image, and submit its first Metal frame."
+      ],
+      "metrics": {
+        "draw_calls": 0.0,
+        "encode_ms_median": 0.010562499999999999,
+        "encoded_bytes": 6797.0,
+        "texture_bytes": 65536.0
+      }
+    },
+    {
+      "id": "cpu.navigation.button_press.response",
+      "family": "navigation",
+      "layer": "flow",
+      "scenario": "navigation-input",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 2.4876429227941177,
+      "p95": 2.52149528125,
+      "p99": 2.52363230625,
+      "min": 2.4539037990196078,
+      "max": 2.5241665625,
+      "mean": 2.488715485089869,
+      "samples": 12,
+      "ops_per_sample": 64,
+      "notes": [
+        "Direct input-latency slice for a pressed button transitioning to its first visible response."
+      ],
+      "metrics": {
+        "dirty_nodes": 1.0
+      }
+    },
+    {
+      "id": "cpu.navigation.slider_scrub.response",
+      "family": "navigation",
+      "layer": "flow",
+      "scenario": "navigation-input",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 0.008177248058274716,
+      "p95": 0.008308606848073248,
+      "p99": 0.008338631671390588,
+      "min": 0.008139779497948817,
+      "max": 0.008346137877219923,
+      "mean": 0.008197388394299978,
+      "samples": 12,
+      "ops_per_sample": 64,
+      "notes": [
+        "Direct input-latency slice for a slider scrub updating thumb position and fill immediately."
+      ],
+      "metrics": {
+        "dirty_nodes": 1.0
+      }
+    },
+    {
+      "id": "cpu.navigation.text_focus.response",
+      "family": "navigation",
+      "layer": "flow",
+      "scenario": "navigation-input",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 384.97068749999994,
+      "p95": 396.9847703125,
+      "p99": 399.23862906249997,
+      "min": 368.73309375,
+      "max": 399.80209375,
+      "mean": 385.7678984375,
+      "samples": 12,
+      "ops_per_sample": 32,
+      "notes": [
+        "Direct input-latency slice for focusing the Input & Haptics editor and presenting its next visible frame."
+      ],
+      "metrics": {
+        "dirty_nodes": 1.0
+      }
+    },
+    {
+      "id": "cpu.reconcile.single_node_mutation",
+      "family": "reconcile",
+      "layer": "engine",
+      "scenario": "state-reconcile",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 6.2798032407407405,
+      "p95": 6.377954716981131,
+      "p99": 6.398651320754716,
+      "min": 6.162753030303031,
+      "max": 6.403825471698113,
+      "mean": 6.281568066408318,
+      "samples": 12,
+      "ops_per_sample": 24,
+      "notes": [
+        "Diff/apply slice for a single-node mutation over a retained 1000-node flat-rect tree."
+      ],
+      "metrics": {
+        "dirty_nodes": 1.0,
+        "layout_passes": 1.0
+      }
+    },
+    {
+      "id": "cpu.reconcile.tree_mutation_1pct",
+      "family": "reconcile",
+      "layer": "engine",
+      "scenario": "state-reconcile",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 6.355198506289308,
+      "p95": 6.425414142628204,
+      "p99": 6.4283520592948715,
+      "min": 6.256141203703703,
+      "max": 6.429086538461537,
+      "mean": 6.343773978967325,
+      "samples": 12,
+      "ops_per_sample": 24,
+      "notes": [
+        "Diff/apply slice for a 1 percent tree mutation over a retained 1000-node flat-rect tree."
+      ],
+      "metrics": {
+        "dirty_nodes": 10.0,
+        "layout_passes": 1.0
+      }
+    },
+    {
+      "id": "cpu.reconcile.tree_mutation_10pct",
+      "family": "reconcile",
+      "layer": "engine",
+      "scenario": "state-reconcile",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 6.357393081761006,
+      "p95": 6.503231690705128,
+      "p99": 6.505053389423075,
+      "min": 6.28031712962963,
+      "max": 6.505508814102563,
+      "mean": 6.390461890247317,
+      "samples": 12,
+      "ops_per_sample": 24,
+      "notes": [
+        "Diff/apply slice for a 10 percent tree mutation over a retained 1000-node flat-rect tree."
+      ],
+      "metrics": {
+        "dirty_nodes": 100.0,
+        "layout_passes": 1.0
+      }
+    },
+    {
+      "id": "cpu.reconcile.theme_swap_full",
+      "family": "reconcile",
+      "layer": "engine",
+      "scenario": "state-reconcile",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 17.427127083333332,
+      "p95": 17.755962171052634,
+      "p99": 17.772245065789477,
+      "min": 16.89913333333333,
+      "max": 17.776315789473685,
+      "mean": 17.408523044590645,
+      "samples": 12,
+      "ops_per_sample": 24,
+      "notes": [
+        "Full retained-tree theme swap touching every node plus root spacing to expose diff/apply and relayout cost directly."
+      ],
+      "metrics": {
+        "dirty_nodes": 1000.0,
+        "layout_passes": 2.0
+      }
+    },
+    {
+      "id": "cpu.endurance.open_close_heavy_screen.100x",
+      "family": "endurance",
+      "layer": "flow",
+      "scenario": "endurance-thermal",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 11393.5625,
+      "p95": 11452.63635,
+      "p99": 11465.094070000001,
+      "min": 11112.104500000001,
+      "max": 11468.2085,
+      "mean": 11357.541666666666,
+      "samples": 12,
+      "ops_per_sample": 2,
+      "notes": [
+        "Repeated heavy-screen open/close loop across Oxide router scenes to trap retained-state ratchets."
+      ],
+      "metrics": {
+        "layout_passes": 100.0
+      }
+    },
+    {
+      "id": "cpu.endurance.tab_switch_heavy.500x",
+      "family": "endurance",
+      "layer": "flow",
+      "scenario": "endurance-thermal",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 39967.8435,
+      "p95": 40560.893599999996,
+      "p99": 40619.39512,
+      "min": 39386.04150000001,
+      "max": 40634.0205,
+      "mean": 40025.42179166666,
+      "samples": 12,
+      "ops_per_sample": 2,
+      "notes": [
+        "Heavy tab-switch loop across three representative scenes to catch drift in repeated scene swaps."
+      ],
+      "metrics": {
+        "layout_passes": 500.0
+      }
+    },
+    {
+      "id": "cpu.endurance.idle_animation.600_frames",
+      "family": "endurance",
+      "layer": "flow",
+      "scenario": "endurance-thermal",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 15063.03125,
+      "p95": 15197.157199999998,
+      "p99": 15198.98144,
+      "min": 14907.3125,
+      "max": 15199.4375,
+      "mean": 15077.065916666666,
+      "samples": 12,
+      "ops_per_sample": 2,
+      "notes": [
+        "Long-running animation tick loop for drift detection across a 600-frame idle window."
+      ],
+      "metrics": {
+        "layout_passes": 600.0
+      }
+    },
+    {
+      "id": "cpu.stress.flat_rects.10000.mount",
+      "family": "stress",
+      "layer": "engine",
+      "scenario": "stress-pathological",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 403.907275,
+      "p95": 414.71907,
+      "p99": 415.7154940000001,
+      "min": 397.0587272727273,
+      "max": 415.9646000000001,
+      "mean": 404.8606950757576,
+      "samples": 12,
+      "ops_per_sample": 2,
+      "notes": [
+        "Pathological retained-tree mount of ten thousand flat rectangles."
+      ],
+      "metrics": {
+        "dirty_nodes": 10000.0,
+        "layout_passes": 1.0
+      }
+    },
+    {
+      "id": "cpu.stress.simultaneous_animations.300",
+      "family": "stress",
+      "layer": "engine",
+      "scenario": "stress-pathological",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 2.239509092138179,
+      "p95": 2.3620638413915094,
+      "p99": 2.364512768278302,
+      "min": 2.1555204741379312,
+      "max": 2.365125,
+      "mean": 2.2388343480682065,
+      "samples": 12,
+      "ops_per_sample": 2,
+      "notes": [
+        "Three hundred simultaneous animated bars sharing one encode pass to trap bulk animation regressions."
+      ],
+      "metrics": {
+        "draw_calls": 300.0
+      }
+    },
+    {
+      "id": "cpu.stress.ticker_100hz",
+      "family": "stress",
+      "layer": "engine",
+      "scenario": "stress-pathological",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 11075.34375,
+      "p95": 11106.5814,
+      "p99": 11111.549879999999,
+      "min": 10830.625,
+      "max": 11112.792,
+      "mean": 11036.151124999999,
+      "samples": 12,
+      "ops_per_sample": 2,
+      "notes": [
+        "Hundred-hertz ticker update loop on the stress scene to trap high-frequency mutation regressions."
+      ],
+      "metrics": {
+        "layout_passes": 100.0
+      }
+    },
+    {
+      "id": "cpu.bridge.permission_callback_fanout",
+      "family": "bridge",
+      "layer": "bridge",
+      "scenario": "os-bridge",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 0.06887741625010613,
+      "p95": 0.07130535174077052,
+      "p99": 0.07161933439631923,
+      "min": 0.06792922943811075,
+      "max": 0.07169783006020641,
+      "mean": 0.06923798286013307,
+      "samples": 12,
+      "ops_per_sample": 128,
+      "notes": [
+        "App-owned permission wrapper overhead: cached status update plus three callback listeners."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.bridge.sensor_location_snapshot",
+      "family": "bridge",
+      "layer": "bridge",
+      "scenario": "os-bridge",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 0.08898994756215489,
+      "p95": 0.08998555621681217,
+      "p99": 0.09041198637908447,
+      "min": 0.0875815169817927,
+      "max": 0.09051859391965256,
+      "mean": 0.0888594354224634,
+      "samples": 12,
+      "ops_per_sample": 96,
+      "notes": [
+        "Location bridge overhead: permission-gated sensor ingest plus snapshot materialization."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.bridge.bluetooth_cache_update",
+      "family": "bridge",
+      "layer": "bridge",
+      "scenario": "os-bridge",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 1.1267896576124117,
+      "p95": 1.1502587890625,
+      "p99": 1.1561368272569443,
+      "min": 1.113171875,
+      "max": 1.1576063368055556,
+      "mean": 1.1296654241777289,
+      "samples": 12,
+      "ops_per_sample": 64,
+      "notes": [
+        "Bluetooth bridge overhead: discovery cache update and snapshot emission without renderer work."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.bridge.photo_import_thumbnail",
+      "family": "bridge",
+      "layer": "bridge",
+      "scenario": "os-bridge",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 52.30595512820513,
+      "p95": 53.1966092948718,
+      "p99": 53.233978269230775,
+      "min": 51.3945,
+      "max": 53.24332051282052,
+      "mean": 52.47714155982906,
+      "samples": 12,
+      "ops_per_sample": 12,
+      "notes": [
+        "App-owned photo-import bridge path from imported bytes to the first rendered thumbnail strip, excluding the system picker surface."
+      ],
+      "metrics": {
+        "encoded_bytes": 6797.0,
+        "texture_bytes": 65536.0
+      }
+    },
+    {
+      "id": "cpu.bridge.file_import_render",
+      "family": "bridge",
+      "layer": "bridge",
+      "scenario": "os-bridge",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 293.75901666666664,
+      "p95": 302.791105,
+      "p99": 304.16488766666663,
+      "min": 286.7416666666667,
+      "max": 304.5083333333333,
+      "mean": 294.4122666666667,
+      "samples": 12,
+      "ops_per_sample": 10,
+      "notes": [
+        "App-owned file-import path from imported text bytes to the first rendered snapshot rows, excluding any system document picker UI."
+      ],
+      "metrics": {
+        "dirty_nodes": 32.0
+      }
+    },
+    {
+      "id": "cpu.bridge.share_payload_prepare",
+      "family": "bridge",
+      "layer": "bridge",
+      "scenario": "os-bridge",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 72.54062083333332,
+      "p95": 74.65106208333333,
+      "p99": 75.41021241666667,
+      "min": 71.67777499999998,
+      "max": 75.6,
+      "mean": 72.7728875,
+      "samples": 12,
+      "ops_per_sample": 24,
+      "notes": [
+        "App-owned share bridge path from selected records to a prepared share payload summary, excluding the system share sheet presentation."
+      ],
+      "metrics": {
+        "encoded_bytes": 74.0
+      }
+    },
+    {
+      "id": "cpu.bridge.local_json_transport_render",
+      "family": "bridge",
+      "layer": "bridge",
+      "scenario": "os-bridge",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 38.87589285714286,
+      "p95": 43.721207105263154,
+      "p99": 43.98424142105263,
+      "min": 37.76041818181819,
+      "max": 44.05,
+      "mean": 39.75169072207032,
+      "samples": 12,
+      "ops_per_sample": 10,
+      "notes": [
+        "App-owned localhost JSON transport path from bytes-ready through decode into the first rendered feed skeleton, excluding network stack and system UI."
+      ],
+      "metrics": {
+        "dirty_nodes": 48.0,
+        "encoded_bytes": 2007.0
+      }
+    },
+    {
+      "id": "cpu.bridge.local_image_transport_render",
+      "family": "bridge",
+      "layer": "bridge",
+      "scenario": "os-bridge",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 148.81805000000003,
+      "p95": 152.1118025,
+      "p99": 152.7473605,
+      "min": 146.83681666666664,
+      "max": 152.90625,
+      "mean": 149.2715277777778,
+      "samples": 12,
+      "ops_per_sample": 12,
+      "notes": [
+        "App-owned localhost image transport path from bytes-ready through decode into the first rendered hero image, excluding network stack and system UI."
+      ],
+      "metrics": {
+        "encoded_bytes": 26533.0,
+        "texture_bytes": 262144.0
+      }
+    }
+  ],
+  "coverage": {
+    "components_total": 9,
+    "components_covered": [
+      "Button",
+      "CollectionView",
+      "ImageView",
+      "Label",
+      "NineSliceImage",
+      "ProgressBar",
+      "Slider",
+      "Spinner",
+      "Toggle"
+    ],
+    "animations_total": 7,
+    "animations_covered": [
+      "AnimTimelineBars",
+      "ButtonPressScale",
+      "ImageZoomPan",
+      "ProgressIndeterminate",
+      "SliderThumbMove",
+      "SpinnerSpin",
+      "ToggleThumbSpring"
+    ],
+    "launch_total": 5,
+    "launch_covered": [
+      "Detail Deep Link Launch",
+      "Heavy Home Cold Launch",
+      "Heavy Home Foreground After Background",
+      "Simple Home Cold Launch",
+      "Simple Home Warm Resume"
+    ],
+    "primitive_lifecycle_total": 25,
+    "primitive_lifecycle_covered": [
+      "Cards 10 Mount",
+      "Cards 10 Mutate Palette",
+      "Cards 100 Mount",
+      "Cards 100 Mutate Palette",
+      "Control Set Mount",
+      "Control Set Mutate State",
+      "Empty Root Mount",
+      "Flat Rects 10 Mount",
+      "Flat Rects 10 Mutate Fill",
+      "Flat Rects 100 Mount",
+      "Flat Rects 100 Mutate Fill",
+      "Flat Rects 100 Remount",
+      "Flat Rects 100 Remove All",
+      "Flat Rects 1000 Mount",
+      "Flat Rects 1000 Mutate Fill",
+      "Images 10 Mount",
+      "Images 10 Mutate Alpha",
+      "Images 100 Mount",
+      "Images 100 Mutate Alpha",
+      "Labels 10 Mount",
+      "Labels 10 Mutate Text",
+      "Labels 100 Mount",
+      "Labels 100 Mutate Text",
+      "Labels 1000 Mount",
+      "Labels 1000 Mutate Text"
+    ],
+    "scenes_cpu_total": 17,
+    "scenes_cpu_covered": [
+      "Animation Timings",
+      "Animations",
+      "Camera",
+      "Collection Stress",
+      "Controls",
+      "Damage Lab",
+      "Elements Extended",
+      "Input & Haptics",
+      "Integration",
+      "Nine Slice",
+      "Permissions",
+      "SDF Text",
+      "Snapshot",
+      "Stress Test",
+      "Text Layout",
+      "UI Orchestration",
+      "Zoom Image"
+    ],
+    "scenes_gpu_total": 17,
+    "scenes_gpu_covered": [
+      "Animation Timings",
+      "Animations",
+      "Camera",
+      "Collection Stress",
+      "Controls",
+      "Damage Lab",
+      "Elements Extended",
+      "Input & Haptics",
+      "Integration",
+      "Nine Slice",
+      "Permissions",
+      "SDF Text",
+      "Snapshot",
+      "Stress Test",
+      "Text Layout",
+      "UI Orchestration",
+      "Zoom Image"
+    ],
+    "journeys_total": 7,
+    "journeys_covered": [
+      "Chat Thread Scroll Matrix",
+      "Collection Navigation",
+      "Feed Scroll Matrix",
+      "Input Form Submit",
+      "Orchestration Transition + Modal",
+      "Thumbnail Grid Scroll Matrix",
+      "Zoom Image Gesture Cycle"
+    ],
+    "authoring_total": 4,
+    "authoring_covered": [
+      "Burst Emitter",
+      "Popup Wheel Picker",
+      "Surface Router Composition",
+      "Text Fields"
+    ],
+    "layout_total": 3,
+    "layout_covered": [
+      "Deep Stack Theme Swap",
+      "Flat Grid Rotation Relayout",
+      "Grid Safe Area Swap"
+    ],
+    "text_input_total": 3,
+    "text_input_covered": [
+      "Large Editor Keystroke Burst",
+      "Large Editor Paste 10KB",
+      "Large Editor Selection Replace"
+    ],
+    "image_pipeline_total": 3,
+    "image_pipeline_covered": [
+      "PNG Decode",
+      "PNG First Visible",
+      "PNG Upload"
+    ],
+    "navigation_total": 3,
+    "navigation_covered": [
+      "Button Press Response",
+      "Slider Scrub Response",
+      "Text Focus Response"
+    ],
+    "reconcile_total": 4,
+    "reconcile_covered": [
+      "Single Node Mutation",
+      "Theme Swap Full",
+      "Tree Mutation 10Pct",
+      "Tree Mutation 1Pct"
+    ],
+    "endurance_total": 3,
+    "endurance_covered": [
+      "Idle Animation 600 Frames",
+      "Open Close Heavy Screen 100x",
+      "Tab Switch Heavy 500x"
+    ],
+    "stress_total": 3,
+    "stress_covered": [
+      "Flat Rects 10k Mount",
+      "Simultaneous Animations 300",
+      "Ticker 100 Hz"
+    ],
+    "bridges_total": 8,
+    "bridges_covered": [
+      "Bluetooth Cache Update",
+      "File Import Render",
+      "Local Image Transport Render",
+      "Local JSON Transport Render",
+      "Permission Callback Fanout",
+      "Photo Import Thumbnail",
+      "Sensor Location Snapshot",
+      "Share Payload Prepare"
+    ]
+  },
+  "contract": {
+    "layers": [
+      {
+        "id": "engine",
+        "label": "Engine Microbenchmarks",
+        "status": "implemented",
+        "notes": [
+          "Engine coverage currently spans system hot paths, primitive views, animations, primitive lifecycle slices, and author-facing APIs."
+        ]
+      },
+      {
+        "id": "flow",
+        "label": "Representative Screen Flows",
+        "status": "implemented",
+        "notes": [
+          "Flow coverage now spans offscreen launch/lifecycle, router scenes, and explicit user journeys, but hitch and device refresh-mode batteries are still incomplete."
+        ]
+      },
+      {
+        "id": "os-bridge",
+        "label": "OS-Bridge Benchmarks",
+        "status": "implemented",
+        "notes": [
+          "Bridge coverage currently measures only app-owned wrapper overhead, not system-owned surface cost as a renderer win."
+        ]
+      }
+    ],
+    "battery": [
+      {
+        "id": "launch-lifecycle",
+        "label": "Launch & Lifecycle",
+        "status": "implemented",
+        "notes": [
+          "Offscreen bootstrap now includes simple-home and heavy-home cold launch, route-driven detail launch, warm resume, and foreground-after-background lifecycle workloads."
+        ]
+      },
+      {
+        "id": "primitive-lifecycle",
+        "label": "Primitive Mount / Update / Destroy",
+        "status": "implemented",
+        "notes": [
+          "Flat rects, labels, cards, images, an empty-root slice, a shared control-set slice, and retained-tree remove-all/remount slices are all covered."
+        ]
+      },
+      {
+        "id": "layout-invalidation",
+        "label": "Layout & Invalidation",
+        "status": "implemented",
+        "notes": [
+          "Flat-grid rotation, deep-stack theme swap, and safe-area inset relayout batteries are all implemented."
+        ]
+      },
+      {
+        "id": "text-input",
+        "label": "Text & Text Input",
+        "status": "implemented",
+        "notes": [
+          "Large-editor keystroke, paste, and selection-replace workloads now complement the existing text-field and input-form coverage."
+        ]
+      },
+      {
+        "id": "image-pipeline",
+        "label": "Image Pipeline",
+        "status": "implemented",
+        "notes": [
+          "The committed image battery now splits PNG decode, Metal texture upload, and first-visible presentation into separate persisted workloads."
+        ]
+      },
+      {
+        "id": "lists-grids-chat",
+        "label": "Lists, Grids, & Chat",
+        "status": "implemented",
+        "notes": [
+          "Feed, thumbnail-grid, and chat-thread scroll matrices now exist alongside the collection encode and navigation slices."
+        ]
+      },
+      {
+        "id": "navigation-input",
+        "label": "Navigation & Input Latency",
+        "status": "implemented",
+        "notes": [
+          "Direct button-press, slider-scrub, and text-focus response batteries now complement the higher-level journey cases."
+        ]
+      },
+      {
+        "id": "animation-effects",
+        "label": "Animation & Visual Effects",
+        "status": "partial",
+        "notes": [
+          "Representative animations exist, but there is no dedicated hitch-ratio or refresh-mode matrix yet for 60 Hz versus native refresh."
+        ]
+      },
+      {
+        "id": "state-reconcile",
+        "label": "State Mutation & Reconciliation",
+        "status": "implemented",
+        "notes": [
+          "Single-node, 1 percent, 10 percent, and full-theme tree mutation batteries now expose diff/apply cost directly."
+        ]
+      },
+      {
+        "id": "os-bridge",
+        "label": "OS Bridge Overhead",
+        "status": "implemented",
+        "notes": [
+          "Permission, sensor, photo import, file import, share payload, and localhost transport/render bridge workloads are all covered without claiming system-owned UI as a renderer win."
+        ]
+      },
+      {
+        "id": "endurance-thermal",
+        "label": "Endurance, Memory, & Thermal Drift",
+        "status": "implemented",
+        "notes": [
+          "Open/close, tab-switch, and idle-animation endurance loops are now part of the committed Oxide battery."
+        ]
+      },
+      {
+        "id": "stress-pathological",
+        "label": "Stress & Pathological Regressions",
+        "status": "implemented",
+        "notes": [
+          "Dedicated 10k-node, 300-animation, and 100 Hz ticker traps now complement the router stress scene."
+        ]
+      }
+    ],
+    "notes": [
+      "The Oxide report is intentionally explicit about missing contract families so the battery does not over-claim comprehensiveness.",
+      "Current Oxide coverage now spans engine hot paths, launch/lifecycle, representative scenes, and bridge slices; the biggest remaining gaps are hitch-oriented flow metrics and real-device refresh-mode coverage."
+    ]
+  },
+  "findings": [
+    {
+      "status": "fixed",
+      "summary": "DrawListBuilder::clear now clears retained vertex and index storage, eliminating stale geometry accumulation when builders are reused across frames."
+    },
+    {
+      "status": "fixed",
+      "summary": "ui-core::prepare_draws now keeps cumulative clip intersections on the stack instead of rebuilding the full stack on every ClipPop."
+    },
+    {
+      "status": "fixed",
+      "summary": "ui-core::coalesce_adjacent_draws now uses a single linear compaction pass instead of Vec::remove-based quadratic merging."
+    },
+    {
+      "status": "candidate",
+      "summary": "renderer-metal still encodes rounded rectangles one draw at a time with per-draw parameter binding; that remains the clearest GPU-side batching opportunity on real Metal targets."
+    },
+    {
+      "status": "candidate",
+      "summary": "The macOS glyph indirect-command-buffer path is now default-disabled because Metal validation exposed CPU access to private ICB storage and an invalid ICB pipeline configuration; restoring it with a truly valid text ICB path remains a high-value GPU follow-up."
+    },
+    {
+      "status": "candidate",
+      "summary": "Label wrapping still re-shapes tentative strings per word and clones intermediate Strings, which is likely the next CPU hotspot for text-heavy wrapped layouts."
+    }
+  ]
+}

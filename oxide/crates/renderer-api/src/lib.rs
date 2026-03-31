@@ -176,7 +176,7 @@ pub enum DrawCmd {
     // as a request to composite the latest camera frame behind UI.
     // When unsupported on a platform, it is a no-op.
     CameraBg { rect: RectF, tint: Color, alpha: f32, grayscale: bool, blur: bool, sigma: f32 },
-    Spinner { center: [f32; 2], radius: f32, thickness: f32, phase: f32, alpha: f32 },
+    Spinner { center: [f32; 2], atom: f32, alpha: f32 },
     ClipPush { rect: RectI },
     ClipPop,
 }
@@ -199,14 +199,7 @@ pub trait RenderEncoder {
         _sigma: f32,
     ) {
     }
-    fn draw_spinner(
-        &mut self,
-        center: [f32; 2],
-        radius: f32,
-        thickness: f32,
-        phase: f32,
-        alpha: f32,
-    );
+    fn draw_spinner(&mut self, center: [f32; 2], atom: f32, alpha: f32);
     fn draw_glyph_run(&mut self, run: &GlyphRun);
 }
 

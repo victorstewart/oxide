@@ -19,6 +19,8 @@ use oxide_ui_core::{
     DrawListBuilder,
 };
 
+const LEGACY_BADGE_IMAGE: gfx::ImageHandle = gfx::ImageHandle(1);
+
 /// Performance metrics tracker
 struct PerformanceMetrics {
     frame_count: u64,
@@ -277,7 +279,6 @@ impl StressTestScene {
                 // Animate badges
                 for (i, (badge, state)) in self.badges.iter_mut().enumerate() {
                     if i as u64 % 30 == self.metrics.frame_count % 30 {
-                        badge.count = (badge.count % 99) + 1;
                         state.bounce(&badge.style);
                     }
                     // Badge animation handled internally
@@ -322,7 +323,6 @@ impl StressTestScene {
 
                 for (i, (badge, state)) in self.badges.iter_mut().enumerate() {
                     if i as u64 % 20 == self.metrics.frame_count % 20 {
-                        badge.count = (badge.count % 99) + 1;
                         state.bounce(&badge.style);
                     }
                     // Badge animation handled internally
@@ -361,7 +361,7 @@ impl StressTestScene {
                     };
 
                     self.badges
-                        .push((Badge { count: (i % 100) as u32, style }, BadgeState::default()));
+                        .push((Badge { image: LEGACY_BADGE_IMAGE, style }, BadgeState::default()));
                 }
             }
 
@@ -400,7 +400,7 @@ impl StressTestScene {
                     ));
 
                     self.badges.push((
-                        Badge { count: i as u32, style: BadgeStyle::default() },
+                        Badge { image: LEGACY_BADGE_IMAGE, style: BadgeStyle::default() },
                         BadgeState::default(),
                     ));
 
@@ -460,7 +460,7 @@ impl StressTestScene {
             ));
 
             self.badges.push((
-                Badge { count: i as u32, style: BadgeStyle::default() },
+                Badge { image: LEGACY_BADGE_IMAGE, style: BadgeStyle::default() },
                 BadgeState::default(),
             ));
 
@@ -733,7 +733,7 @@ impl StressTestScene {
                     );
 
                     if rect.y < content_area.y + content_area.h {
-                        badge.encode(rect, device_scale, text, uploader, state, builder);
+                        badge.encode(rect, state, builder);
                         self.metrics.draw_call_count += 1;
                     }
                 }
@@ -800,7 +800,7 @@ impl StressTestScene {
                         40.0,
                         40.0,
                     );
-                    badge.encode(rect, device_scale, text, uploader, state, builder);
+                    badge.encode(rect, state, builder);
                     self.metrics.draw_call_count += 1;
                 }
                 y_offset += 50.0;
@@ -897,7 +897,7 @@ impl StressTestScene {
                         35.0,
                         35.0,
                     );
-                    badge.encode(rect, device_scale, text, uploader, state, builder);
+                    badge.encode(rect, state, builder);
                     draw_count += 1;
                 }
 

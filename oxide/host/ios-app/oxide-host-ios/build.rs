@@ -4,12 +4,12 @@ fn main() {
     if target_os == "ios" {
         println!("cargo:rerun-if-changed=src/ios/app.m");
         let mut b = cc::Build::new();
-        b.file("src/ios/app.m")
-            .file("src/ios/location.m")
-            .file("src/ios/motion.m")
-            .flag("-fobjc-arc")
-            .flag("-fmodules")
-            .flag("-fcxx-modules");
+        b.file("src/ios/app.m").flag("-fobjc-arc").flag("-fmodules").flag("-fcxx-modules");
+        b.define("OXIDE_HOST_USE_PLATFORM_CAMERA", Some("1"));
+        if std::env::var_os("CARGO_FEATURE_PERF_HOST_STUBS").is_some() {
+            println!("cargo:rerun-if-changed=src/ios/perf_stubs.m");
+            b.file("src/ios/perf_stubs.m");
+        }
         if std::env::var_os("CARGO_FEATURE_IOS_EDR").is_some() {
             b.define("EDR_ENABLED", Some("1"));
         }

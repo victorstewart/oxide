@@ -115,7 +115,7 @@ fragment float4 f_spinner(UIVSOut in [[stage_in]], constant SpinnerParams* sarr 
                   - (1.0 - smoothstep(sp.radius + sp.thickness*0.5 - aa, sp.radius + sp.thickness*0.5 + aa, r));
     float alpha = (inArc ? 1.0 : 0.0) * clamp(ring, 0.0, 1.0) * sp.alpha;
     if (alpha <= 0.01) discard_fragment();
-    return float4(0.0, 0.0, 0.0, alpha);
+    return float4(236.0 / 255.0, 240.0 / 255.0, 241.0 / 255.0, alpha);
 }
 
 struct ImageParams { float4 rect; float4 srcRect; float2 texSize; float alpha; uint texIndex; };

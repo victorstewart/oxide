@@ -6,6 +6,21 @@ options:
 settings:
   base:
     IPHONEOS_DEPLOYMENT_TARGET: 18.0
+schemes:
+  OxideUIKitPerf:
+    build:
+      targets:
+        OxideHost:
+          - test
+        OxideHostPerfTests:
+          - test
+        OxideHostUITests:
+          - test
+      buildImplicitDependencies: false
+    test:
+      targets:
+        - OxideHostPerfTests
+        - OxideHostUITests
 targets:
   OxideHost:
     type: application
@@ -16,7 +31,10 @@ targets:
           - OxideHost.xcodeproj
           - project.yml
           - OxideHostUITests
+          - OxideHostPerfTests
+          - PerfShared
           - Resources
+      - path: PerfShared
     resources:
       - Info.plist
       - capabilities.toml
@@ -74,8 +92,8 @@ targets:
               ;;
           esac
           echo "Building Rust staticlib for ${RUST_TARGET}…"
-          (cd "${REPO_ROOT}/oxide/host/ios-app/oxide-host-ios" && \
-             cargo build -p oxide-host-ios --release --target "${RUST_TARGET}")
+          (cd "${REPO_ROOT}/host/ios-app/oxide-host-ios" && \
+             cargo build -p oxide-host-ios --release --features perf-host-stubs --target "${RUST_TARGET}")
           mkdir -p "${BUILT_PRODUCTS_DIR}"
           SRC="${CARGO_TARGET_DIR}/${RUST_TARGET}/release/liboxide_host_ios.a"
           cp -v "${SRC}" "${BUILT_PRODUCTS_DIR}/liboxide_host_ios.a"
@@ -96,3 +114,18 @@ targets:
         IPHONEOS_DEPLOYMENT_TARGET: 18.0
     dependencies:
       - target: OxideHost
+  OxideHostPerfTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: PerfShared
+      - path: OxideHostPerfTests
+    dependencies:
+      - target: OxideHost
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.oxide.host.PerfTests
+        INFOPLIST_FILE: OxideHostPerfTests/Info.plist
+        SWIFT_VERSION: 5.0
+        TARGETED_DEVICE_FAMILY: "1,2"
+        IPHONEOS_DEPLOYMENT_TARGET: 18.0

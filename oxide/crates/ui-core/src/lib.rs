@@ -20,6 +20,7 @@ pub mod bitmap_text;
 pub mod camera;
 pub mod capture;
 pub mod draw_replay;
+pub mod emitter;
 pub mod keyboard;
 pub mod layout_async;
 pub mod overlay;
@@ -35,14 +36,20 @@ pub use camera::{
     CameraPreviewNode, CameraRecordingUiEvent, CameraSession, CropperState, VolumeHudState,
 };
 pub use capture::SurfaceCapture;
+pub use emitter::{
+    BurstEmitter, BurstEmitterCellConfig, BurstEmitterConfig, BurstEmitterParticle,
+    BurstEmitterShape,
+};
 pub use keyboard::{KeyboardEventExt, KeyboardTracker};
 pub use layout_async::AsyncLayoutCoordinator;
 pub use overlay::{
-    OverlayBehavior, OverlayHandle, OverlayPointerResult, OverlayStack, OverlayVisual, PopupHandle,
-    PopupManager, PopupSpec,
+    OverlayBehavior, OverlayHandle, OverlayPointerResult, OverlayStack, OverlayVisual,
+    PopupCallbacks, PopupHandle, PopupManager, PopupSpec, PopupTouchRegion,
 };
 pub use permissions::{PermissionOverlayUi, PermissionPrompt};
-pub use picker_popup::{PanelPopupState, PopupTapRegion, PopupWheelPickerState, WheelPickerState};
+pub use picker_popup::{
+    PanelPopupState, PickerColumnCommit, PickerColumnState, PopupPickerState, PopupTapRegion,
+};
 pub use scroll_state::ScrollState;
 pub use sensors::{
     BluetoothSnapshot, LocationSnapshot, MotionSnapshot, PushSnapshot, SensorBridgeConfig,
@@ -89,6 +96,8 @@ impl DrawListBuilder {
     #[inline]
     pub fn clear(&mut self) {
         self.list.items.clear();
+        self.list.vertices.clear();
+        self.list.indices.clear();
         self.clip_stack.clear();
     }
 
@@ -156,15 +165,8 @@ impl DrawListBuilder {
         self.list.items.push(gfx::DrawCmd::CameraBg { rect, tint, alpha, grayscale, blur, sigma });
     }
 
-    pub fn spinner(
-        &mut self,
-        center: [f32; 2],
-        radius: f32,
-        thickness: f32,
-        phase: f32,
-        alpha: f32,
-    ) {
-        self.list.items.push(gfx::DrawCmd::Spinner { center, radius, thickness, phase, alpha });
+    pub fn spinner(&mut self, center: [f32; 2], atom: f32, alpha: f32) {
+        self.list.items.push(gfx::DrawCmd::Spinner { center, atom, alpha });
     }
 }
 
@@ -200,31 +202,17 @@ pub fn prepare_draws(list: &gfx::DrawList) -> alloc::vec::Vec<PreparedDraw> {
     for item in &list.items {
         match *item {
             C::ClipPush { rect } => {
-                current = Some(if let Some(cur) = current {
+                let next = if let Some(cur) = current {
                     intersect(cur, rect).unwrap_or(gfx::RectI { x: 0, y: 0, w: 0, h: 0 })
                 } else {
                     rect
-                });
-                stack.push(rect);
+                };
+                stack.push(next);
+                current = Some(next);
             }
             C::ClipPop => {
                 let _ = stack.pop();
-                // Recompute current from stack to avoid cumulative precision/logic errors
-                current = if stack.is_empty() {
-                    None
-                } else {
-                    let mut it = stack.iter();
-                    let mut acc = *it.next().unwrap();
-                    for r in it {
-                        if let Some(i) = intersect(acc, *r) {
-                            acc = i;
-                        } else {
-                            acc = gfx::RectI { x: 0, y: 0, w: 0, h: 0 };
-                            break;
-                        }
-                    }
-                    Some(acc)
-                };
+                current = stack.last().copied();
             }
             _ => {
                 out.push(PreparedDraw {
@@ -304,9 +292,9 @@ pub fn coalesce_adjacent_draws(list: &mut gfx::DrawList) {
         vb.len >= 3 && vb.len % 3 == 0
     }
 
-    let mut i = 0usize;
-    while i + 1 < list.items.len() {
-        let can_merge = match (&list.items[i], &list.items[i + 1]) {
+    #[inline]
+    fn can_merge(a: &C, b: &C) -> bool {
+        match (a, b) {
             (C::GlyphRun { .. }, C::GlyphRun { .. }) => false,
             (C::Solid { vb: av, ib: ai, color: ac }, C::Solid { vb: bv, ib: bi, color: bc }) => {
                 if ac != bc
@@ -321,31 +309,42 @@ pub fn coalesce_adjacent_draws(list: &mut gfx::DrawList) {
                 }
             }
             _ => false,
-        };
-        if can_merge {
-            {
-                // Use split_at_mut to get two distinct mutable refs without aliasing
-                let (left_slice, right_slice) = list.items.split_at_mut(i + 1);
-                let left = &mut left_slice[i];
-                let right = &mut right_slice[0];
-                match (left, right) {
-                    (C::GlyphRun { run: a }, C::GlyphRun { run: b }) => {
-                        a.vb.len += b.vb.len;
-                        a.ib.len += b.ib.len;
-                    }
-                    (C::Solid { vb: av, ib: ai, .. }, C::Solid { vb: bv, ib: bi, .. }) => {
-                        av.len += bv.len;
-                        ai.len += bi.len;
-                    }
-                    _ => {}
-                }
-            }
-            list.items.remove(i + 1);
-            // stay on same i to attempt merging multiple in a row
-        } else {
-            i += 1;
         }
     }
+
+    #[inline]
+    fn merge_into(dst: &mut C, src: C) {
+        match (dst, src) {
+            (C::Solid { vb: av, ib: ai, .. }, C::Solid { vb: bv, ib: bi, .. }) => {
+                av.len += bv.len;
+                ai.len += bi.len;
+            }
+            _ => {}
+        }
+    }
+
+    if list.items.len() < 2 {
+        return;
+    }
+
+    let items = core::mem::take(&mut list.items);
+    let mut out = alloc::vec::Vec::with_capacity(items.len());
+    let mut iter = items.into_iter();
+    let Some(mut current) = iter.next() else {
+        return;
+    };
+
+    for next in iter {
+        if can_merge(&current, &next) {
+            merge_into(&mut current, next);
+        } else {
+            out.push(current);
+            current = next;
+        }
+    }
+
+    out.push(current);
+    list.items = out;
 }
 
 extern crate alloc;

@@ -40,12 +40,26 @@ jobs:
           curl -L -o fonts/Inter-Regular.ttf https://github.com/rsms/inter/releases/download/v4.0/Inter-Regular.ttf || true
 
       - name: Unit tests (ui-core, timing)
-        run: cargo test -p oxide-ui-core -p oxide-timing
+        run: cargo test -j$(sysctl -n hw.ncpu) -p oxide-ui-core -p oxide-timing
+
+      - name: Perf tooling tests
+        run: |
+          cargo test -j$(sysctl -n hw.ncpu) -p oxide-perf-runner --test report_tests
+          cargo test -j$(sysctl -n hw.ncpu) -p xtask --tests
+          cargo test -j$(sysctl -n hw.ncpu) -p oxide-renderer-metal glyph_icb_cpu_recording_uses_shared_storage
+          cargo test -j$(sysctl -n hw.ncpu) -p oxide-renderer-metal macos_defaults_disable_icb_but_keep_layer_cache
 
       - name: Perf sweep
         run: |
           just --justfile ../Justfile sweep
           just --justfile ../Justfile aggregate
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Workspace perf compare
+        run: |
+          cargo run --release -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --compare benchmarks/workspace/latest.json --json-out benchmarks/workspace/ci-current.json --markdown-out benchmarks/workspace/ci-current.md
 
       - name: Static goldens
         env:
@@ -68,6 +82,8 @@ jobs:
             sweep.txt
             ../sweep.csv
             ../sweep.json
+            benchmarks/workspace/ci-current.json
+            benchmarks/workspace/ci-current.md
             artifacts/static
             artifacts/anim
 

@@ -250,14 +250,22 @@ extern "C" {
     fn oxide_cam_record_stop() -> i32;
     fn oxide_cam_record_cancel() -> i32;
     fn oxide_host_set_camera_running(on: u8) -> ::libc::c_int;
+    #[cfg(not(all(test, not(target_os = "ios"))))]
     fn oxide_host_set_location_callback(
         cb: Option<unsafe extern "C" fn(*const OxideLocationSample)>,
     );
+    #[cfg(not(all(test, not(target_os = "ios"))))]
     fn oxide_host_set_location_error_callback(cb: Option<unsafe extern "C" fn(*const u8, usize)>);
+    #[cfg(not(all(test, not(target_os = "ios"))))]
     fn oxide_host_location_start(cfg: OxideLocationConfig) -> i32;
+    #[cfg(not(all(test, not(target_os = "ios"))))]
     fn oxide_host_location_stop();
+    #[cfg(not(all(test, not(target_os = "ios"))))]
     fn oxide_host_location_request_once();
+    #[cfg(not(all(test, not(target_os = "ios"))))]
     fn oxide_host_location_last(out: *mut OxideLocationSample) -> u8;
+    #[cfg(not(all(test, not(target_os = "ios"))))]
+    fn oxide_host_location_set_accuracy(accuracy_kind: u32) -> i32;
     fn oxide_host_set_motion_callback(cb: Option<unsafe extern "C" fn(*const OxideMotionSample)>);
     fn oxide_host_motion_start() -> i32;
     fn oxide_host_motion_stop();
@@ -589,7 +597,8 @@ impl LocationService for IosLocation {
             accuracy_kind: match opts.accuracy {
                 LocationAccuracy::Reduced => 0,
                 LocationAccuracy::Balanced => 1,
-                LocationAccuracy::Precise => 2,
+                LocationAccuracy::LowPower => 2,
+                LocationAccuracy::Precise => 3,
             },
             distance_filter_m: f64::from(opts.distance_filter_m),
             allow_background: if opts.allow_background_updates { 1 } else { 0 },
@@ -657,9 +666,18 @@ impl LocationService for IosLocation {
         Some(Box::new(IosGeoRegionTracker::new()))
     }
 
-    fn set_accuracy(&self, _accuracy: LocationAccuracy) -> Result<(), PlatformError> {
-        // Not directly supported by current FFI, would require stopping and restarting location services
-        Err(PlatformError::Unsupported("Changing location accuracy not supported after start"))
+    fn set_accuracy(&self, accuracy: LocationAccuracy) -> Result<(), PlatformError> {
+        let accuracy_kind = match accuracy {
+            LocationAccuracy::Reduced => 0,
+            LocationAccuracy::Balanced => 1,
+            LocationAccuracy::LowPower => 2,
+            LocationAccuracy::Precise => 3,
+        };
+        let rc = unsafe { oxide_host_location_set_accuracy(accuracy_kind) };
+        if rc != 0 {
+            return Err(PlatformError::Unsupported("location accuracy update failed"));
+        }
+        Ok(())
     }
 }
 
@@ -2913,11 +2931,16 @@ impl UrlSchemeHandler for IosUrlSchemeHandler {
 #[cfg(feature = "tokio-runtime")]
 pub fn init_tokio_spawn() {
     use once_cell::sync::OnceCell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     static RT: OnceCell<tokio::runtime::Runtime> = OnceCell::new();
+    static NEXT_WORKER_INDEX: AtomicUsize = AtomicUsize::new(0);
     runtime::set_spawn(|fut| {
         let rt = RT.get_or_init(|| {
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(std::cmp::min(4, num_cpus::get()))
+                .thread_name_fn(|| {
+                    format!("oxide-tokio-{}", NEXT_WORKER_INDEX.fetch_add(1, Ordering::Relaxed))
+                })
                 .enable_all()
                 .build()
                 .expect("tokio runtime")
@@ -2926,9 +2949,61 @@ pub fn init_tokio_spawn() {
     });
 }
 
+#[cfg(all(test, not(target_os = "ios")))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oxide_host_set_location_callback(
+    _cb: Option<unsafe extern "C" fn(*const OxideLocationSample)>,
+) {
+}
+
+#[cfg(all(test, not(target_os = "ios")))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oxide_host_set_location_error_callback(
+    _cb: Option<unsafe extern "C" fn(*const u8, usize)>,
+) {
+}
+
+#[cfg(all(test, not(target_os = "ios")))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oxide_host_location_start(_cfg: OxideLocationConfig) -> i32 {
+    0
+}
+
+#[cfg(all(test, not(target_os = "ios")))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oxide_host_location_stop() {}
+
+#[cfg(all(test, not(target_os = "ios")))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oxide_host_location_request_once() {}
+
+#[cfg(all(test, not(target_os = "ios")))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oxide_host_location_last(_out: *mut OxideLocationSample) -> u8 {
+    0
+}
+
+#[cfg(all(test, not(target_os = "ios")))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oxide_host_location_set_accuracy(_accuracy_kind: u32) -> i32 {
+    0
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use oxide_platform_api::telephony::normalize_country_iso;
+    use std::sync::{Arc, Mutex};
+
+    static LOCATION_TEST_MUTEX: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+    fn reset_location_state_for_tests() {
+        LOCATION_SUBS.lock().unwrap().clear();
+        *LOCATION_LAST.lock().unwrap() = None;
+        LOCATION_HISTORY.lock().unwrap().clear();
+        LOCATION_REGIONS.lock().unwrap().entries.clear();
+        LOCATION_RUNNING.store(false, Ordering::SeqCst);
+    }
 
     #[test]
     fn parse_country_iso_accepts_alpha_two_code() {
@@ -2941,5 +3016,85 @@ mod tests {
         assert_eq!(normalize_country_iso(""), None);
         assert_eq!(normalize_country_iso("USA"), None);
         assert_eq!(normalize_country_iso("1A"), None);
+    }
+
+    #[test]
+    fn location_update_trampoline_caches_last_and_history() {
+        let _guard = LOCATION_TEST_MUTEX.lock().unwrap();
+        reset_location_state_for_tests();
+
+        let sample = OxideLocationSample {
+            latitude: 37.3349,
+            longitude: -122.0090,
+            altitude: 14.0,
+            horizontal_accuracy: 6.0,
+            vertical_accuracy: 8.0,
+            speed: 2.5,
+            course: 90.0,
+            timestamp_ms: 42,
+        };
+
+        unsafe {
+            oxide_location_update_trampoline(&sample);
+        }
+
+        let service = IosLocation;
+        let last = service.last().expect("last location");
+        assert_eq!(last.latitude_deg, sample.latitude);
+        assert_eq!(last.longitude_deg, sample.longitude);
+        assert_eq!(last.timestamp_ms, sample.timestamp_ms);
+        assert_eq!(service.history(), vec![last]);
+    }
+
+    #[test]
+    fn location_region_tracker_emits_enter_and_exit_events() {
+        let _guard = LOCATION_TEST_MUTEX.lock().unwrap();
+        reset_location_state_for_tests();
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service = IosLocation;
+        let tracker = service.region_tracker().expect("region tracker");
+        tracker
+            .set_regions(&[GeoRegion {
+                hash: GeoHash(0),
+                center: (37.3349, -122.0090),
+                radius_m: 50.0,
+            }])
+            .expect("set regions");
+
+        let events_sink = events.clone();
+        service.subscribe(Box::new(move |event| {
+            events_sink.lock().unwrap().push(event);
+        }));
+
+        let inside = OxideLocationSample {
+            latitude: 37.3349,
+            longitude: -122.0090,
+            altitude: 10.0,
+            horizontal_accuracy: 5.0,
+            vertical_accuracy: 5.0,
+            speed: 0.0,
+            course: 0.0,
+            timestamp_ms: 1,
+        };
+        let outside = OxideLocationSample {
+            latitude: 37.3400,
+            longitude: -122.0150,
+            altitude: 10.0,
+            horizontal_accuracy: 5.0,
+            vertical_accuracy: 5.0,
+            speed: 0.0,
+            course: 0.0,
+            timestamp_ms: 2,
+        };
+
+        unsafe {
+            oxide_location_update_trampoline(&inside);
+            oxide_location_update_trampoline(&outside);
+        }
+
+        let events = events.lock().unwrap().clone();
+        assert!(events.iter().any(|event| matches!(event, LocationEvent::EnteredRegion(_))));
+        assert!(events.iter().any(|event| matches!(event, LocationEvent::ExitedRegion(_))));
     }
 }

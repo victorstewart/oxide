@@ -1,10 +1,15 @@
 use oxide_platform_api::{
     clipboard, AutoCapitalization, KeyboardAppearance, ReturnKeyType, TextContentType, TextEvent,
 };
+use oxide_renderer_api::{Color, DrawCmd, ImageHandle, RectF};
 use oxide_ui_core::elements::{
-    OverlayState, PickerState, PickerStyle, TextInputState, TextValidation,
+    Badge, BadgeState, Overlay, OverlayState, PickerState, PickerStyle, PopupWindow,
+    SlidingSwitchMode, SlidingSwitchState, SlidingSwitchStyle, Spinner, TextInputState,
+    TextValidation,
 };
 use std::sync::{Arc, RwLock};
+use std::thread;
+use std::time::Duration;
 
 #[test]
 fn text_input_validates_and_commits() {
@@ -39,6 +44,178 @@ fn overlay_animates_open_close() {
 }
 
 #[test]
+fn overlay_default_backdrop_matches_legacy_popup_blur_base_targets() {
+    let overlay = Overlay::default();
+    let backdrop =
+        overlay.backdrop_spec(RectF::new(0.0, 0.0, 240.0, 480.0), 1.0, 1.0).expect("backdrop");
+
+    assert_eq!(backdrop.sigma, 18.0);
+    assert_eq!(backdrop.tint, oxide_renderer_api::Color::rgba(0.0, 0.0, 0.0, 1.0));
+    assert_eq!(backdrop.alpha, 0.90);
+}
+
+#[test]
+fn popup_window_default_chrome_matches_legacy_popup_blur_base_targets() {
+    let popup = PopupWindow::default();
+    let chrome = popup.chrome(RectF::new(10.0, 20.0, 200.0, 120.0), 2.0);
+
+    assert_eq!(chrome.panel_backdrop.sigma, 32.0);
+    assert_eq!(chrome.panel_backdrop.alpha, 0.50);
+    assert!((chrome.panel_radius - 18.0).abs() <= f32::EPSILON);
+    assert!((chrome.border_width - 2.0).abs() <= f32::EPSILON);
+    assert!((chrome.panel_inner_rect.x - 12.0).abs() <= f32::EPSILON);
+    assert!((chrome.panel_inner_rect.y - 22.0).abs() <= f32::EPSILON);
+    assert!((chrome.panel_inner_rect.w - 196.0).abs() <= f32::EPSILON);
+    assert!((chrome.panel_inner_rect.h - 116.0).abs() <= f32::EPSILON);
+    assert!((chrome.panel_inner_radius - 16.0).abs() <= f32::EPSILON);
+}
+
+#[test]
+fn popup_window_encode_emits_backdrop_shell_and_inner_fill() {
+    let popup = PopupWindow::default();
+    let mut builder = oxide_ui_core::DrawListBuilder::new();
+    popup.encode(RectF::new(10.0, 20.0, 200.0, 120.0), 1.0, &mut builder);
+
+    assert_eq!(builder.drawlist().items.len(), 3);
+    assert!(matches!(builder.drawlist().items[0], DrawCmd::Backdrop { .. }));
+    assert!(matches!(builder.drawlist().items[1], DrawCmd::RRect { .. }));
+    assert!(matches!(builder.drawlist().items[2], DrawCmd::RRect { .. }));
+}
+
+#[test]
+fn badge_rect_matches_legacy_badgeable_button_geometry() {
+    let badge = Badge::default();
+    let host_rect = RectF::new(12.0, 24.0, 80.0, 80.0);
+
+    assert_eq!(badge.style.bounce_duration_ms, 450);
+    assert_eq!(badge.style.color, Color::rgba(231.0 / 255.0, 76.0 / 255.0, 60.0 / 255.0, 1.0));
+    assert_eq!(badge.rect(host_rect), RectF::new(82.0, 24.0, 20.0, 20.0));
+}
+
+#[test]
+fn badge_encode_prefers_image_draw_when_handle_present() {
+    let badge = Badge { image: ImageHandle(91), style: Badge::default().style };
+    let mut builder = oxide_ui_core::DrawListBuilder::new();
+    badge.encode(RectF::new(10.0, 20.0, 80.0, 80.0), &BadgeState::default(), &mut builder);
+
+    assert_eq!(builder.drawlist().items.len(), 1);
+    match &builder.drawlist().items[0] {
+        DrawCmd::Image { tex, dst, src, alpha } => {
+            assert_eq!(*tex, ImageHandle(91));
+            assert_eq!(*dst, RectF::new(80.0, 20.0, 20.0, 20.0));
+            assert_eq!(*src, RectF::new(0.0, 0.0, 1.0, 1.0));
+            assert_eq!(*alpha, 1.0);
+        }
+        other => panic!("expected badge image draw, got {:?}", other),
+    }
+}
+
+#[test]
+fn badge_encode_falls_back_to_legacy_red_circle_when_image_missing() {
+    let badge = Badge::default();
+    let mut builder = oxide_ui_core::DrawListBuilder::new();
+    badge.encode(RectF::new(10.0, 20.0, 80.0, 80.0), &BadgeState::default(), &mut builder);
+
+    assert_eq!(builder.drawlist().items.len(), 1);
+    match &builder.drawlist().items[0] {
+        DrawCmd::RRect { rect, radii, color } => {
+            assert_eq!(*rect, RectF::new(80.0, 20.0, 20.0, 20.0));
+            assert_eq!(*radii, [10.0; 4]);
+            assert_eq!(*color, badge.style.color);
+        }
+        other => panic!("expected badge fallback draw, got {:?}", other),
+    }
+}
+
+#[test]
+fn spinner_defaults_match_legacy_large_indicator_contract() {
+    let spinner = Spinner::default();
+
+    assert_eq!(spinner.alpha, 1.0);
+    assert!((Spinner::LEGACY_LARGE_STYLE_ATOM - 37.0).abs() <= f32::EPSILON);
+    assert!((Spinner::LEGACY_LARGE_STYLE_STROKE - 2.5).abs() <= f32::EPSILON);
+    assert_eq!(
+        Spinner::LEGACY_BASE_TINT,
+        Color::rgba(236.0 / 255.0, 240.0 / 255.0, 241.0 / 255.0, 1.0)
+    );
+    assert_eq!(Spinner::LEGACY_ROTATION_MS, 1_000);
+}
+
+#[test]
+fn spinner_encode_uses_rect_atom_without_caller_phase() {
+    let spinner = Spinner { alpha: 0.55 };
+    let mut builder = oxide_ui_core::DrawListBuilder::new();
+    spinner.encode(RectF::new(10.0, 20.0, 24.0, 30.0), &mut builder);
+
+    assert_eq!(builder.drawlist().items.len(), 1);
+    match &builder.drawlist().items[0] {
+        DrawCmd::Spinner { center, atom, alpha } => {
+            assert_eq!(*center, [22.0, 35.0]);
+            assert_eq!(*atom, 24.0);
+            assert_eq!(*alpha, 0.55);
+        }
+        other => panic!("expected spinner draw, got {:?}", other),
+    }
+}
+
+#[test]
+fn sliding_switch_waits_for_legacy_long_press_before_dragging() {
+    let bounds = RectF::new(0.0, 0.0, 120.0, 24.0);
+    let mut state = SlidingSwitchState::default();
+
+    assert!(state.begin_drag([12.0, 12.0], bounds));
+    assert_eq!(state.mode, SlidingSwitchMode::Pressing);
+    assert!(!state.drag_to([48.0, 12.0], bounds));
+    assert_eq!(state.progress(bounds), 0.0);
+
+    thread::sleep(Duration::from_millis(350));
+
+    assert!(!state.drag_to([48.0, 12.0], bounds));
+    assert_eq!(state.mode, SlidingSwitchMode::Dragging);
+    assert!(state.progress(bounds) > 0.0);
+}
+
+#[test]
+fn sliding_switch_triggers_at_legacy_max_offset() {
+    let bounds = RectF::new(0.0, 0.0, 120.0, 24.0);
+    let mut state = SlidingSwitchState::default();
+
+    assert!(state.begin_drag([12.0, 12.0], bounds));
+    thread::sleep(Duration::from_millis(350));
+
+    assert!(state.drag_to([96.0, 12.0], bounds));
+    assert_eq!(state.mode, SlidingSwitchMode::Triggered);
+    assert!((state.progress(bounds) - 1.0).abs() <= f32::EPSILON);
+}
+
+#[test]
+fn sliding_switch_cancels_when_pointer_leaves_bounds() {
+    let bounds = RectF::new(0.0, 0.0, 120.0, 24.0);
+    let mut state = SlidingSwitchState::default();
+
+    assert!(state.begin_drag([12.0, 12.0], bounds));
+    thread::sleep(Duration::from_millis(350));
+    assert!(!state.drag_to([40.0, 12.0], bounds));
+    assert!(state.progress(bounds) > 0.0);
+
+    assert!(!state.drag_to([140.0, 12.0], bounds));
+    assert_eq!(state.mode, SlidingSwitchMode::Idle);
+    assert_eq!(state.progress(bounds), 0.0);
+}
+
+#[test]
+fn sliding_switch_inactive_event_fires_once_after_timeout() {
+    let style = SlidingSwitchStyle { inactive_timeout_ms: 10, ..SlidingSwitchStyle::default() };
+    let mut state = SlidingSwitchState::default();
+
+    state.start(&style);
+    thread::sleep(Duration::from_millis(20));
+
+    assert!(state.take_inactive());
+    assert!(!state.take_inactive());
+}
+
+#[test]
 fn picker_selection_tracks_scroll() {
     let mut picker =
         PickerState::new(vec!["Alpha".to_string(), "Beta".to_string(), "Gamma".to_string()]);
@@ -53,6 +230,40 @@ fn picker_selection_tracks_scroll() {
     picker.set_items(vec!["Solo".to_string()]);
     assert_eq!(picker.selection(), 0);
     assert_eq!(picker.selection_label(), Some("Solo"));
+}
+
+#[test]
+fn picker_multi_column_layout_matches_legacy_three_row_contract() {
+    let style = PickerStyle::default();
+    let rect = RectF::new(10.0, 20.0, 180.0, 90.0);
+
+    assert_eq!(style.row_height(rect), 30.0);
+    assert_eq!(style.center_band_rect(rect), RectF::new(10.0, 50.0, 180.0, 30.0));
+    assert_eq!(style.center_band_radius(rect), 7.5);
+    assert_eq!(style.column_rect(rect, 2, 0), Some(RectF::new(10.0, 20.0, 90.0, 90.0)));
+    assert_eq!(style.column_rect(rect, 2, 1), Some(RectF::new(100.0, 20.0, 90.0, 90.0)));
+    assert_eq!(style.item_rect(rect, 2, 0, 0.0, 0), Some(RectF::new(10.0, 50.0, 90.0, 30.0)));
+    assert_eq!(style.item_rect(rect, 2, 1, 1.0, 1), Some(RectF::new(100.0, 50.0, 90.0, 30.0)));
+}
+
+#[test]
+fn picker_multi_column_state_tracks_each_column_selection() {
+    let mut picker = PickerState::from_columns(vec![
+        vec!["One".to_string(), "Two".to_string()],
+        vec!["Red".to_string(), "Blue".to_string(), "Green".to_string()],
+    ]);
+
+    assert_eq!(picker.column_count(), 2);
+    assert_eq!(picker.column_selection(0), Some(0));
+    assert_eq!(picker.column_selection(1), Some(0));
+
+    assert!(picker.scroll_column(1, -1.0));
+    picker.tick(0);
+    assert_eq!(picker.column_selection(1), Some(1));
+    assert_eq!(picker.column_selection_label(1), Some("Blue"));
+
+    assert!(picker.set_column_selection(0, 1));
+    assert_eq!(picker.column_selection_label(0), Some("Two"));
 }
 
 #[test]

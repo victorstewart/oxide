@@ -3,10 +3,21 @@ name = "oxide-perf-runner"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+path = "src/lib.rs"
+
 [dependencies]
+anyhow = "1.0"
+oxide-harness-registry = { path = "../harness-registry" }
+oxide-input = { path = "../input" }
+oxide-permissions = { path = "../permissions" }
+oxide-platform-api = { path = "../platform-api" }
 oxide-renderer-metal = { path = "../renderer-metal" }
 oxide-renderer-api = { path = "../renderer-api" }
-oxide-ui-core = { path = "../ui-core" }
+oxide-test-scenes = { path = "../test-scenes" }
 oxide-text = { path = "../text" }
 oxide-timing = { path = "../timing" }
-oxide-test-scenes = { path = "../test-scenes" }
+oxide-ui-core = { path = "../ui-core" }
+png = "0.17"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

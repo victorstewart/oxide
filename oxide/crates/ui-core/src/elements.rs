@@ -270,24 +270,86 @@ impl UICameraView {
 
 // ----- Spinner -----
 
+/// Legacy iOS spinner contract backed by `UIActivityIndicatorViewStyleLarge`.
+///
+/// The shared API owns sizing and animation defaults so callers no longer
+/// pass renderer-specific stroke or phase data.
 pub struct Spinner {
-    pub thickness: f32,
     pub alpha: f32,
 }
 
 impl Default for Spinner {
     fn default() -> Self {
-        Self { thickness: 2.5, alpha: 1.0 }
+        Self { alpha: 1.0 }
     }
 }
 
 impl Spinner {
-    pub fn encode(&self, rect: gfx::RectF, phase: f32, b: &mut DrawListBuilder) {
+    pub const LEGACY_LARGE_STYLE_ATOM: f32 = 37.0;
+    pub const LEGACY_LARGE_STYLE_STROKE: f32 = 2.5;
+    pub const LEGACY_BASE_TINT: gfx::Color =
+        gfx::Color::rgba(236.0 / 255.0, 240.0 / 255.0, 241.0 / 255.0, 1.0);
+    pub const LEGACY_ROTATION_MS: u64 = 1_000;
+
+    #[must_use]
+    pub fn atom_for_rect(rect: gfx::RectF) -> f32 {
+        rect.w.min(rect.h).max(1.0)
+    }
+
+    #[must_use]
+    pub fn center_for_rect(rect: gfx::RectF) -> [f32; 2] {
         let cx = rect.x + rect.w * 0.5;
         let cy = rect.y + rect.h * 0.5;
-        let radius = 0.5 * rect.w.min(rect.h) - self.thickness.max(1.0);
+        [cx, cy]
+    }
+
+    #[must_use]
+    pub fn rect_for_center(center: [f32; 2], atom: f32) -> gfx::RectF {
+        let clamped_atom = atom.max(1.0);
+        gfx::RectF::new(
+            center[0] - clamped_atom * 0.5,
+            center[1] - clamped_atom * 0.5,
+            clamped_atom,
+            clamped_atom,
+        )
+    }
+
+    #[must_use]
+    pub fn fallback_phase_ms(now_ms: u64) -> f32 {
+        let progress = (now_ms % Self::LEGACY_ROTATION_MS) as f32 / Self::LEGACY_ROTATION_MS as f32;
+        progress * core::f32::consts::TAU
+    }
+
+    #[must_use]
+    pub fn fallback_thickness(atom: f32) -> f32 {
+        (atom.max(1.0) / Self::LEGACY_LARGE_STYLE_ATOM * Self::LEGACY_LARGE_STYLE_STROKE).max(1.0)
+    }
+
+    #[must_use]
+    pub fn fallback_radius(atom: f32) -> f32 {
+        let clamped_atom = atom.max(1.0);
+        (clamped_atom * 0.5 - Self::fallback_thickness(clamped_atom)).max(2.0)
+    }
+
+    pub fn encode(&self, rect: gfx::RectF, b: &mut DrawListBuilder) {
+        self.encode_at(Self::center_for_rect(rect), Self::atom_for_rect(rect), b);
+    }
+
+    pub fn encode_at(&self, center: [f32; 2], atom: f32, b: &mut DrawListBuilder) {
+        debug_assert!(center[0].is_finite() && center[1].is_finite());
+        debug_assert!(atom.is_finite() && atom > 0.0);
         let alpha = self.alpha.clamp(0.0, 1.0);
-        b.spinner([cx, cy], radius.max(2.0), self.thickness, phase, alpha);
+        b.spinner(center, atom.max(1.0), alpha);
+    }
+
+    pub fn draw(&self, rect: gfx::RectF, encoder: &mut dyn gfx::RenderEncoder) {
+        self.draw_at(Self::center_for_rect(rect), Self::atom_for_rect(rect), encoder);
+    }
+
+    pub fn draw_at(&self, center: [f32; 2], atom: f32, encoder: &mut dyn gfx::RenderEncoder) {
+        debug_assert!(center[0].is_finite() && center[1].is_finite());
+        debug_assert!(atom.is_finite() && atom > 0.0);
+        encoder.draw_spinner(center, atom.max(1.0), self.alpha.clamp(0.0, 1.0));
     }
 }
 
@@ -1754,6 +1816,7 @@ fn clamp_index(s: &str, idx: usize) -> usize {
     cmp::min(idx, s.chars().count())
 }
 
+/// Fullscreen modal-overlay blur parameters after resolving the current viewport and animation state.
 #[derive(Clone, Copy, Debug)]
 pub struct OverlayStyle {
     pub tint: gfx::Color,
@@ -1763,8 +1826,17 @@ pub struct OverlayStyle {
 
 impl Default for OverlayStyle {
     fn default() -> Self {
-        Self { tint: gfx::Color::rgba(0.0, 0.08, 0.20, 1.0), alpha: 0.35, blur_sigma: 18.0 }
+        Self { tint: gfx::Color::rgba(0.0, 0.0, 0.0, 1.0), alpha: 0.90, blur_sigma: 18.0 }
     }
+}
+
+/// Resolved fullscreen backdrop draw for a modal overlay.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BackdropSpec {
+    pub rect: gfx::RectF,
+    pub sigma: f32,
+    pub tint: gfx::Color,
+    pub alpha: f32,
 }
 
 pub struct OverlayState {
@@ -1827,39 +1899,79 @@ impl Default for Overlay {
 }
 
 impl Overlay {
+    /// Resolves the fullscreen backdrop draw that matches the legacy iOS modal overlay contract.
+    #[must_use]
+    pub fn backdrop_spec(
+        &self,
+        rect: gfx::RectF,
+        progress: f32,
+        device_scale: f32,
+    ) -> Option<BackdropSpec> {
+        let alpha = self.style.alpha * progress.clamp(0.0, 1.0);
+        if alpha <= f32::EPSILON {
+            return None;
+        }
+        Some(BackdropSpec {
+            rect,
+            sigma: self.style.blur_sigma * device_scale,
+            tint: self.style.tint,
+            alpha,
+        })
+    }
+
     pub fn encode(
         &self,
         state: &OverlayState,
         viewport: gfx::RectF,
+        device_scale: f32,
         builder: &mut DrawListBuilder,
     ) -> bool {
         if !state.is_visible() {
             return false;
         }
-        let alpha = self.style.alpha * state.progress();
-        if alpha <= f32::EPSILON {
+        let Some(backdrop) = self.backdrop_spec(viewport, state.progress(), device_scale) else {
             return false;
-        }
-        builder.backdrop(viewport, self.style.blur_sigma, self.style.tint, alpha);
+        };
+        builder.backdrop(backdrop.rect, backdrop.sigma, backdrop.tint, backdrop.alpha);
         true
     }
 }
 
+/// Shared popup chrome parameters for the legacy iOS blur-card treatment.
 #[derive(Clone, Copy, Debug)]
 pub struct PopupStyle {
-    pub radius: f32,
-    pub body: gfx::Color,
-    pub outline: gfx::Color,
+    pub blur_tint: gfx::Color,
+    pub panel_backdrop_alpha: f32,
+    pub panel_backdrop_sigma: f32,
+    pub corner_radius_scale: f32,
+    pub border_width_points: f32,
+    pub shell_color: gfx::Color,
+    pub inner_fill_color: gfx::Color,
 }
 
 impl Default for PopupStyle {
     fn default() -> Self {
         Self {
-            radius: 14.0,
-            body: gfx::Color::rgba(1.0, 1.0, 1.0, 0.97),
-            outline: gfx::Color::rgba(0.26, 0.46, 0.86, 0.35),
+            blur_tint: gfx::Color::rgba(0.0, 0.0, 0.0, 1.0),
+            panel_backdrop_alpha: 0.50,
+            panel_backdrop_sigma: 16.0,
+            corner_radius_scale: 0.09,
+            border_width_points: 1.0,
+            shell_color: gfx::Color::rgba(236.0 / 255.0, 240.0 / 255.0, 241.0 / 255.0, 1.0),
+            inner_fill_color: gfx::Color::rgba(0.0, 0.0, 0.0, 0.18),
         }
     }
+}
+
+/// Resolved geometry and blur state for a popup panel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PopupChrome {
+    pub panel_backdrop: BackdropSpec,
+    pub panel_rect: gfx::RectF,
+    pub panel_radius: f32,
+    pub border_width: f32,
+    pub panel_inner_rect: gfx::RectF,
+    pub panel_inner_radius: f32,
 }
 
 pub struct PopupWindow {
@@ -1873,62 +1985,105 @@ impl Default for PopupWindow {
 }
 
 impl PopupWindow {
-    pub fn encode(&self, rect: gfx::RectF, builder: &mut DrawListBuilder) {
-        builder.rrect(rect, [self.style.radius; 4], self.style.body);
-        let outline = gfx::RectF::new(rect.x - 1.0, rect.y - 1.0, rect.w + 2.0, rect.h + 2.0);
-        builder.rrect(outline, [self.style.radius + 1.0; 4], self.style.outline);
+    /// Resolves the legacy popup blur-card chrome for a panel rect at the current device scale.
+    #[must_use]
+    pub fn chrome(&self, rect: gfx::RectF, device_scale: f32) -> PopupChrome {
+        let border_width = (self.style.border_width_points * device_scale).max(1.0);
+        let panel_radius = rect.w * self.style.corner_radius_scale;
+        let panel_inner_rect = gfx::RectF::new(
+            rect.x + border_width,
+            rect.y + border_width,
+            (rect.w - border_width * 2.0).max(0.0),
+            (rect.h - border_width * 2.0).max(0.0),
+        );
+        let panel_inner_radius = (panel_radius - border_width).max(0.0);
+        PopupChrome {
+            panel_backdrop: BackdropSpec {
+                rect,
+                sigma: self.style.panel_backdrop_sigma * device_scale,
+                tint: self.style.blur_tint,
+                alpha: self.style.panel_backdrop_alpha,
+            },
+            panel_rect: rect,
+            panel_radius,
+            border_width,
+            panel_inner_rect,
+            panel_inner_radius,
+        }
+    }
+
+    pub fn encode(&self, rect: gfx::RectF, device_scale: f32, builder: &mut DrawListBuilder) {
+        let chrome = self.chrome(rect, device_scale);
+        builder.backdrop(
+            chrome.panel_backdrop.rect,
+            chrome.panel_backdrop.sigma,
+            chrome.panel_backdrop.tint,
+            chrome.panel_backdrop.alpha,
+        );
+        builder.rrect(chrome.panel_rect, [chrome.panel_radius; 4], self.style.shell_color);
+        if chrome.panel_inner_rect.w > 0.0 && chrome.panel_inner_rect.h > 0.0 {
+            builder.rrect(
+                chrome.panel_inner_rect,
+                [chrome.panel_inner_radius; 4],
+                self.style.inner_fill_color,
+            );
+        }
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct PickerState {
+struct PickerColumn {
     items: Vec<String>,
     offset: f32,
     velocity: f32,
     selection: usize,
 }
 
-impl PickerState {
-    pub fn new(items: Vec<String>) -> Self {
-        let selection = 0;
-        Self { items, offset: selection as f32, velocity: 0.0, selection }
+impl PickerColumn {
+    fn new(items: Vec<String>) -> Self {
+        let mut column = Self { items, offset: 0.0, velocity: 0.0, selection: 0 };
+        column.set_selection(0);
+        column
     }
 
-    pub fn set_items(&mut self, items: Vec<String>) {
+    fn set_items(&mut self, items: Vec<String>) {
         self.items = items;
+        self.set_selection(self.selection);
+    }
+
+    fn set_selection(&mut self, selection: usize) {
         if self.items.is_empty() {
             self.offset = 0.0;
+            self.velocity = 0.0;
             self.selection = 0;
-        } else {
-            self.selection = self.selection.min(self.items.len() - 1);
-            self.offset = self.selection as f32;
+            return;
         }
+        self.selection = selection.min(self.items.len() - 1);
+        self.offset = self.selection as f32;
         self.velocity = 0.0;
     }
 
-    pub fn selection(&self) -> usize {
-        self.selection
+    fn selection_label(&self) -> Option<&str> {
+        self.items.get(self.selection).map(String::as_str)
     }
 
-    pub fn selection_label(&self) -> Option<&str> {
-        self.items.get(self.selection).map(|s| s.as_str())
+    fn position(&self) -> f32 {
+        self.offset
     }
 
-    pub fn scroll(&mut self, delta: f32) {
+    fn scroll(&mut self, delta: f32) {
         if self.items.is_empty() {
             return;
         }
-        self.offset -= delta;
-        let max = (self.items.len() - 1) as f32;
-        self.offset = self.offset.clamp(0.0, max);
-        self.selection = self.offset.round() as usize;
+        self.offset = clamp_picker_position(self.items.len(), self.offset - delta);
+        self.selection = snap_picker_position(self.offset);
     }
 
-    pub fn fling(&mut self, velocity: f32) {
+    fn fling(&mut self, velocity: f32) {
         self.velocity = velocity;
     }
 
-    pub fn tick(&mut self, dt_ms: u32) {
+    fn tick(&mut self, dt_ms: u32) {
         if self.items.is_empty() {
             return;
         }
@@ -1938,12 +2093,128 @@ impl PickerState {
         if self.velocity.abs() < 0.02 {
             self.velocity = 0.0;
         }
-        let max = (self.items.len() - 1) as f32;
-        self.offset = self.offset.clamp(0.0, max);
+        self.offset = clamp_picker_position(self.items.len(), self.offset);
         if self.velocity.abs() < 0.02 {
-            self.offset = self.offset.round();
+            self.offset = self.offset.floor() + if self.offset.fract() > 0.5 { 1.0 } else { 0.0 };
         }
-        self.selection = self.offset.round() as usize;
+        self.selection = snap_picker_position(self.offset);
+    }
+}
+
+#[inline]
+fn clamp_picker_position(item_count: usize, position: f32) -> f32 {
+    if item_count == 0 {
+        0.0
+    } else {
+        position.clamp(0.0, (item_count - 1) as f32)
+    }
+}
+
+#[inline]
+fn snap_picker_position(position: f32) -> usize {
+    let floor = position.floor();
+    let fraction = position - floor;
+    if fraction > 0.5 {
+        floor as usize + 1
+    } else {
+        floor as usize
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PickerState {
+    columns: Vec<PickerColumn>,
+}
+
+impl PickerState {
+    pub fn new(items: Vec<String>) -> Self {
+        Self::from_columns(vec![items])
+    }
+
+    pub fn from_columns(columns: Vec<Vec<String>>) -> Self {
+        Self { columns: columns.into_iter().map(PickerColumn::new).collect() }
+    }
+
+    pub fn column_count(&self) -> usize {
+        self.columns.len()
+    }
+
+    pub fn set_columns(&mut self, columns: Vec<Vec<String>>) {
+        self.columns = columns.into_iter().map(PickerColumn::new).collect();
+    }
+
+    pub fn set_items(&mut self, items: Vec<String>) {
+        if let Some(column) = self.columns.get_mut(0) {
+            column.set_items(items);
+        } else {
+            self.columns.push(PickerColumn::new(items));
+        }
+    }
+
+    pub fn set_column_items(&mut self, column_index: usize, items: Vec<String>) -> bool {
+        let Some(column) = self.columns.get_mut(column_index) else {
+            return false;
+        };
+        column.set_items(items);
+        true
+    }
+
+    pub fn set_column_selection(&mut self, column_index: usize, selection: usize) -> bool {
+        let Some(column) = self.columns.get_mut(column_index) else {
+            return false;
+        };
+        column.set_selection(selection);
+        true
+    }
+
+    pub fn selection(&self) -> usize {
+        self.column_selection(0).unwrap_or(0)
+    }
+
+    pub fn column_selection(&self, column_index: usize) -> Option<usize> {
+        self.columns.get(column_index).map(|column| column.selection)
+    }
+
+    pub fn selection_label(&self) -> Option<&str> {
+        self.column_selection_label(0)
+    }
+
+    pub fn column_selection_label(&self, column_index: usize) -> Option<&str> {
+        self.columns.get(column_index).and_then(PickerColumn::selection_label)
+    }
+
+    pub fn column_position(&self, column_index: usize) -> Option<f32> {
+        self.columns.get(column_index).map(PickerColumn::position)
+    }
+
+    pub fn scroll(&mut self, delta: f32) {
+        self.scroll_column(0, delta);
+    }
+
+    pub fn scroll_column(&mut self, column_index: usize, delta: f32) -> bool {
+        let Some(column) = self.columns.get_mut(column_index) else {
+            return false;
+        };
+        column.scroll(delta);
+        true
+    }
+
+    pub fn fling(&mut self, velocity: f32) {
+        self.fling_column(0, velocity);
+    }
+
+    pub fn fling_column(&mut self, column_index: usize, velocity: f32) -> bool {
+        let Some(column) = self.columns.get_mut(column_index) else {
+            return false;
+        };
+        column.fling(velocity);
+        true
+    }
+
+    pub fn tick(&mut self, dt_ms: u32) {
+        for column in &mut self.columns {
+            column.tick(dt_ms);
+        }
     }
 
     pub fn encode<U: ImageUploader>(
@@ -1955,84 +2226,147 @@ impl PickerState {
         uploader: &mut U,
         builder: &mut DrawListBuilder,
     ) {
-        if self.items.is_empty() {
+        if self.columns.is_empty() {
             return;
         }
-        let highlight = gfx::RectF::new(
-            rect.x + style.padding_x,
-            rect.y + rect.h * 0.5 - style.item_height * 0.5,
-            rect.w - style.padding_x * 2.0,
-            style.item_height,
-        );
-        builder.rrect(highlight, [style.corner_radius; 4], style.highlight);
+        let highlight = style.center_band_rect(rect);
+        builder.rrect(highlight, [style.center_band_radius(rect); 4], style.highlight);
 
-        let center = rect.y + rect.h * 0.5;
-        let visible = cmp::min(self.items.len(), 9);
-        let start = self.selection.saturating_sub(visible / 2);
-        let end = cmp::min(self.items.len(), start + visible);
         let handle = text_ctx.ensure_gpu(uploader);
         let Some(font) = text_ctx.fonts.font(style.font_id) else {
             return;
         };
+        builder.clip_push(gfx::RectI::new(
+            rect.x.floor() as i32,
+            rect.y.floor() as i32,
+            rect.w.ceil() as i32,
+            rect.h.ceil() as i32,
+        ));
 
-        for idx in start..end {
-            let rel = idx as f32 - self.offset;
-            let dy = rel * style.item_height;
-            let y = center + dy - style.item_height * 0.5;
-            let fade = (1.0 - rel.abs() / visible as f32).clamp(0.2, 1.0);
-            let color = if idx == self.selection {
-                style.text_focus
-            } else {
-                gfx::Color::rgba(style.text_dim.r, style.text_dim.g, style.text_dim.b, fade)
-            };
-            let label = &self.items[idx];
-            let Ok(shape) = text_ctx.shaper.shape(font, style.font_id, label, style.font_px) else {
-                continue;
-            };
-            let dl = builder.drawlist_mut();
-            let run = shape.bake_into(
-                &mut text_ctx.atlas,
-                &mut dl.vertices,
-                &mut dl.indices,
-                color,
-                handle,
-                rect.x + style.padding_x + 8.0,
-                y + style.baseline_shift,
-                device_scale,
-            );
-            let _ = dl;
-            builder.glyph_run(run);
+        for (column_index, column) in self.columns.iter().enumerate() {
+            for (item_index, label) in column.items.iter().enumerate() {
+                let Some(item_rect) = style.item_rect(
+                    rect,
+                    self.columns.len(),
+                    column_index,
+                    column.position(),
+                    item_index,
+                ) else {
+                    continue;
+                };
+                if item_rect.y + item_rect.h <= rect.y || item_rect.y >= rect.y + rect.h {
+                    continue;
+                }
+                let Ok(shape) = text_ctx.shaper.shape(font, style.font_id, label, style.font_px)
+                else {
+                    continue;
+                };
+                let text_x = item_rect.x + (item_rect.w - shape.width()) * 0.50;
+                let text_y =
+                    item_rect.y + (item_rect.h - style.font_px) * 0.50 + style.baseline_shift;
+                let dl = builder.drawlist_mut();
+                let run = shape.bake_into(
+                    &mut text_ctx.atlas,
+                    &mut dl.vertices,
+                    &mut dl.indices,
+                    style.text_color,
+                    handle,
+                    text_x,
+                    text_y,
+                    device_scale,
+                );
+                let _ = dl;
+                builder.glyph_run(run);
+            }
         }
 
+        builder.clip_pop();
         let (data, w, h) = text_ctx.atlas.image();
         uploader.update_a8(handle, 0, 0, w, h, data, w as usize);
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PickerStyle {
-    pub item_height: f32,
     pub font_id: usize,
     pub font_px: f32,
-    pub corner_radius: f32,
     pub highlight: gfx::Color,
-    pub text_focus: gfx::Color,
-    pub text_dim: gfx::Color,
-    pub padding_x: f32,
+    pub text_color: gfx::Color,
+    pub center_band_corner_ratio: f32,
     pub baseline_shift: f32,
+}
+
+impl PickerStyle {
+    #[must_use]
+    pub fn visible_rows(&self) -> usize {
+        3
+    }
+
+    #[must_use]
+    pub fn row_height(&self, rect: gfx::RectF) -> f32 {
+        (rect.h / self.visible_rows() as f32).max(1.0)
+    }
+
+    #[must_use]
+    pub fn center_band_rect(&self, rect: gfx::RectF) -> gfx::RectF {
+        let row_height = self.row_height(rect);
+        gfx::RectF::new(rect.x, rect.y + (rect.h - row_height) * 0.50, rect.w, row_height)
+    }
+
+    #[must_use]
+    pub fn center_band_radius(&self, rect: gfx::RectF) -> f32 {
+        self.row_height(rect) * self.center_band_corner_ratio
+    }
+
+    #[must_use]
+    pub fn column_rect(
+        &self,
+        rect: gfx::RectF,
+        column_count: usize,
+        column_index: usize,
+    ) -> Option<gfx::RectF> {
+        if column_count == 0 || column_index >= column_count {
+            return None;
+        }
+        let column_width = rect.w / column_count as f32;
+        Some(gfx::RectF::new(
+            rect.x + column_width * column_index as f32,
+            rect.y,
+            column_width,
+            rect.h,
+        ))
+    }
+
+    #[must_use]
+    pub fn item_rect(
+        &self,
+        rect: gfx::RectF,
+        column_count: usize,
+        column_index: usize,
+        column_position: f32,
+        item_index: usize,
+    ) -> Option<gfx::RectF> {
+        let column_rect = self.column_rect(rect, column_count, column_index)?;
+        let row_height = self.row_height(rect);
+        let center_mid_y = rect.y + rect.h * 0.50;
+        let row_mid_y = center_mid_y + (item_index as f32 - column_position) * row_height;
+        Some(gfx::RectF::new(
+            column_rect.x,
+            row_mid_y - row_height * 0.50,
+            column_rect.w,
+            row_height,
+        ))
+    }
 }
 
 impl Default for PickerStyle {
     fn default() -> Self {
         Self {
-            item_height: 38.0,
             font_id: 0,
-            font_px: 16.0,
-            corner_radius: 9.0,
+            font_px: 17.5,
             highlight: gfx::Color::rgba(0.82, 0.91, 1.0, 0.45),
-            text_focus: gfx::Color::rgba(0.12, 0.24, 0.60, 1.0),
-            text_dim: gfx::Color::rgba(0.28, 0.32, 0.40, 0.6),
-            padding_x: 12.0,
+            text_color: gfx::Color::rgba(0.12, 0.24, 0.60, 1.0),
+            center_band_corner_ratio: 0.25,
             baseline_shift: 4.0,
         }
     }
@@ -2107,37 +2441,37 @@ mod tests {
 
 // ----- Badge -----
 
+const LEGACY_BADGE_EDGE_RATIO: f32 = 0.25;
+const LEGACY_BADGE_X_OVERLAP_RATIO: f32 = 0.50;
+const LEGACY_BADGE_IMAGE_SRC: gfx::RectF = gfx::RectF::new(0.0, 0.0, 1.0, 1.0);
+
 #[derive(Clone, Copy, Debug)]
 pub struct BadgeStyle {
+    /// Legacy fallback color used when the badge image handle is unavailable.
     pub color: gfx::Color,
-    pub text_color: gfx::Color,
-    pub font_px: f32,
-    pub corner: f32,
-    pub min_size: f32,
+    /// Legacy 0.45s bounce timing from `Badge.m`.
     pub bounce_duration_ms: u32,
 }
 
 impl Default for BadgeStyle {
     fn default() -> Self {
         Self {
-            color: gfx::Color::rgba(0.96, 0.14, 0.35, 1.0), // Nametag red
-            text_color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
-            font_px: 10.0,
-            corner: 8.0,
-            min_size: 16.0,
+            color: gfx::Color::rgba(231.0 / 255.0, 76.0 / 255.0, 60.0 / 255.0, 1.0),
             bounce_duration_ms: 450,
         }
     }
 }
 
+/// Image-backed badge overlay that matches the old iOS `BadgeableButton` contract.
 pub struct Badge {
-    pub count: u32,
+    /// Full badge texture handle. When absent, the legacy red fallback circle is drawn instead.
+    pub image: gfx::ImageHandle,
     pub style: BadgeStyle,
 }
 
 impl Default for Badge {
     fn default() -> Self {
-        Self { count: 0, style: BadgeStyle::default() }
+        Self { image: gfx::ImageHandle(0), style: BadgeStyle::default() }
     }
 }
 
@@ -2193,53 +2527,38 @@ impl BadgeState {
 }
 
 impl Badge {
-    pub fn encode<U: ImageUploader>(
-        &self,
-        rect: gfx::RectF,
-        device_scale: f32,
-        txt: &mut TextCtx,
-        up: &mut U,
-        state: &BadgeState,
-        b: &mut DrawListBuilder,
-    ) {
-        if self.count == 0 {
-            return; // Auto-hide when count is 0
+    /// Resolve the unscaled legacy badge rect from the host icon bounds.
+    #[must_use]
+    pub fn rect(&self, icon_rect: gfx::RectF) -> gfx::RectF {
+        let side = icon_rect.w * LEGACY_BADGE_EDGE_RATIO;
+        gfx::RectF::new(
+            icon_rect.x + icon_rect.w - side * LEGACY_BADGE_X_OVERLAP_RATIO,
+            icon_rect.y,
+            side,
+            side,
+        )
+    }
+
+    #[must_use]
+    fn scaled_rect(&self, icon_rect: gfx::RectF, scale: f32) -> gfx::RectF {
+        let badge_rect = self.rect(icon_rect);
+        let cx = badge_rect.x + badge_rect.w * 0.5;
+        let cy = badge_rect.y + badge_rect.h * 0.5;
+        let w = badge_rect.w * scale;
+        let h = badge_rect.h * scale;
+        gfx::RectF::new(cx - w * 0.5, cy - h * 0.5, w, h)
+    }
+
+    /// Draw the badge over the host icon using the legacy top-right overlay placement.
+    pub fn encode(&self, icon_rect: gfx::RectF, state: &BadgeState, b: &mut DrawListBuilder) {
+        let badge_rect = self.scaled_rect(icon_rect, state.current_scale());
+        if self.image.0 != 0 {
+            b.image(self.image, badge_rect, LEGACY_BADGE_IMAGE_SRC, 1.0);
+            return;
         }
 
-        let scale = state.current_scale();
-        let text = if self.count <= 99 {
-            alloc::format!("{}", self.count)
-        } else {
-            alloc::string::String::from("99+")
-        };
-
-        // Measure text to determine badge width
-        let label = Label {
-            text: text.clone(),
-            color: self.style.text_color,
-            align: Align::Center,
-            wrap: false,
-            font_id: 0,
-            font_px: self.style.font_px,
-        };
-
-        // Estimate text width (rough calculation for badge sizing)
-        let text_width = self.style.font_px * text.len() as f32 * 0.6;
-        let badge_width = (text_width + self.style.font_px).max(self.style.min_size);
-        let badge_height = self.style.min_size;
-
-        // Scale about center
-        let cx = rect.x + rect.w * 0.5;
-        let cy = rect.y + rect.h * 0.5;
-        let w = badge_width * scale;
-        let h = badge_height * scale;
-        let badge_rect = gfx::RectF::new(cx - w * 0.5, cy - h * 0.5, w, h);
-
-        // Draw badge background
-        b.rrect(badge_rect, [self.style.corner; 4], self.style.color);
-
-        // Draw count text
-        label.encode(badge_rect, device_scale, txt, up, b);
+        let radius = badge_rect.w.min(badge_rect.h) * 0.50;
+        b.rrect(badge_rect, [radius; 4], self.style.color);
     }
 }
 
@@ -2833,31 +3152,49 @@ impl Default for SlidingSwitch {
     }
 }
 
+const LEGACY_SLIDING_SWITCH_LONG_PRESS_MS: u64 = 300;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SlidingSwitchMode {
     Idle,
+    Pressing,
     Dragging,
     Triggered,
 }
 
 pub struct SlidingSwitchState {
     pub mode: SlidingSwitchMode,
-    drag_start_x: f32,
     knob_offset_x: f32,
     inactive_timer_ms: u64,
     last_interaction_ms: u64,
+    press_started_ms: u64,
+    inactive_armed: bool,
 }
 
 impl Default for SlidingSwitchState {
     fn default() -> Self {
         Self {
             mode: SlidingSwitchMode::Idle,
-            drag_start_x: 0.0,
             knob_offset_x: 0.0,
             inactive_timer_ms: 0, // Will be set from style when needed
             last_interaction_ms: 0,
+            press_started_ms: 0,
+            inactive_armed: false,
         }
     }
+}
+
+#[inline]
+fn sliding_switch_point_in_rect(point: [f32; 2], rect: gfx::RectF) -> bool {
+    point[0] >= rect.x
+        && point[0] <= rect.x + rect.w
+        && point[1] >= rect.y
+        && point[1] <= rect.y + rect.h
+}
+
+#[inline]
+fn sliding_switch_knob_rect(bounds: gfx::RectF, knob_offset_x: f32) -> gfx::RectF {
+    gfx::RectF::new(bounds.x + knob_offset_x, bounds.y, bounds.h, bounds.h)
 }
 
 impl SlidingSwitchState {
@@ -2865,57 +3202,73 @@ impl SlidingSwitchState {
     pub fn start(&mut self, style: &SlidingSwitchStyle) {
         self.last_interaction_ms = timing::now_ms();
         self.inactive_timer_ms = style.inactive_timeout_ms;
+        self.inactive_armed = self.inactive_timer_ms > 0;
     }
 
-    /// Check if inactive timeout has been reached
-    pub fn is_inactive(&self) -> bool {
-        if self.mode == SlidingSwitchMode::Idle {
+    /// Emit the one-shot inactive event after the legacy timeout elapses.
+    pub fn take_inactive(&mut self) -> bool {
+        if !self.inactive_armed {
             return false;
         }
         let elapsed = timing::now_ms().saturating_sub(self.last_interaction_ms);
-        elapsed >= self.inactive_timer_ms
-    }
-
-    /// Begin drag (requires long press - check externally)
-    pub fn begin_drag(&mut self, x: f32) {
-        self.mode = SlidingSwitchMode::Dragging;
-        self.drag_start_x = x;
-        self.knob_offset_x = 0.0;
-        self.last_interaction_ms = timing::now_ms();
-    }
-
-    /// Update drag position
-    /// Returns true if fully slid (triggered)
-    pub fn drag_to(&mut self, x: f32, bounds: gfx::RectF) -> bool {
-        if self.mode != SlidingSwitchMode::Dragging {
+        if elapsed < self.inactive_timer_ms {
             return false;
         }
+        self.inactive_armed = false;
+        true
+    }
 
-        self.last_interaction_ms = timing::now_ms();
+    /// Begin the legacy knob press. Motion is ignored until the long-press gate elapses.
+    pub fn begin_drag(&mut self, point: [f32; 2], bounds: gfx::RectF) -> bool {
+        if self.mode != SlidingSwitchMode::Idle {
+            return false;
+        }
+        let knob_rect = sliding_switch_knob_rect(bounds, self.knob_offset_x);
+        if !sliding_switch_point_in_rect(point, knob_rect) {
+            return false;
+        }
+        let now = timing::now_ms();
+        self.mode = SlidingSwitchMode::Pressing;
+        self.press_started_ms = now;
+        self.last_interaction_ms = now;
+        true
+    }
 
-        let delta = x - self.drag_start_x;
-        let max_offset = bounds.w - bounds.h; // Width minus knob size
-
-        // Only allow left-to-right sliding
-        if delta < 0.0 {
+    /// Update the legacy press/drag state. Returns true when the control reaches the trigger edge.
+    pub fn drag_to(&mut self, point: [f32; 2], bounds: gfx::RectF) -> bool {
+        if !matches!(self.mode, SlidingSwitchMode::Pressing | SlidingSwitchMode::Dragging) {
+            return false;
+        }
+        if !sliding_switch_point_in_rect(point, bounds) {
+            self.reset();
+            return false;
+        }
+        let now = timing::now_ms();
+        self.last_interaction_ms = now;
+        if self.mode == SlidingSwitchMode::Pressing
+            && now.saturating_sub(self.press_started_ms) < LEGACY_SLIDING_SWITCH_LONG_PRESS_MS
+        {
+            return false;
+        }
+        self.mode = SlidingSwitchMode::Dragging;
+        let max_offset = (bounds.w - bounds.h).max(0.0);
+        debug_assert!(bounds.w >= bounds.h, "SlidingSwitch requires width >= height");
+        if max_offset <= 0.0 {
             self.knob_offset_x = 0.0;
             return false;
         }
-
-        self.knob_offset_x = delta.min(max_offset);
-
-        // Check if fully slid
+        let local_x = (point[0] - bounds.x).clamp(0.0, max_offset);
+        self.knob_offset_x = local_x;
         if self.knob_offset_x >= max_offset {
             self.mode = SlidingSwitchMode::Triggered;
             return true;
         }
-
         false
     }
 
     /// End drag gesture
     pub fn end_drag(&mut self) {
-        if self.mode == SlidingSwitchMode::Dragging {
+        if matches!(self.mode, SlidingSwitchMode::Pressing | SlidingSwitchMode::Dragging) {
             self.reset();
         }
     }
@@ -2924,7 +3277,7 @@ impl SlidingSwitchState {
     pub fn reset(&mut self) {
         self.mode = SlidingSwitchMode::Idle;
         self.knob_offset_x = 0.0;
-        self.drag_start_x = 0.0;
+        self.press_started_ms = 0;
     }
 
     /// Get current slide progress (0.0 to 1.0)

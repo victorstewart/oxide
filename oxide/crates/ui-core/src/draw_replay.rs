@@ -74,13 +74,9 @@ pub fn replay_drawlist(
                 *tint,
                 *alpha,
             ),
-            DrawCmd::Spinner { center, radius, thickness, phase, alpha } => encoder.draw_spinner(
-                [center[0] + offset_x, center[1] + offset_y],
-                *radius,
-                *thickness,
-                *phase,
-                *alpha,
-            ),
+            DrawCmd::Spinner { center, atom, alpha } => {
+                encoder.draw_spinner([center[0] + offset_x, center[1] + offset_y], *atom, *alpha)
+            }
             DrawCmd::CameraBg { rect, sigma, tint, alpha, grayscale, blur } => encoder
                 .draw_camera_bg(
                     RectF::new(rect.x + offset_x, rect.y + offset_y, rect.w, rect.h),

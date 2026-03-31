@@ -18,6 +18,8 @@ use oxide_ui_core::{
     DrawListBuilder,
 };
 
+const LEGACY_BADGE_IMAGE: gfx::ImageHandle = gfx::ImageHandle(1);
+
 /// Test scene for animation timing configurations
 pub struct AnimationConfigScene {
     /// Multiple badges with different bounce timings (100ms, 450ms, 1000ms, 2000ms)
@@ -52,7 +54,7 @@ impl Default for AnimationConfigScene {
         let mut badges = Vec::new();
         for &timing_ms in &badge_timings {
             let badge = Badge {
-                count: 5,
+                image: LEGACY_BADGE_IMAGE,
                 style: BadgeStyle { bounce_duration_ms: timing_ms, ..BadgeStyle::default() },
             };
 
@@ -115,9 +117,11 @@ impl Default for AnimationConfigScene {
                     ..SlidingSwitchStyle::default()
                 },
             };
+            let mut state = SlidingSwitchState::default();
+            state.start(&switch.style);
 
             let label = format!("{}s timeout", timeout_ms / 1000);
-            sliding_switches.push((switch, SlidingSwitchState::default(), label));
+            sliding_switches.push((switch, state, label));
         }
 
         Self {
@@ -156,6 +160,13 @@ impl AnimationConfigScene {
         for (_toggle, state, _) in &mut self.toggles {
             state.step(dt_ms);
         }
+
+        for (switch, state, _) in &mut self.sliding_switches {
+            if state.take_inactive() {
+                state.reset();
+                state.start(&switch.style);
+            }
+        }
     }
 
     pub fn input_pointer(&mut self, x: f32, y: f32, _dx: f32, _dy: f32, buttons: u32) {
@@ -184,7 +195,6 @@ impl AnimationConfigScene {
 
             if buttons & 1 != 0 && point_in_rect([x, y], rect) {
                 state.bounce(&badge.style);
-                badge.count = (badge.count % 99) + 1;
             }
         }
 
@@ -204,16 +214,15 @@ impl AnimationConfigScene {
             let col = i % 4;
             let rect = gfx::RectF::new(50.0 + col as f32 * 120.0, 300.0, 110.0, 40.0);
 
-            if buttons & 1 != 0 && point_in_rect([x, y], rect) {
+            if buttons & 1 != 0 {
                 if state.mode == SlidingSwitchMode::Idle {
-                    state.start(&switch.style);
-                    state.begin_drag(rect.x);
-                }
-
-                if state.drag_to(x, rect) {
+                    if state.begin_drag([x, y], rect) {
+                        state.start(&switch.style);
+                    }
+                } else if state.drag_to([x, y], rect) {
                     state.reset();
                 }
-            } else if buttons == 0 && state.mode == SlidingSwitchMode::Dragging {
+            } else if buttons == 0 {
                 state.end_drag();
             }
         }
@@ -271,7 +280,7 @@ impl AnimationConfigScene {
 
         // Draw badges row
         let badge_label = Label {
-            text: "Badges (click to bounce):".into(),
+            text: "Legacy Badges (click to bounce):".into(),
             color: gfx::Color::rgba(0.3, 0.3, 0.3, 1.0),
             align: Align::Left,
             wrap: false,
@@ -291,14 +300,7 @@ impl AnimationConfigScene {
             let x = viewport.x + 50.0 + col as f32 * 100.0;
             let y = viewport.y + 40.0;
 
-            badge.encode(
-                gfx::RectF::new(x, y, 60.0, 60.0),
-                device_scale,
-                text,
-                uploader,
-                state,
-                builder,
-            );
+            badge.encode(gfx::RectF::new(x, y, 60.0, 60.0), state, builder);
 
             // Timing label
             let timing_label = Label {

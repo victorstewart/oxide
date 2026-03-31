@@ -1,0 +1,582 @@
+{
+  "version": 1,
+  "suite": "full",
+  "generated_label": null,
+  "cases": [
+    {
+      "id": "cpu.system.prepare_draws.current",
+      "family": "system",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 3.9323330078125,
+      "p95": 4.06813486328125,
+      "min": 3.76708984375,
+      "max": 4.154296875,
+      "mean": 3.9179235026041663,
+      "samples": 12,
+      "ops_per_sample": 256,
+      "notes": [
+        "Current ui-core clip lowering path."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.system.prepare_draws.legacy",
+      "family": "audit-baseline",
+      "unit": "us/op",
+      "gated": false,
+      "threshold_pct": 0.0,
+      "median": 4.7292070312500005,
+      "p95": 4.90552578125,
+      "min": 4.65242578125,
+      "max": 4.91886328125,
+      "mean": 4.763557128906251,
+      "samples": 12,
+      "ops_per_sample": 256,
+      "notes": [
+        "Legacy ClipPop recompute path kept for A/B audit context."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.system.coalesce_adjacent_draws.current",
+      "family": "system",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 3.9530439453125004,
+      "p95": 4.1806640625,
+      "min": 3.857096875,
+      "max": 4.25048828125,
+      "mean": 3.9883410481770833,
+      "samples": 12,
+      "ops_per_sample": 128,
+      "notes": [
+        "Current linear ui-core merge path."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.system.coalesce_adjacent_draws.legacy",
+      "family": "audit-baseline",
+      "unit": "us/op",
+      "gated": false,
+      "threshold_pct": 0.0,
+      "median": 172.65283203125,
+      "p95": 179.845640625,
+      "min": 170.87728125,
+      "max": 184.29720312499998,
+      "mean": 173.74099479166668,
+      "samples": 12,
+      "ops_per_sample": 128,
+      "notes": [
+        "Legacy Vec::remove merge path kept for A/B audit context."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.system.gesture_sequence",
+      "family": "system",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 0.2718017578125,
+      "p95": 0.28192333470394737,
+      "min": 0.264984765625,
+      "max": 0.2821809210526316,
+      "mean": 0.2723755379660088,
+      "samples": 12,
+      "ops_per_sample": 384,
+      "notes": [
+        "Tap, long-press, pan, and double-tap sequence."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.system.text_shape_bake",
+      "family": "system",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 19.358333333333334,
+      "p95": 20.428333333333335,
+      "min": 19.166316666666667,
+      "max": 20.483333333333334,
+      "mean": 19.587211111111113,
+      "samples": 12,
+      "ops_per_sample": 24,
+      "notes": [
+        "Mixed Latin+CJK shaping and atlas bake."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.label.encode",
+      "family": "component",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 43.455406249999996,
+      "p95": 44.36718984375,
+      "min": 42.999359375,
+      "max": 44.44596875,
+      "mean": 43.57476302083334,
+      "samples": 12,
+      "ops_per_sample": 32,
+      "notes": [
+        "Representative wrapped label encode."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.progress_bar.encode",
+      "family": "component",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.005477148694602895,
+      "p95": 0.005692155469045786,
+      "min": 0.005403251944684529,
+      "max": 0.005746401079963235,
+      "mean": 0.005515502153010582,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Representative determinate progress encode."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.spinner.encode",
+      "family": "component",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.0021473694752125825,
+      "p95": 0.0021828414085914086,
+      "min": 0.002080906707723036,
+      "max": 0.002185541958041958,
+      "mean": 0.002139998140592549,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Representative spinner encode."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.button.encode",
+      "family": "component",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 2.872958096590909,
+      "p95": 3.020988244047619,
+      "min": 2.824955163043478,
+      "max": 3.049976190476191,
+      "mean": 2.887440679602704,
+      "samples": 12,
+      "ops_per_sample": 32,
+      "notes": [
+        "Representative enabled button encode."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.toggle.encode",
+      "family": "component",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.006092557911832518,
+      "p95": 0.01075940930886243,
+      "min": 0.005908973298676749,
+      "max": 0.013802083333333333,
+      "mean": 0.006927440693969735,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Representative toggle encode."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.slider.encode",
+      "family": "component",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.007215595712161365,
+      "p95": 0.007529385740138724,
+      "min": 0.0071140571672354954,
+      "max": 0.007562167271627345,
+      "mean": 0.007291393293543576,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Representative slider encode."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.image_view.encode",
+      "family": "component",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.002717961793391511,
+      "p95": 0.0028116711383077597,
+      "min": 0.0026257180739340477,
+      "max": 0.0028266080714447204,
+      "mean": 0.002719850444015145,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Representative contain image encode."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.nine_slice_image.encode",
+      "family": "component",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.002421809847736621,
+      "p95": 0.0024828717521709212,
+      "min": 0.002365283822138127,
+      "max": 0.002493071898683686,
+      "mean": 0.0024281101554757063,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Representative nine-slice encode."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.component.collection_view.encode",
+      "family": "component",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 2.3353548079329327,
+      "p95": 2.3922572023809527,
+      "min": 2.261167792792793,
+      "max": 2.4032238095238094,
+      "mean": 2.3411115240240243,
+      "samples": 12,
+      "ops_per_sample": 24,
+      "notes": [
+        "Representative virtualized collection layout+render."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.animation.spinner_spin",
+      "family": "animation",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.00538563275869603,
+      "p95": 0.005589508473861188,
+      "min": 0.005300731242051717,
+      "max": 0.005592321668157423,
+      "mean": 0.005439010183053923,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Registry animation sample for SpinnerSpin."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.animation.progress_indeterminate",
+      "family": "animation",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.006491493004260444,
+      "p95": 0.006550500975501333,
+      "min": 0.00624843828085957,
+      "max": 0.006554500786163522,
+      "mean": 0.006441043233317852,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Registry animation sample for ProgressIndeterminate."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.animation.button_press_scale",
+      "family": "animation",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 2.453475360576923,
+      "p95": 2.5578153749999997,
+      "min": 2.3879247685185185,
+      "max": 2.5649475,
+      "mean": 2.466794680229108,
+      "samples": 12,
+      "ops_per_sample": 32,
+      "notes": [
+        "Registry animation sample for ButtonPressScale."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.animation.toggle_thumb_spring",
+      "family": "animation",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.007052143798792943,
+      "p95": 0.007140782327554556,
+      "min": 0.006787374457111835,
+      "max": 0.007161307989690721,
+      "mean": 0.0070109413259807395,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Registry animation sample for ToggleThumbSpring."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.animation.slider_thumb_move",
+      "family": "animation",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.008102039910916143,
+      "p95": 0.008370388333282863,
+      "min": 0.007973764349489796,
+      "max": 0.008421191077441078,
+      "mean": 0.008140565835377882,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Registry animation sample for SliderThumbMove."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.animation.image_zoom_pan",
+      "family": "animation",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.1,
+      "median": 0.007001989444091729,
+      "p95": 0.007109378243327804,
+      "min": 0.006809555419389979,
+      "max": 0.007125028490028489,
+      "mean": 0.006979309620888374,
+      "samples": 12,
+      "ops_per_sample": 160,
+      "notes": [
+        "Registry animation sample for ImageZoomPan."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.animation.anim_timeline_bars",
+      "family": "animation",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 8.227323076923078,
+      "p95": 8.702265,
+      "min": 8.089261538461539,
+      "max": 8.705033333333335,
+      "mean": 8.31895766559829,
+      "samples": 12,
+      "ops_per_sample": 20,
+      "notes": [
+        "Registry animation sample for AnimTimelineBars."
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.controls.frame",
+      "family": "scene-cpu",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 23.220052083333336,
+      "p95": 24.06024166666667,
+      "min": 22.36371875,
+      "max": 24.098702380952382,
+      "mean": 23.266373883928576,
+      "samples": 12,
+      "ops_per_sample": 12,
+      "notes": [
+        "Router update + draw + coalesce for Controls"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.collection.frame",
+      "family": "scene-cpu",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 13.532320512820514,
+      "p95": 14.353803472222223,
+      "min": 13.146634615384615,
+      "max": 14.537618055555559,
+      "mean": 13.612211182336182,
+      "samples": 12,
+      "ops_per_sample": 12,
+      "notes": [
+        "Router update + draw + coalesce for Collection Stress"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "cpu.scene.stress.frame",
+      "family": "scene-cpu",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.15,
+      "median": 105.217875,
+      "p95": 107.08820208333334,
+      "min": 101.99829166666666,
+      "max": 107.359375,
+      "mean": 104.86936458333334,
+      "samples": 12,
+      "ops_per_sample": 12,
+      "notes": [
+        "Router update + draw + coalesce for Stress Test"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "gpu.scene.controls.frame",
+      "family": "scene-gpu",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 2.1033125000000004,
+      "p95": 6.744041999999999,
+      "min": 1.2385840000000001,
+      "max": 7.484959,
+      "mean": 3.489404625,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Controls"
+      ],
+      "metrics": {
+        "culled_avg": 0.0,
+        "damage_pct_avg": 25.020000338554382,
+        "draw_ms_median": 0.8024165000000001,
+        "draws_avg": 22.0,
+        "encode_ms_median": 0.0632495,
+        "instanced_avg": 3.0
+      }
+    },
+    {
+      "id": "gpu.scene.collection.frame",
+      "family": "scene-gpu",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 1.174271,
+      "p95": 6.165368749999999,
+      "min": 0.717209,
+      "max": 6.349791,
+      "mean": 1.9247508333333332,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Collection Stress"
+      ],
+      "metrics": {
+        "culled_avg": 0.0,
+        "damage_pct_avg": 100.0,
+        "draw_ms_median": 0.307063,
+        "draws_avg": 4.0,
+        "encode_ms_median": 0.059167,
+        "instanced_avg": 1.0
+      }
+    },
+    {
+      "id": "gpu.scene.stress.frame",
+      "family": "scene-gpu",
+      "unit": "ms/frame",
+      "gated": true,
+      "threshold_pct": 0.18,
+      "median": 8.361854000000001,
+      "p95": 8.795859750000002,
+      "min": 6.15625,
+      "max": 10.0295,
+      "mean": 8.332122458333334,
+      "samples": 48,
+      "ops_per_sample": 1,
+      "notes": [
+        "Metal scene frame for Stress Test"
+      ],
+      "metrics": {
+        "culled_avg": 0.0,
+        "damage_pct_avg": 100.0,
+        "draw_ms_median": 4.7741665,
+        "draws_avg": 64.0,
+        "encode_ms_median": 0.06531200000000001,
+        "instanced_avg": 1.0
+      }
+    }
+  ],
+  "coverage": {
+    "components_total": 9,
+    "components_covered": [
+      "Button",
+      "CollectionView",
+      "ImageView",
+      "Label",
+      "NineSliceImage",
+      "ProgressBar",
+      "Slider",
+      "Spinner",
+      "Toggle"
+    ],
+    "animations_total": 7,
+    "animations_covered": [
+      "AnimTimelineBars",
+      "ButtonPressScale",
+      "ImageZoomPan",
+      "ProgressIndeterminate",
+      "SliderThumbMove",
+      "SpinnerSpin",
+      "ToggleThumbSpring"
+    ]
+  },
+  "findings": [
+    {
+      "status": "fixed",
+      "summary": "DrawListBuilder::clear now clears retained vertex and index storage, eliminating stale geometry accumulation when builders are reused across frames."
+    },
+    {
+      "status": "fixed",
+      "summary": "ui-core::prepare_draws now keeps cumulative clip intersections on the stack instead of rebuilding the full stack on every ClipPop."
+    },
+    {
+      "status": "fixed",
+      "summary": "ui-core::coalesce_adjacent_draws now uses a single linear compaction pass instead of Vec::remove-based quadratic merging."
+    },
+    {
+      "status": "candidate",
+      "summary": "renderer-metal still encodes rounded rectangles one draw at a time with per-draw parameter binding; that remains the clearest GPU-side batching opportunity on real Metal targets."
+    },
+    {
+      "status": "candidate",
+      "summary": "The macOS glyph indirect-command-buffer path is now default-disabled because Metal validation exposed CPU access to private ICB storage and an invalid ICB pipeline configuration; restoring it with a truly valid text ICB path remains a high-value GPU follow-up."
+    },
+    {
+      "status": "candidate",
+      "summary": "Label wrapping still re-shapes tentative strings per word and clones intermediate Strings, which is likely the next CPU hotspot for text-heavy wrapped layouts."
+    }
+  ]
+}

@@ -38,6 +38,7 @@
 )]
 
 use block::ConcreteBlock;
+use core::f32::consts::TAU;
 use core::ptr::NonNull;
 use metal::foreign_types::ForeignType;
 use metal::foreign_types::ForeignTypeRef;
@@ -47,32 +48,34 @@ use objc::runtime::Object;
 use objc::sel;
 use objc::sel_impl;
 use oxide_renderer_api as api;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::CStr;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::{atomic::AtomicBool, Arc, OnceLock};
+use std::time::Instant;
 use thiserror::Error;
 
 #[cfg(target_os = "ios")]
 extern "C" {
-    fn oxide_host_release_drawable(drawable: *mut core::ffi::c_void);
     fn oxide_host_ios_log(ptr: *const core::ffi::c_char, len: usize);
+    fn oxide_host_perf_signpost_begin(ptr: *const core::ffi::c_char, len: usize) -> u64;
+    fn oxide_host_perf_signpost_end(ptr: *const core::ffi::c_char, len: usize, signpost_id: u64);
 }
-
-#[cfg(not(target_os = "ios"))]
-unsafe fn oxide_host_release_drawable(_drawable: *mut core::ffi::c_void) {}
 
 #[inline(always)]
 #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
 fn ios_log_enabled() -> bool {
-    let oxide = std::env::var("OXIDE_RUST_LOG")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    let nametag = std::env::var("NAMETAG_DEBUG_RUNTIME_CREATE")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    oxide || nametag
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        let oxide = std::env::var("OXIDE_RUST_LOG")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let nametag = std::env::var("NAMETAG_DEBUG_RUNTIME_CREATE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        oxide || nametag
+    })
 }
 
 #[inline(always)]
@@ -83,6 +86,148 @@ fn ios_log(msg: &str) {
         if ios_log_enabled() {
             oxide_host_ios_log(msg.as_ptr() as *const core::ffi::c_char, msg.len());
         }
+    }
+}
+
+#[inline(always)]
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+fn camera_perf_trace_signposts_enabled() -> bool {
+    #[cfg(target_os = "ios")]
+    {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            std::env::var("OXIDE_PERF_CAMERA_TRACE_PHASES")
+                .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+                .unwrap_or(false)
+        })
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        false
+    }
+}
+
+#[inline(always)]
+fn camera_perf_stage_stats_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("OXIDE_PERF_PARKED")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    })
+}
+
+#[inline(always)]
+fn experimental_tiny_camera_preview_renderer_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("OXIDE_PERF_CAMERA_TINY_PREVIEW_RENDERER")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    })
+}
+
+#[inline(always)]
+fn experimental_preview_submission_backpressure_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("OXIDE_PERF_CAMERA_PREVIEW_BACKPRESSURE")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    })
+}
+
+#[inline(always)]
+pub fn direct_preview_submission_backpressure_applies(enabled: bool, in_flight: usize) -> bool {
+    enabled && in_flight >= 2
+}
+
+#[inline(always)]
+#[cfg(target_os = "ios")]
+fn ios_monotonic_now_ns() -> u64 {
+    static TIMEBASE: OnceLock<(u64, u64)> = OnceLock::new();
+    let (numer, denom) = *TIMEBASE.get_or_init(|| {
+        let mut info = mach2::mach_time::mach_timebase_info_data_t { numer: 0, denom: 0 };
+        let status = unsafe { mach2::mach_time::mach_timebase_info(&mut info) };
+        if status != mach2::kern_return::KERN_SUCCESS || info.denom == 0 {
+            return (0, 1);
+        }
+        (u64::from(info.numer), u64::from(info.denom))
+    });
+    if numer == 0 {
+        return 0;
+    }
+    let ticks = unsafe { mach2::mach_time::mach_absolute_time() };
+    ticks.saturating_mul(numer) / denom.max(1)
+}
+
+#[inline(always)]
+#[cfg(not(target_os = "ios"))]
+fn ios_monotonic_now_ns() -> u64 {
+    0
+}
+
+#[inline(always)]
+fn direct_preview_present_frame_age_ms(timestamp_ns: u64) -> f64 {
+    if timestamp_ns == 0 {
+        return 0.0;
+    }
+    let now_ns = ios_monotonic_now_ns();
+    if now_ns <= timestamp_ns {
+        return 0.0;
+    }
+    (now_ns - timestamp_ns) as f64 / 1_000_000.0
+}
+
+#[inline(always)]
+fn elapsed_ms(start: Option<Instant>) -> f64 {
+    start.map(|value| value.elapsed().as_secs_f64() * 1000.0).unwrap_or(0.0)
+}
+
+#[cfg(target_os = "ios")]
+#[inline(always)]
+unsafe fn command_buffer_gpu_duration_ms(buffer: &CommandBufferRef) -> f64 {
+    let gpu_start_time: f64 = msg_send![buffer.as_ptr(), GPUStartTime];
+    let gpu_end_time: f64 = msg_send![buffer.as_ptr(), GPUEndTime];
+    if gpu_start_time.is_finite()
+        && gpu_end_time.is_finite()
+        && gpu_start_time > 0.0
+        && gpu_end_time >= gpu_start_time
+    {
+        return (gpu_end_time - gpu_start_time) * 1000.0;
+    }
+    0.0
+}
+
+#[cfg(not(target_os = "ios"))]
+#[inline(always)]
+unsafe fn command_buffer_gpu_duration_ms(_buffer: &CommandBufferRef) -> f64 {
+    0.0
+}
+
+#[inline(always)]
+fn with_perf_signpost<T>(_name: &str, body: impl FnOnce() -> T) -> T {
+    #[cfg(target_os = "ios")]
+    {
+        if !camera_perf_trace_signposts_enabled() {
+            return body();
+        }
+        let signpost_id = unsafe {
+            oxide_host_perf_signpost_begin(_name.as_ptr() as *const core::ffi::c_char, _name.len())
+        };
+        let result = body();
+        unsafe {
+            oxide_host_perf_signpost_end(
+                _name.as_ptr() as *const core::ffi::c_char,
+                _name.len(),
+                signpost_id,
+            );
+        }
+        return result;
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        body()
     }
 }
 
@@ -105,6 +250,31 @@ fn nsstring_to_string(ns: *mut Object) -> Option<String> {
 fn env_flag(name: &str) -> Option<bool> {
     std::env::var(name).ok().map(|value| {
         matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+    })
+}
+
+#[inline(always)]
+fn camera_render_mode_from_env() -> Option<CameraRenderMode> {
+    std::env::var("OXIDE_CAMERA_RENDER_MODE").ok().and_then(|value| {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "nv12_optimized" | "optimized" | "default" => Some(CameraRenderMode::Nv12Optimized),
+            "nv12_legacy" | "legacy" => Some(CameraRenderMode::Nv12Legacy),
+            "bgra_benchmark" | "bgra" => Some(CameraRenderMode::BgraBenchmark),
+            _ => None,
+        }
+    })
+}
+
+#[inline(always)]
+fn camera_texture_source_from_env() -> Option<CameraTextureSource> {
+    std::env::var("OXIDE_CAMERA_TEXTURE_SOURCE").ok().and_then(|value| {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "live" | "camera" => Some(CameraTextureSource::Live),
+            "synthetic" | "benchmark" | "synthetic_benchmark" => {
+                Some(CameraTextureSource::SyntheticBenchmark)
+            }
+            _ => None,
+        }
     })
 }
 
@@ -193,7 +363,9 @@ fn glyph_icb_enabled_default() -> bool {
     if running_on_ios_simulator() {
         return false;
     }
-    true
+    // The current glyph ICB path is not yet production-safe on device either.
+    // Keep the default on the direct draw path until the ICB pipeline is fixed.
+    false
 }
 
 #[inline(always)]
@@ -206,11 +378,44 @@ fn layer_cache_enabled_default() -> bool {
     true
 }
 
+#[inline(always)]
+fn glyph_icb_resource_options() -> MTLResourceOptions {
+    // ICB recording calls `indirect_render_command_at_index`, which is CPU access.
+    // Private storage faults under Metal validation and can surface as submit errors.
+    MTLResourceOptions::StorageModeShared
+}
+
 // Metal `set*Bytes` APIs are limited to 4 KiB payloads per call.
 // Keep instanced parameter uploads under this limit by chunking draws.
 const METAL_SET_BYTES_LIMIT: usize = 4096;
 const FRAME_RING_SIZE: usize = 8;
 const IMAGE_ARG_TEXTURE_SLOTS: u32 = 128;
+const LEGACY_SPINNER_LARGE_ATOM: f32 = 37.0;
+const LEGACY_SPINNER_LARGE_STROKE: f32 = 2.5;
+const LEGACY_SPINNER_ROTATION_MS: u64 = 1_000;
+
+#[inline]
+fn legacy_spinner_thickness(atom: f32) -> f32 {
+    (atom.max(1.0) / LEGACY_SPINNER_LARGE_ATOM * LEGACY_SPINNER_LARGE_STROKE).max(1.0)
+}
+
+#[inline]
+fn legacy_spinner_radius(atom: f32) -> f32 {
+    let clamped_atom = atom.max(1.0);
+    (clamped_atom * 0.5 - legacy_spinner_thickness(clamped_atom)).max(2.0)
+}
+
+#[inline]
+fn legacy_spinner_phase(now_ms: u64) -> f32 {
+    let progress = (now_ms % LEGACY_SPINNER_ROTATION_MS) as f32 / LEGACY_SPINNER_ROTATION_MS as f32;
+    progress * TAU
+}
+
+#[inline]
+fn spinner_now_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
 
 #[inline(always)]
 fn max_instances_per_set_bytes(v_bytes_per_instance: usize, f_bytes_per_instance: usize) -> usize {
@@ -235,8 +440,55 @@ pub enum MetalInitError {
     NoQueue,
     #[error("failed to compile shader library: {0}")]
     Library(String),
-    #[error("pipeline state error")]
-    Pipeline,
+    #[error("pipeline state error in {0}")]
+    Pipeline(String),
+}
+
+#[inline(always)]
+fn pipeline_error(stage: &str, message: impl Into<String>) -> MetalInitError {
+    let message = message.into();
+    eprintln!("[Oxide] renderer pipeline failure stage={stage}: {message}");
+    ios_log(&format!("oxide.renderer-metal: pipeline failure stage={} message={}", stage, message));
+    MetalInitError::Pipeline(format!("{}: {}", stage, message))
+}
+
+#[inline(always)]
+fn pipeline_function(lib: &Library, stage: &str, name: &str) -> Result<Function, MetalInitError> {
+    lib.get_function(name, None).map_err(|err| pipeline_error(stage, err))
+}
+
+#[inline(always)]
+fn pipeline_state(
+    device: &Device,
+    stage: &str,
+    desc: &RenderPipelineDescriptor,
+) -> Result<RenderPipelineState, MetalInitError> {
+    desc.set_label(stage);
+    device.new_render_pipeline_state(desc).map_err(|err| pipeline_error(stage, err))
+}
+
+#[inline(always)]
+fn build_init_stage<T>(
+    stage: &'static str,
+    build: impl FnOnce() -> Result<T, MetalInitError>,
+) -> Result<T, MetalInitError> {
+    ios_log(&format!("oxide.renderer-metal: init building {}", stage));
+    let result = build();
+    if let Err(err) = &result {
+        eprintln!("[Oxide] renderer init failed stage={stage}: {err}");
+        ios_log(&format!("oxide.renderer-metal: init failed stage={} err={}", stage, err));
+    }
+    result
+}
+
+#[inline(always)]
+fn pipeline_mentions_indirect_command_buffers(err: &MetalInitError) -> bool {
+    match err {
+        MetalInitError::Pipeline(message) => {
+            message.to_ascii_lowercase().contains("indirect command buffers")
+        }
+        _ => false,
+    }
 }
 
 const SHADERS_SRC: &str = concat!(
@@ -255,12 +507,36 @@ const SHADERS_SRC: &str = concat!(
 pub struct MetalRendererConfig {
     pub wants_hdr: bool,
     pub sample_count: u32,
+    pub camera_render_mode: CameraRenderMode,
+    pub camera_texture_source: CameraTextureSource,
+    pub direct_preview_only: bool,
 }
 
 impl Default for MetalRendererConfig {
     fn default() -> Self {
-        Self { wants_hdr: false, sample_count: 1 }
+        Self {
+            wants_hdr: false,
+            sample_count: 1,
+            camera_render_mode: camera_render_mode_from_env()
+                .unwrap_or(CameraRenderMode::Nv12Optimized),
+            camera_texture_source: camera_texture_source_from_env()
+                .unwrap_or(CameraTextureSource::Live),
+            direct_preview_only: false,
+        }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CameraRenderMode {
+    Nv12Optimized,
+    Nv12Legacy,
+    BgraBenchmark,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CameraTextureSource {
+    Live,
+    SyntheticBenchmark,
 }
 
 #[allow(dead_code)]
@@ -280,6 +556,10 @@ pub struct MetalRenderer {
     pso_text: RenderPipelineState,
     pso_text_sdf: RenderPipelineState,
     pso_camera: RenderPipelineState,
+    pso_camera_legacy: RenderPipelineState,
+    pso_camera_preview_fast_full: RenderPipelineState,
+    pso_camera_preview_fast_video: RenderPipelineState,
+    pso_camera_bgra: RenderPipelineState,
     // Argument buffer for image textures
     img_arg: Option<ArgumentEncoder>,
     img_arg_buf: Option<Buffer>,
@@ -338,21 +618,244 @@ pub struct MetalRenderer {
     last_cam_mx: i32,
     last_cam_vr: i32,
     last_cam_cs: i32,
+    last_cam_fetch_ms: f64,
     cam_xfade_prev_tex: Option<Texture>,
     cam_xfade_t0: Option<std::time::Instant>,
     cam_xfade_ms: u32,
     cam_blur_fade_t0: Option<std::time::Instant>,
+    camera_render_mode: CameraRenderMode,
+    camera_texture_source: CameraTextureSource,
+    current_live_camera_frame: Option<LiveCameraNv12Frame>,
+    camera_preview_renderer: Option<CameraPreviewRenderer>,
+    bench_cam_y_tex: Option<Texture>,
+    bench_cam_uv_tex: Option<Texture>,
+    bench_cam_bgra_tex: Option<Texture>,
     use_camera_textures: bool,
     use_image_arg_buffer: bool,
     submit_error_flag: Arc<AtomicBool>,
+    direct_preview_submitted: VecDeque<(u64, CommandBuffer)>,
+    direct_preview_last_submission_depth: u32,
+    direct_preview_last_submission_skipped: u32,
+    direct_preview_last_present_frame_age_ms: f64,
+    direct_preview_last_completed_frame_id: u64,
+    direct_preview_last_completed_gpu_ms: f64,
+    pending_present_drawable: usize,
+    pending_present_texture: usize,
+}
+
+#[allow(dead_code)]
+struct CameraPreviewRenderer {
+    queue: CommandQueue,
+    pso_camera: RenderPipelineState,
+    pso_camera_legacy: RenderPipelineState,
+    pso_camera_preview_fast_full: RenderPipelineState,
+    pso_camera_preview_fast_video: RenderPipelineState,
+    submit_error_flag: Arc<AtomicBool>,
+    inflight_submissions: Arc<AtomicUsize>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct CameraPreviewRenderResult {
+    drew_live_frame: bool,
+    camera_width: i32,
+    camera_height: i32,
+    camera_bit_depth: i32,
+    camera_matrix: i32,
+    camera_video_range: i32,
+    camera_color_space: i32,
+    setup_ms: f64,
+    encode_quad_ms: f64,
+    present_ms: f64,
+    commit_ms: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct DirectCameraEncodeStats {
+    camera_width: i32,
+    camera_height: i32,
+    camera_bit_depth: i32,
+    camera_matrix: i32,
+    camera_video_range: i32,
+    camera_color_space: i32,
+    bind_ms: f64,
+    draw_ms: f64,
+}
+
+impl CameraPreviewRenderer {
+    fn new(
+        queue: CommandQueue,
+        pso_camera: RenderPipelineState,
+        pso_camera_legacy: RenderPipelineState,
+        pso_camera_preview_fast_full: RenderPipelineState,
+        pso_camera_preview_fast_video: RenderPipelineState,
+    ) -> Self {
+        Self {
+            queue,
+            pso_camera,
+            pso_camera_legacy,
+            pso_camera_preview_fast_full,
+            pso_camera_preview_fast_video,
+            submit_error_flag: Arc::new(AtomicBool::new(false)),
+            inflight_submissions: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn submit_error_pending(&self) -> bool {
+        self.submit_error_flag.load(Ordering::Acquire)
+    }
+
+    fn take_submit_error(&self) -> bool {
+        self.submit_error_flag.swap(false, Ordering::AcqRel)
+    }
+
+    fn pending_submission_count(&self) -> u32 {
+        self.inflight_submissions.load(Ordering::Acquire) as u32
+    }
+
+    fn camera_pipeline_for_frame(
+        &self,
+        frame: &LiveCameraNv12Frame,
+        mode: CameraRenderMode,
+    ) -> &RenderPipelineState {
+        if direct_preview_uses_fast_yuv_pipeline(frame.bit_depth, frame.matrix, frame.video_range) {
+            if frame.video_range == 0 {
+                return &self.pso_camera_preview_fast_full;
+            }
+            if frame.video_range == 1 {
+                return &self.pso_camera_preview_fast_video;
+            }
+        }
+        match mode {
+            CameraRenderMode::Nv12Legacy => &self.pso_camera_legacy,
+            CameraRenderMode::Nv12Optimized | CameraRenderMode::BgraBenchmark => &self.pso_camera,
+        }
+    }
+
+    unsafe fn render_live_frame(
+        &mut self,
+        drawable_ptr: *mut core::ffi::c_void,
+        frame: Option<&LiveCameraNv12Frame>,
+        width: u32,
+        height: u32,
+        scale: f32,
+        mode: CameraRenderMode,
+        collect_stage_stats: bool,
+    ) -> Result<CameraPreviewRenderResult, api::RenderError> {
+        let mut result = CameraPreviewRenderResult::default();
+        let Some(frame) = frame else {
+            return Ok(result);
+        };
+        if drawable_ptr.is_null() {
+            return Ok(result);
+        }
+
+        let vp_dp = [(width as f32) / scale.max(1.0), (height as f32) / scale.max(1.0)];
+        let rect_dp = [0.0, 0.0, vp_dp[0], vp_dp[1]];
+        let command_buffer_t0 = collect_stage_stats.then(Instant::now);
+        let cmd = self.queue.new_command_buffer().to_owned();
+        let command_buffer_ms = elapsed_ms(command_buffer_t0);
+        let rpd = RenderPassDescriptor::new();
+        let setup_t0 = collect_stage_stats.then(Instant::now);
+        with_perf_signpost("camera.renderer.direct.setup", || -> Result<(), api::RenderError> {
+            let raw_drawable_obj = drawable_ptr as *mut Object;
+            let raw_dst_tex: *mut MTLTexture = msg_send![raw_drawable_obj, texture];
+            if raw_dst_tex.is_null() {
+                return Err(api::RenderError::InvalidOperation(
+                    "drawable did not provide a destination texture",
+                ));
+            }
+            let ca0 = rpd.color_attachments().object_at(0).unwrap();
+            ca0.set_texture(Some(TextureRef::from_ptr(raw_dst_tex)));
+            ca0.set_store_action(MTLStoreAction::Store);
+            ca0.set_load_action(MTLLoadAction::Clear);
+            ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 });
+            Ok(())
+        })?;
+        result.setup_ms = elapsed_ms(setup_t0);
+
+        let encoder_t0 = collect_stage_stats.then(Instant::now);
+        let enc = cmd.new_render_command_encoder(&rpd);
+        let encoder_ms = elapsed_ms(encoder_t0);
+        let encode_quad_t0 = collect_stage_stats.then(Instant::now);
+        with_perf_signpost("camera.renderer.direct.encode_quad", || {
+            let (uv_scale, uv_bias) =
+                camera_aspect_fill_params(rect_dp[2], rect_dp[3], frame.width, frame.height);
+            let params = pack_camera_params(
+                rect_dp,
+                api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+                1.0,
+                uv_scale,
+                uv_bias,
+                false,
+                frame.matrix,
+                frame.video_range,
+                frame.bit_depth,
+            );
+            let y_tex = TextureRef::from_ptr(frame.y_tex as *mut MTLTexture);
+            let uv_tex = TextureRef::from_ptr(frame.uv_tex as *mut MTLTexture);
+            enc.set_render_pipeline_state(self.camera_pipeline_for_frame(frame, mode));
+            enc.set_fragment_texture(0, Some(y_tex));
+            enc.set_fragment_texture(1, Some(uv_tex));
+            enc.set_fragment_bytes(
+                1,
+                core::mem::size_of_val(&params) as u64,
+                (&params as *const CameraGpuParams).cast(),
+            );
+            enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
+        });
+        result.encode_quad_ms = elapsed_ms(encode_quad_t0);
+        enc.end_encoding();
+
+        let raw_drawable = drawable_ptr as *mut MTLDrawable;
+        let drawable = DrawableRef::from_ptr(raw_drawable);
+        let present_t0 = collect_stage_stats.then(Instant::now);
+        with_perf_signpost(
+            "camera.renderer.direct.present_drawable",
+            || -> Result<(), api::RenderError> {
+                cmd.present_drawable(drawable);
+                Ok(())
+            },
+        )?;
+        result.present_ms = elapsed_ms(present_t0);
+
+        let submit_error_flag = Arc::clone(&self.submit_error_flag);
+        let inflight_submissions = Arc::clone(&self.inflight_submissions);
+        inflight_submissions.fetch_add(1, Ordering::AcqRel);
+        let completion = ConcreteBlock::new(move |buffer: &CommandBufferRef| {
+            if buffer.status() == MTLCommandBufferStatus::Error {
+                submit_error_flag.store(true, Ordering::Release);
+            }
+            inflight_submissions.fetch_sub(1, Ordering::AcqRel);
+        })
+        .copy();
+        cmd.add_completed_handler(&completion);
+
+        let commit_t0 = collect_stage_stats.then(Instant::now);
+        with_perf_signpost("camera.renderer.direct.commit", || {
+            cmd.commit();
+        });
+        result.commit_ms = elapsed_ms(commit_t0);
+        result.drew_live_frame = true;
+        result.camera_width = frame.width;
+        result.camera_height = frame.height;
+        result.camera_bit_depth = frame.bit_depth;
+        result.camera_matrix = frame.matrix;
+        result.camera_video_range = frame.video_range;
+        result.camera_color_space = frame.color_space;
+        Ok(result)
+    }
 }
 
 impl MetalRenderer {
     fn new_with_config_impl(config: MetalRendererConfig) -> Result<Self, MetalInitError> {
         let simulator = running_on_ios_simulator();
         ios_log(&format!(
-            "oxide.renderer-metal: init begin simulator={} wants_hdr={} sample_count={}",
-            simulator, config.wants_hdr, config.sample_count
+            "oxide.renderer-metal: init begin simulator={} wants_hdr={} sample_count={} camera_mode={:?} camera_source={:?}",
+            simulator,
+            config.wants_hdr,
+            config.sample_count,
+            config.camera_render_mode,
+            config.camera_texture_source
         ));
         ios_log("oxide.renderer-metal: init before device resolve");
         let device = if let Some(external) = take_external_mtl_device() {
@@ -387,20 +890,97 @@ impl MetalRenderer {
         let mut color_format =
             if hdr_enabled { MTLPixelFormat::BGRA10_XR } else { MTLPixelFormat::BGRA8Unorm_sRGB };
 
-        let build_pipelines = |fmt: MTLPixelFormat| -> Result<_, MetalInitError> {
-            let pso_solid = build_solid_pso(&device, &library, fmt, sample_count)?;
-            let pso_image = build_image_pso(&device, &library, fmt, sample_count)?;
-            let pso_image_single = build_image_single_pso(&device, &library, fmt, sample_count)?;
-            let pso_blur = build_blur_pso(&device, &library, fmt)?;
-            let pso_downsample = build_downsample_pso(&device, &library, fmt)?;
-            let pso_upsample = build_upsample_pso(&device, &library, fmt)?;
-            let pso_backdrop = build_backdrop_pso(&device, &library, fmt)?;
-            let pso_rrect = build_rrect_pso(&device, &library, fmt, sample_count)?;
-            let pso_nine = build_nine_slice_pso(&device, &library, fmt, sample_count)?;
-            let pso_spin = build_spinner_pso(&device, &library, fmt, sample_count)?;
-            let pso_text = build_text_pso(&device, &library, fmt, sample_count)?;
-            let pso_text_sdf = build_text_sdf_pso(&device, &library, fmt, sample_count)?;
-            let pso_camera = build_camera_pso(&device, &library, fmt, sample_count)?;
+        let mut use_glyph_icb = apply_simulator_safety_bool(
+            simulator,
+            env_flag("OXIDE_GLYPH_USE_ICB").unwrap_or_else(glyph_icb_enabled_default),
+        );
+
+        let direct_preview_only = config.direct_preview_only;
+        let build_pipelines = |fmt: MTLPixelFormat,
+                               supports_glyph_icb: bool|
+         -> Result<_, MetalInitError> {
+            let pso_camera = build_init_stage("pso.camera_nv12", || {
+                build_camera_pso(&device, &library, fmt, sample_count, "f_camera_nv12")
+            })?;
+            let pso_camera_legacy = build_init_stage("pso.camera_nv12_legacy", || {
+                build_camera_pso(&device, &library, fmt, sample_count, "f_camera_nv12_legacy")
+            })?;
+            let pso_camera_preview_fast_full =
+                build_init_stage("pso.camera_nv12_preview_fast_full", || {
+                    build_camera_pso(
+                        &device,
+                        &library,
+                        fmt,
+                        sample_count,
+                        "f_camera_nv12_preview_fast_full",
+                    )
+                })?;
+            let pso_camera_preview_fast_video =
+                build_init_stage("pso.camera_nv12_preview_fast_video", || {
+                    build_camera_pso(
+                        &device,
+                        &library,
+                        fmt,
+                        sample_count,
+                        "f_camera_nv12_preview_fast_video",
+                    )
+                })?;
+            let pso_camera_bgra = build_init_stage("pso.camera_bgra_bench", || {
+                build_camera_pso(&device, &library, fmt, sample_count, "f_camera_bgra_bench")
+            })?;
+            if direct_preview_only {
+                return Ok((
+                    pso_camera.to_owned(),
+                    pso_camera.to_owned(),
+                    pso_camera.to_owned(),
+                    pso_camera.to_owned(),
+                    pso_camera.to_owned(),
+                    pso_camera.to_owned(),
+                    pso_camera.to_owned(),
+                    pso_camera.to_owned(),
+                    pso_camera.to_owned(),
+                    pso_camera.to_owned(),
+                    pso_camera.to_owned(),
+                    pso_camera.to_owned(),
+                    pso_camera,
+                    pso_camera_legacy,
+                    pso_camera_preview_fast_full,
+                    pso_camera_preview_fast_video,
+                    pso_camera_bgra,
+                ));
+            }
+            let pso_solid = build_init_stage("pso.solid", || {
+                build_solid_pso(&device, &library, fmt, sample_count)
+            })?;
+            let pso_image = build_init_stage("pso.image", || {
+                build_image_pso(&device, &library, fmt, sample_count)
+            })?;
+            let pso_image_single = build_init_stage("pso.image_single", || {
+                build_image_single_pso(&device, &library, fmt, sample_count)
+            })?;
+            let pso_blur = build_init_stage("pso.blur", || build_blur_pso(&device, &library, fmt))?;
+            let pso_downsample = build_init_stage("pso.downsample", || {
+                build_downsample_pso(&device, &library, fmt)
+            })?;
+            let pso_upsample =
+                build_init_stage("pso.upsample", || build_upsample_pso(&device, &library, fmt))?;
+            let pso_backdrop =
+                build_init_stage("pso.backdrop", || build_backdrop_pso(&device, &library, fmt))?;
+            let pso_rrect = build_init_stage("pso.rrect", || {
+                build_rrect_pso(&device, &library, fmt, sample_count)
+            })?;
+            let pso_nine = build_init_stage("pso.nine_slice", || {
+                build_nine_slice_pso(&device, &library, fmt, sample_count)
+            })?;
+            let pso_spin = build_init_stage("pso.spinner", || {
+                build_spinner_pso(&device, &library, fmt, sample_count)
+            })?;
+            let pso_text = build_init_stage("pso.text", || {
+                build_text_pso(&device, &library, fmt, sample_count, supports_glyph_icb)
+            })?;
+            let pso_text_sdf = build_init_stage("pso.text_sdf", || {
+                build_text_sdf_pso(&device, &library, fmt, sample_count, supports_glyph_icb)
+            })?;
             Ok((
                 pso_solid,
                 pso_image,
@@ -415,6 +995,10 @@ impl MetalRenderer {
                 pso_text,
                 pso_text_sdf,
                 pso_camera,
+                pso_camera_legacy,
+                pso_camera_preview_fast_full,
+                pso_camera_preview_fast_video,
+                pso_camera_bgra,
             ))
         };
 
@@ -432,54 +1016,82 @@ impl MetalRenderer {
             pso_text,
             pso_text_sdf,
             pso_camera,
-        ) = match build_pipelines(color_format) {
-            Ok(pipelines) => pipelines,
-            Err(err) => {
-                if hdr_enabled {
-                    hdr_enabled = false;
-                    color_format = MTLPixelFormat::BGRA8Unorm_sRGB;
-                    build_pipelines(color_format)?
-                } else {
+            pso_camera_legacy,
+            pso_camera_preview_fast_full,
+            pso_camera_preview_fast_video,
+            pso_camera_bgra,
+        ) = loop {
+            match build_pipelines(color_format, use_glyph_icb) {
+                Ok(pipelines) => break pipelines,
+                Err(err) => {
+                    if hdr_enabled {
+                        hdr_enabled = false;
+                        color_format = MTLPixelFormat::BGRA8Unorm_sRGB;
+                        continue;
+                    }
+                    if use_glyph_icb && pipeline_mentions_indirect_command_buffers(&err) {
+                        eprintln!(
+                            "[Oxide] renderer disabling glyph ICB after pipeline rejection: {err}"
+                        );
+                        use_glyph_icb = false;
+                        continue;
+                    }
                     return Err(err);
                 }
             }
         };
         // Prepare argument encoder for image textures
-        let f_image_fn =
-            library.get_function("f_image", None).map_err(|_| MetalInitError::Pipeline)?;
-        let img_arg = Some(f_image_fn.new_argument_encoder(2));
-        let img_ab_len = img_arg.as_ref().unwrap().encoded_length();
-        let img_arg_buf =
-            Some(device.new_buffer(img_ab_len, MTLResourceOptions::StorageModeShared));
-        img_arg.as_ref().unwrap().set_argument_buffer(img_arg_buf.as_ref().unwrap(), 0);
+        let (img_arg, img_arg_buf) = if direct_preview_only {
+            (None, None)
+        } else {
+            let f_image_fn = pipeline_function(&library, "function.f_image", "f_image")?;
+            let img_arg = Some(f_image_fn.new_argument_encoder(2));
+            let img_ab_len = img_arg.as_ref().unwrap().encoded_length();
+            let img_arg_buf =
+                Some(device.new_buffer(img_ab_len, MTLResourceOptions::StorageModeShared));
+            img_arg.as_ref().unwrap().set_argument_buffer(img_arg_buf.as_ref().unwrap(), 0);
+            (img_arg, img_arg_buf)
+        };
         let sampler = build_sampler(&device);
         let opts =
             MTLResourceOptions::CPUCacheModeWriteCombined | MTLResourceOptions::StorageModeShared;
+        let direct_preview_ring_size = 4 * 1024;
         // Pre-size dynamic rings to reduce first-frame growth churn on Simulator.
         // This path previously hit MTLSim `newBuffer` failures during early growth.
-        let vb = Ring::new(&device, 4 * 1024 * 1024, opts);
-        let ib = Ring::new(&device, 2 * 1024 * 1024, opts);
-        let ub = Ring::new(&device, 2 * 1024 * 1024, opts);
-        let damage_enabled = apply_simulator_safety_bool(
-            simulator,
-            env_flag("OXIDE_ENABLE_DAMAGE").unwrap_or(false),
+        let vb = Ring::new(
+            &device,
+            if direct_preview_only { direct_preview_ring_size } else { 4 * 1024 * 1024 },
+            opts,
         );
-        let use_glyph_icb = apply_simulator_safety_bool(
-            simulator,
-            env_flag("OXIDE_GLYPH_USE_ICB").unwrap_or_else(glyph_icb_enabled_default),
+        let ib = Ring::new(
+            &device,
+            if direct_preview_only { direct_preview_ring_size } else { 2 * 1024 * 1024 },
+            opts,
         );
-        let layer_cache_enabled = apply_simulator_safety_bool(
-            simulator,
-            env_flag("OXIDE_ENABLE_LAYER_CACHE").unwrap_or_else(layer_cache_enabled_default),
+        let ub = Ring::new(
+            &device,
+            if direct_preview_only { direct_preview_ring_size } else { 2 * 1024 * 1024 },
+            opts,
         );
+        let damage_enabled = !direct_preview_only
+            && apply_simulator_safety_bool(
+                simulator,
+                env_flag("OXIDE_ENABLE_DAMAGE").unwrap_or(false),
+            );
+        let layer_cache_enabled = !direct_preview_only
+            && apply_simulator_safety_bool(
+                simulator,
+                env_flag("OXIDE_ENABLE_LAYER_CACHE").unwrap_or_else(layer_cache_enabled_default),
+            );
         let use_camera_textures = apply_simulator_safety_bool(
             simulator,
             env_flag("OXIDE_ENABLE_CAMERA_TEXTURES").unwrap_or(true),
         );
-        let use_image_arg_buffer = apply_simulator_safety_bool(
-            simulator,
-            env_flag("OXIDE_ENABLE_IMAGE_ARG_BUFFER").unwrap_or(true),
-        );
+        let use_image_arg_buffer = !direct_preview_only
+            && apply_simulator_safety_bool(
+                simulator,
+                env_flag("OXIDE_ENABLE_IMAGE_ARG_BUFFER").unwrap_or(true),
+            );
         if !use_glyph_icb {
             ios_log("oxide.renderer-metal: glyph ICB path disabled");
         }
@@ -500,7 +1112,27 @@ impl MetalRenderer {
             .ok()
             .and_then(|s| s.parse::<f32>().ok())
             .unwrap_or(0.25);
-        let applied_config = MetalRendererConfig { wants_hdr: hdr_enabled, sample_count };
+        let applied_config = MetalRendererConfig {
+            wants_hdr: hdr_enabled,
+            sample_count,
+            camera_render_mode: config.camera_render_mode,
+            camera_texture_source: config.camera_texture_source,
+            direct_preview_only,
+        };
+        let camera_preview_renderer = if direct_preview_only
+            && experimental_tiny_camera_preview_renderer_enabled()
+        {
+            ios_log("oxide.renderer-metal: [EXPERIMENTAL] tiny camera preview renderer enabled");
+            Some(CameraPreviewRenderer::new(
+                queue.to_owned(),
+                pso_camera.to_owned(),
+                pso_camera_legacy.to_owned(),
+                pso_camera_preview_fast_full.to_owned(),
+                pso_camera_preview_fast_video.to_owned(),
+            ))
+        } else {
+            None
+        };
 
         Ok(Self {
             device,
@@ -518,6 +1150,10 @@ impl MetalRenderer {
             pso_text,
             pso_text_sdf,
             pso_camera,
+            pso_camera_legacy,
+            pso_camera_preview_fast_full,
+            pso_camera_preview_fast_video,
+            pso_camera_bgra,
             img_arg,
             img_arg_buf,
             sampler,
@@ -571,13 +1207,29 @@ impl MetalRenderer {
             last_cam_mx: 0,
             last_cam_vr: 0,
             last_cam_cs: 0,
+            last_cam_fetch_ms: 0.0,
             cam_xfade_prev_tex: None,
             cam_xfade_t0: None,
             cam_xfade_ms: 120,
             cam_blur_fade_t0: None,
+            camera_render_mode: config.camera_render_mode,
+            camera_texture_source: config.camera_texture_source,
+            current_live_camera_frame: None,
+            camera_preview_renderer,
+            bench_cam_y_tex: None,
+            bench_cam_uv_tex: None,
+            bench_cam_bgra_tex: None,
             use_camera_textures,
             use_image_arg_buffer,
             submit_error_flag: Arc::new(AtomicBool::new(false)),
+            direct_preview_submitted: VecDeque::new(),
+            direct_preview_last_submission_depth: 0,
+            direct_preview_last_submission_skipped: 0,
+            direct_preview_last_present_frame_age_ms: 0.0,
+            direct_preview_last_completed_frame_id: 0,
+            direct_preview_last_completed_gpu_ms: 0.0,
+            pending_present_drawable: 0,
+            pending_present_texture: 0,
         })
     }
 
@@ -587,6 +1239,415 @@ impl MetalRenderer {
 
     pub fn new_default() -> Result<Self, MetalInitError> {
         Self::new_with_config(MetalRendererConfig::default())
+    }
+
+    pub fn set_camera_render_mode(&mut self, mode: CameraRenderMode) {
+        self.camera_render_mode = mode;
+        self.config.camera_render_mode = mode;
+    }
+
+    pub fn set_camera_texture_source(&mut self, source: CameraTextureSource) {
+        if self.camera_texture_source != source {
+            self.release_live_camera_frame();
+        }
+        self.camera_texture_source = source;
+        self.config.camera_texture_source = source;
+    }
+
+    #[cfg(target_os = "ios")]
+    fn release_live_camera_frame(&mut self) {
+        extern "C" {
+            fn oxide_cam_release_acquired(slot: u32, generation: u64);
+        }
+        if let Some(frame) = self.current_live_camera_frame.take() {
+            unsafe {
+                oxide_cam_release_acquired(frame.slot, frame.generation);
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "ios"))]
+    fn release_live_camera_frame(&mut self) {
+        self.current_live_camera_frame = None;
+    }
+
+    fn poll_direct_preview_submissions(&mut self) {
+        let log_enabled = ios_log_enabled();
+        while let Some((frame_id, cmd)) = self.direct_preview_submitted.front() {
+            let status = cmd.status();
+            match status {
+                MTLCommandBufferStatus::Completed => {
+                    self.direct_preview_last_completed_frame_id = *frame_id;
+                    self.direct_preview_last_completed_gpu_ms =
+                        unsafe { command_buffer_gpu_duration_ms(cmd) };
+                    self.direct_preview_submitted.pop_front();
+                }
+                MTLCommandBufferStatus::Error => {
+                    if log_enabled {
+                        unsafe {
+                            let err: *mut Object = msg_send![cmd.as_ptr(), error];
+                            if !err.is_null() {
+                                let code: i64 = msg_send![err, code];
+                                let domain_obj: *mut Object = msg_send![err, domain];
+                                let desc_obj: *mut Object = msg_send![err, localizedDescription];
+                                let domain = nsstring_to_string(domain_obj)
+                                    .unwrap_or_else(|| "<null-domain>".to_string());
+                                let desc = nsstring_to_string(desc_obj)
+                                    .unwrap_or_else(|| "<null-description>".to_string());
+                                ios_log(&format!(
+                                    "oxide.renderer-metal: direct preview submit error frame={} domain={} code={} desc={}",
+                                    frame_id, domain, code, desc
+                                ));
+                            } else {
+                                ios_log(&format!(
+                                    "oxide.renderer-metal: direct preview submit error frame={} error=nil",
+                                    frame_id
+                                ));
+                            }
+                        }
+                    }
+                    self.submit_error_flag.store(true, Ordering::Release);
+                    self.direct_preview_submitted.pop_front();
+                }
+                MTLCommandBufferStatus::Committed
+                | MTLCommandBufferStatus::Scheduled
+                | MTLCommandBufferStatus::Enqueued
+                | MTLCommandBufferStatus::NotEnqueued => break,
+            }
+        }
+    }
+
+    fn track_direct_preview_submission(&mut self, frame_id: u64, cmd: &CommandBuffer) {
+        self.direct_preview_submitted.push_back((frame_id, cmd.to_owned()));
+    }
+
+    #[inline]
+    fn note_direct_preview_submission_depth(&mut self) -> u32 {
+        let depth = self.direct_preview_submitted.len() as u32;
+        self.direct_preview_last_submission_depth = depth;
+        depth
+    }
+
+    #[inline]
+    fn direct_preview_backpressure_blocks_present(&mut self) -> bool {
+        let depth = self.note_direct_preview_submission_depth() as usize;
+        let blocked = self.camera_preview_renderer.is_none()
+            && direct_preview_submission_backpressure_applies(
+                experimental_preview_submission_backpressure_enabled(),
+                depth,
+            );
+        self.direct_preview_last_submission_skipped = if blocked { 1 } else { 0 };
+        blocked
+    }
+
+    #[cfg(target_os = "ios")]
+    fn fetch_live_camera_nv12_if_new(
+        &self,
+        min_generation_exclusive: u64,
+    ) -> Option<LiveCameraNv12Frame> {
+        #[repr(C)]
+        #[derive(Clone, Copy, Debug)]
+        struct OxideCamAcquiredFrame {
+            y_tex: *mut core::ffi::c_void,
+            uv_tex: *mut core::ffi::c_void,
+            width: i32,
+            height: i32,
+            bit_depth: i32,
+            matrix: i32,
+            video_range: i32,
+            color_space: i32,
+            slot: u32,
+            generation: u64,
+            timestamp_ns: u64,
+        }
+        impl Default for OxideCamAcquiredFrame {
+            fn default() -> Self {
+                Self {
+                    y_tex: core::ptr::null_mut(),
+                    uv_tex: core::ptr::null_mut(),
+                    width: 0,
+                    height: 0,
+                    bit_depth: 0,
+                    matrix: 0,
+                    video_range: 0,
+                    color_space: 0,
+                    slot: 0,
+                    generation: 0,
+                    timestamp_ns: 0,
+                }
+            }
+        }
+
+        extern "C" {
+            fn oxide_cam_acquire_latest_frame_ex(
+                min_generation_exclusive: u64,
+                out_frame: *mut OxideCamAcquiredFrame,
+            ) -> ::libc::c_int;
+        }
+
+        let mut acquired = OxideCamAcquiredFrame::default();
+        let ok =
+            unsafe { oxide_cam_acquire_latest_frame_ex(min_generation_exclusive, &mut acquired) };
+        if ok == 0
+            || acquired.y_tex.is_null()
+            || acquired.uv_tex.is_null()
+            || acquired.width <= 0
+            || acquired.height <= 0
+        {
+            return None;
+        }
+        Some(LiveCameraNv12Frame {
+            y_tex: acquired.y_tex as usize,
+            uv_tex: acquired.uv_tex as usize,
+            width: acquired.width,
+            height: acquired.height,
+            bit_depth: acquired.bit_depth,
+            matrix: acquired.matrix,
+            video_range: acquired.video_range,
+            color_space: acquired.color_space,
+            slot: acquired.slot,
+            generation: acquired.generation,
+            timestamp_ns: acquired.timestamp_ns,
+        })
+    }
+
+    #[cfg(target_os = "ios")]
+    fn peek_live_camera_frame_identity(&self) -> (u64, u64) {
+        extern "C" {
+            fn oxide_cam_peek_latest_generation() -> u64;
+            fn oxide_cam_peek_latest_timestamp_ns() -> u64;
+        }
+        unsafe { (oxide_cam_peek_latest_generation(), oxide_cam_peek_latest_timestamp_ns()) }
+    }
+
+    #[cfg(not(target_os = "ios"))]
+    fn peek_live_camera_frame_identity(&self) -> (u64, u64) {
+        (0, 0)
+    }
+
+    #[cfg(not(target_os = "ios"))]
+    fn fetch_live_camera_nv12_if_new(
+        &self,
+        _min_generation_exclusive: u64,
+    ) -> Option<LiveCameraNv12Frame> {
+        None
+    }
+
+    fn fetch_live_camera_nv12(&self) -> Option<CameraNv12Source> {
+        #[cfg(target_os = "ios")]
+        {
+            extern "C" {
+                fn oxide_cam_get_latest_ex(
+                    y_tex: *mut *mut core::ffi::c_void,
+                    uv_tex: *mut *mut core::ffi::c_void,
+                    w: *mut i32,
+                    h: *mut i32,
+                    bitdepth: *mut i32,
+                    matrix: *mut i32,
+                    video_range: *mut i32,
+                    colorspace: *mut i32,
+                ) -> ::libc::c_int;
+            }
+            let (
+                mut y_tex,
+                mut uv_tex,
+                mut width,
+                mut height,
+                mut bit_depth,
+                mut matrix,
+                mut video_range,
+                mut color_space,
+            ) = (core::ptr::null_mut(), core::ptr::null_mut(), 0i32, 0i32, 0i32, 0i32, 0i32, 0i32);
+            let ok = unsafe {
+                oxide_cam_get_latest_ex(
+                    &mut y_tex,
+                    &mut uv_tex,
+                    &mut width,
+                    &mut height,
+                    &mut bit_depth,
+                    &mut matrix,
+                    &mut video_range,
+                    &mut color_space,
+                )
+            };
+            if ok == 0 || y_tex.is_null() || uv_tex.is_null() || width <= 0 || height <= 0 {
+                return None;
+            }
+            Some(CameraNv12Source {
+                y_tex: unsafe { Texture::from_ptr(y_tex as *mut MTLTexture) },
+                uv_tex: unsafe { Texture::from_ptr(uv_tex as *mut MTLTexture) },
+                width,
+                height,
+                bit_depth,
+                matrix,
+                video_range,
+                color_space,
+            })
+        }
+        #[cfg(not(target_os = "ios"))]
+        {
+            None
+        }
+    }
+
+    #[cfg(target_os = "ios")]
+    fn fetch_live_camera_bgra(&self) -> Option<CameraBgraSource> {
+        extern "C" {
+            fn oxide_cam_get_latest_bgra(
+                bgra_tex: *mut *mut core::ffi::c_void,
+                w: *mut i32,
+                h: *mut i32,
+            ) -> ::libc::c_int;
+        }
+
+        let mut bgra_ptr: *mut core::ffi::c_void = core::ptr::null_mut();
+        let mut width: i32 = 0;
+        let mut height: i32 = 0;
+        let ok = unsafe { oxide_cam_get_latest_bgra(&mut bgra_ptr, &mut width, &mut height) };
+        if ok == 0 || bgra_ptr.is_null() || width <= 0 || height <= 0 {
+            return None;
+        }
+        Some(CameraBgraSource {
+            tex: unsafe { Texture::from_ptr(bgra_ptr as *mut MTLTexture) },
+            width,
+            height,
+        })
+    }
+
+    #[cfg(not(target_os = "ios"))]
+    fn fetch_live_camera_bgra(&self) -> Option<CameraBgraSource> {
+        None
+    }
+
+    fn fetch_camera_nv12(&mut self) -> Option<CameraNv12Source> {
+        if self.camera_texture_source == CameraTextureSource::SyntheticBenchmark {
+            self.ensure_benchmark_camera_textures();
+            return Some(CameraNv12Source {
+                y_tex: self.bench_cam_y_tex.as_ref()?.to_owned(),
+                uv_tex: self.bench_cam_uv_tex.as_ref()?.to_owned(),
+                width: 1920,
+                height: 1080,
+                bit_depth: 8,
+                matrix: 0,
+                video_range: 0,
+                color_space: 0,
+            });
+        }
+        self.fetch_live_camera_nv12()
+    }
+
+    fn fetch_camera_bgra(&mut self) -> Option<CameraBgraSource> {
+        if self.camera_texture_source == CameraTextureSource::Live {
+            return self.fetch_live_camera_bgra();
+        }
+        self.ensure_benchmark_camera_textures();
+        Some(CameraBgraSource {
+            tex: self.bench_cam_bgra_tex.as_ref()?.to_owned(),
+            width: 1920,
+            height: 1080,
+        })
+    }
+
+    fn encode_camera_quad(
+        &mut self,
+        enc: &RenderCommandEncoderRef,
+        vp_dp: [f32; 2],
+        rect_dp: [f32; 4],
+        tint: api::Color,
+        alpha: f32,
+        grayscale: bool,
+    ) -> Option<(i32, i32, i32, i32, i32, i32)> {
+        let collect_stage_stats = camera_perf_stage_stats_enabled();
+        enc.set_vertex_bytes(1, core::mem::size_of_val(&vp_dp) as u64, vp_dp.as_ptr() as *const _);
+        enc.set_vertex_bytes(
+            0,
+            core::mem::size_of_val(&rect_dp) as u64,
+            rect_dp.as_ptr() as *const _,
+        );
+        if let Some(sam) = &self.sampler {
+            enc.set_fragment_sampler_state(0, Some(sam));
+        }
+
+        match self.camera_render_mode {
+            CameraRenderMode::BgraBenchmark => {
+                let fetch_t0 = collect_stage_stats.then(Instant::now);
+                let src = self.fetch_camera_bgra()?;
+                self.last_cam_fetch_ms = elapsed_ms(fetch_t0);
+                let (uv_scale, uv_bias) =
+                    camera_aspect_fill_params(rect_dp[2], rect_dp[3], src.width, src.height);
+                let params =
+                    pack_camera_params(rect_dp, tint, alpha, uv_scale, uv_bias, grayscale, 0, 0, 8);
+                enc.set_render_pipeline_state(&self.pso_camera_bgra);
+                enc.set_fragment_texture(0, Some(&src.tex));
+                enc.set_fragment_texture(1, None);
+                enc.set_fragment_bytes(
+                    1,
+                    core::mem::size_of_val(&params) as u64,
+                    (&params as *const CameraGpuParams).cast(),
+                );
+                enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
+                Some((src.width, src.height, 8, 0, 0, 0))
+            }
+            CameraRenderMode::Nv12Optimized | CameraRenderMode::Nv12Legacy => {
+                let fetch_t0 = collect_stage_stats.then(Instant::now);
+                let src = self.fetch_camera_nv12()?;
+                self.last_cam_fetch_ms = elapsed_ms(fetch_t0);
+                let (uv_scale, uv_bias) =
+                    camera_aspect_fill_params(rect_dp[2], rect_dp[3], src.width, src.height);
+                match self.camera_render_mode {
+                    CameraRenderMode::Nv12Optimized => {
+                        let params = pack_camera_params(
+                            rect_dp,
+                            tint,
+                            alpha,
+                            uv_scale,
+                            uv_bias,
+                            grayscale,
+                            src.matrix,
+                            src.video_range,
+                            src.bit_depth,
+                        );
+                        enc.set_render_pipeline_state(&self.pso_camera);
+                        enc.set_fragment_bytes(
+                            1,
+                            core::mem::size_of_val(&params) as u64,
+                            (&params as *const CameraGpuParams).cast(),
+                        );
+                    }
+                    CameraRenderMode::Nv12Legacy => {
+                        let params = pack_camera_params(
+                            rect_dp,
+                            tint,
+                            alpha,
+                            uv_scale,
+                            uv_bias,
+                            grayscale,
+                            src.matrix,
+                            src.video_range,
+                            src.bit_depth,
+                        );
+                        enc.set_render_pipeline_state(&self.pso_camera_legacy);
+                        enc.set_fragment_bytes(
+                            1,
+                            core::mem::size_of_val(&params) as u64,
+                            (&params as *const CameraGpuParams).cast(),
+                        );
+                    }
+                    CameraRenderMode::BgraBenchmark => unreachable!(),
+                }
+                enc.set_fragment_texture(0, Some(&src.y_tex));
+                enc.set_fragment_texture(1, Some(&src.uv_tex));
+                enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
+                Some((
+                    src.width,
+                    src.height,
+                    src.bit_depth,
+                    src.matrix,
+                    src.video_range,
+                    src.color_space,
+                ))
+            }
+        }
     }
 
     fn ensure_target(&mut self) {
@@ -632,6 +1693,41 @@ impl MetalRenderer {
             }
         } else {
             self.target_msaa_tex = None;
+        }
+    }
+
+    fn drop_direct_preview_offscreen_targets(&mut self) {
+        self.target_tex = None;
+        self.target_msaa_tex = None;
+        self.prepass_tex = None;
+        self.blur_tmp_tex = None;
+        self.half_tex = None;
+        self.quarter_tex = None;
+        self.quarter_tmp_tex = None;
+        self.cam_blur_tex = None;
+        self.cam_xfade_prev_tex = None;
+    }
+
+    pub fn resize_for_direct_preview(&mut self, w: u32, h: u32, scale: f32) {
+        let target_w = w.max(1);
+        let target_h = h.max(1);
+        let target_scale = if scale > 0.0 { scale } else { 1.0 };
+        if direct_preview_can_reuse_resize_targets(
+            self.target_w,
+            self.target_h,
+            self.target_scale,
+            target_w,
+            target_h,
+            target_scale,
+            self.sample_count,
+        ) {
+            return;
+        }
+        self.target_w = target_w;
+        self.target_h = target_h;
+        self.target_scale = target_scale;
+        if self.sample_count == 1 {
+            self.drop_direct_preview_offscreen_targets();
         }
     }
 
@@ -821,6 +1917,293 @@ impl MetalRenderer {
         let _ = self.images.remove(&handle.0);
     }
 
+    fn ensure_benchmark_camera_textures(&mut self) {
+        if self.bench_cam_y_tex.is_some()
+            && self.bench_cam_uv_tex.is_some()
+            && self.bench_cam_bgra_tex.is_some()
+        {
+            return;
+        }
+
+        let width = 1920u32;
+        let height = 1080u32;
+        let chroma_width = width / 2;
+        let chroma_height = height / 2;
+        let mut y_plane = vec![0u8; (width * height) as usize];
+        let mut uv_plane = vec![0u8; (chroma_width * chroma_height * 2) as usize];
+        let mut bgra = vec![0u8; (width * height * 4) as usize];
+
+        for y in 0..height {
+            for x in 0..width {
+                let fx = x as f32 / (width.saturating_sub(1) as f32).max(1.0);
+                let fy = y as f32 / (height.saturating_sub(1) as f32).max(1.0);
+                let stripe = (((x / 32) ^ (y / 24)) & 1) as f32;
+                let wave = (((fx * core::f32::consts::TAU * 3.0).sin() * 0.5 + 0.5)
+                    + ((fy * core::f32::consts::TAU * 2.0).cos() * 0.5 + 0.5))
+                    * 0.5;
+                let luma = (0.18 + wave * 0.62 + stripe * 0.08).clamp(0.0, 1.0);
+                y_plane[(y * width + x) as usize] = (luma * 255.0).round() as u8;
+            }
+        }
+
+        for y in 0..chroma_height {
+            for x in 0..chroma_width {
+                let fx = x as f32 / (chroma_width.saturating_sub(1) as f32).max(1.0);
+                let fy = y as f32 / (chroma_height.saturating_sub(1) as f32).max(1.0);
+                let cb = (128.0
+                    + (fx * core::f32::consts::TAU * 1.5).sin() * 42.0
+                    + (fy * core::f32::consts::TAU).cos() * 18.0)
+                    .clamp(16.0, 240.0);
+                let cr = (128.0 + (fy * core::f32::consts::TAU * 1.25).sin() * 38.0
+                    - (fx * core::f32::consts::TAU * 0.75).cos() * 22.0)
+                    .clamp(16.0, 240.0);
+                let offset = ((y * chroma_width + x) * 2) as usize;
+                uv_plane[offset] = cb.round() as u8;
+                uv_plane[offset + 1] = cr.round() as u8;
+            }
+        }
+
+        for y in 0..height {
+            for x in 0..width {
+                let y_code = y_plane[(y * width + x) as usize] as f32 / 255.0;
+                let uv_index = (((y / 2) * chroma_width + (x / 2)) * 2) as usize;
+                let cb_code = uv_plane[uv_index] as f32 / 255.0;
+                let cr_code = uv_plane[uv_index + 1] as f32 / 255.0;
+                let u = cb_code - (128.0 / 255.0);
+                let v = cr_code - (128.0 / 255.0);
+                let rgb = yuv_to_rgb_bt709_full_range(y_code, u, v);
+                let offset = ((y * width + x) * 4) as usize;
+                bgra[offset] = linear_to_srgb_u8(rgb[2]);
+                bgra[offset + 1] = linear_to_srgb_u8(rgb[1]);
+                bgra[offset + 2] = linear_to_srgb_u8(rgb[0]);
+                bgra[offset + 3] = 255;
+            }
+        }
+
+        let y_desc = TextureDescriptor::new();
+        y_desc.set_pixel_format(MTLPixelFormat::R8Unorm);
+        y_desc.set_texture_type(MTLTextureType::D2);
+        y_desc.set_width(width as u64);
+        y_desc.set_height(height as u64);
+        y_desc.set_storage_mode(MTLStorageMode::Shared);
+        y_desc.set_usage(MTLTextureUsage::ShaderRead);
+        let y_tex = self.device.new_texture(&y_desc);
+        let y_region = MTLRegion {
+            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            size: MTLSize { width: width as u64, height: height as u64, depth: 1 },
+        };
+        y_tex.replace_region(y_region, 0, y_plane.as_ptr() as *const _, width as u64);
+
+        let uv_desc = TextureDescriptor::new();
+        uv_desc.set_pixel_format(MTLPixelFormat::RG8Unorm);
+        uv_desc.set_texture_type(MTLTextureType::D2);
+        uv_desc.set_width(chroma_width as u64);
+        uv_desc.set_height(chroma_height as u64);
+        uv_desc.set_storage_mode(MTLStorageMode::Shared);
+        uv_desc.set_usage(MTLTextureUsage::ShaderRead);
+        let uv_tex = self.device.new_texture(&uv_desc);
+        let uv_region = MTLRegion {
+            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            size: MTLSize { width: chroma_width as u64, height: chroma_height as u64, depth: 1 },
+        };
+        uv_tex.replace_region(
+            uv_region,
+            0,
+            uv_plane.as_ptr() as *const _,
+            (chroma_width * 2) as u64,
+        );
+
+        let bgra_desc = TextureDescriptor::new();
+        bgra_desc.set_pixel_format(MTLPixelFormat::BGRA8Unorm_sRGB);
+        bgra_desc.set_texture_type(MTLTextureType::D2);
+        bgra_desc.set_width(width as u64);
+        bgra_desc.set_height(height as u64);
+        bgra_desc.set_storage_mode(MTLStorageMode::Shared);
+        bgra_desc.set_usage(MTLTextureUsage::ShaderRead);
+        let bgra_tex = self.device.new_texture(&bgra_desc);
+        let bgra_region = MTLRegion {
+            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            size: MTLSize { width: width as u64, height: height as u64, depth: 1 },
+        };
+        bgra_tex.replace_region(bgra_region, 0, bgra.as_ptr() as *const _, (width * 4) as u64);
+
+        self.bench_cam_y_tex = Some(y_tex);
+        self.bench_cam_uv_tex = Some(uv_tex);
+        self.bench_cam_bgra_tex = Some(bgra_tex);
+    }
+
+    fn refresh_live_camera_preview_frame(&mut self) {
+        if self.camera_texture_source != CameraTextureSource::Live {
+            self.release_live_camera_frame();
+            return;
+        }
+        let min_generation =
+            self.current_live_camera_frame.as_ref().map(|frame| frame.generation).unwrap_or(0);
+        if let Some(frame) = self.fetch_live_camera_nv12_if_new(min_generation) {
+            self.release_live_camera_frame();
+            self.current_live_camera_frame = Some(frame);
+        }
+    }
+
+    fn direct_preview_camera_pipeline_for_frame(
+        &self,
+        frame: &LiveCameraNv12Frame,
+    ) -> &RenderPipelineState {
+        if direct_preview_uses_fast_yuv_pipeline(frame.bit_depth, frame.matrix, frame.video_range) {
+            if frame.video_range == 0 {
+                return &self.pso_camera_preview_fast_full;
+            }
+            if frame.video_range == 1 {
+                return &self.pso_camera_preview_fast_video;
+            }
+        }
+        match self.camera_render_mode {
+            CameraRenderMode::Nv12Legacy => &self.pso_camera_legacy,
+            CameraRenderMode::Nv12Optimized | CameraRenderMode::BgraBenchmark => &self.pso_camera,
+        }
+    }
+
+    pub fn camera_preview_needs_drawable(
+        &self,
+        w: u32,
+        h: u32,
+        scale: f32,
+        camera_running: bool,
+    ) -> bool {
+        direct_preview_reason_requires_drawable(self.camera_preview_draw_reason(
+            w,
+            h,
+            scale,
+            camera_running,
+        ))
+    }
+
+    pub fn camera_preview_draw_reason(
+        &self,
+        w: u32,
+        h: u32,
+        scale: f32,
+        camera_running: bool,
+    ) -> u32 {
+        if self
+            .camera_preview_renderer
+            .as_ref()
+            .is_some_and(CameraPreviewRenderer::submit_error_pending)
+        {
+            return CAMERA_PREVIEW_REASON_SUBMIT_ERROR;
+        }
+        if self.submit_error_flag.load(Ordering::Acquire) {
+            return CAMERA_PREVIEW_REASON_SUBMIT_ERROR;
+        }
+        if !self.config.direct_preview_only || self.sample_count > 1 {
+            return CAMERA_PREVIEW_REASON_NON_DIRECT_PREVIEW;
+        }
+        let next_w = w.max(1);
+        let next_h = h.max(1);
+        let next_scale = if scale > 0.0 { scale } else { 1.0 };
+        let resize_reused = direct_preview_can_reuse_resize_targets(
+            self.target_w,
+            self.target_h,
+            self.target_scale,
+            next_w,
+            next_h,
+            next_scale,
+            self.sample_count,
+        );
+        if !resize_reused {
+            return CAMERA_PREVIEW_REASON_RESIZE;
+        }
+        if !camera_running {
+            return CAMERA_PREVIEW_REASON_CAMERA_STOPPED;
+        }
+        if self.camera_texture_source != CameraTextureSource::Live {
+            return CAMERA_PREVIEW_REASON_NON_LIVE_SOURCE;
+        }
+        if !matches!(
+            self.camera_render_mode,
+            CameraRenderMode::Nv12Optimized | CameraRenderMode::Nv12Legacy
+        ) {
+            return CAMERA_PREVIEW_REASON_NON_NV12_MODE;
+        }
+        let current_generation =
+            self.current_live_camera_frame.as_ref().map(|frame| frame.generation).unwrap_or(0);
+        let current_timestamp_ns =
+            self.current_live_camera_frame.as_ref().map(|frame| frame.timestamp_ns).unwrap_or(0);
+        let (latest_generation, latest_timestamp_ns) = self.peek_live_camera_frame_identity();
+        let reason = direct_live_preview_needs_render(
+            resize_reused,
+            self.current_live_camera_frame.is_some(),
+            current_generation,
+            current_timestamp_ns,
+            latest_generation,
+            latest_timestamp_ns,
+        );
+        if reason != 0
+            && self.camera_preview_renderer.is_none()
+            && direct_preview_submission_backpressure_applies(
+                experimental_preview_submission_backpressure_enabled(),
+                self.direct_preview_submitted.len(),
+            )
+        {
+            return CAMERA_PREVIEW_REASON_BACKPRESSURE;
+        }
+        reason
+    }
+
+    fn encode_camera_quad_from_live_frame(
+        &self,
+        enc: &RenderCommandEncoderRef,
+        frame: &LiveCameraNv12Frame,
+        vp_dp: [f32; 2],
+        rect_dp: [f32; 4],
+        tint: api::Color,
+        alpha: f32,
+        grayscale: bool,
+        collect_stage_stats: bool,
+    ) -> DirectCameraEncodeStats {
+        let bind_t0 = collect_stage_stats.then(Instant::now);
+        let (uv_scale, uv_bias) =
+            camera_aspect_fill_params(rect_dp[2], rect_dp[3], frame.width, frame.height);
+        let params = pack_camera_params(
+            rect_dp,
+            tint,
+            alpha,
+            uv_scale,
+            uv_bias,
+            grayscale,
+            frame.matrix,
+            frame.video_range,
+            frame.bit_depth,
+        );
+        let y_tex = unsafe { TextureRef::from_ptr(frame.y_tex as *mut MTLTexture) };
+        let uv_tex = unsafe { TextureRef::from_ptr(frame.uv_tex as *mut MTLTexture) };
+        with_perf_signpost("camera.renderer.direct.encode.bind", || {
+            enc.set_render_pipeline_state(self.direct_preview_camera_pipeline_for_frame(frame));
+            enc.set_fragment_texture(0, Some(y_tex));
+            enc.set_fragment_texture(1, Some(uv_tex));
+            enc.set_fragment_bytes(
+                1,
+                core::mem::size_of_val(&params) as u64,
+                (&params as *const CameraGpuParams).cast(),
+            );
+        });
+        let bind_ms = elapsed_ms(bind_t0);
+        let draw_t0 = collect_stage_stats.then(Instant::now);
+        with_perf_signpost("camera.renderer.direct.encode.draw", || {
+            enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
+        });
+        DirectCameraEncodeStats {
+            camera_width: frame.width,
+            camera_height: frame.height,
+            camera_bit_depth: frame.bit_depth,
+            camera_matrix: frame.matrix,
+            camera_video_range: frame.video_range,
+            camera_color_space: frame.color_space,
+            bind_ms,
+            draw_ms: elapsed_ms(draw_t0),
+        }
+    }
+
     pub unsafe fn blit_to_texture_and_present_drawable(
         &mut self,
         dst_tex_ptr: *mut core::ffi::c_void,
@@ -834,9 +2217,20 @@ impl MetalRenderer {
             Some(t) => t,
             None => return Err(api::RenderError::InvalidOperation("no target texture")),
         };
-        let dst = unsafe { TextureRef::from_ptr(dst_tex_ptr as *mut MTLTexture) };
+        let raw_drawable_obj = drawable_ptr as *mut Object;
+        let dst = if dst_tex_ptr.is_null() {
+            let raw_dst_tex: *mut MTLTexture = unsafe { msg_send![raw_drawable_obj, texture] };
+            if raw_dst_tex.is_null() {
+                return Err(api::RenderError::InvalidOperation(
+                    "drawable did not provide a destination texture",
+                ));
+            }
+            unsafe { TextureRef::from_ptr(raw_dst_tex) }
+        } else {
+            unsafe { TextureRef::from_ptr(dst_tex_ptr as *mut MTLTexture) }
+        };
         let raw_drawable = drawable_ptr as *mut MTLDrawable;
-        let drawable = unsafe { Drawable::from_ptr(raw_drawable) };
+        let drawable = unsafe { DrawableRef::from_ptr(raw_drawable) };
         let cmd = self.queue.new_command_buffer();
         let blit = cmd.new_blit_command_encoder();
         let origin = MTLOrigin { x: 0, y: 0, z: 0 };
@@ -847,8 +2241,6 @@ impl MetalRenderer {
         let copy_w = src_w.min(dst_w);
         let copy_h = src_h.min(dst_h);
         if copy_w == 0 || copy_h == 0 {
-            oxide_host_release_drawable(drawable_ptr);
-            core::mem::forget(drawable);
             return Err(api::RenderError::InvalidOperation("zero-sized blit copy extent"));
         }
         if copy_w != src_w || copy_h != src_h {
@@ -861,7 +2253,7 @@ impl MetalRenderer {
         blit.copy_from_texture(src, 0, 0, origin, size, dst, 0, 0, origin);
         blit.end_encoding();
         ios_log("metal: calling present_drawable");
-        cmd.present_drawable(&drawable);
+        cmd.present_drawable(drawable);
         if ios_log_enabled() {
             let completion = ConcreteBlock::new(move |buffer: &CommandBufferRef| {
                 ios_log(&format!("metal: present completion status={:?}", buffer.status()));
@@ -870,31 +2262,504 @@ impl MetalRenderer {
             cmd.add_completed_handler(&completion);
         }
         ios_log("metal: committing command buffer");
-        if running_on_ios_simulator() {
-            if env_flag("NAMETAG_RENDERER_SIM_WAIT_PRESENT").unwrap_or(false) {
-                cmd.commit();
-                cmd.wait_until_completed();
-                oxide_host_release_drawable(drawable_ptr);
-            } else {
-                // The simulator path must not release the retained drawable until
-                // GPU work completes; early release can invalidate present.
-                let retained_drawable = drawable_ptr;
-                let release = ConcreteBlock::new(move |_| unsafe {
-                    oxide_host_release_drawable(retained_drawable);
-                })
-                .copy();
-                cmd.add_completed_handler(&release);
-                cmd.commit();
-            }
-            core::mem::forget(drawable);
-        } else {
-            cmd.commit();
-            cmd.wait_until_completed();
-            oxide_host_release_drawable(drawable_ptr);
-            core::mem::forget(drawable);
-        }
+        cmd.commit();
         ios_log("metal: blit+present end");
         Ok(())
+    }
+
+    pub unsafe fn prepare_present_drawable(
+        &mut self,
+        drawable_ptr: *mut core::ffi::c_void,
+    ) -> Result<(), api::RenderError> {
+        if drawable_ptr.is_null() {
+            self.pending_present_drawable = 0;
+            self.pending_present_texture = 0;
+            return Ok(());
+        }
+        let raw_drawable_obj = drawable_ptr as *mut Object;
+        let raw_dst_tex: *mut MTLTexture = msg_send![raw_drawable_obj, texture];
+        if raw_dst_tex.is_null() {
+            return Err(api::RenderError::InvalidOperation(
+                "drawable did not provide a destination texture",
+            ));
+        }
+        self.pending_present_drawable = drawable_ptr as usize;
+        self.pending_present_texture = raw_dst_tex as usize;
+        Ok(())
+    }
+
+    pub fn cancel_present_drawable(&mut self) -> *mut core::ffi::c_void {
+        let drawable = self.pending_present_drawable as *mut core::ffi::c_void;
+        self.pending_present_drawable = 0;
+        self.pending_present_texture = 0;
+        drawable
+    }
+
+    pub unsafe fn render_camera_preview_direct(
+        &mut self,
+        drawable_ptr: *mut core::ffi::c_void,
+        w: u32,
+        h: u32,
+        scale: f32,
+    ) -> Result<PerfStats, api::RenderError> {
+        let collect_stage_stats = camera_perf_stage_stats_enabled();
+        self.pending_present_drawable = 0;
+        self.pending_present_texture = 0;
+        if drawable_ptr.is_null() || self.sample_count > 1 {
+            with_perf_signpost("camera.renderer.resize", || {
+                <Self as api::Renderer>::resize(self, w, h, scale)
+            })?;
+        } else {
+            with_perf_signpost("camera.renderer.resize", || {
+                self.resize_for_direct_preview(w, h, scale)
+            });
+        }
+
+        let cpu_t0 = collect_stage_stats.then(Instant::now);
+        self.frame_id = self.frame_id.wrapping_add(1);
+        self.acc_draws = 0;
+        self.acc_instanced = 0;
+        self.acc_icb_cmds = 0;
+        self.acc_culled = 0;
+        self.last_cam_fetch_ms = 0.0;
+        let mut poll_submissions_ms = 0.0;
+        self.direct_preview_last_submission_depth = 0;
+        self.direct_preview_last_submission_skipped = 0;
+        self.direct_preview_last_present_frame_age_ms = 0.0;
+
+        if let Some(renderer) = self.camera_preview_renderer.as_ref() {
+            if renderer.take_submit_error() {
+                return Err(api::RenderError::DeviceLost);
+            }
+        } else {
+            let poll_t0 = collect_stage_stats.then(Instant::now);
+            with_perf_signpost("camera.renderer.direct.poll_submissions", || {
+                self.poll_direct_preview_submissions();
+            });
+            poll_submissions_ms = elapsed_ms(poll_t0);
+            if self.submit_error_flag.swap(false, Ordering::AcqRel) {
+                return Err(api::RenderError::DeviceLost);
+            }
+        }
+
+        let use_tiny_live_preview = direct_preview_tiny_renderer_active(
+            self.camera_preview_renderer.is_some(),
+            self.sample_count,
+            self.camera_texture_source,
+            self.camera_render_mode,
+        );
+        if use_tiny_live_preview {
+            let fetch_t0 = collect_stage_stats.then(Instant::now);
+            self.refresh_live_camera_preview_frame();
+            self.last_cam_fetch_ms = elapsed_ms(fetch_t0);
+            let current_frame = self.current_live_camera_frame.clone();
+            let preview = self
+                .camera_preview_renderer
+                .as_mut()
+                .expect("tiny preview renderer available for active tiny preview path")
+                .render_live_frame(
+                    drawable_ptr,
+                    current_frame.as_ref(),
+                    w,
+                    h,
+                    scale,
+                    self.camera_render_mode,
+                    collect_stage_stats,
+                )?;
+            self.last_cam_w = preview.camera_width.max(0);
+            self.last_cam_h = preview.camera_height.max(0);
+            self.last_cam_bd = preview.camera_bit_depth.max(0);
+            self.last_cam_mx = preview.camera_matrix.max(0);
+            self.last_cam_vr = preview.camera_video_range.max(0);
+            self.last_cam_cs = preview.camera_color_space.max(0);
+            self.acc_draws = if preview.drew_live_frame { 1 } else { 0 };
+            self.last_stats = PerfStats {
+                memory: self.memory_stats(),
+                draws: self.acc_draws,
+                instanced: self.acc_instanced,
+                icb_cmds: self.acc_icb_cmds,
+                encode_ms: elapsed_ms(cpu_t0),
+                damage_px: 0,
+                damage_pct: 0.0,
+                damage_rects: 0,
+                culled: self.acc_culled,
+                blur_ms: 0.0,
+                blur_updates: 0,
+                blur_period_ms: 0,
+                cam_coverage_pct: if preview.drew_live_frame { 1.0 } else { 0.0 },
+                cam_paused: 0,
+                thermal: 0,
+                low_power: 0,
+                cam_width: self.last_cam_w as u32,
+                cam_height: self.last_cam_h as u32,
+                cam_bit_depth: self.last_cam_bd as u8,
+                cam_matrix: self.last_cam_mx as u8,
+                cam_video_range: self.last_cam_vr as u8,
+                cam_color_space: self.last_cam_cs as u8,
+                cam_poll_submissions_ms: poll_submissions_ms,
+                cam_fetch_ms: self.last_cam_fetch_ms,
+                cam_setup_ms: preview.setup_ms,
+                cam_encode_quad_ms: preview.encode_quad_ms,
+                cam_command_buffer_ms: 0.0,
+                cam_encoder_ms: 0.0,
+                cam_encode_bind_ms: 0.0,
+                cam_encode_draw_ms: 0.0,
+                cam_end_encoding_ms: 0.0,
+                cam_present_ms: preview.present_ms,
+                cam_commit_ms: preview.commit_ms,
+                cam_gpu_ms: 0.0,
+                preview_submission_depth: self.direct_preview_last_submission_depth,
+                preview_submission_skipped: self.direct_preview_last_submission_skipped,
+                preview_submission_frame_age_ms: self.direct_preview_last_present_frame_age_ms,
+                ..PerfStats::default()
+            };
+            return Ok(self.last_stats);
+        }
+
+        let use_live_direct_preview = self.camera_texture_source == CameraTextureSource::Live
+            && matches!(
+                self.camera_render_mode,
+                CameraRenderMode::Nv12Optimized | CameraRenderMode::Nv12Legacy
+            )
+            && self.sample_count == 1;
+        if use_live_direct_preview {
+            let vp_dp = [
+                (self.target_w as f32) / self.target_scale.max(1.0),
+                (self.target_h as f32) / self.target_scale.max(1.0),
+            ];
+            let rect_dp = [0.0, 0.0, vp_dp[0], vp_dp[1]];
+            let fetch_t0 = collect_stage_stats.then(Instant::now);
+            with_perf_signpost("camera.renderer.direct.fetch", || {
+                self.refresh_live_camera_preview_frame();
+            });
+            self.last_cam_fetch_ms = elapsed_ms(fetch_t0);
+            let current_frame = self.current_live_camera_frame.clone();
+            self.direct_preview_backpressure_blocks_present();
+            let mut camera_props = current_frame.as_ref().map(|frame| {
+                (
+                    frame.width,
+                    frame.height,
+                    frame.bit_depth,
+                    frame.matrix,
+                    frame.video_range,
+                    frame.color_space,
+                )
+            });
+            let mut setup_ms = 0.0;
+            let mut encode_quad_ms = 0.0;
+            let mut command_buffer_ms = 0.0;
+            let mut encoder_ms = 0.0;
+            let mut encode_bind_ms = 0.0;
+            let mut encode_draw_ms = 0.0;
+            let mut end_encoding_ms = 0.0;
+            let mut present_ms = 0.0;
+            let mut commit_ms = 0.0;
+            let mut drew_live_frame = false;
+            if self.direct_preview_last_submission_skipped == 0 && !drawable_ptr.is_null() {
+                let command_buffer_t0 = collect_stage_stats.then(Instant::now);
+                let cmd = with_perf_signpost("camera.renderer.direct.command_buffer", || {
+                    self.queue.new_command_buffer().to_owned()
+                });
+                command_buffer_ms = elapsed_ms(command_buffer_t0);
+                let rpd = RenderPassDescriptor::new();
+                let setup_t0 = collect_stage_stats.then(Instant::now);
+                with_perf_signpost(
+                    "camera.renderer.direct.setup",
+                    || -> Result<(), api::RenderError> {
+                        let raw_drawable_obj = drawable_ptr as *mut Object;
+                        let raw_dst_tex: *mut MTLTexture = msg_send![raw_drawable_obj, texture];
+                        if raw_dst_tex.is_null() {
+                            return Err(api::RenderError::InvalidOperation(
+                                "drawable did not provide a destination texture",
+                            ));
+                        }
+                        let ca0 = rpd.color_attachments().object_at(0).unwrap();
+                        ca0.set_texture(Some(TextureRef::from_ptr(raw_dst_tex)));
+                        ca0.set_store_action(MTLStoreAction::Store);
+                        ca0.set_load_action(MTLLoadAction::Clear);
+                        ca0.set_clear_color(MTLClearColor {
+                            red: 0.0,
+                            green: 0.0,
+                            blue: 0.0,
+                            alpha: 1.0,
+                        });
+                        Ok(())
+                    },
+                )?;
+                setup_ms = elapsed_ms(setup_t0);
+                let encoder_t0 = collect_stage_stats.then(Instant::now);
+                let enc = with_perf_signpost("camera.renderer.direct.encoder", || {
+                    cmd.new_render_command_encoder(&rpd)
+                });
+                encoder_ms = elapsed_ms(encoder_t0);
+                let encode_quad_t0 = collect_stage_stats.then(Instant::now);
+                camera_props = with_perf_signpost("camera.renderer.direct.encode_quad", || {
+                    current_frame.as_ref().map(|frame| {
+                        drew_live_frame = true;
+                        let encode_stats = self.encode_camera_quad_from_live_frame(
+                            &enc,
+                            frame,
+                            vp_dp,
+                            rect_dp,
+                            api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+                            1.0,
+                            false,
+                            collect_stage_stats,
+                        );
+                        encode_bind_ms = encode_stats.bind_ms;
+                        encode_draw_ms = encode_stats.draw_ms;
+                        (
+                            encode_stats.camera_width,
+                            encode_stats.camera_height,
+                            encode_stats.camera_bit_depth,
+                            encode_stats.camera_matrix,
+                            encode_stats.camera_video_range,
+                            encode_stats.camera_color_space,
+                        )
+                    })
+                });
+                encode_quad_ms = elapsed_ms(encode_quad_t0);
+                let end_encoding_t0 = collect_stage_stats.then(Instant::now);
+                with_perf_signpost("camera.renderer.direct.end_encoding", || {
+                    enc.end_encoding();
+                });
+                end_encoding_ms = elapsed_ms(end_encoding_t0);
+                let raw_drawable = drawable_ptr as *mut MTLDrawable;
+                let drawable = DrawableRef::from_ptr(raw_drawable);
+                let present_t0 = collect_stage_stats.then(Instant::now);
+                with_perf_signpost(
+                    "camera.renderer.direct.present_drawable",
+                    || -> Result<(), api::RenderError> {
+                        cmd.present_drawable(drawable);
+                        Ok(())
+                    },
+                )?;
+                self.direct_preview_last_present_frame_age_ms = current_frame
+                    .as_ref()
+                    .map(|frame| direct_preview_present_frame_age_ms(frame.timestamp_ns))
+                    .unwrap_or(0.0);
+                present_ms = elapsed_ms(present_t0);
+                let commit_t0 = collect_stage_stats.then(Instant::now);
+                with_perf_signpost("camera.renderer.direct.commit", || {
+                    cmd.commit();
+                });
+                commit_ms = elapsed_ms(commit_t0);
+                self.track_direct_preview_submission(self.frame_id, &cmd);
+            }
+            if let Some((cw, ch, bd, mx, vr, cs)) = camera_props {
+                self.last_cam_w = cw;
+                self.last_cam_h = ch;
+                self.last_cam_bd = bd;
+                self.last_cam_mx = mx;
+                self.last_cam_vr = vr;
+                self.last_cam_cs = cs;
+            } else {
+                self.last_cam_w = 0;
+                self.last_cam_h = 0;
+                self.last_cam_bd = 0;
+                self.last_cam_mx = 0;
+                self.last_cam_vr = 0;
+                self.last_cam_cs = 0;
+            }
+            self.acc_draws = if drew_live_frame { 1 } else { 0 };
+            self.last_stats = PerfStats {
+                memory: self.memory_stats(),
+                draws: self.acc_draws,
+                instanced: self.acc_instanced,
+                icb_cmds: self.acc_icb_cmds,
+                encode_ms: elapsed_ms(cpu_t0),
+                damage_px: 0,
+                damage_pct: 0.0,
+                damage_rects: 0,
+                culled: self.acc_culled,
+                blur_ms: 0.0,
+                blur_updates: 0,
+                blur_period_ms: 0,
+                cam_coverage_pct: if drew_live_frame { 1.0 } else { 0.0 },
+                cam_paused: 0,
+                thermal: 0,
+                low_power: 0,
+                cam_width: self.last_cam_w.max(0) as u32,
+                cam_height: self.last_cam_h.max(0) as u32,
+                cam_bit_depth: self.last_cam_bd.max(0) as u8,
+                cam_matrix: self.last_cam_mx.max(0) as u8,
+                cam_video_range: self.last_cam_vr.max(0) as u8,
+                cam_color_space: self.last_cam_cs.max(0) as u8,
+                cam_poll_submissions_ms: poll_submissions_ms,
+                cam_fetch_ms: self.last_cam_fetch_ms,
+                cam_setup_ms: setup_ms,
+                cam_encode_quad_ms: encode_quad_ms,
+                cam_command_buffer_ms: command_buffer_ms,
+                cam_encoder_ms: encoder_ms,
+                cam_encode_bind_ms: encode_bind_ms,
+                cam_encode_draw_ms: encode_draw_ms,
+                cam_end_encoding_ms: end_encoding_ms,
+                cam_present_ms: present_ms,
+                cam_commit_ms: commit_ms,
+                cam_gpu_ms: self.direct_preview_last_completed_gpu_ms,
+                preview_submission_depth: self.direct_preview_last_submission_depth,
+                preview_submission_skipped: self.direct_preview_last_submission_skipped,
+                preview_submission_frame_age_ms: self.direct_preview_last_present_frame_age_ms,
+                ..PerfStats::default()
+            };
+            return Ok(self.last_stats);
+        }
+
+        self.ensure_target();
+
+        let raw_direct_tex: *mut MTLTexture = if drawable_ptr.is_null() {
+            core::ptr::null_mut()
+        } else {
+            let raw_drawable_obj = drawable_ptr as *mut Object;
+            let raw_tex: *mut MTLTexture = msg_send![raw_drawable_obj, texture];
+            if raw_tex.is_null() {
+                return Err(api::RenderError::InvalidOperation(
+                    "drawable did not provide a destination texture",
+                ));
+            }
+            raw_tex
+        };
+        let command_buffer_t0 = collect_stage_stats.then(Instant::now);
+        let cmd = self.queue.new_command_buffer().to_owned();
+        let command_buffer_ms = elapsed_ms(command_buffer_t0);
+        let rpd = RenderPassDescriptor::new();
+        let setup_t0 = collect_stage_stats.then(Instant::now);
+        with_perf_signpost("camera.renderer.direct.setup", || -> Result<(), api::RenderError> {
+            let ca0 = rpd.color_attachments().object_at(0).unwrap();
+            if self.sample_count > 1 {
+                if let Some(msaa) = &self.target_msaa_tex {
+                    ca0.set_texture(Some(msaa));
+                } else {
+                    return Err(api::RenderError::InvalidOperation(
+                        "missing multisample camera preview target",
+                    ));
+                }
+                if !raw_direct_tex.is_null() {
+                    ca0.set_resolve_texture(Some(TextureRef::from_ptr(raw_direct_tex)));
+                } else if let Some(dst) = &self.target_tex {
+                    ca0.set_resolve_texture(Some(dst));
+                } else {
+                    return Err(api::RenderError::InvalidOperation(
+                        "missing camera preview resolve target",
+                    ));
+                }
+                ca0.set_store_action(MTLStoreAction::MultisampleResolve);
+            } else {
+                if !raw_direct_tex.is_null() {
+                    ca0.set_texture(Some(TextureRef::from_ptr(raw_direct_tex)));
+                } else if let Some(dst) = &self.target_tex {
+                    ca0.set_texture(Some(dst));
+                } else {
+                    return Err(api::RenderError::InvalidOperation(
+                        "missing camera preview target",
+                    ));
+                }
+                ca0.set_store_action(MTLStoreAction::Store);
+            }
+            ca0.set_load_action(MTLLoadAction::Clear);
+            ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 });
+            Ok(())
+        })?;
+        let setup_ms = elapsed_ms(setup_t0);
+        let encoder_t0 = collect_stage_stats.then(Instant::now);
+        let enc = cmd.new_render_command_encoder(&rpd);
+        let encoder_ms = elapsed_ms(encoder_t0);
+        let vp_dp = [
+            (self.target_w as f32) / self.target_scale.max(1.0),
+            (self.target_h as f32) / self.target_scale.max(1.0),
+        ];
+        let rect_dp = [0.0, 0.0, vp_dp[0], vp_dp[1]];
+        let encode_quad_t0 = collect_stage_stats.then(Instant::now);
+        let camera_props = with_perf_signpost("camera.renderer.direct.encode_quad", || {
+            self.encode_camera_quad(
+                &enc,
+                vp_dp,
+                rect_dp,
+                api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+                1.0,
+                false,
+            )
+        });
+        let encode_quad_ms = elapsed_ms(encode_quad_t0);
+        if let Some((cw, ch, bd, mx, vr, cs)) = camera_props {
+            self.last_cam_w = cw;
+            self.last_cam_h = ch;
+            self.last_cam_bd = bd;
+            self.last_cam_mx = mx;
+            self.last_cam_vr = vr;
+            self.last_cam_cs = cs;
+            self.acc_draws = 1;
+        } else {
+            self.last_cam_w = 0;
+            self.last_cam_h = 0;
+            self.last_cam_bd = 0;
+            self.last_cam_mx = 0;
+            self.last_cam_vr = 0;
+            self.last_cam_cs = 0;
+        }
+        let end_encoding_t0 = collect_stage_stats.then(Instant::now);
+        let end_encoding_t0 = collect_stage_stats.then(Instant::now);
+        enc.end_encoding();
+        let end_encoding_ms = elapsed_ms(end_encoding_t0);
+        let end_encoding_ms = elapsed_ms(end_encoding_t0);
+
+        let mut present_ms = 0.0;
+        if !drawable_ptr.is_null() {
+            let raw_drawable = drawable_ptr as *mut MTLDrawable;
+            let drawable = DrawableRef::from_ptr(raw_drawable);
+            let present_t0 = collect_stage_stats.then(Instant::now);
+            with_perf_signpost("camera.renderer.direct.present_drawable", || {
+                cmd.present_drawable(drawable);
+            });
+            present_ms = elapsed_ms(present_t0);
+        }
+        let commit_t0 = collect_stage_stats.then(Instant::now);
+        with_perf_signpost("camera.renderer.direct.commit", || {
+            cmd.commit();
+        });
+        let commit_ms = elapsed_ms(commit_t0);
+        self.track_direct_preview_submission(self.frame_id, &cmd);
+        self.last_stats = PerfStats {
+            memory: self.memory_stats(),
+            draws: self.acc_draws,
+            instanced: self.acc_instanced,
+            icb_cmds: self.acc_icb_cmds,
+            encode_ms: elapsed_ms(cpu_t0),
+            damage_px: 0,
+            damage_pct: 0.0,
+            damage_rects: 0,
+            culled: self.acc_culled,
+            blur_ms: 0.0,
+            blur_updates: 0,
+            blur_period_ms: 0,
+            cam_coverage_pct: if camera_props.is_some() { 1.0 } else { 0.0 },
+            cam_paused: 0,
+            thermal: 0,
+            low_power: 0,
+            cam_width: self.last_cam_w.max(0) as u32,
+            cam_height: self.last_cam_h.max(0) as u32,
+            cam_bit_depth: self.last_cam_bd.max(0) as u8,
+            cam_matrix: self.last_cam_mx.max(0) as u8,
+            cam_video_range: self.last_cam_vr.max(0) as u8,
+            cam_color_space: self.last_cam_cs.max(0) as u8,
+            cam_poll_submissions_ms: poll_submissions_ms,
+            cam_fetch_ms: self.last_cam_fetch_ms,
+            cam_setup_ms: setup_ms,
+            cam_encode_quad_ms: encode_quad_ms,
+            cam_command_buffer_ms: command_buffer_ms,
+            cam_encoder_ms: encoder_ms,
+            cam_encode_bind_ms: 0.0,
+            cam_encode_draw_ms: 0.0,
+            cam_end_encoding_ms: end_encoding_ms,
+            cam_present_ms: present_ms,
+            cam_commit_ms: commit_ms,
+            cam_gpu_ms: self.direct_preview_last_completed_gpu_ms,
+            preview_submission_depth: self.direct_preview_last_submission_depth,
+            preview_submission_skipped: self.direct_preview_last_submission_skipped,
+            preview_submission_frame_age_ms: self.direct_preview_last_present_frame_age_ms,
+            ..PerfStats::default()
+        };
+        Ok(self.last_stats)
     }
 
     pub fn readback_bgra8(&mut self) -> Option<(u32, u32, alloc::vec::Vec<u8>)> {
@@ -984,10 +2849,13 @@ fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI) -> api::D
                 }
                 i += 1;
             }
-            api::DrawCmd::Spinner { center, radius, thickness, .. } => {
-                let mm = radius + thickness;
-                let rect =
-                    api::RectF { x: center[0] - mm, y: center[1] - mm, w: mm * 2.0, h: mm * 2.0 };
+            api::DrawCmd::Spinner { center, atom, .. } => {
+                let rect = api::RectF {
+                    x: center[0] - atom * 0.5,
+                    y: center[1] - atom * 0.5,
+                    w: *atom,
+                    h: *atom,
+                };
                 if rect_intersects(&rect, &sc) {
                     out.items.push(list.items[i].clone());
                 }
@@ -1078,6 +2946,12 @@ fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI) -> api::D
     out
 }
 
+impl Drop for MetalRenderer {
+    fn drop(&mut self) {
+        self.release_live_camera_frame();
+    }
+}
+
 impl api::Renderer for MetalRenderer {
     fn device_caps(&self) -> api::DeviceCaps {
         api::DeviceCaps {
@@ -1095,7 +2969,7 @@ impl api::Renderer for MetalRenderer {
     ) -> api::FrameToken {
         self.frame_id = self.frame_id.wrapping_add(1);
         let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
-        self.frames[slot].reset();
+        self.frames[slot].prepare_for_encode();
         self.acc_draws = 0;
         self.acc_instanced = 0;
         self.acc_icb_cmds = 0;
@@ -1175,7 +3049,8 @@ impl api::Renderer for MetalRenderer {
 
     fn encode_pass(&mut self, list: &api::DrawList) {
         let cpu_t0 = std::time::Instant::now();
-        if self.target_tex.is_none() {
+        let direct_present = self.pending_present_texture != 0;
+        if self.target_tex.is_none() && !direct_present {
             return;
         }
         if self.submit_error_flag.load(Ordering::Acquire) {
@@ -1254,11 +3129,11 @@ impl api::Renderer for MetalRenderer {
         #[cfg(target_os = "ios")]
         let mut blur_ms_out: f64 = 0.0;
         #[cfg(not(target_os = "ios"))]
-        let blur_ms_out: f64 = 0.0;
+        let mut blur_ms_out: f64 = 0.0;
         #[cfg(target_os = "ios")]
         let mut blur_updated: u32 = 0;
         #[cfg(not(target_os = "ios"))]
-        let blur_updated: u32 = 0;
+        let mut blur_updated: u32 = 0;
         if need_cam_blur {
             let do_update = match self.cam_last_update {
                 None => true,
@@ -1266,50 +3141,34 @@ impl api::Renderer for MetalRenderer {
             };
             if do_update {
                 let blur_t0 = std::time::Instant::now();
-                #[cfg(target_os = "ios")]
-                {
-                    extern "C" {
-                        fn oxide_cam_get_latest(
-                            y_tex: *mut *mut core::ffi::c_void,
-                            uv_tex: *mut *mut core::ffi::c_void,
-                            w: *mut i32,
-                            h: *mut i32,
-                        ) -> ::libc::c_int;
-                    }
-                    let mut y_ptr: *mut core::ffi::c_void = core::ptr::null_mut();
-                    let mut uv_ptr: *mut core::ffi::c_void = core::ptr::null_mut();
-                    let mut cw: i32 = 0;
-                    let mut ch: i32 = 0;
-                    extern "C" {
-                        fn oxide_cam_get_latest_ex(
-                            y_tex: *mut *mut core::ffi::c_void,
-                            uv_tex: *mut *mut core::ffi::c_void,
-                            w: *mut i32,
-                            h: *mut i32,
-                            bitdepth: *mut i32,
-                            matrix: *mut i32,
-                            video_range: *mut i32,
-                            colorspace: *mut i32,
-                        ) -> ::libc::c_int;
-                    }
-                    let mut bd: i32 = 8;
-                    let mut mx: i32 = 0;
-                    let mut vr: i32 = 0;
-                    let mut cs: i32 = 0;
-                    let ok = unsafe {
-                        oxide_cam_get_latest_ex(
-                            &mut y_ptr,
-                            &mut uv_ptr,
-                            &mut cw,
-                            &mut ch,
-                            &mut bd,
-                            &mut mx,
-                            &mut vr,
-                            &mut cs,
-                        )
-                    };
-                    if ok != 0 && !y_ptr.is_null() && !uv_ptr.is_null() && cw > 0 && ch > 0 {
-                        let now = std::time::Instant::now();
+                let now = std::time::Instant::now();
+                let vp_dp: [f32; 2] = [
+                    (self.target_w as f32) / self.target_scale.max(1.0),
+                    (self.target_h as f32) / self.target_scale.max(1.0),
+                ];
+                let rect_dp: [f32; 4] = [0.0, 0.0, vp_dp[0], vp_dp[1]];
+                self.ensure_effect_targets();
+                if let Some(src) = &self.prepass_tex {
+                    let rpd0 = RenderPassDescriptor::new();
+                    let ca = rpd0.color_attachments().object_at(0).unwrap();
+                    ca.set_texture(Some(src));
+                    ca.set_load_action(MTLLoadAction::Clear);
+                    ca.set_clear_color(MTLClearColor {
+                        red: 0.0,
+                        green: 0.0,
+                        blue: 0.0,
+                        alpha: 1.0,
+                    });
+                    ca.set_store_action(MTLStoreAction::Store);
+                    let enc0 = cmd.new_render_command_encoder(&rpd0);
+                    if let Some((cw, ch, bd, mx, vr, cs)) = self.encode_camera_quad(
+                        &enc0,
+                        vp_dp,
+                        rect_dp,
+                        api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+                        1.0,
+                        false,
+                    ) {
                         let changed = self.last_cam_w != cw
                             || self.last_cam_h != ch
                             || self.last_cam_bd != bd
@@ -1331,211 +3190,123 @@ impl api::Renderer for MetalRenderer {
                         if self.cam_blur_tex.is_none() {
                             self.cam_blur_fade_t0 = Some(now);
                         }
-                        let y_tex = unsafe { Texture::from_ptr(y_ptr as *mut MTLTexture) };
-                        let uv_tex = unsafe { Texture::from_ptr(uv_ptr as *mut MTLTexture) };
-                        // 1) Render NV12 to prepass texture
-                        self.ensure_effect_targets();
-                        if let Some(src) = &self.prepass_tex {
-                            let rpd0 = RenderPassDescriptor::new();
-                            let ca = rpd0.color_attachments().object_at(0).unwrap();
-                            ca.set_texture(Some(src));
-                            ca.set_load_action(MTLLoadAction::Clear);
-                            ca.set_clear_color(MTLClearColor {
-                                red: 0.0,
-                                green: 0.0,
-                                blue: 0.0,
-                                alpha: 1.0,
-                            });
-                            ca.set_store_action(MTLStoreAction::Store);
-                            let enc0 = cmd.new_render_command_encoder(&rpd0);
-                            enc0.set_render_pipeline_state(&self.pso_camera);
-                            if let Some(sam) = &self.sampler {
-                                enc0.set_fragment_sampler_state(0, Some(sam));
-                            }
-                            enc0.set_fragment_texture(0, Some(&y_tex));
-                            enc0.set_fragment_texture(1, Some(&uv_tex));
-                            // VP dp and rect dp
-                            let vp_dp: [f32; 2] = [
-                                (self.target_w as f32) / self.target_scale.max(1.0),
-                                (self.target_h as f32) / self.target_scale.max(1.0),
-                            ];
-                            let rect_dp: [f32; 4] = [0.0, 0.0, vp_dp[0], vp_dp[1]];
-                            enc0.set_vertex_bytes(
-                                1,
-                                core::mem::size_of_val(&vp_dp) as u64,
-                                vp_dp.as_ptr() as *const _,
-                            );
-                            enc0.set_vertex_bytes(
-                                0,
-                                core::mem::size_of_val(&rect_dp) as u64,
-                                rect_dp.as_ptr() as *const _,
-                            );
-                            // Aspect fill params
-                            let ar_dest = if vp_dp[1] > 0.0 { vp_dp[0] / vp_dp[1] } else { 1.0 };
-                            let ar_cam = (cw as f32) / (ch as f32);
-                            let (mut sx, mut sy) = (1.0f32, 1.0f32);
-                            let (mut bx, mut by) = (0.0f32, 0.0f32);
-                            if ar_cam > ar_dest {
-                                sx = ar_dest / ar_cam;
-                                bx = (1.0 - sx) * 0.5;
-                            } else if ar_cam < ar_dest {
-                                sy = ar_cam / ar_dest;
-                                by = (1.0 - sy) * 0.5;
-                            }
-                            let fbuf = pack_camera_params(
-                                rect_dp,
-                                api::Color::rgba(1.0, 1.0, 1.0, 1.0),
-                                1.0,
-                                [sx, sy],
-                                [bx, by],
-                                false,
-                                mx,
-                                vr,
-                                bd,
-                            );
-                            enc0.set_fragment_bytes(
-                                1,
-                                core::mem::size_of_val(&fbuf) as u64,
-                                (&fbuf as *const CameraGpuParams).cast(),
-                            );
-                            enc0.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
-                            enc0.end_encoding();
-                        }
-                        // 2) Downsample and blur
-                        self.ensure_effect_targets();
-                        if let (Some(pre), Some(half)) = (&self.prepass_tex, &self.half_tex) {
-                            let rpd = RenderPassDescriptor::new();
-                            let ca = rpd.color_attachments().object_at(0).unwrap();
-                            ca.set_texture(Some(half));
-                            ca.set_load_action(MTLLoadAction::DontCare);
-                            ca.set_store_action(MTLStoreAction::Store);
-                            let enc = cmd.new_render_command_encoder(&rpd);
-                            enc.set_render_pipeline_state(&self.pso_downsample);
-                            if let Some(sam) = &self.sampler {
-                                enc.set_fragment_sampler_state(0, Some(sam));
-                            }
-                            enc.set_fragment_texture(0, Some(pre));
-                            let vp_dp: [f32; 2] = [
-                                (self.target_w as f32) / self.target_scale.max(1.0),
-                                (self.target_h as f32) / self.target_scale.max(1.0),
-                            ];
-                            let rect_dp: [f32; 4] = [0.0, 0.0, vp_dp[0], vp_dp[1]];
-                            enc.set_vertex_bytes(
-                                1,
-                                core::mem::size_of_val(&vp_dp) as u64,
-                                vp_dp.as_ptr() as *const _,
-                            );
-                            enc.set_vertex_bytes(
-                                0,
-                                core::mem::size_of_val(&rect_dp) as u64,
-                                rect_dp.as_ptr() as *const _,
-                            );
-                            enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
-                            enc.end_encoding();
-                        }
-                        if let (Some(half), Some(q)) = (&self.half_tex, &self.quarter_tex) {
-                            let rpd = RenderPassDescriptor::new();
-                            let ca = rpd.color_attachments().object_at(0).unwrap();
-                            ca.set_texture(Some(q));
-                            ca.set_load_action(MTLLoadAction::DontCare);
-                            ca.set_store_action(MTLStoreAction::Store);
-                            let enc = cmd.new_render_command_encoder(&rpd);
-                            enc.set_render_pipeline_state(&self.pso_downsample);
-                            if let Some(sam) = &self.sampler {
-                                enc.set_fragment_sampler_state(0, Some(sam));
-                            }
-                            enc.set_fragment_texture(0, Some(half));
-                            let vp_dp: [f32; 2] = [
-                                (self.target_w as f32) / self.target_scale.max(1.0),
-                                (self.target_h as f32) / self.target_scale.max(1.0),
-                            ];
-                            let rect_dp: [f32; 4] = [0.0, 0.0, vp_dp[0], vp_dp[1]];
-                            enc.set_vertex_bytes(
-                                1,
-                                core::mem::size_of_val(&vp_dp) as u64,
-                                vp_dp.as_ptr() as *const _,
-                            );
-                            enc.set_vertex_bytes(
-                                0,
-                                core::mem::size_of_val(&rect_dp) as u64,
-                                rect_dp.as_ptr() as *const _,
-                            );
-                            enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
-                            enc.end_encoding();
-                        }
-                        if let (Some(q), Some(qtmp)) = (&self.quarter_tex, &self.quarter_tmp_tex) {
-                            let vp_dp: [f32; 2] = [
-                                (self.target_w as f32) / self.target_scale.max(1.0),
-                                (self.target_h as f32) / self.target_scale.max(1.0),
-                            ];
-                            let rect_dp: [f32; 4] = [0.0, 0.0, vp_dp[0], vp_dp[1]];
-                            // Horizontal blur
-                            let rpd = RenderPassDescriptor::new();
-                            let ca = rpd.color_attachments().object_at(0).unwrap();
-                            ca.set_texture(Some(qtmp));
-                            ca.set_load_action(MTLLoadAction::DontCare);
-                            ca.set_store_action(MTLStoreAction::Store);
-                            let enc = cmd.new_render_command_encoder(&rpd);
-                            enc.set_render_pipeline_state(&self.pso_blur);
-                            if let Some(sam) = &self.sampler {
-                                enc.set_fragment_sampler_state(0, Some(sam));
-                            }
-                            enc.set_fragment_texture(0, Some(q));
-                            let params_h: [f32; 4] = [1.0, 0.0, 6.0, 0.0];
-                            enc.set_vertex_bytes(
-                                1,
-                                core::mem::size_of_val(&vp_dp) as u64,
-                                vp_dp.as_ptr() as *const _,
-                            );
-                            enc.set_vertex_bytes(
-                                0,
-                                core::mem::size_of_val(&rect_dp) as u64,
-                                rect_dp.as_ptr() as *const _,
-                            );
-                            enc.set_fragment_bytes(
-                                1,
-                                core::mem::size_of_val(&params_h) as u64,
-                                params_h.as_ptr() as *const _,
-                            );
-                            enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
-                            enc.end_encoding();
-                            // Vertical blur back to q
-                            let rpd2 = RenderPassDescriptor::new();
-                            let ca2 = rpd2.color_attachments().object_at(0).unwrap();
-                            ca2.set_texture(Some(q));
-                            ca2.set_load_action(MTLLoadAction::DontCare);
-                            ca2.set_store_action(MTLStoreAction::Store);
-                            let enc2 = cmd.new_render_command_encoder(&rpd2);
-                            enc2.set_render_pipeline_state(&self.pso_blur);
-                            if let Some(sam) = &self.sampler {
-                                enc2.set_fragment_sampler_state(0, Some(sam));
-                            }
-                            enc2.set_fragment_texture(0, Some(qtmp));
-                            let params_v: [f32; 4] = [0.0, 1.0, 6.0, 0.0];
-                            enc2.set_vertex_bytes(
-                                1,
-                                core::mem::size_of_val(&vp_dp) as u64,
-                                vp_dp.as_ptr() as *const _,
-                            );
-                            enc2.set_vertex_bytes(
-                                0,
-                                core::mem::size_of_val(&rect_dp) as u64,
-                                rect_dp.as_ptr() as *const _,
-                            );
-                            enc2.set_fragment_bytes(
-                                1,
-                                core::mem::size_of_val(&params_v) as u64,
-                                params_v.as_ptr() as *const _,
-                            );
-                            enc2.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
-                            enc2.end_encoding();
-                            self.cam_blur_tex = Some(q.to_owned());
-                        }
-                        self.cam_last_update = Some(std::time::Instant::now());
-                        blur_ms_out = blur_t0.elapsed().as_secs_f64() * 1000.0;
-                        blur_updated = 1;
                     }
+                    enc0.end_encoding();
                 }
+                if let (Some(pre), Some(half)) = (&self.prepass_tex, &self.half_tex) {
+                    let rpd = RenderPassDescriptor::new();
+                    let ca = rpd.color_attachments().object_at(0).unwrap();
+                    ca.set_texture(Some(half));
+                    ca.set_load_action(MTLLoadAction::DontCare);
+                    ca.set_store_action(MTLStoreAction::Store);
+                    let enc = cmd.new_render_command_encoder(&rpd);
+                    enc.set_render_pipeline_state(&self.pso_downsample);
+                    if let Some(sam) = &self.sampler {
+                        enc.set_fragment_sampler_state(0, Some(sam));
+                    }
+                    enc.set_fragment_texture(0, Some(pre));
+                    enc.set_vertex_bytes(
+                        1,
+                        core::mem::size_of_val(&vp_dp) as u64,
+                        vp_dp.as_ptr() as *const _,
+                    );
+                    enc.set_vertex_bytes(
+                        0,
+                        core::mem::size_of_val(&rect_dp) as u64,
+                        rect_dp.as_ptr() as *const _,
+                    );
+                    enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
+                    enc.end_encoding();
+                }
+                if let (Some(half), Some(q)) = (&self.half_tex, &self.quarter_tex) {
+                    let rpd = RenderPassDescriptor::new();
+                    let ca = rpd.color_attachments().object_at(0).unwrap();
+                    ca.set_texture(Some(q));
+                    ca.set_load_action(MTLLoadAction::DontCare);
+                    ca.set_store_action(MTLStoreAction::Store);
+                    let enc = cmd.new_render_command_encoder(&rpd);
+                    enc.set_render_pipeline_state(&self.pso_downsample);
+                    if let Some(sam) = &self.sampler {
+                        enc.set_fragment_sampler_state(0, Some(sam));
+                    }
+                    enc.set_fragment_texture(0, Some(half));
+                    enc.set_vertex_bytes(
+                        1,
+                        core::mem::size_of_val(&vp_dp) as u64,
+                        vp_dp.as_ptr() as *const _,
+                    );
+                    enc.set_vertex_bytes(
+                        0,
+                        core::mem::size_of_val(&rect_dp) as u64,
+                        rect_dp.as_ptr() as *const _,
+                    );
+                    enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
+                    enc.end_encoding();
+                }
+                if let (Some(q), Some(qtmp)) = (&self.quarter_tex, &self.quarter_tmp_tex) {
+                    let rpd = RenderPassDescriptor::new();
+                    let ca = rpd.color_attachments().object_at(0).unwrap();
+                    ca.set_texture(Some(qtmp));
+                    ca.set_load_action(MTLLoadAction::DontCare);
+                    ca.set_store_action(MTLStoreAction::Store);
+                    let enc = cmd.new_render_command_encoder(&rpd);
+                    enc.set_render_pipeline_state(&self.pso_blur);
+                    if let Some(sam) = &self.sampler {
+                        enc.set_fragment_sampler_state(0, Some(sam));
+                    }
+                    enc.set_fragment_texture(0, Some(q));
+                    let params_h: [f32; 4] = [1.0, 0.0, 6.0, 0.0];
+                    enc.set_vertex_bytes(
+                        1,
+                        core::mem::size_of_val(&vp_dp) as u64,
+                        vp_dp.as_ptr() as *const _,
+                    );
+                    enc.set_vertex_bytes(
+                        0,
+                        core::mem::size_of_val(&rect_dp) as u64,
+                        rect_dp.as_ptr() as *const _,
+                    );
+                    enc.set_fragment_bytes(
+                        1,
+                        core::mem::size_of_val(&params_h) as u64,
+                        params_h.as_ptr() as *const _,
+                    );
+                    enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
+                    enc.end_encoding();
+                    let rpd2 = RenderPassDescriptor::new();
+                    let ca2 = rpd2.color_attachments().object_at(0).unwrap();
+                    ca2.set_texture(Some(q));
+                    ca2.set_load_action(MTLLoadAction::DontCare);
+                    ca2.set_store_action(MTLStoreAction::Store);
+                    let enc2 = cmd.new_render_command_encoder(&rpd2);
+                    enc2.set_render_pipeline_state(&self.pso_blur);
+                    if let Some(sam) = &self.sampler {
+                        enc2.set_fragment_sampler_state(0, Some(sam));
+                    }
+                    enc2.set_fragment_texture(0, Some(qtmp));
+                    let params_v: [f32; 4] = [0.0, 1.0, 6.0, 0.0];
+                    enc2.set_vertex_bytes(
+                        1,
+                        core::mem::size_of_val(&vp_dp) as u64,
+                        vp_dp.as_ptr() as *const _,
+                    );
+                    enc2.set_vertex_bytes(
+                        0,
+                        core::mem::size_of_val(&rect_dp) as u64,
+                        rect_dp.as_ptr() as *const _,
+                    );
+                    enc2.set_fragment_bytes(
+                        1,
+                        core::mem::size_of_val(&params_v) as u64,
+                        params_v.as_ptr() as *const _,
+                    );
+                    enc2.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
+                    enc2.end_encoding();
+                    self.cam_blur_tex = Some(q.to_owned());
+                }
+                self.cam_last_update = Some(std::time::Instant::now());
+                blur_ms_out = blur_t0.elapsed().as_secs_f64() * 1000.0;
+                blur_updated = 1;
             }
         }
 
@@ -1606,19 +3377,11 @@ impl api::Renderer for MetalRenderer {
                                         alpha: *alpha,
                                     });
                                 }
-                                api::DrawCmd::Spinner {
-                                    center,
-                                    radius,
-                                    thickness,
-                                    phase,
-                                    alpha,
-                                } => {
+                                api::DrawCmd::Spinner { center, atom, alpha } => {
                                     let adj = [center[0] - ox, center[1] - oy];
                                     sub.items.push(api::DrawCmd::Spinner {
                                         center: adj,
-                                        radius: *radius,
-                                        thickness: *thickness,
-                                        phase: *phase,
+                                        atom: *atom,
                                         alpha: *alpha,
                                     });
                                 }
@@ -2046,23 +3809,33 @@ impl api::Renderer for MetalRenderer {
 
         let rpd = RenderPassDescriptor::new();
         let ca0 = rpd.color_attachments().object_at(0).unwrap();
+        let direct_target = if direct_present {
+            Some(unsafe { TextureRef::from_ptr(self.pending_present_texture as *mut MTLTexture) })
+        } else {
+            None
+        };
         if self.sample_count > 1 {
             if let Some(msaa) = &self.target_msaa_tex {
                 ca0.set_texture(Some(msaa));
             }
-            if let Some(dst) = &self.target_tex {
+            if let Some(dst) = direct_target {
+                ca0.set_resolve_texture(Some(dst));
+            } else if let Some(dst) = &self.target_tex {
                 ca0.set_resolve_texture(Some(dst));
             }
             ca0.set_store_action(MTLStoreAction::MultisampleResolve);
         } else {
-            if let Some(dst) = &self.target_tex {
+            if let Some(dst) = direct_target {
+                ca0.set_texture(Some(dst));
+            } else if let Some(dst) = &self.target_tex {
                 ca0.set_texture(Some(dst));
             }
             ca0.set_store_action(MTLStoreAction::Store);
         }
         // Heuristic: use Load (damage) only when enabled and coverage < threshold
         let dmg_thresh: f32 = self.damage_use_thresh;
-        let use_damage = self.sample_count == 1
+        let use_damage = !direct_present
+            && self.sample_count == 1
             && self.damage_enabled
             && self.frame_scissor_dp.is_some()
             && self.frame_damage_pct < dmg_thresh;
@@ -2141,10 +3914,19 @@ impl api::Renderer for MetalRenderer {
             return Err(api::RenderError::DeviceLost);
         }
         let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
+        let pending_present_drawable = self.pending_present_drawable as *mut core::ffi::c_void;
+        self.pending_present_drawable = 0;
+        self.pending_present_texture = 0;
         if let Some(cmd) = self.frames[slot].cmd.take() {
             let frame_id = self.frame_id;
             let log_enabled = ios_log_enabled();
             let submit_error_flag = self.submit_error_flag.clone();
+            let in_flight = self.frames[slot].in_flight.clone();
+            if !pending_present_drawable.is_null() {
+                let raw_drawable = pending_present_drawable as *mut MTLDrawable;
+                let drawable = unsafe { DrawableRef::from_ptr(raw_drawable) };
+                cmd.present_drawable(drawable);
+            }
             let completion = ConcreteBlock::new(move |buffer: &CommandBufferRef| {
                 let status = buffer.status();
                 if log_enabled {
@@ -2179,27 +3961,30 @@ impl api::Renderer for MetalRenderer {
                     }
                     submit_error_flag.store(true, Ordering::Release);
                 }
+                in_flight.store(false, Ordering::Release);
             })
             .copy();
             cmd.add_completed_handler(&completion);
+            self.frames[slot].mark_submitted(&cmd);
             cmd.commit();
-            // Safety/correctness barrier:
-            // upload memory is reused by slot index. On physical devices we can
-            // block for completion. On iOS simulator this can deadlock when called
-            // from display-link-driven main-thread rendering.
-            let wait_on_simulator = env_flag("NAMETAG_RENDERER_SIM_WAIT_SUBMIT").unwrap_or(false);
-            if !running_on_ios_simulator() || wait_on_simulator {
-                cmd.wait_until_completed();
-            }
-            self.frames[slot].completed();
         }
         Ok(())
     }
 
     fn resize(&mut self, w: u32, h: u32, scale: f32) -> Result<(), api::RenderError> {
-        self.target_w = w.max(1);
-        self.target_h = h.max(1);
-        self.target_scale = if scale > 0.0 { scale } else { 1.0 };
+        let next_w = w.max(1);
+        let next_h = h.max(1);
+        let next_scale = if scale > 0.0 { scale } else { 1.0 };
+        if self.target_w == next_w
+            && self.target_h == next_h
+            && (self.target_scale - next_scale).abs() <= f32::EPSILON
+            && self.target_tex.is_some()
+        {
+            return Ok(());
+        }
+        self.target_w = next_w;
+        self.target_h = next_h;
+        self.target_scale = next_scale;
         self.ensure_target();
         Ok(())
     }
@@ -2302,17 +4087,86 @@ fn encode_draws(
         }
         match &list.items[i] {
             api::DrawCmd::CameraBg { rect, tint, alpha, grayscale, blur, sigma } => {
-                // Only supported on iOS Metal; no-op elsewhere
-                #[cfg(target_os = "ios")]
-                {
-                    if !r.use_camera_textures {
+                // Live camera frames are iOS-only. The synthetic benchmark source is also
+                // available on macOS so shader correctness can be tested off-device.
+                let camera_preview_supported = cfg!(target_os = "ios")
+                    || r.camera_texture_source == CameraTextureSource::SyntheticBenchmark;
+                if !camera_preview_supported {
+                    i += 1;
+                    continue;
+                }
+                if !r.use_camera_textures {
+                    let a = (tint.a * *alpha).clamp(0.0, 1.0);
+                    let vparams: [f32; 4] = [rect.x, rect.y, rect.w, rect.h];
+                    let fparams: [f32; 12] = [
+                        rect.x, rect.y, rect.w, rect.h, 0.0, 0.0, 0.0, 0.0, tint.r, tint.g, tint.b,
+                        a,
+                    ];
+                    enc.set_render_pipeline_state(&r.pso_rrect);
+                    enc.set_vertex_bytes(
+                        1,
+                        core::mem::size_of_val(&vp_dp) as u64,
+                        vp_dp.as_ptr() as *const _,
+                    );
+                    enc.set_vertex_bytes(
+                        0,
+                        core::mem::size_of_val(&vparams) as u64,
+                        vparams.as_ptr() as *const _,
+                    );
+                    enc.set_fragment_bytes(
+                        1,
+                        core::mem::size_of_val(&fparams) as u64,
+                        fparams.as_ptr() as *const _,
+                    );
+                    enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
+                    r.acc_draws = r.acc_draws.saturating_add(1);
+                    i += 1;
+                    continue;
+                }
+                if *blur {
+                    if r.cam_blur_tex.is_some() {
                         let a = (tint.a * *alpha).clamp(0.0, 1.0);
-                        let vparams: [f32; 4] = [rect.x, rect.y, rect.w, rect.h];
-                        let fparams: [f32; 12] = [
-                            rect.x, rect.y, rect.w, rect.h, 0.0, 0.0, 0.0, 0.0, tint.r, tint.g,
-                            tint.b, a,
-                        ];
-                        enc.set_render_pipeline_state(&r.pso_rrect);
+                        let vbuf: [f32; 4] = [rect.x, rect.y, rect.w, rect.h];
+                        let base_fb: [f32; 8] =
+                            [rect.x, rect.y, rect.w, rect.h, tint.r, tint.g, tint.b, a];
+                        let mut fade_prev = 0.0f32;
+                        let mut fade_cur = 1.0f32;
+                        if let Some(t0) = r.cam_xfade_t0 {
+                            let dt = t0.elapsed().as_millis() as u32;
+                            let ms = r.cam_xfade_ms.max(1);
+                            let f = (dt as f32 / ms as f32).clamp(0.0, 1.0);
+                            fade_prev = 1.0 - f;
+                            fade_cur = f;
+                        } else if let Some(t0) = r.cam_blur_fade_t0 {
+                            let dt = t0.elapsed().as_millis() as u32;
+                            let ms = r.cam_xfade_ms.max(1);
+                            let f = (dt as f32 / ms as f32).clamp(0.0, 1.0);
+                            fade_prev = 0.0;
+                            fade_cur = f;
+                            // Draw the live or synthetic camera base with (1 - f)
+                            if fade_cur < 1.0 {
+                                if let Some((cw, ch, bd, mx, vr, cs)) = r.encode_camera_quad(
+                                    enc,
+                                    vp_dp,
+                                    [rect.x, rect.y, rect.w, rect.h],
+                                    *tint,
+                                    a * (1.0 - fade_cur),
+                                    *grayscale,
+                                ) {
+                                    r.last_cam_w = cw;
+                                    r.last_cam_h = ch;
+                                    r.last_cam_bd = bd;
+                                    r.last_cam_mx = mx;
+                                    r.last_cam_vr = vr;
+                                    r.last_cam_cs = cs;
+                                    r.acc_instanced += 1;
+                                }
+                            }
+                        }
+                        enc.set_render_pipeline_state(&r.pso_backdrop);
+                        if let Some(sam) = &r.sampler {
+                            enc.set_fragment_sampler_state(0, Some(sam));
+                        }
                         enc.set_vertex_bytes(
                             1,
                             core::mem::size_of_val(&vp_dp) as u64,
@@ -2320,169 +4174,26 @@ fn encode_draws(
                         );
                         enc.set_vertex_bytes(
                             0,
-                            core::mem::size_of_val(&vparams) as u64,
-                            vparams.as_ptr() as *const _,
+                            core::mem::size_of_val(&vbuf) as u64,
+                            vbuf.as_ptr() as *const _,
                         );
-                        enc.set_fragment_bytes(
-                            1,
-                            core::mem::size_of_val(&fparams) as u64,
-                            fparams.as_ptr() as *const _,
-                        );
-                        enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
-                        r.acc_draws = r.acc_draws.saturating_add(1);
-                        i += 1;
-                        continue;
-                    }
-                    if *blur {
+                        // Draw previous blurred
+                        if fade_prev > 0.0 {
+                            if let Some(prev) = &r.cam_xfade_prev_tex {
+                                enc.set_fragment_texture(0, Some(prev));
+                                let mut fb = base_fb;
+                                fb[7] = a * fade_prev;
+                                enc.set_fragment_bytes(
+                                    1,
+                                    core::mem::size_of_val(&fb) as u64,
+                                    fb.as_ptr() as *const _,
+                                );
+                                enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
+                                r.acc_instanced += 1;
+                            }
+                        }
+                        // Draw current blurred
                         if let Some(src) = &r.cam_blur_tex {
-                            let a = (tint.a * *alpha).clamp(0.0, 1.0);
-                            let vbuf: [f32; 4] = [rect.x, rect.y, rect.w, rect.h];
-                            let base_fb: [f32; 8] =
-                                [rect.x, rect.y, rect.w, rect.h, tint.r, tint.g, tint.b, a];
-                            let mut fade_prev = 0.0f32;
-                            let mut fade_cur = 1.0f32;
-                            if let Some(t0) = r.cam_xfade_t0 {
-                                let dt = t0.elapsed().as_millis() as u32;
-                                let ms = r.cam_xfade_ms.max(1);
-                                let f = (dt as f32 / ms as f32).clamp(0.0, 1.0);
-                                fade_prev = 1.0 - f;
-                                fade_cur = f;
-                            } else if let Some(t0) = r.cam_blur_fade_t0 {
-                                let dt = t0.elapsed().as_millis() as u32;
-                                let ms = r.cam_xfade_ms.max(1);
-                                let f = (dt as f32 / ms as f32).clamp(0.0, 1.0);
-                                fade_prev = 0.0;
-                                fade_cur = f;
-                                // Draw raw NV12 base with (1 - f)
-                                if fade_cur < 1.0 {
-                                    extern "C" {
-                                        fn oxide_cam_get_latest_ex(
-                                            y_tex: *mut *mut core::ffi::c_void,
-                                            uv_tex: *mut *mut core::ffi::c_void,
-                                            w: *mut i32,
-                                            h: *mut i32,
-                                            bitdepth: *mut i32,
-                                            matrix: *mut i32,
-                                            video_range: *mut i32,
-                                            colorspace: *mut i32,
-                                        ) -> ::libc::c_int;
-                                    }
-                                    let mut y_ptr: *mut core::ffi::c_void = core::ptr::null_mut();
-                                    let mut uv_ptr: *mut core::ffi::c_void = core::ptr::null_mut();
-                                    let mut cw: i32 = 0;
-                                    let mut ch: i32 = 0;
-                                    let mut bd: i32 = 8;
-                                    let mut mx: i32 = 0;
-                                    let mut vr: i32 = 0;
-                                    let mut cs: i32 = 0;
-                                    let ok2 = unsafe {
-                                        oxide_cam_get_latest_ex(
-                                            &mut y_ptr,
-                                            &mut uv_ptr,
-                                            &mut cw,
-                                            &mut ch,
-                                            &mut bd,
-                                            &mut mx,
-                                            &mut vr,
-                                            &mut cs,
-                                        )
-                                    };
-                                    if ok2 != 0 && !y_ptr.is_null() && !uv_ptr.is_null() {
-                                        let y_tex =
-                                            unsafe { Texture::from_ptr(y_ptr as *mut MTLTexture) };
-                                        let uv_tex =
-                                            unsafe { Texture::from_ptr(uv_ptr as *mut MTLTexture) };
-                                        enc.set_render_pipeline_state(&r.pso_camera);
-                                        if let Some(sam) = &r.sampler {
-                                            enc.set_fragment_sampler_state(0, Some(sam));
-                                        }
-                                        enc.set_fragment_texture(0, Some(&y_tex));
-                                        enc.set_fragment_texture(1, Some(&uv_tex));
-                                        enc.set_vertex_bytes(
-                                            1,
-                                            core::mem::size_of_val(&vp_dp) as u64,
-                                            vp_dp.as_ptr() as *const _,
-                                        );
-                                        enc.set_vertex_bytes(
-                                            0,
-                                            core::mem::size_of_val(&vbuf) as u64,
-                                            vbuf.as_ptr() as *const _,
-                                        );
-                                        // Aspect-fill params
-                                        let ar_dest =
-                                            if rect.h > 0.0 { rect.w / rect.h } else { 1.0 };
-                                        let ar_cam =
-                                            if ch > 0 { (cw as f32) / (ch as f32) } else { 1.0 };
-                                        let (mut sx, mut sy) = (1.0f32, 1.0f32);
-                                        let (mut bx, mut by) = (0.0f32, 0.0f32);
-                                        if ar_cam > ar_dest {
-                                            sx = ar_dest / ar_cam;
-                                            bx = (1.0 - sx) * 0.5;
-                                        } else if ar_cam < ar_dest {
-                                            sy = ar_cam / ar_dest;
-                                            by = (1.0 - sy) * 0.5;
-                                        }
-                                        let fb_cam = pack_camera_params(
-                                            [rect.x, rect.y, rect.w, rect.h],
-                                            *tint,
-                                            a * (1.0 - fade_cur),
-                                            [sx, sy],
-                                            [bx, by],
-                                            *grayscale,
-                                            mx,
-                                            vr,
-                                            bd,
-                                        );
-                                        enc.set_fragment_bytes(
-                                            1,
-                                            core::mem::size_of_val(&fb_cam) as u64,
-                                            (&fb_cam as *const CameraGpuParams).cast(),
-                                        );
-                                        enc.draw_primitives_instanced(
-                                            MTLPrimitiveType::Triangle,
-                                            0,
-                                            6,
-                                            1,
-                                        );
-                                        r.acc_instanced += 1;
-                                    }
-                                }
-                            }
-                            enc.set_render_pipeline_state(&r.pso_backdrop);
-                            if let Some(sam) = &r.sampler {
-                                enc.set_fragment_sampler_state(0, Some(sam));
-                            }
-                            enc.set_vertex_bytes(
-                                1,
-                                core::mem::size_of_val(&vp_dp) as u64,
-                                vp_dp.as_ptr() as *const _,
-                            );
-                            enc.set_vertex_bytes(
-                                0,
-                                core::mem::size_of_val(&vbuf) as u64,
-                                vbuf.as_ptr() as *const _,
-                            );
-                            // Draw previous blurred
-                            if fade_prev > 0.0 {
-                                if let Some(prev) = &r.cam_xfade_prev_tex {
-                                    enc.set_fragment_texture(0, Some(prev));
-                                    let mut fb = base_fb;
-                                    fb[7] = a * fade_prev;
-                                    enc.set_fragment_bytes(
-                                        1,
-                                        core::mem::size_of_val(&fb) as u64,
-                                        fb.as_ptr() as *const _,
-                                    );
-                                    enc.draw_primitives_instanced(
-                                        MTLPrimitiveType::Triangle,
-                                        0,
-                                        6,
-                                        1,
-                                    );
-                                    r.acc_instanced += 1;
-                                }
-                            }
-                            // Draw current blurred
                             enc.set_fragment_texture(0, Some(src));
                             let mut fb = base_fb;
                             fb[7] = a * fade_cur;
@@ -2494,93 +4205,25 @@ fn encode_draws(
                             enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
                             r.acc_instanced += 1;
                         }
-                    } else {
-                        extern "C" {
-                            fn oxide_cam_get_latest_ex(
-                                y_tex: *mut *mut core::ffi::c_void,
-                                uv_tex: *mut *mut core::ffi::c_void,
-                                w: *mut i32,
-                                h: *mut i32,
-                                bitdepth: *mut i32,
-                                matrix: *mut i32,
-                                video_range: *mut i32,
-                                colorspace: *mut i32,
-                            ) -> ::libc::c_int;
-                        }
-                        let mut y_ptr: *mut core::ffi::c_void = core::ptr::null_mut();
-                        let mut uv_ptr: *mut core::ffi::c_void = core::ptr::null_mut();
-                        let mut cw: i32 = 0;
-                        let mut ch: i32 = 0;
-                        let mut bd: i32 = 8;
-                        let mut mx: i32 = 0;
-                        let mut vr: i32 = 0;
-                        let mut cs: i32 = 0;
-                        let ok = unsafe {
-                            oxide_cam_get_latest_ex(
-                                &mut y_ptr,
-                                &mut uv_ptr,
-                                &mut cw,
-                                &mut ch,
-                                &mut bd,
-                                &mut mx,
-                                &mut vr,
-                                &mut cs,
-                            )
-                        };
-                        if ok != 0 && !y_ptr.is_null() && !uv_ptr.is_null() && cw > 0 && ch > 0 {
-                            let y_tex = unsafe { Texture::from_ptr(y_ptr as *mut MTLTexture) };
-                            let uv_tex = unsafe { Texture::from_ptr(uv_ptr as *mut MTLTexture) };
-                            enc.set_render_pipeline_state(&r.pso_camera);
-                            if let Some(sam) = &r.sampler {
-                                enc.set_fragment_sampler_state(0, Some(sam));
-                            }
-                            enc.set_fragment_texture(0, Some(&y_tex));
-                            enc.set_fragment_texture(1, Some(&uv_tex));
-                            let ar_dest = if rect.h > 0.0 { rect.w / rect.h } else { 1.0 };
-                            let ar_cam = (cw as f32) / (ch as f32);
-                            let (mut sx, mut sy) = (1.0f32, 1.0f32);
-                            let (mut bx, mut by) = (0.0f32, 0.0f32);
-                            if ar_cam > ar_dest {
-                                sx = ar_dest / ar_cam;
-                                bx = (1.0 - sx) * 0.5;
-                            } else if ar_cam < ar_dest {
-                                sy = ar_cam / ar_dest;
-                                by = (1.0 - sy) * 0.5;
-                            }
-                            let a = (tint.a * *alpha).clamp(0.0, 1.0);
-                            let fbuf_cam = pack_camera_params(
-                                [rect.x, rect.y, rect.w, rect.h],
-                                *tint,
-                                a,
-                                [sx, sy],
-                                [bx, by],
-                                *grayscale,
-                                mx,
-                                vr,
-                                bd,
-                            );
-                            let vbuf_cam: [f32; 4] = [rect.x, rect.y, rect.w, rect.h];
-                            enc.set_vertex_bytes(
-                                1,
-                                core::mem::size_of_val(&vp_dp) as u64,
-                                vp_dp.as_ptr() as *const _,
-                            );
-                            enc.set_vertex_bytes(
-                                0,
-                                core::mem::size_of_val(&vbuf_cam) as u64,
-                                vbuf_cam.as_ptr() as *const _,
-                            );
-                            enc.set_fragment_bytes(
-                                1,
-                                core::mem::size_of_val(&fbuf_cam) as u64,
-                                (&fbuf_cam as *const CameraGpuParams).cast(),
-                            );
-                            enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
-                            r.acc_draws = r.acc_draws.saturating_add(1);
-                        }
+                    }
+                } else {
+                    if let Some((cw, ch, bd, mx, vr, cs)) = r.encode_camera_quad(
+                        enc,
+                        vp_dp,
+                        [rect.x, rect.y, rect.w, rect.h],
+                        *tint,
+                        (tint.a * *alpha).clamp(0.0, 1.0),
+                        *grayscale,
+                    ) {
+                        r.last_cam_w = cw;
+                        r.last_cam_h = ch;
+                        r.last_cam_bd = bd;
+                        r.last_cam_mx = mx;
+                        r.last_cam_vr = vr;
+                        r.last_cam_cs = cs;
+                        r.acc_draws = r.acc_draws.saturating_add(1);
                     }
                 }
-                // Non-iOS or failure path: do nothing
                 i += 1;
                 continue;
             }
@@ -2715,13 +4358,11 @@ fn encode_draws(
                             });
                             tex.0.hash(&mut hasher);
                         }
-                        api::DrawCmd::Spinner { center, radius, thickness, phase, alpha } => {
+                        api::DrawCmd::Spinner { center, atom, alpha } => {
                             let adj = [center[0] - ox, center[1] - oy];
                             sub.items.push(api::DrawCmd::Spinner {
                                 center: adj,
-                                radius: *radius,
-                                thickness: *thickness,
-                                phase: *phase,
+                                atom: *atom,
                                 alpha: *alpha,
                             });
                         }
@@ -3329,7 +4970,7 @@ fn encode_draws(
                         let icb = r.device.new_indirect_command_buffer_with_descriptor(
                             &desc,
                             count as u64,
-                            MTLResourceOptions::StorageModePrivate,
+                            glyph_icb_resource_options(),
                         );
                         for (ci, gr) in group.iter().enumerate() {
                             let cmd_i = icb.indirect_render_command_at_index(ci as u64);
@@ -3378,27 +5019,26 @@ fn encode_draws(
                 i = j;
                 continue;
             }
-            api::DrawCmd::Spinner { center, radius, thickness, phase, alpha } => {
+            api::DrawCmd::Spinner { center, atom, alpha } => {
                 enc.set_render_pipeline_state(&r.pso_spinner);
+                let phase = legacy_spinner_phase(spinner_now_ms());
                 // Batch consecutive spinners
                 let mut count = 0usize;
                 let mut vbuf: alloc::vec::Vec<f32> = alloc::vec::Vec::new();
                 let mut fbuf: alloc::vec::Vec<SpinnerGpuParams> = alloc::vec::Vec::new();
                 let mut j = i;
                 while j < list.items.len() {
-                    if let api::DrawCmd::Spinner { center, radius, thickness, phase, alpha } =
-                        &list.items[j]
-                    {
-                        let mm = *radius + *thickness;
+                    if let api::DrawCmd::Spinner { center, atom, alpha } = &list.items[j] {
+                        let thickness = legacy_spinner_thickness(*atom);
+                        let radius = legacy_spinner_radius(*atom);
+                        let mm = *atom * 0.5;
                         vbuf.extend_from_slice(&[
                             center[0] - mm,
                             center[1] - mm,
                             mm * 2.0,
                             mm * 2.0,
                         ]);
-                        fbuf.push(pack_spinner_params(
-                            *center, *radius, *thickness, *phase, *alpha,
-                        ));
+                        fbuf.push(pack_spinner_params(*center, radius, thickness, phase, *alpha));
                         count += 1;
                         j += 1;
                     } else {
@@ -3636,6 +5276,170 @@ fn pack_camera_params(
 }
 
 #[inline]
+fn yuv_to_rgb_bt709_full_range(y: f32, u: f32, v: f32) -> [f32; 3] {
+    [
+        (y + 1.5748 * v).clamp(0.0, 1.0),
+        (y - 0.1873 * u - 0.4681 * v).clamp(0.0, 1.0),
+        (y + 1.8556 * u).clamp(0.0, 1.0),
+    ]
+}
+
+#[inline]
+fn linear_to_srgb_u8(value: f32) -> u8 {
+    let linear = value.clamp(0.0, 1.0);
+    let srgb =
+        if linear <= 0.003_130_8 { linear * 12.92 } else { 1.055 * linear.powf(1.0 / 2.4) - 0.055 };
+    (srgb.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+#[derive(Clone, Debug)]
+struct CameraNv12Source {
+    y_tex: Texture,
+    uv_tex: Texture,
+    width: i32,
+    height: i32,
+    bit_depth: i32,
+    matrix: i32,
+    video_range: i32,
+    color_space: i32,
+}
+
+#[derive(Clone, Debug)]
+struct CameraBgraSource {
+    tex: Texture,
+    width: i32,
+    height: i32,
+}
+
+#[derive(Clone, Debug)]
+struct LiveCameraNv12Frame {
+    y_tex: usize,
+    uv_tex: usize,
+    width: i32,
+    height: i32,
+    bit_depth: i32,
+    matrix: i32,
+    video_range: i32,
+    color_space: i32,
+    #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+    slot: u32,
+    generation: u64,
+    timestamp_ns: u64,
+}
+
+pub const CAMERA_PREVIEW_REASON_SUBMIT_ERROR: u32 = 1 << 0;
+pub const CAMERA_PREVIEW_REASON_NON_DIRECT_PREVIEW: u32 = 1 << 1;
+pub const CAMERA_PREVIEW_REASON_RESIZE: u32 = 1 << 2;
+pub const CAMERA_PREVIEW_REASON_CAMERA_STOPPED: u32 = 1 << 3;
+pub const CAMERA_PREVIEW_REASON_NON_LIVE_SOURCE: u32 = 1 << 4;
+pub const CAMERA_PREVIEW_REASON_NON_NV12_MODE: u32 = 1 << 5;
+pub const CAMERA_PREVIEW_REASON_NO_CURRENT_FRAME: u32 = 1 << 6;
+pub const CAMERA_PREVIEW_REASON_NEW_TIMESTAMP: u32 = 1 << 7;
+pub const CAMERA_PREVIEW_REASON_NEW_GENERATION: u32 = 1 << 8;
+pub const CAMERA_PREVIEW_REASON_BACKPRESSURE: u32 = 1 << 9;
+
+#[doc(hidden)]
+pub fn direct_preview_reason_requires_drawable(reason: u32) -> bool {
+    reason != 0 && reason != CAMERA_PREVIEW_REASON_BACKPRESSURE
+}
+
+#[doc(hidden)]
+pub fn direct_preview_can_reuse_resize_targets(
+    current_w: u32,
+    current_h: u32,
+    current_scale: f32,
+    next_w: u32,
+    next_h: u32,
+    next_scale: f32,
+    sample_count: u32,
+) -> bool {
+    sample_count == 1
+        && current_w == next_w
+        && current_h == next_h
+        && current_scale.to_bits() == next_scale.to_bits()
+}
+
+#[doc(hidden)]
+pub fn direct_preview_uses_fast_yuv_pipeline(
+    bit_depth: i32,
+    matrix: i32,
+    video_range: i32,
+) -> bool {
+    bit_depth == 8 && matrix == 0 && (video_range == 0 || video_range == 1)
+}
+
+#[doc(hidden)]
+pub fn direct_preview_tiny_renderer_active(
+    has_tiny_preview_renderer: bool,
+    sample_count: u32,
+    camera_texture_source: CameraTextureSource,
+    camera_render_mode: CameraRenderMode,
+) -> bool {
+    has_tiny_preview_renderer
+        && sample_count == 1
+        && camera_texture_source == CameraTextureSource::Live
+        && matches!(
+            camera_render_mode,
+            CameraRenderMode::Nv12Optimized | CameraRenderMode::Nv12Legacy
+        )
+}
+
+#[doc(hidden)]
+pub fn direct_live_preview_needs_render(
+    resize_reused: bool,
+    has_current_frame: bool,
+    current_generation: u64,
+    current_timestamp_ns: u64,
+    latest_generation: u64,
+    latest_timestamp_ns: u64,
+) -> u32 {
+    if !resize_reused {
+        return CAMERA_PREVIEW_REASON_RESIZE;
+    }
+    if !has_current_frame {
+        return CAMERA_PREVIEW_REASON_NO_CURRENT_FRAME;
+    }
+    if latest_generation > current_generation {
+        let mut reason = CAMERA_PREVIEW_REASON_NEW_GENERATION;
+        if current_timestamp_ns != 0
+            && latest_timestamp_ns != 0
+            && latest_timestamp_ns > current_timestamp_ns
+        {
+            reason |= CAMERA_PREVIEW_REASON_NEW_TIMESTAMP;
+        }
+        return reason;
+    }
+    if current_timestamp_ns != 0 && latest_timestamp_ns != 0 {
+        if latest_timestamp_ns > current_timestamp_ns {
+            return CAMERA_PREVIEW_REASON_NEW_TIMESTAMP;
+        }
+        return 0;
+    }
+    0
+}
+
+#[inline]
+fn camera_aspect_fill_params(
+    dest_w: f32,
+    dest_h: f32,
+    src_w: i32,
+    src_h: i32,
+) -> ([f32; 2], [f32; 2]) {
+    let ar_dest = if dest_h > 0.0 { dest_w / dest_h } else { 1.0 };
+    let ar_cam = if src_h > 0 { (src_w as f32) / (src_h as f32) } else { 1.0 };
+    let (mut sx, mut sy) = (1.0f32, 1.0f32);
+    let (mut bx, mut by) = (0.0f32, 0.0f32);
+    if ar_cam > ar_dest {
+        sx = ar_dest / ar_cam;
+        bx = (1.0 - sx) * 0.5;
+    } else if ar_cam < ar_dest {
+        sy = ar_cam / ar_dest;
+        by = (1.0 - sy) * 0.5;
+    }
+    ([sx, sy], [bx, by])
+}
+
+#[inline]
 fn map_solid_vertex_dp_to_clip(
     vertex: api::Vertex,
     viewport_width_dp: f32,
@@ -3731,8 +5535,8 @@ fn build_solid_pso(
     fmt: MTLPixelFormat,
     sample_count: u32,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let v = lib.get_function("v_solid", None).map_err(|_| MetalInitError::Pipeline)?;
-    let f = lib.get_function("f_solid", None).map_err(|_| MetalInitError::Pipeline)?;
+    let v = pipeline_function(lib, "solid.vertex", "v_solid")?;
+    let f = pipeline_function(lib, "solid.fragment", "f_solid")?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
@@ -3761,7 +5565,7 @@ fn build_solid_pso(
     ca.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
     ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
     ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-    device.new_render_pipeline_state(&desc).map_err(|_| MetalInitError::Pipeline)
+    pipeline_state(device, "pso.solid.create", &desc)
 }
 
 fn build_blur_pso(
@@ -3769,15 +5573,15 @@ fn build_blur_pso(
     lib: &Library,
     fmt: MTLPixelFormat,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let v = lib.get_function("v_fullscreen", None).map_err(|_| MetalInitError::Pipeline)?;
-    let f = lib.get_function("f_blur", None).map_err(|_| MetalInitError::Pipeline)?;
+    let v = pipeline_function(lib, "blur.vertex", "v_fullscreen")?;
+    let f = pipeline_function(lib, "blur.fragment", "f_blur")?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
     ca.set_blending_enabled(false);
-    device.new_render_pipeline_state(&desc).map_err(|_| MetalInitError::Pipeline)
+    pipeline_state(device, "pso.blur.create", &desc)
 }
 
 fn build_downsample_pso(
@@ -3785,15 +5589,15 @@ fn build_downsample_pso(
     lib: &Library,
     fmt: MTLPixelFormat,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let v = lib.get_function("v_fullscreen", None).map_err(|_| MetalInitError::Pipeline)?;
-    let f = lib.get_function("f_downsample", None).map_err(|_| MetalInitError::Pipeline)?;
+    let v = pipeline_function(lib, "downsample.vertex", "v_fullscreen")?;
+    let f = pipeline_function(lib, "downsample.fragment", "f_downsample")?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
     ca.set_blending_enabled(false);
-    device.new_render_pipeline_state(&desc).map_err(|_| MetalInitError::Pipeline)
+    pipeline_state(device, "pso.downsample.create", &desc)
 }
 
 fn build_upsample_pso(
@@ -3801,15 +5605,15 @@ fn build_upsample_pso(
     lib: &Library,
     fmt: MTLPixelFormat,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let v = lib.get_function("v_fullscreen", None).map_err(|_| MetalInitError::Pipeline)?;
-    let f = lib.get_function("f_upsample", None).map_err(|_| MetalInitError::Pipeline)?;
+    let v = pipeline_function(lib, "upsample.vertex", "v_fullscreen")?;
+    let f = pipeline_function(lib, "upsample.fragment", "f_upsample")?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
     ca.set_blending_enabled(false);
-    device.new_render_pipeline_state(&desc).map_err(|_| MetalInitError::Pipeline)
+    pipeline_state(device, "pso.upsample.create", &desc)
 }
 
 fn build_backdrop_pso(
@@ -3817,8 +5621,8 @@ fn build_backdrop_pso(
     lib: &Library,
     fmt: MTLPixelFormat,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let v = lib.get_function("v_backdrop", None).map_err(|_| MetalInitError::Pipeline)?;
-    let f = lib.get_function("f_backdrop", None).map_err(|_| MetalInitError::Pipeline)?;
+    let v = pipeline_function(lib, "backdrop.vertex", "v_backdrop")?;
+    let f = pipeline_function(lib, "backdrop.fragment", "f_backdrop")?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
@@ -3831,7 +5635,7 @@ fn build_backdrop_pso(
     ca.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
     ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
     ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-    device.new_render_pipeline_state(&desc).map_err(|_| MetalInitError::Pipeline)
+    pipeline_state(device, "pso.backdrop.create", &desc)
 }
 
 fn build_image_pso(
@@ -3840,8 +5644,8 @@ fn build_image_pso(
     fmt: MTLPixelFormat,
     sample_count: u32,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let v = lib.get_function("v_inst_rect", None).map_err(|_| MetalInitError::Pipeline)?;
-    let f = lib.get_function("f_image", None).map_err(|_| MetalInitError::Pipeline)?;
+    let v = pipeline_function(lib, "image.vertex", "v_inst_rect")?;
+    let f = pipeline_function(lib, "image.fragment", "f_image")?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
@@ -3855,7 +5659,7 @@ fn build_image_pso(
     ca.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
     ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
     ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-    device.new_render_pipeline_state(&desc).map_err(|_| MetalInitError::Pipeline)
+    pipeline_state(device, "pso.image.create", &desc)
 }
 
 fn build_image_single_pso(
@@ -3864,8 +5668,8 @@ fn build_image_single_pso(
     fmt: MTLPixelFormat,
     sample_count: u32,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let v = lib.get_function("v_inst_rect", None).map_err(|_| MetalInitError::Pipeline)?;
-    let f = lib.get_function("f_image_single", None).map_err(|_| MetalInitError::Pipeline)?;
+    let v = pipeline_function(lib, "image_single.vertex", "v_inst_rect")?;
+    let f = pipeline_function(lib, "image_single.fragment", "f_image_single")?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
@@ -3879,7 +5683,7 @@ fn build_image_single_pso(
     ca.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
     ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
     ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-    device.new_render_pipeline_state(&desc).map_err(|_| MetalInitError::Pipeline)
+    pipeline_state(device, "pso.image_single.create", &desc)
 }
 
 fn build_rrect_pso(
@@ -3888,8 +5692,8 @@ fn build_rrect_pso(
     fmt: MTLPixelFormat,
     sample_count: u32,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let v = lib.get_function("v_inst_rect", None).map_err(|_| MetalInitError::Pipeline)?;
-    let f = lib.get_function("f_rrect", None).map_err(|_| MetalInitError::Pipeline)?;
+    let v = pipeline_function(lib, "rrect.vertex", "v_inst_rect")?;
+    let f = pipeline_function(lib, "rrect.fragment", "f_rrect")?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
@@ -3903,7 +5707,7 @@ fn build_rrect_pso(
     ca.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
     ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
     ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-    device.new_render_pipeline_state(&desc).map_err(|_| MetalInitError::Pipeline)
+    pipeline_state(device, "pso.rrect.create", &desc)
 }
 
 fn build_nine_slice_pso(
@@ -3912,8 +5716,8 @@ fn build_nine_slice_pso(
     fmt: MTLPixelFormat,
     sample_count: u32,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let v = lib.get_function("v_inst_rect", None).map_err(|_| MetalInitError::Pipeline)?;
-    let f = lib.get_function("f_nine_slice", None).map_err(|_| MetalInitError::Pipeline)?;
+    let v = pipeline_function(lib, "nine_slice.vertex", "v_inst_rect")?;
+    let f = pipeline_function(lib, "nine_slice.fragment", "f_nine_slice")?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
@@ -3927,7 +5731,7 @@ fn build_nine_slice_pso(
     ca.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
     ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
     ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-    device.new_render_pipeline_state(&desc).map_err(|_| MetalInitError::Pipeline)
+    pipeline_state(device, "pso.nine_slice.create", &desc)
 }
 
 fn build_spinner_pso(
@@ -3936,8 +5740,8 @@ fn build_spinner_pso(
     fmt: MTLPixelFormat,
     sample_count: u32,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let v = lib.get_function("v_inst_rect", None).map_err(|_| MetalInitError::Pipeline)?;
-    let f = lib.get_function("f_spinner", None).map_err(|_| MetalInitError::Pipeline)?;
+    let v = pipeline_function(lib, "spinner.vertex", "v_inst_rect")?;
+    let f = pipeline_function(lib, "spinner.fragment", "f_spinner")?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
@@ -3951,7 +5755,7 @@ fn build_spinner_pso(
     ca.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
     ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
     ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-    device.new_render_pipeline_state(&desc).map_err(|_| MetalInitError::Pipeline)
+    pipeline_state(device, "pso.spinner.create", &desc)
 }
 
 fn build_text_pso(
@@ -3959,9 +5763,10 @@ fn build_text_pso(
     lib: &Library,
     fmt: MTLPixelFormat,
     sample_count: u32,
+    supports_icb: bool,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let v = lib.get_function("v_text", None).map_err(|_| MetalInitError::Pipeline)?;
-    let f = lib.get_function("f_text", None).map_err(|_| MetalInitError::Pipeline)?;
+    let v = pipeline_function(lib, "text.vertex", "v_text")?;
+    let f = pipeline_function(lib, "text.fragment", "f_text")?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
@@ -3981,6 +5786,10 @@ fn build_text_pso(
     layouts.object_at(0).unwrap().set_step_function(MTLVertexStepFunction::PerVertex);
     desc.set_vertex_descriptor(Some(&vdesc));
     desc.set_sample_count(sample_count as u64);
+    #[cfg(target_os = "ios")]
+    if supports_icb {
+        desc.set_support_indirect_command_buffers(true);
+    }
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
     ca.set_blending_enabled(true);
@@ -3990,7 +5799,7 @@ fn build_text_pso(
     ca.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
     ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
     ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-    device.new_render_pipeline_state(&desc).map_err(|_| MetalInitError::Pipeline)
+    pipeline_state(device, "pso.text.create", &desc)
 }
 
 fn build_text_sdf_pso(
@@ -3998,9 +5807,10 @@ fn build_text_sdf_pso(
     lib: &Library,
     fmt: MTLPixelFormat,
     sample_count: u32,
+    supports_icb: bool,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let v = lib.get_function("v_text", None).map_err(|_| MetalInitError::Pipeline)?;
-    let f = lib.get_function("f_text_sdf", None).map_err(|_| MetalInitError::Pipeline)?;
+    let v = pipeline_function(lib, "text_sdf.vertex", "v_text")?;
+    let f = pipeline_function(lib, "text_sdf.fragment", "f_text_sdf")?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
@@ -4020,6 +5830,10 @@ fn build_text_sdf_pso(
     layouts.object_at(0).unwrap().set_step_function(MTLVertexStepFunction::PerVertex);
     desc.set_vertex_descriptor(Some(&vdesc));
     desc.set_sample_count(sample_count as u64);
+    #[cfg(target_os = "ios")]
+    if supports_icb {
+        desc.set_support_indirect_command_buffers(true);
+    }
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
     ca.set_blending_enabled(true);
@@ -4029,7 +5843,7 @@ fn build_text_sdf_pso(
     ca.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
     ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
     ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-    device.new_render_pipeline_state(&desc).map_err(|_| MetalInitError::Pipeline)
+    pipeline_state(device, "pso.text_sdf.create", &desc)
 }
 
 fn build_camera_pso(
@@ -4037,9 +5851,11 @@ fn build_camera_pso(
     lib: &Library,
     fmt: MTLPixelFormat,
     sample_count: u32,
+    fragment_name: &str,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let v = lib.get_function("v_inst_rect_cam", None).map_err(|_| MetalInitError::Pipeline)?;
-    let f = lib.get_function("f_camera_nv12", None).map_err(|_| MetalInitError::Pipeline)?;
+    let stage_vertex = "camera.vertex.v_inst_rect_cam";
+    let v = pipeline_function(lib, stage_vertex, "v_inst_rect_cam")?;
+    let f = pipeline_function(lib, fragment_name, fragment_name)?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
@@ -4047,7 +5863,7 @@ fn build_camera_pso(
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
     ca.set_blending_enabled(false);
-    device.new_render_pipeline_state(&desc).map_err(|_| MetalInitError::Pipeline)
+    pipeline_state(device, fragment_name, &desc)
 }
 
 fn build_sampler(device: &Device) -> Option<SamplerState> {
@@ -4060,25 +5876,54 @@ fn build_sampler(device: &Device) -> Option<SamplerState> {
     Some(device.new_sampler(&desc))
 }
 
-#[derive(Default)]
 struct PerFrame {
     cmd: Option<CommandBuffer>,
+    submitted: Option<CommandBuffer>,
+    in_flight: Arc<AtomicBool>,
     vb_used: usize,
     ib_used: usize,
     ub_used: usize,
 }
 
+impl Default for PerFrame {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PerFrame {
-    const fn new() -> Self {
-        Self { cmd: None, vb_used: 0, ib_used: 0, ub_used: 0 }
+    fn new() -> Self {
+        Self {
+            cmd: None,
+            submitted: None,
+            in_flight: Arc::new(AtomicBool::new(false)),
+            vb_used: 0,
+            ib_used: 0,
+            ub_used: 0,
+        }
     }
     fn reset(&mut self) {
         self.vb_used = 0;
         self.ib_used = 0;
         self.ub_used = 0;
     }
-    fn completed(&mut self) {
+
+    fn prepare_for_encode(&mut self) {
+        if self.in_flight.load(Ordering::Acquire) {
+            if let Some(cmd) = self.submitted.take() {
+                cmd.wait_until_completed();
+            }
+            self.in_flight.store(false, Ordering::Release);
+        } else {
+            self.submitted = None;
+        }
         self.reset();
+        self.cmd = None;
+    }
+
+    fn mark_submitted(&mut self, cmd: &CommandBuffer) {
+        self.in_flight.store(true, Ordering::Release);
+        self.submitted = Some(cmd.to_owned());
     }
 }
 
@@ -4137,7 +5982,30 @@ struct LayerEntry {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
+pub struct PerfMemoryStats {
+    pub total_bytes: u64,
+    pub draw_targets_bytes: u64,
+    pub draw_target_main_bytes: u64,
+    pub draw_target_msaa_bytes: u64,
+    pub effect_targets_bytes: u64,
+    pub effect_prepass_bytes: u64,
+    pub effect_blur_chain_bytes: u64,
+    pub live_camera_bytes: u64,
+    pub camera_cache_bytes: u64,
+    pub camera_blur_cache_bytes: u64,
+    pub camera_transition_cache_bytes: u64,
+    pub benchmark_camera_bytes: u64,
+    pub layer_cache_bytes: u64,
+    pub image_cache_bytes: u64,
+    pub buffer_bytes: u64,
+    pub pending_command_buffers: u32,
+    pub pending_present_drawables: u32,
+    pub pending_present_textures: u32,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
 pub struct PerfStats {
+    pub memory: PerfMemoryStats,
     pub vb_bytes: u64,
     pub ib_bytes: u64,
     pub ub_bytes: u64,
@@ -4163,6 +6031,21 @@ pub struct PerfStats {
     pub cam_matrix: u8,
     pub cam_video_range: u8,
     pub cam_color_space: u8,
+    pub cam_poll_submissions_ms: f64,
+    pub cam_fetch_ms: f64,
+    pub cam_setup_ms: f64,
+    pub cam_encode_quad_ms: f64,
+    pub cam_command_buffer_ms: f64,
+    pub cam_encoder_ms: f64,
+    pub cam_encode_bind_ms: f64,
+    pub cam_encode_draw_ms: f64,
+    pub cam_end_encoding_ms: f64,
+    pub cam_present_ms: f64,
+    pub cam_commit_ms: f64,
+    pub cam_gpu_ms: f64,
+    pub preview_submission_depth: u32,
+    pub preview_submission_skipped: u32,
+    pub preview_submission_frame_age_ms: f64,
 }
 
 impl MetalRenderer {
@@ -4174,6 +6057,151 @@ impl MetalRenderer {
         self.damage_enabled = enabled;
         self.damage_use_thresh = use_thresh.clamp(0.0, 1.0);
         self.damage_prefilter_thresh = prefilter.clamp(0.0, 1.0);
+    }
+
+    fn texture_allocated_bytes(tex: &TextureRef) -> u64 {
+        tex.allocated_size() as u64
+    }
+
+    fn buffer_allocated_bytes(buf: &BufferRef) -> u64 {
+        buf.allocated_size() as u64
+    }
+
+    fn push_unique_texture_bytes(seen: &mut HashSet<usize>, total: &mut u64, tex: &TextureRef) {
+        let key = tex.as_ptr() as usize;
+        if seen.insert(key) {
+            *total = total.saturating_add(Self::texture_allocated_bytes(tex));
+        }
+    }
+
+    fn push_unique_buffer_bytes(seen: &mut HashSet<usize>, total: &mut u64, buf: &BufferRef) {
+        let key = buf.as_ptr() as usize;
+        if seen.insert(key) {
+            *total = total.saturating_add(Self::buffer_allocated_bytes(buf));
+        }
+    }
+
+    fn unique_texture_category_bytes<'a>(
+        seen: &mut HashSet<usize>,
+        textures: impl IntoIterator<Item = &'a TextureRef>,
+    ) -> u64 {
+        let mut total = 0;
+        for tex in textures {
+            Self::push_unique_texture_bytes(seen, &mut total, tex);
+        }
+        total
+    }
+
+    fn unique_buffer_category_bytes<'a>(
+        seen: &mut HashSet<usize>,
+        buffers: impl IntoIterator<Item = &'a BufferRef>,
+    ) -> u64 {
+        let mut total = 0;
+        for buf in buffers {
+            Self::push_unique_buffer_bytes(seen, &mut total, buf);
+        }
+        total
+    }
+
+    fn memory_stats(&self) -> PerfMemoryStats {
+        let mut seen = HashSet::new();
+        let draw_target_main_bytes = Self::unique_texture_category_bytes(
+            &mut seen,
+            self.target_tex.iter().map(|tex| tex.as_ref()),
+        );
+        let draw_target_msaa_bytes = Self::unique_texture_category_bytes(
+            &mut seen,
+            self.target_msaa_tex.iter().map(|tex| tex.as_ref()),
+        );
+        let draw_targets_bytes = draw_target_main_bytes.saturating_add(draw_target_msaa_bytes);
+        let effect_prepass_bytes = Self::unique_texture_category_bytes(
+            &mut seen,
+            self.prepass_tex.iter().map(|tex| tex.as_ref()),
+        );
+        let effect_blur_chain_bytes = Self::unique_texture_category_bytes(
+            &mut seen,
+            self.blur_tmp_tex
+                .iter()
+                .map(|tex| tex.as_ref())
+                .chain(self.half_tex.iter().map(|tex| tex.as_ref()))
+                .chain(self.quarter_tex.iter().map(|tex| tex.as_ref()))
+                .chain(self.quarter_tmp_tex.iter().map(|tex| tex.as_ref())),
+        );
+        let effect_targets_bytes = effect_prepass_bytes.saturating_add(effect_blur_chain_bytes);
+        let camera_blur_cache_bytes = Self::unique_texture_category_bytes(
+            &mut seen,
+            self.cam_blur_tex.iter().map(|tex| tex.as_ref()),
+        );
+        let camera_transition_cache_bytes = Self::unique_texture_category_bytes(
+            &mut seen,
+            self.cam_xfade_prev_tex.iter().map(|tex| tex.as_ref()),
+        );
+        let camera_cache_bytes =
+            camera_blur_cache_bytes.saturating_add(camera_transition_cache_bytes);
+        let live_camera_bytes = if let Some(frame) = &self.current_live_camera_frame {
+            let y_tex = unsafe { TextureRef::from_ptr(frame.y_tex as *mut MTLTexture) };
+            let uv_tex = unsafe { TextureRef::from_ptr(frame.uv_tex as *mut MTLTexture) };
+            Self::unique_texture_category_bytes(&mut seen, [y_tex, uv_tex])
+        } else {
+            0
+        };
+        let benchmark_camera_bytes = Self::unique_texture_category_bytes(
+            &mut seen,
+            self.bench_cam_y_tex
+                .iter()
+                .map(|tex| tex.as_ref())
+                .chain(self.bench_cam_uv_tex.iter().map(|tex| tex.as_ref()))
+                .chain(self.bench_cam_bgra_tex.iter().map(|tex| tex.as_ref())),
+        );
+        let layer_cache_bytes = Self::unique_texture_category_bytes(
+            &mut seen,
+            self.layers.values().map(|entry| entry.tex.as_ref()),
+        );
+        let image_cache_bytes = Self::unique_texture_category_bytes(
+            &mut seen,
+            self.images.values().map(|tex| tex.as_ref()),
+        );
+        let buffer_bytes = Self::unique_buffer_category_bytes(
+            &mut seen,
+            self.vb
+                .bufs
+                .iter()
+                .map(|buf| buf.as_ref())
+                .chain(self.ib.bufs.iter().map(|buf| buf.as_ref()))
+                .chain(self.ub.bufs.iter().map(|buf| buf.as_ref()))
+                .chain(self.img_arg_buf.iter().map(|buf| buf.as_ref())),
+        );
+        PerfMemoryStats {
+            total_bytes: draw_targets_bytes
+                .saturating_add(effect_targets_bytes)
+                .saturating_add(live_camera_bytes)
+                .saturating_add(camera_cache_bytes)
+                .saturating_add(benchmark_camera_bytes)
+                .saturating_add(layer_cache_bytes)
+                .saturating_add(image_cache_bytes)
+                .saturating_add(buffer_bytes),
+            draw_targets_bytes,
+            draw_target_main_bytes,
+            draw_target_msaa_bytes,
+            effect_targets_bytes,
+            effect_prepass_bytes,
+            effect_blur_chain_bytes,
+            live_camera_bytes,
+            camera_cache_bytes,
+            camera_blur_cache_bytes,
+            camera_transition_cache_bytes,
+            benchmark_camera_bytes,
+            layer_cache_bytes,
+            image_cache_bytes,
+            buffer_bytes,
+            pending_command_buffers: self
+                .camera_preview_renderer
+                .as_ref()
+                .map(CameraPreviewRenderer::pending_submission_count)
+                .unwrap_or(self.direct_preview_submitted.len() as u32),
+            pending_present_drawables: self.pending_present_drawable as u32,
+            pending_present_textures: self.pending_present_texture as u32,
+        }
     }
 }
 
@@ -4337,13 +6365,25 @@ mod tests {
         assert!(!layer_cache_enabled_default());
     }
 
-    #[cfg(any(target_os = "macos", all(target_os = "ios", not(target_abi = "sim"))))]
     #[test]
-    fn non_simulator_defaults_enable_icb_and_layer_cache_without_simulator_udid() {
+    fn glyph_icb_cpu_recording_uses_shared_storage() {
+        assert_eq!(glyph_icb_resource_options(), MTLResourceOptions::StorageModeShared);
+    }
+
+    #[cfg(all(target_os = "ios", not(target_abi = "sim")))]
+    #[test]
+    fn ios_device_defaults_enable_icb_and_layer_cache_without_simulator_udid() {
         if std::env::var_os("SIMULATOR_UDID").is_some() {
             return;
         }
         assert!(glyph_icb_enabled_default());
+        assert!(layer_cache_enabled_default());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_defaults_disable_icb_but_keep_layer_cache() {
+        assert!(!glyph_icb_enabled_default());
         assert!(layer_cache_enabled_default());
     }
 

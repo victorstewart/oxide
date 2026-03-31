@@ -4,7 +4,7 @@
 ))]
 
 use oxide_renderer_api::{self as api, Renderer};
-use oxide_renderer_metal::MetalRenderer;
+use oxide_renderer_metal::{CameraRenderMode, CameraTextureSource, MetalRenderer};
 
 fn approx_eq(a: u8, b: u8, tol: u8) -> bool {
     let d = a.abs_diff(b);
@@ -160,4 +160,60 @@ fn snapshot_solid_rejects_non_triangle_index_counts() {
             "expected untouched white background at ({x},{y}), got {p:?}"
         );
     }
+}
+
+fn render_camera_preview(mode: CameraRenderMode) -> Vec<u8> {
+    let mut renderer = MetalRenderer::new_default().expect("metal");
+    let width = 128u32;
+    let height = 128u32;
+    renderer.set_camera_texture_source(CameraTextureSource::SyntheticBenchmark);
+    renderer.set_camera_render_mode(mode);
+    renderer.resize(width, height, 1.0).expect("resize");
+
+    let mut list = api::DrawList::default();
+    list.items.push(api::DrawCmd::CameraBg {
+        rect: api::RectF::new(0.0, 0.0, width as f32, height as f32),
+        tint: api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+        alpha: 1.0,
+        grayscale: false,
+        blur: false,
+        sigma: 0.0,
+    });
+
+    let token = renderer.begin_frame(&api::FrameTarget, None);
+    renderer.encode_pass(&list);
+    renderer.submit(token).expect("submit");
+    let (_rw, _rh, bgra) = renderer.readback_bgra8().expect("readback");
+    bgra
+}
+
+#[test]
+fn snapshot_camera_nv12_optimized_tracks_bgra_benchmark() {
+    let optimized = render_camera_preview(CameraRenderMode::Nv12Optimized);
+    let legacy = render_camera_preview(CameraRenderMode::Nv12Legacy);
+    let bgra = render_camera_preview(CameraRenderMode::BgraBenchmark);
+
+    let mut optimized_diff = 0u64;
+    let mut legacy_diff = 0u64;
+    let mut sample_count = 0u64;
+    for ((opt_px, legacy_px), bgra_px) in
+        optimized.chunks_exact(4).zip(legacy.chunks_exact(4)).zip(bgra.chunks_exact(4))
+    {
+        for channel in 0..3 {
+            optimized_diff += opt_px[channel].abs_diff(bgra_px[channel]) as u64;
+            legacy_diff += legacy_px[channel].abs_diff(bgra_px[channel]) as u64;
+            sample_count += 1;
+        }
+    }
+
+    let optimized_mean = optimized_diff as f64 / sample_count as f64;
+    let legacy_mean = legacy_diff as f64 / sample_count as f64;
+    assert!(
+        optimized_mean < 6.0,
+        "optimized NV12 preview drifted too far from BGRA reference: {optimized_mean:.3}"
+    );
+    assert!(
+        legacy_mean > optimized_mean * 1.8,
+        "legacy NV12 path no longer meaningfully diverges from BGRA reference: optimized={optimized_mean:.3} legacy={legacy_mean:.3}"
+    );
 }

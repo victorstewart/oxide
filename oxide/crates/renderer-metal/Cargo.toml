@@ -12,6 +12,7 @@ thiserror = "1.0"
 metal = "0.32"
 objc = "0.2"
 block = "0.1"
+mach2 = "0.4"
 
 [lib]
 path = "src/lib.rs"

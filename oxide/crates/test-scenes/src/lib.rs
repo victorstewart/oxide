@@ -32,6 +32,8 @@ use std::sync::Arc;
 
 pub use oxide_ui_core::camera::{CameraMetrics, CameraRecordingUiEvent};
 
+const LEGACY_BADGE_IMAGE: gfx::ImageHandle = gfx::ImageHandle(1);
+
 // ===== Utilities =====
 
 pub struct Counters {
@@ -221,7 +223,9 @@ impl<U: elements::ImageUploader> Router<U> {
     }
 
     pub fn update(&mut self, now_ms: u64, dt_ms: u32) {
-        self.fps.tick(now_ms);
+        if self.overlay_visible {
+            self.fps.tick(now_ms);
+        }
         self.camera.set_active(matches!(self.current, SceneKind::Camera));
         match self.current {
             SceneKind::Controls => self.controls.update(dt_ms),
@@ -549,10 +553,14 @@ impl<U: elements::ImageUploader> Router<U> {
             }
         }
         b.clip_pop();
-        // Counters
-        self.counters.fps = self.fps.fps;
         self.counters.draws = b.drawlist().items.len();
-        self.counters.anims = self.anim_timeline.animator.active_count();
+        if self.overlay_visible {
+            self.counters.fps = self.fps.fps;
+            self.counters.anims = self.anim_timeline.animator.active_count();
+        } else {
+            self.counters.fps = 0.0;
+            self.counters.anims = 0;
+        }
         // Overlay (toggleable)
         if self.overlay_visible {
             let rm = if self.reduce_motion_on { "RM:on" } else { "RM:off" };
@@ -838,8 +846,8 @@ impl Controls {
         };
         pb.encode(gfx::RectF::new(panel.x + 16.0, panel.y + 48.0, panel.w - 32.0, 12.0), self.t, b);
         // Spinner
-        let sp = elements::Spinner { thickness: 2.5, alpha: 1.0 };
-        sp.encode(gfx::RectF::new(panel.x + 16.0, panel.y + 72.0, 24.0, 24.0), self.t * 3.0, b);
+        let sp = elements::Spinner { alpha: 1.0 };
+        sp.encode(gfx::RectF::new(panel.x + 16.0, panel.y + 72.0, 24.0, 24.0), b);
         // Button
         self.button.text = "Press Me".into();
         self.button.encode(
@@ -1461,11 +1469,8 @@ impl InputLab {
                 self.focus(FocusField::None);
             }
             if point_in_rect(point, self.last_picker_rect) {
-                let scale = if self.picker_style.item_height.abs() < f32::EPSILON {
-                    1.0
-                } else {
-                    self.picker_style.item_height
-                };
+                let row_height = self.picker_style.row_height(self.last_picker_rect);
+                let scale = if row_height.abs() < f32::EPSILON { 1.0 } else { row_height };
                 self.picker.scroll(dy / scale);
             }
         } else if self.submit_state.is_pressed() {
@@ -1615,16 +1620,10 @@ impl InputLab {
         let picker_rect = self.rect_for_node(picker_base, self.picker_node);
         let mut picker_style = self.picker_style;
         picker_style.highlight = gfx::Color::rgba(0.82, 0.91, 1.0, 0.45 * picker_alpha);
-        picker_style.text_focus = gfx::Color::rgba(
-            picker_style.text_focus.r,
-            picker_style.text_focus.g,
-            picker_style.text_focus.b,
-            picker_alpha,
-        );
-        picker_style.text_dim = gfx::Color::rgba(
-            picker_style.text_dim.r,
-            picker_style.text_dim.g,
-            picker_style.text_dim.b,
+        picker_style.text_color = gfx::Color::rgba(
+            picker_style.text_color.r,
+            picker_style.text_color.g,
+            picker_style.text_color.b,
             picker_alpha,
         );
         self.picker.encode(&picker_style, picker_rect, ds, text, up, b);
@@ -1678,7 +1677,7 @@ impl InputLab {
         );
         log_label.encode(logs_text_rect, ds, text, up, b);
 
-        if self.overlay_view.encode(&self.overlay, vp, b) {
+        if self.overlay_view.encode(&self.overlay, vp, ds, b) {
             let popup_w = vp.w.min(420.0);
             let popup_h = 160.0;
             let base_popup = gfx::RectF::new(
@@ -1696,7 +1695,7 @@ impl InputLab {
                 base_popup.w * scale,
                 base_popup.h * scale,
             );
-            self.popup.encode(popup_rect, b);
+            self.popup.encode(popup_rect, ds, b);
             let overlay_label = elements::Label {
                 text: self.overlay_message.clone(),
                 color: gfx::Color::rgba(0.12, 0.14, 0.20, 1.0),
@@ -2091,7 +2090,7 @@ impl Default for ElementsExtended {
         // Create Badge with custom animation timing
         let badge_style = elements::BadgeStyle { bounce_duration_ms: 600, ..Default::default() };
 
-        let badge = elements::Badge { count: 5, style: badge_style };
+        let badge = elements::Badge { image: LEGACY_BADGE_IMAGE, style: badge_style };
 
         // Create CountNode
         let count_node = elements::CountNode {
@@ -2117,6 +2116,8 @@ impl Default for ElementsExtended {
             elements::SlidingSwitchStyle { inactive_timeout_ms: 3000, ..Default::default() };
 
         let sliding_switch = elements::SlidingSwitch { style: switch_style };
+        let mut sliding_switch_state = elements::SlidingSwitchState::default();
+        sliding_switch_state.start(&sliding_switch.style);
 
         // Create ShiftingTextInput
         let shifting_style = elements::ShiftingTextInputStyle::default();
@@ -2139,7 +2140,7 @@ impl Default for ElementsExtended {
             record_button,
             record_button_state: elements::RecordButtonState::default(),
             sliding_switch,
-            sliding_switch_state: elements::SlidingSwitchState::default(),
+            sliding_switch_state,
             shifting_input,
             shifting_input_state: elements::ShiftingTextInputState::default(),
         }
@@ -2165,8 +2166,8 @@ impl ElementsExtended {
         // Update record button state - the timeout is handled internally
         // when we call on_pointer_up with recording active
 
-        // Update sliding switch - check for inactivity timeout
-        if self.sliding_switch_state.is_inactive() {
+        // Update sliding switch - the shared primitive emits the legacy one-shot timeout event.
+        if self.sliding_switch_state.take_inactive() {
             self.sliding_switch_state.reset();
         }
 
@@ -2179,7 +2180,6 @@ impl ElementsExtended {
         let badge_rect = gfx::RectF::new(50.0, 50.0, 80.0, 80.0);
         if buttons & 1 != 0 && point_in_rect([x, y], badge_rect) {
             self.badge_state.bounce(&self.badge.style);
-            self.badge.count = (self.badge.count % 99) + 1; // Increment count
         }
 
         // RecordButton interaction
@@ -2203,25 +2203,18 @@ impl ElementsExtended {
             let _ = self.record_button_state.on_pointer_up(&self.record_button.style);
         }
 
-        // SlidingSwitch interaction - requires drag gesture
+        // SlidingSwitch interaction - the shared primitive owns long-press gating and outside cancel.
         let switch_rect = gfx::RectF::new(50.0, 280.0, 200.0, 60.0);
-        if point_in_rect([x, y], switch_rect) {
-            if buttons & 1 != 0 {
-                // Start dragging
-                if self.sliding_switch_state.mode == elements::SlidingSwitchMode::Idle {
-                    self.sliding_switch_state.begin_drag(x);
+        if buttons & 1 != 0 {
+            if self.sliding_switch_state.mode == elements::SlidingSwitchMode::Idle {
+                if self.sliding_switch_state.begin_drag([x, y], switch_rect) {
                     self.sliding_switch_state.start(&self.sliding_switch.style);
-                } else if self.sliding_switch_state.mode == elements::SlidingSwitchMode::Dragging {
-                    // Update drag
-                    if self.sliding_switch_state.drag_to(x, switch_rect) {
-                        // Triggered!
-                        self.sliding_switch_state.reset();
-                    }
                 }
-            } else {
-                // Release drag
-                self.sliding_switch_state.end_drag();
+            } else if self.sliding_switch_state.drag_to([x, y], switch_rect) {
+                self.sliding_switch_state.reset();
             }
+        } else {
+            self.sliding_switch_state.end_drag();
         }
 
         // ShiftingTextInput focus
@@ -2257,10 +2250,10 @@ impl ElementsExtended {
 
         // Badge
         let badge_rect = gfx::RectF::new(vp.x + 50.0, vp.y + 50.0, 80.0, 80.0);
-        self.badge.encode(badge_rect, ds, text, up, &self.badge_state, b);
+        self.badge.encode(badge_rect, &self.badge_state, b);
 
         let badge_label = elements::Label {
-            text: "Badge (click to bounce)".into(),
+            text: "Legacy Badge Overlay (click to bounce)".into(),
             color: gfx::Color::rgba(0.3, 0.3, 0.3, 1.0),
             align: elements::Align::Left,
             wrap: false,
@@ -2526,13 +2519,21 @@ impl CameraDemo {
             let phase = (self.t * 1.5).sin() * 0.5 + 0.5;
             self.sigma = 2.0 + phase * 10.0;
         }
-        self.volume.tick(dt_ms);
-        self.update_message_timer(dt);
+        if self.volume.is_visible() {
+            self.volume.tick(dt_ms);
+        }
+        if self.last_message.is_some() {
+            self.update_message_timer(dt);
+        }
 
         if self.active {
             self.ensure_session();
             self.poll_session_events();
-            self.playback_phase = (self.playback_phase + dt * 0.2).fract();
+            if self.recording {
+                self.playback_phase = (self.playback_phase + dt * 0.2).fract();
+            } else {
+                self.playback_phase = 0.0;
+            }
         } else {
             self.playback_phase = 0.0;
         }
@@ -2552,6 +2553,10 @@ impl CameraDemo {
         up: &mut U,
         b: &mut DrawListBuilder,
     ) {
+        if self.is_plain_preview() {
+            self.view.encode(vp, b);
+            return;
+        }
         b.rrect(vp, [0.0; 4], gfx::Color::rgba(0.98, 0.98, 0.98, 1.0));
         self.preview.layout(vp);
         let rect = self.preview.rect();
@@ -2718,21 +2723,14 @@ impl CameraDemo {
         if rect.w <= 0.0 || rect.h <= 0.0 {
             return;
         }
-        if let Some(size) = self.pending_frame_size.take() {
-            let content = (size.0 as f32, size.1 as f32);
-            match self.cropper.as_mut() {
-                Some(crop) => {
-                    crop.set_content_size(content);
-                    crop.set_view_size((rect.w, rect.h));
-                }
-                None => {
-                    let mut crop = CropperState::new(content, (rect.w, rect.h));
-                    crop.set_zoom_limits(crop.zoom(), 6.0);
-                    self.cropper = Some(crop);
-                }
+        if let Some(crop) = self.cropper.as_mut() {
+            if let Some(size) = self.pending_frame_size.take() {
+                let content = (size.0 as f32, size.1 as f32);
+                crop.set_content_size(content);
             }
-        } else if let Some(crop) = self.cropper.as_mut() {
             crop.set_view_size((rect.w, rect.h));
+        } else {
+            self.pending_frame_size = None;
         }
     }
 
@@ -2811,11 +2809,23 @@ impl CameraDemo {
     }
 
     fn draw_playback_timeline(&self, rect: gfx::RectF, b: &mut DrawListBuilder) {
+        if !self.recording {
+            return;
+        }
         let track = gfx::RectF::new(rect.x, rect.y + rect.h + 12.0, rect.w, 6.0);
         b.rrect(track, [3.0; 4], gfx::Color::rgba(0.20, 0.22, 0.26, 0.28));
         let knob_x = track.x + track.w * self.playback_phase;
         let knob = gfx::RectF::new(knob_x - 8.0, track.y - 4.0, 16.0, 14.0);
         b.rrect(knob, [6.0; 4], gfx::Color::rgba(0.95, 0.36, 0.45, 0.9));
+    }
+
+    fn is_plain_preview(&self) -> bool {
+        !self.preview_failed
+            && !self.permission_ui.is_visible()
+            && self.cropper.is_none()
+            && !self.volume.is_visible()
+            && !self.recording
+            && self.last_message.is_none()
     }
 
     fn draw_volume_hud(&self, rect: gfx::RectF, b: &mut DrawListBuilder) {

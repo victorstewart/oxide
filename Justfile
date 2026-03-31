@@ -17,6 +17,30 @@ aggregate:
     cargo build --release --manifest-path tools/sweep_agg/Cargo.toml
     ./tools/sweep_agg/target/release/sweep_agg --input sweep.txt --csv sweep.csv --json sweep.json
 
+perf:
+    cd oxide && cargo run --release -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --compare benchmarks/workspace/latest.json --json-out benchmarks/workspace/ci-current.json --markdown-out benchmarks/workspace/ci-current.md
+
+perf-baseline:
+    cd oxide && PERF_REPORT_DATE=$(date +%F) cargo run --release -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --write-baseline
+
+ios-perf:
+    cd oxide && cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios device-perf --refresh-mode both --compare benchmarks/uikit-device/latest.json --json-out benchmarks/uikit-device/ci-current.json --markdown-out benchmarks/uikit-device/ci-current.md
+
+ios-perf-baseline:
+    cd oxide && PERF_REPORT_DATE=$(date +%F) cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios device-perf --refresh-mode both --write-baseline
+
+ios-device-perf:
+    cd oxide && cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios device-perf --refresh-mode both --compare benchmarks/uikit-device/latest.json --json-out benchmarks/uikit-device/ci-current.json --markdown-out benchmarks/uikit-device/ci-current.md
+
+ios-device-perf-baseline:
+    cd oxide && PERF_REPORT_DATE=$(date +%F) cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios device-perf --refresh-mode both --write-baseline
+
+oxide-device-perf:
+    cd oxide && cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios oxide-device-perf --compare benchmarks/oxide-device/latest.json --json-out benchmarks/oxide-device/ci-current.json --markdown-out benchmarks/oxide-device/ci-current.md
+
+oxide-device-perf-baseline:
+    cd oxide && PERF_REPORT_DATE=$(date +%F) cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios oxide-device-perf --write-baseline
+
 golden:
     ./scripts/run_golden.sh
 

@@ -612,6 +612,7 @@ dependencies = [
  "libc",
  "mach2",
  "oxide-networking",
+ "oxide-perf-runner",
  "oxide-permissions",
  "oxide-platform-api",
  "oxide-platform-ios",
@@ -668,12 +669,20 @@ dependencies = [
 name = "oxide-perf-runner"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "oxide-harness-registry",
+ "oxide-input",
+ "oxide-permissions",
+ "oxide-platform-api",
  "oxide-renderer-api",
  "oxide-renderer-metal",
  "oxide-test-scenes",
  "oxide-text",
  "oxide-timing",
  "oxide-ui-core",
+ "png",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -719,6 +728,7 @@ dependencies = [
  "anyhow",
  "block",
  "libc",
+ "mach2",
  "metal",
  "objc",
  "oxide-renderer-api",
@@ -1007,6 +1017,12 @@ name = "regex-syntax"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a96887878f22d7bad8a3b6dc5b7440e0ada9a245242924394987b21cf2210a4c"
+
+[[package]]
+name = "roxmltree"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
 name = "rustc-demangle"
@@ -1562,7 +1578,10 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
+ "oxide-perf-runner",
  "plist",
+ "roxmltree",
  "serde",
  "serde_json",
  "tempfile",

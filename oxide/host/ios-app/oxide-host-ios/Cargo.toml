@@ -13,7 +13,8 @@ crate-type = ["staticlib", "rlib"]
 cc = "1.0"
 
 [dependencies]
-oxide-platform-ios = { path = "../../../crates/platform-ios", features = ["tokio-runtime"] }
+oxide-platform-ios = { path = "../../../crates/platform-ios", features = ["tokio-runtime", "native-camera-bridge"] }
+oxide-perf-runner = { path = "../../../crates/perf-runner" }
 oxide-renderer-metal = { path = "../../../crates/renderer-metal" }
 oxide-renderer-api = { path = "../../../crates/renderer-api" }
 oxide-ui-core = { path = "../../../crates/ui-core" }
@@ -31,3 +32,4 @@ mach2 = "0.4"
 [features]
 ios-edr = []
 tokio-runtime = []
+perf-host-stubs = []

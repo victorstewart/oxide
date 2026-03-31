@@ -498,6 +498,7 @@ pub struct GeoRegion {
 pub enum LocationAccuracy {
     Reduced,
     Balanced,
+    LowPower,
     Precise,
 }
 

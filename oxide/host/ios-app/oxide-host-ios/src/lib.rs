@@ -10,9 +10,9 @@ use core::time::Duration;
 use oxide_networking::ReachabilityManager;
 #[cfg(target_os = "ios")]
 use oxide_networking::{
-    HandshakeResponse, PacketKind, QuicSessionConfig, QuicSessionManager, ReachabilitySubscription,
-    TimeSyncSample,
+    HandshakeResponse, PacketKind, QuicSessionManager, ReachabilitySubscription, TimeSyncSample,
 };
+use oxide_perf_runner as perf_runner;
 use oxide_permissions::{PermissionManager, PermissionState, PermissionSubscription, SensorBridge};
 #[cfg(target_os = "ios")]
 use oxide_platform_api::{
@@ -44,13 +44,331 @@ use oxide_platform_ios::{
 #[cfg(target_os = "ios")]
 extern "C" {
     // Implemented in src/ios/app.m
-    fn oxide_host_start() -> ::core::ffi::c_int;
+    fn oxide_host_start(
+        argc: ::core::ffi::c_int,
+        argv: *mut *mut ::core::ffi::c_char,
+    ) -> ::core::ffi::c_int;
+    fn oxide_host_perf_signpost_begin(ptr: *const ::core::ffi::c_char, len: usize) -> u64;
+    fn oxide_host_perf_signpost_end(ptr: *const ::core::ffi::c_char, len: usize, signpost_id: u64);
     fn oxide_cam_start_default() -> ::libc::c_int;
+    fn oxide_cam_start_default_preview_only() -> ::libc::c_int;
     fn oxide_cam_stop();
+    fn oxide_cam_set_preview_pixel_format(format: i32) -> ::libc::c_int;
 }
 
 #[cfg(target_os = "ios")]
 pub struct IosTime;
+
+#[inline]
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+fn camera_perf_trace_signposts_enabled() -> bool {
+    #[cfg(target_os = "ios")]
+    {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ENABLED.get_or_init(|| ios_env_flag("OXIDE_PERF_CAMERA_TRACE_PHASES"))
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        false
+    }
+}
+
+#[inline]
+fn with_perf_signpost<T>(_name: &str, body: impl FnOnce() -> T) -> T {
+    #[cfg(target_os = "ios")]
+    {
+        if !camera_perf_trace_signposts_enabled() {
+            return body();
+        }
+        let signpost_id = unsafe {
+            oxide_host_perf_signpost_begin(
+                _name.as_ptr().cast::<::core::ffi::c_char>(),
+                _name.len(),
+            )
+        };
+        let result = body();
+        unsafe {
+            oxide_host_perf_signpost_end(
+                _name.as_ptr().cast::<::core::ffi::c_char>(),
+                _name.len(),
+                signpost_id,
+            );
+        }
+        return result;
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        body()
+    }
+}
+
+#[inline]
+fn benchmark_camera_fast_path_active(app: &AppState) -> bool {
+    app.benchmark_mode && app.benchmark_scene_index == benchmark_camera_scene_index()
+}
+
+#[inline]
+fn benchmark_camera_scene_index() -> u32 {
+    test_scenes::SceneKind::Camera as u32
+}
+
+#[cfg(target_os = "ios")]
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct OxideCamPerfSnapshot {
+    capture_total_ms: f32,
+    capture_sample_setup_ms: f32,
+    capture_lock_ms: f32,
+    capture_texture_bridge_ms: f32,
+    capture_publish_ms: f32,
+    capture_publish_lock_ms: f32,
+    capture_publish_texture_refs_ms: f32,
+    capture_publish_pixel_buffer_ms: f32,
+    capture_frame_delivery_ms: f32,
+    sample_delivery_pool_bytes: u64,
+    sample_delivery_pool_surfaces: u32,
+    active_sample_surface_bytes: u64,
+    active_sample_surface_surfaces: u32,
+    active_sample_buffers: u32,
+    peak_active_sample_surface_bytes: u64,
+    peak_active_sample_surface_surfaces: u32,
+    peak_active_sample_buffers: u32,
+    sample_delivery_total_samples: u32,
+    sample_delivery_reused_frames: u32,
+    sample_delivery_reused_surfaces: u32,
+    sample_delivery_max_reuse_gap_frames: u32,
+    retained_sample_surface_bytes: u64,
+    retained_sample_surface_surfaces: u32,
+    retained_published_slot_surface_bytes: u64,
+    retained_published_slot_surfaces: u32,
+    retained_latest_pixel_buffer_surface_bytes: u64,
+    retained_latest_pixel_buffer_surface_surfaces: u32,
+    latest_published_generation: u64,
+    latest_published_timestamp_ns: u64,
+}
+
+#[cfg(target_os = "ios")]
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct OxideCamContractSnapshot {
+    active_width: u32,
+    active_height: u32,
+    active_fps: f32,
+    video_range: u32,
+    color_space: u32,
+}
+
+#[cfg(target_os = "ios")]
+unsafe extern "C" {
+    fn oxide_cam_get_perf_snapshot(out: *mut OxideCamPerfSnapshot) -> ::libc::c_int;
+    fn oxide_cam_reset_perf_counters() -> ::libc::c_int;
+    fn oxide_cam_get_contract_snapshot(out: *mut OxideCamContractSnapshot) -> ::libc::c_int;
+}
+
+#[inline]
+fn apply_camera_stage_perf(stats: &mut StatsSnapshot, perf_stats: &metal::PerfStats) {
+    stats.cam_poll_submissions_ms = perf_stats.cam_poll_submissions_ms as f32;
+    stats.cam_fetch_ms = perf_stats.cam_fetch_ms as f32;
+    stats.cam_setup_ms = perf_stats.cam_setup_ms as f32;
+    stats.cam_encode_quad_ms = perf_stats.cam_encode_quad_ms as f32;
+    stats.cam_command_buffer_ms = perf_stats.cam_command_buffer_ms as f32;
+    stats.cam_encoder_ms = perf_stats.cam_encoder_ms as f32;
+    stats.cam_encode_bind_ms = perf_stats.cam_encode_bind_ms as f32;
+    stats.cam_encode_draw_ms = perf_stats.cam_encode_draw_ms as f32;
+    stats.cam_end_encoding_ms = perf_stats.cam_end_encoding_ms as f32;
+    stats.cam_present_ms = perf_stats.cam_present_ms as f32;
+    stats.cam_commit_ms = perf_stats.cam_commit_ms as f32;
+    stats.cam_gpu_ms = perf_stats.cam_gpu_ms as f32;
+    stats.renderer_memory_total_bytes = perf_stats.memory.total_bytes;
+    stats.renderer_memory_draw_targets_bytes = perf_stats.memory.draw_targets_bytes;
+    stats.renderer_memory_draw_target_main_bytes = perf_stats.memory.draw_target_main_bytes;
+    stats.renderer_memory_draw_target_msaa_bytes = perf_stats.memory.draw_target_msaa_bytes;
+    stats.renderer_memory_effect_targets_bytes = perf_stats.memory.effect_targets_bytes;
+    stats.renderer_memory_effect_prepass_bytes = perf_stats.memory.effect_prepass_bytes;
+    stats.renderer_memory_effect_blur_chain_bytes = perf_stats.memory.effect_blur_chain_bytes;
+    stats.renderer_memory_live_camera_bytes = perf_stats.memory.live_camera_bytes;
+    stats.renderer_memory_camera_cache_bytes = perf_stats.memory.camera_cache_bytes;
+    stats.renderer_memory_camera_blur_cache_bytes = perf_stats.memory.camera_blur_cache_bytes;
+    stats.renderer_memory_camera_transition_cache_bytes =
+        perf_stats.memory.camera_transition_cache_bytes;
+    stats.renderer_memory_benchmark_camera_bytes = perf_stats.memory.benchmark_camera_bytes;
+    stats.renderer_memory_layer_cache_bytes = perf_stats.memory.layer_cache_bytes;
+    stats.renderer_memory_image_cache_bytes = perf_stats.memory.image_cache_bytes;
+    stats.renderer_memory_buffer_bytes = perf_stats.memory.buffer_bytes;
+    stats.renderer_pending_command_buffers = perf_stats.memory.pending_command_buffers;
+    stats.renderer_pending_present_drawables = perf_stats.memory.pending_present_drawables;
+    stats.renderer_pending_present_textures = perf_stats.memory.pending_present_textures;
+    stats.renderer_preview_submission_depth = perf_stats.preview_submission_depth;
+    stats.renderer_preview_submission_skipped = perf_stats.preview_submission_skipped;
+    stats.renderer_preview_submission_frame_age_ms =
+        perf_stats.preview_submission_frame_age_ms as f32;
+}
+
+#[inline]
+fn apply_camera_capture_perf(_stats: &mut StatsSnapshot) {
+    #[cfg(target_os = "ios")]
+    {
+        let mut snap = OxideCamPerfSnapshot::default();
+        if unsafe { oxide_cam_get_perf_snapshot(&mut snap) } == 1 {
+            _stats.cam_capture_total_ms = snap.capture_total_ms;
+            _stats.cam_capture_sample_setup_ms = snap.capture_sample_setup_ms;
+            _stats.cam_capture_lock_ms = snap.capture_lock_ms;
+            _stats.cam_capture_texture_bridge_ms = snap.capture_texture_bridge_ms;
+            _stats.cam_capture_publish_ms = snap.capture_publish_ms;
+            _stats.cam_capture_publish_lock_ms = snap.capture_publish_lock_ms;
+            _stats.cam_capture_publish_texture_refs_ms = snap.capture_publish_texture_refs_ms;
+            _stats.cam_capture_publish_pixel_buffer_ms = snap.capture_publish_pixel_buffer_ms;
+            _stats.cam_capture_frame_delivery_ms = snap.capture_frame_delivery_ms;
+            _stats.cam_sample_delivery_pool_bytes = snap.sample_delivery_pool_bytes;
+            _stats.cam_sample_delivery_pool_surfaces = snap.sample_delivery_pool_surfaces;
+            _stats.cam_active_sample_surface_bytes = snap.active_sample_surface_bytes;
+            _stats.cam_active_sample_surface_surfaces = snap.active_sample_surface_surfaces;
+            _stats.cam_active_sample_buffers = snap.active_sample_buffers;
+            _stats.cam_peak_active_sample_surface_bytes = snap.peak_active_sample_surface_bytes;
+            _stats.cam_peak_active_sample_surface_surfaces =
+                snap.peak_active_sample_surface_surfaces;
+            _stats.cam_peak_active_sample_buffers = snap.peak_active_sample_buffers;
+            _stats.cam_sample_delivery_total_samples = snap.sample_delivery_total_samples;
+            _stats.cam_sample_delivery_reused_frames = snap.sample_delivery_reused_frames;
+            _stats.cam_sample_delivery_reused_surfaces = snap.sample_delivery_reused_surfaces;
+            _stats.cam_sample_delivery_max_reuse_gap_frames =
+                snap.sample_delivery_max_reuse_gap_frames;
+            _stats.cam_retained_sample_surface_bytes = snap.retained_sample_surface_bytes;
+            _stats.cam_retained_sample_surface_surfaces = snap.retained_sample_surface_surfaces;
+            _stats.cam_retained_published_slot_surface_bytes =
+                snap.retained_published_slot_surface_bytes;
+            _stats.cam_retained_published_slot_surfaces = snap.retained_published_slot_surfaces;
+            _stats.cam_retained_latest_pixel_buffer_surface_bytes =
+                snap.retained_latest_pixel_buffer_surface_bytes;
+            _stats.cam_retained_latest_pixel_buffer_surface_surfaces =
+                snap.retained_latest_pixel_buffer_surface_surfaces;
+            _stats.cam_latest_published_generation = snap.latest_published_generation;
+            _stats.cam_latest_published_timestamp_ns = snap.latest_published_timestamp_ns;
+        }
+    }
+}
+
+#[doc(hidden)]
+pub fn merge_camera_contract_fields(
+    fallback_width: u32,
+    fallback_height: u32,
+    fallback_fps: f32,
+    fallback_video_range: u8,
+    fallback_color_space: u8,
+    active_width: u32,
+    active_height: u32,
+    active_fps: f32,
+    video_range: u32,
+    color_space: u32,
+) -> (u32, u32, f32, u8, u8) {
+    let width = if active_width > 0 { active_width } else { fallback_width };
+    let height = if active_height > 0 { active_height } else { fallback_height };
+    let fps = if active_fps > 0.0 { active_fps } else { fallback_fps };
+    let video_range =
+        if video_range <= u32::from(u8::MAX) { video_range as u8 } else { fallback_video_range };
+    let color_space =
+        if color_space <= u32::from(u8::MAX) { color_space as u8 } else { fallback_color_space };
+    (width, height, fps, video_range, color_space)
+}
+
+#[inline]
+fn apply_camera_contract_snapshot(_stats: &mut StatsSnapshot) {
+    #[cfg(target_os = "ios")]
+    {
+        let mut snap = OxideCamContractSnapshot::default();
+        if unsafe { oxide_cam_get_contract_snapshot(&mut snap) } == 1 {
+            let (width, height, fps, video_range, color_space) = merge_camera_contract_fields(
+                _stats.cam_width,
+                _stats.cam_height,
+                _stats.cam_fps,
+                _stats.cam_video_range,
+                _stats.cam_color_space,
+                snap.active_width,
+                snap.active_height,
+                snap.active_fps,
+                snap.video_range,
+                snap.color_space,
+            );
+            _stats.cam_width = width;
+            _stats.cam_height = height;
+            _stats.cam_fps = fps;
+            _stats.cam_video_range = video_range;
+            _stats.cam_color_space = color_space;
+        }
+    }
+}
+
+#[inline]
+fn stats_snapshot_from_perf(perf_stats: metal::PerfStats, camera_running: bool) -> StatsSnapshot {
+    let mut stats = StatsSnapshot {
+        draws: perf_stats.draws,
+        damage_pct: perf_stats.damage_pct,
+        damage_rects: perf_stats.damage_rects,
+        cam_coverage_pct: perf_stats.cam_coverage_pct,
+        cam_blur_ms: perf_stats.blur_ms as f32,
+        cam_blur_updates: perf_stats.blur_updates,
+        cam_update_period_ms: perf_stats.blur_period_ms,
+        cam_paused: perf_stats.cam_paused,
+        cam_low_power: perf_stats.low_power,
+        cam_thermal: perf_stats.thermal,
+        cam_width: perf_stats.cam_width,
+        cam_height: perf_stats.cam_height,
+        cam_bit_depth: perf_stats.cam_bit_depth,
+        cam_matrix: perf_stats.cam_matrix,
+        cam_video_range: perf_stats.cam_video_range,
+        cam_color_space: perf_stats.cam_color_space,
+        cam_running: if camera_running { 1 } else { 0 },
+        cam_fps: if perf_stats.blur_period_ms > 0 {
+            1000.0 / (perf_stats.blur_period_ms as f32)
+        } else {
+            0.0
+        },
+        ..StatsSnapshot::default()
+    };
+    apply_camera_stage_perf(&mut stats, &perf_stats);
+    stats
+}
+
+fn render_camera_benchmark_fast_path(
+    renderer: &mut metal::MetalRenderer,
+    camera_running: bool,
+    w: u32,
+    h: u32,
+    scale: f32,
+    drawable_ptr: *mut ::libc::c_void,
+) -> Result<StatsSnapshot, ::libc::c_int> {
+    let perf_stats = match with_perf_signpost("camera.renderer.direct_preview", || unsafe {
+        renderer.render_camera_preview_direct(drawable_ptr.cast(), w, h, scale)
+    }) {
+        Ok(stats) => stats,
+        Err(_) => return Err(-4),
+    };
+    Ok(stats_snapshot_from_perf(perf_stats, camera_running))
+}
+
+fn camera_preview_plan(
+    renderer: &metal::MetalRenderer,
+    camera_running: bool,
+    w: u32,
+    h: u32,
+    scale: f32,
+) -> ::libc::c_int {
+    if renderer.camera_preview_needs_drawable(w, h, scale, camera_running) {
+        1
+    } else {
+        0
+    }
+}
+
+fn camera_preview_plan_reason(
+    renderer: &metal::MetalRenderer,
+    camera_running: bool,
+    w: u32,
+    h: u32,
+    scale: f32,
+) -> ::libc::c_int {
+    renderer.camera_preview_draw_reason(w, h, scale, camera_running) as ::libc::c_int
+}
 
 #[cfg(target_os = "ios")]
 impl TimeService for IosTime {
@@ -70,7 +388,7 @@ impl TimeService for IosTime {
 struct SensorRuntime {
     bridge: Arc<SensorBridge>,
     telemetry: Weak<TelemetryHub>,
-    binding: oxide_permissions::sensors::SensorPermissionBinding,
+    _binding: oxide_permissions::sensors::SensorPermissionBinding,
     location: IosLocation,
     motion: IosMotion,
     bluetooth: IosBluetooth,
@@ -97,7 +415,7 @@ impl SensorRuntime {
             push: IosPushManager,
             telemetry,
             bridge: Arc::clone(&bridge),
-            binding,
+            _binding: binding,
             location_running: false,
             motion_running: false,
         };
@@ -372,7 +690,10 @@ impl Drop for NetworkRuntime {
 }
 
 #[no_mangle]
-pub extern "C" fn rust_entry() -> ::libc::c_int {
+pub extern "C" fn rust_entry(
+    _argc: ::libc::c_int,
+    _argv: *mut *mut ::core::ffi::c_char,
+) -> ::libc::c_int {
     #[cfg(target_os = "ios")]
     unsafe {
         #[cfg(feature = "tokio-runtime")]
@@ -380,11 +701,11 @@ pub extern "C" fn rust_entry() -> ::libc::c_int {
             oxide_platform_ios::init_tokio_spawn();
         }
         ios_log("rust_entry: calling oxide_host_start");
-        let rc = oxide_host_start() as ::libc::c_int;
+        let rc = oxide_host_start(_argc, _argv) as ::libc::c_int;
         ios_log(&format!("rust_entry: oxide_host_start returned {}", rc));
         return rc;
     }
-    #[allow(clippy::unnecessary_cast)]
+    #[cfg(not(target_os = "ios"))]
     {
         -1 as ::libc::c_int
     }
@@ -984,6 +1305,68 @@ struct StatsSnapshot {
     cam_color_space: u8,
     cam_running: u8,
     cam_fps: f32,
+    cam_poll_submissions_ms: f32,
+    cam_fetch_ms: f32,
+    cam_setup_ms: f32,
+    cam_encode_quad_ms: f32,
+    cam_command_buffer_ms: f32,
+    cam_encoder_ms: f32,
+    cam_encode_bind_ms: f32,
+    cam_encode_draw_ms: f32,
+    cam_end_encoding_ms: f32,
+    cam_present_ms: f32,
+    cam_commit_ms: f32,
+    cam_gpu_ms: f32,
+    cam_capture_total_ms: f32,
+    cam_capture_sample_setup_ms: f32,
+    cam_capture_lock_ms: f32,
+    cam_capture_texture_bridge_ms: f32,
+    cam_capture_publish_ms: f32,
+    cam_capture_publish_lock_ms: f32,
+    cam_capture_publish_texture_refs_ms: f32,
+    cam_capture_publish_pixel_buffer_ms: f32,
+    cam_capture_frame_delivery_ms: f32,
+    cam_sample_delivery_pool_bytes: u64,
+    cam_sample_delivery_pool_surfaces: u32,
+    cam_active_sample_surface_bytes: u64,
+    cam_active_sample_surface_surfaces: u32,
+    cam_active_sample_buffers: u32,
+    cam_peak_active_sample_surface_bytes: u64,
+    cam_peak_active_sample_surface_surfaces: u32,
+    cam_peak_active_sample_buffers: u32,
+    cam_sample_delivery_total_samples: u32,
+    cam_sample_delivery_reused_frames: u32,
+    cam_sample_delivery_reused_surfaces: u32,
+    cam_sample_delivery_max_reuse_gap_frames: u32,
+    cam_retained_sample_surface_bytes: u64,
+    cam_retained_sample_surface_surfaces: u32,
+    cam_retained_published_slot_surface_bytes: u64,
+    cam_retained_published_slot_surfaces: u32,
+    cam_retained_latest_pixel_buffer_surface_bytes: u64,
+    cam_retained_latest_pixel_buffer_surface_surfaces: u32,
+    cam_latest_published_generation: u64,
+    cam_latest_published_timestamp_ns: u64,
+    renderer_memory_total_bytes: u64,
+    renderer_memory_draw_targets_bytes: u64,
+    renderer_memory_draw_target_main_bytes: u64,
+    renderer_memory_draw_target_msaa_bytes: u64,
+    renderer_memory_effect_targets_bytes: u64,
+    renderer_memory_effect_prepass_bytes: u64,
+    renderer_memory_effect_blur_chain_bytes: u64,
+    renderer_memory_live_camera_bytes: u64,
+    renderer_memory_camera_cache_bytes: u64,
+    renderer_memory_camera_blur_cache_bytes: u64,
+    renderer_memory_camera_transition_cache_bytes: u64,
+    renderer_memory_benchmark_camera_bytes: u64,
+    renderer_memory_layer_cache_bytes: u64,
+    renderer_memory_image_cache_bytes: u64,
+    renderer_memory_buffer_bytes: u64,
+    renderer_pending_command_buffers: u32,
+    renderer_pending_present_drawables: u32,
+    renderer_pending_present_textures: u32,
+    renderer_preview_submission_depth: u32,
+    renderer_preview_submission_skipped: u32,
+    renderer_preview_submission_frame_age_ms: f32,
 }
 
 #[allow(dead_code)]
@@ -1106,8 +1489,10 @@ impl PrimaryTouchTracker {
 struct AppState {
     renderer: Option<Box<metal::MetalRenderer>>,
     router: Option<test_scenes::Router<MtlUploader>>,
+    benchmark_scene_index: u32,
     last_ms: u64,
     inited: bool,
+    benchmark_mode: bool,
     last_stats: StatsSnapshot,
     window: WindowMetrics,
     space_down: bool,
@@ -1119,6 +1504,8 @@ struct AppState {
     overlay_dirty: bool,
     snapshot_status: String,
     camera_running: bool,
+    camera_render_mode: metal::CameraRenderMode,
+    camera_texture_source: metal::CameraTextureSource,
     permissions: Option<Arc<PermissionManager>>,
     permission_subs: Vec<PermissionSubscription>,
     permission_states: Vec<PermissionState>,
@@ -1138,8 +1525,10 @@ impl Default for AppState {
         Self {
             renderer: None,
             router: None,
+            benchmark_scene_index: benchmark_camera_scene_index(),
             last_ms: 0,
             inited: false,
+            benchmark_mode: false,
             last_stats: StatsSnapshot::default(),
             window: WindowMetrics::default(),
             space_down: false,
@@ -1151,6 +1540,8 @@ impl Default for AppState {
             overlay_dirty: false,
             snapshot_status: String::new(),
             camera_running: false,
+            camera_render_mode: metal::CameraRenderMode::Nv12Optimized,
+            camera_texture_source: metal::CameraTextureSource::Live,
             permissions: None,
             permission_subs: Vec::new(),
             permission_states: Vec::new(),
@@ -1168,9 +1559,15 @@ impl Default for AppState {
 }
 
 static APP_STATE: std::sync::OnceLock<std::sync::Mutex<AppState>> = std::sync::OnceLock::new();
+static PERF_REPORT_JSON: std::sync::OnceLock<std::sync::Mutex<Option<Vec<u8>>>> =
+    std::sync::OnceLock::new();
 
 fn app_state() -> &'static std::sync::Mutex<AppState> {
     APP_STATE.get_or_init(|| std::sync::Mutex::new(AppState::default()))
+}
+
+fn perf_report_json() -> &'static std::sync::Mutex<Option<Vec<u8>>> {
+    PERF_REPORT_JSON.get_or_init(|| std::sync::Mutex::new(None))
 }
 
 fn with_app_mut<R>(f: impl FnOnce(&mut AppState) -> R) -> Option<R> {
@@ -1328,58 +1725,120 @@ pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_i
         app.sensor_runtime = None;
         app.network_runtime = None;
     }
-    let telemetry = Arc::new(TelemetryHub::new());
-    app.telemetry = Some(Arc::clone(&telemetry));
-    app.telemetry_ops = Some(TelemetryOperations::new(Arc::clone(&telemetry)));
-    let mut renderer = match metal::MetalRenderer::new_default() {
+    let telemetry = if app.benchmark_mode {
+        None
+    } else {
+        let telemetry = Arc::new(TelemetryHub::new());
+        app.telemetry = Some(Arc::clone(&telemetry));
+        app.telemetry_ops = Some(TelemetryOperations::new(Arc::clone(&telemetry)));
+        Some(telemetry)
+    };
+    let renderer_cfg = metal::MetalRendererConfig {
+        wants_hdr: false,
+        sample_count: 1,
+        camera_render_mode: app.camera_render_mode,
+        camera_texture_source: app.camera_texture_source,
+        direct_preview_only: app.benchmark_mode,
+    };
+    let mut renderer = match metal::MetalRenderer::new_with_config(renderer_cfg) {
         Ok(r) => r,
         Err(err) => {
-            eprintln!("[Oxide] MetalRenderer::new_default() failed: {err:?}");
+            eprintln!("[Oxide] MetalRenderer::new_with_config() failed: {err}");
             return -1;
         }
     };
-    let _ = renderer.resize(w, h, scale);
+    if !app.benchmark_mode {
+        let _ = renderer.resize(w, h, scale);
+    }
     let mut boxed = Box::new(renderer);
     let renderer_ptr: *mut metal::MetalRenderer = &mut *boxed;
-    let uploader = MtlUploader { renderer: renderer_ptr };
-    let mut router = test_scenes::Router::new(uploader);
-    let sensor_bridge = Arc::new(SensorBridge::with_default_clock());
-    router.sensors_bind(&sensor_bridge);
-    router.telemetry_bind(&telemetry);
-    telemetry.update_sensors(Some(sensor_bridge.snapshot()));
-    let reachability = Arc::new(ReachabilityManager::with_default_clock());
+    let mut router = if app.benchmark_mode {
+        None
+    } else {
+        Some(test_scenes::Router::new(MtlUploader { renderer: renderer_ptr }))
+    };
+    let sensor_bridge = if app.benchmark_mode {
+        None
+    } else {
+        let sensor_bridge = Arc::new(SensorBridge::with_default_clock());
+        router
+            .as_mut()
+            .expect("router available outside benchmark mode")
+            .sensors_bind(&sensor_bridge);
+        if let Some(telemetry) = telemetry.as_ref() {
+            router
+                .as_mut()
+                .expect("router available outside benchmark mode")
+                .telemetry_bind(telemetry);
+            telemetry.update_sensors(Some(sensor_bridge.snapshot()));
+        }
+        Some(sensor_bridge)
+    };
+    let reachability = if app.benchmark_mode {
+        None
+    } else {
+        Some(Arc::new(ReachabilityManager::with_default_clock()))
+    };
     #[cfg(target_os = "ios")]
     {
-        let manager: Arc<dyn CameraManager + Send + Sync> = Arc::new(IosCameraManager);
-        router.camera_attach_manager(manager);
-        let perm_iface: Arc<dyn Permissions + Send + Sync> = Arc::new(IosPermissions);
-        let perm_manager = Arc::new(PermissionManager::with_default_clock(perm_iface));
-        router.permissions_bind(&perm_manager);
-        let snapshot = initialize_permissions(&perm_manager);
-        router.permissions_update(&snapshot);
-        app.permission_states = snapshot;
-        app.permissions = Some(Arc::clone(&perm_manager));
-        app.permission_subs.clear();
-        telemetry.update_permissions(app.permission_states.clone());
-        let runtime = SensorRuntime::new(
-            Arc::clone(&sensor_bridge),
-            Arc::clone(&perm_manager),
-            Arc::downgrade(&telemetry),
-            Some("com.nametag.social"), // Pass the restore_id here
-        );
-        app.sensor_runtime = Some(runtime);
-        match NetworkRuntime::new(Arc::clone(&reachability), Arc::clone(&telemetry)) {
-            Ok(net_runtime) => app.network_runtime = Some(net_runtime),
-            Err(err) => ios_log(&format!("reachability start failed: {err}")),
+        if app.benchmark_mode {
+            ios_log("oxide.host-ios: benchmark mode skipping iOS runtime services");
+        } else {
+            let manager: Arc<dyn CameraManager + Send + Sync> = Arc::new(IosCameraManager);
+            router
+                .as_mut()
+                .expect("router available outside benchmark mode")
+                .camera_attach_manager(manager);
+            let perm_iface: Arc<dyn Permissions + Send + Sync> = Arc::new(IosPermissions);
+            let perm_manager = Arc::new(PermissionManager::with_default_clock(perm_iface));
+            router
+                .as_mut()
+                .expect("router available outside benchmark mode")
+                .permissions_bind(&perm_manager);
+            let snapshot = initialize_permissions(&perm_manager);
+            router
+                .as_mut()
+                .expect("router available outside benchmark mode")
+                .permissions_update(&snapshot);
+            app.permission_states = snapshot;
+            app.permissions = Some(Arc::clone(&perm_manager));
+            app.permission_subs.clear();
+            if let Some(telemetry) = telemetry.as_ref() {
+                telemetry.update_permissions(app.permission_states.clone());
+            }
+            let runtime = SensorRuntime::new(
+                Arc::clone(
+                    sensor_bridge.as_ref().expect("sensor bridge available outside benchmark mode"),
+                ),
+                Arc::clone(&perm_manager),
+                Arc::downgrade(
+                    telemetry.as_ref().expect("telemetry available outside benchmark mode"),
+                ),
+                None,
+            );
+            app.sensor_runtime = Some(runtime);
+            match NetworkRuntime::new(
+                Arc::clone(
+                    reachability.as_ref().expect("reachability available outside benchmark mode"),
+                ),
+                Arc::clone(telemetry.as_ref().expect("telemetry available outside benchmark mode")),
+            ) {
+                Ok(net_runtime) => app.network_runtime = Some(net_runtime),
+                Err(err) => ios_log(&format!("reachability start failed: {err}")),
+            }
+            perm_manager_for_subs = Some(Arc::clone(&perm_manager));
         }
-        perm_manager_for_subs = Some(Arc::clone(&perm_manager));
     }
-    app.sensors = Some(Arc::clone(&sensor_bridge));
-    app.networking = Some(Arc::clone(&reachability));
-    load_default_assets(renderer_ptr, &mut router);
+    app.sensors = sensor_bridge.clone();
+    app.networking = reachability.clone();
+    if let Some(router) = router.as_mut() {
+        load_default_assets(renderer_ptr, router);
+    }
     let default_damage_use = 0.70f32;
     let default_damage_pref = 0.25f32;
-    router.damage_set_options(false, default_damage_use, default_damage_pref);
+    if let Some(router) = router.as_mut() {
+        router.damage_set_options(false, default_damage_use, default_damage_pref);
+    }
     unsafe {
         (*renderer_ptr).set_damage_options(false, default_damage_use, default_damage_pref);
     }
@@ -1398,35 +1857,41 @@ pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_i
     app.space_down = false;
     app.memory_warnings = 0;
 
-    let desired_overlay = if app.overlay_dirty { app.overlay_visible } else { true };
+    let desired_overlay = if app.overlay_dirty { app.overlay_visible } else { !app.benchmark_mode };
     if !desired_overlay {
-        router.toggle_overlay();
+        if let Some(router) = router.as_mut() {
+            router.toggle_overlay();
+        }
     }
     app.overlay_visible = desired_overlay;
     app.overlay_dirty = false;
 
     let desired_reduce = if app.reduce_motion_dirty { app.reduce_motion_on } else { false };
     if desired_reduce {
-        router.set_reduce_motion(true);
+        if let Some(router) = router.as_mut() {
+            router.set_reduce_motion(true);
+        }
     }
     app.reduce_motion_on = desired_reduce;
     app.reduce_motion_dirty = false;
     app.snapshot_status.clear();
     app.camera_running = false;
-    app.router = Some(router);
+    app.router = router;
     app.renderer = Some(boxed);
     if let Some(ops) = app.telemetry_ops.as_ref() {
         ops.handle_foreground(timing::now_ms());
     }
     process_telemetry_commands_locked(&mut app);
-    oxide_host_set_window_resized_callback(Some(window_resized_cb));
-    oxide_host_set_touch_callback(Some(touch_cb));
-    oxide_host_set_pointer_callback(Some(pointer_cb));
-    oxide_host_set_key_callback(Some(key_cb));
-    oxide_host_set_text_commit_callback(Some(text_commit_cb));
-    oxide_host_set_text_composition_callback(Some(text_composition_cb));
-    oxide_host_set_text_selection_callback(Some(text_selection_cb));
-    oxide_host_set_ime_callbacks(Some(ime_shown_cb), Some(ime_hidden_cb));
+    if !app.benchmark_mode {
+        oxide_host_set_window_resized_callback(Some(window_resized_cb));
+        oxide_host_set_touch_callback(Some(touch_cb));
+        oxide_host_set_pointer_callback(Some(pointer_cb));
+        oxide_host_set_key_callback(Some(key_cb));
+        oxide_host_set_text_commit_callback(Some(text_commit_cb));
+        oxide_host_set_text_composition_callback(Some(text_composition_cb));
+        oxide_host_set_text_selection_callback(Some(text_selection_cb));
+        oxide_host_set_ime_callbacks(Some(ime_shown_cb), Some(ime_hidden_cb));
+    }
     app.inited = true;
     #[cfg(target_os = "ios")]
     let manager_to_subscribe = perm_manager_for_subs.take();
@@ -1440,12 +1905,97 @@ pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_i
 
 #[no_mangle]
 pub extern "C" fn oxide_host_app_frame(w: u32, h: u32, scale: f32) -> ::libc::c_int {
+    oxide_host_app_frame_inner(w, h, scale, core::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_camera_preview_plan(w: u32, h: u32, scale: f32) -> ::libc::c_int {
+    let app = app_state().lock().expect("app_state mutex");
+    if !app.inited {
+        return -1;
+    }
+    if !benchmark_camera_fast_path_active(&app) {
+        return 1;
+    }
+    let Some(renderer) = app.renderer.as_ref() else {
+        return -2;
+    };
+    camera_preview_plan(renderer, app.camera_running, w, h, scale)
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_camera_preview_plan_reason(
+    w: u32,
+    h: u32,
+    scale: f32,
+) -> ::libc::c_int {
+    let app = app_state().lock().expect("app_state mutex");
+    if !app.inited {
+        return -1;
+    }
+    if !benchmark_camera_fast_path_active(&app) {
+        return metal::CAMERA_PREVIEW_REASON_NON_DIRECT_PREVIEW as ::libc::c_int;
+    }
+    let Some(renderer) = app.renderer.as_ref() else {
+        return -2;
+    };
+    camera_preview_plan_reason(renderer, app.camera_running, w, h, scale)
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_app_frame_with_drawable(
+    w: u32,
+    h: u32,
+    scale: f32,
+    drawable_ptr: *mut ::libc::c_void,
+) -> ::libc::c_int {
+    oxide_host_app_frame_inner(w, h, scale, drawable_ptr)
+}
+
+fn oxide_host_app_frame_inner(
+    w: u32,
+    h: u32,
+    scale: f32,
+    drawable_ptr: *mut ::libc::c_void,
+) -> ::libc::c_int {
     let mut app = app_state().lock().expect("app_state mutex");
     if !app.inited {
         return -1;
     }
+    if benchmark_camera_fast_path_active(&app) {
+        let Some(mut renderer) = app.renderer.take() else {
+            return -2;
+        };
+        let camera_running = app.camera_running;
+        drop(app);
+
+        let render_result = render_camera_benchmark_fast_path(
+            &mut renderer,
+            camera_running,
+            w,
+            h,
+            scale,
+            drawable_ptr,
+        );
+
+        let mut app = app_state().lock().expect("app_state mutex");
+        debug_assert!(app.renderer.is_none(), "benchmark fast path renderer unexpectedly replaced");
+        app.renderer = Some(renderer);
+        match render_result {
+            Ok(stats) => {
+                app.last_stats = stats;
+                if ios_log_enabled() {
+                    ios_log("app_frame: camera fast path ok");
+                }
+                return 0;
+            }
+            Err(code) => return code,
+        }
+    }
     process_telemetry_commands_locked(&mut app);
-    ios_log(&format!("app_frame: w={} h={} scale={:.2}", w, h, scale));
+    if ios_log_enabled() {
+        ios_log(&format!("app_frame: w={} h={} scale={:.2}", w, h, scale));
+    }
     let now = timing::now_ms();
     let dt_ms = (now.saturating_sub(app.last_ms)) as u32;
     app.last_ms = now;
@@ -1464,17 +2014,29 @@ pub extern "C" fn oxide_host_app_frame(w: u32, h: u32, scale: f32) -> ::libc::c_
     {
         let renderer = match app.renderer.as_mut().map(|b| b.as_mut()) {
             Some(r) => r,
-            None => return -2,
+            None => {
+                return -2;
+            }
         };
-        let _ = renderer.resize(w, h, scale);
+        if !drawable_ptr.is_null() {
+            let present_result = unsafe {
+                with_perf_signpost("camera.host.present", || {
+                    renderer.prepare_present_drawable(drawable_ptr.cast())
+                })
+            };
+            if present_result.is_err() {
+                return -5;
+            }
+        }
+        let _ = with_perf_signpost("camera.renderer.resize", || renderer.resize(w, h, scale));
     }
     let mut builder = ui::DrawListBuilder::new();
     let vp =
         gfx_api::RectF::new(0.0, 0.0, (w as f32) / scale.max(1.0), (h as f32) / scale.max(1.0));
-    let (damage_rects, stats) = {
+    let router_update = with_perf_signpost("camera.router.update_draw", || {
         let router = match app.router.as_mut() {
             Some(r) => r,
-            None => return -3,
+            None => return None,
         };
         router.update(now, dt_ms);
         router.draw(vp, scale, &mut builder);
@@ -1488,7 +2050,18 @@ pub extern "C" fn oxide_host_app_frame(w: u32, h: u32, scale: f32) -> ::libc::c_
             damage_rects: 0,
             ..StatsSnapshot::default()
         };
-        (router.take_damage(), stats)
+        Some((router.take_damage(), stats))
+    });
+    let (damage_rects, stats) = match router_update {
+        Some(value) => value,
+        None => {
+            if !drawable_ptr.is_null() {
+                if let Some(renderer) = app.renderer.as_mut().map(|b| b.as_mut()) {
+                    let _ = renderer.cancel_present_drawable();
+                }
+            }
+            return -3;
+        }
     };
     let perf_stats = {
         let renderer = match app.renderer.as_mut().map(|b| b.as_mut()) {
@@ -1496,43 +2069,55 @@ pub extern "C" fn oxide_host_app_frame(w: u32, h: u32, scale: f32) -> ::libc::c_
             None => return -2,
         };
         let damage = gfx_api::Damage { rects: damage_rects };
-        let token = renderer.begin_frame(&gfx_api::FrameTarget, Some(&damage));
-        {
-            let dl = builder.drawlist_mut();
-            oxide_ui_core::coalesce_adjacent_draws(dl);
+        let token = with_perf_signpost("camera.renderer.begin_frame", || {
+            renderer.begin_frame(&gfx_api::FrameTarget, Some(&damage))
+        });
+        if builder.drawlist().items.len() > 1 {
+            with_perf_signpost("camera.renderer.coalesce", || {
+                let dl = builder.drawlist_mut();
+                oxide_ui_core::coalesce_adjacent_draws(dl);
+            });
         }
-        renderer.encode_pass(builder.drawlist());
-        if let Err(_) = renderer.submit(token) {
+        with_perf_signpost("camera.renderer.encode_pass", || {
+            renderer.encode_pass(builder.drawlist());
+        });
+        if with_perf_signpost("camera.renderer.submit", || renderer.submit(token)).is_err() {
+            if !drawable_ptr.is_null() {
+                let _ = renderer.cancel_present_drawable();
+            }
             return -4;
         }
         renderer.last_stats()
     };
     let paused = perf_stats.cam_paused != 0 || !app.camera_running;
     let running = app.camera_running;
+    let overlay_visible = app.overlay_visible;
     if let Some(router) = app.router.as_mut() {
         router.damage_set_stats(perf_stats.damage_pct, perf_stats.damage_rects);
-        let metrics = test_scenes::CameraMetrics {
-            width: perf_stats.cam_width,
-            height: perf_stats.cam_height,
-            bit_depth: perf_stats.cam_bit_depth,
-            matrix: perf_stats.cam_matrix,
-            video_range: perf_stats.cam_video_range,
-            color_space: perf_stats.cam_color_space,
-            coverage_pct: perf_stats.cam_coverage_pct,
-            blur_ms: perf_stats.blur_ms as f32,
-            blur_updates: perf_stats.blur_updates,
-            update_period_ms: perf_stats.blur_period_ms,
-            paused,
-            running,
-            low_power: perf_stats.low_power != 0,
-            thermal: perf_stats.thermal,
-            fps: if perf_stats.blur_period_ms > 0 {
-                1000.0 / (perf_stats.blur_period_ms as f32)
-            } else {
-                0.0
-            },
-        };
-        router.camera_set_metrics(metrics);
+        if overlay_visible {
+            let metrics = test_scenes::CameraMetrics {
+                width: perf_stats.cam_width,
+                height: perf_stats.cam_height,
+                bit_depth: perf_stats.cam_bit_depth,
+                matrix: perf_stats.cam_matrix,
+                video_range: perf_stats.cam_video_range,
+                color_space: perf_stats.cam_color_space,
+                coverage_pct: perf_stats.cam_coverage_pct,
+                blur_ms: perf_stats.blur_ms as f32,
+                blur_updates: perf_stats.blur_updates,
+                update_period_ms: perf_stats.blur_period_ms,
+                paused,
+                running,
+                low_power: perf_stats.low_power != 0,
+                thermal: perf_stats.thermal,
+                fps: if perf_stats.blur_period_ms > 0 {
+                    1000.0 / (perf_stats.blur_period_ms as f32)
+                } else {
+                    0.0
+                },
+            };
+            router.camera_set_metrics(metrics);
+        }
     }
     let mut stats = stats;
     stats.damage_pct = perf_stats.damage_pct;
@@ -1556,6 +2141,10 @@ pub extern "C" fn oxide_host_app_frame(w: u32, h: u32, scale: f32) -> ::libc::c_
     } else {
         0.0
     };
+    apply_camera_stage_perf(&mut stats, &perf_stats);
+    if app.camera_running {
+        apply_camera_capture_perf(&mut stats);
+    }
     app.last_stats = stats;
     ios_log("app_frame: ok");
     0
@@ -1605,31 +2194,6 @@ pub extern "C" fn oxide_host_on_memory_warning() {
     });
 }
 
-#[no_mangle]
-pub extern "C" fn oxide_host_app_present(
-    drawable_ptr: *mut ::libc::c_void,
-    texture_ptr: *mut ::libc::c_void,
-) -> ::libc::c_int {
-    let mut app = app_state().lock().expect("app_state mutex");
-    if !app.inited {
-        return -1;
-    }
-    ios_log(&format!("app_present: drawable_ptr={:p} texture_ptr={:p}", drawable_ptr, texture_ptr));
-    let renderer = match app.renderer.as_mut().map(|b| b.as_mut()) {
-        Some(r) => r,
-        None => return -2,
-    };
-    let res = unsafe {
-        renderer.blit_to_texture_and_present_drawable(texture_ptr.cast(), drawable_ptr.cast())
-    };
-    if res.is_err() {
-        ios_log("app_present: renderer error");
-        return -3;
-    }
-    ios_log("app_present: ok");
-    0
-}
-
 // ===== Camera options control (for UITests) =====
 
 #[no_mangle]
@@ -1640,6 +2204,9 @@ pub extern "C" fn oxide_host_set_camera_options(
     animate: u8,
 ) -> ::libc::c_int {
     let mut app = app_state().lock().expect("app_state mutex");
+    if app.benchmark_mode {
+        return 0;
+    }
     let router = match app.router.as_mut() {
         Some(r) => r,
         None => return -1,
@@ -1652,12 +2219,70 @@ pub extern "C" fn oxide_host_set_camera_options(
 }
 
 #[no_mangle]
+pub extern "C" fn oxide_host_set_camera_render_mode(mode: i32) -> ::libc::c_int {
+    let mode = match mode {
+        1 => metal::CameraRenderMode::Nv12Legacy,
+        2 => metal::CameraRenderMode::BgraBenchmark,
+        _ => metal::CameraRenderMode::Nv12Optimized,
+    };
+    #[cfg(target_os = "ios")]
+    let _ = unsafe {
+        oxide_cam_set_preview_pixel_format(
+            if matches!(mode, metal::CameraRenderMode::BgraBenchmark) { 1 } else { 0 },
+        )
+    };
+    let mut app = app_state().lock().expect("app_state mutex");
+    app.camera_render_mode = mode;
+    if let Some(renderer) = app.renderer.as_mut() {
+        renderer.set_camera_render_mode(mode);
+    }
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_set_camera_texture_source(source: i32) -> ::libc::c_int {
+    let source = match source {
+        1 => metal::CameraTextureSource::SyntheticBenchmark,
+        _ => metal::CameraTextureSource::Live,
+    };
+    let mut app = app_state().lock().expect("app_state mutex");
+    app.camera_texture_source = source;
+    if let Some(renderer) = app.renderer.as_mut() {
+        renderer.set_camera_texture_source(source);
+    }
+    0
+}
+
+#[no_mangle]
 pub extern "C" fn oxide_host_set_camera_running(on: u8) -> ::libc::c_int {
+    oxide_host_set_camera_running_mode(on, 0)
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_reset_camera_perf_counters() -> ::libc::c_int {
+    #[cfg(target_os = "ios")]
+    unsafe {
+        return oxide_cam_reset_perf_counters();
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_set_camera_running_mode(on: u8, _preview_only: u8) -> ::libc::c_int {
     let mut app = app_state().lock().expect("app_state mutex");
     let want_on = on != 0;
     if want_on && !app.camera_running {
         #[cfg(target_os = "ios")]
-        let rc = unsafe { oxide_cam_start_default() };
+        let rc = unsafe {
+            if _preview_only != 0 {
+                oxide_cam_start_default_preview_only()
+            } else {
+                oxide_cam_start_default()
+            }
+        };
         #[cfg(not(target_os = "ios"))]
         let rc = 0;
         if rc == 0 {
@@ -1867,8 +2492,10 @@ pub extern "C" fn oxide_host_app_shutdown() {
         }
         app.renderer = None;
         app.router = None;
+        app.benchmark_scene_index = benchmark_camera_scene_index();
         app.snapshot_status.clear();
         app.inited = false;
+        app.benchmark_mode = false;
         app.last_ms = 0;
         app.overlay_visible = true;
         app.overlay_dirty = false;
@@ -1876,10 +2503,30 @@ pub extern "C" fn oxide_host_app_shutdown() {
         app.reduce_motion_dirty = false;
         app.space_down = false;
         app.camera_running = false;
+        app.sensors = None;
+        app.networking = None;
+        app.network_metrics = None;
+        app.telemetry = None;
+        app.telemetry_ops = None;
+        #[cfg(target_os = "ios")]
+        {
+            app.sensor_runtime = None;
+            app.network_runtime = None;
+        }
         app.permissions = None;
         app.permission_subs.clear();
         app.permission_states.clear();
     }
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_set_benchmark_mode(on: u8) -> ::libc::c_int {
+    let mut app = app_state().lock().expect("app_state mutex");
+    if app.inited {
+        return -1;
+    }
+    app.benchmark_mode = on != 0;
+    0
 }
 
 extern "C" fn window_resized_cb(
@@ -2092,6 +2739,68 @@ pub struct OxideHostStats {
     pub cam_color_space: u8,
     pub cam_running: u8,
     pub cam_fps: f32,
+    pub cam_poll_submissions_ms: f32,
+    pub cam_fetch_ms: f32,
+    pub cam_setup_ms: f32,
+    pub cam_encode_quad_ms: f32,
+    pub cam_command_buffer_ms: f32,
+    pub cam_encoder_ms: f32,
+    pub cam_encode_bind_ms: f32,
+    pub cam_encode_draw_ms: f32,
+    pub cam_end_encoding_ms: f32,
+    pub cam_present_ms: f32,
+    pub cam_commit_ms: f32,
+    pub cam_gpu_ms: f32,
+    pub cam_capture_total_ms: f32,
+    pub cam_capture_sample_setup_ms: f32,
+    pub cam_capture_lock_ms: f32,
+    pub cam_capture_texture_bridge_ms: f32,
+    pub cam_capture_publish_ms: f32,
+    pub cam_capture_publish_lock_ms: f32,
+    pub cam_capture_publish_texture_refs_ms: f32,
+    pub cam_capture_publish_pixel_buffer_ms: f32,
+    pub cam_capture_frame_delivery_ms: f32,
+    pub cam_sample_delivery_pool_bytes: u64,
+    pub cam_sample_delivery_pool_surfaces: u32,
+    pub cam_active_sample_surface_bytes: u64,
+    pub cam_active_sample_surface_surfaces: u32,
+    pub cam_active_sample_buffers: u32,
+    pub cam_peak_active_sample_surface_bytes: u64,
+    pub cam_peak_active_sample_surface_surfaces: u32,
+    pub cam_peak_active_sample_buffers: u32,
+    pub cam_sample_delivery_total_samples: u32,
+    pub cam_sample_delivery_reused_frames: u32,
+    pub cam_sample_delivery_reused_surfaces: u32,
+    pub cam_sample_delivery_max_reuse_gap_frames: u32,
+    pub cam_retained_sample_surface_bytes: u64,
+    pub cam_retained_sample_surface_surfaces: u32,
+    pub cam_retained_published_slot_surface_bytes: u64,
+    pub cam_retained_published_slot_surfaces: u32,
+    pub cam_retained_latest_pixel_buffer_surface_bytes: u64,
+    pub cam_retained_latest_pixel_buffer_surface_surfaces: u32,
+    pub cam_latest_published_generation: u64,
+    pub cam_latest_published_timestamp_ns: u64,
+    pub renderer_memory_total_bytes: u64,
+    pub renderer_memory_draw_targets_bytes: u64,
+    pub renderer_memory_draw_target_main_bytes: u64,
+    pub renderer_memory_draw_target_msaa_bytes: u64,
+    pub renderer_memory_effect_targets_bytes: u64,
+    pub renderer_memory_effect_prepass_bytes: u64,
+    pub renderer_memory_effect_blur_chain_bytes: u64,
+    pub renderer_memory_live_camera_bytes: u64,
+    pub renderer_memory_camera_cache_bytes: u64,
+    pub renderer_memory_camera_blur_cache_bytes: u64,
+    pub renderer_memory_camera_transition_cache_bytes: u64,
+    pub renderer_memory_benchmark_camera_bytes: u64,
+    pub renderer_memory_layer_cache_bytes: u64,
+    pub renderer_memory_image_cache_bytes: u64,
+    pub renderer_memory_buffer_bytes: u64,
+    pub renderer_pending_command_buffers: u32,
+    pub renderer_pending_present_drawables: u32,
+    pub renderer_pending_present_textures: u32,
+    pub renderer_preview_submission_depth: u32,
+    pub renderer_preview_submission_skipped: u32,
+    pub renderer_preview_submission_frame_age_ms: f32,
 }
 
 #[no_mangle]
@@ -2101,7 +2810,11 @@ pub extern "C" fn oxide_host_app_stats(out: *mut OxideHostStats) -> ::libc::c_in
     }
     if let Some(state) = APP_STATE.get() {
         if let Ok(app) = state.lock() {
-            let snap = &app.last_stats;
+            let mut snap = app.last_stats;
+            if benchmark_camera_fast_path_active(&app) && app.camera_running {
+                apply_camera_capture_perf(&mut snap);
+                apply_camera_contract_snapshot(&mut snap);
+            }
             unsafe {
                 *out = OxideHostStats {
                     fps: snap.fps,
@@ -2125,12 +2838,135 @@ pub extern "C" fn oxide_host_app_stats(out: *mut OxideHostStats) -> ::libc::c_in
                     cam_color_space: snap.cam_color_space,
                     cam_running: snap.cam_running,
                     cam_fps: snap.cam_fps,
+                    cam_poll_submissions_ms: snap.cam_poll_submissions_ms,
+                    cam_fetch_ms: snap.cam_fetch_ms,
+                    cam_setup_ms: snap.cam_setup_ms,
+                    cam_encode_quad_ms: snap.cam_encode_quad_ms,
+                    cam_command_buffer_ms: snap.cam_command_buffer_ms,
+                    cam_encoder_ms: snap.cam_encoder_ms,
+                    cam_encode_bind_ms: snap.cam_encode_bind_ms,
+                    cam_encode_draw_ms: snap.cam_encode_draw_ms,
+                    cam_end_encoding_ms: snap.cam_end_encoding_ms,
+                    cam_present_ms: snap.cam_present_ms,
+                    cam_commit_ms: snap.cam_commit_ms,
+                    cam_gpu_ms: snap.cam_gpu_ms,
+                    cam_capture_total_ms: snap.cam_capture_total_ms,
+                    cam_capture_sample_setup_ms: snap.cam_capture_sample_setup_ms,
+                    cam_capture_lock_ms: snap.cam_capture_lock_ms,
+                    cam_capture_texture_bridge_ms: snap.cam_capture_texture_bridge_ms,
+                    cam_capture_publish_ms: snap.cam_capture_publish_ms,
+                    cam_capture_publish_lock_ms: snap.cam_capture_publish_lock_ms,
+                    cam_capture_publish_texture_refs_ms: snap.cam_capture_publish_texture_refs_ms,
+                    cam_capture_publish_pixel_buffer_ms: snap.cam_capture_publish_pixel_buffer_ms,
+                    cam_capture_frame_delivery_ms: snap.cam_capture_frame_delivery_ms,
+                    cam_sample_delivery_pool_bytes: snap.cam_sample_delivery_pool_bytes,
+                    cam_sample_delivery_pool_surfaces: snap.cam_sample_delivery_pool_surfaces,
+                    cam_active_sample_surface_bytes: snap.cam_active_sample_surface_bytes,
+                    cam_active_sample_surface_surfaces: snap.cam_active_sample_surface_surfaces,
+                    cam_active_sample_buffers: snap.cam_active_sample_buffers,
+                    cam_peak_active_sample_surface_bytes: snap.cam_peak_active_sample_surface_bytes,
+                    cam_peak_active_sample_surface_surfaces: snap
+                        .cam_peak_active_sample_surface_surfaces,
+                    cam_peak_active_sample_buffers: snap.cam_peak_active_sample_buffers,
+                    cam_sample_delivery_total_samples: snap.cam_sample_delivery_total_samples,
+                    cam_sample_delivery_reused_frames: snap.cam_sample_delivery_reused_frames,
+                    cam_sample_delivery_reused_surfaces: snap.cam_sample_delivery_reused_surfaces,
+                    cam_sample_delivery_max_reuse_gap_frames: snap
+                        .cam_sample_delivery_max_reuse_gap_frames,
+                    cam_retained_sample_surface_bytes: snap.cam_retained_sample_surface_bytes,
+                    cam_retained_sample_surface_surfaces: snap.cam_retained_sample_surface_surfaces,
+                    cam_retained_published_slot_surface_bytes: snap
+                        .cam_retained_published_slot_surface_bytes,
+                    cam_retained_published_slot_surfaces: snap.cam_retained_published_slot_surfaces,
+                    cam_retained_latest_pixel_buffer_surface_bytes: snap
+                        .cam_retained_latest_pixel_buffer_surface_bytes,
+                    cam_retained_latest_pixel_buffer_surface_surfaces: snap
+                        .cam_retained_latest_pixel_buffer_surface_surfaces,
+                    cam_latest_published_generation: snap.cam_latest_published_generation,
+                    cam_latest_published_timestamp_ns: snap.cam_latest_published_timestamp_ns,
+                    renderer_memory_total_bytes: snap.renderer_memory_total_bytes,
+                    renderer_memory_draw_targets_bytes: snap.renderer_memory_draw_targets_bytes,
+                    renderer_memory_draw_target_main_bytes: snap
+                        .renderer_memory_draw_target_main_bytes,
+                    renderer_memory_draw_target_msaa_bytes: snap
+                        .renderer_memory_draw_target_msaa_bytes,
+                    renderer_memory_effect_targets_bytes: snap.renderer_memory_effect_targets_bytes,
+                    renderer_memory_effect_prepass_bytes: snap.renderer_memory_effect_prepass_bytes,
+                    renderer_memory_effect_blur_chain_bytes: snap
+                        .renderer_memory_effect_blur_chain_bytes,
+                    renderer_memory_live_camera_bytes: snap.renderer_memory_live_camera_bytes,
+                    renderer_memory_camera_cache_bytes: snap.renderer_memory_camera_cache_bytes,
+                    renderer_memory_camera_blur_cache_bytes: snap
+                        .renderer_memory_camera_blur_cache_bytes,
+                    renderer_memory_camera_transition_cache_bytes: snap
+                        .renderer_memory_camera_transition_cache_bytes,
+                    renderer_memory_benchmark_camera_bytes: snap
+                        .renderer_memory_benchmark_camera_bytes,
+                    renderer_memory_layer_cache_bytes: snap.renderer_memory_layer_cache_bytes,
+                    renderer_memory_image_cache_bytes: snap.renderer_memory_image_cache_bytes,
+                    renderer_memory_buffer_bytes: snap.renderer_memory_buffer_bytes,
+                    renderer_pending_command_buffers: snap.renderer_pending_command_buffers,
+                    renderer_pending_present_drawables: snap.renderer_pending_present_drawables,
+                    renderer_pending_present_textures: snap.renderer_pending_present_textures,
+                    renderer_preview_submission_depth: snap.renderer_preview_submission_depth,
+                    renderer_preview_submission_skipped: snap.renderer_preview_submission_skipped,
+                    renderer_preview_submission_frame_age_ms: snap
+                        .renderer_preview_submission_frame_age_ms,
                 };
             }
             return 0;
         }
     }
     -1
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_run_perf_suite(smoke: u8) -> ::libc::c_int {
+    match perf_runner::collect_suite_json(smoke != 0) {
+        Ok(json) => {
+            if let Ok(mut slot) = perf_report_json().lock() {
+                *slot = Some(json.into_bytes());
+                0
+            } else {
+                ios_log("oxide.host-ios: perf report cache mutex poisoned");
+                -2
+            }
+        }
+        Err(err) => {
+            ios_log(&format!("oxide.host-ios: collect perf suite failed: {err}"));
+            -1
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_perf_report_json_len() -> usize {
+    perf_report_json()
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|bytes| bytes.len().saturating_add(1)))
+        .unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_copy_perf_report_json(out_ptr: *mut u8, out_len: usize) -> usize {
+    let Ok(slot) = perf_report_json().lock() else { return 0 };
+    let Some(bytes) = slot.as_ref() else { return 0 };
+    let needed = bytes.len().saturating_add(1);
+    if !out_ptr.is_null() && out_len >= needed {
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, bytes.len());
+            *out_ptr.add(bytes.len()) = 0;
+        }
+    }
+    needed
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_clear_perf_report_json() {
+    if let Ok(mut slot) = perf_report_json().lock() {
+        *slot = None;
+    }
 }
 
 #[no_mangle]
@@ -2160,6 +2996,10 @@ pub extern "C" fn oxide_host_set_scene(index: u32) -> ::libc::c_int {
         return -1;
     }
     with_app_mut(|app| {
+        if app.benchmark_mode {
+            app.benchmark_scene_index = index;
+            return 0;
+        }
         if let Some(router) = app.router.as_mut() {
             router.set_scene(index as usize);
             0
@@ -2175,7 +3015,13 @@ pub extern "C" fn oxide_host_current_scene() -> u32 {
     APP_STATE
         .get()
         .and_then(|state| state.lock().ok())
-        .and_then(|app| app.router.as_ref().map(|router| scene_index(router.current)))
+        .map(|app| {
+            if app.benchmark_mode {
+                app.benchmark_scene_index
+            } else {
+                app.router.as_ref().map(|router| scene_index(router.current)).unwrap_or(0)
+            }
+        })
         .unwrap_or(0)
 }
 
@@ -2262,25 +3108,7 @@ fn decode_png_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ()> {
 }
 
 fn scene_index(kind: test_scenes::SceneKind) -> u32 {
-    match kind {
-        test_scenes::SceneKind::Controls => 0,
-        test_scenes::SceneKind::TextLayout => 1,
-        test_scenes::SceneKind::ZoomImage => 2,
-        test_scenes::SceneKind::AnimTimeline => 3,
-        test_scenes::SceneKind::CollectionStress => 4,
-        test_scenes::SceneKind::DamageLab => 5,
-        test_scenes::SceneKind::NineSlice => 6,
-        test_scenes::SceneKind::SdfText => 7,
-        test_scenes::SceneKind::Snapshot => 8,
-        test_scenes::SceneKind::Camera => 9,
-        test_scenes::SceneKind::InputLab => 10,
-        test_scenes::SceneKind::ElementsExtended => 11,
-        test_scenes::SceneKind::AnimationConfig => 12,
-        test_scenes::SceneKind::Orchestration => 13,
-        test_scenes::SceneKind::Permissions => 14,
-        test_scenes::SceneKind::Integration => 15,
-        test_scenes::SceneKind::StressTest => 16,
-    }
+    kind as u32
 }
 
 fn gen_checker_rgba(w: u32, h: u32) -> (u32, u32, Vec<u8>) {
@@ -2346,7 +3174,15 @@ fn ios_env_flag(name: &str) -> bool {
 #[inline(always)]
 #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
 fn ios_log_enabled() -> bool {
-    ios_env_flag("OXIDE_RUST_LOG")
+    #[cfg(target_os = "ios")]
+    {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ENABLED.get_or_init(|| ios_env_flag("OXIDE_RUST_LOG"))
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        false
+    }
 }
 
 #[inline(always)]

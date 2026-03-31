@@ -637,15 +637,7 @@ mod tests {
 
         fn draw_backdrop(&mut self, _rect: RectF, _sigma: f32, _tint: Color, _alpha: f32) {}
 
-        fn draw_spinner(
-            &mut self,
-            _center: [f32; 2],
-            _radius: f32,
-            _thickness: f32,
-            _phase: f32,
-            _alpha: f32,
-        ) {
-        }
+        fn draw_spinner(&mut self, _center: [f32; 2], _atom: f32, _alpha: f32) {}
 
         fn draw_glyph_run(&mut self, _run: &GlyphRun) {}
     }

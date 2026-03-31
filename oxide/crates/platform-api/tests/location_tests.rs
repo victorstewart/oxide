@@ -13,6 +13,11 @@ fn location_options_default_balanced() {
 }
 
 #[test]
+fn location_accuracy_supports_low_power_mode() {
+    assert_eq!(LocationAccuracy::LowPower, LocationAccuracy::LowPower);
+}
+
+#[test]
 fn location_event_update_clones_reading() {
     let reading = LocationReading {
         latitude_deg: 1.0,

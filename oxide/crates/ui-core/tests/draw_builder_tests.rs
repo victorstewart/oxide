@@ -12,7 +12,7 @@ fn builder_records_advanced_draws() {
     let bg_rect = gfx::RectF::new(0.0, 0.0, 100.0, 80.0);
     builder.camera_bg(bg_rect, gfx::Color::rgba(0.1, 0.2, 0.3, 0.9), 0.8, true, false, 12.0);
 
-    builder.spinner([16.0, 24.0], 18.0, 2.0, 0.5, 1.0);
+    builder.spinner([16.0, 24.0], 36.0, 1.0);
 
     let list = builder.drawlist();
     assert_eq!(list.items.len(), 3);
@@ -33,9 +33,9 @@ fn builder_records_advanced_draws() {
         other => panic!("expected camera bg, found {other:?}"),
     }
     match &list.items[2] {
-        gfx::DrawCmd::Spinner { center, radius, thickness, phase, alpha } => {
+        gfx::DrawCmd::Spinner { center, atom, alpha } => {
             assert_eq!(*center, [16.0, 24.0]);
-            assert_eq!((*radius, *thickness, *phase, *alpha), (18.0, 2.0, 0.5, 1.0));
+            assert_eq!((*atom, *alpha), (36.0, 1.0));
         }
         other => panic!("expected spinner, found {other:?}"),
     }
@@ -56,4 +56,26 @@ fn builder_manages_clip_stack() {
     assert!(matches!(list.items[1], gfx::DrawCmd::ClipPush { rect } if rect == clip_b));
     assert!(matches!(list.items[2], gfx::DrawCmd::ClipPop));
     assert!(matches!(list.items[3], gfx::DrawCmd::ClipPop));
+}
+
+#[test]
+fn builder_clear_drops_geometry_buffers() {
+    let mut builder = DrawListBuilder::new();
+    {
+        let list = builder.drawlist_mut();
+        list.vertices.push(gfx::Vertex { x: 1.0, y: 2.0, u: 0.0, v: 0.0, rgba: 0xFFFF_FFFF });
+        list.indices.extend_from_slice(&[0, 1, 2]);
+    }
+    builder.rrect(
+        gfx::RectF::new(0.0, 0.0, 10.0, 10.0),
+        [2.0, 2.0, 2.0, 2.0],
+        gfx::Color::rgba(0.3, 0.4, 0.5, 1.0),
+    );
+
+    builder.clear();
+
+    let list = builder.drawlist();
+    assert!(list.items.is_empty());
+    assert!(list.vertices.is_empty());
+    assert!(list.indices.is_empty());
 }

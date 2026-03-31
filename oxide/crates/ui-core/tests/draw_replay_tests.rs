@@ -13,7 +13,7 @@ struct RecordingEncoder {
     nine_slices: Vec<(ImageHandle, RectF, Insets, f32)>,
     backdrops: Vec<(RectF, f32, Color, f32)>,
     camera_bgs: Vec<(RectF, Color, f32, bool, bool, f32)>,
-    spinners: Vec<([f32; 2], f32, f32, f32, f32)>,
+    spinners: Vec<([f32; 2], f32, f32)>,
     glyph_runs: usize,
 }
 
@@ -56,15 +56,8 @@ impl gfx::RenderEncoder for RecordingEncoder {
         self.camera_bgs.push((rect, tint, alpha, grayscale, blur, sigma));
     }
 
-    fn draw_spinner(
-        &mut self,
-        center: [f32; 2],
-        radius: f32,
-        thickness: f32,
-        phase: f32,
-        alpha: f32,
-    ) {
-        self.spinners.push((center, radius, thickness, phase, alpha));
+    fn draw_spinner(&mut self, center: [f32; 2], atom: f32, alpha: f32) {
+        self.spinners.push((center, atom, alpha));
     }
 
     fn draw_glyph_run(&mut self, _run: &GlyphRun) {
@@ -109,13 +102,7 @@ fn build_test_drawlist() -> DrawList {
         tint: Color::rgba(0.1, 0.2, 0.3, 0.4),
         alpha: 0.8,
     });
-    list.items.push(DrawCmd::Spinner {
-        center: [40.0, 41.0],
-        radius: 7.0,
-        thickness: 2.0,
-        phase: 0.4,
-        alpha: 0.6,
-    });
+    list.items.push(DrawCmd::Spinner { center: [40.0, 41.0], atom: 18.0, alpha: 0.6 });
     list.items.push(DrawCmd::CameraBg {
         rect: RectF::new(50.0, 51.0, 52.0, 53.0),
         tint: Color::rgba(0.6, 0.5, 0.4, 0.3),
@@ -190,9 +177,11 @@ fn replay_translates_primitives_and_restores_fallback_clip() {
     assert!(approx_eq(sigma, 4.0));
 
     assert_eq!(encoder.spinners.len(), 1);
-    let (center, _, _, _, _) = encoder.spinners[0];
+    let (center, atom, alpha) = encoder.spinners[0];
     assert!(approx_eq(center[0], 45.0));
     assert!(approx_eq(center[1], 38.0));
+    assert!(approx_eq(atom, 18.0));
+    assert!(approx_eq(alpha, 0.6));
 
     assert_eq!(encoder.glyph_runs, 1);
 }
