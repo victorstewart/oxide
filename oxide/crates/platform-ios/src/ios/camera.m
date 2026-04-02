@@ -212,6 +212,14 @@ struct OxideCamPerfSnapshot {
   uint32_t retained_latest_pixel_buffer_surface_surfaces;
   uint64_t latest_published_generation;
   uint64_t latest_published_timestamp_ns;
+  uint64_t latest_presented_generation;
+  uint32_t generation_advances;
+  uint32_t samples_received;
+  uint32_t samples_dropped_prebridge;
+  uint32_t samples_bridged;
+  uint32_t samples_published;
+  uint32_t samples_presented;
+  uint32_t samples_superseded_before_present;
 };
 
 struct OxideCamContractSnapshot {
@@ -293,13 +301,62 @@ typedef void (*OxideCameraFrameCallback)(const struct OxideCamFrame *);
 typedef void (*OxideCameraAudioCallback)(const struct OxideCamAudio *);
 typedef void (*OxideCameraRecordCallback)(const struct OxideCamRecordEvent *);
 typedef void (*OxideCameraPhotoCallback)(const struct OxideCamPhotoEvent *);
+typedef void (*OxideCameraPreviewPublishCallback)(uint64_t generation,
+                                                  uint64_t timestamp_ns,
+                                                  void *ctx);
 
 static OxideCameraFrameCallback g_oxide_camera_frame_callback = NULL;
 static OxideCameraAudioCallback g_oxide_camera_audio_callback = NULL;
 static OxideCameraRecordCallback g_oxide_camera_record_callback = NULL;
 static OxideCameraPhotoCallback g_oxide_camera_photo_callback = NULL;
+static OxideCameraPreviewPublishCallback
+    g_oxide_camera_preview_publish_callback = NULL;
+static void *g_oxide_camera_preview_publish_context = NULL;
 
 enum { kOxideCameraPublishedSlotCount = 4 };
+
+static uint32_t NametagPerfPreviewPublishedSlotCountCurrent(void) {
+  static uint32_t count = kOxideCameraPublishedSlotCount;
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    NSString *env = [NSProcessInfo.processInfo.environment
+        objectForKey:@"OXIDE_PERF_CAMERA_PREVIEW_PUBLISHED_SLOT_COUNT"];
+    NSInteger parsed = [[env ?: @""
+        stringByTrimmingCharactersInSet:[NSCharacterSet
+                                            whitespaceAndNewlineCharacterSet]]
+        integerValue];
+    if (parsed >= 1 && parsed <= kOxideCameraPublishedSlotCount) {
+      count = (uint32_t)parsed;
+    }
+  });
+  return count;
+}
+
+static BOOL NametagPerfPreviewPrebridgeDropEnabled(void) {
+  static BOOL enabled = NO;
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    NSString *env = [NSProcessInfo.processInfo.environment
+        objectForKey:@"OXIDE_PERF_CAMERA_PREBRIDGE_DROP"];
+    NSString *normalized = [[env ?: @""
+        stringByTrimmingCharactersInSet:[NSCharacterSet
+                                            whitespaceAndNewlineCharacterSet]]
+        lowercaseString];
+    enabled = [normalized isEqualToString:@"1"] ||
+              [normalized isEqualToString:@"true"] ||
+              [normalized isEqualToString:@"yes"];
+  });
+  return enabled;
+}
+
+static inline void OxideDispatchPreviewPublishCallback(uint64_t generation,
+                                                       uint64_t timestamp_ns) {
+  OxideCameraPreviewPublishCallback callback =
+      g_oxide_camera_preview_publish_callback;
+  if (callback != NULL) {
+    callback(generation, timestamp_ns, g_oxide_camera_preview_publish_context);
+  }
+}
 
 static inline uint64_t OxidePackPublishedFrameState(uint32_t slot,
                                                     uint64_t generation) {
@@ -1372,6 +1429,14 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
 @property(nonatomic, assign) uint32_t peakActiveSampleSurfaceSurfaces;
 @property(nonatomic, assign) uint32_t peakActiveSampleBufferCount;
 @property(nonatomic, assign) BOOL legacyLatestTextureMirrorCleared;
+@property(nonatomic, assign) uint64_t latestPresentedGeneration;
+@property(nonatomic, assign) uint32_t observedGenerationAdvances;
+@property(nonatomic, assign) uint32_t observedSamplesReceived;
+@property(nonatomic, assign) uint32_t observedSamplesDroppedPrebridge;
+@property(nonatomic, assign) uint32_t observedSamplesBridged;
+@property(nonatomic, assign) uint32_t observedSamplesPublished;
+@property(nonatomic, assign) uint32_t observedSamplesPresented;
+@property(nonatomic, assign) uint32_t observedSamplesSupersededBeforePresent;
 @property(atomic, strong) NametagCameraRecorder *recorder;
 
 - (BOOL)applyConfiguration; // New method for dynamic configuration
@@ -1415,6 +1480,10 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
                                              bytes:(uint64_t)sampleSurfaceBytes;
 - (uint64_t)latestPublishedGeneration;
 - (uint64_t)latestPublishedTimestampNs;
+- (BOOL)shouldDropPreviewOnlySampleBeforeBridge;
+- (void)notePublishedFrameGeneration:(uint64_t)generation
+                           timestamp:(uint64_t)timestamp;
+- (void)notePresentedGeneration:(uint64_t)generation;
 @end
 
 @implementation NametagCameraSampleLifetimeToken
@@ -1506,6 +1575,14 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
   _observedSampleSurfaceFrameCount = 0;
   _observedSampleSurfaceReusedFrames = 0;
   _observedSampleSurfaceMaxReuseGapFrames = 0;
+  _latestPresentedGeneration = 0;
+  _observedGenerationAdvances = 0;
+  _observedSamplesReceived = 0;
+  _observedSamplesDroppedPrebridge = 0;
+  _observedSamplesBridged = 0;
+  _observedSamplesPublished = 0;
+  _observedSamplesPresented = 0;
+  _observedSamplesSupersededBeforePresent = 0;
   _activeSampleSurfaceRefCounts = [[NSMutableDictionary alloc] init];
   _activeSampleSurfaceBytes = 0;
   _activeSampleBufferCount = 0;
@@ -1541,11 +1618,19 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
 }
 
 - (int)reservePublishSlot {
+  uint32_t slotCount = kOxideCameraPublishedSlotCount;
+  if (![self requiresLegacyLatestTextureMirror] &&
+      ![self retainsLatestPreviewPixelBuffer]) {
+    slotCount = NametagPerfPreviewPublishedSlotCountCurrent();
+  }
+  if (slotCount == 0 || slotCount > kOxideCameraPublishedSlotCount) {
+    slotCount = kOxideCameraPublishedSlotCount;
+  }
   uint32_t start = self.publishCursor;
-  for (uint32_t offset = 0; offset < kOxideCameraPublishedSlotCount; offset++) {
-    uint32_t slot = (start + offset) % kOxideCameraPublishedSlotCount;
+  for (uint32_t offset = 0; offset < slotCount; offset++) {
+    uint32_t slot = (start + offset) % slotCount;
     if (atomic_load_explicit(&_slotPins[slot], memory_order_acquire) == 0) {
-      self.publishCursor = (slot + 1) % kOxideCameraPublishedSlotCount;
+      self.publishCursor = (slot + 1) % slotCount;
       return (int)slot;
     }
   }
@@ -1709,6 +1794,49 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
   self.latestBGRATexture = nil;
   os_unfair_lock_unlock(&_textureLock);
   self.legacyLatestTextureMirrorCleared = YES;
+}
+
+- (BOOL)shouldDropPreviewOnlySampleBeforeBridge {
+  if (!NametagPerfPreviewPrebridgeDropEnabled() ||
+      [self requiresLegacyLatestTextureMirror] ||
+      [self retainsLatestPreviewPixelBuffer] ||
+      [self requiresCpuFrameDelivery]) {
+    return NO;
+  }
+  os_unfair_lock_lock(&_textureLock);
+  uint64_t latestPublishedGeneration = self.latestGeneration;
+  uint64_t latestPresentedGeneration = self.latestPresentedGeneration;
+  os_unfair_lock_unlock(&_textureLock);
+  return latestPublishedGeneration > latestPresentedGeneration;
+}
+
+- (void)notePublishedFrameGeneration:(uint64_t)generation
+                           timestamp:(uint64_t)timestamp {
+  BOOL supersededBeforePresent = NO;
+  os_unfair_lock_lock(&_textureLock);
+  supersededBeforePresent =
+      self.latestGeneration > self.latestPresentedGeneration;
+  self.latestGeneration = generation;
+  self.observedGenerationAdvances = self.observedGenerationAdvances + 1;
+  self.observedSamplesPublished = self.observedSamplesPublished + 1;
+  if (supersededBeforePresent) {
+    self.observedSamplesSupersededBeforePresent =
+        self.observedSamplesSupersededBeforePresent + 1;
+  }
+  os_unfair_lock_unlock(&_textureLock);
+  OxideDispatchPreviewPublishCallback(generation, timestamp);
+}
+
+- (void)notePresentedGeneration:(uint64_t)generation {
+  if (generation == 0) {
+    return;
+  }
+  os_unfair_lock_lock(&_textureLock);
+  if (generation > self.latestPresentedGeneration) {
+    self.latestPresentedGeneration = generation;
+    self.observedSamplesPresented = self.observedSamplesPresented + 1;
+  }
+  os_unfair_lock_unlock(&_textureLock);
 }
 
 - (BOOL)applyConfiguration {
@@ -2009,6 +2137,7 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
         self.latestBGRATexture = nil;
         self.latestTimestampNs = 0;
         self.latestGeneration = 0;
+        self.latestPresentedGeneration = 0;
         self.legacyLatestTextureMirrorCleared = NO;
         self.publishCursor = 0;
         atomic_store_explicit(&_publishedFrameState, 0, memory_order_release);
@@ -2163,6 +2292,8 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
   NSCAssert(![self requiresLegacyLatestTextureMirror],
             @"preview-only publication must not touch the legacy "
             @"latest-texture mirror");
+  NSCAssert(![self retainsLatestPreviewPixelBuffer],
+            @"preview-only publication must not retain a latest pixel buffer");
   [self clearLegacyLatestTextureMirror];
   os_unfair_lock_lock(&_textureLock);
   self.latestBitDepth = bitDepth;
@@ -2208,13 +2339,14 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
   slot.matrix = matrix;
   slot.videoRange = videoRange;
   slot.colorSpace = self.latestColorSpace;
-  self.latestGeneration = self.latestGeneration + 1;
-  slot.generation = self.latestGeneration;
+  uint64_t nextGeneration = self.latestGeneration + 1;
+  slot.generation = nextGeneration;
   slot.timestampNs = timestamp;
   atomic_store_explicit(
       &_publishedFrameState,
       OxidePackPublishedFrameState((uint32_t)slotIndex, slot.generation),
       memory_order_release);
+  [self notePublishedFrameGeneration:nextGeneration timestamp:timestamp];
 }
 
 - (void)updateLatestTexturesWithY:(CVMetalTextureRef)yRef
@@ -2312,13 +2444,14 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
   slot.matrix = matrix;
   slot.videoRange = videoRange;
   slot.colorSpace = self.latestColorSpace;
-  self.latestGeneration = self.latestGeneration + 1;
-  slot.generation = self.latestGeneration;
+  uint64_t nextGeneration = self.latestGeneration + 1;
+  slot.generation = nextGeneration;
   slot.timestampNs = timestamp;
   atomic_store_explicit(
       &_publishedFrameState,
       OxidePackPublishedFrameState((uint32_t)slotIndex, slot.generation),
       memory_order_release);
+  [self notePublishedFrameGeneration:nextGeneration timestamp:timestamp];
 }
 
 - (void)updateLatestTextureWithBGRA:(CVMetalTextureRef)bgraRef
@@ -2623,6 +2756,15 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
   outSnapshot->latest_published_generation = [self latestPublishedGeneration];
   outSnapshot->latest_published_timestamp_ns =
       [self latestPublishedTimestampNs];
+  outSnapshot->latest_presented_generation = self.latestPresentedGeneration;
+  outSnapshot->generation_advances = self.observedGenerationAdvances;
+  outSnapshot->samples_received = self.observedSamplesReceived;
+  outSnapshot->samples_dropped_prebridge = self.observedSamplesDroppedPrebridge;
+  outSnapshot->samples_bridged = self.observedSamplesBridged;
+  outSnapshot->samples_published = self.observedSamplesPublished;
+  outSnapshot->samples_presented = self.observedSamplesPresented;
+  outSnapshot->samples_superseded_before_present =
+      self.observedSamplesSupersededBeforePresent;
   os_unfair_lock_unlock(&_textureLock);
 }
 
@@ -2635,6 +2777,13 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
   self.observedSampleSurfaceFrameCount = 0;
   self.observedSampleSurfaceReusedFrames = 0;
   self.observedSampleSurfaceMaxReuseGapFrames = 0;
+  self.observedGenerationAdvances = 0;
+  self.observedSamplesReceived = 0;
+  self.observedSamplesDroppedPrebridge = 0;
+  self.observedSamplesBridged = 0;
+  self.observedSamplesPublished = 0;
+  self.observedSamplesPresented = 0;
+  self.observedSamplesSupersededBeforePresent = 0;
   self.peakActiveSampleSurfaceBytes = self.activeSampleSurfaceBytes;
   self.peakActiveSampleSurfaceSurfaces =
       (uint32_t)MIN(self.activeSampleSurfaceRefCounts.count, UINT32_MAX);
@@ -2905,6 +3054,9 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
         NAMETAG_PERF_END(captureSignpost, "camera.capture.total");
         return;
       }
+      os_unfair_lock_lock(&_textureLock);
+      self.observedSamplesReceived = self.observedSamplesReceived + 1;
+      os_unfair_lock_unlock(&_textureLock);
       IOSurfaceRef sampleSurface = NametagPerfParkedModeCurrent()
                                        ? CVPixelBufferGetIOSurface(pixelBuffer)
                                        : NULL;
@@ -2914,12 +3066,6 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
       NSValue *sampleSurfaceKey = sampleSurface != NULL
                                       ? [NSValue valueWithPointer:sampleSurface]
                                       : nil;
-      if (NametagPerfParkedModeCurrent() && sampleSurfaceKey != nil &&
-          sampleSurfaceBytes > 0) {
-        [self trackActiveSampleBuffer:sampleBuffer
-                        sampleSurface:sampleSurfaceKey
-                   sampleSurfaceBytes:sampleSurfaceBytes];
-      }
       uint64_t sampleSetupTicks = NametagPerfNowTicks();
       NAMETAG_PERF_BEGIN(sampleSetupSignpost, "camera.capture.sample_setup");
       OSType pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
@@ -2930,6 +3076,7 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
       BOOL needsCpuPlaneAccess = requiresCpuFrameDelivery;
       float captureLockMs = 0.0f;
       float frameDeliveryMs = 0.0f;
+      BOOL droppedPrebridge = NO;
       os_signpost_id_t lockSignpost = OS_SIGNPOST_ID_NULL;
       if (needsCpuPlaneAccess) {
         uint64_t captureLockTicks = NametagPerfNowTicks();
@@ -2942,9 +3089,17 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
         CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
         captureLockMs = (float)NametagPerfElapsedMs(captureLockTicks);
       }
+      droppedPrebridge = [self shouldDropPreviewOnlySampleBeforeBridge];
+      if (!droppedPrebridge && NametagPerfParkedModeCurrent() &&
+          sampleSurfaceKey != nil && sampleSurfaceBytes > 0) {
+        [self trackActiveSampleBuffer:sampleBuffer
+                        sampleSurface:sampleSurfaceKey
+                   sampleSurfaceBytes:sampleSurfaceBytes];
+      }
       float textureBridgeMs = 0.0f;
       float publishMs = 0.0f;
-      if (pixelFormat == kCVPixelFormatType_32BGRA) {
+      if (droppedPrebridge) {
+      } else if (pixelFormat == kCVPixelFormatType_32BGRA) {
         CVMetalTextureRef bgraRef = NULL;
         int width = 0;
         int height = 0;
@@ -2958,6 +3113,9 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
         NAMETAG_PERF_END(bridgeSignpost, "camera.capture.texture_bridge");
         textureBridgeMs = (float)NametagPerfElapsedMs(bridgeTicks);
         if (copiedTexture) {
+          os_unfair_lock_lock(&_textureLock);
+          self.observedSamplesBridged = self.observedSamplesBridged + 1;
+          os_unfair_lock_unlock(&_textureLock);
           uint64_t publishTicks = NametagPerfNowTicks();
           NAMETAG_PERF_BEGIN(publishSignpost, "camera.capture.publish");
           [self updateLatestTextureWithBGRA:bgraRef
@@ -2992,6 +3150,9 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
         NAMETAG_PERF_END(bridgeSignpost, "camera.capture.texture_bridge");
         textureBridgeMs = (float)NametagPerfElapsedMs(bridgeTicks);
         if (copiedTexture) {
+          os_unfair_lock_lock(&_textureLock);
+          self.observedSamplesBridged = self.observedSamplesBridged + 1;
+          os_unfair_lock_unlock(&_textureLock);
           uint64_t publishTicks = NametagPerfNowTicks();
           NAMETAG_PERF_BEGIN(publishSignpost, "camera.capture.publish");
           if ([self requiresLegacyLatestTextureMirror]) {
@@ -3098,6 +3259,10 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
           self.observedSampleSurfaceLastSeenFrame[sampleSurfaceKey] =
               @(self.observedSampleSurfaceFrameCount);
         }
+      }
+      if (droppedPrebridge) {
+        self.observedSamplesDroppedPrebridge =
+            self.observedSamplesDroppedPrebridge + 1;
       }
       self.lastCaptureTotalMs = captureTotalMs;
       self.lastCaptureSampleSetupMs = sampleSetupMs;
@@ -4253,6 +4418,23 @@ void oxide_cam_release_acquired(uint32_t slot, uint64_t generation) {
     return;
   }
   [stream releaseAcquiredSlot:slot generation:generation];
+}
+
+void oxide_cam_set_preview_publish_callback(
+    OxideCameraPreviewPublishCallback callback, void *context) {
+  g_oxide_camera_preview_publish_callback = callback;
+  g_oxide_camera_preview_publish_context = context;
+}
+
+void oxide_cam_mark_presented_generation(uint64_t generation) {
+  NametagCameraStream *stream = g_default_stream;
+  if (stream == nil || !stream.isRunning) {
+    stream = RegisteredStreamForRendering();
+  }
+  if (stream == nil) {
+    return;
+  }
+  [stream notePresentedGeneration:generation];
 }
 
 int32_t oxide_cam_get_latest_bgra(void **bgra_tex, int32_t *w, int32_t *h) {

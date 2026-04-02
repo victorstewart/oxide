@@ -15,19 +15,24 @@ use xtask::{
     is_xctrace_trace_bundle, map_uikit_case, merge_background_modes, merge_usage_strings,
     merge_xcresult_metrics_json_fragments, normalize_ios_version_for_device_support,
     notification_or_console_marker_observed, parse_apple_development_team_from_security_output,
-    parse_available_ios_sim_destination, parse_oxide_camera_contract_summary,
-    parse_oxide_memory_summary, parse_oxide_stage_summary,
-    parse_provisioning_profile_team_identifier, parse_react_native_device_report_json,
-    parse_uikit_report_json, parse_xctrace_summary_window, parse_xctrace_tables,
-    parse_xctrace_toc_tables, preferred_xctrace_toc_tables, prepare_uikit_device_perf_xctestrun,
-    resolve_existing_uikit_power_trace, summarize_device_gpu_metrics_from_tables,
-    summarize_energy_table, summarize_time_profile_from_xml,
-    summarize_trace_signpost_metrics_from_tables, uikit_device_metrics_case_stdout_path,
+    parse_oxide_benchmark_metadata,
+    parse_available_ios_sim_destination, parse_oxide_app_host_debug_summary,
+    parse_oxide_camera_contract_summary, parse_oxide_memory_summary, parse_oxide_stage_summary,
+    parse_oxide_tick_ring, parse_provisioning_profile_team_identifier,
+    parse_react_native_device_report_json, parse_uikit_report_json, parse_xctrace_summary_window,
+    parse_xctrace_tables, parse_xctrace_toc_tables, preferred_xctrace_toc_tables,
+    prepare_uikit_device_perf_xctestrun, render_oxide_app_host_debug_summary_note,
+    render_oxide_tick_ring_note, resolve_existing_uikit_power_trace,
+    summarize_device_gpu_metrics_from_tables, summarize_energy_table,
+    summarize_time_profile_from_xml, summarize_trace_signpost_metrics_from_tables,
+    uikit_case_in_official_device_battery, uikit_case_requires_normalized_camera_contract,
+    uikit_device_metrics_case_stdout_path,
     uikit_device_perf_environment_for_test_name, uikit_device_trace_artifact_exists,
     uikit_device_trace_enabled, uikit_only_testing_identifier_for_test_name,
     uikit_perf_environment_json_for_test_name, uikit_power_trace_candidate_paths,
     validate_normalized_camera_contract, Entitlements, LocationMode, TraceWindow,
-    UIKitContractCoverageReport, UIKitMetricSummary, UIKitPerfCase, UIKitPerfReport, XctraceCell,
+    UIKitCanonicalSignpostSource, UIKitContractCoverageReport, UIKitMetricFallbackMode,
+    UIKitMetricSource, UIKitMetricSummary, UIKitPerfCase, UIKitPerfReport, XctraceCell,
     XctraceTocTable,
 };
 
@@ -166,10 +171,16 @@ fn parse_uikit_report_json_maps_cases_and_metrics() {
     assert_eq!(report.cases[0].scenario, "primitive-view");
     assert_eq!(report.cases[0].style, "idiomatic");
     assert_eq!(report.cases[0].refresh_mode, "simulator-default");
+    assert_eq!(report.cases[0].measure_iterations, 3);
+    assert_eq!(report.cases[0].benchmark_iterations, 0);
+    assert_eq!(report.cases[0].canonical_signpost_source, UIKitCanonicalSignpostSource::XCTest);
     assert_eq!(report.contract.styles[0].status, "implemented");
     assert_eq!(report.cases[0].metrics["clock_s"].median, 0.002);
-    assert_eq!(report.cases[0].metrics["memory_peak_kb"].p95, 21.0);
+    assert!((report.cases[0].metrics["memory_peak_kb"].p95 - 20.9).abs() < 1e-9);
     assert_eq!(report.cases[0].metrics["workload_s"].median, 0.008);
+    assert_eq!(report.cases[0].metrics["clock_s"].source, UIKitMetricSource::XCTest);
+    assert_eq!(report.cases[0].metrics["workload_s"].source, UIKitMetricSource::XCTestSignpost);
+    assert!(report.cases[0].metrics["workload_s"].fallback_modes.is_empty());
 }
 
 #[test]
@@ -371,6 +382,48 @@ fn parse_oxide_memory_summary_maps_memory_metrics() {
 }
 
 #[test]
+fn parse_oxide_tick_ring_summarizes_submission_depth_and_frame_age() {
+    let stdout = concat!(
+        "OXIDE_READY testCameraNV12LegacyLivePreview\n",
+        "OXIDE_TICK_RING {\"ticks\":[",
+        "{\"serial\":1,\"drawableWidth\":1170,\"drawableHeight\":2532,\"drawableScale\":3.0,\"planReason\":384,\"planMs\":0.01,\"drawableAcquireMs\":0.02,\"frameCallMs\":0.30,\"tickTotalMs\":0.33,\"skipped\":false,\"drawableAcquired\":true,\"frameSubmitted\":true,\"previewSubmissionDepth\":1,\"previewSubmissionSkipped\":false,\"previewFrameAgeMs\":1.25},",
+        "{\"serial\":2,\"drawableWidth\":1170,\"drawableHeight\":2532,\"drawableScale\":3.0,\"planReason\":0,\"planMs\":0.01,\"drawableAcquireMs\":0.0,\"frameCallMs\":0.0,\"tickTotalMs\":0.01,\"skipped\":true,\"drawableAcquired\":false,\"frameSubmitted\":false,\"previewSubmissionDepth\":0,\"previewSubmissionSkipped\":false,\"previewFrameAgeMs\":0.0},",
+        "{\"serial\":3,\"drawableWidth\":1170,\"drawableHeight\":2532,\"drawableScale\":3.0,\"planReason\":512,\"planMs\":0.02,\"drawableAcquireMs\":0.03,\"frameCallMs\":0.31,\"tickTotalMs\":0.36,\"skipped\":false,\"drawableAcquired\":true,\"frameSubmitted\":true,\"previewSubmissionDepth\":2,\"previewSubmissionSkipped\":true,\"previewFrameAgeMs\":2.50}",
+        "]}\n",
+        "OXIDE_COMPLETE testCameraNV12LegacyLivePreview\n"
+    );
+
+    let payload = parse_oxide_tick_ring(stdout).expect("parse tick ring");
+    assert_eq!(payload.ticks.len(), 3);
+    assert_eq!(payload.ticks[0].preview_submission_depth, 1);
+    assert!(payload.ticks[2].preview_submission_skipped);
+    let note = render_oxide_tick_ring_note(&payload).expect("render tick ring note");
+    assert!(note.contains("ticks=3"));
+    assert!(note.contains("previewDepth p50/p95/p99/max=1/2/2/2"));
+    assert!(note.contains("previewFrameAge p50/p95/p99/max=1.88/2.44/2.49/2.50ms"));
+}
+
+#[test]
+fn parse_oxide_app_host_debug_summary_surfaces_actual_app_counters() {
+    let stdout = concat!(
+        "OXIDE_READY testCameraNV12LegacyRealAppLivePreview\n",
+        "OXIDE_APP_HOST_DEBUG_SUMMARY {\"cameraFrameTriggeredRenders\":15,\"cameraGenerationAdvances\":16,\"commandBuffersCommitted\":14,\"displayLinkCallbacks\":18,\"displayLinkCreateCalls\":1,\"drawablesAcquired\":14,\"ensureHostInitializedCalls\":1,\"hostReady\":true,\"hostReadyTransitions\":1,\"metalViewInstalls\":1,\"normalSceneBranchCalls\":0,\"onTickCalls\":18,\"perfSceneBranchCalls\":1,\"planSkips\":4,\"presentedFrameAgeMs\":1.75,\"previewSubmissionDepth\":1,\"runningPerfBenchmarkHost\":true,\"runningUiTest\":true,\"samplesBridged\":16,\"samplesDroppedPrebridge\":3,\"samplesPresented\":14,\"samplesPublished\":16,\"samplesReceived\":19,\"samplesSupersededBeforePresent\":2,\"sceneDidBecomeActiveCalls\":1,\"sceneWillConnectCalls\":1,\"sceneWillEnterForegroundCalls\":0,\"shouldRender\":true}\n",
+        "OXIDE_COMPLETE testCameraNV12LegacyRealAppLivePreview\n"
+    );
+
+    let payload = parse_oxide_app_host_debug_summary(stdout).expect("parse app-host debug summary");
+    assert_eq!(payload.display_link_callbacks, 18);
+    assert_eq!(payload.camera_generation_advances, 16);
+    assert_eq!(payload.samples_dropped_prebridge, 3);
+    let note = render_oxide_app_host_debug_summary_note(&payload);
+    assert!(note.contains("displayLinkCallbacks=18"));
+    assert!(note.contains("cameraTriggeredRenders=15"));
+    assert!(note.contains(
+        "samples received/droppedPrebridge/bridged/published/presented/superseded=19/3/16/16/14/2"
+    ));
+}
+
+#[test]
 fn parse_oxide_camera_contract_summary_maps_contract_fields() {
     let stdout = concat!(
         "OXIDE_READY testCameraNV12LegacyLivePreview\n",
@@ -399,6 +452,22 @@ fn parse_oxide_camera_contract_summary_maps_contract_fields() {
 }
 
 #[test]
+fn parse_oxide_benchmark_metadata_collects_per_test_iteration_counts() {
+    let stdout = concat!(
+        "OXIDE_BENCHMARK_METADATA ",
+        "{\"testName\":\"testLabelEncode\",\"measureIterations\":10,\"benchmarkIterations\":96}\n",
+        "noise\n",
+        "OXIDE_BENCHMARK_METADATA ",
+        "{\"testName\":\"testSimpleHomeColdLaunch\",\"measureIterations\":10,\"benchmarkIterations\":1}\n",
+    );
+
+    let metadata = parse_oxide_benchmark_metadata(stdout).expect("parse benchmark metadata");
+    assert_eq!(metadata["testLabelEncode"].measure_iterations, 10);
+    assert_eq!(metadata["testLabelEncode"].benchmark_iterations, 96);
+    assert_eq!(metadata["testSimpleHomeColdLaunch"].benchmark_iterations, 1);
+}
+
+#[test]
 fn validate_normalized_camera_contract_accepts_yuv_family_formats() {
     let oxide_contract = parse_oxide_camera_contract_summary(concat!(
         "OXIDE_CAMERA_CONTRACT_SUMMARY ",
@@ -415,6 +484,15 @@ fn validate_normalized_camera_contract_accepts_yuv_family_formats() {
     .expect("parse React camera contract summary");
     validate_normalized_camera_contract(&react_contract, "React Native")
         .expect("React yuv contract should be accepted");
+}
+
+#[test]
+fn uikit_case_requires_normalized_camera_contract_only_for_live_camera_cases() {
+    assert!(uikit_case_requires_normalized_camera_contract("testCameraNV12LegacyLivePreview"));
+    assert!(uikit_case_requires_normalized_camera_contract(
+        "testCameraAVFoundationPreviewLayerLivePreview"
+    ));
+    assert!(!uikit_case_requires_normalized_camera_contract("testCameraNV12LegacyPreview"));
 }
 
 #[test]
@@ -902,6 +980,7 @@ fn compare_uikit_reports_flags_regressions() {
                 (String::from("cpu_cycles_kc"), sample_metric(1.05)),
                 (String::from("memory_peak_kb"), sample_metric(1.0)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -930,6 +1009,7 @@ fn compare_uikit_reports_flags_regressions() {
                 (String::from("cpu_cycles_kc"), sample_metric(1.0)),
                 (String::from("memory_peak_kb"), sample_metric(1.0)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -966,6 +1046,7 @@ fn compare_uikit_reports_allows_tiny_simulator_bridge_jitter() {
                 (String::from("cpu_cycles_kc"), sample_metric(2386.376)),
                 (String::from("memory_peak_kb"), sample_metric(72125.224)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -994,6 +1075,7 @@ fn compare_uikit_reports_allows_tiny_simulator_bridge_jitter() {
                 (String::from("cpu_cycles_kc"), sample_metric(1975.153)),
                 (String::from("memory_peak_kb"), sample_metric(72059.688)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1029,6 +1111,7 @@ fn compare_uikit_reports_ignores_simulator_peak_memory_drift() {
                 (String::from("cpu_cycles_kc"), sample_metric(2321.346)),
                 (String::from("memory_peak_kb"), sample_metric(108809.216)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1057,6 +1140,7 @@ fn compare_uikit_reports_ignores_simulator_peak_memory_drift() {
                 (String::from("cpu_cycles_kc"), sample_metric(2012.978)),
                 (String::from("memory_peak_kb"), sample_metric(73583.640)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1092,6 +1176,7 @@ fn compare_uikit_reports_allows_tiny_simulator_component_jitter() {
                 (String::from("cpu_cycles_kc"), sample_metric(4870.673)),
                 (String::from("memory_peak_kb"), sample_metric(108809.216)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1120,6 +1205,7 @@ fn compare_uikit_reports_allows_tiny_simulator_component_jitter() {
                 (String::from("cpu_cycles_kc"), sample_metric(3950.752)),
                 (String::from("memory_peak_kb"), sample_metric(73665.560)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1155,6 +1241,7 @@ fn compare_uikit_reports_allows_small_simulator_microbench_jitter() {
                 (String::from("cpu_cycles_kc"), sample_metric(23668.251)),
                 (String::from("memory_peak_kb"), sample_metric(85806.152)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1183,6 +1270,7 @@ fn compare_uikit_reports_allows_small_simulator_microbench_jitter() {
                 (String::from("cpu_cycles_kc"), sample_metric(19177.811)),
                 (String::from("memory_peak_kb"), sample_metric(85806.152)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1218,6 +1306,7 @@ fn compare_uikit_reports_still_flags_small_simulator_microbench_regressions() {
                 (String::from("cpu_cycles_kc"), sample_metric(28000.0)),
                 (String::from("memory_peak_kb"), sample_metric(143445.064)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1246,6 +1335,7 @@ fn compare_uikit_reports_still_flags_small_simulator_microbench_regressions() {
                 (String::from("cpu_cycles_kc"), sample_metric(21000.0)),
                 (String::from("memory_peak_kb"), sample_metric(143445.064)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1281,6 +1371,7 @@ fn compare_uikit_reports_ignores_spinner_encode_simulator_clock_jitter() {
                 (String::from("cpu_cycles_kc"), sample_metric(8622.283)),
                 (String::from("memory_peak_kb"), sample_metric(74353.688)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1309,6 +1400,7 @@ fn compare_uikit_reports_ignores_spinner_encode_simulator_clock_jitter() {
                 (String::from("cpu_cycles_kc"), sample_metric(6329.844)),
                 (String::from("memory_peak_kb"), sample_metric(83758.2)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1344,6 +1436,7 @@ fn compare_uikit_reports_ignores_button_press_response_simulator_clock_jitter() 
                 (String::from("cpu_cycles_kc"), sample_metric(48298.675)),
                 (String::from("memory_peak_kb"), sample_metric(38619.824)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1372,6 +1465,7 @@ fn compare_uikit_reports_ignores_button_press_response_simulator_clock_jitter() 
                 (String::from("cpu_cycles_kc"), sample_metric(40348.289)),
                 (String::from("memory_peak_kb"), sample_metric(41454.16)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1462,6 +1556,37 @@ fn uikit_only_testing_identifier_maps_launch_cases_to_ui_test_target() {
 }
 
 #[test]
+fn uikit_only_testing_identifier_maps_optimized_launch_cases_to_ui_test_target() {
+    let identifier =
+        uikit_only_testing_identifier_for_test_name("testOptimizedSimpleHomeColdLaunch")
+            .expect("optimized launch identifier");
+    assert_eq!(
+        identifier,
+        "OxideHostUITests/OxideUIKitLaunchPerfTests/testOptimizedSimpleHomeColdLaunch"
+    );
+}
+
+#[test]
+fn uikit_only_testing_identifier_maps_real_app_camera_cases_to_ui_test_target() {
+    let custom =
+        uikit_only_testing_identifier_for_test_name("testCameraNV12LegacyRealAppLivePreview")
+            .expect("real-app custom identifier");
+    assert_eq!(
+        custom,
+        "OxideHostUITests/OxideUIKitLaunchPerfTests/testCameraNV12LegacyRealAppLivePreview"
+    );
+
+    let avfoundation = uikit_only_testing_identifier_for_test_name(
+        "testCameraAVFoundationPreviewLayerRealAppLivePreview",
+    )
+    .expect("real-app AVFoundation identifier");
+    assert_eq!(
+        avfoundation,
+        "OxideHostUITests/OxideUIKitLaunchPerfTests/testCameraAVFoundationPreviewLayerRealAppLivePreview"
+    );
+}
+
+#[test]
 fn uikit_perf_environment_uses_launch_env_for_launch_cases() {
     let json = uikit_perf_environment_json_for_test_name("testDetailDeepLinkLaunch", "native")
         .expect("launch environment json");
@@ -1475,6 +1600,18 @@ fn uikit_perf_environment_uses_launch_env_for_launch_cases() {
 }
 
 #[test]
+fn uikit_perf_environment_uses_launch_style_for_optimized_launch_cases() {
+    let json =
+        uikit_perf_environment_json_for_test_name("testOptimizedDetailDeepLinkLaunch", "60hz")
+            .expect("optimized launch environment json");
+    assert!(json.contains("\"OXIDE_PERF_UIKIT_LAUNCH\":\"1\""));
+    assert!(json.contains("\"OXIDE_PERF_LAUNCH_SCENARIO\":\"detail_route\""));
+    assert!(json.contains("\"OXIDE_PERF_LAUNCH_STYLE\":\"optimized\""));
+    assert!(json.contains("\"OXIDE_PERF_LAUNCH_ROUTE\":\"oxide://detail/integration?item=42\""));
+    assert!(json.contains("\"OXIDE_PERF_REFRESH_MODE\":\"60hz\""));
+}
+
+#[test]
 fn uikit_perf_environment_forwards_camera_benchmark_overrides() {
     with_env_vars(
         &[
@@ -1483,6 +1620,12 @@ fn uikit_perf_environment_forwards_camera_benchmark_overrides() {
             ("OXIDE_PERF_CAMERA_STAGE_MEASUREMENT", Some("0")),
             ("OXIDE_PERF_CAMERA_TINY_PREVIEW_RENDERER", Some("1")),
             ("OXIDE_PERF_CAMERA_PREVIEW_BACKPRESSURE", Some("1")),
+            ("OXIDE_PERF_CAMERA_PREVIEW_DONT_CARE_LOAD", Some("1")),
+            ("OXIDE_PERF_CAMERA_PREVIEW_SUBMISSION_CAP", Some("1")),
+            ("OXIDE_PERF_CAMERA_PREVIEW_PUBLISHED_SLOT_COUNT", Some("2")),
+            ("OXIDE_PERF_CAMERA_NO_VISIBLE_PRESENT", Some("1")),
+            ("OXIDE_PERF_CAMERA_FRAME_DRIVEN_SCHEDULING", Some("1")),
+            ("OXIDE_PERF_CAMERA_PREBRIDGE_DROP", Some("1")),
         ],
         || {
             let json = uikit_perf_environment_json_for_test_name(
@@ -1495,6 +1638,12 @@ fn uikit_perf_environment_forwards_camera_benchmark_overrides() {
             assert!(json.contains("\"OXIDE_PERF_CAMERA_STAGE_MEASUREMENT\":\"0\""));
             assert!(json.contains("\"OXIDE_PERF_CAMERA_TINY_PREVIEW_RENDERER\":\"1\""));
             assert!(json.contains("\"OXIDE_PERF_CAMERA_PREVIEW_BACKPRESSURE\":\"1\""));
+            assert!(json.contains("\"OXIDE_PERF_CAMERA_PREVIEW_DONT_CARE_LOAD\":\"1\""));
+            assert!(json.contains("\"OXIDE_PERF_CAMERA_PREVIEW_SUBMISSION_CAP\":\"1\""));
+            assert!(json.contains("\"OXIDE_PERF_CAMERA_PREVIEW_PUBLISHED_SLOT_COUNT\":\"2\""));
+            assert!(json.contains("\"OXIDE_PERF_CAMERA_NO_VISIBLE_PRESENT\":\"1\""));
+            assert!(json.contains("\"OXIDE_PERF_CAMERA_FRAME_DRIVEN_SCHEDULING\":\"1\""));
+            assert!(json.contains("\"OXIDE_PERF_CAMERA_PREBRIDGE_DROP\":\"1\""));
         },
     );
 }
@@ -1504,8 +1653,10 @@ fn uikit_perf_environment_enables_real_app_camera_host_for_real_app_cases() {
     let custom_json =
         uikit_perf_environment_json_for_test_name("testCameraNV12LegacyRealAppLivePreview", "60hz")
             .expect("real app custom environment json");
+    assert!(custom_json.contains("\"OXIDE_PERF_CASE\":\"testCameraNV12LegacyRealAppLivePreview\""));
     assert!(custom_json.contains("\"OXIDE_RENDER_IN_TEST\":\"1\""));
     assert!(custom_json.contains("\"OXIDE_PERF_CAMERA_REAL_APP_HOST\":\"1\""));
+    assert!(!custom_json.contains("\"OXIDE_PERF_PARKED\":\"1\""));
     assert!(!custom_json.contains("\"OXIDE_PERF_CAMERA_REAL_APP_HYBRID_VISIBLE_PREVIEW\""));
 
     let hybrid_json = uikit_perf_environment_json_for_test_name(
@@ -1513,13 +1664,17 @@ fn uikit_perf_environment_enables_real_app_camera_host_for_real_app_cases() {
         "60hz",
     )
     .expect("real app hybrid environment json");
+    assert!(hybrid_json.contains(
+        "\"OXIDE_PERF_CASE\":\"testCameraNV12LegacyRealAppHybridPreviewLayerLivePreview\""
+    ));
     assert!(hybrid_json.contains("\"OXIDE_RENDER_IN_TEST\":\"1\""));
     assert!(hybrid_json.contains("\"OXIDE_PERF_CAMERA_REAL_APP_HOST\":\"1\""));
+    assert!(!hybrid_json.contains("\"OXIDE_PERF_PARKED\":\"1\""));
     assert!(hybrid_json.contains("\"OXIDE_PERF_CAMERA_REAL_APP_HYBRID_VISIBLE_PREVIEW\":\"1\""));
 }
 
 #[test]
-fn selected_uikit_case_specs_includes_oxide_hybrid_preview_layer_live_case() {
+fn map_uikit_case_includes_oxide_hybrid_preview_layer_live_case() {
     let selected =
         map_uikit_case("testCameraNV12LegacyHybridPreviewLayerLivePreview").expect("map case");
     assert_eq!(
@@ -1530,7 +1685,7 @@ fn selected_uikit_case_specs_includes_oxide_hybrid_preview_layer_live_case() {
 }
 
 #[test]
-fn selected_uikit_case_specs_include_real_app_camera_cases() {
+fn map_uikit_case_includes_real_app_camera_cases() {
     let custom = map_uikit_case("testCameraNV12LegacyRealAppLivePreview").expect("map custom case");
     assert_eq!(custom.0, "uikit.optimized.image_pipeline.camera_preview.nv12_legacy_real_app_live");
     assert_eq!(custom.1, "gpu.scene.camera.frame");
@@ -1542,6 +1697,40 @@ fn selected_uikit_case_specs_include_real_app_camera_cases() {
         "uikit.optimized.image_pipeline.camera_preview.nv12_legacy_real_app_hybrid_preview_layer_live"
     );
     assert_eq!(hybrid.1, "gpu.scene.camera.frame");
+}
+
+#[test]
+fn official_device_battery_keeps_only_the_official_camera_pair() {
+    assert!(
+        uikit_case_in_official_device_battery("testCameraNV12LegacyLivePreview")
+            .expect("parked pure custom case")
+    );
+    assert!(
+        uikit_case_in_official_device_battery("testCameraAVFoundationPreviewLayerLivePreview")
+            .expect("parked AVFoundation case")
+    );
+    assert!(
+        !uikit_case_in_official_device_battery("testCameraNV12LegacyHybridPreviewLayerLivePreview")
+            .expect("parked hybrid case")
+    );
+    assert!(
+        !uikit_case_in_official_device_battery("testCameraNV12LegacyRealAppLivePreview")
+            .expect("real app custom case")
+    );
+    assert!(
+        !uikit_case_in_official_device_battery("testCameraAVFoundationPreviewLayerRealAppLivePreview")
+            .expect("real app baseline case")
+    );
+    assert!(
+        !uikit_case_in_official_device_battery(
+            "testCameraNV12LegacyRealAppHybridPreviewLayerLivePreview",
+        )
+        .expect("real app hybrid case")
+    );
+    assert!(
+        !uikit_case_in_official_device_battery("testCameraAVFoundationPreviewLayerSidecarLivePreview")
+            .expect("sidecar diagnostic case")
+    );
 }
 
 #[test]
@@ -1661,6 +1850,7 @@ fn compare_uikit_reports_device_suite_gates_direct_counters() {
                 (String::from("gpu_latency_s"), sample_metric(1.0)),
                 (String::from("gpu_counter.shader_cycles"), sample_metric(1.30)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1693,6 +1883,7 @@ fn compare_uikit_reports_device_suite_gates_direct_counters() {
                 (String::from("energy_j"), sample_metric(1.0)),
                 (String::from("gpu_counter.shader_cycles"), sample_metric(1.0)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1732,6 +1923,7 @@ fn compare_uikit_reports_device_suite_gates_energy_when_present() {
                 (String::from("gpu_latency_s"), sample_metric(1.0)),
                 (String::from("energy_j"), sample_metric(1.30)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1763,6 +1955,7 @@ fn compare_uikit_reports_device_suite_gates_energy_when_present() {
                 (String::from("gpu_latency_s"), sample_metric(1.0)),
                 (String::from("energy_j"), sample_metric(1.0)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1800,6 +1993,7 @@ fn compare_uikit_reports_keys_device_rows_by_refresh_mode() {
                 (String::from("gpu_time_s"), sample_metric(1.0)),
                 (String::from("gpu_latency_s"), sample_metric(1.0)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -1830,6 +2024,7 @@ fn compare_uikit_reports_keys_device_rows_by_refresh_mode() {
                 (String::from("gpu_time_s"), sample_metric(1.0)),
                 (String::from("gpu_latency_s"), sample_metric(1.0)),
             ]),
+            ..UIKitPerfCase::default()
         }],
     };
 
@@ -2460,7 +2655,7 @@ fn summarize_trace_signpost_metrics_from_tables_collects_stage_durations() {
 
     let tables = parse_xctrace_tables(xml).expect("parse signpost table");
     let windows = extract_trace_windows_from_tables(&tables).expect("extract trace windows");
-    let metrics = summarize_trace_signpost_metrics_from_tables(&tables, &windows)
+    let metrics = summarize_trace_signpost_metrics_from_tables(&tables, &windows, &[])
         .expect("summarize signpost metrics");
 
     assert!(!metrics.contains_key("signpost_perfworkload_s"));
@@ -2468,12 +2663,14 @@ fn summarize_trace_signpost_metrics_from_tables_collects_stage_durations() {
         metrics.get("signpost_camera_drawable_acquire_s").expect("drawable acquire metric");
     assert_eq!(drawable.samples, 1);
     assert!((drawable.median - 0.1).abs() < 1e-9);
+    assert_eq!(drawable.source, UIKitMetricSource::XctraceSignpost);
+    assert!(drawable.fallback_modes.is_empty());
 
     let publish = metrics.get("signpost_camera_capture_publish_s").expect("publish metric");
     assert_eq!(publish.samples, 2);
     assert!((publish.min - 0.2).abs() < 1e-9);
     assert!((publish.max - 0.3).abs() < 1e-9);
-    assert!((publish.median - 0.3).abs() < 1e-9);
+    assert!((publish.median - 0.25).abs() < 1e-9);
 
     let commit = metrics.get("signpost_camera_renderer_direct_commit_s").expect("commit metric");
     assert_eq!(commit.samples, 1);
@@ -2537,7 +2734,7 @@ fn summarize_trace_signpost_metrics_from_tables_accepts_lowercase_points_of_inte
 
     let tables = parse_xctrace_tables(xml).expect("parse signpost table");
     let windows = extract_trace_windows_from_tables(&tables).expect("extract trace windows");
-    let metrics = summarize_trace_signpost_metrics_from_tables(&tables, &windows)
+    let metrics = summarize_trace_signpost_metrics_from_tables(&tables, &windows, &[])
         .expect("summarize signpost metrics");
 
     let commit = metrics.get("signpost_camera_renderer_direct_commit_s").expect("commit metric");
@@ -2625,7 +2822,7 @@ fn summarize_trace_signpost_metrics_from_tables_prefers_region_of_interest_inter
 
     let tables = parse_xctrace_tables(xml).expect("parse roi + signpost tables");
     let windows = extract_trace_windows_from_tables(&tables).expect("extract trace windows");
-    let metrics = summarize_trace_signpost_metrics_from_tables(&tables, &windows)
+    let metrics = summarize_trace_signpost_metrics_from_tables(&tables, &windows, &[])
         .expect("summarize signpost metrics");
 
     let commit = metrics.get("signpost_camera_renderer_direct_commit_s").expect("commit metric");
@@ -2719,7 +2916,7 @@ fn summarize_trace_signpost_metrics_from_tables_ignores_non_perf_signpost_tables
 
     let tables = parse_xctrace_tables(xml).expect("parse signpost tables");
     let windows = extract_trace_windows_from_tables(&tables).expect("extract trace windows");
-    let metrics = summarize_trace_signpost_metrics_from_tables(&tables, &windows)
+    let metrics = summarize_trace_signpost_metrics_from_tables(&tables, &windows, &[])
         .expect("summarize signpost metrics");
 
     let commit = metrics.get("signpost_camera_renderer_direct_commit_s").expect("commit metric");
@@ -2764,6 +2961,7 @@ fn summarize_energy_table_converts_millijoules() {
     let summary = summarize_energy_table(&table, &windows).expect("summarize energy");
     assert_eq!(summary.samples, 2);
     assert!((summary.mean - 0.003).abs() < 1e-9);
+    assert_eq!(summary.source, UIKitMetricSource::XctraceEnergy);
 }
 
 #[test]
@@ -2801,12 +2999,16 @@ fn summarize_device_gpu_metrics_from_tables_reports_compositor_fallback_detail()
         process_name: String::from("ReactNativeCameraBench"),
     }];
     let mut notes = Vec::new();
-    let metrics = summarize_device_gpu_metrics_from_tables(&table, &windows, &mut notes)
+    let metrics = summarize_device_gpu_metrics_from_tables(&table, &windows, &mut notes, &[])
         .expect("summarize gpu metrics");
 
     let gpu_time = metrics.get("gpu_time_s").expect("gpu time metric");
     assert_eq!(gpu_time.samples, 1);
     assert!((gpu_time.median - 60e-9).abs() < 1e-18);
+    assert_eq!(gpu_time.source, UIKitMetricSource::XctraceGpuInterval);
+    assert!(gpu_time
+        .fallback_modes
+        .contains(&UIKitMetricFallbackMode::CompositorInclusiveGpuIntervals));
 
     let gpu_latency = metrics.get("gpu_latency_s").expect("gpu latency metric");
     assert_eq!(gpu_latency.samples, 1);
@@ -2872,5 +3074,7 @@ fn sample_metric(median: f64) -> UIKitMetricSummary {
         p95: median,
         p99: median,
         samples: 3,
+        source: UIKitMetricSource::Unknown,
+        fallback_modes: Vec::new(),
     }
 }

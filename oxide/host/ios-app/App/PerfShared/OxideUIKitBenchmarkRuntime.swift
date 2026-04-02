@@ -18,6 +18,7 @@ let parkedCaseEnv = "OXIDE_PERF_CASE"
 let perfUIKitLaunchEnv = "OXIDE_PERF_UIKIT_LAUNCH"
 let perfLaunchScenarioEnv = "OXIDE_PERF_LAUNCH_SCENARIO"
 let perfLaunchRouteEnv = "OXIDE_PERF_LAUNCH_ROUTE"
+let perfLaunchStyleEnv = "OXIDE_PERF_LAUNCH_STYLE"
 let perfTraceHandshakeEnv = "OXIDE_PERF_TRACE_HANDSHAKE"
 let perfOxideRunnerEnv = "OXIDE_PERF_RUNNER"
 let perfOxideRunnerSmokeEnv = "OXIDE_PERF_RUNNER_SMOKE"
@@ -30,11 +31,15 @@ let perfCameraMaxDrawableCountEnv = "OXIDE_PERF_CAMERA_MAX_DRAWABLE_COUNT"
 let perfCameraPreviewSurfaceScaleEnv = "OXIDE_PERF_CAMERA_PREVIEW_SURFACE_SCALE"
 let perfCameraCaptureContractModeEnv = "OXIDE_PERF_CAMERA_CAPTURE_CONTRACT_MODE"
 let perfCameraStageMeasurementEnv = "OXIDE_PERF_CAMERA_STAGE_MEASUREMENT"
+let perfCameraNoVisiblePresentEnv = "OXIDE_PERF_CAMERA_NO_VISIBLE_PRESENT"
+let perfCameraFrameDrivenSchedulingEnv = "OXIDE_PERF_CAMERA_FRAME_DRIVEN_SCHEDULING"
+let perfCameraPrebridgeDropEnv = "OXIDE_PERF_CAMERA_PREBRIDGE_DROP"
 let perfCameraRealAppHostEnv = "OXIDE_PERF_CAMERA_REAL_APP_HOST"
 let perfCameraRealAppHybridVisiblePreviewEnv = "OXIDE_PERF_CAMERA_REAL_APP_HYBRID_VISIBLE_PREVIEW"
 let perfUIKitLaunchArg = "-oxide-perf-uikit-launch"
 let perfLaunchScenarioArg = "-oxide-perf-launch-scenario"
 let perfLaunchRouteArg = "-oxide-perf-launch-route"
+let perfLaunchStyleArg = "-oxide-perf-launch-style"
 let readyNotificationName = "com.oxide.perf.ready"
 let startNotificationName = "com.oxide.perf.start"
 let completeNotificationName = "com.oxide.perf.complete"
@@ -46,7 +51,9 @@ let oxideCameraContractSummaryPrefix = "OXIDE_CAMERA_CONTRACT_SUMMARY "
 let oxidePreviewPlanSummaryPrefix = "OXIDE_PREVIEW_PLAN_SUMMARY "
 let oxideMemorySummaryPrefix = "OXIDE_MEMORY_SUMMARY "
 let oxideTickDebugSummaryPrefix = "OXIDE_TICK_DEBUG_SUMMARY "
+let oxideTickRingPrefix = "OXIDE_TICK_RING "
 let oxideAppHostDebugSummaryPrefix = "OXIDE_APP_HOST_DEBUG_SUMMARY "
+let oxideBenchmarkMetadataPrefix = "OXIDE_BENCHMARK_METADATA "
 
 private let benchmarkCameraTargetWidth: Int32 = 1280
 private let benchmarkCameraTargetHeight: Int32 = 720
@@ -415,6 +422,22 @@ func realAppCameraBenchmarkUsesHybridVisiblePreview(
     environment[perfCameraRealAppHybridVisiblePreviewEnv] == "1"
 }
 
+func realAppCameraFrameDrivenSchedulingEnabled(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+) -> Bool
+{
+    environment[perfCameraFrameDrivenSchedulingEnv] == "1" &&
+        realAppCameraBenchmarkEnabled(environment: environment) &&
+        !realAppCameraBenchmarkUsesHybridVisiblePreview(environment: environment)
+}
+
+func cameraNoVisiblePresentEnabled(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+) -> Bool
+{
+    environment[perfCameraNoVisiblePresentEnv] == "1"
+}
+
 @MainActor
 func configureDirectPreviewMetalLayer(
     view: UIView,
@@ -471,6 +494,26 @@ func emitConsoleLine(_ line: String)
         return
     }
     try? FileHandle.standardOutput.write(contentsOf: data)
+}
+
+func emitBenchmarkMetadataLine(
+    testName: String,
+    measureIterations: Int,
+    benchmarkIterations: Int
+)
+{
+    let payload = OxideBenchmarkMetadataPayload(
+        testName: testName,
+        measureIterations: measureIterations,
+        benchmarkIterations: benchmarkIterations
+    )
+    guard let data = try? JSONEncoder().encode(payload),
+          let json = String(data: data, encoding: .utf8)
+    else
+    {
+        return
+    }
+    emitConsoleLine("\(oxideBenchmarkMetadataPrefix)\(json)")
 }
 
 func postDarwinNotification(_ name: String)
@@ -574,6 +617,9 @@ private func oxideHostCameraTickPerf(_ out: UnsafeMutablePointer<OxideHostCamera
 @_silgen_name("oxide_host_app_debug_perf")
 private func oxideHostAppDebugPerf(_ out: UnsafeMutablePointer<OxideHostAppDebugPerf>?) -> Int32
 
+@_silgen_name("oxide_host_reset_app_debug_perf")
+private func oxideHostResetAppDebugPerf() -> Int32
+
 @_silgen_name("oxide_host_app_shutdown")
 private func oxideHostAppShutdown()
 
@@ -669,6 +715,9 @@ private struct OxideHostStats
     var camPresentMs: Float = 0
     var camCommitMs: Float = 0
     var camGpuMs: Float = 0
+    var camGpuRenderMs: Float = 0
+    var camGpuVertexMs: Float = 0
+    var camGpuFragmentMs: Float = 0
     var camCaptureTotalMs: Float = 0
     var camCaptureSampleSetupMs: Float = 0
     var camCaptureLockMs: Float = 0
@@ -698,6 +747,14 @@ private struct OxideHostStats
     var camRetainedLatestPixelBufferSurfaceSurfaces: UInt32 = 0
     var camLatestPublishedGeneration: UInt64 = 0
     var camLatestPublishedTimestampNs: UInt64 = 0
+    var camLatestPresentedGeneration: UInt64 = 0
+    var camGenerationAdvances: UInt32 = 0
+    var camSamplesReceived: UInt32 = 0
+    var camSamplesDroppedPrebridge: UInt32 = 0
+    var camSamplesBridged: UInt32 = 0
+    var camSamplesPublished: UInt32 = 0
+    var camSamplesPresented: UInt32 = 0
+    var camSamplesSupersededBeforePresent: UInt32 = 0
     var rendererMemoryTotalBytes: UInt64 = 0
     var rendererMemoryDrawTargetsBytes: UInt64 = 0
     var rendererMemoryDrawTargetMainBytes: UInt64 = 0
@@ -750,6 +807,10 @@ private struct OxideHostAppDebugPerf
     var ensureHostInitializedCalls: UInt32 = 0
     var hostReadyTransitions: UInt32 = 0
     var onTickCalls: UInt32 = 0
+    var cameraFrameTriggeredRenders: UInt32 = 0
+    var planSkips: UInt32 = 0
+    var drawablesAcquired: UInt32 = 0
+    var commandBuffersCommitted: UInt32 = 0
     var runningUiTest: UInt8 = 0
     var runningPerfBenchmarkHost: UInt8 = 0
     var shouldRender: UInt8 = 0
@@ -799,8 +860,33 @@ private struct OxideTickDebugSummaryPayload: Codable
     let frameSubmittedTicks: Int
 }
 
+private struct OxideTickRingEntryPayload: Codable
+{
+    let serial: UInt64
+    let drawableWidth: UInt32
+    let drawableHeight: UInt32
+    let drawableScale: Float
+    let planReason: UInt32
+    let planMs: Double
+    let drawableAcquireMs: Double
+    let frameCallMs: Double
+    let tickTotalMs: Double
+    let skipped: Bool
+    let drawableAcquired: Bool
+    let frameSubmitted: Bool
+    let previewSubmissionDepth: UInt32
+    let previewSubmissionSkipped: Bool
+    let previewFrameAgeMs: Double
+}
+
+private struct OxideTickRingPayload: Codable
+{
+    let ticks: [OxideTickRingEntryPayload]
+}
+
 private struct OxideAppHostDebugSummaryPayload: Codable
 {
+    let displayLinkCallbacks: UInt32
     let sceneWillConnectCalls: UInt32
     let perfSceneBranchCalls: UInt32
     let normalSceneBranchCalls: UInt32
@@ -811,10 +897,30 @@ private struct OxideAppHostDebugSummaryPayload: Codable
     let ensureHostInitializedCalls: UInt32
     let hostReadyTransitions: UInt32
     let onTickCalls: UInt32
+    let cameraGenerationAdvances: UInt32
+    let cameraFrameTriggeredRenders: UInt32
+    let planSkips: UInt32
+    let drawablesAcquired: UInt32
+    let commandBuffersCommitted: UInt32
+    let previewSubmissionDepth: UInt32
+    let presentedFrameAgeMs: Double
+    let samplesReceived: UInt32
+    let samplesDroppedPrebridge: UInt32
+    let samplesBridged: UInt32
+    let samplesPublished: UInt32
+    let samplesPresented: UInt32
+    let samplesSupersededBeforePresent: UInt32
     let runningUiTest: Bool
     let runningPerfBenchmarkHost: Bool
     let shouldRender: Bool
     let hostReady: Bool
+}
+
+private struct OxideBenchmarkMetadataPayload: Codable
+{
+    let testName: String
+    let measureIterations: Int
+    let benchmarkIterations: Int
 }
 
 private func perfNowMs() -> Double
@@ -829,8 +935,16 @@ private func oxideStagePercentile(_ sortedValues: [Double], percentile: Double) 
         return 0
     }
     let clamped = min(max(percentile, 0), 1)
-    let index = Int((Double(sortedValues.count - 1) * clamped).rounded())
-    return sortedValues[min(max(index, 0), sortedValues.count - 1)]
+    let lastIndex = Double(sortedValues.count - 1)
+    let index = min(max(lastIndex * clamped, 0), lastIndex)
+    let lowerIndex = Int(index.rounded(.down))
+    let upperIndex = Int(index.rounded(.up))
+    if lowerIndex == upperIndex
+    {
+        return sortedValues[lowerIndex]
+    }
+    let weight = index - Double(lowerIndex)
+    return ((1 - weight) * sortedValues[lowerIndex]) + (weight * sortedValues[upperIndex])
 }
 
 private func summarizeStageSamples(_ values: [Double]) -> OxideStageMetricSummary?
@@ -873,6 +987,9 @@ private final class OxideCameraStageAccumulator
         "camera.renderer.direct.present_drawable",
         "camera.renderer.direct.commit",
         "camera.renderer.direct.gpu_total",
+        "camera.renderer.direct.gpu_render",
+        "camera.renderer.direct.gpu_vertex",
+        "camera.renderer.direct.gpu_fragment",
         "camera.capture.total",
         "camera.capture.sample_setup",
         "camera.capture.lock",
@@ -924,6 +1041,9 @@ private final class OxideCameraStageAccumulator
         append(Double(stats.camPresentMs), for: "camera.renderer.direct.present_drawable")
         append(Double(stats.camCommitMs), for: "camera.renderer.direct.commit")
         append(Double(stats.camGpuMs), for: "camera.renderer.direct.gpu_total")
+        append(Double(stats.camGpuRenderMs), for: "camera.renderer.direct.gpu_render")
+        append(Double(stats.camGpuVertexMs), for: "camera.renderer.direct.gpu_vertex")
+        append(Double(stats.camGpuFragmentMs), for: "camera.renderer.direct.gpu_fragment")
         append(Double(stats.camCaptureTotalMs), for: "camera.capture.total")
         append(Double(stats.camCaptureSampleSetupMs), for: "camera.capture.sample_setup")
         append(Double(stats.camCaptureLockMs), for: "camera.capture.lock")
@@ -1123,6 +1243,8 @@ private final class OxideCameraMemoryAccumulator
         ("camera.retained_published_slot_surfaces", "count"),
         ("camera.retained_latest_pixel_buffer_surface_bytes_est", "bytes"),
         ("camera.retained_latest_pixel_buffer_surface_surfaces", "count"),
+        ("camera.cpu_frame_delivery_active", "fraction"),
+        ("camera.retained_latest_pixel_buffer_active", "fraction"),
         ("renderer.total_bytes", "bytes"),
         ("renderer.draw_targets_bytes", "bytes"),
         ("renderer.draw_target_main_bytes", "bytes"),
@@ -1248,6 +1370,17 @@ private final class OxideCameraMemoryAccumulator
         append(
             Double(stats.camRetainedLatestPixelBufferSurfaceSurfaces),
             for: "camera.retained_latest_pixel_buffer_surface_surfaces"
+        )
+        append(
+            stats.camCaptureFrameDeliveryMs > 0 ? 1.0 : 0.0,
+            for: "camera.cpu_frame_delivery_active"
+        )
+        let retainedLatestPixelBufferActive =
+            stats.camRetainedLatestPixelBufferSurfaceBytes > 0 ||
+            stats.camRetainedLatestPixelBufferSurfaceSurfaces > 0
+        append(
+            retainedLatestPixelBufferActive ? 1.0 : 0.0,
+            for: "camera.retained_latest_pixel_buffer_active"
         )
         append(Double(stats.rendererMemoryTotalBytes), for: "renderer.total_bytes")
         append(Double(stats.rendererMemoryDrawTargetsBytes), for: "renderer.draw_targets_bytes")
@@ -1403,6 +1536,69 @@ private final class OxideCameraMemoryAccumulator
     {
         let (result, overflow) = lhs.addingReportingOverflow(rhs)
         return overflow ? .max : result
+    }
+}
+
+private final class OxideCameraTickRingAccumulator
+{
+    private var ticks: [OxideTickRingEntryPayload] = []
+
+    func reset()
+    {
+        ticks.removeAll(keepingCapacity: true)
+    }
+
+    func record(
+        serial: UInt64,
+        drawableWidth: UInt32,
+        drawableHeight: UInt32,
+        drawableScale: Float,
+        planReason: UInt32,
+        planMs: Double,
+        drawableAcquireMs: Double,
+        frameCallMs: Double,
+        tickTotalMs: Double,
+        skipped: Bool,
+        drawableAcquired: Bool,
+        frameSubmitted: Bool,
+        stats: OxideHostStats?
+    )
+    {
+        ticks.append(
+            OxideTickRingEntryPayload(
+                serial: serial,
+                drawableWidth: drawableWidth,
+                drawableHeight: drawableHeight,
+                drawableScale: drawableScale,
+                planReason: planReason,
+                planMs: max(planMs, 0),
+                drawableAcquireMs: max(drawableAcquireMs, 0),
+                frameCallMs: max(frameCallMs, 0),
+                tickTotalMs: max(tickTotalMs, 0),
+                skipped: skipped,
+                drawableAcquired: drawableAcquired,
+                frameSubmitted: frameSubmitted,
+                previewSubmissionDepth: stats?.rendererPreviewSubmissionDepth ?? 0,
+                previewSubmissionSkipped: (stats?.rendererPreviewSubmissionSkipped ?? 0) != 0,
+                previewFrameAgeMs: max(Double(stats?.rendererPreviewSubmissionFrameAgeMs ?? 0), 0)
+            )
+        )
+    }
+
+    func summaryLine() -> String?
+    {
+        guard !ticks.isEmpty else
+        {
+            return nil
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(OxideTickRingPayload(ticks: ticks)),
+              let json = String(data: data, encoding: .utf8) else
+        {
+            return nil
+        }
+        return "\(oxideTickRingPrefix)\(json)"
     }
 }
 
@@ -1648,10 +1844,14 @@ private final class OxideCameraBenchmarkHarness
     private let stageAccumulator = OxideCameraStageAccumulator()
     private let previewPlanAccumulator = OxideCameraPreviewPlanAccumulator()
     private let memoryAccumulator = OxideCameraMemoryAccumulator()
+    private let tickRingAccumulator = OxideCameraTickRingAccumulator()
     private var recordStageMetrics = false
     private var currentMode: OxideCameraRenderMode = .nv12Optimized
     private var currentSource: OxideCameraTextureSource = .live
     private var contractSummaryCache: String?
+    private var measuredTickSerial: UInt64 = 0
+    private var observedCpuFrameDelivery = false
+    private var observedRetainedLatestPixelBuffer = false
 
     init?(
         host: PerfSurfaceHost,
@@ -1797,8 +1997,9 @@ private final class OxideCameraBenchmarkHarness
             {
                 if recordStageMetrics
                 {
+                    let stats = readStats()
                     stageAccumulator.recordSkippedFrame()
-                    if let stats = readStats()
+                    if let stats
                     {
                         memoryAccumulator.record(
                             stats: stats,
@@ -1807,29 +2008,54 @@ private final class OxideCameraBenchmarkHarness
                             layer: layer
                         )
                     }
+                    recordMeasuredTick(
+                        planReason: planReason,
+                        planMs: planMs,
+                        drawableAcquireMs: 0,
+                        frameCallMs: 0,
+                        tickTotalMs: planMs,
+                        skipped: true,
+                        drawableAcquired: false,
+                        frameSubmitted: false,
+                        stats: stats
+                    )
                 }
                 return true
             }
-            let drawableAcquireT0 = perfNowMs()
-            let drawable: CAMetalDrawable?
-            if tracePhases
+            let noVisiblePresent = cameraNoVisiblePresentEnabled()
+            let drawableAcquireMs: Double
+            let drawablePtr: UnsafeMutableRawPointer?
+            let drawableAcquired: Bool
+            if noVisiblePresent
             {
-                drawable = withPerfSignpost("camera.drawable.acquire")
-                {
-                    layer.nextDrawable()
-                }
+                drawableAcquireMs = 0
+                drawablePtr = nil
+                drawableAcquired = false
             }
             else
             {
-                drawable = layer.nextDrawable()
+                let drawableAcquireT0 = perfNowMs()
+                let drawable: CAMetalDrawable?
+                if tracePhases
+                {
+                    drawable = withPerfSignpost("camera.drawable.acquire")
+                    {
+                        layer.nextDrawable()
+                    }
+                }
+                else
+                {
+                    drawable = layer.nextDrawable()
+                }
+                drawableAcquireMs = perfNowMs() - drawableAcquireT0
+                guard let drawable else
+                {
+                    recordBenchmarkBuildFailure("failed - camera preview benchmark could not acquire CAMetalLayer drawable")
+                    return false
+                }
+                drawablePtr = Unmanaged.passUnretained(drawable).toOpaque()
+                drawableAcquired = true
             }
-            let drawableAcquireMs = perfNowMs() - drawableAcquireT0
-            guard let drawable else
-            {
-                recordBenchmarkBuildFailure("failed - camera preview benchmark could not acquire CAMetalLayer drawable")
-                return false
-            }
-            let drawablePtr = Unmanaged.passUnretained(drawable).toOpaque()
             let hostFrameT0 = perfNowMs()
             let frameResult: Int32
             if tracePhases
@@ -1853,22 +2079,36 @@ private final class OxideCameraBenchmarkHarness
                     "failed - camera preview benchmark oxideHostAppFrameWithDrawable returned \(frameResult)"
                 )
             }
-            if frameResult == 0,
-               recordStageMetrics,
-               let stats = readStats()
+            if recordStageMetrics
             {
-                stageAccumulator.record(
-                    hostPlanMs: planMs,
+                let stats = readStats()
+                if frameResult == 0,
+                   let stats
+                {
+                    stageAccumulator.record(
+                        hostPlanMs: planMs,
+                        drawableAcquireMs: drawableAcquireMs,
+                        hostFrameMs: hostFrameMs,
+                        hostTickTotalMs: planMs + drawableAcquireMs + hostFrameMs,
+                        stats: stats
+                    )
+                    memoryAccumulator.record(
+                        stats: stats,
+                        drawableWidth: width,
+                        drawableHeight: height,
+                        layer: layer
+                    )
+                }
+                recordMeasuredTick(
+                    planReason: planReason,
+                    planMs: planMs,
                     drawableAcquireMs: drawableAcquireMs,
-                    hostFrameMs: hostFrameMs,
-                    hostTickTotalMs: planMs + drawableAcquireMs + hostFrameMs,
+                    frameCallMs: hostFrameMs,
+                    tickTotalMs: planMs + drawableAcquireMs + hostFrameMs,
+                    skipped: false,
+                    drawableAcquired: drawableAcquired,
+                    frameSubmitted: frameResult == 0 && drawableAcquired,
                     stats: stats
-                )
-                memoryAccumulator.record(
-                    stats: stats,
-                    drawableWidth: width,
-                    drawableHeight: height,
-                    layer: layer
                 )
             }
             return frameResult == 0
@@ -1947,12 +2187,29 @@ private final class OxideCameraBenchmarkHarness
         stageAccumulator.reset()
         previewPlanAccumulator.reset()
         memoryAccumulator.reset()
+        tickRingAccumulator.reset()
+        measuredTickSerial = 0
+        observedCpuFrameDelivery = false
+        observedRetainedLatestPixelBuffer = false
         _ = oxideHostResetCameraPerfCounters()
+        _ = oxideHostResetAppDebugPerf()
         recordStageMetrics = true
     }
 
     func endStageMeasurement()
     {
+        if observedCpuFrameDelivery
+        {
+            recordBenchmarkBuildFailure(
+                "failed - clean preview benchmark observed CPU frame delivery during measured window"
+            )
+        }
+        if observedRetainedLatestPixelBuffer
+        {
+            recordBenchmarkBuildFailure(
+                "failed - clean preview benchmark retained a latest pixel buffer during measured window"
+            )
+        }
         recordStageMetrics = false
     }
 
@@ -1977,6 +2234,15 @@ private final class OxideCameraBenchmarkHarness
     func memorySummaryLine() -> String?
     {
         memoryAccumulator.summaryLine()
+    }
+
+    func tickRingSummaryLine() -> String?
+    {
+        guard visibleTransport == .oxideRenderer else
+        {
+            return nil
+        }
+        return tickRingAccumulator.summaryLine()
     }
 
     func contractSummaryLine() -> String?
@@ -2199,6 +2465,55 @@ private final class OxideCameraBenchmarkHarness
         return stats
     }
 
+    private func recordPreviewContamination(_ stats: OxideHostStats?)
+    {
+        guard let stats else
+        {
+            return
+        }
+        if stats.camCaptureFrameDeliveryMs > 0
+        {
+            observedCpuFrameDelivery = true
+        }
+        if stats.camRetainedLatestPixelBufferSurfaceBytes > 0 ||
+           stats.camRetainedLatestPixelBufferSurfaceSurfaces > 0
+        {
+            observedRetainedLatestPixelBuffer = true
+        }
+    }
+
+    private func recordMeasuredTick(
+        planReason: Int32,
+        planMs: Double,
+        drawableAcquireMs: Double,
+        frameCallMs: Double,
+        tickTotalMs: Double,
+        skipped: Bool,
+        drawableAcquired: Bool,
+        frameSubmitted: Bool,
+        stats: OxideHostStats?
+    )
+    {
+        measuredTickSerial &+= 1
+        let (width, height, scale) = currentDrawableMetrics()
+        tickRingAccumulator.record(
+            serial: measuredTickSerial,
+            drawableWidth: width,
+            drawableHeight: height,
+            drawableScale: scale,
+            planReason: UInt32(bitPattern: planReason),
+            planMs: planMs,
+            drawableAcquireMs: drawableAcquireMs,
+            frameCallMs: frameCallMs,
+            tickTotalMs: tickTotalMs,
+            skipped: skipped,
+            drawableAcquired: drawableAcquired,
+            frameSubmitted: frameSubmitted,
+            stats: stats
+        )
+        recordPreviewContamination(stats)
+    }
+
     private func currentDrawableMetrics() -> (UInt32, UInt32, Float)
     {
         let drawableSize = layer.drawableSize
@@ -2255,20 +2570,33 @@ private final class OxideCameraBenchmarkHarness
         case .nv12Optimized, .nv12Legacy:
             activePixelFormat = stats.camVideoRange == 1 ? "420v" : "420f"
         }
+        let noVisiblePresent = cameraNoVisiblePresentEnabled()
         let payload = OxideCameraContractSummaryPayload(
             source: currentSource == .live
                 ? (
                     visibleTransport == .avFoundationPreviewLayer
                     ? "oxide-live-hybrid"
-                    : "oxide-live"
+                    : (
+                        noVisiblePresent
+                        ? "oxide-live-no-visible-present"
+                        : "oxide-live"
+                    )
                 )
                 : "oxide-synthetic",
             transport: visibleTransport == .avFoundationPreviewLayer
                 ? "AVCaptureVideoPreviewLayer+OxideCameraSidecar(NV12)"
                 : (
-                    currentMode == .bgraBenchmark
-                    ? "AVCaptureVideoDataOutput+CVMetalTexture(BGRA)"
-                    : "AVCaptureVideoDataOutput+CVMetalTexture(NV12)"
+                    noVisiblePresent
+                    ? (
+                        currentMode == .bgraBenchmark
+                        ? "AVCaptureVideoDataOutput+CVMetalTexture(BGRA)+NoVisiblePresent"
+                        : "AVCaptureVideoDataOutput+CVMetalTexture(NV12)+NoVisiblePresent"
+                    )
+                    : (
+                        currentMode == .bgraBenchmark
+                        ? "AVCaptureVideoDataOutput+CVMetalTexture(BGRA)"
+                        : "AVCaptureVideoDataOutput+CVMetalTexture(NV12)"
+                    )
                 ),
             devicePosition: "back",
             sessionPreset: captureContractMode.sessionPresetName,
@@ -2324,10 +2652,13 @@ private final class OxideRealAppCameraBenchmarkHarness
     private let stageAccumulator = OxideCameraStageAccumulator()
     private let previewPlanAccumulator = OxideCameraPreviewPlanAccumulator()
     private let memoryAccumulator = OxideCameraMemoryAccumulator()
+    private let tickRingAccumulator = OxideCameraTickRingAccumulator()
     private var currentMode: OxideCameraRenderMode = .nv12Optimized
     private var currentSource: OxideCameraTextureSource = .live
     private var contractSummaryCache: String?
     private var recordStageMetrics = false
+    private var observedCpuFrameDelivery = false
+    private var observedRetainedLatestPixelBuffer = false
     private var lastRecordedTickSerial: UInt64 = 0
     private var tickPolls = 0
     private var tickReadFailures = 0
@@ -2437,6 +2768,7 @@ private final class OxideRealAppCameraBenchmarkHarness
         stageAccumulator.reset()
         previewPlanAccumulator.reset()
         memoryAccumulator.reset()
+        tickRingAccumulator.reset()
         let initialSerial = readTickPerf()?.serial ?? 0
         lastRecordedTickSerial = initialSerial
         startSerial = initialSerial
@@ -2451,12 +2783,26 @@ private final class OxideRealAppCameraBenchmarkHarness
         skippedTicks = 0
         drawableAcquiredTicks = 0
         frameSubmittedTicks = 0
+        observedCpuFrameDelivery = false
+        observedRetainedLatestPixelBuffer = false
         _ = oxideHostResetCameraPerfCounters()
         recordStageMetrics = true
     }
 
     func endStageMeasurement()
     {
+        if observedCpuFrameDelivery
+        {
+            recordBenchmarkBuildFailure(
+                "failed - clean preview benchmark observed CPU frame delivery during measured window"
+            )
+        }
+        if observedRetainedLatestPixelBuffer
+        {
+            recordBenchmarkBuildFailure(
+                "failed - clean preview benchmark retained a latest pixel buffer during measured window"
+            )
+        }
         recordStageMetrics = false
     }
 
@@ -2500,15 +2846,26 @@ private final class OxideRealAppCameraBenchmarkHarness
         )
     }
 
+    func tickRingSummaryLine() -> String?
+    {
+        guard visibleTransport == .oxideRenderer else
+        {
+            return nil
+        }
+        return tickRingAccumulator.summaryLine()
+    }
+
     func appHostDebugSummaryLine() -> String?
     {
         guard visibleTransport == .oxideRenderer,
-              let debugPerf = readAppDebugPerf() else
+              let debugPerf = readAppDebugPerf(),
+              let stats = readStats() else
         {
             return nil
         }
         return encodeAppHostDebugSummaryLine(
             OxideAppHostDebugSummaryPayload(
+                displayLinkCallbacks: debugPerf.onTickCalls,
                 sceneWillConnectCalls: debugPerf.sceneWillConnectCalls,
                 perfSceneBranchCalls: debugPerf.perfSceneBranchCalls,
                 normalSceneBranchCalls: debugPerf.normalSceneBranchCalls,
@@ -2519,6 +2876,19 @@ private final class OxideRealAppCameraBenchmarkHarness
                 ensureHostInitializedCalls: debugPerf.ensureHostInitializedCalls,
                 hostReadyTransitions: debugPerf.hostReadyTransitions,
                 onTickCalls: debugPerf.onTickCalls,
+                cameraGenerationAdvances: stats.camGenerationAdvances,
+                cameraFrameTriggeredRenders: debugPerf.cameraFrameTriggeredRenders,
+                planSkips: debugPerf.planSkips,
+                drawablesAcquired: debugPerf.drawablesAcquired,
+                commandBuffersCommitted: debugPerf.commandBuffersCommitted,
+                previewSubmissionDepth: stats.rendererPreviewSubmissionDepth,
+                presentedFrameAgeMs: Double(stats.rendererPreviewSubmissionFrameAgeMs),
+                samplesReceived: stats.camSamplesReceived,
+                samplesDroppedPrebridge: stats.camSamplesDroppedPrebridge,
+                samplesBridged: stats.camSamplesBridged,
+                samplesPublished: stats.camSamplesPublished,
+                samplesPresented: stats.camSamplesPresented,
+                samplesSupersededBeforePresent: stats.camSamplesSupersededBeforePresent,
                 runningUiTest: debugPerf.runningUiTest != 0,
                 runningPerfBenchmarkHost: debugPerf.runningPerfBenchmarkHost != 0,
                 shouldRender: debugPerf.shouldRender != 0,
@@ -2692,6 +3062,23 @@ private final class OxideRealAppCameraBenchmarkHarness
         return debugPerf
     }
 
+    private func recordPreviewContamination(_ stats: OxideHostStats?)
+    {
+        guard let stats else
+        {
+            return
+        }
+        if stats.camCaptureFrameDeliveryMs > 0
+        {
+            observedCpuFrameDelivery = true
+        }
+        if stats.camRetainedLatestPixelBufferSurfaceBytes > 0 ||
+           stats.camRetainedLatestPixelBufferSurfaceSurfaces > 0
+        {
+            observedRetainedLatestPixelBuffer = true
+        }
+    }
+
     private func recordLatestMeasuredTick()
     {
         tickPolls += 1
@@ -2739,6 +3126,7 @@ private final class OxideRealAppCameraBenchmarkHarness
         recordedTicks += 1
         if let stats
         {
+            recordPreviewContamination(stats)
             memoryAccumulator.record(
                 stats: stats,
                 drawableWidth: tickPerf.drawableWidth,
@@ -2747,6 +3135,21 @@ private final class OxideRealAppCameraBenchmarkHarness
                 maximumDrawableCount: resolveDirectPreviewMaximumDrawableCount()
             )
         }
+        tickRingAccumulator.record(
+            serial: tickPerf.serial,
+            drawableWidth: tickPerf.drawableWidth,
+            drawableHeight: tickPerf.drawableHeight,
+            drawableScale: tickPerf.drawableScale,
+            planReason: tickPerf.planReason,
+            planMs: Double(tickPerf.planMs),
+            drawableAcquireMs: Double(tickPerf.drawableAcquireMs),
+            frameCallMs: Double(tickPerf.frameCallMs),
+            tickTotalMs: Double(tickPerf.tickTotalMs),
+            skipped: tickPerf.skipped != 0,
+            drawableAcquired: tickPerf.drawableAcquired != 0,
+            frameSubmitted: tickPerf.frameSubmitted != 0,
+            stats: stats
+        )
     }
 
     private static func resolveSceneIndex(named target: String) -> UInt32?
@@ -3440,9 +3843,15 @@ enum OxideUIKitLaunchScenario: String
     case detailRoute = "detail_route"
 }
 
+enum OxideUIKitLaunchStyle: String
+{
+    case idiomatic = "idiomatic"
+    case optimized = "optimized"
+}
+
 func resolveUIKitLaunchScenario(
     environment: [String: String] = ProcessInfo.processInfo.environment
-) -> (scenario: OxideUIKitLaunchScenario, route: String?)?
+) -> (scenario: OxideUIKitLaunchScenario, route: String?, style: OxideUIKitLaunchStyle)?
 {
     let arguments = ProcessInfo.processInfo.arguments
     let hasLaunchEnv = environment[perfUIKitLaunchEnv].map({ !$0.isEmpty && $0 != "0" }) == true
@@ -3452,16 +3861,20 @@ func resolveUIKitLaunchScenario(
         return nil
     }
     let route = environment[perfLaunchRouteEnv] ?? value(forLaunchArgument: perfLaunchRouteArg, arguments: arguments)
+    let style =
+        (environment[perfLaunchStyleEnv] ?? value(forLaunchArgument: perfLaunchStyleArg, arguments: arguments))
+            .flatMap(OxideUIKitLaunchStyle.init(rawValue:))
+        ?? .idiomatic
     if let rawScenario = environment[perfLaunchScenarioEnv] ?? value(forLaunchArgument: perfLaunchScenarioArg, arguments: arguments),
        let scenario = OxideUIKitLaunchScenario(rawValue: rawScenario)
     {
-        return (scenario, route)
+        return (scenario, route, style)
     }
     if route != nil
     {
-        return (.detailRoute, route)
+        return (.detailRoute, route, style)
     }
-    return (.simpleHome, nil)
+    return (.simpleHome, nil, style)
 }
 
 private func value(forLaunchArgument name: String, arguments: [String]) -> String?
@@ -3481,7 +3894,8 @@ private func value(forLaunchArgument name: String, arguments: [String]) -> Strin
 @MainActor
 func makeUIKitLaunchRootViewController(
     scenario: OxideUIKitLaunchScenario,
-    route: String?
+    route: String?,
+    style: OxideUIKitLaunchStyle = .idiomatic
 ) -> UIViewController
 {
     let controller = UIViewController()
@@ -3504,28 +3918,61 @@ func makeUIKitLaunchRootViewController(
     switch scenario
     {
     case .simpleHome:
-        let view = ControlSetBenchView(
-            frame: .zero,
-            image: OxideUIKitBenchmarkAssets.shared.checkerImage
-        )
-        view.installDeck(palettePhase: 0)
-        readyLabel.text = "UIKit simple home ready"
-        contentView = view
+        if style == .optimized
+        {
+            let view = OptimizedControlSetBenchView(
+                frame: .zero,
+                image: OxideUIKitBenchmarkAssets.shared.checkerImage
+            )
+            view.installDeck(palettePhase: 0)
+            contentView = view
+        } else {
+            let view = ControlSetBenchView(
+                frame: .zero,
+                image: OxideUIKitBenchmarkAssets.shared.checkerImage
+            )
+            view.installDeck(palettePhase: 0)
+            contentView = view
+        }
+        readyLabel.text = style == .optimized
+            ? "UIKit optimized simple home ready"
+            : "UIKit simple home ready"
         contentFrame = CGRect(x: 18.0, y: 96.0, width: 390.0, height: 228.0)
     case .heavyHome:
-        let view = CollectionBenchView(frame: .zero, mode: .feed)
-        view.scroll(to: 0.18)
-        readyLabel.text = "UIKit heavy home ready"
-        contentView = view
+        if style == .optimized
+        {
+            let view = OptimizedCollectionJourneyBenchView(frame: .zero, mode: .feed)
+            view.scroll(to: 0.18)
+            contentView = view
+        } else {
+            let view = CollectionBenchView(frame: .zero, mode: .feed)
+            view.scroll(to: 0.18)
+            contentView = view
+        }
+        readyLabel.text = style == .optimized
+            ? "UIKit optimized heavy home ready"
+            : "UIKit heavy home ready"
         contentFrame = CGRect(x: 0.0, y: 88.0, width: controller.view.bounds.width, height: controller.view.bounds.height - 88.0)
     case .detailRoute:
-        let view = LaunchDetailBenchView(
-            frame: .zero,
-            image: OxideUIKitBenchmarkAssets.shared.checkerImage
-        )
-        view.install(route: route ?? "oxide://detail/integration")
-        readyLabel.text = "UIKit detail route ready"
-        contentView = view
+        if style == .optimized
+        {
+            let view = OptimizedLaunchDetailBenchView(
+                frame: .zero,
+                image: OxideUIKitBenchmarkAssets.shared.checkerImage
+            )
+            view.install(route: route ?? "oxide://detail/integration")
+            contentView = view
+        } else {
+            let view = LaunchDetailBenchView(
+                frame: .zero,
+                image: OxideUIKitBenchmarkAssets.shared.checkerImage
+            )
+            view.install(route: route ?? "oxide://detail/integration")
+            contentView = view
+        }
+        readyLabel.text = style == .optimized
+            ? "UIKit optimized detail route ready"
+            : "UIKit detail route ready"
         contentFrame = CGRect(x: 18.0, y: 96.0, width: 390.0, height: 420.0)
     }
 
@@ -3602,6 +4049,80 @@ private final class LaunchDetailBenchView: UIView
         subtitleLabel.text = "Deep-link parity route"
         routeLabel.text = route
         bodyLabel.text = "Detail launch shows the selected payload with the same image bytes, rounded card treatment, and text stack used by the other parity screens."
+    }
+}
+
+private final class OptimizedLaunchDetailBenchView: UIView
+{
+    private let image: UIImage
+    private var route = "oxide://detail/integration"
+
+    init(frame: CGRect, image: UIImage)
+    {
+        self.image = image
+        super.init(frame: frame)
+        isOpaque = false
+        backgroundColor = UIColor.clear
+        contentScaleFactor = UIScreen.main.scale
+    }
+
+    required init?(coder: NSCoder)
+    {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func install(route: String)
+    {
+        self.route = route
+        setNeedsDisplay()
+    }
+
+    override func draw(_ rect: CGRect)
+    {
+        UIColor(red: 0.95, green: 0.97, blue: 1.0, alpha: 1.0).setFill()
+        UIRectFill(bounds)
+
+        let cardRect = bounds.insetBy(dx: 10.0, dy: 12.0)
+        UIColor.white.setFill()
+        UIBezierPath(roundedRect: cardRect, cornerRadius: 20.0).fill()
+
+        let heroRect = CGRect(x: cardRect.minX + 18.0, y: cardRect.minY + 18.0, width: cardRect.width - 36.0, height: 168.0)
+        UIBezierPath(roundedRect: heroRect, cornerRadius: 18.0).addClip()
+        image.draw(in: heroRect)
+
+        let titleAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 24.0, weight: .bold),
+            .foregroundColor: UIColor(red: 0.10, green: 0.12, blue: 0.18, alpha: 1.0),
+        ]
+        let subtitleAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 14.0, weight: .semibold),
+            .foregroundColor: UIColor(red: 0.20, green: 0.55, blue: 1.0, alpha: 1.0),
+        ]
+        let routeAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.monospacedSystemFont(ofSize: 12.0, weight: .regular),
+            .foregroundColor: UIColor(red: 0.36, green: 0.40, blue: 0.48, alpha: 1.0),
+        ]
+        let bodyAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 14.0, weight: .regular),
+            .foregroundColor: UIColor(red: 0.20, green: 0.24, blue: 0.30, alpha: 1.0),
+        ]
+
+        ("Mission Briefing" as NSString).draw(
+            in: CGRect(x: cardRect.minX + 18.0, y: heroRect.maxY + 16.0, width: cardRect.width - 36.0, height: 30.0),
+            withAttributes: titleAttrs
+        )
+        ("Ready for dock assignment" as NSString).draw(
+            in: CGRect(x: cardRect.minX + 18.0, y: heroRect.maxY + 48.0, width: cardRect.width - 36.0, height: 20.0),
+            withAttributes: subtitleAttrs
+        )
+        (route as NSString).draw(
+            in: CGRect(x: cardRect.minX + 18.0, y: heroRect.maxY + 76.0, width: cardRect.width - 36.0, height: 34.0),
+            withAttributes: routeAttrs
+        )
+        ("Telemetry uplink is synchronized. Dock operations can proceed once the route is confirmed." as NSString).draw(
+            in: CGRect(x: cardRect.minX + 18.0, y: heroRect.maxY + 118.0, width: cardRect.width - 36.0, height: 56.0),
+            withAttributes: bodyAttrs
+        )
     }
 }
 
@@ -4865,6 +5386,31 @@ private final class InsetGridBenchView: UIView
     }
 }
 
+private final class OptimizedInsetGridBenchView: UIView
+{
+    let gridView = OptimizedFlatRectGridBenchView(frame: .zero)
+    var contentInsets = UIEdgeInsets(top: 8.0, left: 8.0, bottom: 8.0, right: 8.0)
+
+    override init(frame: CGRect)
+    {
+        super.init(frame: frame)
+        backgroundColor = UIColor.clear
+        addSubview(gridView)
+    }
+
+    required init?(coder: NSCoder)
+    {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews()
+    {
+        super.layoutSubviews()
+        gridView.frame = bounds.inset(by: contentInsets)
+        gridView.setNeedsDisplay()
+    }
+}
+
 private final class DeepStackBenchView: UIView
 {
     private var nodes: [UIView] = []
@@ -4911,6 +5457,53 @@ private final class DeepStackBenchView: UIView
         }
         setNeedsLayout()
         layoutIfNeeded()
+    }
+}
+
+private final class OptimizedDeepStackBenchView: UIView
+{
+    private var contentInset: CGFloat = 12.0
+    private var palettePhase = 0
+
+    override init(frame: CGRect)
+    {
+        super.init(frame: frame)
+        isOpaque = false
+        backgroundColor = UIColor(red: 0.98, green: 0.99, blue: 1.0, alpha: 1.0)
+        contentScaleFactor = UIScreen.main.scale
+    }
+
+    required init?(coder: NSCoder)
+    {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func runThemeSwap(step: Int)
+    {
+        withPerfSignpost("diff.apply")
+        {
+            contentInset = step.isMultiple(of: 2) ? 12.0 : 22.0
+            palettePhase = step
+            setNeedsDisplay()
+        }
+    }
+
+    override func draw(_ rect: CGRect)
+    {
+        UIColor(red: 0.98, green: 0.99, blue: 1.0, alpha: 1.0).setFill()
+        UIRectFill(bounds)
+
+        var frame = bounds.insetBy(dx: contentInset, dy: contentInset)
+        for depth in 0..<30
+        {
+            benchPaletteColor(index: depth, palettePhase: palettePhase).setFill()
+            UIBezierPath(roundedRect: frame, cornerRadius: 8.0).fill()
+            frame = frame.insetBy(dx: 6.0, dy: 6.0)
+            if frame.width <= 12.0 || frame.height <= 12.0
+            {
+                break
+            }
+        }
     }
 }
 
@@ -5064,6 +5657,20 @@ private func gridFrameForIndex(
     )
 }
 
+private func contextDrawImage(
+    _ image: UIImage,
+    in rect: CGRect,
+    cornerRadius: CGFloat,
+    alpha: CGFloat
+)
+{
+    UIGraphicsGetCurrentContext()?.saveGState()
+    let path = UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius)
+    path.addClip()
+    image.draw(in: rect, blendMode: .normal, alpha: alpha)
+    UIGraphicsGetCurrentContext()?.restoreGState()
+}
+
 private final class FlatRectGridBenchView: UIView
 {
     private var rectViews: [UIView] = []
@@ -5189,8 +5796,10 @@ private final class OptimizedFlatRectGridBenchView: UIView
 {
     private var count = 0
     private var palettePhase = 0
+    private var dirtyLimit = Int.max
     private let cellSize = CGSize(width: 28.0, height: 18.0)
-    private let spacing: CGFloat = 6.0
+    private var spacing: CGFloat = 6.0
+    private var cornerRadius: CGFloat = 4.0
 
     override init(frame: CGRect)
     {
@@ -5210,6 +5819,9 @@ private final class OptimizedFlatRectGridBenchView: UIView
     {
         self.count = count
         self.palettePhase = palettePhase
+        self.dirtyLimit = count
+        self.spacing = 6.0
+        self.cornerRadius = 4.0
         setNeedsDisplay()
     }
 
@@ -5218,6 +5830,32 @@ private final class OptimizedFlatRectGridBenchView: UIView
         withPerfSignpost("diff.apply")
         {
             self.palettePhase = palettePhase
+            self.dirtyLimit = self.count
+            setNeedsDisplay()
+        }
+    }
+
+    func mutateSubset(limit: Int, palettePhase: Int)
+    {
+        withPerfSignpost("diff.apply")
+        {
+            self.palettePhase = palettePhase
+            self.dirtyLimit = max(0, min(limit, self.count))
+            setNeedsDisplay()
+        }
+    }
+
+    func runThemeSwap(step: Int)
+    {
+        withPerfSignpost("diff.apply")
+        {
+            self.palettePhase = step
+            self.dirtyLimit = self.count
+            self.spacing = step.isMultiple(of: 2) ? 10.0 : 4.0
+            self.cornerRadius = step.isMultiple(of: 2) ? 6.0 : 3.0
+            self.backgroundColor = step.isMultiple(of: 2)
+                ? UIColor(red: 0.96, green: 0.98, blue: 1.0, alpha: 1.0)
+                : UIColor(red: 0.92, green: 0.95, blue: 0.99, alpha: 1.0)
             setNeedsDisplay()
         }
     }
@@ -5236,9 +5874,10 @@ private final class OptimizedFlatRectGridBenchView: UIView
                 spacing: spacing,
                 boundsWidth: bounds.width
             )
-            let alpha = 0.72 + CGFloat((index + palettePhase) % 5) * 0.05
-            context.setFillColor(Self.fillColor(index: index, palettePhase: palettePhase).withAlphaComponent(alpha).cgColor)
-            let path = UIBezierPath(roundedRect: frame, cornerRadius: 4.0)
+            let activePhase = index < dirtyLimit ? palettePhase : 0
+            let alpha = 0.72 + CGFloat((index + activePhase) % 5) * 0.05
+            context.setFillColor(Self.fillColor(index: index, palettePhase: activePhase).withAlphaComponent(alpha).cgColor)
+            let path = UIBezierPath(roundedRect: frame, cornerRadius: cornerRadius)
             context.addPath(path.cgPath)
             context.fillPath()
         }
@@ -6194,6 +6833,11 @@ private final class OptimizedOrchestrationBenchView: UIView
         setNeedsDisplay()
     }
 
+    func runComposition(step: Int)
+    {
+        runJourney(step: step)
+    }
+
     override func draw(_ rect: CGRect)
     {
         let baseFrames = [
@@ -6239,6 +6883,49 @@ private final class OptimizedOrchestrationBenchView: UIView
                 in: CGRect(x: modalRect.minX + 24.0, y: modalRect.midY - 12.0, width: modalRect.width - 48.0, height: 24.0),
                 withAttributes: attrs
             )
+        }
+    }
+}
+
+private final class OptimizedStressBarsBenchView: UIView
+{
+    private var step = 0
+
+    override init(frame: CGRect)
+    {
+        super.init(frame: frame)
+        isOpaque = false
+        backgroundColor = UIColor(red: 0.97, green: 0.98, blue: 1.0, alpha: 1.0)
+        contentScaleFactor = UIScreen.main.scale
+    }
+
+    required init?(coder: NSCoder)
+    {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func runPhase(step: Int)
+    {
+        self.step = step
+        setNeedsDisplay()
+    }
+
+    override func draw(_ rect: CGRect)
+    {
+        UIColor(red: 0.97, green: 0.98, blue: 1.0, alpha: 1.0).setFill()
+        UIRectFill(bounds)
+        let columns = 20
+        for index in 0..<300
+        {
+            let row = index / columns
+            let column = index % columns
+            let phase = CGFloat((index + step) % 23) / 23.0
+            let height = 10.0 + phase * 38.0
+            let x = CGFloat(column) * 18.0
+            let y = CGFloat(row) * 22.0 + (48.0 - height)
+            let barRect = CGRect(x: x, y: y, width: 12.0, height: height)
+            benchPaletteColor(index: index, palettePhase: step).setFill()
+            UIBezierPath(roundedRect: barRect, cornerRadius: 6.0).fill()
         }
     }
 }
@@ -6440,6 +7127,193 @@ private final class ControlSetBenchView: UIView
             return UIColor(red: 0.58, green: 0.38, blue: 0.96, alpha: 1.0)
         default:
             return UIColor(red: 0.16, green: 0.68, blue: 0.86, alpha: 1.0)
+        }
+    }
+}
+
+private final class OptimizedControlSetBenchView: UIView
+{
+    private let image: UIImage
+    private var statePhase = 0
+    private var buttonScale: CGFloat = 1.0
+    private var sliderValue: CGFloat = 0.0
+    private var previewAlpha: CGFloat = 0.72
+    private var focusMode = 0
+
+    init(frame: CGRect, image: UIImage)
+    {
+        self.image = image
+        super.init(frame: frame)
+        isOpaque = false
+        backgroundColor = UIColor.clear
+        contentScaleFactor = UIScreen.main.scale
+    }
+
+    required init?(coder: NSCoder)
+    {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func installDeck(palettePhase: Int)
+    {
+        statePhase = palettePhase
+        buttonScale = 1.0
+        sliderValue = 0.0
+        previewAlpha = 0.72
+        setNeedsDisplay()
+    }
+
+    func mutate(statePhase: Int)
+    {
+        withPerfSignpost("diff.apply")
+        {
+            self.statePhase = statePhase
+            self.sliderValue = CGFloat(statePhase % 10) / 9.0
+            self.previewAlpha = 0.72 + CGFloat(statePhase % 4) * 0.07
+            self.buttonScale = 1.0
+            self.focusMode = 0
+            self.setNeedsDisplay()
+        }
+    }
+
+    func runButtonPressResponse(step: Int)
+    {
+        withPerfSignpost("diff.apply")
+        {
+            self.statePhase = step
+        }
+        withPerfSignpost("first.interactive")
+        {
+            self.buttonScale = step.isMultiple(of: 2) ? 0.96 : 1.0
+            self.previewAlpha = step.isMultiple(of: 2) ? 0.84 : 1.0
+            self.setNeedsDisplay()
+        }
+    }
+
+    func runSliderScrubResponse(step: Int)
+    {
+        let value = CGFloat(step % 11) / 10.0
+        withPerfSignpost("diff.apply")
+        {
+            self.statePhase = step
+            self.sliderValue = value
+        }
+        withPerfSignpost("first.interactive")
+        {
+            self.previewAlpha = 0.70 + value * 0.30
+            self.setNeedsDisplay()
+        }
+    }
+
+    func runFocusMode(step: Int)
+    {
+        withPerfSignpost("diff.apply")
+        {
+            self.statePhase = step
+        }
+        withPerfSignpost("first.interactive")
+        {
+            self.focusMode = step % 3
+            self.setNeedsDisplay()
+        }
+    }
+
+    override func draw(_ rect: CGRect)
+    {
+        let accent = benchPaletteColor(index: statePhase, palettePhase: statePhase)
+        accent.withAlphaComponent(0.10).setFill()
+        UIBezierPath(roundedRect: bounds, cornerRadius: 14.0).fill()
+
+        let titleAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 18.0, weight: .semibold),
+            .foregroundColor: UIColor(red: 0.10, green: 0.12, blue: 0.18, alpha: 1.0),
+        ]
+        let detailAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 12.0, weight: .medium),
+            .foregroundColor: accent,
+        ]
+        ("Controls Showcase" as NSString).draw(
+            in: CGRect(x: 18.0, y: 14.0, width: bounds.width - 36.0, height: 24.0),
+            withAttributes: titleAttrs
+        )
+        let detailText = focusMode == 1
+            ? "Preparing responder update."
+            : (focusMode == 2
+                ? "Preparing focus handoff."
+                : "State \(statePhase % 9) • Slider \(statePhase % 10)")
+        (detailText as NSString).draw(
+            in: CGRect(x: 18.0, y: 38.0, width: bounds.width - 36.0, height: 32.0),
+            withAttributes: detailAttrs
+        )
+
+        let progressRect = CGRect(x: 18.0, y: 82.0, width: bounds.width - 36.0, height: 12.0)
+        UIColor.white.withAlphaComponent(0.82).setFill()
+        UIBezierPath(roundedRect: progressRect, cornerRadius: 6.0).fill()
+        accent.setFill()
+        UIBezierPath(
+            roundedRect: CGRect(x: progressRect.minX, y: progressRect.minY, width: progressRect.width * (0.18 + sliderValue * 0.76), height: progressRect.height),
+            cornerRadius: 6.0
+        ).fill()
+
+        let spinnerRect = CGRect(x: 18.0, y: 108.0, width: 24.0, height: 24.0)
+        let spinnerPath = UIBezierPath(arcCenter: CGPoint(x: spinnerRect.midX, y: spinnerRect.midY), radius: 9.0, startAngle: 0.0, endAngle: .pi * 1.55, clockwise: true)
+        accent.setStroke()
+        spinnerPath.lineWidth = 3.0
+        spinnerPath.stroke()
+
+        let buttonRect = CGRect(x: 56.0, y: 100.0, width: 136.0, height: 40.0)
+        let scaledButtonRect = CGRect(
+            x: buttonRect.midX - buttonRect.width * buttonScale * 0.5,
+            y: buttonRect.midY - buttonRect.height * buttonScale * 0.5,
+            width: buttonRect.width * buttonScale,
+            height: buttonRect.height * buttonScale
+        )
+        accent.setFill()
+        UIBezierPath(roundedRect: scaledButtonRect, cornerRadius: 12.0).fill()
+        ("Confirm" as NSString).draw(
+            in: CGRect(x: scaledButtonRect.minX + 28.0, y: scaledButtonRect.minY + 10.0, width: scaledButtonRect.width - 56.0, height: 20.0),
+            withAttributes: [
+                .font: UIFont.systemFont(ofSize: 15.0, weight: .semibold),
+                .foregroundColor: UIColor.white,
+            ]
+        )
+
+        let toggleRect = CGRect(x: 18.0, y: 152.0, width: 60.0, height: 28.0)
+        let toggleTrack = UIBezierPath(roundedRect: toggleRect, cornerRadius: 14.0)
+        accent.withAlphaComponent(statePhase.isMultiple(of: 2) ? 0.92 : 0.28).setFill()
+        toggleTrack.fill()
+        UIColor.white.setFill()
+        let thumbX = statePhase.isMultiple(of: 2) ? toggleRect.maxX - 24.0 : toggleRect.minX + 4.0
+        UIBezierPath(ovalIn: CGRect(x: thumbX, y: toggleRect.minY + 4.0, width: 20.0, height: 20.0)).fill()
+
+        let sliderRect = CGRect(x: 94.0, y: 160.0, width: bounds.width - 188.0, height: 12.0)
+        UIColor.white.withAlphaComponent(0.82).setFill()
+        UIBezierPath(roundedRect: sliderRect, cornerRadius: 6.0).fill()
+        accent.setFill()
+        UIBezierPath(
+            roundedRect: CGRect(x: sliderRect.minX, y: sliderRect.minY, width: sliderRect.width * sliderValue, height: sliderRect.height),
+            cornerRadius: 6.0
+        ).fill()
+
+        let previewRect = CGRect(x: bounds.width - 86.0, y: 100.0, width: 68.0, height: 80.0)
+        contextDrawImage(image, in: previewRect, cornerRadius: 12.0, alpha: previewAlpha)
+
+        if focusMode != 0
+        {
+            let focusRect: CGRect
+            switch focusMode
+            {
+            case 1:
+                focusRect = buttonRect.insetBy(dx: -4.0, dy: -4.0)
+            case 2:
+                focusRect = sliderRect.insetBy(dx: -4.0, dy: -8.0)
+            default:
+                focusRect = previewRect.insetBy(dx: -4.0, dy: -4.0)
+            }
+            accent.withAlphaComponent(0.28).setStroke()
+            let focusPath = UIBezierPath(roundedRect: focusRect, cornerRadius: 14.0)
+            focusPath.lineWidth = 2.0
+            focusPath.stroke()
         }
     }
 }
@@ -6932,6 +7806,258 @@ private final class SurfaceRouterComposeBenchView: UIView
             showingPopup = step.isMultiple(of: 2)
             popupLabel.text = showingPopup ? "Overlay Compose \(step % 7)" : "Overlay Compose"
         }
+    }
+}
+
+private final class OptimizedAuthoringTextFieldsBenchView: UIView
+{
+    private var username = "pilot"
+    private var bio = "Docking ready."
+    private var password = "secret"
+    private var status = "Idle"
+    private var focusMode = 0
+
+    override init(frame: CGRect)
+    {
+        super.init(frame: frame)
+        isOpaque = false
+        backgroundColor = UIColor(red: 0.97, green: 0.98, blue: 1.0, alpha: 1.0)
+        contentScaleFactor = UIScreen.main.scale
+    }
+
+    required init?(coder: NSCoder)
+    {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func runEditCycle(step: Int)
+    {
+        withPerfSignpost("diff.apply")
+        {
+            username = "pilot_\(step % 19).one"
+            bio = "Orbit clearance \(step % 7). Preparing dock \(step % 5) with status \(step % 11)."
+            password = "secret\(42 + step % 31)"
+            status = step.isMultiple(of: 2)
+                ? "Validation clear. Secure remask applied."
+                : "Checking normalization and caret update."
+            focusMode = 0
+        }
+        withPerfSignpost("text.measure")
+        {
+            let textRect = CGRect(x: 26.0, y: 90.0, width: bounds.width - 52.0, height: 112.0)
+            _ = (bio as NSString).boundingRect(
+                with: textRect.size,
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [
+                    .font: UIFont.systemFont(ofSize: 14.0),
+                ],
+                context: nil
+            )
+        }
+        withPerfSignpost("first.interactive")
+        {
+            setNeedsDisplay()
+        }
+    }
+
+    func runFocusCycle(step: Int)
+    {
+        withPerfSignpost("diff.apply")
+        {
+            status = step.isMultiple(of: 2)
+                ? "Preparing focus handoff."
+                : "Preparing responder update."
+        }
+        withPerfSignpost("first.interactive")
+        {
+            focusMode = step % 3
+            setNeedsDisplay()
+        }
+    }
+
+    override func draw(_ rect: CGRect)
+    {
+        UIColor(red: 0.97, green: 0.98, blue: 1.0, alpha: 1.0).setFill()
+        UIRectFill(bounds)
+        drawFieldPanel(rect: CGRect(x: 18.0, y: 20.0, width: bounds.width - 36.0, height: 42.0), text: username, placeholder: "username", focused: focusMode == 0)
+        drawFieldPanel(rect: CGRect(x: 18.0, y: 76.0, width: bounds.width - 36.0, height: 112.0), text: bio, placeholder: "", focused: focusMode == 1, multiline: true)
+        drawFieldPanel(rect: CGRect(x: 18.0, y: 202.0, width: bounds.width - 36.0, height: 42.0), text: String(repeating: "•", count: max(password.count, 1)), placeholder: "password", focused: focusMode == 2)
+        (status as NSString).draw(
+            in: CGRect(x: 18.0, y: 256.0, width: bounds.width - 36.0, height: 40.0),
+            withAttributes: [
+                .font: UIFont.systemFont(ofSize: 13.0, weight: .medium),
+                .foregroundColor: UIColor(red: 0.28, green: 0.32, blue: 0.40, alpha: 1.0),
+            ]
+        )
+    }
+
+    private func drawFieldPanel(
+        rect: CGRect,
+        text: String,
+        placeholder: String,
+        focused: Bool,
+        multiline: Bool = false
+    )
+    {
+        UIColor.white.setFill()
+        UIBezierPath(roundedRect: rect, cornerRadius: 12.0).fill()
+        let stroke = focused
+            ? UIColor(red: 0.20, green: 0.55, blue: 1.0, alpha: 1.0)
+            : UIColor(red: 0.82, green: 0.86, blue: 0.93, alpha: 1.0)
+        stroke.setStroke()
+        let path = UIBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), cornerRadius: 12.0)
+        path.lineWidth = 1.0
+        path.stroke()
+        let drawText = text.isEmpty ? placeholder : text
+        (drawText as NSString).draw(
+            in: rect.insetBy(dx: 12.0, dy: multiline ? 10.0 : 11.0),
+            withAttributes: [
+                .font: UIFont.systemFont(ofSize: 14.0),
+                .foregroundColor: text.isEmpty
+                    ? UIColor(red: 0.56, green: 0.60, blue: 0.68, alpha: 1.0)
+                    : UIColor(red: 0.12, green: 0.16, blue: 0.24, alpha: 1.0),
+            ]
+        )
+    }
+}
+
+private final class OptimizedPopupWheelPickerBenchView: UIView
+{
+    private let options = [
+        "Explorer",
+        "Navigator",
+        "Commander",
+        "Systems",
+        "Guest",
+        "Dock",
+        "Control",
+    ]
+    private var selection = 0
+    private var panelOpen = true
+
+    override init(frame: CGRect)
+    {
+        super.init(frame: frame)
+        isOpaque = false
+        backgroundColor = UIColor(red: 0.95, green: 0.97, blue: 1.0, alpha: 1.0)
+        contentScaleFactor = UIScreen.main.scale
+    }
+
+    required init?(coder: NSCoder)
+    {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func runInteraction(step: Int)
+    {
+        withPerfSignpost("diff.apply")
+        {
+            panelOpen = true
+            selection = step % options.count
+        }
+        withPerfSignpost("first.interactive")
+        {
+            panelOpen = !step.isMultiple(of: 3)
+            setNeedsDisplay()
+        }
+    }
+
+    override func draw(_ rect: CGRect)
+    {
+        UIColor(red: 0.95, green: 0.97, blue: 1.0, alpha: 1.0).setFill()
+        UIRectFill(bounds)
+
+        let panelWidth = min(bounds.width - 32.0, 240.0)
+        let panelHeight: CGFloat = panelOpen ? 212.0 : 72.0
+        let panelRect = CGRect(x: bounds.midX - panelWidth * 0.5, y: bounds.midY - panelHeight * 0.5, width: panelWidth, height: panelHeight)
+        UIColor.white.setFill()
+        UIBezierPath(roundedRect: panelRect, cornerRadius: 18.0).fill()
+        ("Crew Role" as NSString).draw(
+            in: CGRect(x: panelRect.minX + 16.0, y: panelRect.minY + 14.0, width: panelRect.width - 32.0, height: 22.0),
+            withAttributes: [
+                .font: UIFont.boldSystemFont(ofSize: 17.0),
+                .foregroundColor: UIColor(red: 0.12, green: 0.16, blue: 0.24, alpha: 1.0),
+            ]
+        )
+        ("Selected \(options[selection])" as NSString).draw(
+            in: CGRect(x: panelRect.minX + 16.0, y: panelRect.minY + 40.0, width: panelRect.width - 32.0, height: 18.0),
+            withAttributes: [
+                .font: UIFont.systemFont(ofSize: 13.0),
+                .foregroundColor: UIColor(red: 0.30, green: 0.34, blue: 0.42, alpha: 1.0),
+            ]
+        )
+        guard panelOpen else
+        {
+            return
+        }
+        for rowOffset in -1...1
+        {
+            let index = max(0, min(selection + rowOffset, options.count - 1))
+            let rowRect = CGRect(x: panelRect.minX + 16.0, y: panelRect.minY + 78.0 + CGFloat(rowOffset + 1) * 34.0, width: panelRect.width - 32.0, height: 28.0)
+            if rowOffset == 0
+            {
+                UIColor(red: 0.20, green: 0.55, blue: 1.0, alpha: 0.14).setFill()
+                UIBezierPath(roundedRect: rowRect, cornerRadius: 10.0).fill()
+            }
+            (options[index] as NSString).draw(
+                in: rowRect.insetBy(dx: 12.0, dy: 4.0),
+                withAttributes: [
+                    .font: UIFont.systemFont(ofSize: 15.0, weight: rowOffset == 0 ? .semibold : .regular),
+                    .foregroundColor: UIColor(red: 0.14, green: 0.18, blue: 0.24, alpha: rowOffset == 0 ? 1.0 : 0.72),
+                ]
+            )
+        }
+    }
+}
+
+private final class OptimizedBurstEmitterBenchView: UIView
+{
+    private var step = 0
+
+    override init(frame: CGRect)
+    {
+        super.init(frame: frame)
+        isOpaque = false
+        backgroundColor = UIColor(red: 0.08, green: 0.10, blue: 0.16, alpha: 1.0)
+        contentScaleFactor = UIScreen.main.scale
+    }
+
+    required init?(coder: NSCoder)
+    {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func runSample(step: Int)
+    {
+        withPerfSignpost("diff.apply")
+        {
+            self.step = step
+            setNeedsDisplay()
+        }
+    }
+
+    override func draw(_ rect: CGRect)
+    {
+        UIColor(red: 0.08, green: 0.10, blue: 0.16, alpha: 1.0).setFill()
+        UIRectFill(bounds)
+        let phase = CGFloat(step % 9) / 8.0
+        let center = CGPoint(x: bounds.width * (0.25 + phase * 0.5), y: bounds.height * (0.35 + phase * 0.2))
+        for index in 0..<48
+        {
+            let angle = CGFloat(index) / 48.0 * .pi * 2.0
+            let radius = 16.0 + CGFloat((index + step) % 9) * 7.0
+            let point = CGPoint(x: center.x + cos(angle) * radius, y: center.y + sin(angle) * radius)
+            let size = 4.0 + CGFloat((index + step) % 4) * 2.0
+            UIColor(red: 0.98, green: 0.94, blue: 0.56, alpha: 0.94).setFill()
+            UIBezierPath(ovalIn: CGRect(x: point.x - size * 0.5, y: point.y - size * 0.5, width: size, height: size)).fill()
+        }
+        ("Emitter phase \(step % 9)" as NSString).draw(
+            in: CGRect(x: 16.0, y: bounds.height - 34.0, width: bounds.width - 32.0, height: 18.0),
+            withAttributes: [
+                .font: UIFont.systemFont(ofSize: 13.0, weight: .medium),
+                .foregroundColor: UIColor.white.withAlphaComponent(0.92),
+            ]
+        )
     }
 }
 
@@ -7490,6 +8616,115 @@ private func makeControlSetMutateBenchmark(
     }
 }
 
+@MainActor
+private func makeOptimizedControlSetMountBenchmark(
+    testName: String,
+    image: UIImage,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    OxideUIKitBenchmark(testName: testName, iterations: 32)
+    {
+        let view = OptimizedControlSetBenchView(frame: .zero, image: image)
+        view.installDeck(palettePhase: 0)
+        host.mount(view, size: CGSize(width: 360, height: 220))
+    }
+}
+
+@MainActor
+private func makeOptimizedControlSetMutateBenchmark(
+    testName: String,
+    image: UIImage,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let view = OptimizedControlSetBenchView(frame: .zero, image: image)
+    view.installDeck(palettePhase: 0)
+    host.mount(view, size: CGSize(width: 360, height: 220))
+    var statePhase = 0
+    return OxideUIKitBenchmark(testName: testName, iterations: 32)
+    {
+        statePhase += 1
+        view.mutate(statePhase: statePhase)
+        host.commit(view)
+    }
+}
+
+@MainActor
+private func makeOptimizedCollectionViewEncodeBenchmark(
+    testName: String,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let view = OptimizedCollectionJourneyBenchView(frame: .zero, mode: .matrix)
+    host.mount(view, size: CGSize(width: 360, height: 240))
+    return OxideUIKitBenchmark(testName: testName, iterations: 24)
+    {
+        withPerfSignpost("scroll")
+        {
+            view.scroll(to: 0.35)
+        }
+        host.commit(view)
+    }
+}
+
+@MainActor
+private func makeOptimizedLayoutFlatGridRelayoutBenchmark(
+    testName: String,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let view = OptimizedFlatRectGridBenchView(frame: .zero)
+    view.install(count: 240, palettePhase: 0)
+    host.mount(view, size: CGSize(width: 360, height: 760))
+    var landscape = false
+    return OxideUIKitBenchmark(testName: testName, iterations: 24)
+    {
+        landscape.toggle()
+        view.frame.size = landscape
+            ? CGSize(width: 640, height: 420)
+            : CGSize(width: 360, height: 760)
+        host.commit(view)
+    }
+}
+
+@MainActor
+private func makeOptimizedLayoutDeepStackThemeSwapBenchmark(
+    testName: String,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let view = OptimizedDeepStackBenchView(frame: .zero)
+    host.mount(view, size: CGSize(width: 420, height: 820))
+    var step = 0
+    return OxideUIKitBenchmark(testName: testName, iterations: 24)
+    {
+        step += 1
+        view.runThemeSwap(step: step)
+        host.commit(view)
+    }
+}
+
+@MainActor
+private func makeOptimizedLayoutGridSafeAreaBenchmark(
+    testName: String,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let view = OptimizedInsetGridBenchView(frame: .zero)
+    view.gridView.install(count: 180, palettePhase: 0)
+    host.mount(view, size: CGSize(width: 420, height: 760))
+    var expanded = false
+    return OxideUIKitBenchmark(testName: testName, iterations: 24)
+    {
+        expanded.toggle()
+        view.contentInsets = expanded
+            ? UIEdgeInsets(top: 44.0, left: 32.0, bottom: 28.0, right: 24.0)
+            : UIEdgeInsets(top: 8.0, left: 8.0, bottom: 8.0, right: 8.0)
+        host.commit(view)
+    }
+}
+
 private func bridgeFileFixture(rowCount: Int) -> [String]
 {
     (0..<rowCount).map
@@ -7754,6 +8989,166 @@ private func makeOptimizedZoomImageGestureJourneyBenchmark(
         host.commit(view)
         view.scale = 1.0
         view.offset = .zero
+        host.commit(view)
+    }
+}
+
+@MainActor
+private func makeOptimizedButtonPressResponseBenchmark(
+    testName: String,
+    image: UIImage,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let view = OptimizedControlSetBenchView(frame: .zero, image: image)
+    view.installDeck(palettePhase: 0)
+    host.mount(view, size: CGSize(width: 360, height: 220))
+    var step = 0
+    return OxideUIKitBenchmark(testName: testName, iterations: 64)
+    {
+        step += 1
+        view.runButtonPressResponse(step: step)
+        host.commit(view)
+    }
+}
+
+@MainActor
+private func makeOptimizedSliderScrubResponseBenchmark(
+    testName: String,
+    image: UIImage,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let view = OptimizedControlSetBenchView(frame: .zero, image: image)
+    view.installDeck(palettePhase: 0)
+    host.mount(view, size: CGSize(width: 360, height: 220))
+    var step = 0
+    return OxideUIKitBenchmark(testName: testName, iterations: 64)
+    {
+        step += 1
+        view.runSliderScrubResponse(step: step)
+        host.commit(view)
+    }
+}
+
+@MainActor
+private func makeOptimizedTextFocusResponseBenchmark(
+    testName: String,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let view = OptimizedAuthoringTextFieldsBenchView(frame: .zero)
+    host.mount(view, size: CGSize(width: 320, height: 308))
+    var step = 0
+    return OxideUIKitBenchmark(testName: testName, iterations: 24)
+    {
+        step += 1
+        view.runFocusCycle(step: step)
+        host.commit(view)
+    }
+}
+
+@MainActor
+private func makeOptimizedReconcileMutationBenchmark(
+    testName: String,
+    dirtyNodes: Int,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let view = OptimizedFlatRectGridBenchView(frame: .zero)
+    view.install(count: 1_000, palettePhase: 0)
+    host.mount(view, size: CGSize(width: 420, height: 760))
+    var step = 0
+    return OxideUIKitBenchmark(testName: testName, iterations: 24)
+    {
+        step += 1
+        view.mutateSubset(limit: dirtyNodes, palettePhase: step)
+        host.commit(view)
+    }
+}
+
+@MainActor
+private func makeOptimizedThemeSwapFullBenchmark(
+    testName: String,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let view = OptimizedFlatRectGridBenchView(frame: .zero)
+    view.install(count: 1_000, palettePhase: 0)
+    host.mount(view, size: CGSize(width: 420, height: 760))
+    var step = 0
+    return OxideUIKitBenchmark(testName: testName, iterations: 24)
+    {
+        step += 1
+        view.runThemeSwap(step: step)
+        host.commit(view)
+    }
+}
+
+@MainActor
+private func makeOptimizedTextFieldsEditCycleBenchmark(
+    testName: String,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let view = OptimizedAuthoringTextFieldsBenchView(frame: .zero)
+    host.mount(view, size: CGSize(width: 320, height: 308))
+    var step = 0
+    return OxideUIKitBenchmark(testName: testName, iterations: 24)
+    {
+        step += 1
+        view.runEditCycle(step: step)
+        host.commit(view)
+    }
+}
+
+@MainActor
+private func makeOptimizedPopupWheelPickerBenchmark(
+    testName: String,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let view = OptimizedPopupWheelPickerBenchView(frame: .zero)
+    host.mount(view, size: CGSize(width: 300, height: 260))
+    var step = 0
+    return OxideUIKitBenchmark(testName: testName, iterations: 72)
+    {
+        step += 1
+        view.runInteraction(step: step)
+        host.commit(view)
+    }
+}
+
+@MainActor
+private func makeOptimizedBurstEmitterBenchmark(
+    testName: String,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let view = OptimizedBurstEmitterBenchView(frame: .zero)
+    host.mount(view, size: CGSize(width: 260, height: 220))
+    var step = 0
+    return OxideUIKitBenchmark(testName: testName, iterations: 40)
+    {
+        step += 1
+        view.runSample(step: step)
+        host.commit(view)
+    }
+}
+
+@MainActor
+private func makeOptimizedSurfaceRouterComposeBenchmark(
+    testName: String,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let view = OptimizedOrchestrationBenchView(frame: .zero)
+    host.mount(view, size: CGSize(width: 280, height: 280))
+    var step = 0
+    return OxideUIKitBenchmark(testName: testName, iterations: 32)
+    {
+        step += 1
+        view.runComposition(step: step)
         host.commit(view)
     }
 }
@@ -8029,6 +9424,55 @@ private func makeOptimizedIdleAnimationBenchmark(
 }
 
 @MainActor
+private func makeOptimizedFlatRects10000MountBenchmark(
+    testName: String,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    OxideUIKitBenchmark(testName: testName, iterations: 1)
+    {
+        let view = OptimizedFlatRectGridBenchView(frame: .zero)
+        view.install(count: 10_000, palettePhase: 0)
+        host.mount(view, size: CGSize(width: 420, height: 760))
+    }
+}
+
+@MainActor
+private func makeOptimizedStress300AnimationsBenchmark(
+    testName: String,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let view = OptimizedStressBarsBenchView(frame: .zero)
+    host.mount(view, size: CGSize(width: 360, height: 360))
+    var step = 0
+    return OxideUIKitBenchmark(testName: testName, iterations: 20)
+    {
+        step += 1
+        view.runPhase(step: step)
+        host.commit(view)
+    }
+}
+
+@MainActor
+private func makeOptimizedTicker100HzBenchmark(
+    testName: String,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let view = OptimizedStressBarsBenchView(frame: .zero)
+    host.mount(view, size: CGSize(width: 360, height: 360))
+    return OxideUIKitBenchmark(testName: testName, iterations: 1)
+    {
+        for tick in 0..<100
+        {
+            view.runPhase(step: tick)
+            host.commit(view)
+        }
+    }
+}
+
+@MainActor
 private func makePhotoImportThumbnailBenchmark(
     testName: String,
     pngData: Data,
@@ -8265,6 +9709,10 @@ private func makeOxideCameraPreviewBenchmark(
             {
                 lines.append(line)
             }
+            if let line = harness.tickRingSummaryLine()
+            {
+                lines.append(line)
+            }
             if let line = harness.memorySummaryLine()
             {
                 lines.append(line)
@@ -8347,6 +9795,10 @@ private func makeOxideRealAppCameraPreviewBenchmark(
                 return lines
             }
             if let line = harness.tickDebugSummaryLine()
+            {
+                lines.append(line)
+            }
+            if let line = harness.tickRingSummaryLine()
             {
                 lines.append(line)
             }
@@ -8615,6 +10067,11 @@ enum OxideUIKitBenchmarkCatalog
                 }
                 host.commit(view)
             }
+        case "testOptimizedCollectionViewEncode":
+            return makeOptimizedCollectionViewEncodeBenchmark(
+                testName: normalizedTestName,
+                host: host
+            )
         case "testLayoutFlatGridRelayout":
             let view = FlatRectGridBenchView(frame: .zero)
             view.install(count: 240, palettePhase: 0)
@@ -8628,6 +10085,11 @@ enum OxideUIKitBenchmarkCatalog
                     : CGSize(width: 360, height: 760)
                 host.commit(view)
             }
+        case "testOptimizedLayoutFlatGridRelayout":
+            return makeOptimizedLayoutFlatGridRelayoutBenchmark(
+                testName: normalizedTestName,
+                host: host
+            )
         case "testLayoutDeepStackThemeSwap":
             let view = DeepStackBenchView(frame: .zero)
             host.mount(view, size: CGSize(width: 420, height: 820))
@@ -8638,6 +10100,11 @@ enum OxideUIKitBenchmarkCatalog
                 view.runThemeSwap(step: step)
                 host.commit(view)
             }
+        case "testOptimizedLayoutDeepStackThemeSwap":
+            return makeOptimizedLayoutDeepStackThemeSwapBenchmark(
+                testName: normalizedTestName,
+                host: host
+            )
         case "testLayoutGridSafeAreaSwap":
             let view = InsetGridBenchView(frame: .zero)
             view.gridView.install(count: 180, palettePhase: 0)
@@ -8651,6 +10118,11 @@ enum OxideUIKitBenchmarkCatalog
                     : UIEdgeInsets(top: 8.0, left: 8.0, bottom: 8.0, right: 8.0)
                 host.commit(view)
             }
+        case "testOptimizedLayoutGridSafeAreaSwap":
+            return makeOptimizedLayoutGridSafeAreaBenchmark(
+                testName: normalizedTestName,
+                host: host
+            )
         case "testLargeEditorKeystrokeBurst":
             let view = LargeEditorBenchView(frame: .zero)
             host.mount(view, size: CGSize(width: 380, height: 460))
@@ -8723,16 +10195,39 @@ enum OxideUIKitBenchmarkCatalog
                 image: assets.checkerImage,
                 host: host
             )
+        case "testOptimizedButtonPressResponse":
+            return makeOptimizedButtonPressResponseBenchmark(
+                testName: normalizedTestName,
+                image: assets.checkerImage,
+                host: host
+            )
         case "testSliderScrubResponse":
             return makeSliderScrubResponseBenchmark(
                 testName: normalizedTestName,
                 image: assets.checkerImage,
                 host: host
             )
+        case "testOptimizedSliderScrubResponse":
+            return makeOptimizedSliderScrubResponseBenchmark(
+                testName: normalizedTestName,
+                image: assets.checkerImage,
+                host: host
+            )
         case "testTextFocusResponse":
             return makeTextFocusResponseBenchmark(testName: normalizedTestName, host: host)
+        case "testOptimizedTextFocusResponse":
+            return makeOptimizedTextFocusResponseBenchmark(
+                testName: normalizedTestName,
+                host: host
+            )
         case "testSingleNodeReconcile":
             return makeReconcileMutationBenchmark(
+                testName: normalizedTestName,
+                dirtyNodes: 1,
+                host: host
+            )
+        case "testOptimizedSingleNodeReconcile":
+            return makeOptimizedReconcileMutationBenchmark(
                 testName: normalizedTestName,
                 dirtyNodes: 1,
                 host: host
@@ -8743,14 +10238,31 @@ enum OxideUIKitBenchmarkCatalog
                 dirtyNodes: 10,
                 host: host
             )
+        case "testOptimizedTreeMutation1Pct":
+            return makeOptimizedReconcileMutationBenchmark(
+                testName: normalizedTestName,
+                dirtyNodes: 10,
+                host: host
+            )
         case "testTreeMutation10Pct":
             return makeReconcileMutationBenchmark(
                 testName: normalizedTestName,
                 dirtyNodes: 100,
                 host: host
             )
+        case "testOptimizedTreeMutation10Pct":
+            return makeOptimizedReconcileMutationBenchmark(
+                testName: normalizedTestName,
+                dirtyNodes: 100,
+                host: host
+            )
         case "testThemeSwapFull":
             return makeThemeSwapFullBenchmark(testName: normalizedTestName, host: host)
+        case "testOptimizedThemeSwapFull":
+            return makeOptimizedThemeSwapFullBenchmark(
+                testName: normalizedTestName,
+                host: host
+            )
         case "testEmptyRootMount":
             return makeEmptyRootMountBenchmark(testName: normalizedTestName, host: host)
         case "testFlatRects10Mount":
@@ -8883,8 +10395,20 @@ enum OxideUIKitBenchmarkCatalog
                 image: assets.checkerImage,
                 host: host
             )
+        case "testOptimizedControlSetMount":
+            return makeOptimizedControlSetMountBenchmark(
+                testName: normalizedTestName,
+                image: assets.checkerImage,
+                host: host
+            )
         case "testControlSetMutate":
             return makeControlSetMutateBenchmark(
+                testName: normalizedTestName,
+                image: assets.checkerImage,
+                host: host
+            )
+        case "testOptimizedControlSetMutate":
+            return makeOptimizedControlSetMutateBenchmark(
                 testName: normalizedTestName,
                 image: assets.checkerImage,
                 host: host
@@ -9260,6 +10784,11 @@ enum OxideUIKitBenchmarkCatalog
                 view.runEditCycle(step: step)
                 host.commit(view)
             }
+        case "testOptimizedTextFieldsEditCycle":
+            return makeOptimizedTextFieldsEditCycleBenchmark(
+                testName: normalizedTestName,
+                host: host
+            )
         case "testPopupWheelPickerInteraction":
             let view = PopupWheelPickerBenchView(frame: .zero)
             host.mount(view, size: CGSize(width: 300, height: 260))
@@ -9270,6 +10799,11 @@ enum OxideUIKitBenchmarkCatalog
                 view.runInteraction(step: step)
                 host.commit(view)
             }
+        case "testOptimizedPopupWheelPickerInteraction":
+            return makeOptimizedPopupWheelPickerBenchmark(
+                testName: normalizedTestName,
+                host: host
+            )
         case "testBurstEmitterSample":
             let view = BurstEmitterBenchView(frame: .zero)
             host.mount(view, size: CGSize(width: 260, height: 220))
@@ -9280,6 +10814,11 @@ enum OxideUIKitBenchmarkCatalog
                 view.runSample(step: step)
                 host.commit(view)
             }
+        case "testOptimizedBurstEmitterSample":
+            return makeOptimizedBurstEmitterBenchmark(
+                testName: normalizedTestName,
+                host: host
+            )
         case "testSurfaceRouterCompose":
             let view = SurfaceRouterComposeBenchView(frame: .zero)
             host.mount(view, size: CGSize(width: 280, height: 280))
@@ -9290,6 +10829,11 @@ enum OxideUIKitBenchmarkCatalog
                 view.runComposition(step: step)
                 host.commit(view)
             }
+        case "testOptimizedSurfaceRouterCompose":
+            return makeOptimizedSurfaceRouterComposeBenchmark(
+                testName: normalizedTestName,
+                host: host
+            )
         case "testOpenCloseHeavyScreen100x":
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 1)
             {
@@ -9352,6 +10896,11 @@ enum OxideUIKitBenchmarkCatalog
                 view.install(count: 10_000, palettePhase: 0)
                 host.mount(view, size: CGSize(width: 420, height: 760))
             }
+        case "testOptimizedFlatRects10000Mount":
+            return makeOptimizedFlatRects10000MountBenchmark(
+                testName: normalizedTestName,
+                host: host
+            )
         case "testStress300Animations":
             let view = StressBarsBenchView(frame: .zero)
             host.mount(view, size: CGSize(width: 360, height: 360))
@@ -9362,6 +10911,11 @@ enum OxideUIKitBenchmarkCatalog
                 view.runPhase(step: step)
                 host.commit(view)
             }
+        case "testOptimizedStress300Animations":
+            return makeOptimizedStress300AnimationsBenchmark(
+                testName: normalizedTestName,
+                host: host
+            )
         case "testTicker100Hz":
             let view = StressBarsBenchView(frame: .zero)
             host.mount(view, size: CGSize(width: 360, height: 360))
@@ -9373,6 +10927,11 @@ enum OxideUIKitBenchmarkCatalog
                     host.commit(view)
                 }
             }
+        case "testOptimizedTicker100Hz":
+            return makeOptimizedTicker100HzBenchmark(
+                testName: normalizedTestName,
+                host: host
+            )
         case "testPermissionCallbackBridge":
             let bridge = PermissionBenchBridge(domain: "camera", status: .authorized)
             let callbackSum = UInt64Box()

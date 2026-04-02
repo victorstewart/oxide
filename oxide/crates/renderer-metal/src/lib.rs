@@ -138,8 +138,35 @@ fn experimental_preview_submission_backpressure_enabled() -> bool {
 }
 
 #[inline(always)]
-pub fn direct_preview_submission_backpressure_applies(enabled: bool, in_flight: usize) -> bool {
-    enabled && in_flight >= 2
+pub fn direct_preview_uses_dontcare_load_action() -> bool {
+    env_flag("OXIDE_PERF_CAMERA_PREVIEW_DONT_CARE_LOAD").unwrap_or(false)
+}
+
+#[inline(always)]
+fn experimental_preview_submission_cap() -> Option<usize> {
+    static CAP: OnceLock<Option<usize>> = OnceLock::new();
+    *CAP.get_or_init(|| {
+        if let Ok(value) = std::env::var("OXIDE_PERF_CAMERA_PREVIEW_SUBMISSION_CAP") {
+            if let Ok(parsed) = value.trim().parse::<usize>() {
+                if parsed >= 1 {
+                    return Some(parsed);
+                }
+            }
+        }
+        if experimental_preview_submission_backpressure_enabled() {
+            Some(2)
+        } else {
+            None
+        }
+    })
+}
+
+#[inline(always)]
+pub fn direct_preview_submission_backpressure_applies(
+    submission_cap: Option<usize>,
+    in_flight: usize,
+) -> bool {
+    submission_cap.is_some_and(|limit| in_flight >= limit)
 }
 
 #[inline(always)]
@@ -179,6 +206,22 @@ fn direct_preview_present_frame_age_ms(timestamp_ns: u64) -> f64 {
     (now_ns - timestamp_ns) as f64 / 1_000_000.0
 }
 
+#[cfg(target_os = "ios")]
+fn mark_preview_generation_presented(generation: u64) {
+    if generation == 0 {
+        return;
+    }
+    unsafe extern "C" {
+        fn oxide_cam_mark_presented_generation(generation: u64);
+    }
+    unsafe {
+        oxide_cam_mark_presented_generation(generation);
+    }
+}
+
+#[cfg(not(target_os = "ios"))]
+fn mark_preview_generation_presented(_generation: u64) {}
+
 #[inline(always)]
 fn elapsed_ms(start: Option<Instant>) -> f64 {
     start.map(|value| value.elapsed().as_secs_f64() * 1000.0).unwrap_or(0.0)
@@ -203,6 +246,176 @@ unsafe fn command_buffer_gpu_duration_ms(buffer: &CommandBufferRef) -> f64 {
 #[inline(always)]
 unsafe fn command_buffer_gpu_duration_ms(_buffer: &CommandBufferRef) -> f64 {
     0.0
+}
+
+#[cfg(target_os = "ios")]
+#[inline(always)]
+fn camera_gpu_stage_timestamps_enabled() -> bool {
+    env_flag("OXIDE_PERF_CAMERA_GPU_TIMESTAMPS")
+        .unwrap_or_else(|| env_flag("OXIDE_PERF_PARKED").unwrap_or(false))
+}
+
+#[cfg(target_os = "ios")]
+#[inline(always)]
+fn gpu_timestamp_interval_ms(
+    begin: u64,
+    end: u64,
+    cpu_start: u64,
+    cpu_end: u64,
+    gpu_start: u64,
+    gpu_end: u64,
+) -> f64 {
+    if end <= begin || cpu_end <= cpu_start || gpu_end <= gpu_start {
+        return 0.0;
+    }
+    let sample_span = (end - begin) as f64;
+    let cpu_span = (cpu_end - cpu_start) as f64;
+    let gpu_span = (gpu_end - gpu_start) as f64;
+    if sample_span <= 0.0 || cpu_span <= 0.0 || gpu_span <= 0.0 {
+        return 0.0;
+    }
+    let nanos = sample_span / gpu_span * cpu_span;
+    if nanos.is_finite() && nanos > 0.0 {
+        nanos / 1_000_000.0
+    } else {
+        0.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct DirectPreviewGpuStageStats {
+    render_ms: f64,
+    vertex_ms: f64,
+    fragment_ms: f64,
+}
+
+#[cfg(target_os = "ios")]
+#[derive(Clone)]
+struct DirectPreviewGpuTimingSupport {
+    counter_set: CounterSet,
+}
+
+#[cfg(not(target_os = "ios"))]
+#[derive(Clone)]
+struct DirectPreviewGpuTimingSupport;
+
+#[cfg(target_os = "ios")]
+#[derive(Clone)]
+struct DirectPreviewGpuTrace {
+    sample_buffer: CounterSampleBuffer,
+    cpu_start: u64,
+    gpu_start: u64,
+}
+
+#[cfg(not(target_os = "ios"))]
+#[derive(Clone)]
+struct DirectPreviewGpuTrace;
+
+#[cfg(target_os = "ios")]
+impl DirectPreviewGpuTimingSupport {
+    fn new(device: &Device) -> Option<Self> {
+        if !camera_gpu_stage_timestamps_enabled()
+            || !device.supports_counter_sampling(MTLCounterSamplingPoint::AtStageBoundary)
+        {
+            return None;
+        }
+        let counter_set =
+            device.counter_sets().into_iter().find(|set| set.name() == "timestamp")?;
+        Some(Self { counter_set })
+    }
+
+    fn begin_submission(&self, device: &Device) -> Option<DirectPreviewGpuTrace> {
+        let desc = CounterSampleBufferDescriptor::new();
+        desc.set_storage_mode(MTLStorageMode::Shared);
+        desc.set_sample_count(4);
+        desc.set_counter_set(&self.counter_set);
+        let sample_buffer = device.new_counter_sample_buffer_with_descriptor(&desc).ok()?;
+        let mut cpu_start = 0;
+        let mut gpu_start = 0;
+        device.sample_timestamps(&mut cpu_start, &mut gpu_start);
+        Some(DirectPreviewGpuTrace { sample_buffer, cpu_start, gpu_start })
+    }
+}
+
+#[cfg(target_os = "ios")]
+impl DirectPreviewGpuTrace {
+    fn configure_render_pass(&self, descriptor: &RenderPassDescriptorRef) {
+        let sample_attachment = descriptor.sample_buffer_attachments().object_at(0).unwrap();
+        sample_attachment.set_sample_buffer(&self.sample_buffer);
+        sample_attachment.set_start_of_vertex_sample_index(0);
+        sample_attachment.set_end_of_vertex_sample_index(1);
+        sample_attachment.set_start_of_fragment_sample_index(2);
+        sample_attachment.set_end_of_fragment_sample_index(3);
+    }
+
+    fn resolve(&self, device: &Device) -> DirectPreviewGpuStageStats {
+        let mut cpu_end = 0;
+        let mut gpu_end = 0;
+        device.sample_timestamps(&mut cpu_end, &mut gpu_end);
+        let Some(samples) =
+            (unsafe { resolve_direct_preview_gpu_timestamp_samples(&self.sample_buffer) })
+        else {
+            return DirectPreviewGpuStageStats::default();
+        };
+        let vertex_ms = gpu_timestamp_interval_ms(
+            samples[0],
+            samples[1],
+            self.cpu_start,
+            cpu_end,
+            self.gpu_start,
+            gpu_end,
+        );
+        let fragment_ms = gpu_timestamp_interval_ms(
+            samples[2],
+            samples[3],
+            self.cpu_start,
+            cpu_end,
+            self.gpu_start,
+            gpu_end,
+        );
+        DirectPreviewGpuStageStats { render_ms: vertex_ms + fragment_ms, vertex_ms, fragment_ms }
+    }
+}
+
+#[cfg(not(target_os = "ios"))]
+impl DirectPreviewGpuTimingSupport {
+    fn new(_device: &Device) -> Option<Self> {
+        None
+    }
+
+    fn begin_submission(&self, _device: &Device) -> Option<DirectPreviewGpuTrace> {
+        None
+    }
+}
+
+#[cfg(not(target_os = "ios"))]
+impl DirectPreviewGpuTrace {
+    fn configure_render_pass(&self, _descriptor: &RenderPassDescriptorRef) {}
+
+    fn resolve(&self, _device: &Device) -> DirectPreviewGpuStageStats {
+        DirectPreviewGpuStageStats::default()
+    }
+}
+
+#[cfg(target_os = "ios")]
+unsafe fn resolve_direct_preview_gpu_timestamp_samples(
+    sample_buffer: &CounterSampleBufferRef,
+) -> Option<[u64; 4]> {
+    let ns_data: *mut Object = msg_send![
+        sample_buffer.as_ptr(),
+        resolveCounterRange: NSRange::new(0u64, 4u64)
+    ];
+    if ns_data.is_null() {
+        return None;
+    }
+    let length: NSUInteger = msg_send![ns_data, length];
+    let bytes: *const std::ffi::c_void = msg_send![ns_data, bytes];
+    let expected_bytes = core::mem::size_of::<u64>() * 4;
+    if bytes.is_null() || (length as usize) < expected_bytes {
+        return None;
+    }
+    let resolved = std::slice::from_raw_parts(bytes.cast::<u64>(), 4);
+    Some([resolved[0], resolved[1], resolved[2], resolved[3]])
 }
 
 #[inline(always)]
@@ -539,6 +752,14 @@ pub enum CameraTextureSource {
     SyntheticBenchmark,
 }
 
+#[derive(Clone)]
+struct DirectPreviewSubmittedFrame {
+    frame_id: u64,
+    generation: u64,
+    cmd: CommandBuffer,
+    gpu_trace: Option<DirectPreviewGpuTrace>,
+}
+
 #[allow(dead_code)]
 pub struct MetalRenderer {
     device: Device,
@@ -633,12 +854,16 @@ pub struct MetalRenderer {
     use_camera_textures: bool,
     use_image_arg_buffer: bool,
     submit_error_flag: Arc<AtomicBool>,
-    direct_preview_submitted: VecDeque<(u64, CommandBuffer)>,
+    direct_preview_gpu_timing: Option<DirectPreviewGpuTimingSupport>,
+    direct_preview_submitted: VecDeque<DirectPreviewSubmittedFrame>,
     direct_preview_last_submission_depth: u32,
     direct_preview_last_submission_skipped: u32,
     direct_preview_last_present_frame_age_ms: f64,
     direct_preview_last_completed_frame_id: u64,
     direct_preview_last_completed_gpu_ms: f64,
+    direct_preview_last_completed_gpu_render_ms: f64,
+    direct_preview_last_completed_gpu_vertex_ms: f64,
+    direct_preview_last_completed_gpu_fragment_ms: f64,
     pending_present_drawable: usize,
     pending_present_texture: usize,
 }
@@ -663,9 +888,12 @@ struct CameraPreviewRenderResult {
     camera_matrix: i32,
     camera_video_range: i32,
     camera_color_space: i32,
+    command_buffer_ms: f64,
+    encoder_ms: f64,
     setup_ms: f64,
     encode_quad_ms: f64,
     present_ms: f64,
+    present_frame_age_ms: f64,
     commit_ms: f64,
 }
 
@@ -754,6 +982,7 @@ impl CameraPreviewRenderer {
         let command_buffer_t0 = collect_stage_stats.then(Instant::now);
         let cmd = self.queue.new_command_buffer().to_owned();
         let command_buffer_ms = elapsed_ms(command_buffer_t0);
+        result.command_buffer_ms = command_buffer_ms;
         let rpd = RenderPassDescriptor::new();
         let setup_t0 = collect_stage_stats.then(Instant::now);
         with_perf_signpost("camera.renderer.direct.setup", || -> Result<(), api::RenderError> {
@@ -767,8 +996,12 @@ impl CameraPreviewRenderer {
             let ca0 = rpd.color_attachments().object_at(0).unwrap();
             ca0.set_texture(Some(TextureRef::from_ptr(raw_dst_tex)));
             ca0.set_store_action(MTLStoreAction::Store);
-            ca0.set_load_action(MTLLoadAction::Clear);
-            ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 });
+            if direct_preview_uses_dontcare_load_action() {
+                ca0.set_load_action(MTLLoadAction::DontCare);
+            } else {
+                ca0.set_load_action(MTLLoadAction::Clear);
+                ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 });
+            }
             Ok(())
         })?;
         result.setup_ms = elapsed_ms(setup_t0);
@@ -776,6 +1009,7 @@ impl CameraPreviewRenderer {
         let encoder_t0 = collect_stage_stats.then(Instant::now);
         let enc = cmd.new_render_command_encoder(&rpd);
         let encoder_ms = elapsed_ms(encoder_t0);
+        result.encoder_ms = encoder_ms;
         let encode_quad_t0 = collect_stage_stats.then(Instant::now);
         with_perf_signpost("camera.renderer.direct.encode_quad", || {
             let (uv_scale, uv_bias) =
@@ -816,14 +1050,18 @@ impl CameraPreviewRenderer {
                 Ok(())
             },
         )?;
+        result.present_frame_age_ms = direct_preview_present_frame_age_ms(frame.timestamp_ns);
         result.present_ms = elapsed_ms(present_t0);
 
         let submit_error_flag = Arc::clone(&self.submit_error_flag);
         let inflight_submissions = Arc::clone(&self.inflight_submissions);
+        let presented_generation = frame.generation;
         inflight_submissions.fetch_add(1, Ordering::AcqRel);
         let completion = ConcreteBlock::new(move |buffer: &CommandBufferRef| {
             if buffer.status() == MTLCommandBufferStatus::Error {
                 submit_error_flag.store(true, Ordering::Release);
+            } else {
+                mark_preview_generation_presented(presented_generation);
             }
             inflight_submissions.fetch_sub(1, Ordering::AcqRel);
         })
@@ -1133,6 +1371,7 @@ impl MetalRenderer {
         } else {
             None
         };
+        let direct_preview_gpu_timing = DirectPreviewGpuTimingSupport::new(&device);
 
         Ok(Self {
             device,
@@ -1222,12 +1461,16 @@ impl MetalRenderer {
             use_camera_textures,
             use_image_arg_buffer,
             submit_error_flag: Arc::new(AtomicBool::new(false)),
+            direct_preview_gpu_timing,
             direct_preview_submitted: VecDeque::new(),
             direct_preview_last_submission_depth: 0,
             direct_preview_last_submission_skipped: 0,
             direct_preview_last_present_frame_age_ms: 0.0,
             direct_preview_last_completed_frame_id: 0,
             direct_preview_last_completed_gpu_ms: 0.0,
+            direct_preview_last_completed_gpu_render_ms: 0.0,
+            direct_preview_last_completed_gpu_vertex_ms: 0.0,
+            direct_preview_last_completed_gpu_fragment_ms: 0.0,
             pending_present_drawable: 0,
             pending_present_texture: 0,
         })
@@ -1273,19 +1516,29 @@ impl MetalRenderer {
 
     fn poll_direct_preview_submissions(&mut self) {
         let log_enabled = ios_log_enabled();
-        while let Some((frame_id, cmd)) = self.direct_preview_submitted.front() {
-            let status = cmd.status();
+        while let Some(submission) = self.direct_preview_submitted.front().cloned() {
+            let status = submission.cmd.status();
             match status {
                 MTLCommandBufferStatus::Completed => {
-                    self.direct_preview_last_completed_frame_id = *frame_id;
+                    self.direct_preview_last_completed_frame_id = submission.frame_id;
+                    mark_preview_generation_presented(submission.generation);
                     self.direct_preview_last_completed_gpu_ms =
-                        unsafe { command_buffer_gpu_duration_ms(cmd) };
+                        unsafe { command_buffer_gpu_duration_ms(&submission.cmd) };
+                    let gpu_stage_stats = submission
+                        .gpu_trace
+                        .as_ref()
+                        .map(|trace| trace.resolve(&self.device))
+                        .unwrap_or_default();
+                    self.direct_preview_last_completed_gpu_render_ms = gpu_stage_stats.render_ms;
+                    self.direct_preview_last_completed_gpu_vertex_ms = gpu_stage_stats.vertex_ms;
+                    self.direct_preview_last_completed_gpu_fragment_ms =
+                        gpu_stage_stats.fragment_ms;
                     self.direct_preview_submitted.pop_front();
                 }
                 MTLCommandBufferStatus::Error => {
                     if log_enabled {
                         unsafe {
-                            let err: *mut Object = msg_send![cmd.as_ptr(), error];
+                            let err: *mut Object = msg_send![submission.cmd.as_ptr(), error];
                             if !err.is_null() {
                                 let code: i64 = msg_send![err, code];
                                 let domain_obj: *mut Object = msg_send![err, domain];
@@ -1296,12 +1549,12 @@ impl MetalRenderer {
                                     .unwrap_or_else(|| "<null-description>".to_string());
                                 ios_log(&format!(
                                     "oxide.renderer-metal: direct preview submit error frame={} domain={} code={} desc={}",
-                                    frame_id, domain, code, desc
+                                    submission.frame_id, domain, code, desc
                                 ));
                             } else {
                                 ios_log(&format!(
                                     "oxide.renderer-metal: direct preview submit error frame={} error=nil",
-                                    frame_id
+                                    submission.frame_id
                                 ));
                             }
                         }
@@ -1317,25 +1570,41 @@ impl MetalRenderer {
         }
     }
 
-    fn track_direct_preview_submission(&mut self, frame_id: u64, cmd: &CommandBuffer) {
-        self.direct_preview_submitted.push_back((frame_id, cmd.to_owned()));
+    fn track_direct_preview_submission(
+        &mut self,
+        frame_id: u64,
+        generation: u64,
+        cmd: &CommandBuffer,
+        gpu_trace: Option<DirectPreviewGpuTrace>,
+    ) {
+        self.direct_preview_submitted.push_back(DirectPreviewSubmittedFrame {
+            frame_id,
+            generation,
+            cmd: cmd.to_owned(),
+            gpu_trace,
+        });
     }
 
     #[inline]
     fn note_direct_preview_submission_depth(&mut self) -> u32 {
-        let depth = self.direct_preview_submitted.len() as u32;
+        let depth = self.current_preview_submission_depth() as u32;
         self.direct_preview_last_submission_depth = depth;
         depth
     }
 
     #[inline]
+    fn current_preview_submission_depth(&self) -> usize {
+        self.camera_preview_renderer
+            .as_ref()
+            .map(|renderer| renderer.pending_submission_count() as usize)
+            .unwrap_or(self.direct_preview_submitted.len())
+    }
+
+    #[inline]
     fn direct_preview_backpressure_blocks_present(&mut self) -> bool {
         let depth = self.note_direct_preview_submission_depth() as usize;
-        let blocked = self.camera_preview_renderer.is_none()
-            && direct_preview_submission_backpressure_applies(
-                experimental_preview_submission_backpressure_enabled(),
-                depth,
-            );
+        let blocked =
+            direct_preview_submission_backpressure_applies(experimental_preview_submission_cap(), depth);
         self.direct_preview_last_submission_skipped = if blocked { 1 } else { 0 };
         blocked
     }
@@ -2139,10 +2408,9 @@ impl MetalRenderer {
             latest_timestamp_ns,
         );
         if reason != 0
-            && self.camera_preview_renderer.is_none()
             && direct_preview_submission_backpressure_applies(
-                experimental_preview_submission_backpressure_enabled(),
-                self.direct_preview_submitted.len(),
+                experimental_preview_submission_cap(),
+                self.current_preview_submission_depth(),
             )
         {
             return CAMERA_PREVIEW_REASON_BACKPRESSURE;
@@ -2353,19 +2621,33 @@ impl MetalRenderer {
             self.refresh_live_camera_preview_frame();
             self.last_cam_fetch_ms = elapsed_ms(fetch_t0);
             let current_frame = self.current_live_camera_frame.clone();
-            let preview = self
-                .camera_preview_renderer
-                .as_mut()
-                .expect("tiny preview renderer available for active tiny preview path")
-                .render_live_frame(
-                    drawable_ptr,
-                    current_frame.as_ref(),
-                    w,
-                    h,
-                    scale,
-                    self.camera_render_mode,
-                    collect_stage_stats,
-                )?;
+            let mut preview = CameraPreviewRenderResult::default();
+            if let Some(frame) = current_frame.as_ref() {
+                preview.camera_width = frame.width;
+                preview.camera_height = frame.height;
+                preview.camera_bit_depth = frame.bit_depth;
+                preview.camera_matrix = frame.matrix;
+                preview.camera_video_range = frame.video_range;
+                preview.camera_color_space = frame.color_space;
+            }
+            let backpressure_blocked = self.direct_preview_backpressure_blocks_present();
+            if !backpressure_blocked && !drawable_ptr.is_null() {
+                preview = self
+                    .camera_preview_renderer
+                    .as_mut()
+                    .expect("tiny preview renderer available for active tiny preview path")
+                    .render_live_frame(
+                        drawable_ptr,
+                        current_frame.as_ref(),
+                        w,
+                        h,
+                        scale,
+                        self.camera_render_mode,
+                        collect_stage_stats,
+                    )?;
+                self.note_direct_preview_submission_depth();
+                self.direct_preview_last_present_frame_age_ms = preview.present_frame_age_ms;
+            }
             self.last_cam_w = preview.camera_width.max(0);
             self.last_cam_h = preview.camera_height.max(0);
             self.last_cam_bd = preview.camera_bit_depth.max(0);
@@ -2400,14 +2682,17 @@ impl MetalRenderer {
                 cam_fetch_ms: self.last_cam_fetch_ms,
                 cam_setup_ms: preview.setup_ms,
                 cam_encode_quad_ms: preview.encode_quad_ms,
-                cam_command_buffer_ms: 0.0,
-                cam_encoder_ms: 0.0,
+                cam_command_buffer_ms: preview.command_buffer_ms,
+                cam_encoder_ms: preview.encoder_ms,
                 cam_encode_bind_ms: 0.0,
                 cam_encode_draw_ms: 0.0,
                 cam_end_encoding_ms: 0.0,
                 cam_present_ms: preview.present_ms,
                 cam_commit_ms: preview.commit_ms,
                 cam_gpu_ms: 0.0,
+                cam_gpu_render_ms: 0.0,
+                cam_gpu_vertex_ms: 0.0,
+                cam_gpu_fragment_ms: 0.0,
                 preview_submission_depth: self.direct_preview_last_submission_depth,
                 preview_submission_skipped: self.direct_preview_last_submission_skipped,
                 preview_submission_frame_age_ms: self.direct_preview_last_present_frame_age_ms,
@@ -2462,6 +2747,10 @@ impl MetalRenderer {
                 });
                 command_buffer_ms = elapsed_ms(command_buffer_t0);
                 let rpd = RenderPassDescriptor::new();
+                let direct_preview_gpu_trace = self
+                    .direct_preview_gpu_timing
+                    .as_ref()
+                    .and_then(|timing| timing.begin_submission(&self.device));
                 let setup_t0 = collect_stage_stats.then(Instant::now);
                 with_perf_signpost(
                     "camera.renderer.direct.setup",
@@ -2476,13 +2765,20 @@ impl MetalRenderer {
                         let ca0 = rpd.color_attachments().object_at(0).unwrap();
                         ca0.set_texture(Some(TextureRef::from_ptr(raw_dst_tex)));
                         ca0.set_store_action(MTLStoreAction::Store);
-                        ca0.set_load_action(MTLLoadAction::Clear);
-                        ca0.set_clear_color(MTLClearColor {
-                            red: 0.0,
-                            green: 0.0,
-                            blue: 0.0,
-                            alpha: 1.0,
-                        });
+                        if direct_preview_uses_dontcare_load_action() {
+                            ca0.set_load_action(MTLLoadAction::DontCare);
+                        } else {
+                            ca0.set_load_action(MTLLoadAction::Clear);
+                            ca0.set_clear_color(MTLClearColor {
+                                red: 0.0,
+                                green: 0.0,
+                                blue: 0.0,
+                                alpha: 1.0,
+                            });
+                        }
+                        if let Some(gpu_trace) = direct_preview_gpu_trace.as_ref() {
+                            gpu_trace.configure_render_pass(&rpd);
+                        }
                         Ok(())
                     },
                 )?;
@@ -2544,7 +2840,12 @@ impl MetalRenderer {
                     cmd.commit();
                 });
                 commit_ms = elapsed_ms(commit_t0);
-                self.track_direct_preview_submission(self.frame_id, &cmd);
+                self.track_direct_preview_submission(
+                    self.frame_id,
+                    current_frame.as_ref().map(|frame| frame.generation).unwrap_or(0),
+                    &cmd,
+                    direct_preview_gpu_trace,
+                );
             }
             if let Some((cw, ch, bd, mx, vr, cs)) = camera_props {
                 self.last_cam_w = cw;
@@ -2597,6 +2898,9 @@ impl MetalRenderer {
                 cam_present_ms: present_ms,
                 cam_commit_ms: commit_ms,
                 cam_gpu_ms: self.direct_preview_last_completed_gpu_ms,
+                cam_gpu_render_ms: self.direct_preview_last_completed_gpu_render_ms,
+                cam_gpu_vertex_ms: self.direct_preview_last_completed_gpu_vertex_ms,
+                cam_gpu_fragment_ms: self.direct_preview_last_completed_gpu_fragment_ms,
                 preview_submission_depth: self.direct_preview_last_submission_depth,
                 preview_submission_skipped: self.direct_preview_last_submission_skipped,
                 preview_submission_frame_age_ms: self.direct_preview_last_present_frame_age_ms,
@@ -2718,7 +3022,7 @@ impl MetalRenderer {
             cmd.commit();
         });
         let commit_ms = elapsed_ms(commit_t0);
-        self.track_direct_preview_submission(self.frame_id, &cmd);
+        self.track_direct_preview_submission(self.frame_id, 0, &cmd, None);
         self.last_stats = PerfStats {
             memory: self.memory_stats(),
             draws: self.acc_draws,
@@ -2754,6 +3058,9 @@ impl MetalRenderer {
             cam_present_ms: present_ms,
             cam_commit_ms: commit_ms,
             cam_gpu_ms: self.direct_preview_last_completed_gpu_ms,
+            cam_gpu_render_ms: self.direct_preview_last_completed_gpu_render_ms,
+            cam_gpu_vertex_ms: self.direct_preview_last_completed_gpu_vertex_ms,
+            cam_gpu_fragment_ms: self.direct_preview_last_completed_gpu_fragment_ms,
             preview_submission_depth: self.direct_preview_last_submission_depth,
             preview_submission_skipped: self.direct_preview_last_submission_skipped,
             preview_submission_frame_age_ms: self.direct_preview_last_present_frame_age_ms,
@@ -6043,6 +6350,9 @@ pub struct PerfStats {
     pub cam_present_ms: f64,
     pub cam_commit_ms: f64,
     pub cam_gpu_ms: f64,
+    pub cam_gpu_render_ms: f64,
+    pub cam_gpu_vertex_ms: f64,
+    pub cam_gpu_fragment_ms: f64,
     pub preview_submission_depth: u32,
     pub preview_submission_skipped: u32,
     pub preview_submission_frame_age_ms: f64,

@@ -32,7 +32,11 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
     private var refreshUpdateLink: UIUpdateLink?
     private var didRunBenchmark = false
     private var oxidePerfRunnerSmoke = false
-    private var pendingLaunchScenario: (scenario: OxideUIKitLaunchScenario, route: String?)?
+    private var pendingLaunchScenario: (
+        scenario: OxideUIKitLaunchScenario,
+        route: String?,
+        style: OxideUIKitLaunchStyle
+    )?
 
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options: UIScene.ConnectionOptions)
     {
@@ -90,7 +94,8 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
                 let window = UIWindow(windowScene: windowScene)
                 let rootViewController = makeUIKitLaunchRootViewController(
                     scenario: launch.scenario,
-                    route: launch.route
+                    route: launch.route,
+                    style: launch.style
                 )
                 window.rootViewController = rootViewController
                 window.makeKeyAndVisible()
@@ -141,6 +146,11 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
         }
         didRunBenchmark = true
         emitConsoleLine("OXIDE_START \(benchmark.testName)")
+        emitBenchmarkMetadataLine(
+            testName: benchmark.testName,
+            measureIterations: 1,
+            benchmarkIterations: benchmark.iterations
+        )
         runMeasuredBenchmarkPass(benchmark)
         for line in benchmark.summaryLines()
         {
@@ -164,9 +174,15 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
         }
         didRunBenchmark = true
         emitConsoleLine("OXIDE_START \(launch.scenario.rawValue)")
+        emitBenchmarkMetadataLine(
+            testName: launch.scenario.rawValue,
+            measureIterations: 1,
+            benchmarkIterations: 1
+        )
         window.rootViewController = makeUIKitLaunchRootViewController(
             scenario: launch.scenario,
-            route: launch.route
+            route: launch.route,
+            style: launch.style
         )
         window.makeKeyAndVisible()
         window.layoutIfNeeded()

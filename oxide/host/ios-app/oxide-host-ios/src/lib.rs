@@ -145,6 +145,14 @@ struct OxideCamPerfSnapshot {
     retained_latest_pixel_buffer_surface_surfaces: u32,
     latest_published_generation: u64,
     latest_published_timestamp_ns: u64,
+    latest_presented_generation: u64,
+    generation_advances: u32,
+    samples_received: u32,
+    samples_dropped_prebridge: u32,
+    samples_bridged: u32,
+    samples_published: u32,
+    samples_presented: u32,
+    samples_superseded_before_present: u32,
 }
 
 #[cfg(target_os = "ios")]
@@ -179,6 +187,9 @@ fn apply_camera_stage_perf(stats: &mut StatsSnapshot, perf_stats: &metal::PerfSt
     stats.cam_present_ms = perf_stats.cam_present_ms as f32;
     stats.cam_commit_ms = perf_stats.cam_commit_ms as f32;
     stats.cam_gpu_ms = perf_stats.cam_gpu_ms as f32;
+    stats.cam_gpu_render_ms = perf_stats.cam_gpu_render_ms as f32;
+    stats.cam_gpu_vertex_ms = perf_stats.cam_gpu_vertex_ms as f32;
+    stats.cam_gpu_fragment_ms = perf_stats.cam_gpu_fragment_ms as f32;
     stats.renderer_memory_total_bytes = perf_stats.memory.total_bytes;
     stats.renderer_memory_draw_targets_bytes = perf_stats.memory.draw_targets_bytes;
     stats.renderer_memory_draw_target_main_bytes = perf_stats.memory.draw_target_main_bytes;
@@ -244,6 +255,15 @@ fn apply_camera_capture_perf(_stats: &mut StatsSnapshot) {
                 snap.retained_latest_pixel_buffer_surface_surfaces;
             _stats.cam_latest_published_generation = snap.latest_published_generation;
             _stats.cam_latest_published_timestamp_ns = snap.latest_published_timestamp_ns;
+            _stats.cam_latest_presented_generation = snap.latest_presented_generation;
+            _stats.cam_generation_advances = snap.generation_advances;
+            _stats.cam_samples_received = snap.samples_received;
+            _stats.cam_samples_dropped_prebridge = snap.samples_dropped_prebridge;
+            _stats.cam_samples_bridged = snap.samples_bridged;
+            _stats.cam_samples_published = snap.samples_published;
+            _stats.cam_samples_presented = snap.samples_presented;
+            _stats.cam_samples_superseded_before_present =
+                snap.samples_superseded_before_present;
         }
     }
 }
@@ -1317,6 +1337,9 @@ struct StatsSnapshot {
     cam_present_ms: f32,
     cam_commit_ms: f32,
     cam_gpu_ms: f32,
+    cam_gpu_render_ms: f32,
+    cam_gpu_vertex_ms: f32,
+    cam_gpu_fragment_ms: f32,
     cam_capture_total_ms: f32,
     cam_capture_sample_setup_ms: f32,
     cam_capture_lock_ms: f32,
@@ -1346,6 +1369,14 @@ struct StatsSnapshot {
     cam_retained_latest_pixel_buffer_surface_surfaces: u32,
     cam_latest_published_generation: u64,
     cam_latest_published_timestamp_ns: u64,
+    cam_latest_presented_generation: u64,
+    cam_generation_advances: u32,
+    cam_samples_received: u32,
+    cam_samples_dropped_prebridge: u32,
+    cam_samples_bridged: u32,
+    cam_samples_published: u32,
+    cam_samples_presented: u32,
+    cam_samples_superseded_before_present: u32,
     renderer_memory_total_bytes: u64,
     renderer_memory_draw_targets_bytes: u64,
     renderer_memory_draw_target_main_bytes: u64,
@@ -2751,6 +2782,9 @@ pub struct OxideHostStats {
     pub cam_present_ms: f32,
     pub cam_commit_ms: f32,
     pub cam_gpu_ms: f32,
+    pub cam_gpu_render_ms: f32,
+    pub cam_gpu_vertex_ms: f32,
+    pub cam_gpu_fragment_ms: f32,
     pub cam_capture_total_ms: f32,
     pub cam_capture_sample_setup_ms: f32,
     pub cam_capture_lock_ms: f32,
@@ -2780,6 +2814,14 @@ pub struct OxideHostStats {
     pub cam_retained_latest_pixel_buffer_surface_surfaces: u32,
     pub cam_latest_published_generation: u64,
     pub cam_latest_published_timestamp_ns: u64,
+    pub cam_latest_presented_generation: u64,
+    pub cam_generation_advances: u32,
+    pub cam_samples_received: u32,
+    pub cam_samples_dropped_prebridge: u32,
+    pub cam_samples_bridged: u32,
+    pub cam_samples_published: u32,
+    pub cam_samples_presented: u32,
+    pub cam_samples_superseded_before_present: u32,
     pub renderer_memory_total_bytes: u64,
     pub renderer_memory_draw_targets_bytes: u64,
     pub renderer_memory_draw_target_main_bytes: u64,
@@ -2850,6 +2892,9 @@ pub extern "C" fn oxide_host_app_stats(out: *mut OxideHostStats) -> ::libc::c_in
                     cam_present_ms: snap.cam_present_ms,
                     cam_commit_ms: snap.cam_commit_ms,
                     cam_gpu_ms: snap.cam_gpu_ms,
+                    cam_gpu_render_ms: snap.cam_gpu_render_ms,
+                    cam_gpu_vertex_ms: snap.cam_gpu_vertex_ms,
+                    cam_gpu_fragment_ms: snap.cam_gpu_fragment_ms,
                     cam_capture_total_ms: snap.cam_capture_total_ms,
                     cam_capture_sample_setup_ms: snap.cam_capture_sample_setup_ms,
                     cam_capture_lock_ms: snap.cam_capture_lock_ms,
@@ -2884,6 +2929,15 @@ pub extern "C" fn oxide_host_app_stats(out: *mut OxideHostStats) -> ::libc::c_in
                         .cam_retained_latest_pixel_buffer_surface_surfaces,
                     cam_latest_published_generation: snap.cam_latest_published_generation,
                     cam_latest_published_timestamp_ns: snap.cam_latest_published_timestamp_ns,
+                    cam_latest_presented_generation: snap.cam_latest_presented_generation,
+                    cam_generation_advances: snap.cam_generation_advances,
+                    cam_samples_received: snap.cam_samples_received,
+                    cam_samples_dropped_prebridge: snap.cam_samples_dropped_prebridge,
+                    cam_samples_bridged: snap.cam_samples_bridged,
+                    cam_samples_published: snap.cam_samples_published,
+                    cam_samples_presented: snap.cam_samples_presented,
+                    cam_samples_superseded_before_present: snap
+                        .cam_samples_superseded_before_present,
                     renderer_memory_total_bytes: snap.renderer_memory_total_bytes,
                     renderer_memory_draw_targets_bytes: snap.renderer_memory_draw_targets_bytes,
                     renderer_memory_draw_target_main_bytes: snap

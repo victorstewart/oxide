@@ -61,6 +61,9 @@ fn zeroed_host_stats() -> OxideHostStats {
         cam_present_ms: 0.0,
         cam_commit_ms: 0.0,
         cam_gpu_ms: 0.0,
+        cam_gpu_render_ms: 0.0,
+        cam_gpu_vertex_ms: 0.0,
+        cam_gpu_fragment_ms: 0.0,
         cam_capture_total_ms: 0.0,
         cam_capture_sample_setup_ms: 0.0,
         cam_capture_lock_ms: 0.0,
@@ -90,6 +93,14 @@ fn zeroed_host_stats() -> OxideHostStats {
         cam_retained_latest_pixel_buffer_surface_surfaces: 0,
         cam_latest_published_generation: 0,
         cam_latest_published_timestamp_ns: 0,
+        cam_latest_presented_generation: 0,
+        cam_generation_advances: 0,
+        cam_samples_received: 0,
+        cam_samples_dropped_prebridge: 0,
+        cam_samples_bridged: 0,
+        cam_samples_published: 0,
+        cam_samples_presented: 0,
+        cam_samples_superseded_before_present: 0,
         renderer_memory_total_bytes: 0,
         renderer_memory_draw_targets_bytes: 0,
         renderer_memory_draw_target_main_bytes: 0,
@@ -154,6 +165,9 @@ fn benchmark_camera_scene_uses_minimal_preview_draw_list() {
     assert!(stats.cam_commit_ms >= 0.0);
     assert!(stats.cam_present_ms >= 0.0);
     assert!(stats.cam_gpu_ms >= 0.0);
+    assert!(stats.cam_gpu_render_ms >= 0.0);
+    assert!(stats.cam_gpu_vertex_ms >= 0.0);
+    assert!(stats.cam_gpu_fragment_ms >= 0.0);
     assert!(stats.cam_capture_sample_setup_ms >= 0.0);
     assert!(stats.cam_capture_frame_delivery_ms >= 0.0);
     assert!(stats.renderer_memory_total_bytes > 0);

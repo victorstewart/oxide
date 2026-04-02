@@ -1,12 +1,33 @@
 use oxide_renderer_metal::{
     direct_live_preview_needs_render, direct_preview_can_reuse_resize_targets,
     direct_preview_reason_requires_drawable, direct_preview_submission_backpressure_applies,
-    direct_preview_tiny_renderer_active, direct_preview_uses_fast_yuv_pipeline, CameraRenderMode,
-    CameraTextureSource, MetalInitError, MetalRenderer, MetalRendererConfig,
+    direct_preview_tiny_renderer_active, direct_preview_uses_dontcare_load_action,
+    direct_preview_uses_fast_yuv_pipeline, CameraRenderMode, CameraTextureSource, MetalInitError,
+    MetalRenderer, MetalRendererConfig,
     CAMERA_PREVIEW_REASON_BACKPRESSURE, CAMERA_PREVIEW_REASON_NEW_GENERATION,
     CAMERA_PREVIEW_REASON_NEW_TIMESTAMP, CAMERA_PREVIEW_REASON_NO_CURRENT_FRAME,
     CAMERA_PREVIEW_REASON_RESIZE,
 };
+use std::sync::{Mutex, OnceLock};
+
+fn env_test_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn with_env_var(key: &str, value: Option<&str>, body: impl FnOnce()) {
+    let _guard = env_test_lock().lock().expect("env test lock");
+    let saved = std::env::var(key).ok();
+    match value {
+        Some(value) => unsafe { std::env::set_var(key, value) },
+        None => unsafe { std::env::remove_var(key) },
+    }
+    body();
+    match saved {
+        Some(value) => unsafe { std::env::set_var(key, value) },
+        None => unsafe { std::env::remove_var(key) },
+    }
+}
 
 #[test]
 fn direct_camera_preview_path_draws_single_synthetic_camera_frame() {
@@ -102,6 +123,9 @@ fn direct_camera_preview_path_reuses_same_size_fast_path() {
     assert_eq!(stats.cam_height, 1080);
     assert!(stats.cam_fetch_ms >= 0.0);
     assert!(stats.cam_setup_ms >= 0.0);
+    assert!(stats.cam_gpu_render_ms >= 0.0);
+    assert!(stats.cam_gpu_vertex_ms >= 0.0);
+    assert!(stats.cam_gpu_fragment_ms >= 0.0);
 }
 
 #[test]
@@ -193,10 +217,22 @@ fn direct_tiny_preview_renderer_only_targets_live_single_sample_nv12_modes() {
 
 #[test]
 fn direct_preview_backpressure_only_applies_at_two_in_flight_submissions() {
-    assert!(!direct_preview_submission_backpressure_applies(false, 2));
-    assert!(!direct_preview_submission_backpressure_applies(true, 1));
-    assert!(direct_preview_submission_backpressure_applies(true, 2));
-    assert!(direct_preview_submission_backpressure_applies(true, 3));
+    assert!(!direct_preview_submission_backpressure_applies(None, 2));
+    assert!(!direct_preview_submission_backpressure_applies(Some(2), 1));
+    assert!(direct_preview_submission_backpressure_applies(Some(2), 2));
+    assert!(direct_preview_submission_backpressure_applies(Some(2), 3));
+    assert!(!direct_preview_submission_backpressure_applies(Some(1), 0));
+    assert!(direct_preview_submission_backpressure_applies(Some(1), 1));
     assert!(!direct_preview_reason_requires_drawable(CAMERA_PREVIEW_REASON_BACKPRESSURE));
     assert!(direct_preview_reason_requires_drawable(CAMERA_PREVIEW_REASON_NEW_GENERATION));
+}
+
+#[test]
+fn direct_preview_dontcare_load_action_is_env_gated() {
+    with_env_var("OXIDE_PERF_CAMERA_PREVIEW_DONT_CARE_LOAD", None, || {
+        assert!(!direct_preview_uses_dontcare_load_action());
+    });
+    with_env_var("OXIDE_PERF_CAMERA_PREVIEW_DONT_CARE_LOAD", Some("1"), || {
+        assert!(direct_preview_uses_dontcare_load_action());
+    });
 }

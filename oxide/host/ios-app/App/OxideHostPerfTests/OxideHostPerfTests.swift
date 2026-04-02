@@ -208,6 +208,24 @@ final class OxideHostPerfTests: XCTestCase
                 environment: [perfCameraRealAppHybridVisiblePreviewEnv: "1"]
             )
         )
+        XCTAssertFalse(realAppCameraFrameDrivenSchedulingEnabled(environment: [:]))
+        XCTAssertTrue(
+            realAppCameraFrameDrivenSchedulingEnabled(
+                environment: [
+                    perfCameraRealAppHostEnv: "1",
+                    perfCameraFrameDrivenSchedulingEnv: "1",
+                ]
+            )
+        )
+        XCTAssertFalse(
+            realAppCameraFrameDrivenSchedulingEnabled(
+                environment: [
+                    perfCameraRealAppHostEnv: "1",
+                    perfCameraFrameDrivenSchedulingEnv: "1",
+                    perfCameraRealAppHybridVisiblePreviewEnv: "1",
+                ]
+            )
+        )
     }
 
     func testConfigureDirectPreviewMetalLayerHonorsDrawableCountOverride()
@@ -313,6 +331,11 @@ final class OxideHostPerfTests: XCTestCase
         {
             settleForDeviceTraceAttachment()
         }
+        emitBenchmarkMetadataLine(
+            testName: benchmark.testName,
+            measureIterations: options.iterationCount,
+            benchmarkIterations: benchmark.iterations
+        )
         // Camera signpost metrics are collected from the dedicated xctrace path.
         // Keeping them out of XCTest avoids per-iteration metric-set drift on device.
         let metrics = standardMetrics()
@@ -379,6 +402,7 @@ final class OxideHostPerfTests: XCTestCase
 
         measureBenchmark(benchmark)
 
+        XCTAssertTrue(lines.contains(where: { $0.contains(oxideBenchmarkMetadataPrefix) }))
         XCTAssertTrue(lines.contains("OXIDE_STAGE_SUMMARY {\"stages\":{}}"))
         XCTAssertTrue(lines.contains("OXIDE_MEMORY_SUMMARY {\"categories\":{}}"))
     }
@@ -483,7 +507,17 @@ final class OxideHostPerfTests: XCTestCase
         measureBenchmark(named: #function)
     }
 
+    func testOptimizedCollectionViewEncode()
+    {
+        measureBenchmark(named: #function)
+    }
+
     func testLayoutFlatGridRelayout()
+    {
+        measureBenchmark(named: #function)
+    }
+
+    func testOptimizedLayoutFlatGridRelayout()
     {
         measureBenchmark(named: #function)
     }
@@ -493,7 +527,17 @@ final class OxideHostPerfTests: XCTestCase
         measureBenchmark(named: #function)
     }
 
+    func testOptimizedLayoutDeepStackThemeSwap()
+    {
+        measureBenchmark(named: #function)
+    }
+
     func testLayoutGridSafeAreaSwap()
+    {
+        measureBenchmark(named: #function)
+    }
+
+    func testOptimizedLayoutGridSafeAreaSwap()
     {
         measureBenchmark(named: #function)
     }
@@ -563,7 +607,17 @@ final class OxideHostPerfTests: XCTestCase
         measureBenchmark(named: #function)
     }
 
+    func testOptimizedButtonPressResponse()
+    {
+        measureBenchmark(named: #function)
+    }
+
     func testSliderScrubResponse()
+    {
+        measureBenchmark(named: #function)
+    }
+
+    func testOptimizedSliderScrubResponse()
     {
         measureBenchmark(named: #function)
     }
@@ -573,7 +627,17 @@ final class OxideHostPerfTests: XCTestCase
         measureBenchmark(named: #function)
     }
 
+    func testOptimizedTextFocusResponse()
+    {
+        measureBenchmark(named: #function)
+    }
+
     func testSingleNodeReconcile()
+    {
+        measureBenchmark(named: #function)
+    }
+
+    func testOptimizedSingleNodeReconcile()
     {
         measureBenchmark(named: #function)
     }
@@ -583,12 +647,27 @@ final class OxideHostPerfTests: XCTestCase
         measureBenchmark(named: #function)
     }
 
+    func testOptimizedTreeMutation1Pct()
+    {
+        measureBenchmark(named: #function)
+    }
+
     func testTreeMutation10Pct()
     {
         measureBenchmark(named: #function)
     }
 
+    func testOptimizedTreeMutation10Pct()
+    {
+        measureBenchmark(named: #function)
+    }
+
     func testThemeSwapFull()
+    {
+        measureBenchmark(named: #function)
+    }
+
+    func testOptimizedThemeSwapFull()
     {
         measureBenchmark(named: #function)
     }
@@ -813,7 +892,17 @@ final class OxideHostPerfTests: XCTestCase
         measureBenchmark(named: #function)
     }
 
+    func testOptimizedControlSetMount()
+    {
+        measureBenchmark(named: #function)
+    }
+
     func testControlSetMutate()
+    {
+        measureBenchmark(named: #function)
+    }
+
+    func testOptimizedControlSetMutate()
     {
         measureBenchmark(named: #function)
     }
@@ -963,7 +1052,17 @@ final class OxideHostPerfTests: XCTestCase
         measureBenchmark(named: #function)
     }
 
+    func testOptimizedTextFieldsEditCycle()
+    {
+        measureBenchmark(named: #function)
+    }
+
     func testPopupWheelPickerInteraction()
+    {
+        measureBenchmark(named: #function)
+    }
+
+    func testOptimizedPopupWheelPickerInteraction()
     {
         measureBenchmark(named: #function)
     }
@@ -973,7 +1072,17 @@ final class OxideHostPerfTests: XCTestCase
         measureBenchmark(named: #function)
     }
 
+    func testOptimizedBurstEmitterSample()
+    {
+        measureBenchmark(named: #function)
+    }
+
     func testSurfaceRouterCompose()
+    {
+        measureBenchmark(named: #function)
+    }
+
+    func testOptimizedSurfaceRouterCompose()
     {
         measureBenchmark(named: #function)
     }
@@ -1013,12 +1122,27 @@ final class OxideHostPerfTests: XCTestCase
         measureBenchmark(named: #function)
     }
 
+    func testOptimizedFlatRects10000Mount()
+    {
+        measureBenchmark(named: #function)
+    }
+
     func testStress300Animations()
     {
         measureBenchmark(named: #function)
     }
 
+    func testOptimizedStress300Animations()
+    {
+        measureBenchmark(named: #function)
+    }
+
     func testTicker100Hz()
+    {
+        measureBenchmark(named: #function)
+    }
+
+    func testOptimizedTicker100Hz()
     {
         measureBenchmark(named: #function)
     }

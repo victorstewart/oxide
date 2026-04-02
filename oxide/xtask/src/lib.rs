@@ -67,6 +67,7 @@ const XCTRACE_EXPORT_RETRY_DELAY_MS: u64 = 250;
 const XCTRACE_TRACE_SETTLE_TIMEOUT_MS: u64 = 4000;
 const XCTRACE_TRACE_SETTLE_POLL_MS: u64 = 200;
 const XCTRACE_STARTUP_DELAY_MS: u64 = 750;
+const XCTRACE_LAUNCH_TRACE_BUFFER_SECS: u64 = 6;
 const UIKIT_DEVICE_READY_NOTIFICATION: &str = "com.oxide.perf.ready";
 const UIKIT_DEVICE_START_NOTIFICATION: &str = "com.oxide.perf.start";
 const UIKIT_DEVICE_COMPLETE_NOTIFICATION: &str = "com.oxide.perf.complete";
@@ -76,7 +77,10 @@ const OXIDE_DEVICE_REPORT_CHUNK_PREFIX: &str = "OXIDE_PERF_REPORT_CHUNK ";
 const OXIDE_DEVICE_REPORT_END_LINE: &str = "OXIDE_PERF_REPORT_END";
 const OXIDE_STAGE_SUMMARY_PREFIX: &str = "OXIDE_STAGE_SUMMARY ";
 const OXIDE_MEMORY_SUMMARY_PREFIX: &str = "OXIDE_MEMORY_SUMMARY ";
+const OXIDE_TICK_RING_PREFIX: &str = "OXIDE_TICK_RING ";
 const OXIDE_CAMERA_CONTRACT_SUMMARY_PREFIX: &str = "OXIDE_CAMERA_CONTRACT_SUMMARY ";
+const OXIDE_APP_HOST_DEBUG_SUMMARY_PREFIX: &str = "OXIDE_APP_HOST_DEBUG_SUMMARY ";
+const OXIDE_BENCHMARK_METADATA_PREFIX: &str = "OXIDE_BENCHMARK_METADATA ";
 const UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS: u64 = 250;
 const UIKIT_DEVICE_READY_TIMEOUT_SECS: u64 = 30;
 const UIKIT_DEVICE_COMPLETE_TIMEOUT_SECS: u64 = 30;
@@ -93,6 +97,16 @@ const UIKIT_PERF_CAMERA_CAPTURE_CONTRACT_MODE_ENV: &str = "OXIDE_PERF_CAMERA_CAP
 const UIKIT_PERF_CAMERA_STAGE_MEASUREMENT_ENV: &str = "OXIDE_PERF_CAMERA_STAGE_MEASUREMENT";
 const UIKIT_PERF_CAMERA_TINY_PREVIEW_RENDERER_ENV: &str = "OXIDE_PERF_CAMERA_TINY_PREVIEW_RENDERER";
 const UIKIT_PERF_CAMERA_PREVIEW_BACKPRESSURE_ENV: &str = "OXIDE_PERF_CAMERA_PREVIEW_BACKPRESSURE";
+const UIKIT_PERF_CAMERA_PREVIEW_DONT_CARE_LOAD_ENV: &str =
+    "OXIDE_PERF_CAMERA_PREVIEW_DONT_CARE_LOAD";
+const UIKIT_PERF_CAMERA_PREVIEW_SUBMISSION_CAP_ENV: &str =
+    "OXIDE_PERF_CAMERA_PREVIEW_SUBMISSION_CAP";
+const UIKIT_PERF_CAMERA_PREVIEW_PUBLISHED_SLOT_COUNT_ENV: &str =
+    "OXIDE_PERF_CAMERA_PREVIEW_PUBLISHED_SLOT_COUNT";
+const UIKIT_PERF_CAMERA_NO_VISIBLE_PRESENT_ENV: &str = "OXIDE_PERF_CAMERA_NO_VISIBLE_PRESENT";
+const UIKIT_PERF_CAMERA_FRAME_DRIVEN_SCHEDULING_ENV: &str =
+    "OXIDE_PERF_CAMERA_FRAME_DRIVEN_SCHEDULING";
+const UIKIT_PERF_CAMERA_PREBRIDGE_DROP_ENV: &str = "OXIDE_PERF_CAMERA_PREBRIDGE_DROP";
 const UIKIT_PERF_CAMERA_REAL_APP_HOST_ENV: &str = "OXIDE_PERF_CAMERA_REAL_APP_HOST";
 const UIKIT_PERF_CAMERA_REAL_APP_HYBRID_VISIBLE_PREVIEW_ENV: &str =
     "OXIDE_PERF_CAMERA_REAL_APP_HYBRID_VISIBLE_PREVIEW";
@@ -188,37 +202,43 @@ const UIKIT_CASE_SPECS: &[UIKitCaseSpec] = &[
         test_name: "testCameraNV12LegacyLivePreview",
         case_id: "uikit.optimized.image_pipeline.camera_preview.nv12_legacy_live",
         oxide_case_id: "gpu.scene.camera.frame",
-        note: "OxideHost live NV12 camera preview using the legacy Metal YUV to RGB conversion path.",
+        note: "Official parked microscope full-custom camera preview benchmark: raw NV12 frames via AVCaptureVideoDataOutput + CVMetalTexture, with Oxide owning the visible preview and no AVCaptureVideoPreviewLayer.",
     },
     UIKitCaseSpec {
         test_name: "testCameraNV12LegacyHybridPreviewLayerLivePreview",
         case_id: "uikit.optimized.image_pipeline.camera_preview.nv12_legacy_hybrid_preview_layer_live",
         oxide_case_id: "gpu.scene.camera.frame",
-        note: "OxideHost live NV12 camera backend with AVCaptureVideoPreviewLayer handling the visible preview from the same running Oxide camera session.",
+        note: "Diagnostic-only hybrid live camera preview: Oxide camera backend with AVCaptureVideoPreviewLayer handling the visible preview from the same running Oxide camera session.",
     },
     UIKitCaseSpec {
         test_name: "testCameraNV12LegacyRealAppLivePreview",
         case_id: "uikit.optimized.image_pipeline.camera_preview.nv12_legacy_real_app_live",
         oxide_case_id: "gpu.scene.camera.frame",
-        note: "OxideHost live NV12 camera preview through the actual app-host display-link and MetalView path.",
+        note: "Shipping-oriented actual app-host full-custom camera preview path through the foreground display-link and MetalView path. Keep this explicit until the UI-test runner path is stable enough for the default battery.",
     },
     UIKitCaseSpec {
         test_name: "testCameraNV12LegacyRealAppHybridPreviewLayerLivePreview",
         case_id: "uikit.optimized.image_pipeline.camera_preview.nv12_legacy_real_app_hybrid_preview_layer_live",
         oxide_case_id: "gpu.scene.camera.frame",
-        note: "OxideHost live NV12 camera backend on the actual app-host path with AVCaptureVideoPreviewLayer handling the visible preview from the same running Oxide camera session.",
+        note: "Diagnostic-only actual app-host hybrid camera preview: Oxide camera backend with AVCaptureVideoPreviewLayer handling the visible preview from the same running session.",
     },
     UIKitCaseSpec {
         test_name: "testCameraAVFoundationPreviewLayerLivePreview",
         case_id: "uikit.idiomatic.image_pipeline.camera_preview.avfoundation_preview_layer_live",
         oxide_case_id: "gpu.scene.camera.frame",
-        note: "Stock AVFoundation live camera preview using AVCaptureSession and AVCaptureVideoPreviewLayer.",
+        note: "Official parked microscope AVFoundation baseline: AVCaptureSession plus AVCaptureVideoPreviewLayer for the visible preview on the same device and refresh mode as the custom path.",
+    },
+    UIKitCaseSpec {
+        test_name: "testCameraAVFoundationPreviewLayerRealAppLivePreview",
+        case_id: "uikit.idiomatic.image_pipeline.camera_preview.avfoundation_preview_layer_real_app_live",
+        oxide_case_id: "gpu.scene.camera.frame",
+        note: "Shipping-oriented actual app-host AVFoundation camera preview baseline through the foreground app-host path. Keep this explicit until the UI-test runner path is stable enough for the default battery.",
     },
     UIKitCaseSpec {
         test_name: "testCameraAVFoundationPreviewLayerSidecarLivePreview",
         case_id: "uikit.idiomatic.image_pipeline.camera_preview.avfoundation_preview_layer_sidecar_live",
         oxide_case_id: "gpu.scene.camera.frame",
-        note: "Hybrid live camera preview using AVCaptureVideoPreviewLayer for visible preview plus AVCaptureVideoDataOutput sidecar delivery.",
+        note: "Diagnostic-only hybrid camera preview using AVCaptureVideoPreviewLayer for visible preview plus AVCaptureVideoDataOutput sidecar delivery.",
     },
     UIKitCaseSpec {
         test_name: "testCollectionViewEncode",
@@ -227,10 +247,22 @@ const UIKIT_CASE_SPECS: &[UIKitCaseSpec] = &[
         note: "UICollectionView cell layout parity.",
     },
     UIKitCaseSpec {
+        test_name: "testOptimizedCollectionViewEncode",
+        case_id: "uikit.optimized.component.collection_view.encode",
+        oxide_case_id: "cpu.component.collection_view.encode",
+        note: "Hand-tuned custom-draw collection layout parity.",
+    },
+    UIKitCaseSpec {
         test_name: "testSimpleHomeColdLaunch",
         case_id: "uikit.idiomatic.launch.simple_home.cold_launch",
         oxide_case_id: "cpu.launch.simple_home.cold_launch",
         note: "Swift/UIKit simple-home cold launch parity through XCTApplicationLaunchMetric.",
+    },
+    UIKitCaseSpec {
+        test_name: "testOptimizedSimpleHomeColdLaunch",
+        case_id: "uikit.optimized.launch.simple_home.cold_launch",
+        oxide_case_id: "cpu.launch.simple_home.cold_launch",
+        note: "Hand-tuned simple-home cold launch parity through XCTApplicationLaunchMetric.",
     },
     UIKitCaseSpec {
         test_name: "testHeavyHomeColdLaunch",
@@ -239,10 +271,22 @@ const UIKIT_CASE_SPECS: &[UIKitCaseSpec] = &[
         note: "Swift/UIKit heavy-home cold launch parity through XCTApplicationLaunchMetric.",
     },
     UIKitCaseSpec {
+        test_name: "testOptimizedHeavyHomeColdLaunch",
+        case_id: "uikit.optimized.launch.heavy_home.cold_launch",
+        oxide_case_id: "cpu.launch.heavy_home.cold_launch",
+        note: "Hand-tuned heavy-home cold launch parity through XCTApplicationLaunchMetric.",
+    },
+    UIKitCaseSpec {
         test_name: "testDetailDeepLinkLaunch",
         case_id: "uikit.idiomatic.launch.detail.deep_link_launch",
         oxide_case_id: "cpu.launch.detail.deep_link_launch",
         note: "Swift/UIKit detail-route launch parity through XCTApplicationLaunchMetric.",
+    },
+    UIKitCaseSpec {
+        test_name: "testOptimizedDetailDeepLinkLaunch",
+        case_id: "uikit.optimized.launch.detail.deep_link_launch",
+        oxide_case_id: "cpu.launch.detail.deep_link_launch",
+        note: "Hand-tuned detail-route launch parity through XCTApplicationLaunchMetric.",
     },
     UIKitCaseSpec {
         test_name: "testSimpleHomeWarmResume",
@@ -251,10 +295,22 @@ const UIKIT_CASE_SPECS: &[UIKitCaseSpec] = &[
         note: "Swift/UIKit simple-home warm-resume parity.",
     },
     UIKitCaseSpec {
+        test_name: "testOptimizedSimpleHomeWarmResume",
+        case_id: "uikit.optimized.launch.simple_home.warm_resume",
+        oxide_case_id: "cpu.launch.simple_home.warm_resume",
+        note: "Hand-tuned simple-home warm-resume parity.",
+    },
+    UIKitCaseSpec {
         test_name: "testHeavyHomeForegroundAfterBackground",
         case_id: "uikit.idiomatic.launch.heavy_home.foreground_after_background",
         oxide_case_id: "cpu.launch.heavy_home.foreground_after_background",
         note: "Swift/UIKit heavy-home foreground-after-background parity.",
+    },
+    UIKitCaseSpec {
+        test_name: "testOptimizedHeavyHomeForegroundAfterBackground",
+        case_id: "uikit.optimized.launch.heavy_home.foreground_after_background",
+        oxide_case_id: "cpu.launch.heavy_home.foreground_after_background",
+        note: "Hand-tuned heavy-home foreground-after-background parity.",
     },
     UIKitCaseSpec {
         test_name: "testLayoutFlatGridRelayout",
@@ -263,16 +319,34 @@ const UIKIT_CASE_SPECS: &[UIKitCaseSpec] = &[
         note: "Flat grid relayout parity under alternating portrait and landscape widths.",
     },
     UIKitCaseSpec {
+        test_name: "testOptimizedLayoutFlatGridRelayout",
+        case_id: "uikit.optimized.layout.flat_grid.rotation_relayout",
+        oxide_case_id: "cpu.layout.flat_grid.rotation_relayout",
+        note: "Hand-tuned flat grid relayout parity under alternating portrait and landscape widths.",
+    },
+    UIKitCaseSpec {
         test_name: "testLayoutDeepStackThemeSwap",
         case_id: "uikit.idiomatic.layout.deep_stack.theme_swap",
         oxide_case_id: "cpu.layout.deep_stack.theme_swap",
         note: "Deep stack theme swap relayout parity.",
     },
     UIKitCaseSpec {
+        test_name: "testOptimizedLayoutDeepStackThemeSwap",
+        case_id: "uikit.optimized.layout.deep_stack.theme_swap",
+        oxide_case_id: "cpu.layout.deep_stack.theme_swap",
+        note: "Hand-tuned deep stack theme swap relayout parity.",
+    },
+    UIKitCaseSpec {
         test_name: "testLayoutGridSafeAreaSwap",
         case_id: "uikit.idiomatic.layout.grid.safe_area_swap",
         oxide_case_id: "cpu.layout.grid.safe_area_swap",
         note: "Grid relayout parity under safe-area inset swaps.",
+    },
+    UIKitCaseSpec {
+        test_name: "testOptimizedLayoutGridSafeAreaSwap",
+        case_id: "uikit.optimized.layout.grid.safe_area_swap",
+        oxide_case_id: "cpu.layout.grid.safe_area_swap",
+        note: "Hand-tuned grid relayout parity under safe-area inset swaps.",
     },
     UIKitCaseSpec {
         test_name: "testLargeEditorKeystrokeBurst",
@@ -353,10 +427,22 @@ const UIKIT_CASE_SPECS: &[UIKitCaseSpec] = &[
         note: "Direct button response parity from event to first visible control-state update.",
     },
     UIKitCaseSpec {
+        test_name: "testOptimizedButtonPressResponse",
+        case_id: "uikit.optimized.navigation.button_press.response",
+        oxide_case_id: "cpu.navigation.button_press.response",
+        note: "Hand-tuned direct button response parity from event to first visible control-state update.",
+    },
+    UIKitCaseSpec {
         test_name: "testSliderScrubResponse",
         case_id: "uikit.idiomatic.navigation.slider_scrub.response",
         oxide_case_id: "cpu.navigation.slider_scrub.response",
         note: "Direct slider scrub response parity from event to first visible thumb/fill update.",
+    },
+    UIKitCaseSpec {
+        test_name: "testOptimizedSliderScrubResponse",
+        case_id: "uikit.optimized.navigation.slider_scrub.response",
+        oxide_case_id: "cpu.navigation.slider_scrub.response",
+        note: "Hand-tuned direct slider scrub response parity from event to first visible thumb/fill update.",
     },
     UIKitCaseSpec {
         test_name: "testTextFocusResponse",
@@ -365,10 +451,22 @@ const UIKIT_CASE_SPECS: &[UIKitCaseSpec] = &[
         note: "Direct text focus response parity from event to first visible responder-state update.",
     },
     UIKitCaseSpec {
+        test_name: "testOptimizedTextFocusResponse",
+        case_id: "uikit.optimized.navigation.text_focus.response",
+        oxide_case_id: "cpu.navigation.text_focus.response",
+        note: "Hand-tuned direct text focus response parity from event to first visible responder-state update.",
+    },
+    UIKitCaseSpec {
         test_name: "testSingleNodeReconcile",
         case_id: "uikit.idiomatic.reconcile.single_node_mutation",
         oxide_case_id: "cpu.reconcile.single_node_mutation",
         note: "Single-node reconcile parity over a retained 1000-node flat-rect tree.",
+    },
+    UIKitCaseSpec {
+        test_name: "testOptimizedSingleNodeReconcile",
+        case_id: "uikit.optimized.reconcile.single_node_mutation",
+        oxide_case_id: "cpu.reconcile.single_node_mutation",
+        note: "Hand-tuned single-node reconcile parity over a custom-draw 1000-node flat-rect tree.",
     },
     UIKitCaseSpec {
         test_name: "testTreeMutation1Pct",
@@ -377,16 +475,34 @@ const UIKIT_CASE_SPECS: &[UIKitCaseSpec] = &[
         note: "1 percent tree-mutation reconcile parity over a retained 1000-node flat-rect tree.",
     },
     UIKitCaseSpec {
+        test_name: "testOptimizedTreeMutation1Pct",
+        case_id: "uikit.optimized.reconcile.tree_mutation_1pct",
+        oxide_case_id: "cpu.reconcile.tree_mutation_1pct",
+        note: "Hand-tuned 1 percent tree-mutation reconcile parity over a custom-draw 1000-node flat-rect tree.",
+    },
+    UIKitCaseSpec {
         test_name: "testTreeMutation10Pct",
         case_id: "uikit.idiomatic.reconcile.tree_mutation_10pct",
         oxide_case_id: "cpu.reconcile.tree_mutation_10pct",
         note: "10 percent tree-mutation reconcile parity over a retained 1000-node flat-rect tree.",
     },
     UIKitCaseSpec {
+        test_name: "testOptimizedTreeMutation10Pct",
+        case_id: "uikit.optimized.reconcile.tree_mutation_10pct",
+        oxide_case_id: "cpu.reconcile.tree_mutation_10pct",
+        note: "Hand-tuned 10 percent tree-mutation reconcile parity over a custom-draw 1000-node flat-rect tree.",
+    },
+    UIKitCaseSpec {
         test_name: "testThemeSwapFull",
         case_id: "uikit.idiomatic.reconcile.theme_swap_full",
         oxide_case_id: "cpu.reconcile.theme_swap_full",
         note: "Full retained-tree theme-swap parity over a retained 1000-node flat-rect tree.",
+    },
+    UIKitCaseSpec {
+        test_name: "testOptimizedThemeSwapFull",
+        case_id: "uikit.optimized.reconcile.theme_swap_full",
+        oxide_case_id: "cpu.reconcile.theme_swap_full",
+        note: "Hand-tuned full tree theme-swap parity over a custom-draw 1000-node flat-rect tree.",
     },
     UIKitCaseSpec {
         test_name: "testEmptyRootMount",
@@ -653,10 +769,22 @@ const UIKIT_CASE_SPECS: &[UIKitCaseSpec] = &[
         note: "Shared control-set mount parity.",
     },
     UIKitCaseSpec {
+        test_name: "testOptimizedControlSetMount",
+        case_id: "uikit.optimized.primitive.control_set.mount",
+        oxide_case_id: "cpu.primitive.control_set.mount",
+        note: "Hand-tuned custom-draw control-set mount parity.",
+    },
+    UIKitCaseSpec {
         test_name: "testControlSetMutate",
         case_id: "uikit.idiomatic.primitive.control_set.mutate_state",
         oxide_case_id: "cpu.primitive.control_set.mutate_state",
         note: "Shared control-set state mutation parity.",
+    },
+    UIKitCaseSpec {
+        test_name: "testOptimizedControlSetMutate",
+        case_id: "uikit.optimized.primitive.control_set.mutate_state",
+        oxide_case_id: "cpu.primitive.control_set.mutate_state",
+        note: "Hand-tuned custom-draw control-set state mutation parity.",
     },
     UIKitCaseSpec {
         test_name: "testSpinnerSpin",
@@ -833,10 +961,22 @@ const UIKIT_CASE_SPECS: &[UIKitCaseSpec] = &[
         note: "Author-facing text-field editing lifecycle parity.",
     },
     UIKitCaseSpec {
+        test_name: "testOptimizedTextFieldsEditCycle",
+        case_id: "uikit.optimized.authoring.text_fields.edit_cycle",
+        oxide_case_id: "cpu.authoring.text_fields.edit_cycle",
+        note: "Hand-tuned author-facing text-field editing lifecycle parity.",
+    },
+    UIKitCaseSpec {
         test_name: "testPopupWheelPickerInteraction",
         case_id: "uikit.idiomatic.authoring.popup_wheel_picker.interaction",
         oxide_case_id: "cpu.authoring.popup_wheel_picker.interaction",
         note: "Author-facing popup and wheel-picker interaction parity.",
+    },
+    UIKitCaseSpec {
+        test_name: "testOptimizedPopupWheelPickerInteraction",
+        case_id: "uikit.optimized.authoring.popup_wheel_picker.interaction",
+        oxide_case_id: "cpu.authoring.popup_wheel_picker.interaction",
+        note: "Hand-tuned author-facing popup and wheel-picker interaction parity.",
     },
     UIKitCaseSpec {
         test_name: "testBurstEmitterSample",
@@ -845,10 +985,22 @@ const UIKIT_CASE_SPECS: &[UIKitCaseSpec] = &[
         note: "Author-facing burst-emitter configuration and sampling parity.",
     },
     UIKitCaseSpec {
+        test_name: "testOptimizedBurstEmitterSample",
+        case_id: "uikit.optimized.authoring.burst_emitter.sample",
+        oxide_case_id: "cpu.authoring.burst_emitter.sample",
+        note: "Hand-tuned author-facing burst-emitter configuration and sampling parity.",
+    },
+    UIKitCaseSpec {
         test_name: "testSurfaceRouterCompose",
         case_id: "uikit.idiomatic.authoring.surface_router.compose",
         oxide_case_id: "cpu.authoring.surface_router.compose",
         note: "Author-facing surface composition and overlay wiring parity.",
+    },
+    UIKitCaseSpec {
+        test_name: "testOptimizedSurfaceRouterCompose",
+        case_id: "uikit.optimized.authoring.surface_router.compose",
+        oxide_case_id: "cpu.authoring.surface_router.compose",
+        note: "Hand-tuned author-facing surface composition and overlay wiring parity.",
     },
     UIKitCaseSpec {
         test_name: "testOpenCloseHeavyScreen100x",
@@ -893,16 +1045,34 @@ const UIKIT_CASE_SPECS: &[UIKitCaseSpec] = &[
         note: "10k-node flat-rect mount stress parity.",
     },
     UIKitCaseSpec {
+        test_name: "testOptimizedFlatRects10000Mount",
+        case_id: "uikit.optimized.stress.flat_rects.10000.mount",
+        oxide_case_id: "cpu.stress.flat_rects.10000.mount",
+        note: "Hand-tuned 10k-node flat-rect mount stress parity.",
+    },
+    UIKitCaseSpec {
         test_name: "testStress300Animations",
         case_id: "uikit.idiomatic.stress.simultaneous_animations.300",
         oxide_case_id: "cpu.stress.simultaneous_animations.300",
         note: "300 simultaneous animation stress parity.",
     },
     UIKitCaseSpec {
+        test_name: "testOptimizedStress300Animations",
+        case_id: "uikit.optimized.stress.simultaneous_animations.300",
+        oxide_case_id: "cpu.stress.simultaneous_animations.300",
+        note: "Hand-tuned 300 simultaneous animation stress parity.",
+    },
+    UIKitCaseSpec {
         test_name: "testTicker100Hz",
         case_id: "uikit.idiomatic.stress.ticker_100hz",
         oxide_case_id: "cpu.stress.ticker_100hz",
         note: "100 Hz ticker stress parity.",
+    },
+    UIKitCaseSpec {
+        test_name: "testOptimizedTicker100Hz",
+        case_id: "uikit.optimized.stress.ticker_100hz",
+        oxide_case_id: "cpu.stress.ticker_100hz",
+        note: "Hand-tuned 100 Hz ticker stress parity.",
     },
     UIKitCaseSpec {
         test_name: "testPermissionCallbackBridge",
@@ -1176,9 +1346,57 @@ pub struct UIKitPerfCase {
     pub style: String,
     pub cache_state: String,
     pub refresh_mode: String,
+    pub measure_iterations: usize,
+    pub benchmark_iterations: usize,
+    pub canonical_signpost_source: UIKitCanonicalSignpostSource,
     pub threshold_pct: f64,
     pub metrics: BTreeMap<String, UIKitMetricSummary>,
     pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum UIKitCanonicalSignpostSource {
+    #[default]
+    #[serde(rename = "unknown")]
+    Unknown,
+    #[serde(rename = "xctest")]
+    XCTest,
+    #[serde(rename = "xctrace")]
+    Xctrace,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum UIKitMetricSource {
+    #[default]
+    #[serde(rename = "unknown")]
+    Unknown,
+    #[serde(rename = "xctest")]
+    XCTest,
+    #[serde(rename = "xctest_signpost")]
+    XCTestSignpost,
+    #[serde(rename = "xctrace_signpost")]
+    XctraceSignpost,
+    #[serde(rename = "xctrace_gpu_interval")]
+    XctraceGpuInterval,
+    #[serde(rename = "xctrace_gpu_counter")]
+    XctraceGpuCounter,
+    #[serde(rename = "xctrace_energy")]
+    XctraceEnergy,
+    #[serde(rename = "device_console_stage_summary")]
+    DeviceConsoleStageSummary,
+    #[serde(rename = "device_console_memory_summary")]
+    DeviceConsoleMemorySummary,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum UIKitMetricFallbackMode {
+    #[default]
+    #[serde(rename = "none")]
+    None,
+    #[serde(rename = "summary_window")]
+    SummaryWindow,
+    #[serde(rename = "compositor_inclusive_gpu_intervals")]
+    CompositorInclusiveGpuIntervals,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1192,6 +1410,8 @@ pub struct UIKitMetricSummary {
     pub p95: f64,
     pub p99: f64,
     pub samples: usize,
+    pub source: UIKitMetricSource,
+    pub fallback_modes: Vec<UIKitMetricFallbackMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1223,6 +1443,9 @@ impl Default for UIKitPerfCase {
             style: String::new(),
             cache_state: String::new(),
             refresh_mode: String::new(),
+            measure_iterations: 0,
+            benchmark_iterations: 0,
+            canonical_signpost_source: UIKitCanonicalSignpostSource::Unknown,
             threshold_pct: 0.0,
             metrics: BTreeMap::new(),
             notes: Vec::new(),
@@ -1241,6 +1464,8 @@ impl Default for UIKitMetricSummary {
             p95: 0.0,
             p99: 0.0,
             samples: 0,
+            source: UIKitMetricSource::Unknown,
+            fallback_modes: Vec::new(),
         }
     }
 }
@@ -1289,6 +1514,22 @@ struct XCTestMetric {
     #[serde(rename = "unitOfMeasurement")]
     unit_of_measurement: String,
     measurements: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OxideBenchmarkMetadataPayload {
+    pub test_name: String,
+    pub measure_iterations: usize,
+    pub benchmark_iterations: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+struct UIKitMetricsBatchRun {
+    metrics_json: String,
+    case_ids: BTreeSet<String>,
+    benchmark_metadata: BTreeMap<String, OxideBenchmarkMetadataPayload>,
+    skipped_case_notes: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1706,9 +1947,9 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
 
     let include_energy =
         trace_enabled && (cli.power_trace.is_some() || cli.power_trace_root.is_some());
-    let mut metrics_json_by_refresh = BTreeMap::new();
+    let mut metrics_by_refresh = BTreeMap::new();
     for refresh_mode in &refresh_modes {
-        let metrics_json = run_uikit_device_metrics_batch(
+        let metrics_batch = run_uikit_device_metrics_batch(
             &root,
             &xctestrun_path,
             &destination,
@@ -1716,18 +1957,23 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
             *refresh_mode,
             &result_root,
         )?;
-        metrics_json_by_refresh.insert(*refresh_mode, metrics_json);
+        metrics_by_refresh.insert(*refresh_mode, metrics_batch);
     }
     let mut report_cases = Vec::new();
+    let mut skipped_case_notes = Vec::new();
     for spec in selected_specs {
         for refresh_mode in &refresh_modes {
             let case_dir =
                 result_root.join(format!("{}-{}", spec.test_name, refresh_mode.dir_suffix()));
             fs::create_dir_all(&case_dir)
                 .with_context(|| format!("creating {}", case_dir.display()))?;
-            let metrics_json = metrics_json_by_refresh.get(refresh_mode).with_context(|| {
+            let metrics_batch = metrics_by_refresh.get(refresh_mode).with_context(|| {
                 format!("missing batched metrics for `{}`", refresh_mode.report_value())
             })?;
+            if let Some(note) = uikit_skipped_case_note(spec, *refresh_mode, metrics_batch) {
+                skipped_case_notes.push(note);
+                continue;
+            }
             let gpu_run = if trace_enabled {
                 run_uikit_device_case_trace(
                     &root,
@@ -1760,14 +2006,15 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
                 spec,
                 &built_app.executable_name,
                 *refresh_mode,
-                metrics_json,
+                metrics_batch,
                 &gpu_run,
                 power_run.as_ref(),
             )?);
         }
     }
 
-    let contract = build_uikit_contract_coverage(&report_cases, "device");
+    let mut contract = build_uikit_contract_coverage(&report_cases, "device");
+    contract.notes.extend(skipped_case_notes.iter().cloned());
 
     let report = UIKitPerfReport {
         version: 1,
@@ -1789,11 +2036,12 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
         },
         contract,
         cases: report_cases,
-        notes: if !trace_enabled {
+        notes: {
+            let mut notes = if !trace_enabled {
             vec![
                 String::from("Scheme: OxideUIKitPerf"),
                 String::from(
-                    "Device flow: build/install the host app once, collect CPU metrics through batched xcodebuild test-without-building runs per refresh mode, then prelaunch the benchmark app on the phone and drive the parked benchmark over Darwin notifications without attaching a Metal trace.",
+                    "Device flow: build/install the host app once, collect CPU metrics through batched xcodebuild test-without-building runs per refresh mode, then drive the device workload over the shared Darwin ready/start/complete handshake without recording a Metal trace.",
                 ),
                 String::from(
                     "GPU trace: skipped for this run because `--trace-seconds 0` disabled the attached Metal trace. Camera contract, stage, and memory summaries still come from the parked app console log.",
@@ -1823,7 +2071,7 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
             vec![
                 String::from("Scheme: OxideUIKitPerf"),
                 String::from(
-                    "Device flow: build/install the host app once, collect CPU metrics through batched xcodebuild test-without-building runs per refresh mode, then prelaunch the benchmark app on the phone and attach process-scoped Instruments traces by PID from the Mac for each case.",
+                    "Device flow: build/install the host app once, collect CPU metrics through batched xcodebuild test-without-building runs per refresh mode, then record per-case process-scoped Metal traces on the phone. Parked and launch-handshake workloads are launched through xctrace and driven by the shared Darwin ready/start/complete notifications; camera cases that still need console summaries retain the device-console launch path.",
                 ),
                 String::from(
                     "GPU trace: process-scoped Metal System Trace + Points of Interest, with Metal GPU Counters enabled when the device supports that counter profile.",
@@ -1853,7 +2101,7 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
             vec![
                 String::from("Scheme: OxideUIKitPerf"),
                 String::from(
-                    "Device flow: build/install the host app once, collect CPU metrics through batched xcodebuild test-without-building runs per refresh mode, then prelaunch the benchmark app on the phone and attach process-scoped Instruments traces by PID from the Mac for each case.",
+                    "Device flow: build/install the host app once, collect CPU metrics through batched xcodebuild test-without-building runs per refresh mode, then record per-case process-scoped Metal traces on the phone. Parked and launch-handshake workloads are launched through xctrace and driven by the shared Darwin ready/start/complete notifications; camera cases that still need console summaries retain the device-console launch path.",
                 ),
                 String::from(
                     "GPU trace: process-scoped Metal System Trace + Points of Interest, with Metal GPU Counters enabled when the device supports that counter profile.",
@@ -1879,6 +2127,9 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
                     )
                 },
             ]
+        };
+            notes.extend(skipped_case_notes);
+            notes
         },
     };
     let comparison = if let Some(path) = cli.compare.as_ref() {
@@ -2012,9 +2263,15 @@ fn ios_react_device_perf(args: &[String]) -> Result<()> {
                 "GPU trace window status: this Metal trace did not expose the per-workload signposts, so GPU metrics were summarized over the full trace duration for the ReactNativeCameraBench process.",
             ));
         }
+        let trace_fallback_modes = trace_summary_window_fallback_modes(used_summary_window);
         case.notes.push(format!("GPU trace windows: {}", gpu_windows.len()));
         for (name, metric) in
-            summarize_trace_signpost_metrics(&root, &react_run.trace_run.trace_path, &gpu_windows)?
+            summarize_trace_signpost_metrics(
+                &root,
+                &react_run.trace_run.trace_path,
+                &gpu_windows,
+                &trace_fallback_modes,
+            )?
         {
             case.metrics.insert(name, metric.median);
         }
@@ -2023,6 +2280,7 @@ fn ios_react_device_perf(args: &[String]) -> Result<()> {
             &react_run.trace_run.trace_path,
             &gpu_windows,
             &mut case.notes,
+            &trace_fallback_modes,
         )? {
             case.metrics.insert(name, metric.median);
         }
@@ -2181,6 +2439,63 @@ struct DeviceTraceRun {
     notes: Vec<String>,
 }
 
+fn trace_summary_window_fallback_modes(used_summary_window: bool) -> Vec<UIKitMetricFallbackMode> {
+    if used_summary_window {
+        vec![UIKitMetricFallbackMode::SummaryWindow]
+    } else {
+        Vec::new()
+    }
+}
+
+fn reconcile_device_case_iteration_counts(
+    spec: &UIKitCaseSpec,
+    base_case: &UIKitPerfCase,
+    batch_metadata: Option<&OxideBenchmarkMetadataPayload>,
+    trace_metadata: Option<&OxideBenchmarkMetadataPayload>,
+) -> Result<(usize, usize)> {
+    let inferred_measure_iterations = base_case.measure_iterations;
+    if let Some(metadata) = batch_metadata {
+        if metadata.measure_iterations > 0
+            && inferred_measure_iterations > 0
+            && metadata.measure_iterations != inferred_measure_iterations
+        {
+            bail!(
+                "measure iteration mismatch for `{}`: xcresult reported {} samples but console metadata reported {} iterations",
+                spec.test_name,
+                inferred_measure_iterations,
+                metadata.measure_iterations
+            );
+        }
+    }
+
+    let batch_benchmark_iterations =
+        batch_metadata.map(|metadata| metadata.benchmark_iterations).filter(|count| *count > 0);
+    let trace_benchmark_iterations =
+        trace_metadata.map(|metadata| metadata.benchmark_iterations).filter(|count| *count > 0);
+    if let (Some(batch_count), Some(trace_count)) =
+        (batch_benchmark_iterations, trace_benchmark_iterations)
+    {
+        if batch_count != trace_count {
+            bail!(
+                "benchmark iteration mismatch for `{}`: XCTest console metadata reported {} but trace console metadata reported {}",
+                spec.test_name,
+                batch_count,
+                trace_count
+            );
+        }
+    }
+
+    let measure_iterations = batch_metadata
+        .map(|metadata| metadata.measure_iterations)
+        .filter(|count| *count > 0)
+        .unwrap_or(inferred_measure_iterations);
+    let benchmark_iterations = batch_benchmark_iterations
+        .or(trace_benchmark_iterations)
+        .or_else(|| uikit_launch_case_metadata(spec).map(|_| 1usize))
+        .with_context(|| format!("missing benchmark iteration metadata for `{}`", spec.test_name))?;
+    Ok((measure_iterations, benchmark_iterations))
+}
+
 #[derive(Debug)]
 struct ReactDevicePerfRun {
     result_bundle: PathBuf,
@@ -2199,15 +2514,15 @@ pub struct BuiltUIKitApp {
 
 fn build_uikit_device_case(
     root: &Path,
-    result_root: &Path,
+    _result_root: &Path,
     spec: &UIKitCaseSpec,
     host_process_name: &str,
     refresh_mode: UIKitDeviceRefreshMode,
-    metrics_json: &str,
+    batch_run: &UIKitMetricsBatchRun,
     metal_run: &DeviceTraceRun,
     power_run: Option<&DeviceTraceRun>,
 ) -> Result<UIKitPerfCase> {
-    let base_report = parse_uikit_report_json(metrics_json)?;
+    let base_report = parse_uikit_report_json(&batch_run.metrics_json)?;
     let base_case = base_report
         .cases
         .into_iter()
@@ -2217,18 +2532,15 @@ fn build_uikit_device_case(
         vec![String::from(spec.note), format!("Refresh mode: {}", refresh_mode.report_value())];
     notes.extend(metal_run.notes.iter().cloned());
 
-    let mut metrics = base_case.metrics;
+    let batch_metadata = batch_run.benchmark_metadata.get(spec.test_name);
+    let mut canonical_signpost_source = UIKitCanonicalSignpostSource::XCTest;
     let (camera_summary_stdout_path, contract_source_note, stage_source_note, memory_source_note) =
         if uikit_case_uses_real_app_camera_host(spec) {
             (
-                uikit_device_metrics_case_stdout_path(
-                    result_root,
-                    refresh_mode.dir_suffix(),
-                    spec.test_name,
-                ),
-                "Capture contract source: actual app-host XCTest stdout emitted during xcodebuild test-without-building.",
-                "Stage timing source: actual app-host XCTest stdout emitted during xcodebuild test-without-building.",
-                "Memory breakdown source: actual app-host XCTest stdout emitted during xcodebuild test-without-building.",
+                metal_run.launch_stdout_path.clone(),
+                "Capture contract source: actual app-host summary emitted through the launched app device console log.",
+                "Stage timing source: actual app-host summary emitted through the launched app device console log.",
+                "Memory breakdown source: actual app-host summary emitted through the launched app device console log.",
             )
         } else {
             (
@@ -2238,15 +2550,43 @@ fn build_uikit_device_case(
                 "Memory breakdown source: app-owned parked benchmark summary emitted through the device console launch log.",
             )
         };
-    if spec.test_name.contains("Camera") && camera_summary_stdout_path.is_file() {
-        let stdout = fs::read_to_string(&camera_summary_stdout_path)
-            .with_context(|| format!("reading {}", camera_summary_stdout_path.display()))?;
+    let launch_stdout = if camera_summary_stdout_path.is_file() {
+        Some(
+            fs::read_to_string(&camera_summary_stdout_path)
+                .with_context(|| format!("reading {}", camera_summary_stdout_path.display()))?,
+        )
+    } else {
+        None
+    };
+    let trace_metadata_map = launch_stdout
+        .as_deref()
+        .map(parse_oxide_benchmark_metadata)
+        .transpose()
+        .with_context(|| {
+            format!(
+                "parsing benchmark metadata from {}",
+                camera_summary_stdout_path.display()
+            )
+        })?
+        .unwrap_or_default();
+    let trace_metadata = trace_metadata_map.get(spec.test_name);
+    let (measure_iterations, benchmark_iterations) =
+        reconcile_device_case_iteration_counts(spec, &base_case, batch_metadata, trace_metadata)?;
+    let mut metrics = base_case.metrics;
+    if spec.test_name.contains("Camera") && launch_stdout.is_some() {
+        let stdout = launch_stdout.as_deref().unwrap_or_default();
         match parse_oxide_camera_contract_summary(&stdout) {
             Ok(contract) => {
-                validate_normalized_camera_contract(&contract, spec.test_name)?;
-                notes.push(String::from(
-                    "Capture contract validation: stable back-camera 1280x720@30 YUV-family negotiation confirmed before the report was accepted.",
-                ));
+                if uikit_case_requires_normalized_camera_contract(spec.test_name) {
+                    validate_normalized_camera_contract(&contract, spec.test_name)?;
+                    notes.push(String::from(
+                        "Capture contract validation: stable back-camera 1280x720@30 YUV-family negotiation confirmed before the report was accepted.",
+                    ));
+                } else {
+                    notes.push(String::from(
+                        "Capture contract validation: skipped for synthetic/non-live benchmark case.",
+                    ));
+                }
                 notes.push(String::from(contract_source_note));
                 notes.push(render_oxide_camera_contract_note(&contract));
             }
@@ -2255,7 +2595,12 @@ fn build_uikit_device_case(
             }
         }
         match parse_oxide_stage_summary(&stdout) {
-            Ok(stage_metrics) => {
+            Ok(mut stage_metrics) => {
+                set_metric_metadata(
+                    &mut stage_metrics,
+                    UIKitMetricSource::DeviceConsoleStageSummary,
+                    &[],
+                );
                 notes.push(String::from(stage_source_note));
                 for (name, metric) in stage_metrics {
                     metrics.insert(name, metric);
@@ -2266,9 +2611,14 @@ fn build_uikit_device_case(
             }
         }
         match parse_oxide_memory_summary(&stdout) {
-            Ok(memory_metrics) => {
+            Ok(mut memory_metrics) => {
+                set_metric_metadata(
+                    &mut memory_metrics,
+                    UIKitMetricSource::DeviceConsoleMemorySummary,
+                    &[],
+                );
                 notes.push(String::from(memory_source_note));
-                if let Some(note) = render_oxide_memory_breakdown_note(&memory_metrics) {
+                if let Some(note) = render_oxide_memory_breakdown_note(&memory_metrics, &metrics) {
                     notes.push(note);
                 }
                 for (name, metric) in memory_metrics {
@@ -2279,13 +2629,44 @@ fn build_uikit_device_case(
                 notes.push(format!("Memory breakdown status: {}", err));
             }
         }
+        if stdout.contains(OXIDE_TICK_RING_PREFIX) {
+            match parse_oxide_tick_ring(&stdout) {
+                Ok(payload) => {
+                    if let Some(note) = render_oxide_tick_ring_note(&payload) {
+                        notes.push(note);
+                    }
+                }
+                Err(err) => {
+                    notes.push(format!("Tick ring status: {}", err));
+                }
+            }
+        }
+        if stdout.contains(OXIDE_APP_HOST_DEBUG_SUMMARY_PREFIX) {
+            match parse_oxide_app_host_debug_summary(&stdout) {
+                Ok(payload) => {
+                    notes.push(render_oxide_app_host_debug_summary_note(&payload));
+                }
+                Err(err) => {
+                    notes.push(format!("Actual app-host debug summary status: {}", err));
+                }
+            }
+        }
     }
     if uikit_device_trace_artifact_exists(&metal_run.trace_path) {
+        let renamed_signposts = relabel_xctest_device_signpost_metrics(&mut metrics);
+        if !renamed_signposts.is_empty() {
+            notes.push(format!(
+                "Device signpost source: canonical `signpost_*` metrics come from xctrace for this case; preserved XCTest signposts under `{}`.",
+                renamed_signposts.join("`, `")
+            ));
+        }
+        canonical_signpost_source = UIKitCanonicalSignpostSource::Xctrace;
         let (gpu_windows, used_summary_window) = extract_trace_windows_or_summary_window(
             root,
             &metal_run.trace_path,
             host_process_name,
         )?;
+        let trace_fallback_modes = trace_summary_window_fallback_modes(used_summary_window);
         if used_summary_window {
             notes.push(String::from(
                 "GPU trace window status: this Metal trace did not expose the per-workload signposts, so GPU metrics were summarized over the full trace duration for the OxideHost process.",
@@ -2293,12 +2674,23 @@ fn build_uikit_device_case(
         }
         notes.push(format!("GPU trace windows: {}", gpu_windows.len()));
         for (name, metric) in
-            summarize_trace_signpost_metrics(root, &metal_run.trace_path, &gpu_windows)?
+            summarize_trace_signpost_metrics(
+                root,
+                &metal_run.trace_path,
+                &gpu_windows,
+                &trace_fallback_modes,
+            )?
         {
             metrics.insert(name, metric);
         }
         for (name, metric) in
-            summarize_device_gpu_metrics(root, &metal_run.trace_path, &gpu_windows, &mut notes)?
+            summarize_device_gpu_metrics(
+                root,
+                &metal_run.trace_path,
+                &gpu_windows,
+                &mut notes,
+                &trace_fallback_modes,
+            )?
         {
             if name.starts_with("gpu_counter.") {
                 notes.push(format!("Direct counter: `{}`", name));
@@ -2320,7 +2712,12 @@ fn build_uikit_device_case(
             notes.push(format!("Power trace windows: {}", power_windows.len()));
             metrics.insert(
                 String::from("energy_j"),
-                summarize_device_energy_metric(root, &power_run.trace_path, &power_windows)?,
+                summarize_device_energy_metric(
+                    root,
+                    &power_run.trace_path,
+                    &power_windows,
+                    &trace_summary_window_fallback_modes(used_summary_window),
+                )?,
             );
         } else {
             notes.push(String::from(
@@ -2338,6 +2735,9 @@ fn build_uikit_device_case(
         style: base_case.style,
         cache_state: base_case.cache_state,
         refresh_mode: String::from(refresh_mode.report_value()),
+        measure_iterations,
+        benchmark_iterations,
+        canonical_signpost_source,
         threshold_pct: UIKIT_DEVICE_THRESHOLD_PCT,
         metrics,
         notes,
@@ -2351,9 +2751,13 @@ pub fn uikit_device_trace_artifact_exists(path: &Path) -> bool {
 fn selected_uikit_case_specs(requested: &[String]) -> Result<Vec<&'static UIKitCaseSpec>> {
     let mut selected = Vec::new();
     for spec in UIKIT_CASE_SPECS {
-        if requested.is_empty()
-            || requested.iter().any(|value| value == spec.test_name || value == spec.case_id)
-        {
+        if requested.is_empty() {
+            if uikit_case_in_official_device_battery_spec(spec) {
+                selected.push(spec);
+            }
+            continue;
+        }
+        if requested.iter().any(|value| value == spec.test_name || value == spec.case_id) {
             selected.push(spec);
         }
     }
@@ -2361,6 +2765,26 @@ fn selected_uikit_case_specs(requested: &[String]) -> Result<Vec<&'static UIKitC
         bail!("unknown UIKit perf case(s) `{}`", requested.join(", "));
     }
     Ok(selected)
+}
+
+fn uikit_case_in_official_device_battery_spec(spec: &UIKitCaseSpec) -> bool {
+    if !spec.test_name.starts_with("testCamera") {
+        return true;
+    }
+    matches!(
+        spec.test_name,
+        "testCameraNV12LegacyLivePreview" | "testCameraAVFoundationPreviewLayerLivePreview"
+    )
+}
+
+pub fn uikit_case_in_official_device_battery(test_name: &str) -> Result<bool> {
+    let (case_id, _, _) = map_uikit_case(test_name)?;
+    let requested = vec![String::from(case_id)];
+    let spec = selected_uikit_case_specs(&requested)?
+        .into_iter()
+        .next()
+        .with_context(|| format!("missing UIKit case `{}`", test_name))?;
+    Ok(uikit_case_in_official_device_battery_spec(spec))
 }
 
 fn validate_uikit_power_trace_inputs(
@@ -2878,21 +3302,41 @@ pub fn format_uikit_only_testing_identifier(
 
 fn uikit_launch_case_metadata(
     spec: &UIKitCaseSpec,
-) -> Option<(&'static str, Option<&'static str>)> {
+) -> Option<(&'static str, Option<&'static str>, &'static str)> {
     match spec.test_name {
-        "testSimpleHomeColdLaunch" | "testSimpleHomeWarmResume" => Some(("simple_home", None)),
+        "testSimpleHomeColdLaunch" | "testSimpleHomeWarmResume" => {
+            Some(("simple_home", None, "idiomatic"))
+        }
+        "testOptimizedSimpleHomeColdLaunch" | "testOptimizedSimpleHomeWarmResume" => {
+            Some(("simple_home", None, "optimized"))
+        }
         "testHeavyHomeColdLaunch" | "testHeavyHomeForegroundAfterBackground" => {
-            Some(("heavy_home", None))
+            Some(("heavy_home", None, "idiomatic"))
+        }
+        "testOptimizedHeavyHomeColdLaunch" | "testOptimizedHeavyHomeForegroundAfterBackground" => {
+            Some(("heavy_home", None, "optimized"))
         }
         "testDetailDeepLinkLaunch" => {
-            Some(("detail_route", Some("oxide://detail/integration?item=42")))
+            Some(("detail_route", Some("oxide://detail/integration?item=42"), "idiomatic"))
+        }
+        "testOptimizedDetailDeepLinkLaunch" => {
+            Some(("detail_route", Some("oxide://detail/integration?item=42"), "optimized"))
         }
         _ => None,
     }
 }
 
+fn uikit_case_uses_ui_test_target(spec: &UIKitCaseSpec) -> bool {
+    uikit_launch_case_metadata(spec).is_some()
+        || matches!(
+            spec.test_name,
+            "testCameraNV12LegacyRealAppLivePreview"
+                | "testCameraAVFoundationPreviewLayerRealAppLivePreview"
+        )
+}
+
 fn uikit_only_testing_identifier_for_spec(spec: &UIKitCaseSpec) -> String {
-    if uikit_launch_case_metadata(spec).is_some() {
+    if uikit_case_uses_ui_test_target(spec) {
         return format_uikit_only_testing_identifier(
             DEFAULT_UIKIT_UI_TEST_TARGET,
             DEFAULT_UIKIT_UI_LAUNCH_TEST_CLASS,
@@ -2904,6 +3348,29 @@ fn uikit_only_testing_identifier_for_spec(spec: &UIKitCaseSpec) -> String {
         DEFAULT_UIKIT_TEST_CLASS,
         spec.test_name,
     )
+}
+
+fn uikit_skipped_case_note(
+    spec: &UIKitCaseSpec,
+    refresh_mode: UIKitDeviceRefreshMode,
+    batch_run: &UIKitMetricsBatchRun,
+) -> Option<String> {
+    if let Some(note) = batch_run.skipped_case_notes.get(spec.case_id) {
+        return Some(format!(
+            "Skipped `{}` on `{}`: {}",
+            spec.case_id,
+            refresh_mode.report_value(),
+            note
+        ));
+    }
+    if !batch_run.case_ids.contains(spec.case_id) && uikit_case_uses_ui_test_target(spec) {
+        return Some(format!(
+            "Skipped `{}` on `{}`: xcodebuild did not produce an XCTest metrics row for this UI-test case on the current device/build, so the official device report leaves that row missing instead of fabricating a launch metric.",
+            spec.case_id,
+            refresh_mode.report_value()
+        ));
+    }
+    None
 }
 
 pub fn uikit_only_testing_identifier_for_test_name(test_name: &str) -> Result<String> {
@@ -2944,7 +3411,12 @@ fn uikit_case_uses_real_app_camera_host(spec: &UIKitCaseSpec) -> bool {
         spec.test_name,
         "testCameraNV12LegacyRealAppLivePreview"
             | "testCameraNV12LegacyRealAppHybridPreviewLayerLivePreview"
+            | "testCameraAVFoundationPreviewLayerRealAppLivePreview"
     )
+}
+
+fn uikit_case_requires_console_launch_summary(spec: &UIKitCaseSpec) -> bool {
+    spec.test_name.contains("Camera")
 }
 
 fn uikit_case_uses_real_app_hybrid_visible_preview(spec: &UIKitCaseSpec) -> bool {
@@ -2983,26 +3455,22 @@ fn append_uikit_case_specific_perf_environment(
     }
 }
 
-fn uikit_perf_launch_environment_json(
-    spec: &UIKitCaseSpec,
-    refresh_mode: UIKitDeviceRefreshMode,
-) -> Result<String> {
-    uikit_perf_launch_environment_json_with_trace_phases(spec, refresh_mode, false)
-}
-
-fn uikit_perf_launch_environment_json_with_trace_phases(
+fn uikit_perf_launch_environment(
     spec: &UIKitCaseSpec,
     refresh_mode: UIKitDeviceRefreshMode,
     camera_trace_phases: bool,
-) -> Result<String> {
+) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
-    if let Some((scenario, route)) = uikit_launch_case_metadata(spec) {
+    if let Some((scenario, route, style)) = uikit_launch_case_metadata(spec) {
         env.insert(String::from("OXIDE_PERF_UIKIT_LAUNCH"), String::from("1"));
         env.insert(String::from("OXIDE_PERF_LAUNCH_SCENARIO"), String::from(scenario));
+        env.insert(String::from("OXIDE_PERF_LAUNCH_STYLE"), String::from(style));
         env.insert(String::from("OXIDE_PERF_TRACE_HANDSHAKE"), String::from("1"));
         if let Some(route) = route {
             env.insert(String::from("OXIDE_PERF_LAUNCH_ROUTE"), String::from(route));
         }
+    } else if uikit_case_uses_real_app_camera_host(spec) {
+        env.insert(String::from("OXIDE_PERF_CASE"), String::from(spec.test_name));
     } else {
         env.insert(String::from("OXIDE_PERF_PARKED"), String::from("1"));
         env.insert(String::from("OXIDE_PERF_CASE"), String::from(spec.test_name));
@@ -3015,8 +3483,37 @@ fn uikit_perf_launch_environment_json_with_trace_phases(
         env.insert(String::from(UIKIT_PERF_CAMERA_TRACE_PHASES_ENV), String::from("1"));
     }
     append_forwarded_uikit_perf_environment(&mut env);
+    env
+}
+
+fn uikit_perf_launch_environment_json(
+    spec: &UIKitCaseSpec,
+    refresh_mode: UIKitDeviceRefreshMode,
+) -> Result<String> {
+    uikit_perf_launch_environment_json_with_trace_phases(spec, refresh_mode, false)
+}
+
+fn uikit_perf_launch_environment_json_with_trace_phases(
+    spec: &UIKitCaseSpec,
+    refresh_mode: UIKitDeviceRefreshMode,
+    camera_trace_phases: bool,
+) -> Result<String> {
+    let env = uikit_perf_launch_environment(spec, refresh_mode, camera_trace_phases);
     serde_json::to_string(&env)
         .with_context(|| format!("encoding parked benchmark environment for `{}`", spec.test_name))
+}
+
+fn uikit_perf_xctrace_launch_env_args(
+    spec: &UIKitCaseSpec,
+    refresh_mode: UIKitDeviceRefreshMode,
+    camera_trace_phases: bool,
+) -> Vec<String> {
+    let mut args = Vec::new();
+    for (key, value) in uikit_perf_launch_environment(spec, refresh_mode, camera_trace_phases) {
+        args.push(String::from("--env"));
+        args.push(format!("{}={}", key, value));
+    }
+    args
 }
 
 fn uikit_perf_launch_args(
@@ -3055,6 +3552,12 @@ fn append_forwarded_uikit_perf_environment(env: &mut BTreeMap<String, String>) {
         UIKIT_PERF_CAMERA_STAGE_MEASUREMENT_ENV,
         UIKIT_PERF_CAMERA_TINY_PREVIEW_RENDERER_ENV,
         UIKIT_PERF_CAMERA_PREVIEW_BACKPRESSURE_ENV,
+        UIKIT_PERF_CAMERA_PREVIEW_DONT_CARE_LOAD_ENV,
+        UIKIT_PERF_CAMERA_PREVIEW_SUBMISSION_CAP_ENV,
+        UIKIT_PERF_CAMERA_PREVIEW_PUBLISHED_SLOT_COUNT_ENV,
+        UIKIT_PERF_CAMERA_NO_VISIBLE_PRESENT_ENV,
+        UIKIT_PERF_CAMERA_FRAME_DRIVEN_SCHEDULING_ENV,
+        UIKIT_PERF_CAMERA_PREBRIDGE_DROP_ENV,
     ] {
         if let Ok(value) = std::env::var(key) {
             let trimmed = value.trim();
@@ -3577,12 +4080,14 @@ fn run_uikit_device_metrics_batch(
     specs: &[&'static UIKitCaseSpec],
     refresh_mode: UIKitDeviceRefreshMode,
     result_root: &Path,
-) -> Result<String> {
+) -> Result<UIKitMetricsBatchRun> {
     let mut metrics_json_fragments = Vec::new();
+    let mut benchmark_metadata = BTreeMap::new();
+    let mut skipped_case_notes = BTreeMap::new();
     let mut metric_shards: Vec<Vec<&'static UIKitCaseSpec>> = Vec::new();
     let mut current_shard: Vec<&'static UIKitCaseSpec> = Vec::new();
     for spec in specs {
-        if spec.test_name.starts_with("testCamera") {
+        if spec.test_name.starts_with("testCamera") || uikit_case_uses_ui_test_target(spec) {
             if !current_shard.is_empty() {
                 metric_shards.push(core::mem::take(&mut current_shard));
             }
@@ -3700,10 +4205,42 @@ fn run_uikit_device_metrics_batch(
             }
             (Ok(()), Err(err)) | (Err(_), Err(err)) => return Err(err),
         };
+        let stdout = fs::read_to_string(&stdout_path)
+            .with_context(|| format!("reading {}", stdout_path.display()))?;
+        let stderr = fs::read_to_string(&stderr_path)
+            .with_context(|| format!("reading {}", stderr_path.display()))?;
+        merge_benchmark_metadata(&mut benchmark_metadata, parse_oxide_benchmark_metadata(&stdout)?)?;
+        if shard_specs.len() == 1
+            && metrics_json.trim() == "[]"
+            && uikit_case_uses_ui_test_target(shard_specs[0])
+            && format!("{}\n{}", stdout, stderr)
+                .to_ascii_lowercase()
+                .contains("timed out while enabling automation mode")
+        {
+            skipped_case_notes.insert(
+                String::from(shard_specs[0].case_id),
+                String::from(
+                    "xcodebuild did not produce XCTest metrics for this UI-test launch case because the device UI automation session timed out while enabling automation mode; the direct trace artifacts were still captured, but the official launch row remains missing on this device/build.",
+                ),
+            );
+            continue;
+        }
         metrics_json_fragments.push(metrics_json);
     }
 
-    merge_xcresult_metrics_json_fragments(&metrics_json_fragments)
+    let metrics_json = merge_xcresult_metrics_json_fragments(&metrics_json_fragments)?;
+    let case_ids = parse_uikit_report_json(&metrics_json)?
+        .cases
+        .into_iter()
+        .map(|case| case.id)
+        .collect();
+
+    Ok(UIKitMetricsBatchRun {
+        metrics_json,
+        case_ids,
+        benchmark_metadata,
+        skipped_case_notes,
+    })
 }
 
 fn oxide_device_launch_environment_json(smoke: bool) -> Result<String> {
@@ -4110,18 +4647,34 @@ fn run_uikit_device_case_trace_attempt(
     if include_gpu_counters {
         extra_instruments.push(String::from("Metal GPU Counters"));
     }
-    let (trace_path, launch_stdout_path, stderr_path) = run_uikit_device_attached_trace(
-        root,
-        device,
-        built_app,
-        spec,
-        refresh_mode,
-        case_dir,
-        trace_label,
-        template_name,
-        &extra_instruments,
-        trace_seconds,
-    )?;
+    let (trace_path, launch_stdout_path, stderr_path) =
+        if uikit_case_requires_console_launch_summary(spec) {
+            run_uikit_device_attached_trace(
+                root,
+                device,
+                built_app,
+                spec,
+                refresh_mode,
+                case_dir,
+                trace_label,
+                template_name,
+                &extra_instruments,
+                trace_seconds,
+            )?
+        } else {
+            run_uikit_device_launched_trace(
+                root,
+                device,
+                built_app,
+                spec,
+                refresh_mode,
+                case_dir,
+                trace_label,
+                template_name,
+                &extra_instruments,
+                trace_seconds,
+            )?
+        };
     let mut notes = Vec::new();
     let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
     if include_gpu_counters && is_unsupported_gpu_counter_profile_error(&stderr) {
@@ -4130,6 +4683,154 @@ fn run_uikit_device_case_trace_attempt(
         ));
     }
     Ok(DeviceTraceRun { trace_path, launch_stdout_path, notes })
+}
+
+fn run_uikit_device_launched_trace(
+    root: &Path,
+    device: &UIKitPhysicalDevice,
+    built_app: &BuiltUIKitApp,
+    spec: &UIKitCaseSpec,
+    refresh_mode: UIKitDeviceRefreshMode,
+    case_dir: &Path,
+    trace_label: &str,
+    template_name: &str,
+    extra_instruments: &[String],
+    trace_seconds: u64,
+) -> Result<(PathBuf, PathBuf, PathBuf)> {
+    let launched_trace_seconds = trace_seconds.saturating_add(XCTRACE_LAUNCH_TRACE_BUFFER_SECS);
+    let trace_path = case_dir.join(format!("{}.trace", trace_label));
+    let stdout_path = case_dir.join(format!("{}.stdout.log", trace_label));
+    let stderr_path = case_dir.join(format!("{}.stderr.log", trace_label));
+    let ready_stdout_path = case_dir.join("ready.stdout.log");
+    let ready_stderr_path = case_dir.join("ready.stderr.log");
+    let complete_stdout_path = case_dir.join("complete.stdout.log");
+    let complete_stderr_path = case_dir.join("complete.stderr.log");
+    remove_existing_path(&trace_path)?;
+    remove_existing_path(&stdout_path)?;
+    remove_existing_path(&stderr_path)?;
+    remove_existing_path(&ready_stdout_path)?;
+    remove_existing_path(&ready_stderr_path)?;
+    remove_existing_path(&complete_stdout_path)?;
+    remove_existing_path(&complete_stderr_path)?;
+
+    drain_uikit_processes(
+        root,
+        device,
+        &built_app.executable_name,
+        Duration::from_secs(5),
+        "pre-trace launch cleanup",
+    )?;
+
+    let ready_args = uikit_device_notification_observe_args(
+        device,
+        UIKIT_DEVICE_READY_NOTIFICATION,
+        UIKIT_DEVICE_READY_TIMEOUT_SECS,
+    );
+    let mut ready_child = spawn_command_owned_with_output_paths(
+        root,
+        "xcrun",
+        &ready_args,
+        &ready_stdout_path,
+        &ready_stderr_path,
+    )?;
+    thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
+
+    let complete_args = uikit_device_notification_observe_args(
+        device,
+        UIKIT_DEVICE_COMPLETE_NOTIFICATION,
+        UIKIT_DEVICE_COMPLETE_TIMEOUT_SECS,
+    );
+    let mut complete_child = spawn_command_owned_with_output_paths(
+        root,
+        "xcrun",
+        &complete_args,
+        &complete_stdout_path,
+        &complete_stderr_path,
+    )?;
+    thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
+
+    let mut trace_args = vec![
+        String::from("xctrace"),
+        String::from("record"),
+        String::from("--template"),
+        String::from(template_name),
+        String::from("--device"),
+        device.udid.clone(),
+        String::from("--time-limit"),
+        format!("{}s", launched_trace_seconds),
+        String::from("--output"),
+        trace_path.to_string_lossy().into_owned(),
+        String::from("--no-prompt"),
+    ];
+    for instrument in extra_instruments {
+        trace_args.push(String::from("--instrument"));
+        trace_args.push(instrument.clone());
+    }
+    trace_args.extend(uikit_perf_xctrace_launch_env_args(
+        spec,
+        refresh_mode,
+        false,
+    ));
+    trace_args.push(String::from("--launch"));
+    trace_args.push(String::from("--"));
+    trace_args.push(built_app.bundle_identifier.clone());
+    let mut trace_child = spawn_command_owned_with_output_paths(
+        root,
+        "xcrun",
+        &trace_args,
+        &stdout_path,
+        &stderr_path,
+    )?;
+    thread::sleep(Duration::from_millis(XCTRACE_STARTUP_DELAY_MS));
+
+    let ready_console_marker = format!("OXIDE_READY {}", uikit_trace_console_case_label(spec));
+    wait_for_device_notification_or_console_marker(
+        "xcrun",
+        &ready_args,
+        &mut ready_child,
+        &ready_stdout_path,
+        &ready_stderr_path,
+        UIKIT_DEVICE_READY_NOTIFICATION,
+        Path::new("/dev/null"),
+        &ready_console_marker,
+        Duration::from_secs(UIKIT_DEVICE_READY_TIMEOUT_SECS),
+    )?;
+
+    post_uikit_device_notification(root, device, UIKIT_DEVICE_START_NOTIFICATION)?;
+    let complete_console_marker = format!("OXIDE_COMPLETE {}", uikit_trace_console_case_label(spec));
+    let complete_result = wait_for_device_notification_or_console_marker(
+        "xcrun",
+        &complete_args,
+        &mut complete_child,
+        &complete_stdout_path,
+        &complete_stderr_path,
+        UIKIT_DEVICE_COMPLETE_NOTIFICATION,
+        Path::new("/dev/null"),
+        &complete_console_marker,
+        Duration::from_secs(UIKIT_DEVICE_COMPLETE_TIMEOUT_SECS),
+    );
+    let trace_result = wait_for_child_with_output_paths(
+        root,
+        "xcrun",
+        &trace_args,
+        &mut trace_child,
+        &stdout_path,
+        &stderr_path,
+    );
+    let clear_result = drain_uikit_processes(
+        root,
+        device,
+        &built_app.executable_name,
+        Duration::from_secs(5),
+        "launched trace cleanup",
+    );
+
+    complete_result?;
+    trace_result?;
+    clear_result?;
+    wait_for_xctrace_bundle_settle(&trace_path)?;
+
+    Ok((trace_path, PathBuf::new(), stderr_path))
 }
 
 fn run_uikit_device_attached_trace(
@@ -4245,7 +4946,27 @@ fn run_uikit_device_attached_trace(
     let mut complete_child = None;
     let mut active_trace_args = Vec::new();
     let mut attach_error = None;
+    let mut attached_process_pid = process_pid;
+    let pid_attach_attempts = usize::max(1, XCTRACE_ATTACH_RETRIES / 2);
     for attempt in 0..XCTRACE_ATTACH_RETRIES {
+        let current_process_pid = match wait_for_uikit_process_start(
+            root,
+            device,
+            &built_app.executable_name,
+            Duration::from_secs(2),
+        ) {
+            Ok(pid) => pid,
+            Err(err) => {
+                attach_error = Some(err);
+                break;
+            }
+        };
+        let use_name_attach = attempt >= pid_attach_attempts;
+        let attach_target = if use_name_attach {
+            built_app.executable_name.clone()
+        } else {
+            current_process_pid.to_string()
+        };
         let trace_started_args =
             vec![String::from("-1"), String::from(UIKIT_TRACE_STARTED_NOTIFICATION)];
         remove_existing_path(&trace_started_stdout_path)?;
@@ -4283,7 +5004,7 @@ fn run_uikit_device_attached_trace(
             String::from("--device"),
             device.udid.clone(),
             String::from("--attach"),
-            process_pid.to_string(),
+            attach_target,
             String::from("--time-limit"),
             format!("{}s", trace_seconds),
             String::from("--output"),
@@ -4319,6 +5040,7 @@ fn run_uikit_device_attached_trace(
         );
         match started_result {
             Ok(()) => {
+                attached_process_pid = current_process_pid;
                 active_trace_args = trace_args;
                 trace_child = Some(child);
                 complete_child = Some((complete_args, complete_child_attempt));
@@ -4345,7 +5067,8 @@ fn run_uikit_device_attached_trace(
     let mut trace_child = match trace_child {
         Some(child) => child,
         None => {
-            let terminate_result = terminate_uikit_device_process(root, device, process_pid);
+            let terminate_result =
+                terminate_uikit_device_process(root, device, attached_process_pid);
             let launch_result = wait_for_console_launch_with_output_paths(
                 root,
                 "xcrun",
@@ -4367,7 +5090,7 @@ fn run_uikit_device_attached_trace(
             return Err(attach_error.unwrap_or_else(|| {
                 anyhow::anyhow!(
                     "xcrun xctrace record never attached to pid `{}` after {} attempts",
-                    process_pid,
+                    attached_process_pid,
                     XCTRACE_ATTACH_RETRIES
                 )
             }));
@@ -4377,7 +5100,7 @@ fn run_uikit_device_attached_trace(
         format!(
             "xcrun {} started without a completion observer for pid `{}`",
             active_trace_args.join(" "),
-            process_pid
+            attached_process_pid
         )
     })?;
     let start_result =
@@ -4406,7 +5129,7 @@ fn run_uikit_device_attached_trace(
         &stdout_path,
         &stderr_path,
     );
-    let terminate_result = terminate_uikit_device_process(root, device, process_pid);
+    let terminate_result = terminate_uikit_device_process(root, device, attached_process_pid);
     let launch_result = wait_for_console_launch_with_output_paths(
         root,
         "xcrun",
@@ -4596,8 +5319,14 @@ fn wait_for_device_notification_or_console_marker(
     let deadline = Instant::now() + timeout;
     let mut observer_result: Option<(std::process::ExitStatus, String, String)> = None;
     loop {
+        let stdout = fs::read_to_string(stdout_path).unwrap_or_default();
         let console_stdout = fs::read_to_string(console_stdout_path).unwrap_or_default();
-        if console_output_contains_marker(&console_stdout, console_marker) {
+        if notification_or_console_marker_observed(
+            &stdout,
+            notification_name,
+            &console_stdout,
+            console_marker,
+        ) {
             let _ = child.kill();
             let _ = child.wait();
             return Ok(());
@@ -4607,7 +5336,6 @@ fn wait_for_device_notification_or_console_marker(
                 .try_wait()
                 .with_context(|| format!("probing {} {}", program, args.join(" ")))?
             {
-                let stdout = fs::read_to_string(stdout_path).unwrap_or_default();
                 let stderr = fs::read_to_string(stderr_path).unwrap_or_default();
                 if notification_or_console_marker_observed(
                     &stdout,
@@ -4676,8 +5404,8 @@ fn wait_for_device_notification_or_console_marker(
 }
 
 fn uikit_trace_console_case_label(spec: &UIKitCaseSpec) -> String {
-    if let Some((scenario, _route)) = uikit_launch_case_metadata(spec) {
-        return String::from(scenario);
+    if let Some((scenario, _route, style)) = uikit_launch_case_metadata(spec) {
+        return format!("{}-{}", style, scenario);
     }
     String::from(spec.test_name)
 }
@@ -6049,10 +6777,11 @@ fn summarize_trace_signpost_metrics(
     root: &Path,
     trace_path: &Path,
     windows: &[TraceWindow],
+    fallback_modes: &[UIKitMetricFallbackMode],
 ) -> Result<BTreeMap<String, UIKitMetricSummary>> {
     let mut tables = export_xctrace_tables(root, trace_path, "region-of-interest")?;
     tables.extend(export_xctrace_tables(root, trace_path, "os-signpost")?);
-    summarize_trace_signpost_metrics_from_tables(&tables, windows)
+    summarize_trace_signpost_metrics_from_tables(&tables, windows, fallback_modes)
 }
 
 fn extract_trace_summary_window(
@@ -6213,8 +6942,10 @@ pub fn extract_trace_windows_from_tables(tables: &[XctraceTable]) -> Result<Vec<
 pub fn summarize_trace_signpost_metrics_from_tables(
     tables: &[XctraceTable],
     windows: &[TraceWindow],
+    fallback_modes: &[UIKitMetricFallbackMode],
 ) -> Result<BTreeMap<String, UIKitMetricSummary>> {
-    let roi_metrics = summarize_trace_signpost_metrics_from_roi_tables(tables, windows)?;
+    let roi_metrics =
+        summarize_trace_signpost_metrics_from_roi_tables(tables, windows, fallback_modes)?;
     if !roi_metrics.is_empty() {
         return Ok(roi_metrics);
     }
@@ -6314,7 +7045,15 @@ pub fn summarize_trace_signpost_metrics_from_tables(
 
     let mut metrics = BTreeMap::new();
     for (name, values) in samples {
-        metrics.insert(name, metric_summary_from_samples("s", &values)?);
+        metrics.insert(
+            name,
+            metric_summary_from_samples_with_metadata(
+                "s",
+                &values,
+                UIKitMetricSource::XctraceSignpost,
+                fallback_modes,
+            )?,
+        );
     }
     Ok(metrics)
 }
@@ -6322,6 +7061,7 @@ pub fn summarize_trace_signpost_metrics_from_tables(
 fn summarize_trace_signpost_metrics_from_roi_tables(
     tables: &[XctraceTable],
     windows: &[TraceWindow],
+    fallback_modes: &[UIKitMetricFallbackMode],
 ) -> Result<BTreeMap<String, UIKitMetricSummary>> {
     let mut samples = BTreeMap::<String, Vec<f64>>::new();
     for table in tables {
@@ -6374,7 +7114,15 @@ fn summarize_trace_signpost_metrics_from_roi_tables(
 
     let mut metrics = BTreeMap::new();
     for (name, values) in samples {
-        metrics.insert(name, metric_summary_from_samples("s", &values)?);
+        metrics.insert(
+            name,
+            metric_summary_from_samples_with_metadata(
+                "s",
+                &values,
+                UIKitMetricSource::XctraceSignpost,
+                fallback_modes,
+            )?,
+        );
     }
     Ok(metrics)
 }
@@ -6384,9 +7132,15 @@ fn summarize_device_gpu_metrics(
     trace_path: &Path,
     windows: &[TraceWindow],
     notes: &mut Vec<String>,
+    inherited_fallback_modes: &[UIKitMetricFallbackMode],
 ) -> Result<BTreeMap<String, UIKitMetricSummary>> {
     let table = export_xctrace_preferred_table(root, trace_path, "metal-gpu-intervals", None)?;
-    let mut metrics = summarize_device_gpu_metrics_from_tables(&table, windows, notes)?;
+    let mut metrics = summarize_device_gpu_metrics_from_tables(
+        &table,
+        windows,
+        notes,
+        inherited_fallback_modes,
+    )?;
     let counter_info = export_xctrace_preferred_table(root, trace_path, "gpu-counter-info", None);
     let counter_values =
         export_xctrace_preferred_table(root, trace_path, "gpu-counter-value", None);
@@ -6442,7 +7196,12 @@ fn summarize_device_gpu_metrics(
     for (counter_name, values) in counter_samples {
         metrics.insert(
             format!("gpu_counter.{}", counter_name),
-            metric_summary_from_samples("count", &values)?,
+            metric_summary_from_samples_with_metadata(
+                "count",
+                &values,
+                UIKitMetricSource::XctraceGpuCounter,
+                inherited_fallback_modes,
+            )?,
         );
     }
     Ok(metrics)
@@ -6452,6 +7211,7 @@ pub fn summarize_device_gpu_metrics_from_tables(
     table: &XctraceTable,
     windows: &[TraceWindow],
     notes: &mut Vec<String>,
+    inherited_fallback_modes: &[UIKitMetricFallbackMode],
 ) -> Result<BTreeMap<String, UIKitMetricSummary>> {
     let mut gpu_samples = Vec::with_capacity(windows.len());
     let mut latency_samples = Vec::with_capacity(windows.len());
@@ -6527,9 +7287,30 @@ pub fn summarize_device_gpu_metrics_from_tables(
     }
 
     let mut metrics = BTreeMap::new();
-    metrics.insert(String::from("gpu_time_s"), metric_summary_from_samples("s", &gpu_samples)?);
-    metrics
-        .insert(String::from("gpu_latency_s"), metric_summary_from_samples("s", &latency_samples)?);
+    let mut fallback_modes = inherited_fallback_modes.to_vec();
+    if used_compositor_fallback
+        && !fallback_modes.contains(&UIKitMetricFallbackMode::CompositorInclusiveGpuIntervals)
+    {
+        fallback_modes.push(UIKitMetricFallbackMode::CompositorInclusiveGpuIntervals);
+    }
+    metrics.insert(
+        String::from("gpu_time_s"),
+        metric_summary_from_samples_with_metadata(
+            "s",
+            &gpu_samples,
+            UIKitMetricSource::XctraceGpuInterval,
+            &fallback_modes,
+        )?,
+    );
+    metrics.insert(
+        String::from("gpu_latency_s"),
+        metric_summary_from_samples_with_metadata(
+            "s",
+            &latency_samples,
+            UIKitMetricSource::XctraceGpuInterval,
+            &fallback_modes,
+        )?,
+    );
     if used_compositor_fallback {
         notes.push(String::from(
             "GPU interval attribution status: this trace exposed no direct target-process GPU intervals, so GPU time and latency were summarized from compositor-inclusive Metal GPU intervals within the same trace window.",
@@ -6556,6 +7337,7 @@ fn summarize_device_energy_metric(
     root: &Path,
     trace_path: &Path,
     windows: &[TraceWindow],
+    fallback_modes: &[UIKitMetricFallbackMode],
 ) -> Result<UIKitMetricSummary> {
     let toc = export_xctrace_toc(root, trace_path)?;
     let mut candidates = toc
@@ -6581,7 +7363,12 @@ fn summarize_device_energy_metric(
         }
     }
 
-    best.map(|(_, metric)| metric).with_context(|| {
+    best.map(|(_, mut metric)| {
+        metric.source = UIKitMetricSource::XctraceEnergy;
+        metric.fallback_modes = fallback_modes.to_vec();
+        metric
+    })
+    .with_context(|| {
         format!("could not find a direct device energy table in {}", trace_path.display())
     })
 }
@@ -6673,7 +7460,10 @@ pub fn summarize_energy_table(
     windows: &[TraceWindow],
 ) -> Result<UIKitMetricSummary> {
     summarize_energy_from_table(table, windows)
-        .map(|(_, metric)| metric)
+        .map(|(_, mut metric)| {
+            metric.source = UIKitMetricSource::XctraceEnergy;
+            metric
+        })
         .with_context(|| "could not summarize direct energy samples from xctrace table")
 }
 
@@ -6743,6 +7533,20 @@ fn find_power_column(table: &XctraceTable) -> Option<String> {
 }
 
 fn metric_summary_from_samples(unit: &str, values: &[f64]) -> Result<UIKitMetricSummary> {
+    metric_summary_from_samples_with_metadata(
+        unit,
+        values,
+        UIKitMetricSource::Unknown,
+        &[],
+    )
+}
+
+fn metric_summary_from_samples_with_metadata(
+    unit: &str,
+    values: &[f64],
+    source: UIKitMetricSource,
+    fallback_modes: &[UIKitMetricFallbackMode],
+) -> Result<UIKitMetricSummary> {
     if values.is_empty() {
         bail!("metric `{}` had no measurements", unit);
     }
@@ -6750,9 +7554,9 @@ fn metric_summary_from_samples(unit: &str, values: &[f64]) -> Result<UIKitMetric
     sorted.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
     let samples = sorted.len();
     let mean = sorted.iter().sum::<f64>() / samples as f64;
-    let median = percentile(&sorted, 0.50);
-    let p95 = percentile(&sorted, 0.95);
-    let p99 = percentile(&sorted, 0.99);
+    let median = quantile(&sorted, 0.50);
+    let p95 = quantile(&sorted, 0.95);
+    let p99 = quantile(&sorted, 0.99);
     Ok(UIKitMetricSummary {
         unit: unit.to_string(),
         min: *sorted.first().unwrap_or(&0.0),
@@ -6762,6 +7566,8 @@ fn metric_summary_from_samples(unit: &str, values: &[f64]) -> Result<UIKitMetric
         p95,
         p99,
         samples,
+        source,
+        fallback_modes: fallback_modes.to_vec(),
     })
 }
 
@@ -6854,6 +7660,95 @@ fn build_uikit_contract_coverage(
     let has = |needle: &str| cases.iter().any(|case| case.id.contains(needle));
     let has_case = |id: &str| cases.iter().any(|case| case.id == id);
     let has_style = |style: &str| cases.iter().any(|case| case.style == style);
+    let has_case_refresh = |id: &str, refresh_mode: &str| {
+        cases.iter().any(|case| case.id == id && case.refresh_mode == refresh_mode)
+    };
+    let has_refresh_matrix = |ids: &[&str]| {
+        suite == "device"
+            && ids.iter().all(|id| {
+                has_case_refresh(id, "60hz-capped") && has_case_refresh(id, "native")
+            })
+    };
+    let optimized_complete = [
+        "uikit.optimized.component.collection_view.encode",
+        "uikit.optimized.launch.simple_home.cold_launch",
+        "uikit.optimized.launch.heavy_home.cold_launch",
+        "uikit.optimized.launch.detail.deep_link_launch",
+        "uikit.optimized.launch.simple_home.warm_resume",
+        "uikit.optimized.launch.heavy_home.foreground_after_background",
+        "uikit.optimized.primitive.control_set.mount",
+        "uikit.optimized.primitive.control_set.mutate_state",
+        "uikit.optimized.layout.flat_grid.rotation_relayout",
+        "uikit.optimized.layout.deep_stack.theme_swap",
+        "uikit.optimized.layout.grid.safe_area_swap",
+        "uikit.optimized.text_input.large_editor.keystroke_burst",
+        "uikit.optimized.text_input.large_editor.paste_10kb",
+        "uikit.optimized.text_input.large_editor.selection_replace",
+        "uikit.optimized.image_pipeline.png.decode",
+        "uikit.optimized.image_pipeline.png.upload",
+        "uikit.optimized.image_pipeline.png.first_visible",
+        "uikit.optimized.journey.feed_scroll_matrix",
+        "uikit.optimized.journey.thumbnail_grid_scroll_matrix",
+        "uikit.optimized.journey.chat_thread_scroll_matrix",
+        "uikit.optimized.navigation.button_press.response",
+        "uikit.optimized.navigation.slider_scrub.response",
+        "uikit.optimized.navigation.text_focus.response",
+        "uikit.optimized.animation.spinner_spin",
+        "uikit.optimized.animation.progress_indeterminate",
+        "uikit.optimized.animation.button_press_scale",
+        "uikit.optimized.animation.toggle_thumb_spring",
+        "uikit.optimized.animation.slider_thumb_move",
+        "uikit.optimized.animation.image_zoom_pan",
+        "uikit.optimized.animation.anim_timeline_bars",
+        "uikit.optimized.reconcile.single_node_mutation",
+        "uikit.optimized.reconcile.tree_mutation_1pct",
+        "uikit.optimized.reconcile.tree_mutation_10pct",
+        "uikit.optimized.reconcile.theme_swap_full",
+        "uikit.optimized.authoring.text_fields.edit_cycle",
+        "uikit.optimized.authoring.popup_wheel_picker.interaction",
+        "uikit.optimized.authoring.burst_emitter.sample",
+        "uikit.optimized.authoring.surface_router.compose",
+        "uikit.optimized.bridge.permission_callback_fanout",
+        "uikit.optimized.bridge.sensor_location_snapshot",
+        "uikit.optimized.bridge.bluetooth_cache_update",
+        "uikit.optimized.bridge.photo_import_thumbnail",
+        "uikit.optimized.bridge.file_import_render",
+        "uikit.optimized.bridge.share_payload_prepare",
+        "uikit.optimized.bridge.local_json_transport_render",
+        "uikit.optimized.bridge.local_image_transport_render",
+        "uikit.optimized.endurance.open_close_heavy_screen.100x",
+        "uikit.optimized.endurance.tab_switch_heavy.500x",
+        "uikit.optimized.endurance.idle_animation.600_frames",
+        "uikit.optimized.stress.flat_rects.10000.mount",
+        "uikit.optimized.stress.simultaneous_animations.300",
+        "uikit.optimized.stress.ticker_100hz",
+    ]
+    .iter()
+    .all(|id| has_case(id));
+    let scroll_refresh_matrix_complete = has_refresh_matrix(&[
+        "uikit.journey.feed_scroll_matrix",
+        "uikit.journey.thumbnail_grid_scroll_matrix",
+        "uikit.journey.chat_thread_scroll_matrix",
+        "uikit.optimized.journey.feed_scroll_matrix",
+        "uikit.optimized.journey.thumbnail_grid_scroll_matrix",
+        "uikit.optimized.journey.chat_thread_scroll_matrix",
+    ]);
+    let animation_refresh_matrix_complete = has_refresh_matrix(&[
+        "uikit.animation.spinner_spin",
+        "uikit.animation.progress_indeterminate",
+        "uikit.animation.button_press_scale",
+        "uikit.animation.toggle_thumb_spring",
+        "uikit.animation.slider_thumb_move",
+        "uikit.animation.image_zoom_pan",
+        "uikit.animation.anim_timeline_bars",
+        "uikit.optimized.animation.spinner_spin",
+        "uikit.optimized.animation.progress_indeterminate",
+        "uikit.optimized.animation.button_press_scale",
+        "uikit.optimized.animation.toggle_thumb_spring",
+        "uikit.optimized.animation.slider_thumb_move",
+        "uikit.optimized.animation.image_zoom_pan",
+        "uikit.optimized.animation.anim_timeline_bars",
+    ]);
     let layers = vec![
         uikit_contract_entry(
             "engine",
@@ -6871,9 +7766,15 @@ fn build_uikit_contract_coverage(
             "flow",
             "Representative Screen Flows",
             if has(".journey.") { "implemented" } else { "missing" },
-            vec![String::from(
-                "Flow coverage now spans launch/lifecycle and user-journey cases, but hitch and refresh-mode matrices are still incomplete.",
-            )],
+            vec![if scroll_refresh_matrix_complete && animation_refresh_matrix_complete {
+                String::from(
+                    "Flow coverage now spans launch/lifecycle and user journeys, with 60 Hz-capped and native rows carried on the same ProMotion iPhone for the committed scroll and animation families.",
+                )
+            } else {
+                String::from(
+                    "Flow coverage now spans launch/lifecycle and user-journey cases, but hitch and refresh-mode matrices are still incomplete.",
+                )
+            }],
         ),
         uikit_contract_entry(
             "os-bridge",
@@ -6896,10 +7797,22 @@ fn build_uikit_contract_coverage(
         uikit_contract_entry(
             "optimized",
             "Hand-Optimized UIKit",
-            if has_style("optimized") { "partial" } else { "missing" },
-            vec![String::from(
-                "The optimized UIKit slice now covers the full currently implemented journey, bridge, and endurance families, plus primitive-lifecycle, animation-effect, image-pipeline, and large-editor text-input peers; launch/lifecycle, layout/invalidation, authoring, component microbenchmarks, and stress/pathological traps still need tuned peers.",
-            )],
+            if optimized_complete {
+                "implemented"
+            } else if has_style("optimized") {
+                "partial"
+            } else {
+                "missing"
+            },
+            vec![if optimized_complete {
+                String::from(
+                    "The optimized UIKit slice now carries direct counterparts across the currently implemented component, launch/lifecycle, primitive-lifecycle, layout, text-input, image-pipeline, journey, navigation, animation, reconcile, authoring, bridge, endurance, and stress families.",
+                )
+            } else {
+                String::from(
+                    "The optimized UIKit slice now covers the full currently implemented journey, bridge, and endurance families, plus primitive-lifecycle, animation-effect, image-pipeline, and large-editor text-input peers; launch/lifecycle, layout/invalidation, authoring, component microbenchmarks, and stress/pathological traps still need tuned peers.",
+                )
+            }],
         ),
     ];
     let battery = vec![
@@ -7018,18 +7931,46 @@ fn build_uikit_contract_coverage(
             } else {
                 "partial"
             },
-            vec![if has_case("uikit.idiomatic.image_pipeline.png.decode")
-                && has_case("uikit.idiomatic.image_pipeline.png.upload")
-                && has_case("uikit.idiomatic.image_pipeline.png.first_visible")
-            {
-                String::from(
-                    "The committed UIKit image battery now splits PNG decode, upload/attach, and first-visible phases into separate persisted workloads.",
-                )
-            } else {
-                String::from(
-                    "UIImageView and zoom workloads exist, but bytes-ready, decode, upload, and first-visible phases are not yet split into separate metrics.",
-                )
-            }],
+            vec![
+                if has_case("uikit.idiomatic.image_pipeline.png.decode")
+                    && has_case("uikit.idiomatic.image_pipeline.png.upload")
+                    && has_case("uikit.idiomatic.image_pipeline.png.first_visible")
+                {
+                    String::from(
+                        "The committed UIKit image battery now splits PNG decode, upload/attach, and first-visible phases into separate persisted workloads.",
+                    )
+                } else {
+                    String::from(
+                        "UIImageView and zoom workloads exist, but bytes-ready, decode, upload, and first-visible phases are not yet split into separate metrics.",
+                    )
+                },
+                if has_case(
+                    "uikit.optimized.image_pipeline.camera_preview.nv12_legacy_live",
+                ) && has_case(
+                    "uikit.idiomatic.image_pipeline.camera_preview.avfoundation_preview_layer_live",
+                ) {
+                    String::from(
+                        "The official camera-preview battery includes the parked pure-custom NV12 live preview path and the matching AVCaptureVideoPreviewLayer baseline on the same build and device.",
+                    )
+                } else {
+                    String::from(
+                        "The official camera-preview comparison is still missing the parked pure-custom versus AVCaptureVideoPreviewLayer pair.",
+                    )
+                },
+                if has_case(
+                    "uikit.optimized.image_pipeline.camera_preview.nv12_legacy_real_app_live",
+                ) && has_case(
+                    "uikit.idiomatic.image_pipeline.camera_preview.avfoundation_preview_layer_real_app_live",
+                ) {
+                    String::from(
+                        "The shipping-oriented actual app-host camera pair is present in this report.",
+                    )
+                } else {
+                    String::from(
+                        "The shipping-oriented actual app-host camera pair remains a separate bucket and may still be partial or blocked until the UI-test runner path is stable.",
+                    )
+                },
+            ],
         ),
         uikit_contract_entry(
             "lists-grids-chat",
@@ -7082,10 +8023,20 @@ fn build_uikit_contract_coverage(
         uikit_contract_entry(
             "animation-effects",
             "Animation & Visual Effects",
-            "partial",
-            vec![String::from(
-                "Idiomatic and hand-tuned animation-effect cases now exist, but the suite still lacks full hitch-ratio and refresh-mode matrices on real 60 Hz and ProMotion hardware.",
-            )],
+            if animation_refresh_matrix_complete {
+                "implemented"
+            } else {
+                "partial"
+            },
+            vec![if animation_refresh_matrix_complete {
+                String::from(
+                    "Idiomatic and hand-tuned animation-effect cases now carry both 60 Hz-capped and native rows on the same ProMotion iPhone; the separate older 60 Hz hardware leg remains explicitly pending in the report notes.",
+                )
+            } else {
+                String::from(
+                    "Idiomatic and hand-tuned animation-effect cases now exist, but the suite still lacks full hitch-ratio and refresh-mode matrices on real 60 Hz and ProMotion hardware.",
+                )
+            }],
         ),
         uikit_contract_entry(
             "state-reconcile",
@@ -7199,9 +8150,15 @@ fn build_uikit_contract_coverage(
     let mut notes = vec![String::from(
         "The UIKit reports now persist explicit contract coverage so the suite does not over-claim comprehensiveness.",
     )];
+    notes.push(String::from(
+        "Official camera preview rows use the parked microscope full-custom NV12 path (`testCameraNV12LegacyLivePreview`) against the parked AVFoundation preview-layer baseline (`testCameraAVFoundationPreviewLayerLivePreview`). Hybrid preview-layer visible-preview cases remain diagnostic-only and stay out of the default battery.",
+    ));
     if suite == "device" {
         notes.push(String::from(
             "The device report is the authoritative GPU source. Manual per-case Power Profiler traces still gate true energy coverage.",
+        ));
+        notes.push(String::from(
+            "The shipping-oriented actual app-host camera comparison remains an explicit bucket. Keep `testCameraNV12LegacyRealAppLivePreview` and `testCameraAVFoundationPreviewLayerRealAppLivePreview` out of the default device battery until the UI-test runner launch path is stable enough to produce repeatable JSON and trace outputs.",
         ));
     } else {
         notes.push(String::from(
@@ -7281,7 +8238,13 @@ pub fn parse_uikit_report_json(text: &str) -> Result<UIKitPerfReport> {
             let Some(metric_key) = map_uikit_metric(&metric.identifier) else {
                 continue;
             };
-            metrics.insert(metric_key, summarize_uikit_metric(metric)?);
+            let metric_source = if metric_key == "workload_s" || metric_key.starts_with("signpost_")
+            {
+                UIKitMetricSource::XCTestSignpost
+            } else {
+                UIKitMetricSource::XCTest
+            };
+            metrics.insert(metric_key, summarize_uikit_metric(metric, metric_source)?);
         }
         for required in [
             "clock_s",
@@ -7304,6 +8267,9 @@ pub fn parse_uikit_report_json(text: &str) -> Result<UIKitPerfReport> {
             style: String::from(style),
             cache_state: String::from(cache_state),
             refresh_mode: String::from(uikit_refresh_mode_for_suite("simulator")),
+            measure_iterations: infer_measure_iterations(&metrics),
+            benchmark_iterations: 0,
+            canonical_signpost_source: UIKitCanonicalSignpostSource::XCTest,
             threshold_pct: UIKIT_SIM_THRESHOLD_PCT,
             metrics,
             notes: vec![String::from(note)],
@@ -7534,6 +8500,64 @@ struct OxideMemorySummaryPayload {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct OxideTickRingEntryPayload {
+    pub serial: u64,
+    pub drawable_width: u32,
+    pub drawable_height: u32,
+    pub drawable_scale: f32,
+    pub plan_reason: u32,
+    pub plan_ms: f64,
+    pub drawable_acquire_ms: f64,
+    pub frame_call_ms: f64,
+    pub tick_total_ms: f64,
+    pub skipped: bool,
+    pub drawable_acquired: bool,
+    pub frame_submitted: bool,
+    pub preview_submission_depth: u32,
+    pub preview_submission_skipped: bool,
+    pub preview_frame_age_ms: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OxideTickRingPayload {
+    pub ticks: Vec<OxideTickRingEntryPayload>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OxideAppHostDebugSummaryPayload {
+    pub display_link_callbacks: u32,
+    pub scene_will_connect_calls: u32,
+    pub perf_scene_branch_calls: u32,
+    pub normal_scene_branch_calls: u32,
+    pub metal_view_installs: u32,
+    pub display_link_create_calls: u32,
+    pub scene_did_become_active_calls: u32,
+    pub scene_will_enter_foreground_calls: u32,
+    pub ensure_host_initialized_calls: u32,
+    pub host_ready_transitions: u32,
+    pub on_tick_calls: u32,
+    pub camera_generation_advances: u32,
+    pub camera_frame_triggered_renders: u32,
+    pub plan_skips: u32,
+    pub drawables_acquired: u32,
+    pub command_buffers_committed: u32,
+    pub preview_submission_depth: u32,
+    pub presented_frame_age_ms: f64,
+    pub samples_received: u32,
+    pub samples_dropped_prebridge: u32,
+    pub samples_bridged: u32,
+    pub samples_published: u32,
+    pub samples_presented: u32,
+    pub samples_superseded_before_present: u32,
+    pub running_ui_test: bool,
+    pub running_perf_benchmark_host: bool,
+    pub should_render: bool,
+    pub host_ready: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OxideCameraContractSummaryPayload {
     pub source: String,
     pub transport: String,
@@ -7551,6 +8575,54 @@ pub struct OxideCameraContractSummaryPayload {
     pub color_space: String,
     pub wide_color_auto: bool,
     pub mirrored: bool,
+}
+
+pub fn parse_oxide_benchmark_metadata(
+    stdout: &str,
+) -> Result<BTreeMap<String, OxideBenchmarkMetadataPayload>> {
+    let mut metadata_by_test = BTreeMap::new();
+    for line in stdout.lines() {
+        let Some(index) = line.find(OXIDE_BENCHMARK_METADATA_PREFIX) else {
+            continue;
+        };
+        let payload_json = line[(index + OXIDE_BENCHMARK_METADATA_PREFIX.len())..].trim();
+        let payload: OxideBenchmarkMetadataPayload = serde_json::from_str(payload_json)
+            .with_context(|| "parsing benchmark metadata json")?;
+        if let Some(existing) = metadata_by_test.get(&payload.test_name) {
+            if existing != &payload {
+                bail!(
+                    "conflicting benchmark metadata for `{}`: {:?} vs {:?}",
+                    payload.test_name,
+                    existing,
+                    payload
+                );
+            }
+            continue;
+        }
+        metadata_by_test.insert(payload.test_name.clone(), payload);
+    }
+    Ok(metadata_by_test)
+}
+
+fn merge_benchmark_metadata(
+    into: &mut BTreeMap<String, OxideBenchmarkMetadataPayload>,
+    next: BTreeMap<String, OxideBenchmarkMetadataPayload>,
+) -> Result<()> {
+    for (test_name, payload) in next {
+        if let Some(existing) = into.get(&test_name) {
+            if existing != &payload {
+                bail!(
+                    "conflicting benchmark metadata for `{}` across shards: {:?} vs {:?}",
+                    test_name,
+                    existing,
+                    payload
+                );
+            }
+            continue;
+        }
+        into.insert(test_name, payload);
+    }
+    Ok(())
 }
 
 pub fn parse_oxide_stage_summary(stdout: &str) -> Result<BTreeMap<String, UIKitMetricSummary>> {
@@ -7593,8 +8665,107 @@ pub fn parse_oxide_memory_summary(stdout: &str) -> Result<BTreeMap<String, UIKit
         .collect())
 }
 
+pub fn parse_oxide_tick_ring(stdout: &str) -> Result<OxideTickRingPayload> {
+    let mut payload_json = None;
+    for line in stdout.lines() {
+        if let Some(index) = line.find(OXIDE_TICK_RING_PREFIX) {
+            payload_json = Some(line[(index + OXIDE_TICK_RING_PREFIX.len())..].trim().to_string());
+        }
+    }
+    let payload_json = payload_json.with_context(|| {
+        format!("missing `{}` marker in device console output", OXIDE_TICK_RING_PREFIX)
+    })?;
+    serde_json::from_str(&payload_json).with_context(|| "parsing Oxide tick ring json")
+}
+
+pub fn parse_oxide_app_host_debug_summary(stdout: &str) -> Result<OxideAppHostDebugSummaryPayload> {
+    let mut payload_json = None;
+    for line in stdout.lines() {
+        if let Some(index) = line.find(OXIDE_APP_HOST_DEBUG_SUMMARY_PREFIX) {
+            payload_json = Some(
+                line[(index + OXIDE_APP_HOST_DEBUG_SUMMARY_PREFIX.len())..].trim().to_string(),
+            );
+        }
+    }
+    let payload_json = payload_json.with_context(|| {
+        format!("missing `{}` marker in device console output", OXIDE_APP_HOST_DEBUG_SUMMARY_PREFIX)
+    })?;
+    serde_json::from_str(&payload_json).with_context(|| "parsing Oxide app-host debug summary json")
+}
+
+fn summarize_tick_values(values: &[f64]) -> Option<(f64, f64, f64, f64)> {
+    let mut filtered = values.iter().copied().filter(|value| value.is_finite()).collect::<Vec<_>>();
+    if filtered.is_empty() {
+        return None;
+    }
+    filtered.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    Some((quantile(&filtered, 0.50), quantile(&filtered, 0.95), quantile(&filtered, 0.99), *filtered.last().unwrap()))
+}
+
+pub fn render_oxide_tick_ring_note(payload: &OxideTickRingPayload) -> Option<String> {
+    if payload.ticks.is_empty() {
+        return None;
+    }
+    let tick_count = payload.ticks.len();
+    let skipped = payload.ticks.iter().filter(|tick| tick.skipped).count();
+    let acquired = payload.ticks.iter().filter(|tick| tick.drawable_acquired).count();
+    let submitted = payload.ticks.iter().filter(|tick| tick.frame_submitted).count();
+    let depth_values =
+        payload.ticks.iter().map(|tick| tick.preview_submission_depth as f64).collect::<Vec<_>>();
+    let frame_age_values = payload
+        .ticks
+        .iter()
+        .filter(|tick| tick.frame_submitted && tick.preview_frame_age_ms > 0.0)
+        .map(|tick| tick.preview_frame_age_ms)
+        .collect::<Vec<_>>();
+    let mut parts = vec![
+        format!("ticks={}", tick_count),
+        format!("skipShare={:.1}%", (skipped as f64 / tick_count as f64) * 100.0),
+        format!("acquireShare={:.1}%", (acquired as f64 / tick_count as f64) * 100.0),
+        format!("submitShare={:.1}%", (submitted as f64 / tick_count as f64) * 100.0),
+    ];
+    if let Some((p50, p95, p99, max)) = summarize_tick_values(&depth_values) {
+        parts.push(format!(
+            "previewDepth p50/p95/p99/max={:.0}/{:.0}/{:.0}/{:.0}",
+            p50, p95, p99, max
+        ));
+    }
+    if let Some((p50, p95, p99, max)) = summarize_tick_values(&frame_age_values) {
+        parts.push(format!(
+            "previewFrameAge p50/p95/p99/max={:.2}/{:.2}/{:.2}/{:.2}ms",
+            p50, p95, p99, max
+        ));
+    }
+    Some(format!("Per-opportunity preview tick ring (measured window): {}", parts.join(", ")))
+}
+
+pub fn render_oxide_app_host_debug_summary_note(
+    payload: &OxideAppHostDebugSummaryPayload,
+) -> String {
+    format!(
+        "Actual app-host preview counters: displayLinkCallbacks={} cameraGenerationAdvances={} cameraTriggeredRenders={} planSkips={} drawablesAcquired={} commandBuffersCommitted={} previewDepth={} presentedFrameAge={:.2}ms samples received/droppedPrebridge/bridged/published/presented/superseded={}/{}/{}/{}/{}/{} hostReady={} shouldRender={}",
+        payload.display_link_callbacks,
+        payload.camera_generation_advances,
+        payload.camera_frame_triggered_renders,
+        payload.plan_skips,
+        payload.drawables_acquired,
+        payload.command_buffers_committed,
+        payload.preview_submission_depth,
+        payload.presented_frame_age_ms,
+        payload.samples_received,
+        payload.samples_dropped_prebridge,
+        payload.samples_bridged,
+        payload.samples_published,
+        payload.samples_presented,
+        payload.samples_superseded_before_present,
+        payload.host_ready,
+        payload.should_render,
+    )
+}
+
 fn render_oxide_memory_breakdown_note(
     memory_metrics: &BTreeMap<String, UIKitMetricSummary>,
+    report_metrics: &BTreeMap<String, UIKitMetricSummary>,
 ) -> Option<String> {
     let top_bytes = [
         ("memory.camera.sample_delivery_pool_bytes_est", "camera.samplePoolEst"),
@@ -7719,6 +8890,19 @@ fn render_oxide_memory_breakdown_note(
     {
         parts.push(format!("camera.retainedLatestPixelBufferSurfaces={:.0}", summary.max));
     }
+    if let Some(summary) = memory_metrics.get("memory.camera.cpu_frame_delivery_active") {
+        parts.push(format!("camera.cpuFrameDeliveryActive={:.1}%", summary.mean * 100.0));
+    }
+    if let Some(summary) = memory_metrics.get("memory.camera.retained_latest_pixel_buffer_active") {
+        parts.push(format!("camera.retainedLatestPixelBufferActive={:.1}%", summary.mean * 100.0));
+    }
+    if let (Some(xctest_peak_kb), Some(known_total_bytes)) =
+        (report_metrics.get("memory_peak_kb"), memory_metrics.get("memory.known.total_bytes_est"))
+    {
+        let unexplained_mb = ((xctest_peak_kb.median * 1024.0) - known_total_bytes.median).max(0.0)
+            / (1024.0 * 1024.0);
+        parts.push(format!("xctestPeakMinusKnownP50={:.2}MB", unexplained_mb));
+    }
     if parts.is_empty() {
         None
     } else {
@@ -7771,6 +8955,10 @@ fn render_oxide_camera_contract_note(payload: &OxideCameraContractSummaryPayload
 
 fn is_normalized_yuv_pixel_format(pixel_format: &str) -> bool {
     matches!(pixel_format, "yuv" | "420f" | "420v")
+}
+
+pub fn uikit_case_requires_normalized_camera_contract(test_name: &str) -> bool {
+    test_name.contains("LivePreview")
 }
 
 pub fn validate_normalized_camera_contract(
@@ -7852,7 +9040,12 @@ pub fn parse_react_native_device_report_json(
         let Some(metric_key) = map_uikit_metric(&metric.identifier) else {
             continue;
         };
-        let summary = summarize_uikit_metric(metric)?;
+        let metric_source = if metric_key == "workload_s" || metric_key.starts_with("signpost_") {
+            UIKitMetricSource::XCTestSignpost
+        } else {
+            UIKitMetricSource::XCTest
+        };
+        let summary = summarize_uikit_metric(metric, metric_source)?;
         metrics.insert(metric_key.clone(), summary.median);
         metric_summaries.insert(metric_key, summary);
     }
@@ -8157,7 +9350,11 @@ fn write_uikit_markdown(
     out.push_str(&format!("- Device: `{}`\n", report.device_name));
     out.push_str(&format!("- Energy: {}\n", report.energy_status));
     out.push_str("- CPU columns measure UIKit-side orchestration cost (layout, animation stepping, layer updates, command submission) around a GPU-backed rendering pipeline; they do not imply final rasterization happened on the CPU.\n");
-    out.push_str("- Metrics reflect 10 XCTest iterations per case on the same simulator target used for CI. Stable XCTest clock/CPU/memory/storage metrics are always collected; phase columns are filled only when the runner can export them safely.\n");
+    out.push_str(&format!(
+        "- Metrics reflect {} on the same simulator target used for CI. Stable XCTest clock/CPU/memory/storage metrics are always collected; phase columns are filled only when the runner can export them safely.\n",
+        report_measure_iterations_summary(report)
+    ));
+    out.push_str("- Per-case JSON now persists `measure_iterations`, `benchmark_iterations`, `canonical_signpost_source`, and per-metric `source` plus `fallback_modes` so the timing provenance is explicit instead of implied.\n");
     if let Some(label) = report.generated_label.as_ref() {
         out.push_str(&format!("- Label: `{}`\n", label));
     }
@@ -8170,17 +9367,19 @@ fn write_uikit_markdown(
     push_uikit_contract_markdown(&mut out, report);
 
     out.push_str("\n## Case Table\n\n");
-    out.push_str("| UIKit Case | Layer | Scenario | Style | Cache | Refresh | P50 ms | P95 ms | P99 ms | Peak ms | CPU ms | CPU cycles kC | Writes kB | RSS kB | Peak kB | Launch/Mount ms | Layout ms | Text ms | Diff ms | Draw ms | Present ms | Scroll ms | Transition ms | Bridge ms |\n");
-    out.push_str("| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+    out.push_str("| UIKit Case | Layer | Scenario | Style | Cache | Refresh | Measure iters | Bench iters | P50 ms | P95 ms | P99 ms | Peak ms | CPU ms | CPU cycles kC | Writes kB | RSS kB | Peak kB | Launch/Mount ms | Layout ms | Text ms | Diff ms | Draw ms | Present ms | Scroll ms | Transition ms | Bridge ms |\n");
+    out.push_str("| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
     for case in &report.cases {
         out.push_str(&format!(
-            "| `{}` | `{}` | `{}` | `{}` | `{}` | `{}` | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            "| `{}` | `{}` | `{}` | `{}` | `{}` | `{}` | {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             case.id,
             case.layer,
             case.scenario,
             case.style,
             case.cache_state,
             case.refresh_mode,
+            iteration_display(case.measure_iterations),
+            iteration_display(case.benchmark_iterations),
             metric_median_ms(case, "clock_s"),
             metric_percentile_ms(case, "clock_s", PercentileKey::P95),
             metric_percentile_ms(case, "clock_s", PercentileKey::P99),
@@ -8248,10 +9447,17 @@ fn write_uikit_device_markdown(
     out.push_str(&format!("- Energy: {}\n", report.energy_status));
     out.push_str("- CPU columns measure UIKit-side orchestration cost around a GPU-backed rendering pipeline; GPU columns come from direct physical-device Instruments traces.\n");
     if includes_energy {
-        out.push_str("- Metrics reflect 10 XCTest iterations per case plus automated per-case process-scoped Metal System Trace captures attached only to the single launched OxideHost process on the same physical iPhone. Direct energy values in this report come from manually imported per-case Power Profiler traces for the same workload. Shared workload/phase signposts still bound the device traces even when the XCTest result bundle is carrying only the stable core metrics.\n");
+        out.push_str(&format!(
+            "- Metrics reflect {} plus automated per-case process-scoped Metal System Trace captures attached only to the single launched OxideHost process on the same physical iPhone. Direct energy values in this report come from manually imported per-case Power Profiler traces for the same workload. Shared workload/phase signposts still bound the device traces even when the XCTest result bundle is carrying only the stable core metrics.\n",
+            report_measure_iterations_summary(report)
+        ));
     } else {
-        out.push_str("- Metrics reflect 10 XCTest iterations per case plus automated per-case process-scoped Metal System Trace captures attached only to the single launched OxideHost process on the same physical iPhone. Energy is manual-pending and is intentionally omitted from this run. Shared workload/phase signposts still bound the device traces even when the XCTest result bundle is carrying only the stable core metrics.\n");
+        out.push_str(&format!(
+            "- Metrics reflect {} plus automated per-case process-scoped Metal System Trace captures attached only to the single launched OxideHost process on the same physical iPhone. Energy is manual-pending and is intentionally omitted from this run. Shared workload/phase signposts still bound the device traces even when the XCTest result bundle is carrying only the stable core metrics.\n",
+            report_measure_iterations_summary(report)
+        ));
     }
+    out.push_str("- Canonical device `signpost_*` metrics come from `xctrace`; any XCTest signpost metrics are preserved separately under `xctest_*` keys in JSON. Per-case JSON also persists `measure_iterations`, `benchmark_iterations`, and per-metric `source` plus `fallback_modes`.\n");
     if let Some(label) = report.generated_label.as_ref() {
         out.push_str(&format!("- Label: `{}`\n", label));
     }
@@ -8264,8 +9470,8 @@ fn write_uikit_device_markdown(
     push_uikit_contract_markdown(&mut out, report);
 
     out.push_str("\n## Case Table\n\n");
-    out.push_str("| UIKit Case | Layer | Scenario | Style | Cache | Refresh | P50 ms | P95 ms | P99 ms | Peak ms | CPU ms | Peak kB | GPU time ms | GPU latency ms | Energy J | Launch/Mount ms | Layout ms | Text ms | Diff ms | Draw ms | Present ms | Scroll ms | Transition ms | Bridge ms | GPU counters |\n");
-    out.push_str("| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n");
+    out.push_str("| UIKit Case | Layer | Scenario | Style | Cache | Refresh | Measure iters | Bench iters | P50 ms | P95 ms | P99 ms | Peak ms | CPU ms | Peak kB | GPU time ms | GPU latency ms | Energy J | Launch/Mount ms | Layout ms | Text ms | Diff ms | Draw ms | Present ms | Scroll ms | Transition ms | Bridge ms | GPU counters |\n");
+    out.push_str("| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n");
     for case in &report.cases {
         let counter_count =
             case.metrics.keys().filter(|name| name.starts_with("gpu_counter.")).count();
@@ -8275,13 +9481,15 @@ fn write_uikit_device_markdown(
             .map(|metric| format!("{:.6}", metric.median))
             .unwrap_or_else(|| String::from("manual pending"));
         out.push_str(&format!(
-            "| `{}` | `{}` | `{}` | `{}` | `{}` | `{}` | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | `{}` |\n",
+            "| `{}` | `{}` | `{}` | `{}` | `{}` | `{}` | {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | `{}` |\n",
             case.id,
             case.layer,
             case.scenario,
             case.style,
             case.cache_state,
             case.refresh_mode,
+            iteration_display(case.measure_iterations),
+            iteration_display(case.benchmark_iterations),
             metric_median_ms(case, "clock_s"),
             metric_percentile_ms(case, "clock_s", PercentileKey::P95),
             metric_percentile_ms(case, "clock_s", PercentileKey::P99),
@@ -8426,8 +9634,57 @@ fn map_uikit_metric(identifier: &str) -> Option<String> {
     None
 }
 
-fn summarize_uikit_metric(metric: &XCTestMetric) -> Result<UIKitMetricSummary> {
-    metric_summary_from_samples(&metric.unit_of_measurement, &metric.measurements)
+fn summarize_uikit_metric(
+    metric: &XCTestMetric,
+    source: UIKitMetricSource,
+) -> Result<UIKitMetricSummary> {
+    metric_summary_from_samples_with_metadata(
+        &metric.unit_of_measurement,
+        &metric.measurements,
+        source,
+        &[],
+    )
+}
+
+fn infer_measure_iterations(metrics: &BTreeMap<String, UIKitMetricSummary>) -> usize {
+    metrics
+        .get("clock_s")
+        .or_else(|| metrics.get("app_launch_s"))
+        .map(|metric| metric.samples)
+        .or_else(|| metrics.values().map(|metric| metric.samples).max())
+        .unwrap_or(0)
+}
+
+fn set_metric_metadata(
+    metrics: &mut BTreeMap<String, UIKitMetricSummary>,
+    source: UIKitMetricSource,
+    fallback_modes: &[UIKitMetricFallbackMode],
+) {
+    for metric in metrics.values_mut() {
+        metric.source = source;
+        metric.fallback_modes = fallback_modes.to_vec();
+    }
+}
+
+fn relabel_xctest_device_signpost_metrics(
+    metrics: &mut BTreeMap<String, UIKitMetricSummary>,
+) -> Vec<String> {
+    let keys = metrics
+        .keys()
+        .filter(|name| **name == "workload_s" || name.starts_with("signpost_"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut renamed = Vec::new();
+    for key in keys {
+        let Some(metric) = metrics.remove(&key) else {
+            continue;
+        };
+        let renamed_key =
+            if key == "workload_s" { String::from("xctest_workload_s") } else { format!("xctest_{}", key) };
+        metrics.insert(renamed_key.clone(), metric);
+        renamed.push(renamed_key);
+    }
+    renamed
 }
 
 enum PercentileKey {
@@ -8435,13 +9692,19 @@ enum PercentileKey {
     P99,
 }
 
-fn percentile(sorted_values: &[f64], pct: f64) -> f64 {
+fn quantile(sorted_values: &[f64], pct: f64) -> f64 {
     if sorted_values.is_empty() {
         return 0.0;
     }
-    let last = sorted_values.len() - 1;
-    let index = ((last as f64) * pct).round() as usize;
-    sorted_values[index.min(last)]
+    let last = (sorted_values.len() - 1) as f64;
+    let index = (last * pct.clamp(0.0, 1.0)).clamp(0.0, last);
+    let lo = index.floor() as usize;
+    let hi = index.ceil() as usize;
+    if lo == hi {
+        return sorted_values[lo];
+    }
+    let weight = index - lo as f64;
+    (1.0 - weight) * sorted_values[lo] + weight * sorted_values[hi]
 }
 
 fn metric_median(case: &UIKitPerfCase, name: &str) -> f64 {
@@ -8464,6 +9727,33 @@ fn metric_peak(case: &UIKitPerfCase, name: &str) -> f64 {
 
 fn report_includes_metric(report: &UIKitPerfReport, name: &str) -> bool {
     !report.cases.is_empty() && report.cases.iter().all(|case| case.metrics.contains_key(name))
+}
+
+fn report_measure_iterations_summary(report: &UIKitPerfReport) -> String {
+    let mut values = report
+        .cases
+        .iter()
+        .map(|case| case.measure_iterations)
+        .filter(|count| *count > 0)
+        .collect::<Vec<_>>();
+    values.sort_unstable();
+    values.dedup();
+    match values.as_slice() {
+        [] => String::from("per-case counts unavailable"),
+        [single] => format!("{} per case", single),
+        _ => format!(
+            "{}-{} depending on case",
+            values.first().copied().unwrap_or(0),
+            values.last().copied().unwrap_or(0)
+        ),
+    }
+}
+
+fn iteration_display(count: usize) -> String {
+    if count == 0 {
+        return String::from("`-`");
+    }
+    count.to_string()
 }
 
 fn metric_median_ms(case: &UIKitPerfCase, name: &str) -> f64 {

@@ -16,14 +16,16 @@ static BOOL OxideArgPresent(int argc, char **argv, const char *needle) {
   return NO;
 }
 
-static BOOL OxideShouldLaunchParkedBenchmark(void) {
+static BOOL OxideShouldLaunchParkedBenchmark(int argc, char **argv) {
   const char *env = getenv("OXIDE_PERF_PARKED");
   if (!env) {
     const char *realAppHost = getenv("OXIDE_PERF_CAMERA_REAL_APP_HOST");
-    if (realAppHost &&
-        (strcmp(realAppHost, "1") == 0 ||
-         strcasecmp(realAppHost, "true") == 0 ||
-         strcasecmp(realAppHost, "yes") == 0)) {
+    const BOOL realAppHostEnabled =
+        (realAppHost && (strcmp(realAppHost, "1") == 0 ||
+                         strcasecmp(realAppHost, "true") == 0 ||
+                         strcasecmp(realAppHost, "yes") == 0)) ||
+        OxideArgPresent(argc, argv, "-oxide-perf-camera-real-app-host");
+    if (realAppHostEnabled) {
       return NO;
     }
     const char *bundlePath = getenv("XCTestBundlePath");
@@ -53,7 +55,7 @@ static void OxideConfigurePerfProcessEnvironment(void) {
 
 int main(int argc, char **argv) {
   @autoreleasepool {
-    const BOOL launchPerfApp = OxideShouldLaunchParkedBenchmark() ||
+    const BOOL launchPerfApp = OxideShouldLaunchParkedBenchmark(argc, argv) ||
                                OxideShouldLaunchUIKitPerfApp(argc, argv);
     if (launchPerfApp) {
       OxideConfigurePerfProcessEnvironment();

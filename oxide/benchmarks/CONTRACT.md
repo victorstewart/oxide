@@ -81,6 +81,8 @@ Each persisted report row should move toward this shape:
 - `refresh_mode`
 - `variant` or `style`
 - `cache_state`
+- `measure_iterations`
+- `benchmark_iterations`
 - `p50_ms`
 - `p95_ms`
 - `p99_ms`
@@ -112,11 +114,21 @@ Oxide-owned reports should additionally preserve explanatory counters when avail
 - `encoded_bytes`
 - `texture_bytes`
 
+When a persisted metric is derived from multiple potential collectors, the report should also preserve:
+
+- canonical metric source
+- per-metric provenance
+- structured fallback modes when trace reduction had to widen attribution
+
 ## Device Rules
 
 - Keep `cold`, `warm`, and `hot` cache states separate.
 - Run real user-visible scroll and animation flows on real devices, including at least one 60 Hz phone and one ProMotion phone.
 - Treat simulator probes as debug-only and never as committed baselines, official comparison numbers, or user-facing summary data.
+- Camera preview has two reporting buckets:
+  - the official today bucket is the parked microscope comparison between the pure custom Oxide-owned visible preview path and the matching `AVCaptureVideoPreviewLayer` baseline on the same unchanged build and device
+  - the actual app-host comparison is a separate shipping-oriented bucket and must be reported as partial or blocked until the UI-test runner path is stable
+- Hybrid camera visible-preview-layer paths are diagnostic-only. They must never appear in committed default baselines or user-facing summary tables.
 - Treat real-device process-scoped Metal System Trace as the authoritative GPU source.
 - Treat manual device-side Power Profiler traces as the authoritative energy source when available.
 

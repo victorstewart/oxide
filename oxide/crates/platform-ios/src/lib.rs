@@ -2941,6 +2941,22 @@ pub fn init_tokio_spawn() {
                 .thread_name_fn(|| {
                     format!("oxide-tokio-{}", NEXT_WORKER_INDEX.fetch_add(1, Ordering::Relaxed))
                 })
+                .on_thread_start(|| {
+                    #[cfg(any(target_os = "ios", target_os = "macos"))]
+                    {
+                        if let Some(name) = std::thread::current().name() {
+                            let mut bytes = name.as_bytes().to_vec();
+                            if bytes.len() > 63 {
+                                bytes.truncate(63);
+                            }
+                            if let Ok(c_name) = std::ffi::CString::new(bytes) {
+                                unsafe {
+                                    libc::pthread_setname_np(c_name.as_ptr());
+                                }
+                            }
+                        }
+                    }
+                })
                 .enable_all()
                 .build()
                 .expect("tokio runtime")

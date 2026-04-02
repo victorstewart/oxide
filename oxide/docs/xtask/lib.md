@@ -39,11 +39,13 @@
 
 The crate maintains one authoritative UIKit case table that maps XCTest methods to Oxide benchmark identifiers and contract metadata. That table now spans idiomatic UIKit coverage for components, animation effects, primitive lifecycle slices such as empty-root mount, retained-view remove-all/remount, and a shared control-set mount/mutate case, plus the first hand-optimized UIKit flat-rect family.
 
-Device perf runs reuse the same case mapping but add process-scoped Instruments attachment. CPU metrics still come from XCTest, while GPU timing and counters come from Metal System Trace. Energy remains an optional imported input sourced from manual Power Profiler traces, and the report marks it as manual-pending when those traces are absent.
+Device perf runs reuse the same case mapping but add process-scoped Instruments attachment. CPU metrics still come from XCTest, while GPU timing, GPU counters, and the canonical device phase/signpost timings come from process-scoped Metal System Trace on the same case. Energy remains an optional imported input sourced from manual Power Profiler traces, and the report marks it as manual-pending when those traces are absent.
+
+The default committed UIKit device battery is narrower than the full case table. For camera preview, the official today bucket is the parked microscope pair: the pure custom Oxide-owned NV12 live preview path and the matching `AVCaptureVideoPreviewLayer` baseline. Actual app-host camera runs and hybrid visible-preview-layer variants remain callable by explicit `--case`, but they are separate diagnostic or shipping-oriented buckets and are not part of the default committed camera baseline.
 
 The Oxide device flow installs the host app on the same physical iPhone, launches the parked benchmark app with the in-process Rust perf suite enabled, triggers it over Darwin notifications, then reconstructs the JSON report from the console payload and persists it under `benchmarks/oxide-device/`. Markdown rendering rewrites the baseline workflow so the report points at the device-only command instead of the desktop workspace runner.
 
-The report schema carries layer/scenario/style/cache/refresh metadata so the UIKit results can be compared directly against the Oxide-side battery. Markdown rendering surfaces both top-line latency numbers and the per-phase signpost timings recorded by the shared UIKit harness. Simulator plumbing still exists for local debugging and tests, but repo policy now blocks it from the official baseline/write path and from any user-facing Oxide/UIKit summary table.
+The report schema carries layer/scenario/style/cache/refresh metadata so the UIKit results can be compared directly against the Oxide-side battery. It now also persists `measure_iterations`, `benchmark_iterations`, `canonical_signpost_source`, and per-metric `source` plus `fallback_modes`, so the timing provenance is explicit instead of inferred from notes. On device runs, `signpost_*` keys are reserved for `xctrace`; any XCTest signpost metrics are preserved separately under `xctest_*`.
 
 ## Preconditions and postconditions
 
@@ -54,6 +56,7 @@ The report schema carries layer/scenario/style/cache/refresh metadata so the UIK
   - Imported power traces, when supplied, must correspond to the same workload/device/build being compared.
 - Postconditions:
   - Successful device runs emit a device report with direct GPU timing and any available GPU counters, plus direct energy when imported traces are present.
+  - The emitted UIKit case rows persist actual measure-loop counts, actual benchmark-loop counts, explicit canonical signpost source, and per-metric provenance/fallback metadata.
 - Invariants maintained:
   - The UIKit case mapping is the single source of truth for report IDs and parity notes.
   - Local debug and device reports use the same case identity and metadata surface.
