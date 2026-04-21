@@ -35,6 +35,13 @@ fn draw_router(router: &mut Router<DummyUploader>) -> usize {
     builder.drawlist().items.len()
 }
 
+fn advance_router(router: &mut Router<DummyUploader>, now_ms: &mut u64, frames: usize, dt_ms: u32) {
+    for _ in 0..frames {
+        *now_ms += dt_ms as u64;
+        router.update(*now_ms, dt_ms);
+    }
+}
+
 #[test]
 fn controls_scene_counters_and_overlay() {
     let mut router = Router::new(DummyUploader);
@@ -47,6 +54,26 @@ fn controls_scene_counters_and_overlay() {
     router.toggle_overlay();
     let draws_no_overlay = draw_router(&mut router);
     assert!(draws_no_overlay < overlay_draws);
+}
+
+#[test]
+fn overlay_toggle_keeps_fps_sampling_stable() {
+    let mut router = Router::new(DummyUploader);
+    let mut now_ms = 0_u64;
+
+    advance_router(&mut router, &mut now_ms, 70, 16);
+    let _ = draw_router(&mut router);
+    assert!(router.counters.fps > 40.0);
+
+    router.toggle_overlay();
+    advance_router(&mut router, &mut now_ms, 60, 16);
+    let _ = draw_router(&mut router);
+    assert_eq!(router.counters.fps, 0.0);
+
+    router.toggle_overlay();
+    advance_router(&mut router, &mut now_ms, 1, 16);
+    let _ = draw_router(&mut router);
+    assert!(router.counters.fps > 40.0);
 }
 
 #[test]

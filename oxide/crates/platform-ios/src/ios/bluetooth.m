@@ -266,21 +266,6 @@ static int32_t nametag_bluetooth_status_code(CBManagerAuthorization authorizatio
    }
 }
 
-static uint32_t oxide_bluetooth_status_code(CBManagerAuthorization authorization)
-{
-   switch (authorization)
-   {
-      case CBManagerAuthorizationAllowedAlways:
-         return 3;
-      case CBManagerAuthorizationDenied:
-      case CBManagerAuthorizationRestricted:
-         return 1;
-      case CBManagerAuthorizationNotDetermined:
-      default:
-         return 0;
-   }
-}
-
 static void publish_bluetooth_permission(CBCentralManager *central)
 {
    (void)central;
@@ -294,7 +279,7 @@ static void publish_bluetooth_permission(CBCentralManager *central)
    if (oxide_host_emit_perm != NULL)
    {
       oxide_host_emit_perm(kOxidePermissionDomainBluetooth,
-                           oxide_bluetooth_status_code(authorization));
+                           (uint32_t)nametag_status);
    }
 }
 
@@ -306,26 +291,16 @@ static void emit_oxide_state_event(BOOL powered)
    }
 }
 
-static void emit_oxide_connected_event(NSUUID *identifier)
+static void emit_oxide_identifier_event(NSUUID *identifier,
+                                        void (*emit)(const uint8_t *addr))
 {
-   if (oxide_host_ble_emit_connected == NULL)
+   if (emit == NULL)
    {
       return;
    }
    uint8_t bytes[16];
    uuid_bytes_from_nsuuid(identifier, bytes);
-   oxide_host_ble_emit_connected(bytes);
-}
-
-static void emit_oxide_disconnected_event(NSUUID *identifier)
-{
-   if (oxide_host_ble_emit_disconnected == NULL)
-   {
-      return;
-   }
-   uint8_t bytes[16];
-   uuid_bytes_from_nsuuid(identifier, bytes);
-   oxide_host_ble_emit_disconnected(bytes);
+   emit(bytes);
 }
 
 static void emit_oxide_notification_event(CBPeripheral *peripheral,
@@ -439,7 +414,7 @@ static void emit_state_event(BOOL powered)
 
 static void emit_connected_event(NSUUID *identifier)
 {
-   emit_oxide_connected_event(identifier);
+   emit_oxide_identifier_event(identifier, oxide_host_ble_emit_connected);
    if (g_ble_callback != NULL)
    {
       nametag_uint128_t value = uuid_to_u128(identifier);
@@ -449,7 +424,7 @@ static void emit_connected_event(NSUUID *identifier)
 
 static void emit_disconnected_event(NSUUID *identifier)
 {
-   emit_oxide_disconnected_event(identifier);
+   emit_oxide_identifier_event(identifier, oxide_host_ble_emit_disconnected);
    if (g_ble_callback != NULL)
    {
       nametag_uint128_t value = uuid_to_u128(identifier);

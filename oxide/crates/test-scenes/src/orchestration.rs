@@ -266,6 +266,18 @@ impl OrchestrationScene {
         }
     }
 
+    pub fn benchmark_reset(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn benchmark_transition_or_modal(&mut self, step: usize) {
+        if step % 2 == 0 {
+            self.handle_action("transition");
+        } else {
+            self.handle_action("modal");
+        }
+    }
+
     fn handle_action(&mut self, action: &str) {
         match action {
             "scatter_on" => {

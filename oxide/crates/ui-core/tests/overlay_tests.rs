@@ -3,7 +3,7 @@ use oxide_ui_core::overlay::{
     OverlayBehavior, OverlayPointerResult, OverlayStack, OverlayVisual, PopupCallbacks,
     PopupManager, PopupSpec, PopupTouchRegion,
 };
-use oxide_ui_core::{surface::UiSurface, Dim, NodeStyle, Size2D};
+use oxide_ui_core::{surface::UiSurface, Dim, NodeId, NodeStyle, Size2D};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -22,6 +22,28 @@ fn basic_surface(w: f32, h: f32) -> (UiSurface, oxide_ui_core::NodeId) {
     );
     surface.layout(w, h);
     (surface, content)
+}
+
+fn popup_manager() -> PopupManager {
+    let mut manager = PopupManager::new();
+    manager.set_viewport(gfx::RectF::new(0.0, 0.0, 220.0, 220.0), 1.0);
+    manager
+}
+
+fn focused_popup_behavior(content: NodeId) -> OverlayBehavior {
+    OverlayBehavior {
+        content_root: Some(content),
+        focus_root: Some(content),
+        ..OverlayBehavior::default()
+    }
+}
+
+fn noop_popup_callbacks() -> PopupCallbacks {
+    PopupCallbacks {
+        approve_dismissal: None,
+        dismissal: Some(Box::new(|_| {})),
+        approve_touch: None,
+    }
 }
 
 #[test]
@@ -53,9 +75,7 @@ fn overlay_background_tap_dismisses() {
 fn popup_z_order_prefers_topmost() {
     let (popup_a, _) = basic_surface(160.0, 160.0);
     let (popup_b, _) = basic_surface(160.0, 160.0);
-    let mut manager = PopupManager::new();
-    let viewport = gfx::RectF::new(0.0, 0.0, 220.0, 220.0);
-    manager.set_viewport(viewport, 1.0);
+    let mut manager = popup_manager();
     let high = OverlayVisual { z_index: 10, ..OverlayVisual::default() };
     let low = OverlayVisual::default();
     let handle_low = manager.push(
@@ -84,28 +104,16 @@ fn popup_z_order_prefers_topmost() {
 fn popup_key_window_tracks_topmost_popup() {
     let (popup_a, popup_content_a) = basic_surface(160.0, 160.0);
     let (popup_b, popup_content_b) = basic_surface(160.0, 160.0);
-    let mut manager = PopupManager::new();
-    manager.set_viewport(gfx::RectF::new(0.0, 0.0, 220.0, 220.0), 1.0);
+    let mut manager = popup_manager();
     let handle_low = manager.push(
         popup_a,
-        PopupSpec {
-            behavior: OverlayBehavior {
-                content_root: Some(popup_content_a),
-                focus_root: Some(popup_content_a),
-                ..OverlayBehavior::default()
-            },
-            ..PopupSpec::default()
-        },
+        PopupSpec { behavior: focused_popup_behavior(popup_content_a), ..PopupSpec::default() },
     );
     let handle_high = manager.push(
         popup_b,
         PopupSpec {
             visual: OverlayVisual { z_index: 5, ..OverlayVisual::default() },
-            behavior: OverlayBehavior {
-                content_root: Some(popup_content_b),
-                focus_root: Some(popup_content_b),
-                ..OverlayBehavior::default()
-            },
+            behavior: focused_popup_behavior(popup_content_b),
             ..PopupSpec::default()
         },
     );
@@ -125,8 +133,7 @@ fn popup_key_window_tracks_topmost_popup() {
 #[test]
 fn popup_dismissal_obeys_approve_dismissal_and_runs_once() {
     let (popup, popup_content) = basic_surface(160.0, 160.0);
-    let mut manager = PopupManager::new();
-    manager.set_viewport(gfx::RectF::new(0.0, 0.0, 220.0, 220.0), 1.0);
+    let mut manager = popup_manager();
 
     let approvals = Arc::new(AtomicUsize::new(0));
     let dismissals = Arc::new(AtomicUsize::new(0));
@@ -134,11 +141,7 @@ fn popup_dismissal_obeys_approve_dismissal_and_runs_once() {
     let handle = manager.push(
         popup,
         PopupSpec {
-            behavior: OverlayBehavior {
-                content_root: Some(popup_content),
-                focus_root: Some(popup_content),
-                ..OverlayBehavior::default()
-            },
+            behavior: focused_popup_behavior(popup_content),
             callbacks: PopupCallbacks {
                 approve_dismissal: Some(Box::new({
                     let approvals = Arc::clone(&approvals);
@@ -177,17 +180,12 @@ fn popup_dismissal_obeys_approve_dismissal_and_runs_once() {
 #[test]
 fn popup_pointer_dismisses_outside_touch_region_on_press() {
     let (popup, popup_content) = basic_surface(160.0, 160.0);
-    let mut manager = PopupManager::new();
-    manager.set_viewport(gfx::RectF::new(0.0, 0.0, 220.0, 220.0), 1.0);
+    let mut manager = popup_manager();
     let dismissals = Arc::new(AtomicUsize::new(0));
     manager.push(
         popup,
         PopupSpec {
-            behavior: OverlayBehavior {
-                content_root: Some(popup_content),
-                focus_root: Some(popup_content),
-                ..OverlayBehavior::default()
-            },
+            behavior: focused_popup_behavior(popup_content),
             callbacks: PopupCallbacks {
                 approve_dismissal: None,
                 dismissal: Some(Box::new({
@@ -214,17 +212,12 @@ fn popup_pointer_dismisses_outside_touch_region_on_press() {
 #[test]
 fn popup_approve_touch_can_veto_inside_touches() {
     let (popup, popup_content) = basic_surface(160.0, 160.0);
-    let mut manager = PopupManager::new();
-    manager.set_viewport(gfx::RectF::new(0.0, 0.0, 220.0, 220.0), 1.0);
+    let mut manager = popup_manager();
     let dismissals = Arc::new(AtomicUsize::new(0));
     manager.push(
         popup,
         PopupSpec {
-            behavior: OverlayBehavior {
-                content_root: Some(popup_content),
-                focus_root: Some(popup_content),
-                ..OverlayBehavior::default()
-            },
+            behavior: focused_popup_behavior(popup_content),
             callbacks: PopupCallbacks {
                 approve_dismissal: None,
                 dismissal: Some(Box::new({
@@ -250,21 +243,12 @@ fn popup_approve_touch_can_veto_inside_touches() {
 #[test]
 fn popup_content_size_changed_refreshes_content_touch_region() {
     let (popup, popup_content) = basic_surface(160.0, 160.0);
-    let mut manager = PopupManager::new();
-    manager.set_viewport(gfx::RectF::new(0.0, 0.0, 220.0, 220.0), 1.0);
+    let mut manager = popup_manager();
     let handle = manager.push(
         popup,
         PopupSpec {
-            behavior: OverlayBehavior {
-                content_root: Some(popup_content),
-                focus_root: Some(popup_content),
-                ..OverlayBehavior::default()
-            },
-            callbacks: PopupCallbacks {
-                approve_dismissal: None,
-                dismissal: Some(Box::new(|_| {})),
-                approve_touch: None,
-            },
+            behavior: focused_popup_behavior(popup_content),
+            callbacks: noop_popup_callbacks(),
             ..PopupSpec::default()
         },
     );
@@ -286,21 +270,12 @@ fn popup_content_size_changed_refreshes_content_touch_region() {
 #[test]
 fn popup_manual_touch_region_overrides_content_root_resync() {
     let (popup, popup_content) = basic_surface(160.0, 160.0);
-    let mut manager = PopupManager::new();
-    manager.set_viewport(gfx::RectF::new(0.0, 0.0, 220.0, 220.0), 1.0);
+    let mut manager = popup_manager();
     let handle = manager.push(
         popup,
         PopupSpec {
-            behavior: OverlayBehavior {
-                content_root: Some(popup_content),
-                focus_root: Some(popup_content),
-                ..OverlayBehavior::default()
-            },
-            callbacks: PopupCallbacks {
-                approve_dismissal: None,
-                dismissal: Some(Box::new(|_| {})),
-                approve_touch: None,
-            },
+            behavior: focused_popup_behavior(popup_content),
+            callbacks: noop_popup_callbacks(),
             ..PopupSpec::default()
         },
     );

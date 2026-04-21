@@ -7,8 +7,6 @@
 #import <stdlib.h>
 #import <strings.h>
 
-extern void nametag_host_update_permission(int32_t domain, int32_t status)
-    __attribute__((weak_import));
 extern void oxide_host_emit_perm(uint32_t domain, uint32_t status)
     __attribute__((weak_import));
 extern void oxide_host_emit_push_token(uint32_t provider, const char *utf8,
@@ -16,12 +14,17 @@ extern void oxide_host_emit_push_token(uint32_t provider, const char *utf8,
     __attribute__((weak_import));
 extern void oxide_host_emit_push_notify(const char *utf8, size_t len)
     __attribute__((weak_import));
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
+extern void nametag_host_update_permission(int32_t domain, int32_t status)
+    __attribute__((weak_import));
 extern void nametag_ios_handle_notification_response(NSDictionary *userInfo)
     __attribute__((weak_import));
+#endif
 
 static const int32_t kPermissionDomainNotifications = 0;
 static const uint32_t kOxidePushProviderApns = 0;
 
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 struct NametagHostUtf8 {
   const uint8_t *ptr;
   size_t len;
@@ -48,6 +51,7 @@ static const int32_t NAMETAG_PUSH_EVENT_NOTIFICATION = 1;
 
 static NametagPushEventCallback g_push_callback = NULL;
 static void *g_push_context = NULL;
+#endif
 
 static bool env_bool(const char *name, bool fallback) {
   const char *value = getenv(name);
@@ -105,9 +109,11 @@ static int32_t notification_status_code(UNAuthorizationStatus status) {
 
 static void publish_notification_permission(UNAuthorizationStatus status) {
   int32_t code = notification_status_code(status);
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
   if (nametag_host_update_permission != NULL) {
     nametag_host_update_permission(kPermissionDomainNotifications, code);
   }
+#endif
   if (oxide_host_emit_perm != NULL) {
     oxide_host_emit_perm((uint32_t)kPermissionDomainNotifications,
                          (uint32_t)code);
@@ -123,6 +129,7 @@ static void emit_oxide_token_event(NSString *token) {
 }
 
 static void emit_token_event(NSString *token) {
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
   if (g_push_callback != NULL) {
     NSData *utf8 = [token dataUsingEncoding:NSUTF8StringEncoding];
     struct NametagHostUtf8 payload;
@@ -130,6 +137,7 @@ static void emit_token_event(NSString *token) {
     payload.len = utf8.length;
     g_push_callback(NAMETAG_PUSH_EVENT_TOKEN, &payload, g_push_context);
   }
+#endif
   emit_oxide_token_event(token);
 }
 
@@ -174,6 +182,7 @@ static void emit_oxide_notification_event(NSDictionary *userInfo) {
 static void emit_notification_event(NSDictionary *userInfo) {
   emit_oxide_notification_event(userInfo);
 
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
   if (g_push_callback == NULL) {
     return;
   }
@@ -250,12 +259,17 @@ static void emit_notification_event(NSDictionary *userInfo) {
   if (fields != NULL) {
     free(fields);
   }
+#endif
 }
 
 static void dispatch_notification_response(NSDictionary *userInfo) {
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
   if (nametag_ios_handle_notification_response != NULL) {
     nametag_ios_handle_notification_response(userInfo);
   }
+#else
+  (void)userInfo;
+#endif
 }
 
 @interface OxidePushBridge : NSObject <UNUserNotificationCenterDelegate>
@@ -366,7 +380,9 @@ static OxidePushBridge *push_bridge(void) {
 
 void oxide_host_push_bootstrap(void) { (void)push_bridge(); }
 
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 void nametag_ios_push_bootstrap(void) { oxide_host_push_bootstrap(); }
+#endif
 
 void oxide_host_push_register(void) {
   dispatch_async(push_queue(), ^{
@@ -374,7 +390,9 @@ void oxide_host_push_register(void) {
   });
 }
 
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 void nametag_ios_push_register(void) { oxide_host_push_register(); }
+#endif
 
 void oxide_host_push_set_badge(int32_t count) {
   dispatch_async(dispatch_get_main_queue(), ^{
@@ -402,13 +420,17 @@ void oxide_host_push_set_badge(int32_t count) {
   });
 }
 
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 void nametag_ios_push_set_badge(int32_t count) {
   oxide_host_push_set_badge(count);
 }
+#endif
 
 void oxide_host_push_clear_badge(void) { oxide_host_push_set_badge(0); }
 
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 void nametag_ios_push_clear_badge(void) { oxide_host_push_clear_badge(); }
+#endif
 
 int oxide_host_push_get_device_token(char **out_ptr, size_t *out_len) {
   if (out_ptr != NULL) {
@@ -443,6 +465,7 @@ int oxide_host_push_get_device_token(char **out_ptr, size_t *out_len) {
   return 1;
 }
 
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 bool nametag_ios_push_device_token(struct NametagHostUtf8 *out) {
   __block NSString *token = nil;
   dispatch_sync(push_queue(), ^{
@@ -486,6 +509,7 @@ void nametag_ios_push_subscribe(NametagPushEventCallback cb, void *ctx) {
     [push_bridge() refreshAuthorization];
   });
 }
+#endif
 
 void oxide_host_push_application_did_register(NSData *deviceToken) {
   dispatch_async(push_queue(), ^{
@@ -494,9 +518,11 @@ void oxide_host_push_application_did_register(NSData *deviceToken) {
   });
 }
 
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 void nametag_ios_push_application_did_register(NSData *deviceToken) {
   oxide_host_push_application_did_register(deviceToken);
 }
+#endif
 
 void oxide_host_push_application_did_fail(NSError *error) {
   (void)error;
@@ -505,9 +531,11 @@ void oxide_host_push_application_did_fail(NSError *error) {
   });
 }
 
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 void nametag_ios_push_application_did_fail(NSError *error) {
   oxide_host_push_application_did_fail(error);
 }
+#endif
 
 void oxide_host_push_application_did_receive(NSDictionary *userInfo) {
   dispatch_async(push_queue(), ^{
@@ -516,6 +544,8 @@ void oxide_host_push_application_did_receive(NSDictionary *userInfo) {
   });
 }
 
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 void nametag_ios_push_application_did_receive(NSDictionary *userInfo) {
   oxide_host_push_application_did_receive(userInfo);
 }
+#endif

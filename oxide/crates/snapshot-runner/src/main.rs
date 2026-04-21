@@ -262,7 +262,6 @@ fn render_component(
         }
         "spinner" => {
             let sp = ui::elements::Spinner::default();
-            let phase = time_ms.map(|t| (t as f32 / period_ms as f32)).unwrap_or(0.25);
             sp.encode(
                 api::RectF::new(
                     panel.x + panel.w * 0.5 - 16.0,
@@ -270,7 +269,6 @@ fn render_component(
                     32.0,
                     32.0,
                 ),
-                phase,
                 &mut b,
             );
         }

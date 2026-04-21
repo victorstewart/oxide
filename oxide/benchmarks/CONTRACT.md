@@ -31,6 +31,14 @@ Each platform report should classify coverage against these workload families:
 
 If a family is not yet implemented, the report must say `missing` or `partial`.
 
+The committed default device baselines are representative signal batteries, not exhaustive every-row matrices. They should preserve distinct workload families, idiomatic-versus-optimized style comparisons where they matter, and the highest-signal scaling points, while tiering dense near-duplicate count/style permutations into explicit full-contract or touched-case runs.
+
+The official device workflow is staged:
+
+- `watchable smoke`: fast representative runs that a human can watch on-device to confirm the right scene is visibly rendering
+- `family proof`: a complete proof pass for one compact workload family
+- `promotion`: the full baseline refresh, allowed only after the required family proofs are green for the current build
+
 ## UIKit Baselines
 
 UIKit parity must maintain two styles for the same workload family:
@@ -123,8 +131,9 @@ When a persisted metric is derived from multiple potential collectors, the repor
 ## Device Rules
 
 - Keep `cold`, `warm`, and `hot` cache states separate.
-- Run real user-visible scroll and animation flows on real devices, including at least one 60 Hz phone and one ProMotion phone.
+- Run real user-visible scroll and animation flows on real ProMotion hardware at native refresh in the official device harness.
 - Treat simulator probes as debug-only and never as committed baselines, official comparison numbers, or user-facing summary data.
+- Native-only is the official Oxide/UIKit device contract. Any separate 60 Hz study is diagnostic-only and must not expand or slow the default committed battery.
 - Camera preview has two reporting buckets:
   - the official today bucket is the parked microscope comparison between the pure custom Oxide-owned visible preview path and the matching `AVCaptureVideoPreviewLayer` baseline on the same unchanged build and device
   - the actual app-host comparison is a separate shipping-oriented bucket and must be reported as partial or blocked until the UI-test runner path is stable
@@ -136,4 +145,5 @@ When a persisted metric is derived from multiple potential collectors, the repor
 
 - Prefer hitch ratio, first frame, first interactive, and input-event-to-visible-response over headline FPS.
 - Report partial coverage truthfully instead of implying the battery is already comprehensive.
+- Keep the compact default device baseline honest: if a workload row is tiered out of the default run, do not imply it was measured there; run it explicitly when the touched surface or a full-contract audit requires it.
 - Keep app-owned UI separate from system-owned UI; system surfaces count as bridge overhead, not renderer wins.

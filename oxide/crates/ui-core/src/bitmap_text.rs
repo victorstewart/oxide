@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::sync::Mutex;
 
-const SMOOTH_MIN_PX: f32 = 6.0;
+const SMOOTH_MIN_PX: f32 = 4.0;
 const SMOOTH_OVERSAMPLE: f32 = 3.0;
 const BUNDLED_FONT_REGULAR_BYTES: &[u8] = include_bytes!("../assets/Asap-Regular.ttf");
 const BUNDLED_FONT_BOLD_BYTES: &[u8] = include_bytes!("../assets/Asap-Bold.ttf");
@@ -195,7 +195,7 @@ impl TextStyle {
 #[must_use]
 pub fn line_height(style: TextStyle) -> f32 {
     if smooth_enabled(style) {
-        (style.px * 1.25).max(12.0)
+        (style.px * 1.20).max(1.0)
     } else {
         pixel_size(style) * 10.0
     }
@@ -203,7 +203,15 @@ pub fn line_height(style: TextStyle) -> f32 {
 
 #[must_use]
 pub fn text_width(text: &str, style: TextStyle) -> f32 {
-    if let Some(width) = smooth_text_width(text, style) {
+    if let Some(width) = smooth_text_width(text, style, false) {
+        return width;
+    }
+    text_width_bitmap(text, style)
+}
+
+#[must_use]
+pub fn text_width_pixel_snapped(text: &str, style: TextStyle) -> f32 {
+    if let Some(width) = smooth_text_width(text, style, true) {
         return width;
     }
     text_width_bitmap(text, style)
@@ -375,7 +383,7 @@ fn aligned_x(rect: RectF, width: f32, align: TextAlign) -> f32 {
     }
 }
 
-fn smooth_text_width(text: &str, style: TextStyle) -> Option<f32> {
+fn smooth_text_width(text: &str, style: TextStyle, pixel_snapped: bool) -> Option<f32> {
     if text.is_empty() {
         return Some(0.0);
     }
@@ -384,12 +392,15 @@ fn smooth_text_width(text: &str, style: TextStyle) -> Option<f32> {
     }
     let state = SMOOTH_TEXT_STATE.lock().ok()?;
     let font = state.font_for_face(style.face)?;
-    let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
-    layout.reset(&LayoutSettings::default());
-    layout.append(&[font], &FontdueTextStyle::new(text, style.px * SMOOTH_OVERSAMPLE, 0));
+    let scaled_px = style.px * SMOOTH_OVERSAMPLE;
     let mut width = 0.0_f32;
-    for glyph in layout.glyphs() {
-        width = width.max(glyph.x + glyph.width as f32);
+    for ch in text.chars() {
+        if ch == '\n' {
+            continue;
+        }
+        let glyph_index = font.lookup_glyph_index(ch);
+        let metrics = font.metrics_indexed(glyph_index, scaled_px);
+        width += if pixel_snapped { metrics.advance_width.ceil() } else { metrics.advance_width };
     }
     Some(width / SMOOTH_OVERSAMPLE)
 }
@@ -645,7 +656,7 @@ mod tests {
     #[test]
     fn draw_text_uses_lsb_left_to_right_bit_order() {
         // Keep this test on the bitmap fallback path.
-        let style = TextStyle::new(5.0, Color::rgba(1.0, 1.0, 1.0, 1.0));
+        let style = TextStyle::new(3.0, Color::rgba(1.0, 1.0, 1.0, 1.0));
         let mut encoder = CollectingEncoder::default();
         draw_text(&mut encoder, "\\", 10.0, 20.0, style);
         assert!(!encoder.rects.is_empty(), "expected bitmap rect draws for glyph");
@@ -672,6 +683,27 @@ mod tests {
         }
         assert!(min_x.is_finite(), "expected at least one run on first row");
         assert!((min_x - (10.0 + expected_left_col as f32)).abs() < 0.001);
+    }
+
+    #[test]
+    fn small_asap_text_uses_smooth_widths() {
+        let style = TextStyle::new(5.25, Color::rgba(1.0, 1.0, 1.0, 1.0));
+        assert!(text_width("followers", style) < 40.0);
+        assert!((line_height(style) - 6.3).abs() < 0.001);
+    }
+
+    #[test]
+    fn smooth_text_width_includes_trailing_advance() {
+        let style = TextStyle::new(12.0, Color::rgba(1.0, 1.0, 1.0, 1.0));
+        assert!(text_width("scope    ", style) > text_width("scope", style));
+    }
+
+    #[test]
+    fn pixel_snapped_text_width_keeps_trailing_advance() {
+        let style = TextStyle::new(7.0, Color::rgba(1.0, 1.0, 1.0, 1.0));
+        assert!(
+            text_width_pixel_snapped("500    ", style) > text_width_pixel_snapped("500", style)
+        );
     }
 
     #[test]

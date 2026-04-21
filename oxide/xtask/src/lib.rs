@@ -7,9 +7,12 @@ use oxide_perf_runner::{
 use plist::{Dictionary, Value as PlValue};
 use roxmltree::Document;
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::ErrorKind;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -19,12 +22,15 @@ use std::time::{Duration, Instant};
 const DEFAULT_OXIDE_DEVICE_BASELINE_JSON: &str = "benchmarks/oxide-device/latest.json";
 const DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN: &str = "benchmarks/oxide-device/latest.md";
 const DEFAULT_OXIDE_DEVICE_RESULT_ROOT: &str = "/tmp/oxide-device-perf";
+const DEFAULT_COMBINED_DEVICE_RESULT_ROOT: &str = "/tmp/oxide-combined-device-perf";
 const DEFAULT_UIKIT_DEVICE_BASELINE_JSON: &str = "benchmarks/uikit-device/latest.json";
 const DEFAULT_UIKIT_DEVICE_BASELINE_MARKDOWN: &str = "benchmarks/uikit-device/latest.md";
 const DEFAULT_UIKIT_DEVICE_RESULT_ROOT: &str = "/tmp/oxide-uikit-device-perf";
 const DEFAULT_REACT_DEVICE_BASELINE_JSON: &str = "benchmarks/react-native-device/latest.json";
 const DEFAULT_REACT_DEVICE_BASELINE_MARKDOWN: &str = "benchmarks/react-native-device/latest.md";
 const DEFAULT_REACT_DEVICE_RESULT_ROOT: &str = "/tmp/react-native-device-perf";
+const COMPARE_DEVICE_PROOF_STATUS_FILE: &str = "proof-status.json";
+const COMPARE_DEVICE_PROOF_STATUS_MARKDOWN_FILE: &str = "proof-status.md";
 const DEFAULT_UIKIT_SCHEME: &str = "OxideUIKitPerf";
 const DEFAULT_UIKIT_TEST_TARGET: &str = "OxideHostPerfTests";
 const DEFAULT_UIKIT_TEST_CLASS: &str = "OxideHostPerfTests";
@@ -59,19 +65,24 @@ const UIKIT_PERF_SIGNPOST_SUBSYSTEM: &str = "com.oxide.perf";
 const UIKIT_PERF_SIGNPOST_CATEGORY: &str = "PointsOfInterest";
 const UIKIT_PERF_SIGNPOST_NAME: &str = "PerfWorkload";
 const XCTRACE_EXPORT_RETRIES: usize = 4;
-const XCTRACE_ATTACH_RETRIES: usize = 8;
-const XCTRACE_ATTACH_RETRY_DELAY_MS: u64 = 250;
-const XCTRACE_ATTACH_READY_DELAY_MS: u64 = 3000;
 const XCTRACE_STARTED_TIMEOUT_MS: u64 = 5000;
 const XCTRACE_EXPORT_RETRY_DELAY_MS: u64 = 250;
+const DEVICECTL_JSON_RETRIES: usize = 4;
+const DEVICECTL_JSON_RETRY_DELAY_MS: u64 = 250;
 const XCTRACE_TRACE_SETTLE_TIMEOUT_MS: u64 = 4000;
 const XCTRACE_TRACE_SETTLE_POLL_MS: u64 = 200;
 const XCTRACE_STARTUP_DELAY_MS: u64 = 750;
-const XCTRACE_LAUNCH_TRACE_BUFFER_SECS: u64 = 6;
+const XCTRACE_LAUNCH_TRACE_BUFFER_SECS: u64 = 1;
+const XCTRACE_LAUNCH_UI_TEST_TRACE_BUFFER_SECS: u64 = 2;
+const XCTRACE_RECORD_TIMEOUT_GRACE_SECS: u64 = 15;
+const XCTRACE_RECORD_INTERRUPT_GRACE_SECS: u64 = 5;
+const XCTRACE_RECORD_TIMEOUT_POLL_MS: u64 = 250;
 const UIKIT_DEVICE_READY_NOTIFICATION: &str = "com.oxide.perf.ready";
 const UIKIT_DEVICE_START_NOTIFICATION: &str = "com.oxide.perf.start";
 const UIKIT_DEVICE_COMPLETE_NOTIFICATION: &str = "com.oxide.perf.complete";
+const UIKIT_DEVICE_FAILED_NOTIFICATION: &str = "com.oxide.perf.failed";
 const UIKIT_TRACE_STARTED_NOTIFICATION: &str = "com.oxide.perf.xctrace.started";
+const OXIDE_BENCHMARK_BUILD_FAIL_PREFIX: &str = "OXIDE_BENCHMARK_BUILD_FAIL ";
 const OXIDE_DEVICE_REPORT_BEGIN_LINE: &str = "OXIDE_PERF_REPORT_BEGIN";
 const OXIDE_DEVICE_REPORT_CHUNK_PREFIX: &str = "OXIDE_PERF_REPORT_CHUNK ";
 const OXIDE_DEVICE_REPORT_END_LINE: &str = "OXIDE_PERF_REPORT_END";
@@ -81,12 +92,33 @@ const OXIDE_TICK_RING_PREFIX: &str = "OXIDE_TICK_RING ";
 const OXIDE_CAMERA_CONTRACT_SUMMARY_PREFIX: &str = "OXIDE_CAMERA_CONTRACT_SUMMARY ";
 const OXIDE_APP_HOST_DEBUG_SUMMARY_PREFIX: &str = "OXIDE_APP_HOST_DEBUG_SUMMARY ";
 const OXIDE_BENCHMARK_METADATA_PREFIX: &str = "OXIDE_BENCHMARK_METADATA ";
+const OXIDE_PERF_RUNNER_FILTER_ENV: &str = "OXIDE_PERF_RUNNER_FILTER";
+const OXIDE_DEBUG_ENCODE_EVERY_ENV: &str = "OXIDE_DEBUG_ENCODE_EVERY";
+const OXIDE_DEVICE_FORWARD_ENV_VARS: &[&str] = &[
+    OXIDE_PERF_RUNNER_FILTER_ENV,
+    OXIDE_DEBUG_ENCODE_EVERY_ENV,
+    "OXIDE_ENABLE_DAMAGE",
+    "OXIDE_ENABLE_LAYER_CACHE",
+    "OXIDE_ENABLE_IMAGE_ARG_BUFFER",
+    "OXIDE_GLYPH_USE_ICB",
+    "OXIDE_DAMAGE_USE_THRESH",
+    "OXIDE_DAMAGE_PREFILTER_THRESH",
+];
 const UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS: u64 = 250;
 const UIKIT_DEVICE_READY_TIMEOUT_SECS: u64 = 30;
 const UIKIT_DEVICE_COMPLETE_TIMEOUT_SECS: u64 = 30;
-const OXIDE_DEVICE_READY_TIMEOUT_SECS: u64 = 30;
-const OXIDE_DEVICE_COMPLETE_TIMEOUT_SECS: u64 = 900;
+const UIKIT_DEVICE_START_ACK_TIMEOUT_MS: u64 = 2000;
+const UIKIT_DEVICE_START_POST_RETRIES: usize = 3;
+const UIKIT_DEVICE_TRACE_HANDSHAKE_RETRIES: usize = 2;
+const UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES: usize = 2;
 const UIKIT_DEVICE_READY_GRACE_MS: u64 = 2000;
+const UIKIT_PERF_WATCH_MODE_ENV: &str = "OXIDE_PERF_WATCH_MODE";
+const UIKIT_PERF_FRAME_CAPTURE_ENV: &str = "OXIDE_PERF_FRAME_CAPTURE";
+const UIKIT_PERF_FRAME_CAPTURE_EVERY_ENV: &str = "OXIDE_PERF_FRAME_CAPTURE_EVERY";
+const UIKIT_PERF_FRAME_CAPTURE_MAX_ENV: &str = "OXIDE_PERF_FRAME_CAPTURE_MAX";
+const UIKIT_PERF_FRAME_CAPTURE_RELATIVE_ROOT: &str = "Library/Caches/oxide-watch-captures";
+const UIKIT_PERF_FRAME_CAPTURE_DEFAULT_EVERY: &str = "1";
+const UIKIT_PERF_FRAME_CAPTURE_DEFAULT_MAX: &str = "12";
 const UIKIT_PERF_REFRESH_MODE_ENV: &str = "OXIDE_PERF_REFRESH_MODE";
 const UIKIT_PERF_MEASURE_ITERATIONS_ENV: &str = "OXIDE_PERF_MEASURE_ITERATIONS";
 const UIKIT_PERF_BENCHMARK_ITERATIONS_ENV: &str = "OXIDE_PERF_BENCHMARK_ITERATIONS";
@@ -111,13 +143,131 @@ const UIKIT_PERF_CAMERA_REAL_APP_HOST_ENV: &str = "OXIDE_PERF_CAMERA_REAL_APP_HO
 const UIKIT_PERF_CAMERA_REAL_APP_HYBRID_VISIBLE_PREVIEW_ENV: &str =
     "OXIDE_PERF_CAMERA_REAL_APP_HYBRID_VISIBLE_PREVIEW";
 const UIKIT_RENDER_IN_TEST_ENV: &str = "OXIDE_RENDER_IN_TEST";
+const UIKIT_HOST_BUILD_STAMP_FILE: &str = ".oxide-device-build-stamp.json";
+const UIKIT_RESULT_ROOT_STAMP_FILE: &str = ".oxide-device-result-root-stamp.json";
 
+#[derive(Debug)]
 struct UIKitCaseSpec {
     test_name: &'static str,
     case_id: &'static str,
     oxide_case_id: &'static str,
     note: &'static str,
 }
+
+#[derive(Debug)]
+struct OxideOnscreenCaseSpec {
+    test_name: &'static str,
+    case_id: &'static str,
+    family: &'static str,
+    layer: &'static str,
+    scenario: &'static str,
+    variant: &'static str,
+    benchmark_iterations: usize,
+    note: &'static str,
+}
+
+const OXIDE_ONSCREEN_CASE_SPECS: &[OxideOnscreenCaseSpec] = &[
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideSpinnerSpin",
+        case_id: "cpu.animation.spinner_spin",
+        family: "animation",
+        layer: "onscreen",
+        scenario: "spinner_spin",
+        variant: "oxide_host",
+        benchmark_iterations: 96,
+        note: "Real on-screen Oxide spinner scene rendered through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideImageZoomPan",
+        case_id: "cpu.animation.image_zoom_pan",
+        family: "animation",
+        layer: "onscreen",
+        scenario: "image_zoom_pan",
+        variant: "oxide_host",
+        benchmark_iterations: 48,
+        note: "Real on-screen Oxide zoom-image scene rendered through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideAnimTimelineBars",
+        case_id: "cpu.animation.anim_timeline_bars",
+        family: "animation",
+        layer: "onscreen",
+        scenario: "anim_timeline_bars",
+        variant: "oxide_host",
+        benchmark_iterations: 24,
+        note: "Real on-screen Oxide animation timeline scene rendered through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideButtonPressResponse",
+        case_id: "cpu.navigation.button_press.response",
+        family: "navigation",
+        layer: "onscreen",
+        scenario: "button_press_response",
+        variant: "oxide_host",
+        benchmark_iterations: 32,
+        note: "Real on-screen Oxide button press response through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideTextFocusResponse",
+        case_id: "cpu.navigation.text_focus.response",
+        family: "navigation",
+        layer: "onscreen",
+        scenario: "text_focus_response",
+        variant: "oxide_host",
+        benchmark_iterations: 24,
+        note: "Real on-screen Oxide text focus response through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideInputFormJourney",
+        case_id: "cpu.journey.input_form_submit",
+        family: "journey",
+        layer: "onscreen",
+        scenario: "input_form_submit",
+        variant: "oxide_host",
+        benchmark_iterations: 12,
+        note: "Real on-screen Oxide input-form journey through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideCollectionNavigationJourney",
+        case_id: "cpu.journey.collection_navigation",
+        family: "journey",
+        layer: "onscreen",
+        scenario: "collection_navigation",
+        variant: "oxide_host",
+        benchmark_iterations: 18,
+        note: "Real on-screen Oxide collection-navigation journey through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideZoomImageGestureJourney",
+        case_id: "cpu.journey.zoom_image_gesture_cycle",
+        family: "journey",
+        layer: "onscreen",
+        scenario: "zoom_image_gesture_cycle",
+        variant: "oxide_host",
+        benchmark_iterations: 18,
+        note: "Real on-screen Oxide zoom-image gesture journey through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideOrchestrationJourney",
+        case_id: "cpu.journey.orchestration_transition_modal",
+        family: "journey",
+        layer: "onscreen",
+        scenario: "orchestration_transition_modal",
+        variant: "oxide_host",
+        benchmark_iterations: 18,
+        note: "Real on-screen Oxide orchestration journey through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testCameraNV12LegacyLivePreview",
+        case_id: "gpu.scene.camera.frame",
+        family: "image_pipeline",
+        layer: "onscreen",
+        scenario: "camera_preview",
+        variant: "oxide_custom_camera_preview",
+        benchmark_iterations: 1,
+        note: "Real on-screen Oxide custom camera preview benchmark with Oxide owning the visible preview.",
+    },
+];
 
 const UIKIT_CASE_SPECS: &[UIKitCaseSpec] = &[
     UIKitCaseSpec {
@@ -1226,7 +1376,7 @@ struct IosDevicePerfCli {
     markdown_out: Option<PathBuf>,
     power_trace: Option<PathBuf>,
     power_trace_root: Option<PathBuf>,
-    refresh_modes: Vec<UIKitDeviceRefreshMode>,
+    refresh_mode: UIKitDeviceRefreshMode,
     reuse_derived_data: Option<PathBuf>,
     result_root: Option<PathBuf>,
     team: Option<String>,
@@ -1235,13 +1385,39 @@ struct IosDevicePerfCli {
 }
 
 #[derive(Debug, Default)]
+struct IosCompareDevicePerfCli {
+    cases: Vec<String>,
+    device: Option<String>,
+    family: Option<String>,
+    oxide_compare: Option<PathBuf>,
+    power_trace: Option<PathBuf>,
+    power_trace_root: Option<PathBuf>,
+    refresh_mode: UIKitDeviceRefreshMode,
+    result_root: Option<PathBuf>,
+    smoke: bool,
+    team: Option<String>,
+    trace_seconds: Option<u64>,
+    uikit_compare: Option<PathBuf>,
+    write_baseline: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompareDeviceRunStage {
+    WatchableSmoke,
+    FamilyProof,
+    Promotion,
+}
+
+#[derive(Debug, Default)]
 struct IosOxideDevicePerfCli {
     compare: Option<PathBuf>,
     device: Option<String>,
     json_out: Option<PathBuf>,
     markdown_out: Option<PathBuf>,
+    reuse_derived_data: Option<PathBuf>,
     result_root: Option<PathBuf>,
     team: Option<String>,
+    trace_seconds: Option<u64>,
     smoke: bool,
     write_baseline: bool,
 }
@@ -1265,60 +1441,35 @@ struct IosTimeProfilerSummaryCli {
     trace: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 enum UIKitDeviceRefreshMode {
-    DeviceDefault,
-    Hz60Capped,
+    #[default]
     Native,
 }
 
 impl UIKitDeviceRefreshMode {
-    fn parse_cli(value: &str) -> Result<Vec<Self>> {
+    fn parse_cli(value: &str) -> Result<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "default" | "device-default" => Ok(vec![Self::DeviceDefault]),
-            "60" | "60hz" | "60hz-capped" => Ok(vec![Self::Hz60Capped]),
-            "native" => Ok(vec![Self::Native]),
-            "both" => Ok(vec![Self::Hz60Capped, Self::Native]),
+            "native" => Ok(Self::Native),
             other => {
-                bail!("unknown --refresh-mode `{}`; expected default, 60hz, native, or both", other)
+                bail!(
+                    "unknown --refresh-mode `{}`; the official device harness is native-only, so only `native` is supported",
+                    other
+                )
             }
         }
     }
 
     fn report_value(self) -> &'static str {
-        match self {
-            Self::DeviceDefault => "device-default",
-            Self::Hz60Capped => "60hz-capped",
-            Self::Native => "native",
-        }
+        "native"
     }
 
     fn dir_suffix(self) -> &'static str {
-        match self {
-            Self::DeviceDefault => "default",
-            Self::Hz60Capped => "60hz",
-            Self::Native => "native",
-        }
+        "native"
     }
 
-    fn env_value(self) -> Option<&'static str> {
-        match self {
-            Self::DeviceDefault => None,
-            Self::Hz60Capped => Some("60hz"),
-            Self::Native => Some("native"),
-        }
-    }
-}
-
-fn normalize_uikit_refresh_modes(modes: &mut Vec<UIKitDeviceRefreshMode>) {
-    if modes.is_empty() {
-        modes.push(UIKitDeviceRefreshMode::DeviceDefault);
-        return;
-    }
-    modes.sort_unstable();
-    modes.dedup();
-    if modes.len() > 1 {
-        modes.retain(|mode| *mode != UIKitDeviceRefreshMode::DeviceDefault);
+    fn env_value(self) -> &'static str {
+        "native"
     }
 }
 
@@ -1348,6 +1499,7 @@ pub struct UIKitPerfCase {
     pub refresh_mode: String,
     pub measure_iterations: usize,
     pub benchmark_iterations: usize,
+    pub headline_metric: String,
     pub canonical_signpost_source: UIKitCanonicalSignpostSource,
     pub threshold_pct: f64,
     pub metrics: BTreeMap<String, UIKitMetricSummary>,
@@ -1399,7 +1551,7 @@ pub enum UIKitMetricFallbackMode {
     CompositorInclusiveGpuIntervals,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct UIKitMetricSummary {
     pub unit: String,
@@ -1445,27 +1597,11 @@ impl Default for UIKitPerfCase {
             refresh_mode: String::new(),
             measure_iterations: 0,
             benchmark_iterations: 0,
+            headline_metric: String::from("clock_s"),
             canonical_signpost_source: UIKitCanonicalSignpostSource::Unknown,
             threshold_pct: 0.0,
             metrics: BTreeMap::new(),
             notes: Vec::new(),
-        }
-    }
-}
-
-impl Default for UIKitMetricSummary {
-    fn default() -> Self {
-        Self {
-            unit: String::new(),
-            min: 0.0,
-            max: 0.0,
-            mean: 0.0,
-            median: 0.0,
-            p95: 0.0,
-            p99: 0.0,
-            samples: 0,
-            source: UIKitMetricSource::Unknown,
-            fallback_modes: Vec::new(),
         }
     }
 }
@@ -1526,10 +1662,23 @@ pub struct OxideBenchmarkMetadataPayload {
 
 #[derive(Debug, Clone, Default)]
 struct UIKitMetricsBatchRun {
-    metrics_json: String,
     case_ids: BTreeSet<String>,
+    parsed_cases: BTreeMap<String, UIKitPerfCase>,
     benchmark_metadata: BTreeMap<String, OxideBenchmarkMetadataPayload>,
     skipped_case_notes: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+struct UIKitProgressState {
+    stage: String,
+    refresh_mode: String,
+    metrics_shards_completed: usize,
+    metrics_shards_total: usize,
+    completed_cases: usize,
+    total_cases: usize,
+    last_case_id: Option<String>,
+    last_test_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1729,13 +1878,14 @@ pub fn run_cli(args: &[String]) -> Result<()> {
         (Some("ios"), Some("prepare")) => ios_prepare(),
         (Some("ios"), Some("perf")) => ios_perf(&args[2..]),
         (Some("ios"), Some("device-perf")) => ios_device_perf(&args[2..]),
+        (Some("ios"), Some("compare-device-perf")) => ios_compare_device_perf(&args[2..]),
         (Some("ios"), Some("react-device-perf")) => ios_react_device_perf(&args[2..]),
         (Some("ios"), Some("oxide-device-perf")) => ios_oxide_device_perf(&args[2..]),
         (Some("ios"), Some("time-profiler-summary")) => ios_time_profiler_summary(&args[2..]),
         (Some("test-all"), _) => test_all(),
         _ => {
             eprintln!(
-                "Usage:\n  cargo xtask ios prepare\n  cargo xtask ios perf [disabled: use `ios device-perf`]\n  cargo xtask ios device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--trace-seconds N] [--refresh-mode default|60hz|native|both] [--power-trace PATH | --power-trace-root DIR]\n    note: `--trace-seconds 0` skips the attached Metal trace and collects only xcodebuild CPU metrics plus parked console summaries.\n  cargo xtask ios react-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--reuse-derived-data PATH] [--trace-seconds N]\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
+                "Usage:\n  cargo xtask ios prepare\n  cargo xtask ios perf [disabled: use `ios device-perf`]\n  cargo xtask ios device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR]\n    note: `--trace-seconds 0` skips the attached Metal trace and collects only xcodebuild CPU metrics plus parked console summaries.\n  cargo xtask ios compare-device-perf [--write-baseline] [--uikit-compare PATH] [--oxide-compare PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR] [--watchable-smoke|--smoke] [--family animation|navigation|journey|camera]\n    staged flow: run watchable smoke first, then `--family ...` proofs, then `--write-baseline` from the same result root once proof status is green.\n  cargo xtask ios react-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--reuse-derived-data PATH] [--trace-seconds N]\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--reuse-derived-data PATH] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
             );
             Ok(())
         }
@@ -1881,8 +2031,198 @@ fn run_xcui_smoke(root: &Path) -> Result<()> {
 fn ios_perf(args: &[String]) -> Result<()> {
     let _ = parse_ios_perf_cli(args)?;
     bail!(
-        "`cargo xtask ios perf` is disabled by repo policy. Official UIKit perf baselines and comparisons are physical-device-only; use `cargo xtask ios device-perf --refresh-mode both ...`."
+        "`cargo xtask ios perf` is disabled by repo policy. Official UIKit perf baselines and comparisons are physical-device-only and native-only; use `cargo xtask ios device-perf ...`."
     )
+}
+
+fn ios_compare_device_perf(args: &[String]) -> Result<()> {
+    let cli = parse_ios_compare_device_perf_cli(args)?;
+    let root = locate_workspace_root()?;
+    let spec = root.join("host/ios-app/App/project.yml");
+    let project = root.join("host/ios-app/App/OxideHost.xcodeproj");
+    let result_root = cli
+        .result_root
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_COMBINED_DEVICE_RESULT_ROOT));
+    let (stage, family) = resolve_compare_device_run_stage(&cli)?;
+    let stage_result_root = compare_device_stage_result_root(&result_root, stage, family);
+    let uikit_result_root = stage_result_root.join("uikit");
+    let oxide_result_root = stage_result_root.join("oxide");
+    let watch_capture = stage == CompareDeviceRunStage::WatchableSmoke;
+    let selected_specs = selected_uikit_case_specs_for_compare_stage(&cli.cases, stage, family)?;
+    let selected_oxide_specs = selected_oxide_onscreen_case_specs_for_uikit_specs(&selected_specs)?;
+    let device = resolve_uikit_physical_device(&root, cli.device.as_deref())?;
+    let trace_seconds = cli.trace_seconds.unwrap_or(DEFAULT_UIKIT_DEVICE_TRACE_SECONDS);
+    let refresh_mode = cli.refresh_mode;
+    let shared_derived_data_path = result_root.join("derived-data");
+    let build_context = prepare_uikit_host_device_build_context(
+        &root,
+        &spec,
+        &project,
+        &device,
+        cli.team.as_deref(),
+    )?;
+    prepare_resumable_uikit_device_result_root(
+        &stage_result_root,
+        &[shared_derived_data_path.as_path()],
+        &build_context.expected_stamp,
+        "combined device",
+    )?;
+    if cli.write_baseline {
+        let missing = compare_device_missing_promotion_families(
+            load_compare_device_proof_status(&result_root)?.as_ref(),
+            &build_context.expected_stamp,
+        );
+        if !missing.is_empty() {
+            bail!(
+                "compare-device-perf baseline promotion requires green family proofs first. Missing families: {}. Run `cargo xtask ios compare-device-perf --family <family> --result-root {}` for each missing family.",
+                missing.join(", "),
+                result_root.display()
+            );
+        }
+    }
+    fs::create_dir_all(&uikit_result_root)
+        .with_context(|| format!("creating {}", uikit_result_root.display()))?;
+    fs::create_dir_all(&oxide_result_root)
+        .with_context(|| format!("creating {}", oxide_result_root.display()))?;
+
+    validate_uikit_power_trace_inputs_for_specs(
+        trace_seconds,
+        cli.power_trace.as_deref(),
+        cli.power_trace_root.as_deref(),
+        &selected_specs,
+    )?;
+    let prepared_build = prepare_uikit_host_device_build(
+        &root,
+        &project,
+        &device,
+        &shared_derived_data_path,
+        None,
+        &build_context,
+    )?;
+
+    let uikit_current_json = uikit_result_root.join("current.json");
+    let uikit_report = if uikit_current_json.is_file() {
+        println!("Reusing completed UIKit device report at {}.", uikit_current_json.display());
+        load_uikit_report(&uikit_current_json)?
+    } else {
+        capture_uikit_device_report(
+            &root,
+            &device,
+            &prepared_build,
+            &selected_specs,
+            refresh_mode,
+            &uikit_result_root,
+            trace_seconds,
+            cli.power_trace.as_deref(),
+            cli.power_trace_root.as_deref(),
+            watch_capture,
+        )?
+    };
+    let uikit_comparison = if let Some(path) = cli.uikit_compare.as_ref() {
+        let baseline = load_uikit_report(path)?;
+        Some(compare_uikit_reports(&uikit_report, &baseline))
+    } else {
+        None
+    };
+    write_uikit_report_json(&uikit_result_root.join("current.json"), &uikit_report)?;
+    write_uikit_markdown(
+        &uikit_result_root.join("current.md"),
+        &uikit_report,
+        uikit_comparison.as_ref(),
+    )?;
+    if cli.write_baseline {
+        write_uikit_report_json(Path::new(DEFAULT_UIKIT_DEVICE_BASELINE_JSON), &uikit_report)?;
+        write_uikit_markdown(
+            Path::new(DEFAULT_UIKIT_DEVICE_BASELINE_MARKDOWN),
+            &uikit_report,
+            uikit_comparison.as_ref(),
+        )?;
+        write_uikit_dated_markdown(
+            Path::new(DEFAULT_UIKIT_DEVICE_BASELINE_MARKDOWN),
+            &uikit_report,
+            uikit_comparison.as_ref(),
+        )?;
+    }
+    print_uikit_summary(&uikit_report, uikit_comparison.as_ref());
+
+    let oxide_current_json = oxide_result_root.join("current.json");
+    let oxide_report = if oxide_current_json.is_file() {
+        println!("Reusing completed Oxide device report at {}.", oxide_current_json.display());
+        load_oxide_device_report(&oxide_current_json)?
+    } else {
+        capture_oxide_onscreen_device_report(
+            &root,
+            &device,
+            &prepared_build.built_app,
+            &selected_oxide_specs,
+            refresh_mode,
+            &oxide_result_root,
+            trace_seconds,
+            watch_capture,
+        )?
+    };
+    let oxide_comparison = if let Some(path) = cli.oxide_compare.as_ref() {
+        let baseline = load_oxide_device_report(path)?;
+        Some(compare_reports(&oxide_report, &baseline))
+    } else {
+        None
+    };
+    write_oxide_device_report_json(&oxide_result_root.join("current.json"), &oxide_report)?;
+    write_oxide_device_report_markdown(
+        &oxide_result_root.join("current.md"),
+        &oxide_report,
+        oxide_comparison.as_ref(),
+    )?;
+    if cli.write_baseline {
+        write_oxide_device_report_json(
+            Path::new(DEFAULT_OXIDE_DEVICE_BASELINE_JSON),
+            &oxide_report,
+        )?;
+        write_oxide_device_report_markdown(
+            Path::new(DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN),
+            &oxide_report,
+            oxide_comparison.as_ref(),
+        )?;
+        write_oxide_device_dated_markdown(
+            Path::new(DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN),
+            &oxide_report,
+            oxide_comparison.as_ref(),
+        )?;
+    }
+    print_oxide_device_summary(&oxide_report, oxide_comparison.as_ref());
+
+    if stage != CompareDeviceRunStage::Promotion {
+        let completed_families = selected_specs
+            .iter()
+            .map(|spec| String::from(compare_device_family_for_uikit_spec(spec).unwrap()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        update_compare_device_proof_status(
+            &result_root,
+            &build_context.expected_stamp,
+            stage,
+            &completed_families,
+        )?;
+    }
+
+    if let Some(comp) = uikit_comparison.as_ref() {
+        if !comp.missing_baseline.is_empty() || !comp.regressions.is_empty() {
+            bail!(
+                "UIKit device performance comparison failed; inspect the generated report and update the committed baseline only with review"
+            );
+        }
+    }
+    if let Some(comp) = oxide_comparison.as_ref() {
+        if !comp.missing_baseline.is_empty() || !comp.regressions.is_empty() {
+            bail!(
+                "Oxide device performance comparison failed; inspect the generated report and update the committed baseline only with review"
+            );
+        }
+    }
+
+    Ok(())
 }
 
 fn ios_device_perf(args: &[String]) -> Result<()> {
@@ -1894,243 +2234,60 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
         cli.result_root.clone().unwrap_or_else(|| PathBuf::from(DEFAULT_UIKIT_DEVICE_RESULT_ROOT));
     let selected_specs = selected_uikit_case_specs(&cli.cases)?;
     let device = resolve_uikit_physical_device(&root, cli.device.as_deref())?;
-    let destination = format!("platform=iOS,id={}", device.udid);
     let trace_seconds = cli.trace_seconds.unwrap_or(DEFAULT_UIKIT_DEVICE_TRACE_SECONDS);
-    let trace_enabled = uikit_device_trace_enabled(trace_seconds);
-    let refresh_modes = cli.refresh_modes.clone();
-    let has_same_device_refresh_matrix = refresh_modes
-        .contains(&UIKitDeviceRefreshMode::Hz60Capped)
-        && refresh_modes.contains(&UIKitDeviceRefreshMode::Native);
+    let refresh_mode = cli.refresh_mode;
     let derived_data_path =
         cli.reuse_derived_data.clone().unwrap_or_else(|| result_root.join("derived-data"));
-
-    if cli.reuse_derived_data.as_ref().map(|path| path.starts_with(&result_root)).unwrap_or(false) {
-        fs::create_dir_all(&result_root)
-            .with_context(|| format!("creating {}", result_root.display()))?;
+    let preserved_paths = if derived_data_path.starts_with(&result_root) {
+        vec![derived_data_path.as_path()]
     } else {
-        remove_existing_path(&result_root)?;
-        fs::create_dir_all(&result_root)
-            .with_context(|| format!("creating {}", result_root.display()))?;
-    }
-
-    validate_uikit_power_trace_inputs(&cli, &selected_specs)?;
-    if !trace_enabled && (cli.power_trace.is_some() || cli.power_trace_root.is_some()) {
-        bail!("--trace-seconds 0 cannot be combined with --power-trace or --power-trace-root");
-    }
-    ensure_uikit_device_ready(&root, &device)?;
-    ensure_uikit_device_support_available(&root, &device)?;
-    let development_team =
-        resolve_uikit_development_team(&root, cli.team.as_deref(), Some(device.udid.as_str()))?;
-    run_command_owned(
+        Vec::new()
+    };
+    let build_context = prepare_uikit_host_device_build_context(
         &root,
-        "xcodegen",
-        &[String::from("generate"), String::from("--spec"), spec.to_string_lossy().into_owned()],
-        false,
+        &spec,
+        &project,
+        &device,
+        cli.team.as_deref(),
     )?;
-    if cli.reuse_derived_data.is_none() {
-        run_uikit_device_build_for_testing(
-            &root,
-            &project,
-            &destination,
-            &development_team,
-            &derived_data_path,
-        )?;
-    } else if !derived_data_path.exists() {
-        bail!(
-            "requested --reuse-derived-data path does not exist: {}",
-            derived_data_path.display()
-        );
-    }
-    let built_app = resolve_built_uikit_app(&derived_data_path)?;
-    let xctestrun_path = resolve_built_xctestrun_path(&derived_data_path, DEFAULT_UIKIT_SCHEME)?;
-    install_uikit_device_app(&root, &device, &built_app)?;
+    prepare_resumable_uikit_device_result_root(
+        &result_root,
+        &preserved_paths,
+        &build_context.expected_stamp,
+        "UIKit device",
+    )?;
 
-    let include_energy =
-        trace_enabled && (cli.power_trace.is_some() || cli.power_trace_root.is_some());
-    let mut metrics_by_refresh = BTreeMap::new();
-    for refresh_mode in &refresh_modes {
-        let metrics_batch = run_uikit_device_metrics_batch(
+    validate_uikit_power_trace_inputs_for_specs(
+        trace_seconds,
+        cli.power_trace.as_deref(),
+        cli.power_trace_root.as_deref(),
+        &selected_specs,
+    )?;
+    let prepared_build = prepare_uikit_host_device_build(
+        &root,
+        &project,
+        &device,
+        &derived_data_path,
+        cli.reuse_derived_data.as_deref(),
+        &build_context,
+    )?;
+    let current_json = result_root.join("current.json");
+    let report = if current_json.is_file() {
+        println!("Reusing completed UIKit device report at {}.", current_json.display());
+        load_uikit_report(&current_json)?
+    } else {
+        capture_uikit_device_report(
             &root,
-            &xctestrun_path,
-            &destination,
+            &device,
+            &prepared_build,
             &selected_specs,
-            *refresh_mode,
+            refresh_mode,
             &result_root,
-        )?;
-        metrics_by_refresh.insert(*refresh_mode, metrics_batch);
-    }
-    let mut report_cases = Vec::new();
-    let mut skipped_case_notes = Vec::new();
-    for spec in selected_specs {
-        for refresh_mode in &refresh_modes {
-            let case_dir =
-                result_root.join(format!("{}-{}", spec.test_name, refresh_mode.dir_suffix()));
-            fs::create_dir_all(&case_dir)
-                .with_context(|| format!("creating {}", case_dir.display()))?;
-            let metrics_batch = metrics_by_refresh.get(refresh_mode).with_context(|| {
-                format!("missing batched metrics for `{}`", refresh_mode.report_value())
-            })?;
-            if let Some(note) = uikit_skipped_case_note(spec, *refresh_mode, metrics_batch) {
-                skipped_case_notes.push(note);
-                continue;
-            }
-            let gpu_run = if trace_enabled {
-                run_uikit_device_case_trace(
-                    &root,
-                    &device,
-                    &built_app,
-                    spec,
-                    *refresh_mode,
-                    &case_dir,
-                    trace_seconds,
-                )?
-            } else {
-                run_uikit_device_case_console_capture(
-                    &root,
-                    &device,
-                    &built_app,
-                    spec,
-                    *refresh_mode,
-                    &case_dir,
-                )?
-            };
-            let power_run = include_energy
-                .then(|| load_uikit_device_case_power_trace(&root, &cli, spec, &case_dir));
-            let power_run = match power_run {
-                Some(run) => Some(run?),
-                None => None,
-            };
-            report_cases.push(build_uikit_device_case(
-                &root,
-                &result_root,
-                spec,
-                &built_app.executable_name,
-                *refresh_mode,
-                metrics_batch,
-                &gpu_run,
-                power_run.as_ref(),
-            )?);
-        }
-    }
-
-    let mut contract = build_uikit_contract_coverage(&report_cases, "device");
-    contract.notes.extend(skipped_case_notes.iter().cloned());
-
-    let report = UIKitPerfReport {
-        version: 1,
-        suite: String::from("device"),
-        generated_label: std::env::var("PERF_REPORT_DATE").ok(),
-        device_name: device.name.clone(),
-        energy_status: if !trace_enabled {
-            String::from(
-                "Direct device GPU time and energy were intentionally skipped for this run because `--trace-seconds 0` disabled the attached Metal trace; CPU metrics still come from xcodebuild test-without-building and camera summaries still come from the parked app console output.",
-            )
-        } else if include_energy {
-            String::from(
-                "Direct device GPU time comes from process-scoped Metal System Trace on real iPhone hardware. Direct energy is included only when manually imported per-case Power Profiler traces (.trace or raw exported .atrc) are supplied for the same OxideHost workload.",
-            )
-        } else {
-            String::from(
-                "Direct device GPU time comes from process-scoped Metal System Trace on real iPhone hardware. Direct energy is intentionally skipped in this run and remains manual-pending until per-case Power Profiler traces are imported.",
-            )
-        },
-        contract,
-        cases: report_cases,
-        notes: {
-            let mut notes = if !trace_enabled {
-            vec![
-                String::from("Scheme: OxideUIKitPerf"),
-                String::from(
-                    "Device flow: build/install the host app once, collect CPU metrics through batched xcodebuild test-without-building runs per refresh mode, then drive the device workload over the shared Darwin ready/start/complete handshake without recording a Metal trace.",
-                ),
-                String::from(
-                    "GPU trace: skipped for this run because `--trace-seconds 0` disabled the attached Metal trace. Camera contract, stage, and memory summaries still come from the parked app console log.",
-                ),
-                String::from(
-                    "Energy trace: skipped because attached tracing was disabled for this run.",
-                ),
-                format!(
-                    "Refresh modes: {}",
-                    refresh_modes
-                        .iter()
-                        .map(|mode| mode.report_value())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                if has_same_device_refresh_matrix {
-                    String::from(
-                        "Refresh-matrix status: this report includes 60 Hz-capped and native rows on the same ProMotion iPhone, but the separate older 60 Hz hardware leg is still pending.",
-                    )
-                } else {
-                    String::from(
-                        "Refresh-matrix status: this run covers only the listed refresh mode(s); the broader 60 Hz versus native device matrix remains partial.",
-                    )
-                },
-            ]
-        } else if include_energy {
-            vec![
-                String::from("Scheme: OxideUIKitPerf"),
-                String::from(
-                    "Device flow: build/install the host app once, collect CPU metrics through batched xcodebuild test-without-building runs per refresh mode, then record per-case process-scoped Metal traces on the phone. Parked and launch-handshake workloads are launched through xctrace and driven by the shared Darwin ready/start/complete notifications; camera cases that still need console summaries retain the device-console launch path.",
-                ),
-                String::from(
-                    "GPU trace: process-scoped Metal System Trace + Points of Interest, with Metal GPU Counters enabled when the device supports that counter profile.",
-                ),
-                String::from(
-                    "Energy trace: manual per-case Power Profiler import from an exported .trace or raw .atrc captured for the same OxideHost workload.",
-                ),
-                format!(
-                    "Refresh modes: {}",
-                    refresh_modes
-                        .iter()
-                        .map(|mode| mode.report_value())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                if has_same_device_refresh_matrix {
-                    String::from(
-                        "Refresh-matrix status: this report includes 60 Hz-capped and native rows on the same ProMotion iPhone, but the separate older 60 Hz hardware leg is still pending.",
-                    )
-                } else {
-                    String::from(
-                        "Refresh-matrix status: this run covers only the listed refresh mode(s); the broader 60 Hz versus native device matrix remains partial.",
-                    )
-                },
-            ]
-        } else {
-            vec![
-                String::from("Scheme: OxideUIKitPerf"),
-                String::from(
-                    "Device flow: build/install the host app once, collect CPU metrics through batched xcodebuild test-without-building runs per refresh mode, then record per-case process-scoped Metal traces on the phone. Parked and launch-handshake workloads are launched through xctrace and driven by the shared Darwin ready/start/complete notifications; camera cases that still need console summaries retain the device-console launch path.",
-                ),
-                String::from(
-                    "GPU trace: process-scoped Metal System Trace + Points of Interest, with Metal GPU Counters enabled when the device supports that counter profile.",
-                ),
-                String::from(
-                    "Energy trace: manual per-case Power Profiler import from an exported .trace or raw .atrc captured for the same OxideHost workload.",
-                ),
-                format!(
-                    "Refresh modes: {}",
-                    refresh_modes
-                        .iter()
-                        .map(|mode| mode.report_value())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                if has_same_device_refresh_matrix {
-                    String::from(
-                        "Refresh-matrix status: this report includes 60 Hz-capped and native rows on the same ProMotion iPhone, but the separate older 60 Hz hardware leg is still pending.",
-                    )
-                } else {
-                    String::from(
-                        "Refresh-matrix status: this run covers only the listed refresh mode(s); the broader 60 Hz versus native device matrix remains partial.",
-                    )
-                },
-            ]
-        };
-            notes.extend(skipped_case_notes);
-            notes
-        },
+            trace_seconds,
+            cli.power_trace.as_deref(),
+            cli.power_trace_root.as_deref(),
+            false,
+        )?
     };
     let comparison = if let Some(path) = cli.compare.as_ref() {
         let baseline = load_uikit_report(path)?;
@@ -2185,14 +2342,15 @@ fn ios_react_device_perf(args: &[String]) -> Result<()> {
     let trace_seconds = cli.trace_seconds.unwrap_or(DEFAULT_UIKIT_DEVICE_TRACE_SECONDS);
     let device = resolve_uikit_physical_device(&root, cli.device.as_deref())?;
     let destination = format!("platform=iOS,id={}", device.udid);
-
-    if cli.reuse_derived_data.as_ref().map(|path| path.starts_with(&result_root)).unwrap_or(false) {
-        fs::create_dir_all(&result_root)
-            .with_context(|| format!("creating {}", result_root.display()))?;
+    let preserved_paths = if derived_data_path.starts_with(&result_root) {
+        vec![derived_data_path.as_path()]
     } else {
-        remove_existing_path(&result_root)?;
-        fs::create_dir_all(&result_root)
-            .with_context(|| format!("creating {}", result_root.display()))?;
+        Vec::new()
+    };
+    if result_root_has_resumable_device_artifacts(&result_root)? {
+        println!("Resuming existing Oxide device result root at {}.", result_root.display());
+    } else {
+        prepare_result_root(&result_root, &preserved_paths)?;
     }
 
     ensure_uikit_device_ready(&root, &device)?;
@@ -2252,33 +2410,31 @@ fn ios_react_device_perf(args: &[String]) -> Result<()> {
     )?;
     let mut report = report;
     if let Some(case) = report.cases.first_mut() {
-        let (gpu_windows, used_summary_window) = extract_trace_windows_or_summary_window(
+        let parsed_trace = ParsedDeviceTrace::parse(
             &root,
             &react_run.trace_run.trace_path,
             built_app.executable_name.as_str(),
+            true,
+            false,
         )?;
         case.notes.extend(react_run.trace_run.notes.iter().cloned());
-        if used_summary_window {
+        if parsed_trace.used_summary_window {
             case.notes.push(String::from(
                 "GPU trace window status: this Metal trace did not expose the per-workload signposts, so GPU metrics were summarized over the full trace duration for the ReactNativeCameraBench process.",
             ));
         }
-        let trace_fallback_modes = trace_summary_window_fallback_modes(used_summary_window);
-        case.notes.push(format!("GPU trace windows: {}", gpu_windows.len()));
-        for (name, metric) in
-            summarize_trace_signpost_metrics(
-                &root,
-                &react_run.trace_run.trace_path,
-                &gpu_windows,
-                &trace_fallback_modes,
-            )?
-        {
+        let trace_fallback_modes =
+            trace_summary_window_fallback_modes(parsed_trace.used_summary_window);
+        case.notes.push(format!("GPU trace windows: {}", parsed_trace.windows.len()));
+        for (name, metric) in summarize_trace_signpost_metrics_from_tables(
+            &parsed_trace.signpost_tables,
+            &parsed_trace.windows,
+            &trace_fallback_modes,
+        )? {
             case.metrics.insert(name, metric.median);
         }
-        for (name, metric) in summarize_device_gpu_metrics(
-            &root,
-            &react_run.trace_run.trace_path,
-            &gpu_windows,
+        for (name, metric) in summarize_device_gpu_metrics_from_trace(
+            &parsed_trace,
             &mut case.notes,
             &trace_fallback_modes,
         )? {
@@ -2339,34 +2495,59 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
     let result_root =
         cli.result_root.clone().unwrap_or_else(|| PathBuf::from(DEFAULT_OXIDE_DEVICE_RESULT_ROOT));
     let device = resolve_uikit_physical_device(&root, cli.device.as_deref())?;
-    let destination = format!("platform=iOS,id={}", device.udid);
-
-    remove_existing_path(&result_root)?;
-    fs::create_dir_all(&result_root)
-        .with_context(|| format!("creating {}", result_root.display()))?;
-
-    ensure_uikit_device_ready(&root, &device)?;
-    let development_team =
-        resolve_uikit_development_team(&root, cli.team.as_deref(), Some(device.udid.as_str()))?;
-    run_command_owned(
+    let selected_specs = if cli.smoke {
+        selected_oxide_onscreen_case_specs(&[String::from("testOxideSpinnerSpin")])?
+    } else {
+        selected_oxide_onscreen_case_specs(&[])?
+    };
+    let trace_seconds = cli.trace_seconds.unwrap_or(DEFAULT_UIKIT_DEVICE_TRACE_SECONDS);
+    let refresh_mode = UIKitDeviceRefreshMode::Native;
+    let derived_data_path =
+        cli.reuse_derived_data.clone().unwrap_or_else(|| result_root.join("derived-data"));
+    let preserved_paths = if derived_data_path.starts_with(&result_root) {
+        vec![derived_data_path.as_path()]
+    } else {
+        Vec::new()
+    };
+    let build_context = prepare_uikit_host_device_build_context(
         &root,
-        "xcodegen",
-        &[String::from("generate"), String::from("--spec"), spec.to_string_lossy().into_owned()],
-        false,
+        &spec,
+        &project,
+        &device,
+        cli.team.as_deref(),
     )?;
-    let derived_data_path = result_root.join("derived-data");
-    run_uikit_device_build_for_testing(
+    prepare_resumable_uikit_device_result_root(
+        &result_root,
+        &preserved_paths,
+        &build_context.expected_stamp,
+        "Oxide device",
+    )?;
+
+    let prepared_build = prepare_uikit_host_device_build(
         &root,
         &project,
-        &destination,
-        &development_team,
+        &device,
         &derived_data_path,
+        cli.reuse_derived_data.as_deref(),
+        &build_context,
     )?;
-    let built_app = resolve_built_uikit_app(&derived_data_path)?;
-    install_uikit_device_app(&root, &device, &built_app)?;
 
-    let report =
-        run_oxide_device_report_capture(&root, &device, &built_app, &result_root, cli.smoke)?;
+    let current_json = result_root.join("current.json");
+    let report = if current_json.is_file() {
+        println!("Reusing completed Oxide device report at {}.", current_json.display());
+        load_oxide_device_report(&current_json)?
+    } else {
+        capture_oxide_onscreen_device_report(
+            &root,
+            &device,
+            &prepared_build.built_app,
+            &selected_specs,
+            refresh_mode,
+            &result_root,
+            trace_seconds,
+            false,
+        )?
+    };
     let comparison = if let Some(path) = cli.compare.as_ref() {
         let baseline = load_oxide_device_report(path)?;
         Some(compare_reports(&report, &baseline))
@@ -2439,6 +2620,159 @@ struct DeviceTraceRun {
     notes: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct PreparedUIKitHostBuild {
+    destination: String,
+    built_app: BuiltUIKitApp,
+    uikit_xctestrun_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct UIKitHostBuildContext {
+    destination: String,
+    development_team: String,
+    expected_stamp: UIKitHostBuildStamp,
+}
+
+#[derive(Debug, Clone)]
+struct UIKitMetricsShard {
+    specs: Vec<&'static UIKitCaseSpec>,
+    environment: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ParsedDeviceTrace {
+    windows: Vec<TraceWindow>,
+    used_summary_window: bool,
+    signpost_tables: Vec<XctraceTable>,
+    gpu_interval_table: Option<XctraceTable>,
+    gpu_counter_info_table: Option<XctraceTable>,
+    gpu_counter_value_table: Option<XctraceTable>,
+    energy_tables: Vec<XctraceTable>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompareDeviceProofFamilyStatus {
+    pub watchable_smoke_passed: bool,
+    pub family_proof_passed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompareDeviceProofStatus {
+    pub build_stamp: UIKitHostBuildStamp,
+    pub families: BTreeMap<String, CompareDeviceProofFamilyStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UIKitHostBuildStamp {
+    pub destination: String,
+    pub development_team: String,
+    pub source_fingerprint: u64,
+}
+
+#[derive(Debug, Default)]
+struct IncrementalTextReader {
+    offset: u64,
+    text: String,
+}
+
+impl IncrementalTextReader {
+    fn current(&self) -> &str {
+        self.text.as_str()
+    }
+
+    fn refresh<'a>(&'a mut self, path: &Path) -> Result<&'a str> {
+        let mut file = match fs::File::open(path) {
+            Ok(file) => file,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(self.text.as_str()),
+            Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
+        };
+        let len = file.metadata().with_context(|| format!("reading {}", path.display()))?.len();
+        if len < self.offset {
+            self.offset = 0;
+            self.text.clear();
+        }
+        file.seek(SeekFrom::Start(self.offset))
+            .with_context(|| format!("seeking {}", path.display()))?;
+        let mut appended = String::new();
+        file.read_to_string(&mut appended)
+            .with_context(|| format!("reading {}", path.display()))?;
+        self.offset = self.offset.saturating_add(appended.as_bytes().len() as u64);
+        self.text.push_str(&appended);
+        Ok(self.text.as_str())
+    }
+}
+
+impl ParsedDeviceTrace {
+    fn parse(
+        root: &Path,
+        trace_path: &Path,
+        process_name: &str,
+        include_gpu: bool,
+        include_energy: bool,
+    ) -> Result<Self> {
+        let toc = export_xctrace_toc(root, trace_path)?;
+        let signpost_tables = export_xctrace_signpost_tables(root, trace_path, &toc)?;
+        let (windows, used_summary_window) =
+            match extract_trace_windows_from_tables(&signpost_tables) {
+                Ok(windows) => (windows, false),
+                Err(_) => {
+                    (vec![extract_trace_summary_window(root, trace_path, process_name)?], true)
+                }
+            };
+        let gpu_interval_table = if include_gpu {
+            export_xctrace_preferred_table_from_toc(
+                root,
+                trace_path,
+                &toc,
+                "metal-gpu-intervals",
+                None,
+            )
+            .ok()
+        } else {
+            None
+        };
+        let gpu_counter_info_table = if include_gpu {
+            export_xctrace_preferred_table_from_toc(
+                root,
+                trace_path,
+                &toc,
+                "gpu-counter-info",
+                None,
+            )
+            .ok()
+        } else {
+            None
+        };
+        let gpu_counter_value_table = if include_gpu {
+            export_xctrace_preferred_table_from_toc(
+                root,
+                trace_path,
+                &toc,
+                "gpu-counter-value",
+                None,
+            )
+            .ok()
+        } else {
+            None
+        };
+        let energy_tables = if include_energy {
+            load_xctrace_energy_tables(root, trace_path, &toc)?
+        } else {
+            Vec::new()
+        };
+        Ok(Self {
+            windows,
+            used_summary_window,
+            signpost_tables,
+            gpu_interval_table,
+            gpu_counter_info_table,
+            gpu_counter_value_table,
+            energy_tables,
+        })
+    }
+}
+
 fn trace_summary_window_fallback_modes(used_summary_window: bool) -> Vec<UIKitMetricFallbackMode> {
     if used_summary_window {
         vec![UIKitMetricFallbackMode::SummaryWindow]
@@ -2492,7 +2826,9 @@ fn reconcile_device_case_iteration_counts(
     let benchmark_iterations = batch_benchmark_iterations
         .or(trace_benchmark_iterations)
         .or_else(|| uikit_launch_case_metadata(spec).map(|_| 1usize))
-        .with_context(|| format!("missing benchmark iteration metadata for `{}`", spec.test_name))?;
+        .with_context(|| {
+            format!("missing benchmark iteration metadata for `{}`", spec.test_name)
+        })?;
     Ok((measure_iterations, benchmark_iterations))
 }
 
@@ -2522,11 +2858,10 @@ fn build_uikit_device_case(
     metal_run: &DeviceTraceRun,
     power_run: Option<&DeviceTraceRun>,
 ) -> Result<UIKitPerfCase> {
-    let base_report = parse_uikit_report_json(&batch_run.metrics_json)?;
-    let base_case = base_report
-        .cases
-        .into_iter()
-        .find(|case| case.id == spec.case_id)
+    let base_case = batch_run
+        .parsed_cases
+        .get(spec.case_id)
+        .cloned()
         .with_context(|| format!("missing base UIKit case `{}`", spec.case_id))?;
     let mut notes =
         vec![String::from(spec.note), format!("Refresh mode: {}", refresh_mode.report_value())];
@@ -2534,6 +2869,7 @@ fn build_uikit_device_case(
 
     let batch_metadata = batch_run.benchmark_metadata.get(spec.test_name);
     let mut canonical_signpost_source = UIKitCanonicalSignpostSource::XCTest;
+    let mut headline_metric = String::from("clock_s");
     let (camera_summary_stdout_path, contract_source_note, stage_source_note, memory_source_note) =
         if uikit_case_uses_real_app_camera_host(spec) {
             (
@@ -2563,10 +2899,7 @@ fn build_uikit_device_case(
         .map(parse_oxide_benchmark_metadata)
         .transpose()
         .with_context(|| {
-            format!(
-                "parsing benchmark metadata from {}",
-                camera_summary_stdout_path.display()
-            )
+            format!("parsing benchmark metadata from {}", camera_summary_stdout_path.display())
         })?
         .unwrap_or_default();
     let trace_metadata = trace_metadata_map.get(spec.test_name);
@@ -2661,62 +2994,53 @@ fn build_uikit_device_case(
             ));
         }
         canonical_signpost_source = UIKitCanonicalSignpostSource::Xctrace;
-        let (gpu_windows, used_summary_window) = extract_trace_windows_or_summary_window(
-            root,
-            &metal_run.trace_path,
-            host_process_name,
-        )?;
-        let trace_fallback_modes = trace_summary_window_fallback_modes(used_summary_window);
-        if used_summary_window {
+        let parsed_metal_trace =
+            ParsedDeviceTrace::parse(root, &metal_run.trace_path, host_process_name, true, false)?;
+        let trace_fallback_modes =
+            trace_summary_window_fallback_modes(parsed_metal_trace.used_summary_window);
+        if parsed_metal_trace.used_summary_window {
             notes.push(String::from(
                 "GPU trace window status: this Metal trace did not expose the per-workload signposts, so GPU metrics were summarized over the full trace duration for the OxideHost process.",
             ));
         }
-        notes.push(format!("GPU trace windows: {}", gpu_windows.len()));
-        for (name, metric) in
-            summarize_trace_signpost_metrics(
-                root,
-                &metal_run.trace_path,
-                &gpu_windows,
-                &trace_fallback_modes,
-            )?
-        {
+        notes.push(format!("GPU trace windows: {}", parsed_metal_trace.windows.len()));
+        for (name, metric) in summarize_trace_signpost_metrics_from_tables(
+            &parsed_metal_trace.signpost_tables,
+            &parsed_metal_trace.windows,
+            &trace_fallback_modes,
+        )? {
             metrics.insert(name, metric);
         }
-        for (name, metric) in
-            summarize_device_gpu_metrics(
-                root,
-                &metal_run.trace_path,
-                &gpu_windows,
-                &mut notes,
-                &trace_fallback_modes,
-            )?
-        {
+        for (name, metric) in summarize_device_gpu_metrics_from_trace(
+            &parsed_metal_trace,
+            &mut notes,
+            &trace_fallback_modes,
+        )? {
             if name.starts_with("gpu_counter.") {
                 notes.push(format!("Direct counter: `{}`", name));
             }
             metrics.insert(name, metric);
         }
         if let Some(power_run) = power_run {
-            let (power_windows, used_summary_window) = extract_trace_windows_or_summary_window(
+            let parsed_power_trace = ParsedDeviceTrace::parse(
                 root,
                 &power_run.trace_path,
                 host_process_name,
+                false,
+                true,
             )?;
             notes.extend(power_run.notes.iter().cloned());
-            if used_summary_window {
+            if parsed_power_trace.used_summary_window {
                 notes.push(String::from(
                     "Energy trace window status: this power trace did not expose the per-workload signposts, so energy was integrated over the full trace duration for the OxideHost process.",
                 ));
             }
-            notes.push(format!("Power trace windows: {}", power_windows.len()));
+            notes.push(format!("Power trace windows: {}", parsed_power_trace.windows.len()));
             metrics.insert(
                 String::from("energy_j"),
-                summarize_device_energy_metric(
-                    root,
-                    &power_run.trace_path,
-                    &power_windows,
-                    &trace_summary_window_fallback_modes(used_summary_window),
+                summarize_device_energy_metric_from_trace(
+                    &parsed_power_trace,
+                    &trace_summary_window_fallback_modes(parsed_power_trace.used_summary_window),
                 )?,
             );
         } else {
@@ -2724,6 +3048,8 @@ fn build_uikit_device_case(
                 "Energy trace status: skipped for this run; import a per-case Power Profiler .trace or raw .atrc later to add direct device energy.",
             ));
         }
+        headline_metric =
+            promote_uikit_device_case_clock(&mut metrics, spec.oxide_case_id, &mut notes)?;
     }
 
     Ok(UIKitPerfCase {
@@ -2737,6 +3063,7 @@ fn build_uikit_device_case(
         refresh_mode: String::from(refresh_mode.report_value()),
         measure_iterations,
         benchmark_iterations,
+        headline_metric,
         canonical_signpost_source,
         threshold_pct: UIKIT_DEVICE_THRESHOLD_PCT,
         metrics,
@@ -2746,6 +3073,137 @@ fn build_uikit_device_case(
 
 pub fn uikit_device_trace_artifact_exists(path: &Path) -> bool {
     path.is_file() || is_xctrace_trace_bundle(path)
+}
+
+fn oxide_onscreen_case_spec_for_case_id(case_id: &str) -> Option<&'static OxideOnscreenCaseSpec> {
+    OXIDE_ONSCREEN_CASE_SPECS.iter().find(|spec| spec.case_id == case_id)
+}
+
+fn normalize_compare_device_family(value: &str) -> Result<&'static str> {
+    match value {
+        "animation" => Ok("animation"),
+        "navigation" => Ok("navigation"),
+        "journey" => Ok("journey"),
+        "camera" | "image_pipeline" => Ok("camera"),
+        other => bail!(
+            "unknown compare-device-perf family `{}`; expected one of: animation, navigation, journey, camera",
+            other
+        ),
+    }
+}
+
+fn compare_device_family_for_uikit_spec(spec: &UIKitCaseSpec) -> Result<&'static str> {
+    if spec.case_id.contains("camera_preview") {
+        return Ok("camera");
+    }
+    if spec.case_id.contains(".animation.") {
+        return Ok("animation");
+    }
+    if spec.case_id.contains(".navigation.") {
+        return Ok("navigation");
+    }
+    if spec.case_id.contains(".journey.") {
+        return Ok("journey");
+    }
+    bail!(
+        "UIKit case `{}` is not part of the staged compare-device-perf family map",
+        spec.test_name
+    )
+}
+
+fn uikit_case_in_compare_device_watchable_smoke_spec(spec: &UIKitCaseSpec) -> bool {
+    matches!(
+        spec.test_name,
+        "testSpinnerSpin"
+            | "testOptimizedSpinnerSpin"
+            | "testButtonPressResponse"
+            | "testOptimizedButtonPressResponse"
+            | "testCollectionNavigationJourney"
+            | "testOptimizedCollectionNavigationJourney"
+            | "testCameraNV12LegacyLivePreview"
+            | "testCameraAVFoundationPreviewLayerLivePreview"
+    )
+}
+
+pub fn compare_device_official_families() -> Vec<String> {
+    let mut families = BTreeSet::new();
+    for spec in UIKIT_CASE_SPECS {
+        if uikit_case_in_official_device_battery_spec(spec) {
+            if let Ok(family) = compare_device_family_for_uikit_spec(spec) {
+                families.insert(String::from(family));
+            }
+        }
+    }
+    families.into_iter().collect()
+}
+
+pub fn uikit_case_in_compare_device_watchable_smoke(test_name: &str) -> Result<bool> {
+    let (case_id, _, _) = map_uikit_case(test_name)?;
+    let requested = vec![String::from(case_id)];
+    let spec = selected_uikit_case_specs(&requested)?
+        .into_iter()
+        .next()
+        .with_context(|| format!("missing UIKit case `{}`", test_name))?;
+    Ok(uikit_case_in_compare_device_watchable_smoke_spec(spec))
+}
+
+pub fn uikit_case_in_compare_device_family(test_name: &str, family: &str) -> Result<bool> {
+    let family = normalize_compare_device_family(family)?;
+    let (case_id, _, _) = map_uikit_case(test_name)?;
+    let requested = vec![String::from(case_id)];
+    let spec = selected_uikit_case_specs(&requested)?
+        .into_iter()
+        .next()
+        .with_context(|| format!("missing UIKit case `{}`", test_name))?;
+    Ok(compare_device_family_for_uikit_spec(spec)? == family)
+}
+
+fn selected_oxide_onscreen_case_specs(
+    requested: &[String],
+) -> Result<Vec<&'static OxideOnscreenCaseSpec>> {
+    let mut selected = Vec::new();
+    let mut seen = BTreeSet::new();
+    for spec in OXIDE_ONSCREEN_CASE_SPECS {
+        if requested.is_empty() {
+            selected.push(spec);
+            continue;
+        }
+        let matches_requested = requested.iter().any(|value| {
+            value == spec.test_name
+                || value == spec.case_id
+                || UIKIT_CASE_SPECS.iter().any(|uikit_spec| {
+                    (value == uikit_spec.test_name || value == uikit_spec.case_id)
+                        && uikit_spec.oxide_case_id == spec.case_id
+                })
+        });
+        if matches_requested && seen.insert(spec.case_id) {
+            selected.push(spec);
+        }
+    }
+    if selected.is_empty() {
+        bail!("unknown Oxide on-screen perf case(s) `{}`", requested.join(", "));
+    }
+    Ok(selected)
+}
+
+fn selected_oxide_onscreen_case_specs_for_uikit_specs(
+    selected_uikit_specs: &[&'static UIKitCaseSpec],
+) -> Result<Vec<&'static OxideOnscreenCaseSpec>> {
+    let mut selected = Vec::new();
+    let mut seen = BTreeSet::new();
+    for uikit_spec in selected_uikit_specs {
+        let spec =
+            oxide_onscreen_case_spec_for_case_id(uikit_spec.oxide_case_id).with_context(|| {
+                format!(
+                    "missing on-screen Oxide case mapping for `{}` ({})",
+                    uikit_spec.test_name, uikit_spec.oxide_case_id
+                )
+            })?;
+        if seen.insert(spec.case_id) {
+            selected.push(spec);
+        }
+    }
+    Ok(selected)
 }
 
 fn selected_uikit_case_specs(requested: &[String]) -> Result<Vec<&'static UIKitCaseSpec>> {
@@ -2767,13 +3225,62 @@ fn selected_uikit_case_specs(requested: &[String]) -> Result<Vec<&'static UIKitC
     Ok(selected)
 }
 
-fn uikit_case_in_official_device_battery_spec(spec: &UIKitCaseSpec) -> bool {
-    if !spec.test_name.starts_with("testCamera") {
-        return true;
+fn selected_uikit_case_specs_for_compare_stage(
+    requested: &[String],
+    stage: CompareDeviceRunStage,
+    family: Option<&str>,
+) -> Result<Vec<&'static UIKitCaseSpec>> {
+    if !requested.is_empty() {
+        return selected_uikit_case_specs(requested);
     }
+
+    let normalized_family = match family {
+        Some(value) => Some(normalize_compare_device_family(value)?),
+        None => None,
+    };
+    let mut selected = Vec::new();
+    for spec in selected_uikit_case_specs(&[])? {
+        let spec_family = compare_device_family_for_uikit_spec(spec)?;
+        if normalized_family.is_some() && normalized_family != Some(spec_family) {
+            continue;
+        }
+        if stage == CompareDeviceRunStage::WatchableSmoke
+            && !uikit_case_in_compare_device_watchable_smoke_spec(spec)
+        {
+            continue;
+        }
+        selected.push(spec);
+    }
+    if selected.is_empty() {
+        let detail = normalized_family.unwrap_or("all");
+        bail!("no compare-device-perf cases matched stage {:?} for family `{}`", stage, detail);
+    }
+    Ok(selected)
+}
+
+fn uikit_case_in_official_device_battery_spec(spec: &UIKitCaseSpec) -> bool {
     matches!(
-        spec.test_name,
-        "testCameraNV12LegacyLivePreview" | "testCameraAVFoundationPreviewLayerLivePreview"
+        spec.case_id,
+        "uikit.animation.spinner_spin"
+            | "uikit.optimized.animation.spinner_spin"
+            | "uikit.animation.image_zoom_pan"
+            | "uikit.optimized.animation.image_zoom_pan"
+            | "uikit.animation.anim_timeline_bars"
+            | "uikit.optimized.animation.anim_timeline_bars"
+            | "uikit.idiomatic.navigation.button_press.response"
+            | "uikit.optimized.navigation.button_press.response"
+            | "uikit.idiomatic.navigation.text_focus.response"
+            | "uikit.optimized.navigation.text_focus.response"
+            | "uikit.journey.input_form_submit"
+            | "uikit.optimized.journey.input_form_submit"
+            | "uikit.journey.collection_navigation"
+            | "uikit.optimized.journey.collection_navigation"
+            | "uikit.journey.zoom_image_gesture_cycle"
+            | "uikit.optimized.journey.zoom_image_gesture_cycle"
+            | "uikit.journey.orchestration_transition_modal"
+            | "uikit.optimized.journey.orchestration_transition_modal"
+            | "uikit.optimized.image_pipeline.camera_preview.nv12_legacy_live"
+            | "uikit.idiomatic.image_pipeline.camera_preview.avfoundation_preview_layer_live"
     )
 }
 
@@ -2787,31 +3294,37 @@ pub fn uikit_case_in_official_device_battery(test_name: &str) -> Result<bool> {
     Ok(uikit_case_in_official_device_battery_spec(spec))
 }
 
-fn validate_uikit_power_trace_inputs(
-    cli: &IosDevicePerfCli,
+fn validate_uikit_power_trace_inputs_for_specs(
+    trace_seconds: u64,
+    power_trace: Option<&Path>,
+    power_trace_root: Option<&Path>,
     selected_specs: &[&'static UIKitCaseSpec],
 ) -> Result<()> {
-    if cli.power_trace.is_some() && cli.power_trace_root.is_some() {
+    if power_trace.is_some() && power_trace_root.is_some() {
         bail!("pass either --power-trace or --power-trace-root, not both");
     }
-    if cli.power_trace.is_some() && selected_specs.len() != 1 {
+    if trace_seconds == 0 && (power_trace.is_some() || power_trace_root.is_some()) {
+        bail!("--trace-seconds 0 cannot be combined with --power-trace or --power-trace-root");
+    }
+    if power_trace.is_some() && selected_specs.len() != 1 {
         bail!("--power-trace requires exactly one selected UIKit device-perf case");
     }
-    if cli.power_trace.is_some() || cli.power_trace_root.is_some() {
+    if power_trace.is_some() || power_trace_root.is_some() {
         for spec in selected_specs {
-            let _ = resolve_uikit_power_trace_path(cli, spec)?;
+            let _ = resolve_uikit_power_trace_path(power_trace, power_trace_root, spec)?;
         }
     }
     Ok(())
 }
 
-fn load_uikit_device_case_power_trace(
+fn load_uikit_device_case_power_trace_from_paths(
     root: &Path,
-    cli: &IosDevicePerfCli,
+    power_trace: Option<&Path>,
+    power_trace_root: Option<&Path>,
     spec: &UIKitCaseSpec,
     case_dir: &Path,
 ) -> Result<DeviceTraceRun> {
-    let source_path = resolve_uikit_power_trace_path(cli, spec)?;
+    let source_path = resolve_uikit_power_trace_path(power_trace, power_trace_root, spec)?;
     let mut notes = vec![format!("Energy trace source: {}", source_path.display())];
     let trace_path = materialize_uikit_power_trace(
         root,
@@ -2825,14 +3338,18 @@ fn load_uikit_device_case_power_trace(
     Ok(DeviceTraceRun { trace_path, launch_stdout_path: PathBuf::new(), notes })
 }
 
-fn resolve_uikit_power_trace_path(cli: &IosDevicePerfCli, spec: &UIKitCaseSpec) -> Result<PathBuf> {
-    if let Some(path) = cli.power_trace.as_ref() {
+fn resolve_uikit_power_trace_path(
+    power_trace: Option<&Path>,
+    power_trace_root: Option<&Path>,
+    spec: &UIKitCaseSpec,
+) -> Result<PathBuf> {
+    if let Some(path) = power_trace {
         if path.exists() {
-            return Ok(path.clone());
+            return Ok(path.to_path_buf());
         }
         bail!("power trace path does not exist: {}", path.display());
     }
-    if let Some(root) = cli.power_trace_root.as_ref() {
+    if let Some(root) = power_trace_root {
         if let Some(path) = resolve_existing_uikit_power_trace(root, spec.test_name) {
             return Ok(path);
         }
@@ -3023,6 +3540,82 @@ fn ensure_uikit_device_ready(root: &Path, device: &UIKitPhysicalDevice) -> Resul
     )
 }
 
+pub fn parse_devicectl_lock_state_text(text: &str) -> Result<bool> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("• passcodeRequired: ") {
+            return match value.trim() {
+                "true" => Ok(true),
+                "false" => Ok(false),
+                other => bail!("unexpected passcodeRequired value `{}`", other),
+            };
+        }
+    }
+    bail!("missing `passcodeRequired` in devicectl lockState output")
+}
+
+pub fn parse_devicectl_display_backlight_active(text: &str) -> Result<bool> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("Main display backlight state: ") {
+            let lowercased = value.trim().to_ascii_lowercase();
+            if lowercased.contains("backlight is on") {
+                return Ok(true);
+            }
+            if lowercased.contains("backlight is off") {
+                return Ok(false);
+            }
+            bail!("unexpected backlight state `{}`", value.trim());
+        }
+    }
+    bail!("missing `Main display backlight state` in devicectl displays output")
+}
+
+fn ensure_uikit_device_interactive_ready(root: &Path, device: &UIKitPhysicalDevice) -> Result<()> {
+    let lock_state = run_command_capture_owned(
+        root,
+        "xcrun",
+        &[
+            String::from("devicectl"),
+            String::from("device"),
+            String::from("info"),
+            String::from("lockState"),
+            String::from("--device"),
+            device.udid.clone(),
+        ],
+    )?;
+    let passcode_required = parse_devicectl_lock_state_text(&lock_state)?;
+    let displays = run_command_capture_owned(
+        root,
+        "xcrun",
+        &[
+            String::from("devicectl"),
+            String::from("device"),
+            String::from("info"),
+            String::from("displays"),
+            String::from("--device"),
+            device.udid.clone(),
+        ],
+    )?;
+    let backlight_active = parse_devicectl_display_backlight_active(&displays)?;
+    if !passcode_required && backlight_active {
+        return Ok(());
+    }
+
+    let mut reasons = Vec::new();
+    if passcode_required {
+        reasons.push("the device is locked");
+    }
+    if !backlight_active {
+        reasons.push("the main display backlight is off");
+    }
+    bail!(
+        "device `{}` is not interactive enough for xcodebuild destination preflight: {}. Wake the screen, unlock the phone, keep it awake, and rerun the same command to resume from checkpoints.",
+        device.name,
+        reasons.join(" and ")
+    )
+}
+
 fn ensure_uikit_device_support_available(root: &Path, device: &UIKitPhysicalDevice) -> Result<()> {
     if device.product_type.is_empty() || device.os_version.is_empty() {
         bail!(
@@ -3132,14 +3725,77 @@ fn drain_uikit_processes(
     wait_for_uikit_process_clear(root, device, process_name, timeout)
 }
 
-fn wait_for_uikit_process_start(
+fn wait_for_uikit_process_start_or_launch_failure(
     root: &Path,
     device: &UIKitPhysicalDevice,
     process_name: &str,
+    launch_child: &mut Child,
+    launch_program: &str,
+    launch_args: &[String],
+    launch_stdout_path: &Path,
+    launch_stderr_path: &Path,
     timeout: Duration,
 ) -> Result<u64> {
     let start = std::time::Instant::now();
     while start.elapsed() < timeout {
+        if let Some(status) = launch_child
+            .try_wait()
+            .with_context(|| format!("probing {} {}", launch_program, launch_args.join(" ")))?
+        {
+            let pids = list_uikit_process_ids(root, device, process_name)?;
+            match pids.len() {
+                1 => return Ok(*pids.iter().next().unwrap_or(&0)),
+                2.. => {
+                    let listed =
+                        pids.into_iter().map(|pid| pid.to_string()).collect::<Vec<_>>().join(", ");
+                    bail!(
+                        "expected one `{}` process on device `{}`, but found {} after {} {} exited with status {}: {}",
+                        process_name,
+                        device.name,
+                        listed.split(", ").count(),
+                        launch_program,
+                        launch_args.join(" "),
+                        status.code().unwrap_or(-1),
+                        listed
+                    );
+                }
+                _ => {}
+            }
+            let stdout = fs::read_to_string(launch_stdout_path).unwrap_or_default();
+            let stderr = fs::read_to_string(launch_stderr_path).unwrap_or_default();
+            let stdout = stdout.trim();
+            let stderr = stderr.trim();
+            if stderr.is_empty() {
+                if stdout.is_empty() {
+                    bail!(
+                        "{} {} exited before process `{}` started on device `{}` with status {}",
+                        launch_program,
+                        launch_args.join(" "),
+                        process_name,
+                        device.name,
+                        status.code().unwrap_or(-1)
+                    );
+                }
+                bail!(
+                    "{} {} exited before process `{}` started on device `{}` with status {}: {}",
+                    launch_program,
+                    launch_args.join(" "),
+                    process_name,
+                    device.name,
+                    status.code().unwrap_or(-1),
+                    stdout
+                );
+            }
+            bail!(
+                "{} {} exited before process `{}` started on device `{}` with status {}: {}",
+                launch_program,
+                launch_args.join(" "),
+                process_name,
+                device.name,
+                status.code().unwrap_or(-1),
+                stderr
+            );
+        }
         let pids = list_uikit_process_ids(root, device, process_name)?;
         match pids.len() {
             0 => {}
@@ -3266,6 +3922,14 @@ pub fn console_output_contains_marker(stdout: &str, marker: &str) -> bool {
     stdout.lines().any(|line| line.trim() == marker)
 }
 
+pub fn latest_benchmark_build_failure(stdout: &str) -> Option<String> {
+    stdout.lines().rev().find_map(|line| {
+        line.trim()
+            .strip_prefix(OXIDE_BENCHMARK_BUILD_FAIL_PREFIX)
+            .map(|detail| detail.trim().to_owned())
+    })
+}
+
 pub fn notification_or_console_marker_observed(
     notification_stdout: &str,
     notification_name: &str,
@@ -3276,20 +3940,47 @@ pub fn notification_or_console_marker_observed(
         || console_output_contains_marker(console_stdout, console_marker)
 }
 
+pub fn start_console_marker_or_completion_observed(
+    completion_notification_stdout: &str,
+    completion_notification_name: &str,
+    console_stdout: &str,
+    start_console_marker: &str,
+    complete_console_marker: &str,
+) -> bool {
+    console_output_contains_marker(console_stdout, start_console_marker)
+        || notification_or_console_marker_observed(
+            completion_notification_stdout,
+            completion_notification_name,
+            console_stdout,
+            complete_console_marker,
+        )
+}
+
 pub fn is_unsupported_gpu_counter_profile_error(text: &str) -> bool {
     let lowered = text.to_ascii_lowercase();
     lowered.contains("selected counter profile is not supported on target device")
         || (lowered.contains("metal gpu counters") && lowered.contains("failed with status 21"))
 }
 
-fn is_missing_xctrace_attach_process_error(text: &str) -> bool {
+pub fn is_retryable_uikit_trace_handshake_error(text: &str) -> bool {
     let lowered = text.to_ascii_lowercase();
-    lowered.contains("cannot find process matching name")
-        || lowered.contains("cannot find process for provided pid")
+    (lowered.contains("timed out waiting for")
+        && (lowered.contains(&UIKIT_DEVICE_READY_NOTIFICATION.to_ascii_lowercase())
+            || lowered.contains(&UIKIT_DEVICE_COMPLETE_NOTIFICATION.to_ascii_lowercase())))
+        || (lowered.contains("exited without observing")
+            && lowered.contains("never appeared before the timeout")
+            && (lowered.contains(&UIKIT_DEVICE_READY_NOTIFICATION.to_ascii_lowercase())
+                || lowered.contains(&UIKIT_DEVICE_COMPLETE_NOTIFICATION.to_ascii_lowercase())))
+        || (lowered.contains("posted")
+            && lowered.contains(&UIKIT_DEVICE_START_NOTIFICATION.to_ascii_lowercase())
+            && lowered.contains("never appeared before the acknowledgment timeout"))
 }
 
-fn xctrace_attach_ready_delay_ms() -> u64 {
-    XCTRACE_ATTACH_READY_DELAY_MS
+pub fn is_retryable_xctrace_record_timeout_error(text: &str) -> bool {
+    let lowered = text.to_ascii_lowercase();
+    lowered.contains("xcrun xctrace record")
+        && lowered.contains("exceeded wall-time timeout")
+        && lowered.contains("before xctrace finished")
 }
 
 pub fn format_uikit_only_testing_identifier(
@@ -3386,16 +4077,21 @@ pub fn uikit_perf_environment_json_for_test_name(
     test_name: &str,
     refresh_mode: &str,
 ) -> Result<String> {
+    uikit_perf_environment_json_for_test_name_with_watch_capture(test_name, refresh_mode, false)
+}
+
+pub fn uikit_perf_environment_json_for_test_name_with_watch_capture(
+    test_name: &str,
+    refresh_mode: &str,
+    watch_capture: bool,
+) -> Result<String> {
     let requested = vec![String::from(test_name)];
     let spec = selected_uikit_case_specs(&requested)?
         .into_iter()
         .next()
         .with_context(|| format!("missing UIKit case `{}`", test_name))?;
-    let mode = UIKitDeviceRefreshMode::parse_cli(refresh_mode)?
-        .into_iter()
-        .next()
-        .with_context(|| format!("missing refresh mode from `{}`", refresh_mode))?;
-    uikit_perf_launch_environment_json(spec, mode)
+    let mode = UIKitDeviceRefreshMode::parse_cli(refresh_mode)?;
+    uikit_perf_launch_environment_json_with_trace_phases(spec, mode, false, watch_capture)
 }
 
 pub fn normalize_ios_version_for_device_support(value: &str) -> String {
@@ -3417,6 +4113,13 @@ fn uikit_case_uses_real_app_camera_host(spec: &UIKitCaseSpec) -> bool {
 
 fn uikit_case_requires_console_launch_summary(spec: &UIKitCaseSpec) -> bool {
     spec.test_name.contains("Camera")
+}
+
+fn uikit_launch_trace_buffer_secs(spec: &UIKitCaseSpec) -> u64 {
+    if uikit_case_uses_ui_test_target(spec) {
+        return XCTRACE_LAUNCH_UI_TEST_TRACE_BUFFER_SECS;
+    }
+    XCTRACE_LAUNCH_TRACE_BUFFER_SECS
 }
 
 fn uikit_case_uses_real_app_hybrid_visible_preview(spec: &UIKitCaseSpec) -> bool {
@@ -3455,10 +4158,31 @@ fn append_uikit_case_specific_perf_environment(
     }
 }
 
+fn append_watch_capture_perf_environment(env: &mut BTreeMap<String, String>, enabled: bool) {
+    if enabled {
+        env.insert(String::from(UIKIT_PERF_WATCH_MODE_ENV), String::from("1"));
+        env.insert(String::from(UIKIT_PERF_FRAME_CAPTURE_ENV), String::from("1"));
+        env.entry(String::from(UIKIT_PERF_FRAME_CAPTURE_EVERY_ENV))
+            .or_insert_with(|| String::from(UIKIT_PERF_FRAME_CAPTURE_DEFAULT_EVERY));
+        env.entry(String::from(UIKIT_PERF_FRAME_CAPTURE_MAX_ENV))
+            .or_insert_with(|| String::from(UIKIT_PERF_FRAME_CAPTURE_DEFAULT_MAX));
+        return;
+    }
+    for key in [
+        UIKIT_PERF_WATCH_MODE_ENV,
+        UIKIT_PERF_FRAME_CAPTURE_ENV,
+        UIKIT_PERF_FRAME_CAPTURE_EVERY_ENV,
+        UIKIT_PERF_FRAME_CAPTURE_MAX_ENV,
+    ] {
+        insert_env_if_present(env, key);
+    }
+}
+
 fn uikit_perf_launch_environment(
     spec: &UIKitCaseSpec,
     refresh_mode: UIKitDeviceRefreshMode,
     camera_trace_phases: bool,
+    watch_capture: bool,
 ) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     if let Some((scenario, route, style)) = uikit_launch_case_metadata(spec) {
@@ -3475,45 +4199,42 @@ fn uikit_perf_launch_environment(
         env.insert(String::from("OXIDE_PERF_PARKED"), String::from("1"));
         env.insert(String::from("OXIDE_PERF_CASE"), String::from(spec.test_name));
     }
-    if let Some(value) = refresh_mode.env_value() {
-        env.insert(String::from(UIKIT_PERF_REFRESH_MODE_ENV), String::from(value));
-    }
+    env.insert(String::from(UIKIT_PERF_REFRESH_MODE_ENV), String::from(refresh_mode.env_value()));
     append_uikit_case_specific_perf_environment(&mut env, spec);
     if camera_trace_phases {
         env.insert(String::from(UIKIT_PERF_CAMERA_TRACE_PHASES_ENV), String::from("1"));
     }
     append_forwarded_uikit_perf_environment(&mut env);
+    append_watch_capture_perf_environment(&mut env, watch_capture);
     env
-}
-
-fn uikit_perf_launch_environment_json(
-    spec: &UIKitCaseSpec,
-    refresh_mode: UIKitDeviceRefreshMode,
-) -> Result<String> {
-    uikit_perf_launch_environment_json_with_trace_phases(spec, refresh_mode, false)
 }
 
 fn uikit_perf_launch_environment_json_with_trace_phases(
     spec: &UIKitCaseSpec,
     refresh_mode: UIKitDeviceRefreshMode,
     camera_trace_phases: bool,
+    watch_capture: bool,
 ) -> Result<String> {
-    let env = uikit_perf_launch_environment(spec, refresh_mode, camera_trace_phases);
-    serde_json::to_string(&env)
-        .with_context(|| format!("encoding parked benchmark environment for `{}`", spec.test_name))
+    let env = uikit_perf_launch_environment(spec, refresh_mode, camera_trace_phases, watch_capture);
+    encode_environment_json(
+        &env,
+        &format!("encoding parked benchmark environment for `{}`", spec.test_name),
+    )
 }
 
-fn uikit_perf_xctrace_launch_env_args(
+fn uikit_perf_xctrace_launch_env_args_with_autostart(
     spec: &UIKitCaseSpec,
     refresh_mode: UIKitDeviceRefreshMode,
     camera_trace_phases: bool,
+    autostart: bool,
+    watch_capture: bool,
 ) -> Vec<String> {
-    let mut args = Vec::new();
-    for (key, value) in uikit_perf_launch_environment(spec, refresh_mode, camera_trace_phases) {
-        args.push(String::from("--env"));
-        args.push(format!("{}={}", key, value));
+    let mut env =
+        uikit_perf_launch_environment(spec, refresh_mode, camera_trace_phases, watch_capture);
+    if autostart {
+        env.insert(String::from("OXIDE_PERF_TRACE_AUTOSTART"), String::from("1"));
     }
-    args
+    environment_as_xctrace_args(env)
 }
 
 fn uikit_perf_launch_args(
@@ -3522,7 +4243,9 @@ fn uikit_perf_launch_args(
     spec: &UIKitCaseSpec,
     refresh_mode: UIKitDeviceRefreshMode,
     camera_trace_phases: bool,
+    watch_capture: bool,
 ) -> Result<Vec<String>> {
+    let env = uikit_perf_launch_environment(spec, refresh_mode, camera_trace_phases, watch_capture);
     Ok(vec![
         String::from("devicectl"),
         String::from("device"),
@@ -3533,17 +4256,58 @@ fn uikit_perf_launch_args(
         String::from("--console"),
         String::from("--terminate-existing"),
         String::from("--environment-variables"),
-        uikit_perf_launch_environment_json_with_trace_phases(
-            spec,
-            refresh_mode,
-            camera_trace_phases,
+        encode_environment_json(
+            &env,
+            &format!("encoding parked benchmark environment for `{}`", spec.test_name),
         )?,
         built_app.bundle_identifier.clone(),
     ])
 }
 
+fn oxide_onscreen_launch_spec(spec: &OxideOnscreenCaseSpec) -> UIKitCaseSpec {
+    UIKitCaseSpec {
+        test_name: spec.test_name,
+        case_id: spec.case_id,
+        oxide_case_id: spec.case_id,
+        note: spec.note,
+    }
+}
+
+fn load_resumable_oxide_onscreen_trace_run(
+    root: &Path,
+    case_dir: &Path,
+) -> Result<Option<DeviceTraceRun>> {
+    let trace_path = case_dir.join("metal.trace");
+    if !uikit_device_trace_artifact_exists(&trace_path) {
+        return Ok(None);
+    }
+    if export_xctrace_toc(root, &trace_path).is_err() {
+        return Ok(None);
+    }
+    let console_stdout_path = case_dir.join("launch.stdout.log");
+    let trace_stdout_path = case_dir.join("metal.target.stdout.log");
+    let launch_stdout_path = if console_stdout_path.is_file() {
+        console_stdout_path
+    } else if trace_stdout_path.is_file() {
+        trace_stdout_path
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(DeviceTraceRun {
+        trace_path,
+        launch_stdout_path,
+        notes: vec![String::from(
+            "GPU trace status: reused a completed Metal trace artifact from the existing result root.",
+        )],
+    }))
+}
+
 fn append_forwarded_uikit_perf_environment(env: &mut BTreeMap<String, String>) {
     for key in [
+        UIKIT_PERF_WATCH_MODE_ENV,
+        UIKIT_PERF_FRAME_CAPTURE_ENV,
+        UIKIT_PERF_FRAME_CAPTURE_EVERY_ENV,
+        UIKIT_PERF_FRAME_CAPTURE_MAX_ENV,
         UIKIT_PERF_MEASURE_ITERATIONS_ENV,
         UIKIT_PERF_BENCHMARK_ITERATIONS_ENV,
         UIKIT_PERF_CAMERA_MAX_DRAWABLE_COUNT_ENV,
@@ -3569,6 +4333,19 @@ fn append_forwarded_uikit_perf_environment(env: &mut BTreeMap<String, String>) {
     if !env.contains_key(UIKIT_PERF_CAMERA_MAX_DRAWABLE_COUNT_ENV) {
         env.insert(String::from(UIKIT_PERF_CAMERA_MAX_DRAWABLE_COUNT_ENV), String::from("2"));
     }
+}
+
+fn encode_environment_json(env: &BTreeMap<String, String>, context: &str) -> Result<String> {
+    serde_json::to_string(env).with_context(|| String::from(context))
+}
+
+fn environment_as_xctrace_args(env: BTreeMap<String, String>) -> Vec<String> {
+    let mut args = Vec::with_capacity(env.len() * 2);
+    for (key, value) in env {
+        args.push(String::from("--env"));
+        args.push(format!("{}={}", key, value));
+    }
+    args
 }
 
 fn uikit_device_notification_observe_args(
@@ -3692,13 +4469,52 @@ fn run_uikit_device_build_for_testing(
     development_team: &str,
     derived_data_path: &Path,
 ) -> Result<()> {
-    remove_existing_path(derived_data_path)?;
+    run_ios_build_for_testing(
+        root,
+        "-project",
+        project,
+        DEFAULT_UIKIT_SCHEME,
+        destination,
+        development_team,
+        derived_data_path,
+    )
+}
+
+fn run_react_device_build_for_testing(
+    root: &Path,
+    workspace: &Path,
+    development_team: &str,
+    derived_data_path: &Path,
+) -> Result<()> {
+    run_ios_build_for_testing(
+        root,
+        "-workspace",
+        workspace,
+        DEFAULT_REACT_DEVICE_SCHEME,
+        "generic/platform=iOS",
+        development_team,
+        derived_data_path,
+    )
+}
+
+fn run_ios_build_for_testing(
+    root: &Path,
+    container_flag: &str,
+    container_path: &Path,
+    scheme: &str,
+    destination: &str,
+    development_team: &str,
+    derived_data_path: &Path,
+) -> Result<()> {
+    if let Some(parent) = derived_data_path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
     let mut args = vec![
         String::from("build-for-testing"),
-        String::from("-project"),
-        project.to_string_lossy().into_owned(),
+        String::from(container_flag),
+        container_path.to_string_lossy().into_owned(),
         String::from("-scheme"),
-        String::from(DEFAULT_UIKIT_SCHEME),
+        String::from(scheme),
         String::from("-destination"),
         String::from(destination),
         String::from("-derivedDataPath"),
@@ -3710,35 +4526,586 @@ fn run_uikit_device_build_for_testing(
     run_command_owned(root, "xcodebuild", &args, false)
 }
 
-fn run_react_device_build_for_testing(
-    root: &Path,
-    workspace: &Path,
-    development_team: &str,
-    derived_data_path: &Path,
+fn prepare_result_root(result_root: &Path, preserved_paths: &[&Path]) -> Result<()> {
+    if !result_root.exists() {
+        fs::create_dir_all(result_root)
+            .with_context(|| format!("creating {}", result_root.display()))?;
+        return Ok(());
+    }
+
+    for entry in
+        fs::read_dir(result_root).with_context(|| format!("reading {}", result_root.display()))?
+    {
+        let entry = entry.with_context(|| format!("reading {}", result_root.display()))?;
+        let path = entry.path();
+        if preserved_paths.iter().any(|preserved| path == **preserved) {
+            continue;
+        }
+        remove_existing_path(&path)?;
+    }
+    Ok(())
+}
+
+fn uikit_result_root_stamp_path(result_root: &Path) -> PathBuf {
+    result_root.join(UIKIT_RESULT_ROOT_STAMP_FILE)
+}
+
+fn load_uikit_result_root_build_stamp(result_root: &Path) -> Result<Option<UIKitHostBuildStamp>> {
+    let path = uikit_result_root_stamp_path(result_root);
+    match fs::read_to_string(&path) {
+        Ok(text) => {
+            let stamp = serde_json::from_str(&text)
+                .with_context(|| format!("parsing {}", path.display()))?;
+            Ok(Some(stamp))
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+fn write_uikit_result_root_build_stamp(
+    result_root: &Path,
+    stamp: &UIKitHostBuildStamp,
 ) -> Result<()> {
-    remove_existing_path(derived_data_path)?;
-    let mut args = vec![
-        String::from("build-for-testing"),
-        String::from("-workspace"),
-        workspace.to_string_lossy().into_owned(),
-        String::from("-scheme"),
-        String::from(DEFAULT_REACT_DEVICE_SCHEME),
-        String::from("-destination"),
-        String::from("generic/platform=iOS"),
-        String::from("-derivedDataPath"),
-        derived_data_path.to_string_lossy().into_owned(),
-        String::from("-jobs"),
-        host_parallel_job_count(),
-    ];
-    append_uikit_device_signing_args(&mut args, development_team);
-    run_command_owned(root, "xcodebuild", &args, false)
+    fs::create_dir_all(result_root)
+        .with_context(|| format!("creating {}", result_root.display()))?;
+    let path = uikit_result_root_stamp_path(result_root);
+    let json = serde_json::to_string_pretty(stamp)
+        .with_context(|| format!("serializing {}", path.display()))?;
+    fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
+}
+
+pub fn prepare_resumable_uikit_device_result_root(
+    result_root: &Path,
+    preserved_paths: &[&Path],
+    expected_stamp: &UIKitHostBuildStamp,
+    label: &str,
+) -> Result<()> {
+    let has_resumable_artifacts = result_root_has_resumable_device_artifacts(result_root)?;
+    let saved_stamp = load_uikit_result_root_build_stamp(result_root)?;
+    if has_resumable_artifacts && saved_stamp.as_ref() == Some(expected_stamp) {
+        println!("Resuming existing {} result root at {}.", label, result_root.display());
+        return Ok(());
+    }
+    if has_resumable_artifacts {
+        let reason = if saved_stamp.is_some() {
+            "the host build fingerprint changed"
+        } else {
+            "it predates resumable build fingerprinting"
+        };
+        println!(
+            "Discarding stale {} result root at {} because {}.",
+            label,
+            result_root.display(),
+            reason
+        );
+    }
+    prepare_result_root(result_root, preserved_paths)?;
+    write_uikit_result_root_build_stamp(result_root, expected_stamp)
+}
+
+fn result_root_has_resumable_device_artifacts(result_root: &Path) -> Result<bool> {
+    if !result_root.exists() {
+        return Ok(false);
+    }
+    let mut stack = Vec::new();
+    for entry in
+        fs::read_dir(result_root).with_context(|| format!("reading {}", result_root.display()))?
+    {
+        let entry = entry.with_context(|| format!("reading {}", result_root.display()))?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if name == "derived-data" {
+            continue;
+        }
+        stack.push(path);
+    }
+    while let Some(path) = stack.pop() {
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if name == "current.json"
+            || name == "current.partial.json"
+            || name == "progress.json"
+            || name == "case.json"
+            || name.ends_with(".xcresult")
+            || name.ends_with(".trace")
+        {
+            return Ok(true);
+        }
+        if path.is_dir() {
+            for child in
+                fs::read_dir(&path).with_context(|| format!("reading {}", path.display()))?
+            {
+                let child = child.with_context(|| format!("reading {}", path.display()))?;
+                stack.push(child.path());
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn uikit_progress_json_path(result_root: &Path) -> PathBuf {
+    result_root.join("progress.json")
+}
+
+fn uikit_progress_markdown_path(result_root: &Path) -> PathBuf {
+    result_root.join("progress.md")
+}
+
+fn uikit_case_checkpoint_json_path(case_dir: &Path) -> PathBuf {
+    case_dir.join("case.json")
+}
+
+fn write_device_progress_state(
+    result_root: &Path,
+    title: &str,
+    state: &UIKitProgressState,
+) -> Result<()> {
+    let json_path = uikit_progress_json_path(result_root);
+    ensure_parent_dir(&json_path)?;
+    let json =
+        serde_json::to_string_pretty(state).with_context(|| "serializing UIKit progress state")?;
+    fs::write(&json_path, json).with_context(|| format!("writing {}", json_path.display()))?;
+
+    let markdown_path = uikit_progress_markdown_path(result_root);
+    let mut markdown = String::new();
+    markdown.push_str(&format!("# {}\n\n", title));
+    markdown.push_str(&format!("- Stage: `{}`\n", state.stage));
+    markdown.push_str(&format!("- Refresh mode: `{}`\n", state.refresh_mode));
+    markdown.push_str(&format!(
+        "- Metrics shards: `{}/{}`\n",
+        state.metrics_shards_completed, state.metrics_shards_total
+    ));
+    markdown.push_str(&format!(
+        "- Completed cases: `{}/{}`\n",
+        state.completed_cases, state.total_cases
+    ));
+    if let Some(case_id) = state.last_case_id.as_ref() {
+        markdown.push_str(&format!("- Last case id: `{}`\n", case_id));
+    }
+    if let Some(test_name) = state.last_test_name.as_ref() {
+        markdown.push_str(&format!("- Last test name: `{}`\n", test_name));
+    }
+    fs::write(&markdown_path, markdown)
+        .with_context(|| format!("writing {}", markdown_path.display()))
+}
+
+fn write_uikit_progress_state(result_root: &Path, state: &UIKitProgressState) -> Result<()> {
+    write_device_progress_state(result_root, "UIKit Device Progress", state)
+}
+
+fn write_oxide_progress_state(result_root: &Path, state: &UIKitProgressState) -> Result<()> {
+    write_device_progress_state(result_root, "Oxide Device Progress", state)
+}
+
+fn compare_device_proof_status_json_path(result_root: &Path) -> PathBuf {
+    result_root.join(COMPARE_DEVICE_PROOF_STATUS_FILE)
+}
+
+fn compare_device_proof_status_markdown_path(result_root: &Path) -> PathBuf {
+    result_root.join(COMPARE_DEVICE_PROOF_STATUS_MARKDOWN_FILE)
+}
+
+pub fn load_compare_device_proof_status(
+    result_root: &Path,
+) -> Result<Option<CompareDeviceProofStatus>> {
+    let path = compare_device_proof_status_json_path(result_root);
+    match fs::read_to_string(&path) {
+        Ok(text) => {
+            let status = serde_json::from_str(&text)
+                .with_context(|| format!("parsing {}", path.display()))?;
+            Ok(Some(status))
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+fn write_compare_device_proof_status(
+    result_root: &Path,
+    status: &CompareDeviceProofStatus,
+) -> Result<()> {
+    fs::create_dir_all(result_root)
+        .with_context(|| format!("creating {}", result_root.display()))?;
+    let json_path = compare_device_proof_status_json_path(result_root);
+    let json = serde_json::to_string_pretty(status)
+        .with_context(|| format!("serializing {}", json_path.display()))?;
+    fs::write(&json_path, json).with_context(|| format!("writing {}", json_path.display()))?;
+
+    let markdown_path = compare_device_proof_status_markdown_path(result_root);
+    let mut markdown = String::new();
+    markdown.push_str("# Compare Device Proof Status\n\n");
+    markdown.push_str(&format!(
+        "- Families: `{}`\n",
+        status.families.keys().cloned().collect::<Vec<_>>().join(", ")
+    ));
+    markdown.push_str("\n| Family | Watchable smoke | Family proof |\n");
+    markdown.push_str("| --- | --- | --- |\n");
+    for (family, state) in &status.families {
+        markdown.push_str(&format!(
+            "| `{}` | `{}` | `{}` |\n",
+            family, state.watchable_smoke_passed, state.family_proof_passed
+        ));
+    }
+    fs::write(&markdown_path, markdown)
+        .with_context(|| format!("writing {}", markdown_path.display()))
+}
+
+pub fn compare_device_missing_promotion_families(
+    status: Option<&CompareDeviceProofStatus>,
+    expected_stamp: &UIKitHostBuildStamp,
+) -> Vec<String> {
+    let Some(status) = status else {
+        return compare_device_official_families();
+    };
+    if &status.build_stamp != expected_stamp {
+        return compare_device_official_families();
+    }
+    compare_device_official_families()
+        .into_iter()
+        .filter(|family| {
+            !status.families.get(family).map(|state| state.family_proof_passed).unwrap_or(false)
+        })
+        .collect()
+}
+
+fn update_compare_device_proof_status(
+    result_root: &Path,
+    expected_stamp: &UIKitHostBuildStamp,
+    stage: CompareDeviceRunStage,
+    families: &[String],
+) -> Result<()> {
+    let mut status = match load_compare_device_proof_status(result_root)? {
+        Some(existing) if existing.build_stamp == *expected_stamp => existing,
+        _ => CompareDeviceProofStatus {
+            build_stamp: expected_stamp.clone(),
+            families: BTreeMap::new(),
+        },
+    };
+    for family in families {
+        let entry = status.families.entry(family.clone()).or_default();
+        match stage {
+            CompareDeviceRunStage::WatchableSmoke => {
+                entry.watchable_smoke_passed = true;
+            }
+            CompareDeviceRunStage::FamilyProof => {
+                entry.family_proof_passed = true;
+            }
+            CompareDeviceRunStage::Promotion => {}
+        }
+    }
+    write_compare_device_proof_status(result_root, &status)
+}
+
+fn compare_device_stage_result_root(
+    result_root: &Path,
+    stage: CompareDeviceRunStage,
+    family: Option<&str>,
+) -> PathBuf {
+    match stage {
+        CompareDeviceRunStage::Promotion => result_root.to_path_buf(),
+        CompareDeviceRunStage::WatchableSmoke => {
+            result_root.join("watchable").join(family.unwrap_or("all"))
+        }
+        CompareDeviceRunStage::FamilyProof => result_root
+            .join("family")
+            .join(family.expect("family proof stage must provide a family name")),
+    }
+}
+
+fn load_uikit_case_checkpoint(
+    case_dir: &Path,
+    spec: &UIKitCaseSpec,
+    refresh_mode: UIKitDeviceRefreshMode,
+) -> Result<Option<UIKitPerfCase>> {
+    let checkpoint_path = uikit_case_checkpoint_json_path(case_dir);
+    if !checkpoint_path.is_file() {
+        return Ok(None);
+    }
+    let case = load_uikit_report_case(&checkpoint_path)?;
+    if case.id != spec.case_id || case.refresh_mode != refresh_mode.report_value() {
+        return Ok(None);
+    }
+    Ok(Some(case))
+}
+
+fn load_uikit_report_case(path: &Path) -> Result<UIKitPerfCase> {
+    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_str::<UIKitPerfCase>(&text)
+        .with_context(|| format!("parsing UIKit perf case checkpoint {}", path.display()))
+}
+
+fn write_uikit_case_checkpoint(case_dir: &Path, case: &UIKitPerfCase) -> Result<()> {
+    let checkpoint_path = uikit_case_checkpoint_json_path(case_dir);
+    ensure_parent_dir(&checkpoint_path)?;
+    let json =
+        serde_json::to_string_pretty(case).with_context(|| "serializing UIKit case checkpoint")?;
+    fs::write(&checkpoint_path, json)
+        .with_context(|| format!("writing {}", checkpoint_path.display()))
+}
+
+fn load_oxide_case_checkpoint(
+    case_dir: &Path,
+    spec: &OxideOnscreenCaseSpec,
+    refresh_mode: UIKitDeviceRefreshMode,
+) -> Result<Option<PerfCaseResult>> {
+    let checkpoint_path = uikit_case_checkpoint_json_path(case_dir);
+    if !checkpoint_path.is_file() {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(&checkpoint_path)
+        .with_context(|| format!("reading {}", checkpoint_path.display()))?;
+    let case = serde_json::from_str::<PerfCaseResult>(&text).with_context(|| {
+        format!("parsing Oxide perf case checkpoint {}", checkpoint_path.display())
+    })?;
+    if case.id != spec.case_id || case.refresh_mode != refresh_mode.report_value() {
+        return Ok(None);
+    }
+    Ok(Some(case))
+}
+
+fn write_oxide_case_checkpoint(case_dir: &Path, case: &PerfCaseResult) -> Result<()> {
+    let checkpoint_path = uikit_case_checkpoint_json_path(case_dir);
+    ensure_parent_dir(&checkpoint_path)?;
+    let json =
+        serde_json::to_string_pretty(case).with_context(|| "serializing Oxide case checkpoint")?;
+    fs::write(&checkpoint_path, json)
+        .with_context(|| format!("writing {}", checkpoint_path.display()))
+}
+
+fn ensure_generated_uikit_project(root: &Path, spec: &Path) -> Result<()> {
+    run_command_owned(
+        root,
+        "xcodegen",
+        &[
+            String::from("generate"),
+            String::from("--use-cache"),
+            String::from("--spec"),
+            spec.to_string_lossy().into_owned(),
+        ],
+        false,
+    )
+}
+
+fn hash_environment_pairs(environment: &[(String, String)]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    environment.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn prepare_uikit_metrics_shards(
+    specs: &[&'static UIKitCaseSpec],
+    refresh_mode: UIKitDeviceRefreshMode,
+) -> Vec<UIKitMetricsShard> {
+    let mut shards = Vec::new();
+    let mut current_specs = Vec::new();
+    let mut current_environment = None::<Vec<(String, String)>>;
+    let mut current_uses_ui_tests = None::<bool>;
+
+    for spec in specs {
+        let uses_ui_tests = uikit_case_uses_ui_test_target(spec);
+        let environment = uikit_device_perf_environment_for_specs(refresh_mode, &[*spec]);
+        let should_split = current_specs.len() == UIKIT_DEVICE_METRICS_BATCH_MAX_CASES
+            || current_uses_ui_tests != Some(uses_ui_tests)
+            || current_environment.as_ref() != Some(&environment);
+        if should_split && !current_specs.is_empty() {
+            shards.push(UIKitMetricsShard {
+                specs: core::mem::take(&mut current_specs),
+                environment: current_environment.take().unwrap_or_default(),
+            });
+        }
+        if current_specs.is_empty() {
+            current_environment = Some(environment);
+            current_uses_ui_tests = Some(uses_ui_tests);
+        }
+        current_specs.push(*spec);
+    }
+
+    if !current_specs.is_empty() {
+        shards.push(UIKitMetricsShard {
+            specs: current_specs,
+            environment: current_environment.unwrap_or_default(),
+        });
+    }
+    if shards.is_empty() {
+        shards.push(UIKitMetricsShard {
+            specs: Vec::new(),
+            environment: uikit_device_perf_environment(refresh_mode),
+        });
+    }
+    shards
+}
+
+fn hash_file_metadata_recursive(path: &Path, hasher: &mut DefaultHasher) -> Result<()> {
+    let metadata = fs::metadata(path).with_context(|| format!("reading {}", path.display()))?;
+    path.to_string_lossy().hash(hasher);
+    metadata.len().hash(hasher);
+    metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos())
+        .unwrap_or_default()
+        .hash(hasher);
+    metadata.is_dir().hash(hasher);
+    if metadata.is_dir() {
+        let mut children = fs::read_dir(path)
+            .with_context(|| format!("reading {}", path.display()))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| format!("reading {}", path.display()))?;
+        children.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
+        for child in children {
+            hash_file_metadata_recursive(&child.path(), hasher)?;
+        }
+    }
+    Ok(())
+}
+
+fn fingerprint_uikit_host_build_inputs(root: &Path, spec: &Path, project: &Path) -> Result<u64> {
+    let mut hasher = DefaultHasher::new();
+    for path in [
+        spec.to_path_buf(),
+        project.to_path_buf(),
+        root.join("Cargo.toml"),
+        root.join("Cargo.lock"),
+        root.join("host/ios-app/App"),
+        root.join("host/ios-app/oxide-host-ios"),
+        root.join("crates"),
+    ] {
+        if path.exists() {
+            hash_file_metadata_recursive(&path, &mut hasher)?;
+        }
+    }
+    Ok(hasher.finish())
+}
+
+fn uikit_host_build_stamp_path(derived_data_path: &Path) -> PathBuf {
+    derived_data_path.join(UIKIT_HOST_BUILD_STAMP_FILE)
+}
+
+fn load_uikit_host_build_stamp(derived_data_path: &Path) -> Result<Option<UIKitHostBuildStamp>> {
+    let path = uikit_host_build_stamp_path(derived_data_path);
+    match fs::read_to_string(&path) {
+        Ok(text) => {
+            let stamp = serde_json::from_str(&text)
+                .with_context(|| format!("parsing {}", path.display()))?;
+            Ok(Some(stamp))
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+fn write_uikit_host_build_stamp(
+    derived_data_path: &Path,
+    stamp: &UIKitHostBuildStamp,
+) -> Result<()> {
+    fs::create_dir_all(derived_data_path)
+        .with_context(|| format!("creating {}", derived_data_path.display()))?;
+    let path = uikit_host_build_stamp_path(derived_data_path);
+    let json = serde_json::to_string_pretty(stamp)
+        .with_context(|| format!("serializing {}", path.display()))?;
+    fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
+}
+
+fn expected_uikit_host_build_stamp(
+    root: &Path,
+    spec: &Path,
+    project: &Path,
+    destination: &str,
+    development_team: &str,
+) -> Result<UIKitHostBuildStamp> {
+    Ok(UIKitHostBuildStamp {
+        destination: String::from(destination),
+        development_team: String::from(development_team),
+        source_fingerprint: fingerprint_uikit_host_build_inputs(root, spec, project)?,
+    })
+}
+
+fn prepare_uikit_host_device_build_context(
+    root: &Path,
+    spec: &Path,
+    project: &Path,
+    device: &UIKitPhysicalDevice,
+    requested_team: Option<&str>,
+) -> Result<UIKitHostBuildContext> {
+    ensure_uikit_device_ready(root, device)?;
+    ensure_uikit_device_support_available(root, device)?;
+    let destination = format!("platform=iOS,id={}", device.udid);
+    let development_team =
+        resolve_uikit_development_team(root, requested_team, Some(device.udid.as_str()))?;
+    ensure_generated_uikit_project(root, spec)?;
+    let expected_stamp =
+        expected_uikit_host_build_stamp(root, spec, project, &destination, &development_team)?;
+    Ok(UIKitHostBuildContext { destination, development_team, expected_stamp })
+}
+
+fn uikit_host_build_can_be_reused(
+    derived_data_path: &Path,
+    expected_stamp: &UIKitHostBuildStamp,
+) -> Result<bool> {
+    let Some(saved_stamp) = load_uikit_host_build_stamp(derived_data_path)? else {
+        return Ok(false);
+    };
+    if &saved_stamp != expected_stamp {
+        return Ok(false);
+    }
+    if resolve_built_uikit_app(derived_data_path).is_err() {
+        return Ok(false);
+    }
+    if resolve_built_xctestrun_path(derived_data_path, DEFAULT_UIKIT_SCHEME).is_err() {
+        return Ok(false);
+    }
+    let built_app = resolve_built_uikit_app(derived_data_path)?;
+    if !built_app.app_path.exists() || !built_app.info_plist_path.exists() {
+        return Ok(false);
+    }
+    println!("reusing unchanged iOS build artifacts at {}", derived_data_path.display());
+    Ok(true)
+}
+
+fn prepare_uikit_host_device_build(
+    root: &Path,
+    project: &Path,
+    device: &UIKitPhysicalDevice,
+    derived_data_path: &Path,
+    reuse_derived_data: Option<&Path>,
+    context: &UIKitHostBuildContext,
+) -> Result<PreparedUIKitHostBuild> {
+    if reuse_derived_data.is_some() {
+        if !derived_data_path.exists() {
+            bail!(
+                "requested --reuse-derived-data path does not exist: {}",
+                derived_data_path.display()
+            );
+        }
+    } else if !uikit_host_build_can_be_reused(derived_data_path, &context.expected_stamp)? {
+        run_uikit_device_build_for_testing(
+            root,
+            project,
+            &context.destination,
+            &context.development_team,
+            derived_data_path,
+        )?;
+        write_uikit_host_build_stamp(derived_data_path, &context.expected_stamp)?;
+    }
+    let built_app = resolve_built_uikit_app(derived_data_path)?;
+    let uikit_xctestrun_path =
+        resolve_built_xctestrun_path(derived_data_path, DEFAULT_UIKIT_SCHEME)?;
+    install_uikit_device_app(root, device, &built_app)?;
+    Ok(PreparedUIKitHostBuild {
+        destination: context.destination.clone(),
+        built_app,
+        uikit_xctestrun_path,
+    })
 }
 
 fn uikit_device_perf_environment(refresh_mode: UIKitDeviceRefreshMode) -> Vec<(String, String)> {
     let mut env = BTreeMap::new();
-    if let Some(value) = refresh_mode.env_value() {
-        env.insert(String::from(UIKIT_PERF_REFRESH_MODE_ENV), String::from(value));
-    }
+    env.insert(String::from(UIKIT_PERF_REFRESH_MODE_ENV), String::from(refresh_mode.env_value()));
     append_forwarded_uikit_perf_environment(&mut env);
     env.into_iter().collect()
 }
@@ -3763,10 +5130,7 @@ pub fn uikit_device_perf_environment_for_test_name(
         .iter()
         .find(|spec| spec.test_name == test_name || spec.case_id == test_name)
         .with_context(|| format!("unknown UIKit perf case `{}`", test_name))?;
-    let mode = UIKitDeviceRefreshMode::parse_cli(refresh_mode)?
-        .into_iter()
-        .next()
-        .with_context(|| format!("missing refresh mode from `{}`", refresh_mode))?;
+    let mode = UIKitDeviceRefreshMode::parse_cli(refresh_mode)?;
     Ok(uikit_device_perf_environment_for_specs(mode, &[spec]))
 }
 
@@ -3778,7 +5142,9 @@ pub fn prepare_uikit_device_perf_xctestrun(
         .file_stem()
         .and_then(|value| value.to_str())
         .with_context(|| format!("missing xctestrun file stem for {}", source_path.display()))?;
-    let output_path = source_path.with_file_name(format!("{}-perf.xctestrun", stem));
+    let env_hash = hash_environment_pairs(environment);
+    let output_path =
+        source_path.with_file_name(format!("{}-perf-{:016x}.xctestrun", stem, env_hash));
     let mut plist_value: PlValue = plist::from_file(source_path)
         .with_context(|| format!("reading {}", source_path.display()))?;
     let mut applied_targets = 0usize;
@@ -3806,8 +5172,14 @@ pub fn prepare_uikit_device_perf_xctestrun(
             DEFAULT_UIKIT_UI_TEST_TARGET
         );
     }
-    plist::to_file_xml(&output_path, &plist_value)
-        .with_context(|| format!("writing {}", output_path.display()))?;
+    let mut encoded = Vec::new();
+    plist::to_writer_xml(&mut encoded, &plist_value)
+        .with_context(|| format!("encoding {}", output_path.display()))?;
+    let existing = fs::read(&output_path).ok();
+    if existing.as_deref() != Some(encoded.as_slice()) {
+        fs::write(&output_path, encoded)
+            .with_context(|| format!("writing {}", output_path.display()))?;
+    }
     Ok(output_path)
 }
 
@@ -3882,6 +5254,7 @@ fn run_react_device_perf_case(
     let trace_stderr_path = result_root.join("metal.stderr.log");
     let trace_started_stdout_path = result_root.join("trace-started.stdout.log");
     let trace_started_stderr_path = result_root.join("trace-started.stderr.log");
+    ensure_uikit_device_interactive_ready(root, device)?;
     remove_existing_path(&result_bundle)?;
     remove_existing_path(&stdout_path)?;
     remove_existing_path(&stderr_path)?;
@@ -4073,6 +5446,947 @@ fn install_uikit_device_app(
     )
 }
 
+fn perf_frame_capture_case_component(test_name: &str) -> String {
+    let value = test_name
+        .chars()
+        .map(
+            |ch| {
+                if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                    ch
+                } else {
+                    '_'
+                }
+            },
+        )
+        .collect::<String>();
+    let trimmed = value.trim_matches('_');
+    if trimmed.is_empty() {
+        return String::from("case");
+    }
+    String::from(trimmed)
+}
+
+pub fn perf_frame_capture_relative_source_for_test_name(test_name: &str) -> String {
+    format!(
+        "{}/{}",
+        UIKIT_PERF_FRAME_CAPTURE_RELATIVE_ROOT,
+        perf_frame_capture_case_component(test_name)
+    )
+}
+
+fn case_rendered_frames_dir(case_dir: &Path) -> PathBuf {
+    case_dir.join("rendered-frames")
+}
+
+fn directory_contains_pngs(path: &Path) -> Result<bool> {
+    if !path.is_dir() {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(path).with_context(|| format!("reading {}", path.display()))? {
+        let entry = entry.with_context(|| format!("reading {}", path.display()))?;
+        let entry_path = entry.path();
+        if entry_path.is_file()
+            && entry_path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(|value| value.eq_ignore_ascii_case("png"))
+                .unwrap_or(false)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn copy_device_app_capture_dir(
+    root: &Path,
+    device: &UIKitPhysicalDevice,
+    built_app: &BuiltUIKitApp,
+    test_name: &str,
+    case_dir: &Path,
+) -> Result<()> {
+    let rendered_frames_dir = case_rendered_frames_dir(case_dir);
+    remove_existing_path(&rendered_frames_dir)?;
+    let args = vec![
+        String::from("devicectl"),
+        String::from("device"),
+        String::from("copy"),
+        String::from("from"),
+        String::from("--device"),
+        device.udid.clone(),
+        String::from("--source"),
+        perf_frame_capture_relative_source_for_test_name(test_name),
+        String::from("--destination"),
+        rendered_frames_dir.to_string_lossy().into_owned(),
+        String::from("--domain-type"),
+        String::from("appDataContainer"),
+        String::from("--domain-identifier"),
+        built_app.bundle_identifier.clone(),
+        String::from("--remove-existing-content"),
+        String::from("true"),
+    ];
+    run_command_owned(root, "xcrun", &args, false).with_context(|| {
+        format!(
+            "copying app-rendered frames for `{}` from `{}` into {}",
+            test_name,
+            built_app.bundle_identifier,
+            rendered_frames_dir.display()
+        )
+    })?;
+    if !directory_contains_pngs(&rendered_frames_dir)? {
+        bail!(
+            "copied app-rendered frames for `{}` into {}, but no PNGs were present",
+            test_name,
+            rendered_frames_dir.display()
+        );
+    }
+    Ok(())
+}
+
+fn capture_uikit_device_report(
+    root: &Path,
+    device: &UIKitPhysicalDevice,
+    prepared_build: &PreparedUIKitHostBuild,
+    selected_specs: &[&'static UIKitCaseSpec],
+    refresh_mode: UIKitDeviceRefreshMode,
+    result_root: &Path,
+    trace_seconds: u64,
+    power_trace: Option<&Path>,
+    power_trace_root: Option<&Path>,
+    watch_capture: bool,
+) -> Result<UIKitPerfReport> {
+    let trace_enabled = uikit_device_trace_enabled(trace_seconds);
+    let include_energy = trace_enabled && (power_trace.is_some() || power_trace_root.is_some());
+    let metrics_shard_count = prepare_uikit_metrics_shards(selected_specs, refresh_mode).len();
+    let metrics_batch = run_uikit_device_metrics_batch(
+        root,
+        &prepared_build.uikit_xctestrun_path,
+        &prepared_build.destination,
+        selected_specs,
+        refresh_mode,
+        result_root,
+    )?;
+
+    let total_cases = selected_specs.len();
+    let mut report_cases_by_id = BTreeMap::<String, UIKitPerfCase>::new();
+    let mut skipped_case_notes = Vec::new();
+    let mut completed_cases = 0usize;
+    write_uikit_progress_state(
+        result_root,
+        &UIKitProgressState {
+            stage: String::from("traces"),
+            refresh_mode: String::from(refresh_mode.report_value()),
+            metrics_shards_completed: metrics_shard_count,
+            metrics_shards_total: metrics_shard_count,
+            completed_cases: 0,
+            total_cases,
+            last_case_id: None,
+            last_test_name: None,
+        },
+    )?;
+    for spec in selected_specs {
+        let case_dir =
+            result_root.join(format!("{}-{}", spec.test_name, refresh_mode.dir_suffix()));
+        fs::create_dir_all(&case_dir)
+            .with_context(|| format!("creating {}", case_dir.display()))?;
+        if let Some(note) = uikit_skipped_case_note(spec, refresh_mode, &metrics_batch) {
+            skipped_case_notes.push(note);
+            continue;
+        }
+        if let Some(case) = load_uikit_case_checkpoint(&case_dir, spec, refresh_mode)? {
+            println!(
+                "Reusing completed UIKit case checkpoint for `{}` from {}.",
+                spec.test_name,
+                uikit_case_checkpoint_json_path(&case_dir).display()
+            );
+            report_cases_by_id.insert(case.id.clone(), case);
+            completed_cases += 1;
+            write_uikit_progress_state(
+                result_root,
+                &UIKitProgressState {
+                    stage: String::from("traces"),
+                    refresh_mode: String::from(refresh_mode.report_value()),
+                    metrics_shards_completed: metrics_shard_count,
+                    metrics_shards_total: metrics_shard_count,
+                    completed_cases,
+                    total_cases,
+                    last_case_id: Some(String::from(spec.case_id)),
+                    last_test_name: Some(String::from(spec.test_name)),
+                },
+            )?;
+            continue;
+        }
+        let power_run = if include_energy {
+            Some(load_uikit_device_case_power_trace_from_paths(
+                root,
+                power_trace,
+                power_trace_root,
+                spec,
+                &case_dir,
+            )?)
+        } else {
+            None
+        };
+        let gpu_run = if trace_enabled {
+            if let Some(existing_run) =
+                load_resumable_uikit_device_trace_run(root, spec, &case_dir)?
+            {
+                println!(
+                    "Reusing completed UIKit Metal trace for `{}` from {}.",
+                    spec.test_name,
+                    existing_run.trace_path.display()
+                );
+                existing_run
+            } else {
+                run_uikit_device_case_trace(
+                    root,
+                    device,
+                    &prepared_build.built_app,
+                    spec,
+                    refresh_mode,
+                    &case_dir,
+                    trace_seconds,
+                    watch_capture,
+                )?
+            }
+        } else {
+            run_uikit_device_case_console_capture(
+                root,
+                device,
+                &prepared_build.built_app,
+                spec,
+                refresh_mode,
+                &case_dir,
+                watch_capture,
+            )?
+        };
+        if watch_capture {
+            copy_device_app_capture_dir(
+                root,
+                device,
+                &prepared_build.built_app,
+                spec.test_name,
+                &case_dir,
+            )?;
+        }
+        let case = build_uikit_device_case(
+            root,
+            result_root,
+            spec,
+            &prepared_build.built_app.executable_name,
+            refresh_mode,
+            &metrics_batch,
+            &gpu_run,
+            power_run.as_ref(),
+        )?;
+        write_uikit_case_checkpoint(&case_dir, &case)?;
+        report_cases_by_id.insert(case.id.clone(), case);
+        completed_cases += 1;
+        write_uikit_progress_state(
+            result_root,
+            &UIKitProgressState {
+                stage: String::from("traces"),
+                refresh_mode: String::from(refresh_mode.report_value()),
+                metrics_shards_completed: metrics_shard_count,
+                metrics_shards_total: metrics_shard_count,
+                completed_cases,
+                total_cases,
+                last_case_id: Some(String::from(spec.case_id)),
+                last_test_name: Some(String::from(spec.test_name)),
+            },
+        )?;
+    }
+
+    let mut report_cases = Vec::with_capacity(report_cases_by_id.len());
+    for spec in selected_specs {
+        if let Some(case) = report_cases_by_id.remove(spec.case_id) {
+            report_cases.push(case);
+        }
+    }
+    let mut contract = build_uikit_contract_coverage(&report_cases, "device");
+    contract.notes.extend(skipped_case_notes.iter().cloned());
+
+    let report = UIKitPerfReport {
+        version: 1,
+        suite: String::from("device"),
+        generated_label: std::env::var("PERF_REPORT_DATE").ok(),
+        device_name: device.name.clone(),
+        energy_status: if !trace_enabled {
+            String::from(
+                "Direct device GPU time and energy were intentionally skipped for this run because `--trace-seconds 0` disabled the attached Metal trace; CPU metrics still come from xcodebuild test-without-building and camera summaries still come from the parked app console output.",
+            )
+        } else if include_energy {
+            String::from(
+                "Direct device GPU time comes from process-scoped Metal System Trace on real iPhone hardware. Direct energy is included only when manually imported per-case Power Profiler traces (.trace or raw exported .atrc) are supplied for the same OxideHost workload.",
+            )
+        } else {
+            String::from(
+                "Direct device GPU time comes from process-scoped Metal System Trace on real iPhone hardware. Direct energy is intentionally skipped in this run and remains manual-pending until per-case Power Profiler traces are imported.",
+            )
+        },
+        contract,
+        cases: report_cases,
+        notes: {
+            let mut notes = vec![
+                String::from("Scheme: OxideUIKitPerf"),
+                if !trace_enabled {
+                    String::from(
+                        "Device flow: build/install the host app once, collect CPU metrics through one native-only batched xcodebuild test-without-building run, then drive the device workload over the shared Darwin ready/start/complete handshake without recording a Metal trace.",
+                    )
+                } else {
+                    String::from(
+                        "Device flow: build/install the host app once, collect CPU metrics through one native-only batched xcodebuild test-without-building run, then record per-case process-scoped Metal traces on the phone. Parked and launch-handshake workloads are launched through xctrace and driven by the shared Darwin ready/start/complete notifications; camera cases that still need console summaries retain the device-console launch path.",
+                    )
+                },
+                if !trace_enabled {
+                    String::from(
+                        "GPU trace: skipped for this run because `--trace-seconds 0` disabled the attached Metal trace. Camera contract, stage, and memory summaries still come from the parked app console log.",
+                    )
+                } else {
+                    String::from(
+                        "GPU trace: process-scoped Metal System Trace + Points of Interest, with Metal GPU Counters enabled when the device supports that counter profile.",
+                    )
+                },
+                if !trace_enabled {
+                    String::from(
+                        "Energy trace: skipped because attached tracing was disabled for this run.",
+                    )
+                } else {
+                    String::from(
+                        "Energy trace: manual per-case Power Profiler import from an exported .trace or raw .atrc captured for the same OxideHost workload.",
+                    )
+                },
+                format!("Refresh mode: {}", refresh_mode.report_value()),
+                String::from(
+                    "Refresh policy: the official device harness is native-only. The old 60 Hz/device-default matrix was removed to keep the committed battery focused on the target shipping refresh path.",
+                ),
+            ];
+            notes.extend(skipped_case_notes);
+            notes
+        },
+    };
+    write_uikit_progress_state(
+        result_root,
+        &UIKitProgressState {
+            stage: String::from("done"),
+            refresh_mode: String::from(refresh_mode.report_value()),
+            metrics_shards_completed: metrics_shard_count,
+            metrics_shards_total: metrics_shard_count,
+            completed_cases: report.cases.len(),
+            total_cases,
+            last_case_id: report.cases.last().map(|case| case.id.clone()),
+            last_test_name: report.cases.last().map(|case| case.test_name.clone()),
+        },
+    )?;
+
+    Ok(report)
+}
+
+fn run_oxide_onscreen_case_console_capture(
+    root: &Path,
+    device: &UIKitPhysicalDevice,
+    built_app: &BuiltUIKitApp,
+    spec: &OxideOnscreenCaseSpec,
+    refresh_mode: UIKitDeviceRefreshMode,
+    case_dir: &Path,
+    watch_capture: bool,
+) -> Result<DeviceTraceRun> {
+    let launch_spec = oxide_onscreen_launch_spec(spec);
+    let mut run = run_uikit_device_case_console_capture(
+        root,
+        device,
+        built_app,
+        &launch_spec,
+        refresh_mode,
+        case_dir,
+        watch_capture,
+    )?;
+    run.notes.push(String::from(
+        "Capture source: on-screen Oxide benchmark summary emitted through the parked device app console log.",
+    ));
+    Ok(run)
+}
+
+fn run_oxide_onscreen_case_trace(
+    root: &Path,
+    device: &UIKitPhysicalDevice,
+    built_app: &BuiltUIKitApp,
+    spec: &OxideOnscreenCaseSpec,
+    refresh_mode: UIKitDeviceRefreshMode,
+    case_dir: &Path,
+    trace_seconds: u64,
+    watch_capture: bool,
+) -> Result<DeviceTraceRun> {
+    let launch_spec = oxide_onscreen_launch_spec(spec);
+    let mut include_gpu_counters = true;
+    let mut timeout_attempt = 0usize;
+    let mut notes = vec![String::from(
+        "Capture source: on-screen Oxide workload and GPU metrics derived from a process-scoped launched Metal trace on the live phone path, with the launched Oxide host stdout providing workload and memory summaries.",
+    )];
+    loop {
+        let mut extra_instruments = vec![String::from("Points of Interest")];
+        if include_gpu_counters {
+            extra_instruments.push(String::from("Metal GPU Counters"));
+        }
+        let (trace_path, launch_stdout_path, stderr_path) = run_uikit_device_launched_trace(
+            root,
+            device,
+            built_app,
+            &launch_spec,
+            refresh_mode,
+            case_dir,
+            "metal",
+            "Metal System Trace",
+            &extra_instruments,
+            trace_seconds,
+            true,
+            watch_capture,
+        )?;
+        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+        if include_gpu_counters && is_unsupported_gpu_counter_profile_error(&stderr) {
+            println!(
+                "Metal GPU Counters unsupported on {}; retrying on-screen Oxide `{}` without the counter profile.",
+                device.name, spec.test_name
+            );
+            include_gpu_counters = false;
+            notes.push(String::from(
+                "GPU counter status: the launched device trace rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+            ));
+            continue;
+        }
+        if timeout_attempt + 1 < UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
+            && is_retryable_xctrace_record_timeout_error(&stderr)
+        {
+            timeout_attempt += 1;
+            println!(
+                "On-screen Oxide trace for `{}` on {} hit a transient xctrace wall-time timeout (attempt {}/{}); retrying the launched trace.",
+                spec.test_name,
+                refresh_mode.report_value(),
+                timeout_attempt + 1,
+                UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
+            );
+            notes.push(String::from(
+                "Trace timeout status: this on-screen Oxide case retried the launched trace after xctrace exceeded its wall-time watchdog before finishing.",
+            ));
+            continue;
+        }
+        return Ok(DeviceTraceRun { trace_path, launch_stdout_path, notes });
+    }
+}
+
+fn summary_value_seconds(summary: &UIKitMetricSummary, value: f64) -> Result<f64> {
+    match summary.unit.as_str() {
+        "s" => Ok(value),
+        "ms" => Ok(value / 1_000.0),
+        other => bail!("unsupported Oxide stage-summary time unit `{}`", other),
+    }
+}
+
+fn summary_value_kb(summary: &UIKitMetricSummary, value: f64) -> Result<f64> {
+    match summary.unit.as_str() {
+        "kb" | "KB" => Ok(value),
+        "bytes" => Ok(value / 1024.0),
+        other => bail!("unsupported Oxide memory-summary unit `{}`", other),
+    }
+}
+
+fn summarize_trace_workload_windows(
+    windows: &[TraceWindow],
+    process_name: &str,
+    fallback_modes: &[UIKitMetricFallbackMode],
+) -> Result<UIKitMetricSummary> {
+    let samples = windows
+        .iter()
+        .filter(|window| window.process_name == process_name)
+        .map(|window| (window.end_ns.saturating_sub(window.start_ns) as f64) / 1_000_000_000.0)
+        .collect::<Vec<_>>();
+    metric_summary_from_samples_with_metadata(
+        "s",
+        &samples,
+        UIKitMetricSource::XctraceSignpost,
+        fallback_modes,
+    )
+}
+
+fn promote_oxide_device_case_clock(
+    spec: &OxideOnscreenCaseSpec,
+    metrics: &mut BTreeMap<String, f64>,
+    notes: &mut Vec<String>,
+    workload: &UIKitMetricSummary,
+    signpost_metrics: &BTreeMap<String, UIKitMetricSummary>,
+) -> Result<(String, UIKitMetricSummary)> {
+    let Some(headline_metric) = official_device_headline_metric_for_oxide_case(spec.case_id) else {
+        return Ok((String::from("clock_s"), workload.clone()));
+    };
+    let promoted_clock = signpost_metrics.get(headline_metric).cloned().with_context(|| {
+        format!(
+            "missing promoted headline metric `{}` for Oxide on-screen case `{}`",
+            headline_metric, spec.case_id
+        )
+    })?;
+    metrics.insert(String::from("clock_s"), promoted_clock.median);
+    notes.push(format!(
+        "Clock metric scope: promoted `{}` into `clock_s` for the official matched on-screen Oxide/UIKit comparison; raw end-to-end Oxide host workload wall clock remains under `workload_s`.",
+        headline_metric
+    ));
+    Ok((String::from(headline_metric), promoted_clock))
+}
+
+fn build_oxide_onscreen_device_case(
+    root: &Path,
+    built_app: &BuiltUIKitApp,
+    spec: &OxideOnscreenCaseSpec,
+    refresh_mode: UIKitDeviceRefreshMode,
+    trace_run: &DeviceTraceRun,
+    trace_enabled: bool,
+) -> Result<PerfCaseResult> {
+    let stdout = fs::read_to_string(&trace_run.launch_stdout_path).unwrap_or_default();
+    let memory_metrics = parse_all_oxide_memory_summaries(&stdout)
+        .ok()
+        .and_then(|summaries| {
+            summaries.into_iter().find(|metrics| metrics.contains_key("memory.process.rss_bytes"))
+        })
+        .or_else(|| parse_oxide_memory_summary(&stdout).ok())
+        .unwrap_or_default();
+
+    let mut workload_from_trace = None;
+    let mut metrics = BTreeMap::new();
+    let mut headline_metric = String::from("clock_s");
+    let mut notes = vec![
+        String::from(spec.note),
+        format!("Refresh mode: {}", refresh_mode.report_value()),
+        format!("Device executable: `{}`", built_app.executable_name),
+        String::from(
+            "Metric scope: live on-screen Oxide host workload running through the real MetalView app path on the physical iPhone.",
+        ),
+    ];
+    let workload = if trace_enabled {
+        let parsed_trace = ParsedDeviceTrace::parse(
+            root,
+            &trace_run.trace_path,
+            &built_app.executable_name,
+            true,
+            false,
+        )?;
+        let fallback_modes = trace_summary_window_fallback_modes(parsed_trace.used_summary_window);
+        let trace_process_name = parsed_trace
+            .windows
+            .first()
+            .map(|window| window.process_name.as_str())
+            .unwrap_or(built_app.executable_name.as_str());
+        let workload = summarize_trace_workload_windows(
+            &parsed_trace.windows,
+            trace_process_name,
+            &fallback_modes,
+        )?;
+        metrics.insert(String::from("clock_s"), workload.median);
+        metrics.insert(String::from("workload_s"), workload.median);
+        if parsed_trace.used_summary_window {
+            notes.push(String::from(
+                "Trace window status: this case fell back to the whole launched trace summary window because no bounded workload signpost table was available.",
+            ));
+        }
+        let signpost_metrics = summarize_trace_signpost_metrics_from_tables(
+            &parsed_trace.signpost_tables,
+            &parsed_trace.windows,
+            &fallback_modes,
+        )?;
+        for (name, metric) in &signpost_metrics {
+            metrics.insert(name.clone(), metric.median);
+        }
+        let (promoted_headline_metric, promoted_clock) = promote_oxide_device_case_clock(
+            spec,
+            &mut metrics,
+            &mut notes,
+            &workload,
+            &signpost_metrics,
+        )?;
+        headline_metric = promoted_headline_metric;
+        let workload = promoted_clock;
+        let mut gpu_notes = Vec::new();
+        for (name, metric) in
+            summarize_device_gpu_metrics_from_trace(&parsed_trace, &mut gpu_notes, &fallback_modes)?
+        {
+            metrics.insert(name, metric.median);
+        }
+        notes.extend(trace_run.notes.iter().cloned());
+        notes.extend(gpu_notes);
+        if memory_metrics.is_empty() {
+            notes.push(String::from(
+                "Memory summary status: launched xctrace did not provide parked-app summary lines for this case, so the on-screen Oxide row is trace-derived for workload and GPU metrics only.",
+            ));
+        }
+        if trace_process_name != built_app.executable_name {
+            notes.push(format!(
+                "Trace process identity: used `{}` from the saved Metal trace instead of executable `{}` when reducing workload windows.",
+                trace_process_name,
+                built_app.executable_name
+            ));
+        }
+        workload_from_trace = Some(workload.clone());
+        workload
+    } else {
+        let stage_metrics = parse_all_oxide_stage_summaries(&stdout)
+            .with_context(|| {
+                format!(
+                    "parsing stage summary for `{}` from {}",
+                    spec.test_name,
+                    trace_run.launch_stdout_path.display()
+                )
+            })?
+            .into_iter()
+            .find(|metrics| metrics.contains_key("stage.workload"))
+            .or_else(|| parse_oxide_stage_summary(&stdout).ok())
+            .with_context(|| {
+                format!(
+                    "missing stage summary payload for `{}` in {}",
+                    spec.test_name,
+                    trace_run.launch_stdout_path.display()
+                )
+            })?;
+        let workload = stage_metrics.get("stage.workload").with_context(|| {
+            format!(
+                "missing `stage.workload` summary for `{}` in {}",
+                spec.test_name,
+                trace_run.launch_stdout_path.display()
+            )
+        })?;
+        metrics.insert(String::from("clock_s"), summary_value_seconds(workload, workload.median)?);
+        metrics
+            .insert(String::from("workload_s"), summary_value_seconds(workload, workload.median)?);
+        notes.extend(trace_run.notes.iter().cloned());
+        notes.push(String::from(
+            "GPU trace status: skipped for this case because `--trace-seconds 0` disabled the attached Metal trace.",
+        ));
+        workload.clone()
+    };
+    if let Some(rss_summary) = memory_metrics.get("memory.process.rss_bytes") {
+        metrics.insert(
+            String::from("memory_peak_kb"),
+            summary_value_kb(rss_summary, rss_summary.max)?,
+        );
+        metrics.insert(
+            String::from("memory_rss_median_kb"),
+            summary_value_kb(rss_summary, rss_summary.median)?,
+        );
+    }
+    if headline_metric != "clock_s" {
+        notes.push(format!("Headline metric: `{}`.", headline_metric));
+    }
+    let measure_iterations =
+        workload_from_trace.as_ref().map(|summary| summary.samples).unwrap_or(workload.samples);
+
+    Ok(PerfCaseResult {
+        id: String::from(spec.case_id),
+        family: String::from(spec.family),
+        layer: String::from(spec.layer),
+        scenario: String::from(spec.scenario),
+        variant: String::from(spec.variant),
+        cache_state: String::from("warm"),
+        refresh_mode: String::from(refresh_mode.report_value()),
+        unit: String::from("s"),
+        gated: true,
+        threshold_pct: UIKIT_DEVICE_THRESHOLD_PCT,
+        median: summary_value_seconds(&workload, workload.median)?,
+        p95: summary_value_seconds(&workload, workload.p95)?,
+        p99: summary_value_seconds(&workload, workload.p99)?,
+        min: summary_value_seconds(&workload, workload.min)?,
+        max: summary_value_seconds(&workload, workload.max)?,
+        mean: summary_value_seconds(&workload, workload.mean)?,
+        samples: measure_iterations.max(workload.samples),
+        ops_per_sample: spec.benchmark_iterations as u64,
+        notes,
+        metrics,
+    })
+}
+
+fn build_oxide_onscreen_device_coverage(cases: &[PerfCaseResult]) -> CoverageReport {
+    let has_case = |case_id: &str| cases.iter().any(|case| case.id == case_id);
+    CoverageReport {
+        animations_total: OXIDE_ONSCREEN_CASE_SPECS
+            .iter()
+            .filter(|spec| spec.family == "animation")
+            .count(),
+        animations_covered: OXIDE_ONSCREEN_CASE_SPECS
+            .iter()
+            .filter(|spec| spec.family == "animation" && has_case(spec.case_id))
+            .map(|spec| String::from(spec.case_id))
+            .collect(),
+        image_pipeline_total: OXIDE_ONSCREEN_CASE_SPECS
+            .iter()
+            .filter(|spec| spec.family == "image_pipeline")
+            .count(),
+        image_pipeline_covered: OXIDE_ONSCREEN_CASE_SPECS
+            .iter()
+            .filter(|spec| spec.family == "image_pipeline" && has_case(spec.case_id))
+            .map(|spec| String::from(spec.case_id))
+            .collect(),
+        navigation_total: OXIDE_ONSCREEN_CASE_SPECS
+            .iter()
+            .filter(|spec| spec.family == "navigation")
+            .count(),
+        navigation_covered: OXIDE_ONSCREEN_CASE_SPECS
+            .iter()
+            .filter(|spec| spec.family == "navigation" && has_case(spec.case_id))
+            .map(|spec| String::from(spec.case_id))
+            .collect(),
+        journeys_total: OXIDE_ONSCREEN_CASE_SPECS
+            .iter()
+            .filter(|spec| spec.family == "journey")
+            .count(),
+        journeys_covered: OXIDE_ONSCREEN_CASE_SPECS
+            .iter()
+            .filter(|spec| spec.family == "journey" && has_case(spec.case_id))
+            .map(|spec| String::from(spec.case_id))
+            .collect(),
+        scenes_gpu_total: 1,
+        scenes_gpu_covered: cases
+            .iter()
+            .filter(|case| case.id == "gpu.scene.camera.frame")
+            .map(|case| case.id.clone())
+            .collect(),
+        ..CoverageReport::default()
+    }
+}
+
+fn build_oxide_onscreen_device_contract(
+    cases: &[PerfCaseResult],
+    device: &UIKitPhysicalDevice,
+    built_app: &BuiltUIKitApp,
+) -> ContractCoverageReport {
+    let has_case = |case_id: &str| cases.iter().any(|case| case.id == case_id);
+    ContractCoverageReport {
+        layers: vec![
+            ContractCoverageEntry {
+                id: String::from("oxide-onscreen-host"),
+                label: String::from("Oxide On-Screen Host Battery"),
+                status: String::from("implemented"),
+                notes: vec![String::from(
+                    "This device report is captured through the real on-screen Oxide MetalView host path instead of the offscreen Rust perf runner.",
+                )],
+            },
+            ContractCoverageEntry {
+                id: String::from("oxide-offscreen-workspace"),
+                label: String::from("Workspace Engine Battery"),
+                status: String::from("separate"),
+                notes: vec![String::from(
+                    "The broader offscreen engine and microbenchmark suite remains in benchmarks/workspace and is intentionally not mixed into this device comparison report.",
+                )],
+            },
+        ],
+        battery: vec![
+            ContractCoverageEntry {
+                id: String::from("animation-effects"),
+                label: String::from("Animation & Visual Effects"),
+                status: if has_case("cpu.animation.spinner_spin")
+                    && has_case("cpu.animation.image_zoom_pan")
+                    && has_case("cpu.animation.anim_timeline_bars")
+                {
+                    String::from("implemented")
+                } else {
+                    String::from("partial")
+                },
+                notes: vec![String::from(
+                    "The official matched device battery now carries representative Oxide on-screen animation workloads through the live host path.",
+                )],
+            },
+            ContractCoverageEntry {
+                id: String::from("navigation-input"),
+                label: String::from("Navigation & Input Latency"),
+                status: if has_case("cpu.navigation.button_press.response")
+                    && has_case("cpu.navigation.text_focus.response")
+                {
+                    String::from("implemented")
+                } else {
+                    String::from("partial")
+                },
+                notes: vec![String::from(
+                    "The official matched device battery now carries direct Oxide button-press and text-focus response workloads through the live host path.",
+                )],
+            },
+            ContractCoverageEntry {
+                id: String::from("journeys"),
+                label: String::from("Representative Journeys"),
+                status: if has_case("cpu.journey.input_form_submit")
+                    && has_case("cpu.journey.collection_navigation")
+                    && has_case("cpu.journey.zoom_image_gesture_cycle")
+                    && has_case("cpu.journey.orchestration_transition_modal")
+                {
+                    String::from("implemented")
+                } else {
+                    String::from("partial")
+                },
+                notes: vec![String::from(
+                    "The official matched device battery now carries representative Oxide journey workloads through the live host path.",
+                )],
+            },
+            ContractCoverageEntry {
+                id: String::from("camera-preview"),
+                label: String::from("Camera Preview"),
+                status: if has_case("gpu.scene.camera.frame") {
+                    String::from("implemented")
+                } else {
+                    String::from("partial")
+                },
+                notes: vec![String::from(
+                    "The official custom-camera row uses the real on-screen Oxide preview path with Oxide owning the visible preview on the phone.",
+                )],
+            },
+        ],
+        notes: vec![
+            format!("Device: `{}`", device.name),
+            format!("Executable: `{}`", built_app.executable_name),
+            String::from(
+                "Device flow: launch the parked host app on the physical iPhone with a live on-screen Oxide workload selected, collect workload and memory summaries from the app console, and collect direct GPU/signpost metrics from a process-scoped launched Metal System Trace when tracing is enabled.",
+            ),
+            String::from(
+                "Comparison scope: only on-screen Oxide host cases are persisted here. Offscreen Rust workspace numbers remain separate and are not part of the official device comparison.",
+            ),
+        ],
+    }
+}
+
+fn capture_oxide_onscreen_device_report(
+    root: &Path,
+    device: &UIKitPhysicalDevice,
+    built_app: &BuiltUIKitApp,
+    selected_specs: &[&'static OxideOnscreenCaseSpec],
+    refresh_mode: UIKitDeviceRefreshMode,
+    result_root: &Path,
+    trace_seconds: u64,
+    watch_capture: bool,
+) -> Result<PerfReport> {
+    let trace_enabled = uikit_device_trace_enabled(trace_seconds);
+    let total_cases = selected_specs.len();
+    let mut cases = Vec::with_capacity(total_cases);
+    write_oxide_progress_state(
+        result_root,
+        &UIKitProgressState {
+            stage: String::from("cases"),
+            refresh_mode: String::from(refresh_mode.report_value()),
+            metrics_shards_completed: 0,
+            metrics_shards_total: 0,
+            completed_cases: 0,
+            total_cases,
+            last_case_id: None,
+            last_test_name: None,
+        },
+    )?;
+    for spec in selected_specs {
+        let case_dir =
+            result_root.join(format!("{}-{}", spec.test_name, refresh_mode.dir_suffix()));
+        fs::create_dir_all(&case_dir)
+            .with_context(|| format!("creating {}", case_dir.display()))?;
+        if let Some(case) = load_oxide_case_checkpoint(&case_dir, spec, refresh_mode)? {
+            println!(
+                "Reusing completed Oxide on-screen case checkpoint for `{}` from {}.",
+                spec.test_name,
+                uikit_case_checkpoint_json_path(&case_dir).display()
+            );
+            cases.push(case);
+            write_oxide_progress_state(
+                result_root,
+                &UIKitProgressState {
+                    stage: String::from("cases"),
+                    refresh_mode: String::from(refresh_mode.report_value()),
+                    metrics_shards_completed: 0,
+                    metrics_shards_total: 0,
+                    completed_cases: cases.len(),
+                    total_cases,
+                    last_case_id: Some(String::from(spec.case_id)),
+                    last_test_name: Some(String::from(spec.test_name)),
+                },
+            )?;
+            continue;
+        }
+        let trace_run = if trace_enabled {
+            if let Some(existing_run) = load_resumable_oxide_onscreen_trace_run(root, &case_dir)? {
+                println!(
+                    "Reusing completed Oxide on-screen Metal trace for `{}` from {}.",
+                    spec.test_name,
+                    existing_run.trace_path.display()
+                );
+                existing_run
+            } else {
+                run_oxide_onscreen_case_trace(
+                    root,
+                    device,
+                    built_app,
+                    spec,
+                    refresh_mode,
+                    &case_dir,
+                    trace_seconds,
+                    watch_capture,
+                )?
+            }
+        } else {
+            run_oxide_onscreen_case_console_capture(
+                root,
+                device,
+                built_app,
+                spec,
+                refresh_mode,
+                &case_dir,
+                watch_capture,
+            )?
+        };
+        if watch_capture {
+            copy_device_app_capture_dir(root, device, built_app, spec.test_name, &case_dir)?;
+        }
+        let case = build_oxide_onscreen_device_case(
+            root,
+            built_app,
+            spec,
+            refresh_mode,
+            &trace_run,
+            trace_enabled,
+        )?;
+        write_oxide_case_checkpoint(&case_dir, &case)?;
+        cases.push(case);
+        write_oxide_progress_state(
+            result_root,
+            &UIKitProgressState {
+                stage: String::from("cases"),
+                refresh_mode: String::from(refresh_mode.report_value()),
+                metrics_shards_completed: 0,
+                metrics_shards_total: 0,
+                completed_cases: cases.len(),
+                total_cases,
+                last_case_id: Some(String::from(spec.case_id)),
+                last_test_name: Some(String::from(spec.test_name)),
+            },
+        )?;
+    }
+    let report = PerfReport {
+        version: 1,
+        suite: String::from("oxide-device"),
+        generated_label: std::env::var("PERF_REPORT_DATE").ok(),
+        coverage: build_oxide_onscreen_device_coverage(&cases),
+        contract: build_oxide_onscreen_device_contract(&cases, device, built_app),
+        findings: vec![AuditFinding {
+            status: String::from("info"),
+            summary: String::from(
+                "This device report measures the live on-screen Oxide host path rather than the offscreen Rust perf runner, so it is the authoritative Oxide side of the official device comparison.",
+            ),
+        }],
+        cases,
+    };
+    write_oxide_progress_state(
+        result_root,
+        &UIKitProgressState {
+            stage: String::from("done"),
+            refresh_mode: String::from(refresh_mode.report_value()),
+            metrics_shards_completed: 0,
+            metrics_shards_total: 0,
+            completed_cases: report.cases.len(),
+            total_cases,
+            last_case_id: report.cases.last().map(|case| case.id.clone()),
+            last_test_name: report.cases.last().map(|case| case.id.clone()),
+        },
+    )?;
+    Ok(report)
+}
+
 fn run_uikit_device_metrics_batch(
     root: &Path,
     xctestrun_path: &Path,
@@ -4081,36 +6395,29 @@ fn run_uikit_device_metrics_batch(
     refresh_mode: UIKitDeviceRefreshMode,
     result_root: &Path,
 ) -> Result<UIKitMetricsBatchRun> {
+    let device_udid = destination
+        .split(',')
+        .find_map(|part| part.strip_prefix("id="))
+        .map(String::from)
+        .with_context(|| format!("missing device id in destination `{}`", destination))?;
+    let device = UIKitPhysicalDevice {
+        name: String::from(destination),
+        os_version: String::new(),
+        os_build: String::new(),
+        product_type: String::new(),
+        udid: device_udid,
+    };
+    ensure_uikit_device_interactive_ready(root, &device)?;
     let mut metrics_json_fragments = Vec::new();
     let mut benchmark_metadata = BTreeMap::new();
     let mut skipped_case_notes = BTreeMap::new();
-    let mut metric_shards: Vec<Vec<&'static UIKitCaseSpec>> = Vec::new();
-    let mut current_shard: Vec<&'static UIKitCaseSpec> = Vec::new();
-    for spec in specs {
-        if spec.test_name.starts_with("testCamera") || uikit_case_uses_ui_test_target(spec) {
-            if !current_shard.is_empty() {
-                metric_shards.push(core::mem::take(&mut current_shard));
-            }
-            metric_shards.push(vec![*spec]);
-            continue;
-        }
-        current_shard.push(*spec);
-        if current_shard.len() == UIKIT_DEVICE_METRICS_BATCH_MAX_CASES {
-            metric_shards.push(core::mem::take(&mut current_shard));
-        }
-    }
-    if !current_shard.is_empty() {
-        metric_shards.push(current_shard);
-    }
-    if metric_shards.is_empty() {
-        metric_shards.push(Vec::new());
-    }
+    let metric_shards = prepare_uikit_metrics_shards(specs, refresh_mode);
     let shard_count = metric_shards.len();
+    let total_cases = specs.len();
 
-    for (shard_index, shard_specs) in metric_shards.iter().enumerate() {
-        let environment = uikit_device_perf_environment_for_specs(refresh_mode, shard_specs);
+    for (shard_index, shard) in metric_shards.iter().enumerate() {
         let prepared_xctestrun_path =
-            prepare_uikit_device_perf_xctestrun(xctestrun_path, &environment)?;
+            prepare_uikit_device_perf_xctestrun(xctestrun_path, &shard.environment)?;
         let result_bundle = if shard_count == 1 {
             result_root.join(format!("metrics-{}.xcresult", refresh_mode.dir_suffix()))
         } else {
@@ -4120,11 +6427,11 @@ fn run_uikit_device_metrics_batch(
                 shard_index + 1
             ))
         };
-        let stdout_path = if shard_specs.len() == 1 {
+        let stdout_path = if shard.specs.len() == 1 {
             uikit_device_metrics_case_stdout_path(
                 result_root,
                 refresh_mode.dir_suffix(),
-                shard_specs[0].test_name,
+                shard.specs[0].test_name,
             )
         } else {
             result_root.join(format!(
@@ -4133,11 +6440,11 @@ fn run_uikit_device_metrics_batch(
                 shard_index + 1
             ))
         };
-        let stderr_path = if shard_specs.len() == 1 {
+        let stderr_path = if shard.specs.len() == 1 {
             uikit_device_metrics_case_stderr_path(
                 result_root,
                 refresh_mode.dir_suffix(),
-                shard_specs[0].test_name,
+                shard.specs[0].test_name,
             )
         } else {
             result_root.join(format!(
@@ -4146,104 +6453,206 @@ fn run_uikit_device_metrics_batch(
                 shard_index + 1
             ))
         };
-        remove_existing_path(&result_bundle)?;
-        remove_existing_path(&stdout_path)?;
-        remove_existing_path(&stderr_path)?;
-
-        let mut args = vec![
-            String::from("test-without-building"),
-            String::from("-xctestrun"),
-            prepared_xctestrun_path.to_string_lossy().into_owned(),
-            String::from("-destination"),
-            String::from(destination),
-            String::from("-parallel-testing-enabled"),
-            String::from("NO"),
-            String::from("-enablePerformanceTestsDiagnostics"),
-            String::from("NO"),
-            String::from("-collect-test-diagnostics"),
-            String::from("never"),
-            String::from("-resultBundlePath"),
-            result_bundle.to_string_lossy().into_owned(),
-        ];
-        for spec in shard_specs {
-            args.push(format!("-only-testing:{}", uikit_only_testing_identifier_for_spec(spec)));
-        }
-        let mut child = spawn_command_owned_with_env_and_output_paths(
-            root,
-            "xcodebuild",
-            &args,
-            &environment,
-            &stdout_path,
-            &stderr_path,
-        )?;
-        let run_result = wait_for_child_with_output_paths(
-            root,
-            "xcodebuild",
-            &args,
-            &mut child,
-            &stdout_path,
-            &stderr_path,
-        );
-        let extracted_metrics =
-            extract_xcresult_metrics_json(root, &result_bundle).with_context(|| {
-                format!(
-                    "extracting sharded device metrics json for {} part {}",
-                    refresh_mode.report_value(),
-                    shard_index + 1
-                )
-            });
-        let metrics_json = match (run_result, extracted_metrics) {
-            (Ok(()), Ok(metrics_json)) => metrics_json,
-            (Err(err), Ok(metrics_json)) => {
-                eprintln!(
-                    "xcodebuild exited with an error after producing usable metrics for {} part {}; continuing with the extracted xcresult metrics: {}",
-                    refresh_mode.report_value(),
-                    shard_index + 1,
-                    err
-                );
-                metrics_json
-            }
-            (Ok(()), Err(err)) | (Err(_), Err(err)) => return Err(err),
+        let expected_case_ids = shard.specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
+        let mut existing_metrics_json = if result_bundle.exists() {
+            extract_xcresult_metrics_json(root, &result_bundle).ok()
+        } else {
+            None
         };
-        let stdout = fs::read_to_string(&stdout_path)
-            .with_context(|| format!("reading {}", stdout_path.display()))?;
-        let stderr = fs::read_to_string(&stderr_path)
-            .with_context(|| format!("reading {}", stderr_path.display()))?;
-        merge_benchmark_metadata(&mut benchmark_metadata, parse_oxide_benchmark_metadata(&stdout)?)?;
-        if shard_specs.len() == 1
+        if let Some(metrics_json) = existing_metrics_json.as_ref() {
+            let missing_case_ids =
+                missing_uikit_metrics_case_ids(metrics_json, &expected_case_ids)?;
+            if !missing_case_ids.is_empty() {
+                println!(
+                    "Discarding incomplete UIKit metrics shard {} / {} for {} from {} because it is missing case(s): {}.",
+                    shard_index + 1,
+                    shard_count,
+                    refresh_mode.report_value(),
+                    result_bundle.display(),
+                    missing_case_ids.join(", "),
+                );
+                existing_metrics_json = None;
+            }
+        }
+        if existing_metrics_json.is_none() {
+            remove_existing_path(&result_bundle)?;
+            remove_existing_path(&stdout_path)?;
+            remove_existing_path(&stderr_path)?;
+        }
+
+        let metrics_json = if let Some(metrics_json) = existing_metrics_json {
+            println!(
+                "Reusing completed UIKit metrics shard {} / {} for {} from {}.",
+                shard_index + 1,
+                shard_count,
+                refresh_mode.report_value(),
+                result_bundle.display()
+            );
+            metrics_json
+        } else {
+            let mut args = vec![
+                String::from("test-without-building"),
+                String::from("-xctestrun"),
+                prepared_xctestrun_path.to_string_lossy().into_owned(),
+                String::from("-destination"),
+                String::from(destination),
+                String::from("-parallel-testing-enabled"),
+                String::from("NO"),
+                String::from("-enablePerformanceTestsDiagnostics"),
+                String::from("NO"),
+                String::from("-collect-test-diagnostics"),
+                String::from("never"),
+                String::from("-resultBundlePath"),
+                result_bundle.to_string_lossy().into_owned(),
+            ];
+            for spec in &shard.specs {
+                args.push(format!(
+                    "-only-testing:{}",
+                    uikit_only_testing_identifier_for_spec(spec)
+                ));
+            }
+            let mut child = spawn_command_owned_with_env_and_output_paths(
+                root,
+                "xcodebuild",
+                &args,
+                &shard.environment,
+                &stdout_path,
+                &stderr_path,
+            )?;
+            let run_result = wait_for_child_with_output_paths(
+                root,
+                "xcodebuild",
+                &args,
+                &mut child,
+                &stdout_path,
+                &stderr_path,
+            );
+            let extracted_metrics = extract_xcresult_metrics_json(root, &result_bundle)
+                .with_context(|| {
+                    format!(
+                        "extracting sharded device metrics json for {} part {}",
+                        refresh_mode.report_value(),
+                        shard_index + 1
+                    )
+                });
+            match (run_result, extracted_metrics) {
+                (Ok(()), Ok(metrics_json)) => metrics_json,
+                (Err(err), Ok(metrics_json)) => {
+                    eprintln!(
+                        "xcodebuild exited with an error after producing usable metrics for {} part {}; continuing with the extracted xcresult metrics: {}",
+                        refresh_mode.report_value(),
+                        shard_index + 1,
+                        err
+                    );
+                    metrics_json
+                }
+                (Ok(()), Err(err)) | (Err(_), Err(err)) => return Err(err),
+            }
+        };
+        let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
+        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+        merge_benchmark_metadata(
+            &mut benchmark_metadata,
+            parse_oxide_benchmark_metadata(&stdout)?,
+        )?;
+        if shard.specs.len() == 1
             && metrics_json.trim() == "[]"
-            && uikit_case_uses_ui_test_target(shard_specs[0])
+            && uikit_case_uses_ui_test_target(shard.specs[0])
             && format!("{}\n{}", stdout, stderr)
                 .to_ascii_lowercase()
                 .contains("timed out while enabling automation mode")
         {
             skipped_case_notes.insert(
-                String::from(shard_specs[0].case_id),
+                String::from(shard.specs[0].case_id),
                 String::from(
                     "xcodebuild did not produce XCTest metrics for this UI-test launch case because the device UI automation session timed out while enabling automation mode; the direct trace artifacts were still captured, but the official launch row remains missing on this device/build.",
                 ),
             );
             continue;
         }
+        if metrics_json.trim() == "[]"
+            && shard.specs.iter().any(|spec| uikit_case_uses_ui_test_target(spec))
+            && format!("{}\n{}", stdout, stderr)
+                .to_ascii_lowercase()
+                .contains("timed out while enabling automation mode")
+        {
+            for spec in &shard.specs {
+                if uikit_case_uses_ui_test_target(spec) {
+                    skipped_case_notes.insert(
+                        String::from(spec.case_id),
+                        String::from(
+                            "xcodebuild did not produce XCTest metrics for this UI-test shard because the device UI automation session timed out while enabling automation mode; the direct trace artifacts were still captured, but the affected launch rows remain missing on this device/build.",
+                        ),
+                    );
+                }
+            }
+            continue;
+        }
+        let missing_case_ids = missing_uikit_metrics_case_ids(&metrics_json, &expected_case_ids)?;
+        if !missing_case_ids.is_empty() {
+            bail!(
+                "device metrics shard {} / {} for {} is missing expected UIKit case(s): {}. Inspect {} and {} for the underlying XCTest failure.",
+                shard_index + 1,
+                shard_count,
+                refresh_mode.report_value(),
+                missing_case_ids.join(", "),
+                stdout_path.display(),
+                stderr_path.display(),
+            );
+        }
         metrics_json_fragments.push(metrics_json);
+        write_uikit_progress_state(
+            result_root,
+            &UIKitProgressState {
+                stage: String::from("metrics"),
+                refresh_mode: String::from(refresh_mode.report_value()),
+                metrics_shards_completed: shard_index + 1,
+                metrics_shards_total: shard_count,
+                completed_cases: 0,
+                total_cases,
+                last_case_id: None,
+                last_test_name: shard.specs.last().map(|spec| String::from(spec.test_name)),
+            },
+        )?;
     }
 
     let metrics_json = merge_xcresult_metrics_json_fragments(&metrics_json_fragments)?;
-    let case_ids = parse_uikit_report_json(&metrics_json)?
-        .cases
-        .into_iter()
-        .map(|case| case.id)
-        .collect();
+    let parsed_report = parse_uikit_report_json(&metrics_json)?;
+    let mut parsed_cases = BTreeMap::new();
+    let mut case_ids = BTreeSet::new();
+    for case in parsed_report.cases {
+        case_ids.insert(case.id.clone());
+        parsed_cases.insert(case.id.clone(), case);
+    }
 
-    Ok(UIKitMetricsBatchRun {
-        metrics_json,
-        case_ids,
-        benchmark_metadata,
-        skipped_case_notes,
-    })
+    Ok(UIKitMetricsBatchRun { case_ids, parsed_cases, benchmark_metadata, skipped_case_notes })
 }
 
-fn oxide_device_launch_environment_json(smoke: bool) -> Result<String> {
+pub fn missing_uikit_metrics_case_ids(
+    metrics_json: &str,
+    expected_case_ids: &[&str],
+) -> Result<Vec<String>> {
+    let parsed_report = parse_uikit_report_json(metrics_json)?;
+    let present_case_ids =
+        parsed_report.cases.into_iter().map(|case| case.id).collect::<BTreeSet<_>>();
+    let mut missing = Vec::new();
+    for expected_case_id in expected_case_ids {
+        if !present_case_ids.contains(*expected_case_id) {
+            missing.push(String::from(*expected_case_id));
+        }
+    }
+    Ok(missing)
+}
+
+fn insert_env_if_present(env: &mut BTreeMap<String, String>, name: &str) {
+    if let Ok(value) = std::env::var(name) {
+        if !value.trim().is_empty() {
+            env.insert(String::from(name), value);
+        }
+    }
+}
+
+pub fn oxide_device_launch_environment_json(smoke: bool) -> Result<String> {
     let mut env = BTreeMap::new();
     env.insert(String::from("OXIDE_PERF_PARKED"), String::from("1"));
     env.insert(String::from("OXIDE_PERF_RUNNER"), String::from("1"));
@@ -4255,179 +6664,11 @@ fn oxide_device_launch_environment_json(smoke: bool) -> Result<String> {
             env.insert(String::from("PERF_REPORT_DATE"), label);
         }
     }
+    for name in OXIDE_DEVICE_FORWARD_ENV_VARS {
+        insert_env_if_present(&mut env, name);
+    }
     serde_json::to_string(&env)
         .with_context(|| "encoding parked Oxide device benchmark environment")
-}
-
-fn oxide_device_launch_args(
-    device: &UIKitPhysicalDevice,
-    built_app: &BuiltUIKitApp,
-    smoke: bool,
-) -> Result<Vec<String>> {
-    Ok(vec![
-        String::from("devicectl"),
-        String::from("device"),
-        String::from("process"),
-        String::from("launch"),
-        String::from("--device"),
-        device.udid.clone(),
-        String::from("--console"),
-        String::from("--terminate-existing"),
-        String::from("--environment-variables"),
-        oxide_device_launch_environment_json(smoke)?,
-        built_app.bundle_identifier.clone(),
-    ])
-}
-
-fn run_oxide_device_report_capture(
-    root: &Path,
-    device: &UIKitPhysicalDevice,
-    built_app: &BuiltUIKitApp,
-    result_root: &Path,
-    smoke: bool,
-) -> Result<PerfReport> {
-    let launch_stdout_path = result_root.join("launch.stdout.log");
-    let launch_stderr_path = result_root.join("launch.stderr.log");
-    let ready_stdout_path = result_root.join("ready.stdout.log");
-    let ready_stderr_path = result_root.join("ready.stderr.log");
-    let complete_stdout_path = result_root.join("complete.stdout.log");
-    let complete_stderr_path = result_root.join("complete.stderr.log");
-    remove_existing_path(&launch_stdout_path)?;
-    remove_existing_path(&launch_stderr_path)?;
-    remove_existing_path(&ready_stdout_path)?;
-    remove_existing_path(&ready_stderr_path)?;
-    remove_existing_path(&complete_stdout_path)?;
-    remove_existing_path(&complete_stderr_path)?;
-
-    drain_uikit_processes(
-        root,
-        device,
-        &built_app.executable_name,
-        Duration::from_secs(5),
-        "pre-trace launch cleanup",
-    )?;
-
-    let ready_args = uikit_device_notification_observe_args(
-        device,
-        UIKIT_DEVICE_READY_NOTIFICATION,
-        OXIDE_DEVICE_READY_TIMEOUT_SECS,
-    );
-    let mut ready_child = spawn_command_owned_with_output_paths(
-        root,
-        "xcrun",
-        &ready_args,
-        &ready_stdout_path,
-        &ready_stderr_path,
-    )?;
-    thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
-
-    let complete_args = uikit_device_notification_observe_args(
-        device,
-        UIKIT_DEVICE_COMPLETE_NOTIFICATION,
-        OXIDE_DEVICE_COMPLETE_TIMEOUT_SECS,
-    );
-    let mut complete_child = spawn_command_owned_with_output_paths(
-        root,
-        "xcrun",
-        &complete_args,
-        &complete_stdout_path,
-        &complete_stderr_path,
-    )?;
-    thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
-
-    let launch_args = oxide_device_launch_args(device, built_app, smoke)?;
-    let mut launch_child = spawn_command_owned_with_output_paths(
-        root,
-        "xcrun",
-        &launch_args,
-        &launch_stdout_path,
-        &launch_stderr_path,
-    )?;
-
-    let process_pid = match wait_for_uikit_process_start(
-        root,
-        device,
-        &built_app.executable_name,
-        Duration::from_secs(15),
-    ) {
-        Ok(pid) => pid,
-        Err(err) => {
-            let _ = ready_child.kill();
-            let _ = ready_child.wait();
-            let _ = complete_child.kill();
-            let _ = complete_child.wait();
-            let _ = launch_child.kill();
-            let _ = launch_child.wait();
-            let _ = wait_for_uikit_process_clear(
-                root,
-                device,
-                &built_app.executable_name,
-                Duration::from_secs(5),
-            );
-            return Err(err);
-        }
-    };
-
-    let _ = wait_for_ready_notification_or_assume_ready(
-        &mut ready_child,
-        &ready_stdout_path,
-        &ready_stderr_path,
-    )?;
-
-    let start_result =
-        post_uikit_device_notification(root, device, UIKIT_DEVICE_START_NOTIFICATION);
-    let complete_result = if start_result.is_ok() {
-        wait_for_child_with_output_paths(
-            root,
-            "xcrun",
-            &complete_args,
-            &mut complete_child,
-            &complete_stdout_path,
-            &complete_stderr_path,
-        )
-    } else {
-        start_result.map(|_| ())
-    };
-    let launch_result = wait_for_console_launch_with_output_paths(
-        root,
-        "xcrun",
-        &launch_args,
-        &mut launch_child,
-        &launch_stdout_path,
-        &launch_stderr_path,
-    );
-    let clear_result = wait_for_uikit_process_clear(
-        root,
-        device,
-        &built_app.executable_name,
-        Duration::from_secs(15),
-    );
-
-    complete_result?;
-    launch_result?;
-    clear_result?;
-
-    let stdout = fs::read_to_string(&launch_stdout_path)
-        .with_context(|| format!("reading {}", launch_stdout_path.display()))?;
-    let mut report = parse_oxide_device_report_json(&stdout).with_context(|| {
-        format!("parsing Oxide device perf report from {}", launch_stdout_path.display())
-    })?;
-    report.suite = String::from("oxide-device");
-    if report.generated_label.is_none() {
-        report.generated_label = std::env::var("PERF_REPORT_DATE").ok();
-    }
-    report.contract.notes.push(format!(
-        "Device flow: build/install the host app, launch the parked Oxide app on the physical iPhone with the in-process Rust perf runner enabled, trigger it over Darwin notifications, and exfiltrate the JSON report through the process-scoped devicectl console channel."
-    ));
-    report.contract.notes.push(format!("Device: `{}`", device.name));
-    report.contract.notes.push(format!("Executable: `{}`", built_app.executable_name));
-    if smoke {
-        report.contract.notes.push(String::from("Capture mode: smoke-only device run."));
-    } else {
-        report.contract.notes.push(String::from("Capture mode: full device perf suite."));
-    }
-    let _ = process_pid;
-    Ok(report)
 }
 
 fn run_uikit_device_case_trace(
@@ -4438,40 +6679,107 @@ fn run_uikit_device_case_trace(
     refresh_mode: UIKitDeviceRefreshMode,
     case_dir: &Path,
     trace_seconds: u64,
+    watch_capture: bool,
 ) -> Result<DeviceTraceRun> {
-    match run_uikit_device_case_trace_attempt(
-        root,
-        device,
-        built_app,
-        spec,
-        refresh_mode,
-        case_dir,
-        trace_seconds,
-        true,
-    ) {
-        Ok(run) => Ok(run),
-        Err(err) if is_unsupported_gpu_counter_profile_error(&err.to_string()) => {
-            println!(
-                "Metal GPU Counters unsupported on {}; retrying `{}` without the counter profile.",
-                device.name, spec.test_name
-            );
-            let mut run = run_uikit_device_case_trace_attempt(
-                root,
-                device,
-                built_app,
-                spec,
-                refresh_mode,
-                case_dir,
-                trace_seconds,
-                false,
-            )?;
-            run.notes.push(String::from(
-                "GPU counter status: the attached device rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
-            ));
-            Ok(run)
+    let mut include_gpu_counters = true;
+    let mut notes = Vec::new();
+    let mut handshake_attempt = 0usize;
+    let mut timeout_attempt = 0usize;
+    loop {
+        match run_uikit_device_case_trace_attempt(
+            root,
+            device,
+            built_app,
+            spec,
+            refresh_mode,
+            case_dir,
+            trace_seconds,
+            include_gpu_counters,
+            watch_capture,
+        ) {
+            Ok(mut run) => {
+                run.notes.splice(0..0, notes.drain(..));
+                return Ok(run);
+            }
+            Err(err)
+                if include_gpu_counters
+                    && is_unsupported_gpu_counter_profile_error(&err.to_string()) =>
+            {
+                println!(
+                    "Metal GPU Counters unsupported on {}; retrying `{}` without the counter profile.",
+                    device.name, spec.test_name
+                );
+                include_gpu_counters = false;
+                notes.push(String::from(
+                    "GPU counter status: the attached device rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+                ));
+            }
+            Err(err)
+                if handshake_attempt + 1 < UIKIT_DEVICE_TRACE_HANDSHAKE_RETRIES
+                    && is_retryable_uikit_trace_handshake_error(&err.to_string()) =>
+            {
+                handshake_attempt += 1;
+                println!(
+                    "UIKit device trace handshake flaked for `{}` on {} (attempt {}/{}); retrying the launched trace.",
+                    spec.test_name,
+                    refresh_mode.report_value(),
+                    handshake_attempt + 1,
+                    UIKIT_DEVICE_TRACE_HANDSHAKE_RETRIES
+                );
+                notes.push(format!(
+                    "Trace handshake status: this case retried the launched trace after a transient `{}` handshake timeout.",
+                    UIKIT_DEVICE_COMPLETE_NOTIFICATION
+                ));
+            }
+            Err(err)
+                if timeout_attempt + 1 < UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
+                    && is_retryable_xctrace_record_timeout_error(&err.to_string()) =>
+            {
+                timeout_attempt += 1;
+                println!(
+                    "UIKit device trace for `{}` on {} hit a transient xctrace wall-time timeout (attempt {}/{}); retrying the launched trace.",
+                    spec.test_name,
+                    refresh_mode.report_value(),
+                    timeout_attempt + 1,
+                    UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
+                );
+                notes.push(String::from(
+                    "Trace timeout status: this case retried the launched trace after xctrace exceeded its wall-time watchdog before finishing.",
+                ));
+            }
+            Err(err) => return Err(err),
         }
-        Err(err) => Err(err),
     }
+}
+
+fn load_resumable_uikit_device_trace_run(
+    root: &Path,
+    spec: &UIKitCaseSpec,
+    case_dir: &Path,
+) -> Result<Option<DeviceTraceRun>> {
+    let trace_path = case_dir.join("metal.trace");
+    if !uikit_device_trace_artifact_exists(&trace_path) {
+        return Ok(None);
+    }
+    if export_xctrace_toc(root, &trace_path).is_err() {
+        return Ok(None);
+    }
+    let launch_stdout_path = if uikit_case_requires_console_launch_summary(spec) {
+        let path = case_dir.join("launch.stdout.log");
+        if !path.is_file() {
+            return Ok(None);
+        }
+        path
+    } else {
+        case_dir.join("metal.target.stdout.log")
+    };
+    Ok(Some(DeviceTraceRun {
+        trace_path,
+        launch_stdout_path,
+        notes: vec![String::from(
+            "GPU trace status: reused a completed Metal trace artifact from the existing result root.",
+        )],
+    }))
 }
 
 fn run_uikit_device_case_console_capture(
@@ -4481,6 +6789,7 @@ fn run_uikit_device_case_console_capture(
     spec: &UIKitCaseSpec,
     refresh_mode: UIKitDeviceRefreshMode,
     case_dir: &Path,
+    watch_capture: bool,
 ) -> Result<DeviceTraceRun> {
     let launch_stdout_path = case_dir.join("launch.stdout.log");
     let launch_stderr_path = case_dir.join("launch.stderr.log");
@@ -4488,12 +6797,16 @@ fn run_uikit_device_case_console_capture(
     let ready_stderr_path = case_dir.join("ready.stderr.log");
     let complete_stdout_path = case_dir.join("complete.stdout.log");
     let complete_stderr_path = case_dir.join("complete.stderr.log");
+    let failed_stdout_path = case_dir.join("failed.stdout.log");
+    let failed_stderr_path = case_dir.join("failed.stderr.log");
     remove_existing_path(&launch_stdout_path)?;
     remove_existing_path(&launch_stderr_path)?;
     remove_existing_path(&ready_stdout_path)?;
     remove_existing_path(&ready_stderr_path)?;
     remove_existing_path(&complete_stdout_path)?;
     remove_existing_path(&complete_stderr_path)?;
+    remove_existing_path(&failed_stdout_path)?;
+    remove_existing_path(&failed_stderr_path)?;
 
     drain_uikit_processes(
         root,
@@ -4531,7 +6844,22 @@ fn run_uikit_device_case_console_capture(
     )?;
     thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
 
-    let launch_args = uikit_perf_launch_args(device, built_app, spec, refresh_mode, false)?;
+    let failed_args = uikit_device_notification_observe_args(
+        device,
+        UIKIT_DEVICE_FAILED_NOTIFICATION,
+        UIKIT_DEVICE_COMPLETE_TIMEOUT_SECS,
+    );
+    let mut failed_child = spawn_command_owned_with_output_paths(
+        root,
+        "xcrun",
+        &failed_args,
+        &failed_stdout_path,
+        &failed_stderr_path,
+    )?;
+    thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
+
+    let launch_args =
+        uikit_perf_launch_args(device, built_app, spec, refresh_mode, false, watch_capture)?;
     let mut launch_child = spawn_command_owned_with_output_paths(
         root,
         "xcrun",
@@ -4540,10 +6868,15 @@ fn run_uikit_device_case_console_capture(
         &launch_stderr_path,
     )?;
 
-    let process_pid = match wait_for_uikit_process_start(
+    let process_pid = match wait_for_uikit_process_start_or_launch_failure(
         root,
         device,
         &built_app.executable_name,
+        &mut launch_child,
+        "xcrun",
+        &launch_args,
+        &launch_stdout_path,
+        &launch_stderr_path,
         Duration::from_secs(15),
     ) {
         Ok(pid) => pid,
@@ -4552,6 +6885,8 @@ fn run_uikit_device_case_console_capture(
             let _ = ready_child.wait();
             let _ = complete_child.kill();
             let _ = complete_child.wait();
+            let _ = failed_child.kill();
+            let _ = failed_child.wait();
             let _ = launch_child.kill();
             let _ = launch_child.wait();
             let _ = wait_for_uikit_process_clear(
@@ -4583,17 +6918,27 @@ fn run_uikit_device_case_console_capture(
         Duration::from_secs(UIKIT_DEVICE_READY_TIMEOUT_SECS),
     )?;
 
-    let start_result =
-        post_uikit_device_notification(root, device, UIKIT_DEVICE_START_NOTIFICATION);
+    let start_console_marker = format!("OXIDE_START {}", console_case_label);
     let complete_console_marker = format!("OXIDE_COMPLETE {}", console_case_label);
+    let start_result = post_uikit_start_notification_until_acknowledged(
+        root,
+        device,
+        &launch_stdout_path,
+        &complete_stdout_path,
+        &start_console_marker,
+        &complete_console_marker,
+    );
     let complete_result = if start_result.is_ok() {
-        wait_for_device_notification_or_console_marker(
+        wait_for_device_completion_or_failure(
             "xcrun",
             &complete_args,
             &mut complete_child,
             &complete_stdout_path,
             &complete_stderr_path,
-            UIKIT_DEVICE_COMPLETE_NOTIFICATION,
+            &failed_args,
+            &mut failed_child,
+            &failed_stdout_path,
+            &failed_stderr_path,
             &launch_stdout_path,
             &complete_console_marker,
             Duration::from_secs(UIKIT_DEVICE_COMPLETE_TIMEOUT_SECS),
@@ -4616,6 +6961,8 @@ fn run_uikit_device_case_console_capture(
         &built_app.executable_name,
         Duration::from_secs(15),
     );
+    let _ = failed_child.kill();
+    let _ = failed_child.wait();
 
     complete_result?;
     terminate_result?;
@@ -4640,6 +6987,7 @@ fn run_uikit_device_case_trace_attempt(
     case_dir: &Path,
     trace_seconds: u64,
     include_gpu_counters: bool,
+    watch_capture: bool,
 ) -> Result<DeviceTraceRun> {
     let trace_label = "metal";
     let template_name = "Metal System Trace";
@@ -4647,9 +6995,23 @@ fn run_uikit_device_case_trace_attempt(
     if include_gpu_counters {
         extra_instruments.push(String::from("Metal GPU Counters"));
     }
+    let mut notes = Vec::new();
     let (trace_path, launch_stdout_path, stderr_path) =
         if uikit_case_requires_console_launch_summary(spec) {
-            run_uikit_device_attached_trace(
+            let console_run = run_uikit_device_case_console_capture(
+                root,
+                device,
+                built_app,
+                spec,
+                refresh_mode,
+                case_dir,
+                watch_capture,
+            )?;
+            notes.extend(console_run.notes.iter().cloned());
+            notes.push(String::from(
+                "GPU trace source: collected through a separate launched xctrace pass after the console-summary camera run, so camera stage summaries and GPU timing stay available without the flaky attached-trace camera path.",
+            ));
+            let (trace_path, _, stderr_path) = run_uikit_device_launched_trace(
                 root,
                 device,
                 built_app,
@@ -4660,7 +7022,10 @@ fn run_uikit_device_case_trace_attempt(
                 template_name,
                 &extra_instruments,
                 trace_seconds,
-            )?
+                true,
+                watch_capture,
+            )?;
+            (trace_path, console_run.launch_stdout_path, stderr_path)
         } else {
             run_uikit_device_launched_trace(
                 root,
@@ -4673,9 +7038,10 @@ fn run_uikit_device_case_trace_attempt(
                 template_name,
                 &extra_instruments,
                 trace_seconds,
+                true,
+                watch_capture,
             )?
         };
-    let mut notes = Vec::new();
     let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
     if include_gpu_counters && is_unsupported_gpu_counter_profile_error(&stderr) {
         notes.push(String::from(
@@ -4696,22 +7062,39 @@ fn run_uikit_device_launched_trace(
     template_name: &str,
     extra_instruments: &[String],
     trace_seconds: u64,
+    autostart: bool,
+    watch_capture: bool,
 ) -> Result<(PathBuf, PathBuf, PathBuf)> {
-    let launched_trace_seconds = trace_seconds.saturating_add(XCTRACE_LAUNCH_TRACE_BUFFER_SECS);
+    let launched_trace_seconds = trace_seconds.saturating_add(uikit_launch_trace_buffer_secs(spec));
+    let trace_wall_timeout = Duration::from_secs(
+        launched_trace_seconds.saturating_add(XCTRACE_RECORD_TIMEOUT_GRACE_SECS),
+    );
     let trace_path = case_dir.join(format!("{}.trace", trace_label));
     let stdout_path = case_dir.join(format!("{}.stdout.log", trace_label));
+    let target_stdout_path = case_dir.join(format!("{}.target.stdout.log", trace_label));
     let stderr_path = case_dir.join(format!("{}.stderr.log", trace_label));
-    let ready_stdout_path = case_dir.join("ready.stdout.log");
-    let ready_stderr_path = case_dir.join("ready.stderr.log");
-    let complete_stdout_path = case_dir.join("complete.stdout.log");
-    let complete_stderr_path = case_dir.join("complete.stderr.log");
+    let ready_stdout_path = case_dir.join(format!("{}.ready.stdout.log", trace_label));
+    let ready_stderr_path = case_dir.join(format!("{}.ready.stderr.log", trace_label));
+    let complete_stdout_path = case_dir.join(format!("{}.complete.stdout.log", trace_label));
+    let complete_stderr_path = case_dir.join(format!("{}.complete.stderr.log", trace_label));
+    let failed_stdout_path = case_dir.join(format!("{}.failed.stdout.log", trace_label));
+    let failed_stderr_path = case_dir.join(format!("{}.failed.stderr.log", trace_label));
+    let trace_started_stdout_path =
+        case_dir.join(format!("{}.trace-started.stdout.log", trace_label));
+    let trace_started_stderr_path =
+        case_dir.join(format!("{}.trace-started.stderr.log", trace_label));
     remove_existing_path(&trace_path)?;
     remove_existing_path(&stdout_path)?;
+    remove_existing_path(&target_stdout_path)?;
     remove_existing_path(&stderr_path)?;
     remove_existing_path(&ready_stdout_path)?;
     remove_existing_path(&ready_stderr_path)?;
     remove_existing_path(&complete_stdout_path)?;
     remove_existing_path(&complete_stderr_path)?;
+    remove_existing_path(&failed_stdout_path)?;
+    remove_existing_path(&failed_stderr_path)?;
+    remove_existing_path(&trace_started_stdout_path)?;
+    remove_existing_path(&trace_started_stderr_path)?;
 
     drain_uikit_processes(
         root,
@@ -4721,19 +7104,24 @@ fn run_uikit_device_launched_trace(
         "pre-trace launch cleanup",
     )?;
 
-    let ready_args = uikit_device_notification_observe_args(
-        device,
-        UIKIT_DEVICE_READY_NOTIFICATION,
-        UIKIT_DEVICE_READY_TIMEOUT_SECS,
-    );
-    let mut ready_child = spawn_command_owned_with_output_paths(
-        root,
-        "xcrun",
-        &ready_args,
-        &ready_stdout_path,
-        &ready_stderr_path,
-    )?;
-    thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
+    let mut ready_child = if autostart {
+        None
+    } else {
+        let ready_args = uikit_device_notification_observe_args(
+            device,
+            UIKIT_DEVICE_READY_NOTIFICATION,
+            UIKIT_DEVICE_READY_TIMEOUT_SECS,
+        );
+        let child = spawn_command_owned_with_output_paths(
+            root,
+            "xcrun",
+            &ready_args,
+            &ready_stdout_path,
+            &ready_stderr_path,
+        )?;
+        thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
+        Some(child)
+    };
 
     let complete_args = uikit_device_notification_observe_args(
         device,
@@ -4748,6 +7136,36 @@ fn run_uikit_device_launched_trace(
         &complete_stderr_path,
     )?;
     thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
+
+    let failed_args = uikit_device_notification_observe_args(
+        device,
+        UIKIT_DEVICE_FAILED_NOTIFICATION,
+        UIKIT_DEVICE_COMPLETE_TIMEOUT_SECS,
+    );
+    let mut failed_child = spawn_command_owned_with_output_paths(
+        root,
+        "xcrun",
+        &failed_args,
+        &failed_stdout_path,
+        &failed_stderr_path,
+    )?;
+    thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
+
+    let mut trace_started_child = if autostart {
+        None
+    } else {
+        let trace_started_args =
+            vec![String::from("-1"), String::from(UIKIT_TRACE_STARTED_NOTIFICATION)];
+        let child = spawn_command_owned_with_output_paths(
+            root,
+            "notifyutil",
+            &trace_started_args,
+            &trace_started_stdout_path,
+            &trace_started_stderr_path,
+        )?;
+        thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
+        Some(child)
+    };
 
     let mut trace_args = vec![
         String::from("xctrace"),
@@ -4766,11 +7184,19 @@ fn run_uikit_device_launched_trace(
         trace_args.push(String::from("--instrument"));
         trace_args.push(instrument.clone());
     }
-    trace_args.extend(uikit_perf_xctrace_launch_env_args(
+    trace_args.extend(uikit_perf_xctrace_launch_env_args_with_autostart(
         spec,
         refresh_mode,
         false,
+        autostart,
+        watch_capture,
     ));
+    if !autostart {
+        trace_args.push(String::from("--notify-tracing-started"));
+        trace_args.push(String::from(UIKIT_TRACE_STARTED_NOTIFICATION));
+    }
+    trace_args.push(String::from("--target-stdout"));
+    trace_args.push(target_stdout_path.to_string_lossy().into_owned());
     trace_args.push(String::from("--launch"));
     trace_args.push(String::from("--"));
     trace_args.push(built_app.bundle_identifier.clone());
@@ -4783,39 +7209,58 @@ fn run_uikit_device_launched_trace(
     )?;
     thread::sleep(Duration::from_millis(XCTRACE_STARTUP_DELAY_MS));
 
-    let ready_console_marker = format!("OXIDE_READY {}", uikit_trace_console_case_label(spec));
-    wait_for_device_notification_or_console_marker(
-        "xcrun",
-        &ready_args,
-        &mut ready_child,
-        &ready_stdout_path,
-        &ready_stderr_path,
-        UIKIT_DEVICE_READY_NOTIFICATION,
-        Path::new("/dev/null"),
-        &ready_console_marker,
-        Duration::from_secs(UIKIT_DEVICE_READY_TIMEOUT_SECS),
-    )?;
+    if !autostart {
+        if let Some(ready_child) = ready_child.as_mut() {
+            let _ = wait_for_ready_notification_or_assume_ready(
+                ready_child,
+                &ready_stdout_path,
+                &ready_stderr_path,
+            )?;
+        }
+        if let Some(trace_started_child) = trace_started_child.as_mut() {
+            wait_for_trace_started_or_trace_exit(
+                "xcrun",
+                &trace_args,
+                &mut trace_child,
+                &stdout_path,
+                &stderr_path,
+                trace_started_child,
+                &trace_started_stdout_path,
+                &trace_started_stderr_path,
+            )?;
+        }
+        post_uikit_device_notification(root, device, UIKIT_DEVICE_START_NOTIFICATION)?;
+    }
 
-    post_uikit_device_notification(root, device, UIKIT_DEVICE_START_NOTIFICATION)?;
-    let complete_console_marker = format!("OXIDE_COMPLETE {}", uikit_trace_console_case_label(spec));
-    let complete_result = wait_for_device_notification_or_console_marker(
-        "xcrun",
-        &complete_args,
-        &mut complete_child,
-        &complete_stdout_path,
-        &complete_stderr_path,
-        UIKIT_DEVICE_COMPLETE_NOTIFICATION,
-        Path::new("/dev/null"),
-        &complete_console_marker,
-        Duration::from_secs(UIKIT_DEVICE_COMPLETE_TIMEOUT_SECS),
-    );
-    let trace_result = wait_for_child_with_output_paths(
-        root,
+    let completion_marker = format!("OXIDE_COMPLETE {}", spec.test_name);
+    let observed_completion = observe_trace_completion_before_exit(
         "xcrun",
         &trace_args,
         &mut trace_child,
         &stdout_path,
         &stderr_path,
+        &failed_args,
+        &mut failed_child,
+        &failed_stdout_path,
+        &failed_stderr_path,
+        &mut complete_child,
+        &complete_stdout_path,
+        &complete_stderr_path,
+        &target_stdout_path,
+        &completion_marker,
+        trace_wall_timeout,
+    )?;
+    if observed_completion {
+        interrupt_child_process(&mut trace_child)?;
+    }
+
+    let trace_result = wait_for_xctrace_record_with_timeout(
+        "xcrun",
+        &trace_args,
+        &mut trace_child,
+        &stdout_path,
+        &stderr_path,
+        trace_wall_timeout,
     );
     let clear_result = drain_uikit_processes(
         root,
@@ -4824,337 +7269,338 @@ fn run_uikit_device_launched_trace(
         Duration::from_secs(5),
         "launched trace cleanup",
     );
+    let _ = failed_child.kill();
+    let _ = failed_child.wait();
 
-    complete_result?;
     trace_result?;
     clear_result?;
     wait_for_xctrace_bundle_settle(&trace_path)?;
+    if !autostart && !observed_completion {
+        if !launched_trace_has_bounded_workload_windows(
+            root,
+            &trace_path,
+            &built_app.executable_name,
+        )? {
+            bail!(
+                "launched trace for `{}` exited before `{}` or `{}` was observed, and `{}` did not expose bounded workload signposts in {}",
+                spec.test_name,
+                UIKIT_DEVICE_COMPLETE_NOTIFICATION,
+                completion_marker,
+                built_app.executable_name,
+                trace_path.display()
+            );
+        }
+        println!(
+            "Launched trace for `{}` exited without `{}` or `{}`, but the saved trace exposed bounded workload windows for `{}`; accepting the trace.",
+            spec.test_name,
+            UIKIT_DEVICE_COMPLETE_NOTIFICATION,
+            completion_marker,
+            built_app.executable_name
+        );
+    }
 
-    Ok((trace_path, PathBuf::new(), stderr_path))
+    Ok((trace_path, target_stdout_path, stderr_path))
 }
 
-fn run_uikit_device_attached_trace(
+fn launched_trace_has_bounded_workload_windows(
     root: &Path,
-    device: &UIKitPhysicalDevice,
-    built_app: &BuiltUIKitApp,
-    spec: &UIKitCaseSpec,
-    refresh_mode: UIKitDeviceRefreshMode,
-    case_dir: &Path,
-    trace_label: &str,
-    template_name: &str,
-    extra_instruments: &[String],
-    trace_seconds: u64,
-) -> Result<(PathBuf, PathBuf, PathBuf)> {
-    let trace_path = case_dir.join(format!("{}.trace", trace_label));
-    let stdout_path = case_dir.join(format!("{}.stdout.log", trace_label));
-    let stderr_path = case_dir.join(format!("{}.stderr.log", trace_label));
-    let launch_stdout_path = case_dir.join("launch.stdout.log");
-    let launch_stderr_path = case_dir.join("launch.stderr.log");
-    let ready_stdout_path = case_dir.join("ready.stdout.log");
-    let ready_stderr_path = case_dir.join("ready.stderr.log");
-    let complete_stdout_path = case_dir.join("complete.stdout.log");
-    let complete_stderr_path = case_dir.join("complete.stderr.log");
-    let trace_started_stdout_path = case_dir.join("trace-started.stdout.log");
-    let trace_started_stderr_path = case_dir.join("trace-started.stderr.log");
-    remove_existing_path(&trace_path)?;
-    remove_existing_path(&stdout_path)?;
-    remove_existing_path(&stderr_path)?;
-    remove_existing_path(&launch_stdout_path)?;
-    remove_existing_path(&launch_stderr_path)?;
-    remove_existing_path(&ready_stdout_path)?;
-    remove_existing_path(&ready_stderr_path)?;
-    remove_existing_path(&complete_stdout_path)?;
-    remove_existing_path(&complete_stderr_path)?;
-    remove_existing_path(&trace_started_stdout_path)?;
-    remove_existing_path(&trace_started_stderr_path)?;
+    trace_path: &Path,
+    process_name: &str,
+) -> Result<bool> {
+    let expected_process = normalize_process_name(process_name);
+    let windows = extract_trace_windows(root, trace_path)?;
+    Ok(windows
+        .iter()
+        .any(|window| normalize_process_name(&window.process_name) == expected_process))
+}
 
-    drain_uikit_processes(
-        root,
-        device,
-        &built_app.executable_name,
-        Duration::from_secs(5),
-        "pre-trace launch cleanup",
-    )?;
-
-    let ready_args = uikit_device_notification_observe_args(
-        device,
-        UIKIT_DEVICE_READY_NOTIFICATION,
-        UIKIT_DEVICE_READY_TIMEOUT_SECS,
-    );
-    let mut ready_child = spawn_command_owned_with_output_paths(
-        root,
-        "xcrun",
-        &ready_args,
-        &ready_stdout_path,
-        &ready_stderr_path,
-    )?;
-    thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
-
-    let launch_args = uikit_perf_launch_args(device, built_app, spec, refresh_mode, true)?;
-    let mut launch_child = spawn_command_owned_with_output_paths(
-        root,
-        "xcrun",
-        &launch_args,
-        &launch_stdout_path,
-        &launch_stderr_path,
-    )?;
-    let process_pid = match wait_for_uikit_process_start(
-        root,
-        device,
-        &built_app.executable_name,
-        Duration::from_secs(15),
-    ) {
-        Ok(pid) => pid,
-        Err(err) => {
-            let _ = ready_child.kill();
-            let _ = ready_child.wait();
-            let _ = launch_child.kill();
-            let _ = launch_child.wait();
-            let _ = wait_for_uikit_process_clear(
-                root,
-                device,
-                &built_app.executable_name,
-                Duration::from_secs(5),
-            );
-            return Err(err);
+fn observe_trace_completion_before_exit(
+    _program: &str,
+    _args: &[String],
+    trace_child: &mut Child,
+    trace_stdout_path: &Path,
+    trace_stderr_path: &Path,
+    _failed_args: &[String],
+    failed_child: &mut Child,
+    failed_stdout_path: &Path,
+    failed_stderr_path: &Path,
+    complete_child: &mut Child,
+    complete_stdout_path: &Path,
+    complete_stderr_path: &Path,
+    target_stdout_path: &Path,
+    complete_console_marker: &str,
+    timeout: Duration,
+) -> Result<bool> {
+    let deadline = Instant::now() + timeout;
+    let mut complete_stdout = IncrementalTextReader::default();
+    let mut failed_stdout = IncrementalTextReader::default();
+    let mut target_stdout = IncrementalTextReader::default();
+    let mut observer_finished = false;
+    let mut failed_observer_finished = false;
+    loop {
+        let complete_stdout_text = complete_stdout.refresh(complete_stdout_path)?;
+        let failed_stdout_text = failed_stdout.refresh(failed_stdout_path)?;
+        let target_stdout_text = target_stdout.refresh(target_stdout_path)?;
+        if let Some(detail) = latest_benchmark_build_failure(target_stdout_text) {
+            let _ = complete_child.kill();
+            let _ = complete_child.wait();
+            let _ = failed_child.kill();
+            let _ = failed_child.wait();
+            bail!("benchmark build failure during launched trace: {}", detail);
         }
-    };
-    let _ = wait_for_ready_notification_or_assume_ready(
-        &mut ready_child,
-        &ready_stdout_path,
-        &ready_stderr_path,
-    )?;
-    let console_case_label = uikit_trace_console_case_label(spec);
-    let ready_console_marker = format!("OXIDE_READY {}", console_case_label);
-    wait_for_device_notification_or_console_marker(
-        "xcrun",
-        &ready_args,
-        &mut ready_child,
-        &ready_stdout_path,
-        &ready_stderr_path,
-        UIKIT_DEVICE_READY_NOTIFICATION,
-        &launch_stdout_path,
-        &ready_console_marker,
-        Duration::from_secs(UIKIT_DEVICE_READY_TIMEOUT_SECS),
-    )?;
-    let attach_ready_delay_ms = xctrace_attach_ready_delay_ms();
-    if attach_ready_delay_ms > 0 {
-        thread::sleep(Duration::from_millis(attach_ready_delay_ms));
-    }
-
-    let mut trace_child = None;
-    let mut complete_child = None;
-    let mut active_trace_args = Vec::new();
-    let mut attach_error = None;
-    let mut attached_process_pid = process_pid;
-    let pid_attach_attempts = usize::max(1, XCTRACE_ATTACH_RETRIES / 2);
-    for attempt in 0..XCTRACE_ATTACH_RETRIES {
-        let current_process_pid = match wait_for_uikit_process_start(
-            root,
-            device,
-            &built_app.executable_name,
-            Duration::from_secs(2),
+        if devicectl_notification_observed(failed_stdout_text, UIKIT_DEVICE_FAILED_NOTIFICATION) {
+            let _ = complete_child.kill();
+            let _ = complete_child.wait();
+            let _ = failed_child.kill();
+            let _ = failed_child.wait();
+            let stderr = fs::read_to_string(failed_stderr_path).unwrap_or_default();
+            let detail = latest_benchmark_build_failure(target_stdout_text)
+                .unwrap_or_else(|| String::from("app posted a benchmark failure notification"));
+            let stderr = stderr.trim();
+            if stderr.is_empty() {
+                bail!("benchmark build failure during launched trace: {}", detail);
+            }
+            bail!(
+                "benchmark build failure during launched trace: {} (failure observer stderr: {})",
+                detail,
+                stderr
+            );
+        }
+        if notification_or_console_marker_observed(
+            complete_stdout_text,
+            UIKIT_DEVICE_COMPLETE_NOTIFICATION,
+            target_stdout_text,
+            complete_console_marker,
         ) {
-            Ok(pid) => pid,
-            Err(err) => {
-                attach_error = Some(err);
-                break;
-            }
-        };
-        let use_name_attach = attempt >= pid_attach_attempts;
-        let attach_target = if use_name_attach {
-            built_app.executable_name.clone()
-        } else {
-            current_process_pid.to_string()
-        };
-        let trace_started_args =
-            vec![String::from("-1"), String::from(UIKIT_TRACE_STARTED_NOTIFICATION)];
-        remove_existing_path(&trace_started_stdout_path)?;
-        remove_existing_path(&trace_started_stderr_path)?;
-        let mut trace_started_child = spawn_command_owned_with_output_paths(
-            root,
-            "notifyutil",
-            &trace_started_args,
-            &trace_started_stdout_path,
-            &trace_started_stderr_path,
-        )?;
-        thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
-
-        let complete_args = uikit_device_notification_observe_args(
-            device,
-            UIKIT_DEVICE_COMPLETE_NOTIFICATION,
-            UIKIT_DEVICE_COMPLETE_TIMEOUT_SECS,
-        );
-        remove_existing_path(&complete_stdout_path)?;
-        remove_existing_path(&complete_stderr_path)?;
-        let mut complete_child_attempt = spawn_command_owned_with_output_paths(
-            root,
-            "xcrun",
-            &complete_args,
-            &complete_stdout_path,
-            &complete_stderr_path,
-        )?;
-        thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
-
-        let mut trace_args = vec![
-            String::from("xctrace"),
-            String::from("record"),
-            String::from("--template"),
-            String::from(template_name),
-            String::from("--device"),
-            device.udid.clone(),
-            String::from("--attach"),
-            attach_target,
-            String::from("--time-limit"),
-            format!("{}s", trace_seconds),
-            String::from("--output"),
-            trace_path.to_string_lossy().into_owned(),
-            String::from("--notify-tracing-started"),
-            String::from(UIKIT_TRACE_STARTED_NOTIFICATION),
-            String::from("--no-prompt"),
-        ];
-        for instrument in extra_instruments {
-            trace_args.push(String::from("--instrument"));
-            trace_args.push(instrument.clone());
+            let _ = complete_child.kill();
+            let _ = complete_child.wait();
+            let _ = failed_child.kill();
+            let _ = failed_child.wait();
+            return Ok(true);
         }
-        remove_existing_path(&trace_path)?;
-        remove_existing_path(&stdout_path)?;
-        remove_existing_path(&stderr_path)?;
-        let mut child = spawn_command_owned_with_output_paths(
-            root,
-            "xcrun",
-            &trace_args,
-            &stdout_path,
-            &stderr_path,
-        )?;
-        thread::sleep(Duration::from_millis(XCTRACE_STARTUP_DELAY_MS));
-        let started_result = wait_for_trace_started_or_trace_exit(
-            "xcrun",
-            &trace_args,
-            &mut child,
-            &stdout_path,
-            &stderr_path,
-            &mut trace_started_child,
-            &trace_started_stdout_path,
-            &trace_started_stderr_path,
-        );
-        match started_result {
-            Ok(()) => {
-                attached_process_pid = current_process_pid;
-                active_trace_args = trace_args;
-                trace_child = Some(child);
-                complete_child = Some((complete_args, complete_child_attempt));
-                break;
+        if !observer_finished {
+            if complete_child.try_wait()?.is_some() {
+                let _ = fs::read_to_string(complete_stderr_path).unwrap_or_default();
+                observer_finished = true;
             }
-            Err(err) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = trace_started_child.kill();
-                let _ = trace_started_child.wait();
-                let _ = complete_child_attempt.kill();
-                let _ = complete_child_attempt.wait();
-                let can_retry = is_missing_xctrace_attach_process_error(&err.to_string())
-                    && attempt + 1 < XCTRACE_ATTACH_RETRIES;
-                attach_error = Some(err);
-                if can_retry {
-                    thread::sleep(Duration::from_millis(XCTRACE_ATTACH_RETRY_DELAY_MS));
-                    continue;
+        }
+        if !failed_observer_finished {
+            if failed_child.try_wait()?.is_some() {
+                let _ = fs::read_to_string(failed_stderr_path).unwrap_or_default();
+                failed_observer_finished = true;
+            }
+        }
+        if trace_child.try_wait()?.is_some() {
+            let _ = complete_child.kill();
+            let _ = complete_child.wait();
+            let _ = failed_child.kill();
+            let _ = failed_child.wait();
+            let _ = fs::read_to_string(trace_stdout_path).unwrap_or_default();
+            let _ = fs::read_to_string(trace_stderr_path).unwrap_or_default();
+            return Ok(false);
+        }
+        if Instant::now() >= deadline {
+            let _ = complete_child.kill();
+            let _ = complete_child.wait();
+            let _ = failed_child.kill();
+            let _ = failed_child.wait();
+            return Ok(false);
+        }
+        thread::sleep(Duration::from_millis(XCTRACE_RECORD_TIMEOUT_POLL_MS));
+    }
+}
+
+fn wait_for_device_completion_or_failure(
+    program: &str,
+    complete_args: &[String],
+    complete_child: &mut Child,
+    complete_stdout_path: &Path,
+    complete_stderr_path: &Path,
+    failed_args: &[String],
+    failed_child: &mut Child,
+    failed_stdout_path: &Path,
+    failed_stderr_path: &Path,
+    console_stdout_path: &Path,
+    complete_console_marker: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let mut complete_stdout = IncrementalTextReader::default();
+    let mut failed_stdout = IncrementalTextReader::default();
+    let mut console_stdout = IncrementalTextReader::default();
+    let mut complete_observer_result: Option<(std::process::ExitStatus, String, String)> = None;
+    let mut failed_observer_result: Option<(std::process::ExitStatus, String, String)> = None;
+    loop {
+        let complete_text = complete_stdout.refresh(complete_stdout_path)?;
+        let failed_text = failed_stdout.refresh(failed_stdout_path)?;
+        let console_text = console_stdout.refresh(console_stdout_path)?;
+        if let Some(detail) = latest_benchmark_build_failure(console_text) {
+            let _ = complete_child.kill();
+            let _ = complete_child.wait();
+            let _ = failed_child.kill();
+            let _ = failed_child.wait();
+            bail!("benchmark build failure: {}", detail);
+        }
+        if devicectl_notification_observed(failed_text, UIKIT_DEVICE_FAILED_NOTIFICATION) {
+            let _ = complete_child.kill();
+            let _ = complete_child.wait();
+            let _ = failed_child.kill();
+            let _ = failed_child.wait();
+            bail!(
+                "benchmark build failure: {}",
+                latest_benchmark_build_failure(console_text)
+                    .unwrap_or_else(|| String::from("app posted a benchmark failure notification"))
+            );
+        }
+        if notification_or_console_marker_observed(
+            complete_text,
+            UIKIT_DEVICE_COMPLETE_NOTIFICATION,
+            console_text,
+            complete_console_marker,
+        ) {
+            let _ = complete_child.kill();
+            let _ = complete_child.wait();
+            let _ = failed_child.kill();
+            let _ = failed_child.wait();
+            return Ok(());
+        }
+        if complete_observer_result.is_none() {
+            if let Some(status) = complete_child
+                .try_wait()
+                .with_context(|| format!("probing {} {}", program, complete_args.join(" ")))?
+            {
+                let stderr = fs::read_to_string(complete_stderr_path).unwrap_or_default();
+                if notification_or_console_marker_observed(
+                    complete_stdout.current(),
+                    UIKIT_DEVICE_COMPLETE_NOTIFICATION,
+                    console_stdout.current(),
+                    complete_console_marker,
+                ) {
+                    let _ = failed_child.kill();
+                    let _ = failed_child.wait();
+                    return Ok(());
                 }
-                break;
+                complete_observer_result =
+                    Some((status, complete_stdout.current().to_string(), stderr));
             }
         }
-    }
-    let mut trace_child = match trace_child {
-        Some(child) => child,
-        None => {
-            let terminate_result =
-                terminate_uikit_device_process(root, device, attached_process_pid);
-            let launch_result = wait_for_console_launch_with_output_paths(
-                root,
-                "xcrun",
-                &launch_args,
-                &mut launch_child,
-                &launch_stdout_path,
-                &launch_stderr_path,
-            );
-            let clear_result = drain_uikit_processes(
-                root,
-                device,
-                &built_app.executable_name,
-                Duration::from_secs(5),
-                "failed attached trace cleanup",
-            );
-            let _ = terminate_result;
-            let _ = launch_result;
-            let _ = clear_result;
-            return Err(attach_error.unwrap_or_else(|| {
-                anyhow::anyhow!(
-                    "xcrun xctrace record never attached to pid `{}` after {} attempts",
-                    attached_process_pid,
-                    XCTRACE_ATTACH_RETRIES
-                )
-            }));
+        if failed_observer_result.is_none() {
+            if let Some(status) = failed_child
+                .try_wait()
+                .with_context(|| format!("probing {} {}", program, failed_args.join(" ")))?
+            {
+                let stderr = fs::read_to_string(failed_stderr_path).unwrap_or_default();
+                if devicectl_notification_observed(
+                    failed_stdout.current(),
+                    UIKIT_DEVICE_FAILED_NOTIFICATION,
+                ) {
+                    let _ = complete_child.kill();
+                    let _ = complete_child.wait();
+                    bail!(
+                        "benchmark build failure: {}",
+                        latest_benchmark_build_failure(console_stdout.current()).unwrap_or_else(
+                            || String::from("app posted a benchmark failure notification")
+                        )
+                    );
+                }
+                failed_observer_result =
+                    Some((status, failed_stdout.current().to_string(), stderr));
+            }
         }
-    };
-    let (complete_args, mut complete_child) = complete_child.with_context(|| {
-        format!(
-            "xcrun {} started without a completion observer for pid `{}`",
-            active_trace_args.join(" "),
-            attached_process_pid
-        )
-    })?;
-    let start_result =
-        post_uikit_device_notification(root, device, UIKIT_DEVICE_START_NOTIFICATION);
-    let complete_console_marker = format!("OXIDE_COMPLETE {}", console_case_label);
-    let complete_result = if start_result.is_ok() {
-        wait_for_device_notification_or_console_marker(
-            "xcrun",
-            &complete_args,
-            &mut complete_child,
-            &complete_stdout_path,
-            &complete_stderr_path,
-            UIKIT_DEVICE_COMPLETE_NOTIFICATION,
-            &launch_stdout_path,
-            &complete_console_marker,
-            Duration::from_secs(UIKIT_DEVICE_COMPLETE_TIMEOUT_SECS),
-        )
-    } else {
-        start_result.map(|_| ())
-    };
-    let trace_result = wait_for_child_with_output_paths(
-        root,
-        "xcrun",
-        &active_trace_args,
-        &mut trace_child,
-        &stdout_path,
-        &stderr_path,
-    );
-    let terminate_result = terminate_uikit_device_process(root, device, attached_process_pid);
-    let launch_result = wait_for_console_launch_with_output_paths(
-        root,
-        "xcrun",
-        &launch_args,
-        &mut launch_child,
-        &launch_stdout_path,
-        &launch_stderr_path,
-    );
-    let clear_result = drain_uikit_processes(
-        root,
-        device,
-        &built_app.executable_name,
-        Duration::from_secs(5),
-        "attached trace cleanup",
-    );
-    complete_result?;
-    trace_result?;
-    terminate_result?;
-    if let Err(err) = launch_result {
-        eprintln!("[xtask] non-fatal console launch teardown error for attached trace: {err}");
+        if Instant::now() >= deadline {
+            let _ = complete_child.kill();
+            let _ = complete_child.wait();
+            let _ = failed_child.kill();
+            let _ = failed_child.wait();
+            if let Some(detail) = latest_benchmark_build_failure(console_stdout.current()) {
+                bail!("benchmark build failure: {}", detail);
+            }
+            if let Some((status, stdout, stderr)) = complete_observer_result.take() {
+                let stdout = stdout.trim();
+                let stderr = stderr.trim();
+                if status.success() {
+                    bail!(
+                        "{} {} exited without observing `{}` and console marker `{}` never appeared before the timeout",
+                        program,
+                        complete_args.join(" "),
+                        UIKIT_DEVICE_COMPLETE_NOTIFICATION,
+                        complete_console_marker
+                    );
+                }
+                if stderr.is_empty() {
+                    if stdout.is_empty() {
+                        bail!(
+                            "{} {} failed with status {} and console marker `{}` never appeared before the timeout",
+                            program,
+                            complete_args.join(" "),
+                            status.code().unwrap_or(-1),
+                            complete_console_marker
+                        );
+                    }
+                    bail!(
+                        "{} {} failed with status {}: {}",
+                        program,
+                        complete_args.join(" "),
+                        status.code().unwrap_or(-1),
+                        stdout
+                    );
+                }
+                bail!(
+                    "{} {} failed with status {}: {}",
+                    program,
+                    complete_args.join(" "),
+                    status.code().unwrap_or(-1),
+                    stderr
+                );
+            }
+            if let Some((status, stdout, stderr)) = failed_observer_result.take() {
+                let stdout = stdout.trim();
+                let stderr = stderr.trim();
+                if status.success() {
+                    bail!(
+                        "benchmark build failure: {}",
+                        latest_benchmark_build_failure(console_stdout.current()).unwrap_or_else(
+                            || String::from("app posted a benchmark failure notification")
+                        )
+                    );
+                }
+                if stderr.is_empty() {
+                    if stdout.is_empty() {
+                        bail!(
+                            "{} {} failed with status {} while observing `{}`",
+                            program,
+                            failed_args.join(" "),
+                            status.code().unwrap_or(-1),
+                            UIKIT_DEVICE_FAILED_NOTIFICATION
+                        );
+                    }
+                    bail!(
+                        "{} {} failed with status {}: {}",
+                        program,
+                        failed_args.join(" "),
+                        status.code().unwrap_or(-1),
+                        stdout
+                    );
+                }
+                bail!(
+                    "{} {} failed with status {}: {}",
+                    program,
+                    failed_args.join(" "),
+                    status.code().unwrap_or(-1),
+                    stderr
+                );
+            }
+            bail!(
+                "timed out waiting for `{}`/`{}` or console marker `{}` from {} {}",
+                UIKIT_DEVICE_COMPLETE_NOTIFICATION,
+                UIKIT_DEVICE_FAILED_NOTIFICATION,
+                complete_console_marker,
+                program,
+                complete_args.join(" ")
+            );
+        }
+        thread::sleep(Duration::from_millis(100));
     }
-    clear_result?;
-    wait_for_xctrace_bundle_settle(&trace_path)?;
-
-    Ok((trace_path, launch_stdout_path, stderr_path))
 }
 
 fn wait_for_trace_started_or_trace_exit(
@@ -5305,6 +7751,67 @@ fn wait_for_ready_notification_or_assume_ready(
     }
 }
 
+fn wait_for_start_ack_or_completion(
+    launch_stdout_path: &Path,
+    complete_stdout_path: &Path,
+    start_console_marker: &str,
+    complete_console_marker: &str,
+    timeout: Duration,
+) -> Result<bool> {
+    let deadline = Instant::now() + timeout;
+    let mut launch_stdout = IncrementalTextReader::default();
+    let mut complete_stdout = IncrementalTextReader::default();
+    loop {
+        let launch_stdout_text = launch_stdout.refresh(launch_stdout_path)?;
+        let complete_stdout_text = complete_stdout.refresh(complete_stdout_path)?;
+        if start_console_marker_or_completion_observed(
+            complete_stdout_text,
+            UIKIT_DEVICE_COMPLETE_NOTIFICATION,
+            launch_stdout_text,
+            start_console_marker,
+            complete_console_marker,
+        ) {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn post_uikit_start_notification_until_acknowledged(
+    root: &Path,
+    device: &UIKitPhysicalDevice,
+    launch_stdout_path: &Path,
+    complete_stdout_path: &Path,
+    start_console_marker: &str,
+    complete_console_marker: &str,
+) -> Result<()> {
+    for attempt in 0..UIKIT_DEVICE_START_POST_RETRIES {
+        post_uikit_device_notification(root, device, UIKIT_DEVICE_START_NOTIFICATION)?;
+        if wait_for_start_ack_or_completion(
+            launch_stdout_path,
+            complete_stdout_path,
+            start_console_marker,
+            complete_console_marker,
+            Duration::from_millis(UIKIT_DEVICE_START_ACK_TIMEOUT_MS),
+        )? {
+            return Ok(());
+        }
+        if attempt + 1 < UIKIT_DEVICE_START_POST_RETRIES {
+            thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
+        }
+    }
+    bail!(
+        "posted `{}` {} times but `{}` or `{}` never appeared before the acknowledgment timeout",
+        UIKIT_DEVICE_START_NOTIFICATION,
+        UIKIT_DEVICE_START_POST_RETRIES,
+        start_console_marker,
+        complete_console_marker
+    );
+}
+
 fn wait_for_device_notification_or_console_marker(
     program: &str,
     args: &[String],
@@ -5318,13 +7825,15 @@ fn wait_for_device_notification_or_console_marker(
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
     let mut observer_result: Option<(std::process::ExitStatus, String, String)> = None;
+    let mut notification_reader = IncrementalTextReader::default();
+    let mut console_reader = IncrementalTextReader::default();
     loop {
-        let stdout = fs::read_to_string(stdout_path).unwrap_or_default();
-        let console_stdout = fs::read_to_string(console_stdout_path).unwrap_or_default();
+        let stdout = notification_reader.refresh(stdout_path)?;
+        let console_stdout = console_reader.refresh(console_stdout_path)?;
         if notification_or_console_marker_observed(
-            &stdout,
+            stdout,
             notification_name,
-            &console_stdout,
+            console_stdout,
             console_marker,
         ) {
             let _ = child.kill();
@@ -5338,14 +7847,14 @@ fn wait_for_device_notification_or_console_marker(
             {
                 let stderr = fs::read_to_string(stderr_path).unwrap_or_default();
                 if notification_or_console_marker_observed(
-                    &stdout,
+                    notification_reader.current(),
                     notification_name,
-                    &console_stdout,
+                    console_reader.current(),
                     console_marker,
                 ) {
                     return Ok(());
                 }
-                observer_result = Some((status, stdout, stderr));
+                observer_result = Some((status, notification_reader.current().to_string(), stderr));
             }
         }
         if Instant::now() >= deadline {
@@ -5531,7 +8040,7 @@ fn parse_ios_device_perf_cli(args: &[String]) -> Result<IosDevicePerfCli> {
             }
             "--refresh-mode" => {
                 let value = it.next().context("missing value for --refresh-mode")?;
-                cli.refresh_modes.extend(UIKitDeviceRefreshMode::parse_cli(value)?);
+                cli.refresh_mode = UIKitDeviceRefreshMode::parse_cli(value)?;
             }
             "--reuse-derived-data" => {
                 let path = it.next().context("missing value for --reuse-derived-data")?;
@@ -5558,7 +8067,73 @@ fn parse_ios_device_perf_cli(args: &[String]) -> Result<IosDevicePerfCli> {
             other => bail!("unknown ios device-perf argument `{}`", other),
         }
     }
-    normalize_uikit_refresh_modes(&mut cli.refresh_modes);
+    Ok(cli)
+}
+
+fn parse_ios_compare_device_perf_cli(args: &[String]) -> Result<IosCompareDevicePerfCli> {
+    let mut cli = IosCompareDevicePerfCli::default();
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--case" => {
+                let value = it.next().context("missing value for --case")?;
+                cli.cases.push(value.clone());
+            }
+            "--device" => {
+                let value = it.next().context("missing value for --device")?;
+                cli.device = Some(value.clone());
+            }
+            "--family" => {
+                let value = it.next().context("missing value for --family")?;
+                cli.family = Some(String::from(normalize_compare_device_family(value)?));
+            }
+            "--oxide-compare" => {
+                let path = it.next().context("missing value for --oxide-compare")?;
+                cli.oxide_compare = Some(PathBuf::from(path));
+            }
+            "--power-trace" => {
+                let path = it.next().context("missing value for --power-trace")?;
+                cli.power_trace = Some(PathBuf::from(path));
+            }
+            "--power-trace-root" => {
+                let path = it.next().context("missing value for --power-trace-root")?;
+                cli.power_trace_root = Some(PathBuf::from(path));
+            }
+            "--refresh-mode" => {
+                let value = it.next().context("missing value for --refresh-mode")?;
+                cli.refresh_mode = UIKitDeviceRefreshMode::parse_cli(value)?;
+            }
+            "--result-root" => {
+                let path = it.next().context("missing value for --result-root")?;
+                cli.result_root = Some(PathBuf::from(path));
+            }
+            "--watchable-smoke" => {
+                cli.smoke = true;
+            }
+            "--smoke" => {
+                cli.smoke = true;
+            }
+            "--team" => {
+                let value = it.next().context("missing value for --team")?;
+                cli.team = Some(value.clone());
+            }
+            "--trace-seconds" => {
+                let value = it.next().context("missing value for --trace-seconds")?;
+                let seconds = value
+                    .parse::<u64>()
+                    .with_context(|| format!("parsing trace seconds from `{}`", value))?;
+                cli.trace_seconds = Some(seconds);
+            }
+            "--uikit-compare" => {
+                let path = it.next().context("missing value for --uikit-compare")?;
+                cli.uikit_compare = Some(PathBuf::from(path));
+            }
+            "--write-baseline" => {
+                cli.write_baseline = true;
+            }
+            other => bail!("unknown ios compare-device-perf argument `{}`", other),
+        }
+    }
     Ok(cli)
 }
 
@@ -5632,6 +8207,10 @@ fn parse_ios_oxide_device_perf_cli(args: &[String]) -> Result<IosOxideDevicePerf
                 let path = it.next().context("missing value for --markdown-out")?;
                 cli.markdown_out = Some(PathBuf::from(path));
             }
+            "--reuse-derived-data" => {
+                let path = it.next().context("missing value for --reuse-derived-data")?;
+                cli.reuse_derived_data = Some(PathBuf::from(path));
+            }
             "--result-root" => {
                 let path = it.next().context("missing value for --result-root")?;
                 cli.result_root = Some(PathBuf::from(path));
@@ -5639,6 +8218,13 @@ fn parse_ios_oxide_device_perf_cli(args: &[String]) -> Result<IosOxideDevicePerf
             "--team" => {
                 let value = it.next().context("missing value for --team")?;
                 cli.team = Some(value.clone());
+            }
+            "--trace-seconds" => {
+                let value = it.next().context("missing value for --trace-seconds")?;
+                let seconds = value
+                    .parse::<u64>()
+                    .with_context(|| format!("parsing trace seconds from `{}`", value))?;
+                cli.trace_seconds = Some(seconds);
             }
             "--smoke" => {
                 cli.smoke = true;
@@ -5669,6 +8255,26 @@ fn parse_ios_time_profiler_summary_cli(args: &[String]) -> Result<IosTimeProfile
         }
     }
     Ok(cli)
+}
+
+fn resolve_compare_device_run_stage(
+    cli: &IosCompareDevicePerfCli,
+) -> Result<(CompareDeviceRunStage, Option<&str>)> {
+    if !cli.cases.is_empty() && (cli.smoke || cli.family.is_some()) {
+        bail!("--case cannot be combined with --watchable-smoke/--smoke or --family");
+    }
+    if cli.write_baseline && (cli.smoke || cli.family.is_some()) {
+        bail!("--write-baseline requires the promotion/full compare-device-perf mode");
+    }
+    let family = cli.family.as_deref();
+    let stage = if cli.smoke {
+        CompareDeviceRunStage::WatchableSmoke
+    } else if family.is_some() {
+        CompareDeviceRunStage::FamilyProof
+    } else {
+        CompareDeviceRunStage::Promotion
+    };
+    Ok((stage, family))
 }
 
 fn run_command_owned(root: &Path, program: &str, args: &[String], allow_fail: bool) -> Result<()> {
@@ -5940,6 +8546,131 @@ fn wait_for_child_with_output_paths(
     )
 }
 
+fn wait_for_xctrace_record_with_timeout(
+    program: &str,
+    args: &[String],
+    child: &mut Child,
+    stdout_path: &Path,
+    stderr_path: &Path,
+    wall_timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + wall_timeout;
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("waiting for {} {}", program, args.join(" ")))?
+        {
+            let stdout = fs::read_to_string(stdout_path).unwrap_or_default();
+            let stderr = fs::read_to_string(stderr_path).unwrap_or_default();
+            if status.success() {
+                return Ok(());
+            }
+            let stdout = stdout.trim();
+            let stderr = stderr.trim();
+            if stderr.is_empty() {
+                if stdout.is_empty() {
+                    bail!(
+                        "{} {} failed with status {}",
+                        program,
+                        args.join(" "),
+                        status.code().unwrap_or(-1)
+                    );
+                }
+                bail!(
+                    "{} {} failed with status {}: {}",
+                    program,
+                    args.join(" "),
+                    status.code().unwrap_or(-1),
+                    stdout
+                );
+            }
+            bail!(
+                "{} {} failed with status {}: {}",
+                program,
+                args.join(" "),
+                status.code().unwrap_or(-1),
+                stderr
+            );
+        }
+        if Instant::now() >= deadline {
+            let _ = interrupt_child_process(child);
+            let interrupt_deadline =
+                Instant::now() + Duration::from_secs(XCTRACE_RECORD_INTERRUPT_GRACE_SECS);
+            while Instant::now() < interrupt_deadline {
+                if let Some(status) = child
+                    .try_wait()
+                    .with_context(|| format!("waiting for {} {}", program, args.join(" ")))?
+                {
+                    let stdout = fs::read_to_string(stdout_path).unwrap_or_default();
+                    let stderr = fs::read_to_string(stderr_path).unwrap_or_default();
+                    if status.success() {
+                        return Ok(());
+                    }
+                    let stdout = stdout.trim();
+                    let stderr = stderr.trim();
+                    if stderr.is_empty() {
+                        if stdout.is_empty() {
+                            bail!(
+                                "{} {} failed with status {} after interrupting the timed-out xctrace run",
+                                program,
+                                args.join(" "),
+                                status.code().unwrap_or(-1)
+                            );
+                        }
+                        bail!(
+                            "{} {} failed with status {} after interrupting the timed-out xctrace run: {}",
+                            program,
+                            args.join(" "),
+                            status.code().unwrap_or(-1),
+                            stdout
+                        );
+                    }
+                    bail!(
+                        "{} {} failed with status {} after interrupting the timed-out xctrace run: {}",
+                        program,
+                        args.join(" "),
+                        status.code().unwrap_or(-1),
+                        stderr
+                    );
+                }
+                thread::sleep(Duration::from_millis(XCTRACE_RECORD_TIMEOUT_POLL_MS));
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            let stdout = fs::read_to_string(stdout_path).unwrap_or_default();
+            let stderr = fs::read_to_string(stderr_path).unwrap_or_default();
+            bail!(
+                "{} {} exceeded wall-time timeout of {:.1}s before xctrace finished. stdout: {} stderr: {}",
+                program,
+                args.join(" "),
+                wall_timeout.as_secs_f64(),
+                stdout.trim(),
+                stderr.trim()
+            );
+        }
+        thread::sleep(Duration::from_millis(XCTRACE_RECORD_TIMEOUT_POLL_MS));
+    }
+}
+
+fn interrupt_child_process(child: &mut Child) -> Result<()> {
+    if child.try_wait()?.is_some() {
+        return Ok(());
+    }
+    let pid = child.id().to_string();
+    let status = Command::new("kill")
+        .arg("-INT")
+        .arg(&pid)
+        .status()
+        .with_context(|| format!("sending SIGINT to child pid {}", pid))?;
+    if status.success() {
+        return Ok(());
+    }
+    if child.try_wait()?.is_some() {
+        return Ok(());
+    }
+    bail!("kill -INT {} failed with status {}", pid, status.code().unwrap_or(-1));
+}
+
 fn wait_for_console_launch_with_output_paths(
     _root: &Path,
     program: &str,
@@ -5999,25 +8730,53 @@ fn run_devicectl_json_allow_failure(root: &Path, args: &[String], label: &str) -
     Ok(json)
 }
 
+pub fn is_retryable_devicectl_json_error(stderr: &str) -> bool {
+    stderr.contains("Couldn't get the message from the device")
+        || stderr.contains("StreamingAction")
+        || stderr.contains("CoreDevice.ActionError error 3")
+}
+
 fn run_devicectl_json_inner(root: &Path, args: &[String], label: &str) -> Result<(String, i32)> {
     let json_path =
         std::env::temp_dir().join(format!("oxide-xtask-{}-{}.json", label, std::process::id()));
-    remove_existing_path(&json_path)?;
     let mut full_args = vec![String::from("devicectl")];
     full_args.extend_from_slice(args);
     full_args.push(String::from("-j"));
     full_args.push(json_path.to_string_lossy().into_owned());
-    println!("> xcrun {}", full_args.join(" "));
-    let status = Command::new("xcrun")
-        .args(&full_args)
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::inherit())
-        .status()
-        .with_context(|| format!("running xcrun {}", full_args.join(" ")))?;
-    let json = fs::read_to_string(&json_path)
-        .with_context(|| format!("reading {}", json_path.display()))?;
-    Ok((json, status.code().unwrap_or(-1)))
+    let printed_command = format!("xcrun {}", full_args.join(" "));
+    for attempt in 0..DEVICECTL_JSON_RETRIES {
+        remove_existing_path(&json_path)?;
+        println!("> {}", printed_command);
+        let output = Command::new("xcrun")
+            .args(&full_args)
+            .current_dir(root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .with_context(|| format!("running {}", printed_command))?;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.trim().is_empty() {
+            eprint!("{}", stderr);
+        }
+        let status = output.status.code().unwrap_or(-1);
+        if status != 0
+            && attempt + 1 < DEVICECTL_JSON_RETRIES
+            && is_retryable_devicectl_json_error(stderr.as_ref())
+        {
+            eprintln!(
+                "[xtask] transient devicectl json failure for `{}` (attempt {}/{}); retrying.",
+                label,
+                attempt + 1,
+                DEVICECTL_JSON_RETRIES
+            );
+            thread::sleep(Duration::from_millis(DEVICECTL_JSON_RETRY_DELAY_MS));
+            continue;
+        }
+        let json = fs::read_to_string(&json_path)
+            .with_context(|| format!("reading {}", json_path.display()))?;
+        return Ok((json, status));
+    }
+    unreachable!("device json retry loop always returns or errors")
 }
 
 fn extract_xcresult_metrics_json(root: &Path, result_bundle: &Path) -> Result<String> {
@@ -6142,12 +8901,80 @@ fn export_xctrace_toc_text(root: &Path, trace_path: &Path) -> Result<String> {
     )
 }
 
-fn export_xctrace_tables(
+fn export_xctrace_preferred_table_from_toc(
     root: &Path,
     trace_path: &Path,
+    toc: &[XctraceTocTable],
     schema: &str,
+    preferred_category: Option<&str>,
+) -> Result<XctraceTable> {
+    export_xctrace_preferred_candidate_table(
+        root,
+        trace_path,
+        &preferred_xctrace_toc_tables(toc, schema, preferred_category),
+        schema,
+    )
+}
+
+fn load_xctrace_energy_tables(
+    root: &Path,
+    trace_path: &Path,
+    toc: &[XctraceTocTable],
 ) -> Result<Vec<XctraceTable>> {
-    let combined = run_xctrace_export(
+    export_xctrace_tables_for_candidates(root, trace_path, &xctrace_energy_toc_tables(toc))
+}
+
+fn export_xctrace_signpost_tables(
+    root: &Path,
+    trace_path: &Path,
+    toc: &[XctraceTocTable],
+) -> Result<Vec<XctraceTable>> {
+    let mut candidates = preferred_xctrace_toc_tables(toc, "region-of-interest", None);
+    candidates.extend(preferred_xctrace_toc_tables(
+        toc,
+        "os-signpost",
+        Some(UIKIT_PERF_SIGNPOST_CATEGORY),
+    ));
+    export_xctrace_tables_for_candidates(root, trace_path, &candidates)
+}
+
+fn xctrace_energy_toc_tables(toc: &[XctraceTocTable]) -> Vec<XctraceTocTable> {
+    let mut tables = toc
+        .iter()
+        .filter(|table| table.schema.contains("power") || table.schema.contains("energy"))
+        .cloned()
+        .collect::<Vec<_>>();
+    tables.sort_by(|left, right| left.xpath.cmp(&right.xpath));
+    tables
+}
+
+fn export_xctrace_preferred_candidate_table(
+    root: &Path,
+    trace_path: &Path,
+    candidates: &[XctraceTocTable],
+    schema: &str,
+) -> Result<XctraceTable> {
+    let parsed = export_xctrace_tables_for_candidates(root, trace_path, candidates)?;
+    if let Some(non_empty) = parsed.iter().find(|candidate| !candidate.rows.is_empty()) {
+        return Ok(non_empty.clone());
+    }
+    parsed
+        .into_iter()
+        .next()
+        .with_context(|| format!("missing `{}` table in {}", schema, trace_path.display()))
+}
+
+fn export_xctrace_tables_for_candidates(
+    root: &Path,
+    trace_path: &Path,
+    candidates: &[XctraceTocTable],
+) -> Result<Vec<XctraceTable>> {
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let xpath =
+        candidates.iter().map(|candidate| candidate.xpath.as_str()).collect::<Vec<_>>().join(" | ");
+    let text = run_xctrace_export(
         root,
         &[
             String::from("xctrace"),
@@ -6155,63 +8982,10 @@ fn export_xctrace_tables(
             String::from("--input"),
             trace_path.to_string_lossy().into_owned(),
             String::from("--xpath"),
-            format!("/trace-toc/run[1]/data[1]/table[@schema=\"{}\"]", schema),
+            xpath,
         ],
     )?;
-    let parsed = parse_xctrace_tables(&combined)?;
-    if !parsed.is_empty() {
-        return Ok(parsed);
-    }
-
-    let toc = export_xctrace_toc(root, trace_path)?;
-    let mut out = Vec::new();
-    for table in preferred_xctrace_toc_tables(&toc, schema, None) {
-        let text = run_xctrace_export(
-            root,
-            &[
-                String::from("xctrace"),
-                String::from("export"),
-                String::from("--input"),
-                trace_path.to_string_lossy().into_owned(),
-                String::from("--xpath"),
-                table.xpath,
-            ],
-        )?;
-        out.extend(parse_xctrace_tables(&text)?);
-    }
-    Ok(out)
-}
-
-fn export_xctrace_preferred_table(
-    root: &Path,
-    trace_path: &Path,
-    schema: &str,
-    preferred_category: Option<&str>,
-) -> Result<XctraceTable> {
-    let toc = export_xctrace_toc(root, trace_path)?;
-    let candidates = preferred_xctrace_toc_tables(&toc, schema, preferred_category);
-    let mut fallback = None;
-    for table in candidates {
-        let text = run_xctrace_export(
-            root,
-            &[
-                String::from("xctrace"),
-                String::from("export"),
-                String::from("--input"),
-                trace_path.to_string_lossy().into_owned(),
-                String::from("--xpath"),
-                table.xpath,
-            ],
-        )?;
-        let parsed = parse_xctrace_tables(&text)?;
-        if let Some(non_empty) = parsed.iter().find(|candidate| !candidate.rows.is_empty()) {
-            return Ok(non_empty.clone());
-        }
-        if fallback.is_none() {
-            fallback = parsed.into_iter().next();
-        }
-    }
-    fallback.with_context(|| format!("missing `{}` table in {}", schema, trace_path.display()))
+    parse_xctrace_tables(&text)
 }
 
 pub fn preferred_xctrace_toc_tables(
@@ -6757,8 +9531,8 @@ impl XctraceCell {
 }
 
 fn extract_trace_windows(root: &Path, trace_path: &Path) -> Result<Vec<TraceWindow>> {
-    let mut tables = export_xctrace_tables(root, trace_path, "region-of-interest")?;
-    tables.extend(export_xctrace_tables(root, trace_path, "os-signpost")?);
+    let toc = export_xctrace_toc(root, trace_path)?;
+    let tables = export_xctrace_signpost_tables(root, trace_path, &toc)?;
     extract_trace_windows_from_tables(&tables)
 }
 
@@ -6771,17 +9545,6 @@ fn extract_trace_windows_or_summary_window(
         Ok(windows) => Ok((windows, false)),
         Err(_) => Ok((vec![extract_trace_summary_window(root, trace_path, process_name)?], true)),
     }
-}
-
-fn summarize_trace_signpost_metrics(
-    root: &Path,
-    trace_path: &Path,
-    windows: &[TraceWindow],
-    fallback_modes: &[UIKitMetricFallbackMode],
-) -> Result<BTreeMap<String, UIKitMetricSummary>> {
-    let mut tables = export_xctrace_tables(root, trace_path, "region-of-interest")?;
-    tables.extend(export_xctrace_tables(root, trace_path, "os-signpost")?);
-    summarize_trace_signpost_metrics_from_tables(&tables, windows, fallback_modes)
 }
 
 fn extract_trace_summary_window(
@@ -7127,24 +9890,24 @@ fn summarize_trace_signpost_metrics_from_roi_tables(
     Ok(metrics)
 }
 
-fn summarize_device_gpu_metrics(
-    root: &Path,
-    trace_path: &Path,
-    windows: &[TraceWindow],
+fn summarize_device_gpu_metrics_from_trace(
+    trace: &ParsedDeviceTrace,
     notes: &mut Vec<String>,
     inherited_fallback_modes: &[UIKitMetricFallbackMode],
 ) -> Result<BTreeMap<String, UIKitMetricSummary>> {
-    let table = export_xctrace_preferred_table(root, trace_path, "metal-gpu-intervals", None)?;
+    let table = trace
+        .gpu_interval_table
+        .as_ref()
+        .with_context(|| "missing `metal-gpu-intervals` table in parsed device trace")?;
     let mut metrics = summarize_device_gpu_metrics_from_tables(
-        &table,
-        windows,
+        table,
+        &trace.windows,
         notes,
         inherited_fallback_modes,
     )?;
-    let counter_info = export_xctrace_preferred_table(root, trace_path, "gpu-counter-info", None);
-    let counter_values =
-        export_xctrace_preferred_table(root, trace_path, "gpu-counter-value", None);
-    let (Ok(counter_info), Ok(counter_values)) = (counter_info, counter_values) else {
+    let (Some(counter_info), Some(counter_values)) =
+        (trace.gpu_counter_info_table.as_ref(), trace.gpu_counter_value_table.as_ref())
+    else {
         notes.push(String::from(
             "GPU counter status: direct GPU counters were unavailable in this device trace; GPU time and GPU latency remained available from Metal System Trace.",
         ));
@@ -7162,7 +9925,7 @@ fn summarize_device_gpu_metrics(
     }
 
     let mut counter_samples = BTreeMap::<String, Vec<f64>>::new();
-    for window in windows {
+    for window in &trace.windows {
         let mut interval_samples = BTreeMap::<String, Vec<f64>>::new();
         for row in &counter_values.rows {
             let Some(timestamp) = row.cell("timestamp").and_then(XctraceCell::raw_u64) else {
@@ -7333,44 +10096,28 @@ pub fn summarize_device_gpu_metrics_from_tables(
     Ok(metrics)
 }
 
-fn summarize_device_energy_metric(
-    root: &Path,
-    trace_path: &Path,
-    windows: &[TraceWindow],
+fn summarize_device_energy_metric_from_trace(
+    trace: &ParsedDeviceTrace,
     fallback_modes: &[UIKitMetricFallbackMode],
 ) -> Result<UIKitMetricSummary> {
-    let toc = export_xctrace_toc(root, trace_path)?;
-    let mut candidates = toc
-        .into_iter()
-        .map(|table| table.schema)
-        .filter(|schema| schema.contains("power") || schema.contains("energy"))
-        .collect::<Vec<_>>();
-    candidates.sort();
-    candidates.dedup();
-
     let mut best = None::<(usize, UIKitMetricSummary)>;
-    for schema in candidates {
-        for table in export_xctrace_tables(root, trace_path, &schema)? {
-            if table.rows.is_empty() {
-                continue;
-            }
-            let Some((score, metric)) = summarize_energy_from_table(&table, windows) else {
-                continue;
-            };
-            if best.as_ref().map(|(best_score, _)| score > *best_score).unwrap_or(true) {
-                best = Some((score, metric));
-            }
+    for table in &trace.energy_tables {
+        if table.rows.is_empty() {
+            continue;
+        }
+        let Some((score, metric)) = summarize_energy_from_table(table, &trace.windows) else {
+            continue;
+        };
+        if best.as_ref().map(|(best_score, _)| score > *best_score).unwrap_or(true) {
+            best = Some((score, metric));
         }
     }
-
     best.map(|(_, mut metric)| {
         metric.source = UIKitMetricSource::XctraceEnergy;
         metric.fallback_modes = fallback_modes.to_vec();
         metric
     })
-    .with_context(|| {
-        format!("could not find a direct device energy table in {}", trace_path.display())
-    })
+    .with_context(|| "could not find a direct device energy table in parsed device trace")
 }
 
 fn summarize_energy_from_table(
@@ -7533,12 +10280,7 @@ fn find_power_column(table: &XctraceTable) -> Option<String> {
 }
 
 fn metric_summary_from_samples(unit: &str, values: &[f64]) -> Result<UIKitMetricSummary> {
-    metric_summary_from_samples_with_metadata(
-        unit,
-        values,
-        UIKitMetricSource::Unknown,
-        &[],
-    )
+    metric_summary_from_samples_with_metadata(unit, values, UIKitMetricSource::Unknown, &[])
 }
 
 fn metric_summary_from_samples_with_metadata(
@@ -7648,7 +10390,7 @@ fn uikit_case_contract_metadata(
 
 fn uikit_refresh_mode_for_suite(suite: &str) -> &'static str {
     match suite {
-        "device" => "device-default",
+        "device" => "native",
         _ => "simulator-default",
     }
 }
@@ -7660,15 +10402,6 @@ fn build_uikit_contract_coverage(
     let has = |needle: &str| cases.iter().any(|case| case.id.contains(needle));
     let has_case = |id: &str| cases.iter().any(|case| case.id == id);
     let has_style = |style: &str| cases.iter().any(|case| case.style == style);
-    let has_case_refresh = |id: &str, refresh_mode: &str| {
-        cases.iter().any(|case| case.id == id && case.refresh_mode == refresh_mode)
-    };
-    let has_refresh_matrix = |ids: &[&str]| {
-        suite == "device"
-            && ids.iter().all(|id| {
-                has_case_refresh(id, "60hz-capped") && has_case_refresh(id, "native")
-            })
-    };
     let optimized_complete = [
         "uikit.optimized.component.collection_view.encode",
         "uikit.optimized.launch.simple_home.cold_launch",
@@ -7725,30 +10458,36 @@ fn build_uikit_contract_coverage(
     ]
     .iter()
     .all(|id| has_case(id));
-    let scroll_refresh_matrix_complete = has_refresh_matrix(&[
-        "uikit.journey.feed_scroll_matrix",
-        "uikit.journey.thumbnail_grid_scroll_matrix",
-        "uikit.journey.chat_thread_scroll_matrix",
-        "uikit.optimized.journey.feed_scroll_matrix",
-        "uikit.optimized.journey.thumbnail_grid_scroll_matrix",
-        "uikit.optimized.journey.chat_thread_scroll_matrix",
-    ]);
-    let animation_refresh_matrix_complete = has_refresh_matrix(&[
-        "uikit.animation.spinner_spin",
-        "uikit.animation.progress_indeterminate",
-        "uikit.animation.button_press_scale",
-        "uikit.animation.toggle_thumb_spring",
-        "uikit.animation.slider_thumb_move",
-        "uikit.animation.image_zoom_pan",
-        "uikit.animation.anim_timeline_bars",
-        "uikit.optimized.animation.spinner_spin",
-        "uikit.optimized.animation.progress_indeterminate",
-        "uikit.optimized.animation.button_press_scale",
-        "uikit.optimized.animation.toggle_thumb_spring",
-        "uikit.optimized.animation.slider_thumb_move",
-        "uikit.optimized.animation.image_zoom_pan",
-        "uikit.optimized.animation.anim_timeline_bars",
-    ]);
+    let scroll_flow_complete = suite == "device"
+        && [
+            "uikit.journey.feed_scroll_matrix",
+            "uikit.journey.thumbnail_grid_scroll_matrix",
+            "uikit.journey.chat_thread_scroll_matrix",
+            "uikit.optimized.journey.feed_scroll_matrix",
+            "uikit.optimized.journey.thumbnail_grid_scroll_matrix",
+            "uikit.optimized.journey.chat_thread_scroll_matrix",
+        ]
+        .iter()
+        .all(|id| has_case(id));
+    let animation_complete = suite == "device"
+        && [
+            "uikit.animation.spinner_spin",
+            "uikit.animation.progress_indeterminate",
+            "uikit.animation.button_press_scale",
+            "uikit.animation.toggle_thumb_spring",
+            "uikit.animation.slider_thumb_move",
+            "uikit.animation.image_zoom_pan",
+            "uikit.animation.anim_timeline_bars",
+            "uikit.optimized.animation.spinner_spin",
+            "uikit.optimized.animation.progress_indeterminate",
+            "uikit.optimized.animation.button_press_scale",
+            "uikit.optimized.animation.toggle_thumb_spring",
+            "uikit.optimized.animation.slider_thumb_move",
+            "uikit.optimized.animation.image_zoom_pan",
+            "uikit.optimized.animation.anim_timeline_bars",
+        ]
+        .iter()
+        .all(|id| has_case(id));
     let layers = vec![
         uikit_contract_entry(
             "engine",
@@ -7766,13 +10505,13 @@ fn build_uikit_contract_coverage(
             "flow",
             "Representative Screen Flows",
             if has(".journey.") { "implemented" } else { "missing" },
-            vec![if scroll_refresh_matrix_complete && animation_refresh_matrix_complete {
+            vec![if scroll_flow_complete && animation_complete {
                 String::from(
-                    "Flow coverage now spans launch/lifecycle and user journeys, with 60 Hz-capped and native rows carried on the same ProMotion iPhone for the committed scroll and animation families.",
+                    "Flow coverage now spans launch/lifecycle and user journeys on the native-only physical-device path used by the official harness.",
                 )
             } else {
                 String::from(
-                    "Flow coverage now spans launch/lifecycle and user-journey cases, but hitch and refresh-mode matrices are still incomplete.",
+                    "Flow coverage now spans launch/lifecycle and user-journey cases, but some committed journey families are still missing from the native device battery.",
                 )
             }],
         ),
@@ -8023,18 +10762,18 @@ fn build_uikit_contract_coverage(
         uikit_contract_entry(
             "animation-effects",
             "Animation & Visual Effects",
-            if animation_refresh_matrix_complete {
+            if animation_complete {
                 "implemented"
             } else {
                 "partial"
             },
-            vec![if animation_refresh_matrix_complete {
+            vec![if animation_complete {
                 String::from(
-                    "Idiomatic and hand-tuned animation-effect cases now carry both 60 Hz-capped and native rows on the same ProMotion iPhone; the separate older 60 Hz hardware leg remains explicitly pending in the report notes.",
+                    "Idiomatic and hand-tuned animation-effect cases now carry native physical-device rows in the official ProMotion battery.",
                 )
             } else {
                 String::from(
-                    "Idiomatic and hand-tuned animation-effect cases now exist, but the suite still lacks full hitch-ratio and refresh-mode matrices on real 60 Hz and ProMotion hardware.",
+                    "Idiomatic and hand-tuned animation-effect cases now exist, but the native device battery still lacks full hitch-ratio coverage across that family.",
                 )
             }],
         ),
@@ -8269,6 +11008,7 @@ pub fn parse_uikit_report_json(text: &str) -> Result<UIKitPerfReport> {
             refresh_mode: String::from(uikit_refresh_mode_for_suite("simulator")),
             measure_iterations: infer_measure_iterations(&metrics),
             benchmark_iterations: 0,
+            headline_metric: String::from("clock_s"),
             canonical_signpost_source: UIKitCanonicalSignpostSource::XCTest,
             threshold_pct: UIKIT_SIM_THRESHOLD_PCT,
             metrics,
@@ -8626,43 +11366,61 @@ fn merge_benchmark_metadata(
 }
 
 pub fn parse_oxide_stage_summary(stdout: &str) -> Result<BTreeMap<String, UIKitMetricSummary>> {
-    let mut payload_json = None;
+    let summaries = parse_all_oxide_stage_summaries(stdout)?;
+    summaries.into_iter().last().with_context(|| {
+        format!("missing `{}` marker in device console output", OXIDE_STAGE_SUMMARY_PREFIX)
+    })
+}
+
+fn parse_all_oxide_stage_summaries(
+    stdout: &str,
+) -> Result<Vec<BTreeMap<String, UIKitMetricSummary>>> {
+    let mut payloads = Vec::new();
     for line in stdout.lines() {
         if let Some(index) = line.find(OXIDE_STAGE_SUMMARY_PREFIX) {
-            payload_json =
-                Some(line[(index + OXIDE_STAGE_SUMMARY_PREFIX.len())..].trim().to_string());
+            let payload_json =
+                line[(index + OXIDE_STAGE_SUMMARY_PREFIX.len())..].trim().to_string();
+            let payload: OxideStageSummaryPayload = serde_json::from_str(&payload_json)
+                .with_context(|| "parsing Oxide stage summary json")?;
+            payloads.push(
+                payload
+                    .stages
+                    .into_iter()
+                    .map(|(stage_name, summary)| (format!("stage.{}", stage_name), summary))
+                    .collect(),
+            );
         }
     }
-    let payload_json = payload_json.with_context(|| {
-        format!("missing `{}` marker in device console output", OXIDE_STAGE_SUMMARY_PREFIX)
-    })?;
-    let payload: OxideStageSummaryPayload =
-        serde_json::from_str(&payload_json).with_context(|| "parsing Oxide stage summary json")?;
-    Ok(payload
-        .stages
-        .into_iter()
-        .map(|(stage_name, summary)| (format!("stage.{}", stage_name), summary))
-        .collect())
+    Ok(payloads)
 }
 
 pub fn parse_oxide_memory_summary(stdout: &str) -> Result<BTreeMap<String, UIKitMetricSummary>> {
-    let mut payload_json = None;
+    let summaries = parse_all_oxide_memory_summaries(stdout)?;
+    summaries.into_iter().last().with_context(|| {
+        format!("missing `{}` marker in device console output", OXIDE_MEMORY_SUMMARY_PREFIX)
+    })
+}
+
+fn parse_all_oxide_memory_summaries(
+    stdout: &str,
+) -> Result<Vec<BTreeMap<String, UIKitMetricSummary>>> {
+    let mut payloads = Vec::new();
     for line in stdout.lines() {
         if let Some(index) = line.find(OXIDE_MEMORY_SUMMARY_PREFIX) {
-            payload_json =
-                Some(line[(index + OXIDE_MEMORY_SUMMARY_PREFIX.len())..].trim().to_string());
+            let payload_json =
+                line[(index + OXIDE_MEMORY_SUMMARY_PREFIX.len())..].trim().to_string();
+            let payload: OxideMemorySummaryPayload = serde_json::from_str(&payload_json)
+                .with_context(|| "parsing Oxide memory summary json")?;
+            payloads.push(
+                payload
+                    .categories
+                    .into_iter()
+                    .map(|(name, summary)| (format!("memory.{}", name), summary))
+                    .collect(),
+            );
         }
     }
-    let payload_json = payload_json.with_context(|| {
-        format!("missing `{}` marker in device console output", OXIDE_MEMORY_SUMMARY_PREFIX)
-    })?;
-    let payload: OxideMemorySummaryPayload =
-        serde_json::from_str(&payload_json).with_context(|| "parsing Oxide memory summary json")?;
-    Ok(payload
-        .categories
-        .into_iter()
-        .map(|(name, summary)| (format!("memory.{}", name), summary))
-        .collect())
+    Ok(payloads)
 }
 
 pub fn parse_oxide_tick_ring(stdout: &str) -> Result<OxideTickRingPayload> {
@@ -8699,7 +11457,12 @@ fn summarize_tick_values(values: &[f64]) -> Option<(f64, f64, f64, f64)> {
         return None;
     }
     filtered.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    Some((quantile(&filtered, 0.50), quantile(&filtered, 0.95), quantile(&filtered, 0.99), *filtered.last().unwrap()))
+    Some((
+        quantile(&filtered, 0.50),
+        quantile(&filtered, 0.95),
+        quantile(&filtered, 0.99),
+        *filtered.last().unwrap(),
+    ))
 }
 
 pub fn render_oxide_tick_ring_note(payload: &OxideTickRingPayload) -> Option<String> {
@@ -9005,11 +11768,6 @@ pub fn validate_normalized_camera_contract(
         );
     }
     Ok(())
-}
-
-fn parse_oxide_device_report_json(stdout: &str) -> Result<PerfReport> {
-    let json = extract_oxide_device_report_json(stdout)?;
-    serde_json::from_str(&json).with_context(|| "parsing Oxide device perf report json")
 }
 
 pub fn parse_react_native_device_report_json(
@@ -9457,7 +12215,7 @@ fn write_uikit_device_markdown(
             report_measure_iterations_summary(report)
         ));
     }
-    out.push_str("- Canonical device `signpost_*` metrics come from `xctrace`; any XCTest signpost metrics are preserved separately under `xctest_*` keys in JSON. Per-case JSON also persists `measure_iterations`, `benchmark_iterations`, and per-metric `source` plus `fallback_modes`.\n");
+    out.push_str("- Canonical device `signpost_*` metrics come from `xctrace`; any XCTest signpost metrics are preserved separately under `xctest_*` keys in JSON. For the official matched on-screen Oxide/UIKit rows, `clock_s` is promoted from the case headline signpost and the originating metric key is recorded under `headline_metric`. Per-case JSON also persists `measure_iterations`, `benchmark_iterations`, and per-metric `source` plus `fallback_modes`.\n");
     if let Some(label) = report.generated_label.as_ref() {
         out.push_str(&format!("- Label: `{}`\n", label));
     }
@@ -9593,6 +12351,46 @@ pub fn map_uikit_case(test_name: &str) -> Result<(&'static str, &'static str, &'
         .with_context(|| format!("unmapped UIKit perf test `{}`", test_name))
 }
 
+fn official_device_headline_metric_for_oxide_case(oxide_case_id: &str) -> Option<&'static str> {
+    match oxide_case_id {
+        "cpu.navigation.button_press.response" | "cpu.navigation.text_focus.response" => {
+            Some("signpost_first_interactive_s")
+        }
+        "cpu.animation.anim_timeline_bars" => Some("signpost_frame_present_s"),
+        "cpu.animation.spinner_spin"
+        | "cpu.animation.image_zoom_pan"
+        | "cpu.journey.input_form_submit"
+        | "cpu.journey.zoom_image_gesture_cycle"
+        | "cpu.journey.orchestration_transition_modal" => Some("signpost_transition_s"),
+        "cpu.journey.collection_navigation" => Some("signpost_scroll_s"),
+        _ => None,
+    }
+}
+
+fn promote_uikit_device_case_clock(
+    metrics: &mut BTreeMap<String, UIKitMetricSummary>,
+    oxide_case_id: &str,
+    notes: &mut Vec<String>,
+) -> Result<String> {
+    let Some(headline_metric) = official_device_headline_metric_for_oxide_case(oxide_case_id)
+    else {
+        return Ok(String::from("clock_s"));
+    };
+    let raw_clock = metrics.get("clock_s").cloned().with_context(|| {
+        format!("missing raw `clock_s` before promotion for `{}`", oxide_case_id)
+    })?;
+    let promoted_clock = metrics.get(headline_metric).cloned().with_context(|| {
+        format!("missing promoted headline metric `{}` for `{}`", headline_metric, oxide_case_id)
+    })?;
+    metrics.insert(String::from("xctest_clock_s"), raw_clock);
+    metrics.insert(String::from("clock_s"), promoted_clock);
+    notes.push(format!(
+        "Clock metric scope: promoted `{}` into `clock_s` for the official matched on-screen Oxide/UIKit comparison; raw XCTest wall clock is preserved under `xctest_clock_s`.",
+        headline_metric
+    ));
+    Ok(String::from(headline_metric))
+}
+
 fn map_uikit_metric(identifier: &str) -> Option<String> {
     let lowered = identifier.to_ascii_lowercase();
     if lowered.contains("application") && lowered.contains("launch") {
@@ -9679,8 +12477,11 @@ fn relabel_xctest_device_signpost_metrics(
         let Some(metric) = metrics.remove(&key) else {
             continue;
         };
-        let renamed_key =
-            if key == "workload_s" { String::from("xctest_workload_s") } else { format!("xctest_{}", key) };
+        let renamed_key = if key == "workload_s" {
+            String::from("xctest_workload_s")
+        } else {
+            format!("xctest_{}", key)
+        };
         metrics.insert(renamed_key.clone(), metric);
         renamed.push(renamed_key);
     }
@@ -9904,7 +12705,8 @@ fn resolve_built_xctestrun_path(derived_data_path: &Path, scheme_name: &str) -> 
 pub fn is_primary_built_xctestrun_file(file_name: &str, scheme_name: &str) -> bool {
     file_name.starts_with(scheme_name)
         && file_name.ends_with(".xctestrun")
-        && !file_name.ends_with("-perf.xctestrun")
+        && !file_name.contains("-perf.")
+        && !file_name.contains("-perf-")
 }
 
 fn prepare_react_device_perf_xctestrun(source_path: &Path) -> Result<PathBuf> {

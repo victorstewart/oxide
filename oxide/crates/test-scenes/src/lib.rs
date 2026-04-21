@@ -34,6 +34,30 @@ pub use oxide_ui_core::camera::{CameraMetrics, CameraRecordingUiEvent};
 
 const LEGACY_BADGE_IMAGE: gfx::ImageHandle = gfx::ImageHandle(1);
 
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+fn watch_event_log_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        env_flag("OXIDE_PERF_WATCH_LOG_EVENTS")
+            || env_flag("OXIDE_PERF_WATCH_MODE")
+            || env_flag("OXIDE_RUST_LOG")
+    })
+}
+
+macro_rules! watch_event_log
+{
+   ($($arg:tt)*) => {
+      if watch_event_log_enabled() {
+         std::eprintln!("oxide.watch: {}", alloc::format!($($arg)*));
+      }
+   };
+}
+
 // ===== Utilities =====
 
 pub struct Counters {
@@ -215,6 +239,13 @@ impl<U: elements::ImageUploader> Router<U> {
             16 => SceneKind::StressTest,
             _ => self.current,
         };
+        if previous != self.current {
+            watch_event_log!(
+                "scene {} -> {}",
+                Self::scene_names()[previous as usize],
+                Self::scene_names()[self.current as usize]
+            );
+        }
         if self.current == SceneKind::Camera && previous != SceneKind::Camera {
             self.camera.set_active(true);
         } else if previous == SceneKind::Camera && self.current != SceneKind::Camera {
@@ -223,9 +254,7 @@ impl<U: elements::ImageUploader> Router<U> {
     }
 
     pub fn update(&mut self, now_ms: u64, dt_ms: u32) {
-        if self.overlay_visible {
-            self.fps.tick(now_ms);
-        }
+        self.fps.tick(now_ms);
         self.camera.set_active(matches!(self.current, SceneKind::Camera));
         match self.current {
             SceneKind::Controls => self.controls.update(dt_ms),
@@ -385,6 +414,140 @@ impl<U: elements::ImageUploader> Router<U> {
             SceneKind::ZoomImage => self.zoom_image.double_tap(),
             SceneKind::Camera => self.camera.double_tap(),
             _ => {}
+        }
+    }
+
+    pub fn prepare_onscreen_benchmark(&mut self, benchmark: &str) -> bool {
+        let prepared = match benchmark {
+            "button_press_response" => {
+                self.set_scene(SceneKind::Controls as usize);
+                self.controls = Controls::default();
+                true
+            }
+            "spinner_spin" => {
+                self.set_scene(SceneKind::Controls as usize);
+                self.controls = Controls::default();
+                true
+            }
+            "text_focus_response" => {
+                self.set_scene(SceneKind::InputLab as usize);
+                self.input_lab = InputLab::default();
+                true
+            }
+            "input_form_submit" => {
+                self.set_scene(SceneKind::InputLab as usize);
+                self.input_lab = InputLab::default();
+                true
+            }
+            "collection_navigation" => {
+                self.set_scene(SceneKind::CollectionStress as usize);
+                self.collection_stress = CollectionStress::default();
+                true
+            }
+            "image_zoom_pan" | "zoom_image_gesture_cycle" => {
+                self.set_scene(SceneKind::ZoomImage as usize);
+                self.zoom_image.zoom = elements::ImageZoomState::default();
+                true
+            }
+            "anim_timeline_bars" => {
+                self.set_scene(SceneKind::AnimTimeline as usize);
+                self.anim_timeline = AnimTimeline::default();
+                true
+            }
+            "orchestration_transition_modal" => {
+                self.set_scene(SceneKind::Orchestration as usize);
+                self.orchestration.benchmark_reset();
+                true
+            }
+            _ => false,
+        };
+        if prepared {
+            watch_event_log!(
+                "benchmark.prepare name={} scene={} font0_present={}",
+                benchmark,
+                Self::scene_names()[self.current as usize],
+                self.text.fonts.font(0).is_some()
+            );
+        }
+        prepared
+    }
+
+    pub fn step_onscreen_benchmark(&mut self, benchmark: &str, step: usize) -> bool {
+        let action = match benchmark {
+            "button_press_response" => {
+                let action = if step % 2 == 0 {
+                    let _ = self.controls.key_space_up();
+                    "button.up"
+                } else {
+                    self.controls.key_space_down();
+                    "button.down"
+                };
+                self.controls.update(16);
+                Some(action)
+            }
+            "spinner_spin" => {
+                self.controls.update(16);
+                Some("spinner.tick")
+            }
+            "text_focus_response" => {
+                self.input_lab.focus(FocusField::Username);
+                Some("input.focus_username")
+            }
+            "input_form_submit" => {
+                self.input_lab.focus(FocusField::Username);
+                self.input_lab.commit("Oxide Pilot");
+                self.input_lab.focus(FocusField::Password);
+                self.input_lab.commit("mission123");
+                self.input_lab.handle_submit();
+                Some("input.submit")
+            }
+            "collection_navigation" => {
+                let action = if step % 2 == 0 {
+                    self.collection_stress.view.focus_move_right();
+                    "collection.focus_right"
+                } else {
+                    self.collection_stress.view.focus_move_down();
+                    "collection.focus_down"
+                };
+                Some(action)
+            }
+            "image_zoom_pan" => {
+                self.zoom_image.pinch(200.0, 300.0, 0.18);
+                self.zoom_image.input_pointer(200.0, 300.0, 12.0, -6.0, 1);
+                Some("image.pinch_pan")
+            }
+            "zoom_image_gesture_cycle" => {
+                self.zoom_image.pinch(200.0, 300.0, 0.22);
+                self.zoom_image.input_pointer(200.0, 300.0, 14.0, -8.0, 1);
+                if step % 2 == 0 {
+                    self.zoom_image.double_tap();
+                    Some("image.pinch_pan_double_tap")
+                } else {
+                    Some("image.pinch_pan")
+                }
+            }
+            "anim_timeline_bars" => {
+                self.anim_timeline.update(16);
+                Some("timeline.tick")
+            }
+            "orchestration_transition_modal" => {
+                self.orchestration.benchmark_transition_or_modal(step);
+                Some("orchestration.transition_or_modal")
+            }
+            _ => None,
+        };
+        if let Some(action) = action {
+            watch_event_log!(
+                "benchmark.step name={} step={} scene={} action={} font0_present={}",
+                benchmark,
+                step,
+                Self::scene_names()[self.current as usize],
+                action,
+                self.text.fonts.font(0).is_some()
+            );
+            true
+        } else {
+            false
         }
     }
 
@@ -780,7 +943,6 @@ fn rectf_to_recti(r: gfx::RectF) -> gfx::RectI {
 
 // ---- Controls scene ----
 
-#[derive(Default)]
 pub struct Controls {
     t: f32,
     progress: f32,
@@ -790,6 +952,26 @@ pub struct Controls {
     toggle_state: elements::ToggleState,
     slider: elements::Slider,
     slider_state: elements::SliderState,
+}
+
+impl Default for Controls {
+    fn default() -> Self {
+        let mut controls = Self {
+            t: 0.0,
+            progress: 0.32,
+            button: elements::Button::default(),
+            button_state: elements::ButtonState::default(),
+            toggle: elements::Toggle::default(),
+            toggle_state: elements::ToggleState::default(),
+            slider: elements::Slider::default(),
+            slider_state: elements::SliderState::default(),
+        };
+        controls.toggle_state.on = true;
+        for _ in 0..6 {
+            let _ = controls.slider_state.arrow_right(controls.slider.step);
+        }
+        controls
+    }
 }
 
 impl Controls {
@@ -828,6 +1010,14 @@ impl Controls {
     ) {
         // Layout a small panel
         let panel = gfx::RectF::new(vp.x + 20.0, vp.y + 20.0, vp.w - 40.0, vp.h - 40.0);
+        watch_event_log!(
+            "controls.draw button_pressed={} slider_value={:.3} toggle_on={} progress={:.3} font0_present={}",
+            self.button_state.is_pressed(),
+            self.slider_state.value,
+            self.toggle_state.on,
+            self.progress,
+            text.fonts.font(0).is_some()
+        );
         b.rrect(panel, [8.0; 4], gfx::Color::rgba(0.96, 0.97, 0.99, 1.0));
         // Label
         let lbl = elements::Label {
@@ -1109,6 +1299,7 @@ impl Default for CollectionStress {
             spacing: 8.0,
         });
         view.set_transition(Some(collection::CellTransition::shrink_grow(420, 0.82, 1.08)));
+        view.set_count(5000);
         Self { view }
     }
 }

@@ -18,7 +18,7 @@ use std::hint::black_box;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Instant;
 
 const DEFAULT_BASELINE_JSON: &str = "benchmarks/workspace/latest.json";
@@ -30,6 +30,7 @@ const DAMAGE_PREFILTER_THRESH: f32 = 0.25;
 const PERF_DEVICE_SCALE: f32 = 2.0;
 const PERF_SCENE_W: u32 = 1200;
 const PERF_SCENE_H: u32 = 800;
+const PERF_RUNNER_FILTER_ENV: &str = "OXIDE_PERF_RUNNER_FILTER";
 
 struct ScenePerfSpec {
     slug: &'static str,
@@ -99,6 +100,43 @@ struct BridgePerfSpec {
     name: &'static str,
 }
 
+fn perf_case_filters() -> &'static Vec<String> {
+    static FILTERS: OnceLock<Vec<String>> = OnceLock::new();
+    FILTERS.get_or_init(|| {
+        std::env::var(PERF_RUNNER_FILTER_ENV)
+            .ok()
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    })
+}
+
+fn perf_case_allowed(case_id: &str) -> bool {
+    let filters = perf_case_filters();
+    filters.is_empty()
+        || filters.iter().any(|filter| case_id == filter || case_id.starts_with(filter))
+}
+
+fn perf_case_prefix_allowed(prefix: &str) -> bool {
+    let filters = perf_case_filters();
+    filters.is_empty()
+        || filters.iter().any(|filter| filter.starts_with(prefix) || prefix.starts_with(filter))
+}
+
+fn set_env_if_unset(name: &str, value: &str) {
+    if std::env::var_os(name).is_none() {
+        unsafe {
+            std::env::set_var(name, value);
+        }
+    }
+}
+
 const PERF_SCENE_SPECS: &[ScenePerfSpec] = &[
     ScenePerfSpec { slug: "controls", name: "Controls", index: 0 },
     ScenePerfSpec { slug: "text_layout", name: "Text Layout", index: 1 },
@@ -141,12 +179,11 @@ const PERF_JOURNEY_SPECS: &[JourneyPerfSpec] = &[
     },
 ];
 
+const POPUP_WHEEL_PICKER_CASE_ID: &str = "cpu.authoring.popup_wheel_picker.interaction";
+
 const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
     AuthoringPerfSpec { id: "cpu.authoring.text_fields.edit_cycle", name: "Text Fields" },
-    AuthoringPerfSpec {
-        id: "cpu.authoring.popup_wheel_picker.interaction",
-        name: "Popup Wheel Picker",
-    },
+    AuthoringPerfSpec { id: POPUP_WHEEL_PICKER_CASE_ID, name: "Popup Wheel Picker" },
     AuthoringPerfSpec { id: "cpu.authoring.burst_emitter.sample", name: "Burst Emitter" },
     AuthoringPerfSpec {
         id: "cpu.authoring.surface_router.compose",
@@ -424,7 +461,7 @@ const PERF_BRIDGE_SPECS: &[BridgePerfSpec] = &[
     },
 ];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct Cli {
     run_suite: bool,
     smoke: bool,
@@ -432,19 +469,6 @@ struct Cli {
     json_out: Option<PathBuf>,
     markdown_out: Option<PathBuf>,
     write_baseline: bool,
-}
-
-impl Default for Cli {
-    fn default() -> Self {
-        Self {
-            run_suite: false,
-            smoke: false,
-            compare: None,
-            json_out: None,
-            markdown_out: None,
-            write_baseline: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -459,7 +483,7 @@ pub struct PerfReport {
     pub findings: Vec<AuditFinding>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct PerfCaseResult {
     pub id: String,
@@ -482,33 +506,6 @@ pub struct PerfCaseResult {
     pub ops_per_sample: u64,
     pub notes: Vec<String>,
     pub metrics: BTreeMap<String, f64>,
-}
-
-impl Default for PerfCaseResult {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            family: String::new(),
-            layer: String::new(),
-            scenario: String::new(),
-            variant: String::new(),
-            cache_state: String::new(),
-            refresh_mode: String::new(),
-            unit: String::new(),
-            gated: false,
-            threshold_pct: 0.0,
-            median: 0.0,
-            p95: 0.0,
-            p99: 0.0,
-            min: 0.0,
-            max: 0.0,
-            mean: 0.0,
-            samples: 0,
-            ops_per_sample: 0,
-            notes: Vec::new(),
-            metrics: BTreeMap::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -903,23 +900,59 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
     let mut covered_stress = BTreeSet::new();
     let mut covered_bridges = BTreeSet::new();
 
-    push_system_cases(&mut cases, smoke);
-    push_component_cases(&mut cases, smoke, &mut covered_components);
-    push_animation_cases(&mut cases, smoke, &mut covered_animations);
-    push_launch_cases(&mut cases, smoke, &mut covered_launch)?;
-    push_primitive_lifecycle_cases(&mut cases, smoke, &mut covered_primitive_lifecycle)?;
-    push_cpu_scene_cases(&mut cases, smoke, &mut covered_cpu_scenes)?;
-    push_gpu_scene_cases(&mut cases, smoke, &mut covered_gpu_scenes)?;
-    push_journey_cases(&mut cases, smoke, &mut covered_journeys)?;
-    push_authoring_cases(&mut cases, smoke, &mut covered_authoring)?;
-    push_layout_cases(&mut cases, smoke, &mut covered_layout)?;
-    push_text_input_cases(&mut cases, smoke, &mut covered_text_input)?;
-    push_image_pipeline_cases(&mut cases, smoke, &mut covered_image_pipeline)?;
-    push_navigation_cases(&mut cases, smoke, &mut covered_navigation)?;
-    push_reconcile_cases(&mut cases, smoke, &mut covered_reconcile)?;
-    push_endurance_cases(&mut cases, smoke, &mut covered_endurance)?;
-    push_stress_cases(&mut cases, smoke, &mut covered_stress)?;
-    push_bridge_cases(&mut cases, smoke, &mut covered_bridges)?;
+    if perf_case_prefix_allowed("cpu.system.") {
+        push_system_cases(&mut cases, smoke);
+    }
+    if perf_case_prefix_allowed("cpu.component.") {
+        push_component_cases(&mut cases, smoke, &mut covered_components);
+    }
+    if perf_case_prefix_allowed("cpu.animation.") {
+        push_animation_cases(&mut cases, smoke, &mut covered_animations);
+    }
+    if perf_case_prefix_allowed("cpu.launch.") {
+        push_launch_cases(&mut cases, smoke, &mut covered_launch)?;
+    }
+    if perf_case_prefix_allowed("cpu.primitive.") {
+        push_primitive_lifecycle_cases(&mut cases, smoke, &mut covered_primitive_lifecycle)?;
+    }
+    if perf_case_prefix_allowed("cpu.scene.") {
+        push_cpu_scene_cases(&mut cases, smoke, &mut covered_cpu_scenes)?;
+    }
+    if perf_case_prefix_allowed("gpu.scene.") {
+        push_gpu_scene_cases(&mut cases, smoke, &mut covered_gpu_scenes)?;
+    }
+    if perf_case_prefix_allowed("cpu.journey.") {
+        push_journey_cases(&mut cases, smoke, &mut covered_journeys)?;
+    }
+    if perf_case_prefix_allowed("cpu.authoring.") {
+        push_authoring_cases(&mut cases, smoke, &mut covered_authoring)?;
+    }
+    if perf_case_prefix_allowed("cpu.layout.") {
+        push_layout_cases(&mut cases, smoke, &mut covered_layout)?;
+    }
+    if perf_case_prefix_allowed("cpu.text_input.") {
+        push_text_input_cases(&mut cases, smoke, &mut covered_text_input)?;
+    }
+    if perf_case_prefix_allowed("cpu.image_pipeline.")
+        || perf_case_prefix_allowed("gpu.image_pipeline.")
+    {
+        push_image_pipeline_cases(&mut cases, smoke, &mut covered_image_pipeline)?;
+    }
+    if perf_case_prefix_allowed("cpu.navigation.") {
+        push_navigation_cases(&mut cases, smoke, &mut covered_navigation)?;
+    }
+    if perf_case_prefix_allowed("cpu.reconcile.") {
+        push_reconcile_cases(&mut cases, smoke, &mut covered_reconcile)?;
+    }
+    if perf_case_prefix_allowed("cpu.endurance.") {
+        push_endurance_cases(&mut cases, smoke, &mut covered_endurance)?;
+    }
+    if perf_case_prefix_allowed("cpu.stress.") {
+        push_stress_cases(&mut cases, smoke, &mut covered_stress)?;
+    }
+    if perf_case_prefix_allowed("cpu.bridge.") {
+        push_bridge_cases(&mut cases, smoke, &mut covered_bridges)?;
+    }
 
     let coverage = CoverageReport {
         components_total: registry::components().len(),
@@ -1049,183 +1082,89 @@ fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageRe
             )],
         ),
     ];
-    let has_primitive_slice = |needle: &str| cases.iter().any(|case| case.id == needle);
+    let has_case = |needle: &str| cases.iter().any(|case| case.id == needle);
+    let has_all = |needles: &[&str]| needles.iter().all(|needle| has_case(needle));
     let battery = vec![
-        contract_entry(
+        contract_battery_entry(
             "launch-lifecycle",
             "Launch & Lifecycle",
-            if has_primitive_slice("cpu.launch.simple_home.cold_launch")
-                && has_primitive_slice("cpu.launch.heavy_home.cold_launch")
-                && has_primitive_slice("cpu.launch.detail.deep_link_launch")
-                && has_primitive_slice("cpu.launch.simple_home.warm_resume")
-                && has_primitive_slice("cpu.launch.heavy_home.foreground_after_background")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_primitive_slice("cpu.launch.simple_home.cold_launch")
-                && has_primitive_slice("cpu.launch.heavy_home.cold_launch")
-                && has_primitive_slice("cpu.launch.detail.deep_link_launch")
-                && has_primitive_slice("cpu.launch.simple_home.warm_resume")
-                && has_primitive_slice("cpu.launch.heavy_home.foreground_after_background")
-            {
-                String::from(
-                    "Offscreen bootstrap now includes simple-home and heavy-home cold launch, route-driven detail launch, warm resume, and foreground-after-background lifecycle workloads.",
-                )
-            } else {
-                String::from(
-                    "No dedicated cold launch, warm resume, deep-link launch, or foreground-after-background battery is wired into oxide-perf-runner yet.",
-                )
-            }],
+            has_all(&[
+                "cpu.launch.simple_home.cold_launch",
+                "cpu.launch.heavy_home.cold_launch",
+                "cpu.launch.detail.deep_link_launch",
+                "cpu.launch.simple_home.warm_resume",
+                "cpu.launch.heavy_home.foreground_after_background",
+            ]),
+            "Offscreen bootstrap now includes simple-home and heavy-home cold launch, route-driven detail launch, warm resume, and foreground-after-background lifecycle workloads.",
+            "No dedicated cold launch, warm resume, deep-link launch, or foreground-after-background battery is wired into oxide-perf-runner yet.",
         ),
-        contract_entry(
+        contract_battery_entry(
             "primitive-lifecycle",
             "Primitive Mount / Update / Destroy",
-            if has_primitive_slice("cpu.primitive.empty_root.mount")
-                && has_primitive_slice("cpu.primitive.control_set.mount")
-                && has_primitive_slice("cpu.primitive.control_set.mutate_state")
-                && has_primitive_slice("cpu.primitive.flat_rects.100.remove_all")
-                && has_primitive_slice("cpu.primitive.flat_rects.100.remount")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_primitive_slice("cpu.primitive.empty_root.mount")
-                && has_primitive_slice("cpu.primitive.control_set.mount")
-                && has_primitive_slice("cpu.primitive.control_set.mutate_state")
-                && has_primitive_slice("cpu.primitive.flat_rects.100.remove_all")
-                && has_primitive_slice("cpu.primitive.flat_rects.100.remount")
-            {
-                String::from(
-                    "Flat rects, labels, cards, images, an empty-root slice, a shared control-set slice, and retained-tree remove-all/remount slices are all covered.",
-                )
-            } else {
-                String::from(
-                    "Flat rects, labels, cards, and images cover mount plus mutate, but the empty-root, shared control-set, and retained-tree remove-all/remount slices are still incomplete.",
-                )
-            }],
+            has_all(&[
+                "cpu.primitive.empty_root.mount",
+                "cpu.primitive.control_set.mount",
+                "cpu.primitive.control_set.mutate_state",
+                "cpu.primitive.flat_rects.100.remove_all",
+                "cpu.primitive.flat_rects.100.remount",
+            ]),
+            "Flat rects, labels, cards, images, an empty-root slice, a shared control-set slice, and retained-tree remove-all/remount slices are all covered.",
+            "Flat rects, labels, cards, and images cover mount plus mutate, but the empty-root, shared control-set, and retained-tree remove-all/remount slices are still incomplete.",
         ),
-        contract_entry(
+        contract_battery_entry(
             "layout-invalidation",
             "Layout & Invalidation",
-            if has_primitive_slice("cpu.layout.flat_grid.rotation_relayout")
-                && has_primitive_slice("cpu.layout.deep_stack.theme_swap")
-                && has_primitive_slice("cpu.layout.grid.safe_area_swap")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_primitive_slice("cpu.layout.flat_grid.rotation_relayout")
-                && has_primitive_slice("cpu.layout.deep_stack.theme_swap")
-                && has_primitive_slice("cpu.layout.grid.safe_area_swap")
-            {
-                String::from(
-                    "Flat-grid rotation, deep-stack theme swap, and safe-area inset relayout batteries are all implemented.",
-                )
-            } else {
-                String::from(
-                    "Dedicated relayout batteries now exist, but not every required flat/deep/grid invalidation slice is present yet.",
-                )
-            }],
+            has_all(&[
+                "cpu.layout.flat_grid.rotation_relayout",
+                "cpu.layout.deep_stack.theme_swap",
+                "cpu.layout.grid.safe_area_swap",
+            ]),
+            "Flat-grid rotation, deep-stack theme swap, and safe-area inset relayout batteries are all implemented.",
+            "Dedicated relayout batteries now exist, but not every required flat/deep/grid invalidation slice is present yet.",
         ),
-        contract_entry(
+        contract_battery_entry(
             "text-input",
             "Text & Text Input",
-            if has_primitive_slice("cpu.text_input.large_editor.keystroke_burst")
-                && has_primitive_slice("cpu.text_input.large_editor.paste_10kb")
-                && has_primitive_slice("cpu.text_input.large_editor.selection_replace")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_primitive_slice("cpu.text_input.large_editor.keystroke_burst")
-                && has_primitive_slice("cpu.text_input.large_editor.paste_10kb")
-                && has_primitive_slice("cpu.text_input.large_editor.selection_replace")
-            {
-                String::from(
-                    "Large-editor keystroke, paste, and selection-replace workloads now complement the existing text-field and input-form coverage.",
-                )
-            } else {
-                String::from(
-                    "Text fields, wrapped labels, and the input-form journey are covered, but the full large-editor typing, paste, and selection battery is still incomplete.",
-                )
-            }],
+            has_all(&[
+                "cpu.text_input.large_editor.keystroke_burst",
+                "cpu.text_input.large_editor.paste_10kb",
+                "cpu.text_input.large_editor.selection_replace",
+            ]),
+            "Large-editor keystroke, paste, and selection-replace workloads now complement the existing text-field and input-form coverage.",
+            "Text fields, wrapped labels, and the input-form journey are covered, but the full large-editor typing, paste, and selection battery is still incomplete.",
         ),
-        contract_entry(
+        contract_battery_entry(
             "image-pipeline",
             "Image Pipeline",
-            if has_primitive_slice("cpu.image_pipeline.png.decode")
-                && has_primitive_slice("gpu.image_pipeline.png.upload")
-                && has_primitive_slice("gpu.image_pipeline.png.first_visible")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_primitive_slice("cpu.image_pipeline.png.decode")
-                && has_primitive_slice("gpu.image_pipeline.png.upload")
-                && has_primitive_slice("gpu.image_pipeline.png.first_visible")
-            {
-                String::from(
-                    "The committed image battery now splits PNG decode, Metal texture upload, and first-visible presentation into separate persisted workloads.",
-                )
-            } else {
-                String::from(
-                    "Image view and zoom workloads exist, but decode, upload, and first-visible phases are not yet split into separate benchmark metrics.",
-                )
-            }],
+            has_all(&[
+                "cpu.image_pipeline.png.decode",
+                "gpu.image_pipeline.png.upload",
+                "gpu.image_pipeline.png.first_visible",
+            ]),
+            "The committed image battery now splits PNG decode, Metal texture upload, and first-visible presentation into separate persisted workloads.",
+            "Image view and zoom workloads exist, but decode, upload, and first-visible phases are not yet split into separate benchmark metrics.",
         ),
-        contract_entry(
+        contract_battery_entry(
             "lists-grids-chat",
             "Lists, Grids, & Chat",
-            if has_primitive_slice("cpu.journey.feed_scroll_matrix")
-                && has_primitive_slice("cpu.journey.thumbnail_grid_scroll_matrix")
-                && has_primitive_slice("cpu.journey.chat_thread_scroll_matrix")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_primitive_slice("cpu.journey.feed_scroll_matrix")
-                && has_primitive_slice("cpu.journey.thumbnail_grid_scroll_matrix")
-                && has_primitive_slice("cpu.journey.chat_thread_scroll_matrix")
-            {
-                String::from(
-                    "Feed, thumbnail-grid, and chat-thread scroll matrices now exist alongside the collection encode and navigation slices.",
-                )
-            } else {
-                String::from(
-                    "Collection encode and collection-navigation journey coverage exist, but the full feed/grid/chat scroll matrices are still incomplete.",
-                )
-            }],
+            has_all(&[
+                "cpu.journey.feed_scroll_matrix",
+                "cpu.journey.thumbnail_grid_scroll_matrix",
+                "cpu.journey.chat_thread_scroll_matrix",
+            ]),
+            "Feed, thumbnail-grid, and chat-thread scroll matrices now exist alongside the collection encode and navigation slices.",
+            "Collection encode and collection-navigation journey coverage exist, but the full feed/grid/chat scroll matrices are still incomplete.",
         ),
-        contract_entry(
+        contract_battery_entry(
             "navigation-input",
             "Navigation & Input Latency",
-            if has_primitive_slice("cpu.navigation.button_press.response")
-                && has_primitive_slice("cpu.navigation.slider_scrub.response")
-                && has_primitive_slice("cpu.navigation.text_focus.response")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_primitive_slice("cpu.navigation.button_press.response")
-                && has_primitive_slice("cpu.navigation.slider_scrub.response")
-                && has_primitive_slice("cpu.navigation.text_focus.response")
-            {
-                String::from(
-                    "Direct button-press, slider-scrub, and text-focus response batteries now complement the higher-level journey cases.",
-                )
-            } else {
-                String::from(
-                    "Navigation, orchestration, and zoom journeys exist, but direct event-to-first-response latency batteries are still missing.",
-                )
-            }],
+            has_all(&[
+                "cpu.navigation.button_press.response",
+                "cpu.navigation.slider_scrub.response",
+                "cpu.navigation.text_focus.response",
+            ]),
+            "Direct button-press, slider-scrub, and text-focus response batteries now complement the higher-level journey cases.",
+            "Navigation, orchestration, and zoom journeys exist, but direct event-to-first-response latency batteries are still missing.",
         ),
         contract_entry(
             "animation-effects",
@@ -1235,113 +1174,55 @@ fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageRe
                 "Representative animations exist, but there is no dedicated hitch-ratio or refresh-mode matrix yet for 60 Hz versus native refresh.",
             )],
         ),
-        contract_entry(
+        contract_battery_entry(
             "state-reconcile",
             "State Mutation & Reconciliation",
-            if has_primitive_slice("cpu.reconcile.single_node_mutation")
-                && has_primitive_slice("cpu.reconcile.tree_mutation_1pct")
-                && has_primitive_slice("cpu.reconcile.tree_mutation_10pct")
-                && has_primitive_slice("cpu.reconcile.theme_swap_full")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_primitive_slice("cpu.reconcile.single_node_mutation")
-                && has_primitive_slice("cpu.reconcile.tree_mutation_1pct")
-                && has_primitive_slice("cpu.reconcile.tree_mutation_10pct")
-                && has_primitive_slice("cpu.reconcile.theme_swap_full")
-            {
-                String::from(
-                    "Single-node, 1 percent, 10 percent, and full-theme tree mutation batteries now expose diff/apply cost directly.",
-                )
-            } else {
-                String::from(
-                    "Primitive mutations and surface-router composition exist, but there is no dedicated diff/apply battery for 1 percent, 10 percent, or full-theme tree mutation yet.",
-                )
-            }],
+            has_all(&[
+                "cpu.reconcile.single_node_mutation",
+                "cpu.reconcile.tree_mutation_1pct",
+                "cpu.reconcile.tree_mutation_10pct",
+                "cpu.reconcile.theme_swap_full",
+            ]),
+            "Single-node, 1 percent, 10 percent, and full-theme tree mutation batteries now expose diff/apply cost directly.",
+            "Primitive mutations and surface-router composition exist, but there is no dedicated diff/apply battery for 1 percent, 10 percent, or full-theme tree mutation yet.",
         ),
-        contract_entry(
+        contract_battery_entry(
             "os-bridge",
             "OS Bridge Overhead",
-            if has_primitive_slice("cpu.bridge.permission_callback_fanout")
-                && has_primitive_slice("cpu.bridge.sensor_location_snapshot")
-                && has_primitive_slice("cpu.bridge.bluetooth_cache_update")
-                && has_primitive_slice("cpu.bridge.photo_import_thumbnail")
-                && has_primitive_slice("cpu.bridge.file_import_render")
-                && has_primitive_slice("cpu.bridge.share_payload_prepare")
-                && has_primitive_slice("cpu.bridge.local_json_transport_render")
-                && has_primitive_slice("cpu.bridge.local_image_transport_render")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_primitive_slice("cpu.bridge.permission_callback_fanout")
-                && has_primitive_slice("cpu.bridge.sensor_location_snapshot")
-                && has_primitive_slice("cpu.bridge.bluetooth_cache_update")
-                && has_primitive_slice("cpu.bridge.photo_import_thumbnail")
-                && has_primitive_slice("cpu.bridge.file_import_render")
-                && has_primitive_slice("cpu.bridge.share_payload_prepare")
-                && has_primitive_slice("cpu.bridge.local_json_transport_render")
-                && has_primitive_slice("cpu.bridge.local_image_transport_render")
-            {
-                String::from(
-                    "Permission, sensor, photo import, file import, share payload, and localhost transport/render bridge workloads are all covered without claiming system-owned UI as a renderer win.",
-                )
-            } else {
-                String::from(
-                    "Permission, location, and Bluetooth wrappers are covered, but photo import, file import, share sheet, and transport/decode/render bridge batteries remain missing.",
-                )
-            }],
+            has_all(&[
+                "cpu.bridge.permission_callback_fanout",
+                "cpu.bridge.sensor_location_snapshot",
+                "cpu.bridge.bluetooth_cache_update",
+                "cpu.bridge.photo_import_thumbnail",
+                "cpu.bridge.file_import_render",
+                "cpu.bridge.share_payload_prepare",
+                "cpu.bridge.local_json_transport_render",
+                "cpu.bridge.local_image_transport_render",
+            ]),
+            "Permission, sensor, photo import, file import, share payload, and localhost transport/render bridge workloads are all covered without claiming system-owned UI as a renderer win.",
+            "Permission, location, and Bluetooth wrappers are covered, but photo import, file import, share sheet, and transport/decode/render bridge batteries remain missing.",
         ),
-        contract_entry(
+        contract_battery_entry(
             "endurance-thermal",
             "Endurance, Memory, & Thermal Drift",
-            if has_primitive_slice("cpu.endurance.open_close_heavy_screen.100x")
-                && has_primitive_slice("cpu.endurance.tab_switch_heavy.500x")
-                && has_primitive_slice("cpu.endurance.idle_animation.600_frames")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_primitive_slice("cpu.endurance.open_close_heavy_screen.100x")
-                && has_primitive_slice("cpu.endurance.tab_switch_heavy.500x")
-                && has_primitive_slice("cpu.endurance.idle_animation.600_frames")
-            {
-                String::from(
-                    "Open/close, tab-switch, and idle-animation endurance loops are now part of the committed Oxide battery.",
-                )
-            } else {
-                String::from(
-                    "There is still not a complete long-run open/close, tab-switch, and idle-animation endurance battery in the current Oxide suite.",
-                )
-            }],
+            has_all(&[
+                "cpu.endurance.open_close_heavy_screen.100x",
+                "cpu.endurance.tab_switch_heavy.500x",
+                "cpu.endurance.idle_animation.600_frames",
+            ]),
+            "Open/close, tab-switch, and idle-animation endurance loops are now part of the committed Oxide battery.",
+            "There is still not a complete long-run open/close, tab-switch, and idle-animation endurance battery in the current Oxide suite.",
         ),
-        contract_entry(
+        contract_battery_entry(
             "stress-pathological",
             "Stress & Pathological Regressions",
-            if has_primitive_slice("cpu.stress.flat_rects.10000.mount")
-                && has_primitive_slice("cpu.stress.simultaneous_animations.300")
-                && has_primitive_slice("cpu.stress.ticker_100hz")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_primitive_slice("cpu.stress.flat_rects.10000.mount")
-                && has_primitive_slice("cpu.stress.simultaneous_animations.300")
-                && has_primitive_slice("cpu.stress.ticker_100hz")
-            {
-                String::from(
-                    "Dedicated 10k-node, 300-animation, and 100 Hz ticker traps now complement the router stress scene.",
-                )
-            } else {
-                String::from(
-                    "The router stress scene exists, but the explicit 10k-node, 300-animation, and 100 Hz ticker traps are still incomplete.",
-                )
-            }],
+            has_all(&[
+                "cpu.stress.flat_rects.10000.mount",
+                "cpu.stress.simultaneous_animations.300",
+                "cpu.stress.ticker_100hz",
+            ]),
+            "Dedicated 10k-node, 300-animation, and 100 Hz ticker traps now complement the router stress scene.",
+            "The router stress scene exists, but the explicit 10k-node, 300-animation, and 100 Hz ticker traps are still incomplete.",
         ),
     ];
     ContractCoverageReport {
@@ -1370,6 +1251,21 @@ fn contract_entry(
         status: status.to_string(),
         notes,
     }
+}
+
+fn contract_battery_entry(
+    id: &str,
+    label: &str,
+    implemented: bool,
+    implemented_note: &str,
+    partial_note: &str,
+) -> ContractCoverageEntry {
+    contract_entry(
+        id,
+        label,
+        if implemented { "implemented" } else { "partial" },
+        vec![String::from(if implemented { implemented_note } else { partial_note })],
+    )
 }
 
 fn push_system_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) {
@@ -1511,6 +1407,9 @@ fn push_launch_cases(
     covered: &mut BTreeSet<String>,
 ) -> Result<()> {
     for spec in PERF_LAUNCH_SPECS {
+        if !perf_case_allowed(spec.id) {
+            continue;
+        }
         covered.insert(spec.name.to_string());
         let case = match spec.id {
             "cpu.launch.simple_home.cold_launch" => launch_simple_home_cold_case(smoke),
@@ -1533,6 +1432,9 @@ fn push_primitive_lifecycle_cases(
     covered: &mut BTreeSet<String>,
 ) -> Result<()> {
     for spec in PERF_PRIMITIVE_LIFECYCLE_SPECS {
+        if !perf_case_allowed(spec.id) {
+            continue;
+        }
         covered.insert(spec.name.to_string());
         let case = match spec.kind {
             PrimitiveLifecycleKind::EmptyRoot => primitive_empty_root_case(spec, smoke)?,
@@ -1553,6 +1455,10 @@ fn push_cpu_scene_cases(
     covered: &mut BTreeSet<String>,
 ) -> Result<()> {
     for spec in PERF_SCENE_SPECS {
+        let case_id = format!("cpu.scene.{}.frame", spec.slug);
+        if !perf_case_allowed(&case_id) {
+            continue;
+        }
         covered.insert(spec.name.to_string());
         cases.push(cpu_scene_case(spec, smoke)?);
     }
@@ -1565,6 +1471,10 @@ fn push_gpu_scene_cases(
     covered: &mut BTreeSet<String>,
 ) -> Result<()> {
     for spec in PERF_SCENE_SPECS {
+        let case_id = format!("gpu.scene.{}.frame", spec.slug);
+        if !perf_case_allowed(&case_id) {
+            continue;
+        }
         covered.insert(spec.name.to_string());
         cases.push(gpu_scene_case(spec, smoke)?);
     }
@@ -1577,6 +1487,9 @@ fn push_journey_cases(
     covered: &mut BTreeSet<String>,
 ) -> Result<()> {
     for spec in PERF_JOURNEY_SPECS {
+        if !perf_case_allowed(spec.id) {
+            continue;
+        }
         covered.insert(spec.name.to_string());
         let case = match spec.id {
             "cpu.journey.input_form_submit" => journey_input_form_case(smoke),
@@ -1599,12 +1512,13 @@ fn push_authoring_cases(
     covered: &mut BTreeSet<String>,
 ) -> Result<()> {
     for spec in PERF_AUTHORING_SPECS {
+        if !perf_case_allowed(spec.id) {
+            continue;
+        }
         covered.insert(spec.name.to_string());
         let case = match spec.id {
             "cpu.authoring.text_fields.edit_cycle" => authoring_text_fields_case(smoke),
-            "cpu.authoring.popup_wheel_picker.interaction" => {
-                authoring_popup_wheel_picker_case(smoke)
-            }
+            POPUP_WHEEL_PICKER_CASE_ID => authoring_popup_wheel_picker_case(smoke),
             "cpu.authoring.burst_emitter.sample" => authoring_burst_emitter_case(smoke),
             "cpu.authoring.surface_router.compose" => authoring_surface_router_case(smoke),
             other => bail!("unknown authoring perf case `{}`", other),
@@ -1620,6 +1534,9 @@ fn push_layout_cases(
     covered: &mut BTreeSet<String>,
 ) -> Result<()> {
     for spec in PERF_LAYOUT_SPECS {
+        if !perf_case_allowed(spec.id) {
+            continue;
+        }
         covered.insert(spec.name.to_string());
         let case = match spec.id {
             "cpu.layout.flat_grid.rotation_relayout" => layout_flat_grid_rotation_case(smoke),
@@ -1638,6 +1555,9 @@ fn push_text_input_cases(
     covered: &mut BTreeSet<String>,
 ) -> Result<()> {
     for spec in PERF_TEXT_INPUT_SPECS {
+        if !perf_case_allowed(spec.id) {
+            continue;
+        }
         covered.insert(spec.name.to_string());
         let case = match spec.id {
             "cpu.text_input.large_editor.keystroke_burst" => {
@@ -1660,6 +1580,9 @@ fn push_image_pipeline_cases(
     covered: &mut BTreeSet<String>,
 ) -> Result<()> {
     for spec in PERF_IMAGE_PIPELINE_SPECS {
+        if !perf_case_allowed(spec.id) {
+            continue;
+        }
         covered.insert(spec.name.to_string());
         let case = match spec.id {
             "cpu.image_pipeline.png.decode" => image_pipeline_png_decode_case(smoke)?,
@@ -1678,6 +1601,9 @@ fn push_endurance_cases(
     covered: &mut BTreeSet<String>,
 ) -> Result<()> {
     for spec in PERF_ENDURANCE_SPECS {
+        if !perf_case_allowed(spec.id) {
+            continue;
+        }
         covered.insert(spec.name.to_string());
         let case = match spec.id {
             "cpu.endurance.open_close_heavy_screen.100x" => endurance_open_close_case(smoke),
@@ -1696,6 +1622,9 @@ fn push_navigation_cases(
     covered: &mut BTreeSet<String>,
 ) -> Result<()> {
     for spec in PERF_NAVIGATION_SPECS {
+        if !perf_case_allowed(spec.id) {
+            continue;
+        }
         covered.insert(spec.name.to_string());
         let case = match spec.id {
             "cpu.navigation.button_press.response" => navigation_button_press_case(smoke),
@@ -1714,6 +1643,9 @@ fn push_reconcile_cases(
     covered: &mut BTreeSet<String>,
 ) -> Result<()> {
     for spec in PERF_RECONCILE_SPECS {
+        if !perf_case_allowed(spec.id) {
+            continue;
+        }
         covered.insert(spec.name.to_string());
         let case = match spec.id {
             "cpu.reconcile.single_node_mutation" => reconcile_single_node_case(smoke)?,
@@ -1733,6 +1665,9 @@ fn push_stress_cases(
     covered: &mut BTreeSet<String>,
 ) -> Result<()> {
     for spec in PERF_STRESS_SPECS {
+        if !perf_case_allowed(spec.id) {
+            continue;
+        }
         covered.insert(spec.name.to_string());
         let case = match spec.id {
             "cpu.stress.flat_rects.10000.mount" => stress_flat_rects_mount_case(smoke)?,
@@ -1751,6 +1686,9 @@ fn push_bridge_cases(
     covered: &mut BTreeSet<String>,
 ) -> Result<()> {
     for spec in PERF_BRIDGE_SPECS {
+        if !perf_case_allowed(spec.id) {
+            continue;
+        }
         covered.insert(spec.name.to_string());
         let case = match spec.id {
             "cpu.bridge.permission_callback_fanout" => bridge_permission_callback_case(smoke),
@@ -2928,7 +2866,7 @@ fn cpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
 }
 
 fn gpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
-    std::env::set_var("OXIDE_ENABLE_DAMAGE", "1");
+    set_env_if_unset("OXIDE_ENABLE_DAMAGE", "1");
 
     let mut renderer =
         Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
@@ -2968,7 +2906,9 @@ fn gpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
         let damage = api::Damage { rects: router.take_damage() };
         let token = renderer.begin_frame(&api::FrameTarget, Some(&damage));
         renderer.encode_pass(builder.drawlist());
-        renderer.submit(token).context("submitting Metal frame")?;
+        renderer
+            .submit(token)
+            .with_context(|| format!("submitting Metal frame for gpu.scene.{}.frame", spec.slug))?;
         let stats = renderer.last_stats();
         if index >= warmups {
             frame_samples.push(frame_t0.elapsed().as_secs_f64() * 1000.0);
@@ -3202,7 +3142,7 @@ fn authoring_popup_wheel_picker_case(smoke: bool) -> PerfCaseResult {
     let loops = if smoke { 24 } else { 72 };
     let panel_rect = api::RectF::new(24.0, 36.0, 180.0, 120.0);
     measure_cpu_case(
-        "cpu.authoring.popup_picker.interaction",
+        POPUP_WHEEL_PICKER_CASE_ID,
         "authoring",
         smoke,
         true,
@@ -5226,54 +5166,95 @@ pub fn compare_reports(current: &PerfReport, baseline: &PerfReport) -> PerfCompa
 }
 
 pub fn assert_full_coverage(coverage: &CoverageReport) -> Result<()> {
-    if coverage.components_total != coverage.components_covered.len() {
-        bail!("component perf coverage is incomplete");
+    let checks = [
+        (
+            coverage.components_total,
+            coverage.components_covered.len(),
+            "component perf coverage is incomplete",
+        ),
+        (
+            coverage.animations_total,
+            coverage.animations_covered.len(),
+            "animation perf coverage is incomplete",
+        ),
+        (
+            coverage.launch_total,
+            coverage.launch_covered.len(),
+            "launch perf coverage is incomplete",
+        ),
+        (
+            coverage.primitive_lifecycle_total,
+            coverage.primitive_lifecycle_covered.len(),
+            "primitive lifecycle perf coverage is incomplete",
+        ),
+        (
+            coverage.scenes_cpu_total,
+            coverage.scenes_cpu_covered.len(),
+            "cpu scene perf coverage is incomplete",
+        ),
+        (
+            coverage.scenes_gpu_total,
+            coverage.scenes_gpu_covered.len(),
+            "gpu scene perf coverage is incomplete",
+        ),
+        (
+            coverage.journeys_total,
+            coverage.journeys_covered.len(),
+            "user journey perf coverage is incomplete",
+        ),
+        (
+            coverage.authoring_total,
+            coverage.authoring_covered.len(),
+            "authoring perf coverage is incomplete",
+        ),
+        (
+            coverage.layout_total,
+            coverage.layout_covered.len(),
+            "layout perf coverage is incomplete",
+        ),
+        (
+            coverage.text_input_total,
+            coverage.text_input_covered.len(),
+            "text-input perf coverage is incomplete",
+        ),
+        (
+            coverage.image_pipeline_total,
+            coverage.image_pipeline_covered.len(),
+            "image-pipeline perf coverage is incomplete",
+        ),
+        (
+            coverage.navigation_total,
+            coverage.navigation_covered.len(),
+            "navigation perf coverage is incomplete",
+        ),
+        (
+            coverage.reconcile_total,
+            coverage.reconcile_covered.len(),
+            "reconcile perf coverage is incomplete",
+        ),
+        (
+            coverage.endurance_total,
+            coverage.endurance_covered.len(),
+            "endurance perf coverage is incomplete",
+        ),
+        (
+            coverage.stress_total,
+            coverage.stress_covered.len(),
+            "stress perf coverage is incomplete",
+        ),
+        (
+            coverage.bridges_total,
+            coverage.bridges_covered.len(),
+            "bridge perf coverage is incomplete",
+        ),
+    ];
+
+    for (total, covered, message) in checks {
+        if total != covered {
+            bail!(message);
+        }
     }
-    if coverage.animations_total != coverage.animations_covered.len() {
-        bail!("animation perf coverage is incomplete");
-    }
-    if coverage.launch_total != coverage.launch_covered.len() {
-        bail!("launch perf coverage is incomplete");
-    }
-    if coverage.primitive_lifecycle_total != coverage.primitive_lifecycle_covered.len() {
-        bail!("primitive lifecycle perf coverage is incomplete");
-    }
-    if coverage.scenes_cpu_total != coverage.scenes_cpu_covered.len() {
-        bail!("cpu scene perf coverage is incomplete");
-    }
-    if coverage.scenes_gpu_total != coverage.scenes_gpu_covered.len() {
-        bail!("gpu scene perf coverage is incomplete");
-    }
-    if coverage.journeys_total != coverage.journeys_covered.len() {
-        bail!("user journey perf coverage is incomplete");
-    }
-    if coverage.authoring_total != coverage.authoring_covered.len() {
-        bail!("authoring perf coverage is incomplete");
-    }
-    if coverage.layout_total != coverage.layout_covered.len() {
-        bail!("layout perf coverage is incomplete");
-    }
-    if coverage.text_input_total != coverage.text_input_covered.len() {
-        bail!("text-input perf coverage is incomplete");
-    }
-    if coverage.image_pipeline_total != coverage.image_pipeline_covered.len() {
-        bail!("image-pipeline perf coverage is incomplete");
-    }
-    if coverage.navigation_total != coverage.navigation_covered.len() {
-        bail!("navigation perf coverage is incomplete");
-    }
-    if coverage.reconcile_total != coverage.reconcile_covered.len() {
-        bail!("reconcile perf coverage is incomplete");
-    }
-    if coverage.endurance_total != coverage.endurance_covered.len() {
-        bail!("endurance perf coverage is incomplete");
-    }
-    if coverage.stress_total != coverage.stress_covered.len() {
-        bail!("stress perf coverage is incomplete");
-    }
-    if coverage.bridges_total != coverage.bridges_covered.len() {
-        bail!("bridge perf coverage is incomplete");
-    }
+
     Ok(())
 }
 

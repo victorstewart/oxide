@@ -220,6 +220,7 @@
 /* Begin PBXShellScriptBuildPhase section */
 		3FB4470CDB1BEFC6AC04CBB5 /* Build + Embed Rust Staticlib */ = {
 			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
@@ -231,10 +232,11 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/liboxide_host_ios.a",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\nPROJECT_DIR=\"${PROJECT_DIR}\"\nREPO_ROOT=\"$(cd \"${PROJECT_DIR}/../../..\" && pwd)\"\nexport CARGO_TARGET_DIR=\"${REPO_ROOT}/target\"\n# Determine Rust target triple from SDK\ncase \"${PLATFORM_NAME}\" in\n  iphoneos)\n    RUST_TARGET=\"aarch64-apple-ios\"\n    ;;\n  *)\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\n    ;;\nesac\necho \"Building Rust staticlib for ${RUST_TARGET}…\"\n(cd \"${REPO_ROOT}/host/ios-app/oxide-host-ios\" && \\\n   cargo build -p oxide-host-ios --release --features perf-host-stubs --target \"${RUST_TARGET}\")\nmkdir -p \"${BUILT_PRODUCTS_DIR}\"\nSRC=\"${CARGO_TARGET_DIR}/${RUST_TARGET}/release/liboxide_host_ios.a\"\ncp -v \"${SRC}\" \"${BUILT_PRODUCTS_DIR}/liboxide_host_ios.a\"\n";
+			shellScript = "set -euo pipefail\nPROJECT_DIR=\"${PROJECT_DIR}\"\nREPO_ROOT=\"$(cd \"${PROJECT_DIR}/../../..\" && pwd)\"\nexport CARGO_TARGET_DIR=\"${REPO_ROOT}/target\"\n# Determine Rust target triple from SDK\ncase \"${PLATFORM_NAME}\" in\n  iphoneos)\n    RUST_TARGET=\"aarch64-apple-ios\"\n    ;;\n  *)\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\n    ;;\nesac\nHOST_LINKER_WRAPPER=\"${CARGO_TARGET_DIR}/xcode-host-clang.sh\"\ncat > \"${HOST_LINKER_WRAPPER}\" <<'EOF'\n#!/bin/sh\nexec xcrun --sdk macosx clang \"$@\"\nEOF\nchmod +x \"${HOST_LINKER_WRAPPER}\"\necho \"Building Rust staticlib for ${RUST_TARGET}…\"\n(cd \"${REPO_ROOT}/host/ios-app/oxide-host-ios\" && \\\n   export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=\"${HOST_LINKER_WRAPPER}\" && \\\n   unset SDKROOT SDK_DIR SDK_NAME IPHONEOS_DEPLOYMENT_TARGET && \\\n   cargo build -p oxide-host-ios --release --features perf-host-stubs --target \"${RUST_TARGET}\")\nmkdir -p \"${BUILT_PRODUCTS_DIR}\"\nSRC=\"${CARGO_TARGET_DIR}/${RUST_TARGET}/release/liboxide_host_ios.a\"\ncp -v \"${SRC}\" \"${BUILT_PRODUCTS_DIR}/liboxide_host_ios.a\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

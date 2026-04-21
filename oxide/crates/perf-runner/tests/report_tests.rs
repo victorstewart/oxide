@@ -1,6 +1,6 @@
 use oxide_perf_runner::{
-    assert_full_coverage, compare_reports, AuditFinding, ContractCoverageReport, CoverageReport,
-    PerfCaseResult, PerfReport,
+    assert_full_coverage, collect_suite_report, compare_reports, AuditFinding,
+    ContractCoverageReport, CoverageReport, PerfCaseResult, PerfReport,
 };
 use std::collections::BTreeMap;
 
@@ -318,4 +318,14 @@ fn full_coverage_check_rejects_missing_bridge_coverage() {
     };
 
     assert!(assert_full_coverage(&coverage).is_err());
+}
+
+#[test]
+fn smoke_suite_keeps_popup_wheel_picker_case_id_stable() {
+    let report = collect_suite_report(true).expect("collect smoke suite");
+    let ids =
+        report.cases.iter().map(|case| case.id.as_str()).collect::<std::collections::BTreeSet<_>>();
+
+    assert!(ids.contains("cpu.authoring.popup_wheel_picker.interaction"));
+    assert!(!ids.contains("cpu.authoring.popup_picker.interaction"));
 }

@@ -62,17 +62,11 @@ fn callbacks_cell() -> &'static RwLock<Option<SecureStorageCallbacks>> {
 }
 
 fn callbacks_write_guard() -> std::sync::RwLockWriteGuard<'static, Option<SecureStorageCallbacks>> {
-    match callbacks_cell().write() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
+    callbacks_cell().write().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn callbacks_read_guard() -> std::sync::RwLockReadGuard<'static, Option<SecureStorageCallbacks>> {
-    match callbacks_cell().read() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
+    callbacks_cell().read().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 pub fn register_secure_storage_callbacks(callbacks: SecureStorageCallbacks) {

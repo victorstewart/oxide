@@ -52,7 +52,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::CStr;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{atomic::AtomicBool, Arc, OnceLock};
+use std::sync::{atomic::AtomicBool, Arc, Mutex, OnceLock};
 use std::time::Instant;
 use thiserror::Error;
 
@@ -68,13 +68,8 @@ extern "C" {
 fn ios_log_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        let oxide = std::env::var("OXIDE_RUST_LOG")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        let nametag = std::env::var("NAMETAG_DEBUG_RUNTIME_CREATE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        oxide || nametag
+        env_flag("OXIDE_RUST_LOG").unwrap_or(false)
+            || env_flag("NAMETAG_DEBUG_RUNTIME_CREATE").unwrap_or(false)
     })
 }
 
@@ -95,11 +90,7 @@ fn camera_perf_trace_signposts_enabled() -> bool {
     #[cfg(target_os = "ios")]
     {
         static ENABLED: OnceLock<bool> = OnceLock::new();
-        *ENABLED.get_or_init(|| {
-            std::env::var("OXIDE_PERF_CAMERA_TRACE_PHASES")
-                .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-                .unwrap_or(false)
-        })
+        cached_env_flag(&ENABLED, "OXIDE_PERF_CAMERA_TRACE_PHASES")
     }
     #[cfg(not(target_os = "ios"))]
     {
@@ -110,31 +101,19 @@ fn camera_perf_trace_signposts_enabled() -> bool {
 #[inline(always)]
 fn camera_perf_stage_stats_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("OXIDE_PERF_PARKED")
-            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-    })
+    cached_env_flag(&ENABLED, "OXIDE_PERF_PARKED")
 }
 
 #[inline(always)]
 fn experimental_tiny_camera_preview_renderer_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("OXIDE_PERF_CAMERA_TINY_PREVIEW_RENDERER")
-            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-    })
+    cached_env_flag(&ENABLED, "OXIDE_PERF_CAMERA_TINY_PREVIEW_RENDERER")
 }
 
 #[inline(always)]
 fn experimental_preview_submission_backpressure_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("OXIDE_PERF_CAMERA_PREVIEW_BACKPRESSURE")
-            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-    })
+    cached_env_flag(&ENABLED, "OXIDE_PERF_CAMERA_PREVIEW_BACKPRESSURE")
 }
 
 #[inline(always)]
@@ -167,6 +146,14 @@ pub fn direct_preview_submission_backpressure_applies(
     in_flight: usize,
 ) -> bool {
     submission_cap.is_some_and(|limit| in_flight >= limit)
+}
+
+#[inline(always)]
+pub fn direct_preview_should_clear_load_action(
+    dontcare_load_enabled: bool,
+    draws_live_frame: bool,
+) -> bool {
+    !dontcare_load_enabled || !draws_live_frame
 }
 
 #[inline(always)]
@@ -460,10 +447,29 @@ fn nsstring_to_string(ns: *mut Object) -> Option<String> {
 }
 
 #[inline(always)]
+unsafe fn command_buffer_error_detail(buffer: &CommandBufferRef) -> Option<String> {
+    let err: *mut Object = msg_send![buffer, error];
+    if err.is_null() {
+        return None;
+    }
+    let code: i64 = msg_send![err, code];
+    let domain_obj: *mut Object = msg_send![err, domain];
+    let desc_obj: *mut Object = msg_send![err, localizedDescription];
+    let domain = nsstring_to_string(domain_obj).unwrap_or_else(|| "<null-domain>".to_string());
+    let desc = nsstring_to_string(desc_obj).unwrap_or_else(|| "<null-description>".to_string());
+    Some(format!("domain={} code={} desc={}", domain, code, desc))
+}
+
+#[inline(always)]
 fn env_flag(name: &str) -> Option<bool> {
     std::env::var(name).ok().map(|value| {
         matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
     })
+}
+
+#[inline(always)]
+fn cached_env_flag(cache: &OnceLock<bool>, name: &str) -> bool {
+    *cache.get_or_init(|| env_flag(name).unwrap_or(false))
 }
 
 #[inline(always)]
@@ -515,7 +521,7 @@ fn take_external_mtl_device() -> Option<Device> {
 
 #[inline(always)]
 fn encode_debug_stride() -> usize {
-    std::env::var("NAMETAG_DEBUG_ENCODE_EVERY")
+    std::env::var("OXIDE_DEBUG_ENCODE_EVERY")
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
         .unwrap_or(0)
@@ -783,7 +789,7 @@ pub struct MetalRenderer {
     pso_camera_bgra: RenderPipelineState,
     // Argument buffer for image textures
     img_arg: Option<ArgumentEncoder>,
-    img_arg_buf: Option<Buffer>,
+    img_arg_bufs: Option<[Buffer; FRAME_RING_SIZE]>,
     sampler: Option<SamplerState>,
     color_format: MTLPixelFormat,
     config: MetalRendererConfig,
@@ -854,6 +860,7 @@ pub struct MetalRenderer {
     use_camera_textures: bool,
     use_image_arg_buffer: bool,
     submit_error_flag: Arc<AtomicBool>,
+    submit_error_detail: Arc<Mutex<Option<String>>>,
     direct_preview_gpu_timing: Option<DirectPreviewGpuTimingSupport>,
     direct_preview_submitted: VecDeque<DirectPreviewSubmittedFrame>,
     direct_preview_last_submission_depth: u32,
@@ -875,7 +882,9 @@ struct CameraPreviewRenderer {
     pso_camera_legacy: RenderPipelineState,
     pso_camera_preview_fast_full: RenderPipelineState,
     pso_camera_preview_fast_video: RenderPipelineState,
+    sampler: Option<SamplerState>,
     submit_error_flag: Arc<AtomicBool>,
+    submit_error_detail: Arc<Mutex<Option<String>>>,
     inflight_submissions: Arc<AtomicUsize>,
 }
 
@@ -916,6 +925,7 @@ impl CameraPreviewRenderer {
         pso_camera_legacy: RenderPipelineState,
         pso_camera_preview_fast_full: RenderPipelineState,
         pso_camera_preview_fast_video: RenderPipelineState,
+        sampler: Option<SamplerState>,
     ) -> Self {
         Self {
             queue,
@@ -923,7 +933,9 @@ impl CameraPreviewRenderer {
             pso_camera_legacy,
             pso_camera_preview_fast_full,
             pso_camera_preview_fast_video,
+            sampler,
             submit_error_flag: Arc::new(AtomicBool::new(false)),
+            submit_error_detail: Arc::new(Mutex::new(None)),
             inflight_submissions: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -985,6 +997,10 @@ impl CameraPreviewRenderer {
         result.command_buffer_ms = command_buffer_ms;
         let rpd = RenderPassDescriptor::new();
         let setup_t0 = collect_stage_stats.then(Instant::now);
+        let should_clear = direct_preview_should_clear_load_action(
+            direct_preview_uses_dontcare_load_action(),
+            true,
+        );
         with_perf_signpost("camera.renderer.direct.setup", || -> Result<(), api::RenderError> {
             let raw_drawable_obj = drawable_ptr as *mut Object;
             let raw_dst_tex: *mut MTLTexture = msg_send![raw_drawable_obj, texture];
@@ -996,11 +1012,11 @@ impl CameraPreviewRenderer {
             let ca0 = rpd.color_attachments().object_at(0).unwrap();
             ca0.set_texture(Some(TextureRef::from_ptr(raw_dst_tex)));
             ca0.set_store_action(MTLStoreAction::Store);
-            if direct_preview_uses_dontcare_load_action() {
-                ca0.set_load_action(MTLLoadAction::DontCare);
-            } else {
+            if should_clear {
                 ca0.set_load_action(MTLLoadAction::Clear);
                 ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 });
+            } else {
+                ca0.set_load_action(MTLLoadAction::DontCare);
             }
             Ok(())
         })?;
@@ -1028,6 +1044,19 @@ impl CameraPreviewRenderer {
             let y_tex = TextureRef::from_ptr(frame.y_tex as *mut MTLTexture);
             let uv_tex = TextureRef::from_ptr(frame.uv_tex as *mut MTLTexture);
             enc.set_render_pipeline_state(self.camera_pipeline_for_frame(frame, mode));
+            enc.set_vertex_bytes(
+                1,
+                core::mem::size_of_val(&vp_dp) as u64,
+                vp_dp.as_ptr() as *const _,
+            );
+            enc.set_vertex_bytes(
+                0,
+                core::mem::size_of_val(&rect_dp) as u64,
+                rect_dp.as_ptr() as *const _,
+            );
+            if let Some(sam) = &self.sampler {
+                enc.set_fragment_sampler_state(0, Some(sam));
+            }
             enc.set_fragment_texture(0, Some(y_tex));
             enc.set_fragment_texture(1, Some(uv_tex));
             enc.set_fragment_bytes(
@@ -1054,11 +1083,16 @@ impl CameraPreviewRenderer {
         result.present_ms = elapsed_ms(present_t0);
 
         let submit_error_flag = Arc::clone(&self.submit_error_flag);
+        let submit_error_detail = Arc::clone(&self.submit_error_detail);
         let inflight_submissions = Arc::clone(&self.inflight_submissions);
         let presented_generation = frame.generation;
         inflight_submissions.fetch_add(1, Ordering::AcqRel);
         let completion = ConcreteBlock::new(move |buffer: &CommandBufferRef| {
             if buffer.status() == MTLCommandBufferStatus::Error {
+                let detail = unsafe { command_buffer_error_detail(buffer) };
+                if let Ok(mut slot) = submit_error_detail.lock() {
+                    *slot = detail.clone();
+                }
                 submit_error_flag.store(true, Ordering::Release);
             } else {
                 mark_preview_generation_presented(presented_generation);
@@ -1279,16 +1313,16 @@ impl MetalRenderer {
             }
         };
         // Prepare argument encoder for image textures
-        let (img_arg, img_arg_buf) = if direct_preview_only {
+        let (img_arg, img_arg_bufs) = if direct_preview_only {
             (None, None)
         } else {
             let f_image_fn = pipeline_function(&library, "function.f_image", "f_image")?;
             let img_arg = Some(f_image_fn.new_argument_encoder(2));
             let img_ab_len = img_arg.as_ref().unwrap().encoded_length();
-            let img_arg_buf =
-                Some(device.new_buffer(img_ab_len, MTLResourceOptions::StorageModeShared));
-            img_arg.as_ref().unwrap().set_argument_buffer(img_arg_buf.as_ref().unwrap(), 0);
-            (img_arg, img_arg_buf)
+            let img_arg_bufs = Some(core::array::from_fn(|_| {
+                device.new_buffer(img_ab_len, MTLResourceOptions::StorageModeShared)
+            }));
+            (img_arg, img_arg_bufs)
         };
         let sampler = build_sampler(&device);
         let opts =
@@ -1367,6 +1401,7 @@ impl MetalRenderer {
                 pso_camera_legacy.to_owned(),
                 pso_camera_preview_fast_full.to_owned(),
                 pso_camera_preview_fast_video.to_owned(),
+                sampler.clone(),
             ))
         } else {
             None
@@ -1394,7 +1429,7 @@ impl MetalRenderer {
             pso_camera_preview_fast_video,
             pso_camera_bgra,
             img_arg,
-            img_arg_buf,
+            img_arg_bufs,
             sampler,
             color_format,
             config: applied_config,
@@ -1461,6 +1496,7 @@ impl MetalRenderer {
             use_camera_textures,
             use_image_arg_buffer,
             submit_error_flag: Arc::new(AtomicBool::new(false)),
+            submit_error_detail: Arc::new(Mutex::new(None)),
             direct_preview_gpu_timing,
             direct_preview_submitted: VecDeque::new(),
             direct_preview_last_submission_depth: 0,
@@ -1603,8 +1639,10 @@ impl MetalRenderer {
     #[inline]
     fn direct_preview_backpressure_blocks_present(&mut self) -> bool {
         let depth = self.note_direct_preview_submission_depth() as usize;
-        let blocked =
-            direct_preview_submission_backpressure_applies(experimental_preview_submission_cap(), depth);
+        let blocked = direct_preview_submission_backpressure_applies(
+            experimental_preview_submission_cap(),
+            depth,
+        );
         self.direct_preview_last_submission_skipped = if blocked { 1 } else { 0 };
         blocked
     }
@@ -2446,6 +2484,19 @@ impl MetalRenderer {
         let y_tex = unsafe { TextureRef::from_ptr(frame.y_tex as *mut MTLTexture) };
         let uv_tex = unsafe { TextureRef::from_ptr(frame.uv_tex as *mut MTLTexture) };
         with_perf_signpost("camera.renderer.direct.encode.bind", || {
+            enc.set_vertex_bytes(
+                1,
+                core::mem::size_of_val(&vp_dp) as u64,
+                vp_dp.as_ptr() as *const _,
+            );
+            enc.set_vertex_bytes(
+                0,
+                core::mem::size_of_val(&rect_dp) as u64,
+                rect_dp.as_ptr() as *const _,
+            );
+            if let Some(sam) = &self.sampler {
+                enc.set_fragment_sampler_state(0, Some(sam));
+            }
             enc.set_render_pipeline_state(self.direct_preview_camera_pipeline_for_frame(frame));
             enc.set_fragment_texture(0, Some(y_tex));
             enc.set_fragment_texture(1, Some(uv_tex));
@@ -2751,6 +2802,10 @@ impl MetalRenderer {
                     .direct_preview_gpu_timing
                     .as_ref()
                     .and_then(|timing| timing.begin_submission(&self.device));
+                let should_clear = direct_preview_should_clear_load_action(
+                    direct_preview_uses_dontcare_load_action(),
+                    current_frame.is_some(),
+                );
                 let setup_t0 = collect_stage_stats.then(Instant::now);
                 with_perf_signpost(
                     "camera.renderer.direct.setup",
@@ -2765,9 +2820,7 @@ impl MetalRenderer {
                         let ca0 = rpd.color_attachments().object_at(0).unwrap();
                         ca0.set_texture(Some(TextureRef::from_ptr(raw_dst_tex)));
                         ca0.set_store_action(MTLStoreAction::Store);
-                        if direct_preview_uses_dontcare_load_action() {
-                            ca0.set_load_action(MTLLoadAction::DontCare);
-                        } else {
+                        if should_clear {
                             ca0.set_load_action(MTLLoadAction::Clear);
                             ca0.set_clear_color(MTLClearColor {
                                 red: 0.0,
@@ -2775,6 +2828,8 @@ impl MetalRenderer {
                                 blue: 0.0,
                                 alpha: 1.0,
                             });
+                        } else {
+                            ca0.set_load_action(MTLLoadAction::DontCare);
                         }
                         if let Some(gpu_trace) = direct_preview_gpu_trace.as_ref() {
                             gpu_trace.configure_render_pass(&rpd);
@@ -3002,9 +3057,7 @@ impl MetalRenderer {
             self.last_cam_cs = 0;
         }
         let end_encoding_t0 = collect_stage_stats.then(Instant::now);
-        let end_encoding_t0 = collect_stage_stats.then(Instant::now);
         enc.end_encoding();
-        let end_encoding_ms = elapsed_ms(end_encoding_t0);
         let end_encoding_ms = elapsed_ms(end_encoding_t0);
 
         let mut present_ms = 0.0;
@@ -3069,13 +3122,12 @@ impl MetalRenderer {
         Ok(self.last_stats)
     }
 
-    pub fn readback_bgra8(&mut self) -> Option<(u32, u32, alloc::vec::Vec<u8>)> {
-        if self.color_format != MTLPixelFormat::BGRA8Unorm_sRGB {
-            return None;
-        }
-        let tex = self.target_tex.as_ref()?;
+    fn readback_texture_bgra8(&self, tex: &TextureRef) -> Option<(u32, u32, alloc::vec::Vec<u8>)> {
         let w = tex.width() as u32;
         let h = tex.height() as u32;
+        if w == 0 || h == 0 {
+            return None;
+        }
         let row_bytes = (w as usize) * 4;
         let buf_bytes = row_bytes * (h as usize);
         let opts =
@@ -3094,7 +3146,7 @@ impl MetalRenderer {
             &buf,
             0,
             row_bytes as u64,
-            (row_bytes * (h as usize)) as u64,
+            buf_bytes as u64,
             MTLBlitOption::empty(),
         );
         blit.end_encoding();
@@ -3106,6 +3158,83 @@ impl MetalRenderer {
         }
         let out = unsafe { core::slice::from_raw_parts(ptr as *const u8, buf_bytes) };
         Some((w, h, out.to_vec()))
+    }
+
+    fn readback_direct_live_camera_bgra8(&self) -> Option<(u32, u32, alloc::vec::Vec<u8>)> {
+        let frame = self.current_live_camera_frame.as_ref()?;
+        let w = if self.target_w > 0 { self.target_w } else { frame.width.max(1) as u32 };
+        let h = if self.target_h > 0 { self.target_h } else { frame.height.max(1) as u32 };
+        let scale = self.target_scale.max(1.0);
+        let vp_dp = [(w as f32) / scale, (h as f32) / scale];
+        let rect_dp = [0.0, 0.0, vp_dp[0], vp_dp[1]];
+
+        let desc = TextureDescriptor::new();
+        desc.set_pixel_format(MTLPixelFormat::BGRA8Unorm_sRGB);
+        desc.set_texture_type(MTLTextureType::D2);
+        desc.set_width(w as u64);
+        desc.set_height(h as u64);
+        desc.set_storage_mode(MTLStorageMode::Private);
+        desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+        let tex = self.device.new_texture(&desc);
+        let cmd = self.queue.new_command_buffer();
+        let rpd = RenderPassDescriptor::new();
+        let ca0 = rpd.color_attachments().object_at(0).unwrap();
+        ca0.set_texture(Some(&tex));
+        ca0.set_load_action(MTLLoadAction::Clear);
+        ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 });
+        ca0.set_store_action(MTLStoreAction::Store);
+        let enc = cmd.new_render_command_encoder(&rpd);
+        self.encode_camera_quad_from_live_frame(
+            &enc,
+            frame,
+            vp_dp,
+            rect_dp,
+            api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+            1.0,
+            false,
+            false,
+        );
+        enc.end_encoding();
+
+        let row_bytes = (w as usize) * 4;
+        let buf_bytes = row_bytes * (h as usize);
+        let opts =
+            MTLResourceOptions::CPUCacheModeDefaultCache | MTLResourceOptions::StorageModeShared;
+        let buf = self.device.new_buffer(buf_bytes as u64, opts);
+        let blit = cmd.new_blit_command_encoder();
+        let origin = MTLOrigin { x: 0, y: 0, z: 0 };
+        let size = MTLSize { width: w as u64, height: h as u64, depth: 1 };
+        blit.copy_from_texture_to_buffer(
+            &tex,
+            0,
+            0,
+            origin,
+            size,
+            &buf,
+            0,
+            row_bytes as u64,
+            buf_bytes as u64,
+            MTLBlitOption::empty(),
+        );
+        blit.end_encoding();
+        cmd.commit();
+        cmd.wait_until_completed();
+        let ptr = buf.contents();
+        if ptr.is_null() {
+            return None;
+        }
+        let out = unsafe { core::slice::from_raw_parts(ptr as *const u8, buf_bytes) };
+        Some((w, h, out.to_vec()))
+    }
+
+    pub fn readback_bgra8(&mut self) -> Option<(u32, u32, alloc::vec::Vec<u8>)> {
+        if self.color_format != MTLPixelFormat::BGRA8Unorm_sRGB {
+            return None;
+        }
+        if let Some(tex) = self.target_tex.as_ref() {
+            return self.readback_texture_bgra8(tex.as_ref());
+        }
+        self.readback_direct_live_camera_bgra8()
     }
 }
 
@@ -3356,8 +3485,7 @@ impl api::Renderer for MetalRenderer {
 
     fn encode_pass(&mut self, list: &api::DrawList) {
         let cpu_t0 = std::time::Instant::now();
-        let direct_present = self.pending_present_texture != 0;
-        if self.target_tex.is_none() && !direct_present {
+        if self.target_tex.is_none() {
             return;
         }
         if self.submit_error_flag.load(Ordering::Acquire) {
@@ -3447,6 +3575,16 @@ impl api::Renderer for MetalRenderer {
                 Some(t) => t.elapsed() >= self.cam_update_period,
             };
             if do_update {
+                let requested_cam_blur_sigma = list
+                    .items
+                    .iter()
+                    .filter_map(|cmd| match cmd {
+                        api::DrawCmd::CameraBg { blur: true, sigma, .. } => Some(*sigma),
+                        _ => None,
+                    })
+                    .fold(0.0f32, f32::max);
+                let (cam_blur_passes, cam_blur_pass_sigma) =
+                    camera_blur_pass_plan(requested_cam_blur_sigma);
                 let blur_t0 = std::time::Instant::now();
                 let now = std::time::Instant::now();
                 let vp_dp: [f32; 2] = [
@@ -3551,64 +3689,66 @@ impl api::Renderer for MetalRenderer {
                     enc.end_encoding();
                 }
                 if let (Some(q), Some(qtmp)) = (&self.quarter_tex, &self.quarter_tmp_tex) {
-                    let rpd = RenderPassDescriptor::new();
-                    let ca = rpd.color_attachments().object_at(0).unwrap();
-                    ca.set_texture(Some(qtmp));
-                    ca.set_load_action(MTLLoadAction::DontCare);
-                    ca.set_store_action(MTLStoreAction::Store);
-                    let enc = cmd.new_render_command_encoder(&rpd);
-                    enc.set_render_pipeline_state(&self.pso_blur);
-                    if let Some(sam) = &self.sampler {
-                        enc.set_fragment_sampler_state(0, Some(sam));
+                    for _ in 0..cam_blur_passes {
+                        let rpd = RenderPassDescriptor::new();
+                        let ca = rpd.color_attachments().object_at(0).unwrap();
+                        ca.set_texture(Some(qtmp));
+                        ca.set_load_action(MTLLoadAction::DontCare);
+                        ca.set_store_action(MTLStoreAction::Store);
+                        let enc = cmd.new_render_command_encoder(&rpd);
+                        enc.set_render_pipeline_state(&self.pso_blur);
+                        if let Some(sam) = &self.sampler {
+                            enc.set_fragment_sampler_state(0, Some(sam));
+                        }
+                        enc.set_fragment_texture(0, Some(q));
+                        let params_h: [f32; 4] = [1.0, 0.0, cam_blur_pass_sigma, 0.0];
+                        enc.set_vertex_bytes(
+                            1,
+                            core::mem::size_of_val(&vp_dp) as u64,
+                            vp_dp.as_ptr() as *const _,
+                        );
+                        enc.set_vertex_bytes(
+                            0,
+                            core::mem::size_of_val(&rect_dp) as u64,
+                            rect_dp.as_ptr() as *const _,
+                        );
+                        enc.set_fragment_bytes(
+                            1,
+                            core::mem::size_of_val(&params_h) as u64,
+                            params_h.as_ptr() as *const _,
+                        );
+                        enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
+                        enc.end_encoding();
+                        let rpd2 = RenderPassDescriptor::new();
+                        let ca2 = rpd2.color_attachments().object_at(0).unwrap();
+                        ca2.set_texture(Some(q));
+                        ca2.set_load_action(MTLLoadAction::DontCare);
+                        ca2.set_store_action(MTLStoreAction::Store);
+                        let enc2 = cmd.new_render_command_encoder(&rpd2);
+                        enc2.set_render_pipeline_state(&self.pso_blur);
+                        if let Some(sam) = &self.sampler {
+                            enc2.set_fragment_sampler_state(0, Some(sam));
+                        }
+                        enc2.set_fragment_texture(0, Some(qtmp));
+                        let params_v: [f32; 4] = [0.0, 1.0, cam_blur_pass_sigma, 0.0];
+                        enc2.set_vertex_bytes(
+                            1,
+                            core::mem::size_of_val(&vp_dp) as u64,
+                            vp_dp.as_ptr() as *const _,
+                        );
+                        enc2.set_vertex_bytes(
+                            0,
+                            core::mem::size_of_val(&rect_dp) as u64,
+                            rect_dp.as_ptr() as *const _,
+                        );
+                        enc2.set_fragment_bytes(
+                            1,
+                            core::mem::size_of_val(&params_v) as u64,
+                            params_v.as_ptr() as *const _,
+                        );
+                        enc2.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
+                        enc2.end_encoding();
                     }
-                    enc.set_fragment_texture(0, Some(q));
-                    let params_h: [f32; 4] = [1.0, 0.0, 6.0, 0.0];
-                    enc.set_vertex_bytes(
-                        1,
-                        core::mem::size_of_val(&vp_dp) as u64,
-                        vp_dp.as_ptr() as *const _,
-                    );
-                    enc.set_vertex_bytes(
-                        0,
-                        core::mem::size_of_val(&rect_dp) as u64,
-                        rect_dp.as_ptr() as *const _,
-                    );
-                    enc.set_fragment_bytes(
-                        1,
-                        core::mem::size_of_val(&params_h) as u64,
-                        params_h.as_ptr() as *const _,
-                    );
-                    enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
-                    enc.end_encoding();
-                    let rpd2 = RenderPassDescriptor::new();
-                    let ca2 = rpd2.color_attachments().object_at(0).unwrap();
-                    ca2.set_texture(Some(q));
-                    ca2.set_load_action(MTLLoadAction::DontCare);
-                    ca2.set_store_action(MTLStoreAction::Store);
-                    let enc2 = cmd.new_render_command_encoder(&rpd2);
-                    enc2.set_render_pipeline_state(&self.pso_blur);
-                    if let Some(sam) = &self.sampler {
-                        enc2.set_fragment_sampler_state(0, Some(sam));
-                    }
-                    enc2.set_fragment_texture(0, Some(qtmp));
-                    let params_v: [f32; 4] = [0.0, 1.0, 6.0, 0.0];
-                    enc2.set_vertex_bytes(
-                        1,
-                        core::mem::size_of_val(&vp_dp) as u64,
-                        vp_dp.as_ptr() as *const _,
-                    );
-                    enc2.set_vertex_bytes(
-                        0,
-                        core::mem::size_of_val(&rect_dp) as u64,
-                        rect_dp.as_ptr() as *const _,
-                    );
-                    enc2.set_fragment_bytes(
-                        1,
-                        core::mem::size_of_val(&params_v) as u64,
-                        params_v.as_ptr() as *const _,
-                    );
-                    enc2.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
-                    enc2.end_encoding();
                     self.cam_blur_tex = Some(q.to_owned());
                 }
                 self.cam_last_update = Some(std::time::Instant::now());
@@ -4116,33 +4256,23 @@ impl api::Renderer for MetalRenderer {
 
         let rpd = RenderPassDescriptor::new();
         let ca0 = rpd.color_attachments().object_at(0).unwrap();
-        let direct_target = if direct_present {
-            Some(unsafe { TextureRef::from_ptr(self.pending_present_texture as *mut MTLTexture) })
-        } else {
-            None
-        };
         if self.sample_count > 1 {
             if let Some(msaa) = &self.target_msaa_tex {
                 ca0.set_texture(Some(msaa));
             }
-            if let Some(dst) = direct_target {
-                ca0.set_resolve_texture(Some(dst));
-            } else if let Some(dst) = &self.target_tex {
+            if let Some(dst) = &self.target_tex {
                 ca0.set_resolve_texture(Some(dst));
             }
             ca0.set_store_action(MTLStoreAction::MultisampleResolve);
         } else {
-            if let Some(dst) = direct_target {
-                ca0.set_texture(Some(dst));
-            } else if let Some(dst) = &self.target_tex {
+            if let Some(dst) = &self.target_tex {
                 ca0.set_texture(Some(dst));
             }
             ca0.set_store_action(MTLStoreAction::Store);
         }
         // Heuristic: use Load (damage) only when enabled and coverage < threshold
         let dmg_thresh: f32 = self.damage_use_thresh;
-        let use_damage = !direct_present
-            && self.sample_count == 1
+        let use_damage = self.sample_count == 1
             && self.damage_enabled
             && self.frame_scissor_dp.is_some()
             && self.frame_damage_pct < dmg_thresh;
@@ -4218,6 +4348,10 @@ impl api::Renderer for MetalRenderer {
 
     fn submit(&mut self, _token: api::FrameToken) -> Result<(), api::RenderError> {
         if self.submit_error_flag.swap(false, Ordering::AcqRel) {
+            let detail = self.submit_error_detail.lock().ok().and_then(|mut slot| slot.take());
+            if let Some(detail) = detail {
+                return Err(api::RenderError::Io(format!("device lost: {}", detail)));
+            }
             return Err(api::RenderError::DeviceLost);
         }
         let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
@@ -4228,11 +4362,37 @@ impl api::Renderer for MetalRenderer {
             let frame_id = self.frame_id;
             let log_enabled = ios_log_enabled();
             let submit_error_flag = self.submit_error_flag.clone();
+            let submit_error_detail = self.submit_error_detail.clone();
             let in_flight = self.frames[slot].in_flight.clone();
             if !pending_present_drawable.is_null() {
                 let raw_drawable = pending_present_drawable as *mut MTLDrawable;
                 let drawable = unsafe { DrawableRef::from_ptr(raw_drawable) };
-                cmd.present_drawable(drawable);
+                if let Some(src) = &self.target_tex {
+                    let raw_drawable_obj = pending_present_drawable as *mut Object;
+                    let raw_dst_tex: *mut MTLTexture =
+                        unsafe { msg_send![raw_drawable_obj, texture] };
+                    if raw_dst_tex.is_null() {
+                        return Err(api::RenderError::InvalidOperation(
+                            "drawable did not provide a destination texture",
+                        ));
+                    }
+                    let dst = unsafe { TextureRef::from_ptr(raw_dst_tex) };
+                    let blit = cmd.new_blit_command_encoder();
+                    let origin = MTLOrigin { x: 0, y: 0, z: 0 };
+                    let copy_w = src.width().min(dst.width());
+                    let copy_h = src.height().min(dst.height());
+                    if copy_w == 0 || copy_h == 0 {
+                        return Err(api::RenderError::InvalidOperation(
+                            "zero-sized blit copy extent",
+                        ));
+                    }
+                    let size = MTLSize { width: copy_w, height: copy_h, depth: 1 };
+                    blit.copy_from_texture(src, 0, 0, origin, size, dst, 0, 0, origin);
+                    blit.end_encoding();
+                    cmd.present_drawable(drawable);
+                } else {
+                    cmd.present_drawable(drawable);
+                }
             }
             let completion = ConcreteBlock::new(move |buffer: &CommandBufferRef| {
                 let status = buffer.status();
@@ -4243,27 +4403,21 @@ impl api::Renderer for MetalRenderer {
                     ));
                 }
                 if status == MTLCommandBufferStatus::Error {
+                    let detail = unsafe { command_buffer_error_detail(buffer) };
+                    if let Ok(mut slot) = submit_error_detail.lock() {
+                        *slot = detail.clone();
+                    }
                     if log_enabled {
-                        unsafe {
-                            let err: *mut Object = msg_send![buffer, error];
-                            if !err.is_null() {
-                                let code: i64 = msg_send![err, code];
-                                let domain_obj: *mut Object = msg_send![err, domain];
-                                let desc_obj: *mut Object = msg_send![err, localizedDescription];
-                                let domain = nsstring_to_string(domain_obj)
-                                    .unwrap_or_else(|| "<null-domain>".to_string());
-                                let desc = nsstring_to_string(desc_obj)
-                                    .unwrap_or_else(|| "<null-description>".to_string());
-                                ios_log(&format!(
-                                    "oxide.renderer-metal: submit error frame={} domain={} code={} desc={}",
-                                    frame_id, domain, code, desc
-                                ));
-                            } else {
-                                ios_log(&format!(
-                                    "oxide.renderer-metal: submit error frame={} error=nil",
-                                    frame_id
-                                ));
-                            }
+                        if let Some(detail) = detail {
+                            ios_log(&format!(
+                                "oxide.renderer-metal: submit error frame={} {}",
+                                frame_id, detail
+                            ));
+                        } else {
+                            ios_log(&format!(
+                                "oxide.renderer-metal: submit error frame={} error=nil",
+                                frame_id
+                            ));
                         }
                     }
                     submit_error_flag.store(true, Ordering::Release);
@@ -4370,6 +4524,7 @@ fn encode_draws(
     global_scissor_dp: Option<api::RectI>,
 ) {
     let debug_stride = encode_debug_stride();
+    let slot = (r.frame_id % FRAME_RING_SIZE as u64) as usize;
     // Scissor state
     let mut stack: alloc::vec::Vec<api::RectI> = alloc::vec::Vec::new();
     let mut current: Option<api::RectI> = None;
@@ -5056,16 +5211,25 @@ fn encode_draws(
                 }
 
                 enc.set_render_pipeline_state(&r.pso_image);
-                // Bind argument buffer for image textures
-                if let Some(buf) = &r.img_arg_buf {
+                // Bind the per-frame argument buffer once, then populate texture slots
+                // and explicitly mark those textures resident for the fragment stage.
+                let img_arg_encoder = if let (Some(encdr), Some(bufs)) =
+                    (r.img_arg.as_ref(), r.img_arg_bufs.as_ref())
+                {
+                    let buf = &bufs[slot];
                     enc.set_fragment_buffer(2, Some(buf), 0);
-                }
+                    encdr.set_argument_buffer(buf, 0);
+                    Some(encdr)
+                } else {
+                    None
+                };
                 // Batch consecutive Images regardless of texture using argument buffer
                 let mut count = 0usize;
                 let mut vbuf: alloc::vec::Vec<f32> = alloc::vec::Vec::new();
                 let mut fbuf: alloc::vec::Vec<ImageGpuParams> = alloc::vec::Vec::new();
                 let mut tex_map: std::collections::HashMap<u32, u32> =
                     std::collections::HashMap::new();
+                let mut tex_resources: alloc::vec::Vec<&ResourceRef> = alloc::vec::Vec::new();
                 let mut next_slot: u32 = 0;
                 let mut j = i;
                 while j < list.items.len() {
@@ -5085,14 +5249,10 @@ fn encode_draws(
                             }
                             let s = next_slot;
                             next_slot += 1;
-                            // Set texture in argument encoder
-                            if let (Some(encdr), Some(buf)) =
-                                (r.img_arg.as_ref(), r.img_arg_buf.as_ref())
-                            {
-                                // Rebind the buffer to ensure encoder targets it
-                                encdr.set_argument_buffer(buf, 0);
+                            if let Some(encdr) = img_arg_encoder {
                                 encdr.set_texture(s as u64, tref);
                             }
+                            tex_resources.push(tref);
                             tex_map.insert(tex.0, s);
                             s
                         };
@@ -5116,6 +5276,13 @@ fn encode_draws(
                 if count == 0 {
                     i = j;
                     continue;
+                }
+                if !tex_resources.is_empty() {
+                    enc.use_resources(
+                        &tex_resources,
+                        MTLResourceUsage::Read,
+                        MTLRenderStages::Fragment,
+                    );
                 }
                 // Set vp
                 enc.set_vertex_bytes(
@@ -5161,7 +5328,6 @@ fn encode_draws(
                 let mut count = 0usize;
                 let mut group_atlas = None;
                 let mut group_sdf = false;
-                let slot = (r.frame_id % FRAME_RING_SIZE as u64) as usize;
                 // Pre-scan to determine group and upload VB/UB/IB, collecting offsets
                 struct GR {
                     vb_off: u64,
@@ -5251,7 +5417,22 @@ fn encode_draws(
                     }
                 }
                 // Bind atlas + sampler and vp
+                if ios_log_enabled() {
+                    ios_log(&format!(
+                        "oxide.renderer-metal: glyph group count={} atlas_handle={} sdf={}",
+                        count,
+                        group_atlas.map(|handle| handle.0).unwrap_or(0),
+                        group_sdf
+                    ));
+                }
                 if let Some(atlas) = group_atlas.and_then(|h| r.get_image_tex(h)) {
+                    if ios_log_enabled() {
+                        ios_log(&format!(
+                            "oxide.renderer-metal: glyph atlas bound={}x{}",
+                            atlas.width(),
+                            atlas.height()
+                        ));
+                    }
                     if group_sdf {
                         enc.set_render_pipeline_state(&r.pso_text_sdf);
                     } else {
@@ -5322,6 +5503,11 @@ fn encode_draws(
                             }
                         }
                     }
+                } else if ios_log_enabled() && group_atlas.is_some() {
+                    ios_log(&format!(
+                        "oxide.renderer-metal: glyph atlas missing for handle={}",
+                        group_atlas.map(|handle| handle.0).unwrap_or(0)
+                    ));
                 }
                 i = j;
                 continue;
@@ -5723,6 +5909,13 @@ pub fn direct_live_preview_needs_render(
         return 0;
     }
     0
+}
+
+#[doc(hidden)]
+pub fn camera_blur_pass_plan(requested_sigma: f32) -> (u32, f32) {
+    let sigma = if requested_sigma.is_finite() { requested_sigma.max(6.0) } else { 6.0 };
+    let passes = ((sigma / 6.0).ceil() as u32).clamp(1, 4);
+    (passes, (sigma / passes as f32).max(0.001))
 }
 
 #[inline]
@@ -6479,7 +6672,9 @@ impl MetalRenderer {
                 .map(|buf| buf.as_ref())
                 .chain(self.ib.bufs.iter().map(|buf| buf.as_ref()))
                 .chain(self.ub.bufs.iter().map(|buf| buf.as_ref()))
-                .chain(self.img_arg_buf.iter().map(|buf| buf.as_ref())),
+                .chain(
+                    self.img_arg_bufs.iter().flat_map(|bufs| bufs.iter().map(|buf| buf.as_ref())),
+                ),
         );
         PerfMemoryStats {
             total_bytes: draw_targets_bytes

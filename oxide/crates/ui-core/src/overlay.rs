@@ -58,7 +58,6 @@ struct OverlayEntry {
     surface: UiSurface,
     visual: OverlayVisual,
     behavior: OverlayBehavior,
-    last_tick: u64,
 }
 
 impl OverlayEntry {
@@ -68,7 +67,7 @@ impl OverlayEntry {
         visual: OverlayVisual,
         behavior: OverlayBehavior,
     ) -> Self {
-        Self { id, surface, visual, behavior, last_tick: 0 }
+        Self { id, surface, visual, behavior }
     }
 }
 
@@ -76,26 +75,19 @@ pub struct OverlayStack {
     entries: Vec<OverlayEntry>,
     next_id: u64,
     viewport: gfx::RectF,
-    device_scale: f32,
 }
 
 impl OverlayStack {
     pub fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-            next_id: 1,
-            viewport: gfx::RectF::new(0.0, 0.0, 0.0, 0.0),
-            device_scale: 1.0,
-        }
+        Self { entries: Vec::new(), next_id: 1, viewport: gfx::RectF::new(0.0, 0.0, 0.0, 0.0) }
     }
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    pub fn set_viewport(&mut self, viewport: gfx::RectF, device_scale: f32) {
+    pub fn set_viewport(&mut self, viewport: gfx::RectF, _device_scale: f32) {
         self.viewport = viewport;
-        self.device_scale = device_scale;
         for entry in &mut self.entries {
             entry.surface.layout(viewport.w, viewport.h);
         }
@@ -110,9 +102,7 @@ impl OverlayStack {
         let id = OverlayHandle(self.next_id);
         self.next_id = self.next_id.wrapping_add(1).max(1);
         surface.layout(self.viewport.w, self.viewport.h);
-        let mut entry = OverlayEntry::new(id, surface, visual, behavior);
-        entry.last_tick = timing::now_ms();
-        self.entries.push(entry);
+        self.entries.push(OverlayEntry::new(id, surface, visual, behavior));
         self.entries.sort_by(|a, b| {
             a.visual.z_index.cmp(&b.visual.z_index).then_with(|| a.id.0.cmp(&b.id.0))
         });
@@ -120,11 +110,10 @@ impl OverlayStack {
     }
 
     pub fn remove(&mut self, handle: OverlayHandle) -> Option<UiSurface> {
-        if let Some(pos) = self.entries.iter().position(|entry| entry.id == handle) {
-            Some(self.entries.remove(pos).surface)
-        } else {
-            None
-        }
+        self.entries
+            .iter()
+            .position(|entry| entry.id == handle)
+            .map(|pos| self.entries.remove(pos).surface)
     }
 
     pub fn top_handle(&self) -> Option<OverlayHandle> {
@@ -164,7 +153,6 @@ impl OverlayStack {
             if entry.surface.tick_at(now_ms) {
                 changed = true;
             }
-            entry.last_tick = now_ms;
         }
         changed
     }
@@ -175,7 +163,7 @@ impl OverlayStack {
     }
 
     pub fn encode(&self, builder: &mut DrawListBuilder) {
-        for entry in self.sorted_entries() {
+        for entry in &self.entries {
             builder.backdrop(
                 self.viewport,
                 entry.visual.blur_sigma,
@@ -191,14 +179,6 @@ impl OverlayStack {
         self.encode(&mut builder);
         builder.into_inner()
     }
-
-    fn sorted_entries(&self) -> impl Iterator<Item = &OverlayEntry> {
-        let mut refs: Vec<&OverlayEntry> = self.entries.iter().collect();
-        refs.sort_by(|a, b| {
-            a.visual.z_index.cmp(&b.visual.z_index).then_with(|| a.id.0.cmp(&b.id.0))
-        });
-        refs.into_iter()
-    }
 }
 
 fn layout_rect_to_rect(rect: LayoutRect) -> gfx::RectF {
@@ -209,51 +189,31 @@ fn rect_contains_point(rect: gfx::RectF, x: f32, y: f32) -> bool {
     x >= rect.x && y >= rect.y && x <= rect.x + rect.w && y <= rect.y + rect.h
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum PopupTouchRegion {
     None,
+    #[default]
     ContentRoot,
     Rect(gfx::RectF),
-}
-
-impl Default for PopupTouchRegion {
-    fn default() -> Self {
-        Self::ContentRoot
-    }
 }
 
 pub type PopupApproveDismissal = Box<dyn FnMut(&mut UiSurface) -> bool>;
 pub type PopupDismissal = Box<dyn FnMut(&mut UiSurface)>;
 pub type PopupApproveTouch = Box<dyn FnMut(&mut UiSurface, [f32; 2]) -> bool>;
 
+#[derive(Default)]
 pub struct PopupCallbacks {
     pub approve_dismissal: Option<PopupApproveDismissal>,
     pub dismissal: Option<PopupDismissal>,
     pub approve_touch: Option<PopupApproveTouch>,
 }
 
-impl Default for PopupCallbacks {
-    fn default() -> Self {
-        Self { approve_dismissal: None, dismissal: None, approve_touch: None }
-    }
-}
-
+#[derive(Default)]
 pub struct PopupSpec {
     pub visual: OverlayVisual,
     pub behavior: OverlayBehavior,
     pub touch_region: PopupTouchRegion,
     pub callbacks: PopupCallbacks,
-}
-
-impl Default for PopupSpec {
-    fn default() -> Self {
-        Self {
-            visual: OverlayVisual::default(),
-            behavior: OverlayBehavior::default(),
-            touch_region: PopupTouchRegion::default(),
-            callbacks: PopupCallbacks::default(),
-        }
-    }
 }
 
 pub type PopupHandle = OverlayHandle;
@@ -266,7 +226,6 @@ struct PopupEntry {
     touch_region: PopupTouchRegion,
     touch_exception: Option<gfx::RectF>,
     callbacks: PopupCallbacks,
-    last_tick: u64,
 }
 
 impl PopupEntry {
@@ -280,7 +239,6 @@ impl PopupEntry {
             touch_region: spec.touch_region,
             touch_exception: None,
             callbacks: spec.callbacks,
-            last_tick: timing::now_ms(),
         };
         entry.sync_touch_exception();
         entry
@@ -310,22 +268,15 @@ pub struct PopupManager {
     entries: Vec<PopupEntry>,
     next_id: u64,
     viewport: gfx::RectF,
-    device_scale: f32,
 }
 
 impl PopupManager {
     pub fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-            next_id: 1,
-            viewport: gfx::RectF::new(0.0, 0.0, 0.0, 0.0),
-            device_scale: 1.0,
-        }
+        Self { entries: Vec::new(), next_id: 1, viewport: gfx::RectF::new(0.0, 0.0, 0.0, 0.0) }
     }
 
-    pub fn set_viewport(&mut self, viewport: gfx::RectF, device_scale: f32) {
+    pub fn set_viewport(&mut self, viewport: gfx::RectF, _device_scale: f32) {
         self.viewport = viewport;
-        self.device_scale = device_scale;
         for entry in &mut self.entries {
             entry.surface.layout(viewport.w, viewport.h);
             entry.sync_touch_exception();
@@ -344,11 +295,10 @@ impl PopupManager {
     }
 
     pub fn remove(&mut self, handle: PopupHandle) -> Option<UiSurface> {
-        if let Some(pos) = self.entries.iter().position(|entry| entry.id == handle) {
-            Some(self.entries.remove(pos).surface)
-        } else {
-            None
-        }
+        self.entries
+            .iter()
+            .position(|entry| entry.id == handle)
+            .map(|pos| self.entries.remove(pos).surface)
     }
 
     pub fn key_popup(&self) -> Option<PopupHandle> {
@@ -356,7 +306,7 @@ impl PopupManager {
     }
 
     pub fn popup_is_key_window(&self) -> bool {
-        self.key_popup().is_some()
+        !self.entries.is_empty()
     }
 
     pub fn dismiss(&mut self, handle: PopupHandle) -> bool {
@@ -385,11 +335,7 @@ impl PopupManager {
 
     pub fn dismiss_key_popup(&mut self) -> Option<PopupHandle> {
         let handle = self.key_popup()?;
-        if self.dismiss(handle) {
-            Some(handle)
-        } else {
-            None
-        }
+        self.dismiss(handle).then_some(handle)
     }
 
     pub fn content_size_changed(&mut self, handle: PopupHandle) -> bool {
@@ -467,7 +413,6 @@ impl PopupManager {
             if entry.surface.tick_at(now_ms) {
                 changed = true;
             }
-            entry.last_tick = now_ms;
         }
         changed
     }
@@ -478,7 +423,7 @@ impl PopupManager {
     }
 
     pub fn encode(&self, builder: &mut DrawListBuilder) {
-        for entry in self.sorted_entries() {
+        for entry in &self.entries {
             builder.backdrop(
                 self.viewport,
                 entry.visual.blur_sigma,
@@ -505,13 +450,5 @@ impl PopupManager {
 
     pub fn surface_mut(&mut self, handle: PopupHandle) -> Option<&mut UiSurface> {
         self.entries.iter_mut().find(|entry| entry.id == handle).map(|entry| &mut entry.surface)
-    }
-
-    fn sorted_entries(&self) -> impl Iterator<Item = &PopupEntry> {
-        let mut refs: Vec<&PopupEntry> = self.entries.iter().collect();
-        refs.sort_by(|a, b| {
-            a.visual.z_index.cmp(&b.visual.z_index).then_with(|| a.id.0.cmp(&b.id.0))
-        });
-        refs.into_iter()
     }
 }

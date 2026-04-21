@@ -32,12 +32,7 @@ pub fn replay_drawlist(
     let offset_y = origin[1];
     let offset_ix = offset_x.round() as i32;
     let offset_iy = offset_y.round() as i32;
-    let translated_fallback = RectI::new(
-        fallback_clip.x + offset_ix,
-        fallback_clip.y + offset_iy,
-        fallback_clip.w,
-        fallback_clip.h,
-    );
+    let translated_fallback = translate_clip(fallback_clip, offset_ix, offset_iy);
     encoder.set_clip(translated_fallback);
 
     let mut clip_stack = Vec::new();
@@ -51,35 +46,33 @@ pub fn replay_drawlist(
                 let translated = translate_vertices(slice, offset_x, offset_y);
                 encoder.draw_solid(&translated, *color);
             }
-            DrawCmd::Image { tex, dst, src, .. } => encoder.draw_image(
-                *tex,
-                RectF::new(dst.x + offset_x, dst.y + offset_y, dst.w, dst.h),
-                *src,
-            ),
+            DrawCmd::Image { tex, dst, src, .. } => {
+                encoder.draw_image(*tex, translate_rect(*dst, offset_x, offset_y), *src);
+            }
             DrawCmd::GlyphRun { run } => encoder.draw_glyph_run(run),
-            DrawCmd::RRect { rect, radii, color } => encoder.draw_rrect(
-                RectF::new(rect.x + offset_x, rect.y + offset_y, rect.w, rect.h),
-                *radii,
-                *color,
-            ),
+            DrawCmd::RRect { rect, radii, color } => {
+                encoder.draw_rrect(translate_rect(*rect, offset_x, offset_y), *radii, *color);
+            }
             DrawCmd::NineSlice { tex, rect, slice, alpha } => encoder.draw_nine_slice(
                 *tex,
-                RectF::new(rect.x + offset_x, rect.y + offset_y, rect.w, rect.h),
+                translate_rect(*rect, offset_x, offset_y),
                 *slice,
                 *alpha,
             ),
-            DrawCmd::Backdrop { rect, sigma, tint, alpha } => encoder.draw_backdrop(
-                RectF::new(rect.x + offset_x, rect.y + offset_y, rect.w, rect.h),
-                *sigma,
-                *tint,
-                *alpha,
-            ),
+            DrawCmd::Backdrop { rect, sigma, tint, alpha } => {
+                encoder.draw_backdrop(
+                    translate_rect(*rect, offset_x, offset_y),
+                    *sigma,
+                    *tint,
+                    *alpha,
+                );
+            }
             DrawCmd::Spinner { center, atom, alpha } => {
                 encoder.draw_spinner([center[0] + offset_x, center[1] + offset_y], *atom, *alpha)
             }
             DrawCmd::CameraBg { rect, sigma, tint, alpha, grayscale, blur } => encoder
                 .draw_camera_bg(
-                    RectF::new(rect.x + offset_x, rect.y + offset_y, rect.w, rect.h),
+                    translate_rect(*rect, offset_x, offset_y),
                     *tint,
                     *alpha,
                     *grayscale,
@@ -87,7 +80,7 @@ pub fn replay_drawlist(
                     *sigma,
                 ),
             DrawCmd::ClipPush { rect } => {
-                let translated = RectI::new(rect.x + offset_ix, rect.y + offset_iy, rect.w, rect.h);
+                let translated = translate_clip(*rect, offset_ix, offset_iy);
                 clip_stack.push(translated);
                 encoder.set_clip(translated);
             }
@@ -108,6 +101,14 @@ fn slice_vertices(list: &DrawList, span: VertexSpan) -> Option<&[Vertex]> {
     let len = span.len as usize;
     let end = start.checked_add(len)?;
     list.vertices.get(start..end)
+}
+
+fn translate_rect(rect: RectF, dx: f32, dy: f32) -> RectF {
+    RectF::new(rect.x + dx, rect.y + dy, rect.w, rect.h)
+}
+
+fn translate_clip(rect: RectI, dx: i32, dy: i32) -> RectI {
+    RectI::new(rect.x + dx, rect.y + dy, rect.w, rect.h)
 }
 
 fn translate_vertices(vertices: &[Vertex], dx: f32, dy: f32) -> Vec<Vertex> {

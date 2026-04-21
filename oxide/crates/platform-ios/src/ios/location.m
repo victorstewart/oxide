@@ -85,9 +85,11 @@ static CLLocationAccuracy desired_accuracy_for_kind(uint32_t accuracy_kind);
 - (void)locationManager:(CLLocationManager *)manager
        didFailWithError:(NSError *)error {
   (void)manager;
-  (void)error;
-  // Legacy Nametag ignored transient CoreLocation failures here and relied on
-  // subsequent readings and authorization state changes instead.
+  if (g_location_error_callback == NULL) {
+    return;
+  }
+  const char *msg = error.localizedDescription.UTF8String ?: "unknown error";
+  g_location_error_callback((const uint8_t *)msg, strlen(msg));
 }
 
 @end
@@ -129,9 +131,9 @@ static CLLocationAccuracy desired_accuracy_for_kind(uint32_t accuracy_kind) {
   case 2:
     return kCLLocationAccuracyThreeKilometers;
   case 3:
-    return kCLLocationAccuracyNearestTenMeters;
+    return kCLLocationAccuracyBest;
   default:
-    return kCLLocationAccuracyNearestTenMeters;
+    return kCLLocationAccuracyBest;
   }
 }
 
@@ -145,21 +147,22 @@ void oxide_host_set_location_error_callback(void (*cb)(const uint8_t *,
 }
 
 int32_t oxide_host_location_start(OxideLocationConfig cfg) {
-  __block int32_t result = 0;
   dispatch_main_sync(^{
     CLLocationManager *manager = ensure_manager();
     apply_location_config(manager, cfg);
 
     CLAuthorizationStatus status = manager.authorizationStatus;
     if (status == kCLAuthorizationStatusNotDetermined) {
-      // Legacy Nametag requested when-in-use authorization only, even while
-      // keeping background updates enabled once the app was already active.
       [manager requestWhenInUseAuthorization];
+    }
+    if (cfg.allow_background &&
+        status != kCLAuthorizationStatusAuthorizedAlways) {
+      [manager requestAlwaysAuthorization];
     }
 
     [manager startUpdatingLocation];
   });
-  return result;
+  return 0;
 }
 
 void oxide_host_location_stop(void) {
@@ -178,18 +181,24 @@ void oxide_host_location_request_once(void) {
 }
 
 uint8_t oxide_host_location_last(OxideLocationSample *out_ptr) {
-  if (!g_has_last_sample || out_ptr == NULL) {
+  if (out_ptr == NULL) {
     return 0;
   }
-  *out_ptr = g_last_sample;
-  return 1;
+  __block uint8_t has_sample = 0;
+  dispatch_main_sync(^{
+    if (!g_has_last_sample) {
+      return;
+    }
+    *out_ptr = g_last_sample;
+    has_sample = 1;
+  });
+  return has_sample;
 }
 
 int32_t oxide_host_location_set_accuracy(uint32_t accuracy_kind) {
-  __block int32_t result = 0;
   dispatch_main_sync(^{
     CLLocationManager *manager = ensure_manager();
     manager.desiredAccuracy = desired_accuracy_for_kind(accuracy_kind);
   });
-  return result;
+  return 0;
 }

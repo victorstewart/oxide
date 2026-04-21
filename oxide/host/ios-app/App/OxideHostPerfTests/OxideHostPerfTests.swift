@@ -15,7 +15,7 @@ final class OxideHostPerfTests: XCTestCase
         super.setUp()
         continueAfterFailure = false
         let host = PerfSurfaceHost()
-        let window = host.installInNewWindow(makeKey: false)
+        let window = host.installInNewWindow(makeKey: true)
         self.host = host
         self.window = window
         host.reset()
@@ -23,6 +23,7 @@ final class OxideHostPerfTests: XCTestCase
 
     override func tearDown()
     {
+        host?.setVisibleTestLabel(nil)
         host?.reset()
         window?.isHidden = true
         window?.rootViewController = nil
@@ -73,9 +74,13 @@ final class OxideHostPerfTests: XCTestCase
             .contains("iphoneos") == true
     }
 
-    private func settleForDeviceTraceAttachment()
+    private func settleForDeviceTraceAttachment(_ benchmark: OxideUIKitBenchmark)
     {
         guard Self.requiresPhysicalDeviceTraceSettle() else
+        {
+            return
+        }
+        guard !benchmark.signpostNames.isEmpty else
         {
             return
         }
@@ -177,6 +182,67 @@ final class OxideHostPerfTests: XCTestCase
         )
     }
 
+    func testVisibleOutputValidationRejectsUniformBlackImage()
+    {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 32, height: 32))
+        let image = renderer.image
+        {
+            context in
+            UIColor.black.setFill()
+            context.cgContext.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+        }
+        let signature = visibleOutputSignature(from: image)
+        XCTAssertNotNil(signature)
+        XCTAssertFalse(visibleOutputLooksMeaningful(signature!))
+    }
+
+    func testVisibleOutputValidationAcceptsRenderedCheckerImage()
+    {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 32, height: 32))
+        let image = renderer.image
+        {
+            context in
+            UIColor.white.setFill()
+            context.cgContext.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+            UIColor.systemBlue.setFill()
+            context.cgContext.fill(CGRect(x: 0, y: 0, width: 16, height: 16))
+            context.cgContext.fill(CGRect(x: 16, y: 16, width: 16, height: 16))
+            UIColor.systemOrange.setFill()
+            context.cgContext.fill(CGRect(x: 16, y: 0, width: 16, height: 16))
+            context.cgContext.fill(CGRect(x: 0, y: 16, width: 16, height: 16))
+        }
+        let signature = visibleOutputSignature(from: image)
+        XCTAssertNotNil(signature)
+        XCTAssertTrue(visibleOutputLooksMeaningful(signature!))
+    }
+
+    func testPerfDisplayLabelTextClassifiesOxideUIKitAndOptimizedCases()
+    {
+        XCTAssertEqual(
+            perfDisplayLabelText(forBenchmarkNamed: "testOxideButtonPressResponse"),
+            "OXIDE  testOxideButtonPressResponse"
+        )
+        XCTAssertEqual(
+            perfDisplayLabelText(forBenchmarkNamed: "testButtonPressResponse"),
+            "UIKIT  testButtonPressResponse"
+        )
+        XCTAssertEqual(
+            perfDisplayLabelText(forBenchmarkNamed: "testOptimizedButtonPressResponse"),
+            "UIKIT OPT  testOptimizedButtonPressResponse"
+        )
+    }
+
+    func testResolvePerfDisplayLabelPrefersExplicitEnvironmentLabel()
+    {
+        let label = resolvePerfDisplayLabel(
+            environment: [
+                perfDisplayLabelEnv: "UIKIT  testButtonPressResponse",
+                parkedCaseEnv: "testCameraNV12LegacyLivePreview",
+            ]
+        )
+        XCTAssertEqual(label, "UIKIT  testButtonPressResponse")
+    }
+
     func testResolveCameraCaptureContractModeParsesBenchmarkModes()
     {
         XCTAssertEqual(resolveCameraCaptureContractMode(environment: [:]), .inputPriority)
@@ -243,20 +309,20 @@ final class OxideHostPerfTests: XCTestCase
         }
     }
 
-    func testResolveCameraBenchmarkOpportunityIntervalUsesRefreshMode()
+    func testResolveCameraBenchmarkOpportunityIntervalUsesNativeRate()
     {
         XCTAssertEqual(
             resolveCameraBenchmarkOpportunityIntervalSeconds(
                 maximumFramesPerSecond: 120,
-                environment: [perfRefreshModeEnv: "60hz-capped"]
+                environment: [perfRefreshModeEnv: "native"]
             ),
-            1.0 / 60.0,
+            1.0 / 120.0,
             accuracy: 0.000_001
         )
         XCTAssertEqual(
             resolveCameraBenchmarkOpportunityIntervalSeconds(
                 maximumFramesPerSecond: 120,
-                environment: [perfRefreshModeEnv: "native"]
+                environment: [:]
             ),
             1.0 / 120.0,
             accuracy: 0.000_001
@@ -271,7 +337,7 @@ final class OxideHostPerfTests: XCTestCase
         )
     }
 
-    func testResolveCameraBenchmarkOpportunityCountUsesOneSecondWindow()
+    func testResolveCameraBenchmarkOpportunityCountUsesNativeRate()
     {
         XCTAssertEqual(
             resolveCameraBenchmarkOpportunityCount(
@@ -283,9 +349,9 @@ final class OxideHostPerfTests: XCTestCase
         XCTAssertEqual(
             resolveCameraBenchmarkOpportunityCount(
                 maximumFramesPerSecond: 120,
-                environment: [perfRefreshModeEnv: "60hz-capped"]
+                environment: [:]
             ),
-            60
+            120
         )
         XCTAssertEqual(
             resolveCameraBenchmarkOpportunityCount(
@@ -296,12 +362,12 @@ final class OxideHostPerfTests: XCTestCase
         )
     }
 
-    func testRunPacedCameraPreviewWindowExecutesRequestedOpportunities()
+    func testRunPacedFrameOpportunityWindowExecutesRequestedOpportunities()
     {
         var steps = 0
         let startedAt = CACurrentMediaTime()
 
-        runPacedCameraPreviewWindow(opportunities: 3, opportunityIntervalSeconds: 0.02)
+        runPacedFrameOpportunityWindow(opportunities: 3, opportunityIntervalSeconds: 0.02)
         {
             steps += 1
         }
@@ -317,6 +383,7 @@ final class OxideHostPerfTests: XCTestCase
         {
             benchmark.tearDown()
         }
+        host?.setVisibleTestLabel(perfDisplayLabelText(forBenchmarkNamed: benchmark.testName))
         let previousIdleTimerState = UIApplication.shared.isIdleTimerDisabled
         UIApplication.shared.isIdleTimerDisabled = true
         defer
@@ -326,10 +393,14 @@ final class OxideHostPerfTests: XCTestCase
         let options = XCTMeasureOptions()
         let isCameraBenchmark = benchmark.testName.starts(with: "testCamera")
         let defaultMeasureIterations = isCameraBenchmark ? 5 : 10
-        options.iterationCount = resolvePerfMeasureIterations(defaultValue: defaultMeasureIterations)
+        options.iterationCount = resolveAdaptivePerfMeasureIterations(
+            testName: benchmark.testName,
+            benchmarkIterations: benchmark.iterations,
+            defaultValue: defaultMeasureIterations
+        )
         if !isCameraBenchmark
         {
-            settleForDeviceTraceAttachment()
+            settleForDeviceTraceAttachment(benchmark)
         }
         emitBenchmarkMetadataLine(
             testName: benchmark.testName,
@@ -366,7 +437,12 @@ final class OxideHostPerfTests: XCTestCase
             )
             return
         }
-        measureBenchmark(benchmark)
+        measureBenchmark(
+            withVisibleOutputValidation(
+                withWatchFrameCapture(benchmark, host: host),
+                host: host
+            )
+        )
         if let failure = takeBenchmarkBuildFailure()
         {
             XCTFail(failure)

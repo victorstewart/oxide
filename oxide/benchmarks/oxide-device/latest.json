@@ -1,0 +1,559 @@
+{
+  "version": 1,
+  "suite": "oxide-device",
+  "generated_label": "2026-04-05",
+  "cases": [
+    {
+      "id": "gpu.scene.camera.frame",
+      "family": "image_pipeline",
+      "layer": "onscreen",
+      "scenario": "camera_preview",
+      "variant": "oxide_custom_camera_preview",
+      "cache_state": "warm",
+      "refresh_mode": "native",
+      "unit": "s",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 7.076684,
+      "p95": 7.076684,
+      "p99": 7.076684,
+      "min": 7.076684,
+      "max": 7.076684,
+      "mean": 7.076684,
+      "samples": 1,
+      "ops_per_sample": 1,
+      "notes": [
+        "Real on-screen Oxide custom camera preview benchmark with Oxide owning the visible preview.",
+        "Refresh mode: native",
+        "Device executable: `OxideHost`",
+        "Metric scope: live on-screen Oxide host workload running through the real MetalView app path on the physical iPhone.",
+        "Trace window status: this case fell back to the whole launched trace summary window because no bounded workload signpost table was available.",
+        "Capture source: on-screen Oxide workload and GPU metrics derived from a process-scoped launched Metal trace on the live phone path, with the launched Oxide host stdout providing workload and memory summaries.",
+        "GPU counter status: the launched device trace rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+        "GPU interval attribution status: this trace exposed no direct target-process GPU intervals, so GPU time and latency were summarized from compositor-inclusive Metal GPU intervals within the same trace window.",
+        "GPU compositor detail: the compositor-inclusive overlap was dominated by `` (1736 rows, 120.755 ms total across 1 workload window(s)).",
+        "GPU metric semantics: `gpu_time_s` is the total overlapping Metal GPU execution duration inside each bounded workload window. `gpu_latency_s` is the mean CPU-to-GPU latency across overlapping Metal GPU intervals inside that same window.",
+        "GPU counter status: the trace exposed GPU counter tables, but there were no direct counter samples inside the bounded workload window; GPU time and GPU latency remained available from Metal System Trace.",
+        "Memory summary status: launched xctrace did not provide parked-app summary lines for this case, so the on-screen Oxide row is trace-derived for workload and GPU metrics only."
+      ],
+      "metrics": {
+        "clock_s": 7.076684,
+        "gpu_latency_s": 0.0014827761031105992,
+        "gpu_time_s": 0.120754822,
+        "workload_s": 7.076684
+      }
+    },
+    {
+      "id": "cpu.navigation.button_press.response",
+      "family": "navigation",
+      "layer": "onscreen",
+      "scenario": "button_press_response",
+      "variant": "oxide_host",
+      "cache_state": "warm",
+      "refresh_mode": "native",
+      "unit": "s",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 0.0166552085,
+      "p95": 0.024902342,
+      "p99": 0.02502460809,
+      "min": 0.002601833,
+      "max": 0.025196167,
+      "mean": 0.0167675322265625,
+      "samples": 128,
+      "ops_per_sample": 32,
+      "notes": [
+        "Real on-screen Oxide button press response through the live MetalView host path.",
+        "Refresh mode: native",
+        "Device executable: `OxideHost`",
+        "Metric scope: live on-screen Oxide host workload running through the real MetalView app path on the physical iPhone.",
+        "Clock metric scope: promoted `signpost_first_interactive_s` into `clock_s` for the official matched on-screen Oxide/UIKit comparison; raw end-to-end Oxide host workload wall clock remains under `workload_s`.",
+        "Capture source: on-screen Oxide workload and GPU metrics derived from a process-scoped launched Metal trace on the live phone path, with the launched Oxide host stdout providing workload and memory summaries.",
+        "GPU counter status: the launched device trace rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+        "GPU interval attribution status: this trace exposed no direct target-process GPU intervals, so GPU time and latency were summarized from compositor-inclusive Metal GPU intervals within the same trace window.",
+        "GPU compositor detail: the compositor-inclusive overlap was dominated by `` (1678 rows, 41.936 ms total across 4 workload window(s)).",
+        "GPU metric semantics: `gpu_time_s` is the total overlapping Metal GPU execution duration inside each bounded workload window. `gpu_latency_s` is the mean CPU-to-GPU latency across overlapping Metal GPU intervals inside that same window.",
+        "Memory summary status: launched xctrace did not provide parked-app summary lines for this case, so the on-screen Oxide row is trace-derived for workload and GPU metrics only.",
+        "Trace process identity: used `Oxide Demo` from the saved Metal trace instead of executable `OxideHost` when reducing workload windows.",
+        "Headline metric: `signpost_first_interactive_s`."
+      ],
+      "metrics": {
+        "clock_s": 0.0166552085,
+        "gpu_counter.rt_unit_active": 0.0,
+        "gpu_latency_s": 0.000682965075,
+        "gpu_time_s": 0.0046653785,
+        "signpost_first_interactive_s": 0.0166552085,
+        "signpost_frame_present_s": 0.000203813,
+        "workload_s": 0.532604437
+      }
+    },
+    {
+      "id": "cpu.navigation.text_focus.response",
+      "family": "navigation",
+      "layer": "onscreen",
+      "scenario": "text_focus_response",
+      "variant": "oxide_host",
+      "cache_state": "warm",
+      "refresh_mode": "native",
+      "unit": "s",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 0.016653875,
+      "p95": 0.02493726025,
+      "p99": 0.025174929149999997,
+      "min": 0.002594584,
+      "max": 0.025323208,
+      "mean": 0.016807894114583336,
+      "samples": 96,
+      "ops_per_sample": 24,
+      "notes": [
+        "Real on-screen Oxide text focus response through the live MetalView host path.",
+        "Refresh mode: native",
+        "Device executable: `OxideHost`",
+        "Metric scope: live on-screen Oxide host workload running through the real MetalView app path on the physical iPhone.",
+        "Clock metric scope: promoted `signpost_first_interactive_s` into `clock_s` for the official matched on-screen Oxide/UIKit comparison; raw end-to-end Oxide host workload wall clock remains under `workload_s`.",
+        "Capture source: on-screen Oxide workload and GPU metrics derived from a process-scoped launched Metal trace on the live phone path, with the launched Oxide host stdout providing workload and memory summaries.",
+        "GPU counter status: the launched device trace rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+        "GPU interval attribution status: this trace exposed no direct target-process GPU intervals, so GPU time and latency were summarized from compositor-inclusive Metal GPU intervals within the same trace window.",
+        "GPU compositor detail: the compositor-inclusive overlap was dominated by `` (1356 rows, 38.296 ms total across 4 workload window(s)).",
+        "GPU metric semantics: `gpu_time_s` is the total overlapping Metal GPU execution duration inside each bounded workload window. `gpu_latency_s` is the mean CPU-to-GPU latency across overlapping Metal GPU intervals inside that same window.",
+        "Memory summary status: launched xctrace did not provide parked-app summary lines for this case, so the on-screen Oxide row is trace-derived for workload and GPU metrics only.",
+        "Trace process identity: used `Oxide Demo` from the saved Metal trace instead of executable `OxideHost` when reducing workload windows.",
+        "Headline metric: `signpost_first_interactive_s`."
+      ],
+      "metrics": {
+        "clock_s": 0.016653875,
+        "gpu_counter.rt_unit_active": 0.0,
+        "gpu_latency_s": 0.0006830419578103208,
+        "gpu_time_s": 0.0035062415,
+        "signpost_first_interactive_s": 0.016653875,
+        "signpost_frame_present_s": 0.000199708,
+        "workload_s": 0.39918085400000003
+      }
+    },
+    {
+      "id": "cpu.animation.spinner_spin",
+      "family": "animation",
+      "layer": "onscreen",
+      "scenario": "spinner_spin",
+      "variant": "oxide_host",
+      "cache_state": "warm",
+      "refresh_mode": "native",
+      "unit": "s",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 0.016659166,
+      "p95": 0.0167877339,
+      "p99": 0.024994635839999998,
+      "min": 0.00256725,
+      "max": 0.025245708,
+      "mean": 0.016701369253731335,
+      "samples": 335,
+      "ops_per_sample": 96,
+      "notes": [
+        "Real on-screen Oxide spinner scene rendered through the live MetalView host path.",
+        "Refresh mode: native",
+        "Device executable: `OxideHost`",
+        "Metric scope: live on-screen Oxide host workload running through the real MetalView app path on the physical iPhone.",
+        "Clock metric scope: promoted `signpost_transition_s` into `clock_s` for the official matched on-screen Oxide/UIKit comparison; raw end-to-end Oxide host workload wall clock remains under `workload_s`.",
+        "Capture source: on-screen Oxide workload and GPU metrics derived from a process-scoped launched Metal trace on the live phone path, with the launched Oxide host stdout providing workload and memory summaries.",
+        "GPU counter status: the launched device trace rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+        "GPU interval attribution status: this trace exposed no direct target-process GPU intervals, so GPU time and latency were summarized from compositor-inclusive Metal GPU intervals within the same trace window.",
+        "GPU compositor detail: the compositor-inclusive overlap was dominated by `` (3754 rows, 70.673 ms total across 4 workload window(s)).",
+        "GPU metric semantics: `gpu_time_s` is the total overlapping Metal GPU execution duration inside each bounded workload window. `gpu_latency_s` is the mean CPU-to-GPU latency across overlapping Metal GPU intervals inside that same window.",
+        "Memory summary status: launched xctrace did not provide parked-app summary lines for this case, so the on-screen Oxide row is trace-derived for workload and GPU metrics only.",
+        "Trace process identity: used `Oxide Demo` from the saved Metal trace instead of executable `OxideHost` when reducing workload windows.",
+        "Headline metric: `signpost_transition_s`."
+      ],
+      "metrics": {
+        "clock_s": 0.016659166,
+        "gpu_counter.rt_unit_active": 0.0,
+        "gpu_latency_s": 0.0006812002347462,
+        "gpu_time_s": 0.013971963,
+        "signpost_frame_present_s": 0.00016175,
+        "signpost_transition_s": 0.016659166,
+        "workload_s": 1.598255896
+      }
+    },
+    {
+      "id": "cpu.animation.image_zoom_pan",
+      "family": "animation",
+      "layer": "onscreen",
+      "scenario": "image_zoom_pan",
+      "variant": "oxide_host",
+      "cache_state": "warm",
+      "refresh_mode": "native",
+      "unit": "s",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 0.016640270999999998,
+      "p95": 0.01714238575,
+      "p99": 0.02184561859000001,
+      "min": 0.003691709,
+      "max": 0.025156208,
+      "mean": 0.01654819011458333,
+      "samples": 192,
+      "ops_per_sample": 48,
+      "notes": [
+        "Real on-screen Oxide zoom-image scene rendered through the live MetalView host path.",
+        "Refresh mode: native",
+        "Device executable: `OxideHost`",
+        "Metric scope: live on-screen Oxide host workload running through the real MetalView app path on the physical iPhone.",
+        "Clock metric scope: promoted `signpost_transition_s` into `clock_s` for the official matched on-screen Oxide/UIKit comparison; raw end-to-end Oxide host workload wall clock remains under `workload_s`.",
+        "Capture source: on-screen Oxide workload and GPU metrics derived from a process-scoped launched Metal trace on the live phone path, with the launched Oxide host stdout providing workload and memory summaries.",
+        "GPU counter status: the launched device trace rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+        "GPU interval attribution status: this trace exposed no direct target-process GPU intervals, so GPU time and latency were summarized from compositor-inclusive Metal GPU intervals within the same trace window.",
+        "GPU compositor detail: the compositor-inclusive overlap was dominated by `` (1982 rows, 39.105 ms total across 4 workload window(s)).",
+        "GPU metric semantics: `gpu_time_s` is the total overlapping Metal GPU execution duration inside each bounded workload window. `gpu_latency_s` is the mean CPU-to-GPU latency across overlapping Metal GPU intervals inside that same window.",
+        "Memory summary status: launched xctrace did not provide parked-app summary lines for this case, so the on-screen Oxide row is trace-derived for workload and GPU metrics only.",
+        "Trace process identity: used `Oxide Demo` from the saved Metal trace instead of executable `OxideHost` when reducing workload windows.",
+        "Headline metric: `signpost_transition_s`."
+      ],
+      "metrics": {
+        "clock_s": 0.016640270999999998,
+        "gpu_counter.rt_unit_active": 0.0,
+        "gpu_latency_s": 0.0006597112785862786,
+        "gpu_time_s": 0.007357816,
+        "signpost_frame_present_s": 0.00024733299999999997,
+        "signpost_transition_s": 0.016640270999999998,
+        "workload_s": 0.798119104
+      }
+    },
+    {
+      "id": "cpu.animation.anim_timeline_bars",
+      "family": "animation",
+      "layer": "onscreen",
+      "scenario": "anim_timeline_bars",
+      "variant": "oxide_host",
+      "cache_state": "warm",
+      "refresh_mode": "native",
+      "unit": "s",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 0.0002399165,
+      "p95": 0.000328417,
+      "p99": 0.0005042416499999994,
+      "min": 0.00014,
+      "max": 0.000724958,
+      "mean": 0.00024893487499999994,
+      "samples": 96,
+      "ops_per_sample": 24,
+      "notes": [
+        "Real on-screen Oxide animation timeline scene rendered through the live MetalView host path.",
+        "Refresh mode: native",
+        "Device executable: `OxideHost`",
+        "Metric scope: live on-screen Oxide host workload running through the real MetalView app path on the physical iPhone.",
+        "Clock metric scope: promoted `signpost_frame_present_s` into `clock_s` for the official matched on-screen Oxide/UIKit comparison; raw end-to-end Oxide host workload wall clock remains under `workload_s`.",
+        "Capture source: on-screen Oxide workload and GPU metrics derived from a process-scoped launched Metal trace on the live phone path, with the launched Oxide host stdout providing workload and memory summaries.",
+        "GPU counter status: the launched device trace rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+        "GPU interval attribution status: this trace exposed no direct target-process GPU intervals, so GPU time and latency were summarized from compositor-inclusive Metal GPU intervals within the same trace window.",
+        "GPU compositor detail: the compositor-inclusive overlap was dominated by `` (1272 rows, 33.381 ms total across 4 workload window(s)).",
+        "GPU metric semantics: `gpu_time_s` is the total overlapping Metal GPU execution duration inside each bounded workload window. `gpu_latency_s` is the mean CPU-to-GPU latency across overlapping Metal GPU intervals inside that same window.",
+        "Memory summary status: launched xctrace did not provide parked-app summary lines for this case, so the on-screen Oxide row is trace-derived for workload and GPU metrics only.",
+        "Trace process identity: used `Oxide Demo` from the saved Metal trace instead of executable `OxideHost` when reducing workload windows.",
+        "Headline metric: `signpost_frame_present_s`."
+      ],
+      "metrics": {
+        "clock_s": 0.0002399165,
+        "gpu_counter.rt_unit_active": 0.0,
+        "gpu_latency_s": 0.0006732977374564156,
+        "gpu_time_s": 0.003540231,
+        "signpost_frame_present_s": 0.0002399165,
+        "signpost_transition_s": 0.016647562499999997,
+        "workload_s": 0.398454813
+      }
+    },
+    {
+      "id": "cpu.journey.input_form_submit",
+      "family": "journey",
+      "layer": "onscreen",
+      "scenario": "input_form_submit",
+      "variant": "oxide_host",
+      "cache_state": "warm",
+      "refresh_mode": "native",
+      "unit": "s",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 0.016626958499999997,
+      "p95": 0.025093789249999998,
+      "p99": 0.025343395989999996,
+      "min": 0.001450417,
+      "max": 0.025362,
+      "mean": 0.0160801396875,
+      "samples": 48,
+      "ops_per_sample": 12,
+      "notes": [
+        "Real on-screen Oxide input-form journey through the live MetalView host path.",
+        "Refresh mode: native",
+        "Device executable: `OxideHost`",
+        "Metric scope: live on-screen Oxide host workload running through the real MetalView app path on the physical iPhone.",
+        "Clock metric scope: promoted `signpost_transition_s` into `clock_s` for the official matched on-screen Oxide/UIKit comparison; raw end-to-end Oxide host workload wall clock remains under `workload_s`.",
+        "Capture source: on-screen Oxide workload and GPU metrics derived from a process-scoped launched Metal trace on the live phone path, with the launched Oxide host stdout providing workload and memory summaries.",
+        "GPU counter status: the launched device trace rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+        "GPU interval attribution status: this trace exposed no direct target-process GPU intervals, so GPU time and latency were summarized from compositor-inclusive Metal GPU intervals within the same trace window.",
+        "GPU compositor detail: the compositor-inclusive overlap was dominated by `` (790 rows, 27.766 ms total across 4 workload window(s)).",
+        "GPU metric semantics: `gpu_time_s` is the total overlapping Metal GPU execution duration inside each bounded workload window. `gpu_latency_s` is the mean CPU-to-GPU latency across overlapping Metal GPU intervals inside that same window.",
+        "Memory summary status: launched xctrace did not provide parked-app summary lines for this case, so the on-screen Oxide row is trace-derived for workload and GPU metrics only.",
+        "Trace process identity: used `Oxide Demo` from the saved Metal trace instead of executable `OxideHost` when reducing workload windows.",
+        "Headline metric: `signpost_transition_s`."
+      ],
+      "metrics": {
+        "clock_s": 0.016626958499999997,
+        "gpu_counter.rt_unit_active": 0.0,
+        "gpu_latency_s": 0.0007213690095004668,
+        "gpu_time_s": 0.0036706265,
+        "signpost_frame_present_s": 0.000248292,
+        "signpost_transition_s": 0.016626958499999997,
+        "workload_s": 0.1993304375
+      }
+    },
+    {
+      "id": "cpu.journey.collection_navigation",
+      "family": "journey",
+      "layer": "onscreen",
+      "scenario": "collection_navigation",
+      "variant": "oxide_host",
+      "cache_state": "warm",
+      "refresh_mode": "native",
+      "unit": "s",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 0.016647207999999997,
+      "p95": 0.02501358285,
+      "p99": 0.025164622640000002,
+      "min": 0.002566625,
+      "max": 0.025199708,
+      "mean": 0.01662388143055556,
+      "samples": 72,
+      "ops_per_sample": 18,
+      "notes": [
+        "Real on-screen Oxide collection-navigation journey through the live MetalView host path.",
+        "Refresh mode: native",
+        "Device executable: `OxideHost`",
+        "Metric scope: live on-screen Oxide host workload running through the real MetalView app path on the physical iPhone.",
+        "Clock metric scope: promoted `signpost_scroll_s` into `clock_s` for the official matched on-screen Oxide/UIKit comparison; raw end-to-end Oxide host workload wall clock remains under `workload_s`.",
+        "Capture source: on-screen Oxide workload and GPU metrics derived from a process-scoped launched Metal trace on the live phone path, with the launched Oxide host stdout providing workload and memory summaries.",
+        "GPU counter status: the launched device trace rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+        "GPU interval attribution status: this trace exposed no direct target-process GPU intervals, so GPU time and latency were summarized from compositor-inclusive Metal GPU intervals within the same trace window.",
+        "GPU compositor detail: the compositor-inclusive overlap was dominated by `` (1072 rows, 32.296 ms total across 4 workload window(s)).",
+        "GPU metric semantics: `gpu_time_s` is the total overlapping Metal GPU execution duration inside each bounded workload window. `gpu_latency_s` is the mean CPU-to-GPU latency across overlapping Metal GPU intervals inside that same window.",
+        "Memory summary status: launched xctrace did not provide parked-app summary lines for this case, so the on-screen Oxide row is trace-derived for workload and GPU metrics only.",
+        "Trace process identity: used `Oxide Demo` from the saved Metal trace instead of executable `OxideHost` when reducing workload windows.",
+        "Headline metric: `signpost_scroll_s`."
+      ],
+      "metrics": {
+        "clock_s": 0.016647207999999997,
+        "gpu_counter.rt_unit_active": 0.0,
+        "gpu_latency_s": 0.0006711078994413408,
+        "gpu_time_s": 0.0026412625,
+        "signpost_frame_present_s": 0.0002483745,
+        "signpost_scroll_s": 0.016647207999999997,
+        "workload_s": 0.2991276665
+      }
+    },
+    {
+      "id": "cpu.journey.zoom_image_gesture_cycle",
+      "family": "journey",
+      "layer": "onscreen",
+      "scenario": "zoom_image_gesture_cycle",
+      "variant": "oxide_host",
+      "cache_state": "warm",
+      "refresh_mode": "native",
+      "unit": "s",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 0.0166533125,
+      "p95": 0.024982814649999997,
+      "p99": 0.02531398157,
+      "min": 0.003029959,
+      "max": 0.025416458,
+      "mean": 0.016621760444444453,
+      "samples": 72,
+      "ops_per_sample": 18,
+      "notes": [
+        "Real on-screen Oxide zoom-image gesture journey through the live MetalView host path.",
+        "Refresh mode: native",
+        "Device executable: `OxideHost`",
+        "Metric scope: live on-screen Oxide host workload running through the real MetalView app path on the physical iPhone.",
+        "Clock metric scope: promoted `signpost_transition_s` into `clock_s` for the official matched on-screen Oxide/UIKit comparison; raw end-to-end Oxide host workload wall clock remains under `workload_s`.",
+        "Capture source: on-screen Oxide workload and GPU metrics derived from a process-scoped launched Metal trace on the live phone path, with the launched Oxide host stdout providing workload and memory summaries.",
+        "GPU counter status: the launched device trace rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+        "GPU interval attribution status: this trace exposed no direct target-process GPU intervals, so GPU time and latency were summarized from compositor-inclusive Metal GPU intervals within the same trace window.",
+        "GPU compositor detail: the compositor-inclusive overlap was dominated by `` (1073 rows, 32.930 ms total across 4 workload window(s)).",
+        "GPU metric semantics: `gpu_time_s` is the total overlapping Metal GPU execution duration inside each bounded workload window. `gpu_latency_s` is the mean CPU-to-GPU latency across overlapping Metal GPU intervals inside that same window.",
+        "Memory summary status: launched xctrace did not provide parked-app summary lines for this case, so the on-screen Oxide row is trace-derived for workload and GPU metrics only.",
+        "Trace process identity: used `Oxide Demo` from the saved Metal trace instead of executable `OxideHost` when reducing workload windows.",
+        "Headline metric: `signpost_transition_s`."
+      ],
+      "metrics": {
+        "clock_s": 0.0166533125,
+        "gpu_counter.rt_unit_active": 0.0,
+        "gpu_latency_s": 0.0006771105670391061,
+        "gpu_time_s": 0.002656452,
+        "signpost_frame_present_s": 0.00024031250000000002,
+        "signpost_transition_s": 0.0166533125,
+        "workload_s": 0.299321208
+      }
+    },
+    {
+      "id": "cpu.journey.orchestration_transition_modal",
+      "family": "journey",
+      "layer": "onscreen",
+      "scenario": "orchestration_transition_modal",
+      "variant": "oxide_host",
+      "cache_state": "warm",
+      "refresh_mode": "native",
+      "unit": "s",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 0.016646458500000003,
+      "p95": 0.024962841,
+      "p99": 0.02517261482,
+      "min": 0.000757791,
+      "max": 0.025278375,
+      "mean": 0.01600575230555556,
+      "samples": 72,
+      "ops_per_sample": 18,
+      "notes": [
+        "Real on-screen Oxide orchestration journey through the live MetalView host path.",
+        "Refresh mode: native",
+        "Device executable: `OxideHost`",
+        "Metric scope: live on-screen Oxide host workload running through the real MetalView app path on the physical iPhone.",
+        "Clock metric scope: promoted `signpost_transition_s` into `clock_s` for the official matched on-screen Oxide/UIKit comparison; raw end-to-end Oxide host workload wall clock remains under `workload_s`.",
+        "Capture source: on-screen Oxide workload and GPU metrics derived from a process-scoped launched Metal trace on the live phone path, with the launched Oxide host stdout providing workload and memory summaries.",
+        "GPU counter status: the launched device trace rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+        "GPU interval attribution status: this trace exposed no direct target-process GPU intervals, so GPU time and latency were summarized from compositor-inclusive Metal GPU intervals within the same trace window.",
+        "GPU compositor detail: the compositor-inclusive overlap was dominated by `` (1031 rows, 30.698 ms total across 4 workload window(s)).",
+        "GPU metric semantics: `gpu_time_s` is the total overlapping Metal GPU execution duration inside each bounded workload window. `gpu_latency_s` is the mean CPU-to-GPU latency across overlapping Metal GPU intervals inside that same window.",
+        "Memory summary status: launched xctrace did not provide parked-app summary lines for this case, so the on-screen Oxide row is trace-derived for workload and GPU metrics only.",
+        "Trace process identity: used `Oxide Demo` from the saved Metal trace instead of executable `OxideHost` when reducing workload windows.",
+        "Headline metric: `signpost_transition_s`."
+      ],
+      "metrics": {
+        "clock_s": 0.016646458500000003,
+        "gpu_counter.rt_unit_active": 0.0,
+        "gpu_latency_s": 0.0006735994485567969,
+        "gpu_time_s": 0.002658669,
+        "signpost_frame_present_s": 0.00024631299999999996,
+        "signpost_transition_s": 0.016646458500000003,
+        "workload_s": 0.298026479
+      }
+    }
+  ],
+  "coverage": {
+    "components_total": 0,
+    "components_covered": [],
+    "animations_total": 3,
+    "animations_covered": [
+      "cpu.animation.spinner_spin",
+      "cpu.animation.image_zoom_pan",
+      "cpu.animation.anim_timeline_bars"
+    ],
+    "launch_total": 0,
+    "launch_covered": [],
+    "primitive_lifecycle_total": 0,
+    "primitive_lifecycle_covered": [],
+    "scenes_cpu_total": 0,
+    "scenes_cpu_covered": [],
+    "scenes_gpu_total": 1,
+    "scenes_gpu_covered": [
+      "gpu.scene.camera.frame"
+    ],
+    "journeys_total": 4,
+    "journeys_covered": [
+      "cpu.journey.input_form_submit",
+      "cpu.journey.collection_navigation",
+      "cpu.journey.zoom_image_gesture_cycle",
+      "cpu.journey.orchestration_transition_modal"
+    ],
+    "authoring_total": 0,
+    "authoring_covered": [],
+    "layout_total": 0,
+    "layout_covered": [],
+    "text_input_total": 0,
+    "text_input_covered": [],
+    "image_pipeline_total": 1,
+    "image_pipeline_covered": [
+      "gpu.scene.camera.frame"
+    ],
+    "navigation_total": 2,
+    "navigation_covered": [
+      "cpu.navigation.button_press.response",
+      "cpu.navigation.text_focus.response"
+    ],
+    "reconcile_total": 0,
+    "reconcile_covered": [],
+    "endurance_total": 0,
+    "endurance_covered": [],
+    "stress_total": 0,
+    "stress_covered": [],
+    "bridges_total": 0,
+    "bridges_covered": []
+  },
+  "contract": {
+    "layers": [
+      {
+        "id": "oxide-onscreen-host",
+        "label": "Oxide On-Screen Host Battery",
+        "status": "implemented",
+        "notes": [
+          "This device report is captured through the real on-screen Oxide MetalView host path instead of the offscreen Rust perf runner."
+        ]
+      },
+      {
+        "id": "oxide-offscreen-workspace",
+        "label": "Workspace Engine Battery",
+        "status": "separate",
+        "notes": [
+          "The broader offscreen engine and microbenchmark suite remains in benchmarks/workspace and is intentionally not mixed into this device comparison report."
+        ]
+      }
+    ],
+    "battery": [
+      {
+        "id": "animation-effects",
+        "label": "Animation & Visual Effects",
+        "status": "implemented",
+        "notes": [
+          "The official matched device battery now carries representative Oxide on-screen animation workloads through the live host path."
+        ]
+      },
+      {
+        "id": "navigation-input",
+        "label": "Navigation & Input Latency",
+        "status": "implemented",
+        "notes": [
+          "The official matched device battery now carries direct Oxide button-press and text-focus response workloads through the live host path."
+        ]
+      },
+      {
+        "id": "journeys",
+        "label": "Representative Journeys",
+        "status": "implemented",
+        "notes": [
+          "The official matched device battery now carries representative Oxide journey workloads through the live host path."
+        ]
+      },
+      {
+        "id": "camera-preview",
+        "label": "Camera Preview",
+        "status": "implemented",
+        "notes": [
+          "The official custom-camera row uses the real on-screen Oxide preview path with Oxide owning the visible preview on the phone."
+        ]
+      }
+    ],
+    "notes": [
+      "Device: `Victor’s iPhone`",
+      "Executable: `OxideHost`",
+      "Device flow: launch the parked host app on the physical iPhone with a live on-screen Oxide workload selected, collect workload and memory summaries from the app console, and collect direct GPU/signpost metrics from a process-scoped launched Metal System Trace when tracing is enabled.",
+      "Comparison scope: only on-screen Oxide host cases are persisted here. Offscreen Rust workspace numbers remain separate and are not part of the official device comparison."
+    ]
+  },
+  "findings": [
+    {
+      "status": "info",
+      "summary": "This device report measures the live on-screen Oxide host path rather than the offscreen Rust perf runner, so it is the authoritative Oxide side of the official device comparison."
+    }
+  ]
+}

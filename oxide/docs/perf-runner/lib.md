@@ -35,6 +35,7 @@ The crate builds a case inventory spanning component/animation microbenchmarks, 
 CPU-oriented cases run through a shared warmup-and-sample loop that amortizes timer noise by executing enough operations to hit a target sample duration. Journey-style workloads run one full interaction cycle per sample. GPU scene cases execute live Metal frames and persist renderer counters such as draw, encode, cull, and damage summaries when available.
 
 The resulting `PerfReport` is serialized to JSON and Markdown. Baseline comparison is median-based and only applies to gated cases. Coverage validation is structural: the suite is considered incomplete if any required family lacks a case.
+Contract coverage battery entries share one status-and-note helper so each required case set is evaluated once, then rendered consistently into the persisted report.
 
 ## Preconditions and postconditions
 
@@ -49,3 +50,9 @@ The resulting `PerfReport` is serialized to JSON and Markdown. Baseline comparis
   - Every persisted case carries contract metadata alongside latency distributions.
   - Coverage counts and covered-name inventories stay synchronized with the registered case inventory.
   - Missing metrics default safely through serde so older baselines remain readable while the schema grows.
+
+## Changelog
+
+- 2026-04-18: Collapsed duplicated contract-battery status and note conditionals into shared helper logic while preserving report output semantics.
+- 2026-04-14: Collapsed repetitive coverage assertions into one shared check table while preserving the same incomplete-family error messages.
+- 2026-04-11: Removed redundant manual `Default` implementations for internal CLI options and `PerfCaseResult`; derived defaults preserve the same serde fallback behavior with less implementation surface.

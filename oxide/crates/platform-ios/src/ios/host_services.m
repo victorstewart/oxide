@@ -136,20 +136,6 @@ oxide_status_from_av_authorization(AVAuthorizationStatus status) {
   }
 }
 
-static int32_t
-nametag_status_from_av_authorization(AVAuthorizationStatus status) {
-  switch (status) {
-  case AVAuthorizationStatusAuthorized:
-    return 3;
-  case AVAuthorizationStatusDenied:
-  case AVAuthorizationStatusRestricted:
-    return 1;
-  case AVAuthorizationStatusNotDetermined:
-  default:
-    return 0;
-  }
-}
-
 static uint32_t oxide_status_from_record_permission(
     AVAudioApplicationRecordPermission permission) {
   switch (permission) {
@@ -160,19 +146,6 @@ static uint32_t oxide_status_from_record_permission(
   case AVAudioApplicationRecordPermissionUndetermined:
   default:
     return kOxPermStatusNotDetermined;
-  }
-}
-
-static int32_t nametag_status_from_record_permission(
-    AVAudioApplicationRecordPermission permission) {
-  switch (permission) {
-  case AVAudioApplicationRecordPermissionGranted:
-    return 3;
-  case AVAudioApplicationRecordPermissionDenied:
-    return 1;
-  case AVAudioApplicationRecordPermissionUndetermined:
-  default:
-    return 0;
   }
 }
 
@@ -296,21 +269,7 @@ static uint32_t oxide_bluetooth_permission_status(void) {
 }
 
 static int32_t nametag_bluetooth_permission_status(void) {
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 130000
-  if (@available(iOS 13.0, *)) {
-    switch ([CBManager authorization]) {
-    case CBManagerAuthorizationAllowedAlways:
-      return 3;
-    case CBManagerAuthorizationDenied:
-    case CBManagerAuthorizationRestricted:
-      return 1;
-    case CBManagerAuthorizationNotDetermined:
-    default:
-      return 0;
-    }
-  }
-#endif
-  return 3;
+  return (int32_t)oxide_bluetooth_permission_status();
 }
 
 static uint32_t oxide_motion_permission_status(void) {
@@ -361,30 +320,7 @@ static uint32_t oxide_location_permission_status(void) {
 }
 
 static int32_t nametag_location_permission_status(void) {
-  if (![CLLocationManager locationServicesEnabled]) {
-    return 1;
-  }
-  CLLocationManager *manager = ensure_location_permission_manager();
-  CLAuthorizationStatus status = manager.authorizationStatus;
-  switch (status) {
-  case kCLAuthorizationStatusAuthorizedAlways:
-  case kCLAuthorizationStatusAuthorizedWhenInUse:
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 140000
-    if (@available(iOS 14.0, *)) {
-      if (manager.accuracyAuthorization ==
-          CLAccuracyAuthorizationReducedAccuracy) {
-        return 2;
-      }
-    }
-#endif
-    return 3;
-  case kCLAuthorizationStatusDenied:
-  case kCLAuthorizationStatusRestricted:
-    return 1;
-  case kCLAuthorizationStatusNotDetermined:
-  default:
-    return 0;
-  }
+  return (int32_t)oxide_location_permission_status();
 }
 
 static uint32_t oxide_camera_permission_status(void) {
@@ -393,8 +329,7 @@ static uint32_t oxide_camera_permission_status(void) {
 }
 
 static int32_t nametag_camera_permission_status(void) {
-  return nametag_status_from_av_authorization(
-      [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo]);
+  return (int32_t)oxide_camera_permission_status();
 }
 
 static uint32_t oxide_microphone_permission_status(void) {
@@ -403,8 +338,7 @@ static uint32_t oxide_microphone_permission_status(void) {
 }
 
 static int32_t nametag_microphone_permission_status(void) {
-  return nametag_status_from_record_permission(
-      AVAudioApplication.sharedInstance.recordPermission);
+  return (int32_t)oxide_microphone_permission_status();
 }
 
 static PHAuthorizationStatus current_photo_authorization(void) {

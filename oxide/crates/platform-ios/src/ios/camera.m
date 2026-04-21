@@ -1798,9 +1798,7 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
 
 - (BOOL)shouldDropPreviewOnlySampleBeforeBridge {
   if (!NametagPerfPreviewPrebridgeDropEnabled() ||
-      [self requiresLegacyLatestTextureMirror] ||
-      [self retainsLatestPreviewPixelBuffer] ||
-      [self requiresCpuFrameDelivery]) {
+      [self requiresLegacyLatestTextureMirror]) {
     return NO;
   }
   os_unfair_lock_lock(&_textureLock);
@@ -2279,35 +2277,16 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
   return YES;
 }
 
-- (void)publishPreviewOnlyTexturesWithY:(CVMetalTextureRef)yRef
-                                     uv:(CVMetalTextureRef)uvRef
-                                    bit:(int)bitDepth
-                                 matrix:(int)matrix
-                             videoRange:(int)videoRange
-                              timestamp:(uint64_t)timestamp
-                          sampleSurface:(NSValue *)sampleSurfaceKey
-                     sampleSurfaceBytes:(uint64_t)sampleSurfaceBytes
-                                  width:(int)width
-                                 height:(int)height {
-  NSCAssert(![self requiresLegacyLatestTextureMirror],
-            @"preview-only publication must not touch the legacy "
-            @"latest-texture mirror");
-  NSCAssert(![self retainsLatestPreviewPixelBuffer],
-            @"preview-only publication must not retain a latest pixel buffer");
-  [self clearLegacyLatestTextureMirror];
-  os_unfair_lock_lock(&_textureLock);
-  self.latestBitDepth = bitDepth;
-  self.latestMatrix = matrix;
-  self.latestVideoRange = videoRange;
-  self.latestTimestampNs = timestamp;
-  self.latestRotationDeg = 0;
-  self.latestWidth = width;
-  self.latestHeight = height;
-  self.lastCapturePublishLockMs = 0.0f;
-  self.lastCapturePublishTextureRefsMs = 0.0f;
-  self.lastCapturePublishPixelBufferMs = 0.0f;
-  os_unfair_lock_unlock(&_textureLock);
-
+- (void)publishYuvFrameWithY:(CVMetalTextureRef)yRef
+                          uv:(CVMetalTextureRef)uvRef
+               sampleSurface:(NSValue *)sampleSurfaceKey
+          sampleSurfaceBytes:(uint64_t)sampleSurfaceBytes
+                         bit:(int)bitDepth
+                      matrix:(int)matrix
+                  videoRange:(int)videoRange
+                   timestamp:(uint64_t)timestamp
+                       width:(int)width
+                      height:(int)height {
   int slotIndex = [self reservePublishSlot];
   if (slotIndex < 0) {
     if (yRef != NULL) {
@@ -2347,6 +2326,44 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
       OxidePackPublishedFrameState((uint32_t)slotIndex, slot.generation),
       memory_order_release);
   [self notePublishedFrameGeneration:nextGeneration timestamp:timestamp];
+}
+
+- (void)publishPreviewOnlyTexturesWithY:(CVMetalTextureRef)yRef
+                                     uv:(CVMetalTextureRef)uvRef
+                                    bit:(int)bitDepth
+                                 matrix:(int)matrix
+                             videoRange:(int)videoRange
+                              timestamp:(uint64_t)timestamp
+                          sampleSurface:(NSValue *)sampleSurfaceKey
+                     sampleSurfaceBytes:(uint64_t)sampleSurfaceBytes
+                                 width:(int)width
+                                 height:(int)height {
+  NSCAssert(![self requiresLegacyLatestTextureMirror],
+            @"preview-only publication must not touch the legacy "
+            @"latest-texture mirror");
+  [self clearLegacyLatestTextureMirror];
+  os_unfair_lock_lock(&_textureLock);
+  self.latestBitDepth = bitDepth;
+  self.latestMatrix = matrix;
+  self.latestVideoRange = videoRange;
+  self.latestTimestampNs = timestamp;
+  self.latestRotationDeg = 0;
+  self.latestWidth = width;
+  self.latestHeight = height;
+  self.lastCapturePublishLockMs = 0.0f;
+  self.lastCapturePublishTextureRefsMs = 0.0f;
+  self.lastCapturePublishPixelBufferMs = 0.0f;
+  os_unfair_lock_unlock(&_textureLock);
+  [self publishYuvFrameWithY:yRef
+                          uv:uvRef
+               sampleSurface:sampleSurfaceKey
+          sampleSurfaceBytes:sampleSurfaceBytes
+                         bit:bitDepth
+                      matrix:matrix
+                  videoRange:videoRange
+                   timestamp:timestamp
+                       width:width
+                      height:height];
 }
 
 - (void)updateLatestTexturesWithY:(CVMetalTextureRef)yRef
@@ -2412,46 +2429,16 @@ nametag_dispatch_photo_completed(NametagPhotoCallback callback, void *context,
   self.lastCapturePublishTextureRefsMs = textureRefMs;
   self.lastCapturePublishPixelBufferMs = pixelBufferMs;
   os_unfair_lock_unlock(&_textureLock);
-
-  int slotIndex = [self reservePublishSlot];
-  if (slotIndex < 0) {
-    if (yRef != NULL) {
-      CFRelease(yRef);
-    }
-    if (uvRef != NULL) {
-      CFRelease(uvRef);
-    }
-    return;
-  }
-  NametagCameraPublishedSlot *slot = self.publishedSlots[(NSUInteger)slotIndex];
-  if (slot.yRef != NULL) {
-    CFRelease(slot.yRef);
-    slot.yRef = NULL;
-  }
-  if (slot.uvRef != NULL) {
-    CFRelease(slot.uvRef);
-    slot.uvRef = NULL;
-  }
-  slot.yRef = yRef;
-  slot.uvRef = uvRef;
-  slot.yTex = slot.yRef != NULL ? CVMetalTextureGetTexture(slot.yRef) : nil;
-  slot.uvTex = slot.uvRef != NULL ? CVMetalTextureGetTexture(slot.uvRef) : nil;
-  slot.sampleSurfaceKey = sampleSurfaceKey;
-  slot.sampleSurfaceBytes = sampleSurfaceBytes;
-  slot.width = width;
-  slot.height = height;
-  slot.bitDepth = bitDepth;
-  slot.matrix = matrix;
-  slot.videoRange = videoRange;
-  slot.colorSpace = self.latestColorSpace;
-  uint64_t nextGeneration = self.latestGeneration + 1;
-  slot.generation = nextGeneration;
-  slot.timestampNs = timestamp;
-  atomic_store_explicit(
-      &_publishedFrameState,
-      OxidePackPublishedFrameState((uint32_t)slotIndex, slot.generation),
-      memory_order_release);
-  [self notePublishedFrameGeneration:nextGeneration timestamp:timestamp];
+  [self publishYuvFrameWithY:yRef
+                          uv:uvRef
+               sampleSurface:sampleSurfaceKey
+          sampleSurfaceBytes:sampleSurfaceBytes
+                         bit:bitDepth
+                      matrix:matrix
+                  videoRange:videoRange
+                   timestamp:timestamp
+                       width:width
+                      height:height];
 }
 
 - (void)updateLatestTextureWithBGRA:(CVMetalTextureRef)bgraRef

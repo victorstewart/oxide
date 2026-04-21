@@ -219,6 +219,7 @@ extern "C" {
     );
     // Camera (NV12 → Metal) controls
     fn oxide_cam_start_default() -> ::libc::c_int;
+    fn oxide_cam_start_default_preview_only() -> ::libc::c_int;
     fn oxide_cam_stop();
     fn oxide_cam_set_fps(fps: i32) -> i32;
     fn oxide_cam_set_resolution_height(h: i32) -> i32;
@@ -1464,7 +1465,12 @@ impl CameraRecording for IosCameraRecording {
 
 impl IosCameraManager {
     fn start_capture(&self) -> Result<(), PlatformError> {
-        let rc = unsafe { oxide_cam_start_default() };
+        let rc = unsafe {
+            match camera_capture_start_mode(CAM_STATE.has_audio_subscribers()) {
+                CameraCaptureStartMode::Default => oxide_cam_start_default(),
+                CameraCaptureStartMode::PreviewOnly => oxide_cam_start_default_preview_only(),
+            }
+        };
         if rc != 0 {
             return Err(PlatformError::Unsupported("camera start failed"));
         }
@@ -1479,6 +1485,20 @@ impl IosCameraManager {
             oxide_cam_stop();
             let _ = oxide_host_set_camera_running(0);
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CameraCaptureStartMode {
+    Default,
+    PreviewOnly,
+}
+
+fn camera_capture_start_mode(has_audio_subscribers: bool) -> CameraCaptureStartMode {
+    if has_audio_subscribers {
+        CameraCaptureStartMode::Default
+    } else {
+        CameraCaptureStartMode::PreviewOnly
     }
 }
 
@@ -2451,15 +2471,10 @@ extern "C" {
         out_image: *mut OxideImageData,
     ) -> i32;
 
-    fn oxide_media_load_full_image_rgba_if_available(
-        identifier_ptr: *const u8,
-        identifier_len: usize,
-        out_image: *mut OxideImageData,
-    ) -> i32;
-
     fn oxide_media_free_image_data(data_ptr: *const u8, data_len: usize);
 }
 
+#[derive(Default)]
 pub struct IosMediaLibraryManager {}
 
 #[derive(Clone, Debug)]
@@ -2470,12 +2485,36 @@ pub struct IosRawImageData {
     pub bgra: alloc::vec::Vec<u8>,
 }
 
+struct OwnedImageData {
+    width: u32,
+    height: u32,
+    row_bytes: usize,
+    bytes: alloc::vec::Vec<u8>,
+}
+
+impl OwnedImageData {
+    fn into_raw_image_data(self) -> IosRawImageData {
+        IosRawImageData {
+            width: self.width,
+            height: self.height,
+            row_bytes: self.row_bytes,
+            bgra: self.bytes,
+        }
+    }
+}
+
 impl IosMediaLibraryManager {
-    fn load_image_data(
+    fn load_owned_image_data<F>(
         &self,
         id: &AssetId,
-        quality: ImageQuality,
-    ) -> Result<AssetData, PlatformError> {
+        missing_is_ok: bool,
+        failure_label: &str,
+        missing_label: &'static str,
+        load: F,
+    ) -> Result<Option<OwnedImageData>, PlatformError>
+    where
+        F: FnOnce(*const u8, usize, &mut OxideImageData) -> i32,
+    {
         let identifier = id.0.as_bytes();
         let mut image_data = OxideImageData {
             data_ptr: std::ptr::null(),
@@ -2484,39 +2523,58 @@ impl IosMediaLibraryManager {
             height: 0,
             row_bytes: 0,
         };
-
-        let result = match quality {
-            ImageQuality::Thumbnail => unsafe {
-                oxide_media_load_thumbnail(
-                    identifier.as_ptr(),
-                    identifier.len(),
-                    1,
-                    &mut image_data,
-                )
-            },
-            ImageQuality::Display => unsafe {
-                oxide_media_load_full_image(identifier.as_ptr(), identifier.len(), &mut image_data)
-            },
-        };
+        let result = load(identifier.as_ptr(), identifier.len(), &mut image_data);
 
         if result == -1 {
             return Err(PlatformError::PermissionDenied("media_library"));
         }
         if result < 0 {
-            return Err(PlatformError::Unknown(format!("media image request failed: {}", result)));
+            return Err(PlatformError::Unknown(format!("{}: {}", failure_label, result)));
         }
-        if image_data.data_ptr.is_null() {
-            return Err(PlatformError::NotFound("media image data"));
+        if result == 0 || image_data.data_ptr.is_null() || image_data.data_len == 0 {
+            if missing_is_ok {
+                return Ok(None);
+            }
+            return Err(PlatformError::NotFound(missing_label));
         }
 
-        let data = unsafe {
+        let bytes = unsafe {
             std::slice::from_raw_parts(image_data.data_ptr, image_data.data_len).to_vec()
         };
         unsafe {
             oxide_media_free_image_data(image_data.data_ptr, image_data.data_len);
         }
+        Ok(Some(OwnedImageData {
+            width: image_data.width,
+            height: image_data.height,
+            row_bytes: image_data.row_bytes,
+            bytes,
+        }))
+    }
 
-        Ok(AssetData::Image { data, format: ImageFormat::Jpeg })
+    fn load_image_data(
+        &self,
+        id: &AssetId,
+        quality: ImageQuality,
+    ) -> Result<AssetData, PlatformError> {
+        let image = self
+            .load_owned_image_data(
+                id,
+                false,
+                "media image request failed",
+                "media image data",
+                |identifier_ptr, identifier_len, image_data| match quality {
+                    ImageQuality::Thumbnail => unsafe {
+                        oxide_media_load_thumbnail(identifier_ptr, identifier_len, 1, image_data)
+                    },
+                    ImageQuality::Display => unsafe {
+                        oxide_media_load_full_image(identifier_ptr, identifier_len, image_data)
+                    },
+                },
+            )?
+            .ok_or(PlatformError::NotFound("media image data"))?;
+
+        Ok(AssetData::Image { data: image.bytes, format: ImageFormat::Jpeg })
     }
 
     pub fn load_image_bgra_data(
@@ -2524,112 +2582,41 @@ impl IosMediaLibraryManager {
         id: &AssetId,
         quality: ImageQuality,
     ) -> Result<IosRawImageData, PlatformError> {
-        let identifier = id.0.as_bytes();
-        let mut image_data = OxideImageData {
-            data_ptr: std::ptr::null(),
-            data_len: 0,
-            width: 0,
-            height: 0,
-            row_bytes: 0,
-        };
-
-        let result = match quality {
-            ImageQuality::Thumbnail => unsafe {
-                oxide_media_load_thumbnail_rgba(
-                    identifier.as_ptr(),
-                    identifier.len(),
-                    0,
-                    &mut image_data,
-                )
+        self.load_owned_image_data(
+            id,
+            false,
+            "media image rgba request failed",
+            "media image rgba data",
+            |identifier_ptr, identifier_len, image_data| match quality {
+                ImageQuality::Thumbnail => unsafe {
+                    oxide_media_load_thumbnail_rgba(identifier_ptr, identifier_len, 0, image_data)
+                },
+                ImageQuality::Display => unsafe {
+                    oxide_media_load_full_image_rgba(identifier_ptr, identifier_len, image_data)
+                },
             },
-            ImageQuality::Display => unsafe {
-                oxide_media_load_full_image_rgba(
-                    identifier.as_ptr(),
-                    identifier.len(),
-                    &mut image_data,
-                )
-            },
-        };
-
-        if result == -1 {
-            return Err(PlatformError::PermissionDenied("media_library"));
-        }
-        if result < 0 {
-            return Err(PlatformError::Unknown(format!(
-                "media image rgba request failed: {}",
-                result
-            )));
-        }
-        if image_data.data_ptr.is_null() || image_data.data_len == 0 {
-            return Err(PlatformError::NotFound("media image rgba data"));
-        }
-
-        let bgra = unsafe {
-            std::slice::from_raw_parts(image_data.data_ptr, image_data.data_len).to_vec()
-        };
-        unsafe {
-            oxide_media_free_image_data(image_data.data_ptr, image_data.data_len);
-        }
-        Ok(IosRawImageData {
-            width: image_data.width,
-            height: image_data.height,
-            row_bytes: image_data.row_bytes,
-            bgra,
-        })
+        )?
+        .map(OwnedImageData::into_raw_image_data)
+        .ok_or(PlatformError::NotFound("media image rgba data"))
     }
 
     pub fn load_display_image_bgra_data_if_available(
         &self,
         id: &AssetId,
     ) -> Result<Option<IosRawImageData>, PlatformError> {
-        let identifier = id.0.as_bytes();
-        let mut image_data = OxideImageData {
-            data_ptr: std::ptr::null(),
-            data_len: 0,
-            width: 0,
-            height: 0,
-            row_bytes: 0,
-        };
-
-        let result = unsafe {
-            oxide_media_load_full_image_rgba_if_available(
-                identifier.as_ptr(),
-                identifier.len(),
-                &mut image_data,
-            )
-        };
-
-        if result == -1 {
-            return Err(PlatformError::PermissionDenied("media_library"));
-        }
-        if result < 0 {
-            return Err(PlatformError::Unknown(format!(
-                "media image cached rgba request failed: {}",
-                result
-            )));
-        }
-        if result == 0 || image_data.data_ptr.is_null() || image_data.data_len == 0 {
-            return Ok(None);
-        }
-
-        let bgra = unsafe {
-            std::slice::from_raw_parts(image_data.data_ptr, image_data.data_len).to_vec()
-        };
-        unsafe {
-            oxide_media_free_image_data(image_data.data_ptr, image_data.data_len);
-        }
-        Ok(Some(IosRawImageData {
-            width: image_data.width,
-            height: image_data.height,
-            row_bytes: image_data.row_bytes,
-            bgra,
-        }))
-    }
-}
-
-impl Default for IosMediaLibraryManager {
-    fn default() -> Self {
-        Self {}
+        // The iOS native bridge currently exposes only the full-image RGBA loader.
+        // Reuse it here so the optional display-image path does not depend on a
+        // missing cached-image symbol.
+        self.load_owned_image_data(
+            id,
+            true,
+            "media display image rgba request failed",
+            "media image cached rgba data",
+            |identifier_ptr, identifier_len, image_data| unsafe {
+                oxide_media_load_full_image_rgba(identifier_ptr, identifier_len, image_data)
+            },
+        )
+        .map(|image| image.map(OwnedImageData::into_raw_image_data))
     }
 }
 
@@ -3035,6 +3022,12 @@ mod tests {
     }
 
     #[test]
+    fn camera_capture_without_audio_subscribers_uses_preview_only_mode() {
+        assert_eq!(camera_capture_start_mode(false), CameraCaptureStartMode::PreviewOnly);
+        assert_eq!(camera_capture_start_mode(true), CameraCaptureStartMode::Default);
+    }
+
+    #[test]
     fn location_update_trampoline_caches_last_and_history() {
         let _guard = LOCATION_TEST_MUTEX.lock().unwrap();
         reset_location_state_for_tests();
@@ -3112,5 +3105,32 @@ mod tests {
         let events = events.lock().unwrap().clone();
         assert!(events.iter().any(|event| matches!(event, LocationEvent::EnteredRegion(_))));
         assert!(events.iter().any(|event| matches!(event, LocationEvent::ExitedRegion(_))));
+    }
+
+    #[test]
+    fn location_error_trampoline_emits_error_events() {
+        let _guard = LOCATION_TEST_MUTEX.lock().unwrap();
+        reset_location_state_for_tests();
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service = IosLocation;
+        let events_sink = events.clone();
+        service.subscribe(Box::new(move |event| {
+            events_sink.lock().unwrap().push(event);
+        }));
+
+        let msg = b"gps offline";
+        unsafe {
+            oxide_location_error_trampoline(msg.as_ptr(), msg.len());
+        }
+
+        let events = events.lock().unwrap().clone();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            LocationEvent::Error(PlatformError::Unknown(message)) => {
+                assert_eq!(message, "gps offline");
+            }
+            other => panic!("expected location error event, got {other:?}"),
+        }
     }
 }

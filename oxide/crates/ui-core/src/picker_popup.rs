@@ -27,11 +27,7 @@ impl PanelPopupState {
     }
 
     pub fn toggle(&mut self) {
-        if self.open {
-            self.close();
-        } else {
-            self.open();
-        }
+        self.open = !self.open;
     }
 
     #[must_use]

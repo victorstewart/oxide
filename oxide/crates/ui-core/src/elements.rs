@@ -16,6 +16,48 @@ use oxide_renderer_api as gfx;
 use oxide_text as text;
 use oxide_timing as timing;
 
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+fn watch_event_log_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        env_flag("OXIDE_PERF_WATCH_LOG_EVENTS")
+            || env_flag("OXIDE_PERF_WATCH_MODE")
+            || env_flag("OXIDE_RUST_LOG")
+    })
+}
+
+fn watch_text_fragment(text: &str) -> String {
+    const LIMIT: usize = 40;
+    let mut fragment = String::new();
+    let mut count = 0usize;
+    for ch in text.chars() {
+        if count == LIMIT {
+            fragment.push_str("...");
+            break;
+        }
+        fragment.push(ch);
+        count += 1;
+    }
+    fragment
+}
+
+fn watch_text_event(event: &str, font_id: usize, text: &str, detail: &str) {
+    if watch_event_log_enabled() {
+        std::eprintln!(
+            "oxide.watch: text event={} font_id={} text=\"{}\" {}",
+            event,
+            font_id,
+            watch_text_fragment(text),
+            detail
+        );
+    }
+}
+
 // ----- Text integration -----
 
 pub trait ImageUploader {
@@ -115,9 +157,27 @@ impl Label {
         b: &mut DrawListBuilder,
     ) {
         if txt.fonts.font(self.font_id).is_none() {
+            watch_text_event(
+                "label.skip_missing_font",
+                self.font_id,
+                &self.text,
+                &format!("rect={:.1}x{:.1} font_px={:.1}", rect.w, rect.h, self.font_px),
+            );
             return;
         }
         let mut handle = txt.ensure_gpu(up);
+        watch_text_event(
+            "label.begin",
+            self.font_id,
+            &self.text,
+            &format!(
+                "rect={:.1}x{:.1} font_px={:.1} atlas_handle={}",
+                rect.w,
+                rect.h,
+                self.font_px,
+                txt.atlas_handle.is_some()
+            ),
+        );
 
         let scale = if device_scale > 0.0 { device_scale } else { 1.0 };
         let ox = (rect.x * scale).round() / scale;
@@ -156,11 +216,26 @@ impl Label {
                 lines.push(cur.trim_end().to_string());
             }
         }
+        watch_text_event(
+            "label.lines",
+            self.font_id,
+            &self.text,
+            &format!("count={} wrap={}", lines.len(), self.wrap),
+        );
 
         for line in &lines {
             let Some(font) = txt.fonts.font(self.font_id) else { continue };
-            let Ok(shape) = txt.shaper.shape(font, self.font_id, line, self.font_px) else {
-                continue;
+            let shape = match txt.shaper.shape(font, self.font_id, line, self.font_px) {
+                Ok(shape) => shape,
+                Err(err) => {
+                    watch_text_event(
+                        "label.shape_error",
+                        self.font_id,
+                        line,
+                        &format!("err={err}"),
+                    );
+                    continue;
+                }
             };
             // Measure width for alignment via public API
             let width = shape.width();
@@ -180,6 +255,17 @@ impl Label {
                 ox + dx,
                 oy,
                 scale,
+            );
+            watch_text_event(
+                "label.glyph_run",
+                self.font_id,
+                line,
+                &format!(
+                    "width={width:.1} verts={} indices={} atlas_handle={}",
+                    run.vb.len,
+                    run.ib.len,
+                    txt.atlas_handle.is_some()
+                ),
             );
             b.glyph_run(run);
             oy += line_h;

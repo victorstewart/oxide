@@ -1,4 +1,5 @@
 import AVFoundation
+import Darwin
 import Foundation
 import ImageIO
 import Metal
@@ -20,6 +21,11 @@ let perfLaunchScenarioEnv = "OXIDE_PERF_LAUNCH_SCENARIO"
 let perfLaunchRouteEnv = "OXIDE_PERF_LAUNCH_ROUTE"
 let perfLaunchStyleEnv = "OXIDE_PERF_LAUNCH_STYLE"
 let perfTraceHandshakeEnv = "OXIDE_PERF_TRACE_HANDSHAKE"
+let perfTraceAutostartEnv = "OXIDE_PERF_TRACE_AUTOSTART"
+let perfWatchModeEnv = "OXIDE_PERF_WATCH_MODE"
+let perfFrameCaptureEnv = "OXIDE_PERF_FRAME_CAPTURE"
+let perfFrameCaptureEveryEnv = "OXIDE_PERF_FRAME_CAPTURE_EVERY"
+let perfFrameCaptureMaxEnv = "OXIDE_PERF_FRAME_CAPTURE_MAX"
 let perfOxideRunnerEnv = "OXIDE_PERF_RUNNER"
 let perfOxideRunnerSmokeEnv = "OXIDE_PERF_RUNNER_SMOKE"
 let perfRefreshModeEnv = "OXIDE_PERF_REFRESH_MODE"
@@ -36,6 +42,7 @@ let perfCameraFrameDrivenSchedulingEnv = "OXIDE_PERF_CAMERA_FRAME_DRIVEN_SCHEDUL
 let perfCameraPrebridgeDropEnv = "OXIDE_PERF_CAMERA_PREBRIDGE_DROP"
 let perfCameraRealAppHostEnv = "OXIDE_PERF_CAMERA_REAL_APP_HOST"
 let perfCameraRealAppHybridVisiblePreviewEnv = "OXIDE_PERF_CAMERA_REAL_APP_HYBRID_VISIBLE_PREVIEW"
+let perfDisplayLabelEnv = "OXIDE_PERF_DISPLAY_LABEL"
 let perfUIKitLaunchArg = "-oxide-perf-uikit-launch"
 let perfLaunchScenarioArg = "-oxide-perf-launch-scenario"
 let perfLaunchRouteArg = "-oxide-perf-launch-route"
@@ -43,6 +50,7 @@ let perfLaunchStyleArg = "-oxide-perf-launch-style"
 let readyNotificationName = "com.oxide.perf.ready"
 let startNotificationName = "com.oxide.perf.start"
 let completeNotificationName = "com.oxide.perf.complete"
+let failedNotificationName = "com.oxide.perf.failed"
 let oxidePerfReportBeginLine = "OXIDE_PERF_REPORT_BEGIN"
 let oxidePerfReportChunkPrefix = "OXIDE_PERF_REPORT_CHUNK "
 let oxidePerfReportEndLine = "OXIDE_PERF_REPORT_END"
@@ -54,6 +62,7 @@ let oxideTickDebugSummaryPrefix = "OXIDE_TICK_DEBUG_SUMMARY "
 let oxideTickRingPrefix = "OXIDE_TICK_RING "
 let oxideAppHostDebugSummaryPrefix = "OXIDE_APP_HOST_DEBUG_SUMMARY "
 let oxideBenchmarkMetadataPrefix = "OXIDE_BENCHMARK_METADATA "
+let oxideFrameCapturePrefix = "OXIDE_FRAME_CAPTURE "
 
 private let benchmarkCameraTargetWidth: Int32 = 1280
 private let benchmarkCameraTargetHeight: Int32 = 720
@@ -326,6 +335,52 @@ func resolvePerfMeasureIterations(
     )
 }
 
+func resolveAdaptivePerfMeasureIterations(
+    testName: String,
+    benchmarkIterations: Int,
+    defaultValue: Int,
+    environment: [String: String] = ProcessInfo.processInfo.environment
+) -> Int
+{
+    let lowercased = testName.lowercased()
+    let adaptiveDefault: Int
+    if lowercased.contains("camera")
+    {
+        adaptiveDefault = 3
+    }
+    else if lowercased.contains("scroll")
+        || lowercased.contains("grid")
+        || lowercased.contains("feed")
+        || lowercased.contains("chat")
+        || lowercased.contains("animation")
+        || lowercased.contains("transition")
+        || lowercased.contains("stagger")
+        || lowercased.contains("stress")
+        || lowercased.contains("roundtrip")
+        || lowercased.contains("loop")
+        || lowercased.contains("autoscroll")
+        || lowercased.contains("idle")
+    {
+        adaptiveDefault = 4
+    }
+    else if benchmarkIterations >= 96
+    {
+        adaptiveDefault = 4
+    }
+    else if benchmarkIterations >= 64
+    {
+        adaptiveDefault = 5
+    }
+    else
+    {
+        adaptiveDefault = 6
+    }
+    return resolvePerfMeasureIterations(
+        defaultValue: min(defaultValue, adaptiveDefault),
+        environment: environment
+    )
+}
+
 func resolvePerfBenchmarkIterations(
     defaultValue: Int,
     minimum: Int = 12,
@@ -341,7 +396,7 @@ func resolvePerfBenchmarkIterations(
 }
 
 func resolvePerfTraceSettleSeconds(
-    defaultMilliseconds: Int = 1000,
+    defaultMilliseconds: Int = 250,
     minimumMilliseconds: Int = 0,
     environment: [String: String] = ProcessInfo.processInfo.environment
 ) -> TimeInterval
@@ -458,7 +513,23 @@ func configureDirectPreviewMetalLayer(
 private func recordBenchmarkBuildFailure(_ message: String)
 {
     lastBenchmarkBuildFailure = message
-    emitConsoleLine("OXIDE_BENCHMARK_BUILD_FAIL \(message)")
+    let line = "OXIDE_BENCHMARK_BUILD_FAIL \(message)"
+    NSLog("[OxidePerf] %@", line)
+    emitConsoleLine(line)
+    postDarwinNotification(failedNotificationName)
+}
+
+@MainActor
+private func emitPerfTraceDebugStage(_ stage: String)
+{
+    guard ProcessInfo.processInfo.environment[parkedCaseEnv]?.isEmpty == false ||
+          ProcessInfo.processInfo.environment[perfOxideRunnerEnv] == "1" else
+    {
+        return
+    }
+    let line = "OXIDE_STAGE \(stage)"
+    NSLog("[OxidePerf] %@", line)
+    emitConsoleLine(line)
 }
 
 @MainActor
@@ -484,6 +555,10 @@ var perfConsoleLineEmitterOverride: ((String) -> Void)?
 
 func emitConsoleLine(_ line: String)
 {
+    if ProcessInfo.processInfo.environment[perfTraceAutostartEnv] == "1"
+    {
+        NSLog("[OxidePerf] %@", line)
+    }
     if let emitter = perfConsoleLineEmitterOverride
     {
         emitter(line)
@@ -516,6 +591,69 @@ func emitBenchmarkMetadataLine(
     emitConsoleLine("\(oxideBenchmarkMetadataPrefix)\(json)")
 }
 
+func perfDisplayLabelText(forBenchmarkNamed testName: String) -> String
+{
+    if testName == "oxide-perf-runner"
+    {
+        return "OXIDE  oxide-perf-runner"
+    }
+    if testName.starts(with: "testOxide")
+    {
+        return "OXIDE  \(testName)"
+    }
+    if testName.starts(with: "testOptimized")
+    {
+        return "UIKIT OPT  \(testName)"
+    }
+    return "UIKIT  \(testName)"
+}
+
+func resolvePerfDisplayLabel(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+) -> String?
+{
+    if let explicit = environment[perfDisplayLabelEnv]?
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+       !explicit.isEmpty
+    {
+        return explicit
+    }
+    if let caseName = environment[parkedCaseEnv]?
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+       !caseName.isEmpty
+    {
+        return perfDisplayLabelText(forBenchmarkNamed: caseName)
+    }
+    if environment[perfOxideRunnerEnv] == "1"
+    {
+        return perfDisplayLabelText(forBenchmarkNamed: "oxide-perf-runner")
+    }
+    if let launch = resolveUIKitLaunchScenario(environment: environment)
+    {
+        let prefix = launch.style == .optimized ? "UIKIT OPT" : "UIKIT"
+        return "\(prefix)  \(launch.scenario.rawValue)"
+    }
+    return nil
+}
+
+func perfWatchModeEnabled(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+) -> Bool
+{
+    environment[perfWatchModeEnv] == "1"
+}
+
+func resolvePerfWatchStepDelaySeconds(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+) -> TimeInterval
+{
+    guard perfWatchModeEnabled(environment: environment) else
+    {
+        return 0.0
+    }
+    return 0.18
+}
+
 func postDarwinNotification(_ name: String)
 {
     CFNotificationCenterPostNotification(
@@ -533,7 +671,11 @@ func collectOxidePerfRunnerJSON(smoke: Bool) -> String?
     oxideHostClearPerfReportJSON()
     guard oxideHostRunPerfSuite(smoke ? 1 : 0) == 0 else
     {
-        recordBenchmarkBuildFailure("failed - oxide perf suite execution returned non-zero")
+        let detail = takeOxidePerfRunnerError().map
+        {
+            "failed - oxide perf suite execution returned non-zero: \($0)"
+        } ?? "failed - oxide perf suite execution returned non-zero"
+        recordBenchmarkBuildFailure(detail)
         return nil
     }
     let needed = oxideHostPerfReportJSONLen()
@@ -563,6 +705,27 @@ func collectOxidePerfRunnerJSON(smoke: Bool) -> String?
         return nil
     }
     return json
+}
+
+func takeOxidePerfRunnerError() -> String?
+{
+    let needed = oxideHostPerfReportErrorLen()
+    guard needed > 1 else
+    {
+        return nil
+    }
+    let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: needed)
+    defer
+    {
+        buffer.deallocate()
+    }
+    let copied = oxideHostCopyPerfReportError(buffer, needed)
+    guard copied == needed else
+    {
+        return nil
+    }
+    let data = Data(bytes: buffer, count: needed - 1)
+    return String(data: data, encoding: .utf8)
 }
 
 func emitOxidePerfRunnerJSON(_ json: String)
@@ -626,6 +789,25 @@ private func oxideHostAppShutdown()
 @_silgen_name("oxide_host_set_benchmark_mode")
 private func oxideHostSetBenchmarkMode(_ on: UInt8) -> Int32
 
+@_silgen_name("oxide_host_prepare_onscreen_benchmark")
+private func oxideHostPrepareOnscreenBenchmark(
+    _ namePtr: UnsafePointer<UInt8>?,
+    _ nameLen: Int
+) -> Int32
+
+@_silgen_name("oxide_host_step_onscreen_benchmark")
+private func oxideHostStepOnscreenBenchmark(
+    _ namePtr: UnsafePointer<UInt8>?,
+    _ nameLen: Int,
+    _ step: UInt32
+) -> Int32
+
+@_silgen_name("oxide_host_perf_workload_signpost_begin")
+private func oxideHostPerfWorkloadSignpostBegin() -> UInt64
+
+@_silgen_name("oxide_host_perf_workload_signpost_end")
+private func oxideHostPerfWorkloadSignpostEnd(_ signpostID: UInt64)
+
 @_silgen_name("oxide_host_scene_count")
 private func oxideHostSceneCount() -> UInt32
 
@@ -638,6 +820,12 @@ private func oxideHostSceneName(
 
 @_silgen_name("oxide_host_set_scene")
 private func oxideHostSetScene(_ index: UInt32) -> Int32
+
+@_silgen_name("oxide_host_set_overlay_visible")
+private func oxideHostSetOverlayVisible(_ on: UInt8) -> Int32
+
+@_silgen_name("oxide_host_set_reduce_motion")
+private func oxideHostSetReduceMotion(_ on: UInt8) -> Int32
 
 @_silgen_name("oxide_host_set_camera_options")
 private func oxideHostSetCameraOptions(
@@ -677,8 +865,26 @@ private func oxideHostCopyPerfReportJSON(
     _ outLen: Int
 ) -> Int
 
+@_silgen_name("oxide_host_perf_report_error_len")
+private func oxideHostPerfReportErrorLen() -> Int
+
+@_silgen_name("oxide_host_copy_perf_report_error")
+private func oxideHostCopyPerfReportError(
+    _ outPtr: UnsafeMutablePointer<UInt8>?,
+    _ outLen: Int
+) -> Int
+
 @_silgen_name("oxide_host_clear_perf_report_json")
 private func oxideHostClearPerfReportJSON()
+
+@_silgen_name("oxide_host_take_snapshot")
+private func oxideHostTakeSnapshot() -> Int32
+
+@_silgen_name("oxide_host_get_snapshot_status")
+private func oxideHostGetSnapshotStatus(
+    _ outPtr: UnsafeMutablePointer<CChar>?,
+    _ outLen: UInt32
+) -> UInt32
 
 private struct OxideHostStats
 {
@@ -817,7 +1023,7 @@ private struct OxideHostAppDebugPerf
     var hostReady: UInt8 = 0
 }
 
-private struct OxideStageMetricSummary: Codable
+struct OxideStageMetricSummary: Codable
 {
     let unit: String
     let min: Double
@@ -928,6 +1134,30 @@ private func perfNowMs() -> Double
     CACurrentMediaTime() * 1000.0
 }
 
+func summarizeSamples(
+    _ values: [Double],
+    unit: String
+) -> OxideStageMetricSummary?
+{
+    let filtered = values.filter { $0.isFinite }
+    guard !filtered.isEmpty else
+    {
+        return nil
+    }
+    let sorted = filtered.sorted()
+    let sum = sorted.reduce(0, +)
+    return OxideStageMetricSummary(
+        unit: unit,
+        min: sorted.first ?? 0,
+        max: sorted.last ?? 0,
+        mean: sum / Double(sorted.count),
+        median: oxideStagePercentile(sorted, percentile: 0.50),
+        p95: oxideStagePercentile(sorted, percentile: 0.95),
+        p99: oxideStagePercentile(sorted, percentile: 0.99),
+        samples: sorted.count
+    )
+}
+
 private func oxideStagePercentile(_ sortedValues: [Double], percentile: Double) -> Double
 {
     guard !sortedValues.isEmpty else
@@ -947,25 +1177,721 @@ private func oxideStagePercentile(_ sortedValues: [Double], percentile: Double) 
     return ((1 - weight) * sortedValues[lowerIndex]) + (weight * sortedValues[upperIndex])
 }
 
-private func summarizeStageSamples(_ values: [Double]) -> OxideStageMetricSummary?
+func summarizeStageSamples(_ values: [Double]) -> OxideStageMetricSummary?
 {
-    let filtered = values.filter { $0.isFinite }
-    guard !filtered.isEmpty else
+    summarizeSamples(values, unit: "ms")
+}
+
+func encodeOxideStageSummaryLine(
+    stages: [String: OxideStageMetricSummary]
+) -> String?
+{
+    guard let data = try? JSONEncoder().encode(OxideStageSummaryPayload(stages: stages)),
+          let json = String(data: data, encoding: .utf8)
+    else
     {
         return nil
     }
-    let sorted = filtered.sorted()
-    let sum = sorted.reduce(0, +)
-    return OxideStageMetricSummary(
-        unit: "ms",
-        min: sorted.first ?? 0,
-        max: sorted.last ?? 0,
-        mean: sum / Double(sorted.count),
-        median: oxideStagePercentile(sorted, percentile: 0.50),
-        p95: oxideStagePercentile(sorted, percentile: 0.95),
-        p99: oxideStagePercentile(sorted, percentile: 0.99),
-        samples: sorted.count
+    return "\(oxideStageSummaryPrefix)\(json)"
+}
+
+func encodeOxideMemorySummaryLine(
+    categories: [String: OxideStageMetricSummary]
+) -> String?
+{
+    guard let data = try? JSONEncoder().encode(OxideMemorySummaryPayload(categories: categories)),
+          let json = String(data: data, encoding: .utf8)
+    else
+    {
+        return nil
+    }
+    return "\(oxideMemorySummaryPrefix)\(json)"
+}
+
+private func currentResidentMemoryBytes() -> UInt64?
+{
+    var info = mach_task_basic_info()
+    var count =
+        mach_msg_type_number_t(MemoryLayout<mach_task_basic_info_data_t>.size / MemoryLayout<natural_t>.size)
+    let result = withUnsafeMutablePointer(to: &info)
+    {
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count))
+        {
+            task_info(
+                mach_task_self_,
+                task_flavor_t(MACH_TASK_BASIC_INFO),
+                $0,
+                &count
+            )
+        }
+    }
+    guard result == KERN_SUCCESS else
+    {
+        return nil
+    }
+    return UInt64(info.resident_size)
+}
+
+struct BenchVisibleOutputSignature
+{
+    let meanLuma: Double
+    let minLuma: UInt8
+    let maxLuma: UInt8
+    let darkFraction: Double
+    let brightFraction: Double
+    let distinctBucketCount: Int
+    let rollingHash: UInt64
+}
+
+private struct PerfFrameCaptureConfig
+{
+    let directoryURL: URL
+    let captureEvery: Int
+    let maxFrames: Int
+}
+
+private func captureViewHierarchyImage(
+    _ view: UIView,
+    cropRect: CGRect? = nil
+) -> UIImage?
+{
+    let bounds = view.bounds.integral
+    guard bounds.width > 0, bounds.height > 0 else
+    {
+        return nil
+    }
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1.0
+    format.opaque = true
+    let renderer = UIGraphicsImageRenderer(size: bounds.size, format: format)
+    let image = renderer.image
+    {
+        context in
+        if !view.drawHierarchy(in: bounds, afterScreenUpdates: true)
+        {
+            view.layer.render(in: context.cgContext)
+        }
+    }
+    guard let cropRect else
+    {
+        return image
+    }
+    let cropped = cropRect.integral.intersection(bounds)
+    guard cropped.width > 0,
+          cropped.height > 0,
+          let cgImage = image.cgImage?.cropping(to: cropped)
+    else
+    {
+        return image
+    }
+    return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
+}
+
+private func parsePositivePerfInt(
+    _ name: String,
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    defaultValue: Int
+) -> Int
+{
+    guard let rawValue = environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines),
+          let parsed = Int(rawValue),
+          parsed > 0
+    else
+    {
+        return defaultValue
+    }
+    return parsed
+}
+
+private func perfFrameCaptureEnabled(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+) -> Bool
+{
+    environment[perfFrameCaptureEnv] == "1" || perfWatchModeEnabled(environment: environment)
+}
+
+private func sanitizedPerfFrameCaptureComponent(_ text: String) -> String
+{
+    let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
+    let value = text.unicodeScalars.map
+    {
+        scalar in
+        allowed.contains(scalar) ? String(scalar) : "_"
+    }.joined()
+    let trimmed = value.trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+    return trimmed.isEmpty ? "case" : trimmed
+}
+
+private func perfFrameCaptureDirectoryURL(
+    testName: String,
+    environment: [String: String] = ProcessInfo.processInfo.environment
+) -> URL?
+{
+    guard perfFrameCaptureEnabled(environment: environment),
+          let cachesURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+    else
+    {
+        return nil
+    }
+    return cachesURL
+        .appendingPathComponent("oxide-watch-captures", isDirectory: true)
+        .appendingPathComponent(
+            sanitizedPerfFrameCaptureComponent(testName),
+            isDirectory: true
+        )
+}
+
+private func preparePerfFrameCaptureDirectory(
+    _ directoryURL: URL
+) throws
+{
+    let fileManager = FileManager.default
+    if fileManager.fileExists(atPath: directoryURL.path)
+    {
+        try fileManager.removeItem(at: directoryURL)
+    }
+    try fileManager.createDirectory(
+        at: directoryURL,
+        withIntermediateDirectories: true
     )
+}
+
+private func perfFrameCaptureConfig(
+    testName: String,
+    environment: [String: String] = ProcessInfo.processInfo.environment
+) -> PerfFrameCaptureConfig?
+{
+    guard let directoryURL = perfFrameCaptureDirectoryURL(
+        testName: testName,
+        environment: environment
+    )
+    else
+    {
+        return nil
+    }
+    return PerfFrameCaptureConfig(
+        directoryURL: directoryURL,
+        captureEvery: parsePositivePerfInt(
+            perfFrameCaptureEveryEnv,
+            environment: environment,
+            defaultValue: 1
+        ),
+        maxFrames: parsePositivePerfInt(
+            perfFrameCaptureMaxEnv,
+            environment: environment,
+            defaultValue: 12
+        )
+    )
+}
+
+@MainActor
+private final class PerfFrameCaptureSession
+{
+    private let testName: String
+    private let imageProvider: () -> UIImage?
+    private let directoryURL: URL
+    private let captureEvery: Int
+    private let maxFrames: Int
+    private var captureCount = 0
+
+    init?(
+        benchmark: OxideUIKitBenchmark,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    )
+    {
+        guard let imageProvider = benchmark.captureFrameImage,
+              let config = perfFrameCaptureConfig(
+                    testName: benchmark.testName,
+                    environment: environment
+              )
+        else
+        {
+            return nil
+        }
+        do
+        {
+            try preparePerfFrameCaptureDirectory(config.directoryURL)
+        }
+        catch
+        {
+            recordBenchmarkBuildFailure(
+                "failed - \(benchmark.testName) frame capture could not prepare " +
+                "\(config.directoryURL.path): \(error.localizedDescription)"
+            )
+            return nil
+        }
+        self.testName = benchmark.testName
+        self.imageProvider = imageProvider
+        self.directoryURL = config.directoryURL
+        self.captureEvery = config.captureEvery
+        self.maxFrames = config.maxFrames
+    }
+
+    func capturePreparedFrame()
+    {
+        capture(label: "prepared")
+    }
+
+    func captureStep(stepIndex: Int)
+    {
+        guard stepIndex >= 0,
+              captureEvery == 1 || stepIndex % captureEvery == 0
+        else
+        {
+            return
+        }
+        capture(label: String(format: "step-%04d", stepIndex))
+    }
+
+    private func capture(label: String)
+    {
+        guard captureCount < maxFrames else
+        {
+            return
+        }
+        guard let image = imageProvider() else
+        {
+            recordBenchmarkBuildFailure(
+                "failed - \(testName) frame capture could not snapshot `\(label)`"
+            )
+            return
+        }
+        guard let pngData = image.pngData() else
+        {
+            recordBenchmarkBuildFailure(
+                "failed - \(testName) frame capture could not encode `\(label)` as PNG"
+            )
+            return
+        }
+        let filename = String(format: "%04d-%@.png", captureCount, label)
+        let fileURL = directoryURL.appendingPathComponent(filename, isDirectory: false)
+        do
+        {
+            try pngData.write(to: fileURL, options: .atomic)
+        }
+        catch
+        {
+            recordBenchmarkBuildFailure(
+                "failed - \(testName) frame capture could not write \(fileURL.path): " +
+                "\(error.localizedDescription)"
+            )
+            return
+        }
+        emitConsoleLine(
+            "\(oxideFrameCapturePrefix)test=\(testName) file=\(filename)"
+        )
+        captureCount += 1
+    }
+}
+
+@MainActor
+private final class VisibleOutputValidationEvidence
+{
+    var meaningfulCapturedFrameSignature: BenchVisibleOutputSignature?
+}
+
+func visibleOutputSignature(from image: UIImage) -> BenchVisibleOutputSignature?
+{
+    guard let cgImage = image.cgImage else
+    {
+        return nil
+    }
+    let sampleSize = 24
+    let bytesPerRow = sampleSize * 4
+    var pixels = [UInt8](repeating: 0, count: sampleSize * sampleSize * 4)
+    guard let context = CGContext(
+        data: &pixels,
+        width: sampleSize,
+        height: sampleSize,
+        bitsPerComponent: 8,
+        bytesPerRow: bytesPerRow,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    )
+    else
+    {
+        return nil
+    }
+    context.interpolationQuality = .low
+    context.draw(cgImage, in: CGRect(x: 0, y: 0, width: sampleSize, height: sampleSize))
+
+    var minLuma = UInt8.max
+    var maxLuma = UInt8.min
+    var lumaSum = 0.0
+    var darkSamples = 0
+    var brightSamples = 0
+    var bucketMask: UInt32 = 0
+    var rollingHash: UInt64 = 1469598103934665603
+    let sampleCount = sampleSize * sampleSize
+    for index in stride(from: 0, to: pixels.count, by: 4)
+    {
+        let red = Int(pixels[index])
+        let green = Int(pixels[index + 1])
+        let blue = Int(pixels[index + 2])
+        let luma = UInt8((299 * red + 587 * green + 114 * blue) / 1000)
+        minLuma = min(minLuma, luma)
+        maxLuma = max(maxLuma, luma)
+        lumaSum += Double(luma)
+        if luma < 12
+        {
+            darkSamples += 1
+        }
+        if luma > 243
+        {
+            brightSamples += 1
+        }
+        bucketMask |= 1 << UInt32(min(Int(luma) / 32, 7))
+        rollingHash ^= UInt64(luma)
+        rollingHash &*= 1099511628211
+    }
+
+    return BenchVisibleOutputSignature(
+        meanLuma: lumaSum / Double(sampleCount),
+        minLuma: minLuma,
+        maxLuma: maxLuma,
+        darkFraction: Double(darkSamples) / Double(sampleCount),
+        brightFraction: Double(brightSamples) / Double(sampleCount),
+        distinctBucketCount: bucketMask.nonzeroBitCount,
+        rollingHash: rollingHash
+    )
+}
+
+func visibleOutputLooksMeaningful(_ signature: BenchVisibleOutputSignature) -> Bool
+{
+    let dynamicRange = Int(signature.maxLuma) - Int(signature.minLuma)
+    if signature.darkFraction > 0.98 &&
+       signature.meanLuma < 10.0 &&
+       dynamicRange < 8
+    {
+        return false
+    }
+    if signature.brightFraction > 0.98 &&
+       signature.meanLuma > 245.0 &&
+       dynamicRange < 8
+    {
+        return false
+    }
+    if dynamicRange < 10 && signature.distinctBucketCount < 3
+    {
+        return false
+    }
+    return true
+}
+
+private func formatVisibleOutputSignature(_ signature: BenchVisibleOutputSignature) -> String
+{
+    String(
+        format: "mean=%.1f min=%u max=%u dark=%.3f bright=%.3f buckets=%d hash=%016llx",
+        signature.meanLuma,
+        signature.minLuma,
+        signature.maxLuma,
+        signature.darkFraction,
+        signature.brightFraction,
+        signature.distinctBucketCount,
+        signature.rollingHash
+    )
+}
+
+@MainActor
+private func oxideSnapshotStatusString(maxBytes: Int = 1024) -> String
+{
+    var buffer = [CChar](repeating: 0, count: max(maxBytes, 2))
+    _ = oxideHostGetSnapshotStatus(&buffer, UInt32(buffer.count))
+    return String(cString: buffer)
+}
+
+@MainActor
+private func oxideSnapshotPath(from status: String) -> String?
+{
+    guard let range = status.range(of: " to ", options: .backwards) else
+    {
+        return nil
+    }
+    let path = String(status[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    return path.isEmpty ? nil : path
+}
+
+@MainActor
+private func captureOxideRendererSnapshotImage(testName: String) -> UIImage?
+{
+    let rc = oxideHostTakeSnapshot()
+    let status = oxideSnapshotStatusString()
+    guard rc == 0 else
+    {
+        recordBenchmarkBuildFailure(
+            "failed - \(testName) renderer snapshot returned \(rc) (\(status))"
+        )
+        return nil
+    }
+    guard let path = oxideSnapshotPath(from: status),
+          let image = UIImage(contentsOfFile: path)
+    else
+    {
+        recordBenchmarkBuildFailure(
+            "failed - \(testName) renderer snapshot status did not include a readable file (\(status))"
+        )
+        return nil
+    }
+    try? FileManager.default.removeItem(atPath: path)
+    return image
+}
+
+@MainActor
+private func snapshotOxideHostStats() -> OxideHostStats?
+{
+    var stats = OxideHostStats()
+    return oxideHostAppStats(&stats) == 0 ? stats : nil
+}
+
+@MainActor
+private func captureOxideOffscreenValidationSignature(
+    testName: String,
+    host: PerfSurfaceHost
+) -> BenchVisibleOutputSignature?
+{
+    guard let targetView = host.containerView.subviews.last else
+    {
+        recordBenchmarkBuildFailure(
+            "failed - \(testName) could not find the mounted Oxide benchmark view for validation"
+        )
+        return nil
+    }
+
+    let width: UInt32
+    let height: UInt32
+    let scale: Float
+    if let metalLayer = targetView.layer as? CAMetalLayer
+    {
+        width = UInt32(max(Int(metalLayer.drawableSize.width.rounded()), 1))
+        height = UInt32(max(Int(metalLayer.drawableSize.height.rounded()), 1))
+        scale = Float(max(metalLayer.contentsScale, 1.0))
+    }
+    else
+    {
+        let bounds = targetView.bounds.integral
+        let resolvedScale = max(targetView.window?.screen.nativeScale ?? targetView.contentScaleFactor, 1.0)
+        width = UInt32(max(Int((bounds.width * resolvedScale).rounded()), 1))
+        height = UInt32(max(Int((bounds.height * resolvedScale).rounded()), 1))
+        scale = Float(resolvedScale)
+    }
+
+    let rc = oxideHostAppFrame(width, height, scale)
+    guard rc == 0 else
+    {
+        recordBenchmarkBuildFailure(
+            "failed - \(testName) offscreen validation frame returned \(rc)"
+        )
+        return nil
+    }
+
+    return captureOxideRendererSnapshotImage(testName: testName)
+        .flatMap(visibleOutputSignature(from:))
+}
+
+@MainActor
+private func snapshotOxideAppDebugPerf() -> OxideHostAppDebugPerf?
+{
+    var debugPerf = OxideHostAppDebugPerf()
+    return oxideHostAppDebugPerf(&debugPerf) == 0 ? debugPerf : nil
+}
+
+private func formatOxideAppDebugPerf(_ debugPerf: OxideHostAppDebugPerf) -> String
+{
+    "drawables=\(debugPerf.drawablesAcquired) commits=\(debugPerf.commandBuffersCommitted) " +
+    "ticks=\(debugPerf.onTickCalls) hostReady=\(debugPerf.hostReady) " +
+    "shouldRender=\(debugPerf.shouldRender) perfHost=\(debugPerf.runningPerfBenchmarkHost)"
+}
+
+private func formatOxideHostStatsForValidation(_ stats: OxideHostStats) -> String
+{
+    "draws=\(stats.draws) anims=\(stats.anims) fps=\(String(format: "%.2f", stats.fps)) " +
+    "damage=\(String(format: "%.3f", stats.damagePct)) pendingDrawables=\(stats.rendererPendingPresentDrawables) " +
+    "pendingTextures=\(stats.rendererPendingPresentTextures)"
+}
+
+private enum BenchmarkVisibleOutputValidationKind
+{
+    case hostHierarchy
+    case oxideRenderer
+    case oxideCameraCustom
+    case previewLayer
+}
+
+private func visibleOutputValidationKind(for testName: String) -> BenchmarkVisibleOutputValidationKind
+{
+    if testName.contains("PreviewLayer")
+    {
+        return .previewLayer
+    }
+    if testName.starts(with: "testCamera") &&
+       !testName.contains("AVFoundationPreviewLayer") &&
+       !testName.contains("HybridPreviewLayer")
+    {
+        return .oxideCameraCustom
+    }
+    if testName.starts(with: "testOxide")
+    {
+        return .oxideRenderer
+    }
+    return .hostHierarchy
+}
+
+private func firstPreviewView(in view: UIView) -> AVFoundationPreviewView?
+{
+    if let previewView = view as? AVFoundationPreviewView
+    {
+        return previewView
+    }
+    for subview in view.subviews
+    {
+        if let previewView = firstPreviewView(in: subview)
+        {
+            return previewView
+        }
+    }
+    return nil
+}
+
+private func formatPreviewLayerValidationState(
+    previewView: AVFoundationPreviewView,
+    snapshotSignature: BenchVisibleOutputSignature?
+) -> String
+{
+    let previewLayer = previewView.previewLayer
+    let previewing: Bool
+    if #available(iOS 13.0, *)
+    {
+        previewing = previewLayer.isPreviewing
+    }
+    else
+    {
+        previewing = previewLayer.session?.isRunning == true
+    }
+    let connectionEnabled = previewLayer.connection?.isEnabled ?? false
+    let sessionRunning = previewLayer.session?.isRunning ?? false
+    let bounds = previewLayer.bounds.integral
+    let snapshotDetail = snapshotSignature.map(formatVisibleOutputSignature) ?? "unavailable"
+    return
+        "previewing=\(previewing) sessionRunning=\(sessionRunning) " +
+        "connectionEnabled=\(connectionEnabled) bounds=\(Int(bounds.width))x\(Int(bounds.height)) " +
+        "snapshot=\(snapshotDetail)"
+}
+
+private final class PerfOverlayPassthroughWindow: UIWindow
+{
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool
+    {
+        false
+    }
+}
+
+@MainActor
+final class PerfVisibleTestOverlay
+{
+    private let window: UIWindow
+    private let label = UILabel()
+
+    init(referenceWindow: UIWindow, preferBottom: Bool = false)
+    {
+        if let scene = referenceWindow.windowScene
+        {
+            window = PerfOverlayPassthroughWindow(windowScene: scene)
+        }
+        else
+        {
+            window = PerfOverlayPassthroughWindow(frame: referenceWindow.frame)
+        }
+        window.windowLevel = .alert + 1
+        window.isUserInteractionEnabled = false
+        window.backgroundColor = .clear
+
+        let rootViewController = UIViewController()
+        rootViewController.view.backgroundColor = .clear
+        rootViewController.view.isUserInteractionEnabled = false
+
+        let banner = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterialDark))
+        banner.translatesAutoresizingMaskIntoConstraints = false
+        banner.layer.cornerRadius = 12
+        banner.layer.masksToBounds = true
+        banner.isUserInteractionEnabled = false
+
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = .monospacedSystemFont(ofSize: 14, weight: .semibold)
+        label.textColor = .white
+        label.numberOfLines = 2
+        label.textAlignment = .center
+        label.lineBreakMode = .byTruncatingMiddle
+
+        rootViewController.view.addSubview(banner)
+        banner.contentView.addSubview(label)
+        NSLayoutConstraint.activate(
+            [
+                banner.centerXAnchor.constraint(equalTo: rootViewController.view.centerXAnchor),
+                banner.leadingAnchor.constraint(
+                    greaterThanOrEqualTo: rootViewController.view.leadingAnchor,
+                    constant: 12
+                ),
+                banner.trailingAnchor.constraint(
+                    lessThanOrEqualTo: rootViewController.view.trailingAnchor,
+                    constant: -12
+                ),
+                label.leadingAnchor.constraint(equalTo: banner.contentView.leadingAnchor, constant: 12),
+                label.trailingAnchor.constraint(equalTo: banner.contentView.trailingAnchor, constant: -12),
+                label.topAnchor.constraint(equalTo: banner.contentView.topAnchor, constant: 8),
+                label.bottomAnchor.constraint(equalTo: banner.contentView.bottomAnchor, constant: -8),
+            ]
+        )
+        if preferBottom
+        {
+            banner.bottomAnchor.constraint(
+                equalTo: rootViewController.view.safeAreaLayoutGuide.bottomAnchor,
+                constant: -12
+            ).isActive = true
+        }
+        else
+        {
+            banner.topAnchor.constraint(
+                equalTo: rootViewController.view.safeAreaLayoutGuide.topAnchor,
+                constant: 8
+            ).isActive = true
+        }
+
+        window.rootViewController = rootViewController
+        window.isHidden = false
+        window.alpha = 0.999
+    }
+
+    func setText(_ text: String?)
+    {
+        label.text = text
+        window.isHidden = text == nil
+    }
+}
+
+@MainActor
+func runConsoleMeasuredBenchmarkPasses(
+    _ benchmark: OxideUIKitBenchmark
+) -> (workloadMs: [Double], residentBytes: [Double])
+{
+    let measureIterations = perfWatchModeEnabled()
+        ? 1
+        : max(benchmark.consoleMeasureIterations, 1)
+    var workloadMs: [Double] = []
+    var residentBytes: [Double] = []
+    workloadMs.reserveCapacity(measureIterations)
+    residentBytes.reserveCapacity(measureIterations)
+    for _ in 0..<measureIterations
+    {
+        let startMs = perfNowMs()
+        runMeasuredBenchmarkPass(benchmark)
+        workloadMs.append(max(perfNowMs() - startMs, 0.0))
+        if benchmark.emitGenericResidentMemorySummary,
+           let resident = currentResidentMemoryBytes()
+        {
+            residentBytes.append(Double(resident))
+        }
+    }
+    return (workloadMs, residentBytes)
 }
 
 private final class OxideCameraStageAccumulator
@@ -1219,6 +2145,20 @@ private func encodeAppHostDebugSummaryLine(
         return nil
     }
     return "\(oxideAppHostDebugSummaryPrefix)\(json)"
+}
+
+private func appendSummaryLines(
+    to lines: inout [String],
+    _ summaries: String?...
+)
+{
+    for summary in summaries
+    {
+        if let line = summary
+        {
+            lines.append(line)
+        }
+    }
 }
 
 private final class OxideCameraMemoryAccumulator
@@ -1605,9 +2545,9 @@ private final class OxideCameraTickRingAccumulator
 final class DarwinNotificationObserver
 {
     private let name: String
-    private let callback: () -> Void
+    private let callback: @MainActor () -> Void
 
-    init(name: String, callback: @escaping () -> Void)
+    init(name: String, callback: @escaping @MainActor () -> Void)
     {
         self.name = name
         self.callback = callback
@@ -1624,10 +2564,12 @@ final class DarwinNotificationObserver
                 let token = Unmanaged<DarwinNotificationObserver>
                     .fromOpaque(observer)
                     .takeUnretainedValue()
-                DispatchQueue.main.async
+                Task
                 {
+                    @MainActor in
                     token.callback()
                 }
+                CFRunLoopWakeUp(CFRunLoopGetMain())
             },
             name as CFString,
             nil,
@@ -1648,19 +2590,30 @@ final class DarwinNotificationObserver
 }
 
 @MainActor
-final class PerfSurfaceHost
+final class PerfSurfaceHost: NSObject
 {
     let rootViewController: UIViewController
     let containerView: UIView
     private var refreshUpdateLink: UIUpdateLink?
+    private var presentationDisplayLink: CADisplayLink?
+    private var presentationDisplayTick: UInt64 = 0
     private weak var installedWindow: UIWindow?
+    private var visibleTestOverlay: PerfVisibleTestOverlay?
 
     init(containerSize: CGSize = CGSize(width: 430, height: 932))
     {
-        self.rootViewController = UIViewController()
-        self.containerView = UIView(frame: CGRect(origin: .zero, size: containerSize))
-        self.containerView.backgroundColor = .white
-        self.rootViewController.view = containerView
+        let rootViewController = UIViewController()
+        let containerView = UIView(frame: CGRect(origin: .zero, size: containerSize))
+        containerView.backgroundColor = .white
+        rootViewController.view = containerView
+        self.rootViewController = rootViewController
+        self.containerView = containerView
+        super.init()
+    }
+
+    deinit
+    {
+        presentationDisplayLink?.invalidate()
     }
 
     @discardableResult
@@ -1683,6 +2636,12 @@ final class PerfSurfaceHost
     {
         installedWindow = window
         window.rootViewController = rootViewController
+        visibleTestOverlay = PerfVisibleTestOverlay(
+            referenceWindow: window,
+            preferBottom: perfWatchModeEnabled()
+        )
+        visibleTestOverlay?.setText(resolvePerfDisplayLabel())
+        ensurePresentationDisplayLink(for: window)
         if let windowScene = window.windowScene
         {
             refreshUpdateLink = makeUIKitRefreshUpdateLink(for: windowScene)
@@ -1715,6 +2674,41 @@ final class PerfSurfaceHost
         CATransaction.flush()
     }
 
+    func setVisibleTestLabel(_ text: String?)
+    {
+        visibleTestOverlay?.setText(text)
+    }
+
+    func captureVisibleImage() -> UIImage?
+    {
+        rootViewController.view.layoutIfNeeded()
+        containerView.layoutIfNeeded()
+        CATransaction.flush()
+        let snapshotView = installedWindow ?? containerView
+        return captureViewHierarchyImage(snapshotView)
+    }
+
+    func visibleOutputSignature() -> BenchVisibleOutputSignature?
+    {
+        let snapshotView = installedWindow ?? containerView
+        return captureViewHierarchyImage(snapshotView).flatMap(visibleOutputSignature(from:))
+    }
+
+    func visibleOutputSignature(of targetView: UIView?) -> BenchVisibleOutputSignature?
+    {
+        guard let targetView else
+        {
+            return visibleOutputSignature()
+        }
+        if let installedWindow
+        {
+            let rect = targetView.convert(targetView.bounds, to: installedWindow).integral
+            return captureViewHierarchyImage(installedWindow, cropRect: rect)
+                .flatMap(visibleOutputSignature(from:))
+        }
+        return captureViewHierarchyImage(targetView).flatMap(visibleOutputSignature(from:))
+    }
+
     func prepareForMetalFrameCapture()
     {
         guard let window = installedWindow else
@@ -1738,7 +2732,10 @@ final class PerfSurfaceHost
         }
     }
 
-    func commit(_ view: UIView)
+    func commit(
+        _ view: UIView,
+        awaitDisplayPresentation: Bool = false
+    )
     {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -1761,6 +2758,51 @@ final class PerfSurfaceHost
         withPerfSignpost("frame.present")
         {
             CATransaction.flush()
+            if awaitDisplayPresentation
+            {
+                awaitVisiblePresentation()
+            }
+        }
+    }
+
+    @objc
+    private func handlePresentationDisplayLink(_ displayLink: CADisplayLink)
+    {
+        presentationDisplayTick &+= 1
+    }
+
+    private func ensurePresentationDisplayLink(for window: UIWindow)
+    {
+        guard presentationDisplayLink == nil else
+        {
+            return
+        }
+        let displayLink = CADisplayLink(
+            target: self,
+            selector: #selector(handlePresentationDisplayLink(_:))
+        )
+        if #available(iOS 15.0, *)
+        {
+            let maximumFramesPerSecond = Float(max(window.screen.maximumFramesPerSecond, 60))
+            displayLink.preferredFrameRateRange = CAFrameRateRange(
+                minimum: min(60.0, maximumFramesPerSecond),
+                maximum: maximumFramesPerSecond,
+                preferred: maximumFramesPerSecond
+            )
+        }
+        displayLink.add(to: .main, forMode: .common)
+        presentationDisplayLink = displayLink
+    }
+
+    func awaitVisiblePresentation(timeout: TimeInterval = 0.1)
+    {
+        let startTick = presentationDisplayTick
+        let deadline = Date().addingTimeInterval(timeout)
+        while presentationDisplayTick == startTick && Date() < deadline
+        {
+            RunLoop.main.run(
+                until: min(deadline, Date().addingTimeInterval(1.0 / 240.0))
+            )
         }
     }
 
@@ -1779,6 +2821,7 @@ final class PerfSurfaceHost
             $0.activationState == .foregroundInactive
         } ?? scenes.first
     }
+
 }
 
 private enum OxideCameraRenderMode: Int32
@@ -1906,6 +2949,7 @@ private final class OxideCameraBenchmarkHarness
         currentMode = mode
         currentSource = source
         _ = oxideHostSetBenchmarkMode(1)
+        _ = oxideHostSetScene(cameraSceneIndex)
         host.mount(hostView, size: CGSize(width: 390, height: 844))
         host.prepareForMetalFrameCapture()
         guard initializeHost() else
@@ -1915,7 +2959,6 @@ private final class OxideCameraBenchmarkHarness
         }
         _ = oxideHostSetCameraRenderMode(mode.rawValue)
         _ = oxideHostSetCameraTextureSource(source.rawValue)
-        _ = oxideHostSetScene(cameraSceneIndex)
         _ = oxideHostSetCameraOptions(0, 0.0, 0, 0)
         let wantsLiveCamera = source == .live
         _ = oxideHostSetCameraRunningMode(wantsLiveCamera ? 1 : 0, wantsLiveCamera ? 1 : 0)
@@ -2645,6 +3688,259 @@ private final class OxideCameraBenchmarkHarness
 }
 
 @MainActor
+private final class OxideOnscreenBenchmarkHarness
+{
+    private let host: PerfSurfaceHost
+    private let benchmarkKey: String
+    private let benchmarkKeyBytes: [UInt8]
+    private let sceneIndex: UInt32
+    private let metalView: UIView
+    private let layer: CAMetalLayer
+
+    init?(host: PerfSurfaceHost, benchmarkKey: String)
+    {
+        guard let sceneName = Self.resolveSceneName(for: benchmarkKey),
+              let sceneIndex = Self.resolveSceneIndex(named: sceneName) else
+        {
+            recordBenchmarkBuildFailure(
+                "failed - on-screen Oxide benchmark could not resolve a host scene for \(benchmarkKey)"
+            )
+            return nil
+        }
+        guard let metalViewType = Self.resolveMetalViewType() else
+        {
+            recordBenchmarkBuildFailure("failed - on-screen Oxide benchmark could not resolve MetalView")
+            return nil
+        }
+        let metalView = metalViewType.init(frame: .zero)
+        guard let layer = metalView.layer as? CAMetalLayer else
+        {
+            recordBenchmarkBuildFailure("failed - on-screen Oxide benchmark MetalView did not expose CAMetalLayer")
+            return nil
+        }
+        self.host = host
+        self.benchmarkKey = benchmarkKey
+        self.benchmarkKeyBytes = Array(benchmarkKey.utf8)
+        self.sceneIndex = sceneIndex
+        self.metalView = metalView
+        self.layer = layer
+        configureDirectPreviewMetalLayer(view: metalView, layer: layer)
+    }
+
+    func installAndWarm(warmupFrames: Int = 4) -> Bool
+    {
+        emitPerfTraceDebugStage("onscreen.install.begin \(benchmarkKey)")
+        oxideHostAppShutdown()
+        _ = oxideHostSetBenchmarkMode(1)
+        _ = oxideHostSetScene(sceneIndex)
+        emitPerfTraceDebugStage("onscreen.install.mount \(benchmarkKey)")
+        host.mount(metalView, size: CGSize(width: 390, height: 844))
+        host.prepareForMetalFrameCapture()
+        emitPerfTraceDebugStage("onscreen.install.init \(benchmarkKey)")
+        guard initializeHost() else
+        {
+            recordBenchmarkBuildFailure("failed - on-screen Oxide benchmark host initialization returned non-zero")
+            return false
+        }
+        _ = oxideHostSetOverlayVisible(0)
+        _ = oxideHostSetReduceMotion(0)
+        emitPerfTraceDebugStage("onscreen.install.prepare \(benchmarkKey)")
+        guard prepareForMeasuredPass() else
+        {
+            return false
+        }
+        let warmupFrameCount = max(warmupFrames, 1)
+        for frame in 0..<warmupFrameCount
+        {
+            emitPerfTraceDebugStage(
+                "onscreen.install.warm \(benchmarkKey) frame=\(frame + 1)/\(warmupFrameCount)"
+            )
+            guard renderFrame() else
+            {
+                return false
+            }
+        }
+        emitPerfTraceDebugStage("onscreen.install.ready \(benchmarkKey)")
+        return true
+    }
+
+    func prepareForMeasuredPass() -> Bool
+    {
+        withBenchmarkKeyBytes
+        {
+            buffer,
+            count in
+            guard oxideHostPrepareOnscreenBenchmark(buffer.baseAddress, count) == 0 else
+            {
+                recordBenchmarkBuildFailure(
+                    "failed - on-screen Oxide benchmark prepare returned non-zero for \(benchmarkKey)"
+                )
+                return false
+            }
+            return true
+        }
+    }
+
+    func runStep(step: Int) -> Bool
+    {
+        let ok = withBenchmarkKeyBytes
+        {
+            buffer,
+            count in
+            oxideHostStepOnscreenBenchmark(
+                buffer.baseAddress,
+                count,
+                UInt32(step)
+            ) == 0
+        }
+        guard ok else
+        {
+            recordBenchmarkBuildFailure(
+                "failed - on-screen Oxide benchmark step returned non-zero for \(benchmarkKey)"
+            )
+            return false
+        }
+        return renderFrame()
+    }
+
+    func tearDown()
+    {
+        oxideHostAppShutdown()
+        host.reset()
+        CATransaction.flush()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+    }
+
+    private func renderFrame(
+        awaitVisiblePresentation: Bool = true
+    ) -> Bool
+    {
+        emitPerfTraceDebugStage("onscreen.frame.layout \(benchmarkKey)")
+        host.containerView.layoutIfNeeded()
+        emitPerfTraceDebugStage("onscreen.frame.drawable \(benchmarkKey)")
+        guard let drawable = layer.nextDrawable() else
+        {
+            recordBenchmarkBuildFailure("failed - on-screen Oxide benchmark could not acquire CAMetalLayer drawable")
+            return false
+        }
+        emitPerfTraceDebugStage("onscreen.frame.drawable.ok \(benchmarkKey)")
+        let drawablePtr = Unmanaged.passUnretained(drawable).toOpaque()
+        let (width, height, scale) = currentDrawableMetrics()
+        emitPerfTraceDebugStage("onscreen.frame.host \(benchmarkKey) \(width)x\(height)@\(scale)")
+        let result = withPerfSignpost("frame.present")
+        {
+            oxideHostAppFrameWithDrawable(width, height, scale, drawablePtr)
+        }
+        emitPerfTraceDebugStage("onscreen.frame.host.result \(benchmarkKey) \(result)")
+        guard result == 0 else
+        {
+            recordBenchmarkBuildFailure(
+                "failed - on-screen Oxide benchmark oxideHostAppFrameWithDrawable returned \(result)"
+            )
+            return false
+        }
+        if awaitVisiblePresentation
+        {
+            host.awaitVisiblePresentation()
+        }
+        return true
+    }
+
+    private func initializeHost() -> Bool
+    {
+        let (width, height, scale) = currentDrawableMetrics()
+        return oxideHostAppInit(width, height, scale) == 0
+    }
+
+    private func currentDrawableMetrics() -> (UInt32, UInt32, Float)
+    {
+        let drawableSize = layer.drawableSize
+        let width = UInt32(max(Int(drawableSize.width.rounded()), 1))
+        let height = UInt32(max(Int(drawableSize.height.rounded()), 1))
+        let scale = Float(max(layer.contentsScale, 1.0))
+        return (width, height, scale)
+    }
+
+    private func withBenchmarkKeyBytes<T>(
+        _ body: (UnsafeBufferPointer<UInt8>, Int) -> T
+    ) -> T
+    {
+        benchmarkKeyBytes.withUnsafeBufferPointer
+        {
+            buffer in
+            body(buffer, benchmarkKeyBytes.count)
+        }
+    }
+
+    private static func resolveMetalViewType() -> UIView.Type?
+    {
+        if let metalViewType = NSClassFromString("MetalView") as? UIView.Type
+        {
+            return metalViewType
+        }
+        if let executable = Bundle.main.object(forInfoDictionaryKey: "CFBundleExecutable") as? String,
+           let metalViewType = NSClassFromString("\(executable).MetalView") as? UIView.Type
+        {
+            return metalViewType
+        }
+        if let bundleName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String,
+           let metalViewType = NSClassFromString("\(bundleName).MetalView") as? UIView.Type
+        {
+            return metalViewType
+        }
+        return nil
+    }
+
+    private static func resolveSceneIndex(named target: String) -> UInt32?
+    {
+        let count = Int(oxideHostSceneCount())
+        for index in 0..<count
+        {
+            let needed = Int(oxideHostSceneName(UInt32(index), nil, 0))
+            guard needed > 0 else
+            {
+                continue
+            }
+            let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: needed)
+            defer
+            {
+                buffer.deallocate()
+            }
+            guard oxideHostSceneName(UInt32(index), buffer, UInt32(needed)) > 0 else
+            {
+                continue
+            }
+            if String(cString: buffer) == target
+            {
+                return UInt32(index)
+            }
+        }
+        return nil
+    }
+
+    private static func resolveSceneName(for benchmarkKey: String) -> String?
+    {
+        switch benchmarkKey
+        {
+        case "button_press_response", "spinner_spin":
+            return "Controls"
+        case "text_focus_response", "input_form_submit":
+            return "Input & Haptics"
+        case "collection_navigation":
+            return "Collection Stress"
+        case "image_zoom_pan", "zoom_image_gesture_cycle":
+            return "Zoom Image"
+        case "anim_timeline_bars":
+            return "Animations"
+        case "orchestration_transition_modal":
+            return "UI Orchestration"
+        default:
+            return nil
+        }
+    }
+}
+
+@MainActor
 private final class OxideRealAppCameraBenchmarkHarness
 {
     private let visibleTransport: OxideCameraVisiblePreviewTransport
@@ -2727,9 +4023,9 @@ private final class OxideRealAppCameraBenchmarkHarness
         currentMode = mode
         currentSource = source
         _ = oxideHostSetBenchmarkMode(1)
+        _ = oxideHostSetScene(cameraSceneIndex)
         _ = oxideHostSetCameraRenderMode(mode.rawValue)
         _ = oxideHostSetCameraTextureSource(source.rawValue)
-        _ = oxideHostSetScene(cameraSceneIndex)
         _ = oxideHostSetCameraOptions(0, 0.0, 0, 0)
         _ = oxideHostSetCameraRunningMode(1, 1)
         return waitForFrameAdvances(
@@ -3586,40 +4882,13 @@ private final class AVFoundationPreviewBenchmarkHarness
     }
 }
 
-enum OxideUIKitRefreshMode: String
-{
-    case deviceDefault = "device-default"
-    case capped60Hz = "60hz-capped"
-    case native = "native"
-}
-
-func resolveUIKitRefreshMode(
-    environment: [String: String] = ProcessInfo.processInfo.environment
-) -> OxideUIKitRefreshMode
-{
-    switch environment[perfRefreshModeEnv]?.lowercased()
-    {
-    case "60", "60hz", "60hz-capped":
-        return .capped60Hz
-    case "native":
-        return .native
-    default:
-        return .deviceDefault
-    }
-}
-
 func resolveCameraBenchmarkTargetFramesPerSecond(
     maximumFramesPerSecond: Int? = UIScreen.main.maximumFramesPerSecond,
     environment: [String: String] = ProcessInfo.processInfo.environment
 ) -> Int
 {
-    switch resolveUIKitRefreshMode(environment: environment)
-    {
-    case .capped60Hz:
-        return 60
-    case .deviceDefault, .native:
-        return max(maximumFramesPerSecond ?? 60, 60)
-    }
+    _ = environment
+    return max(maximumFramesPerSecond ?? 60, 60)
 }
 
 func resolveCameraBenchmarkOpportunityIntervalSeconds(
@@ -3659,61 +4928,64 @@ func makeUIKitRefreshUpdateLink(
     {
         return nil
     }
-    switch resolveUIKitRefreshMode(environment: environment)
+    if environment[perfRefreshModeEnv] == nil || environment[perfRefreshModeEnv] == "native"
     {
-    case .deviceDefault:
         return nil
-    case .capped60Hz:
-        let value: Float = 60.0
-        let updateLink = UIUpdateLink(windowScene: windowScene)
-        updateLink.preferredFrameRateRange = CAFrameRateRange(
-            minimum: value,
-            maximum: value,
-            preferred: value
-        )
-        updateLink.isEnabled = true
-        return updateLink
-    case .native:
-        let maximum = Float(max(windowScene.screen.maximumFramesPerSecond, 60))
-        let updateLink = UIUpdateLink(windowScene: windowScene)
-        updateLink.preferredFrameRateRange = CAFrameRateRange(
-            minimum: min(60.0, maximum),
-            maximum: maximum,
-            preferred: maximum
-        )
-        updateLink.isEnabled = true
-        return updateLink
     }
+    let maximum = Float(max(windowScene.screen.maximumFramesPerSecond, 60))
+    let updateLink = UIUpdateLink(windowScene: windowScene)
+    updateLink.preferredFrameRateRange = CAFrameRateRange(
+        minimum: min(60.0, maximum),
+        maximum: maximum,
+        preferred: maximum
+    )
+    updateLink.isEnabled = true
+    return updateLink
 }
 
 @MainActor
 struct OxideUIKitBenchmark
 {
-    let testName: String
-    let iterations: Int
-    let signpostNames: [String]
-    let prepareIteration: () -> Bool
-    let summaryLines: () -> [String]
-    let tearDown: () -> Void
-    let runStep: () -> Void
+   let testName: String
+   let iterations: Int
+   let signpostNames: [String]
+   let consoleMeasureIterations: Int
+   let emitGenericWorkloadSummary: Bool
+   let emitGenericResidentMemorySummary: Bool
+   let useHostWorkloadSignpost: Bool
+   let prepareIteration: () -> Bool
+   let summaryLines: () -> [String]
+   let tearDown: () -> Void
+   let runStep: () -> Void
+   let captureFrameImage: (() -> UIImage?)?
 
     init(
         testName: String,
         iterations: Int,
         signpostNames: [String] = [],
+        consoleMeasureIterations: Int = 1,
+        emitGenericWorkloadSummary: Bool = false,
+        emitGenericResidentMemorySummary: Bool = false,
+        useHostWorkloadSignpost: Bool = false,
         prepareIteration: @escaping () -> Bool = { true },
         summaryLines: @escaping () -> [String] = { [] },
         tearDown: @escaping () -> Void = {},
-        runStep: @escaping () -> Void
+        runStep: @escaping () -> Void,
+        captureFrameImage: (() -> UIImage?)? = nil
     )
     {
         self.testName = testName
         self.iterations = iterations
         self.signpostNames = signpostNames
+        self.consoleMeasureIterations = consoleMeasureIterations
+        self.emitGenericWorkloadSummary = emitGenericWorkloadSummary
+        self.emitGenericResidentMemorySummary = emitGenericResidentMemorySummary
+        self.useHostWorkloadSignpost = useHostWorkloadSignpost
         self.prepareIteration = prepareIteration
         self.summaryLines = summaryLines
         self.tearDown = tearDown
         self.runStep = runStep
+        self.captureFrameImage = captureFrameImage
     }
 }
 
@@ -3782,7 +5054,7 @@ private let avFoundationPreviewBenchmarkSignpostNames = [
 ]
 
 @MainActor
-func runPacedCameraPreviewWindow(
+func runPacedFrameOpportunityWindow(
     opportunities: Int,
     opportunityIntervalSeconds: TimeInterval,
     waitSignpostName: StaticString? = nil,
@@ -3820,20 +5092,299 @@ func runPacedCameraPreviewWindow(
 @MainActor
 func runMeasuredBenchmarkPass(_ benchmark: OxideUIKitBenchmark)
 {
+    let watchStepDelaySeconds = resolvePerfWatchStepDelaySeconds()
+    let watchModeEnabled = watchStepDelaySeconds > 0.0
+    let frameCaptureSession = PerfFrameCaptureSession(benchmark: benchmark)
     guard benchmark.prepareIteration() else
     {
         return
     }
+    frameCaptureSession?.capturePreparedFrame()
     autoreleasepool
     {
+        if benchmark.useHostWorkloadSignpost
+        {
+            let signpostID = oxideHostPerfWorkloadSignpostBegin()
+            for stepIndex in 0..<benchmark.iterations
+            {
+                benchmark.runStep()
+                frameCaptureSession?.captureStep(stepIndex: stepIndex)
+                if watchModeEnabled
+                {
+                    RunLoop.main.run(until: Date(timeIntervalSinceNow: watchStepDelaySeconds))
+                }
+            }
+            oxideHostPerfWorkloadSignpostEnd(signpostID)
+            return
+        }
         let signpostID = OSSignpostID(log: perfSignpostLog)
         os_signpost(.begin, log: perfSignpostLog, name: "PerfWorkload", signpostID: signpostID)
-        for _ in 0..<benchmark.iterations
+        for stepIndex in 0..<benchmark.iterations
         {
             benchmark.runStep()
+            frameCaptureSession?.captureStep(stepIndex: stepIndex)
+            if watchModeEnabled
+            {
+                RunLoop.main.run(until: Date(timeIntervalSinceNow: watchStepDelaySeconds))
+            }
         }
         os_signpost(.end, log: perfSignpostLog, name: "PerfWorkload", signpostID: signpostID)
     }
+}
+
+@MainActor
+private func validateBenchmarkVisibleRendering(
+    testName: String,
+    host: PerfSurfaceHost,
+    capturedFrameSignature: BenchVisibleOutputSignature? = nil
+)
+{
+    switch visibleOutputValidationKind(for: testName)
+    {
+    case .hostHierarchy:
+        let targetView = host.containerView.subviews.last
+        let targetSignature = host.visibleOutputSignature(of: targetView)
+        let windowSignature = targetView == nil ? nil : host.visibleOutputSignature()
+        guard let signature = targetSignature ?? windowSignature else
+        {
+            recordBenchmarkBuildFailure(
+                "failed - \(testName) could not capture a UIKit visible-output snapshot"
+            )
+            return
+        }
+        guard visibleOutputLooksMeaningful(signature) else
+        {
+            let targetDetail = targetSignature.map(formatVisibleOutputSignature) ?? "unavailable"
+            let windowDetail = windowSignature.map(formatVisibleOutputSignature) ?? "unavailable"
+            recordBenchmarkBuildFailure(
+                "failed - \(testName) visible UIKit output was blank or near-uniform " +
+                "(target=\(targetDetail) window=\(windowDetail))"
+            )
+            return
+        }
+    case .previewLayer:
+        if let capturedFrameSignature,
+           visibleOutputLooksMeaningful(capturedFrameSignature)
+        {
+            return
+        }
+        let targetView = host.containerView.subviews.last ?? host.containerView
+        guard let previewView = firstPreviewView(in: targetView) ?? firstPreviewView(in: host.containerView) else
+        {
+            recordBenchmarkBuildFailure(
+                "failed - \(testName) could not find an AVCaptureVideoPreviewLayer view for validation"
+            )
+            return
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        let snapshotSignature = host.visibleOutputSignature(of: previewView)
+        if let snapshotSignature, visibleOutputLooksMeaningful(snapshotSignature)
+        {
+            return
+        }
+        let previewLayer = previewView.previewLayer
+        let previewing: Bool
+        if #available(iOS 13.0, *)
+        {
+            previewing = previewLayer.isPreviewing
+        }
+        else
+        {
+            previewing = previewLayer.session?.isRunning == true
+        }
+        let sessionRunning = previewLayer.session?.isRunning ?? false
+        let connectionEnabled = previewLayer.connection?.isEnabled ?? false
+        let bounds = previewLayer.bounds.integral
+        guard previewing,
+              sessionRunning,
+              connectionEnabled,
+              bounds.width > 0,
+              bounds.height > 0
+        else
+        {
+            recordBenchmarkBuildFailure(
+                "failed - \(testName) preview-layer output was not actively rendering " +
+                "(\(formatPreviewLayerValidationState(previewView: previewView, snapshotSignature: snapshotSignature)))"
+            )
+            return
+        }
+    case .oxideRenderer:
+        guard let stats = snapshotOxideHostStats() else
+        {
+            recordBenchmarkBuildFailure(
+                "failed - \(testName) could not read Oxide host stats for visible-output validation"
+            )
+            return
+        }
+        guard stats.draws > 0 else
+        {
+            recordBenchmarkBuildFailure(
+                "failed - \(testName) produced zero Oxide draws during validation " +
+                "(\(formatOxideHostStatsForValidation(stats)))"
+            )
+            return
+        }
+        let debugPerf = snapshotOxideAppDebugPerf()
+        let targetView = host.containerView.subviews.last
+        let windowSignature = host.visibleOutputSignature(of: targetView)
+        guard let rendererSignature = captureOxideOffscreenValidationSignature(
+            testName: testName,
+            host: host
+        ) else
+        {
+            return
+        }
+        guard visibleOutputLooksMeaningful(rendererSignature) else
+        {
+            let windowDetail = windowSignature.map(formatVisibleOutputSignature) ?? "unavailable"
+            let hostDetail = debugPerf.map(formatOxideAppDebugPerf) ?? "unavailable"
+            recordBenchmarkBuildFailure(
+                "failed - \(testName) visible Oxide output was blank or near-uniform " +
+                "(renderer=\(formatVisibleOutputSignature(rendererSignature)) " +
+                "window=\(windowDetail) host=\(hostDetail) stats=\(formatOxideHostStatsForValidation(stats)))"
+            )
+            return
+        }
+    case .oxideCameraCustom:
+        guard let stats = snapshotOxideHostStats() else
+        {
+            recordBenchmarkBuildFailure(
+                "failed - \(testName) could not read Oxide camera stats for visible-output validation"
+            )
+            return
+        }
+        guard stats.camRunning != 0, stats.camWidth > 0, stats.camHeight > 0 else
+        {
+            recordBenchmarkBuildFailure(
+                "failed - \(testName) camera renderer did not report an active visible frame " +
+                "(running=\(stats.camRunning), size=\(stats.camWidth)x\(stats.camHeight))"
+            )
+            return
+        }
+        guard stats.camSamplesPresented > 0 else
+        {
+            recordBenchmarkBuildFailure(
+                "failed - \(testName) camera renderer never presented a sample during validation"
+            )
+            return
+        }
+        guard stats.camLatestPresentedGeneration > 0 || stats.camLatestPublishedGeneration > 0 else
+        {
+            recordBenchmarkBuildFailure(
+                "failed - \(testName) camera renderer never advanced to a presented generation"
+            )
+            return
+        }
+        if testName.contains("RealApp"),
+           let debugPerf = snapshotOxideAppDebugPerf()
+        {
+            guard debugPerf.drawablesAcquired > 0 else
+            {
+                recordBenchmarkBuildFailure(
+                    "failed - \(testName) camera renderer never acquired a visible drawable"
+                )
+                return
+            }
+            guard debugPerf.cameraFrameTriggeredRenders > 0 else
+            {
+                recordBenchmarkBuildFailure(
+                    "failed - \(testName) camera renderer never triggered a frame render"
+                )
+                return
+            }
+        }
+        guard let image = captureOxideRendererSnapshotImage(testName: testName),
+              let signature = visibleOutputSignature(from: image)
+        else
+        {
+            return
+        }
+        guard visibleOutputLooksMeaningful(signature) else
+        {
+            recordBenchmarkBuildFailure(
+                "failed - \(testName) camera visible output was black or near-uniform " +
+                "(\(formatVisibleOutputSignature(signature)))"
+            )
+            return
+        }
+    }
+}
+
+@MainActor
+func withVisibleOutputValidation(
+    _ benchmark: OxideUIKitBenchmark,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let summaryLines = benchmark.summaryLines
+    let validationEvidence = VisibleOutputValidationEvidence()
+    let captureFrameImage = benchmark.captureFrameImage.map
+    {
+        original in
+        {
+            let image = original()
+            if let image,
+               let signature = visibleOutputSignature(from: image),
+               visibleOutputLooksMeaningful(signature)
+            {
+                validationEvidence.meaningfulCapturedFrameSignature = signature
+            }
+            return image
+        }
+    }
+    return OxideUIKitBenchmark(
+        testName: benchmark.testName,
+        iterations: benchmark.iterations,
+        signpostNames: benchmark.signpostNames,
+        consoleMeasureIterations: benchmark.consoleMeasureIterations,
+        emitGenericWorkloadSummary: benchmark.emitGenericWorkloadSummary,
+        emitGenericResidentMemorySummary: benchmark.emitGenericResidentMemorySummary,
+        useHostWorkloadSignpost: benchmark.useHostWorkloadSignpost,
+        prepareIteration: benchmark.prepareIteration,
+        summaryLines: {
+            validateBenchmarkVisibleRendering(
+                testName: benchmark.testName,
+                host: host,
+                capturedFrameSignature: validationEvidence.meaningfulCapturedFrameSignature
+            )
+            return summaryLines()
+        },
+        tearDown: benchmark.tearDown,
+        runStep: benchmark.runStep,
+        captureFrameImage: captureFrameImage
+    )
+}
+
+@MainActor
+func withWatchFrameCapture(
+    _ benchmark: OxideUIKitBenchmark,
+    host: PerfSurfaceHost
+) -> OxideUIKitBenchmark
+{
+    let captureFrameImage = {
+        switch visibleOutputValidationKind(for: benchmark.testName)
+        {
+        case .oxideRenderer, .oxideCameraCustom:
+            return host.captureVisibleImage() ??
+                captureOxideRendererSnapshotImage(testName: benchmark.testName)
+        case .hostHierarchy, .previewLayer:
+            return host.captureVisibleImage()
+        }
+    }
+    return OxideUIKitBenchmark(
+        testName: benchmark.testName,
+        iterations: benchmark.iterations,
+        signpostNames: benchmark.signpostNames,
+        consoleMeasureIterations: benchmark.consoleMeasureIterations,
+        emitGenericWorkloadSummary: benchmark.emitGenericWorkloadSummary,
+        emitGenericResidentMemorySummary: benchmark.emitGenericResidentMemorySummary,
+        useHostWorkloadSignpost: benchmark.useHostWorkloadSignpost,
+        prepareIteration: benchmark.prepareIteration,
+        summaryLines: benchmark.summaryLines,
+        tearDown: benchmark.tearDown,
+        runStep: benchmark.runStep,
+        captureFrameImage: captureFrameImage
+    )
 }
 
 enum OxideUIKitLaunchScenario: String
@@ -6822,10 +8373,7 @@ private final class OptimizedOrchestrationBenchView: UIView
 
     func runJourney(step: Int)
     {
-        withPerfSignpost("transition")
-        {
-            phase = CGFloat((step % 4) + 1) / 4.0
-        }
+        phase = CGFloat((step % 4) + 1) / 4.0
         withPerfSignpost("diff.apply")
         {
             showingModal = step.isMultiple(of: 2)
@@ -7070,13 +8618,10 @@ private final class ControlSetBenchView: UIView
                 ? "Pressed state armed."
                 : "Released state armed."
         }
-        withPerfSignpost("first.interactive")
-        {
-            actionButton.transform = step.isMultiple(of: 2)
-                ? CGAffineTransform(scaleX: 0.96, y: 0.96)
-                : .identity
-            previewImageView.alpha = step.isMultiple(of: 2) ? 0.84 : 1.0
-        }
+        actionButton.transform = step.isMultiple(of: 2)
+            ? CGAffineTransform(scaleX: 0.96, y: 0.96)
+            : .identity
+        previewImageView.alpha = step.isMultiple(of: 2) ? 0.84 : 1.0
     }
 
     func runSliderScrubResponse(step: Int)
@@ -7182,12 +8727,9 @@ private final class OptimizedControlSetBenchView: UIView
         {
             self.statePhase = step
         }
-        withPerfSignpost("first.interactive")
-        {
-            self.buttonScale = step.isMultiple(of: 2) ? 0.96 : 1.0
-            self.previewAlpha = step.isMultiple(of: 2) ? 0.84 : 1.0
-            self.setNeedsDisplay()
-        }
+        self.buttonScale = step.isMultiple(of: 2) ? 0.96 : 1.0
+        self.previewAlpha = step.isMultiple(of: 2) ? 0.84 : 1.0
+        self.setNeedsDisplay()
     }
 
     func runSliderScrubResponse(step: Int)
@@ -7498,28 +9040,25 @@ private final class AuthoringTextFieldsBenchView: UIView
                 ? "Preparing focus handoff."
                 : "Preparing responder update."
         }
-        withPerfSignpost("first.interactive")
+        switch step % 3
         {
-            switch step % 3
-            {
-            case 0:
-                _ = usernameField.becomeFirstResponder()
-                usernameField.backgroundColor = focusColor.withAlphaComponent(0.12)
-                bioView.layer.borderColor = idleColor.cgColor
-                passwordField.backgroundColor = .white
-            case 1:
-                _ = bioView.becomeFirstResponder()
-                usernameField.backgroundColor = .white
-                bioView.layer.borderColor = focusColor.cgColor
-                passwordField.backgroundColor = .white
-            default:
-                _ = passwordField.becomeFirstResponder()
-                usernameField.backgroundColor = .white
-                bioView.layer.borderColor = idleColor.cgColor
-                passwordField.backgroundColor = focusColor.withAlphaComponent(0.12)
-            }
-            statusLabel.alpha = step.isMultiple(of: 2) ? 1.0 : 0.86
+        case 0:
+            _ = usernameField.becomeFirstResponder()
+            usernameField.backgroundColor = focusColor.withAlphaComponent(0.12)
+            bioView.layer.borderColor = idleColor.cgColor
+            passwordField.backgroundColor = .white
+        case 1:
+            _ = bioView.becomeFirstResponder()
+            usernameField.backgroundColor = .white
+            bioView.layer.borderColor = focusColor.cgColor
+            passwordField.backgroundColor = .white
+        default:
+            _ = passwordField.becomeFirstResponder()
+            usernameField.backgroundColor = .white
+            bioView.layer.borderColor = idleColor.cgColor
+            passwordField.backgroundColor = focusColor.withAlphaComponent(0.12)
         }
+        statusLabel.alpha = step.isMultiple(of: 2) ? 1.0 : 0.86
     }
 }
 
@@ -7868,11 +9407,8 @@ private final class OptimizedAuthoringTextFieldsBenchView: UIView
                 ? "Preparing focus handoff."
                 : "Preparing responder update."
         }
-        withPerfSignpost("first.interactive")
-        {
-            focusMode = step % 3
-            setNeedsDisplay()
-        }
+        focusMode = step % 3
+        setNeedsDisplay()
     }
 
     override func draw(_ rect: CGRect)
@@ -8252,17 +9788,66 @@ private func flatRectLifecycleIterations(count: Int) -> Int
 }
 
 @MainActor
+private func primitiveLifecycleViewport() -> CGSize
+{
+    CGSize(width: 420, height: 760)
+}
+
+@MainActor
+private func makeMountedViewBenchmark<View: UIView>(
+    testName: String,
+    iterations: Int,
+    host: PerfSurfaceHost,
+    size: CGSize,
+    build: @escaping () -> View,
+    prepare: @escaping (View) -> Void = { _ in }
+) -> OxideUIKitBenchmark
+{
+    OxideUIKitBenchmark(testName: testName, iterations: iterations)
+    {
+        let view = build()
+        prepare(view)
+        host.mount(view, size: size)
+    }
+}
+
+@MainActor
+private func makeMutatingViewBenchmark<View: UIView>(
+    testName: String,
+    iterations: Int,
+    host: PerfSurfaceHost,
+    size: CGSize,
+    build: @escaping () -> View,
+    prepare: @escaping (View) -> Void = { _ in },
+    mutate: @escaping (View, Int) -> Void
+) -> OxideUIKitBenchmark
+{
+    let view = build()
+    prepare(view)
+    host.mount(view, size: size)
+    var step = 0
+    return OxideUIKitBenchmark(testName: testName, iterations: iterations)
+    {
+        step += 1
+        mutate(view, step)
+        host.commit(view)
+    }
+}
+
+@MainActor
 private func makeEmptyRootMountBenchmark(
     testName: String,
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    OxideUIKitBenchmark(testName: testName, iterations: 96)
-    {
-        let view = UIView(frame: .zero)
-        view.backgroundColor = .clear
-        host.mount(view, size: primitiveLifecycleViewport())
-    }
+    makeMountedViewBenchmark(
+        testName: testName,
+        iterations: 96,
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { UIView(frame: .zero) },
+        prepare: { view in view.backgroundColor = .clear }
+    )
 }
 
 @MainActor
@@ -8272,12 +9857,14 @@ private func makeFlatRectMountBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    OxideUIKitBenchmark(testName: testName, iterations: flatRectLifecycleIterations(count: count))
-    {
-        let view = FlatRectGridBenchView(frame: .zero)
-        view.install(count: count, palettePhase: 0)
-        host.mount(view, size: CGSize(width: 420, height: 760))
-    }
+    makeMountedViewBenchmark(
+        testName: testName,
+        iterations: flatRectLifecycleIterations(count: count),
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { FlatRectGridBenchView(frame: .zero) },
+        prepare: { view in view.install(count: count, palettePhase: 0) }
+    )
 }
 
 @MainActor
@@ -8287,16 +9874,15 @@ private func makeFlatRectMutateBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    let view = FlatRectGridBenchView(frame: .zero)
-    view.install(count: count, palettePhase: 0)
-    host.mount(view, size: CGSize(width: 420, height: 760))
-    var palettePhase = 0
-    return OxideUIKitBenchmark(testName: testName, iterations: flatRectLifecycleIterations(count: count))
-    {
-        palettePhase += 1
-        view.mutate(palettePhase: palettePhase)
-        host.commit(view)
-    }
+    makeMutatingViewBenchmark(
+        testName: testName,
+        iterations: flatRectLifecycleIterations(count: count),
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { FlatRectGridBenchView(frame: .zero) },
+        prepare: { view in view.install(count: count, palettePhase: 0) },
+        mutate: { view, palettePhase in view.mutate(palettePhase: palettePhase) }
+    )
 }
 
 @MainActor
@@ -8341,12 +9927,14 @@ private func makeOptimizedFlatRectMountBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    OxideUIKitBenchmark(testName: testName, iterations: flatRectLifecycleIterations(count: count))
-    {
-        let view = OptimizedFlatRectGridBenchView(frame: .zero)
-        view.install(count: count, palettePhase: 0)
-        host.mount(view, size: primitiveLifecycleViewport())
-    }
+    makeMountedViewBenchmark(
+        testName: testName,
+        iterations: flatRectLifecycleIterations(count: count),
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { OptimizedFlatRectGridBenchView(frame: .zero) },
+        prepare: { view in view.install(count: count, palettePhase: 0) }
+    )
 }
 
 @MainActor
@@ -8356,16 +9944,15 @@ private func makeOptimizedFlatRectMutateBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    let view = OptimizedFlatRectGridBenchView(frame: .zero)
-    view.install(count: count, palettePhase: 0)
-    host.mount(view, size: primitiveLifecycleViewport())
-    var palettePhase = 0
-    return OxideUIKitBenchmark(testName: testName, iterations: flatRectLifecycleIterations(count: count))
-    {
-        palettePhase += 1
-        view.mutate(palettePhase: palettePhase)
-        host.commit(view)
-    }
+    makeMutatingViewBenchmark(
+        testName: testName,
+        iterations: flatRectLifecycleIterations(count: count),
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { OptimizedFlatRectGridBenchView(frame: .zero) },
+        prepare: { view in view.install(count: count, palettePhase: 0) },
+        mutate: { view, palettePhase in view.mutate(palettePhase: palettePhase) }
+    )
 }
 
 @MainActor
@@ -8375,12 +9962,14 @@ private func makeOptimizedLabelMountBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    OxideUIKitBenchmark(testName: testName, iterations: flatRectLifecycleIterations(count: count))
-    {
-        let view = OptimizedLabelGridBenchView(frame: .zero)
-        view.install(count: count, palettePhase: 0)
-        host.mount(view, size: primitiveLifecycleViewport())
-    }
+    makeMountedViewBenchmark(
+        testName: testName,
+        iterations: flatRectLifecycleIterations(count: count),
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { OptimizedLabelGridBenchView(frame: .zero) },
+        prepare: { view in view.install(count: count, palettePhase: 0) }
+    )
 }
 
 @MainActor
@@ -8390,16 +9979,15 @@ private func makeOptimizedLabelMutateBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    let view = OptimizedLabelGridBenchView(frame: .zero)
-    view.install(count: count, palettePhase: 0)
-    host.mount(view, size: primitiveLifecycleViewport())
-    var palettePhase = 0
-    return OxideUIKitBenchmark(testName: testName, iterations: flatRectLifecycleIterations(count: count))
-    {
-        palettePhase += 1
-        view.mutate(palettePhase: palettePhase)
-        host.commit(view)
-    }
+    makeMutatingViewBenchmark(
+        testName: testName,
+        iterations: flatRectLifecycleIterations(count: count),
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { OptimizedLabelGridBenchView(frame: .zero) },
+        prepare: { view in view.install(count: count, palettePhase: 0) },
+        mutate: { view, palettePhase in view.mutate(palettePhase: palettePhase) }
+    )
 }
 
 @MainActor
@@ -8409,12 +9997,14 @@ private func makeOptimizedCardMountBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    OxideUIKitBenchmark(testName: testName, iterations: flatRectLifecycleIterations(count: count))
-    {
-        let view = OptimizedCardGridBenchView(frame: .zero)
-        view.install(count: count, palettePhase: 0)
-        host.mount(view, size: primitiveLifecycleViewport())
-    }
+    makeMountedViewBenchmark(
+        testName: testName,
+        iterations: flatRectLifecycleIterations(count: count),
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { OptimizedCardGridBenchView(frame: .zero) },
+        prepare: { view in view.install(count: count, palettePhase: 0) }
+    )
 }
 
 @MainActor
@@ -8424,16 +10014,15 @@ private func makeOptimizedCardMutateBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    let view = OptimizedCardGridBenchView(frame: .zero)
-    view.install(count: count, palettePhase: 0)
-    host.mount(view, size: primitiveLifecycleViewport())
-    var palettePhase = 0
-    return OxideUIKitBenchmark(testName: testName, iterations: flatRectLifecycleIterations(count: count))
-    {
-        palettePhase += 1
-        view.mutate(palettePhase: palettePhase)
-        host.commit(view)
-    }
+    makeMutatingViewBenchmark(
+        testName: testName,
+        iterations: flatRectLifecycleIterations(count: count),
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { OptimizedCardGridBenchView(frame: .zero) },
+        prepare: { view in view.install(count: count, palettePhase: 0) },
+        mutate: { view, palettePhase in view.mutate(palettePhase: palettePhase) }
+    )
 }
 
 @MainActor
@@ -8444,12 +10033,14 @@ private func makeOptimizedImageMountBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    OxideUIKitBenchmark(testName: testName, iterations: flatRectLifecycleIterations(count: count))
-    {
-        let view = OptimizedImageGridBenchView(frame: .zero, image: image)
-        view.install(count: count, palettePhase: 0)
-        host.mount(view, size: primitiveLifecycleViewport())
-    }
+    makeMountedViewBenchmark(
+        testName: testName,
+        iterations: flatRectLifecycleIterations(count: count),
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { OptimizedImageGridBenchView(frame: .zero, image: image) },
+        prepare: { view in view.install(count: count, palettePhase: 0) }
+    )
 }
 
 @MainActor
@@ -8460,22 +10051,15 @@ private func makeOptimizedImageMutateBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    let view = OptimizedImageGridBenchView(frame: .zero, image: image)
-    view.install(count: count, palettePhase: 0)
-    host.mount(view, size: primitiveLifecycleViewport())
-    var palettePhase = 0
-    return OxideUIKitBenchmark(testName: testName, iterations: flatRectLifecycleIterations(count: count))
-    {
-        palettePhase += 1
-        view.mutate(palettePhase: palettePhase)
-        host.commit(view)
-    }
-}
-
-@MainActor
-private func primitiveLifecycleViewport() -> CGSize
-{
-    CGSize(width: 420, height: 760)
+    makeMutatingViewBenchmark(
+        testName: testName,
+        iterations: flatRectLifecycleIterations(count: count),
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { OptimizedImageGridBenchView(frame: .zero, image: image) },
+        prepare: { view in view.install(count: count, palettePhase: 0) },
+        mutate: { view, palettePhase in view.mutate(palettePhase: palettePhase) }
+    )
 }
 
 @MainActor
@@ -8485,12 +10069,14 @@ private func makeLabelMountBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    OxideUIKitBenchmark(testName: testName, iterations: flatRectLifecycleIterations(count: count))
-    {
-        let view = LabelGridBenchView(frame: .zero)
-        view.install(count: count, palettePhase: 0)
-        host.mount(view, size: primitiveLifecycleViewport())
-    }
+    makeMountedViewBenchmark(
+        testName: testName,
+        iterations: flatRectLifecycleIterations(count: count),
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { LabelGridBenchView(frame: .zero) },
+        prepare: { view in view.install(count: count, palettePhase: 0) }
+    )
 }
 
 @MainActor
@@ -8500,16 +10086,15 @@ private func makeLabelMutateBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    let view = LabelGridBenchView(frame: .zero)
-    view.install(count: count, palettePhase: 0)
-    host.mount(view, size: primitiveLifecycleViewport())
-    var palettePhase = 0
-    return OxideUIKitBenchmark(testName: testName, iterations: flatRectLifecycleIterations(count: count))
-    {
-        palettePhase += 1
-        view.mutate(palettePhase: palettePhase)
-        host.commit(view)
-    }
+    makeMutatingViewBenchmark(
+        testName: testName,
+        iterations: flatRectLifecycleIterations(count: count),
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { LabelGridBenchView(frame: .zero) },
+        prepare: { view in view.install(count: count, palettePhase: 0) },
+        mutate: { view, palettePhase in view.mutate(palettePhase: palettePhase) }
+    )
 }
 
 @MainActor
@@ -8519,12 +10104,14 @@ private func makeCardMountBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    OxideUIKitBenchmark(testName: testName, iterations: flatRectLifecycleIterations(count: count))
-    {
-        let view = CardGridBenchView(frame: .zero)
-        view.install(count: count, palettePhase: 0)
-        host.mount(view, size: primitiveLifecycleViewport())
-    }
+    makeMountedViewBenchmark(
+        testName: testName,
+        iterations: flatRectLifecycleIterations(count: count),
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { CardGridBenchView(frame: .zero) },
+        prepare: { view in view.install(count: count, palettePhase: 0) }
+    )
 }
 
 @MainActor
@@ -8534,16 +10121,15 @@ private func makeCardMutateBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    let view = CardGridBenchView(frame: .zero)
-    view.install(count: count, palettePhase: 0)
-    host.mount(view, size: primitiveLifecycleViewport())
-    var palettePhase = 0
-    return OxideUIKitBenchmark(testName: testName, iterations: flatRectLifecycleIterations(count: count))
-    {
-        palettePhase += 1
-        view.mutate(palettePhase: palettePhase)
-        host.commit(view)
-    }
+    makeMutatingViewBenchmark(
+        testName: testName,
+        iterations: flatRectLifecycleIterations(count: count),
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { CardGridBenchView(frame: .zero) },
+        prepare: { view in view.install(count: count, palettePhase: 0) },
+        mutate: { view, palettePhase in view.mutate(palettePhase: palettePhase) }
+    )
 }
 
 @MainActor
@@ -8554,12 +10140,14 @@ private func makeImageMountBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    OxideUIKitBenchmark(testName: testName, iterations: flatRectLifecycleIterations(count: count))
-    {
-        let view = ImageGridBenchView(frame: .zero, image: image)
-        view.install(count: count, palettePhase: 0)
-        host.mount(view, size: primitiveLifecycleViewport())
-    }
+    makeMountedViewBenchmark(
+        testName: testName,
+        iterations: flatRectLifecycleIterations(count: count),
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { ImageGridBenchView(frame: .zero, image: image) },
+        prepare: { view in view.install(count: count, palettePhase: 0) }
+    )
 }
 
 @MainActor
@@ -8570,16 +10158,15 @@ private func makeImageMutateBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    let view = ImageGridBenchView(frame: .zero, image: image)
-    view.install(count: count, palettePhase: 0)
-    host.mount(view, size: primitiveLifecycleViewport())
-    var palettePhase = 0
-    return OxideUIKitBenchmark(testName: testName, iterations: flatRectLifecycleIterations(count: count))
-    {
-        palettePhase += 1
-        view.mutate(palettePhase: palettePhase)
-        host.commit(view)
-    }
+    makeMutatingViewBenchmark(
+        testName: testName,
+        iterations: flatRectLifecycleIterations(count: count),
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { ImageGridBenchView(frame: .zero, image: image) },
+        prepare: { view in view.install(count: count, palettePhase: 0) },
+        mutate: { view, palettePhase in view.mutate(palettePhase: palettePhase) }
+    )
 }
 
 @MainActor
@@ -8589,12 +10176,14 @@ private func makeControlSetMountBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    OxideUIKitBenchmark(testName: testName, iterations: 32)
-    {
-        let view = ControlSetBenchView(frame: .zero, image: image)
-        view.installDeck(palettePhase: 0)
-        host.mount(view, size: CGSize(width: 360, height: 220))
-    }
+    makeMountedViewBenchmark(
+        testName: testName,
+        iterations: 32,
+        host: host,
+        size: CGSize(width: 360, height: 220),
+        build: { ControlSetBenchView(frame: .zero, image: image) },
+        prepare: { view in view.installDeck(palettePhase: 0) }
+    )
 }
 
 @MainActor
@@ -8604,16 +10193,15 @@ private func makeControlSetMutateBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    let view = ControlSetBenchView(frame: .zero, image: image)
-    view.installDeck(palettePhase: 0)
-    host.mount(view, size: CGSize(width: 360, height: 220))
-    var statePhase = 0
-    return OxideUIKitBenchmark(testName: testName, iterations: 32)
-    {
-        statePhase += 1
-        view.mutate(statePhase: statePhase)
-        host.commit(view)
-    }
+    makeMutatingViewBenchmark(
+        testName: testName,
+        iterations: 32,
+        host: host,
+        size: CGSize(width: 360, height: 220),
+        build: { ControlSetBenchView(frame: .zero, image: image) },
+        prepare: { view in view.installDeck(palettePhase: 0) },
+        mutate: { view, statePhase in view.mutate(statePhase: statePhase) }
+    )
 }
 
 @MainActor
@@ -8623,12 +10211,14 @@ private func makeOptimizedControlSetMountBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    OxideUIKitBenchmark(testName: testName, iterations: 32)
-    {
-        let view = OptimizedControlSetBenchView(frame: .zero, image: image)
-        view.installDeck(palettePhase: 0)
-        host.mount(view, size: CGSize(width: 360, height: 220))
-    }
+    makeMountedViewBenchmark(
+        testName: testName,
+        iterations: 32,
+        host: host,
+        size: CGSize(width: 360, height: 220),
+        build: { OptimizedControlSetBenchView(frame: .zero, image: image) },
+        prepare: { view in view.installDeck(palettePhase: 0) }
+    )
 }
 
 @MainActor
@@ -8638,16 +10228,15 @@ private func makeOptimizedControlSetMutateBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    let view = OptimizedControlSetBenchView(frame: .zero, image: image)
-    view.installDeck(palettePhase: 0)
-    host.mount(view, size: CGSize(width: 360, height: 220))
-    var statePhase = 0
-    return OxideUIKitBenchmark(testName: testName, iterations: 32)
-    {
-        statePhase += 1
-        view.mutate(statePhase: statePhase)
-        host.commit(view)
-    }
+    makeMutatingViewBenchmark(
+        testName: testName,
+        iterations: 32,
+        host: host,
+        size: CGSize(width: 360, height: 220),
+        build: { OptimizedControlSetBenchView(frame: .zero, image: image) },
+        prepare: { view in view.installDeck(palettePhase: 0) },
+        mutate: { view, statePhase in view.mutate(statePhase: statePhase) }
+    )
 }
 
 @MainActor
@@ -8749,15 +10338,71 @@ private func bridgeJSONFixture(rowCount: Int) -> Data
 }
 
 @MainActor
+private func makeDecodedImageBenchmark(
+    testName: String,
+    iterations: Int = 24,
+    pngData: Data,
+    decode: @escaping (Data) -> UIImage?
+) -> OxideUIKitBenchmark
+{
+    OxideUIKitBenchmark(testName: testName, iterations: iterations)
+    {
+        _ = decode(pngData)
+    }
+}
+
+@MainActor
+private func makeImageGridBenchmark<View: UIView>(
+    testName: String,
+    iterations: Int,
+    pngData: Data,
+    host: PerfSurfaceHost,
+    decode: @escaping (Data) -> UIImage?,
+    build: @escaping (UIImage) -> View,
+    install: @escaping (View) -> Void
+) -> OxideUIKitBenchmark
+{
+    let decoded = decode(pngData) ?? UIImage()
+    return makeMutatingViewBenchmark(
+        testName: testName,
+        iterations: iterations,
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: { build(decoded) },
+        mutate: { view, _ in install(view) }
+    )
+}
+
+@MainActor
+private func makeImageFirstVisibleGridBenchmark<View: UIView>(
+    testName: String,
+    pngData: Data,
+    host: PerfSurfaceHost,
+    decode: @escaping (Data) -> UIImage?,
+    build: @escaping (UIImage) -> View,
+    install: @escaping (View) -> Void
+) -> OxideUIKitBenchmark
+{
+    makeMountedViewBenchmark(
+        testName: testName,
+        iterations: 12,
+        host: host,
+        size: primitiveLifecycleViewport(),
+        build: {
+            let decoded = decode(pngData) ?? UIImage()
+            return build(decoded)
+        },
+        prepare: install
+    )
+}
+
+@MainActor
 private func makeImageDecodeBenchmark(
     testName: String,
     pngData: Data
 ) -> OxideUIKitBenchmark
 {
-    OxideUIKitBenchmark(testName: testName, iterations: 24)
-    {
-        _ = decodedCheckerImage(from: pngData)
-    }
+    makeDecodedImageBenchmark(testName: testName, pngData: pngData, decode: decodedCheckerImage)
 }
 
 @MainActor
@@ -8767,14 +10412,15 @@ private func makeImageUploadBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    let decoded = decodedCheckerImage(from: pngData) ?? UIImage()
-    let view = ImageGridBenchView(frame: .zero, image: decoded)
-    host.mount(view, size: primitiveLifecycleViewport())
-    return OxideUIKitBenchmark(testName: testName, iterations: 12)
-    {
-        view.install(count: 100, palettePhase: 0)
-        host.commit(view)
-    }
+    makeImageGridBenchmark(
+        testName: testName,
+        iterations: 12,
+        pngData: pngData,
+        host: host,
+        decode: decodedCheckerImage,
+        build: { ImageGridBenchView(frame: .zero, image: $0) },
+        install: { view in view.install(count: 100, palettePhase: 0) }
+    )
 }
 
 @MainActor
@@ -8784,13 +10430,14 @@ private func makeImageFirstVisibleBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    OxideUIKitBenchmark(testName: testName, iterations: 12)
-    {
-        let decoded = decodedCheckerImage(from: pngData) ?? UIImage()
-        let view = ImageGridBenchView(frame: .zero, image: decoded)
-        view.install(count: 100, palettePhase: 0)
-        host.mount(view, size: primitiveLifecycleViewport())
-    }
+    makeImageFirstVisibleGridBenchmark(
+        testName: testName,
+        pngData: pngData,
+        host: host,
+        decode: decodedCheckerImage,
+        build: { ImageGridBenchView(frame: .zero, image: $0) },
+        install: { view in view.install(count: 100, palettePhase: 0) }
+    )
 }
 
 @MainActor
@@ -8799,10 +10446,11 @@ private func makeOptimizedImageDecodeBenchmark(
     pngData: Data
 ) -> OxideUIKitBenchmark
 {
-    OxideUIKitBenchmark(testName: testName, iterations: 24)
-    {
-        _ = optimizedDecodedCheckerImage(from: pngData)
-    }
+    makeDecodedImageBenchmark(
+        testName: testName,
+        pngData: pngData,
+        decode: optimizedDecodedCheckerImage
+    )
 }
 
 @MainActor
@@ -8812,14 +10460,15 @@ private func makeOptimizedImageUploadBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    let decoded = optimizedDecodedCheckerImage(from: pngData) ?? UIImage()
-    let view = OptimizedImageGridBenchView(frame: .zero, image: decoded)
-    host.mount(view, size: primitiveLifecycleViewport())
-    return OxideUIKitBenchmark(testName: testName, iterations: 12)
-    {
-        view.install(count: 100, palettePhase: 0)
-        host.commit(view)
-    }
+    makeImageGridBenchmark(
+        testName: testName,
+        iterations: 12,
+        pngData: pngData,
+        host: host,
+        decode: optimizedDecodedCheckerImage,
+        build: { OptimizedImageGridBenchView(frame: .zero, image: $0) },
+        install: { view in view.install(count: 100, palettePhase: 0) }
+    )
 }
 
 @MainActor
@@ -8829,13 +10478,14 @@ private func makeOptimizedImageFirstVisibleBenchmark(
     host: PerfSurfaceHost
 ) -> OxideUIKitBenchmark
 {
-    OxideUIKitBenchmark(testName: testName, iterations: 12)
-    {
-        let decoded = optimizedDecodedCheckerImage(from: pngData) ?? UIImage()
-        let view = OptimizedImageGridBenchView(frame: .zero, image: decoded)
-        view.install(count: 100, palettePhase: 0)
-        host.mount(view, size: primitiveLifecycleViewport())
-    }
+    makeImageFirstVisibleGridBenchmark(
+        testName: testName,
+        pngData: pngData,
+        host: host,
+        decode: optimizedDecodedCheckerImage,
+        build: { OptimizedImageGridBenchView(frame: .zero, image: $0) },
+        install: { view in view.install(count: 100, palettePhase: 0) }
+    )
 }
 
 @MainActor
@@ -8897,8 +10547,11 @@ private func makeOptimizedInputFormJourneyBenchmark(
     return OxideUIKitBenchmark(testName: testName, iterations: 24)
     {
         step += 1
-        view.runJourney(step: step)
-        host.commit(view)
+        withPerfSignpost("transition")
+        {
+            view.runJourney(step: step)
+            host.commit(view, awaitDisplayPresentation: true)
+        }
     }
 }
 
@@ -8914,8 +10567,11 @@ private func makeOptimizedOrchestrationJourneyBenchmark(
     return OxideUIKitBenchmark(testName: testName, iterations: 20)
     {
         step += 1
-        view.runJourney(step: step)
-        host.commit(view)
+        withPerfSignpost("transition")
+        {
+            view.runJourney(step: step)
+            host.commit(view, awaitDisplayPresentation: true)
+        }
     }
 }
 
@@ -8934,13 +10590,13 @@ private func makeOptimizedCollectionNavigationBenchmark(
         withPerfSignpost("scroll")
         {
             view.select(item: anchor)
-            host.commit(view)
+            host.commit(view, awaitDisplayPresentation: true)
             view.select(item: anchor + 3)
-            host.commit(view)
+            host.commit(view, awaitDisplayPresentation: true)
             view.select(item: anchor + 6)
-            host.commit(view)
+            host.commit(view, awaitDisplayPresentation: true)
             view.select(item: anchor + 2)
-            host.commit(view)
+            host.commit(view, awaitDisplayPresentation: true)
         }
     }
 }
@@ -8984,12 +10640,15 @@ private func makeOptimizedZoomImageGestureJourneyBenchmark(
         let scale = 1.0 + CGFloat(step % 6) * 0.12
         let tx = CGFloat((step % 5) - 2) * 12.0
         let ty = CGFloat((step % 4) - 2) * -9.0
-        view.scale = scale
-        view.offset = CGPoint(x: tx, y: ty)
-        host.commit(view)
-        view.scale = 1.0
-        view.offset = .zero
-        host.commit(view)
+        withPerfSignpost("transition")
+        {
+            view.scale = scale
+            view.offset = CGPoint(x: tx, y: ty)
+            host.commit(view, awaitDisplayPresentation: true)
+            view.scale = 1.0
+            view.offset = .zero
+            host.commit(view, awaitDisplayPresentation: true)
+        }
     }
 }
 
@@ -9007,8 +10666,11 @@ private func makeOptimizedButtonPressResponseBenchmark(
     return OxideUIKitBenchmark(testName: testName, iterations: 64)
     {
         step += 1
-        view.runButtonPressResponse(step: step)
-        host.commit(view)
+        withPerfSignpost("first.interactive")
+        {
+            view.runButtonPressResponse(step: step)
+            host.commit(view, awaitDisplayPresentation: true)
+        }
     }
 }
 
@@ -9043,8 +10705,11 @@ private func makeOptimizedTextFocusResponseBenchmark(
     return OxideUIKitBenchmark(testName: testName, iterations: 24)
     {
         step += 1
-        view.runFocusCycle(step: step)
-        host.commit(view)
+        withPerfSignpost("first.interactive")
+        {
+            view.runFocusCycle(step: step)
+            host.commit(view, awaitDisplayPresentation: true)
+        }
     }
 }
 
@@ -9571,8 +11236,11 @@ private func makeButtonPressResponseBenchmark(
     return OxideUIKitBenchmark(testName: testName, iterations: 48)
     {
         step += 1
-        view.runButtonPressResponse(step: step)
-        host.commit(view)
+        withPerfSignpost("first.interactive")
+        {
+            view.runButtonPressResponse(step: step)
+            host.commit(view, awaitDisplayPresentation: true)
+        }
     }
 }
 
@@ -9607,8 +11275,11 @@ private func makeTextFocusResponseBenchmark(
     return OxideUIKitBenchmark(testName: testName, iterations: 24)
     {
         step += 1
-        view.runFocusCycle(step: step)
-        host.commit(view)
+        withPerfSignpost("first.interactive")
+        {
+            view.runFocusCycle(step: step)
+            host.commit(view, awaitDisplayPresentation: true)
+        }
     }
 }
 
@@ -9650,6 +11321,28 @@ private func makeThemeSwapFullBenchmark(
 }
 
 @MainActor
+private func resolveCameraBenchmarkRunConfig(
+    testName: String,
+    host: PerfSurfaceHost
+) -> (opportunityCount: Int, opportunityIntervalSeconds: TimeInterval, measureIterations: Int)
+{
+    let maximumFramesPerSecond =
+        host.containerView.window?.windowScene?.screen.maximumFramesPerSecond
+    let opportunityCount = resolveCameraBenchmarkOpportunityCount(
+        maximumFramesPerSecond: maximumFramesPerSecond
+    )
+    let opportunityIntervalSeconds = resolveCameraBenchmarkOpportunityIntervalSeconds(
+        maximumFramesPerSecond: maximumFramesPerSecond
+    )
+    let measureIterations = resolveAdaptivePerfMeasureIterations(
+        testName: testName,
+        benchmarkIterations: opportunityCount,
+        defaultValue: 3
+    )
+    return (opportunityCount, opportunityIntervalSeconds, measureIterations)
+}
+
+@MainActor
 private func makeOxideCameraPreviewBenchmark(
     testName: String,
     mode: OxideCameraRenderMode,
@@ -9670,12 +11363,7 @@ private func makeOxideCameraPreviewBenchmark(
         return nil
     }
     let collectStageMetrics = cameraStageMeasurementEnabled()
-    let opportunityCount = resolveCameraBenchmarkOpportunityCount(
-        maximumFramesPerSecond: host.containerView.window?.windowScene?.screen.maximumFramesPerSecond
-    )
-    let opportunityIntervalSeconds = resolveCameraBenchmarkOpportunityIntervalSeconds(
-        maximumFramesPerSecond: host.containerView.window?.windowScene?.screen.maximumFramesPerSecond
-    )
+    let runConfig = resolveCameraBenchmarkRunConfig(testName: testName, host: host)
     return OxideUIKitBenchmark(
         testName: testName,
         iterations: 1,
@@ -9684,6 +11372,9 @@ private func makeOxideCameraPreviewBenchmark(
             source: source,
             visibleTransport: visibleTransport
         ),
+        consoleMeasureIterations: runConfig.measureIterations,
+        emitGenericWorkloadSummary: true,
+        emitGenericResidentMemorySummary: true,
         prepareIteration: {
             guard harness.prepareForMeasuredPass() else
             {
@@ -9697,30 +11388,18 @@ private func makeOxideCameraPreviewBenchmark(
         },
         summaryLines: {
             var lines: [String] = []
-            if let line = harness.contractSummaryLine()
-            {
-                lines.append(line)
-            }
+            appendSummaryLines(to: &lines, harness.contractSummaryLine())
             guard collectStageMetrics else
             {
                 return lines
             }
-            if let line = harness.previewPlanSummaryLine()
-            {
-                lines.append(line)
-            }
-            if let line = harness.tickRingSummaryLine()
-            {
-                lines.append(line)
-            }
-            if let line = harness.memorySummaryLine()
-            {
-                lines.append(line)
-            }
-            if let line = harness.stageSummaryLine()
-            {
-                lines.append(line)
-            }
+            appendSummaryLines(
+                to: &lines,
+                harness.previewPlanSummaryLine(),
+                harness.tickRingSummaryLine(),
+                harness.memorySummaryLine(),
+                harness.stageSummaryLine()
+            )
             harness.endStageMeasurement()
             return lines
         },
@@ -9729,9 +11408,9 @@ private func makeOxideCameraPreviewBenchmark(
         }
     )
     {
-        runPacedCameraPreviewWindow(
-            opportunities: opportunityCount,
-            opportunityIntervalSeconds: opportunityIntervalSeconds
+        runPacedFrameOpportunityWindow(
+            opportunities: runConfig.opportunityCount,
+            opportunityIntervalSeconds: runConfig.opportunityIntervalSeconds
         )
         {
             _ = harness.renderFrame()
@@ -9759,12 +11438,7 @@ private func makeOxideRealAppCameraPreviewBenchmark(
         return nil
     }
     let collectStageMetrics = cameraStageMeasurementEnabled()
-    let opportunityCount = resolveCameraBenchmarkOpportunityCount(
-        maximumFramesPerSecond: host.containerView.window?.windowScene?.screen.maximumFramesPerSecond
-    )
-    let opportunityIntervalSeconds = resolveCameraBenchmarkOpportunityIntervalSeconds(
-        maximumFramesPerSecond: host.containerView.window?.windowScene?.screen.maximumFramesPerSecond
-    )
+    let runConfig = resolveCameraBenchmarkRunConfig(testName: testName, host: host)
     return OxideUIKitBenchmark(
         testName: testName,
         iterations: 1,
@@ -9773,6 +11447,9 @@ private func makeOxideRealAppCameraPreviewBenchmark(
             source: source,
             visibleTransport: visibleTransport
         ),
+        consoleMeasureIterations: runConfig.measureIterations,
+        emitGenericWorkloadSummary: true,
+        emitGenericResidentMemorySummary: true,
         prepareIteration: {
             guard harness.prepareForMeasuredPass() else
             {
@@ -9786,38 +11463,20 @@ private func makeOxideRealAppCameraPreviewBenchmark(
         },
         summaryLines: {
             var lines: [String] = []
-            if let line = harness.contractSummaryLine()
-            {
-                lines.append(line)
-            }
+            appendSummaryLines(to: &lines, harness.contractSummaryLine())
             guard collectStageMetrics else
             {
                 return lines
             }
-            if let line = harness.tickDebugSummaryLine()
-            {
-                lines.append(line)
-            }
-            if let line = harness.tickRingSummaryLine()
-            {
-                lines.append(line)
-            }
-            if let line = harness.appHostDebugSummaryLine()
-            {
-                lines.append(line)
-            }
-            if let line = harness.previewPlanSummaryLine()
-            {
-                lines.append(line)
-            }
-            if let line = harness.memorySummaryLine()
-            {
-                lines.append(line)
-            }
-            if let line = harness.stageSummaryLine()
-            {
-                lines.append(line)
-            }
+            appendSummaryLines(
+                to: &lines,
+                harness.tickDebugSummaryLine(),
+                harness.tickRingSummaryLine(),
+                harness.appHostDebugSummaryLine(),
+                harness.previewPlanSummaryLine(),
+                harness.memorySummaryLine(),
+                harness.stageSummaryLine()
+            )
             harness.endStageMeasurement()
             return lines
         },
@@ -9826,9 +11485,9 @@ private func makeOxideRealAppCameraPreviewBenchmark(
         }
     )
     {
-        runPacedCameraPreviewWindow(
-            opportunities: opportunityCount,
-            opportunityIntervalSeconds: opportunityIntervalSeconds
+        runPacedFrameOpportunityWindow(
+            opportunities: runConfig.opportunityCount,
+            opportunityIntervalSeconds: runConfig.opportunityIntervalSeconds
         )
         {
             harness.step()
@@ -9854,16 +11513,14 @@ private func makeAVFoundationPreviewBenchmark(
     {
         return nil
     }
-    let opportunityCount = resolveCameraBenchmarkOpportunityCount(
-        maximumFramesPerSecond: host.containerView.window?.windowScene?.screen.maximumFramesPerSecond
-    )
-    let opportunityIntervalSeconds = resolveCameraBenchmarkOpportunityIntervalSeconds(
-        maximumFramesPerSecond: host.containerView.window?.windowScene?.screen.maximumFramesPerSecond
-    )
+    let runConfig = resolveCameraBenchmarkRunConfig(testName: testName, host: host)
     return OxideUIKitBenchmark(
         testName: testName,
         iterations: 1,
         signpostNames: avFoundationPreviewBenchmarkSignpostNames,
+        consoleMeasureIterations: runConfig.measureIterations,
+        emitGenericWorkloadSummary: true,
+        emitGenericResidentMemorySummary: true,
         prepareIteration: {
             harness.prepareForMeasuredPass()
         },
@@ -9879,13 +11536,80 @@ private func makeAVFoundationPreviewBenchmark(
         }
     )
     {
-        runPacedCameraPreviewWindow(
-            opportunities: opportunityCount,
-            opportunityIntervalSeconds: opportunityIntervalSeconds,
+        runPacedFrameOpportunityWindow(
+            opportunities: runConfig.opportunityCount,
+            opportunityIntervalSeconds: runConfig.opportunityIntervalSeconds,
             waitSignpostName: "baseline.preview.runloop"
         )
         {
             harness.step()
+        }
+    }
+}
+
+@MainActor
+private func makeOxideOnscreenBenchmark(
+    testName: String,
+    benchmarkKey: String,
+    iterations: Int,
+    host: PerfSurfaceHost,
+    signpostNames: [String] = [],
+    interactionSignpostName: StaticString? = nil
+) -> OxideUIKitBenchmark?
+{
+    emitPerfTraceDebugStage("onscreen.make.begin \(testName)")
+    guard let harness = OxideOnscreenBenchmarkHarness(host: host, benchmarkKey: benchmarkKey) else
+    {
+        return nil
+    }
+    emitPerfTraceDebugStage("onscreen.make.harness \(testName)")
+    guard harness.installAndWarm() else
+    {
+        harness.tearDown()
+        return nil
+    }
+    emitPerfTraceDebugStage("onscreen.make.warm \(testName)")
+    let measureIterations = resolveAdaptivePerfMeasureIterations(
+        testName: testName,
+        benchmarkIterations: iterations,
+        defaultValue: 4
+    )
+    var step = 0
+    return OxideUIKitBenchmark(
+        testName: testName,
+        iterations: iterations,
+        signpostNames: signpostNames,
+        consoleMeasureIterations: measureIterations,
+        emitGenericWorkloadSummary: true,
+        emitGenericResidentMemorySummary: true,
+        useHostWorkloadSignpost: false,
+        prepareIteration: {
+            step = 0
+            return harness.prepareForMeasuredPass()
+        },
+        tearDown: {
+            harness.tearDown()
+        }
+    )
+    {
+        step += 1
+        let succeeded: Bool
+        if let interactionSignpostName
+        {
+            succeeded = withPerfSignpost(interactionSignpostName)
+            {
+                harness.runStep(step: step)
+            }
+        }
+        else
+        {
+            succeeded = harness.runStep(step: step)
+        }
+        if !succeeded
+        {
+            recordBenchmarkBuildFailure(
+                "failed - on-screen Oxide benchmark run step did not complete for \(testName)"
+            )
         }
     }
 }
@@ -10055,6 +11779,87 @@ enum OxideUIKitBenchmarkCatalog
                 testName: normalizedTestName,
                 host: host,
                 includeVideoDataOutputSidecar: true
+            )
+        case "testOxideButtonPressResponse":
+            return makeOxideOnscreenBenchmark(
+                testName: normalizedTestName,
+                benchmarkKey: "button_press_response",
+                iterations: 32,
+                host: host,
+                signpostNames: ["first.interactive", "draw.encode"],
+                interactionSignpostName: "first.interactive"
+            )
+        case "testOxideTextFocusResponse":
+            return makeOxideOnscreenBenchmark(
+                testName: normalizedTestName,
+                benchmarkKey: "text_focus_response",
+                iterations: 24,
+                host: host,
+                signpostNames: ["first.interactive", "draw.encode"],
+                interactionSignpostName: "first.interactive"
+            )
+        case "testOxideSpinnerSpin":
+            return makeOxideOnscreenBenchmark(
+                testName: normalizedTestName,
+                benchmarkKey: "spinner_spin",
+                iterations: 96,
+                host: host,
+                signpostNames: ["transition", "draw.encode"],
+                interactionSignpostName: "transition"
+            )
+        case "testOxideImageZoomPan":
+            return makeOxideOnscreenBenchmark(
+                testName: normalizedTestName,
+                benchmarkKey: "image_zoom_pan",
+                iterations: 48,
+                host: host,
+                signpostNames: ["transition", "draw.encode"],
+                interactionSignpostName: "transition"
+            )
+        case "testOxideAnimTimelineBars":
+            return makeOxideOnscreenBenchmark(
+                testName: normalizedTestName,
+                benchmarkKey: "anim_timeline_bars",
+                iterations: 24,
+                host: host,
+                signpostNames: ["transition", "draw.encode"],
+                interactionSignpostName: "transition"
+            )
+        case "testOxideInputFormJourney":
+            return makeOxideOnscreenBenchmark(
+                testName: normalizedTestName,
+                benchmarkKey: "input_form_submit",
+                iterations: 12,
+                host: host,
+                signpostNames: ["transition", "draw.encode"],
+                interactionSignpostName: "transition"
+            )
+        case "testOxideCollectionNavigationJourney":
+            return makeOxideOnscreenBenchmark(
+                testName: normalizedTestName,
+                benchmarkKey: "collection_navigation",
+                iterations: 18,
+                host: host,
+                signpostNames: ["scroll", "draw.encode"],
+                interactionSignpostName: "scroll"
+            )
+        case "testOxideZoomImageGestureJourney":
+            return makeOxideOnscreenBenchmark(
+                testName: normalizedTestName,
+                benchmarkKey: "zoom_image_gesture_cycle",
+                iterations: 18,
+                host: host,
+                signpostNames: ["transition", "draw.encode"],
+                interactionSignpostName: "transition"
+            )
+        case "testOxideOrchestrationJourney":
+            return makeOxideOnscreenBenchmark(
+                testName: normalizedTestName,
+                benchmarkKey: "orchestration_transition_modal",
+                iterations: 18,
+                host: host,
+                signpostNames: ["transition", "draw.encode"],
+                interactionSignpostName: "transition"
             )
         case "testCollectionViewEncode":
             let view = CollectionBenchView(frame: .zero)
@@ -10419,9 +12224,12 @@ enum OxideUIKitBenchmarkCatalog
             var phase: CGFloat = 0.0
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 96)
             {
-                phase = (phase + 0.03125).truncatingRemainder(dividingBy: 1.0)
-                view.phase = phase
-                host.commit(view)
+                withPerfSignpost("transition")
+                {
+                    phase = (phase + 0.03125).truncatingRemainder(dividingBy: 1.0)
+                    view.phase = phase
+                    host.commit(view, awaitDisplayPresentation: true)
+                }
             }
         case "testOptimizedSpinnerSpin":
             let view = OptimizedSpinnerBenchView(frame: .zero)
@@ -10429,9 +12237,12 @@ enum OxideUIKitBenchmarkCatalog
             var phase: CGFloat = 0.0
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 96)
             {
-                phase = (phase + 0.03125).truncatingRemainder(dividingBy: 1.0)
-                view.phase = phase
-                host.commit(view)
+                withPerfSignpost("transition")
+                {
+                    phase = (phase + 0.03125).truncatingRemainder(dividingBy: 1.0)
+                    view.phase = phase
+                    host.commit(view, awaitDisplayPresentation: true)
+                }
             }
         case "testProgressIndeterminate":
             let view = ProgressBarBenchView(frame: .zero)
@@ -10571,18 +12382,21 @@ enum OxideUIKitBenchmarkCatalog
             var offset = CGPoint.zero
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 96)
             {
-                scale = min(scale + 0.01, 2.0)
-                offset.x += 0.6
-                offset.y -= 0.3
-                imageView.transform = CGAffineTransform.identity
-                    .translatedBy(x: offset.x, y: offset.y)
-                    .scaledBy(x: scale, y: scale)
-                if scale >= 2.0
+                withPerfSignpost("transition")
                 {
-                    scale = 1.0
-                    offset = .zero
+                    scale = min(scale + 0.01, 2.0)
+                    offset.x += 0.6
+                    offset.y -= 0.3
+                    imageView.transform = CGAffineTransform.identity
+                        .translatedBy(x: offset.x, y: offset.y)
+                        .scaledBy(x: scale, y: scale)
+                    if scale >= 2.0
+                    {
+                        scale = 1.0
+                        offset = .zero
+                    }
+                    host.commit(imageView, awaitDisplayPresentation: true)
                 }
-                host.commit(imageView)
             }
         case "testOptimizedImageZoomPan":
             let imageView = OptimizedImageTransformBenchView(frame: .zero, image: assets.checkerImage)
@@ -10591,17 +12405,20 @@ enum OxideUIKitBenchmarkCatalog
             var offset = CGPoint.zero
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 96)
             {
-                scale = min(scale + 0.01, 2.0)
-                offset.x += 0.6
-                offset.y -= 0.3
-                imageView.scale = scale
-                imageView.offset = offset
-                if scale >= 2.0
+                withPerfSignpost("transition")
                 {
-                    scale = 1.0
-                    offset = .zero
+                    scale = min(scale + 0.01, 2.0)
+                    offset.x += 0.6
+                    offset.y -= 0.3
+                    imageView.scale = scale
+                    imageView.offset = offset
+                    if scale >= 2.0
+                    {
+                        scale = 1.0
+                        offset = .zero
+                    }
+                    host.commit(imageView, awaitDisplayPresentation: true)
                 }
-                host.commit(imageView)
             }
         case "testAnimTimelineBars":
             let view = TimelineBenchView(frame: .zero)
@@ -10609,9 +12426,12 @@ enum OxideUIKitBenchmarkCatalog
             var phase: CGFloat = 0.0
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 24)
             {
-                phase = (phase + 0.016).truncatingRemainder(dividingBy: 1.0)
-                view.phase = phase
-                host.commit(view)
+                withPerfSignpost("transition")
+                {
+                    phase = (phase + 0.016).truncatingRemainder(dividingBy: 1.0)
+                    view.phase = phase
+                    host.commit(view, awaitDisplayPresentation: true)
+                }
             }
         case "testOptimizedAnimTimelineBars":
             let view = OptimizedTimelineBenchView(frame: .zero)
@@ -10619,19 +12439,25 @@ enum OxideUIKitBenchmarkCatalog
             var phase: CGFloat = 0.0
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 24)
             {
-                phase = (phase + 0.016).truncatingRemainder(dividingBy: 1.0)
-                view.phase = phase
-                host.commit(view)
+                withPerfSignpost("transition")
+                {
+                    phase = (phase + 0.016).truncatingRemainder(dividingBy: 1.0)
+                    view.phase = phase
+                    host.commit(view, awaitDisplayPresentation: true)
+                }
             }
         case "testInputFormJourney":
             var step = 0
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 24)
             {
                 step += 1
-                let view = FormJourneyBenchView(frame: .zero)
-                host.mount(view, size: CGSize(width: 560, height: 280))
-                view.runJourney(step: step)
-                host.commit(view)
+                withPerfSignpost("transition")
+                {
+                    let view = FormJourneyBenchView(frame: .zero)
+                    host.mount(view, size: CGSize(width: 560, height: 280))
+                    view.runJourney(step: step)
+                    host.commit(view, awaitDisplayPresentation: true)
+                }
             }
         case "testOptimizedInputFormJourney":
             return makeOptimizedInputFormJourneyBenchmark(testName: normalizedTestName, host: host)
@@ -10645,13 +12471,13 @@ enum OxideUIKitBenchmarkCatalog
                 withPerfSignpost("scroll")
                 {
                     view.select(item: anchor)
-                    host.commit(view)
+                    host.commit(view, awaitDisplayPresentation: true)
                     view.select(item: anchor + 3)
-                    host.commit(view)
+                    host.commit(view, awaitDisplayPresentation: true)
                     view.select(item: anchor + 6)
-                    host.commit(view)
+                    host.commit(view, awaitDisplayPresentation: true)
                     view.select(item: anchor + 2)
-                    host.commit(view)
+                    host.commit(view, awaitDisplayPresentation: true)
                 }
             }
         case "testOptimizedCollectionNavigationJourney":
@@ -10727,20 +12553,23 @@ enum OxideUIKitBenchmarkCatalog
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 24)
             {
                 step += 1
-                let imageView = UIImageView(image: assets.checkerImage)
-                imageView.contentMode = .scaleAspectFit
-                host.mount(imageView, size: CGSize(width: 280, height: 220))
+                withPerfSignpost("transition")
+                {
+                    let imageView = UIImageView(image: assets.checkerImage)
+                    imageView.contentMode = .scaleAspectFit
+                    host.mount(imageView, size: CGSize(width: 280, height: 220))
 
-                let scale = 1.0 + CGFloat(step % 6) * 0.12
-                let tx = CGFloat((step % 5) - 2) * 12.0
-                let ty = CGFloat((step % 4) - 2) * -9.0
-                imageView.transform = CGAffineTransform.identity
-                    .translatedBy(x: tx, y: ty)
-                    .scaledBy(x: scale, y: scale)
-                host.commit(imageView)
+                    let scale = 1.0 + CGFloat(step % 6) * 0.12
+                    let tx = CGFloat((step % 5) - 2) * 12.0
+                    let ty = CGFloat((step % 4) - 2) * -9.0
+                    imageView.transform = CGAffineTransform.identity
+                        .translatedBy(x: tx, y: ty)
+                        .scaledBy(x: scale, y: scale)
+                    host.commit(imageView, awaitDisplayPresentation: true)
 
-                imageView.transform = .identity
-                host.commit(imageView)
+                    imageView.transform = .identity
+                    host.commit(imageView, awaitDisplayPresentation: true)
+                }
             }
         case "testOptimizedZoomImageGestureJourney":
             return makeOptimizedZoomImageGestureJourneyBenchmark(
@@ -10753,24 +12582,23 @@ enum OxideUIKitBenchmarkCatalog
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 20)
             {
                 step += 1
-                let view = OrchestrationBenchView(frame: .zero)
-                host.mount(view, size: CGSize(width: 300, height: 280))
-
                 withPerfSignpost("transition")
                 {
+                    let view = OrchestrationBenchView(frame: .zero)
+                    host.mount(view, size: CGSize(width: 300, height: 280))
                     view.phase = 0.25
-                    host.commit(view)
+                    host.commit(view, awaitDisplayPresentation: true)
                     view.phase = 0.50
-                    host.commit(view)
+                    host.commit(view, awaitDisplayPresentation: true)
                     view.phase = 0.75
-                    host.commit(view)
+                    host.commit(view, awaitDisplayPresentation: true)
                     view.phase = 1.0
-                    host.commit(view)
+                    host.commit(view, awaitDisplayPresentation: true)
+                    view.showingModal = step % 2 == 0
+                    host.commit(view, awaitDisplayPresentation: true)
+                    view.showingModal = false
+                    host.commit(view, awaitDisplayPresentation: true)
                 }
-                view.showingModal = step % 2 == 0
-                host.commit(view)
-                view.showingModal = false
-                host.commit(view)
             }
         case "testOptimizedOrchestrationJourney":
             return makeOptimizedOrchestrationJourneyBenchmark(testName: normalizedTestName, host: host)

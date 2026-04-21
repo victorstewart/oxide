@@ -811,6 +811,8 @@ dependencies = [
  "oxide-timing",
  "oxide-utils",
  "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

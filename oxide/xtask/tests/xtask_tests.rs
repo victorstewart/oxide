@@ -6,34 +6,43 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use tempfile::tempdir;
 use xtask::{
-    apply_xctestrun_environment_overrides, build_entitlements_dict, compare_uikit_reports,
-    console_output_contains_marker, device_process_name, device_support_dir_matches,
-    devicectl_notification_observed, display_value_to_base, extract_oxide_device_report_json,
-    extract_trace_windows_from_tables, find_device_process_ids,
+    apply_xctestrun_environment_overrides, build_entitlements_dict,
+    compare_device_missing_promotion_families, compare_device_official_families,
+    compare_uikit_reports, console_output_contains_marker, device_process_name,
+    device_support_dir_matches, devicectl_notification_observed, display_value_to_base,
+    extract_oxide_device_report_json, extract_trace_windows_from_tables, find_device_process_ids,
     format_uikit_only_testing_identifier, is_expected_devicectl_console_termination,
-    is_primary_built_xctestrun_file, is_unsupported_gpu_counter_profile_error,
-    is_xctrace_trace_bundle, map_uikit_case, merge_background_modes, merge_usage_strings,
-    merge_xcresult_metrics_json_fragments, normalize_ios_version_for_device_support,
-    notification_or_console_marker_observed, parse_apple_development_team_from_security_output,
-    parse_oxide_benchmark_metadata,
-    parse_available_ios_sim_destination, parse_oxide_app_host_debug_summary,
-    parse_oxide_camera_contract_summary, parse_oxide_memory_summary, parse_oxide_stage_summary,
-    parse_oxide_tick_ring, parse_provisioning_profile_team_identifier,
-    parse_react_native_device_report_json, parse_uikit_report_json, parse_xctrace_summary_window,
-    parse_xctrace_tables, parse_xctrace_toc_tables, preferred_xctrace_toc_tables,
+    is_primary_built_xctestrun_file, is_retryable_devicectl_json_error,
+    is_retryable_uikit_trace_handshake_error, is_retryable_xctrace_record_timeout_error,
+    is_unsupported_gpu_counter_profile_error, is_xctrace_trace_bundle,
+    latest_benchmark_build_failure, map_uikit_case, merge_background_modes, merge_usage_strings,
+    merge_xcresult_metrics_json_fragments, missing_uikit_metrics_case_ids,
+    normalize_ios_version_for_device_support, notification_or_console_marker_observed,
+    oxide_device_launch_environment_json, parse_apple_development_team_from_security_output,
+    parse_available_ios_sim_destination, parse_devicectl_display_backlight_active,
+    parse_devicectl_lock_state_text, parse_oxide_app_host_debug_summary,
+    parse_oxide_benchmark_metadata, parse_oxide_camera_contract_summary,
+    parse_oxide_memory_summary, parse_oxide_stage_summary, parse_oxide_tick_ring,
+    parse_provisioning_profile_team_identifier, parse_react_native_device_report_json,
+    parse_uikit_report_json, parse_xctrace_summary_window, parse_xctrace_tables,
+    parse_xctrace_toc_tables, perf_frame_capture_relative_source_for_test_name,
+    preferred_xctrace_toc_tables, prepare_resumable_uikit_device_result_root,
     prepare_uikit_device_perf_xctestrun, render_oxide_app_host_debug_summary_note,
     render_oxide_tick_ring_note, resolve_existing_uikit_power_trace,
-    summarize_device_gpu_metrics_from_tables, summarize_energy_table,
-    summarize_time_profile_from_xml, summarize_trace_signpost_metrics_from_tables,
-    uikit_case_in_official_device_battery, uikit_case_requires_normalized_camera_contract,
-    uikit_device_metrics_case_stdout_path,
+    start_console_marker_or_completion_observed, summarize_device_gpu_metrics_from_tables,
+    summarize_energy_table, summarize_time_profile_from_xml,
+    summarize_trace_signpost_metrics_from_tables, uikit_case_in_compare_device_family,
+    uikit_case_in_compare_device_watchable_smoke, uikit_case_in_official_device_battery,
+    uikit_case_requires_normalized_camera_contract, uikit_device_metrics_case_stdout_path,
     uikit_device_perf_environment_for_test_name, uikit_device_trace_artifact_exists,
     uikit_device_trace_enabled, uikit_only_testing_identifier_for_test_name,
-    uikit_perf_environment_json_for_test_name, uikit_power_trace_candidate_paths,
-    validate_normalized_camera_contract, Entitlements, LocationMode, TraceWindow,
-    UIKitCanonicalSignpostSource, UIKitContractCoverageReport, UIKitMetricFallbackMode,
-    UIKitMetricSource, UIKitMetricSummary, UIKitPerfCase, UIKitPerfReport, XctraceCell,
-    XctraceTocTable,
+    uikit_perf_environment_json_for_test_name,
+    uikit_perf_environment_json_for_test_name_with_watch_capture,
+    uikit_power_trace_candidate_paths, validate_normalized_camera_contract,
+    CompareDeviceProofFamilyStatus, CompareDeviceProofStatus, Entitlements, LocationMode,
+    TraceWindow, UIKitCanonicalSignpostSource, UIKitContractCoverageReport, UIKitHostBuildStamp,
+    UIKitMetricFallbackMode, UIKitMetricSource, UIKitMetricSummary, UIKitPerfCase, UIKitPerfReport,
+    XctraceCell, XctraceTocTable,
 };
 
 fn env_test_lock() -> &'static Mutex<()> {
@@ -99,13 +108,20 @@ fn uikit_device_metrics_case_stdout_path_uses_case_name_suffix() {
     let root = tempdir().expect("tempdir");
     let path = uikit_device_metrics_case_stdout_path(
         root.path(),
-        "60hz",
+        "native",
         "testCameraNV12LegacyRealAppLivePreview",
     );
     assert_eq!(
         path,
-        root.path().join("metrics-60hz-testCameraNV12LegacyRealAppLivePreview.stdout.log")
+        root.path().join("metrics-native-testCameraNV12LegacyRealAppLivePreview.stdout.log")
     );
+}
+
+#[test]
+fn uikit_device_refresh_mode_rejects_non_native_values() {
+    let err = uikit_perf_environment_json_for_test_name("testLabelEncode", "60hz")
+        .expect_err("60hz should be rejected");
+    assert!(err.to_string().contains("native-only"));
 }
 
 #[test]
@@ -294,6 +310,173 @@ fn parse_uikit_report_json_classifies_authoring_cases() {
     assert_eq!(report.cases[0].scenario, "authoring");
     assert_eq!(report.cases[0].style, "idiomatic");
     assert_eq!(report.cases[0].refresh_mode, "simulator-default");
+}
+
+#[test]
+fn missing_uikit_metrics_case_ids_returns_missing_expected_rows() {
+    let json = r#"
+[
+  {
+    "testIdentifier": "OxideHostPerfTests/testCameraNV12LegacyLivePreview()",
+    "testRuns": [
+      {
+        "device": {
+          "deviceName": "iPhone 16 Pro"
+        },
+        "metrics": [
+          {
+            "identifier": "com.apple.dt.XCTMetric_Clock.time.monotonic",
+            "unitOfMeasurement": "s",
+            "measurements": [0.1, 0.2, 0.3]
+          },
+          {
+            "identifier": "com.apple.dt.XCTMetric_CPU.time",
+            "unitOfMeasurement": "s",
+            "measurements": [0.4, 0.5, 0.6]
+          },
+          {
+            "identifier": "com.apple.dt.XCTMetric_CPU.cycles",
+            "unitOfMeasurement": "kC",
+            "measurements": [10.0, 11.0, 12.0]
+          },
+          {
+            "identifier": "com.apple.dt.XCTMetric_CPU.instructions_retired",
+            "unitOfMeasurement": "kI",
+            "measurements": [13.0, 14.0, 15.0]
+          },
+          {
+            "identifier": "com.apple.dt.XCTMetric_Memory.physical",
+            "unitOfMeasurement": "kB",
+            "measurements": [16.0, 17.0, 18.0]
+          },
+          {
+            "identifier": "com.apple.dt.XCTMetric_Memory.physical_peak",
+            "unitOfMeasurement": "kB",
+            "measurements": [19.0, 20.0, 21.0]
+          }
+        ]
+      }
+    ]
+  }
+]
+"#;
+
+    let missing = missing_uikit_metrics_case_ids(
+        json,
+        &[
+            "uikit.optimized.image_pipeline.camera_preview.nv12_legacy_live",
+            "uikit.idiomatic.image_pipeline.camera_preview.avfoundation_preview_layer_live",
+        ],
+    )
+    .expect("missing case ids");
+    assert_eq!(
+        missing,
+        vec![String::from(
+            "uikit.idiomatic.image_pipeline.camera_preview.avfoundation_preview_layer_live"
+        )]
+    );
+}
+
+#[test]
+fn missing_uikit_metrics_case_ids_accepts_complete_shard() {
+    let json = r#"
+[
+  {
+    "testIdentifier": "OxideHostPerfTests/testCameraNV12LegacyLivePreview()",
+    "testRuns": [
+      {
+        "device": {
+          "deviceName": "iPhone 16 Pro"
+        },
+        "metrics": [
+          {
+            "identifier": "com.apple.dt.XCTMetric_Clock.time.monotonic",
+            "unitOfMeasurement": "s",
+            "measurements": [0.1, 0.2, 0.3]
+          },
+          {
+            "identifier": "com.apple.dt.XCTMetric_CPU.time",
+            "unitOfMeasurement": "s",
+            "measurements": [0.4, 0.5, 0.6]
+          },
+          {
+            "identifier": "com.apple.dt.XCTMetric_CPU.cycles",
+            "unitOfMeasurement": "kC",
+            "measurements": [10.0, 11.0, 12.0]
+          },
+          {
+            "identifier": "com.apple.dt.XCTMetric_CPU.instructions_retired",
+            "unitOfMeasurement": "kI",
+            "measurements": [13.0, 14.0, 15.0]
+          },
+          {
+            "identifier": "com.apple.dt.XCTMetric_Memory.physical",
+            "unitOfMeasurement": "kB",
+            "measurements": [16.0, 17.0, 18.0]
+          },
+          {
+            "identifier": "com.apple.dt.XCTMetric_Memory.physical_peak",
+            "unitOfMeasurement": "kB",
+            "measurements": [19.0, 20.0, 21.0]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "testIdentifier": "OxideHostPerfTests/testCameraAVFoundationPreviewLayerLivePreview()",
+    "testRuns": [
+      {
+        "device": {
+          "deviceName": "iPhone 16 Pro"
+        },
+        "metrics": [
+          {
+            "identifier": "com.apple.dt.XCTMetric_Clock.time.monotonic",
+            "unitOfMeasurement": "s",
+            "measurements": [0.1, 0.2, 0.3]
+          },
+          {
+            "identifier": "com.apple.dt.XCTMetric_CPU.time",
+            "unitOfMeasurement": "s",
+            "measurements": [0.4, 0.5, 0.6]
+          },
+          {
+            "identifier": "com.apple.dt.XCTMetric_CPU.cycles",
+            "unitOfMeasurement": "kC",
+            "measurements": [10.0, 11.0, 12.0]
+          },
+          {
+            "identifier": "com.apple.dt.XCTMetric_CPU.instructions_retired",
+            "unitOfMeasurement": "kI",
+            "measurements": [13.0, 14.0, 15.0]
+          },
+          {
+            "identifier": "com.apple.dt.XCTMetric_Memory.physical",
+            "unitOfMeasurement": "kB",
+            "measurements": [16.0, 17.0, 18.0]
+          },
+          {
+            "identifier": "com.apple.dt.XCTMetric_Memory.physical_peak",
+            "unitOfMeasurement": "kB",
+            "measurements": [19.0, 20.0, 21.0]
+          }
+        ]
+      }
+    ]
+  }
+]
+"#;
+
+    let missing = missing_uikit_metrics_case_ids(
+        json,
+        &[
+            "uikit.optimized.image_pipeline.camera_preview.nv12_legacy_live",
+            "uikit.idiomatic.image_pipeline.camera_preview.avfoundation_preview_layer_live",
+        ],
+    )
+    .expect("complete shard");
+    assert!(missing.is_empty());
 }
 
 #[test]
@@ -679,6 +862,11 @@ fn prepare_uikit_device_perf_xctestrun_updates_perf_and_ui_test_targets() {
         ],
     )
     .expect("prepare UIKit xctestrun");
+    assert!(prepared_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.contains("-perf-"))
+        .unwrap_or(false));
 
     let prepared: PlValue = plist::from_file(&prepared_path).expect("read prepared xctestrun");
     let root = prepared.as_dictionary().expect("root dictionary");
@@ -703,21 +891,120 @@ fn prepare_uikit_device_perf_xctestrun_updates_perf_and_ui_test_targets() {
 }
 
 #[test]
+fn prepare_uikit_device_perf_xctestrun_reuses_same_hashed_path_for_same_environment() {
+    let dir = tempdir().expect("tempdir");
+    let source_path = dir.path().join("OxideUIKitPerf_iphoneos26.4-arm64.xctestrun");
+    let xctestrun = PlValue::Dictionary(Dictionary::from_iter([(
+        String::from("OxideHostPerfTests"),
+        PlValue::Dictionary(Dictionary::from_iter([
+            (String::from("EnvironmentVariables"), PlValue::Dictionary(Dictionary::new())),
+            (String::from("TestingEnvironmentVariables"), PlValue::Dictionary(Dictionary::new())),
+        ])),
+    )]));
+    plist::to_file_xml(&source_path, &xctestrun).expect("write xctestrun");
+
+    let environment = vec![(String::from("OXIDE_PERF_REFRESH_MODE"), String::from("native"))];
+    let first = prepare_uikit_device_perf_xctestrun(&source_path, &environment)
+        .expect("first prepared xctestrun");
+    let second = prepare_uikit_device_perf_xctestrun(&source_path, &environment)
+        .expect("second prepared xctestrun");
+
+    assert_eq!(first, second);
+}
+
+#[test]
+fn prepare_resumable_uikit_device_result_root_keeps_matching_checkpoints() {
+    let dir = tempdir().expect("tempdir");
+    let result_root = dir.path().join("result-root");
+    let derived_data = result_root.join("derived-data");
+    fs::create_dir_all(&derived_data).expect("create derived-data");
+    let stamp = UIKitHostBuildStamp {
+        destination: String::from("platform=iOS,id=device"),
+        development_team: String::from("TEAM123456"),
+        source_fingerprint: 1,
+    };
+
+    prepare_resumable_uikit_device_result_root(
+        &result_root,
+        &[derived_data.as_path()],
+        &stamp,
+        "UIKit device",
+    )
+    .expect("seed result root");
+
+    let case_dir = result_root.join("uikit").join("testLabelEncode-native");
+    fs::create_dir_all(&case_dir).expect("create case dir");
+    fs::write(case_dir.join("case.json"), "{}").expect("write case checkpoint");
+
+    prepare_resumable_uikit_device_result_root(
+        &result_root,
+        &[derived_data.as_path()],
+        &stamp,
+        "UIKit device",
+    )
+    .expect("reuse matching result root");
+
+    assert!(case_dir.join("case.json").is_file());
+    assert!(derived_data.exists());
+}
+
+#[test]
+fn prepare_resumable_uikit_device_result_root_clears_stale_checkpoints_on_stamp_change() {
+    let dir = tempdir().expect("tempdir");
+    let result_root = dir.path().join("result-root");
+    let derived_data = result_root.join("derived-data");
+    fs::create_dir_all(&derived_data).expect("create derived-data");
+    let old_stamp = UIKitHostBuildStamp {
+        destination: String::from("platform=iOS,id=device"),
+        development_team: String::from("TEAM123456"),
+        source_fingerprint: 1,
+    };
+    let new_stamp = UIKitHostBuildStamp {
+        destination: String::from("platform=iOS,id=device"),
+        development_team: String::from("TEAM123456"),
+        source_fingerprint: 2,
+    };
+
+    prepare_resumable_uikit_device_result_root(
+        &result_root,
+        &[derived_data.as_path()],
+        &old_stamp,
+        "UIKit device",
+    )
+    .expect("seed result root");
+
+    let case_dir = result_root.join("uikit").join("testAnimTimelineBars-native");
+    fs::create_dir_all(&case_dir).expect("create case dir");
+    fs::write(case_dir.join("case.json"), "{}").expect("write stale case checkpoint");
+
+    prepare_resumable_uikit_device_result_root(
+        &result_root,
+        &[derived_data.as_path()],
+        &new_stamp,
+        "UIKit device",
+    )
+    .expect("clear stale result root");
+
+    assert!(!case_dir.exists());
+    assert!(derived_data.exists());
+}
+
+#[test]
 fn uikit_device_perf_environment_for_real_app_camera_cases_includes_case_specific_flags() {
     let custom_env = uikit_device_perf_environment_for_test_name(
         "testCameraNV12LegacyRealAppLivePreview",
-        "60hz",
+        "native",
     )
     .expect("custom real-app xctestrun environment");
     let custom_map: BTreeMap<String, String> = custom_env.into_iter().collect();
-    assert_eq!(custom_map.get("OXIDE_PERF_REFRESH_MODE").map(String::as_str), Some("60hz"));
+    assert_eq!(custom_map.get("OXIDE_PERF_REFRESH_MODE").map(String::as_str), Some("native"));
     assert_eq!(custom_map.get("OXIDE_RENDER_IN_TEST").map(String::as_str), Some("1"));
     assert_eq!(custom_map.get("OXIDE_PERF_CAMERA_REAL_APP_HOST").map(String::as_str), Some("1"));
     assert!(!custom_map.contains_key("OXIDE_PERF_CAMERA_REAL_APP_HYBRID_VISIBLE_PREVIEW"));
 
     let hybrid_env = uikit_device_perf_environment_for_test_name(
         "testCameraNV12LegacyRealAppHybridPreviewLayerLivePreview",
-        "60hz",
+        "native",
     )
     .expect("hybrid real-app xctestrun environment");
     let hybrid_map: BTreeMap<String, String> = hybrid_env.into_iter().collect();
@@ -740,6 +1027,10 @@ fn is_primary_built_xctestrun_file_ignores_generated_perf_copies() {
         "ReactNativeCameraBenchPerf"
     ));
     assert!(!is_primary_built_xctestrun_file(
+        "ReactNativeCameraBenchPerf_iphoneos26.4-arm64-perf-deadbeefcafebabe.xctestrun",
+        "ReactNativeCameraBenchPerf"
+    ));
+    assert!(!is_primary_built_xctestrun_file(
         "OtherScheme_iphoneos26.4-arm64.xctestrun",
         "ReactNativeCameraBenchPerf"
     ));
@@ -752,6 +1043,33 @@ fn devicectl_notification_observed_requires_observed_line() {
 
     assert!(devicectl_notification_observed(observed, "com.oxide.perf.complete"));
     assert!(!devicectl_notification_observed(timed_out, "com.oxide.perf.complete"));
+}
+
+#[test]
+fn parse_devicectl_lock_state_text_reads_passcode_required() {
+    let unlocked = r#"
+Current device lock state:
+• deviceIdentifier: 1DEDF2A3-EC8E-5FCC-A437-8BD3A6F3D659
+• passcodeRequired: false
+• unlockedSinceBoot: true
+"#;
+    assert!(!parse_devicectl_lock_state_text(unlocked).expect("unlocked parse"));
+
+    let locked = unlocked.replace("false", "true");
+    assert!(parse_devicectl_lock_state_text(&locked).expect("locked parse"));
+}
+
+#[test]
+fn parse_devicectl_display_backlight_active_reads_backlight_state() {
+    let active = r#"
+Current Displays:
+▿ 1: LCD (primary):
+Main display backlight state: backlight is on and active
+"#;
+    assert!(parse_devicectl_display_backlight_active(active).expect("active parse"));
+
+    let inactive = active.replace("backlight is on and active", "backlight is off");
+    assert!(!parse_devicectl_display_backlight_active(&inactive).expect("inactive parse"));
 }
 
 #[test]
@@ -783,6 +1101,52 @@ fn notification_or_console_marker_observed_accepts_console_fallback() {
         "com.oxide.perf.ready",
         "banner\n",
         "OXIDE_READY testCameraNV12LegacyLivePreview"
+    ));
+}
+
+#[test]
+fn latest_benchmark_build_failure_returns_last_failure_line() {
+    let stdout = "\
+OXIDE_STAGE one\n\
+OXIDE_BENCHMARK_BUILD_FAIL failed - first\n\
+OXIDE_STAGE two\n\
+OXIDE_BENCHMARK_BUILD_FAIL failed - second\n";
+
+    assert_eq!(latest_benchmark_build_failure(stdout).as_deref(), Some("failed - second"));
+}
+
+#[test]
+fn latest_benchmark_build_failure_ignores_unrelated_output() {
+    let stdout = "OXIDE_READY testLabelEncode\nOXIDE_COMPLETE testLabelEncode\n";
+
+    assert_eq!(latest_benchmark_build_failure(stdout), None);
+}
+
+#[test]
+fn start_console_marker_or_completion_observed_accepts_start_marker() {
+    let console_stdout = "OXIDE_READY testCameraNV12LegacyLivePreview\nOXIDE_START testCameraNV12LegacyLivePreview\n";
+
+    assert!(start_console_marker_or_completion_observed(
+        "",
+        "com.oxide.perf.complete",
+        console_stdout,
+        "OXIDE_START testCameraNV12LegacyLivePreview",
+        "OXIDE_COMPLETE testCameraNV12LegacyLivePreview"
+    ));
+}
+
+#[test]
+fn start_console_marker_or_completion_observed_accepts_completion_fallback() {
+    let completion_stdout =
+        "Darwin notification observation started.\n• Apr 2, 2026 at 02:26:54 : Observed 'com.oxide.perf.complete'\n";
+    let console_stdout = "OXIDE_READY testCameraNV12LegacyLivePreview\n";
+
+    assert!(start_console_marker_or_completion_observed(
+        completion_stdout,
+        "com.oxide.perf.complete",
+        console_stdout,
+        "OXIDE_START testCameraNV12LegacyLivePreview",
+        "OXIDE_COMPLETE testCameraNV12LegacyLivePreview"
     ));
 }
 
@@ -1602,13 +1966,60 @@ fn uikit_perf_environment_uses_launch_env_for_launch_cases() {
 #[test]
 fn uikit_perf_environment_uses_launch_style_for_optimized_launch_cases() {
     let json =
-        uikit_perf_environment_json_for_test_name("testOptimizedDetailDeepLinkLaunch", "60hz")
+        uikit_perf_environment_json_for_test_name("testOptimizedDetailDeepLinkLaunch", "native")
             .expect("optimized launch environment json");
     assert!(json.contains("\"OXIDE_PERF_UIKIT_LAUNCH\":\"1\""));
     assert!(json.contains("\"OXIDE_PERF_LAUNCH_SCENARIO\":\"detail_route\""));
     assert!(json.contains("\"OXIDE_PERF_LAUNCH_STYLE\":\"optimized\""));
     assert!(json.contains("\"OXIDE_PERF_LAUNCH_ROUTE\":\"oxide://detail/integration?item=42\""));
-    assert!(json.contains("\"OXIDE_PERF_REFRESH_MODE\":\"60hz\""));
+    assert!(json.contains("\"OXIDE_PERF_REFRESH_MODE\":\"native\""));
+}
+
+#[test]
+fn uikit_perf_environment_enables_watch_frame_capture_for_watchable_runs() {
+    let json = uikit_perf_environment_json_for_test_name_with_watch_capture(
+        "testButtonPressResponse",
+        "native",
+        true,
+    )
+    .expect("watchable environment json");
+    assert!(json.contains("\"OXIDE_PERF_WATCH_MODE\":\"1\""));
+    assert!(json.contains("\"OXIDE_PERF_FRAME_CAPTURE\":\"1\""));
+    assert!(json.contains("\"OXIDE_PERF_FRAME_CAPTURE_EVERY\":\"1\""));
+    assert!(json.contains("\"OXIDE_PERF_FRAME_CAPTURE_MAX\":\"12\""));
+    assert!(json.contains("\"OXIDE_PERF_CASE\":\"testButtonPressResponse\""));
+}
+
+#[test]
+fn uikit_perf_environment_respects_watch_frame_capture_overrides() {
+    with_env_vars(
+        &[
+            ("OXIDE_PERF_FRAME_CAPTURE_EVERY", Some("2")),
+            ("OXIDE_PERF_FRAME_CAPTURE_MAX", Some("5")),
+        ],
+        || {
+            let json = uikit_perf_environment_json_for_test_name_with_watch_capture(
+                "testButtonPressResponse",
+                "native",
+                true,
+            )
+            .expect("watchable environment json");
+            assert!(json.contains("\"OXIDE_PERF_FRAME_CAPTURE_EVERY\":\"2\""));
+            assert!(json.contains("\"OXIDE_PERF_FRAME_CAPTURE_MAX\":\"5\""));
+        },
+    );
+}
+
+#[test]
+fn perf_frame_capture_relative_source_uses_stable_case_component() {
+    assert_eq!(
+        perf_frame_capture_relative_source_for_test_name("testButtonPressResponse"),
+        "Library/Caches/oxide-watch-captures/testButtonPressResponse"
+    );
+    assert_eq!(
+        perf_frame_capture_relative_source_for_test_name("test odd/case name"),
+        "Library/Caches/oxide-watch-captures/test_odd_case_name"
+    );
 }
 
 #[test]
@@ -1630,7 +2041,7 @@ fn uikit_perf_environment_forwards_camera_benchmark_overrides() {
         || {
             let json = uikit_perf_environment_json_for_test_name(
                 "testCameraNV12LegacyLivePreview",
-                "60hz",
+                "native",
             )
             .expect("camera environment json");
             assert!(json.contains("\"OXIDE_PERF_CAMERA_PREVIEW_SURFACE_SCALE\":\"0.5\""));
@@ -1650,9 +2061,11 @@ fn uikit_perf_environment_forwards_camera_benchmark_overrides() {
 
 #[test]
 fn uikit_perf_environment_enables_real_app_camera_host_for_real_app_cases() {
-    let custom_json =
-        uikit_perf_environment_json_for_test_name("testCameraNV12LegacyRealAppLivePreview", "60hz")
-            .expect("real app custom environment json");
+    let custom_json = uikit_perf_environment_json_for_test_name(
+        "testCameraNV12LegacyRealAppLivePreview",
+        "native",
+    )
+    .expect("real app custom environment json");
     assert!(custom_json.contains("\"OXIDE_PERF_CASE\":\"testCameraNV12LegacyRealAppLivePreview\""));
     assert!(custom_json.contains("\"OXIDE_RENDER_IN_TEST\":\"1\""));
     assert!(custom_json.contains("\"OXIDE_PERF_CAMERA_REAL_APP_HOST\":\"1\""));
@@ -1661,7 +2074,7 @@ fn uikit_perf_environment_enables_real_app_camera_host_for_real_app_cases() {
 
     let hybrid_json = uikit_perf_environment_json_for_test_name(
         "testCameraNV12LegacyRealAppHybridPreviewLayerLivePreview",
-        "60hz",
+        "native",
     )
     .expect("real app hybrid environment json");
     assert!(hybrid_json.contains(
@@ -1671,6 +2084,28 @@ fn uikit_perf_environment_enables_real_app_camera_host_for_real_app_cases() {
     assert!(hybrid_json.contains("\"OXIDE_PERF_CAMERA_REAL_APP_HOST\":\"1\""));
     assert!(!hybrid_json.contains("\"OXIDE_PERF_PARKED\":\"1\""));
     assert!(hybrid_json.contains("\"OXIDE_PERF_CAMERA_REAL_APP_HYBRID_VISIBLE_PREVIEW\":\"1\""));
+}
+
+#[test]
+fn oxide_device_launch_environment_json_forwards_runner_debug_env() {
+    with_env_vars(
+        &[
+            ("OXIDE_PERF_RUNNER_FILTER", Some("gpu.scene.zoom_image.frame")),
+            ("OXIDE_DEBUG_ENCODE_EVERY", Some("1")),
+            ("OXIDE_ENABLE_IMAGE_ARG_BUFFER", Some("0")),
+            ("OXIDE_ENABLE_DAMAGE", Some("0")),
+        ],
+        || {
+            let json = oxide_device_launch_environment_json(true)
+                .expect("oxide device launch environment json");
+            assert!(json.contains("\"OXIDE_PERF_RUNNER\":\"1\""));
+            assert!(json.contains("\"OXIDE_PERF_RUNNER_SMOKE\":\"1\""));
+            assert!(json.contains("\"OXIDE_PERF_RUNNER_FILTER\":\"gpu.scene.zoom_image.frame\""));
+            assert!(json.contains("\"OXIDE_DEBUG_ENCODE_EVERY\":\"1\""));
+            assert!(json.contains("\"OXIDE_ENABLE_IMAGE_ARG_BUFFER\":\"0\""));
+            assert!(json.contains("\"OXIDE_ENABLE_DAMAGE\":\"0\""));
+        },
+    );
 }
 
 #[test]
@@ -1701,35 +2136,133 @@ fn map_uikit_case_includes_real_app_camera_cases() {
 
 #[test]
 fn official_device_battery_keeps_only_the_official_camera_pair() {
+    assert!(uikit_case_in_official_device_battery("testCameraNV12LegacyLivePreview")
+        .expect("parked pure custom case"));
+    assert!(uikit_case_in_official_device_battery("testCameraAVFoundationPreviewLayerLivePreview")
+        .expect("parked AVFoundation case"));
+    assert!(!uikit_case_in_official_device_battery(
+        "testCameraNV12LegacyHybridPreviewLayerLivePreview"
+    )
+    .expect("parked hybrid case"));
+    assert!(!uikit_case_in_official_device_battery("testCameraNV12LegacyRealAppLivePreview")
+        .expect("real app custom case"));
+    assert!(!uikit_case_in_official_device_battery(
+        "testCameraAVFoundationPreviewLayerRealAppLivePreview"
+    )
+    .expect("real app baseline case"));
+    assert!(!uikit_case_in_official_device_battery(
+        "testCameraNV12LegacyRealAppHybridPreviewLayerLivePreview",
+    )
+    .expect("real app hybrid case"));
+    assert!(!uikit_case_in_official_device_battery(
+        "testCameraAVFoundationPreviewLayerSidecarLivePreview"
+    )
+    .expect("sidecar diagnostic case"));
+}
+
+#[test]
+fn official_device_battery_keeps_representative_signal_cases_and_tiers_out_repetitive_matrix_rows()
+{
     assert!(
-        uikit_case_in_official_device_battery("testCameraNV12LegacyLivePreview")
-            .expect("parked pure custom case")
+        uikit_case_in_official_device_battery("testSpinnerSpin").expect("matched animation case")
     );
-    assert!(
-        uikit_case_in_official_device_battery("testCameraAVFoundationPreviewLayerLivePreview")
-            .expect("parked AVFoundation case")
+    assert!(uikit_case_in_official_device_battery("testOptimizedSpinnerSpin")
+        .expect("matched optimized animation case"));
+    assert!(uikit_case_in_official_device_battery("testImageZoomPan")
+        .expect("representative animation case"));
+    assert!(uikit_case_in_official_device_battery("testAnimTimelineBars")
+        .expect("matched timeline animation case"));
+    assert!(uikit_case_in_official_device_battery("testInputFormJourney")
+        .expect("matched journey case"));
+    assert!(uikit_case_in_official_device_battery("testCollectionNavigationJourney")
+        .expect("matched collection journey case"));
+    assert!(uikit_case_in_official_device_battery("testZoomImageGestureJourney")
+        .expect("matched zoom journey case"));
+    assert!(uikit_case_in_official_device_battery("testOrchestrationJourney")
+        .expect("matched orchestration journey case"));
+    assert!(uikit_case_in_official_device_battery("testButtonPressResponse")
+        .expect("matched navigation case"));
+    assert!(uikit_case_in_official_device_battery("testTextFocusResponse")
+        .expect("matched text focus case"));
+    assert!(uikit_case_in_official_device_battery("testCameraNV12LegacyLivePreview")
+        .expect("matched custom camera case"));
+    assert!(uikit_case_in_official_device_battery("testCameraAVFoundationPreviewLayerLivePreview")
+        .expect("matched avfoundation camera case"));
+    assert!(!uikit_case_in_official_device_battery("testCollectionViewEncode")
+        .expect("trimmed component case"));
+    assert!(!uikit_case_in_official_device_battery("testSimpleHomeColdLaunch")
+        .expect("trimmed launch case"));
+    assert!(!uikit_case_in_official_device_battery("testLabels1000Mount")
+        .expect("trimmed primitive case"));
+    assert!(!uikit_case_in_official_device_battery("testPhotoImportThumbnailBridge")
+        .expect("trimmed bridge case"));
+    assert!(!uikit_case_in_official_device_battery("testFeedScrollJourney")
+        .expect("trimmed unmatched journey case"));
+}
+
+#[test]
+fn compare_device_watchable_smoke_keeps_one_watchable_pair_per_family() {
+    assert!(uikit_case_in_compare_device_watchable_smoke("testSpinnerSpin")
+        .expect("animation smoke case"));
+    assert!(uikit_case_in_compare_device_watchable_smoke("testOptimizedButtonPressResponse")
+        .expect("navigation smoke case"));
+    assert!(uikit_case_in_compare_device_watchable_smoke("testCollectionNavigationJourney")
+        .expect("journey smoke case"));
+    assert!(uikit_case_in_compare_device_watchable_smoke("testCameraNV12LegacyLivePreview")
+        .expect("camera smoke case"));
+    assert!(!uikit_case_in_compare_device_watchable_smoke("testImageZoomPan")
+        .expect("non-smoke animation case"));
+    assert!(!uikit_case_in_compare_device_watchable_smoke("testTextFocusResponse")
+        .expect("non-smoke navigation case"));
+}
+
+#[test]
+fn compare_device_family_classification_matches_staged_proof_buckets() {
+    assert!(uikit_case_in_compare_device_family("testSpinnerSpin", "animation")
+        .expect("animation family"));
+    assert!(uikit_case_in_compare_device_family("testButtonPressResponse", "navigation")
+        .expect("navigation family"));
+    assert!(uikit_case_in_compare_device_family("testOrchestrationJourney", "journey")
+        .expect("journey family"));
+    assert!(uikit_case_in_compare_device_family(
+        "testCameraAVFoundationPreviewLayerLivePreview",
+        "camera"
+    )
+    .expect("camera family"));
+    assert!(uikit_case_in_compare_device_family(
+        "testCameraAVFoundationPreviewLayerLivePreview",
+        "image_pipeline"
+    )
+    .expect("camera alias family"));
+    assert!(!uikit_case_in_compare_device_family("testCollectionNavigationJourney", "animation")
+        .expect("wrong family"));
+}
+
+#[test]
+fn compare_device_promotion_missing_families_requires_green_proofs_for_current_build() {
+    let expected_stamp = UIKitHostBuildStamp {
+        destination: String::from("platform=iOS,id=device"),
+        development_team: String::from("TEAM"),
+        source_fingerprint: 42,
+    };
+    let mut families = BTreeMap::new();
+    families.insert(
+        String::from("animation"),
+        CompareDeviceProofFamilyStatus { watchable_smoke_passed: true, family_proof_passed: true },
     );
-    assert!(
-        !uikit_case_in_official_device_battery("testCameraNV12LegacyHybridPreviewLayerLivePreview")
-            .expect("parked hybrid case")
+    families.insert(
+        String::from("navigation"),
+        CompareDeviceProofFamilyStatus { watchable_smoke_passed: true, family_proof_passed: true },
     );
-    assert!(
-        !uikit_case_in_official_device_battery("testCameraNV12LegacyRealAppLivePreview")
-            .expect("real app custom case")
-    );
-    assert!(
-        !uikit_case_in_official_device_battery("testCameraAVFoundationPreviewLayerRealAppLivePreview")
-            .expect("real app baseline case")
-    );
-    assert!(
-        !uikit_case_in_official_device_battery(
-            "testCameraNV12LegacyRealAppHybridPreviewLayerLivePreview",
-        )
-        .expect("real app hybrid case")
-    );
-    assert!(
-        !uikit_case_in_official_device_battery("testCameraAVFoundationPreviewLayerSidecarLivePreview")
-            .expect("sidecar diagnostic case")
+    let status = CompareDeviceProofStatus { build_stamp: expected_stamp.clone(), families };
+
+    let missing = compare_device_missing_promotion_families(Some(&status), &expected_stamp);
+    assert_eq!(missing, vec![String::from("camera"), String::from("journey")]);
+
+    let stale_stamp = UIKitHostBuildStamp { source_fingerprint: 99, ..expected_stamp };
+    assert_eq!(
+        compare_device_missing_promotion_families(Some(&status), &stale_stamp),
+        compare_device_official_families()
     );
 }
 
@@ -1752,6 +2285,45 @@ fn unsupported_gpu_counter_profile_detection_matches_xctrace_error_text() {
     assert!(is_unsupported_gpu_counter_profile_error(text));
     assert!(!is_unsupported_gpu_counter_profile_error(
         "xcrun xctrace record failed with status 19: Cannot find process matching name: OxideHost"
+    ));
+}
+
+#[test]
+fn retryable_uikit_trace_handshake_error_matches_completion_timeout_text() {
+    assert!(is_retryable_uikit_trace_handshake_error(
+        "Error: xcrun devicectl device notification observe --device 00008150-001529C434F8401C --name com.oxide.perf.complete --session-timeout 30 --timeout 35 exited without observing `com.oxide.perf.complete` and console marker `OXIDE_COMPLETE testOptimizedCollectionViewEncode` never appeared before the timeout"
+    ));
+    assert!(is_retryable_uikit_trace_handshake_error(
+        "Error: xcrun devicectl device notification observe --device 00008150-001529C434F8401C --name com.oxide.perf.ready --session-timeout 30 --timeout 35 exited without observing `com.oxide.perf.ready` and console marker `OXIDE_READY testLabelEncode` never appeared before the timeout"
+    ));
+    assert!(is_retryable_uikit_trace_handshake_error(
+        "posted `com.oxide.perf.start` 3 times but `OXIDE_START testCameraNV12LegacyLivePreview` or `OXIDE_COMPLETE testCameraNV12LegacyLivePreview` never appeared before the acknowledgment timeout"
+    ));
+    assert!(!is_retryable_uikit_trace_handshake_error(
+        "xcrun xctrace record failed with status 19: Cannot find process matching name: OxideHost"
+    ));
+}
+
+#[test]
+fn retryable_xctrace_record_timeout_error_matches_watchdog_text() {
+    assert!(is_retryable_xctrace_record_timeout_error(
+        "Error: xcrun xctrace record --template Metal System Trace --device 00008150-001529C434F8401C --time-limit 6s --output /tmp/test.trace --no-prompt --instrument Points of Interest --launch -- com.oxide.host exceeded wall-time timeout of 21.0s before xctrace finished. stdout: Starting recording with the Metal System Trace template and Points of Interest Instruments. Launching process: com.oxide.host. Time limit: 6.0 s stderr: "
+    ));
+    assert!(!is_retryable_xctrace_record_timeout_error(
+        "xcrun xctrace record failed with status 19: Cannot find process matching name: OxideHost"
+    ));
+}
+
+#[test]
+fn retryable_devicectl_json_error_matches_streaming_device_failures() {
+    assert!(is_retryable_devicectl_json_error(
+        "ERROR: The operation couldn’t be completed. (CoreDevice.ActionError error 3.)\nNSDebugDescription = This operation could not be performed due to an error in StreamingAction: Couldn't get the message from the device."
+    ));
+    assert!(is_retryable_devicectl_json_error(
+        "StreamingAction: Couldn't get the message from the device."
+    ));
+    assert!(!is_retryable_devicectl_json_error(
+        "devicectl device info processes --device 00008150 failed with status 1"
     ));
 }
 
@@ -1838,7 +2410,7 @@ fn compare_uikit_reports_device_suite_gates_direct_counters() {
             scenario: String::from("primitive-view"),
             style: String::from("idiomatic"),
             cache_state: String::from("warm"),
-            refresh_mode: String::from("device-default"),
+            refresh_mode: String::from("native"),
             threshold_pct: 0.10,
             notes: Vec::new(),
             metrics: BTreeMap::from([
@@ -1870,7 +2442,7 @@ fn compare_uikit_reports_device_suite_gates_direct_counters() {
             scenario: String::from("primitive-view"),
             style: String::from("idiomatic"),
             cache_state: String::from("warm"),
-            refresh_mode: String::from("device-default"),
+            refresh_mode: String::from("native"),
             threshold_pct: 0.10,
             notes: Vec::new(),
             metrics: BTreeMap::from([
@@ -1911,7 +2483,7 @@ fn compare_uikit_reports_device_suite_gates_energy_when_present() {
             scenario: String::from("primitive-view"),
             style: String::from("idiomatic"),
             cache_state: String::from("warm"),
-            refresh_mode: String::from("device-default"),
+            refresh_mode: String::from("native"),
             threshold_pct: 0.10,
             notes: Vec::new(),
             metrics: BTreeMap::from([
@@ -1943,7 +2515,7 @@ fn compare_uikit_reports_device_suite_gates_energy_when_present() {
             scenario: String::from("primitive-view"),
             style: String::from("idiomatic"),
             cache_state: String::from("warm"),
-            refresh_mode: String::from("device-default"),
+            refresh_mode: String::from("native"),
             threshold_pct: 0.10,
             notes: Vec::new(),
             metrics: BTreeMap::from([
@@ -2013,7 +2585,7 @@ fn compare_uikit_reports_keys_device_rows_by_refresh_mode() {
             scenario: String::from("animation-effect"),
             style: String::from("idiomatic"),
             cache_state: String::from("warm"),
-            refresh_mode: String::from("60hz-capped"),
+            refresh_mode: String::from("legacy-refresh"),
             threshold_pct: 0.10,
             notes: Vec::new(),
             metrics: BTreeMap::from([

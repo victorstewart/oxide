@@ -24,16 +24,16 @@ perf-baseline:
     cd oxide && PERF_REPORT_DATE=$(date +%F) cargo run --release -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --write-baseline
 
 ios-perf:
-    cd oxide && cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios device-perf --refresh-mode both --compare benchmarks/uikit-device/latest.json --json-out benchmarks/uikit-device/ci-current.json --markdown-out benchmarks/uikit-device/ci-current.md
+    cd oxide && cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios device-perf --compare benchmarks/uikit-device/latest.json --json-out benchmarks/uikit-device/ci-current.json --markdown-out benchmarks/uikit-device/ci-current.md
 
 ios-perf-baseline:
-    cd oxide && PERF_REPORT_DATE=$(date +%F) cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios device-perf --refresh-mode both --write-baseline
+    cd oxide && PERF_REPORT_DATE=$(date +%F) cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios device-perf --write-baseline
 
 ios-device-perf:
-    cd oxide && cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios device-perf --refresh-mode both --compare benchmarks/uikit-device/latest.json --json-out benchmarks/uikit-device/ci-current.json --markdown-out benchmarks/uikit-device/ci-current.md
+    cd oxide && cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios device-perf --compare benchmarks/uikit-device/latest.json --json-out benchmarks/uikit-device/ci-current.json --markdown-out benchmarks/uikit-device/ci-current.md
 
 ios-device-perf-baseline:
-    cd oxide && PERF_REPORT_DATE=$(date +%F) cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios device-perf --refresh-mode both --write-baseline
+    cd oxide && PERF_REPORT_DATE=$(date +%F) cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios device-perf --write-baseline
 
 oxide-device-perf:
     cd oxide && cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios oxide-device-perf --compare benchmarks/oxide-device/latest.json --json-out benchmarks/oxide-device/ci-current.json --markdown-out benchmarks/oxide-device/ci-current.md

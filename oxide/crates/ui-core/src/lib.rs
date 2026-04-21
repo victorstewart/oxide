@@ -30,6 +30,7 @@ pub mod scroll_state;
 pub mod sensors;
 pub mod surface;
 pub mod telemetry;
+pub mod visual_tree;
 
 pub use camera::{
     recording_event_to_ui, CameraController, CameraEvent, CameraMetrics, CameraMode,
@@ -57,6 +58,19 @@ pub use sensors::{
 };
 pub use surface::{ChromeMetrics, InteractionBlockGuard, ScatterSpec, SurfaceRouter, UiSurface};
 pub use telemetry::TelemetryView;
+pub use visual_tree::{
+    build_visual_tree_action_graph, build_visual_tree_action_graph_manifest,
+    compare_visual_tree_action_graphs, compare_visual_tree_sequences,
+    compare_visual_tree_snapshots, default_visual_tree_action_animation_trace,
+    visual_tree_action_observation_for_path, visual_tree_node_by_path,
+    VisualTreeActionAnimationTracePlan, VisualTreeActionDescriptor, VisualTreeActionGraph,
+    VisualTreeActionGraphDiff, VisualTreeActionGraphManifest, VisualTreeActionNode,
+    VisualTreeActionObservation, VisualTreeActionReplayPlanStep, VisualTreeDiff, VisualTreeInsets,
+    VisualTreeMismatch, VisualTreeNode, VisualTreeRect, VisualTreeSequence, VisualTreeSequenceDiff,
+    VisualTreeSequenceStep, VisualTreeSequenceStepDiff, VisualTreeSnapshot, VisualTreeViewport,
+    VISUAL_TREE_ACTION_GRAPH_MANIFEST_SCHEMA_VERSION, VISUAL_TREE_ACTION_GRAPH_SCHEMA_VERSION,
+    VISUAL_TREE_SCHEMA_VERSION, VISUAL_TREE_SEQUENCE_SCHEMA_VERSION,
+};
 
 use oxide_renderer_api as gfx;
 

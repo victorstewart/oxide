@@ -298,6 +298,27 @@ static BOOL OxidePerfSignpostMatches(const char *utf8, size_t len,
     return;                                                                    \
   }
 
+uint64_t oxide_host_perf_workload_signpost_begin(void) {
+  if (@available(iOS 12.0, *)) {
+    os_log_t log = OxidePerfSignpostLog();
+    os_signpost_id_t signpostId = os_signpost_id_generate(log);
+    os_signpost_interval_begin(log, signpostId, "PerfWorkload");
+    return (uint64_t)signpostId;
+  }
+  return 0;
+}
+
+void oxide_host_perf_workload_signpost_end(uint64_t signpostIdRaw) {
+  if (signpostIdRaw == 0) {
+    return;
+  }
+  if (@available(iOS 12.0, *)) {
+    os_log_t log = OxidePerfSignpostLog();
+    os_signpost_id_t signpostId = (os_signpost_id_t)signpostIdRaw;
+    os_signpost_interval_end(log, signpostId, "PerfWorkload");
+  }
+}
+
 uint64_t oxide_host_perf_signpost_begin(const char *utf8, size_t len) {
   if (utf8 == NULL || len == 0) {
     return 0;
@@ -603,6 +624,9 @@ typedef struct oxide_host_stats_t {
   float cam_present_ms;
   float cam_commit_ms;
   float cam_gpu_ms;
+  float cam_gpu_render_ms;
+  float cam_gpu_vertex_ms;
+  float cam_gpu_fragment_ms;
   float cam_capture_total_ms;
   float cam_capture_sample_setup_ms;
   float cam_capture_lock_ms;
@@ -699,6 +723,17 @@ typedef struct oxide_host_app_debug_perf_t {
   uint8_t should_render;
   uint8_t host_ready;
 } oxide_host_app_debug_perf_t;
+
+__attribute__((weak)) void nametag_host_update_permission(int32_t domain,
+                                                          int32_t status) {
+  (void)domain;
+  (void)status;
+}
+
+__attribute__((weak)) void
+nametag_ios_handle_notification_response(NSDictionary *userInfo) {
+  (void)userInfo;
+}
 
 @class RustSceneDelegate;
 static __weak UIView *gMetalView = nil;
@@ -2802,6 +2837,7 @@ int32_t oxide_host_thermal_state(void) {
 - (IBAction)onImePaste:(UIButton *)button;
 - (IBAction)onImeHaptic:(UIButton *)button;
 - (void)updateCameraDrivenDisplayLinkState;
+- (void)installCameraDrivenSchedulingCallbackIfNeeded;
 - (void)handleActualAppCameraBenchmarkStart;
 @end
 
@@ -2923,6 +2959,17 @@ static void OxidePerfCameraBenchmarkStartCallback(
   BOOL shouldRun = atomic_load_explicit(&gCameraPreviewNeedsPresent,
                                         memory_order_acquire) != 0;
   self.displayLink.paused = !shouldRun;
+}
+
+- (void)installCameraDrivenSchedulingCallbackIfNeeded {
+  gActiveRustSceneDelegate = self;
+  if (OxidePerfCameraFrameDrivenSchedulingEnabled()) {
+    atomic_store_explicit(&gCameraPreviewNeedsPresent, 1, memory_order_release);
+    oxide_cam_set_preview_publish_callback(OxideCameraPreviewPublishDidAdvance,
+                                           NULL);
+  } else {
+    oxide_cam_set_preview_publish_callback(NULL, NULL);
+  }
 }
 
 - (void)updateActualAppCameraBenchmarkState:(NSString *)state {
@@ -3788,6 +3835,7 @@ static void OxidePerfCameraBenchmarkStartCallback(
       gAppDebugPerf.metal_view_installs += 1;
     }
     [self.window makeKeyAndVisible];
+    [self installCameraDrivenSchedulingCallbackIfNeeded];
     if (mv != nil && ShouldRender()) {
       OXLOG(@"willConnect: creating DisplayLink for perf app host");
       self.displayLink =
@@ -4259,14 +4307,7 @@ static void OxidePerfCameraBenchmarkStartCallback(
   ]];
   self.statusLabel = status;
   [self.window makeKeyAndVisible];
-  gActiveRustSceneDelegate = self;
-  if (OxidePerfCameraFrameDrivenSchedulingEnabled()) {
-    atomic_store_explicit(&gCameraPreviewNeedsPresent, 1, memory_order_release);
-    oxide_cam_set_preview_publish_callback(OxideCameraPreviewPublishDidAdvance,
-                                           NULL);
-  } else {
-    oxide_cam_set_preview_publish_callback(NULL, NULL);
-  }
+  [self installCameraDrivenSchedulingCallbackIfNeeded];
 
   [self pushAnimOptions];
   [self pushDamageOptions];

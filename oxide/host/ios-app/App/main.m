@@ -16,15 +16,18 @@ static BOOL OxideArgPresent(int argc, char **argv, const char *needle) {
   return NO;
 }
 
+static BOOL OxideEnvTruthy(const char *value) {
+  return value && (strcmp(value, "1") == 0 || strcasecmp(value, "true") == 0 ||
+                   strcasecmp(value, "yes") == 0);
+}
+
 static BOOL OxideShouldLaunchParkedBenchmark(int argc, char **argv) {
   const char *env = getenv("OXIDE_PERF_PARKED");
   if (!env) {
     const char *realAppHost = getenv("OXIDE_PERF_CAMERA_REAL_APP_HOST");
-    const BOOL realAppHostEnabled =
-        (realAppHost && (strcmp(realAppHost, "1") == 0 ||
-                         strcasecmp(realAppHost, "true") == 0 ||
-                         strcasecmp(realAppHost, "yes") == 0)) ||
-        OxideArgPresent(argc, argv, "-oxide-perf-camera-real-app-host");
+    const BOOL realAppHostEnabled = OxideEnvTruthy(realAppHost) ||
+                                    OxideArgPresent(argc, argv,
+                                                    "-oxide-perf-camera-real-app-host");
     if (realAppHostEnabled) {
       return NO;
     }
@@ -35,17 +38,13 @@ static BOOL OxideShouldLaunchParkedBenchmark(int argc, char **argv) {
            (injectPath &&
             strstr(injectPath, "OxideHostPerfTests.xctest") != NULL);
   }
-  return strcmp(env, "1") == 0 || strcasecmp(env, "true") == 0 ||
-         strcasecmp(env, "yes") == 0;
+  return OxideEnvTruthy(env);
 }
 
 static BOOL OxideShouldLaunchUIKitPerfApp(int argc, char **argv) {
   const char *env = getenv("OXIDE_PERF_UIKIT_LAUNCH");
-  if (env) {
-    return strcmp(env, "1") == 0 || strcasecmp(env, "true") == 0 ||
-           strcasecmp(env, "yes") == 0;
-  }
-  return OxideArgPresent(argc, argv, "-oxide-perf-uikit-launch");
+  return env ? OxideEnvTruthy(env)
+             : OxideArgPresent(argc, argv, "-oxide-perf-uikit-launch");
 }
 
 static void OxideConfigurePerfProcessEnvironment(void) {

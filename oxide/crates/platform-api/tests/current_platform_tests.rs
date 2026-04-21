@@ -173,6 +173,7 @@ impl TimeService for StubTime {
     }
 }
 
+#[derive(Default)]
 struct RecordingPlatform {
     redraws: AtomicUsize,
     haptics: Arc<RecordingHaptics>,
@@ -183,22 +184,6 @@ struct RecordingPlatform {
     motion: StubMotion,
     push: StubPush,
     time: StubTime,
-}
-
-impl RecordingPlatform {
-    fn new() -> Self {
-        Self {
-            redraws: AtomicUsize::new(0),
-            haptics: Arc::new(RecordingHaptics),
-            permissions: StubPermissions,
-            camera: StubCamera,
-            bluetooth: StubBluetooth,
-            location: StubLocation,
-            motion: StubMotion,
-            push: StubPush,
-            time: StubTime,
-        }
-    }
 }
 
 impl Platform for RecordingPlatform {
@@ -275,7 +260,7 @@ fn current_platform_registry_tracks_shared_platform_instance() {
     assert!(current_platform_if_registered().is_none());
     assert!(!request_redraw_if_registered());
 
-    let platform: Arc<dyn Platform + Send + Sync> = Arc::new(RecordingPlatform::new());
+    let platform: Arc<dyn Platform + Send + Sync> = Arc::new(RecordingPlatform::default());
     set_current_platform(platform.clone());
 
     let installed = current_platform();

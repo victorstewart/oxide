@@ -3,6 +3,16 @@ import Foundation
 import XCTest
 
 private let oxideBenchmarkMetadataPrefix = "OXIDE_BENCHMARK_METADATA "
+private let perfDisplayLabelEnvName = "OXIDE_PERF_DISPLAY_LABEL"
+
+private func perfDisplayLabelTextForTestName(_ testName: String) -> String
+{
+    if testName.starts(with: "testOptimized")
+    {
+        return "UIKIT OPT  \(testName)"
+    }
+    return "UIKIT  \(testName)"
+}
 
 private struct OxideBenchmarkMetadataPayload: Codable
 {
@@ -160,6 +170,31 @@ final class OxideUIKitLaunchPerfTests: XCTestCase
         return parsed
     }
 
+    private func adaptiveMeasureIterations(
+        for testName: String,
+        defaultValue: Int
+    ) -> Int
+    {
+        let lowercased = testName.lowercased()
+        let adaptiveDefault: Int
+        if lowercased.contains("camera")
+        {
+            adaptiveDefault = 3
+        }
+        else if lowercased.contains("coldlaunch")
+            || lowercased.contains("resume")
+            || lowercased.contains("foregroundafterbackground")
+            || lowercased.contains("deeplink")
+        {
+            adaptiveDefault = 4
+        }
+        else
+        {
+            adaptiveDefault = 5
+        }
+        return resolvePerfMeasureIterations(defaultValue: min(defaultValue, adaptiveDefault))
+    }
+
     private func coldLaunchMetrics() -> [XCTMetric]
     {
         [
@@ -232,6 +267,7 @@ final class OxideUIKitLaunchPerfTests: XCTestCase
         var environment = [
             "OXIDE_PERF_CASE": caseName,
             "OXIDE_PERF_CAMERA_REAL_APP_HOST": "1",
+            perfDisplayLabelEnvName: perfDisplayLabelTextForTestName(caseName),
             "OXIDE_RENDER_IN_TEST": "1",
             "NSUnbufferedIO": "YES",
             "UITEST": "1",
@@ -274,7 +310,7 @@ final class OxideUIKitLaunchPerfTests: XCTestCase
         readyCounter.waitForCount(1, timeout: 20.0, context: app.debugDescription)
 
         let options = XCTMeasureOptions()
-        options.iterationCount = resolvePerfMeasureIterations(defaultValue: 5)
+        options.iterationCount = adaptiveMeasureIterations(for: caseName, defaultValue: 5)
         emitBenchmarkMetadataLine(
             testName: caseName,
             measureIterations: options.iterationCount,
@@ -300,11 +336,15 @@ final class OxideUIKitLaunchPerfTests: XCTestCase
     {
         let app = makeApp(scenario: scenario, route: route, style: style)
         let options = XCTMeasureOptions()
-        options.iterationCount = 10
+        let testName = style == .optimized
+            ? "testOptimized\(scenario.coldLaunchTestName(route: route).dropFirst(4))"
+            : scenario.coldLaunchTestName(route: route)
+        var launchEnvironment = app.launchEnvironment
+        launchEnvironment[perfDisplayLabelEnvName] = perfDisplayLabelTextForTestName(testName)
+        app.launchEnvironment = launchEnvironment
+        options.iterationCount = adaptiveMeasureIterations(for: testName, defaultValue: 10)
         emitBenchmarkMetadataLine(
-            testName: style == .optimized
-                ? "testOptimized\(scenario.coldLaunchTestName(route: route).dropFirst(4))"
-                : scenario.coldLaunchTestName(route: route),
+            testName: testName,
             measureIterations: options.iterationCount,
             benchmarkIterations: 1
         )
@@ -326,11 +366,15 @@ final class OxideUIKitLaunchPerfTests: XCTestCase
         waitForLaunchReady(app)
 
         let options = XCTMeasureOptions()
-        options.iterationCount = 10
+        let testName = style == .optimized
+            ? "testOptimized\(scenario.resumeTestName.dropFirst(4))"
+            : scenario.resumeTestName
+        var launchEnvironment = app.launchEnvironment
+        launchEnvironment[perfDisplayLabelEnvName] = perfDisplayLabelTextForTestName(testName)
+        app.launchEnvironment = launchEnvironment
+        options.iterationCount = adaptiveMeasureIterations(for: testName, defaultValue: 10)
         emitBenchmarkMetadataLine(
-            testName: style == .optimized
-                ? "testOptimized\(scenario.resumeTestName.dropFirst(4))"
-                : scenario.resumeTestName,
+            testName: testName,
             measureIterations: options.iterationCount,
             benchmarkIterations: 1
         )

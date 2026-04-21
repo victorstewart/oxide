@@ -262,8 +262,7 @@ fn apply_camera_capture_perf(_stats: &mut StatsSnapshot) {
             _stats.cam_samples_bridged = snap.samples_bridged;
             _stats.cam_samples_published = snap.samples_published;
             _stats.cam_samples_presented = snap.samples_presented;
-            _stats.cam_samples_superseded_before_present =
-                snap.samples_superseded_before_present;
+            _stats.cam_samples_superseded_before_present = snap.samples_superseded_before_present;
         }
     }
 }
@@ -1592,6 +1591,8 @@ impl Default for AppState {
 static APP_STATE: std::sync::OnceLock<std::sync::Mutex<AppState>> = std::sync::OnceLock::new();
 static PERF_REPORT_JSON: std::sync::OnceLock<std::sync::Mutex<Option<Vec<u8>>>> =
     std::sync::OnceLock::new();
+static PERF_REPORT_ERROR: std::sync::OnceLock<std::sync::Mutex<Option<Vec<u8>>>> =
+    std::sync::OnceLock::new();
 
 fn app_state() -> &'static std::sync::Mutex<AppState> {
     APP_STATE.get_or_init(|| std::sync::Mutex::new(AppState::default()))
@@ -1599,6 +1600,10 @@ fn app_state() -> &'static std::sync::Mutex<AppState> {
 
 fn perf_report_json() -> &'static std::sync::Mutex<Option<Vec<u8>>> {
     PERF_REPORT_JSON.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+fn perf_report_error() -> &'static std::sync::Mutex<Option<Vec<u8>>> {
+    PERF_REPORT_ERROR.get_or_init(|| std::sync::Mutex::new(None))
 }
 
 fn with_app_mut<R>(f: impl FnOnce(&mut AppState) -> R) -> Option<R> {
@@ -1720,12 +1725,29 @@ fn resource_read(name: &str) -> Option<Vec<u8>> {
     Some(data)
 }
 
+const FALLBACK_UI_FONT_BYTES: &[u8] =
+    include_bytes!("../../../../crates/ui-core/assets/Asap-Regular.ttf");
+
 fn load_default_assets(
     renderer: *mut metal::MetalRenderer,
     router: &mut test_scenes::Router<MtlUploader>,
 ) {
-    if let Some(bytes) = resource_read("fonts/Inter-Regular.ttf") {
-        let _fid0 = router.text.fonts.add_font(text::Font::from_bytes(bytes));
+    let (font_source, font_bytes) = if let Some(bytes) = resource_read("fonts/Inter-Regular.ttf") {
+        ("resource", bytes)
+    } else {
+        ("fallback", FALLBACK_UI_FONT_BYTES.to_vec())
+    };
+    ios_log(&format!("oxide.host-ios: ui font source={} bytes={}", font_source, font_bytes.len()));
+    if ios_log_enabled() {
+        eprintln!("oxide.watch: host font source={} bytes={}", font_source, font_bytes.len());
+    }
+    let fid0 = router.text.fonts.add_font(text::Font::from_bytes(font_bytes));
+    if ios_log_enabled() {
+        eprintln!(
+            "oxide.watch: host font added id={} font0_present={}",
+            fid0,
+            router.text.fonts.font(0).is_some()
+        );
     }
     let (w, h, data) = match resource_read("images/sample.png")
         .and_then(|png_bytes| decode_png_rgba(&png_bytes).ok())
@@ -1764,12 +1786,13 @@ pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_i
         app.telemetry_ops = Some(TelemetryOperations::new(Arc::clone(&telemetry)));
         Some(telemetry)
     };
+    let direct_preview_only = benchmark_camera_fast_path_active(&app);
     let renderer_cfg = metal::MetalRendererConfig {
         wants_hdr: false,
         sample_count: 1,
         camera_render_mode: app.camera_render_mode,
         camera_texture_source: app.camera_texture_source,
-        direct_preview_only: app.benchmark_mode,
+        direct_preview_only,
     };
     let mut renderer = match metal::MetalRenderer::new_with_config(renderer_cfg) {
         Ok(r) => r,
@@ -1778,16 +1801,12 @@ pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_i
             return -1;
         }
     };
-    if !app.benchmark_mode {
+    if !direct_preview_only {
         let _ = renderer.resize(w, h, scale);
     }
     let mut boxed = Box::new(renderer);
     let renderer_ptr: *mut metal::MetalRenderer = &mut *boxed;
-    let mut router = if app.benchmark_mode {
-        None
-    } else {
-        Some(test_scenes::Router::new(MtlUploader { renderer: renderer_ptr }))
-    };
+    let mut router = Some(test_scenes::Router::new(MtlUploader { renderer: renderer_ptr }));
     let sensor_bridge = if app.benchmark_mode {
         None
     } else {
@@ -2257,12 +2276,25 @@ pub extern "C" fn oxide_host_set_camera_render_mode(mode: i32) -> ::libc::c_int 
         _ => metal::CameraRenderMode::Nv12Optimized,
     };
     #[cfg(target_os = "ios")]
-    let _ = unsafe {
+    let preview_pixel_format_rc = unsafe {
         oxide_cam_set_preview_pixel_format(
             if matches!(mode, metal::CameraRenderMode::BgraBenchmark) { 1 } else { 0 },
         )
     };
+    #[cfg(not(target_os = "ios"))]
+    let preview_pixel_format_rc = 0;
     let mut app = app_state().lock().expect("app_state mutex");
+    apply_camera_render_mode(&mut app, mode, preview_pixel_format_rc)
+}
+
+fn apply_camera_render_mode(
+    app: &mut AppState,
+    mode: metal::CameraRenderMode,
+    preview_pixel_format_rc: ::libc::c_int,
+) -> ::libc::c_int {
+    if preview_pixel_format_rc != 0 {
+        return -1;
+    }
     app.camera_render_mode = mode;
     if let Some(renderer) = app.renderer.as_mut() {
         renderer.set_camera_render_mode(mode);
@@ -2976,6 +3008,12 @@ pub extern "C" fn oxide_host_app_stats(out: *mut OxideHostStats) -> ::libc::c_in
 
 #[no_mangle]
 pub extern "C" fn oxide_host_run_perf_suite(smoke: u8) -> ::libc::c_int {
+    if let Ok(mut slot) = perf_report_json().lock() {
+        *slot = None;
+    }
+    if let Ok(mut slot) = perf_report_error().lock() {
+        *slot = None;
+    }
     match perf_runner::collect_suite_json(smoke != 0) {
         Ok(json) => {
             if let Ok(mut slot) = perf_report_json().lock() {
@@ -2987,7 +3025,11 @@ pub extern "C" fn oxide_host_run_perf_suite(smoke: u8) -> ::libc::c_int {
             }
         }
         Err(err) => {
-            ios_log(&format!("oxide.host-ios: collect perf suite failed: {err}"));
+            let message = format!("{err:#}");
+            if let Ok(mut slot) = perf_report_error().lock() {
+                *slot = Some(message.as_bytes().to_vec());
+            }
+            ios_log(&format!("oxide.host-ios: collect perf suite failed: {message}"));
             -1
         }
     }
@@ -3021,6 +3063,32 @@ pub extern "C" fn oxide_host_clear_perf_report_json() {
     if let Ok(mut slot) = perf_report_json().lock() {
         *slot = None;
     }
+    if let Ok(mut slot) = perf_report_error().lock() {
+        *slot = None;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_perf_report_error_len() -> usize {
+    perf_report_error()
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|bytes| bytes.len().saturating_add(1)))
+        .unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_copy_perf_report_error(out_ptr: *mut u8, out_len: usize) -> usize {
+    let Ok(slot) = perf_report_error().lock() else { return 0 };
+    let Some(bytes) = slot.as_ref() else { return 0 };
+    let needed = bytes.len().saturating_add(1);
+    if !out_ptr.is_null() && out_len >= needed {
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, bytes.len());
+            *out_ptr.add(bytes.len()) = 0;
+        }
+    }
+    needed
 }
 
 #[no_mangle]
@@ -3056,6 +3124,47 @@ pub extern "C" fn oxide_host_set_scene(index: u32) -> ::libc::c_int {
         }
         if let Some(router) = app.router.as_mut() {
             router.set_scene(index as usize);
+            0
+        } else {
+            -1
+        }
+    })
+    .unwrap_or(-1)
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_prepare_onscreen_benchmark(
+    name_ptr: *const u8,
+    name_len: usize,
+) -> ::libc::c_int {
+    let Ok(name) = std::str::from_utf8(unsafe { std::slice::from_raw_parts(name_ptr, name_len) })
+    else {
+        return -2;
+    };
+    with_app_mut(|app| {
+        let Some(router) = app.router.as_mut() else { return -1 };
+        if router.prepare_onscreen_benchmark(name) {
+            0
+        } else {
+            -1
+        }
+    })
+    .unwrap_or(-1)
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_step_onscreen_benchmark(
+    name_ptr: *const u8,
+    name_len: usize,
+    step: u32,
+) -> ::libc::c_int {
+    let Ok(name) = std::str::from_utf8(unsafe { std::slice::from_raw_parts(name_ptr, name_len) })
+    else {
+        return -2;
+    };
+    with_app_mut(|app| {
+        let Some(router) = app.router.as_mut() else { return -1 };
+        if router.step_onscreen_benchmark(name, step as usize) {
             0
         } else {
             -1
@@ -3212,6 +3321,27 @@ mod tests {
         assert!(second_start.pointer.is_some());
         let second_end = tracker.on_event(2, 2, 1.0, 1.0, 340_000_000);
         assert!(second_end.double_tap);
+    }
+
+    #[test]
+    fn apply_camera_render_mode_updates_state_after_success() {
+        let mut app = AppState::default();
+        assert_eq!(
+            apply_camera_render_mode(&mut app, metal::CameraRenderMode::BgraBenchmark, 0),
+            0
+        );
+        assert_eq!(app.camera_render_mode, metal::CameraRenderMode::BgraBenchmark);
+    }
+
+    #[test]
+    fn apply_camera_render_mode_preserves_existing_mode_after_preview_pixel_format_failure() {
+        let mut app = AppState::default();
+        app.camera_render_mode = metal::CameraRenderMode::Nv12Legacy;
+        assert_eq!(
+            apply_camera_render_mode(&mut app, metal::CameraRenderMode::BgraBenchmark, -1),
+            -1
+        );
+        assert_eq!(app.camera_render_mode, metal::CameraRenderMode::Nv12Legacy);
     }
 }
 #[cfg(target_os = "ios")]

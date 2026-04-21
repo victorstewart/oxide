@@ -1,12 +1,12 @@
 use oxide_renderer_metal::{
-    direct_live_preview_needs_render, direct_preview_can_reuse_resize_targets,
-    direct_preview_reason_requires_drawable, direct_preview_submission_backpressure_applies,
+    camera_blur_pass_plan, direct_live_preview_needs_render,
+    direct_preview_can_reuse_resize_targets, direct_preview_reason_requires_drawable,
+    direct_preview_should_clear_load_action, direct_preview_submission_backpressure_applies,
     direct_preview_tiny_renderer_active, direct_preview_uses_dontcare_load_action,
     direct_preview_uses_fast_yuv_pipeline, CameraRenderMode, CameraTextureSource, MetalInitError,
-    MetalRenderer, MetalRendererConfig,
-    CAMERA_PREVIEW_REASON_BACKPRESSURE, CAMERA_PREVIEW_REASON_NEW_GENERATION,
-    CAMERA_PREVIEW_REASON_NEW_TIMESTAMP, CAMERA_PREVIEW_REASON_NO_CURRENT_FRAME,
-    CAMERA_PREVIEW_REASON_RESIZE,
+    MetalRenderer, MetalRendererConfig, CAMERA_PREVIEW_REASON_BACKPRESSURE,
+    CAMERA_PREVIEW_REASON_NEW_GENERATION, CAMERA_PREVIEW_REASON_NEW_TIMESTAMP,
+    CAMERA_PREVIEW_REASON_NO_CURRENT_FRAME, CAMERA_PREVIEW_REASON_RESIZE,
 };
 use std::sync::{Mutex, OnceLock};
 
@@ -29,18 +29,24 @@ fn with_env_var(key: &str, value: Option<&str>, body: impl FnOnce()) {
     }
 }
 
-#[test]
-fn direct_camera_preview_path_draws_single_synthetic_camera_frame() {
-    let mut renderer = match MetalRenderer::new_with_config(MetalRendererConfig {
+fn synthetic_direct_preview_renderer() -> Option<MetalRenderer> {
+    match MetalRenderer::new_with_config(MetalRendererConfig {
         wants_hdr: false,
         sample_count: 1,
         camera_render_mode: CameraRenderMode::Nv12Legacy,
         camera_texture_source: CameraTextureSource::SyntheticBenchmark,
         direct_preview_only: true,
     }) {
-        Ok(renderer) => renderer,
-        Err(MetalInitError::NoDevice) => return,
+        Ok(renderer) => Some(renderer),
+        Err(MetalInitError::NoDevice) => None,
         Err(err) => panic!("unexpected renderer init error: {err}"),
+    }
+}
+
+#[test]
+fn direct_camera_preview_path_draws_single_synthetic_camera_frame() {
+    let Some(mut renderer) = synthetic_direct_preview_renderer() else {
+        return;
     };
 
     unsafe {
@@ -62,17 +68,18 @@ fn direct_camera_preview_path_draws_single_synthetic_camera_frame() {
 }
 
 #[test]
+fn camera_blur_pass_plan_scales_to_legacy_strength() {
+    assert_eq!(camera_blur_pass_plan(0.0), (1, 6.0));
+    assert_eq!(camera_blur_pass_plan(6.0), (1, 6.0));
+    assert_eq!(camera_blur_pass_plan(18.0), (3, 6.0));
+    assert_eq!(camera_blur_pass_plan(24.0), (4, 6.0));
+    assert_eq!(camera_blur_pass_plan(f32::INFINITY), (1, 6.0));
+}
+
+#[test]
 fn direct_camera_preview_path_reuses_same_surface_size_without_regressing_output() {
-    let mut renderer = match MetalRenderer::new_with_config(MetalRendererConfig {
-        wants_hdr: false,
-        sample_count: 1,
-        camera_render_mode: CameraRenderMode::Nv12Legacy,
-        camera_texture_source: CameraTextureSource::SyntheticBenchmark,
-        direct_preview_only: true,
-    }) {
-        Ok(renderer) => renderer,
-        Err(MetalInitError::NoDevice) => return,
-        Err(err) => panic!("unexpected renderer init error: {err}"),
+    let Some(mut renderer) = synthetic_direct_preview_renderer() else {
+        return;
     };
 
     unsafe {
@@ -95,16 +102,8 @@ fn direct_camera_preview_path_reuses_same_surface_size_without_regressing_output
 
 #[test]
 fn direct_camera_preview_path_reuses_same_size_fast_path() {
-    let mut renderer = match MetalRenderer::new_with_config(MetalRendererConfig {
-        wants_hdr: false,
-        sample_count: 1,
-        camera_render_mode: CameraRenderMode::Nv12Legacy,
-        camera_texture_source: CameraTextureSource::SyntheticBenchmark,
-        direct_preview_only: true,
-    }) {
-        Ok(renderer) => renderer,
-        Err(MetalInitError::NoDevice) => return,
-        Err(err) => panic!("unexpected renderer init error: {err}"),
+    let Some(mut renderer) = synthetic_direct_preview_renderer() else {
+        return;
     };
 
     unsafe {
@@ -235,4 +234,11 @@ fn direct_preview_dontcare_load_action_is_env_gated() {
     with_env_var("OXIDE_PERF_CAMERA_PREVIEW_DONT_CARE_LOAD", Some("1"), || {
         assert!(direct_preview_uses_dontcare_load_action());
     });
+}
+
+#[test]
+fn direct_preview_dontcare_load_action_still_clears_when_no_frame_will_draw() {
+    assert!(direct_preview_should_clear_load_action(false, true));
+    assert!(!direct_preview_should_clear_load_action(true, true));
+    assert!(direct_preview_should_clear_load_action(true, false));
 }

@@ -77,6 +77,9 @@ targets:
     prebuildScripts:
       - name: Build + Embed Rust Staticlib
         shell: /bin/sh
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - "$(BUILT_PRODUCTS_DIR)/liboxide_host_ios.a"
         script: |
           set -euo pipefail
           PROJECT_DIR="${PROJECT_DIR}"
@@ -91,8 +94,16 @@ targets:
               RUST_TARGET="aarch64-apple-ios-sim"
               ;;
           esac
+          HOST_LINKER_WRAPPER="${CARGO_TARGET_DIR}/xcode-host-clang.sh"
+          cat > "${HOST_LINKER_WRAPPER}" <<'EOF'
+          #!/bin/sh
+          exec xcrun --sdk macosx clang "$@"
+          EOF
+          chmod +x "${HOST_LINKER_WRAPPER}"
           echo "Building Rust staticlib for ${RUST_TARGET}…"
           (cd "${REPO_ROOT}/host/ios-app/oxide-host-ios" && \
+             export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="${HOST_LINKER_WRAPPER}" && \
+             unset SDKROOT SDK_DIR SDK_NAME IPHONEOS_DEPLOYMENT_TARGET && \
              cargo build -p oxide-host-ios --release --features perf-host-stubs --target "${RUST_TARGET}")
           mkdir -p "${BUILT_PRODUCTS_DIR}"
           SRC="${CARGO_TARGET_DIR}/${RUST_TARGET}/release/liboxide_host_ios.a"
