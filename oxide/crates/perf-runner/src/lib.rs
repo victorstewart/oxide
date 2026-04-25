@@ -18,7 +18,7 @@ use std::hint::black_box;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 const DEFAULT_BASELINE_JSON: &str = "benchmarks/workspace/latest.json";
@@ -100,21 +100,22 @@ struct BridgePerfSpec {
     name: &'static str,
 }
 
-fn perf_case_filters() -> &'static Vec<String> {
-    static FILTERS: OnceLock<Vec<String>> = OnceLock::new();
-    FILTERS.get_or_init(|| {
-        std::env::var(PERF_RUNNER_FILTER_ENV)
-            .ok()
-            .map(|value| {
-                value
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(String::from)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
-    })
+fn perf_case_filters() -> Vec<String> {
+    std::env::var(PERF_RUNNER_FILTER_ENV)
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(String::from)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn perf_case_filter_active() -> bool {
+    !perf_case_filters().is_empty()
 }
 
 fn perf_case_allowed(case_id: &str) -> bool {
@@ -189,6 +190,7 @@ const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
         id: "cpu.authoring.surface_router.compose",
         name: "Surface Router Composition",
     },
+    AuthoringPerfSpec { id: "gpu.authoring.scene3d.mixed_frame", name: "Scene3D Mixed Frame" },
 ];
 
 const PERF_LAUNCH_SPECS: &[LaunchPerfSpec] = &[
@@ -829,7 +831,9 @@ fn print_usage() {
 
 fn run_suite(cli: Cli) -> Result<()> {
     let report = collect_suite(cli.smoke)?;
-    assert_full_coverage(&report.coverage)?;
+    if !perf_case_filter_active() {
+        assert_full_coverage(&report.coverage)?;
+    }
 
     let comparison = if let Some(path) = cli.compare.as_ref() {
         let baseline = load_report(path)?;
@@ -924,7 +928,7 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
     if perf_case_prefix_allowed("cpu.journey.") {
         push_journey_cases(&mut cases, smoke, &mut covered_journeys)?;
     }
-    if perf_case_prefix_allowed("cpu.authoring.") {
+    if perf_case_prefix_allowed("cpu.authoring.") || perf_case_prefix_allowed("gpu.authoring.") {
         push_authoring_cases(&mut cases, smoke, &mut covered_authoring)?;
     }
     if perf_case_prefix_allowed("cpu.layout.") {
@@ -1280,83 +1284,95 @@ fn push_system_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) {
     let gesture_loops = if smoke { 96 } else { 384 };
     let text_loops = if smoke { 8 } else { 24 };
 
-    cases.push(measure_cpu_case(
-        "cpu.system.prepare_draws.current",
-        "system",
-        smoke,
-        true,
-        0.12,
-        prepare_loops,
-        vec![String::from("Current ui-core clip lowering path.")],
-        move || ui::prepare_draws(&prepare_template).len() as u64,
-    ));
+    if perf_case_allowed("cpu.system.prepare_draws.current") {
+        cases.push(measure_cpu_case(
+            "cpu.system.prepare_draws.current",
+            "system",
+            smoke,
+            true,
+            0.12,
+            prepare_loops,
+            vec![String::from("Current ui-core clip lowering path.")],
+            move || ui::prepare_draws(&prepare_template).len() as u64,
+        ));
+    }
 
-    cases.push(measure_cpu_case(
-        "cpu.system.prepare_draws.legacy",
-        "audit-baseline",
-        smoke,
-        false,
-        0.0,
-        prepare_loops,
-        vec![String::from("Legacy ClipPop recompute path kept for A/B audit context.")],
-        move || legacy_prepare_draws(&prepare_template_legacy).len() as u64,
-    ));
+    if perf_case_allowed("cpu.system.prepare_draws.legacy") {
+        cases.push(measure_cpu_case(
+            "cpu.system.prepare_draws.legacy",
+            "audit-baseline",
+            smoke,
+            false,
+            0.0,
+            prepare_loops,
+            vec![String::from("Legacy ClipPop recompute path kept for A/B audit context.")],
+            move || legacy_prepare_draws(&prepare_template_legacy).len() as u64,
+        ));
+    }
 
-    cases.push(measure_cpu_case(
-        "cpu.system.coalesce_adjacent_draws.current",
-        "system",
-        smoke,
-        true,
-        0.12,
-        coalesce_loops,
-        vec![String::from("Current linear ui-core merge path.")],
-        move || {
-            let mut list =
-                api::DrawList { items: coalesce_template.clone(), ..api::DrawList::default() };
-            ui::coalesce_adjacent_draws(&mut list);
-            list.items.len() as u64
-        },
-    ));
+    if perf_case_allowed("cpu.system.coalesce_adjacent_draws.current") {
+        cases.push(measure_cpu_case(
+            "cpu.system.coalesce_adjacent_draws.current",
+            "system",
+            smoke,
+            true,
+            0.12,
+            coalesce_loops,
+            vec![String::from("Current linear ui-core merge path.")],
+            move || {
+                let mut list =
+                    api::DrawList { items: coalesce_template.clone(), ..api::DrawList::default() };
+                ui::coalesce_adjacent_draws(&mut list);
+                list.items.len() as u64
+            },
+        ));
+    }
 
-    cases.push(measure_cpu_case(
-        "cpu.system.coalesce_adjacent_draws.legacy",
-        "audit-baseline",
-        smoke,
-        false,
-        0.0,
-        coalesce_loops,
-        vec![String::from("Legacy Vec::remove merge path kept for A/B audit context.")],
-        move || {
-            let mut list = api::DrawList {
-                items: coalesce_template_legacy.clone(),
-                ..api::DrawList::default()
-            };
-            legacy_coalesce_adjacent_draws(&mut list);
-            list.items.len() as u64
-        },
-    ));
+    if perf_case_allowed("cpu.system.coalesce_adjacent_draws.legacy") {
+        cases.push(measure_cpu_case(
+            "cpu.system.coalesce_adjacent_draws.legacy",
+            "audit-baseline",
+            smoke,
+            false,
+            0.0,
+            coalesce_loops,
+            vec![String::from("Legacy Vec::remove merge path kept for A/B audit context.")],
+            move || {
+                let mut list = api::DrawList {
+                    items: coalesce_template_legacy.clone(),
+                    ..api::DrawList::default()
+                };
+                legacy_coalesce_adjacent_draws(&mut list);
+                list.items.len() as u64
+            },
+        ));
+    }
 
-    cases.push(measure_cpu_case(
-        "cpu.system.gesture_sequence",
-        "system",
-        smoke,
-        true,
-        0.12,
-        gesture_loops,
-        vec![String::from("Tap, long-press, pan, and double-tap sequence.")],
-        move || run_gesture_sequence(&gesture_events),
-    ));
+    if perf_case_allowed("cpu.system.gesture_sequence") {
+        cases.push(measure_cpu_case(
+            "cpu.system.gesture_sequence",
+            "system",
+            smoke,
+            true,
+            0.12,
+            gesture_loops,
+            vec![String::from("Tap, long-press, pan, and double-tap sequence.")],
+            move || run_gesture_sequence(&gesture_events),
+        ));
+    }
 
-    cases.push(measure_cpu_case(
-        "cpu.system.text_shape_bake",
-        "system",
-        smoke,
-        true,
-        0.12,
-        text_loops,
-        vec![String::from("Mixed Latin+CJK shaping and atlas bake.")],
-        move || run_text_shape_bake(),
-    ));
+    if perf_case_allowed("cpu.system.text_shape_bake") {
+        cases.push(measure_cpu_case(
+            "cpu.system.text_shape_bake",
+            "system",
+            smoke,
+            true,
+            0.12,
+            text_loops,
+            vec![String::from("Mixed Latin+CJK shaping and atlas bake.")],
+            move || run_text_shape_bake(),
+        ));
+    }
 }
 
 fn push_component_cases(
@@ -1521,6 +1537,7 @@ fn push_authoring_cases(
             POPUP_WHEEL_PICKER_CASE_ID => authoring_popup_wheel_picker_case(smoke),
             "cpu.authoring.burst_emitter.sample" => authoring_burst_emitter_case(smoke),
             "cpu.authoring.surface_router.compose" => authoring_surface_router_case(smoke),
+            "gpu.authoring.scene3d.mixed_frame" => authoring_scene3d_mixed_frame_case(smoke)?,
             other => bail!("unknown authoring perf case `{}`", other),
         };
         cases.push(case);
@@ -3366,6 +3383,128 @@ fn authoring_surface_router_case(smoke: bool) -> PerfCaseResult {
                 + hits
         },
     )
+}
+
+fn authoring_scene3d_identity() -> metal::scene3d::Mat4 {
+    [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+}
+
+fn authoring_scene3d_mixed_frame_case(smoke: bool) -> Result<PerfCaseResult> {
+    let mut renderer =
+        Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
+    renderer.resize(512, 512, 2.0).context("resizing Metal renderer")?;
+
+    let fill_vertices = [
+        metal::scene3d::Vertex3d { position: [-0.72, -0.60, 0.08] },
+        metal::scene3d::Vertex3d { position: [0.18, -0.62, 0.08] },
+        metal::scene3d::Vertex3d { position: [-0.40, 0.22, 0.08] },
+    ];
+    let fill_indices = [0_u32, 1, 2];
+    let fill = renderer
+        .mesh3d_create(&metal::scene3d::Mesh3dData {
+            vertices: &fill_vertices,
+            indices: &fill_indices,
+            topology: metal::scene3d::MeshTopology::Triangles,
+        })
+        .context("creating scene3d fill mesh")?;
+
+    let line_vertices = [
+        metal::scene3d::Vertex3d { position: [-0.84, 0.0, 0.0] },
+        metal::scene3d::Vertex3d { position: [0.84, 0.0, 0.0] },
+        metal::scene3d::Vertex3d { position: [0.0, -0.84, 0.0] },
+        metal::scene3d::Vertex3d { position: [0.0, 0.84, 0.0] },
+    ];
+    let line_indices = [0_u32, 1, 2, 3];
+    let lines = renderer
+        .mesh3d_create(&metal::scene3d::Mesh3dData {
+            vertices: &line_vertices,
+            indices: &line_indices,
+            topology: metal::scene3d::MeshTopology::Lines,
+        })
+        .context("creating scene3d line mesh")?;
+
+    let identity = authoring_scene3d_identity();
+    let mut line_instance =
+        metal::scene3d::Instance3d::new(lines, identity, api::Color::rgba(0.98, 0.30, 0.46, 1.0));
+    line_instance.cull = metal::scene3d::CullMode3d::None;
+    line_instance.depth_write = false;
+    let instances = [
+        metal::scene3d::Instance3d::new(fill, identity, api::Color::rgba(0.18, 0.72, 1.0, 1.0)),
+        line_instance,
+    ];
+    let scene = metal::scene3d::Pass3d {
+        clear_color: Some(api::Color::rgba(0.08, 0.09, 0.13, 1.0)),
+        clear_depth: true,
+        view_proj: identity,
+        instances: &instances,
+    };
+
+    let mut overlay = api::DrawList::default();
+    overlay.items.push(api::DrawCmd::RRect {
+        rect: api::RectF::new(16.0, 16.0, 96.0, 28.0),
+        radii: [8.0; 4],
+        color: api::Color::rgba(0.92, 0.94, 0.97, 1.0),
+    });
+
+    let warmups = if smoke { 2 } else { 4 };
+    let frames = if smoke { 6 } else { 12 };
+    let mut frame_samples = Vec::with_capacity(frames);
+    let mut encode_samples = Vec::with_capacity(frames);
+    let mut draws_sum = 0.0;
+
+    for index in 0..(warmups + frames) {
+        let frame_t0 = Instant::now();
+        let token = renderer.begin_frame(&api::FrameTarget, None);
+        renderer
+            .encode_scene3d(&scene)
+            .with_context(|| "encoding authoring scene3d mixed frame")?;
+        renderer.encode_pass(&overlay);
+        renderer.submit(token).with_context(|| "submitting authoring scene3d mixed frame")?;
+        let stats = renderer.last_stats();
+        if index >= warmups {
+            frame_samples.push(frame_t0.elapsed().as_secs_f64() * 1000.0);
+            encode_samples.push(stats.encode_ms);
+            draws_sum += stats.draws as f64;
+        }
+    }
+
+    renderer.mesh3d_release(fill);
+    renderer.mesh3d_release(lines);
+
+    let summary = summarize(&frame_samples);
+    let (layer, scenario, variant, cache_state, refresh_mode) =
+        perf_case_contract_metadata("gpu.authoring.scene3d.mixed_frame", "authoring");
+    let mut metrics = BTreeMap::new();
+    metrics.insert(String::from("draws_avg"), draws_sum / frames as f64);
+    metrics.insert(String::from("encode_ms_median"), summarize(&encode_samples).median);
+    metrics
+        .insert(String::from("mesh_vertices"), (fill_vertices.len() + line_vertices.len()) as f64);
+    metrics.insert(String::from("mesh_indices"), (fill_indices.len() + line_indices.len()) as f64);
+
+    Ok(PerfCaseResult {
+        id: String::from("gpu.authoring.scene3d.mixed_frame"),
+        family: String::from("authoring"),
+        layer: String::from(layer),
+        scenario: String::from(scenario),
+        variant: String::from(variant),
+        cache_state: String::from(cache_state),
+        refresh_mode: String::from(refresh_mode),
+        unit: String::from("ms/frame"),
+        gated: true,
+        threshold_pct: 0.20,
+        median: summary.median,
+        p95: summary.p95,
+        p99: summary.p99,
+        min: summary.min,
+        max: summary.max,
+        mean: summary.mean,
+        samples: frame_samples.len(),
+        ops_per_sample: 1,
+        notes: vec![String::from(
+            "Persistent scene3d mesh handles rendered ahead of a 2D Oxide drawlist in the same frame to validate mixed 2D/3D authoring overhead on the Metal backend.",
+        )],
+        metrics,
+    })
 }
 
 fn authoring_username_policy() -> ui::TextFieldPolicy {

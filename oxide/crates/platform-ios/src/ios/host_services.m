@@ -9,6 +9,7 @@
 #import <UserNotifications/UserNotifications.h>
 #import <dispatch/dispatch.h>
 #import <stdbool.h>
+#import <stdatomic.h>
 #import <stdint.h>
 #import <stdlib.h>
 #import <string.h>
@@ -42,6 +43,8 @@ static const int32_t kNametagPermissionDomainCamera = 2;
 static const int32_t kNametagPermissionDomainBluetooth = 4;
 static const int32_t kNametagPermissionDomainMicrophone = 6;
 static const int32_t kNametagPermissionDomainMediaLibrary = 7;
+static _Atomic(uint32_t) g_media_library_cached_status =
+    ATOMIC_VAR_INIT(kOxPermStatusNotDetermined);
 
 static void dispatch_main_async(void (^block)(void)) {
   if ([NSThread isMainThread]) {
@@ -351,12 +354,20 @@ static PHAuthorizationStatus current_photo_authorization(void) {
   return [PHPhotoLibrary authorizationStatus];
 }
 
+static void cache_media_library_permission_status(PHAuthorizationStatus status) {
+  atomic_store_explicit(&g_media_library_cached_status,
+                        oxide_status_from_photo_authorization(status),
+                        memory_order_relaxed);
+}
+
 static uint32_t oxide_media_library_permission_status(void) {
-  return oxide_status_from_photo_authorization(current_photo_authorization());
+  return atomic_load_explicit(&g_media_library_cached_status,
+                              memory_order_relaxed);
 }
 
 static int32_t nametag_media_library_permission_status(void) {
-  return nametag_status_from_photo_authorization(current_photo_authorization());
+  return (int32_t)atomic_load_explicit(&g_media_library_cached_status,
+                                       memory_order_relaxed);
 }
 
 static void emit_location_permission_updates(void) {
@@ -602,7 +613,8 @@ void oxide_host_perm_request(uint32_t domain) {
       [PHPhotoLibrary
           requestAuthorizationForAccessLevel:PHAccessLevelReadWrite
                                      handler:^(PHAuthorizationStatus status) {
-                                       (void)status;
+                                       cache_media_library_permission_status(
+                                           status);
                                        emit_oxide_permission_async(
                                            kOxPermDomainMediaLibrary,
                                            oxide_media_library_permission_status());
@@ -611,7 +623,7 @@ void oxide_host_perm_request(uint32_t domain) {
     }
 #endif
     [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus status) {
-      (void)status;
+      cache_media_library_permission_status(status);
       emit_oxide_permission_async(kOxPermDomainMediaLibrary,
                                   oxide_media_library_permission_status());
     }];
@@ -632,8 +644,8 @@ void nametag_ios_publish_permissions(void) {
                                 nametag_camera_permission_status());
   emit_nametag_permission_async(kNametagPermissionDomainMicrophone,
                                 nametag_microphone_permission_status());
-  emit_nametag_permission_async(kNametagPermissionDomainMediaLibrary,
-                                nametag_media_library_permission_status());
+  // Keep Photos permission lazy. Boot-time permission sync must not probe
+  // PHPhotoLibrary before the app explicitly tries to access the library.
 }
 
 void nametag_ios_request_permission(int32_t domain) {
@@ -674,7 +686,8 @@ void nametag_ios_request_permission(int32_t domain) {
       [PHPhotoLibrary
           requestAuthorizationForAccessLevel:PHAccessLevelReadWrite
                                      handler:^(PHAuthorizationStatus status) {
-                                       (void)status;
+                                       cache_media_library_permission_status(
+                                           status);
                                        emit_nametag_permission_async(
                                            kNametagPermissionDomainMediaLibrary,
                                            nametag_media_library_permission_status());
@@ -683,7 +696,7 @@ void nametag_ios_request_permission(int32_t domain) {
     }
 #endif
     [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus status) {
-      (void)status;
+      cache_media_library_permission_status(status);
       emit_nametag_permission_async(kNametagPermissionDomainMediaLibrary,
                                     nametag_media_library_permission_status());
     }];

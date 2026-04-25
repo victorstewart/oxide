@@ -1,8 +1,7 @@
 # Oxide Performance Report
 
 - Suite: `full`
-- Label: `2026-03-27`
-- Coverage: 9/9 components, 7/7 animations, 5/5 launch cases, 25/25 primitive lifecycle cases, 17/17 CPU scenes, 17/17 GPU scenes, 7/7 journeys, 4/4 authoring APIs, 3/3 image pipeline cases, 3/3 navigation cases, 4/4 reconcile cases, 8/8 bridge paths
+- Coverage: 9/9 components, 7/7 animations, 5/5 launch cases, 25/25 primitive lifecycle cases, 17/17 CPU scenes, 17/17 GPU scenes, 7/7 journeys, 5/5 authoring APIs, 3/3 image pipeline cases, 3/3 navigation cases, 4/4 reconcile cases, 8/8 bridge paths
 
 ## Contract Coverage
 
@@ -31,138 +30,139 @@
 
 | Case | Layer | Scenario | Variant | Cache | Refresh | P50 | P95 | P99 | Peak | Unit | Gate | Key Metrics |
 | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- |
-| `cpu.system.prepare_draws.current` | `engine` | `system` | `oxide` | `warm` | `offscreen` | 3.897 | 3.943 | 3.944 | 3.944 | us/op | regression-gated | `-` |
-| `cpu.system.prepare_draws.legacy` | `engine` | `audit-baseline` | `legacy-baseline` | `warm` | `offscreen` | 4.937 | 5.067 | 5.075 | 5.077 | us/op | audit-only | `-` |
-| `cpu.system.coalesce_adjacent_draws.current` | `engine` | `system` | `oxide` | `warm` | `offscreen` | 4.192 | 4.583 | 4.834 | 4.896 | us/op | regression-gated | `-` |
-| `cpu.system.coalesce_adjacent_draws.legacy` | `engine` | `audit-baseline` | `legacy-baseline` | `warm` | `offscreen` | 173.423 | 177.171 | 177.414 | 177.475 | us/op | audit-only | `-` |
-| `cpu.system.gesture_sequence` | `engine` | `system` | `oxide` | `warm` | `offscreen` | 0.276 | 0.304 | 0.324 | 0.329 | us/op | regression-gated | `-` |
-| `cpu.system.text_shape_bake` | `engine` | `system` | `oxide` | `warm` | `offscreen` | 19.762 | 20.435 | 20.442 | 20.443 | us/op | regression-gated | `-` |
-| `cpu.component.label.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 42.614 | 44.064 | 44.401 | 44.485 | us/op | regression-gated | `-` |
-| `cpu.component.progress_bar.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 0.006 | 0.006 | 0.006 | 0.006 | us/op | regression-gated | `-` |
-| `cpu.component.spinner.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 0.002 | 0.002 | 0.002 | 0.002 | us/op | regression-gated | `-` |
-| `cpu.component.button.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 2.850 | 2.863 | 2.865 | 2.866 | us/op | regression-gated | `-` |
-| `cpu.component.toggle.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 0.006 | 0.007 | 0.008 | 0.009 | us/op | regression-gated | `-` |
-| `cpu.component.slider.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 0.007 | 0.008 | 0.008 | 0.008 | us/op | regression-gated | `-` |
-| `cpu.component.image_view.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 0.003 | 0.003 | 0.003 | 0.003 | us/op | regression-gated | `-` |
-| `cpu.component.nine_slice_image.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 0.003 | 0.003 | 0.003 | 0.003 | us/op | regression-gated | `-` |
-| `cpu.component.collection_view.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 2.646 | 2.714 | 2.716 | 2.717 | us/op | regression-gated | `-` |
-| `cpu.animation.spinner_spin` | `engine` | `animation` | `oxide` | `warm` | `offscreen` | 0.006 | 0.006 | 0.006 | 0.006 | us/op | regression-gated | `-` |
-| `cpu.animation.progress_indeterminate` | `engine` | `animation` | `oxide` | `warm` | `offscreen` | 0.007 | 0.007 | 0.007 | 0.007 | us/op | regression-gated | `-` |
-| `cpu.animation.button_press_scale` | `engine` | `animation` | `oxide` | `warm` | `offscreen` | 2.566 | 2.643 | 2.647 | 2.648 | us/op | regression-gated | `-` |
-| `cpu.animation.toggle_thumb_spring` | `engine` | `animation` | `oxide` | `warm` | `offscreen` | 0.007 | 0.007 | 0.007 | 0.007 | us/op | regression-gated | `-` |
-| `cpu.animation.slider_thumb_move` | `engine` | `animation` | `oxide` | `warm` | `offscreen` | 0.008 | 0.009 | 0.009 | 0.009 | us/op | regression-gated | `-` |
-| `cpu.animation.image_zoom_pan` | `engine` | `animation` | `oxide` | `warm` | `offscreen` | 0.007 | 0.007 | 0.007 | 0.007 | us/op | regression-gated | `-` |
-| `cpu.animation.anim_timeline_bars` | `engine` | `animation` | `oxide` | `warm` | `offscreen` | 8.384 | 8.666 | 8.698 | 8.706 | us/op | regression-gated | `-` |
-| `cpu.launch.simple_home.cold_launch` | `flow` | `launch-lifecycle` | `oxide` | `cold` | `offscreen` | 126.417 | 184.608 | 196.488 | 199.458 | us/journey | regression-gated | `-` |
-| `cpu.launch.heavy_home.cold_launch` | `flow` | `launch-lifecycle` | `oxide` | `cold` | `offscreen` | 78.272 | 92.610 | 94.756 | 95.292 | us/journey | regression-gated | `-` |
-| `cpu.launch.detail.deep_link_launch` | `flow` | `launch-lifecycle` | `oxide` | `cold` | `offscreen` | 387.458 | 426.875 | 433.475 | 435.125 | us/journey | regression-gated | `-` |
-| `cpu.launch.simple_home.warm_resume` | `flow` | `launch-lifecycle` | `oxide` | `warm` | `offscreen` | 142.396 | 165.897 | 169.812 | 170.791 | us/journey | regression-gated | `-` |
-| `cpu.launch.heavy_home.foreground_after_background` | `flow` | `launch-lifecycle` | `oxide` | `warm` | `offscreen` | 86.354 | 94.096 | 95.386 | 95.709 | us/journey | regression-gated | `-` |
-| `cpu.primitive.empty_root.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 23.088 | 27.027 | 28.303 | 28.622 | us/op | regression-gated | `-` |
-| `cpu.primitive.flat_rects.10.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 22.495 | 25.708 | 26.684 | 26.928 | us/op | regression-gated | `-` |
-| `cpu.primitive.flat_rects.100.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 28.463 | 30.713 | 31.102 | 31.199 | us/op | regression-gated | `-` |
-| `cpu.primitive.flat_rects.1000.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 66.276 | 70.230 | 71.375 | 71.662 | us/op | regression-gated | `-` |
-| `cpu.primitive.flat_rects.10.mutate_fill` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 0.087 | 0.088 | 0.088 | 0.088 | us/op | regression-gated | `-` |
-| `cpu.primitive.flat_rects.100.mutate_fill` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 0.690 | 0.703 | 0.709 | 0.711 | us/op | regression-gated | `-` |
-| `cpu.primitive.flat_rects.1000.mutate_fill` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 8.982 | 15.165 | 16.669 | 17.044 | us/op | regression-gated | `-` |
-| `cpu.primitive.flat_rects.100.remove_all` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 15.013 | 15.384 | 15.451 | 15.468 | us/op | regression-gated | `-` |
-| `cpu.primitive.flat_rects.100.remount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 15.658 | 16.525 | 17.030 | 17.157 | us/op | regression-gated | `-` |
-| `cpu.primitive.labels.10.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 145.451 | 147.699 | 147.747 | 147.759 | us/op | regression-gated | `-` |
-| `cpu.primitive.labels.100.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 1466.722 | 2088.315 | 2581.341 | 2704.597 | us/op | regression-gated | `-` |
-| `cpu.primitive.labels.1000.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 14832.938 | 15319.533 | 15453.440 | 15486.916 | us/op | regression-gated | `-` |
-| `cpu.primitive.labels.10.mutate_text` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 146.667 | 148.648 | 149.194 | 149.330 | us/op | regression-gated | `-` |
-| `cpu.primitive.labels.100.mutate_text` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 1484.694 | 1520.049 | 1521.299 | 1521.611 | us/op | regression-gated | `-` |
-| `cpu.primitive.labels.1000.mutate_text` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 14687.636 | 14972.806 | 15014.844 | 15025.354 | us/op | regression-gated | `-` |
-| `cpu.primitive.cards.10.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 0.055 | 0.056 | 0.056 | 0.056 | us/op | regression-gated | `-` |
-| `cpu.primitive.cards.100.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 0.504 | 0.510 | 0.512 | 0.513 | us/op | regression-gated | `-` |
-| `cpu.primitive.cards.10.mutate_palette` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 0.055 | 0.055 | 0.055 | 0.055 | us/op | regression-gated | `-` |
-| `cpu.primitive.cards.100.mutate_palette` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 0.508 | 0.511 | 0.512 | 0.512 | us/op | regression-gated | `-` |
-| `cpu.primitive.images.10.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 0.059 | 0.060 | 0.060 | 0.060 | us/op | regression-gated | `-` |
-| `cpu.primitive.images.100.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 0.372 | 0.378 | 0.381 | 0.382 | us/op | regression-gated | `-` |
-| `cpu.primitive.images.10.mutate_alpha` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 0.030 | 0.031 | 0.031 | 0.031 | us/op | regression-gated | `-` |
-| `cpu.primitive.images.100.mutate_alpha` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 0.285 | 0.289 | 0.290 | 0.290 | us/op | regression-gated | `-` |
-| `cpu.primitive.control_set.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 50.151 | 51.131 | 51.217 | 51.239 | us/op | regression-gated | `-` |
-| `cpu.primitive.control_set.mutate_state` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 10.891 | 11.115 | 11.149 | 11.158 | us/op | regression-gated | `-` |
-| `cpu.scene.controls.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 23.803 | 24.079 | 24.134 | 24.147 | us/op | regression-gated | `-` |
-| `cpu.scene.text_layout.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 143.487 | 145.930 | 146.049 | 146.079 | us/op | regression-gated | `-` |
-| `cpu.scene.zoom_image.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 13.233 | 13.437 | 13.444 | 13.445 | us/op | regression-gated | `-` |
-| `cpu.scene.anim_timeline.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 24.630 | 25.208 | 25.388 | 25.433 | us/op | regression-gated | `-` |
-| `cpu.scene.collection.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 13.784 | 13.968 | 14.017 | 14.029 | us/op | regression-gated | `-` |
-| `cpu.scene.damage_lab.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 78.594 | 81.225 | 81.345 | 81.375 | us/op | regression-gated | `-` |
-| `cpu.scene.input_lab.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 103.829 | 105.252 | 105.317 | 105.333 | us/op | regression-gated | `-` |
-| `cpu.scene.nine_slice.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 16.765 | 17.092 | 17.186 | 17.210 | us/op | regression-gated | `-` |
-| `cpu.scene.sdf_text.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 31.439 | 32.133 | 32.294 | 32.335 | us/op | regression-gated | `-` |
-| `cpu.scene.snapshot.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 48.182 | 48.992 | 49.235 | 49.296 | us/op | regression-gated | `-` |
-| `cpu.scene.camera.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 29.032 | 29.546 | 29.674 | 29.706 | us/op | regression-gated | `-` |
-| `cpu.scene.elements_extended.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 82.351 | 84.974 | 85.378 | 85.479 | us/op | regression-gated | `-` |
-| `cpu.scene.animation_config.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 167.707 | 171.085 | 172.015 | 172.247 | us/op | regression-gated | `-` |
-| `cpu.scene.orchestration.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 101.326 | 102.341 | 102.445 | 102.471 | us/op | regression-gated | `-` |
-| `cpu.scene.permissions.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 212.180 | 276.893 | 336.904 | 351.906 | us/op | regression-gated | `-` |
-| `cpu.scene.integration.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 120.641 | 123.095 | 123.211 | 123.240 | us/op | regression-gated | `-` |
-| `cpu.scene.stress.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 108.232 | 110.655 | 111.708 | 111.972 | us/op | regression-gated | `-` |
-| `gpu.scene.controls.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 1.940 | 6.014 | 7.212 | 8.239 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=25.020; draw_ms_median=0.890; draws_avg=22.000` |
-| `gpu.scene.text_layout.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 3.290 | 6.448 | 6.724 | 6.754 | ms/frame | regression-gated | `culled_avg=6.000; damage_pct_avg=3.300; draw_ms_median=1.406; draws_avg=6.000` |
-| `gpu.scene.zoom_image.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 2.012 | 6.237 | 6.690 | 7.000 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=80.960; draw_ms_median=0.753; draws_avg=4.000` |
-| `gpu.scene.anim_timeline.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 2.208 | 6.276 | 6.494 | 6.592 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=41.213; draw_ms_median=1.047; draws_avg=16.000` |
-| `gpu.scene.collection.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 0.904 | 5.164 | 5.304 | 5.372 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=100.000; draw_ms_median=0.292; draws_avg=4.000` |
-| `gpu.scene.damage_lab.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 1.784 | 6.025 | 6.503 | 6.817 | ms/frame | regression-gated | `culled_avg=2.000; damage_pct_avg=3.300; draw_ms_median=0.792; draws_avg=6.000` |
-| `gpu.scene.input_lab.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 7.674 | 8.356 | 9.135 | 9.765 | ms/frame | regression-gated | `culled_avg=42.000; damage_pct_avg=3.300; draw_ms_median=2.769; draws_avg=6.000` |
-| `gpu.scene.nine_slice.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 0.897 | 6.207 | 8.975 | 10.233 | ms/frame | regression-gated | `culled_avg=2.000; damage_pct_avg=3.300; draw_ms_median=0.271; draws_avg=2.000` |
-| `gpu.scene.sdf_text.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 1.153 | 5.355 | 6.689 | 7.687 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=3.300; draw_ms_median=0.548; draws_avg=4.000` |
-| `gpu.scene.snapshot.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 1.234 | 5.255 | 5.737 | 5.792 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=3.300; draw_ms_median=0.558; draws_avg=4.000` |
-| `gpu.scene.camera.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 0.844 | 5.197 | 5.319 | 5.321 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=100.000; draw_ms_median=0.277; draws_avg=8.000` |
-| `gpu.scene.elements_extended.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 5.514 | 8.189 | 8.362 | 8.400 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=100.000; draw_ms_median=2.748; draws_avg=36.000` |
-| `gpu.scene.animation_config.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 8.318 | 8.537 | 8.603 | 8.610 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=100.000; draw_ms_median=7.475; draws_avg=130.000` |
-| `gpu.scene.orchestration.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 8.351 | 8.824 | 8.905 | 8.949 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=100.000; draw_ms_median=3.720; draws_avg=56.000` |
-| `gpu.scene.permissions.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 10.065 | 14.414 | 14.451 | 14.466 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=100.000; draw_ms_median=8.963; draws_avg=178.000` |
-| `gpu.scene.integration.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 7.911 | 8.644 | 9.020 | 9.251 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=100.000; draw_ms_median=3.040; draws_avg=41.000` |
-| `gpu.scene.stress.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 8.269 | 9.144 | 9.220 | 9.238 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=100.000; draw_ms_median=4.564; draws_avg=64.000` |
-| `cpu.journey.input_form_submit` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 493.062 | 553.662 | 554.532 | 554.750 | us/journey | regression-gated | `-` |
-| `cpu.journey.collection_navigation` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 127.083 | 136.764 | 137.619 | 137.833 | us/journey | regression-gated | `-` |
-| `cpu.journey.zoom_image_gesture_cycle` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 115.083 | 147.978 | 165.529 | 169.916 | us/journey | regression-gated | `-` |
-| `cpu.journey.orchestration_transition_modal` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 978.333 | 1016.075 | 1019.015 | 1019.750 | us/journey | regression-gated | `-` |
-| `cpu.journey.feed_scroll_matrix` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 124.563 | 124.865 | 124.940 | 124.959 | us/journey | regression-gated | `-` |
-| `cpu.journey.thumbnail_grid_scroll_matrix` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 144.145 | 149.342 | 150.602 | 150.917 | us/journey | regression-gated | `-` |
-| `cpu.journey.chat_thread_scroll_matrix` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 233.729 | 241.304 | 241.394 | 241.417 | us/journey | regression-gated | `-` |
-| `cpu.authoring.text_fields.edit_cycle` | `engine` | `authoring` | `oxide` | `warm` | `offscreen` | 0.843 | 0.856 | 0.859 | 0.859 | us/op | regression-gated | `-` |
-| `cpu.authoring.popup_wheel_picker.interaction` | `engine` | `authoring` | `oxide` | `warm` | `offscreen` | 0.001 | 0.001 | 0.001 | 0.001 | us/op | regression-gated | `-` |
-| `cpu.authoring.burst_emitter.sample` | `engine` | `authoring` | `oxide` | `warm` | `offscreen` | 0.668 | 0.672 | 0.672 | 0.672 | us/op | regression-gated | `-` |
-| `cpu.authoring.surface_router.compose` | `engine` | `authoring` | `oxide` | `warm` | `offscreen` | 114.005 | 116.489 | 116.617 | 116.649 | us/op | regression-gated | `-` |
-| `cpu.layout.flat_grid.rotation_relayout` | `engine` | `layout-invalidation` | `oxide` | `warm` | `offscreen` | 40.448 | 42.023 | 42.180 | 42.219 | us/op | regression-gated | `dirty_nodes=240.000; layout_passes=2.000` |
-| `cpu.layout.deep_stack.theme_swap` | `engine` | `layout-invalidation` | `oxide` | `warm` | `offscreen` | 28.129 | 30.229 | 30.357 | 30.389 | us/op | regression-gated | `dirty_nodes=60.000; layout_passes=2.000` |
-| `cpu.layout.grid.safe_area_swap` | `engine` | `layout-invalidation` | `oxide` | `warm` | `offscreen` | 37.618 | 39.307 | 39.477 | 39.519 | us/op | regression-gated | `dirty_nodes=180.000; layout_passes=3.000` |
-| `cpu.text_input.large_editor.keystroke_burst` | `engine` | `text-input` | `oxide` | `warm` | `offscreen` | 1215.146 | 1236.785 | 1237.007 | 1237.062 | us/op | regression-gated | `dirty_nodes=1.000` |
-| `cpu.text_input.large_editor.paste_10kb` | `engine` | `text-input` | `oxide` | `warm` | `offscreen` | 10.697 | 10.831 | 10.833 | 10.834 | us/op | regression-gated | `dirty_nodes=1.000` |
-| `cpu.text_input.large_editor.selection_replace` | `engine` | `text-input` | `oxide` | `warm` | `offscreen` | 83.618 | 85.641 | 85.797 | 85.836 | us/op | regression-gated | `dirty_nodes=1.000` |
-| `cpu.image_pipeline.png.decode` | `engine` | `image-pipeline` | `oxide` | `cold` | `offscreen` | 50.745 | 52.148 | 52.194 | 52.205 | us/op | regression-gated | `encoded_bytes=6797.000; texture_bytes=65536.000` |
-| `gpu.image_pipeline.png.upload` | `engine` | `image-pipeline` | `oxide` | `warm` | `offscreen` | 15.157 | 15.719 | 15.792 | 15.810 | us/upload | regression-gated | `encoded_bytes=6797.000; texture_bytes=65536.000` |
-| `gpu.image_pipeline.png.first_visible` | `engine` | `image-pipeline` | `oxide` | `warm` | `offscreen` | 0.448 | 2.591 | 3.737 | 4.024 | ms/frame | regression-gated | `draw_calls=0.000; encode_ms_median=0.011; encoded_bytes=6797.000; texture_bytes=65536.000` |
-| `cpu.navigation.button_press.response` | `flow` | `navigation-input` | `oxide` | `warm` | `offscreen` | 2.488 | 2.521 | 2.524 | 2.524 | us/op | regression-gated | `dirty_nodes=1.000` |
-| `cpu.navigation.slider_scrub.response` | `flow` | `navigation-input` | `oxide` | `warm` | `offscreen` | 0.008 | 0.008 | 0.008 | 0.008 | us/op | regression-gated | `dirty_nodes=1.000` |
-| `cpu.navigation.text_focus.response` | `flow` | `navigation-input` | `oxide` | `warm` | `offscreen` | 384.971 | 396.985 | 399.239 | 399.802 | us/op | regression-gated | `dirty_nodes=1.000` |
-| `cpu.reconcile.single_node_mutation` | `engine` | `state-reconcile` | `oxide` | `warm` | `offscreen` | 6.280 | 6.378 | 6.399 | 6.404 | us/op | regression-gated | `dirty_nodes=1.000; layout_passes=1.000` |
-| `cpu.reconcile.tree_mutation_1pct` | `engine` | `state-reconcile` | `oxide` | `warm` | `offscreen` | 6.355 | 6.425 | 6.428 | 6.429 | us/op | regression-gated | `dirty_nodes=10.000; layout_passes=1.000` |
-| `cpu.reconcile.tree_mutation_10pct` | `engine` | `state-reconcile` | `oxide` | `warm` | `offscreen` | 6.357 | 6.503 | 6.505 | 6.506 | us/op | regression-gated | `dirty_nodes=100.000; layout_passes=1.000` |
-| `cpu.reconcile.theme_swap_full` | `engine` | `state-reconcile` | `oxide` | `warm` | `offscreen` | 17.427 | 17.756 | 17.772 | 17.776 | us/op | regression-gated | `dirty_nodes=1000.000; layout_passes=2.000` |
-| `cpu.endurance.open_close_heavy_screen.100x` | `flow` | `endurance-thermal` | `oxide` | `warm` | `offscreen` | 11393.562 | 11452.636 | 11465.094 | 11468.209 | us/op | regression-gated | `layout_passes=100.000` |
-| `cpu.endurance.tab_switch_heavy.500x` | `flow` | `endurance-thermal` | `oxide` | `warm` | `offscreen` | 39967.844 | 40560.894 | 40619.395 | 40634.020 | us/op | regression-gated | `layout_passes=500.000` |
-| `cpu.endurance.idle_animation.600_frames` | `flow` | `endurance-thermal` | `oxide` | `warm` | `offscreen` | 15063.031 | 15197.157 | 15198.981 | 15199.438 | us/op | regression-gated | `layout_passes=600.000` |
-| `cpu.stress.flat_rects.10000.mount` | `engine` | `stress-pathological` | `oxide` | `warm` | `offscreen` | 403.907 | 414.719 | 415.715 | 415.965 | us/op | regression-gated | `dirty_nodes=10000.000; layout_passes=1.000` |
-| `cpu.stress.simultaneous_animations.300` | `engine` | `stress-pathological` | `oxide` | `warm` | `offscreen` | 2.240 | 2.362 | 2.365 | 2.365 | us/op | regression-gated | `draw_calls=300.000` |
-| `cpu.stress.ticker_100hz` | `engine` | `stress-pathological` | `oxide` | `warm` | `offscreen` | 11075.344 | 11106.581 | 11111.550 | 11112.792 | us/op | regression-gated | `layout_passes=100.000` |
-| `cpu.bridge.permission_callback_fanout` | `bridge` | `os-bridge` | `oxide` | `warm` | `offscreen` | 0.069 | 0.071 | 0.072 | 0.072 | us/op | regression-gated | `-` |
-| `cpu.bridge.sensor_location_snapshot` | `bridge` | `os-bridge` | `oxide` | `warm` | `offscreen` | 0.089 | 0.090 | 0.090 | 0.091 | us/op | regression-gated | `-` |
-| `cpu.bridge.bluetooth_cache_update` | `bridge` | `os-bridge` | `oxide` | `warm` | `offscreen` | 1.127 | 1.150 | 1.156 | 1.158 | us/op | regression-gated | `-` |
-| `cpu.bridge.photo_import_thumbnail` | `bridge` | `os-bridge` | `oxide` | `warm` | `offscreen` | 52.306 | 53.197 | 53.234 | 53.243 | us/op | regression-gated | `encoded_bytes=6797.000; texture_bytes=65536.000` |
-| `cpu.bridge.file_import_render` | `bridge` | `os-bridge` | `oxide` | `warm` | `offscreen` | 293.759 | 302.791 | 304.165 | 304.508 | us/op | regression-gated | `dirty_nodes=32.000` |
-| `cpu.bridge.share_payload_prepare` | `bridge` | `os-bridge` | `oxide` | `warm` | `offscreen` | 72.541 | 74.651 | 75.410 | 75.600 | us/op | regression-gated | `encoded_bytes=74.000` |
-| `cpu.bridge.local_json_transport_render` | `bridge` | `os-bridge` | `oxide` | `warm` | `offscreen` | 38.876 | 43.721 | 43.984 | 44.050 | us/op | regression-gated | `dirty_nodes=48.000; encoded_bytes=2007.000` |
-| `cpu.bridge.local_image_transport_render` | `bridge` | `os-bridge` | `oxide` | `warm` | `offscreen` | 148.818 | 152.112 | 152.747 | 152.906 | us/op | regression-gated | `encoded_bytes=26533.000; texture_bytes=262144.000` |
+| `cpu.system.prepare_draws.current` | `engine` | `system` | `oxide` | `warm` | `offscreen` | 33.906 | 43.639 | 51.281 | 53.192 | us/op | regression-gated | `-` |
+| `cpu.system.prepare_draws.legacy` | `engine` | `audit-baseline` | `legacy-baseline` | `warm` | `offscreen` | 56.980 | 59.900 | 61.032 | 61.316 | us/op | audit-only | `-` |
+| `cpu.system.coalesce_adjacent_draws.current` | `engine` | `system` | `oxide` | `warm` | `offscreen` | 56.558 | 68.536 | 68.643 | 68.670 | us/op | regression-gated | `-` |
+| `cpu.system.coalesce_adjacent_draws.legacy` | `engine` | `audit-baseline` | `legacy-baseline` | `warm` | `offscreen` | 253.257 | 276.575 | 285.354 | 287.549 | us/op | audit-only | `-` |
+| `cpu.system.gesture_sequence` | `engine` | `system` | `oxide` | `warm` | `offscreen` | 3.663 | 4.112 | 4.259 | 4.296 | us/op | regression-gated | `-` |
+| `cpu.system.text_shape_bake` | `engine` | `system` | `oxide` | `warm` | `offscreen` | 489.255 | 498.349 | 501.942 | 502.840 | us/op | regression-gated | `-` |
+| `cpu.component.label.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 1181.724 | 1203.502 | 1203.671 | 1203.714 | us/op | regression-gated | `-` |
+| `cpu.component.progress_bar.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 0.078 | 0.087 | 0.092 | 0.094 | us/op | regression-gated | `-` |
+| `cpu.component.spinner.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 0.055 | 0.056 | 0.056 | 0.056 | us/op | regression-gated | `-` |
+| `cpu.component.button.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 78.598 | 83.045 | 85.556 | 86.184 | us/op | regression-gated | `-` |
+| `cpu.component.toggle.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 0.084 | 0.087 | 0.087 | 0.087 | us/op | regression-gated | `-` |
+| `cpu.component.slider.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 0.097 | 0.101 | 0.102 | 0.102 | us/op | regression-gated | `-` |
+| `cpu.component.image_view.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 0.079 | 0.082 | 0.085 | 0.085 | us/op | regression-gated | `-` |
+| `cpu.component.nine_slice_image.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 0.044 | 0.046 | 0.046 | 0.046 | us/op | regression-gated | `-` |
+| `cpu.component.collection_view.encode` | `engine` | `component` | `oxide` | `warm` | `offscreen` | 25.907 | 26.452 | 26.517 | 26.533 | us/op | regression-gated | `-` |
+| `cpu.animation.spinner_spin` | `engine` | `animation` | `oxide` | `warm` | `offscreen` | 0.056 | 0.057 | 0.058 | 0.058 | us/op | regression-gated | `-` |
+| `cpu.animation.progress_indeterminate` | `engine` | `animation` | `oxide` | `warm` | `offscreen` | 0.077 | 0.093 | 0.105 | 0.108 | us/op | regression-gated | `-` |
+| `cpu.animation.button_press_scale` | `engine` | `animation` | `oxide` | `warm` | `offscreen` | 70.123 | 73.429 | 73.539 | 73.566 | us/op | regression-gated | `-` |
+| `cpu.animation.toggle_thumb_spring` | `engine` | `animation` | `oxide` | `warm` | `offscreen` | 0.104 | 0.108 | 0.110 | 0.111 | us/op | regression-gated | `-` |
+| `cpu.animation.slider_thumb_move` | `engine` | `animation` | `oxide` | `warm` | `offscreen` | 0.097 | 0.099 | 0.099 | 0.099 | us/op | regression-gated | `-` |
+| `cpu.animation.image_zoom_pan` | `engine` | `animation` | `oxide` | `warm` | `offscreen` | 0.093 | 0.094 | 0.094 | 0.094 | us/op | regression-gated | `-` |
+| `cpu.animation.anim_timeline_bars` | `engine` | `animation` | `oxide` | `warm` | `offscreen` | 238.454 | 242.091 | 243.515 | 243.871 | us/op | regression-gated | `-` |
+| `cpu.launch.simple_home.cold_launch` | `flow` | `launch-lifecycle` | `oxide` | `cold` | `offscreen` | 1495.542 | 1654.471 | 1659.661 | 1660.958 | us/journey | regression-gated | `-` |
+| `cpu.launch.heavy_home.cold_launch` | `flow` | `launch-lifecycle` | `oxide` | `cold` | `offscreen` | 850.458 | 1069.335 | 1120.200 | 1132.916 | us/journey | regression-gated | `-` |
+| `cpu.launch.detail.deep_link_launch` | `flow` | `launch-lifecycle` | `oxide` | `cold` | `offscreen` | 6862.166 | 10391.611 | 11591.356 | 11891.292 | us/journey | regression-gated | `-` |
+| `cpu.launch.simple_home.warm_resume` | `flow` | `launch-lifecycle` | `oxide` | `warm` | `offscreen` | 2225.979 | 2338.877 | 2365.142 | 2371.708 | us/journey | regression-gated | `-` |
+| `cpu.launch.heavy_home.foreground_after_background` | `flow` | `launch-lifecycle` | `oxide` | `warm` | `offscreen` | 1525.500 | 1709.973 | 1739.628 | 1747.042 | us/journey | regression-gated | `-` |
+| `cpu.primitive.empty_root.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 27.946 | 29.231 | 29.812 | 29.957 | us/op | regression-gated | `-` |
+| `cpu.primitive.flat_rects.10.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 30.479 | 32.879 | 34.178 | 34.503 | us/op | regression-gated | `-` |
+| `cpu.primitive.flat_rects.100.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 73.800 | 108.850 | 140.081 | 147.888 | us/op | regression-gated | `-` |
+| `cpu.primitive.flat_rects.1000.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 477.919 | 736.796 | 802.559 | 819.000 | us/op | regression-gated | `-` |
+| `cpu.primitive.flat_rects.10.mutate_fill` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 1.595 | 1.894 | 1.919 | 1.925 | us/op | regression-gated | `-` |
+| `cpu.primitive.flat_rects.100.mutate_fill` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 11.844 | 19.778 | 23.228 | 24.091 | us/op | regression-gated | `-` |
+| `cpu.primitive.flat_rects.1000.mutate_fill` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 106.779 | 135.576 | 145.644 | 148.161 | us/op | regression-gated | `-` |
+| `cpu.primitive.flat_rects.100.remove_all` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 194.521 | 212.668 | 213.906 | 214.215 | us/op | regression-gated | `-` |
+| `cpu.primitive.flat_rects.100.remount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 228.287 | 563.590 | 826.301 | 891.979 | us/op | regression-gated | `-` |
+| `cpu.primitive.labels.10.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 4059.113 | 4186.777 | 4273.183 | 4294.785 | us/op | regression-gated | `-` |
+| `cpu.primitive.labels.100.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 41651.264 | 42383.576 | 42445.360 | 42460.806 | us/op | regression-gated | `-` |
+| `cpu.primitive.labels.1000.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 414329.469 | 439111.125 | 441854.525 | 442540.375 | us/op | regression-gated | `-` |
+| `cpu.primitive.labels.10.mutate_text` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 4059.981 | 4813.070 | 5529.667 | 5708.816 | us/op | regression-gated | `-` |
+| `cpu.primitive.labels.100.mutate_text` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 41061.871 | 50266.129 | 56932.553 | 58599.160 | us/op | regression-gated | `-` |
+| `cpu.primitive.labels.1000.mutate_text` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 411034.292 | 521502.050 | 564763.693 | 575579.104 | us/op | regression-gated | `-` |
+| `cpu.primitive.cards.10.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 1.431 | 2.358 | 2.530 | 2.573 | us/op | regression-gated | `-` |
+| `cpu.primitive.cards.100.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 34.559 | 3287.247 | 4251.591 | 4492.677 | us/op | regression-gated | `-` |
+| `cpu.primitive.cards.10.mutate_palette` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 1.204 | 6.248 | 10.866 | 12.021 | us/op | regression-gated | `-` |
+| `cpu.primitive.cards.100.mutate_palette` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 10.373 | 15.749 | 17.577 | 18.034 | us/op | regression-gated | `-` |
+| `cpu.primitive.images.10.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 1.069 | 1.425 | 1.432 | 1.434 | us/op | regression-gated | `-` |
+| `cpu.primitive.images.100.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 8.022 | 8.694 | 9.148 | 9.261 | us/op | regression-gated | `-` |
+| `cpu.primitive.images.10.mutate_alpha` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 0.947 | 0.981 | 0.988 | 0.990 | us/op | regression-gated | `-` |
+| `cpu.primitive.images.100.mutate_alpha` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 7.443 | 7.610 | 7.619 | 7.621 | us/op | regression-gated | `-` |
+| `cpu.primitive.control_set.mount` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 930.847 | 1320.011 | 1620.057 | 1695.069 | us/op | regression-gated | `-` |
+| `cpu.primitive.control_set.mutate_state` | `engine` | `primitive-lifecycle` | `oxide` | `warm` | `offscreen` | 328.479 | 334.875 | 335.120 | 335.181 | us/op | regression-gated | `-` |
+| `cpu.scene.controls.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 659.508 | 754.677 | 816.998 | 832.578 | us/op | regression-gated | `-` |
+| `cpu.scene.text_layout.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 4004.932 | 4874.295 | 5076.921 | 5127.578 | us/op | regression-gated | `-` |
+| `cpu.scene.zoom_image.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 332.872 | 393.140 | 412.432 | 417.255 | us/op | regression-gated | `-` |
+| `cpu.scene.anim_timeline.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 622.229 | 680.094 | 699.179 | 703.951 | us/op | regression-gated | `-` |
+| `cpu.scene.collection.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 610.422 | 739.666 | 765.221 | 771.609 | us/op | regression-gated | `-` |
+| `cpu.scene.damage_lab.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 2175.331 | 2632.665 | 2715.016 | 2735.604 | us/op | regression-gated | `-` |
+| `cpu.scene.input_lab.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 2569.052 | 2707.747 | 2802.029 | 2825.599 | us/op | regression-gated | `-` |
+| `cpu.scene.nine_slice.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 399.163 | 424.317 | 437.923 | 441.325 | us/op | regression-gated | `-` |
+| `cpu.scene.sdf_text.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 1175.585 | 3446.076 | 4235.624 | 4433.011 | us/op | regression-gated | `-` |
+| `cpu.scene.snapshot.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 1283.583 | 1664.637 | 1676.582 | 1679.568 | us/op | regression-gated | `-` |
+| `cpu.scene.camera.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 641.919 | 674.437 | 678.604 | 679.646 | us/op | regression-gated | `-` |
+| `cpu.scene.elements_extended.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 2134.018 | 2186.034 | 2217.132 | 2224.906 | us/op | regression-gated | `-` |
+| `cpu.scene.animation_config.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 4872.008 | 6487.189 | 7718.217 | 8025.974 | us/op | regression-gated | `-` |
+| `cpu.scene.orchestration.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 2904.917 | 3462.318 | 3648.972 | 3695.635 | us/op | regression-gated | `-` |
+| `cpu.scene.permissions.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 6028.258 | 6259.573 | 6405.869 | 6442.443 | us/op | regression-gated | `-` |
+| `cpu.scene.integration.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 3322.667 | 3528.862 | 3542.702 | 3546.162 | us/op | regression-gated | `-` |
+| `cpu.scene.stress.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 3031.581 | 3119.348 | 3151.395 | 3159.406 | us/op | regression-gated | `-` |
+| `gpu.scene.controls.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 1.376 | 1.715 | 1.778 | 1.785 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=25.020; draw_ms_median=1.292; draws_avg=24.000` |
+| `gpu.scene.text_layout.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 4.761 | 5.276 | 5.344 | 5.354 | ms/frame | regression-gated | `culled_avg=6.000; damage_pct_avg=3.300; draw_ms_median=4.671; draws_avg=6.000` |
+| `gpu.scene.zoom_image.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 0.661 | 1.245 | 1.895 | 2.287 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=80.960; draw_ms_median=0.564; draws_avg=4.000` |
+| `gpu.scene.anim_timeline.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 1.611 | 1.831 | 1.922 | 1.930 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=41.213; draw_ms_median=1.531; draws_avg=16.000` |
+| `gpu.scene.collection.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 0.864 | 1.115 | 1.130 | 1.139 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=100.000; draw_ms_median=0.789; draws_avg=64.000` |
+| `gpu.scene.damage_lab.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 2.767 | 3.070 | 3.201 | 3.258 | ms/frame | regression-gated | `culled_avg=2.000; damage_pct_avg=3.300; draw_ms_median=2.682; draws_avg=6.000` |
+| `gpu.scene.input_lab.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 5.190 | 5.525 | 5.581 | 5.619 | ms/frame | regression-gated | `culled_avg=36.000; damage_pct_avg=3.300; draw_ms_median=5.089; draws_avg=6.000` |
+| `gpu.scene.nine_slice.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 0.668 | 0.866 | 1.118 | 1.248 | ms/frame | regression-gated | `culled_avg=2.000; damage_pct_avg=3.300; draw_ms_median=0.598; draws_avg=2.000` |
+| `gpu.scene.sdf_text.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 1.288 | 1.584 | 1.651 | 1.695 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=3.300; draw_ms_median=1.212; draws_avg=4.000` |
+| `gpu.scene.snapshot.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 1.723 | 1.972 | 2.021 | 2.054 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=3.300; draw_ms_median=1.637; draws_avg=4.000` |
+| `gpu.scene.camera.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 0.937 | 1.106 | 1.687 | 2.133 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=100.000; draw_ms_median=0.873; draws_avg=2.000` |
+| `gpu.scene.elements_extended.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 5.173 | 7.361 | 9.354 | 10.417 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=100.000; draw_ms_median=4.946; draws_avg=32.000` |
+| `gpu.scene.animation_config.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 11.358 | 12.104 | 12.789 | 12.955 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=100.000; draw_ms_median=11.092; draws_avg=114.000` |
+| `gpu.scene.orchestration.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 6.738 | 7.903 | 8.425 | 8.626 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=100.000; draw_ms_median=6.581; draws_avg=56.000` |
+| `gpu.scene.permissions.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 15.191 | 15.864 | 16.265 | 16.493 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=100.000; draw_ms_median=14.912; draws_avg=178.000` |
+| `gpu.scene.integration.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 6.314 | 6.843 | 6.893 | 6.904 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=100.000; draw_ms_median=6.200; draws_avg=41.000` |
+| `gpu.scene.stress.frame` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 7.749 | 8.311 | 8.420 | 8.474 | ms/frame | regression-gated | `culled_avg=0.000; damage_pct_avg=100.000; draw_ms_median=7.610; draws_avg=64.000` |
+| `cpu.journey.input_form_submit` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 8211.291 | 8380.602 | 8394.687 | 8398.208 | us/journey | regression-gated | `-` |
+| `cpu.journey.collection_navigation` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 3146.312 | 3344.044 | 3361.609 | 3366.000 | us/journey | regression-gated | `-` |
+| `cpu.journey.zoom_image_gesture_cycle` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 1500.417 | 1711.916 | 1819.316 | 1846.166 | us/journey | regression-gated | `-` |
+| `cpu.journey.orchestration_transition_modal` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 25008.938 | 26421.600 | 26551.320 | 26583.750 | us/journey | regression-gated | `-` |
+| `cpu.journey.feed_scroll_matrix` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 603.042 | 678.637 | 686.527 | 688.500 | us/journey | regression-gated | `-` |
+| `cpu.journey.thumbnail_grid_scroll_matrix` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 1214.417 | 1361.637 | 1398.628 | 1407.875 | us/journey | regression-gated | `-` |
+| `cpu.journey.chat_thread_scroll_matrix` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 1168.229 | 1244.146 | 1251.796 | 1253.709 | us/journey | regression-gated | `-` |
+| `cpu.authoring.text_fields.edit_cycle` | `engine` | `authoring` | `oxide` | `warm` | `offscreen` | 4.799 | 4.871 | 4.879 | 4.881 | us/op | regression-gated | `-` |
+| `cpu.authoring.popup_wheel_picker.interaction` | `engine` | `authoring` | `oxide` | `warm` | `offscreen` | 0.538 | 0.555 | 0.561 | 0.563 | us/op | regression-gated | `-` |
+| `cpu.authoring.burst_emitter.sample` | `engine` | `authoring` | `oxide` | `warm` | `offscreen` | 5.876 | 5.998 | 6.021 | 6.026 | us/op | regression-gated | `-` |
+| `cpu.authoring.surface_router.compose` | `engine` | `authoring` | `oxide` | `warm` | `offscreen` | 152.419 | 172.637 | 176.322 | 177.243 | us/op | regression-gated | `-` |
+| `gpu.authoring.scene3d.mixed_frame` | `engine` | `authoring` | `oxide` | `warm` | `offscreen` | 0.054 | 0.620 | 0.645 | 0.651 | ms/frame | regression-gated | `draws_avg=3.000; encode_ms_median=0.034; mesh_indices=7.000; mesh_vertices=7.000` |
+| `cpu.layout.flat_grid.rotation_relayout` | `engine` | `layout-invalidation` | `oxide` | `warm` | `offscreen` | 234.522 | 289.237 | 314.308 | 320.576 | us/op | regression-gated | `dirty_nodes=240.000; layout_passes=2.000` |
+| `cpu.layout.deep_stack.theme_swap` | `engine` | `layout-invalidation` | `oxide` | `warm` | `offscreen` | 81.973 | 90.700 | 93.664 | 94.405 | us/op | regression-gated | `dirty_nodes=60.000; layout_passes=2.000` |
+| `cpu.layout.grid.safe_area_swap` | `engine` | `layout-invalidation` | `oxide` | `warm` | `offscreen` | 207.807 | 330.412 | 357.808 | 364.658 | us/op | regression-gated | `dirty_nodes=180.000; layout_passes=3.000` |
+| `cpu.text_input.large_editor.keystroke_burst` | `engine` | `text-input` | `oxide` | `warm` | `offscreen` | 8861.552 | 9927.622 | 10291.912 | 10382.984 | us/op | regression-gated | `dirty_nodes=1.000` |
+| `cpu.text_input.large_editor.paste_10kb` | `engine` | `text-input` | `oxide` | `warm` | `offscreen` | 74.860 | 76.128 | 76.296 | 76.338 | us/op | regression-gated | `dirty_nodes=1.000` |
+| `cpu.text_input.large_editor.selection_replace` | `engine` | `text-input` | `oxide` | `warm` | `offscreen` | 621.609 | 631.244 | 632.192 | 632.430 | us/op | regression-gated | `dirty_nodes=1.000` |
+| `cpu.image_pipeline.png.decode` | `engine` | `image-pipeline` | `oxide` | `cold` | `offscreen` | 945.589 | 960.760 | 967.182 | 968.788 | us/op | regression-gated | `encoded_bytes=6797.000; texture_bytes=65536.000` |
+| `gpu.image_pipeline.png.upload` | `engine` | `image-pipeline` | `oxide` | `warm` | `offscreen` | 16.626 | 18.893 | 19.299 | 19.400 | us/upload | regression-gated | `encoded_bytes=6797.000; texture_bytes=65536.000` |
+| `gpu.image_pipeline.png.first_visible` | `engine` | `image-pipeline` | `oxide` | `warm` | `offscreen` | 0.041 | 1.300 | 2.016 | 2.195 | ms/frame | regression-gated | `draw_calls=0.000; encode_ms_median=0.037; encoded_bytes=6797.000; texture_bytes=65536.000` |
+| `cpu.navigation.button_press.response` | `flow` | `navigation-input` | `oxide` | `warm` | `offscreen` | 69.254 | 72.200 | 73.422 | 73.727 | us/op | regression-gated | `dirty_nodes=1.000` |
+| `cpu.navigation.slider_scrub.response` | `flow` | `navigation-input` | `oxide` | `warm` | `offscreen` | 0.105 | 0.107 | 0.107 | 0.107 | us/op | regression-gated | `dirty_nodes=1.000` |
+| `cpu.navigation.text_focus.response` | `flow` | `navigation-input` | `oxide` | `warm` | `offscreen` | 6638.145 | 8647.929 | 10236.415 | 10633.536 | us/op | regression-gated | `dirty_nodes=1.000` |
+| `cpu.reconcile.single_node_mutation` | `engine` | `state-reconcile` | `oxide` | `warm` | `offscreen` | 60.819 | 92.779 | 96.153 | 96.996 | us/op | regression-gated | `dirty_nodes=1.000; layout_passes=1.000` |
+| `cpu.reconcile.tree_mutation_1pct` | `engine` | `state-reconcile` | `oxide` | `warm` | `offscreen` | 59.394 | 63.494 | 63.501 | 63.503 | us/op | regression-gated | `dirty_nodes=10.000; layout_passes=1.000` |
+| `cpu.reconcile.tree_mutation_10pct` | `engine` | `state-reconcile` | `oxide` | `warm` | `offscreen` | 61.270 | 65.489 | 67.570 | 68.090 | us/op | regression-gated | `dirty_nodes=100.000; layout_passes=1.000` |
+| `cpu.reconcile.theme_swap_full` | `engine` | `state-reconcile` | `oxide` | `warm` | `offscreen` | 264.128 | 270.095 | 271.428 | 271.761 | us/op | regression-gated | `dirty_nodes=1000.000; layout_passes=2.000` |
+| `cpu.endurance.open_close_heavy_screen.100x` | `flow` | `endurance-thermal` | `oxide` | `warm` | `offscreen` | 320093.823 | 372560.407 | 391837.348 | 396656.583 | us/op | regression-gated | `layout_passes=100.000` |
+| `cpu.endurance.tab_switch_heavy.500x` | `flow` | `endurance-thermal` | `oxide` | `warm` | `offscreen` | 1137529.479 | 1182298.466 | 1207353.010 | 1213616.646 | us/op | regression-gated | `layout_passes=500.000` |
+| `cpu.endurance.idle_animation.600_frames` | `flow` | `endurance-thermal` | `oxide` | `warm` | `offscreen` | 367956.302 | 374171.087 | 378282.301 | 379310.104 | us/op | regression-gated | `layout_passes=600.000` |
+| `cpu.stress.flat_rects.10000.mount` | `engine` | `stress-pathological` | `oxide` | `warm` | `offscreen` | 3697.120 | 3911.597 | 3931.186 | 3936.083 | us/op | regression-gated | `dirty_nodes=10000.000; layout_passes=1.000` |
+| `cpu.stress.simultaneous_animations.300` | `engine` | `stress-pathological` | `oxide` | `warm` | `offscreen` | 12.800 | 14.473 | 15.409 | 15.643 | us/op | regression-gated | `draw_calls=300.000` |
+| `cpu.stress.ticker_100hz` | `engine` | `stress-pathological` | `oxide` | `warm` | `offscreen` | 307706.552 | 324786.361 | 337637.689 | 340850.520 | us/op | regression-gated | `layout_passes=100.000` |
+| `cpu.bridge.permission_callback_fanout` | `bridge` | `os-bridge` | `oxide` | `warm` | `offscreen` | 1.251 | 1.375 | 1.466 | 1.488 | us/op | regression-gated | `-` |
+| `cpu.bridge.sensor_location_snapshot` | `bridge` | `os-bridge` | `oxide` | `warm` | `offscreen` | 0.970 | 0.985 | 0.989 | 0.990 | us/op | regression-gated | `-` |
+| `cpu.bridge.bluetooth_cache_update` | `bridge` | `os-bridge` | `oxide` | `warm` | `offscreen` | 4.995 | 5.083 | 5.099 | 5.103 | us/op | regression-gated | `-` |
+| `cpu.bridge.photo_import_thumbnail` | `bridge` | `os-bridge` | `oxide` | `warm` | `offscreen` | 942.550 | 962.758 | 967.635 | 968.854 | us/op | regression-gated | `encoded_bytes=6797.000; texture_bytes=65536.000` |
+| `cpu.bridge.file_import_render` | `bridge` | `os-bridge` | `oxide` | `warm` | `offscreen` | 7649.773 | 7806.404 | 7857.151 | 7869.837 | us/op | regression-gated | `dirty_nodes=32.000` |
+| `cpu.bridge.share_payload_prepare` | `bridge` | `os-bridge` | `oxide` | `warm` | `offscreen` | 1561.042 | 1592.819 | 1597.726 | 1598.953 | us/op | regression-gated | `encoded_bytes=74.000` |
+| `cpu.bridge.local_json_transport_render` | `bridge` | `os-bridge` | `oxide` | `warm` | `offscreen` | 165.106 | 176.980 | 177.141 | 177.182 | us/op | regression-gated | `dirty_nodes=48.000; encoded_bytes=2007.000` |
+| `cpu.bridge.local_image_transport_render` | `bridge` | `os-bridge` | `oxide` | `warm` | `offscreen` | 3794.017 | 4253.966 | 4329.124 | 4347.913 | us/op | regression-gated | `encoded_bytes=26533.000; texture_bytes=262144.000` |
 
 ## A/B Audit
 
-- prepare_draws: 1.27x faster than the retained legacy path
-- coalesce_adjacent_draws: 41.37x faster than the retained legacy path
+- prepare_draws: 1.68x faster than the retained legacy path
+- coalesce_adjacent_draws: 4.48x faster than the retained legacy path
 
 ## Findings
 

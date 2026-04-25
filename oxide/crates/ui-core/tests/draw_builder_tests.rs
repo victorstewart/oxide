@@ -12,10 +12,19 @@ fn builder_records_advanced_draws() {
     let bg_rect = gfx::RectF::new(0.0, 0.0, 100.0, 80.0);
     builder.camera_bg(bg_rect, gfx::Color::rgba(0.1, 0.2, 0.3, 0.9), 0.8, true, false, 12.0);
 
+    let effect_rect = gfx::RectF::new(2.0, 3.0, 90.0, 70.0);
+    builder.visual_effect(
+        effect_rect,
+        gfx::VisualEffect::DarkPopup {
+            blur_intensity: 0.5,
+            tint: gfx::Color::rgba(1.0, 1.0, 1.0, 0.9),
+        },
+    );
+
     builder.spinner([16.0, 24.0], 36.0, 1.0);
 
     let list = builder.drawlist();
-    assert_eq!(list.items.len(), 3);
+    assert_eq!(list.items.len(), 4);
     match &list.items[0] {
         gfx::DrawCmd::NineSlice { tex: t, rect: r, slice: s, alpha } => {
             assert_eq!((*t, *alpha), (tex, 0.75));
@@ -33,6 +42,19 @@ fn builder_records_advanced_draws() {
         other => panic!("expected camera bg, found {other:?}"),
     }
     match &list.items[2] {
+        gfx::DrawCmd::VisualEffect { rect, effect } => {
+            assert_eq!(*rect, effect_rect);
+            assert_eq!(
+                *effect,
+                gfx::VisualEffect::DarkPopup {
+                    blur_intensity: 0.5,
+                    tint: gfx::Color::rgba(1.0, 1.0, 1.0, 0.9),
+                }
+            );
+        }
+        other => panic!("expected visual effect, found {other:?}"),
+    }
+    match &list.items[3] {
         gfx::DrawCmd::Spinner { center, atom, alpha } => {
             assert_eq!(*center, [16.0, 24.0]);
             assert_eq!((*atom, *alpha), (36.0, 1.0));

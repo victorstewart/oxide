@@ -1,6 +1,6 @@
 use oxide_renderer_api::{
     self as gfx, Color, DrawCmd, DrawList, GlyphRun, ImageHandle, IndexSpan, Insets, RectF, RectI,
-    Vertex, VertexSpan,
+    Vertex, VertexSpan, VisualEffect,
 };
 use oxide_ui_core::draw_replay::replay_drawlist;
 
@@ -12,6 +12,7 @@ struct RecordingEncoder {
     rrects: Vec<(RectF, [f32; 4], Color)>,
     nine_slices: Vec<(ImageHandle, RectF, Insets, f32)>,
     backdrops: Vec<(RectF, f32, Color, f32)>,
+    visual_effects: Vec<(RectF, VisualEffect)>,
     camera_bgs: Vec<(RectF, Color, f32, bool, bool, f32)>,
     spinners: Vec<([f32; 2], f32, f32)>,
     glyph_runs: usize,
@@ -42,6 +43,10 @@ impl gfx::RenderEncoder for RecordingEncoder {
 
     fn draw_backdrop(&mut self, rect: RectF, sigma: f32, tint: Color, alpha: f32) {
         self.backdrops.push((rect, sigma, tint, alpha));
+    }
+
+    fn draw_visual_effect(&mut self, rect: RectF, effect: VisualEffect) {
+        self.visual_effects.push((rect, effect));
     }
 
     fn draw_camera_bg(
@@ -101,6 +106,13 @@ fn build_test_drawlist() -> DrawList {
         sigma: 5.0,
         tint: Color::rgba(0.1, 0.2, 0.3, 0.4),
         alpha: 0.8,
+    });
+    list.items.push(DrawCmd::VisualEffect {
+        rect: RectF::new(34.0, 35.0, 36.0, 37.0),
+        effect: VisualEffect::DarkPopup {
+            blur_intensity: 0.5,
+            tint: Color::rgba(1.0, 1.0, 1.0, 0.9),
+        },
     });
     list.items.push(DrawCmd::Spinner { center: [40.0, 41.0], atom: 18.0, alpha: 0.6 });
     list.items.push(DrawCmd::CameraBg {
@@ -167,6 +179,19 @@ fn replay_translates_primitives_and_restores_fallback_clip() {
     let (first_backdrop_rect, _, _, _) = encoder.backdrops[0];
     assert!(approx_eq(first_backdrop_rect.x, 35.0));
     assert!(approx_eq(first_backdrop_rect.y, 28.0));
+
+    assert_eq!(encoder.visual_effects.len(), 1);
+    let (visual_effect_rect, visual_effect) = encoder.visual_effects[0];
+    assert!(approx_eq(visual_effect_rect.x, 39.0));
+    assert!(approx_eq(visual_effect_rect.y, 32.0));
+    assert!(matches!(
+        visual_effect,
+        VisualEffect::DarkPopup {
+            blur_intensity,
+            tint,
+        } if approx_eq(blur_intensity, 0.5)
+            && tint == Color::rgba(1.0, 1.0, 1.0, 0.9)
+    ));
 
     assert_eq!(encoder.camera_bgs.len(), 1);
     let (camera_rect, _, _, grayscale, blur, sigma) = encoder.camera_bgs[0];

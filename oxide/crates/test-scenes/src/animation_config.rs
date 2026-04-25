@@ -18,8 +18,6 @@ use oxide_ui_core::{
     DrawListBuilder,
 };
 
-const LEGACY_BADGE_IMAGE: gfx::ImageHandle = gfx::ImageHandle(1);
-
 /// Test scene for animation timing configurations
 pub struct AnimationConfigScene {
     /// Multiple badges with different bounce timings (100ms, 450ms, 1000ms, 2000ms)
@@ -54,7 +52,7 @@ impl Default for AnimationConfigScene {
         let mut badges = Vec::new();
         for &timing_ms in &badge_timings {
             let badge = Badge {
-                image: LEGACY_BADGE_IMAGE,
+                image: crate::LEGACY_BADGE_IMAGE,
                 style: BadgeStyle { bounce_duration_ms: timing_ms, ..BadgeStyle::default() },
             };
 

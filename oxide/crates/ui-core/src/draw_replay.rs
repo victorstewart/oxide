@@ -67,6 +67,9 @@ pub fn replay_drawlist(
                     *alpha,
                 );
             }
+            DrawCmd::VisualEffect { rect, effect } => {
+                encoder.draw_visual_effect(translate_rect(*rect, offset_x, offset_y), *effect);
+            }
             DrawCmd::Spinner { center, atom, alpha } => {
                 encoder.draw_spinner([center[0] + offset_x, center[1] + offset_y], *atom, *alpha)
             }

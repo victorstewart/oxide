@@ -167,6 +167,10 @@ impl DrawListBuilder {
         self.list.items.push(gfx::DrawCmd::Backdrop { rect, sigma, tint, alpha });
     }
 
+    pub fn visual_effect(&mut self, rect: gfx::RectF, effect: gfx::VisualEffect) {
+        self.list.items.push(gfx::DrawCmd::VisualEffect { rect, effect });
+    }
+
     pub fn camera_bg(
         &mut self,
         rect: gfx::RectF,
@@ -212,26 +216,23 @@ pub fn prepare_draws(list: &gfx::DrawList) -> alloc::vec::Vec<PreparedDraw> {
     use gfx::DrawCmd as C;
     let mut out = alloc::vec::Vec::with_capacity(list.items.len());
     let mut stack: alloc::vec::Vec<gfx::RectI> = alloc::vec::Vec::new();
-    let mut current: Option<gfx::RectI> = None;
     for item in &list.items {
         match *item {
             C::ClipPush { rect } => {
-                let next = if let Some(cur) = current {
+                let next = if let Some(cur) = stack.last().copied() {
                     intersect(cur, rect).unwrap_or(gfx::RectI { x: 0, y: 0, w: 0, h: 0 })
                 } else {
                     rect
                 };
                 stack.push(next);
-                current = Some(next);
             }
             C::ClipPop => {
                 let _ = stack.pop();
-                current = stack.last().copied();
             }
             _ => {
                 out.push(PreparedDraw {
                     cmd: item.clone(),
-                    clip: current.filter(|r| r.w > 0 && r.h > 0),
+                    clip: stack.last().copied().filter(|r| r.w > 0 && r.h > 0),
                 });
             }
         }
@@ -265,6 +266,7 @@ fn key_for(pd: &PreparedDraw) -> BatchKey {
         C::NineSlice { tex, .. } => BatchKey(4, tex.0, clip_hash),
         C::Backdrop { .. } => BatchKey(5, 0, clip_hash),
         C::Spinner { .. } => BatchKey(6, 0, clip_hash),
+        C::VisualEffect { .. } => BatchKey(9, 0, clip_hash),
         C::CameraBg { .. } => BatchKey(8, 0, clip_hash),
         C::ClipPush { .. } | C::ClipPop => {
             unreachable!("clip commands are removed by prepare_draws")

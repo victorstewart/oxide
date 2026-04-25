@@ -25,8 +25,9 @@
 #include <string.h>
 #include <time.h>
 
-// Forward declaration for in-file logging overlay function
+// Forward declarations for in-file debug sinks.
 static void UILog(NSString *line);
+static void OxideTouchFileLog(NSString *line);
 
 static inline void OxLogImpl(NSString *msg) {
   // NSLog to device log
@@ -36,6 +37,8 @@ static inline void OxLogImpl(NSString *msg) {
     os_log_with_type(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, "[Oxide] %{public}@",
                      msg);
   }
+  // Mirror touch-debug sessions to an app-container file that simctl can read.
+  OxideTouchFileLog(msg);
   // Mirror to on-screen UILog overlay if present
   UILog(msg);
 }
@@ -475,6 +478,8 @@ void oxide_host_emit_pointer(float x, float y, float dx, float dy,
 void oxide_host_emit_key(uint32_t code, const char *chars, size_t chars_len,
                          uint8_t repeat, uint32_t modifiers, uint64_t ts_ns);
 void oxide_host_emit_pinch(float cx, float cy, float delta);
+void oxide_host_emit_pan_gesture(float x, float y, float dx, float dy,
+                                 uint8_t active);
 void oxide_host_emit_double_tap(void);
 void oxide_host_emit_perm(uint32_t domain, uint32_t status);
 void oxide_host_emit_push_token(uint32_t provider, const char *utf8,
@@ -839,9 +844,11 @@ static BOOL IsRunningPerfBenchmarkHost(void) {
     NSString *bundlePath = [env objectForKey:@"XCTestBundlePath"];
     NSString *injectPath = [env objectForKey:@"XCInjectBundleInto"];
     cached =
-        ([bundlePath rangeOfString:@"OxideHostPerfTests.xctest"].location !=
+        (bundlePath != nil &&
+         [bundlePath rangeOfString:@"OxideHostPerfTests.xctest"].location !=
          NSNotFound) ||
-        ([injectPath rangeOfString:@"OxideHostPerfTests.xctest"].location !=
+        (injectPath != nil &&
+         [injectPath rangeOfString:@"OxideHostPerfTests.xctest"].location !=
          NSNotFound) ||
         OxidePerfCameraRealAppHostEnabled();
     gAppDebugPerf.running_perf_benchmark_host = cached ? 1 : 0;
@@ -863,6 +870,318 @@ static BOOL ShouldRender(void) {
   BOOL should_render = render_in_test || !IsRunningUITest();
   gAppDebugPerf.should_render = should_render ? 1 : 0;
   return should_render;
+}
+
+static BOOL OxideHostChromeHidden(void) {
+  NSString *value = [NSProcessInfo.processInfo.environment
+      objectForKey:@"OXIDE_HIDE_HOST_CHROME"];
+  if (value == nil) {
+    return NO;
+  }
+  NSString *normalized = [[value
+      stringByTrimmingCharactersInSet:[NSCharacterSet
+                                          whitespaceAndNewlineCharacterSet]]
+      lowercaseString];
+  return [normalized isEqualToString:@"1"] ||
+         [normalized isEqualToString:@"true"] ||
+         [normalized isEqualToString:@"yes"];
+}
+
+static BOOL OxideTouchDebugEnabled(void) {
+  static BOOL checked = NO;
+  static BOOL enabled = NO;
+  if (!checked) {
+    NSString *value = [NSProcessInfo.processInfo.environment
+        objectForKey:@"OXIDE_TOUCH_LOG"];
+    enabled = value != nil && value.intValue != 0;
+    checked = YES;
+  }
+  return enabled;
+}
+
+static BOOL OxideTouchScreenLogEnabled(void) {
+  static BOOL checked = NO;
+  static BOOL enabled = NO;
+  if (!checked) {
+    NSString *value = [NSProcessInfo.processInfo.environment
+        objectForKey:@"OXIDE_TOUCH_LOG_SCREEN"];
+    enabled = value != nil && value.intValue != 0;
+    checked = YES;
+  }
+  return enabled;
+}
+
+static BOOL OxideWindowTouchCaptureEnabled(void) { return YES; }
+
+static BOOL OxideTouchIsDirect(UITouch *touch) {
+  return touch != nil && touch.type == UITouchTypeDirect;
+}
+
+static BOOL OxideEventHasOnlyDirectTouches(UIEvent *event) {
+  NSSet<UITouch *> *touches = event.allTouches;
+  if (touches.count == 0) {
+    return NO;
+  }
+  for (UITouch *touch in touches) {
+    if (!OxideTouchIsDirect(touch)) {
+      return NO;
+    }
+  }
+  return YES;
+}
+
+static BOOL OxideTouchPhaseForUITouch(UITouch *touch, uint32_t *phaseOut) {
+  switch (touch.phase) {
+  case UITouchPhaseBegan:
+    *phaseOut = 0;
+    return YES;
+  case UITouchPhaseMoved:
+    *phaseOut = 1;
+    return YES;
+  case UITouchPhaseEnded:
+    *phaseOut = 2;
+    return YES;
+  case UITouchPhaseCancelled:
+    *phaseOut = 3;
+    return YES;
+  case UITouchPhaseStationary:
+    *phaseOut = 1;
+    return YES;
+  default:
+    return NO;
+  }
+}
+
+static NSString *OxideTouchDebugLogPath(void) {
+  NSArray<NSString *> *documents =
+      NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask,
+                                          YES);
+  NSString *base = documents.firstObject;
+  if (base.length == 0) {
+    base = NSTemporaryDirectory();
+  }
+  return [base stringByAppendingPathComponent:@"oxide-touch.log"];
+}
+
+static BOOL OxideTouchFileLogShouldInclude(NSString *line) {
+  if (line.length == 0) {
+    return NO;
+  }
+  NSArray<NSString *> *needles = @[
+    @"touch", @"Touch", @"recognizer", @"gesture", @"pointer", @"hover",
+    @"pinch", @"pan", @"rust "
+  ];
+  for (NSString *needle in needles) {
+    if ([line rangeOfString:needle].location != NSNotFound) {
+      return YES;
+    }
+  }
+  return NO;
+}
+
+static void OxideTouchFileLog(NSString *line) {
+  static BOOL enabled = NO;
+  static dispatch_once_t onceToken;
+  static dispatch_queue_t queue;
+  static NSString *path;
+  dispatch_once(&onceToken, ^{
+    NSString *value = [NSProcessInfo.processInfo.environment
+        objectForKey:@"OXIDE_TOUCH_LOG"];
+    enabled = value != nil && value.intValue != 0;
+    if (!enabled) {
+      return;
+    }
+    queue = dispatch_queue_create("com.oxide.touch-log-file",
+                                  DISPATCH_QUEUE_SERIAL);
+    path = [OxideTouchDebugLogPath() copy];
+    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    [[NSFileManager defaultManager] createFileAtPath:path contents:nil
+                                          attributes:nil];
+    NSString *header =
+        [NSString stringWithFormat:@"oxide touch log path=%@\n", path];
+    NSData *data = [header dataUsingEncoding:NSUTF8StringEncoding];
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+    [handle writeData:data];
+    [handle closeFile];
+  });
+  if (!enabled || path.length == 0 ||
+      !OxideTouchFileLogShouldInclude(line)) {
+    return;
+  }
+  NSString *copy = [line copy];
+  dispatch_async(queue, ^{
+    @autoreleasepool {
+      NSString *entry = [NSString
+          stringWithFormat:@"%.6f %@\n", CACurrentMediaTime(), copy];
+      NSData *data = [entry dataUsingEncoding:NSUTF8StringEncoding];
+      if (data.length == 0) {
+        return;
+      }
+      NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+      if (handle == nil) {
+        return;
+      }
+      [handle seekToEndOfFile];
+      [handle writeData:data];
+      [handle closeFile];
+    }
+  });
+}
+
+static NSString *OxideGestureStateName(UIGestureRecognizerState state) {
+  switch (state) {
+  case UIGestureRecognizerStatePossible:
+    return @"possible";
+  case UIGestureRecognizerStateBegan:
+    return @"began";
+  case UIGestureRecognizerStateChanged:
+    return @"changed";
+  case UIGestureRecognizerStateEnded:
+    return @"ended";
+  case UIGestureRecognizerStateCancelled:
+    return @"cancelled";
+  case UIGestureRecognizerStateFailed:
+    return @"failed";
+  default:
+    return @"recognized";
+  }
+}
+
+static NSString *OxideTouchPhaseName(UITouchPhase phase) {
+  switch (phase) {
+  case UITouchPhaseBegan:
+    return @"began";
+  case UITouchPhaseMoved:
+    return @"moved";
+  case UITouchPhaseStationary:
+    return @"stationary";
+  case UITouchPhaseEnded:
+    return @"ended";
+  case UITouchPhaseCancelled:
+    return @"cancelled";
+  default:
+    break;
+  }
+  if (@available(iOS 13.4, *)) {
+    if (phase == UITouchPhaseRegionEntered) {
+      return @"regionEntered";
+    }
+    if (phase == UITouchPhaseRegionMoved) {
+      return @"regionMoved";
+    }
+    if (phase == UITouchPhaseRegionExited) {
+      return @"regionExited";
+    }
+  }
+  return @"unknown";
+}
+
+static NSString *OxideTouchTypeName(UITouchType type) {
+  switch (type) {
+  case UITouchTypeDirect:
+    return @"direct";
+  case UITouchTypeIndirect:
+    return @"indirect";
+  case UITouchTypePencil:
+    return @"pencil";
+  default:
+    break;
+  }
+  if (@available(iOS 13.4, *)) {
+    if (type == UITouchTypeIndirectPointer) {
+      return @"indirectPointer";
+    }
+  }
+  return @"unknown";
+}
+
+static NSString *OxideEventTypeName(UIEventType type) {
+  switch (type) {
+  case UIEventTypeTouches:
+    return @"touches";
+  case UIEventTypeMotion:
+    return @"motion";
+  case UIEventTypeRemoteControl:
+    return @"remoteControl";
+  case UIEventTypePresses:
+    return @"presses";
+  default:
+    break;
+  }
+  if (@available(iOS 13.4, *)) {
+    if (type == UIEventTypeScroll) {
+      return @"scroll";
+    }
+    if (type == UIEventTypeHover) {
+      return @"hover";
+    }
+    if (type == UIEventTypeTransform) {
+      return @"transform";
+    }
+  }
+  return @"unknown";
+}
+
+static UIEventButtonMask OxideEventButtonMask(UIEvent *event) {
+  if (event == nil) {
+    return 0;
+  }
+  if (@available(iOS 13.4, *)) {
+    return event.buttonMask;
+  }
+  return 0;
+}
+
+static UIEventButtonMask OxideRecognizerButtonMask(UIGestureRecognizer *rec) {
+  if (rec == nil) {
+    return 0;
+  }
+  if (@available(iOS 13.4, *)) {
+    return rec.buttonMask;
+  }
+  return 0;
+}
+
+static NSString *OxideTouchSummary(UITouch *touch, UIView *view) {
+  if (touch == nil) {
+    return @"nil";
+  }
+  CGPoint point = [touch locationInView:view];
+  CGPoint previous = [touch previousLocationInView:view];
+  return [NSString
+      stringWithFormat:
+          @"phase=%@ type=%@ p=(%.1f,%.1f) prev=(%.1f,%.1f) taps=%lu",
+          OxideTouchPhaseName(touch.phase), OxideTouchTypeName(touch.type),
+          point.x, point.y, previous.x, previous.y,
+          (unsigned long)touch.tapCount];
+}
+
+static NSString *OxideTouchCollectionSummary(id<NSFastEnumeration> touches,
+                                             UIView *view) {
+  NSMutableArray<NSString *> *items = [NSMutableArray array];
+  for (UITouch *touch in touches) {
+    [items addObject:OxideTouchSummary(touch, view)];
+  }
+  return [items componentsJoinedByString:@" | "];
+}
+
+static NSString *OxideEventSummary(UIEvent *event, UIView *view) {
+  if (event == nil) {
+    return @"nil";
+  }
+  NSString *touches = @"";
+  NSUInteger touchCount = 0;
+  if (event.type == UIEventTypeTouches && event.allTouches.count > 0) {
+    touchCount = event.allTouches.count;
+    touches = OxideTouchCollectionSummary(event.allTouches, view);
+  }
+  return [NSString
+      stringWithFormat:@"type=%@ raw=%ld buttonMask=%ld modifiers=%lu "
+                       @"allTouches=%lu touches=[%@]",
+                       OxideEventTypeName(event.type), (long)event.type,
+                       (long)OxideEventButtonMask(event),
+                       (unsigned long)event.modifierFlags,
+                       (unsigned long)touchCount, touches];
 }
 
 static NSString *BoolYesNo(BOOL value) { return value ? @"yes" : @"no"; }
@@ -1011,8 +1330,8 @@ static CGFloat ResolveViewScale(UIView *view) {
 
 static void EnsureHostInitialized(UIView *view) {
   gAppDebugPerf.ensure_host_initialized_calls += 1;
-  if ((IsRunningUITest() && !IsRunningPerfBenchmarkHost()) || gHostAppReady ||
-      !view) {
+  if ((IsRunningUITest() && !ShouldRender() && !IsRunningPerfBenchmarkHost()) ||
+      gHostAppReady || !view) {
     return;
   }
   UIWindow *window = ResolveWindow(view);
@@ -2556,7 +2875,8 @@ int32_t oxide_host_thermal_state(void) {
 
 // ===== Metal view =====
 
-@interface MetalView : UIView <UIKeyInput, UITextInputTraits>
+@interface MetalView
+    : UIView <UIKeyInput, UITextInputTraits, UIGestureRecognizerDelegate>
 @property(nonatomic) CGPoint lastHover;
 @property(nonatomic, strong)
     NSMutableDictionary<NSValue *, NSNumber *> *touchIds;
@@ -2564,6 +2884,7 @@ int32_t oxide_host_thermal_state(void) {
 @property(nonatomic, copy, nullable) UITextContentType textContentType;
 @property(nonatomic) UITextAutocorrectionType autocorrectionType;
 @property(nonatomic) UITextAutocapitalizationType autocapitalizationType;
+- (void)emitTouch:(UITouch *)touch phase:(uint32_t)phase;
 @end
 
 @implementation MetalView
@@ -2571,68 +2892,205 @@ int32_t oxide_host_thermal_state(void) {
   return [CAMetalLayer class];
 }
 
+- (void)oxideCommonInit {
+  if (self.touchIds != nil) {
+    return;
+  }
+  OXLOG(@"MetalView init");
+  self.touchIds = [NSMutableDictionary dictionary];
+  self.multipleTouchEnabled = YES;
+  self.opaque = YES;
+  self.backgroundColor = [UIColor whiteColor];
+  self.isAccessibilityElement = YES;
+  self.accessibilityIdentifier = @"metalView";
+  self.accessibilityLabel = @"Oxide Metal View";
+  self.keyboardType = UIKeyboardTypeDefault;
+  self.textContentType = nil;
+  self.autocorrectionType = UITextAutocorrectionTypeDefault;
+  self.autocapitalizationType = UITextAutocapitalizationTypeSentences;
+
+  CAMetalLayer *layer = (CAMetalLayer *)self.layer;
+  // Bind a device and align format with renderer (sRGB)
+  id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
+  gMetalDevice = dev;
+  layer.device = dev;
+  layer.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+  layer.framebufferOnly = YES;
+  layer.presentsWithTransaction = NO;
+  if (@available(iOS 13.0, *)) {
+    layer.allowsNextDrawableTimeout = NO;
+  }
+  if (@available(iOS 11.2, *)) {
+    layer.maximumDrawableCount = OxidePerfCameraMaximumDrawableCount();
+  }
+  layer.contentsScale =
+      MAX(ResolveViewScale(self) * OxidePerfCameraPreviewSurfaceScale(), 1.0);
+  OXLOG(@"Layer setup: device=%p format=%lu framebufferOnly=%d "
+        @"contentsScale=%.2f previewScale=%.2f maxDrawable=%lu",
+        layer.device, (unsigned long)layer.pixelFormat,
+        (int)layer.framebufferOnly, layer.contentsScale,
+        OxidePerfCameraPreviewSurfaceScale(),
+        (unsigned long)layer.maximumDrawableCount);
+  StartMetalCaptureIfEnabled(dev);
+
+  UIPinchGestureRecognizer *pinch =
+      [[UIPinchGestureRecognizer alloc] initWithTarget:self
+                                                action:@selector(onPinch:)];
+  pinch.delaysTouchesBegan = NO;
+  pinch.delaysTouchesEnded = NO;
+  pinch.cancelsTouchesInView = NO;
+  pinch.requiresExclusiveTouchType = NO;
+  if (@available(iOS 13.4, *)) {
+    pinch.allowedTouchTypes = @[
+      @(UITouchTypeDirect), @(UITouchTypeIndirect),
+      @(UITouchTypeIndirectPointer)
+    ];
+  } else {
+    pinch.allowedTouchTypes = @[ @(UITouchTypeDirect), @(UITouchTypeIndirect) ];
+  }
+  pinch.delegate = self;
+  [self addGestureRecognizer:pinch];
+
+  UIPanGestureRecognizer *pan =
+      [[UIPanGestureRecognizer alloc] initWithTarget:self
+                                              action:@selector(onPan:)];
+  pan.minimumNumberOfTouches = 1;
+  pan.maximumNumberOfTouches = 2;
+  pan.delaysTouchesBegan = NO;
+  pan.delaysTouchesEnded = NO;
+  pan.cancelsTouchesInView = NO;
+  pan.requiresExclusiveTouchType = NO;
+  if (@available(iOS 13.4, *)) {
+    pan.allowedTouchTypes = @[
+      @(UITouchTypeDirect), @(UITouchTypeIndirect),
+      @(UITouchTypeIndirectPointer)
+    ];
+    pan.allowedScrollTypesMask = UIScrollTypeMaskAll;
+  } else {
+    pan.allowedTouchTypes = @[ @(UITouchTypeDirect), @(UITouchTypeIndirect) ];
+  }
+  pan.delegate = self;
+  [self addGestureRecognizer:pan];
+
+  UITapGestureRecognizer *doubleTap =
+      [[UITapGestureRecognizer alloc] initWithTarget:self
+                                              action:@selector(onDoubleTap:)];
+  doubleTap.numberOfTapsRequired = 2;
+  doubleTap.delaysTouchesBegan = NO;
+  doubleTap.delaysTouchesEnded = NO;
+  doubleTap.cancelsTouchesInView = NO;
+  [self addGestureRecognizer:doubleTap];
+
+  if (@available(iOS 13.4, *)) {
+    UIHoverGestureRecognizer *hover =
+        [[UIHoverGestureRecognizer alloc] initWithTarget:self
+                                                  action:@selector(onHover:)];
+    [self addGestureRecognizer:hover];
+  }
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+    shouldRecognizeSimultaneouslyWithGestureRecognizer:
+        (UIGestureRecognizer *)otherGestureRecognizer {
+  if (OxideTouchDebugEnabled()) {
+    OXLOG(@"touch recognizer simultaneous first=%@/%@ second=%@/%@",
+          NSStringFromClass(gestureRecognizer.class),
+          OxideGestureStateName(gestureRecognizer.state),
+          NSStringFromClass(otherGestureRecognizer.class),
+          OxideGestureStateName(otherGestureRecognizer.state));
+  }
+  return YES;
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+       shouldReceiveEvent:(UIEvent *)event API_AVAILABLE(ios(13.4)) {
+  if (OxideWindowTouchCaptureEnabled() &&
+      event.type == UIEventTypeTouches &&
+      OxideEventHasOnlyDirectTouches(event)) {
+    if (OxideTouchDebugEnabled()) {
+      OXLOG(@"touch recognizer shouldReceiveEvent blocked direct touches "
+            @"class=%@ state=%@ all=%lu",
+            NSStringFromClass(gestureRecognizer.class),
+            OxideGestureStateName(gestureRecognizer.state),
+            (unsigned long)event.allTouches.count);
+    }
+    return NO;
+  }
+  if (OxideTouchDebugEnabled()) {
+    OXLOG(@"touch recognizer shouldReceiveEvent class=%@ state=%@ event=%@ "
+          @"buttonMask=%ld modifiers=%lu all=%lu touches=[%@]",
+          NSStringFromClass(gestureRecognizer.class),
+          OxideGestureStateName(gestureRecognizer.state),
+          OxideEventTypeName(event.type), (long)OxideEventButtonMask(event),
+          (unsigned long)event.modifierFlags,
+          (unsigned long)event.allTouches.count,
+          OxideTouchCollectionSummary(event.allTouches, self));
+  }
+  return YES;
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+       shouldReceiveTouch:(UITouch *)touch {
+  if (OxideWindowTouchCaptureEnabled() && OxideTouchIsDirect(touch)) {
+    if (OxideTouchDebugEnabled()) {
+      OXLOG(@"touch recognizer shouldReceiveTouch blocked direct touch "
+            @"class=%@ state=%@ touch=[%@]",
+            NSStringFromClass(gestureRecognizer.class),
+            OxideGestureStateName(gestureRecognizer.state),
+            OxideTouchSummary(touch, self));
+    }
+    return NO;
+  }
+  if (OxideTouchDebugEnabled()) {
+    OXLOG(@"touch recognizer shouldReceiveTouch class=%@ state=%@ touch=[%@]",
+          NSStringFromClass(gestureRecognizer.class),
+          OxideGestureStateName(gestureRecognizer.state),
+          OxideTouchSummary(touch, self));
+  }
+  return YES;
+}
+
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
+  if (OxideTouchDebugEnabled()) {
+    OXLOG(@"touch recognizer shouldBegin class=%@ state=%@ touches=%lu "
+          @"buttonMask=%ld",
+          NSStringFromClass(gestureRecognizer.class),
+          OxideGestureStateName(gestureRecognizer.state),
+          (unsigned long)gestureRecognizer.numberOfTouches,
+          (long)OxideRecognizerButtonMask(gestureRecognizer));
+  }
+  return YES;
+}
+
+- (instancetype)init {
+  self = [super init];
+  if (self) {
+    [self oxideCommonInit];
+  }
+  return self;
+}
+
 - (instancetype)initWithFrame:(CGRect)frame {
   self = [super initWithFrame:frame];
   if (self) {
-    OXLOG(@"MetalView init");
-    self.touchIds = [NSMutableDictionary dictionary];
-    self.multipleTouchEnabled = YES;
-    self.opaque = YES;
-    self.backgroundColor = [UIColor whiteColor];
-    self.accessibilityIdentifier = @"metalView";
-    self.keyboardType = UIKeyboardTypeDefault;
-    self.textContentType = nil;
-    self.autocorrectionType = UITextAutocorrectionTypeDefault;
-    self.autocapitalizationType = UITextAutocapitalizationTypeSentences;
+    [self oxideCommonInit];
+  }
+  return self;
+}
 
-    CAMetalLayer *layer = (CAMetalLayer *)self.layer;
-    // Bind a device and align format with renderer (sRGB)
-    id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
-    gMetalDevice = dev;
-    layer.device = dev;
-    layer.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
-    layer.framebufferOnly = YES;
-    layer.presentsWithTransaction = NO;
-    if (@available(iOS 13.0, *)) {
-      layer.allowsNextDrawableTimeout = NO;
-    }
-    if (@available(iOS 11.2, *)) {
-      layer.maximumDrawableCount = OxidePerfCameraMaximumDrawableCount();
-    }
-    layer.contentsScale =
-        MAX(ResolveViewScale(self) * OxidePerfCameraPreviewSurfaceScale(), 1.0);
-    OXLOG(@"Layer setup: device=%p format=%lu framebufferOnly=%d "
-          @"contentsScale=%.2f previewScale=%.2f maxDrawable=%lu",
-          layer.device, (unsigned long)layer.pixelFormat,
-          (int)layer.framebufferOnly, layer.contentsScale,
-          OxidePerfCameraPreviewSurfaceScale(),
-          (unsigned long)layer.maximumDrawableCount);
-    StartMetalCaptureIfEnabled(dev);
-
-    UIPinchGestureRecognizer *pinch =
-        [[UIPinchGestureRecognizer alloc] initWithTarget:self
-                                                  action:@selector(onPinch:)];
-    pinch.delaysTouchesBegan = NO;
-    [self addGestureRecognizer:pinch];
-
-    UITapGestureRecognizer *doubleTap =
-        [[UITapGestureRecognizer alloc] initWithTarget:self
-                                                action:@selector(onDoubleTap:)];
-    doubleTap.numberOfTapsRequired = 2;
-    [self addGestureRecognizer:doubleTap];
-
-    if (@available(iOS 13.4, *)) {
-      UIHoverGestureRecognizer *hover =
-          [[UIHoverGestureRecognizer alloc] initWithTarget:self
-                                                    action:@selector(onHover:)];
-      [self addGestureRecognizer:hover];
-    }
+- (instancetype)initWithCoder:(NSCoder *)coder {
+  self = [super initWithCoder:coder];
+  if (self) {
+    [self oxideCommonInit];
   }
   return self;
 }
 
 - (BOOL)canBecomeFirstResponder {
   return YES;
+}
+- (NSString *)accessibilityValue {
+  return @"";
 }
 - (BOOL)hasText {
   return NO;
@@ -2707,6 +3165,10 @@ int32_t oxide_host_thermal_state(void) {
   }
   NSNumber *idNum = [self ensureIdForTouch:touch];
   uint64_t id = idNum.unsignedLongLongValue;
+  if (OxideTouchDebugEnabled()) {
+    OXLOG(@"touch emit generic id=%llu phase=%u touch=[%@]",
+          (unsigned long long)id, phase, OxideTouchSummary(touch, self));
+  }
   oxide_host_emit_touch(id, phase, p.x, p.y, pressure, hasP, alt, azi, hasT,
                         device, ts_now_ns());
   if (phase == 2 || phase == 3) {
@@ -2715,26 +3177,74 @@ int32_t oxide_host_thermal_state(void) {
 }
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-  (void)event;
+  if (OxideTouchDebugEnabled()) {
+    OXLOG(@"touchesBegan event=%@ buttonMask=%ld touches=%lu all=%lu "
+          @"touches=[%@]",
+          OxideEventTypeName(event.type), (long)OxideEventButtonMask(event),
+          (unsigned long)touches.count, (unsigned long)event.allTouches.count,
+          OxideTouchCollectionSummary(touches, self));
+  }
+  if (OxideWindowTouchCaptureEnabled()) {
+    if (OxideTouchDebugEnabled()) {
+      OXLOG(@"touchesBegan skipped window touch capture active");
+    }
+    return;
+  }
   for (UITouch *t in touches) {
     [self emitTouch:t phase:0];
   }
 }
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-  (void)event;
+  if (OxideTouchDebugEnabled()) {
+    OXLOG(@"touchesMoved event=%@ buttonMask=%ld touches=%lu all=%lu "
+          @"touches=[%@]",
+          OxideEventTypeName(event.type), (long)OxideEventButtonMask(event),
+          (unsigned long)touches.count, (unsigned long)event.allTouches.count,
+          OxideTouchCollectionSummary(touches, self));
+  }
+  if (OxideWindowTouchCaptureEnabled()) {
+    if (OxideTouchDebugEnabled()) {
+      OXLOG(@"touchesMoved skipped window touch capture active");
+    }
+    return;
+  }
   for (UITouch *t in touches) {
     [self emitTouch:t phase:1];
   }
 }
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-  (void)event;
+  if (OxideTouchDebugEnabled()) {
+    OXLOG(@"touchesEnded event=%@ buttonMask=%ld touches=%lu all=%lu "
+          @"touches=[%@]",
+          OxideEventTypeName(event.type), (long)OxideEventButtonMask(event),
+          (unsigned long)touches.count, (unsigned long)event.allTouches.count,
+          OxideTouchCollectionSummary(touches, self));
+  }
+  if (OxideWindowTouchCaptureEnabled()) {
+    if (OxideTouchDebugEnabled()) {
+      OXLOG(@"touchesEnded skipped window touch capture active");
+    }
+    return;
+  }
   for (UITouch *t in touches) {
     [self emitTouch:t phase:2];
   }
 }
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches
                withEvent:(UIEvent *)event {
-  (void)event;
+  if (OxideTouchDebugEnabled()) {
+    OXLOG(@"touchesCancelled event=%@ buttonMask=%ld touches=%lu all=%lu "
+          @"touches=[%@]",
+          OxideEventTypeName(event.type), (long)OxideEventButtonMask(event),
+          (unsigned long)touches.count, (unsigned long)event.allTouches.count,
+          OxideTouchCollectionSummary(touches, self));
+  }
+  if (OxideWindowTouchCaptureEnabled()) {
+    if (OxideTouchDebugEnabled()) {
+      OXLOG(@"touchesCancelled skipped window touch capture active");
+    }
+    return;
+  }
   for (UITouch *t in touches) {
     [self emitTouch:t phase:3];
   }
@@ -2745,19 +3255,86 @@ int32_t oxide_host_thermal_state(void) {
   CGPoint last = self.lastHover;
   self.lastHover = p;
   float dx = p.x - last.x, dy = p.y - last.y;
+  if (OxideTouchDebugEnabled()) {
+    OXLOG(@"touch hover state=%@ point=(%.1f,%.1f) delta=(%.1f,%.1f) "
+          @"buttonMask=%ld",
+          OxideGestureStateName(rec.state), p.x, p.y, dx, dy,
+          (long)OxideRecognizerButtonMask(rec));
+  }
   oxide_host_emit_pointer(p.x, p.y, dx, dy, 0, 0, ts_now_ns());
 }
 
 - (void)onPinch:(UIPinchGestureRecognizer *)rec {
+  if (OxideTouchDebugEnabled()) {
+    CGPoint c = [rec locationInView:self];
+    OXLOG(@"touch recognizer pinch state=%@ scale=%.4f center=(%.1f,%.1f) "
+          @"touches=%lu buttonMask=%ld",
+          OxideGestureStateName(rec.state), rec.scale, c.x, c.y,
+          (unsigned long)rec.numberOfTouches,
+          (long)OxideRecognizerButtonMask(rec));
+  }
   if (rec.state == UIGestureRecognizerStateBegan ||
       rec.state == UIGestureRecognizerStateChanged) {
     CGPoint c = [rec locationInView:self];
     CGFloat scale = rec.scale;
     if (scale > 0.0f) {
       float delta = log2f(scale);
+      if (OxideTouchDebugEnabled()) {
+        OXLOG(@"touch recognizer pinch emit center=(%.1f,%.1f) delta=%.4f",
+              c.x, c.y, delta);
+      }
       oxide_host_emit_pinch(c.x, c.y, delta);
+    } else if (OxideTouchDebugEnabled()) {
+      OXLOG(@"touch recognizer pinch ignored invalid scale=%.4f", scale);
     }
     rec.scale = 1.0f;
+  } else if (OxideTouchDebugEnabled()) {
+    OXLOG(@"touch recognizer pinch no-emit state=%@",
+          OxideGestureStateName(rec.state));
+  }
+}
+
+- (void)onPan:(UIPanGestureRecognizer *)rec {
+  if (OxideTouchDebugEnabled()) {
+    CGPoint p = [rec locationInView:self];
+    CGPoint d = [rec translationInView:self];
+    CGPoint v = [rec velocityInView:self];
+    OXLOG(@"touch recognizer pan state=%@ point=(%.1f,%.1f) delta=(%.1f,%.1f) "
+          @"velocity=(%.1f,%.1f) touches=%lu buttonMask=%ld",
+          OxideGestureStateName(rec.state), p.x, p.y, d.x, d.y,
+          v.x, v.y, (unsigned long)rec.numberOfTouches,
+          (long)OxideRecognizerButtonMask(rec));
+  }
+  if (rec.state == UIGestureRecognizerStateBegan ||
+      rec.state == UIGestureRecognizerStateChanged) {
+    CGPoint p = [rec locationInView:self];
+    CGPoint d = [rec translationInView:self];
+    if (isfinite(p.x) && isfinite(p.y) && isfinite(d.x) && isfinite(d.y)) {
+      if (OxideTouchDebugEnabled()) {
+        OXLOG(@"touch recognizer pan emit point=(%.1f,%.1f) "
+              @"delta=(%.1f,%.1f)",
+              p.x, p.y, d.x, d.y);
+      }
+      oxide_host_emit_pan_gesture(p.x, p.y, d.x, d.y, 1);
+    } else if (OxideTouchDebugEnabled()) {
+      OXLOG(@"touch recognizer pan ignored invalid point/delta");
+    }
+    [rec setTranslation:CGPointZero inView:self];
+  } else if (rec.state == UIGestureRecognizerStateEnded ||
+             rec.state == UIGestureRecognizerStateCancelled ||
+             rec.state == UIGestureRecognizerStateFailed) {
+    CGPoint p = [rec locationInView:self];
+    if (isfinite(p.x) && isfinite(p.y)) {
+      if (OxideTouchDebugEnabled()) {
+        OXLOG(@"touch recognizer pan end point=(%.1f,%.1f)", p.x, p.y);
+      }
+      oxide_host_emit_pan_gesture(p.x, p.y, 0.0f, 0.0f, 0);
+    } else if (OxideTouchDebugEnabled()) {
+      OXLOG(@"touch recognizer pan end ignored invalid point");
+    }
+  } else if (OxideTouchDebugEnabled()) {
+    OXLOG(@"touch recognizer pan no-emit state=%@",
+          OxideGestureStateName(rec.state));
   }
 }
 
@@ -2767,6 +3344,46 @@ int32_t oxide_host_thermal_state(void) {
   }
 }
 
+@end
+
+@interface OxideTouchWindow : UIWindow
+@end
+
+@implementation OxideTouchWindow
+- (void)sendEvent:(UIEvent *)event {
+  if (OxideTouchDebugEnabled()) {
+    OXLOG(@"touch-debug window sendEvent %@", OxideEventSummary(event, self));
+  }
+  if (OxideWindowTouchCaptureEnabled() && event.type == UIEventTypeTouches) {
+    NSSet<UITouch *> *touches = event.allTouches;
+    MetalView *view = [gMetalView isKindOfClass:[MetalView class]]
+                          ? (MetalView *)gMetalView
+                          : nil;
+    if (OxideTouchDebugEnabled()) {
+      OXLOG(@"window touch sendEvent type=%@ buttonMask=%ld touches=%lu "
+            @"targetMetal=%d touches=[%@]",
+            OxideEventTypeName(event.type), (long)OxideEventButtonMask(event),
+            (unsigned long)touches.count, view != nil,
+            OxideTouchCollectionSummary(touches, view ?: self));
+    }
+    if (view != nil) {
+      for (UITouch *touch in touches) {
+        uint32_t phase = 0;
+        if (OxideTouchPhaseForUITouch(touch, &phase)) {
+          if (OxideTouchDebugEnabled()) {
+            OXLOG(@"window touch emit phase=%u touch=[%@]", phase,
+                  OxideTouchSummary(touch, view));
+          }
+          [view emitTouch:touch phase:phase];
+        } else if (OxideTouchDebugEnabled()) {
+          OXLOG(@"window touch ignored unknown phase touch=[%@]",
+                OxideTouchSummary(touch, view));
+        }
+      }
+    }
+  }
+  [super sendEvent:event];
+}
 @end
 
 @interface OxidePerfCameraPreviewView : UIView
@@ -3769,7 +4386,7 @@ static void OxidePerfCameraBenchmarkStartCallback(
   gAppDebugPerf.running_perf_benchmark_host =
       IsRunningPerfBenchmarkHost() ? 1 : 0;
   gAppDebugPerf.should_render = ShouldRender() ? 1 : 0;
-  self.window = [[UIWindow alloc] initWithWindowScene:ws];
+  self.window = [[OxideTouchWindow alloc] initWithWindowScene:ws];
   UIViewController *vc = [UIViewController new];
   if (IsRunningPerfBenchmarkHost()) {
     gAppDebugPerf.perf_scene_branch_calls += 1;
@@ -3862,7 +4479,6 @@ static void OxidePerfCameraBenchmarkStartCallback(
   } else {
     self.perfBenchmarkStateLabel = nil;
   }
-
   UILabel *fps = [UILabel new];
   fps.translatesAutoresizingMaskIntoConstraints = NO;
   fps.font = [UIFont monospacedDigitSystemFontOfSize:12
@@ -3900,7 +4516,7 @@ static void OxidePerfCameraBenchmarkStartCallback(
     [ll.bottomAnchor
         constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.bottomAnchor
                        constant:-8.0],
-    [ll.widthAnchor constraintLessThanOrEqualToConstant:320.0]
+    [ll.widthAnchor constraintLessThanOrEqualToConstant:360.0]
   ]];
   gUILogLabel = ll;
 
@@ -4306,6 +4922,12 @@ static void OxidePerfCameraBenchmarkStartCallback(
         constraintLessThanOrEqualToAnchor:controls.trailingAnchor]
   ]];
   self.statusLabel = status;
+  if (OxideHostChromeHidden()) {
+    fps.hidden = YES;
+    ll.hidden = !OxideTouchScreenLogEnabled();
+    controls.hidden = YES;
+    status.hidden = YES;
+  }
   [self.window makeKeyAndVisible];
   [self installCameraDrivenSchedulingCallbackIfNeeded];
 
@@ -4321,7 +4943,7 @@ static void OxidePerfCameraBenchmarkStartCallback(
          selector:@selector(onPowerStateChanged:)
              name:NSProcessInfoPowerStateDidChangeNotification
            object:nil];
-  if (ShouldRender()) {
+  if (ShouldRender() && (!IsRunningUITest() || IsRunningPerfBenchmarkHost())) {
     OXLOG(@"willConnect: creating DisplayLink");
     self.displayLink = [CADisplayLink displayLinkWithTarget:self
                                                    selector:@selector(onTick:)];
@@ -4332,6 +4954,9 @@ static void OxidePerfCameraBenchmarkStartCallback(
     EnsureHostInitialized(mv);
     [self pushCamOptions];
     [self updateCameraDrivenDisplayLinkState];
+  } else if (ShouldRender()) {
+    OXLOG(@"willConnect: initializing host without DisplayLink under UITest");
+    EnsureHostInitialized(mv);
   } else {
     OXLOG(@"willConnect: running under UITest — no DisplayLink");
   }
@@ -4625,6 +5250,21 @@ static void OxidePerfCameraBenchmarkStartCallback(
 
 @end
 
+@interface OxideApplication : UIApplication
+@end
+
+@implementation OxideApplication
+- (void)sendEvent:(UIEvent *)event {
+  if (OxideTouchDebugEnabled()) {
+    UIWindow *window = ResolveWindow(gMetalView);
+    UIView *view = gMetalView ?: window.rootViewController.view ?: window;
+    OXLOG(@"touch-debug application sendEvent %@",
+          OxideEventSummary(event, view));
+  }
+  [super sendEvent:event];
+}
+@end
+
 @interface RustAppDelegate : UIResponder <UIApplicationDelegate>
 @property(nonatomic, strong) UIWindow *window;
 @end
@@ -4698,13 +5338,17 @@ int32_t oxide_host_start(int argc, char **argv) {
     char *fallback_argv[] = {(char *)"oxide-host", NULL};
     int launch_argc = (argc > 0 && argv != NULL) ? argc : 1;
     char **launch_argv = (argc > 0 && argv != NULL) ? argv : fallback_argv;
-    int ret = UIApplicationMain(launch_argc, launch_argv, nil,
+    int ret = UIApplicationMain(launch_argc, launch_argv,
+                                NSStringFromClass([OxideApplication class]),
                                 NSStringFromClass([RustAppDelegate class]));
     OXLOG(@"UIApplicationMain returned: %d", ret);
     return ret;
   }
 }
 static void UILog(NSString *line) {
+  if (OxideTouchDebugEnabled() && !OxideTouchScreenLogEnabled()) {
+    return;
+  }
   dispatch_on_main(^{
     if (!gUILogLabel || !gUILogLabel.superview) {
       return;
@@ -4712,8 +5356,8 @@ static void UILog(NSString *line) {
     NSString *prev = gUILogLabel.text ?: @"";
     NSString *next =
         (prev.length > 0) ? [prev stringByAppendingFormat:@"\n%@", line] : line;
-    if (next.length > 2000) {
-      next = [next substringFromIndex:(next.length - 2000)];
+    if (next.length > 8000) {
+      next = [next substringFromIndex:(next.length - 8000)];
     }
     gUILogLabel.text = next;
   });
@@ -4733,5 +5377,6 @@ void oxide_host_ios_log(const char *utf8, size_t len) {
     return;
   }
   NSLog(@"[Oxide-Rust] %@", s);
+  OxideTouchFileLog([NSString stringWithFormat:@"rust %@", s]);
   UILog(s);
 }

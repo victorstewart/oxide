@@ -19,8 +19,6 @@ use oxide_ui_core::{
     DrawListBuilder,
 };
 
-const LEGACY_BADGE_IMAGE: gfx::ImageHandle = gfx::ImageHandle(1);
-
 /// Performance metrics tracker
 struct PerformanceMetrics {
     frame_count: u64,
@@ -360,8 +358,10 @@ impl StressTestScene {
                         ..BadgeStyle::default()
                     };
 
-                    self.badges
-                        .push((Badge { image: LEGACY_BADGE_IMAGE, style }, BadgeState::default()));
+                    self.badges.push((
+                        Badge { image: crate::LEGACY_BADGE_IMAGE, style },
+                        BadgeState::default(),
+                    ));
                 }
             }
 
@@ -400,7 +400,7 @@ impl StressTestScene {
                     ));
 
                     self.badges.push((
-                        Badge { image: LEGACY_BADGE_IMAGE, style: BadgeStyle::default() },
+                        Badge { image: crate::LEGACY_BADGE_IMAGE, style: BadgeStyle::default() },
                         BadgeState::default(),
                     ));
 
@@ -460,7 +460,7 @@ impl StressTestScene {
             ));
 
             self.badges.push((
-                Badge { image: LEGACY_BADGE_IMAGE, style: BadgeStyle::default() },
+                Badge { image: crate::LEGACY_BADGE_IMAGE, style: BadgeStyle::default() },
                 BadgeState::default(),
             ));
 

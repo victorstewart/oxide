@@ -63,6 +63,19 @@ pub struct Databento
 - Manual formatting fixes must maintain the style canon above; no automated formatter may be used.
 - Deprecation warnings are blockers: whenever a deprecated API is observed in touched code or command output, replace it with the upstream-recommended supported API in the same change.
 
+## Touch And Gesture Input
+- Oxide product interactions must be owned by Rust/Oxide. UIKit may only provide the smallest raw OS event delivery shell needed to reach Oxide.
+- For iOS pan, pinch, rotate, or drag surfaces, copy the proven standalone globe model first: inspect `/Users/victorstewart/globe/ios/App/Sources/main.m` and `/Users/victorstewart/globe/src/lib.rs` before inventing new gesture plumbing.
+- The iOS shell should enable multi-touch, install an Oxide-owned `UIWindow`, override `sendEvent:`, and forward every raw `UIEvent.allTouches` `UITouch` phase, coordinate, timestamp, and stable touch identity into Rust/Oxide. This window-level forwarding is the default for every Oxide app so view hit-testing or UIKit recognizer routing cannot silently drop touch samples.
+- View-level `touchesBegan/Moved/Ended/Cancelled` methods may remain as fallback diagnostics, but they must not be the primary Oxide touch ingestion path when a window-level raw event stream is available.
+- Shared touch comprehension belongs in `oxide-input`. New Oxide apps should boot with the host configured for raw touch delivery, feed those raw `oxide_platform_api::TouchEvent`s into Oxide, and consume high-level actions or surface gestures produced by Rust.
+- Do not add scene-specific Objective-C touch state such as drag tracking, active-touch ownership, pinch-distance memory, camera transforms, or map transforms. If UIKit glue exists, it is an OS event adapter only.
+- Do not implement product pan/zoom behavior with `UIPanGestureRecognizer`, `UIPinchGestureRecognizer`, or other UIKit recognizers. If a manual Simulator, pointer, or OS-host path only surfaces recognizer measurements, the recognizer may be used strictly as an input adapter that forwards deltas into Rust immediately; it must not own gesture state, transforms, physics, or rendering.
+- Manual Simulator and trackpad/mouse paths must explicitly accept indirect input: configure recognizer adapters for `UITouchTypeIndirectPointer` and, for pan/scroll, `UIScrollTypeMaskAll`.
+- For surfaces that support both one-finger drag and two-finger pinch, match globe semantics: cancel the active drag when two touches become active, emit pinch from the two-touch distance ratio, and when pinch ends with one touch still active, restart a one-finger drag from the remaining touch point.
+- Gesture verification must prove the real host path. A passing state test or `simctl` environment-triggered synthetic automation is not enough; use XCTest OS-level gestures or manual Simulator/device input and capture visible before/after evidence that the active Oxide scene moved or zoomed.
+- Touch diagnostics must default to file-backed artifacts, not on-screen overlays. For iOS Simulator debugging, write env-gated traces to the app container, for example `Documents/oxide-touch.log`, and pull them with `simctl get_app_container` after the manual reproduction.
+
 ## Performance Requirements
 - Every new Oxide feature, component, animation, or renderer-facing hot path must land with a corresponding Rust perf case in `oxide/crates/perf-runner` and refreshed persisted results in `oxide/benchmarks/workspace/latest.json` plus `oxide/benchmarks/workspace/latest.md`.
 - Every new user-facing scene, workflow, or interaction path must also land with either a scene-level perf case or an explicit user-journey perf case in `oxide/crates/perf-runner`. If the change is interactive or visible to the user, prefer a journey case that exercises the actual use path instead of only a low-level encode path.

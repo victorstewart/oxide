@@ -69,6 +69,51 @@ fn nested_opacity_snapshot(container_opacity: f32, child_opacity: f32) -> Visual
     }
 }
 
+fn nested_action_snapshot(container_opacity: f32, button_opacity: f32) -> VisualTreeSnapshot {
+    let mut root = VisualTreeNode::new("root", "Root", RectF::new(0.0, 0.0, 100.0, 200.0));
+    let mut container =
+        VisualTreeNode::new("root/container", "Container", RectF::new(10.0, 20.0, 60.0, 80.0))
+            .with_opacity(container_opacity);
+    container.push_child(
+        VisualTreeNode::new("root/container/button", "Button", RectF::new(16.0, 24.0, 20.0, 20.0))
+            .with_role("button")
+            .with_opacity(button_opacity)
+            .with_data("target", "people"),
+    );
+    root.push_child(container);
+
+    VisualTreeSnapshot {
+        schema: VISUAL_TREE_SCHEMA_VERSION.to_owned(),
+        producer: "test".to_owned(),
+        scene: "scene".to_owned(),
+        route: "route".to_owned(),
+        preset: Some("fixture".to_owned()),
+        viewport: VisualTreeViewport {
+            frame: VisualTreeRect::from_rect(RectF::new(0.0, 0.0, 100.0, 200.0)),
+            safe: VisualTreeInsets::from_insets(Insets::new(0.0, 10.0, 0.0, 5.0)),
+            points_scale: 1.0,
+        },
+        root,
+    }
+}
+
+fn observation(
+    step_index: usize,
+    frame: VisualTreeRect,
+    opacity: f32,
+) -> VisualTreeActionObservation {
+    VisualTreeActionObservation {
+        step_index,
+        scene: "scene".to_owned(),
+        route: "route".to_owned(),
+        preset: Some("fixture".to_owned()),
+        frame,
+        visible: true,
+        opacity,
+        data: BTreeMap::new(),
+    }
+}
+
 fn snapshot_with_visual_metrics(
     content_x: f64,
     content_y: f64,
@@ -135,6 +180,36 @@ fn visual_tree_diff_reports_geometry_and_semantic_mismatches() {
 }
 
 #[test]
+fn visual_tree_diff_reports_viewport_safe_area_mismatch() {
+    let expected = snapshot(RectF::new(10.0, 20.0, 30.0, 40.0), "demo");
+    let mut actual = snapshot(RectF::new(10.0, 20.0, 30.0, 40.0), "demo");
+    actual.viewport.safe.top = 0.0;
+
+    let diff = compare_visual_tree_snapshots(&expected, &actual, 0.25);
+
+    assert!(!diff.passed);
+    assert!(diff
+        .mismatches
+        .iter()
+        .any(|mismatch| mismatch.path == "$.viewport.safe" && mismatch.field == "top"));
+}
+
+#[test]
+fn visual_tree_diff_reports_points_scale_mismatch() {
+    let expected = snapshot(RectF::new(10.0, 20.0, 30.0, 40.0), "demo");
+    let mut actual = snapshot(RectF::new(10.0, 20.0, 30.0, 40.0), "demo");
+    actual.viewport.points_scale = 2.0;
+
+    let diff = compare_visual_tree_snapshots(&expected, &actual, 0.25);
+
+    assert!(!diff.passed);
+    assert!(diff
+        .mismatches
+        .iter()
+        .any(|mismatch| mismatch.path == "$.viewport" && mismatch.field == "points_scale"));
+}
+
+#[test]
 fn visual_tree_diff_reports_opacity_mismatch_with_large_geometry_tolerance() {
     let expected = snapshot_with_button_opacity(RectF::new(10.0, 20.0, 30.0, 40.0), "demo", 0.20);
     let actual = snapshot_with_button_opacity(RectF::new(10.0, 20.0, 30.0, 40.0), "demo", 0.65);
@@ -165,8 +240,14 @@ fn visual_tree_diff_reports_effective_opacity_mismatch_for_nested_nodes() {
 
 #[test]
 fn visual_tree_diff_accepts_nested_visual_metric_deltas_inside_tolerance() {
-    let expected = snapshot_with_visual_metrics(114.0, 115.0, 21.84782600402832, 25.037608600616455);
-    let actual = snapshot_with_visual_metrics(113.66666412353516, 115.0, 21.84782600402832, 25.0383243560791);
+    let expected =
+        snapshot_with_visual_metrics(114.0, 115.0, 21.84782600402832, 25.037608600616455);
+    let actual = snapshot_with_visual_metrics(
+        113.66666412353516,
+        115.0,
+        21.84782600402832,
+        25.0383243560791,
+    );
 
     let diff = compare_visual_tree_snapshots(&expected, &actual, 0.75);
 
@@ -175,18 +256,16 @@ fn visual_tree_diff_accepts_nested_visual_metric_deltas_inside_tolerance() {
 
 #[test]
 fn visual_tree_diff_reports_nested_visual_metric_delta_outside_tolerance() {
-    let expected = snapshot_with_visual_metrics(114.0, 115.0, 21.84782600402832, 25.037608600616455);
+    let expected =
+        snapshot_with_visual_metrics(114.0, 115.0, 21.84782600402832, 25.037608600616455);
     let actual = snapshot_with_visual_metrics(112.9, 115.0, 21.84782600402832, 25.037608600616455);
 
     let diff = compare_visual_tree_snapshots(&expected, &actual, 0.75);
 
     assert!(!diff.passed);
-    assert!(diff
-        .mismatches
-        .iter()
-        .any(|mismatch| mismatch.path == "root/button"
-            && mismatch.field == "data.visual.content_rect.x"
-            && mismatch.delta.is_some()));
+    assert!(diff.mismatches.iter().any(|mismatch| mismatch.path == "root/button"
+        && mismatch.field == "data.visual.content_rect.x"
+        && mismatch.delta.is_some()));
 }
 
 #[test]
@@ -197,12 +276,9 @@ fn visual_tree_diff_keeps_nested_non_visual_numbers_exact() {
     let diff = compare_visual_tree_snapshots(&expected, &actual, 0.75);
 
     assert!(!diff.passed);
-    assert!(diff
-        .mismatches
-        .iter()
-        .any(|mismatch| mismatch.path == "root/button"
-            && mismatch.field == "data.stats.score"
-            && mismatch.delta.is_some()));
+    assert!(diff.mismatches.iter().any(|mismatch| mismatch.path == "root/button"
+        && mismatch.field == "data.stats.score"
+        && mismatch.delta.is_some()));
 }
 
 #[test]
@@ -362,6 +438,28 @@ fn visual_tree_action_observation_lookup_selects_requested_step() {
 }
 
 #[test]
+fn visual_tree_action_observation_lookup_defaults_to_earliest_step() {
+    let mut step_0 = snapshot(RectF::new(1.0, 2.0, 3.0, 4.0), "demo");
+    step_0.root.children[0].data.insert("target".to_owned(), serde_json::json!("people"));
+    let mut step_2 = snapshot(RectF::new(5.0, 6.0, 7.0, 8.0), "demo");
+    step_2.root.children[0].data.insert("target".to_owned(), serde_json::json!("people"));
+    let graph = build_visual_tree_action_graph(
+        step_0.producer.clone(),
+        step_0.scene.clone(),
+        step_0.route.clone(),
+        step_0.preset.clone(),
+        "sequence.json",
+        [(2, &step_2), (0, &step_0)],
+        action_descriptor,
+    );
+
+    let observation =
+        visual_tree_action_observation_for_path(&graph, "root/button", None).expect("observation");
+    assert_eq!(observation.step_index, 0);
+    assert_eq!(observation.center(), (2.5, 4.0));
+}
+
+#[test]
 fn visual_tree_node_by_path_finds_nested_nodes() {
     let mut snap = snapshot(RectF::new(10.0, 20.0, 30.0, 40.0), "demo");
     snap.root.children[0].push_child(VisualTreeNode::new(
@@ -377,36 +475,94 @@ fn visual_tree_node_by_path_finds_nested_nodes() {
 
 #[test]
 fn visual_tree_action_observation_marks_transition_nodes_unactionable_for_replay() {
-    let observation = VisualTreeActionObservation {
-        step_index: 0,
-        scene: "scene".to_owned(),
-        route: "route".to_owned(),
-        preset: None,
-        frame: VisualTreeRect { x: 0.0, y: 0.0, w: 5.0, h: 9.0 },
-        visible: true,
-        opacity: 0.00001,
-        data: BTreeMap::new(),
-    };
+    let observation = observation(0, VisualTreeRect { x: 0.0, y: 0.0, w: 5.0, h: 9.0 }, 0.0);
 
     assert_eq!(observation.replay_unactionable_reason(), Some("opacity_below_replay_threshold"));
     assert!(!observation.is_replay_actionable());
 }
 
 #[test]
+fn visual_tree_action_observation_allows_zero_extent_targets_when_center_is_finite() {
+    let observation =
+        observation(0, VisualTreeRect { x: 187.66667, y: 303.0, w: 0.0, h: 0.0 }, 1.0);
+
+    assert_eq!(observation.center(), (187.66667, 303.0));
+    assert_eq!(observation.replay_unactionable_reason(), None);
+    assert!(observation.is_replay_actionable());
+}
+
+#[test]
 fn visual_tree_action_observation_allows_stable_visible_replay_targets() {
-    let observation = VisualTreeActionObservation {
-        step_index: 0,
-        scene: "scene".to_owned(),
-        route: "route".to_owned(),
-        preset: None,
-        frame: VisualTreeRect { x: 10.0, y: 20.0, w: 24.0, h: 24.0 },
-        visible: true,
-        opacity: 0.50,
-        data: BTreeMap::new(),
-    };
+    let observation = observation(0, VisualTreeRect { x: 10.0, y: 20.0, w: 24.0, h: 24.0 }, 0.50);
 
     assert_eq!(observation.replay_unactionable_reason(), None);
     assert!(observation.is_replay_actionable());
+}
+
+#[test]
+fn visual_tree_action_observation_allows_nametag_skipped_manifest_targets() {
+    let replay_targets = [
+        (
+            "root/account/login/forgot",
+            observation(0, VisualTreeRect { x: 187.66667, y: 303.0, w: 0.0, h: 0.0 }, 1.0),
+        ),
+        (
+            "root/mission_control/panel/radar/content/card_0",
+            observation(
+                3,
+                VisualTreeRect { x: 178.20905, y: 117.0, w: 145.45198, h: 271.0 },
+                0.00027457738,
+            ),
+        ),
+        (
+            "root/mission_control/panel/radar/content/card_2",
+            observation(
+                2,
+                VisualTreeRect { x: 90.768364, y: 703.0, w: 5.0273438, h: 9.0 },
+                0.001780273,
+            ),
+        ),
+        (
+            "root/mission_control/panel/radar/content/card_3",
+            observation(
+                2,
+                VisualTreeRect { x: 289.31967, y: 752.0, w: 5.0273438, h: 9.0 },
+                0.00000814721,
+            ),
+        ),
+    ];
+
+    for (path, observation) in replay_targets {
+        assert_eq!(
+            observation.replay_unactionable_reason(),
+            None,
+            "{} should stay replayable",
+            path
+        );
+        assert!(observation.is_replay_actionable(), "{} should stay actionable", path);
+        assert!(observation.center().0.is_finite());
+        assert!(observation.center().1.is_finite());
+    }
+}
+
+#[test]
+fn visual_tree_action_graph_uses_effective_opacity_for_replay_targets() {
+    let snapshot = nested_action_snapshot(0.01, 1.0);
+    let graph = build_visual_tree_action_graph(
+        snapshot.producer.clone(),
+        snapshot.scene.clone(),
+        snapshot.route.clone(),
+        snapshot.preset.clone(),
+        "snapshot.json",
+        [(0, &snapshot)],
+        action_descriptor,
+    );
+
+    let observation =
+        visual_tree_action_observation_for_path(&graph, "root/container/button", None)
+            .expect("nested observation");
+    assert_eq!(observation.opacity, 0.01);
+    assert_eq!(observation.replay_unactionable_reason(), None);
 }
 
 #[test]

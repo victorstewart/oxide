@@ -88,6 +88,51 @@ impl Color {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum VisualEffect {
+    UIKitDark,
+    /// One draw command that collapses old Nametag iOS `PopupBlurBase` chrome.
+    ///
+    /// `blur_intensity` is the only blur-strength control exposed to callers:
+    /// `0.0` disables blur and `1.0` requests the strongest reusable popup
+    /// blur material. Renderer backends own the sigma, radius, downsample, and
+    /// pass-planning details.
+    ///
+    /// `tint` is the caller-controlled material color. Its RGB channels are
+    /// the overlay color; its alpha is the material opacity, not another blur
+    /// strength control.
+    DarkPopup {
+        blur_intensity: f32,
+        tint: Color,
+    },
+}
+
+impl VisualEffect {
+    #[inline]
+    #[must_use]
+    pub fn blur_intensity(self) -> f32 {
+        match self {
+            Self::UIKitDark => 1.0,
+            Self::DarkPopup { blur_intensity, .. } => {
+                if blur_intensity.is_finite() {
+                    blur_intensity.clamp(0.0, 1.0)
+                } else {
+                    0.0
+                }
+            }
+        }
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn tint(self) -> Color {
+        match self {
+            Self::UIKitDark => Color::rgba(0.0, 0.0, 0.0, 0.90),
+            Self::DarkPopup { tint, .. } => tint,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vertex {
@@ -172,6 +217,7 @@ pub enum DrawCmd {
     RRect { rect: RectF, radii: [f32; 4], color: Color },
     NineSlice { tex: ImageHandle, rect: RectF, slice: Insets, alpha: f32 },
     Backdrop { rect: RectF, sigma: f32, tint: Color, alpha: f32 },
+    VisualEffect { rect: RectF, effect: VisualEffect },
     // Platform camera background (iOS Metal: NV12 import). Renderer interprets this
     // as a request to composite the latest camera frame behind UI.
     // When unsupported on a platform, it is a no-op.
@@ -189,6 +235,20 @@ pub trait RenderEncoder {
     fn draw_rrect(&mut self, rect: RectF, radii: [f32; 4], color: Color);
     fn draw_nine_slice(&mut self, img: ImageHandle, rect: RectF, slice: Insets, alpha: f32);
     fn draw_backdrop(&mut self, rect: RectF, sigma: f32, tint: Color, alpha: f32);
+    fn draw_visual_effect(&mut self, rect: RectF, effect: VisualEffect) {
+        match effect {
+            VisualEffect::UIKitDark | VisualEffect::DarkPopup { .. } => {
+                let tint = effect.tint();
+                const FALLBACK_MAX_BLUR_SIGMA: f32 = 72.0;
+                self.draw_backdrop(
+                    rect,
+                    effect.blur_intensity() * FALLBACK_MAX_BLUR_SIGMA,
+                    Color::rgba(tint.r, tint.g, tint.b, 1.0),
+                    tint.a,
+                );
+            }
+        }
+    }
     fn draw_camera_bg(
         &mut self,
         _rect: RectF,

@@ -1,4 +1,7 @@
-use oxide_input::{GestureConfig, GestureEvent, GestureOutcome, GestureRecognizer};
+use oxide_input::{
+    GestureConfig, GestureEvent, GestureOutcome, GestureRecognizer, TouchSurfaceEvent,
+    TouchSurfaceRecognizer,
+};
 use oxide_platform_api as api;
 
 fn touch(id: api::TouchId, phase: api::TouchPhase, x: f32, y: f32) -> api::TouchEvent {
@@ -128,4 +131,24 @@ fn gesture_outcome_haptics() {
             haptic: Some(api::HapticPattern::Selection)
         }
     );
+}
+
+#[test]
+fn touch_surface_recognizer_owns_two_touch_pinch_semantics() {
+    let mut surface = TouchSurfaceRecognizer::new();
+    surface.on_touch(&touch(api::TouchId(1), api::TouchPhase::Start, 180.0, 400.0));
+    surface.on_touch(&touch(api::TouchId(2), api::TouchPhase::Start, 220.0, 400.0));
+
+    let out = surface.on_touch(&touch(api::TouchId(2), api::TouchPhase::Move, 260.0, 400.0));
+
+    assert!(out.iter().any(|event| matches!(
+        event,
+        TouchSurfaceEvent::Pinch { scale_delta, log2_scale_delta, .. }
+            if (*scale_delta - 2.0).abs() < 0.001 && (*log2_scale_delta - 1.0).abs() < 0.001
+    )));
+    assert!(out.iter().any(|event| matches!(
+        event,
+        TouchSurfaceEvent::Pan { touch_count: 2, dx, dy, .. }
+            if (*dx - 20.0).abs() < 0.001 && dy.abs() < 0.001
+    )));
 }

@@ -4,11 +4,16 @@
 ))]
 
 use oxide_renderer_api::{self as api, Renderer};
+use oxide_renderer_metal::scene3d::{self, Instance3d, Mesh3dData, Pass3d, Vertex3d};
 use oxide_renderer_metal::{CameraRenderMode, CameraTextureSource, MetalRenderer};
 
 fn approx_eq(a: u8, b: u8, tol: u8) -> bool {
     let d = a.abs_diff(b);
     d <= tol
+}
+
+fn mat4_identity() -> scene3d::Mat4 {
+    [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
 }
 
 #[test]
@@ -160,6 +165,94 @@ fn snapshot_solid_rejects_non_triangle_index_counts() {
             "expected untouched white background at ({x},{y}), got {p:?}"
         );
     }
+}
+
+#[test]
+fn snapshot_scene3d_mixes_with_2d_overlay() {
+    let mut renderer = MetalRenderer::new_default().expect("metal");
+    let width = 128u32;
+    let height = 128u32;
+    renderer.resize(width, height, 1.0).expect("resize");
+
+    let fill_vertices = [
+        Vertex3d { position: [-0.70, -0.55, 0.10] },
+        Vertex3d { position: [0.10, -0.60, 0.10] },
+        Vertex3d { position: [-0.45, 0.15, 0.10] },
+    ];
+    let fill_indices = [0_u32, 1, 2];
+    let fill = renderer
+        .mesh3d_create(&Mesh3dData {
+            vertices: &fill_vertices,
+            indices: &fill_indices,
+            topology: scene3d::MeshTopology::Triangles,
+        })
+        .expect("create fill mesh");
+
+    let line_vertices = [
+        Vertex3d { position: [-0.85, 0.0, 0.0] },
+        Vertex3d { position: [0.85, 0.0, 0.0] },
+        Vertex3d { position: [0.0, -0.85, 0.0] },
+        Vertex3d { position: [0.0, 0.85, 0.0] },
+    ];
+    let line_indices = [0_u32, 1, 2, 3];
+    let lines = renderer
+        .mesh3d_create(&Mesh3dData {
+            vertices: &line_vertices,
+            indices: &line_indices,
+            topology: scene3d::MeshTopology::Lines,
+        })
+        .expect("create line mesh");
+
+    let mut line_instance =
+        Instance3d::new(lines, mat4_identity(), api::Color::rgba(0.98, 0.30, 0.46, 1.0));
+    line_instance.cull = scene3d::CullMode3d::None;
+    line_instance.depth_write = false;
+    let instances = [
+        Instance3d::new(fill, mat4_identity(), api::Color::rgba(0.18, 0.72, 1.0, 1.0)),
+        line_instance,
+    ];
+    let scene = Pass3d {
+        clear_color: Some(api::Color::rgba(0.08, 0.09, 0.13, 1.0)),
+        clear_depth: true,
+        view_proj: mat4_identity(),
+        instances: &instances,
+    };
+
+    let mut overlay = api::DrawList::default();
+    overlay.items.push(api::DrawCmd::RRect {
+        rect: api::RectF::new(10.0, 10.0, 28.0, 18.0),
+        radii: [4.0; 4],
+        color: api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+    });
+
+    let token = renderer.begin_frame(&api::FrameTarget, None);
+    renderer.encode_scene3d(&scene).expect("encode scene3d");
+    renderer.encode_pass(&overlay);
+    renderer.submit(token).expect("submit");
+    let (_rw, _rh, bgra) = renderer.readback_bgra8().expect("readback");
+
+    let pixel = |x: u32, y: u32| -> [u8; 4] {
+        let idx = ((y * width + x) * 4) as usize;
+        [bgra[idx], bgra[idx + 1], bgra[idx + 2], bgra[idx + 3]]
+    };
+
+    let overlay_px = pixel(20, 18);
+    assert!(
+        overlay_px[0] > 235 && overlay_px[1] > 235 && overlay_px[2] > 235,
+        "expected 2D overlay to remain visible over scene3d, got {overlay_px:?}"
+    );
+
+    let fill_px = pixel(38, 74);
+    assert!(
+        fill_px[0] > 180 && fill_px[1] > 120 && fill_px[2] < 120,
+        "expected scene3d fill color in the lower-left quadrant, got {fill_px:?}"
+    );
+
+    let background_px = pixel(118, 118);
+    assert!(
+        background_px[2] < 140 && background_px[1] < 140 && background_px[0] < 140,
+        "expected clear color to survive on untouched pixels, got {background_px:?}"
+    );
 }
 
 fn render_camera_preview(mode: CameraRenderMode) -> Vec<u8> {

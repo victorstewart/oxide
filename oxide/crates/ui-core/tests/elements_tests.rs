@@ -128,20 +128,6 @@ fn badge_encode_falls_back_to_legacy_red_circle_when_image_missing() {
 }
 
 #[test]
-fn spinner_defaults_match_legacy_large_indicator_contract() {
-    let spinner = Spinner::default();
-
-    assert_eq!(spinner.alpha, 1.0);
-    assert!((Spinner::LEGACY_LARGE_STYLE_ATOM - 37.0).abs() <= f32::EPSILON);
-    assert!((Spinner::LEGACY_LARGE_STYLE_STROKE - 2.5).abs() <= f32::EPSILON);
-    assert_eq!(
-        Spinner::LEGACY_BASE_TINT,
-        Color::rgba(236.0 / 255.0, 240.0 / 255.0, 241.0 / 255.0, 1.0)
-    );
-    assert_eq!(Spinner::LEGACY_ROTATION_MS, 1_000);
-}
-
-#[test]
 fn spinner_encode_uses_rect_atom_without_caller_phase() {
     let spinner = Spinner { alpha: 0.55 };
     let mut builder = oxide_ui_core::DrawListBuilder::new();

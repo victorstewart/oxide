@@ -410,7 +410,7 @@ struct SensorRuntime {
     _binding: oxide_permissions::sensors::SensorPermissionBinding,
     location: IosLocation,
     motion: IosMotion,
-    bluetooth: IosBluetooth,
+    bluetooth: Option<IosBluetooth>,
     push: IosPushManager,
     location_running: bool,
     motion_running: bool,
@@ -423,10 +423,19 @@ impl SensorRuntime {
         perms: Arc<PermissionManager>,
         telemetry: Weak<TelemetryHub>,
         restore_id: Option<&str>,
+        enable_bluetooth: bool,
     ) -> Self {
         let binding = bridge.bind_permissions(&perms);
-        let bluetooth =
-            if let Some(id) = restore_id { bluetooth_with_restoration(id) } else { IosBluetooth };
+        let bluetooth = if enable_bluetooth {
+            Some(if let Some(id) = restore_id {
+                bluetooth_with_restoration(id)
+            } else {
+                IosBluetooth
+            })
+        } else {
+            ios_log("oxide.host-ios: Bluetooth runtime disabled for app profile");
+            None
+        };
         let mut runtime = Self {
             bluetooth,
             location: IosLocation,
@@ -465,14 +474,19 @@ impl SensorRuntime {
 
         let telemetry_bt = self.telemetry.clone();
         let bt_bridge = Arc::clone(&self.bridge);
-        self.bluetooth.subscribe_events(Box::new(move |event| {
-            bt_bridge.handle_bluetooth_event(event);
-            if let Some(tele) = telemetry_bt.upgrade() {
-                tele.update_sensors(Some(bt_bridge.snapshot()));
-            }
-        }));
-        let powered = self.bluetooth.powered_on();
-        self.bridge.handle_bluetooth_event(BluetoothEvent::StateChanged { powered_on: powered });
+        if let Some(bluetooth) = self.bluetooth.as_ref() {
+            bluetooth.subscribe_events(Box::new(move |event| {
+                bt_bridge.handle_bluetooth_event(event);
+                if let Some(tele) = telemetry_bt.upgrade() {
+                    tele.update_sensors(Some(bt_bridge.snapshot()));
+                }
+            }));
+            let powered = bluetooth.powered_on();
+            self.bridge
+                .handle_bluetooth_event(BluetoothEvent::StateChanged { powered_on: powered });
+        } else {
+            self.bridge.handle_bluetooth_event(BluetoothEvent::StateChanged { powered_on: false });
+        }
 
         let telemetry_push = self.telemetry.clone();
         let push_bridge = Arc::clone(&self.bridge);
@@ -563,7 +577,9 @@ impl SensorRuntime {
             self.motion.stop();
             self.motion_running = false;
         }
-        self.bluetooth.stop_scan();
+        if let Some(bluetooth) = self.bluetooth.as_ref() {
+            bluetooth.stop_scan();
+        }
         self.bridge.prune_bluetooth();
         if let Some(tele) = self.telemetry.upgrade() {
             tele.update_sensors(Some(self.bridge.snapshot()));
@@ -587,9 +603,12 @@ impl SensorRuntime {
             PermissionDomain::Motion => self.refresh_motion(),
             PermissionDomain::Notifications => self.refresh_push(),
             PermissionDomain::Bluetooth => {
-                let powered = self.bluetooth.powered_on();
-                self.bridge
-                    .handle_bluetooth_event(BluetoothEvent::StateChanged { powered_on: powered });
+                if let Some(bluetooth) = self.bluetooth.as_ref() {
+                    let powered = bluetooth.powered_on();
+                    self.bridge.handle_bluetooth_event(BluetoothEvent::StateChanged {
+                        powered_on: powered,
+                    });
+                }
             }
             _ => {}
         }
@@ -1130,7 +1149,12 @@ pub extern "C" fn oxide_host_emit_touch(
     device: u32,
     timestamp_ns: u64,
 ) {
-    if let Some(cb) = TOUCH_CB.get().and_then(|m| *m.lock().unwrap()) {
+    let callback = TOUCH_CB.get().and_then(|m| *m.lock().unwrap());
+    touch_log(&format!(
+        "rust ffi oxide_host_emit_touch entry id={id} phase={phase} x={x:.1} y={y:.1} callback={}",
+        callback.is_some()
+    ));
+    if let Some(cb) = callback {
         cb(
             id,
             phase,
@@ -1144,8 +1168,10 @@ pub extern "C" fn oxide_host_emit_touch(
             device,
             timestamp_ns,
         );
+        touch_log("rust ffi oxide_host_emit_touch callback returned");
     } else {
         eprintln!("[Oxide] touch id={} phase={} x={} y={}", id, phase, x, y);
+        touch_log("rust ffi oxide_host_emit_touch dropped no callback");
     }
 }
 
@@ -1760,6 +1786,59 @@ fn load_default_assets(
     router.nine_slice_set_image(tex);
 }
 
+fn apply_initial_scene_from_env(router: &mut test_scenes::Router<MtlUploader>) {
+    let requested_env = std::env::var("OXIDE_INITIAL_SCENE").ok();
+    let requested = if let Some(requested) = requested_env.as_deref() {
+        requested.trim()
+    } else {
+        return;
+    };
+    let names = test_scenes::Router::<MtlUploader>::scene_names();
+    if let Some(index) = names.iter().position(|name| name.eq_ignore_ascii_case(requested)) {
+        router.set_scene(index);
+        ios_log(&format!("oxide.host-ios: initial scene '{}'", names[index]));
+        return;
+    }
+    if let Ok(index) = requested.parse::<usize>() {
+        if index < names.len() {
+            router.set_scene(index);
+            ios_log(&format!("oxide.host-ios: initial scene '{}'", names[index]));
+            return;
+        }
+    }
+    ios_log(&format!("oxide.host-ios: unknown OXIDE_INITIAL_SCENE='{requested}'"));
+}
+
+fn initial_env_bool(name: &str) -> Option<bool> {
+    std::env::var(name).ok().and_then(|value| {
+        let normalized = value.trim();
+        if normalized == "1"
+            || normalized.eq_ignore_ascii_case("true")
+            || normalized.eq_ignore_ascii_case("yes")
+        {
+            Some(true)
+        } else if normalized == "0"
+            || normalized.eq_ignore_ascii_case("false")
+            || normalized.eq_ignore_ascii_case("no")
+        {
+            Some(false)
+        } else {
+            None
+        }
+    })
+}
+
+#[cfg(target_os = "ios")]
+fn bluetooth_runtime_enabled() -> bool {
+    if initial_env_bool("OXIDE_ENABLE_BLUETOOTH").unwrap_or(false) {
+        return true;
+    }
+    if initial_env_bool("OXIDE_DISABLE_BLUETOOTH").unwrap_or(false) {
+        return false;
+    }
+    true
+}
+
 #[no_mangle]
 pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_int {
     #[cfg(target_os = "ios")]
@@ -1865,6 +1944,7 @@ pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_i
                     telemetry.as_ref().expect("telemetry available outside benchmark mode"),
                 ),
                 None,
+                bluetooth_runtime_enabled(),
             );
             app.sensor_runtime = Some(runtime);
             match NetworkRuntime::new(
@@ -1883,6 +1963,9 @@ pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_i
     app.networking = reachability.clone();
     if let Some(router) = router.as_mut() {
         load_default_assets(renderer_ptr, router);
+        if !app.benchmark_mode {
+            apply_initial_scene_from_env(router);
+        }
     }
     let default_damage_use = 0.70f32;
     let default_damage_pref = 0.25f32;
@@ -1907,7 +1990,11 @@ pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_i
     app.space_down = false;
     app.memory_warnings = 0;
 
-    let desired_overlay = if app.overlay_dirty { app.overlay_visible } else { !app.benchmark_mode };
+    let desired_overlay = if app.overlay_dirty {
+        app.overlay_visible
+    } else {
+        initial_env_bool("OXIDE_INITIAL_OVERLAY_VISIBLE").unwrap_or(!app.benchmark_mode)
+    };
     if !desired_overlay {
         if let Some(router) = router.as_mut() {
             router.toggle_overlay();
@@ -2617,7 +2704,13 @@ extern "C" fn window_resized_cb(
 extern "C" fn pointer_cb(x: f32, y: f32, dx: f32, dy: f32, buttons: u32, _mods: u32, _ts: u64) {
     let _ = with_app_mut(|app| {
         if let Some(router) = app.router.as_mut() {
+            touch_log(&format!(
+                "rust callback pointer scene={:?} x={x:.1} y={y:.1} dx={dx:.1} dy={dy:.1} buttons={buttons}",
+                router.current
+            ));
             router.input_pointer(x, y, dx, dy, buttons);
+        } else {
+            touch_log("rust callback pointer dropped no router");
         }
     });
 }
@@ -2627,16 +2720,25 @@ extern "C" fn touch_cb(
     phase: u32,
     x: f32,
     y: f32,
-    _pressure: f32,
-    _has_pressure: u8,
-    _tilt_alt: f32,
-    _tilt_azi: f32,
-    _has_tilt: u8,
-    _device: u32,
+    pressure: f32,
+    has_pressure: u8,
+    tilt_alt: f32,
+    tilt_azi: f32,
+    has_tilt: u8,
+    device: u32,
     ts_ns: u64,
 ) {
     let _ = with_app_mut(|app| {
+        let _ = (pressure, has_pressure, tilt_alt, tilt_azi, has_tilt);
+        touch_log(&format!(
+            "rust callback touch decoded id={id} phase={phase} x={x:.1} y={y:.1} device={device}"
+        ));
         let result = app.touch.on_event(id, phase, x, y, ts_ns);
+        touch_log(&format!(
+            "rust callback touch generic result pointer={} double_tap={}",
+            result.pointer.is_some(),
+            result.double_tap
+        ));
         if let Some(router) = app.router.as_mut() {
             if let Some(ptr) = result.pointer {
                 router.input_pointer(ptr.x, ptr.y, ptr.dx, ptr.dy, ptr.buttons);
@@ -2644,6 +2746,8 @@ extern "C" fn touch_cb(
             if result.double_tap {
                 router.input_double_tap();
             }
+        } else {
+            touch_log("rust callback touch dropped no router");
         }
     });
 }
@@ -3238,10 +3342,31 @@ pub extern "C" fn oxide_host_is_reduce_motion() -> u8 {
 
 #[no_mangle]
 pub extern "C" fn oxide_host_emit_pinch(cx: f32, cy: f32, delta: f32) {
+    touch_log(&format!(
+        "rust ffi oxide_host_emit_pinch entry cx={cx:.1} cy={cy:.1} delta={delta:.4}"
+    ));
     let _ = with_app_mut(|app| {
         if let Some(router) = app.router.as_mut() {
+            touch_log(&format!("rust ffi pinch scene={:?}", router.current));
             router.input_pinch(cx, cy, delta);
+        } else {
+            touch_log("rust ffi pinch dropped no router");
         }
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_emit_pan_gesture(x: f32, y: f32, dx: f32, dy: f32, active: u8) {
+    touch_log(&format!(
+        "rust ffi oxide_host_emit_pan_gesture entry x={x:.1} y={y:.1} dx={dx:.1} dy={dy:.1} active={active}"
+    ));
+    let _ = with_app_mut(|app| {
+        let Some(router) = app.router.as_mut() else {
+            touch_log("rust ffi pan dropped no router");
+            return;
+        };
+        touch_log(&format!("rust ffi pan scene={:?}", router.current));
+        router.input_pointer(x, y, dx, dy, if active != 0 { 1 } else { 0 });
     });
 }
 
@@ -3381,4 +3506,29 @@ fn ios_log(msg: &str) {
 
     #[cfg(not(target_os = "ios"))]
     let _ = msg;
+}
+
+#[inline(always)]
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+fn touch_log_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| ios_env_flag("OXIDE_TOUCH_LOG"))
+}
+
+#[inline(always)]
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+fn touch_log(msg: &str) {
+    #[cfg(target_os = "ios")]
+    unsafe {
+        if touch_log_enabled() {
+            oxide_host_ios_log(msg.as_ptr() as *const ::libc::c_char, msg.len());
+        }
+    }
+
+    #[cfg(not(target_os = "ios"))]
+    {
+        if touch_log_enabled() {
+            std::eprintln!("oxide.touch: {msg}");
+        }
+    }
 }

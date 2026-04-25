@@ -212,14 +212,6 @@ int32_t oxide_media_load_full_image_rgba(const uint8_t *identifier_ptr,
                                     out_image);
 }
 
-int32_t
-oxide_media_load_full_image_rgba_if_available(const uint8_t *identifier_ptr,
-                                              size_t identifier_len,
-                                              OxideImageData *out_image) {
-  return oxide_media_load_thumbnail(identifier_ptr, identifier_len, 0,
-                                    out_image);
-}
-
 void oxide_media_free_image_data(const uint8_t *data_ptr, size_t data_len) {
   (void)data_ptr;
   (void)data_len;

@@ -55,6 +55,14 @@ pub struct GestureOutcome {
     pub haptic: Option<api::HapticPattern>,
 }
 
+/// Raw-touch surface gestures derived inside Oxide.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TouchSurfaceEvent {
+    ActiveTouchesChanged { touch_count: u8, x: f32, y: f32 },
+    Pan { touch_count: u8, x: f32, y: f32, dx: f32, dy: f32 },
+    Pinch { x: f32, y: f32, scale_delta: f32, log2_scale_delta: f32 },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TrackState {
     Pending,
@@ -92,6 +100,122 @@ struct TapMemory {
     x: f32,
     y: f32,
     time_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SurfaceTouch {
+    id: api::TouchId,
+    x: f32,
+    y: f32,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct TouchSurfaceFrame {
+    count: u8,
+    x: f32,
+    y: f32,
+    distance: f32,
+}
+
+/// Tracks raw touch contacts and emits pan/pinch deltas for a continuous surface.
+#[derive(Clone, Debug, Default)]
+pub struct TouchSurfaceRecognizer {
+    touches: HashMap<api::TouchId, SurfaceTouch>,
+}
+
+impl TouchSurfaceRecognizer {
+    pub fn new() -> Self {
+        Self { touches: HashMap::new() }
+    }
+
+    pub fn active_count(&self) -> usize {
+        self.touches.len()
+    }
+
+    pub fn reset(&mut self) {
+        self.touches.clear();
+    }
+
+    pub fn on_touch(&mut self, ev: &api::TouchEvent) -> alloc::vec::Vec<TouchSurfaceEvent> {
+        let mut out = alloc::vec::Vec::new();
+        if !ev.x.is_finite() || !ev.y.is_finite() {
+            return out;
+        }
+
+        let before = self.frame();
+        match ev.phase {
+            api::TouchPhase::Start => {
+                self.touches.insert(ev.id, SurfaceTouch { id: ev.id, x: ev.x, y: ev.y });
+            }
+            api::TouchPhase::Move => {
+                if let Some(touch) = self.touches.get_mut(&ev.id) {
+                    touch.x = ev.x;
+                    touch.y = ev.y;
+                }
+            }
+            api::TouchPhase::End | api::TouchPhase::Cancel => {
+                self.touches.remove(&ev.id);
+            }
+        }
+
+        let after = self.frame();
+        if before.count != after.count {
+            out.push(TouchSurfaceEvent::ActiveTouchesChanged {
+                touch_count: after.count,
+                x: after.x,
+                y: after.y,
+            });
+        }
+        if !matches!(ev.phase, api::TouchPhase::Move) {
+            return out;
+        }
+
+        match (before.count, after.count) {
+            (1, 1) => out.push(TouchSurfaceEvent::Pan {
+                touch_count: 1,
+                x: after.x,
+                y: after.y,
+                dx: after.x - before.x,
+                dy: after.y - before.y,
+            }),
+            (2, 2) => {
+                if before.distance > 1.0 && after.distance > 1.0 {
+                    let scale_delta = after.distance / before.distance;
+                    out.push(TouchSurfaceEvent::Pinch {
+                        x: after.x,
+                        y: after.y,
+                        scale_delta,
+                        log2_scale_delta: scale_delta.log2(),
+                    });
+                }
+                out.push(TouchSurfaceEvent::Pan {
+                    touch_count: 2,
+                    x: after.x,
+                    y: after.y,
+                    dx: after.x - before.x,
+                    dy: after.y - before.y,
+                });
+            }
+            _ => {}
+        }
+        out
+    }
+
+    fn frame(&self) -> TouchSurfaceFrame {
+        let mut touches: alloc::vec::Vec<SurfaceTouch> = self.touches.values().copied().collect();
+        touches.sort_by_key(|touch| touch.id.0);
+        match touches.as_slice() {
+            [] => TouchSurfaceFrame::default(),
+            [first] => TouchSurfaceFrame { count: 1, x: first.x, y: first.y, distance: 0.0 },
+            [first, second, ..] => {
+                let x = (first.x + second.x) * 0.5;
+                let y = (first.y + second.y) * 0.5;
+                let dx = second.x - first.x;
+                let dy = second.y - first.y;
+                TouchSurfaceFrame { count: 2, x, y, distance: (dx * dx + dy * dy).sqrt() }
+            }
+        }
+    }
 }
 
 /// Stateful recognizer for touch gestures.
@@ -447,5 +571,69 @@ mod tests {
         assert!(acc.momentum());
         acc.push(0.0, 0.0, ScrollPhase::Began);
         assert!(!acc.momentum());
+    }
+
+    #[test]
+    fn touch_surface_single_touch_pan_from_raw_events() {
+        let mut surface = TouchSurfaceRecognizer::new();
+        assert_eq!(
+            surface.on_touch(&start(1, 100.0, 200.0)),
+            vec![TouchSurfaceEvent::ActiveTouchesChanged { touch_count: 1, x: 100.0, y: 200.0 }]
+        );
+
+        assert_eq!(
+            surface.on_touch(&mv(1, 124.0, 190.0)),
+            vec![TouchSurfaceEvent::Pan {
+                touch_count: 1,
+                x: 124.0,
+                y: 190.0,
+                dx: 24.0,
+                dy: -10.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn touch_surface_two_touch_pinch_and_center_pan_from_raw_events() {
+        let mut surface = TouchSurfaceRecognizer::new();
+        let _ = surface.on_touch(&start(2, 220.0, 400.0));
+        let _ = surface.on_touch(&start(1, 180.0, 400.0));
+
+        assert_eq!(
+            surface.on_touch(&mv(1, 160.0, 390.0)),
+            vec![
+                TouchSurfaceEvent::Pinch {
+                    x: 190.0,
+                    y: 395.0,
+                    scale_delta: ((60.0_f32 * 60.0) + (10.0_f32 * 10.0)).sqrt() / 40.0,
+                    log2_scale_delta: (((60.0_f32 * 60.0) + (10.0_f32 * 10.0)).sqrt() / 40.0)
+                        .log2(),
+                },
+                TouchSurfaceEvent::Pan { touch_count: 2, x: 190.0, y: 395.0, dx: -10.0, dy: -5.0 },
+            ]
+        );
+    }
+
+    #[test]
+    fn touch_surface_cancel_removes_active_touch() {
+        let mut surface = TouchSurfaceRecognizer::new();
+        let _ = surface.on_touch(&start(1, 0.0, 0.0));
+
+        assert_eq!(surface.active_count(), 1);
+        let out = surface.on_touch(&api::TouchEvent {
+            id: tid(1),
+            phase: api::TouchPhase::Cancel,
+            x: 0.0,
+            y: 0.0,
+            pressure: None,
+            tilt: None,
+            device: api::PointerDevice::Finger,
+        });
+
+        assert_eq!(surface.active_count(), 0);
+        assert_eq!(
+            out,
+            vec![TouchSurfaceEvent::ActiveTouchesChanged { touch_count: 0, x: 0.0, y: 0.0 }]
+        );
     }
 }

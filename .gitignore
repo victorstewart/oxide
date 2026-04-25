@@ -4,6 +4,7 @@
 *.swo
 *.log
 /tasks/
+.run/
 
 # Rust/Cargo
 **/target/

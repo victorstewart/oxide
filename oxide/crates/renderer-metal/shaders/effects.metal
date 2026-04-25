@@ -18,27 +18,31 @@ vertex VSOut v_fullscreen(uint vid [[vertex_id]]) {
     return o;
 }
 
-// params: (dir_x, dir_y, sigma, pad)
+// params: (dir_x, dir_y, sigma, radius)
 fragment float4 f_blur(VSOut in [[stage_in]], texture2d<float> src [[texture(0)]], sampler s [[sampler(0)]], constant float4& params [[buffer(1)]]) {
     float2 dir = params.xy;
     float sigma = max(params.z, 0.001);
+    int radius = clamp(int(round(params.w)), 2, 192);
     float2 inv_size = float2(1.0 / src.get_width(), 1.0 / src.get_height());
     float2 uv = in.uv;
 
-    // 5-tap Gaussian weights based on sigma
+    // Wider separable Gaussian. The effect prepass runs at quarter resolution,
+    // so each radius texel covers roughly four framebuffer pixels. Backdrop
+    // effects pass a wider radius than camera blur to match UIKit's material.
     float w0 = 1.0 / (sqrt(2.0 * M_PI_F) * sigma);
-    float e1 = exp(-0.5 * (1.0 / sigma) * (1.0 / sigma));
-    float e2 = exp(-0.5 * (2.0 / sigma) * (2.0 / sigma));
-    float w1 = w0 * e1;
-    float w2 = w0 * e2;
-    float norm = w0 + 2.0 * (w1 + w2);
-    w0 /= norm; w1 /= norm; w2 /= norm;
-
     float2 step = dir * inv_size;
     float4 c = src.sample(s, uv) * w0;
-    c += (src.sample(s, uv + step * 1.0) + src.sample(s, uv - step * 1.0)) * w1;
-    c += (src.sample(s, uv + step * 2.0) + src.sample(s, uv - step * 2.0)) * w2;
-    return c;
+    float norm = w0;
+    for (int i = 1; i <= 192; ++i) {
+        if (i > radius) {
+            break;
+        }
+        float x = float(i);
+        float w = w0 * exp(-0.5 * (x / sigma) * (x / sigma));
+        c += (src.sample(s, uv + step * x) + src.sample(s, uv - step * x)) * w;
+        norm += 2.0 * w;
+    }
+    return c / max(norm, 1e-6);
 }
 
 // Downsample by 2x: sample at center of 2x2 block (simple bilinear is sufficient)
@@ -111,4 +115,31 @@ fragment float4 f_backdrop(BackdropVSOut in [[stage_in]],
     c.rgb *= float3(p.tint.x, p.tint.y, p.tint.z);
     c.a *= p.tint.w;
     return c;
+}
+
+// rect: (x, y, w, h), tint: caller material tint color.
+struct VisualEffectParams { float4 rect; float4 tint; };
+
+static inline float3 dark_popup_blur_material(float3 blurred, float3 tint)
+{
+    float3 darkened_backdrop = blurred * 0.10;
+    return mix(darkened_backdrop, tint, 0.73);
+}
+
+fragment float4 f_visual_effect(BackdropVSOut in [[stage_in]],
+                                texture2d<float> src [[texture(0)]], sampler s [[sampler(0)]],
+                                constant VisualEffectParams* parr [[buffer(1)]])
+{
+    VisualEffectParams p = parr[in.iid];
+    float2 xy_dp = in.pos_dp;
+    if (xy_dp.x < p.rect.x || xy_dp.y < p.rect.y ||
+        xy_dp.x > p.rect.x + p.rect.z || xy_dp.y > p.rect.y + p.rect.w)
+    {
+        discard_fragment();
+    }
+
+    float4 c = src.sample(s, in.uv);
+    float effect_alpha = clamp(p.tint.a, 0.0, 1.0);
+    float3 material = dark_popup_blur_material(c.rgb, clamp(p.tint.rgb, 0.0, 1.0));
+    return float4(mix(c.rgb, material, effect_alpha), c.a);
 }

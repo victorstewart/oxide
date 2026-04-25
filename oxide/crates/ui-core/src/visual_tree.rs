@@ -155,13 +155,13 @@ impl VisualTreeActionObservation {
         if !self.visible {
             return Some("not_visible");
         }
-        if !self.opacity.is_finite() || self.opacity < VISUAL_TREE_REPLAY_MIN_ACTION_OPACITY {
+        if !self.opacity.is_finite() || self.opacity <= 0.0 {
             return Some("opacity_below_replay_threshold");
         }
-        if !self.frame.w.is_finite() || self.frame.w < VISUAL_TREE_REPLAY_MIN_ACTION_EXTENT {
+        if !self.frame.w.is_finite() || self.frame.w < 0.0 {
             return Some("width_below_replay_threshold");
         }
-        if !self.frame.h.is_finite() || self.frame.h < VISUAL_TREE_REPLAY_MIN_ACTION_EXTENT {
+        if !self.frame.h.is_finite() || self.frame.h < 0.0 {
             return Some("height_below_replay_threshold");
         }
         None
@@ -387,6 +387,7 @@ where
             snapshot.scene.as_str(),
             snapshot.route.as_str(),
             snapshot.preset.as_ref(),
+            1.0,
             &mut actions,
             &mut classify,
         );
@@ -559,7 +560,7 @@ pub fn visual_tree_action_observation_for_path<'a>(
     if let Some(step) = observation_step {
         return action.observations.iter().find(|observation| observation.step_index == step);
     }
-    action.observations.first()
+    action.observations.iter().min_by_key(|observation| observation.step_index)
 }
 
 #[must_use]
@@ -579,6 +580,7 @@ fn collect_visual_tree_action_nodes<F>(
     scene: &str,
     route: &str,
     preset: Option<&String>,
+    inherited_opacity: f32,
     actions: &mut BTreeMap<String, VisualTreeActionNode>,
     classify: &mut F,
 ) where
@@ -587,6 +589,7 @@ fn collect_visual_tree_action_nodes<F>(
     if parity_ignored(node) {
         return;
     }
+    let effective_opacity = inherited_opacity * node.opacity;
     if let Some(descriptor) = classify(node) {
         let entry = actions.entry(node.path.clone()).or_insert_with(|| VisualTreeActionNode {
             path: node.path.clone(),
@@ -603,13 +606,20 @@ fn collect_visual_tree_action_nodes<F>(
             preset: preset.cloned(),
             frame: node.frame,
             visible: node.visible,
-            opacity: node.opacity,
+            opacity: effective_opacity,
             data: descriptor.data,
         });
     }
     for child in node.children.iter() {
         collect_visual_tree_action_nodes(
-            child, step_index, scene, route, preset, actions, classify,
+            child,
+            step_index,
+            scene,
+            route,
+            preset,
+            effective_opacity,
+            actions,
+            classify,
         );
     }
 }
@@ -806,6 +816,21 @@ pub fn compare_visual_tree_snapshots(
         "$.viewport",
         reference.viewport.frame,
         candidate.viewport.frame,
+        tolerance_points,
+    );
+    compare_insets(
+        &mut mismatches,
+        "$.viewport.safe",
+        reference.viewport.safe,
+        candidate.viewport.safe,
+        tolerance_points,
+    );
+    compare_f32(
+        &mut mismatches,
+        "$.viewport",
+        "points_scale",
+        reference.viewport.points_scale,
+        candidate.viewport.points_scale,
         tolerance_points,
     );
 
@@ -1204,6 +1229,19 @@ fn compare_rect(
     compare_f32(mismatches, path, "frame.y", expected.y, actual.y, tolerance_points);
     compare_f32(mismatches, path, "frame.w", expected.w, actual.w, tolerance_points);
     compare_f32(mismatches, path, "frame.h", expected.h, actual.h, tolerance_points);
+}
+
+fn compare_insets(
+    mismatches: &mut Vec<VisualTreeMismatch>,
+    path: &str,
+    expected: VisualTreeInsets,
+    actual: VisualTreeInsets,
+    tolerance_points: f32,
+) {
+    compare_f32(mismatches, path, "left", expected.left, actual.left, tolerance_points);
+    compare_f32(mismatches, path, "top", expected.top, actual.top, tolerance_points);
+    compare_f32(mismatches, path, "right", expected.right, actual.right, tolerance_points);
+    compare_f32(mismatches, path, "bottom", expected.bottom, actual.bottom, tolerance_points);
 }
 
 fn compare_f32(

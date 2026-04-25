@@ -3,6 +3,7 @@ use oxide_perf_runner::{
     ContractCoverageReport, CoverageReport, PerfCaseResult, PerfReport,
 };
 use std::collections::BTreeMap;
+use std::process::Command;
 
 fn sample_case(id: &str, median: f64, threshold_pct: f64, gated: bool) -> PerfCaseResult {
     PerfCaseResult {
@@ -328,4 +329,39 @@ fn smoke_suite_keeps_popup_wheel_picker_case_id_stable() {
 
     assert!(ids.contains("cpu.authoring.popup_wheel_picker.interaction"));
     assert!(!ids.contains("cpu.authoring.popup_picker.interaction"));
+}
+
+#[test]
+fn filtered_run_suite_skips_full_coverage_gate() {
+    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+        .env("OXIDE_PERF_RUNNER_FILTER", "cpu.system.prepare_draws.current")
+        .arg("--run-suite")
+        .arg("--smoke")
+        .output()
+        .expect("run filtered smoke suite");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "filtered suite failed: {stderr}");
+    assert!(stdout.contains("cases=1"), "stdout: {stdout}");
+    assert!(stdout.contains("case=cpu.system.prepare_draws.current"), "stdout: {stdout}");
+    assert!(!stdout.contains("case=cpu.system.prepare_draws.legacy"), "stdout: {stdout}");
+    assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
+}
+
+#[test]
+fn filtered_run_suite_supports_gpu_authoring_cases() {
+    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+        .env("OXIDE_PERF_RUNNER_FILTER", "gpu.authoring.scene3d.mixed_frame")
+        .arg("--run-suite")
+        .arg("--smoke")
+        .output()
+        .expect("run filtered gpu authoring smoke suite");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "filtered suite failed: {stderr}");
+    assert!(stdout.contains("cases=1"), "stdout: {stdout}");
+    assert!(stdout.contains("case=gpu.authoring.scene3d.mixed_frame"), "stdout: {stdout}");
+    assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
 }

@@ -21,8 +21,6 @@ use oxide_ui_core::{
     DrawListBuilder,
 };
 
-const LEGACY_BADGE_IMAGE: gfx::ImageHandle = gfx::ImageHandle(1);
-
 /// Workflow states for the integration demo
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum WorkflowState {
@@ -221,7 +219,7 @@ impl DataCollectionWorkflow {
             submissions: Vec::new(),
             status_message: "Fill out the form".into(),
             show_success_badge: false,
-            success_badge: Badge { image: LEGACY_BADGE_IMAGE, style: BadgeStyle::default() },
+            success_badge: Badge { image: crate::LEGACY_BADGE_IMAGE, style: BadgeStyle::default() },
             success_badge_state: BadgeState::default(),
         }
     }

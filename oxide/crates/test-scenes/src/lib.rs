@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 pub use oxide_ui_core::camera::{CameraMetrics, CameraRecordingUiEvent};
 
-const LEGACY_BADGE_IMAGE: gfx::ImageHandle = gfx::ImageHandle(1);
+pub(crate) const LEGACY_BADGE_IMAGE: gfx::ImageHandle = gfx::ImageHandle(1);
 
 fn env_flag(name: &str) -> bool {
     std::env::var(name)
@@ -319,8 +319,9 @@ impl<U: elements::ImageUploader> Router<U> {
     }
 
     pub fn key_zoom_reset(&mut self) {
-        if let SceneKind::ZoomImage = self.current {
-            self.zoom_image.double_tap();
+        match self.current {
+            SceneKind::ZoomImage => self.zoom_image.double_tap(),
+            _ => {}
         }
     }
 
@@ -408,6 +409,8 @@ impl<U: elements::ImageUploader> Router<U> {
             _ => {}
         }
     }
+
+    pub fn input_touch(&mut self, _event: &api::TouchEvent) {}
 
     pub fn input_double_tap(&mut self) {
         match self.current {

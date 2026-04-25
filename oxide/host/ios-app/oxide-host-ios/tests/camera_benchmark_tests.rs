@@ -134,6 +134,83 @@ fn benchmark_camera_scene_uses_minimal_preview_draw_list() {
 }
 
 #[test]
+fn ios_manual_touch_path_uses_raw_events_and_recognizer_fallback() {
+    let source = include_str!("../src/ios/app.m");
+    assert!(
+        source.contains("self.multipleTouchEnabled = YES;")
+            && source.contains("for (UITouch *t in touches)")
+            && source.contains("[self emitTouch:t phase:"),
+        "UIKit should only enable multi-touch and forward raw UITouch events into Oxide"
+    );
+    assert!(
+        source.contains("@interface OxideTouchWindow : UIWindow")
+            && source.contains("- (void)sendEvent:(UIEvent *)event")
+            && source.contains("event.allTouches")
+            && source.contains("window touch emit")
+            && source.contains("case UITouchPhaseStationary")
+            && source.contains("[[OxideTouchWindow alloc] initWithWindowScene:ws]"),
+        "every iOS Oxide app should capture UIEvent.allTouches at the window boundary before view hit-testing can lose samples"
+    );
+    assert!(
+        source.contains("touchesBegan skipped window touch capture active")
+            && source.contains("touchesMoved skipped window touch capture active"),
+        "view-level touch handlers should not double-emit when Oxide window capture is active"
+    );
+    assert!(
+        source.contains("OxideEventHasOnlyDirectTouches(event)")
+            && source.contains("touch recognizer shouldReceiveEvent blocked direct touches")
+            && source.contains("touch recognizer shouldReceiveTouch blocked direct touch"),
+        "recognizer fallback should not double-emit direct touches already captured by the Oxide window"
+    );
+    assert!(
+        source.contains("@interface OxideApplication : UIApplication")
+            && source.contains("touch-debug application sendEvent")
+            && source.contains("touch-debug window sendEvent")
+            && source.contains("NSStringFromClass([OxideApplication class])"),
+        "manual touch debugging must log app-level and window-level event dispatch before recognizers or views can drop input"
+    );
+    assert!(
+        source.contains(
+            "- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer"
+        ) && source.contains("return YES;"),
+        "manual Simulator gestures need recognizer fallback enabled"
+    );
+    assert!(
+        !source.contains("finishPinchWithActiveTouches")
+            && !source.contains("pinchDistanceForActiveTouches")
+            && !source.contains("lastPinchDistance"),
+        "drag and pinch state must live in Rust, not Objective-C"
+    );
+    assert!(
+        source.contains("oxide_host_emit_pan_gesture(p.x, p.y, d.x, d.y, 1);")
+            && source.contains("oxide_host_emit_pinch(c.x, c.y, delta);"),
+        "recognizers may only forward OS deltas into Rust-owned gestures"
+    );
+    assert!(
+        source.contains("@(UITouchTypeIndirectPointer)")
+            && source.contains("pan.allowedScrollTypesMask = UIScrollTypeMaskAll;"),
+        "manual Simulator mouse/trackpad gestures must accept indirect pointer and scroll input"
+    );
+    assert!(
+        source.contains("shouldReceiveEvent:(UIEvent *)event")
+            && source.contains("touch recognizer shouldReceiveEvent")
+            && source.contains("touch emit generic"),
+        "manual touch debugging must log recognizer receipt and raw Objective-C touch emits"
+    );
+    assert!(
+        source.contains("oxide-touch.log")
+            && source.contains("OxideTouchFileLog")
+            && source.contains("rust %@"),
+        "manual touch debugging must persist Objective-C and Rust boundary logs into the Simulator app container"
+    );
+    assert!(
+        source.contains("OxideTouchScreenLogEnabled")
+            && source.contains("if (OxideTouchDebugEnabled() && !OxideTouchScreenLogEnabled())"),
+        "touch diagnostics should write to file without covering the app screen"
+    );
+}
+
+#[test]
 fn benchmark_camera_preview_plan_requires_first_drawable() {
     let _guard = lock_tests();
     init_benchmark_camera_scene();

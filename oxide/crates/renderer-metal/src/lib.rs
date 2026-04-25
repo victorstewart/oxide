@@ -37,6 +37,8 @@
     unused_variables
 )]
 
+pub mod scene3d;
+
 use block::ConcreteBlock;
 use core::f32::consts::TAU;
 use core::ptr::NonNull;
@@ -538,6 +540,7 @@ fn draw_cmd_kind(cmd: &api::DrawCmd) -> &'static str {
         api::DrawCmd::RRect { .. } => "rrect",
         api::DrawCmd::NineSlice { .. } => "nine_slice",
         api::DrawCmd::Backdrop { .. } => "backdrop",
+        api::DrawCmd::VisualEffect { .. } => "visual_effect",
         api::DrawCmd::CameraBg { .. } => "camera_bg",
         api::DrawCmd::Spinner { .. } => "spinner",
         api::DrawCmd::ClipPush { .. } => "clip_push",
@@ -720,6 +723,8 @@ const SHADERS_SRC: &str = concat!(
     include_str!("../shaders/text.metal"),
     "\n",
     include_str!("../shaders/camera.metal"),
+    "\n",
+    include_str!("../shaders/scene3d.metal"),
 );
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -766,6 +771,25 @@ struct DirectPreviewSubmittedFrame {
     gpu_trace: Option<DirectPreviewGpuTrace>,
 }
 
+struct Mesh3dGpu {
+    vb: Buffer,
+    ib: Buffer,
+    index_count: u64,
+    topology: scene3d::MeshTopology,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Scene3dGpuUniforms {
+    mvp: scene3d::Mat4,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Scene3dGpuColor {
+    color: [f32; 4],
+}
+
 #[allow(dead_code)]
 pub struct MetalRenderer {
     device: Device,
@@ -777,6 +801,7 @@ pub struct MetalRenderer {
     pso_downsample: RenderPipelineState,
     pso_upsample: RenderPipelineState,
     pso_backdrop: RenderPipelineState,
+    pso_visual_effect: RenderPipelineState,
     pso_rrect: RenderPipelineState,
     pso_nine_slice: RenderPipelineState,
     pso_spinner: RenderPipelineState,
@@ -787,6 +812,13 @@ pub struct MetalRenderer {
     pso_camera_preview_fast_full: RenderPipelineState,
     pso_camera_preview_fast_video: RenderPipelineState,
     pso_camera_bgra: RenderPipelineState,
+    pso_scene3d_tri: RenderPipelineState,
+    pso_scene3d_tri_depth: RenderPipelineState,
+    pso_scene3d_line: RenderPipelineState,
+    pso_scene3d_line_depth: RenderPipelineState,
+    depth_state_3d_disabled: DepthStencilState,
+    depth_state_3d_read: DepthStencilState,
+    depth_state_3d_write: DepthStencilState,
     // Argument buffer for image textures
     img_arg: Option<ArgumentEncoder>,
     img_arg_bufs: Option<[Buffer; FRAME_RING_SIZE]>,
@@ -805,13 +837,18 @@ pub struct MetalRenderer {
     target_scale: f32,
     target_tex: Option<Texture>,
     target_msaa_tex: Option<Texture>,
+    depth_tex: Option<Texture>,
     prepass_tex: Option<Texture>,
     blur_tmp_tex: Option<Texture>,
     half_tex: Option<Texture>,
     quarter_tex: Option<Texture>,
     quarter_tmp_tex: Option<Texture>,
+    eighth_tex: Option<Texture>,
+    eighth_tmp_tex: Option<Texture>,
     images: HashMap<u32, Texture>,
     next_image_id: u32,
+    meshes_3d: HashMap<u32, Mesh3dGpu>,
+    next_mesh3d_id: u32,
     layers: HashMap<u32, LayerEntry>,
     layer_cache_enabled: bool,
     last_stats: PerfStats,
@@ -873,6 +910,10 @@ pub struct MetalRenderer {
     direct_preview_last_completed_gpu_fragment_ms: f64,
     pending_present_drawable: usize,
     pending_present_texture: usize,
+    frame_2d_encoded: bool,
+    frame_color_initialized: bool,
+    frame_depth_initialized: bool,
+    frame_encode_started_at: Option<Instant>,
 }
 
 #[allow(dead_code)]
@@ -1214,6 +1255,7 @@ impl MetalRenderer {
                     pso_camera.to_owned(),
                     pso_camera.to_owned(),
                     pso_camera.to_owned(),
+                    pso_camera.to_owned(),
                     pso_camera,
                     pso_camera_legacy,
                     pso_camera_preview_fast_full,
@@ -1238,6 +1280,9 @@ impl MetalRenderer {
                 build_init_stage("pso.upsample", || build_upsample_pso(&device, &library, fmt))?;
             let pso_backdrop =
                 build_init_stage("pso.backdrop", || build_backdrop_pso(&device, &library, fmt))?;
+            let pso_visual_effect = build_init_stage("pso.visual_effect", || {
+                build_visual_effect_pso(&device, &library, fmt)
+            })?;
             let pso_rrect = build_init_stage("pso.rrect", || {
                 build_rrect_pso(&device, &library, fmt, sample_count)
             })?;
@@ -1261,6 +1306,7 @@ impl MetalRenderer {
                 pso_downsample,
                 pso_upsample,
                 pso_backdrop,
+                pso_visual_effect,
                 pso_rrect,
                 pso_nine,
                 pso_spin,
@@ -1282,6 +1328,7 @@ impl MetalRenderer {
             pso_downsample,
             pso_upsample,
             pso_backdrop,
+            pso_visual_effect,
             pso_rrect,
             pso_nine,
             pso_spin,
@@ -1312,6 +1359,36 @@ impl MetalRenderer {
                 }
             }
         };
+        let pso_scene3d_tri = build_init_stage("pso.scene3d.tri", || {
+            build_scene3d_pso(
+                &device,
+                &library,
+                color_format,
+                false,
+                scene3d::MeshTopology::Triangles,
+            )
+        })?;
+        let pso_scene3d_tri_depth = build_init_stage("pso.scene3d.tri_depth", || {
+            build_scene3d_pso(
+                &device,
+                &library,
+                color_format,
+                true,
+                scene3d::MeshTopology::Triangles,
+            )
+        })?;
+        let pso_scene3d_line = build_init_stage("pso.scene3d.line", || {
+            build_scene3d_pso(&device, &library, color_format, false, scene3d::MeshTopology::Lines)
+        })?;
+        let pso_scene3d_line_depth = build_init_stage("pso.scene3d.line_depth", || {
+            build_scene3d_pso(&device, &library, color_format, true, scene3d::MeshTopology::Lines)
+        })?;
+        let depth_state_3d_disabled =
+            build_depth_stencil_state(&device, false, false, "depth.scene3d.disabled");
+        let depth_state_3d_read =
+            build_depth_stencil_state(&device, true, false, "depth.scene3d.read");
+        let depth_state_3d_write =
+            build_depth_stencil_state(&device, true, true, "depth.scene3d.write");
         // Prepare argument encoder for image textures
         let (img_arg, img_arg_bufs) = if direct_preview_only {
             (None, None)
@@ -1418,6 +1495,7 @@ impl MetalRenderer {
             pso_downsample,
             pso_upsample,
             pso_backdrop,
+            pso_visual_effect,
             pso_rrect,
             pso_nine_slice: pso_nine,
             pso_spinner: pso_spin,
@@ -1428,6 +1506,13 @@ impl MetalRenderer {
             pso_camera_preview_fast_full,
             pso_camera_preview_fast_video,
             pso_camera_bgra,
+            pso_scene3d_tri,
+            pso_scene3d_tri_depth,
+            pso_scene3d_line,
+            pso_scene3d_line_depth,
+            depth_state_3d_disabled,
+            depth_state_3d_read,
+            depth_state_3d_write,
             img_arg,
             img_arg_bufs,
             sampler,
@@ -1445,13 +1530,18 @@ impl MetalRenderer {
             target_scale: 1.0,
             target_tex: None,
             target_msaa_tex: None,
+            depth_tex: None,
             prepass_tex: None,
             blur_tmp_tex: None,
             half_tex: None,
             quarter_tex: None,
             quarter_tmp_tex: None,
+            eighth_tex: None,
+            eighth_tmp_tex: None,
             images: HashMap::new(),
             next_image_id: 1,
+            meshes_3d: HashMap::new(),
+            next_mesh3d_id: 1,
             layers: HashMap::new(),
             layer_cache_enabled,
             last_stats: PerfStats::default(),
@@ -1509,6 +1599,10 @@ impl MetalRenderer {
             direct_preview_last_completed_gpu_fragment_ms: 0.0,
             pending_present_drawable: 0,
             pending_present_texture: 0,
+            frame_2d_encoded: false,
+            frame_color_initialized: false,
+            frame_depth_initialized: false,
+            frame_encode_started_at: None,
         })
     }
 
@@ -2003,14 +2097,50 @@ impl MetalRenderer {
         }
     }
 
+    fn ensure_depth_target(&mut self) {
+        if self.target_w == 0 || self.target_h == 0 {
+            return;
+        }
+        let need_new = match &self.depth_tex {
+            Some(tex) => {
+                tex.width() as u32 != self.target_w || tex.height() as u32 != self.target_h
+            }
+            None => true,
+        };
+        if !need_new {
+            return;
+        }
+
+        let desc = TextureDescriptor::new();
+        desc.set_pixel_format(MTLPixelFormat::Depth32Float);
+        desc.set_texture_type(MTLTextureType::D2);
+        desc.set_width(self.target_w as u64);
+        desc.set_height(self.target_h as u64);
+        desc.set_storage_mode(MTLStorageMode::Private);
+        desc.set_usage(MTLTextureUsage::RenderTarget);
+        self.depth_tex = Some(self.device.new_texture(&desc));
+    }
+
+    fn ensure_frame_command_buffer(&mut self, slot: usize) -> CommandBuffer {
+        if let Some(cmd) = self.frames[slot].cmd.as_ref() {
+            return cmd.to_owned();
+        }
+        let cmd = self.queue.new_command_buffer().to_owned();
+        self.frames[slot].cmd = Some(cmd.to_owned());
+        cmd
+    }
+
     fn drop_direct_preview_offscreen_targets(&mut self) {
         self.target_tex = None;
         self.target_msaa_tex = None;
+        self.depth_tex = None;
         self.prepass_tex = None;
         self.blur_tmp_tex = None;
         self.half_tex = None;
         self.quarter_tex = None;
         self.quarter_tmp_tex = None;
+        self.eighth_tex = None;
+        self.eighth_tmp_tex = None;
         self.cam_blur_tex = None;
         self.cam_xfade_prev_tex = None;
     }
@@ -2075,9 +2205,10 @@ impl MetalRenderer {
             self.blur_tmp_tex = Some(self.device.new_texture(&d));
         }
 
-        // Downsample chain targets (half, quarter) + quarter ping-pong
+        // Downsample chain targets plus ping-pong buffers for strong visual effects.
         let (hw, hh) = (((self.target_w / 2).max(1)) as u64, ((self.target_h / 2).max(1)) as u64);
         let (qw, qh) = (((self.target_w / 4).max(1)) as u64, ((self.target_h / 4).max(1)) as u64);
+        let (ew, eh) = (((self.target_w / 8).max(1)) as u64, ((self.target_h / 8).max(1)) as u64);
         let need_half = match &self.half_tex {
             Some(tex) => tex.width() != hw || tex.height() != hh,
             None => true,
@@ -2088,6 +2219,14 @@ impl MetalRenderer {
         };
         let need_quarter_tmp = match &self.quarter_tmp_tex {
             Some(tex) => tex.width() != qw || tex.height() != qh,
+            None => true,
+        };
+        let need_eighth = match &self.eighth_tex {
+            Some(tex) => tex.width() != ew || tex.height() != eh,
+            None => true,
+        };
+        let need_eighth_tmp = match &self.eighth_tmp_tex {
+            Some(tex) => tex.width() != ew || tex.height() != eh,
             None => true,
         };
         if need_half {
@@ -2119,6 +2258,26 @@ impl MetalRenderer {
             d.set_storage_mode(MTLStorageMode::Private);
             d.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
             self.quarter_tmp_tex = Some(self.device.new_texture(&d));
+        }
+        if need_eighth {
+            let d = TextureDescriptor::new();
+            d.set_pixel_format(self.color_format);
+            d.set_texture_type(MTLTextureType::D2);
+            d.set_width(ew);
+            d.set_height(eh);
+            d.set_storage_mode(MTLStorageMode::Private);
+            d.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+            self.eighth_tex = Some(self.device.new_texture(&d));
+        }
+        if need_eighth_tmp {
+            let d = TextureDescriptor::new();
+            d.set_pixel_format(self.color_format);
+            d.set_texture_type(MTLTextureType::D2);
+            d.set_width(ew);
+            d.set_height(eh);
+            d.set_storage_mode(MTLStorageMode::Private);
+            d.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+            self.eighth_tmp_tex = Some(self.device.new_texture(&d));
         }
     }
 
@@ -3236,11 +3395,242 @@ impl MetalRenderer {
         }
         self.readback_direct_live_camera_bgra8()
     }
+
+    /// Uploads a static indexed 3D mesh into persistent Metal buffers.
+    pub fn mesh3d_create(
+        &mut self,
+        data: &scene3d::Mesh3dData<'_>,
+    ) -> Result<scene3d::MeshHandle3d, api::RenderError> {
+        if data.vertices.is_empty() {
+            return Err(api::RenderError::InvalidOperation("mesh3d_create requires vertices"));
+        }
+        if data.indices.is_empty() {
+            return Err(api::RenderError::InvalidOperation("mesh3d_create requires indices"));
+        }
+        match data.topology {
+            scene3d::MeshTopology::Triangles if data.indices.len() % 3 != 0 => {
+                return Err(api::RenderError::InvalidOperation(
+                    "triangle mesh indices must be a multiple of 3",
+                ));
+            }
+            scene3d::MeshTopology::Lines if data.indices.len() % 2 != 0 => {
+                return Err(api::RenderError::InvalidOperation(
+                    "line mesh indices must be a multiple of 2",
+                ));
+            }
+            _ => {}
+        }
+
+        let mut max_index = 0_u32;
+        for &index in data.indices {
+            max_index = max_index.max(index);
+        }
+        if max_index as usize >= data.vertices.len() {
+            return Err(api::RenderError::InvalidOperation(
+                "mesh index referenced a vertex outside the provided slice",
+            ));
+        }
+
+        let vb_len = (data.vertices.len() * core::mem::size_of::<scene3d::Vertex3d>()) as u64;
+        let ib_len = (data.indices.len() * core::mem::size_of::<u32>()) as u64;
+        let vb = self.device.new_buffer(vb_len, MTLResourceOptions::StorageModeShared);
+        let ib = self.device.new_buffer(ib_len, MTLResourceOptions::StorageModeShared);
+        let vb_ptr = vb.contents();
+        let ib_ptr = ib.contents();
+        if vb_ptr.is_null() || ib_ptr.is_null() {
+            return Err(api::RenderError::OutOfMemory);
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                data.vertices.as_ptr() as *const u8,
+                vb_ptr as *mut u8,
+                vb_len as usize,
+            );
+            core::ptr::copy_nonoverlapping(
+                data.indices.as_ptr() as *const u8,
+                ib_ptr as *mut u8,
+                ib_len as usize,
+            );
+        }
+
+        let id = self.next_mesh3d_id;
+        self.next_mesh3d_id = self.next_mesh3d_id.wrapping_add(1).max(1);
+        self.meshes_3d.insert(
+            id,
+            Mesh3dGpu { vb, ib, index_count: data.indices.len() as u64, topology: data.topology },
+        );
+        Ok(scene3d::MeshHandle3d(id))
+    }
+
+    /// Releases a previously uploaded 3D mesh handle.
+    pub fn mesh3d_release(&mut self, handle: scene3d::MeshHandle3d) {
+        let _ = self.meshes_3d.remove(&handle.0);
+    }
+
+    /// Encodes one scene3d pass into the current frame before the 2D draw list.
+    pub fn encode_scene3d(&mut self, pass: &scene3d::Pass3d<'_>) -> Result<(), api::RenderError> {
+        if self.sample_count != 1 {
+            return Err(api::RenderError::Unsupported(
+                "scene3d currently requires MetalRenderer sample_count == 1",
+            ));
+        }
+        if self.frame_2d_encoded {
+            return Err(api::RenderError::InvalidOperation(
+                "encode_scene3d must run before encode_pass within a frame",
+            ));
+        }
+
+        self.ensure_target();
+        self.ensure_depth_target();
+        let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
+        let cmd = self.ensure_frame_command_buffer(slot);
+        let Some(target_tex) = self.target_tex.as_ref().map(Texture::to_owned) else {
+            return Err(api::RenderError::InvalidOperation("scene3d target texture unavailable"));
+        };
+        let Some(depth_tex) = self.depth_tex.as_ref().map(Texture::to_owned) else {
+            return Err(api::RenderError::InvalidOperation("scene3d depth texture unavailable"));
+        };
+        let rpd = RenderPassDescriptor::new();
+        let ca0 = rpd.color_attachments().object_at(0).unwrap();
+        ca0.set_texture(Some(&target_tex));
+        ca0.set_store_action(MTLStoreAction::Store);
+        if self.frame_color_initialized {
+            ca0.set_load_action(MTLLoadAction::Load);
+        } else if let Some(color) = pass.clear_color {
+            ca0.set_load_action(MTLLoadAction::Clear);
+            ca0.set_clear_color(MTLClearColor {
+                red: color.r as f64,
+                green: color.g as f64,
+                blue: color.b as f64,
+                alpha: color.a as f64,
+            });
+        } else {
+            ca0.set_load_action(MTLLoadAction::Clear);
+            ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0 });
+        }
+
+        let da = rpd.depth_attachment().unwrap();
+        da.set_texture(Some(&depth_tex));
+        da.set_store_action(MTLStoreAction::Store);
+        if self.frame_depth_initialized && !pass.clear_depth {
+            da.set_load_action(MTLLoadAction::Load);
+        } else {
+            da.set_load_action(MTLLoadAction::Clear);
+            da.set_clear_depth(1.0);
+        }
+
+        let enc = cmd.new_render_command_encoder(&rpd);
+        enc.set_front_facing_winding(MTLWinding::CounterClockwise);
+        for instance in pass.instances {
+            let Some(mesh) = self.meshes_3d.get(&instance.mesh.0) else {
+                enc.end_encoding();
+                return Err(api::RenderError::ResourceNotFound("mesh3d handle"));
+            };
+            let mvp = mat4_mul(&pass.view_proj, &instance.transform);
+            let uniforms = Scene3dGpuUniforms { mvp };
+            let color = Scene3dGpuColor {
+                color: [instance.color.r, instance.color.g, instance.color.b, instance.color.a],
+            };
+            let pso = match (mesh.topology, instance.color_write) {
+                (scene3d::MeshTopology::Triangles, true) => &self.pso_scene3d_tri,
+                (scene3d::MeshTopology::Triangles, false) => &self.pso_scene3d_tri_depth,
+                (scene3d::MeshTopology::Lines, true) => &self.pso_scene3d_line,
+                (scene3d::MeshTopology::Lines, false) => &self.pso_scene3d_line_depth,
+            };
+            let depth_state = match (instance.depth_test, instance.depth_write) {
+                (false, false) => &self.depth_state_3d_disabled,
+                (true, false) => &self.depth_state_3d_read,
+                (true, true) => &self.depth_state_3d_write,
+                (false, true) => &self.depth_state_3d_write,
+            };
+            enc.set_render_pipeline_state(pso);
+            enc.set_depth_stencil_state(depth_state);
+            enc.set_cull_mode(scene3d_cull_mode(instance.cull));
+            enc.set_vertex_buffer(0, Some(&mesh.vb), 0);
+            enc.set_vertex_bytes(
+                1,
+                core::mem::size_of::<Scene3dGpuUniforms>() as u64,
+                (&uniforms as *const Scene3dGpuUniforms).cast(),
+            );
+            enc.set_fragment_bytes(
+                0,
+                core::mem::size_of::<Scene3dGpuColor>() as u64,
+                (&color as *const Scene3dGpuColor).cast(),
+            );
+            enc.draw_indexed_primitives(
+                scene3d_primitive(mesh.topology),
+                mesh.index_count,
+                MTLIndexType::UInt32,
+                &mesh.ib,
+                0,
+            );
+            self.acc_draws = self.acc_draws.saturating_add(1);
+        }
+        enc.end_encoding();
+        self.frame_color_initialized = true;
+        self.frame_depth_initialized = true;
+        if let Some(t0) = self.frame_encode_started_at {
+            self.last_stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        }
+        self.last_stats.draws = self.acc_draws;
+        Ok(())
+    }
 }
 
 // Build a filtered copy of a DrawList that keeps only items whose bounding
 // rect (in dp) intersects the provided dp scissor. Vertices/indices are
 // copied by reference (cloned arrays), spans remain valid.
+const DARK_POPUP_MAX_BLUR_SIGMA_DP: f32 = 72.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct VisualEffectBlurPlan {
+    sigma_dp: f32,
+    downsample_divisor: u64,
+    pass_scale: f32,
+    pass_sigma: f32,
+    pass_radius: f32,
+}
+
+impl VisualEffectBlurPlan {
+    const OFF: Self = Self {
+        sigma_dp: 0.0,
+        downsample_divisor: 1,
+        pass_scale: 1.0,
+        pass_sigma: 0.0,
+        pass_radius: 0.0,
+    };
+
+    #[inline]
+    fn uses_eighth_downsample(self) -> bool {
+        self.downsample_divisor >= 8
+    }
+}
+
+fn visual_effect_blur_plan(effect: api::VisualEffect) -> VisualEffectBlurPlan {
+    let intensity = effect.blur_intensity();
+    if intensity <= 0.0 {
+        return VisualEffectBlurPlan::OFF;
+    }
+
+    let downsample_divisor = if intensity < 0.75 { 4 } else { 8 };
+    let pass_scale = downsample_divisor as f32;
+    let sigma_dp = DARK_POPUP_MAX_BLUR_SIGMA_DP * intensity;
+    let pass_sigma = (sigma_dp / pass_scale).max(0.001);
+    let pass_radius = (pass_sigma * 3.0).ceil().clamp(2.0, 192.0);
+
+    VisualEffectBlurPlan { sigma_dp, downsample_divisor, pass_scale, pass_sigma, pass_radius }
+}
+
+fn draw_cmd_blur_rect_and_sigma(cmd: &api::DrawCmd) -> Option<(&api::RectF, f32)> {
+    match cmd {
+        api::DrawCmd::Backdrop { rect, sigma, .. } => Some((rect, sigma.max(0.0))),
+        api::DrawCmd::VisualEffect { rect, effect } => {
+            Some((rect, visual_effect_blur_plan(*effect).sigma_dp))
+        }
+        _ => None,
+    }
+}
+
 fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI) -> api::DrawList {
     fn rect_intersects(r: &api::RectF, sc: &api::RectI) -> bool {
         let rx0 = r.x;
@@ -3297,7 +3687,7 @@ fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI) -> api::D
                 }
                 i += 1;
             }
-            api::DrawCmd::Backdrop { rect, .. } => {
+            api::DrawCmd::Backdrop { rect, .. } | api::DrawCmd::VisualEffect { rect, .. } => {
                 if rect_intersects(rect, &sc) {
                     out.items.push(list.items[i].clone());
                 }
@@ -3410,8 +3800,12 @@ impl api::Renderer for MetalRenderer {
         self.acc_instanced = 0;
         self.acc_icb_cmds = 0;
         self.acc_culled = 0;
-        // Defer command buffer creation to encode_pass
+        // Defer command buffer creation until either encode_scene3d or encode_pass.
         self.frames[slot].cmd = None;
+        self.frame_2d_encoded = false;
+        self.frame_color_initialized = false;
+        self.frame_depth_initialized = false;
+        self.frame_encode_started_at = Some(Instant::now());
         // Reset per-frame accumulators
         self.scissor_changes = 0;
         self.prepass_shaded_px = 0;
@@ -3495,9 +3889,7 @@ impl api::Renderer for MetalRenderer {
             return;
         }
         let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
-        // Create command buffer for this frame now
-        let cmd = self.queue.new_command_buffer().to_owned();
-        self.frames[slot].cmd = Some(cmd.to_owned());
+        let cmd = self.ensure_frame_command_buffer(slot);
 
         // Adaptive policy: compute camera coverage and environment (iOS thermal/LPM),
         // then tune blur update period and optionally pause camera when hot with tiny coverage.
@@ -3771,9 +4163,9 @@ impl api::Renderer for MetalRenderer {
                         match &list.items[j] {
                             api::DrawCmd::LayerBegin { .. } => depth += 1,
                             api::DrawCmd::LayerEnd => depth -= 1,
-                            api::DrawCmd::Solid { .. } | api::DrawCmd::Backdrop { .. } => {
-                                unsupported = true
-                            }
+                            api::DrawCmd::Solid { .. }
+                            | api::DrawCmd::Backdrop { .. }
+                            | api::DrawCmd::VisualEffect { .. } => unsupported = true,
                             _ => {}
                         }
                         j += 1;
@@ -3936,7 +4328,22 @@ impl api::Renderer for MetalRenderer {
         }
 
         // Effects prepass: if there is any Backdrop, render a prepass and blur it.
-        let has_backdrop = list.items.iter().any(|c| matches!(c, api::DrawCmd::Backdrop { .. }));
+        let has_backdrop = list.items.iter().any(|c| {
+            matches!(c, api::DrawCmd::Backdrop { .. } | api::DrawCmd::VisualEffect { .. })
+        });
+        let has_visual_effect =
+            list.items.iter().any(|c| matches!(c, api::DrawCmd::VisualEffect { .. }));
+        let mut visual_effect_plan = VisualEffectBlurPlan::OFF;
+        if has_visual_effect {
+            for c in &list.items {
+                if let api::DrawCmd::VisualEffect { effect, .. } = c {
+                    let plan = visual_effect_blur_plan(*effect);
+                    if plan.sigma_dp > visual_effect_plan.sigma_dp {
+                        visual_effect_plan = plan;
+                    }
+                }
+            }
+        }
         if has_backdrop {
             self.ensure_effect_targets();
             // 1) Prepass: render up to the first Backdrop into prepass_tex
@@ -3954,7 +4361,6 @@ impl api::Renderer for MetalRenderer {
             // Compute prepass scissor: union of Backdrop rects (expanded) intersect frame scissor if enabled
             let mut prepass_scissor_dp: Option<api::RectI> = None;
             {
-                let mut sigma = 6.0f32;
                 let s = self.target_scale.max(1.0);
                 let mut x0 = self.target_w as i32;
                 let mut y0 = self.target_h as i32;
@@ -3962,21 +4368,19 @@ impl api::Renderer for MetalRenderer {
                 let mut y1 = 0i32;
                 let mut found_any = false;
                 for c in &list.items {
-                    if let api::DrawCmd::Backdrop { rect, sigma: sg, .. } = c {
-                        if *sg > sigma {
-                            sigma = *sg;
-                        }
-                        let margin = (3.0 * *sg).ceil();
-                        let rx0 = (rect.x - margin).floor() as i32;
-                        let ry0 = (rect.y - margin).floor() as i32;
-                        let rx1 = (rect.x + rect.w + margin).ceil() as i32;
-                        let ry1 = (rect.y + rect.h + margin).ceil() as i32;
-                        x0 = x0.min(rx0);
-                        y0 = y0.min(ry0);
-                        x1 = x1.max(rx1);
-                        y1 = y1.max(ry1);
-                        found_any = true;
-                    }
+                    let Some((rect, effect_sigma)) = draw_cmd_blur_rect_and_sigma(c) else {
+                        continue;
+                    };
+                    let margin = (3.0 * effect_sigma).ceil();
+                    let rx0 = (rect.x - margin).floor() as i32;
+                    let ry0 = (rect.y - margin).floor() as i32;
+                    let rx1 = (rect.x + rect.w + margin).ceil() as i32;
+                    let ry1 = (rect.y + rect.h + margin).ceil() as i32;
+                    x0 = x0.min(rx0);
+                    y0 = y0.min(ry0);
+                    x1 = x1.max(rx1);
+                    y1 = y1.max(ry1);
+                    found_any = true;
                 }
                 if found_any {
                     // Clamp to framebuffer dp bounds
@@ -4034,7 +4438,7 @@ impl api::Renderer for MetalRenderer {
             enc0.end_encoding();
 
             // Determine blur kernel and union scissor in pixel coords for all Backdrop rects
-            let mut sigma = 6.0f32;
+            let mut sigma = 0.0f32;
             let mut u_x0: i32 = self.target_w as i32;
             let mut u_y0: i32 = self.target_h as i32;
             let mut u_x1: i32 = 0;
@@ -4042,25 +4446,26 @@ impl api::Renderer for MetalRenderer {
             let scale = self.target_scale.max(1.0);
             let mut found_any = false;
             for c in &list.items {
-                if let api::DrawCmd::Backdrop { rect, sigma: s, .. } = c {
-                    if *s > sigma {
-                        sigma = *s;
-                    }
-                    // Expand by ~3*sigma kernel radius, convert to px then clamp
-                    let margin = (3.0 * *s).ceil();
-                    let x0 = ((rect.x - margin) * scale).floor() as i32;
-                    let y0 = ((rect.y - margin) * scale).floor() as i32;
-                    let x1 = ((rect.x + rect.w + margin) * scale).ceil() as i32;
-                    let y1 = ((rect.y + rect.h + margin) * scale).ceil() as i32;
-                    u_x0 = u_x0.min(x0);
-                    u_y0 = u_y0.min(y0);
-                    u_x1 = u_x1.max(x1);
-                    u_y1 = u_y1.max(y1);
-                    found_any = true;
+                let Some((rect, effect_sigma)) = draw_cmd_blur_rect_and_sigma(c) else {
+                    continue;
+                };
+                if effect_sigma > sigma {
+                    sigma = effect_sigma;
                 }
+                // Expand by ~3*sigma kernel radius, convert to px then clamp
+                let margin = (3.0 * effect_sigma).ceil();
+                let x0 = ((rect.x - margin) * scale).floor() as i32;
+                let y0 = ((rect.y - margin) * scale).floor() as i32;
+                let x1 = ((rect.x + rect.w + margin) * scale).ceil() as i32;
+                let y1 = ((rect.y + rect.h + margin) * scale).ceil() as i32;
+                u_x0 = u_x0.min(x0);
+                u_y0 = u_y0.min(y0);
+                u_x1 = u_x1.max(x1);
+                u_y1 = u_y1.max(y1);
+                found_any = true;
             }
             if !found_any {
-                sigma = 6.0;
+                sigma = 0.0;
                 u_x0 = 0;
                 u_y0 = 0;
                 u_x1 = self.target_w as i32;
@@ -4076,182 +4481,260 @@ impl api::Renderer for MetalRenderer {
             let sc_w = (x1c - x0c).max(0) as u64;
             let sc_h = (y1c - y0c).max(0) as u64;
 
-            // 2) Downsample: prepass_tex -> half_tex -> quarter_tex
-            let sc_half = MTLScissorRect {
-                x: sc_x / 2,
-                y: sc_y / 2,
-                width: (sc_w / 2).max(0),
-                height: (sc_h / 2).max(0),
-            };
-            let sc_quarter = MTLScissorRect {
-                x: sc_x / 4,
-                y: sc_y / 4,
-                width: (sc_w / 4).max(0),
-                height: (sc_h / 4).max(0),
-            };
+            if sigma > 0.0 {
+                // 2) Downsample: prepass_tex -> half_tex -> quarter_tex
+                let sc_half =
+                    MTLScissorRect { x: sc_x / 2, y: sc_y / 2, width: sc_w / 2, height: sc_h / 2 };
+                let sc_quarter =
+                    MTLScissorRect { x: sc_x / 4, y: sc_y / 4, width: sc_w / 4, height: sc_h / 4 };
+                let sc_eighth =
+                    MTLScissorRect { x: sc_x / 8, y: sc_y / 8, width: sc_w / 8, height: sc_h / 8 };
+                let visual_effect_uses_eighth =
+                    has_visual_effect && visual_effect_plan.uses_eighth_downsample();
 
-            // prepass -> half
-            let rpd_ds1 = RenderPassDescriptor::new();
-            let ca_ds1 = rpd_ds1.color_attachments().object_at(0).unwrap();
-            if let Some(dst) = &self.half_tex {
-                ca_ds1.set_texture(Some(dst));
-            }
-            ca_ds1.set_load_action(MTLLoadAction::DontCare);
-            ca_ds1.set_store_action(MTLStoreAction::Store);
-            let enc_ds1 = cmd.new_render_command_encoder(&rpd_ds1);
-            enc_ds1.set_render_pipeline_state(&self.pso_downsample);
-            if let Some(sam) = &self.sampler {
-                enc_ds1.set_fragment_sampler_state(0, Some(sam));
-            }
-            if let Some(src) = &self.prepass_tex {
-                enc_ds1.set_fragment_texture(0, Some(src));
-            }
-            enc_ds1.set_scissor_rect(sc_half);
-            enc_ds1.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
-            self.prepass_shaded_px =
-                self.prepass_shaded_px.saturating_add(sc_half.width.saturating_mul(sc_half.height));
-            enc_ds1.end_encoding();
+                // prepass -> half
+                let rpd_ds1 = RenderPassDescriptor::new();
+                let ca_ds1 = rpd_ds1.color_attachments().object_at(0).unwrap();
+                if let Some(dst) = &self.half_tex {
+                    ca_ds1.set_texture(Some(dst));
+                }
+                ca_ds1.set_load_action(MTLLoadAction::DontCare);
+                ca_ds1.set_store_action(MTLStoreAction::Store);
+                let enc_ds1 = cmd.new_render_command_encoder(&rpd_ds1);
+                enc_ds1.set_render_pipeline_state(&self.pso_downsample);
+                if let Some(sam) = &self.sampler {
+                    enc_ds1.set_fragment_sampler_state(0, Some(sam));
+                }
+                if let Some(src) = &self.prepass_tex {
+                    enc_ds1.set_fragment_texture(0, Some(src));
+                }
+                enc_ds1.set_scissor_rect(sc_half);
+                enc_ds1.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+                self.prepass_shaded_px = self
+                    .prepass_shaded_px
+                    .saturating_add(sc_half.width.saturating_mul(sc_half.height));
+                enc_ds1.end_encoding();
 
-            // half -> quarter
-            let rpd_ds2 = RenderPassDescriptor::new();
-            let ca_ds2 = rpd_ds2.color_attachments().object_at(0).unwrap();
-            if let Some(dst) = &self.quarter_tex {
-                ca_ds2.set_texture(Some(dst));
-            }
-            ca_ds2.set_load_action(MTLLoadAction::DontCare);
-            ca_ds2.set_store_action(MTLStoreAction::Store);
-            let enc_ds2 = cmd.new_render_command_encoder(&rpd_ds2);
-            enc_ds2.set_render_pipeline_state(&self.pso_downsample);
-            if let Some(sam) = &self.sampler {
-                enc_ds2.set_fragment_sampler_state(0, Some(sam));
-            }
-            if let Some(src) = &self.half_tex {
-                enc_ds2.set_fragment_texture(0, Some(src));
-            }
-            enc_ds2.set_scissor_rect(sc_quarter);
-            enc_ds2.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
-            self.prepass_shaded_px = self
-                .prepass_shaded_px
-                .saturating_add(sc_quarter.width.saturating_mul(sc_quarter.height));
-            enc_ds2.end_encoding();
+                // half -> quarter
+                let rpd_ds2 = RenderPassDescriptor::new();
+                let ca_ds2 = rpd_ds2.color_attachments().object_at(0).unwrap();
+                if let Some(dst) = &self.quarter_tex {
+                    ca_ds2.set_texture(Some(dst));
+                }
+                ca_ds2.set_load_action(MTLLoadAction::DontCare);
+                ca_ds2.set_store_action(MTLStoreAction::Store);
+                let enc_ds2 = cmd.new_render_command_encoder(&rpd_ds2);
+                enc_ds2.set_render_pipeline_state(&self.pso_downsample);
+                if let Some(sam) = &self.sampler {
+                    enc_ds2.set_fragment_sampler_state(0, Some(sam));
+                }
+                if let Some(src) = &self.half_tex {
+                    enc_ds2.set_fragment_texture(0, Some(src));
+                }
+                enc_ds2.set_scissor_rect(sc_quarter);
+                enc_ds2.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+                self.prepass_shaded_px = self
+                    .prepass_shaded_px
+                    .saturating_add(sc_quarter.width.saturating_mul(sc_quarter.height));
+                enc_ds2.end_encoding();
 
-            // 3) Blur H at quarter: quarter -> quarter_tmp
-            let rpd1 = RenderPassDescriptor::new();
-            let ca_blur_h = rpd1.color_attachments().object_at(0).unwrap();
-            if let Some(tmp) = &self.quarter_tmp_tex {
-                ca_blur_h.set_texture(Some(tmp));
-            }
-            ca_blur_h.set_load_action(MTLLoadAction::DontCare);
-            ca_blur_h.set_store_action(MTLStoreAction::Store);
-            let enc1 = cmd.new_render_command_encoder(&rpd1);
-            enc1.set_render_pipeline_state(&self.pso_blur);
-            if let Some(sam) = &self.sampler {
-                enc1.set_fragment_sampler_state(0, Some(sam));
-            }
-            if let Some(src) = &self.quarter_tex {
-                enc1.set_fragment_texture(0, Some(src));
-            }
-            enc1.set_scissor_rect(sc_quarter);
-            let params_h: [f32; 4] = [1.0, 0.0, sigma / 4.0, 0.0];
-            enc1.set_fragment_bytes(
-                1,
-                core::mem::size_of_val(&params_h) as u64,
-                params_h.as_ptr() as *const _,
-            );
-            enc1.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
-            self.prepass_shaded_px = self
-                .prepass_shaded_px
-                .saturating_add(sc_quarter.width.saturating_mul(sc_quarter.height));
-            enc1.end_encoding();
+                if visual_effect_uses_eighth {
+                    let rpd_ds3 = RenderPassDescriptor::new();
+                    let ca_ds3 = rpd_ds3.color_attachments().object_at(0).unwrap();
+                    if let Some(dst) = &self.eighth_tex {
+                        ca_ds3.set_texture(Some(dst));
+                    }
+                    ca_ds3.set_load_action(MTLLoadAction::DontCare);
+                    ca_ds3.set_store_action(MTLStoreAction::Store);
+                    let enc_ds3 = cmd.new_render_command_encoder(&rpd_ds3);
+                    enc_ds3.set_render_pipeline_state(&self.pso_downsample);
+                    if let Some(sam) = &self.sampler {
+                        enc_ds3.set_fragment_sampler_state(0, Some(sam));
+                    }
+                    if let Some(src) = &self.quarter_tex {
+                        enc_ds3.set_fragment_texture(0, Some(src));
+                    }
+                    enc_ds3.set_scissor_rect(sc_eighth);
+                    enc_ds3.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+                    self.prepass_shaded_px = self
+                        .prepass_shaded_px
+                        .saturating_add(sc_eighth.width.saturating_mul(sc_eighth.height));
+                    enc_ds3.end_encoding();
+                }
 
-            // 4) Blur V at quarter: quarter_tmp -> quarter
-            let rpd2 = RenderPassDescriptor::new();
-            let ca_blur_v = rpd2.color_attachments().object_at(0).unwrap();
-            if let Some(dst) = &self.quarter_tex {
-                ca_blur_v.set_texture(Some(dst));
-            }
-            ca_blur_v.set_load_action(MTLLoadAction::DontCare);
-            ca_blur_v.set_store_action(MTLStoreAction::Store);
-            let enc2 = cmd.new_render_command_encoder(&rpd2);
-            enc2.set_render_pipeline_state(&self.pso_blur);
-            if let Some(sam) = &self.sampler {
-                enc2.set_fragment_sampler_state(0, Some(sam));
-            }
-            if let Some(tmp) = &self.quarter_tmp_tex {
-                enc2.set_fragment_texture(0, Some(tmp));
-            }
-            enc2.set_scissor_rect(sc_quarter);
-            let params_v: [f32; 4] = [0.0, 1.0, sigma / 4.0, 0.0];
-            enc2.set_fragment_bytes(
-                1,
-                core::mem::size_of_val(&params_v) as u64,
-                params_v.as_ptr() as *const _,
-            );
-            enc2.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
-            self.prepass_shaded_px = self
-                .prepass_shaded_px
-                .saturating_add(sc_quarter.width.saturating_mul(sc_quarter.height));
-            enc2.end_encoding();
+                let effect_scissor = if visual_effect_uses_eighth { sc_eighth } else { sc_quarter };
+                let (effect_pass_sigma, effect_pass_radius) = if has_visual_effect {
+                    (visual_effect_plan.pass_sigma, visual_effect_plan.pass_radius)
+                } else {
+                    let pass_scale = 4.0;
+                    let pass_sigma = (sigma / pass_scale).max(0.001);
+                    (pass_sigma, (pass_sigma * 3.0).ceil().clamp(2.0, 192.0))
+                };
 
-            // 5) Upsample quarter -> half (scale 2)
-            let rpd_us1 = RenderPassDescriptor::new();
-            let ca_us1 = rpd_us1.color_attachments().object_at(0).unwrap();
-            if let Some(dst) = &self.half_tex {
-                ca_us1.set_texture(Some(dst));
-            }
-            ca_us1.set_load_action(MTLLoadAction::DontCare);
-            ca_us1.set_store_action(MTLStoreAction::Store);
-            let enc_us1 = cmd.new_render_command_encoder(&rpd_us1);
-            enc_us1.set_render_pipeline_state(&self.pso_upsample);
-            if let Some(sam) = &self.sampler {
-                enc_us1.set_fragment_sampler_state(0, Some(sam));
-            }
-            if let Some(src) = &self.quarter_tex {
-                enc_us1.set_fragment_texture(0, Some(src));
-            }
-            let scale2: f32 = 2.0;
-            enc_us1.set_fragment_bytes(
-                1,
-                core::mem::size_of_val(&scale2) as u64,
-                &scale2 as *const _ as *const _,
-            );
-            enc_us1.set_scissor_rect(sc_half);
-            enc_us1.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
-            self.prepass_shaded_px =
-                self.prepass_shaded_px.saturating_add(sc_half.width.saturating_mul(sc_half.height));
-            enc_us1.end_encoding();
+                // 3) Blur at the strongest active effect resolution.
+                let rpd1 = RenderPassDescriptor::new();
+                let ca_blur_h = rpd1.color_attachments().object_at(0).unwrap();
+                if visual_effect_uses_eighth {
+                    if let Some(tmp) = &self.eighth_tmp_tex {
+                        ca_blur_h.set_texture(Some(tmp));
+                    }
+                } else if let Some(tmp) = &self.quarter_tmp_tex {
+                    ca_blur_h.set_texture(Some(tmp));
+                }
+                ca_blur_h.set_load_action(MTLLoadAction::DontCare);
+                ca_blur_h.set_store_action(MTLStoreAction::Store);
+                let enc1 = cmd.new_render_command_encoder(&rpd1);
+                enc1.set_render_pipeline_state(&self.pso_blur);
+                if let Some(sam) = &self.sampler {
+                    enc1.set_fragment_sampler_state(0, Some(sam));
+                }
+                if visual_effect_uses_eighth {
+                    if let Some(src) = &self.eighth_tex {
+                        enc1.set_fragment_texture(0, Some(src));
+                    }
+                } else if let Some(src) = &self.quarter_tex {
+                    enc1.set_fragment_texture(0, Some(src));
+                }
+                enc1.set_scissor_rect(effect_scissor);
+                let params_h: [f32; 4] = [1.0, 0.0, effect_pass_sigma, effect_pass_radius];
+                enc1.set_fragment_bytes(
+                    1,
+                    core::mem::size_of_val(&params_h) as u64,
+                    params_h.as_ptr() as *const _,
+                );
+                enc1.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+                self.prepass_shaded_px = self
+                    .prepass_shaded_px
+                    .saturating_add(effect_scissor.width.saturating_mul(effect_scissor.height));
+                enc1.end_encoding();
 
-            // 6) Upsample half -> prepass (scale 2)
-            let rpd_us2 = RenderPassDescriptor::new();
-            let ca_us2 = rpd_us2.color_attachments().object_at(0).unwrap();
-            if let Some(dst) = &self.prepass_tex {
-                ca_us2.set_texture(Some(dst));
+                let rpd2 = RenderPassDescriptor::new();
+                let ca_blur_v = rpd2.color_attachments().object_at(0).unwrap();
+                if visual_effect_uses_eighth {
+                    if let Some(dst) = &self.eighth_tex {
+                        ca_blur_v.set_texture(Some(dst));
+                    }
+                } else if let Some(dst) = &self.quarter_tex {
+                    ca_blur_v.set_texture(Some(dst));
+                }
+                ca_blur_v.set_load_action(MTLLoadAction::DontCare);
+                ca_blur_v.set_store_action(MTLStoreAction::Store);
+                let enc2 = cmd.new_render_command_encoder(&rpd2);
+                enc2.set_render_pipeline_state(&self.pso_blur);
+                if let Some(sam) = &self.sampler {
+                    enc2.set_fragment_sampler_state(0, Some(sam));
+                }
+                if visual_effect_uses_eighth {
+                    if let Some(tmp) = &self.eighth_tmp_tex {
+                        enc2.set_fragment_texture(0, Some(tmp));
+                    }
+                } else if let Some(tmp) = &self.quarter_tmp_tex {
+                    enc2.set_fragment_texture(0, Some(tmp));
+                }
+                enc2.set_scissor_rect(effect_scissor);
+                let params_v: [f32; 4] = [0.0, 1.0, effect_pass_sigma, effect_pass_radius];
+                enc2.set_fragment_bytes(
+                    1,
+                    core::mem::size_of_val(&params_v) as u64,
+                    params_v.as_ptr() as *const _,
+                );
+                enc2.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+                self.prepass_shaded_px = self
+                    .prepass_shaded_px
+                    .saturating_add(effect_scissor.width.saturating_mul(effect_scissor.height));
+                enc2.end_encoding();
+
+                if visual_effect_uses_eighth {
+                    let rpd_us0 = RenderPassDescriptor::new();
+                    let ca_us0 = rpd_us0.color_attachments().object_at(0).unwrap();
+                    if let Some(dst) = &self.quarter_tex {
+                        ca_us0.set_texture(Some(dst));
+                    }
+                    ca_us0.set_load_action(MTLLoadAction::DontCare);
+                    ca_us0.set_store_action(MTLStoreAction::Store);
+                    let enc_us0 = cmd.new_render_command_encoder(&rpd_us0);
+                    enc_us0.set_render_pipeline_state(&self.pso_upsample);
+                    if let Some(sam) = &self.sampler {
+                        enc_us0.set_fragment_sampler_state(0, Some(sam));
+                    }
+                    if let Some(src) = &self.eighth_tex {
+                        enc_us0.set_fragment_texture(0, Some(src));
+                    }
+                    let scale2: f32 = 2.0;
+                    enc_us0.set_fragment_bytes(
+                        1,
+                        core::mem::size_of_val(&scale2) as u64,
+                        &scale2 as *const _ as *const _,
+                    );
+                    enc_us0.set_scissor_rect(sc_quarter);
+                    enc_us0.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+                    self.prepass_shaded_px = self
+                        .prepass_shaded_px
+                        .saturating_add(sc_quarter.width.saturating_mul(sc_quarter.height));
+                    enc_us0.end_encoding();
+                }
+
+                // 5) Upsample quarter -> half (scale 2)
+                let rpd_us1 = RenderPassDescriptor::new();
+                let ca_us1 = rpd_us1.color_attachments().object_at(0).unwrap();
+                if let Some(dst) = &self.half_tex {
+                    ca_us1.set_texture(Some(dst));
+                }
+                ca_us1.set_load_action(MTLLoadAction::DontCare);
+                ca_us1.set_store_action(MTLStoreAction::Store);
+                let enc_us1 = cmd.new_render_command_encoder(&rpd_us1);
+                enc_us1.set_render_pipeline_state(&self.pso_upsample);
+                if let Some(sam) = &self.sampler {
+                    enc_us1.set_fragment_sampler_state(0, Some(sam));
+                }
+                if let Some(src) = &self.quarter_tex {
+                    enc_us1.set_fragment_texture(0, Some(src));
+                }
+                let scale2: f32 = 2.0;
+                enc_us1.set_fragment_bytes(
+                    1,
+                    core::mem::size_of_val(&scale2) as u64,
+                    &scale2 as *const _ as *const _,
+                );
+                enc_us1.set_scissor_rect(sc_half);
+                enc_us1.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+                self.prepass_shaded_px = self
+                    .prepass_shaded_px
+                    .saturating_add(sc_half.width.saturating_mul(sc_half.height));
+                enc_us1.end_encoding();
+
+                // 6) Upsample half -> prepass (scale 2)
+                let rpd_us2 = RenderPassDescriptor::new();
+                let ca_us2 = rpd_us2.color_attachments().object_at(0).unwrap();
+                if let Some(dst) = &self.prepass_tex {
+                    ca_us2.set_texture(Some(dst));
+                }
+                ca_us2.set_load_action(MTLLoadAction::DontCare);
+                ca_us2.set_store_action(MTLStoreAction::Store);
+                let enc_us2 = cmd.new_render_command_encoder(&rpd_us2);
+                enc_us2.set_render_pipeline_state(&self.pso_upsample);
+                if let Some(sam) = &self.sampler {
+                    enc_us2.set_fragment_sampler_state(0, Some(sam));
+                }
+                if let Some(src) = &self.half_tex {
+                    enc_us2.set_fragment_texture(0, Some(src));
+                }
+                enc_us2.set_fragment_bytes(
+                    1,
+                    core::mem::size_of_val(&scale2) as u64,
+                    &scale2 as *const _ as *const _,
+                );
+                enc_us2.set_scissor_rect(MTLScissorRect {
+                    x: sc_x,
+                    y: sc_y,
+                    width: sc_w,
+                    height: sc_h,
+                });
+                enc_us2.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+                self.prepass_shaded_px =
+                    self.prepass_shaded_px.saturating_add(sc_w.saturating_mul(sc_h));
+                enc_us2.end_encoding();
             }
-            ca_us2.set_load_action(MTLLoadAction::DontCare);
-            ca_us2.set_store_action(MTLStoreAction::Store);
-            let enc_us2 = cmd.new_render_command_encoder(&rpd_us2);
-            enc_us2.set_render_pipeline_state(&self.pso_upsample);
-            if let Some(sam) = &self.sampler {
-                enc_us2.set_fragment_sampler_state(0, Some(sam));
-            }
-            if let Some(src) = &self.half_tex {
-                enc_us2.set_fragment_texture(0, Some(src));
-            }
-            enc_us2.set_fragment_bytes(
-                1,
-                core::mem::size_of_val(&scale2) as u64,
-                &scale2 as *const _ as *const _,
-            );
-            enc_us2.set_scissor_rect(MTLScissorRect {
-                x: sc_x,
-                y: sc_y,
-                width: sc_w,
-                height: sc_h,
-            });
-            enc_us2.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
-            self.prepass_shaded_px =
-                self.prepass_shaded_px.saturating_add(sc_w.saturating_mul(sc_h));
-            enc_us2.end_encoding();
         }
 
         let rpd = RenderPassDescriptor::new();
@@ -4276,7 +4759,9 @@ impl api::Renderer for MetalRenderer {
             && self.damage_enabled
             && self.frame_scissor_dp.is_some()
             && self.frame_damage_pct < dmg_thresh;
-        if use_damage {
+        if self.frame_color_initialized {
+            ca0.set_load_action(MTLLoadAction::Load);
+        } else if use_damage {
             ca0.set_load_action(MTLLoadAction::Load);
         } else {
             ca0.set_load_action(MTLLoadAction::Clear);
@@ -4344,6 +4829,11 @@ impl api::Renderer for MetalRenderer {
         self.last_stats.cam_matrix = self.last_cam_mx.max(0) as u8;
         self.last_stats.cam_video_range = self.last_cam_vr.max(0) as u8;
         self.last_stats.cam_color_space = self.last_cam_cs.max(0) as u8;
+        self.frame_2d_encoded = true;
+        self.frame_color_initialized = true;
+        if let Some(t0) = self.frame_encode_started_at {
+            self.last_stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        }
     }
 
     fn submit(&mut self, _token: api::FrameToken) -> Result<(), api::RenderError> {
@@ -4836,6 +5326,11 @@ fn encode_draws(
                                 tint: *tint,
                                 alpha: *alpha,
                             });
+                        }
+                        api::DrawCmd::VisualEffect { rect: r0, effect } => {
+                            let adj = api::RectF::new(r0.x - ox, r0.y - oy, r0.w, r0.h);
+                            sub.items
+                                .push(api::DrawCmd::VisualEffect { rect: adj, effect: *effect });
                         }
                         api::DrawCmd::GlyphRun { run } => {
                             // Copy referenced vertices/indices with rebase
@@ -5644,6 +6139,71 @@ fn encode_draws(
                     continue;
                 }
                 i += 1;
+            }
+            api::DrawCmd::VisualEffect { .. } => {
+                if prepass {
+                    // Stop prepass at the first visual effect; draw nothing for it here.
+                    break;
+                }
+                if let Some(src) = &r.prepass_tex {
+                    enc.set_render_pipeline_state(&r.pso_visual_effect);
+                    if let Some(sam) = &r.sampler {
+                        enc.set_fragment_sampler_state(0, Some(sam));
+                    }
+                    enc.set_fragment_texture(0, Some(src));
+                    let mut count = 0usize;
+                    let mut vbuf: alloc::vec::Vec<f32> = alloc::vec::Vec::new();
+                    let mut fbuf: alloc::vec::Vec<f32> = alloc::vec::Vec::new();
+                    let mut j = i;
+                    while j < list.items.len() {
+                        if let api::DrawCmd::VisualEffect { rect, effect } = &list.items[j] {
+                            vbuf.extend_from_slice(&[rect.x, rect.y, rect.w, rect.h]);
+                            fbuf.extend_from_slice(&pack_visual_effect_params(*rect, *effect));
+                            count += 1;
+                            j += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    enc.set_vertex_bytes(
+                        1,
+                        core::mem::size_of_val(&vp_dp) as u64,
+                        vp_dp.as_ptr() as *const _,
+                    );
+                    let max_batch = max_instances_per_set_bytes(
+                        core::mem::size_of::<[f32; 4]>(),
+                        core::mem::size_of::<[f32; 8]>(),
+                    );
+                    let mut emitted = 0usize;
+                    let mut start = 0usize;
+                    while start < count {
+                        let end = (start + max_batch).min(count);
+                        let v_slice = &vbuf[(start * 4)..(end * 4)];
+                        let f_slice = &fbuf[(start * 8)..(end * 8)];
+                        enc.set_vertex_bytes(
+                            0,
+                            (v_slice.len() * core::mem::size_of::<f32>()) as u64,
+                            v_slice.as_ptr() as *const _,
+                        );
+                        enc.set_fragment_bytes(
+                            1,
+                            (f_slice.len() * core::mem::size_of::<f32>()) as u64,
+                            f_slice.as_ptr() as *const _,
+                        );
+                        enc.draw_primitives_instanced(
+                            MTLPrimitiveType::Triangle,
+                            0,
+                            6,
+                            (end - start) as u64,
+                        );
+                        emitted += end - start;
+                        start = end;
+                    }
+                    r.acc_instanced += emitted as u32;
+                    i = j;
+                    continue;
+                }
+                i += 1;
             } // ClipPush/ClipPop handled above
         }
         // Default progress
@@ -5661,6 +6221,12 @@ struct NineSliceGpuParams {
     slice_ltrb: [f32; 4],
     alpha: f32,
     _pad1: [f32; 3],
+}
+
+#[inline]
+fn pack_visual_effect_params(rect: api::RectF, effect: api::VisualEffect) -> [f32; 8] {
+    let tint = effect.tint();
+    [rect.x, rect.y, rect.w, rect.h, tint.r, tint.g, tint.b, tint.a]
 }
 
 #[inline]
@@ -6138,6 +6704,22 @@ fn build_backdrop_pso(
     pipeline_state(device, "pso.backdrop.create", &desc)
 }
 
+fn build_visual_effect_pso(
+    device: &Device,
+    lib: &Library,
+    fmt: MTLPixelFormat,
+) -> Result<RenderPipelineState, MetalInitError> {
+    let v = pipeline_function(lib, "visual_effect.vertex", "v_backdrop")?;
+    let f = pipeline_function(lib, "visual_effect.fragment", "f_visual_effect")?;
+    let desc = RenderPipelineDescriptor::new();
+    desc.set_vertex_function(Some(&v));
+    desc.set_fragment_function(Some(&f));
+    let ca = desc.color_attachments().object_at(0).unwrap();
+    ca.set_pixel_format(fmt);
+    ca.set_blending_enabled(false);
+    pipeline_state(device, "pso.visual_effect.create", &desc)
+}
+
 fn build_image_pso(
     device: &Device,
     lib: &Library,
@@ -6364,6 +6946,102 @@ fn build_camera_pso(
     ca.set_pixel_format(fmt);
     ca.set_blending_enabled(false);
     pipeline_state(device, fragment_name, &desc)
+}
+
+fn build_scene3d_pso(
+    device: &Device,
+    lib: &Library,
+    fmt: MTLPixelFormat,
+    depth_only: bool,
+    topology: scene3d::MeshTopology,
+) -> Result<RenderPipelineState, MetalInitError> {
+    let v = pipeline_function(lib, "scene3d.vertex", "v_scene3d")?;
+    let f = pipeline_function(lib, "scene3d.fragment", "f_scene3d")?;
+    let desc = RenderPipelineDescriptor::new();
+    desc.set_vertex_function(Some(&v));
+    desc.set_fragment_function(Some(&f));
+    desc.set_sample_count(1);
+    desc.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
+
+    let vdesc = VertexDescriptor::new();
+    let attrs = vdesc.attributes();
+    attrs.object_at(0).unwrap().set_format(MTLVertexFormat::Float3);
+    attrs.object_at(0).unwrap().set_offset(0);
+    attrs.object_at(0).unwrap().set_buffer_index(0);
+    let layouts = vdesc.layouts();
+    layouts.object_at(0).unwrap().set_stride(12);
+    layouts.object_at(0).unwrap().set_step_function(MTLVertexStepFunction::PerVertex);
+    desc.set_vertex_descriptor(Some(&vdesc));
+
+    let ca = desc.color_attachments().object_at(0).unwrap();
+    ca.set_pixel_format(fmt);
+    ca.set_blending_enabled(true);
+    ca.set_rgb_blend_operation(MTLBlendOperation::Add);
+    ca.set_alpha_blend_operation(MTLBlendOperation::Add);
+    ca.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
+    ca.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
+    ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+    ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+    if depth_only {
+        ca.set_write_mask(MTLColorWriteMask::empty());
+    }
+
+    let stage = match (topology, depth_only) {
+        (scene3d::MeshTopology::Triangles, false) => "pso.scene3d.tri.create",
+        (scene3d::MeshTopology::Triangles, true) => "pso.scene3d.tri_depth.create",
+        (scene3d::MeshTopology::Lines, false) => "pso.scene3d.line.create",
+        (scene3d::MeshTopology::Lines, true) => "pso.scene3d.line_depth.create",
+    };
+    pipeline_state(device, stage, &desc)
+}
+
+fn build_depth_stencil_state(
+    device: &Device,
+    depth_test: bool,
+    depth_write: bool,
+    label: &str,
+) -> DepthStencilState {
+    let desc = DepthStencilDescriptor::new();
+    desc.set_label(label);
+    desc.set_depth_compare_function(if depth_test {
+        MTLCompareFunction::LessEqual
+    } else {
+        MTLCompareFunction::Always
+    });
+    desc.set_depth_write_enabled(depth_write);
+    device.new_depth_stencil_state(&desc)
+}
+
+fn scene3d_primitive(topology: scene3d::MeshTopology) -> MTLPrimitiveType {
+    match topology {
+        scene3d::MeshTopology::Triangles => MTLPrimitiveType::Triangle,
+        scene3d::MeshTopology::Lines => MTLPrimitiveType::Line,
+    }
+}
+
+fn scene3d_cull_mode(cull: scene3d::CullMode3d) -> MTLCullMode {
+    match cull {
+        scene3d::CullMode3d::None => MTLCullMode::None,
+        scene3d::CullMode3d::Front => MTLCullMode::Front,
+        scene3d::CullMode3d::Back => MTLCullMode::Back,
+    }
+}
+
+fn mat4_mul(a: &scene3d::Mat4, b: &scene3d::Mat4) -> scene3d::Mat4 {
+    let mut out = [[0.0_f32; 4]; 4];
+    let mut col = 0;
+    while col < 4 {
+        let mut row = 0;
+        while row < 4 {
+            out[col][row] = a[0][row] * b[col][0]
+                + a[1][row] * b[col][1]
+                + a[2][row] * b[col][2]
+                + a[3][row] * b[col][3];
+            row += 1;
+        }
+        col += 1;
+    }
+    out
 }
 
 fn build_sampler(device: &Device) -> Option<SamplerState> {
@@ -6628,7 +7306,9 @@ impl MetalRenderer {
                 .map(|tex| tex.as_ref())
                 .chain(self.half_tex.iter().map(|tex| tex.as_ref()))
                 .chain(self.quarter_tex.iter().map(|tex| tex.as_ref()))
-                .chain(self.quarter_tmp_tex.iter().map(|tex| tex.as_ref())),
+                .chain(self.quarter_tmp_tex.iter().map(|tex| tex.as_ref()))
+                .chain(self.eighth_tex.iter().map(|tex| tex.as_ref()))
+                .chain(self.eighth_tmp_tex.iter().map(|tex| tex.as_ref())),
         );
         let effect_targets_bytes = effect_prepass_bytes.saturating_add(effect_blur_chain_bytes);
         let camera_blur_cache_bytes = Self::unique_texture_category_bytes(
@@ -6835,6 +7515,45 @@ mod tests {
         assert_eq!(spinner, 170);
         assert!(spinner.saturating_mul(16) <= METAL_SET_BYTES_LIMIT);
         assert!(spinner.saturating_mul(24) <= METAL_SET_BYTES_LIMIT);
+    }
+
+    #[test]
+    fn dark_popup_visual_effect_packs_single_tint_material() {
+        let params = pack_visual_effect_params(
+            api::RectF::new(0.0, 0.0, 402.0, 874.0),
+            api::VisualEffect::DarkPopup {
+                blur_intensity: 1.0,
+                tint: api::Color::rgba(1.0, 0.25, 0.0, 0.90),
+            },
+        );
+
+        assert_eq!(params, [0.0, 0.0, 402.0, 874.0, 1.0, 0.25, 0.0, 0.90]);
+    }
+
+    #[test]
+    fn dark_popup_visual_effect_intensity_drives_composite_blur_plan() {
+        let low = visual_effect_blur_plan(api::VisualEffect::DarkPopup {
+            blur_intensity: 0.5,
+            tint: api::Color::rgba(1.0, 1.0, 1.0, 0.9),
+        });
+        let high = visual_effect_blur_plan(api::VisualEffect::DarkPopup {
+            blur_intensity: 1.0,
+            tint: api::Color::rgba(1.0, 1.0, 1.0, 0.9),
+        });
+        let off = visual_effect_blur_plan(api::VisualEffect::DarkPopup {
+            blur_intensity: f32::NAN,
+            tint: api::Color::rgba(1.0, 1.0, 1.0, 0.9),
+        });
+
+        assert_eq!(low.downsample_divisor, 4);
+        assert_eq!(low.sigma_dp, 36.0);
+        assert_eq!(low.pass_scale, 4.0);
+        assert_eq!(low.pass_sigma, 9.0);
+        assert_eq!(low.pass_radius, 27.0);
+        assert_eq!(high.downsample_divisor, 8);
+        assert_eq!(high.sigma_dp, 72.0);
+        assert_eq!(high.pass_scale, 8.0);
+        assert_eq!(off, VisualEffectBlurPlan::OFF);
     }
 
     #[test]

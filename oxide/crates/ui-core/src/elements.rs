@@ -371,54 +371,12 @@ impl Default for Spinner {
 }
 
 impl Spinner {
-    pub const LEGACY_LARGE_STYLE_ATOM: f32 = 37.0;
-    pub const LEGACY_LARGE_STYLE_STROKE: f32 = 2.5;
-    pub const LEGACY_BASE_TINT: gfx::Color =
-        gfx::Color::rgba(236.0 / 255.0, 240.0 / 255.0, 241.0 / 255.0, 1.0);
-    pub const LEGACY_ROTATION_MS: u64 = 1_000;
-
-    #[must_use]
-    pub fn atom_for_rect(rect: gfx::RectF) -> f32 {
-        rect.w.min(rect.h).max(1.0)
-    }
-
-    #[must_use]
-    pub fn center_for_rect(rect: gfx::RectF) -> [f32; 2] {
-        let cx = rect.x + rect.w * 0.5;
-        let cy = rect.y + rect.h * 0.5;
-        [cx, cy]
-    }
-
-    #[must_use]
-    pub fn rect_for_center(center: [f32; 2], atom: f32) -> gfx::RectF {
-        let clamped_atom = atom.max(1.0);
-        gfx::RectF::new(
-            center[0] - clamped_atom * 0.5,
-            center[1] - clamped_atom * 0.5,
-            clamped_atom,
-            clamped_atom,
-        )
-    }
-
-    #[must_use]
-    pub fn fallback_phase_ms(now_ms: u64) -> f32 {
-        let progress = (now_ms % Self::LEGACY_ROTATION_MS) as f32 / Self::LEGACY_ROTATION_MS as f32;
-        progress * core::f32::consts::TAU
-    }
-
-    #[must_use]
-    pub fn fallback_thickness(atom: f32) -> f32 {
-        (atom.max(1.0) / Self::LEGACY_LARGE_STYLE_ATOM * Self::LEGACY_LARGE_STYLE_STROKE).max(1.0)
-    }
-
-    #[must_use]
-    pub fn fallback_radius(atom: f32) -> f32 {
-        let clamped_atom = atom.max(1.0);
-        (clamped_atom * 0.5 - Self::fallback_thickness(clamped_atom)).max(2.0)
-    }
-
     pub fn encode(&self, rect: gfx::RectF, b: &mut DrawListBuilder) {
-        self.encode_at(Self::center_for_rect(rect), Self::atom_for_rect(rect), b);
+        self.encode_at(
+            [rect.x + rect.w * 0.5, rect.y + rect.h * 0.5],
+            rect.w.min(rect.h).max(1.0),
+            b,
+        );
     }
 
     pub fn encode_at(&self, center: [f32; 2], atom: f32, b: &mut DrawListBuilder) {
@@ -429,7 +387,11 @@ impl Spinner {
     }
 
     pub fn draw(&self, rect: gfx::RectF, encoder: &mut dyn gfx::RenderEncoder) {
-        self.draw_at(Self::center_for_rect(rect), Self::atom_for_rect(rect), encoder);
+        self.draw_at(
+            [rect.x + rect.w * 0.5, rect.y + rect.h * 0.5],
+            rect.w.min(rect.h).max(1.0),
+            encoder,
+        );
     }
 
     pub fn draw_at(&self, center: [f32; 2], atom: f32, encoder: &mut dyn gfx::RenderEncoder) {
