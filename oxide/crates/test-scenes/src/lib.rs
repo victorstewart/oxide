@@ -457,6 +457,17 @@ impl<U: elements::ImageUploader> Router<U> {
                 self.anim_timeline = AnimTimeline::default();
                 true
             }
+            "damage_lab_frame" => {
+                self.set_scene(SceneKind::DamageLab as usize);
+                self.damage_lab = DamageLab::default();
+                self.damage_lab.set_options(true, 0.75, 0.25);
+                true
+            }
+            "nine_slice_frame" => {
+                self.set_scene(SceneKind::NineSlice as usize);
+                self.nine_slice.set_options(16.0, 1.0);
+                true
+            }
             "orchestration_transition_modal" => {
                 self.set_scene(SceneKind::Orchestration as usize);
                 self.orchestration.benchmark_reset();
@@ -532,6 +543,15 @@ impl<U: elements::ImageUploader> Router<U> {
             "anim_timeline_bars" => {
                 self.anim_timeline.update(16);
                 Some("timeline.tick")
+            }
+            "damage_lab_frame" => {
+                self.damage_lab.update(16);
+                Some("damage.tick")
+            }
+            "nine_slice_frame" => {
+                let slice = if step % 2 == 0 { 16.0 } else { 18.0 };
+                self.nine_slice.set_options(slice, 1.0);
+                Some("nine_slice.tick")
             }
             "orchestration_transition_modal" => {
                 self.orchestration.benchmark_transition_or_modal(step);
@@ -640,6 +660,15 @@ impl<U: elements::ImageUploader> Router<U> {
                     b,
                     DamageFrameStats { pct: self.damage_stats_pct, rects: self.damage_stats_rects },
                 );
+                if self.damage_lab.enabled {
+                    let rect = gfx::RectF::new(
+                        viewport.x + 8.0,
+                        viewport.y + 8.0,
+                        (viewport.w - 16.0).max(1.0),
+                        24.0,
+                    );
+                    self.push_damage(rectf_to_recti(rect));
+                }
             }
             SceneKind::InputLab => {
                 self.input_lab.draw(viewport, device_scale, &mut self.text, &mut self.uploader, b);

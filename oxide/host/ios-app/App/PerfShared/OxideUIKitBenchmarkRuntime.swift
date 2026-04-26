@@ -4058,6 +4058,10 @@ private final class OxideOnscreenBenchmarkHarness
             return "Zoom Image"
         case "anim_timeline_bars":
             return "Animations"
+        case "damage_lab_frame":
+            return "Damage Lab"
+        case "nine_slice_frame":
+            return "Nine Slice"
         case "orchestration_transition_modal":
             return "UI Orchestration"
         default:
@@ -11968,6 +11972,24 @@ enum OxideUIKitBenchmarkCatalog
                 host: host,
                 signpostNames: ["transition", "draw.encode"],
                 interactionSignpostName: "transition"
+            )
+        case "testOxideDamageLabFrame":
+            return makeOxideOnscreenBenchmark(
+                testName: normalizedTestName,
+                benchmarkKey: "damage_lab_frame",
+                iterations: 32,
+                host: host,
+                signpostNames: ["frame.present", "draw.encode"],
+                interactionSignpostName: "frame.present"
+            )
+        case "testOxideNineSliceFrame":
+            return makeOxideOnscreenBenchmark(
+                testName: normalizedTestName,
+                benchmarkKey: "nine_slice_frame",
+                iterations: 32,
+                host: host,
+                signpostNames: ["frame.present", "draw.encode"],
+                interactionSignpostName: "frame.present"
             )
         case "testOxideInputFormJourney":
             return makeOxideOnscreenBenchmark(

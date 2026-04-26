@@ -259,6 +259,26 @@ const OXIDE_ONSCREEN_CASE_SPECS: &[OxideOnscreenCaseSpec] = &[
         note: "Real on-screen Oxide orchestration journey through the live MetalView host path.",
     },
     OxideOnscreenCaseSpec {
+        test_name: "testOxideDamageLabFrame",
+        case_id: "gpu.scene.damage_lab.frame",
+        family: "scene-gpu",
+        layer: "onscreen",
+        scenario: "damage_lab",
+        variant: "oxide_host",
+        benchmark_iterations: 32,
+        note: "Real on-screen Oxide damage-lab frame through the live MetalView host path with damage prefiltering enabled.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideNineSliceFrame",
+        case_id: "gpu.scene.nine_slice.frame",
+        family: "scene-gpu",
+        layer: "onscreen",
+        scenario: "nine_slice",
+        variant: "oxide_host",
+        benchmark_iterations: 32,
+        note: "Real on-screen Oxide nine-slice frame through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
         test_name: "testCameraNV12LegacyLivePreview",
         case_id: "gpu.scene.camera.frame",
         family: "image_pipeline",
@@ -1411,6 +1431,7 @@ enum CompareDeviceRunStage {
 
 #[derive(Debug, Default)]
 struct IosOxideDevicePerfCli {
+    cases: Vec<String>,
     compare: Option<PathBuf>,
     device: Option<String>,
     json_out: Option<PathBuf>,
@@ -1886,7 +1907,7 @@ pub fn run_cli(args: &[String]) -> Result<()> {
         (Some("test-all"), _) => test_all(),
         _ => {
             eprintln!(
-                "Usage:\n  cargo xtask ios prepare\n  cargo xtask ios perf [disabled: use `ios device-perf`]\n  cargo xtask ios device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR]\n    note: `--trace-seconds 0` skips the attached Metal trace and collects only xcodebuild CPU metrics plus parked console summaries.\n  cargo xtask ios compare-device-perf [--write-baseline] [--uikit-compare PATH] [--oxide-compare PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR] [--watchable-smoke|--smoke] [--family animation|navigation|journey|camera]\n    staged flow: run watchable smoke first, then `--family ...` proofs, then `--write-baseline` from the same result root once proof status is green.\n  cargo xtask ios react-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--reuse-derived-data PATH] [--trace-seconds N]\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--reuse-derived-data PATH] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
+                "Usage:\n  cargo xtask ios prepare\n  cargo xtask ios perf [disabled: use `ios device-perf`]\n  cargo xtask ios device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR]\n    note: `--trace-seconds 0` skips the attached Metal trace and collects only xcodebuild CPU metrics plus parked console summaries.\n  cargo xtask ios compare-device-perf [--write-baseline] [--uikit-compare PATH] [--oxide-compare PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR] [--watchable-smoke|--smoke] [--family animation|navigation|journey|camera]\n    staged flow: run watchable smoke first, then `--family ...` proofs, then `--write-baseline` from the same result root once proof status is green.\n  cargo xtask ios react-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--reuse-derived-data PATH] [--trace-seconds N]\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
             );
             Ok(())
         }
@@ -2476,7 +2497,12 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
     let result_root =
         cli.result_root.clone().unwrap_or_else(|| PathBuf::from(DEFAULT_OXIDE_DEVICE_RESULT_ROOT));
     let device = resolve_uikit_physical_device(&root, cli.device.as_deref())?;
-    let selected_specs = if cli.smoke {
+    if cli.smoke && !cli.cases.is_empty() {
+        bail!("--smoke cannot be combined with --case for ios oxide-device-perf");
+    }
+    let selected_specs = if !cli.cases.is_empty() {
+        selected_oxide_onscreen_case_specs(&cli.cases)?
+    } else if cli.smoke {
         selected_oxide_onscreen_case_specs(&[String::from("testOxideSpinnerSpin")])?
     } else {
         selected_oxide_onscreen_case_specs(&[])?
@@ -6153,11 +6179,14 @@ fn build_oxide_onscreen_device_coverage(cases: &[PerfCaseResult]) -> CoverageRep
             .filter(|spec| spec.family == "journey" && has_case(spec.case_id))
             .map(|spec| String::from(spec.case_id))
             .collect(),
-        scenes_gpu_total: 1,
-        scenes_gpu_covered: cases
+        scenes_gpu_total: OXIDE_ONSCREEN_CASE_SPECS
             .iter()
-            .filter(|case| case.id == "gpu.scene.camera.frame")
-            .map(|case| case.id.clone())
+            .filter(|spec| spec.case_id.starts_with("gpu.scene."))
+            .count(),
+        scenes_gpu_covered: OXIDE_ONSCREEN_CASE_SPECS
+            .iter()
+            .filter(|spec| spec.case_id.starts_with("gpu.scene.") && has_case(spec.case_id))
+            .map(|spec| String::from(spec.case_id))
             .collect(),
         ..CoverageReport::default()
     }
@@ -6232,6 +6261,20 @@ fn build_oxide_onscreen_device_contract(
                 },
                 notes: vec![String::from(
                     "The official matched device battery now carries representative Oxide journey workloads through the live host path.",
+                )],
+            },
+            ContractCoverageEntry {
+                id: String::from("renderer-scene-gpu"),
+                label: String::from("Renderer Scene GPU Paths"),
+                status: if has_case("gpu.scene.damage_lab.frame")
+                    && has_case("gpu.scene.nine_slice.frame")
+                {
+                    String::from("implemented")
+                } else {
+                    String::from("partial")
+                },
+                notes: vec![String::from(
+                    "The on-screen Oxide device battery carries dedicated renderer rows for damage prefiltering and nine-slice composition through the live host path.",
                 )],
             },
             ContractCoverageEntry {
@@ -8206,6 +8249,10 @@ fn parse_ios_oxide_device_perf_cli(args: &[String]) -> Result<IosOxideDevicePerf
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
+            "--case" => {
+                let value = it.next().context("missing value for --case")?;
+                cli.cases.push(value.clone());
+            }
             "--compare" => {
                 let path = it.next().context("missing value for --compare")?;
                 cli.compare = Some(PathBuf::from(path));

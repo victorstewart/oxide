@@ -870,6 +870,9 @@ pub struct MetalRenderer {
     spinner_fbuf: alloc::vec::Vec<SpinnerGpuParams>,
     effect_vbuf: alloc::vec::Vec<f32>,
     effect_fbuf: alloc::vec::Vec<f32>,
+    filtered_prepass: FilteredDrawList,
+    filtered_main: FilteredDrawList,
+    layer_sublist: api::DrawList,
     target_w: u32,
     target_h: u32,
     target_scale: f32,
@@ -1655,6 +1658,9 @@ impl MetalRenderer {
             spinner_fbuf: alloc::vec::Vec::new(),
             effect_vbuf: alloc::vec::Vec::new(),
             effect_fbuf: alloc::vec::Vec::new(),
+            filtered_prepass: FilteredDrawList::default(),
+            filtered_main: FilteredDrawList::default(),
+            layer_sublist: api::DrawList::default(),
             target_w: 0,
             target_h: 0,
             target_scale: 1.0,
@@ -3928,9 +3934,9 @@ impl MetalRenderer {
     }
 }
 
-// Build a filtered copy of a DrawList that keeps only items whose bounding
-// rect (in dp) intersects the provided dp scissor. Vertices/indices are
-// copied by reference (cloned arrays), spans remain valid.
+// Fill reusable draw-command scratch with only items whose bounding rect in dp
+// intersects the provided dp scissor. Vertices/indices stay borrowed from the
+// source DrawList, so command spans remain valid.
 const DARK_POPUP_MAX_BLUR_SIGMA_DP: f32 = 72.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -3995,6 +4001,7 @@ impl<'a> DrawListView<'a> {
     }
 }
 
+#[derive(Default)]
 struct FilteredDrawList {
     items: alloc::vec::Vec<api::DrawCmd>,
 }
@@ -4030,7 +4037,7 @@ fn vertex_span_rect(vertices: &[api::Vertex], span: api::VertexSpan) -> Option<a
     })
 }
 
-fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI) -> FilteredDrawList {
+fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI, out: &mut FilteredDrawList) {
     fn rect_intersects(r: &api::RectF, sc: &api::RectI) -> bool {
         let rx0 = r.x;
         let ry0 = r.y;
@@ -4042,7 +4049,10 @@ fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI) -> Filter
         let sy1 = (sc.y + sc.h) as f32;
         rx1 > sx0 && rx0 < sx1 && ry1 > sy0 && ry0 < sy1
     }
-    let mut out = FilteredDrawList { items: alloc::vec::Vec::with_capacity(list.items.len()) };
+    out.items.clear();
+    if out.items.capacity() < list.items.len() {
+        out.items.reserve(list.items.len() - out.items.capacity());
+    }
     let mut i = 0usize;
     while i < list.items.len() {
         match &list.items[i] {
@@ -4145,7 +4155,15 @@ fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI) -> Filter
             }
         }
     }
-    out
+}
+
+fn clear_layer_sublist(sub: &mut api::DrawList, item_capacity: usize) {
+    sub.items.clear();
+    sub.vertices.clear();
+    sub.indices.clear();
+    if sub.items.capacity() < item_capacity {
+        sub.items.reserve(item_capacity - sub.items.capacity());
+    }
 }
 
 impl Drop for MetalRenderer {
@@ -4565,11 +4583,8 @@ impl api::Renderer for MetalRenderer {
                         // Build offset sublist like in encode_draws
                         let ox = rect.x;
                         let oy = rect.y;
-                        let mut sub = api::DrawList {
-                            items: alloc::vec::Vec::new(),
-                            vertices: alloc::vec::Vec::new(),
-                            indices: alloc::vec::Vec::new(),
-                        };
+                        let mut sub = core::mem::take(&mut self.layer_sublist);
+                        clear_layer_sublist(&mut sub, end.saturating_sub(i + 1));
                         let mut hasher = std::collections::hash_map::DefaultHasher::new();
                         for k in i + 1..end {
                             match &list.items[k] {
@@ -4628,15 +4643,16 @@ impl api::Renderer for MetalRenderer {
                                     }
                                     let srci = &list.indices[(run.ib.offset as usize)
                                         ..(run.ib.offset as usize + i_count)];
-                                    let Some(remapped_indices) = remap_indices_to_span(
+                                    let ib_offset = sub.indices.len() as u32;
+                                    let Some(remapped_len) = append_remapped_indices_to_span(
                                         srci,
                                         run.vb.offset,
                                         run.vb.len,
                                         new_v_off,
+                                        &mut sub.indices,
                                     ) else {
                                         continue;
                                     };
-                                    sub.indices.extend_from_slice(&remapped_indices);
                                     sub.items.push(api::DrawCmd::GlyphRun {
                                         run: api::GlyphRun {
                                             atlas: run.atlas,
@@ -4645,9 +4661,8 @@ impl api::Renderer for MetalRenderer {
                                                 len: v_count as u32,
                                             },
                                             ib: api::IndexSpan {
-                                                offset: (sub.indices.len() as u32)
-                                                    .wrapping_sub(i_count as u32),
-                                                len: i_count as u32,
+                                                offset: ib_offset,
+                                                len: remapped_len as u32,
                                             },
                                             sdf: run.sdf,
                                             color: run.color,
@@ -4716,6 +4731,7 @@ impl api::Renderer for MetalRenderer {
                             encl.end_encoding();
                             self.layers.insert(*id, LayerEntry { tex, w: w_px, h: h_px, hash });
                         }
+                        self.layer_sublist = sub;
                     }
                     i = end + 1;
                     continue;
@@ -4798,23 +4814,31 @@ impl api::Renderer for MetalRenderer {
                 prepass_scissor_dp = None;
             }
             // Optional pre-filtering by prepass scissor only when damage is small
-            let filtered_prepass;
-            let list_pre_view = if let Some(sc_dp) = prepass_scissor_dp {
-                if self.frame_damage_pct <= self.damage_prefilter_thresh {
-                    filtered_prepass = filter_drawlist_by_dp_scissor(list, sc_dp);
-                    if filtered_prepass.items.len() < list.items.len() {
-                        self.acc_culled = self.acc_culled.saturating_add(
-                            (list.items.len() - filtered_prepass.items.len()) as u32,
-                        );
+            let mut filtered_prepass = core::mem::take(&mut self.filtered_prepass);
+            let mut used_filtered_prepass = false;
+            {
+                let list_pre_view = if let Some(sc_dp) = prepass_scissor_dp {
+                    if self.frame_damage_pct <= self.damage_prefilter_thresh {
+                        filter_drawlist_by_dp_scissor(list, sc_dp, &mut filtered_prepass);
+                        used_filtered_prepass = true;
+                        if filtered_prepass.items.len() < list.items.len() {
+                            self.acc_culled = self.acc_culled.saturating_add(
+                                (list.items.len() - filtered_prepass.items.len()) as u32,
+                            );
+                        }
+                        filtered_prepass.view(list)
+                    } else {
+                        DrawListView::from_draw_list(list)
                     }
-                    filtered_prepass.view(list)
                 } else {
                     DrawListView::from_draw_list(list)
-                }
-            } else {
-                DrawListView::from_draw_list(list)
-            };
-            encode_draws(&enc0, &mut pf0, self, list_pre_view, true, prepass_scissor_dp);
+                };
+                encode_draws(&enc0, &mut pf0, self, list_pre_view, true, prepass_scissor_dp);
+            }
+            if used_filtered_prepass {
+                filtered_prepass.items.clear();
+            }
+            self.filtered_prepass = filtered_prepass;
             self.frames[slot] = pf0;
             enc0.end_encoding();
 
@@ -5160,34 +5184,42 @@ impl api::Renderer for MetalRenderer {
         // Move out per-frame to avoid double-borrow on &mut self
         let mut pf = core::mem::take(&mut self.frames[slot]);
         // Optional pre-filtering by frame scissor to reduce CPU work (small damage only)
-        let list_main_storage;
-        let list_main_view = if use_damage {
-            if let Some(sc) = self.frame_scissor_dp {
-                if self.frame_damage_pct <= self.damage_prefilter_thresh {
-                    list_main_storage = filter_drawlist_by_dp_scissor(list, sc);
-                    if list_main_storage.items.len() < list.items.len() {
-                        self.acc_culled = self.acc_culled.saturating_add(
-                            (list.items.len() - list_main_storage.items.len()) as u32,
-                        );
+        let mut filtered_main = core::mem::take(&mut self.filtered_main);
+        let mut used_filtered_main = false;
+        {
+            let list_main_view = if use_damage {
+                if let Some(sc) = self.frame_scissor_dp {
+                    if self.frame_damage_pct <= self.damage_prefilter_thresh {
+                        filter_drawlist_by_dp_scissor(list, sc, &mut filtered_main);
+                        used_filtered_main = true;
+                        if filtered_main.items.len() < list.items.len() {
+                            self.acc_culled = self.acc_culled.saturating_add(
+                                (list.items.len() - filtered_main.items.len()) as u32,
+                            );
+                        }
+                        filtered_main.view(list)
+                    } else {
+                        DrawListView::from_draw_list(list)
                     }
-                    list_main_storage.view(list)
                 } else {
                     DrawListView::from_draw_list(list)
                 }
             } else {
                 DrawListView::from_draw_list(list)
-            }
-        } else {
-            DrawListView::from_draw_list(list)
-        };
-        encode_draws(
-            &enc,
-            &mut pf,
-            self,
-            list_main_view,
-            false,
-            if use_damage { self.frame_scissor_dp } else { None },
-        );
+            };
+            encode_draws(
+                &enc,
+                &mut pf,
+                self,
+                list_main_view,
+                false,
+                if use_damage { self.frame_scissor_dp } else { None },
+            );
+        }
+        if used_filtered_main {
+            filtered_main.items.clear();
+        }
+        self.filtered_main = filtered_main;
         self.frames[slot] = pf;
         enc.end_encoding();
 
@@ -5653,11 +5685,8 @@ fn encode_draws_range(
                 // Build offset sublist in local coordinates (dp) and compute hash
                 let ox = rect.x;
                 let oy = rect.y;
-                let mut sub = api::DrawList {
-                    items: alloc::vec::Vec::new(),
-                    vertices: alloc::vec::Vec::new(),
-                    indices: alloc::vec::Vec::new(),
-                };
+                let mut sub = core::mem::take(&mut r.layer_sublist);
+                clear_layer_sublist(&mut sub, end.saturating_sub(i + 1));
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 for k in i + 1..end {
                     match &list.items[k] {
@@ -5759,20 +5788,24 @@ fn encode_draws_range(
                             // Copy and rebase indices
                             let srci = &list.indices
                                 [(run.ib.offset as usize)..(run.ib.offset as usize + i_count)];
-                            let Some(remapped_indices) =
-                                remap_indices_to_span(srci, run.vb.offset, run.vb.len, new_v_off)
+                            let ib_offset = sub.indices.len() as u32;
+                            let Some(remapped_len) = append_remapped_indices_to_span(
+                                srci,
+                                run.vb.offset,
+                                run.vb.len,
+                                new_v_off,
+                                &mut sub.indices,
+                            )
                             else {
                                 continue;
                             };
-                            sub.indices.extend_from_slice(&remapped_indices);
                             sub.items.push(api::DrawCmd::GlyphRun {
                                 run: api::GlyphRun {
                                     atlas: run.atlas,
                                     vb: api::VertexSpan { offset: new_v_off, len: v_count as u32 },
                                     ib: api::IndexSpan {
-                                        offset: (sub.indices.len() as u32)
-                                            .wrapping_sub(i_count as u32),
-                                        len: i_count as u32,
+                                        offset: ib_offset,
+                                        len: remapped_len as u32,
                                     },
                                     sdf: run.sdf,
                                     color: run.color,
@@ -5783,6 +5816,7 @@ fn encode_draws_range(
                     }
                 }
                 let hash = hasher.finish();
+                r.layer_sublist = sub;
                 // Ensure layer texture exists (px)
                 let w_px = (rect.w * r.target_scale.max(1.0)).ceil() as u32;
                 let h_px = (rect.h * r.target_scale.max(1.0)).ceil() as u32;
@@ -6997,24 +7031,6 @@ fn normalized_index_mode(
 }
 
 #[inline]
-fn normalize_indices_for_local_vertex_span(
-    source: &[u16],
-    vertex_base: u32,
-    vertex_count: u32,
-) -> Option<alloc::vec::Vec<u16>> {
-    match normalized_index_mode(source, vertex_base, vertex_count)? {
-        NormalizedIndexMode::Local => Some(source.to_vec()),
-        NormalizedIndexMode::Rebase { vertex_base } => {
-            let mut rebased = alloc::vec::Vec::with_capacity(source.len());
-            for index in source.iter().copied() {
-                rebased.push((index as u32 - vertex_base) as u16);
-            }
-            Some(rebased)
-        }
-    }
-}
-
-#[inline]
 fn copy_normalized_indices_for_local_vertex_span(
     source: &[u16],
     vertex_base: u32,
@@ -7044,21 +7060,69 @@ fn copy_normalized_indices_for_local_vertex_span(
 }
 
 #[inline]
+fn append_remapped_indices_to_span(
+    source: &[u16],
+    src_vertex_base: u32,
+    src_vertex_count: u32,
+    dst_vertex_base: u32,
+    out: &mut alloc::vec::Vec<u16>,
+) -> Option<usize> {
+    let mode = normalized_index_mode(source, src_vertex_base, src_vertex_count)?;
+    let start_len = out.len();
+    out.reserve(source.len());
+    for index in source.iter().copied() {
+        let local = match mode {
+            NormalizedIndexMode::Local => index as u32,
+            NormalizedIndexMode::Rebase { vertex_base } => index as u32 - vertex_base,
+        };
+        let Some(dst) = dst_vertex_base.checked_add(local) else {
+            out.truncate(start_len);
+            return None;
+        };
+        if dst > u16::MAX as u32 {
+            out.truncate(start_len);
+            return None;
+        }
+        out.push(dst as u16);
+    }
+    Some(source.len())
+}
+
+#[cfg(test)]
+#[inline]
+fn normalize_indices_for_local_vertex_span(
+    source: &[u16],
+    vertex_base: u32,
+    vertex_count: u32,
+) -> Option<alloc::vec::Vec<u16>> {
+    match normalized_index_mode(source, vertex_base, vertex_count)? {
+        NormalizedIndexMode::Local => Some(source.to_vec()),
+        NormalizedIndexMode::Rebase { vertex_base } => {
+            let mut rebased = alloc::vec::Vec::with_capacity(source.len());
+            for index in source.iter().copied() {
+                rebased.push((index as u32 - vertex_base) as u16);
+            }
+            Some(rebased)
+        }
+    }
+}
+
+#[cfg(test)]
+#[inline]
 fn remap_indices_to_span(
     source: &[u16],
     src_vertex_base: u32,
     src_vertex_count: u32,
     dst_vertex_base: u32,
 ) -> Option<alloc::vec::Vec<u16>> {
-    let local = normalize_indices_for_local_vertex_span(source, src_vertex_base, src_vertex_count)?;
-    let mut mapped = alloc::vec::Vec::with_capacity(local.len());
-    for index in local.iter().copied() {
-        let dst = dst_vertex_base.saturating_add(index as u32);
-        if dst > u16::MAX as u32 {
-            return None;
-        }
-        mapped.push(dst as u16);
-    }
+    let mut mapped = alloc::vec::Vec::new();
+    append_remapped_indices_to_span(
+        source,
+        src_vertex_base,
+        src_vertex_count,
+        dst_vertex_base,
+        &mut mapped,
+    )?;
     Some(mapped)
 }
 

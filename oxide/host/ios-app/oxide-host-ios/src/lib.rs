@@ -3262,12 +3262,25 @@ pub extern "C" fn oxide_host_prepare_onscreen_benchmark(
         return -2;
     };
     with_app_mut(|app| {
-        let Some(router) = app.router.as_mut() else { return -1 };
-        if router.prepare_onscreen_benchmark(name) {
-            0
-        } else {
-            -1
+        let prepared = {
+            let Some(router) = app.router.as_mut() else { return -1 };
+            router.prepare_onscreen_benchmark(name)
+        };
+        if !prepared {
+            return -1;
         }
+        let (damage_enabled, damage_use, damage_prefilter) = if name == "damage_lab_frame" {
+            (true, 0.75f32, 0.25f32)
+        } else {
+            (false, 0.70f32, 0.25f32)
+        };
+        if let Some(router) = app.router.as_mut() {
+            router.damage_set_options(damage_enabled, damage_use, damage_prefilter);
+        }
+        if let Some(renderer) = app.renderer.as_mut().map(|b| b.as_mut()) {
+            renderer.set_damage_options(damage_enabled, damage_use, damage_prefilter);
+        }
+        0
     })
     .unwrap_or(-1)
 }
