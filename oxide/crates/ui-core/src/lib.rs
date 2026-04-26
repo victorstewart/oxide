@@ -215,7 +215,7 @@ fn intersect(a: gfx::RectI, b: gfx::RectI) -> Option<gfx::RectI> {
 pub fn prepare_draws(list: &gfx::DrawList) -> alloc::vec::Vec<PreparedDraw> {
     use gfx::DrawCmd as C;
     let mut out = alloc::vec::Vec::with_capacity(list.items.len());
-    let mut stack: alloc::vec::Vec<gfx::RectI> = alloc::vec::Vec::new();
+    let mut stack: alloc::vec::Vec<gfx::RectI> = alloc::vec::Vec::with_capacity(8);
     for item in &list.items {
         match *item {
             C::ClipPush { rect } => {
@@ -376,95 +376,6 @@ pub use text_fields::{
     EditableText, FieldFailRestoreMode, HorizontalShiftingText, SecureText, TextFieldPolicy,
 };
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn clip_intersection() {
-        let mut b = DrawListBuilder::new();
-        // Outer 0..100,0..100
-        b.clip_push(gfx::RectI::new(0, 0, 100, 100));
-        b.solid(
-            gfx::VertexSpan { offset: 0, len: 3 },
-            gfx::IndexSpan { offset: 0, len: 3 },
-            gfx::Color::rgba(1.0, 0.0, 0.0, 1.0),
-        );
-        // Inner 50..150,50..150 => intersection 50..100
-        b.clip_push(gfx::RectI::new(50, 50, 100, 100));
-        b.solid(
-            gfx::VertexSpan { offset: 0, len: 6 },
-            gfx::IndexSpan { offset: 0, len: 6 },
-            gfx::Color::rgba(0.0, 1.0, 0.0, 1.0),
-        );
-        b.clip_pop();
-        b.solid(
-            gfx::VertexSpan { offset: 0, len: 6 },
-            gfx::IndexSpan { offset: 0, len: 6 },
-            gfx::Color::rgba(0.0, 0.0, 1.0, 1.0),
-        );
-        let prepared = prepare_draws(&b.into_inner());
-        assert_eq!(prepared.len(), 3);
-        // First solid has outer clip
-        let c0 = prepared[0].clip.unwrap();
-        assert_eq!((c0.x, c0.y, c0.w, c0.h), (0, 0, 100, 100));
-        // Second solid has intersection clip 50..100
-        let c1 = prepared[1].clip.unwrap();
-        assert_eq!((c1.x, c1.y, c1.w, c1.h), (50, 50, 50, 50));
-        // Third solid returns to outer clip
-        let c2 = prepared[2].clip.unwrap();
-        assert_eq!((c2.x, c2.y, c2.w, c2.h), (0, 0, 100, 100));
-    }
-
-    #[test]
-    fn stable_sort_batches() {
-        let img1 = gfx::ImageHandle(1);
-        let img2 = gfx::ImageHandle(2);
-        let draws = vec![
-            PreparedDraw {
-                cmd: gfx::DrawCmd::Image {
-                    tex: img2,
-                    dst: gfx::RectF::new(0.0, 0.0, 1.0, 1.0),
-                    src: gfx::RectF::new(0.0, 0.0, 1.0, 1.0),
-                    alpha: 1.0,
-                },
-                clip: None,
-            },
-            PreparedDraw {
-                cmd: gfx::DrawCmd::Solid {
-                    vb: gfx::VertexSpan { offset: 0, len: 3 },
-                    ib: gfx::IndexSpan { offset: 0, len: 3 },
-                    color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
-                },
-                clip: Some(gfx::RectI::new(0, 0, 10, 10)),
-            },
-            PreparedDraw {
-                cmd: gfx::DrawCmd::Image {
-                    tex: img1,
-                    dst: gfx::RectF::new(0.0, 0.0, 1.0, 1.0),
-                    src: gfx::RectF::new(0.0, 0.0, 1.0, 1.0),
-                    alpha: 1.0,
-                },
-                clip: None,
-            },
-        ];
-        let sorted = sort_for_batching(draws);
-        // Expect: Solid (pipeline 0) first, then Image with tex=1, then Image with tex=2
-        match sorted[0].cmd {
-            gfx::DrawCmd::Solid { .. } => {}
-            _ => panic!("expected solid first"),
-        }
-        match sorted[1].cmd {
-            gfx::DrawCmd::Image { tex, .. } => assert_eq!(tex.0, 1),
-            _ => panic!("expected image"),
-        }
-        match sorted[2].cmd {
-            gfx::DrawCmd::Image { tex, .. } => assert_eq!(tex.0, 2),
-            _ => panic!("expected image"),
-        }
-    }
-}
-
 // ===== UI Node Tree (layout + routing) =====
 
 use crate::prelude::platform_api as plat;
@@ -591,6 +502,8 @@ pub struct NodeTree {
     free_list: alloc::vec::Vec<NodeId>,
 }
 
+const INLINE_LAYOUT_CHILDREN: usize = 16;
+
 impl NodeTree {
     pub fn new_root(style: NodeStyle) -> Self {
         let root = NodeId(1);
@@ -642,20 +555,33 @@ impl NodeTree {
     }
 
     fn layout_children(&mut self, id: NodeId, content: LayoutRect) {
-        let (axis, gap) = if let Some(node) = self.get(id) {
-            (node.style.axis, node.style.gap)
+        let (axis, gap, child_count) = if let Some(node) = self.get(id) {
+            (node.style.axis, node.style.gap, node.children.len())
         } else {
             return;
         };
-        let kids: alloc::vec::Vec<NodeId> =
-            if let Some(n) = self.get(id) { n.children.clone() } else { return };
-        if kids.is_empty() {
+        if child_count == 0 {
             return;
         }
 
-        match axis {
-            Axis::Row => self.layout_row(id, content, gap, &kids),
-            Axis::Column => self.layout_col(id, content, gap, &kids),
+        if child_count <= INLINE_LAYOUT_CHILDREN {
+            let mut kids = [NodeId(0); INLINE_LAYOUT_CHILDREN];
+            if let Some(node) = self.get(id) {
+                kids[..child_count].copy_from_slice(&node.children);
+            } else {
+                return;
+            }
+            match axis {
+                Axis::Row => self.layout_row(id, content, gap, &kids[..child_count]),
+                Axis::Column => self.layout_col(id, content, gap, &kids[..child_count]),
+            }
+        } else {
+            let kids: alloc::vec::Vec<NodeId> =
+                if let Some(n) = self.get(id) { n.children.clone() } else { return };
+            match axis {
+                Axis::Row => self.layout_row(id, content, gap, &kids),
+                Axis::Column => self.layout_col(id, content, gap, &kids),
+            }
         }
     }
 
@@ -936,22 +862,29 @@ impl NodeTree {
         if id == self.root {
             return;
         }
-        let children = if let Some(node) = self.get(id) {
-            node.children.clone()
-        } else {
+        if self.get(id).is_none() {
             return;
-        };
-        for child in children {
-            self.remove_node(child);
         }
         for slot in self.nodes.iter_mut() {
             if let Some(parent) = slot {
                 parent.children.retain(|c| *c != id);
             }
         }
+        self.remove_subtree(id);
+    }
+
+    fn remove_subtree(&mut self, id: NodeId) {
+        let children = if let Some(node) = self.get_mut(id) {
+            core::mem::take(&mut node.children)
+        } else {
+            return;
+        };
+        for child in children {
+            self.remove_subtree(child);
+        }
         if let Some(slot) = self.nodes.get_mut(id.0 as usize) {
-            *slot = None;
-            if !self.free_list.iter().any(|x| *x == id) {
+            if slot.is_some() {
+                *slot = None;
                 self.free_list.push(id);
             }
         }
@@ -1007,62 +940,4 @@ fn content_rect(style: &NodeStyle, layout: &LayoutRect) -> LayoutRect {
 
 fn point_in_rect(x: f32, y: f32, r: LayoutRect) -> bool {
     x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h
-}
-
-#[cfg(test)]
-mod node_tests {
-    use super::*;
-
-    #[test]
-    fn row_layout_and_hit() {
-        let mut t = NodeTree::new_root(NodeStyle {
-            axis: Axis::Row,
-            size: Size2D { w: Dim::Px(300.0), h: Dim::Px(100.0) },
-            gap: 10.0,
-            padding: Edges { left: 10.0, top: 10.0, right: 10.0, bottom: 10.0 },
-            ..Default::default()
-        });
-        let a = t.add_node(
-            t.root(),
-            NodeStyle {
-                size: Size2D { w: Dim::Px(50.0), h: Dim::Px(50.0) },
-                background: gfx::Color::rgba(1.0, 0.0, 0.0, 1.0),
-                ..Default::default()
-            },
-        );
-        let b = t.add_node(
-            t.root(),
-            NodeStyle {
-                size: Size2D { w: Dim::Px(0.0), h: Dim::Px(50.0) },
-                flex_grow: 1.0,
-                background: gfx::Color::rgba(0.0, 1.0, 0.0, 1.0),
-                ..Default::default()
-            },
-        );
-        t.layout(300.0, 100.0);
-        let na = t.get(a).unwrap();
-        let nb = t.get(b).unwrap();
-        // Root padding 10; gap 10; expect a.x=10, b.x=10+50+10=70
-        assert!((na.layout.x - 10.0).abs() < 0.5);
-        assert!((nb.layout.x - 70.0).abs() < 0.5);
-        // Hit test inside b
-        let hit = t.hit_test(80.0, 20.0).unwrap();
-        assert_eq!(hit.0, b);
-    }
-
-    #[test]
-    fn reuse_node_slots() {
-        let mut t = NodeTree::new_root(NodeStyle { ..Default::default() });
-        let a = t.add_node(t.root(), NodeStyle { ..Default::default() });
-        let b = t.add_node(t.root(), NodeStyle { ..Default::default() });
-        assert_eq!(a.0, 2);
-        assert_eq!(b.0, 3);
-        t.remove_node(a);
-        let c = t.add_node(t.root(), NodeStyle { ..Default::default() });
-        // Slot for `a` should be reused
-        assert_eq!(c.0, a.0);
-        // Removing the root should be a no-op
-        t.remove_node(t.root());
-        assert!(t.get(t.root()).is_some());
-    }
 }

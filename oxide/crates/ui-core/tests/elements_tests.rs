@@ -3,10 +3,12 @@ use oxide_platform_api::{
 };
 use oxide_renderer_api::{Color, DrawCmd, ImageHandle, RectF};
 use oxide_ui_core::elements::{
-    Badge, BadgeState, Overlay, OverlayState, PickerState, PickerStyle, PopupWindow,
-    SlidingSwitchMode, SlidingSwitchState, SlidingSwitchStyle, Spinner, TextInputState,
-    TextValidation,
+    encode_label_text, Align, Badge, BadgeState, ButtonState, ImageUploader, Label, Overlay,
+    OverlayState, PickerState, PickerStyle, PopupWindow, SliderState, SlidingSwitchMode,
+    SlidingSwitchState, SlidingSwitchStyle, Spinner, TextCtx, TextInputState, TextValidation,
+    ToggleState, UICameraView,
 };
+use oxide_ui_core::DrawListBuilder;
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
@@ -293,6 +295,85 @@ fn picker_encode_no_panic() {
 }
 
 #[derive(Default)]
+struct CountingUploader {
+    creates: usize,
+    updates: usize,
+    last_update: Option<(u32, u32, u32, u32, usize)>,
+}
+
+impl ImageUploader for CountingUploader {
+    fn create_a8(
+        &mut self,
+        _w: u32,
+        _h: u32,
+        _data: &[u8],
+        _row_bytes: usize,
+    ) -> oxide_renderer_api::ImageHandle {
+        self.creates += 1;
+        oxide_renderer_api::ImageHandle(41)
+    }
+
+    fn update_a8(
+        &mut self,
+        _handle: oxide_renderer_api::ImageHandle,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        _data: &[u8],
+        row_bytes: usize,
+    ) {
+        self.updates += 1;
+        self.last_update = Some((x, y, w, h, row_bytes));
+    }
+}
+
+#[test]
+fn label_reuses_layout_and_skips_clean_atlas_upload() {
+    let mut text = TextCtx::default();
+    let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let label = Label {
+        text: "Cached label".to_string(),
+        color: Color::rgba(0.1, 0.1, 0.1, 1.0),
+        align: Align::Left,
+        wrap: true,
+        font_id: 0,
+        font_px: 13.0,
+    };
+    let mut builder = DrawListBuilder::new();
+    let mut uploader = CountingUploader::default();
+
+    label.encode(RectF::new(0.0, 0.0, 160.0, 40.0), 2.0, &mut text, &mut uploader, &mut builder);
+    assert_eq!(uploader.creates, 1);
+    assert_eq!(uploader.updates, 1);
+    let Some((_, _, w, h, row_bytes)) = uploader.last_update else {
+        panic!("expected dirty atlas upload");
+    };
+    assert!(w < 1024);
+    assert!(h < 1024);
+    assert_eq!(row_bytes, 1024);
+
+    builder.clear();
+    encode_label_text(
+        "Cached label",
+        Color::rgba(0.1, 0.1, 0.1, 1.0),
+        Align::Left,
+        true,
+        0,
+        13.0,
+        RectF::new(0.0, 0.0, 160.0, 40.0),
+        2.0,
+        &mut text,
+        &mut uploader,
+        &mut builder,
+    );
+    assert_eq!(uploader.creates, 1);
+    assert_eq!(uploader.updates, 1);
+}
+
+#[derive(Default)]
 struct MemoryClipboard {
     buf: RwLock<Option<String>>,
 }
@@ -366,4 +447,72 @@ fn text_input_clipboard_roundtrip() {
     st.focus();
     assert!(st.paste_from_clipboard());
     assert_eq!(st.text(), "oxide");
+
+    st.set_text("aé日b");
+    st.set_selection(1, 3);
+    assert!(st.copy_selection_to_clipboard());
+    assert_eq!(clipboard::read_string(), Some(String::from("é日")));
+    assert!(st.cut_selection_to_clipboard());
+    assert_eq!(st.text(), "ab");
+}
+
+#[test]
+fn camera_view_encodes_draw_cmd() {
+   let mut dl = DrawListBuilder::new();
+   let rect = RectF::new(0.0, 0.0, 320.0, 240.0);
+   let cam = UICameraView {
+      tint: Color::rgba(0.8, 0.7, 0.6, 0.5),
+      alpha: 0.75,
+      grayscale: true,
+      blur: true,
+      sigma: 8.0,
+   };
+   cam.encode(rect, &mut dl);
+   let items = dl.drawlist().items.clone();
+   assert_eq!(items.len(), 1);
+   match &items[0] {
+      DrawCmd::CameraBg { rect: r, tint, alpha, grayscale, blur, sigma } => {
+         assert_eq!(r.x, rect.x);
+         assert_eq!(r.y, rect.y);
+         assert_eq!(r.w, rect.w);
+         assert_eq!(r.h, rect.h);
+         assert!((*alpha - 0.75).abs() < 1e-6);
+         assert!(*grayscale);
+         assert!(*blur);
+         assert!((*sigma - 8.0).abs() < 1e-6);
+         assert!((*tint).r > 0.79 && (*tint).g > 0.69 && (*tint).b > 0.59);
+      }
+      _ => panic!("expected CameraBg draw command"),
+   }
+}
+
+#[test]
+fn button_press_release_tap() {
+   let mut st = ButtonState::default();
+   st.on_pointer_down();
+   assert!(st.is_pressed());
+   let tapped = st.on_pointer_up();
+   assert!(tapped);
+   assert!(!st.is_pressed());
+}
+
+#[test]
+fn toggle_drag_and_tap() {
+   let mut st = ToggleState::default();
+   st.begin_drag(0.0);
+   st.drag_to(50.0, RectF::new(0.0, 0.0, 100.0, 20.0));
+   st.end_drag();
+   assert!(st.on);
+   st.on_tap();
+   assert!(!st.on);
+}
+
+#[test]
+fn slider_keyboard_adjust() {
+   let mut st = SliderState::default();
+   st.set(0.5, Some(0.1));
+   st.arrow_right(Some(0.1));
+   assert!((st.value - 0.6).abs() < 1e-6);
+   st.arrow_left(Some(0.1));
+   assert!((st.value - 0.5).abs() < 1e-6);
 }

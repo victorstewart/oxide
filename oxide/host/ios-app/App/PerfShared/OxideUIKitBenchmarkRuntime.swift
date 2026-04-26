@@ -37,6 +37,7 @@ let perfCameraMaxDrawableCountEnv = "OXIDE_PERF_CAMERA_MAX_DRAWABLE_COUNT"
 let perfCameraPreviewSurfaceScaleEnv = "OXIDE_PERF_CAMERA_PREVIEW_SURFACE_SCALE"
 let perfCameraCaptureContractModeEnv = "OXIDE_PERF_CAMERA_CAPTURE_CONTRACT_MODE"
 let perfCameraStageMeasurementEnv = "OXIDE_PERF_CAMERA_STAGE_MEASUREMENT"
+let perfGpuTimestampsEnv = "OXIDE_PERF_GPU_TIMESTAMPS"
 let perfCameraNoVisiblePresentEnv = "OXIDE_PERF_CAMERA_NO_VISIBLE_PRESENT"
 let perfCameraFrameDrivenSchedulingEnv = "OXIDE_PERF_CAMERA_FRAME_DRIVEN_SCHEDULING"
 let perfCameraPrebridgeDropEnv = "OXIDE_PERF_CAMERA_PREBRIDGE_DROP"
@@ -293,6 +294,27 @@ func cameraStageMeasurementEnabled(
         return false
     }
     guard let raw = environment[perfCameraStageMeasurementEnv]?
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+        !raw.isEmpty
+    else
+    {
+        return true
+    }
+    return raw != "0"
+}
+
+func rendererStageMeasurementEnabled(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+) -> Bool
+{
+    guard environment[parkedCaseEnv].map({ !$0.isEmpty }) == true ||
+          environment[perfOxideRunnerEnv] == "1" ||
+          realAppCameraBenchmarkEnabled(environment: environment)
+    else
+    {
+        return false
+    }
+    guard let raw = environment[perfGpuTimestampsEnv]?
         .trimmingCharacters(in: .whitespacesAndNewlines),
         !raw.isEmpty
     else
@@ -924,6 +946,10 @@ private struct OxideHostStats
     var camGpuRenderMs: Float = 0
     var camGpuVertexMs: Float = 0
     var camGpuFragmentMs: Float = 0
+    var rendererGpuMs: Float = 0
+    var rendererGpuRenderMs: Float = 0
+    var rendererGpuVertexMs: Float = 0
+    var rendererGpuFragmentMs: Float = 0
     var camCaptureTotalMs: Float = 0
     var camCaptureSampleSetupMs: Float = 0
     var camCaptureLockMs: Float = 0
@@ -1916,6 +1942,10 @@ private final class OxideCameraStageAccumulator
         "camera.renderer.direct.gpu_render",
         "camera.renderer.direct.gpu_vertex",
         "camera.renderer.direct.gpu_fragment",
+        "renderer.gpu_total",
+        "renderer.gpu_render",
+        "renderer.gpu_vertex",
+        "renderer.gpu_fragment",
         "camera.capture.total",
         "camera.capture.sample_setup",
         "camera.capture.lock",
@@ -1970,6 +2000,10 @@ private final class OxideCameraStageAccumulator
         append(Double(stats.camGpuRenderMs), for: "camera.renderer.direct.gpu_render")
         append(Double(stats.camGpuVertexMs), for: "camera.renderer.direct.gpu_vertex")
         append(Double(stats.camGpuFragmentMs), for: "camera.renderer.direct.gpu_fragment")
+        append(Double(stats.rendererGpuMs), for: "renderer.gpu_total")
+        append(Double(stats.rendererGpuRenderMs), for: "renderer.gpu_render")
+        append(Double(stats.rendererGpuVertexMs), for: "renderer.gpu_vertex")
+        append(Double(stats.rendererGpuFragmentMs), for: "renderer.gpu_fragment")
         append(Double(stats.camCaptureTotalMs), for: "camera.capture.total")
         append(Double(stats.camCaptureSampleSetupMs), for: "camera.capture.sample_setup")
         append(Double(stats.camCaptureLockMs), for: "camera.capture.lock")
@@ -2012,6 +2046,64 @@ private final class OxideCameraStageAccumulator
             return nil
         }
         return "\(oxideStageSummaryPrefix)\(json)"
+    }
+
+    private func append(_ value: Double, for stageName: String)
+    {
+        let clamped = max(value, 0)
+        valuesByStage[stageName, default: []].append(clamped)
+    }
+}
+
+private final class OxideRendererStageAccumulator
+{
+    private static let orderedStageNames = [
+        "renderer.gpu_total",
+        "renderer.gpu_render",
+        "renderer.gpu_vertex",
+        "renderer.gpu_fragment",
+    ]
+
+    private var valuesByStage: [String: [Double]] = [:]
+
+    init()
+    {
+        reset()
+    }
+
+    func reset()
+    {
+        valuesByStage.removeAll(keepingCapacity: true)
+        for stageName in Self.orderedStageNames
+        {
+            valuesByStage[stageName] = []
+        }
+    }
+
+    func record(stats: OxideHostStats)
+    {
+        append(Double(stats.rendererGpuMs), for: "renderer.gpu_total")
+        append(Double(stats.rendererGpuRenderMs), for: "renderer.gpu_render")
+        append(Double(stats.rendererGpuVertexMs), for: "renderer.gpu_vertex")
+        append(Double(stats.rendererGpuFragmentMs), for: "renderer.gpu_fragment")
+    }
+
+    func summaryLine() -> String?
+    {
+        var stages: [String: OxideStageMetricSummary] = [:]
+        for stageName in Self.orderedStageNames
+        {
+            if let values = valuesByStage[stageName],
+               let summary = summarizeStageSamples(values)
+            {
+                stages[stageName] = summary
+            }
+        }
+        guard !stages.isEmpty else
+        {
+            return nil
+        }
+        return encodeOxideStageSummaryLine(stages: stages)
     }
 
     private func append(_ value: Double, for stageName: String)
@@ -3696,6 +3788,8 @@ private final class OxideOnscreenBenchmarkHarness
     private let sceneIndex: UInt32
     private let metalView: UIView
     private let layer: CAMetalLayer
+    private let stageAccumulator = OxideRendererStageAccumulator()
+    private var recordStageMetrics = false
 
     init?(host: PerfSurfaceHost, benchmarkKey: String)
     {
@@ -3781,6 +3875,23 @@ private final class OxideOnscreenBenchmarkHarness
         }
     }
 
+    func beginStageMeasurement()
+    {
+        stageAccumulator.reset()
+        _ = oxideHostResetAppDebugPerf()
+        recordStageMetrics = true
+    }
+
+    func endStageMeasurement()
+    {
+        recordStageMetrics = false
+    }
+
+    func stageSummaryLine() -> String?
+    {
+        stageAccumulator.summaryLine()
+    }
+
     func runStep(step: Int) -> Bool
     {
         let ok = withBenchmarkKeyBytes
@@ -3843,6 +3954,11 @@ private final class OxideOnscreenBenchmarkHarness
         {
             host.awaitVisiblePresentation()
         }
+        if recordStageMetrics,
+           let stats = readStats()
+        {
+            stageAccumulator.record(stats: stats)
+        }
         return true
     }
 
@@ -3850,6 +3966,16 @@ private final class OxideOnscreenBenchmarkHarness
     {
         let (width, height, scale) = currentDrawableMetrics()
         return oxideHostAppInit(width, height, scale) == 0
+    }
+
+    private func readStats() -> OxideHostStats?
+    {
+        var stats = OxideHostStats()
+        guard oxideHostAppStats(&stats) == 0 else
+        {
+            return nil
+        }
+        return stats
     }
 
     private func currentDrawableMetrics() -> (UInt32, UInt32, Float)
@@ -11574,6 +11700,7 @@ private func makeOxideOnscreenBenchmark(
         benchmarkIterations: iterations,
         defaultValue: 4
     )
+    let collectStageMetrics = rendererStageMeasurementEnabled()
     var step = 0
     return OxideUIKitBenchmark(
         testName: testName,
@@ -11585,7 +11712,24 @@ private func makeOxideOnscreenBenchmark(
         useHostWorkloadSignpost: false,
         prepareIteration: {
             step = 0
+            if collectStageMetrics
+            {
+                harness.beginStageMeasurement()
+            }
             return harness.prepareForMeasuredPass()
+        },
+        summaryLines: {
+            guard collectStageMetrics else
+            {
+                return []
+            }
+            let line = harness.stageSummaryLine()
+            harness.endStageMeasurement()
+            if let line
+            {
+                return [line]
+            }
+            return []
         },
         tearDown: {
             harness.tearDown()

@@ -39,7 +39,7 @@
 
 The crate maintains one authoritative UIKit case table that maps XCTest methods to Oxide benchmark identifiers and contract metadata. That table now spans idiomatic UIKit coverage for components, animation effects, primitive lifecycle slices such as empty-root mount, retained-view remove-all/remount, and a shared control-set mount/mutate case, plus the first hand-optimized UIKit flat-rect family.
 
-Device perf runs reuse the same case mapping but add process-scoped Instruments attachment. CPU metrics still come from XCTest, while GPU timing, GPU counters, and the canonical device phase/signpost timings come from process-scoped Metal System Trace on the same case. Energy remains an optional imported input sourced from manual Power Profiler traces, and the report marks it as manual-pending when those traces are absent.
+Device perf runs reuse the same case mapping but add process-scoped Instruments attachment. CPU metrics still come from XCTest, while external GPU timing, GPU counters, and the canonical device phase/signpost timings come from process-scoped Metal System Trace on the same case. Oxide on-screen rows also merge host-console stage summaries so in-app Metal command-buffer and timestamp-counter timings survive even when Apple rejects the optional Instruments hardware-counter profile. Energy remains an optional imported input sourced from manual Power Profiler traces, and the report marks it as manual-pending when those traces are absent.
 
 The active device harness now trims a large amount of orchestration dead weight out of that path. Launched traces use a small case-aware time-limit buffer instead of a fixed multi-second pad, XCTest outer measurement counts are adaptive by workload family instead of a flat 10/5 policy, and the device trace-settle delay is reduced to a short default for signposted cases. Metrics shards are grouped by environment instead of forcing singleton shards for every UI-test/camera case, prepared `.xctestrun` files are hashed by their environment and only rewritten when their bytes change, and unchanged derived-data builds are reused through a persisted input fingerprint stamp. The device-side `devicectl ... -j` polling path now retries transient streaming/control-channel failures, transient launched `xctrace` wall-time watchdog overruns are retried once instead of aborting the full battery immediately, and `xctrace` reduction walks one parsed trace artifact per case instead of repeatedly re-exporting overlapping table sets.
 
@@ -67,7 +67,7 @@ The report schema carries layer/scenario/style/cache/refresh metadata so the UIK
   - The requested physical-device destination must exist for the official workflow.
   - Imported power traces, when supplied, must correspond to the same workload/device/build being compared.
 - Postconditions:
-  - Successful device runs emit a device report with direct GPU timing and any available GPU counters, plus direct energy when imported traces are present.
+- Successful device runs emit a device report with Oxide in-app GPU timing, external Metal System Trace GPU timing, any available GPU counters, plus direct energy when imported traces are present.
   - The emitted UIKit case rows persist actual measure-loop counts, actual benchmark-loop counts, explicit canonical signpost source, and per-metric provenance/fallback metadata.
   - Repeated unchanged local runs should skip the expensive iOS rebuild path and reuse the previously fingerprinted derived data plus hashed `.xctestrun` variants.
 - Invariants maintained:
@@ -78,3 +78,4 @@ The report schema carries layer/scenario/style/cache/refresh metadata so the UIK
 ## Changelog
 
 - 2026-04-11: Removed the redundant manual `Default` implementation for `UIKitMetricSummary`; the derived default keeps the same metric fallback values while reducing report-schema implementation surface.
+- 2026-04-26: Merged Oxide host-console stage summaries into on-screen device rows so in-app Metal GPU timings are persisted independently of Instruments counter-profile support.

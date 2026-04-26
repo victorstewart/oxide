@@ -73,6 +73,48 @@ fn snapshot_rrect_basic() {
 }
 
 #[test]
+fn snapshot_rrect_instanced_batch_draws_consecutive_rects() {
+    let mut renderer = MetalRenderer::new_default().expect("metal");
+    let width = 128u32;
+    let height = 96u32;
+    renderer.resize(width, height, 1.0).expect("resize");
+
+    let mut list = api::DrawList::default();
+    list.items.push(api::DrawCmd::RRect {
+        rect: api::RectF::new(10.0, 10.0, 28.0, 28.0),
+        radii: [6.0; 4],
+        color: api::Color::rgba(1.0, 0.0, 0.0, 1.0),
+    });
+    list.items.push(api::DrawCmd::RRect {
+        rect: api::RectF::new(50.0, 24.0, 28.0, 28.0),
+        radii: [6.0; 4],
+        color: api::Color::rgba(0.0, 1.0, 0.0, 1.0),
+    });
+    list.items.push(api::DrawCmd::RRect {
+        rect: api::RectF::new(90.0, 58.0, 28.0, 28.0),
+        radii: [6.0; 4],
+        color: api::Color::rgba(0.0, 0.0, 1.0, 1.0),
+    });
+
+    let token = renderer.begin_frame(&api::FrameTarget, None);
+    renderer.encode_pass(&list);
+    renderer.submit(token).expect("submit");
+    let (_rw, _rh, bgra) = renderer.readback_bgra8().expect("readback");
+
+    let pixel = |x: u32, y: u32| -> [u8; 4] {
+        let idx = ((y * width + x) * 4) as usize;
+        [bgra[idx], bgra[idx + 1], bgra[idx + 2], bgra[idx + 3]]
+    };
+
+    let red = pixel(24, 24);
+    assert!(red[2] > 220 && red[1] < 40 && red[0] < 40, "expected first instance red, got {red:?}");
+    let green = pixel(64, 38);
+    assert!(green[1] > 220 && green[2] < 40 && green[0] < 40, "expected second instance green, got {green:?}");
+    let blue = pixel(104, 72);
+    assert!(blue[0] > 220 && blue[1] < 40 && blue[2] < 40, "expected third instance blue, got {blue:?}");
+}
+
+#[test]
 fn snapshot_clip_push_pop_scopes_draws() {
     let mut renderer = MetalRenderer::new_default().expect("metal");
     let width = 128u32;
@@ -216,6 +258,7 @@ fn snapshot_scene3d_mixes_with_2d_overlay() {
         clear_depth: true,
         view_proj: mat4_identity(),
         instances: &instances,
+        bloom: None,
     };
 
     let mut overlay = api::DrawList::default();

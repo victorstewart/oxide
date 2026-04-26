@@ -61,6 +61,9 @@
 ## Performance notes
 - Crate-root re-exports are zero-cost.
 - Consolidating the text-input engines here removes duplicate app-side implementations without adding runtime indirection.
+- `prepare_draws` preallocates the resolved clip stack for the common shallow nested-clip path, avoiding the first frame-loop stack growth on representative clipping workloads.
+- `elements::Label` keeps disabled watch logging off the allocation path, preallocates the common wrapped-line buffers, and lets internal non-wrapped label call sites encode borrowed text directly instead of cloning through temporary `Label` values.
+- Wrapped `elements::Label` now reuses the shaped line outputs it created during width fitting and uploads the text atlas once after all line baking, avoiding the old second shape pass over every final wrapped line.
 
 ## Feature flags and cfgs
 - The text-fields export is always enabled.
@@ -87,6 +90,8 @@ assert_eq!(text.value(), "");
 ```
 
 ## Changelog
+- 2026-04-25: reused wrapped-label shaping results after release-mode A/B showed `cpu.component.label.encode` improving from p50 1155.122 us/op, p95 1165.781 to p50 1013.186 us/op, p95 1037.539 in focused runs, with the refreshed full workspace row at p50 987.312 us/op, p95 1004.876.
+- 2026-04-25: preallocated the `prepare_draws` clip stack after release-mode A/B showed the representative clipping workload improving from p50 6.881 us/op, p95 10.977 to p50 5.368 us/op, p95 5.398.
 - 2026-03-28: moved the legacy iOS modal overlay and popup blur-card contract into shared `elements.rs` popup primitives so downstream apps can draw one common fullscreen/panel blur treatment.
 - 2026-03-28: moved the popup key-window, dismissal approval, touch-exception, and content-size refresh lifecycle contract into shared `overlay.rs` popup primitives so downstream apps stop rebuilding those window semantics locally.
 - 2026-03-28: moved the legacy iOS `Badge` / `BadgeableButton` overlay contract into shared `elements.rs` badge primitives so downstream apps draw the image-backed quarter-size top-right badge instead of a numeric pill.

@@ -8,7 +8,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use oxide_renderer_api as gfx;
 use oxide_ui_core::{
-    elements::{Align, Button, ButtonState, ButtonStyle, ImageUploader, Label, TextCtx},
+    elements::{encode_label_text, Align, Button, ButtonState, ButtonStyle, ImageUploader, Label, TextCtx},
     orchestration::{ScatterOrchestrator, ScatterState, Scatterer},
     overlay::{OverlayBehavior, OverlayHandle, OverlayPointerResult, OverlayStack, OverlayVisual},
     DrawListBuilder, NodeId, NodeStyle, UiSurface,
@@ -396,15 +396,13 @@ impl OrchestrationScene {
         builder.rrect(viewport, [0.0; 4], gfx::Color::rgba(0.96, 0.96, 0.97, 1.0));
 
         // Title
-        let title = Label {
-            text: "UI Orchestration Test".into(),
-            color: gfx::Color::rgba(0.1, 0.1, 0.1, 1.0),
-            align: Align::Center,
-            wrap: false,
-            font_id: 0,
-            font_px: 22.0,
-        };
-        title.encode(
+        encode_label_text(
+            "UI Orchestration Test",
+            gfx::Color::rgba(0.1, 0.1, 0.1, 1.0),
+            Align::Center,
+            false,
+            0,
+            22.0,
             gfx::RectF::new(viewport.x, viewport.y + 5.0, viewport.w, 30.0),
             device_scale,
             text,
@@ -445,15 +443,19 @@ impl OrchestrationScene {
                     builder.rrect(scaled_rect, [8.0; 4], color);
 
                     if scale > 0.5 {
-                        let label = Label {
-                            text: node.label.clone(),
-                            color: gfx::Color::rgba(1.0, 1.0, 1.0, opacity),
-                            align: Align::Center,
-                            wrap: false,
-                            font_id: 0,
-                            font_px: 14.0,
-                        };
-                        label.encode(scaled_rect, device_scale, text, uploader, builder);
+                        encode_label_text(
+                            node.label.as_str(),
+                            gfx::Color::rgba(1.0, 1.0, 1.0, opacity),
+                            Align::Center,
+                            false,
+                            0,
+                            14.0,
+                            scaled_rect,
+                            device_scale,
+                            text,
+                            uploader,
+                            builder,
+                        );
                     }
                 }
             }
@@ -477,15 +479,13 @@ impl OrchestrationScene {
         }
 
         // Draw orchestrator selector
-        let selector_label = Label {
-            text: "Timing:".into(),
-            color: gfx::Color::rgba(0.3, 0.3, 0.3, 1.0),
-            align: Align::Left,
-            wrap: false,
-            font_id: 0,
-            font_px: 12.0,
-        };
-        selector_label.encode(
+        encode_label_text(
+            "Timing:",
+            gfx::Color::rgba(0.3, 0.3, 0.3, 1.0),
+            Align::Left,
+            false,
+            0,
+            12.0,
             gfx::RectF::new(viewport.x + 350.0, viewport.y + 295.0, 100.0, 20.0),
             device_scale,
             text,
@@ -512,31 +512,34 @@ impl OrchestrationScene {
                 },
             );
 
-            let timing_label = Label {
-                text: label.clone(),
-                color: if is_selected {
-                    gfx::Color::rgba(1.0, 1.0, 1.0, 1.0)
-                } else {
-                    gfx::Color::rgba(0.2, 0.2, 0.2, 1.0)
-                },
-                align: Align::Center,
-                wrap: false,
-                font_id: 0,
-                font_px: 11.0,
+            let color = if is_selected {
+                gfx::Color::rgba(1.0, 1.0, 1.0, 1.0)
+            } else {
+                gfx::Color::rgba(0.2, 0.2, 0.2, 1.0)
             };
-            timing_label.encode(rect, device_scale, text, uploader, builder);
+            encode_label_text(
+                label.as_str(),
+                color,
+                Align::Center,
+                false,
+                0,
+                11.0,
+                rect,
+                device_scale,
+                text,
+                uploader,
+                builder,
+            );
         }
 
         // Draw group selector
-        let group_label = Label {
-            text: "Group:".into(),
-            color: gfx::Color::rgba(0.3, 0.3, 0.3, 1.0),
-            align: Align::Left,
-            wrap: false,
-            font_id: 0,
-            font_px: 12.0,
-        };
-        group_label.encode(
+        encode_label_text(
+            "Group:",
+            gfx::Color::rgba(0.3, 0.3, 0.3, 1.0),
+            Align::Left,
+            false,
+            0,
+            12.0,
             gfx::RectF::new(viewport.x + 520.0, viewport.y + 295.0, 100.0, 20.0),
             device_scale,
             text,
@@ -563,19 +566,33 @@ impl OrchestrationScene {
                 },
             );
 
-            let group_text = Label {
-                text: format!("Group {}", i + 1),
-                color: if is_selected {
-                    gfx::Color::rgba(1.0, 1.0, 1.0, 1.0)
-                } else {
-                    gfx::Color::rgba(0.2, 0.2, 0.2, 1.0)
-                },
-                align: Align::Center,
-                wrap: false,
-                font_id: 0,
-                font_px: 11.0,
+            let color = if is_selected {
+                gfx::Color::rgba(1.0, 1.0, 1.0, 1.0)
+            } else {
+                gfx::Color::rgba(0.2, 0.2, 0.2, 1.0)
             };
-            group_text.encode(rect, device_scale, text, uploader, builder);
+            let group_fallback;
+            let label = match i {
+                0 => "Group 1",
+                1 => "Group 2",
+                _ => {
+                    group_fallback = format!("Group {}", i + 1);
+                    group_fallback.as_str()
+                }
+            };
+            encode_label_text(
+                label,
+                color,
+                Align::Center,
+                false,
+                0,
+                11.0,
+                rect,
+                device_scale,
+                text,
+                uploader,
+                builder,
+            );
         }
 
         // Status info

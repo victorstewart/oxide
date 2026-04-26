@@ -632,6 +632,10 @@ typedef struct oxide_host_stats_t {
   float cam_gpu_render_ms;
   float cam_gpu_vertex_ms;
   float cam_gpu_fragment_ms;
+  float renderer_gpu_ms;
+  float renderer_gpu_render_ms;
+  float renderer_gpu_vertex_ms;
+  float renderer_gpu_fragment_ms;
   float cam_capture_total_ms;
   float cam_capture_sample_setup_ms;
   float cam_capture_lock_ms;
@@ -906,6 +910,19 @@ static BOOL OxideTouchScreenLogEnabled(void) {
     NSString *value = [NSProcessInfo.processInfo.environment
         objectForKey:@"OXIDE_TOUCH_LOG_SCREEN"];
     enabled = value != nil && value.intValue != 0;
+    checked = YES;
+  }
+  return enabled;
+}
+
+static BOOL OxideUiScreenLogEnabled(void) {
+  static BOOL checked = NO;
+  static BOOL enabled = NO;
+  if (!checked) {
+    NSString *value = [NSProcessInfo.processInfo.environment
+        objectForKey:@"OXIDE_UI_LOG"];
+    enabled = OxideTouchScreenLogEnabled() ||
+              (value != nil && value.intValue != 0);
     checked = YES;
   }
   return enabled;
@@ -4498,26 +4515,28 @@ static void OxidePerfCameraBenchmarkStartCallback(
   ]];
   self.fpsLabel = fps;
 
-  // Always show a small on-screen log label during debugging
-  UILabel *ll = [UILabel new];
-  ll.translatesAutoresizingMaskIntoConstraints = NO;
-  ll.font = [UIFont monospacedSystemFontOfSize:9 weight:UIFontWeightRegular];
-  ll.textColor = [UIColor colorWithWhite:0.95 alpha:1.0];
-  ll.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.6];
-  ll.numberOfLines = 0;
-  ll.layer.cornerRadius = 4.0;
-  ll.layer.masksToBounds = YES;
-  ll.text = @"UILog ready";
-  [vc.view addSubview:ll];
-  [NSLayoutConstraint activateConstraints:@[
-    [ll.leadingAnchor
-        constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.leadingAnchor
-                       constant:8.0],
-    [ll.bottomAnchor
-        constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.bottomAnchor
-                       constant:-8.0],
-    [ll.widthAnchor constraintLessThanOrEqualToConstant:360.0]
-  ]];
+  UILabel *ll = nil;
+  if (OxideUiScreenLogEnabled()) {
+    ll = [UILabel new];
+    ll.translatesAutoresizingMaskIntoConstraints = NO;
+    ll.font = [UIFont monospacedSystemFontOfSize:9 weight:UIFontWeightRegular];
+    ll.textColor = [UIColor colorWithWhite:0.95 alpha:1.0];
+    ll.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.6];
+    ll.numberOfLines = 0;
+    ll.layer.cornerRadius = 4.0;
+    ll.layer.masksToBounds = YES;
+    ll.text = @"UILog ready";
+    [vc.view addSubview:ll];
+    [NSLayoutConstraint activateConstraints:@[
+      [ll.leadingAnchor
+          constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.leadingAnchor
+                         constant:8.0],
+      [ll.bottomAnchor
+          constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.bottomAnchor
+                         constant:-8.0],
+      [ll.widthAnchor constraintLessThanOrEqualToConstant:360.0]
+    ]];
+  }
   gUILogLabel = ll;
 
   NSMutableArray<NSString *> *sceneItems = [NSMutableArray array];
@@ -4924,7 +4943,9 @@ static void OxidePerfCameraBenchmarkStartCallback(
   self.statusLabel = status;
   if (OxideHostChromeHidden()) {
     fps.hidden = YES;
-    ll.hidden = !OxideTouchScreenLogEnabled();
+    if (ll) {
+      ll.hidden = !OxideUiScreenLogEnabled();
+    }
     controls.hidden = YES;
     status.hidden = YES;
   }
@@ -5346,7 +5367,7 @@ int32_t oxide_host_start(int argc, char **argv) {
   }
 }
 static void UILog(NSString *line) {
-  if (OxideTouchDebugEnabled() && !OxideTouchScreenLogEnabled()) {
+  if (!OxideUiScreenLogEnabled()) {
     return;
   }
   dispatch_on_main(^{

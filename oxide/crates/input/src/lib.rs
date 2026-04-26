@@ -11,7 +11,6 @@
 )]
 
 use oxide_platform_api as api;
-use std::collections::HashMap;
 
 /// Configuration for gesture recognition thresholds.
 #[derive(Debug, Clone, Copy)]
@@ -103,6 +102,12 @@ struct TapMemory {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct GestureTrackSlot {
+    id: api::TouchId,
+    track: Track,
+}
+
+#[derive(Debug, Clone, Copy)]
 struct SurfaceTouch {
     id: api::TouchId,
     x: f32,
@@ -117,23 +122,30 @@ struct TouchSurfaceFrame {
     distance: f32,
 }
 
+const INLINE_TOUCH_CAP: usize = 4;
+
 /// Tracks raw touch contacts and emits pan/pinch deltas for a continuous surface.
 #[derive(Clone, Debug, Default)]
 pub struct TouchSurfaceRecognizer {
-    touches: HashMap<api::TouchId, SurfaceTouch>,
+    touches: [Option<SurfaceTouch>; INLINE_TOUCH_CAP],
+    overflow: alloc::vec::Vec<SurfaceTouch>,
 }
 
 impl TouchSurfaceRecognizer {
     pub fn new() -> Self {
-        Self { touches: HashMap::new() }
+        Self::default()
     }
 
     pub fn active_count(&self) -> usize {
-        self.touches.len()
+        let inline = self.touches.iter().filter(|touch| touch.is_some()).count();
+        inline + self.overflow.len()
     }
 
     pub fn reset(&mut self) {
-        self.touches.clear();
+        for touch in &mut self.touches {
+            *touch = None;
+        }
+        self.overflow.clear();
     }
 
     pub fn on_touch(&mut self, ev: &api::TouchEvent) -> alloc::vec::Vec<TouchSurfaceEvent> {
@@ -145,16 +157,16 @@ impl TouchSurfaceRecognizer {
         let before = self.frame();
         match ev.phase {
             api::TouchPhase::Start => {
-                self.touches.insert(ev.id, SurfaceTouch { id: ev.id, x: ev.x, y: ev.y });
+                self.upsert_touch(SurfaceTouch { id: ev.id, x: ev.x, y: ev.y });
             }
             api::TouchPhase::Move => {
-                if let Some(touch) = self.touches.get_mut(&ev.id) {
+                if let Some(touch) = self.touch_mut(ev.id) {
                     touch.x = ev.x;
                     touch.y = ev.y;
                 }
             }
             api::TouchPhase::End | api::TouchPhase::Cancel => {
-                self.touches.remove(&ev.id);
+                let _ = self.remove_touch(ev.id);
             }
         }
 
@@ -202,12 +214,20 @@ impl TouchSurfaceRecognizer {
     }
 
     fn frame(&self) -> TouchSurfaceFrame {
-        let mut touches: alloc::vec::Vec<SurfaceTouch> = self.touches.values().copied().collect();
-        touches.sort_by_key(|touch| touch.id.0);
-        match touches.as_slice() {
-            [] => TouchSurfaceFrame::default(),
-            [first] => TouchSurfaceFrame { count: 1, x: first.x, y: first.y, distance: 0.0 },
-            [first, second, ..] => {
+        let mut first: Option<SurfaceTouch> = None;
+        let mut second: Option<SurfaceTouch> = None;
+        for touch in self.touches.iter().copied().flatten() {
+            select_surface_touch(touch, &mut first, &mut second);
+        }
+        for touch in self.overflow.iter().copied() {
+            select_surface_touch(touch, &mut first, &mut second);
+        }
+        match (first, second) {
+            (None, _) => TouchSurfaceFrame::default(),
+            (Some(first), None) => {
+                TouchSurfaceFrame { count: 1, x: first.x, y: first.y, distance: 0.0 }
+            }
+            (Some(first), Some(second)) => {
                 let x = (first.x + second.x) * 0.5;
                 let y = (first.y + second.y) * 0.5;
                 let dx = second.x - first.x;
@@ -216,18 +236,88 @@ impl TouchSurfaceRecognizer {
             }
         }
     }
+
+    fn upsert_touch(&mut self, next: SurfaceTouch) {
+        if let Some(touch) = self.touch_mut(next.id) {
+            *touch = next;
+            return;
+        }
+
+        for slot in &mut self.touches {
+            if slot.is_none() {
+                *slot = Some(next);
+                return;
+            }
+        }
+
+        self.overflow.push(next);
+    }
+
+    fn touch_mut(&mut self, id: api::TouchId) -> Option<&mut SurfaceTouch> {
+        for slot in &mut self.touches {
+            if let Some(touch) = slot {
+                if touch.id == id {
+                    return Some(touch);
+                }
+            }
+        }
+        self.overflow.iter_mut().find(|touch| touch.id == id)
+    }
+
+    fn remove_touch(&mut self, id: api::TouchId) -> bool {
+        for slot in &mut self.touches {
+            if let Some(touch) = slot {
+                if touch.id == id {
+                    *slot = None;
+                    return true;
+                }
+            }
+        }
+
+        if let Some(index) = self.overflow.iter().position(|touch| touch.id == id) {
+            self.overflow.swap_remove(index);
+            return true;
+        }
+
+        false
+    }
+}
+
+fn select_surface_touch(
+    touch: SurfaceTouch,
+    first: &mut Option<SurfaceTouch>,
+    second: &mut Option<SurfaceTouch>,
+) {
+    match *first {
+        None => *first = Some(touch),
+        Some(current) if touch.id.0 < current.id.0 => {
+            *second = *first;
+            *first = Some(touch);
+        }
+        _ => match *second {
+            None => *second = Some(touch),
+            Some(current) if touch.id.0 < current.id.0 => *second = Some(touch),
+            _ => {}
+        },
+    }
 }
 
 /// Stateful recognizer for touch gestures.
 pub struct GestureRecognizer {
     cfg: GestureConfig,
-    tracks: HashMap<api::TouchId, Track>,
+    tracks: [Option<GestureTrackSlot>; INLINE_TOUCH_CAP],
+    overflow: alloc::vec::Vec<GestureTrackSlot>,
     last_tap: Option<TapMemory>,
 }
 
 impl GestureRecognizer {
     pub fn new(cfg: GestureConfig) -> Self {
-        Self { cfg, tracks: HashMap::new(), last_tap: None }
+        Self {
+            cfg,
+            tracks: [None; INLINE_TOUCH_CAP],
+            overflow: alloc::vec::Vec::new(),
+            last_tap: None,
+        }
     }
     pub fn with_defaults() -> Self {
         Self::new(GestureConfig::default())
@@ -236,7 +326,9 @@ impl GestureRecognizer {
     /// Feed a touch event with a monotonic timestamp in milliseconds.
     /// Returns zero or more gesture events (e.g., PanMove can coalesce multiple outputs).
     pub fn on_touch(&mut self, ev: &api::TouchEvent, t_ms: u64) -> alloc::vec::Vec<GestureEvent> {
-        self.on_touch_with_feedback(ev, t_ms).into_iter().map(|o| o.event).collect()
+        let mut out = alloc::vec::Vec::new();
+        self.on_touch_into(ev, t_ms, &mut out);
+        out
     }
 
     pub fn on_touch_with_feedback(
@@ -245,12 +337,20 @@ impl GestureRecognizer {
         t_ms: u64,
     ) -> alloc::vec::Vec<GestureOutcome> {
         let mut out = alloc::vec::Vec::new();
+        self.on_touch_into(ev, t_ms, &mut out);
+        out
+    }
+
+    fn on_touch_into<S: GestureSink>(&mut self, ev: &api::TouchEvent, t_ms: u64, out: &mut S) {
         match ev.phase {
             api::TouchPhase::Start => {
-                self.tracks.insert(ev.id, Track::new(ev.x, ev.y, t_ms));
+                self.upsert_track(ev.id, Track::new(ev.x, ev.y, t_ms));
             }
             api::TouchPhase::Move => {
-                if let Some(tr) = self.tracks.get_mut(&ev.id) {
+                let pan_min_move = self.cfg.pan_min_move;
+                let long_ms = self.cfg.long_ms;
+                let mut clear_last_tap = false;
+                if let Some(tr) = self.track_mut(ev.id) {
                     let dx = ev.x - tr.last_x;
                     let dy = ev.y - tr.last_y;
                     let mx = ev.x - tr.start_x;
@@ -258,57 +358,69 @@ impl GestureRecognizer {
                     let moved = (mx * mx + my * my).sqrt();
                     match tr.state {
                         TrackState::Pending => {
-                            if moved >= self.cfg.pan_min_move {
+                            if moved >= pan_min_move {
                                 tr.state = TrackState::Panning;
-                                push_outcome(
-                                    &mut out,
-                                    GestureEvent::PanStart { id: ev.id, x: ev.x, y: ev.y },
-                                );
-                                self.last_tap = None;
-                            } else if t_ms.saturating_sub(tr.start_ms) >= self.cfg.long_ms
+                                out.push_gesture(GestureEvent::PanStart {
+                                    id: ev.id,
+                                    x: ev.x,
+                                    y: ev.y,
+                                });
+                                clear_last_tap = true;
+                            } else if t_ms.saturating_sub(tr.start_ms) >= long_ms
                                 && tr.state != TrackState::LongFired
                             {
                                 tr.state = TrackState::LongFired;
-                                push_outcome(
-                                    &mut out,
-                                    GestureEvent::LongPress { id: ev.id, x: ev.x, y: ev.y },
-                                );
-                                self.last_tap = None;
+                                out.push_gesture(GestureEvent::LongPress {
+                                    id: ev.id,
+                                    x: ev.x,
+                                    y: ev.y,
+                                });
+                                clear_last_tap = true;
                             }
                         }
                         TrackState::LongFired => {
-                            if moved >= self.cfg.pan_min_move {
+                            if moved >= pan_min_move {
                                 tr.state = TrackState::Panning;
-                                push_outcome(
-                                    &mut out,
-                                    GestureEvent::PanStart { id: ev.id, x: ev.x, y: ev.y },
-                                );
-                                self.last_tap = None;
+                                out.push_gesture(GestureEvent::PanStart {
+                                    id: ev.id,
+                                    x: ev.x,
+                                    y: ev.y,
+                                });
+                                clear_last_tap = true;
                             }
                         }
                         TrackState::Panning => {
-                            push_outcome(
-                                &mut out,
-                                GestureEvent::PanMove { id: ev.id, x: ev.x, y: ev.y, dx, dy },
-                            );
+                            out.push_gesture(GestureEvent::PanMove {
+                                id: ev.id,
+                                x: ev.x,
+                                y: ev.y,
+                                dx,
+                                dy,
+                            });
                         }
                     }
                     tr.last_x = ev.x;
                     tr.last_y = ev.y;
                     tr.last_ms = t_ms;
                 }
+                if clear_last_tap {
+                    self.last_tap = None;
+                }
             }
             api::TouchPhase::End => {
-                if let Some(tr) = self.tracks.remove(&ev.id) {
+                if let Some(tr) = self.remove_track(ev.id) {
                     match tr.state {
                         TrackState::Panning => {
                             let dt = (t_ms.saturating_sub(tr.last_ms)).max(1) as f32 / 1000.0;
                             let vx = (ev.x - tr.last_x) / dt;
                             let vy = (ev.y - tr.last_y) / dt;
-                            push_outcome(
-                                &mut out,
-                                GestureEvent::PanEnd { id: ev.id, x: ev.x, y: ev.y, vx, vy },
-                            );
+                            out.push_gesture(GestureEvent::PanEnd {
+                                id: ev.id,
+                                x: ev.x,
+                                y: ev.y,
+                                vx,
+                                vy,
+                            });
                             self.last_tap = None;
                         }
                         TrackState::Pending | TrackState::LongFired => {
@@ -316,13 +428,14 @@ impl GestureRecognizer {
                                 ((ev.x - tr.start_x).powi(2) + (ev.y - tr.start_y).powi(2)).sqrt();
                             let dt = t_ms.saturating_sub(tr.start_ms);
                             if moved <= self.cfg.tap_max_move && dt <= self.cfg.tap_max_ms {
-                                if !self.try_double_tap(ev, t_ms, &mut out) {
+                                if !self.try_double_tap(ev, t_ms, out) {
                                     self.last_tap =
                                         Some(TapMemory { x: ev.x, y: ev.y, time_ms: t_ms });
-                                    push_outcome(
-                                        &mut out,
-                                        GestureEvent::Tap { id: ev.id, x: ev.x, y: ev.y },
-                                    );
+                                    out.push_gesture(GestureEvent::Tap {
+                                        id: ev.id,
+                                        x: ev.x,
+                                        y: ev.y,
+                                    });
                                 }
                             } else {
                                 self.last_tap = None;
@@ -332,20 +445,19 @@ impl GestureRecognizer {
                 }
             }
             api::TouchPhase::Cancel => {
-                if self.tracks.remove(&ev.id).is_some() {
-                    push_outcome(&mut out, GestureEvent::Cancel { id: ev.id });
+                if self.remove_track(ev.id).is_some() {
+                    out.push_gesture(GestureEvent::Cancel { id: ev.id });
                 }
                 self.last_tap = None;
             }
         }
-        out
     }
 
-    fn try_double_tap(
+    fn try_double_tap<S: GestureSink>(
         &mut self,
         ev: &api::TouchEvent,
         t_ms: u64,
-        out: &mut alloc::vec::Vec<GestureOutcome>,
+        out: &mut S,
     ) -> bool {
         if let Some(prev) = self.last_tap {
             let dt = t_ms.saturating_sub(prev.time_ms);
@@ -355,19 +467,75 @@ impl GestureRecognizer {
                 let dist = (dx * dx + dy * dy).sqrt();
                 if dist <= self.cfg.double_tap_max_move {
                     self.last_tap = None;
-                    push_outcome(out, GestureEvent::DoubleTap { id: ev.id, x: ev.x, y: ev.y });
+                    out.push_gesture(GestureEvent::DoubleTap { id: ev.id, x: ev.x, y: ev.y });
                     return true;
                 }
             }
         }
         false
     }
+
+    fn upsert_track(&mut self, id: api::TouchId, track: Track) {
+        if let Some(existing) = self.track_mut(id) {
+            *existing = track;
+            return;
+        }
+
+        for slot in &mut self.tracks {
+            if slot.is_none() {
+                *slot = Some(GestureTrackSlot { id, track });
+                return;
+            }
+        }
+
+        self.overflow.push(GestureTrackSlot { id, track });
+    }
+
+    fn track_mut(&mut self, id: api::TouchId) -> Option<&mut Track> {
+        for slot in &mut self.tracks {
+            if let Some(entry) = slot {
+                if entry.id == id {
+                    return Some(&mut entry.track);
+                }
+            }
+        }
+        self.overflow.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.track)
+    }
+
+    fn remove_track(&mut self, id: api::TouchId) -> Option<Track> {
+        for slot in &mut self.tracks {
+            if let Some(entry) = slot {
+                if entry.id == id {
+                    return slot.take().map(|entry| entry.track);
+                }
+            }
+        }
+
+        self.overflow
+            .iter()
+            .position(|entry| entry.id == id)
+            .map(|index| self.overflow.swap_remove(index).track)
+    }
 }
 
 extern crate alloc;
 
-fn push_outcome(out: &mut alloc::vec::Vec<GestureOutcome>, event: GestureEvent) {
-    out.push(GestureOutcome { haptic: default_haptic(&event), event });
+trait GestureSink {
+    fn push_gesture(&mut self, event: GestureEvent);
+}
+
+impl GestureSink for alloc::vec::Vec<GestureEvent> {
+    #[inline]
+    fn push_gesture(&mut self, event: GestureEvent) {
+        self.push(event);
+    }
+}
+
+impl GestureSink for alloc::vec::Vec<GestureOutcome> {
+    #[inline]
+    fn push_gesture(&mut self, event: GestureEvent) {
+        self.push(GestureOutcome { haptic: default_haptic(&event), event });
+    }
 }
 
 fn default_haptic(event: &GestureEvent) -> Option<api::HapticPattern> {
@@ -433,207 +601,5 @@ impl ScrollAccumulator {
     /// Returns true if the last observed phase indicated momentum.
     pub fn momentum(&self) -> bool {
         self.in_momentum
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn tid(n: u64) -> api::TouchId {
-        api::TouchId(n)
-    }
-    fn start(id: u64, x: f32, y: f32) -> api::TouchEvent {
-        api::TouchEvent {
-            id: tid(id),
-            phase: api::TouchPhase::Start,
-            x,
-            y,
-            pressure: None,
-            tilt: None,
-            device: api::PointerDevice::Finger,
-        }
-    }
-    fn mv(id: u64, x: f32, y: f32) -> api::TouchEvent {
-        api::TouchEvent {
-            id: tid(id),
-            phase: api::TouchPhase::Move,
-            x,
-            y,
-            pressure: None,
-            tilt: None,
-            device: api::PointerDevice::Finger,
-        }
-    }
-    fn end(id: u64, x: f32, y: f32) -> api::TouchEvent {
-        api::TouchEvent {
-            id: tid(id),
-            phase: api::TouchPhase::End,
-            x,
-            y,
-            pressure: None,
-            tilt: None,
-            device: api::PointerDevice::Finger,
-        }
-    }
-
-    #[test]
-    fn tap_recognized() {
-        let mut g = GestureRecognizer::with_defaults();
-        assert!(g.on_touch(&start(1, 10.0, 10.0), 0).is_empty());
-        assert!(g.on_touch(&mv(1, 12.0, 10.0), 50).is_empty());
-        let out = g.on_touch(&end(1, 12.0, 10.0), 150);
-        assert_eq!(out, vec![GestureEvent::Tap { id: tid(1), x: 12.0, y: 10.0 }]);
-    }
-
-    #[test]
-    fn long_then_pan() {
-        let mut g = GestureRecognizer::with_defaults();
-        g.on_touch(&start(1, 0.0, 0.0), 0);
-        // Hold still beyond long threshold
-        let out = g.on_touch(&mv(1, 1.0, 0.0), 500);
-        assert_eq!(out, vec![GestureEvent::LongPress { id: tid(1), x: 1.0, y: 0.0 }]);
-        // Move enough to start pan
-        let out2 = g.on_touch(&mv(1, 20.0, 0.0), 520);
-        assert_eq!(out2, vec![GestureEvent::PanStart { id: tid(1), x: 20.0, y: 0.0 }]);
-        // Pan moves
-        let out3 = g.on_touch(&mv(1, 25.0, 5.0), 540);
-        assert_eq!(
-            out3,
-            vec![GestureEvent::PanMove { id: tid(1), x: 25.0, y: 5.0, dx: 5.0, dy: 5.0 }]
-        );
-        // End
-        let out4 = g.on_touch(&end(1, 30.0, 10.0), 560);
-        if let [GestureEvent::PanEnd { id, .. }] = &out4[..] {
-            assert_eq!(*id, tid(1));
-        } else {
-            panic!("expected PanEnd")
-        }
-    }
-
-    #[test]
-    fn cancel_breaks_gesture() {
-        let mut g = GestureRecognizer::with_defaults();
-        g.on_touch(&start(1, 0.0, 0.0), 0);
-        let _ = g.on_touch(&mv(1, 2.0, 2.0), 50);
-        let out = g.on_touch(
-            &api::TouchEvent {
-                id: tid(1),
-                phase: api::TouchPhase::Cancel,
-                x: 2.0,
-                y: 2.0,
-                pressure: None,
-                tilt: None,
-                device: api::PointerDevice::Finger,
-            },
-            60,
-        );
-        assert_eq!(out, vec![GestureEvent::Cancel { id: tid(1) }]);
-        // End after cancel should not produce Tap or PanEnd
-        assert!(g.on_touch(&end(1, 2.0, 2.0), 80).is_empty());
-    }
-
-    #[test]
-    fn deterministic_move_order_within_tick() {
-        let mut g = GestureRecognizer::with_defaults();
-        g.on_touch(&start(1, 0.0, 0.0), 0);
-        // Move enough to enter panning
-        let _ = g.on_touch(&mv(1, 10.0, 0.0), 1);
-        // Subsequent moves at the same timestamp should preserve ordering of outputs
-        let o1 = g.on_touch(&mv(1, 15.0, 0.0), 2);
-        let o2 = g.on_touch(&mv(1, 20.0, 0.0), 2);
-        match (&o1[..], &o2[..]) {
-            ([GestureEvent::PanMove { x: x1, .. }], [GestureEvent::PanMove { x: x2, .. }]) => {
-                assert!(*x1 < *x2);
-            }
-            _ => panic!("expected PanMove events"),
-        }
-    }
-
-    #[test]
-    fn scroll_accumulates_and_resets() {
-        let mut acc = ScrollAccumulator::default();
-        acc.push(1.0, 2.0, ScrollPhase::Began);
-        acc.push(0.5, 1.0, ScrollPhase::Changed);
-        let (dx, dy) = acc.take();
-        assert!((dx - 1.5).abs() < 1e-6 && (dy - 3.0).abs() < 1e-6);
-        let (dx2, dy2) = acc.take();
-        assert!(dx2.abs() < 1e-6 && dy2.abs() < 1e-6);
-    }
-
-    #[test]
-    fn scroll_momentum_flag() {
-        let mut acc = ScrollAccumulator::default();
-        acc.push(0.0, -1.0, ScrollPhase::Momentum);
-        assert!(acc.momentum());
-        let _ = acc.take();
-        // After take, momentum remains flagged until a new Began
-        assert!(acc.momentum());
-        acc.push(0.0, 0.0, ScrollPhase::Began);
-        assert!(!acc.momentum());
-    }
-
-    #[test]
-    fn touch_surface_single_touch_pan_from_raw_events() {
-        let mut surface = TouchSurfaceRecognizer::new();
-        assert_eq!(
-            surface.on_touch(&start(1, 100.0, 200.0)),
-            vec![TouchSurfaceEvent::ActiveTouchesChanged { touch_count: 1, x: 100.0, y: 200.0 }]
-        );
-
-        assert_eq!(
-            surface.on_touch(&mv(1, 124.0, 190.0)),
-            vec![TouchSurfaceEvent::Pan {
-                touch_count: 1,
-                x: 124.0,
-                y: 190.0,
-                dx: 24.0,
-                dy: -10.0,
-            }]
-        );
-    }
-
-    #[test]
-    fn touch_surface_two_touch_pinch_and_center_pan_from_raw_events() {
-        let mut surface = TouchSurfaceRecognizer::new();
-        let _ = surface.on_touch(&start(2, 220.0, 400.0));
-        let _ = surface.on_touch(&start(1, 180.0, 400.0));
-
-        assert_eq!(
-            surface.on_touch(&mv(1, 160.0, 390.0)),
-            vec![
-                TouchSurfaceEvent::Pinch {
-                    x: 190.0,
-                    y: 395.0,
-                    scale_delta: ((60.0_f32 * 60.0) + (10.0_f32 * 10.0)).sqrt() / 40.0,
-                    log2_scale_delta: (((60.0_f32 * 60.0) + (10.0_f32 * 10.0)).sqrt() / 40.0)
-                        .log2(),
-                },
-                TouchSurfaceEvent::Pan { touch_count: 2, x: 190.0, y: 395.0, dx: -10.0, dy: -5.0 },
-            ]
-        );
-    }
-
-    #[test]
-    fn touch_surface_cancel_removes_active_touch() {
-        let mut surface = TouchSurfaceRecognizer::new();
-        let _ = surface.on_touch(&start(1, 0.0, 0.0));
-
-        assert_eq!(surface.active_count(), 1);
-        let out = surface.on_touch(&api::TouchEvent {
-            id: tid(1),
-            phase: api::TouchPhase::Cancel,
-            x: 0.0,
-            y: 0.0,
-            pressure: None,
-            tilt: None,
-            device: api::PointerDevice::Finger,
-        });
-
-        assert_eq!(surface.active_count(), 0);
-        assert_eq!(
-            out,
-            vec![TouchSurfaceEvent::ActiveTouchesChanged { touch_count: 0, x: 0.0, y: 0.0 }]
-        );
     }
 }

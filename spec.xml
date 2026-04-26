@@ -942,9 +942,9 @@ fn main()
   </section>
 
   <section number="24" title="Coding standards">
-    <rustfmt>Follow repository rustfmt.toml for Rust formatting.</rustfmt>
+    <rustfmt>Formatting is manual; do not run cargo fmt in this repository.</rustfmt>
     <clangformat>Follow repository .clang-format for Objective‑C files.</clangformat>
-    <lint>Enable clippy:pedantic for ui-core and renderer crates; CI treats warnings as errors.</lint>
+    <lint>Do not run cargo clippy in this repository; use focused tests and perf checks instead.</lint>
   </section>
 
   <section number="25" title="Docs, licensing, CI">

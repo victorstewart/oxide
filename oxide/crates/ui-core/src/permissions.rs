@@ -262,23 +262,8 @@ impl PermissionOverlayUi {
             text_color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
             press_animation_ms: 100,
         };
-        let button = elements::Button { text: button_text.clone(), style: button_style };
-        let label = elements::Label {
-            text: button_text,
-            color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
-            align: elements::Align::Center,
-            wrap: false,
-            font_id: 0,
-            font_px: 15.0,
-        };
+        let button = elements::Button { text: button_text, style: button_style };
         button.encode(button_rect, device_scale, text, uploader, &self.button_state, builder);
-        label.encode(
-            gfx::RectF::new(button_rect.x, button_rect.y + 12.0, button_rect.w, 18.0),
-            device_scale,
-            text,
-            uploader,
-            builder,
-        );
     }
 
     pub fn pointer_event(&mut self, x: f32, y: f32, buttons: u32) -> Option<PermissionDomain> {

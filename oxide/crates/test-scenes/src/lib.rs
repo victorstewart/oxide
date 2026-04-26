@@ -1757,14 +1757,6 @@ impl InputLab {
     ) {
         b.rrect(vp, [0.0; 4], gfx::Color::rgba(0.95, 0.97, 1.0, 1.0));
 
-        let header = elements::Label {
-            text: "Input & Haptics".into(),
-            color: gfx::Color::rgba(0.1, 0.1, 0.1, 1.0),
-            align: elements::Align::Left,
-            wrap: false,
-            font_id: 0,
-            font_px: 18.0,
-        };
         if self.form_layout.ensure_layout(vp) {
             self.refresh_rect_cache();
         }
@@ -1773,7 +1765,19 @@ impl InputLab {
             .form_layout
             .rect(self.form_layout.nodes.header)
             .unwrap_or(gfx::RectF::new(vp.x + 18.0, vp.y + 18.0, vp.w - 36.0, 26.0));
-        header.encode(header_rect, ds, text, up, b);
+        elements::encode_label_text(
+            "Input & Haptics",
+            gfx::Color::rgba(0.1, 0.1, 0.1, 1.0),
+            elements::Align::Left,
+            false,
+            0,
+            18.0,
+            header_rect,
+            ds,
+            text,
+            up,
+            b,
+        );
 
         let username_rect = self.rect_for_node(self.last_username_rect, self.username_node);
         self.username_widget.encode(&self.username_input, username_rect, ds, text, up, b);
@@ -1822,21 +1826,25 @@ impl InputLab {
         );
         self.picker.encode(&picker_style, picker_rect, ds, text, up, b);
 
-        let picker_title = elements::Label {
-            text: alloc::string::String::from("Role Picker"),
-            color: gfx::Color::rgba(0.18, 0.22, 0.32, picker_alpha.max(0.1)),
-            align: elements::Align::Left,
-            wrap: false,
-            font_id: 0,
-            font_px: 14.0,
-        };
         let picker_title_rect = gfx::RectF::new(
             picker_panel.x + 12.0,
             picker_panel.y + 8.0,
             picker_panel.w - 24.0,
             20.0,
         );
-        picker_title.encode(picker_title_rect, ds, text, up, b);
+        elements::encode_label_text(
+            "Role Picker",
+            gfx::Color::rgba(0.18, 0.22, 0.32, picker_alpha.max(0.1)),
+            elements::Align::Left,
+            false,
+            0,
+            14.0,
+            picker_title_rect,
+            ds,
+            text,
+            up,
+            b,
+        );
 
         let logs_rect =
             self.form_layout.rect(self.form_layout.nodes.logs).unwrap_or(gfx::RectF::new(
@@ -1846,30 +1854,42 @@ impl InputLab {
                 vp.h - (submit_rect.y + 110.0),
             ));
         b.rrect(logs_rect, [10.0; 4], gfx::Color::rgba(1.0, 1.0, 1.0, 0.65));
-        let mut log_text = alloc::string::String::from("Event Log:");
-        if self.logs.is_empty() {
-            log_text.push_str("\n- none yet");
-        } else {
-            for entry in self.logs.iter().rev() {
-                log_text.push_str("\n- ");
-                log_text.push_str(entry);
-            }
-        }
-        let log_label = elements::Label {
-            text: log_text,
-            color: gfx::Color::rgba(0.16, 0.18, 0.24, 1.0),
-            align: elements::Align::Left,
-            wrap: true,
-            font_id: 0,
-            font_px: 13.0,
-        };
         let logs_text_rect = gfx::RectF::new(
             logs_rect.x + 12.0,
             logs_rect.y + 12.0,
             logs_rect.w - 24.0,
             logs_rect.h - 24.0,
         );
-        log_label.encode(logs_text_rect, ds, text, up, b);
+        if self.logs.is_empty() {
+            elements::encode_label_text(
+                "Event Log:\n- none yet",
+                gfx::Color::rgba(0.16, 0.18, 0.24, 1.0),
+                elements::Align::Left,
+                true,
+                0,
+                13.0,
+                logs_text_rect,
+                ds,
+                text,
+                up,
+                b,
+            );
+        } else {
+            let mut log_text = alloc::string::String::from("Event Log:");
+            for entry in self.logs.iter().rev() {
+                log_text.push_str("\n- ");
+                log_text.push_str(entry);
+            }
+            let log_label = elements::Label {
+                text: log_text,
+                color: gfx::Color::rgba(0.16, 0.18, 0.24, 1.0),
+                align: elements::Align::Left,
+                wrap: true,
+                font_id: 0,
+                font_px: 13.0,
+            };
+            log_label.encode(logs_text_rect, ds, text, up, b);
+        }
 
         if self.overlay_view.encode(&self.overlay, vp, ds, b) {
             let popup_w = vp.w.min(420.0);
@@ -1890,15 +1910,13 @@ impl InputLab {
                 base_popup.h * scale,
             );
             self.popup.encode(popup_rect, ds, b);
-            let overlay_label = elements::Label {
-                text: self.overlay_message.clone(),
-                color: gfx::Color::rgba(0.12, 0.14, 0.20, 1.0),
-                align: elements::Align::Left,
-                wrap: true,
-                font_id: 0,
-                font_px: 15.0,
-            };
-            overlay_label.encode(
+            elements::encode_label_text(
+                self.overlay_message.as_str(),
+                gfx::Color::rgba(0.12, 0.14, 0.20, 1.0),
+                elements::Align::Left,
+                true,
+                0,
+                15.0,
                 gfx::RectF::new(
                     popup_rect.x + 20.0,
                     popup_rect.y + 20.0,

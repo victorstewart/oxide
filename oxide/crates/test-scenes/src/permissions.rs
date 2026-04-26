@@ -12,8 +12,8 @@ use oxide_renderer_api as gfx;
 use oxide_timing as timing;
 use oxide_ui_core::{
     elements::{
-        Align, Button, ButtonState, ButtonStyle, ImageUploader, Label, TextCtx, Toggle,
-        ToggleState, ToggleStyle,
+        encode_label_text, Align, Button, ButtonState, ButtonStyle, ImageUploader, Label, TextCtx,
+        Toggle, ToggleState, ToggleStyle,
     },
     permissions::PermissionOverlayUi,
     DrawListBuilder,
@@ -103,6 +103,19 @@ impl PermissionCard {
             PermissionStatus::Authorized => "Authorized",
             PermissionStatus::Denied => "Denied",
             PermissionStatus::Limited => "Limited",
+        }
+    }
+
+    fn domain_label(&self) -> &'static str {
+        match self.domain {
+            PermissionDomain::Camera => "Camera",
+            PermissionDomain::Microphone => "Microphone",
+            PermissionDomain::Location => "Location",
+            PermissionDomain::Bluetooth => "Bluetooth",
+            PermissionDomain::Motion => "Motion",
+            PermissionDomain::Notifications => "Notifications",
+            PermissionDomain::Contacts => "Contacts",
+            PermissionDomain::MediaLibrary => "MediaLibrary",
         }
     }
 }
@@ -247,7 +260,8 @@ impl PermissionsScene {
         self.show_overlay_toggle.1.step(dt_ms);
 
         // Sync permission states
-        self.permission_states = self.cards.iter().map(|card| card.state).collect();
+        self.permission_states.clear();
+        self.permission_states.extend(self.cards.iter().map(|card| card.state));
 
         // Update overlay UI with current states
         if self.show_overlay {
@@ -410,15 +424,13 @@ impl PermissionsScene {
         builder.rrect(viewport, [0.0; 4], gfx::Color::rgba(0.97, 0.97, 0.98, 1.0));
 
         // Title
-        let title = Label {
-            text: "Permissions UI Test - All 8 Domains".into(),
-            color: gfx::Color::rgba(0.1, 0.1, 0.1, 1.0),
-            align: Align::Center,
-            wrap: false,
-            font_id: 0,
-            font_px: 22.0,
-        };
-        title.encode(
+        encode_label_text(
+            "Permissions UI Test - All 8 Domains",
+            gfx::Color::rgba(0.1, 0.1, 0.1, 1.0),
+            Align::Center,
+            false,
+            0,
+            22.0,
             gfx::RectF::new(viewport.x, viewport.y + 5.0, viewport.w, 30.0),
             device_scale,
             text,
@@ -433,24 +445,24 @@ impl PermissionsScene {
             let x = viewport.x + 50.0 + col as f32 * 300.0;
             let y = viewport.y + 80.0 + row as f32 * 90.0;
 
+            let status_color = card.get_status_color();
+
             // Card background with border
             let card_rect = gfx::RectF::new(x - 10.0, y - 5.0, 280.0, 75.0);
             // Draw border first (larger rect)
-            builder.rrect(card_rect, [8.0; 4], card.get_status_color());
+            builder.rrect(card_rect, [8.0; 4], status_color);
             // Draw inner white background (smaller rect)
             let inner_rect = gfx::RectF::new(x - 8.0, y - 3.0, 276.0, 71.0);
             builder.rrect(inner_rect, [7.0; 4], gfx::Color::rgba(1.0, 1.0, 1.0, 1.0));
 
             // Domain name
-            let domain_label = Label {
-                text: format!("{:?}", card.domain),
-                color: gfx::Color::rgba(0.2, 0.2, 0.2, 1.0),
-                align: Align::Left,
-                wrap: false,
-                font_id: 0,
-                font_px: 14.0,
-            };
-            domain_label.encode(
+            encode_label_text(
+                card.domain_label(),
+                gfx::Color::rgba(0.2, 0.2, 0.2, 1.0),
+                Align::Left,
+                false,
+                0,
+                14.0,
                 gfx::RectF::new(x, y, 200.0, 20.0),
                 device_scale,
                 text,
@@ -459,15 +471,13 @@ impl PermissionsScene {
             );
 
             // Status text
-            let status_label = Label {
-                text: card.get_status_text().into(),
-                color: card.get_status_color(),
-                align: Align::Left,
-                wrap: false,
-                font_id: 0,
-                font_px: 11.0,
-            };
-            status_label.encode(
+            encode_label_text(
+                card.get_status_text(),
+                status_color,
+                Align::Left,
+                false,
+                0,
+                11.0,
                 gfx::RectF::new(x, y + 45.0, 150.0, 15.0),
                 device_scale,
                 text,
@@ -513,15 +523,13 @@ impl PermissionsScene {
         }
 
         // Control buttons section
-        let controls_label = Label {
-            text: "Controls:".into(),
-            color: gfx::Color::rgba(0.3, 0.3, 0.3, 1.0),
-            align: Align::Left,
-            wrap: false,
-            font_id: 0,
-            font_px: 14.0,
-        };
-        controls_label.encode(
+        encode_label_text(
+            "Controls:",
+            gfx::Color::rgba(0.3, 0.3, 0.3, 1.0),
+            Align::Left,
+            false,
+            0,
+            14.0,
             gfx::RectF::new(viewport.x + 650.0, viewport.y + 70.0, 100.0, 20.0),
             device_scale,
             text,
@@ -567,15 +575,13 @@ impl PermissionsScene {
         );
 
         // Test scenarios section
-        let scenarios_label = Label {
-            text: "Test Scenarios:".into(),
-            color: gfx::Color::rgba(0.3, 0.3, 0.3, 1.0),
-            align: Align::Left,
-            wrap: false,
-            font_id: 0,
-            font_px: 14.0,
-        };
-        scenarios_label.encode(
+        encode_label_text(
+            "Test Scenarios:",
+            gfx::Color::rgba(0.3, 0.3, 0.3, 1.0),
+            Align::Left,
+            false,
+            0,
+            14.0,
             gfx::RectF::new(viewport.x + 650.0, viewport.y + 290.0, 150.0, 20.0),
             device_scale,
             text,
@@ -603,31 +609,34 @@ impl PermissionsScene {
                 },
             );
 
-            let scenario_label = Label {
-                text: name.clone(),
-                color: if is_selected {
-                    gfx::Color::rgba(1.0, 1.0, 1.0, 1.0)
-                } else {
-                    gfx::Color::rgba(0.2, 0.2, 0.2, 1.0)
-                },
-                align: Align::Center,
-                wrap: false,
-                font_id: 0,
-                font_px: 11.0,
+            let color = if is_selected {
+                gfx::Color::rgba(1.0, 1.0, 1.0, 1.0)
+            } else {
+                gfx::Color::rgba(0.2, 0.2, 0.2, 1.0)
             };
-            scenario_label.encode(rect, device_scale, text, uploader, builder);
+            encode_label_text(
+                name.as_str(),
+                color,
+                Align::Center,
+                false,
+                0,
+                11.0,
+                rect,
+                device_scale,
+                text,
+                uploader,
+                builder,
+            );
         }
 
         // Show overlay toggle
-        let overlay_label = Label {
-            text: "Show Overlay:".into(),
-            color: gfx::Color::rgba(0.3, 0.3, 0.3, 1.0),
-            align: Align::Left,
-            wrap: false,
-            font_id: 0,
-            font_px: 12.0,
-        };
-        overlay_label.encode(
+        encode_label_text(
+            "Show Overlay:",
+            gfx::Color::rgba(0.3, 0.3, 0.3, 1.0),
+            Align::Left,
+            false,
+            0,
+            12.0,
             gfx::RectF::new(viewport.x + 650.0, viewport.y + 455.0, 100.0, 20.0),
             device_scale,
             text,

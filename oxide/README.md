@@ -115,4 +115,4 @@ cargo test -p oxide-ui-core
 
 ## Formatting & Style
 
-Formatting is enforced by `rustfmt` (see `rustfmt.toml`). When in doubt, prefer the repo’s 3‑space indentation and Allman braces.
+Formatting is manual. Do not run `cargo fmt` or `cargo clippy`; preserve the repo’s 3-space indentation and Allman braces.

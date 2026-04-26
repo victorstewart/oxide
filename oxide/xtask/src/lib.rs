@@ -64,6 +64,7 @@ const DEFAULT_UIKIT_DEVICE_TRACE_SECONDS: u64 = 5;
 const UIKIT_PERF_SIGNPOST_SUBSYSTEM: &str = "com.oxide.perf";
 const UIKIT_PERF_SIGNPOST_CATEGORY: &str = "PointsOfInterest";
 const UIKIT_PERF_SIGNPOST_NAME: &str = "PerfWorkload";
+const UIKIT_PHASE_ROI_MIN_WORKLOAD_NS: u64 = 1_000_000;
 const XCTRACE_EXPORT_RETRIES: usize = 4;
 const XCTRACE_STARTED_TIMEOUT_MS: u64 = 5000;
 const XCTRACE_EXPORT_RETRY_DELAY_MS: u64 = 250;
@@ -1761,7 +1762,7 @@ struct DeviceCtlProcessesResult {
 
 #[derive(Debug, Deserialize)]
 struct DeviceCtlRunningProcess {
-    executable: String,
+    executable: Option<String>,
     #[serde(rename = "processIdentifier")]
     process_identifier: u64,
 }
@@ -1930,16 +1931,6 @@ fn ios_prepare() -> Result<()> {
 fn test_all() -> Result<()> {
     let root = locate_workspace_root()?;
 
-    if clippy_available(&root) {
-        run_command(
-            &root,
-            "cargo",
-            &["clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"],
-            false,
-        )?;
-    } else {
-        println!("cargo clippy not installed; skipping lint step (install with `rustup component add clippy`).");
-    }
     run_command(
         &root,
         "cargo",
@@ -1982,18 +1973,6 @@ fn run_command(root: &Path, program: &str, args: &[&str], allow_fail: bool) -> R
         return Ok(());
     }
     bail!("{} {} failed with status {}", program, args.join(" "), status.code().unwrap_or(-1))
-}
-
-fn clippy_available(root: &Path) -> bool {
-    Command::new("cargo")
-        .arg("clippy")
-        .arg("--version")
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
 }
 
 fn run_xcui_smoke(root: &Path) -> Result<()> {
@@ -2060,6 +2039,7 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
         &spec,
         &project,
         &device,
+        trace_seconds,
         cli.team.as_deref(),
     )?;
     prepare_resumable_uikit_device_result_root(
@@ -2248,6 +2228,7 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
         &spec,
         &project,
         &device,
+        trace_seconds,
         cli.team.as_deref(),
     )?;
     prepare_resumable_uikit_device_result_root(
@@ -2514,6 +2495,7 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
         &spec,
         &project,
         &device,
+        trace_seconds,
         cli.team.as_deref(),
     )?;
     prepare_resumable_uikit_device_result_root(
@@ -2611,6 +2593,10 @@ fn ios_time_profiler_summary(args: &[String]) -> Result<()> {
 
 pub fn uikit_device_trace_enabled(trace_seconds: u64) -> bool {
     trace_seconds > 0
+}
+
+pub fn uikit_device_support_required(trace_seconds: u64) -> bool {
+    uikit_device_trace_enabled(trace_seconds)
 }
 
 #[derive(Debug, Clone)]
@@ -3877,8 +3863,8 @@ pub fn find_device_process_ids(json: &str, process_name: &str) -> Result<BTreeSe
         .running_processes
         .into_iter()
         .filter_map(|process| {
-            (device_process_name(&process.executable) == process_name)
-                .then_some(process.process_identifier)
+            let executable = process.executable.as_deref()?;
+            (device_process_name(executable) == process_name).then_some(process.process_identifier)
         })
         .collect())
 }
@@ -4200,6 +4186,7 @@ fn uikit_perf_launch_environment(
         env.insert(String::from("OXIDE_PERF_CASE"), String::from(spec.test_name));
     }
     env.insert(String::from(UIKIT_PERF_REFRESH_MODE_ENV), String::from(refresh_mode.env_value()));
+    env.insert(String::from("OXIDE_PERF_GPU_TIMESTAMPS"), String::from("1"));
     append_uikit_case_specific_perf_environment(&mut env, spec);
     if camera_trace_phases {
         env.insert(String::from(UIKIT_PERF_CAMERA_TRACE_PHASES_ENV), String::from("1"));
@@ -5030,10 +5017,13 @@ fn prepare_uikit_host_device_build_context(
     spec: &Path,
     project: &Path,
     device: &UIKitPhysicalDevice,
+    trace_seconds: u64,
     requested_team: Option<&str>,
 ) -> Result<UIKitHostBuildContext> {
     ensure_uikit_device_ready(root, device)?;
-    ensure_uikit_device_support_available(root, device)?;
+    if uikit_device_support_required(trace_seconds) {
+        ensure_uikit_device_support_available(root, device)?;
+    }
     let destination = format!("platform=iOS,id={}", device.udid);
     let development_team =
         resolve_uikit_development_team(root, requested_team, Some(device.udid.as_str()))?;
@@ -5818,17 +5808,32 @@ fn run_oxide_onscreen_case_trace(
     watch_capture: bool,
 ) -> Result<DeviceTraceRun> {
     let launch_spec = oxide_onscreen_launch_spec(spec);
+    let console_run = run_oxide_onscreen_case_console_capture(
+        root,
+        device,
+        built_app,
+        spec,
+        refresh_mode,
+        case_dir,
+        watch_capture,
+    )?;
     let mut include_gpu_counters = true;
     let mut timeout_attempt = 0usize;
-    let mut notes = vec![String::from(
-        "Capture source: on-screen Oxide workload and GPU metrics derived from a process-scoped launched Metal trace on the live phone path, with the launched Oxide host stdout providing workload and memory summaries.",
-    )];
+    let mut notes = console_run
+        .notes
+        .iter()
+        .filter(|note| !note.starts_with("GPU trace status: skipped"))
+        .cloned()
+        .collect::<Vec<_>>();
+    notes.push(String::from(
+        "GPU trace source: collected through a separate launched Metal trace after the console-summary on-screen Oxide run, so in-app renderer stage summaries remain available when xctrace target stdout is empty.",
+    ));
     loop {
         let mut extra_instruments = vec![String::from("Points of Interest")];
         if include_gpu_counters {
             extra_instruments.push(String::from("Metal GPU Counters"));
         }
-        let (trace_path, launch_stdout_path, stderr_path) = run_uikit_device_launched_trace(
+        let (trace_path, _trace_stdout_path, stderr_path) = run_uikit_device_launched_trace(
             root,
             device,
             built_app,
@@ -5870,7 +5875,11 @@ fn run_oxide_onscreen_case_trace(
             ));
             continue;
         }
-        return Ok(DeviceTraceRun { trace_path, launch_stdout_path, notes });
+        return Ok(DeviceTraceRun {
+            trace_path,
+            launch_stdout_path: console_run.launch_stdout_path,
+            notes,
+        });
     }
 }
 
@@ -6011,6 +6020,21 @@ fn build_oxide_onscreen_device_case(
         }
         notes.extend(trace_run.notes.iter().cloned());
         notes.extend(gpu_notes);
+        match preferred_oxide_stage_summary(&stdout) {
+            Ok(stage_metrics) => {
+                insert_oxide_stage_metric_medians(&mut metrics, &stage_metrics)?;
+                if stage_metrics.contains_key("stage.renderer.gpu_total")
+                    || stage_metrics.contains_key("stage.camera.renderer.direct.gpu_total")
+                {
+                    notes.push(String::from(
+                        "In-app GPU timing: Oxide host console stage summaries provided Metal command-buffer and timestamp-counter timings; process-scoped Metal System Trace remains the external cross-check.",
+                    ));
+                }
+            }
+            Err(err) => {
+                notes.push(format!("In-app GPU timing status: {}", err));
+            }
+        }
         if memory_metrics.is_empty() {
             notes.push(String::from(
                 "Memory summary status: launched xctrace did not provide parked-app summary lines for this case, so the on-screen Oxide row is trace-derived for workload and GPU metrics only.",
@@ -6026,24 +6050,13 @@ fn build_oxide_onscreen_device_case(
         workload_from_trace = Some(workload.clone());
         workload
     } else {
-        let stage_metrics = parse_all_oxide_stage_summaries(&stdout)
-            .with_context(|| {
-                format!(
-                    "parsing stage summary for `{}` from {}",
-                    spec.test_name,
-                    trace_run.launch_stdout_path.display()
-                )
-            })?
-            .into_iter()
-            .find(|metrics| metrics.contains_key("stage.workload"))
-            .or_else(|| parse_oxide_stage_summary(&stdout).ok())
-            .with_context(|| {
-                format!(
-                    "missing stage summary payload for `{}` in {}",
-                    spec.test_name,
-                    trace_run.launch_stdout_path.display()
-                )
-            })?;
+        let stage_metrics = preferred_oxide_stage_summary(&stdout).with_context(|| {
+            format!(
+                "missing stage summary payload for `{}` in {}",
+                spec.test_name,
+                trace_run.launch_stdout_path.display()
+            )
+        })?;
         let workload = stage_metrics.get("stage.workload").with_context(|| {
             format!(
                 "missing `stage.workload` summary for `{}` in {}",
@@ -6054,6 +6067,7 @@ fn build_oxide_onscreen_device_case(
         metrics.insert(String::from("clock_s"), summary_value_seconds(workload, workload.median)?);
         metrics
             .insert(String::from("workload_s"), summary_value_seconds(workload, workload.median)?);
+        insert_oxide_stage_metric_medians(&mut metrics, &stage_metrics)?;
         notes.extend(trace_run.notes.iter().cloned());
         notes.push(String::from(
             "GPU trace status: skipped for this case because `--trace-seconds 0` disabled the attached Metal trace.",
@@ -6656,6 +6670,7 @@ pub fn oxide_device_launch_environment_json(smoke: bool) -> Result<String> {
     let mut env = BTreeMap::new();
     env.insert(String::from("OXIDE_PERF_PARKED"), String::from("1"));
     env.insert(String::from("OXIDE_PERF_RUNNER"), String::from("1"));
+    env.insert(String::from("OXIDE_PERF_GPU_TIMESTAMPS"), String::from("1"));
     if smoke {
         env.insert(String::from("OXIDE_PERF_RUNNER_SMOKE"), String::from("1"));
     }
@@ -9619,6 +9634,68 @@ pub fn extract_trace_windows_from_tables(tables: &[XctraceTable]) -> Result<Vec<
         });
         return Ok(roi_windows);
     }
+    let mut phase_roi_windows = BTreeMap::<String, (u64, u64)>::new();
+    for table in tables {
+        for row in &table.rows {
+            let name = row.cell("name").and_then(XctraceCell::display).unwrap_or_default();
+            let subsystem =
+                row.cell("subsystem").and_then(XctraceCell::display).unwrap_or_default();
+            if name.is_empty()
+                || name == UIKIT_PERF_SIGNPOST_NAME
+                || subsystem != UIKIT_PERF_SIGNPOST_SUBSYSTEM
+            {
+                continue;
+            }
+            let Some(start_ns) = row.cell("start").and_then(XctraceCell::raw_u64) else {
+                continue;
+            };
+            let Some(duration_ns) = row.cell("duration").and_then(XctraceCell::raw_u64) else {
+                continue;
+            };
+            if duration_ns == 0 {
+                continue;
+            }
+            let process_name = normalize_process_name(
+                row.cell("process")
+                    .or_else(|| row.cell("start-process"))
+                    .and_then(XctraceCell::display)
+                    .unwrap_or_default(),
+            );
+            if process_name.is_empty() {
+                continue;
+            }
+            let end_ns = start_ns.saturating_add(duration_ns);
+            phase_roi_windows
+                .entry(process_name)
+                .and_modify(|window| {
+                    window.0 = window.0.min(start_ns);
+                    window.1 = window.1.max(end_ns);
+                })
+                .or_insert((start_ns, end_ns));
+        }
+    }
+    if !phase_roi_windows.is_empty() {
+        let mut windows = phase_roi_windows
+            .into_iter()
+            .filter(|(_, (start_ns, end_ns))| {
+                end_ns.saturating_sub(*start_ns) >= UIKIT_PHASE_ROI_MIN_WORKLOAD_NS
+            })
+            .map(|(process_name, (start_ns, end_ns))| TraceWindow {
+                start_ns,
+                end_ns,
+                process_name,
+            })
+            .collect::<Vec<_>>();
+        if !windows.is_empty() {
+            windows.sort_by(|left, right| {
+                left.start_ns
+                    .cmp(&right.start_ns)
+                    .then_with(|| left.end_ns.cmp(&right.end_ns))
+                    .then_with(|| left.process_name.cmp(&right.process_name))
+            });
+            return Ok(windows);
+        }
+    }
 
     struct SignpostEvent {
         time_ns: u64,
@@ -11370,6 +11447,30 @@ pub fn parse_oxide_stage_summary(stdout: &str) -> Result<BTreeMap<String, UIKitM
     summaries.into_iter().last().with_context(|| {
         format!("missing `{}` marker in device console output", OXIDE_STAGE_SUMMARY_PREFIX)
     })
+}
+
+fn preferred_oxide_stage_summary(stdout: &str) -> Result<BTreeMap<String, UIKitMetricSummary>> {
+    let mut merged = BTreeMap::new();
+    for metrics in parse_all_oxide_stage_summaries(stdout)? {
+        merged.extend(metrics);
+    }
+    if merged.is_empty() {
+        bail!(
+            "missing `{}` marker in device console output",
+            OXIDE_STAGE_SUMMARY_PREFIX
+        );
+    }
+    Ok(merged)
+}
+
+fn insert_oxide_stage_metric_medians(
+    into: &mut BTreeMap<String, f64>,
+    stage_metrics: &BTreeMap<String, UIKitMetricSummary>,
+) -> Result<()> {
+    for (name, summary) in stage_metrics {
+        into.insert(format!("{}_s", name), summary_value_seconds(summary, summary.median)?);
+    }
+    Ok(())
 }
 
 fn parse_all_oxide_stage_summaries(

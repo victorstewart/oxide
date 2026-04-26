@@ -9,7 +9,6 @@ This document captures the current state of automated testing across the Oxide w
 - `cargo test -p oxide-ui-core` – runs CPU layout/collection simulation property tests.
 - `cargo test -p oxide-renderer-metal --features snapshot-tests` – runs GPU readback snapshot tests on macOS.
 - `cargo test -p oxide-platform-ios` – exercises the camera capability heuristics.
-- (New) `cargo xtask test-all` – consolidated workspace gate that runs formatting, linting, and the full cargo test matrix (implemented in this phase).
 
 ## Workspace Inventory
 
@@ -47,12 +46,11 @@ These gaps inform the follow-on phases outlined in the broader test plan.
 
 ## Continuous Integration
 
-The repository ships a GitHub Actions workflow (`.github/workflows/test.yml`) that
-ensures the gating commands from Phase 1 run on every push/PR. The pipeline covers:
+The repository ships the macOS GitHub Actions workflow at `.github/workflows/ci.yml`.
+It runs focused Rust tests, the workspace perf comparison, sweep aggregation, static
+goldens, and animation frame generation on every push/PR. This repository intentionally
+does not run `cargo fmt` or `cargo clippy`; the project style is maintained manually.
 
-- Ubuntu: `cargo fmt -- --check`, clippy with `-D warnings`, the full workspace test
-  matrix, and a `cargo hack --each-feature` sweep (best effort).
-- macOS: builds the Metal renderer with snapshot features gated, runs the iOS host
-  bridge unit tests, and performs a smoke build of the macOS host. GPU-centric tests
-  still require a real device and remain manually triggered per the plan in
-  `docs/ui_automation_plan.md`.
+Device-authoritative Oxide/UIKit performance remains a reviewed physical-iPhone flow
+through the `Justfile` device targets and the checked-in `benchmarks/oxide-device` and
+`benchmarks/uikit-device` reports.

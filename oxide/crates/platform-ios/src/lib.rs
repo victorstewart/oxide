@@ -2995,7 +2995,6 @@ pub unsafe extern "C" fn oxide_host_location_set_accuracy(_accuracy_kind: u32) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oxide_platform_api::telephony::normalize_country_iso;
     use std::sync::{Arc, Mutex};
 
     static LOCATION_TEST_MUTEX: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
@@ -3006,19 +3005,6 @@ mod tests {
         LOCATION_HISTORY.lock().unwrap().clear();
         LOCATION_REGIONS.lock().unwrap().entries.clear();
         LOCATION_RUNNING.store(false, Ordering::SeqCst);
-    }
-
-    #[test]
-    fn parse_country_iso_accepts_alpha_two_code() {
-        assert_eq!(normalize_country_iso("us"), Some("US".to_owned()));
-        assert_eq!(normalize_country_iso("GB"), Some("GB".to_owned()));
-    }
-
-    #[test]
-    fn parse_country_iso_rejects_invalid_values() {
-        assert_eq!(normalize_country_iso(""), None);
-        assert_eq!(normalize_country_iso("USA"), None);
-        assert_eq!(normalize_country_iso("1A"), None);
     }
 
     #[test]

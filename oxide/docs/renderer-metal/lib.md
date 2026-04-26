@@ -30,6 +30,22 @@ The renderer keeps long-lived GPU resources resident and reuses them across fram
 
 Mixed 2D/3D frames share the same frame command buffer and color target. `encode_scene3d` initializes color/depth when needed, then `encode_pass` loads the already-rendered target instead of clearing it again. The supported ordering is 3D first, then 2D overlay, which matches the intended Oxide use case of a 3D scene under author-driven 2D interface chrome.
 
+The 2D encoder validates local or rebased `u16` index spans before upload, then writes normalized indices directly into the frame-local Metal index ring for Solid and GlyphRun draws. This avoids allocating a temporary index `Vec` in the shared renderer hot path while preserving the existing local-index and absolute-index contracts.
+
+Consecutive rounded rectangles are collected into retained scratch buffers and encoded through the instanced UI shader path. The batches preserve draw-list ordering while moving per-rectangle control overhead out of the Metal command stream, with payload chunks kept under Metal's `set*Bytes` limit.
+
+The same retained-scratch discipline is used for the other small instanced UI batches: nine-slice images, argument-buffer images, spinners, backdrop composites, visual effects, and grouped glyph-run command metadata reuse renderer-owned buffers instead of allocating fresh temporary vectors on each encode.
+
+Inline layer fallbacks encode the original draw-list range directly. That keeps vertex and index spans valid without cloning the layer item slice or duplicating the full vertex/index arrays when a layer is rendered inline for prepass, unsupported commands, disabled layer caching, or a stale cache miss.
+
+Damage prefiltering stays allocation-light. It now builds a compact temporary command list that borrows the original vertex and index backing arrays, so geometry-backed `Solid`, `GlyphRun`, and inline layer ranges can still be culled without cloning the full vertex/index payload just to discard off-scissor commands.
+
+Renderer GPU timing is collected in-app instead of depending on Instruments hardware-counter availability. Completed frame command buffers update renderer stats from Metal's command-buffer GPU start/end timestamps, and iOS devices that expose the common timestamp counter set attach an `MTLCounterSampleBuffer` to the main 2D render pass for vertex/fragment/pass attribution. Those values are read after command-buffer completion and surfaced through `last_stats()` without waiting on the GPU from the frame hot path.
+
+Frame-level camera/effect metadata is gathered in one draw-list scan. Camera coverage, camera-blur sigma, backdrop presence, and the strongest visual-effect blur plan are reused by the later policy and prepass blocks instead of rediscovering the same facts with separate passes.
+
+Scene3D bloom uses the same persistent-object discipline: additive bloom PSOs are created once, bloom textures are reused across frames at a bounded downsample size, and the composite pass uses a dedicated shader entry point instead of borrowing a higher-level UI effect pipeline.
+
 ## Preconditions and postconditions
 
 - Preconditions:
@@ -43,3 +59,10 @@ Mixed 2D/3D frames share the same frame command buffer and color target. `encode
 ## Changelog
 
 - 2026-04-23: Added the reusable retained `scene3d` mesh pass with depth buffering and same-frame 2D overlay interop.
+- 2026-04-25: Removed the temporary normalized-index allocation from Solid and GlyphRun Metal uploads.
+- 2026-04-25: Wired scene3d bloom PSO initialization and documented the dedicated bloom composite path.
+- 2026-04-25: Batched consecutive rounded rectangles through the existing instanced UI shader path.
+- 2026-04-25: Replaced inline layer fallback sublist cloning with range-aware draw-list encoding.
+- 2026-04-25: Collapsed repeated frame metadata scans for camera and visual-effect decisions.
+- 2026-04-25: Reused renderer-retained scratch across remaining small batch encode paths and made damage prefiltering borrow geometry backing storage instead of cloning it.
+- 2026-04-26: Generalized in-app Metal GPU timing from camera direct preview to normal renderer frame submissions.

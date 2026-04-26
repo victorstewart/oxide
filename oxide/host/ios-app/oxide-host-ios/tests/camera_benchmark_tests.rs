@@ -122,6 +122,10 @@ fn benchmark_camera_scene_uses_minimal_preview_draw_list() {
     assert!(stats.cam_gpu_render_ms >= 0.0);
     assert!(stats.cam_gpu_vertex_ms >= 0.0);
     assert!(stats.cam_gpu_fragment_ms >= 0.0);
+    assert!(stats.renderer_gpu_ms >= 0.0);
+    assert!(stats.renderer_gpu_render_ms >= 0.0);
+    assert!(stats.renderer_gpu_vertex_ms >= 0.0);
+    assert!(stats.renderer_gpu_fragment_ms >= 0.0);
     assert!(stats.cam_capture_sample_setup_ms >= 0.0);
     assert!(stats.cam_capture_frame_delivery_ms >= 0.0);
     assert!(stats.renderer_memory_total_bytes > 0);
@@ -205,7 +209,8 @@ fn ios_manual_touch_path_uses_raw_events_and_recognizer_fallback() {
     );
     assert!(
         source.contains("OxideTouchScreenLogEnabled")
-            && source.contains("if (OxideTouchDebugEnabled() && !OxideTouchScreenLogEnabled())"),
+            && source.contains("OxideUiScreenLogEnabled")
+            && source.contains("if (!OxideUiScreenLogEnabled())"),
         "touch diagnostics should write to file without covering the app screen"
     );
 }

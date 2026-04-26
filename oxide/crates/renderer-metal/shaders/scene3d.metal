@@ -11,24 +11,49 @@ struct Scene3dUniforms
    float4x4 mvp;
 };
 
-struct Scene3dColor
+struct Scene3dMaterial
 {
    float4 color;
+   uint material;
+   float3 _pad;
+   float4 params;
 };
 
 struct Scene3dRaster
 {
    float4 position [[position]];
+   float3 local_position;
 };
 
 vertex Scene3dRaster v_scene3d(Scene3dVertex in_vertex [[stage_in]], constant Scene3dUniforms &uniforms [[buffer(1)]])
 {
    Scene3dRaster raster;
    raster.position = uniforms.mvp * float4(in_vertex.position, 1.0);
+   raster.local_position = in_vertex.position;
    return raster;
 }
 
-fragment float4 f_scene3d(Scene3dRaster raster [[stage_in]], constant Scene3dColor &color [[buffer(0)]])
+fragment float4 f_scene3d(Scene3dRaster raster [[stage_in]], constant Scene3dMaterial &mat [[buffer(0)]])
 {
-   return color.color;
+   float4 c = mat.color;
+   if (mat.material == 1) {
+      float radius = max(mat.params.x, 0.001);
+      float2 center_position = mat.params.yz;
+      float2 p = raster.local_position.xy - center_position;
+      float r = length(p) / radius;
+      float radial = 1.0 - smoothstep(0.0, 1.05, r);
+      float2 dir = normalize(float2(-0.45, 0.89));
+      float diag = dot(normalize(p + float2(0.0001)), dir) * 0.5 + 0.5;
+      diag = smoothstep(0.15, 1.0, diag);
+      float3 base = clamp(c.rgb, 0.0, 1.0);
+      float edge_darken = clamp(mat.params.w, 0.52, 0.82);
+      float3 edge_col = base * edge_darken;
+      float3 center_col = min(base * 1.42 + float3(0.08), float3(1.0));
+      float light = clamp(radial * 0.78 + diag * 0.16, 0.0, 1.0);
+      c.rgb = mix(edge_col, center_col, light);
+      c.a = mat.color.a;
+   } else if (mat.material == 2) {
+      c.rgb = min(c.rgb * max(mat.params.x, 1.0), float3(1.0));
+   }
+   return c;
 }

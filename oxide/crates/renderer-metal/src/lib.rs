@@ -239,8 +239,9 @@ unsafe fn command_buffer_gpu_duration_ms(_buffer: &CommandBufferRef) -> f64 {
 
 #[cfg(target_os = "ios")]
 #[inline(always)]
-fn camera_gpu_stage_timestamps_enabled() -> bool {
-    env_flag("OXIDE_PERF_CAMERA_GPU_TIMESTAMPS")
+fn render_pass_gpu_stage_timestamps_enabled() -> bool {
+    env_flag("OXIDE_PERF_GPU_TIMESTAMPS")
+        .or_else(|| env_flag("OXIDE_PERF_CAMERA_GPU_TIMESTAMPS"))
         .unwrap_or_else(|| env_flag("OXIDE_PERF_PARKED").unwrap_or(false))
 }
 
@@ -272,7 +273,7 @@ fn gpu_timestamp_interval_ms(
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-struct DirectPreviewGpuStageStats {
+struct GpuStageStats {
     render_ms: f64,
     vertex_ms: f64,
     fragment_ms: f64,
@@ -280,17 +281,17 @@ struct DirectPreviewGpuStageStats {
 
 #[cfg(target_os = "ios")]
 #[derive(Clone)]
-struct DirectPreviewGpuTimingSupport {
+struct GpuStageTimingSupport {
     counter_set: CounterSet,
 }
 
 #[cfg(not(target_os = "ios"))]
 #[derive(Clone)]
-struct DirectPreviewGpuTimingSupport;
+struct GpuStageTimingSupport;
 
 #[cfg(target_os = "ios")]
 #[derive(Clone)]
-struct DirectPreviewGpuTrace {
+struct GpuStageTrace {
     sample_buffer: CounterSampleBuffer,
     cpu_start: u64,
     gpu_start: u64,
@@ -298,12 +299,20 @@ struct DirectPreviewGpuTrace {
 
 #[cfg(not(target_os = "ios"))]
 #[derive(Clone)]
-struct DirectPreviewGpuTrace;
+struct GpuStageTrace;
+
+#[derive(Clone, Copy, Debug, Default)]
+struct CompletedGpuStats {
+    command_ms: f64,
+    render_ms: f64,
+    vertex_ms: f64,
+    fragment_ms: f64,
+}
 
 #[cfg(target_os = "ios")]
-impl DirectPreviewGpuTimingSupport {
+impl GpuStageTimingSupport {
     fn new(device: &Device) -> Option<Self> {
-        if !camera_gpu_stage_timestamps_enabled()
+        if !render_pass_gpu_stage_timestamps_enabled()
             || !device.supports_counter_sampling(MTLCounterSamplingPoint::AtStageBoundary)
         {
             return None;
@@ -313,7 +322,7 @@ impl DirectPreviewGpuTimingSupport {
         Some(Self { counter_set })
     }
 
-    fn begin_submission(&self, device: &Device) -> Option<DirectPreviewGpuTrace> {
+    fn begin_submission(&self, device: &Device) -> Option<GpuStageTrace> {
         let desc = CounterSampleBufferDescriptor::new();
         desc.set_storage_mode(MTLStorageMode::Shared);
         desc.set_sample_count(4);
@@ -322,12 +331,12 @@ impl DirectPreviewGpuTimingSupport {
         let mut cpu_start = 0;
         let mut gpu_start = 0;
         device.sample_timestamps(&mut cpu_start, &mut gpu_start);
-        Some(DirectPreviewGpuTrace { sample_buffer, cpu_start, gpu_start })
+        Some(GpuStageTrace { sample_buffer, cpu_start, gpu_start })
     }
 }
 
 #[cfg(target_os = "ios")]
-impl DirectPreviewGpuTrace {
+impl GpuStageTrace {
     fn configure_render_pass(&self, descriptor: &RenderPassDescriptorRef) {
         let sample_attachment = descriptor.sample_buffer_attachments().object_at(0).unwrap();
         sample_attachment.set_sample_buffer(&self.sample_buffer);
@@ -337,14 +346,14 @@ impl DirectPreviewGpuTrace {
         sample_attachment.set_end_of_fragment_sample_index(3);
     }
 
-    fn resolve(&self, device: &Device) -> DirectPreviewGpuStageStats {
+    fn resolve(&self, device: &Device) -> GpuStageStats {
         let mut cpu_end = 0;
         let mut gpu_end = 0;
         device.sample_timestamps(&mut cpu_end, &mut gpu_end);
         let Some(samples) =
-            (unsafe { resolve_direct_preview_gpu_timestamp_samples(&self.sample_buffer) })
+            (unsafe { resolve_gpu_timestamp_samples(&self.sample_buffer) })
         else {
-            return DirectPreviewGpuStageStats::default();
+            return GpuStageStats::default();
         };
         let vertex_ms = gpu_timestamp_interval_ms(
             samples[0],
@@ -362,32 +371,32 @@ impl DirectPreviewGpuTrace {
             self.gpu_start,
             gpu_end,
         );
-        DirectPreviewGpuStageStats { render_ms: vertex_ms + fragment_ms, vertex_ms, fragment_ms }
+        GpuStageStats { render_ms: vertex_ms + fragment_ms, vertex_ms, fragment_ms }
     }
 }
 
 #[cfg(not(target_os = "ios"))]
-impl DirectPreviewGpuTimingSupport {
+impl GpuStageTimingSupport {
     fn new(_device: &Device) -> Option<Self> {
         None
     }
 
-    fn begin_submission(&self, _device: &Device) -> Option<DirectPreviewGpuTrace> {
+    fn begin_submission(&self, _device: &Device) -> Option<GpuStageTrace> {
         None
     }
 }
 
 #[cfg(not(target_os = "ios"))]
-impl DirectPreviewGpuTrace {
+impl GpuStageTrace {
     fn configure_render_pass(&self, _descriptor: &RenderPassDescriptorRef) {}
 
-    fn resolve(&self, _device: &Device) -> DirectPreviewGpuStageStats {
-        DirectPreviewGpuStageStats::default()
+    fn resolve(&self, _device: &Device) -> GpuStageStats {
+        GpuStageStats::default()
     }
 }
 
 #[cfg(target_os = "ios")]
-unsafe fn resolve_direct_preview_gpu_timestamp_samples(
+unsafe fn resolve_gpu_timestamp_samples(
     sample_buffer: &CounterSampleBufferRef,
 ) -> Option<[u64; 4]> {
     let ns_data: *mut Object = msg_send![
@@ -768,7 +777,7 @@ struct DirectPreviewSubmittedFrame {
     frame_id: u64,
     generation: u64,
     cmd: CommandBuffer,
-    gpu_trace: Option<DirectPreviewGpuTrace>,
+    gpu_trace: Option<GpuStageTrace>,
 }
 
 struct Mesh3dGpu {
@@ -786,8 +795,19 @@ struct Scene3dGpuUniforms {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct Scene3dGpuColor {
+struct Scene3dGpuMaterial {
     color: [f32; 4],
+    material: u32,
+    _pad: [f32; 3],
+    params: [f32; 4],
+}
+
+#[derive(Clone, Copy, Debug)]
+struct GlyphRunGpuOffsets {
+    vb_off: u64,
+    ib_off: u64,
+    idx_count: u64,
+    ub_off: u64,
 }
 
 #[allow(dead_code)]
@@ -814,8 +834,14 @@ pub struct MetalRenderer {
     pso_camera_bgra: RenderPipelineState,
     pso_scene3d_tri: RenderPipelineState,
     pso_scene3d_tri_depth: RenderPipelineState,
+    pso_scene3d_tri_add: RenderPipelineState,
+    pso_scene3d_tri_add_bloom: RenderPipelineState,
     pso_scene3d_line: RenderPipelineState,
     pso_scene3d_line_depth: RenderPipelineState,
+    pso_scene3d_line_add: RenderPipelineState,
+    pso_scene3d_line_add_bloom: RenderPipelineState,
+    pso_bloom_blur: RenderPipelineState,
+    pso_bloom_composite: RenderPipelineState,
     depth_state_3d_disabled: DepthStencilState,
     depth_state_3d_read: DepthStencilState,
     depth_state_3d_write: DepthStencilState,
@@ -832,6 +858,18 @@ pub struct MetalRenderer {
     vb: Ring,
     ib: Ring,
     ub: Ring,
+    rrect_vbuf: alloc::vec::Vec<f32>,
+    rrect_fbuf: alloc::vec::Vec<RRectGpuParams>,
+    nine_slice_vbuf: alloc::vec::Vec<f32>,
+    nine_slice_fbuf: alloc::vec::Vec<NineSliceGpuParams>,
+    image_vbuf: alloc::vec::Vec<f32>,
+    image_fbuf: alloc::vec::Vec<ImageGpuParams>,
+    image_tex_map: HashMap<u32, u32>,
+    glyph_group: alloc::vec::Vec<GlyphRunGpuOffsets>,
+    spinner_vbuf: alloc::vec::Vec<f32>,
+    spinner_fbuf: alloc::vec::Vec<SpinnerGpuParams>,
+    effect_vbuf: alloc::vec::Vec<f32>,
+    effect_fbuf: alloc::vec::Vec<f32>,
     target_w: u32,
     target_h: u32,
     target_scale: f32,
@@ -845,6 +883,8 @@ pub struct MetalRenderer {
     quarter_tmp_tex: Option<Texture>,
     eighth_tex: Option<Texture>,
     eighth_tmp_tex: Option<Texture>,
+    scene3d_bloom_tex: Option<Texture>,
+    scene3d_bloom_tmp_tex: Option<Texture>,
     images: HashMap<u32, Texture>,
     next_image_id: u32,
     meshes_3d: HashMap<u32, Mesh3dGpu>,
@@ -898,7 +938,9 @@ pub struct MetalRenderer {
     use_image_arg_buffer: bool,
     submit_error_flag: Arc<AtomicBool>,
     submit_error_detail: Arc<Mutex<Option<String>>>,
-    direct_preview_gpu_timing: Option<DirectPreviewGpuTimingSupport>,
+    gpu_stage_timing: Option<GpuStageTimingSupport>,
+    frame_gpu_trace: Option<GpuStageTrace>,
+    completed_gpu_stats: Arc<Mutex<CompletedGpuStats>>,
     direct_preview_submitted: VecDeque<DirectPreviewSubmittedFrame>,
     direct_preview_last_submission_depth: u32,
     direct_preview_last_submission_skipped: u32,
@@ -1365,7 +1407,9 @@ impl MetalRenderer {
                 &library,
                 color_format,
                 false,
+                scene3d::BlendMode3d::Alpha,
                 scene3d::MeshTopology::Triangles,
+                true,
             )
         })?;
         let pso_scene3d_tri_depth = build_init_stage("pso.scene3d.tri_depth", || {
@@ -1374,14 +1418,82 @@ impl MetalRenderer {
                 &library,
                 color_format,
                 true,
+                scene3d::BlendMode3d::Alpha,
                 scene3d::MeshTopology::Triangles,
+                true,
+            )
+        })?;
+        let pso_scene3d_tri_add = build_init_stage("pso.scene3d.tri_add", || {
+            build_scene3d_pso(
+                &device,
+                &library,
+                color_format,
+                false,
+                scene3d::BlendMode3d::Additive,
+                scene3d::MeshTopology::Triangles,
+                true,
+            )
+        })?;
+        let pso_scene3d_tri_add_bloom = build_init_stage("pso.scene3d.tri_add_bloom", || {
+            build_scene3d_pso(
+                &device,
+                &library,
+                MTLPixelFormat::RGBA16Float,
+                false,
+                scene3d::BlendMode3d::Additive,
+                scene3d::MeshTopology::Triangles,
+                false,
             )
         })?;
         let pso_scene3d_line = build_init_stage("pso.scene3d.line", || {
-            build_scene3d_pso(&device, &library, color_format, false, scene3d::MeshTopology::Lines)
+            build_scene3d_pso(
+                &device,
+                &library,
+                color_format,
+                false,
+                scene3d::BlendMode3d::Alpha,
+                scene3d::MeshTopology::Lines,
+                true,
+            )
         })?;
         let pso_scene3d_line_depth = build_init_stage("pso.scene3d.line_depth", || {
-            build_scene3d_pso(&device, &library, color_format, true, scene3d::MeshTopology::Lines)
+            build_scene3d_pso(
+                &device,
+                &library,
+                color_format,
+                true,
+                scene3d::BlendMode3d::Alpha,
+                scene3d::MeshTopology::Lines,
+                true,
+            )
+        })?;
+        let pso_scene3d_line_add = build_init_stage("pso.scene3d.line_add", || {
+            build_scene3d_pso(
+                &device,
+                &library,
+                color_format,
+                false,
+                scene3d::BlendMode3d::Additive,
+                scene3d::MeshTopology::Lines,
+                true,
+            )
+        })?;
+        let pso_scene3d_line_add_bloom = build_init_stage("pso.scene3d.line_add_bloom", || {
+            build_scene3d_pso(
+                &device,
+                &library,
+                MTLPixelFormat::RGBA16Float,
+                false,
+                scene3d::BlendMode3d::Additive,
+                scene3d::MeshTopology::Lines,
+                false,
+            )
+        })?;
+        let pso_bloom_blur = build_init_stage("pso.bloom.blur", || {
+            build_blur_pso(&device, &library, MTLPixelFormat::RGBA16Float)
+        })?;
+        let pso_bloom_composite = build_init_stage("pso.bloom.composite", || {
+            build_bloom_composite_pso(&device, &library, color_format)
         })?;
         let depth_state_3d_disabled =
             build_depth_stencil_state(&device, false, false, "depth.scene3d.disabled");
@@ -1483,7 +1595,7 @@ impl MetalRenderer {
         } else {
             None
         };
-        let direct_preview_gpu_timing = DirectPreviewGpuTimingSupport::new(&device);
+        let gpu_stage_timing = GpuStageTimingSupport::new(&device);
 
         Ok(Self {
             device,
@@ -1508,8 +1620,14 @@ impl MetalRenderer {
             pso_camera_bgra,
             pso_scene3d_tri,
             pso_scene3d_tri_depth,
+            pso_scene3d_tri_add,
+            pso_scene3d_tri_add_bloom,
             pso_scene3d_line,
             pso_scene3d_line_depth,
+            pso_scene3d_line_add,
+            pso_scene3d_line_add_bloom,
+            pso_bloom_blur,
+            pso_bloom_composite,
             depth_state_3d_disabled,
             depth_state_3d_read,
             depth_state_3d_write,
@@ -1525,6 +1643,18 @@ impl MetalRenderer {
             vb,
             ib,
             ub,
+            rrect_vbuf: alloc::vec::Vec::new(),
+            rrect_fbuf: alloc::vec::Vec::new(),
+            nine_slice_vbuf: alloc::vec::Vec::new(),
+            nine_slice_fbuf: alloc::vec::Vec::new(),
+            image_vbuf: alloc::vec::Vec::new(),
+            image_fbuf: alloc::vec::Vec::new(),
+            image_tex_map: HashMap::new(),
+            glyph_group: alloc::vec::Vec::new(),
+            spinner_vbuf: alloc::vec::Vec::new(),
+            spinner_fbuf: alloc::vec::Vec::new(),
+            effect_vbuf: alloc::vec::Vec::new(),
+            effect_fbuf: alloc::vec::Vec::new(),
             target_w: 0,
             target_h: 0,
             target_scale: 1.0,
@@ -1538,6 +1668,8 @@ impl MetalRenderer {
             quarter_tmp_tex: None,
             eighth_tex: None,
             eighth_tmp_tex: None,
+            scene3d_bloom_tex: None,
+            scene3d_bloom_tmp_tex: None,
             images: HashMap::new(),
             next_image_id: 1,
             meshes_3d: HashMap::new(),
@@ -1587,7 +1719,9 @@ impl MetalRenderer {
             use_image_arg_buffer,
             submit_error_flag: Arc::new(AtomicBool::new(false)),
             submit_error_detail: Arc::new(Mutex::new(None)),
-            direct_preview_gpu_timing,
+            gpu_stage_timing,
+            frame_gpu_trace: None,
+            completed_gpu_stats: Arc::new(Mutex::new(CompletedGpuStats::default())),
             direct_preview_submitted: VecDeque::new(),
             direct_preview_last_submission_depth: 0,
             direct_preview_last_submission_skipped: 0,
@@ -1705,7 +1839,7 @@ impl MetalRenderer {
         frame_id: u64,
         generation: u64,
         cmd: &CommandBuffer,
-        gpu_trace: Option<DirectPreviewGpuTrace>,
+        gpu_trace: Option<GpuStageTrace>,
     ) {
         self.direct_preview_submitted.push_back(DirectPreviewSubmittedFrame {
             frame_id,
@@ -1713,6 +1847,20 @@ impl MetalRenderer {
             cmd: cmd.to_owned(),
             gpu_trace,
         });
+    }
+
+    #[inline]
+    fn latest_completed_gpu_stats(&self) -> CompletedGpuStats {
+        self.completed_gpu_stats.lock().map(|stats| *stats).unwrap_or_default()
+    }
+
+    #[inline]
+    fn apply_completed_gpu_stats(&self, stats: &mut PerfStats) {
+        let gpu = self.latest_completed_gpu_stats();
+        stats.gpu_ms = gpu.command_ms;
+        stats.gpu_render_ms = gpu.render_ms;
+        stats.gpu_vertex_ms = gpu.vertex_ms;
+        stats.gpu_fragment_ms = gpu.fragment_ms;
     }
 
     #[inline]
@@ -2141,6 +2289,8 @@ impl MetalRenderer {
         self.quarter_tmp_tex = None;
         self.eighth_tex = None;
         self.eighth_tmp_tex = None;
+        self.scene3d_bloom_tex = None;
+        self.scene3d_bloom_tmp_tex = None;
         self.cam_blur_tex = None;
         self.cam_xfade_prev_tex = None;
     }
@@ -2278,6 +2428,44 @@ impl MetalRenderer {
             d.set_storage_mode(MTLStorageMode::Private);
             d.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
             self.eighth_tmp_tex = Some(self.device.new_texture(&d));
+        }
+    }
+
+    #[allow(dead_code)]
+    fn ensure_scene3d_bloom_targets(&mut self, downsample_divisor: u32) {
+        if self.target_w == 0 || self.target_h == 0 {
+            return;
+        }
+        let divisor = downsample_divisor.clamp(1, 8);
+        let w = ((self.target_w / divisor).max(1)) as u64;
+        let h = ((self.target_h / divisor).max(1)) as u64;
+        let need_src = match &self.scene3d_bloom_tex {
+            Some(tex) => tex.width() != w || tex.height() != h,
+            None => true,
+        };
+        let need_tmp = match &self.scene3d_bloom_tmp_tex {
+            Some(tex) => tex.width() != w || tex.height() != h,
+            None => true,
+        };
+        if need_src {
+            let d = TextureDescriptor::new();
+            d.set_pixel_format(MTLPixelFormat::RGBA16Float);
+            d.set_texture_type(MTLTextureType::D2);
+            d.set_width(w);
+            d.set_height(h);
+            d.set_storage_mode(MTLStorageMode::Private);
+            d.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+            self.scene3d_bloom_tex = Some(self.device.new_texture(&d));
+        }
+        if need_tmp {
+            let d = TextureDescriptor::new();
+            d.set_pixel_format(MTLPixelFormat::RGBA16Float);
+            d.set_texture_type(MTLTextureType::D2);
+            d.set_width(w);
+            d.set_height(h);
+            d.set_storage_mode(MTLStorageMode::Private);
+            d.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+            self.scene3d_bloom_tmp_tex = Some(self.device.new_texture(&d));
         }
     }
 
@@ -2958,7 +3146,7 @@ impl MetalRenderer {
                 command_buffer_ms = elapsed_ms(command_buffer_t0);
                 let rpd = RenderPassDescriptor::new();
                 let direct_preview_gpu_trace = self
-                    .direct_preview_gpu_timing
+                    .gpu_stage_timing
                     .as_ref()
                     .and_then(|timing| timing.begin_submission(&self.device));
                 let should_clear = direct_preview_should_clear_load_action(
@@ -3521,50 +3709,15 @@ impl MetalRenderer {
 
         let enc = cmd.new_render_command_encoder(&rpd);
         enc.set_front_facing_winding(MTLWinding::CounterClockwise);
+        if let Some(bloom) = pass.bloom {
+            let strength =
+                bloom.layers.iter().map(|layer| layer.strength.max(0.0)).sum::<f32>().max(0.0);
+            for instance in bloom.emissive_instances {
+                self.encode_scene3d_instance(&enc, pass.view_proj, instance, strength, false)?;
+            }
+        }
         for instance in pass.instances {
-            let Some(mesh) = self.meshes_3d.get(&instance.mesh.0) else {
-                enc.end_encoding();
-                return Err(api::RenderError::ResourceNotFound("mesh3d handle"));
-            };
-            let mvp = mat4_mul(&pass.view_proj, &instance.transform);
-            let uniforms = Scene3dGpuUniforms { mvp };
-            let color = Scene3dGpuColor {
-                color: [instance.color.r, instance.color.g, instance.color.b, instance.color.a],
-            };
-            let pso = match (mesh.topology, instance.color_write) {
-                (scene3d::MeshTopology::Triangles, true) => &self.pso_scene3d_tri,
-                (scene3d::MeshTopology::Triangles, false) => &self.pso_scene3d_tri_depth,
-                (scene3d::MeshTopology::Lines, true) => &self.pso_scene3d_line,
-                (scene3d::MeshTopology::Lines, false) => &self.pso_scene3d_line_depth,
-            };
-            let depth_state = match (instance.depth_test, instance.depth_write) {
-                (false, false) => &self.depth_state_3d_disabled,
-                (true, false) => &self.depth_state_3d_read,
-                (true, true) => &self.depth_state_3d_write,
-                (false, true) => &self.depth_state_3d_write,
-            };
-            enc.set_render_pipeline_state(pso);
-            enc.set_depth_stencil_state(depth_state);
-            enc.set_cull_mode(scene3d_cull_mode(instance.cull));
-            enc.set_vertex_buffer(0, Some(&mesh.vb), 0);
-            enc.set_vertex_bytes(
-                1,
-                core::mem::size_of::<Scene3dGpuUniforms>() as u64,
-                (&uniforms as *const Scene3dGpuUniforms).cast(),
-            );
-            enc.set_fragment_bytes(
-                0,
-                core::mem::size_of::<Scene3dGpuColor>() as u64,
-                (&color as *const Scene3dGpuColor).cast(),
-            );
-            enc.draw_indexed_primitives(
-                scene3d_primitive(mesh.topology),
-                mesh.index_count,
-                MTLIndexType::UInt32,
-                &mesh.ib,
-                0,
-            );
-            self.acc_draws = self.acc_draws.saturating_add(1);
+            self.encode_scene3d_instance(&enc, pass.view_proj, instance, 1.0, false)?;
         }
         enc.end_encoding();
         self.frame_color_initialized = true;
@@ -3573,6 +3726,204 @@ impl MetalRenderer {
             self.last_stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
         }
         self.last_stats.draws = self.acc_draws;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    fn encode_scene3d_bloom(
+        &mut self,
+        cmd: &CommandBuffer,
+        target_tex: &Texture,
+        view_proj: scene3d::Mat4,
+        bloom: scene3d::Bloom3d<'_>,
+    ) -> Result<(), api::RenderError> {
+        if bloom.emissive_instances.is_empty() || bloom.layers.is_empty() {
+            return Ok(());
+        }
+        let divisor = bloom.downsample_divisor.clamp(1, 8);
+        self.ensure_scene3d_bloom_targets(divisor);
+        let Some(bloom_tex) = self.scene3d_bloom_tex.as_ref().map(Texture::to_owned) else {
+            return Ok(());
+        };
+        let Some(bloom_tmp_tex) = self.scene3d_bloom_tmp_tex.as_ref().map(Texture::to_owned) else {
+            return Ok(());
+        };
+
+        for layer in bloom.layers {
+            if layer.strength <= 0.0 || layer.sigma_px <= 0.0 {
+                continue;
+            }
+            let rpd = RenderPassDescriptor::new();
+            let ca = rpd.color_attachments().object_at(0).unwrap();
+            ca.set_texture(Some(&bloom_tex));
+            ca.set_load_action(MTLLoadAction::Clear);
+            ca.set_store_action(MTLStoreAction::Store);
+            ca.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0 });
+            let enc = cmd.new_render_command_encoder(&rpd);
+            enc.set_front_facing_winding(MTLWinding::CounterClockwise);
+            for instance in bloom.emissive_instances {
+                self.encode_scene3d_instance(&enc, view_proj, instance, 1.0, true)?;
+            }
+            enc.end_encoding();
+
+            let pass_sigma = (layer.sigma_px / divisor as f32).max(0.75);
+            let pass_radius = (pass_sigma * 3.0).ceil().clamp(2.0, 192.0);
+            self.encode_scene3d_bloom_blur_pass(
+                cmd,
+                &bloom_tex,
+                &bloom_tmp_tex,
+                [1.0, 0.0, pass_sigma, pass_radius],
+            );
+            self.encode_scene3d_bloom_blur_pass(
+                cmd,
+                &bloom_tmp_tex,
+                &bloom_tex,
+                [0.0, 1.0, pass_sigma, pass_radius],
+            );
+            self.encode_scene3d_bloom_composite(cmd, &bloom_tex, target_tex, layer.strength);
+        }
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    fn encode_scene3d_bloom_blur_pass(
+        &mut self,
+        cmd: &CommandBuffer,
+        src: &Texture,
+        dst: &Texture,
+        params: [f32; 4],
+    ) {
+        let rpd = RenderPassDescriptor::new();
+        let ca = rpd.color_attachments().object_at(0).unwrap();
+        ca.set_texture(Some(dst));
+        ca.set_load_action(MTLLoadAction::DontCare);
+        ca.set_store_action(MTLStoreAction::Store);
+        let enc = cmd.new_render_command_encoder(&rpd);
+        enc.set_render_pipeline_state(&self.pso_bloom_blur);
+        if let Some(sam) = &self.sampler {
+            enc.set_fragment_sampler_state(0, Some(sam));
+        }
+        enc.set_fragment_texture(0, Some(src));
+        enc.set_fragment_bytes(
+            1,
+            core::mem::size_of_val(&params) as u64,
+            params.as_ptr() as *const _,
+        );
+        enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+        enc.end_encoding();
+        self.acc_draws = self.acc_draws.saturating_add(1);
+    }
+
+    #[allow(dead_code)]
+    fn encode_scene3d_bloom_composite(
+        &mut self,
+        cmd: &CommandBuffer,
+        src: &Texture,
+        dst: &Texture,
+        strength: f32,
+    ) {
+        let rpd = RenderPassDescriptor::new();
+        let ca = rpd.color_attachments().object_at(0).unwrap();
+        ca.set_texture(Some(dst));
+        ca.set_load_action(MTLLoadAction::Load);
+        ca.set_store_action(MTLStoreAction::Store);
+        let enc = cmd.new_render_command_encoder(&rpd);
+        enc.set_render_pipeline_state(&self.pso_bloom_composite);
+        if let Some(sam) = &self.sampler {
+            enc.set_fragment_sampler_state(0, Some(sam));
+        }
+        let strength = strength.max(0.0);
+        enc.set_fragment_texture(0, Some(src));
+        enc.set_fragment_bytes(
+            1,
+            core::mem::size_of_val(&strength) as u64,
+            (&strength as *const f32).cast(),
+        );
+        enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+        enc.end_encoding();
+        self.acc_draws = self.acc_draws.saturating_add(1);
+    }
+
+    fn encode_scene3d_instance(
+        &mut self,
+        enc: &RenderCommandEncoderRef,
+        view_proj: scene3d::Mat4,
+        instance: &scene3d::Instance3d,
+        intensity: f32,
+        bloom_target: bool,
+    ) -> Result<(), api::RenderError> {
+        let Some(mesh) = self.meshes_3d.get(&instance.mesh.0) else {
+            return Err(api::RenderError::ResourceNotFound("mesh3d handle"));
+        };
+        let mvp = mat4_mul(&view_proj, &instance.transform);
+        let uniforms = Scene3dGpuUniforms { mvp };
+        let color_scale = intensity.max(0.0);
+        let material = Scene3dGpuMaterial {
+            color: [
+                instance.color.r * color_scale,
+                instance.color.g * color_scale,
+                instance.color.b * color_scale,
+                instance.color.a,
+            ],
+            material: scene3d_material_id(instance.material),
+            _pad: [0.0; 3],
+            params: instance.params,
+        };
+        let pso = if bloom_target {
+            match mesh.topology {
+                scene3d::MeshTopology::Triangles => &self.pso_scene3d_tri_add_bloom,
+                scene3d::MeshTopology::Lines => &self.pso_scene3d_line_add_bloom,
+            }
+        } else {
+            match (mesh.topology, instance.color_write, instance.blend) {
+                (scene3d::MeshTopology::Triangles, true, scene3d::BlendMode3d::Alpha) => {
+                    &self.pso_scene3d_tri
+                }
+                (scene3d::MeshTopology::Triangles, true, scene3d::BlendMode3d::Additive) => {
+                    &self.pso_scene3d_tri_add
+                }
+                (scene3d::MeshTopology::Triangles, false, _) => &self.pso_scene3d_tri_depth,
+                (scene3d::MeshTopology::Lines, true, scene3d::BlendMode3d::Alpha) => {
+                    &self.pso_scene3d_line
+                }
+                (scene3d::MeshTopology::Lines, true, scene3d::BlendMode3d::Additive) => {
+                    &self.pso_scene3d_line_add
+                }
+                (scene3d::MeshTopology::Lines, false, _) => &self.pso_scene3d_line_depth,
+            }
+        };
+        let depth_state = if bloom_target {
+            &self.depth_state_3d_disabled
+        } else {
+            match (instance.depth_test, instance.depth_write) {
+                (false, false) => &self.depth_state_3d_disabled,
+                (true, false) => &self.depth_state_3d_read,
+                (true, true) => &self.depth_state_3d_write,
+                (false, true) => &self.depth_state_3d_write,
+            }
+        };
+        enc.set_render_pipeline_state(pso);
+        enc.set_depth_stencil_state(depth_state);
+        enc.set_cull_mode(scene3d_cull_mode(instance.cull));
+        enc.set_vertex_buffer(0, Some(&mesh.vb), 0);
+        enc.set_vertex_bytes(
+            1,
+            core::mem::size_of::<Scene3dGpuUniforms>() as u64,
+            (&uniforms as *const Scene3dGpuUniforms).cast(),
+        );
+        enc.set_fragment_bytes(
+            0,
+            core::mem::size_of::<Scene3dGpuMaterial>() as u64,
+            (&material as *const Scene3dGpuMaterial).cast(),
+        );
+        enc.draw_indexed_primitives(
+            scene3d_primitive(mesh.topology),
+            mesh.index_count,
+            MTLIndexType::UInt32,
+            &mesh.ib,
+            0,
+        );
+        self.acc_draws = self.acc_draws.saturating_add(1);
         Ok(())
     }
 }
@@ -3631,7 +3982,55 @@ fn draw_cmd_blur_rect_and_sigma(cmd: &api::DrawCmd) -> Option<(&api::RectF, f32)
     }
 }
 
-fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI) -> api::DrawList {
+#[derive(Clone, Copy)]
+struct DrawListView<'a> {
+    items: &'a [api::DrawCmd],
+    vertices: &'a [api::Vertex],
+    indices: &'a [u16],
+}
+
+impl<'a> DrawListView<'a> {
+    fn from_draw_list(list: &'a api::DrawList) -> Self {
+        Self { items: &list.items, vertices: &list.vertices, indices: &list.indices }
+    }
+}
+
+struct FilteredDrawList {
+    items: alloc::vec::Vec<api::DrawCmd>,
+}
+
+impl FilteredDrawList {
+    fn view<'a>(&'a self, source: &'a api::DrawList) -> DrawListView<'a> {
+        DrawListView { items: &self.items, vertices: &source.vertices, indices: &source.indices }
+    }
+}
+
+fn vertex_span_rect(vertices: &[api::Vertex], span: api::VertexSpan) -> Option<api::RectF> {
+    let start = span.offset as usize;
+    let end = start.checked_add(span.len as usize)?;
+    let src = vertices.get(start..end)?;
+    if src.is_empty() {
+        return None;
+    }
+    let mut minx = f32::INFINITY;
+    let mut miny = f32::INFINITY;
+    let mut maxx = f32::NEG_INFINITY;
+    let mut maxy = f32::NEG_INFINITY;
+    for v in src.iter() {
+        minx = minx.min(v.x);
+        miny = miny.min(v.y);
+        maxx = maxx.max(v.x);
+        maxy = maxy.max(v.y);
+    }
+    Some(api::RectF {
+        x: minx,
+        y: miny,
+        w: (maxx - minx).max(0.0),
+        h: (maxy - miny).max(0.0),
+    })
+}
+
+fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI) -> FilteredDrawList {
     fn rect_intersects(r: &api::RectF, sc: &api::RectI) -> bool {
         let rx0 = r.x;
         let ry0 = r.y;
@@ -3643,11 +4042,7 @@ fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI) -> api::D
         let sy1 = (sc.y + sc.h) as f32;
         rx1 > sx0 && rx0 < sx1 && ry1 > sy0 && ry0 < sy1
     }
-    let mut out = api::DrawList {
-        items: alloc::vec::Vec::new(),
-        vertices: list.vertices.clone(),
-        indices: list.indices.clone(),
-    };
+    let mut out = FilteredDrawList { items: alloc::vec::Vec::with_capacity(list.items.len()) };
     let mut i = 0usize;
     while i < list.items.len() {
         match &list.items[i] {
@@ -3694,37 +4089,14 @@ fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI) -> api::D
                 i += 1;
             }
             api::DrawCmd::GlyphRun { run } => {
-                // Compute bounding box from vertices
-                let v_count = run.vb.len as usize;
-                if v_count == 0 {
-                    i += 1;
-                    continue;
-                }
-                let srcv =
-                    &list.vertices[(run.vb.offset as usize)..(run.vb.offset as usize + v_count)];
-                let mut minx = f32::INFINITY;
-                let mut miny = f32::INFINITY;
-                let mut maxx = f32::NEG_INFINITY;
-                let mut maxy = f32::NEG_INFINITY;
-                for v in srcv.iter() {
-                    minx = minx.min(v.x);
-                    miny = miny.min(v.y);
-                    maxx = maxx.max(v.x);
-                    maxy = maxy.max(v.y);
-                }
-                let rect = api::RectF {
-                    x: minx,
-                    y: miny,
-                    w: (maxx - minx).max(0.0),
-                    h: (maxy - miny).max(0.0),
-                };
-                if rect_intersects(&rect, &sc) {
-                    out.items.push(list.items[i].clone());
+                if let Some(rect) = vertex_span_rect(&list.vertices, run.vb) {
+                    if rect_intersects(&rect, &sc) {
+                        out.items.push(list.items[i].clone());
+                    }
                 }
                 i += 1;
             }
             api::DrawCmd::LayerBegin { rect, .. } => {
-                // If layer rect doesn't intersect, skip until matching LayerEnd
                 let mut depth = 1usize;
                 let mut j = i + 1;
                 if rect_intersects(rect, &sc) {
@@ -3759,8 +4131,12 @@ fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI) -> api::D
                 out.items.push(list.items[i].clone());
                 i += 1;
             }
-            api::DrawCmd::Solid { .. } => {
-                out.items.push(list.items[i].clone());
+            api::DrawCmd::Solid { vb, .. } => {
+                if let Some(rect) = vertex_span_rect(&list.vertices, *vb) {
+                    if rect_intersects(&rect, &sc) {
+                        out.items.push(list.items[i].clone());
+                    }
+                }
                 i += 1;
             }
             api::DrawCmd::ClipPush { .. } | api::DrawCmd::ClipPop => {
@@ -3805,6 +4181,7 @@ impl api::Renderer for MetalRenderer {
         self.frame_2d_encoded = false;
         self.frame_color_initialized = false;
         self.frame_depth_initialized = false;
+        self.frame_gpu_trace = None;
         self.frame_encode_started_at = Some(Instant::now());
         // Reset per-frame accumulators
         self.scissor_changes = 0;
@@ -3897,10 +4274,33 @@ impl api::Renderer for MetalRenderer {
         let vp_h_dp = (self.target_h as f32) / self.target_scale.max(1.0);
         let vp_area_dp = (vp_w_dp.max(1.0)) * (vp_h_dp.max(1.0));
         let mut cam_area: f32 = 0.0;
+        let mut need_cam_blur = false;
+        let mut requested_cam_blur_sigma = 0.0f32;
+        let mut has_backdrop = false;
+        let mut has_visual_effect = false;
+        let mut visual_effect_plan = VisualEffectBlurPlan::OFF;
         for it in &list.items {
-            if let api::DrawCmd::CameraBg { rect, .. } = it {
-                let a = (rect.w.max(0.0) * rect.h.max(0.0)).min(vp_area_dp);
-                cam_area += a;
+            match it {
+                api::DrawCmd::CameraBg { rect, blur, sigma, .. } => {
+                    let a = (rect.w.max(0.0) * rect.h.max(0.0)).min(vp_area_dp);
+                    cam_area += a;
+                    if *blur {
+                        need_cam_blur = true;
+                        requested_cam_blur_sigma = requested_cam_blur_sigma.max(*sigma);
+                    }
+                }
+                api::DrawCmd::Backdrop { .. } => {
+                    has_backdrop = true;
+                }
+                api::DrawCmd::VisualEffect { effect, .. } => {
+                    has_backdrop = true;
+                    has_visual_effect = true;
+                    let plan = visual_effect_blur_plan(*effect);
+                    if plan.sigma_dp > visual_effect_plan.sigma_dp {
+                        visual_effect_plan = plan;
+                    }
+                }
+                _ => {}
             }
         }
         let cam_coverage =
@@ -3951,8 +4351,6 @@ impl api::Renderer for MetalRenderer {
         }
 
         // Camera blur prepass: if any CameraBg requests blur, update a cached blurred camera
-        let need_cam_blur =
-            list.items.iter().any(|c| matches!(c, api::DrawCmd::CameraBg { blur: true, .. }));
         #[cfg(target_os = "ios")]
         let mut blur_ms_out: f64 = 0.0;
         #[cfg(not(target_os = "ios"))]
@@ -3967,14 +4365,6 @@ impl api::Renderer for MetalRenderer {
                 Some(t) => t.elapsed() >= self.cam_update_period,
             };
             if do_update {
-                let requested_cam_blur_sigma = list
-                    .items
-                    .iter()
-                    .filter_map(|cmd| match cmd {
-                        api::DrawCmd::CameraBg { blur: true, sigma, .. } => Some(*sigma),
-                        _ => None,
-                    })
-                    .fold(0.0f32, f32::max);
                 let (cam_blur_passes, cam_blur_pass_sigma) =
                     camera_blur_pass_plan(requested_cam_blur_sigma);
                 let blur_t0 = std::time::Instant::now();
@@ -4312,7 +4702,14 @@ impl api::Renderer for MetalRenderer {
                             self.target_w = w_px;
                             self.target_h = h_px;
                             self.target_scale = old_scale;
-                            encode_draws(&encl, &mut pf_l, self, &sub, false, None);
+                            encode_draws(
+                                &encl,
+                                &mut pf_l,
+                                self,
+                                DrawListView::from_draw_list(&sub),
+                                false,
+                                None,
+                            );
                             self.target_w = old_w;
                             self.target_h = old_h;
                             self.target_scale = old_scale;
@@ -4328,22 +4725,6 @@ impl api::Renderer for MetalRenderer {
         }
 
         // Effects prepass: if there is any Backdrop, render a prepass and blur it.
-        let has_backdrop = list.items.iter().any(|c| {
-            matches!(c, api::DrawCmd::Backdrop { .. } | api::DrawCmd::VisualEffect { .. })
-        });
-        let has_visual_effect =
-            list.items.iter().any(|c| matches!(c, api::DrawCmd::VisualEffect { .. }));
-        let mut visual_effect_plan = VisualEffectBlurPlan::OFF;
-        if has_visual_effect {
-            for c in &list.items {
-                if let api::DrawCmd::VisualEffect { effect, .. } = c {
-                    let plan = visual_effect_blur_plan(*effect);
-                    if plan.sigma_dp > visual_effect_plan.sigma_dp {
-                        visual_effect_plan = plan;
-                    }
-                }
-            }
-        }
         if has_backdrop {
             self.ensure_effect_targets();
             // 1) Prepass: render up to the first Backdrop into prepass_tex
@@ -4418,7 +4799,7 @@ impl api::Renderer for MetalRenderer {
             }
             // Optional pre-filtering by prepass scissor only when damage is small
             let filtered_prepass;
-            let list_pre_ref = if let Some(sc_dp) = prepass_scissor_dp {
+            let list_pre_view = if let Some(sc_dp) = prepass_scissor_dp {
                 if self.frame_damage_pct <= self.damage_prefilter_thresh {
                     filtered_prepass = filter_drawlist_by_dp_scissor(list, sc_dp);
                     if filtered_prepass.items.len() < list.items.len() {
@@ -4426,14 +4807,14 @@ impl api::Renderer for MetalRenderer {
                             (list.items.len() - filtered_prepass.items.len()) as u32,
                         );
                     }
-                    &filtered_prepass
+                    filtered_prepass.view(list)
                 } else {
-                    list
+                    DrawListView::from_draw_list(list)
                 }
             } else {
-                list
+                DrawListView::from_draw_list(list)
             };
-            encode_draws(&enc0, &mut pf0, self, list_pre_ref, true, prepass_scissor_dp);
+            encode_draws(&enc0, &mut pf0, self, list_pre_view, true, prepass_scissor_dp);
             self.frames[slot] = pf0;
             enc0.end_encoding();
 
@@ -4767,12 +5148,20 @@ impl api::Renderer for MetalRenderer {
             ca0.set_load_action(MTLLoadAction::Clear);
         }
         ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 });
+        let frame_gpu_trace = self
+            .gpu_stage_timing
+            .as_ref()
+            .and_then(|timing| timing.begin_submission(&self.device));
+        if let Some(gpu_trace) = frame_gpu_trace.as_ref() {
+            gpu_trace.configure_render_pass(&rpd);
+        }
+        self.frame_gpu_trace = frame_gpu_trace;
         let enc = cmd.new_render_command_encoder(&rpd);
         // Move out per-frame to avoid double-borrow on &mut self
         let mut pf = core::mem::take(&mut self.frames[slot]);
         // Optional pre-filtering by frame scissor to reduce CPU work (small damage only)
         let list_main_storage;
-        let list_main_ref: &api::DrawList = if use_damage {
+        let list_main_view = if use_damage {
             if let Some(sc) = self.frame_scissor_dp {
                 if self.frame_damage_pct <= self.damage_prefilter_thresh {
                     list_main_storage = filter_drawlist_by_dp_scissor(list, sc);
@@ -4781,21 +5170,21 @@ impl api::Renderer for MetalRenderer {
                             (list.items.len() - list_main_storage.items.len()) as u32,
                         );
                     }
-                    &list_main_storage
+                    list_main_storage.view(list)
                 } else {
-                    list
+                    DrawListView::from_draw_list(list)
                 }
             } else {
-                list
+                DrawListView::from_draw_list(list)
             }
         } else {
-            list
+            DrawListView::from_draw_list(list)
         };
         encode_draws(
             &enc,
             &mut pf,
             self,
-            list_main_ref,
+            list_main_view,
             false,
             if use_damage { self.frame_scissor_dp } else { None },
         );
@@ -4829,6 +5218,11 @@ impl api::Renderer for MetalRenderer {
         self.last_stats.cam_matrix = self.last_cam_mx.max(0) as u8;
         self.last_stats.cam_video_range = self.last_cam_vr.max(0) as u8;
         self.last_stats.cam_color_space = self.last_cam_cs.max(0) as u8;
+        let completed_gpu_stats = self.latest_completed_gpu_stats();
+        self.last_stats.gpu_ms = completed_gpu_stats.command_ms;
+        self.last_stats.gpu_render_ms = completed_gpu_stats.render_ms;
+        self.last_stats.gpu_vertex_ms = completed_gpu_stats.vertex_ms;
+        self.last_stats.gpu_fragment_ms = completed_gpu_stats.fragment_ms;
         self.frame_2d_encoded = true;
         self.frame_color_initialized = true;
         if let Some(t0) = self.frame_encode_started_at {
@@ -4853,6 +5247,9 @@ impl api::Renderer for MetalRenderer {
             let log_enabled = ios_log_enabled();
             let submit_error_flag = self.submit_error_flag.clone();
             let submit_error_detail = self.submit_error_detail.clone();
+            let completed_gpu_stats = self.completed_gpu_stats.clone();
+            let gpu_trace = self.frame_gpu_trace.take();
+            let gpu_device = self.device.to_owned();
             let in_flight = self.frames[slot].in_flight.clone();
             if !pending_present_drawable.is_null() {
                 let raw_drawable = pending_present_drawable as *mut MTLDrawable;
@@ -4911,6 +5308,20 @@ impl api::Renderer for MetalRenderer {
                         }
                     }
                     submit_error_flag.store(true, Ordering::Release);
+                } else if status == MTLCommandBufferStatus::Completed {
+                    let command_ms = unsafe { command_buffer_gpu_duration_ms(buffer) };
+                    let stage_stats = gpu_trace
+                        .as_ref()
+                        .map(|trace| trace.resolve(&gpu_device))
+                        .unwrap_or_default();
+                    if let Ok(mut stats) = completed_gpu_stats.lock() {
+                        *stats = CompletedGpuStats {
+                            command_ms,
+                            render_ms: stage_stats.render_ms,
+                            vertex_ms: stage_stats.vertex_ms,
+                            fragment_ms: stage_stats.fragment_ms,
+                        };
+                    }
                 }
                 in_flight.store(false, Ordering::Release);
             })
@@ -5009,7 +5420,20 @@ fn encode_draws(
     enc: &RenderCommandEncoderRef,
     pf: &mut PerFrame,
     r: &mut MetalRenderer,
-    list: &api::DrawList,
+    list: DrawListView<'_>,
+    prepass: bool,
+    global_scissor_dp: Option<api::RectI>,
+) {
+    encode_draws_range(enc, pf, r, list, 0, list.items.len(), prepass, global_scissor_dp);
+}
+
+fn encode_draws_range(
+    enc: &RenderCommandEncoderRef,
+    pf: &mut PerFrame,
+    r: &mut MetalRenderer,
+    list: DrawListView<'_>,
+    item_start: usize,
+    item_end: usize,
     prepass: bool,
     global_scissor_dp: Option<api::RectI>,
 ) {
@@ -5025,15 +5449,15 @@ fn encode_draws(
         (r.target_h as f32) / r.target_scale.max(1.0),
     ];
 
-    let mut i: usize = 0;
-    while i < list.items.len() {
+    let mut i: usize = item_start;
+    while i < item_end {
         if debug_stride > 0 && (i == 0 || (i % debug_stride) == 0) {
             ios_log(&format!(
                 "oxide.renderer-metal: encode frame={} prepass={} idx={} total={} kind={}",
                 r.frame_id,
                 prepass,
                 i,
-                list.items.len(),
+                item_end.saturating_sub(item_start),
                 draw_cmd_kind(&list.items[i])
             ));
         }
@@ -5050,10 +5474,11 @@ fn encode_draws(
                 if !r.use_camera_textures {
                     let a = (tint.a * *alpha).clamp(0.0, 1.0);
                     let vparams: [f32; 4] = [rect.x, rect.y, rect.w, rect.h];
-                    let fparams: [f32; 12] = [
-                        rect.x, rect.y, rect.w, rect.h, 0.0, 0.0, 0.0, 0.0, tint.r, tint.g, tint.b,
-                        a,
-                    ];
+                    let fparams = pack_rrect_params(
+                        *rect,
+                        [0.0, 0.0, 0.0, 0.0],
+                        api::Color::rgba(tint.r, tint.g, tint.b, a),
+                    );
                     enc.set_render_pipeline_state(&r.pso_rrect);
                     enc.set_vertex_bytes(
                         1,
@@ -5068,7 +5493,7 @@ fn encode_draws(
                     enc.set_fragment_bytes(
                         1,
                         core::mem::size_of_val(&fparams) as u64,
-                        fparams.as_ptr() as *const _,
+                        (&fparams as *const RRectGpuParams).cast(),
                     );
                     enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
                     r.acc_draws = r.acc_draws.saturating_add(1);
@@ -5183,7 +5608,7 @@ fn encode_draws(
                 // Find matching LayerEnd and collect sublist
                 let mut depth = 1usize;
                 let mut j = i + 1;
-                while j < list.items.len() && depth > 0 {
+                while j < item_end && depth > 0 {
                     match &list.items[j] {
                         api::DrawCmd::LayerBegin { .. } => depth += 1,
                         api::DrawCmd::LayerEnd => depth -= 1,
@@ -5195,13 +5620,8 @@ fn encode_draws(
                                  // If in prepass, render sublist inline (no caching)
                 if prepass {
                     // Encode sublist directly
-                    let sub = api::DrawList {
-                        items: list.items[i + 1..end].to_vec(),
-                        vertices: list.vertices.clone(),
-                        indices: list.indices.clone(),
-                    };
                     let resume_scissor = effective_scissor_dp(current, global_scissor_dp);
-                    encode_draws(enc, pf, r, &sub, true, global_scissor_dp);
+                    encode_draws_range(enc, pf, r, list, i + 1, end, true, global_scissor_dp);
                     apply_scissor_dp(enc, r, resume_scissor, &mut last_applied);
                     i = end + 1;
                     continue;
@@ -5216,26 +5636,16 @@ fn encode_draws(
                 }
                 if unsupported {
                     // Fallback to inline encode
-                    let sub = api::DrawList {
-                        items: list.items[i + 1..end].to_vec(),
-                        vertices: list.vertices.clone(),
-                        indices: list.indices.clone(),
-                    };
                     let resume_scissor = effective_scissor_dp(current, global_scissor_dp);
-                    encode_draws(enc, pf, r, &sub, false, global_scissor_dp);
+                    encode_draws_range(enc, pf, r, list, i + 1, end, false, global_scissor_dp);
                     apply_scissor_dp(enc, r, resume_scissor, &mut last_applied);
                     i = end + 1;
                     continue;
                 }
                 if !r.layer_cache_enabled {
                     // Correctness-first path: disable layer texture caching and render inline.
-                    let sub = api::DrawList {
-                        items: list.items[i + 1..end].to_vec(),
-                        vertices: list.vertices.clone(),
-                        indices: list.indices.clone(),
-                    };
                     let resume_scissor = effective_scissor_dp(current, global_scissor_dp);
-                    encode_draws(enc, pf, r, &sub, false, global_scissor_dp);
+                    encode_draws_range(enc, pf, r, list, i + 1, end, false, global_scissor_dp);
                     apply_scissor_dp(enc, r, resume_scissor, &mut last_applied);
                     i = end + 1;
                     continue;
@@ -5385,13 +5795,8 @@ fn encode_draws(
                 if do_render {
                     // If the cache did not get refreshed in pre-scan, render inline.
                     // This avoids composing stale or empty layer textures.
-                    let sub = api::DrawList {
-                        items: list.items[i + 1..end].to_vec(),
-                        vertices: list.vertices.clone(),
-                        indices: list.indices.clone(),
-                    };
                     let resume_scissor = effective_scissor_dp(current, global_scissor_dp);
-                    encode_draws(enc, pf, r, &sub, false, global_scissor_dp);
+                    encode_draws_range(enc, pf, r, list, i + 1, end, false, global_scissor_dp);
                     apply_scissor_dp(enc, r, resume_scissor, &mut last_applied);
                     i = end + 1;
                     continue;
@@ -5441,7 +5846,7 @@ fn encode_draws(
             api::DrawCmd::ClipPush { rect } => {
                 let next =
                     if let Some(cur) = current { intersect_scissor_dp(cur, *rect) } else { *rect };
-                stack.push(*rect);
+                stack.push(next);
                 current = Some(next);
                 let effective = effective_scissor_dp(current, global_scissor_dp);
                 apply_scissor_dp(enc, r, effective, &mut last_applied);
@@ -5450,19 +5855,7 @@ fn encode_draws(
             }
             api::DrawCmd::ClipPop => {
                 let _ = stack.pop();
-                current = if stack.is_empty() {
-                    None
-                } else {
-                    let mut it = stack.iter();
-                    let mut acc = *it.next().unwrap();
-                    for rct in it {
-                        acc = intersect_scissor_dp(acc, *rct);
-                        if acc.w == 0 || acc.h == 0 {
-                            break;
-                        }
-                    }
-                    Some(acc)
-                };
+                current = stack.last().copied();
                 let effective = effective_scissor_dp(current, global_scissor_dp);
                 apply_scissor_dp(enc, r, effective, &mut last_applied);
                 i += 1;
@@ -5474,22 +5867,17 @@ fn encode_draws(
                 let v_bytes = v_count * core::mem::size_of::<api::Vertex>();
                 let slot = (r.frame_id % FRAME_RING_SIZE as u64) as usize;
                 r.vb.ensure_capacity(&r.device, slot, pf.vb_used + v_bytes);
-                let dst = unsafe {
-                    core::slice::from_raw_parts_mut(
-                        r.vb.contents_ptr(slot).as_ptr().add(pf.vb_used),
-                        v_bytes,
-                    )
-                };
                 let src_slice =
                     &list.vertices[(vb.offset as usize)..(vb.offset as usize + v_count)];
-                let mut clip_vertices = alloc::vec::Vec::with_capacity(v_count);
-                for vertex in src_slice.iter().copied() {
-                    clip_vertices.push(map_solid_vertex_dp_to_clip(vertex, vp_dp[0], vp_dp[1]));
-                }
-                let src_bytes: &[u8] = unsafe {
-                    core::slice::from_raw_parts(clip_vertices.as_ptr() as *const u8, v_bytes)
+                let dst_vertices = unsafe {
+                    core::slice::from_raw_parts_mut(
+                        r.vb.contents_ptr(slot).as_ptr().add(pf.vb_used) as *mut api::Vertex,
+                        v_count,
+                    )
                 };
-                dst.copy_from_slice(src_bytes);
+                for (dst, vertex) in dst_vertices.iter_mut().zip(src_slice.iter().copied()) {
+                    *dst = map_solid_vertex_dp_to_clip(vertex, vp_dp[0], vp_dp[1]);
+                }
                 let vb_off = pf.vb_used as u64;
                 pf.vb_used += v_bytes;
                 let rgba = [color.r, color.g, color.b, color.a];
@@ -5511,13 +5899,7 @@ fn encode_draws(
                     // Upload indices and draw indexed
                     let isrc_slice =
                         &list.indices[(ib.offset as usize)..(ib.offset as usize + idx_count)];
-                    let Some(local_indices) =
-                        normalize_indices_for_local_vertex_span(isrc_slice, vb.offset, vb.len)
-                    else {
-                        i += 1;
-                        continue;
-                    };
-                    let i_bytes = local_indices.len() * core::mem::size_of::<u16>();
+                    let i_bytes = isrc_slice.len() * core::mem::size_of::<u16>();
                     r.ib.ensure_capacity(&r.device, slot, pf.ib_used + i_bytes);
                     let idst = unsafe {
                         core::slice::from_raw_parts_mut(
@@ -5525,16 +5907,18 @@ fn encode_draws(
                             i_bytes,
                         )
                     };
-                    let isrc_bytes: &[u8] = unsafe {
-                        core::slice::from_raw_parts(local_indices.as_ptr() as *const u8, i_bytes)
+                    let Some(local_idx_count) = copy_normalized_indices_for_local_vertex_span(
+                        isrc_slice, vb.offset, vb.len, idst,
+                    ) else {
+                        i += 1;
+                        continue;
                     };
-                    idst.copy_from_slice(isrc_bytes);
                     let ib_off = pf.ib_used as u64;
                     pf.ib_used += i_bytes;
-                    if let Some(primitive) = solid_primitive_for_index_count(local_indices.len()) {
+                    if let Some(primitive) = solid_primitive_for_index_count(local_idx_count) {
                         enc.draw_indexed_primitives(
                             primitive,
-                            local_indices.len() as u64,
+                            local_idx_count as u64,
                             MTLIndexType::UInt16,
                             &r.ib.bufs[slot],
                             ib_off,
@@ -5549,39 +5933,62 @@ fn encode_draws(
                 }
                 i += 1;
             }
-            api::DrawCmd::RRect { rect, radii, color } => {
+            api::DrawCmd::RRect { .. } => {
                 enc.set_render_pipeline_state(&r.pso_rrect);
-                // Draw consecutive RRects in a deterministic non-instanced loop.
-                // Some simulator/driver combinations can produce flat output for
-                // instanced UI quads; this path prioritizes correctness.
                 let mut j = i;
-                while j < list.items.len() && matches!(list.items[j], api::DrawCmd::RRect { .. }) {
-                    if let api::DrawCmd::RRect { rect, radii, color } = &list.items[j] {
-                        let vparams: [f32; 4] = [rect.x, rect.y, rect.w, rect.h];
-                        let fparams: [f32; 12] = [
-                            rect.x, rect.y, rect.w, rect.h, radii[0], radii[1], radii[2], radii[3],
-                            color.r, color.g, color.b, color.a,
-                        ];
-                        enc.set_vertex_bytes(
-                            1,
-                            core::mem::size_of_val(&vp_dp) as u64,
-                            vp_dp.as_ptr() as *const _,
-                        );
+                let emitted = {
+                    let vbuf = &mut r.rrect_vbuf;
+                    let fbuf = &mut r.rrect_fbuf;
+                    vbuf.clear();
+                    fbuf.clear();
+                    while j < item_end {
+                        if let api::DrawCmd::RRect { rect, radii, color } = &list.items[j] {
+                            vbuf.extend_from_slice(&[rect.x, rect.y, rect.w, rect.h]);
+                            fbuf.push(pack_rrect_params(*rect, *radii, *color));
+                            j += 1;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    enc.set_vertex_bytes(
+                        1,
+                        core::mem::size_of_val(&vp_dp) as u64,
+                        vp_dp.as_ptr() as *const _,
+                    );
+                    let count = fbuf.len();
+                    let max_batch = max_instances_per_set_bytes(
+                        core::mem::size_of::<[f32; 4]>(),
+                        core::mem::size_of::<RRectGpuParams>(),
+                    );
+                    let mut emitted = 0usize;
+                    let mut start = 0usize;
+                    while start < count {
+                        let end = (start + max_batch).min(count);
+                        let v_slice = &r.rrect_vbuf[(start * 4)..(end * 4)];
+                        let f_slice = &r.rrect_fbuf[start..end];
                         enc.set_vertex_bytes(
                             0,
-                            core::mem::size_of_val(&vparams) as u64,
-                            vparams.as_ptr() as *const _,
+                            (v_slice.len() * core::mem::size_of::<f32>()) as u64,
+                            v_slice.as_ptr() as *const _,
                         );
                         enc.set_fragment_bytes(
                             1,
-                            core::mem::size_of_val(&fparams) as u64,
-                            fparams.as_ptr() as *const _,
+                            (f_slice.len() * core::mem::size_of::<RRectGpuParams>()) as u64,
+                            f_slice.as_ptr() as *const _,
                         );
-                        enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
-                        r.acc_draws = r.acc_draws.saturating_add(1);
+                        enc.draw_primitives_instanced(
+                            MTLPrimitiveType::Triangle,
+                            0,
+                            6,
+                            (end - start) as u64,
+                        );
+                        emitted += end - start;
+                        start = end;
                     }
-                    j += 1;
-                }
+                    emitted
+                };
+                r.acc_instanced = r.acc_instanced.saturating_add(emitted as u32);
                 i = j;
                 continue;
             }
@@ -5592,22 +5999,23 @@ fn encode_draws(
                         enc.set_fragment_sampler_state(0, Some(sam));
                     }
                     enc.set_fragment_texture(0, Some(img));
-                    // Batch consecutive NineSlice with same texture
-                    let mut count = 0usize;
-                    let mut vbuf: alloc::vec::Vec<f32> = alloc::vec::Vec::new();
-                    let mut fbuf: alloc::vec::Vec<NineSliceGpuParams> = alloc::vec::Vec::new();
                     let tex_w = img.width() as f32;
                     let tex_h = img.height() as f32;
+                    // Batch consecutive NineSlice with same texture
+                    let mut count = 0usize;
+                    r.nine_slice_vbuf.clear();
+                    r.nine_slice_fbuf.clear();
                     let mut j = i;
-                    while j < list.items.len() {
+                    while j < item_end {
                         if let api::DrawCmd::NineSlice { tex: t2, rect, slice, alpha } =
                             &list.items[j]
                         {
                             if *t2 != *tex {
                                 break;
                             }
-                            vbuf.extend_from_slice(&[rect.x, rect.y, rect.w, rect.h]);
-                            fbuf.push(pack_nine_slice_params(*rect, tex_w, tex_h, *slice, *alpha));
+                            r.nine_slice_vbuf.extend_from_slice(&[rect.x, rect.y, rect.w, rect.h]);
+                            r.nine_slice_fbuf
+                                .push(pack_nine_slice_params(*rect, tex_w, tex_h, *slice, *alpha));
                             count += 1;
                             j += 1;
                         } else {
@@ -5627,8 +6035,8 @@ fn encode_draws(
                     let mut start = 0usize;
                     while start < count {
                         let end = (start + max_batch).min(count);
-                        let v_slice = &vbuf[(start * 4)..(end * 4)];
-                        let f_slice = &fbuf[start..end];
+                        let v_slice = &r.nine_slice_vbuf[(start * 4)..(end * 4)];
+                        let f_slice = &r.nine_slice_fbuf[start..end];
                         enc.set_vertex_bytes(
                             0,
                             (v_slice.len() * core::mem::size_of::<f32>()) as u64,
@@ -5669,7 +6077,7 @@ fn encode_draws(
                     );
                     let mut emitted = 0usize;
                     let mut j = i;
-                    while j < list.items.len() {
+                    while j < item_end {
                         if let api::DrawCmd::Image { tex, dst, src, alpha } = &list.items[j] {
                             if let Some(tref) = r.get_image_tex(*tex) {
                                 let vparams: [f32; 4] = [dst.x, dst.y, dst.w, dst.h];
@@ -5720,24 +6128,24 @@ fn encode_draws(
                 };
                 // Batch consecutive Images regardless of texture using argument buffer
                 let mut count = 0usize;
-                let mut vbuf: alloc::vec::Vec<f32> = alloc::vec::Vec::new();
-                let mut fbuf: alloc::vec::Vec<ImageGpuParams> = alloc::vec::Vec::new();
-                let mut tex_map: std::collections::HashMap<u32, u32> =
-                    std::collections::HashMap::new();
-                let mut tex_resources: alloc::vec::Vec<&ResourceRef> = alloc::vec::Vec::new();
+                r.image_vbuf.clear();
+                r.image_fbuf.clear();
+                r.image_tex_map.clear();
                 let mut next_slot: u32 = 0;
                 let mut j = i;
-                while j < list.items.len() {
+                while j < item_end {
                     if let api::DrawCmd::Image { tex, dst, src, alpha } = &list.items[j] {
+                        let existing_slot = r.image_tex_map.get(&tex.0).copied();
                         let Some(tref) = r.get_image_tex(*tex) else {
                             // Skip image draws referencing unknown textures to avoid sampling
                             // unbound argument-buffer slots on simulator/device GPUs.
                             j += 1;
                             continue;
                         };
+                        let (tw, th) = (tref.width() as f32, tref.height() as f32);
                         // Map texture handle to slot
-                        let slot_idx = if let Some(s) = tex_map.get(&tex.0) {
-                            *s
+                        let slot_idx = if let Some(s) = existing_slot {
+                            s
                         } else {
                             if next_slot >= IMAGE_ARG_TEXTURE_SLOTS {
                                 break;
@@ -5747,15 +6155,18 @@ fn encode_draws(
                             if let Some(encdr) = img_arg_encoder {
                                 encdr.set_texture(s as u64, tref);
                             }
-                            tex_resources.push(tref);
-                            tex_map.insert(tex.0, s);
+                            enc.use_resource_at(
+                                tref,
+                                MTLResourceUsage::Read,
+                                MTLRenderStages::Fragment,
+                            );
+                            r.image_tex_map.insert(tex.0, s);
                             s
                         };
                         // Vertex params
-                        vbuf.extend_from_slice(&[dst.x, dst.y, dst.w, dst.h]);
+                        r.image_vbuf.extend_from_slice(&[dst.x, dst.y, dst.w, dst.h]);
                         // Fragment params (ImageParams): rect(dp), src(px), tex_size(px), alpha, tex_index
-                        let (tw, th) = (tref.width() as f32, tref.height() as f32);
-                        fbuf.push(pack_image_params(
+                        r.image_fbuf.push(pack_image_params(
                             *dst,
                             *src,
                             [tw, th],
@@ -5772,13 +6183,6 @@ fn encode_draws(
                     i = j;
                     continue;
                 }
-                if !tex_resources.is_empty() {
-                    enc.use_resources(
-                        &tex_resources,
-                        MTLResourceUsage::Read,
-                        MTLRenderStages::Fragment,
-                    );
-                }
                 // Set vp
                 enc.set_vertex_bytes(
                     1,
@@ -5793,8 +6197,8 @@ fn encode_draws(
                 let mut start = 0usize;
                 while start < count {
                     let end = (start + max_batch).min(count);
-                    let v_slice = &vbuf[(start * 4)..(end * 4)];
-                    let f_slice = &fbuf[start..end];
+                    let v_slice = &r.image_vbuf[(start * 4)..(end * 4)];
+                    let f_slice = &r.image_fbuf[start..end];
                     enc.set_vertex_bytes(
                         0,
                         (v_slice.len() * core::mem::size_of::<f32>()) as u64,
@@ -5824,15 +6228,9 @@ fn encode_draws(
                 let mut group_atlas = None;
                 let mut group_sdf = false;
                 // Pre-scan to determine group and upload VB/UB/IB, collecting offsets
-                struct GR {
-                    vb_off: u64,
-                    ib_off: u64,
-                    idx_count: u64,
-                    ub_off: u64,
-                }
-                let mut group: alloc::vec::Vec<GR> = alloc::vec::Vec::new();
+                r.glyph_group.clear();
                 let mut j = i;
-                while j < list.items.len() {
+                while j < item_end {
                     if let api::DrawCmd::GlyphRun { run } = &list.items[j] {
                         if group_atlas.is_none() {
                             group_atlas = Some(run.atlas);
@@ -5840,7 +6238,6 @@ fn encode_draws(
                         } else if group_atlas != Some(run.atlas) || group_sdf != run.sdf {
                             break;
                         }
-
                         // Upload VB
                         let v_count = run.vb.len as usize;
                         let v_bytes = v_count * core::mem::size_of::<api::Vertex>();
@@ -5879,32 +6276,33 @@ fn encode_draws(
                         if idx_count > 0 {
                             let isrc_slice = &list.indices
                                 [(run.ib.offset as usize)..(run.ib.offset as usize + idx_count)];
-                            if let Some(local_indices) = normalize_indices_for_local_vertex_span(
-                                isrc_slice,
-                                run.vb.offset,
-                                run.vb.len,
-                            ) {
-                                let i_bytes = local_indices.len() * core::mem::size_of::<u16>();
-                                r.ib.ensure_capacity(&r.device, slot, pf.ib_used + i_bytes);
-                                let idst = unsafe {
-                                    core::slice::from_raw_parts_mut(
-                                        r.ib.contents_ptr(slot).as_ptr().add(pf.ib_used),
-                                        i_bytes,
-                                    )
-                                };
-                                let isrc_bytes: &[u8] = unsafe {
-                                    core::slice::from_raw_parts(
-                                        local_indices.as_ptr() as *const u8,
-                                        i_bytes,
-                                    )
-                                };
-                                idst.copy_from_slice(isrc_bytes);
+                            let i_bytes = isrc_slice.len() * core::mem::size_of::<u16>();
+                            r.ib.ensure_capacity(&r.device, slot, pf.ib_used + i_bytes);
+                            let idst = unsafe {
+                                core::slice::from_raw_parts_mut(
+                                    r.ib.contents_ptr(slot).as_ptr().add(pf.ib_used),
+                                    i_bytes,
+                                )
+                            };
+                            if let Some(uploaded_idx_count) =
+                                copy_normalized_indices_for_local_vertex_span(
+                                    isrc_slice,
+                                    run.vb.offset,
+                                    run.vb.len,
+                                    idst,
+                                )
+                            {
                                 ib_off = pf.ib_used as u64;
                                 pf.ib_used += i_bytes;
-                                local_idx_count = local_indices.len() as u64;
+                                local_idx_count = uploaded_idx_count as u64;
                             }
                         }
-                        group.push(GR { vb_off, ib_off, idx_count: local_idx_count, ub_off });
+                        r.glyph_group.push(GlyphRunGpuOffsets {
+                            vb_off,
+                            ib_off,
+                            idx_count: local_idx_count,
+                            ub_off,
+                        });
                         count += 1;
                         j += 1;
                     } else {
@@ -5955,7 +6353,7 @@ fn encode_draws(
                             count as u64,
                             glyph_icb_resource_options(),
                         );
-                        for (ci, gr) in group.iter().enumerate() {
+                        for (ci, gr) in r.glyph_group.iter().enumerate() {
                             let cmd_i = icb.indirect_render_command_at_index(ci as u64);
                             if group_sdf {
                                 cmd_i.set_render_pipeline_state(&r.pso_text_sdf);
@@ -5983,7 +6381,7 @@ fn encode_draws(
                         );
                         r.acc_icb_cmds += count as u32;
                     } else {
-                        for gr in &group {
+                        for gr in &r.glyph_group {
                             enc.set_vertex_buffer(0, Some(&r.vb.bufs[slot]), gr.vb_off);
                             enc.set_fragment_buffer(0, Some(&r.ub.bufs[slot]), gr.ub_off);
                             if gr.idx_count > 0 {
@@ -6012,21 +6410,22 @@ fn encode_draws(
                 let phase = legacy_spinner_phase(spinner_now_ms());
                 // Batch consecutive spinners
                 let mut count = 0usize;
-                let mut vbuf: alloc::vec::Vec<f32> = alloc::vec::Vec::new();
-                let mut fbuf: alloc::vec::Vec<SpinnerGpuParams> = alloc::vec::Vec::new();
+                r.spinner_vbuf.clear();
+                r.spinner_fbuf.clear();
                 let mut j = i;
-                while j < list.items.len() {
+                while j < item_end {
                     if let api::DrawCmd::Spinner { center, atom, alpha } = &list.items[j] {
                         let thickness = legacy_spinner_thickness(*atom);
                         let radius = legacy_spinner_radius(*atom);
                         let mm = *atom * 0.5;
-                        vbuf.extend_from_slice(&[
+                        r.spinner_vbuf.extend_from_slice(&[
                             center[0] - mm,
                             center[1] - mm,
                             mm * 2.0,
                             mm * 2.0,
                         ]);
-                        fbuf.push(pack_spinner_params(*center, radius, thickness, phase, *alpha));
+                        r.spinner_fbuf
+                            .push(pack_spinner_params(*center, radius, thickness, phase, *alpha));
                         count += 1;
                         j += 1;
                     } else {
@@ -6046,8 +6445,8 @@ fn encode_draws(
                 let mut start = 0usize;
                 while start < count {
                     let end = (start + max_batch).min(count);
-                    let v_slice = &vbuf[(start * 4)..(end * 4)];
-                    let f_slice = &fbuf[start..end];
+                    let v_slice = &r.spinner_vbuf[(start * 4)..(end * 4)];
+                    let f_slice = &r.spinner_fbuf[start..end];
                     enc.set_vertex_bytes(
                         0,
                         (v_slice.len() * core::mem::size_of::<f32>()) as u64,
@@ -6084,14 +6483,14 @@ fn encode_draws(
                     enc.set_fragment_texture(0, Some(src));
                     // Batch consecutive backdrops
                     let mut count = 0usize;
-                    let mut vbuf: alloc::vec::Vec<f32> = alloc::vec::Vec::new();
-                    let mut fbuf: alloc::vec::Vec<f32> = alloc::vec::Vec::new(); // rect px + tint
+                    r.effect_vbuf.clear();
+                    r.effect_fbuf.clear();
                     let mut j = i;
-                    while j < list.items.len() {
+                    while j < item_end {
                         if let api::DrawCmd::Backdrop { rect, tint, alpha, .. } = &list.items[j] {
-                            vbuf.extend_from_slice(&[rect.x, rect.y, rect.w, rect.h]);
+                            r.effect_vbuf.extend_from_slice(&[rect.x, rect.y, rect.w, rect.h]);
                             let a = (tint.a * *alpha).clamp(0.0, 1.0);
-                            fbuf.extend_from_slice(&[
+                            r.effect_fbuf.extend_from_slice(&[
                                 rect.x, rect.y, rect.w, rect.h, tint.r, tint.g, tint.b, a,
                             ]);
                             count += 1;
@@ -6113,8 +6512,8 @@ fn encode_draws(
                     let mut start = 0usize;
                     while start < count {
                         let end = (start + max_batch).min(count);
-                        let v_slice = &vbuf[(start * 4)..(end * 4)];
-                        let f_slice = &fbuf[(start * 8)..(end * 8)];
+                        let v_slice = &r.effect_vbuf[(start * 4)..(end * 4)];
+                        let f_slice = &r.effect_fbuf[(start * 8)..(end * 8)];
                         enc.set_vertex_bytes(
                             0,
                             (v_slice.len() * core::mem::size_of::<f32>()) as u64,
@@ -6152,13 +6551,13 @@ fn encode_draws(
                     }
                     enc.set_fragment_texture(0, Some(src));
                     let mut count = 0usize;
-                    let mut vbuf: alloc::vec::Vec<f32> = alloc::vec::Vec::new();
-                    let mut fbuf: alloc::vec::Vec<f32> = alloc::vec::Vec::new();
+                    r.effect_vbuf.clear();
+                    r.effect_fbuf.clear();
                     let mut j = i;
-                    while j < list.items.len() {
+                    while j < item_end {
                         if let api::DrawCmd::VisualEffect { rect, effect } = &list.items[j] {
-                            vbuf.extend_from_slice(&[rect.x, rect.y, rect.w, rect.h]);
-                            fbuf.extend_from_slice(&pack_visual_effect_params(*rect, *effect));
+                            r.effect_vbuf.extend_from_slice(&[rect.x, rect.y, rect.w, rect.h]);
+                            r.effect_fbuf.extend_from_slice(&pack_visual_effect_params(*rect, *effect));
                             count += 1;
                             j += 1;
                         } else {
@@ -6178,8 +6577,8 @@ fn encode_draws(
                     let mut start = 0usize;
                     while start < count {
                         let end = (start + max_batch).min(count);
-                        let v_slice = &vbuf[(start * 4)..(end * 4)];
-                        let f_slice = &fbuf[(start * 8)..(end * 8)];
+                        let v_slice = &r.effect_vbuf[(start * 4)..(end * 4)];
+                        let f_slice = &r.effect_fbuf[(start * 8)..(end * 8)];
                         enc.set_vertex_bytes(
                             0,
                             (v_slice.len() * core::mem::size_of::<f32>()) as u64,
@@ -6208,7 +6607,7 @@ fn encode_draws(
         }
         // Default progress
         // Note: continue branches have updated i accordingly
-        if i < list.items.len() { /* fallthrough increment happens in each arm */ }
+        if i < item_end { /* fallthrough increment happens in each arm */ }
     }
 }
 
@@ -6227,6 +6626,23 @@ struct NineSliceGpuParams {
 fn pack_visual_effect_params(rect: api::RectF, effect: api::VisualEffect) -> [f32; 8] {
     let tint = effect.tint();
     [rect.x, rect.y, rect.w, rect.h, tint.r, tint.g, tint.b, tint.a]
+}
+
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Debug)]
+struct RRectGpuParams {
+    rect: [f32; 4],
+    radii: [f32; 4],
+    color: [f32; 4],
+}
+
+#[inline]
+fn pack_rrect_params(rect: api::RectF, radii: [f32; 4], color: api::Color) -> RRectGpuParams {
+    RRectGpuParams {
+        rect: [rect.x, rect.y, rect.w, rect.h],
+        radii,
+        color: [color.r, color.g, color.b, color.a],
+    }
 }
 
 #[inline]
@@ -6543,14 +6959,20 @@ fn solid_primitive_for_vertex_count(vertex_count: usize) -> Option<MTLPrimitiveT
     }
 }
 
+#[derive(Clone, Copy)]
+enum NormalizedIndexMode {
+    Local,
+    Rebase { vertex_base: u32 },
+}
+
 #[inline]
-fn normalize_indices_for_local_vertex_span(
+fn normalized_index_mode(
     source: &[u16],
     vertex_base: u32,
     vertex_count: u32,
-) -> Option<alloc::vec::Vec<u16>> {
+) -> Option<NormalizedIndexMode> {
     if source.is_empty() {
-        return Some(alloc::vec::Vec::new());
+        return Some(NormalizedIndexMode::Local);
     }
     if vertex_count == 0 {
         return None;
@@ -6560,20 +6982,65 @@ fn normalize_indices_for_local_vertex_span(
         let local_limit = vertex_count as u16;
         let local = source.iter().all(|index| *index < local_limit);
         if local {
-            return Some(source.to_vec());
+            return Some(NormalizedIndexMode::Local);
         }
     }
 
     let vertex_end = vertex_base.saturating_add(vertex_count);
-    let mut rebased = alloc::vec::Vec::with_capacity(source.len());
     for index in source.iter().copied() {
         let absolute = index as u32;
         if absolute < vertex_base || absolute >= vertex_end {
             return None;
         }
-        rebased.push((absolute - vertex_base) as u16);
     }
-    Some(rebased)
+    Some(NormalizedIndexMode::Rebase { vertex_base })
+}
+
+#[inline]
+fn normalize_indices_for_local_vertex_span(
+    source: &[u16],
+    vertex_base: u32,
+    vertex_count: u32,
+) -> Option<alloc::vec::Vec<u16>> {
+    match normalized_index_mode(source, vertex_base, vertex_count)? {
+        NormalizedIndexMode::Local => Some(source.to_vec()),
+        NormalizedIndexMode::Rebase { vertex_base } => {
+            let mut rebased = alloc::vec::Vec::with_capacity(source.len());
+            for index in source.iter().copied() {
+                rebased.push((index as u32 - vertex_base) as u16);
+            }
+            Some(rebased)
+        }
+    }
+}
+
+#[inline]
+fn copy_normalized_indices_for_local_vertex_span(
+    source: &[u16],
+    vertex_base: u32,
+    vertex_count: u32,
+    dst: &mut [u8],
+) -> Option<usize> {
+    let byte_count = source.len() * core::mem::size_of::<u16>();
+    if dst.len() < byte_count {
+        return None;
+    }
+
+    match normalized_index_mode(source, vertex_base, vertex_count)? {
+        NormalizedIndexMode::Local => {
+            let source_bytes =
+                unsafe { core::slice::from_raw_parts(source.as_ptr() as *const u8, byte_count) };
+            dst[..byte_count].copy_from_slice(source_bytes);
+        }
+        NormalizedIndexMode::Rebase { vertex_base } => {
+            for (out, index) in dst[..byte_count].chunks_exact_mut(2).zip(source.iter().copied()) {
+                let bytes = ((index as u32 - vertex_base) as u16).to_ne_bytes();
+                out[0] = bytes[0];
+                out[1] = bytes[1];
+            }
+        }
+    }
+    Some(source.len())
 }
 
 #[inline]
@@ -6680,6 +7147,28 @@ fn build_upsample_pso(
     ca.set_pixel_format(fmt);
     ca.set_blending_enabled(false);
     pipeline_state(device, "pso.upsample.create", &desc)
+}
+
+fn build_bloom_composite_pso(
+    device: &Device,
+    lib: &Library,
+    fmt: MTLPixelFormat,
+) -> Result<RenderPipelineState, MetalInitError> {
+    let v = pipeline_function(lib, "bloom_composite.vertex", "v_fullscreen")?;
+    let f = pipeline_function(lib, "bloom_composite.fragment", "f_bloom_composite")?;
+    let desc = RenderPipelineDescriptor::new();
+    desc.set_vertex_function(Some(&v));
+    desc.set_fragment_function(Some(&f));
+    let ca = desc.color_attachments().object_at(0).unwrap();
+    ca.set_pixel_format(fmt);
+    ca.set_blending_enabled(true);
+    ca.set_rgb_blend_operation(MTLBlendOperation::Add);
+    ca.set_alpha_blend_operation(MTLBlendOperation::Add);
+    ca.set_source_rgb_blend_factor(MTLBlendFactor::One);
+    ca.set_source_alpha_blend_factor(MTLBlendFactor::One);
+    ca.set_destination_rgb_blend_factor(MTLBlendFactor::One);
+    ca.set_destination_alpha_blend_factor(MTLBlendFactor::One);
+    pipeline_state(device, "pso.bloom_composite.create", &desc)
 }
 
 fn build_backdrop_pso(
@@ -6953,7 +7442,9 @@ fn build_scene3d_pso(
     lib: &Library,
     fmt: MTLPixelFormat,
     depth_only: bool,
+    blend: scene3d::BlendMode3d,
     topology: scene3d::MeshTopology,
+    depth_attachment: bool,
 ) -> Result<RenderPipelineState, MetalInitError> {
     let v = pipeline_function(lib, "scene3d.vertex", "v_scene3d")?;
     let f = pipeline_function(lib, "scene3d.fragment", "f_scene3d")?;
@@ -6961,7 +7452,11 @@ fn build_scene3d_pso(
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
     desc.set_sample_count(1);
-    desc.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
+    desc.set_depth_attachment_pixel_format(if depth_attachment {
+        MTLPixelFormat::Depth32Float
+    } else {
+        MTLPixelFormat::Invalid
+    });
 
     let vdesc = VertexDescriptor::new();
     let attrs = vdesc.attributes();
@@ -6980,17 +7475,35 @@ fn build_scene3d_pso(
     ca.set_alpha_blend_operation(MTLBlendOperation::Add);
     ca.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
     ca.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
-    ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-    ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+    match blend {
+        scene3d::BlendMode3d::Alpha => {
+            ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+            ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+        }
+        scene3d::BlendMode3d::Additive => {
+            ca.set_destination_rgb_blend_factor(MTLBlendFactor::One);
+            ca.set_destination_alpha_blend_factor(MTLBlendFactor::One);
+        }
+    }
     if depth_only {
         ca.set_write_mask(MTLColorWriteMask::empty());
     }
 
-    let stage = match (topology, depth_only) {
-        (scene3d::MeshTopology::Triangles, false) => "pso.scene3d.tri.create",
-        (scene3d::MeshTopology::Triangles, true) => "pso.scene3d.tri_depth.create",
-        (scene3d::MeshTopology::Lines, false) => "pso.scene3d.line.create",
-        (scene3d::MeshTopology::Lines, true) => "pso.scene3d.line_depth.create",
+    let stage = match (topology, depth_only, blend) {
+        (scene3d::MeshTopology::Triangles, false, scene3d::BlendMode3d::Alpha) => {
+            "pso.scene3d.tri.create"
+        }
+        (scene3d::MeshTopology::Triangles, true, _) => "pso.scene3d.tri_depth.create",
+        (scene3d::MeshTopology::Triangles, false, scene3d::BlendMode3d::Additive) => {
+            "pso.scene3d.tri_add.create"
+        }
+        (scene3d::MeshTopology::Lines, false, scene3d::BlendMode3d::Alpha) => {
+            "pso.scene3d.line.create"
+        }
+        (scene3d::MeshTopology::Lines, true, _) => "pso.scene3d.line_depth.create",
+        (scene3d::MeshTopology::Lines, false, scene3d::BlendMode3d::Additive) => {
+            "pso.scene3d.line_add.create"
+        }
     };
     pipeline_state(device, stage, &desc)
 }
@@ -7024,6 +7537,14 @@ fn scene3d_cull_mode(cull: scene3d::CullMode3d) -> MTLCullMode {
         scene3d::CullMode3d::None => MTLCullMode::None,
         scene3d::CullMode3d::Front => MTLCullMode::Front,
         scene3d::CullMode3d::Back => MTLCullMode::Back,
+    }
+}
+
+fn scene3d_material_id(material: scene3d::Material3d) -> u32 {
+    match material {
+        scene3d::Material3d::Flat => 0,
+        scene3d::Material3d::NeighborhoodFill => 1,
+        scene3d::Material3d::Emissive => 2,
     }
 }
 
@@ -7191,6 +7712,10 @@ pub struct PerfStats {
     pub instanced: u32,
     pub icb_cmds: u32,
     pub encode_ms: f64,
+    pub gpu_ms: f64,
+    pub gpu_render_ms: f64,
+    pub gpu_vertex_ms: f64,
+    pub gpu_fragment_ms: f64,
     pub damage_px: u64,
     pub damage_pct: f32,
     pub damage_rects: u32,
@@ -7231,7 +7756,9 @@ pub struct PerfStats {
 
 impl MetalRenderer {
     pub fn last_stats(&self) -> PerfStats {
-        self.last_stats
+        let mut stats = self.last_stats;
+        self.apply_completed_gpu_stats(&mut stats);
+        stats
     }
 
     pub fn set_damage_options(&mut self, enabled: bool, use_thresh: f32, prefilter: f32) {
@@ -7397,6 +7924,9 @@ mod tests {
     #[test]
     fn gpu_param_layouts_match_metal_contracts() {
         use core::mem::{align_of, size_of};
+
+        assert_eq!(align_of::<RRectGpuParams>(), 16);
+        assert_eq!(size_of::<RRectGpuParams>(), 48);
 
         assert_eq!(align_of::<NineSliceGpuParams>(), 16);
         assert_eq!(size_of::<NineSliceGpuParams>(), 64);

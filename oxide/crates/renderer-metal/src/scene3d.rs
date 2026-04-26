@@ -30,6 +30,21 @@ pub enum CullMode3d {
     Back,
 }
 
+/// Blend policy for a single scene3d instance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlendMode3d {
+    Alpha,
+    Additive,
+}
+
+/// Fragment material used by the scene3d shader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Material3d {
+    Flat,
+    NeighborhoodFill,
+    Emissive,
+}
+
 /// CPU-side mesh upload payload copied into Metal buffers once.
 #[derive(Clone, Copy, Debug)]
 pub struct Mesh3dData<'a> {
@@ -48,6 +63,9 @@ pub struct Instance3d {
     pub depth_test: bool,
     pub depth_write: bool,
     pub color_write: bool,
+    pub blend: BlendMode3d,
+    pub material: Material3d,
+    pub params: [f32; 4],
 }
 
 impl Instance3d {
@@ -61,8 +79,26 @@ impl Instance3d {
             depth_test: true,
             depth_write: true,
             color_write: true,
+            blend: BlendMode3d::Alpha,
+            material: Material3d::Flat,
+            params: [0.0; 4],
         }
     }
+}
+
+/// One separable blur/composite layer for scene3d emissive bloom.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BloomLayer3d {
+    pub sigma_px: f32,
+    pub strength: f32,
+}
+
+/// Optional emissive layer rendered by scene3d into an offscreen bloom stack.
+#[derive(Clone, Copy, Debug)]
+pub struct Bloom3d<'a> {
+    pub emissive_instances: &'a [Instance3d],
+    pub layers: &'a [BloomLayer3d],
+    pub downsample_divisor: u32,
 }
 
 /// One 3D pass encoded into the current frame before 2D content.
@@ -72,4 +108,5 @@ pub struct Pass3d<'a> {
     pub clear_depth: bool,
     pub view_proj: Mat4,
     pub instances: &'a [Instance3d],
+    pub bloom: Option<Bloom3d<'a>>,
 }

@@ -2,7 +2,7 @@
 //! Provides measurement, culling, diff-driven reusable cells, and focus/hover navigation.
 
 use crate::{anim, DrawListBuilder};
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use oxide_renderer_api as gfx;
 use oxide_timing as timing;
@@ -98,6 +98,7 @@ pub struct CollectionView {
     pool: CellPool,
     transition: Option<CellTransition>,
     cell_anim: BTreeMap<usize, CellAnimState>,
+    row_heights: Vec<f32>,
 }
 
 impl CollectionView {
@@ -115,6 +116,7 @@ impl CollectionView {
             pool: CellPool::default(),
             transition: None,
             cell_anim: BTreeMap::new(),
+            row_heights: Vec::new(),
         }
     }
 
@@ -175,45 +177,34 @@ impl CollectionView {
             }
         }
         let now = timing::now_ms();
-        // Diff-driven cell reuse
-        let mut newset: BTreeSet<usize> = BTreeSet::new();
-        for v in &self.visible {
-            newset.insert(v.index);
-        }
-        let old_keys: Vec<usize> = self.cells.keys().copied().collect();
-        for k in old_keys {
-            if !newset.contains(&k) {
-                if let Some(id) = self.cells.remove(&k) {
-                    self.pool.free(id);
-                }
+        let visible = &self.visible;
+        let pool = &mut self.pool;
+        self.cells.retain(|index, cell_id| {
+            let keep = collection_visible_contains(visible, *index);
+            if !keep {
+                pool.free(*cell_id);
             }
-        }
+            keep
+        });
         for v in &self.visible {
             self.cells.entry(v.index).or_insert_with(|| self.pool.alloc());
         }
         if self.transition.is_some() {
-            self.cell_anim.retain(|idx, _| newset.contains(idx));
-            for idx in newset.iter() {
+            let visible = &self.visible;
+            self.cell_anim.retain(|index, _| collection_visible_contains(visible, *index));
+            for v in &self.visible {
                 self.cell_anim
-                    .entry(*idx)
+                    .entry(v.index)
                     .or_insert(CellAnimState { start_ms: now, cached_scale: None });
             }
         }
-        // Render (collect data first to avoid borrow conflict)
-        let visible_items: Vec<(usize, gfx::RectF, u32, bool, bool)> = self
-            .visible
-            .iter()
-            .map(|v| {
-                let cell_id = self.cells.get(&v.index).copied().unwrap_or(0);
-                let focused = self.focus == Some(v.index);
-                let hovered = self.hover == Some(v.index);
-                (v.index, v.rect_screen, cell_id, focused, hovered)
-            })
-            .collect();
-
-        for (index, rect_screen, cell_id, focused, hovered) in visible_items {
-            let rect = self.transition_rect(index, rect_screen, now);
-            renderer.render(cell_id, index, rect, focused, hovered, b);
+        for slot in 0..self.visible.len() {
+            let visible = self.visible[slot].clone();
+            let cell_id = self.cells.get(&visible.index).copied().unwrap_or(0);
+            let focused = self.focus == Some(visible.index);
+            let hovered = self.hover == Some(visible.index);
+            let rect = self.transition_rect(visible.index, visible.rect_screen, now);
+            renderer.render(cell_id, visible.index, rect, focused, hovered, b);
         }
         self.content
     }
@@ -281,19 +272,18 @@ impl CollectionView {
         let vp_h = viewport.h;
         while i < self.count {
             let n = core::cmp::min(cols, self.count - i);
-            // Measure row heights
-            let mut heights: alloc::vec::Vec<f32> = alloc::vec::Vec::with_capacity(n);
+            self.row_heights.clear();
             for k in 0..n {
-                heights.push(measure.measure(i + k, col_width).max(1.0));
+                self.row_heights.push(measure.measure(i + k, col_width).max(1.0));
             }
-            let row_h = heights.iter().cloned().fold(0.0f32, f32::max);
+            let row_h = self.row_heights.iter().cloned().fold(0.0f32, f32::max);
             let row_top = y;
             let row_bot = y + row_h;
             if row_bot >= scroll && row_top <= scroll + vp_h {
                 for k in 0..n {
                     let x = viewport.x + (col_width + spacing) * (k as f32);
                     let screen_y = viewport.y + (row_top - scroll);
-                    let rect = gfx::RectF::new(x, screen_y, col_width, heights[k]);
+                    let rect = gfx::RectF::new(x, screen_y, col_width, self.row_heights[k]);
                     self.visible.push(VisibleItem { index: i + k, rect_screen: rect });
                 }
             }
@@ -406,6 +396,11 @@ impl CollectionView {
 #[inline]
 fn pt_in(x: f32, y: f32, r: gfx::RectF) -> bool {
     x >= r.x && y >= r.y && x <= r.x + r.w && y <= r.y + r.h
+}
+
+#[inline]
+fn collection_visible_contains(visible: &[VisibleItem], index: usize) -> bool {
+    visible.iter().any(|item| item.index == index)
 }
 
 extern crate alloc;

@@ -13,8 +13,9 @@ use oxide_renderer_api as gfx;
 use oxide_timing as timing;
 use oxide_ui_core::{
     elements::{
-        Align, Badge, BadgeState, BadgeStyle, Button, ButtonState, ButtonStyle, ImageUploader,
-        Label, ProgressBar, RecordButton, RecordButtonState, RecordButtonStyle, TextCtx,
+        encode_label_text, Align, Badge, BadgeState, BadgeStyle, Button, ButtonState,
+        ButtonStyle, ImageUploader, Label, ProgressBar, RecordButton, RecordButtonState,
+        RecordButtonStyle, TextCtx,
     },
     orchestration::ScatterOrchestrator,
     permissions::PermissionOverlayUi,
@@ -590,15 +591,13 @@ impl IntegrationScene {
         builder.rrect(viewport, [0.0; 4], gfx::Color::rgba(0.95, 0.95, 0.96, 1.0));
 
         // Title
-        let title = Label {
-            text: "Integration Test - Real-World Workflows".into(),
-            color: gfx::Color::rgba(0.1, 0.1, 0.1, 1.0),
-            align: Align::Center,
-            wrap: false,
-            font_id: 0,
-            font_px: 20.0,
-        };
-        title.encode(
+        encode_label_text(
+            "Integration Test - Real-World Workflows",
+            gfx::Color::rgba(0.1, 0.1, 0.1, 1.0),
+            Align::Center,
+            false,
+            0,
+            20.0,
             gfx::RectF::new(viewport.x, viewport.y + 5.0, viewport.w, 30.0),
             device_scale,
             text,
@@ -658,15 +657,13 @@ impl IntegrationScene {
         let workflow = &mut self.media_workflow;
 
         // Workflow title
-        let title = Label {
-            text: "Media Capture Workflow".into(),
-            color: gfx::Color::rgba(0.2, 0.2, 0.2, 1.0),
-            align: Align::Left,
-            wrap: false,
-            font_id: 0,
-            font_px: 18.0,
-        };
-        title.encode(
+        encode_label_text(
+            "Media Capture Workflow",
+            gfx::Color::rgba(0.2, 0.2, 0.2, 1.0),
+            Align::Left,
+            false,
+            0,
+            18.0,
             gfx::RectF::new(viewport.x + 100.0, viewport.y + 120.0, 300.0, 25.0),
             device_scale,
             text,
@@ -675,15 +672,13 @@ impl IntegrationScene {
         );
 
         // Status
-        let status = Label {
-            text: workflow.status_label.clone(),
-            color: gfx::Color::rgba(0.4, 0.4, 0.4, 1.0),
-            align: Align::Left,
-            wrap: false,
-            font_id: 0,
-            font_px: 14.0,
-        };
-        status.encode(
+        encode_label_text(
+            workflow.status_label.as_str(),
+            gfx::Color::rgba(0.4, 0.4, 0.4, 1.0),
+            Align::Left,
+            false,
+            0,
+            14.0,
             gfx::RectF::new(viewport.x + 100.0, viewport.y + 150.0, 400.0, 20.0),
             device_scale,
             text,
@@ -723,15 +718,13 @@ impl IntegrationScene {
 
         // Captured items list
         if !workflow.captured_items.is_empty() {
-            let list_title = Label {
-                text: "Captured Items:".into(),
-                color: gfx::Color::rgba(0.3, 0.3, 0.3, 1.0),
-                align: Align::Left,
-                wrap: false,
-                font_id: 0,
-                font_px: 14.0,
-            };
-            list_title.encode(
+            encode_label_text(
+                "Captured Items:",
+                gfx::Color::rgba(0.3, 0.3, 0.3, 1.0),
+                Align::Left,
+                false,
+                0,
+                14.0,
                 gfx::RectF::new(viewport.x + 100.0, viewport.y + 320.0, 200.0, 20.0),
                 device_scale,
                 text,
@@ -789,25 +782,16 @@ impl IntegrationScene {
         uploader: &mut U,
         builder: &mut DrawListBuilder,
     ) {
-        // Extract text values before mutable borrow
-        let name_text = self.data_workflow.name_text.clone();
-        let email_text = self.data_workflow.email_text.clone();
-        let notes_text = self.data_workflow.notes_text.clone();
-        let name_valid = self.data_workflow.name_valid;
-        let email_valid = self.data_workflow.email_valid;
-
         let workflow = &mut self.data_workflow;
 
         // Workflow title
-        let title = Label {
-            text: "Data Collection Form".into(),
-            color: gfx::Color::rgba(0.2, 0.2, 0.2, 1.0),
-            align: Align::Left,
-            wrap: false,
-            font_id: 0,
-            font_px: 18.0,
-        };
-        title.encode(
+        encode_label_text(
+            "Data Collection Form",
+            gfx::Color::rgba(0.2, 0.2, 0.2, 1.0),
+            Align::Left,
+            false,
+            0,
+            18.0,
             gfx::RectF::new(viewport.x + 100.0, viewport.y + 120.0, 300.0, 25.0),
             device_scale,
             text,
@@ -820,9 +804,9 @@ impl IntegrationScene {
             TextFieldView {
                 rect: gfx::RectF::new(viewport.x + 100.0, viewport.y + 200.0, 300.0, 40.0),
                 label: "Name:",
-                text: &name_text,
+                text: workflow.name_text.as_str(),
                 placeholder: Some("Enter name..."),
-                is_valid: name_valid,
+                is_valid: workflow.name_valid,
             },
             text,
             device_scale,
@@ -834,9 +818,9 @@ impl IntegrationScene {
             TextFieldView {
                 rect: gfx::RectF::new(viewport.x + 100.0, viewport.y + 260.0, 300.0, 40.0),
                 label: "Email:",
-                text: &email_text,
+                text: workflow.email_text.as_str(),
                 placeholder: Some("Enter email..."),
-                is_valid: email_valid,
+                is_valid: workflow.email_valid,
             },
             text,
             device_scale,
@@ -848,7 +832,7 @@ impl IntegrationScene {
             TextFieldView {
                 rect: gfx::RectF::new(viewport.x + 100.0, viewport.y + 320.0, 300.0, 60.0),
                 label: "Notes:",
-                text: &notes_text,
+                text: workflow.notes_text.as_str(),
                 placeholder: Some("Add notes (optional)..."),
                 is_valid: true,
             },
@@ -869,19 +853,18 @@ impl IntegrationScene {
         );
 
         // Status message
-        let status = Label {
-            text: workflow.status_message.clone(),
-            color: if workflow.name_valid && workflow.email_valid {
+        let status_color = if workflow.name_valid && workflow.email_valid {
                 gfx::Color::rgba(0.2, 0.7, 0.3, 1.0)
             } else {
                 gfx::Color::rgba(0.7, 0.3, 0.3, 1.0)
-            },
-            align: Align::Left,
-            wrap: false,
-            font_id: 0,
-            font_px: 12.0,
         };
-        status.encode(
+        encode_label_text(
+            workflow.status_message.as_str(),
+            status_color,
+            Align::Left,
+            false,
+            0,
+            12.0,
             gfx::RectF::new(viewport.x + 240.0, viewport.y + 408.0, 200.0, 20.0),
             device_scale,
             text,
@@ -975,16 +958,21 @@ impl IntegrationScene {
                 color,
             );
 
-            // Step number
-            let step_num = Label {
-                text: format!("{}", i + 1),
-                color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
-                align: Align::Center,
-                wrap: false,
-                font_id: 0,
-                font_px: 10.0,
+            let step_label = match i {
+                0 => "1",
+                1 => "2",
+                2 => "3",
+                3 => "4",
+                4 => "5",
+                _ => "",
             };
-            step_num.encode(
+            encode_label_text(
+                step_label,
+                gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
+                Align::Center,
+                false,
+                0,
+                10.0,
                 gfx::RectF::new(
                     step_x - radius,
                     progress_y - radius + 4.0,
@@ -1002,15 +990,13 @@ impl IntegrationScene {
         let content_y = viewport.y + 180.0;
 
         // Step title
-        let title = Label {
-            text: workflow.step_titles[workflow.current_step].clone(),
-            color: gfx::Color::rgba(0.1, 0.1, 0.1, 1.0),
-            align: Align::Center,
-            wrap: false,
-            font_id: 0,
-            font_px: 24.0,
-        };
-        title.encode(
+        encode_label_text(
+            workflow.step_titles[workflow.current_step].as_str(),
+            gfx::Color::rgba(0.1, 0.1, 0.1, 1.0),
+            Align::Center,
+            false,
+            0,
+            24.0,
             gfx::RectF::new(viewport.x, content_y, viewport.w, 35.0),
             device_scale,
             text,
@@ -1019,15 +1005,13 @@ impl IntegrationScene {
         );
 
         // Step description
-        let desc = Label {
-            text: workflow.step_descriptions[workflow.current_step].clone(),
-            color: gfx::Color::rgba(0.4, 0.4, 0.4, 1.0),
-            align: Align::Center,
-            wrap: true,
-            font_id: 0,
-            font_px: 14.0,
-        };
-        desc.encode(
+        encode_label_text(
+            workflow.step_descriptions[workflow.current_step].as_str(),
+            gfx::Color::rgba(0.4, 0.4, 0.4, 1.0),
+            Align::Center,
+            true,
+            0,
+            14.0,
             gfx::RectF::new(viewport.x + 100.0, content_y + 50.0, viewport.w - 200.0, 100.0),
             device_scale,
             text,
@@ -1060,15 +1044,13 @@ impl IntegrationScene {
 
         // Completion message
         if workflow.completed {
-            let complete_msg = Label {
-                text: "✓ Onboarding Complete!".into(),
-                color: gfx::Color::rgba(0.2, 0.7, 0.3, 1.0),
-                align: Align::Center,
-                wrap: false,
-                font_id: 0,
-                font_px: 20.0,
-            };
-            complete_msg.encode(
+            encode_label_text(
+                "✓ Onboarding Complete!",
+                gfx::Color::rgba(0.2, 0.7, 0.3, 1.0),
+                Align::Center,
+                false,
+                0,
+                20.0,
                 gfx::RectF::new(viewport.x, viewport.y + 400.0, viewport.w, 40.0),
                 device_scale,
                 text,
@@ -1086,15 +1068,13 @@ impl IntegrationScene {
         builder: &mut DrawListBuilder,
     ) {
         // Label
-        let field_label = Label {
-            text: view.label.into(),
-            color: gfx::Color::rgba(0.3, 0.3, 0.3, 1.0),
-            align: Align::Left,
-            wrap: false,
-            font_id: 0,
-            font_px: 12.0,
-        };
-        field_label.encode(
+        encode_label_text(
+            view.label,
+            gfx::Color::rgba(0.3, 0.3, 0.3, 1.0),
+            Align::Left,
+            false,
+            0,
+            12.0,
             gfx::RectF::new(view.rect.x, view.rect.y - 20.0, 100.0, 18.0),
             device_scale,
             text_ctx,
@@ -1124,9 +1104,9 @@ impl IntegrationScene {
 
         // Field text or placeholder
         let display_text = if view.text.is_empty() {
-            view.placeholder.unwrap_or("").into()
+            view.placeholder.unwrap_or("")
         } else {
-            view.text.into()
+            view.text
         };
 
         let text_color = if view.text.is_empty() {
@@ -1135,15 +1115,13 @@ impl IntegrationScene {
             gfx::Color::rgba(0.1, 0.1, 0.1, 1.0)
         };
 
-        let field_text = Label {
-            text: display_text,
-            color: text_color,
-            align: Align::Left,
-            wrap: false,
-            font_id: 0,
-            font_px: 14.0,
-        };
-        field_text.encode(
+        encode_label_text(
+            display_text,
+            text_color,
+            Align::Left,
+            false,
+            0,
+            14.0,
             gfx::RectF::new(
                 view.rect.x + 10.0,
                 view.rect.y + (view.rect.h - 16.0) / 2.0,

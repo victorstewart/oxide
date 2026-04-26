@@ -33,9 +33,64 @@ fn latin_text_shapes_into_atlas() {
 
     assert_eq!(run.vb.len as usize, verts.len());
     assert_eq!(run.ib.len as usize, indices.len());
+    assert!(indices.iter().all(|index| usize::from(*index) < verts.len()));
     let (img, _, _) = atlas.image();
     assert!(img.iter().any(|&px| px != 0));
     assert!(!verts.is_empty());
+}
+
+#[test]
+fn atlas_reset_preserves_image_contract() {
+    let mut atlas = Atlas::new(8, 8);
+    let (initial, w, h) = atlas.image();
+    assert_eq!(w, 8);
+    assert_eq!(h, 8);
+    assert_eq!(initial.len(), 64);
+    assert!(initial.iter().all(|px| *px == 0));
+
+    atlas.reset();
+    let (reset, rw, rh) = atlas.image();
+    assert_eq!((rw, rh), (8, 8));
+    assert_eq!(reset.len(), 64);
+}
+
+#[test]
+fn atlas_dirty_rect_tracks_new_glyph_pixels_only() {
+    let mut db = FontDb::default();
+    let latin_id = db.add_font(load_font(LATIN_FONT));
+    let mut shaper = TextShaper::default();
+    let font = db.font(latin_id).expect("latin font");
+    let shaped = shaper.shape(font, latin_id, "AA", 24.0).expect("shape latin");
+    let mut atlas = Atlas::new(128, 128);
+    let mut verts = Vec::new();
+    let mut indices = Vec::new();
+
+    shaped.bake_into(
+        &mut atlas,
+        &mut verts,
+        &mut indices,
+        api::Color::rgba(0.7, 0.2, 0.1, 1.0),
+        api::ImageHandle(1),
+        0.0,
+        0.0,
+        1.0,
+    );
+    let dirty = atlas.dirty_rect().expect("new glyphs dirty atlas");
+    assert!(dirty.w < 128);
+    assert!(dirty.h < 128);
+
+    atlas.clear_dirty();
+    shaped.bake_into(
+        &mut atlas,
+        &mut verts,
+        &mut indices,
+        api::Color::rgba(0.7, 0.2, 0.1, 1.0),
+        api::ImageHandle(1),
+        32.0,
+        0.0,
+        1.0,
+    );
+    assert_eq!(atlas.dirty_rect(), None);
 }
 
 #[test]

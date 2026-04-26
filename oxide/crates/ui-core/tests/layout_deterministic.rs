@@ -78,6 +78,38 @@ fn zero_sized_layout_has_no_hits() {
 }
 
 #[test]
+fn remove_node_removes_descendants_and_reuses_slots() {
+    let mut tree = NodeTree::new_root(root_style());
+    let root = tree.root();
+    let parent = tree.add_node(
+        root,
+        NodeStyle {
+            axis: Axis::Column,
+            size: Size2D { w: Dim::Px(90.0), h: Dim::Px(90.0) },
+            ..NodeStyle::default()
+        },
+    );
+    let child = tree.add_node(
+        parent,
+        NodeStyle { size: Size2D { w: Dim::Px(40.0), h: Dim::Px(40.0) }, ..NodeStyle::default() },
+    );
+    let sibling = tree.add_node(
+        root,
+        NodeStyle { size: Size2D { w: Dim::Px(60.0), h: Dim::Px(60.0) }, ..NodeStyle::default() },
+    );
+
+    tree.remove_node(parent);
+
+    assert!(tree.style(parent).is_none());
+    assert!(tree.style(child).is_none());
+    assert!(tree.style(sibling).is_some());
+    let reused_a = tree.add_node(root, NodeStyle { ..NodeStyle::default() });
+    let reused_b = tree.add_node(root, NodeStyle { ..NodeStyle::default() });
+    assert!([reused_a, reused_b].contains(&parent));
+    assert!([reused_a, reused_b].contains(&child));
+}
+
+#[test]
 fn route_pointer_invokes_handler() {
     let mut tree = NodeTree::new_root(root_style());
     let target = tree.add_node(
@@ -88,4 +120,52 @@ fn route_pointer_invokes_handler() {
     let mut called = None;
     tree.route_pointer(15.0, 12.0, |id, _pos| called = Some(id));
     assert_eq!(called, Some(target));
+}
+
+#[test]
+fn row_layout_and_hit() {
+   let mut tree = NodeTree::new_root(NodeStyle {
+      axis: Axis::Row,
+      size: Size2D { w: Dim::Px(300.0), h: Dim::Px(100.0) },
+      gap: 10.0,
+      padding: Edges { left: 10.0, top: 10.0, right: 10.0, bottom: 10.0 },
+      ..NodeStyle::default()
+   });
+   let a = tree.add_node(
+      tree.root(),
+      NodeStyle { size: Size2D { w: Dim::Px(50.0), h: Dim::Px(50.0) }, ..NodeStyle::default() },
+   );
+   let b = tree.add_node(
+      tree.root(),
+      NodeStyle {
+         size: Size2D { w: Dim::Px(0.0), h: Dim::Px(50.0) },
+         flex_grow: 1.0,
+         ..NodeStyle::default()
+      },
+   );
+
+   tree.layout(300.0, 100.0);
+
+   let a_layout = tree.layout_rect(a).expect("a layout");
+   let b_layout = tree.layout_rect(b).expect("b layout");
+   assert!((a_layout.x - 10.0).abs() < 0.5);
+   assert!((b_layout.x - 70.0).abs() < 0.5);
+   let hit = tree.hit_test(80.0, 20.0).expect("hit inside b");
+   assert_eq!(hit.0, b);
+}
+
+#[test]
+fn reuse_node_slots_and_preserve_root() {
+   let mut tree = NodeTree::new_root(NodeStyle { ..NodeStyle::default() });
+   let a = tree.add_node(tree.root(), NodeStyle { ..NodeStyle::default() });
+   let b = tree.add_node(tree.root(), NodeStyle { ..NodeStyle::default() });
+   assert_eq!(a.0, 2);
+   assert_eq!(b.0, 3);
+
+   tree.remove_node(a);
+   let c = tree.add_node(tree.root(), NodeStyle { ..NodeStyle::default() });
+
+   assert_eq!(c.0, a.0);
+   tree.remove_node(tree.root());
+   assert!(tree.style(tree.root()).is_some());
 }

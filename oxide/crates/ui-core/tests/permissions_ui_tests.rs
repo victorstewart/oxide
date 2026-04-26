@@ -1,6 +1,6 @@
 use oxide_permissions::PermissionState;
 use oxide_platform_api::{PermissionDomain, PermissionStatus};
-use oxide_renderer_api::RectF;
+use oxide_renderer_api::{DrawCmd, RectF};
 use oxide_ui_core::{
     elements::{ImageUploader, TextCtx},
     permissions::PermissionOverlayUi,
@@ -44,8 +44,27 @@ fn overlay_tracks_permission_status() {
 
     let mut builder = DrawListBuilder::new();
     let mut text = TextCtx::default();
+    let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
     let mut uploader = TestUploader;
     overlay.draw(RectF::new(0.0, 0.0, 320.0, 240.0), 2.0, &mut text, &mut uploader, &mut builder);
+    let cta_runs = builder
+        .drawlist()
+        .items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item,
+                DrawCmd::GlyphRun { run }
+                    if run.color.r == 1.0
+                        && run.color.g == 1.0
+                        && run.color.b == 1.0
+                        && run.color.a == 1.0
+            )
+        })
+        .count();
+    assert_eq!(cta_runs, 1);
 
     let triggered = overlay.pointer_event(160.0, 180.0, 1);
     assert!(triggered.is_none());

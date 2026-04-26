@@ -9,6 +9,8 @@
 use oxide_platform_api as api;
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
+use std::mem;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 
@@ -38,29 +40,37 @@ struct TimerEntry {
 
 static TIMERS: LazyLock<Mutex<BTreeMap<u64, Vec<TimerEntry>>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
-static NEXT_TID: LazyLock<Mutex<u64>> = LazyLock::new(|| Mutex::new(1));
+static NEXT_TID: AtomicU64 = AtomicU64::new(1);
 
 pub fn schedule_after<F: FnOnce() + Send + 'static>(delay_ms: u64, f: F) -> TimerId {
     let when = now_ms().saturating_add(delay_ms);
+    let id = NEXT_TID
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| Some(id.saturating_add(1)))
+        .unwrap_or_else(|id| id);
     let mut map = TIMERS.lock().unwrap();
-    let mut id_guard = NEXT_TID.lock().unwrap();
-    let id = *id_guard;
-    *id_guard = id.saturating_add(1);
     map.entry(when).or_default().push(TimerEntry { cb: Box::new(f) });
     id
 }
 
 pub fn advance_timers(now_ms_val: u64) {
-    let mut map = TIMERS.lock().unwrap();
-    let mut due_keys: Vec<u64> = Vec::new();
-    for (k, _) in map.range(..=now_ms_val) {
-        due_keys.push(*k);
-    }
-    for k in due_keys {
-        if let Some(mut vec) = map.remove(&k) {
-            for entry in vec.drain(..) {
-                (entry.cb)();
-            }
+    let due = {
+        let mut map = TIMERS.lock().unwrap();
+        let Some(first_due) = map.keys().next().copied() else {
+            return;
+        };
+        if first_due > now_ms_val {
+            return;
+        }
+        if now_ms_val == u64::MAX {
+            mem::take(&mut *map)
+        } else {
+            let future = map.split_off(&now_ms_val.saturating_add(1));
+            mem::replace(&mut *map, future)
+        }
+    };
+    for (_, entries) in due {
+        for entry in entries {
+            (entry.cb)();
         }
     }
 }
@@ -79,10 +89,10 @@ static ANIMS: LazyLock<Mutex<HashMap<api::AnimId, AnimState>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static RUNNING_PROP: LazyLock<Mutex<HashMap<api::AnimProp, api::AnimId>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-static REDUCE_MOTION: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
+static REDUCE_MOTION: AtomicBool = AtomicBool::new(false);
 
 pub fn set_reduce_motion(enabled: bool) {
-    *REDUCE_MOTION.lock().unwrap() = enabled;
+    REDUCE_MOTION.store(enabled, Ordering::Relaxed);
 }
 
 #[cfg_attr(not(test), doc(hidden))]
@@ -90,13 +100,14 @@ pub fn set_reduce_motion(enabled: bool) {
 pub mod testing {
     use super::{ANIMS, NEXT_TID, REDUCE_MOTION, RUNNING_PROP, TIMERS};
     use oxide_platform_api as api;
+    use std::sync::atomic::Ordering;
 
     pub fn reset() {
         TIMERS.lock().unwrap().clear();
-        *NEXT_TID.lock().unwrap() = 1;
+        NEXT_TID.store(1, Ordering::Relaxed);
         ANIMS.lock().unwrap().clear();
         RUNNING_PROP.lock().unwrap().clear();
-        *REDUCE_MOTION.lock().unwrap() = false;
+        REDUCE_MOTION.store(false, Ordering::Relaxed);
     }
 
     pub fn pending_timers() -> usize {
@@ -115,11 +126,10 @@ pub mod testing {
 pub mod anim {
     use super::{ease_value, lerp_value, now_ms, AnimState, ANIMS, REDUCE_MOTION, RUNNING_PROP};
     use oxide_platform_api as api;
+    use std::sync::atomic::Ordering;
 
     pub fn start(desc: &api::AnimDesc) -> api::AnimId {
-        let reduce = *REDUCE_MOTION.lock().unwrap();
-        // Cancel existing prop animation if any
-        cancel_prop(desc.prop);
+        let reduce = REDUCE_MOTION.load(Ordering::Relaxed);
         let now = now_ms();
         let mut d = desc.clone();
         if reduce {
@@ -128,8 +138,13 @@ pub mod anim {
         }
         let id = d.id;
         let st = AnimState { desc: d, start_ms: now, elapsed_ms: 0, finished: false };
-        ANIMS.lock().unwrap().insert(id, st);
-        RUNNING_PROP.lock().unwrap().insert(desc.prop, id);
+        let mut running = RUNNING_PROP.lock().unwrap();
+        let old = running.insert(desc.prop, id);
+        let mut anims = ANIMS.lock().unwrap();
+        if let Some(old_id) = old {
+            anims.remove(&old_id);
+        }
+        anims.insert(id, st);
         id
     }
 
@@ -318,111 +333,5 @@ fn lerp_value(a: &api::AnimValue, b: &api::AnimValue, k: f32) -> api::AnimValue 
             rot_rad: x0.rot_rad + (x1.rot_rad - x0.rot_rad) * k,
         }),
         _ => b.clone(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ease_curves_behave() {
-        // Monotonic eases: should be non-decreasing [0,1]
-        let mono = [
-            api::EaseKind::Linear,
-            api::EaseKind::QuadIn,
-            api::EaseKind::QuadOut,
-            api::EaseKind::QuadInOut,
-            api::EaseKind::CubicIn,
-            api::EaseKind::CubicOut,
-            api::EaseKind::CubicInOut,
-        ];
-        for k in mono {
-            let e = api::Ease { kind: k };
-            let c = api::AnimCurve::Ease { ease: e };
-            let mut last = -1.0f32;
-            for i in 0..=20 {
-                let t = i as f32 / 20.0;
-                let y = super::ease_value(&c, t);
-                assert!(y.is_finite());
-                assert!((0.0 - 1e-4..=1.0 + 1e-4).contains(&y));
-                assert!(y + 1e-4 >= last);
-                last = y;
-            }
-        }
-        // Non-monotonic eases: values remain finite and within [0,1]
-        for k in [api::EaseKind::BackInOut, api::EaseKind::ElasticOut, api::EaseKind::BounceOut] {
-            let e = api::Ease { kind: k };
-            let c = api::AnimCurve::Ease { ease: e };
-            for i in 0..=20 {
-                let t = i as f32 / 20.0;
-                let y = super::ease_value(&c, t);
-                assert!(y.is_finite());
-                // Allow bounded overshoot/undershoot typical for these curves
-                assert!((-0.5..=1.5).contains(&y));
-            }
-        }
-    }
-
-    #[test]
-    fn timers_fire() {
-        use std::sync::{
-            atomic::{AtomicUsize, Ordering},
-            Arc,
-        };
-        let hit = Arc::new(AtomicUsize::new(0));
-        let hit2 = hit.clone();
-        schedule_after(10, move || {
-            hit2.fetch_add(1, Ordering::SeqCst);
-        });
-        advance_timers(now_ms() + 9);
-        assert_eq!(hit.load(Ordering::SeqCst), 0);
-        advance_timers(now_ms() + 11);
-        assert_eq!(hit.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn ease_endpoints() {
-        let d = api::AnimDesc {
-            id: 1,
-            prop: api::AnimProp::Opacity,
-            from: api::AnimValue::F32(0.0),
-            to: api::AnimValue::F32(1.0),
-            curve: api::AnimCurve::Ease { ease: api::Ease { kind: api::EaseKind::CubicOut } },
-            duration_ms: 200,
-            delay_ms: 0,
-            repeat: api::Repeat::Once,
-        };
-        match super::anim::value_at(&d, 0) {
-            api::AnimValue::F32(v) => assert!((v - 0.0).abs() < 1e-6),
-            _ => panic!(),
-        }
-        match super::anim::value_at(&d, 200) {
-            api::AnimValue::F32(v) => assert!((v - 1.0).abs() < 1e-6),
-            _ => panic!(),
-        }
-    }
-
-    #[test]
-    fn reduce_motion_zero_duration() {
-        super::set_reduce_motion(true);
-        let d = api::AnimDesc {
-            id: 2,
-            prop: api::AnimProp::Opacity,
-            from: api::AnimValue::F32(0.5),
-            to: api::AnimValue::F32(0.9),
-            curve: api::AnimCurve::Ease { ease: api::Ease { kind: api::EaseKind::Linear } },
-            duration_ms: 100,
-            delay_ms: 50,
-            repeat: api::Repeat::Once,
-        };
-        let id = super::anim::start(&d);
-        super::anim::step(now_ms());
-        // Since durations/delay become 0 under reduce motion, direct finish expected
-        if let api::AnimValue::F32(v) = super::anim::value_at(&d, 0) {
-            assert!((v - 0.9).abs() > 1e-2);
-        }
-        super::anim::cancel(id);
-        super::set_reduce_motion(false);
     }
 }

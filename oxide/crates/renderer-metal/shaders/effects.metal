@@ -57,10 +57,17 @@ fragment float4 f_downsample(VSOut in [[stage_in]], texture2d<float> src [[textu
 // Upsample by scale factor (e.g., 2.0)
 fragment float4 f_upsample(VSOut in [[stage_in]], texture2d<float> src [[texture(0)]], sampler s [[sampler(0)]], constant float& scale [[buffer(1)]])
 {
-    // Scale is intentionally accepted for ABI stability; UV mapping is normalized.
-    // Re-scaling UV here causes out-of-range sampling and severe artifacts.
-    (void)scale;
-    return src.sample(s, in.uv);
+   // Scale is intentionally accepted for ABI stability; UV mapping is normalized.
+   // Re-scaling UV here causes out-of-range sampling and severe artifacts.
+   (void)scale;
+   return src.sample(s, in.uv);
+}
+
+fragment float4 f_bloom_composite(VSOut in [[stage_in]], texture2d<float> src [[texture(0)]], sampler s [[sampler(0)]], constant float& strength [[buffer(1)]])
+{
+   float gain = max(strength, 0.0);
+   float4 c = src.sample(s, in.uv);
+   return float4(c.rgb * gain, c.a * gain);
 }
 
 // Dedicated backdrop rect pipeline I/O. Keep names unique to avoid cross-file collisions.

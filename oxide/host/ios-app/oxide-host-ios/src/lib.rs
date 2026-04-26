@@ -190,6 +190,10 @@ fn apply_camera_stage_perf(stats: &mut StatsSnapshot, perf_stats: &metal::PerfSt
     stats.cam_gpu_render_ms = perf_stats.cam_gpu_render_ms as f32;
     stats.cam_gpu_vertex_ms = perf_stats.cam_gpu_vertex_ms as f32;
     stats.cam_gpu_fragment_ms = perf_stats.cam_gpu_fragment_ms as f32;
+    stats.renderer_gpu_ms = perf_stats.gpu_ms as f32;
+    stats.renderer_gpu_render_ms = perf_stats.gpu_render_ms as f32;
+    stats.renderer_gpu_vertex_ms = perf_stats.gpu_vertex_ms as f32;
+    stats.renderer_gpu_fragment_ms = perf_stats.gpu_fragment_ms as f32;
     stats.renderer_memory_total_bytes = perf_stats.memory.total_bytes;
     stats.renderer_memory_draw_targets_bytes = perf_stats.memory.draw_targets_bytes;
     stats.renderer_memory_draw_target_main_bytes = perf_stats.memory.draw_target_main_bytes;
@@ -1365,6 +1369,10 @@ struct StatsSnapshot {
     cam_gpu_render_ms: f32,
     cam_gpu_vertex_ms: f32,
     cam_gpu_fragment_ms: f32,
+    renderer_gpu_ms: f32,
+    renderer_gpu_render_ms: f32,
+    renderer_gpu_vertex_ms: f32,
+    renderer_gpu_fragment_ms: f32,
     cam_capture_total_ms: f32,
     cam_capture_sample_setup_ms: f32,
     cam_capture_lock_ms: f32,
@@ -2921,6 +2929,10 @@ pub struct OxideHostStats {
     pub cam_gpu_render_ms: f32,
     pub cam_gpu_vertex_ms: f32,
     pub cam_gpu_fragment_ms: f32,
+    pub renderer_gpu_ms: f32,
+    pub renderer_gpu_render_ms: f32,
+    pub renderer_gpu_vertex_ms: f32,
+    pub renderer_gpu_fragment_ms: f32,
     pub cam_capture_total_ms: f32,
     pub cam_capture_sample_setup_ms: f32,
     pub cam_capture_lock_ms: f32,
@@ -3031,6 +3043,10 @@ pub extern "C" fn oxide_host_app_stats(out: *mut OxideHostStats) -> ::libc::c_in
                     cam_gpu_render_ms: snap.cam_gpu_render_ms,
                     cam_gpu_vertex_ms: snap.cam_gpu_vertex_ms,
                     cam_gpu_fragment_ms: snap.cam_gpu_fragment_ms,
+                    renderer_gpu_ms: snap.renderer_gpu_ms,
+                    renderer_gpu_render_ms: snap.renderer_gpu_render_ms,
+                    renderer_gpu_vertex_ms: snap.renderer_gpu_vertex_ms,
+                    renderer_gpu_fragment_ms: snap.renderer_gpu_fragment_ms,
                     cam_capture_total_ms: snap.cam_capture_total_ms,
                     cam_capture_sample_setup_ms: snap.cam_capture_sample_setup_ms,
                     cam_capture_lock_ms: snap.cam_capture_lock_ms,

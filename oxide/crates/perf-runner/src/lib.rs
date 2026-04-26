@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use oxide_harness_registry as registry;
-use oxide_input::GestureRecognizer;
+use oxide_input::{GestureRecognizer, TouchSurfaceRecognizer};
 use oxide_permissions as permissions;
 use oxide_platform_api as platform;
 use oxide_renderer_api as api;
@@ -136,6 +136,24 @@ fn set_env_if_unset(name: &str, value: &str) {
             std::env::set_var(name, value);
         }
     }
+}
+
+fn env_bool(name: &str, default: bool) -> bool {
+    let Some(value) = std::env::var(name).ok() else {
+        return default;
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => true,
+        "0" | "false" | "no" | "off" => false,
+        _ => default,
+    }
+}
+
+fn env_f32(name: &str, default: f32) -> f32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<f32>().ok())
+        .unwrap_or(default)
 }
 
 const PERF_SCENE_SPECS: &[ScenePerfSpec] = &[
@@ -1015,9 +1033,51 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
          ),
       },
       AuditFinding {
-         status: String::from("candidate"),
+         status: String::from("fixed"),
          summary: String::from(
-            "renderer-metal still encodes rounded rectangles one draw at a time with per-draw parameter binding; that remains the clearest GPU-side batching opportunity on real Metal targets.",
+            "oxide-input::TouchSurfaceRecognizer now keeps common active touches inline and derives the active one/two-touch frame with a deterministic scan instead of hashing, allocating, and sorting on every raw touch event.",
+         ),
+      },
+      AuditFinding {
+         status: String::from("fixed"),
+         summary: String::from(
+            "oxide-input::GestureRecognizer now keeps common active tracks inline and writes event-only and feedback outputs through monomorphized sinks, removing hashing and the second vector path from common touch handling.",
+         ),
+      },
+      AuditFinding {
+         status: String::from("fixed"),
+         summary: String::from(
+            "oxide-timing timers now use atomic id generation and drain due callbacks before execution, reducing scheduler overhead while avoiding callback execution under the timer map lock.",
+         ),
+      },
+      AuditFinding {
+         status: String::from("fixed"),
+         summary: String::from(
+            "oxide-timing animation start now uses atomic reduce-motion state and a consistent RUNNING_PROP-to-ANIMS lock order, reducing property-animation replacement overhead.",
+         ),
+      },
+      AuditFinding {
+         status: String::from("fixed"),
+         summary: String::from(
+            "oxide-ui-core label encoding now avoids non-wrapped internal label clones, skips disabled diagnostic string formatting on the hot path, and preallocates the common wrapped-line buffers.",
+         ),
+      },
+      AuditFinding {
+         status: String::from("fixed"),
+         summary: String::from(
+            "renderer-metal now batches consecutive rounded rectangles through the instanced shader path, reducing per-rect command encoding and parameter binding.",
+         ),
+      },
+      AuditFinding {
+         status: String::from("fixed"),
+         summary: String::from(
+            "renderer-metal now reuses retained scratch buffers across the remaining small batch encode paths instead of allocating per-frame vectors for each batch group.",
+         ),
+      },
+      AuditFinding {
+         status: String::from("fixed"),
+         summary: String::from(
+            "renderer-metal damage prefiltering now borrows source geometry backing storage, preserving small-damage culling without cloning full vertex and index arrays.",
          ),
       },
       AuditFinding {
@@ -1278,10 +1338,12 @@ fn push_system_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) {
     let coalesce_template = build_coalesce_items();
     let coalesce_template_legacy = coalesce_template.clone();
     let gesture_events = build_gesture_events();
+    let touch_surface_events = build_touch_surface_events();
 
     let prepare_loops = if smoke { 64 } else { 256 };
     let coalesce_loops = if smoke { 32 } else { 128 };
     let gesture_loops = if smoke { 96 } else { 384 };
+    let timer_loops = if smoke { 32 } else { 128 };
     let text_loops = if smoke { 8 } else { 24 };
 
     if perf_case_allowed("cpu.system.prepare_draws.current") {
@@ -1358,6 +1420,45 @@ fn push_system_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) {
             gesture_loops,
             vec![String::from("Tap, long-press, pan, and double-tap sequence.")],
             move || run_gesture_sequence(&gesture_events),
+        ));
+    }
+
+    if perf_case_allowed("cpu.system.touch_surface_sequence") {
+        cases.push(measure_cpu_case(
+            "cpu.system.touch_surface_sequence",
+            "system",
+            smoke,
+            true,
+            0.12,
+            gesture_loops,
+            vec![String::from("Raw one-touch pan plus two-touch pinch surface sequence.")],
+            move || run_touch_surface_sequence(&touch_surface_events),
+        ));
+    }
+
+    if perf_case_allowed("cpu.system.timer_schedule_advance") {
+        cases.push(measure_cpu_case(
+            "cpu.system.timer_schedule_advance",
+            "system",
+            smoke,
+            true,
+            0.12,
+            timer_loops,
+            vec![String::from("Schedule and advance a compact batch of due timers.")],
+            run_timer_schedule_advance,
+        ));
+    }
+
+    if perf_case_allowed("cpu.system.anim_start_replace") {
+        cases.push(measure_cpu_case(
+            "cpu.system.anim_start_replace",
+            "system",
+            smoke,
+            true,
+            0.12,
+            timer_loops,
+            vec![String::from("Start and replace compact property animation batches.")],
+            run_anim_start_replace,
         ));
     }
 
@@ -2884,6 +2985,10 @@ fn cpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
 
 fn gpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
     set_env_if_unset("OXIDE_ENABLE_DAMAGE", "1");
+    let damage_enabled = env_bool("OXIDE_PERF_DAMAGE_ENABLED", true);
+    let damage_use_thresh = env_f32("OXIDE_PERF_DAMAGE_USE_THRESH", DAMAGE_USE_THRESH);
+    let damage_prefilter_thresh =
+        env_f32("OXIDE_PERF_DAMAGE_PREFILTER_THRESH", DAMAGE_PREFILTER_THRESH);
 
     let mut renderer =
         Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
@@ -2891,7 +2996,7 @@ fn gpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
     let h = PERF_SCENE_H;
     let scale = PERF_DEVICE_SCALE;
     renderer.resize(w, h, scale).context("resizing Metal renderer")?;
-    renderer.set_damage_options(true, DAMAGE_USE_THRESH, DAMAGE_PREFILTER_THRESH);
+    renderer.set_damage_options(damage_enabled, damage_use_thresh, damage_prefilter_thresh);
 
     let ptr: *mut metal::MetalRenderer = &mut *renderer;
     let checker = gen_checker_rgba(512, 512);
@@ -2921,7 +3026,11 @@ fn gpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
         ui::coalesce_adjacent_draws(builder.drawlist_mut());
         let draw_ms = draw_t0.elapsed().as_secs_f64() * 1000.0;
         let damage = api::Damage { rects: router.take_damage() };
-        let token = renderer.begin_frame(&api::FrameTarget, Some(&damage));
+        let token = if damage_enabled {
+            renderer.begin_frame(&api::FrameTarget, Some(&damage))
+        } else {
+            renderer.begin_frame(&api::FrameTarget, None)
+        };
         renderer.encode_pass(builder.drawlist());
         renderer
             .submit(token)
@@ -2946,6 +3055,12 @@ fn gpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
     metrics.insert(String::from("instanced_avg"), instanced_sum / frames as f64);
     metrics.insert(String::from("culled_avg"), culled_sum / frames as f64);
     metrics.insert(String::from("damage_pct_avg"), damage_sum / frames as f64);
+    metrics.insert(
+        String::from("damage_enabled"),
+        if damage_enabled { 1.0 } else { 0.0 },
+    );
+    metrics.insert(String::from("damage_use_thresh"), damage_use_thresh as f64);
+    metrics.insert(String::from("damage_prefilter_thresh"), damage_prefilter_thresh as f64);
 
     Ok(PerfCaseResult {
         id: format!("gpu.scene.{}.frame", spec.slug),
@@ -3437,6 +3552,7 @@ fn authoring_scene3d_mixed_frame_case(smoke: bool) -> Result<PerfCaseResult> {
         clear_depth: true,
         view_proj: identity,
         instances: &instances,
+        bloom: None,
     };
 
     let mut overlay = api::DrawList::default();
@@ -5721,6 +5837,20 @@ fn build_gesture_events() -> Vec<(platform::TouchEvent, u64)> {
     ]
 }
 
+fn build_touch_surface_events() -> Vec<platform::TouchEvent> {
+    vec![
+        touch(platform::TouchId(1), platform::TouchPhase::Start, 100.0, 200.0),
+        touch(platform::TouchId(1), platform::TouchPhase::Move, 112.0, 210.0),
+        touch(platform::TouchId(1), platform::TouchPhase::End, 112.0, 210.0),
+        touch(platform::TouchId(2), platform::TouchPhase::Start, 120.0, 220.0),
+        touch(platform::TouchId(3), platform::TouchPhase::Start, 220.0, 420.0),
+        touch(platform::TouchId(2), platform::TouchPhase::Move, 110.0, 210.0),
+        touch(platform::TouchId(3), platform::TouchPhase::Move, 240.0, 430.0),
+        touch(platform::TouchId(2), platform::TouchPhase::End, 110.0, 210.0),
+        touch(platform::TouchId(3), platform::TouchPhase::End, 240.0, 430.0),
+    ]
+}
+
 fn run_gesture_sequence(events: &[(platform::TouchEvent, u64)]) -> u64 {
     let mut recognizer = GestureRecognizer::with_defaults();
     let mut count = 0u64;
@@ -5728,6 +5858,55 @@ fn run_gesture_sequence(events: &[(platform::TouchEvent, u64)]) -> u64 {
         count = count.wrapping_add(recognizer.on_touch(event, *at).len() as u64);
     }
     count
+}
+
+fn run_touch_surface_sequence(events: &[platform::TouchEvent]) -> u64 {
+    let mut recognizer = TouchSurfaceRecognizer::new();
+    let mut count = 0u64;
+    for event in events {
+        count = count.wrapping_add(recognizer.on_touch(event).len() as u64);
+    }
+    count
+}
+
+fn run_timer_schedule_advance() -> u64 {
+    timing::testing::reset();
+    let start = timing::now_ms();
+    let fired = Arc::new(AtomicU64::new(0));
+    for index in 0..32u64 {
+        let fired = fired.clone();
+        timing::schedule_after(index % 8, move || {
+            fired.fetch_add(1, Ordering::Relaxed);
+        });
+    }
+    timing::advance_timers(start.saturating_add(8));
+    fired.load(Ordering::Relaxed)
+}
+
+fn run_anim_start_replace() -> u64 {
+    timing::testing::reset();
+    let mut checksum = 0u64;
+    for index in 0..32u64 {
+        let desc = perf_anim_desc(index + 1, platform::AnimProp::Opacity);
+        checksum = checksum.wrapping_add(timing::anim::start(&desc));
+    }
+    timing::anim::step(timing::now_ms().saturating_add(1_000));
+    checksum.wrapping_add(timing::testing::active_anims() as u64)
+}
+
+fn perf_anim_desc(id: u64, prop: platform::AnimProp) -> platform::AnimDesc {
+    platform::AnimDesc {
+        id,
+        prop,
+        from: platform::AnimValue::F32(0.0),
+        to: platform::AnimValue::F32(1.0),
+        curve: platform::AnimCurve::Ease {
+            ease: platform::Ease { kind: platform::EaseKind::QuadInOut },
+        },
+        duration_ms: 250,
+        delay_ms: 0,
+        repeat: platform::Repeat::Once,
+    }
 }
 
 fn run_text_shape_bake() -> u64 {

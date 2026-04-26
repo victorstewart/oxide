@@ -34,9 +34,9 @@ use xtask::{
     summarize_trace_signpost_metrics_from_tables, uikit_case_in_compare_device_family,
     uikit_case_in_compare_device_watchable_smoke, uikit_case_in_official_device_battery,
     uikit_case_requires_normalized_camera_contract, uikit_device_metrics_case_stdout_path,
-    uikit_device_perf_environment_for_test_name, uikit_device_trace_artifact_exists,
-    uikit_device_trace_enabled, uikit_only_testing_identifier_for_test_name,
-    uikit_perf_environment_json_for_test_name,
+    uikit_device_perf_environment_for_test_name, uikit_device_support_required,
+    uikit_device_trace_artifact_exists, uikit_device_trace_enabled,
+    uikit_only_testing_identifier_for_test_name, uikit_perf_environment_json_for_test_name,
     uikit_perf_environment_json_for_test_name_with_watch_capture,
     uikit_power_trace_candidate_paths, validate_normalized_camera_contract,
     CompareDeviceProofFamilyStatus, CompareDeviceProofStatus, Entitlements, LocationMode,
@@ -1977,17 +1977,27 @@ fn uikit_perf_environment_uses_launch_style_for_optimized_launch_cases() {
 
 #[test]
 fn uikit_perf_environment_enables_watch_frame_capture_for_watchable_runs() {
-    let json = uikit_perf_environment_json_for_test_name_with_watch_capture(
-        "testButtonPressResponse",
-        "native",
-        true,
-    )
-    .expect("watchable environment json");
-    assert!(json.contains("\"OXIDE_PERF_WATCH_MODE\":\"1\""));
-    assert!(json.contains("\"OXIDE_PERF_FRAME_CAPTURE\":\"1\""));
-    assert!(json.contains("\"OXIDE_PERF_FRAME_CAPTURE_EVERY\":\"1\""));
-    assert!(json.contains("\"OXIDE_PERF_FRAME_CAPTURE_MAX\":\"12\""));
-    assert!(json.contains("\"OXIDE_PERF_CASE\":\"testButtonPressResponse\""));
+    with_env_vars(
+        &[
+            ("OXIDE_PERF_WATCH_MODE", None),
+            ("OXIDE_PERF_FRAME_CAPTURE", None),
+            ("OXIDE_PERF_FRAME_CAPTURE_EVERY", None),
+            ("OXIDE_PERF_FRAME_CAPTURE_MAX", None),
+        ],
+        || {
+            let json = uikit_perf_environment_json_for_test_name_with_watch_capture(
+                "testButtonPressResponse",
+                "native",
+                true,
+            )
+            .expect("watchable environment json");
+            assert!(json.contains("\"OXIDE_PERF_WATCH_MODE\":\"1\""));
+            assert!(json.contains("\"OXIDE_PERF_FRAME_CAPTURE\":\"1\""));
+            assert!(json.contains("\"OXIDE_PERF_FRAME_CAPTURE_EVERY\":\"1\""));
+            assert!(json.contains("\"OXIDE_PERF_FRAME_CAPTURE_MAX\":\"12\""));
+            assert!(json.contains("\"OXIDE_PERF_CASE\":\"testButtonPressResponse\""));
+        },
+    );
 }
 
 #[test]
@@ -2280,6 +2290,12 @@ fn device_support_dir_matches_supported_directory_layouts() {
 }
 
 #[test]
+fn uikit_device_support_required_tracks_attached_trace_collection() {
+    assert!(!uikit_device_support_required(0));
+    assert!(uikit_device_support_required(1));
+}
+
+#[test]
 fn unsupported_gpu_counter_profile_detection_matches_xctrace_error_text() {
     let text = "xcrun xctrace record --template Metal System Trace --instrument Metal GPU Counters failed with status 21: GPU Service reported error: Selected counter profile is not supported on target device";
     assert!(is_unsupported_gpu_counter_profile_error(text));
@@ -2345,6 +2361,9 @@ fn device_process_helpers_extract_name_and_pid() {
       {
         "executable": "file:///System/Library/CoreServices/SpringBoard.app/SpringBoard",
         "processIdentifier": 35
+      },
+      {
+        "processIdentifier": 41
       },
       {
         "executable": "file:///var/containers/Bundle/Application/ABC/OxideHost.app/OxideHost",
@@ -3096,6 +3115,52 @@ fn extract_trace_windows_from_tables_uses_region_of_interest_perfworkload() {
     assert_eq!(windows[0].start_ns, 10_808_576_916);
     assert_eq!(windows[0].end_ns, 10_909_448_146);
     assert_eq!(windows[0].process_name, "OxideHost");
+}
+
+#[test]
+fn extract_trace_windows_from_tables_uses_phase_roi_when_perfworkload_is_missing() {
+    let xml = r#"
+<?xml version="1.0"?>
+<trace-query-result>
+  <node xpath='//trace-toc[1]/run[1]/data[1]/table[1]'>
+    <schema name="region-of-interest">
+      <col><mnemonic>start</mnemonic><name>Start</name><engineering-type>start-time</engineering-type></col>
+      <col><mnemonic>name</mnemonic><name>Name</name><engineering-type>signpost-name</engineering-type></col>
+      <col><mnemonic>duration</mnemonic><name>Duration</name><engineering-type>duration</engineering-type></col>
+      <col><mnemonic>subsystem</mnemonic><name>Subsystem</name><engineering-type>subsystem</engineering-type></col>
+      <col><mnemonic>process</mnemonic><name>Start Process</name><engineering-type>process</engineering-type></col>
+    </schema>
+    <row>
+      <start-time fmt="00:00.884.761">884761541</start-time>
+      <signpost-name fmt="screen.mount">screen.mount</signpost-name>
+      <duration fmt="20.00 ms">20000000</duration>
+      <subsystem fmt="com.oxide.perf">com.oxide.perf</subsystem>
+      <process fmt="Oxide Demo (1013)">1013</process>
+    </row>
+    <row>
+      <start-time fmt="00:00.885.177">885177250</start-time>
+      <signpost-name fmt="draw.encode">draw.encode</signpost-name>
+      <duration fmt="291 ns">291</duration>
+      <subsystem fmt="com.oxide.perf">com.oxide.perf</subsystem>
+      <process fmt="Oxide Demo (1013)">1013</process>
+    </row>
+    <row>
+      <start-time fmt="00:00.885.180">885180208</start-time>
+      <signpost-name fmt="frame.present">frame.present</signpost-name>
+      <duration fmt="43.33 µs">43333</duration>
+      <subsystem fmt="com.oxide.perf">com.oxide.perf</subsystem>
+      <process fmt="Oxide Demo (1013)">1013</process>
+    </row>
+  </node>
+</trace-query-result>
+"#;
+
+    let tables = parse_xctrace_tables(xml).expect("parse roi table");
+    let windows = extract_trace_windows_from_tables(&tables).expect("extract trace windows");
+    assert_eq!(windows.len(), 1);
+    assert_eq!(windows[0].start_ns, 884_761_541);
+    assert_eq!(windows[0].end_ns, 904_761_541);
+    assert_eq!(windows[0].process_name, "Oxide Demo");
 }
 
 #[test]
