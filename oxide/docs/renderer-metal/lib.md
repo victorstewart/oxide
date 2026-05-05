@@ -44,7 +44,7 @@ Renderer GPU timing is collected in-app instead of depending on Instruments hard
 
 Frame-level camera/effect metadata is gathered in one draw-list scan. Camera coverage, camera-blur sigma, backdrop presence, and the strongest visual-effect blur plan are reused by the later policy and prepass blocks instead of rediscovering the same facts with separate passes.
 
-Scene3D bloom uses the same persistent-object discipline: additive bloom PSOs are created once, bloom textures are reused across frames at a bounded downsample size, and the composite pass uses a dedicated shader entry point instead of borrowing a higher-level UI effect pipeline.
+Scene3D bloom uses the same persistent-object discipline: additive bloom PSOs are created once, bloom textures are reused across frames at a bounded downsample size, and `encode_scene3d()` routes `Pass3d::bloom` through the dedicated blur/composite encoder after the main 3D pass has initialized the target.
 
 ## Preconditions and postconditions
 
@@ -66,3 +66,4 @@ Scene3D bloom uses the same persistent-object discipline: additive bloom PSOs ar
 - 2026-04-25: Collapsed repeated frame metadata scans for camera and visual-effect decisions.
 - 2026-04-25: Reused renderer-retained scratch across remaining small batch encode paths and made damage prefiltering borrow geometry backing storage instead of cloning it.
 - 2026-04-26: Generalized in-app Metal GPU timing from camera direct preview to normal renderer frame submissions.
+- 2026-04-30: Routed Scene3D bloom payloads through the offscreen blur/composite encoder and fixed the Scene3D material shader padding ABI.

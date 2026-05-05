@@ -8,6 +8,7 @@ license.workspace = true
 oxide-ui-core = { path = "../ui-core" }
 oxide-renderer-api = { path = "../renderer-api" }
 oxide-platform-api = { path = "../platform-api" }
+oxide-input = { path = "../input" }
 oxide-permissions = { path = "../permissions" }
 oxide-telemetry = { path = "../telemetry" }
 oxide-timing = { path = "../timing" }

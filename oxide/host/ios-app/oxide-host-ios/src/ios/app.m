@@ -301,6 +301,38 @@ static BOOL OxidePerfSignpostMatches(const char *utf8, size_t len,
     return;                                                                    \
   }
 
+#define OXIDE_PERF_CAMERA_TRACE_PHASE_LIST(APPLY)                              \
+  APPLY("camera.renderer.direct_preview")                                      \
+  APPLY("camera.host.present")                                                 \
+  APPLY("camera.renderer.resize")                                              \
+  APPLY("camera.router.update_draw")                                           \
+  APPLY("camera.renderer.begin_frame")                                         \
+  APPLY("camera.renderer.coalesce")                                            \
+  APPLY("camera.renderer.encode_pass")                                         \
+  APPLY("camera.renderer.submit")                                              \
+  APPLY("camera.capture.total")                                                \
+  APPLY("camera.capture.sample_setup")                                         \
+  APPLY("camera.capture.lock")                                                 \
+  APPLY("camera.capture.texture_bridge")                                       \
+  APPLY("camera.capture.publish")                                              \
+  APPLY("camera.capture.publish.lock")                                         \
+  APPLY("camera.capture.publish.texture_refs")                                 \
+  APPLY("camera.capture.publish.pixel_buffer")                                 \
+  APPLY("camera.capture.frame_delivery")                                       \
+  APPLY("camera.fetch.live_yuv")                                               \
+  APPLY("camera.fetch.live_bgra")                                              \
+  APPLY("camera.renderer.direct.fetch")                                        \
+  APPLY("camera.renderer.direct.command_buffer")                               \
+  APPLY("camera.renderer.direct.encoder")                                      \
+  APPLY("camera.renderer.direct.setup")                                        \
+  APPLY("camera.renderer.direct.encode_quad")                                  \
+  APPLY("camera.renderer.direct.encode.bind")                                  \
+  APPLY("camera.renderer.direct.encode.draw")                                  \
+  APPLY("camera.renderer.direct.end_encoding")                                 \
+  APPLY("camera.renderer.direct.present_drawable")                             \
+  APPLY("camera.renderer.direct.commit")                                       \
+  APPLY("camera.renderer.direct.poll_submissions")
+
 uint64_t oxide_host_perf_workload_signpost_begin(void) {
   if (@available(iOS 12.0, *)) {
     os_log_t log = OxidePerfSignpostLog();
@@ -332,36 +364,7 @@ uint64_t oxide_host_perf_signpost_begin(const char *utf8, size_t len) {
   if (@available(iOS 12.0, *)) {
     os_log_t log = OxidePerfSignpostLog();
     os_signpost_id_t signpostId = os_signpost_id_generate(log);
-    OXIDE_PERF_TRY_BEGIN("camera.renderer.direct_preview");
-    OXIDE_PERF_TRY_BEGIN("camera.host.present");
-    OXIDE_PERF_TRY_BEGIN("camera.renderer.resize");
-    OXIDE_PERF_TRY_BEGIN("camera.router.update_draw");
-    OXIDE_PERF_TRY_BEGIN("camera.renderer.begin_frame");
-    OXIDE_PERF_TRY_BEGIN("camera.renderer.coalesce");
-    OXIDE_PERF_TRY_BEGIN("camera.renderer.encode_pass");
-    OXIDE_PERF_TRY_BEGIN("camera.renderer.submit");
-    OXIDE_PERF_TRY_BEGIN("camera.capture.total");
-    OXIDE_PERF_TRY_BEGIN("camera.capture.sample_setup");
-    OXIDE_PERF_TRY_BEGIN("camera.capture.lock");
-    OXIDE_PERF_TRY_BEGIN("camera.capture.texture_bridge");
-    OXIDE_PERF_TRY_BEGIN("camera.capture.publish");
-    OXIDE_PERF_TRY_BEGIN("camera.capture.publish.lock");
-    OXIDE_PERF_TRY_BEGIN("camera.capture.publish.texture_refs");
-    OXIDE_PERF_TRY_BEGIN("camera.capture.publish.pixel_buffer");
-    OXIDE_PERF_TRY_BEGIN("camera.capture.frame_delivery");
-    OXIDE_PERF_TRY_BEGIN("camera.fetch.live_yuv");
-    OXIDE_PERF_TRY_BEGIN("camera.fetch.live_bgra");
-    OXIDE_PERF_TRY_BEGIN("camera.renderer.direct.fetch");
-    OXIDE_PERF_TRY_BEGIN("camera.renderer.direct.command_buffer");
-    OXIDE_PERF_TRY_BEGIN("camera.renderer.direct.encoder");
-    OXIDE_PERF_TRY_BEGIN("camera.renderer.direct.setup");
-    OXIDE_PERF_TRY_BEGIN("camera.renderer.direct.encode_quad");
-    OXIDE_PERF_TRY_BEGIN("camera.renderer.direct.encode.bind");
-    OXIDE_PERF_TRY_BEGIN("camera.renderer.direct.encode.draw");
-    OXIDE_PERF_TRY_BEGIN("camera.renderer.direct.end_encoding");
-    OXIDE_PERF_TRY_BEGIN("camera.renderer.direct.present_drawable");
-    OXIDE_PERF_TRY_BEGIN("camera.renderer.direct.commit");
-    OXIDE_PERF_TRY_BEGIN("camera.renderer.direct.poll_submissions");
+    OXIDE_PERF_CAMERA_TRACE_PHASE_LIST(OXIDE_PERF_TRY_BEGIN);
   }
   return 0;
 }
@@ -377,36 +380,7 @@ void oxide_host_perf_signpost_end(const char *utf8, size_t len,
   if (@available(iOS 12.0, *)) {
     os_log_t log = OxidePerfSignpostLog();
     os_signpost_id_t signpostId = (os_signpost_id_t)signpostIdRaw;
-    OXIDE_PERF_TRY_END("camera.renderer.direct_preview");
-    OXIDE_PERF_TRY_END("camera.host.present");
-    OXIDE_PERF_TRY_END("camera.renderer.resize");
-    OXIDE_PERF_TRY_END("camera.router.update_draw");
-    OXIDE_PERF_TRY_END("camera.renderer.begin_frame");
-    OXIDE_PERF_TRY_END("camera.renderer.coalesce");
-    OXIDE_PERF_TRY_END("camera.renderer.encode_pass");
-    OXIDE_PERF_TRY_END("camera.renderer.submit");
-    OXIDE_PERF_TRY_END("camera.capture.total");
-    OXIDE_PERF_TRY_END("camera.capture.sample_setup");
-    OXIDE_PERF_TRY_END("camera.capture.lock");
-    OXIDE_PERF_TRY_END("camera.capture.texture_bridge");
-    OXIDE_PERF_TRY_END("camera.capture.publish");
-    OXIDE_PERF_TRY_END("camera.capture.publish.lock");
-    OXIDE_PERF_TRY_END("camera.capture.publish.texture_refs");
-    OXIDE_PERF_TRY_END("camera.capture.publish.pixel_buffer");
-    OXIDE_PERF_TRY_END("camera.capture.frame_delivery");
-    OXIDE_PERF_TRY_END("camera.fetch.live_yuv");
-    OXIDE_PERF_TRY_END("camera.fetch.live_bgra");
-    OXIDE_PERF_TRY_END("camera.renderer.direct.fetch");
-    OXIDE_PERF_TRY_END("camera.renderer.direct.command_buffer");
-    OXIDE_PERF_TRY_END("camera.renderer.direct.encoder");
-    OXIDE_PERF_TRY_END("camera.renderer.direct.setup");
-    OXIDE_PERF_TRY_END("camera.renderer.direct.encode_quad");
-    OXIDE_PERF_TRY_END("camera.renderer.direct.encode.bind");
-    OXIDE_PERF_TRY_END("camera.renderer.direct.encode.draw");
-    OXIDE_PERF_TRY_END("camera.renderer.direct.end_encoding");
-    OXIDE_PERF_TRY_END("camera.renderer.direct.present_drawable");
-    OXIDE_PERF_TRY_END("camera.renderer.direct.commit");
-    OXIDE_PERF_TRY_END("camera.renderer.direct.poll_submissions");
+    OXIDE_PERF_CAMERA_TRACE_PHASE_LIST(OXIDE_PERF_TRY_END);
   }
 }
 

@@ -1,0 +1,91 @@
+# oxide-test-scenes::lib
+
+## Intention and purpose
+
+`oxide-test-scenes` provides the reusable scene router used by the host app, snapshot tooling, and device performance harnesses. It keeps visual workloads in Rust/Oxide so iOS shells only deliver host surfaces and raw events.
+
+## Relation to the rest of the code
+
+- Upstream callers:
+  - `oxide/host/ios-app/oxide-host-ios/src/lib.rs` drives the router through FFI for app frames and on-screen benchmarks.
+  - `oxide/crates/perf-runner` uses the scenes for offscreen workspace performance cases.
+  - Snapshot and host diagnostics use the same router to render canonical scenes.
+- Downstream dependencies:
+  - `oxide-ui-core` provides controls, text, collection, animation, camera, and draw-list primitives.
+  - `oxide-renderer-api` supplies draw commands, rectangles, colors, and image handles.
+  - `oxide-input` derives surface pinch deltas from raw host touch contacts.
+
+## Entry points list
+
+- `oxide_test_scenes::Router<U>::new(uploader: U) -> Self`
+  - Builds the scene router and all scene state.
+  - Main callers: host app and tests.
+- `oxide_test_scenes::Router<U>::prepare_onscreen_benchmark(&mut self, benchmark: &str) -> bool`
+  - Selects and resets the scene used by a named on-screen device benchmark.
+  - Main callers: iOS host FFI.
+- `oxide_test_scenes::Router<U>::step_onscreen_benchmark(&mut self, benchmark: &str, step: usize) -> bool`
+  - Advances one named benchmark step before the host renders the next visible frame.
+  - Main callers: iOS host FFI.
+- `oxide_test_scenes::Router<U>::draw(&mut self, viewport: RectF, device_scale: f32, b: &mut DrawListBuilder)`
+  - Encodes the active scene into a draw list.
+  - Main callers: host app frame path and snapshot/perf tools.
+- `oxide_test_scenes::Router<U>::input_touch(&mut self, event: &TouchEvent)`
+  - Feeds raw touch contacts into the Oxide-owned surface recognizer and forwards pinch deltas to scenes that support zoom.
+  - Main callers: iOS host raw touch callback.
+
+## Logic narrative
+
+The router owns one state object per scene and switches between them by `SceneKind`. On-screen benchmarks reuse those scenes instead of introducing benchmark-only renderers. Headline component cases map to the smallest existing scene that renders the target object: text layout for labels, controls for progress/spinner/button/toggle/slider, zoom image for image views, nine-slice for resizable imagery, and collection stress for collection views. Headline animation cases use the controls scene for indeterminate progress, button scale, toggle spring, and slider thumb motion, plus the existing zoom-image and animation-timeline scenes.
+
+`prepare_onscreen_benchmark` resets state so every measurement pass starts from a known scene. `step_onscreen_benchmark` performs one deterministic mutation, then the host renders a real MetalView frame. This keeps product behavior and gesture/control state in Rust while UIKit remains only the host shell.
+
+Raw touch input follows the same ownership rule. The host forwards each `TouchEvent`, the router updates a `TouchSurfaceRecognizer`, and recognized pinch ratios are applied through the existing scene-level pinch entry points for Zoom Image and Camera. Scene switches reset the recognizer so stale contacts cannot leak across benchmark or product scene boundaries.
+
+## Preconditions and postconditions
+
+- Preconditions:
+  - The router must have a valid image uploader.
+  - Text benchmarks need loaded fonts to produce glyph runs.
+  - Host-side on-screen benchmarks must call prepare before step.
+- Postconditions:
+  - A successful prepare selects the expected scene and resets its benchmark state.
+  - A successful step mutates only the active benchmark's scene state.
+- Invariants maintained:
+  - UIKit does not own scene-specific benchmark state.
+  - Component and animation cases share production scene code.
+  - Test code remains in `tests/`, not inside source modules.
+
+## Edge cases and failure modes
+
+Unknown benchmark names return `false` so the FFI layer can fail the benchmark explicitly. Missing fonts can reduce label draw output, but the benchmark still runs through the same scene path and host validation catches blank output on device.
+
+Unknown or unsupported touch gestures are ignored. Invalid coordinates are filtered by `oxide-input`, and scene changes clear active touch state before the next scene receives input.
+
+## Concurrency and memory behavior
+
+The router is single-threaded scene state. Benchmark stepping reuses existing scene allocations after prepare; per-frame allocation behavior is governed by the underlying UI-core scene primitives and renderer.
+
+Raw touch recognition stores a bounded inline set of active contacts with overflow only for unusually high touch counts. The router consumes the recognizer synchronously on the host input thread.
+
+## Performance notes
+
+The headline cases deliberately avoid new benchmark-only abstractions. Reusing existing scenes keeps code surface small and ensures the measured cost includes the same draw-list paths app authors use.
+
+## Testing and benchmarks
+
+- `oxide/crates/test-scenes/tests/onscreen_benchmark_tests.rs` verifies the new headline benchmark keys prepare the expected scenes and accept a step.
+- `oxide/crates/test-scenes/tests/onscreen_benchmark_tests.rs` verifies raw two-touch pinch events change the Zoom Image scene through the router.
+- Device benchmark rows are selected by `oxide/xtask/src/lib.rs` and persisted under `oxide/benchmarks/oxide-device/`.
+
+## Examples
+
+```rust
+let mut router = oxide_test_scenes::Router::new(uploader);
+assert!(router.prepare_onscreen_benchmark("component_button_encode"));
+assert!(router.step_onscreen_benchmark("component_button_encode", 1));
+```
+
+## Changelog
+
+- 2026-04-26: Added headline on-screen component and animation benchmark keys for matched Oxide/UIKit device statistics, with identical prepare resets grouped by scene state.
+- 2026-04-29: Routed raw touch pinch events through the scene router instead of dropping them at the new hook.

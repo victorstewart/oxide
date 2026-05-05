@@ -26,6 +26,7 @@
 ## Logic narrative
 - `IosCameraManager` now owns the shared iOS camera bridge that downstream apps such as Nametag consume, so app crates should only keep app-specific review/policy hooks above this layer instead of duplicating AVFoundation camera control code locally.
 - `host_services.m` now owns the shared clipboard, haptics, and permission/update plumbing so host apps can keep only app-shell behavior locally instead of carrying parallel Objective-C utility bridges.
+- Media-library permission status remains lazy until an explicit Photos request, and the cached Oxide status is kept separate from the legacy Nametag status because limited Photos access has different status codes across those bridges.
 - The native CoreLocation bridge keeps delegate-owned cached location state on the main queue; synchronous reads of the last sample also cross that queue so `LocationService: Send + Sync` callers do not race the delegate callback.
 - Each service owns the platform-specific FFI contract and converts host return codes into `PlatformError`.
 - `IosSecureStorage` exposes sync helper methods plus the async `SecureStorage` trait adapter so both direct platform usage and callback-registry compatibility shims share one implementation.
@@ -43,6 +44,7 @@
 - Validated indirectly through downstream workspace builds/tests that consume these services.
 
 ## Changelog
+- 2026-05-01: split lazy media-library permission caching into Oxide and legacy Nametag status slots so limited Photos access preserves each bridge's ABI mapping.
 - 2026-04-20: synchronized `oxide_host_location_last` through the main queue to match CoreLocation delegate ownership and prevent cross-thread reads of the cached native sample.
 - 2026-03-20: absorbed shared iOS clipboard, haptics, permissions, and open-URL/settings Objective-C helpers into `src/ios/host_services.m`, deleting the parallel host-local copies from both Oxide host-app and downstream Nametag host code.
 - 2026-03-20: absorbed shared iOS Bluetooth, push, and QUIC/reachability Objective-C shims so Oxide and downstream apps stop carrying parallel host-local copies of the same platform bridges.

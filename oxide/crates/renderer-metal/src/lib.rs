@@ -774,17 +774,24 @@ pub enum CameraTextureSource {
 
 #[derive(Clone)]
 struct DirectPreviewSubmittedFrame {
-    frame_id: u64,
-    generation: u64,
-    cmd: CommandBuffer,
-    gpu_trace: Option<GpuStageTrace>,
+   frame_id: u64,
+   generation: u64,
+   cmd: CommandBuffer,
+   gpu_trace: Option<GpuStageTrace>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MeshFormat3d {
+   Position,
+   PositionColor,
 }
 
 struct Mesh3dGpu {
-    vb: Buffer,
-    ib: Buffer,
-    index_count: u64,
-    topology: scene3d::MeshTopology,
+   vb: Buffer,
+   ib: Buffer,
+   index_count: u64,
+   topology: scene3d::MeshTopology,
+   format: MeshFormat3d,
 }
 
 #[repr(C)]
@@ -834,11 +841,13 @@ pub struct MetalRenderer {
     pso_camera_bgra: RenderPipelineState,
     pso_scene3d_tri: RenderPipelineState,
     pso_scene3d_tri_depth: RenderPipelineState,
-    pso_scene3d_tri_add: RenderPipelineState,
-    pso_scene3d_tri_add_bloom: RenderPipelineState,
-    pso_scene3d_line: RenderPipelineState,
-    pso_scene3d_line_depth: RenderPipelineState,
-    pso_scene3d_line_add: RenderPipelineState,
+   pso_scene3d_tri_add: RenderPipelineState,
+   pso_scene3d_tri_add_bloom: RenderPipelineState,
+   pso_scene3d_color_tri: RenderPipelineState,
+   pso_scene3d_color_tri_add: RenderPipelineState,
+   pso_scene3d_line: RenderPipelineState,
+   pso_scene3d_line_depth: RenderPipelineState,
+   pso_scene3d_line_add: RenderPipelineState,
     pso_scene3d_line_add_bloom: RenderPipelineState,
     pso_bloom_blur: RenderPipelineState,
     pso_bloom_composite: RenderPipelineState,
@@ -1448,6 +1457,22 @@ impl MetalRenderer {
                 false,
             )
         })?;
+        let pso_scene3d_color_tri = build_init_stage("pso.scene3d.color_tri", || {
+            build_scene3d_color_pso(
+                &device,
+                &library,
+                color_format,
+                scene3d::BlendMode3d::Alpha,
+            )
+        })?;
+        let pso_scene3d_color_tri_add = build_init_stage("pso.scene3d.color_tri_add", || {
+            build_scene3d_color_pso(
+                &device,
+                &library,
+                color_format,
+                scene3d::BlendMode3d::Additive,
+            )
+        })?;
         let pso_scene3d_line = build_init_stage("pso.scene3d.line", || {
             build_scene3d_pso(
                 &device,
@@ -1625,6 +1650,8 @@ impl MetalRenderer {
             pso_scene3d_tri_depth,
             pso_scene3d_tri_add,
             pso_scene3d_tri_add_bloom,
+            pso_scene3d_color_tri,
+            pso_scene3d_color_tri_add,
             pso_scene3d_line,
             pso_scene3d_line_depth,
             pso_scene3d_line_add,
@@ -3651,7 +3678,90 @@ impl MetalRenderer {
         self.next_mesh3d_id = self.next_mesh3d_id.wrapping_add(1).max(1);
         self.meshes_3d.insert(
             id,
-            Mesh3dGpu { vb, ib, index_count: data.indices.len() as u64, topology: data.topology },
+            Mesh3dGpu {
+               vb,
+               ib,
+               index_count: data.indices.len() as u64,
+               topology: data.topology,
+               format: MeshFormat3d::Position,
+            },
+        );
+        Ok(scene3d::MeshHandle3d(id))
+    }
+
+    /// Uploads a static indexed colored 3D mesh into persistent Metal buffers.
+    pub fn mesh3d_create_colored(
+        &mut self,
+        data: &scene3d::MeshColor3dData<'_>,
+    ) -> Result<scene3d::MeshHandle3d, api::RenderError> {
+        if data.vertices.is_empty() {
+            return Err(api::RenderError::InvalidOperation(
+                "mesh3d_create_colored requires vertices",
+            ));
+        }
+        if data.indices.is_empty() {
+            return Err(api::RenderError::InvalidOperation(
+                "mesh3d_create_colored requires indices",
+            ));
+        }
+        match data.topology {
+            scene3d::MeshTopology::Triangles if data.indices.len() % 3 != 0 => {
+                return Err(api::RenderError::InvalidOperation(
+                    "triangle colored mesh indices must be a multiple of 3",
+                ));
+            }
+            scene3d::MeshTopology::Lines => {
+                return Err(api::RenderError::InvalidOperation(
+                    "colored scene3d mesh only supports triangles",
+                ));
+            }
+            _ => {}
+        }
+
+        let mut max_index = 0_u32;
+        for &index in data.indices {
+            max_index = max_index.max(index);
+        }
+        if max_index as usize >= data.vertices.len() {
+            return Err(api::RenderError::InvalidOperation(
+                "colored mesh index referenced a vertex outside the provided slice",
+            ));
+        }
+
+        let vb_len =
+            (data.vertices.len() * core::mem::size_of::<scene3d::VertexColor3d>()) as u64;
+        let ib_len = (data.indices.len() * core::mem::size_of::<u32>()) as u64;
+        let vb = self.device.new_buffer(vb_len, MTLResourceOptions::StorageModeShared);
+        let ib = self.device.new_buffer(ib_len, MTLResourceOptions::StorageModeShared);
+        let vb_ptr = vb.contents();
+        let ib_ptr = ib.contents();
+        if vb_ptr.is_null() || ib_ptr.is_null() {
+            return Err(api::RenderError::OutOfMemory);
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                data.vertices.as_ptr() as *const u8,
+                vb_ptr as *mut u8,
+                vb_len as usize,
+            );
+            core::ptr::copy_nonoverlapping(
+                data.indices.as_ptr() as *const u8,
+                ib_ptr as *mut u8,
+                ib_len as usize,
+            );
+        }
+
+        let id = self.next_mesh3d_id;
+        self.next_mesh3d_id = self.next_mesh3d_id.wrapping_add(1).max(1);
+        self.meshes_3d.insert(
+            id,
+            Mesh3dGpu {
+                vb,
+                ib,
+                index_count: data.indices.len() as u64,
+                topology: data.topology,
+                format: MeshFormat3d::PositionColor,
+            },
         );
         Ok(scene3d::MeshHandle3d(id))
     }
@@ -3715,17 +3825,13 @@ impl MetalRenderer {
 
         let enc = cmd.new_render_command_encoder(&rpd);
         enc.set_front_facing_winding(MTLWinding::CounterClockwise);
-        if let Some(bloom) = pass.bloom {
-            let strength =
-                bloom.layers.iter().map(|layer| layer.strength.max(0.0)).sum::<f32>().max(0.0);
-            for instance in bloom.emissive_instances {
-                self.encode_scene3d_instance(&enc, pass.view_proj, instance, strength, false)?;
-            }
-        }
         for instance in pass.instances {
             self.encode_scene3d_instance(&enc, pass.view_proj, instance, 1.0, false)?;
         }
         enc.end_encoding();
+        if let Some(bloom) = pass.bloom {
+            self.encode_scene3d_bloom(&cmd, &target_tex, pass.view_proj, bloom)?;
+        }
         self.frame_color_initialized = true;
         self.frame_depth_initialized = true;
         if let Some(t0) = self.frame_encode_started_at {
@@ -3735,7 +3841,6 @@ impl MetalRenderer {
         Ok(())
     }
 
-    #[allow(dead_code)]
     fn encode_scene3d_bloom(
         &mut self,
         cmd: &CommandBuffer,
@@ -3791,7 +3896,6 @@ impl MetalRenderer {
         Ok(())
     }
 
-    #[allow(dead_code)]
     fn encode_scene3d_bloom_blur_pass(
         &mut self,
         cmd: &CommandBuffer,
@@ -3820,7 +3924,6 @@ impl MetalRenderer {
         self.acc_draws = self.acc_draws.saturating_add(1);
     }
 
-    #[allow(dead_code)]
     fn encode_scene3d_bloom_composite(
         &mut self,
         cmd: &CommandBuffer,
@@ -3875,7 +3978,26 @@ impl MetalRenderer {
             _pad: [0.0; 3],
             params: instance.params,
         };
-        let pso = if bloom_target {
+        let pso = if mesh.format == MeshFormat3d::PositionColor {
+            if bloom_target {
+                return Err(api::RenderError::InvalidOperation(
+                    "colored scene3d mesh bloom target is not supported",
+                ));
+            }
+            match (mesh.topology, instance.blend) {
+                (scene3d::MeshTopology::Triangles, scene3d::BlendMode3d::Alpha) => {
+                    &self.pso_scene3d_color_tri
+                }
+                (scene3d::MeshTopology::Triangles, scene3d::BlendMode3d::Additive) => {
+                    &self.pso_scene3d_color_tri_add
+                }
+                _ => {
+                    return Err(api::RenderError::InvalidOperation(
+                        "colored scene3d mesh only supports triangles",
+                    ));
+                }
+            }
+        } else if bloom_target {
             match mesh.topology {
                 scene3d::MeshTopology::Triangles => &self.pso_scene3d_tri_add_bloom,
                 scene3d::MeshTopology::Lines => &self.pso_scene3d_line_add_bloom,
@@ -4056,24 +4178,6 @@ fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI, out: &mut
     let mut i = 0usize;
     while i < list.items.len() {
         match &list.items[i] {
-            api::DrawCmd::RRect { rect, .. } => {
-                if rect_intersects(rect, &sc) {
-                    out.items.push(list.items[i].clone());
-                }
-                i += 1;
-            }
-            api::DrawCmd::CameraBg { rect, .. } => {
-                if rect_intersects(rect, &sc) {
-                    out.items.push(list.items[i].clone());
-                }
-                i += 1;
-            }
-            api::DrawCmd::NineSlice { rect, .. } => {
-                if rect_intersects(rect, &sc) {
-                    out.items.push(list.items[i].clone());
-                }
-                i += 1;
-            }
             api::DrawCmd::Image { dst, .. } => {
                 if rect_intersects(dst, &sc) {
                     out.items.push(list.items[i].clone());
@@ -4092,7 +4196,11 @@ fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI, out: &mut
                 }
                 i += 1;
             }
-            api::DrawCmd::Backdrop { rect, .. } | api::DrawCmd::VisualEffect { rect, .. } => {
+            api::DrawCmd::Backdrop { rect, .. }
+            | api::DrawCmd::VisualEffect { rect, .. }
+            | api::DrawCmd::RRect { rect, .. }
+            | api::DrawCmd::CameraBg { rect, .. }
+            | api::DrawCmd::NineSlice { rect, .. } => {
                 if rect_intersects(rect, &sc) {
                     out.items.push(list.items[i].clone());
                 }
@@ -4137,10 +4245,6 @@ fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI, out: &mut
                 }
                 i = j;
             }
-            api::DrawCmd::LayerEnd => {
-                out.items.push(list.items[i].clone());
-                i += 1;
-            }
             api::DrawCmd::Solid { vb, .. } => {
                 if let Some(rect) = vertex_span_rect(&list.vertices, *vb) {
                     if rect_intersects(&rect, &sc) {
@@ -4149,12 +4253,33 @@ fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI, out: &mut
                 }
                 i += 1;
             }
-            api::DrawCmd::ClipPush { .. } | api::DrawCmd::ClipPop => {
+            api::DrawCmd::LayerEnd | api::DrawCmd::ClipPush { .. } | api::DrawCmd::ClipPop => {
                 out.items.push(list.items[i].clone());
                 i += 1;
             }
         }
     }
+}
+
+fn damage_prefiltered_drawlist_view<'a>(
+    list: &'a api::DrawList,
+    scissor: Option<api::RectI>,
+    damage_pct: f32,
+    prefilter_thresh: f32,
+    filtered: &'a mut FilteredDrawList,
+) -> (DrawListView<'a>, usize, bool) {
+    let Some(scissor) = scissor else {
+        return (DrawListView::from_draw_list(list), 0, false);
+    };
+    if damage_pct > prefilter_thresh {
+        return (DrawListView::from_draw_list(list), 0, false);
+    }
+    filter_drawlist_by_dp_scissor(list, scissor, filtered);
+    (
+        filtered.view(list),
+        list.items.len().saturating_sub(filtered.items.len()),
+        true,
+    )
 }
 
 fn clear_layer_sublist(sub: &mut api::DrawList, item_capacity: usize) {
@@ -4815,26 +4940,18 @@ impl api::Renderer for MetalRenderer {
             }
             // Optional pre-filtering by prepass scissor only when damage is small
             let mut filtered_prepass = core::mem::take(&mut self.filtered_prepass);
-            let mut used_filtered_prepass = false;
-            {
-                let list_pre_view = if let Some(sc_dp) = prepass_scissor_dp {
-                    if self.frame_damage_pct <= self.damage_prefilter_thresh {
-                        filter_drawlist_by_dp_scissor(list, sc_dp, &mut filtered_prepass);
-                        used_filtered_prepass = true;
-                        if filtered_prepass.items.len() < list.items.len() {
-                            self.acc_culled = self.acc_culled.saturating_add(
-                                (list.items.len() - filtered_prepass.items.len()) as u32,
-                            );
-                        }
-                        filtered_prepass.view(list)
-                    } else {
-                        DrawListView::from_draw_list(list)
-                    }
-                } else {
-                    DrawListView::from_draw_list(list)
-                };
-                encode_draws(&enc0, &mut pf0, self, list_pre_view, true, prepass_scissor_dp);
+            let (list_pre_view, culled_prepass, used_filtered_prepass) =
+                damage_prefiltered_drawlist_view(
+                    list,
+                    prepass_scissor_dp,
+                    self.frame_damage_pct,
+                    self.damage_prefilter_thresh,
+                    &mut filtered_prepass,
+                );
+            if culled_prepass > 0 {
+                self.acc_culled = self.acc_culled.saturating_add(culled_prepass as u32);
             }
+            encode_draws(&enc0, &mut pf0, self, list_pre_view, true, prepass_scissor_dp);
             if used_filtered_prepass {
                 filtered_prepass.items.clear();
             }
@@ -5185,37 +5302,18 @@ impl api::Renderer for MetalRenderer {
         let mut pf = core::mem::take(&mut self.frames[slot]);
         // Optional pre-filtering by frame scissor to reduce CPU work (small damage only)
         let mut filtered_main = core::mem::take(&mut self.filtered_main);
-        let mut used_filtered_main = false;
-        {
-            let list_main_view = if use_damage {
-                if let Some(sc) = self.frame_scissor_dp {
-                    if self.frame_damage_pct <= self.damage_prefilter_thresh {
-                        filter_drawlist_by_dp_scissor(list, sc, &mut filtered_main);
-                        used_filtered_main = true;
-                        if filtered_main.items.len() < list.items.len() {
-                            self.acc_culled = self.acc_culled.saturating_add(
-                                (list.items.len() - filtered_main.items.len()) as u32,
-                            );
-                        }
-                        filtered_main.view(list)
-                    } else {
-                        DrawListView::from_draw_list(list)
-                    }
-                } else {
-                    DrawListView::from_draw_list(list)
-                }
-            } else {
-                DrawListView::from_draw_list(list)
-            };
-            encode_draws(
-                &enc,
-                &mut pf,
-                self,
-                list_main_view,
-                false,
-                if use_damage { self.frame_scissor_dp } else { None },
-            );
+        let main_scissor = if use_damage { self.frame_scissor_dp } else { None };
+        let (list_main_view, culled_main, used_filtered_main) = damage_prefiltered_drawlist_view(
+            list,
+            main_scissor,
+            self.frame_damage_pct,
+            self.damage_prefilter_thresh,
+            &mut filtered_main,
+        );
+        if culled_main > 0 {
+            self.acc_culled = self.acc_culled.saturating_add(culled_main as u32);
         }
+        encode_draws(&enc, &mut pf, self, list_main_view, false, main_scissor);
         if used_filtered_main {
             filtered_main.items.clear();
         }
@@ -7568,6 +7666,64 @@ fn build_scene3d_pso(
         (scene3d::MeshTopology::Lines, false, scene3d::BlendMode3d::Additive) => {
             "pso.scene3d.line_add.create"
         }
+    };
+    pipeline_state(device, stage, &desc)
+}
+
+fn build_scene3d_color_pso(
+    device: &Device,
+    lib: &Library,
+    fmt: MTLPixelFormat,
+    blend: scene3d::BlendMode3d,
+) -> Result<RenderPipelineState, MetalInitError> {
+    let v = pipeline_function(lib, "scene3d_color.vertex", "v_scene3d_color")?;
+    let f = pipeline_function(lib, "scene3d_color.fragment", "f_scene3d_color")?;
+    let desc = RenderPipelineDescriptor::new();
+    desc.set_vertex_function(Some(&v));
+    desc.set_fragment_function(Some(&f));
+    desc.set_sample_count(1);
+    desc.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
+
+    let vdesc = VertexDescriptor::new();
+    let attrs = vdesc.attributes();
+    attrs.object_at(0).unwrap().set_format(MTLVertexFormat::Float3);
+    attrs.object_at(0).unwrap().set_offset(0);
+    attrs.object_at(0).unwrap().set_buffer_index(0);
+    attrs.object_at(1).unwrap().set_format(MTLVertexFormat::Float4);
+    attrs
+        .object_at(1)
+        .unwrap()
+        .set_offset(core::mem::size_of::<[f32; 3]>() as u64);
+    attrs.object_at(1).unwrap().set_buffer_index(0);
+    let layouts = vdesc.layouts();
+    layouts
+        .object_at(0)
+        .unwrap()
+        .set_stride(core::mem::size_of::<scene3d::VertexColor3d>() as u64);
+    layouts.object_at(0).unwrap().set_step_function(MTLVertexStepFunction::PerVertex);
+    desc.set_vertex_descriptor(Some(&vdesc));
+
+    let ca = desc.color_attachments().object_at(0).unwrap();
+    ca.set_pixel_format(fmt);
+    ca.set_blending_enabled(true);
+    ca.set_rgb_blend_operation(MTLBlendOperation::Add);
+    ca.set_alpha_blend_operation(MTLBlendOperation::Add);
+    ca.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
+    ca.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
+    match blend {
+        scene3d::BlendMode3d::Alpha => {
+            ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+            ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+        }
+        scene3d::BlendMode3d::Additive => {
+            ca.set_destination_rgb_blend_factor(MTLBlendFactor::One);
+            ca.set_destination_alpha_blend_factor(MTLBlendFactor::One);
+        }
+    }
+
+    let stage = match blend {
+        scene3d::BlendMode3d::Alpha => "pso.scene3d.color_tri.create",
+        scene3d::BlendMode3d::Additive => "pso.scene3d.color_tri_add.create",
     };
     pipeline_state(device, stage, &desc)
 }

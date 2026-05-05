@@ -31,6 +31,9 @@
 - `xtask::compare_uikit_reports(current: &UIKitPerfReport, baseline: &UIKitPerfReport) -> UIKitPerfComparison`
   - Applies regression gating to UIKit baselines.
   - Main callers: device perf flow and tests.
+- `xtask::uikit_report_matches_case_ids(report: &UIKitPerfReport, expected_case_ids: &[&str]) -> bool`
+  - Validates that a checkpointed UIKit report contains exactly the case set requested by the current resumable run before reuse.
+  - Main callers: device perf flow and tests.
 - `xtask::summarize_energy_table(...) -> anyhow::Result<UIKitMetricSummary>`
   - Reduces imported Power Profiler tables into direct device energy summaries when manual traces are available.
   - Main callers: device perf flow and tests.
@@ -45,17 +48,21 @@ The active device harness now trims a large amount of orchestration dead weight 
 
 Before any `xcodebuild test-without-building` device batch, the harness now also preflights the phone's interactive state through `devicectl device info lockState` and `devicectl device info displays`. If the phone is locked or the main display backlight is off, the run fails fast and keeps its checkpoints instead of burning time in Xcode destination-preflight limbo.
 
-The default committed UIKit device battery is intentionally a compact representative signal battery, not the exhaustive case matrix. Dense count/style matrices are tiered down to a smaller high-signal subset in the default run so the official device baseline preserves distinct behaviors instead of every near-duplicate permutation. The full case table remains callable by explicit `--case` selection when a touched area or nightly/full-contract run needs the complete matrix.
+The default committed UIKit device battery is intentionally a compact representative signal battery, not the exhaustive case matrix. It now includes headline UI object rows for labels, progress bars, spinners, buttons, toggles, sliders, images, nine-slice images, and collection views, plus common animation rows for spinner, indeterminate progress, button press scale, toggle spring, slider movement, image zoom/pan, and timeline bars. Dense count/style matrices are tiered down to a smaller high-signal subset in the default run so the official device baseline preserves distinct behaviors instead of every near-duplicate permutation. The full case table remains callable by explicit `--case` selection when a touched area or nightly/full-contract run needs the complete matrix.
 
-The official compare flow is now staged instead of using the full baseline pass as a debugging tool. `cargo xtask ios compare-device-perf --watchable-smoke` runs a small visibly watchable representative set and writes its own checkpointed artifacts under `watchable/<family-or-all>/`. `cargo xtask ios compare-device-perf --family <animation|navigation|journey|camera>` runs the compact proof set for one family under `family/<family>/`. The root-level full `--write-baseline` promotion run keeps using `uikit/` and `oxide/`, but it now refuses to write official baselines until the corresponding family proofs for the current build stamp are green in `proof-status.json`.
+The official compare flow is now staged instead of using the full baseline pass as a debugging tool. `cargo xtask ios compare-device-perf --watchable-smoke` runs a small visibly watchable representative set and writes its own checkpointed artifacts under `watchable/<family-or-all>/`. `cargo xtask ios compare-device-perf --family <component|animation|navigation|journey|camera>` runs the compact proof set for one family under `family/<family>/`. The root-level full `--write-baseline` promotion run keeps using `uikit/` and `oxide/`, but it now refuses to write official baselines until the corresponding family proofs for the current build stamp are green in `proof-status.json`.
 
 Watchable smoke runs now also enable app-rendered frame capture for both Oxide and UIKit. Each watched case can persist a small PNG sequence under `<case-dir>/rendered-frames/`, copied back from the app's data container after the case finishes. Those frames are diagnostic artifacts for visual parity and black/blank-scene debugging; they are intentionally limited to watchable smoke so they do not slow the family-proof or promotion baseline paths.
+
+Resumable UIKit and Oxide device flows only reuse a completed `current.json` when the report case IDs exactly match the selected case set. This keeps a prior smoke, family, or explicit `--case` run from satisfying a different requested run through a stale checkpoint.
 
 For camera preview, the official today bucket is the parked microscope pair: the pure custom Oxide-owned NV12 live preview path and the matching `AVCaptureVideoPreviewLayer` baseline. Actual app-host camera runs and hybrid visible-preview-layer variants remain callable by explicit `--case`, but they are separate diagnostic or shipping-oriented buckets and are not part of the default committed camera baseline.
 
 The Oxide device flow installs the host app on the same physical iPhone, launches the parked benchmark app with the in-process Rust perf suite enabled, triggers it over Darwin notifications, then reconstructs the JSON report from the console payload and persists it under `benchmarks/oxide-device/`. Markdown rendering rewrites the baseline workflow so the report points at the device-only command instead of the desktop workspace runner.
 
 For the on-screen Oxide battery, the authoritative device workload window is no longer inferred from the older offscreen Rust suite. The parked host app now emits the bounded `PerfWorkload` interval through the host-side `com.oxide.perf` Points-of-Interest log, and the device harness traces that same live process through a launched Metal trace on the real app-hosted MetalView surface. That keeps the on-screen Oxide path on the real host view, preserves the parked-app console summaries when they are available, and lets the harness stop the trace on the app's `com.oxide.perf.complete` notification instead of relying on a blind wall-clock timeout.
+
+Headline comparisons use visible workload, transition, interaction, or present signposts as the first-order statistic. CPU and memory columns remain process-attribution metrics, because UIKit and iOS can place some framework, compositor, or service work outside the app process; the report labels that scope instead of treating uncharged system work as free.
 
 The report schema carries layer/scenario/style/cache/refresh metadata so the UIKit results can be compared directly against the Oxide-side battery. For the official physical-device path, `refresh_mode` is now intentionally native-only; the old 60 Hz/device-default matrix was removed from the committed harness to cut wall time and keep the battery aligned with the target shipping path. The schema also persists `measure_iterations`, `benchmark_iterations`, `canonical_signpost_source`, and per-metric `source` plus `fallback_modes`, so the timing provenance is explicit instead of inferred from notes. On device runs, `signpost_*` keys are reserved for `xctrace`; any XCTest signpost metrics are preserved separately under `xctest_*`.
 
@@ -77,5 +84,7 @@ The report schema carries layer/scenario/style/cache/refresh metadata so the UIK
 
 ## Changelog
 
+- 2026-05-04: Added UIKit `current.json` case-set validation before resumable device-report reuse.
+- 2026-04-26: Added headline UI object and common animation cases to the official Oxide/UIKit device battery, plus fairness wording for system-attributed iOS work.
 - 2026-04-11: Removed the redundant manual `Default` implementation for `UIKitMetricSummary`; the derived default keeps the same metric fallback values while reducing report-schema implementation surface.
 - 2026-04-26: Merged Oxide host-console stage summaries into on-screen device rows so in-app Metal GPU timings are persisted independently of Instruments counter-profile support.

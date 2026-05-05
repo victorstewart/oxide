@@ -6,6 +6,12 @@ struct Scene3dVertex
    float3 position [[attribute(0)]];
 };
 
+struct Scene3dColorVertex
+{
+   float3 position [[attribute(0)]];
+   float4 color    [[attribute(1)]];
+};
+
 struct Scene3dUniforms
 {
    float4x4 mvp;
@@ -15,7 +21,7 @@ struct Scene3dMaterial
 {
    float4 color;
    uint material;
-   float3 _pad;
+   packed_float3 _pad;
    float4 params;
 };
 
@@ -25,11 +31,25 @@ struct Scene3dRaster
    float3 local_position;
 };
 
+struct Scene3dColorRaster
+{
+   float4 position [[position]];
+   float4 color;
+};
+
 vertex Scene3dRaster v_scene3d(Scene3dVertex in_vertex [[stage_in]], constant Scene3dUniforms &uniforms [[buffer(1)]])
 {
    Scene3dRaster raster;
    raster.position = uniforms.mvp * float4(in_vertex.position, 1.0);
    raster.local_position = in_vertex.position;
+   return raster;
+}
+
+vertex Scene3dColorRaster v_scene3d_color(Scene3dColorVertex in_vertex [[stage_in]], constant Scene3dUniforms &uniforms [[buffer(1)]])
+{
+   Scene3dColorRaster raster;
+   raster.position = uniforms.mvp * float4(in_vertex.position, 1.0);
+   raster.color = in_vertex.color;
    return raster;
 }
 
@@ -55,5 +75,13 @@ fragment float4 f_scene3d(Scene3dRaster raster [[stage_in]], constant Scene3dMat
    } else if (mat.material == 2) {
       c.rgb = min(c.rgb * max(mat.params.x, 1.0), float3(1.0));
    }
+   return c;
+}
+
+fragment float4 f_scene3d_color(Scene3dColorRaster raster [[stage_in]], constant Scene3dMaterial &mat [[buffer(0)]])
+{
+   float4 c = raster.color;
+   c.rgb *= mat.color.rgb;
+   c.a *= mat.color.a;
    return c;
 }

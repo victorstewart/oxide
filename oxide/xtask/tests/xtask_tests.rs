@@ -1,4 +1,7 @@
 use base64::Engine;
+use oxide_perf_runner::{
+    ContractCoverageReport, CoverageReport, PerfCaseResult, PerfComparison, PerfReport,
+};
 use plist::{Dictionary, Value as PlValue};
 use std::collections::BTreeMap;
 use std::fs;
@@ -8,8 +11,9 @@ use tempfile::tempdir;
 use xtask::{
     apply_xctestrun_environment_overrides, build_entitlements_dict,
     compare_device_missing_promotion_families, compare_device_official_families,
-    compare_uikit_reports, console_output_contains_marker, device_process_name,
-    device_support_dir_matches, devicectl_notification_observed, display_value_to_base,
+    compare_device_comparisons_pass, compare_uikit_reports, console_output_contains_marker,
+    device_process_name, device_support_dir_matches, devicectl_notification_observed,
+    display_value_to_base,
     extract_oxide_device_report_json, extract_trace_windows_from_tables, find_device_process_ids,
     format_uikit_only_testing_identifier, is_expected_devicectl_console_termination,
     is_primary_built_xctestrun_file, is_retryable_devicectl_json_error,
@@ -26,7 +30,8 @@ use xtask::{
     parse_provisioning_profile_team_identifier, parse_react_native_device_report_json,
     parse_uikit_report_json, parse_xctrace_summary_window, parse_xctrace_tables,
     parse_xctrace_toc_tables, perf_frame_capture_relative_source_for_test_name,
-    preferred_xctrace_toc_tables, prepare_resumable_uikit_device_result_root,
+    perf_report_matches_case_ids, preferred_xctrace_toc_tables,
+    prepare_resumable_uikit_device_result_root,
     prepare_uikit_device_perf_xctestrun, render_oxide_app_host_debug_summary_note,
     render_oxide_tick_ring_note, resolve_existing_uikit_power_trace,
     start_console_marker_or_completion_observed, summarize_device_gpu_metrics_from_tables,
@@ -38,11 +43,12 @@ use xtask::{
     uikit_device_trace_artifact_exists, uikit_device_trace_enabled,
     uikit_only_testing_identifier_for_test_name, uikit_perf_environment_json_for_test_name,
     uikit_perf_environment_json_for_test_name_with_watch_capture,
-    uikit_power_trace_candidate_paths, validate_normalized_camera_contract,
+    uikit_power_trace_candidate_paths, uikit_report_matches_case_ids,
+    validate_normalized_camera_contract,
     CompareDeviceProofFamilyStatus, CompareDeviceProofStatus, Entitlements, LocationMode,
     TraceWindow, UIKitCanonicalSignpostSource, UIKitContractCoverageReport, UIKitHostBuildStamp,
-    UIKitMetricFallbackMode, UIKitMetricSource, UIKitMetricSummary, UIKitPerfCase, UIKitPerfReport,
-    XctraceCell, XctraceTocTable,
+    UIKitMetricFallbackMode, UIKitMetricSource, UIKitMetricSummary, UIKitPerfCase,
+    UIKitPerfComparison, UIKitPerfReport, XctraceCell, XctraceTocTable,
 };
 
 fn env_test_lock() -> &'static Mutex<()> {
@@ -66,6 +72,37 @@ fn with_env_vars(vars: &[(&str, Option<&str>)], body: impl FnOnce()) {
             Some(value) => unsafe { std::env::set_var(&key, value) },
             None => unsafe { std::env::remove_var(&key) },
         }
+    }
+}
+
+fn sample_perf_report(case_ids: &[&str]) -> PerfReport {
+    PerfReport {
+        version: 1,
+        suite: String::from("oxide-device"),
+        generated_label: None,
+        cases: case_ids
+            .iter()
+            .map(|id| PerfCaseResult { id: String::from(*id), ..PerfCaseResult::default() })
+            .collect(),
+        coverage: CoverageReport::default(),
+        contract: ContractCoverageReport::default(),
+        findings: Vec::new(),
+    }
+}
+
+fn sample_uikit_report(case_ids: &[&str]) -> UIKitPerfReport {
+    UIKitPerfReport {
+        version: 1,
+        suite: String::from("uikit-device"),
+        generated_label: None,
+        device_name: String::from("iPhone"),
+        energy_status: String::from("manual-pending"),
+        contract: UIKitContractCoverageReport::default(),
+        cases: case_ids
+            .iter()
+            .map(|id| UIKitPerfCase { id: String::from(*id), ..UIKitPerfCase::default() })
+            .collect(),
+        notes: Vec::new(),
     }
 }
 
@@ -2178,6 +2215,20 @@ fn official_device_battery_keeps_representative_signal_cases_and_tiers_out_repet
     );
     assert!(uikit_case_in_official_device_battery("testOptimizedSpinnerSpin")
         .expect("matched optimized animation case"));
+    assert!(uikit_case_in_official_device_battery("testLabelEncode")
+        .expect("matched label component case"));
+    assert!(uikit_case_in_official_device_battery("testButtonEncode")
+        .expect("matched button component case"));
+    assert!(uikit_case_in_official_device_battery("testCollectionViewEncode")
+        .expect("matched collection component case"));
+    assert!(uikit_case_in_official_device_battery("testProgressIndeterminate")
+        .expect("matched progress animation case"));
+    assert!(uikit_case_in_official_device_battery("testButtonPressScale")
+        .expect("matched button animation case"));
+    assert!(uikit_case_in_official_device_battery("testToggleThumbSpring")
+        .expect("matched toggle animation case"));
+    assert!(uikit_case_in_official_device_battery("testSliderThumbMove")
+        .expect("matched slider animation case"));
     assert!(uikit_case_in_official_device_battery("testImageZoomPan")
         .expect("representative animation case"));
     assert!(uikit_case_in_official_device_battery("testAnimTimelineBars")
@@ -2198,8 +2249,6 @@ fn official_device_battery_keeps_representative_signal_cases_and_tiers_out_repet
         .expect("matched custom camera case"));
     assert!(uikit_case_in_official_device_battery("testCameraAVFoundationPreviewLayerLivePreview")
         .expect("matched avfoundation camera case"));
-    assert!(!uikit_case_in_official_device_battery("testCollectionViewEncode")
-        .expect("trimmed component case"));
     assert!(!uikit_case_in_official_device_battery("testSimpleHomeColdLaunch")
         .expect("trimmed launch case"));
     assert!(!uikit_case_in_official_device_battery("testLabels1000Mount")
@@ -2212,6 +2261,8 @@ fn official_device_battery_keeps_representative_signal_cases_and_tiers_out_repet
 
 #[test]
 fn compare_device_watchable_smoke_keeps_one_watchable_pair_per_family() {
+    assert!(uikit_case_in_compare_device_watchable_smoke("testButtonEncode")
+        .expect("component smoke case"));
     assert!(uikit_case_in_compare_device_watchable_smoke("testSpinnerSpin")
         .expect("animation smoke case"));
     assert!(uikit_case_in_compare_device_watchable_smoke("testOptimizedButtonPressResponse")
@@ -2228,6 +2279,8 @@ fn compare_device_watchable_smoke_keeps_one_watchable_pair_per_family() {
 
 #[test]
 fn compare_device_family_classification_matches_staged_proof_buckets() {
+    assert!(uikit_case_in_compare_device_family("testButtonEncode", "component")
+        .expect("component family"));
     assert!(uikit_case_in_compare_device_family("testSpinnerSpin", "animation")
         .expect("animation family"));
     assert!(uikit_case_in_compare_device_family("testButtonPressResponse", "navigation")
@@ -2267,13 +2320,66 @@ fn compare_device_promotion_missing_families_requires_green_proofs_for_current_b
     let status = CompareDeviceProofStatus { build_stamp: expected_stamp.clone(), families };
 
     let missing = compare_device_missing_promotion_families(Some(&status), &expected_stamp);
-    assert_eq!(missing, vec![String::from("camera"), String::from("journey")]);
+    assert_eq!(
+        missing,
+        vec![
+            String::from("camera"),
+            String::from("component"),
+            String::from("journey"),
+        ]
+    );
 
     let stale_stamp = UIKitHostBuildStamp { source_fingerprint: 99, ..expected_stamp };
     assert_eq!(
         compare_device_missing_promotion_families(Some(&status), &stale_stamp),
         compare_device_official_families()
     );
+}
+
+#[test]
+fn perf_report_case_set_must_match_selected_cases_before_reuse() {
+    let report = sample_perf_report(&["cpu.animation.spinner_spin", "gpu.scene.damage_lab.frame"]);
+
+    assert!(perf_report_matches_case_ids(
+        &report,
+        &["gpu.scene.damage_lab.frame", "cpu.animation.spinner_spin"]
+    ));
+    assert!(!perf_report_matches_case_ids(&report, &["cpu.animation.spinner_spin"]));
+    assert!(!perf_report_matches_case_ids(
+        &sample_perf_report(&["cpu.animation.spinner_spin", "cpu.animation.spinner_spin"]),
+        &["cpu.animation.spinner_spin", "cpu.animation.spinner_spin"]
+    ));
+}
+
+#[test]
+fn uikit_report_case_set_must_match_selected_cases_before_reuse() {
+    let report = sample_uikit_report(&[
+        "uikit.animation.spinner_spin",
+        "uikit.component.button.encode",
+    ]);
+
+    assert!(uikit_report_matches_case_ids(
+        &report,
+        &["uikit.component.button.encode", "uikit.animation.spinner_spin"]
+    ));
+    assert!(!uikit_report_matches_case_ids(&report, &["uikit.animation.spinner_spin"]));
+    assert!(!uikit_report_matches_case_ids(
+        &sample_uikit_report(&["uikit.animation.spinner_spin", "uikit.animation.spinner_spin"]),
+        &["uikit.animation.spinner_spin", "uikit.animation.spinner_spin"]
+    ));
+}
+
+#[test]
+fn compare_device_comparisons_must_pass_before_proof_status_updates() {
+    assert!(compare_device_comparisons_pass(None, None));
+
+    let uikit_failed =
+        UIKitPerfComparison { missing_baseline: vec![String::from("uikit.case")], ..Default::default() };
+    assert!(!compare_device_comparisons_pass(Some(&uikit_failed), None));
+
+    let oxide_failed =
+        PerfComparison { missing_baseline: vec![String::from("oxide.case")], ..Default::default() };
+    assert!(!compare_device_comparisons_pass(None, Some(&oxide_failed)));
 }
 
 #[test]

@@ -114,10 +114,6 @@ fn perf_case_filters() -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn perf_case_filter_active() -> bool {
-    !perf_case_filters().is_empty()
-}
-
 fn perf_case_allowed(case_id: &str) -> bool {
     let filters = perf_case_filters();
     filters.is_empty()
@@ -849,7 +845,7 @@ fn print_usage() {
 
 fn run_suite(cli: Cli) -> Result<()> {
     let report = collect_suite(cli.smoke)?;
-    if !perf_case_filter_active() {
+    if perf_case_filters().is_empty() {
         assert_full_coverage(&report.coverage)?;
     }
 

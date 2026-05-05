@@ -53,6 +53,7 @@ Contract coverage battery entries share one status-and-note helper so each requi
 
 ## Changelog
 
+- 2026-04-30: Removed the one-use perf-filter activity wrapper; suite coverage gating now checks the parsed filter list directly.
 - 2026-04-18: Collapsed duplicated contract-battery status and note conditionals into shared helper logic while preserving report output semantics.
 - 2026-04-14: Collapsed repetitive coverage assertions into one shared check table while preserving the same incomplete-family error messages.
 - 2026-04-11: Removed redundant manual `Default` implementations for internal CLI options and `PerfCaseResult`; derived defaults preserve the same serde fallback behavior with less implementation surface.

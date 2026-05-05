@@ -370,18 +370,8 @@ func resolveAdaptivePerfMeasureIterations(
     {
         adaptiveDefault = 3
     }
-    else if lowercased.contains("scroll")
-        || lowercased.contains("grid")
-        || lowercased.contains("feed")
-        || lowercased.contains("chat")
-        || lowercased.contains("animation")
-        || lowercased.contains("transition")
-        || lowercased.contains("stagger")
-        || lowercased.contains("stress")
-        || lowercased.contains("roundtrip")
-        || lowercased.contains("loop")
-        || lowercased.contains("autoscroll")
-        || lowercased.contains("idle")
+    else if ["scroll", "grid", "feed", "chat", "animation", "transition", "stagger",
+             "stress", "roundtrip", "loop", "autoscroll", "idle"].contains(where: { lowercased.contains($0) })
     {
         adaptiveDefault = 4
     }
@@ -4048,19 +4038,31 @@ private final class OxideOnscreenBenchmarkHarness
     {
         switch benchmarkKey
         {
-        case "button_press_response", "spinner_spin":
+        case "button_press_response",
+             "component_progress_bar_encode",
+             "component_spinner_encode",
+             "component_button_encode",
+             "component_toggle_encode",
+             "component_slider_encode",
+             "spinner_spin",
+             "animation_progress_indeterminate",
+             "animation_button_press_scale",
+             "animation_toggle_thumb_spring",
+             "animation_slider_thumb_move":
             return "Controls"
+        case "component_label_encode":
+            return "Text Layout"
         case "text_focus_response", "input_form_submit":
             return "Input & Haptics"
-        case "collection_navigation":
+        case "collection_navigation", "component_collection_view_encode":
             return "Collection Stress"
-        case "image_zoom_pan", "zoom_image_gesture_cycle":
+        case "component_image_view_encode", "image_zoom_pan", "zoom_image_gesture_cycle":
             return "Zoom Image"
         case "anim_timeline_bars":
             return "Animations"
         case "damage_lab_frame":
             return "Damage Lab"
-        case "nine_slice_frame":
+        case "component_nine_slice_image_encode", "nine_slice_frame":
             return "Nine Slice"
         case "orchestration_transition_modal":
             return "UI Orchestration"
@@ -11762,6 +11764,41 @@ private func makeOxideOnscreenBenchmark(
     }
 }
 
+private typealias OxideOnscreenBenchmarkSpec = (
+    testName: String,
+    benchmarkKey: String,
+    iterations: Int,
+    signpostNames: [String],
+    interactionSignpostName: StaticString?
+)
+
+private let oxideOnscreenBenchmarkSpecs: [OxideOnscreenBenchmarkSpec] = [
+    ("testOxideLabelEncode", "component_label_encode", 64, ["frame.present"], nil),
+    ("testOxideProgressBarEncode", "component_progress_bar_encode", 96, ["frame.present"], nil),
+    ("testOxideSpinnerEncode", "component_spinner_encode", 96, ["frame.present"], nil),
+    ("testOxideButtonEncode", "component_button_encode", 64, ["frame.present"], nil),
+    ("testOxideToggleEncode", "component_toggle_encode", 96, ["frame.present"], nil),
+    ("testOxideSliderEncode", "component_slider_encode", 96, ["frame.present"], nil),
+    ("testOxideImageViewEncode", "component_image_view_encode", 96, ["frame.present"], nil),
+    ("testOxideNineSliceImageEncode", "component_nine_slice_image_encode", 96, ["frame.present"], nil),
+    ("testOxideCollectionViewEncode", "component_collection_view_encode", 24, ["frame.present"], nil),
+    ("testOxideButtonPressResponse", "button_press_response", 32, ["first.interactive", "draw.encode"], "first.interactive"),
+    ("testOxideTextFocusResponse", "text_focus_response", 24, ["first.interactive", "draw.encode"], "first.interactive"),
+    ("testOxideSpinnerSpin", "spinner_spin", 96, ["transition", "draw.encode"], "transition"),
+    ("testOxideProgressIndeterminate", "animation_progress_indeterminate", 96, ["transition", "frame.present"], "transition"),
+    ("testOxideButtonPressScale", "animation_button_press_scale", 64, ["transition", "frame.present"], "transition"),
+    ("testOxideToggleThumbSpring", "animation_toggle_thumb_spring", 96, ["transition", "frame.present"], "transition"),
+    ("testOxideSliderThumbMove", "animation_slider_thumb_move", 96, ["transition", "frame.present"], "transition"),
+    ("testOxideImageZoomPan", "image_zoom_pan", 48, ["transition", "draw.encode"], "transition"),
+    ("testOxideAnimTimelineBars", "anim_timeline_bars", 24, ["transition", "draw.encode"], "transition"),
+    ("testOxideDamageLabFrame", "damage_lab_frame", 32, ["frame.present", "draw.encode"], "frame.present"),
+    ("testOxideNineSliceFrame", "nine_slice_frame", 32, ["frame.present", "draw.encode"], "frame.present"),
+    ("testOxideInputFormJourney", "input_form_submit", 12, ["transition", "draw.encode"], "transition"),
+    ("testOxideCollectionNavigationJourney", "collection_navigation", 18, ["scroll", "draw.encode"], "scroll"),
+    ("testOxideZoomImageGestureJourney", "zoom_image_gesture_cycle", 18, ["transition", "draw.encode"], "transition"),
+    ("testOxideOrchestrationJourney", "orchestration_transition_modal", 18, ["transition", "draw.encode"], "transition"),
+]
+
 @MainActor
 enum OxideUIKitBenchmarkCatalog
 {
@@ -11769,6 +11806,18 @@ enum OxideUIKitBenchmarkCatalog
     {
         let normalizedTestName = testName.replacingOccurrences(of: "()", with: "")
         let assets = OxideUIKitBenchmarkAssets.shared
+
+        if let spec = oxideOnscreenBenchmarkSpecs.first(where: { $0.testName == normalizedTestName })
+        {
+            return makeOxideOnscreenBenchmark(
+                testName: normalizedTestName,
+                benchmarkKey: spec.benchmarkKey,
+                iterations: spec.iterations,
+                host: host,
+                signpostNames: spec.signpostNames,
+                interactionSignpostName: spec.interactionSignpostName
+            )
+        }
 
         switch normalizedTestName
         {
@@ -11927,105 +11976,6 @@ enum OxideUIKitBenchmarkCatalog
                 testName: normalizedTestName,
                 host: host,
                 includeVideoDataOutputSidecar: true
-            )
-        case "testOxideButtonPressResponse":
-            return makeOxideOnscreenBenchmark(
-                testName: normalizedTestName,
-                benchmarkKey: "button_press_response",
-                iterations: 32,
-                host: host,
-                signpostNames: ["first.interactive", "draw.encode"],
-                interactionSignpostName: "first.interactive"
-            )
-        case "testOxideTextFocusResponse":
-            return makeOxideOnscreenBenchmark(
-                testName: normalizedTestName,
-                benchmarkKey: "text_focus_response",
-                iterations: 24,
-                host: host,
-                signpostNames: ["first.interactive", "draw.encode"],
-                interactionSignpostName: "first.interactive"
-            )
-        case "testOxideSpinnerSpin":
-            return makeOxideOnscreenBenchmark(
-                testName: normalizedTestName,
-                benchmarkKey: "spinner_spin",
-                iterations: 96,
-                host: host,
-                signpostNames: ["transition", "draw.encode"],
-                interactionSignpostName: "transition"
-            )
-        case "testOxideImageZoomPan":
-            return makeOxideOnscreenBenchmark(
-                testName: normalizedTestName,
-                benchmarkKey: "image_zoom_pan",
-                iterations: 48,
-                host: host,
-                signpostNames: ["transition", "draw.encode"],
-                interactionSignpostName: "transition"
-            )
-        case "testOxideAnimTimelineBars":
-            return makeOxideOnscreenBenchmark(
-                testName: normalizedTestName,
-                benchmarkKey: "anim_timeline_bars",
-                iterations: 24,
-                host: host,
-                signpostNames: ["transition", "draw.encode"],
-                interactionSignpostName: "transition"
-            )
-        case "testOxideDamageLabFrame":
-            return makeOxideOnscreenBenchmark(
-                testName: normalizedTestName,
-                benchmarkKey: "damage_lab_frame",
-                iterations: 32,
-                host: host,
-                signpostNames: ["frame.present", "draw.encode"],
-                interactionSignpostName: "frame.present"
-            )
-        case "testOxideNineSliceFrame":
-            return makeOxideOnscreenBenchmark(
-                testName: normalizedTestName,
-                benchmarkKey: "nine_slice_frame",
-                iterations: 32,
-                host: host,
-                signpostNames: ["frame.present", "draw.encode"],
-                interactionSignpostName: "frame.present"
-            )
-        case "testOxideInputFormJourney":
-            return makeOxideOnscreenBenchmark(
-                testName: normalizedTestName,
-                benchmarkKey: "input_form_submit",
-                iterations: 12,
-                host: host,
-                signpostNames: ["transition", "draw.encode"],
-                interactionSignpostName: "transition"
-            )
-        case "testOxideCollectionNavigationJourney":
-            return makeOxideOnscreenBenchmark(
-                testName: normalizedTestName,
-                benchmarkKey: "collection_navigation",
-                iterations: 18,
-                host: host,
-                signpostNames: ["scroll", "draw.encode"],
-                interactionSignpostName: "scroll"
-            )
-        case "testOxideZoomImageGestureJourney":
-            return makeOxideOnscreenBenchmark(
-                testName: normalizedTestName,
-                benchmarkKey: "zoom_image_gesture_cycle",
-                iterations: 18,
-                host: host,
-                signpostNames: ["transition", "draw.encode"],
-                interactionSignpostName: "transition"
-            )
-        case "testOxideOrchestrationJourney":
-            return makeOxideOnscreenBenchmark(
-                testName: normalizedTestName,
-                benchmarkKey: "orchestration_transition_modal",
-                iterations: 18,
-                host: host,
-                signpostNames: ["transition", "draw.encode"],
-                interactionSignpostName: "transition"
             )
         case "testCollectionViewEncode":
             let view = CollectionBenchView(frame: .zero)
@@ -12417,10 +12367,13 @@ enum OxideUIKitBenchmarkCatalog
             var phase: CGFloat = 0.0
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 96)
             {
-                phase = (phase + 0.0275).truncatingRemainder(dividingBy: 1.0)
-                view.progress = nil
-                view.phase = phase
-                host.commit(view)
+                withPerfSignpost("transition")
+                {
+                    phase = (phase + 0.0275).truncatingRemainder(dividingBy: 1.0)
+                    view.progress = nil
+                    view.phase = phase
+                    host.commit(view, awaitDisplayPresentation: true)
+                }
             }
         case "testOptimizedProgressIndeterminate":
             let view = OptimizedProgressBarBenchView(frame: .zero)
@@ -12429,10 +12382,13 @@ enum OxideUIKitBenchmarkCatalog
             var phase: CGFloat = 0.0
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 96)
             {
-                phase = (phase + 0.0275).truncatingRemainder(dividingBy: 1.0)
-                view.progress = nil
-                view.phase = phase
-                host.commit(view)
+                withPerfSignpost("transition")
+                {
+                    phase = (phase + 0.0275).truncatingRemainder(dividingBy: 1.0)
+                    view.progress = nil
+                    view.phase = phase
+                    host.commit(view, awaitDisplayPresentation: true)
+                }
             }
         case "testButtonPressScale":
             let button = UIButton(type: .system)
@@ -12443,13 +12399,16 @@ enum OxideUIKitBenchmarkCatalog
             var delta: CGFloat = 0.004
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 64)
             {
-                scale += delta
-                if scale >= 1.0 || scale <= 0.98
+                withPerfSignpost("transition")
                 {
-                    delta = -delta
+                    scale += delta
+                    if scale >= 1.0 || scale <= 0.98
+                    {
+                        delta = -delta
+                    }
+                    button.transform = CGAffineTransform(scaleX: scale, y: scale)
+                    host.commit(button, awaitDisplayPresentation: true)
                 }
-                button.transform = CGAffineTransform(scaleX: scale, y: scale)
-                host.commit(button)
             }
         case "testOptimizedButtonPressScale":
             let button = OptimizedButtonBenchView(frame: .zero)
@@ -12460,13 +12419,16 @@ enum OxideUIKitBenchmarkCatalog
             var delta: CGFloat = 0.004
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 64)
             {
-                scale += delta
-                if scale >= 1.0 || scale <= 0.98
+                withPerfSignpost("transition")
                 {
-                    delta = -delta
+                    scale += delta
+                    if scale >= 1.0 || scale <= 0.98
+                    {
+                        delta = -delta
+                    }
+                    button.scale = scale
+                    host.commit(button, awaitDisplayPresentation: true)
                 }
-                button.scale = scale
-                host.commit(button)
             }
         case "testToggleThumbSpring":
             let view = ToggleBenchView(frame: .zero)
@@ -12475,20 +12437,23 @@ enum OxideUIKitBenchmarkCatalog
             var velocity: CGFloat = 0.0
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 96)
             {
-                let target: CGFloat = 1.0
-                let stiffness: CGFloat = 20.0
-                let damping: CGFloat = 2.0 * sqrt(stiffness)
-                let dt: CGFloat = 0.016
-                let acceleration = stiffness * (target - phase) - damping * velocity
-                velocity += acceleration * dt
-                phase += velocity * dt
-                if abs(target - phase) < 0.001 && abs(velocity) < 0.001
+                withPerfSignpost("transition")
                 {
-                    phase = 0.0
-                    velocity = 0.0
+                    let target: CGFloat = 1.0
+                    let stiffness: CGFloat = 20.0
+                    let damping: CGFloat = 2.0 * sqrt(stiffness)
+                    let dt: CGFloat = 0.016
+                    let acceleration = stiffness * (target - phase) - damping * velocity
+                    velocity += acceleration * dt
+                    phase += velocity * dt
+                    if abs(target - phase) < 0.001 && abs(velocity) < 0.001
+                    {
+                        phase = 0.0
+                        velocity = 0.0
+                    }
+                    view.phase = phase
+                    host.commit(view, awaitDisplayPresentation: true)
                 }
-                view.phase = phase
-                host.commit(view)
             }
         case "testOptimizedToggleThumbSpring":
             let view = OptimizedToggleBenchView(frame: .zero)
@@ -12497,20 +12462,23 @@ enum OxideUIKitBenchmarkCatalog
             var velocity: CGFloat = 0.0
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 96)
             {
-                let target: CGFloat = 1.0
-                let stiffness: CGFloat = 20.0
-                let damping: CGFloat = 2.0 * sqrt(stiffness)
-                let dt: CGFloat = 0.016
-                let acceleration = stiffness * (target - phase) - damping * velocity
-                velocity += acceleration * dt
-                phase += velocity * dt
-                if abs(target - phase) < 0.001 && abs(velocity) < 0.001
+                withPerfSignpost("transition")
                 {
-                    phase = 0.0
-                    velocity = 0.0
+                    let target: CGFloat = 1.0
+                    let stiffness: CGFloat = 20.0
+                    let damping: CGFloat = 2.0 * sqrt(stiffness)
+                    let dt: CGFloat = 0.016
+                    let acceleration = stiffness * (target - phase) - damping * velocity
+                    velocity += acceleration * dt
+                    phase += velocity * dt
+                    if abs(target - phase) < 0.001 && abs(velocity) < 0.001
+                    {
+                        phase = 0.0
+                        velocity = 0.0
+                    }
+                    view.phase = phase
+                    host.commit(view, awaitDisplayPresentation: true)
                 }
-                view.phase = phase
-                host.commit(view)
             }
         case "testSliderThumbMove":
             let slider = UISlider(frame: .zero)
@@ -12518,13 +12486,16 @@ enum OxideUIKitBenchmarkCatalog
             var value: Float = 0.0
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 96)
             {
-                value += 0.01
-                if value > 1.0
+                withPerfSignpost("transition")
                 {
-                    value = 0.0
+                    value += 0.01
+                    if value > 1.0
+                    {
+                        value = 0.0
+                    }
+                    slider.value = value
+                    host.commit(slider, awaitDisplayPresentation: true)
                 }
-                slider.value = value
-                host.commit(slider)
             }
         case "testOptimizedSliderThumbMove":
             let slider = OptimizedSliderBenchView(frame: .zero)
@@ -12532,13 +12503,16 @@ enum OxideUIKitBenchmarkCatalog
             var value = CGFloat(0.0)
             return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 96)
             {
-                value += 0.01
-                if value > 1.0
+                withPerfSignpost("transition")
                 {
-                    value = 0.0
+                    value += 0.01
+                    if value > 1.0
+                    {
+                        value = 0.0
+                    }
+                    slider.value = value
+                    host.commit(slider, awaitDisplayPresentation: true)
                 }
-                slider.value = value
-                host.commit(slider)
             }
         case "testImageZoomPan":
             let imageView = UIImageView(image: assets.checkerImage)

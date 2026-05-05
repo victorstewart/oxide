@@ -75,7 +75,7 @@ fn display_image_loader_reuses_full_rgba_loader_until_cached_variant_exists() {
 }
 
 #[test]
-fn media_library_permission_status_stays_lazy_until_request() {
+fn media_library_permission_status_refreshes_on_explicit_status_call() {
     let source = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ios/host_services.m"),
     )
@@ -89,9 +89,8 @@ fn media_library_permission_status_stays_lazy_until_request() {
         .expect("nametag status function");
     let oxide_status_body = &source[oxide_status_start..oxide_status_end];
     assert!(
-        !oxide_status_body.contains("current_photo_authorization")
-            && !oxide_status_body.contains("PHPhotoLibrary"),
-        "oxide media-library status must stay lazy until explicit request"
+        oxide_status_body.contains("refresh_media_library_permission_status();"),
+        "oxide media-library status must refresh the current Photos authorization"
     );
 
     let nametag_status_start = oxide_status_end;
@@ -100,9 +99,54 @@ fn media_library_permission_status_stays_lazy_until_request() {
         .expect("location updates function");
     let nametag_status_body = &source[nametag_status_start..nametag_status_end];
     assert!(
-        !nametag_status_body.contains("current_photo_authorization")
-            && !nametag_status_body.contains("PHPhotoLibrary"),
-        "nametag media-library status must stay lazy until explicit request"
+        nametag_status_body.contains("refresh_media_library_permission_status();"),
+        "nametag media-library status must refresh the current Photos authorization"
+    );
+
+    let refresh_start = source
+        .find("static void refresh_media_library_permission_status(void) {")
+        .expect("refresh function");
+    let refresh_end = source
+        .find("static uint32_t oxide_media_library_permission_status(void) {")
+        .expect("oxide status function");
+    let refresh_body = &source[refresh_start..refresh_end];
+    assert!(
+        refresh_body.contains("cache_media_library_permission_status(current_photo_authorization())"),
+        "explicit status refresh must query PHPhotoLibrary through current_photo_authorization"
+    );
+}
+
+#[test]
+fn nametag_media_library_cache_preserves_legacy_limited_mapping() {
+    let source = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ios/host_services.m"),
+    )
+    .expect("read host_services.m");
+
+    let cache_start = source
+        .find("static void cache_media_library_permission_status(PHAuthorizationStatus status) {")
+        .expect("cache function");
+    let cache_end = source
+        .find("static uint32_t oxide_media_library_permission_status(void) {")
+        .expect("oxide status function");
+    let cache_body = &source[cache_start..cache_end];
+    assert!(
+        cache_body.contains("oxide_status_from_photo_authorization(status)")
+            && cache_body.contains("nametag_status_from_photo_authorization(status)"),
+        "media-library cache must retain separate Oxide and Nametag status mappings"
+    );
+
+    let nametag_status_start = source
+        .find("static int32_t nametag_media_library_permission_status(void) {")
+        .expect("nametag status function");
+    let nametag_status_end = source
+        .find("static void emit_location_permission_updates(void) {")
+        .expect("location updates function");
+    let nametag_status_body = &source[nametag_status_start..nametag_status_end];
+    assert!(
+        nametag_status_body.contains("g_media_library_cached_nametag_status")
+            && !nametag_status_body.contains("g_media_library_cached_oxide_status"),
+        "nametag media-library status must not reuse the Oxide limited-status cache"
     );
 }
 

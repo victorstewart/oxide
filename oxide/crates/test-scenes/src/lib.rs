@@ -12,6 +12,7 @@ mod stress_test;
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::format;
+use oxide_input::{TouchSurfaceEvent, TouchSurfaceRecognizer};
 use oxide_permissions::{PermissionManager, PermissionState, SensorBridge};
 use oxide_platform_api as api;
 use oxide_renderer_api as gfx;
@@ -136,6 +137,8 @@ pub struct Router<U: elements::ImageUploader> {
     reduce_motion_on: bool,
     // Accumulated damage rects for the last draw (dp units)
     last_damage: alloc::vec::Vec<gfx::RectI>,
+    force_full_damage_next_frame: bool,
+    touch_surface: TouchSurfaceRecognizer,
     // Scene states
     controls: Controls,
     text_layout: TextLayout,
@@ -171,6 +174,8 @@ impl<U: elements::ImageUploader> Router<U> {
             overlay_visible: true,
             reduce_motion_on: false,
             last_damage: alloc::vec::Vec::new(),
+            force_full_damage_next_frame: true,
+            touch_surface: TouchSurfaceRecognizer::new(),
             controls: Controls::default(),
             text_layout: TextLayout::default(),
             zoom_image: ZoomImage::default(),
@@ -240,6 +245,8 @@ impl<U: elements::ImageUploader> Router<U> {
             _ => self.current,
         };
         if previous != self.current {
+            self.force_full_damage_next_frame = true;
+            self.touch_surface.reset();
             watch_event_log!(
                 "scene {} -> {}",
                 Self::scene_names()[previous as usize],
@@ -410,7 +417,17 @@ impl<U: elements::ImageUploader> Router<U> {
         }
     }
 
-    pub fn input_touch(&mut self, _event: &api::TouchEvent) {}
+    pub fn input_touch(&mut self, event: &api::TouchEvent) {
+        let surface_events = self.touch_surface.on_touch(event);
+        for event in surface_events {
+            if let TouchSurfaceEvent::Pinch { x, y, scale_delta, .. } = event {
+                let delta = scale_delta - 1.0;
+                if delta.is_finite() && delta != 0.0 {
+                    self.input_pinch(x, y, delta);
+                }
+            }
+        }
+    }
 
     pub fn input_double_tap(&mut self) {
         match self.current {
@@ -422,34 +439,48 @@ impl<U: elements::ImageUploader> Router<U> {
 
     pub fn prepare_onscreen_benchmark(&mut self, benchmark: &str) -> bool {
         let prepared = match benchmark {
-            "button_press_response" => {
+            "button_press_response" | "spinner_spin" | "animation_button_press_scale"
+            | "animation_toggle_thumb_spring" | "animation_slider_thumb_move" => {
                 self.set_scene(SceneKind::Controls as usize);
                 self.controls = Controls::default();
                 true
             }
-            "spinner_spin" => {
+            "component_label_encode" => {
+                self.set_scene(SceneKind::TextLayout as usize);
+                self.text_layout = TextLayout::default();
+                true
+            }
+            "component_progress_bar_encode" | "component_spinner_encode" | "component_button_encode"
+            | "component_toggle_encode" | "component_slider_encode" => {
                 self.set_scene(SceneKind::Controls as usize);
                 self.controls = Controls::default();
+                self.controls.progress_indeterminate = false;
                 true
             }
-            "text_focus_response" => {
-                self.set_scene(SceneKind::InputLab as usize);
-                self.input_lab = InputLab::default();
+            "component_image_view_encode" | "image_zoom_pan" | "zoom_image_gesture_cycle" => {
+                self.set_scene(SceneKind::ZoomImage as usize);
+                self.zoom_image.zoom = elements::ImageZoomState::default();
                 true
             }
-            "input_form_submit" => {
-                self.set_scene(SceneKind::InputLab as usize);
-                self.input_lab = InputLab::default();
+            "component_nine_slice_image_encode" | "nine_slice_frame" => {
+                self.set_scene(SceneKind::NineSlice as usize);
+                self.nine_slice.set_options(16.0, 1.0);
                 true
             }
-            "collection_navigation" => {
+            "component_collection_view_encode" | "collection_navigation" => {
                 self.set_scene(SceneKind::CollectionStress as usize);
                 self.collection_stress = CollectionStress::default();
                 true
             }
-            "image_zoom_pan" | "zoom_image_gesture_cycle" => {
-                self.set_scene(SceneKind::ZoomImage as usize);
-                self.zoom_image.zoom = elements::ImageZoomState::default();
+            "animation_progress_indeterminate" => {
+                self.set_scene(SceneKind::Controls as usize);
+                self.controls = Controls::default();
+                self.controls.progress_indeterminate = true;
+                true
+            }
+            "text_focus_response" | "input_form_submit" => {
+                self.set_scene(SceneKind::InputLab as usize);
+                self.input_lab = InputLab::default();
                 true
             }
             "anim_timeline_bars" => {
@@ -461,11 +492,6 @@ impl<U: elements::ImageUploader> Router<U> {
                 self.set_scene(SceneKind::DamageLab as usize);
                 self.damage_lab = DamageLab::default();
                 self.damage_lab.set_options(true, 0.75, 0.25);
-                true
-            }
-            "nine_slice_frame" => {
-                self.set_scene(SceneKind::NineSlice as usize);
-                self.nine_slice.set_options(16.0, 1.0);
                 true
             }
             "orchestration_transition_modal" => {
@@ -499,9 +525,90 @@ impl<U: elements::ImageUploader> Router<U> {
                 self.controls.update(16);
                 Some(action)
             }
+            "component_label_encode" => {
+                self.text_layout.update(16);
+                Some("label.draw")
+            }
+            "component_progress_bar_encode" => {
+                self.controls.progress_indeterminate = false;
+                self.controls.update(16);
+                Some("progress.draw")
+            }
+            "component_spinner_encode" => {
+                self.controls.update(16);
+                Some("spinner.draw")
+            }
+            "component_button_encode" => {
+                let action = if step % 2 == 0 {
+                    let _ = self.controls.key_space_up();
+                    "button.draw_up"
+                } else {
+                    self.controls.key_space_down();
+                    "button.draw_down"
+                };
+                self.controls.update(16);
+                Some(action)
+            }
+            "component_toggle_encode" => {
+                self.controls.toggle_state.set_on(step % 2 == 0);
+                self.controls.toggle_state.step(16);
+                Some("toggle.draw")
+            }
+            "component_slider_encode" => {
+                let value = (step % 100) as f32 / 99.0;
+                let _ = self.controls.slider_state.set(value, self.controls.slider.step);
+                Some("slider.draw")
+            }
+            "component_image_view_encode" => {
+                self.zoom_image.update(16);
+                Some("image.draw")
+            }
+            "component_nine_slice_image_encode" => {
+                let slice = if step % 2 == 0 { 16.0 } else { 18.0 };
+                self.nine_slice.set_options(slice, 1.0);
+                Some("nine_slice.draw")
+            }
+            "component_collection_view_encode" => {
+                let action = if step % 2 == 0 {
+                    self.collection_stress.view.focus_move_right();
+                    "collection.draw_right"
+                } else {
+                    self.collection_stress.view.focus_move_down();
+                    "collection.draw_down"
+                };
+                Some(action)
+            }
             "spinner_spin" => {
                 self.controls.update(16);
                 Some("spinner.tick")
+            }
+            "animation_progress_indeterminate" => {
+                self.controls.progress_indeterminate = true;
+                self.controls.update(16);
+                Some("progress.indeterminate_tick")
+            }
+            "animation_button_press_scale" => {
+                let action = if step % 2 == 0 {
+                    let _ = self.controls.key_space_up();
+                    "button.scale_up"
+                } else {
+                    self.controls.key_space_down();
+                    "button.scale_down"
+                };
+                self.controls.update(16);
+                Some(action)
+            }
+            "animation_toggle_thumb_spring" => {
+                if step % 24 == 0 {
+                    self.controls.toggle_state.set_on(!self.controls.toggle_state.on);
+                }
+                self.controls.toggle_state.step(16);
+                Some("toggle.spring_tick")
+            }
+            "animation_slider_thumb_move" => {
+                let value = (step % 100) as f32 / 99.0;
+                let _ = self.controls.slider_state.set(value, self.controls.slider.step);
+                Some("slider.thumb_tick")
             }
             "text_focus_response" => {
                 self.input_lab.focus(FocusField::Username);
@@ -665,7 +772,7 @@ impl<U: elements::ImageUploader> Router<U> {
                         viewport.x + 8.0,
                         viewport.y + 8.0,
                         (viewport.w - 16.0).max(1.0),
-                        24.0,
+                        128.0,
                     );
                     self.push_damage(rectf_to_recti(rect));
                 }
@@ -843,6 +950,11 @@ impl<U: elements::ImageUploader> Router<U> {
                 b,
             );
         }
+        if self.force_full_damage_next_frame {
+            self.last_damage.clear();
+            self.push_damage(rectf_to_recti(viewport));
+            self.force_full_damage_next_frame = false;
+        }
     }
 
     // Camera scene external controls via host (iOS)
@@ -978,6 +1090,7 @@ fn rectf_to_recti(r: gfx::RectF) -> gfx::RectI {
 pub struct Controls {
     t: f32,
     progress: f32,
+    progress_indeterminate: bool,
     button: elements::Button,
     button_state: elements::ButtonState,
     toggle: elements::Toggle,
@@ -991,6 +1104,7 @@ impl Default for Controls {
         let mut controls = Self {
             t: 0.0,
             progress: 0.32,
+            progress_indeterminate: false,
             button: elements::Button::default(),
             button_state: elements::ButtonState::default(),
             toggle: elements::Toggle::default(),
@@ -998,7 +1112,8 @@ impl Default for Controls {
             slider: elements::Slider::default(),
             slider_state: elements::SliderState::default(),
         };
-        controls.toggle_state.on = true;
+        controls.toggle_state.set_on(true);
+        controls.toggle_state.step(1000);
         for _ in 0..6 {
             let _ = controls.slider_state.arrow_right(controls.slider.step);
         }
@@ -1010,6 +1125,7 @@ impl Controls {
     pub fn update(&mut self, dt_ms: u32) {
         self.t += dt_ms as f32 / 1000.0;
         self.progress = (self.t * 0.25).sin() * 0.5 + 0.5;
+        self.toggle_state.step(dt_ms);
     }
     pub fn input_pointer(&mut self, x: f32, y: f32, _dx: f32, _dy: f32, buttons: u32) {
         let r = gfx::RectF::new(40.0, 40.0, 140.0, 40.0);
@@ -1063,7 +1179,7 @@ impl Controls {
         lbl.encode(gfx::RectF::new(panel.x + 16.0, panel.y + 12.0, 300.0, 24.0), ds, text, up, b);
         // Progress
         let pb = elements::ProgressBar {
-            value: Some(self.progress),
+            value: if self.progress_indeterminate { None } else { Some(self.progress) },
             ..elements::ProgressBar::default()
         };
         pb.encode(gfx::RectF::new(panel.x + 16.0, panel.y + 48.0, panel.w - 32.0, 12.0), self.t, b);

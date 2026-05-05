@@ -2723,6 +2723,24 @@ extern "C" fn pointer_cb(x: f32, y: f32, dx: f32, dy: f32, buttons: u32, _mods: 
     });
 }
 
+fn touch_phase_from_raw(phase: u32) -> Option<oxide_platform_api::TouchPhase> {
+    match phase {
+        0 => Some(oxide_platform_api::TouchPhase::Start),
+        1 => Some(oxide_platform_api::TouchPhase::Move),
+        2 => Some(oxide_platform_api::TouchPhase::End),
+        3 => Some(oxide_platform_api::TouchPhase::Cancel),
+        _ => None,
+    }
+}
+
+fn pointer_device_from_raw(device: u32) -> oxide_platform_api::PointerDevice {
+    match device {
+        1 => oxide_platform_api::PointerDevice::Pencil,
+        2 => oxide_platform_api::PointerDevice::Mouse,
+        _ => oxide_platform_api::PointerDevice::Finger,
+    }
+}
+
 extern "C" fn touch_cb(
     id: u64,
     phase: u32,
@@ -2737,7 +2755,29 @@ extern "C" fn touch_cb(
     ts_ns: u64,
 ) {
     let _ = with_app_mut(|app| {
-        let _ = (pressure, has_pressure, tilt_alt, tilt_azi, has_tilt);
+        let Some(touch_phase) = touch_phase_from_raw(phase) else {
+            touch_log(&format!("rust callback touch dropped invalid phase={phase} id={id}"));
+            return;
+        };
+        let pressure = if has_pressure != 0 && pressure.is_finite() {
+            Some(pressure)
+        } else {
+            None
+        };
+        let tilt = if has_tilt != 0 && tilt_alt.is_finite() && tilt_azi.is_finite() {
+            Some((tilt_alt, tilt_azi))
+        } else {
+            None
+        };
+        let touch_event = oxide_platform_api::TouchEvent {
+            id: oxide_platform_api::TouchId(id),
+            phase: touch_phase,
+            x,
+            y,
+            pressure,
+            tilt,
+            device: pointer_device_from_raw(device),
+        };
         touch_log(&format!(
             "rust callback touch decoded id={id} phase={phase} x={x:.1} y={y:.1} device={device}"
         ));
@@ -2748,6 +2788,7 @@ extern "C" fn touch_cb(
             result.double_tap
         ));
         if let Some(router) = app.router.as_mut() {
+            router.input_touch(&touch_event);
             if let Some(ptr) = result.pointer {
                 router.input_pointer(ptr.x, ptr.y, ptr.dx, ptr.dy, ptr.buttons);
             }
@@ -3262,11 +3303,8 @@ pub extern "C" fn oxide_host_prepare_onscreen_benchmark(
         return -2;
     };
     with_app_mut(|app| {
-        let prepared = {
-            let Some(router) = app.router.as_mut() else { return -1 };
-            router.prepare_onscreen_benchmark(name)
-        };
-        if !prepared {
+        let Some(router) = app.router.as_mut() else { return -1 };
+        if !router.prepare_onscreen_benchmark(name) {
             return -1;
         }
         let (damage_enabled, damage_use, damage_prefilter) = if name == "damage_lab_frame" {
@@ -3274,9 +3312,7 @@ pub extern "C" fn oxide_host_prepare_onscreen_benchmark(
         } else {
             (false, 0.70f32, 0.25f32)
         };
-        if let Some(router) = app.router.as_mut() {
-            router.damage_set_options(damage_enabled, damage_use, damage_prefilter);
-        }
+        router.damage_set_options(damage_enabled, damage_use, damage_prefilter);
         if let Some(renderer) = app.renderer.as_mut().map(|b| b.as_mut()) {
             renderer.set_damage_options(damage_enabled, damage_use, damage_prefilter);
         }

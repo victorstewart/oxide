@@ -10,6 +10,14 @@ pub struct Vertex3d {
     pub position: [f32; 3],
 }
 
+/// One position + color vertex for scene3d meshes that carry their own color field.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VertexColor3d {
+    pub position: [f32; 3],
+    pub color: [f32; 4],
+}
+
 /// Stable renderer-owned handle for a GPU-resident 3D mesh.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -49,6 +57,14 @@ pub enum Material3d {
 #[derive(Clone, Copy, Debug)]
 pub struct Mesh3dData<'a> {
     pub vertices: &'a [Vertex3d],
+    pub indices: &'a [u32],
+    pub topology: MeshTopology,
+}
+
+/// CPU-side colored mesh upload payload copied into Metal buffers once.
+#[derive(Clone, Copy, Debug)]
+pub struct MeshColor3dData<'a> {
+    pub vertices: &'a [VertexColor3d],
     pub indices: &'a [u32],
     pub topology: MeshTopology,
 }

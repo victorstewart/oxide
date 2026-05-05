@@ -767,6 +767,7 @@ name = "oxide-test-scenes"
 version = "0.1.0"
 dependencies = [
  "once_cell",
+ "oxide-input",
  "oxide-permissions",
  "oxide-platform-api",
  "oxide-renderer-api",

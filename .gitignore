@@ -3,6 +3,7 @@
 *.swp
 *.swo
 *.log
+/.tasks/
 /tasks/
 .run/
 

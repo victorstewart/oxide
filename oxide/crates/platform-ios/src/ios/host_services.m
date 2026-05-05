@@ -43,8 +43,10 @@ static const int32_t kNametagPermissionDomainCamera = 2;
 static const int32_t kNametagPermissionDomainBluetooth = 4;
 static const int32_t kNametagPermissionDomainMicrophone = 6;
 static const int32_t kNametagPermissionDomainMediaLibrary = 7;
-static _Atomic(uint32_t) g_media_library_cached_status =
+static _Atomic(uint32_t) g_media_library_cached_oxide_status =
     ATOMIC_VAR_INIT(kOxPermStatusNotDetermined);
+static _Atomic(int32_t) g_media_library_cached_nametag_status =
+    ATOMIC_VAR_INIT(0);
 
 static void dispatch_main_async(void (^block)(void)) {
   if ([NSThread isMainThread]) {
@@ -355,19 +357,28 @@ static PHAuthorizationStatus current_photo_authorization(void) {
 }
 
 static void cache_media_library_permission_status(PHAuthorizationStatus status) {
-  atomic_store_explicit(&g_media_library_cached_status,
+  atomic_store_explicit(&g_media_library_cached_oxide_status,
                         oxide_status_from_photo_authorization(status),
+                        memory_order_relaxed);
+  atomic_store_explicit(&g_media_library_cached_nametag_status,
+                        nametag_status_from_photo_authorization(status),
                         memory_order_relaxed);
 }
 
+static void refresh_media_library_permission_status(void) {
+  cache_media_library_permission_status(current_photo_authorization());
+}
+
 static uint32_t oxide_media_library_permission_status(void) {
-  return atomic_load_explicit(&g_media_library_cached_status,
+  refresh_media_library_permission_status();
+  return atomic_load_explicit(&g_media_library_cached_oxide_status,
                               memory_order_relaxed);
 }
 
 static int32_t nametag_media_library_permission_status(void) {
-  return (int32_t)atomic_load_explicit(&g_media_library_cached_status,
-                                       memory_order_relaxed);
+  refresh_media_library_permission_status();
+  return atomic_load_explicit(&g_media_library_cached_nametag_status,
+                              memory_order_relaxed);
 }
 
 static void emit_location_permission_updates(void) {

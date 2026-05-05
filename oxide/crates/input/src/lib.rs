@@ -254,11 +254,9 @@ impl TouchSurfaceRecognizer {
     }
 
     fn touch_mut(&mut self, id: api::TouchId) -> Option<&mut SurfaceTouch> {
-        for slot in &mut self.touches {
-            if let Some(touch) = slot {
-                if touch.id == id {
-                    return Some(touch);
-                }
+        for touch in self.touches.iter_mut().flatten() {
+            if touch.id == id {
+                return Some(touch);
             }
         }
         self.overflow.iter_mut().find(|touch| touch.id == id)
@@ -266,11 +264,9 @@ impl TouchSurfaceRecognizer {
 
     fn remove_touch(&mut self, id: api::TouchId) -> bool {
         for slot in &mut self.touches {
-            if let Some(touch) = slot {
-                if touch.id == id {
-                    *slot = None;
-                    return true;
-                }
+            if slot.as_ref().is_some_and(|touch| touch.id == id) {
+                *slot = None;
+                return true;
             }
         }
 
@@ -357,37 +353,23 @@ impl GestureRecognizer {
                     let my = ev.y - tr.start_y;
                     let moved = (mx * mx + my * my).sqrt();
                     match tr.state {
-                        TrackState::Pending => {
-                            if moved >= pan_min_move {
-                                tr.state = TrackState::Panning;
-                                out.push_gesture(GestureEvent::PanStart {
-                                    id: ev.id,
-                                    x: ev.x,
-                                    y: ev.y,
-                                });
-                                clear_last_tap = true;
-                            } else if t_ms.saturating_sub(tr.start_ms) >= long_ms
-                                && tr.state != TrackState::LongFired
-                            {
-                                tr.state = TrackState::LongFired;
-                                out.push_gesture(GestureEvent::LongPress {
-                                    id: ev.id,
-                                    x: ev.x,
-                                    y: ev.y,
-                                });
-                                clear_last_tap = true;
-                            }
+                        TrackState::Pending | TrackState::LongFired if moved >= pan_min_move => {
+                            tr.state = TrackState::Panning;
+                            out.push_gesture(GestureEvent::PanStart {
+                                id: ev.id,
+                                x: ev.x,
+                                y: ev.y,
+                            });
+                            clear_last_tap = true;
                         }
-                        TrackState::LongFired => {
-                            if moved >= pan_min_move {
-                                tr.state = TrackState::Panning;
-                                out.push_gesture(GestureEvent::PanStart {
-                                    id: ev.id,
-                                    x: ev.x,
-                                    y: ev.y,
-                                });
-                                clear_last_tap = true;
-                            }
+                        TrackState::Pending if t_ms.saturating_sub(tr.start_ms) >= long_ms => {
+                            tr.state = TrackState::LongFired;
+                            out.push_gesture(GestureEvent::LongPress {
+                                id: ev.id,
+                                x: ev.x,
+                                y: ev.y,
+                            });
+                            clear_last_tap = true;
                         }
                         TrackState::Panning => {
                             out.push_gesture(GestureEvent::PanMove {
@@ -398,6 +380,7 @@ impl GestureRecognizer {
                                 dy,
                             });
                         }
+                        TrackState::Pending | TrackState::LongFired => {}
                     }
                     tr.last_x = ev.x;
                     tr.last_y = ev.y;
@@ -492,11 +475,9 @@ impl GestureRecognizer {
     }
 
     fn track_mut(&mut self, id: api::TouchId) -> Option<&mut Track> {
-        for slot in &mut self.tracks {
-            if let Some(entry) = slot {
-                if entry.id == id {
-                    return Some(&mut entry.track);
-                }
+        for entry in self.tracks.iter_mut().flatten() {
+            if entry.id == id {
+                return Some(&mut entry.track);
             }
         }
         self.overflow.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.track)
@@ -504,10 +485,8 @@ impl GestureRecognizer {
 
     fn remove_track(&mut self, id: api::TouchId) -> Option<Track> {
         for slot in &mut self.tracks {
-            if let Some(entry) = slot {
-                if entry.id == id {
-                    return slot.take().map(|entry| entry.track);
-                }
+            if slot.as_ref().is_some_and(|entry| entry.id == id) {
+                return slot.take().map(|entry| entry.track);
             }
         }
 

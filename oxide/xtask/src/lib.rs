@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use base64::Engine;
 use oxide_perf_runner::{
     compare_reports, render_report_markdown, AuditFinding, ContractCoverageEntry,
-    ContractCoverageReport, CoverageReport, PerfCaseResult, PerfReport,
+    ContractCoverageReport, CoverageReport, PerfCaseResult, PerfComparison, PerfReport,
 };
 use plist::{Dictionary, Value as PlValue};
 use roxmltree::Document;
@@ -169,6 +169,96 @@ struct OxideOnscreenCaseSpec {
 
 const OXIDE_ONSCREEN_CASE_SPECS: &[OxideOnscreenCaseSpec] = &[
     OxideOnscreenCaseSpec {
+        test_name: "testOxideLabelEncode",
+        case_id: "cpu.component.label.encode",
+        family: "component",
+        layer: "onscreen",
+        scenario: "label_encode",
+        variant: "oxide_host",
+        benchmark_iterations: 64,
+        note: "Real on-screen Oxide label scene rendered through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideProgressBarEncode",
+        case_id: "cpu.component.progress_bar.encode",
+        family: "component",
+        layer: "onscreen",
+        scenario: "progress_bar_encode",
+        variant: "oxide_host",
+        benchmark_iterations: 96,
+        note: "Real on-screen Oxide progress-bar scene rendered through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideSpinnerEncode",
+        case_id: "cpu.component.spinner.encode",
+        family: "component",
+        layer: "onscreen",
+        scenario: "spinner_encode",
+        variant: "oxide_host",
+        benchmark_iterations: 96,
+        note: "Real on-screen Oxide spinner component scene rendered through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideButtonEncode",
+        case_id: "cpu.component.button.encode",
+        family: "component",
+        layer: "onscreen",
+        scenario: "button_encode",
+        variant: "oxide_host",
+        benchmark_iterations: 64,
+        note: "Real on-screen Oxide button component scene rendered through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideToggleEncode",
+        case_id: "cpu.component.toggle.encode",
+        family: "component",
+        layer: "onscreen",
+        scenario: "toggle_encode",
+        variant: "oxide_host",
+        benchmark_iterations: 96,
+        note: "Real on-screen Oxide toggle component scene rendered through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideSliderEncode",
+        case_id: "cpu.component.slider.encode",
+        family: "component",
+        layer: "onscreen",
+        scenario: "slider_encode",
+        variant: "oxide_host",
+        benchmark_iterations: 96,
+        note: "Real on-screen Oxide slider component scene rendered through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideImageViewEncode",
+        case_id: "cpu.component.image_view.encode",
+        family: "component",
+        layer: "onscreen",
+        scenario: "image_view_encode",
+        variant: "oxide_host",
+        benchmark_iterations: 96,
+        note: "Real on-screen Oxide image-view scene rendered through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideNineSliceImageEncode",
+        case_id: "cpu.component.nine_slice_image.encode",
+        family: "component",
+        layer: "onscreen",
+        scenario: "nine_slice_image_encode",
+        variant: "oxide_host",
+        benchmark_iterations: 96,
+        note: "Real on-screen Oxide nine-slice image component scene rendered through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideCollectionViewEncode",
+        case_id: "cpu.component.collection_view.encode",
+        family: "component",
+        layer: "onscreen",
+        scenario: "collection_view_encode",
+        variant: "oxide_host",
+        benchmark_iterations: 24,
+        note: "Real on-screen Oxide collection-view scene rendered through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
         test_name: "testOxideSpinnerSpin",
         case_id: "cpu.animation.spinner_spin",
         family: "animation",
@@ -177,6 +267,46 @@ const OXIDE_ONSCREEN_CASE_SPECS: &[OxideOnscreenCaseSpec] = &[
         variant: "oxide_host",
         benchmark_iterations: 96,
         note: "Real on-screen Oxide spinner scene rendered through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideProgressIndeterminate",
+        case_id: "cpu.animation.progress_indeterminate",
+        family: "animation",
+        layer: "onscreen",
+        scenario: "progress_indeterminate",
+        variant: "oxide_host",
+        benchmark_iterations: 96,
+        note: "Real on-screen Oxide indeterminate progress animation rendered through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideButtonPressScale",
+        case_id: "cpu.animation.button_press_scale",
+        family: "animation",
+        layer: "onscreen",
+        scenario: "button_press_scale",
+        variant: "oxide_host",
+        benchmark_iterations: 64,
+        note: "Real on-screen Oxide button press-scale animation rendered through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideToggleThumbSpring",
+        case_id: "cpu.animation.toggle_thumb_spring",
+        family: "animation",
+        layer: "onscreen",
+        scenario: "toggle_thumb_spring",
+        variant: "oxide_host",
+        benchmark_iterations: 96,
+        note: "Real on-screen Oxide toggle thumb spring animation rendered through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideSliderThumbMove",
+        case_id: "cpu.animation.slider_thumb_move",
+        family: "animation",
+        layer: "onscreen",
+        scenario: "slider_thumb_move",
+        variant: "oxide_host",
+        benchmark_iterations: 96,
+        note: "Real on-screen Oxide slider thumb movement animation rendered through the live MetalView host path.",
     },
     OxideOnscreenCaseSpec {
         test_name: "testOxideImageZoomPan",
@@ -1907,7 +2037,7 @@ pub fn run_cli(args: &[String]) -> Result<()> {
         (Some("test-all"), _) => test_all(),
         _ => {
             eprintln!(
-                "Usage:\n  cargo xtask ios prepare\n  cargo xtask ios perf [disabled: use `ios device-perf`]\n  cargo xtask ios device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR]\n    note: `--trace-seconds 0` skips the attached Metal trace and collects only xcodebuild CPU metrics plus parked console summaries.\n  cargo xtask ios compare-device-perf [--write-baseline] [--uikit-compare PATH] [--oxide-compare PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR] [--watchable-smoke|--smoke] [--family animation|navigation|journey|camera]\n    staged flow: run watchable smoke first, then `--family ...` proofs, then `--write-baseline` from the same result root once proof status is green.\n  cargo xtask ios react-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--reuse-derived-data PATH] [--trace-seconds N]\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
+                "Usage:\n  cargo xtask ios prepare\n  cargo xtask ios perf [disabled: use `ios device-perf`]\n  cargo xtask ios device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR]\n    note: `--trace-seconds 0` skips the attached Metal trace and collects only xcodebuild CPU metrics plus parked console summaries.\n  cargo xtask ios compare-device-perf [--write-baseline] [--uikit-compare PATH] [--oxide-compare PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR] [--watchable-smoke|--smoke] [--family component|animation|navigation|journey|camera]\n    staged flow: run watchable smoke first, then `--family ...` proofs, then `--write-baseline` from the same result root once proof status is green.\n  cargo xtask ios react-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--reuse-derived-data PATH] [--trace-seconds N]\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
             );
             Ok(())
         }
@@ -2103,9 +2233,30 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
     )?;
 
     let uikit_current_json = uikit_result_root.join("current.json");
+    let expected_uikit_case_ids = selected_specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
     let uikit_report = if uikit_current_json.is_file() {
-        println!("Reusing completed UIKit device report at {}.", uikit_current_json.display());
-        load_uikit_report(&uikit_current_json)?
+        let cached = load_uikit_report(&uikit_current_json)?;
+        if uikit_report_matches_case_ids(&cached, &expected_uikit_case_ids) {
+            println!("Reusing completed UIKit device report at {}.", uikit_current_json.display());
+            cached
+        } else {
+            println!(
+                "Discarding completed UIKit device report at {} because its case set does not match the selected run.",
+                uikit_current_json.display()
+            );
+            capture_uikit_device_report(
+                &root,
+                &device,
+                &prepared_build,
+                &selected_specs,
+                refresh_mode,
+                &uikit_result_root,
+                trace_seconds,
+                cli.power_trace.as_deref(),
+                cli.power_trace_root.as_deref(),
+                watch_capture,
+            )?
+        }
     } else {
         capture_uikit_device_report(
             &root,
@@ -2148,9 +2299,29 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
     print_uikit_summary(&uikit_report, uikit_comparison.as_ref());
 
     let oxide_current_json = oxide_result_root.join("current.json");
+    let expected_oxide_case_ids =
+        selected_oxide_specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
     let oxide_report = if oxide_current_json.is_file() {
-        println!("Reusing completed Oxide device report at {}.", oxide_current_json.display());
-        load_oxide_device_report(&oxide_current_json)?
+        let cached = load_oxide_device_report(&oxide_current_json)?;
+        if perf_report_matches_case_ids(&cached, &expected_oxide_case_ids) {
+            println!("Reusing completed Oxide device report at {}.", oxide_current_json.display());
+            cached
+        } else {
+            println!(
+                "Discarding completed Oxide device report at {} because its case set does not match the selected run.",
+                oxide_current_json.display()
+            );
+            capture_oxide_onscreen_device_report(
+                &root,
+                &device,
+                &prepared_build.built_app,
+                &selected_oxide_specs,
+                refresh_mode,
+                &oxide_result_root,
+                trace_seconds,
+                watch_capture,
+            )?
+        }
     } else {
         capture_oxide_onscreen_device_report(
             &root,
@@ -2193,21 +2364,6 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
     }
     print_oxide_device_summary(&oxide_report, oxide_comparison.as_ref());
 
-    if stage != CompareDeviceRunStage::Promotion {
-        let completed_families = selected_specs
-            .iter()
-            .map(|spec| String::from(compare_device_family_for_uikit_spec(spec).unwrap()))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        update_compare_device_proof_status(
-            &result_root,
-            &build_context.expected_stamp,
-            stage,
-            &completed_families,
-        )?;
-    }
-
     if let Some(comp) = uikit_comparison.as_ref() {
         if !comp.missing_baseline.is_empty() || !comp.regressions.is_empty() {
             bail!(
@@ -2221,6 +2377,23 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
                 "Oxide device performance comparison failed; inspect the generated report and update the committed baseline only with review"
             );
         }
+    }
+
+    if stage != CompareDeviceRunStage::Promotion
+        && compare_device_comparisons_pass(uikit_comparison.as_ref(), oxide_comparison.as_ref())
+    {
+        let completed_families = selected_specs
+            .iter()
+            .map(|spec| String::from(compare_device_family_for_uikit_spec(spec).unwrap()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        update_compare_device_proof_status(
+            &result_root,
+            &build_context.expected_stamp,
+            stage,
+            &completed_families,
+        )?;
     }
 
     Ok(())
@@ -2274,9 +2447,30 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
         &build_context,
     )?;
     let current_json = result_root.join("current.json");
+    let expected_case_ids = selected_specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
     let report = if current_json.is_file() {
-        println!("Reusing completed UIKit device report at {}.", current_json.display());
-        load_uikit_report(&current_json)?
+        let cached = load_uikit_report(&current_json)?;
+        if uikit_report_matches_case_ids(&cached, &expected_case_ids) {
+            println!("Reusing completed UIKit device report at {}.", current_json.display());
+            cached
+        } else {
+            println!(
+                "Discarding completed UIKit device report at {} because its case set does not match the selected run.",
+                current_json.display()
+            );
+            capture_uikit_device_report(
+                &root,
+                &device,
+                &prepared_build,
+                &selected_specs,
+                refresh_mode,
+                &result_root,
+                trace_seconds,
+                cli.power_trace.as_deref(),
+                cli.power_trace_root.as_deref(),
+                false,
+            )?
+        }
     } else {
         capture_uikit_device_report(
             &root,
@@ -2541,9 +2735,28 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
     )?;
 
     let current_json = result_root.join("current.json");
+    let expected_case_ids = selected_specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
     let report = if current_json.is_file() {
-        println!("Reusing completed Oxide device report at {}.", current_json.display());
-        load_oxide_device_report(&current_json)?
+        let cached = load_oxide_device_report(&current_json)?;
+        if perf_report_matches_case_ids(&cached, &expected_case_ids) {
+            println!("Reusing completed Oxide device report at {}.", current_json.display());
+            cached
+        } else {
+            println!(
+                "Discarding completed Oxide device report at {} because its case set does not match the selected run.",
+                current_json.display()
+            );
+            capture_oxide_onscreen_device_report(
+                &root,
+                &device,
+                &prepared_build.built_app,
+                &selected_specs,
+                refresh_mode,
+                &result_root,
+                trace_seconds,
+                false,
+            )?
+        }
     } else {
         capture_oxide_onscreen_device_report(
             &root,
@@ -3093,12 +3306,13 @@ fn oxide_onscreen_case_spec_for_case_id(case_id: &str) -> Option<&'static OxideO
 
 fn normalize_compare_device_family(value: &str) -> Result<&'static str> {
     match value {
+        "component" | "object" | "ui" => Ok("component"),
         "animation" => Ok("animation"),
         "navigation" => Ok("navigation"),
         "journey" => Ok("journey"),
         "camera" | "image_pipeline" => Ok("camera"),
         other => bail!(
-            "unknown compare-device-perf family `{}`; expected one of: animation, navigation, journey, camera",
+            "unknown compare-device-perf family `{}`; expected one of: component, animation, navigation, journey, camera",
             other
         ),
     }
@@ -3110,6 +3324,9 @@ fn compare_device_family_for_uikit_spec(spec: &UIKitCaseSpec) -> Result<&'static
     }
     if spec.case_id.contains(".animation.") {
         return Ok("animation");
+    }
+    if spec.case_id.contains(".component.") {
+        return Ok("component");
     }
     if spec.case_id.contains(".navigation.") {
         return Ok("navigation");
@@ -3126,7 +3343,8 @@ fn compare_device_family_for_uikit_spec(spec: &UIKitCaseSpec) -> Result<&'static
 fn uikit_case_in_compare_device_watchable_smoke_spec(spec: &UIKitCaseSpec) -> bool {
     matches!(
         spec.test_name,
-        "testSpinnerSpin"
+        "testButtonEncode"
+            | "testSpinnerSpin"
             | "testOptimizedSpinnerSpin"
             | "testButtonPressResponse"
             | "testOptimizedButtonPressResponse"
@@ -3196,6 +3414,30 @@ fn selected_oxide_onscreen_case_specs(
         bail!("unknown Oxide on-screen perf case(s) `{}`", requested.join(", "));
     }
     Ok(selected)
+}
+
+pub fn perf_report_matches_case_ids(report: &PerfReport, expected_case_ids: &[&str]) -> bool {
+    if report.cases.len() != expected_case_ids.len() {
+        return false;
+    }
+    let actual = report.cases.iter().map(|case| case.id.as_str()).collect::<BTreeSet<_>>();
+    if actual.len() != report.cases.len() {
+        return false;
+    }
+    let expected = expected_case_ids.iter().copied().collect::<BTreeSet<_>>();
+    actual == expected
+}
+
+pub fn uikit_report_matches_case_ids(report: &UIKitPerfReport, expected_case_ids: &[&str]) -> bool {
+    if report.cases.len() != expected_case_ids.len() {
+        return false;
+    }
+    let actual = report.cases.iter().map(|case| case.id.as_str()).collect::<BTreeSet<_>>();
+    if actual.len() != report.cases.len() {
+        return false;
+    }
+    let expected = expected_case_ids.iter().copied().collect::<BTreeSet<_>>();
+    actual == expected
 }
 
 fn selected_oxide_onscreen_case_specs_for_uikit_specs(
@@ -3273,8 +3515,26 @@ fn selected_uikit_case_specs_for_compare_stage(
 fn uikit_case_in_official_device_battery_spec(spec: &UIKitCaseSpec) -> bool {
     matches!(
         spec.case_id,
-        "uikit.animation.spinner_spin"
+        "uikit.component.label.encode"
+            | "uikit.component.progress_bar.encode"
+            | "uikit.component.spinner.encode"
+            | "uikit.component.button.encode"
+            | "uikit.component.toggle.encode"
+            | "uikit.component.slider.encode"
+            | "uikit.component.image_view.encode"
+            | "uikit.component.nine_slice_image.encode"
+            | "uikit.component.collection_view.encode"
+            | "uikit.optimized.component.collection_view.encode"
+            | "uikit.animation.spinner_spin"
             | "uikit.optimized.animation.spinner_spin"
+            | "uikit.animation.progress_indeterminate"
+            | "uikit.optimized.animation.progress_indeterminate"
+            | "uikit.animation.button_press_scale"
+            | "uikit.optimized.animation.button_press_scale"
+            | "uikit.animation.toggle_thumb_spring"
+            | "uikit.optimized.animation.toggle_thumb_spring"
+            | "uikit.animation.slider_thumb_move"
+            | "uikit.optimized.animation.slider_thumb_move"
             | "uikit.animation.image_zoom_pan"
             | "uikit.optimized.animation.image_zoom_pan"
             | "uikit.animation.anim_timeline_bars"
@@ -4785,6 +5045,19 @@ pub fn compare_device_missing_promotion_families(
         .collect()
 }
 
+pub fn compare_device_comparisons_pass(
+    uikit_comparison: Option<&UIKitPerfComparison>,
+    oxide_comparison: Option<&PerfComparison>,
+) -> bool {
+    let uikit_passed = uikit_comparison
+        .map(|comparison| comparison.missing_baseline.is_empty() && comparison.regressions.is_empty())
+        .unwrap_or(true);
+    let oxide_passed = oxide_comparison
+        .map(|comparison| comparison.missing_baseline.is_empty() && comparison.regressions.is_empty())
+        .unwrap_or(true);
+    uikit_passed && oxide_passed
+}
+
 fn update_compare_device_proof_status(
     result_root: &Path,
     expected_stamp: &UIKitHostBuildStamp,
@@ -5859,7 +6132,7 @@ fn run_oxide_onscreen_case_trace(
         if include_gpu_counters {
             extra_instruments.push(String::from("Metal GPU Counters"));
         }
-        let (trace_path, _trace_stdout_path, stderr_path) = run_uikit_device_launched_trace(
+        let trace_attempt = run_uikit_device_launched_trace(
             root,
             device,
             built_app,
@@ -5872,7 +6145,42 @@ fn run_oxide_onscreen_case_trace(
             trace_seconds,
             true,
             watch_capture,
-        )?;
+        );
+        let (trace_path, _trace_stdout_path, stderr_path) = match trace_attempt {
+            Ok(run) => run,
+            Err(err)
+                if include_gpu_counters
+                    && is_retryable_xctrace_record_timeout_error(&err.to_string()) =>
+            {
+                println!(
+                    "Metal GPU Counters timed out on {}; retrying on-screen Oxide `{}` without the counter profile.",
+                    device.name, spec.test_name
+                );
+                include_gpu_counters = false;
+                notes.push(String::from(
+                    "GPU counter status: the launched device trace timed out while requesting the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+                ));
+                continue;
+            }
+            Err(err)
+                if timeout_attempt + 1 < UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
+                    && is_retryable_xctrace_record_timeout_error(&err.to_string()) =>
+            {
+                timeout_attempt += 1;
+                println!(
+                    "On-screen Oxide trace for `{}` on {} hit a transient xctrace wall-time timeout (attempt {}/{}); retrying the launched trace.",
+                    spec.test_name,
+                    refresh_mode.report_value(),
+                    timeout_attempt + 1,
+                    UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
+                );
+                notes.push(String::from(
+                    "Trace timeout status: this on-screen Oxide case retried the launched trace after xctrace exceeded its wall-time watchdog before finishing.",
+                ));
+                continue;
+            }
+            Err(err) => return Err(err),
+        };
         let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
         if include_gpu_counters && is_unsupported_gpu_counter_profile_error(&stderr) {
             println!(
@@ -5882,6 +6190,17 @@ fn run_oxide_onscreen_case_trace(
             include_gpu_counters = false;
             notes.push(String::from(
                 "GPU counter status: the launched device trace rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+            ));
+            continue;
+        }
+        if include_gpu_counters && is_retryable_xctrace_record_timeout_error(&stderr) {
+            println!(
+                "Metal GPU Counters timed out on {}; retrying on-screen Oxide `{}` without the counter profile.",
+                device.name, spec.test_name
+            );
+            include_gpu_counters = false;
+            notes.push(String::from(
+                "GPU counter status: the launched device trace timed out while requesting the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
             ));
             continue;
         }
@@ -6142,52 +6461,36 @@ fn build_oxide_onscreen_device_case(
 
 fn build_oxide_onscreen_device_coverage(cases: &[PerfCaseResult]) -> CoverageReport {
     let has_case = |case_id: &str| cases.iter().any(|case| case.id == case_id);
+    let coverage_for = |matches_spec: fn(&OxideOnscreenCaseSpec) -> bool| {
+        let specs = OXIDE_ONSCREEN_CASE_SPECS.iter().filter(|spec| matches_spec(spec));
+        (
+            specs.clone().count(),
+            specs
+                .filter(|spec| has_case(spec.case_id))
+                .map(|spec| String::from(spec.case_id))
+                .collect(),
+        )
+    };
+    let components = coverage_for(|spec| spec.family == "component");
+    let animations = coverage_for(|spec| spec.family == "animation");
+    let image_pipeline = coverage_for(|spec| spec.family == "image_pipeline");
+    let navigation = coverage_for(|spec| spec.family == "navigation");
+    let journeys = coverage_for(|spec| spec.family == "journey");
+    let scenes_gpu = coverage_for(|spec| spec.case_id.starts_with("gpu.scene."));
+
     CoverageReport {
-        animations_total: OXIDE_ONSCREEN_CASE_SPECS
-            .iter()
-            .filter(|spec| spec.family == "animation")
-            .count(),
-        animations_covered: OXIDE_ONSCREEN_CASE_SPECS
-            .iter()
-            .filter(|spec| spec.family == "animation" && has_case(spec.case_id))
-            .map(|spec| String::from(spec.case_id))
-            .collect(),
-        image_pipeline_total: OXIDE_ONSCREEN_CASE_SPECS
-            .iter()
-            .filter(|spec| spec.family == "image_pipeline")
-            .count(),
-        image_pipeline_covered: OXIDE_ONSCREEN_CASE_SPECS
-            .iter()
-            .filter(|spec| spec.family == "image_pipeline" && has_case(spec.case_id))
-            .map(|spec| String::from(spec.case_id))
-            .collect(),
-        navigation_total: OXIDE_ONSCREEN_CASE_SPECS
-            .iter()
-            .filter(|spec| spec.family == "navigation")
-            .count(),
-        navigation_covered: OXIDE_ONSCREEN_CASE_SPECS
-            .iter()
-            .filter(|spec| spec.family == "navigation" && has_case(spec.case_id))
-            .map(|spec| String::from(spec.case_id))
-            .collect(),
-        journeys_total: OXIDE_ONSCREEN_CASE_SPECS
-            .iter()
-            .filter(|spec| spec.family == "journey")
-            .count(),
-        journeys_covered: OXIDE_ONSCREEN_CASE_SPECS
-            .iter()
-            .filter(|spec| spec.family == "journey" && has_case(spec.case_id))
-            .map(|spec| String::from(spec.case_id))
-            .collect(),
-        scenes_gpu_total: OXIDE_ONSCREEN_CASE_SPECS
-            .iter()
-            .filter(|spec| spec.case_id.starts_with("gpu.scene."))
-            .count(),
-        scenes_gpu_covered: OXIDE_ONSCREEN_CASE_SPECS
-            .iter()
-            .filter(|spec| spec.case_id.starts_with("gpu.scene.") && has_case(spec.case_id))
-            .map(|spec| String::from(spec.case_id))
-            .collect(),
+        components_total: components.0,
+        components_covered: components.1,
+        animations_total: animations.0,
+        animations_covered: animations.1,
+        image_pipeline_total: image_pipeline.0,
+        image_pipeline_covered: image_pipeline.1,
+        navigation_total: navigation.0,
+        navigation_covered: navigation.1,
+        journeys_total: journeys.0,
+        journeys_covered: journeys.1,
+        scenes_gpu_total: scenes_gpu.0,
+        scenes_gpu_covered: scenes_gpu.1,
         ..CoverageReport::default()
     }
 }
@@ -6219,9 +6522,34 @@ fn build_oxide_onscreen_device_contract(
         ],
         battery: vec![
             ContractCoverageEntry {
+                id: String::from("primitive-views"),
+                label: String::from("Headline UI Objects"),
+                status: if has_case("cpu.component.label.encode")
+                    && has_case("cpu.component.progress_bar.encode")
+                    && has_case("cpu.component.spinner.encode")
+                    && has_case("cpu.component.button.encode")
+                    && has_case("cpu.component.toggle.encode")
+                    && has_case("cpu.component.slider.encode")
+                    && has_case("cpu.component.image_view.encode")
+                    && has_case("cpu.component.nine_slice_image.encode")
+                    && has_case("cpu.component.collection_view.encode")
+                {
+                    String::from("implemented")
+                } else {
+                    String::from("partial")
+                },
+                notes: vec![String::from(
+                    "The official matched device battery carries headline Oxide UI object workloads through the live MetalView host path.",
+                )],
+            },
+            ContractCoverageEntry {
                 id: String::from("animation-effects"),
                 label: String::from("Animation & Visual Effects"),
                 status: if has_case("cpu.animation.spinner_spin")
+                    && has_case("cpu.animation.progress_indeterminate")
+                    && has_case("cpu.animation.button_press_scale")
+                    && has_case("cpu.animation.toggle_thumb_spring")
+                    && has_case("cpu.animation.slider_thumb_move")
                     && has_case("cpu.animation.image_zoom_pan")
                     && has_case("cpu.animation.anim_timeline_bars")
                 {
@@ -6295,6 +6623,9 @@ fn build_oxide_onscreen_device_contract(
             format!("Executable: `{}`", built_app.executable_name),
             String::from(
                 "Device flow: launch the parked host app on the physical iPhone with a live on-screen Oxide workload selected, collect workload and memory summaries from the app console, and collect direct GPU/signpost metrics from a process-scoped launched Metal System Trace when tracing is enabled.",
+            ),
+            String::from(
+                "Fairness scope: headline rows use visible workload, transition, interaction, or present signposts; app-process CPU and memory are attribution metrics, not a claim that all iOS framework or compositor work is charged to the app process.",
             ),
             String::from(
                 "Comparison scope: only on-screen Oxide host cases are persisted here. Offscreen Rust workspace numbers remain separate and are not part of the official device comparison.",
@@ -6770,6 +7101,19 @@ fn run_uikit_device_case_trace(
                 include_gpu_counters = false;
                 notes.push(String::from(
                     "GPU counter status: the attached device rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+                ));
+            }
+            Err(err)
+                if include_gpu_counters
+                    && is_retryable_xctrace_record_timeout_error(&err.to_string()) =>
+            {
+                println!(
+                    "Metal GPU Counters timed out on {}; retrying `{}` without the counter profile.",
+                    device.name, spec.test_name
+                );
+                include_gpu_counters = false;
+                notes.push(String::from(
+                    "GPU counter status: the attached device trace timed out while requesting the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
                 ));
             }
             Err(err)
@@ -12352,6 +12696,7 @@ fn write_uikit_device_markdown(
     out.push_str(&format!("- Device: `{}`\n", report.device_name));
     out.push_str(&format!("- Energy: {}\n", report.energy_status));
     out.push_str("- CPU columns measure UIKit-side orchestration cost around a GPU-backed rendering pipeline; GPU columns come from direct physical-device Instruments traces.\n");
+    out.push_str("- Fairness scope: headline rows use visible workload, transition, interaction, or present signposts where available. CPU and memory columns are app-process attribution metrics; they do not pretend that UIKit/iOS system-framework, compositor, or service work outside the app process was free.\n");
     if includes_energy {
         out.push_str(&format!(
             "- Metrics reflect {} plus automated per-case process-scoped Metal System Trace captures attached only to the single launched OxideHost process on the same physical iPhone. Direct energy values in this report come from manually imported per-case Power Profiler traces for the same workload. Shared workload/phase signposts still bound the device traces even when the XCTest result bundle is carrying only the stable core metrics.\n",
@@ -12501,11 +12846,24 @@ pub fn map_uikit_case(test_name: &str) -> Result<(&'static str, &'static str, &'
 
 fn official_device_headline_metric_for_oxide_case(oxide_case_id: &str) -> Option<&'static str> {
     match oxide_case_id {
+        "cpu.component.label.encode"
+        | "cpu.component.progress_bar.encode"
+        | "cpu.component.spinner.encode"
+        | "cpu.component.button.encode"
+        | "cpu.component.toggle.encode"
+        | "cpu.component.slider.encode"
+        | "cpu.component.image_view.encode"
+        | "cpu.component.nine_slice_image.encode"
+        | "cpu.component.collection_view.encode" => Some("signpost_frame_present_s"),
         "cpu.navigation.button_press.response" | "cpu.navigation.text_focus.response" => {
             Some("signpost_first_interactive_s")
         }
         "cpu.animation.anim_timeline_bars" => Some("signpost_frame_present_s"),
         "cpu.animation.spinner_spin"
+        | "cpu.animation.progress_indeterminate"
+        | "cpu.animation.button_press_scale"
+        | "cpu.animation.toggle_thumb_spring"
+        | "cpu.animation.slider_thumb_move"
         | "cpu.animation.image_zoom_pan"
         | "cpu.journey.input_form_submit"
         | "cpu.journey.zoom_image_gesture_cycle"
