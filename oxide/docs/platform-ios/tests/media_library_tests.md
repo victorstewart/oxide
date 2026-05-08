@@ -23,6 +23,7 @@
 - Expose a minimal `oxide_media_load_full_image_rgba` test symbol that returns one BGRA pixel and metadata.
 - Call the display-image helper and assert that the loader ran exactly once and that the returned dimensions and bytes match the stub payload.
 - Parse `src/ios/host_services.m` for permission bridge invariants that are otherwise only observable on iOS, keeping the test host-independent while still locking the explicit Photos status refresh, lazy boot sync, and legacy Nametag mapping behavior.
+- Reuse a single source loader and marker-slicing helper so each assertion states only the Objective-C function span it needs.
 
 ## Preconditions and postconditions
 - The Rust media-library helper must continue importing only the full-image RGBA bridge for this fallback path.
@@ -51,6 +52,7 @@
 - The test itself is the minimal usage example for the display-image BGRA fallback path.
 
 ## Changelog
+- 2026-05-05: shared the host-services source loader and marker slicing helper across the Objective-C source invariants.
 - 2026-05-04: added coverage that explicit Photos status reads refresh current authorization while boot-time Nametag sync remains lazy.
 - 2026-05-01: added coverage for separate Oxide and legacy Nametag media-library permission caches after lazy Photos status caching was introduced.
 - 2026-04-22: removed the obsolete cached-image stub symbol from the test because the Rust bridge no longer imports it.

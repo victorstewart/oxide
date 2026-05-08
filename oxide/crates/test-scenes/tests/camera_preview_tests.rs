@@ -2,30 +2,11 @@ use oxide_permissions::PermissionState;
 use oxide_platform_api::{PermissionDomain, PermissionStatus};
 use oxide_renderer_api as gfx;
 use oxide_test_scenes::CameraDemo;
-use oxide_ui_core::{
-    elements::{ImageUploader, TextCtx},
-    DrawListBuilder,
-};
+use oxide_ui_core::{elements::TextCtx, DrawListBuilder};
 
-struct NullUploader;
+mod helpers;
 
-impl ImageUploader for NullUploader {
-    fn create_a8(&mut self, _w: u32, _h: u32, _data: &[u8], _row_bytes: usize) -> gfx::ImageHandle {
-        gfx::ImageHandle(0)
-    }
-
-    fn update_a8(
-        &mut self,
-        _handle: gfx::ImageHandle,
-        _x: u32,
-        _y: u32,
-        _w: u32,
-        _h: u32,
-        _data: &[u8],
-        _row_bytes: usize,
-    ) {
-    }
-}
+use helpers::NullUploader;
 
 #[test]
 fn default_camera_preview_draws_only_fullscreen_camera_background() {

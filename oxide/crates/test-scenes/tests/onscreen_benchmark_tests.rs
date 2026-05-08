@@ -1,27 +1,11 @@
 use oxide_renderer_api as gfx;
 use oxide_platform_api as api;
 use oxide_test_scenes::{Router, SceneKind};
-use oxide_ui_core::{elements::ImageUploader, DrawListBuilder};
+use oxide_ui_core::DrawListBuilder;
 
-struct NullUploader;
+mod helpers;
 
-impl ImageUploader for NullUploader {
-    fn create_a8(&mut self, _w: u32, _h: u32, _data: &[u8], _row_bytes: usize) -> gfx::ImageHandle {
-        gfx::ImageHandle(0)
-    }
-
-    fn update_a8(
-        &mut self,
-        _handle: gfx::ImageHandle,
-        _x: u32,
-        _y: u32,
-        _w: u32,
-        _h: u32,
-        _data: &[u8],
-        _row_bytes: usize,
-    ) {
-    }
-}
+use helpers::NullUploader;
 
 #[test]
 fn headline_component_onscreen_benchmarks_prepare_and_step() {
@@ -105,5 +89,22 @@ fn raw_touch_pinch_reaches_zoom_image_scene() {
    assert!(
       after.w > before.w * 1.5,
       "pinch should increase zoom width: before={before:?} after={after:?}"
+   );
+}
+
+#[test]
+fn raw_touch_pan_reaches_zoom_image_scene() {
+   let mut router = Router::new(NullUploader);
+   assert!(router.prepare_onscreen_benchmark("component_image_view_encode"));
+   router.set_zoom_image(gfx::ImageHandle(7), 100, 100);
+
+   let before = image_rect(&mut router);
+   router.input_touch(&touch(1, api::TouchPhase::Start, 180.0, 400.0));
+   router.input_touch(&touch(1, api::TouchPhase::Move, 210.0, 416.0));
+   let after = image_rect(&mut router);
+
+   assert!(
+      after.x > before.x + 20.0 && after.y > before.y + 10.0,
+      "pan should move zoom image rect: before={before:?} after={after:?}"
    );
 }

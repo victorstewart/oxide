@@ -3417,27 +3417,31 @@ fn selected_oxide_onscreen_case_specs(
 }
 
 pub fn perf_report_matches_case_ids(report: &PerfReport, expected_case_ids: &[&str]) -> bool {
-    if report.cases.len() != expected_case_ids.len() {
-        return false;
-    }
-    let actual = report.cases.iter().map(|case| case.id.as_str()).collect::<BTreeSet<_>>();
-    if actual.len() != report.cases.len() {
-        return false;
-    }
-    let expected = expected_case_ids.iter().copied().collect::<BTreeSet<_>>();
-    actual == expected
+    report_matches_case_ids(
+        report.cases.len(),
+        report.cases.iter().map(|case| case.id.as_str()),
+        expected_case_ids,
+    )
 }
 
 pub fn uikit_report_matches_case_ids(report: &UIKitPerfReport, expected_case_ids: &[&str]) -> bool {
-    if report.cases.len() != expected_case_ids.len() {
+    report_matches_case_ids(
+        report.cases.len(),
+        report.cases.iter().map(|case| case.id.as_str()),
+        expected_case_ids,
+    )
+}
+
+fn report_matches_case_ids<'a>(
+    actual_len: usize,
+    actual_case_ids: impl Iterator<Item = &'a str>,
+    expected_case_ids: &[&str],
+) -> bool {
+    if actual_len != expected_case_ids.len() {
         return false;
     }
-    let actual = report.cases.iter().map(|case| case.id.as_str()).collect::<BTreeSet<_>>();
-    if actual.len() != report.cases.len() {
-        return false;
-    }
-    let expected = expected_case_ids.iter().copied().collect::<BTreeSet<_>>();
-    actual == expected
+    let actual = actual_case_ids.collect::<BTreeSet<_>>();
+    actual.len() == actual_len && actual == expected_case_ids.iter().copied().collect::<BTreeSet<_>>()
 }
 
 fn selected_oxide_onscreen_case_specs_for_uikit_specs(
@@ -5049,13 +5053,10 @@ pub fn compare_device_comparisons_pass(
     uikit_comparison: Option<&UIKitPerfComparison>,
     oxide_comparison: Option<&PerfComparison>,
 ) -> bool {
-    let uikit_passed = uikit_comparison
-        .map(|comparison| comparison.missing_baseline.is_empty() && comparison.regressions.is_empty())
-        .unwrap_or(true);
-    let oxide_passed = oxide_comparison
-        .map(|comparison| comparison.missing_baseline.is_empty() && comparison.regressions.is_empty())
-        .unwrap_or(true);
-    uikit_passed && oxide_passed
+    uikit_comparison
+        .is_none_or(|comparison| comparison.missing_baseline.is_empty() && comparison.regressions.is_empty())
+        && oxide_comparison
+            .is_none_or(|comparison| comparison.missing_baseline.is_empty() && comparison.regressions.is_empty())
 }
 
 fn update_compare_device_proof_status(
@@ -6495,12 +6496,22 @@ fn build_oxide_onscreen_device_coverage(cases: &[PerfCaseResult]) -> CoverageRep
     }
 }
 
+fn contract_coverage_status(complete: bool) -> String {
+    String::from(if complete { "implemented" } else { "partial" })
+}
+
 fn build_oxide_onscreen_device_contract(
     cases: &[PerfCaseResult],
     device: &UIKitPhysicalDevice,
     built_app: &BuiltUIKitApp,
 ) -> ContractCoverageReport {
     let has_case = |case_id: &str| cases.iter().any(|case| case.id == case_id);
+    let complete_family = |family: &str| {
+        OXIDE_ONSCREEN_CASE_SPECS
+            .iter()
+            .filter(|spec| spec.family == family)
+            .all(|spec| has_case(spec.case_id))
+    };
     ContractCoverageReport {
         layers: vec![
             ContractCoverageEntry {
@@ -6524,20 +6535,7 @@ fn build_oxide_onscreen_device_contract(
             ContractCoverageEntry {
                 id: String::from("primitive-views"),
                 label: String::from("Headline UI Objects"),
-                status: if has_case("cpu.component.label.encode")
-                    && has_case("cpu.component.progress_bar.encode")
-                    && has_case("cpu.component.spinner.encode")
-                    && has_case("cpu.component.button.encode")
-                    && has_case("cpu.component.toggle.encode")
-                    && has_case("cpu.component.slider.encode")
-                    && has_case("cpu.component.image_view.encode")
-                    && has_case("cpu.component.nine_slice_image.encode")
-                    && has_case("cpu.component.collection_view.encode")
-                {
-                    String::from("implemented")
-                } else {
-                    String::from("partial")
-                },
+                status: contract_coverage_status(complete_family("component")),
                 notes: vec![String::from(
                     "The official matched device battery carries headline Oxide UI object workloads through the live MetalView host path.",
                 )],
@@ -6545,18 +6543,7 @@ fn build_oxide_onscreen_device_contract(
             ContractCoverageEntry {
                 id: String::from("animation-effects"),
                 label: String::from("Animation & Visual Effects"),
-                status: if has_case("cpu.animation.spinner_spin")
-                    && has_case("cpu.animation.progress_indeterminate")
-                    && has_case("cpu.animation.button_press_scale")
-                    && has_case("cpu.animation.toggle_thumb_spring")
-                    && has_case("cpu.animation.slider_thumb_move")
-                    && has_case("cpu.animation.image_zoom_pan")
-                    && has_case("cpu.animation.anim_timeline_bars")
-                {
-                    String::from("implemented")
-                } else {
-                    String::from("partial")
-                },
+                status: contract_coverage_status(complete_family("animation")),
                 notes: vec![String::from(
                     "The official matched device battery now carries representative Oxide on-screen animation workloads through the live host path.",
                 )],
@@ -6564,13 +6551,7 @@ fn build_oxide_onscreen_device_contract(
             ContractCoverageEntry {
                 id: String::from("navigation-input"),
                 label: String::from("Navigation & Input Latency"),
-                status: if has_case("cpu.navigation.button_press.response")
-                    && has_case("cpu.navigation.text_focus.response")
-                {
-                    String::from("implemented")
-                } else {
-                    String::from("partial")
-                },
+                status: contract_coverage_status(complete_family("navigation")),
                 notes: vec![String::from(
                     "The official matched device battery now carries direct Oxide button-press and text-focus response workloads through the live host path.",
                 )],
@@ -6578,15 +6559,7 @@ fn build_oxide_onscreen_device_contract(
             ContractCoverageEntry {
                 id: String::from("journeys"),
                 label: String::from("Representative Journeys"),
-                status: if has_case("cpu.journey.input_form_submit")
-                    && has_case("cpu.journey.collection_navigation")
-                    && has_case("cpu.journey.zoom_image_gesture_cycle")
-                    && has_case("cpu.journey.orchestration_transition_modal")
-                {
-                    String::from("implemented")
-                } else {
-                    String::from("partial")
-                },
+                status: contract_coverage_status(complete_family("journey")),
                 notes: vec![String::from(
                     "The official matched device battery now carries representative Oxide journey workloads through the live host path.",
                 )],
@@ -6594,13 +6567,7 @@ fn build_oxide_onscreen_device_contract(
             ContractCoverageEntry {
                 id: String::from("renderer-scene-gpu"),
                 label: String::from("Renderer Scene GPU Paths"),
-                status: if has_case("gpu.scene.damage_lab.frame")
-                    && has_case("gpu.scene.nine_slice.frame")
-                {
-                    String::from("implemented")
-                } else {
-                    String::from("partial")
-                },
+                status: contract_coverage_status(complete_family("scene-gpu")),
                 notes: vec![String::from(
                     "The on-screen Oxide device battery carries dedicated renderer rows for damage prefiltering and nine-slice composition through the live host path.",
                 )],

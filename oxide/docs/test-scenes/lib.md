@@ -37,7 +37,7 @@
 
 The router owns one state object per scene and switches between them by `SceneKind`. On-screen benchmarks reuse those scenes instead of introducing benchmark-only renderers. Headline component cases map to the smallest existing scene that renders the target object: text layout for labels, controls for progress/spinner/button/toggle/slider, zoom image for image views, nine-slice for resizable imagery, and collection stress for collection views. Headline animation cases use the controls scene for indeterminate progress, button scale, toggle spring, and slider thumb motion, plus the existing zoom-image and animation-timeline scenes.
 
-`prepare_onscreen_benchmark` resets state so every measurement pass starts from a known scene. `step_onscreen_benchmark` performs one deterministic mutation, then the host renders a real MetalView frame. This keeps product behavior and gesture/control state in Rust while UIKit remains only the host shell.
+`prepare_onscreen_benchmark` resets state so every measurement pass starts from a known scene. `step_onscreen_benchmark` performs one deterministic mutation, sharing the common button and collection-focus step mechanics while preserving case-specific action labels, then the host renders a real MetalView frame. This keeps product behavior and gesture/control state in Rust while UIKit remains only the host shell.
 
 Raw touch input follows the same ownership rule. The host forwards each `TouchEvent`, the router updates a `TouchSurfaceRecognizer`, and recognized pinch ratios are applied through the existing scene-level pinch entry points for Zoom Image and Camera. Scene switches reset the recognizer so stale contacts cannot leak across benchmark or product scene boundaries.
 
@@ -87,5 +87,6 @@ assert!(router.step_onscreen_benchmark("component_button_encode", 1));
 
 ## Changelog
 
+- 2026-05-05: Shared repeated button and collection-focus benchmark step mechanics inside the router.
 - 2026-04-26: Added headline on-screen component and animation benchmark keys for matched Oxide/UIKit device statistics, with identical prepare resets grouped by scene state.
 - 2026-04-29: Routed raw touch pinch events through the scene router instead of dropping them at the new hook.

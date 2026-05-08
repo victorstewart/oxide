@@ -84,6 +84,7 @@ The report schema carries layer/scenario/style/cache/refresh metadata so the UIK
 
 ## Changelog
 
+- 2026-05-05: Collapsed duplicate resumable report case-set checks and table-backed Oxide contract family status checks.
 - 2026-05-04: Added UIKit `current.json` case-set validation before resumable device-report reuse.
 - 2026-04-26: Added headline UI object and common animation cases to the official Oxide/UIKit device battery, plus fairness wording for system-attributed iOS work.
 - 2026-04-11: Removed the redundant manual `Default` implementation for `UIKitMetricSummary`; the derived default keeps the same metric fallback values while reducing report-schema implementation surface.

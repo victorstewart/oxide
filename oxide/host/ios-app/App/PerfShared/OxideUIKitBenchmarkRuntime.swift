@@ -4036,39 +4036,7 @@ private final class OxideOnscreenBenchmarkHarness
 
     private static func resolveSceneName(for benchmarkKey: String) -> String?
     {
-        switch benchmarkKey
-        {
-        case "button_press_response",
-             "component_progress_bar_encode",
-             "component_spinner_encode",
-             "component_button_encode",
-             "component_toggle_encode",
-             "component_slider_encode",
-             "spinner_spin",
-             "animation_progress_indeterminate",
-             "animation_button_press_scale",
-             "animation_toggle_thumb_spring",
-             "animation_slider_thumb_move":
-            return "Controls"
-        case "component_label_encode":
-            return "Text Layout"
-        case "text_focus_response", "input_form_submit":
-            return "Input & Haptics"
-        case "collection_navigation", "component_collection_view_encode":
-            return "Collection Stress"
-        case "component_image_view_encode", "image_zoom_pan", "zoom_image_gesture_cycle":
-            return "Zoom Image"
-        case "anim_timeline_bars":
-            return "Animations"
-        case "damage_lab_frame":
-            return "Damage Lab"
-        case "component_nine_slice_image_encode", "nine_slice_frame":
-            return "Nine Slice"
-        case "orchestration_transition_modal":
-            return "UI Orchestration"
-        default:
-            return nil
-        }
+        oxideOnscreenBenchmarkSpecs.first(where: { $0.benchmarkKey == benchmarkKey })?.sceneName
     }
 }
 
@@ -11767,36 +11735,37 @@ private func makeOxideOnscreenBenchmark(
 private typealias OxideOnscreenBenchmarkSpec = (
     testName: String,
     benchmarkKey: String,
+    sceneName: String,
     iterations: Int,
     signpostNames: [String],
     interactionSignpostName: StaticString?
 )
 
 private let oxideOnscreenBenchmarkSpecs: [OxideOnscreenBenchmarkSpec] = [
-    ("testOxideLabelEncode", "component_label_encode", 64, ["frame.present"], nil),
-    ("testOxideProgressBarEncode", "component_progress_bar_encode", 96, ["frame.present"], nil),
-    ("testOxideSpinnerEncode", "component_spinner_encode", 96, ["frame.present"], nil),
-    ("testOxideButtonEncode", "component_button_encode", 64, ["frame.present"], nil),
-    ("testOxideToggleEncode", "component_toggle_encode", 96, ["frame.present"], nil),
-    ("testOxideSliderEncode", "component_slider_encode", 96, ["frame.present"], nil),
-    ("testOxideImageViewEncode", "component_image_view_encode", 96, ["frame.present"], nil),
-    ("testOxideNineSliceImageEncode", "component_nine_slice_image_encode", 96, ["frame.present"], nil),
-    ("testOxideCollectionViewEncode", "component_collection_view_encode", 24, ["frame.present"], nil),
-    ("testOxideButtonPressResponse", "button_press_response", 32, ["first.interactive", "draw.encode"], "first.interactive"),
-    ("testOxideTextFocusResponse", "text_focus_response", 24, ["first.interactive", "draw.encode"], "first.interactive"),
-    ("testOxideSpinnerSpin", "spinner_spin", 96, ["transition", "draw.encode"], "transition"),
-    ("testOxideProgressIndeterminate", "animation_progress_indeterminate", 96, ["transition", "frame.present"], "transition"),
-    ("testOxideButtonPressScale", "animation_button_press_scale", 64, ["transition", "frame.present"], "transition"),
-    ("testOxideToggleThumbSpring", "animation_toggle_thumb_spring", 96, ["transition", "frame.present"], "transition"),
-    ("testOxideSliderThumbMove", "animation_slider_thumb_move", 96, ["transition", "frame.present"], "transition"),
-    ("testOxideImageZoomPan", "image_zoom_pan", 48, ["transition", "draw.encode"], "transition"),
-    ("testOxideAnimTimelineBars", "anim_timeline_bars", 24, ["transition", "draw.encode"], "transition"),
-    ("testOxideDamageLabFrame", "damage_lab_frame", 32, ["frame.present", "draw.encode"], "frame.present"),
-    ("testOxideNineSliceFrame", "nine_slice_frame", 32, ["frame.present", "draw.encode"], "frame.present"),
-    ("testOxideInputFormJourney", "input_form_submit", 12, ["transition", "draw.encode"], "transition"),
-    ("testOxideCollectionNavigationJourney", "collection_navigation", 18, ["scroll", "draw.encode"], "scroll"),
-    ("testOxideZoomImageGestureJourney", "zoom_image_gesture_cycle", 18, ["transition", "draw.encode"], "transition"),
-    ("testOxideOrchestrationJourney", "orchestration_transition_modal", 18, ["transition", "draw.encode"], "transition"),
+    ("testOxideLabelEncode", "component_label_encode", "Text Layout", 64, ["frame.present"], nil),
+    ("testOxideProgressBarEncode", "component_progress_bar_encode", "Controls", 96, ["frame.present"], nil),
+    ("testOxideSpinnerEncode", "component_spinner_encode", "Controls", 96, ["frame.present"], nil),
+    ("testOxideButtonEncode", "component_button_encode", "Controls", 64, ["frame.present"], nil),
+    ("testOxideToggleEncode", "component_toggle_encode", "Controls", 96, ["frame.present"], nil),
+    ("testOxideSliderEncode", "component_slider_encode", "Controls", 96, ["frame.present"], nil),
+    ("testOxideImageViewEncode", "component_image_view_encode", "Zoom Image", 96, ["frame.present"], nil),
+    ("testOxideNineSliceImageEncode", "component_nine_slice_image_encode", "Nine Slice", 96, ["frame.present"], nil),
+    ("testOxideCollectionViewEncode", "component_collection_view_encode", "Collection Stress", 24, ["frame.present"], nil),
+    ("testOxideButtonPressResponse", "button_press_response", "Controls", 32, ["first.interactive", "draw.encode"], "first.interactive"),
+    ("testOxideTextFocusResponse", "text_focus_response", "Input & Haptics", 24, ["first.interactive", "draw.encode"], "first.interactive"),
+    ("testOxideSpinnerSpin", "spinner_spin", "Controls", 96, ["transition", "draw.encode"], "transition"),
+    ("testOxideProgressIndeterminate", "animation_progress_indeterminate", "Controls", 96, ["transition", "frame.present"], "transition"),
+    ("testOxideButtonPressScale", "animation_button_press_scale", "Controls", 64, ["transition", "frame.present"], "transition"),
+    ("testOxideToggleThumbSpring", "animation_toggle_thumb_spring", "Controls", 96, ["transition", "frame.present"], "transition"),
+    ("testOxideSliderThumbMove", "animation_slider_thumb_move", "Controls", 96, ["transition", "frame.present"], "transition"),
+    ("testOxideImageZoomPan", "image_zoom_pan", "Zoom Image", 48, ["transition", "draw.encode"], "transition"),
+    ("testOxideAnimTimelineBars", "anim_timeline_bars", "Animations", 24, ["transition", "draw.encode"], "transition"),
+    ("testOxideDamageLabFrame", "damage_lab_frame", "Damage Lab", 32, ["frame.present", "draw.encode"], "frame.present"),
+    ("testOxideNineSliceFrame", "nine_slice_frame", "Nine Slice", 32, ["frame.present", "draw.encode"], "frame.present"),
+    ("testOxideInputFormJourney", "input_form_submit", "Input & Haptics", 12, ["transition", "draw.encode"], "transition"),
+    ("testOxideCollectionNavigationJourney", "collection_navigation", "Collection Stress", 18, ["scroll", "draw.encode"], "scroll"),
+    ("testOxideZoomImageGestureJourney", "zoom_image_gesture_cycle", "Zoom Image", 18, ["transition", "draw.encode"], "transition"),
+    ("testOxideOrchestrationJourney", "orchestration_transition_modal", "UI Orchestration", 18, ["transition", "draw.encode"], "transition"),
 ]
 
 @MainActor

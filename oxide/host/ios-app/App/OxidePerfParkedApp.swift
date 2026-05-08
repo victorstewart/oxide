@@ -75,6 +75,31 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
         visibleTestOverlay = overlay
     }
 
+    private func installParkedWindow(
+        _ window: UIWindow,
+        rootViewController: UIViewController,
+        environment: [String: String]
+    )
+    {
+        window.rootViewController = rootViewController
+        window.makeKeyAndVisible()
+        self.window = window
+        installVisibleTestOverlay(
+            for: window,
+            text: resolvePerfDisplayLabel(environment: environment)
+        )
+    }
+
+    private func installWhiteParkedWindow(for windowScene: UIWindowScene, environment: [String: String])
+    {
+        let window = UIWindow(windowScene: windowScene)
+        let rootViewController = UIViewController()
+        let view = UIView(frame: window.bounds)
+        view.backgroundColor = .white
+        rootViewController.view = view
+        installParkedWindow(window, rootViewController: rootViewController, environment: environment)
+    }
+
     private func scheduleWatchAutostartIfNeeded()
     {
         guard watchModeEnabled,
@@ -138,18 +163,7 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
         if environment[perfOxideRunnerEnv] == "1"
         {
             oxidePerfRunnerSmoke = environment[perfOxideRunnerSmokeEnv] == "1"
-            let window = UIWindow(windowScene: windowScene)
-            let rootViewController = UIViewController()
-            let view = UIView(frame: window.bounds)
-            view.backgroundColor = .white
-            rootViewController.view = view
-            window.rootViewController = rootViewController
-            window.makeKeyAndVisible()
-            self.window = window
-            installVisibleTestOverlay(
-                for: window,
-                text: resolvePerfDisplayLabel(environment: environment)
-            )
+            installWhiteParkedWindow(for: windowScene, environment: environment)
             self.startObserver = DarwinNotificationObserver(name: startNotificationName)
             {
                 [weak self] in
@@ -166,18 +180,7 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
             {
                 if environment[perfTraceHandshakeEnv] == "1"
                 {
-                    let window = UIWindow(windowScene: windowScene)
-                    let rootViewController = UIViewController()
-                    let view = UIView(frame: window.bounds)
-                    view.backgroundColor = .white
-                    rootViewController.view = view
-                    window.rootViewController = rootViewController
-                    window.makeKeyAndVisible()
-                    self.window = window
-                    installVisibleTestOverlay(
-                        for: window,
-                        text: resolvePerfDisplayLabel(environment: environment)
-                    )
+                    installWhiteParkedWindow(for: windowScene, environment: environment)
                     self.pendingLaunchScenario = launch
                     self.startObserver = DarwinNotificationObserver(name: startNotificationName)
                     {
@@ -194,29 +197,12 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
                     route: launch.route,
                     style: launch.style
                 )
-                window.rootViewController = rootViewController
-                window.makeKeyAndVisible()
-                self.window = window
-                installVisibleTestOverlay(
-                    for: window,
-                    text: resolvePerfDisplayLabel(environment: environment)
-                )
+                installParkedWindow(window, rootViewController: rootViewController, environment: environment)
                 return
             }
             if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
             {
-                let window = UIWindow(windowScene: windowScene)
-                let rootViewController = UIViewController()
-                let view = UIView(frame: window.bounds)
-                view.backgroundColor = .white
-                rootViewController.view = view
-                window.rootViewController = rootViewController
-                window.makeKeyAndVisible()
-                self.window = window
-                installVisibleTestOverlay(
-                    for: window,
-                    text: resolvePerfDisplayLabel(environment: environment)
-                )
+                installWhiteParkedWindow(for: windowScene, environment: environment)
                 return
             }
             fatalError("missing \(parkedCaseEnv) for parked benchmark mode")

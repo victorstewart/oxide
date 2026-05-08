@@ -420,11 +420,19 @@ impl<U: elements::ImageUploader> Router<U> {
     pub fn input_touch(&mut self, event: &api::TouchEvent) {
         let surface_events = self.touch_surface.on_touch(event);
         for event in surface_events {
-            if let TouchSurfaceEvent::Pinch { x, y, scale_delta, .. } = event {
-                let delta = scale_delta - 1.0;
-                if delta.is_finite() && delta != 0.0 {
-                    self.input_pinch(x, y, delta);
+            match event {
+                TouchSurfaceEvent::Pan { x, y, dx, dy, .. } => {
+                    if dx.is_finite() && dy.is_finite() {
+                        self.input_pointer(x, y, dx, dy, 1);
+                    }
                 }
+                TouchSurfaceEvent::Pinch { x, y, scale_delta, .. } => {
+                    let delta = scale_delta - 1.0;
+                    if delta.is_finite() && delta != 0.0 {
+                        self.input_pinch(x, y, delta);
+                    }
+                }
+                TouchSurfaceEvent::ActiveTouchesChanged { .. } => {}
             }
         }
     }
@@ -434,6 +442,28 @@ impl<U: elements::ImageUploader> Router<U> {
             SceneKind::ZoomImage => self.zoom_image.double_tap(),
             SceneKind::Camera => self.camera.double_tap(),
             _ => {}
+        }
+    }
+
+    fn step_button_control(&mut self, step: usize, up_action: &'static str, down_action: &'static str) -> &'static str {
+        let action = if step % 2 == 0 {
+            let _ = self.controls.key_space_up();
+            up_action
+        } else {
+            self.controls.key_space_down();
+            down_action
+        };
+        self.controls.update(16);
+        action
+    }
+
+    fn step_collection_focus(&mut self, step: usize, right_action: &'static str, down_action: &'static str) -> &'static str {
+        if step % 2 == 0 {
+            self.collection_stress.view.focus_move_right();
+            right_action
+        } else {
+            self.collection_stress.view.focus_move_down();
+            down_action
         }
     }
 
@@ -515,15 +545,7 @@ impl<U: elements::ImageUploader> Router<U> {
     pub fn step_onscreen_benchmark(&mut self, benchmark: &str, step: usize) -> bool {
         let action = match benchmark {
             "button_press_response" => {
-                let action = if step % 2 == 0 {
-                    let _ = self.controls.key_space_up();
-                    "button.up"
-                } else {
-                    self.controls.key_space_down();
-                    "button.down"
-                };
-                self.controls.update(16);
-                Some(action)
+                Some(self.step_button_control(step, "button.up", "button.down"))
             }
             "component_label_encode" => {
                 self.text_layout.update(16);
@@ -539,15 +561,7 @@ impl<U: elements::ImageUploader> Router<U> {
                 Some("spinner.draw")
             }
             "component_button_encode" => {
-                let action = if step % 2 == 0 {
-                    let _ = self.controls.key_space_up();
-                    "button.draw_up"
-                } else {
-                    self.controls.key_space_down();
-                    "button.draw_down"
-                };
-                self.controls.update(16);
-                Some(action)
+                Some(self.step_button_control(step, "button.draw_up", "button.draw_down"))
             }
             "component_toggle_encode" => {
                 self.controls.toggle_state.set_on(step % 2 == 0);
@@ -569,14 +583,7 @@ impl<U: elements::ImageUploader> Router<U> {
                 Some("nine_slice.draw")
             }
             "component_collection_view_encode" => {
-                let action = if step % 2 == 0 {
-                    self.collection_stress.view.focus_move_right();
-                    "collection.draw_right"
-                } else {
-                    self.collection_stress.view.focus_move_down();
-                    "collection.draw_down"
-                };
-                Some(action)
+                Some(self.step_collection_focus(step, "collection.draw_right", "collection.draw_down"))
             }
             "spinner_spin" => {
                 self.controls.update(16);
@@ -588,15 +595,7 @@ impl<U: elements::ImageUploader> Router<U> {
                 Some("progress.indeterminate_tick")
             }
             "animation_button_press_scale" => {
-                let action = if step % 2 == 0 {
-                    let _ = self.controls.key_space_up();
-                    "button.scale_up"
-                } else {
-                    self.controls.key_space_down();
-                    "button.scale_down"
-                };
-                self.controls.update(16);
-                Some(action)
+                Some(self.step_button_control(step, "button.scale_up", "button.scale_down"))
             }
             "animation_toggle_thumb_spring" => {
                 if step % 24 == 0 {
@@ -623,14 +622,7 @@ impl<U: elements::ImageUploader> Router<U> {
                 Some("input.submit")
             }
             "collection_navigation" => {
-                let action = if step % 2 == 0 {
-                    self.collection_stress.view.focus_move_right();
-                    "collection.focus_right"
-                } else {
-                    self.collection_stress.view.focus_move_down();
-                    "collection.focus_down"
-                };
-                Some(action)
+                Some(self.step_collection_focus(step, "collection.focus_right", "collection.focus_down"))
             }
             "image_zoom_pan" => {
                 self.zoom_image.pinch(200.0, 300.0, 0.18);

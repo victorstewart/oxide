@@ -10,7 +10,7 @@ These tests keep the headline on-screen benchmark key list honest. They verify t
   - `cargo test -p oxide-test-scenes --test onscreen_benchmark_tests`.
 - Downstream dependencies:
   - `oxide_test_scenes::Router` supplies the benchmark prepare/step API.
-  - `oxide_ui_core::elements::ImageUploader` is implemented by a null uploader because these tests validate routing, not GPU upload behavior.
+  - `tests/helpers.rs` supplies `NullUploader` because these tests validate routing, not GPU upload behavior.
 
 ## Entry points list
 
@@ -30,7 +30,7 @@ Each test creates a fresh router per case, calls `prepare_onscreen_benchmark`, a
 - Postconditions:
   - All headline benchmark keys are routable by the Rust scene router.
 - Invariants maintained:
-  - Test-only image upload behavior remains isolated in the test file.
+  - Test-only image upload behavior remains isolated in shared test helpers.
 
 ## Edge cases and failure modes
 
@@ -58,4 +58,5 @@ assert!(router.step_onscreen_benchmark("animation_slider_thumb_move", 1));
 
 ## Changelog
 
+- 2026-05-05: Reused the shared integration-test `NullUploader` helper.
 - 2026-04-26: Added coverage for headline on-screen UI object and animation benchmark keys.
