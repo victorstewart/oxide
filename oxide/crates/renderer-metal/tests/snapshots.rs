@@ -109,9 +109,15 @@ fn snapshot_rrect_instanced_batch_draws_consecutive_rects() {
     let red = pixel(24, 24);
     assert!(red[2] > 220 && red[1] < 40 && red[0] < 40, "expected first instance red, got {red:?}");
     let green = pixel(64, 38);
-    assert!(green[1] > 220 && green[2] < 40 && green[0] < 40, "expected second instance green, got {green:?}");
+    assert!(
+        green[1] > 220 && green[2] < 40 && green[0] < 40,
+        "expected second instance green, got {green:?}"
+    );
     let blue = pixel(104, 72);
-    assert!(blue[0] > 220 && blue[1] < 40 && blue[2] < 40, "expected third instance blue, got {blue:?}");
+    assert!(
+        blue[0] > 220 && blue[1] < 40 && blue[2] < 40,
+        "expected third instance blue, got {blue:?}"
+    );
 }
 
 #[test]

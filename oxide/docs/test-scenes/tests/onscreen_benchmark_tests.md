@@ -18,10 +18,18 @@ These tests keep the headline on-screen benchmark key list honest. They verify t
   - Checks label, progress bar, spinner, button, toggle, slider, image view, nine-slice image, and collection-view benchmark keys.
 - `headline_animation_onscreen_benchmarks_prepare_and_step()`
   - Checks indeterminate progress, button press scale, toggle thumb spring, and slider thumb move benchmark keys.
+- `raw_touch_pinch_reaches_zoom_image_scene()`
+  - Verifies that two-finger raw touch movement reaches the Zoom Image scene as a pinch.
+- `raw_touch_pinch_does_not_apply_two_touch_pan_to_zoom_image_scene()`
+  - Verifies that the two-touch pan emitted alongside pinch is not replayed as a one-finger drag.
+- `raw_touch_pan_reaches_zoom_image_scene()`
+  - Verifies that a one-finger raw touch pan still reaches the Zoom Image scene.
 
 ## Logic narrative
 
 Each test creates a fresh router per case, calls `prepare_onscreen_benchmark`, asserts that the expected `SceneKind` was selected, and then calls `step_onscreen_benchmark`. A fresh router per row prevents hidden state from one benchmark key from making another key pass.
+
+The raw-touch tests draw the Zoom Image scene before and after synthetic touch input. They check pinch scale, reject accidental two-touch drag, and keep the one-finger pan path covered separately.
 
 ## Preconditions and postconditions
 
@@ -34,7 +42,7 @@ Each test creates a fresh router per case, calls `prepare_onscreen_benchmark`, a
 
 ## Edge cases and failure modes
 
-The tests intentionally do not validate pixels or performance values. Device visual validation and timing are owned by the iOS host perf harness.
+The benchmark-key tests intentionally do not validate pixels or performance values. Device visual validation and timing are owned by the iOS host perf harness. The raw-touch tests inspect draw-list geometry because touch routing has observable scene-state effects without needing GPU output.
 
 ## Concurrency and memory behavior
 
@@ -58,5 +66,6 @@ assert!(router.step_onscreen_benchmark("animation_slider_thumb_move", 1));
 
 ## Changelog
 
+- 2026-05-09: Added regression coverage that pinch does not replay two-touch pan as a one-finger drag.
 - 2026-05-05: Reused the shared integration-test `NullUploader` helper.
 - 2026-04-26: Added coverage for headline on-screen UI object and animation benchmark keys.

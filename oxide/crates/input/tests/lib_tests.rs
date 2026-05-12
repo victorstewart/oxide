@@ -1,6 +1,6 @@
 use oxide_input::{
-    GestureConfig, GestureEvent, GestureOutcome, GestureRecognizer, ScrollAccumulator,
-    ScrollPhase, TouchSurfaceEvent, TouchSurfaceRecognizer,
+    GestureConfig, GestureEvent, GestureOutcome, GestureRecognizer, ScrollAccumulator, ScrollPhase,
+    TouchSurfaceEvent, TouchSurfaceRecognizer,
 };
 use oxide_platform_api as api;
 
@@ -92,16 +92,12 @@ fn long_press_then_pan_move_and_end_are_ordered() {
     let move_events = gr.on_touch(&mv(1, 25.0, 5.0), 540);
     assert_eq!(
         move_events,
-        vec![GestureEvent::PanMove {
-            id: api::TouchId(1),
-            x: 25.0,
-            y: 5.0,
-            dx: 5.0,
-            dy: 5.0,
-        }]
+        vec![GestureEvent::PanMove { id: api::TouchId(1), x: 25.0, y: 5.0, dx: 5.0, dy: 5.0 }]
     );
     let end_events = gr.on_touch(&end(1, 30.0, 10.0), 560);
-    assert!(matches!(end_events.as_slice(), [GestureEvent::PanEnd { id, .. }] if *id == api::TouchId(1)));
+    assert!(
+        matches!(end_events.as_slice(), [GestureEvent::PanEnd { id, .. }] if *id == api::TouchId(1))
+    );
 }
 
 #[test]
@@ -265,13 +261,7 @@ fn touch_surface_single_touch_pan_from_raw_events() {
 
     assert_eq!(
         surface.on_touch(&mv(1, 124.0, 190.0)),
-        vec![TouchSurfaceEvent::Pan {
-            touch_count: 1,
-            x: 124.0,
-            y: 190.0,
-            dx: 24.0,
-            dy: -10.0,
-        }]
+        vec![TouchSurfaceEvent::Pan { touch_count: 1, x: 124.0, y: 190.0, dx: 24.0, dy: -10.0 }]
     );
 }
 
@@ -289,10 +279,35 @@ fn touch_surface_two_touch_pinch_and_center_pan_from_raw_events() {
                 y: 395.0,
                 scale_delta: ((60.0_f32 * 60.0) + (10.0_f32 * 10.0)).sqrt() / 40.0,
                 log2_scale_delta: (((60.0_f32 * 60.0) + (10.0_f32 * 10.0)).sqrt() / 40.0).log2(),
+                gesture_scale: ((60.0_f32 * 60.0) + (10.0_f32 * 10.0)).sqrt() / 40.0,
+                log2_gesture_scale: (((60.0_f32 * 60.0) + (10.0_f32 * 10.0)).sqrt() / 40.0).log2(),
             },
             TouchSurfaceEvent::Pan { touch_count: 2, x: 190.0, y: 395.0, dx: -10.0, dy: -5.0 },
         ]
     );
+}
+
+#[test]
+fn touch_surface_pinch_reports_cumulative_gesture_scale() {
+    let mut surface = TouchSurfaceRecognizer::new();
+    let _ = surface.on_touch(&start(1, 180.0, 400.0));
+    let _ = surface.on_touch(&start(2, 220.0, 400.0));
+
+    let first = surface.on_touch(&mv(2, 222.0, 400.0));
+    let second = surface.on_touch(&mv(2, 224.0, 400.0));
+
+    assert!(first.iter().any(|event| matches!(
+        event,
+        TouchSurfaceEvent::Pinch { scale_delta, gesture_scale, .. }
+            if (*scale_delta - 1.05).abs() < 0.001
+                && (*gesture_scale - 1.05).abs() < 0.001
+    )));
+    assert!(second.iter().any(|event| matches!(
+        event,
+        TouchSurfaceEvent::Pinch { scale_delta, gesture_scale, .. }
+            if (*scale_delta - (44.0 / 42.0)).abs() < 0.001
+                && (*gesture_scale - 1.10).abs() < 0.001
+    )));
 }
 
 #[test]

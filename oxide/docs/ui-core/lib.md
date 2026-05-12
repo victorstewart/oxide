@@ -90,6 +90,7 @@ assert_eq!(text.value(), "");
 ```
 
 ## Changelog
+- 2026-05-10: reused the existing character-range byte mapping in `elements.rs` text insertion and removed the single-point byte helper.
 - 2026-04-25: reused wrapped-label shaping results after release-mode A/B showed `cpu.component.label.encode` improving from p50 1155.122 us/op, p95 1165.781 to p50 1013.186 us/op, p95 1037.539 in focused runs, with the refreshed full workspace row at p50 987.312 us/op, p95 1004.876.
 - 2026-04-25: preallocated the `prepare_draws` clip stack after release-mode A/B showed the representative clipping workload improving from p50 6.881 us/op, p95 10.977 to p50 5.368 us/op, p95 5.398.
 - 2026-03-28: moved the legacy iOS modal overlay and popup blur-card contract into shared `elements.rs` popup primitives so downstream apps can draw one common fullscreen/panel blur treatment.

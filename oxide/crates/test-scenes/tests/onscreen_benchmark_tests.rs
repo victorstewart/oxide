@@ -93,6 +93,23 @@ fn raw_touch_pinch_reaches_zoom_image_scene() {
 }
 
 #[test]
+fn raw_touch_pinch_does_not_apply_two_touch_pan_to_zoom_image_scene() {
+   let mut router = Router::new(NullUploader);
+   assert!(router.prepare_onscreen_benchmark("component_image_view_encode"));
+   router.set_zoom_image(gfx::ImageHandle(7), 100, 100);
+
+   router.input_touch(&touch(1, api::TouchPhase::Start, 180.0, 400.0));
+   router.input_touch(&touch(2, api::TouchPhase::Start, 220.0, 400.0));
+   router.input_touch(&touch(2, api::TouchPhase::Move, 260.0, 400.0));
+   let after = image_rect(&mut router);
+
+   assert!(
+      (after.x + 115.0).abs() < 0.001,
+      "pinch should scale around the image layout without applying two-touch pan: after={after:?}"
+   );
+}
+
+#[test]
 fn raw_touch_pan_reaches_zoom_image_scene() {
    let mut router = Router::new(NullUploader);
    assert!(router.prepare_onscreen_benchmark("component_image_view_encode"));

@@ -57,9 +57,26 @@ pub struct GestureOutcome {
 /// Raw-touch surface gestures derived inside Oxide.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TouchSurfaceEvent {
-    ActiveTouchesChanged { touch_count: u8, x: f32, y: f32 },
-    Pan { touch_count: u8, x: f32, y: f32, dx: f32, dy: f32 },
-    Pinch { x: f32, y: f32, scale_delta: f32, log2_scale_delta: f32 },
+    ActiveTouchesChanged {
+        touch_count: u8,
+        x: f32,
+        y: f32,
+    },
+    Pan {
+        touch_count: u8,
+        x: f32,
+        y: f32,
+        dx: f32,
+        dy: f32,
+    },
+    Pinch {
+        x: f32,
+        y: f32,
+        scale_delta: f32,
+        log2_scale_delta: f32,
+        gesture_scale: f32,
+        log2_gesture_scale: f32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,6 +146,7 @@ const INLINE_TOUCH_CAP: usize = 4;
 pub struct TouchSurfaceRecognizer {
     touches: [Option<SurfaceTouch>; INLINE_TOUCH_CAP],
     overflow: alloc::vec::Vec<SurfaceTouch>,
+    gesture_start: Option<TouchSurfaceFrame>,
 }
 
 impl TouchSurfaceRecognizer {
@@ -146,6 +164,7 @@ impl TouchSurfaceRecognizer {
             *touch = None;
         }
         self.overflow.clear();
+        self.gesture_start = None;
     }
 
     pub fn on_touch(&mut self, ev: &api::TouchEvent) -> alloc::vec::Vec<TouchSurfaceEvent> {
@@ -172,6 +191,8 @@ impl TouchSurfaceRecognizer {
 
         let after = self.frame();
         if before.count != after.count {
+            self.gesture_start =
+                if after.count == 2 && after.distance > 1.0 { Some(after) } else { None };
             out.push(TouchSurfaceEvent::ActiveTouchesChanged {
                 touch_count: after.count,
                 x: after.x,
@@ -193,11 +214,19 @@ impl TouchSurfaceRecognizer {
             (2, 2) => {
                 if before.distance > 1.0 && after.distance > 1.0 {
                     let scale_delta = after.distance / before.distance;
+                    let gesture_start_distance = self
+                        .gesture_start
+                        .filter(|start| start.count == 2 && start.distance > 1.0)
+                        .map(|start| start.distance)
+                        .unwrap_or(before.distance);
+                    let gesture_scale = after.distance / gesture_start_distance;
                     out.push(TouchSurfaceEvent::Pinch {
                         x: after.x,
                         y: after.y,
                         scale_delta,
                         log2_scale_delta: scale_delta.log2(),
+                        gesture_scale,
+                        log2_gesture_scale: gesture_scale.log2(),
                     });
                 }
                 out.push(TouchSurfaceEvent::Pan {

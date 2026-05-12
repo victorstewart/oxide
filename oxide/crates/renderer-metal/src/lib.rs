@@ -37,6 +37,8 @@
     unused_variables
 )]
 
+pub mod id_mask_compositor;
+pub mod neon_marker;
 pub mod scene3d;
 
 use block::ConcreteBlock;
@@ -350,9 +352,7 @@ impl GpuStageTrace {
         let mut cpu_end = 0;
         let mut gpu_end = 0;
         device.sample_timestamps(&mut cpu_end, &mut gpu_end);
-        let Some(samples) =
-            (unsafe { resolve_gpu_timestamp_samples(&self.sample_buffer) })
-        else {
+        let Some(samples) = (unsafe { resolve_gpu_timestamp_samples(&self.sample_buffer) }) else {
             return GpuStageStats::default();
         };
         let vertex_ms = gpu_timestamp_interval_ms(
@@ -734,6 +734,10 @@ const SHADERS_SRC: &str = concat!(
     include_str!("../shaders/camera.metal"),
     "\n",
     include_str!("../shaders/scene3d.metal"),
+    "\n",
+    include_str!("../shaders/id_mask_compositor.metal"),
+    "\n",
+    include_str!("../shaders/neon_marker.metal"),
 );
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -774,24 +778,24 @@ pub enum CameraTextureSource {
 
 #[derive(Clone)]
 struct DirectPreviewSubmittedFrame {
-   frame_id: u64,
-   generation: u64,
-   cmd: CommandBuffer,
-   gpu_trace: Option<GpuStageTrace>,
+    frame_id: u64,
+    generation: u64,
+    cmd: CommandBuffer,
+    gpu_trace: Option<GpuStageTrace>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MeshFormat3d {
-   Position,
-   PositionColor,
+    Position,
+    PositionColor,
 }
 
 struct Mesh3dGpu {
-   vb: Buffer,
-   ib: Buffer,
-   index_count: u64,
-   topology: scene3d::MeshTopology,
-   format: MeshFormat3d,
+    vb: Buffer,
+    ib: Buffer,
+    index_count: u64,
+    topology: scene3d::MeshTopology,
+    format: MeshFormat3d,
 }
 
 #[repr(C)]
@@ -807,6 +811,53 @@ struct Scene3dGpuMaterial {
     material: u32,
     _pad: [f32; 3],
     params: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct IdMaskCompositorGpuParams {
+    viewport: [f32; 4],
+    mask_size: [f32; 2],
+    mask_scale: f32,
+    darken_background_alpha: f32,
+    mode: u32,
+    glow_enabled: u32,
+    polish_radius_px: f32,
+    fallback_radius_px: f32,
+    city_fill_colors: [[f32; 4]; id_mask_compositor::ID_MASK_MAX_CITY_STYLES],
+    city_edge_colors: [[f32; 4]; id_mask_compositor::ID_MASK_MAX_CITY_STYLES],
+    city_seam_colors: [[f32; 4]; id_mask_compositor::ID_MASK_MAX_CITY_STYLES],
+    neighborhood_colors: [[f32; 4]; id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct IdMaskRasterGpuParams {
+    mask_size: [f32; 2],
+    _pad: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct NeonMarkerGpuParams {
+    viewport: [f32; 4],
+    marker_count: u32,
+    _pad: [u32; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct NeonMarkerGpuInstance {
+    center: [f32; 2],
+    core_radius_px: f32,
+    ring_radius_px: f32,
+    ring_width_px: f32,
+    halo_radius_px: f32,
+    halo_sigma_px: f32,
+    halo_alpha_max: f32,
+    ring_alpha_max: f32,
+    core_color: [f32; 4],
+    ring_color: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -841,16 +892,19 @@ pub struct MetalRenderer {
     pso_camera_bgra: RenderPipelineState,
     pso_scene3d_tri: RenderPipelineState,
     pso_scene3d_tri_depth: RenderPipelineState,
-   pso_scene3d_tri_add: RenderPipelineState,
-   pso_scene3d_tri_add_bloom: RenderPipelineState,
-   pso_scene3d_color_tri: RenderPipelineState,
-   pso_scene3d_color_tri_add: RenderPipelineState,
-   pso_scene3d_line: RenderPipelineState,
-   pso_scene3d_line_depth: RenderPipelineState,
-   pso_scene3d_line_add: RenderPipelineState,
+    pso_scene3d_tri_add: RenderPipelineState,
+    pso_scene3d_tri_add_bloom: RenderPipelineState,
+    pso_scene3d_color_tri: RenderPipelineState,
+    pso_scene3d_color_tri_add: RenderPipelineState,
+    pso_scene3d_line: RenderPipelineState,
+    pso_scene3d_line_depth: RenderPipelineState,
+    pso_scene3d_line_add: RenderPipelineState,
     pso_scene3d_line_add_bloom: RenderPipelineState,
     pso_bloom_blur: RenderPipelineState,
     pso_bloom_composite: RenderPipelineState,
+    pso_id_mask_raster: RenderPipelineState,
+    pso_id_mask_compositor: RenderPipelineState,
+    pso_neon_marker: RenderPipelineState,
     depth_state_3d_disabled: DepthStencilState,
     depth_state_3d_read: DepthStencilState,
     depth_state_3d_write: DepthStencilState,
@@ -1458,20 +1512,10 @@ impl MetalRenderer {
             )
         })?;
         let pso_scene3d_color_tri = build_init_stage("pso.scene3d.color_tri", || {
-            build_scene3d_color_pso(
-                &device,
-                &library,
-                color_format,
-                scene3d::BlendMode3d::Alpha,
-            )
+            build_scene3d_color_pso(&device, &library, color_format, scene3d::BlendMode3d::Alpha)
         })?;
         let pso_scene3d_color_tri_add = build_init_stage("pso.scene3d.color_tri_add", || {
-            build_scene3d_color_pso(
-                &device,
-                &library,
-                color_format,
-                scene3d::BlendMode3d::Additive,
-            )
+            build_scene3d_color_pso(&device, &library, color_format, scene3d::BlendMode3d::Additive)
         })?;
         let pso_scene3d_line = build_init_stage("pso.scene3d.line", || {
             build_scene3d_pso(
@@ -1522,6 +1566,15 @@ impl MetalRenderer {
         })?;
         let pso_bloom_composite = build_init_stage("pso.bloom.composite", || {
             build_bloom_composite_pso(&device, &library, color_format)
+        })?;
+        let pso_id_mask_raster = build_init_stage("pso.id_mask_raster", || {
+            build_id_mask_raster_pso(&device, &library)
+        })?;
+        let pso_id_mask_compositor = build_init_stage("pso.id_mask_compositor", || {
+            build_id_mask_compositor_pso(&device, &library, color_format)
+        })?;
+        let pso_neon_marker = build_init_stage("pso.neon_marker", || {
+            build_neon_marker_pso(&device, &library, color_format)
         })?;
         let depth_state_3d_disabled =
             build_depth_stencil_state(&device, false, false, "depth.scene3d.disabled");
@@ -1658,6 +1711,9 @@ impl MetalRenderer {
             pso_scene3d_line_add_bloom,
             pso_bloom_blur,
             pso_bloom_composite,
+            pso_id_mask_raster,
+            pso_id_mask_compositor,
+            pso_neon_marker,
             depth_state_3d_disabled,
             depth_state_3d_read,
             depth_state_3d_write,
@@ -3679,11 +3735,11 @@ impl MetalRenderer {
         self.meshes_3d.insert(
             id,
             Mesh3dGpu {
-               vb,
-               ib,
-               index_count: data.indices.len() as u64,
-               topology: data.topology,
-               format: MeshFormat3d::Position,
+                vb,
+                ib,
+                index_count: data.indices.len() as u64,
+                topology: data.topology,
+                format: MeshFormat3d::Position,
             },
         );
         Ok(scene3d::MeshHandle3d(id))
@@ -3728,8 +3784,7 @@ impl MetalRenderer {
             ));
         }
 
-        let vb_len =
-            (data.vertices.len() * core::mem::size_of::<scene3d::VertexColor3d>()) as u64;
+        let vb_len = (data.vertices.len() * core::mem::size_of::<scene3d::VertexColor3d>()) as u64;
         let ib_len = (data.indices.len() * core::mem::size_of::<u32>()) as u64;
         let vb = self.device.new_buffer(vb_len, MTLResourceOptions::StorageModeShared);
         let ib = self.device.new_buffer(ib_len, MTLResourceOptions::StorageModeShared);
@@ -3769,6 +3824,394 @@ impl MetalRenderer {
     /// Releases a previously uploaded 3D mesh handle.
     pub fn mesh3d_release(&mut self, handle: scene3d::MeshHandle3d) {
         let _ = self.meshes_3d.remove(&handle.0);
+    }
+
+    fn upload_r8_mask_texture(
+        &self,
+        width: usize,
+        height: usize,
+        bytes: &[u8],
+    ) -> Result<Texture, api::RenderError> {
+        let expected = width
+            .checked_mul(height)
+            .ok_or(api::RenderError::InvalidOperation("id-mask dimensions overflow"))?;
+        if bytes.len() != expected {
+            return Err(api::RenderError::InvalidOperation(
+                "id-mask texture data length does not match dimensions",
+            ));
+        }
+        let desc = TextureDescriptor::new();
+        desc.set_pixel_format(MTLPixelFormat::R8Uint);
+        desc.set_texture_type(MTLTextureType::D2);
+        desc.set_width(width as u64);
+        desc.set_height(height as u64);
+        desc.set_storage_mode(MTLStorageMode::Shared);
+        desc.set_usage(MTLTextureUsage::ShaderRead);
+        let texture = self.device.new_texture(&desc);
+        let region = MTLRegion {
+            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            size: MTLSize { width: width as u64, height: height as u64, depth: 1 },
+        };
+        texture.replace_region(region, 0, bytes.as_ptr() as *const _, width as u64);
+        Ok(texture)
+    }
+
+    fn new_r8_mask_render_texture(
+        &self,
+        width: usize,
+        height: usize,
+    ) -> Result<Texture, api::RenderError> {
+        if width == 0 || height == 0 {
+            return Err(api::RenderError::InvalidOperation("id-mask render target has zero size"));
+        }
+        let desc = TextureDescriptor::new();
+        desc.set_pixel_format(MTLPixelFormat::R8Uint);
+        desc.set_texture_type(MTLTextureType::D2);
+        desc.set_width(width as u64);
+        desc.set_height(height as u64);
+        desc.set_storage_mode(MTLStorageMode::Private);
+        desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+        Ok(self.device.new_texture(&desc))
+    }
+
+    fn encode_id_mask_compositor_textures(
+        &mut self,
+        viewport: api::RectF,
+        mask_width: usize,
+        mask_height: usize,
+        mask_scale: f32,
+        city_tex: &TextureRef,
+        neighborhood_tex: &TextureRef,
+        city_styles: &[id_mask_compositor::IdMaskCityStyle; id_mask_compositor::ID_MASK_MAX_CITY_STYLES],
+        neighborhood_colors_src: &[[f32; 3]; id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS],
+        mode: id_mask_compositor::IdMaskCompositorMode,
+        glow_enabled: bool,
+        darken_background_alpha: f32,
+        polish: id_mask_compositor::IdMaskPolishConfig,
+    ) -> Result<(), api::RenderError> {
+        let Some(target_tex) = self.target_tex.as_ref().map(Texture::to_owned) else {
+            return Err(api::RenderError::InvalidOperation(
+                "id-mask compositor target texture unavailable",
+            ));
+        };
+
+        let mut city_fill_colors = [[0.0_f32; 4]; id_mask_compositor::ID_MASK_MAX_CITY_STYLES];
+        let mut city_edge_colors = [[0.0_f32; 4]; id_mask_compositor::ID_MASK_MAX_CITY_STYLES];
+        let mut city_seam_colors = [[0.0_f32; 4]; id_mask_compositor::ID_MASK_MAX_CITY_STYLES];
+        for (idx, style) in city_styles.iter().enumerate() {
+            city_fill_colors[idx] = [style.fill_rgb[0], style.fill_rgb[1], style.fill_rgb[2], 1.0];
+            city_edge_colors[idx] = [style.edge_rgb[0], style.edge_rgb[1], style.edge_rgb[2], 1.0];
+            city_seam_colors[idx] = [style.seam_rgb[0], style.seam_rgb[1], style.seam_rgb[2], 1.0];
+        }
+        let mut neighborhood_colors =
+            [[0.0_f32; 4]; id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS];
+        for (idx, rgb) in neighborhood_colors_src.iter().enumerate() {
+            neighborhood_colors[idx] = [rgb[0], rgb[1], rgb[2], 1.0];
+        }
+        let params = IdMaskCompositorGpuParams {
+            viewport: [viewport.x, viewport.y, viewport.w, viewport.h],
+            mask_size: [mask_width as f32, mask_height as f32],
+            mask_scale: mask_scale.max(1.0),
+            darken_background_alpha: darken_background_alpha.clamp(0.0, 1.0),
+            mode: mode as u32,
+            glow_enabled: glow_enabled as u32,
+            polish_radius_px: polish.smooth_radius_px.max(0.0),
+            fallback_radius_px: polish.fallback_radius_px.max(0.0),
+            city_fill_colors,
+            city_edge_colors,
+            city_seam_colors,
+            neighborhood_colors,
+        };
+
+        let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
+        let cmd = self.ensure_frame_command_buffer(slot);
+        let rpd = RenderPassDescriptor::new();
+        let ca0 = rpd.color_attachments().object_at(0).unwrap();
+        ca0.set_texture(Some(&target_tex));
+        ca0.set_store_action(MTLStoreAction::Store);
+        if self.frame_color_initialized {
+            ca0.set_load_action(MTLLoadAction::Load);
+        } else {
+            ca0.set_load_action(MTLLoadAction::Clear);
+            ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 });
+        }
+
+        let enc = cmd.new_render_command_encoder(&rpd);
+        enc.set_render_pipeline_state(&self.pso_id_mask_compositor);
+        enc.set_vertex_bytes(
+            0,
+            core::mem::size_of_val(&params) as u64,
+            (&params as *const IdMaskCompositorGpuParams).cast(),
+        );
+        enc.set_fragment_bytes(
+            0,
+            core::mem::size_of_val(&params) as u64,
+            (&params as *const IdMaskCompositorGpuParams).cast(),
+        );
+        enc.set_fragment_texture(0, Some(city_tex));
+        enc.set_fragment_texture(1, Some(neighborhood_tex));
+        enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
+        enc.end_encoding();
+
+        self.acc_draws = self.acc_draws.saturating_add(1);
+        self.frame_color_initialized = true;
+        if let Some(t0) = self.frame_encode_started_at {
+            self.last_stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        }
+        self.last_stats.draws = self.acc_draws;
+        Ok(())
+    }
+
+    pub fn encode_id_mask_compositor(
+        &mut self,
+        pass: &id_mask_compositor::IdMaskCompositorPass<'_>,
+    ) -> Result<(), api::RenderError> {
+        if self.sample_count != 1 {
+            return Err(api::RenderError::Unsupported(
+                "id-mask compositor currently requires MetalRenderer sample_count == 1",
+            ));
+        }
+        if self.frame_2d_encoded {
+            return Err(api::RenderError::InvalidOperation(
+                "encode_id_mask_compositor must run before encode_pass within a frame",
+            ));
+        }
+        let expected = pass
+            .expected_len()
+            .ok_or(api::RenderError::InvalidOperation("id-mask dimensions overflow"))?;
+        if pass.city_ids.len() != expected || pass.neighborhood_ids.len() != expected {
+            return Err(api::RenderError::InvalidOperation(
+                "id-mask compositor buffers do not match dimensions",
+            ));
+        }
+
+        self.ensure_target();
+        let city_tex =
+            self.upload_r8_mask_texture(pass.mask_width, pass.mask_height, pass.city_ids)?;
+        let neighborhood_tex =
+            self.upload_r8_mask_texture(pass.mask_width, pass.mask_height, pass.neighborhood_ids)?;
+        self.encode_id_mask_compositor_textures(
+            pass.viewport,
+            pass.mask_width,
+            pass.mask_height,
+            pass.mask_scale,
+            &city_tex,
+            &neighborhood_tex,
+            &pass.city_styles,
+            &pass.neighborhood_colors,
+            pass.mode,
+            pass.glow_enabled,
+            pass.darken_background_alpha,
+            id_mask_compositor::IdMaskPolishConfig { smooth_radius_px: 0.0, fallback_radius_px: 0.0 },
+        )
+    }
+
+    pub fn encode_id_mask_gpu_compositor(
+        &mut self,
+        pass: &id_mask_compositor::IdMaskGpuCompositorPass<'_>,
+    ) -> Result<(), api::RenderError> {
+        if self.sample_count != 1 {
+            return Err(api::RenderError::Unsupported(
+                "id-mask GPU compositor currently requires MetalRenderer sample_count == 1",
+            ));
+        }
+        if self.frame_2d_encoded {
+            return Err(api::RenderError::InvalidOperation(
+                "encode_id_mask_gpu_compositor must run before encode_pass within a frame",
+            ));
+        }
+        if pass.raster.mask_width == 0 || pass.raster.mask_height == 0 {
+            return Err(api::RenderError::InvalidOperation("id-mask GPU raster has zero dimensions"));
+        }
+        if !pass.raster.valid_triangle_vertex_count() {
+            return Err(api::RenderError::InvalidOperation(
+                "id-mask GPU raster vertices must be non-empty triangles",
+            ));
+        }
+
+        self.ensure_target();
+        let city_tex =
+            self.new_r8_mask_render_texture(pass.raster.mask_width, pass.raster.mask_height)?;
+        let neighborhood_tex =
+            self.new_r8_mask_render_texture(pass.raster.mask_width, pass.raster.mask_height)?;
+        let vertex_bytes = pass.raster.vertices.len()
+            .checked_mul(core::mem::size_of::<id_mask_compositor::IdMaskRasterVertex>())
+            .ok_or(api::RenderError::InvalidOperation("id-mask raster vertex data overflow"))?;
+        let vertex_buf =
+            self.device.new_buffer(vertex_bytes as u64, MTLResourceOptions::StorageModeShared);
+        let vertex_ptr = vertex_buf.contents();
+        if vertex_ptr.is_null() {
+            return Err(api::RenderError::OutOfMemory);
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                pass.raster.vertices.as_ptr() as *const u8,
+                vertex_ptr as *mut u8,
+                vertex_bytes,
+            );
+        }
+        let params = IdMaskRasterGpuParams {
+            mask_size: [pass.raster.mask_width as f32, pass.raster.mask_height as f32],
+            _pad: [0.0, 0.0],
+        };
+
+        let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
+        let cmd = self.ensure_frame_command_buffer(slot);
+        let rpd = RenderPassDescriptor::new();
+        let ca0 = rpd.color_attachments().object_at(0).unwrap();
+        ca0.set_texture(Some(&city_tex));
+        ca0.set_load_action(MTLLoadAction::Clear);
+        ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0 });
+        ca0.set_store_action(MTLStoreAction::Store);
+        let ca1 = rpd.color_attachments().object_at(1).unwrap();
+        ca1.set_texture(Some(&neighborhood_tex));
+        ca1.set_load_action(MTLLoadAction::Clear);
+        ca1.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0 });
+        ca1.set_store_action(MTLStoreAction::Store);
+        let enc = cmd.new_render_command_encoder(&rpd);
+        enc.set_render_pipeline_state(&self.pso_id_mask_raster);
+        enc.set_vertex_buffer(0, Some(&vertex_buf), 0);
+        enc.set_vertex_bytes(
+            1,
+            core::mem::size_of_val(&params) as u64,
+            (&params as *const IdMaskRasterGpuParams).cast(),
+        );
+        enc.draw_primitives(
+            MTLPrimitiveType::Triangle,
+            0,
+            pass.raster.vertex_count() as u64,
+        );
+        enc.end_encoding();
+
+        self.encode_id_mask_compositor_textures(
+            pass.raster.viewport,
+            pass.raster.mask_width,
+            pass.raster.mask_height,
+            pass.raster.mask_scale,
+            &city_tex,
+            &neighborhood_tex,
+            &pass.city_styles,
+            &pass.neighborhood_colors,
+            pass.mode,
+            pass.glow_enabled,
+            pass.darken_background_alpha,
+            pass.polish,
+        )
+    }
+
+    pub fn encode_neon_markers(
+        &mut self,
+        pass: &neon_marker::NeonMarkerPass<'_>,
+    ) -> Result<(), api::RenderError> {
+        if self.sample_count != 1 {
+            return Err(api::RenderError::Unsupported(
+                "neon marker compositor currently requires MetalRenderer sample_count == 1",
+            ));
+        }
+        if self.frame_2d_encoded {
+            return Err(api::RenderError::InvalidOperation(
+                "encode_neon_markers must run before encode_pass within a frame",
+            ));
+        }
+        let marker_count = pass.clamped_len();
+        if marker_count == 0 {
+            return Ok(());
+        }
+
+        self.ensure_target();
+        let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
+        let cmd = self.ensure_frame_command_buffer(slot);
+        let Some(target_tex) = self.target_tex.as_ref().map(Texture::to_owned) else {
+            return Err(api::RenderError::InvalidOperation(
+                "neon marker target texture unavailable",
+            ));
+        };
+
+        let params = NeonMarkerGpuParams {
+            viewport: [pass.viewport.x, pass.viewport.y, pass.viewport.w, pass.viewport.h],
+            marker_count: marker_count as u32,
+            _pad: [0, 0, 0],
+        };
+        let mut markers = [NeonMarkerGpuInstance {
+            center: [0.0, 0.0],
+            core_radius_px: 0.0,
+            ring_radius_px: 0.0,
+            ring_width_px: 0.0,
+            halo_radius_px: 0.0,
+            halo_sigma_px: 1.0,
+            halo_alpha_max: 0.0,
+            ring_alpha_max: 0.0,
+            core_color: [0.0, 0.0, 0.0, 0.0],
+            ring_color: [0.0, 0.0, 0.0, 0.0],
+        }; neon_marker::NEON_MARKER_MAX_INSTANCES];
+        for (dst, marker) in markers.iter_mut().zip(pass.markers.iter()).take(marker_count) {
+            *dst = NeonMarkerGpuInstance {
+                center: marker.center,
+                core_radius_px: marker.core_radius_px.max(0.0),
+                ring_radius_px: marker.ring_radius_px.max(0.0),
+                ring_width_px: marker.ring_width_px.max(0.001),
+                halo_radius_px: marker.halo_radius_px.max(0.0),
+                halo_sigma_px: marker.halo_sigma_px.max(0.001),
+                halo_alpha_max: marker.halo_alpha_max.clamp(0.0, 1.0),
+                ring_alpha_max: marker.ring_alpha_max.clamp(0.0, 1.0),
+                core_color: [
+                    marker.core_color.r.clamp(0.0, 1.0),
+                    marker.core_color.g.clamp(0.0, 1.0),
+                    marker.core_color.b.clamp(0.0, 1.0),
+                    marker.core_color.a.clamp(0.0, 1.0),
+                ],
+                ring_color: [
+                    marker.ring_color.r.clamp(0.0, 1.0),
+                    marker.ring_color.g.clamp(0.0, 1.0),
+                    marker.ring_color.b.clamp(0.0, 1.0),
+                    marker.ring_color.a.clamp(0.0, 1.0),
+                ],
+            };
+        }
+
+        let rpd = RenderPassDescriptor::new();
+        let ca0 = rpd.color_attachments().object_at(0).unwrap();
+        ca0.set_texture(Some(&target_tex));
+        ca0.set_store_action(MTLStoreAction::Store);
+        if self.frame_color_initialized {
+            ca0.set_load_action(MTLLoadAction::Load);
+        } else {
+            ca0.set_load_action(MTLLoadAction::Clear);
+            ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 });
+        }
+
+        let enc = cmd.new_render_command_encoder(&rpd);
+        enc.set_render_pipeline_state(&self.pso_neon_marker);
+        enc.set_vertex_bytes(
+            0,
+            core::mem::size_of_val(&params) as u64,
+            (&params as *const NeonMarkerGpuParams).cast(),
+        );
+        enc.set_vertex_bytes(
+            1,
+            (core::mem::size_of::<NeonMarkerGpuInstance>() * marker_count) as u64,
+            markers.as_ptr().cast(),
+        );
+        enc.set_fragment_bytes(
+            0,
+            core::mem::size_of_val(&params) as u64,
+            (&params as *const NeonMarkerGpuParams).cast(),
+        );
+        enc.set_fragment_bytes(
+            1,
+            (core::mem::size_of::<NeonMarkerGpuInstance>() * marker_count) as u64,
+            markers.as_ptr().cast(),
+        );
+        enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, marker_count as u64);
+        enc.end_encoding();
+
+        self.acc_draws = self.acc_draws.saturating_add(marker_count as u32);
+        self.frame_color_initialized = true;
+        if let Some(t0) = self.frame_encode_started_at {
+            self.last_stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        }
+        self.last_stats.draws = self.acc_draws;
+        Ok(())
     }
 
     /// Encodes one scene3d pass into the current frame before the 2D draw list.
@@ -4151,12 +4594,7 @@ fn vertex_span_rect(vertices: &[api::Vertex], span: api::VertexSpan) -> Option<a
         maxx = maxx.max(v.x);
         maxy = maxy.max(v.y);
     }
-    Some(api::RectF {
-        x: minx,
-        y: miny,
-        w: (maxx - minx).max(0.0),
-        h: (maxy - miny).max(0.0),
-    })
+    Some(api::RectF { x: minx, y: miny, w: (maxx - minx).max(0.0), h: (maxy - miny).max(0.0) })
 }
 
 fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI, out: &mut FilteredDrawList) {
@@ -4275,11 +4713,7 @@ fn damage_prefiltered_drawlist_view<'a>(
         return (DrawListView::from_draw_list(list), 0, false);
     }
     filter_drawlist_by_dp_scissor(list, scissor, filtered);
-    (
-        filtered.view(list),
-        list.items.len().saturating_sub(filtered.items.len()),
-        true,
-    )
+    (filtered.view(list), list.items.len().saturating_sub(filtered.items.len()), true)
 }
 
 fn clear_layer_sublist(sub: &mut api::DrawList, item_capacity: usize) {
@@ -5289,10 +5723,8 @@ impl api::Renderer for MetalRenderer {
             ca0.set_load_action(MTLLoadAction::Clear);
         }
         ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 });
-        let frame_gpu_trace = self
-            .gpu_stage_timing
-            .as_ref()
-            .and_then(|timing| timing.begin_submission(&self.device));
+        let frame_gpu_trace =
+            self.gpu_stage_timing.as_ref().and_then(|timing| timing.begin_submission(&self.device));
         if let Some(gpu_trace) = frame_gpu_trace.as_ref() {
             gpu_trace.configure_render_pass(&rpd);
         }
@@ -5893,8 +6325,7 @@ fn encode_draws_range(
                                 run.vb.len,
                                 new_v_off,
                                 &mut sub.indices,
-                            )
-                            else {
+                            ) else {
                                 continue;
                             };
                             sub.items.push(api::DrawCmd::GlyphRun {
@@ -6689,7 +7120,8 @@ fn encode_draws_range(
                     while j < item_end {
                         if let api::DrawCmd::VisualEffect { rect, effect } = &list.items[j] {
                             r.effect_vbuf.extend_from_slice(&[rect.x, rect.y, rect.w, rect.h]);
-                            r.effect_fbuf.extend_from_slice(&pack_visual_effect_params(*rect, *effect));
+                            r.effect_fbuf
+                                .extend_from_slice(&pack_visual_effect_params(*rect, *effect));
                             count += 1;
                             j += 1;
                         } else {
@@ -7333,6 +7765,69 @@ fn build_bloom_composite_pso(
     pipeline_state(device, "pso.bloom_composite.create", &desc)
 }
 
+fn build_id_mask_compositor_pso(
+    device: &Device,
+    lib: &Library,
+    fmt: MTLPixelFormat,
+) -> Result<RenderPipelineState, MetalInitError> {
+    let v = pipeline_function(lib, "id_mask_compositor.vertex", "v_id_mask_compositor")?;
+    let f = pipeline_function(lib, "id_mask_compositor.fragment", "f_id_mask_compositor")?;
+    let desc = RenderPipelineDescriptor::new();
+    desc.set_vertex_function(Some(&v));
+    desc.set_fragment_function(Some(&f));
+    desc.set_sample_count(1);
+    let ca = desc.color_attachments().object_at(0).unwrap();
+    ca.set_pixel_format(fmt);
+    ca.set_blending_enabled(true);
+    ca.set_rgb_blend_operation(MTLBlendOperation::Add);
+    ca.set_alpha_blend_operation(MTLBlendOperation::Add);
+    ca.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
+    ca.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
+    ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+    ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+    pipeline_state(device, "pso.id_mask_compositor.create", &desc)
+}
+
+fn build_id_mask_raster_pso(
+    device: &Device,
+    lib: &Library,
+) -> Result<RenderPipelineState, MetalInitError> {
+    let v = pipeline_function(lib, "id_mask_raster.vertex", "v_id_mask_raster")?;
+    let f = pipeline_function(lib, "id_mask_raster.fragment", "f_id_mask_raster")?;
+    let desc = RenderPipelineDescriptor::new();
+    desc.set_vertex_function(Some(&v));
+    desc.set_fragment_function(Some(&f));
+    desc.set_sample_count(1);
+    for index in 0..2 {
+        let ca = desc.color_attachments().object_at(index).unwrap();
+        ca.set_pixel_format(MTLPixelFormat::R8Uint);
+        ca.set_blending_enabled(false);
+    }
+    pipeline_state(device, "pso.id_mask_raster.create", &desc)
+}
+
+fn build_neon_marker_pso(
+    device: &Device,
+    lib: &Library,
+    fmt: MTLPixelFormat,
+) -> Result<RenderPipelineState, MetalInitError> {
+    let v = pipeline_function(lib, "neon_marker.vertex", "v_neon_marker")?;
+    let f = pipeline_function(lib, "neon_marker.fragment", "f_neon_marker")?;
+    let desc = RenderPipelineDescriptor::new();
+    desc.set_vertex_function(Some(&v));
+    desc.set_fragment_function(Some(&f));
+    let ca = desc.color_attachments().object_at(0).unwrap();
+    ca.set_pixel_format(fmt);
+    ca.set_blending_enabled(true);
+    ca.set_rgb_blend_operation(MTLBlendOperation::Add);
+    ca.set_alpha_blend_operation(MTLBlendOperation::Add);
+    ca.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
+    ca.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
+    ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+    ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+    pipeline_state(device, "pso.neon_marker.create", &desc)
+}
+
 fn build_backdrop_pso(
     device: &Device,
     lib: &Library,
@@ -7690,16 +8185,10 @@ fn build_scene3d_color_pso(
     attrs.object_at(0).unwrap().set_offset(0);
     attrs.object_at(0).unwrap().set_buffer_index(0);
     attrs.object_at(1).unwrap().set_format(MTLVertexFormat::Float4);
-    attrs
-        .object_at(1)
-        .unwrap()
-        .set_offset(core::mem::size_of::<[f32; 3]>() as u64);
+    attrs.object_at(1).unwrap().set_offset(core::mem::size_of::<[f32; 3]>() as u64);
     attrs.object_at(1).unwrap().set_buffer_index(0);
     let layouts = vdesc.layouts();
-    layouts
-        .object_at(0)
-        .unwrap()
-        .set_stride(core::mem::size_of::<scene3d::VertexColor3d>() as u64);
+    layouts.object_at(0).unwrap().set_stride(core::mem::size_of::<scene3d::VertexColor3d>() as u64);
     layouts.object_at(0).unwrap().set_step_function(MTLVertexStepFunction::PerVertex);
     desc.set_vertex_descriptor(Some(&vdesc));
 

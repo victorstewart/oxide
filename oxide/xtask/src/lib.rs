@@ -6575,11 +6575,7 @@ fn build_oxide_onscreen_device_contract(
             ContractCoverageEntry {
                 id: String::from("camera-preview"),
                 label: String::from("Camera Preview"),
-                status: if has_case("gpu.scene.camera.frame") {
-                    String::from("implemented")
-                } else {
-                    String::from("partial")
-                },
+                status: contract_coverage_status(has_case("gpu.scene.camera.frame")),
                 notes: vec![String::from(
                     "The official custom-camera row uses the real on-screen Oxide preview path with Oxide owning the visible preview on the phone.",
                 )],

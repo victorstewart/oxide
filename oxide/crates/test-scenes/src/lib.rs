@@ -421,11 +421,12 @@ impl<U: elements::ImageUploader> Router<U> {
         let surface_events = self.touch_surface.on_touch(event);
         for event in surface_events {
             match event {
-                TouchSurfaceEvent::Pan { x, y, dx, dy, .. } => {
+                TouchSurfaceEvent::Pan { touch_count: 1, x, y, dx, dy } => {
                     if dx.is_finite() && dy.is_finite() {
                         self.input_pointer(x, y, dx, dy, 1);
                     }
                 }
+                TouchSurfaceEvent::Pan { .. } => {}
                 TouchSurfaceEvent::Pinch { x, y, scale_delta, .. } => {
                     let delta = scale_delta - 1.0;
                     if delta.is_finite() && delta != 0.0 {
@@ -484,7 +485,6 @@ impl<U: elements::ImageUploader> Router<U> {
             | "component_toggle_encode" | "component_slider_encode" => {
                 self.set_scene(SceneKind::Controls as usize);
                 self.controls = Controls::default();
-                self.controls.progress_indeterminate = false;
                 true
             }
             "component_image_view_encode" | "image_zoom_pan" | "zoom_image_gesture_cycle" => {

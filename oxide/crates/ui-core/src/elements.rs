@@ -1714,11 +1714,7 @@ impl TextInputState {
         }
         let inserted = sanitized.as_ref();
         let inserted_len = text_char_len(inserted);
-        let byte = if self.cursor == self.text.len() {
-            self.text.len()
-        } else {
-            char_to_byte(&self.text, self.cursor)
-        };
+        let byte = char_range_to_byte(&self.text, self.cursor..self.cursor).start;
         self.text.insert_str(byte, inserted);
         self.cursor += inserted_len;
         if !self.accepts_unconstrained_text() {
@@ -2135,23 +2131,6 @@ fn measure_prefix(
     let font = text_ctx.fonts.font(font_id)?;
     let shape = text_ctx.shaper.shape(font, font_id, &slice, font_px).ok()?;
     Some(shape.width())
-}
-
-fn char_to_byte(s: &str, idx: usize) -> usize {
-    if idx == 0 {
-        return 0;
-    }
-    if s.is_ascii() {
-        return idx.min(s.len());
-    }
-    let mut byte = s.len();
-    for (i, (b, _)) in s.char_indices().enumerate() {
-        if i == idx {
-            byte = b;
-            break;
-        }
-    }
-    byte
 }
 
 fn char_range_to_byte(s: &str, range: Range<usize>) -> Range<usize> {

@@ -30,7 +30,7 @@
   - Encodes the active scene into a draw list.
   - Main callers: host app frame path and snapshot/perf tools.
 - `oxide_test_scenes::Router<U>::input_touch(&mut self, event: &TouchEvent)`
-  - Feeds raw touch contacts into the Oxide-owned surface recognizer and forwards pinch deltas to scenes that support zoom.
+  - Feeds raw touch contacts into the Oxide-owned surface recognizer and forwards one-finger pans plus pinch deltas to scenes that support them.
   - Main callers: iOS host raw touch callback.
 
 ## Logic narrative
@@ -39,7 +39,7 @@ The router owns one state object per scene and switches between them by `SceneKi
 
 `prepare_onscreen_benchmark` resets state so every measurement pass starts from a known scene. `step_onscreen_benchmark` performs one deterministic mutation, sharing the common button and collection-focus step mechanics while preserving case-specific action labels, then the host renders a real MetalView frame. This keeps product behavior and gesture/control state in Rust while UIKit remains only the host shell.
 
-Raw touch input follows the same ownership rule. The host forwards each `TouchEvent`, the router updates a `TouchSurfaceRecognizer`, and recognized pinch ratios are applied through the existing scene-level pinch entry points for Zoom Image and Camera. Scene switches reset the recognizer so stale contacts cannot leak across benchmark or product scene boundaries.
+Raw touch input follows the same ownership rule. The host forwards each `TouchEvent`, the router updates a `TouchSurfaceRecognizer`, one-finger pan events are replayed through the existing pointer-drag entry point, and recognized pinch ratios are applied through the existing scene-level pinch entry points for Zoom Image and Camera. Two-touch center pan events emitted by the recognizer are not replayed as one-finger drags because pinch surfaces cancel drag ownership while two touches are active. Scene switches reset the recognizer so stale contacts cannot leak across benchmark or product scene boundaries.
 
 ## Preconditions and postconditions
 
@@ -59,7 +59,7 @@ Raw touch input follows the same ownership rule. The host forwards each `TouchEv
 
 Unknown benchmark names return `false` so the FFI layer can fail the benchmark explicitly. Missing fonts can reduce label draw output, but the benchmark still runs through the same scene path and host validation catches blank output on device.
 
-Unknown or unsupported touch gestures are ignored. Invalid coordinates are filtered by `oxide-input`, and scene changes clear active touch state before the next scene receives input.
+Unknown or unsupported touch gestures are ignored. Invalid coordinates are filtered by `oxide-input`, two-touch pan is ignored at the router boundary, and scene changes clear active touch state before the next scene receives input.
 
 ## Concurrency and memory behavior
 
@@ -74,7 +74,7 @@ The headline cases deliberately avoid new benchmark-only abstractions. Reusing e
 ## Testing and benchmarks
 
 - `oxide/crates/test-scenes/tests/onscreen_benchmark_tests.rs` verifies the new headline benchmark keys prepare the expected scenes and accept a step.
-- `oxide/crates/test-scenes/tests/onscreen_benchmark_tests.rs` verifies raw two-touch pinch events change the Zoom Image scene through the router.
+- `oxide/crates/test-scenes/tests/onscreen_benchmark_tests.rs` verifies raw two-touch pinch events change the Zoom Image scene through the router without applying two-touch pan as a drag.
 - Device benchmark rows are selected by `oxide/xtask/src/lib.rs` and persisted under `oxide/benchmarks/oxide-device/`.
 
 ## Examples
@@ -87,6 +87,8 @@ assert!(router.step_onscreen_benchmark("component_button_encode", 1));
 
 ## Changelog
 
+- 2026-05-11: Removed the redundant component-benchmark reset assignment for `Controls::progress_indeterminate`; `Controls::default()` already starts determinate progress.
+- 2026-05-09: Filtered router touch-pan forwarding to one-finger pans so pinch does not also drag Zoom Image or Camera state.
 - 2026-05-05: Shared repeated button and collection-focus benchmark step mechanics inside the router.
 - 2026-04-26: Added headline on-screen component and animation benchmark keys for matched Oxide/UIKit device statistics, with identical prepare resets grouped by scene state.
 - 2026-04-29: Routed raw touch pinch events through the scene router instead of dropping them at the new hook.
