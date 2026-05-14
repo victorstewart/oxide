@@ -3,6 +3,8 @@ use oxide_harness_registry as registry;
 use oxide_input::{GestureRecognizer, TouchSurfaceRecognizer};
 use oxide_permissions as permissions;
 use oxide_platform_api as platform;
+use oxide_platform_api::Platform as _;
+use oxide_platform_web as platform_web;
 use oxide_renderer_api as api;
 use oxide_renderer_api::Renderer;
 use oxide_renderer_metal as metal;
@@ -462,6 +464,7 @@ const PERF_BRIDGE_SPECS: &[BridgePerfSpec] = &[
         id: "cpu.bridge.permission_callback_fanout",
         name: "Permission Callback Fanout",
     },
+    BridgePerfSpec { id: "cpu.bridge.web_backend_surface", name: "Web Backend Surface" },
     BridgePerfSpec { id: "cpu.bridge.sensor_location_snapshot", name: "Sensor Location Snapshot" },
     BridgePerfSpec { id: "cpu.bridge.bluetooth_cache_update", name: "Bluetooth Cache Update" },
     BridgePerfSpec { id: "cpu.bridge.photo_import_thumbnail", name: "Photo Import Thumbnail" },
@@ -1806,6 +1809,7 @@ fn push_bridge_cases(
         covered.insert(spec.name.to_string());
         let case = match spec.id {
             "cpu.bridge.permission_callback_fanout" => bridge_permission_callback_case(smoke),
+            "cpu.bridge.web_backend_surface" => bridge_web_backend_surface_case(smoke),
             "cpu.bridge.sensor_location_snapshot" => bridge_sensor_location_case(smoke),
             "cpu.bridge.bluetooth_cache_update" => bridge_bluetooth_cache_case(smoke),
             "cpu.bridge.photo_import_thumbnail" => bridge_photo_import_thumbnail_case(smoke)?,
@@ -4757,6 +4761,65 @@ fn bridge_permission_callback_case(smoke: bool) -> PerfCaseResult {
             };
             permissions.notify(permission_domain, status);
             callback_sum.load(Ordering::Relaxed) + manager.status(permission_domain) as u64
+        },
+    )
+}
+
+fn bridge_web_backend_surface_case(smoke: bool) -> PerfCaseResult {
+    let loops = if smoke { 32 } else { 128 };
+    let web_platform = platform_web::WebPlatform::new();
+    let mut tick = 0u64;
+    measure_cpu_case(
+        "cpu.bridge.web_backend_surface",
+        "bridge",
+        smoke,
+        true,
+        0.20,
+        loops,
+        vec![String::from(
+            "Web backend bridge surface on the native fallback path: capabilities, device caps, clipboard cache, network status, permission callbacks, location fallback, haptics, and iframe WebView unsupported boundary.",
+        )],
+        move || {
+            tick = tick.wrapping_add(1);
+            web_platform.clipboard_set("oxide-web-backend");
+            web_platform.network_status().subscribe(Box::new(|_| {}));
+            web_platform.permissions().subscribe(Box::new(|_, _| {}));
+            web_platform.permissions().request(platform::PermissionDomain::Location);
+            web_platform.haptics().play(platform::HapticPattern::Selection);
+            web_platform.location().request_once();
+
+            let caps = web_platform.capabilities().bits();
+            let device = web_platform.device_caps();
+            let network = web_platform.network_status().current_status();
+            let permission = web_platform.permissions().status(platform::PermissionDomain::Location) as u64;
+            let clipboard_len = web_platform
+                .clipboard_get()
+                .map(|value| value.len() as u64)
+                .unwrap_or_default();
+            let location_start = match web_platform.location().start(platform::LocationOptions::default()) {
+                Ok(()) => 1,
+                Err(platform::PlatformError::Unsupported(_)) => 2,
+                Err(_) => 3,
+            };
+            let web_view_status = match web_platform.web_view_service().create_view("about:blank", Box::new(|_| {})) {
+                Ok(view) => {
+                    view.close();
+                    1
+                }
+                Err(platform::PlatformError::Unsupported(_)) => 2,
+                Err(_) => 3,
+            };
+
+            tick
+                .wrapping_add(caps)
+                .wrapping_add(device.max_framerate_hz as u64)
+                .wrapping_add(device.native_scale.to_bits() as u64)
+                .wrapping_add(u64::from(network.is_connected))
+                .wrapping_add(permission)
+                .wrapping_add(clipboard_len)
+                .wrapping_add(web_platform.location().history().len() as u64)
+                .wrapping_add(location_start)
+                .wrapping_add(web_view_status)
         },
     )
 }

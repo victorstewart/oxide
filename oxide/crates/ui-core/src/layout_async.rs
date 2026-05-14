@@ -1,8 +1,11 @@
 //! Asynchronous layout coordinator for off-thread measurement and reflow.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread::{self, JoinHandle};
 
+#[cfg(not(target_arch = "wasm32"))]
 enum Command<T>
 where
     T: Send + 'static,
@@ -11,6 +14,7 @@ where
     Shutdown,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Task<T>
 where
     T: Send + 'static,
@@ -35,9 +39,14 @@ pub struct AsyncLayoutCoordinator<T>
 where
     T: Send + 'static,
 {
+    #[cfg(not(target_arch = "wasm32"))]
     tx: mpsc::Sender<Command<T>>,
+    #[cfg(not(target_arch = "wasm32"))]
     rx: mpsc::Receiver<TaskResult<T>>,
+    #[cfg(not(target_arch = "wasm32"))]
     worker: Option<JoinHandle<()>>,
+    #[cfg(target_arch = "wasm32")]
+    pending: Option<TaskResult<T>>,
     next_seq: u64,
     last_requested: u64,
     last_applied: u64,
@@ -48,6 +57,18 @@ where
     T: Send + 'static,
 {
     pub fn new() -> Self {
+        #[cfg(target_arch = "wasm32")]
+        {
+            return Self {
+                pending: None,
+                next_seq: 1,
+                last_requested: 0,
+                last_applied: 0,
+            };
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command<T>>();
         let (res_tx, res_rx) = mpsc::channel::<TaskResult<T>>();
         let worker = thread::Builder::new()
@@ -76,6 +97,7 @@ where
             last_requested: 0,
             last_applied: 0,
         }
+        }
     }
 
     /// Queue a new layout job. Returns the sequence identifier associated
@@ -87,13 +109,32 @@ where
         let seq = self.next_seq;
         self.next_seq = self.next_seq.saturating_add(1);
         self.last_requested = seq;
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.pending = Some(TaskResult { seq, value: job() });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         let task = Task { seq, job: Box::new(job) };
         let _ = self.tx.send(Command::Compute(task));
+        }
         seq
     }
 
     /// Drain any completed jobs and return the most recent result.
     pub fn poll_latest(&mut self) -> Option<(u64, T)> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let res = self.pending.take()?;
+            if res.seq <= self.last_applied {
+                return None;
+            }
+            self.last_applied = res.seq;
+            return Some((res.seq, res.value));
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         let mut latest: Option<TaskResult<T>> = None;
         while let Ok(res) = self.rx.try_recv() {
             if latest.as_ref().map_or(true, |cur| res.seq >= cur.seq) {
@@ -109,6 +150,7 @@ where
         } else {
             None
         }
+        }
     }
 
     pub fn has_inflight(&self) -> bool {
@@ -116,12 +158,19 @@ where
     }
 
     fn shutdown(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.pending = None;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         if self.worker.is_none() {
             return;
         }
         let _ = self.tx.send(Command::Shutdown);
         if let Some(handle) = self.worker.take() {
             let _ = handle.join();
+        }
         }
     }
 }

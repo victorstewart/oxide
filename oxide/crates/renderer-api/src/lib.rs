@@ -261,6 +261,10 @@ pub trait RenderEncoder {
     }
     fn draw_spinner(&mut self, center: [f32; 2], atom: f32, alpha: f32);
     fn draw_glyph_run(&mut self, run: &GlyphRun);
+    fn draw_glyph_run_resolved(&mut self, run: &GlyphRun, vertices: &[Vertex], indices: &[u16]) {
+        let _ = (vertices, indices);
+        self.draw_glyph_run(run);
+    }
 }
 
 pub trait Renderer {

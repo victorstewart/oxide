@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+   <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Oxide WebAssembly Host</title>
+      <style>
+         html,
+         body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            background: transparent;
+         }
+
+         #oxide-canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            touch-action: none;
+            background: transparent;
+         }
+      </style>
+   </head>
+   <body>
+      <canvas id="oxide-canvas"></canvas>
+      <script type="module">
+         import init, { platform_smoke_report, start_oxide_async, webgpu_smoke_report } from "./pkg/oxide_host_web.js";
+
+         await init();
+         window.oxidePlatformSmoke = platform_smoke_report();
+         console.log("oxide-platform-smoke", window.oxidePlatformSmoke);
+         window.oxideWebGpuSmoke = await webgpu_smoke_report();
+         console.log("oxide-webgpu-smoke", window.oxideWebGpuSmoke);
+         window.oxideApp = await start_oxide_async("oxide-canvas");
+         window.oxideApp.frame();
+         console.log("oxide-renderer-backend", window.oxideApp.renderer_backend());
+         console.log("oxide-render-smoke", `draws=${window.oxideApp.last_draw_count()}`);
+         window.oxideWebPerf = window.oxideApp.bench_frame_samples(8, 30);
+         console.log("oxide-web-perf", window.oxideWebPerf);
+      </script>
+   </body>
+</html>

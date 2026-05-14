@@ -10,7 +10,7 @@
   - `oxide/crates/perf-runner/src/main.rs` invokes `run_from_env()`.
   - CI and local commands route through `cargo run -p oxide-perf-runner -- --run-suite ...`.
 - Downstream dependencies:
-  - `oxide_ui_core`, `oxide_renderer_metal`, `oxide_test_scenes`, `oxide_platform_api`, and related crates provide the actual workload surfaces being measured.
+  - `oxide_ui_core`, `oxide_renderer_metal`, `oxide_test_scenes`, `oxide_platform_api`, `oxide_platform_web`, and related crates provide the actual workload surfaces being measured.
   - `oxide/benchmarks/workspace/latest.json` and `oxide/benchmarks/workspace/latest.md` are the persisted outputs consumed by review and CI.
 
 ## Entry points list
@@ -34,6 +34,8 @@ The crate builds a case inventory spanning component/animation microbenchmarks, 
 
 CPU-oriented cases run through a shared warmup-and-sample loop that amortizes timer noise by executing enough operations to hit a target sample duration. Journey-style workloads run one full interaction cycle per sample. GPU scene cases execute live Metal frames and persist renderer counters such as draw, encode, cull, and damage summaries when available. The authoring battery now also includes a retained `scene3d` mixed-frame case that renders a persistent 3D mesh pass ahead of a 2D overlay so the Metal backend's shared-frame 2D/3D path stays under regression coverage.
 
+Bridge coverage includes both app-owned OS bridge workloads and the web backend surface available on native fallback builds. The web case exercises browser-backend capabilities, device caps, clipboard cache, network status, permission callbacks, location fallback, haptics, and the explicit unsupported iframe WebView boundary so the WebAssembly backend is represented in the workspace contract even when the browser-only DOM paths are tested separately.
+
 The resulting `PerfReport` is serialized to JSON and Markdown. Baseline comparison is median-based and only applies to gated cases. Coverage validation is structural: the suite is considered incomplete if any required family lacks a case.
 Contract coverage battery entries share one status-and-note helper so each required case set is evaluated once, then rendered consistently into the persisted report.
 
@@ -53,6 +55,7 @@ Contract coverage battery entries share one status-and-note helper so each requi
 
 ## Changelog
 
+- 2026-05-14: Added `cpu.bridge.web_backend_surface` and refreshed the workspace baseline to keep the WebAssembly backend represented in the Rust-side performance contract.
 - 2026-04-30: Removed the one-use perf-filter activity wrapper; suite coverage gating now checks the parsed filter list directly.
 - 2026-04-18: Collapsed duplicated contract-battery status and note conditionals into shared helper logic while preserving report output semantics.
 - 2026-04-14: Collapsed repetitive coverage assertions into one shared check table while preserving the same incomplete-family error messages.

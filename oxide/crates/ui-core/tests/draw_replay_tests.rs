@@ -16,6 +16,7 @@ struct RecordingEncoder {
     camera_bgs: Vec<(RectF, Color, f32, bool, bool, f32)>,
     spinners: Vec<([f32; 2], f32, f32)>,
     glyph_runs: usize,
+    resolved_glyph_runs: Vec<(usize, usize)>,
 }
 
 impl gfx::RenderEncoder for RecordingEncoder {
@@ -68,6 +69,10 @@ impl gfx::RenderEncoder for RecordingEncoder {
     fn draw_glyph_run(&mut self, _run: &GlyphRun) {
         self.glyph_runs = self.glyph_runs.saturating_add(1);
     }
+
+    fn draw_glyph_run_resolved(&mut self, _run: &GlyphRun, vertices: &[Vertex], indices: &[u16]) {
+        self.resolved_glyph_runs.push((vertices.len(), indices.len()));
+    }
 }
 
 fn build_test_drawlist() -> DrawList {
@@ -78,6 +83,7 @@ fn build_test_drawlist() -> DrawList {
         Vertex { x: 0.0, y: 2.0, u: 0.0, v: 1.0, rgba: u32::MAX },
         Vertex { x: 2.0, y: 2.0, u: 1.0, v: 1.0, rgba: u32::MAX },
     ]);
+    list.indices.extend_from_slice(&[0, 1, 2, 2, 1, 3]);
     list.items.push(DrawCmd::ClipPush { rect: RectI::new(1, 2, 30, 40) });
     list.items.push(DrawCmd::Solid {
         vb: VertexSpan { offset: 0, len: 4 },
@@ -126,8 +132,8 @@ fn build_test_drawlist() -> DrawList {
     list.items.push(DrawCmd::GlyphRun {
         run: GlyphRun {
             atlas: ImageHandle(9),
-            vb: VertexSpan { offset: 0, len: 0 },
-            ib: IndexSpan { offset: 0, len: 0 },
+            vb: VertexSpan { offset: 0, len: 4 },
+            ib: IndexSpan { offset: 0, len: 6 },
             sdf: false,
             color: Color::rgba(0.9, 0.8, 0.7, 1.0),
         },
@@ -208,7 +214,8 @@ fn replay_translates_primitives_and_restores_fallback_clip() {
     assert!(approx_eq(atom, 18.0));
     assert!(approx_eq(alpha, 0.6));
 
-    assert_eq!(encoder.glyph_runs, 1);
+    assert_eq!(encoder.glyph_runs, 0);
+    assert_eq!(encoder.resolved_glyph_runs, vec![(4, 6)]);
 }
 
 #[test]

@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "suite": "web-wasm",
+  "generated_date": "2026-05-14",
+  "browser_target": "Chrome via Codex in-app browser",
+  "url": "http://127.0.0.1:8787/?fresh=webgpu-only-public-final",
+  "status": "browser-baseline",
+  "notes": [
+    "BrowserRenderer selected the WebGPU backend through async renderer initialization.",
+    "This baseline was collected from a release wasm build.",
+    "Production web visual startup is WebGPU-only; unsupported browsers return NOT SUPPORTED instead of drawing through Canvas2D.",
+    "Browser permission prompts were not accepted during automation; location remained not-determined."
+  ],
+  "smoke": {
+    "platform": "caps=40;online=true;location=not-determined;webview=ok",
+    "webgpu": "webgpu=device-ok",
+    "backend": "webgpu",
+    "render": "draws=26"
+  },
+  "cases": [
+    {
+      "id": "web.wasm.webgpu.frame_loop",
+      "layer": "flow",
+      "scenario": "browser-render",
+      "variant": "webgpu",
+      "cache_state": "warm",
+      "refresh_mode": "browser-main-thread",
+      "samples": 8,
+      "frames_per_sample": 30,
+      "frames": 240,
+      "p50_ms": 0.110,
+      "p95_ms": 0.147,
+      "p99_ms": 0.147,
+      "peak_ms": 0.147,
+      "avg_ms": 0.114,
+      "draws": 26,
+      "unit": "ms/frame"
+    }
+  ],
+  "pixel_check": {
+    "viewport_width": 1280,
+    "viewport_height": 720,
+    "alpha_samples": 25680,
+    "non_background_samples": 3872,
+    "colored_samples": 273,
+    "artifact": "oxide/host/web-app/www/oxide-wasm-browser-check.png"
+  }
+}

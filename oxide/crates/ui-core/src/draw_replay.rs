@@ -49,7 +49,11 @@ pub fn replay_drawlist(
             DrawCmd::Image { tex, dst, src, .. } => {
                 encoder.draw_image(*tex, translate_rect(*dst, offset_x, offset_y), *src);
             }
-            DrawCmd::GlyphRun { run } => encoder.draw_glyph_run(run),
+            DrawCmd::GlyphRun { run } => {
+                let vertices = slice_vertices(list, run.vb).unwrap_or(&[]);
+                let indices = slice_indices(list, run.ib).unwrap_or(&[]);
+                encoder.draw_glyph_run_resolved(run, vertices, indices);
+            }
             DrawCmd::RRect { rect, radii, color } => {
                 encoder.draw_rrect(translate_rect(*rect, offset_x, offset_y), *radii, *color);
             }
@@ -104,6 +108,13 @@ fn slice_vertices(list: &DrawList, span: VertexSpan) -> Option<&[Vertex]> {
     let len = span.len as usize;
     let end = start.checked_add(len)?;
     list.vertices.get(start..end)
+}
+
+fn slice_indices(list: &DrawList, span: oxide_renderer_api::IndexSpan) -> Option<&[u16]> {
+    let start = span.offset as usize;
+    let len = span.len as usize;
+    let end = start.checked_add(len)?;
+    list.indices.get(start..end)
 }
 
 fn translate_rect(rect: RectF, dx: f32, dy: f32) -> RectF {

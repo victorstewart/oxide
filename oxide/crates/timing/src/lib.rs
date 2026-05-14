@@ -8,26 +8,64 @@
 
 use oxide_platform_api as api;
 use std::collections::{BTreeMap, HashMap};
+#[cfg(not(target_arch = "wasm32"))]
 use std::convert::TryFrom;
 use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
 // ===== Monotonic clock =====
 
+#[cfg(not(target_arch = "wasm32"))]
 static START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn now_ns() -> u64 {
     clamp_u128_to_u64(START.elapsed().as_nanos())
 }
+
+#[cfg(target_arch = "wasm32")]
+pub fn now_ns() -> u64 {
+    clamp_f64_to_u64(wasm_now_ms() * 1_000_000.0)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn now_ms() -> u64 {
     clamp_u128_to_u64(START.elapsed().as_millis())
 }
 
+#[cfg(target_arch = "wasm32")]
+pub fn now_ms() -> u64 {
+    clamp_f64_to_u64(wasm_now_ms())
+}
+
 #[inline]
+#[cfg(not(target_arch = "wasm32"))]
 fn clamp_u128_to_u64(value: u128) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[inline]
+fn clamp_f64_to_u64(value: f64) -> u64 {
+    if !value.is_finite() || value <= 0.0 {
+        0
+    } else if value >= u64::MAX as f64 {
+        u64::MAX
+    } else {
+        value.round() as u64
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn wasm_now_ms() -> f64 {
+    web_sys::window()
+        .and_then(|window| window.performance())
+        .map(|performance| performance.now())
+        .unwrap_or(0.0)
+        .max(0.0)
 }
 
 // ===== Timers =====
