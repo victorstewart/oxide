@@ -13,9 +13,9 @@ use oxide_renderer_api as gfx;
 use oxide_timing as timing;
 use oxide_ui_core::{
     elements::{
-        encode_label_text, Align, Badge, BadgeState, BadgeStyle, Button, ButtonState,
-        ButtonStyle, ImageUploader, Label, ProgressBar, RecordButton, RecordButtonState,
-        RecordButtonStyle, TextCtx,
+        encode_label_text, Align, Badge, BadgeState, BadgeStyle, Button, ButtonState, ButtonStyle,
+        ImageUploader, Label, ProgressBar, RecordButton, RecordButtonState, RecordButtonStyle,
+        TextCtx,
     },
     orchestration::ScatterOrchestrator,
     permissions::PermissionOverlayUi,
@@ -854,9 +854,9 @@ impl IntegrationScene {
 
         // Status message
         let status_color = if workflow.name_valid && workflow.email_valid {
-                gfx::Color::rgba(0.2, 0.7, 0.3, 1.0)
-            } else {
-                gfx::Color::rgba(0.7, 0.3, 0.3, 1.0)
+            gfx::Color::rgba(0.2, 0.7, 0.3, 1.0)
+        } else {
+            gfx::Color::rgba(0.7, 0.3, 0.3, 1.0)
         };
         encode_label_text(
             workflow.status_message.as_str(),
@@ -1103,11 +1103,8 @@ impl IntegrationScene {
         );
 
         // Field text or placeholder
-        let display_text = if view.text.is_empty() {
-            view.placeholder.unwrap_or("")
-        } else {
-            view.text
-        };
+        let display_text =
+            if view.text.is_empty() { view.placeholder.unwrap_or("") } else { view.text };
 
         let text_color = if view.text.is_empty() {
             gfx::Color::rgba(0.6, 0.6, 0.6, 1.0)

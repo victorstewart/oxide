@@ -458,61 +458,61 @@ fn text_input_clipboard_roundtrip() {
 
 #[test]
 fn camera_view_encodes_draw_cmd() {
-   let mut dl = DrawListBuilder::new();
-   let rect = RectF::new(0.0, 0.0, 320.0, 240.0);
-   let cam = UICameraView {
-      tint: Color::rgba(0.8, 0.7, 0.6, 0.5),
-      alpha: 0.75,
-      grayscale: true,
-      blur: true,
-      sigma: 8.0,
-   };
-   cam.encode(rect, &mut dl);
-   let items = dl.drawlist().items.clone();
-   assert_eq!(items.len(), 1);
-   match &items[0] {
-      DrawCmd::CameraBg { rect: r, tint, alpha, grayscale, blur, sigma } => {
-         assert_eq!(r.x, rect.x);
-         assert_eq!(r.y, rect.y);
-         assert_eq!(r.w, rect.w);
-         assert_eq!(r.h, rect.h);
-         assert!((*alpha - 0.75).abs() < 1e-6);
-         assert!(*grayscale);
-         assert!(*blur);
-         assert!((*sigma - 8.0).abs() < 1e-6);
-         assert!((*tint).r > 0.79 && (*tint).g > 0.69 && (*tint).b > 0.59);
-      }
-      _ => panic!("expected CameraBg draw command"),
-   }
+    let mut dl = DrawListBuilder::new();
+    let rect = RectF::new(0.0, 0.0, 320.0, 240.0);
+    let cam = UICameraView {
+        tint: Color::rgba(0.8, 0.7, 0.6, 0.5),
+        alpha: 0.75,
+        grayscale: true,
+        blur: true,
+        sigma: 8.0,
+    };
+    cam.encode(rect, &mut dl);
+    let items = dl.drawlist().items.clone();
+    assert_eq!(items.len(), 1);
+    match &items[0] {
+        DrawCmd::CameraBg { rect: r, tint, alpha, grayscale, blur, sigma } => {
+            assert_eq!(r.x, rect.x);
+            assert_eq!(r.y, rect.y);
+            assert_eq!(r.w, rect.w);
+            assert_eq!(r.h, rect.h);
+            assert!((*alpha - 0.75).abs() < 1e-6);
+            assert!(*grayscale);
+            assert!(*blur);
+            assert!((*sigma - 8.0).abs() < 1e-6);
+            assert!((*tint).r > 0.79 && (*tint).g > 0.69 && (*tint).b > 0.59);
+        }
+        _ => panic!("expected CameraBg draw command"),
+    }
 }
 
 #[test]
 fn button_press_release_tap() {
-   let mut st = ButtonState::default();
-   st.on_pointer_down();
-   assert!(st.is_pressed());
-   let tapped = st.on_pointer_up();
-   assert!(tapped);
-   assert!(!st.is_pressed());
+    let mut st = ButtonState::default();
+    st.on_pointer_down();
+    assert!(st.is_pressed());
+    let tapped = st.on_pointer_up();
+    assert!(tapped);
+    assert!(!st.is_pressed());
 }
 
 #[test]
 fn toggle_drag_and_tap() {
-   let mut st = ToggleState::default();
-   st.begin_drag(0.0);
-   st.drag_to(50.0, RectF::new(0.0, 0.0, 100.0, 20.0));
-   st.end_drag();
-   assert!(st.on);
-   st.on_tap();
-   assert!(!st.on);
+    let mut st = ToggleState::default();
+    st.begin_drag(0.0);
+    st.drag_to(50.0, RectF::new(0.0, 0.0, 100.0, 20.0));
+    st.end_drag();
+    assert!(st.on);
+    st.on_tap();
+    assert!(!st.on);
 }
 
 #[test]
 fn slider_keyboard_adjust() {
-   let mut st = SliderState::default();
-   st.set(0.5, Some(0.1));
-   st.arrow_right(Some(0.1));
-   assert!((st.value - 0.6).abs() < 1e-6);
-   st.arrow_left(Some(0.1));
-   assert!((st.value - 0.5).abs() < 1e-6);
+    let mut st = SliderState::default();
+    st.set(0.5, Some(0.1));
+    st.arrow_right(Some(0.1));
+    assert!((st.value - 0.6).abs() < 1e-6);
+    st.arrow_left(Some(0.1));
+    assert!((st.value - 0.5).abs() < 1e-6);
 }

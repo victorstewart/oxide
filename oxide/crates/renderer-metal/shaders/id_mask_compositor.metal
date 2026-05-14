@@ -174,44 +174,25 @@ inline bool is_internal_seam_pixel(texture2d<uint, access::read> city_tex,
   return false;
 }
 
-inline uint nearest_city_id(texture2d<uint, access::read> city_tex,
-                            int2 p,
-                            uint2 size,
-                            int max_radius)
+inline uint2 nearest_city(texture2d<uint, access::read> city_tex,
+                          int2 p,
+                          uint2 size,
+                          int max_radius)
 {
   uint direct = read_mask(city_tex, p, size);
   if (direct != 0) {
-    return direct;
+    return uint2(direct, 0u);
   }
   for (int r = 1; r <= max_radius; r += 2) {
     for (int i = 0; i < 24; ++i) {
       int2 q = p + direction_sample_offset(i, r);
       uint city = read_mask(city_tex, q, size);
       if (city != 0) {
-        return city;
+        return uint2(city, uint(r));
       }
     }
   }
-  return 0;
-}
-
-inline float nearest_city_distance(texture2d<uint, access::read> city_tex,
-                                   int2 p,
-                                   uint2 size,
-                                   int max_radius)
-{
-  if (read_mask(city_tex, p, size) != 0) {
-    return 0.0;
-  }
-  for (int r = 1; r <= max_radius; r += 2) {
-    for (int i = 0; i < 24; ++i) {
-      int2 q = p + direction_sample_offset(i, r);
-      if (read_mask(city_tex, q, size) != 0) {
-        return float(r);
-      }
-    }
-  }
-  return float(max_radius + 1);
+  return uint2(0u, uint(max_radius + 1));
 }
 
 inline uint nearest_neighborhood_for_city(texture2d<uint, access::read> city_tex,
@@ -312,11 +293,12 @@ fragment float4 f_id_mask_compositor(IdMaskCompositorRaster in [[stage_in]],
     if (params.glow_enabled == 0u) {
       return float4(0.0, 0.0, 0.0, clamp(params.darken_background_alpha, 0.0, 1.0));
     }
-    uint halo_city = nearest_city_id(city_tex, p, size, int(ceil(18.0 * params.mask_scale)));
+    uint2 halo = nearest_city(city_tex, p, size, int(ceil(18.0 * params.mask_scale)));
+    uint halo_city = halo.x;
     if (halo_city == 0u) {
       return float4(0.0, 0.0, 0.0, clamp(params.darken_background_alpha, 0.0, 1.0));
     }
-    float halo_distance = nearest_city_distance(city_tex, p, size, int(ceil(18.0 * params.mask_scale)));
+    float halo_distance = float(halo.y);
     float alpha = max(gaussian_alpha(halo_distance, params.mask_scale, 16.0, 0.04, 3.2),
                       gaussian_alpha(halo_distance, params.mask_scale, 8.5, 0.15, 3.2));
     if (alpha <= 0.002) {

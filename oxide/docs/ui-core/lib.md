@@ -18,6 +18,8 @@
   Exposes the shared overlay and popup-lifecycle infrastructure used by higher-level surface routers.
 - `pub mod anim`
   Exposes shared animation helpers for reusable easing and keyframed offset sampling.
+- `pub mod draw_replay`
+  Exposes renderer-agnostic draw-list replay helpers for translated CPU composition paths.
 - `pub mod text_fields`
   Exposes the generic policy-driven text-input module.
 - `pub mod picker_popup`
@@ -60,6 +62,7 @@
 
 ## Performance notes
 - Crate-root re-exports are zero-cost.
+- `draw_replay` translates only command-local geometry slices instead of cloning whole draw lists.
 - Consolidating the text-input engines here removes duplicate app-side implementations without adding runtime indirection.
 - `prepare_draws` preallocates the resolved clip stack for the common shallow nested-clip path, avoiding the first frame-loop stack growth on representative clipping workloads.
 - `elements::Label` keeps disabled watch logging off the allocation path, preallocates the common wrapped-line buffers, and lets internal non-wrapped label call sites encode borrowed text directly instead of cloning through temporary `Label` values.
@@ -74,6 +77,7 @@
 - `crates/ui-core/tests/elements_tests.rs` also covers the shared legacy badge overlay contract.
 - `crates/ui-core/tests/elements_tests.rs` also covers the shared legacy spinner defaults and atom-driven encoding contract.
 - `crates/ui-core/tests/elements_tests.rs` also covers the shared legacy sliding-switch long-press, timeout, and bounds-cancel contract.
+- `crates/ui-core/tests/draw_replay_tests.rs` covers translated replay geometry and clip restoration.
 - `crates/ui-core/tests/anim_helpers.rs` covers the shared animation-helper surface.
 - `crates/ui-core/tests/text_fields_tests.rs` covers the text-input surface.
 - `crates/ui-core/tests/picker_popup_tests.rs` covers the popup-picker interaction surface.
@@ -90,6 +94,7 @@ assert_eq!(text.value(), "");
 ```
 
 ## Changelog
+- 2026-05-14: documented `draw_replay` because glyph replay now resolves and translates vertex spans for CPU composition paths.
 - 2026-05-10: reused the existing character-range byte mapping in `elements.rs` text insertion and removed the single-point byte helper.
 - 2026-04-25: reused wrapped-label shaping results after release-mode A/B showed `cpu.component.label.encode` improving from p50 1155.122 us/op, p95 1165.781 to p50 1013.186 us/op, p95 1037.539 in focused runs, with the refreshed full workspace row at p50 987.312 us/op, p95 1004.876.
 - 2026-04-25: preallocated the `prepare_draws` clip stack after release-mode A/B showed the representative clipping workload improving from p50 6.881 us/op, p95 10.977 to p50 5.368 us/op, p95 5.398.

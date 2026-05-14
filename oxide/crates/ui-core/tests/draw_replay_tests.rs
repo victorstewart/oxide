@@ -16,7 +16,7 @@ struct RecordingEncoder {
     camera_bgs: Vec<(RectF, Color, f32, bool, bool, f32)>,
     spinners: Vec<([f32; 2], f32, f32)>,
     glyph_runs: usize,
-    resolved_glyph_runs: Vec<(usize, usize)>,
+    resolved_glyph_runs: Vec<(Vec<Vertex>, Vec<u16>)>,
 }
 
 impl gfx::RenderEncoder for RecordingEncoder {
@@ -71,7 +71,7 @@ impl gfx::RenderEncoder for RecordingEncoder {
     }
 
     fn draw_glyph_run_resolved(&mut self, _run: &GlyphRun, vertices: &[Vertex], indices: &[u16]) {
-        self.resolved_glyph_runs.push((vertices.len(), indices.len()));
+        self.resolved_glyph_runs.push((vertices.to_vec(), indices.to_vec()));
     }
 }
 
@@ -215,7 +215,14 @@ fn replay_translates_primitives_and_restores_fallback_clip() {
     assert!(approx_eq(alpha, 0.6));
 
     assert_eq!(encoder.glyph_runs, 0);
-    assert_eq!(encoder.resolved_glyph_runs, vec![(4, 6)]);
+    assert_eq!(encoder.resolved_glyph_runs.len(), 1);
+    let (glyph_vertices, glyph_indices) = &encoder.resolved_glyph_runs[0];
+    assert_eq!(glyph_vertices.len(), 4);
+    assert_eq!(glyph_indices, &[0, 1, 2, 2, 1, 3]);
+    assert!(approx_eq(glyph_vertices[0].x, 5.0));
+    assert!(approx_eq(glyph_vertices[0].y, -3.0));
+    assert!(approx_eq(glyph_vertices[3].x, 7.0));
+    assert!(approx_eq(glyph_vertices[3].y, -1.0));
 }
 
 #[test]

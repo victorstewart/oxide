@@ -84,6 +84,7 @@ console.log("oxide-web-perf", window.oxideWebPerf);
 
 ## Changelog
 
+- Compacted DOM listener registration through a retained-listener helper while preserving the app-lifetime closure invariant.
 - Hard-cut web visual startup to WebGPU only; synchronous startup and unsupported browsers now return `Unsupported` instead of drawing through Canvas2D.
 - Added async WebGPU renderer selection and renderer-backend smoke logging.
 - Added the WebGPU smoke export and sampled browser frame benchmark hook.

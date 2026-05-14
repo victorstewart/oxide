@@ -148,10 +148,7 @@ fn env_bool(name: &str, default: bool) -> bool {
 }
 
 fn env_f32(name: &str, default: f32) -> f32 {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.trim().parse::<f32>().ok())
-        .unwrap_or(default)
+    std::env::var(name).ok().and_then(|value| value.trim().parse::<f32>().ok()).unwrap_or(default)
 }
 
 const PERF_SCENE_SPECS: &[ScenePerfSpec] = &[
@@ -3055,10 +3052,7 @@ fn gpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
     metrics.insert(String::from("instanced_avg"), instanced_sum / frames as f64);
     metrics.insert(String::from("culled_avg"), culled_sum / frames as f64);
     metrics.insert(String::from("damage_pct_avg"), damage_sum / frames as f64);
-    metrics.insert(
-        String::from("damage_enabled"),
-        if damage_enabled { 1.0 } else { 0.0 },
-    );
+    metrics.insert(String::from("damage_enabled"), if damage_enabled { 1.0 } else { 0.0 });
     metrics.insert(String::from("damage_use_thresh"), damage_use_thresh as f64);
     metrics.insert(String::from("damage_prefilter_thresh"), damage_prefilter_thresh as f64);
 

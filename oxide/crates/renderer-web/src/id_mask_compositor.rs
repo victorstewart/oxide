@@ -3,9 +3,6 @@ use oxide_renderer_api as api;
 pub const ID_MASK_MAX_CITY_STYLES: usize = 4;
 pub const ID_MASK_MAX_NEIGHBORHOOD_COLORS: usize = 32;
 
-pub const SEMANTIC_MASK_MAX_REGION_STYLES: usize = ID_MASK_MAX_CITY_STYLES;
-pub const SEMANTIC_MASK_MAX_SUBREGION_COLORS: usize = ID_MASK_MAX_NEIGHBORHOOD_COLORS;
-
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IdMaskCompositorMode {
@@ -21,8 +18,6 @@ pub struct IdMaskCityStyle {
     pub edge_rgb: [f32; 3],
     pub seam_rgb: [f32; 3],
 }
-
-pub type SemanticMaskRegionStyle = IdMaskCityStyle;
 
 impl Default for IdMaskCityStyle {
     fn default() -> Self {

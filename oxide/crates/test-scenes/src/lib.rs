@@ -446,7 +446,12 @@ impl<U: elements::ImageUploader> Router<U> {
         }
     }
 
-    fn step_button_control(&mut self, step: usize, up_action: &'static str, down_action: &'static str) -> &'static str {
+    fn step_button_control(
+        &mut self,
+        step: usize,
+        up_action: &'static str,
+        down_action: &'static str,
+    ) -> &'static str {
         let action = if step % 2 == 0 {
             let _ = self.controls.key_space_up();
             up_action
@@ -458,7 +463,12 @@ impl<U: elements::ImageUploader> Router<U> {
         action
     }
 
-    fn step_collection_focus(&mut self, step: usize, right_action: &'static str, down_action: &'static str) -> &'static str {
+    fn step_collection_focus(
+        &mut self,
+        step: usize,
+        right_action: &'static str,
+        down_action: &'static str,
+    ) -> &'static str {
         if step % 2 == 0 {
             self.collection_stress.view.focus_move_right();
             right_action
@@ -470,8 +480,11 @@ impl<U: elements::ImageUploader> Router<U> {
 
     pub fn prepare_onscreen_benchmark(&mut self, benchmark: &str) -> bool {
         let prepared = match benchmark {
-            "button_press_response" | "spinner_spin" | "animation_button_press_scale"
-            | "animation_toggle_thumb_spring" | "animation_slider_thumb_move" => {
+            "button_press_response"
+            | "spinner_spin"
+            | "animation_button_press_scale"
+            | "animation_toggle_thumb_spring"
+            | "animation_slider_thumb_move" => {
                 self.set_scene(SceneKind::Controls as usize);
                 self.controls = Controls::default();
                 true
@@ -481,8 +494,11 @@ impl<U: elements::ImageUploader> Router<U> {
                 self.text_layout = TextLayout::default();
                 true
             }
-            "component_progress_bar_encode" | "component_spinner_encode" | "component_button_encode"
-            | "component_toggle_encode" | "component_slider_encode" => {
+            "component_progress_bar_encode"
+            | "component_spinner_encode"
+            | "component_button_encode"
+            | "component_toggle_encode"
+            | "component_slider_encode" => {
                 self.set_scene(SceneKind::Controls as usize);
                 self.controls = Controls::default();
                 true
@@ -556,10 +572,6 @@ impl<U: elements::ImageUploader> Router<U> {
                 self.controls.update(16);
                 Some("progress.draw")
             }
-            "component_spinner_encode" => {
-                self.controls.update(16);
-                Some("spinner.draw")
-            }
             "component_button_encode" => {
                 Some(self.step_button_control(step, "button.draw_up", "button.draw_down"))
             }
@@ -568,26 +580,40 @@ impl<U: elements::ImageUploader> Router<U> {
                 self.controls.toggle_state.step(16);
                 Some("toggle.draw")
             }
-            "component_slider_encode" => {
+            "component_slider_encode" | "animation_slider_thumb_move" => {
                 let value = (step % 100) as f32 / 99.0;
                 let _ = self.controls.slider_state.set(value, self.controls.slider.step);
-                Some("slider.draw")
+                Some(if benchmark == "component_slider_encode" {
+                    "slider.draw"
+                } else {
+                    "slider.thumb_tick"
+                })
             }
             "component_image_view_encode" => {
                 self.zoom_image.update(16);
                 Some("image.draw")
             }
-            "component_nine_slice_image_encode" => {
+            "component_nine_slice_image_encode" | "nine_slice_frame" => {
                 let slice = if step % 2 == 0 { 16.0 } else { 18.0 };
                 self.nine_slice.set_options(slice, 1.0);
-                Some("nine_slice.draw")
+                Some(if benchmark == "component_nine_slice_image_encode" {
+                    "nine_slice.draw"
+                } else {
+                    "nine_slice.tick"
+                })
             }
-            "component_collection_view_encode" => {
-                Some(self.step_collection_focus(step, "collection.draw_right", "collection.draw_down"))
-            }
-            "spinner_spin" => {
+            "component_collection_view_encode" => Some(self.step_collection_focus(
+                step,
+                "collection.draw_right",
+                "collection.draw_down",
+            )),
+            "component_spinner_encode" | "spinner_spin" => {
                 self.controls.update(16);
-                Some("spinner.tick")
+                Some(if benchmark == "component_spinner_encode" {
+                    "spinner.draw"
+                } else {
+                    "spinner.tick"
+                })
             }
             "animation_progress_indeterminate" => {
                 self.controls.progress_indeterminate = true;
@@ -604,11 +630,6 @@ impl<U: elements::ImageUploader> Router<U> {
                 self.controls.toggle_state.step(16);
                 Some("toggle.spring_tick")
             }
-            "animation_slider_thumb_move" => {
-                let value = (step % 100) as f32 / 99.0;
-                let _ = self.controls.slider_state.set(value, self.controls.slider.step);
-                Some("slider.thumb_tick")
-            }
             "text_focus_response" => {
                 self.input_lab.focus(FocusField::Username);
                 Some("input.focus_username")
@@ -621,9 +642,11 @@ impl<U: elements::ImageUploader> Router<U> {
                 self.input_lab.handle_submit();
                 Some("input.submit")
             }
-            "collection_navigation" => {
-                Some(self.step_collection_focus(step, "collection.focus_right", "collection.focus_down"))
-            }
+            "collection_navigation" => Some(self.step_collection_focus(
+                step,
+                "collection.focus_right",
+                "collection.focus_down",
+            )),
             "image_zoom_pan" => {
                 self.zoom_image.pinch(200.0, 300.0, 0.18);
                 self.zoom_image.input_pointer(200.0, 300.0, 12.0, -6.0, 1);
@@ -646,11 +669,6 @@ impl<U: elements::ImageUploader> Router<U> {
             "damage_lab_frame" => {
                 self.damage_lab.update(16);
                 Some("damage.tick")
-            }
-            "nine_slice_frame" => {
-                let slice = if step % 2 == 0 { 16.0 } else { 18.0 };
-                self.nine_slice.set_options(slice, 1.0);
-                Some("nine_slice.tick")
             }
             "orchestration_transition_modal" => {
                 self.orchestration.benchmark_transition_or_modal(step);

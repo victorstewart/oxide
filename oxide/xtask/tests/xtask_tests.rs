@@ -10,28 +10,27 @@ use std::sync::{Mutex, OnceLock};
 use tempfile::tempdir;
 use xtask::{
     apply_xctestrun_environment_overrides, build_entitlements_dict,
-    compare_device_missing_promotion_families, compare_device_official_families,
-    compare_device_comparisons_pass, compare_uikit_reports, console_output_contains_marker,
+    compare_device_comparisons_pass, compare_device_missing_promotion_families,
+    compare_device_official_families, compare_uikit_reports, console_output_contains_marker,
     device_process_name, device_support_dir_matches, devicectl_notification_observed,
-    display_value_to_base,
-    extract_oxide_device_report_json, extract_trace_windows_from_tables, find_device_process_ids,
-    format_uikit_only_testing_identifier, is_expected_devicectl_console_termination,
-    is_primary_built_xctestrun_file, is_retryable_devicectl_json_error,
-    is_retryable_uikit_trace_handshake_error, is_retryable_xctrace_record_timeout_error,
-    is_unsupported_gpu_counter_profile_error, is_xctrace_trace_bundle,
-    latest_benchmark_build_failure, map_uikit_case, merge_background_modes, merge_usage_strings,
-    merge_xcresult_metrics_json_fragments, missing_uikit_metrics_case_ids,
-    normalize_ios_version_for_device_support, notification_or_console_marker_observed,
-    oxide_device_launch_environment_json, parse_apple_development_team_from_security_output,
-    parse_available_ios_sim_destination, parse_devicectl_display_backlight_active,
-    parse_devicectl_lock_state_text, parse_oxide_app_host_debug_summary,
-    parse_oxide_benchmark_metadata, parse_oxide_camera_contract_summary,
-    parse_oxide_memory_summary, parse_oxide_stage_summary, parse_oxide_tick_ring,
-    parse_provisioning_profile_team_identifier, parse_react_native_device_report_json,
-    parse_uikit_report_json, parse_xctrace_summary_window, parse_xctrace_tables,
-    parse_xctrace_toc_tables, perf_frame_capture_relative_source_for_test_name,
-    perf_report_matches_case_ids, preferred_xctrace_toc_tables,
-    prepare_resumable_uikit_device_result_root,
+    display_value_to_base, extract_oxide_device_report_json, extract_trace_windows_from_tables,
+    find_device_process_ids, format_uikit_only_testing_identifier,
+    is_expected_devicectl_console_termination, is_primary_built_xctestrun_file,
+    is_retryable_devicectl_json_error, is_retryable_uikit_trace_handshake_error,
+    is_retryable_xctrace_record_timeout_error, is_unsupported_gpu_counter_profile_error,
+    is_xctrace_trace_bundle, latest_benchmark_build_failure, map_uikit_case,
+    merge_background_modes, merge_usage_strings, merge_xcresult_metrics_json_fragments,
+    missing_uikit_metrics_case_ids, normalize_ios_version_for_device_support,
+    notification_or_console_marker_observed, oxide_device_launch_environment_json,
+    parse_apple_development_team_from_security_output, parse_available_ios_sim_destination,
+    parse_devicectl_display_backlight_active, parse_devicectl_lock_state_text,
+    parse_oxide_app_host_debug_summary, parse_oxide_benchmark_metadata,
+    parse_oxide_camera_contract_summary, parse_oxide_memory_summary, parse_oxide_stage_summary,
+    parse_oxide_tick_ring, parse_provisioning_profile_team_identifier,
+    parse_react_native_device_report_json, parse_uikit_report_json, parse_xctrace_summary_window,
+    parse_xctrace_tables, parse_xctrace_toc_tables,
+    perf_frame_capture_relative_source_for_test_name, perf_report_matches_case_ids,
+    preferred_xctrace_toc_tables, prepare_resumable_uikit_device_result_root,
     prepare_uikit_device_perf_xctestrun, render_oxide_app_host_debug_summary_note,
     render_oxide_tick_ring_note, resolve_existing_uikit_power_trace,
     start_console_marker_or_completion_observed, summarize_device_gpu_metrics_from_tables,
@@ -44,11 +43,11 @@ use xtask::{
     uikit_only_testing_identifier_for_test_name, uikit_perf_environment_json_for_test_name,
     uikit_perf_environment_json_for_test_name_with_watch_capture,
     uikit_power_trace_candidate_paths, uikit_report_matches_case_ids,
-    validate_normalized_camera_contract,
-    CompareDeviceProofFamilyStatus, CompareDeviceProofStatus, Entitlements, LocationMode,
-    TraceWindow, UIKitCanonicalSignpostSource, UIKitContractCoverageReport, UIKitHostBuildStamp,
-    UIKitMetricFallbackMode, UIKitMetricSource, UIKitMetricSummary, UIKitPerfCase,
-    UIKitPerfComparison, UIKitPerfReport, XctraceCell, XctraceTocTable,
+    validate_normalized_camera_contract, CompareDeviceProofFamilyStatus, CompareDeviceProofStatus,
+    Entitlements, LocationMode, TraceWindow, UIKitCanonicalSignpostSource,
+    UIKitContractCoverageReport, UIKitHostBuildStamp, UIKitMetricFallbackMode, UIKitMetricSource,
+    UIKitMetricSummary, UIKitPerfCase, UIKitPerfComparison, UIKitPerfReport, XctraceCell,
+    XctraceTocTable,
 };
 
 fn env_test_lock() -> &'static Mutex<()> {
@@ -2322,11 +2321,7 @@ fn compare_device_promotion_missing_families_requires_green_proofs_for_current_b
     let missing = compare_device_missing_promotion_families(Some(&status), &expected_stamp);
     assert_eq!(
         missing,
-        vec![
-            String::from("camera"),
-            String::from("component"),
-            String::from("journey"),
-        ]
+        vec![String::from("camera"), String::from("component"), String::from("journey"),]
     );
 
     let stale_stamp = UIKitHostBuildStamp { source_fingerprint: 99, ..expected_stamp };
@@ -2353,10 +2348,8 @@ fn perf_report_case_set_must_match_selected_cases_before_reuse() {
 
 #[test]
 fn uikit_report_case_set_must_match_selected_cases_before_reuse() {
-    let report = sample_uikit_report(&[
-        "uikit.animation.spinner_spin",
-        "uikit.component.button.encode",
-    ]);
+    let report =
+        sample_uikit_report(&["uikit.animation.spinner_spin", "uikit.component.button.encode"]);
 
     assert!(uikit_report_matches_case_ids(
         &report,
@@ -2373,8 +2366,10 @@ fn uikit_report_case_set_must_match_selected_cases_before_reuse() {
 fn compare_device_comparisons_must_pass_before_proof_status_updates() {
     assert!(compare_device_comparisons_pass(None, None));
 
-    let uikit_failed =
-        UIKitPerfComparison { missing_baseline: vec![String::from("uikit.case")], ..Default::default() };
+    let uikit_failed = UIKitPerfComparison {
+        missing_baseline: vec![String::from("uikit.case")],
+        ..Default::default()
+    };
     assert!(!compare_device_comparisons_pass(Some(&uikit_failed), None));
 
     let oxide_failed =

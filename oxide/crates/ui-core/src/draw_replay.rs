@@ -51,8 +51,9 @@ pub fn replay_drawlist(
             }
             DrawCmd::GlyphRun { run } => {
                 let vertices = slice_vertices(list, run.vb).unwrap_or(&[]);
+                let translated = translate_vertices(vertices, offset_x, offset_y);
                 let indices = slice_indices(list, run.ib).unwrap_or(&[]);
-                encoder.draw_glyph_run_resolved(run, vertices, indices);
+                encoder.draw_glyph_run_resolved(run, &translated, indices);
             }
             DrawCmd::RRect { rect, radii, color } => {
                 encoder.draw_rrect(translate_rect(*rect, offset_x, offset_y), *radii, *color);

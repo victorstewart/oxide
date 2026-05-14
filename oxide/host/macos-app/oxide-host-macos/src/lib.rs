@@ -243,6 +243,25 @@ fn log_telemetry_metrics(app: &AppState, reason: TelemetryCommandReason) {
 
 #[no_mangle]
 pub extern "C" fn macos_app_frame(w: u32, h: u32, scale: f32) -> ::libc::c_int {
+    macos_app_frame_inner(w, h, scale, core::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "C" fn macos_app_frame_with_drawable(
+    w: u32,
+    h: u32,
+    scale: f32,
+    drawable_ptr: *mut ::libc::c_void,
+) -> ::libc::c_int {
+    macos_app_frame_inner(w, h, scale, drawable_ptr)
+}
+
+fn macos_app_frame_inner(
+    w: u32,
+    h: u32,
+    scale: f32,
+    drawable_ptr: *mut ::libc::c_void,
+) -> ::libc::c_int {
     let mut app = app_state().lock().expect("app mutex");
     if !app.inited {
         return -1;
@@ -258,6 +277,13 @@ pub extern "C" fn macos_app_frame(w: u32, h: u32, scale: f32) -> ::libc::c_int {
             None => return -2,
         };
         let _ = renderer.resize(w, h, scale);
+        if !drawable_ptr.is_null() {
+            let present_result =
+                unsafe { renderer.prepare_present_drawable(drawable_ptr.cast()) };
+            if present_result.is_err() {
+                return -5;
+            }
+        }
     }
     // Build draws via router
     let mut builder = ui::DrawListBuilder::new();
@@ -267,7 +293,14 @@ pub extern "C" fn macos_app_frame(w: u32, h: u32, scale: f32) -> ::libc::c_int {
     let damage_rects = {
         let router = match app.router.as_mut() {
             Some(r) => r,
-            None => return -3,
+            None => {
+                if !drawable_ptr.is_null() {
+                    if let Some(renderer) = app.renderer.as_mut().map(|b| b.as_mut()) {
+                        let _ = renderer.cancel_present_drawable();
+                    }
+                }
+                return -3;
+            }
         };
         router.update(now, dt_ms);
         router.draw(vp, scale, &mut builder);
@@ -289,47 +322,14 @@ pub extern "C" fn macos_app_frame(w: u32, h: u32, scale: f32) -> ::libc::c_int {
         }
         renderer.encode_pass(builder.drawlist());
         if let Err(_) = renderer.submit(token) {
+            if !drawable_ptr.is_null() {
+                let _ = renderer.cancel_present_drawable();
+            }
             return -4;
         }
-        // Log perf stats (temporary text output)
-        let s = renderer.last_stats();
-        eprintln!(
-            "perf: encode={:.2}ms draws={} inst={} icb={} vb={}KB ib={}KB ub={}KB dmg={:.0}% rects={} culled={}",
-            s.encode_ms,
-            s.draws,
-            s.instanced,
-            s.icb_cmds,
-            s.vb_bytes / 1024,
-            s.ib_bytes / 1024,
-            s.ub_bytes / 1024,
-            (s.damage_pct * 100.0).round(),
-            s.damage_rects,
-            s.culled
-        );
+        // Per-frame perf stats remain available through renderer.last_stats().
     }
     process_telemetry_commands(&mut app);
-    0
-}
-
-#[no_mangle]
-pub extern "C" fn macos_app_present_to_drawable(
-    drawable_ptr: *mut ::libc::c_void,
-    texture_ptr: *mut ::libc::c_void,
-) -> ::libc::c_int {
-    let mut app = app_state().lock().expect("app mutex");
-    if !app.inited {
-        return -1;
-    }
-    let renderer = match app.renderer.as_mut().map(|b| b.as_mut()) {
-        Some(r) => r,
-        None => return -2,
-    };
-    let res = unsafe {
-        renderer.blit_to_texture_and_present_drawable(texture_ptr.cast(), drawable_ptr.cast())
-    };
-    if res.is_err() {
-        return -3;
-    }
     0
 }
 

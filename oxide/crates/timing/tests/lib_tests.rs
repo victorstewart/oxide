@@ -1,8 +1,8 @@
 use oxide_platform_api as api;
 use oxide_timing::testing;
 use oxide_timing::{self, advance_timers, anim, now_ms, now_ns, schedule_after};
-use std::sync::{Arc, LazyLock, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 
 static TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 

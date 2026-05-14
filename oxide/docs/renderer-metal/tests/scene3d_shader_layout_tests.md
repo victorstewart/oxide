@@ -2,7 +2,7 @@
 
 ## Intention and purpose
 
-These tests lock the CPU-to-Metal ABI for the `Scene3dMaterial` payload sent with `set_fragment_bytes` and guard the Scene3D bloom API path. The shader must keep its padding field packed so the following `float4 params` begins at the same byte offset as the Rust `#[repr(C)]` payload, and `Pass3d::bloom` must reach the offscreen bloom encoder rather than being collapsed into an unblurred main-pass draw.
+These tests lock the CPU-to-Metal ABI for the `Scene3dMaterial` payload sent with `set_fragment_bytes`, guard the Scene3D bloom API path, and keep the renderer-owned ID-mask shader path wired. The shader must keep its padding field packed so the following `float4 params` begins at the same byte offset as the Rust `#[repr(C)]` payload, and `Pass3d::bloom` must reach the offscreen bloom encoder rather than being collapsed into an unblurred main-pass draw.
 
 ## Relation to the rest of the code
 
@@ -12,12 +12,13 @@ The renderer builds a `Scene3dGpuMaterial` in `oxide_renderer_metal::MetalRender
 
 - `scene3d_material_shader_matches_cpu_set_bytes_layout()` verifies the 48-byte CPU layout and checks the shader source uses `packed_float3 _pad;`.
 - `scene3d_bloom_payload_reaches_bloom_encoder()` verifies `encode_scene3d()` calls the bloom encoder and does not collapse bloom layers into one main-pass strength.
+- `id_mask_compositor_is_renderer_owned_shader_path()` verifies the renderer module, encode entry point, PSO field, and ID-mask shader helpers remain connected.
 
 ## Logic narrative
 
 The layout test mirrors the public ABI shape of the renderer's private Scene3D material payload, verifies the important offsets, then checks the shader declaration. `packed_float3` is required because a normal Metal `float3` can carry 16-byte alignment before the following `float4`, while the Rust payload intentionally uses three packed `f32` padding slots after the `u32` material id.
 
-The bloom test reads the renderer source and checks the intended handoff from `Pass3d::bloom` into `encode_scene3d_bloom()`. This is a narrow regression guard because the defect was a committed wiring mismatch between an exposed payload and a dormant helper.
+The bloom test reads the renderer source and checks the intended handoff from `Pass3d::bloom` into `encode_scene3d_bloom()`. This is a narrow regression guard because the defect was a committed wiring mismatch between an exposed payload and a dormant helper. The ID-mask test reads the renderer and shader source to make sure the public compositor entry point still reaches the renderer-owned shader path after shader-helper compaction.
 
 ## Preconditions and postconditions
 
@@ -56,3 +57,4 @@ assert!(shader.contains("packed_float3 _pad;"));
 
 - 2026-04-30: Added ABI regression coverage for Scene3D material shader padding.
 - 2026-04-30: Added regression coverage for routing `Pass3d::bloom` through the offscreen bloom encoder.
+- 2026-05-13: Kept ID-mask compositor shader-path coverage aligned with the compact shared nearest-city helper.

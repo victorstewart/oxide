@@ -1,7 +1,8 @@
 #[cfg(all(target_os = "macos", feature = "host-testing"))]
 mod harness {
     use oxide_host_macos::{
-        host_harness_reset, host_harness_snapshot, macos_app_frame, macos_app_init,
+        host_harness_reset, host_harness_snapshot, macos_app_frame, macos_app_frame_with_drawable,
+        macos_app_init,
     };
     use oxide_telemetry::TelemetryLifecycleState;
     use oxide_test_scenes::SceneKind;
@@ -31,6 +32,11 @@ mod harness {
             let frame = macos_app_frame(W, H, SCALE);
             assert_eq!(frame, 0, "macos_app_frame should succeed");
         }
+        assert_eq!(
+            macos_app_frame_with_drawable(W, H, SCALE, core::ptr::null_mut()),
+            0,
+            "macos_app_frame_with_drawable should preserve the headless path",
+        );
 
         let after = host_harness_snapshot();
         assert!(after.inited, "app should remain initialised");

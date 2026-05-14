@@ -1,0 +1,292 @@
+use super::*;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CompositorGpuParams {
+    viewport: [f32; 4],
+    mask_size: [f32; 2],
+    mask_scale: f32,
+    darken_background_alpha: f32,
+    mode: u32,
+    glow_enabled: u32,
+    polish_radius_px: f32,
+    fallback_radius_px: f32,
+    city_fill_colors: [[f32; 4]; id_mask_compositor::ID_MASK_MAX_CITY_STYLES],
+    city_edge_colors: [[f32; 4]; id_mask_compositor::ID_MASK_MAX_CITY_STYLES],
+    city_seam_colors: [[f32; 4]; id_mask_compositor::ID_MASK_MAX_CITY_STYLES],
+    neighborhood_colors: [[f32; 4]; id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS],
+}
+
+pub(super) struct RenderTargets {
+    pub(super) width: usize,
+    pub(super) height: usize,
+    pub(super) city: Texture,
+    pub(super) neighborhood: Texture,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct RasterGpuParams {
+    mask_size: [f32; 2],
+    _pad: [f32; 2],
+}
+
+pub(super) fn build_compositor_pso(
+    device: &Device,
+    lib: &Library,
+    fmt: MTLPixelFormat,
+) -> Result<RenderPipelineState, MetalInitError> {
+    let v = pipeline_function(lib, "id_mask_compositor.vertex", "v_id_mask_compositor")?;
+    let f = pipeline_function(lib, "id_mask_compositor.fragment", "f_id_mask_compositor")?;
+    let desc = RenderPipelineDescriptor::new();
+    desc.set_vertex_function(Some(&v));
+    desc.set_fragment_function(Some(&f));
+    desc.set_sample_count(1);
+    let ca = desc.color_attachments().object_at(0).unwrap();
+    ca.set_pixel_format(fmt);
+    configure_source_alpha_blend(ca);
+    pipeline_state(device, "pso.id_mask_compositor.create", &desc)
+}
+
+pub(super) fn build_raster_pso(
+    device: &Device,
+    lib: &Library,
+) -> Result<RenderPipelineState, MetalInitError> {
+    let v = pipeline_function(lib, "id_mask_raster.vertex", "v_id_mask_raster")?;
+    let f = pipeline_function(lib, "id_mask_raster.fragment", "f_id_mask_raster")?;
+    let desc = RenderPipelineDescriptor::new();
+    desc.set_vertex_function(Some(&v));
+    desc.set_fragment_function(Some(&f));
+    desc.set_sample_count(1);
+    for index in 0..2 {
+        let ca = desc.color_attachments().object_at(index).unwrap();
+        ca.set_pixel_format(MTLPixelFormat::R8Uint);
+        ca.set_blending_enabled(false);
+    }
+    pipeline_state(device, "pso.id_mask_raster.create", &desc)
+}
+
+impl MetalRenderer {
+    fn new_r8_mask_render_texture(
+        &self,
+        width: usize,
+        height: usize,
+    ) -> Result<Texture, api::RenderError> {
+        if width == 0 || height == 0 {
+            return Err(api::RenderError::InvalidOperation("id-mask render target has zero size"));
+        }
+        let desc = TextureDescriptor::new();
+        desc.set_pixel_format(MTLPixelFormat::R8Uint);
+        desc.set_texture_type(MTLTextureType::D2);
+        desc.set_width(width as u64);
+        desc.set_height(height as u64);
+        desc.set_storage_mode(MTLStorageMode::Private);
+        desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+        Ok(self.device.new_texture(&desc))
+    }
+
+    fn ensure_id_mask_render_targets(
+        &mut self,
+        slot: usize,
+        width: usize,
+        height: usize,
+    ) -> Result<(Texture, Texture), api::RenderError> {
+        let needs_new = match &self.id_mask_targets[slot] {
+            Some(targets) => targets.width != width || targets.height != height,
+            None => true,
+        };
+        if needs_new {
+            let city = self.new_r8_mask_render_texture(width, height)?;
+            let neighborhood = self.new_r8_mask_render_texture(width, height)?;
+            self.id_mask_targets[slot] = Some(RenderTargets { width, height, city, neighborhood });
+        }
+        let Some(targets) = &self.id_mask_targets[slot] else {
+            return Err(api::RenderError::OutOfMemory);
+        };
+        Ok((targets.city.to_owned(), targets.neighborhood.to_owned()))
+    }
+
+    fn encode_id_mask_compositor_textures(
+        &mut self,
+        viewport: api::RectF,
+        mask_width: usize,
+        mask_height: usize,
+        mask_scale: f32,
+        city_tex: &TextureRef,
+        neighborhood_tex: &TextureRef,
+        city_styles: &[id_mask_compositor::IdMaskCityStyle;
+             id_mask_compositor::ID_MASK_MAX_CITY_STYLES],
+        neighborhood_colors_src: &[[f32; 3]; id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS],
+        mode: id_mask_compositor::IdMaskCompositorMode,
+        glow_enabled: bool,
+        darken_background_alpha: f32,
+        polish: id_mask_compositor::IdMaskPolishConfig,
+    ) -> Result<(), api::RenderError> {
+        let Some(target_tex) = self.target_tex.as_ref().map(Texture::to_owned) else {
+            return Err(api::RenderError::InvalidOperation(
+                "id-mask compositor target texture unavailable",
+            ));
+        };
+
+        let mut city_fill_colors = [[0.0_f32; 4]; id_mask_compositor::ID_MASK_MAX_CITY_STYLES];
+        let mut city_edge_colors = [[0.0_f32; 4]; id_mask_compositor::ID_MASK_MAX_CITY_STYLES];
+        let mut city_seam_colors = [[0.0_f32; 4]; id_mask_compositor::ID_MASK_MAX_CITY_STYLES];
+        for (idx, style) in city_styles.iter().enumerate() {
+            city_fill_colors[idx] = [style.fill_rgb[0], style.fill_rgb[1], style.fill_rgb[2], 1.0];
+            city_edge_colors[idx] = [style.edge_rgb[0], style.edge_rgb[1], style.edge_rgb[2], 1.0];
+            city_seam_colors[idx] = [style.seam_rgb[0], style.seam_rgb[1], style.seam_rgb[2], 1.0];
+        }
+        let mut neighborhood_colors =
+            [[0.0_f32; 4]; id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS];
+        for (idx, rgb) in neighborhood_colors_src.iter().enumerate() {
+            neighborhood_colors[idx] = [rgb[0], rgb[1], rgb[2], 1.0];
+        }
+        let params = CompositorGpuParams {
+            viewport: [viewport.x, viewport.y, viewport.w, viewport.h],
+            mask_size: [mask_width as f32, mask_height as f32],
+            mask_scale: mask_scale.max(1.0),
+            darken_background_alpha: darken_background_alpha.clamp(0.0, 1.0),
+            mode: mode as u32,
+            glow_enabled: glow_enabled as u32,
+            polish_radius_px: polish.smooth_radius_px.max(0.0),
+            fallback_radius_px: polish.fallback_radius_px.max(0.0),
+            city_fill_colors,
+            city_edge_colors,
+            city_seam_colors,
+            neighborhood_colors,
+        };
+
+        let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
+        let cmd = self.ensure_frame_command_buffer(slot);
+        let rpd = RenderPassDescriptor::new();
+        let ca0 = rpd.color_attachments().object_at(0).unwrap();
+        ca0.set_texture(Some(&target_tex));
+        ca0.set_store_action(MTLStoreAction::Store);
+        if self.frame_color_initialized {
+            ca0.set_load_action(MTLLoadAction::Load);
+        } else {
+            ca0.set_load_action(MTLLoadAction::Clear);
+            ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 });
+        }
+
+        let enc = cmd.new_render_command_encoder(&rpd);
+        enc.set_render_pipeline_state(&self.pso_id_mask_compositor);
+        enc.set_vertex_bytes(
+            0,
+            core::mem::size_of_val(&params) as u64,
+            (&params as *const CompositorGpuParams).cast(),
+        );
+        enc.set_fragment_bytes(
+            0,
+            core::mem::size_of_val(&params) as u64,
+            (&params as *const CompositorGpuParams).cast(),
+        );
+        enc.set_fragment_texture(0, Some(city_tex));
+        enc.set_fragment_texture(1, Some(neighborhood_tex));
+        enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
+        enc.end_encoding();
+
+        self.acc_draws = self.acc_draws.saturating_add(1);
+        self.frame_color_initialized = true;
+        if let Some(t0) = self.frame_encode_started_at {
+            self.last_stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        }
+        self.last_stats.draws = self.acc_draws;
+        Ok(())
+    }
+
+    pub fn encode_id_mask_gpu_compositor(
+        &mut self,
+        pass: &id_mask_compositor::IdMaskGpuCompositorPass<'_>,
+    ) -> Result<(), api::RenderError> {
+        if self.sample_count != 1 {
+            return Err(api::RenderError::Unsupported(
+                "id-mask GPU compositor currently requires MetalRenderer sample_count == 1",
+            ));
+        }
+        if self.frame_2d_encoded {
+            return Err(api::RenderError::InvalidOperation(
+                "encode_id_mask_gpu_compositor must run before encode_pass within a frame",
+            ));
+        }
+        if pass.raster.mask_width == 0 || pass.raster.mask_height == 0 {
+            return Err(api::RenderError::InvalidOperation(
+                "id-mask GPU raster has zero dimensions",
+            ));
+        }
+        if !pass.raster.valid_triangle_vertex_count() {
+            return Err(api::RenderError::InvalidOperation(
+                "id-mask GPU raster vertices must be non-empty triangles",
+            ));
+        }
+
+        self.ensure_target();
+        let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
+        let (city_tex, neighborhood_tex) = self.ensure_id_mask_render_targets(
+            slot,
+            pass.raster.mask_width,
+            pass.raster.mask_height,
+        )?;
+        let vertex_bytes = pass
+            .raster
+            .vertices
+            .len()
+            .checked_mul(core::mem::size_of::<id_mask_compositor::IdMaskRasterVertex>())
+            .ok_or(api::RenderError::InvalidOperation("id-mask raster vertex data overflow"))?;
+        self.id_mask_vb.ensure_capacity(&self.device, slot, vertex_bytes);
+        let vertex_buf = self.id_mask_vb.bufs[slot].to_owned();
+        let vertex_ptr = self.id_mask_vb.contents_ptr(slot).as_ptr();
+        if vertex_ptr.is_null() {
+            return Err(api::RenderError::OutOfMemory);
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                pass.raster.vertices.as_ptr() as *const u8,
+                vertex_ptr,
+                vertex_bytes,
+            );
+        }
+        let params = RasterGpuParams {
+            mask_size: [pass.raster.mask_width as f32, pass.raster.mask_height as f32],
+            _pad: [0.0, 0.0],
+        };
+
+        let cmd = self.ensure_frame_command_buffer(slot);
+        let rpd = RenderPassDescriptor::new();
+        let ca0 = rpd.color_attachments().object_at(0).unwrap();
+        ca0.set_texture(Some(&city_tex));
+        ca0.set_load_action(MTLLoadAction::Clear);
+        ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0 });
+        ca0.set_store_action(MTLStoreAction::Store);
+        let ca1 = rpd.color_attachments().object_at(1).unwrap();
+        ca1.set_texture(Some(&neighborhood_tex));
+        ca1.set_load_action(MTLLoadAction::Clear);
+        ca1.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0 });
+        ca1.set_store_action(MTLStoreAction::Store);
+        let enc = cmd.new_render_command_encoder(&rpd);
+        enc.set_render_pipeline_state(&self.pso_id_mask_raster);
+        enc.set_vertex_buffer(0, Some(&vertex_buf), 0);
+        enc.set_vertex_bytes(
+            1,
+            core::mem::size_of_val(&params) as u64,
+            (&params as *const RasterGpuParams).cast(),
+        );
+        enc.draw_primitives(MTLPrimitiveType::Triangle, 0, pass.raster.vertex_count() as u64);
+        enc.end_encoding();
+
+        self.encode_id_mask_compositor_textures(
+            pass.raster.viewport,
+            pass.raster.mask_width,
+            pass.raster.mask_height,
+            pass.raster.mask_scale,
+            &city_tex,
+            &neighborhood_tex,
+            &pass.city_styles,
+            &pass.neighborhood_colors,
+            pass.mode,
+            pass.glow_enabled,
+            pass.darken_background_alpha,
+            pass.polish,
+        )
+    }
+}

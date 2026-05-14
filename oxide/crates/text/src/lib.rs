@@ -386,12 +386,8 @@ where
     let render = Render::new(&[Source::Outline]);
 
     for glyph in glyphs {
-        let key = GlyphKey {
-            font: font_id,
-            gid: glyph.glyph_id,
-            px: px.round() as u16,
-            sdf: use_sdf,
-        };
+        let key =
+            GlyphKey { font: font_id, gid: glyph.glyph_id, px: px.round() as u16, sdf: use_sdf };
         let entry = if let Some(e) = atlas.map.get_mut(&key) {
             e.last_used = atlas.clock.wrapping_add(1);
             atlas.clock = e.last_used;

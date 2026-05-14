@@ -51,12 +51,15 @@ fn scene3d_matrix_helpers_are_column_major_renderer_math() {
 #[test]
 fn id_mask_compositor_is_renderer_owned_shader_path() {
     let renderer_source = include_str!("../src/lib.rs");
+    let id_mask_gpu_source = include_str!("../src/id_mask_gpu.rs");
     let shader_source = include_str!("../shaders/id_mask_compositor.metal");
 
     assert!(renderer_source.contains("pub mod id_mask_compositor;"));
-    assert!(renderer_source.contains("pub fn encode_id_mask_compositor"));
+    assert!(id_mask_gpu_source.contains("pub fn encode_id_mask_gpu_compositor"));
+    assert!(!renderer_source.contains("pub fn encode_id_mask_compositor("));
+    assert!(!renderer_source.contains("upload_r8_mask_texture"));
     assert!(renderer_source.contains("pso_id_mask_compositor"));
     assert!(shader_source.contains("texture2d<uint, access::read> city_tex"));
     assert!(shader_source.contains("nearest_seam_distance"));
-    assert!(shader_source.contains("nearest_city_distance"));
+    assert!(shader_source.contains("nearest_city"));
 }

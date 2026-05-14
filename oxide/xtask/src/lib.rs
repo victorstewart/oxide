@@ -2233,7 +2233,8 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
     )?;
 
     let uikit_current_json = uikit_result_root.join("current.json");
-    let expected_uikit_case_ids = selected_specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
+    let expected_uikit_case_ids =
+        selected_specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
     let uikit_report = if uikit_current_json.is_file() {
         let cached = load_uikit_report(&uikit_current_json)?;
         if uikit_report_matches_case_ids(&cached, &expected_uikit_case_ids) {
@@ -3441,7 +3442,8 @@ fn report_matches_case_ids<'a>(
         return false;
     }
     let actual = actual_case_ids.collect::<BTreeSet<_>>();
-    actual.len() == actual_len && actual == expected_case_ids.iter().copied().collect::<BTreeSet<_>>()
+    actual.len() == actual_len
+        && actual == expected_case_ids.iter().copied().collect::<BTreeSet<_>>()
 }
 
 fn selected_oxide_onscreen_case_specs_for_uikit_specs(
@@ -5053,10 +5055,11 @@ pub fn compare_device_comparisons_pass(
     uikit_comparison: Option<&UIKitPerfComparison>,
     oxide_comparison: Option<&PerfComparison>,
 ) -> bool {
-    uikit_comparison
-        .is_none_or(|comparison| comparison.missing_baseline.is_empty() && comparison.regressions.is_empty())
-        && oxide_comparison
-            .is_none_or(|comparison| comparison.missing_baseline.is_empty() && comparison.regressions.is_empty())
+    uikit_comparison.is_none_or(|comparison| {
+        comparison.missing_baseline.is_empty() && comparison.regressions.is_empty()
+    }) && oxide_comparison.is_none_or(|comparison| {
+        comparison.missing_baseline.is_empty() && comparison.regressions.is_empty()
+    })
 }
 
 fn update_compare_device_proof_status(
@@ -11809,10 +11812,7 @@ fn preferred_oxide_stage_summary(stdout: &str) -> Result<BTreeMap<String, UIKitM
         merged.extend(metrics);
     }
     if merged.is_empty() {
-        bail!(
-            "missing `{}` marker in device console output",
-            OXIDE_STAGE_SUMMARY_PREFIX
-        );
+        bail!("missing `{}` marker in device console output", OXIDE_STAGE_SUMMARY_PREFIX);
     }
     Ok(merged)
 }

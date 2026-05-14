@@ -151,56 +151,58 @@ fn snapshot_with_nested_non_visual_metric(score: f64) -> VisualTreeSnapshot {
 }
 
 fn numeric_encoding_snapshot(root: VisualTreeNode) -> VisualTreeSnapshot {
-   VisualTreeSnapshot {
-      schema: VISUAL_TREE_SCHEMA_VERSION.to_owned(),
-      producer: "test".to_owned(),
-      scene: "mission_control".to_owned(),
-      route: "mission_control::radar".to_owned(),
-      preset: Some("legacy_preview".to_owned()),
-      viewport: VisualTreeViewport {
-         frame: VisualTreeRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 },
-         safe: VisualTreeInsets { left: 0.0, top: 0.0, right: 0.0, bottom: 0.0 },
-         points_scale: 1.0,
-      },
-      root,
-   }
+    VisualTreeSnapshot {
+        schema: VISUAL_TREE_SCHEMA_VERSION.to_owned(),
+        producer: "test".to_owned(),
+        scene: "mission_control".to_owned(),
+        route: "mission_control::radar".to_owned(),
+        preset: Some("legacy_preview".to_owned()),
+        viewport: VisualTreeViewport {
+            frame: VisualTreeRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 },
+            safe: VisualTreeInsets { left: 0.0, top: 0.0, right: 0.0, bottom: 0.0 },
+            points_scale: 1.0,
+        },
+        root,
+    }
 }
 
 fn numeric_encoding_node() -> VisualTreeNode {
-   VisualTreeNode::new("root/card", "BigFaceNode", RectF::new(0.0, 0.0, 10.0, 10.0))
+    VisualTreeNode::new("root/card", "BigFaceNode", RectF::new(0.0, 0.0, 10.0, 10.0))
 }
 
 #[test]
 fn visual_tree_data_compare_accepts_equivalent_numeric_encodings() {
-   let reference = numeric_encoding_snapshot(
-      numeric_encoding_node()
-         .with_data("tunnel_alpha", serde_json::json!(1))
-         .with_data("tunnel_scale", serde_json::json!(0.9706518054008483)),
-   );
-   let candidate = numeric_encoding_snapshot(
-      numeric_encoding_node()
-         .with_data("tunnel_alpha", serde_json::json!(1.0))
-         .with_data("tunnel_scale", serde_json::json!(0.9706518054008484)),
-   );
+    let reference = numeric_encoding_snapshot(
+        numeric_encoding_node()
+            .with_data("tunnel_alpha", serde_json::json!(1))
+            .with_data("tunnel_scale", serde_json::json!(0.9706518054008483)),
+    );
+    let candidate = numeric_encoding_snapshot(
+        numeric_encoding_node()
+            .with_data("tunnel_alpha", serde_json::json!(1.0))
+            .with_data("tunnel_scale", serde_json::json!(0.9706518054008484)),
+    );
 
-   let diff = compare_visual_tree_snapshots(&reference, &candidate, 0.75);
+    let diff = compare_visual_tree_snapshots(&reference, &candidate, 0.75);
 
-   assert!(diff.passed, "{:?}", diff.mismatches);
+    assert!(diff.passed, "{:?}", diff.mismatches);
 }
 
 #[test]
 fn visual_tree_data_compare_rejects_meaningful_numeric_deltas() {
-   let reference =
-      numeric_encoding_snapshot(numeric_encoding_node().with_data("tunnel_alpha", serde_json::json!(0.5)));
-   let candidate =
-      numeric_encoding_snapshot(numeric_encoding_node().with_data("tunnel_alpha", serde_json::json!(0.51)));
+    let reference = numeric_encoding_snapshot(
+        numeric_encoding_node().with_data("tunnel_alpha", serde_json::json!(0.5)),
+    );
+    let candidate = numeric_encoding_snapshot(
+        numeric_encoding_node().with_data("tunnel_alpha", serde_json::json!(0.51)),
+    );
 
-   let diff = compare_visual_tree_snapshots(&reference, &candidate, 0.75);
+    let diff = compare_visual_tree_snapshots(&reference, &candidate, 0.75);
 
-   assert!(!diff.passed);
-   assert_eq!(diff.mismatches.len(), 1);
-   assert_eq!(diff.mismatches[0].field, "data.tunnel_alpha");
-   assert!(diff.mismatches[0].delta.is_some());
+    assert!(!diff.passed);
+    assert_eq!(diff.mismatches.len(), 1);
+    assert_eq!(diff.mismatches[0].field, "data.tunnel_alpha");
+    assert!(diff.mismatches[0].delta.is_some());
 }
 
 #[test]

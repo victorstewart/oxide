@@ -21,6 +21,10 @@
   - Uploads a static indexed 3D mesh into persistent Metal buffers for reuse across frames.
 - `MetalRenderer::encode_scene3d(pass) -> Result<(), RenderError>`
   - Encodes one retained 3D pass into the current frame before `encode_pass`.
+- `MetalRenderer::encode_id_mask_gpu_compositor(pass) -> Result<(), RenderError>`
+  - Rasterizes semantic region/subregion ID triangles into renderer-owned R8 targets before running the compositor shader. Implementation lives in `id_mask_gpu.rs`.
+- `MetalRenderer::encode_neon_markers(pass) -> Result<(), RenderError>`
+  - Encodes bounded neon marker instances over the current color target before `encode_pass`. Implementation lives in `neon_marker_gpu.rs`.
 - `MetalRenderer::encode_pass(list)`
   - Encodes the existing 2D Oxide draw list and reuses the same frame command buffer when a scene3d pass already ran.
 
@@ -46,18 +50,22 @@ Frame-level camera/effect metadata is gathered in one draw-list scan. Camera cov
 
 Scene3D bloom uses the same persistent-object discipline: additive bloom PSOs are created once, bloom textures are reused across frames at a bounded downsample size, and `encode_scene3d()` routes `Pass3d::bloom` through the dedicated blur/composite encoder after the main 3D pass has initialized the target.
 
+ID-mask composition is GPU-owned. Semantic region/subregion triangles are rasterized into private R8 render targets and then sampled by the compositor. The renderer keeps those render targets and the raster vertex upload buffer in the frame ring, so repeated mask composition does not allocate fresh textures and buffers every frame. ID-mask and neon-marker internals are split out of this file into focused renderer modules while keeping the public `MetalRenderer` API unchanged.
+
 ## Preconditions and postconditions
 
 - Preconditions:
   - `MetalRenderer` must be resized before encode work.
   - `encode_scene3d()` currently requires `sample_count == 1`.
   - `encode_scene3d()` must run before `encode_pass()` within a frame.
+  - ID-mask compositor dimensions must be non-zero, and GPU raster input must be a non-empty triangle list.
 - Postconditions:
   - Uploaded `MeshHandle3d` values stay valid until `mesh3d_release()` or renderer drop.
   - A mixed 3D/2D frame reuses one frame command buffer and one color target initialization path.
 
 ## Changelog
 
+- 2026-05-14: Shared scene3d mesh validation, buffer upload, and handle insertion between position-only and colored mesh uploads.
 - 2026-04-23: Added the reusable retained `scene3d` mesh pass with depth buffering and same-frame 2D overlay interop.
 - 2026-04-25: Removed the temporary normalized-index allocation from Solid and GlyphRun Metal uploads.
 - 2026-04-25: Wired scene3d bloom PSO initialization and documented the dedicated bloom composite path.
@@ -67,3 +75,7 @@ Scene3D bloom uses the same persistent-object discipline: additive bloom PSOs ar
 - 2026-04-25: Reused renderer-retained scratch across remaining small batch encode paths and made damage prefiltering borrow geometry backing storage instead of cloning it.
 - 2026-04-26: Generalized in-app Metal GPU timing from camera direct preview to normal renderer frame submissions.
 - 2026-04-30: Routed Scene3D bloom payloads through the offscreen blur/composite encoder and fixed the Scene3D material shader padding ABI.
+- 2026-05-13: Rejected empty ID-mask dimensions and invalid GPU raster input before Metal texture work.
+- 2026-05-13: Reused the shared scene3d matrix multiply and collapsed repeated Metal alpha/additive blend-state setup plus duplicate ID-mask halo scans.
+- 2026-05-13: Removed the legacy CPU ID-mask upload path and pooled GPU ID-mask render targets plus raster vertex uploads in the renderer frame ring.
+- 2026-05-13: Moved ID-mask GPU compositor and neon-marker encode internals into focused modules without changing the public renderer API.

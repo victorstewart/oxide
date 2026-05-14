@@ -28,7 +28,6 @@ void macos_app_on_memory_pressure(uint32_t level);
 
 @interface MetalView : NSView <NSTextInputClient> {
     id<MTLDevice> _device;
-    id<MTLCommandQueue> _queue;
     uint64_t _nextTouchId;
     uint64_t _activeTouchId;
     NSPoint _lastPointer;
@@ -47,7 +46,6 @@ void macos_app_on_memory_pressure(uint32_t level);
         CAMetalLayer *layer = (CAMetalLayer *)self.layer;
         _device = MTLCreateSystemDefaultDevice();
         layer.device = _device;
-        _queue = [_device newCommandQueue];
         layer.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
         layer.framebufferOnly = YES;
         layer.presentsWithTransaction = NO;
@@ -70,16 +68,16 @@ void macos_app_on_memory_pressure(uint32_t level);
     CAMetalLayer *layer = (CAMetalLayer *)self.layer;
     // Late acquire
     id<CAMetalDrawable> drawable = [layer nextDrawable];
-    if (!drawable || !_queue) { return; }
+    if (!drawable) { return; }
     CGSize ds = layer.drawableSize;
     CGFloat scale = layer.contentsScale;
     extern int32_t macos_app_init(uint32_t w, uint32_t h, float scale);
-    extern int32_t macos_app_frame(uint32_t w, uint32_t h, float scale);
-    extern int32_t macos_app_present_to_drawable(void *drawable_ptr, void *texture_ptr);
+    extern int32_t macos_app_frame_with_drawable(uint32_t w, uint32_t h, float scale,
+                                                 void *drawable_ptr);
     static BOOL sInited = NO;
     if (!sInited) { macos_app_init((uint32_t)ds.width, (uint32_t)ds.height, (float)scale); sInited = YES; }
-    macos_app_frame((uint32_t)ds.width, (uint32_t)ds.height, (float)scale);
-    macos_app_present_to_drawable((__bridge void*)drawable, (__bridge void*)drawable.texture);
+    macos_app_frame_with_drawable((uint32_t)ds.width, (uint32_t)ds.height, (float)scale,
+                                  (__bridge void*)drawable);
 }
 
 - (BOOL)acceptsFirstResponder { return YES; }

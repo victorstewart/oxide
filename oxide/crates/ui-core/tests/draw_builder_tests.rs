@@ -104,81 +104,81 @@ fn builder_clear_drops_geometry_buffers() {
 
 #[test]
 fn clip_intersection() {
-   let mut builder = DrawListBuilder::new();
-   builder.clip_push(gfx::RectI::new(0, 0, 100, 100));
-   builder.solid(
-      gfx::VertexSpan { offset: 0, len: 3 },
-      gfx::IndexSpan { offset: 0, len: 3 },
-      gfx::Color::rgba(1.0, 0.0, 0.0, 1.0),
-   );
-   builder.clip_push(gfx::RectI::new(50, 50, 100, 100));
-   builder.solid(
-      gfx::VertexSpan { offset: 0, len: 6 },
-      gfx::IndexSpan { offset: 0, len: 6 },
-      gfx::Color::rgba(0.0, 1.0, 0.0, 1.0),
-   );
-   builder.clip_pop();
-   builder.solid(
-      gfx::VertexSpan { offset: 0, len: 6 },
-      gfx::IndexSpan { offset: 0, len: 6 },
-      gfx::Color::rgba(0.0, 0.0, 1.0, 1.0),
-   );
+    let mut builder = DrawListBuilder::new();
+    builder.clip_push(gfx::RectI::new(0, 0, 100, 100));
+    builder.solid(
+        gfx::VertexSpan { offset: 0, len: 3 },
+        gfx::IndexSpan { offset: 0, len: 3 },
+        gfx::Color::rgba(1.0, 0.0, 0.0, 1.0),
+    );
+    builder.clip_push(gfx::RectI::new(50, 50, 100, 100));
+    builder.solid(
+        gfx::VertexSpan { offset: 0, len: 6 },
+        gfx::IndexSpan { offset: 0, len: 6 },
+        gfx::Color::rgba(0.0, 1.0, 0.0, 1.0),
+    );
+    builder.clip_pop();
+    builder.solid(
+        gfx::VertexSpan { offset: 0, len: 6 },
+        gfx::IndexSpan { offset: 0, len: 6 },
+        gfx::Color::rgba(0.0, 0.0, 1.0, 1.0),
+    );
 
-   let prepared = prepare_draws(&builder.into_inner());
-   assert_eq!(prepared.len(), 3);
-   let c0 = prepared[0].clip.expect("outer clip");
-   assert_eq!((c0.x, c0.y, c0.w, c0.h), (0, 0, 100, 100));
-   let c1 = prepared[1].clip.expect("intersected clip");
-   assert_eq!((c1.x, c1.y, c1.w, c1.h), (50, 50, 50, 50));
-   let c2 = prepared[2].clip.expect("restored clip");
-   assert_eq!((c2.x, c2.y, c2.w, c2.h), (0, 0, 100, 100));
+    let prepared = prepare_draws(&builder.into_inner());
+    assert_eq!(prepared.len(), 3);
+    let c0 = prepared[0].clip.expect("outer clip");
+    assert_eq!((c0.x, c0.y, c0.w, c0.h), (0, 0, 100, 100));
+    let c1 = prepared[1].clip.expect("intersected clip");
+    assert_eq!((c1.x, c1.y, c1.w, c1.h), (50, 50, 50, 50));
+    let c2 = prepared[2].clip.expect("restored clip");
+    assert_eq!((c2.x, c2.y, c2.w, c2.h), (0, 0, 100, 100));
 }
 
 #[test]
 fn stable_sort_batches() {
-   let img1 = gfx::ImageHandle(1);
-   let img2 = gfx::ImageHandle(2);
-   let draws = vec![
-      PreparedDraw {
-         cmd: gfx::DrawCmd::Image {
-            tex: img2,
-            dst: gfx::RectF::new(0.0, 0.0, 1.0, 1.0),
-            src: gfx::RectF::new(0.0, 0.0, 1.0, 1.0),
-            alpha: 1.0,
-         },
-         clip: None,
-      },
-      PreparedDraw {
-         cmd: gfx::DrawCmd::Solid {
-            vb: gfx::VertexSpan { offset: 0, len: 3 },
-            ib: gfx::IndexSpan { offset: 0, len: 3 },
-            color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
-         },
-         clip: Some(gfx::RectI::new(0, 0, 10, 10)),
-      },
-      PreparedDraw {
-         cmd: gfx::DrawCmd::Image {
-            tex: img1,
-            dst: gfx::RectF::new(0.0, 0.0, 1.0, 1.0),
-            src: gfx::RectF::new(0.0, 0.0, 1.0, 1.0),
-            alpha: 1.0,
-         },
-         clip: None,
-      },
-   ];
+    let img1 = gfx::ImageHandle(1);
+    let img2 = gfx::ImageHandle(2);
+    let draws = vec![
+        PreparedDraw {
+            cmd: gfx::DrawCmd::Image {
+                tex: img2,
+                dst: gfx::RectF::new(0.0, 0.0, 1.0, 1.0),
+                src: gfx::RectF::new(0.0, 0.0, 1.0, 1.0),
+                alpha: 1.0,
+            },
+            clip: None,
+        },
+        PreparedDraw {
+            cmd: gfx::DrawCmd::Solid {
+                vb: gfx::VertexSpan { offset: 0, len: 3 },
+                ib: gfx::IndexSpan { offset: 0, len: 3 },
+                color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
+            },
+            clip: Some(gfx::RectI::new(0, 0, 10, 10)),
+        },
+        PreparedDraw {
+            cmd: gfx::DrawCmd::Image {
+                tex: img1,
+                dst: gfx::RectF::new(0.0, 0.0, 1.0, 1.0),
+                src: gfx::RectF::new(0.0, 0.0, 1.0, 1.0),
+                alpha: 1.0,
+            },
+            clip: None,
+        },
+    ];
 
-   let sorted = sort_for_batching(draws);
+    let sorted = sort_for_batching(draws);
 
-   match sorted[0].cmd {
-      gfx::DrawCmd::Solid { .. } => {}
-      _ => panic!("expected solid first"),
-   }
-   match sorted[1].cmd {
-      gfx::DrawCmd::Image { tex, .. } => assert_eq!(tex.0, 1),
-      _ => panic!("expected image"),
-   }
-   match sorted[2].cmd {
-      gfx::DrawCmd::Image { tex, .. } => assert_eq!(tex.0, 2),
-      _ => panic!("expected image"),
-   }
+    match sorted[0].cmd {
+        gfx::DrawCmd::Solid { .. } => {}
+        _ => panic!("expected solid first"),
+    }
+    match sorted[1].cmd {
+        gfx::DrawCmd::Image { tex, .. } => assert_eq!(tex.0, 1),
+        _ => panic!("expected image"),
+    }
+    match sorted[2].cmd {
+        gfx::DrawCmd::Image { tex, .. } => assert_eq!(tex.0, 2),
+        _ => panic!("expected image"),
+    }
 }

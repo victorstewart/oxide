@@ -1,5 +1,5 @@
-use oxide_renderer_api as gfx;
 use oxide_platform_api as api;
+use oxide_renderer_api as gfx;
 use oxide_test_scenes::{Router, SceneKind};
 use oxide_ui_core::DrawListBuilder;
 
@@ -49,61 +49,61 @@ fn headline_animation_onscreen_benchmarks_prepare_and_step() {
 }
 
 fn touch(id: u64, phase: api::TouchPhase, x: f32, y: f32) -> api::TouchEvent {
-   api::TouchEvent {
-      id: api::TouchId(id),
-      phase,
-      x,
-      y,
-      pressure: None,
-      tilt: None,
-      device: api::PointerDevice::Finger,
-   }
+    api::TouchEvent {
+        id: api::TouchId(id),
+        phase,
+        x,
+        y,
+        pressure: None,
+        tilt: None,
+        device: api::PointerDevice::Finger,
+    }
 }
 
 fn image_rect(router: &mut Router<NullUploader>) -> gfx::RectF {
-   let mut builder = DrawListBuilder::new();
-   router.draw(gfx::RectF::new(0.0, 0.0, 390.0, 844.0), 1.0, &mut builder);
-   builder
-      .drawlist()
-      .items
-      .iter()
-      .find_map(|cmd| match cmd {
-         gfx::DrawCmd::NineSlice { rect, .. } => Some(*rect),
-         _ => None,
-      })
-      .expect("zoom image draw command")
+    let mut builder = DrawListBuilder::new();
+    router.draw(gfx::RectF::new(0.0, 0.0, 390.0, 844.0), 1.0, &mut builder);
+    builder
+        .drawlist()
+        .items
+        .iter()
+        .find_map(|cmd| match cmd {
+            gfx::DrawCmd::NineSlice { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("zoom image draw command")
 }
 
 #[test]
 fn raw_touch_pinch_reaches_zoom_image_scene() {
-   let mut router = Router::new(NullUploader);
-   assert!(router.prepare_onscreen_benchmark("component_image_view_encode"));
-   router.set_zoom_image(gfx::ImageHandle(7), 100, 100);
+    let mut router = Router::new(NullUploader);
+    assert!(router.prepare_onscreen_benchmark("component_image_view_encode"));
+    router.set_zoom_image(gfx::ImageHandle(7), 100, 100);
 
-   let before = image_rect(&mut router);
-   router.input_touch(&touch(1, api::TouchPhase::Start, 180.0, 400.0));
-   router.input_touch(&touch(2, api::TouchPhase::Start, 220.0, 400.0));
-   router.input_touch(&touch(2, api::TouchPhase::Move, 260.0, 400.0));
-   let after = image_rect(&mut router);
+    let before = image_rect(&mut router);
+    router.input_touch(&touch(1, api::TouchPhase::Start, 180.0, 400.0));
+    router.input_touch(&touch(2, api::TouchPhase::Start, 220.0, 400.0));
+    router.input_touch(&touch(2, api::TouchPhase::Move, 260.0, 400.0));
+    let after = image_rect(&mut router);
 
-   assert!(
-      after.w > before.w * 1.5,
-      "pinch should increase zoom width: before={before:?} after={after:?}"
-   );
+    assert!(
+        after.w > before.w * 1.5,
+        "pinch should increase zoom width: before={before:?} after={after:?}"
+    );
 }
 
 #[test]
 fn raw_touch_pinch_does_not_apply_two_touch_pan_to_zoom_image_scene() {
-   let mut router = Router::new(NullUploader);
-   assert!(router.prepare_onscreen_benchmark("component_image_view_encode"));
-   router.set_zoom_image(gfx::ImageHandle(7), 100, 100);
+    let mut router = Router::new(NullUploader);
+    assert!(router.prepare_onscreen_benchmark("component_image_view_encode"));
+    router.set_zoom_image(gfx::ImageHandle(7), 100, 100);
 
-   router.input_touch(&touch(1, api::TouchPhase::Start, 180.0, 400.0));
-   router.input_touch(&touch(2, api::TouchPhase::Start, 220.0, 400.0));
-   router.input_touch(&touch(2, api::TouchPhase::Move, 260.0, 400.0));
-   let after = image_rect(&mut router);
+    router.input_touch(&touch(1, api::TouchPhase::Start, 180.0, 400.0));
+    router.input_touch(&touch(2, api::TouchPhase::Start, 220.0, 400.0));
+    router.input_touch(&touch(2, api::TouchPhase::Move, 260.0, 400.0));
+    let after = image_rect(&mut router);
 
-   assert!(
+    assert!(
       (after.x + 115.0).abs() < 0.001,
       "pinch should scale around the image layout without applying two-touch pan: after={after:?}"
    );
@@ -111,17 +111,17 @@ fn raw_touch_pinch_does_not_apply_two_touch_pan_to_zoom_image_scene() {
 
 #[test]
 fn raw_touch_pan_reaches_zoom_image_scene() {
-   let mut router = Router::new(NullUploader);
-   assert!(router.prepare_onscreen_benchmark("component_image_view_encode"));
-   router.set_zoom_image(gfx::ImageHandle(7), 100, 100);
+    let mut router = Router::new(NullUploader);
+    assert!(router.prepare_onscreen_benchmark("component_image_view_encode"));
+    router.set_zoom_image(gfx::ImageHandle(7), 100, 100);
 
-   let before = image_rect(&mut router);
-   router.input_touch(&touch(1, api::TouchPhase::Start, 180.0, 400.0));
-   router.input_touch(&touch(1, api::TouchPhase::Move, 210.0, 416.0));
-   let after = image_rect(&mut router);
+    let before = image_rect(&mut router);
+    router.input_touch(&touch(1, api::TouchPhase::Start, 180.0, 400.0));
+    router.input_touch(&touch(1, api::TouchPhase::Move, 210.0, 416.0));
+    let after = image_rect(&mut router);
 
-   assert!(
-      after.x > before.x + 20.0 && after.y > before.y + 10.0,
-      "pan should move zoom image rect: before={before:?} after={after:?}"
-   );
+    assert!(
+        after.x > before.x + 20.0 && after.y > before.y + 10.0,
+        "pan should move zoom image rect: before={before:?} after={after:?}"
+    );
 }

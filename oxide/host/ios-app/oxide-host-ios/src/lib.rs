@@ -2759,11 +2759,8 @@ extern "C" fn touch_cb(
             touch_log(&format!("rust callback touch dropped invalid phase={phase} id={id}"));
             return;
         };
-        let pressure = if has_pressure != 0 && pressure.is_finite() {
-            Some(pressure)
-        } else {
-            None
-        };
+        let pressure =
+            if has_pressure != 0 && pressure.is_finite() { Some(pressure) } else { None };
         let tilt = if has_tilt != 0 && tilt_alt.is_finite() && tilt_azi.is_finite() {
             Some((tilt_alt, tilt_azi))
         } else {

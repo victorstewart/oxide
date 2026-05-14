@@ -59,44 +59,39 @@ where
     pub fn new() -> Self {
         #[cfg(target_arch = "wasm32")]
         {
-            return Self {
-                pending: None,
-                next_seq: 1,
-                last_requested: 0,
-                last_applied: 0,
-            };
+            return Self { pending: None, next_seq: 1, last_requested: 0, last_applied: 0 };
         }
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-        let (cmd_tx, cmd_rx) = mpsc::channel::<Command<T>>();
-        let (res_tx, res_rx) = mpsc::channel::<TaskResult<T>>();
-        let worker = thread::Builder::new()
-            .name(String::from("oxide-layout-worker"))
-            .spawn(move || {
-                while let Ok(cmd) = cmd_rx.recv() {
-                    match cmd {
-                        Command::Compute(task) => {
-                            let Task { seq, job } = task;
-                            let value = job();
-                            if res_tx.send(TaskResult { seq, value }).is_err() {
-                                break;
+            let (cmd_tx, cmd_rx) = mpsc::channel::<Command<T>>();
+            let (res_tx, res_rx) = mpsc::channel::<TaskResult<T>>();
+            let worker = thread::Builder::new()
+                .name(String::from("oxide-layout-worker"))
+                .spawn(move || {
+                    while let Ok(cmd) = cmd_rx.recv() {
+                        match cmd {
+                            Command::Compute(task) => {
+                                let Task { seq, job } = task;
+                                let value = job();
+                                if res_tx.send(TaskResult { seq, value }).is_err() {
+                                    break;
+                                }
                             }
+                            Command::Shutdown => break,
                         }
-                        Command::Shutdown => break,
                     }
-                }
-            })
-            .expect("spawn layout worker");
+                })
+                .expect("spawn layout worker");
 
-        Self {
-            tx: cmd_tx,
-            rx: res_rx,
-            worker: Some(worker),
-            next_seq: 1,
-            last_requested: 0,
-            last_applied: 0,
-        }
+            Self {
+                tx: cmd_tx,
+                rx: res_rx,
+                worker: Some(worker),
+                next_seq: 1,
+                last_requested: 0,
+                last_applied: 0,
+            }
         }
     }
 
@@ -115,8 +110,8 @@ where
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-        let task = Task { seq, job: Box::new(job) };
-        let _ = self.tx.send(Command::Compute(task));
+            let task = Task { seq, job: Box::new(job) };
+            let _ = self.tx.send(Command::Compute(task));
         }
         seq
     }
@@ -135,21 +130,21 @@ where
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-        let mut latest: Option<TaskResult<T>> = None;
-        while let Ok(res) = self.rx.try_recv() {
-            if latest.as_ref().map_or(true, |cur| res.seq >= cur.seq) {
-                latest = Some(res);
+            let mut latest: Option<TaskResult<T>> = None;
+            while let Ok(res) = self.rx.try_recv() {
+                if latest.as_ref().map_or(true, |cur| res.seq >= cur.seq) {
+                    latest = Some(res);
+                }
             }
-        }
-        if let Some(res) = latest {
-            if res.seq <= self.last_applied {
-                return None;
+            if let Some(res) = latest {
+                if res.seq <= self.last_applied {
+                    return None;
+                }
+                self.last_applied = res.seq;
+                Some((res.seq, res.value))
+            } else {
+                None
             }
-            self.last_applied = res.seq;
-            Some((res.seq, res.value))
-        } else {
-            None
-        }
         }
     }
 
@@ -164,13 +159,13 @@ where
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-        if self.worker.is_none() {
-            return;
-        }
-        let _ = self.tx.send(Command::Shutdown);
-        if let Some(handle) = self.worker.take() {
-            let _ = handle.join();
-        }
+            if self.worker.is_none() {
+                return;
+            }
+            let _ = self.tx.send(Command::Shutdown);
+            if let Some(handle) = self.worker.take() {
+                let _ = handle.join();
+            }
         }
     }
 }

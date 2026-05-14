@@ -114,7 +114,8 @@ fn media_library_permission_status_refreshes_on_explicit_status_call() {
         "static uint32_t oxide_media_library_permission_status(void) {",
     );
     assert!(
-        refresh_body.contains("cache_media_library_permission_status(current_photo_authorization())"),
+        refresh_body
+            .contains("cache_media_library_permission_status(current_photo_authorization())"),
         "explicit status refresh must query PHPhotoLibrary through current_photo_authorization"
     );
 }

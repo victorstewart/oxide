@@ -8,7 +8,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 use oxide_renderer_api as gfx;
 use oxide_ui_core::{
-    elements::{encode_label_text, Align, Button, ButtonState, ButtonStyle, ImageUploader, Label, TextCtx},
+    elements::{
+        encode_label_text, Align, Button, ButtonState, ButtonStyle, ImageUploader, Label, TextCtx,
+    },
     orchestration::{ScatterOrchestrator, ScatterState, Scatterer},
     overlay::{OverlayBehavior, OverlayHandle, OverlayPointerResult, OverlayStack, OverlayVisual},
     DrawListBuilder, NodeId, NodeStyle, UiSurface,
