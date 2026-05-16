@@ -207,6 +207,10 @@ impl OrchestrationScene {
         }
     }
 
+    pub fn wants_next_frame(&self) -> bool {
+        self.animation_active || self.orchestrators[self.active_orchestrator].0.is_animating()
+    }
+
     pub fn input_pointer(&mut self, x: f32, y: f32, _dx: f32, _dy: f32, buttons: u32) {
         // Check overlay stack first
         if !self.overlay_stack.is_empty() {

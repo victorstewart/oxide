@@ -77,6 +77,7 @@ pub async fn build_renderer() -> Result<oxide_renderer_web::BrowserRenderer, oxi
 
 ## Changelog
 
+- Compacted WebGPU render-target, depth-target, and ID-mask texture creation through one 2D texture descriptor helper.
 - Compacted row-strided image copying and Canvas2D fallback camera/backdrop helper branches without changing the public WebGPU startup contract.
 - Added browser pixel verification and persisted Canvas2D wasm baseline coverage through `oxide-host-web`.
 - Hard-cut production browser rendering to WebGPU only; unsupported browsers now fail construction instead of drawing through Canvas2D.

@@ -220,6 +220,7 @@ extern "C" {
     // Camera (NV12 → Metal) controls
     fn oxide_cam_start_default() -> ::libc::c_int;
     fn oxide_cam_start_default_preview_only() -> ::libc::c_int;
+    fn oxide_cam_start_native_preview_layer() -> ::libc::c_int;
     fn oxide_cam_stop();
     fn oxide_cam_set_fps(fps: i32) -> i32;
     fn oxide_cam_set_resolution_height(h: i32) -> i32;
@@ -1292,6 +1293,7 @@ struct CamState {
     subs: Mutex<alloc::vec::Vec<CameraSubscriber>>,
     next_id: AtomicU64,
     settings: Mutex<CameraSettings>,
+    native_previews: AtomicU64,
     callback_once: std::sync::Once,
     record_once: std::sync::Once,
     photo_once: std::sync::Once,
@@ -1306,6 +1308,7 @@ impl CamState {
             subs: Mutex::new(alloc::vec::Vec::new()),
             next_id: AtomicU64::new(1),
             settings: Mutex::new(CameraSettings::default()),
+            native_previews: AtomicU64::new(0),
             callback_once: std::sync::Once::new(),
             record_once: std::sync::Once::new(),
             photo_once: std::sync::Once::new(),
@@ -1423,6 +1426,10 @@ struct IosCameraStream {
     id: u64,
 }
 
+struct IosNativePreviewStream {
+    active: AtomicBool,
+}
+
 struct IosCameraRecording {
     active: AtomicBool,
 }
@@ -1434,6 +1441,24 @@ impl CameraStream for IosCameraStream {
 }
 
 impl Drop for IosCameraStream {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+impl CameraStream for IosNativePreviewStream {
+    fn stop(&self) {
+        if !self.active.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        let previous = CAM_STATE.native_previews.fetch_sub(1, Ordering::SeqCst);
+        if previous <= 1 && CAM_STATE.subs.lock().unwrap().is_empty() {
+            IOS_CAMERA_MANAGER.stop_capture();
+        }
+    }
+}
+
+impl Drop for IosNativePreviewStream {
     fn drop(&mut self) {
         self.stop();
     }
@@ -1480,6 +1505,17 @@ impl IosCameraManager {
         Ok(())
     }
 
+    fn start_native_preview_capture(&self) -> Result<(), PlatformError> {
+        let rc = unsafe { oxide_cam_start_native_preview_layer() };
+        if rc != 0 {
+            return Err(PlatformError::Unsupported("native camera preview start failed"));
+        }
+        unsafe {
+            let _ = oxide_host_set_camera_running(1);
+        }
+        Ok(())
+    }
+
     fn stop_capture(&self) {
         unsafe {
             oxide_cam_stop();
@@ -1510,7 +1546,12 @@ fn remove_camera_subscriber(id: u64) {
     let should_stop = subs.is_empty();
     drop(subs);
     if should_stop {
-        IOS_CAMERA_MANAGER.stop_capture();
+        if CAM_STATE.native_previews.load(Ordering::SeqCst) > 0 {
+            IOS_CAMERA_MANAGER.stop_capture();
+            let _ = IOS_CAMERA_MANAGER.start_native_preview_capture();
+        } else {
+            IOS_CAMERA_MANAGER.stop_capture();
+        }
     }
 }
 
@@ -1529,12 +1570,30 @@ impl CameraManager for IosCameraManager {
         subs.push(CameraSubscriber { id, frame_cb: on_frame, audio_cb: on_audio });
         drop(subs);
         if is_first {
+            if CAM_STATE.native_previews.load(Ordering::SeqCst) > 0 {
+                self.stop_capture();
+            }
             if let Err(e) = self.start_capture() {
                 remove_camera_subscriber(id);
                 return Err(e);
             }
         }
         Ok(Box::new(IosCameraStream { id }))
+    }
+
+    fn start_native_preview(
+        &self,
+        cfg: CameraConfig,
+    ) -> Result<alloc::boxed::Box<dyn CameraStream + Send>, PlatformError> {
+        CAM_STATE.apply_settings(cfg);
+        let previous = CAM_STATE.native_previews.fetch_add(1, Ordering::SeqCst);
+        if previous == 0 && CAM_STATE.subs.lock().unwrap().is_empty() {
+            if let Err(err) = self.start_native_preview_capture() {
+                CAM_STATE.native_previews.fetch_sub(1, Ordering::SeqCst);
+                return Err(err);
+            }
+        }
+        Ok(Box::new(IosNativePreviewStream { active: AtomicBool::new(true) }))
     }
 
     fn start_recording(

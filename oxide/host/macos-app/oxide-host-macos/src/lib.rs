@@ -64,6 +64,7 @@ impl ui::elements::ImageUploader for MtlUploader {
 struct AppState {
     renderer: Option<Box<metal::MetalRenderer>>,
     router: Option<test_scenes::Router<MtlUploader>>,
+    builder: ui::DrawListBuilder,
     last_ms: u64,
     inited: bool,
     space_down: bool,
@@ -72,6 +73,10 @@ struct AppState {
     idle_disabled: bool,
     telemetry: Option<Arc<TelemetryHub>>,
     telemetry_ops: Option<Arc<TelemetryOperations>>,
+    frame_dirty: bool,
+    settle_frames_remaining: u8,
+    idle_skipped_frames: u64,
+    submitted_frames: u64,
 }
 
 static APP: OnceLock<Mutex<AppState>> = OnceLock::new();
@@ -82,6 +87,13 @@ fn app_state() -> &'static Mutex<AppState> {
 
 fn with_app_mut<R>(f: impl FnOnce(&mut AppState) -> R) -> Option<R> {
     APP.get().and_then(|mtx| mtx.lock().ok()).map(|mut guard| f(&mut guard))
+}
+
+const IDLE_SETTLE_FRAMES: u8 = 2;
+
+fn mark_frame_dirty(app: &mut AppState) {
+    app.frame_dirty = true;
+    app.settle_frames_remaining = IDLE_SETTLE_FRAMES;
 }
 
 #[no_mangle]
@@ -95,11 +107,13 @@ pub extern "C" fn macos_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_int {
         Err(_) => return -1,
     };
     let _ = renderer.resize(w, h, scale);
+    renderer.set_damage_options(true, 0.70, 0.25);
     // Store renderer in a Box so its address remains stable for the uploader.
     let mut boxed = Box::new(renderer);
     let ptr: *mut metal::MetalRenderer = &mut *boxed;
     let uploader = MtlUploader { renderer: ptr };
     let mut router = test_scenes::Router::new(uploader);
+    router.damage_set_options(true, 0.70, 0.25);
     let telemetry = Arc::new(TelemetryHub::new());
     router.telemetry_bind(&telemetry);
     app.renderer = Some(boxed);
@@ -127,6 +141,8 @@ pub extern "C" fn macos_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_int {
     app.high_refresh_on = true;
     app.reduce_motion_on = false;
     app.idle_disabled = true;
+    app.builder.clear();
+    mark_frame_dirty(&mut app);
     unsafe {
         macos_set_idle_timer_disabled(1);
     }
@@ -190,6 +206,11 @@ pub fn host_harness_reset() {
     app.reduce_motion_on = false;
     app.idle_disabled = false;
     app.last_ms = 0;
+    app.builder.clear();
+    app.frame_dirty = true;
+    app.settle_frames_remaining = IDLE_SETTLE_FRAMES;
+    app.idle_skipped_frames = 0;
+    app.submitted_frames = 0;
     unsafe {
         macos_set_idle_timer_disabled(0);
     }
@@ -247,6 +268,21 @@ pub extern "C" fn macos_app_frame(w: u32, h: u32, scale: f32) -> ::libc::c_int {
 }
 
 #[no_mangle]
+pub extern "C" fn macos_app_should_render() -> u8 {
+    let mut app = app_state().lock().expect("app mutex");
+    if !app.inited {
+        return 1;
+    }
+    let router_wants_frame =
+        app.router.as_ref().map_or(false, test_scenes::Router::wants_next_frame);
+    if app.frame_dirty || app.settle_frames_remaining > 0 || router_wants_frame {
+        return 1;
+    }
+    app.idle_skipped_frames = app.idle_skipped_frames.saturating_add(1);
+    0
+}
+
+#[no_mangle]
 pub extern "C" fn macos_app_frame_with_drawable(
     w: u32,
     h: u32,
@@ -278,15 +314,15 @@ fn macos_app_frame_inner(
         };
         let _ = renderer.resize(w, h, scale);
         if !drawable_ptr.is_null() {
-            let present_result =
-                unsafe { renderer.prepare_present_drawable(drawable_ptr.cast()) };
+            let present_result = unsafe { renderer.prepare_present_drawable(drawable_ptr.cast()) };
             if present_result.is_err() {
                 return -5;
             }
         }
     }
     // Build draws via router
-    let mut builder = ui::DrawListBuilder::new();
+    let mut builder = core::mem::take(&mut app.builder);
+    builder.clear();
     let vp =
         gfx_api::RectF::new(0.0, 0.0, (w as f32) / scale.max(1.0), (h as f32) / scale.max(1.0));
     // Compute draws and collect damage rects from the router
@@ -294,6 +330,7 @@ fn macos_app_frame_inner(
         let router = match app.router.as_mut() {
             Some(r) => r,
             None => {
+                app.builder = builder;
                 if !drawable_ptr.is_null() {
                     if let Some(renderer) = app.renderer.as_mut().map(|b| b.as_mut()) {
                         let _ = renderer.cancel_present_drawable();
@@ -307,10 +344,10 @@ fn macos_app_frame_inner(
         router.take_damage()
     };
     // Encode and submit with a fresh renderer borrow
-    {
-        let renderer = match app.renderer.as_mut().map(|b| b.as_mut()) {
-            Some(r) => r,
-            None => return -2,
+    let submit_result = {
+        let Some(renderer) = app.renderer.as_mut().map(|b| b.as_mut()) else {
+            app.builder = builder;
+            return -2;
         };
         // Build Damage object (dp units); renderer will ignore it if the flag is disabled
         let damage_obj = gfx_api::Damage { rects: damage_rects };
@@ -325,10 +362,21 @@ fn macos_app_frame_inner(
             if !drawable_ptr.is_null() {
                 let _ = renderer.cancel_present_drawable();
             }
-            return -4;
+            Err(-4)
+        } else {
+            Ok(())
         }
-        // Per-frame perf stats remain available through renderer.last_stats().
+    };
+    if let Err(code) = submit_result {
+        app.builder = builder;
+        return code;
     }
+    app.builder = builder;
+    app.submitted_frames = app.submitted_frames.saturating_add(1);
+    if app.settle_frames_remaining > 0 {
+        app.settle_frames_remaining -= 1;
+    }
+    app.frame_dirty = false;
     process_telemetry_commands(&mut app);
     0
 }
@@ -426,6 +474,7 @@ extern "C" fn pointer_cb(x: f32, y: f32, dx: f32, dy: f32, _buttons: u32, _mods:
         if let Some(router) = app.router.as_mut() {
             router.input_pointer(x, y, dx, dy, _buttons);
         }
+        mark_frame_dirty(&mut app);
     }
 }
 
@@ -434,6 +483,7 @@ extern "C" fn pinch_cb(cx: f32, cy: f32, delta: f32, _ts: u64) {
         if let Some(router) = app.router.as_mut() {
             router.input_pinch(cx, cy, delta);
         }
+        mark_frame_dirty(&mut app);
     }
 }
 
@@ -635,6 +685,7 @@ extern "C" fn key_cb(
             }
             _ => {}
         }
+        mark_frame_dirty(&mut app);
     }
 }
 

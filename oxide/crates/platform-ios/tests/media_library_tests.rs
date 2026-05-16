@@ -159,3 +159,17 @@ fn nametag_bootstrap_permission_sync_skips_media_library() {
         "nametag bootstrap permission sync must not probe Photos at launch"
     );
 }
+
+#[test]
+fn nametag_bootstrap_permission_sync_skips_bluetooth() {
+    let source = host_services_source();
+    let publish_body = source_between(
+        &source,
+        "void nametag_ios_publish_permissions(void) {",
+        "void nametag_ios_request_permission(int32_t domain) {",
+    );
+    assert!(
+        !publish_body.contains("kNametagPermissionDomainBluetooth"),
+        "nametag bootstrap permission sync must not probe Bluetooth at launch"
+    );
+}

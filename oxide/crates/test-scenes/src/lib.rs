@@ -284,6 +284,31 @@ impl<U: elements::ImageUploader> Router<U> {
         }
     }
 
+    pub fn wants_next_frame(&self) -> bool {
+        if self.force_full_damage_next_frame {
+            return true;
+        }
+        match self.current {
+            SceneKind::Controls => true,
+            SceneKind::TextLayout => false,
+            SceneKind::ZoomImage => false,
+            SceneKind::AnimTimeline => self.anim_timeline.wants_next_frame(),
+            SceneKind::CollectionStress => false,
+            SceneKind::DamageLab => self.damage_lab.enabled,
+            SceneKind::InputLab => self.input_lab.wants_next_frame(),
+            SceneKind::NineSlice => false,
+            SceneKind::SdfText => false,
+            SceneKind::Snapshot => false,
+            SceneKind::Camera => true,
+            SceneKind::ElementsExtended => true,
+            SceneKind::AnimationConfig => true,
+            SceneKind::Orchestration => self.orchestration.wants_next_frame(),
+            SceneKind::Permissions => true,
+            SceneKind::Integration => true,
+            SceneKind::StressTest => true,
+        }
+    }
+
     // ===== Hotkey helpers =====
     pub fn key_scene_select(&mut self, idx0: usize) {
         self.set_scene(idx0);
@@ -482,6 +507,11 @@ impl<U: elements::ImageUploader> Router<U> {
         let prepared = match benchmark {
             "button_press_response"
             | "spinner_spin"
+            | "component_progress_bar_encode"
+            | "component_spinner_encode"
+            | "component_button_encode"
+            | "component_toggle_encode"
+            | "component_slider_encode"
             | "animation_button_press_scale"
             | "animation_toggle_thumb_spring"
             | "animation_slider_thumb_move" => {
@@ -492,15 +522,6 @@ impl<U: elements::ImageUploader> Router<U> {
             "component_label_encode" => {
                 self.set_scene(SceneKind::TextLayout as usize);
                 self.text_layout = TextLayout::default();
-                true
-            }
-            "component_progress_bar_encode"
-            | "component_spinner_encode"
-            | "component_button_encode"
-            | "component_toggle_encode"
-            | "component_slider_encode" => {
-                self.set_scene(SceneKind::Controls as usize);
-                self.controls = Controls::default();
                 true
             }
             "component_image_view_encode" | "image_zoom_pan" | "zoom_image_gesture_cycle" => {
@@ -1440,6 +1461,10 @@ impl AnimTimeline {
     pub fn playing(&self) -> bool {
         self.playing
     }
+
+    pub fn wants_next_frame(&self) -> bool {
+        self.playing || self.animator.active_count() > 0
+    }
 }
 
 // ---- Camera demo ----
@@ -1797,6 +1822,13 @@ impl InputLab {
         }
         let now = timing::now_ms();
         self.anim_overrides = self.animator.step(now);
+    }
+
+    pub fn wants_next_frame(&self) -> bool {
+        self.username_input.focused()
+            || self.password_input.focused()
+            || self.overlay.is_visible()
+            || self.animator.active_count() > 0
     }
 
     pub fn pointer_event(&mut self, x: f32, y: f32, dy: f32, buttons: u32) {

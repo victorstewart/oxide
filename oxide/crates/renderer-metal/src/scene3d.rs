@@ -260,6 +260,10 @@ pub struct Bloom3d<'a> {
 /// One 3D pass encoded into the current frame before 2D content.
 #[derive(Clone, Copy, Debug)]
 pub struct Pass3d<'a> {
+    /// Optional target rect in device-independent pixels. When set, Metal maps
+    /// clip space into this rect and clips rasterization there, which lets app
+    /// UIs embed shared 3D renderers as ordinary draw-list surfaces.
+    pub viewport: Option<api::RectF>,
     pub clear_color: Option<api::Color>,
     pub clear_depth: bool,
     pub view_proj: Mat4,

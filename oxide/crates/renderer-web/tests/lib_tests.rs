@@ -53,14 +53,9 @@ fn wasm_public_exports_are_webgpu_only() {
 #[test]
 fn wasm_webgpu_submits_directly_to_surface_without_backdrop_effects() {
     let source = include_str!("../src/wasm/webgpu.rs");
-    let renderer_impl = source
-        .split("impl api::Renderer for WebGpuRenderer")
-        .nth(1)
-        .expect("webgpu renderer impl");
-    let submit = renderer_impl
-        .split("fn resize(&mut self")
-        .next()
-        .expect("webgpu submit body");
+    let renderer_impl =
+        source.split("impl api::Renderer for WebGpuRenderer").nth(1).expect("webgpu renderer impl");
+    let submit = renderer_impl.split("fn resize(&mut self").next().expect("webgpu submit body");
 
     assert!(submit.contains("if self.frame_uses_backdrop()"));
     assert!(submit.contains("self.render_scene_with_effects(&mut encoder);"));

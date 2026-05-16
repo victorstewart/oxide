@@ -1008,11 +1008,10 @@ static BLE_NOTIFY_CB: std::sync::OnceLock<std::sync::Mutex<Option<BleNotifyCb>>>
     std::sync::OnceLock::new();
 
 #[cfg(target_os = "ios")]
-const PERMISSION_DOMAINS: [PermissionDomain; 8] = [
+const PERMISSION_DOMAINS: [PermissionDomain; 7] = [
     PermissionDomain::Camera,
     PermissionDomain::Microphone,
     PermissionDomain::Location,
-    PermissionDomain::Bluetooth,
     PermissionDomain::Motion,
     PermissionDomain::Notifications,
     PermissionDomain::Contacts,
@@ -1553,6 +1552,7 @@ impl PrimaryTouchTracker {
 struct AppState {
     renderer: Option<Box<metal::MetalRenderer>>,
     router: Option<test_scenes::Router<MtlUploader>>,
+    builder: ui::DrawListBuilder,
     benchmark_scene_index: u32,
     last_ms: u64,
     inited: bool,
@@ -1582,6 +1582,10 @@ struct AppState {
     sensor_runtime: Option<SensorRuntime>,
     #[cfg(target_os = "ios")]
     network_runtime: Option<NetworkRuntime>,
+    frame_dirty: bool,
+    settle_frames_remaining: u8,
+    idle_skipped_frames: u64,
+    submitted_frames: u64,
 }
 
 impl Default for AppState {
@@ -1589,6 +1593,7 @@ impl Default for AppState {
         Self {
             renderer: None,
             router: None,
+            builder: ui::DrawListBuilder::new(),
             benchmark_scene_index: benchmark_camera_scene_index(),
             last_ms: 0,
             inited: false,
@@ -1618,6 +1623,10 @@ impl Default for AppState {
             sensor_runtime: None,
             #[cfg(target_os = "ios")]
             network_runtime: None,
+            frame_dirty: true,
+            settle_frames_remaining: IDLE_SETTLE_FRAMES,
+            idle_skipped_frames: 0,
+            submitted_frames: 0,
         }
     }
 }
@@ -1642,6 +1651,13 @@ fn perf_report_error() -> &'static std::sync::Mutex<Option<Vec<u8>>> {
 
 fn with_app_mut<R>(f: impl FnOnce(&mut AppState) -> R) -> Option<R> {
     app_state().lock().ok().map(|mut guard| f(&mut guard))
+}
+
+const IDLE_SETTLE_FRAMES: u8 = 2;
+
+fn mark_frame_dirty(app: &mut AppState) {
+    app.frame_dirty = true;
+    app.settle_frames_remaining = IDLE_SETTLE_FRAMES;
 }
 
 fn process_telemetry_commands_locked(app: &mut AppState) {
@@ -1844,7 +1860,7 @@ fn bluetooth_runtime_enabled() -> bool {
     if initial_env_bool("OXIDE_DISABLE_BLUETOOTH").unwrap_or(false) {
         return false;
     }
-    true
+    false
 }
 
 #[no_mangle]
@@ -1978,10 +1994,10 @@ pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_i
     let default_damage_use = 0.70f32;
     let default_damage_pref = 0.25f32;
     if let Some(router) = router.as_mut() {
-        router.damage_set_options(false, default_damage_use, default_damage_pref);
+        router.damage_set_options(true, default_damage_use, default_damage_pref);
     }
     unsafe {
-        (*renderer_ptr).set_damage_options(false, default_damage_use, default_damage_pref);
+        (*renderer_ptr).set_damage_options(true, default_damage_use, default_damage_pref);
     }
     app.last_ms = timing::now_ms();
     app.last_stats = StatsSnapshot::default();
@@ -2023,6 +2039,8 @@ pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_i
     app.camera_running = false;
     app.router = router;
     app.renderer = Some(boxed);
+    app.builder.clear();
+    mark_frame_dirty(&mut app);
     if let Some(ops) = app.telemetry_ops.as_ref() {
         ops.handle_foreground(timing::now_ms());
     }
@@ -2051,6 +2069,24 @@ pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_i
 #[no_mangle]
 pub extern "C" fn oxide_host_app_frame(w: u32, h: u32, scale: f32) -> ::libc::c_int {
     oxide_host_app_frame_inner(w, h, scale, core::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_app_should_render() -> u8 {
+    let mut app = app_state().lock().expect("app_state mutex");
+    if !app.inited {
+        return 1;
+    }
+    if app.benchmark_mode || benchmark_camera_fast_path_active(&app) || app.camera_running {
+        return 1;
+    }
+    let router_wants_frame =
+        app.router.as_ref().map_or(false, test_scenes::Router::wants_next_frame);
+    if app.frame_dirty || app.settle_frames_remaining > 0 || router_wants_frame {
+        return 1;
+    }
+    app.idle_skipped_frames = app.idle_skipped_frames.saturating_add(1);
+    0
 }
 
 #[no_mangle]
@@ -2175,7 +2211,8 @@ fn oxide_host_app_frame_inner(
         }
         let _ = with_perf_signpost("camera.renderer.resize", || renderer.resize(w, h, scale));
     }
-    let mut builder = ui::DrawListBuilder::new();
+    let mut builder = core::mem::take(&mut app.builder);
+    builder.clear();
     let vp =
         gfx_api::RectF::new(0.0, 0.0, (w as f32) / scale.max(1.0), (h as f32) / scale.max(1.0));
     let router_update = with_perf_signpost("camera.router.update_draw", || {
@@ -2200,6 +2237,7 @@ fn oxide_host_app_frame_inner(
     let (damage_rects, stats) = match router_update {
         Some(value) => value,
         None => {
+            app.builder = builder;
             if !drawable_ptr.is_null() {
                 if let Some(renderer) = app.renderer.as_mut().map(|b| b.as_mut()) {
                     let _ = renderer.cancel_present_drawable();
@@ -2208,32 +2246,41 @@ fn oxide_host_app_frame_inner(
             return -3;
         }
     };
-    let perf_stats = {
-        let renderer = match app.renderer.as_mut().map(|b| b.as_mut()) {
-            Some(r) => r,
-            None => return -2,
-        };
-        let damage = gfx_api::Damage { rects: damage_rects };
-        let token = with_perf_signpost("camera.renderer.begin_frame", || {
-            renderer.begin_frame(&gfx_api::FrameTarget, Some(&damage))
-        });
-        if builder.drawlist().items.len() > 1 {
-            with_perf_signpost("camera.renderer.coalesce", || {
-                let dl = builder.drawlist_mut();
-                oxide_ui_core::coalesce_adjacent_draws(dl);
+    let perf_stats_result = {
+        if let Some(renderer) = app.renderer.as_mut().map(|b| b.as_mut()) {
+            let damage = gfx_api::Damage { rects: damage_rects };
+            let token = with_perf_signpost("camera.renderer.begin_frame", || {
+                renderer.begin_frame(&gfx_api::FrameTarget, Some(&damage))
             });
-        }
-        with_perf_signpost("camera.renderer.encode_pass", || {
-            renderer.encode_pass(builder.drawlist());
-        });
-        if with_perf_signpost("camera.renderer.submit", || renderer.submit(token)).is_err() {
-            if !drawable_ptr.is_null() {
-                let _ = renderer.cancel_present_drawable();
+            if builder.drawlist().items.len() > 1 {
+                with_perf_signpost("camera.renderer.coalesce", || {
+                    let dl = builder.drawlist_mut();
+                    oxide_ui_core::coalesce_adjacent_draws(dl);
+                });
             }
-            return -4;
+            with_perf_signpost("camera.renderer.encode_pass", || {
+                renderer.encode_pass(builder.drawlist());
+            });
+            if with_perf_signpost("camera.renderer.submit", || renderer.submit(token)).is_err() {
+                if !drawable_ptr.is_null() {
+                    let _ = renderer.cancel_present_drawable();
+                }
+                Err(-4)
+            } else {
+                Ok(renderer.last_stats())
+            }
+        } else {
+            Err(-2)
         }
-        renderer.last_stats()
     };
+    let perf_stats = match perf_stats_result {
+        Ok(stats) => stats,
+        Err(code) => {
+            app.builder = builder;
+            return code;
+        }
+    };
+    app.builder = builder;
     let paused = perf_stats.cam_paused != 0 || !app.camera_running;
     let running = app.camera_running;
     let overlay_visible = app.overlay_visible;
@@ -2291,6 +2338,11 @@ fn oxide_host_app_frame_inner(
         apply_camera_capture_perf(&mut stats);
     }
     app.last_stats = stats;
+    app.submitted_frames = app.submitted_frames.saturating_add(1);
+    if app.settle_frames_remaining > 0 {
+        app.settle_frames_remaining -= 1;
+    }
+    app.frame_dirty = false;
     ios_log("app_frame: ok");
     0
 }
@@ -2360,6 +2412,7 @@ pub extern "C" fn oxide_host_set_camera_options(
     let g = grayscale != 0;
     let a = animate != 0;
     router.camera_set_options(b, sigma, g, a);
+    mark_frame_dirty(&mut app);
     0
 }
 
@@ -2394,6 +2447,7 @@ fn apply_camera_render_mode(
     if let Some(renderer) = app.renderer.as_mut() {
         renderer.set_camera_render_mode(mode);
     }
+    mark_frame_dirty(app);
     0
 }
 
@@ -2408,6 +2462,7 @@ pub extern "C" fn oxide_host_set_camera_texture_source(source: i32) -> ::libc::c
     if let Some(renderer) = app.renderer.as_mut() {
         renderer.set_camera_texture_source(source);
     }
+    mark_frame_dirty(&mut app);
     0
 }
 
@@ -2447,6 +2502,7 @@ pub extern "C" fn oxide_host_set_camera_running_mode(on: u8, _preview_only: u8) 
             app.camera_running = true;
             app.last_stats.cam_running = 1;
             app.last_stats.cam_paused = 0;
+            mark_frame_dirty(&mut app);
         } else {
             app.camera_running = false;
             app.last_stats.cam_running = 0;
@@ -2460,6 +2516,7 @@ pub extern "C" fn oxide_host_set_camera_running_mode(on: u8, _preview_only: u8) 
         app.camera_running = false;
         app.last_stats.cam_running = 0;
         app.last_stats.cam_paused = 1;
+        mark_frame_dirty(&mut app);
         0
     } else {
         0
@@ -2474,6 +2531,7 @@ pub extern "C" fn oxide_host_set_anim_play(play: u8) -> ::libc::c_int {
         None => return -1,
     };
     router.anim_set_play(play != 0);
+    mark_frame_dirty(&mut app);
     0
 }
 
@@ -2485,6 +2543,7 @@ pub extern "C" fn oxide_host_set_anim_progress(progress: f32) -> ::libc::c_int {
         None => return -1,
     };
     router.anim_set_progress(progress);
+    mark_frame_dirty(&mut app);
     0
 }
 
@@ -2504,6 +2563,7 @@ pub extern "C" fn oxide_host_set_damage_options(
     if let Some(renderer) = app.renderer.as_mut().map(|b| b.as_mut()) {
         renderer.set_damage_options(enabled_bool, use_thresh, prefilter);
     }
+    mark_frame_dirty(&mut app);
     0
 }
 
@@ -2515,6 +2575,7 @@ pub extern "C" fn oxide_host_set_nine_slice(slice_px: f32, alpha: f32) -> ::libc
         None => return -1,
     };
     router.nine_slice_set_options(slice_px, alpha);
+    mark_frame_dirty(&mut app);
     0
 }
 
@@ -2526,6 +2587,7 @@ pub extern "C" fn oxide_host_set_sdf_font(font_px: f32) -> ::libc::c_int {
         None => return -1,
     };
     router.sdf_set_font_px(font_px);
+    mark_frame_dirty(&mut app);
     0
 }
 
@@ -2630,6 +2692,7 @@ pub extern "C" fn oxide_host_input_log(ptr: *const u8, len: usize) {
         if let Some(router) = app.router.as_mut() {
             router.input_log(&owned);
         }
+        mark_frame_dirty(app);
     });
 }
 
@@ -2674,6 +2737,11 @@ pub extern "C" fn oxide_host_app_shutdown() {
         app.permissions = None;
         app.permission_subs.clear();
         app.permission_states.clear();
+        app.builder.clear();
+        app.frame_dirty = true;
+        app.settle_frames_remaining = IDLE_SETTLE_FRAMES;
+        app.idle_skipped_frames = 0;
+        app.submitted_frames = 0;
     }
 }
 
@@ -2706,6 +2774,7 @@ extern "C" fn window_resized_cb(
             safe_right: safe_r,
             safe_bottom: safe_b,
         };
+        mark_frame_dirty(app);
     });
 }
 
@@ -2720,6 +2789,7 @@ extern "C" fn pointer_cb(x: f32, y: f32, dx: f32, dy: f32, buttons: u32, _mods: 
         } else {
             touch_log("rust callback pointer dropped no router");
         }
+        mark_frame_dirty(app);
     });
 }
 
@@ -2795,6 +2865,7 @@ extern "C" fn touch_cb(
         } else {
             touch_log("rust callback touch dropped no router");
         }
+        mark_frame_dirty(app);
     });
 }
 
@@ -2867,6 +2938,7 @@ extern "C" fn key_cb(
                 }
             }
         }
+        mark_frame_dirty(app);
     });
 }
 
@@ -2881,6 +2953,7 @@ extern "C" fn text_commit_cb(ptr: *const u8, len: usize) {
         if let Some(router) = app.router.as_mut() {
             router.input_commit(&owned);
         }
+        mark_frame_dirty(app);
     });
 }
 
@@ -2898,6 +2971,7 @@ extern "C" fn text_composition_cb(start: u32, end: u32, ptr: *const u8, len: usi
         if let Some(router) = app.router.as_mut() {
             router.input_set_composition(start, end, &text);
         }
+        mark_frame_dirty(app);
     });
 }
 
@@ -2906,6 +2980,7 @@ extern "C" fn text_selection_cb(start: u32, end: u32) {
         if let Some(router) = app.router.as_mut() {
             router.input_set_selection(start, end);
         }
+        mark_frame_dirty(app);
     });
 }
 
@@ -2917,6 +2992,7 @@ extern "C" fn ime_shown_cb(x: f32, y: f32, w: f32, h: f32) {
             router.input_set_ime_rect(rect);
             router.input_log(&message);
         }
+        mark_frame_dirty(app);
     });
 }
 
@@ -2926,6 +3002,7 @@ extern "C" fn ime_hidden_cb() {
             router.input_hide_ime();
             router.input_log("IME hidden");
         }
+        mark_frame_dirty(app);
     });
 }
 
@@ -3029,6 +3106,10 @@ pub struct OxideHostStats {
     pub renderer_preview_submission_depth: u32,
     pub renderer_preview_submission_skipped: u32,
     pub renderer_preview_submission_frame_age_ms: f32,
+    pub host_idle_skipped_frames: u64,
+    pub host_submitted_frames: u64,
+    pub host_frame_dirty: u8,
+    pub host_settle_frames_remaining: u8,
 }
 
 #[no_mangle]
@@ -3156,6 +3237,10 @@ pub extern "C" fn oxide_host_app_stats(out: *mut OxideHostStats) -> ::libc::c_in
                     renderer_preview_submission_skipped: snap.renderer_preview_submission_skipped,
                     renderer_preview_submission_frame_age_ms: snap
                         .renderer_preview_submission_frame_age_ms,
+                    host_idle_skipped_frames: app.idle_skipped_frames,
+                    host_submitted_frames: app.submitted_frames,
+                    host_frame_dirty: if app.frame_dirty { 1 } else { 0 },
+                    host_settle_frames_remaining: app.settle_frames_remaining,
                 };
             }
             return 0;
@@ -3278,10 +3363,12 @@ pub extern "C" fn oxide_host_set_scene(index: u32) -> ::libc::c_int {
     with_app_mut(|app| {
         if app.benchmark_mode {
             app.benchmark_scene_index = index;
+            mark_frame_dirty(app);
             return 0;
         }
         if let Some(router) = app.router.as_mut() {
             router.set_scene(index as usize);
+            mark_frame_dirty(app);
             0
         } else {
             -1
@@ -3313,6 +3400,7 @@ pub extern "C" fn oxide_host_prepare_onscreen_benchmark(
         if let Some(renderer) = app.renderer.as_mut().map(|b| b.as_mut()) {
             renderer.set_damage_options(damage_enabled, damage_use, damage_prefilter);
         }
+        mark_frame_dirty(app);
         0
     })
     .unwrap_or(-1)
@@ -3331,6 +3419,7 @@ pub extern "C" fn oxide_host_step_onscreen_benchmark(
     with_app_mut(|app| {
         let Some(router) = app.router.as_mut() else { return -1 };
         if router.step_onscreen_benchmark(name, step as usize) {
+            mark_frame_dirty(app);
             0
         } else {
             -1
@@ -3368,6 +3457,7 @@ pub extern "C" fn oxide_host_set_overlay_visible(on: u8) -> ::libc::c_int {
         } else if prev != desired {
             app.overlay_dirty = true;
         }
+        mark_frame_dirty(app);
         0
     })
     .unwrap_or(-1)
@@ -3392,6 +3482,7 @@ pub extern "C" fn oxide_host_set_reduce_motion(on: u8) -> ::libc::c_int {
         } else if prev != desired {
             app.reduce_motion_dirty = true;
         }
+        mark_frame_dirty(app);
         0
     })
     .unwrap_or(-1)
@@ -3414,6 +3505,7 @@ pub extern "C" fn oxide_host_emit_pinch(cx: f32, cy: f32, delta: f32) {
         } else {
             touch_log("rust ffi pinch dropped no router");
         }
+        mark_frame_dirty(app);
     });
 }
 
@@ -3429,6 +3521,7 @@ pub extern "C" fn oxide_host_emit_pan_gesture(x: f32, y: f32, dx: f32, dy: f32, 
         };
         touch_log(&format!("rust ffi pan scene={:?}", router.current));
         router.input_pointer(x, y, dx, dy, if active != 0 { 1 } else { 0 });
+        mark_frame_dirty(app);
     });
 }
 
@@ -3438,6 +3531,7 @@ pub extern "C" fn oxide_host_emit_double_tap() {
         if let Some(router) = app.router.as_mut() {
             router.input_double_tap();
         }
+        mark_frame_dirty(app);
     });
 }
 

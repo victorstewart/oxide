@@ -92,6 +92,7 @@ const OXIDE_MEMORY_SUMMARY_PREFIX: &str = "OXIDE_MEMORY_SUMMARY ";
 const OXIDE_TICK_RING_PREFIX: &str = "OXIDE_TICK_RING ";
 const OXIDE_CAMERA_CONTRACT_SUMMARY_PREFIX: &str = "OXIDE_CAMERA_CONTRACT_SUMMARY ";
 const OXIDE_APP_HOST_DEBUG_SUMMARY_PREFIX: &str = "OXIDE_APP_HOST_DEBUG_SUMMARY ";
+const OXIDE_STATIC_IDLE_SUMMARY_PREFIX: &str = "OXIDE_STATIC_IDLE_SUMMARY ";
 const OXIDE_BENCHMARK_METADATA_PREFIX: &str = "OXIDE_BENCHMARK_METADATA ";
 const OXIDE_PERF_RUNNER_FILTER_ENV: &str = "OXIDE_PERF_RUNNER_FILTER";
 const OXIDE_DEBUG_ENCODE_EVERY_ENV: &str = "OXIDE_DEBUG_ENCODE_EVERY";
@@ -143,6 +144,7 @@ const UIKIT_PERF_CAMERA_PREBRIDGE_DROP_ENV: &str = "OXIDE_PERF_CAMERA_PREBRIDGE_
 const UIKIT_PERF_CAMERA_REAL_APP_HOST_ENV: &str = "OXIDE_PERF_CAMERA_REAL_APP_HOST";
 const UIKIT_PERF_CAMERA_REAL_APP_HYBRID_VISIBLE_PREVIEW_ENV: &str =
     "OXIDE_PERF_CAMERA_REAL_APP_HYBRID_VISIBLE_PREVIEW";
+const UIKIT_PERF_STATIC_IDLE_REAL_APP_HOST_ENV: &str = "OXIDE_PERF_STATIC_IDLE_REAL_APP_HOST";
 const UIKIT_RENDER_IN_TEST_ENV: &str = "OXIDE_RENDER_IN_TEST";
 const UIKIT_HOST_BUILD_STAMP_FILE: &str = ".oxide-device-build-stamp.json";
 const UIKIT_RESULT_ROOT_STAMP_FILE: &str = ".oxide-device-result-root-stamp.json";
@@ -407,6 +409,16 @@ const OXIDE_ONSCREEN_CASE_SPECS: &[OxideOnscreenCaseSpec] = &[
         variant: "oxide_host",
         benchmark_iterations: 32,
         note: "Real on-screen Oxide nine-slice frame through the live MetalView host path.",
+    },
+    OxideOnscreenCaseSpec {
+        test_name: "testOxideStaticIdleNoRedraw",
+        case_id: "gpu.scene.static_idle.no_redraw",
+        family: "scene-gpu",
+        layer: "onscreen",
+        scenario: "static_idle",
+        variant: "oxide_real_app_host",
+        benchmark_iterations: 1,
+        note: "Real iOS app-host static-scene idle contract: after settle, the display link may tick but Oxide must submit zero frames, acquire zero drawables, and commit zero command buffers during the measured idle window.",
     },
     OxideOnscreenCaseSpec {
         test_name: "testCameraNV12LegacyLivePreview",
@@ -4389,8 +4401,12 @@ fn uikit_case_uses_real_app_camera_host(spec: &UIKitCaseSpec) -> bool {
     )
 }
 
+fn uikit_case_uses_real_app_static_idle_host(spec: &UIKitCaseSpec) -> bool {
+    spec.test_name == "testOxideStaticIdleNoRedraw"
+}
+
 fn uikit_case_requires_console_launch_summary(spec: &UIKitCaseSpec) -> bool {
-    spec.test_name.contains("Camera")
+    spec.test_name.contains("Camera") || uikit_case_uses_real_app_static_idle_host(spec)
 }
 
 fn uikit_launch_trace_buffer_secs(spec: &UIKitCaseSpec) -> u64 {
@@ -4427,6 +4443,10 @@ fn append_uikit_case_specific_perf_environment(
     if uikit_case_uses_real_app_camera_host(spec) {
         env.insert(String::from(UIKIT_RENDER_IN_TEST_ENV), String::from("1"));
         env.insert(String::from(UIKIT_PERF_CAMERA_REAL_APP_HOST_ENV), String::from("1"));
+    }
+    if uikit_case_uses_real_app_static_idle_host(spec) {
+        env.insert(String::from(UIKIT_RENDER_IN_TEST_ENV), String::from("1"));
+        env.insert(String::from(UIKIT_PERF_STATIC_IDLE_REAL_APP_HOST_ENV), String::from("1"));
     }
     if uikit_case_uses_real_app_hybrid_visible_preview(spec) {
         env.insert(
@@ -4473,6 +4493,10 @@ fn uikit_perf_launch_environment(
         }
     } else if uikit_case_uses_real_app_camera_host(spec) {
         env.insert(String::from("OXIDE_PERF_CASE"), String::from(spec.test_name));
+    } else if uikit_case_uses_real_app_static_idle_host(spec) {
+        env.insert(String::from("OXIDE_PERF_CASE"), String::from(spec.test_name));
+        env.insert(String::from(UIKIT_RENDER_IN_TEST_ENV), String::from("1"));
+        env.insert(String::from(UIKIT_PERF_STATIC_IDLE_REAL_APP_HOST_ENV), String::from("1"));
     } else {
         env.insert(String::from("OXIDE_PERF_PARKED"), String::from("1"));
         env.insert(String::from("OXIDE_PERF_CASE"), String::from(spec.test_name));
@@ -5739,6 +5763,28 @@ fn install_uikit_device_app(
     )
 }
 
+fn reinstall_uikit_device_app(
+    root: &Path,
+    device: &UIKitPhysicalDevice,
+    built_app: &BuiltUIKitApp,
+) -> Result<()> {
+    let _ = run_command_owned(
+        root,
+        "xcrun",
+        &[
+            String::from("devicectl"),
+            String::from("device"),
+            String::from("uninstall"),
+            String::from("app"),
+            String::from("--device"),
+            device.udid.clone(),
+            built_app.bundle_identifier.clone(),
+        ],
+        true,
+    );
+    install_uikit_device_app(root, device, built_app)
+}
+
 fn perf_frame_capture_case_component(test_name: &str) -> String {
     let value = test_name
         .chars()
@@ -6432,6 +6478,66 @@ fn build_oxide_onscreen_device_case(
             String::from("memory_rss_median_kb"),
             summary_value_kb(rss_summary, rss_summary.median)?,
         );
+    }
+    if spec.case_id == "gpu.scene.static_idle.no_redraw" {
+        let idle = parse_oxide_static_idle_summary(&stdout)?;
+        metrics.insert(String::from("idle_window_s"), idle.window_ms / 1_000.0);
+        metrics.insert(
+            String::from("idle_delta_display_link_callbacks"),
+            f64::from(idle.delta_display_link_callbacks),
+        );
+        metrics.insert(String::from("idle_delta_plan_skips"), f64::from(idle.delta_plan_skips));
+        metrics.insert(
+            String::from("idle_delta_drawables_acquired"),
+            f64::from(idle.delta_drawables_acquired),
+        );
+        metrics.insert(
+            String::from("idle_delta_command_buffers_committed"),
+            f64::from(idle.delta_command_buffers_committed),
+        );
+        metrics.insert(
+            String::from("idle_delta_host_submitted_frames"),
+            idle.delta_host_submitted_frames as f64,
+        );
+        metrics.insert(
+            String::from("idle_delta_host_idle_skipped_frames"),
+            idle.delta_host_idle_skipped_frames as f64,
+        );
+        metrics.insert(
+            String::from("idle_end_host_frame_dirty"),
+            f64::from(idle.end_host_frame_dirty),
+        );
+        metrics.insert(
+            String::from("idle_end_host_settle_frames_remaining"),
+            f64::from(idle.end_host_settle_frames_remaining),
+        );
+        notes.push(format!(
+            "Static idle no-redraw contract: window={:.1}ms displayLinkDelta={} planSkipDelta={} drawableDelta={} commandBufferDelta={} submittedFrameDelta={} idleSkipDelta={}.",
+            idle.window_ms,
+            idle.delta_display_link_callbacks,
+            idle.delta_plan_skips,
+            idle.delta_drawables_acquired,
+            idle.delta_command_buffers_committed,
+            idle.delta_host_submitted_frames,
+            idle.delta_host_idle_skipped_frames
+        ));
+        if !idle.contract_passed
+            || idle.delta_drawables_acquired != 0
+            || idle.delta_command_buffers_committed != 0
+            || idle.delta_host_submitted_frames != 0
+            || idle.end_host_frame_dirty != 0
+            || idle.end_host_settle_frames_remaining != 0
+        {
+            bail!(
+                "static idle no-redraw contract failed for `{}`: drawables={} commandBuffers={} submittedFrames={} dirty={} settle={}",
+                spec.test_name,
+                idle.delta_drawables_acquired,
+                idle.delta_command_buffers_committed,
+                idle.delta_host_submitted_frames,
+                idle.end_host_frame_dirty,
+                idle.end_host_settle_frames_remaining
+            );
+        }
     }
     if headline_metric != "clock_s" {
         notes.push(format!("Headline metric: `{}`.", headline_metric));
@@ -7183,6 +7289,9 @@ fn run_uikit_device_case_console_capture(
         Duration::from_secs(5),
         "pre-console launch cleanup",
     )?;
+    if uikit_case_uses_real_app_static_idle_host(spec) {
+        reinstall_uikit_device_app(root, device, built_app)?;
+    }
 
     let ready_args = uikit_device_notification_observe_args(
         device,
@@ -11716,6 +11825,14 @@ pub struct OxideAppHostDebugSummaryPayload {
     pub plan_skips: u32,
     pub drawables_acquired: u32,
     pub command_buffers_committed: u32,
+    #[serde(default)]
+    pub host_idle_skipped_frames: u64,
+    #[serde(default)]
+    pub host_submitted_frames: u64,
+    #[serde(default)]
+    pub host_frame_dirty: u8,
+    #[serde(default)]
+    pub host_settle_frames_remaining: u8,
     pub preview_submission_depth: u32,
     pub presented_frame_age_ms: f64,
     pub samples_received: u32,
@@ -11728,6 +11845,33 @@ pub struct OxideAppHostDebugSummaryPayload {
     pub running_perf_benchmark_host: bool,
     pub should_render: bool,
     pub host_ready: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OxideStaticIdleSummaryPayload {
+    pub window_ms: f64,
+    pub start_display_link_callbacks: u32,
+    pub end_display_link_callbacks: u32,
+    pub delta_display_link_callbacks: u32,
+    pub start_plan_skips: u32,
+    pub end_plan_skips: u32,
+    pub delta_plan_skips: u32,
+    pub start_drawables_acquired: u32,
+    pub end_drawables_acquired: u32,
+    pub delta_drawables_acquired: u32,
+    pub start_command_buffers_committed: u32,
+    pub end_command_buffers_committed: u32,
+    pub delta_command_buffers_committed: u32,
+    pub start_host_submitted_frames: u64,
+    pub end_host_submitted_frames: u64,
+    pub delta_host_submitted_frames: u64,
+    pub start_host_idle_skipped_frames: u64,
+    pub end_host_idle_skipped_frames: u64,
+    pub delta_host_idle_skipped_frames: u64,
+    pub end_host_frame_dirty: u8,
+    pub end_host_settle_frames_remaining: u8,
+    pub contract_passed: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -11906,6 +12050,20 @@ pub fn parse_oxide_app_host_debug_summary(stdout: &str) -> Result<OxideAppHostDe
     serde_json::from_str(&payload_json).with_context(|| "parsing Oxide app-host debug summary json")
 }
 
+pub fn parse_oxide_static_idle_summary(stdout: &str) -> Result<OxideStaticIdleSummaryPayload> {
+    let mut payload_json = None;
+    for line in stdout.lines() {
+        if let Some(index) = line.find(OXIDE_STATIC_IDLE_SUMMARY_PREFIX) {
+            payload_json =
+                Some(line[(index + OXIDE_STATIC_IDLE_SUMMARY_PREFIX.len())..].trim().to_string());
+        }
+    }
+    let payload_json = payload_json.with_context(|| {
+        format!("missing `{}` marker in device console output", OXIDE_STATIC_IDLE_SUMMARY_PREFIX)
+    })?;
+    serde_json::from_str(&payload_json).with_context(|| "parsing Oxide static-idle summary json")
+}
+
 fn summarize_tick_values(values: &[f64]) -> Option<(f64, f64, f64, f64)> {
     let mut filtered = values.iter().copied().filter(|value| value.is_finite()).collect::<Vec<_>>();
     if filtered.is_empty() {
@@ -11961,13 +12119,17 @@ pub fn render_oxide_app_host_debug_summary_note(
     payload: &OxideAppHostDebugSummaryPayload,
 ) -> String {
     format!(
-        "Actual app-host preview counters: displayLinkCallbacks={} cameraGenerationAdvances={} cameraTriggeredRenders={} planSkips={} drawablesAcquired={} commandBuffersCommitted={} previewDepth={} presentedFrameAge={:.2}ms samples received/droppedPrebridge/bridged/published/presented/superseded={}/{}/{}/{}/{}/{} hostReady={} shouldRender={}",
+        "Actual app-host preview counters: displayLinkCallbacks={} cameraGenerationAdvances={} cameraTriggeredRenders={} planSkips={} drawablesAcquired={} commandBuffersCommitted={} hostIdleSkippedFrames={} hostSubmittedFrames={} hostFrameDirty={} hostSettleFramesRemaining={} previewDepth={} presentedFrameAge={:.2}ms samples received/droppedPrebridge/bridged/published/presented/superseded={}/{}/{}/{}/{}/{} hostReady={} shouldRender={}",
         payload.display_link_callbacks,
         payload.camera_generation_advances,
         payload.camera_frame_triggered_renders,
         payload.plan_skips,
         payload.drawables_acquired,
         payload.command_buffers_committed,
+        payload.host_idle_skipped_frames,
+        payload.host_submitted_frames,
+        payload.host_frame_dirty,
+        payload.host_settle_frames_remaining,
         payload.preview_submission_depth,
         payload.presented_frame_age_ms,
         payload.samples_received,

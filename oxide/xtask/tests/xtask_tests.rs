@@ -26,20 +26,20 @@ use xtask::{
     parse_devicectl_display_backlight_active, parse_devicectl_lock_state_text,
     parse_oxide_app_host_debug_summary, parse_oxide_benchmark_metadata,
     parse_oxide_camera_contract_summary, parse_oxide_memory_summary, parse_oxide_stage_summary,
-    parse_oxide_tick_ring, parse_provisioning_profile_team_identifier,
-    parse_react_native_device_report_json, parse_uikit_report_json, parse_xctrace_summary_window,
-    parse_xctrace_tables, parse_xctrace_toc_tables,
-    perf_frame_capture_relative_source_for_test_name, perf_report_matches_case_ids,
-    preferred_xctrace_toc_tables, prepare_resumable_uikit_device_result_root,
-    prepare_uikit_device_perf_xctestrun, render_oxide_app_host_debug_summary_note,
-    render_oxide_tick_ring_note, resolve_existing_uikit_power_trace,
-    start_console_marker_or_completion_observed, summarize_device_gpu_metrics_from_tables,
-    summarize_energy_table, summarize_time_profile_from_xml,
-    summarize_trace_signpost_metrics_from_tables, uikit_case_in_compare_device_family,
-    uikit_case_in_compare_device_watchable_smoke, uikit_case_in_official_device_battery,
-    uikit_case_requires_normalized_camera_contract, uikit_device_metrics_case_stdout_path,
-    uikit_device_perf_environment_for_test_name, uikit_device_support_required,
-    uikit_device_trace_artifact_exists, uikit_device_trace_enabled,
+    parse_oxide_static_idle_summary, parse_oxide_tick_ring,
+    parse_provisioning_profile_team_identifier, parse_react_native_device_report_json,
+    parse_uikit_report_json, parse_xctrace_summary_window, parse_xctrace_tables,
+    parse_xctrace_toc_tables, perf_frame_capture_relative_source_for_test_name,
+    perf_report_matches_case_ids, preferred_xctrace_toc_tables,
+    prepare_resumable_uikit_device_result_root, prepare_uikit_device_perf_xctestrun,
+    render_oxide_app_host_debug_summary_note, render_oxide_tick_ring_note,
+    resolve_existing_uikit_power_trace, start_console_marker_or_completion_observed,
+    summarize_device_gpu_metrics_from_tables, summarize_energy_table,
+    summarize_time_profile_from_xml, summarize_trace_signpost_metrics_from_tables,
+    uikit_case_in_compare_device_family, uikit_case_in_compare_device_watchable_smoke,
+    uikit_case_in_official_device_battery, uikit_case_requires_normalized_camera_contract,
+    uikit_device_metrics_case_stdout_path, uikit_device_perf_environment_for_test_name,
+    uikit_device_support_required, uikit_device_trace_artifact_exists, uikit_device_trace_enabled,
     uikit_only_testing_identifier_for_test_name, uikit_perf_environment_json_for_test_name,
     uikit_perf_environment_json_for_test_name_with_watch_capture,
     uikit_power_trace_candidate_paths, uikit_report_matches_case_ids,
@@ -640,6 +640,25 @@ fn parse_oxide_app_host_debug_summary_surfaces_actual_app_counters() {
     assert!(note.contains(
         "samples received/droppedPrebridge/bridged/published/presented/superseded=19/3/16/16/14/2"
     ));
+}
+
+#[test]
+fn parse_oxide_static_idle_summary_surfaces_no_redraw_contract() {
+    let stdout = concat!(
+        "OXIDE_READY testOxideStaticIdleNoRedraw\n",
+        "OXIDE_STATIC_IDLE_SUMMARY {\"contractPassed\":true,\"deltaCommandBuffersCommitted\":0,\"deltaDisplayLinkCallbacks\":12,\"deltaDrawablesAcquired\":0,\"deltaHostIdleSkippedFrames\":12,\"deltaHostSubmittedFrames\":0,\"deltaPlanSkips\":12,\"endCommandBuffersCommitted\":2,\"endDisplayLinkCallbacks\":18,\"endDrawablesAcquired\":2,\"endHostFrameDirty\":0,\"endHostIdleSkippedFrames\":14,\"endHostSettleFramesRemaining\":0,\"endHostSubmittedFrames\":2,\"endPlanSkips\":14,\"startCommandBuffersCommitted\":2,\"startDisplayLinkCallbacks\":6,\"startDrawablesAcquired\":2,\"startHostIdleSkippedFrames\":2,\"startHostSubmittedFrames\":2,\"startPlanSkips\":2,\"windowMs\":116.7}\n",
+        "OXIDE_COMPLETE testOxideStaticIdleNoRedraw\n"
+    );
+
+    let payload = parse_oxide_static_idle_summary(stdout).expect("parse static-idle summary");
+    assert!(payload.contract_passed);
+    assert_eq!(payload.delta_drawables_acquired, 0);
+    assert_eq!(payload.delta_command_buffers_committed, 0);
+    assert_eq!(payload.delta_host_submitted_frames, 0);
+    assert_eq!(payload.end_host_frame_dirty, 0);
+    assert_eq!(payload.end_host_settle_frames_remaining, 0);
+    assert_eq!(payload.delta_host_idle_skipped_frames, 12);
+    assert_eq!(payload.window_ms, 116.7);
 }
 
 #[test]

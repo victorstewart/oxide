@@ -1,5 +1,5 @@
 use oxide_renderer_metal::id_mask_compositor::{
-    IdMaskGpuRasterPass, IdMaskRasterVertex, SemanticMaskRegionStyle,
+    IdMaskGpuRasterPass, IdMaskRasterProjection, IdMaskRasterVertex, SemanticMaskRegionStyle,
     SEMANTIC_MASK_MAX_REGION_STYLES, SEMANTIC_MASK_MAX_SUBREGION_COLORS,
 };
 
@@ -11,6 +11,7 @@ fn id_mask_gpu_raster_rejects_empty_or_non_triangle_vertices() {
         mask_height: 8,
         mask_scale: 1.0,
         vertices: &[],
+        projection: IdMaskRasterProjection::screen_px(),
     };
     assert!(!empty.valid_triangle_vertex_count());
 
@@ -32,6 +33,7 @@ fn id_mask_gpu_raster_accepts_triangle_vertices_and_generic_style_alias() {
         mask_height: 8,
         mask_scale: 1.0,
         vertices: &vertices,
+        projection: IdMaskRasterProjection::screen_px(),
     };
 
     let style = SemanticMaskRegionStyle::default();

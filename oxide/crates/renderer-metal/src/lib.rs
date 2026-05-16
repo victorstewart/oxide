@@ -92,6 +92,28 @@ fn ios_log(msg: &str) {
 }
 
 #[inline(always)]
+fn renderer_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        env_flag("OXIDE_RENDERER_TRACE").unwrap_or(false)
+            || env_flag("NAMETAG_DRAW_TIMING").unwrap_or(false)
+            || env_flag("NAMETAG_DRAW_TRACE").unwrap_or(false)
+    })
+}
+
+#[inline(always)]
+fn renderer_trace_log(msg: &str) {
+    #[cfg(target_os = "ios")]
+    unsafe {
+        oxide_host_ios_log(msg.as_ptr() as *const core::ffi::c_char, msg.len());
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        eprintln!("{}", msg);
+    }
+}
+
+#[inline(always)]
 #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
 fn camera_perf_trace_signposts_enabled() -> bool {
     #[cfg(target_os = "ios")]
@@ -487,6 +509,15 @@ fn cached_env_flag(cache: &OnceLock<bool>, name: &str) -> bool {
 }
 
 #[inline(always)]
+fn transparent_drawable_clear_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        env_flag("OXIDE_METAL_TRANSPARENT_DRAWABLE").unwrap_or(false)
+            || env_flag("NAMETAG_NATIVE_CAMERA_TRANSPARENT_METAL").unwrap_or(false)
+    })
+}
+
+#[inline(always)]
 fn camera_render_mode_from_env() -> Option<CameraRenderMode> {
     std::env::var("OXIDE_CAMERA_RENDER_MODE").ok().and_then(|value| {
         match value.trim().to_ascii_lowercase().as_str() {
@@ -554,6 +585,8 @@ fn draw_cmd_kind(cmd: &api::DrawCmd) -> &'static str {
         api::DrawCmd::Backdrop { .. } => "backdrop",
         api::DrawCmd::VisualEffect { .. } => "visual_effect",
         api::DrawCmd::CameraBg { .. } => "camera_bg",
+        api::DrawCmd::NativeCameraPreview { .. } => "native_camera_preview",
+        api::DrawCmd::TopomapGlobe { .. } => "topomap_globe",
         api::DrawCmd::Spinner { .. } => "spinner",
         api::DrawCmd::ClipPush { .. } => "clip_push",
         api::DrawCmd::ClipPop => "clip_pop",
@@ -859,6 +892,8 @@ pub struct MetalRenderer {
     pso_bloom_blur: RenderPipelineState,
     pso_bloom_composite: RenderPipelineState,
     pso_id_mask_raster: RenderPipelineState,
+    pso_id_mask_field_seed: RenderPipelineState,
+    pso_id_mask_field_jump: RenderPipelineState,
     pso_id_mask_compositor: RenderPipelineState,
     pso_neon_marker: RenderPipelineState,
     depth_state_3d_disabled: DepthStencilState,
@@ -892,6 +927,8 @@ pub struct MetalRenderer {
     filtered_prepass: FilteredDrawList,
     filtered_main: FilteredDrawList,
     layer_sublist: api::DrawList,
+    layer_scratch_frame: Option<PerFrame>,
+    clip_stack_pool: alloc::vec::Vec<alloc::vec::Vec<api::RectI>>,
     target_w: u32,
     target_h: u32,
     target_scale: f32,
@@ -977,6 +1014,7 @@ pub struct MetalRenderer {
     pending_present_drawable: usize,
     pending_present_texture: usize,
     frame_present_direct_to_drawable: bool,
+    frame_native_camera_preview: bool,
     frame_2d_encoded: bool,
     frame_color_initialized: bool,
     frame_depth_initialized: bool,
@@ -1529,6 +1567,12 @@ impl MetalRenderer {
         let pso_id_mask_raster = build_init_stage("pso.id_mask_raster", || {
             id_mask_gpu::build_raster_pso(&device, &library)
         })?;
+        let pso_id_mask_field_seed = build_init_stage("pso.id_mask_field_seed", || {
+            id_mask_gpu::build_field_seed_pso(&device, &library)
+        })?;
+        let pso_id_mask_field_jump = build_init_stage("pso.id_mask_field_jump", || {
+            id_mask_gpu::build_field_jump_pso(&device, &library)
+        })?;
         let pso_id_mask_compositor = build_init_stage("pso.id_mask_compositor", || {
             id_mask_gpu::build_compositor_pso(&device, &library, color_format)
         })?;
@@ -1672,6 +1716,8 @@ impl MetalRenderer {
             pso_bloom_blur,
             pso_bloom_composite,
             pso_id_mask_raster,
+            pso_id_mask_field_seed,
+            pso_id_mask_field_jump,
             pso_id_mask_compositor,
             pso_neon_marker,
             depth_state_3d_disabled,
@@ -1704,6 +1750,8 @@ impl MetalRenderer {
             filtered_prepass: FilteredDrawList::default(),
             filtered_main: FilteredDrawList::default(),
             layer_sublist: api::DrawList::default(),
+            layer_scratch_frame: None,
+            clip_stack_pool: alloc::vec::Vec::new(),
             target_w: 0,
             target_h: 0,
             target_scale: 1.0,
@@ -1785,6 +1833,7 @@ impl MetalRenderer {
             pending_present_drawable: 0,
             pending_present_texture: 0,
             frame_present_direct_to_drawable: false,
+            frame_native_camera_preview: false,
             frame_2d_encoded: false,
             frame_color_initialized: false,
             frame_depth_initialized: false,
@@ -3583,7 +3632,13 @@ impl MetalRenderer {
         let ca0 = rpd.color_attachments().object_at(0).unwrap();
         ca0.set_texture(Some(&tex));
         ca0.set_load_action(MTLLoadAction::Clear);
-        ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 });
+        let clear_alpha =
+            if transparent_drawable_clear_enabled() || self.frame_native_camera_preview {
+                0.0
+            } else {
+                1.0
+            };
+        ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: clear_alpha });
         ca0.set_store_action(MTLStoreAction::Store);
         let enc = cmd.new_render_command_encoder(&rpd);
         self.encode_camera_quad_from_live_frame(
@@ -3732,10 +3787,8 @@ impl MetalRenderer {
     ) -> scene3d::MeshHandle3d {
         let id = self.next_mesh3d_id;
         self.next_mesh3d_id = self.next_mesh3d_id.wrapping_add(1).max(1);
-        self.meshes_3d.insert(
-            id,
-            Mesh3dGpu { vb, ib, index_count: index_count as u64, topology, format },
-        );
+        self.meshes_3d
+            .insert(id, Mesh3dGpu { vb, ib, index_count: index_count as u64, topology, format });
         scene3d::MeshHandle3d(id)
     }
 
@@ -3770,16 +3823,20 @@ impl MetalRenderer {
         let _ = self.meshes_3d.remove(&handle.0);
     }
 
-    /// Encodes one scene3d pass into the current frame before the 2D draw list.
+    /// Encodes one scene3d pass into the current frame.
+    ///
+    /// Scene3D and ID-mask passes may be interleaved with 2D passes so app
+    /// shells can embed shared renderers, such as Topomap, at the correct
+    /// draw-list depth without forcing the whole frame into that renderer.
     pub fn encode_scene3d(&mut self, pass: &scene3d::Pass3d<'_>) -> Result<(), api::RenderError> {
         if self.sample_count != 1 {
             return Err(api::RenderError::Unsupported(
                 "scene3d currently requires MetalRenderer sample_count == 1",
             ));
         }
-        if self.frame_2d_encoded {
-            return Err(api::RenderError::InvalidOperation(
-                "encode_scene3d must run before encode_pass within a frame",
+        if pass.viewport.is_some() && pass.bloom.is_some() {
+            return Err(api::RenderError::Unsupported(
+                "scene3d viewport clipping is not implemented for bloom",
             ));
         }
 
@@ -3824,6 +3881,9 @@ impl MetalRenderer {
 
         let enc = cmd.new_render_command_encoder(&rpd);
         enc.set_front_facing_winding(MTLWinding::CounterClockwise);
+        if let Some(viewport) = pass.viewport {
+            set_viewport_and_scissor_dp(&enc, self, viewport);
+        }
         for instance in pass.instances {
             self.encode_scene3d_instance(&enc, pass.view_proj, instance, 1.0, false)?;
         }
@@ -4194,6 +4254,8 @@ fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI, out: &mut
             | api::DrawCmd::VisualEffect { rect, .. }
             | api::DrawCmd::RRect { rect, .. }
             | api::DrawCmd::CameraBg { rect, .. }
+            | api::DrawCmd::NativeCameraPreview { rect }
+            | api::DrawCmd::TopomapGlobe { rect }
             | api::DrawCmd::NineSlice { rect, .. } => {
                 if rect_intersects(rect, &sc) {
                     out.items.push(list.items[i].clone());
@@ -4313,6 +4375,7 @@ impl api::Renderer for MetalRenderer {
         self.frames[slot].cmd = None;
         self.frame_2d_encoded = false;
         self.frame_present_direct_to_drawable = false;
+        self.frame_native_camera_preview = false;
         self.frame_color_initialized = false;
         self.frame_depth_initialized = false;
         self.frame_gpu_trace = None;
@@ -4423,6 +4486,11 @@ impl api::Renderer for MetalRenderer {
                         need_cam_blur = true;
                         requested_cam_blur_sigma = requested_cam_blur_sigma.max(*sigma);
                     }
+                }
+                api::DrawCmd::NativeCameraPreview { rect } => {
+                    let a = (rect.w.max(0.0) * rect.h.max(0.0)).min(vp_area_dp);
+                    cam_area += a;
+                    self.frame_native_camera_preview = true;
                 }
                 api::DrawCmd::Backdrop { .. } => {
                     has_backdrop = true;
@@ -4829,7 +4897,11 @@ impl api::Renderer for MetalRenderer {
                             });
                             ca_l.set_store_action(MTLStoreAction::Store);
                             let encl = cmd.new_render_command_encoder(&rpdl);
-                            let mut pf_l = PerFrame::new();
+                            let mut pf_l =
+                                self.layer_scratch_frame.take().unwrap_or_else(PerFrame::new);
+                            pf_l.reset();
+                            pf_l.cmd = None;
+                            pf_l.submitted = None;
                             // Temporarily change viewport values
                             let old_w = self.target_w;
                             let old_h = self.target_h;
@@ -4849,6 +4921,7 @@ impl api::Renderer for MetalRenderer {
                             self.target_h = old_h;
                             self.target_scale = old_scale;
                             encl.end_encoding();
+                            self.layer_scratch_frame = Some(pf_l);
                             self.layers.insert(*id, LayerEntry { tex, w: w_px, h: h_px, hash });
                         }
                         self.layer_sublist = sub;
@@ -5309,7 +5382,13 @@ impl api::Renderer for MetalRenderer {
         } else {
             ca0.set_load_action(MTLLoadAction::Clear);
         }
-        ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 });
+        let clear_alpha =
+            if transparent_drawable_clear_enabled() || self.frame_native_camera_preview {
+                0.0
+            } else {
+                1.0
+            };
+        ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: clear_alpha });
         let frame_gpu_trace =
             self.gpu_stage_timing.as_ref().and_then(|timing| timing.begin_submission(&self.device));
         if let Some(gpu_trace) = frame_gpu_trace.as_ref() {
@@ -5377,9 +5456,41 @@ impl api::Renderer for MetalRenderer {
         if let Some(t0) = self.frame_encode_started_at {
             self.last_stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
         }
+        if renderer_trace_enabled() {
+            renderer_trace_log(&format!(
+                "OXIDE_METAL_TRACE phase=encode frame={} total_ms={:.3} draws={} instanced={} icb_cmds={} items={} vb_bytes={} ib_bytes={} ub_bytes={} damage_enabled={} use_damage={} damage_rects={} damage_pct={:.3} culled={} used_filtered_main={} direct_present={} backdrop={} visual_effect={} camera_blur={} layer_commands={} scissor_changes={} main_shaded_px={} prepass_shaded_px={} gpu_ms={:.3} gpu_render_ms={:.3}",
+                self.frame_id,
+                self.last_stats.encode_ms,
+                self.last_stats.draws,
+                self.last_stats.instanced,
+                self.last_stats.icb_cmds,
+                list.items.len(),
+                self.last_stats.vb_bytes,
+                self.last_stats.ib_bytes,
+                self.last_stats.ub_bytes,
+                self.damage_enabled,
+                use_damage,
+                self.last_stats.damage_rects,
+                self.last_stats.damage_pct,
+                self.last_stats.culled,
+                used_filtered_main,
+                self.frame_present_direct_to_drawable,
+                has_backdrop,
+                has_visual_effect,
+                need_cam_blur,
+                has_layer_commands,
+                self.scissor_changes,
+                self.main_shaded_px,
+                self.prepass_shaded_px,
+                self.last_stats.gpu_ms,
+                self.last_stats.gpu_render_ms
+            ));
+        }
     }
 
     fn submit(&mut self, _token: api::FrameToken) -> Result<(), api::RenderError> {
+        let trace = renderer_trace_enabled();
+        let trace_started_at = if trace { Some(Instant::now()) } else { None };
         if self.submit_error_flag.swap(false, Ordering::AcqRel) {
             let detail = self.submit_error_detail.lock().ok().and_then(|mut slot| slot.take());
             if let Some(detail) = detail {
@@ -5390,6 +5501,9 @@ impl api::Renderer for MetalRenderer {
         let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
         let pending_present_drawable = self.pending_present_drawable as *mut core::ffi::c_void;
         let present_direct_to_drawable = self.frame_present_direct_to_drawable;
+        let has_present_drawable = !pending_present_drawable.is_null();
+        let blit_present_to_drawable =
+            has_present_drawable && !present_direct_to_drawable && self.target_tex.is_some();
         self.pending_present_drawable = 0;
         self.pending_present_texture = 0;
         self.frame_present_direct_to_drawable = false;
@@ -5482,6 +5596,34 @@ impl api::Renderer for MetalRenderer {
             cmd.add_completed_handler(&completion);
             self.frames[slot].mark_submitted(&cmd);
             cmd.commit();
+            if trace {
+                let total_ms = trace_started_at
+                    .map(|start| start.elapsed().as_secs_f64() * 1000.0)
+                    .unwrap_or(0.0);
+                renderer_trace_log(&format!(
+                    "OXIDE_METAL_TRACE phase=submit frame={} total_ms={:.3} had_command=1 slot={} present_drawable={} direct_present={} blit_present={} gpu_timestamps={}",
+                    frame_id,
+                    total_ms,
+                    slot,
+                    has_present_drawable,
+                    present_direct_to_drawable,
+                    blit_present_to_drawable,
+                    self.gpu_stage_timing.is_some()
+                ));
+            }
+        } else if trace {
+            let total_ms =
+                trace_started_at.map(|start| start.elapsed().as_secs_f64() * 1000.0).unwrap_or(0.0);
+            renderer_trace_log(&format!(
+                "OXIDE_METAL_TRACE phase=submit frame={} total_ms={:.3} had_command=0 slot={} present_drawable={} direct_present={} blit_present={} gpu_timestamps={}",
+                self.frame_id,
+                total_ms,
+                slot,
+                has_present_drawable,
+                present_direct_to_drawable,
+                blit_present_to_drawable,
+                self.gpu_stage_timing.is_some()
+            ));
         }
         Ok(())
     }
@@ -5569,6 +5711,40 @@ fn apply_scissor_dp(
     r.scissor_changes = r.scissor_changes.saturating_add(1);
 }
 
+pub(crate) fn set_viewport_and_scissor_dp(
+    enc: &RenderCommandEncoderRef,
+    r: &MetalRenderer,
+    rect: api::RectF,
+) {
+    let scale = r.target_scale.max(1.0);
+    let x = (rect.x * scale).floor().max(0.0);
+    let y = (rect.y * scale).floor().max(0.0);
+    let w = (rect.w * scale).ceil().max(0.0);
+    let h = (rect.h * scale).ceil().max(0.0);
+    let target_w = r.target_w as f64;
+    let target_h = r.target_h as f64;
+    let x1 = (x as f64).clamp(0.0, target_w);
+    let y1 = (y as f64).clamp(0.0, target_h);
+    let x2 = ((x + w) as f64).clamp(0.0, target_w);
+    let y2 = ((y + h) as f64).clamp(0.0, target_h);
+    let width = (x2 - x1).max(0.0);
+    let height = (y2 - y1).max(0.0);
+    enc.set_viewport(MTLViewport {
+        originX: x1,
+        originY: y1,
+        width,
+        height,
+        znear: 0.0,
+        zfar: 1.0,
+    });
+    enc.set_scissor_rect(MTLScissorRect {
+        x: x1 as u64,
+        y: y1 as u64,
+        width: width as u64,
+        height: height as u64,
+    });
+}
+
 fn encode_draws(
     enc: &RenderCommandEncoderRef,
     pf: &mut PerFrame,
@@ -5593,7 +5769,8 @@ fn encode_draws_range(
     let debug_stride = encode_debug_stride();
     let slot = (r.frame_id % FRAME_RING_SIZE as u64) as usize;
     // Scissor state
-    let mut stack: alloc::vec::Vec<api::RectI> = alloc::vec::Vec::new();
+    let mut stack = r.clip_stack_pool.pop().unwrap_or_default();
+    stack.clear();
     let mut current: Option<api::RectI> = None;
     let mut last_applied: Option<api::RectI> = None;
 
@@ -5838,6 +6015,11 @@ fn encode_draws_range(
                                 blur: *blur,
                                 sigma: *sigma,
                             });
+                            ((adj.x.to_bits() ^ adj.y.to_bits()) as u64).hash(&mut hasher);
+                        }
+                        api::DrawCmd::NativeCameraPreview { rect: r0 } => {
+                            let adj = api::RectF::new(r0.x - ox, r0.y - oy, r0.w, r0.h);
+                            sub.items.push(api::DrawCmd::NativeCameraPreview { rect: adj });
                             ((adj.x.to_bits() ^ adj.y.to_bits()) as u64).hash(&mut hasher);
                         }
                         api::DrawCmd::ClipPop => sub.items.push(api::DrawCmd::ClipPop),
@@ -6085,6 +6267,12 @@ fn encode_draws_range(
                         r.acc_draws += 1;
                     }
                 }
+                i += 1;
+            }
+            api::DrawCmd::NativeCameraPreview { .. } => {
+                i += 1;
+            }
+            api::DrawCmd::TopomapGlobe { .. } => {
                 i += 1;
             }
             api::DrawCmd::RRect { .. } => {
@@ -6764,6 +6952,7 @@ fn encode_draws_range(
         // Note: continue branches have updated i accordingly
         if i < item_end { /* fallthrough increment happens in each arm */ }
     }
+    r.clip_stack_pool.push(stack);
 }
 
 #[repr(C, align(16))]
@@ -7298,6 +7487,22 @@ fn configure_blend(
 #[inline]
 fn configure_source_alpha_blend(ca: &RenderPipelineColorAttachmentDescriptorRef) {
     configure_blend(ca, MTLBlendFactor::SourceAlpha, MTLBlendFactor::OneMinusSourceAlpha);
+}
+
+#[inline]
+fn configure_frame_color_attachment(
+    ca: &RenderPassColorAttachmentDescriptorRef,
+    texture: &TextureRef,
+    initialized: bool,
+) {
+    ca.set_texture(Some(texture));
+    ca.set_store_action(MTLStoreAction::Store);
+    if initialized {
+        ca.set_load_action(MTLLoadAction::Load);
+    } else {
+        ca.set_load_action(MTLLoadAction::Clear);
+        ca.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 });
+    }
 }
 
 #[inline]

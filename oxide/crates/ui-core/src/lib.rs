@@ -183,6 +183,14 @@ impl DrawListBuilder {
         self.list.items.push(gfx::DrawCmd::CameraBg { rect, tint, alpha, grayscale, blur, sigma });
     }
 
+    pub fn native_camera_preview(&mut self, rect: gfx::RectF) {
+        self.list.items.push(gfx::DrawCmd::NativeCameraPreview { rect });
+    }
+
+    pub fn topomap_globe(&mut self, rect: gfx::RectF) {
+        self.list.items.push(gfx::DrawCmd::TopomapGlobe { rect });
+    }
+
     pub fn spinner(&mut self, center: [f32; 2], atom: f32, alpha: f32) {
         self.list.items.push(gfx::DrawCmd::Spinner { center, atom, alpha });
     }
@@ -268,6 +276,8 @@ fn key_for(pd: &PreparedDraw) -> BatchKey {
         C::Spinner { .. } => BatchKey(6, 0, clip_hash),
         C::VisualEffect { .. } => BatchKey(9, 0, clip_hash),
         C::CameraBg { .. } => BatchKey(8, 0, clip_hash),
+        C::NativeCameraPreview { .. } => BatchKey(10, 0, clip_hash),
+        C::TopomapGlobe { .. } => BatchKey(11, 0, clip_hash),
         C::ClipPush { .. } | C::ClipPop => {
             unreachable!("clip commands are removed by prepare_draws")
         }

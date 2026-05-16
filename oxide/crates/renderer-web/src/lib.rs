@@ -372,11 +372,16 @@ mod wasm {
             row_bytes: usize,
         ) -> Result<(), api::RenderError> {
             if let Some(handle) = self.camera_background {
-                if self.image(handle).is_some_and(|image| image.width == width && image.height == height) {
-                    return self.try_image_update_rgba8(handle, 0, 0, width, height, data, row_bytes);
+                if self
+                    .image(handle)
+                    .is_some_and(|image| image.width == width && image.height == height)
+                {
+                    return self
+                        .try_image_update_rgba8(handle, 0, 0, width, height, data, row_bytes);
                 }
             }
-            self.camera_background = Some(self.try_image_create_rgba8(width, height, data, row_bytes)?);
+            self.camera_background =
+                Some(self.try_image_create_rgba8(width, height, data, row_bytes)?);
             Ok(())
         }
 
@@ -590,6 +595,8 @@ mod wasm {
                 api::DrawCmd::CameraBg { rect, tint, alpha, grayscale, blur, sigma } => {
                     self.draw_camera_background(*rect, *tint, *alpha, *grayscale, *blur, *sigma);
                 }
+                api::DrawCmd::NativeCameraPreview { .. } => {}
+                api::DrawCmd::TopomapGlobe { .. } => {}
                 api::DrawCmd::Spinner { center, atom, alpha } => {
                     self.draw_spinner_shape(*center, *atom, *alpha)
                 }
@@ -1094,7 +1101,7 @@ mod wasm {
     impl api::Renderer for WebRenderer {
         fn device_caps(&self) -> api::DeviceCaps {
             api::DeviceCaps {
-                max_framerate_hz: 60,
+                max_framerate_hz: 120,
                 supports_edr: false,
                 supports_msaa4x: false,
                 native_scale: self.scale,
@@ -1451,7 +1458,7 @@ mod native_stub {
     impl api::Renderer for WebRenderer {
         fn device_caps(&self) -> api::DeviceCaps {
             api::DeviceCaps {
-                max_framerate_hz: 60,
+                max_framerate_hz: 120,
                 supports_edr: false,
                 supports_msaa4x: false,
                 native_scale: self.scale,

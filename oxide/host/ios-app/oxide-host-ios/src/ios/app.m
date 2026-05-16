@@ -222,6 +222,24 @@ static BOOL OxidePerfActualAppCameraBenchmarkEnabled(void) {
          OxidePerfActualAppAVFoundationCameraBenchmarkEnabled();
 }
 
+static BOOL OxidePerfStaticIdleRealAppHostEnabled(void) {
+  static BOOL enabled = NO;
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    NSString *env = [NSProcessInfo.processInfo.environment
+        objectForKey:@"OXIDE_PERF_STATIC_IDLE_REAL_APP_HOST"];
+    enabled = (env != nil && env.intValue != 0) ||
+              [OxidePerfCaseName()
+                  isEqualToString:@"testOxideStaticIdleNoRedraw"];
+  });
+  return enabled;
+}
+
+static BOOL OxidePerfActualAppBenchmarkEnabled(void) {
+  return OxidePerfActualAppCameraBenchmarkEnabled() ||
+         OxidePerfStaticIdleRealAppHostEnabled();
+}
+
 static NSString *OxidePerfCameraCaptureContractPresetName(void) {
   static NSString *presetName = nil;
   static dispatch_once_t onceToken;
@@ -462,6 +480,7 @@ void oxide_host_emit_push_notify(const char *utf8, size_t len);
 
 int32_t oxide_host_app_init(uint32_t w, uint32_t h, float scale);
 int32_t oxide_host_app_frame(uint32_t w, uint32_t h, float scale);
+uint8_t oxide_host_app_should_render(void);
 int32_t oxide_host_camera_preview_plan(uint32_t w, uint32_t h, float scale);
 int32_t oxide_host_camera_preview_plan_reason(uint32_t w, uint32_t h,
                                               float scale);
@@ -668,6 +687,10 @@ typedef struct oxide_host_stats_t {
   uint32_t renderer_preview_submission_depth;
   uint32_t renderer_preview_submission_skipped;
   float renderer_preview_submission_frame_age_ms;
+  uint64_t host_idle_skipped_frames;
+  uint64_t host_submitted_frames;
+  uint8_t host_frame_dirty;
+  uint8_t host_settle_frames_remaining;
 } oxide_host_stats_t;
 
 typedef struct oxide_host_camera_tick_perf_t {
@@ -829,6 +852,9 @@ static BOOL IsRunningPerfBenchmarkHost(void) {
          [injectPath rangeOfString:@"OxideHostPerfTests.xctest"].location !=
          NSNotFound) ||
         OxidePerfCameraRealAppHostEnabled();
+    if (!cached) {
+      cached = OxidePerfStaticIdleRealAppHostEnabled();
+    }
     gAppDebugPerf.running_perf_benchmark_host = cached ? 1 : 0;
     checked = YES;
   }
@@ -3429,6 +3455,24 @@ int32_t oxide_host_thermal_state(void) {
 @property(nonatomic) uint32_t perfBenchmarkCompletedRuns;
 @property(nonatomic, copy)
     NSString *perfBenchmarkIterationStartNotificationName;
+@property(nonatomic) CFTimeInterval perfStaticIdleStartTime;
+@property(nonatomic) double perfStaticIdleMeasuredWindowMs;
+@property(nonatomic) BOOL perfStaticIdleWindowStarted;
+@property(nonatomic) BOOL perfStaticIdleWindowMeasured;
+@property(nonatomic) uint32_t perfStaticIdleStartDisplayLinkCallbacks;
+@property(nonatomic) uint32_t perfStaticIdleStartPlanSkips;
+@property(nonatomic) uint32_t perfStaticIdleStartDrawablesAcquired;
+@property(nonatomic) uint32_t perfStaticIdleStartCommandBuffersCommitted;
+@property(nonatomic) uint64_t perfStaticIdleStartHostSubmittedFrames;
+@property(nonatomic) uint64_t perfStaticIdleStartHostIdleSkippedFrames;
+@property(nonatomic) uint32_t perfStaticIdleEndDisplayLinkCallbacks;
+@property(nonatomic) uint32_t perfStaticIdleEndPlanSkips;
+@property(nonatomic) uint32_t perfStaticIdleEndDrawablesAcquired;
+@property(nonatomic) uint32_t perfStaticIdleEndCommandBuffersCommitted;
+@property(nonatomic) uint64_t perfStaticIdleEndHostSubmittedFrames;
+@property(nonatomic) uint64_t perfStaticIdleEndHostIdleSkippedFrames;
+@property(nonatomic) uint8_t perfStaticIdleEndHostFrameDirty;
+@property(nonatomic) uint8_t perfStaticIdleEndHostSettleFramesRemaining;
 @property(nonatomic) BOOL hasRealScenes;
 - (IBAction)sceneChanged:(UISegmentedControl *)control;
 - (IBAction)onOverlaySwitch:(UISwitch *)sw;
@@ -3446,7 +3490,7 @@ int32_t oxide_host_thermal_state(void) {
 - (IBAction)onImeHaptic:(UIButton *)button;
 - (void)updateCameraDrivenDisplayLinkState;
 - (void)installCameraDrivenSchedulingCallbackIfNeeded;
-- (void)handleActualAppCameraBenchmarkStart;
+- (void)handleActualAppBenchmarkStart;
 @end
 
 static void OxideCameraPreviewPublishDidAdvance(uint64_t generation,
@@ -3471,12 +3515,15 @@ static void OxideCameraPreviewPublishDidAdvance(uint64_t generation,
 static NSString *const kOxidePerfReadyNotification = @"com.oxide.perf.ready";
 static NSString *const kOxidePerfCompleteNotification =
     @"com.oxide.perf.complete";
+static NSString *const kOxidePerfFailedNotification = @"com.oxide.perf.failed";
 static NSString *const kOxidePerfBenchmarkStateLabelIdentifier =
     @"perfCameraBenchmarkStateLabel";
 static NSString *const kOxidePerfCameraContractSummaryPrefix =
     @"OXIDE_CAMERA_CONTRACT_SUMMARY ";
 static NSString *const kOxidePerfAppHostDebugSummaryPrefix =
     @"OXIDE_APP_HOST_DEBUG_SUMMARY ";
+static NSString *const kOxidePerfStaticIdleSummaryPrefix =
+    @"OXIDE_STATIC_IDLE_SUMMARY ";
 static CFStringRef const kOxidePerfStartNotificationCF =
     CFSTR("com.oxide.perf.start");
 
@@ -3486,10 +3533,11 @@ static NSString *OxidePerfIterationStartNotificationName(uint32_t run) {
 
 static NSString *OxidePerfActualAppBootState(void) {
   return [NSString
-      stringWithFormat:@"boot ui:%d perf:%d real:%d render:%d case:%@",
+      stringWithFormat:@"boot ui:%d perf:%d camera:%d idle:%d render:%d case:%@",
                        (int)IsRunningUITest(),
                        (int)IsRunningPerfBenchmarkHost(),
                        (int)OxidePerfCameraRealAppHostEnabled(),
+                       (int)OxidePerfStaticIdleRealAppHostEnabled(),
                        (int)ShouldRender(), OxidePerfCaseName()];
 }
 
@@ -3529,7 +3577,7 @@ static void OxidePerfCameraBenchmarkStartCallback(
   }
   RustSceneDelegate *delegate = (__bridge RustSceneDelegate *)observer;
   dispatch_async(dispatch_get_main_queue(), ^{
-    [delegate handleActualAppCameraBenchmarkStart];
+    [delegate handleActualAppBenchmarkStart];
   });
 }
 
@@ -3544,7 +3592,7 @@ static void OxidePerfCameraBenchmarkStartCallback(
         NULL);
     self.perfBenchmarkIterationStartNotificationName = nil;
   }
-  if (!OxidePerfActualAppCameraBenchmarkEnabled()) {
+  if (!OxidePerfActualAppBenchmarkEnabled()) {
     return;
   }
   NSString *name = OxidePerfIterationStartNotificationName(
@@ -3554,6 +3602,29 @@ static void OxidePerfCameraBenchmarkStartCallback(
       center, (__bridge const void *)(self),
       OxidePerfCameraBenchmarkStartCallback, (__bridge CFStringRef)name, NULL,
       CFNotificationSuspensionBehaviorDeliverImmediately);
+}
+
+static NSDictionary *OxidePerfSingleMetricSummary(NSString *unit,
+                                                  double value) {
+  return @{
+    @"unit" : unit ?: @"",
+    @"min" : @(value),
+    @"max" : @(value),
+    @"mean" : @(value),
+    @"median" : @(value),
+    @"p95" : @(value),
+    @"p99" : @(value),
+    @"samples" : @(1),
+  };
+}
+
+static void OxidePerfEmitBenchmarkFailure(NSString *message) {
+  if (message.length == 0) {
+    return;
+  }
+  OxidePerfEmitConsoleLine(
+      [NSString stringWithFormat:@"OXIDE_BENCHMARK_BUILD_FAIL %@", message]);
+  OxidePerfPostDarwinNotification(kOxidePerfFailedNotification);
 }
 
 - (void)updateCameraDrivenDisplayLinkState {
@@ -3719,6 +3790,10 @@ static void OxidePerfCameraBenchmarkStartCallback(
     @"planSkips" : @(debugPerf.plan_skips),
     @"drawablesAcquired" : @(debugPerf.drawables_acquired),
     @"commandBuffersCommitted" : @(debugPerf.command_buffers_committed),
+    @"hostIdleSkippedFrames" : @(stats.host_idle_skipped_frames),
+    @"hostSubmittedFrames" : @(stats.host_submitted_frames),
+    @"hostFrameDirty" : @(stats.host_frame_dirty),
+    @"hostSettleFramesRemaining" : @(stats.host_settle_frames_remaining),
     @"previewSubmissionDepth" : @(stats.renderer_preview_submission_depth),
     @"presentedFrameAgeMs" : @(stats.renderer_preview_submission_frame_age_ms),
     @"samplesReceived" : @(stats.cam_samples_received),
@@ -3907,15 +3982,142 @@ static void OxidePerfCameraBenchmarkStartCallback(
       });
 }
 
+- (void)pollActualAppStaticIdleBenchmarkReadiness {
+  if (!OxidePerfStaticIdleRealAppHostEnabled() || self.perfBenchmarkReady ||
+      self.perfBenchmarkRunning) {
+    return;
+  }
+  if (!gHostAppReady && gMetalView != nil) {
+    EnsureHostInitialized(gMetalView);
+  }
+  oxide_host_stats_t stats = {0};
+  oxide_host_app_debug_perf_t debugPerf = {0};
+  if (gHostAppReady && oxide_host_app_stats(&stats) == 0 &&
+      oxide_host_app_debug_perf(&debugPerf) == 0 &&
+      stats.host_submitted_frames > 0 &&
+      stats.host_settle_frames_remaining == 0 &&
+      stats.host_frame_dirty == 0 &&
+      stats.host_idle_skipped_frames > 0 &&
+      debugPerf.drawables_acquired > 0 &&
+      debugPerf.command_buffers_committed > 0) {
+    if (!self.perfStaticIdleWindowStarted) {
+      self.perfStaticIdleWindowStarted = YES;
+      self.perfStaticIdleWindowMeasured = NO;
+      self.perfStaticIdleStartTime = CACurrentMediaTime();
+      self.perfStaticIdleStartDisplayLinkCallbacks = debugPerf.on_tick_calls;
+      self.perfStaticIdleStartPlanSkips = debugPerf.plan_skips;
+      self.perfStaticIdleStartDrawablesAcquired =
+          debugPerf.drawables_acquired;
+      self.perfStaticIdleStartCommandBuffersCommitted =
+          debugPerf.command_buffers_committed;
+      self.perfStaticIdleStartHostSubmittedFrames =
+          stats.host_submitted_frames;
+      self.perfStaticIdleStartHostIdleSkippedFrames =
+          stats.host_idle_skipped_frames;
+      [self updateActualAppCameraBenchmarkState:
+                [NSString stringWithFormat:@"idle-window:%u",
+                                           self.perfBenchmarkCompletedRuns]];
+      dispatch_after(
+          dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.016 * NSEC_PER_SEC)),
+          dispatch_get_main_queue(), ^{
+            [self pollActualAppStaticIdleBenchmarkReadiness];
+          });
+      return;
+    }
+    uint32_t deltaDrawables =
+        debugPerf.drawables_acquired -
+        self.perfStaticIdleStartDrawablesAcquired;
+    uint32_t deltaCommandBuffers =
+        debugPerf.command_buffers_committed -
+        self.perfStaticIdleStartCommandBuffersCommitted;
+    uint64_t deltaSubmitted =
+        stats.host_submitted_frames -
+        self.perfStaticIdleStartHostSubmittedFrames;
+    if (deltaDrawables != 0 || deltaCommandBuffers != 0 ||
+        deltaSubmitted != 0 || stats.host_frame_dirty != 0 ||
+        stats.host_settle_frames_remaining != 0) {
+      oxide_host_app_debug_perf_t startDebug = {0};
+      oxide_host_stats_t startStats = {0};
+      startDebug.on_tick_calls =
+          self.perfStaticIdleStartDisplayLinkCallbacks;
+      startDebug.plan_skips = self.perfStaticIdleStartPlanSkips;
+      startDebug.drawables_acquired =
+          self.perfStaticIdleStartDrawablesAcquired;
+      startDebug.command_buffers_committed =
+          self.perfStaticIdleStartCommandBuffersCommitted;
+      startStats.host_submitted_frames =
+          self.perfStaticIdleStartHostSubmittedFrames;
+      startStats.host_idle_skipped_frames =
+          self.perfStaticIdleStartHostIdleSkippedFrames;
+      double windowMs =
+          (CACurrentMediaTime() - self.perfStaticIdleStartTime) * 1000.0;
+      [self emitActualAppStaticIdleSummaryWithStartDebug:startDebug
+                                                endDebug:debugPerf
+                                              startStats:startStats
+                                                endStats:stats
+                                                windowMs:windowMs];
+      [self updateActualAppCameraBenchmarkState:@"idle-failed"];
+      return;
+    }
+    uint64_t deltaIdleSkipped =
+        stats.host_idle_skipped_frames -
+        self.perfStaticIdleStartHostIdleSkippedFrames;
+    double windowMs =
+        (CACurrentMediaTime() - self.perfStaticIdleStartTime) * 1000.0;
+    if (deltaIdleSkipped < 8 && windowMs < 100.0) {
+      dispatch_after(
+          dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.016 * NSEC_PER_SEC)),
+          dispatch_get_main_queue(), ^{
+            [self pollActualAppStaticIdleBenchmarkReadiness];
+          });
+      return;
+    }
+    self.perfStaticIdleEndDisplayLinkCallbacks = debugPerf.on_tick_calls;
+    self.perfStaticIdleEndPlanSkips = debugPerf.plan_skips;
+    self.perfStaticIdleEndDrawablesAcquired = debugPerf.drawables_acquired;
+    self.perfStaticIdleEndCommandBuffersCommitted =
+        debugPerf.command_buffers_committed;
+    self.perfStaticIdleEndHostSubmittedFrames = stats.host_submitted_frames;
+    self.perfStaticIdleEndHostIdleSkippedFrames =
+        stats.host_idle_skipped_frames;
+    self.perfStaticIdleEndHostFrameDirty = stats.host_frame_dirty;
+    self.perfStaticIdleEndHostSettleFramesRemaining =
+        stats.host_settle_frames_remaining;
+    self.perfStaticIdleMeasuredWindowMs = windowMs;
+    self.perfStaticIdleWindowMeasured = YES;
+    self.perfBenchmarkReady = YES;
+    [self updateActualAppCameraBenchmarkState:
+              [NSString stringWithFormat:@"idle-ready:%u",
+                                         self.perfBenchmarkCompletedRuns]];
+    if (!self.perfBenchmarkReadyEmitted) {
+      self.perfBenchmarkReadyEmitted = YES;
+      OxidePerfEmitConsoleLine(
+          [NSString stringWithFormat:@"OXIDE_READY %@", OxidePerfCaseName()]);
+      OxidePerfPostDarwinNotification(kOxidePerfReadyNotification);
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [self handleActualAppBenchmarkStart];
+    });
+    return;
+  }
+  dispatch_after(
+      dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
+      dispatch_get_main_queue(), ^{
+        [self pollActualAppStaticIdleBenchmarkReadiness];
+      });
+}
+
 - (void)configureActualAppCameraBenchmarkIfNeeded {
-  if (!OxidePerfActualAppCameraBenchmarkEnabled() ||
-      self.perfBenchmarkConfigured) {
+  if (!OxidePerfActualAppBenchmarkEnabled() || self.perfBenchmarkConfigured) {
     return;
   }
   self.perfBenchmarkConfigured = YES;
   self.perfBenchmarkReady = NO;
   self.perfBenchmarkRunning = NO;
   self.perfBenchmarkCompletedRuns = 0;
+  self.perfStaticIdleWindowStarted = NO;
+  self.perfStaticIdleWindowMeasured = NO;
+  self.perfStaticIdleMeasuredWindowMs = 0.0;
   CFNotificationCenterAddObserver(
       CFNotificationCenterGetDarwinNotifyCenter(),
       (__bridge const void *)(self), OxidePerfCameraBenchmarkStartCallback,
@@ -3923,6 +4125,20 @@ static void OxidePerfCameraBenchmarkStartCallback(
       CFNotificationSuspensionBehaviorDeliverImmediately);
   [self updateActualAppCameraBenchmarkIterationStartObserver];
   [self updateActualAppCameraBenchmarkState:@"booting"];
+  if (OxidePerfStaticIdleRealAppHostEnabled()) {
+    int32_t sceneIndex = OxideResolveSceneIndexNamed("Nine Slice");
+    if (sceneIndex < 0) {
+      OxidePerfEmitBenchmarkFailure(
+          @"actual-app static idle benchmark: missing Nine Slice scene");
+      [self updateActualAppCameraBenchmarkState:@"failed"];
+      return;
+    }
+    oxide_host_set_benchmark_mode(0);
+    oxide_host_set_scene((uint32_t)sceneIndex);
+    [self refreshStats];
+    [self pollActualAppStaticIdleBenchmarkReadiness];
+    return;
+  }
   if (OxidePerfActualAppAVFoundationCameraBenchmarkEnabled()) {
     if (![self configureActualAppAVFoundationSessionIfNeeded]) {
       [self updateActualAppCameraBenchmarkState:@"failed"];
@@ -3948,6 +4164,124 @@ static void OxidePerfCameraBenchmarkStartCallback(
   [self pollActualAppCameraBenchmarkReadiness];
 }
 
+- (void)emitActualAppStaticIdleSummaryWithStartDebug:
+            (oxide_host_app_debug_perf_t)startDebug
+                                      endDebug:(oxide_host_app_debug_perf_t)endDebug
+                                    startStats:(oxide_host_stats_t)startStats
+                                      endStats:(oxide_host_stats_t)endStats
+                                      windowMs:(double)windowMs {
+  uint32_t deltaDisplayLink =
+      endDebug.on_tick_calls - startDebug.on_tick_calls;
+  uint32_t deltaPlanSkips = endDebug.plan_skips - startDebug.plan_skips;
+  uint32_t deltaDrawables =
+      endDebug.drawables_acquired - startDebug.drawables_acquired;
+  uint32_t deltaCommandBuffers = endDebug.command_buffers_committed -
+                                 startDebug.command_buffers_committed;
+  uint64_t deltaSubmitted = endStats.host_submitted_frames -
+                            startStats.host_submitted_frames;
+  uint64_t deltaIdleSkipped = endStats.host_idle_skipped_frames -
+                              startStats.host_idle_skipped_frames;
+  BOOL passed = deltaDrawables == 0 && deltaCommandBuffers == 0 &&
+                deltaSubmitted == 0 && endStats.host_frame_dirty == 0 &&
+                endStats.host_settle_frames_remaining == 0;
+  NSDictionary *payload = @{
+    @"windowMs" : @(windowMs),
+    @"startDisplayLinkCallbacks" : @(startDebug.on_tick_calls),
+    @"endDisplayLinkCallbacks" : @(endDebug.on_tick_calls),
+    @"deltaDisplayLinkCallbacks" : @(deltaDisplayLink),
+    @"startPlanSkips" : @(startDebug.plan_skips),
+    @"endPlanSkips" : @(endDebug.plan_skips),
+    @"deltaPlanSkips" : @(deltaPlanSkips),
+    @"startDrawablesAcquired" : @(startDebug.drawables_acquired),
+    @"endDrawablesAcquired" : @(endDebug.drawables_acquired),
+    @"deltaDrawablesAcquired" : @(deltaDrawables),
+    @"startCommandBuffersCommitted" :
+        @(startDebug.command_buffers_committed),
+    @"endCommandBuffersCommitted" : @(endDebug.command_buffers_committed),
+    @"deltaCommandBuffersCommitted" : @(deltaCommandBuffers),
+    @"startHostSubmittedFrames" : @(startStats.host_submitted_frames),
+    @"endHostSubmittedFrames" : @(endStats.host_submitted_frames),
+    @"deltaHostSubmittedFrames" : @(deltaSubmitted),
+    @"startHostIdleSkippedFrames" : @(startStats.host_idle_skipped_frames),
+    @"endHostIdleSkippedFrames" : @(endStats.host_idle_skipped_frames),
+    @"deltaHostIdleSkippedFrames" : @(deltaIdleSkipped),
+    @"endHostFrameDirty" : @(endStats.host_frame_dirty),
+    @"endHostSettleFramesRemaining" :
+        @(endStats.host_settle_frames_remaining),
+    @"contractPassed" : @(passed),
+  };
+  OxidePerfEmitJSONLine(kOxidePerfStaticIdleSummaryPrefix, payload);
+  if (!passed) {
+    OxidePerfEmitBenchmarkFailure([NSString
+        stringWithFormat:@"static idle no-redraw contract failed: "
+                         @"drawables=%u commandBuffers=%u submitted=%llu "
+                         @"dirty=%u settle=%u",
+                         deltaDrawables, deltaCommandBuffers,
+                         (unsigned long long)deltaSubmitted,
+                         endStats.host_frame_dirty,
+                         endStats.host_settle_frames_remaining]);
+  }
+}
+
+- (void)finishActualAppStaticIdleBenchmarkRun {
+  if (!self.perfBenchmarkRunning) {
+    return;
+  }
+  self.perfBenchmarkRunning = NO;
+  self.perfBenchmarkCompletedRuns += 1;
+  [self updateActualAppCameraBenchmarkIterationStartObserver];
+  if (!self.perfStaticIdleWindowMeasured) {
+    OxidePerfEmitBenchmarkFailure(
+        @"static idle benchmark reached finish before idle window measured");
+    return;
+  }
+  oxide_host_app_debug_perf_t startDebug = {0};
+  oxide_host_stats_t startStats = {0};
+  startDebug.on_tick_calls = self.perfStaticIdleStartDisplayLinkCallbacks;
+  startDebug.plan_skips = self.perfStaticIdleStartPlanSkips;
+  startDebug.drawables_acquired = self.perfStaticIdleStartDrawablesAcquired;
+  startDebug.command_buffers_committed =
+      self.perfStaticIdleStartCommandBuffersCommitted;
+  startStats.host_submitted_frames =
+      self.perfStaticIdleStartHostSubmittedFrames;
+  startStats.host_idle_skipped_frames =
+      self.perfStaticIdleStartHostIdleSkippedFrames;
+  oxide_host_app_debug_perf_t endDebug = {0};
+  oxide_host_stats_t endStats = {0};
+  endDebug.on_tick_calls = self.perfStaticIdleEndDisplayLinkCallbacks;
+  endDebug.plan_skips = self.perfStaticIdleEndPlanSkips;
+  endDebug.drawables_acquired = self.perfStaticIdleEndDrawablesAcquired;
+  endDebug.command_buffers_committed =
+      self.perfStaticIdleEndCommandBuffersCommitted;
+  endStats.host_submitted_frames = self.perfStaticIdleEndHostSubmittedFrames;
+  endStats.host_idle_skipped_frames =
+      self.perfStaticIdleEndHostIdleSkippedFrames;
+  endStats.host_frame_dirty = self.perfStaticIdleEndHostFrameDirty;
+  endStats.host_settle_frames_remaining =
+      self.perfStaticIdleEndHostSettleFramesRemaining;
+  double windowMs = self.perfStaticIdleMeasuredWindowMs;
+  NSDictionary *stagePayload = @{
+    @"stages" : @{
+      @"workload" : OxidePerfSingleMetricSummary(@"ms", windowMs),
+    },
+  };
+  OxidePerfEmitJSONLine(@"OXIDE_STAGE_SUMMARY ", stagePayload);
+  [self emitActualAppStaticIdleSummaryWithStartDebug:startDebug
+                                            endDebug:endDebug
+                                          startStats:startStats
+                                            endStats:endStats
+                                            windowMs:windowMs];
+  [self emitActualAppHostDebugSummary];
+  [self updateActualAppCameraBenchmarkState:
+            [NSString
+                stringWithFormat:@"idle-ready:%u",
+                                 self.perfBenchmarkCompletedRuns]];
+  OxidePerfEmitConsoleLine(
+      [NSString stringWithFormat:@"OXIDE_COMPLETE %@", OxidePerfCaseName()]);
+  OxidePerfPostDarwinNotification(kOxidePerfCompleteNotification);
+  OxidePerfPostDarwinNotification(kOxidePerfReadyNotification);
+}
+
 - (void)finishActualAppCameraBenchmarkRun {
   if (!self.perfBenchmarkRunning) {
     return;
@@ -3966,7 +4300,21 @@ static void OxidePerfCameraBenchmarkStartCallback(
   OxidePerfPostDarwinNotification(kOxidePerfReadyNotification);
 }
 
-- (void)handleActualAppCameraBenchmarkStart {
+- (void)handleActualAppBenchmarkStart {
+  if (OxidePerfStaticIdleRealAppHostEnabled()) {
+    if (!self.perfBenchmarkReady || self.perfBenchmarkRunning ||
+        !self.perfStaticIdleWindowMeasured) {
+      return;
+    }
+    self.perfBenchmarkRunning = YES;
+    [self updateActualAppCameraBenchmarkState:
+              [NSString stringWithFormat:@"idle-running:%u",
+                                         self.perfBenchmarkCompletedRuns + 1]];
+    OxidePerfEmitConsoleLine(
+        [NSString stringWithFormat:@"OXIDE_START %@", OxidePerfCaseName()]);
+    [self finishActualAppStaticIdleBenchmarkRun];
+    return;
+  }
   if (!OxidePerfActualAppCameraBenchmarkEnabled() || !self.perfBenchmarkReady ||
       self.perfBenchmarkRunning) {
     return;
@@ -4381,7 +4729,8 @@ static void OxidePerfCameraBenchmarkStartCallback(
   UIViewController *vc = [UIViewController new];
   if (IsRunningPerfBenchmarkHost()) {
     gAppDebugPerf.perf_scene_branch_calls += 1;
-    if (!OxidePerfCameraRealAppHostEnabled()) {
+    if (!OxidePerfCameraRealAppHostEnabled() &&
+        !OxidePerfStaticIdleRealAppHostEnabled()) {
       UIView *blank = [UIView new];
       blank.backgroundColor = [UIColor whiteColor];
       vc.view = blank;
@@ -4431,7 +4780,7 @@ static void OxidePerfCameraBenchmarkStartCallback(
     } else {
       self.perfCameraPreviewView = nil;
     }
-    if (OxidePerfActualAppCameraBenchmarkEnabled() || IsRunningUITest()) {
+    if (OxidePerfActualAppBenchmarkEnabled() || IsRunningUITest()) {
       [self installPerfBenchmarkStateLabelIfNeededInView:container];
     } else {
       self.perfBenchmarkStateLabel = nil;
@@ -4465,7 +4814,7 @@ static void OxidePerfCameraBenchmarkStartCallback(
   gMetalView = mv;
   gAppDebugPerf.metal_view_installs += 1;
   self.window.rootViewController = vc;
-  if (OxidePerfActualAppCameraBenchmarkEnabled() || IsRunningUITest()) {
+  if (OxidePerfActualAppBenchmarkEnabled() || IsRunningUITest()) {
     [self installPerfBenchmarkStateLabelIfNeededInView:vc.view];
   } else {
     self.perfBenchmarkStateLabel = nil;
@@ -5196,6 +5545,14 @@ static void OxidePerfCameraBenchmarkStartCallback(
   BOOL noVisiblePresent = OxidePerfCameraNoVisiblePresentEnabled() &&
                           OxidePerfCameraRealAppHostEnabled() &&
                           !OxidePerfCameraRealAppHybridVisiblePreviewEnabled();
+  if (!noVisiblePresent && oxide_host_app_should_render() == 0) {
+    gAppDebugPerf.plan_skips += 1;
+    tickPerf.skipped = 1;
+    tickPerf.tick_total_ms = (float)(OxidePerfNowMs() - tickT0Ms);
+    gLastCameraTickPerf = tickPerf;
+    [self updateCameraDrivenDisplayLinkState];
+    return;
+  }
   id<CAMetalDrawable> drawable = nil;
   if (!noVisiblePresent) {
     double drawableAcquireT0Ms = OxidePerfNowMs();

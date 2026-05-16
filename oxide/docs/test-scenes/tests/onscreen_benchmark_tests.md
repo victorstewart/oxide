@@ -14,10 +14,8 @@ These tests keep the headline on-screen benchmark key list honest. They verify t
 
 ## Entry points list
 
-- `headline_component_onscreen_benchmarks_prepare_and_step()`
-  - Checks label, progress bar, spinner, button, toggle, slider, image view, nine-slice image, and collection-view benchmark keys.
-- `headline_animation_onscreen_benchmarks_prepare_and_step()`
-  - Checks indeterminate progress, button press scale, toggle thumb spring, and slider thumb move benchmark keys.
+- `headline_onscreen_benchmarks_prepare_and_step()`
+  - Checks component and animation benchmark keys against their expected scenes.
 - `raw_touch_pinch_reaches_zoom_image_scene()`
   - Verifies that two-finger raw touch movement reaches the Zoom Image scene as a pinch.
 - `raw_touch_pinch_does_not_apply_two_touch_pan_to_zoom_image_scene()`
@@ -66,6 +64,7 @@ assert!(router.step_onscreen_benchmark("animation_slider_thumb_move", 1));
 
 ## Changelog
 
+- 2026-05-15: Merged component and animation benchmark-key coverage into one table-driven test.
 - 2026-05-09: Added regression coverage that pinch does not replay two-touch pan as a one-finger drag.
 - 2026-05-05: Reused the shared integration-test `NullUploader` helper.
 - 2026-04-26: Added coverage for headline on-screen UI object and animation benchmark keys.

@@ -260,6 +260,7 @@ fn snapshot_scene3d_mixes_with_2d_overlay() {
         line_instance,
     ];
     let scene = Pass3d {
+        viewport: None,
         clear_color: Some(api::Color::rgba(0.08, 0.09, 0.13, 1.0)),
         clear_depth: true,
         view_proj: mat4_identity(),

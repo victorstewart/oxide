@@ -222,6 +222,13 @@ pub enum DrawCmd {
     // as a request to composite the latest camera frame behind UI.
     // When unsupported on a platform, it is a no-op.
     CameraBg { rect: RectF, tint: Color, alpha: f32, grayscale: bool, blur: bool, sigma: f32 },
+    // Native compositor camera preview plane. Platform hosts that support this keep
+    // camera frames outside the app renderer and place UI/blur/tint draws above it.
+    // When unsupported on a platform, it is a no-op.
+    NativeCameraPreview { rect: RectF },
+    // Shared native/web hook for app-owned renderers that embed a Topomap globe
+    // at a specific draw-list position. Generic backends ignore it.
+    TopomapGlobe { rect: RectF },
     Spinner { center: [f32; 2], atom: f32, alpha: f32 },
     ClipPush { rect: RectI },
     ClipPop,
@@ -259,6 +266,8 @@ pub trait RenderEncoder {
         _sigma: f32,
     ) {
     }
+    fn draw_native_camera_preview(&mut self, _rect: RectF) {}
+    fn draw_topomap_globe(&mut self, _rect: RectF) {}
     fn draw_spinner(&mut self, center: [f32; 2], atom: f32, alpha: f32);
     fn draw_glyph_run(&mut self, run: &GlyphRun);
     fn draw_glyph_run_resolved(&mut self, run: &GlyphRun, vertices: &[Vertex], indices: &[u16]) {

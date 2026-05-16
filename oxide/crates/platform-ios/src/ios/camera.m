@@ -3736,7 +3736,8 @@ static int32_t g_oxide_camera_default_preview_pixel_format = 0;
 static int32_t g_oxide_camera_audio_session_mode = 0;
 
 static int32_t oxide_cam_start_default_impl(BOOL enableAudio,
-                                            NSInteger captureMode) {
+                                            NSInteger captureMode,
+                                            BOOL deliverFrames) {
   __block int32_t result = -1;
   dispatch_sync(CameraRegistryQueue(), ^{
     if (g_default_stream && g_default_stream.isRunning) {
@@ -3756,7 +3757,7 @@ static int32_t oxide_cam_start_default_impl(BOOL enableAudio,
     };
     NametagCameraStream *stream = [[NametagCameraStream alloc]
         initWithConfig:&cfg
-            frameBlock:oxide_camera_stream_callback
+            frameBlock:deliverFrames ? oxide_camera_stream_callback : NULL
             audioBlock:enableAudio ? oxide_camera_audio_callback : NULL
                context:NULL];
     if (stream) {
@@ -3979,11 +3980,15 @@ void oxide_host_set_camera_photo_callback(OxideCameraPhotoCallback callback) {
 }
 
 int32_t oxide_cam_start_default(void) {
-  return oxide_cam_start_default_impl(YES, g_oxide_camera_default_mode);
+  return oxide_cam_start_default_impl(YES, g_oxide_camera_default_mode, YES);
 }
 
 int32_t oxide_cam_start_default_preview_only(void) {
-  return oxide_cam_start_default_impl(NO, 0);
+  return oxide_cam_start_default_impl(NO, 0, YES);
+}
+
+int32_t oxide_cam_start_native_preview_layer(void) {
+  return oxide_cam_start_default_impl(NO, g_oxide_camera_default_mode, NO);
 }
 
 void oxide_cam_stop(void) {

@@ -11,7 +11,7 @@
 
 ## Entry points list
 - `IosCameraManager`
-  Generic iOS camera manager for preview, photo capture, recording, and camera-scene texture export. When the optional `native-camera-bridge` feature is enabled, the crate also compiles the Objective-C camera bridge it binds to.
+  Generic iOS camera manager for native preview planes, app-visible frame streams, photo capture, recording, and camera-scene texture export. When the optional `native-camera-bridge` feature is enabled, the crate also compiles the Objective-C camera bridge it binds to.
 - Shared native bridges
   `src/ios/bluetooth.m`, `src/ios/host_services.m`, `src/ios/network.m`, and `src/ios/push.m` now provide the shared Objective-C ownership for generic BLE, clipboard/haptics/permissions/open-URL helpers, QUIC/reachability, and APNs plumbing used by both Oxide host apps and downstream apps such as Nametag.
 - `IosMediaLibraryManager`
@@ -25,6 +25,7 @@
 
 ## Logic narrative
 - `IosCameraManager` now owns the shared iOS camera bridge that downstream apps such as Nametag consume, so app crates should only keep app-specific review/policy hooks above this layer instead of duplicating AVFoundation camera control code locally.
+- Native preview streams increment a separate preview lease count and start the host bridge with frame delivery disabled. If an app-visible stream starts while a native preview is active, the bridge restarts with frame callbacks; when the last app-visible subscriber leaves, the bridge downgrades back to native-preview-only capture when preview leases remain.
 - `host_services.m` now owns the shared clipboard, haptics, and permission/update plumbing so host apps can keep only app-shell behavior locally instead of carrying parallel Objective-C utility bridges.
 - Media-library permission status remains lazy until an explicit Photos request, and the cached Oxide status is kept separate from the legacy Nametag status because limited Photos access has different status codes across those bridges.
 - The native CoreLocation bridge keeps delegate-owned cached location state on the main queue; synchronous reads of the last sample also cross that queue so `LocationService: Send + Sync` callers do not race the delegate callback.
@@ -39,11 +40,14 @@
 ## Edge cases and failure modes
 - Negative host return codes are converted into structured `PlatformError` values.
 - Missing/empty returned buffers are treated as `NotFound` instead of producing invalid slices.
+- Native preview stop is lease-based: dropping the last preview stream stops capture only when there are no app-visible frame subscribers.
 
 ## Testing and benchmarks
 - Validated indirectly through downstream workspace builds/tests that consume these services.
 
 ## Changelog
+- 2026-05-15: added the native camera preview stream path that can run `AVCaptureVideoPreviewLayer` presentation without app-visible camera frame callbacks, while preserving full frame streams for capture and pixel-processing callers.
+- 2026-05-15: compacted empty camera-frame stub output clearing in the standalone Metal app host.
 - 2026-05-01: split lazy media-library permission caching into Oxide and legacy Nametag status slots so limited Photos access preserves each bridge's ABI mapping.
 - 2026-04-20: synchronized `oxide_host_location_last` through the main queue to match CoreLocation delegate ownership and prevent cross-thread reads of the cached native sample.
 - 2026-03-20: absorbed shared iOS clipboard, haptics, permissions, and open-URL/settings Objective-C helpers into `src/ios/host_services.m`, deleting the parallel host-local copies from both Oxide host-app and downstream Nametag host code.

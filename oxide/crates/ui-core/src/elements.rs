@@ -596,6 +596,7 @@ pub struct UICameraView {
     pub grayscale: bool,
     pub blur: bool,
     pub sigma: f32,
+    pub native_preview: bool,
 }
 
 impl Default for UICameraView {
@@ -606,13 +607,18 @@ impl Default for UICameraView {
             grayscale: false,
             blur: true,
             sigma: 6.0,
+            native_preview: false,
         }
     }
 }
 
 impl UICameraView {
     pub fn encode(&self, rect: gfx::RectF, b: &mut DrawListBuilder) {
-        b.camera_bg(rect, self.tint, self.alpha, self.grayscale, self.blur, self.sigma);
+        if self.native_preview {
+            b.native_camera_preview(rect);
+        } else {
+            b.camera_bg(rect, self.tint, self.alpha, self.grayscale, self.blur, self.sigma);
+        }
     }
 }
 

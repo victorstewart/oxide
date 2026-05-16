@@ -63,6 +63,18 @@ static void OxideMetalHostLog(NSString *line) {
   [handle closeFile];
 }
 
+static void OxideMetalHostClearPtr(void **out) {
+  if (out != NULL) {
+    *out = NULL;
+  }
+}
+
+static void OxideMetalHostClearInt(int32_t *out) {
+  if (out != NULL) {
+    *out = 0;
+  }
+}
+
 void oxide_host_ios_log(const char *utf8, size_t len) {
   if (utf8 == NULL || len == 0) {
     return;
@@ -142,43 +154,21 @@ uint64_t oxide_cam_peek_latest_timestamp_ns(void) {
 int32_t oxide_cam_get_latest_ex(void **y_tex, void **uv_tex, int32_t *w, int32_t *h,
                                 int32_t *bit_depth, int32_t *matrix,
                                 int32_t *video_range, int32_t *color_space) {
-  if (y_tex != NULL) {
-    *y_tex = NULL;
-  }
-  if (uv_tex != NULL) {
-    *uv_tex = NULL;
-  }
-  if (w != NULL) {
-    *w = 0;
-  }
-  if (h != NULL) {
-    *h = 0;
-  }
-  if (bit_depth != NULL) {
-    *bit_depth = 0;
-  }
-  if (matrix != NULL) {
-    *matrix = 0;
-  }
-  if (video_range != NULL) {
-    *video_range = 0;
-  }
-  if (color_space != NULL) {
-    *color_space = 0;
-  }
+  OxideMetalHostClearPtr(y_tex);
+  OxideMetalHostClearPtr(uv_tex);
+  OxideMetalHostClearInt(w);
+  OxideMetalHostClearInt(h);
+  OxideMetalHostClearInt(bit_depth);
+  OxideMetalHostClearInt(matrix);
+  OxideMetalHostClearInt(video_range);
+  OxideMetalHostClearInt(color_space);
   return 0;
 }
 
 int32_t oxide_cam_get_latest_bgra(void **bgra_tex, int32_t *w, int32_t *h) {
-  if (bgra_tex != NULL) {
-    *bgra_tex = NULL;
-  }
-  if (w != NULL) {
-    *w = 0;
-  }
-  if (h != NULL) {
-    *h = 0;
-  }
+  OxideMetalHostClearPtr(bgra_tex);
+  OxideMetalHostClearInt(w);
+  OxideMetalHostClearInt(h);
   return 0;
 }
 

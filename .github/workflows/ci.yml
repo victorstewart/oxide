@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      update_golds:
+        description: 'Regenerate goldens (does not commit)'
+        required: false
+        default: 'false'
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: oxide
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            oxide/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('oxide/Cargo.lock') }}
+
+      - name: Download OFL Inter Regular
+        run: |
+          mkdir -p fonts
+          curl -L -o fonts/Inter-Regular.ttf https://github.com/rsms/inter/releases/download/v4.0/Inter-Regular.ttf || true
+
+      - name: Unit tests (ui-core, timing)
+        run: cargo test -j$(sysctl -n hw.ncpu) -p oxide-ui-core -p oxide-timing
+
+      - name: Perf tooling tests
+        run: |
+          cargo test -j$(sysctl -n hw.ncpu) -p oxide-perf-runner --test report_tests
+          cargo test -j$(sysctl -n hw.ncpu) -p xtask --tests
+          cargo test -j$(sysctl -n hw.ncpu) -p oxide-renderer-metal glyph_icb_cpu_recording_uses_shared_storage
+          cargo test -j$(sysctl -n hw.ncpu) -p oxide-renderer-metal macos_defaults_disable_icb_but_keep_layer_cache
+
+      - name: Perf sweep
+        run: |
+          just --justfile ../Justfile sweep
+          just --justfile ../Justfile aggregate
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Workspace perf compare
+        run: |
+          cargo run --release -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --compare benchmarks/workspace/latest.json --json-out benchmarks/workspace/ci-current.json --markdown-out benchmarks/workspace/ci-current.md
+
+      - name: Static goldens
+        env:
+          SNAPSHOT_FONT_PATH: ../fonts/Inter-Regular.ttf
+        run: just --justfile ../Justfile golden
+
+      - name: Anim frames
+        env:
+          SNAPSHOT_FONT_PATH: ../fonts/Inter-Regular.ttf
+        run: |
+          just --justfile ../Justfile anim
+          just --justfile ../Justfile aggregate-anim
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts
+          path: |
+            sweep.txt
+            ../sweep.csv
+            ../sweep.json
+            benchmarks/workspace/ci-current.json
+            benchmarks/workspace/ci-current.md
+            artifacts/static
+            artifacts/anim
+
+  update-goldens:
+    if: ${{ github.event.inputs.update_golds == 'true' }}
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: oxide
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Download OFL Inter Regular
+        run: |
+          mkdir -p fonts
+          curl -L -o fonts/Inter-Regular.ttf https://github.com/rsms/inter/releases/download/v4.0/Inter-Regular.ttf || true
+
+      - name: Regenerate goldens
+        env:
+          UPDATE_GOLDENS: 1
+          SNAPSHOT_FONT_PATH: ../fonts/Inter-Regular.ttf
+        run: |
+          just --justfile ../Justfile golden
+          just --justfile ../Justfile anim
+
+      - name: Upload updated goldens
+        uses: actions/upload-artifact@v4
+        with:
+          name: updated-goldens
+          path: |
+            goldens/static
+            goldens/anim

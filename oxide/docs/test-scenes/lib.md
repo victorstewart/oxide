@@ -87,6 +87,7 @@ assert!(router.step_onscreen_benchmark("component_button_encode", 1));
 
 ## Changelog
 
+- 2026-05-16: Merged duplicate Controls-scene benchmark prepare arms into one grouped reset.
 - 2026-05-13: Collapsed duplicate spinner, slider, and nine-slice on-screen benchmark step bodies while preserving their case-specific action labels.
 - 2026-05-11: Removed the redundant component-benchmark reset assignment for `Controls::progress_indeterminate`; `Controls::default()` already starts determinate progress.
 - 2026-05-09: Filtered router touch-pan forwarding to one-finger pans so pinch does not also drag Zoom Image or Camera state.

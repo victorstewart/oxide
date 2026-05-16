@@ -49,11 +49,8 @@ impl MetalRenderer {
                 "neon marker compositor currently requires MetalRenderer sample_count == 1",
             ));
         }
-        if self.frame_2d_encoded {
-            return Err(api::RenderError::InvalidOperation(
-                "encode_neon_markers must run before encode_pass within a frame",
-            ));
-        }
+        // Keep marker passes interleavable with app UI for embedded renderers.
+        // The frame attachment helper below loads any already-drawn 2D content.
         let marker_count = pass.clamped_len();
         if marker_count == 0 {
             return Ok(());
@@ -112,14 +109,7 @@ impl MetalRenderer {
 
         let rpd = RenderPassDescriptor::new();
         let ca0 = rpd.color_attachments().object_at(0).unwrap();
-        ca0.set_texture(Some(&target_tex));
-        ca0.set_store_action(MTLStoreAction::Store);
-        if self.frame_color_initialized {
-            ca0.set_load_action(MTLLoadAction::Load);
-        } else {
-            ca0.set_load_action(MTLLoadAction::Clear);
-            ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 });
-        }
+        configure_frame_color_attachment(ca0, &target_tex, self.frame_color_initialized);
 
         let enc = cmd.new_render_command_encoder(&rpd);
         enc.set_render_pipeline_state(&self.pso_neon_marker);

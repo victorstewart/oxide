@@ -196,6 +196,7 @@ impl Instance3d {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Pass3d<'a> {
+    pub viewport: Option<api::RectF>,
     pub clear_color: Option<api::Color>,
     pub clear_depth: bool,
     pub view_proj: Mat4,

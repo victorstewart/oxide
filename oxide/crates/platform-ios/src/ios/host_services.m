@@ -649,14 +649,12 @@ void oxide_host_perm_request(uint32_t domain) {
 void nametag_ios_publish_permissions(void) {
   emit_nametag_permission_async(kNametagPermissionDomainLocation,
                                 nametag_location_permission_status());
-  emit_nametag_permission_async(kNametagPermissionDomainBluetooth,
-                                nametag_bluetooth_permission_status());
   emit_nametag_permission_async(kNametagPermissionDomainCamera,
                                 nametag_camera_permission_status());
   emit_nametag_permission_async(kNametagPermissionDomainMicrophone,
                                 nametag_microphone_permission_status());
-  // Keep Photos permission lazy. Boot-time permission sync must not probe
-  // PHPhotoLibrary before the app explicitly tries to access the library.
+  // Keep Bluetooth and Photos permission lazy. Boot-time permission sync must
+  // not touch CoreBluetooth or PHPhotoLibrary before an explicit app action.
 }
 
 void nametag_ios_request_permission(int32_t domain) {

@@ -8,7 +8,7 @@ mod helpers;
 use helpers::NullUploader;
 
 #[test]
-fn headline_component_onscreen_benchmarks_prepare_and_step() {
+fn headline_onscreen_benchmarks_prepare_and_step() {
     let cases = [
         ("component_label_encode", SceneKind::TextLayout),
         ("component_progress_bar_encode", SceneKind::Controls),
@@ -19,20 +19,6 @@ fn headline_component_onscreen_benchmarks_prepare_and_step() {
         ("component_image_view_encode", SceneKind::ZoomImage),
         ("component_nine_slice_image_encode", SceneKind::NineSlice),
         ("component_collection_view_encode", SceneKind::CollectionStress),
-    ];
-
-    for (name, scene) in cases {
-        let mut router = Router::new(NullUploader);
-
-        assert!(router.prepare_onscreen_benchmark(name), "{name} did not prepare");
-        assert_eq!(router.current, scene, "{name} prepared the wrong scene");
-        assert!(router.step_onscreen_benchmark(name, 1), "{name} did not step");
-    }
-}
-
-#[test]
-fn headline_animation_onscreen_benchmarks_prepare_and_step() {
-    let cases = [
         ("animation_progress_indeterminate", SceneKind::Controls),
         ("animation_button_press_scale", SceneKind::Controls),
         ("animation_toggle_thumb_spring", SceneKind::Controls),

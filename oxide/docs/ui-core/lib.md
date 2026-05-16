@@ -46,6 +46,7 @@
 - The popup-picker move follows the same boundary: Oxide owns the reusable multi-column legacy-picker interaction state, scroll-end commit result, and fixed medium-impact haptic intent, while apps keep their own anchored layouts, copy, and visual treatments.
 - The emitter move follows that same pattern: Oxide owns the reusable burst timing, source-shape, and particle sampling math, while apps keep scene-specific asset choice and draw calls.
 - The spinner move follows the same rule at runtime too: the iOS host can now promote spinner draws into native `UIActivityIndicatorViewStyleLarge` views while non-iOS fallbacks still share one Oxide-owned contract.
+- Camera views can now encode either the renderer-owned `CameraBg` path or a `NativeCameraPreview` command when a platform compositor plane should carry the camera frames below Oxide UI.
 - The popup lifecycle move follows that same rule: Oxide now owns the reusable key-popup, approval-gated dismissal, manual or content-root touch-exception, and content-size refresh contract, while apps keep scene-specific copy and mutation policy.
 - This keeps ownership clear: Oxide owns reusable UI state machines; app crates own field naming, copy, and scene composition.
 
@@ -63,6 +64,7 @@
 ## Performance notes
 - Crate-root re-exports are zero-cost.
 - `draw_replay` translates only command-local geometry slices instead of cloning whole draw lists.
+- `UICameraView::native_preview` emits a single no-pixel-copy command and leaves platform support detection to the host.
 - Consolidating the text-input engines here removes duplicate app-side implementations without adding runtime indirection.
 - `prepare_draws` preallocates the resolved clip stack for the common shallow nested-clip path, avoiding the first frame-loop stack growth on representative clipping workloads.
 - `elements::Label` keeps disabled watch logging off the allocation path, preallocates the common wrapped-line buffers, and lets internal non-wrapped label call sites encode borrowed text directly instead of cloning through temporary `Label` values.
@@ -94,6 +96,7 @@ assert_eq!(text.value(), "");
 ```
 
 ## Changelog
+- 2026-05-15: added the native camera preview draw-list command and `UICameraView::native_preview` routing for host-composited camera planes.
 - 2026-05-14: documented `draw_replay` because glyph replay now resolves and translates vertex spans for CPU composition paths.
 - 2026-05-10: reused the existing character-range byte mapping in `elements.rs` text insertion and removed the single-point byte helper.
 - 2026-04-25: reused wrapped-label shaping results after release-mode A/B showed `cpu.component.label.encode` improving from p50 1155.122 us/op, p95 1165.781 to p50 1013.186 us/op, p95 1037.539 in focused runs, with the refreshed full workspace row at p50 987.312 us/op, p95 1004.876.

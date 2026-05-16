@@ -28,7 +28,11 @@ static BOOL OxideShouldLaunchParkedBenchmark(int argc, char **argv) {
     const BOOL realAppHostEnabled = OxideEnvTruthy(realAppHost) ||
                                     OxideArgPresent(argc, argv,
                                                     "-oxide-perf-camera-real-app-host");
-    if (realAppHostEnabled) {
+    const char *staticIdleHost = getenv("OXIDE_PERF_STATIC_IDLE_REAL_APP_HOST");
+    const BOOL staticIdleHostEnabled = OxideEnvTruthy(staticIdleHost) ||
+                                       OxideArgPresent(argc, argv,
+                                                       "-oxide-perf-static-idle-real-app-host");
+    if (realAppHostEnabled || staticIdleHostEnabled) {
       return NO;
     }
     const char *bundlePath = getenv("XCTestBundlePath");

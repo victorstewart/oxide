@@ -3542,6 +3542,7 @@ fn authoring_scene3d_mixed_frame_case(smoke: bool) -> Result<PerfCaseResult> {
         line_instance,
     ];
     let scene = metal::scene3d::Pass3d {
+        viewport: None,
         clear_color: Some(api::Color::rgba(0.08, 0.09, 0.13, 1.0)),
         clear_depth: true,
         view_proj: identity,

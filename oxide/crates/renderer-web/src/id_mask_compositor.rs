@@ -29,6 +29,7 @@ impl Default for IdMaskCityStyle {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IdMaskRasterVertex {
     pub position_px: [f32; 2],
+    pub position_world: [f32; 4],
     pub city_id: u32,
     pub neighborhood_id: u32,
 }
@@ -36,19 +37,69 @@ pub struct IdMaskRasterVertex {
 impl IdMaskRasterVertex {
     #[must_use]
     pub fn new(position_px: [f32; 2], city_id: u8, neighborhood_id: u8) -> Self {
-        Self { position_px, city_id: city_id as u32, neighborhood_id: neighborhood_id as u32 }
+        Self {
+            position_px,
+            position_world: [0.0, 0.0, 0.0, 1.0],
+            city_id: city_id as u32,
+            neighborhood_id: neighborhood_id as u32,
+        }
     }
+
+    #[must_use]
+    pub fn new_world(position_world: [f32; 3], city_id: u8, neighborhood_id: u8) -> Self {
+        Self {
+            position_px: [0.0, 0.0],
+            position_world: [position_world[0], position_world[1], position_world[2], 1.0],
+            city_id: city_id as u32,
+            neighborhood_id: neighborhood_id as u32,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IdMaskRasterProjection {
+    pub world_to_clip: [[f32; 4]; 4],
+    pub use_world_position: bool,
+}
+
+impl IdMaskRasterProjection {
+    #[must_use]
+    pub fn screen_px() -> Self {
+        Self { world_to_clip: identity(), use_world_position: false }
+    }
+
+    #[must_use]
+    pub fn world_3d(world_to_clip: [[f32; 4]; 4]) -> Self {
+        Self { world_to_clip, use_world_position: true }
+    }
+}
+
+fn identity() -> [[f32; 4]; 4] {
+    [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IdMaskPolishConfig {
     pub smooth_radius_px: f32,
     pub fallback_radius_px: f32,
+    /// Optional exterior city halo. Product code should own these visual values;
+    /// WebGPU only consumes them through the JFA field compositor.
+    pub exterior_halo_inner_sigma_px: f32,
+    pub exterior_halo_inner_alpha: f32,
+    pub exterior_halo_outer_sigma_px: f32,
+    pub exterior_halo_outer_alpha: f32,
 }
 
 impl Default for IdMaskPolishConfig {
     fn default() -> Self {
-        Self { smooth_radius_px: 0.70, fallback_radius_px: 2.0 }
+        Self {
+            smooth_radius_px: 0.70,
+            fallback_radius_px: 2.0,
+            exterior_halo_inner_sigma_px: 8.5,
+            exterior_halo_inner_alpha: 0.15,
+            exterior_halo_outer_sigma_px: 16.0,
+            exterior_halo_outer_alpha: 0.04,
+        }
     }
 }
 
@@ -59,6 +110,7 @@ pub struct IdMaskGpuRasterPass<'a> {
     pub mask_height: usize,
     pub mask_scale: f32,
     pub vertices: &'a [IdMaskRasterVertex],
+    pub projection: IdMaskRasterProjection,
 }
 
 impl<'a> IdMaskGpuRasterPass<'a> {

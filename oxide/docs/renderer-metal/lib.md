@@ -48,6 +48,8 @@ Renderer GPU timing is collected in-app instead of depending on Instruments hard
 
 Frame-level camera/effect metadata is gathered in one draw-list scan. Camera coverage, camera-blur sigma, backdrop presence, and the strongest visual-effect blur plan are reused by the later policy and prepass blocks instead of rediscovering the same facts with separate passes.
 
+Native camera preview commands are treated as compositor-plane markers. The Metal renderer uses them to keep the drawable clear alpha transparent for the frame and otherwise performs no camera-frame texture work, leaving preview presentation to the host layer below the Metal layer.
+
 Scene3D bloom uses the same persistent-object discipline: additive bloom PSOs are created once, bloom textures are reused across frames at a bounded downsample size, and `encode_scene3d()` routes `Pass3d::bloom` through the dedicated blur/composite encoder after the main 3D pass has initialized the target.
 
 ID-mask composition is GPU-owned. Semantic region/subregion triangles are rasterized into private R8 render targets and then sampled by the compositor. The renderer keeps those render targets and the raster vertex upload buffer in the frame ring, so repeated mask composition does not allocate fresh textures and buffers every frame. ID-mask and neon-marker internals are split out of this file into focused renderer modules while keeping the public `MetalRenderer` API unchanged.
@@ -65,6 +67,8 @@ ID-mask composition is GPU-owned. Semantic region/subregion triangles are raster
 
 ## Changelog
 
+- 2026-05-15: made `NativeCameraPreview` a no-op Metal draw marker that requests transparent clear so host compositor camera layers can show through under Oxide UI.
+- 2026-05-15: Shared overlay color-target attachment setup between ID-mask and neon-marker encoders.
 - 2026-05-14: Shared scene3d mesh validation, buffer upload, and handle insertion between position-only and colored mesh uploads.
 - 2026-04-23: Added the reusable retained `scene3d` mesh pass with depth buffering and same-frame 2D overlay interop.
 - 2026-04-25: Removed the temporary normalized-index allocation from Solid and GlyphRun Metal uploads.

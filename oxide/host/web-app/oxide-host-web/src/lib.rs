@@ -95,8 +95,15 @@ mod wasm_host {
         ime_composing: bool,
         ime_skip_next_input: bool,
         raf: Option<Closure<dyn FnMut(f64)>>,
+        raf_pending: bool,
         listeners: Vec<Closure<dyn FnMut(Event)>>,
+        frame_dirty: bool,
+        settle_frames_remaining: u8,
+        idle_skipped_frames: u64,
+        submitted_frames: u64,
     }
+
+    const IDLE_SETTLE_FRAMES: u8 = 2;
 
     impl AppState {
         fn frame_at(&mut self, timestamp_ms: f64) -> Result<(), JsValue> {
@@ -126,7 +133,22 @@ mod wasm_host {
             let mut renderer = self.renderer.borrow_mut();
             let token = renderer.begin_frame(&gfx::FrameTarget, Some(&damage));
             renderer.encode_pass(self.builder.drawlist());
-            renderer.submit(token).map_err(render_err)
+            renderer.submit(token).map_err(render_err)?;
+            self.submitted_frames = self.submitted_frames.saturating_add(1);
+            if self.settle_frames_remaining > 0 {
+                self.settle_frames_remaining -= 1;
+            }
+            self.frame_dirty = false;
+            Ok(())
+        }
+
+        fn mark_frame_dirty(&mut self) {
+            self.frame_dirty = true;
+            self.settle_frames_remaining = IDLE_SETTLE_FRAMES;
+        }
+
+        fn should_request_next_frame(&self) -> bool {
+            self.frame_dirty || self.settle_frames_remaining > 0 || self.router.wants_next_frame()
         }
 
         fn last_draw_count(&self) -> u32 {
@@ -195,7 +217,12 @@ mod wasm_host {
                 ime_composing: false,
                 ime_skip_next_input: false,
                 raf: None,
+                raf_pending: false,
                 listeners: Vec::new(),
+                frame_dirty: true,
+                settle_frames_remaining: IDLE_SETTLE_FRAMES,
+                idle_skipped_frames: 0,
+                submitted_frames: 0,
             }));
             install_event_listeners(&state)?;
             Ok(OxideWebApp { state })
@@ -208,9 +235,16 @@ mod wasm_host {
             let state_for_frame = Rc::clone(&self.state);
             let closure = Closure::wrap(Box::new(move |timestamp_ms: f64| {
                 {
-                    let _ = state_for_frame.borrow_mut().frame_at(timestamp_ms);
+                    let mut state = state_for_frame.borrow_mut();
+                    state.raf_pending = false;
+                    let _ = state.frame_at(timestamp_ms);
                 }
-                request_next_frame(&state_for_frame);
+                if state_for_frame.borrow().should_request_next_frame() {
+                    request_next_frame(&state_for_frame);
+                } else {
+                    let mut state = state_for_frame.borrow_mut();
+                    state.idle_skipped_frames = state.idle_skipped_frames.saturating_add(1);
+                }
             }) as Box<dyn FnMut(f64)>);
             self.state.borrow_mut().raf = Some(closure);
             request_next_frame(&self.state);
@@ -268,7 +302,12 @@ mod wasm_host {
         }
 
         pub fn set_scene(&self, scene_index: usize) {
-            self.state.borrow_mut().router.set_scene(scene_index);
+            {
+                let mut state = self.state.borrow_mut();
+                state.router.set_scene(scene_index);
+                state.mark_frame_dirty();
+            }
+            request_next_frame(&self.state);
         }
 
         #[must_use]
@@ -383,11 +422,16 @@ mod wasm_host {
         let Some(window) = web_sys::window() else {
             return;
         };
-        let borrowed = state.borrow();
+        let mut borrowed = state.borrow_mut();
+        if borrowed.raf_pending {
+            return;
+        }
         let Some(raf) = borrowed.raf.as_ref() else {
             return;
         };
-        let _ = window.request_animation_frame(raf.as_ref().unchecked_ref());
+        if window.request_animation_frame(raf.as_ref().unchecked_ref()).is_ok() {
+            borrowed.raf_pending = true;
+        }
     }
 
     fn install_event_listeners(state: &Rc<RefCell<AppState>>) -> Result<(), JsValue> {
@@ -481,16 +525,21 @@ mod wasm_host {
                     tilt: None,
                     device,
                 };
-                state_for_event.borrow_mut().router.input_touch(&touch);
+                let mut state = state_for_event.borrow_mut();
+                state.router.input_touch(&touch);
+                state.mark_frame_dirty();
             } else {
-                state_for_event.borrow_mut().router.input_pointer(
+                let mut state = state_for_event.borrow_mut();
+                state.router.input_pointer(
                     x,
                     y,
                     pointer.movement_x() as f32,
                     pointer.movement_y() as f32,
                     pointer.buttons() as u32,
                 );
+                state.mark_frame_dirty();
             }
+            request_next_frame(&state_for_event);
         }) as Box<dyn FnMut(Event)>);
         retain_listener(state, target, name, closure)
     }
@@ -512,10 +561,15 @@ mod wasm_host {
             );
             let delta = wheel.delta_y() as f32;
             if wheel.ctrl_key() || wheel.meta_key() {
-                state_for_event.borrow_mut().router.input_pinch(x, y, -delta * 0.001);
+                let mut state = state_for_event.borrow_mut();
+                state.router.input_pinch(x, y, -delta * 0.001);
+                state.mark_frame_dirty();
             } else {
-                state_for_event.borrow_mut().router.input_pointer(x, y, 0.0, -delta, 0);
+                let mut state = state_for_event.borrow_mut();
+                state.router.input_pointer(x, y, 0.0, -delta, 0);
+                state.mark_frame_dirty();
             }
+            request_next_frame(&state_for_event);
         }) as Box<dyn FnMut(Event)>);
         retain_listener(state, target, "wheel", closure)
     }
@@ -536,6 +590,9 @@ mod wasm_host {
             if handled {
                 event.prevent_default();
             }
+            state.mark_frame_dirty();
+            drop(state);
+            request_next_frame(&state_for_event);
         }) as Box<dyn FnMut(Event)>);
         retain_listener(state, target, name, closure)
     }
@@ -553,6 +610,9 @@ mod wasm_host {
             let mut state = state_for_start.borrow_mut();
             state.ime_composing = true;
             state.ime_skip_next_input = false;
+            state.mark_frame_dirty();
+            drop(state);
+            request_next_frame(&state_for_start);
         }) as Box<dyn FnMut(Event)>);
         retain_listener(state, target, "compositionstart", start)?;
 
@@ -563,7 +623,11 @@ mod wasm_host {
             };
             let text = composition.data().unwrap_or_default();
             let end = text.chars().count() as u32;
-            state_for_update.borrow_mut().router.input_set_composition(0, end, &text);
+            let mut state = state_for_update.borrow_mut();
+            state.router.input_set_composition(0, end, &text);
+            state.mark_frame_dirty();
+            drop(state);
+            request_next_frame(&state_for_update);
         }) as Box<dyn FnMut(Event)>);
         retain_listener(state, target, "compositionupdate", update)?;
 
@@ -582,6 +646,9 @@ mod wasm_host {
                 state.router.input_commit(&text);
             }
             textarea_for_end.set_value("");
+            state.mark_frame_dirty();
+            drop(state);
+            request_next_frame(&state_for_end);
         }) as Box<dyn FnMut(Event)>);
         retain_listener(state, target, "compositionend", end)?;
 
@@ -605,6 +672,9 @@ mod wasm_host {
                 state.router.input_commit(&text);
             }
             textarea_for_input.set_value("");
+            state.mark_frame_dirty();
+            drop(state);
+            request_next_frame(&state_for_input);
         }) as Box<dyn FnMut(Event)>);
         retain_listener(state, target, "input", input)?;
 
@@ -624,6 +694,9 @@ mod wasm_host {
                 0.0,
                 logical_h * 0.38,
             ));
+            state.mark_frame_dirty();
+            drop(state);
+            request_next_frame(&state_for_show);
         }) as Box<dyn FnMut(Event)>);
         retain_listener(state, window_target, "oxide-ime-show", show)?;
 
@@ -638,6 +711,9 @@ mod wasm_host {
             let element: &HtmlElement = textarea_for_hide.unchecked_ref();
             let _ = element.blur();
             state.router.input_hide_ime();
+            state.mark_frame_dirty();
+            drop(state);
+            request_next_frame(&state_for_hide);
         }) as Box<dyn FnMut(Event)>);
         retain_listener(state, window_target, "oxide-ime-hide", hide)
     }
@@ -649,7 +725,14 @@ mod wasm_host {
     ) -> Result<(), JsValue> {
         let state_for_event = Rc::clone(state);
         let closure = Closure::wrap(Box::new(move |_event: Event| {
-            let _ = state_for_event.borrow_mut().frame_at(perf_now());
+            {
+                let mut state = state_for_event.borrow_mut();
+                state.mark_frame_dirty();
+                let _ = state.frame_at(perf_now());
+            }
+            if state_for_event.borrow().should_request_next_frame() {
+                request_next_frame(&state_for_event);
+            }
         }) as Box<dyn FnMut(Event)>);
         retain_listener(state, target, name, closure)
     }

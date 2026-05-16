@@ -14,9 +14,16 @@ const VERTEX_STRIDE_BYTES: usize = 32;
 const SCENE3D_VERTEX_STRIDE: wgpu::BufferAddress = 28;
 const SCENE3D_UNIFORM_STRIDE: usize = 256;
 const SCENE3D_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
-const ID_MASK_VERTEX_STRIDE: wgpu::BufferAddress = 16;
-const ID_MASK_RASTER_UNIFORM_SIZE_BYTES: usize = 16;
+const ID_MASK_VERTEX_STRIDE: wgpu::BufferAddress = 32;
+const ID_MASK_RASTER_UNIFORM_SIZE_BYTES: usize = 80;
 const ID_MASK_RASTER_UNIFORM_SIZE: u64 = ID_MASK_RASTER_UNIFORM_SIZE_BYTES as u64;
+// The ID-mask polish path must keep nearest-city / nearest-seam search out of the
+// final compositor fragment shader. Chrome traces for the Nametag Topomap showed
+// per-fragment radius walks stalling Dawn/IOSurface at 16.708ms p95; seeding and
+// jump-flooding these fields first brought that p95 to 0.235ms at mask scale 4.
+const ID_MASK_FIELD_UNIFORM_SIZE_BYTES: usize = 16;
+const ID_MASK_FIELD_UNIFORM_SIZE: u64 = ID_MASK_FIELD_UNIFORM_SIZE_BYTES as u64;
+const ID_MASK_FIELD_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const MAX_BLUR_SIGMA: f32 = 96.0;
 
 #[derive(Clone, Copy)]
@@ -69,18 +76,32 @@ struct Scene3dDraw {
     pipeline: Scene3dPipelineKind,
 }
 
+#[derive(Clone, Copy)]
 struct IdMaskDraw {
     viewport: api::RectF,
     mask_width: u32,
     mask_height: u32,
     mask_scale: f32,
-    vertices: Vec<id_mask_compositor::IdMaskRasterVertex>,
+    vertex_cache_index: usize,
+    vertex_count: u32,
+    projection: id_mask_compositor::IdMaskRasterProjection,
     city_styles: [id_mask_compositor::IdMaskCityStyle; id_mask_compositor::ID_MASK_MAX_CITY_STYLES],
     neighborhood_colors: [[f32; 3]; id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS],
     mode: id_mask_compositor::IdMaskCompositorMode,
     glow_enabled: bool,
     darken_background_alpha: f32,
     polish: id_mask_compositor::IdMaskPolishConfig,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct IdMaskVertexCacheKey {
+    ptr: usize,
+    len: usize,
+}
+
+struct IdMaskVertexCache {
+    key: IdMaskVertexCacheKey,
+    bytes: Vec<u8>,
 }
 
 #[derive(Clone, Copy)]
@@ -115,25 +136,40 @@ impl FrameData {
 }
 
 struct GpuPrograms {
+    format: wgpu::TextureFormat,
+    shader: wgpu::ShaderModule,
+    scene3d_shader: wgpu::ShaderModule,
+    id_mask_shader: wgpu::ShaderModule,
+    id_mask_field_shader: wgpu::ShaderModule,
     viewport_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
     effect_layout: wgpu::BindGroupLayout,
     scene3d_layout: wgpu::BindGroupLayout,
     id_mask_raster_layout: wgpu::BindGroupLayout,
+    id_mask_field_layout: wgpu::BindGroupLayout,
     id_mask_compositor_layout: wgpu::BindGroupLayout,
-    solid_pipeline: wgpu::RenderPipeline,
-    rgba_pipeline: wgpu::RenderPipeline,
-    a8_pipeline: wgpu::RenderPipeline,
-    sdf_pipeline: wgpu::RenderPipeline,
-    effect_pipeline: wgpu::RenderPipeline,
-    scene3d_color_tri_depth_read_pipeline: wgpu::RenderPipeline,
-    scene3d_color_tri_depth_write_pipeline: wgpu::RenderPipeline,
-    scene3d_color_tri_pipeline: wgpu::RenderPipeline,
-    scene3d_color_tri_add_depth_read_pipeline: wgpu::RenderPipeline,
-    scene3d_color_tri_add_depth_write_pipeline: wgpu::RenderPipeline,
-    scene3d_color_tri_add_pipeline: wgpu::RenderPipeline,
-    id_mask_raster_pipeline: wgpu::RenderPipeline,
-    id_mask_compositor_pipeline: wgpu::RenderPipeline,
+    solid_pipeline_layout: wgpu::PipelineLayout,
+    texture_pipeline_layout: wgpu::PipelineLayout,
+    effect_pipeline_layout: wgpu::PipelineLayout,
+    scene3d_pipeline_layout: wgpu::PipelineLayout,
+    id_mask_raster_pipeline_layout: wgpu::PipelineLayout,
+    id_mask_field_pipeline_layout: wgpu::PipelineLayout,
+    id_mask_compositor_pipeline_layout: wgpu::PipelineLayout,
+    solid_pipeline: Option<wgpu::RenderPipeline>,
+    rgba_pipeline: Option<wgpu::RenderPipeline>,
+    a8_pipeline: Option<wgpu::RenderPipeline>,
+    sdf_pipeline: Option<wgpu::RenderPipeline>,
+    effect_pipeline: Option<wgpu::RenderPipeline>,
+    scene3d_color_tri_depth_read_pipeline: Option<wgpu::RenderPipeline>,
+    scene3d_color_tri_depth_write_pipeline: Option<wgpu::RenderPipeline>,
+    scene3d_color_tri_pipeline: Option<wgpu::RenderPipeline>,
+    scene3d_color_tri_add_depth_read_pipeline: Option<wgpu::RenderPipeline>,
+    scene3d_color_tri_add_depth_write_pipeline: Option<wgpu::RenderPipeline>,
+    scene3d_color_tri_add_pipeline: Option<wgpu::RenderPipeline>,
+    id_mask_raster_pipeline: Option<wgpu::RenderPipeline>,
+    id_mask_field_seed_pipeline: Option<wgpu::RenderPipeline>,
+    id_mask_field_jump_pipeline: Option<wgpu::RenderPipeline>,
+    id_mask_compositor_pipeline: Option<wgpu::RenderPipeline>,
     sampler: wgpu::Sampler,
 }
 
@@ -310,7 +346,35 @@ pub struct WebGpuRenderer {
     index_bytes: Vec<u8>,
     scene3d_uniform_bytes: Vec<u8>,
     scene3d_draws: Vec<Scene3dDraw>,
+    scene3d_overlay_draws: Vec<Scene3dDraw>,
     id_mask_draws: Vec<IdMaskDraw>,
+    id_mask_vertex_caches: Vec<IdMaskVertexCache>,
+    id_mask_uploaded_vertex_cache: Option<usize>,
+    id_mask_width: u32,
+    id_mask_height: u32,
+    id_mask_city_texture: Option<wgpu::Texture>,
+    id_mask_neighborhood_texture: Option<wgpu::Texture>,
+    id_mask_city_field_a_texture: Option<wgpu::Texture>,
+    id_mask_city_field_b_texture: Option<wgpu::Texture>,
+    id_mask_seam_field_a_texture: Option<wgpu::Texture>,
+    id_mask_seam_field_b_texture: Option<wgpu::Texture>,
+    id_mask_city_view: Option<wgpu::TextureView>,
+    id_mask_neighborhood_view: Option<wgpu::TextureView>,
+    id_mask_city_field_a_view: Option<wgpu::TextureView>,
+    id_mask_city_field_b_view: Option<wgpu::TextureView>,
+    id_mask_seam_field_a_view: Option<wgpu::TextureView>,
+    id_mask_seam_field_b_view: Option<wgpu::TextureView>,
+    id_mask_vertex_buffer: Option<wgpu::Buffer>,
+    id_mask_vertex_capacity: u64,
+    id_mask_raster_uniform_buffer: Option<wgpu::Buffer>,
+    id_mask_raster_bind_group: Option<wgpu::BindGroup>,
+    id_mask_field_uniform_buffer: Option<wgpu::Buffer>,
+    id_mask_field_bind_group_a: Option<wgpu::BindGroup>,
+    id_mask_field_bind_group_b: Option<wgpu::BindGroup>,
+    id_mask_compositor_uniform_buffer: Option<wgpu::Buffer>,
+    id_mask_compositor_uniform_capacity: u64,
+    id_mask_compositor_bind_group_a: Option<wgpu::BindGroup>,
+    id_mask_compositor_bind_group_b: Option<wgpu::BindGroup>,
     scene3d_clear_color: Option<api::Color>,
     scene3d_clear_depth: bool,
     scene3d_active: bool,
@@ -369,6 +433,7 @@ impl WebGpuRenderer {
         config.width = width;
         config.height = height;
         config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        config.desired_maximum_frame_latency = 1;
         surface.configure(&device, &config);
 
         let programs = create_programs(&device, config.format);
@@ -440,7 +505,35 @@ impl WebGpuRenderer {
             index_bytes: Vec::new(),
             scene3d_uniform_bytes: Vec::new(),
             scene3d_draws: Vec::new(),
+            scene3d_overlay_draws: Vec::new(),
             id_mask_draws: Vec::new(),
+            id_mask_vertex_caches: Vec::new(),
+            id_mask_uploaded_vertex_cache: None,
+            id_mask_width: 0,
+            id_mask_height: 0,
+            id_mask_city_texture: None,
+            id_mask_neighborhood_texture: None,
+            id_mask_city_field_a_texture: None,
+            id_mask_city_field_b_texture: None,
+            id_mask_seam_field_a_texture: None,
+            id_mask_seam_field_b_texture: None,
+            id_mask_city_view: None,
+            id_mask_neighborhood_view: None,
+            id_mask_city_field_a_view: None,
+            id_mask_city_field_b_view: None,
+            id_mask_seam_field_a_view: None,
+            id_mask_seam_field_b_view: None,
+            id_mask_vertex_buffer: None,
+            id_mask_vertex_capacity: 0,
+            id_mask_raster_uniform_buffer: None,
+            id_mask_raster_bind_group: None,
+            id_mask_field_uniform_buffer: None,
+            id_mask_field_bind_group_a: None,
+            id_mask_field_bind_group_b: None,
+            id_mask_compositor_uniform_buffer: None,
+            id_mask_compositor_uniform_capacity: 0,
+            id_mask_compositor_bind_group_a: None,
+            id_mask_compositor_bind_group_b: None,
             scene3d_clear_color: None,
             scene3d_clear_depth: true,
             scene3d_active: false,
@@ -698,11 +791,12 @@ impl WebGpuRenderer {
                 (scene3d::BlendMode3d::Alpha, true, false) => Scene3dPipelineKind::AlphaDepthRead,
                 (scene3d::BlendMode3d::Alpha, false, _) => Scene3dPipelineKind::AlphaNoDepth,
             };
-            self.scene3d_draws.push(Scene3dDraw {
-                mesh: instance.mesh.0 as usize,
-                uniform_offset,
-                pipeline,
-            });
+            let draw = Scene3dDraw { mesh: instance.mesh.0 as usize, uniform_offset, pipeline };
+            if self.id_mask_draws.is_empty() {
+                self.scene3d_draws.push(draw);
+            } else {
+                self.scene3d_overlay_draws.push(draw);
+            }
         }
         Ok(())
     }
@@ -721,12 +815,15 @@ impl WebGpuRenderer {
                 "id-mask GPU raster vertices must be non-empty triangles",
             ));
         }
+        let vertex_cache_index = self.id_mask_vertex_cache_index(pass.raster.vertices);
         self.id_mask_draws.push(IdMaskDraw {
             viewport: pass.raster.viewport,
             mask_width: pass.raster.mask_width as u32,
             mask_height: pass.raster.mask_height as u32,
             mask_scale: pass.raster.mask_scale,
-            vertices: pass.raster.vertices.to_vec(),
+            vertex_cache_index,
+            vertex_count: pass.raster.vertices.len() as u32,
+            projection: pass.raster.projection,
             city_styles: pass.city_styles,
             neighborhood_colors: pass.neighborhood_colors,
             mode: pass.mode,
@@ -957,6 +1054,8 @@ impl WebGpuRenderer {
                     );
                 }
             }
+            api::DrawCmd::NativeCameraPreview { .. } => {}
+            api::DrawCmd::TopomapGlobe { .. } => {}
             api::DrawCmd::Spinner { center, atom, alpha } => {
                 self.encode_spinner(*center, *atom, *alpha)
             }
@@ -1276,12 +1375,210 @@ impl WebGpuRenderer {
         let bytes = f32x4_bytes([texel_x, texel_y, radius, 0.0]);
         self.queue.write_buffer(&self.effect_buffer, 0, &bytes);
     }
+
+    fn ensure_id_mask_resources(
+        &mut self,
+        width: u32,
+        height: u32,
+        vertex_bytes_len: usize,
+        compositor_uniform_len: usize,
+    ) {
+        let size_changed = self.id_mask_width != width
+            || self.id_mask_height != height
+            || self.id_mask_city_view.is_none()
+            || self.id_mask_neighborhood_view.is_none();
+        if size_changed {
+            let city_texture =
+                create_id_mask_texture(&self.device, "oxide-webgpu-id-mask-city", width, height);
+            let neighborhood_texture = create_id_mask_texture(
+                &self.device,
+                "oxide-webgpu-id-mask-neighborhood",
+                width,
+                height,
+            );
+            let city_field_a_texture = create_id_mask_field_texture(
+                &self.device,
+                "oxide-webgpu-id-mask-city-field-a",
+                width,
+                height,
+            );
+            let city_field_b_texture = create_id_mask_field_texture(
+                &self.device,
+                "oxide-webgpu-id-mask-city-field-b",
+                width,
+                height,
+            );
+            let seam_field_a_texture = create_id_mask_field_texture(
+                &self.device,
+                "oxide-webgpu-id-mask-seam-field-a",
+                width,
+                height,
+            );
+            let seam_field_b_texture = create_id_mask_field_texture(
+                &self.device,
+                "oxide-webgpu-id-mask-seam-field-b",
+                width,
+                height,
+            );
+            self.id_mask_city_view =
+                Some(city_texture.create_view(&wgpu::TextureViewDescriptor::default()));
+            self.id_mask_neighborhood_view =
+                Some(neighborhood_texture.create_view(&wgpu::TextureViewDescriptor::default()));
+            self.id_mask_city_field_a_view =
+                Some(city_field_a_texture.create_view(&wgpu::TextureViewDescriptor::default()));
+            self.id_mask_city_field_b_view =
+                Some(city_field_b_texture.create_view(&wgpu::TextureViewDescriptor::default()));
+            self.id_mask_seam_field_a_view =
+                Some(seam_field_a_texture.create_view(&wgpu::TextureViewDescriptor::default()));
+            self.id_mask_seam_field_b_view =
+                Some(seam_field_b_texture.create_view(&wgpu::TextureViewDescriptor::default()));
+            self.id_mask_city_texture = Some(city_texture);
+            self.id_mask_neighborhood_texture = Some(neighborhood_texture);
+            self.id_mask_city_field_a_texture = Some(city_field_a_texture);
+            self.id_mask_city_field_b_texture = Some(city_field_b_texture);
+            self.id_mask_seam_field_a_texture = Some(seam_field_a_texture);
+            self.id_mask_seam_field_b_texture = Some(seam_field_b_texture);
+            self.id_mask_width = width;
+            self.id_mask_height = height;
+            self.id_mask_field_bind_group_a = None;
+            self.id_mask_field_bind_group_b = None;
+            self.id_mask_compositor_bind_group_a = None;
+            self.id_mask_compositor_bind_group_b = None;
+        }
+
+        let old_vertex_capacity = self.id_mask_vertex_capacity;
+        ensure_buffer(
+            &self.device,
+            &mut self.id_mask_vertex_buffer,
+            &mut self.id_mask_vertex_capacity,
+            vertex_bytes_len.max(1) as u64,
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            "oxide-webgpu-id-mask-raster-vertices",
+        );
+        if self.id_mask_vertex_capacity != old_vertex_capacity {
+            self.id_mask_uploaded_vertex_cache = None;
+        }
+
+        if self.id_mask_raster_uniform_buffer.is_none() {
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("oxide-webgpu-id-mask-raster-uniforms"),
+                size: ID_MASK_RASTER_UNIFORM_SIZE,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("oxide-webgpu-id-mask-raster-bind-group"),
+                layout: &self.programs.id_mask_raster_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            });
+            self.id_mask_raster_uniform_buffer = Some(buffer);
+            self.id_mask_raster_bind_group = Some(bind_group);
+        }
+
+        if self.id_mask_field_uniform_buffer.is_none() {
+            self.id_mask_field_uniform_buffer =
+                Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("oxide-webgpu-id-mask-field-uniforms"),
+                    size: ID_MASK_FIELD_UNIFORM_SIZE,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            self.id_mask_field_bind_group_a = None;
+            self.id_mask_field_bind_group_b = None;
+        }
+
+        let compositor_needed = compositor_uniform_len.max(1) as u64;
+        if self.id_mask_compositor_uniform_buffer.is_none()
+            || self.id_mask_compositor_uniform_capacity < compositor_needed
+        {
+            let capacity = compositor_needed.next_power_of_two();
+            self.id_mask_compositor_uniform_buffer =
+                Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("oxide-webgpu-id-mask-compositor-uniforms"),
+                    size: capacity,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            self.id_mask_compositor_uniform_capacity = capacity;
+            self.id_mask_compositor_bind_group_a = None;
+            self.id_mask_compositor_bind_group_b = None;
+        }
+
+        if self.id_mask_field_bind_group_a.is_none() || self.id_mask_field_bind_group_b.is_none() {
+            let Some(uniform_buffer) = self.id_mask_field_uniform_buffer.as_ref() else {
+                return;
+            };
+            let Some(city_view) = self.id_mask_city_view.as_ref() else { return };
+            let Some(neighborhood_view) = self.id_mask_neighborhood_view.as_ref() else { return };
+            let Some(city_field_a_view) = self.id_mask_city_field_a_view.as_ref() else { return };
+            let Some(city_field_b_view) = self.id_mask_city_field_b_view.as_ref() else { return };
+            let Some(seam_field_a_view) = self.id_mask_seam_field_a_view.as_ref() else { return };
+            let Some(seam_field_b_view) = self.id_mask_seam_field_b_view.as_ref() else { return };
+            self.id_mask_field_bind_group_a = Some(create_id_mask_field_bind_group(
+                &self.device,
+                &self.programs.id_mask_field_layout,
+                uniform_buffer,
+                city_view,
+                neighborhood_view,
+                city_field_a_view,
+                seam_field_a_view,
+                "oxide-webgpu-id-mask-field-bind-group-a",
+            ));
+            self.id_mask_field_bind_group_b = Some(create_id_mask_field_bind_group(
+                &self.device,
+                &self.programs.id_mask_field_layout,
+                uniform_buffer,
+                city_view,
+                neighborhood_view,
+                city_field_b_view,
+                seam_field_b_view,
+                "oxide-webgpu-id-mask-field-bind-group-b",
+            ));
+        }
+
+        if self.id_mask_compositor_bind_group_a.is_none()
+            || self.id_mask_compositor_bind_group_b.is_none()
+        {
+            let Some(uniform_buffer) = self.id_mask_compositor_uniform_buffer.as_ref() else {
+                return;
+            };
+            let Some(city_view) = self.id_mask_city_view.as_ref() else { return };
+            let Some(neighborhood_view) = self.id_mask_neighborhood_view.as_ref() else { return };
+            let Some(city_field_a_view) = self.id_mask_city_field_a_view.as_ref() else { return };
+            let Some(city_field_b_view) = self.id_mask_city_field_b_view.as_ref() else { return };
+            let Some(seam_field_a_view) = self.id_mask_seam_field_a_view.as_ref() else { return };
+            let Some(seam_field_b_view) = self.id_mask_seam_field_b_view.as_ref() else { return };
+            self.id_mask_compositor_bind_group_a = Some(create_id_mask_compositor_bind_group(
+                &self.device,
+                &self.programs.id_mask_compositor_layout,
+                uniform_buffer,
+                city_view,
+                neighborhood_view,
+                city_field_a_view,
+                seam_field_a_view,
+                "oxide-webgpu-id-mask-compositor-bind-group-a",
+            ));
+            self.id_mask_compositor_bind_group_b = Some(create_id_mask_compositor_bind_group(
+                &self.device,
+                &self.programs.id_mask_compositor_layout,
+                uniform_buffer,
+                city_view,
+                neighborhood_view,
+                city_field_b_view,
+                seam_field_b_view,
+                "oxide-webgpu-id-mask-compositor-bind-group-b",
+            ));
+        }
+    }
 }
 
 impl api::Renderer for WebGpuRenderer {
     fn device_caps(&self) -> api::DeviceCaps {
         api::DeviceCaps {
-            max_framerate_hz: 60,
+            max_framerate_hz: 120,
             supports_edr: false,
             supports_msaa4x: false,
             native_scale: self.scale,
@@ -1297,6 +1594,7 @@ impl api::Renderer for WebGpuRenderer {
         self.frame.clear();
         self.scene3d_uniform_bytes.clear();
         self.scene3d_draws.clear();
+        self.scene3d_overlay_draws.clear();
         self.id_mask_draws.clear();
         self.scene3d_clear_color = None;
         self.scene3d_clear_depth = true;
@@ -1355,9 +1653,18 @@ impl api::Renderer for WebGpuRenderer {
     }
 
     fn resize(&mut self, width: u32, height: u32, scale: f32) -> Result<(), api::RenderError> {
-        self.width = width.max(1);
-        self.height = height.max(1);
-        self.scale = sanitize_scale(scale);
+        let width = width.max(1);
+        let height = height.max(1);
+        let scale = sanitize_scale(scale);
+        if self.width == width
+            && self.height == height
+            && (self.scale - scale).abs() <= f32::EPSILON
+        {
+            return Ok(());
+        }
+        self.width = width;
+        self.height = height;
+        self.scale = scale;
         self.canvas.set_width(self.width);
         self.canvas.set_height(self.height);
         self.config.width = self.width;
@@ -1369,8 +1676,329 @@ impl api::Renderer for WebGpuRenderer {
 }
 
 impl WebGpuRenderer {
+    fn id_mask_vertex_cache_index(
+        &mut self,
+        vertices: &[id_mask_compositor::IdMaskRasterVertex],
+    ) -> usize {
+        let key = IdMaskVertexCacheKey { ptr: vertices.as_ptr() as usize, len: vertices.len() };
+        if let Some(index) = self.id_mask_vertex_caches.iter().position(|cache| cache.key == key) {
+            return index;
+        }
+        self.id_mask_vertex_caches
+            .push(IdMaskVertexCache { key, bytes: id_mask_raster_vertex_bytes(vertices) });
+        self.id_mask_vertex_caches.len() - 1
+    }
+
     fn frame_uses_backdrop(&self) -> bool {
         self.frame.draws.iter().any(|draw| matches!(draw.kind, DrawKind::Backdrop { .. }))
+    }
+
+    fn ensure_solid_pipeline(&mut self) {
+        if self.programs.solid_pipeline.is_some() {
+            return;
+        }
+        let vertex_layout = vertex_layout();
+        let color_target = alpha_color_target(self.programs.format);
+        self.programs.solid_pipeline = Some(create_pipeline(
+            &self.device,
+            &self.programs.shader,
+            &self.programs.solid_pipeline_layout,
+            &vertex_layout,
+            &color_target,
+            "fs_solid",
+        ));
+    }
+
+    fn ensure_rgba_pipeline(&mut self) {
+        if self.programs.rgba_pipeline.is_some() {
+            return;
+        }
+        let vertex_layout = vertex_layout();
+        let color_target = alpha_color_target(self.programs.format);
+        self.programs.rgba_pipeline = Some(create_pipeline(
+            &self.device,
+            &self.programs.shader,
+            &self.programs.texture_pipeline_layout,
+            &vertex_layout,
+            &color_target,
+            "fs_rgba",
+        ));
+    }
+
+    fn ensure_a8_pipeline(&mut self) {
+        if self.programs.a8_pipeline.is_some() {
+            return;
+        }
+        let vertex_layout = vertex_layout();
+        let color_target = alpha_color_target(self.programs.format);
+        self.programs.a8_pipeline = Some(create_pipeline(
+            &self.device,
+            &self.programs.shader,
+            &self.programs.texture_pipeline_layout,
+            &vertex_layout,
+            &color_target,
+            "fs_a8",
+        ));
+    }
+
+    fn ensure_sdf_pipeline(&mut self) {
+        if self.programs.sdf_pipeline.is_some() {
+            return;
+        }
+        let vertex_layout = vertex_layout();
+        let color_target = alpha_color_target(self.programs.format);
+        self.programs.sdf_pipeline = Some(create_pipeline(
+            &self.device,
+            &self.programs.shader,
+            &self.programs.texture_pipeline_layout,
+            &vertex_layout,
+            &color_target,
+            "fs_sdf",
+        ));
+    }
+
+    fn ensure_effect_pipeline(&mut self) {
+        if self.programs.effect_pipeline.is_some() {
+            return;
+        }
+        let vertex_layout = vertex_layout();
+        let color_target = alpha_color_target(self.programs.format);
+        self.programs.effect_pipeline = Some(create_pipeline(
+            &self.device,
+            &self.programs.shader,
+            &self.programs.effect_pipeline_layout,
+            &vertex_layout,
+            &color_target,
+            "fs_backdrop",
+        ));
+    }
+
+    fn ensure_scene3d_pipeline(&mut self, kind: Scene3dPipelineKind) {
+        let exists = match kind {
+            Scene3dPipelineKind::AlphaDepthRead => {
+                self.programs.scene3d_color_tri_depth_read_pipeline.is_some()
+            }
+            Scene3dPipelineKind::AlphaDepthWrite => {
+                self.programs.scene3d_color_tri_depth_write_pipeline.is_some()
+            }
+            Scene3dPipelineKind::AlphaNoDepth => self.programs.scene3d_color_tri_pipeline.is_some(),
+            Scene3dPipelineKind::AdditiveDepthRead => {
+                self.programs.scene3d_color_tri_add_depth_read_pipeline.is_some()
+            }
+            Scene3dPipelineKind::AdditiveDepthWrite => {
+                self.programs.scene3d_color_tri_add_depth_write_pipeline.is_some()
+            }
+            Scene3dPipelineKind::AdditiveNoDepth => {
+                self.programs.scene3d_color_tri_add_pipeline.is_some()
+            }
+        };
+        if exists {
+            return;
+        }
+
+        let (blend, depth_test, depth_write, label) = match kind {
+            Scene3dPipelineKind::AlphaDepthRead => (
+                Some(wgpu::BlendState::ALPHA_BLENDING),
+                true,
+                false,
+                "oxide-webgpu-scene3d-color-tri-depth-read",
+            ),
+            Scene3dPipelineKind::AlphaDepthWrite => (
+                Some(wgpu::BlendState::ALPHA_BLENDING),
+                true,
+                true,
+                "oxide-webgpu-scene3d-color-tri-depth-write",
+            ),
+            Scene3dPipelineKind::AlphaNoDepth => (
+                Some(wgpu::BlendState::ALPHA_BLENDING),
+                false,
+                false,
+                "oxide-webgpu-scene3d-color-tri",
+            ),
+            Scene3dPipelineKind::AdditiveDepthRead => (
+                Some(additive_blend_state()),
+                true,
+                false,
+                "oxide-webgpu-scene3d-color-tri-add-depth-read",
+            ),
+            Scene3dPipelineKind::AdditiveDepthWrite => (
+                Some(additive_blend_state()),
+                true,
+                true,
+                "oxide-webgpu-scene3d-color-tri-add-depth-write",
+            ),
+            Scene3dPipelineKind::AdditiveNoDepth => {
+                (Some(additive_blend_state()), false, false, "oxide-webgpu-scene3d-color-tri-add")
+            }
+        };
+        let vertex_layout = scene3d_color_vertex_layout();
+        let pipeline = create_scene3d_pipeline(
+            &self.device,
+            &self.programs.scene3d_shader,
+            &self.programs.scene3d_pipeline_layout,
+            &vertex_layout,
+            self.programs.format,
+            blend,
+            depth_test,
+            depth_write,
+            label,
+        );
+        match kind {
+            Scene3dPipelineKind::AlphaDepthRead => {
+                self.programs.scene3d_color_tri_depth_read_pipeline = Some(pipeline);
+            }
+            Scene3dPipelineKind::AlphaDepthWrite => {
+                self.programs.scene3d_color_tri_depth_write_pipeline = Some(pipeline);
+            }
+            Scene3dPipelineKind::AlphaNoDepth => {
+                self.programs.scene3d_color_tri_pipeline = Some(pipeline);
+            }
+            Scene3dPipelineKind::AdditiveDepthRead => {
+                self.programs.scene3d_color_tri_add_depth_read_pipeline = Some(pipeline);
+            }
+            Scene3dPipelineKind::AdditiveDepthWrite => {
+                self.programs.scene3d_color_tri_add_depth_write_pipeline = Some(pipeline);
+            }
+            Scene3dPipelineKind::AdditiveNoDepth => {
+                self.programs.scene3d_color_tri_add_pipeline = Some(pipeline);
+            }
+        }
+    }
+
+    fn ensure_id_mask_raster_pipeline(&mut self) {
+        if self.programs.id_mask_raster_pipeline.is_some() {
+            return;
+        }
+        let vertex_layout = id_mask_raster_vertex_layout();
+        self.programs.id_mask_raster_pipeline = Some(create_id_mask_raster_pipeline(
+            &self.device,
+            &self.programs.id_mask_shader,
+            &self.programs.id_mask_raster_pipeline_layout,
+            &vertex_layout,
+        ));
+    }
+
+    fn ensure_id_mask_field_pipelines(&mut self) {
+        if self.programs.id_mask_field_seed_pipeline.is_none() {
+            self.programs.id_mask_field_seed_pipeline = Some(create_id_mask_field_pipeline(
+                &self.device,
+                &self.programs.id_mask_field_shader,
+                &self.programs.id_mask_field_pipeline_layout,
+                "fs_id_mask_field_seed",
+                "oxide-webgpu-id-mask-field-seed",
+            ));
+        }
+        if self.programs.id_mask_field_jump_pipeline.is_none() {
+            self.programs.id_mask_field_jump_pipeline = Some(create_id_mask_field_pipeline(
+                &self.device,
+                &self.programs.id_mask_field_shader,
+                &self.programs.id_mask_field_pipeline_layout,
+                "fs_id_mask_field_jump",
+                "oxide-webgpu-id-mask-field-jump",
+            ));
+        }
+    }
+
+    fn ensure_id_mask_compositor_pipeline(&mut self) {
+        if self.programs.id_mask_compositor_pipeline.is_some() {
+            return;
+        }
+        self.programs.id_mask_compositor_pipeline = Some(create_id_mask_compositor_pipeline(
+            &self.device,
+            &self.programs.id_mask_shader,
+            &self.programs.id_mask_compositor_pipeline_layout,
+            self.programs.format,
+        ));
+    }
+
+    fn ensure_draw_pipeline(&mut self, kind: DrawKind) {
+        match kind {
+            DrawKind::Solid => self.ensure_solid_pipeline(),
+            DrawKind::Rgba { .. } => self.ensure_rgba_pipeline(),
+            DrawKind::A8 { .. } => self.ensure_a8_pipeline(),
+            DrawKind::Sdf { .. } => self.ensure_sdf_pipeline(),
+            DrawKind::Backdrop { .. } => self.ensure_effect_pipeline(),
+        }
+    }
+
+    fn solid_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.programs.solid_pipeline.as_ref().expect("solid pipeline initialized")
+    }
+
+    fn rgba_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.programs.rgba_pipeline.as_ref().expect("rgba pipeline initialized")
+    }
+
+    fn a8_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.programs.a8_pipeline.as_ref().expect("a8 pipeline initialized")
+    }
+
+    fn sdf_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.programs.sdf_pipeline.as_ref().expect("sdf pipeline initialized")
+    }
+
+    fn effect_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.programs.effect_pipeline.as_ref().expect("effect pipeline initialized")
+    }
+
+    fn scene3d_pipeline(&self, kind: Scene3dPipelineKind) -> &wgpu::RenderPipeline {
+        match kind {
+            Scene3dPipelineKind::AlphaDepthRead => self
+                .programs
+                .scene3d_color_tri_depth_read_pipeline
+                .as_ref()
+                .expect("scene3d alpha depth-read pipeline initialized"),
+            Scene3dPipelineKind::AlphaDepthWrite => self
+                .programs
+                .scene3d_color_tri_depth_write_pipeline
+                .as_ref()
+                .expect("scene3d alpha depth-write pipeline initialized"),
+            Scene3dPipelineKind::AlphaNoDepth => self
+                .programs
+                .scene3d_color_tri_pipeline
+                .as_ref()
+                .expect("scene3d alpha no-depth pipeline initialized"),
+            Scene3dPipelineKind::AdditiveDepthRead => self
+                .programs
+                .scene3d_color_tri_add_depth_read_pipeline
+                .as_ref()
+                .expect("scene3d additive depth-read pipeline initialized"),
+            Scene3dPipelineKind::AdditiveDepthWrite => self
+                .programs
+                .scene3d_color_tri_add_depth_write_pipeline
+                .as_ref()
+                .expect("scene3d additive depth-write pipeline initialized"),
+            Scene3dPipelineKind::AdditiveNoDepth => self
+                .programs
+                .scene3d_color_tri_add_pipeline
+                .as_ref()
+                .expect("scene3d additive no-depth pipeline initialized"),
+        }
+    }
+
+    fn id_mask_raster_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.programs.id_mask_raster_pipeline.as_ref().expect("id-mask raster pipeline initialized")
+    }
+
+    fn id_mask_field_seed_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.programs
+            .id_mask_field_seed_pipeline
+            .as_ref()
+            .expect("id-mask field seed pipeline initialized")
+    }
+
+    fn id_mask_field_jump_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.programs
+            .id_mask_field_jump_pipeline
+            .as_ref()
+            .expect("id-mask field jump pipeline initialized")
+    }
+
+    fn id_mask_compositor_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.programs
+            .id_mask_compositor_pipeline
+            .as_ref()
+            .expect("id-mask compositor pipeline initialized")
     }
 
     fn render_direct(
@@ -1392,12 +2020,18 @@ impl WebGpuRenderer {
                 },
             );
         }
+        if !self.scene3d_overlay_draws.is_empty() {
+            self.render_scene3d_overlay(encoder, surface_view);
+        }
         self.render_draw_range(
             encoder,
             surface_view,
             0,
             self.frame.draws.len(),
-            if self.scene3d_active || !self.id_mask_draws.is_empty() {
+            if self.scene3d_active
+                || !self.id_mask_draws.is_empty()
+                || !self.scene3d_overlay_draws.is_empty()
+            {
                 wgpu::LoadOp::Load
             } else {
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
@@ -1415,6 +2049,9 @@ impl WebGpuRenderer {
         let scene_view = self.scene_view.clone();
         if !self.id_mask_draws.is_empty() {
             self.render_id_mask_compositors(encoder, &scene_view, wgpu::LoadOp::Load);
+        }
+        if !self.scene3d_overlay_draws.is_empty() {
+            self.render_scene3d_overlay(encoder, &scene_view);
         }
         let mut start = 0_usize;
         while start < self.frame.draws.len() {
@@ -1477,6 +2114,10 @@ impl WebGpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         target_view: &wgpu::TextureView,
     ) {
+        let draws = self.scene3d_draws.clone();
+        for draw in &draws {
+            self.ensure_scene3d_pipeline(draw.pipeline);
+        }
         let Some(bind_group) = self.scene3d_bind_group.as_ref() else {
             return;
         };
@@ -1512,28 +2153,57 @@ impl WebGpuRenderer {
             occlusion_query_set: None,
         });
 
-        for draw in &self.scene3d_draws {
+        for draw in &draws {
             let Some(mesh) = self.meshes_3d.get(draw.mesh).and_then(Option::as_ref) else {
                 continue;
             };
-            let pipeline = match draw.pipeline {
-                Scene3dPipelineKind::AlphaDepthRead => {
-                    &self.programs.scene3d_color_tri_depth_read_pipeline
-                }
-                Scene3dPipelineKind::AlphaDepthWrite => {
-                    &self.programs.scene3d_color_tri_depth_write_pipeline
-                }
-                Scene3dPipelineKind::AlphaNoDepth => &self.programs.scene3d_color_tri_pipeline,
-                Scene3dPipelineKind::AdditiveDepthRead => {
-                    &self.programs.scene3d_color_tri_add_depth_read_pipeline
-                }
-                Scene3dPipelineKind::AdditiveDepthWrite => {
-                    &self.programs.scene3d_color_tri_add_depth_write_pipeline
-                }
-                Scene3dPipelineKind::AdditiveNoDepth => {
-                    &self.programs.scene3d_color_tri_add_pipeline
-                }
+            let pipeline = self.scene3d_pipeline(draw.pipeline);
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, bind_group, &[draw.uniform_offset]);
+            pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            self.stats.draws = self.stats.draws.saturating_add(1);
+        }
+    }
+
+    fn render_scene3d_overlay(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target_view: &wgpu::TextureView,
+    ) {
+        let draws = self.scene3d_overlay_draws.clone();
+        for draw in &draws {
+            self.ensure_scene3d_pipeline(draw.pipeline);
+        }
+        let Some(bind_group) = self.scene3d_bind_group.as_ref() else {
+            return;
+        };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("oxide-webgpu-scene3d-overlay-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.scene_depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        for draw in &draws {
+            let Some(mesh) = self.meshes_3d.get(draw.mesh).and_then(Option::as_ref) else {
+                continue;
             };
+            let pipeline = self.scene3d_pipeline(draw.pipeline);
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, bind_group, &[draw.uniform_offset]);
             pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
@@ -1551,46 +2221,88 @@ impl WebGpuRenderer {
     ) {
         let mut load = first_load;
         let mut encoded_draws = 0_u32;
-        for draw in &self.id_mask_draws {
+        for draw_index in 0..self.id_mask_draws.len() {
+            let draw = self.id_mask_draws[draw_index];
+            let Some(vertex_bytes_len) = self
+                .id_mask_vertex_caches
+                .get(draw.vertex_cache_index)
+                .map(|cache| cache.bytes.len())
+            else {
+                continue;
+            };
             let width = draw.mask_width.max(1);
             let height = draw.mask_height.max(1);
-            let city_texture =
-                create_id_mask_texture(&self.device, "oxide-webgpu-id-mask-city", width, height);
-            let neighborhood_texture = create_id_mask_texture(
-                &self.device,
-                "oxide-webgpu-id-mask-neighborhood",
+            let vertex_count = draw.vertex_count;
+            let raster_uniform_bytes = id_mask_raster_uniform_bytes(width, height, draw.projection);
+            let compositor_uniform_bytes = id_mask_compositor_uniform_bytes(&draw);
+
+            self.ensure_id_mask_resources(
                 width,
                 height,
+                vertex_bytes_len,
+                compositor_uniform_bytes.len(),
             );
-            let city_view = city_texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let neighborhood_view =
-                neighborhood_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.ensure_id_mask_raster_pipeline();
+            self.ensure_id_mask_field_pipelines();
+            self.ensure_id_mask_compositor_pipeline();
+            let Some(city_view) = self.id_mask_city_view.as_ref() else { continue };
+            let Some(neighborhood_view) = self.id_mask_neighborhood_view.as_ref() else {
+                continue;
+            };
+            let Some(city_field_a_view) = self.id_mask_city_field_a_view.as_ref() else {
+                continue;
+            };
+            let Some(city_field_b_view) = self.id_mask_city_field_b_view.as_ref() else {
+                continue;
+            };
+            let Some(seam_field_a_view) = self.id_mask_seam_field_a_view.as_ref() else {
+                continue;
+            };
+            let Some(seam_field_b_view) = self.id_mask_seam_field_b_view.as_ref() else {
+                continue;
+            };
+            let Some(vertex_buffer) = self.id_mask_vertex_buffer.as_ref() else { continue };
+            let Some(raster_uniform_buffer) = self.id_mask_raster_uniform_buffer.as_ref() else {
+                continue;
+            };
+            let Some(raster_bind_group) = self.id_mask_raster_bind_group.as_ref() else {
+                continue;
+            };
+            let Some(field_uniform_buffer) = self.id_mask_field_uniform_buffer.as_ref() else {
+                continue;
+            };
+            let Some(field_bind_group_a) = self.id_mask_field_bind_group_a.as_ref() else {
+                continue;
+            };
+            let Some(field_bind_group_b) = self.id_mask_field_bind_group_b.as_ref() else {
+                continue;
+            };
+            let Some(compositor_uniform_buffer) = self.id_mask_compositor_uniform_buffer.as_ref()
+            else {
+                continue;
+            };
+            let Some(compositor_bind_group_a) = self.id_mask_compositor_bind_group_a.as_ref()
+            else {
+                continue;
+            };
+            let Some(compositor_bind_group_b) = self.id_mask_compositor_bind_group_b.as_ref()
+            else {
+                continue;
+            };
 
-            let vertex_bytes = id_mask_raster_vertex_bytes(&draw.vertices);
-            let vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("oxide-webgpu-id-mask-raster-vertices"),
-                size: vertex_bytes.len().max(1) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&vertex_buffer, 0, &vertex_bytes);
-
-            let raster_uniform_bytes = id_mask_raster_uniform_bytes(width, height);
-            let raster_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("oxide-webgpu-id-mask-raster-uniforms"),
-                size: ID_MASK_RASTER_UNIFORM_SIZE,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&raster_uniform_buffer, 0, &raster_uniform_bytes);
-            let raster_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("oxide-webgpu-id-mask-raster-bind-group"),
-                layout: &self.programs.id_mask_raster_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: raster_uniform_buffer.as_entire_binding(),
-                }],
-            });
+            if self.id_mask_uploaded_vertex_cache != Some(draw.vertex_cache_index) {
+                let Some(vertex_bytes) = self
+                    .id_mask_vertex_caches
+                    .get(draw.vertex_cache_index)
+                    .map(|cache| cache.bytes.as_slice())
+                else {
+                    continue;
+                };
+                self.queue.write_buffer(vertex_buffer, 0, vertex_bytes);
+                self.id_mask_uploaded_vertex_cache = Some(draw.vertex_cache_index);
+            }
+            self.queue.write_buffer(raster_uniform_buffer, 0, &raster_uniform_bytes);
+            self.queue.write_buffer(compositor_uniform_buffer, 0, &compositor_uniform_bytes);
 
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1619,38 +2331,102 @@ impl WebGpuRenderer {
                     timestamp_writes: None,
                     occlusion_query_set: None,
                 });
-                pass.set_pipeline(&self.programs.id_mask_raster_pipeline);
-                pass.set_bind_group(0, &raster_bind_group, &[]);
+                pass.set_pipeline(self.id_mask_raster_pipeline());
+                pass.set_bind_group(0, raster_bind_group, &[]);
                 pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-                pass.draw(0..draw.vertices.len() as u32, 0..1);
+                pass.draw(0..vertex_count, 0..1);
             }
 
-            let compositor_uniform_bytes = id_mask_compositor_uniform_bytes(draw);
-            let compositor_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("oxide-webgpu-id-mask-compositor-uniforms"),
-                size: compositor_uniform_bytes.len() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&compositor_uniform_buffer, 0, &compositor_uniform_bytes);
-            let compositor_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("oxide-webgpu-id-mask-compositor-bind-group"),
-                layout: &self.programs.id_mask_compositor_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: compositor_uniform_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&city_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&neighborhood_view),
-                    },
-                ],
-            });
+            // Seed nearest-city and seam fields from the exact rasterized masks,
+            // then jump-flood them. The final beauty compositor should only read
+            // these fields; reintroducing radius searches there recreates the GPU
+            // scheduling stalls this path was built to remove.
+            self.queue.write_buffer(
+                field_uniform_buffer,
+                0,
+                &id_mask_field_uniform_bytes(width, height, 0.0),
+            );
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("oxide-webgpu-id-mask-field-seed-pass"),
+                    color_attachments: &[
+                        Some(wgpu::RenderPassColorAttachment {
+                            view: city_field_a_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        }),
+                        Some(wgpu::RenderPassColorAttachment {
+                            view: seam_field_a_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        }),
+                    ],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_pipeline(self.id_mask_field_seed_pipeline());
+                pass.set_bind_group(0, field_bind_group_b, &[]);
+                pass.draw(0..6, 0..1);
+            }
+
+            let mut src_is_a = true;
+            let mut jump = width.max(height).next_power_of_two() / 2;
+            while jump >= 1 {
+                self.queue.write_buffer(
+                    field_uniform_buffer,
+                    0,
+                    &id_mask_field_uniform_bytes(width, height, jump as f32),
+                );
+                let (src_bind_group, dst_city_view, dst_seam_view) = if src_is_a {
+                    (field_bind_group_a, city_field_b_view, seam_field_b_view)
+                } else {
+                    (field_bind_group_b, city_field_a_view, seam_field_a_view)
+                };
+                {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("oxide-webgpu-id-mask-field-jump-pass"),
+                        color_attachments: &[
+                            Some(wgpu::RenderPassColorAttachment {
+                                view: dst_city_view,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            }),
+                            Some(wgpu::RenderPassColorAttachment {
+                                view: dst_seam_view,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            }),
+                        ],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    pass.set_pipeline(self.id_mask_field_jump_pipeline());
+                    pass.set_bind_group(0, src_bind_group, &[]);
+                    pass.draw(0..6, 0..1);
+                }
+                src_is_a = !src_is_a;
+                jump /= 2;
+            }
+            let compositor_bind_group =
+                if src_is_a { compositor_bind_group_a } else { compositor_bind_group_b };
 
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1665,12 +2441,24 @@ impl WebGpuRenderer {
                     timestamp_writes: None,
                     occlusion_query_set: None,
                 });
-                pass.set_pipeline(&self.programs.id_mask_compositor_pipeline);
-                pass.set_bind_group(0, &compositor_bind_group, &[]);
+                // Keep the expensive beauty compositor bounded to the requested
+                // surface. The shader's quad is local to the mask, so the
+                // hardware viewport/scissor owns page/UI placement.
+                set_viewport_and_scissor_rect(
+                    &mut pass,
+                    draw.viewport,
+                    self.scale,
+                    self.width,
+                    self.height,
+                );
+                pass.set_pipeline(self.id_mask_compositor_pipeline());
+                pass.set_bind_group(0, compositor_bind_group, &[]);
                 pass.draw(0..6, 0..1);
             }
             load = wgpu::LoadOp::Load;
-            encoded_draws = encoded_draws.saturating_add(2);
+            encoded_draws = encoded_draws
+                .saturating_add(3)
+                .saturating_add(width.max(height).next_power_of_two().trailing_zeros());
         }
         self.stats.draws = self.stats.draws.saturating_add(encoded_draws);
     }
@@ -1683,15 +2471,18 @@ impl WebGpuRenderer {
         end: usize,
         load: wgpu::LoadOp<wgpu::Color>,
     ) {
+        if start >= end {
+            return;
+        }
+        for draw_index in start..end {
+            self.ensure_draw_pipeline(self.frame.draws[draw_index].kind);
+        }
         let Some(vertex_buffer) = &self.vertex_buffer else {
             return;
         };
         let Some(index_buffer) = &self.index_buffer else {
             return;
         };
-        if start >= end {
-            return;
-        }
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("oxide-webgpu-draw-pass"),
@@ -1714,31 +2505,31 @@ impl WebGpuRenderer {
             set_scissor(&mut pass, draw.clip, self.scale, self.width, self.height);
             match draw.kind {
                 DrawKind::Solid => {
-                    pass.set_pipeline(&self.programs.solid_pipeline);
+                    pass.set_pipeline(self.solid_pipeline());
                 }
                 DrawKind::Rgba { image } => {
                     let Some(image) = self.images.get(image).and_then(Option::as_ref) else {
                         continue;
                     };
-                    pass.set_pipeline(&self.programs.rgba_pipeline);
+                    pass.set_pipeline(self.rgba_pipeline());
                     pass.set_bind_group(1, &image.bind_group, &[]);
                 }
                 DrawKind::A8 { image } => {
                     let Some(image) = self.images.get(image).and_then(Option::as_ref) else {
                         continue;
                     };
-                    pass.set_pipeline(&self.programs.a8_pipeline);
+                    pass.set_pipeline(self.a8_pipeline());
                     pass.set_bind_group(1, &image.bind_group, &[]);
                 }
                 DrawKind::Sdf { image } => {
                     let Some(image) = self.images.get(image).and_then(Option::as_ref) else {
                         continue;
                     };
-                    pass.set_pipeline(&self.programs.sdf_pipeline);
+                    pass.set_pipeline(self.sdf_pipeline());
                     pass.set_bind_group(1, &image.bind_group, &[]);
                 }
                 DrawKind::Backdrop { .. } => {
-                    pass.set_pipeline(&self.programs.effect_pipeline);
+                    pass.set_pipeline(self.effect_pipeline());
                     pass.set_bind_group(1, &self.scratch_bind_group, &[]);
                     pass.set_bind_group(2, &self.effect_bind_group, &[]);
                 }
@@ -1783,6 +2574,7 @@ impl WebGpuRenderer {
         surface_view: &wgpu::TextureView,
     ) {
         self.ensure_present_buffers();
+        self.ensure_rgba_pipeline();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("oxide-webgpu-present-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1798,7 +2590,7 @@ impl WebGpuRenderer {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        pass.set_pipeline(&self.programs.rgba_pipeline);
+        pass.set_pipeline(self.rgba_pipeline());
         pass.set_bind_group(0, &self.viewport_bind_group, &[]);
         pass.set_bind_group(1, &self.scene_bind_group, &[]);
         pass.set_vertex_buffer(0, self.present_vertex_buffer.slice(..));
@@ -1901,6 +2693,61 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
             count: None,
         }],
     });
+    let id_mask_field_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("oxide-webgpu-id-mask-field-layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Uint,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Uint,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+        ],
+    });
     let id_mask_compositor_layout =
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("oxide-webgpu-id-mask-compositor-layout"),
@@ -1935,6 +2782,26 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -1960,13 +2827,11 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
         label: Some("oxide-webgpu-id-mask-shader"),
         source: wgpu::ShaderSource::Wgsl(ID_MASK_WGSL.into()),
     });
-    let vertex_layout = vertex_layout();
-    let color_target = [Some(wgpu::ColorTargetState {
-        format,
-        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-        write_mask: wgpu::ColorWrites::ALL,
-    })];
-    let solid_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+    let id_mask_field_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("oxide-webgpu-id-mask-field-shader"),
+        source: wgpu::ShaderSource::Wgsl(ID_MASK_FIELD_WGSL.into()),
+    });
+    let solid_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("oxide-webgpu-solid-pipeline-layout"),
         bind_group_layouts: &[&viewport_layout],
         push_constant_ranges: &[],
@@ -1992,6 +2857,12 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
             bind_group_layouts: &[&id_mask_raster_layout],
             push_constant_ranges: &[],
         });
+    let id_mask_field_pipeline_layout =
+        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("oxide-webgpu-id-mask-field-pipeline-layout"),
+            bind_group_layouts: &[&id_mask_field_layout],
+            push_constant_ranges: &[],
+        });
     let id_mask_compositor_pipeline_layout =
         device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("oxide-webgpu-id-mask-compositor-pipeline-layout"),
@@ -1999,142 +2870,51 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
             push_constant_ranges: &[],
         });
 
-    let solid_pipeline =
-        create_pipeline(device, &shader, &solid_layout, &vertex_layout, &color_target, "fs_solid");
-    let rgba_pipeline = create_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &vertex_layout,
-        &color_target,
-        "fs_rgba",
-    );
-    let a8_pipeline = create_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &vertex_layout,
-        &color_target,
-        "fs_a8",
-    );
-    let sdf_pipeline = create_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &vertex_layout,
-        &color_target,
-        "fs_sdf",
-    );
-    let effect_pipeline = create_pipeline(
-        device,
-        &shader,
-        &effect_pipeline_layout,
-        &vertex_layout,
-        &color_target,
-        "fs_backdrop",
-    );
-    let scene3d_vertex_layout = scene3d_color_vertex_layout();
-    let scene3d_color_tri_depth_read_pipeline = create_scene3d_pipeline(
-        device,
-        &scene3d_shader,
-        &scene3d_pipeline_layout,
-        &scene3d_vertex_layout,
-        format,
-        Some(wgpu::BlendState::ALPHA_BLENDING),
-        true,
-        false,
-        "oxide-webgpu-scene3d-color-tri-depth-read",
-    );
-    let scene3d_color_tri_depth_write_pipeline = create_scene3d_pipeline(
-        device,
-        &scene3d_shader,
-        &scene3d_pipeline_layout,
-        &scene3d_vertex_layout,
-        format,
-        Some(wgpu::BlendState::ALPHA_BLENDING),
-        true,
-        true,
-        "oxide-webgpu-scene3d-color-tri-depth-write",
-    );
-    let scene3d_color_tri_pipeline = create_scene3d_pipeline(
-        device,
-        &scene3d_shader,
-        &scene3d_pipeline_layout,
-        &scene3d_vertex_layout,
-        format,
-        Some(wgpu::BlendState::ALPHA_BLENDING),
-        false,
-        false,
-        "oxide-webgpu-scene3d-color-tri",
-    );
-    let scene3d_color_tri_add_depth_read_pipeline = create_scene3d_pipeline(
-        device,
-        &scene3d_shader,
-        &scene3d_pipeline_layout,
-        &scene3d_vertex_layout,
-        format,
-        Some(additive_blend_state()),
-        true,
-        false,
-        "oxide-webgpu-scene3d-color-tri-add-depth-read",
-    );
-    let scene3d_color_tri_add_depth_write_pipeline = create_scene3d_pipeline(
-        device,
-        &scene3d_shader,
-        &scene3d_pipeline_layout,
-        &scene3d_vertex_layout,
-        format,
-        Some(additive_blend_state()),
-        true,
-        true,
-        "oxide-webgpu-scene3d-color-tri-add-depth-write",
-    );
-    let scene3d_color_tri_add_pipeline = create_scene3d_pipeline(
-        device,
-        &scene3d_shader,
-        &scene3d_pipeline_layout,
-        &scene3d_vertex_layout,
-        format,
-        Some(additive_blend_state()),
-        false,
-        false,
-        "oxide-webgpu-scene3d-color-tri-add",
-    );
-    let id_mask_raster_pipeline = create_id_mask_raster_pipeline(
-        device,
-        &id_mask_shader,
-        &id_mask_raster_pipeline_layout,
-        &id_mask_raster_vertex_layout(),
-    );
-    let id_mask_compositor_pipeline = create_id_mask_compositor_pipeline(
-        device,
-        &id_mask_shader,
-        &id_mask_compositor_pipeline_layout,
-        format,
-    );
-
     GpuPrograms {
+        format,
+        shader,
+        scene3d_shader,
+        id_mask_shader,
+        id_mask_field_shader,
         viewport_layout,
         texture_layout,
         effect_layout,
         scene3d_layout,
         id_mask_raster_layout,
+        id_mask_field_layout,
         id_mask_compositor_layout,
-        solid_pipeline,
-        rgba_pipeline,
-        a8_pipeline,
-        sdf_pipeline,
-        effect_pipeline,
-        scene3d_color_tri_depth_read_pipeline,
-        scene3d_color_tri_depth_write_pipeline,
-        scene3d_color_tri_pipeline,
-        scene3d_color_tri_add_depth_read_pipeline,
-        scene3d_color_tri_add_depth_write_pipeline,
-        scene3d_color_tri_add_pipeline,
-        id_mask_raster_pipeline,
-        id_mask_compositor_pipeline,
+        solid_pipeline_layout,
+        texture_pipeline_layout,
+        effect_pipeline_layout,
+        scene3d_pipeline_layout,
+        id_mask_raster_pipeline_layout,
+        id_mask_field_pipeline_layout,
+        id_mask_compositor_pipeline_layout,
+        solid_pipeline: None,
+        rgba_pipeline: None,
+        a8_pipeline: None,
+        sdf_pipeline: None,
+        effect_pipeline: None,
+        scene3d_color_tri_depth_read_pipeline: None,
+        scene3d_color_tri_depth_write_pipeline: None,
+        scene3d_color_tri_pipeline: None,
+        scene3d_color_tri_add_depth_read_pipeline: None,
+        scene3d_color_tri_add_depth_write_pipeline: None,
+        scene3d_color_tri_add_pipeline: None,
+        id_mask_raster_pipeline: None,
+        id_mask_field_seed_pipeline: None,
+        id_mask_field_jump_pipeline: None,
+        id_mask_compositor_pipeline: None,
         sampler,
     }
+}
+
+fn alpha_color_target(format: wgpu::TextureFormat) -> [Option<wgpu::ColorTargetState>; 1] {
+    [Some(wgpu::ColorTargetState {
+        format,
+        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+        write_mask: wgpu::ColorWrites::ALL,
+    })]
 }
 
 fn create_pipeline(
@@ -2324,6 +3104,56 @@ fn create_id_mask_compositor_pipeline(
     })
 }
 
+fn create_id_mask_field_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    fragment: &'static str,
+    label: &'static str,
+) -> wgpu::RenderPipeline {
+    let color_targets = [
+        Some(wgpu::ColorTargetState {
+            format: ID_MASK_FIELD_FORMAT,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+        Some(wgpu::ColorTargetState {
+            format: ID_MASK_FIELD_FORMAT,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+    ];
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_id_mask_field"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(fragment),
+            compilation_options: Default::default(),
+            targets: &color_targets,
+        }),
+        multiview: None,
+        cache: None,
+    })
+}
+
 fn additive_blend_state() -> wgpu::BlendState {
     wgpu::BlendState {
         color: wgpu::BlendComponent {
@@ -2385,17 +3215,26 @@ fn scene3d_color_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
 }
 
 fn id_mask_raster_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
-    const ATTRIBUTES: [wgpu::VertexAttribute; 3] = [
+    const ATTRIBUTES: [wgpu::VertexAttribute; 4] = [
         wgpu::VertexAttribute {
             format: wgpu::VertexFormat::Float32x2,
             offset: 0,
             shader_location: 0,
         },
-        wgpu::VertexAttribute { format: wgpu::VertexFormat::Uint32, offset: 8, shader_location: 1 },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x3,
+            offset: 8,
+            shader_location: 1,
+        },
         wgpu::VertexAttribute {
             format: wgpu::VertexFormat::Uint32,
-            offset: 12,
+            offset: 24,
             shader_location: 2,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Uint32,
+            offset: 28,
+            shader_location: 3,
         },
     ];
     wgpu::VertexBufferLayout {
@@ -2449,23 +3288,17 @@ fn create_target_texture(
     width: u32,
     height: u32,
 ) -> (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup) {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(label),
-        size: wgpu::Extent3d {
-            width: width.max(1),
-            height: height.max(1),
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
+    let texture = create_texture_2d(
+        device,
+        label,
         format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+        width,
+        height,
+        wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
+    );
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let bind_group = create_texture_bind_group(device, programs, &view, &programs.sampler);
     (texture, view, bind_group)
@@ -2477,20 +3310,14 @@ fn create_depth_texture(
     width: u32,
     height: u32,
 ) -> (wgpu::Texture, wgpu::TextureView) {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(label),
-        size: wgpu::Extent3d {
-            width: width.max(1),
-            height: height.max(1),
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: SCENE3D_DEPTH_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
+    let texture = create_texture_2d(
+        device,
+        label,
+        SCENE3D_DEPTH_FORMAT,
+        width,
+        height,
+        wgpu::TextureUsages::RENDER_ATTACHMENT,
+    );
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     (texture, view)
 }
@@ -2500,6 +3327,40 @@ fn create_id_mask_texture(
     label: &'static str,
     width: u32,
     height: u32,
+) -> wgpu::Texture {
+    create_texture_2d(
+        device,
+        label,
+        wgpu::TextureFormat::R8Uint,
+        width,
+        height,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+    )
+}
+
+fn create_id_mask_field_texture(
+    device: &wgpu::Device,
+    label: &'static str,
+    width: u32,
+    height: u32,
+) -> wgpu::Texture {
+    create_texture_2d(
+        device,
+        label,
+        ID_MASK_FIELD_FORMAT,
+        width,
+        height,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+    )
+}
+
+fn create_texture_2d(
+    device: &wgpu::Device,
+    label: &'static str,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+    usage: wgpu::TextureUsages,
 ) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
@@ -2511,8 +3372,8 @@ fn create_id_mask_texture(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::R8Uint,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        format,
+        usage,
         view_formats: &[],
     })
 }
@@ -2529,6 +3390,76 @@ fn create_texture_bind_group(
         entries: &[
             wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+        ],
+    })
+}
+
+fn create_id_mask_field_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    uniform_buffer: &wgpu::Buffer,
+    city_view: &wgpu::TextureView,
+    neighborhood_view: &wgpu::TextureView,
+    city_field_view: &wgpu::TextureView,
+    seam_field_view: &wgpu::TextureView,
+    label: &'static str,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(label),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: uniform_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(city_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(neighborhood_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(city_field_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(seam_field_view),
+            },
+        ],
+    })
+}
+
+fn create_id_mask_compositor_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    uniform_buffer: &wgpu::Buffer,
+    city_view: &wgpu::TextureView,
+    neighborhood_view: &wgpu::TextureView,
+    city_field_view: &wgpu::TextureView,
+    seam_field_view: &wgpu::TextureView,
+    label: &'static str,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(label),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: uniform_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(city_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(neighborhood_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(city_field_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(seam_field_view),
+            },
         ],
     })
 }
@@ -2574,6 +3505,26 @@ fn set_scissor(
     let w = w.min(width.saturating_sub(x)).max(1);
     let h = h.min(height.saturating_sub(y)).max(1);
     pass.set_scissor_rect(x, y, w, h);
+}
+
+fn set_viewport_and_scissor_rect(
+    pass: &mut wgpu::RenderPass<'_>,
+    rect: api::RectF,
+    scale: f32,
+    width: u32,
+    height: u32,
+) {
+    let scale = sanitize_scale(scale);
+    let x = (rect.x.max(0.0) * scale).floor();
+    let y = (rect.y.max(0.0) * scale).floor();
+    let w = (rect.w.max(0.0) * scale).ceil();
+    let h = (rect.h.max(0.0) * scale).ceil();
+    let x = x.min(width.saturating_sub(1) as f32);
+    let y = y.min(height.saturating_sub(1) as f32);
+    let w = w.min(width as f32 - x).max(1.0);
+    let h = h.min(height as f32 - y).max(1.0);
+    pass.set_viewport(x, y, w, h, 0.0, 1.0);
+    pass.set_scissor_rect(x as u32, y as u32, w as u32, h as u32);
 }
 
 fn quad_vertices(
@@ -2713,6 +3664,10 @@ fn id_mask_raster_vertex_bytes(vertices: &[id_mask_compositor::IdMaskRasterVerte
     for vertex in vertices {
         push_f32(&mut out, vertex.position_px[0]);
         push_f32(&mut out, vertex.position_px[1]);
+        push_f32(&mut out, vertex.position_world[0]);
+        push_f32(&mut out, vertex.position_world[1]);
+        push_f32(&mut out, vertex.position_world[2]);
+        push_f32(&mut out, vertex.position_world[3]);
         out.extend_from_slice(&vertex.city_id.to_le_bytes());
         out.extend_from_slice(&vertex.neighborhood_id.to_le_bytes());
     }
@@ -2722,13 +3677,38 @@ fn id_mask_raster_vertex_bytes(vertices: &[id_mask_compositor::IdMaskRasterVerte
 fn id_mask_raster_uniform_bytes(
     width: u32,
     height: u32,
-) -> [u8; ID_MASK_RASTER_UNIFORM_SIZE_BYTES] {
-    f32x4_bytes([width as f32, height as f32, 0.0, 0.0])
+    projection: id_mask_compositor::IdMaskRasterProjection,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(ID_MASK_RASTER_UNIFORM_SIZE_BYTES);
+    for value in
+        [width as f32, height as f32, if projection.use_world_position { 1.0 } else { 0.0 }, 0.0]
+    {
+        push_f32(&mut out, value);
+    }
+    for column in projection.world_to_clip {
+        for value in column {
+            push_f32(&mut out, value);
+        }
+    }
+    out
+}
+
+fn id_mask_field_uniform_bytes(
+    width: u32,
+    height: u32,
+    jump_px: f32,
+) -> [u8; ID_MASK_FIELD_UNIFORM_SIZE_BYTES] {
+    let mut out = [0_u8; ID_MASK_FIELD_UNIFORM_SIZE_BYTES];
+    out[0..4].copy_from_slice(&(width as f32).to_le_bytes());
+    out[4..8].copy_from_slice(&(height as f32).to_le_bytes());
+    out[8..12].copy_from_slice(&jump_px.to_le_bytes());
+    out[12..16].copy_from_slice(&0.0_f32.to_le_bytes());
+    out
 }
 
 fn id_mask_compositor_uniform_bytes(draw: &IdMaskDraw) -> Vec<u8> {
     let mut out = Vec::with_capacity(
-        16 * (3 + 4 + 4 + 4 + id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS),
+        16 * (4 + 4 + 4 + 4 + id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS),
     );
     for value in [draw.viewport.x, draw.viewport.y, draw.viewport.w, draw.viewport.h] {
         push_f32(&mut out, value);
@@ -2746,6 +3726,14 @@ fn id_mask_compositor_uniform_bytes(draw: &IdMaskDraw) -> Vec<u8> {
         if draw.glow_enabled { 1.0 } else { 0.0 },
         draw.polish.smooth_radius_px.max(0.0),
         draw.polish.fallback_radius_px.max(0.0),
+    ] {
+        push_f32(&mut out, value);
+    }
+    for value in [
+        draw.polish.exterior_halo_inner_sigma_px.max(0.0),
+        draw.polish.exterior_halo_inner_alpha.max(0.0),
+        draw.polish.exterior_halo_outer_sigma_px.max(0.0),
+        draw.polish.exterior_halo_outer_alpha.max(0.0),
     ] {
         push_f32(&mut out, value);
     }
@@ -2985,17 +3973,162 @@ fn fs_scene3d_color(input: Scene3dColorVertexOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+const ID_MASK_FIELD_WGSL: &str = r#"
+// Precompute nearest-city and seam seeds with jump flooding so the beauty
+// compositor stays constant-cost per pixel. This is intentionally more passes,
+// less fragment work: that was the winning Chrome/Dawn profile for Topomap.
+struct IdMaskFieldParams {
+   mask_size_jump_pad: vec4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> field_params: IdMaskFieldParams;
+@group(0) @binding(1) var field_city_tex: texture_2d<u32>;
+@group(0) @binding(2) var field_neighborhood_tex: texture_2d<u32>;
+@group(0) @binding(3) var field_city_src_tex: texture_2d<f32>;
+@group(0) @binding(4) var field_seam_src_tex: texture_2d<f32>;
+
+struct IdMaskFieldRaster {
+   @builtin(position) position: vec4<f32>,
+};
+
+struct IdMaskFieldTargets {
+   @location(0) city: vec4<f32>,
+   @location(1) seam: vec4<f32>,
+};
+
+@vertex
+fn vs_id_mask_field(@builtin(vertex_index) vid: u32) -> IdMaskFieldRaster {
+   let pos = array<vec2<f32>, 6>(
+      vec2<f32>(-1.0, -1.0),
+      vec2<f32>(1.0, -1.0),
+      vec2<f32>(-1.0, 1.0),
+      vec2<f32>(-1.0, 1.0),
+      vec2<f32>(1.0, -1.0),
+      vec2<f32>(1.0, 1.0),
+   );
+   var out: IdMaskFieldRaster;
+   out.position = vec4<f32>(pos[vid], 0.0, 1.0);
+   return out;
+}
+
+fn field_size() -> vec2<u32> {
+   let raw = max(field_params.mask_size_jump_pad.xy, vec2<f32>(1.0, 1.0));
+   return vec2<u32>(u32(raw.x), u32(raw.y));
+}
+
+fn field_pixel(pos: vec4<f32>, size: vec2<u32>) -> vec2<i32> {
+   return vec2<i32>(clamp(pos.xy, vec2<f32>(0.0), vec2<f32>(size) - vec2<f32>(1.0)));
+}
+
+fn read_field_mask(tex: texture_2d<u32>, p: vec2<i32>, size: vec2<u32>) -> u32 {
+   if (p.x < 0 || p.y < 0 || p.x >= i32(size.x) || p.y >= i32(size.y)) {
+      return 0u;
+   }
+   return textureLoad(tex, p, 0).r;
+}
+
+fn read_seed_field(tex: texture_2d<f32>, p: vec2<i32>, size: vec2<u32>) -> vec4<f32> {
+   if (p.x < 0 || p.y < 0 || p.x >= i32(size.x) || p.y >= i32(size.y)) {
+      return vec4<f32>(-1.0, -1.0, 0.0, 0.0);
+   }
+   return textureLoad(tex, p, 0);
+}
+
+fn valid_seed(seed: vec4<f32>) -> bool {
+   return seed.x >= -0.5 && seed.y >= -0.5 && seed.z >= 0.5;
+}
+
+fn seed_distance2(seed: vec4<f32>, p: vec2<i32>) -> f32 {
+   if (!valid_seed(seed)) {
+      return 1.0e30;
+   }
+   let delta = seed.xy - vec2<f32>(p);
+   return dot(delta, delta);
+}
+
+fn seam_seed(p: vec2<i32>, size: vec2<u32>) -> vec4<f32> {
+   let city = read_field_mask(field_city_tex, p, size);
+   let neighborhood = read_field_mask(field_neighborhood_tex, p, size);
+   if (city == 0u || neighborhood == 0u) {
+      return vec4<f32>(-1.0, -1.0, 0.0, 0.0);
+   }
+   for (var oy = -1; oy <= 1; oy = oy + 1) {
+      for (var ox = -1; ox <= 1; ox = ox + 1) {
+         if (ox == 0 && oy == 0) {
+            continue;
+         }
+         let q = p + vec2<i32>(ox, oy);
+         if (read_field_mask(field_city_tex, q, size) == city) {
+            let other = read_field_mask(field_neighborhood_tex, q, size);
+            if (other != 0u && other != neighborhood) {
+               return vec4<f32>(vec2<f32>(p), f32(city), 1.0);
+            }
+         }
+      }
+   }
+   return vec4<f32>(-1.0, -1.0, 0.0, 0.0);
+}
+
+@fragment
+fn fs_id_mask_field_seed(input: IdMaskFieldRaster) -> IdMaskFieldTargets {
+   let size = field_size();
+   let p = field_pixel(input.position, size);
+   let city = read_field_mask(field_city_tex, p, size);
+   let neighborhood = read_field_mask(field_neighborhood_tex, p, size);
+   var out: IdMaskFieldTargets;
+   out.city = select(
+      vec4<f32>(-1.0, -1.0, 0.0, 0.0),
+      vec4<f32>(vec2<f32>(p), f32(city), f32(neighborhood)),
+      city != 0u,
+   );
+   out.seam = seam_seed(p, size);
+   return out;
+}
+
+fn best_jump_seed(src: texture_2d<f32>, p: vec2<i32>, size: vec2<u32>, jump: i32) -> vec4<f32> {
+   var best = read_seed_field(src, p, size);
+   var best_distance = seed_distance2(best, p);
+   for (var oy = -1; oy <= 1; oy = oy + 1) {
+      for (var ox = -1; ox <= 1; ox = ox + 1) {
+         if (ox == 0 && oy == 0) {
+            continue;
+         }
+         let candidate = read_seed_field(src, p + vec2<i32>(ox * jump, oy * jump), size);
+         let distance = seed_distance2(candidate, p);
+         if (distance < best_distance) {
+            best = candidate;
+            best_distance = distance;
+         }
+      }
+   }
+   return best;
+}
+
+@fragment
+fn fs_id_mask_field_jump(input: IdMaskFieldRaster) -> IdMaskFieldTargets {
+   let size = field_size();
+   let p = field_pixel(input.position, size);
+   let jump = max(i32(round(field_params.mask_size_jump_pad.z)), 1);
+   var out: IdMaskFieldTargets;
+   out.city = best_jump_seed(field_city_src_tex, p, size, jump);
+   out.seam = best_jump_seed(field_seam_src_tex, p, size, jump);
+   return out;
+}
+"#;
+
 const ID_MASK_WGSL: &str = r#"
 struct IdMaskRasterParams {
-   mask_size: vec4<f32>,
+   mask_size_mode: vec4<f32>,
+   world_to_clip: mat4x4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> raster_params: IdMaskRasterParams;
 
 struct IdMaskRasterVertexIn {
    @location(0) position_px: vec2<f32>,
-   @location(1) city_id: u32,
-   @location(2) neighborhood_id: u32,
+   @location(1) position_world: vec3<f32>,
+   @location(2) city_id: u32,
+   @location(3) neighborhood_id: u32,
 };
 
 struct IdMaskRasterOut {
@@ -3011,10 +4144,14 @@ struct IdMaskRasterTargets {
 
 @vertex
 fn vs_id_mask_raster(input: IdMaskRasterVertexIn) -> IdMaskRasterOut {
-   let mask_size = max(raster_params.mask_size.xy, vec2<f32>(1.0, 1.0));
-   let normalized = input.position_px / mask_size;
    var out: IdMaskRasterOut;
-   out.position = vec4<f32>(normalized.x * 2.0 - 1.0, 1.0 - normalized.y * 2.0, 0.0, 1.0);
+   if (raster_params.mask_size_mode.z > 0.5) {
+      out.position = raster_params.world_to_clip * vec4<f32>(input.position_world, 1.0);
+   } else {
+      let mask_size = max(raster_params.mask_size_mode.xy, vec2<f32>(1.0, 1.0));
+      let normalized = input.position_px / mask_size;
+      out.position = vec4<f32>(normalized.x * 2.0 - 1.0, 1.0 - normalized.y * 2.0, 0.0, 1.0);
+   }
    out.city_id = input.city_id;
    out.neighborhood_id = input.neighborhood_id;
    return out;
@@ -3032,6 +4169,7 @@ struct IdMaskCompositorParams {
    viewport: vec4<f32>,
    mask_size_scale_alpha: vec4<f32>,
    mode_glow_polish_fallback: vec4<f32>,
+   exterior_halo: vec4<f32>,
    city_fill_colors: array<vec4<f32>, 4>,
    city_edge_colors: array<vec4<f32>, 4>,
    city_seam_colors: array<vec4<f32>, 4>,
@@ -3041,6 +4179,8 @@ struct IdMaskCompositorParams {
 @group(0) @binding(0) var<uniform> compositor_params: IdMaskCompositorParams;
 @group(0) @binding(1) var city_tex: texture_2d<u32>;
 @group(0) @binding(2) var neighborhood_tex: texture_2d<u32>;
+@group(0) @binding(3) var city_field_tex: texture_2d<f32>;
+@group(0) @binding(4) var seam_field_tex: texture_2d<f32>;
 
 struct IdMaskCompositorRaster {
    @builtin(position) position: vec4<f32>,
@@ -3080,123 +4220,30 @@ fn read_mask(tex: texture_2d<u32>, p: vec2<i32>, size: vec2<u32>) -> u32 {
    return textureLoad(tex, p, 0).r;
 }
 
-fn direction_sample_offset(direction_index: i32, radius: i32) -> vec2<i32> {
-   let dirs = array<vec2<f32>, 24>(
-      vec2<f32>(1.0, 0.0), vec2<f32>(0.966, 0.259), vec2<f32>(0.866, 0.5),
-      vec2<f32>(0.707, 0.707), vec2<f32>(0.5, 0.866), vec2<f32>(0.259, 0.966),
-      vec2<f32>(0.0, 1.0), vec2<f32>(-0.259, 0.966), vec2<f32>(-0.5, 0.866),
-      vec2<f32>(-0.707, 0.707), vec2<f32>(-0.866, 0.5), vec2<f32>(-0.966, 0.259),
-      vec2<f32>(-1.0, 0.0), vec2<f32>(-0.966, -0.259), vec2<f32>(-0.866, -0.5),
-      vec2<f32>(-0.707, -0.707), vec2<f32>(-0.5, -0.866), vec2<f32>(-0.259, -0.966),
-      vec2<f32>(0.0, -1.0), vec2<f32>(0.259, -0.966), vec2<f32>(0.5, -0.866),
-      vec2<f32>(0.707, -0.707), vec2<f32>(0.866, -0.5), vec2<f32>(0.966, -0.259),
-   );
-   return vec2<i32>(round(dirs[u32(direction_index)] * f32(radius)));
+fn read_field(tex: texture_2d<f32>, p: vec2<i32>, size: vec2<u32>) -> vec4<f32> {
+   if (p.x < 0 || p.y < 0 || p.x >= i32(size.x) || p.y >= i32(size.y)) {
+      return vec4<f32>(-1.0, -1.0, 0.0, 0.0);
+   }
+   return textureLoad(tex, p, 0);
 }
 
-fn conservative_polished_city(p: vec2<i32>, size: vec2<u32>, max_radius: i32) -> u32 {
-   let direct = read_mask(city_tex, p, size);
-   if (direct != 0u || max_radius <= 0) {
-      return direct;
-   }
-   var counts = array<u32, 4>(0u, 0u, 0u, 0u);
-   var sample_count = 0u;
-   let radius_squared = max_radius * max_radius;
-   for (var oy = -max_radius; oy <= max_radius; oy = oy + 1) {
-      for (var ox = -max_radius; ox <= max_radius; ox = ox + 1) {
-         if (ox * ox + oy * oy > radius_squared) {
-            continue;
-         }
-         sample_count = sample_count + 1u;
-         let city = min(read_mask(city_tex, p + vec2<i32>(ox, oy), size), 3u);
-         if (city != 0u) {
-            counts[city] = counts[city] + 1u;
-         }
-      }
-   }
-   var best_city = 0u;
-   var best_count = 0u;
-   for (var city = 1u; city <= 3u; city = city + 1u) {
-      if (counts[city] > best_count) {
-         best_city = city;
-         best_count = counts[city];
-      }
-   }
-   let coverage = select(0.0, f32(best_count) / f32(sample_count), sample_count != 0u);
-   return select(0u, best_city, coverage >= 0.68);
+fn field_valid(field: vec4<f32>) -> bool {
+   return field.x >= -0.5 && field.y >= -0.5 && field.z >= 0.5;
 }
 
-fn is_internal_seam_pixel(p: vec2<i32>, size: vec2<u32>) -> bool {
-   let city = read_mask(city_tex, p, size);
-   let neighborhood = read_mask(neighborhood_tex, p, size);
-   if (city == 0u || neighborhood == 0u) {
-      return false;
+fn field_distance(field: vec4<f32>, p: vec2<i32>) -> f32 {
+   if (!field_valid(field)) {
+      return 1000000.0;
    }
-   for (var oy = -1; oy <= 1; oy = oy + 1) {
-      for (var ox = -1; ox <= 1; ox = ox + 1) {
-         if (ox == 0 && oy == 0) {
-            continue;
-         }
-         let q = p + vec2<i32>(ox, oy);
-         if (read_mask(city_tex, q, size) == city) {
-            let other = read_mask(neighborhood_tex, q, size);
-            if (other != 0u && other != neighborhood) {
-               return true;
-            }
-         }
-      }
-   }
-   return false;
+   return length(field.xy - vec2<f32>(p));
 }
 
-fn nearest_city(p: vec2<i32>, size: vec2<u32>, max_radius: i32) -> vec2<u32> {
-   let direct = read_mask(city_tex, p, size);
-   if (direct != 0u) {
-      return vec2<u32>(direct, 0u);
-   }
-   for (var r = 1; r <= max_radius; r = r + 2) {
-      for (var i = 0; i < 24; i = i + 1) {
-         let city = read_mask(city_tex, p + direction_sample_offset(i, r), size);
-         if (city != 0u) {
-            return vec2<u32>(city, u32(r));
-         }
-      }
-   }
-   return vec2<u32>(0u, u32(max_radius + 1));
+fn field_city(field: vec4<f32>) -> u32 {
+   return u32(round(clamp(field.z, 0.0, 255.0)));
 }
 
-fn nearest_neighborhood_for_city(p: vec2<i32>, size: vec2<u32>, city: u32, max_radius: i32) -> u32 {
-   let direct_city = read_mask(city_tex, p, size);
-   let direct_neighborhood = read_mask(neighborhood_tex, p, size);
-   if (direct_city == city && direct_neighborhood != 0u) {
-      return direct_neighborhood;
-   }
-   for (var r = 1; r <= max_radius; r = r + 1) {
-      for (var i = 0; i < 24; i = i + 1) {
-         let q = p + direction_sample_offset(i, r);
-         if (read_mask(city_tex, q, size) == city) {
-            let neighborhood = read_mask(neighborhood_tex, q, size);
-            if (neighborhood != 0u) {
-               return neighborhood;
-            }
-         }
-      }
-   }
-   return 0u;
-}
-
-fn nearest_seam_distance(p: vec2<i32>, size: vec2<u32>, max_radius: i32) -> f32 {
-   if (is_internal_seam_pixel(p, size)) {
-      return 0.0;
-   }
-   for (var r = 1; r <= max_radius; r = r + 1) {
-      for (var i = 0; i < 24; i = i + 1) {
-         if (is_internal_seam_pixel(p + direction_sample_offset(i, r), size)) {
-            return f32(r);
-         }
-      }
-   }
-   return f32(max_radius + 1);
+fn field_neighborhood(field: vec4<f32>) -> u32 {
+   return u32(round(clamp(field.w, 0.0, 255.0)));
 }
 
 fn gaussian_alpha(distance_mask_px: f32, mask_scale: f32, sigma_px: f32, max_alpha: f32, cutoff_sigma: f32) -> f32 {
@@ -3218,8 +4265,20 @@ fn fs_id_mask_compositor(input: IdMaskCompositorRaster) -> @location(0) vec4<f32
    let glow_enabled = compositor_params.mode_glow_polish_fallback.y >= 0.5;
    let polish_radius = i32(ceil(compositor_params.mode_glow_polish_fallback.z * mask_scale));
    let fallback_radius = i32(ceil(compositor_params.mode_glow_polish_fallback.w * mask_scale));
-   let city = conservative_polished_city(p, size, polish_radius);
-   let neighborhood = nearest_neighborhood_for_city(p, size, city, fallback_radius);
+   let nearest_city_field = read_field(city_field_tex, p, size);
+   let city_direct = read_mask(city_tex, p, size);
+   let city_distance = field_distance(nearest_city_field, p);
+   let city = select(
+      select(0u, field_city(nearest_city_field), city_distance <= f32(polish_radius)),
+      city_direct,
+      city_direct != 0u,
+   );
+   let neighborhood_direct = read_mask(neighborhood_tex, p, size);
+   let neighborhood = select(
+      select(0u, field_neighborhood(nearest_city_field), city_distance <= f32(fallback_radius) && field_city(nearest_city_field) == city),
+      neighborhood_direct,
+      city_direct == city && neighborhood_direct != 0u,
+   );
    let city_index = min(city, 3u);
    let neighborhood_index = min(neighborhood, 31u);
 
@@ -3230,7 +4289,12 @@ fn fs_id_mask_compositor(input: IdMaskCompositorRaster) -> @location(0) vec4<f32
       return select(vec4<f32>(compositor_params.neighborhood_colors[neighborhood_index].rgb, 1.0), vec4<f32>(0.0, 0.0, 0.0, 1.0), neighborhood == 0u);
    }
 
-   let seam_distance = nearest_seam_distance(p, size, i32(ceil(5.0 * mask_scale)));
+   let seam_field = read_field(seam_field_tex, p, size);
+   let seam_distance = select(
+      f32(i32(ceil(5.0 * mask_scale)) + 1),
+      field_distance(seam_field, p),
+      field_valid(seam_field) && field_city(seam_field) == city,
+   );
    if (mode == 1u) {
       let core = gaussian_alpha(seam_distance, mask_scale, 0.42, 1.0, 2.1);
       return select(vec4<f32>(0.0, 0.0, 0.0, 1.0), vec4<f32>(1.0, 1.0, 1.0, 1.0), core > 0.04 && city != 0u);
@@ -3241,15 +4305,14 @@ fn fs_id_mask_compositor(input: IdMaskCompositorRaster) -> @location(0) vec4<f32
       if (!glow_enabled) {
          return vec4<f32>(0.0, 0.0, 0.0, dark_alpha);
       }
-      let halo = nearest_city(p, size, i32(ceil(18.0 * mask_scale)));
-      let halo_city = halo.x;
-      if (halo_city == 0u) {
+      let halo_city = field_city(nearest_city_field);
+      if (!field_valid(nearest_city_field) || halo_city == 0u) {
          return vec4<f32>(0.0, 0.0, 0.0, dark_alpha);
       }
-      let halo_distance = f32(halo.y);
+      let halo_distance = city_distance;
       let alpha = max(
-         gaussian_alpha(halo_distance, mask_scale, 16.0, 0.04, 3.2),
-         gaussian_alpha(halo_distance, mask_scale, 8.5, 0.15, 3.2),
+         gaussian_alpha(halo_distance, mask_scale, compositor_params.exterior_halo.x, compositor_params.exterior_halo.y, 3.2),
+         gaussian_alpha(halo_distance, mask_scale, compositor_params.exterior_halo.z, compositor_params.exterior_halo.w, 3.2),
       );
       if (alpha <= 0.002) {
          return vec4<f32>(0.0, 0.0, 0.0, dark_alpha);

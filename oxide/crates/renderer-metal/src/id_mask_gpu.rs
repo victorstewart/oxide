@@ -11,6 +11,7 @@ struct CompositorGpuParams {
     glow_enabled: u32,
     polish_radius_px: f32,
     fallback_radius_px: f32,
+    exterior_halo: [f32; 4],
     city_fill_colors: [[f32; 4]; id_mask_compositor::ID_MASK_MAX_CITY_STYLES],
     city_edge_colors: [[f32; 4]; id_mask_compositor::ID_MASK_MAX_CITY_STYLES],
     city_seam_colors: [[f32; 4]; id_mask_compositor::ID_MASK_MAX_CITY_STYLES],
@@ -22,13 +23,27 @@ pub(super) struct RenderTargets {
     pub(super) height: usize,
     pub(super) city: Texture,
     pub(super) neighborhood: Texture,
+    pub(super) city_field_a: Texture,
+    pub(super) city_field_b: Texture,
+    pub(super) seam_field_a: Texture,
+    pub(super) seam_field_b: Texture,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct RasterGpuParams {
     mask_size: [f32; 2],
-    _pad: [f32; 2],
+    use_world_position: f32,
+    _pad: f32,
+    world_to_clip: [[f32; 4]; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FieldGpuParams {
+    mask_size: [f32; 2],
+    jump: f32,
+    _pad: f32,
 }
 
 pub(super) fn build_compositor_pso(
@@ -66,6 +81,40 @@ pub(super) fn build_raster_pso(
     pipeline_state(device, "pso.id_mask_raster.create", &desc)
 }
 
+pub(super) fn build_field_seed_pso(
+    device: &Device,
+    lib: &Library,
+) -> Result<RenderPipelineState, MetalInitError> {
+    build_field_pso(device, lib, "f_id_mask_field_seed", "pso.id_mask_field_seed.create")
+}
+
+pub(super) fn build_field_jump_pso(
+    device: &Device,
+    lib: &Library,
+) -> Result<RenderPipelineState, MetalInitError> {
+    build_field_pso(device, lib, "f_id_mask_field_jump", "pso.id_mask_field_jump.create")
+}
+
+fn build_field_pso(
+    device: &Device,
+    lib: &Library,
+    fragment_name: &str,
+    label: &str,
+) -> Result<RenderPipelineState, MetalInitError> {
+    let v = pipeline_function(lib, "id_mask_field.vertex", "v_id_mask_field")?;
+    let f = pipeline_function(lib, "id_mask_field.fragment", fragment_name)?;
+    let desc = RenderPipelineDescriptor::new();
+    desc.set_vertex_function(Some(&v));
+    desc.set_fragment_function(Some(&f));
+    desc.set_sample_count(1);
+    for index in 0..2 {
+        let ca = desc.color_attachments().object_at(index).unwrap();
+        ca.set_pixel_format(MTLPixelFormat::RGBA32Float);
+        ca.set_blending_enabled(false);
+    }
+    pipeline_state(device, label, &desc)
+}
+
 impl MetalRenderer {
     fn new_r8_mask_render_texture(
         &self,
@@ -90,7 +139,7 @@ impl MetalRenderer {
         slot: usize,
         width: usize,
         height: usize,
-    ) -> Result<(Texture, Texture), api::RenderError> {
+    ) -> Result<(Texture, Texture, Texture, Texture, Texture, Texture), api::RenderError> {
         let needs_new = match &self.id_mask_targets[slot] {
             Some(targets) => targets.width != width || targets.height != height,
             None => true,
@@ -98,12 +147,50 @@ impl MetalRenderer {
         if needs_new {
             let city = self.new_r8_mask_render_texture(width, height)?;
             let neighborhood = self.new_r8_mask_render_texture(width, height)?;
-            self.id_mask_targets[slot] = Some(RenderTargets { width, height, city, neighborhood });
+            let city_field_a = self.new_rgba32_float_render_texture(width, height)?;
+            let city_field_b = self.new_rgba32_float_render_texture(width, height)?;
+            let seam_field_a = self.new_rgba32_float_render_texture(width, height)?;
+            let seam_field_b = self.new_rgba32_float_render_texture(width, height)?;
+            self.id_mask_targets[slot] = Some(RenderTargets {
+                width,
+                height,
+                city,
+                neighborhood,
+                city_field_a,
+                city_field_b,
+                seam_field_a,
+                seam_field_b,
+            });
         }
         let Some(targets) = &self.id_mask_targets[slot] else {
             return Err(api::RenderError::OutOfMemory);
         };
-        Ok((targets.city.to_owned(), targets.neighborhood.to_owned()))
+        Ok((
+            targets.city.to_owned(),
+            targets.neighborhood.to_owned(),
+            targets.city_field_a.to_owned(),
+            targets.city_field_b.to_owned(),
+            targets.seam_field_a.to_owned(),
+            targets.seam_field_b.to_owned(),
+        ))
+    }
+
+    fn new_rgba32_float_render_texture(
+        &self,
+        width: usize,
+        height: usize,
+    ) -> Result<Texture, api::RenderError> {
+        if width == 0 || height == 0 {
+            return Err(api::RenderError::InvalidOperation("id-mask field target has zero size"));
+        }
+        let desc = TextureDescriptor::new();
+        desc.set_pixel_format(MTLPixelFormat::RGBA32Float);
+        desc.set_texture_type(MTLTextureType::D2);
+        desc.set_width(width as u64);
+        desc.set_height(height as u64);
+        desc.set_storage_mode(MTLStorageMode::Private);
+        desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+        Ok(self.device.new_texture(&desc))
     }
 
     fn encode_id_mask_compositor_textures(
@@ -114,6 +201,8 @@ impl MetalRenderer {
         mask_scale: f32,
         city_tex: &TextureRef,
         neighborhood_tex: &TextureRef,
+        city_field_tex: &TextureRef,
+        seam_field_tex: &TextureRef,
         city_styles: &[id_mask_compositor::IdMaskCityStyle;
              id_mask_compositor::ID_MASK_MAX_CITY_STYLES],
         neighborhood_colors_src: &[[f32; 3]; id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS],
@@ -150,6 +239,12 @@ impl MetalRenderer {
             glow_enabled: glow_enabled as u32,
             polish_radius_px: polish.smooth_radius_px.max(0.0),
             fallback_radius_px: polish.fallback_radius_px.max(0.0),
+            exterior_halo: [
+                polish.exterior_halo_inner_sigma_px.max(0.0),
+                polish.exterior_halo_inner_alpha.max(0.0),
+                polish.exterior_halo_outer_sigma_px.max(0.0),
+                polish.exterior_halo_outer_alpha.max(0.0),
+            ],
             city_fill_colors,
             city_edge_colors,
             city_seam_colors,
@@ -160,16 +255,14 @@ impl MetalRenderer {
         let cmd = self.ensure_frame_command_buffer(slot);
         let rpd = RenderPassDescriptor::new();
         let ca0 = rpd.color_attachments().object_at(0).unwrap();
-        ca0.set_texture(Some(&target_tex));
-        ca0.set_store_action(MTLStoreAction::Store);
-        if self.frame_color_initialized {
-            ca0.set_load_action(MTLLoadAction::Load);
-        } else {
-            ca0.set_load_action(MTLLoadAction::Clear);
-            ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 });
-        }
+        configure_frame_color_attachment(ca0, &target_tex, self.frame_color_initialized);
 
         let enc = cmd.new_render_command_encoder(&rpd);
+        // The compositor shader builds a local full-quad for mask sampling.
+        // Hardware viewport/scissor maps that quad into the requested widget
+        // rect so embedded Topomap does not leak fullscreen pixels or shade
+        // outside the visible surface.
+        set_viewport_and_scissor_dp(&enc, self, viewport);
         enc.set_render_pipeline_state(&self.pso_id_mask_compositor);
         enc.set_vertex_bytes(
             0,
@@ -183,6 +276,8 @@ impl MetalRenderer {
         );
         enc.set_fragment_texture(0, Some(city_tex));
         enc.set_fragment_texture(1, Some(neighborhood_tex));
+        enc.set_fragment_texture(2, Some(city_field_tex));
+        enc.set_fragment_texture(3, Some(seam_field_tex));
         enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
         enc.end_encoding();
 
@@ -204,11 +299,10 @@ impl MetalRenderer {
                 "id-mask GPU compositor currently requires MetalRenderer sample_count == 1",
             ));
         }
-        if self.frame_2d_encoded {
-            return Err(api::RenderError::InvalidOperation(
-                "encode_id_mask_gpu_compositor must run before encode_pass within a frame",
-            ));
-        }
+        // The compositor deliberately supports interleaving with 2D passes.
+        // Topomap embeds its high-resolution JFA/ID-mask polish at a draw-list
+        // position inside app UI, so this pass must load the current frame when
+        // earlier 2D content has already initialized it.
         if pass.raster.mask_width == 0 || pass.raster.mask_height == 0 {
             return Err(api::RenderError::InvalidOperation(
                 "id-mask GPU raster has zero dimensions",
@@ -222,7 +316,14 @@ impl MetalRenderer {
 
         self.ensure_target();
         let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
-        let (city_tex, neighborhood_tex) = self.ensure_id_mask_render_targets(
+        let (
+            city_tex,
+            neighborhood_tex,
+            city_field_a,
+            city_field_b,
+            seam_field_a,
+            seam_field_b,
+        ) = self.ensure_id_mask_render_targets(
             slot,
             pass.raster.mask_width,
             pass.raster.mask_height,
@@ -248,21 +349,20 @@ impl MetalRenderer {
         }
         let params = RasterGpuParams {
             mask_size: [pass.raster.mask_width as f32, pass.raster.mask_height as f32],
-            _pad: [0.0, 0.0],
+            use_world_position: if pass.raster.projection.use_world_position { 1.0 } else { 0.0 },
+            _pad: 0.0,
+            world_to_clip: pass.raster.projection.world_to_clip,
         };
 
         let cmd = self.ensure_frame_command_buffer(slot);
         let rpd = RenderPassDescriptor::new();
-        let ca0 = rpd.color_attachments().object_at(0).unwrap();
-        ca0.set_texture(Some(&city_tex));
-        ca0.set_load_action(MTLLoadAction::Clear);
-        ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0 });
-        ca0.set_store_action(MTLStoreAction::Store);
-        let ca1 = rpd.color_attachments().object_at(1).unwrap();
-        ca1.set_texture(Some(&neighborhood_tex));
-        ca1.set_load_action(MTLLoadAction::Clear);
-        ca1.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0 });
-        ca1.set_store_action(MTLStoreAction::Store);
+        for (index, texture) in [(0_u64, &city_tex), (1_u64, &neighborhood_tex)] {
+            let ca = rpd.color_attachments().object_at(index).unwrap();
+            ca.set_texture(Some(texture));
+            ca.set_load_action(MTLLoadAction::Clear);
+            ca.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0 });
+            ca.set_store_action(MTLStoreAction::Store);
+        }
         let enc = cmd.new_render_command_encoder(&rpd);
         enc.set_render_pipeline_state(&self.pso_id_mask_raster);
         enc.set_vertex_buffer(0, Some(&vertex_buf), 0);
@@ -274,6 +374,81 @@ impl MetalRenderer {
         enc.draw_primitives(MTLPrimitiveType::Triangle, 0, pass.raster.vertex_count() as u64);
         enc.end_encoding();
 
+        let field_params = FieldGpuParams {
+            mask_size: [
+                pass.raster.mask_width as f32,
+                pass.raster.mask_height as f32,
+            ],
+            jump: 0.0,
+            _pad: 0.0,
+        };
+        let rpd = RenderPassDescriptor::new();
+        for (index, texture) in [(0_u64, &city_field_a), (1_u64, &seam_field_a)] {
+            let ca = rpd.color_attachments().object_at(index).unwrap();
+            ca.set_texture(Some(texture));
+            ca.set_load_action(MTLLoadAction::Clear);
+            ca.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0 });
+            ca.set_store_action(MTLStoreAction::Store);
+        }
+        let enc = cmd.new_render_command_encoder(&rpd);
+        enc.set_render_pipeline_state(&self.pso_id_mask_field_seed);
+        enc.set_fragment_bytes(
+            0,
+            core::mem::size_of_val(&field_params) as u64,
+            (&field_params as *const FieldGpuParams).cast(),
+        );
+        enc.set_fragment_texture(0, Some(&city_tex));
+        enc.set_fragment_texture(1, Some(&neighborhood_tex));
+        enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
+        enc.end_encoding();
+
+        // Keep nearest-city and seam lookup work in these ping-pong field
+        // passes. The final beauty compositor is per-visible-pixel, so doing
+        // radius searches there was the source of the WebGPU/Metal perf cliff.
+        let mut src_is_a = true;
+        let mut jump = pass.raster.mask_width.max(pass.raster.mask_height).next_power_of_two() / 2;
+        while jump >= 1 {
+            let params = FieldGpuParams {
+                mask_size: [
+                    pass.raster.mask_width as f32,
+                    pass.raster.mask_height as f32,
+                ],
+                jump: jump as f32,
+                _pad: 0.0,
+            };
+            let (src_city, src_seam, dst_city, dst_seam) = if src_is_a {
+                (&city_field_a, &seam_field_a, &city_field_b, &seam_field_b)
+            } else {
+                (&city_field_b, &seam_field_b, &city_field_a, &seam_field_a)
+            };
+            let rpd = RenderPassDescriptor::new();
+            for (index, texture) in [(0_u64, dst_city), (1_u64, dst_seam)] {
+                let ca = rpd.color_attachments().object_at(index).unwrap();
+                ca.set_texture(Some(texture));
+                ca.set_load_action(MTLLoadAction::Clear);
+                ca.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0 });
+                ca.set_store_action(MTLStoreAction::Store);
+            }
+            let enc = cmd.new_render_command_encoder(&rpd);
+            enc.set_render_pipeline_state(&self.pso_id_mask_field_jump);
+            enc.set_fragment_bytes(
+                0,
+                core::mem::size_of_val(&params) as u64,
+                (&params as *const FieldGpuParams).cast(),
+            );
+            enc.set_fragment_texture(0, Some(src_city));
+            enc.set_fragment_texture(1, Some(src_seam));
+            enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
+            enc.end_encoding();
+            src_is_a = !src_is_a;
+            jump /= 2;
+        }
+        let (city_field_tex, seam_field_tex) = if src_is_a {
+            (&city_field_a, &seam_field_a)
+        } else {
+            (&city_field_b, &seam_field_b)
+        };
+
         self.encode_id_mask_compositor_textures(
             pass.raster.viewport,
             pass.raster.mask_width,
@@ -281,6 +456,8 @@ impl MetalRenderer {
             pass.raster.mask_scale,
             &city_tex,
             &neighborhood_tex,
+            city_field_tex,
+            seam_field_tex,
             &pass.city_styles,
             &pass.neighborhood_colors,
             pass.mode,

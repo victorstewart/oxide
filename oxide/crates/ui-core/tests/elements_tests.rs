@@ -466,6 +466,7 @@ fn camera_view_encodes_draw_cmd() {
         grayscale: true,
         blur: true,
         sigma: 8.0,
+        native_preview: false,
     };
     cam.encode(rect, &mut dl);
     let items = dl.drawlist().items.clone();

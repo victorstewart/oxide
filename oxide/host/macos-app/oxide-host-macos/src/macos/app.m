@@ -25,6 +25,7 @@ void macos_app_did_become_active(void);
 void macos_app_will_resign_active(void);
 void macos_app_will_terminate(void);
 void macos_app_on_memory_pressure(uint32_t level);
+uint8_t macos_app_should_render(void);
 
 @interface MetalView : NSView <NSTextInputClient> {
     id<MTLDevice> _device;
@@ -535,6 +536,7 @@ int macos_host_start(void)
 
 static BOOL ShouldRenderFrame(void)
 {
+    if (!macos_app_should_render()) { return NO; }
     if (gDropEvery <= 1) { return YES; }
     uint64_t idx = __atomic_add_fetch(&gFrameCounter, 1, __ATOMIC_RELAXED);
     return (idx % gDropEvery) == 0;
