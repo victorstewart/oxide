@@ -78,10 +78,10 @@ jobs:
           name: artifacts
           path: |
             sweep.txt
-            ../sweep.csv
-            ../sweep.json
-            benchmarks/workspace/ci-current.json
-            benchmarks/workspace/ci-current.md
+            sweep.csv
+            sweep.json
+            oxide/benchmarks/workspace/ci-current.json
+            oxide/benchmarks/workspace/ci-current.md
             artifacts/static
             artifacts/anim
 
