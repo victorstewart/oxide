@@ -316,18 +316,12 @@ impl MetalRenderer {
 
         self.ensure_target();
         let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
-        let (
-            city_tex,
-            neighborhood_tex,
-            city_field_a,
-            city_field_b,
-            seam_field_a,
-            seam_field_b,
-        ) = self.ensure_id_mask_render_targets(
-            slot,
-            pass.raster.mask_width,
-            pass.raster.mask_height,
-        )?;
+        let (city_tex, neighborhood_tex, city_field_a, city_field_b, seam_field_a, seam_field_b) =
+            self.ensure_id_mask_render_targets(
+                slot,
+                pass.raster.mask_width,
+                pass.raster.mask_height,
+            )?;
         let vertex_bytes = pass
             .raster
             .vertices
@@ -375,10 +369,7 @@ impl MetalRenderer {
         enc.end_encoding();
 
         let field_params = FieldGpuParams {
-            mask_size: [
-                pass.raster.mask_width as f32,
-                pass.raster.mask_height as f32,
-            ],
+            mask_size: [pass.raster.mask_width as f32, pass.raster.mask_height as f32],
             jump: 0.0,
             _pad: 0.0,
         };
@@ -409,10 +400,7 @@ impl MetalRenderer {
         let mut jump = pass.raster.mask_width.max(pass.raster.mask_height).next_power_of_two() / 2;
         while jump >= 1 {
             let params = FieldGpuParams {
-                mask_size: [
-                    pass.raster.mask_width as f32,
-                    pass.raster.mask_height as f32,
-                ],
+                mask_size: [pass.raster.mask_width as f32, pass.raster.mask_height as f32],
                 jump: jump as f32,
                 _pad: 0.0,
             };
@@ -443,11 +431,8 @@ impl MetalRenderer {
             src_is_a = !src_is_a;
             jump /= 2;
         }
-        let (city_field_tex, seam_field_tex) = if src_is_a {
-            (&city_field_a, &seam_field_a)
-        } else {
-            (&city_field_b, &seam_field_b)
-        };
+        let (city_field_tex, seam_field_tex) =
+            if src_is_a { (&city_field_a, &seam_field_a) } else { (&city_field_b, &seam_field_b) };
 
         self.encode_id_mask_compositor_textures(
             pass.raster.viewport,

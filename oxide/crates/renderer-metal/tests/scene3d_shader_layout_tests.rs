@@ -60,6 +60,6 @@ fn id_mask_compositor_is_renderer_owned_shader_path() {
     assert!(!renderer_source.contains("upload_r8_mask_texture"));
     assert!(renderer_source.contains("pso_id_mask_compositor"));
     assert!(shader_source.contains("texture2d<uint, access::read> city_tex"));
-    assert!(shader_source.contains("nearest_seam_distance"));
+    assert!(shader_source.contains("float seam_distance = field_valid(seam_field) && field_city(seam_field) == city"));
     assert!(shader_source.contains("nearest_city"));
 }
