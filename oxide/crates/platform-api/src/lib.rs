@@ -1040,6 +1040,68 @@ pub trait UdpSocket: Send + Sync {
     fn close(&self);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HttpMethod {
+    Get,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpRequest {
+    pub method: HttpMethod,
+    pub url: alloc::string::String,
+    pub timeout_ms: u32,
+    pub max_response_bytes: usize,
+}
+
+impl HttpRequest {
+    pub const DEFAULT_TIMEOUT_MS: u32 = 10_000;
+    pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 1_048_576;
+
+    #[must_use]
+    pub fn get(url: impl Into<alloc::string::String>) -> Self {
+        Self {
+            method: HttpMethod::Get,
+            url: url.into(),
+            timeout_ms: Self::DEFAULT_TIMEOUT_MS,
+            max_response_bytes: Self::DEFAULT_MAX_RESPONSE_BYTES,
+        }
+    }
+
+    #[must_use]
+    pub fn with_timeout_ms(mut self, timeout_ms: u32) -> Self {
+        self.timeout_ms = timeout_ms;
+        self
+    }
+
+    #[must_use]
+    pub fn with_max_response_bytes(mut self, max_response_bytes: usize) -> Self {
+        self.max_response_bytes = max_response_bytes;
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpResponse {
+    pub final_url: alloc::string::String,
+    pub status: u16,
+    pub content_type: Option<alloc::string::String>,
+    pub body: alloc::vec::Vec<u8>,
+}
+
+pub trait HttpClient: Send + Sync {
+    fn fetch(&self, request: &HttpRequest) -> Result<HttpResponse, PlatformError>;
+}
+
+pub struct UnsupportedHttpClient;
+
+impl HttpClient for UnsupportedHttpClient {
+    fn fetch(&self, _request: &HttpRequest) -> Result<HttpResponse, PlatformError> {
+        Err(PlatformError::Unsupported("platform HTTP service not implemented"))
+    }
+}
+
+static UNSUPPORTED_HTTP_CLIENT: UnsupportedHttpClient = UnsupportedHttpClient;
+
 /// A factory for creating network connections.
 pub trait Networking: Send + Sync {
     /// Establishes a new TCP connection to a remote host.
@@ -1198,6 +1260,9 @@ pub trait Platform: Send + Sync {
     fn capabilities(&self) -> Capabilities;
     fn networking(&self) -> &dyn Networking {
         panic!("platform networking service not implemented")
+    }
+    fn http(&self) -> &dyn HttpClient {
+        &UNSUPPORTED_HTTP_CLIENT
     }
     fn paths(&self) -> &dyn PathService {
         panic!("platform path service not implemented")
@@ -1387,6 +1452,10 @@ impl Platform for SharedPlatform {
 
     fn networking(&self) -> &dyn Networking {
         self.inner.networking()
+    }
+
+    fn http(&self) -> &dyn HttpClient {
+        self.inner.http()
     }
 
     fn paths(&self) -> &dyn PathService {

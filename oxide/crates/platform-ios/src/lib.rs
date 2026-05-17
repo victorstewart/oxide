@@ -17,10 +17,10 @@ use oxide_platform_api::telephony::{normalize_country_iso, TelephonyService};
 use oxide_platform_api::{
     AdvertisementData, AudioSample, AudioSessionMode, BleCacheEntry, BleUuid, Bluetooth,
     BluetoothEvent, CameraConfig, CameraDevice, CameraFrame, CameraImage, CameraManager,
-    CameraRecording, CameraStream, CaptureMode, ColorSpace, FlashMode, GattChar, PeripheralId,
-    PeripheralInfo, PhotoEvent, PhotoOptions, PlatformError, RecordingContainer,
-    RecordingDestination, RecordingEvent, RecordingOptions, RecordingResult, RestorationInfo,
-    ScanOptions, TimeService, TorchMode,
+    CameraRecording, CameraStream, CaptureMode, ColorSpace, FlashMode, GattChar, HttpClient,
+    HttpMethod, HttpRequest, HttpResponse, PeripheralId, PeripheralInfo, PhotoEvent, PhotoOptions,
+    PlatformError, RecordingContainer, RecordingDestination, RecordingEvent, RecordingOptions,
+    RecordingResult, RestorationInfo, ScanOptions, TimeService, TorchMode,
 };
 use oxide_platform_api::{
     GeoHash, GeoRegion, GeoRegionTracker, LocationAccuracy, LocationEvent, LocationOptions,
@@ -74,6 +74,18 @@ pub struct OxideMotionSample {
     timestamp_ms: u64,
     has_pressure: u8,
     has_relative_altitude: u8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct OxideHttpResponse {
+    status: u16,
+    body_ptr: *mut u8,
+    body_len: usize,
+    final_url_ptr: *mut u8,
+    final_url_len: usize,
+    content_type_ptr: *mut u8,
+    content_type_len: usize,
 }
 
 #[repr(C)]
@@ -171,6 +183,14 @@ extern "C" {
     fn oxide_host_set_push_token_callback(cb: Option<unsafe extern "C" fn(u32, *const u8, usize)>);
     fn oxide_host_set_push_notify_callback(cb: Option<unsafe extern "C" fn(*const u8, usize)>);
     // Networking
+    fn oxide_host_http_get(
+        url_ptr: *const u8,
+        url_len: usize,
+        timeout_ms: u32,
+        max_response_bytes: usize,
+        out_response: *mut OxideHttpResponse,
+    ) -> ::libc::c_int;
+    fn oxide_host_http_response_free(response: *mut OxideHttpResponse);
     fn oxide_host_net_set_reachability_callback(cb: Option<extern "C" fn(u32, u32, u8)>);
     fn oxide_host_net_start_reachability() -> ::libc::c_int;
     fn oxide_host_net_stop_reachability();
@@ -761,6 +781,80 @@ impl MotionService for IosMotion {
     }
     fn pressure_history(&self) -> alloc::vec::Vec<MotionSample> {
         MOTION_HISTORY.lock().unwrap().iter().cloned().collect()
+    }
+}
+
+// ===== HTTP =====
+
+pub struct IosHttpClient;
+
+impl HttpClient for IosHttpClient {
+    fn fetch(&self, request: &HttpRequest) -> Result<HttpResponse, PlatformError> {
+        if request.method != HttpMethod::Get {
+            return Err(PlatformError::Unsupported("iOS HTTP bridge only supports GET"));
+        }
+        if request.url.trim().is_empty() {
+            return Err(PlatformError::Invalid("HTTP URL is empty"));
+        }
+        let mut raw = OxideHttpResponse {
+            status: 0,
+            body_ptr: core::ptr::null_mut(),
+            body_len: 0,
+            final_url_ptr: core::ptr::null_mut(),
+            final_url_len: 0,
+            content_type_ptr: core::ptr::null_mut(),
+            content_type_len: 0,
+        };
+        let rc = unsafe {
+            oxide_host_http_get(
+                request.url.as_ptr(),
+                request.url.len(),
+                request.timeout_ms,
+                request.max_response_bytes,
+                &mut raw,
+            )
+        };
+        if rc != 0 {
+            return Err(http_error(rc));
+        }
+
+        let body = copy_bytes(raw.body_ptr, raw.body_len);
+        let final_url = copy_string(raw.final_url_ptr, raw.final_url_len)
+            .unwrap_or_else(|| request.url.clone());
+        let content_type = copy_string(raw.content_type_ptr, raw.content_type_len);
+        let status = raw.status;
+        unsafe {
+            oxide_host_http_response_free(&mut raw);
+        }
+
+        Ok(HttpResponse { final_url, status, content_type, body })
+    }
+}
+
+fn copy_bytes(ptr: *const u8, len: usize) -> Vec<u8> {
+    if ptr.is_null() || len == 0 {
+        return Vec::new();
+    }
+    unsafe { core::slice::from_raw_parts(ptr, len).to_vec() }
+}
+
+fn copy_string(ptr: *const u8, len: usize) -> Option<String> {
+    if ptr.is_null() || len == 0 {
+        return None;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
+    Some(String::from_utf8_lossy(bytes).into_owned())
+}
+
+fn http_error(rc: ::libc::c_int) -> PlatformError {
+    match rc {
+        -1 => PlatformError::Invalid("invalid HTTP request"),
+        -2 => PlatformError::Io("native HTTP request failed".to_owned()),
+        -3 => PlatformError::Invalid("native HTTP response was not HTTP"),
+        -4 => PlatformError::Invalid("native HTTP response exceeded limit"),
+        -5 => PlatformError::Io("native HTTP allocation failed".to_owned()),
+        -6 => PlatformError::Busy,
+        _ => PlatformError::Unknown(format!("native HTTP request failed: {}", rc)),
     }
 }
 
