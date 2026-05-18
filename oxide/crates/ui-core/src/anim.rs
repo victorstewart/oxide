@@ -16,6 +16,18 @@ pub mod helpers {
         [-2.0, 2.0, -2.0, 2.0, -2.0, 2.0, -2.0, 2.0, -2.0, 2.0, -2.0, 0.0];
     pub const REQUIRED_FIELD_SHAKE_DURATION_MS: u32 =
         REQUIRED_FIELD_SHAKE_PHASE_DURATION_MS * REQUIRED_FIELD_SHAKE_PHASE_TARGETS.len() as u32;
+    pub const DELETE_WIGGLE_BOUNCE_Y: f32 = 2.0;
+    pub const DELETE_WIGGLE_BOUNCE_DURATION_MS: u32 = 130;
+    pub const DELETE_WIGGLE_BOUNCE_VARIANCE_MS: u32 = 25;
+    pub const DELETE_WIGGLE_ROTATE_ANGLE_RAD: f32 = 0.06;
+    pub const DELETE_WIGGLE_ROTATE_DURATION_MS: u32 = 130;
+    pub const DELETE_WIGGLE_ROTATE_VARIANCE_MS: u32 = 25;
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct DeleteWiggleSample {
+        pub rotation_rad: f32,
+        pub translation_y: f32,
+    }
 
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub enum Axis2D {
@@ -99,6 +111,39 @@ pub mod helpers {
         }
         seq.push(build_transform(from, base, delay, step_ms, api::EaseKind::CubicOut));
         seq
+    }
+
+    /// Samples the old iOS `Wiggler` delete-mode motion.
+    ///
+    /// The legacy app attached two independent autoreversing CA keyframe
+    /// animations: `transform.rotation.z` from `-0.06` to `+0.06` radians and
+    /// `transform.translation.y` from `2pt` to `0pt`. Each animation used a
+    /// `0.13s` duration with `0.025s` random variance. Oxide makes the variance
+    /// deterministic per element seed so retained redraws remain stable while
+    /// preserving the old per-view desynchronization.
+    #[inline]
+    pub fn delete_wiggle_sample(elapsed_ms: u32, seed: u32) -> DeleteWiggleSample {
+        let rotate_duration = deterministic_duration_ms(
+            DELETE_WIGGLE_ROTATE_DURATION_MS,
+            DELETE_WIGGLE_ROTATE_VARIANCE_MS,
+            seed,
+            0x4f1b_3c29,
+        );
+        let bounce_duration = deterministic_duration_ms(
+            DELETE_WIGGLE_BOUNCE_DURATION_MS,
+            DELETE_WIGGLE_BOUNCE_VARIANCE_MS,
+            seed,
+            0x9d2c_7a51,
+        );
+        DeleteWiggleSample {
+            rotation_rad: sample_autoreversing(
+                elapsed_ms,
+                rotate_duration,
+                -DELETE_WIGGLE_ROTATE_ANGLE_RAD,
+                DELETE_WIGGLE_ROTATE_ANGLE_RAD,
+            ),
+            translation_y: sample_autoreversing(elapsed_ms, bounce_duration, DELETE_WIGGLE_BOUNCE_Y, 0.0),
+        }
     }
 
     pub fn scatter(
@@ -202,6 +247,36 @@ pub mod helpers {
             REQUIRED_FIELD_SHAKE_PHASE_DURATION_MS,
             &REQUIRED_FIELD_SHAKE_PHASE_TARGETS,
         ) * scale.max(0.0)
+    }
+
+    #[inline]
+    fn deterministic_duration_ms(base_ms: u32, variance_ms: u32, seed: u32, salt: u32) -> u32 {
+        let mixed = stable_hash(seed ^ salt);
+        let unit = (mixed as f32 / u32::MAX as f32).clamp(0.0, 1.0);
+        let offset = ((unit * 2.0 - 1.0) * variance_ms as f32).round() as i32;
+        base_ms.saturating_add_signed(offset).max(1)
+    }
+
+    #[inline]
+    fn stable_hash(mut value: u32) -> u32 {
+        value ^= value >> 16;
+        value = value.wrapping_mul(0x7feb_352d);
+        value ^= value >> 15;
+        value = value.wrapping_mul(0x846c_a68b);
+        value ^ (value >> 16)
+    }
+
+    #[inline]
+    fn sample_autoreversing(elapsed_ms: u32, duration_ms: u32, start: f32, end: f32) -> f32 {
+        let duration = duration_ms.max(1);
+        let period = duration.saturating_mul(2).max(1);
+        let local = elapsed_ms % period;
+        let progress = if local <= duration {
+            local as f32 / duration as f32
+        } else {
+            1.0 - (local - duration) as f32 / duration as f32
+        };
+        lerp(start, end, progress)
     }
 
     #[inline]

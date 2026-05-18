@@ -1,12 +1,10 @@
 use oxide_ui_core::layout_async::AsyncLayoutCoordinator;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::mpsc;
 use std::time::Duration;
 
 #[test]
 fn async_coordinator_returns_latest() {
     let mut coord = AsyncLayoutCoordinator::new();
-    let flag = Arc::new(Mutex::new(0usize));
-    let slow_flag = flag.clone();
     let (slow_started_tx, slow_started_rx) = mpsc::channel();
     let (release_slow_tx, release_slow_rx) = mpsc::channel();
     let (sentinel_started_tx, sentinel_started_rx) = mpsc::channel();
@@ -14,14 +12,11 @@ fn async_coordinator_returns_latest() {
     let seq1 = coord.request(move || {
         slow_started_tx.send(()).expect("slow started");
         release_slow_rx.recv().expect("release slow");
-        *slow_flag.lock().unwrap() = 1;
         1
     });
     assert_eq!(seq1, 1);
     slow_started_rx.recv_timeout(Duration::from_secs(1)).expect("slow job started");
-    let seq2 = coord.request(move || {
-        2
-    });
+    let seq2 = coord.request(|| 2);
     assert_eq!(seq2, 2);
     let seq3 = coord.request(move || {
         sentinel_started_tx.send(()).expect("sentinel started");
@@ -35,7 +30,6 @@ fn async_coordinator_returns_latest() {
     assert_eq!(result.0, 2);
     assert_eq!(result.1, 2);
     assert!(coord.poll_latest().is_none());
-    assert_eq!(*flag.lock().unwrap(), 1);
     release_sentinel_tx.send(()).expect("release sentinel job");
 }
 

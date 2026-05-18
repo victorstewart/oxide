@@ -145,6 +145,38 @@ impl DrawListBuilder {
         self.list.items.push(gfx::DrawCmd::Image { tex, dst, src, alpha });
     }
 
+    pub fn image_mesh(
+        &mut self,
+        tex: gfx::ImageHandle,
+        vertices: &[gfx::Vertex],
+        indices: &[u16],
+        alpha: f32,
+    ) {
+        if vertices.is_empty() {
+            return;
+        }
+        let Ok(vb_len) = u32::try_from(vertices.len()) else {
+            return;
+        };
+        let Ok(ib_len) = u32::try_from(indices.len()) else {
+            return;
+        };
+        let Ok(vb_offset) = u32::try_from(self.list.vertices.len()) else {
+            return;
+        };
+        let Ok(ib_offset) = u32::try_from(self.list.indices.len()) else {
+            return;
+        };
+        self.list.vertices.extend_from_slice(vertices);
+        self.list.indices.extend_from_slice(indices);
+        self.list.items.push(gfx::DrawCmd::ImageMesh {
+            tex,
+            vb: gfx::VertexSpan { offset: vb_offset, len: vb_len },
+            ib: gfx::IndexSpan { offset: ib_offset, len: ib_len },
+            alpha,
+        });
+    }
+
     pub fn glyph_run(&mut self, run: gfx::GlyphRun) {
         self.list.items.push(gfx::DrawCmd::GlyphRun { run });
     }
@@ -269,6 +301,7 @@ fn key_for(pd: &PreparedDraw) -> BatchKey {
         C::LayerBegin { .. } | C::LayerEnd => BatchKey(7, 0, clip_hash),
         C::Solid { .. } => BatchKey(0, 0, clip_hash),
         C::Image { tex, .. } => BatchKey(1, tex.0, clip_hash),
+        C::ImageMesh { tex, .. } => BatchKey(1, tex.0, clip_hash),
         C::GlyphRun { .. } => BatchKey(2, 0, clip_hash),
         C::RRect { .. } => BatchKey(3, 0, clip_hash),
         C::NineSlice { tex, .. } => BatchKey(4, tex.0, clip_hash),

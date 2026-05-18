@@ -29,6 +29,8 @@
 - `host_services.m` now owns the shared clipboard, haptics, and permission/update plumbing so host apps can keep only app-shell behavior locally instead of carrying parallel Objective-C utility bridges.
 - Media-library permission status remains lazy until an explicit Photos request, and the cached Oxide status is kept separate from the legacy Nametag status because limited Photos access has different status codes across those bridges.
 - The native CoreLocation bridge keeps delegate-owned cached location state on the main queue; synchronous reads of the last sample also cross that queue so `LocationService: Send + Sync` callers do not race the delegate callback.
+- The Network.framework transport bridge honors forced TCP/TLS selection across every retry, because retrying the QUIC parameter set after a forced TCP/TLS failure would silently change the caller-requested transport.
+- The HTTP bridge uses the same native byte-copy path for response bodies and UTF-8 metadata so zero-length outputs and Rust-owned buffer handoff share one implementation.
 - Each service owns the platform-specific FFI contract and converts host return codes into `PlatformError`.
 - `IosSecureStorage` exposes sync helper methods plus the async `SecureStorage` trait adapter so both direct platform usage and callback-registry compatibility shims share one implementation.
 - `IosMediaLibraryManager` keeps the generic asset query/load path in Oxide, while app crates can still layer app-specific crop/runtime-image logic above the raw BGRA helper.
@@ -44,8 +46,11 @@
 
 ## Testing and benchmarks
 - Validated indirectly through downstream workspace builds/tests that consume these services.
+- `tests/network_bridge_tests.rs` checks Objective-C bridge invariants that are difficult to exercise without a real Network.framework endpoint, including forced TCP/TLS retry routing.
 
 ## Changelog
+- 2026-05-17: compacted the platform-iOS build source selection, HTTP bridge response-copy paths, and TLS/ALPN option setup.
+- 2026-05-17: kept forced TCP/TLS Network.framework retries on TLS parameters instead of falling through to the generic QUIC retry path.
 - 2026-05-15: added the native camera preview stream path that can run `AVCaptureVideoPreviewLayer` presentation without app-visible camera frame callbacks, while preserving full frame streams for capture and pixel-processing callers.
 - 2026-05-15: compacted empty camera-frame stub output clearing in the standalone Metal app host.
 - 2026-05-01: split lazy media-library permission caching into Oxide and legacy Nametag status slots so limited Photos access preserves each bridge's ABI mapping.

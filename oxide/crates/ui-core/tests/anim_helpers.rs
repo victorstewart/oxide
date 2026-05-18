@@ -80,3 +80,19 @@ fn required_field_shake_offset_matches_shared_profile_and_clamps_negative_scale(
         0.0,
     );
 }
+
+#[test]
+fn delete_wiggle_sample_matches_legacy_wiggler_bounds() {
+    let first = anim::helpers::delete_wiggle_sample(0, 0);
+    assert_eq!(first.rotation_rad, -anim::helpers::DELETE_WIGGLE_ROTATE_ANGLE_RAD);
+    assert_eq!(first.translation_y, anim::helpers::DELETE_WIGGLE_BOUNCE_Y);
+
+    for elapsed in (0..2_000).step_by(17) {
+        let sample = anim::helpers::delete_wiggle_sample(elapsed, 7);
+        assert!(
+            sample.rotation_rad >= -anim::helpers::DELETE_WIGGLE_ROTATE_ANGLE_RAD
+                && sample.rotation_rad <= anim::helpers::DELETE_WIGGLE_ROTATE_ANGLE_RAD
+        );
+        assert!(sample.translation_y >= 0.0 && sample.translation_y <= anim::helpers::DELETE_WIGGLE_BOUNCE_Y);
+    }
+}

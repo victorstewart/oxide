@@ -67,6 +67,7 @@ ID-mask composition is GPU-owned. Semantic region/subregion triangles are raster
 
 ## Changelog
 
+- 2026-05-18: Compact ID-mask render-target reuse and shared the clear/store setup used by raster and field passes.
 - 2026-05-15: made `NativeCameraPreview` a no-op Metal draw marker that requests transparent clear so host compositor camera layers can show through under Oxide UI.
 - 2026-05-15: Shared overlay color-target attachment setup between ID-mask and neon-marker encoders.
 - 2026-05-14: Shared scene3d mesh validation, buffer upload, and handle insertion between position-only and colored mesh uploads.

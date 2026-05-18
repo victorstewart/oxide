@@ -2684,7 +2684,7 @@ impl IosMediaLibraryManager {
         if result < 0 {
             return Err(PlatformError::Unknown(format!("{}: {}", failure_label, result)));
         }
-        if result == 0 || image_data.data_ptr.is_null() || image_data.data_len == 0 {
+        if image_data.data_ptr.is_null() || image_data.data_len == 0 {
             if missing_is_ok {
                 return Ok(None);
             }

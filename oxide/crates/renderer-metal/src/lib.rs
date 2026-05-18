@@ -579,6 +579,7 @@ fn draw_cmd_kind(cmd: &api::DrawCmd) -> &'static str {
         api::DrawCmd::LayerEnd => "layer_end",
         api::DrawCmd::Solid { .. } => "solid",
         api::DrawCmd::Image { .. } => "image",
+        api::DrawCmd::ImageMesh { .. } => "image_mesh",
         api::DrawCmd::GlyphRun { .. } => "glyph_run",
         api::DrawCmd::RRect { .. } => "rrect",
         api::DrawCmd::NineSlice { .. } => "nine_slice",
@@ -864,6 +865,7 @@ pub struct MetalRenderer {
     pso_solid: RenderPipelineState,
     pso_image: RenderPipelineState,
     pso_image_single: RenderPipelineState,
+    pso_image_mesh: RenderPipelineState,
     pso_blur: RenderPipelineState,
     pso_downsample: RenderPipelineState,
     pso_upsample: RenderPipelineState,
@@ -1361,6 +1363,7 @@ impl MetalRenderer {
                     pso_camera.to_owned(),
                     pso_camera.to_owned(),
                     pso_camera.to_owned(),
+                    pso_camera.to_owned(),
                     pso_camera,
                     pso_camera_legacy,
                     pso_camera_preview_fast_full,
@@ -1376,6 +1379,9 @@ impl MetalRenderer {
             })?;
             let pso_image_single = build_init_stage("pso.image_single", || {
                 build_image_single_pso(&device, &library, fmt, sample_count)
+            })?;
+            let pso_image_mesh = build_init_stage("pso.image_mesh", || {
+                build_image_mesh_pso(&device, &library, fmt, sample_count)
             })?;
             let pso_blur = build_init_stage("pso.blur", || build_blur_pso(&device, &library, fmt))?;
             let pso_downsample = build_init_stage("pso.downsample", || {
@@ -1407,6 +1413,7 @@ impl MetalRenderer {
                 pso_solid,
                 pso_image,
                 pso_image_single,
+                pso_image_mesh,
                 pso_blur,
                 pso_downsample,
                 pso_upsample,
@@ -1429,6 +1436,7 @@ impl MetalRenderer {
             pso_solid,
             pso_image,
             pso_image_single,
+            pso_image_mesh,
             pso_blur,
             pso_downsample,
             pso_upsample,
@@ -1688,6 +1696,7 @@ impl MetalRenderer {
             pso_solid,
             pso_image,
             pso_image_single,
+            pso_image_mesh,
             pso_blur,
             pso_downsample,
             pso_upsample,
@@ -4270,6 +4279,14 @@ fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI, out: &mut
                 }
                 i += 1;
             }
+            api::DrawCmd::ImageMesh { vb, .. } => {
+                if let Some(rect) = vertex_span_rect(&list.vertices, *vb) {
+                    if rect_intersects(&rect, &sc) {
+                        out.items.push(list.items[i].clone());
+                    }
+                }
+                i += 1;
+            }
             api::DrawCmd::LayerBegin { rect, .. } => {
                 let mut depth = 1usize;
                 let mut j = i + 1;
@@ -4808,6 +4825,19 @@ impl api::Renderer for MetalRenderer {
                                         src: *src,
                                         alpha: *alpha,
                                     });
+                                }
+                                api::DrawCmd::ImageMesh { tex, vb, ib, alpha } => {
+                                    let _ = append_offset_image_mesh_to_sublist(
+                                        &list.vertices,
+                                        &list.indices,
+                                        &mut sub,
+                                        *tex,
+                                        *vb,
+                                        *ib,
+                                        *alpha,
+                                        ox,
+                                        oy,
+                                    );
                                 }
                                 api::DrawCmd::Spinner { center, atom, alpha } => {
                                     let adj = [center[0] - ox, center[1] - oy];
@@ -6052,6 +6082,23 @@ fn encode_draws_range(
                             });
                             tex.0.hash(&mut hasher);
                         }
+                        api::DrawCmd::ImageMesh { tex, vb, ib, alpha } => {
+                            if append_offset_image_mesh_to_sublist(
+                                list.vertices,
+                                list.indices,
+                                &mut sub,
+                                *tex,
+                                *vb,
+                                *ib,
+                                *alpha,
+                                ox,
+                                oy,
+                            ) {
+                                tex.0.hash(&mut hasher);
+                                vb.offset.hash(&mut hasher);
+                                vb.len.hash(&mut hasher);
+                            }
+                        }
                         api::DrawCmd::Spinner { center, atom, alpha } => {
                             let adj = [center[0] - ox, center[1] - oy];
                             sub.items.push(api::DrawCmd::Spinner {
@@ -6401,6 +6448,97 @@ fn encode_draws_range(
                     r.acc_instanced += emitted as u32;
                     i = j;
                     continue;
+                }
+                i += 1;
+            }
+            api::DrawCmd::ImageMesh { tex, vb, ib, alpha } => {
+                if let Some(img) = r.get_image_tex(*tex) {
+                    let v_count = vb.len as usize;
+                    let Some(src_slice) =
+                        list.vertices.get(vb.offset as usize..vb.offset as usize + v_count)
+                    else {
+                        i += 1;
+                        continue;
+                    };
+                    enc.set_render_pipeline_state(&r.pso_image_mesh);
+                    if let Some(sam) = &r.sampler {
+                        enc.set_fragment_sampler_state(0, Some(sam));
+                    }
+                    enc.set_fragment_texture(0, Some(img));
+                    enc.set_vertex_bytes(
+                        1,
+                        core::mem::size_of_val(&vp_dp) as u64,
+                        vp_dp.as_ptr() as *const _,
+                    );
+
+                    let v_bytes = v_count * core::mem::size_of::<api::Vertex>();
+                    r.vb.ensure_capacity(&r.device, slot, pf.vb_used + v_bytes);
+                    let dst = unsafe {
+                        core::slice::from_raw_parts_mut(
+                            r.vb.contents_ptr(slot).as_ptr().add(pf.vb_used),
+                            v_bytes,
+                        )
+                    };
+                    let src_bytes =
+                        unsafe { core::slice::from_raw_parts(src_slice.as_ptr().cast(), v_bytes) };
+                    dst.copy_from_slice(src_bytes);
+                    let vb_off = pf.vb_used as u64;
+                    pf.vb_used += v_bytes;
+
+                    let rgba = [1.0_f32, 1.0, 1.0, alpha.clamp(0.0, 1.0)];
+                    let ub_off = pf.ub_used as u64;
+                    let u_bytes = core::mem::size_of_val(&rgba);
+                    r.ub.ensure_capacity(&r.device, slot, pf.ub_used + u_bytes);
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            rgba.as_ptr().cast::<u8>(),
+                            r.ub.contents_ptr(slot).as_ptr().add(pf.ub_used),
+                            u_bytes,
+                        );
+                    }
+                    pf.ub_used += u_bytes;
+                    enc.set_vertex_buffer(0, Some(&r.vb.bufs[slot]), vb_off);
+                    enc.set_fragment_buffer(0, Some(&r.ub.bufs[slot]), ub_off);
+
+                    let idx_count = ib.len as usize;
+                    if idx_count > 0 {
+                        let Some(isrc_slice) =
+                            list.indices.get(ib.offset as usize..ib.offset as usize + idx_count)
+                        else {
+                            i += 1;
+                            continue;
+                        };
+                        let i_bytes = isrc_slice.len() * core::mem::size_of::<u16>();
+                        r.ib.ensure_capacity(&r.device, slot, pf.ib_used + i_bytes);
+                        let idst = unsafe {
+                            core::slice::from_raw_parts_mut(
+                                r.ib.contents_ptr(slot).as_ptr().add(pf.ib_used),
+                                i_bytes,
+                            )
+                        };
+                        let Some(local_idx_count) = copy_normalized_indices_for_local_vertex_span(
+                            isrc_slice,
+                            vb.offset,
+                            vb.len,
+                            idst,
+                        ) else {
+                            i += 1;
+                            continue;
+                        };
+                        let ib_off = pf.ib_used as u64;
+                        pf.ib_used += i_bytes;
+                        enc.draw_indexed_primitives(
+                            MTLPrimitiveType::Triangle,
+                            local_idx_count as u64,
+                            MTLIndexType::UInt16,
+                            &r.ib.bufs[slot],
+                            ib_off,
+                        );
+                        r.acc_draws = r.acc_draws.saturating_add(1);
+                    } else if v_count > 0 {
+                        enc.draw_primitives(MTLPrimitiveType::Triangle, 0, v_count as u64);
+                        r.acc_draws = r.acc_draws.saturating_add(1);
+                    }
                 }
                 i += 1;
             }
@@ -7398,6 +7536,61 @@ fn append_remapped_indices_to_span(
     Some(source.len())
 }
 
+fn append_offset_image_mesh_to_sublist(
+    vertices: &[api::Vertex],
+    indices: &[u16],
+    sub: &mut api::DrawList,
+    tex: api::ImageHandle,
+    vb: api::VertexSpan,
+    ib: api::IndexSpan,
+    alpha: f32,
+    ox: f32,
+    oy: f32,
+) -> bool {
+    let v_count = vb.len as usize;
+    let i_count = ib.len as usize;
+    let Some(srcv) =
+        vertices.get(vb.offset as usize..vb.offset as usize + v_count)
+    else {
+        return false;
+    };
+    let Some(srci) =
+        indices.get(ib.offset as usize..ib.offset as usize + i_count)
+    else {
+        return false;
+    };
+    let Ok(new_v_off) = u32::try_from(sub.vertices.len()) else {
+        return false;
+    };
+    let Ok(ib_offset) = u32::try_from(sub.indices.len()) else {
+        return false;
+    };
+    for vertex in srcv {
+        let mut out = *vertex;
+        out.x -= ox;
+        out.y -= oy;
+        sub.vertices.push(out);
+    }
+    let Some(remapped_len) = append_remapped_indices_to_span(
+        srci,
+        vb.offset,
+        vb.len,
+        new_v_off,
+        &mut sub.indices,
+    ) else {
+        let len = sub.vertices.len().saturating_sub(v_count);
+        sub.vertices.truncate(len);
+        return false;
+    };
+    sub.items.push(api::DrawCmd::ImageMesh {
+        tex,
+        vb: api::VertexSpan { offset: new_v_off, len: vb.len },
+        ib: api::IndexSpan { offset: ib_offset, len: remapped_len as u32 },
+        alpha,
+    });
+    true
+}
+
 #[cfg(test)]
 #[inline]
 fn normalize_indices_for_local_vertex_span(
@@ -7640,6 +7833,39 @@ fn build_image_single_pso(
     ca.set_pixel_format(fmt);
     configure_source_alpha_blend(ca);
     pipeline_state(device, "pso.image_single.create", &desc)
+}
+
+fn build_image_mesh_pso(
+    device: &Device,
+    lib: &Library,
+    fmt: MTLPixelFormat,
+    sample_count: u32,
+) -> Result<RenderPipelineState, MetalInitError> {
+    let v = pipeline_function(lib, "image_mesh.vertex", "v_text")?;
+    let f = pipeline_function(lib, "image_mesh.fragment", "f_image_mesh")?;
+    let desc = RenderPipelineDescriptor::new();
+    desc.set_vertex_function(Some(&v));
+    desc.set_fragment_function(Some(&f));
+    let vdesc = VertexDescriptor::new();
+    let attrs = vdesc.attributes();
+    attrs.object_at(0).unwrap().set_format(MTLVertexFormat::Float2);
+    attrs.object_at(0).unwrap().set_offset(0);
+    attrs.object_at(0).unwrap().set_buffer_index(0);
+    attrs.object_at(1).unwrap().set_format(MTLVertexFormat::Float2);
+    attrs.object_at(1).unwrap().set_offset(8);
+    attrs.object_at(1).unwrap().set_buffer_index(0);
+    attrs.object_at(2).unwrap().set_format(MTLVertexFormat::UChar4Normalized);
+    attrs.object_at(2).unwrap().set_offset(16);
+    attrs.object_at(2).unwrap().set_buffer_index(0);
+    let layouts = vdesc.layouts();
+    layouts.object_at(0).unwrap().set_stride(20);
+    layouts.object_at(0).unwrap().set_step_function(MTLVertexStepFunction::PerVertex);
+    desc.set_vertex_descriptor(Some(&vdesc));
+    desc.set_sample_count(sample_count as u64);
+    let ca = desc.color_attachments().object_at(0).unwrap();
+    ca.set_pixel_format(fmt);
+    configure_source_alpha_blend(ca);
+    pipeline_state(device, "pso.image_mesh.create", &desc)
 }
 
 fn build_rrect_pso(

@@ -573,6 +573,9 @@ mod wasm {
                 api::DrawCmd::Image { tex, dst, src, alpha } => {
                     self.draw_image_rect(*tex, *dst, *src, *alpha)
                 }
+                api::DrawCmd::ImageMesh { tex, vb, ib, alpha } => {
+                    self.draw_image_mesh_from_list(list, *tex, *vb, *ib, *alpha)
+                }
                 api::DrawCmd::GlyphRun { run } => self.draw_glyph_run_from_list(list, run),
                 api::DrawCmd::RRect { rect, radii, color } => {
                     self.draw_rrect_path(*rect, *radii, *color)
@@ -823,6 +826,59 @@ mod wasm {
                 self.stats.draws = self.stats.draws.saturating_add(1);
                 self.stats.image_draws = self.stats.image_draws.saturating_add(1);
             }
+        }
+
+        fn draw_image_mesh_from_list(
+            &mut self,
+            list: &api::DrawList,
+            handle: api::ImageHandle,
+            vb: api::VertexSpan,
+            ib: api::IndexSpan,
+            alpha: f32,
+        ) {
+            let Some(vertices) = vertex_slice(list, vb) else {
+                return;
+            };
+            let indices = index_slice(list, ib).unwrap_or(&[]);
+            if !indices.is_empty() {
+                let Some(mode) = normalized_index_mode(indices, vb.offset, vb.len) else {
+                    return;
+                };
+                for quad_indices in indices.chunks_exact(6) {
+                    let mut quad = Vec::with_capacity(6);
+                    for index in quad_indices {
+                        if let Some(vertex) =
+                            resolve_index(*index, mode).and_then(|idx| vertices.get(idx))
+                        {
+                            quad.push(*vertex);
+                        }
+                    }
+                    if quad.len() == 6 {
+                        self.draw_image_mesh_quad(handle, &quad, alpha);
+                    }
+                }
+                return;
+            }
+            for quad in vertices.chunks_exact(4) {
+                self.draw_image_mesh_quad(handle, quad, alpha);
+            }
+        }
+
+        fn draw_image_mesh_quad(
+            &mut self,
+            handle: api::ImageHandle,
+            quad: &[api::Vertex],
+            alpha: f32,
+        ) {
+            let dst = quad_rect(quad);
+            if dst.w <= 0.0 || dst.h <= 0.0 {
+                return;
+            }
+            let Some(image) = self.image(handle) else {
+                return;
+            };
+            let src = uv_rect(quad, image.width, image.height);
+            self.draw_image_rect(handle, dst, src, alpha);
         }
 
         fn draw_glyph_run_from_list(&mut self, list: &api::DrawList, run: &api::GlyphRun) {

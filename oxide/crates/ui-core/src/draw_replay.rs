@@ -49,6 +49,14 @@ pub fn replay_drawlist(
             DrawCmd::Image { tex, dst, src, .. } => {
                 encoder.draw_image(*tex, translate_rect(*dst, offset_x, offset_y), *src);
             }
+            DrawCmd::ImageMesh { tex, vb, ib, alpha } => {
+                let Some(vertices) = slice_vertices(list, *vb) else {
+                    continue;
+                };
+                let translated = translate_vertices(vertices, offset_x, offset_y);
+                let indices = slice_indices(list, *ib).unwrap_or(&[]);
+                encoder.draw_image_mesh(*tex, &translated, indices, *alpha);
+            }
             DrawCmd::GlyphRun { run } => {
                 let vertices = slice_vertices(list, run.vb).unwrap_or(&[]);
                 let translated = translate_vertices(vertices, offset_x, offset_y);

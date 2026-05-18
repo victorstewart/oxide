@@ -25,6 +25,13 @@ fragment float4 f_text(TextVSOut in [[stage_in]], texture2d<float> atlas [[textu
     return float4(uni.color.rgb, uni.color.a * a);
 }
 
+fragment float4 f_image_mesh(TextVSOut in [[stage_in]], texture2d<float> img [[texture(0)]], sampler s [[sampler(0)]], constant TextUniform& uni [[buffer(0)]]) {
+    float4 c = img.sample(s, in.uv);
+    c.rgb *= uni.color.rgb;
+    c.a *= uni.color.a;
+    return c;
+}
+
 // SDF variant: treat atlas.r as signed-distance remapped to [0,1] with 0.5 as edge
 fragment float4 f_text_sdf(TextVSOut in [[stage_in]], texture2d<float> atlas [[texture(0)]], sampler s [[sampler(0)]], constant TextUniform& uni [[buffer(0)]])
 {

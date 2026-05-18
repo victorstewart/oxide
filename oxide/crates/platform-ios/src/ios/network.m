@@ -119,19 +119,7 @@ static bool copy_http_string(NSString *string,
                              uint8_t **out_ptr,
                              size_t *out_len)
 {
-   if (string == nil || string.length == 0)
-   {
-      if (out_ptr != NULL)
-      {
-         *out_ptr = NULL;
-      }
-      if (out_len != NULL)
-      {
-         *out_len = 0;
-      }
-      return true;
-   }
-   NSData *data = [string dataUsingEncoding:NSUTF8StringEncoding];
+   NSData *data = string == nil ? nil : [string dataUsingEncoding:NSUTF8StringEncoding];
    return copy_http_bytes(data, out_ptr, out_len);
 }
 
@@ -280,7 +268,8 @@ static SecIdentityRef copy_identity(const struct NametagQuicTlsConfig *tls)
 
 static void configure_sec_options(sec_protocol_options_t sec_options,
                                   const struct NametagQuicTlsConfig *tls,
-                                  const char *server_name)
+                                  const char *server_name,
+                                  NSString *alpn)
 {
    if (sec_options == NULL)
    {
@@ -290,6 +279,11 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    if (server_name != NULL && server_name[0] != '\0')
    {
       sec_protocol_options_set_tls_server_name(sec_options, server_name);
+   }
+
+   if (alpn != nil && alpn.length > 0)
+   {
+      sec_protocol_options_add_tls_application_protocol(sec_options, alpn.UTF8String);
    }
 
    if (tls != NULL && !tls->enforce_hostname)
@@ -344,16 +338,6 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
           },
           dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0));
    }
-}
-
-static void configure_application_protocol(sec_protocol_options_t sec_options,
-                                           NSString *alpn)
-{
-   if (sec_options == NULL || alpn == nil || alpn.length == 0)
-   {
-      return;
-   }
-   sec_protocol_options_add_tls_application_protocol(sec_options, alpn.UTF8String);
 }
 
 @interface NametagQuicConnection : NSObject
@@ -439,8 +423,7 @@ static void configure_application_protocol(sec_protocol_options_t sec_options,
        nw_protocol_options_t quic_options) {
      sec_protocol_options_t sec_options =
          nw_quic_copy_sec_protocol_options(quic_options);
-     configure_sec_options(sec_options, tls, endpoint.UTF8String);
-     configure_application_protocol(sec_options, alpn);
+     configure_sec_options(sec_options, tls, endpoint.UTF8String, alpn);
    });
    if (_quicParameters == NULL)
    {
@@ -453,8 +436,7 @@ static void configure_application_protocol(sec_protocol_options_t sec_options,
        nw_protocol_options_t tls_options) {
      sec_protocol_options_t sec_options =
          nw_tls_copy_sec_protocol_options(tls_options);
-     configure_sec_options(sec_options, tls, endpoint.UTF8String);
-     configure_application_protocol(sec_options, alpn);
+     configure_sec_options(sec_options, tls, endpoint.UTF8String, alpn);
    }, ^(nw_protocol_options_t tcp_options) {
      (void)tcp_options;
    });
@@ -587,6 +569,15 @@ static void configure_application_protocol(sec_protocol_options_t sec_options,
    }
 
    BOOL canRetry = self.attempt < MAX(self.retryPolicy.max_attempts, 1);
+   BOOL forceTcpTls =
+       self.quicConfig.force_tcp_tls ||
+       env_truthy("NAMETAG_NETWORK_FORCE_TCP_TLS");
+   if (forceTcpTls && _tlsParameters != NULL && canRetry)
+   {
+      [self scheduleRetryWithParameters:_tlsParameters fallback:YES];
+      return;
+   }
+
    if (!attemptedFallback && self.quicConfig.allow_fallback &&
        _tlsParameters != NULL)
    {
@@ -1191,32 +1182,18 @@ int32_t oxide_host_http_get(const uint8_t *url_ptr,
       return -4;
    }
 
-   NSString *content_type = nil;
    id raw_content_type = http_response.allHeaderFields[@"Content-Type"];
-   if ([raw_content_type isKindOfClass:[NSString class]])
-   {
-      content_type = (NSString *)raw_content_type;
-   }
-   if (content_type == nil)
-   {
-      content_type = http_response.MIMEType;
-   }
+   NSString *content_type = [raw_content_type isKindOfClass:[NSString class]]
+                                 ? (NSString *)raw_content_type
+                                 : http_response.MIMEType;
 
    out_response->status = (uint16_t)http_response.statusCode;
    if (!copy_http_bytes(body_data, &out_response->body_ptr,
-                        &out_response->body_len))
-   {
-      oxide_host_http_response_free(out_response);
-      return -5;
-   }
-   if (!copy_http_string(http_response.URL.absoluteString,
+                        &out_response->body_len) ||
+       !copy_http_string(http_response.URL.absoluteString,
                          &out_response->final_url_ptr,
-                         &out_response->final_url_len))
-   {
-      oxide_host_http_response_free(out_response);
-      return -5;
-   }
-   if (!copy_http_string(content_type, &out_response->content_type_ptr,
+                         &out_response->final_url_len) ||
+       !copy_http_string(content_type, &out_response->content_type_ptr,
                          &out_response->content_type_len))
    {
       oxide_host_http_response_free(out_response);

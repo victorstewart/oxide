@@ -1025,6 +1025,9 @@ impl WebGpuRenderer {
             api::DrawCmd::Image { tex, dst, src, alpha } => {
                 self.encode_image(*tex, *dst, *src, *alpha, false)
             }
+            api::DrawCmd::ImageMesh { tex, vb, ib, alpha } => {
+                self.encode_image_mesh(list, *tex, *vb, *ib, *alpha)
+            }
             api::DrawCmd::GlyphRun { run } => self.encode_glyph_run(list, run),
             api::DrawCmd::RRect { rect, radii, color } => self.encode_rrect(*rect, *radii, *color),
             api::DrawCmd::NineSlice { tex, rect, slice, alpha } => {
@@ -1150,6 +1153,52 @@ impl WebGpuRenderer {
         };
         let indices = index_slice(list, run.ib).unwrap_or(&[]);
         self.encode_glyph_vertices(run, vertices, indices);
+    }
+
+    fn encode_image_mesh(
+        &mut self,
+        list: &api::DrawList,
+        handle: api::ImageHandle,
+        vb: api::VertexSpan,
+        ib: api::IndexSpan,
+        alpha: f32,
+    ) {
+        let Some(image) = self.image(handle) else {
+            return;
+        };
+        let Some(vertices) = vertex_slice(list, vb) else {
+            return;
+        };
+        let indices = index_slice(list, ib).unwrap_or(&[]);
+        let kind = match image.kind {
+            GpuImageKind::Rgba => DrawKind::Rgba { image: handle.0 as usize },
+            GpuImageKind::A8 => DrawKind::A8 { image: handle.0 as usize },
+        };
+        let color = api::Color::rgba(1.0, 1.0, 1.0, alpha.clamp(0.0, 1.0));
+        let mut out = Vec::new();
+        let mut idx = Vec::new();
+        if !indices.is_empty() {
+            let Some(mode) = normalized_index_mode(indices, vb.offset, vb.len) else {
+                return;
+            };
+            for index in indices {
+                let Some(vertex) = resolve_index(*index, mode).and_then(|idx| vertices.get(idx))
+                else {
+                    return;
+                };
+                idx.push(out.len() as u32);
+                out.push(gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, color));
+            }
+        } else {
+            out.extend(
+                vertices
+                    .iter()
+                    .map(|vertex| gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, color)),
+            );
+            idx.extend(0..out.len() as u32);
+        }
+        self.push_draw(kind, &out, &idx);
+        self.stats.image_draws = self.stats.image_draws.saturating_add(1);
     }
 
     fn encode_glyph_vertices(

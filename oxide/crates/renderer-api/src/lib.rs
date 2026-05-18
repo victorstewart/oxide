@@ -213,6 +213,7 @@ pub enum DrawCmd {
     LayerEnd,
     Solid { vb: VertexSpan, ib: IndexSpan, color: Color },
     Image { tex: ImageHandle, dst: RectF, src: RectF, alpha: f32 },
+    ImageMesh { tex: ImageHandle, vb: VertexSpan, ib: IndexSpan, alpha: f32 },
     GlyphRun { run: GlyphRun },
     RRect { rect: RectF, radii: [f32; 4], color: Color },
     NineSlice { tex: ImageHandle, rect: RectF, slice: Insets, alpha: f32 },
@@ -239,6 +240,19 @@ pub trait RenderEncoder {
     fn set_clip(&mut self, scissor: RectI);
     fn draw_solid(&mut self, verts: &[Vertex], color: Color);
     fn draw_image(&mut self, img: ImageHandle, dst: RectF, src: RectF);
+    fn draw_image_mesh(
+        &mut self,
+        img: ImageHandle,
+        vertices: &[Vertex],
+        indices: &[u16],
+        alpha: f32,
+    ) {
+        let _ = (indices, alpha);
+        let Some(bounds) = vertex_bounds(vertices) else {
+            return;
+        };
+        self.draw_image(img, bounds, RectF::new(0.0, 0.0, 0.0, 0.0));
+    }
     fn draw_rrect(&mut self, rect: RectF, radii: [f32; 4], color: Color);
     fn draw_nine_slice(&mut self, img: ImageHandle, rect: RectF, slice: Insets, alpha: f32);
     fn draw_backdrop(&mut self, rect: RectF, sigma: f32, tint: Color, alpha: f32);
@@ -274,6 +288,25 @@ pub trait RenderEncoder {
         let _ = (vertices, indices);
         self.draw_glyph_run(run);
     }
+}
+
+#[inline]
+#[must_use]
+fn vertex_bounds(vertices: &[Vertex]) -> Option<RectF> {
+    let first = vertices.first()?;
+    let mut x0 = first.x;
+    let mut y0 = first.y;
+    let mut x1 = first.x;
+    let mut y1 = first.y;
+    for vertex in &vertices[1..] {
+        x0 = x0.min(vertex.x);
+        y0 = y0.min(vertex.y);
+        x1 = x1.max(vertex.x);
+        y1 = y1.max(vertex.y);
+    }
+    let w = x1 - x0;
+    let h = y1 - y0;
+    (w > 0.0 && h > 0.0).then_some(RectF::new(x0, y0, w, h))
 }
 
 pub trait Renderer {

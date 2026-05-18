@@ -9,6 +9,7 @@ struct RecordingEncoder {
     clips: Vec<RectI>,
     solids: Vec<Vec<Vertex>>,
     images: Vec<(ImageHandle, RectF, RectF)>,
+    image_meshes: Vec<(ImageHandle, Vec<Vertex>, Vec<u16>, f32)>,
     rrects: Vec<(RectF, [f32; 4], Color)>,
     nine_slices: Vec<(ImageHandle, RectF, Insets, f32)>,
     backdrops: Vec<(RectF, f32, Color, f32)>,
@@ -32,6 +33,16 @@ impl gfx::RenderEncoder for RecordingEncoder {
 
     fn draw_image(&mut self, img: ImageHandle, dst: RectF, src: RectF) {
         self.images.push((img, dst, src));
+    }
+
+    fn draw_image_mesh(
+        &mut self,
+        img: ImageHandle,
+        vertices: &[Vertex],
+        indices: &[u16],
+        alpha: f32,
+    ) {
+        self.image_meshes.push((img, vertices.to_vec(), indices.to_vec(), alpha));
     }
 
     fn draw_rrect(&mut self, rect: RectF, radii: [f32; 4], color: Color) {
@@ -95,6 +106,12 @@ fn build_test_drawlist() -> DrawList {
         dst: RectF::new(3.0, 4.0, 5.0, 6.0),
         src: RectF::new(0.0, 0.0, 1.0, 1.0),
         alpha: 0.75,
+    });
+    list.items.push(DrawCmd::ImageMesh {
+        tex: ImageHandle(11),
+        vb: VertexSpan { offset: 0, len: 4 },
+        ib: IndexSpan { offset: 0, len: 6 },
+        alpha: 0.5,
     });
     list.items.push(DrawCmd::RRect {
         rect: RectF::new(10.0, 11.0, 12.0, 13.0),
@@ -170,6 +187,17 @@ fn replay_translates_primitives_and_restores_fallback_clip() {
     let (_, image_dst, _) = encoder.images[0];
     assert!(approx_eq(image_dst.x, 8.0));
     assert!(approx_eq(image_dst.y, 1.0));
+
+    assert_eq!(encoder.image_meshes.len(), 1);
+    let (mesh_tex, mesh_vertices, mesh_indices, mesh_alpha) = &encoder.image_meshes[0];
+    assert_eq!(*mesh_tex, ImageHandle(11));
+    assert_eq!(mesh_vertices.len(), 4);
+    assert_eq!(mesh_indices, &[0, 1, 2, 2, 1, 3]);
+    assert!(approx_eq(*mesh_alpha, 0.5));
+    assert!(approx_eq(mesh_vertices[0].x, 5.0));
+    assert!(approx_eq(mesh_vertices[0].y, -3.0));
+    assert!(approx_eq(mesh_vertices[3].x, 7.0));
+    assert!(approx_eq(mesh_vertices[3].y, -1.0));
 
     assert_eq!(encoder.rrects.len(), 1);
     let (rrect_rect, _, _) = encoder.rrects[0];

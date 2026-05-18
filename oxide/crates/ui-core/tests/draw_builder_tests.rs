@@ -64,6 +64,31 @@ fn builder_records_advanced_draws() {
 }
 
 #[test]
+fn builder_records_image_mesh_geometry() {
+    let mut builder = DrawListBuilder::new();
+    let tex = gfx::ImageHandle(42);
+    let vertices = [
+        gfx::Vertex { x: 1.0, y: 2.0, u: 0.0, v: 0.0, rgba: u32::MAX },
+        gfx::Vertex { x: 9.0, y: 2.0, u: 1.0, v: 0.0, rgba: u32::MAX },
+        gfx::Vertex { x: 1.0, y: 8.0, u: 0.0, v: 1.0, rgba: u32::MAX },
+        gfx::Vertex { x: 9.0, y: 8.0, u: 1.0, v: 1.0, rgba: u32::MAX },
+    ];
+    let indices = [0, 1, 2, 2, 1, 3];
+    builder.image_mesh(tex, &vertices, &indices, 0.8);
+
+    let list = builder.drawlist();
+    assert_eq!(list.vertices, vertices);
+    assert_eq!(list.indices, indices);
+    match &list.items[0] {
+        gfx::DrawCmd::ImageMesh { tex: t, vb, ib, alpha } => {
+            assert_eq!((*t, *alpha), (tex, 0.8));
+            assert_eq!((*vb, *ib), (gfx::VertexSpan { offset: 0, len: 4 }, gfx::IndexSpan { offset: 0, len: 6 }));
+        }
+        other => panic!("expected image mesh, found {other:?}"),
+    }
+}
+
+#[test]
 fn builder_manages_clip_stack() {
     let mut builder = DrawListBuilder::new();
     let clip_a = gfx::RectI::new(0, 0, 50, 60);

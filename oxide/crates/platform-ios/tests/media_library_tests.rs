@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static FULL_IMAGE_RGBA_CALLS: AtomicUsize = AtomicUsize::new(0);
+static THUMBNAIL_RGBA_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[repr(C)]
 pub struct TestOxideImageData {
@@ -16,6 +17,7 @@ pub struct TestOxideImageData {
 
 fn reset_stub_state() {
     FULL_IMAGE_RGBA_CALLS.store(0, Ordering::SeqCst);
+    THUMBNAIL_RGBA_CALLS.store(0, Ordering::SeqCst);
 }
 
 fn host_services_source() -> String {
@@ -55,7 +57,37 @@ pub unsafe extern "C" fn oxide_media_load_full_image_rgba(
         (*out_image).height = 1;
         (*out_image).row_bytes = 4;
     }
-    1
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oxide_media_load_thumbnail_rgba(
+    identifier_ptr: *const u8,
+    identifier_len: usize,
+    _size: u8,
+    out_image: *mut TestOxideImageData,
+) -> i32 {
+    THUMBNAIL_RGBA_CALLS.fetch_add(1, Ordering::SeqCst);
+    let identifier = unsafe {
+        std::str::from_utf8(std::slice::from_raw_parts(identifier_ptr, identifier_len))
+            .expect("valid asset id")
+    };
+    assert_eq!(identifier, "thumbnail-asset");
+    assert!(!out_image.is_null());
+
+    let mut bytes = vec![5_u8, 6, 7, 8];
+    let data_ptr = bytes.as_mut_ptr();
+    let data_len = bytes.len();
+    std::mem::forget(bytes);
+
+    unsafe {
+        (*out_image).data_ptr = data_ptr.cast_const();
+        (*out_image).data_len = data_len;
+        (*out_image).width = 1;
+        (*out_image).height = 1;
+        (*out_image).row_bytes = 4;
+    }
+    0
 }
 
 #[unsafe(no_mangle)]
@@ -83,6 +115,25 @@ fn display_image_loader_reuses_full_rgba_loader_until_cached_variant_exists() {
     assert_eq!(image.height, 1);
     assert_eq!(image.row_bytes, 4);
     assert_eq!(image.bgra, vec![1_u8, 2, 3, 4]);
+}
+
+#[test]
+fn thumbnail_rgba_loader_accepts_zero_success_code_with_populated_buffer() {
+    reset_stub_state();
+
+    let manager = IosMediaLibraryManager::default();
+    let image = manager
+        .load_image_bgra_data(
+            &AssetId(String::from("thumbnail-asset")),
+            oxide_platform_api::media_library::ImageQuality::Thumbnail,
+        )
+        .expect("thumbnail image request should succeed");
+
+    assert_eq!(THUMBNAIL_RGBA_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(image.width, 1);
+    assert_eq!(image.height, 1);
+    assert_eq!(image.row_bytes, 4);
+    assert_eq!(image.bgra, vec![5_u8, 6, 7, 8]);
 }
 
 #[test]

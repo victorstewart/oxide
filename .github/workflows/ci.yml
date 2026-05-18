@@ -14,9 +14,6 @@ on:
 jobs:
   build-and-test:
     runs-on: macos-latest
-    defaults:
-      run:
-        working-directory: oxide
     steps:
       - uses: actions/checkout@v4
 
@@ -33,15 +30,16 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('oxide/Cargo.lock') }}
 
       - name: Download OFL Inter Regular
-        working-directory: .
         run: |
           mkdir -p fonts
           curl -L -o fonts/Inter-Regular.ttf https://github.com/rsms/inter/releases/download/v4.0/Inter-Regular.ttf || true
 
       - name: Unit tests (ui-core, timing)
+        working-directory: oxide
         run: cargo test -j$(sysctl -n hw.ncpu) -p oxide-ui-core -p oxide-timing
 
       - name: Perf tooling tests
+        working-directory: oxide
         run: |
           cargo test -j$(sysctl -n hw.ncpu) -p oxide-perf-runner --test report_tests
           cargo test -j$(sysctl -n hw.ncpu) -p xtask --tests
@@ -49,33 +47,29 @@ jobs:
           cargo test -j$(sysctl -n hw.ncpu) -p oxide-renderer-metal macos_defaults_disable_icb_but_keep_layer_cache
 
       - name: Perf sweep
-        working-directory: .
         run: |
           ./scripts/sweep_local.sh "0.6,0.7,0.75,0.8,0.9" "0.15,0.25,0.33" "oxide/Cargo.toml"
-          cargo build --release -j$(sysctl -n hw.ncpu) --manifest-path tools/sweep_agg/Cargo.toml
-          ./tools/sweep_agg/target/release/sweep_agg --input sweep.txt --csv sweep.csv --json sweep.json
+          cargo run --release -j$(sysctl -n hw.ncpu) --manifest-path tools/sweep_agg/Cargo.toml -- --input sweep.txt --csv sweep.csv --json sweep.json
 
       - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Workspace perf compare
+        working-directory: oxide
         run: |
           cargo run --release -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --compare benchmarks/workspace/latest.json --json-out benchmarks/workspace/ci-current.json --markdown-out benchmarks/workspace/ci-current.md
 
       - name: Static goldens
-        working-directory: .
         env:
           SNAPSHOT_FONT_PATH: fonts/Inter-Regular.ttf
         run: ./scripts/run_golden.sh
 
       - name: Anim frames
-        working-directory: .
         env:
           SNAPSHOT_FONT_PATH: fonts/Inter-Regular.ttf
         run: |
           ./scripts/run_anim.sh
-          cargo build --release -j$(sysctl -n hw.ncpu) --manifest-path tools/anim_agg/Cargo.toml
-          ./tools/anim_agg/target/release/anim_agg --input artifacts/anim/sweep.txt --csv artifacts/anim/sweep.csv --json artifacts/anim/summary.json
+          cargo run --release -j$(sysctl -n hw.ncpu) --manifest-path tools/anim_agg/Cargo.toml -- --input artifacts/anim/sweep.txt --csv artifacts/anim/sweep.csv --json artifacts/anim/summary.json
 
       - name: Upload artifacts
         if: always()
@@ -94,9 +88,6 @@ jobs:
   update-goldens:
     if: ${{ github.event.inputs.update_golds == 'true' }}
     runs-on: macos-latest
-    defaults:
-      run:
-        working-directory: oxide
     steps:
       - uses: actions/checkout@v4
 
@@ -104,13 +95,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Download OFL Inter Regular
-        working-directory: .
         run: |
           mkdir -p fonts
           curl -L -o fonts/Inter-Regular.ttf https://github.com/rsms/inter/releases/download/v4.0/Inter-Regular.ttf || true
 
       - name: Regenerate goldens
-        working-directory: .
         env:
           UPDATE_GOLDENS: 1
           SNAPSHOT_FONT_PATH: fonts/Inter-Regular.ttf

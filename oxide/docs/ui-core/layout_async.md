@@ -66,4 +66,5 @@ pub fn compute_once()
 
 ## Changelog
 
+- 2026-05-18: Compacted native async-layout coalescing tests while keeping channel-gated worker ordering.
 - Added a wasm32 synchronous fallback so the WebAssembly host can construct scenes without native thread support.
