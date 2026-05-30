@@ -87,3 +87,18 @@ fn wasm_webgpu_present_quad_uploads_are_cached_across_frames() {
     assert!(present.contains("self.ensure_present_buffers();"));
     assert!(!present.contains("queue.write_buffer"));
 }
+
+#[test]
+fn wasm_webgpu_unindexed_quad_vertices_emit_two_triangles() {
+    let source = include_str!("../src/wasm/webgpu.rs");
+    let helper = source
+        .split("fn append_gpu_vertices")
+        .nth(1)
+        .expect("append helper")
+        .split("fn logical_dimension")
+        .next()
+        .expect("append helper end");
+
+    assert!(helper.contains("vertices.len() == 4"));
+    assert!(helper.contains("[base, base + 1, base + 2, base + 2, base + 1, base + 3]"));
+}

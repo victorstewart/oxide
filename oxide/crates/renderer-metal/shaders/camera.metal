@@ -99,8 +99,8 @@ fragment float4 f_camera_nv12(CamVSOut in [[stage_in]],
   } else {
     y = y_s;
     float2 uvz = uv_s - float2(0.5, 0.5);
-    u = uvz.x * 2.0;
-    v = uvz.y * 2.0;
+    u = uvz.x;
+    v = uvz.y;
   }
   int m = (int)floor(clamp(p.matrix + 0.5, 0.0, 2.0));
   float3 rgb = yuv_to_rgb_matrix(y, u, v, m);
@@ -160,8 +160,8 @@ fragment float4 f_camera_nv12_preview_fast_full(
   float2 uv_norm = d * p.uv_scale + p.uv_bias;
   half y = yTex.sample(s, uv_norm).r;
   half2 uv = uvTex.sample(s, uv_norm).rg - half2(0.5h, 0.5h);
-  half u = uv.x * 2.0h;
-  half v = uv.y * 2.0h;
+  half u = uv.x;
+  half v = uv.y;
   half3 rgb =
       half3(y + 1.5748h * v, y - 0.1873h * u - 0.4681h * v, y + 1.8556h * u);
   half g = half(clamp(p.grayscale, 0.0, 1.0));

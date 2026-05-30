@@ -125,3 +125,17 @@ pub struct Databento
 - Representative scroll and animation flows must be evaluated on real ProMotion hardware at native refresh in the official device harness. If UIKit can use `UIScrollView` hitch metrics directly but Oxide cannot, compute the symmetric hitch ratio from frame deadlines instead of comparing unlike metrics.
 - Native-only is the official device contract for Oxide/UIKit parity. Any separate 60 Hz study is opt-in diagnostic work, not part of the default committed battery, and must not slow the official baseline path.
 - When Android UI parity is added, extend the same policy: matching Android view-system perf tests plus persisted baseline reports are required alongside the Oxide and UIKit cases.
+
+<!-- OXIDE CODEX SKILL ROUTING START -->
+## Codex skill routing
+
+Repo-scoped Codex skills live under `.agents/skills/`. Use them when the task matches their trigger descriptions.
+
+Use `$oxide-internals-performance` for changes to Oxide runtime internals, including `ui-core`, `renderer-api`, `renderer-metal`, `renderer-web`, `text`, `input`, `timing`, platform hosts, frame scheduling, damage redraw, Scene3D, snapshots, benchmarks, Metal, GPU profiling, or backend architecture.
+
+Use `$oxide-app-authoring-performance` for applications, demos, examples, docs, sample screens, and performance advice for people building apps with Oxide without modifying Oxide internals.
+
+Routing rule: when a task starts as app code but requires changing Oxide internals, switch to `$oxide-internals-performance` before editing internal crates. When a task starts as internals work but includes public usage examples, also check `$oxide-app-authoring-performance` before writing the example.
+
+Do not replace the existing repo rules with these skill instructions. The existing Oxide rules on formatting, Rust ownership of product input, UIKit shell boundaries, benchmarks, device evidence, and performance proof remain authoritative.
+<!-- OXIDE CODEX SKILL ROUTING END -->

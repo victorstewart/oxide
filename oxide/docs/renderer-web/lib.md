@@ -40,7 +40,7 @@ Call flow:
 
 The legacy Canvas2D renderer stores one visible canvas context plus offscreen canvases for uploaded images, layers, and sampled backdrops. It remains in the crate for diagnostics and native test coverage, but it is not re-exported as a wasm public API and is not reachable from `BrowserRenderer` or the web host production startup path.
 
-The WebGPU renderer owns the browser surface, persistent pipelines, persistent present buffers, reusable frame vertex/index buffers, renderable scene/scratch textures, and texture bind groups for uploaded images. It compiles WGSL pipelines for solid geometry, RGBA images, A8 glyph masks, SDF glyph masks, and sampled backdrop effects. It encodes the draw list into a compact frame command stream and uploads contiguous vertex/index buffers. Frames without backdrop sampling draw directly to the WebGPU surface in one render pass. Frames with backdrop/effect commands render through the scene texture, copy to scratch only at effect boundaries, then present the scene texture to the surface. Text rendering is supported through the normal `DrawCmd::GlyphRun` path because that command is replayed with the owning draw list's vertices and indices. The legacy standalone `RenderEncoder::draw_glyph_run(&GlyphRun)` callback is still insufficient by itself; renderer-agnostic replay now calls `draw_glyph_run_resolved` with resolved geometry.
+The WebGPU renderer owns the browser surface, persistent pipelines, persistent present buffers, reusable frame vertex/index buffers, renderable scene/scratch textures, and texture bind groups for uploaded images. It compiles WGSL pipelines for solid geometry, RGBA images, A8 glyph masks, SDF glyph masks, and sampled backdrop effects. It encodes the draw list into a compact frame command stream and uploads contiguous vertex/index buffers. Frames without backdrop sampling draw directly to the WebGPU surface in one render pass. Frames with backdrop/effect commands render through the scene texture, copy to scratch only at effect boundaries, then present the scene texture to the surface. Text rendering is supported through the normal `DrawCmd::GlyphRun` path because that command is replayed with the owning draw list's vertices and indices. The legacy standalone `RenderEncoder::draw_glyph_run(&GlyphRun)` callback is still insufficient by itself; renderer-agnostic replay now calls `draw_glyph_run_resolved` with resolved geometry. The diagnostic Canvas2D path shares one quad walker for indexed and unindexed image-mesh/glyph fallback drawing so both paths keep identical quad materialization rules.
 
 ## Preconditions and postconditions; invariants maintained; unsafe invariants if any
 
@@ -77,6 +77,9 @@ pub async fn build_renderer() -> Result<oxide_renderer_web::BrowserRenderer, oxi
 
 ## Changelog
 
+- 2026-05-25: shared Canvas2D fallback quad walking between image meshes and glyph runs.
+- 2026-05-25: expanded unindexed four-vertex WebGPU draw geometry into six triangle-list indices so image meshes and glyph quads render as complete quads.
+- Compacted repeated WebGPU non-indexed vertex expansion across solid, image-mesh, and glyph encoding.
 - Compacted WebGPU render-target, depth-target, and ID-mask texture creation through one 2D texture descriptor helper.
 - Compacted row-strided image copying and Canvas2D fallback camera/backdrop helper branches without changing the public WebGPU startup contract.
 - Added browser pixel verification and persisted Canvas2D wasm baseline coverage through `oxide-host-web`.

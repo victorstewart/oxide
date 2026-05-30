@@ -24,6 +24,23 @@
   <string>12.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>Connect to nearby accessories when an Oxide app enables Bluetooth features.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Capture camera frames when an Oxide app enables camera features.</string>
+  <key>NSContactsUsageDescription</key>
+  <string>Access contacts when an Oxide app enables contacts features.</string>
+  <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+  <string>Use location when an Oxide app enables location-aware features.</string>
+  <key>NSLocationUsageDescription</key>
+  <string>Use location when an Oxide app enables location-aware features.</string>
+  <key>NSLocationWhenInUseUsageDescription</key>
+  <string>Use location when an Oxide app enables location-aware features.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Capture audio when an Oxide app enables recording features.</string>
+  <key>NSMotionUsageDescription</key>
+  <string>Read motion and pressure data when an Oxide app enables motion features.</string>
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>Access media assets when an Oxide app enables media-library features.</string>
 </dict>
 </plist>
-

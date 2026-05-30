@@ -218,7 +218,7 @@ mod wasm {
     use super::{
         a8_to_rgba, color_cache_key, color_to_css, copy_a8_rows, copy_rgba_rows,
         layer_physical_dimension, logical_dimension, normalized_index_mode, resolve_index,
-        sanitize_scale, WebRendererStats,
+        sanitize_scale, NormalizedIndexMode, WebRendererStats,
     };
     use oxide_renderer_api as api;
     use std::collections::BTreeMap;
@@ -840,28 +840,17 @@ mod wasm {
                 return;
             };
             let indices = index_slice(list, ib).unwrap_or(&[]);
-            if !indices.is_empty() {
+            let mode = if indices.is_empty() {
+                None
+            } else {
                 let Some(mode) = normalized_index_mode(indices, vb.offset, vb.len) else {
                     return;
                 };
-                for quad_indices in indices.chunks_exact(6) {
-                    let mut quad = Vec::with_capacity(6);
-                    for index in quad_indices {
-                        if let Some(vertex) =
-                            resolve_index(*index, mode).and_then(|idx| vertices.get(idx))
-                        {
-                            quad.push(*vertex);
-                        }
-                    }
-                    if quad.len() == 6 {
-                        self.draw_image_mesh_quad(handle, &quad, alpha);
-                    }
-                }
-                return;
-            }
-            for quad in vertices.chunks_exact(4) {
+                Some(mode)
+            };
+            draw_vertex_quads(vertices, indices, mode, |quad| {
                 self.draw_image_mesh_quad(handle, quad, alpha);
-            }
+            });
         }
 
         fn draw_image_mesh_quad(
@@ -895,23 +884,10 @@ mod wasm {
             vertices: &[api::Vertex],
             indices: &[u16],
         ) {
-            if !indices.is_empty() {
-                for quad_indices in indices.chunks_exact(6) {
-                    let mut quad = Vec::with_capacity(6);
-                    for index in quad_indices {
-                        if let Some(vertex) = vertices.get(*index as usize) {
-                            quad.push(*vertex);
-                        }
-                    }
-                    if quad.len() == 6 {
-                        self.draw_glyph_quad(run, &quad);
-                    }
-                }
-                return;
-            }
-            for quad in vertices.chunks_exact(4) {
+            let mode = if indices.is_empty() { None } else { Some(NormalizedIndexMode::Local) };
+            draw_vertex_quads(vertices, indices, mode, |quad| {
                 self.draw_glyph_quad(run, quad);
-            }
+            });
         }
 
         fn draw_glyph_quad(&mut self, run: &api::GlyphRun, quad: &[api::Vertex]) {
@@ -1397,6 +1373,25 @@ mod wasm {
             )
         } else {
             (0.0, 0.0, width as f64, height as f64)
+        }
+    }
+
+    fn draw_vertex_quads<F>(vertices: &[api::Vertex], indices: &[u16], mode: Option<NormalizedIndexMode>, mut draw: F)
+    where
+        F: FnMut(&[api::Vertex]),
+    {
+        let Some(mode) = mode else {
+            vertices.chunks_exact(4).for_each(draw);
+            return;
+        };
+        for quad_indices in indices.chunks_exact(6) {
+            let quad = quad_indices
+                .iter()
+                .filter_map(|index| resolve_index(*index, mode).and_then(|idx| vertices.get(idx)).copied())
+                .collect::<Vec<_>>();
+            if quad.len() == 6 {
+                draw(&quad);
+            }
         }
     }
 

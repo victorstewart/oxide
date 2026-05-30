@@ -55,7 +55,12 @@ pub fn replay_drawlist(
                 };
                 let translated = translate_vertices(vertices, offset_x, offset_y);
                 let indices = slice_indices(list, *ib).unwrap_or(&[]);
-                encoder.draw_image_mesh(*tex, &translated, indices, *alpha);
+                let Some(normalized_indices) =
+                    normalize_indices_for_vertex_span(indices, vb.offset, vb.len)
+                else {
+                    continue;
+                };
+                encoder.draw_image_mesh(*tex, &translated, &normalized_indices, *alpha);
             }
             DrawCmd::GlyphRun { run } => {
                 let vertices = slice_vertices(list, run.vb).unwrap_or(&[]);
@@ -130,6 +135,36 @@ fn slice_indices(list: &DrawList, span: oxide_renderer_api::IndexSpan) -> Option
     let len = span.len as usize;
     let end = start.checked_add(len)?;
     list.indices.get(start..end)
+}
+
+fn normalize_indices_for_vertex_span(
+    indices: &[u16],
+    vertex_base: u32,
+    vertex_count: u32,
+) -> Option<Vec<u16>> {
+    if indices.is_empty() {
+        return Some(Vec::new());
+    }
+    if vertex_count == 0 {
+        return None;
+    }
+    if vertex_count <= u16::MAX as u32 {
+        let local_limit = vertex_count as u16;
+        if indices.iter().all(|index| *index < local_limit) {
+            return Some(indices.to_vec());
+        }
+    }
+
+    let vertex_end = vertex_base.saturating_add(vertex_count);
+    let mut normalized = Vec::with_capacity(indices.len());
+    for index in indices.iter().copied() {
+        let absolute = index as u32;
+        if absolute < vertex_base || absolute >= vertex_end {
+            return None;
+        }
+        normalized.push((absolute - vertex_base) as u16);
+    }
+    Some(normalized)
 }
 
 fn translate_rect(rect: RectF, dx: f32, dy: f32) -> RectF {

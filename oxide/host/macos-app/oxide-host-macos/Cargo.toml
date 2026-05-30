@@ -13,11 +13,20 @@ crate-type = ["staticlib", "rlib"]
 default = []
 host-testing = []
 
+[[test]]
+name = "web_view_harness"
+path = "tests/web_view_harness.rs"
+harness = false
+required-features = ["host-testing"]
+
 [build-dependencies]
 cc = "1.0"
 
 [dependencies]
 libc = "0.2"
+oxide-input = { path = "../../../crates/input" }
+oxide-platform-api = { path = "../../../crates/platform-api" }
+oxide-platform-macos = { path = "../../../crates/platform-macos" }
 oxide-renderer-metal = { path = "../../../crates/renderer-metal" }
 oxide-renderer-api = { path = "../../../crates/renderer-api" }
 oxide-ui-core = { path = "../../../crates/ui-core" }

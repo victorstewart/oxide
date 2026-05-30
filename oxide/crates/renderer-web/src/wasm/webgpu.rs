@@ -15,7 +15,7 @@ const SCENE3D_VERTEX_STRIDE: wgpu::BufferAddress = 28;
 const SCENE3D_UNIFORM_STRIDE: usize = 256;
 const SCENE3D_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 const ID_MASK_VERTEX_STRIDE: wgpu::BufferAddress = 32;
-const ID_MASK_RASTER_UNIFORM_SIZE_BYTES: usize = 80;
+const ID_MASK_RASTER_UNIFORM_SIZE_BYTES: usize = 176;
 const ID_MASK_RASTER_UNIFORM_SIZE: u64 = ID_MASK_RASTER_UNIFORM_SIZE_BYTES as u64;
 // The ID-mask polish path must keep nearest-city / nearest-seam search out of the
 // final compositor fragment shader. Chrome traces for the Nametag Topomap showed
@@ -1106,12 +1106,7 @@ impl WebGpuRenderer {
             );
             idx.extend_from_slice(&[0, 1, 2, 2, 1, 3]);
         } else {
-            out.extend(
-                vertices
-                    .iter()
-                    .map(|vertex| gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, color)),
-            );
-            idx.extend(0..out.len() as u32);
+            append_gpu_vertices(&mut out, &mut idx, vertices, color);
         }
         self.push_draw(DrawKind::Solid, &out, &idx);
         self.stats.solid_tris = self.stats.solid_tris.saturating_add((idx.len() / 3) as u32);
@@ -1190,12 +1185,7 @@ impl WebGpuRenderer {
                 out.push(gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, color));
             }
         } else {
-            out.extend(
-                vertices
-                    .iter()
-                    .map(|vertex| gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, color)),
-            );
-            idx.extend(0..out.len() as u32);
+            append_gpu_vertices(&mut out, &mut idx, vertices, color);
         }
         self.push_draw(kind, &out, &idx);
         self.stats.image_draws = self.stats.image_draws.saturating_add(1);
@@ -1228,12 +1218,7 @@ impl WebGpuRenderer {
                 }
             }
         } else {
-            out.extend(
-                vertices
-                    .iter()
-                    .map(|vertex| gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, run.color)),
-            );
-            idx.extend(0..out.len() as u32);
+            append_gpu_vertices(&mut out, &mut idx, vertices, run.color);
         }
         self.push_draw(kind, &out, &idx);
         self.stats.glyph_quads = self.stats.glyph_quads.saturating_add((idx.len() / 6) as u32);
@@ -3683,6 +3668,16 @@ fn gpu_vertex(x: f32, y: f32, u: f32, v: f32, color: api::Color) -> GpuVertex {
     }
 }
 
+fn append_gpu_vertices(out: &mut Vec<GpuVertex>, idx: &mut Vec<u32>, vertices: &[api::Vertex], color: api::Color) {
+    let base = out.len() as u32;
+    out.extend(vertices.iter().map(|vertex| gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, color)));
+    if vertices.len() == 4 {
+        idx.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 1, base + 3]);
+    } else {
+        idx.extend(base..out.len() as u32);
+    }
+}
+
 fn logical_dimension(physical: u32, scale: f32) -> f32 {
     physical as f32 / sanitize_scale(scale)
 }
@@ -3729,15 +3724,39 @@ fn id_mask_raster_uniform_bytes(
     projection: id_mask_compositor::IdMaskRasterProjection,
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(ID_MASK_RASTER_UNIFORM_SIZE_BYTES);
-    for value in
-        [width as f32, height as f32, if projection.use_world_position { 1.0 } else { 0.0 }, 0.0]
-    {
+    for value in [
+        width as f32,
+        height as f32,
+        if projection.use_world_position { 1.0 } else { 0.0 },
+        if projection.visible_hemisphere { 1.0 } else { 0.0 },
+    ] {
         push_f32(&mut out, value);
     }
     for column in projection.world_to_clip {
         for value in column {
             push_f32(&mut out, value);
         }
+    }
+    for column in projection.model_to_world {
+        for value in column {
+            push_f32(&mut out, value);
+        }
+    }
+    for value in [
+        projection.camera_eye_unit[0],
+        projection.camera_eye_unit[1],
+        projection.camera_eye_unit[2],
+        projection.visible_front_min,
+    ] {
+        push_f32(&mut out, value);
+    }
+    for value in [
+        projection.normal_scale[0],
+        projection.normal_scale[1],
+        projection.normal_scale[2],
+        0.0,
+    ] {
+        push_f32(&mut out, value);
     }
     out
 }
@@ -4169,6 +4188,9 @@ const ID_MASK_WGSL: &str = r#"
 struct IdMaskRasterParams {
    mask_size_mode: vec4<f32>,
    world_to_clip: mat4x4<f32>,
+   model_to_world: mat4x4<f32>,
+   camera_eye_front_min: vec4<f32>,
+   normal_scale: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> raster_params: IdMaskRasterParams;
@@ -4184,6 +4206,8 @@ struct IdMaskRasterOut {
    @builtin(position) position: vec4<f32>,
    @location(0) @interpolate(flat) city_id: u32,
    @location(1) @interpolate(flat) neighborhood_id: u32,
+   @location(2) frontness: f32,
+   @location(3) visible_front_min: vec2<f32>,
 };
 
 struct IdMaskRasterTargets {
@@ -4194,8 +4218,15 @@ struct IdMaskRasterTargets {
 @vertex
 fn vs_id_mask_raster(input: IdMaskRasterVertexIn) -> IdMaskRasterOut {
    var out: IdMaskRasterOut;
+   out.frontness = 1.0;
+   out.visible_front_min = vec2<f32>(raster_params.mask_size_mode.w, raster_params.camera_eye_front_min.w);
    if (raster_params.mask_size_mode.z > 0.5) {
-      out.position = raster_params.world_to_clip * vec4<f32>(input.position_world, 1.0);
+      let position_world = vec4<f32>(input.position_world, 1.0);
+      out.position = raster_params.world_to_clip * position_world;
+      if (raster_params.mask_size_mode.w > 0.5) {
+         let normal = normalize((raster_params.model_to_world * position_world).xyz * raster_params.normal_scale.xyz);
+         out.frontness = dot(normal, normalize(raster_params.camera_eye_front_min.xyz));
+      }
    } else {
       let mask_size = max(raster_params.mask_size_mode.xy, vec2<f32>(1.0, 1.0));
       let normalized = input.position_px / mask_size;
@@ -4208,6 +4239,9 @@ fn vs_id_mask_raster(input: IdMaskRasterVertexIn) -> IdMaskRasterOut {
 
 @fragment
 fn fs_id_mask_raster(input: IdMaskRasterOut) -> IdMaskRasterTargets {
+   if (input.visible_front_min.x > 0.5 && input.frontness < input.visible_front_min.y) {
+      discard;
+   }
    var out: IdMaskRasterTargets;
    out.city = input.city_id;
    out.neighborhood = input.neighborhood_id;

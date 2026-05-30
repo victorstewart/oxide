@@ -64,18 +64,58 @@ impl IdMaskRasterVertex {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IdMaskRasterProjection {
     pub world_to_clip: [[f32; 4]; 4],
+    pub model_to_world: [[f32; 4]; 4],
+    pub camera_eye_unit: [f32; 3],
+    pub normal_scale: [f32; 3],
+    pub visible_front_min: f32,
     pub use_world_position: bool,
+    pub visible_hemisphere: bool,
 }
 
 impl IdMaskRasterProjection {
     #[must_use]
     pub fn screen_px() -> Self {
-        Self { world_to_clip: identity(), use_world_position: false }
+        Self {
+            world_to_clip: identity(),
+            model_to_world: identity(),
+            camera_eye_unit: [0.0, 0.0, 1.0],
+            normal_scale: [1.0, 1.0, 1.0],
+            visible_front_min: -1.0,
+            use_world_position: false,
+            visible_hemisphere: false,
+        }
     }
 
     #[must_use]
     pub fn world_3d(world_to_clip: [[f32; 4]; 4]) -> Self {
-        Self { world_to_clip, use_world_position: true }
+        Self {
+            world_to_clip,
+            model_to_world: identity(),
+            camera_eye_unit: [0.0, 0.0, 1.0],
+            normal_scale: [1.0, 1.0, 1.0],
+            visible_front_min: -1.0,
+            use_world_position: true,
+            visible_hemisphere: false,
+        }
+    }
+
+    #[must_use]
+    pub fn world_3d_visible_hemisphere(
+        world_to_clip: [[f32; 4]; 4],
+        model_to_world: [[f32; 4]; 4],
+        camera_eye_unit: [f32; 3],
+        normal_scale: [f32; 3],
+        visible_front_min: f32,
+    ) -> Self {
+        Self {
+            world_to_clip,
+            model_to_world,
+            camera_eye_unit,
+            normal_scale,
+            visible_front_min,
+            use_world_position: true,
+            visible_hemisphere: true,
+        }
     }
 }
 

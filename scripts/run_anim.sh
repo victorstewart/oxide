@@ -3,11 +3,12 @@ set -euo pipefail
 
 SUITE_DIR="artifacts/anim"
 GOLDEN_DIR="goldens/anim"
-MANIFEST="oxide/Cargo.toml"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/../oxide" && pwd)"
 
-cargo build --release -p oxide-snapshot-runner --manifest-path "$MANIFEST"
+(cd "$WORKSPACE_DIR" && cargo build --release -p oxide-snapshot-runner)
 
-BIN="oxide/target/release/oxide-snapshot-runner"
+BIN="$WORKSPACE_DIR/target/release/oxide-snapshot-runner"
 rm -rf "$SUITE_DIR"
 mkdir -p "$SUITE_DIR" "$GOLDEN_DIR"
 

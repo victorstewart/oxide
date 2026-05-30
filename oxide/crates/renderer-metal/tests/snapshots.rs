@@ -52,9 +52,9 @@ fn snapshot_rrect_basic() {
     assert!(center[3] > 240, "center alpha too low: {}", center[3]);
 
     let top_left = pixel(2, 2);
-    assert!(approx_eq(top_left[0], 255, 8));
-    assert!(approx_eq(top_left[1], 255, 8));
-    assert!(approx_eq(top_left[2], 255, 8));
+    assert!(approx_eq(top_left[0], 0, 8));
+    assert!(approx_eq(top_left[1], 0, 8));
+    assert!(approx_eq(top_left[2], 0, 8));
     assert!(approx_eq(top_left[3], 255, 0));
 
     let mut red_pixels = 0usize;
@@ -168,10 +168,10 @@ fn snapshot_clip_push_pop_scopes_draws() {
 
     let left_side = pixel(64, 48);
     assert!(
-        approx_eq(left_side[0], 255, 10)
-            && approx_eq(left_side[1], 255, 10)
-            && approx_eq(left_side[2], 255, 10),
-        "expected white background on untouched area, got {left_side:?}"
+        approx_eq(left_side[0], 0, 10)
+            && approx_eq(left_side[1], 0, 10)
+            && approx_eq(left_side[2], 0, 10),
+        "expected black default clear on untouched area, got {left_side:?}"
     );
 }
 
@@ -209,8 +209,8 @@ fn snapshot_solid_rejects_non_triangle_index_counts() {
     for (x, y) in [(20_u32, 20_u32), (48, 48), (80, 80), (80, 20), (20, 80)] {
         let p = pixel(x, y);
         assert!(
-            approx_eq(p[0], 255, 10) && approx_eq(p[1], 255, 10) && approx_eq(p[2], 255, 10),
-            "expected untouched white background at ({x},{y}), got {p:?}"
+            approx_eq(p[0], 0, 10) && approx_eq(p[1], 0, 10) && approx_eq(p[2], 0, 10),
+            "expected untouched black default clear at ({x},{y}), got {p:?}"
         );
     }
 }

@@ -5,10 +5,9 @@ USE_LIST="${1:-0.6,0.7,0.75,0.8,0.9}"
 PREF_LIST="${2:-0.15,0.25,0.33}"
 MANIFEST="${3:-oxide/Cargo.toml}"
 
-cargo build --release -p oxide-perf-runner --manifest-path "${MANIFEST}"
-
 # Resolve target dir relative to manifest
 MANI_DIR="$(cd "$(dirname "${MANIFEST}")" && pwd)"
+(cd "${MANI_DIR}" && cargo build --release -p oxide-perf-runner)
 BIN="${MANI_DIR}/target/release/oxide-perf-runner"
 
 : > sweep.txt
@@ -28,4 +27,3 @@ for u in "${USES[@]}"; do
 done
 
 echo "sweep.txt written"
-

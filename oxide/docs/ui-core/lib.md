@@ -79,6 +79,8 @@
 - `crates/ui-core/tests/elements_tests.rs` also covers the shared legacy badge overlay contract.
 - `crates/ui-core/tests/elements_tests.rs` also covers the shared legacy spinner defaults and atom-driven encoding contract.
 - `crates/ui-core/tests/elements_tests.rs` also covers the shared legacy sliding-switch long-press, timeout, and bounds-cancel contract.
+- `crates/ui-core/tests/layout_async.rs` covers native async layout worker ordering and blocked-job cleanup.
+- `crates/ui-core/tests/draw_builder_tests.rs` covers image-mesh quad index synthesis.
 - `crates/ui-core/tests/draw_replay_tests.rs` covers translated replay geometry and clip restoration.
 - `crates/ui-core/tests/anim_helpers.rs` covers the shared animation-helper surface.
 - `crates/ui-core/tests/text_fields_tests.rs` covers the text-input surface.
@@ -96,6 +98,8 @@ assert_eq!(text.value(), "");
 ```
 
 ## Changelog
+- 2026-05-25: synthesized standard indices for unindexed four-vertex image meshes so GPU triangle-list backends receive a complete quad.
+- 2026-05-22: documented async layout worker-ordering tests and their blocked-job cleanup guard.
 - 2026-05-15: added the native camera preview draw-list command and `UICameraView::native_preview` routing for host-composited camera planes.
 - 2026-05-14: documented `draw_replay` because glyph replay now resolves and translates vertex spans for CPU composition paths.
 - 2026-05-10: reused the existing character-range byte mapping in `elements.rs` text insertion and removed the single-point byte helper.

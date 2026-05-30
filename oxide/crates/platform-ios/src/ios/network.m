@@ -62,20 +62,8 @@ struct NametagReachabilityStatus
 typedef void *NametagQuicHandle;
 typedef void *NametagReachabilityHandle;
 
-struct OxideHttpResponse
-{
-   uint16_t status;
-   uint8_t *body_ptr;
-   size_t body_len;
-   uint8_t *final_url_ptr;
-   size_t final_url_len;
-   uint8_t *content_type_ptr;
-   size_t content_type_len;
-};
-
-void oxide_host_http_response_free(struct OxideHttpResponse *response);
-
 static const uint32_t kNametagDefaultPort = 443;
+static const size_t kNametagMaxFrameBytes = 16 * 1024 * 1024;
 static void (*g_oxide_reachability_callback)(uint32_t status, uint32_t iface,
                                              uint8_t expensive) = NULL;
 static id g_oxide_reachability_monitor = nil;
@@ -92,37 +80,6 @@ static dispatch_queue_t quic_queue(void)
    return queue;
 }
 
-static bool copy_http_bytes(NSData *data, uint8_t **out_ptr, size_t *out_len)
-{
-   if (out_ptr == NULL || out_len == NULL)
-   {
-      return false;
-   }
-   *out_ptr = NULL;
-   *out_len = 0;
-   if (data == nil || data.length == 0)
-   {
-      return true;
-   }
-   uint8_t *buffer = (uint8_t *)malloc(data.length);
-   if (buffer == NULL)
-   {
-      return false;
-   }
-   memcpy(buffer, data.bytes, data.length);
-   *out_ptr = buffer;
-   *out_len = data.length;
-   return true;
-}
-
-static bool copy_http_string(NSString *string,
-                             uint8_t **out_ptr,
-                             size_t *out_len)
-{
-   NSData *data = string == nil ? nil : [string dataUsingEncoding:NSUTF8StringEncoding];
-   return copy_http_bytes(data, out_ptr, out_len);
-}
-
 static BOOL env_truthy(const char *name)
 {
    const char *value = getenv(name);
@@ -134,11 +91,34 @@ static BOOL env_truthy(const char *name)
           strcasecmp(value, "yes") == 0 || strcasecmp(value, "on") == 0;
 }
 
-static void clear_http_response(struct OxideHttpResponse *response)
+static BOOL network_debug_enabled(void)
 {
-   if (response != NULL)
+   return env_truthy("NAMETAG_NETWORK_DEBUG_LOG");
+}
+
+static NSString *network_transport_name(BOOL fallback)
+{
+   return fallback ? @"tcp_tls" : @"quic";
+}
+
+static NSString *network_state_name(nw_connection_state_t state)
+{
+   switch (state)
    {
-      memset(response, 0, sizeof(*response));
+   case nw_connection_state_invalid:
+      return @"invalid";
+   case nw_connection_state_waiting:
+      return @"waiting";
+   case nw_connection_state_preparing:
+      return @"preparing";
+   case nw_connection_state_ready:
+      return @"ready";
+   case nw_connection_state_failed:
+      return @"failed";
+   case nw_connection_state_cancelled:
+      return @"cancelled";
+   default:
+      return @"unknown";
    }
 }
 
@@ -166,20 +146,11 @@ static uint8_t path_kind_for_path(nw_path_t path)
         kind = 1;
         return false;
      }
-#if defined(nw_interface_type_wiredEthernet)
-     if (type == nw_interface_type_wiredEthernet)
-     {
-        kind = 2;
-        return false;
-     }
-#endif
-#if defined(nw_interface_type_wired)
      if (type == nw_interface_type_wired)
      {
         kind = 2;
         return false;
      }
-#endif
      return true;
    });
    return kind;
@@ -357,10 +328,12 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 @property(nonatomic, strong) dispatch_semaphore_t receiveSignal;
 @property(nonatomic, assign) NSUInteger attempt;
 @property(nonatomic, assign) BOOL closed;
+@property(nonatomic, assign) BOOL currentFallback;
 @property(nonatomic, copy) NSString *host;
 @property(nonatomic, assign) uint16_t port;
 @property(nonatomic, strong) NSDate *handshakeStart;
 @property(nonatomic, strong) NSMutableArray<NSData *> *receiveBuffer;
+@property(nonatomic, strong) NSMutableData *incomingBytes;
 
 - (instancetype)initWithEndpoint:(NSString *)endpoint
                             port:(uint16_t)port
@@ -382,6 +355,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 - (void)scheduleRetryWithParameters:(nw_parameters_t)parameters
                             fallback:(BOOL)fallback;
 - (void)startReceiveLoop;
+- (void)drainIncomingBytes;
 - (BOOL)waitForReady:(uint64_t)timeoutMs;
 - (BOOL)sendBytes:(const uint8_t *)data
             length:(size_t)len
@@ -415,6 +389,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    }
    _metrics = (struct NametagQuicMetrics){0};
    _receiveBuffer = [[NSMutableArray alloc] init];
+   _incomingBytes = [[NSMutableData alloc] init];
    _ready = NO;
    _readySignal = dispatch_semaphore_create(0);
    _receiveSignal = dispatch_semaphore_create(0);
@@ -483,9 +458,9 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    }
 
    self.ready = NO;
-   self.readySignal = dispatch_semaphore_create(0);
    self.receiveSignal = dispatch_semaphore_create(0);
    [self.receiveBuffer removeAllObjects];
+   [self.incomingBytes setLength:0];
 
    self.handshakeStart = [NSDate date];
    self.attempt += 1;
@@ -495,6 +470,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
       self.fallbackUsed = YES;
       _metrics.fallback_used = true;
    }
+   self.currentFallback = fallback;
 
    if (_connection != NULL)
    {
@@ -518,6 +494,14 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    }
    _connection = connection;
    nw_connection_set_queue(_connection, self.queue);
+   NSUInteger attemptNumber = self.attempt;
+   if (network_debug_enabled())
+   {
+      NSLog(@"Nametag network connect attempt transport=%@ endpoint=%@:%u "
+            @"attempt=%lu",
+            network_transport_name(fallback), self.host, self.port,
+            (unsigned long)attemptNumber);
+   }
 
    __weak typeof(self) weakSelf = self;
    nw_connection_set_state_changed_handler(
@@ -526,6 +510,18 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
          if (!strongSelf)
          {
             return;
+         }
+         if (strongSelf->_connection != connection)
+         {
+            return;
+         }
+         if (network_debug_enabled())
+         {
+            NSLog(@"Nametag network state transport=%@ endpoint=%@:%u "
+                  @"attempt=%lu state=%@ error=%@",
+                  network_transport_name(fallback), strongSelf.host,
+                  strongSelf.port, (unsigned long)attemptNumber,
+                  network_state_name(state), error);
          }
          switch (state)
          {
@@ -569,23 +565,24 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    }
 
    BOOL canRetry = self.attempt < MAX(self.retryPolicy.max_attempts, 1);
+   BOOL connectFailed = !self.ready;
    BOOL forceTcpTls =
        self.quicConfig.force_tcp_tls ||
        env_truthy("NAMETAG_NETWORK_FORCE_TCP_TLS");
-   if (forceTcpTls && _tlsParameters != NULL && canRetry)
+   if (forceTcpTls && _tlsParameters != NULL && canRetry && connectFailed)
    {
       [self scheduleRetryWithParameters:_tlsParameters fallback:YES];
       return;
    }
 
-   if (!attemptedFallback && self.quicConfig.allow_fallback &&
+   if (!attemptedFallback && connectFailed && self.quicConfig.allow_fallback &&
        _tlsParameters != NULL)
    {
       [self scheduleRetryWithParameters:_tlsParameters fallback:YES];
       return;
    }
 
-   if (canRetry)
+   if (connectFailed && canRetry)
    {
       [self scheduleRetryWithParameters:_quicParameters fallback:NO];
       return;
@@ -593,8 +590,11 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 
    if (error != NULL)
    {
-      NSLog(@"Nametag QUIC connection failed: %@", error);
+      NSLog(@"Nametag network connection failed transport=%@: %@",
+            network_transport_name(self.currentFallback), error);
    }
+   dispatch_semaphore_signal(self.readySignal);
+   dispatch_semaphore_signal(self.receiveSignal);
 }
 
 - (void)scheduleRetryWithParameters:(nw_parameters_t)parameters
@@ -613,11 +613,25 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    }
    dispatch_time_t deadline = dispatch_time(
        DISPATCH_TIME_NOW, (int64_t)(delay_ms * NSEC_PER_MSEC));
+   NSUInteger expectedAttempt = self.attempt;
    __weak typeof(self) weakSelf = self;
    dispatch_after(deadline, self.queue, ^{
      __strong typeof(self) strongSelf = weakSelf;
      if (!strongSelf || strongSelf.closed)
      {
+        return;
+     }
+     if (strongSelf.attempt != expectedAttempt || strongSelf.ready)
+     {
+        if (network_debug_enabled())
+        {
+           NSLog(@"Nametag network retry skipped transport=%@ "
+                 @"expected_attempt=%lu current_attempt=%lu ready=%d",
+                 network_transport_name(fallback),
+                 (unsigned long)expectedAttempt,
+                 (unsigned long)strongSelf.attempt,
+                 strongSelf.ready ? 1 : 0);
+        }
         return;
      }
      [strongSelf startAttemptWithParameters:parameters fallback:fallback];
@@ -637,6 +651,13 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    dispatch_time_t deadline = dispatch_time(
        DISPATCH_TIME_NOW, (int64_t)(timeoutMs * NSEC_PER_MSEC));
    long result = dispatch_semaphore_wait(self.readySignal, deadline);
+   if ((result != 0 || !self.ready) && network_debug_enabled())
+   {
+      NSLog(@"Nametag network wait ready timeout transport=%@ timeout_ms=%llu "
+            @"ready=%d",
+            network_transport_name(self.currentFallback),
+            (unsigned long long)timeoutMs, self.ready ? 1 : 0);
+   }
    return result == 0 && self.ready;
 }
 
@@ -663,12 +684,25 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
                         {
                            ok = YES;
                         }
+                        else if (network_debug_enabled())
+                        {
+                           NSLog(@"Nametag network send error transport=%@ "
+                                 @"len=%zu error=%@",
+                                 network_transport_name(self.currentFallback),
+                                 len, error);
+                        }
                         dispatch_semaphore_signal(sem);
                       });
 
    dispatch_time_t deadline = dispatch_time(
        DISPATCH_TIME_NOW, (int64_t)(timeoutMs * NSEC_PER_MSEC));
-   dispatch_semaphore_wait(sem, deadline);
+   if (dispatch_semaphore_wait(sem, deadline) != 0 && network_debug_enabled())
+   {
+      NSLog(@"Nametag network send timeout transport=%@ len=%zu "
+            @"timeout_ms=%llu",
+            network_transport_name(self.currentFallback), len,
+            (unsigned long long)timeoutMs);
+   }
    return ok;
 }
 
@@ -716,19 +750,17 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
       return;
    }
    __weak typeof(self) weakSelf = self;
-   nw_connection_receive_message(
-       _connection,
+   nw_connection_receive(
+       _connection, 1, 65536,
        ^(dispatch_data_t content, nw_content_context_t context, bool isComplete,
          nw_error_t receiveError) {
          (void)context;
-         (void)isComplete;
          __strong typeof(self) strongSelf = weakSelf;
          if (!strongSelf || strongSelf.closed)
          {
             return;
          }
 
-         NSMutableData *payload = [[NSMutableData alloc] init];
          if (content != NULL)
          {
             dispatch_data_apply(
@@ -738,26 +770,84 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
                   (void)offset;
                   if (buffer != NULL && size > 0)
                   {
-                     [payload appendBytes:buffer length:size];
+                     [strongSelf.incomingBytes appendBytes:buffer length:size];
                   }
                   return true;
                 });
-         }
-
-         if (payload.length > 0)
-         {
-            strongSelf->_metrics.payload_bytes += payload.length;
-            strongSelf->_metrics.total_bytes += payload.length;
-            [strongSelf.receiveBuffer addObject:payload];
-            dispatch_semaphore_signal(strongSelf.receiveSignal);
+            [strongSelf drainIncomingBytes];
          }
 
          if (receiveError != NULL)
          {
-            NSLog(@"Nametag QUIC receive error: %@", receiveError);
+            if (network_debug_enabled())
+            {
+               NSLog(@"Nametag network receive error transport=%@ error=%@",
+                     network_transport_name(strongSelf.currentFallback),
+                     receiveError);
+            }
+            dispatch_semaphore_signal(strongSelf.receiveSignal);
+            return;
+         }
+
+         if (isComplete)
+         {
+            if (network_debug_enabled())
+            {
+               NSLog(@"Nametag network receive closed transport=%@",
+                     network_transport_name(strongSelf.currentFallback));
+            }
+            dispatch_semaphore_signal(strongSelf.receiveSignal);
+            return;
          }
          [strongSelf startReceiveLoop];
        });
+}
+
+- (void)drainIncomingBytes
+{
+   while (self.incomingBytes.length >= 4)
+   {
+      const uint8_t *bytes = self.incomingBytes.bytes;
+      uint32_t frameLength = ((uint32_t)bytes[0]) |
+                             ((uint32_t)bytes[1] << 8) |
+                             ((uint32_t)bytes[2] << 16) |
+                             ((uint32_t)bytes[3] << 24);
+      if (frameLength < 16 || frameLength > kNametagMaxFrameBytes)
+      {
+         if (network_debug_enabled())
+         {
+            NSLog(@"Nametag network receive invalid frame length "
+                  @"transport=%@ length=%u buffered=%lu",
+                  network_transport_name(self.currentFallback), frameLength,
+                  (unsigned long)self.incomingBytes.length);
+         }
+         [self.incomingBytes setLength:0];
+         dispatch_semaphore_signal(self.receiveSignal);
+         return;
+      }
+      if (self.incomingBytes.length < frameLength)
+      {
+         return;
+      }
+
+      NSData *frame =
+          [self.incomingBytes subdataWithRange:NSMakeRange(0, frameLength)];
+      _metrics.payload_bytes += frame.length;
+      _metrics.total_bytes += frame.length;
+      [self.receiveBuffer addObject:frame];
+      if (network_debug_enabled())
+      {
+         NSLog(@"Nametag network receive frame transport=%@ length=%lu "
+               @"queued=%lu",
+               network_transport_name(self.currentFallback),
+               (unsigned long)frame.length,
+               (unsigned long)self.receiveBuffer.count);
+      }
+      [self.incomingBytes replaceBytesInRange:NSMakeRange(0, frameLength)
+                                    withBytes:NULL
+                                       length:0];
+      dispatch_semaphore_signal(self.receiveSignal);
+   }
 }
 
 - (BOOL)copyMetrics:(struct NametagQuicMetrics *)outMetrics
@@ -1084,134 +1174,6 @@ bool nametag_ios_quic_recv(NametagQuicHandle handle,
    memcpy(buffer, payload.bytes, payload.length);
    *out_len = payload.length;
    return true;
-}
-
-int32_t oxide_host_http_get(const uint8_t *url_ptr,
-                            size_t url_len,
-                            uint32_t timeout_ms,
-                            size_t max_response_bytes,
-                            struct OxideHttpResponse *out_response)
-{
-   if (out_response == NULL)
-   {
-      return -1;
-   }
-   clear_http_response(out_response);
-   if (url_ptr == NULL || url_len == 0 || max_response_bytes == 0)
-   {
-      return -1;
-   }
-   if ([NSThread isMainThread])
-   {
-      return -6;
-   }
-
-   NSString *url_string =
-       [[NSString alloc] initWithBytes:url_ptr
-                                length:url_len
-                              encoding:NSUTF8StringEncoding];
-   NSURL *url = url_string == nil ? nil : [NSURL URLWithString:url_string];
-   NSString *scheme = url.scheme.lowercaseString;
-   if (url == nil ||
-       !([scheme isEqualToString:@"https"] || [scheme isEqualToString:@"http"]))
-   {
-      return -1;
-   }
-
-   NSTimeInterval timeout =
-       timeout_ms == 0 ? 10.0 : ((NSTimeInterval)timeout_ms / 1000.0);
-   NSURLSessionConfiguration *configuration =
-       [NSURLSessionConfiguration ephemeralSessionConfiguration];
-   configuration.timeoutIntervalForRequest = timeout;
-   configuration.timeoutIntervalForResource = timeout;
-   configuration.waitsForConnectivity = YES;
-   configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
-   configuration.URLCache = nil;
-   configuration.allowsCellularAccess = YES;
-#if TARGET_OS_IPHONE
-   configuration.multipathServiceType = NSURLSessionMultipathServiceTypeHandover;
-#endif
-
-   NSMutableURLRequest *request =
-       [NSMutableURLRequest requestWithURL:url
-                               cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
-                           timeoutInterval:timeout];
-   request.HTTPMethod = @"GET";
-
-   dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-   __block NSData *body_data = nil;
-   __block NSURLResponse *url_response = nil;
-   __block NSError *request_error = nil;
-
-   NSURLSession *session =
-       [NSURLSession sessionWithConfiguration:configuration];
-   NSURLSessionDataTask *task =
-       [session dataTaskWithRequest:request
-                  completionHandler:^(NSData *data,
-                                      NSURLResponse *response,
-                                      NSError *error) {
-                    body_data = data;
-                    url_response = response;
-                    request_error = error;
-                    dispatch_semaphore_signal(semaphore);
-                  }];
-   [task resume];
-
-   int64_t wait_ns = (int64_t)((timeout + 5.0) * (NSTimeInterval)NSEC_PER_SEC);
-   if (dispatch_semaphore_wait(
-           semaphore, dispatch_time(DISPATCH_TIME_NOW, wait_ns)) != 0)
-   {
-      [task cancel];
-      [session invalidateAndCancel];
-      return -2;
-   }
-   [session finishTasksAndInvalidate];
-
-   if (request_error != nil)
-   {
-      return -2;
-   }
-   if (![url_response isKindOfClass:[NSHTTPURLResponse class]])
-   {
-      return -3;
-   }
-
-   NSHTTPURLResponse *http_response = (NSHTTPURLResponse *)url_response;
-   if (body_data.length > max_response_bytes)
-   {
-      return -4;
-   }
-
-   id raw_content_type = http_response.allHeaderFields[@"Content-Type"];
-   NSString *content_type = [raw_content_type isKindOfClass:[NSString class]]
-                                 ? (NSString *)raw_content_type
-                                 : http_response.MIMEType;
-
-   out_response->status = (uint16_t)http_response.statusCode;
-   if (!copy_http_bytes(body_data, &out_response->body_ptr,
-                        &out_response->body_len) ||
-       !copy_http_string(http_response.URL.absoluteString,
-                         &out_response->final_url_ptr,
-                         &out_response->final_url_len) ||
-       !copy_http_string(content_type, &out_response->content_type_ptr,
-                         &out_response->content_type_len))
-   {
-      oxide_host_http_response_free(out_response);
-      return -5;
-   }
-   return 0;
-}
-
-void oxide_host_http_response_free(struct OxideHttpResponse *response)
-{
-   if (response == NULL)
-   {
-      return;
-   }
-   free(response->body_ptr);
-   free(response->final_url_ptr);
-   free(response->content_type_ptr);
-   clear_http_response(response);
 }
 
 NametagReachabilityHandle nametag_ios_reachability_start(void)

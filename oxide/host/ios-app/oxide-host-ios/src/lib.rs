@@ -7,6 +7,7 @@
 
 #[cfg(target_os = "ios")]
 use core::time::Duration;
+use oxide_input::{pointer_device_from_raw, touch_phase_from_raw, PrimaryTouchTracker};
 use oxide_networking::ReachabilityManager;
 #[cfg(target_os = "ios")]
 use oxide_networking::{
@@ -753,6 +754,24 @@ pub extern "C" fn rust_entry(
     }
 }
 
+fn lock_or_recover<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn callback_value<T: Copy>(cell: &std::sync::OnceLock<std::sync::Mutex<Option<T>>>) -> Option<T> {
+    cell.get().and_then(|mutex| *lock_or_recover(mutex))
+}
+
+fn ffi_bytes<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
+    if len == 0 {
+        return Some(&[]);
+    }
+    if ptr.is_null() {
+        return None;
+    }
+    Some(unsafe { std::slice::from_raw_parts(ptr, len) })
+}
+
 // ---- Window resize callback bridge ----
 
 type WindowResizedCb =
@@ -764,7 +783,7 @@ static WINDOW_CB: std::sync::OnceLock<std::sync::Mutex<Option<WindowResizedCb>>>
 #[no_mangle]
 pub extern "C" fn oxide_host_set_window_resized_callback(cb: Option<WindowResizedCb>) {
     let slot = WINDOW_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *slot.lock().expect("window cb mutex poisoned") = cb;
+    *lock_or_recover(slot) = cb;
 }
 
 #[no_mangle]
@@ -777,7 +796,7 @@ pub extern "C" fn oxide_host_emit_window_resized(
     safe_r: f32,
     safe_b: f32,
 ) {
-    if let Some(cb) = WINDOW_CB.get().and_then(|m| *m.lock().expect("window cb mutex poisoned")) {
+    if let Some(cb) = callback_value(&WINDOW_CB) {
         cb(w, h, scale, safe_l, safe_t, safe_r, safe_b);
     } else {
         eprintln!(
@@ -809,7 +828,7 @@ static IME_HIDDEN_CB: std::sync::OnceLock<std::sync::Mutex<Option<IMEHiddenCb>>>
 #[no_mangle]
 pub extern "C" fn oxide_host_set_text_commit_callback(cb: Option<TextCommitCb>) {
     let slot = TEXT_COMMIT_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *slot.lock().expect("commit cb mutex") = cb;
+    *lock_or_recover(slot) = cb;
 }
 
 // ---- Permissions callback bridge ----
@@ -819,7 +838,7 @@ static PERM_CB: std::sync::OnceLock<std::sync::Mutex<Option<PermCb>>> = std::syn
 #[no_mangle]
 pub extern "C" fn oxide_host_set_perm_callback(cb: Option<PermCb>) {
     let slot = PERM_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *slot.lock().expect("perm cb mutex") = cb;
+    *lock_or_recover(slot) = cb;
 }
 
 // ---- Push notifications callback bridge ----
@@ -883,36 +902,40 @@ extern "C" fn sensor_push_token_cb(provider: u32, ptr: *const u8, len: usize) {
 #[no_mangle]
 pub extern "C" fn oxide_host_set_push_token_callback(cb: Option<PushTokenCb>) {
     let slot = PUSH_TOKEN_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *slot.lock().expect("push token cb mutex") = cb;
+    *lock_or_recover(slot) = cb;
 }
 
 #[no_mangle]
 pub extern "C" fn oxide_host_set_push_notify_callback(cb: Option<PushNotifyCb>) {
     let slot = PUSH_NOTIFY_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *slot.lock().expect("push notify cb mutex") = cb;
+    *lock_or_recover(slot) = cb;
 }
 
 #[no_mangle]
 pub extern "C" fn oxide_host_emit_push_token(provider: u32, ptr: *const u8, len: usize) {
-    if let Some(cb) = PUSH_TOKEN_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&PUSH_TOKEN_CB) {
         cb(provider, ptr, len);
-    } else if let Ok(s) = std::str::from_utf8(unsafe { std::slice::from_raw_parts(ptr, len) }) {
-        eprintln!("[Oxide] push token (prov={}): {}", provider, s);
+    } else if let Some(bytes) = ffi_bytes(ptr, len) {
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            eprintln!("[Oxide] push token (prov={}): {}", provider, s);
+        }
     }
 }
 
 #[no_mangle]
 pub extern "C" fn oxide_host_emit_push_notify(ptr: *const u8, len: usize) {
-    if let Some(cb) = PUSH_NOTIFY_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&PUSH_NOTIFY_CB) {
         cb(ptr, len);
-    } else if let Ok(s) = std::str::from_utf8(unsafe { std::slice::from_raw_parts(ptr, len) }) {
-        eprintln!("[Oxide] push notify: {}", s);
+    } else if let Some(bytes) = ffi_bytes(ptr, len) {
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            eprintln!("[Oxide] push notify: {}", s);
+        }
     }
 }
 
 #[no_mangle]
 pub extern "C" fn oxide_host_emit_perm(domain: u32, status: u32) {
-    if let Some(cb) = PERM_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&PERM_CB) {
         cb(domain, status);
     } else {
         eprintln!("[Oxide] perm domain={} status={}", domain, status);
@@ -963,49 +986,8 @@ static KEY_CB: std::sync::OnceLock<std::sync::Mutex<Option<KeyCb>>> = std::sync:
 #[no_mangle]
 pub extern "C" fn oxide_host_set_touch_callback(cb: Option<TouchCb>) {
     let slot = TOUCH_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *slot.lock().expect("touch cb mutex") = cb;
+    *lock_or_recover(slot) = cb;
 }
-
-// ---- Bluetooth (CoreBluetooth) callbacks ----
-type BleStateCb = extern "C" fn(powered_on: u8);
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct OxideBleScanInfo {
-    pub id: [u8; 16],
-    pub name_ptr: *const u8,
-    pub name_len: usize,
-    pub rssi_dbm: i16,
-    pub services_ptr: *const u8,
-    pub service_count: usize,
-    pub manufacturer_ptr: *const u8,
-    pub manufacturer_len: usize,
-    pub connectable: u8,
-}
-
-type BleDiscoveredCb = extern "C" fn(info: *const OxideBleScanInfo);
-type BleRestoredCb = extern "C" fn(infos: *const OxideBleScanInfo, count: usize);
-type BleConnCb = extern "C" fn(id_ptr: *const u8);
-type BleDiscCb = extern "C" fn(id_ptr: *const u8);
-type BleNotifyCb = extern "C" fn(
-    id_ptr: *const u8,
-    svc_ptr: *const u8,
-    chr_ptr: *const u8,
-    data_ptr: *const u8,
-    data_len: usize,
-);
-
-static BLE_STATE_CB: std::sync::OnceLock<std::sync::Mutex<Option<BleStateCb>>> =
-    std::sync::OnceLock::new();
-static BLE_DISCOVERED_CB: std::sync::OnceLock<std::sync::Mutex<Option<BleDiscoveredCb>>> =
-    std::sync::OnceLock::new();
-static BLE_RESTORED_CB: std::sync::OnceLock<std::sync::Mutex<Option<BleRestoredCb>>> =
-    std::sync::OnceLock::new();
-static BLE_CONN_CB: std::sync::OnceLock<std::sync::Mutex<Option<BleConnCb>>> =
-    std::sync::OnceLock::new();
-static BLE_DISC_CB: std::sync::OnceLock<std::sync::Mutex<Option<BleDiscCb>>> =
-    std::sync::OnceLock::new();
-static BLE_NOTIFY_CB: std::sync::OnceLock<std::sync::Mutex<Option<BleNotifyCb>>> =
-    std::sync::OnceLock::new();
 
 #[cfg(target_os = "ios")]
 const PERMISSION_DOMAINS: [PermissionDomain; 7] = [
@@ -1053,89 +1035,15 @@ fn install_permission_subscriptions(manager: Arc<PermissionManager>) {
 }
 
 #[no_mangle]
-pub extern "C" fn oxide_host_ble_set_state_cb(cb: Option<BleStateCb>) {
-    let s = BLE_STATE_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *s.lock().unwrap() = cb;
-}
-#[no_mangle]
-pub extern "C" fn oxide_host_ble_set_discovered_cb(cb: Option<BleDiscoveredCb>) {
-    let s = BLE_DISCOVERED_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *s.lock().unwrap() = cb;
-}
-#[no_mangle]
-pub extern "C" fn oxide_host_ble_set_restored_cb(cb: Option<BleRestoredCb>) {
-    let s = BLE_RESTORED_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *s.lock().unwrap() = cb;
-}
-#[no_mangle]
-pub extern "C" fn oxide_host_ble_set_connected_cb(cb: Option<BleConnCb>) {
-    let s = BLE_CONN_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *s.lock().unwrap() = cb;
-}
-#[no_mangle]
-pub extern "C" fn oxide_host_ble_set_disconnected_cb(cb: Option<BleDiscCb>) {
-    let s = BLE_DISC_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *s.lock().unwrap() = cb;
-}
-#[no_mangle]
-pub extern "C" fn oxide_host_ble_set_notify_cb(cb: Option<BleNotifyCb>) {
-    let s = BLE_NOTIFY_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *s.lock().unwrap() = cb;
-}
-
-#[no_mangle]
-pub extern "C" fn oxide_host_ble_emit_state(powered_on: u8) {
-    if let Some(cb) = BLE_STATE_CB.get().and_then(|m| *m.lock().unwrap()) {
-        cb(powered_on);
-    }
-}
-#[no_mangle]
-pub extern "C" fn oxide_host_ble_emit_discovered(info: *const OxideBleScanInfo) {
-    if let Some(cb) = BLE_DISCOVERED_CB.get().and_then(|m| *m.lock().unwrap()) {
-        cb(info);
-    }
-}
-#[no_mangle]
-pub extern "C" fn oxide_host_ble_emit_restored(infos: *const OxideBleScanInfo, count: usize) {
-    if let Some(cb) = BLE_RESTORED_CB.get().and_then(|m| *m.lock().unwrap()) {
-        cb(infos, count);
-    }
-}
-#[no_mangle]
-pub extern "C" fn oxide_host_ble_emit_connected(id: *const u8) {
-    if let Some(cb) = BLE_CONN_CB.get().and_then(|m| *m.lock().unwrap()) {
-        cb(id);
-    }
-}
-#[no_mangle]
-pub extern "C" fn oxide_host_ble_emit_disconnected(id: *const u8) {
-    if let Some(cb) = BLE_DISC_CB.get().and_then(|m| *m.lock().unwrap()) {
-        cb(id);
-    }
-}
-#[no_mangle]
-pub extern "C" fn oxide_host_ble_emit_notified(
-    id: *const u8,
-    svc: *const u8,
-    chr: *const u8,
-    data: *const u8,
-    len: usize,
-) {
-    if let Some(cb) = BLE_NOTIFY_CB.get().and_then(|m| *m.lock().unwrap()) {
-        cb(id, svc, chr, data, len);
-    }
-}
-
-#[no_mangle]
 pub extern "C" fn oxide_host_set_pointer_callback(cb: Option<PointerCb>) {
     let slot = POINTER_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *slot.lock().expect("pointer cb mutex") = cb;
+    *lock_or_recover(slot) = cb;
 }
 
 #[no_mangle]
 pub extern "C" fn oxide_host_set_key_callback(cb: Option<KeyCb>) {
     let slot = KEY_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *slot.lock().expect("key cb mutex") = cb;
+    *lock_or_recover(slot) = cb;
 }
 
 #[no_mangle]
@@ -1152,7 +1060,7 @@ pub extern "C" fn oxide_host_emit_touch(
     device: u32,
     timestamp_ns: u64,
 ) {
-    let callback = TOUCH_CB.get().and_then(|m| *m.lock().unwrap());
+    let callback = callback_value(&TOUCH_CB);
     touch_log(&format!(
         "rust ffi oxide_host_emit_touch entry id={id} phase={phase} x={x:.1} y={y:.1} callback={}",
         callback.is_some()
@@ -1188,7 +1096,7 @@ pub extern "C" fn oxide_host_emit_pointer(
     modifiers: u32,
     timestamp_ns: u64,
 ) {
-    if let Some(cb) = POINTER_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&POINTER_CB) {
         cb(x, y, dx, dy, buttons, modifiers, timestamp_ns);
     } else {
         eprintln!("[Oxide] pointer x={} y={} dx={} dy={}", x, y, dx, dy);
@@ -1204,15 +1112,12 @@ pub extern "C" fn oxide_host_emit_key(
     modifiers: u32,
     timestamp_ns: u64,
 ) {
-    if let Some(cb) = KEY_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&KEY_CB) {
         cb(code, chars_ptr, chars_len, repeat, modifiers, timestamp_ns);
     } else {
-        let s = if chars_len > 0 {
-            std::str::from_utf8(unsafe { std::slice::from_raw_parts(chars_ptr, chars_len) })
-                .unwrap_or("")
-        } else {
-            ""
-        };
+        let s = ffi_bytes(chars_ptr, chars_len)
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .unwrap_or("");
         eprintln!("[Oxide] key code={} chars='{}' repeat={} mods={}", code, s, repeat, modifiers);
     }
 }
@@ -1220,13 +1125,13 @@ pub extern "C" fn oxide_host_emit_key(
 #[no_mangle]
 pub extern "C" fn oxide_host_set_text_composition_callback(cb: Option<TextCompositionCb>) {
     let slot = TEXT_COMPOSE_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *slot.lock().expect("compose cb mutex") = cb;
+    *lock_or_recover(slot) = cb;
 }
 
 #[no_mangle]
 pub extern "C" fn oxide_host_set_text_selection_callback(cb: Option<TextSelectionCb>) {
     let slot = TEXT_SELECT_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *slot.lock().expect("select cb mutex") = cb;
+    *lock_or_recover(slot) = cb;
 }
 
 #[no_mangle]
@@ -1235,17 +1140,17 @@ pub extern "C" fn oxide_host_set_ime_callbacks(
     hidden: Option<IMEHiddenCb>,
 ) {
     let s = IME_SHOWN_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *s.lock().expect("ime shown mutex") = shown;
+    *lock_or_recover(s) = shown;
     let h = IME_HIDDEN_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *h.lock().expect("ime hidden mutex") = hidden;
+    *lock_or_recover(h) = hidden;
 }
 
 #[no_mangle]
 pub extern "C" fn oxide_host_emit_text_commit(ptr: *const u8, len: usize) {
-    if let Some(cb) = TEXT_COMMIT_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&TEXT_COMMIT_CB) {
         cb(ptr, len);
-    } else {
-        if let Ok(s) = std::str::from_utf8(unsafe { std::slice::from_raw_parts(ptr, len) }) {
+    } else if let Some(bytes) = ffi_bytes(ptr, len) {
+        if let Ok(s) = std::str::from_utf8(bytes) {
             eprintln!("[Oxide] text commit: {}", s);
         }
     }
@@ -1258,10 +1163,10 @@ pub extern "C" fn oxide_host_emit_text_composition(
     ptr: *const u8,
     len: usize,
 ) {
-    if let Some(cb) = TEXT_COMPOSE_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&TEXT_COMPOSE_CB) {
         cb(start, end, ptr, len);
-    } else {
-        if let Ok(s) = std::str::from_utf8(unsafe { std::slice::from_raw_parts(ptr, len) }) {
+    } else if let Some(bytes) = ffi_bytes(ptr, len) {
+        if let Ok(s) = std::str::from_utf8(bytes) {
             eprintln!("[Oxide] text composition: [{}..{}] {}", start, end, s);
         }
     }
@@ -1269,7 +1174,7 @@ pub extern "C" fn oxide_host_emit_text_composition(
 
 #[no_mangle]
 pub extern "C" fn oxide_host_emit_text_selection(start: u32, end: u32) {
-    if let Some(cb) = TEXT_SELECT_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&TEXT_SELECT_CB) {
         cb(start, end);
     } else {
         eprintln!("[Oxide] selection: [{}..{}]", start, end);
@@ -1278,7 +1183,7 @@ pub extern "C" fn oxide_host_emit_text_selection(start: u32, end: u32) {
 
 #[no_mangle]
 pub extern "C" fn oxide_host_emit_ime_shown(x: f32, y: f32, w: f32, h: f32) {
-    if let Some(cb) = IME_SHOWN_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&IME_SHOWN_CB) {
         cb(x, y, w, h);
     } else {
         eprintln!("[Oxide] IME shown at {},{} size {}x{}", x, y, w, h);
@@ -1287,7 +1192,7 @@ pub extern "C" fn oxide_host_emit_ime_shown(x: f32, y: f32, w: f32, h: f32) {
 
 #[no_mangle]
 pub extern "C" fn oxide_host_emit_ime_hidden() {
-    if let Some(cb) = IME_HIDDEN_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&IME_HIDDEN_CB) {
         cb();
     } else {
         eprintln!("[Oxide] IME hidden");
@@ -1442,111 +1347,6 @@ struct WindowMetrics {
     safe_top: f32,
     safe_right: f32,
     safe_bottom: f32,
-}
-
-#[derive(Clone, Copy, Default)]
-struct PointerSample {
-    x: f32,
-    y: f32,
-    dx: f32,
-    dy: f32,
-    buttons: u32,
-}
-
-#[derive(Default)]
-struct TouchResult {
-    pointer: Option<PointerSample>,
-    double_tap: bool,
-}
-
-#[derive(Clone, Copy)]
-struct TouchTrack {
-    id: u64,
-    start_x: f32,
-    start_y: f32,
-    last_x: f32,
-    last_y: f32,
-    start_ms: u64,
-    last_ms: u64,
-}
-
-impl TouchTrack {
-    fn new(id: u64, x: f32, y: f32, ts_ns: u64) -> Self {
-        let ms = ts_ns / 1_000_000;
-        Self { id, start_x: x, start_y: y, last_x: x, last_y: y, start_ms: ms, last_ms: ms }
-    }
-}
-
-#[derive(Clone, Copy)]
-struct TapRecord {
-    ts_ms: u64,
-    x: f32,
-    y: f32,
-}
-
-#[derive(Default)]
-struct PrimaryTouchTracker {
-    active: Option<TouchTrack>,
-    last_tap: Option<TapRecord>,
-}
-
-impl PrimaryTouchTracker {
-    fn on_event(&mut self, id: u64, phase: u32, x: f32, y: f32, ts_ns: u64) -> TouchResult {
-        let mut result = TouchResult::default();
-        let ms = ts_ns / 1_000_000;
-        match phase {
-            0 => {
-                if self.active.is_none() {
-                    self.active = Some(TouchTrack::new(id, x, y, ts_ns));
-                    result.pointer = Some(PointerSample { x, y, dx: 0.0, dy: 0.0, buttons: 1 });
-                }
-            }
-            1 => {
-                if let Some(mut track) = self.active {
-                    if track.id == id {
-                        let dx = x - track.last_x;
-                        let dy = y - track.last_y;
-                        track.last_x = x;
-                        track.last_y = y;
-                        track.last_ms = ms;
-                        result.pointer = Some(PointerSample { x, y, dx, dy, buttons: 1 });
-                        self.active = Some(track);
-                    }
-                }
-            }
-            2 | 3 => {
-                if let Some(track) = self.active {
-                    if track.id == id {
-                        let dx = x - track.last_x;
-                        let dy = y - track.last_y;
-                        result.pointer = Some(PointerSample { x, y, dx, dy, buttons: 0 });
-                        let total_dx = x - track.start_x;
-                        let total_dy = y - track.start_y;
-                        let moved_sq = total_dx * total_dx + total_dy * total_dy;
-                        let dur_ms = ms.saturating_sub(track.start_ms);
-                        if dur_ms <= 300 && moved_sq <= 36.0 {
-                            let tapped = TapRecord { ts_ms: ms, x, y };
-                            if let Some(prev) = self.last_tap {
-                                let dt = tapped.ts_ms.saturating_sub(prev.ts_ms);
-                                let dx = tapped.x - prev.x;
-                                let dy = tapped.y - prev.y;
-                                if dt <= 360 && (dx * dx + dy * dy) <= 144.0 {
-                                    result.double_tap = true;
-                                }
-                            }
-                            self.last_tap = Some(tapped);
-                        }
-                        self.active = None;
-                    }
-                }
-                if phase == 3 {
-                    self.active = None;
-                }
-            }
-            _ => {}
-        }
-        result
-    }
 }
 
 struct AppState {
@@ -2793,24 +2593,6 @@ extern "C" fn pointer_cb(x: f32, y: f32, dx: f32, dy: f32, buttons: u32, _mods: 
     });
 }
 
-fn touch_phase_from_raw(phase: u32) -> Option<oxide_platform_api::TouchPhase> {
-    match phase {
-        0 => Some(oxide_platform_api::TouchPhase::Start),
-        1 => Some(oxide_platform_api::TouchPhase::Move),
-        2 => Some(oxide_platform_api::TouchPhase::End),
-        3 => Some(oxide_platform_api::TouchPhase::Cancel),
-        _ => None,
-    }
-}
-
-fn pointer_device_from_raw(device: u32) -> oxide_platform_api::PointerDevice {
-    match device {
-        1 => oxide_platform_api::PointerDevice::Pencil,
-        2 => oxide_platform_api::PointerDevice::Mouse,
-        _ => oxide_platform_api::PointerDevice::Finger,
-    }
-}
-
 extern "C" fn touch_cb(
     id: u64,
     phase: u32,
@@ -2848,7 +2630,7 @@ extern "C" fn touch_cb(
         touch_log(&format!(
             "rust callback touch decoded id={id} phase={phase} x={x:.1} y={y:.1} device={device}"
         ));
-        let result = app.touch.on_event(id, phase, x, y, ts_ns);
+        let result = app.touch.on_touch(&touch_event, ts_ns);
         touch_log(&format!(
             "rust callback touch generic result pointer={} double_tap={}",
             result.pointer.is_some(),
@@ -3571,60 +3353,8 @@ fn gen_checker_rgba(w: u32, h: u32) -> (u32, u32, Vec<u8>) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn primary_touch_tracks_pointer_motion() {
-        let mut tracker = PrimaryTouchTracker::default();
-        let start = tracker.on_event(42, 0, 10.0, 20.0, 10);
-        let start_ptr = start.pointer.expect("pointer on start");
-        assert_eq!(start_ptr.buttons, 1);
-        let move_ev = tracker.on_event(42, 1, 12.5, 25.0, 20);
-        let ptr = move_ev.pointer.expect("pointer on move");
-        assert!((ptr.dx - 2.5).abs() < 1e-4);
-        assert!((ptr.dy - 5.0).abs() < 1e-4);
-        assert_eq!(ptr.buttons, 1);
-        let end = tracker.on_event(42, 2, 13.0, 26.0, 30);
-        let ptr_end = end.pointer.expect("pointer on end");
-        assert_eq!(ptr_end.buttons, 0);
-        assert!(!end.double_tap);
-    }
-
-    #[test]
-    fn primary_touch_detects_double_tap() {
-        let mut tracker = PrimaryTouchTracker::default();
-        let first_start = tracker.on_event(1, 0, 0.0, 0.0, 0);
-        assert!(first_start.pointer.is_some());
-        let first_end = tracker.on_event(1, 2, 1.0, 1.0, 150_000_000);
-        assert!(!first_end.double_tap);
-        let second_start = tracker.on_event(2, 0, 0.0, 0.0, 260_000_000);
-        assert!(second_start.pointer.is_some());
-        let second_end = tracker.on_event(2, 2, 1.0, 1.0, 340_000_000);
-        assert!(second_end.double_tap);
-    }
-
-    #[test]
-    fn apply_camera_render_mode_updates_state_after_success() {
-        let mut app = AppState::default();
-        assert_eq!(
-            apply_camera_render_mode(&mut app, metal::CameraRenderMode::BgraBenchmark, 0),
-            0
-        );
-        assert_eq!(app.camera_render_mode, metal::CameraRenderMode::BgraBenchmark);
-    }
-
-    #[test]
-    fn apply_camera_render_mode_preserves_existing_mode_after_preview_pixel_format_failure() {
-        let mut app = AppState::default();
-        app.camera_render_mode = metal::CameraRenderMode::Nv12Legacy;
-        assert_eq!(
-            apply_camera_render_mode(&mut app, metal::CameraRenderMode::BgraBenchmark, -1),
-            -1
-        );
-        assert_eq!(app.camera_render_mode, metal::CameraRenderMode::Nv12Legacy);
-    }
-}
+#[path = "../tests/unit/internal_camera_render_mode.rs"]
+mod internal_camera_render_mode_tests;
 #[cfg(target_os = "ios")]
 extern "C" {
     fn oxide_host_ios_log(ptr: *const ::libc::c_char, len: usize);

@@ -11,29 +11,49 @@
 
 ## Entry points list
 - `IosCameraManager`
-  Generic iOS camera manager for native preview planes, app-visible frame streams, photo capture, recording, and camera-scene texture export. When the optional `native-camera-bridge` feature is enabled, the crate also compiles the Objective-C camera bridge it binds to.
+  Alias for the shared `AppleCameraManager`, covering native preview leases, app-visible frame streams, audio samples, photo capture, recording, and camera-scene texture export. When the optional `native-camera-bridge` feature is enabled, the crate also compiles the iOS Objective-C AVFoundation bridge it binds to.
 - Shared native bridges
-  `src/ios/bluetooth.m`, `src/ios/host_services.m`, `src/ios/network.m`, and `src/ios/push.m` now provide the shared Objective-C ownership for generic BLE, clipboard/haptics/permissions/open-URL helpers, QUIC/reachability, and APNs plumbing used by both Oxide host apps and downstream apps such as Nametag.
+  `../platform-apple/src/apple/bluetooth.m`, `../platform-apple/src/apple/http.m`, `../platform-apple/src/apple/secure_storage.m`, `src/ios/host_services.m`, `src/ios/network.m`, and `src/ios/push.m` now provide shared Objective-C ownership for generic BLE, HTTP, secure storage, clipboard/haptics/permissions/open-URL helpers, QUIC/reachability, and APNs plumbing used by Oxide host apps and downstream apps such as Nametag.
 - `IosMediaLibraryManager`
-  Generic Photos asset query/load bridge, including raw BGRA image extraction for app-specific post-processing.
+  Alias for the shared `AppleMediaLibraryManager`, including raw BGRA image extraction for app-specific post-processing.
 - `IosTelephonyService`
   Generic carrier/home-country ISO lookup service.
 - `IosSecureStorage`
-  Generic iOS Keychain-backed secure save/load/delete service.
+  Alias for the shared `AppleSecureStorage` wrapper; the shared Apple native Keychain source owns the save/load/delete ABI.
+- `IosHttpClient`
+  Alias for the shared `AppleHttpClient` wrapper; the shared Apple native HTTP source owns the URLSession bridge.
+- `IosLocation`
+  Alias for the shared `AppleLocationService`; the iOS native CoreLocation file still owns delegate delivery.
+- `IosMotion`
+  Alias for the shared `AppleMotionService`; the iOS native motion file still owns sample delivery.
+- `IosPushManager`
+  Alias for the shared `ApplePushManager`; the iOS native push file still owns APNs registration and UserNotifications delegate delivery.
+- `IosBluetooth`
+  Alias for the shared `AppleBluetooth`; the shared Apple native CoreBluetooth file owns manager/delegate delivery.
 - `IosTime`
   Monotonic clock bridge for animation/runtime timing.
 
 ## Logic narrative
-- `IosCameraManager` now owns the shared iOS camera bridge that downstream apps such as Nametag consume, so app crates should only keep app-specific review/policy hooks above this layer instead of duplicating AVFoundation camera control code locally.
+- `IosCameraManager` is an alias for the shared Apple camera Rust manager; iOS keeps the native Objective-C AVFoundation bridge and platform-specific preview-layer behavior behind the shared ABI.
 - Native preview streams increment a separate preview lease count and start the host bridge with frame delivery disabled. If an app-visible stream starts while a native preview is active, the bridge restarts with frame callbacks; when the last app-visible subscriber leaves, the bridge downgrades back to native-preview-only capture when preview leases remain.
 - `host_services.m` now owns the shared clipboard, haptics, and permission/update plumbing so host apps can keep only app-shell behavior locally instead of carrying parallel Objective-C utility bridges.
 - Media-library permission status remains lazy until an explicit Photos request, and the cached Oxide status is kept separate from the legacy Nametag status because limited Photos access has different status codes across those bridges.
 - The native CoreLocation bridge keeps delegate-owned cached location state on the main queue; synchronous reads of the last sample also cross that queue so `LocationService: Send + Sync` callers do not race the delegate callback.
+- Rust-side location callback fanout, bounded history, last-sample caching, and geofence-region tracking live in `oxide-platform-apple` and are shared with macOS.
+- Rust-side motion callback fanout and bounded pressure history live in `oxide-platform-apple` and are shared with macOS.
 - The Network.framework transport bridge honors forced TCP/TLS selection across every retry, because retrying the QUIC parameter set after a forced TCP/TLS failure would silently change the caller-requested transport.
-- The HTTP bridge uses the same native byte-copy path for response bodies and UTF-8 metadata so zero-length outputs and Rust-owned buffer handoff share one implementation.
+- Reachability path decoding is shared with macOS through `oxide-platform-apple` so Wi-Fi, cellular, wired, and other path kinds map consistently across Apple hosts.
+- Permission domain/status raw-code mapping is shared with macOS through `oxide-platform-apple`; native permission prompts remain platform-specific.
+- The HTTP bridge is compiled from `oxide-platform-apple/src/apple/http.m` so iOS and macOS use the same native byte-copy path for response bodies and UTF-8 metadata, while iOS-specific multipath behavior stays platform-gated.
 - Each service owns the platform-specific FFI contract and converts host return codes into `PlatformError`.
-- `IosSecureStorage` exposes sync helper methods plus the async `SecureStorage` trait adapter so both direct platform usage and callback-registry compatibility shims share one implementation.
+- `IosSecureStorage` is an alias for the shared `AppleSecureStorage` wrapper and uses the shared Apple native Keychain host ABI behind it.
+- `IosHttpClient` is an alias for the shared `AppleHttpClient` wrapper and uses the shared Apple native HTTP host ABI behind it.
+- `IosLocation` and `IosMotion` are aliases for shared Apple Rust services; iOS keeps only the native CoreLocation/CoreMotion host ABI behind them.
+- `IosMediaLibraryManager` is an alias for the shared Apple media-library Rust service; iOS keeps only the native/media host ABI behind it.
 - `IosMediaLibraryManager` keeps the generic asset query/load path in Oxide, while app crates can still layer app-specific crop/runtime-image logic above the raw BGRA helper.
+- `IosPushManager` is an alias for the shared Apple push manager; iOS keeps only the native APNs/UserNotifications host ABI behind it.
+- `IosBluetooth` is an alias for the shared Apple Bluetooth manager; iOS compiles the shared CoreBluetooth bridge from `oxide-platform-apple` and keeps the legacy Nametag permission callback only on iOS.
+- Camera stream subscriber state, audio subscriber detection, recording/photo callback fanout, and format recommendation helpers live in `oxide-platform-apple` and are shared with macOS.
 
 ## Preconditions and postconditions
 - Host `oxide_*` FFI exports must be installed and ABI-compatible with the Rust declarations in this crate.
@@ -47,8 +67,17 @@
 ## Testing and benchmarks
 - Validated indirectly through downstream workspace builds/tests that consume these services.
 - `tests/network_bridge_tests.rs` checks Objective-C bridge invariants that are difficult to exercise without a real Network.framework endpoint, including forced TCP/TLS retry routing.
+- `tests/camera_capture_mode_tests.rs` checks the shared Apple camera start-mode invariant from `crates/platform-apple/src/lib.rs`.
 
 ## Changelog
+- 2026-05-19: moved the iOS native Keychain secure-storage bridge into shared `oxide-platform-apple`.
+- 2026-05-19: moved the iOS native HTTP URLSession bridge into shared `oxide-platform-apple`.
+- 2026-05-19: replaced the local Rust camera manager with the shared `AppleCameraManager` alias while keeping the iOS native camera bridge platform-specific.
+- 2026-05-19: moved iOS Bluetooth Rust manager and native CoreBluetooth source into shared `oxide-platform-apple`.
+- 2026-05-19: moved iOS push Rust manager behavior into shared `oxide-platform-apple`.
+- 2026-05-19: moved iOS media-library Rust service behavior into shared `oxide-platform-apple`.
+- 2026-05-19: moved iOS location/motion Rust service state into shared `oxide-platform-apple` aliases.
+- 2026-05-19: moved secure-storage and HTTP Rust ABI handling plus Apple reachability and permission-code decoding into `oxide-platform-apple`.
 - 2026-05-17: compacted the platform-iOS build source selection, HTTP bridge response-copy paths, and TLS/ALPN option setup.
 - 2026-05-17: kept forced TCP/TLS Network.framework retries on TLS parameters instead of falling through to the generic QUIC retry path.
 - 2026-05-15: added the native camera preview stream path that can run `AVCaptureVideoPreviewLayer` presentation without app-visible camera frame callbacks, while preserving full frame streams for capture and pixel-processing callers.

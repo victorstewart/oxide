@@ -10,6 +10,9 @@ The snapshot tests validate renderer behavior through readback instead of relyin
 - Clip-stack behavior.
 - Invalid solid-mesh index rejection.
 - Mixed `scene3d` plus 2D overlay composition in the same frame.
+- Optimized NV12 camera preview parity against the synthetic BGRA benchmark reference.
+
+The pure 2D tests assert Oxide's default opaque black Metal clear on untouched pixels. Snapshot-runner component goldens that need white backgrounds draw that background explicitly in their own draw lists.
 
 ## Mixed 2D/3D snapshot
 

@@ -269,6 +269,39 @@ fn replay_skips_invalid_solid_vertex_span() {
 }
 
 #[test]
+fn replay_rebases_absolute_image_mesh_indices_to_translated_span() {
+    let mut list = DrawList::default();
+    list.vertices.extend_from_slice(&[
+        Vertex { x: -100.0, y: -100.0, u: 0.0, v: 0.0, rgba: u32::MAX },
+        Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: u32::MAX },
+        Vertex { x: 4.0, y: 0.0, u: 1.0, v: 0.0, rgba: u32::MAX },
+        Vertex { x: 0.0, y: 4.0, u: 0.0, v: 1.0, rgba: u32::MAX },
+        Vertex { x: 4.0, y: 4.0, u: 1.0, v: 1.0, rgba: u32::MAX },
+    ]);
+    list.indices.extend_from_slice(&[1, 2, 3, 3, 2, 4]);
+    list.items.push(DrawCmd::ImageMesh {
+        tex: ImageHandle(22),
+        vb: VertexSpan { offset: 1, len: 4 },
+        ib: IndexSpan { offset: 0, len: 6 },
+        alpha: 0.65,
+    });
+
+    let mut encoder = RecordingEncoder::default();
+    replay_drawlist(&list, &mut encoder, RectI::new(0, 0, 20, 20), [6.0, 7.0]);
+
+    assert_eq!(encoder.image_meshes.len(), 1);
+    let (tex, vertices, indices, alpha) = &encoder.image_meshes[0];
+    assert_eq!(*tex, ImageHandle(22));
+    assert_eq!(indices, &[0, 1, 2, 2, 1, 3]);
+    assert!(approx_eq(*alpha, 0.65));
+    assert_eq!(vertices.len(), 4);
+    assert!(approx_eq(vertices[0].x, 6.0));
+    assert!(approx_eq(vertices[0].y, 7.0));
+    assert!(approx_eq(vertices[3].x, 10.0));
+    assert!(approx_eq(vertices[3].y, 11.0));
+}
+
+#[test]
 fn replay_recovers_from_unbalanced_clip_stack() {
     let mut list = DrawList::default();
     list.items.push(DrawCmd::ClipPush { rect: RectI::new(2, 3, 4, 5) });

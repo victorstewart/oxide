@@ -1,13 +1,16 @@
 #import <Foundation/Foundation.h>
 #import <CoreBluetooth/CoreBluetooth.h>
+#import <TargetConditionals.h>
 #import <uuid/uuid.h>
 #import <dispatch/dispatch.h>
 #import <stdbool.h>
 #import <stdint.h>
 #import <stdlib.h>
 
+#if TARGET_OS_IPHONE
 extern void nametag_host_update_permission(int32_t domain, int32_t status)
    __attribute__((weak_import));
+#endif
 extern void oxide_host_emit_perm(uint32_t domain, uint32_t status)
    __attribute__((weak_import));
 extern void oxide_host_ble_emit_state(uint32_t state)
@@ -27,8 +30,10 @@ extern void oxide_host_ble_emit_notified(const uint8_t *id,
                                          size_t len)
    __attribute__((weak_import));
 
-static const int32_t kNametagPermissionDomainBluetooth = 4;
 static const uint32_t kOxidePermissionDomainBluetooth = 4;
+#if TARGET_OS_IPHONE
+static const int32_t kNametagPermissionDomainBluetooth = 4;
+#endif
 static const int64_t kNametagBleRequestTimeoutNs = 5LL * NSEC_PER_SEC;
 
 typedef __uint128_t nametag_uint128_t;
@@ -271,11 +276,13 @@ static void publish_bluetooth_permission(CBCentralManager *central)
    (void)central;
    CBManagerAuthorization authorization = CBManager.authorization;
    int32_t nametag_status = nametag_bluetooth_status_code(authorization);
+#if TARGET_OS_IPHONE
    if (nametag_host_update_permission != NULL)
    {
       nametag_host_update_permission(kNametagPermissionDomainBluetooth,
                                      nametag_status);
    }
+#endif
    if (oxide_host_emit_perm != NULL)
    {
       oxide_host_emit_perm(kOxidePermissionDomainBluetooth,

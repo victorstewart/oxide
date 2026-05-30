@@ -50,8 +50,11 @@ fn configure_clear_store_attachments(
 struct RasterGpuParams {
     mask_size: [f32; 2],
     use_world_position: f32,
-    _pad: f32,
+    visible_hemisphere: f32,
     world_to_clip: [[f32; 4]; 4],
+    model_to_world: [[f32; 4]; 4],
+    camera_eye_front_min: [f32; 4],
+    normal_scale: [f32; 4],
 }
 
 #[repr(C)]
@@ -325,8 +328,11 @@ impl MetalRenderer {
 
         self.ensure_target();
         let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
-        let targets =
-            self.ensure_id_mask_render_targets(slot, pass.raster.mask_width, pass.raster.mask_height)?;
+        let targets = self.ensure_id_mask_render_targets(
+            slot,
+            pass.raster.mask_width,
+            pass.raster.mask_height,
+        )?;
         let vertex_bytes = pass
             .raster
             .vertices
@@ -349,8 +355,21 @@ impl MetalRenderer {
         let params = RasterGpuParams {
             mask_size: [pass.raster.mask_width as f32, pass.raster.mask_height as f32],
             use_world_position: if pass.raster.projection.use_world_position { 1.0 } else { 0.0 },
-            _pad: 0.0,
+            visible_hemisphere: if pass.raster.projection.visible_hemisphere { 1.0 } else { 0.0 },
             world_to_clip: pass.raster.projection.world_to_clip,
+            model_to_world: pass.raster.projection.model_to_world,
+            camera_eye_front_min: [
+                pass.raster.projection.camera_eye_unit[0],
+                pass.raster.projection.camera_eye_unit[1],
+                pass.raster.projection.camera_eye_unit[2],
+                pass.raster.projection.visible_front_min,
+            ],
+            normal_scale: [
+                pass.raster.projection.normal_scale[0],
+                pass.raster.projection.normal_scale[1],
+                pass.raster.projection.normal_scale[2],
+                0.0,
+            ],
         };
 
         let cmd = self.ensure_frame_command_buffer(slot);
@@ -398,9 +417,19 @@ impl MetalRenderer {
                 _pad: 0.0,
             };
             let (src_city, src_seam, dst_city, dst_seam) = if src_is_a {
-                (&targets.city_field_a, &targets.seam_field_a, &targets.city_field_b, &targets.seam_field_b)
+                (
+                    &targets.city_field_a,
+                    &targets.seam_field_a,
+                    &targets.city_field_b,
+                    &targets.seam_field_b,
+                )
             } else {
-                (&targets.city_field_b, &targets.seam_field_b, &targets.city_field_a, &targets.seam_field_a)
+                (
+                    &targets.city_field_b,
+                    &targets.seam_field_b,
+                    &targets.city_field_a,
+                    &targets.seam_field_a,
+                )
             };
             let rpd = RenderPassDescriptor::new();
             configure_clear_store_attachments(&rpd, dst_city, dst_seam);
@@ -418,12 +447,11 @@ impl MetalRenderer {
             src_is_a = !src_is_a;
             jump /= 2;
         }
-        let (city_field_tex, seam_field_tex) =
-            if src_is_a {
-                (&targets.city_field_a, &targets.seam_field_a)
-            } else {
-                (&targets.city_field_b, &targets.seam_field_b)
-            };
+        let (city_field_tex, seam_field_tex) = if src_is_a {
+            (&targets.city_field_a, &targets.seam_field_a)
+        } else {
+            (&targets.city_field_b, &targets.seam_field_b)
+        };
 
         self.encode_id_mask_compositor_textures(
             pass.raster.viewport,

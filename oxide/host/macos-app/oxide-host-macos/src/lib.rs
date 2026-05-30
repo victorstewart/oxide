@@ -22,6 +22,8 @@ pub extern "C" fn rust_entry() -> ::libc::c_int {
 
 // ===== App state: renderer + scenes router =====
 
+use oxide_input::{touch_phase_from_raw, PrimaryTouchTracker};
+use oxide_platform_api as platform_api;
 use oxide_renderer_api as gfx_api;
 use oxide_renderer_api::Renderer;
 use oxide_renderer_metal as metal;
@@ -34,7 +36,7 @@ use oxide_test_scenes as test_scenes;
 use oxide_text as text;
 use oxide_timing as timing;
 use oxide_ui_core as ui;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 struct MtlUploader {
     renderer: *mut metal::MetalRenderer,
@@ -65,6 +67,7 @@ struct AppState {
     renderer: Option<Box<metal::MetalRenderer>>,
     router: Option<test_scenes::Router<MtlUploader>>,
     builder: ui::DrawListBuilder,
+    touch: PrimaryTouchTracker,
     last_ms: u64,
     inited: bool,
     space_down: bool,
@@ -85,8 +88,19 @@ fn app_state() -> &'static Mutex<AppState> {
     APP.get_or_init(|| Mutex::new(AppState::default()))
 }
 
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn with_app_mut<R>(f: impl FnOnce(&mut AppState) -> R) -> Option<R> {
-    APP.get().and_then(|mtx| mtx.lock().ok()).map(|mut guard| f(&mut guard))
+    APP.get().map(|mtx| {
+        let mut guard = lock_or_recover(mtx);
+        f(&mut guard)
+    })
+}
+
+fn callback_value<T: Copy>(cell: &OnceLock<Mutex<Option<T>>>) -> Option<T> {
+    cell.get().and_then(|mutex| *lock_or_recover(mutex))
 }
 
 const IDLE_SETTLE_FRAMES: u8 = 2;
@@ -98,10 +112,11 @@ fn mark_frame_dirty(app: &mut AppState) {
 
 #[no_mangle]
 pub extern "C" fn macos_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_int {
-    let mut app = app_state().lock().expect("app mutex");
+    let mut app = lock_or_recover(app_state());
     if app.inited {
         return 0;
     }
+    let _platform = oxide_platform_macos::install_current_platform();
     let mut renderer = match metal::MetalRenderer::new_default() {
         Ok(r) => r,
         Err(_) => return -1,
@@ -147,6 +162,7 @@ pub extern "C" fn macos_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_int {
         macos_set_idle_timer_disabled(1);
     }
     // Register input callbacks to route events to the router
+    macos_set_touch_callback(Some(touch_cb));
     macos_set_pointer_callback(Some(pointer_cb));
     macos_set_pinch_callback(Some(pinch_cb));
     macos_set_rotate_callback(Some(rotate_cb));
@@ -196,7 +212,7 @@ pub struct HostHarnessSnapshot {
 
 #[cfg(feature = "host-testing")]
 pub fn host_harness_reset() {
-    let mut app = app_state().lock().expect("app mutex");
+    let mut app = lock_or_recover(app_state());
     app.router = None;
     app.renderer = None;
     app.telemetry = None;
@@ -206,11 +222,13 @@ pub fn host_harness_reset() {
     app.reduce_motion_on = false;
     app.idle_disabled = false;
     app.last_ms = 0;
+    app.touch = PrimaryTouchTracker::default();
     app.builder.clear();
     app.frame_dirty = true;
     app.settle_frames_remaining = IDLE_SETTLE_FRAMES;
     app.idle_skipped_frames = 0;
     app.submitted_frames = 0;
+    platform_api::clear_current_platform_for_tests();
     unsafe {
         macos_set_idle_timer_disabled(0);
     }
@@ -223,7 +241,7 @@ pub fn host_harness_reset() {
 
 #[cfg(feature = "host-testing")]
 pub fn host_harness_snapshot() -> HostHarnessSnapshot {
-    let app = app_state().lock().expect("app mutex");
+    let app = lock_or_recover(app_state());
     let mut snap = HostHarnessSnapshot::default();
     snap.inited = app.inited;
     snap.last_ms = app.last_ms;
@@ -269,7 +287,7 @@ pub extern "C" fn macos_app_frame(w: u32, h: u32, scale: f32) -> ::libc::c_int {
 
 #[no_mangle]
 pub extern "C" fn macos_app_should_render() -> u8 {
-    let mut app = app_state().lock().expect("app mutex");
+    let mut app = lock_or_recover(app_state());
     if !app.inited {
         return 1;
     }
@@ -298,7 +316,7 @@ fn macos_app_frame_inner(
     scale: f32,
     drawable_ptr: *mut ::libc::c_void,
 ) -> ::libc::c_int {
-    let mut app = app_state().lock().expect("app mutex");
+    let mut app = lock_or_recover(app_state());
     if !app.inited {
         return -1;
     }
@@ -468,6 +486,34 @@ fn gen_checker_rgba(w: u32, h: u32) -> (u32, u32, Vec<u8>) {
 }
 
 // ===== Internal input handlers wired at init =====
+
+extern "C" fn touch_cb(id: u64, phase: u32, x: f32, y: f32, ts_ns: u64) {
+    if let Some(mut app) = APP.get().map(|m| m.lock().ok()).flatten() {
+        let Some(touch_phase) = touch_phase_from_raw(phase) else {
+            return;
+        };
+        let touch_event = platform_api::TouchEvent {
+            id: platform_api::TouchId(id),
+            phase: touch_phase,
+            x,
+            y,
+            pressure: None,
+            tilt: None,
+            device: platform_api::PointerDevice::Mouse,
+        };
+        let result = app.touch.on_touch(&touch_event, ts_ns);
+        if let Some(router) = app.router.as_mut() {
+            router.input_touch(&touch_event);
+            if let Some(ptr) = result.pointer {
+                router.input_pointer(ptr.x, ptr.y, ptr.dx, ptr.dy, ptr.buttons);
+            }
+            if result.double_tap {
+                router.input_double_tap();
+            }
+        }
+        mark_frame_dirty(&mut app);
+    }
+}
 
 extern "C" fn pointer_cb(x: f32, y: f32, dx: f32, dy: f32, _buttons: u32, _mods: u32, _ts: u64) {
     if let Some(mut app) = APP.get().map(|m| m.lock().ok()).flatten() {
@@ -727,22 +773,22 @@ static KEY_CB: std::sync::OnceLock<std::sync::Mutex<Option<KeyCb>>> = std::sync:
 #[no_mangle]
 pub extern "C" fn macos_set_touch_callback(cb: Option<TouchCb>) {
     let slot = TOUCH_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *slot.lock().expect("touch cb mutex") = cb;
+    *lock_or_recover(slot) = cb;
 }
 #[no_mangle]
 pub extern "C" fn macos_set_pointer_callback(cb: Option<PointerCb>) {
     let slot = POINTER_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *slot.lock().expect("pointer cb mutex") = cb;
+    *lock_or_recover(slot) = cb;
 }
 #[no_mangle]
 pub extern "C" fn macos_set_key_callback(cb: Option<KeyCb>) {
     let slot = KEY_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *slot.lock().expect("key cb mutex") = cb;
+    *lock_or_recover(slot) = cb;
 }
 
 #[no_mangle]
 pub extern "C" fn macos_emit_touch(id: u64, phase: u32, x: f32, y: f32, ts_ns: u64) {
-    if let Some(cb) = TOUCH_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&TOUCH_CB) {
         cb(id, phase, x, y, ts_ns);
     }
 }
@@ -756,7 +802,7 @@ pub extern "C" fn macos_emit_pointer(
     modifiers: u32,
     ts_ns: u64,
 ) {
-    if let Some(cb) = POINTER_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&POINTER_CB) {
         cb(x, y, dx, dy, buttons, modifiers, ts_ns);
     }
 }
@@ -769,7 +815,7 @@ pub extern "C" fn macos_emit_key(
     modifiers: u32,
     ts_ns: u64,
 ) {
-    if let Some(cb) = KEY_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&KEY_CB) {
         cb(code, chars_ptr, chars_len, repeat, modifiers, ts_ns);
     }
 }
@@ -789,34 +835,34 @@ static TEXT_SELECT_CB: std::sync::OnceLock<std::sync::Mutex<Option<TextSelection
 #[no_mangle]
 pub extern "C" fn macos_set_text_commit_callback(cb: Option<TextCommitCb>) {
     let slot = TEXT_COMMIT_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *slot.lock().expect("commit cb mutex") = cb;
+    *lock_or_recover(slot) = cb;
 }
 #[no_mangle]
 pub extern "C" fn macos_set_text_composition_callback(cb: Option<TextCompositionCb>) {
     let slot = TEXT_COMPOSE_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *slot.lock().expect("compose cb mutex") = cb;
+    *lock_or_recover(slot) = cb;
 }
 #[no_mangle]
 pub extern "C" fn macos_set_text_selection_callback(cb: Option<TextSelectionCb>) {
     let slot = TEXT_SELECT_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *slot.lock().expect("select cb mutex") = cb;
+    *lock_or_recover(slot) = cb;
 }
 
 #[no_mangle]
 pub extern "C" fn macos_emit_text_commit(ptr: *const u8, len: usize) {
-    if let Some(cb) = TEXT_COMMIT_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&TEXT_COMMIT_CB) {
         cb(ptr, len);
     }
 }
 #[no_mangle]
 pub extern "C" fn macos_emit_text_composition(start: u32, end: u32, ptr: *const u8, len: usize) {
-    if let Some(cb) = TEXT_COMPOSE_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&TEXT_COMPOSE_CB) {
         cb(start, end, ptr, len);
     }
 }
 #[no_mangle]
 pub extern "C" fn macos_emit_text_selection(start: u32, end: u32) {
-    if let Some(cb) = TEXT_SELECT_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&TEXT_SELECT_CB) {
         cb(start, end);
     }
 }
@@ -859,23 +905,23 @@ static ROTATE_CB: std::sync::OnceLock<std::sync::Mutex<Option<RotateCb>>> =
 #[no_mangle]
 pub extern "C" fn macos_set_pinch_callback(cb: Option<PinchCb>) {
     let s = PINCH_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *s.lock().unwrap() = cb;
+    *lock_or_recover(s) = cb;
 }
 #[no_mangle]
 pub extern "C" fn macos_set_rotate_callback(cb: Option<RotateCb>) {
     let s = ROTATE_CB.get_or_init(|| std::sync::Mutex::new(None));
-    *s.lock().unwrap() = cb;
+    *lock_or_recover(s) = cb;
 }
 
 #[no_mangle]
 pub extern "C" fn macos_emit_pinch(cx: f32, cy: f32, delta: f32, ts_ns: u64) {
-    if let Some(cb) = PINCH_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&PINCH_CB) {
         cb(cx, cy, delta, ts_ns);
     }
 }
 #[no_mangle]
 pub extern "C" fn macos_emit_rotate(cx: f32, cy: f32, radians: f32, ts_ns: u64) {
-    if let Some(cb) = ROTATE_CB.get().and_then(|m| *m.lock().unwrap()) {
+    if let Some(cb) = callback_value(&ROTATE_CB) {
         cb(cx, cy, radians, ts_ns);
     }
 }

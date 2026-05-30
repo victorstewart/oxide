@@ -22,8 +22,11 @@ struct IdMaskRasterParams
 {
   float2 mask_size;
   float use_world_position;
-  float _pad0;
+  float visible_hemisphere;
   float4x4 world_to_clip;
+  float4x4 model_to_world;
+  float4 camera_eye_front_min;
+  float4 normal_scale;
 };
 
 struct IdMaskRasterVertexIn
@@ -43,6 +46,9 @@ struct IdMaskRasterOut
   float4 position [[position]];
   uint city_id [[flat]];
   uint neighborhood_id [[flat]];
+  float frontness;
+  float visible_hemisphere;
+  float visible_front_min;
 };
 
 struct IdMaskRasterTargets
@@ -82,9 +88,18 @@ vertex IdMaskRasterOut v_id_mask_raster(uint vid [[vertex_id]],
 {
   IdMaskRasterVertexIn vtx = vertices[vid];
   IdMaskRasterOut out;
+  out.frontness = 1.0;
+  out.visible_hemisphere = params.visible_hemisphere;
+  out.visible_front_min = params.camera_eye_front_min.w;
   if (params.use_world_position > 0.5)
   {
-    out.position = params.world_to_clip * float4(vtx.position_world);
+    float4 position_world = float4(vtx.position_world);
+    out.position = params.world_to_clip * position_world;
+    if (params.visible_hemisphere > 0.5)
+    {
+      float3 normal = normalize((params.model_to_world * position_world).xyz * params.normal_scale.xyz);
+      out.frontness = dot(normal, normalize(params.camera_eye_front_min.xyz));
+    }
   }
   else
   {
@@ -99,6 +114,9 @@ vertex IdMaskRasterOut v_id_mask_raster(uint vid [[vertex_id]],
 
 fragment IdMaskRasterTargets f_id_mask_raster(IdMaskRasterOut in [[stage_in]])
 {
+  if (in.visible_hemisphere > 0.5 && in.frontness < in.visible_front_min) {
+    discard_fragment();
+  }
   IdMaskRasterTargets out;
   out.city = uint4(in.city_id, 0u, 0u, 1u);
   out.neighborhood = uint4(in.neighborhood_id, 0u, 0u, 1u);

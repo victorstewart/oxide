@@ -244,10 +244,9 @@ pub trait RenderEncoder {
         &mut self,
         img: ImageHandle,
         vertices: &[Vertex],
-        indices: &[u16],
-        alpha: f32,
+        _indices: &[u16],
+        _alpha: f32,
     ) {
-        let _ = (indices, alpha);
         let Some(bounds) = vertex_bounds(vertices) else {
             return;
         };
@@ -284,8 +283,7 @@ pub trait RenderEncoder {
     fn draw_topomap_globe(&mut self, _rect: RectF) {}
     fn draw_spinner(&mut self, center: [f32; 2], atom: f32, alpha: f32);
     fn draw_glyph_run(&mut self, run: &GlyphRun);
-    fn draw_glyph_run_resolved(&mut self, run: &GlyphRun, vertices: &[Vertex], indices: &[u16]) {
-        let _ = (vertices, indices);
+    fn draw_glyph_run_resolved(&mut self, run: &GlyphRun, _vertices: &[Vertex], _indices: &[u16]) {
         self.draw_glyph_run(run);
     }
 }

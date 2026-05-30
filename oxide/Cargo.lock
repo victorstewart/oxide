@@ -760,6 +760,7 @@ dependencies = [
  "cc",
  "libc",
  "mach2",
+ "oxide-input",
  "oxide-networking",
  "oxide-perf-runner",
  "oxide-permissions",
@@ -781,6 +782,9 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "libc",
+ "oxide-input",
+ "oxide-platform-api",
+ "oxide-platform-macos",
  "oxide-renderer-api",
  "oxide-renderer-metal",
  "oxide-telemetry",
@@ -869,6 +873,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxide-platform-apple"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "once_cell",
+ "oxide-networking",
+ "oxide-platform-api",
+ "serde_json",
+]
+
+[[package]]
 name = "oxide-platform-ios"
 version = "0.1.0"
 dependencies = [
@@ -879,9 +894,19 @@ dependencies = [
  "once_cell",
  "oxide-networking",
  "oxide-platform-api",
+ "oxide-platform-apple",
  "serde",
- "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "oxide-platform-macos"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "once_cell",
+ "oxide-platform-api",
+ "oxide-platform-apple",
 ]
 
 [[package]]

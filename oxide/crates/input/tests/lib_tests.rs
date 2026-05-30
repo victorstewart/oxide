@@ -1,6 +1,6 @@
 use oxide_input::{
-    GestureConfig, GestureEvent, GestureOutcome, GestureRecognizer, ScrollAccumulator, ScrollPhase,
-    TouchSurfaceEvent, TouchSurfaceRecognizer,
+    GestureConfig, GestureEvent, GestureOutcome, GestureRecognizer, PrimaryTouchTracker,
+    ScrollAccumulator, ScrollPhase, TouchSurfaceEvent, TouchSurfaceRecognizer,
 };
 use oxide_platform_api as api;
 
@@ -373,4 +373,37 @@ fn touch_surface_cancel_removes_active_touch() {
         out,
         vec![TouchSurfaceEvent::ActiveTouchesChanged { touch_count: 0, x: 0.0, y: 0.0 }]
     );
+}
+
+#[test]
+fn primary_touch_tracks_pointer_motion() {
+    let mut tracker = PrimaryTouchTracker::default();
+    let start = tracker.on_touch(&start(42, 10.0, 20.0), 10);
+    let start_ptr = start.pointer.expect("pointer on start");
+    assert_eq!(start_ptr.buttons, 1);
+
+    let move_ev = tracker.on_touch(&mv(42, 12.5, 25.0), 20);
+    let ptr = move_ev.pointer.expect("pointer on move");
+    assert!((ptr.dx - 2.5).abs() < 1e-4);
+    assert!((ptr.dy - 5.0).abs() < 1e-4);
+    assert_eq!(ptr.buttons, 1);
+
+    let end = tracker.on_touch(&end(42, 13.0, 26.0), 30);
+    let ptr_end = end.pointer.expect("pointer on end");
+    assert_eq!(ptr_end.buttons, 0);
+    assert!(!end.double_tap);
+}
+
+#[test]
+fn primary_touch_detects_double_tap() {
+    let mut tracker = PrimaryTouchTracker::default();
+    let first_start = tracker.on_touch(&start(1, 0.0, 0.0), 0);
+    assert!(first_start.pointer.is_some());
+    let first_end = tracker.on_touch(&end(1, 1.0, 1.0), 150_000_000);
+    assert!(!first_end.double_tap);
+
+    let second_start = tracker.on_touch(&start(2, 0.0, 0.0), 260_000_000);
+    assert!(second_start.pointer.is_some());
+    let second_end = tracker.on_touch(&end(2, 1.0, 1.0), 340_000_000);
+    assert!(second_end.double_tap);
 }

@@ -142,7 +142,12 @@ pub mod helpers {
                 -DELETE_WIGGLE_ROTATE_ANGLE_RAD,
                 DELETE_WIGGLE_ROTATE_ANGLE_RAD,
             ),
-            translation_y: sample_autoreversing(elapsed_ms, bounce_duration, DELETE_WIGGLE_BOUNCE_Y, 0.0),
+            translation_y: sample_autoreversing(
+                elapsed_ms,
+                bounce_duration,
+                DELETE_WIGGLE_BOUNCE_Y,
+                0.0,
+            ),
         }
     }
 

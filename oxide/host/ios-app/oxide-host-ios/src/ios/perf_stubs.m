@@ -217,45 +217,31 @@ void oxide_media_free_image_data(const uint8_t *data_ptr, size_t data_len) {
   (void)data_len;
 }
 
+int32_t oxide_media_load_video_file(const uint8_t *identifier_ptr,
+                                    size_t identifier_len,
+                                    const uint8_t **out_path_ptr,
+                                    size_t *out_path_len) {
+  (void)identifier_ptr;
+  (void)identifier_len;
+  if (out_path_ptr != NULL) {
+    *out_path_ptr = NULL;
+  }
+  if (out_path_len != NULL) {
+    *out_path_len = 0;
+  }
+  return 1;
+}
+
+void oxide_media_free_string(const uint8_t *data_ptr, size_t data_len) {
+  (void)data_ptr;
+  (void)data_len;
+}
+
 bool oxide_telephony_home_country_iso(char *buffer, size_t buffer_len) {
   if (buffer != NULL && buffer_len > 0) {
     buffer[0] = '\0';
   }
   return false;
-}
-
-int32_t oxide_secure_storage_save(const uint8_t *key_ptr, size_t key_len,
-                                  const uint8_t *data_ptr, size_t data_len) {
-  (void)key_ptr;
-  (void)key_len;
-  (void)data_ptr;
-  (void)data_len;
-  return 0;
-}
-
-int32_t oxide_secure_storage_load(const uint8_t *key_ptr, size_t key_len,
-                                  const uint8_t **out_data_ptr,
-                                  size_t *out_data_len) {
-  (void)key_ptr;
-  (void)key_len;
-  if (out_data_ptr != NULL) {
-    *out_data_ptr = NULL;
-  }
-  if (out_data_len != NULL) {
-    *out_data_len = 0;
-  }
-  return 1;
-}
-
-int32_t oxide_secure_storage_delete(const uint8_t *key_ptr, size_t key_len) {
-  (void)key_ptr;
-  (void)key_len;
-  return 1;
-}
-
-void oxide_secure_storage_free_data(const uint8_t *data_ptr, size_t data_len) {
-  (void)data_ptr;
-  (void)data_len;
 }
 
 int32_t oxide_url_can_open(const uint8_t *url_ptr, size_t url_len) {

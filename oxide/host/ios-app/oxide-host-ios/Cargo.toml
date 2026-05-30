@@ -13,6 +13,7 @@ crate-type = ["staticlib", "rlib"]
 cc = "1.0"
 
 [dependencies]
+oxide-input = { path = "../../../crates/input" }
 oxide-platform-ios = { path = "../../../crates/platform-ios", features = ["tokio-runtime", "native-camera-bridge"] }
 oxide-perf-runner = { path = "../../../crates/perf-runner" }
 oxide-renderer-metal = { path = "../../../crates/renderer-metal" }

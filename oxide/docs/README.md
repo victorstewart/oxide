@@ -5,7 +5,10 @@ This directory mirrors Rust source units with design notes, entry points, behavi
 ## Crates
 
 - [oxide-host-web](oxide-host-web/lib.md)
+- [oxide-host-ios](oxide-host-ios/lib.md)
+- [oxide-host-macos](oxide-host-macos/lib.md)
 - [perf-runner](perf-runner/lib.md)
+- [platform-apple](platform-apple/lib.md)
 - [platform-api](platform-api/lib.md)
 - [platform-ios](platform-ios/lib.md)
 - [platform-macos](platform-macos/lib.md)

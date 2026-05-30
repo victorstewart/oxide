@@ -13,9 +13,11 @@ fn main() {
     let mut build = cc::Build::new();
     build.flag("-fobjc-arc").flag("-fmodules").flag("-fcxx-modules");
     add_objc_source(&mut build, "src/ios/network.m");
+    add_objc_source(&mut build, "../platform-apple/src/apple/http.m");
+    add_objc_source(&mut build, "../platform-apple/src/apple/secure_storage.m");
     if target_os == "ios" {
         for source in [
-            "src/ios/bluetooth.m",
+            "../platform-apple/src/apple/bluetooth.m",
             "src/ios/location.m",
             "src/ios/motion.m",
             "src/ios/host_services.m",

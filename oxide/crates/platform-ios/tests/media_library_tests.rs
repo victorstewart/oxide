@@ -15,6 +15,18 @@ pub struct TestOxideImageData {
     row_bytes: usize,
 }
 
+#[repr(C)]
+pub struct TestOxideMediaAsset {
+    identifier_ptr: *const u8,
+    identifier_len: usize,
+    media_type: u8,
+    creation_date: u64,
+    duration_sec: f64,
+    width: u32,
+    height: u32,
+    file_size: u64,
+}
+
 fn reset_stub_state() {
     FULL_IMAGE_RGBA_CALLS.store(0, Ordering::SeqCst);
     THUMBNAIL_RGBA_CALLS.store(0, Ordering::SeqCst);
@@ -31,6 +43,75 @@ fn source_between<'a>(source: &'a str, start_marker: &str, end_marker: &str) -> 
     &source[start..end]
 }
 
+fn write_rgba_stub(ptr: *const u8, len: usize, expected: &str, out: *mut TestOxideImageData, rgba: [u8; 4])
+{
+   let identifier = unsafe {
+      std::str::from_utf8(std::slice::from_raw_parts(ptr, len)).expect("valid asset id")
+   };
+   assert_eq!(identifier, expected);
+   assert!(!out.is_null());
+
+   let mut bytes = rgba.to_vec();
+   let data_ptr = bytes.as_mut_ptr();
+   let data_len = bytes.len();
+   std::mem::forget(bytes);
+
+   unsafe {
+      (*out).data_ptr = data_ptr.cast_const();
+      (*out).data_len = data_len;
+      (*out).width = 1;
+      (*out).height = 1;
+      (*out).row_bytes = 4;
+   }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oxide_media_fetch_assets(
+    _media_type_mask: u8,
+    _limit: i32,
+    _ascending: u8,
+    out_assets: *mut *const TestOxideMediaAsset,
+    out_count: *mut usize,
+) -> i32 {
+    if !out_assets.is_null() {
+        unsafe {
+            *out_assets = std::ptr::null();
+        }
+    }
+    if !out_count.is_null() {
+        unsafe {
+            *out_count = 0;
+        }
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oxide_media_free_assets(
+    _assets: *const TestOxideMediaAsset,
+    _count: usize,
+) {
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oxide_media_load_thumbnail(
+    _identifier_ptr: *const u8,
+    _identifier_len: usize,
+    _size: u8,
+    out_image: *mut TestOxideImageData,
+) -> i32 {
+    if !out_image.is_null() {
+        unsafe {
+            (*out_image).data_ptr = std::ptr::null();
+            (*out_image).data_len = 0;
+            (*out_image).width = 0;
+            (*out_image).height = 0;
+            (*out_image).row_bytes = 0;
+        }
+    }
+    0
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oxide_media_load_full_image_rgba(
     identifier_ptr: *const u8,
@@ -38,26 +119,17 @@ pub unsafe extern "C" fn oxide_media_load_full_image_rgba(
     out_image: *mut TestOxideImageData,
 ) -> i32 {
     FULL_IMAGE_RGBA_CALLS.fetch_add(1, Ordering::SeqCst);
-    let identifier = unsafe {
-        std::str::from_utf8(std::slice::from_raw_parts(identifier_ptr, identifier_len))
-            .expect("valid asset id")
-    };
-    assert_eq!(identifier, "display-asset");
-    assert!(!out_image.is_null());
-
-    let mut bytes = vec![1_u8, 2, 3, 4];
-    let data_ptr = bytes.as_mut_ptr();
-    let data_len = bytes.len();
-    std::mem::forget(bytes);
-
-    unsafe {
-        (*out_image).data_ptr = data_ptr.cast_const();
-        (*out_image).data_len = data_len;
-        (*out_image).width = 1;
-        (*out_image).height = 1;
-        (*out_image).row_bytes = 4;
-    }
+    write_rgba_stub(identifier_ptr, identifier_len, "display-asset", out_image, [1_u8, 2, 3, 4]);
     0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oxide_media_load_full_image(
+    identifier_ptr: *const u8,
+    identifier_len: usize,
+    out_image: *mut TestOxideImageData,
+) -> i32 {
+    unsafe { oxide_media_load_thumbnail(identifier_ptr, identifier_len, 0, out_image) }
 }
 
 #[unsafe(no_mangle)]
@@ -68,27 +140,32 @@ pub unsafe extern "C" fn oxide_media_load_thumbnail_rgba(
     out_image: *mut TestOxideImageData,
 ) -> i32 {
     THUMBNAIL_RGBA_CALLS.fetch_add(1, Ordering::SeqCst);
-    let identifier = unsafe {
-        std::str::from_utf8(std::slice::from_raw_parts(identifier_ptr, identifier_len))
-            .expect("valid asset id")
-    };
-    assert_eq!(identifier, "thumbnail-asset");
-    assert!(!out_image.is_null());
-
-    let mut bytes = vec![5_u8, 6, 7, 8];
-    let data_ptr = bytes.as_mut_ptr();
-    let data_len = bytes.len();
-    std::mem::forget(bytes);
-
-    unsafe {
-        (*out_image).data_ptr = data_ptr.cast_const();
-        (*out_image).data_len = data_len;
-        (*out_image).width = 1;
-        (*out_image).height = 1;
-        (*out_image).row_bytes = 4;
-    }
+    write_rgba_stub(identifier_ptr, identifier_len, "thumbnail-asset", out_image, [5_u8, 6, 7, 8]);
     0
 }
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oxide_media_load_video_file(
+    _identifier_ptr: *const u8,
+    _identifier_len: usize,
+    out_path_ptr: *mut *const u8,
+    out_path_len: *mut usize,
+) -> i32 {
+    if !out_path_ptr.is_null() {
+        unsafe {
+            *out_path_ptr = std::ptr::null();
+        }
+    }
+    if !out_path_len.is_null() {
+        unsafe {
+            *out_path_len = 0;
+        }
+    }
+    1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oxide_media_free_string(_data_ptr: *const u8, _data_len: usize) {}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oxide_media_free_image_data(data_ptr: *const u8, data_len: usize) {

@@ -1,4 +1,10 @@
-use crate::elements::{CharFilter, ShiftingTextInputState, ShiftingTextValidation};
+use crate::{
+    bitmap_text::{draw_text_aligned, line_height, text_width, TextAlign, TextStyle},
+    elements::{CharFilter, ShiftingTextInputState, ShiftingTextValidation},
+};
+use core::ops::Range;
+use oxide_platform_api::TouchId;
+use oxide_renderer_api as gfx;
 
 const FIELD_FAIL_DURATION_MS: u32 = 420;
 const FIELD_FAIL_SHAKE_AMPLITUDE_PX: f32 = 12.0;
@@ -6,11 +12,554 @@ const FIELD_FAIL_SHAKE_CYCLES: f32 = 4.0;
 const SECURE_TEXT_DEFAULT_SHIFT_DISTANCE: f32 = 32.0;
 const SECURE_TEXT_DEFAULT_ANIMATION_DURATION_MS: u32 = 1_200;
 const LEGACY_SECURE_TEXT_REVEAL_DURATION_MS: u32 = 1_000;
+const TEXT_INPUT_OPTIONS_HEIGHT_PT: f32 = 30.0;
+const TEXT_INPUT_OPTIONS_ARROW_HEIGHT_PT: f32 = 6.0;
+const TEXT_INPUT_OPTIONS_ARROW_HALF_WIDTH_PT: f32 = 8.0;
+const TEXT_INPUT_OPTIONS_OUTLINE_PT: f32 = 1.0;
+const TEXT_INPUT_OPTIONS_VIEWPORT_MARGIN_PT: f32 = 8.0;
+const TEXT_INPUT_OPTIONS_FIELD_GAP_PT: f32 = 5.0;
+const TEXT_INPUT_OPTIONS_HORIZONTAL_PADDING_PT: f32 = 10.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldFailRestoreMode {
     Clear,
     RestoreValue,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextCaretDragState<FieldId> {
+    pub touch_id: TouchId,
+    pub field: FieldId,
+    pub start_x: f32,
+    pub start_y: f32,
+    pub current_x: f32,
+    pub current_y: f32,
+    pub max_move_sq: f32,
+    pub started_focused: bool,
+}
+
+impl<FieldId: Copy> TextCaretDragState<FieldId> {
+    #[must_use]
+    pub const fn new(touch_id: TouchId, field: FieldId, x: f32, y: f32) -> Self {
+        Self {
+            touch_id,
+            field,
+            start_x: x,
+            start_y: y,
+            current_x: x,
+            current_y: y,
+            max_move_sq: 0.0,
+            started_focused: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_started_focused(mut self, started_focused: bool) -> Self {
+        self.started_focused = started_focused;
+        self
+    }
+
+    pub fn update(&mut self, x: f32, y: f32) {
+        let dx = x - self.start_x;
+        let dy = y - self.start_y;
+        self.current_x = x;
+        self.current_y = y;
+        self.max_move_sq = self.max_move_sq.max(dx * dx + dy * dy);
+    }
+
+    #[must_use]
+    pub fn is_tap_candidate(&self, tap_max_move: f32) -> bool {
+        self.max_move_sq <= tap_max_move * tap_max_move
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextTapMemory<FieldId> {
+    pub field: FieldId,
+    pub x: f32,
+    pub y: f32,
+    pub ended_at_ms: u64,
+}
+
+impl<FieldId: Copy + PartialEq> TextTapMemory<FieldId> {
+    #[must_use]
+    pub const fn new(field: FieldId, x: f32, y: f32, ended_at_ms: u64) -> Self {
+        Self { field, x, y, ended_at_ms }
+    }
+
+    #[must_use]
+    pub fn is_double_tap(
+        self,
+        field: FieldId,
+        x: f32,
+        y: f32,
+        now_ms: u64,
+        max_ms: u64,
+        max_move: f32,
+    ) -> bool {
+        if self.field != field || now_ms.saturating_sub(self.ended_at_ms) > max_ms {
+            return false;
+        }
+        let dx = x - self.x;
+        let dy = y - self.y;
+        dx * dx + dy * dy <= max_move * max_move
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextSelectionState<FieldId> {
+    pub field: FieldId,
+    pub range: Range<usize>,
+}
+
+impl<FieldId> TextSelectionState<FieldId> {
+    #[must_use]
+    pub const fn new(field: FieldId, range: Range<usize>) -> Self {
+        Self { field, range }
+    }
+
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.range.start < self.range.end
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextSelectionDragAnchor {
+    Start,
+    End,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextSelectionDragState<FieldId> {
+    pub touch_id: TouchId,
+    pub field: FieldId,
+    pub anchor: TextSelectionDragAnchor,
+    pub fixed_index: usize,
+    pub current_index: usize,
+}
+
+impl<FieldId: Copy> TextSelectionDragState<FieldId> {
+    #[must_use]
+    pub const fn new(
+        touch_id: TouchId,
+        field: FieldId,
+        anchor: TextSelectionDragAnchor,
+        fixed_index: usize,
+        current_index: usize,
+    ) -> Self {
+        Self { touch_id, field, anchor, fixed_index, current_index }
+    }
+
+    pub fn update_current_index(&mut self, current_index: usize) {
+        self.current_index = current_index;
+    }
+
+    #[must_use]
+    pub fn range(&self) -> Range<usize> {
+        self.fixed_index.min(self.current_index)..self.fixed_index.max(self.current_index)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextSelectionHighlightStyle {
+    pub fill: gfx::Color,
+    pub border: gfx::Color,
+    pub selected_text: gfx::Color,
+    pub border_px: f32,
+    pub y_pad: f32,
+    pub radius_px: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextSelectionHighlightLayout {
+    pub text_rect: gfx::RectF,
+    pub token_rect: gfx::RectF,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextInputOption {
+    SelectAll,
+    Paste,
+}
+
+impl TextInputOption {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::SelectAll => "select all",
+            Self::Paste => "paste",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextInputOptionsConfig {
+    pub select_all: bool,
+    pub paste: bool,
+}
+
+impl TextInputOptionsConfig {
+    #[must_use]
+    pub const fn none() -> Self {
+        Self { select_all: false, paste: false }
+    }
+
+    #[must_use]
+    pub const fn all() -> Self {
+        Self { select_all: true, paste: true }
+    }
+
+    #[must_use]
+    pub const fn option_count(self) -> usize {
+        self.select_all as usize + self.paste as usize
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextInputOptionsPopoverState<FieldId> {
+    pub field: FieldId,
+    pub opened_at_ms: u64,
+}
+
+impl<FieldId> TextInputOptionsPopoverState<FieldId> {
+    #[must_use]
+    pub const fn new(field: FieldId, opened_at_ms: u64) -> Self {
+        Self { field, opened_at_ms }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextInputOptionsLayout {
+    pub bubble_rect: gfx::RectF,
+    pub select_all_rect: Option<gfx::RectF>,
+    pub paste_rect: Option<gfx::RectF>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextInputOptionsPopoverStyle {
+    pub background: gfx::Color,
+    pub divider: gfx::Color,
+    pub text: gfx::Color,
+    pub text_px: f32,
+}
+
+#[must_use]
+pub fn text_input_options_layout(
+    field_rect: gfx::RectF,
+    viewport: gfx::RectF,
+    scale: f32,
+    config: TextInputOptionsConfig,
+    text_px: f32,
+) -> Option<TextInputOptionsLayout> {
+    let option_count = config.option_count();
+    if option_count == 0 || field_rect.w <= 1.0 || field_rect.h <= 1.0 {
+        return None;
+    }
+    let label_style = TextStyle::new(text_px, gfx::Color::rgba(1.0, 1.0, 1.0, 1.0)).bold();
+    let padding = TEXT_INPUT_OPTIONS_HORIZONTAL_PADDING_PT * scale;
+    let select_all_w =
+        config.select_all.then(|| text_width(TextInputOption::SelectAll.label(), label_style));
+    let paste_w = config.paste.then(|| text_width(TextInputOption::Paste.label(), label_style));
+    let content_w = select_all_w.unwrap_or(0.0) + paste_w.unwrap_or(0.0);
+    let bubble_w = content_w + padding * option_count as f32 * 2.0;
+    let bubble_h = TEXT_INPUT_OPTIONS_HEIGHT_PT * scale;
+    let arrow_h = TEXT_INPUT_OPTIONS_ARROW_HEIGHT_PT * scale;
+    let gap = TEXT_INPUT_OPTIONS_FIELD_GAP_PT * scale;
+    let margin = TEXT_INPUT_OPTIONS_VIEWPORT_MARGIN_PT * scale;
+    let field_center_x = field_rect.x + field_rect.w * 0.50;
+    let min_x = viewport.x + margin;
+    let max_x = (viewport.x + viewport.w - bubble_w - margin).max(min_x);
+    let bubble_x = (field_center_x - bubble_w * 0.50).clamp(min_x, max_x);
+    let bubble_y = (field_rect.y - bubble_h - arrow_h - gap).max(viewport.y + margin);
+    let bubble_rect = gfx::RectF::new(bubble_x, bubble_y, bubble_w, bubble_h);
+    let mut option_x = bubble_rect.x;
+    let select_all_rect = select_all_w.map(|width| {
+        let rect = gfx::RectF::new(option_x, bubble_rect.y, width + padding * 2.0, bubble_rect.h);
+        option_x += rect.w;
+        rect
+    });
+    let paste_rect = paste_w.map(|width| {
+        gfx::RectF::new(option_x, bubble_rect.y, width + padding * 2.0, bubble_rect.h)
+    });
+    Some(TextInputOptionsLayout { bubble_rect, select_all_rect, paste_rect })
+}
+
+#[must_use]
+pub fn text_input_option_at(
+    layout: TextInputOptionsLayout,
+    x: f32,
+    y: f32,
+) -> Option<TextInputOption> {
+    if layout.select_all_rect.is_some_and(|rect| rect_contains(rect, x, y)) {
+        return Some(TextInputOption::SelectAll);
+    }
+    if layout.paste_rect.is_some_and(|rect| rect_contains(rect, x, y)) {
+        return Some(TextInputOption::Paste);
+    }
+    None
+}
+
+pub fn draw_text_input_options_popover(
+    encoder: &mut dyn gfx::RenderEncoder,
+    layout: TextInputOptionsLayout,
+    style: TextInputOptionsPopoverStyle,
+) {
+    let scale = (layout.bubble_rect.h / TEXT_INPUT_OPTIONS_HEIGHT_PT).max(1.0);
+    let outline_w = (TEXT_INPUT_OPTIONS_OUTLINE_PT * scale).clamp(1.0, 2.0);
+    let radius = layout.bubble_rect.h * 0.50;
+    encoder.draw_rrect(layout.bubble_rect, [radius; 4], style.divider);
+    let inner_rect = gfx::RectF::new(
+        layout.bubble_rect.x + outline_w,
+        layout.bubble_rect.y + outline_w,
+        (layout.bubble_rect.w - outline_w * 2.0).max(1.0),
+        (layout.bubble_rect.h - outline_w * 2.0).max(1.0),
+    );
+    encoder.draw_rrect(inner_rect, [(radius - outline_w).max(0.0); 4], style.background);
+    let arrow_h = TEXT_INPUT_OPTIONS_ARROW_HEIGHT_PT * scale;
+    let arrow_half_w = TEXT_INPUT_OPTIONS_ARROW_HALF_WIDTH_PT * scale;
+    let arrow_center_x = layout.bubble_rect.x + layout.bubble_rect.w * 0.50;
+    let arrow_top_y = layout.bubble_rect.y + layout.bubble_rect.h - outline_w * 0.50;
+    let outline_arrow_h = arrow_h + outline_w;
+    let outline_arrow_half_w = arrow_half_w + outline_w;
+    encoder.draw_solid(
+        &[
+            vertex(arrow_center_x - outline_arrow_half_w, arrow_top_y),
+            vertex(arrow_center_x + outline_arrow_half_w, arrow_top_y),
+            vertex(arrow_center_x, arrow_top_y + outline_arrow_h),
+        ],
+        style.divider,
+    );
+    encoder.draw_solid(
+        &[
+            vertex(arrow_center_x - arrow_half_w, arrow_top_y),
+            vertex(arrow_center_x + arrow_half_w, arrow_top_y),
+            vertex(arrow_center_x, arrow_top_y + arrow_h),
+        ],
+        style.background,
+    );
+    let text_style = TextStyle::new(style.text_px, style.text).bold();
+    if let (Some(select_all), Some(_)) = (layout.select_all_rect, layout.paste_rect) {
+        let divider_x = select_all.x + select_all.w;
+        let divider_w =
+            (1.0 * (layout.bubble_rect.h / TEXT_INPUT_OPTIONS_HEIGHT_PT).max(1.0)).clamp(1.0, 2.0);
+        let divider_margin = layout.bubble_rect.h * 0.22;
+        encoder.draw_rrect(
+            gfx::RectF::new(
+                divider_x - divider_w * 0.50,
+                select_all.y + divider_margin,
+                divider_w,
+                select_all.h - divider_margin * 2.0,
+            ),
+            [0.0; 4],
+            style.divider,
+        );
+    }
+    if let Some(rect) = layout.select_all_rect {
+        let label_gap = TEXT_INPUT_OPTIONS_HORIZONTAL_PADDING_PT * scale;
+        let label_rect = gfx::RectF::new(
+            rect.x + label_gap,
+            rect.y,
+            (rect.w - label_gap * 2.0).max(1.0),
+            rect.h,
+        );
+        draw_input_option_label(
+            encoder,
+            TextInputOption::SelectAll.label(),
+            label_rect,
+            text_style,
+        );
+    }
+    if let Some(rect) = layout.paste_rect {
+        let label_gap = TEXT_INPUT_OPTIONS_HORIZONTAL_PADDING_PT * scale;
+        let label_rect = gfx::RectF::new(
+            rect.x + label_gap,
+            rect.y,
+            (rect.w - label_gap * 2.0).max(1.0),
+            rect.h,
+        );
+        draw_input_option_label(encoder, TextInputOption::Paste.label(), label_rect, text_style);
+    }
+}
+
+#[must_use]
+pub fn text_word_range_at_char_index(text: &str, char_index: usize) -> Range<usize> {
+    let chars: alloc::vec::Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return 0..0;
+    }
+    let mut index = char_index.min(chars.len());
+    if index == chars.len() || !text_word_char(chars[index]) {
+        if index > 0 && text_word_char(chars[index - 1]) {
+            index -= 1;
+        }
+    }
+    if index >= chars.len() || !text_word_char(chars[index]) {
+        return char_index.min(chars.len())..char_index.min(chars.len());
+    }
+    let mut start = index;
+    while start > 0 && text_word_char(chars[start - 1]) {
+        start -= 1;
+    }
+    let mut end = index + 1;
+    while end < chars.len() && text_word_char(chars[end]) {
+        end += 1;
+    }
+    start..end
+}
+
+#[must_use]
+pub fn text_char_slice(input: &str, range: Range<usize>) -> String {
+    let start = byte_index_for_char(input, range.start);
+    let end = byte_index_for_char(input, range.end);
+    input[start..end].to_owned()
+}
+
+#[must_use]
+pub fn single_line_text_selection_rect(
+    field_rect: gfx::RectF,
+    text_x: f32,
+    text: &str,
+    style: TextStyle,
+    range: Range<usize>,
+) -> Option<gfx::RectF> {
+    let char_len = char_count(text);
+    let start = range.start.min(char_len);
+    let end = range.end.min(char_len).max(start);
+    if start >= end {
+        return None;
+    }
+    let before = text_char_slice(text, 0..start);
+    let selected = text_char_slice(text, start..end);
+    let x = text_x + text_width(before.as_str(), style);
+    let w = text_width(selected.as_str(), style).max(1.0);
+    let h = line_height(style);
+    Some(gfx::RectF::new(x, field_rect.y + (field_rect.h - h) * 0.50, w, h))
+}
+
+#[must_use]
+pub fn single_line_text_selection_highlight_layout(
+    field_rect: gfx::RectF,
+    text_x: f32,
+    text: &str,
+    style: TextStyle,
+    range: Range<usize>,
+    highlight: TextSelectionHighlightStyle,
+) -> Option<TextSelectionHighlightLayout> {
+    let char_len = char_count(text);
+    let start = range.start.min(char_len);
+    let end = range.end.min(char_len).max(start);
+    if start >= end {
+        return None;
+    }
+    let before = text_char_slice(text, 0..start);
+    let selected = text_char_slice(text, start..end);
+    let selected_x = text_x + text_width(before.as_str(), style);
+    let selected_w = text_width(selected.as_str(), style).max(1.0);
+    let text_rect = gfx::RectF::new(
+        selected_x,
+        field_rect.y + (field_rect.h - line_height(style)) * 0.50,
+        selected_w,
+        line_height(style),
+    );
+    let token_rect = gfx::RectF::new(
+        selected_x,
+        text_rect.y - highlight.y_pad,
+        selected_w,
+        text_rect.h + highlight.y_pad * 2.0,
+    );
+    Some(TextSelectionHighlightLayout { text_rect, token_rect })
+}
+
+#[must_use]
+pub fn single_line_text_selection_index_for_x(
+    text_x: f32,
+    text: &str,
+    style: TextStyle,
+    x: f32,
+    anchor: TextSelectionDragAnchor,
+) -> usize {
+    let char_len = char_count(text);
+    if char_len == 0 {
+        return 0;
+    }
+    let mut boundaries = alloc::vec::Vec::with_capacity(char_len + 1);
+    boundaries.push(text_x);
+    let mut prefix = String::new();
+    for ch in text.chars() {
+        prefix.push(ch);
+        boundaries.push(text_x + text_width(prefix.as_str(), style));
+    }
+    match anchor {
+        TextSelectionDragAnchor::Start => {
+            if x <= boundaries[0] {
+                return 0;
+            }
+            for index in 1..boundaries.len() {
+                if x < boundaries[index] {
+                    return index - 1;
+                }
+            }
+            char_len
+        }
+        TextSelectionDragAnchor::End => {
+            if x <= boundaries[0] {
+                return 0;
+            }
+            for index in 1..boundaries.len() {
+                if x <= boundaries[index] {
+                    return index;
+                }
+            }
+            char_len
+        }
+    }
+}
+
+pub fn draw_text_selection_highlight(
+    encoder: &mut dyn gfx::RenderEncoder,
+    layout: TextSelectionHighlightLayout,
+    style: TextSelectionHighlightStyle,
+) {
+    let radius = style.radius_px.min(layout.token_rect.h * 0.50).max(0.0);
+    encoder.draw_rrect(layout.token_rect, [radius; 4], style.border);
+    let border = style.border_px.clamp(0.0, layout.token_rect.w.min(layout.token_rect.h) * 0.45);
+    if border > 0.0 {
+        let inner = gfx::RectF::new(
+            layout.token_rect.x + border,
+            layout.token_rect.y + border,
+            (layout.token_rect.w - border * 2.0).max(1.0),
+            (layout.token_rect.h - border * 2.0).max(1.0),
+        );
+        encoder.draw_rrect(inner, [(radius - border).max(0.0); 4], style.fill);
+    } else {
+        encoder.draw_rrect(layout.token_rect, [radius; 4], style.fill);
+    }
+}
+
+#[must_use]
+pub fn text_selection_drag_anchor_at(
+    layout: TextSelectionHighlightLayout,
+    x: f32,
+    y: f32,
+    hit_padding: f32,
+) -> Option<TextSelectionDragAnchor> {
+    let hit_rect = gfx::RectF::new(
+        layout.token_rect.x - hit_padding,
+        layout.token_rect.y - hit_padding,
+        layout.token_rect.w + hit_padding * 2.0,
+        layout.token_rect.h + hit_padding * 2.0,
+    );
+    if !rect_contains(hit_rect, x, y) {
+        return None;
+    }
+    let start_distance = (x - layout.token_rect.x).abs();
+    let end_distance = (x - (layout.token_rect.x + layout.token_rect.w)).abs();
+    Some(if start_distance <= end_distance {
+        TextSelectionDragAnchor::Start
+    } else {
+        TextSelectionDragAnchor::End
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -294,6 +843,58 @@ impl HorizontalShiftingText {
             self.state.tick();
         }
         self.caret_index = caret_index.min(char_count(&self.state.text));
+    }
+
+    pub fn replace_char_range(&mut self, range: Range<usize>, input: &str) -> bool {
+        if self.is_in_fail_mode() {
+            return false;
+        }
+        let current = self.state.text.clone();
+        let char_len = char_count(current.as_str());
+        let start = range.start.min(char_len);
+        let end = range.end.min(char_len).max(start);
+        let prefix = text_char_slice(current.as_str(), 0..start);
+        let suffix = text_char_slice(current.as_str(), end..char_len);
+        let prefix_len = char_count(prefix.as_str());
+        let suffix_len = char_count(suffix.as_str());
+        let allowed_insert_len =
+            self.policy.max_length().unwrap_or(usize::MAX).saturating_sub(prefix_len + suffix_len);
+        let mut replacement =
+            truncate(self.policy.filter_input(input).as_str(), allowed_insert_len);
+        if self.policy.lowercases() {
+            replacement = replacement.to_lowercase();
+        }
+        let mut next = String::with_capacity(prefix.len() + replacement.len() + suffix.len());
+        next.push_str(prefix.as_str());
+        next.push_str(replacement.as_str());
+        next.push_str(suffix.as_str());
+        let next = self.policy.sanitize(next.as_str());
+        let caret_index =
+            (prefix_len + char_count(replacement.as_str())).min(char_count(next.as_str()));
+        let changed = next != current;
+        if changed {
+            self.set_state_text(next);
+            self.state.tick();
+        }
+        self.caret_index = caret_index;
+        changed
+    }
+
+    pub fn apply_selection_commit(&mut self, selection: Range<usize>, input: &str) -> Option<bool> {
+        if selection.start >= selection.end {
+            return None;
+        }
+        if input.chars().all(|ch| ch == '\u{1c}') {
+            self.set_caret_index(selection.start);
+            return Some(false);
+        }
+        if input.chars().all(|ch| ch == '\u{1d}') {
+            self.set_caret_index(selection.end);
+            return Some(false);
+        }
+        let replacement =
+            if input.chars().all(|ch| ch == '\u{8}' || ch == '\u{7f}') { "" } else { input };
+        Some(self.replace_char_range(selection, replacement))
     }
 
     pub fn focus(&mut self) {
@@ -825,4 +1426,27 @@ fn byte_index_for_char(input: &str, char_index: usize) -> usize {
         return 0;
     }
     input.char_indices().nth(char_index).map(|(idx, _)| idx).unwrap_or(input.len())
+}
+
+fn rect_contains(rect: gfx::RectF, x: f32, y: f32) -> bool {
+    x >= rect.x && y >= rect.y && x <= rect.x + rect.w && y <= rect.y + rect.h
+}
+
+fn draw_input_option_label(
+    encoder: &mut dyn gfx::RenderEncoder,
+    label: &str,
+    rect: gfx::RectF,
+    style: TextStyle,
+) {
+    let line_h = line_height(style);
+    let label_rect = gfx::RectF::new(rect.x, rect.y + (rect.h - line_h) * 0.50, rect.w, line_h);
+    draw_text_aligned(encoder, label, label_rect, TextAlign::Center, style);
+}
+
+fn vertex(x: f32, y: f32) -> gfx::Vertex {
+    gfx::Vertex { x, y, u: 0.0, v: 0.0, rgba: 0xFFFF_FFFF }
+}
+
+fn text_word_char(ch: char) -> bool {
+    !ch.is_whitespace()
 }

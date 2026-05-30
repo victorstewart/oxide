@@ -428,6 +428,13 @@ void nametag_ios_push_set_badge(int32_t count) {
 
 void oxide_host_push_clear_badge(void) { oxide_host_push_set_badge(0); }
 
+void oxide_host_push_clear_all_delivered(void)
+{
+  [[UNUserNotificationCenter currentNotificationCenter]
+      removeAllDeliveredNotifications];
+  oxide_host_push_clear_badge();
+}
+
 #ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 void nametag_ios_push_clear_badge(void) { oxide_host_push_clear_badge(); }
 #endif

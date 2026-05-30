@@ -93,6 +93,9 @@ fn delete_wiggle_sample_matches_legacy_wiggler_bounds() {
             sample.rotation_rad >= -anim::helpers::DELETE_WIGGLE_ROTATE_ANGLE_RAD
                 && sample.rotation_rad <= anim::helpers::DELETE_WIGGLE_ROTATE_ANGLE_RAD
         );
-        assert!(sample.translation_y >= 0.0 && sample.translation_y <= anim::helpers::DELETE_WIGGLE_BOUNCE_Y);
+        assert!(
+            sample.translation_y >= 0.0
+                && sample.translation_y <= anim::helpers::DELETE_WIGGLE_BOUNCE_Y
+        );
     }
 }

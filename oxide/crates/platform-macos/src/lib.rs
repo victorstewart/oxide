@@ -2,13 +2,39 @@
 #![allow(clippy::all, clippy::pedantic)]
 #![allow(clippy::missing_errors_doc, clippy::missing_panics_doc, clippy::module_name_repetitions)]
 
+extern crate alloc;
+
+use std::sync::{Arc, Mutex, Once};
+
 use once_cell::sync::Lazy;
+use oxide_platform_apple::{
+    network_status_from_apple_interface_mask, permission_domain_from_apple_code,
+    permission_domain_to_apple_code, permission_status_from_apple_code, AppleHttpClient,
+    AppleBluetooth, AppleCameraManager, AppleLocationService, AppleMediaLibraryManager, AppleMotionService,
+    AppleSecureStorage, ApplePushManager, AppleSocketNetworking, AppleWebViewService,
+    apple_bluetooth_with_restoration,
+};
 use oxide_platform_api as api;
 
 extern "C" {
     fn macos_request_redraw();
     fn macos_set_high_refresh(enable: u8);
     fn macos_set_idle_timer_disabled(disabled: u8);
+    fn macos_open_system_settings();
+    fn macos_open_external_url(ptr: *const u8, len: usize) -> ::libc::c_int;
+    fn macos_max_framerate_hz() -> u32;
+    fn macos_native_scale() -> f32;
+    fn macos_supports_edr() -> u8;
+    fn macos_reduce_motion_enabled() -> u8;
+    fn macos_camera_available() -> u8;
+    fn macos_network_status(out_connected: *mut u8, out_interfaces: *mut u32) -> ::libc::c_int;
+    fn macos_set_network_status_callback(cb: Option<extern "C" fn(u8, u32)>);
+    fn macos_start_network_monitor() -> ::libc::c_int;
+    fn macos_permission_status(domain: u32) -> u32;
+    fn macos_permission_request(domain: u32);
+    fn macos_set_permission_callback(cb: Option<extern "C" fn(u32, u32)>);
+    fn macos_location_services_available() -> u8;
+    fn macos_motion_available() -> u8;
     fn macos_clipboard_set(ptr: *const u8, len: usize);
     fn macos_clipboard_get(out_ptr: *mut *mut u8, out_len: *mut usize) -> ::libc::c_int;
     fn macos_haptics_play(pattern: u32);
@@ -36,7 +62,16 @@ fn clipboard_get() -> Option<String> {
     let mut ptr: *mut u8 = std::ptr::null_mut();
     let mut len: usize = 0;
     let ok = unsafe { macos_clipboard_get(&mut ptr, &mut len) };
-    if ok == 0 || ptr.is_null() || len == 0 {
+    if ok == 0 {
+        return None;
+    }
+    if len == 0 {
+        if !ptr.is_null() {
+            unsafe { macos_free(ptr.cast()) };
+        }
+        return Some(String::new());
+    }
+    if ptr.is_null() {
         return None;
     }
     let s = unsafe { std::slice::from_raw_parts(ptr, len) };
@@ -50,16 +85,32 @@ fn clipboard_set(s: &str) {
 }
 
 static HAPTICS: Lazy<std::sync::Arc<MacHaptics>> = Lazy::new(|| std::sync::Arc::new(MacHaptics));
+type NetworkStatusCallback = Arc<Mutex<alloc::boxed::Box<dyn Fn(api::network_status::NetworkStatus) + Send>>>;
+static NETWORK_STATUS_CALLBACKS: Lazy<Mutex<alloc::vec::Vec<NetworkStatusCallback>>> =
+    Lazy::new(|| Mutex::new(alloc::vec::Vec::new()));
+static NETWORK_STATUS_INIT: Once = Once::new();
+type PermissionStatusCallback = Arc<Mutex<alloc::boxed::Box<dyn Fn(api::PermissionDomain, api::PermissionStatus) + Send>>>;
+static PERMISSION_CALLBACKS: Lazy<Mutex<alloc::vec::Vec<PermissionStatusCallback>>> =
+    Lazy::new(|| Mutex::new(alloc::vec::Vec::new()));
+static PERMISSION_INIT: Once = Once::new();
+static MAC_HTTP: AppleHttpClient = AppleHttpClient::new();
 
 pub struct MacPlatform;
+
+impl MacPlatform {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
 
 impl api::Platform for MacPlatform {
     fn run_app(&self, _app: alloc::boxed::Box<dyn api::App>) -> ! {
         // For macOS host app, NSApplicationMain is already running in Obj-C.
-        // In this test host, run() will park the current thread indefinitely,
-        // since the main loop is already active.
-        #[allow(clippy::empty_loop)]
-        loop {}
+        // Park this caller indefinitely without burning a CPU core.
+        loop {
+            std::thread::park();
+        }
     }
     fn request_redraw(&self) {
         unsafe { macos_request_redraw() }
@@ -70,9 +121,16 @@ impl api::Platform for MacPlatform {
     fn set_idle_timer_disabled(&self, disabled: bool) {
         unsafe { macos_set_idle_timer_disabled(if disabled { 1 } else { 0 }) }
     }
-    fn open_system_settings(&self) {}
-    fn open_external_url(&self, _url: &str) -> Result<(), api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS external url open not implemented"))
+    fn open_system_settings(&self) {
+        unsafe { macos_open_system_settings() }
+    }
+    fn open_external_url(&self, url: &str) -> Result<(), api::PlatformError> {
+        let ok = unsafe { macos_open_external_url(url.as_ptr(), url.len()) };
+        if ok == 0 {
+            Err(api::PlatformError::Unsupported("macOS rejected external url"))
+        } else {
+            Ok(())
+        }
     }
     fn clipboard_get(&self) -> Option<String> {
         clipboard_get()
@@ -85,354 +143,267 @@ impl api::Platform for MacPlatform {
     fn ime_hide(&self) { /* not applicable on macOS */
     }
     fn device_caps(&self) -> api::DeviceCaps {
+        let max_framerate_hz = unsafe { macos_max_framerate_hz() }.max(60);
+        let native_scale = {
+            let scale = unsafe { macos_native_scale() };
+            if scale.is_finite() && scale > 0.0 { scale } else { 1.0 }
+        };
         api::DeviceCaps {
-            max_framerate_hz: 120,
-            supports_edr: false,
+            max_framerate_hz,
+            supports_edr: unsafe { macos_supports_edr() != 0 },
             supports_msaa4x: true,
-            native_scale: 1.0,
+            native_scale,
             color_space: api::ColorSpace::Srgb,
-            a11y_reduce_motion: false,
+            a11y_reduce_motion: unsafe { macos_reduce_motion_enabled() != 0 },
         }
     }
     fn haptics(&self) -> std::sync::Arc<dyn api::Haptics + Send + Sync> {
         HAPTICS.clone()
     }
     fn permissions(&self) -> &dyn api::Permissions {
-        &NOP_PERMS
+        &MAC_PERMS
     }
     fn camera(&self) -> &dyn api::CameraManager {
-        &NOP_CAMERA
+        &MAC_CAMERA
     }
     fn bluetooth(&self) -> &dyn api::Bluetooth {
-        &NOP_BLE
+        &MAC_BLUETOOTH
     }
     fn location(&self) -> &dyn api::LocationService {
-        &NOP_LOCATION
+        &MAC_LOCATION
     }
     fn motion(&self) -> &dyn api::MotionService {
-        &NOP_MOTION
+        &MAC_MOTION
     }
     fn push(&self) -> &dyn api::PushManager {
-        &NOP_PUSH
+        &MAC_PUSH
     }
     fn capabilities(&self) -> api::Capabilities {
-        api::Capabilities::empty()
+        let mut caps = api::Capabilities::HOVER_POINTER
+            | api::Capabilities::BLUETOOTH
+            | api::Capabilities::PUSH;
+        if unsafe { macos_camera_available() } != 0 {
+            caps |= api::Capabilities::CAMERA | api::Capabilities::CAMERA_RECORDING;
+        }
+        if unsafe { macos_location_services_available() } != 0 {
+            caps |= api::Capabilities::LOCATION;
+        }
+        if unsafe { macos_motion_available() } != 0 {
+            caps |= api::Capabilities::MOTION;
+        }
+        caps
     }
     fn bluetooth_with_restoration(
         &self,
-        _restore_id: &str,
+        restore_id: &str,
     ) -> alloc::boxed::Box<dyn api::Bluetooth> {
-        alloc::boxed::Box::new(NOP_BLE)
+        alloc::boxed::Box::new(apple_bluetooth_with_restoration(restore_id))
     }
     fn networking(&self) -> &dyn api::Networking {
-        &NOP_NETWORKING
+        &MAC_NETWORKING
+    }
+    fn http(&self) -> &dyn api::HttpClient {
+        &MAC_HTTP
     }
     fn paths(&self) -> &dyn api::PathService {
-        &NOP_PATHS
+        &MAC_PATHS
     }
-    fn secure_storage(&self) -> &dyn api::secure_storage::SecureStorage {
-        &NOP_SECURE_STORAGE
+    fn secure_storage(&self) -> &dyn api::SecureStorage {
+        &MAC_SECURE_STORAGE
     }
     fn time(&self) -> &dyn api::TimeService {
-        &NOP_TIME
+        &MAC_TIME
     }
     fn web_view_service(&self) -> &dyn api::web_view::WebViewService {
-        &NOP_WEB_VIEW
+        &MAC_WEB_VIEW
     }
     fn telephony(&self) -> &dyn api::telephony::TelephonyService {
-        &NOP_TELEPHONY
+        &MAC_TELEPHONY
     }
     fn media_library(&self) -> &dyn api::media_library::MediaLibrary {
-        &NOP_MEDIA_LIBRARY
+        &MAC_MEDIA_LIBRARY
     }
     fn network_status(&self) -> &dyn api::network_status::NetworkStatusService {
-        &NOP_NETWORK_STATUS
+        &MAC_NETWORK_STATUS
     }
 }
 
-static NOP_PERMS: NopPermissions = NopPermissions;
-struct NopPermissions;
-impl api::Permissions for NopPermissions {
-    fn request(&self, _domain: api::PermissionDomain) {}
-    fn status(&self, _domain: api::PermissionDomain) -> api::PermissionStatus {
-        api::PermissionStatus { kind: api::PermissionStatusKind::Denied, detail: None }
+static MAC_PERMS: MacPermissions = MacPermissions;
+struct MacPermissions;
+impl api::Permissions for MacPermissions {
+    fn request(&self, domain: api::PermissionDomain) {
+        start_permission_bridge();
+        unsafe {
+            macos_permission_request(permission_domain_to_apple_code(domain));
+        }
+    }
+    fn status(&self, domain: api::PermissionDomain) -> api::PermissionStatus {
+        let status = unsafe { macos_permission_status(permission_domain_to_apple_code(domain)) };
+        permission_status_from_apple_code(status)
     }
     fn subscribe(
         &self,
-        _f: alloc::boxed::Box<dyn Fn(api::PermissionDomain, api::PermissionStatus) + Send>,
+        f: alloc::boxed::Box<dyn Fn(api::PermissionDomain, api::PermissionStatus) + Send>,
     ) {
+        start_permission_bridge();
+        permission_callbacks().push(Arc::new(Mutex::new(f)));
     }
 }
 
-static NOP_CAMERA: NopCamera = NopCamera;
-struct NopCamera;
-impl api::CameraManager for NopCamera {
-    fn start_stream(
-        &self,
-        _cfg: api::CameraConfig,
-        _on_frame: alloc::boxed::Box<dyn Fn(api::CameraFrame) + Send>,
-        _on_audio: Option<alloc::boxed::Box<dyn Fn(api::AudioSample) + Send>>,
-    ) -> Result<Box<dyn api::CameraStream>, api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
-    }
-    fn start_recording(
-        &self,
-        _options: api::RecordingOptions,
-        _on_event: alloc::boxed::Box<dyn Fn(api::RecordingEvent) + Send>,
-    ) -> Result<alloc::boxed::Box<dyn api::CameraRecording + Send>, api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
-    }
-    fn select_device(&self, _device: api::CameraDevice) {}
-    fn set_fps(&self, _fps: u32) {}
-    fn set_resolution(&self, _width: u32, _height: u32) {}
-    fn set_mode(&self, _mode: api::CaptureMode) {}
-    fn set_focus_point(&self, _x: f32, _y: f32) -> Result<(), api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
-    }
-    fn set_zoom_factor(&self, _factor: f32) -> Result<(), api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
-    }
-    fn set_flash_mode(&self, _mode: api::FlashMode) -> Result<(), api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
-    }
-    fn set_torch_mode(&self, _mode: api::TorchMode) -> Result<(), api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
-    }
-    fn capture_photo(
-        &self,
-        _options: api::PhotoOptions,
-        _on_event: alloc::boxed::Box<dyn Fn(api::PhotoEvent) + Send>,
-    ) -> Result<(), api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
+static MAC_CAMERA: AppleCameraManager = AppleCameraManager;
+
+static MAC_BLUETOOTH: AppleBluetooth = AppleBluetooth::new();
+
+static MAC_LOCATION: AppleLocationService = AppleLocationService::new();
+
+static MAC_MOTION: AppleMotionService = AppleMotionService::new();
+
+static MAC_PUSH: ApplePushManager = ApplePushManager::new();
+
+static MAC_NETWORKING: AppleSocketNetworking = AppleSocketNetworking::new();
+
+static MAC_PATHS: MacPaths = MacPaths;
+struct MacPaths;
+impl api::PathService for MacPaths {
+    fn get(&self, path: api::StandardPath) -> alloc::string::String {
+        standard_path(path)
     }
 }
 
-static NOP_BLE: NopBle = NopBle;
-struct NopBle;
-impl api::Bluetooth for NopBle {
-    fn powered_on(&self) -> bool {
-        false
-    }
-    fn subscribe_events(&self, _f: alloc::boxed::Box<dyn Fn(api::BluetoothEvent) + Send>) {}
-    fn start_scan(&self, _opts: &api::ScanOptions) {}
-    fn stop_scan(&self) {}
-    fn connect(&self, _id: api::PeripheralId) {}
-    fn disconnect(&self, _id: api::PeripheralId) {}
-    fn read(
-        &self,
-        _id: api::PeripheralId,
-        _chr: api::GattChar,
-    ) -> Result<Vec<u8>, api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
-    }
-    fn write(
-        &self,
-        _id: api::PeripheralId,
-        _chr: api::GattChar,
-        _data: &[u8],
-        _with_response: bool,
-    ) -> Result<(), api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
-    }
-    fn notify(
-        &self,
-        _id: api::PeripheralId,
-        _chr: api::GattChar,
-        _enable: bool,
-    ) -> Result<(), api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
-    }
-    fn advertise_start(&self, _name: &str, _services: &[api::BleUuid]) {}
-    fn advertise_stop(&self) {}
-    fn cached_peripherals(&self) -> Vec<api::BleCacheEntry> {
-        Vec::new()
-    }
-}
+static MAC_SECURE_STORAGE: AppleSecureStorage = AppleSecureStorage::new();
 
-static NOP_LOCATION: NopLocation = NopLocation;
-struct NopLocation;
-impl api::LocationService for NopLocation {
-    fn start(&self, _opts: api::LocationOptions) -> Result<(), api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
-    }
-    fn stop(&self) {}
-    fn request_once(&self) {}
-    fn last(&self) -> Option<api::LocationReading> {
-        None
-    }
-    fn subscribe(&self, _f: alloc::boxed::Box<dyn Fn(api::LocationEvent) + Send>) {}
-    fn history(&self) -> alloc::vec::Vec<api::LocationReading> {
-        alloc::vec::Vec::new()
-    }
-    fn region_tracker(&self) -> Option<alloc::boxed::Box<dyn api::GeoRegionTracker>> {
-        None
-    }
-    fn set_accuracy(&self, _accuracy: api::LocationAccuracy) -> Result<(), api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
-    }
-}
-
-static NOP_MOTION: NopMotion = NopMotion;
-struct NopMotion;
-impl api::MotionService for NopMotion {
-    fn start(&self) -> Result<(), api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
-    }
-    fn stop(&self) {}
-    fn is_running(&self) -> bool {
-        false
-    }
-    fn subscribe(&self, _f: alloc::boxed::Box<dyn Fn(api::MotionSample) + Send>) {}
-    fn pressure_history(&self) -> alloc::vec::Vec<api::MotionSample> {
-        alloc::vec::Vec::new()
-    }
-}
-
-static NOP_PUSH: NopPush = NopPush;
-struct NopPush;
-impl api::PushManager for NopPush {
-    fn register(&self) {}
-    fn device_token(&self) -> Option<api::PushToken> {
-        None
-    }
-    fn subscribe(&self, _f: alloc::boxed::Box<dyn Fn(api::PushNotification) + Send>) {}
-    fn set_badge(&self, _count: i32) {}
-    fn clear_badge(&self) {}
-    fn clear_all_delivered(&self) {}
-}
-
-static NOP_NETWORKING: NopNetworking = NopNetworking;
-struct NopNetworking;
-impl api::Networking for NopNetworking {
-    fn connect_tcp(
-        &self,
-        _options: api::ConnectionOptions,
-        _on_event: alloc::boxed::Box<dyn Fn(api::ConnectionEvent) + Send>,
-    ) -> Result<alloc::boxed::Box<dyn api::Connection + Send>, api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
-    }
-    fn connect_quic(
-        &self,
-        _options: api::ConnectionOptions,
-        _on_event: alloc::boxed::Box<dyn Fn(api::ConnectionEvent) + Send>,
-    ) -> Result<alloc::boxed::Box<dyn api::ConnectionGroup + Send>, api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
-    }
-    fn bind_udp(
-        &self,
-        _local_port: u16,
-        _on_event: alloc::boxed::Box<dyn Fn(api::UdpEvent) + Send>,
-    ) -> Result<alloc::boxed::Box<dyn api::UdpSocket + Send>, api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
-    }
-}
-
-static NOP_PATHS: NopPaths = NopPaths;
-struct NopPaths;
-impl api::PathService for NopPaths {
-    fn get(&self, _path: api::StandardPath) -> alloc::string::String {
-        alloc::string::String::from("/tmp")
-    }
-}
-
-static NOP_SECURE_STORAGE: NopSecureStorage = NopSecureStorage;
-struct NopSecureStorage;
-impl api::secure_storage::SecureStorage for NopSecureStorage {
-    fn save(
-        &self,
-        _key: &str,
-        _data: &[u8],
-    ) -> impl core::future::Future<Output = Result<(), api::PlatformError>> + Send {
-        async { Err(api::PlatformError::Unsupported("macOS test app")) }
-    }
-    fn load(
-        &self,
-        _key: &str,
-    ) -> impl core::future::Future<Output = Result<Option<alloc::vec::Vec<u8>>, api::PlatformError>> + Send
-    {
-        async { Ok(None) }
-    }
-    fn delete(
-        &self,
-        _key: &str,
-    ) -> impl core::future::Future<Output = Result<(), api::PlatformError>> + Send {
-        async { Err(api::PlatformError::Unsupported("macOS test app")) }
-    }
-}
-
-static NOP_TIME: NopTime = NopTime;
-struct NopTime;
-impl api::TimeService for NopTime {
+static MAC_TIME: MacTime = MacTime;
+struct MacTime;
+impl api::TimeService for MacTime {
     fn monotonic_now(&self) -> core::time::Duration {
-        core::time::Duration::from_nanos(0)
+        static START: Lazy<std::time::Instant> = Lazy::new(std::time::Instant::now);
+        START.elapsed()
     }
 }
 
-static NOP_WEB_VIEW: NopWebView = NopWebView;
-struct NopWebView;
-impl api::web_view::WebViewService for NopWebView {
-    fn create_web_view(
-        &self,
-        _url: &str,
-        _config: api::web_view::WebViewConfig,
-    ) -> Result<alloc::boxed::Box<dyn api::web_view::WebView + Send>, api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
+static MAC_WEB_VIEW: AppleWebViewService = AppleWebViewService::new();
+
+static MAC_TELEPHONY: MacTelephony = MacTelephony;
+struct MacTelephony;
+impl api::telephony::TelephonyService for MacTelephony {
+    fn home_country_iso_code(&self) -> Option<alloc::string::String> {
+        None
     }
 }
 
-static NOP_TELEPHONY: NopTelephony = NopTelephony;
-struct NopTelephony;
-impl api::telephony::TelephonyService for NopTelephony {
-    fn make_call(&self, _phone_number: &str) -> Result<(), api::PlatformError> {
-        Err(api::PlatformError::Unsupported("macOS test app"))
-    }
-}
+static MAC_MEDIA_LIBRARY: AppleMediaLibraryManager = AppleMediaLibraryManager;
 
-static NOP_MEDIA_LIBRARY: NopMediaLibrary = NopMediaLibrary;
-struct NopMediaLibrary;
-impl api::media_library::MediaLibrary for NopMediaLibrary {
-    fn manager(&self) -> &dyn api::media_library::MediaLibraryManager {
-        &NOP_MEDIA_LIBRARY_MANAGER
-    }
-}
-
-static NOP_MEDIA_LIBRARY_MANAGER: NopMediaLibraryManager = NopMediaLibraryManager;
-struct NopMediaLibraryManager;
-impl api::media_library::MediaLibraryManager for NopMediaLibraryManager {
-    fn fetch_assets(
-        &mut self,
-        _options: api::media_library::FetchOptions,
-    ) -> api::media_library::MediaFetchResult {
-        api::media_library::MediaFetchResult::Error("macOS test app".into())
-    }
-    fn load_thumbnail(
-        &mut self,
-        _identifier: &str,
-        _size: api::media_library::ThumbnailSize,
-    ) -> api::media_library::ImageLoadResult {
-        api::media_library::ImageLoadResult::Error("macOS test app".into())
-    }
-    fn load_full_image(&mut self, _identifier: &str) -> api::media_library::ImageLoadResult {
-        api::media_library::ImageLoadResult::Error("macOS test app".into())
-    }
-    fn subscribe_to_changes<F>(&mut self, _callback: F) -> u32
-    where
-        F: Fn() + Send + 'static,
-    {
-        0
-    }
-    fn unsubscribe(&mut self, _subscription_id: u32) {}
-}
-
-static NOP_NETWORK_STATUS: NopNetworkStatus = NopNetworkStatus;
-struct NopNetworkStatus;
-impl api::network_status::NetworkStatusService for NopNetworkStatus {
+static MAC_NETWORK_STATUS: MacNetworkStatus = MacNetworkStatus;
+struct MacNetworkStatus;
+impl api::network_status::NetworkStatusService for MacNetworkStatus {
     fn current_status(&self) -> api::network_status::NetworkStatus {
-        api::network_status::NetworkStatus::Unknown
+        current_network_status()
     }
-    fn subscribe(&self, _f: alloc::boxed::Box<dyn Fn(api::network_status::NetworkStatus) + Send>) {}
+    fn subscribe(&self, f: alloc::boxed::Box<dyn Fn(api::network_status::NetworkStatus) + Send>) {
+        start_network_status_monitor();
+        let callback = Arc::new(Mutex::new(f));
+        network_status_callbacks().push(Arc::clone(&callback));
+        let status = current_network_status();
+        let callback = callback.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        callback(status);
+    }
 }
 
-pub fn platform() -> MacPlatform {
-    MacPlatform
+fn permission_callbacks() -> std::sync::MutexGuard<'static, alloc::vec::Vec<PermissionStatusCallback>> {
+    PERMISSION_CALLBACKS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+extern "C" fn permission_cb(domain: u32, status: u32) {
+    let Some(domain) = permission_domain_from_apple_code(domain) else {
+        return;
+    };
+    let status = permission_status_from_apple_code(status);
+    let callbacks: alloc::vec::Vec<PermissionStatusCallback> =
+        permission_callbacks().iter().map(Arc::clone).collect();
+    for callback in callbacks {
+        let callback = callback.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        callback(domain, status);
+    }
+}
+
+fn start_permission_bridge() {
+    PERMISSION_INIT.call_once(|| unsafe {
+        macos_set_permission_callback(Some(permission_cb));
+    });
+}
+
+fn network_status_callbacks() -> std::sync::MutexGuard<'static, alloc::vec::Vec<NetworkStatusCallback>> {
+    NETWORK_STATUS_CALLBACKS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+extern "C" fn network_status_cb(connected: u8, interfaces: u32) {
+    let status = network_status_from_apple_interface_mask(connected != 0, interfaces);
+    let callbacks: alloc::vec::Vec<NetworkStatusCallback> =
+        network_status_callbacks().iter().map(Arc::clone).collect();
+    for callback in callbacks {
+        let callback = callback.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        callback(status);
+    }
+}
+
+fn start_network_status_monitor() {
+    NETWORK_STATUS_INIT.call_once(|| unsafe {
+        macos_set_network_status_callback(Some(network_status_cb));
+        let _ = macos_start_network_monitor();
+    });
+}
+
+fn current_network_status() -> api::network_status::NetworkStatus {
+    start_network_status_monitor();
+    let mut connected = 0;
+    let mut interfaces = 0;
+    let ok = unsafe { macos_network_status(&mut connected, &mut interfaces) };
+    if ok == 0 {
+        return network_status_from_apple_interface_mask(false, 0);
+    }
+    network_status_from_apple_interface_mask(connected != 0, interfaces)
+}
+
+fn standard_path(path: api::StandardPath) -> alloc::string::String {
+    let mut dir = match path {
+        api::StandardPath::Documents => {
+            let mut dir = home_dir();
+            dir.push("Library");
+            dir.push("Application Support");
+            dir.push("Oxide");
+            dir
+        }
+        api::StandardPath::Cache => {
+            let mut dir = home_dir();
+            dir.push("Library");
+            dir.push("Caches");
+            dir.push("Oxide");
+            dir
+        }
+        api::StandardPath::Temporary => {
+            let mut dir = std::env::temp_dir();
+            dir.push("Oxide");
+            dir
+        }
+    };
+    if std::fs::create_dir_all(&dir).is_err() {
+        dir = std::env::temp_dir();
+    }
+    dir.to_string_lossy().into_owned()
+}
+
+fn home_dir() -> std::path::PathBuf {
+    std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir)
+}
+
+pub fn install_current_platform() -> Arc<MacPlatform> {
+    let platform = Arc::new(MacPlatform::new());
+    let shared: Arc<dyn api::Platform + Send + Sync> = platform.clone();
+    api::set_current_platform(shared);
+    platform
+}
+
+#[must_use]
+pub const fn platform() -> MacPlatform {
+    MacPlatform::new()
 }

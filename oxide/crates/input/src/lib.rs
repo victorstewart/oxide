@@ -79,6 +79,183 @@ pub enum TouchSurfaceEvent {
     },
 }
 
+pub fn touch_phase_from_raw(phase: u32) -> Option<api::TouchPhase>
+{
+   match phase
+   {
+      0 => Some(api::TouchPhase::Start),
+      1 => Some(api::TouchPhase::Move),
+      2 => Some(api::TouchPhase::End),
+      3 => Some(api::TouchPhase::Cancel),
+      _ => None,
+   }
+}
+
+pub fn pointer_device_from_raw(device: u32) -> api::PointerDevice
+{
+   match device
+   {
+      1 => api::PointerDevice::Pencil,
+      2 => api::PointerDevice::Mouse,
+      _ => api::PointerDevice::Finger,
+   }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PrimaryPointerSample
+{
+   pub x: f32,
+   pub y: f32,
+   pub dx: f32,
+   pub dy: f32,
+   pub buttons: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PrimaryTouchResult
+{
+   pub pointer: Option<PrimaryPointerSample>,
+   pub double_tap: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PrimaryTouchTrack
+{
+   id: api::TouchId,
+   start_x: f32,
+   start_y: f32,
+   last_x: f32,
+   last_y: f32,
+   start_ms: u64,
+   last_ms: u64,
+}
+
+impl PrimaryTouchTrack
+{
+   fn new(id: api::TouchId, x: f32, y: f32, ts_ns: u64) -> Self
+   {
+      let ms = ts_ns / 1_000_000;
+      Self { id, start_x: x, start_y: y, last_x: x, last_y: y, start_ms: ms, last_ms: ms }
+   }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PrimaryTapRecord
+{
+   ts_ms: u64,
+   x: f32,
+   y: f32,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PrimaryTouchTracker
+{
+   active: Option<PrimaryTouchTrack>,
+   last_tap: Option<PrimaryTapRecord>,
+}
+
+impl PrimaryTouchTracker
+{
+   pub fn new() -> Self
+   {
+      Self::default()
+   }
+
+   pub fn reset(&mut self)
+   {
+      self.active = None;
+      self.last_tap = None;
+   }
+
+   pub fn on_touch(&mut self, ev: &api::TouchEvent, ts_ns: u64) -> PrimaryTouchResult
+   {
+      let mut result = PrimaryTouchResult::default();
+      let ms = ts_ns / 1_000_000;
+      match ev.phase
+      {
+         api::TouchPhase::Start =>
+         {
+            if self.active.is_none()
+            {
+               self.active = Some(PrimaryTouchTrack::new(ev.id, ev.x, ev.y, ts_ns));
+               result.pointer = Some(PrimaryPointerSample {
+                  x: ev.x,
+                  y: ev.y,
+                  dx: 0.0,
+                  dy: 0.0,
+                  buttons: 1,
+               });
+            }
+         }
+         api::TouchPhase::Move =>
+         {
+            if let Some(mut track) = self.active
+            {
+               if track.id == ev.id
+               {
+                  let dx = ev.x - track.last_x;
+                  let dy = ev.y - track.last_y;
+                  track.last_x = ev.x;
+                  track.last_y = ev.y;
+                  track.last_ms = ms;
+                  result.pointer = Some(PrimaryPointerSample {
+                     x: ev.x,
+                     y: ev.y,
+                     dx,
+                     dy,
+                     buttons: 1,
+                  });
+                  self.active = Some(track);
+               }
+            }
+         }
+         api::TouchPhase::End | api::TouchPhase::Cancel =>
+         {
+            if let Some(track) = self.active
+            {
+               if track.id == ev.id
+               {
+                  let dx = ev.x - track.last_x;
+                  let dy = ev.y - track.last_y;
+                  result.pointer = Some(PrimaryPointerSample {
+                     x: ev.x,
+                     y: ev.y,
+                     dx,
+                     dy,
+                     buttons: 0,
+                  });
+                  let total_dx = ev.x - track.start_x;
+                  let total_dy = ev.y - track.start_y;
+                  let moved_sq = total_dx * total_dx + total_dy * total_dy;
+                  let dur_ms = ms.saturating_sub(track.start_ms);
+                  if dur_ms <= 300 && moved_sq <= 36.0
+                  {
+                     let tapped = PrimaryTapRecord { ts_ms: ms, x: ev.x, y: ev.y };
+                     if let Some(prev) = self.last_tap
+                     {
+                        let dt = tapped.ts_ms.saturating_sub(prev.ts_ms);
+                        let dx = tapped.x - prev.x;
+                        let dy = tapped.y - prev.y;
+                        if dt <= 360 && (dx * dx + dy * dy) <= 144.0
+                        {
+                           result.double_tap = true;
+                        }
+                     }
+                     self.last_tap = Some(tapped);
+                  }
+                  self.active = None;
+               }
+            }
+            if matches!(ev.phase, api::TouchPhase::Cancel)
+            {
+               self.active = None;
+            }
+         }
+      }
+      result
+   }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TrackState {
     Pending,

@@ -3066,6 +3066,11 @@ impl MetalRenderer {
         Ok(())
     }
 
+    pub fn require_offscreen_present_for_frame(&mut self) {
+        self.pending_present_texture = 0;
+        self.frame_present_direct_to_drawable = false;
+    }
+
     pub fn cancel_present_drawable(&mut self) -> *mut core::ffi::c_void {
         let drawable = self.pending_present_drawable as *mut core::ffi::c_void;
         self.pending_present_drawable = 0;
@@ -4827,17 +4832,22 @@ impl api::Renderer for MetalRenderer {
                                     });
                                 }
                                 api::DrawCmd::ImageMesh { tex, vb, ib, alpha } => {
-                                    let _ = append_offset_image_mesh_to_sublist(
+                                    if let Some((vb, ib)) = append_offset_geometry_to_sublist(
                                         &list.vertices,
                                         &list.indices,
                                         &mut sub,
-                                        *tex,
                                         *vb,
                                         *ib,
-                                        *alpha,
                                         ox,
                                         oy,
-                                    );
+                                    ) {
+                                        sub.items.push(api::DrawCmd::ImageMesh {
+                                            tex: *tex,
+                                            vb,
+                                            ib,
+                                            alpha: *alpha,
+                                        });
+                                    }
                                 }
                                 api::DrawCmd::Spinner { center, atom, alpha } => {
                                     let adj = [center[0] - ox, center[1] - oy];
@@ -4848,44 +4858,25 @@ impl api::Renderer for MetalRenderer {
                                     });
                                 }
                                 api::DrawCmd::GlyphRun { run } => {
-                                    let v_count = run.vb.len as usize;
-                                    let i_count = run.ib.len as usize;
-                                    let new_v_off = sub.vertices.len() as u32;
-                                    let srcv = &list.vertices[(run.vb.offset as usize)
-                                        ..(run.vb.offset as usize + v_count)];
-                                    for v in srcv.iter() {
-                                        let mut vv = *v;
-                                        vv.x -= ox;
-                                        vv.y -= oy;
-                                        sub.vertices.push(vv);
+                                    if let Some((vb, ib)) = append_offset_geometry_to_sublist(
+                                        &list.vertices,
+                                        &list.indices,
+                                        &mut sub,
+                                        run.vb,
+                                        run.ib,
+                                        ox,
+                                        oy,
+                                    ) {
+                                        sub.items.push(api::DrawCmd::GlyphRun {
+                                            run: api::GlyphRun {
+                                                atlas: run.atlas,
+                                                vb,
+                                                ib,
+                                                sdf: run.sdf,
+                                                color: run.color,
+                                            },
+                                        });
                                     }
-                                    let srci = &list.indices[(run.ib.offset as usize)
-                                        ..(run.ib.offset as usize + i_count)];
-                                    let ib_offset = sub.indices.len() as u32;
-                                    let Some(remapped_len) = append_remapped_indices_to_span(
-                                        srci,
-                                        run.vb.offset,
-                                        run.vb.len,
-                                        new_v_off,
-                                        &mut sub.indices,
-                                    ) else {
-                                        continue;
-                                    };
-                                    sub.items.push(api::DrawCmd::GlyphRun {
-                                        run: api::GlyphRun {
-                                            atlas: run.atlas,
-                                            vb: api::VertexSpan {
-                                                offset: new_v_off,
-                                                len: v_count as u32,
-                                            },
-                                            ib: api::IndexSpan {
-                                                offset: ib_offset,
-                                                len: remapped_len as u32,
-                                            },
-                                            sdf: run.sdf,
-                                            color: run.color,
-                                        },
-                                    });
                                 }
                                 _ => {}
                             }
@@ -5405,7 +5396,9 @@ impl api::Renderer for MetalRenderer {
             }
             ca0.set_store_action(MTLStoreAction::Store);
         }
-        if self.frame_color_initialized {
+        if self.frame_native_camera_preview && !self.frame_color_initialized {
+            ca0.set_load_action(MTLLoadAction::Clear);
+        } else if self.frame_color_initialized {
             ca0.set_load_action(MTLLoadAction::Load);
         } else if use_damage {
             ca0.set_load_action(MTLLoadAction::Load);
@@ -6083,17 +6076,21 @@ fn encode_draws_range(
                             tex.0.hash(&mut hasher);
                         }
                         api::DrawCmd::ImageMesh { tex, vb, ib, alpha } => {
-                            if append_offset_image_mesh_to_sublist(
+                            if let Some((local_vb, local_ib)) = append_offset_geometry_to_sublist(
                                 list.vertices,
                                 list.indices,
                                 &mut sub,
-                                *tex,
                                 *vb,
                                 *ib,
-                                *alpha,
                                 ox,
                                 oy,
                             ) {
+                                sub.items.push(api::DrawCmd::ImageMesh {
+                                    tex: *tex,
+                                    vb: local_vb,
+                                    ib: local_ib,
+                                    alpha: *alpha,
+                                });
                                 tex.0.hash(&mut hasher);
                                 vb.offset.hash(&mut hasher);
                                 vb.len.hash(&mut hasher);
@@ -6122,44 +6119,25 @@ fn encode_draws_range(
                                 .push(api::DrawCmd::VisualEffect { rect: adj, effect: *effect });
                         }
                         api::DrawCmd::GlyphRun { run } => {
-                            // Copy referenced vertices/indices with rebase
-                            let v_count = run.vb.len as usize;
-                            let i_count = run.ib.len as usize;
-                            let new_v_off = sub.vertices.len() as u32;
-                            // Copy and offset verts
-                            let srcv = &list.vertices
-                                [(run.vb.offset as usize)..(run.vb.offset as usize + v_count)];
-                            for v in srcv.iter() {
-                                let mut vv = *v;
-                                vv.x -= ox;
-                                vv.y -= oy;
-                                sub.vertices.push(vv);
-                            }
-                            // Copy and rebase indices
-                            let srci = &list.indices
-                                [(run.ib.offset as usize)..(run.ib.offset as usize + i_count)];
-                            let ib_offset = sub.indices.len() as u32;
-                            let Some(remapped_len) = append_remapped_indices_to_span(
-                                srci,
-                                run.vb.offset,
-                                run.vb.len,
-                                new_v_off,
-                                &mut sub.indices,
-                            ) else {
-                                continue;
-                            };
-                            sub.items.push(api::DrawCmd::GlyphRun {
-                                run: api::GlyphRun {
-                                    atlas: run.atlas,
-                                    vb: api::VertexSpan { offset: new_v_off, len: v_count as u32 },
-                                    ib: api::IndexSpan {
-                                        offset: ib_offset,
-                                        len: remapped_len as u32,
+                            if let Some((vb, ib)) = append_offset_geometry_to_sublist(
+                                list.vertices,
+                                list.indices,
+                                &mut sub,
+                                run.vb,
+                                run.ib,
+                                ox,
+                                oy,
+                            ) {
+                                sub.items.push(api::DrawCmd::GlyphRun {
+                                    run: api::GlyphRun {
+                                        atlas: run.atlas,
+                                        vb,
+                                        ib,
+                                        sdf: run.sdf,
+                                        color: run.color,
                                     },
-                                    sdf: run.sdf,
-                                    color: run.color,
-                                },
-                            });
+                                });
+                            }
                         }
                         _ => {}
                     }
@@ -6517,10 +6495,7 @@ fn encode_draws_range(
                             )
                         };
                         let Some(local_idx_count) = copy_normalized_indices_for_local_vertex_span(
-                            isrc_slice,
-                            vb.offset,
-                            vb.len,
-                            idst,
+                            isrc_slice, vb.offset, vb.len, idst,
                         ) else {
                             i += 1;
                             continue;
@@ -6535,8 +6510,8 @@ fn encode_draws_range(
                             ib_off,
                         );
                         r.acc_draws = r.acc_draws.saturating_add(1);
-                    } else if v_count > 0 {
-                        enc.draw_primitives(MTLPrimitiveType::Triangle, 0, v_count as u64);
+                    } else if let Some(primitive) = solid_primitive_for_vertex_count(v_count) {
+                        enc.draw_primitives(primitive, 0, v_count as u64);
                         r.acc_draws = r.acc_draws.saturating_add(1);
                     }
                 }
@@ -7536,34 +7511,28 @@ fn append_remapped_indices_to_span(
     Some(source.len())
 }
 
-fn append_offset_image_mesh_to_sublist(
+fn append_offset_geometry_to_sublist(
     vertices: &[api::Vertex],
     indices: &[u16],
     sub: &mut api::DrawList,
-    tex: api::ImageHandle,
     vb: api::VertexSpan,
     ib: api::IndexSpan,
-    alpha: f32,
     ox: f32,
     oy: f32,
-) -> bool {
+) -> Option<(api::VertexSpan, api::IndexSpan)> {
     let v_count = vb.len as usize;
     let i_count = ib.len as usize;
-    let Some(srcv) =
-        vertices.get(vb.offset as usize..vb.offset as usize + v_count)
-    else {
-        return false;
+    let Some(srcv) = vertices.get(vb.offset as usize..vb.offset as usize + v_count) else {
+        return None;
     };
-    let Some(srci) =
-        indices.get(ib.offset as usize..ib.offset as usize + i_count)
-    else {
-        return false;
+    let Some(srci) = indices.get(ib.offset as usize..ib.offset as usize + i_count) else {
+        return None;
     };
     let Ok(new_v_off) = u32::try_from(sub.vertices.len()) else {
-        return false;
+        return None;
     };
     let Ok(ib_offset) = u32::try_from(sub.indices.len()) else {
-        return false;
+        return None;
     };
     for vertex in srcv {
         let mut out = *vertex;
@@ -7571,24 +7540,17 @@ fn append_offset_image_mesh_to_sublist(
         out.y -= oy;
         sub.vertices.push(out);
     }
-    let Some(remapped_len) = append_remapped_indices_to_span(
-        srci,
-        vb.offset,
-        vb.len,
-        new_v_off,
-        &mut sub.indices,
-    ) else {
+    let Some(remapped_len) =
+        append_remapped_indices_to_span(srci, vb.offset, vb.len, new_v_off, &mut sub.indices)
+    else {
         let len = sub.vertices.len().saturating_sub(v_count);
         sub.vertices.truncate(len);
-        return false;
+        return None;
     };
-    sub.items.push(api::DrawCmd::ImageMesh {
-        tex,
-        vb: api::VertexSpan { offset: new_v_off, len: vb.len },
-        ib: api::IndexSpan { offset: ib_offset, len: remapped_len as u32 },
-        alpha,
-    });
-    true
+    Some((
+        api::VertexSpan { offset: new_v_off, len: vb.len },
+        api::IndexSpan { offset: ib_offset, len: remapped_len as u32 },
+    ))
 }
 
 #[cfg(test)]
@@ -7640,6 +7602,17 @@ fn build_solid_pso(
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
+    let vdesc = api_vertex_descriptor();
+    desc.set_vertex_descriptor(Some(vdesc));
+    desc.set_sample_count(sample_count as u64);
+    let ca = desc.color_attachments().object_at(0).unwrap();
+    ca.set_pixel_format(fmt);
+    configure_source_alpha_blend(ca);
+    pipeline_state(device, "pso.solid.create", &desc)
+}
+
+#[inline]
+fn api_vertex_descriptor() -> &'static VertexDescriptorRef {
     let vdesc = VertexDescriptor::new();
     let attrs = vdesc.attributes();
     attrs.object_at(0).unwrap().set_format(MTLVertexFormat::Float2);
@@ -7654,12 +7627,7 @@ fn build_solid_pso(
     let layouts = vdesc.layouts();
     layouts.object_at(0).unwrap().set_stride(20);
     layouts.object_at(0).unwrap().set_step_function(MTLVertexStepFunction::PerVertex);
-    desc.set_vertex_descriptor(Some(&vdesc));
-    desc.set_sample_count(sample_count as u64);
-    let ca = desc.color_attachments().object_at(0).unwrap();
-    ca.set_pixel_format(fmt);
-    configure_source_alpha_blend(ca);
-    pipeline_state(device, "pso.solid.create", &desc)
+    vdesc
 }
 
 #[inline]
@@ -7846,21 +7814,8 @@ fn build_image_mesh_pso(
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
-    let vdesc = VertexDescriptor::new();
-    let attrs = vdesc.attributes();
-    attrs.object_at(0).unwrap().set_format(MTLVertexFormat::Float2);
-    attrs.object_at(0).unwrap().set_offset(0);
-    attrs.object_at(0).unwrap().set_buffer_index(0);
-    attrs.object_at(1).unwrap().set_format(MTLVertexFormat::Float2);
-    attrs.object_at(1).unwrap().set_offset(8);
-    attrs.object_at(1).unwrap().set_buffer_index(0);
-    attrs.object_at(2).unwrap().set_format(MTLVertexFormat::UChar4Normalized);
-    attrs.object_at(2).unwrap().set_offset(16);
-    attrs.object_at(2).unwrap().set_buffer_index(0);
-    let layouts = vdesc.layouts();
-    layouts.object_at(0).unwrap().set_stride(20);
-    layouts.object_at(0).unwrap().set_step_function(MTLVertexStepFunction::PerVertex);
-    desc.set_vertex_descriptor(Some(&vdesc));
+    let vdesc = api_vertex_descriptor();
+    desc.set_vertex_descriptor(Some(vdesc));
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
@@ -7934,21 +7889,8 @@ fn build_text_pso(
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
-    let vdesc = VertexDescriptor::new();
-    let attrs = vdesc.attributes();
-    attrs.object_at(0).unwrap().set_format(MTLVertexFormat::Float2);
-    attrs.object_at(0).unwrap().set_offset(0);
-    attrs.object_at(0).unwrap().set_buffer_index(0);
-    attrs.object_at(1).unwrap().set_format(MTLVertexFormat::Float2);
-    attrs.object_at(1).unwrap().set_offset(8);
-    attrs.object_at(1).unwrap().set_buffer_index(0);
-    attrs.object_at(2).unwrap().set_format(MTLVertexFormat::UChar4Normalized);
-    attrs.object_at(2).unwrap().set_offset(16);
-    attrs.object_at(2).unwrap().set_buffer_index(0);
-    let layouts = vdesc.layouts();
-    layouts.object_at(0).unwrap().set_stride(20);
-    layouts.object_at(0).unwrap().set_step_function(MTLVertexStepFunction::PerVertex);
-    desc.set_vertex_descriptor(Some(&vdesc));
+    let vdesc = api_vertex_descriptor();
+    desc.set_vertex_descriptor(Some(vdesc));
     desc.set_sample_count(sample_count as u64);
     #[cfg(target_os = "ios")]
     if supports_icb {
@@ -7972,21 +7914,8 @@ fn build_text_sdf_pso(
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
-    let vdesc = VertexDescriptor::new();
-    let attrs = vdesc.attributes();
-    attrs.object_at(0).unwrap().set_format(MTLVertexFormat::Float2);
-    attrs.object_at(0).unwrap().set_offset(0);
-    attrs.object_at(0).unwrap().set_buffer_index(0);
-    attrs.object_at(1).unwrap().set_format(MTLVertexFormat::Float2);
-    attrs.object_at(1).unwrap().set_offset(8);
-    attrs.object_at(1).unwrap().set_buffer_index(0);
-    attrs.object_at(2).unwrap().set_format(MTLVertexFormat::UChar4Normalized);
-    attrs.object_at(2).unwrap().set_offset(16);
-    attrs.object_at(2).unwrap().set_buffer_index(0);
-    let layouts = vdesc.layouts();
-    layouts.object_at(0).unwrap().set_stride(20);
-    layouts.object_at(0).unwrap().set_step_function(MTLVertexStepFunction::PerVertex);
-    desc.set_vertex_descriptor(Some(&vdesc));
+    let vdesc = api_vertex_descriptor();
+    desc.set_vertex_descriptor(Some(vdesc));
     desc.set_sample_count(sample_count as u64);
     #[cfg(target_os = "ios")]
     if supports_icb {

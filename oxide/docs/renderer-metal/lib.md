@@ -40,15 +40,21 @@ Consecutive rounded rectangles are collected into retained scratch buffers and e
 
 The same retained-scratch discipline is used for the other small instanced UI batches: nine-slice images, argument-buffer images, spinners, backdrop composites, visual effects, and grouped glyph-run command metadata reuse renderer-owned buffers instead of allocating fresh temporary vectors on each encode.
 
+Solid, image-mesh, text, and SDF text pipelines share the same API vertex descriptor because they all consume `oxide_renderer_api::Vertex` layout: position, UV, and normalized color packed at a 20-byte stride.
+
 Inline layer fallbacks encode the original draw-list range directly. That keeps vertex and index spans valid without cloning the layer item slice or duplicating the full vertex/index arrays when a layer is rendered inline for prepass, unsupported commands, disabled layer caching, or a stale cache miss.
 
 Damage prefiltering stays allocation-light. It now builds a compact temporary command list that borrows the original vertex and index backing arrays, so geometry-backed `Solid`, `GlyphRun`, and inline layer ranges can still be culled without cloning the full vertex/index payload just to discard off-scissor commands.
+
+Layer texture sublists share one geometry-span offset/rebase helper for image meshes and glyph runs. That keeps local layer coordinates and rebased index spans consistent across the pre-render cache pass and the inline encode fallback path.
 
 Renderer GPU timing is collected in-app instead of depending on Instruments hardware-counter availability. Completed frame command buffers update renderer stats from Metal's command-buffer GPU start/end timestamps, and iOS devices that expose the common timestamp counter set attach an `MTLCounterSampleBuffer` to the main 2D render pass for vertex/fragment/pass attribution. Those values are read after command-buffer completion and surfaced through `last_stats()` without waiting on the GPU from the frame hot path.
 
 Frame-level camera/effect metadata is gathered in one draw-list scan. Camera coverage, camera-blur sigma, backdrop presence, and the strongest visual-effect blur plan are reused by the later policy and prepass blocks instead of rediscovering the same facts with separate passes.
 
 Native camera preview commands are treated as compositor-plane markers. The Metal renderer uses them to keep the drawable clear alpha transparent for the frame and otherwise performs no camera-frame texture work, leaving preview presentation to the host layer below the Metal layer.
+
+Synthetic camera benchmark textures keep the BGRA reference and optimized NV12 shader on the same BT.709 full-range contract. The optimized shader uses normalized chroma offsets directly, while the legacy shader intentionally preserves its older divergent full-range conversion so the snapshot benchmark can detect regressions against the BGRA reference.
 
 Scene3D bloom uses the same persistent-object discipline: additive bloom PSOs are created once, bloom textures are reused across frames at a bounded downsample size, and `encode_scene3d()` routes `Pass3d::bloom` through the dedicated blur/composite encoder after the main 3D pass has initialized the target.
 
@@ -67,6 +73,10 @@ ID-mask composition is GPU-owned. Semantic region/subregion triangles are raster
 
 ## Changelog
 
+- 2026-05-25: shared layer-sublist geometry offset/rebase handling between image meshes and glyph runs.
+- 2026-05-25: reused the existing unindexed-vertex primitive selector for Metal image meshes so four-vertex quads encode as triangle strips instead of incomplete triangle lists.
+- 2026-05-30: Aligned optimized full-range NV12 camera shader chroma handling with the BGRA benchmark reference.
+- 2026-05-22: Shared the Metal API vertex descriptor across solid, image-mesh, text, and SDF text PSO setup.
 - 2026-05-18: Compact ID-mask render-target reuse and shared the clear/store setup used by raster and field passes.
 - 2026-05-15: made `NativeCameraPreview` a no-op Metal draw marker that requests transparent clear so host compositor camera layers can show through under Oxide UI.
 - 2026-05-15: Shared overlay color-target attachment setup between ID-mask and neon-marker encoders.
