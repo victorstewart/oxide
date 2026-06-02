@@ -355,6 +355,7 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
         "pub image_upload_scratch_bytes: u64",
         "pub image_upload_scratch_grows: u32",
         "pub draw_items: u32",
+        "pub draw_items_coalesced: u32",
         "pub draw_pipeline_binds: u32",
         "pub draw_bind_group_binds: u32",
         "pub draw_scissor_sets: u32",
@@ -487,10 +488,16 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(source.contains("DrawStateKey"));
     assert!(source.contains("fn draw_state_key(&self, draw: GpuDraw) -> Option<DrawStateKey>"));
     assert!(source.contains("set_draw_state_cache_enabled_for_benchmark"));
+    assert!(source.contains("draw_item_coalescing_enabled: bool"));
+    assert!(source.contains("draw_item_coalescing_enabled: true"));
+    assert!(source.contains("set_draw_item_coalescing_enabled_for_benchmark"));
+    assert!(source.contains("fn coalescible_draw_kind"));
+    assert!(source.contains("fn try_coalesce_draw_item"));
     assert!(source.contains("bound_pipeline"));
     assert!(source.contains("bound_bind"));
     assert!(source.contains("bound_clip"));
     assert!(source.contains("self.stats.draw_items"));
+    assert!(source.contains("self.stats.draw_items_coalesced"));
     assert!(source.contains("self.stats.draw_pipeline_binds"));
     assert!(source.contains("self.stats.draw_bind_group_binds"));
     assert!(source.contains("self.stats.draw_scissor_sets"));
@@ -568,6 +575,7 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(host.contains("renderer_stats_metrics(current.stats, \"current\")"));
     assert!(host.contains("renderer_stats_metrics(legacy.stats, \"legacy\")"));
     assert!(host.contains("{key_prefix}draw_items={}"));
+    assert!(host.contains("{key_prefix}draw_items_coalesced={}"));
     assert!(host.contains("{key_prefix}draw_pipeline_binds={}"));
     assert!(host.contains("{key_prefix}draw_bind_group_binds={}"));
     assert!(host.contains("{key_prefix}draw_scissor_sets={}"));

@@ -215,6 +215,17 @@ impl FrameData {
     }
 }
 
+fn coalescible_draw_kind(a: DrawKind, b: DrawKind) -> bool {
+    match (a, b) {
+        (DrawKind::Solid, DrawKind::Solid) => true,
+        (DrawKind::Rgba { image: a }, DrawKind::Rgba { image: b }) => a == b,
+        (DrawKind::A8 { image: a }, DrawKind::A8 { image: b }) => a == b,
+        (DrawKind::Sdf { image: a }, DrawKind::Sdf { image: b }) => a == b,
+        (DrawKind::Layer { id: a }, DrawKind::Layer { id: b }) => a == b,
+        _ => false,
+    }
+}
+
 #[derive(Clone, Copy)]
 enum TimestampPassFamily {
     Clear,
@@ -550,6 +561,10 @@ impl BrowserRenderer {
         self.inner.set_draw_state_cache_enabled_for_benchmark(enabled);
     }
 
+    pub fn set_draw_item_coalescing_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.inner.set_draw_item_coalescing_enabled_for_benchmark(enabled);
+    }
+
     pub fn set_image_upload_scratch_enabled_for_benchmark(&mut self, enabled: bool) {
         self.inner.set_image_upload_scratch_enabled_for_benchmark(enabled);
     }
@@ -784,6 +799,7 @@ pub struct WebGpuRenderer {
     stats: WebRendererStats,
     timestamp_queries: Option<WebGpuTimestampQueries>,
     draw_state_cache_enabled: bool,
+    draw_item_coalescing_enabled: bool,
     image_upload_scratch_enabled: bool,
     effect_uniform_batch_enabled: bool,
     backdrop_batch_enabled: bool,
@@ -1035,6 +1051,7 @@ impl WebGpuRenderer {
             stats: WebRendererStats::default(),
             timestamp_queries,
             draw_state_cache_enabled: true,
+            draw_item_coalescing_enabled: true,
             image_upload_scratch_enabled: true,
             effect_uniform_batch_enabled: true,
             backdrop_batch_enabled: true,
@@ -1067,6 +1084,10 @@ impl WebGpuRenderer {
 
     pub fn set_draw_state_cache_enabled_for_benchmark(&mut self, enabled: bool) {
         self.draw_state_cache_enabled = enabled;
+    }
+
+    pub fn set_draw_item_coalescing_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.draw_item_coalescing_enabled = enabled;
     }
 
     pub fn set_image_upload_scratch_enabled_for_benchmark(&mut self, enabled: bool) {
@@ -1790,22 +1811,49 @@ impl WebGpuRenderer {
         self.target_stack.last().copied()
     }
 
+    fn try_coalesce_draw_item(&mut self, kind: DrawKind, first_index: u32, index_count: u32, clip: api::RectI, target: Option<u32>) -> bool {
+        if !self.draw_item_coalescing_enabled {
+            return false;
+        }
+        let Some(last) = self.frame.draws.last_mut() else {
+            return false;
+        };
+        if last.first_index.saturating_add(last.index_count) == first_index
+            && last.clip == clip
+            && last.target == target
+            && last.effect_uniform_offset == 0
+            && coalescible_draw_kind(last.kind, kind)
+        {
+            last.index_count = last.index_count.saturating_add(index_count);
+            self.stats.draw_items_coalesced = self.stats.draw_items_coalesced.saturating_add(1);
+            true
+        } else {
+            false
+        }
+    }
+
     fn push_draw(&mut self, kind: DrawKind, vertices: &[GpuVertex], indices: &[u32]) {
         if vertices.is_empty() || indices.is_empty() {
             return;
         }
         let base = self.frame.vertices.len() as u32;
         let first_index = self.frame.indices.len() as u32;
+        let index_count = indices.len() as u32;
+        let clip = self.current_clip();
+        let target = self.current_target();
         self.frame.vertices.extend_from_slice(vertices);
         self.frame.indices.extend(indices.iter().map(|index| base.saturating_add(*index)));
         self.frame.record_draw_kind(kind);
+        if self.try_coalesce_draw_item(kind, first_index, index_count, clip, target) {
+            return;
+        }
         self.frame.draws.push(GpuDraw {
             kind,
             first_index,
-            index_count: indices.len() as u32,
-            clip: self.current_clip(),
+            index_count,
+            clip,
             effect_uniform_offset: 0,
-            target: self.current_target(),
+            target,
         });
     }
 
@@ -1819,20 +1867,25 @@ impl WebGpuRenderer {
             return;
         }
         let clip = self.current_clip();
+        let target = self.current_target();
         let base = self.frame.vertices.len() as u32;
         let first_index = self.frame.indices.len() as u32;
+        let index_count = self.scratch_indices.len() as u32;
         self.frame.vertices.extend_from_slice(&self.scratch_vertices);
         self.frame
             .indices
             .extend(self.scratch_indices.iter().map(|index| base.saturating_add(*index)));
         self.frame.record_draw_kind(kind);
+        if self.try_coalesce_draw_item(kind, first_index, index_count, clip, target) {
+            return;
+        }
         self.frame.draws.push(GpuDraw {
             kind,
             first_index,
-            index_count: self.scratch_indices.len() as u32,
+            index_count,
             clip,
             effect_uniform_offset: 0,
-            target: self.current_target(),
+            target,
         });
     }
 

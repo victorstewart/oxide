@@ -886,6 +886,7 @@ fn assert_web_frame_case_contract(case: &Value) {
     for key in [
         "draws",
         "draw_items",
+        "draw_items_coalesced",
         "draw_pipeline_binds",
         "draw_bind_group_binds",
         "draw_scissor_sets",
@@ -1111,6 +1112,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "glyph_run_ab",
         "neon_marker_ab",
         "direct_surface_ab",
+        "draw_item_coalescing_ab",
         "draw_state_cache_ab",
         "clip_state_cache_ab",
     ];
@@ -1258,6 +1260,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "web.wasm.webgpu.neon_marker.legacy_rebind",
         "web.wasm.webgpu.direct_surface.current",
         "web.wasm.webgpu.direct_surface.legacy_scene_present",
+        "web.wasm.webgpu.draw_item_coalescing.current",
+        "web.wasm.webgpu.draw_item_coalescing.legacy_uncoalesced",
         "web.wasm.webgpu.draw_state_cache.current",
         "web.wasm.webgpu.draw_state_cache.legacy_rebind",
         "web.wasm.webgpu.clip_state_cache.current",
@@ -1277,10 +1281,10 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         gpu_timestamp_stage_breakdown["id"].as_str(),
         Some("web.wasm.webgpu.gpu_timestamp_stage_breakdown"),
     );
-    assert_eq!(web_report_number(gpu_timestamp_stage_breakdown, "row_count"), 35.0);
-    assert_eq!(web_report_number(gpu_timestamp_stage_breakdown, "collected_rows"), 35.0);
+    assert_eq!(web_report_number(gpu_timestamp_stage_breakdown, "row_count"), 37.0);
+    assert_eq!(web_report_number(gpu_timestamp_stage_breakdown, "collected_rows"), 37.0);
     assert_eq!(web_report_number(gpu_timestamp_stage_breakdown, "stage_count"), 9.0);
-    assert_eq!(web_report_number(gpu_timestamp_stage_breakdown, "row_detail_count"), 35.0);
+    assert_eq!(web_report_number(gpu_timestamp_stage_breakdown, "row_detail_count"), 37.0);
     assert_eq!(
         web_report_number(gpu_timestamp_stage_breakdown, "total_render_passes"),
         web_report_number(gpu_timestamp_stage_breakdown, "total_timestamp_passes"),
@@ -1331,8 +1335,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         warm_resource_churn["id"].as_str(),
         Some("web.wasm.webgpu.warm_resource_churn.current_rows"),
     );
-    assert_eq!(web_report_number(warm_resource_churn, "checked_rows"), 18.0);
-    assert_eq!(web_report_number(warm_resource_churn, "excluded_rows"), 17.0);
+    assert_eq!(web_report_number(warm_resource_churn, "checked_rows"), 19.0);
+    assert_eq!(web_report_number(warm_resource_churn, "excluded_rows"), 18.0);
     let warm_rows: Vec<&str> = warm_resource_churn["rows"]
         .as_array()
         .expect("warm resource churn rows")
@@ -1371,6 +1375,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "web.wasm.webgpu.command_family_matrix",
         "web.wasm.webgpu.neon_marker.current",
         "web.wasm.webgpu.direct_surface.current",
+        "web.wasm.webgpu.draw_item_coalescing.current",
         "web.wasm.webgpu.draw_state_cache.current",
         "web.wasm.webgpu.clip_state_cache.current",
     ] {
@@ -1391,6 +1396,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "web.wasm.webgpu.command_family_matrix.legacy_rebind",
         "web.wasm.webgpu.neon_marker.legacy_rebind",
         "web.wasm.webgpu.direct_surface.legacy_scene_present",
+        "web.wasm.webgpu.draw_item_coalescing.legacy_uncoalesced",
         "web.wasm.webgpu.draw_state_cache.legacy_rebind",
         "web.wasm.webgpu.clip_state_cache.legacy_rebind",
     ] {
@@ -1462,8 +1468,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         Some("web.wasm.webgpu.wasm_allocation_audit.current_rows"),
     );
     assert_eq!(wasm_allocation_audit["status"].as_str(), Some("measured"));
-    assert_eq!(web_report_number(wasm_allocation_audit, "checked_count"), 18.0);
-    assert_eq!(web_report_number(wasm_allocation_audit, "excluded_count"), 17.0);
+    assert_eq!(web_report_number(wasm_allocation_audit, "checked_count"), 19.0);
+    assert_eq!(web_report_number(wasm_allocation_audit, "excluded_count"), 18.0);
     assert_eq!(
         web_report_number(wasm_allocation_audit, "row_detail_count"),
         web_report_number(wasm_allocation_audit, "checked_count"),
@@ -1499,6 +1505,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.glyph_run.current"));
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.neon_marker.current"));
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.direct_surface.current"));
+    assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.draw_item_coalescing.current"));
     for detail in wasm_allocation_details {
         let id = detail["id"].as_str().expect("wasm allocation row detail id");
         assert!(wasm_allocation_rows.contains(&id));
@@ -1778,6 +1785,11 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
             &["expected_draw_items", "expected_image_draws", "draw_items", "image_draws", "render_passes", "draw_passes", "clear_passes", "present_passes", "texture_copies", "gpu_timestamp_passes"],
         ),
         (
+            "draw_item_coalescing",
+            &["web.wasm.webgpu.draw_item_coalescing.current", "web.wasm.webgpu.draw_item_coalescing.legacy_uncoalesced"],
+            &["expected_source_draw_items", "expected_current_draw_items", "draw_items", "draw_items_coalesced", "draws", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
+        ),
+        (
             "draw_state_cache",
             &["web.wasm.webgpu.draw_state_cache.current", "web.wasm.webgpu.draw_state_cache.legacy_rebind"],
             &["draw_items", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
@@ -1879,6 +1891,10 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     let direct_surface_current = web_report_case(&report, "web.wasm.webgpu.direct_surface.current");
     let direct_surface_legacy =
         web_report_case(&report, "web.wasm.webgpu.direct_surface.legacy_scene_present");
+    let draw_item_coalescing_current =
+        web_report_case(&report, "web.wasm.webgpu.draw_item_coalescing.current");
+    let draw_item_coalescing_legacy =
+        web_report_case(&report, "web.wasm.webgpu.draw_item_coalescing.legacy_uncoalesced");
     let draw_state_current = web_report_case(&report, "web.wasm.webgpu.draw_state_cache.current");
     let draw_state_legacy =
         web_report_case(&report, "web.wasm.webgpu.draw_state_cache.legacy_rebind");
@@ -1916,6 +1932,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         neon_marker_legacy,
         direct_surface_current,
         direct_surface_legacy,
+        draw_item_coalescing_current,
+        draw_item_coalescing_legacy,
         draw_state_current,
         draw_state_legacy,
         clip_state_current,
@@ -2593,6 +2611,84 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         web_report_number(&report["direct_surface_summary"], "current_gpu_timestamp_total_ns")
             < web_report_number(&report["direct_surface_summary"], "legacy_gpu_timestamp_total_ns"),
         "direct surface GPU timestamp total should beat forced scene-present"
+    );
+    assert_eq!(
+        web_report_number(draw_item_coalescing_current, "expected_source_draw_items"),
+        1024.0,
+    );
+    assert_eq!(
+        web_report_number(draw_item_coalescing_legacy, "expected_source_draw_items"),
+        1024.0,
+    );
+    assert_eq!(
+        web_report_number(draw_item_coalescing_current, "expected_current_draw_items"),
+        1.0,
+    );
+    assert_eq!(
+        web_report_number(draw_item_coalescing_legacy, "expected_current_draw_items"),
+        1.0,
+    );
+    assert_eq!(
+        web_report_number(draw_item_coalescing_current, "draw_items"),
+        web_report_number(draw_item_coalescing_current, "expected_current_draw_items"),
+    );
+    assert_eq!(
+        web_report_number(draw_item_coalescing_legacy, "draw_items"),
+        web_report_number(draw_item_coalescing_legacy, "expected_source_draw_items"),
+    );
+    assert_eq!(
+        web_report_number(draw_item_coalescing_current, "draw_items_coalesced"),
+        web_report_number(draw_item_coalescing_current, "expected_source_draw_items")
+            - web_report_number(draw_item_coalescing_current, "expected_current_draw_items"),
+    );
+    assert_eq!(
+        web_report_number(draw_item_coalescing_legacy, "draw_items_coalesced"),
+        0.0,
+    );
+    assert_eq!(
+        web_report_number(draw_item_coalescing_current, "draws"),
+        web_report_number(draw_item_coalescing_current, "draw_items"),
+    );
+    assert_eq!(
+        web_report_number(draw_item_coalescing_legacy, "draws"),
+        web_report_number(draw_item_coalescing_legacy, "draw_items"),
+    );
+    assert!(
+        web_report_number(draw_item_coalescing_current, "draw_items")
+            < web_report_number(draw_item_coalescing_legacy, "draw_items"),
+        "draw-item coalescing should reduce encoded draw items"
+    );
+    assert!(
+        web_report_number(draw_item_coalescing_current, "draw_pipeline_binds")
+            <= web_report_number(draw_item_coalescing_legacy, "draw_pipeline_binds")
+    );
+    assert!(
+        web_report_number(draw_item_coalescing_current, "draw_bind_group_binds")
+            <= web_report_number(draw_item_coalescing_legacy, "draw_bind_group_binds")
+    );
+    assert!(
+        web_report_number(draw_item_coalescing_current, "draw_scissor_sets")
+            <= web_report_number(draw_item_coalescing_legacy, "draw_scissor_sets")
+    );
+    assert!(
+        web_report_number(&report["draw_item_coalescing_summary"], "legacy_over_current") > 1.0,
+        "draw-item coalescing p50 should beat uncoalesced legacy"
+    );
+    assert_eq!(
+        web_report_number(&report["draw_item_coalescing_summary"], "current_draw_items"),
+        web_report_number(draw_item_coalescing_current, "draw_items"),
+    );
+    assert_eq!(
+        web_report_number(&report["draw_item_coalescing_summary"], "legacy_draw_items"),
+        web_report_number(draw_item_coalescing_legacy, "draw_items"),
+    );
+    assert_eq!(
+        web_report_number(draw_item_coalescing_current, "gpu_timestamp_passes"),
+        web_report_number(draw_item_coalescing_current, "render_passes"),
+    );
+    assert_eq!(
+        web_report_number(draw_item_coalescing_legacy, "gpu_timestamp_passes"),
+        web_report_number(draw_item_coalescing_legacy, "render_passes"),
     );
     assert!(
         web_report_number(draw_state_current, "draw_items")

@@ -955,6 +955,7 @@ function frameLoopCase(metrics)
       ...frameStageAllocationMetricFields(metrics),
       draws: numberMetric(metrics, "draws"),
       draw_items: numberMetric(metrics, "draw_items"),
+      draw_items_coalesced: numberMetric(metrics, "draw_items_coalesced"),
       draw_pipeline_binds: numberMetric(metrics, "draw_pipeline_binds"),
       draw_bind_group_binds: numberMetric(metrics, "draw_bind_group_binds"),
       draw_scissor_sets: numberMetric(metrics, "draw_scissor_sets"),
@@ -1201,6 +1202,7 @@ function idMaskCase(metrics, id, variant, prefix)
       ...submitAllocationMetricFields(metrics, `${prefix}_`),
       draws: numberMetric(metrics, `${prefix}_draws`),
       draw_items: numberMetric(metrics, `${prefix}_draw_items`),
+      draw_items_coalesced: numberMetric(metrics, `${prefix}_draw_items_coalesced`),
       draw_pipeline_binds: numberMetric(metrics, `${prefix}_draw_pipeline_binds`),
       draw_bind_group_binds: numberMetric(metrics, `${prefix}_draw_bind_group_binds`),
       draw_scissor_sets: numberMetric(metrics, `${prefix}_draw_scissor_sets`),
@@ -1277,6 +1279,7 @@ function prefixedBackendCase(metrics, id, variant, prefix, extra)
       ...submitAllocationMetricFields(metrics, `${prefix}_`),
       draws: numberMetric(metrics, `${prefix}_draws`),
       draw_items: numberMetric(metrics, `${prefix}_draw_items`),
+      draw_items_coalesced: numberMetric(metrics, `${prefix}_draw_items_coalesced`),
       draw_pipeline_binds: numberMetric(metrics, `${prefix}_draw_pipeline_binds`),
       draw_bind_group_binds: numberMetric(metrics, `${prefix}_draw_bind_group_binds`),
       draw_scissor_sets: numberMetric(metrics, `${prefix}_draw_scissor_sets`),
@@ -1344,6 +1347,7 @@ const WARM_RESOURCE_CHURN_EXCLUDED_IDS = new Set([
    "web.wasm.webgpu.glyph_run.legacy_rebind",
    "web.wasm.webgpu.neon_marker.legacy_rebind",
    "web.wasm.webgpu.direct_surface.legacy_scene_present",
+   "web.wasm.webgpu.draw_item_coalescing.legacy_uncoalesced",
    "web.wasm.webgpu.draw_state_cache.legacy_rebind",
    "web.wasm.webgpu.clip_state_cache.legacy_rebind",
 ]);
@@ -1415,6 +1419,7 @@ const EXPECTED_BENCHMARK_MARKS = [
    "glyph_run_ab",
    "neon_marker_ab",
    "direct_surface_ab",
+   "draw_item_coalescing_ab",
    "draw_state_cache_ab",
    "clip_state_cache_ab",
 ];
@@ -1514,6 +1519,12 @@ const WEBGPU_BACKEND_PATHS = [
       id: "direct_surface",
       rows: ["web.wasm.webgpu.direct_surface.current", "web.wasm.webgpu.direct_surface.legacy_scene_present"],
       counters: ["expected_draw_items", "expected_image_draws", "draw_items", "image_draws", "render_passes", "draw_passes", "clear_passes", "present_passes", "texture_copies", "gpu_timestamp_passes"],
+      comparison: "current_vs_legacy",
+   },
+   {
+      id: "draw_item_coalescing",
+      rows: ["web.wasm.webgpu.draw_item_coalescing.current", "web.wasm.webgpu.draw_item_coalescing.legacy_uncoalesced"],
+      counters: ["expected_source_draw_items", "expected_current_draw_items", "draw_items", "draw_items_coalesced", "draws", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
       comparison: "current_vs_legacy",
    },
    {
@@ -2045,6 +2056,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
    let glyphRunMetrics = parseMetricString(pageReport.glyph_run_ab);
    let neonMarkerMetrics = parseMetricString(pageReport.neon_marker_ab);
    let directSurfaceMetrics = parseMetricString(pageReport.direct_surface_ab);
+   let drawItemCoalescingMetrics = parseMetricString(pageReport.draw_item_coalescing_ab || "");
    let drawStateMetrics = parseMetricString(pageReport.draw_state_cache_ab);
    let clipStateMetrics = parseMetricString(pageReport.clip_state_ab);
    let timingMetrics = parseMetricString(pageReport.webgpu_timing);
@@ -2409,6 +2421,44 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          },
       ),
       prefixedBackendCase(
+         drawItemCoalescingMetrics,
+         "web.wasm.webgpu.draw_item_coalescing.current",
+         "webgpu-draw-item-coalescing-current",
+         "current",
+         {
+            expected_source_draw_items: numberMetric(
+               drawItemCoalescingMetrics,
+               "expected_source_draw_items",
+            ),
+            expected_current_draw_items: numberMetric(
+               drawItemCoalescingMetrics,
+               "expected_current_draw_items",
+            ),
+            columns: numberMetric(drawItemCoalescingMetrics, "columns"),
+            image_width: numberMetric(drawItemCoalescingMetrics, "image_width"),
+            image_height: numberMetric(drawItemCoalescingMetrics, "image_height"),
+         },
+      ),
+      prefixedBackendCase(
+         drawItemCoalescingMetrics,
+         "web.wasm.webgpu.draw_item_coalescing.legacy_uncoalesced",
+         "webgpu-draw-item-coalescing-legacy-uncoalesced",
+         "legacy",
+         {
+            expected_source_draw_items: numberMetric(
+               drawItemCoalescingMetrics,
+               "expected_source_draw_items",
+            ),
+            expected_current_draw_items: numberMetric(
+               drawItemCoalescingMetrics,
+               "expected_current_draw_items",
+            ),
+            columns: numberMetric(drawItemCoalescingMetrics, "columns"),
+            image_width: numberMetric(drawItemCoalescingMetrics, "image_width"),
+            image_height: numberMetric(drawItemCoalescingMetrics, "image_height"),
+         },
+      ),
+      prefixedBackendCase(
          drawStateMetrics,
          "web.wasm.webgpu.draw_state_cache.current",
          "webgpu-draw-state-cache-current",
@@ -2493,6 +2543,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          "The WebGPU command-family A/B rows draw the same generic ImageMesh, NineSlice, and SDF glyph workload while comparing current draw-state caching against a legacy rebind path and keeping web CameraBg work unavailable.",
          "The WebGPU glyph-run A/B rows draw the same atlas-backed A8 and SDF GlyphRun workload while comparing current draw-state caching against a legacy rebind path.",
          "The WebGPU direct-surface A/B rows draw the same no-effect image workload while comparing direct surface rendering against a benchmark-only forced scene-present path.",
+         "The WebGPU draw-item coalescing A/B rows draw the same adjacent same-state workload while comparing current contiguous draw-item merging against an uncoalesced legacy path.",
          "The WebGPU clip-state A/B rows use real Oxide ClipPush/ClipPop commands to measure scissor-state caching.",
          "Pass-family counters provide browser GPU-stage attribution when direct timestamp queries are unavailable.",
          "Warm current-path WebGPU rows are gated against post-warmup resource creation, buffer growth, mesh creation, image-upload temp allocation, and CPU/image scratch growth.",
@@ -2518,6 +2569,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          glyph_run_ab: pageReport.glyph_run_ab,
          neon_marker_ab: pageReport.neon_marker_ab,
          direct_surface_ab: pageReport.direct_surface_ab,
+         draw_item_coalescing_ab: pageReport.draw_item_coalescing_ab,
          draw_state_cache_ab: pageReport.draw_state_cache_ab,
          clip_state_ab: pageReport.clip_state_ab,
          capture_target: pageReport.capture_target,
@@ -2912,6 +2964,64 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          legacy_gpu_timestamp_total_ns: numberMetric(directSurfaceMetrics, "legacy_gpu_timestamp_total_ns"),
          expected_draw_items: numberMetric(directSurfaceMetrics, "expected_draw_items"),
          expected_image_draws: numberMetric(directSurfaceMetrics, "expected_image_draws"),
+      },
+      draw_item_coalescing_summary: {
+         id: "web.wasm.webgpu.draw_item_coalescing.current_vs_legacy_uncoalesced",
+         legacy_over_current: numberMetric(drawItemCoalescingMetrics, "legacy_over_current"),
+         current_p50_ms: numberMetric(drawItemCoalescingMetrics, "current_p50_ms"),
+         legacy_p50_ms: numberMetric(drawItemCoalescingMetrics, "legacy_p50_ms"),
+         expected_source_draw_items: numberMetric(
+            drawItemCoalescingMetrics,
+            "expected_source_draw_items",
+         ),
+         expected_current_draw_items: numberMetric(
+            drawItemCoalescingMetrics,
+            "expected_current_draw_items",
+         ),
+         current_draw_items: numberMetric(drawItemCoalescingMetrics, "current_draw_items"),
+         legacy_draw_items: numberMetric(drawItemCoalescingMetrics, "legacy_draw_items"),
+         current_draw_items_coalesced: numberMetric(
+            drawItemCoalescingMetrics,
+            "current_draw_items_coalesced",
+         ),
+         legacy_draw_items_coalesced: numberMetric(
+            drawItemCoalescingMetrics,
+            "legacy_draw_items_coalesced",
+         ),
+         current_draws: numberMetric(drawItemCoalescingMetrics, "current_draws"),
+         legacy_draws: numberMetric(drawItemCoalescingMetrics, "legacy_draws"),
+         current_draw_pipeline_binds: numberMetric(
+            drawItemCoalescingMetrics,
+            "current_draw_pipeline_binds",
+         ),
+         legacy_draw_pipeline_binds: numberMetric(
+            drawItemCoalescingMetrics,
+            "legacy_draw_pipeline_binds",
+         ),
+         current_draw_bind_group_binds: numberMetric(
+            drawItemCoalescingMetrics,
+            "current_draw_bind_group_binds",
+         ),
+         legacy_draw_bind_group_binds: numberMetric(
+            drawItemCoalescingMetrics,
+            "legacy_draw_bind_group_binds",
+         ),
+         current_draw_scissor_sets: numberMetric(
+            drawItemCoalescingMetrics,
+            "current_draw_scissor_sets",
+         ),
+         legacy_draw_scissor_sets: numberMetric(
+            drawItemCoalescingMetrics,
+            "legacy_draw_scissor_sets",
+         ),
+         current_gpu_timestamp_total_ns: numberMetric(
+            drawItemCoalescingMetrics,
+            "current_gpu_timestamp_total_ns",
+         ),
+         legacy_gpu_timestamp_total_ns: numberMetric(
+            drawItemCoalescingMetrics,
+            "legacy_gpu_timestamp_total_ns",
+         ),
       },
       draw_state_summary: {
          id: "web.wasm.webgpu.draw_state_cache.current_vs_legacy_rebind",
@@ -3453,6 +3563,12 @@ function renderMarkdown(report)
    lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
    lines.push(`| \`${report.direct_surface_summary.id}\` | ${report.direct_surface_summary.current_p50_ms.toFixed(3)} | ${report.direct_surface_summary.legacy_p50_ms.toFixed(3)} | ${report.direct_surface_summary.legacy_over_current.toFixed(3)} | ${report.direct_surface_summary.current_draw_items} | ${report.direct_surface_summary.legacy_draw_items} | ${report.direct_surface_summary.current_image_draws} | ${report.direct_surface_summary.legacy_image_draws} | ${report.direct_surface_summary.current_render_passes} | ${report.direct_surface_summary.legacy_render_passes} | ${report.direct_surface_summary.current_draw_passes} | ${report.direct_surface_summary.legacy_draw_passes} | ${report.direct_surface_summary.current_clear_passes} | ${report.direct_surface_summary.legacy_clear_passes} | ${report.direct_surface_summary.current_present_passes} | ${report.direct_surface_summary.legacy_present_passes} | ${report.direct_surface_summary.current_gpu_timestamp_total_ns} | ${report.direct_surface_summary.legacy_gpu_timestamp_total_ns} |`);
    lines.push("");
+   lines.push("## Draw Item Coalescing Summary");
+   lines.push("");
+   lines.push("| Comparison | Current p50 ms | Legacy p50 ms | Legacy / Current | Source Items | Expected Current Items | Current Items | Legacy Items | Current Coalesced | Legacy Coalesced | Current Draws | Legacy Draws | Current Pipeline Binds | Legacy Pipeline Binds | Current Bind Groups | Legacy Bind Groups | Current Scissors | Legacy Scissors | Current GPU ns | Legacy GPU ns |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+   lines.push(`| \`${report.draw_item_coalescing_summary.id}\` | ${report.draw_item_coalescing_summary.current_p50_ms.toFixed(3)} | ${report.draw_item_coalescing_summary.legacy_p50_ms.toFixed(3)} | ${report.draw_item_coalescing_summary.legacy_over_current.toFixed(3)} | ${report.draw_item_coalescing_summary.expected_source_draw_items} | ${report.draw_item_coalescing_summary.expected_current_draw_items} | ${report.draw_item_coalescing_summary.current_draw_items} | ${report.draw_item_coalescing_summary.legacy_draw_items} | ${report.draw_item_coalescing_summary.current_draw_items_coalesced} | ${report.draw_item_coalescing_summary.legacy_draw_items_coalesced} | ${report.draw_item_coalescing_summary.current_draws} | ${report.draw_item_coalescing_summary.legacy_draws} | ${report.draw_item_coalescing_summary.current_draw_pipeline_binds} | ${report.draw_item_coalescing_summary.legacy_draw_pipeline_binds} | ${report.draw_item_coalescing_summary.current_draw_bind_group_binds} | ${report.draw_item_coalescing_summary.legacy_draw_bind_group_binds} | ${report.draw_item_coalescing_summary.current_draw_scissor_sets} | ${report.draw_item_coalescing_summary.legacy_draw_scissor_sets} | ${report.draw_item_coalescing_summary.current_gpu_timestamp_total_ns} | ${report.draw_item_coalescing_summary.legacy_gpu_timestamp_total_ns} |`);
+   lines.push("");
    lines.push("## Draw State Cache Summary");
    lines.push("");
    lines.push("| Comparison | Current p50 ms | Legacy p50 ms | Legacy / Current | Current Items | Legacy Items | Current Pipeline Binds | Legacy Pipeline Binds | Current Bind Groups | Legacy Bind Groups | Current Scissors | Legacy Scissors |");
@@ -3643,6 +3759,7 @@ function assertWarmResourceChurn(report, byId)
       "web.wasm.webgpu.glyph_run.current",
       "web.wasm.webgpu.neon_marker.current",
       "web.wasm.webgpu.direct_surface.current",
+      "web.wasm.webgpu.draw_item_coalescing.current",
       "web.wasm.webgpu.draw_state_cache.current",
       "web.wasm.webgpu.clip_state_cache.current",
    ]) {
@@ -3752,6 +3869,10 @@ function assertWasmAllocationAudit(report, byId)
       "web.wasm.webgpu.layer_damage_effects",
       "web.wasm.webgpu.clean_layer.clean_reuse",
       "web.wasm.webgpu.command_family_matrix",
+      "web.wasm.webgpu.glyph_run.current",
+      "web.wasm.webgpu.neon_marker.current",
+      "web.wasm.webgpu.direct_surface.current",
+      "web.wasm.webgpu.draw_item_coalescing.current",
       "web.wasm.webgpu.draw_state_cache.current",
       "web.wasm.webgpu.clip_state_cache.current",
    ]) {
@@ -4200,6 +4321,14 @@ function assertWebReportContract(report)
       "web.wasm.webgpu.clean_layer.dirty_rerender",
       "web.wasm.webgpu.command_family_matrix",
       "web.wasm.webgpu.command_family_matrix.legacy_rebind",
+      "web.wasm.webgpu.glyph_run.current",
+      "web.wasm.webgpu.glyph_run.legacy_rebind",
+      "web.wasm.webgpu.neon_marker.current",
+      "web.wasm.webgpu.neon_marker.legacy_rebind",
+      "web.wasm.webgpu.direct_surface.current",
+      "web.wasm.webgpu.direct_surface.legacy_scene_present",
+      "web.wasm.webgpu.draw_item_coalescing.current",
+      "web.wasm.webgpu.draw_item_coalescing.legacy_uncoalesced",
       "web.wasm.webgpu.draw_state_cache.current",
       "web.wasm.webgpu.draw_state_cache.legacy_rebind",
       "web.wasm.webgpu.clip_state_cache.current",
@@ -4228,6 +4357,7 @@ function assertWebReportContract(report)
          "hitch_ratio_120hz",
          "draws",
          "draw_items",
+         "draw_items_coalesced",
          "draw_pipeline_binds",
          "draw_bind_group_binds",
          "draw_scissor_sets",
@@ -4948,6 +5078,67 @@ function assertWebReportContract(report)
       || report.direct_surface_summary.legacy_gpu_timestamp_total_ns !== directSurfaceLegacy.gpu_timestamp_total_ns
    ) {
       throw new Error("direct-surface WebGPU summary must match current and legacy source rows");
+   }
+   let drawItemCoalescing = byId.get("web.wasm.webgpu.draw_item_coalescing.current");
+   let drawItemCoalescingLegacy = byId.get("web.wasm.webgpu.draw_item_coalescing.legacy_uncoalesced");
+   let expectedCoalesced =
+      drawItemCoalescing.expected_source_draw_items
+      - drawItemCoalescing.expected_current_draw_items;
+   if (
+      drawItemCoalescing.expected_source_draw_items <= drawItemCoalescing.expected_current_draw_items
+      || drawItemCoalescing.expected_current_draw_items <= 0
+      || drawItemCoalescingLegacy.expected_source_draw_items !== drawItemCoalescing.expected_source_draw_items
+      || drawItemCoalescingLegacy.expected_current_draw_items !== drawItemCoalescing.expected_current_draw_items
+      || drawItemCoalescing.draw_items !== drawItemCoalescing.expected_current_draw_items
+      || drawItemCoalescingLegacy.draw_items !== drawItemCoalescingLegacy.expected_source_draw_items
+      || drawItemCoalescing.draw_items_coalesced !== expectedCoalesced
+      || drawItemCoalescingLegacy.draw_items_coalesced !== 0
+      || drawItemCoalescing.draws !== drawItemCoalescing.draw_items
+      || drawItemCoalescingLegacy.draws !== drawItemCoalescingLegacy.draw_items
+      || drawItemCoalescing.gpu_timestamp_passes !== drawItemCoalescing.render_passes
+      || drawItemCoalescingLegacy.gpu_timestamp_passes !== drawItemCoalescingLegacy.render_passes
+   ) {
+      throw new Error("draw-item coalescing WebGPU A/B rows must prove contiguous source draw items collapse to one timestamped encoded draw item");
+   }
+   if (
+      drawItemCoalescing.draw_items >= drawItemCoalescingLegacy.draw_items
+      || drawItemCoalescing.draws >= drawItemCoalescingLegacy.draws
+      || drawItemCoalescing.draw_pipeline_binds > drawItemCoalescingLegacy.draw_pipeline_binds
+      || drawItemCoalescing.draw_bind_group_binds > drawItemCoalescingLegacy.draw_bind_group_binds
+      || drawItemCoalescing.draw_scissor_sets > drawItemCoalescingLegacy.draw_scissor_sets
+   ) {
+      throw new Error(
+         "draw-item coalescing WebGPU A/B rows must prove fewer current draw items without extra state binds: "
+            + `items=${drawItemCoalescing.draw_items}/${drawItemCoalescingLegacy.draw_items} `
+            + `draws=${drawItemCoalescing.draws}/${drawItemCoalescingLegacy.draws} `
+            + `coalesced=${drawItemCoalescing.draw_items_coalesced}/${drawItemCoalescingLegacy.draw_items_coalesced} `
+            + `pipeline_binds=${drawItemCoalescing.draw_pipeline_binds}/${drawItemCoalescingLegacy.draw_pipeline_binds} `
+            + `bind_groups=${drawItemCoalescing.draw_bind_group_binds}/${drawItemCoalescingLegacy.draw_bind_group_binds} `
+            + `scissors=${drawItemCoalescing.draw_scissor_sets}/${drawItemCoalescingLegacy.draw_scissor_sets}`
+      );
+   }
+   if (
+      report.draw_item_coalescing_summary.current_p50_ms !== drawItemCoalescing.p50_ms
+      || report.draw_item_coalescing_summary.legacy_p50_ms !== drawItemCoalescingLegacy.p50_ms
+      || report.draw_item_coalescing_summary.current_draw_items !== drawItemCoalescing.draw_items
+      || report.draw_item_coalescing_summary.legacy_draw_items !== drawItemCoalescingLegacy.draw_items
+      || report.draw_item_coalescing_summary.current_draw_items_coalesced
+         !== drawItemCoalescing.draw_items_coalesced
+      || report.draw_item_coalescing_summary.legacy_draw_items_coalesced
+         !== drawItemCoalescingLegacy.draw_items_coalesced
+      || report.draw_item_coalescing_summary.current_draws !== drawItemCoalescing.draws
+      || report.draw_item_coalescing_summary.legacy_draws !== drawItemCoalescingLegacy.draws
+      || report.draw_item_coalescing_summary.current_gpu_timestamp_total_ns
+         !== drawItemCoalescing.gpu_timestamp_total_ns
+      || report.draw_item_coalescing_summary.legacy_gpu_timestamp_total_ns
+         !== drawItemCoalescingLegacy.gpu_timestamp_total_ns
+   ) {
+      throw new Error("draw-item coalescing WebGPU summary must match current and legacy source rows");
+   }
+   if (report.draw_item_coalescing_summary.legacy_over_current <= 1.0) {
+      throw new Error(
+         `draw-item coalescing current row must beat legacy uncoalesced p50: current=${report.draw_item_coalescing_summary.current_p50_ms.toFixed(3)}ms legacy=${report.draw_item_coalescing_summary.legacy_p50_ms.toFixed(3)}ms ratio=${report.draw_item_coalescing_summary.legacy_over_current.toFixed(3)}`
+      );
    }
    let glyphUploadCurrent = byId.get("web.wasm.webgpu.glyph_atlas_upload.current_dirty");
    let glyphUploadLegacy = byId.get("web.wasm.webgpu.glyph_atlas_upload.legacy_full");

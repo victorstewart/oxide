@@ -88,6 +88,7 @@ mod wasm_host {
     const WEBGPU_GLYPH_RUN_SDF_RUNS: usize = 32;
     const WEBGPU_DRAW_STATE_CACHE_DRAWS: usize = 1024;
     const WEBGPU_DRAW_STATE_CACHE_COLUMNS: usize = 32;
+    const WEBGPU_DRAW_ITEM_COALESCE_EXPECTED_ITEMS: usize = 1;
     const WEBGPU_CLIP_STATE_DRAWS: usize = 512;
     const WEBGPU_CLIP_STATE_RUNS: usize = 16;
     const WEBGPU_NEON_MARKERS: usize = 64;
@@ -813,6 +814,7 @@ mod wasm_host {
             {
                 let mut renderer = renderer.borrow_mut();
                 renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(false);
                 renderer.set_effect_uniform_batch_enabled_for_benchmark(true);
                 renderer.set_backdrop_batch_enabled_for_benchmark(true);
             }
@@ -839,6 +841,7 @@ mod wasm_host {
             {
                 let mut renderer = renderer.borrow_mut();
                 renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(true);
                 renderer.set_effect_uniform_batch_enabled_for_benchmark(true);
                 renderer.set_backdrop_batch_enabled_for_benchmark(true);
             }
@@ -864,6 +867,7 @@ mod wasm_host {
             {
                 let mut renderer = renderer.borrow_mut();
                 renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(false);
                 renderer.set_effect_uniform_batch_enabled_for_benchmark(true);
                 renderer.set_backdrop_batch_enabled_for_benchmark(true);
             }
@@ -890,6 +894,7 @@ mod wasm_host {
             {
                 let mut renderer = renderer.borrow_mut();
                 renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(true);
                 renderer.set_effect_uniform_batch_enabled_for_benchmark(true);
                 renderer.set_backdrop_batch_enabled_for_benchmark(true);
             }
@@ -915,6 +920,7 @@ mod wasm_host {
             {
                 let mut renderer = renderer.borrow_mut();
                 renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(false);
                 renderer.set_effect_uniform_batch_enabled_for_benchmark(true);
                 renderer.set_backdrop_batch_enabled_for_benchmark(true);
             }
@@ -932,6 +938,9 @@ mod wasm_host {
                 })
             })?;
             dirty.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            {
+                renderer.borrow_mut().set_draw_item_coalescing_enabled_for_benchmark(true);
+            }
             let ratio = if clean.p50_ms > 0.0 { dirty.p50_ms / clean.p50_ms } else { 0.0 };
             Ok(format!(
                 "samples={sample_count};frames_per_sample={frames}{}{};dirty_over_clean={ratio:.3};glyphs={};image_tiles={WEBGPU_CLEAN_LAYER_IMAGE_TILES};image_width={};image_height={};expected_layers=1;expected_clean_hits=1;expected_dirty_misses=1",
@@ -954,6 +963,7 @@ mod wasm_host {
             {
                 let mut renderer = renderer.borrow_mut();
                 renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(false);
             }
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
             let mut current = self.with_upload_bench_resources(|renderer, resources| {
@@ -976,6 +986,7 @@ mod wasm_host {
             {
                 let mut renderer = renderer.borrow_mut();
                 renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(true);
             }
             let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             Ok(format!(
@@ -997,7 +1008,9 @@ mod wasm_host {
             let frames = frames_per_sample.clamp(1, 120);
             let renderer = self.ensure_upload_bench_resources()?;
             {
-                renderer.borrow_mut().set_draw_state_cache_enabled_for_benchmark(true);
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(false);
             }
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
             let mut current = self.with_upload_bench_resources(|renderer, resources| {
@@ -1017,7 +1030,9 @@ mod wasm_host {
             })?;
             legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             {
-                renderer.borrow_mut().set_draw_state_cache_enabled_for_benchmark(true);
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(true);
             }
             let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             let expected_glyph_quads =
@@ -1040,7 +1055,9 @@ mod wasm_host {
             let frames = frames_per_sample.clamp(1, 120);
             let renderer = self.ensure_upload_bench_resources()?;
             {
-                renderer.borrow_mut().set_draw_state_cache_enabled_for_benchmark(true);
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(false);
             }
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
             let mut current = self.with_upload_bench_resources(|renderer, resources| {
@@ -1060,7 +1077,9 @@ mod wasm_host {
             })?;
             legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             {
-                renderer.borrow_mut().set_draw_state_cache_enabled_for_benchmark(true);
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(true);
             }
             let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             Ok(format!(
@@ -1082,6 +1101,7 @@ mod wasm_host {
             {
                 let mut renderer = renderer.borrow_mut();
                 renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(false);
                 renderer.set_direct_surface_enabled_for_benchmark(true);
             }
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
@@ -1102,7 +1122,9 @@ mod wasm_host {
             })?;
             legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             {
-                renderer.borrow_mut().set_direct_surface_enabled_for_benchmark(true);
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(true);
+                renderer.set_direct_surface_enabled_for_benchmark(true);
             }
             let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             Ok(format!(
@@ -1110,6 +1132,49 @@ mod wasm_host {
                 sampled_case_metrics(&current, "current"),
                 sampled_case_metrics(&legacy, "legacy"),
                 WEBGPU_DIRECT_SURFACE_DRAWS.saturating_add(1),
+                WEBGPU_UPLOAD_IMAGE_SIZE,
+                WEBGPU_UPLOAD_IMAGE_SIZE,
+            ))
+        }
+
+        pub async fn bench_webgpu_draw_item_coalescing_ab(
+            &self,
+            samples: u32,
+            frames_per_sample: u32,
+        ) -> Result<String, JsValue> {
+            let sample_count = samples.clamp(1, 30);
+            let frames = frames_per_sample.clamp(1, 120);
+            let renderer = self.ensure_upload_bench_resources()?;
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(true);
+            }
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut current = self.with_upload_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    resources.draw_state_cache_frame(renderer)
+                })
+            })?;
+            current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            {
+                renderer.borrow_mut().set_draw_item_coalescing_enabled_for_benchmark(false);
+            }
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut legacy = self.with_upload_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    resources.draw_state_cache_frame(renderer)
+                })
+            })?;
+            legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            {
+                renderer.borrow_mut().set_draw_item_coalescing_enabled_for_benchmark(true);
+            }
+            let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
+            Ok(format!(
+                "samples={sample_count};frames_per_sample={frames}{}{};legacy_over_current={ratio:.3};expected_source_draw_items={WEBGPU_DRAW_STATE_CACHE_DRAWS};expected_current_draw_items={WEBGPU_DRAW_ITEM_COALESCE_EXPECTED_ITEMS};columns={WEBGPU_DRAW_STATE_CACHE_COLUMNS};image_width={};image_height={}",
+                sampled_case_metrics(&current, "current"),
+                sampled_case_metrics(&legacy, "legacy"),
                 WEBGPU_UPLOAD_IMAGE_SIZE,
                 WEBGPU_UPLOAD_IMAGE_SIZE,
             ))
@@ -1124,7 +1189,9 @@ mod wasm_host {
             let frames = frames_per_sample.clamp(1, 120);
             let renderer = self.ensure_upload_bench_resources()?;
             {
-                renderer.borrow_mut().set_draw_state_cache_enabled_for_benchmark(true);
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(false);
             }
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
             let mut current = self.with_upload_bench_resources(|renderer, resources| {
@@ -1144,7 +1211,9 @@ mod wasm_host {
             })?;
             legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             {
-                renderer.borrow_mut().set_draw_state_cache_enabled_for_benchmark(true);
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(true);
             }
             let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             Ok(format!(
@@ -1165,7 +1234,9 @@ mod wasm_host {
             let frames = frames_per_sample.clamp(1, 120);
             let renderer = self.ensure_upload_bench_resources()?;
             {
-                renderer.borrow_mut().set_draw_state_cache_enabled_for_benchmark(true);
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(false);
             }
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
             let mut current = self.with_upload_bench_resources(|renderer, resources| {
@@ -1185,7 +1256,9 @@ mod wasm_host {
             })?;
             legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             {
-                renderer.borrow_mut().set_draw_state_cache_enabled_for_benchmark(true);
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_draw_item_coalescing_enabled_for_benchmark(true);
             }
             let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             Ok(format!(
@@ -3608,9 +3681,10 @@ mod wasm_host {
         let key_prefix = if prefix.is_empty() { String::new() } else { format!("{prefix}_") };
         let _ = write!(
             out,
-            ";{key_prefix}draws={};{key_prefix}draw_items={};{key_prefix}draw_pipeline_binds={};{key_prefix}draw_bind_group_binds={};{key_prefix}draw_scissor_sets={};{key_prefix}solid_tris={};{key_prefix}image_draws={};{key_prefix}image_mesh_draws={};{key_prefix}nine_slice_draws={};{key_prefix}glyph_quads={};{key_prefix}sdf_glyph_quads={};{key_prefix}clip_depth_peak={};{key_prefix}damage_rects={};{key_prefix}layer_draws={};{key_prefix}layer_cache_hits={};{key_prefix}layer_cache_misses={};{key_prefix}layer_cache_skipped_draws={};{key_prefix}layer_passes={};{key_prefix}scene3d_draws={};{key_prefix}id_mask_draws={};{key_prefix}backdrop_draws={};{key_prefix}visual_effect_draws={};{key_prefix}effect_uniform_writes={};{key_prefix}effect_uniform_bytes={};{key_prefix}effect_uniform_slots={};{key_prefix}spinner_draws={};{key_prefix}camera_bg_draws={};{key_prefix}render_passes={};{key_prefix}clear_passes={};{key_prefix}draw_passes={};{key_prefix}scene3d_passes={};{key_prefix}scene3d_overlay_passes={};{key_prefix}id_mask_raster_passes={};{key_prefix}id_mask_field_seed_passes={};{key_prefix}id_mask_field_jump_passes={};{key_prefix}id_mask_compositor_passes={};{key_prefix}present_passes={};{key_prefix}texture_copies={};{key_prefix}command_buffers={};{key_prefix}gpu_timestamp_query_supported={};{key_prefix}gpu_timestamp_frame_id={};{key_prefix}gpu_timestamp_passes={};{key_prefix}gpu_timestamp_total_ns={};{key_prefix}gpu_timestamp_clear_ns={};{key_prefix}gpu_timestamp_draw_ns={};{key_prefix}gpu_timestamp_scene3d_ns={};{key_prefix}gpu_timestamp_scene3d_overlay_ns={};{key_prefix}gpu_timestamp_id_mask_raster_ns={};{key_prefix}gpu_timestamp_id_mask_field_seed_ns={};{key_prefix}gpu_timestamp_id_mask_field_jump_ns={};{key_prefix}gpu_timestamp_id_mask_compositor_ns={};{key_prefix}gpu_timestamp_present_ns={};{key_prefix}gpu_timestamp_max_pass_ns={};{key_prefix}gpu_timestamp_readback_skips={};{key_prefix}gpu_timestamp_readback_interval={};{key_prefix}buffer_upload_bytes={};{key_prefix}texture_upload_bytes={};{key_prefix}buffer_grows={};{key_prefix}texture_creates={};{key_prefix}bind_group_creates={};{key_prefix}pipeline_creates={};{key_prefix}sampler_creates={};{key_prefix}mesh3d_creates={};{key_prefix}draw_buffer_grows={};{key_prefix}image_texture_creates={};{key_prefix}image_bind_group_creates={};{key_prefix}target_texture_creates={};{key_prefix}target_bind_group_creates={};{key_prefix}layer_texture_creates={};{key_prefix}layer_bind_group_creates={};{key_prefix}scene3d_buffer_grows={};{key_prefix}scene3d_bind_group_creates={};{key_prefix}effect_buffer_grows={};{key_prefix}effect_bind_group_creates={};{key_prefix}id_mask_texture_creates={};{key_prefix}id_mask_buffer_grows={};{key_prefix}id_mask_bind_group_creates={};{key_prefix}image_upload_temp_allocs={};{key_prefix}image_upload_temp_bytes={};{key_prefix}image_upload_scratch_bytes={};{key_prefix}image_upload_scratch_grows={};{key_prefix}cpu_scratch_bytes={};{key_prefix}cpu_scratch_grows={};{key_prefix}cpu_scratch_growth_bytes={};{key_prefix}cpu_draw_scratch_bytes={};{key_prefix}cpu_draw_scratch_grows={};{key_prefix}cpu_draw_scratch_growth_bytes={};{key_prefix}cpu_scene3d_scratch_bytes={};{key_prefix}cpu_scene3d_scratch_grows={};{key_prefix}cpu_scene3d_scratch_growth_bytes={};{key_prefix}cpu_effect_scratch_bytes={};{key_prefix}cpu_effect_scratch_grows={};{key_prefix}cpu_effect_scratch_growth_bytes={};{key_prefix}cpu_id_mask_scratch_bytes={};{key_prefix}cpu_id_mask_scratch_grows={};{key_prefix}cpu_id_mask_scratch_growth_bytes={};{key_prefix}cpu_image_upload_scratch_bytes={};{key_prefix}cpu_image_upload_scratch_grows={};{key_prefix}cpu_image_upload_scratch_growth_bytes={};{key_prefix}cpu_resource_table_scratch_bytes={};{key_prefix}cpu_resource_table_scratch_grows={};{key_prefix}cpu_resource_table_scratch_growth_bytes={}",
+            ";{key_prefix}draws={};{key_prefix}draw_items={};{key_prefix}draw_items_coalesced={};{key_prefix}draw_pipeline_binds={};{key_prefix}draw_bind_group_binds={};{key_prefix}draw_scissor_sets={};{key_prefix}solid_tris={};{key_prefix}image_draws={};{key_prefix}image_mesh_draws={};{key_prefix}nine_slice_draws={};{key_prefix}glyph_quads={};{key_prefix}sdf_glyph_quads={};{key_prefix}clip_depth_peak={};{key_prefix}damage_rects={};{key_prefix}layer_draws={};{key_prefix}layer_cache_hits={};{key_prefix}layer_cache_misses={};{key_prefix}layer_cache_skipped_draws={};{key_prefix}layer_passes={};{key_prefix}scene3d_draws={};{key_prefix}id_mask_draws={};{key_prefix}backdrop_draws={};{key_prefix}visual_effect_draws={};{key_prefix}effect_uniform_writes={};{key_prefix}effect_uniform_bytes={};{key_prefix}effect_uniform_slots={};{key_prefix}spinner_draws={};{key_prefix}camera_bg_draws={};{key_prefix}render_passes={};{key_prefix}clear_passes={};{key_prefix}draw_passes={};{key_prefix}scene3d_passes={};{key_prefix}scene3d_overlay_passes={};{key_prefix}id_mask_raster_passes={};{key_prefix}id_mask_field_seed_passes={};{key_prefix}id_mask_field_jump_passes={};{key_prefix}id_mask_compositor_passes={};{key_prefix}present_passes={};{key_prefix}texture_copies={};{key_prefix}command_buffers={};{key_prefix}gpu_timestamp_query_supported={};{key_prefix}gpu_timestamp_frame_id={};{key_prefix}gpu_timestamp_passes={};{key_prefix}gpu_timestamp_total_ns={};{key_prefix}gpu_timestamp_clear_ns={};{key_prefix}gpu_timestamp_draw_ns={};{key_prefix}gpu_timestamp_scene3d_ns={};{key_prefix}gpu_timestamp_scene3d_overlay_ns={};{key_prefix}gpu_timestamp_id_mask_raster_ns={};{key_prefix}gpu_timestamp_id_mask_field_seed_ns={};{key_prefix}gpu_timestamp_id_mask_field_jump_ns={};{key_prefix}gpu_timestamp_id_mask_compositor_ns={};{key_prefix}gpu_timestamp_present_ns={};{key_prefix}gpu_timestamp_max_pass_ns={};{key_prefix}gpu_timestamp_readback_skips={};{key_prefix}gpu_timestamp_readback_interval={};{key_prefix}buffer_upload_bytes={};{key_prefix}texture_upload_bytes={};{key_prefix}buffer_grows={};{key_prefix}texture_creates={};{key_prefix}bind_group_creates={};{key_prefix}pipeline_creates={};{key_prefix}sampler_creates={};{key_prefix}mesh3d_creates={};{key_prefix}draw_buffer_grows={};{key_prefix}image_texture_creates={};{key_prefix}image_bind_group_creates={};{key_prefix}target_texture_creates={};{key_prefix}target_bind_group_creates={};{key_prefix}layer_texture_creates={};{key_prefix}layer_bind_group_creates={};{key_prefix}scene3d_buffer_grows={};{key_prefix}scene3d_bind_group_creates={};{key_prefix}effect_buffer_grows={};{key_prefix}effect_bind_group_creates={};{key_prefix}id_mask_texture_creates={};{key_prefix}id_mask_buffer_grows={};{key_prefix}id_mask_bind_group_creates={};{key_prefix}image_upload_temp_allocs={};{key_prefix}image_upload_temp_bytes={};{key_prefix}image_upload_scratch_bytes={};{key_prefix}image_upload_scratch_grows={};{key_prefix}cpu_scratch_bytes={};{key_prefix}cpu_scratch_grows={};{key_prefix}cpu_scratch_growth_bytes={};{key_prefix}cpu_draw_scratch_bytes={};{key_prefix}cpu_draw_scratch_grows={};{key_prefix}cpu_draw_scratch_growth_bytes={};{key_prefix}cpu_scene3d_scratch_bytes={};{key_prefix}cpu_scene3d_scratch_grows={};{key_prefix}cpu_scene3d_scratch_growth_bytes={};{key_prefix}cpu_effect_scratch_bytes={};{key_prefix}cpu_effect_scratch_grows={};{key_prefix}cpu_effect_scratch_growth_bytes={};{key_prefix}cpu_id_mask_scratch_bytes={};{key_prefix}cpu_id_mask_scratch_grows={};{key_prefix}cpu_id_mask_scratch_growth_bytes={};{key_prefix}cpu_image_upload_scratch_bytes={};{key_prefix}cpu_image_upload_scratch_grows={};{key_prefix}cpu_image_upload_scratch_growth_bytes={};{key_prefix}cpu_resource_table_scratch_bytes={};{key_prefix}cpu_resource_table_scratch_grows={};{key_prefix}cpu_resource_table_scratch_growth_bytes={}",
             stats.draws,
             stats.draw_items,
+            stats.draw_items_coalesced,
             stats.draw_pipeline_binds,
             stats.draw_bind_group_binds,
             stats.draw_scissor_sets,

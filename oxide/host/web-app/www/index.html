@@ -220,6 +220,7 @@
          window.oxideWebGpuGlyphRunAB = "";
          window.oxideWebGpuNeonMarkerAB = "";
          window.oxideWebGpuDirectSurfaceAB = "";
+         window.oxideWebGpuDrawItemCoalescingAB = "";
          window.oxideWebGpuDrawStateCacheAB = "";
          window.oxideWebGpuClipStateAB = "";
          window.oxideWebBenchmarkMarks = benchMarks;
@@ -253,6 +254,8 @@
             console.log("oxide-webgpu-neon-marker-ab", window.oxideWebGpuNeonMarkerAB);
             window.oxideWebGpuDirectSurfaceAB = await runBench("direct_surface_ab", () => window.oxideApp.bench_webgpu_direct_surface_ab(mixedSamples, mixedFrames));
             console.log("oxide-webgpu-direct-surface-ab", window.oxideWebGpuDirectSurfaceAB);
+            window.oxideWebGpuDrawItemCoalescingAB = await runBench("draw_item_coalescing_ab", () => window.oxideApp.bench_webgpu_draw_item_coalescing_ab(mixedSamples, mixedFrames));
+            console.log("oxide-webgpu-draw-item-coalescing-ab", window.oxideWebGpuDrawItemCoalescingAB);
             window.oxideWebGpuDrawStateCacheAB = await runBench("draw_state_cache_ab", () => window.oxideApp.bench_webgpu_draw_state_cache_ab(mixedSamples, mixedFrames));
             console.log("oxide-webgpu-draw-state-cache-ab", window.oxideWebGpuDrawStateCacheAB);
             window.oxideWebGpuClipStateAB = await runBench("clip_state_cache_ab", () => window.oxideApp.bench_webgpu_clip_state_ab(mixedSamples, mixedFrames));
@@ -282,6 +285,7 @@
             glyph_run_ab: window.oxideWebGpuGlyphRunAB,
             neon_marker_ab: window.oxideWebGpuNeonMarkerAB,
             direct_surface_ab: window.oxideWebGpuDirectSurfaceAB,
+            draw_item_coalescing_ab: window.oxideWebGpuDrawItemCoalescingAB,
             draw_state_cache_ab: window.oxideWebGpuDrawStateCacheAB,
             clip_state_ab: window.oxideWebGpuClipStateAB,
             benchmark_marks: window.oxideWebBenchmarkMarks,
