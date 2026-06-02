@@ -80,6 +80,9 @@ mod wasm_host {
     const WEBGPU_COMMAND_FAMILY_SDF_RUNS: usize = 8;
     const WEBGPU_COMMAND_FAMILY_REPEATS: usize = 64;
     const WEBGPU_COMMAND_FAMILY_COLUMNS: usize = 8;
+    const WEBGPU_GLYPH_RUN_RUNS: usize = 64;
+    const WEBGPU_GLYPH_RUN_GLYPHS_PER_RUN: usize = 8;
+    const WEBGPU_GLYPH_RUN_SDF_RUNS: usize = 32;
     const WEBGPU_DRAW_STATE_CACHE_DRAWS: usize = 1024;
     const WEBGPU_DRAW_STATE_CACHE_COLUMNS: usize = 32;
     const WEBGPU_CLIP_STATE_DRAWS: usize = 512;
@@ -930,6 +933,49 @@ mod wasm_host {
                 WEBGPU_COMMAND_FAMILY_SDF_GLYPHS.saturating_mul(WEBGPU_COMMAND_FAMILY_SDF_RUNS),
                 WEBGPU_UPLOAD_IMAGE_SIZE,
                 WEBGPU_UPLOAD_IMAGE_SIZE,
+            ))
+        }
+
+        pub async fn bench_webgpu_glyph_run_ab(
+            &self,
+            samples: u32,
+            frames_per_sample: u32,
+        ) -> Result<String, JsValue> {
+            let sample_count = samples.clamp(1, 30);
+            let frames = frames_per_sample.clamp(1, 120);
+            let renderer = self.ensure_upload_bench_resources()?;
+            {
+                renderer.borrow_mut().set_draw_state_cache_enabled_for_benchmark(true);
+            }
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut current = self.with_upload_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    resources.glyph_run_frame(renderer)
+                })
+            })?;
+            current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            {
+                renderer.borrow_mut().set_draw_state_cache_enabled_for_benchmark(false);
+            }
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut legacy = self.with_upload_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    resources.glyph_run_frame(renderer)
+                })
+            })?;
+            legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            {
+                renderer.borrow_mut().set_draw_state_cache_enabled_for_benchmark(true);
+            }
+            let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
+            let expected_glyph_quads =
+                WEBGPU_GLYPH_RUN_RUNS.saturating_mul(WEBGPU_GLYPH_RUN_GLYPHS_PER_RUN);
+            let expected_draw_items = WEBGPU_GLYPH_RUN_RUNS.saturating_add(1);
+            Ok(format!(
+                "samples={sample_count};frames_per_sample={frames}{}{};legacy_over_current={ratio:.3};expected_glyph_runs={WEBGPU_GLYPH_RUN_RUNS};expected_glyphs_per_run={WEBGPU_GLYPH_RUN_GLYPHS_PER_RUN};expected_glyph_quads={expected_glyph_quads};expected_sdf_runs={WEBGPU_GLYPH_RUN_SDF_RUNS};expected_sdf_glyph_quads={};expected_draw_items={expected_draw_items};atlas_width={WEBGPU_UPLOAD_ATLAS_SIZE};atlas_height={WEBGPU_UPLOAD_ATLAS_SIZE}",
+                sampled_case_metrics(&current, "current"),
+                sampled_case_metrics(&legacy, "legacy"),
+                WEBGPU_GLYPH_RUN_SDF_RUNS.saturating_mul(WEBGPU_GLYPH_RUN_GLYPHS_PER_RUN),
             ))
         }
 
@@ -1862,6 +1908,45 @@ mod wasm_host {
                     gfx::Color::rgba(0.90, 0.96, 1.0, 0.92),
                 ) {
                     return Err(JsValue::from_str("failed to build command family SDF glyph draw list"));
+                }
+            }
+            renderer.encode_pass(self.builder.drawlist());
+            renderer.submit(token).map_err(render_err)
+        }
+
+        fn glyph_run_frame(&mut self, renderer: &mut BrowserRenderer) -> Result<(), JsValue> {
+            renderer.resize(512, 512, 2.0).map_err(render_err)?;
+            let token = renderer.begin_frame(&gfx::FrameTarget, None);
+            self.builder.clear();
+            self.builder.rrect(
+                gfx::RectF::new(0.0, 0.0, 256.0, 256.0),
+                [0.0; 4],
+                gfx::Color::rgba(0.035, 0.045, 0.060, 1.0),
+            );
+            let columns = 8_usize;
+            let cell = 7.0_f32;
+            for run in 0..WEBGPU_GLYPH_RUN_RUNS {
+                let col = run % columns;
+                let row = run / columns;
+                let sdf = run >= WEBGPU_GLYPH_RUN_RUNS.saturating_sub(WEBGPU_GLYPH_RUN_SDF_RUNS);
+                let x = 10.0 + col as f32 * 30.0;
+                let y = 12.0 + row as f32 * 29.0;
+                let color = if sdf {
+                    gfx::Color::rgba(0.76, 0.93, 1.0, 0.94)
+                } else {
+                    gfx::Color::rgba(0.95, 0.97, 1.0, 0.96)
+                };
+                if !append_glyph_grid(
+                    &mut self.builder,
+                    self.glyph_atlas,
+                    WEBGPU_GLYPH_RUN_GLYPHS_PER_RUN,
+                    x,
+                    y,
+                    cell,
+                    sdf,
+                    color,
+                ) {
+                    return Err(JsValue::from_str("failed to build glyph-run draw list"));
                 }
             }
             renderer.encode_pass(self.builder.drawlist());

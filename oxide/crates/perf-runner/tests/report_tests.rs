@@ -1097,6 +1097,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "mixed_matrix",
         "layer_effects_matrix",
         "command_family_matrix",
+        "glyph_run_ab",
         "neon_marker_ab",
         "direct_surface_ab",
         "draw_state_cache_ab",
@@ -1238,6 +1239,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched",
         "web.wasm.webgpu.command_family_matrix",
         "web.wasm.webgpu.command_family_matrix.legacy_rebind",
+        "web.wasm.webgpu.glyph_run.current",
+        "web.wasm.webgpu.glyph_run.legacy_rebind",
         "web.wasm.webgpu.neon_marker.current",
         "web.wasm.webgpu.neon_marker.legacy_rebind",
         "web.wasm.webgpu.direct_surface.current",
@@ -1261,8 +1264,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         warm_resource_churn["id"].as_str(),
         Some("web.wasm.webgpu.warm_resource_churn.current_rows"),
     );
-    assert_eq!(web_report_number(warm_resource_churn, "checked_rows"), 16.0);
-    assert_eq!(web_report_number(warm_resource_churn, "excluded_rows"), 15.0);
+    assert_eq!(web_report_number(warm_resource_churn, "checked_rows"), 17.0);
+    assert_eq!(web_report_number(warm_resource_churn, "excluded_rows"), 16.0);
     let warm_rows: Vec<&str> = warm_resource_churn["rows"]
         .as_array()
         .expect("warm resource churn rows")
@@ -1388,8 +1391,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         Some("web.wasm.webgpu.wasm_allocation_audit.current_rows"),
     );
     assert_eq!(wasm_allocation_audit["status"].as_str(), Some("measured"));
-    assert_eq!(web_report_number(wasm_allocation_audit, "checked_count"), 16.0);
-    assert_eq!(web_report_number(wasm_allocation_audit, "excluded_count"), 15.0);
+    assert_eq!(web_report_number(wasm_allocation_audit, "checked_count"), 17.0);
+    assert_eq!(web_report_number(wasm_allocation_audit, "excluded_count"), 16.0);
     assert_eq!(
         web_report_number(wasm_allocation_audit, "row_detail_count"),
         web_report_number(wasm_allocation_audit, "checked_count"),
@@ -1422,6 +1425,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         .expect("wasm allocation row details");
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.frame_loop"));
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.id_mask_compositor.current"));
+    assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.glyph_run.current"));
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.neon_marker.current"));
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.direct_surface.current"));
     for detail in wasm_allocation_details {
@@ -1616,6 +1620,11 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
             &["image_mesh_draws", "nine_slice_draws", "sdf_glyph_quads", "camera_bg_draws", "expected_camera_bg", "draw_items", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
         ),
         (
+            "glyph_run",
+            &["web.wasm.webgpu.glyph_run.current", "web.wasm.webgpu.glyph_run.legacy_rebind"],
+            &["expected_glyph_runs", "expected_glyph_quads", "expected_sdf_glyph_quads", "expected_draw_items", "draw_items", "glyph_quads", "sdf_glyph_quads", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "render_passes", "gpu_timestamp_passes"],
+        ),
+        (
             "neon_marker",
             &["web.wasm.webgpu.neon_marker.current", "web.wasm.webgpu.neon_marker.legacy_rebind"],
             &["expected_markers", "expected_draw_items", "draw_items", "solid_tris", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
@@ -1717,6 +1726,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     let command_family = web_report_case(&report, "web.wasm.webgpu.command_family_matrix");
     let command_family_legacy =
         web_report_case(&report, "web.wasm.webgpu.command_family_matrix.legacy_rebind");
+    let glyph_run_current = web_report_case(&report, "web.wasm.webgpu.glyph_run.current");
+    let glyph_run_legacy = web_report_case(&report, "web.wasm.webgpu.glyph_run.legacy_rebind");
     let neon_marker_current = web_report_case(&report, "web.wasm.webgpu.neon_marker.current");
     let neon_marker_legacy =
         web_report_case(&report, "web.wasm.webgpu.neon_marker.legacy_rebind");
@@ -1752,6 +1763,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         layer_effects_legacy,
         command_family,
         command_family_legacy,
+        glyph_run_current,
+        glyph_run_legacy,
         neon_marker_current,
         neon_marker_legacy,
         direct_surface_current,
@@ -2200,6 +2213,87 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         web_report_number(&report["command_family_summary"], "legacy_draw_pipeline_binds"),
         web_report_number(command_family_legacy, "draw_pipeline_binds"),
     );
+    assert_eq!(web_report_number(glyph_run_current, "expected_glyph_runs"), 64.0);
+    assert_eq!(web_report_number(glyph_run_legacy, "expected_glyph_runs"), 64.0);
+    assert_eq!(web_report_number(glyph_run_current, "expected_glyphs_per_run"), 8.0);
+    assert_eq!(web_report_number(glyph_run_legacy, "expected_glyphs_per_run"), 8.0);
+    assert_eq!(web_report_number(glyph_run_current, "expected_glyph_quads"), 512.0);
+    assert_eq!(web_report_number(glyph_run_legacy, "expected_glyph_quads"), 512.0);
+    assert_eq!(web_report_number(glyph_run_current, "expected_sdf_runs"), 32.0);
+    assert_eq!(web_report_number(glyph_run_legacy, "expected_sdf_runs"), 32.0);
+    assert_eq!(web_report_number(glyph_run_current, "expected_sdf_glyph_quads"), 256.0);
+    assert_eq!(web_report_number(glyph_run_legacy, "expected_sdf_glyph_quads"), 256.0);
+    assert_eq!(web_report_number(glyph_run_current, "expected_draw_items"), 65.0);
+    assert_eq!(web_report_number(glyph_run_legacy, "expected_draw_items"), 65.0);
+    assert_eq!(
+        web_report_number(glyph_run_current, "draw_items"),
+        web_report_number(glyph_run_current, "expected_draw_items"),
+    );
+    assert_eq!(
+        web_report_number(glyph_run_legacy, "draw_items"),
+        web_report_number(glyph_run_legacy, "expected_draw_items"),
+    );
+    assert_eq!(
+        web_report_number(glyph_run_current, "glyph_quads"),
+        web_report_number(glyph_run_current, "expected_glyph_quads"),
+    );
+    assert_eq!(
+        web_report_number(glyph_run_legacy, "glyph_quads"),
+        web_report_number(glyph_run_legacy, "expected_glyph_quads"),
+    );
+    assert_eq!(
+        web_report_number(glyph_run_current, "sdf_glyph_quads"),
+        web_report_number(glyph_run_current, "expected_sdf_glyph_quads"),
+    );
+    assert_eq!(
+        web_report_number(glyph_run_legacy, "sdf_glyph_quads"),
+        web_report_number(glyph_run_legacy, "expected_sdf_glyph_quads"),
+    );
+    assert_eq!(
+        web_report_number(glyph_run_current, "render_passes"),
+        web_report_number(glyph_run_legacy, "render_passes"),
+    );
+    assert_eq!(
+        web_report_number(glyph_run_current, "draw_passes"),
+        web_report_number(glyph_run_legacy, "draw_passes"),
+    );
+    assert!(
+        web_report_number(glyph_run_current, "draw_pipeline_binds")
+            < web_report_number(glyph_run_legacy, "draw_pipeline_binds")
+    );
+    assert!(
+        web_report_number(glyph_run_current, "draw_bind_group_binds")
+            < web_report_number(glyph_run_legacy, "draw_bind_group_binds")
+    );
+    assert!(
+        web_report_number(glyph_run_current, "draw_scissor_sets")
+            < web_report_number(glyph_run_legacy, "draw_scissor_sets")
+    );
+    assert_eq!(
+        web_report_number(glyph_run_current, "gpu_timestamp_passes"),
+        web_report_number(glyph_run_current, "render_passes"),
+    );
+    assert_eq!(
+        web_report_number(glyph_run_legacy, "gpu_timestamp_passes"),
+        web_report_number(glyph_run_legacy, "render_passes"),
+    );
+    assert_eq!(
+        web_report_number(&report["glyph_run_summary"], "current_p50_ms"),
+        web_report_number(glyph_run_current, "p50_ms"),
+    );
+    assert_eq!(
+        web_report_number(&report["glyph_run_summary"], "legacy_p50_ms"),
+        web_report_number(glyph_run_legacy, "p50_ms"),
+    );
+    assert!(web_report_number(&report["glyph_run_summary"], "legacy_over_current") > 1.0);
+    assert_eq!(
+        web_report_number(&report["glyph_run_summary"], "current_draw_pipeline_binds"),
+        web_report_number(glyph_run_current, "draw_pipeline_binds"),
+    );
+    assert_eq!(
+        web_report_number(&report["glyph_run_summary"], "legacy_draw_pipeline_binds"),
+        web_report_number(glyph_run_legacy, "draw_pipeline_binds"),
+    );
     assert_eq!(web_report_number(neon_marker_current, "expected_markers"), 64.0);
     assert_eq!(web_report_number(neon_marker_legacy, "expected_markers"), 64.0);
     assert_eq!(web_report_number(neon_marker_current, "expected_draw_items"), 192.0);
@@ -2285,6 +2379,10 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         web_report_number(direct_surface_current, "render_passes")
             < web_report_number(direct_surface_legacy, "render_passes")
     );
+    assert!(
+        web_report_number(direct_surface_current, "gpu_timestamp_total_ns")
+            < web_report_number(direct_surface_legacy, "gpu_timestamp_total_ns")
+    );
     assert_eq!(
         web_report_number(direct_surface_current, "texture_copies"),
         web_report_number(direct_surface_legacy, "texture_copies"),
@@ -2306,8 +2404,9 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         web_report_number(direct_surface_legacy, "p50_ms"),
     );
     assert!(
-        web_report_number(&report["direct_surface_summary"], "legacy_over_current") > 1.0,
-        "direct surface p50 should beat forced scene-present"
+        web_report_number(&report["direct_surface_summary"], "current_gpu_timestamp_total_ns")
+            < web_report_number(&report["direct_surface_summary"], "legacy_gpu_timestamp_total_ns"),
+        "direct surface GPU timestamp total should beat forced scene-present"
     );
     assert!(
         web_report_number(draw_state_current, "draw_items")

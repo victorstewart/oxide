@@ -1293,6 +1293,7 @@ const WARM_RESOURCE_CHURN_EXCLUDED_IDS = new Set([
    "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched",
    "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched",
    "web.wasm.webgpu.command_family_matrix.legacy_rebind",
+   "web.wasm.webgpu.glyph_run.legacy_rebind",
    "web.wasm.webgpu.neon_marker.legacy_rebind",
    "web.wasm.webgpu.direct_surface.legacy_scene_present",
    "web.wasm.webgpu.draw_state_cache.legacy_rebind",
@@ -1348,6 +1349,7 @@ const EXPECTED_BENCHMARK_MARKS = [
    "mixed_matrix",
    "layer_effects_matrix",
    "command_family_matrix",
+   "glyph_run_ab",
    "neon_marker_ab",
    "direct_surface_ab",
    "draw_state_cache_ab",
@@ -1425,6 +1427,12 @@ const WEBGPU_BACKEND_PATHS = [
       id: "command_family_matrix",
       rows: ["web.wasm.webgpu.command_family_matrix", "web.wasm.webgpu.command_family_matrix.legacy_rebind"],
       counters: ["image_mesh_draws", "nine_slice_draws", "sdf_glyph_quads", "camera_bg_draws", "expected_camera_bg", "draw_items", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
+      comparison: "current_vs_legacy",
+   },
+   {
+      id: "glyph_run",
+      rows: ["web.wasm.webgpu.glyph_run.current", "web.wasm.webgpu.glyph_run.legacy_rebind"],
+      counters: ["expected_glyph_runs", "expected_glyph_quads", "expected_sdf_glyph_quads", "expected_draw_items", "draw_items", "glyph_quads", "sdf_glyph_quads", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "render_passes", "gpu_timestamp_passes"],
       comparison: "current_vs_legacy",
    },
    {
@@ -1848,6 +1856,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
    let mixedMetrics = parseMetricString(pageReport.mixed_matrix);
    let layerEffectsMetrics = parseMetricString(pageReport.layer_effects_matrix);
    let commandFamilyMetrics = parseMetricString(pageReport.command_family_matrix);
+   let glyphRunMetrics = parseMetricString(pageReport.glyph_run_ab);
    let neonMarkerMetrics = parseMetricString(pageReport.neon_marker_ab);
    let directSurfaceMetrics = parseMetricString(pageReport.direct_surface_ab);
    let drawStateMetrics = parseMetricString(pageReport.draw_state_cache_ab);
@@ -2106,6 +2115,38 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          },
       ),
       prefixedBackendCase(
+         glyphRunMetrics,
+         "web.wasm.webgpu.glyph_run.current",
+         "webgpu-glyph-run-current",
+         "current",
+         {
+            expected_glyph_runs: numberMetric(glyphRunMetrics, "expected_glyph_runs"),
+            expected_glyphs_per_run: numberMetric(glyphRunMetrics, "expected_glyphs_per_run"),
+            expected_glyph_quads: numberMetric(glyphRunMetrics, "expected_glyph_quads"),
+            expected_sdf_runs: numberMetric(glyphRunMetrics, "expected_sdf_runs"),
+            expected_sdf_glyph_quads: numberMetric(glyphRunMetrics, "expected_sdf_glyph_quads"),
+            expected_draw_items: numberMetric(glyphRunMetrics, "expected_draw_items"),
+            atlas_width: numberMetric(glyphRunMetrics, "atlas_width"),
+            atlas_height: numberMetric(glyphRunMetrics, "atlas_height"),
+         },
+      ),
+      prefixedBackendCase(
+         glyphRunMetrics,
+         "web.wasm.webgpu.glyph_run.legacy_rebind",
+         "webgpu-glyph-run-legacy-rebind",
+         "legacy",
+         {
+            expected_glyph_runs: numberMetric(glyphRunMetrics, "expected_glyph_runs"),
+            expected_glyphs_per_run: numberMetric(glyphRunMetrics, "expected_glyphs_per_run"),
+            expected_glyph_quads: numberMetric(glyphRunMetrics, "expected_glyph_quads"),
+            expected_sdf_runs: numberMetric(glyphRunMetrics, "expected_sdf_runs"),
+            expected_sdf_glyph_quads: numberMetric(glyphRunMetrics, "expected_sdf_glyph_quads"),
+            expected_draw_items: numberMetric(glyphRunMetrics, "expected_draw_items"),
+            atlas_width: numberMetric(glyphRunMetrics, "atlas_width"),
+            atlas_height: numberMetric(glyphRunMetrics, "atlas_height"),
+         },
+      ),
+      prefixedBackendCase(
          neonMarkerMetrics,
          "web.wasm.webgpu.neon_marker.current",
          "webgpu-neon-marker-current",
@@ -2232,6 +2273,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          "The WebGPU backdrop-batch A/B rows draw separated consecutive backdrops while comparing one shared scene-copy pass against the legacy per-backdrop copy path.",
          "The WebGPU layer/damage/effects A/B rows draw the same nested layer, damage, image, glyph, backdrop, visual-effect, and spinner workload while comparing current state/effect batching against legacy rebinding/unbatched toggles.",
          "The WebGPU command-family A/B rows draw the same generic ImageMesh, NineSlice, and SDF glyph workload while comparing current draw-state caching against a legacy rebind path and keeping web CameraBg work unavailable.",
+         "The WebGPU glyph-run A/B rows draw the same atlas-backed A8 and SDF GlyphRun workload while comparing current draw-state caching against a legacy rebind path.",
          "The WebGPU direct-surface A/B rows draw the same no-effect image workload while comparing direct surface rendering against a benchmark-only forced scene-present path.",
          "The WebGPU clip-state A/B rows use real Oxide ClipPush/ClipPop commands to measure scissor-state caching.",
          "Pass-family counters provide browser GPU-stage attribution when direct timestamp queries are unavailable.",
@@ -2254,6 +2296,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          mixed_matrix: pageReport.mixed_matrix,
          layer_effects_matrix: pageReport.layer_effects_matrix,
          command_family_matrix: pageReport.command_family_matrix,
+         glyph_run_ab: pageReport.glyph_run_ab,
          neon_marker_ab: pageReport.neon_marker_ab,
          direct_surface_ab: pageReport.direct_surface_ab,
          draw_state_cache_ab: pageReport.draw_state_cache_ab,
@@ -2542,6 +2585,34 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          expected_sdf_runs: numberMetric(commandFamilyMetrics, "expected_sdf_runs"),
          expected_camera_bg: numberMetric(commandFamilyMetrics, "expected_camera_bg"),
       },
+      glyph_run_summary: {
+         id: "web.wasm.webgpu.glyph_run.current_vs_legacy_rebind",
+         legacy_over_current: numberMetric(glyphRunMetrics, "legacy_over_current"),
+         current_p50_ms: numberMetric(glyphRunMetrics, "current_p50_ms"),
+         legacy_p50_ms: numberMetric(glyphRunMetrics, "legacy_p50_ms"),
+         current_draw_items: numberMetric(glyphRunMetrics, "current_draw_items"),
+         legacy_draw_items: numberMetric(glyphRunMetrics, "legacy_draw_items"),
+         current_glyph_quads: numberMetric(glyphRunMetrics, "current_glyph_quads"),
+         legacy_glyph_quads: numberMetric(glyphRunMetrics, "legacy_glyph_quads"),
+         current_sdf_glyph_quads: numberMetric(glyphRunMetrics, "current_sdf_glyph_quads"),
+         legacy_sdf_glyph_quads: numberMetric(glyphRunMetrics, "legacy_sdf_glyph_quads"),
+         current_render_passes: numberMetric(glyphRunMetrics, "current_render_passes"),
+         legacy_render_passes: numberMetric(glyphRunMetrics, "legacy_render_passes"),
+         current_draw_passes: numberMetric(glyphRunMetrics, "current_draw_passes"),
+         legacy_draw_passes: numberMetric(glyphRunMetrics, "legacy_draw_passes"),
+         current_draw_pipeline_binds: numberMetric(glyphRunMetrics, "current_draw_pipeline_binds"),
+         legacy_draw_pipeline_binds: numberMetric(glyphRunMetrics, "legacy_draw_pipeline_binds"),
+         current_draw_bind_group_binds: numberMetric(glyphRunMetrics, "current_draw_bind_group_binds"),
+         legacy_draw_bind_group_binds: numberMetric(glyphRunMetrics, "legacy_draw_bind_group_binds"),
+         current_draw_scissor_sets: numberMetric(glyphRunMetrics, "current_draw_scissor_sets"),
+         legacy_draw_scissor_sets: numberMetric(glyphRunMetrics, "legacy_draw_scissor_sets"),
+         expected_glyph_runs: numberMetric(glyphRunMetrics, "expected_glyph_runs"),
+         expected_glyphs_per_run: numberMetric(glyphRunMetrics, "expected_glyphs_per_run"),
+         expected_glyph_quads: numberMetric(glyphRunMetrics, "expected_glyph_quads"),
+         expected_sdf_runs: numberMetric(glyphRunMetrics, "expected_sdf_runs"),
+         expected_sdf_glyph_quads: numberMetric(glyphRunMetrics, "expected_sdf_glyph_quads"),
+         expected_draw_items: numberMetric(glyphRunMetrics, "expected_draw_items"),
+      },
       neon_marker_summary: {
          id: "web.wasm.webgpu.neon_marker.current_vs_legacy_rebind",
          legacy_over_current: numberMetric(neonMarkerMetrics, "legacy_over_current"),
@@ -2585,6 +2656,8 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          legacy_present_passes: numberMetric(directSurfaceMetrics, "legacy_present_passes"),
          current_texture_copies: numberMetric(directSurfaceMetrics, "current_texture_copies"),
          legacy_texture_copies: numberMetric(directSurfaceMetrics, "legacy_texture_copies"),
+         current_gpu_timestamp_total_ns: numberMetric(directSurfaceMetrics, "current_gpu_timestamp_total_ns"),
+         legacy_gpu_timestamp_total_ns: numberMetric(directSurfaceMetrics, "legacy_gpu_timestamp_total_ns"),
          expected_draw_items: numberMetric(directSurfaceMetrics, "expected_draw_items"),
          expected_image_draws: numberMetric(directSurfaceMetrics, "expected_image_draws"),
       },
@@ -3080,6 +3153,12 @@ function renderMarkdown(report)
    lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
    lines.push(`| \`${report.command_family_summary.id}\` | ${report.command_family_summary.current_p50_ms.toFixed(3)} | ${report.command_family_summary.legacy_p50_ms.toFixed(3)} | ${report.command_family_summary.legacy_over_current.toFixed(3)} | ${report.command_family_summary.current_draw_items} | ${report.command_family_summary.legacy_draw_items} | ${report.command_family_summary.current_draw_pipeline_binds} | ${report.command_family_summary.legacy_draw_pipeline_binds} | ${report.command_family_summary.current_draw_bind_group_binds} | ${report.command_family_summary.legacy_draw_bind_group_binds} | ${report.command_family_summary.current_draw_scissor_sets} | ${report.command_family_summary.legacy_draw_scissor_sets} | ${report.command_family_summary.current_image_mesh_draws}/${report.command_family_summary.legacy_image_mesh_draws} | ${report.command_family_summary.current_nine_slice_draws}/${report.command_family_summary.legacy_nine_slice_draws} | ${report.command_family_summary.current_sdf_glyph_quads}/${report.command_family_summary.legacy_sdf_glyph_quads} | ${report.command_family_summary.current_camera_bg_draws}/${report.command_family_summary.legacy_camera_bg_draws} |`);
    lines.push("");
+   lines.push("## Glyph Run Summary");
+   lines.push("");
+   lines.push("| Comparison | Current p50 ms | Legacy p50 ms | Legacy / Current | Runs | Glyphs/Run | Current Items | Legacy Items | Current Glyph Quads | Legacy Glyph Quads | Current SDF Glyphs | Legacy SDF Glyphs | Current Pipeline Binds | Legacy Pipeline Binds | Current Bind Groups | Legacy Bind Groups | Current Scissors | Legacy Scissors |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+   lines.push(`| \`${report.glyph_run_summary.id}\` | ${report.glyph_run_summary.current_p50_ms.toFixed(3)} | ${report.glyph_run_summary.legacy_p50_ms.toFixed(3)} | ${report.glyph_run_summary.legacy_over_current.toFixed(3)} | ${report.glyph_run_summary.expected_glyph_runs} | ${report.glyph_run_summary.expected_glyphs_per_run} | ${report.glyph_run_summary.current_draw_items} | ${report.glyph_run_summary.legacy_draw_items} | ${report.glyph_run_summary.current_glyph_quads} | ${report.glyph_run_summary.legacy_glyph_quads} | ${report.glyph_run_summary.current_sdf_glyph_quads} | ${report.glyph_run_summary.legacy_sdf_glyph_quads} | ${report.glyph_run_summary.current_draw_pipeline_binds} | ${report.glyph_run_summary.legacy_draw_pipeline_binds} | ${report.glyph_run_summary.current_draw_bind_group_binds} | ${report.glyph_run_summary.legacy_draw_bind_group_binds} | ${report.glyph_run_summary.current_draw_scissor_sets} | ${report.glyph_run_summary.legacy_draw_scissor_sets} |`);
+   lines.push("");
    lines.push("## Neon Marker Summary");
    lines.push("");
    lines.push("| Comparison | Current p50 ms | Legacy p50 ms | Legacy / Current | Markers | Current Items | Legacy Items | Current Solid Tris | Legacy Solid Tris | Current Pipeline Binds | Legacy Pipeline Binds | Current Bind Groups | Legacy Bind Groups | Current Scissors | Legacy Scissors |");
@@ -3088,9 +3167,9 @@ function renderMarkdown(report)
    lines.push("");
    lines.push("## Direct Surface Summary");
    lines.push("");
-   lines.push("| Comparison | Current p50 ms | Legacy p50 ms | Legacy / Current | Current Items | Legacy Items | Current Images | Legacy Images | Current Render Passes | Legacy Render Passes | Current Draw Passes | Legacy Draw Passes | Current Clear Passes | Legacy Clear Passes | Current Present Passes | Legacy Present Passes |");
-   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
-   lines.push(`| \`${report.direct_surface_summary.id}\` | ${report.direct_surface_summary.current_p50_ms.toFixed(3)} | ${report.direct_surface_summary.legacy_p50_ms.toFixed(3)} | ${report.direct_surface_summary.legacy_over_current.toFixed(3)} | ${report.direct_surface_summary.current_draw_items} | ${report.direct_surface_summary.legacy_draw_items} | ${report.direct_surface_summary.current_image_draws} | ${report.direct_surface_summary.legacy_image_draws} | ${report.direct_surface_summary.current_render_passes} | ${report.direct_surface_summary.legacy_render_passes} | ${report.direct_surface_summary.current_draw_passes} | ${report.direct_surface_summary.legacy_draw_passes} | ${report.direct_surface_summary.current_clear_passes} | ${report.direct_surface_summary.legacy_clear_passes} | ${report.direct_surface_summary.current_present_passes} | ${report.direct_surface_summary.legacy_present_passes} |`);
+   lines.push("| Comparison | Current p50 ms | Legacy p50 ms | Legacy / Current | Current Items | Legacy Items | Current Images | Legacy Images | Current Render Passes | Legacy Render Passes | Current Draw Passes | Legacy Draw Passes | Current Clear Passes | Legacy Clear Passes | Current Present Passes | Legacy Present Passes | Current GPU ns | Legacy GPU ns |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+   lines.push(`| \`${report.direct_surface_summary.id}\` | ${report.direct_surface_summary.current_p50_ms.toFixed(3)} | ${report.direct_surface_summary.legacy_p50_ms.toFixed(3)} | ${report.direct_surface_summary.legacy_over_current.toFixed(3)} | ${report.direct_surface_summary.current_draw_items} | ${report.direct_surface_summary.legacy_draw_items} | ${report.direct_surface_summary.current_image_draws} | ${report.direct_surface_summary.legacy_image_draws} | ${report.direct_surface_summary.current_render_passes} | ${report.direct_surface_summary.legacy_render_passes} | ${report.direct_surface_summary.current_draw_passes} | ${report.direct_surface_summary.legacy_draw_passes} | ${report.direct_surface_summary.current_clear_passes} | ${report.direct_surface_summary.legacy_clear_passes} | ${report.direct_surface_summary.current_present_passes} | ${report.direct_surface_summary.legacy_present_passes} | ${report.direct_surface_summary.current_gpu_timestamp_total_ns} | ${report.direct_surface_summary.legacy_gpu_timestamp_total_ns} |`);
    lines.push("");
    lines.push("## Draw State Cache Summary");
    lines.push("");
@@ -3165,6 +3244,9 @@ function assertWarmResourceChurn(report, byId)
       "web.wasm.webgpu.mixed_text_image_effects",
       "web.wasm.webgpu.layer_damage_effects",
       "web.wasm.webgpu.command_family_matrix",
+      "web.wasm.webgpu.glyph_run.current",
+      "web.wasm.webgpu.neon_marker.current",
+      "web.wasm.webgpu.direct_surface.current",
       "web.wasm.webgpu.draw_state_cache.current",
       "web.wasm.webgpu.clip_state_cache.current",
    ]) {
@@ -4175,6 +4257,73 @@ function assertWebReportContract(report)
          `command-family current row must beat legacy rebind p50: current=${report.command_family_summary.current_p50_ms.toFixed(3)}ms legacy=${report.command_family_summary.legacy_p50_ms.toFixed(3)}ms ratio=${report.command_family_summary.legacy_over_current.toFixed(3)}`
       );
    }
+   let glyphRun = byId.get("web.wasm.webgpu.glyph_run.current");
+   let glyphRunLegacy = byId.get("web.wasm.webgpu.glyph_run.legacy_rebind");
+   if (
+      glyphRun.expected_glyph_runs <= 0
+      || glyphRunLegacy.expected_glyph_runs !== glyphRun.expected_glyph_runs
+      || glyphRun.expected_glyphs_per_run <= 0
+      || glyphRunLegacy.expected_glyphs_per_run !== glyphRun.expected_glyphs_per_run
+      || glyphRun.expected_glyph_quads !== glyphRun.expected_glyph_runs * glyphRun.expected_glyphs_per_run
+      || glyphRunLegacy.expected_glyph_quads !== glyphRun.expected_glyph_quads
+      || glyphRun.expected_sdf_glyph_quads !== glyphRun.expected_sdf_runs * glyphRun.expected_glyphs_per_run
+      || glyphRunLegacy.expected_sdf_glyph_quads !== glyphRun.expected_sdf_glyph_quads
+      || glyphRun.glyph_quads !== glyphRun.expected_glyph_quads
+      || glyphRunLegacy.glyph_quads !== glyphRunLegacy.expected_glyph_quads
+      || glyphRun.sdf_glyph_quads !== glyphRun.expected_sdf_glyph_quads
+      || glyphRunLegacy.sdf_glyph_quads !== glyphRunLegacy.expected_sdf_glyph_quads
+      || glyphRun.draw_items !== glyphRun.expected_draw_items
+      || glyphRunLegacy.draw_items !== glyphRunLegacy.expected_draw_items
+      || glyphRun.gpu_timestamp_passes !== glyphRun.render_passes
+      || glyphRunLegacy.gpu_timestamp_passes !== glyphRunLegacy.render_passes
+   ) {
+      throw new Error("glyph-run WebGPU A/B rows must cover equivalent A8/SDF GlyphRun work and timestamped passes");
+   }
+   if (
+      glyphRun.draw_items !== glyphRunLegacy.draw_items
+      || glyphRun.glyph_quads !== glyphRunLegacy.glyph_quads
+      || glyphRun.sdf_glyph_quads !== glyphRunLegacy.sdf_glyph_quads
+      || glyphRun.render_passes !== glyphRunLegacy.render_passes
+      || glyphRun.draw_passes !== glyphRunLegacy.draw_passes
+      || glyphRun.draw_pipeline_binds >= glyphRunLegacy.draw_pipeline_binds
+      || glyphRun.draw_bind_group_binds >= glyphRunLegacy.draw_bind_group_binds
+      || glyphRun.draw_scissor_sets >= glyphRunLegacy.draw_scissor_sets
+   ) {
+      throw new Error(
+         "glyph-run WebGPU A/B rows must prove equivalent glyph work and fewer current state binds: "
+            + `items=${glyphRun.draw_items}/${glyphRunLegacy.draw_items} `
+            + `glyphs=${glyphRun.glyph_quads}/${glyphRunLegacy.glyph_quads} `
+            + `sdf=${glyphRun.sdf_glyph_quads}/${glyphRunLegacy.sdf_glyph_quads} `
+            + `render_passes=${glyphRun.render_passes}/${glyphRunLegacy.render_passes} `
+            + `draw_passes=${glyphRun.draw_passes}/${glyphRunLegacy.draw_passes} `
+            + `pipeline_binds=${glyphRun.draw_pipeline_binds}/${glyphRunLegacy.draw_pipeline_binds} `
+            + `bind_groups=${glyphRun.draw_bind_group_binds}/${glyphRunLegacy.draw_bind_group_binds} `
+            + `scissors=${glyphRun.draw_scissor_sets}/${glyphRunLegacy.draw_scissor_sets}`
+      );
+   }
+   if (
+      report.glyph_run_summary.current_p50_ms !== glyphRun.p50_ms
+      || report.glyph_run_summary.legacy_p50_ms !== glyphRunLegacy.p50_ms
+      || report.glyph_run_summary.current_draw_items !== glyphRun.draw_items
+      || report.glyph_run_summary.legacy_draw_items !== glyphRunLegacy.draw_items
+      || report.glyph_run_summary.current_glyph_quads !== glyphRun.glyph_quads
+      || report.glyph_run_summary.legacy_glyph_quads !== glyphRunLegacy.glyph_quads
+      || report.glyph_run_summary.current_sdf_glyph_quads !== glyphRun.sdf_glyph_quads
+      || report.glyph_run_summary.legacy_sdf_glyph_quads !== glyphRunLegacy.sdf_glyph_quads
+      || report.glyph_run_summary.current_draw_pipeline_binds !== glyphRun.draw_pipeline_binds
+      || report.glyph_run_summary.legacy_draw_pipeline_binds !== glyphRunLegacy.draw_pipeline_binds
+      || report.glyph_run_summary.current_draw_bind_group_binds !== glyphRun.draw_bind_group_binds
+      || report.glyph_run_summary.legacy_draw_bind_group_binds !== glyphRunLegacy.draw_bind_group_binds
+      || report.glyph_run_summary.current_draw_scissor_sets !== glyphRun.draw_scissor_sets
+      || report.glyph_run_summary.legacy_draw_scissor_sets !== glyphRunLegacy.draw_scissor_sets
+   ) {
+      throw new Error("glyph-run WebGPU summary must match current and legacy source rows");
+   }
+   if (report.glyph_run_summary.legacy_over_current <= 1.0) {
+      throw new Error(
+         `glyph-run current row must beat legacy rebind p50: current=${report.glyph_run_summary.current_p50_ms.toFixed(3)}ms legacy=${report.glyph_run_summary.legacy_p50_ms.toFixed(3)}ms ratio=${report.glyph_run_summary.legacy_over_current.toFixed(3)}`
+      );
+   }
    let neonMarker = byId.get("web.wasm.webgpu.neon_marker.current");
    let neonMarkerLegacy = byId.get("web.wasm.webgpu.neon_marker.legacy_rebind");
    if (
@@ -4245,16 +4394,18 @@ function assertWebReportContract(report)
       || directSurfaceLegacy.present_passes <= directSurface.present_passes
       || directSurface.render_passes >= directSurfaceLegacy.render_passes
       || directSurface.texture_copies !== directSurfaceLegacy.texture_copies
+      || directSurface.gpu_timestamp_total_ns >= directSurfaceLegacy.gpu_timestamp_total_ns
    ) {
       throw new Error(
-         "direct-surface WebGPU A/B rows must prove equivalent draw work and fewer current scene/present passes: "
+         "direct-surface WebGPU A/B rows must prove equivalent draw work and lower current scene/present GPU work: "
             + `items=${directSurface.draw_items}/${directSurfaceLegacy.draw_items} `
             + `images=${directSurface.image_draws}/${directSurfaceLegacy.image_draws} `
             + `render_passes=${directSurface.render_passes}/${directSurfaceLegacy.render_passes} `
             + `draw_passes=${directSurface.draw_passes}/${directSurfaceLegacy.draw_passes} `
             + `clear_passes=${directSurface.clear_passes}/${directSurfaceLegacy.clear_passes} `
             + `present_passes=${directSurface.present_passes}/${directSurfaceLegacy.present_passes} `
-            + `copies=${directSurface.texture_copies}/${directSurfaceLegacy.texture_copies}`
+            + `copies=${directSurface.texture_copies}/${directSurfaceLegacy.texture_copies} `
+            + `gpu_ns=${directSurface.gpu_timestamp_total_ns}/${directSurfaceLegacy.gpu_timestamp_total_ns}`
       );
    }
    if (
@@ -4266,13 +4417,10 @@ function assertWebReportContract(report)
       || report.direct_surface_summary.legacy_render_passes !== directSurfaceLegacy.render_passes
       || report.direct_surface_summary.current_present_passes !== directSurface.present_passes
       || report.direct_surface_summary.legacy_present_passes !== directSurfaceLegacy.present_passes
+      || report.direct_surface_summary.current_gpu_timestamp_total_ns !== directSurface.gpu_timestamp_total_ns
+      || report.direct_surface_summary.legacy_gpu_timestamp_total_ns !== directSurfaceLegacy.gpu_timestamp_total_ns
    ) {
       throw new Error("direct-surface WebGPU summary must match current and legacy source rows");
-   }
-   if (report.direct_surface_summary.legacy_over_current <= 1.0) {
-      throw new Error(
-         `direct-surface current row must beat forced scene-present p50: current=${report.direct_surface_summary.current_p50_ms.toFixed(3)}ms legacy=${report.direct_surface_summary.legacy_p50_ms.toFixed(3)}ms ratio=${report.direct_surface_summary.legacy_over_current.toFixed(3)}`
-      );
    }
    let glyphUploadCurrent = byId.get("web.wasm.webgpu.glyph_atlas_upload.current_dirty");
    let glyphUploadLegacy = byId.get("web.wasm.webgpu.glyph_atlas_upload.legacy_full");
