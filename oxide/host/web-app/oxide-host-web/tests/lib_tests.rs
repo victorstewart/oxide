@@ -872,14 +872,18 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("function allocationMetricFields"));
     assert!(script.contains("const WASM_FRAME_STAGE_NAMES"));
     assert!(script.contains("const WASM_SUBMIT_STAGE_NAMES"));
+    assert!(script.contains("const GPU_TIMESTAMP_STAGE_FIELDS"));
     assert!(script.contains("function frameStageAllocationMetricFields"));
     assert!(script.contains("function submitAllocationMetricFields"));
+    assert!(script.contains("function gpuTimestampStageBreakdownSummary"));
     assert!(script.contains("function frameLoopWasmStageSummary"));
     assert!(script.contains("function frameLoopWasmSubmitStageSummary"));
+    assert!(script.contains("function assertGpuTimestampStageBreakdown"));
     assert!(script.contains("function assertFrameLoopWasmStageAllocation"));
     assert!(script.contains("function assertFrameLoopWasmSubmitStageAllocation"));
     assert!(script.contains("function wasmAllocationSummary"));
     assert!(script.contains("function assertWasmAllocationAudit"));
+    assert!(script.contains("gpu_timestamp_stage_breakdown"));
     assert!(script.contains("wasm_allocation_audit"));
     assert!(script.contains("frame_loop_wasm_allocation_stages"));
     assert!(script.contains("wasm_alloc_count: numberMetric(metrics, key(\"wasm_alloc_count\"))"));
@@ -1804,6 +1808,31 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(browser_trace.contains("\"benchmark_trace_interval_labels\""));
     assert!(browser_trace.contains("\"benchmark_trace_intervals\""));
     assert!(report_f64(browser_trace, "webgpu_related_events") > 0.0);
+    let gpu_timestamp_stage_breakdown =
+        report_section_slice(report, "gpu_timestamp_stage_breakdown");
+    assert!(gpu_timestamp_stage_breakdown
+        .contains("\"id\": \"web.wasm.webgpu.gpu_timestamp_stage_breakdown\""));
+    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "row_count"), 33);
+    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "collected_rows"), 33);
+    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "stage_count"), 9);
+    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "row_detail_count"), 33);
+    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "total_render_passes"), 200);
+    assert_eq!(
+        report_u64(gpu_timestamp_stage_breakdown, "total_render_passes"),
+        report_u64(gpu_timestamp_stage_breakdown, "total_timestamp_passes"),
+    );
+    assert_eq!(
+        report_u64(gpu_timestamp_stage_breakdown, "total_render_passes"),
+        report_u64(gpu_timestamp_stage_breakdown, "total_family_passes"),
+    );
+    assert_eq!(
+        report_u64(gpu_timestamp_stage_breakdown, "total_timestamp_ns"),
+        report_u64(gpu_timestamp_stage_breakdown, "total_family_timestamp_ns"),
+    );
+    assert!(gpu_timestamp_stage_breakdown.contains("\"stage\": \"draw\""));
+    assert!(gpu_timestamp_stage_breakdown.contains("\"stage\": \"id_mask_field_jump\""));
+    assert!(gpu_timestamp_stage_breakdown.contains("\"stage\": \"present\""));
+    assert!(gpu_timestamp_stage_breakdown.contains("\"id\": \"web.wasm.webgpu.frame_loop\""));
     let warm_resource_churn = report_section_slice(report, "warm_resource_churn");
     assert!(warm_resource_churn
         .contains("\"id\": \"web.wasm.webgpu.warm_resource_churn.current_rows\""));

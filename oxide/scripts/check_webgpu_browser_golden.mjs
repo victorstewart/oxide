@@ -1371,6 +1371,18 @@ const WARM_RESOURCE_CHURN_FIELDS = [
    "cpu_resource_table_scratch_growth_bytes",
 ];
 
+const GPU_TIMESTAMP_STAGE_FIELDS = [
+   ["clear", "clear_passes", "gpu_timestamp_clear_ns"],
+   ["draw", "draw_passes", "gpu_timestamp_draw_ns"],
+   ["scene3d", "scene3d_passes", "gpu_timestamp_scene3d_ns"],
+   ["scene3d_overlay", "scene3d_overlay_passes", "gpu_timestamp_scene3d_overlay_ns"],
+   ["id_mask_raster", "id_mask_raster_passes", "gpu_timestamp_id_mask_raster_ns"],
+   ["id_mask_field_seed", "id_mask_field_seed_passes", "gpu_timestamp_id_mask_field_seed_ns"],
+   ["id_mask_field_jump", "id_mask_field_jump_passes", "gpu_timestamp_id_mask_field_jump_ns"],
+   ["id_mask_compositor", "id_mask_compositor_passes", "gpu_timestamp_id_mask_compositor_ns"],
+   ["present", "present_passes", "gpu_timestamp_present_ns"],
+];
+
 const EXPECTED_BENCHMARK_MARKS = [
    "frame_loop",
    "id_mask_ab",
@@ -1643,6 +1655,73 @@ function warmResourceChurnSummary(cases)
       excluded,
       row_details: rowDetails,
       ...totals,
+   };
+}
+
+function gpuTimestampStageBreakdownSummary(cases)
+{
+   let stages = GPU_TIMESTAMP_STAGE_FIELDS.map(([stage, passField, timestampField]) => ({
+      stage,
+      pass_field: passField,
+      timestamp_field: timestampField,
+      pass_count: 0,
+      timestamp_ns: 0,
+   }));
+   let rowDetails = [];
+   let totalRenderPasses = 0;
+   let totalTimestampPasses = 0;
+   let totalTimestampNs = 0;
+   let totalFamilyPasses = 0;
+   let totalFamilyTimestampNs = 0;
+   for (let row of cases) {
+      let familyPasses = 0;
+      let familyTimestampNs = 0;
+      let detailStages = [];
+      for (let index = 0; index < GPU_TIMESTAMP_STAGE_FIELDS.length; index++) {
+         let [stage, passField, timestampField] = GPU_TIMESTAMP_STAGE_FIELDS[index];
+         let passCount = row[passField];
+         let timestampNs = row[timestampField];
+         if (!Number.isFinite(passCount) || !Number.isFinite(timestampNs)) {
+            throw new Error(`web report missing finite GPU timestamp stage field ${row.id}.${stage}`);
+         }
+         familyPasses += passCount;
+         familyTimestampNs += timestampNs;
+         stages[index].pass_count += passCount;
+         stages[index].timestamp_ns += timestampNs;
+         detailStages.push({
+            stage,
+            pass_count: passCount,
+            timestamp_ns: timestampNs,
+         });
+      }
+      totalRenderPasses += row.render_passes;
+      totalTimestampPasses += row.gpu_timestamp_passes;
+      totalTimestampNs += row.gpu_timestamp_total_ns;
+      totalFamilyPasses += familyPasses;
+      totalFamilyTimestampNs += familyTimestampNs;
+      rowDetails.push({
+         id: row.id,
+         render_passes: row.render_passes,
+         gpu_timestamp_passes: row.gpu_timestamp_passes,
+         gpu_timestamp_total_ns: row.gpu_timestamp_total_ns,
+         family_passes: familyPasses,
+         family_timestamp_ns: familyTimestampNs,
+         stages: detailStages,
+      });
+   }
+   return {
+      id: "web.wasm.webgpu.gpu_timestamp_stage_breakdown",
+      row_count: cases.length,
+      collected_rows: cases.filter(row => row.gpu_timestamp_passes > 0).length,
+      stage_count: stages.length,
+      row_detail_count: rowDetails.length,
+      total_render_passes: totalRenderPasses,
+      total_timestamp_passes: totalTimestampPasses,
+      total_timestamp_ns: totalTimestampNs,
+      total_family_passes: totalFamilyPasses,
+      total_family_timestamp_ns: totalFamilyTimestampNs,
+      stages,
+      row_details: rowDetails,
    };
 }
 
@@ -2331,6 +2410,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
    let timestampPasses = timestampRows.reduce((sum, row) => sum + row.gpu_timestamp_passes, 0);
    let timestampTotalNs = timestampRows.reduce((sum, row) => sum + row.gpu_timestamp_total_ns, 0);
    let warmResourceChurn = warmResourceChurnSummary(cases);
+   let gpuTimestampStageBreakdown = gpuTimestampStageBreakdownSummary(cases);
    let wasmAllocationAudit = wasmAllocationSummary(cases);
    let wasmAllocationInvariance = wasmAllocationInvarianceSummary(wasmAllocationAudit);
    let backendPathCoverage = backendPathCoverageSummary(cases);
@@ -2400,6 +2480,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          collected_passes: timestampPasses,
          total_ns: timestampTotalNs,
       },
+      gpu_timestamp_stage_breakdown: gpuTimestampStageBreakdown,
       browser_trace: traceSummary,
       benchmark_marks: benchmarkMarks,
       warm_resource_churn: warmResourceChurn,
@@ -3071,6 +3152,22 @@ function renderMarkdown(report)
    lines.push(`| Collected passes | \`${report.gpu_stage_attribution.collected_passes}\` |`);
    lines.push(`| Total ns | \`${report.gpu_stage_attribution.total_ns}\` |`);
    lines.push("");
+   lines.push("### GPU Timestamp Stage Breakdown");
+   lines.push("");
+   lines.push("| Stage | Passes | Timestamp ns |");
+   lines.push("| --- | ---: | ---: |");
+   for (let stage of report.gpu_timestamp_stage_breakdown.stages) {
+      lines.push(`| \`${stage.stage}\` | ${stage.pass_count} | ${stage.timestamp_ns} |`);
+   }
+   lines.push("");
+   lines.push("### GPU Timestamp Row Reconciliation");
+   lines.push("");
+   lines.push("| Row | Render Passes | Timestamp Passes | Timestamp ns | Family Passes | Family Timestamp ns |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: |");
+   for (let row of report.gpu_timestamp_stage_breakdown.row_details) {
+      lines.push(`| \`${row.id}\` | ${row.render_passes} | ${row.gpu_timestamp_passes} | ${row.gpu_timestamp_total_ns} | ${row.family_passes} | ${row.family_timestamp_ns} |`);
+   }
+   lines.push("");
    lines.push("## Browser Trace");
    lines.push("");
    lines.push("| Field | Value |");
@@ -3292,6 +3389,119 @@ function assertNumber(value, label)
 {
    if (!Number.isFinite(value)) {
       throw new Error(`web report contract missing finite ${label}`);
+   }
+}
+
+function assertGpuTimestampStageBreakdown(report, byId)
+{
+   let summary = report.gpu_timestamp_stage_breakdown;
+   if (!summary || summary.id !== "web.wasm.webgpu.gpu_timestamp_stage_breakdown") {
+      throw new Error("web report contract missing GPU timestamp stage breakdown");
+   }
+   let stages = Array.isArray(summary.stages) ? summary.stages : [];
+   let rowDetails = Array.isArray(summary.row_details) ? summary.row_details : [];
+   if (
+      summary.row_count !== report.cases.length
+      || summary.row_detail_count !== rowDetails.length
+      || rowDetails.length !== report.cases.length
+   ) {
+      throw new Error("web report contract has inconsistent GPU timestamp row counts");
+   }
+   if (summary.stage_count !== GPU_TIMESTAMP_STAGE_FIELDS.length || stages.length !== GPU_TIMESTAMP_STAGE_FIELDS.length) {
+      throw new Error("web report contract has inconsistent GPU timestamp stage counts");
+   }
+   let stageByName = new Map();
+   for (let stage of stages) {
+      if (typeof stage.stage !== "string" || stageByName.has(stage.stage)) {
+         throw new Error("web report contract has invalid GPU timestamp stage row");
+      }
+      assertNumber(stage.pass_count, `gpu_timestamp_stage_breakdown.${stage.stage}.pass_count`);
+      assertNumber(stage.timestamp_ns, `gpu_timestamp_stage_breakdown.${stage.stage}.timestamp_ns`);
+      stageByName.set(stage.stage, stage);
+   }
+   let totalStagePasses = 0;
+   let totalStageTimestampNs = 0;
+   for (let [stage, passField, timestampField] of GPU_TIMESTAMP_STAGE_FIELDS) {
+      let detail = stageByName.get(stage);
+      if (!detail || detail.pass_field !== passField || detail.timestamp_field !== timestampField) {
+         throw new Error(`web report contract missing GPU timestamp stage ${stage}`);
+      }
+      totalStagePasses += detail.pass_count;
+      totalStageTimestampNs += detail.timestamp_ns;
+   }
+   let rowIds = new Set();
+   let totalRenderPasses = 0;
+   let totalTimestampPasses = 0;
+   let totalTimestampNs = 0;
+   let totalFamilyPasses = 0;
+   let totalFamilyTimestampNs = 0;
+   for (let detail of rowDetails) {
+      let source = byId.get(detail.id);
+      if (!source || rowIds.has(detail.id)) {
+         throw new Error("web report contract has invalid GPU timestamp row detail");
+      }
+      rowIds.add(detail.id);
+      if (
+         detail.render_passes !== source.render_passes
+         || detail.gpu_timestamp_passes !== source.gpu_timestamp_passes
+         || detail.gpu_timestamp_total_ns !== source.gpu_timestamp_total_ns
+      ) {
+         throw new Error(`web report contract GPU timestamp row detail mismatch ${detail.id}`);
+      }
+      let detailStages = Array.isArray(detail.stages) ? detail.stages : [];
+      if (detailStages.length !== GPU_TIMESTAMP_STAGE_FIELDS.length) {
+         throw new Error(`web report contract GPU timestamp row detail stage count mismatch ${detail.id}`);
+      }
+      let familyPasses = 0;
+      let familyTimestampNs = 0;
+      let detailStageByName = new Map(detailStages.map(stage => [stage.stage, stage]));
+      for (let [stage, passField, timestampField] of GPU_TIMESTAMP_STAGE_FIELDS) {
+         let stageDetail = detailStageByName.get(stage);
+         if (!stageDetail) {
+            throw new Error(`web report contract GPU timestamp row detail missing stage ${detail.id}.${stage}`);
+         }
+         assertNumber(stageDetail.pass_count, `gpu_timestamp_stage_breakdown.${detail.id}.${stage}.pass_count`);
+         assertNumber(stageDetail.timestamp_ns, `gpu_timestamp_stage_breakdown.${detail.id}.${stage}.timestamp_ns`);
+         if (
+            stageDetail.pass_count !== source[passField]
+            || stageDetail.timestamp_ns !== source[timestampField]
+         ) {
+            throw new Error(`web report contract GPU timestamp row detail source mismatch ${detail.id}.${stage}`);
+         }
+         familyPasses += stageDetail.pass_count;
+         familyTimestampNs += stageDetail.timestamp_ns;
+      }
+      if (
+         detail.family_passes !== familyPasses
+         || detail.family_timestamp_ns !== familyTimestampNs
+         || familyPasses !== source.render_passes
+         || familyTimestampNs !== source.gpu_timestamp_total_ns
+      ) {
+         throw new Error(`web report contract GPU timestamp family mismatch ${detail.id}`);
+      }
+      totalRenderPasses += source.render_passes;
+      totalTimestampPasses += source.gpu_timestamp_passes;
+      totalTimestampNs += source.gpu_timestamp_total_ns;
+      totalFamilyPasses += familyPasses;
+      totalFamilyTimestampNs += familyTimestampNs;
+   }
+   if (
+      summary.total_render_passes !== totalRenderPasses
+      || summary.total_timestamp_passes !== totalTimestampPasses
+      || summary.total_timestamp_ns !== totalTimestampNs
+      || summary.total_family_passes !== totalFamilyPasses
+      || summary.total_family_timestamp_ns !== totalFamilyTimestampNs
+      || summary.total_family_passes !== totalStagePasses
+      || summary.total_family_timestamp_ns !== totalStageTimestampNs
+   ) {
+      throw new Error("web report contract GPU timestamp stage totals do not reconcile");
+   }
+   if (
+      summary.collected_rows !== report.gpu_stage_attribution.collected_rows
+      || summary.total_timestamp_passes !== report.gpu_stage_attribution.collected_passes
+      || summary.total_timestamp_ns !== report.gpu_stage_attribution.total_ns
+   ) {
+      throw new Error("web report contract GPU timestamp stage totals do not match attribution summary");
    }
 }
 
@@ -4193,6 +4403,7 @@ function assertWebReportContract(report)
    }
    assertBenchmarkMarks(report);
    let byId = new Map(report.cases.map(row => [row.id, row]));
+   assertGpuTimestampStageBreakdown(report, byId);
    assertWarmResourceChurn(report, byId);
    assertWasmAllocationAudit(report, byId);
    assertWasmAllocationInvariance(report);

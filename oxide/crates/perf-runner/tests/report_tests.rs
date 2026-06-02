@@ -1259,6 +1259,60 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         assert_web_frame_case_contract(web_report_case(&report, id));
     }
 
+    let gpu_timestamp_stage_breakdown = &report["gpu_timestamp_stage_breakdown"];
+    assert_eq!(
+        gpu_timestamp_stage_breakdown["id"].as_str(),
+        Some("web.wasm.webgpu.gpu_timestamp_stage_breakdown"),
+    );
+    assert_eq!(web_report_number(gpu_timestamp_stage_breakdown, "row_count"), 33.0);
+    assert_eq!(web_report_number(gpu_timestamp_stage_breakdown, "collected_rows"), 33.0);
+    assert_eq!(web_report_number(gpu_timestamp_stage_breakdown, "stage_count"), 9.0);
+    assert_eq!(web_report_number(gpu_timestamp_stage_breakdown, "row_detail_count"), 33.0);
+    assert_eq!(
+        web_report_number(gpu_timestamp_stage_breakdown, "total_render_passes"),
+        web_report_number(gpu_timestamp_stage_breakdown, "total_timestamp_passes"),
+    );
+    assert_eq!(
+        web_report_number(gpu_timestamp_stage_breakdown, "total_render_passes"),
+        web_report_number(gpu_timestamp_stage_breakdown, "total_family_passes"),
+    );
+    assert_eq!(
+        web_report_number(gpu_timestamp_stage_breakdown, "total_timestamp_ns"),
+        web_report_number(gpu_timestamp_stage_breakdown, "total_family_timestamp_ns"),
+    );
+    assert_eq!(
+        web_report_number(gpu_timestamp_stage_breakdown, "total_timestamp_passes"),
+        web_report_number(&report["gpu_stage_attribution"], "collected_passes"),
+    );
+    assert_eq!(
+        web_report_number(gpu_timestamp_stage_breakdown, "total_timestamp_ns"),
+        web_report_number(&report["gpu_stage_attribution"], "total_ns"),
+    );
+    let gpu_timestamp_stages: Vec<&str> = gpu_timestamp_stage_breakdown["stages"]
+        .as_array()
+        .expect("gpu timestamp stage details")
+        .iter()
+        .map(|stage| stage["stage"].as_str().expect("gpu timestamp stage name"))
+        .collect();
+    for stage in ["draw", "scene3d", "id_mask_field_jump", "present"] {
+        assert!(gpu_timestamp_stages.contains(&stage), "missing gpu timestamp stage {stage}");
+    }
+    let gpu_timestamp_rows = gpu_timestamp_stage_breakdown["row_details"]
+        .as_array()
+        .expect("gpu timestamp row details");
+    let frame_loop_timestamp_row = gpu_timestamp_rows
+        .iter()
+        .find(|row| row["id"].as_str() == Some("web.wasm.webgpu.frame_loop"))
+        .expect("frame-loop gpu timestamp detail");
+    assert_eq!(
+        web_report_number(frame_loop_timestamp_row, "family_passes"),
+        web_report_number(web_report_case(&report, "web.wasm.webgpu.frame_loop"), "render_passes"),
+    );
+    assert_eq!(
+        web_report_number(frame_loop_timestamp_row, "family_timestamp_ns"),
+        web_report_number(web_report_case(&report, "web.wasm.webgpu.frame_loop"), "gpu_timestamp_total_ns"),
+    );
+
     let warm_resource_churn = &report["warm_resource_churn"];
     assert_eq!(
         warm_resource_churn["id"].as_str(),
