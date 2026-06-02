@@ -478,6 +478,7 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("gpu_timestamp_total_ns={}"));
     assert!(source.contains("gpu_timestamp_id_mask_field_jump_ns={}"));
     assert!(source.contains("gpu_timestamp_readback_skips={}"));
+    assert!(source.contains("gpu_timestamp_readback_interval={}"));
     assert!(source.contains("buffer_upload_bytes={}"));
     assert!(source.contains("texture_upload_bytes={}"));
     assert!(source.contains("buffer_grows={}"));
@@ -531,6 +532,7 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("{key_prefix}id_mask_field_jump_passes={}"));
     assert!(source.contains("{key_prefix}texture_copies={}"));
     assert!(source.contains("{key_prefix}gpu_timestamp_passes={}"));
+    assert!(source.contains("{key_prefix}gpu_timestamp_readback_interval={}"));
     assert!(source.contains("{key_prefix}image_mesh_draws={}"));
     assert!(source.contains("{key_prefix}nine_slice_draws={}"));
     assert!(source.contains("{key_prefix}sdf_glyph_quads={}"));
@@ -974,6 +976,7 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert_eq!(report_u64(frame, "gpu_timestamp_query_supported"), 1);
     assert!(report_f64(frame, "gpu_timestamp_passes") > 0.0);
     assert!(report_f64(frame, "gpu_timestamp_total_ns") >= 0.0);
+    assert!(report_f64(frame, "gpu_timestamp_readback_interval") >= 1.0);
     assert!(report_f64(frame, "buffer_upload_bytes") > 0.0);
     assert!(report_f64(frame, "texture_upload_bytes") >= 0.0);
     assert!(report_f64(frame, "buffer_grows") >= 0.0);
@@ -1594,6 +1597,8 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(report_u64(wasm_allocation_audit, "total_wasm_alloc_bytes") > 0);
     assert_eq!(report_u64(wasm_allocation_audit, "total_wasm_realloc_count"), 0);
     assert_eq!(report_u64(wasm_allocation_audit, "total_wasm_realloc_grow_bytes"), 0);
+    assert!(report_f64(wasm_allocation_audit, "budget_wasm_allocs_per_frame") <= 8.0);
+    assert!(report_f64(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame") <= 256.0);
     assert!(
         report_f64(wasm_allocation_audit, "max_wasm_allocs_per_frame")
             <= report_f64(wasm_allocation_audit, "budget_wasm_allocs_per_frame")

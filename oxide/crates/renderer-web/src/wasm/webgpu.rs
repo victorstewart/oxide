@@ -33,6 +33,7 @@ const MAX_BLUR_SIGMA: f32 = 96.0;
 const TIMESTAMP_MAX_PASSES: u32 = 64;
 const TIMESTAMP_QUERY_COUNT: u32 = TIMESTAMP_MAX_PASSES * 2;
 const TIMESTAMP_READBACK_SLOTS: usize = 48;
+const TIMESTAMP_READBACK_INTERVAL_FRAMES: u64 = 8;
 
 #[derive(Clone, Copy)]
 struct GpuVertex {
@@ -352,6 +353,9 @@ impl WebGpuTimestampQueries {
             return None;
         }
         self.harvest();
+        if frame_id % TIMESTAMP_READBACK_INTERVAL_FRAMES != 0 {
+            return None;
+        }
         let Some(slot_index) = self.next_idle_slot() else {
             self.readback_skips = self.readback_skips.saturating_add(1);
             return None;
@@ -1178,6 +1182,7 @@ impl WebGpuRenderer {
         self.stats.gpu_timestamp_present_ns = latest.present_ns;
         self.stats.gpu_timestamp_max_pass_ns = latest.max_pass_ns;
         self.stats.gpu_timestamp_readback_skips = timestamps.readback_skips;
+        self.stats.gpu_timestamp_readback_interval = TIMESTAMP_READBACK_INTERVAL_FRAMES as u32;
     }
 
     fn reserve_timestamp_pass(&mut self, family: TimestampPassFamily) -> Option<(u32, u32)> {

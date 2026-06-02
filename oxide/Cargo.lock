@@ -970,10 +970,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxide-wasm-alloc-counter"
-version = "0.1.0"
-
-[[package]]
 name = "oxide-telemetry"
 version = "0.1.0"
 dependencies = [
@@ -1004,6 +1000,7 @@ dependencies = [
  "alloc-no-stdlib",
  "anyhow",
  "oxide-renderer-api",
+ "oxide-wasm-alloc-counter",
  "rustybuzz",
  "swash",
  "ttf-parser 0.20.0",
@@ -1047,6 +1044,10 @@ dependencies = [
  "oxide-renderer-api",
  "proptest",
 ]
+
+[[package]]
+name = "oxide-wasm-alloc-counter"
+version = "0.1.0"
 
 [[package]]
 name = "parking_lot"

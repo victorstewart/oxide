@@ -62,7 +62,7 @@
 - `oxide_text::ShapedCursorMap::cursor_for_x_with_affinity(&self, x: f32, affinity: CaretAffinity) -> usize`
   Resolves ambiguous mixed-direction hit tests using an explicit caret affinity.
 - `oxide_text::OwnedShape::bake_into_with(...) -> oxide_renderer_api::GlyphRun`
-  Reuses owned shaped glyphs and caller-owned raster state to append glyph geometry.
+  Reuses owned shaped glyphs and caller-owned raster state to append glyph geometry without cloning cached glyph storage on the common LTR path.
 
 ## Logic narrative
 - `TextShaper` uses `rustybuzz` to shape text and keeps glyph ids plus advances separate from rasterization.
@@ -73,6 +73,7 @@
 - While baking a single run, eviction is limited to glyphs older than the run's starting atlas clock so pressure cannot overwrite a glyph whose vertices were already emitted earlier in the same run.
 - Evicting into a larger stale slot clears and dirties the full old slot before writing the replacement glyph, so dirty-rect uploads cannot leave stale glyph pixels around smaller replacements.
 - New glyph pixels are unioned into the dirty slot region, so `TextCtx::ensure_gpu` can upload a dirty rectangle instead of the full atlas.
+- Zero-bitmap glyphs such as spaces are cached as no-geometry atlas entries. Warm replay advances the pen without rebuilding raster state or dirtying the atlas.
 - `ShapeOutput::prefix_widths_for_boundaries` and `OwnedShape::prefix_widths_for_boundaries` map glyph-cluster advances onto caller-provided boundaries, then prefix-sum those advances so UI text inputs can build caret and selection positions without reshaping every prefix.
 - `ShapedCursorMap` combines Unicode grapheme byte boundaries with shaped caret positions, so callers use one artifact for byte ranges, caret positions, and O(log n) x-to-cursor lookup for both ascending LTR and descending pure RTL runs. Mixed LTR/RTL maps keep upstream and downstream x positions at ambiguous run boundaries while preserving the single-position fast path for ordinary text.
 - `TextShaper::cursor_map_with_fallback_fonts` walks grapheme clusters, groups adjacent clusters by the selected font, shapes each run once, and stitches the run prefix widths into one global `ShapedCursorMap`.
@@ -93,9 +94,11 @@
 - `Atlas`, `TextShaper`, and `RasterCtx` are caller-owned mutable state and do not synchronize internally.
 - The atlas maintains a `HashMap` of resident glyph keys and a contiguous A8 pixel buffer.
 - Baking a borrowed `ShapeOutput` materializes a compact glyph vector before rasterization; cached UI paths prefer `OwnedShape`.
+- Baking an `OwnedShape` borrows cached glyph storage when the cached logical order is already visual. RTL cached shapes still allocate a temporary reversed vector only when visual-order correction is required.
 
 ## Performance notes
 - Cache hits update glyph LRU state without rasterizing or uploading.
+- Warm cached `OwnedShape` replay for already-resident LTR glyphs is allocation-free when caller-owned vertex and index buffers have capacity.
 - LRU slot eviction clears and replaces a stale glyph rectangle in place, avoiding full-atlas uploads, stale global atlas resets, and stale edge pixels after smaller replacement glyphs reuse a larger slot.
 - The dirty rectangle is unioned across new or overwritten glyph slots until the caller uploads it.
 - Cursor maps reuse the same shaped glyph buffer or owned cached run, replacing O(boundary count) shaping calls on a cache miss with one shape plus a glyph-to-boundary pass and binary-search hit testing.
@@ -109,6 +112,7 @@
 ## Testing and benchmarks
 - `crates/text/tests/shaping_tests.rs` covers shaping, reset behavior, atlas revisions, dirty rectangles, full-slot dirtying/clearing after atlas eviction, atlas pressure eviction, same-run eviction protection, and oversize glyph skipping.
 - `crates/text/tests/shaping_tests.rs` also covers shaped-run prefix width maps and cursor maps for ASCII prefixes, combining-grapheme boundaries, ZWJ clusters, pure RTL visual order, mixed-bidi caret affinity, configured fallback-font cursor widths and shape runs, and owned-run reuse parity.
+- `crates/text/tests/owned_shape_replay_tests.rs` covers allocation-free warm LTR owned-shape replay and RTL owned-shape visual-order parity against direct shaping.
 - `cpu.system.text_atlas_pressure` exercises constrained atlas pressure in the workspace perf runner.
 - `cpu.system.text_prefix_width_map` exercises the one-shaped-run cursor prefix map used by text input caches.
 
@@ -119,6 +123,7 @@ assert_eq!(atlas.eviction_count(), 0);
 ```
 
 ## Changelog
+- 2026-06-02: removed cached `OwnedShape` glyph-vector clones on the common replay path, cached zero-bitmap glyphs as no-geometry entries, and added allocation-free warm replay coverage.
 - 2026-06-01: atlas slot eviction now clears and dirties the full reused slot before writing a smaller replacement glyph, preventing stale dirty-rect-upload pixels around the new glyph.
 - 2026-05-31: added mixed-bidi upstream/downstream caret affinity positions to `ShapedCursorMap`.
 - 2026-05-31: added `ShapedCursorMap` so grapheme byte boundaries, shaped prefix widths, and x-to-cursor lookup share one reusable text artifact.

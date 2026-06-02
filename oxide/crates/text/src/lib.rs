@@ -805,12 +805,30 @@ impl OwnedShape {
         origin_y: f32,
         device_scale: f32,
     ) -> api::GlyphRun {
-        let glyphs = self.visual_glyphs();
+        if self.rtl && !clusters_are_descending(self.glyphs.iter().map(|glyph| glyph.cluster)) {
+            let mut glyphs = self.glyphs.clone();
+            glyphs.reverse();
+            return bake_glyphs_into(
+                font,
+                self.font_id,
+                self.px,
+                &glyphs,
+                raster,
+                atlas,
+                draw_vertices,
+                draw_indices,
+                color,
+                atlas_handle,
+                origin_x,
+                origin_y,
+                device_scale,
+            );
+        }
         bake_glyphs_into(
             font,
             self.font_id,
             self.px,
-            &glyphs,
+            &self.glyphs,
             raster,
             atlas,
             draw_vertices,
@@ -821,14 +839,6 @@ impl OwnedShape {
             origin_y,
             device_scale,
         )
-    }
-
-    fn visual_glyphs(&self) -> Vec<ShapedGlyph> {
-        let mut glyphs = self.glyphs.clone();
-        if self.rtl && !clusters_are_descending(glyphs.iter().map(|glyph| glyph.cluster)) {
-            glyphs.reverse();
-        }
-        glyphs
     }
 }
 
@@ -1251,7 +1261,7 @@ fn bake_glyphs_into(
     let i_start = draw_indices.len() as u32;
     let use_sdf = (px * device_scale) >= 24.0;
     let mut scaler = None;
-    let render = Render::new(&[Source::Outline]);
+    let mut render = None;
     let protect_after_clock = atlas.clock;
 
     for glyph in glyphs.iter().copied() {
@@ -1276,7 +1286,9 @@ fn bake_glyphs_into(
                 pen_y += glyph.y_advance as f32 / 64.0;
                 continue;
             };
+            let render = render.get_or_insert_with(|| Render::new(&[Source::Outline]));
             if !render.render_into(scaler, glyph.glyph_id, &mut img) {
+                cache_empty_glyph_entry(atlas, key, 0, 0);
                 pen_x += glyph.x_advance as f32 / 64.0;
                 pen_y += glyph.y_advance as f32 / 64.0;
                 continue;
@@ -1284,6 +1296,12 @@ fn bake_glyphs_into(
             let w = img.placement.width.max(0);
             let h = img.placement.height.max(0);
             if w == 0 || h == 0 {
+                cache_empty_glyph_entry(
+                    atlas,
+                    key,
+                    img.placement.left as i16,
+                    img.placement.top as i16,
+                );
                 pen_x += glyph.x_advance as f32 / 64.0;
                 pen_y += glyph.y_advance as f32 / 64.0;
                 continue;
@@ -1362,6 +1380,11 @@ fn bake_glyphs_into(
             atlas.map.insert(key, e.clone());
             e
         };
+        if entry.w == 0 || entry.h == 0 {
+            pen_x += glyph.x_advance as f32 / 64.0;
+            pen_y += glyph.y_advance as f32 / 64.0;
+            continue;
+        }
 
         let gx = ox + pen_x + (entry.l as f32);
         let gy = oy + pen_y - (entry.t as f32);
@@ -1402,6 +1425,20 @@ fn bake_glyphs_into(
         sdf: use_sdf,
         color,
     }
+}
+
+fn cache_empty_glyph_entry(atlas: &mut Atlas, key: GlyphKey, left: i16, top: i16) {
+    let e = GlyphAtlasEntry {
+        u: 0,
+        v: 0,
+        w: 0,
+        h: 0,
+        l: left,
+        t: top,
+        last_used: atlas.clock.wrapping_add(1),
+    };
+    atlas.clock = e.last_used;
+    atlas.map.insert(key, e);
 }
 
 fn pack_rgba(color: api::Color) -> u32 {

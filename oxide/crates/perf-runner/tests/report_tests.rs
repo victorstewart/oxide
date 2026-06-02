@@ -932,6 +932,7 @@ fn assert_web_frame_case_contract(case: &Value) {
         "gpu_timestamp_present_ns",
         "gpu_timestamp_max_pass_ns",
         "gpu_timestamp_readback_skips",
+        "gpu_timestamp_readback_interval",
         "buffer_upload_bytes",
         "texture_upload_bytes",
         "buffer_grows",
@@ -1008,6 +1009,7 @@ fn assert_web_frame_case_contract(case: &Value) {
             web_report_number(case, "gpu_timestamp_passes"),
             web_report_number(case, "render_passes"),
         );
+        assert!(web_report_number(case, "gpu_timestamp_readback_interval") >= 1.0);
     }
     assert!(web_report_number(case, "cpu_scratch_bytes") > 0.0);
     assert!(web_report_number(case, "cpu_draw_scratch_bytes") > 0.0);
@@ -1389,6 +1391,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         web_report_number(wasm_allocation_audit, "total_wasm_realloc_grow_bytes"),
         0.0,
     );
+    assert!(web_report_number(wasm_allocation_audit, "budget_wasm_allocs_per_frame") <= 8.0);
+    assert!(web_report_number(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame") <= 256.0);
     assert!(
         web_report_number(wasm_allocation_audit, "max_wasm_allocs_per_frame")
             <= web_report_number(wasm_allocation_audit, "budget_wasm_allocs_per_frame")

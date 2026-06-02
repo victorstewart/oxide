@@ -1036,6 +1036,7 @@ function timestampMetricFields(metrics, prefix)
       gpu_timestamp_present_ns: numberMetric(metrics, key("gpu_timestamp_present_ns")),
       gpu_timestamp_max_pass_ns: numberMetric(metrics, key("gpu_timestamp_max_pass_ns")),
       gpu_timestamp_readback_skips: numberMetric(metrics, key("gpu_timestamp_readback_skips")),
+      gpu_timestamp_readback_interval: numberMetric(metrics, key("gpu_timestamp_readback_interval")),
    };
 }
 
@@ -1650,8 +1651,8 @@ function wasmAllocationSummary(cases)
       max_wasm_allocs_per_frame: maxAllocsPerFrame,
       max_wasm_alloc_bytes_per_frame: maxAllocBytesPerFrame,
       max_wasm_peak_frame_alloc_bytes: maxPeakFrameAllocBytes,
-      budget_wasm_allocs_per_frame: 18,
-      budget_wasm_alloc_bytes_per_frame: 3072,
+      budget_wasm_allocs_per_frame: 8,
+      budget_wasm_alloc_bytes_per_frame: 256,
       rows,
       excluded,
       row_detail_count: rowDetails.length,
@@ -3499,6 +3500,7 @@ function assertWebReportContract(report)
          "gpu_timestamp_present_ns",
          "gpu_timestamp_max_pass_ns",
          "gpu_timestamp_readback_skips",
+         "gpu_timestamp_readback_interval",
          "buffer_upload_bytes",
          "texture_upload_bytes",
          "buffer_grows",
@@ -3571,6 +3573,9 @@ function assertWebReportContract(report)
       }
       if (row.gpu_timestamp_query_supported > 0 && row.gpu_timestamp_passes > 0 && row.gpu_timestamp_passes !== row.render_passes) {
          throw new Error(`web report contract timestamp passes ${row.gpu_timestamp_passes} != render_passes ${row.render_passes} for ${row.id}`);
+      }
+      if (row.gpu_timestamp_query_supported > 0 && row.gpu_timestamp_readback_interval < 1) {
+         throw new Error(`web report contract missing timestamp readback interval for ${row.id}`);
       }
       if (
          row.pipeline_creates !== 0
