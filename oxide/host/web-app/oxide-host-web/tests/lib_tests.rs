@@ -1621,12 +1621,38 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
         report_f64(wasm_allocation_audit, "max_wasm_allocs_per_frame")
             <= report_f64(wasm_allocation_audit, "budget_wasm_allocs_per_frame")
     );
-    assert!(
-        report_f64(wasm_allocation_audit, "max_wasm_alloc_bytes_per_frame")
-            <= report_f64(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame")
-    );
+   assert!(
+       report_f64(wasm_allocation_audit, "max_wasm_alloc_bytes_per_frame")
+           <= report_f64(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame")
+   );
 
-    let frame_stage_allocations = report_section_slice(report, "frame_loop_wasm_allocation_stages");
+   let wasm_allocation_invariance = report_section_slice(report, "wasm_allocation_invariance");
+   assert!(wasm_allocation_invariance
+      .contains("\"id\": \"web.wasm.webgpu.wasm_allocation_invariance.current_rows\""));
+   assert!(wasm_allocation_invariance
+      .contains("\"status\": \"shared-submit-boundary-profile\""));
+   assert!(wasm_allocation_invariance
+      .contains("\"reference_row\": \"web.wasm.webgpu.frame_loop\""));
+   assert_eq!(
+      report_u64(wasm_allocation_invariance, "checked_count"),
+      report_u64(wasm_allocation_audit, "checked_count"),
+   );
+   assert_eq!(report_u64(wasm_allocation_invariance, "unique_signature_count"), 1);
+   assert_eq!(
+      report_u64(wasm_allocation_invariance, "shared_wasm_alloc_count"),
+      report_u64(frame, "wasm_alloc_count"),
+   );
+   assert_eq!(
+      report_u64(wasm_allocation_invariance, "shared_wasm_alloc_bytes"),
+      report_u64(frame, "wasm_alloc_bytes"),
+   );
+   assert_eq!(report_u64(wasm_allocation_invariance, "shared_wasm_realloc_count"), 0);
+   assert_eq!(
+      report_u64(wasm_allocation_invariance, "shared_wasm_realloc_grow_bytes"),
+      0,
+   );
+
+   let frame_stage_allocations = report_section_slice(report, "frame_loop_wasm_allocation_stages");
     assert!(frame_stage_allocations
         .contains("\"id\": \"web.wasm.webgpu.frame_loop_wasm_allocation_stages\""));
     assert!(frame_stage_allocations.contains("\"row_id\": \"web.wasm.webgpu.frame_loop\""));

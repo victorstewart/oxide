@@ -1412,9 +1412,9 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         .expect("wasm allocation row details");
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.frame_loop"));
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.id_mask_compositor.current"));
-    for detail in wasm_allocation_details {
-        let id = detail["id"].as_str().expect("wasm allocation row detail id");
-        assert!(wasm_allocation_rows.contains(&id));
+   for detail in wasm_allocation_details {
+       let id = detail["id"].as_str().expect("wasm allocation row detail id");
+       assert!(wasm_allocation_rows.contains(&id));
         let source = web_report_case(&report, id);
         assert_eq!(
             web_report_number(detail, "wasm_alloc_count"),
@@ -1432,12 +1432,57 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         );
         assert!(
             web_report_number(detail, "wasm_alloc_bytes_per_frame")
-                <= web_report_number(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame")
-        );
-    }
+            <= web_report_number(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame")
+       );
+   }
 
-    let frame_loop = web_report_case(&report, "web.wasm.webgpu.frame_loop");
-    let frame_stage_allocations = &report["frame_loop_wasm_allocation_stages"];
+   let frame_loop = web_report_case(&report, "web.wasm.webgpu.frame_loop");
+   let wasm_allocation_invariance = &report["wasm_allocation_invariance"];
+   assert_eq!(
+      wasm_allocation_invariance["id"].as_str(),
+      Some("web.wasm.webgpu.wasm_allocation_invariance.current_rows"),
+   );
+   assert_eq!(
+      wasm_allocation_invariance["status"].as_str(),
+      Some("shared-submit-boundary-profile"),
+   );
+   assert_eq!(
+      wasm_allocation_invariance["reference_row"].as_str(),
+      Some("web.wasm.webgpu.frame_loop"),
+   );
+   assert_eq!(
+      web_report_number(wasm_allocation_invariance, "checked_count"),
+      web_report_number(wasm_allocation_audit, "checked_count"),
+   );
+   assert_eq!(
+      web_report_number(wasm_allocation_invariance, "unique_signature_count"),
+      1.0,
+   );
+   assert_eq!(
+      web_report_number(wasm_allocation_invariance, "shared_wasm_alloc_count"),
+      web_report_number(frame_loop, "wasm_alloc_count"),
+   );
+   assert_eq!(
+      web_report_number(wasm_allocation_invariance, "shared_wasm_alloc_bytes"),
+      web_report_number(frame_loop, "wasm_alloc_bytes"),
+   );
+   assert_eq!(
+      web_report_number(wasm_allocation_invariance, "shared_wasm_realloc_count"),
+      0.0,
+   );
+   assert_eq!(
+      web_report_number(wasm_allocation_invariance, "shared_wasm_realloc_grow_bytes"),
+      0.0,
+   );
+   assert_eq!(
+      wasm_allocation_invariance["signature_rows"]
+         .as_array()
+         .expect("wasm allocation invariance signature rows")
+         .len(),
+      1,
+   );
+
+   let frame_stage_allocations = &report["frame_loop_wasm_allocation_stages"];
     assert_eq!(
         frame_stage_allocations["id"].as_str(),
         Some("web.wasm.webgpu.frame_loop_wasm_allocation_stages"),

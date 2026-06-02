@@ -1660,6 +1660,47 @@ function wasmAllocationSummary(cases)
    };
 }
 
+function wasmAllocationInvarianceSummary(allocationSummary)
+{
+   let signatures = new Map();
+   for (let row of allocationSummary.row_details) {
+      let signature = [
+         row.frames,
+         row.wasm_alloc_count,
+         row.wasm_alloc_bytes,
+         row.wasm_dealloc_count,
+         row.wasm_dealloc_bytes,
+         row.wasm_realloc_count,
+         row.wasm_realloc_grow_bytes,
+         row.wasm_realloc_shrink_bytes,
+         row.wasm_allocating_frames,
+         row.wasm_peak_frame_alloc_bytes,
+      ].join(":");
+      let ids = signatures.get(signature);
+      if (ids) {
+         ids.push(row.id);
+      } else {
+         signatures.set(signature, [row.id]);
+      }
+   }
+   let signatureRows = [...signatures.entries()].map(([signature, ids]) => ({ signature, ids }));
+   let reference = allocationSummary.row_details.find(row => row.id === "web.wasm.webgpu.frame_loop");
+   return {
+      id: "web.wasm.webgpu.wasm_allocation_invariance.current_rows",
+      status: signatures.size === 1 ? "shared-submit-boundary-profile" : "path-specific-allocations",
+      reference_row: reference ? reference.id : "",
+      checked_count: allocationSummary.checked_count,
+      unique_signature_count: signatures.size,
+      shared_wasm_alloc_count: reference ? reference.wasm_alloc_count : 0,
+      shared_wasm_alloc_bytes: reference ? reference.wasm_alloc_bytes : 0,
+      shared_wasm_realloc_count: reference ? reference.wasm_realloc_count : 0,
+      shared_wasm_realloc_grow_bytes: reference ? reference.wasm_realloc_grow_bytes : 0,
+      shared_wasm_allocating_frames: reference ? reference.wasm_allocating_frames : 0,
+      shared_wasm_peak_frame_alloc_bytes: reference ? reference.wasm_peak_frame_alloc_bytes : 0,
+      signature_rows: signatureRows,
+   };
+}
+
 function frameLoopWasmStageSummary(cases)
 {
    let frame = cases.find(row => row.id === "web.wasm.webgpu.frame_loop");
@@ -2103,6 +2144,8 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
    let timestampPasses = timestampRows.reduce((sum, row) => sum + row.gpu_timestamp_passes, 0);
    let timestampTotalNs = timestampRows.reduce((sum, row) => sum + row.gpu_timestamp_total_ns, 0);
    let warmResourceChurn = warmResourceChurnSummary(cases);
+   let wasmAllocationAudit = wasmAllocationSummary(cases);
+   let wasmAllocationInvariance = wasmAllocationInvarianceSummary(wasmAllocationAudit);
    let backendPathCoverage = backendPathCoverageSummary(cases);
    let benchmarkMarks = benchmarkMarkSummary(pageReport, traceSummary);
 
@@ -2168,7 +2211,8 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
       browser_trace: traceSummary,
       benchmark_marks: benchmarkMarks,
       warm_resource_churn: warmResourceChurn,
-      wasm_allocation_audit: wasmAllocationSummary(cases),
+      wasm_allocation_audit: wasmAllocationAudit,
+      wasm_allocation_invariance: wasmAllocationInvariance,
       frame_loop_wasm_allocation_stages: frameLoopWasmStageSummary(cases),
       backend_path_coverage: backendPathCoverage,
       cases,
@@ -2833,6 +2877,12 @@ function renderMarkdown(report)
    lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
    lines.push(`| \`${report.wasm_allocation_audit.id}\` | ${report.wasm_allocation_audit.checked_count} checked / ${report.wasm_allocation_audit.excluded_count} excluded | ${report.wasm_allocation_audit.total_wasm_alloc_count} | ${report.wasm_allocation_audit.total_wasm_alloc_bytes} | ${report.wasm_allocation_audit.total_wasm_realloc_count} | ${report.wasm_allocation_audit.total_wasm_realloc_grow_bytes} | ${report.wasm_allocation_audit.max_wasm_allocs_per_frame.toFixed(3)} | ${report.wasm_allocation_audit.max_wasm_alloc_bytes_per_frame.toFixed(3)} | ${report.wasm_allocation_audit.max_wasm_peak_frame_alloc_bytes} | ${report.wasm_allocation_audit.budget_wasm_allocs_per_frame} | ${report.wasm_allocation_audit.budget_wasm_alloc_bytes_per_frame} |`);
    lines.push("");
+   lines.push("### WASM Allocation Invariance");
+   lines.push("");
+   lines.push("| Check | Status | Reference Row | Rows | Unique Signatures | Shared Allocs | Shared Bytes | Shared Reallocs | Shared Peak Frame Bytes |");
+   lines.push("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |");
+   lines.push(`| \`${report.wasm_allocation_invariance.id}\` | \`${report.wasm_allocation_invariance.status}\` | \`${report.wasm_allocation_invariance.reference_row}\` | ${report.wasm_allocation_invariance.checked_count} | ${report.wasm_allocation_invariance.unique_signature_count} | ${report.wasm_allocation_invariance.shared_wasm_alloc_count} | ${report.wasm_allocation_invariance.shared_wasm_alloc_bytes} | ${report.wasm_allocation_invariance.shared_wasm_realloc_count} | ${report.wasm_allocation_invariance.shared_wasm_peak_frame_alloc_bytes} |`);
+   lines.push("");
    lines.push("### WASM Allocation Rows");
    lines.push("");
    lines.push("| Row | Frames | Allocs | Bytes | Allocs/Frame | Bytes/Frame | Reallocs | Realloc Grow Bytes | Allocating Frames | Peak Frame Bytes |");
@@ -3143,6 +3193,50 @@ function assertWasmAllocationAudit(report, byId)
       ) {
          throw new Error(`web report contract found WASM allocation budget regression in ${detail.id}`);
       }
+   }
+}
+
+function assertWasmAllocationInvariance(report)
+{
+   let summary = report.wasm_allocation_invariance;
+   let audit = report.wasm_allocation_audit;
+   if (
+      !summary
+      || summary.id !== "web.wasm.webgpu.wasm_allocation_invariance.current_rows"
+   ) {
+      throw new Error("web report contract missing WASM allocation invariance summary");
+   }
+   if (!audit || audit.id !== "web.wasm.webgpu.wasm_allocation_audit.current_rows") {
+      throw new Error("web report contract cannot validate WASM allocation invariance without audit");
+   }
+   if (
+      summary.status !== "shared-submit-boundary-profile"
+      || summary.unique_signature_count !== 1
+      || summary.checked_count !== audit.checked_count
+      || summary.reference_row !== "web.wasm.webgpu.frame_loop"
+   ) {
+      throw new Error("web report contract found path-specific current-row WASM allocations");
+   }
+   let signatureRows = Array.isArray(summary.signature_rows) ? summary.signature_rows : [];
+   if (signatureRows.length !== 1 || !Array.isArray(signatureRows[0].ids)) {
+      throw new Error("web report contract has inconsistent WASM allocation invariance signatures");
+   }
+   if (signatureRows[0].ids.length !== audit.checked_count) {
+      throw new Error("web report contract WASM allocation invariance does not cover every checked row");
+   }
+   let frame = audit.row_details.find(row => row.id === "web.wasm.webgpu.frame_loop");
+   if (!frame) {
+      throw new Error("web report contract missing frame-loop allocation reference row");
+   }
+   if (
+      summary.shared_wasm_alloc_count !== frame.wasm_alloc_count
+      || summary.shared_wasm_alloc_bytes !== frame.wasm_alloc_bytes
+      || summary.shared_wasm_realloc_count !== 0
+      || summary.shared_wasm_realloc_grow_bytes !== 0
+      || summary.shared_wasm_allocating_frames !== frame.wasm_allocating_frames
+      || summary.shared_wasm_peak_frame_alloc_bytes !== frame.wasm_peak_frame_alloc_bytes
+   ) {
+      throw new Error("web report contract WASM allocation invariance reference values are inconsistent");
    }
 }
 
@@ -3727,6 +3821,7 @@ function assertWebReportContract(report)
    let byId = new Map(report.cases.map(row => [row.id, row]));
    assertWarmResourceChurn(report, byId);
    assertWasmAllocationAudit(report, byId);
+   assertWasmAllocationInvariance(report);
    assertFrameLoopWasmStageAllocation(report, byId);
    assertBackendPathCoverage(report, byId);
    if (byId.get("web.wasm.webgpu.id_mask_compositor.current").id_mask_draws <= 0) {
