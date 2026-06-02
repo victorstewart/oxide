@@ -484,6 +484,8 @@ function summarizeTraceEvents(path, events)
    let rendererEvents = 0;
    let categories = new Set();
    let benchmarkTraceMarks = new Map();
+   let benchmarkTraceStarts = new Map();
+   let benchmarkTraceEnds = new Map();
    for (let event of events) {
       let cat = typeof event.cat === "string" ? event.cat : "";
       let name = typeof event.name === "string" ? event.name : "";
@@ -523,9 +525,20 @@ function summarizeTraceEvents(path, events)
             entry.duration_us += event.dur;
          }
          benchmarkTraceMarks.set(benchmarkLabel, entry);
+         if (Number.isFinite(event.ts) && event.ph === "b") {
+            let starts = benchmarkTraceStarts.get(benchmarkLabel) || [];
+            starts.push(event.ts);
+            benchmarkTraceStarts.set(benchmarkLabel, starts);
+         }
+         if (Number.isFinite(event.ts) && event.ph === "e") {
+            let ends = benchmarkTraceEnds.get(benchmarkLabel) || [];
+            ends.push(event.ts);
+            benchmarkTraceEnds.set(benchmarkLabel, ends);
+         }
       }
    }
    let benchmarkMarks = [...benchmarkTraceMarks.values()].sort((a, b) => a.id.localeCompare(b.id));
+   let benchmarkIntervals = traceBenchmarkIntervals(benchmarkTraceStarts, benchmarkTraceEnds, events);
    return {
       status: "collected",
       artifact: path,
@@ -541,7 +554,69 @@ function summarizeTraceEvents(path, events)
       benchmark_trace_mark_count: benchmarkMarks.reduce((sum, entry) => sum + entry.event_count, 0),
       benchmark_trace_mark_labels: benchmarkMarks.map(entry => entry.id),
       benchmark_trace_marks: benchmarkMarks,
+      benchmark_trace_interval_count: benchmarkIntervals.length,
+      benchmark_trace_interval_labels: benchmarkIntervals.map(entry => entry.id),
+      benchmark_trace_intervals: benchmarkIntervals,
    };
+}
+
+function traceBenchmarkIntervals(startsById, endsById, events)
+{
+   let intervals = [];
+   for (let [id, starts] of startsById.entries()) {
+      let sortedStarts = [...starts].sort((a, b) => a - b);
+      let sortedEnds = [...(endsById.get(id) || [])].sort((a, b) => a - b);
+      for (let startTs of sortedStarts) {
+         let endIndex = sortedEnds.findIndex(endTs => endTs >= startTs);
+         if (endIndex < 0) {
+            continue;
+         }
+         let endTs = sortedEnds.splice(endIndex, 1)[0];
+         intervals.push({
+            id,
+            start_ts: startTs,
+            end_ts: endTs,
+            duration_us: Math.max(0, endTs - startTs),
+            event_count: 0,
+            gpu_related_events: 0,
+            webgpu_related_events: 0,
+            angle_related_events: 0,
+            renderer_related_events: 0,
+            event_duration_us: 0,
+         });
+      }
+   }
+   intervals.sort((a, b) => a.start_ts - b.start_ts || a.id.localeCompare(b.id));
+   for (let event of events) {
+      if (event.ph === "M" || !Number.isFinite(event.ts)) {
+         continue;
+      }
+      let cat = typeof event.cat === "string" ? event.cat : "";
+      let name = typeof event.name === "string" ? event.name : "";
+      let label = `${cat} ${name}`;
+      for (let interval of intervals) {
+         if (event.ts < interval.start_ts || event.ts > interval.end_ts) {
+            continue;
+         }
+         interval.event_count += 1;
+         if (/gpu|webgpu|dawn|angle|viz|compositor/i.test(label)) {
+            interval.gpu_related_events += 1;
+         }
+         if (/webgpu|dawn/i.test(label)) {
+            interval.webgpu_related_events += 1;
+         }
+         if (/angle/i.test(label)) {
+            interval.angle_related_events += 1;
+         }
+         if (/renderer|render/i.test(label)) {
+            interval.renderer_related_events += 1;
+         }
+         if (Number.isFinite(event.dur)) {
+            interval.event_duration_us += event.dur;
+         }
+      }
+   }
+   return intervals;
 }
 
 function parseTraceJsonText(text, path)
@@ -577,6 +652,9 @@ async function loadTraceSummary(path, timeoutMs)
          benchmark_trace_mark_count: 0,
          benchmark_trace_mark_labels: [],
          benchmark_trace_marks: [],
+         benchmark_trace_interval_count: 0,
+         benchmark_trace_interval_labels: [],
+         benchmark_trace_intervals: [],
       };
    }
    let deadline = Date.now() + timeoutMs;
@@ -1157,6 +1235,93 @@ const EXPECTED_BENCHMARK_MARKS = [
    "clip_state_cache_ab",
 ];
 
+const WEBGPU_BACKEND_PATHS = [
+   {
+      id: "frame_loop",
+      rows: ["web.wasm.webgpu.frame_loop"],
+      counters: ["draws", "draw_items", "draw_passes", "command_buffers", "buffer_upload_bytes", "gpu_timestamp_passes"],
+      comparison: "coverage",
+   },
+   {
+      id: "id_mask_compositor",
+      rows: ["web.wasm.webgpu.id_mask_compositor.current", "web.wasm.webgpu.id_mask_compositor.legacy_upload"],
+      counters: ["id_mask_draws", "id_mask_raster_passes", "id_mask_field_seed_passes", "id_mask_field_jump_passes", "id_mask_compositor_passes", "buffer_upload_bytes", "vertices", "gpu_timestamp_passes"],
+      comparison: "current_vs_legacy",
+   },
+   {
+      id: "glyph_atlas_upload",
+      rows: ["web.wasm.webgpu.glyph_atlas_upload.current_dirty", "web.wasm.webgpu.glyph_atlas_upload.legacy_full"],
+      counters: ["glyph_quads", "texture_upload_bytes", "buffer_upload_bytes", "gpu_timestamp_passes"],
+      comparison: "current_vs_legacy",
+   },
+   {
+      id: "image_upload",
+      rows: ["web.wasm.webgpu.image_upload.current_dirty", "web.wasm.webgpu.image_upload.legacy_full"],
+      counters: ["image_draws", "texture_upload_bytes", "buffer_upload_bytes", "gpu_timestamp_passes"],
+      comparison: "current_vs_legacy",
+   },
+   {
+      id: "upload_scratch",
+      rows: ["web.wasm.webgpu.upload_scratch.current_reuse", "web.wasm.webgpu.upload_scratch.legacy_temp_alloc"],
+      counters: ["image_upload_temp_allocs", "image_upload_temp_bytes", "image_upload_scratch_bytes", "texture_upload_bytes", "gpu_timestamp_passes"],
+      comparison: "current_vs_legacy",
+   },
+   {
+      id: "effect_uniform",
+      rows: ["web.wasm.webgpu.effect_uniform.current_batched", "web.wasm.webgpu.effect_uniform.legacy_write_each"],
+      counters: ["backdrop_draws", "visual_effect_draws", "effect_uniform_writes", "effect_uniform_slots", "texture_copies", "render_passes", "gpu_timestamp_total_ns"],
+      comparison: "current_vs_legacy",
+   },
+   {
+      id: "backdrop_batch",
+      rows: ["web.wasm.webgpu.backdrop_batch.current_coalesced", "web.wasm.webgpu.backdrop_batch.legacy_per_backdrop_copy"],
+      counters: ["backdrop_draws", "effect_uniform_slots", "texture_copies", "render_passes", "gpu_timestamp_passes"],
+      comparison: "current_vs_legacy",
+   },
+   {
+      id: "scene3d_mesh_reuse",
+      rows: ["web.wasm.webgpu.scene3d.reused_mesh", "web.wasm.webgpu.scene3d.recreate_mesh"],
+      counters: ["scene3d_draws", "mesh3d_creates", "buffer_grows", "cpu_scratch_grows", "gpu_timestamp_passes"],
+      comparison: "current_vs_legacy",
+   },
+   {
+      id: "scene3d_stress_mesh_reuse",
+      rows: ["web.wasm.webgpu.scene3d.stress_reused_mesh", "web.wasm.webgpu.scene3d.stress_recreate_mesh"],
+      counters: ["scene3d_draws", "mesh3d_creates", "buffer_grows", "cpu_scratch_grows", "gpu_timestamp_passes"],
+      comparison: "current_vs_legacy",
+   },
+   {
+      id: "mixed_text_image_effects",
+      rows: ["web.wasm.webgpu.mixed_text_image_effects"],
+      counters: ["glyph_quads", "image_draws", "backdrop_draws", "visual_effect_draws", "spinner_draws", "layer_draws", "damage_rects", "texture_copies", "gpu_timestamp_passes"],
+      comparison: "coverage",
+   },
+   {
+      id: "layer_damage_effects",
+      rows: ["web.wasm.webgpu.layer_damage_effects"],
+      counters: ["layer_draws", "damage_rects", "backdrop_draws", "visual_effect_draws", "texture_copies", "render_passes", "gpu_timestamp_passes"],
+      comparison: "coverage",
+   },
+   {
+      id: "command_family_matrix",
+      rows: ["web.wasm.webgpu.command_family_matrix"],
+      counters: ["image_mesh_draws", "nine_slice_draws", "sdf_glyph_quads", "camera_bg_draws", "expected_camera_bg", "gpu_timestamp_passes"],
+      comparison: "coverage",
+   },
+   {
+      id: "draw_state_cache",
+      rows: ["web.wasm.webgpu.draw_state_cache.current", "web.wasm.webgpu.draw_state_cache.legacy_rebind"],
+      counters: ["draw_items", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
+      comparison: "current_vs_legacy",
+   },
+   {
+      id: "clip_state_cache",
+      rows: ["web.wasm.webgpu.clip_state_cache.current", "web.wasm.webgpu.clip_state_cache.legacy_rebind"],
+      counters: ["clip_depth_peak", "draw_scissor_sets", "draw_pipeline_binds", "draw_bind_group_binds", "gpu_timestamp_passes"],
+      comparison: "current_vs_legacy",
+   },
+];
+
 function benchmarkMarkSummary(pageReport, traceSummary)
 {
    let marks = Array.isArray(pageReport.benchmark_marks) ? pageReport.benchmark_marks : [];
@@ -1240,6 +1405,7 @@ function warmResourceChurnSummary(cases)
       totals[`total_${field}`] = 0;
    }
    let rows = [];
+   let rowDetails = [];
    let excluded = [];
    for (let row of cases) {
       if (WARM_RESOURCE_CHURN_EXCLUDED_IDS.has(row.id)) {
@@ -1247,22 +1413,82 @@ function warmResourceChurnSummary(cases)
          continue;
       }
       rows.push(row.id);
+      let detail = { id: row.id };
       for (let field of WARM_RESOURCE_CHURN_FIELDS) {
          let value = row[field];
          if (!Number.isFinite(value)) {
             throw new Error(`web report missing finite warm resource churn field ${row.id}.${field}`);
          }
          totals[`total_${field}`] += value;
+         detail[field] = value;
       }
+      rowDetails.push(detail);
    }
    return {
       id: "web.wasm.webgpu.warm_resource_churn.current_rows",
       checked_rows: rows.length,
       excluded_rows: excluded.length,
+      row_detail_count: rowDetails.length,
       zero_growth_fields: [...WARM_RESOURCE_CHURN_FIELDS],
       rows,
       excluded,
+      row_details: rowDetails,
       ...totals,
+   };
+}
+
+function backendPathCoverageSummary(cases)
+{
+   let byId = new Map(cases.map(row => [row.id, row]));
+   let paths = [];
+   for (let spec of WEBGPU_BACKEND_PATHS) {
+      let rowDetails = [];
+      let missingRows = [];
+      let missingCounters = [];
+      for (let rowId of spec.rows) {
+         let row = byId.get(rowId);
+         if (!row) {
+            missingRows.push(rowId);
+            continue;
+         }
+         let counters = {};
+         for (let field of spec.counters) {
+            let value = row[field];
+            if (!Number.isFinite(value)) {
+               missingCounters.push(`${rowId}.${field}`);
+               continue;
+            }
+            counters[field] = value;
+         }
+         rowDetails.push({
+            id: rowId,
+            p50_ms: row.p50_ms,
+            p95_ms: row.p95_ms,
+            p99_ms: row.p99_ms,
+            peak_ms: row.peak_ms,
+            counters,
+         });
+      }
+      paths.push({
+         id: spec.id,
+         status: missingRows.length === 0 && missingCounters.length === 0 ? "covered" : "missing",
+         comparison: spec.comparison,
+         row_count: spec.rows.length,
+         rows: [...spec.rows],
+         counter_count: spec.counters.length,
+         counters: [...spec.counters],
+         missing_rows: missingRows,
+         missing_counters: missingCounters,
+         row_details: rowDetails,
+      });
+   }
+   let covered = paths.filter(path => path.status === "covered");
+   return {
+      id: "web.wasm.webgpu.backend_path_coverage",
+      expected_path_count: WEBGPU_BACKEND_PATHS.length,
+      covered_path_count: covered.length,
+      missing_path_count: paths.length - covered.length,
+      paths,
    };
 }
 
@@ -1550,6 +1776,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
    let timestampPasses = timestampRows.reduce((sum, row) => sum + row.gpu_timestamp_passes, 0);
    let timestampTotalNs = timestampRows.reduce((sum, row) => sum + row.gpu_timestamp_total_ns, 0);
    let warmResourceChurn = warmResourceChurnSummary(cases);
+   let backendPathCoverage = backendPathCoverageSummary(cases);
    let benchmarkMarks = benchmarkMarkSummary(pageReport, traceSummary);
 
    return {
@@ -1611,6 +1838,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
       browser_trace: traceSummary,
       benchmark_marks: benchmarkMarks,
       warm_resource_churn: warmResourceChurn,
+      backend_path_coverage: backendPathCoverage,
       cases,
       ab_summary: {
          id: "web.wasm.webgpu.id_mask_compositor.current_vs_legacy_upload",
@@ -1636,6 +1864,16 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          glyph_legacy_texture_upload_bytes: numberMetric(uploadMetrics, "glyph_legacy_texture_upload_bytes"),
          image_current_texture_upload_bytes: numberMetric(uploadMetrics, "image_current_texture_upload_bytes"),
          image_legacy_texture_upload_bytes: numberMetric(uploadMetrics, "image_legacy_texture_upload_bytes"),
+         glyph_current_gpu_timestamp_total_ns: numberMetric(uploadMetrics, "glyph_current_gpu_timestamp_total_ns"),
+         glyph_legacy_gpu_timestamp_total_ns: numberMetric(uploadMetrics, "glyph_legacy_gpu_timestamp_total_ns"),
+         glyph_legacy_gpu_over_current:
+            numberMetric(uploadMetrics, "glyph_legacy_gpu_timestamp_total_ns")
+            / numberMetric(uploadMetrics, "glyph_current_gpu_timestamp_total_ns"),
+         image_current_gpu_timestamp_total_ns: numberMetric(uploadMetrics, "image_current_gpu_timestamp_total_ns"),
+         image_legacy_gpu_timestamp_total_ns: numberMetric(uploadMetrics, "image_legacy_gpu_timestamp_total_ns"),
+         image_legacy_gpu_over_current:
+            numberMetric(uploadMetrics, "image_legacy_gpu_timestamp_total_ns")
+            / numberMetric(uploadMetrics, "image_current_gpu_timestamp_total_ns"),
       },
       upload_scratch_summary: {
          id: "web.wasm.webgpu.upload_scratch.current_reuse_vs_legacy_temp_alloc",
@@ -2089,6 +2327,14 @@ function renderMarkdown(report)
    lines.push(`| Benchmark trace mark events | \`${report.browser_trace.benchmark_trace_mark_count}\` |`);
    lines.push(`| Benchmark trace mark labels | \`${report.browser_trace.benchmark_trace_mark_labels.join(",")}\` |`);
    lines.push("");
+   lines.push("### Browser Trace Benchmark Intervals");
+   lines.push("");
+   lines.push("| Mark | Duration us | Events | GPU events | WebGPU/Dawn events | Renderer events | Event duration us |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
+   for (let interval of report.browser_trace.benchmark_trace_intervals) {
+      lines.push(`| \`${interval.id}\` | ${interval.duration_us} | ${interval.event_count} | ${interval.gpu_related_events} | ${interval.webgpu_related_events} | ${interval.renderer_related_events} | ${interval.event_duration_us} |`);
+   }
+   lines.push("");
    lines.push("## Benchmark Marks");
    lines.push("");
    lines.push("| Mark | Duration ms | Trace label | WASM before bytes | WASM after bytes | WASM growth bytes |");
@@ -2104,6 +2350,22 @@ function renderMarkdown(report)
    lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
    lines.push(`| \`${report.warm_resource_churn.id}\` | ${report.warm_resource_churn.checked_rows} checked / ${report.warm_resource_churn.excluded_rows} excluded | ${report.warm_resource_churn.total_buffer_grows} | ${report.warm_resource_churn.total_texture_creates} | ${report.warm_resource_churn.total_bind_group_creates} | ${report.warm_resource_churn.total_pipeline_creates} | ${report.warm_resource_churn.total_sampler_creates} | ${report.warm_resource_churn.total_mesh3d_creates} | ${report.warm_resource_churn.total_image_upload_temp_allocs} | ${report.warm_resource_churn.total_image_upload_temp_bytes} | ${report.warm_resource_churn.total_image_upload_scratch_grows} | ${report.warm_resource_churn.total_cpu_scratch_grows} | ${report.warm_resource_churn.total_cpu_scratch_growth_bytes} |`);
    lines.push("");
+   lines.push("### Warm Resource Churn Rows");
+   lines.push("");
+   lines.push("| Row | Buffer Grows | Texture Creates | Bind Groups | Pipelines | Samplers | Meshes | Temp Allocs | Temp Bytes | Image Scratch Grows | CPU Scratch Grows | CPU Scratch Growth Bytes |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+   for (let row of report.warm_resource_churn.row_details) {
+      lines.push(`| \`${row.id}\` | ${row.buffer_grows} | ${row.texture_creates} | ${row.bind_group_creates} | ${row.pipeline_creates} | ${row.sampler_creates} | ${row.mesh3d_creates} | ${row.image_upload_temp_allocs} | ${row.image_upload_temp_bytes} | ${row.image_upload_scratch_grows} | ${row.cpu_scratch_grows} | ${row.cpu_scratch_growth_bytes} |`);
+   }
+   lines.push("");
+   lines.push("## Backend Path Coverage");
+   lines.push("");
+   lines.push("| Path | Status | Comparison | Rows | Counters |");
+   lines.push("| --- | --- | --- | ---: | ---: |");
+   for (let path of report.backend_path_coverage.paths) {
+      lines.push(`| \`${path.id}\` | \`${path.status}\` | \`${path.comparison}\` | ${path.row_count} | ${path.counter_count} |`);
+   }
+   lines.push("");
    lines.push("## A/B Summary");
    lines.push("");
    lines.push("| Comparison | Current p50 ms | Legacy p50 ms | Legacy / Current | Current Passes | Legacy Passes | Current Upload Bytes | Legacy Upload Bytes | Vertices | Vertex Bytes |");
@@ -2112,9 +2374,9 @@ function renderMarkdown(report)
    lines.push("");
    lines.push("## Upload Summary");
    lines.push("");
-   lines.push("| Comparison | Glyph Current p50 ms | Glyph Legacy p50 ms | Glyph Legacy / Current | Glyph Current Texture Bytes | Glyph Legacy Texture Bytes | Image Current p50 ms | Image Legacy p50 ms | Image Legacy / Current | Image Current Texture Bytes | Image Legacy Texture Bytes |");
-   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
-   lines.push(`| \`${report.upload_summary.id}\` | ${report.upload_summary.glyph_current_p50_ms.toFixed(3)} | ${report.upload_summary.glyph_legacy_p50_ms.toFixed(3)} | ${report.upload_summary.glyph_legacy_over_current.toFixed(3)} | ${report.upload_summary.glyph_current_texture_upload_bytes} | ${report.upload_summary.glyph_legacy_texture_upload_bytes} | ${report.upload_summary.image_current_p50_ms.toFixed(3)} | ${report.upload_summary.image_legacy_p50_ms.toFixed(3)} | ${report.upload_summary.image_legacy_over_current.toFixed(3)} | ${report.upload_summary.image_current_texture_upload_bytes} | ${report.upload_summary.image_legacy_texture_upload_bytes} |`);
+   lines.push("| Comparison | Glyph Current p50 ms | Glyph Legacy p50 ms | Glyph Legacy / Current | Glyph Current Texture Bytes | Glyph Legacy Texture Bytes | Glyph Current GPU ns | Glyph Legacy GPU ns | Glyph Legacy / Current GPU | Image Current p50 ms | Image Legacy p50 ms | Image Legacy / Current | Image Current Texture Bytes | Image Legacy Texture Bytes | Image Current GPU ns | Image Legacy GPU ns | Image Legacy / Current GPU |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+   lines.push(`| \`${report.upload_summary.id}\` | ${report.upload_summary.glyph_current_p50_ms.toFixed(3)} | ${report.upload_summary.glyph_legacy_p50_ms.toFixed(3)} | ${report.upload_summary.glyph_legacy_over_current.toFixed(3)} | ${report.upload_summary.glyph_current_texture_upload_bytes} | ${report.upload_summary.glyph_legacy_texture_upload_bytes} | ${report.upload_summary.glyph_current_gpu_timestamp_total_ns} | ${report.upload_summary.glyph_legacy_gpu_timestamp_total_ns} | ${report.upload_summary.glyph_legacy_gpu_over_current.toFixed(3)} | ${report.upload_summary.image_current_p50_ms.toFixed(3)} | ${report.upload_summary.image_legacy_p50_ms.toFixed(3)} | ${report.upload_summary.image_legacy_over_current.toFixed(3)} | ${report.upload_summary.image_current_texture_upload_bytes} | ${report.upload_summary.image_legacy_texture_upload_bytes} | ${report.upload_summary.image_current_gpu_timestamp_total_ns} | ${report.upload_summary.image_legacy_gpu_timestamp_total_ns} | ${report.upload_summary.image_legacy_gpu_over_current.toFixed(3)} |`);
    lines.push("");
    lines.push("## Upload Scratch Summary");
    lines.push("");
@@ -2187,11 +2449,25 @@ function assertWarmResourceChurn(report, byId)
    }
    let rows = Array.isArray(summary.rows) ? summary.rows : [];
    let excluded = Array.isArray(summary.excluded) ? summary.excluded : [];
+   let rowDetails = Array.isArray(summary.row_details) ? summary.row_details : [];
    if (summary.checked_rows !== rows.length || summary.excluded_rows !== excluded.length) {
       throw new Error("web report contract has inconsistent warm resource churn row counts");
    }
+   if (summary.row_detail_count !== rowDetails.length || rowDetails.length !== rows.length) {
+      throw new Error("web report contract has inconsistent warm resource churn row detail counts");
+   }
    let rowSet = new Set(rows);
    let excludedSet = new Set(excluded);
+   let rowDetailById = new Map();
+   for (let row of rowDetails) {
+      if (typeof row.id !== "string" || !rowSet.has(row.id)) {
+         throw new Error("web report contract has unexpected warm resource churn row detail");
+      }
+      if (rowDetailById.has(row.id)) {
+         throw new Error(`web report contract has duplicate warm resource churn row detail ${row.id}`);
+      }
+      rowDetailById.set(row.id, row);
+   }
    for (let id of [
       "web.wasm.webgpu.frame_loop",
       "web.wasm.webgpu.id_mask_compositor.current",
@@ -2211,6 +2487,9 @@ function assertWarmResourceChurn(report, byId)
       if (!rowSet.has(id) || !byId.has(id)) {
          throw new Error(`web report contract warm resource churn missing checked row ${id}`);
       }
+      if (!rowDetailById.has(id)) {
+         throw new Error(`web report contract warm resource churn missing row detail ${id}`);
+      }
    }
    for (let id of WARM_RESOURCE_CHURN_EXCLUDED_IDS) {
       if (!excludedSet.has(id) || !byId.has(id)) {
@@ -2225,6 +2504,97 @@ function assertWarmResourceChurn(report, byId)
       let total = summary[`total_${field}`];
       if (!Number.isFinite(total) || total !== 0) {
          throw new Error(`web report contract found warm resource churn ${field}=${total}`);
+      }
+      for (let id of rows) {
+         let detail = rowDetailById.get(id);
+         let source = byId.get(id);
+         let value = detail[field];
+         if (!Number.isFinite(value)) {
+            throw new Error(`web report contract missing warm resource churn row detail ${id}.${field}`);
+         }
+         if (value !== source[field]) {
+            throw new Error(`web report contract warm resource churn row detail mismatch ${id}.${field}`);
+         }
+         if (value !== 0) {
+            throw new Error(`web report contract found warm resource churn row ${id}.${field}=${value}`);
+         }
+      }
+   }
+}
+
+function assertBackendPathCoverage(report, byId)
+{
+   let summary = report.backend_path_coverage;
+   if (!summary || summary.id !== "web.wasm.webgpu.backend_path_coverage") {
+      throw new Error("web report contract missing WebGPU backend path coverage");
+   }
+   if (summary.expected_path_count !== WEBGPU_BACKEND_PATHS.length) {
+      throw new Error("web report contract backend path expected count mismatch");
+   }
+   if (summary.covered_path_count !== WEBGPU_BACKEND_PATHS.length || summary.missing_path_count !== 0) {
+      throw new Error("web report contract has uncovered WebGPU backend paths");
+   }
+   let paths = Array.isArray(summary.paths) ? summary.paths : [];
+   if (paths.length !== WEBGPU_BACKEND_PATHS.length) {
+      throw new Error("web report contract backend path row count mismatch");
+   }
+   let pathById = new Map(paths.map(path => [path.id, path]));
+   for (let spec of WEBGPU_BACKEND_PATHS) {
+      let path = pathById.get(spec.id);
+      if (!path) {
+         throw new Error(`web report contract missing backend path ${spec.id}`);
+      }
+      if (path.status !== "covered" || path.comparison !== spec.comparison) {
+         throw new Error(`web report contract backend path ${spec.id} is not covered`);
+      }
+      if (path.row_count !== spec.rows.length || path.counter_count !== spec.counters.length) {
+         throw new Error(`web report contract backend path ${spec.id} count mismatch`);
+      }
+      let rows = Array.isArray(path.rows) ? path.rows : [];
+      let counters = Array.isArray(path.counters) ? path.counters : [];
+      let rowDetails = Array.isArray(path.row_details) ? path.row_details : [];
+      if (rowDetails.length !== spec.rows.length) {
+         throw new Error(`web report contract backend path ${spec.id} row detail mismatch`);
+      }
+      if ((path.missing_rows || []).length !== 0 || (path.missing_counters || []).length !== 0) {
+         throw new Error(`web report contract backend path ${spec.id} has missing evidence`);
+      }
+      for (let rowId of spec.rows) {
+         if (!rows.includes(rowId) || !byId.has(rowId)) {
+            throw new Error(`web report contract backend path ${spec.id} missing row ${rowId}`);
+         }
+      }
+      for (let field of spec.counters) {
+         if (!counters.includes(field)) {
+            throw new Error(`web report contract backend path ${spec.id} missing counter ${field}`);
+         }
+      }
+      let rowDetailById = new Map(rowDetails.map(row => [row.id, row]));
+      for (let rowId of spec.rows) {
+         let row = byId.get(rowId);
+         let detail = rowDetailById.get(rowId);
+         if (!detail) {
+            throw new Error(`web report contract backend path ${spec.id} missing row detail ${rowId}`);
+         }
+         for (let field of ["p50_ms", "p95_ms", "p99_ms", "peak_ms"]) {
+            assertNumber(detail[field], `backend_path_coverage.${spec.id}.${rowId}.${field}`);
+            if (detail[field] !== row[field]) {
+               throw new Error(`web report contract backend path ${spec.id} distribution mismatch ${rowId}.${field}`);
+            }
+         }
+         if (detail.p50_ms <= 0.0 || detail.p95_ms < detail.p50_ms || detail.p99_ms < detail.p95_ms || detail.peak_ms < detail.p99_ms) {
+            throw new Error(`web report contract backend path ${spec.id} invalid distribution for ${rowId}`);
+         }
+         if (!detail.counters || typeof detail.counters !== "object") {
+            throw new Error(`web report contract backend path ${spec.id} missing counters for ${rowId}`);
+         }
+         for (let field of spec.counters) {
+            let value = detail.counters[field];
+            assertNumber(value, `backend_path_coverage.${spec.id}.${rowId}.${field}`);
+            if (value !== row[field]) {
+               throw new Error(`web report contract backend path ${spec.id} counter mismatch ${rowId}.${field}`);
+            }
+         }
       }
    }
 }
@@ -2529,9 +2899,42 @@ function assertWebReportContract(report)
    if (!Array.isArray(report.browser_trace.benchmark_trace_marks)) {
       throw new Error("web report contract missing browser trace benchmark marks");
    }
+   assertNumber(report.browser_trace.benchmark_trace_interval_count, "browser_trace.benchmark_trace_interval_count");
+   if (report.browser_trace.benchmark_trace_interval_count !== EXPECTED_BENCHMARK_MARKS.length) {
+      throw new Error("web report contract requires one browser trace interval per benchmark family");
+   }
+   if (!Array.isArray(report.browser_trace.benchmark_trace_interval_labels)) {
+      throw new Error("web report contract missing browser trace benchmark interval labels");
+   }
+   if (!Array.isArray(report.browser_trace.benchmark_trace_intervals)) {
+      throw new Error("web report contract missing browser trace benchmark intervals");
+   }
+   for (let id of EXPECTED_BENCHMARK_MARKS) {
+      if (!report.browser_trace.benchmark_trace_interval_labels.includes(id)) {
+         throw new Error(`web report contract missing browser trace benchmark interval ${id}`);
+      }
+   }
+   for (let interval of report.browser_trace.benchmark_trace_intervals) {
+      if (!EXPECTED_BENCHMARK_MARKS.includes(interval.id)) {
+         throw new Error(`web report contract has unexpected browser trace benchmark interval ${interval.id}`);
+      }
+      for (let key of ["duration_us", "event_count", "gpu_related_events", "webgpu_related_events", "event_duration_us"]) {
+         assertNumber(interval[key], `browser_trace.${interval.id}.${key}`);
+         if (interval[key] <= 0) {
+            throw new Error(`web report contract missing positive browser trace benchmark interval ${interval.id}.${key}`);
+         }
+      }
+      for (let key of ["angle_related_events", "renderer_related_events"]) {
+         assertNumber(interval[key], `browser_trace.${interval.id}.${key}`);
+         if (interval[key] < 0) {
+            throw new Error(`web report contract has invalid browser trace benchmark interval ${interval.id}.${key}`);
+         }
+      }
+   }
    assertBenchmarkMarks(report);
    let byId = new Map(report.cases.map(row => [row.id, row]));
    assertWarmResourceChurn(report, byId);
+   assertBackendPathCoverage(report, byId);
    if (byId.get("web.wasm.webgpu.id_mask_compositor.current").id_mask_draws <= 0) {
       throw new Error("web report contract missing ID-mask draw counter");
    }
@@ -2582,6 +2985,39 @@ function assertWebReportContract(report)
       || commandFamily.gpu_timestamp_passes !== commandFamily.render_passes
    ) {
       throw new Error("command-family WebGPU row must cover ImageMesh, NineSlice, SDF glyph, zero web CameraBg, and timestamped passes");
+   }
+   let glyphUploadCurrent = byId.get("web.wasm.webgpu.glyph_atlas_upload.current_dirty");
+   let glyphUploadLegacy = byId.get("web.wasm.webgpu.glyph_atlas_upload.legacy_full");
+   let imageUploadCurrent = byId.get("web.wasm.webgpu.image_upload.current_dirty");
+   let imageUploadLegacy = byId.get("web.wasm.webgpu.image_upload.legacy_full");
+   if (
+      glyphUploadCurrent.glyph_quads <= 0
+      || glyphUploadLegacy.glyph_quads <= 0
+      || glyphUploadCurrent.texture_upload_bytes >= glyphUploadLegacy.texture_upload_bytes
+      || glyphUploadCurrent.gpu_timestamp_passes !== glyphUploadCurrent.render_passes
+      || glyphUploadLegacy.gpu_timestamp_passes !== glyphUploadLegacy.render_passes
+      || glyphUploadCurrent.gpu_timestamp_total_ns <= 0
+      || glyphUploadLegacy.gpu_timestamp_total_ns <= 0
+      || report.upload_summary.glyph_current_gpu_timestamp_total_ns !== glyphUploadCurrent.gpu_timestamp_total_ns
+      || report.upload_summary.glyph_legacy_gpu_timestamp_total_ns !== glyphUploadLegacy.gpu_timestamp_total_ns
+   ) {
+      throw new Error("glyph upload WebGPU A/B rows must prove dirty atlas upload, lower current bytes, and timestamped passes");
+   }
+   if (
+      imageUploadCurrent.image_draws <= 0
+      || imageUploadLegacy.image_draws <= 0
+      || imageUploadCurrent.texture_upload_bytes >= imageUploadLegacy.texture_upload_bytes
+      || imageUploadCurrent.gpu_timestamp_passes !== imageUploadCurrent.render_passes
+      || imageUploadLegacy.gpu_timestamp_passes !== imageUploadLegacy.render_passes
+      || imageUploadCurrent.gpu_timestamp_total_ns <= 0
+      || imageUploadLegacy.gpu_timestamp_total_ns <= 0
+      || report.upload_summary.image_current_gpu_timestamp_total_ns !== imageUploadCurrent.gpu_timestamp_total_ns
+      || report.upload_summary.image_legacy_gpu_timestamp_total_ns !== imageUploadLegacy.gpu_timestamp_total_ns
+   ) {
+      throw new Error("image upload WebGPU A/B rows must prove dirty RGBA upload, lower current bytes, and timestamped passes");
+   }
+   if (report.upload_summary.glyph_legacy_over_current <= 1.0 || report.upload_summary.image_legacy_over_current <= 1.0) {
+      throw new Error("upload current rows must beat legacy full-upload rows in browser p50");
    }
    let uploadScratchCurrent = byId.get("web.wasm.webgpu.upload_scratch.current_reuse");
    let uploadScratchLegacy = byId.get("web.wasm.webgpu.upload_scratch.legacy_temp_alloc");

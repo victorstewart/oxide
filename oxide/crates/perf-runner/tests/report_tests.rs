@@ -1044,9 +1044,41 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         .iter()
         .map(|value| value.as_str().expect("browser trace benchmark mark label"))
         .collect();
+    assert_eq!(
+        web_report_number(&report["browser_trace"], "benchmark_trace_interval_count"),
+        expected_benchmark_marks.len() as f64,
+    );
+    let trace_interval_labels: Vec<&str> = report["browser_trace"]["benchmark_trace_interval_labels"]
+        .as_array()
+        .expect("browser trace benchmark interval labels")
+        .iter()
+        .map(|value| value.as_str().expect("browser trace benchmark interval label"))
+        .collect();
     for id in expected_benchmark_marks {
         assert!(traced_labels.contains(&id), "benchmark marks missing traced label {id}");
         assert!(trace_labels.contains(&id), "browser trace missing traced benchmark label {id}");
+        assert!(
+            trace_interval_labels.contains(&id),
+            "browser trace missing benchmark interval {id}"
+        );
+    }
+    let trace_intervals = report["browser_trace"]["benchmark_trace_intervals"]
+        .as_array()
+        .expect("browser trace benchmark intervals");
+    assert_eq!(trace_intervals.len(), expected_benchmark_marks.len());
+    for interval in trace_intervals {
+        let id = interval["id"].as_str().expect("browser trace benchmark interval id");
+        assert!(
+            expected_benchmark_marks.contains(&id),
+            "unexpected browser trace benchmark interval {id}"
+        );
+        assert!(web_report_number(interval, "duration_us") > 0.0);
+        assert!(web_report_number(interval, "event_count") > 0.0);
+        assert!(web_report_number(interval, "gpu_related_events") > 0.0);
+        assert!(web_report_number(interval, "webgpu_related_events") > 0.0);
+        assert!(web_report_number(interval, "event_duration_us") > 0.0);
+        assert!(web_report_number(interval, "angle_related_events") >= 0.0);
+        assert!(web_report_number(interval, "renderer_related_events") >= 0.0);
     }
     for mark in benchmark_marks["marks"].as_array().expect("benchmark marks") {
         assert!(web_report_number(mark, "start_ms") >= 0.0);
@@ -1117,6 +1149,16 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         .iter()
         .map(|value| value.as_str().expect("warm resource churn excluded row id"))
         .collect();
+    let warm_row_details: Vec<&Value> = warm_resource_churn["row_details"]
+        .as_array()
+        .expect("warm resource churn row details")
+        .iter()
+        .collect();
+    assert_eq!(
+        web_report_number(warm_resource_churn, "row_detail_count"),
+        warm_rows.len() as f64,
+    );
+    assert_eq!(warm_row_details.len(), warm_rows.len());
     for id in [
         "web.wasm.webgpu.frame_loop",
         "web.wasm.webgpu.id_mask_compositor.current",
@@ -1149,6 +1191,10 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     ] {
         assert!(warm_excluded.contains(&id), "warm resource churn missing excluded row {id}");
     }
+    for detail in &warm_row_details {
+        let id = detail["id"].as_str().expect("warm resource churn row detail id");
+        assert!(warm_rows.contains(&id), "warm resource churn has unexpected row detail {id}");
+    }
     for field in [
         "buffer_grows",
         "texture_creates",
@@ -1163,6 +1209,144 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "cpu_scratch_growth_bytes",
     ] {
         assert_eq!(web_report_number(warm_resource_churn, &format!("total_{field}")), 0.0);
+        for detail in &warm_row_details {
+            let id = detail["id"].as_str().expect("warm resource churn row detail id");
+            let source = web_report_case(&report, id);
+            assert_eq!(
+                web_report_number(detail, field),
+                web_report_number(source, field),
+                "warm resource churn row detail mismatch for {id}.{field}",
+            );
+            assert_eq!(
+                web_report_number(detail, field),
+                0.0,
+                "warm resource churn row {id}.{field} was nonzero",
+            );
+        }
+    }
+
+    let backend_path_coverage = &report["backend_path_coverage"];
+    assert_eq!(
+        backend_path_coverage["id"].as_str(),
+        Some("web.wasm.webgpu.backend_path_coverage"),
+    );
+    let expected_backend_paths: &[(&str, &[&str], &[&str])] = &[
+        (
+            "frame_loop",
+            &["web.wasm.webgpu.frame_loop"],
+            &["draws", "draw_items", "draw_passes", "command_buffers", "buffer_upload_bytes", "gpu_timestamp_passes"],
+        ),
+        (
+            "id_mask_compositor",
+            &["web.wasm.webgpu.id_mask_compositor.current", "web.wasm.webgpu.id_mask_compositor.legacy_upload"],
+            &["id_mask_draws", "id_mask_raster_passes", "id_mask_field_seed_passes", "id_mask_field_jump_passes", "id_mask_compositor_passes", "buffer_upload_bytes", "vertices", "gpu_timestamp_passes"],
+        ),
+        (
+            "glyph_atlas_upload",
+            &["web.wasm.webgpu.glyph_atlas_upload.current_dirty", "web.wasm.webgpu.glyph_atlas_upload.legacy_full"],
+            &["glyph_quads", "texture_upload_bytes", "buffer_upload_bytes", "gpu_timestamp_passes"],
+        ),
+        (
+            "image_upload",
+            &["web.wasm.webgpu.image_upload.current_dirty", "web.wasm.webgpu.image_upload.legacy_full"],
+            &["image_draws", "texture_upload_bytes", "buffer_upload_bytes", "gpu_timestamp_passes"],
+        ),
+        (
+            "upload_scratch",
+            &["web.wasm.webgpu.upload_scratch.current_reuse", "web.wasm.webgpu.upload_scratch.legacy_temp_alloc"],
+            &["image_upload_temp_allocs", "image_upload_temp_bytes", "image_upload_scratch_bytes", "texture_upload_bytes", "gpu_timestamp_passes"],
+        ),
+        (
+            "effect_uniform",
+            &["web.wasm.webgpu.effect_uniform.current_batched", "web.wasm.webgpu.effect_uniform.legacy_write_each"],
+            &["backdrop_draws", "visual_effect_draws", "effect_uniform_writes", "effect_uniform_slots", "texture_copies", "render_passes", "gpu_timestamp_total_ns"],
+        ),
+        (
+            "backdrop_batch",
+            &["web.wasm.webgpu.backdrop_batch.current_coalesced", "web.wasm.webgpu.backdrop_batch.legacy_per_backdrop_copy"],
+            &["backdrop_draws", "effect_uniform_slots", "texture_copies", "render_passes", "gpu_timestamp_passes"],
+        ),
+        (
+            "scene3d_mesh_reuse",
+            &["web.wasm.webgpu.scene3d.reused_mesh", "web.wasm.webgpu.scene3d.recreate_mesh"],
+            &["scene3d_draws", "mesh3d_creates", "buffer_grows", "cpu_scratch_grows", "gpu_timestamp_passes"],
+        ),
+        (
+            "scene3d_stress_mesh_reuse",
+            &["web.wasm.webgpu.scene3d.stress_reused_mesh", "web.wasm.webgpu.scene3d.stress_recreate_mesh"],
+            &["scene3d_draws", "mesh3d_creates", "buffer_grows", "cpu_scratch_grows", "gpu_timestamp_passes"],
+        ),
+        (
+            "mixed_text_image_effects",
+            &["web.wasm.webgpu.mixed_text_image_effects"],
+            &["glyph_quads", "image_draws", "backdrop_draws", "visual_effect_draws", "spinner_draws", "layer_draws", "damage_rects", "texture_copies", "gpu_timestamp_passes"],
+        ),
+        (
+            "layer_damage_effects",
+            &["web.wasm.webgpu.layer_damage_effects"],
+            &["layer_draws", "damage_rects", "backdrop_draws", "visual_effect_draws", "texture_copies", "render_passes", "gpu_timestamp_passes"],
+        ),
+        (
+            "command_family_matrix",
+            &["web.wasm.webgpu.command_family_matrix"],
+            &["image_mesh_draws", "nine_slice_draws", "sdf_glyph_quads", "camera_bg_draws", "expected_camera_bg", "gpu_timestamp_passes"],
+        ),
+        (
+            "draw_state_cache",
+            &["web.wasm.webgpu.draw_state_cache.current", "web.wasm.webgpu.draw_state_cache.legacy_rebind"],
+            &["draw_items", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
+        ),
+        (
+            "clip_state_cache",
+            &["web.wasm.webgpu.clip_state_cache.current", "web.wasm.webgpu.clip_state_cache.legacy_rebind"],
+            &["clip_depth_peak", "draw_scissor_sets", "draw_pipeline_binds", "draw_bind_group_binds", "gpu_timestamp_passes"],
+        ),
+    ];
+    assert_eq!(
+        web_report_number(backend_path_coverage, "expected_path_count"),
+        expected_backend_paths.len() as f64,
+    );
+    assert_eq!(
+        web_report_number(backend_path_coverage, "covered_path_count"),
+        expected_backend_paths.len() as f64,
+    );
+    assert_eq!(web_report_number(backend_path_coverage, "missing_path_count"), 0.0);
+    let backend_paths = backend_path_coverage["paths"]
+        .as_array()
+        .expect("backend path coverage paths");
+    assert_eq!(backend_paths.len(), expected_backend_paths.len());
+    for (path_id, row_ids, counters) in expected_backend_paths {
+        let path = backend_paths
+            .iter()
+            .find(|value| value["id"].as_str() == Some(*path_id))
+            .unwrap_or_else(|| panic!("missing backend path coverage {path_id}"));
+        assert_eq!(path["status"].as_str(), Some("covered"));
+        assert_eq!(web_report_number(path, "row_count"), row_ids.len() as f64);
+        assert_eq!(web_report_number(path, "counter_count"), counters.len() as f64);
+        assert!(path["missing_rows"].as_array().expect("backend missing rows").is_empty());
+        assert!(path["missing_counters"]
+            .as_array()
+            .expect("backend missing counters")
+            .is_empty());
+        let detail_rows = path["row_details"].as_array().expect("backend row details");
+        assert_eq!(detail_rows.len(), row_ids.len());
+        for row_id in *row_ids {
+            let source = web_report_case(&report, row_id);
+            let detail = detail_rows
+                .iter()
+                .find(|value| value["id"].as_str() == Some(*row_id))
+                .unwrap_or_else(|| panic!("missing backend path row detail {path_id}.{row_id}"));
+            for field in ["p50_ms", "p95_ms", "p99_ms", "peak_ms"] {
+                assert_eq!(web_report_number(detail, field), web_report_number(source, field));
+            }
+            for field in *counters {
+                assert_eq!(
+                    web_report_number(&detail["counters"], field),
+                    web_report_number(source, field),
+                    "backend path counter mismatch {path_id}.{row_id}.{field}",
+                );
+            }
+        }
     }
 
     let frame = web_report_case(&report, "web.wasm.webgpu.frame_loop");
@@ -1244,8 +1428,28 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     assert!(web_report_number(frame, "glyph_quads") > 0.0);
     assert!(web_report_number(glyph_current, "glyph_quads") > 0.0);
     assert!(web_report_number(glyph_legacy, "glyph_quads") > 0.0);
+    assert_eq!(
+        web_report_number(glyph_current, "gpu_timestamp_passes"),
+        web_report_number(glyph_current, "render_passes"),
+    );
+    assert_eq!(
+        web_report_number(glyph_legacy, "gpu_timestamp_passes"),
+        web_report_number(glyph_legacy, "render_passes"),
+    );
+    assert!(web_report_number(glyph_current, "gpu_timestamp_total_ns") > 0.0);
+    assert!(web_report_number(glyph_legacy, "gpu_timestamp_total_ns") > 0.0);
     assert!(web_report_number(image_current, "image_draws") > 0.0);
     assert!(web_report_number(image_legacy, "image_draws") > 0.0);
+    assert_eq!(
+        web_report_number(image_current, "gpu_timestamp_passes"),
+        web_report_number(image_current, "render_passes"),
+    );
+    assert_eq!(
+        web_report_number(image_legacy, "gpu_timestamp_passes"),
+        web_report_number(image_legacy, "render_passes"),
+    );
+    assert!(web_report_number(image_current, "gpu_timestamp_total_ns") > 0.0);
+    assert!(web_report_number(image_legacy, "gpu_timestamp_total_ns") > 0.0);
     assert_eq!(web_report_number(upload_scratch_current, "image_upload_temp_allocs"), 0.0);
     assert_eq!(web_report_number(upload_scratch_current, "image_upload_temp_bytes"), 0.0);
     assert!(web_report_number(upload_scratch_current, "image_upload_scratch_bytes") > 0.0);
@@ -1506,6 +1710,24 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         web_report_number(upload, "image_current_texture_upload_bytes")
             < web_report_number(upload, "image_legacy_texture_upload_bytes")
     );
+    assert_eq!(
+        web_report_number(upload, "glyph_current_gpu_timestamp_total_ns"),
+        web_report_number(glyph_current, "gpu_timestamp_total_ns"),
+    );
+    assert_eq!(
+        web_report_number(upload, "glyph_legacy_gpu_timestamp_total_ns"),
+        web_report_number(glyph_legacy, "gpu_timestamp_total_ns"),
+    );
+    assert_eq!(
+        web_report_number(upload, "image_current_gpu_timestamp_total_ns"),
+        web_report_number(image_current, "gpu_timestamp_total_ns"),
+    );
+    assert_eq!(
+        web_report_number(upload, "image_legacy_gpu_timestamp_total_ns"),
+        web_report_number(image_legacy, "gpu_timestamp_total_ns"),
+    );
+    assert!(web_report_number(upload, "glyph_legacy_gpu_over_current") > 0.0);
+    assert!(web_report_number(upload, "image_legacy_gpu_over_current") > 0.0);
 
     let upload_scratch = &report["upload_scratch_summary"];
     assert_eq!(

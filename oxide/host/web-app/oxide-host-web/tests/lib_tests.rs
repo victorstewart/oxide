@@ -22,8 +22,15 @@ fn decode_png_rgba(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
 }
 
 fn report_case_slice<'a>(report: &'a str, id: &str) -> &'a str {
+    let cases_marker = "\"cases\": [";
+    let cases_start =
+        report.find(cases_marker).unwrap_or_else(|| panic!("missing web report cases array"))
+            + cases_marker.len();
     let marker = format!("\"id\": \"{id}\"");
-    let start = report.find(&marker).unwrap_or_else(|| panic!("missing web report case {id}"));
+    let start = report[cases_start..]
+        .find(&marker)
+        .unwrap_or_else(|| panic!("missing web report case {id}"))
+        + cases_start;
     let tail = &report[start..];
     let end = tail.find("\n    }").unwrap_or(tail.len());
     &tail[..end]
@@ -608,6 +615,10 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("browser_trace"));
     assert!(script.contains("capture_phase = \"benchmark-report\""));
     assert!(script.contains("timing_source = \"untraced-baseline-report\""));
+    assert!(script.contains("benchmark_trace_interval_count"));
+    assert!(script.contains("benchmark_trace_interval_labels"));
+    assert!(script.contains("benchmark_trace_intervals"));
+    assert!(script.contains("traceBenchmarkIntervals"));
     assert!(script.contains("Browser Trace"));
     assert!(script.contains("upload_samples"));
     assert!(script.contains("scene3d_samples"));
@@ -660,6 +671,12 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("warm_resource_churn"));
     assert!(script.contains("WARM_RESOURCE_CHURN_FIELDS"));
     assert!(script.contains("Warm Resource Churn"));
+    assert!(script.contains("row_detail_count"));
+    assert!(script.contains("row_details"));
+    assert!(script.contains("Warm Resource Churn Rows"));
+    assert!(script.contains("WEBGPU_BACKEND_PATHS"));
+    assert!(script.contains("backend_path_coverage"));
+    assert!(script.contains("Backend Path Coverage"));
     assert!(script.contains("solid_tris: numberMetric(metrics, \"solid_tris\")"));
     assert!(script.contains("draw_items: numberMetric(metrics, \"draw_items\")"));
     assert!(script.contains("draw_pipeline_binds: numberMetric(metrics, \"draw_pipeline_binds\")"));
@@ -726,6 +743,10 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("current_gpu_timestamp_total_ns"));
     assert!(script.contains("legacy_gpu_timestamp_total_ns"));
     assert!(script.contains("legacy_gpu_over_current"));
+    assert!(script.contains("glyph_current_gpu_timestamp_total_ns"));
+    assert!(script.contains("glyph_legacy_gpu_timestamp_total_ns"));
+    assert!(script.contains("image_current_gpu_timestamp_total_ns"));
+    assert!(script.contains("image_legacy_gpu_timestamp_total_ns"));
     assert!(script.contains("scene3d_summary"));
     assert!(script.contains("scene3d_stress_summary"));
     assert!(script.contains("Scene3D Summary"));
@@ -913,6 +934,16 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(report_f64(glyph_legacy, "p50_ms") > 0.0);
     assert!(report_f64(glyph_current, "glyph_quads") > 0.0);
     assert!(report_f64(glyph_legacy, "glyph_quads") > 0.0);
+    assert_eq!(
+        report_f64(glyph_current, "gpu_timestamp_passes"),
+        report_f64(glyph_current, "render_passes")
+    );
+    assert_eq!(
+        report_f64(glyph_legacy, "gpu_timestamp_passes"),
+        report_f64(glyph_legacy, "render_passes")
+    );
+    assert!(report_f64(glyph_current, "gpu_timestamp_total_ns") > 0.0);
+    assert!(report_f64(glyph_legacy, "gpu_timestamp_total_ns") > 0.0);
     assert!(
         report_f64(glyph_current, "texture_upload_bytes")
             < report_f64(glyph_legacy, "texture_upload_bytes")
@@ -924,6 +955,16 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(report_f64(image_legacy, "p50_ms") > 0.0);
     assert!(report_f64(image_current, "image_draws") > 0.0);
     assert!(report_f64(image_legacy, "image_draws") > 0.0);
+    assert_eq!(
+        report_f64(image_current, "gpu_timestamp_passes"),
+        report_f64(image_current, "render_passes")
+    );
+    assert_eq!(
+        report_f64(image_legacy, "gpu_timestamp_passes"),
+        report_f64(image_legacy, "render_passes")
+    );
+    assert!(report_f64(image_current, "gpu_timestamp_total_ns") > 0.0);
+    assert!(report_f64(image_legacy, "gpu_timestamp_total_ns") > 0.0);
     assert!(
         report_f64(image_current, "texture_upload_bytes")
             < report_f64(image_legacy, "texture_upload_bytes")
@@ -1179,11 +1220,17 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(report_f64(browser_trace, "gpu_related_events") > 0.0);
     assert!(report_f64(browser_trace, "duration_us") > 0.0);
     assert!(report_f64(browser_trace, "category_count") > 0.0);
+    assert_eq!(report_u64(browser_trace, "benchmark_trace_interval_count"), 12);
+    assert!(browser_trace.contains("\"benchmark_trace_interval_labels\""));
+    assert!(browser_trace.contains("\"benchmark_trace_intervals\""));
+    assert!(report_f64(browser_trace, "webgpu_related_events") > 0.0);
     let warm_resource_churn = report_section_slice(report, "warm_resource_churn");
     assert!(warm_resource_churn
         .contains("\"id\": \"web.wasm.webgpu.warm_resource_churn.current_rows\""));
     assert_eq!(report_u64(warm_resource_churn, "checked_rows"), 14);
     assert_eq!(report_u64(warm_resource_churn, "excluded_rows"), 10);
+    assert_eq!(report_u64(warm_resource_churn, "row_detail_count"), 14);
+    assert!(warm_resource_churn.contains("\"row_details\": ["));
     assert_eq!(report_u64(warm_resource_churn, "total_buffer_grows"), 0);
     assert_eq!(report_u64(warm_resource_churn, "total_texture_creates"), 0);
     assert_eq!(report_u64(warm_resource_churn, "total_bind_group_creates"), 0);
@@ -1195,6 +1242,18 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert_eq!(report_u64(warm_resource_churn, "total_image_upload_scratch_grows"), 0);
     assert_eq!(report_u64(warm_resource_churn, "total_cpu_scratch_grows"), 0);
     assert_eq!(report_u64(warm_resource_churn, "total_cpu_scratch_growth_bytes"), 0);
+    let backend_path_coverage = report_section_slice(report, "backend_path_coverage");
+    assert!(
+        backend_path_coverage.contains("\"id\": \"web.wasm.webgpu.backend_path_coverage\"")
+    );
+    assert_eq!(report_u64(backend_path_coverage, "expected_path_count"), 14);
+    assert_eq!(report_u64(backend_path_coverage, "covered_path_count"), 14);
+    assert_eq!(report_u64(backend_path_coverage, "missing_path_count"), 0);
+    assert!(backend_path_coverage.contains("\"id\": \"glyph_atlas_upload\""));
+    assert!(backend_path_coverage.contains("\"id\": \"image_upload\""));
+    assert!(backend_path_coverage.contains("\"id\": \"backdrop_batch\""));
+    assert!(backend_path_coverage.contains("\"id\": \"layer_damage_effects\""));
+    assert!(backend_path_coverage.contains("\"id\": \"command_family_matrix\""));
     let upload_summary = report_section_slice(report, "upload_summary");
     assert!(
         upload_summary.contains("\"id\": \"web.wasm.webgpu.upload.current_dirty_vs_legacy_full\"")
@@ -1209,6 +1268,24 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
         report_f64(upload_summary, "image_current_texture_upload_bytes")
             < report_f64(upload_summary, "image_legacy_texture_upload_bytes")
     );
+    assert_eq!(
+        report_f64(upload_summary, "glyph_current_gpu_timestamp_total_ns"),
+        report_f64(glyph_current, "gpu_timestamp_total_ns")
+    );
+    assert_eq!(
+        report_f64(upload_summary, "glyph_legacy_gpu_timestamp_total_ns"),
+        report_f64(glyph_legacy, "gpu_timestamp_total_ns")
+    );
+    assert_eq!(
+        report_f64(upload_summary, "image_current_gpu_timestamp_total_ns"),
+        report_f64(image_current, "gpu_timestamp_total_ns")
+    );
+    assert_eq!(
+        report_f64(upload_summary, "image_legacy_gpu_timestamp_total_ns"),
+        report_f64(image_legacy, "gpu_timestamp_total_ns")
+    );
+    assert!(report_f64(upload_summary, "glyph_legacy_gpu_over_current") > 0.0);
+    assert!(report_f64(upload_summary, "image_legacy_gpu_over_current") > 0.0);
     let upload_scratch_summary = report_section_slice(report, "upload_scratch_summary");
     assert!(upload_scratch_summary
         .contains("\"id\": \"web.wasm.webgpu.upload_scratch.current_reuse_vs_legacy_temp_alloc\""));
