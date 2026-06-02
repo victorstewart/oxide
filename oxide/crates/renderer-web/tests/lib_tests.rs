@@ -94,10 +94,13 @@ fn wasm_webgpu_submits_directly_to_surface_without_backdrop_effects() {
         source.split("impl api::Renderer for WebGpuRenderer").nth(1).expect("webgpu renderer impl");
     let submit = renderer_impl.split("fn resize(&mut self").next().expect("webgpu submit body");
 
-    assert!(submit.contains("if self.frame_uses_backdrop()"));
+    assert!(submit.contains("if self.frame_uses_backdrop() || !self.direct_surface_enabled"));
     assert!(submit.contains("self.render_scene_with_effects(&mut encoder);"));
     assert!(submit.contains("self.render_present(&mut encoder, &surface_view);"));
     assert!(submit.contains("self.render_direct(&mut encoder, &surface_view);"));
+    assert!(source.contains("direct_surface_enabled: bool"));
+    assert!(source.contains("direct_surface_enabled: true"));
+    assert!(source.contains("pub fn set_direct_surface_enabled_for_benchmark"));
 }
 
 #[test]

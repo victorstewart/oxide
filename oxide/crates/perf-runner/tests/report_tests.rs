@@ -1098,6 +1098,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "layer_effects_matrix",
         "command_family_matrix",
         "neon_marker_ab",
+        "direct_surface_ab",
         "draw_state_cache_ab",
         "clip_state_cache_ab",
     ];
@@ -1239,6 +1240,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "web.wasm.webgpu.command_family_matrix.legacy_rebind",
         "web.wasm.webgpu.neon_marker.current",
         "web.wasm.webgpu.neon_marker.legacy_rebind",
+        "web.wasm.webgpu.direct_surface.current",
+        "web.wasm.webgpu.direct_surface.legacy_scene_present",
         "web.wasm.webgpu.draw_state_cache.current",
         "web.wasm.webgpu.draw_state_cache.legacy_rebind",
         "web.wasm.webgpu.clip_state_cache.current",
@@ -1258,8 +1261,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         warm_resource_churn["id"].as_str(),
         Some("web.wasm.webgpu.warm_resource_churn.current_rows"),
     );
-    assert_eq!(web_report_number(warm_resource_churn, "checked_rows"), 15.0);
-    assert_eq!(web_report_number(warm_resource_churn, "excluded_rows"), 14.0);
+    assert_eq!(web_report_number(warm_resource_churn, "checked_rows"), 16.0);
+    assert_eq!(web_report_number(warm_resource_churn, "excluded_rows"), 15.0);
     let warm_rows: Vec<&str> = warm_resource_churn["rows"]
         .as_array()
         .expect("warm resource churn rows")
@@ -1296,6 +1299,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "web.wasm.webgpu.layer_damage_effects",
         "web.wasm.webgpu.command_family_matrix",
         "web.wasm.webgpu.neon_marker.current",
+        "web.wasm.webgpu.direct_surface.current",
         "web.wasm.webgpu.draw_state_cache.current",
         "web.wasm.webgpu.clip_state_cache.current",
     ] {
@@ -1314,6 +1318,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched",
         "web.wasm.webgpu.command_family_matrix.legacy_rebind",
         "web.wasm.webgpu.neon_marker.legacy_rebind",
+        "web.wasm.webgpu.direct_surface.legacy_scene_present",
         "web.wasm.webgpu.draw_state_cache.legacy_rebind",
         "web.wasm.webgpu.clip_state_cache.legacy_rebind",
     ] {
@@ -1383,8 +1388,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         Some("web.wasm.webgpu.wasm_allocation_audit.current_rows"),
     );
     assert_eq!(wasm_allocation_audit["status"].as_str(), Some("measured"));
-    assert_eq!(web_report_number(wasm_allocation_audit, "checked_count"), 15.0);
-    assert_eq!(web_report_number(wasm_allocation_audit, "excluded_count"), 14.0);
+    assert_eq!(web_report_number(wasm_allocation_audit, "checked_count"), 16.0);
+    assert_eq!(web_report_number(wasm_allocation_audit, "excluded_count"), 15.0);
     assert_eq!(
         web_report_number(wasm_allocation_audit, "row_detail_count"),
         web_report_number(wasm_allocation_audit, "checked_count"),
@@ -1418,6 +1423,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.frame_loop"));
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.id_mask_compositor.current"));
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.neon_marker.current"));
+    assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.direct_surface.current"));
     for detail in wasm_allocation_details {
         let id = detail["id"].as_str().expect("wasm allocation row detail id");
         assert!(wasm_allocation_rows.contains(&id));
@@ -1615,6 +1621,11 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
             &["expected_markers", "expected_draw_items", "draw_items", "solid_tris", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
         ),
         (
+            "direct_surface",
+            &["web.wasm.webgpu.direct_surface.current", "web.wasm.webgpu.direct_surface.legacy_scene_present"],
+            &["expected_draw_items", "expected_image_draws", "draw_items", "image_draws", "render_passes", "draw_passes", "clear_passes", "present_passes", "texture_copies", "gpu_timestamp_passes"],
+        ),
+        (
             "draw_state_cache",
             &["web.wasm.webgpu.draw_state_cache.current", "web.wasm.webgpu.draw_state_cache.legacy_rebind"],
             &["draw_items", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
@@ -1709,6 +1720,9 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     let neon_marker_current = web_report_case(&report, "web.wasm.webgpu.neon_marker.current");
     let neon_marker_legacy =
         web_report_case(&report, "web.wasm.webgpu.neon_marker.legacy_rebind");
+    let direct_surface_current = web_report_case(&report, "web.wasm.webgpu.direct_surface.current");
+    let direct_surface_legacy =
+        web_report_case(&report, "web.wasm.webgpu.direct_surface.legacy_scene_present");
     let draw_state_current = web_report_case(&report, "web.wasm.webgpu.draw_state_cache.current");
     let draw_state_legacy =
         web_report_case(&report, "web.wasm.webgpu.draw_state_cache.legacy_rebind");
@@ -1740,6 +1754,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         command_family_legacy,
         neon_marker_current,
         neon_marker_legacy,
+        direct_surface_current,
+        direct_surface_legacy,
         draw_state_current,
         draw_state_legacy,
         clip_state_current,
@@ -2236,6 +2252,62 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     assert_eq!(
         web_report_number(&report["neon_marker_summary"], "legacy_draw_pipeline_binds"),
         web_report_number(neon_marker_legacy, "draw_pipeline_binds"),
+    );
+    assert_eq!(web_report_number(direct_surface_current, "expected_image_draws"), 384.0);
+    assert_eq!(web_report_number(direct_surface_legacy, "expected_image_draws"), 384.0);
+    assert_eq!(web_report_number(direct_surface_current, "expected_draw_items"), 385.0);
+    assert_eq!(web_report_number(direct_surface_legacy, "expected_draw_items"), 385.0);
+    assert_eq!(
+        web_report_number(direct_surface_current, "draw_items"),
+        web_report_number(direct_surface_current, "expected_draw_items"),
+    );
+    assert_eq!(
+        web_report_number(direct_surface_legacy, "draw_items"),
+        web_report_number(direct_surface_legacy, "expected_draw_items"),
+    );
+    assert_eq!(
+        web_report_number(direct_surface_current, "image_draws"),
+        web_report_number(direct_surface_current, "expected_image_draws"),
+    );
+    assert_eq!(
+        web_report_number(direct_surface_legacy, "image_draws"),
+        web_report_number(direct_surface_legacy, "expected_image_draws"),
+    );
+    assert_eq!(
+        web_report_number(direct_surface_current, "draw_passes"),
+        web_report_number(direct_surface_legacy, "draw_passes"),
+    );
+    assert_eq!(web_report_number(direct_surface_current, "clear_passes"), 0.0);
+    assert!(web_report_number(direct_surface_legacy, "clear_passes") > 0.0);
+    assert_eq!(web_report_number(direct_surface_current, "present_passes"), 0.0);
+    assert!(web_report_number(direct_surface_legacy, "present_passes") > 0.0);
+    assert!(
+        web_report_number(direct_surface_current, "render_passes")
+            < web_report_number(direct_surface_legacy, "render_passes")
+    );
+    assert_eq!(
+        web_report_number(direct_surface_current, "texture_copies"),
+        web_report_number(direct_surface_legacy, "texture_copies"),
+    );
+    assert_eq!(
+        web_report_number(direct_surface_current, "gpu_timestamp_passes"),
+        web_report_number(direct_surface_current, "render_passes"),
+    );
+    assert_eq!(
+        web_report_number(direct_surface_legacy, "gpu_timestamp_passes"),
+        web_report_number(direct_surface_legacy, "render_passes"),
+    );
+    assert_eq!(
+        web_report_number(&report["direct_surface_summary"], "current_p50_ms"),
+        web_report_number(direct_surface_current, "p50_ms"),
+    );
+    assert_eq!(
+        web_report_number(&report["direct_surface_summary"], "legacy_p50_ms"),
+        web_report_number(direct_surface_legacy, "p50_ms"),
+    );
+    assert!(
+        web_report_number(&report["direct_surface_summary"], "legacy_over_current") > 1.0,
+        "direct surface p50 should beat forced scene-present"
     );
     assert!(
         web_report_number(draw_state_current, "draw_items")

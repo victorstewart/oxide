@@ -1294,6 +1294,7 @@ const WARM_RESOURCE_CHURN_EXCLUDED_IDS = new Set([
    "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched",
    "web.wasm.webgpu.command_family_matrix.legacy_rebind",
    "web.wasm.webgpu.neon_marker.legacy_rebind",
+   "web.wasm.webgpu.direct_surface.legacy_scene_present",
    "web.wasm.webgpu.draw_state_cache.legacy_rebind",
    "web.wasm.webgpu.clip_state_cache.legacy_rebind",
 ]);
@@ -1348,6 +1349,7 @@ const EXPECTED_BENCHMARK_MARKS = [
    "layer_effects_matrix",
    "command_family_matrix",
    "neon_marker_ab",
+   "direct_surface_ab",
    "draw_state_cache_ab",
    "clip_state_cache_ab",
 ];
@@ -1429,6 +1431,12 @@ const WEBGPU_BACKEND_PATHS = [
       id: "neon_marker",
       rows: ["web.wasm.webgpu.neon_marker.current", "web.wasm.webgpu.neon_marker.legacy_rebind"],
       counters: ["expected_markers", "expected_draw_items", "draw_items", "solid_tris", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
+      comparison: "current_vs_legacy",
+   },
+   {
+      id: "direct_surface",
+      rows: ["web.wasm.webgpu.direct_surface.current", "web.wasm.webgpu.direct_surface.legacy_scene_present"],
+      counters: ["expected_draw_items", "expected_image_draws", "draw_items", "image_draws", "render_passes", "draw_passes", "clear_passes", "present_passes", "texture_copies", "gpu_timestamp_passes"],
       comparison: "current_vs_legacy",
    },
    {
@@ -1841,6 +1849,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
    let layerEffectsMetrics = parseMetricString(pageReport.layer_effects_matrix);
    let commandFamilyMetrics = parseMetricString(pageReport.command_family_matrix);
    let neonMarkerMetrics = parseMetricString(pageReport.neon_marker_ab);
+   let directSurfaceMetrics = parseMetricString(pageReport.direct_surface_ab);
    let drawStateMetrics = parseMetricString(pageReport.draw_state_cache_ab);
    let clipStateMetrics = parseMetricString(pageReport.clip_state_ab);
    let timingMetrics = parseMetricString(pageReport.webgpu_timing);
@@ -2117,6 +2126,32 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          },
       ),
       prefixedBackendCase(
+         directSurfaceMetrics,
+         "web.wasm.webgpu.direct_surface.current",
+         "webgpu-direct-surface-current",
+         "current",
+         {
+            expected_draw_items: numberMetric(directSurfaceMetrics, "expected_draw_items"),
+            expected_image_draws: numberMetric(directSurfaceMetrics, "expected_image_draws"),
+            columns: numberMetric(directSurfaceMetrics, "columns"),
+            image_width: numberMetric(directSurfaceMetrics, "image_width"),
+            image_height: numberMetric(directSurfaceMetrics, "image_height"),
+         },
+      ),
+      prefixedBackendCase(
+         directSurfaceMetrics,
+         "web.wasm.webgpu.direct_surface.legacy_scene_present",
+         "webgpu-direct-surface-legacy-scene-present",
+         "legacy",
+         {
+            expected_draw_items: numberMetric(directSurfaceMetrics, "expected_draw_items"),
+            expected_image_draws: numberMetric(directSurfaceMetrics, "expected_image_draws"),
+            columns: numberMetric(directSurfaceMetrics, "columns"),
+            image_width: numberMetric(directSurfaceMetrics, "image_width"),
+            image_height: numberMetric(directSurfaceMetrics, "image_height"),
+         },
+      ),
+      prefixedBackendCase(
          drawStateMetrics,
          "web.wasm.webgpu.draw_state_cache.current",
          "webgpu-draw-state-cache-current",
@@ -2197,6 +2232,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          "The WebGPU backdrop-batch A/B rows draw separated consecutive backdrops while comparing one shared scene-copy pass against the legacy per-backdrop copy path.",
          "The WebGPU layer/damage/effects A/B rows draw the same nested layer, damage, image, glyph, backdrop, visual-effect, and spinner workload while comparing current state/effect batching against legacy rebinding/unbatched toggles.",
          "The WebGPU command-family A/B rows draw the same generic ImageMesh, NineSlice, and SDF glyph workload while comparing current draw-state caching against a legacy rebind path and keeping web CameraBg work unavailable.",
+         "The WebGPU direct-surface A/B rows draw the same no-effect image workload while comparing direct surface rendering against a benchmark-only forced scene-present path.",
          "The WebGPU clip-state A/B rows use real Oxide ClipPush/ClipPop commands to measure scissor-state caching.",
          "Pass-family counters provide browser GPU-stage attribution when direct timestamp queries are unavailable.",
          "Warm current-path WebGPU rows are gated against post-warmup resource creation, buffer growth, mesh creation, image-upload temp allocation, and CPU/image scratch growth.",
@@ -2219,6 +2255,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          layer_effects_matrix: pageReport.layer_effects_matrix,
          command_family_matrix: pageReport.command_family_matrix,
          neon_marker_ab: pageReport.neon_marker_ab,
+         direct_surface_ab: pageReport.direct_surface_ab,
          draw_state_cache_ab: pageReport.draw_state_cache_ab,
          clip_state_ab: pageReport.clip_state_ab,
          capture_target: pageReport.capture_target,
@@ -2528,6 +2565,28 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          legacy_draw_scissor_sets: numberMetric(neonMarkerMetrics, "legacy_draw_scissor_sets"),
          expected_markers: numberMetric(neonMarkerMetrics, "expected_markers"),
          expected_draw_items: numberMetric(neonMarkerMetrics, "expected_draw_items"),
+      },
+      direct_surface_summary: {
+         id: "web.wasm.webgpu.direct_surface.current_vs_legacy_scene_present",
+         legacy_over_current: numberMetric(directSurfaceMetrics, "legacy_over_current"),
+         current_p50_ms: numberMetric(directSurfaceMetrics, "current_p50_ms"),
+         legacy_p50_ms: numberMetric(directSurfaceMetrics, "legacy_p50_ms"),
+         current_draw_items: numberMetric(directSurfaceMetrics, "current_draw_items"),
+         legacy_draw_items: numberMetric(directSurfaceMetrics, "legacy_draw_items"),
+         current_image_draws: numberMetric(directSurfaceMetrics, "current_image_draws"),
+         legacy_image_draws: numberMetric(directSurfaceMetrics, "legacy_image_draws"),
+         current_render_passes: numberMetric(directSurfaceMetrics, "current_render_passes"),
+         legacy_render_passes: numberMetric(directSurfaceMetrics, "legacy_render_passes"),
+         current_draw_passes: numberMetric(directSurfaceMetrics, "current_draw_passes"),
+         legacy_draw_passes: numberMetric(directSurfaceMetrics, "legacy_draw_passes"),
+         current_clear_passes: numberMetric(directSurfaceMetrics, "current_clear_passes"),
+         legacy_clear_passes: numberMetric(directSurfaceMetrics, "legacy_clear_passes"),
+         current_present_passes: numberMetric(directSurfaceMetrics, "current_present_passes"),
+         legacy_present_passes: numberMetric(directSurfaceMetrics, "legacy_present_passes"),
+         current_texture_copies: numberMetric(directSurfaceMetrics, "current_texture_copies"),
+         legacy_texture_copies: numberMetric(directSurfaceMetrics, "legacy_texture_copies"),
+         expected_draw_items: numberMetric(directSurfaceMetrics, "expected_draw_items"),
+         expected_image_draws: numberMetric(directSurfaceMetrics, "expected_image_draws"),
       },
       draw_state_summary: {
          id: "web.wasm.webgpu.draw_state_cache.current_vs_legacy_rebind",
@@ -3026,6 +3085,12 @@ function renderMarkdown(report)
    lines.push("| Comparison | Current p50 ms | Legacy p50 ms | Legacy / Current | Markers | Current Items | Legacy Items | Current Solid Tris | Legacy Solid Tris | Current Pipeline Binds | Legacy Pipeline Binds | Current Bind Groups | Legacy Bind Groups | Current Scissors | Legacy Scissors |");
    lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
    lines.push(`| \`${report.neon_marker_summary.id}\` | ${report.neon_marker_summary.current_p50_ms.toFixed(3)} | ${report.neon_marker_summary.legacy_p50_ms.toFixed(3)} | ${report.neon_marker_summary.legacy_over_current.toFixed(3)} | ${report.neon_marker_summary.expected_markers} | ${report.neon_marker_summary.current_draw_items} | ${report.neon_marker_summary.legacy_draw_items} | ${report.neon_marker_summary.current_solid_tris} | ${report.neon_marker_summary.legacy_solid_tris} | ${report.neon_marker_summary.current_draw_pipeline_binds} | ${report.neon_marker_summary.legacy_draw_pipeline_binds} | ${report.neon_marker_summary.current_draw_bind_group_binds} | ${report.neon_marker_summary.legacy_draw_bind_group_binds} | ${report.neon_marker_summary.current_draw_scissor_sets} | ${report.neon_marker_summary.legacy_draw_scissor_sets} |`);
+   lines.push("");
+   lines.push("## Direct Surface Summary");
+   lines.push("");
+   lines.push("| Comparison | Current p50 ms | Legacy p50 ms | Legacy / Current | Current Items | Legacy Items | Current Images | Legacy Images | Current Render Passes | Legacy Render Passes | Current Draw Passes | Legacy Draw Passes | Current Clear Passes | Legacy Clear Passes | Current Present Passes | Legacy Present Passes |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+   lines.push(`| \`${report.direct_surface_summary.id}\` | ${report.direct_surface_summary.current_p50_ms.toFixed(3)} | ${report.direct_surface_summary.legacy_p50_ms.toFixed(3)} | ${report.direct_surface_summary.legacy_over_current.toFixed(3)} | ${report.direct_surface_summary.current_draw_items} | ${report.direct_surface_summary.legacy_draw_items} | ${report.direct_surface_summary.current_image_draws} | ${report.direct_surface_summary.legacy_image_draws} | ${report.direct_surface_summary.current_render_passes} | ${report.direct_surface_summary.legacy_render_passes} | ${report.direct_surface_summary.current_draw_passes} | ${report.direct_surface_summary.legacy_draw_passes} | ${report.direct_surface_summary.current_clear_passes} | ${report.direct_surface_summary.legacy_clear_passes} | ${report.direct_surface_summary.current_present_passes} | ${report.direct_surface_summary.legacy_present_passes} |`);
    lines.push("");
    lines.push("## Draw State Cache Summary");
    lines.push("");
@@ -4153,6 +4218,61 @@ function assertWebReportContract(report)
       || report.neon_marker_summary.legacy_draw_scissor_sets !== neonMarkerLegacy.draw_scissor_sets
    ) {
       throw new Error("neon marker WebGPU summary must match current and legacy source rows");
+   }
+   let directSurface = byId.get("web.wasm.webgpu.direct_surface.current");
+   let directSurfaceLegacy = byId.get("web.wasm.webgpu.direct_surface.legacy_scene_present");
+   if (
+      directSurface.expected_draw_items <= 0
+      || directSurfaceLegacy.expected_draw_items !== directSurface.expected_draw_items
+      || directSurface.expected_image_draws <= 0
+      || directSurfaceLegacy.expected_image_draws !== directSurface.expected_image_draws
+      || directSurface.draw_items !== directSurface.expected_draw_items
+      || directSurfaceLegacy.draw_items !== directSurfaceLegacy.expected_draw_items
+      || directSurface.image_draws !== directSurface.expected_image_draws
+      || directSurfaceLegacy.image_draws !== directSurfaceLegacy.expected_image_draws
+      || directSurface.gpu_timestamp_passes !== directSurface.render_passes
+      || directSurfaceLegacy.gpu_timestamp_passes !== directSurfaceLegacy.render_passes
+   ) {
+      throw new Error("direct-surface WebGPU A/B rows must cover equivalent no-effect image work and timestamped passes");
+   }
+   if (
+      directSurface.draw_items !== directSurfaceLegacy.draw_items
+      || directSurface.image_draws !== directSurfaceLegacy.image_draws
+      || directSurface.draw_passes !== directSurfaceLegacy.draw_passes
+      || directSurface.clear_passes !== 0
+      || directSurfaceLegacy.clear_passes <= directSurface.clear_passes
+      || directSurface.present_passes !== 0
+      || directSurfaceLegacy.present_passes <= directSurface.present_passes
+      || directSurface.render_passes >= directSurfaceLegacy.render_passes
+      || directSurface.texture_copies !== directSurfaceLegacy.texture_copies
+   ) {
+      throw new Error(
+         "direct-surface WebGPU A/B rows must prove equivalent draw work and fewer current scene/present passes: "
+            + `items=${directSurface.draw_items}/${directSurfaceLegacy.draw_items} `
+            + `images=${directSurface.image_draws}/${directSurfaceLegacy.image_draws} `
+            + `render_passes=${directSurface.render_passes}/${directSurfaceLegacy.render_passes} `
+            + `draw_passes=${directSurface.draw_passes}/${directSurfaceLegacy.draw_passes} `
+            + `clear_passes=${directSurface.clear_passes}/${directSurfaceLegacy.clear_passes} `
+            + `present_passes=${directSurface.present_passes}/${directSurfaceLegacy.present_passes} `
+            + `copies=${directSurface.texture_copies}/${directSurfaceLegacy.texture_copies}`
+      );
+   }
+   if (
+      report.direct_surface_summary.current_p50_ms !== directSurface.p50_ms
+      || report.direct_surface_summary.legacy_p50_ms !== directSurfaceLegacy.p50_ms
+      || report.direct_surface_summary.current_draw_items !== directSurface.draw_items
+      || report.direct_surface_summary.legacy_draw_items !== directSurfaceLegacy.draw_items
+      || report.direct_surface_summary.current_render_passes !== directSurface.render_passes
+      || report.direct_surface_summary.legacy_render_passes !== directSurfaceLegacy.render_passes
+      || report.direct_surface_summary.current_present_passes !== directSurface.present_passes
+      || report.direct_surface_summary.legacy_present_passes !== directSurfaceLegacy.present_passes
+   ) {
+      throw new Error("direct-surface WebGPU summary must match current and legacy source rows");
+   }
+   if (report.direct_surface_summary.legacy_over_current <= 1.0) {
+      throw new Error(
+         `direct-surface current row must beat forced scene-present p50: current=${report.direct_surface_summary.current_p50_ms.toFixed(3)}ms legacy=${report.direct_surface_summary.legacy_p50_ms.toFixed(3)}ms ratio=${report.direct_surface_summary.legacy_over_current.toFixed(3)}`
+      );
    }
    let glyphUploadCurrent = byId.get("web.wasm.webgpu.glyph_atlas_upload.current_dirty");
    let glyphUploadLegacy = byId.get("web.wasm.webgpu.glyph_atlas_upload.legacy_full");

@@ -86,6 +86,8 @@ mod wasm_host {
     const WEBGPU_CLIP_STATE_RUNS: usize = 16;
     const WEBGPU_NEON_MARKERS: usize = 64;
     const WEBGPU_NEON_MARKER_COLUMNS: usize = 8;
+    const WEBGPU_DIRECT_SURFACE_DRAWS: usize = 384;
+    const WEBGPU_DIRECT_SURFACE_COLUMNS: usize = 24;
     const WEBGPU_SCENE3D_STRESS_INSTANCES: usize = 96;
     const WEBGPU_TIMESTAMP_SETTLE_RAFS: u32 = 60;
 
@@ -971,6 +973,50 @@ mod wasm_host {
             ))
         }
 
+        pub async fn bench_webgpu_direct_surface_ab(
+            &self,
+            samples: u32,
+            frames_per_sample: u32,
+        ) -> Result<String, JsValue> {
+            let sample_count = samples.clamp(1, 30);
+            let frames = frames_per_sample.clamp(1, 120);
+            let renderer = self.ensure_upload_bench_resources()?;
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_direct_surface_enabled_for_benchmark(true);
+            }
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut current = self.with_upload_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    resources.direct_surface_frame(renderer)
+                })
+            })?;
+            current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            {
+                renderer.borrow_mut().set_direct_surface_enabled_for_benchmark(false);
+            }
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut legacy = self.with_upload_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    resources.direct_surface_frame(renderer)
+                })
+            })?;
+            legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            {
+                renderer.borrow_mut().set_direct_surface_enabled_for_benchmark(true);
+            }
+            let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
+            Ok(format!(
+                "samples={sample_count};frames_per_sample={frames}{}{};legacy_over_current={ratio:.3};expected_draw_items={};expected_image_draws={WEBGPU_DIRECT_SURFACE_DRAWS};columns={WEBGPU_DIRECT_SURFACE_COLUMNS};image_width={};image_height={}",
+                sampled_case_metrics(&current, "current"),
+                sampled_case_metrics(&legacy, "legacy"),
+                WEBGPU_DIRECT_SURFACE_DRAWS.saturating_add(1),
+                WEBGPU_UPLOAD_IMAGE_SIZE,
+                WEBGPU_UPLOAD_IMAGE_SIZE,
+            ))
+        }
+
         pub async fn bench_webgpu_draw_state_cache_ab(
             &self,
             samples: u32,
@@ -1853,6 +1899,36 @@ mod wasm_host {
                     gfx::RectF::new(col as f32 * size, row as f32 * size, size, size),
                     src,
                     0.86,
+                );
+            }
+            renderer.encode_pass(self.builder.drawlist());
+            renderer.submit(token).map_err(render_err)
+        }
+
+        fn direct_surface_frame(&mut self, renderer: &mut BrowserRenderer) -> Result<(), JsValue> {
+            renderer.resize(512, 512, 2.0).map_err(render_err)?;
+            let token = renderer.begin_frame(&gfx::FrameTarget, None);
+            self.builder.clear();
+            self.builder.rrect(
+                gfx::RectF::new(0.0, 0.0, 256.0, 256.0),
+                [0.0; 4],
+                gfx::Color::rgba(0.03, 0.04, 0.06, 1.0),
+            );
+            let src = gfx::RectF::new(
+                0.0,
+                0.0,
+                WEBGPU_UPLOAD_IMAGE_SIZE as f32,
+                WEBGPU_UPLOAD_IMAGE_SIZE as f32,
+            );
+            let size = 256.0 / WEBGPU_DIRECT_SURFACE_COLUMNS as f32;
+            for index in 0..WEBGPU_DIRECT_SURFACE_DRAWS {
+                let col = index % WEBGPU_DIRECT_SURFACE_COLUMNS;
+                let row = index / WEBGPU_DIRECT_SURFACE_COLUMNS;
+                self.builder.image(
+                    self.image,
+                    gfx::RectF::new(col as f32 * size, row as f32 * size, size, size),
+                    src,
+                    0.82,
                 );
             }
             renderer.encode_pass(self.builder.drawlist());

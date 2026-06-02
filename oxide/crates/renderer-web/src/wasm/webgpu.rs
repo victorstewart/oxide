@@ -525,6 +525,10 @@ impl BrowserRenderer {
         self.inner.set_backdrop_batch_enabled_for_benchmark(enabled);
     }
 
+    pub fn set_direct_surface_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.inner.set_direct_surface_enabled_for_benchmark(enabled);
+    }
+
     #[must_use]
     pub fn image_create_rgba8(
         &mut self,
@@ -744,6 +748,7 @@ pub struct WebGpuRenderer {
     image_upload_scratch_enabled: bool,
     effect_uniform_batch_enabled: bool,
     backdrop_batch_enabled: bool,
+    direct_surface_enabled: bool,
 }
 
 fn image_for_update<'a>(
@@ -991,6 +996,7 @@ impl WebGpuRenderer {
             image_upload_scratch_enabled: true,
             effect_uniform_batch_enabled: true,
             backdrop_batch_enabled: true,
+            direct_surface_enabled: true,
         })
     }
 
@@ -1031,6 +1037,10 @@ impl WebGpuRenderer {
 
     pub fn set_backdrop_batch_enabled_for_benchmark(&mut self, enabled: bool) {
         self.backdrop_batch_enabled = enabled;
+    }
+
+    pub fn set_direct_surface_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.direct_surface_enabled = enabled;
     }
 
     fn scratch_capacity_breakdown(&self) -> ScratchCapacityBreakdown {
@@ -2534,7 +2544,7 @@ impl api::Renderer for WebGpuRenderer {
             label: Some("oxide-webgpu-frame"),
         });
         self.stats.command_buffers = self.stats.command_buffers.saturating_add(1);
-        if self.frame_uses_backdrop() {
+        if self.frame_uses_backdrop() || !self.direct_surface_enabled {
             self.render_scene_with_effects(&mut encoder);
             self.render_present(&mut encoder, &surface_view);
         } else {
