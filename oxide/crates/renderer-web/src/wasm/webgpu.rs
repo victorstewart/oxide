@@ -435,11 +435,6 @@ impl WebGpuTimestampQueries {
 }
 
 struct GpuPrograms {
-    format: wgpu::TextureFormat,
-    shader: wgpu::ShaderModule,
-    scene3d_shader: wgpu::ShaderModule,
-    id_mask_shader: wgpu::ShaderModule,
-    id_mask_field_shader: wgpu::ShaderModule,
     viewport_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
     effect_layout: wgpu::BindGroupLayout,
@@ -447,28 +442,21 @@ struct GpuPrograms {
     id_mask_raster_layout: wgpu::BindGroupLayout,
     id_mask_field_layout: wgpu::BindGroupLayout,
     id_mask_compositor_layout: wgpu::BindGroupLayout,
-    solid_pipeline_layout: wgpu::PipelineLayout,
-    texture_pipeline_layout: wgpu::PipelineLayout,
-    effect_pipeline_layout: wgpu::PipelineLayout,
-    scene3d_pipeline_layout: wgpu::PipelineLayout,
-    id_mask_raster_pipeline_layout: wgpu::PipelineLayout,
-    id_mask_field_pipeline_layout: wgpu::PipelineLayout,
-    id_mask_compositor_pipeline_layout: wgpu::PipelineLayout,
-    solid_pipeline: Option<wgpu::RenderPipeline>,
-    rgba_pipeline: Option<wgpu::RenderPipeline>,
-    a8_pipeline: Option<wgpu::RenderPipeline>,
-    sdf_pipeline: Option<wgpu::RenderPipeline>,
-    effect_pipeline: Option<wgpu::RenderPipeline>,
-    scene3d_color_tri_depth_read_pipeline: Option<wgpu::RenderPipeline>,
-    scene3d_color_tri_depth_write_pipeline: Option<wgpu::RenderPipeline>,
-    scene3d_color_tri_pipeline: Option<wgpu::RenderPipeline>,
-    scene3d_color_tri_add_depth_read_pipeline: Option<wgpu::RenderPipeline>,
-    scene3d_color_tri_add_depth_write_pipeline: Option<wgpu::RenderPipeline>,
-    scene3d_color_tri_add_pipeline: Option<wgpu::RenderPipeline>,
-    id_mask_raster_pipeline: Option<wgpu::RenderPipeline>,
-    id_mask_field_seed_pipeline: Option<wgpu::RenderPipeline>,
-    id_mask_field_jump_pipeline: Option<wgpu::RenderPipeline>,
-    id_mask_compositor_pipeline: Option<wgpu::RenderPipeline>,
+    solid_pipeline: wgpu::RenderPipeline,
+    rgba_pipeline: wgpu::RenderPipeline,
+    a8_pipeline: wgpu::RenderPipeline,
+    sdf_pipeline: wgpu::RenderPipeline,
+    effect_pipeline: wgpu::RenderPipeline,
+    scene3d_color_tri_depth_read_pipeline: wgpu::RenderPipeline,
+    scene3d_color_tri_depth_write_pipeline: wgpu::RenderPipeline,
+    scene3d_color_tri_pipeline: wgpu::RenderPipeline,
+    scene3d_color_tri_add_depth_read_pipeline: wgpu::RenderPipeline,
+    scene3d_color_tri_add_depth_write_pipeline: wgpu::RenderPipeline,
+    scene3d_color_tri_add_pipeline: wgpu::RenderPipeline,
+    id_mask_raster_pipeline: wgpu::RenderPipeline,
+    id_mask_field_seed_pipeline: wgpu::RenderPipeline,
+    id_mask_field_jump_pipeline: wgpu::RenderPipeline,
+    id_mask_compositor_pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
 }
 
@@ -2570,322 +2558,59 @@ impl WebGpuRenderer {
         end
     }
 
-    fn ensure_solid_pipeline(&mut self) {
-        if self.programs.solid_pipeline.is_some() {
-            return;
-        }
-        let vertex_layout = vertex_layout();
-        let color_target = alpha_color_target(self.programs.format);
-        self.programs.solid_pipeline = Some(create_pipeline(
-            &self.device,
-            &self.programs.shader,
-            &self.programs.solid_pipeline_layout,
-            &vertex_layout,
-            &color_target,
-            "fs_solid",
-        ));
-        self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
-    }
-
-    fn ensure_rgba_pipeline(&mut self) {
-        if self.programs.rgba_pipeline.is_some() {
-            return;
-        }
-        let vertex_layout = vertex_layout();
-        let color_target = alpha_color_target(self.programs.format);
-        self.programs.rgba_pipeline = Some(create_pipeline(
-            &self.device,
-            &self.programs.shader,
-            &self.programs.texture_pipeline_layout,
-            &vertex_layout,
-            &color_target,
-            "fs_rgba",
-        ));
-        self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
-    }
-
-    fn ensure_a8_pipeline(&mut self) {
-        if self.programs.a8_pipeline.is_some() {
-            return;
-        }
-        let vertex_layout = vertex_layout();
-        let color_target = alpha_color_target(self.programs.format);
-        self.programs.a8_pipeline = Some(create_pipeline(
-            &self.device,
-            &self.programs.shader,
-            &self.programs.texture_pipeline_layout,
-            &vertex_layout,
-            &color_target,
-            "fs_a8",
-        ));
-        self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
-    }
-
-    fn ensure_sdf_pipeline(&mut self) {
-        if self.programs.sdf_pipeline.is_some() {
-            return;
-        }
-        let vertex_layout = vertex_layout();
-        let color_target = alpha_color_target(self.programs.format);
-        self.programs.sdf_pipeline = Some(create_pipeline(
-            &self.device,
-            &self.programs.shader,
-            &self.programs.texture_pipeline_layout,
-            &vertex_layout,
-            &color_target,
-            "fs_sdf",
-        ));
-        self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
-    }
-
-    fn ensure_effect_pipeline(&mut self) {
-        if self.programs.effect_pipeline.is_some() {
-            return;
-        }
-        let vertex_layout = vertex_layout();
-        let color_target = alpha_color_target(self.programs.format);
-        self.programs.effect_pipeline = Some(create_pipeline(
-            &self.device,
-            &self.programs.shader,
-            &self.programs.effect_pipeline_layout,
-            &vertex_layout,
-            &color_target,
-            "fs_backdrop",
-        ));
-        self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
-    }
-
-    fn ensure_scene3d_pipeline(&mut self, kind: Scene3dPipelineKind) {
-        let exists = match kind {
-            Scene3dPipelineKind::AlphaDepthRead => {
-                self.programs.scene3d_color_tri_depth_read_pipeline.is_some()
-            }
-            Scene3dPipelineKind::AlphaDepthWrite => {
-                self.programs.scene3d_color_tri_depth_write_pipeline.is_some()
-            }
-            Scene3dPipelineKind::AlphaNoDepth => self.programs.scene3d_color_tri_pipeline.is_some(),
-            Scene3dPipelineKind::AdditiveDepthRead => {
-                self.programs.scene3d_color_tri_add_depth_read_pipeline.is_some()
-            }
-            Scene3dPipelineKind::AdditiveDepthWrite => {
-                self.programs.scene3d_color_tri_add_depth_write_pipeline.is_some()
-            }
-            Scene3dPipelineKind::AdditiveNoDepth => {
-                self.programs.scene3d_color_tri_add_pipeline.is_some()
-            }
-        };
-        if exists {
-            return;
-        }
-
-        let (blend, depth_test, depth_write, label) = match kind {
-            Scene3dPipelineKind::AlphaDepthRead => (
-                Some(wgpu::BlendState::ALPHA_BLENDING),
-                true,
-                false,
-                "oxide-webgpu-scene3d-color-tri-depth-read",
-            ),
-            Scene3dPipelineKind::AlphaDepthWrite => (
-                Some(wgpu::BlendState::ALPHA_BLENDING),
-                true,
-                true,
-                "oxide-webgpu-scene3d-color-tri-depth-write",
-            ),
-            Scene3dPipelineKind::AlphaNoDepth => (
-                Some(wgpu::BlendState::ALPHA_BLENDING),
-                false,
-                false,
-                "oxide-webgpu-scene3d-color-tri",
-            ),
-            Scene3dPipelineKind::AdditiveDepthRead => (
-                Some(additive_blend_state()),
-                true,
-                false,
-                "oxide-webgpu-scene3d-color-tri-add-depth-read",
-            ),
-            Scene3dPipelineKind::AdditiveDepthWrite => (
-                Some(additive_blend_state()),
-                true,
-                true,
-                "oxide-webgpu-scene3d-color-tri-add-depth-write",
-            ),
-            Scene3dPipelineKind::AdditiveNoDepth => {
-                (Some(additive_blend_state()), false, false, "oxide-webgpu-scene3d-color-tri-add")
-            }
-        };
-        let vertex_layout = scene3d_color_vertex_layout();
-        let pipeline = create_scene3d_pipeline(
-            &self.device,
-            &self.programs.scene3d_shader,
-            &self.programs.scene3d_pipeline_layout,
-            &vertex_layout,
-            self.programs.format,
-            blend,
-            depth_test,
-            depth_write,
-            label,
-        );
-        match kind {
-            Scene3dPipelineKind::AlphaDepthRead => {
-                self.programs.scene3d_color_tri_depth_read_pipeline = Some(pipeline);
-            }
-            Scene3dPipelineKind::AlphaDepthWrite => {
-                self.programs.scene3d_color_tri_depth_write_pipeline = Some(pipeline);
-            }
-            Scene3dPipelineKind::AlphaNoDepth => {
-                self.programs.scene3d_color_tri_pipeline = Some(pipeline);
-            }
-            Scene3dPipelineKind::AdditiveDepthRead => {
-                self.programs.scene3d_color_tri_add_depth_read_pipeline = Some(pipeline);
-            }
-            Scene3dPipelineKind::AdditiveDepthWrite => {
-                self.programs.scene3d_color_tri_add_depth_write_pipeline = Some(pipeline);
-            }
-            Scene3dPipelineKind::AdditiveNoDepth => {
-                self.programs.scene3d_color_tri_add_pipeline = Some(pipeline);
-            }
-        }
-        self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
-    }
-
-    fn ensure_id_mask_raster_pipeline(&mut self) {
-        if self.programs.id_mask_raster_pipeline.is_some() {
-            return;
-        }
-        let vertex_layout = id_mask_raster_vertex_layout();
-        self.programs.id_mask_raster_pipeline = Some(create_id_mask_raster_pipeline(
-            &self.device,
-            &self.programs.id_mask_shader,
-            &self.programs.id_mask_raster_pipeline_layout,
-            &vertex_layout,
-        ));
-        self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
-    }
-
-    fn ensure_id_mask_field_pipelines(&mut self) {
-        if self.programs.id_mask_field_seed_pipeline.is_none() {
-            self.programs.id_mask_field_seed_pipeline = Some(create_id_mask_field_pipeline(
-                &self.device,
-                &self.programs.id_mask_field_shader,
-                &self.programs.id_mask_field_pipeline_layout,
-                "fs_id_mask_field_seed",
-                "oxide-webgpu-id-mask-field-seed",
-            ));
-            self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
-        }
-        if self.programs.id_mask_field_jump_pipeline.is_none() {
-            self.programs.id_mask_field_jump_pipeline = Some(create_id_mask_field_pipeline(
-                &self.device,
-                &self.programs.id_mask_field_shader,
-                &self.programs.id_mask_field_pipeline_layout,
-                "fs_id_mask_field_jump",
-                "oxide-webgpu-id-mask-field-jump",
-            ));
-            self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
-        }
-    }
-
-    fn ensure_id_mask_compositor_pipeline(&mut self) {
-        if self.programs.id_mask_compositor_pipeline.is_some() {
-            return;
-        }
-        self.programs.id_mask_compositor_pipeline = Some(create_id_mask_compositor_pipeline(
-            &self.device,
-            &self.programs.id_mask_shader,
-            &self.programs.id_mask_compositor_pipeline_layout,
-            self.programs.format,
-        ));
-        self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
-    }
-
-    fn ensure_draw_pipeline(&mut self, kind: DrawKind) {
-        match kind {
-            DrawKind::Solid => self.ensure_solid_pipeline(),
-            DrawKind::Rgba { .. } => self.ensure_rgba_pipeline(),
-            DrawKind::A8 { .. } => self.ensure_a8_pipeline(),
-            DrawKind::Sdf { .. } => self.ensure_sdf_pipeline(),
-            DrawKind::Backdrop { .. } => self.ensure_effect_pipeline(),
-        }
-    }
-
     fn solid_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.programs.solid_pipeline.as_ref().expect("solid pipeline initialized")
+        &self.programs.solid_pipeline
     }
 
     fn rgba_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.programs.rgba_pipeline.as_ref().expect("rgba pipeline initialized")
+        &self.programs.rgba_pipeline
     }
 
     fn a8_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.programs.a8_pipeline.as_ref().expect("a8 pipeline initialized")
+        &self.programs.a8_pipeline
     }
 
     fn sdf_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.programs.sdf_pipeline.as_ref().expect("sdf pipeline initialized")
+        &self.programs.sdf_pipeline
     }
 
     fn effect_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.programs.effect_pipeline.as_ref().expect("effect pipeline initialized")
+        &self.programs.effect_pipeline
     }
 
     fn scene3d_pipeline(&self, kind: Scene3dPipelineKind) -> &wgpu::RenderPipeline {
         match kind {
-            Scene3dPipelineKind::AlphaDepthRead => self
-                .programs
-                .scene3d_color_tri_depth_read_pipeline
-                .as_ref()
-                .expect("scene3d alpha depth-read pipeline initialized"),
-            Scene3dPipelineKind::AlphaDepthWrite => self
-                .programs
-                .scene3d_color_tri_depth_write_pipeline
-                .as_ref()
-                .expect("scene3d alpha depth-write pipeline initialized"),
-            Scene3dPipelineKind::AlphaNoDepth => self
-                .programs
-                .scene3d_color_tri_pipeline
-                .as_ref()
-                .expect("scene3d alpha no-depth pipeline initialized"),
-            Scene3dPipelineKind::AdditiveDepthRead => self
-                .programs
-                .scene3d_color_tri_add_depth_read_pipeline
-                .as_ref()
-                .expect("scene3d additive depth-read pipeline initialized"),
-            Scene3dPipelineKind::AdditiveDepthWrite => self
-                .programs
-                .scene3d_color_tri_add_depth_write_pipeline
-                .as_ref()
-                .expect("scene3d additive depth-write pipeline initialized"),
-            Scene3dPipelineKind::AdditiveNoDepth => self
-                .programs
-                .scene3d_color_tri_add_pipeline
-                .as_ref()
-                .expect("scene3d additive no-depth pipeline initialized"),
+            Scene3dPipelineKind::AlphaDepthRead => {
+                &self.programs.scene3d_color_tri_depth_read_pipeline
+            }
+            Scene3dPipelineKind::AlphaDepthWrite => {
+                &self.programs.scene3d_color_tri_depth_write_pipeline
+            }
+            Scene3dPipelineKind::AlphaNoDepth => &self.programs.scene3d_color_tri_pipeline,
+            Scene3dPipelineKind::AdditiveDepthRead => {
+                &self.programs.scene3d_color_tri_add_depth_read_pipeline
+            }
+            Scene3dPipelineKind::AdditiveDepthWrite => {
+                &self.programs.scene3d_color_tri_add_depth_write_pipeline
+            }
+            Scene3dPipelineKind::AdditiveNoDepth => &self.programs.scene3d_color_tri_add_pipeline,
         }
     }
 
     fn id_mask_raster_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.programs.id_mask_raster_pipeline.as_ref().expect("id-mask raster pipeline initialized")
+        &self.programs.id_mask_raster_pipeline
     }
 
     fn id_mask_field_seed_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.programs
-            .id_mask_field_seed_pipeline
-            .as_ref()
-            .expect("id-mask field seed pipeline initialized")
+        &self.programs.id_mask_field_seed_pipeline
     }
 
     fn id_mask_field_jump_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.programs
-            .id_mask_field_jump_pipeline
-            .as_ref()
-            .expect("id-mask field jump pipeline initialized")
+        &self.programs.id_mask_field_jump_pipeline
     }
 
     fn id_mask_compositor_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.programs
-            .id_mask_compositor_pipeline
-            .as_ref()
-            .expect("id-mask compositor pipeline initialized")
+        &self.programs.id_mask_compositor_pipeline
     }
 
     fn render_direct(
@@ -3010,10 +2735,6 @@ impl WebGpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         target_view: &wgpu::TextureView,
     ) {
-        for draw_index in 0..self.scene3d_draws.len() {
-            let draw = self.scene3d_draws[draw_index];
-            self.ensure_scene3d_pipeline(draw.pipeline);
-        }
         if self.scene3d_bind_group.is_none() {
             return;
         }
@@ -3079,10 +2800,6 @@ impl WebGpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         target_view: &wgpu::TextureView,
     ) {
-        for draw_index in 0..self.scene3d_overlay_draws.len() {
-            let draw = self.scene3d_overlay_draws[draw_index];
-            self.ensure_scene3d_pipeline(draw.pipeline);
-        }
         if self.scene3d_bind_group.is_none() {
             return;
         }
@@ -3166,9 +2883,6 @@ impl WebGpuRenderer {
             let compositor_uniform_len = self.id_mask_compositor_uniform_bytes.len();
 
             self.ensure_id_mask_resources(width, height, vertex_bytes_len, compositor_uniform_len);
-            self.ensure_id_mask_raster_pipeline();
-            self.ensure_id_mask_field_pipelines();
-            self.ensure_id_mask_compositor_pipeline();
             let Some(city_view) = self.id_mask_city_view.as_ref() else { continue };
             let Some(neighborhood_view) = self.id_mask_neighborhood_view.as_ref() else {
                 continue;
@@ -3465,9 +3179,6 @@ impl WebGpuRenderer {
         if start >= end {
             return;
         }
-        for draw_index in start..end {
-            self.ensure_draw_pipeline(self.frame.draws[draw_index].kind);
-        }
         if self.vertex_buffer.is_none() || self.index_buffer.is_none() {
             return;
         }
@@ -3602,7 +3313,6 @@ impl WebGpuRenderer {
         surface_view: &wgpu::TextureView,
     ) {
         self.ensure_present_buffers();
-        self.ensure_rgba_pipeline();
         self.stats.render_passes = self.stats.render_passes.saturating_add(1);
         self.stats.present_passes = self.stats.present_passes.saturating_add(1);
         let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Present);
@@ -3941,12 +3651,144 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
             push_constant_ranges: &[],
         });
 
-    GpuPrograms {
+    let draw_vertex_layout = vertex_layout();
+    let draw_color_target = alpha_color_target(format);
+    let solid_pipeline = create_pipeline(
+        device,
+        &shader,
+        &solid_pipeline_layout,
+        &draw_vertex_layout,
+        &draw_color_target,
+        "fs_solid",
+    );
+    let rgba_pipeline = create_pipeline(
+        device,
+        &shader,
+        &texture_pipeline_layout,
+        &draw_vertex_layout,
+        &draw_color_target,
+        "fs_rgba",
+    );
+    let a8_pipeline = create_pipeline(
+        device,
+        &shader,
+        &texture_pipeline_layout,
+        &draw_vertex_layout,
+        &draw_color_target,
+        "fs_a8",
+    );
+    let sdf_pipeline = create_pipeline(
+        device,
+        &shader,
+        &texture_pipeline_layout,
+        &draw_vertex_layout,
+        &draw_color_target,
+        "fs_sdf",
+    );
+    let effect_pipeline = create_pipeline(
+        device,
+        &shader,
+        &effect_pipeline_layout,
+        &draw_vertex_layout,
+        &draw_color_target,
+        "fs_backdrop",
+    );
+    let scene3d_vertex_layout = scene3d_color_vertex_layout();
+    let scene3d_color_tri_depth_read_pipeline = create_scene3d_pipeline(
+        device,
+        &scene3d_shader,
+        &scene3d_pipeline_layout,
+        &scene3d_vertex_layout,
         format,
-        shader,
-        scene3d_shader,
-        id_mask_shader,
-        id_mask_field_shader,
+        Some(wgpu::BlendState::ALPHA_BLENDING),
+        true,
+        false,
+        "oxide-webgpu-scene3d-color-tri-depth-read",
+    );
+    let scene3d_color_tri_depth_write_pipeline = create_scene3d_pipeline(
+        device,
+        &scene3d_shader,
+        &scene3d_pipeline_layout,
+        &scene3d_vertex_layout,
+        format,
+        Some(wgpu::BlendState::ALPHA_BLENDING),
+        true,
+        true,
+        "oxide-webgpu-scene3d-color-tri-depth-write",
+    );
+    let scene3d_color_tri_pipeline = create_scene3d_pipeline(
+        device,
+        &scene3d_shader,
+        &scene3d_pipeline_layout,
+        &scene3d_vertex_layout,
+        format,
+        Some(wgpu::BlendState::ALPHA_BLENDING),
+        false,
+        false,
+        "oxide-webgpu-scene3d-color-tri",
+    );
+    let scene3d_color_tri_add_depth_read_pipeline = create_scene3d_pipeline(
+        device,
+        &scene3d_shader,
+        &scene3d_pipeline_layout,
+        &scene3d_vertex_layout,
+        format,
+        Some(additive_blend_state()),
+        true,
+        false,
+        "oxide-webgpu-scene3d-color-tri-add-depth-read",
+    );
+    let scene3d_color_tri_add_depth_write_pipeline = create_scene3d_pipeline(
+        device,
+        &scene3d_shader,
+        &scene3d_pipeline_layout,
+        &scene3d_vertex_layout,
+        format,
+        Some(additive_blend_state()),
+        true,
+        true,
+        "oxide-webgpu-scene3d-color-tri-add-depth-write",
+    );
+    let scene3d_color_tri_add_pipeline = create_scene3d_pipeline(
+        device,
+        &scene3d_shader,
+        &scene3d_pipeline_layout,
+        &scene3d_vertex_layout,
+        format,
+        Some(additive_blend_state()),
+        false,
+        false,
+        "oxide-webgpu-scene3d-color-tri-add",
+    );
+    let id_mask_vertex_layout = id_mask_raster_vertex_layout();
+    let id_mask_raster_pipeline = create_id_mask_raster_pipeline(
+        device,
+        &id_mask_shader,
+        &id_mask_raster_pipeline_layout,
+        &id_mask_vertex_layout,
+    );
+    let id_mask_field_seed_pipeline = create_id_mask_field_pipeline(
+        device,
+        &id_mask_field_shader,
+        &id_mask_field_pipeline_layout,
+        "fs_id_mask_field_seed",
+        "oxide-webgpu-id-mask-field-seed",
+    );
+    let id_mask_field_jump_pipeline = create_id_mask_field_pipeline(
+        device,
+        &id_mask_field_shader,
+        &id_mask_field_pipeline_layout,
+        "fs_id_mask_field_jump",
+        "oxide-webgpu-id-mask-field-jump",
+    );
+    let id_mask_compositor_pipeline = create_id_mask_compositor_pipeline(
+        device,
+        &id_mask_shader,
+        &id_mask_compositor_pipeline_layout,
+        format,
+    );
+
+    GpuPrograms {
         viewport_layout,
         texture_layout,
         effect_layout,
@@ -3954,28 +3796,21 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
         id_mask_raster_layout,
         id_mask_field_layout,
         id_mask_compositor_layout,
-        solid_pipeline_layout,
-        texture_pipeline_layout,
-        effect_pipeline_layout,
-        scene3d_pipeline_layout,
-        id_mask_raster_pipeline_layout,
-        id_mask_field_pipeline_layout,
-        id_mask_compositor_pipeline_layout,
-        solid_pipeline: None,
-        rgba_pipeline: None,
-        a8_pipeline: None,
-        sdf_pipeline: None,
-        effect_pipeline: None,
-        scene3d_color_tri_depth_read_pipeline: None,
-        scene3d_color_tri_depth_write_pipeline: None,
-        scene3d_color_tri_pipeline: None,
-        scene3d_color_tri_add_depth_read_pipeline: None,
-        scene3d_color_tri_add_depth_write_pipeline: None,
-        scene3d_color_tri_add_pipeline: None,
-        id_mask_raster_pipeline: None,
-        id_mask_field_seed_pipeline: None,
-        id_mask_field_jump_pipeline: None,
-        id_mask_compositor_pipeline: None,
+        solid_pipeline,
+        rgba_pipeline,
+        a8_pipeline,
+        sdf_pipeline,
+        effect_pipeline,
+        scene3d_color_tri_depth_read_pipeline,
+        scene3d_color_tri_depth_write_pipeline,
+        scene3d_color_tri_pipeline,
+        scene3d_color_tri_add_depth_read_pipeline,
+        scene3d_color_tri_add_depth_write_pipeline,
+        scene3d_color_tri_add_pipeline,
+        id_mask_raster_pipeline,
+        id_mask_field_seed_pipeline,
+        id_mask_field_jump_pipeline,
+        id_mask_compositor_pipeline,
         sampler,
     }
 }

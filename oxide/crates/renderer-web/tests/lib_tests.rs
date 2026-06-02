@@ -219,7 +219,7 @@ fn wasm_webgpu_effect_path_avoids_redundant_hot_work() {
         .split("fn frame_uses_backdrop")
         .nth(1)
         .expect("frame_uses_backdrop")
-        .split("fn ensure_solid_pipeline")
+        .split("fn backdrop_sample_rect")
         .next()
         .expect("frame_uses_backdrop end");
     let prepare_effect_uniforms = source
@@ -415,7 +415,7 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(source.contains("self.stats.buffer_grows"));
     assert!(source.contains("self.stats.texture_creates"));
     assert!(source.contains("self.stats.bind_group_creates"));
-    assert!(source.contains("self.stats.pipeline_creates"));
+    assert!(!source.contains("self.stats.pipeline_creates"));
     assert!(source.contains("draw_state_cache_enabled: bool"));
     assert!(source.contains("image_upload_scratch: Vec<u8>"));
     assert!(source.contains("image_upload_scratch_enabled: bool"));
@@ -527,4 +527,69 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(host.contains("{key_prefix}cpu_scratch_grows={}"));
     assert!(host.contains("{key_prefix}cpu_scratch_growth_bytes={}"));
     assert!(host.contains("{key_prefix}buffer_upload_bytes={}"));
+}
+
+#[test]
+fn wasm_webgpu_static_pipelines_are_created_before_frame_encoding() {
+    let source = include_str!("../src/wasm/webgpu.rs");
+    let programs = source
+        .split("struct GpuPrograms")
+        .nth(1)
+        .expect("gpu programs struct")
+        .split("fn image_for_update")
+        .next()
+        .expect("gpu programs struct end");
+    let create_programs = source
+        .split("fn create_programs")
+        .nth(1)
+        .expect("create_programs")
+        .split("fn alpha_color_target")
+        .next()
+        .expect("create_programs end");
+
+    assert!(!source.contains("Option<wgpu::RenderPipeline>"));
+    assert!(!source.contains("fn ensure_solid_pipeline"));
+    assert!(!source.contains("fn ensure_rgba_pipeline"));
+    assert!(!source.contains("fn ensure_scene3d_pipeline"));
+    assert!(!source.contains("fn ensure_id_mask_raster_pipeline"));
+    assert!(!source.contains("fn ensure_draw_pipeline"));
+    assert!(!source.contains("self.stats.pipeline_creates"));
+    for field in [
+        "solid_pipeline: wgpu::RenderPipeline",
+        "rgba_pipeline: wgpu::RenderPipeline",
+        "a8_pipeline: wgpu::RenderPipeline",
+        "sdf_pipeline: wgpu::RenderPipeline",
+        "effect_pipeline: wgpu::RenderPipeline",
+        "scene3d_color_tri_depth_read_pipeline: wgpu::RenderPipeline",
+        "scene3d_color_tri_depth_write_pipeline: wgpu::RenderPipeline",
+        "scene3d_color_tri_pipeline: wgpu::RenderPipeline",
+        "scene3d_color_tri_add_depth_read_pipeline: wgpu::RenderPipeline",
+        "scene3d_color_tri_add_depth_write_pipeline: wgpu::RenderPipeline",
+        "scene3d_color_tri_add_pipeline: wgpu::RenderPipeline",
+        "id_mask_raster_pipeline: wgpu::RenderPipeline",
+        "id_mask_field_seed_pipeline: wgpu::RenderPipeline",
+        "id_mask_field_jump_pipeline: wgpu::RenderPipeline",
+        "id_mask_compositor_pipeline: wgpu::RenderPipeline",
+    ] {
+        assert!(programs.contains(field), "missing eager pipeline field {field}");
+    }
+    for local in [
+        "let solid_pipeline = create_pipeline(",
+        "let rgba_pipeline = create_pipeline(",
+        "let a8_pipeline = create_pipeline(",
+        "let sdf_pipeline = create_pipeline(",
+        "let effect_pipeline = create_pipeline(",
+        "let scene3d_color_tri_depth_read_pipeline = create_scene3d_pipeline(",
+        "let scene3d_color_tri_depth_write_pipeline = create_scene3d_pipeline(",
+        "let scene3d_color_tri_pipeline = create_scene3d_pipeline(",
+        "let scene3d_color_tri_add_depth_read_pipeline = create_scene3d_pipeline(",
+        "let scene3d_color_tri_add_depth_write_pipeline = create_scene3d_pipeline(",
+        "let scene3d_color_tri_add_pipeline = create_scene3d_pipeline(",
+        "let id_mask_raster_pipeline = create_id_mask_raster_pipeline(",
+        "let id_mask_field_seed_pipeline = create_id_mask_field_pipeline(",
+        "let id_mask_field_jump_pipeline = create_id_mask_field_pipeline(",
+        "let id_mask_compositor_pipeline = create_id_mask_compositor_pipeline(",
+    ] {
+        assert!(create_programs.contains(local), "missing eager pipeline creation {local}");
+    }
 }
