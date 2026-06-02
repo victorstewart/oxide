@@ -60,10 +60,18 @@ mod wasm_host {
     const WEBGPU_UPLOAD_IMAGE_SIZE: u32 = 256;
     const WEBGPU_UPLOAD_SCRATCH_UPDATES: u32 = 24;
     const WEBGPU_MIXED_GLYPHS: usize = 96;
+    const WEBGPU_MIXED_IMAGE_TILES: usize = 96;
+    const WEBGPU_MIXED_IMAGE_COLUMNS: usize = 12;
     const WEBGPU_LAYER_EFFECT_GLYPHS: usize = 72;
+    const WEBGPU_LAYER_EFFECT_IMAGE_TILES: usize = 64;
+    const WEBGPU_LAYER_EFFECT_IMAGE_COLUMNS: usize = 8;
+    const WEBGPU_LAYER_EFFECT_BACKDROPS: usize = 4;
     const WEBGPU_EFFECT_UNIFORM_BACKDROPS: usize = 48;
     const WEBGPU_BACKDROP_BATCH_BACKDROPS: usize = 12;
     const WEBGPU_COMMAND_FAMILY_SDF_GLYPHS: usize = 36;
+    const WEBGPU_COMMAND_FAMILY_SDF_RUNS: usize = 8;
+    const WEBGPU_COMMAND_FAMILY_REPEATS: usize = 64;
+    const WEBGPU_COMMAND_FAMILY_COLUMNS: usize = 8;
     const WEBGPU_DRAW_STATE_CACHE_DRAWS: usize = 1024;
     const WEBGPU_DRAW_STATE_CACHE_COLUMNS: usize = 32;
     const WEBGPU_CLIP_STATE_DRAWS: usize = 512;
@@ -661,16 +669,43 @@ mod wasm_host {
             let sample_count = samples.clamp(1, 30);
             let frames = frames_per_sample.clamp(1, 120);
             let renderer = self.ensure_upload_bench_resources()?;
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_effect_uniform_batch_enabled_for_benchmark(true);
+                renderer.set_backdrop_batch_enabled_for_benchmark(true);
+            }
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
-            let mut mixed = self.with_upload_bench_resources(|renderer, resources| {
+            let mut current = self.with_upload_bench_resources(|renderer, resources| {
                 bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
                     resources.mixed_frame(renderer)
                 })
             })?;
-            mixed.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(false);
+                renderer.set_effect_uniform_batch_enabled_for_benchmark(false);
+                renderer.set_backdrop_batch_enabled_for_benchmark(false);
+            }
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut legacy = self.with_upload_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    resources.mixed_frame(renderer)
+                })
+            })?;
+            legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_effect_uniform_batch_enabled_for_benchmark(true);
+                renderer.set_backdrop_batch_enabled_for_benchmark(true);
+            }
+            let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames}{};glyphs={};image_width={};image_height={}",
-                sampled_case_metrics(&mixed, "mixed"),
+                "samples={sample_count};frames_per_sample={frames}{}{};legacy_over_current={ratio:.3};glyphs={};image_tiles={WEBGPU_MIXED_IMAGE_TILES};image_width={};image_height={}",
+                sampled_case_metrics(&current, "current"),
+                sampled_case_metrics(&legacy, "legacy"),
                 WEBGPU_MIXED_GLYPHS,
                 WEBGPU_UPLOAD_IMAGE_SIZE,
                 WEBGPU_UPLOAD_IMAGE_SIZE,
@@ -685,16 +720,43 @@ mod wasm_host {
             let sample_count = samples.clamp(1, 30);
             let frames = frames_per_sample.clamp(1, 120);
             let renderer = self.ensure_upload_bench_resources()?;
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_effect_uniform_batch_enabled_for_benchmark(true);
+                renderer.set_backdrop_batch_enabled_for_benchmark(true);
+            }
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
-            let mut layer_effects = self.with_upload_bench_resources(|renderer, resources| {
+            let mut current = self.with_upload_bench_resources(|renderer, resources| {
                 bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
                     resources.layer_effects_frame(renderer)
                 })
             })?;
-            layer_effects.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(false);
+                renderer.set_effect_uniform_batch_enabled_for_benchmark(false);
+                renderer.set_backdrop_batch_enabled_for_benchmark(false);
+            }
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut legacy = self.with_upload_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    resources.layer_effects_frame(renderer)
+                })
+            })?;
+            legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_effect_uniform_batch_enabled_for_benchmark(true);
+                renderer.set_backdrop_batch_enabled_for_benchmark(true);
+            }
+            let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames}{};glyphs={};image_width={};image_height={};expected_layers=3;expected_damage_rects=3",
-                sampled_case_metrics(&layer_effects, "layer_effects"),
+                "samples={sample_count};frames_per_sample={frames}{}{};legacy_over_current={ratio:.3};glyphs={};image_tiles={WEBGPU_LAYER_EFFECT_IMAGE_TILES};image_width={};image_height={};expected_layers=3;expected_damage_rects=3;expected_backdrops={WEBGPU_LAYER_EFFECT_BACKDROPS}",
+                sampled_case_metrics(&current, "current"),
+                sampled_case_metrics(&legacy, "legacy"),
                 WEBGPU_LAYER_EFFECT_GLYPHS,
                 WEBGPU_UPLOAD_IMAGE_SIZE,
                 WEBGPU_UPLOAD_IMAGE_SIZE,
@@ -709,18 +771,38 @@ mod wasm_host {
             let sample_count = samples.clamp(1, 30);
             let frames = frames_per_sample.clamp(1, 120);
             let renderer = self.ensure_upload_bench_resources()?;
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(true);
+            }
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
-            let mut command_family = self.with_upload_bench_resources(|renderer, resources| {
+            let mut current = self.with_upload_bench_resources(|renderer, resources| {
                 bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
                     resources.command_family_frame(renderer)
                 })
             })?;
-            command_family.stats =
-                settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(false);
+            }
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut legacy = self.with_upload_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    resources.command_family_frame(renderer)
+                })
+            })?;
+            legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(true);
+            }
+            let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames}{};expected_image_meshes=1;expected_nine_slices=1;expected_sdf_glyphs={};expected_camera_bg=0;image_width={};image_height={}",
-                sampled_case_metrics(&command_family, "command_family"),
-                WEBGPU_COMMAND_FAMILY_SDF_GLYPHS,
+                "samples={sample_count};frames_per_sample={frames}{}{};legacy_over_current={ratio:.3};expected_image_meshes={WEBGPU_COMMAND_FAMILY_REPEATS};expected_nine_slices={WEBGPU_COMMAND_FAMILY_REPEATS};expected_sdf_glyphs={};expected_sdf_runs={WEBGPU_COMMAND_FAMILY_SDF_RUNS};expected_camera_bg=0;image_width={};image_height={}",
+                sampled_case_metrics(&current, "current"),
+                sampled_case_metrics(&legacy, "legacy"),
+                WEBGPU_COMMAND_FAMILY_SDF_GLYPHS.saturating_mul(WEBGPU_COMMAND_FAMILY_SDF_RUNS),
                 WEBGPU_UPLOAD_IMAGE_SIZE,
                 WEBGPU_UPLOAD_IMAGE_SIZE,
             ))
@@ -1336,6 +1418,23 @@ mod wasm_host {
                 [14.0; 4],
                 gfx::Color::rgba(0.10, 0.42, 0.90, 0.90),
             );
+            for index in 0..WEBGPU_MIXED_IMAGE_TILES {
+                let col = index % WEBGPU_MIXED_IMAGE_COLUMNS;
+                let row = index / WEBGPU_MIXED_IMAGE_COLUMNS;
+                let x = 18.0 + col as f32 * 18.0;
+                let y = 88.0 + row as f32 * 9.0;
+                self.builder.image(
+                    self.image,
+                    gfx::RectF::new(x, y, 14.0, 7.0),
+                    gfx::RectF::new(
+                        0.0,
+                        0.0,
+                        WEBGPU_UPLOAD_IMAGE_SIZE as f32,
+                        WEBGPU_UPLOAD_IMAGE_SIZE as f32,
+                    ),
+                    0.38,
+                );
+            }
             let _ = append_glyph_grid(
                 &mut self.builder,
                 self.glyph_atlas,
@@ -1397,6 +1496,23 @@ mod wasm_host {
                 ),
                 0.86,
             );
+            for index in 0..WEBGPU_LAYER_EFFECT_IMAGE_TILES {
+                let col = index % WEBGPU_LAYER_EFFECT_IMAGE_COLUMNS;
+                let row = index / WEBGPU_LAYER_EFFECT_IMAGE_COLUMNS;
+                let x = 18.0 + col as f32 * 18.0;
+                let y = 118.0 + row as f32 * 7.0;
+                self.builder.image(
+                    self.image,
+                    gfx::RectF::new(x, y, 14.0, 5.0),
+                    gfx::RectF::new(
+                        0.0,
+                        0.0,
+                        WEBGPU_UPLOAD_IMAGE_SIZE as f32,
+                        WEBGPU_UPLOAD_IMAGE_SIZE as f32,
+                    ),
+                    0.30,
+                );
+            }
             self.builder.layer_begin(202, gfx::RectF::new(118.0, 18.0, 112.0, 120.0), true);
             self.builder.rrect(
                 gfx::RectF::new(118.0, 18.0, 112.0, 120.0),
@@ -1415,12 +1531,15 @@ mod wasm_host {
             ) {
                 return Err(JsValue::from_str("failed to build layer effects glyph draw list"));
             }
-            self.builder.backdrop(
-                gfx::RectF::new(44.0, 92.0, 168.0, 76.0),
-                16.0,
-                gfx::Color::rgba(0.03, 0.05, 0.08, 0.40),
-                1.0,
-            );
+            for index in 0..WEBGPU_LAYER_EFFECT_BACKDROPS {
+                let x = 26.0 + index as f32 * 54.0;
+                self.builder.backdrop(
+                    gfx::RectF::new(x, 92.0, 24.0, 24.0),
+                    3.0,
+                    gfx::Color::rgba(0.03, 0.05, 0.08, 0.40),
+                    1.0,
+                );
+            }
             self.builder.visual_effect(
                 gfx::RectF::new(74.0, 124.0, 128.0, 74.0),
                 gfx::VisualEffect::DarkPopup {
@@ -1452,31 +1571,39 @@ mod wasm_host {
                 [18.0; 4],
                 gfx::Color::rgba(0.04, 0.05, 0.07, 0.48),
             );
-            let mesh_vertices = [
-                gfx::Vertex { x: 24.0, y: 28.0, u: 0.0, v: 0.0, rgba: u32::MAX },
-                gfx::Vertex { x: 130.0, y: 20.0, u: 1.0, v: 0.0, rgba: u32::MAX },
-                gfx::Vertex { x: 18.0, y: 124.0, u: 0.0, v: 1.0, rgba: u32::MAX },
-                gfx::Vertex { x: 138.0, y: 132.0, u: 1.0, v: 1.0, rgba: u32::MAX },
-            ];
             let mesh_indices = [0_u16, 1, 2, 2, 1, 3];
-            self.builder.image_mesh(self.image, &mesh_vertices, &mesh_indices, 0.88);
-            self.builder.nine_slice(
-                self.image,
-                gfx::RectF::new(40.0, 150.0, 176.0, 72.0),
-                gfx::Insets::new(28.0, 28.0, 28.0, 28.0),
-                0.90,
-            );
-            if !append_glyph_grid(
-                &mut self.builder,
-                self.glyph_atlas,
-                WEBGPU_COMMAND_FAMILY_SDF_GLYPHS,
-                150.0,
-                30.0,
-                10.0,
-                true,
-                gfx::Color::rgba(0.90, 0.96, 1.0, 0.92),
-            ) {
-                return Err(JsValue::from_str("failed to build command family SDF glyph draw list"));
+            for index in 0..WEBGPU_COMMAND_FAMILY_REPEATS {
+                let col = index % WEBGPU_COMMAND_FAMILY_COLUMNS;
+                let row = index / WEBGPU_COMMAND_FAMILY_COLUMNS;
+                let x = 18.0 + col as f32 * 30.0;
+                let y = 24.0 + row as f32 * 22.0;
+                let mesh_vertices = [
+                    gfx::Vertex { x, y, u: 0.0, v: 0.0, rgba: u32::MAX },
+                    gfx::Vertex { x: x + 13.0, y: y + 1.0, u: 1.0, v: 0.0, rgba: u32::MAX },
+                    gfx::Vertex { x: x + 1.0, y: y + 10.0, u: 0.0, v: 1.0, rgba: u32::MAX },
+                    gfx::Vertex { x: x + 14.0, y: y + 11.0, u: 1.0, v: 1.0, rgba: u32::MAX },
+                ];
+                self.builder.image_mesh(self.image, &mesh_vertices, &mesh_indices, 0.72);
+                self.builder.nine_slice(
+                    self.image,
+                    gfx::RectF::new(x + 15.0, y, 12.0, 12.0),
+                    gfx::Insets::new(4.0, 4.0, 4.0, 4.0),
+                    0.60,
+                );
+            }
+            for run in 0..WEBGPU_COMMAND_FAMILY_SDF_RUNS {
+                if !append_glyph_grid(
+                    &mut self.builder,
+                    self.glyph_atlas,
+                    WEBGPU_COMMAND_FAMILY_SDF_GLYPHS,
+                    18.0 + run as f32 * 28.0,
+                    204.0,
+                    2.0,
+                    true,
+                    gfx::Color::rgba(0.90, 0.96, 1.0, 0.92),
+                ) {
+                    return Err(JsValue::from_str("failed to build command family SDF glyph draw list"));
+                }
             }
             renderer.encode_pass(self.builder.drawlist());
             renderer.submit(token).map_err(render_err)

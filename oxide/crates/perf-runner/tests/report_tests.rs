@@ -1114,8 +1114,11 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "web.wasm.webgpu.scene3d.stress_reused_mesh",
         "web.wasm.webgpu.scene3d.stress_recreate_mesh",
         "web.wasm.webgpu.mixed_text_image_effects",
+        "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched",
         "web.wasm.webgpu.layer_damage_effects",
+        "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched",
         "web.wasm.webgpu.command_family_matrix",
+        "web.wasm.webgpu.command_family_matrix.legacy_rebind",
         "web.wasm.webgpu.draw_state_cache.current",
         "web.wasm.webgpu.draw_state_cache.legacy_rebind",
         "web.wasm.webgpu.clip_state_cache.current",
@@ -1136,7 +1139,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         Some("web.wasm.webgpu.warm_resource_churn.current_rows"),
     );
     assert_eq!(web_report_number(warm_resource_churn, "checked_rows"), 14.0);
-    assert_eq!(web_report_number(warm_resource_churn, "excluded_rows"), 10.0);
+    assert_eq!(web_report_number(warm_resource_churn, "excluded_rows"), 13.0);
     let warm_rows: Vec<&str> = warm_resource_churn["rows"]
         .as_array()
         .expect("warm resource churn rows")
@@ -1186,6 +1189,9 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "web.wasm.webgpu.backdrop_batch.legacy_per_backdrop_copy",
         "web.wasm.webgpu.scene3d.recreate_mesh",
         "web.wasm.webgpu.scene3d.stress_recreate_mesh",
+        "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched",
+        "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched",
+        "web.wasm.webgpu.command_family_matrix.legacy_rebind",
         "web.wasm.webgpu.draw_state_cache.legacy_rebind",
         "web.wasm.webgpu.clip_state_cache.legacy_rebind",
     ] {
@@ -1278,18 +1284,18 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         ),
         (
             "mixed_text_image_effects",
-            &["web.wasm.webgpu.mixed_text_image_effects"],
-            &["glyph_quads", "image_draws", "backdrop_draws", "visual_effect_draws", "spinner_draws", "layer_draws", "damage_rects", "texture_copies", "gpu_timestamp_passes"],
+            &["web.wasm.webgpu.mixed_text_image_effects", "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched"],
+            &["glyph_quads", "image_draws", "image_tiles", "backdrop_draws", "visual_effect_draws", "spinner_draws", "layer_draws", "damage_rects", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "effect_uniform_writes", "texture_copies", "render_passes", "gpu_timestamp_passes"],
         ),
         (
             "layer_damage_effects",
-            &["web.wasm.webgpu.layer_damage_effects"],
-            &["layer_draws", "damage_rects", "backdrop_draws", "visual_effect_draws", "texture_copies", "render_passes", "gpu_timestamp_passes"],
+            &["web.wasm.webgpu.layer_damage_effects", "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched"],
+            &["glyph_quads", "image_draws", "image_tiles", "layer_draws", "damage_rects", "clip_depth_peak", "backdrop_draws", "visual_effect_draws", "spinner_draws", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "effect_uniform_writes", "texture_copies", "render_passes", "gpu_timestamp_passes"],
         ),
         (
             "command_family_matrix",
-            &["web.wasm.webgpu.command_family_matrix"],
-            &["image_mesh_draws", "nine_slice_draws", "sdf_glyph_quads", "camera_bg_draws", "expected_camera_bg", "gpu_timestamp_passes"],
+            &["web.wasm.webgpu.command_family_matrix", "web.wasm.webgpu.command_family_matrix.legacy_rebind"],
+            &["image_mesh_draws", "nine_slice_draws", "sdf_glyph_quads", "camera_bg_draws", "expected_camera_bg", "draw_items", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
         ),
         (
             "draw_state_cache",
@@ -1375,8 +1381,14 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     let scene3d_stress_recreate =
         web_report_case(&report, "web.wasm.webgpu.scene3d.stress_recreate_mesh");
     let mixed = web_report_case(&report, "web.wasm.webgpu.mixed_text_image_effects");
+    let mixed_legacy =
+        web_report_case(&report, "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched");
     let layer_effects = web_report_case(&report, "web.wasm.webgpu.layer_damage_effects");
+    let layer_effects_legacy =
+        web_report_case(&report, "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched");
     let command_family = web_report_case(&report, "web.wasm.webgpu.command_family_matrix");
+    let command_family_legacy =
+        web_report_case(&report, "web.wasm.webgpu.command_family_matrix.legacy_rebind");
     let draw_state_current = web_report_case(&report, "web.wasm.webgpu.draw_state_cache.current");
     let draw_state_legacy =
         web_report_case(&report, "web.wasm.webgpu.draw_state_cache.legacy_rebind");
@@ -1401,8 +1413,11 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         scene3d_reused,
         scene3d_stress_reused,
         mixed,
+        mixed_legacy,
         layer_effects,
+        layer_effects_legacy,
         command_family,
+        command_family_legacy,
         draw_state_current,
         draw_state_legacy,
         clip_state_current,
@@ -1551,48 +1566,301 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     assert!(web_report_number(scene3d_stress_reused, "scene3d_draws") >= 64.0);
     assert!(web_report_number(scene3d_stress_recreate, "scene3d_draws") >= 64.0);
     assert!(web_report_number(mixed, "backdrop_draws") > 0.0);
+    assert!(web_report_number(mixed_legacy, "backdrop_draws") > 0.0);
     assert!(web_report_number(mixed, "visual_effect_draws") > 0.0);
+    assert!(web_report_number(mixed_legacy, "visual_effect_draws") > 0.0);
     assert!(web_report_number(mixed, "layer_draws") > 0.0);
+    assert!(web_report_number(mixed_legacy, "layer_draws") > 0.0);
     assert!(web_report_number(mixed, "clip_depth_peak") > 0.0);
+    assert!(web_report_number(mixed_legacy, "clip_depth_peak") > 0.0);
     assert!(web_report_number(mixed, "damage_rects") > 0.0);
+    assert!(web_report_number(mixed_legacy, "damage_rects") > 0.0);
     assert!(web_report_number(mixed, "texture_copies") > 0.0);
+    assert_eq!(
+        web_report_number(mixed, "draw_items"),
+        web_report_number(mixed_legacy, "draw_items"),
+    );
+    assert_eq!(
+        web_report_number(mixed, "glyph_quads"),
+        web_report_number(mixed_legacy, "glyph_quads"),
+    );
+    assert_eq!(
+        web_report_number(mixed, "image_draws"),
+        web_report_number(mixed_legacy, "image_draws"),
+    );
+    assert!(
+        web_report_number(mixed, "image_draws") >= web_report_number(mixed, "image_tiles")
+    );
+    assert!(
+        web_report_number(mixed_legacy, "image_draws")
+            >= web_report_number(mixed_legacy, "image_tiles")
+    );
+    assert_eq!(
+        web_report_number(mixed, "backdrop_draws"),
+        web_report_number(mixed_legacy, "backdrop_draws"),
+    );
+    assert_eq!(
+        web_report_number(mixed, "visual_effect_draws"),
+        web_report_number(mixed_legacy, "visual_effect_draws"),
+    );
+    assert_eq!(
+        web_report_number(mixed, "layer_draws"),
+        web_report_number(mixed_legacy, "layer_draws"),
+    );
+    assert_eq!(
+        web_report_number(mixed, "damage_rects"),
+        web_report_number(mixed_legacy, "damage_rects"),
+    );
+    assert!(
+        web_report_number(mixed, "draw_pipeline_binds")
+            < web_report_number(mixed_legacy, "draw_pipeline_binds")
+    );
+    assert!(
+        web_report_number(mixed, "draw_bind_group_binds")
+            <= web_report_number(mixed_legacy, "draw_bind_group_binds")
+    );
+    assert!(
+        web_report_number(mixed, "draw_scissor_sets")
+            < web_report_number(mixed_legacy, "draw_scissor_sets")
+    );
+    assert!(
+        web_report_number(mixed, "effect_uniform_writes")
+            < web_report_number(mixed_legacy, "effect_uniform_writes")
+    );
+    assert!(
+        web_report_number(mixed, "texture_copies")
+            <= web_report_number(mixed_legacy, "texture_copies")
+    );
+    assert!(
+        web_report_number(mixed, "render_passes")
+            <= web_report_number(mixed_legacy, "render_passes")
+    );
+    assert_eq!(
+        web_report_number(mixed, "gpu_timestamp_passes"),
+        web_report_number(mixed, "render_passes"),
+    );
+    assert_eq!(
+        web_report_number(mixed_legacy, "gpu_timestamp_passes"),
+        web_report_number(mixed_legacy, "render_passes"),
+    );
+    assert_eq!(
+        web_report_number(&report["mixed_summary"], "current_p50_ms"),
+        web_report_number(mixed, "p50_ms"),
+    );
+    assert_eq!(
+        web_report_number(&report["mixed_summary"], "legacy_p50_ms"),
+        web_report_number(mixed_legacy, "p50_ms"),
+    );
+    assert_eq!(
+        web_report_number(&report["mixed_summary"], "current_draw_pipeline_binds"),
+        web_report_number(mixed, "draw_pipeline_binds"),
+    );
+    assert_eq!(
+        web_report_number(&report["mixed_summary"], "legacy_draw_pipeline_binds"),
+        web_report_number(mixed_legacy, "draw_pipeline_binds"),
+    );
     assert!(web_report_number(layer_effects, "image_draws") > 0.0);
+    assert!(web_report_number(layer_effects_legacy, "image_draws") > 0.0);
     assert!(web_report_number(layer_effects, "glyph_quads") > 0.0);
+    assert!(web_report_number(layer_effects_legacy, "glyph_quads") > 0.0);
     assert!(
         web_report_number(layer_effects, "layer_draws")
             >= web_report_number(layer_effects, "expected_layers")
     );
     assert!(
+        web_report_number(layer_effects_legacy, "layer_draws")
+            >= web_report_number(layer_effects_legacy, "expected_layers")
+    );
+    assert!(
         web_report_number(layer_effects, "damage_rects")
             >= web_report_number(layer_effects, "expected_damage_rects")
     );
+    assert!(
+        web_report_number(layer_effects_legacy, "damage_rects")
+            >= web_report_number(layer_effects_legacy, "expected_damage_rects")
+    );
     assert!(web_report_number(layer_effects, "clip_depth_peak") > 0.0);
+    assert!(web_report_number(layer_effects_legacy, "clip_depth_peak") > 0.0);
     assert!(web_report_number(layer_effects, "backdrop_draws") > 0.0);
+    assert!(web_report_number(layer_effects_legacy, "backdrop_draws") > 0.0);
     assert!(web_report_number(layer_effects, "visual_effect_draws") > 0.0);
+    assert!(web_report_number(layer_effects_legacy, "visual_effect_draws") > 0.0);
     assert!(web_report_number(layer_effects, "spinner_draws") > 0.0);
+    assert!(web_report_number(layer_effects_legacy, "spinner_draws") > 0.0);
     assert!(web_report_number(layer_effects, "texture_copies") > 0.0);
+    assert!(web_report_number(layer_effects_legacy, "texture_copies") > 0.0);
+    assert_eq!(
+        web_report_number(layer_effects, "draw_items"),
+        web_report_number(layer_effects_legacy, "draw_items"),
+    );
+    assert_eq!(
+        web_report_number(layer_effects, "glyph_quads"),
+        web_report_number(layer_effects_legacy, "glyph_quads"),
+    );
+    assert_eq!(
+        web_report_number(layer_effects, "image_draws"),
+        web_report_number(layer_effects_legacy, "image_draws"),
+    );
+    assert!(
+        web_report_number(layer_effects, "image_draws")
+            >= web_report_number(layer_effects, "image_tiles")
+    );
+    assert!(
+        web_report_number(layer_effects_legacy, "image_draws")
+            >= web_report_number(layer_effects_legacy, "image_tiles")
+    );
+    assert_eq!(
+        web_report_number(layer_effects, "layer_draws"),
+        web_report_number(layer_effects_legacy, "layer_draws"),
+    );
+    assert_eq!(
+        web_report_number(layer_effects, "damage_rects"),
+        web_report_number(layer_effects_legacy, "damage_rects"),
+    );
+    assert_eq!(
+        web_report_number(layer_effects, "backdrop_draws"),
+        web_report_number(layer_effects_legacy, "backdrop_draws"),
+    );
+    assert_eq!(
+        web_report_number(layer_effects, "visual_effect_draws"),
+        web_report_number(layer_effects_legacy, "visual_effect_draws"),
+    );
+    assert_eq!(
+        web_report_number(layer_effects, "spinner_draws"),
+        web_report_number(layer_effects_legacy, "spinner_draws"),
+    );
+    assert!(
+        web_report_number(layer_effects, "draw_pipeline_binds")
+            < web_report_number(layer_effects_legacy, "draw_pipeline_binds")
+    );
+    assert!(
+        web_report_number(layer_effects, "draw_bind_group_binds")
+            < web_report_number(layer_effects_legacy, "draw_bind_group_binds")
+    );
+    assert!(
+        web_report_number(layer_effects, "draw_scissor_sets")
+            < web_report_number(layer_effects_legacy, "draw_scissor_sets")
+    );
+    assert!(
+        web_report_number(layer_effects, "effect_uniform_writes")
+            < web_report_number(layer_effects_legacy, "effect_uniform_writes")
+    );
+    assert!(
+        web_report_number(layer_effects, "texture_copies")
+            < web_report_number(layer_effects_legacy, "texture_copies")
+    );
+    assert!(
+        web_report_number(layer_effects, "render_passes")
+            < web_report_number(layer_effects_legacy, "render_passes")
+    );
     assert_eq!(
         web_report_number(layer_effects, "gpu_timestamp_passes"),
         web_report_number(layer_effects, "render_passes"),
+    );
+    assert_eq!(
+        web_report_number(layer_effects_legacy, "gpu_timestamp_passes"),
+        web_report_number(layer_effects_legacy, "render_passes"),
+    );
+    assert_eq!(
+        web_report_number(&report["layer_effects_summary"], "current_p50_ms"),
+        web_report_number(layer_effects, "p50_ms"),
+    );
+    assert_eq!(
+        web_report_number(&report["layer_effects_summary"], "legacy_p50_ms"),
+        web_report_number(layer_effects_legacy, "p50_ms"),
+    );
+    assert!(
+        web_report_number(&report["layer_effects_summary"], "legacy_over_current") > 1.0
+    );
+    assert_eq!(
+        web_report_number(&report["layer_effects_summary"], "current_draw_pipeline_binds"),
+        web_report_number(layer_effects, "draw_pipeline_binds"),
+    );
+    assert_eq!(
+        web_report_number(&report["layer_effects_summary"], "legacy_draw_pipeline_binds"),
+        web_report_number(layer_effects_legacy, "draw_pipeline_binds"),
     );
     assert!(
         web_report_number(command_family, "image_mesh_draws")
             >= web_report_number(command_family, "expected_image_meshes")
     );
     assert!(
+        web_report_number(command_family_legacy, "image_mesh_draws")
+            >= web_report_number(command_family_legacy, "expected_image_meshes")
+    );
+    assert!(
         web_report_number(command_family, "nine_slice_draws")
             >= web_report_number(command_family, "expected_nine_slices")
+    );
+    assert!(
+        web_report_number(command_family_legacy, "nine_slice_draws")
+            >= web_report_number(command_family_legacy, "expected_nine_slices")
     );
     assert!(
         web_report_number(command_family, "sdf_glyph_quads")
             >= web_report_number(command_family, "expected_sdf_glyphs")
     );
+    assert!(
+        web_report_number(command_family_legacy, "sdf_glyph_quads")
+            >= web_report_number(command_family_legacy, "expected_sdf_glyphs")
+    );
     assert_eq!(web_report_number(command_family, "expected_camera_bg"), 0.0);
+    assert_eq!(web_report_number(command_family_legacy, "expected_camera_bg"), 0.0);
     assert_eq!(web_report_number(command_family, "camera_bg_draws"), 0.0);
+    assert_eq!(web_report_number(command_family_legacy, "camera_bg_draws"), 0.0);
     assert!(web_report_number(command_family, "image_draws") >= 10.0);
+    assert_eq!(
+        web_report_number(command_family, "draw_items"),
+        web_report_number(command_family_legacy, "draw_items"),
+    );
+    assert_eq!(
+        web_report_number(command_family, "image_mesh_draws"),
+        web_report_number(command_family_legacy, "image_mesh_draws"),
+    );
+    assert_eq!(
+        web_report_number(command_family, "nine_slice_draws"),
+        web_report_number(command_family_legacy, "nine_slice_draws"),
+    );
+    assert_eq!(
+        web_report_number(command_family, "sdf_glyph_quads"),
+        web_report_number(command_family_legacy, "sdf_glyph_quads"),
+    );
+    assert!(
+        web_report_number(command_family, "draw_pipeline_binds")
+            < web_report_number(command_family_legacy, "draw_pipeline_binds")
+    );
+    assert!(
+        web_report_number(command_family, "draw_bind_group_binds")
+            < web_report_number(command_family_legacy, "draw_bind_group_binds")
+    );
+    assert!(
+        web_report_number(command_family, "draw_scissor_sets")
+            < web_report_number(command_family_legacy, "draw_scissor_sets")
+    );
     assert_eq!(
         web_report_number(command_family, "gpu_timestamp_passes"),
         web_report_number(command_family, "render_passes"),
+    );
+    assert_eq!(
+        web_report_number(command_family_legacy, "gpu_timestamp_passes"),
+        web_report_number(command_family_legacy, "render_passes"),
+    );
+    assert_eq!(
+        web_report_number(&report["command_family_summary"], "current_p50_ms"),
+        web_report_number(command_family, "p50_ms"),
+    );
+    assert_eq!(
+        web_report_number(&report["command_family_summary"], "legacy_p50_ms"),
+        web_report_number(command_family_legacy, "p50_ms"),
+    );
+    assert!(web_report_number(&report["command_family_summary"], "legacy_over_current") > 1.0);
+    assert_eq!(
+        web_report_number(&report["command_family_summary"], "current_draw_pipeline_binds"),
+        web_report_number(command_family, "draw_pipeline_binds"),
+    );
+    assert_eq!(
+        web_report_number(&report["command_family_summary"], "legacy_draw_pipeline_binds"),
+        web_report_number(command_family_legacy, "draw_pipeline_binds"),
     );
     assert!(
         web_report_number(draw_state_current, "draw_items")

@@ -1202,6 +1202,9 @@ const WARM_RESOURCE_CHURN_EXCLUDED_IDS = new Set([
    "web.wasm.webgpu.backdrop_batch.legacy_per_backdrop_copy",
    "web.wasm.webgpu.scene3d.recreate_mesh",
    "web.wasm.webgpu.scene3d.stress_recreate_mesh",
+   "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched",
+   "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched",
+   "web.wasm.webgpu.command_family_matrix.legacy_rebind",
    "web.wasm.webgpu.draw_state_cache.legacy_rebind",
    "web.wasm.webgpu.clip_state_cache.legacy_rebind",
 ]);
@@ -1292,21 +1295,21 @@ const WEBGPU_BACKEND_PATHS = [
    },
    {
       id: "mixed_text_image_effects",
-      rows: ["web.wasm.webgpu.mixed_text_image_effects"],
-      counters: ["glyph_quads", "image_draws", "backdrop_draws", "visual_effect_draws", "spinner_draws", "layer_draws", "damage_rects", "texture_copies", "gpu_timestamp_passes"],
-      comparison: "coverage",
+      rows: ["web.wasm.webgpu.mixed_text_image_effects", "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched"],
+      counters: ["glyph_quads", "image_draws", "image_tiles", "backdrop_draws", "visual_effect_draws", "spinner_draws", "layer_draws", "damage_rects", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "effect_uniform_writes", "texture_copies", "render_passes", "gpu_timestamp_passes"],
+      comparison: "current_vs_legacy",
    },
    {
       id: "layer_damage_effects",
-      rows: ["web.wasm.webgpu.layer_damage_effects"],
-      counters: ["layer_draws", "damage_rects", "backdrop_draws", "visual_effect_draws", "texture_copies", "render_passes", "gpu_timestamp_passes"],
-      comparison: "coverage",
+      rows: ["web.wasm.webgpu.layer_damage_effects", "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched"],
+      counters: ["glyph_quads", "image_draws", "image_tiles", "layer_draws", "damage_rects", "clip_depth_peak", "backdrop_draws", "visual_effect_draws", "spinner_draws", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "effect_uniform_writes", "texture_copies", "render_passes", "gpu_timestamp_passes"],
+      comparison: "current_vs_legacy",
    },
    {
       id: "command_family_matrix",
-      rows: ["web.wasm.webgpu.command_family_matrix"],
-      counters: ["image_mesh_draws", "nine_slice_draws", "sdf_glyph_quads", "camera_bg_draws", "expected_camera_bg", "gpu_timestamp_passes"],
-      comparison: "coverage",
+      rows: ["web.wasm.webgpu.command_family_matrix", "web.wasm.webgpu.command_family_matrix.legacy_rebind"],
+      counters: ["image_mesh_draws", "nine_slice_draws", "sdf_glyph_quads", "camera_bg_draws", "expected_camera_bg", "draw_items", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
+      comparison: "current_vs_legacy",
    },
    {
       id: "draw_state_cache",
@@ -1684,10 +1687,23 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
       prefixedBackendCase(
          mixedMetrics,
          "web.wasm.webgpu.mixed_text_image_effects",
-         "webgpu-mixed-effects",
-         "mixed",
+         "webgpu-mixed-effects-current",
+         "current",
          {
             glyphs: numberMetric(mixedMetrics, "glyphs"),
+            image_tiles: numberMetric(mixedMetrics, "image_tiles"),
+            image_width: numberMetric(mixedMetrics, "image_width"),
+            image_height: numberMetric(mixedMetrics, "image_height"),
+         },
+      ),
+      prefixedBackendCase(
+         mixedMetrics,
+         "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched",
+         "webgpu-mixed-effects-legacy-rebind-unbatched",
+         "legacy",
+         {
+            glyphs: numberMetric(mixedMetrics, "glyphs"),
+            image_tiles: numberMetric(mixedMetrics, "image_tiles"),
             image_width: numberMetric(mixedMetrics, "image_width"),
             image_height: numberMetric(mixedMetrics, "image_height"),
          },
@@ -1695,25 +1711,58 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
       prefixedBackendCase(
          layerEffectsMetrics,
          "web.wasm.webgpu.layer_damage_effects",
-         "webgpu-layer-damage-effects",
-         "layer_effects",
+         "webgpu-layer-damage-effects-current",
+         "current",
          {
             glyphs: numberMetric(layerEffectsMetrics, "glyphs"),
+            image_tiles: numberMetric(layerEffectsMetrics, "image_tiles"),
             image_width: numberMetric(layerEffectsMetrics, "image_width"),
             image_height: numberMetric(layerEffectsMetrics, "image_height"),
             expected_layers: numberMetric(layerEffectsMetrics, "expected_layers"),
             expected_damage_rects: numberMetric(layerEffectsMetrics, "expected_damage_rects"),
+            expected_backdrops: numberMetric(layerEffectsMetrics, "expected_backdrops"),
+         },
+      ),
+      prefixedBackendCase(
+         layerEffectsMetrics,
+         "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched",
+         "webgpu-layer-damage-effects-legacy-rebind-unbatched",
+         "legacy",
+         {
+            glyphs: numberMetric(layerEffectsMetrics, "glyphs"),
+            image_tiles: numberMetric(layerEffectsMetrics, "image_tiles"),
+            image_width: numberMetric(layerEffectsMetrics, "image_width"),
+            image_height: numberMetric(layerEffectsMetrics, "image_height"),
+            expected_layers: numberMetric(layerEffectsMetrics, "expected_layers"),
+            expected_damage_rects: numberMetric(layerEffectsMetrics, "expected_damage_rects"),
+            expected_backdrops: numberMetric(layerEffectsMetrics, "expected_backdrops"),
          },
       ),
       prefixedBackendCase(
          commandFamilyMetrics,
          "web.wasm.webgpu.command_family_matrix",
-         "webgpu-command-family-matrix",
-         "command_family",
+         "webgpu-command-family-current",
+         "current",
          {
             expected_image_meshes: numberMetric(commandFamilyMetrics, "expected_image_meshes"),
             expected_nine_slices: numberMetric(commandFamilyMetrics, "expected_nine_slices"),
             expected_sdf_glyphs: numberMetric(commandFamilyMetrics, "expected_sdf_glyphs"),
+            expected_sdf_runs: numberMetric(commandFamilyMetrics, "expected_sdf_runs"),
+            expected_camera_bg: numberMetric(commandFamilyMetrics, "expected_camera_bg"),
+            image_width: numberMetric(commandFamilyMetrics, "image_width"),
+            image_height: numberMetric(commandFamilyMetrics, "image_height"),
+         },
+      ),
+      prefixedBackendCase(
+         commandFamilyMetrics,
+         "web.wasm.webgpu.command_family_matrix.legacy_rebind",
+         "webgpu-command-family-legacy-rebind",
+         "legacy",
+         {
+            expected_image_meshes: numberMetric(commandFamilyMetrics, "expected_image_meshes"),
+            expected_nine_slices: numberMetric(commandFamilyMetrics, "expected_nine_slices"),
+            expected_sdf_glyphs: numberMetric(commandFamilyMetrics, "expected_sdf_glyphs"),
+            expected_sdf_runs: numberMetric(commandFamilyMetrics, "expected_sdf_runs"),
             expected_camera_bg: numberMetric(commandFamilyMetrics, "expected_camera_bg"),
             image_width: numberMetric(commandFamilyMetrics, "image_width"),
             image_height: numberMetric(commandFamilyMetrics, "image_height"),
@@ -1796,6 +1845,8 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          "The WebGPU ID-mask current and legacy upload rows are captured in the same browser process and scene contract.",
          "The WebGPU effect-uniform A/B rows draw the same backdrop scene while comparing one batched dynamic-uniform upload against one queue write per backdrop.",
          "The WebGPU backdrop-batch A/B rows draw separated consecutive backdrops while comparing one shared scene-copy pass against the legacy per-backdrop copy path.",
+         "The WebGPU layer/damage/effects A/B rows draw the same nested layer, damage, image, glyph, backdrop, visual-effect, and spinner workload while comparing current state/effect batching against legacy rebinding/unbatched toggles.",
+         "The WebGPU command-family A/B rows draw the same generic ImageMesh, NineSlice, and SDF glyph workload while comparing current draw-state caching against a legacy rebind path and keeping web CameraBg work unavailable.",
          "The WebGPU clip-state A/B rows use real Oxide ClipPush/ClipPop commands to measure scissor-state caching.",
          "Pass-family counters provide browser GPU-stage attribution when direct timestamp queries are unavailable.",
          "Warm current-path WebGPU rows are gated against post-warmup resource creation, buffer growth, mesh creation, image-upload temp allocation, and CPU/image scratch growth.",
@@ -2000,6 +2051,104 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          recreate_cpu_scratch_growth_bytes: numberMetric(scene3dMetrics, "stress_recreate_cpu_scratch_growth_bytes"),
          meshes: numberMetric(scene3dMetrics, "stress_meshes"),
          instances: numberMetric(scene3dMetrics, "stress_instances"),
+      },
+      mixed_summary: {
+         id: "web.wasm.webgpu.mixed_text_image_effects.current_vs_legacy_rebind_unbatched",
+         legacy_over_current: numberMetric(mixedMetrics, "legacy_over_current"),
+         current_p50_ms: numberMetric(mixedMetrics, "current_p50_ms"),
+         legacy_p50_ms: numberMetric(mixedMetrics, "legacy_p50_ms"),
+         current_draw_items: numberMetric(mixedMetrics, "current_draw_items"),
+         legacy_draw_items: numberMetric(mixedMetrics, "legacy_draw_items"),
+         current_draw_pipeline_binds: numberMetric(mixedMetrics, "current_draw_pipeline_binds"),
+         legacy_draw_pipeline_binds: numberMetric(mixedMetrics, "legacy_draw_pipeline_binds"),
+         current_draw_bind_group_binds: numberMetric(mixedMetrics, "current_draw_bind_group_binds"),
+         legacy_draw_bind_group_binds: numberMetric(mixedMetrics, "legacy_draw_bind_group_binds"),
+         current_draw_scissor_sets: numberMetric(mixedMetrics, "current_draw_scissor_sets"),
+         legacy_draw_scissor_sets: numberMetric(mixedMetrics, "legacy_draw_scissor_sets"),
+         current_effect_uniform_writes: numberMetric(mixedMetrics, "current_effect_uniform_writes"),
+         legacy_effect_uniform_writes: numberMetric(mixedMetrics, "legacy_effect_uniform_writes"),
+         current_texture_copies: numberMetric(mixedMetrics, "current_texture_copies"),
+         legacy_texture_copies: numberMetric(mixedMetrics, "legacy_texture_copies"),
+         current_render_passes: numberMetric(mixedMetrics, "current_render_passes"),
+         legacy_render_passes: numberMetric(mixedMetrics, "legacy_render_passes"),
+         current_glyph_quads: numberMetric(mixedMetrics, "current_glyph_quads"),
+         legacy_glyph_quads: numberMetric(mixedMetrics, "legacy_glyph_quads"),
+         current_image_draws: numberMetric(mixedMetrics, "current_image_draws"),
+         legacy_image_draws: numberMetric(mixedMetrics, "legacy_image_draws"),
+         image_tiles: numberMetric(mixedMetrics, "image_tiles"),
+         current_backdrop_draws: numberMetric(mixedMetrics, "current_backdrop_draws"),
+         legacy_backdrop_draws: numberMetric(mixedMetrics, "legacy_backdrop_draws"),
+         current_visual_effect_draws: numberMetric(mixedMetrics, "current_visual_effect_draws"),
+         legacy_visual_effect_draws: numberMetric(mixedMetrics, "legacy_visual_effect_draws"),
+         current_layer_draws: numberMetric(mixedMetrics, "current_layer_draws"),
+         legacy_layer_draws: numberMetric(mixedMetrics, "legacy_layer_draws"),
+         current_damage_rects: numberMetric(mixedMetrics, "current_damage_rects"),
+         legacy_damage_rects: numberMetric(mixedMetrics, "legacy_damage_rects"),
+      },
+      layer_effects_summary: {
+         id: "web.wasm.webgpu.layer_damage_effects.current_vs_legacy_rebind_unbatched",
+         legacy_over_current: numberMetric(layerEffectsMetrics, "legacy_over_current"),
+         current_p50_ms: numberMetric(layerEffectsMetrics, "current_p50_ms"),
+         legacy_p50_ms: numberMetric(layerEffectsMetrics, "legacy_p50_ms"),
+         current_draw_items: numberMetric(layerEffectsMetrics, "current_draw_items"),
+         legacy_draw_items: numberMetric(layerEffectsMetrics, "legacy_draw_items"),
+         current_draw_pipeline_binds: numberMetric(layerEffectsMetrics, "current_draw_pipeline_binds"),
+         legacy_draw_pipeline_binds: numberMetric(layerEffectsMetrics, "legacy_draw_pipeline_binds"),
+         current_draw_bind_group_binds: numberMetric(layerEffectsMetrics, "current_draw_bind_group_binds"),
+         legacy_draw_bind_group_binds: numberMetric(layerEffectsMetrics, "legacy_draw_bind_group_binds"),
+         current_draw_scissor_sets: numberMetric(layerEffectsMetrics, "current_draw_scissor_sets"),
+         legacy_draw_scissor_sets: numberMetric(layerEffectsMetrics, "legacy_draw_scissor_sets"),
+         current_effect_uniform_writes: numberMetric(layerEffectsMetrics, "current_effect_uniform_writes"),
+         legacy_effect_uniform_writes: numberMetric(layerEffectsMetrics, "legacy_effect_uniform_writes"),
+         current_texture_copies: numberMetric(layerEffectsMetrics, "current_texture_copies"),
+         legacy_texture_copies: numberMetric(layerEffectsMetrics, "legacy_texture_copies"),
+         current_render_passes: numberMetric(layerEffectsMetrics, "current_render_passes"),
+         legacy_render_passes: numberMetric(layerEffectsMetrics, "legacy_render_passes"),
+         current_glyph_quads: numberMetric(layerEffectsMetrics, "current_glyph_quads"),
+         legacy_glyph_quads: numberMetric(layerEffectsMetrics, "legacy_glyph_quads"),
+         current_image_draws: numberMetric(layerEffectsMetrics, "current_image_draws"),
+         legacy_image_draws: numberMetric(layerEffectsMetrics, "legacy_image_draws"),
+         image_tiles: numberMetric(layerEffectsMetrics, "image_tiles"),
+         current_backdrop_draws: numberMetric(layerEffectsMetrics, "current_backdrop_draws"),
+         legacy_backdrop_draws: numberMetric(layerEffectsMetrics, "legacy_backdrop_draws"),
+         current_visual_effect_draws: numberMetric(layerEffectsMetrics, "current_visual_effect_draws"),
+         legacy_visual_effect_draws: numberMetric(layerEffectsMetrics, "legacy_visual_effect_draws"),
+         current_spinner_draws: numberMetric(layerEffectsMetrics, "current_spinner_draws"),
+         legacy_spinner_draws: numberMetric(layerEffectsMetrics, "legacy_spinner_draws"),
+         current_layer_draws: numberMetric(layerEffectsMetrics, "current_layer_draws"),
+         legacy_layer_draws: numberMetric(layerEffectsMetrics, "legacy_layer_draws"),
+         current_damage_rects: numberMetric(layerEffectsMetrics, "current_damage_rects"),
+         legacy_damage_rects: numberMetric(layerEffectsMetrics, "legacy_damage_rects"),
+         expected_layers: numberMetric(layerEffectsMetrics, "expected_layers"),
+         expected_damage_rects: numberMetric(layerEffectsMetrics, "expected_damage_rects"),
+         expected_backdrops: numberMetric(layerEffectsMetrics, "expected_backdrops"),
+      },
+      command_family_summary: {
+         id: "web.wasm.webgpu.command_family_matrix.current_vs_legacy_rebind",
+         legacy_over_current: numberMetric(commandFamilyMetrics, "legacy_over_current"),
+         current_p50_ms: numberMetric(commandFamilyMetrics, "current_p50_ms"),
+         legacy_p50_ms: numberMetric(commandFamilyMetrics, "legacy_p50_ms"),
+         current_draw_items: numberMetric(commandFamilyMetrics, "current_draw_items"),
+         legacy_draw_items: numberMetric(commandFamilyMetrics, "legacy_draw_items"),
+         current_draw_pipeline_binds: numberMetric(commandFamilyMetrics, "current_draw_pipeline_binds"),
+         legacy_draw_pipeline_binds: numberMetric(commandFamilyMetrics, "legacy_draw_pipeline_binds"),
+         current_draw_bind_group_binds: numberMetric(commandFamilyMetrics, "current_draw_bind_group_binds"),
+         legacy_draw_bind_group_binds: numberMetric(commandFamilyMetrics, "legacy_draw_bind_group_binds"),
+         current_draw_scissor_sets: numberMetric(commandFamilyMetrics, "current_draw_scissor_sets"),
+         legacy_draw_scissor_sets: numberMetric(commandFamilyMetrics, "legacy_draw_scissor_sets"),
+         current_image_mesh_draws: numberMetric(commandFamilyMetrics, "current_image_mesh_draws"),
+         legacy_image_mesh_draws: numberMetric(commandFamilyMetrics, "legacy_image_mesh_draws"),
+         current_nine_slice_draws: numberMetric(commandFamilyMetrics, "current_nine_slice_draws"),
+         legacy_nine_slice_draws: numberMetric(commandFamilyMetrics, "legacy_nine_slice_draws"),
+         current_sdf_glyph_quads: numberMetric(commandFamilyMetrics, "current_sdf_glyph_quads"),
+         legacy_sdf_glyph_quads: numberMetric(commandFamilyMetrics, "legacy_sdf_glyph_quads"),
+         current_camera_bg_draws: numberMetric(commandFamilyMetrics, "current_camera_bg_draws"),
+         legacy_camera_bg_draws: numberMetric(commandFamilyMetrics, "legacy_camera_bg_draws"),
+         expected_image_meshes: numberMetric(commandFamilyMetrics, "expected_image_meshes"),
+         expected_nine_slices: numberMetric(commandFamilyMetrics, "expected_nine_slices"),
+         expected_sdf_glyphs: numberMetric(commandFamilyMetrics, "expected_sdf_glyphs"),
+         expected_sdf_runs: numberMetric(commandFamilyMetrics, "expected_sdf_runs"),
+         expected_camera_bg: numberMetric(commandFamilyMetrics, "expected_camera_bg"),
       },
       draw_state_summary: {
          id: "web.wasm.webgpu.draw_state_cache.current_vs_legacy_rebind",
@@ -2236,6 +2385,9 @@ function renderMarkdown(report)
       if (row.glyphs !== undefined) {
          notes.push(`glyphs=${row.glyphs}`);
       }
+      if (row.image_tiles !== undefined) {
+         notes.push(`image_tiles=${row.image_tiles}`);
+      }
       if (row.expected_layers !== undefined) {
          notes.push(`expected_layers=${row.expected_layers}`);
       }
@@ -2250,6 +2402,9 @@ function renderMarkdown(report)
       }
       if (row.expected_sdf_glyphs !== undefined) {
          notes.push(`expected_sdf_glyphs=${row.expected_sdf_glyphs}`);
+      }
+      if (row.expected_sdf_runs !== undefined) {
+         notes.push(`expected_sdf_runs=${row.expected_sdf_runs}`);
       }
       if (row.expected_camera_bg !== undefined) {
          notes.push(`expected_camera_bg=${row.expected_camera_bg}`);
@@ -2407,6 +2562,24 @@ function renderMarkdown(report)
    lines.push("| Comparison | Reused p50 ms | Recreate p50 ms | Recreate / Reused | Reused Mesh Creates | Recreate Mesh Creates | Reused Buffer Grows | Recreate Buffer Grows | Reused CPU Scratch Grows | Recreate CPU Scratch Grows | Reused CPU Scratch Growth Bytes | Recreate CPU Scratch Growth Bytes | Meshes | Instances |");
    lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
    lines.push(`| \`${report.scene3d_stress_summary.id}\` | ${report.scene3d_stress_summary.reused_p50_ms.toFixed(3)} | ${report.scene3d_stress_summary.recreate_p50_ms.toFixed(3)} | ${report.scene3d_stress_summary.recreate_over_reused.toFixed(3)} | ${report.scene3d_stress_summary.reused_mesh3d_creates} | ${report.scene3d_stress_summary.recreate_mesh3d_creates} | ${report.scene3d_stress_summary.reused_buffer_grows} | ${report.scene3d_stress_summary.recreate_buffer_grows} | ${report.scene3d_stress_summary.reused_cpu_scratch_grows} | ${report.scene3d_stress_summary.recreate_cpu_scratch_grows} | ${report.scene3d_stress_summary.reused_cpu_scratch_growth_bytes} | ${report.scene3d_stress_summary.recreate_cpu_scratch_growth_bytes} | ${report.scene3d_stress_summary.meshes} | ${report.scene3d_stress_summary.instances} |`);
+   lines.push("");
+   lines.push("## Mixed Scene Summary");
+   lines.push("");
+   lines.push("| Comparison | Current p50 ms | Legacy p50 ms | Legacy / Current | Current Items | Legacy Items | Current Pipeline Binds | Legacy Pipeline Binds | Current Bind Groups | Legacy Bind Groups | Current Scissors | Legacy Scissors | Current Writes | Legacy Writes | Current Texture Copies | Legacy Texture Copies | Current Passes | Legacy Passes |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+   lines.push(`| \`${report.mixed_summary.id}\` | ${report.mixed_summary.current_p50_ms.toFixed(3)} | ${report.mixed_summary.legacy_p50_ms.toFixed(3)} | ${report.mixed_summary.legacy_over_current.toFixed(3)} | ${report.mixed_summary.current_draw_items} | ${report.mixed_summary.legacy_draw_items} | ${report.mixed_summary.current_draw_pipeline_binds} | ${report.mixed_summary.legacy_draw_pipeline_binds} | ${report.mixed_summary.current_draw_bind_group_binds} | ${report.mixed_summary.legacy_draw_bind_group_binds} | ${report.mixed_summary.current_draw_scissor_sets} | ${report.mixed_summary.legacy_draw_scissor_sets} | ${report.mixed_summary.current_effect_uniform_writes} | ${report.mixed_summary.legacy_effect_uniform_writes} | ${report.mixed_summary.current_texture_copies} | ${report.mixed_summary.legacy_texture_copies} | ${report.mixed_summary.current_render_passes} | ${report.mixed_summary.legacy_render_passes} |`);
+   lines.push("");
+   lines.push("## Layer Effects Summary");
+   lines.push("");
+   lines.push("| Comparison | Current p50 ms | Legacy p50 ms | Legacy / Current | Current Items | Legacy Items | Current Pipeline Binds | Legacy Pipeline Binds | Current Bind Groups | Legacy Bind Groups | Current Scissors | Legacy Scissors | Current Writes | Legacy Writes | Current Texture Copies | Legacy Texture Copies | Current Passes | Legacy Passes |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+   lines.push(`| \`${report.layer_effects_summary.id}\` | ${report.layer_effects_summary.current_p50_ms.toFixed(3)} | ${report.layer_effects_summary.legacy_p50_ms.toFixed(3)} | ${report.layer_effects_summary.legacy_over_current.toFixed(3)} | ${report.layer_effects_summary.current_draw_items} | ${report.layer_effects_summary.legacy_draw_items} | ${report.layer_effects_summary.current_draw_pipeline_binds} | ${report.layer_effects_summary.legacy_draw_pipeline_binds} | ${report.layer_effects_summary.current_draw_bind_group_binds} | ${report.layer_effects_summary.legacy_draw_bind_group_binds} | ${report.layer_effects_summary.current_draw_scissor_sets} | ${report.layer_effects_summary.legacy_draw_scissor_sets} | ${report.layer_effects_summary.current_effect_uniform_writes} | ${report.layer_effects_summary.legacy_effect_uniform_writes} | ${report.layer_effects_summary.current_texture_copies} | ${report.layer_effects_summary.legacy_texture_copies} | ${report.layer_effects_summary.current_render_passes} | ${report.layer_effects_summary.legacy_render_passes} |`);
+   lines.push("");
+   lines.push("## Command Family Summary");
+   lines.push("");
+   lines.push("| Comparison | Current p50 ms | Legacy p50 ms | Legacy / Current | Current Items | Legacy Items | Current Pipeline Binds | Legacy Pipeline Binds | Current Bind Groups | Legacy Bind Groups | Current Scissors | Legacy Scissors | Image Meshes | Nine Slices | SDF Glyphs | CameraBg Draws |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+   lines.push(`| \`${report.command_family_summary.id}\` | ${report.command_family_summary.current_p50_ms.toFixed(3)} | ${report.command_family_summary.legacy_p50_ms.toFixed(3)} | ${report.command_family_summary.legacy_over_current.toFixed(3)} | ${report.command_family_summary.current_draw_items} | ${report.command_family_summary.legacy_draw_items} | ${report.command_family_summary.current_draw_pipeline_binds} | ${report.command_family_summary.legacy_draw_pipeline_binds} | ${report.command_family_summary.current_draw_bind_group_binds} | ${report.command_family_summary.legacy_draw_bind_group_binds} | ${report.command_family_summary.current_draw_scissor_sets} | ${report.command_family_summary.legacy_draw_scissor_sets} | ${report.command_family_summary.current_image_mesh_draws}/${report.command_family_summary.legacy_image_mesh_draws} | ${report.command_family_summary.current_nine_slice_draws}/${report.command_family_summary.legacy_nine_slice_draws} | ${report.command_family_summary.current_sdf_glyph_quads}/${report.command_family_summary.legacy_sdf_glyph_quads} | ${report.command_family_summary.current_camera_bg_draws}/${report.command_family_summary.legacy_camera_bg_draws} |`);
    lines.push("");
    lines.push("## Draw State Cache Summary");
    lines.push("");
@@ -2693,8 +2866,11 @@ function assertWebReportContract(report)
       "web.wasm.webgpu.scene3d.stress_reused_mesh",
       "web.wasm.webgpu.scene3d.stress_recreate_mesh",
       "web.wasm.webgpu.mixed_text_image_effects",
+      "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched",
       "web.wasm.webgpu.layer_damage_effects",
+      "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched",
       "web.wasm.webgpu.command_family_matrix",
+      "web.wasm.webgpu.command_family_matrix.legacy_rebind",
       "web.wasm.webgpu.draw_state_cache.current",
       "web.wasm.webgpu.draw_state_cache.legacy_rebind",
       "web.wasm.webgpu.clip_state_cache.current",
@@ -2960,31 +3136,206 @@ function assertWebReportContract(report)
       throw new Error("stress recreate Scene3D row must cover many Scene3D draws");
    }
    let mixed = byId.get("web.wasm.webgpu.mixed_text_image_effects");
-   if (mixed.backdrop_draws <= 0 || mixed.visual_effect_draws <= 0 || mixed.layer_draws <= 0 || mixed.damage_rects <= 0 || mixed.clip_depth_peak <= 0) {
-      throw new Error("mixed WebGPU row must cover backdrop, visual effect, layer, clip, and damage counters");
+   let mixedLegacy = byId.get("web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched");
+   if (
+      mixed.backdrop_draws <= 0
+      || mixedLegacy.backdrop_draws <= 0
+      || mixed.visual_effect_draws <= 0
+      || mixedLegacy.visual_effect_draws <= 0
+      || mixed.layer_draws <= 0
+      || mixedLegacy.layer_draws <= 0
+      || mixed.damage_rects <= 0
+      || mixedLegacy.damage_rects <= 0
+      || mixed.clip_depth_peak <= 0
+      || mixedLegacy.clip_depth_peak <= 0
+   ) {
+      throw new Error("mixed WebGPU A/B rows must cover backdrop, visual effect, layer, clip, and damage counters");
+   }
+   if (
+      mixed.draw_items !== mixedLegacy.draw_items
+      || mixed.glyph_quads !== mixedLegacy.glyph_quads
+      || mixed.image_draws !== mixedLegacy.image_draws
+      || mixed.image_draws < mixed.image_tiles
+      || mixedLegacy.image_draws < mixedLegacy.image_tiles
+      || mixed.backdrop_draws !== mixedLegacy.backdrop_draws
+      || mixed.visual_effect_draws !== mixedLegacy.visual_effect_draws
+      || mixed.spinner_draws !== mixedLegacy.spinner_draws
+      || mixed.layer_draws !== mixedLegacy.layer_draws
+      || mixed.damage_rects !== mixedLegacy.damage_rects
+      || mixed.draw_pipeline_binds >= mixedLegacy.draw_pipeline_binds
+      || mixed.draw_bind_group_binds > mixedLegacy.draw_bind_group_binds
+      || mixed.draw_scissor_sets >= mixedLegacy.draw_scissor_sets
+      || mixed.effect_uniform_writes >= mixedLegacy.effect_uniform_writes
+      || mixed.texture_copies > mixedLegacy.texture_copies
+      || mixed.render_passes > mixedLegacy.render_passes
+      || mixed.gpu_timestamp_passes !== mixed.render_passes
+      || mixedLegacy.gpu_timestamp_passes !== mixedLegacy.render_passes
+   ) {
+      throw new Error(
+         "mixed WebGPU A/B rows must prove equivalent visible work, fewer current pipeline/scissor/effect writes, no extra bind groups, and timestamped passes: "
+            + `items=${mixed.draw_items}/${mixedLegacy.draw_items} `
+            + `glyphs=${mixed.glyph_quads}/${mixedLegacy.glyph_quads} `
+            + `images=${mixed.image_draws}/${mixedLegacy.image_draws} tiles=${mixed.image_tiles}/${mixedLegacy.image_tiles} `
+            + `backdrops=${mixed.backdrop_draws}/${mixedLegacy.backdrop_draws} `
+            + `visual_effects=${mixed.visual_effect_draws}/${mixedLegacy.visual_effect_draws} `
+            + `layers=${mixed.layer_draws}/${mixedLegacy.layer_draws} `
+            + `damage=${mixed.damage_rects}/${mixedLegacy.damage_rects} `
+            + `pipeline_binds=${mixed.draw_pipeline_binds}/${mixedLegacy.draw_pipeline_binds} `
+            + `bind_groups=${mixed.draw_bind_group_binds}/${mixedLegacy.draw_bind_group_binds} `
+            + `scissors=${mixed.draw_scissor_sets}/${mixedLegacy.draw_scissor_sets} `
+            + `effect_writes=${mixed.effect_uniform_writes}/${mixedLegacy.effect_uniform_writes} `
+            + `copies=${mixed.texture_copies}/${mixedLegacy.texture_copies} `
+            + `passes=${mixed.render_passes}/${mixedLegacy.render_passes} `
+            + `timestamp_passes=${mixed.gpu_timestamp_passes}/${mixedLegacy.gpu_timestamp_passes}`
+      );
+   }
+   if (
+      report.mixed_summary.current_p50_ms !== mixed.p50_ms
+      || report.mixed_summary.legacy_p50_ms !== mixedLegacy.p50_ms
+      || report.mixed_summary.current_draw_pipeline_binds !== mixed.draw_pipeline_binds
+      || report.mixed_summary.legacy_draw_pipeline_binds !== mixedLegacy.draw_pipeline_binds
+      || report.mixed_summary.current_draw_bind_group_binds !== mixed.draw_bind_group_binds
+      || report.mixed_summary.legacy_draw_bind_group_binds !== mixedLegacy.draw_bind_group_binds
+      || report.mixed_summary.current_draw_scissor_sets !== mixed.draw_scissor_sets
+      || report.mixed_summary.legacy_draw_scissor_sets !== mixedLegacy.draw_scissor_sets
+      || report.mixed_summary.current_effect_uniform_writes !== mixed.effect_uniform_writes
+      || report.mixed_summary.legacy_effect_uniform_writes !== mixedLegacy.effect_uniform_writes
+   ) {
+      throw new Error("mixed WebGPU summary must match current and legacy source rows");
    }
    let layerEffects = byId.get("web.wasm.webgpu.layer_damage_effects");
+   let layerEffectsLegacy = byId.get("web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched");
    if (
       layerEffects.layer_draws < layerEffects.expected_layers
+      || layerEffectsLegacy.layer_draws < layerEffectsLegacy.expected_layers
       || layerEffects.damage_rects < layerEffects.expected_damage_rects
+      || layerEffectsLegacy.damage_rects < layerEffectsLegacy.expected_damage_rects
       || layerEffects.clip_depth_peak <= 0
-      || layerEffects.backdrop_draws <= 0
+      || layerEffectsLegacy.clip_depth_peak <= 0
+      || layerEffects.backdrop_draws < layerEffects.expected_backdrops
+      || layerEffectsLegacy.backdrop_draws < layerEffectsLegacy.expected_backdrops
       || layerEffects.visual_effect_draws <= 0
+      || layerEffectsLegacy.visual_effect_draws <= 0
+      || layerEffects.spinner_draws <= 0
+      || layerEffectsLegacy.spinner_draws <= 0
       || layerEffects.texture_copies <= 0
+      || layerEffectsLegacy.texture_copies <= 0
       || layerEffects.gpu_timestamp_passes !== layerEffects.render_passes
+      || layerEffectsLegacy.gpu_timestamp_passes !== layerEffectsLegacy.render_passes
    ) {
-      throw new Error("layer/effects WebGPU row must cover layers, damage, effects, texture copies, and timestamped passes");
+      throw new Error("layer/effects WebGPU A/B rows must cover layers, damage, clips, effects, texture copies, spinner work, and timestamped passes");
+   }
+   if (
+      layerEffects.draw_items !== layerEffectsLegacy.draw_items
+      || layerEffects.glyph_quads !== layerEffectsLegacy.glyph_quads
+      || layerEffects.image_draws !== layerEffectsLegacy.image_draws
+      || layerEffects.image_draws < layerEffects.image_tiles
+      || layerEffectsLegacy.image_draws < layerEffectsLegacy.image_tiles
+      || layerEffects.layer_draws !== layerEffectsLegacy.layer_draws
+      || layerEffects.damage_rects !== layerEffectsLegacy.damage_rects
+      || layerEffects.backdrop_draws !== layerEffectsLegacy.backdrop_draws
+      || layerEffects.visual_effect_draws !== layerEffectsLegacy.visual_effect_draws
+      || layerEffects.spinner_draws !== layerEffectsLegacy.spinner_draws
+      || layerEffects.draw_pipeline_binds >= layerEffectsLegacy.draw_pipeline_binds
+      || layerEffects.draw_bind_group_binds >= layerEffectsLegacy.draw_bind_group_binds
+      || layerEffects.draw_scissor_sets >= layerEffectsLegacy.draw_scissor_sets
+      || layerEffects.effect_uniform_writes >= layerEffectsLegacy.effect_uniform_writes
+      || layerEffects.texture_copies >= layerEffectsLegacy.texture_copies
+      || layerEffects.render_passes >= layerEffectsLegacy.render_passes
+   ) {
+      throw new Error(
+         "layer/effects WebGPU A/B rows must prove equivalent visible work and fewer current state/effect/pass operations: "
+            + `items=${layerEffects.draw_items}/${layerEffectsLegacy.draw_items} `
+            + `glyphs=${layerEffects.glyph_quads}/${layerEffectsLegacy.glyph_quads} `
+            + `images=${layerEffects.image_draws}/${layerEffectsLegacy.image_draws} tiles=${layerEffects.image_tiles}/${layerEffectsLegacy.image_tiles} `
+            + `layers=${layerEffects.layer_draws}/${layerEffectsLegacy.layer_draws} `
+            + `damage=${layerEffects.damage_rects}/${layerEffectsLegacy.damage_rects} `
+            + `backdrops=${layerEffects.backdrop_draws}/${layerEffectsLegacy.backdrop_draws} `
+            + `visual_effects=${layerEffects.visual_effect_draws}/${layerEffectsLegacy.visual_effect_draws} `
+            + `spinners=${layerEffects.spinner_draws}/${layerEffectsLegacy.spinner_draws} `
+            + `pipeline_binds=${layerEffects.draw_pipeline_binds}/${layerEffectsLegacy.draw_pipeline_binds} `
+            + `bind_groups=${layerEffects.draw_bind_group_binds}/${layerEffectsLegacy.draw_bind_group_binds} `
+            + `scissors=${layerEffects.draw_scissor_sets}/${layerEffectsLegacy.draw_scissor_sets} `
+            + `effect_writes=${layerEffects.effect_uniform_writes}/${layerEffectsLegacy.effect_uniform_writes} `
+            + `copies=${layerEffects.texture_copies}/${layerEffectsLegacy.texture_copies} `
+            + `passes=${layerEffects.render_passes}/${layerEffectsLegacy.render_passes}`
+      );
+   }
+   if (
+      report.layer_effects_summary.current_p50_ms !== layerEffects.p50_ms
+      || report.layer_effects_summary.legacy_p50_ms !== layerEffectsLegacy.p50_ms
+      || report.layer_effects_summary.current_draw_pipeline_binds !== layerEffects.draw_pipeline_binds
+      || report.layer_effects_summary.legacy_draw_pipeline_binds !== layerEffectsLegacy.draw_pipeline_binds
+      || report.layer_effects_summary.current_draw_bind_group_binds !== layerEffects.draw_bind_group_binds
+      || report.layer_effects_summary.legacy_draw_bind_group_binds !== layerEffectsLegacy.draw_bind_group_binds
+      || report.layer_effects_summary.current_draw_scissor_sets !== layerEffects.draw_scissor_sets
+      || report.layer_effects_summary.legacy_draw_scissor_sets !== layerEffectsLegacy.draw_scissor_sets
+      || report.layer_effects_summary.current_effect_uniform_writes !== layerEffects.effect_uniform_writes
+      || report.layer_effects_summary.legacy_effect_uniform_writes !== layerEffectsLegacy.effect_uniform_writes
+   ) {
+      throw new Error("layer/effects WebGPU summary must match current and legacy source rows");
+   }
+   if (report.layer_effects_summary.legacy_over_current <= 1.0) {
+      throw new Error(
+         `layer/effects current row must beat legacy rebind/unbatched p50: current=${report.layer_effects_summary.current_p50_ms.toFixed(3)}ms legacy=${report.layer_effects_summary.legacy_p50_ms.toFixed(3)}ms ratio=${report.layer_effects_summary.legacy_over_current.toFixed(3)}`
+      );
    }
    let commandFamily = byId.get("web.wasm.webgpu.command_family_matrix");
+   let commandFamilyLegacy = byId.get("web.wasm.webgpu.command_family_matrix.legacy_rebind");
    if (
       commandFamily.image_mesh_draws < commandFamily.expected_image_meshes
+      || commandFamilyLegacy.image_mesh_draws < commandFamilyLegacy.expected_image_meshes
       || commandFamily.nine_slice_draws < commandFamily.expected_nine_slices
+      || commandFamilyLegacy.nine_slice_draws < commandFamilyLegacy.expected_nine_slices
       || commandFamily.sdf_glyph_quads < commandFamily.expected_sdf_glyphs
+      || commandFamilyLegacy.sdf_glyph_quads < commandFamilyLegacy.expected_sdf_glyphs
       || commandFamily.expected_camera_bg !== 0
+      || commandFamilyLegacy.expected_camera_bg !== 0
       || commandFamily.camera_bg_draws !== 0
+      || commandFamilyLegacy.camera_bg_draws !== 0
       || commandFamily.gpu_timestamp_passes !== commandFamily.render_passes
+      || commandFamilyLegacy.gpu_timestamp_passes !== commandFamilyLegacy.render_passes
    ) {
-      throw new Error("command-family WebGPU row must cover ImageMesh, NineSlice, SDF glyph, zero web CameraBg, and timestamped passes");
+      throw new Error("command-family WebGPU A/B rows must cover ImageMesh, NineSlice, SDF glyph, zero web CameraBg, and timestamped passes");
+   }
+   if (
+      commandFamily.draw_items !== commandFamilyLegacy.draw_items
+      || commandFamily.image_mesh_draws !== commandFamilyLegacy.image_mesh_draws
+      || commandFamily.nine_slice_draws !== commandFamilyLegacy.nine_slice_draws
+      || commandFamily.sdf_glyph_quads !== commandFamilyLegacy.sdf_glyph_quads
+      || commandFamily.camera_bg_draws !== commandFamilyLegacy.camera_bg_draws
+      || commandFamily.draw_pipeline_binds >= commandFamilyLegacy.draw_pipeline_binds
+      || commandFamily.draw_bind_group_binds >= commandFamilyLegacy.draw_bind_group_binds
+      || commandFamily.draw_scissor_sets >= commandFamilyLegacy.draw_scissor_sets
+   ) {
+      throw new Error(
+         "command-family WebGPU A/B rows must prove equivalent generic work, zero web CameraBg, and fewer current state binds: "
+            + `items=${commandFamily.draw_items}/${commandFamilyLegacy.draw_items} `
+            + `image_meshes=${commandFamily.image_mesh_draws}/${commandFamilyLegacy.image_mesh_draws} `
+            + `nine_slices=${commandFamily.nine_slice_draws}/${commandFamilyLegacy.nine_slice_draws} `
+            + `sdf=${commandFamily.sdf_glyph_quads}/${commandFamilyLegacy.sdf_glyph_quads} `
+            + `camera_bg=${commandFamily.camera_bg_draws}/${commandFamilyLegacy.camera_bg_draws} `
+            + `pipeline_binds=${commandFamily.draw_pipeline_binds}/${commandFamilyLegacy.draw_pipeline_binds} `
+            + `bind_groups=${commandFamily.draw_bind_group_binds}/${commandFamilyLegacy.draw_bind_group_binds} `
+            + `scissors=${commandFamily.draw_scissor_sets}/${commandFamilyLegacy.draw_scissor_sets}`
+      );
+   }
+   if (
+      report.command_family_summary.current_p50_ms !== commandFamily.p50_ms
+      || report.command_family_summary.legacy_p50_ms !== commandFamilyLegacy.p50_ms
+      || report.command_family_summary.current_draw_pipeline_binds !== commandFamily.draw_pipeline_binds
+      || report.command_family_summary.legacy_draw_pipeline_binds !== commandFamilyLegacy.draw_pipeline_binds
+      || report.command_family_summary.current_draw_bind_group_binds !== commandFamily.draw_bind_group_binds
+      || report.command_family_summary.legacy_draw_bind_group_binds !== commandFamilyLegacy.draw_bind_group_binds
+      || report.command_family_summary.current_draw_scissor_sets !== commandFamily.draw_scissor_sets
+      || report.command_family_summary.legacy_draw_scissor_sets !== commandFamilyLegacy.draw_scissor_sets
+   ) {
+      throw new Error("command-family WebGPU summary must match current and legacy source rows");
+   }
+   if (report.command_family_summary.legacy_over_current <= 1.0) {
+      throw new Error(
+         `command-family current row must beat legacy rebind p50: current=${report.command_family_summary.current_p50_ms.toFixed(3)}ms legacy=${report.command_family_summary.legacy_p50_ms.toFixed(3)}ms ratio=${report.command_family_summary.legacy_over_current.toFixed(3)}`
+      );
    }
    let glyphUploadCurrent = byId.get("web.wasm.webgpu.glyph_atlas_upload.current_dirty");
    let glyphUploadLegacy = byId.get("web.wasm.webgpu.glyph_atlas_upload.legacy_full");
