@@ -45,6 +45,15 @@ fn report_section_slice<'a>(report: &'a str, section: &str) -> &'a str {
     &tail[..end]
 }
 
+fn source_fn_slice<'a>(source: &'a str, start_marker: &str, end_marker: &str) -> &'a str {
+    let start = source
+        .find(start_marker)
+        .unwrap_or_else(|| panic!("missing source marker {start_marker}"));
+    let tail = &source[start..];
+    let end = tail.find(end_marker).unwrap_or(tail.len());
+    &tail[..end]
+}
+
 fn report_f64(section: &str, key: &str) -> f64 {
     let marker = format!("\"{key}\": ");
     let start =
@@ -527,6 +536,15 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("fn renderer_stats_metrics"));
     assert!(source.contains("renderer_stats_metrics(current.stats, \"current\")"));
     assert!(source.contains("renderer_stats_metrics(legacy.stats, \"legacy\")"));
+    assert!(source.contains("mixed_damage: gfx::Damage"));
+    assert!(source.contains("layer_effects_damage: gfx::Damage"));
+    assert!(source.contains("Some(&self.mixed_damage)"));
+    assert!(source.contains("Some(&self.layer_effects_damage)"));
+    let mixed_frame = source_fn_slice(source, "fn mixed_frame", "fn layer_effects_frame");
+    let layer_effects_frame =
+        source_fn_slice(source, "fn layer_effects_frame", "fn command_family_frame");
+    assert!(!mixed_frame.contains("vec!["));
+    assert!(!layer_effects_frame.contains("vec!["));
     assert!(source.contains("{key_prefix}render_passes={}"));
     assert!(source.contains("{key_prefix}clear_passes={}"));
     assert!(source.contains("{key_prefix}id_mask_field_jump_passes={}"));
@@ -1597,8 +1615,8 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(report_u64(wasm_allocation_audit, "total_wasm_alloc_bytes") > 0);
     assert_eq!(report_u64(wasm_allocation_audit, "total_wasm_realloc_count"), 0);
     assert_eq!(report_u64(wasm_allocation_audit, "total_wasm_realloc_grow_bytes"), 0);
-    assert!(report_f64(wasm_allocation_audit, "budget_wasm_allocs_per_frame") <= 8.0);
-    assert!(report_f64(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame") <= 192.0);
+    assert!(report_f64(wasm_allocation_audit, "budget_wasm_allocs_per_frame") <= 7.0);
+    assert!(report_f64(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame") <= 144.0);
     assert!(
         report_f64(wasm_allocation_audit, "max_wasm_allocs_per_frame")
             <= report_f64(wasm_allocation_audit, "budget_wasm_allocs_per_frame")

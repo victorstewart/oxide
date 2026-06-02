@@ -1280,6 +1280,8 @@ mod wasm_host {
         full_rgba: Vec<u8>,
         dirty_rgba: Vec<u8>,
         builder: ui::DrawListBuilder,
+        mixed_damage: gfx::Damage,
+        layer_effects_damage: gfx::Damage,
     }
 
     impl WebGpuUploadBenchResources {
@@ -1311,6 +1313,19 @@ mod wasm_host {
                 full_rgba,
                 dirty_rgba,
                 builder: ui::DrawListBuilder::new(),
+                mixed_damage: gfx::Damage {
+                    rects: vec![
+                        gfx::RectI::new(0, 0, 128, 128),
+                        gfx::RectI::new(64, 64, 192, 192),
+                    ],
+                },
+                layer_effects_damage: gfx::Damage {
+                    rects: vec![
+                        gfx::RectI::new(0, 0, 96, 96),
+                        gfx::RectI::new(96, 64, 180, 132),
+                        gfx::RectI::new(30, 180, 220, 70),
+                    ],
+                },
             })
         }
 
@@ -1552,12 +1567,7 @@ mod wasm_host {
 
         fn mixed_frame(&mut self, renderer: &mut BrowserRenderer) -> Result<(), JsValue> {
             renderer.resize(512, 512, 2.0).map_err(render_err)?;
-            let token = renderer.begin_frame(
-                &gfx::FrameTarget,
-                Some(&gfx::Damage {
-                    rects: vec![gfx::RectI::new(0, 0, 128, 128), gfx::RectI::new(64, 64, 192, 192)],
-                }),
-            );
+            let token = renderer.begin_frame(&gfx::FrameTarget, Some(&self.mixed_damage));
             self.builder.clear();
             self.builder.rrect(
                 gfx::RectF::new(0.0, 0.0, 256.0, 256.0),
@@ -1631,16 +1641,7 @@ mod wasm_host {
 
         fn layer_effects_frame(&mut self, renderer: &mut BrowserRenderer) -> Result<(), JsValue> {
             renderer.resize(512, 512, 2.0).map_err(render_err)?;
-            let token = renderer.begin_frame(
-                &gfx::FrameTarget,
-                Some(&gfx::Damage {
-                    rects: vec![
-                        gfx::RectI::new(0, 0, 96, 96),
-                        gfx::RectI::new(96, 64, 180, 132),
-                        gfx::RectI::new(30, 180, 220, 70),
-                    ],
-                }),
-            );
+            let token = renderer.begin_frame(&gfx::FrameTarget, Some(&self.layer_effects_damage));
             self.builder.clear();
             self.builder.rrect(
                 gfx::RectF::new(0.0, 0.0, 256.0, 256.0),
