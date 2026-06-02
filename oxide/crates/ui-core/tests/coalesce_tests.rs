@@ -1,5 +1,5 @@
 use oxide_renderer_api::{Color, DrawCmd, DrawList, GlyphRun, ImageHandle, IndexSpan, VertexSpan};
-use oxide_ui_core::coalesce_adjacent_draws;
+use oxide_ui_core::{coalesce_adjacent_draws, coalesce_adjacent_draws_reuse};
 
 fn solid(vb_off: u32, vb_len: u32, ib_off: u32, ib_len: u32) -> DrawCmd {
     DrawCmd::Solid {
@@ -45,6 +45,30 @@ fn coalesce_merges_indexed_solids() {
         }
         _ => panic!("expected merged solid"),
     }
+}
+
+#[test]
+fn coalesce_reuse_merges_indexed_solids_with_caller_storage() {
+    let mut list =
+        DrawList { items: vec![solid(10, 8, 20, 12), solid(18, 6, 32, 9)], ..DrawList::default() };
+    let mut scratch = Vec::with_capacity(8);
+    coalesce_adjacent_draws_reuse(&mut list, &mut scratch);
+    assert_eq!(list.items.len(), 1);
+    match &list.items[0] {
+        DrawCmd::Solid { vb, ib, .. } => {
+            assert_eq!(vb.offset, 10);
+            assert_eq!(vb.len, 14);
+            assert_eq!(ib.offset, 20);
+            assert_eq!(ib.len, 21);
+        }
+        _ => panic!("expected merged solid"),
+    }
+
+    list.items.clear();
+    list.items.push(solid(0, 6, 0, 0));
+    list.items.push(solid(6, 3, 0, 0));
+    coalesce_adjacent_draws_reuse(&mut list, &mut scratch);
+    assert_eq!(list.items.len(), 1);
 }
 
 #[test]

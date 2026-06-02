@@ -34,3 +34,23 @@ fn damage_lab_scene_switch_forces_one_full_redraw_before_partial_damage() {
     assert!(!damage.iter().any(|rect| *rect == viewport_damage()));
     assert_eq!(damage, vec![gfx::RectI::new(8, 8, 374, 128)]);
 }
+
+#[test]
+fn damage_handoff_can_reuse_caller_storage() {
+    let mut router = Router::new(NullUploader);
+    let mut builder = DrawListBuilder::new();
+    let mut damage = Vec::with_capacity(8);
+    let original_capacity = damage.capacity();
+
+    router.draw(viewport(), 1.0, &mut builder);
+    router.take_damage_into(&mut damage);
+
+    assert!(!damage.is_empty());
+
+    damage.clear();
+    router.draw(viewport(), 1.0, &mut builder);
+    router.take_damage_into(&mut damage);
+
+    assert!(damage.capacity() >= original_capacity);
+    assert!(!damage.is_empty());
+}

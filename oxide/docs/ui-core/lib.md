@@ -36,6 +36,8 @@
   Replays a retained cached draw list only when it contains no text-atlas-dependent glyph runs or layer commands.
 - `DrawListBuilder::append_retained_drawlist_with_text_atlas_revisions`
   Replays a retained cached draw list only when every glyph run has a current atlas revision and the command stream is retained-replay safe.
+- `coalesce_adjacent_draws_reuse`
+  Coalesces adjacent mergeable draw commands with caller-owned scratch storage for hot frame loops that prewarm allocation capacity.
 - `elements::TextCtx::retained_text_atlas_revision`
   Exposes the live text atlas handle and revision only after dirty atlas bytes have been uploaded to the GPU.
 - `elements::TextCtx::set_fallback_fonts`
@@ -129,6 +131,7 @@
 - `UICameraView` emits Oxide renderer camera commands only; host-native visible preview planes are diagnostic-only outside this authoring surface.
 - Consolidating the text-input engines here removes duplicate app-side implementations without adding runtime indirection.
 - `prepare_draws` preallocates the resolved clip stack for the common shallow nested-clip path, avoiding the first frame-loop stack growth on representative clipping workloads.
+- `coalesce_adjacent_draws_reuse` lets host frame loops reuse a second command buffer for draw-command coalescing, avoiding the fresh output `Vec` allocation that the standalone convenience helper still pays.
 - `elements::Label` keeps disabled watch logging off the allocation path, preallocates the common wrapped-line buffers, and lets internal non-wrapped label call sites encode borrowed text directly instead of cloning through temporary `Label` values.
 - Wrapped `elements::Label` now reuses the shaped line outputs it created during width fitting and uploads the text atlas once after all line baking, avoiding the old second shape pass over every final wrapped line.
 - Primary-font ASCII wrapped labels now shape once for break decisions on cache misses, then shape only the final emitted lines; fallback-font and non-ASCII wrapping keep the conservative legacy path for correctness.
@@ -163,6 +166,7 @@
 - `crates/ui-core/tests/emitter_tests.rs` covers the CAEmitter-style burst surface.
 - `crates/ui-core/tests/elements_tests.rs` covers multi-line ASCII wrapped-label cache reuse and clean warm atlas redraws, with `cpu.system.wrapped_label_cached_encode` and `cpu.system.wrapped_label_legacy_fit_shape` covering current-vs-legacy workspace A/B evidence.
 - `crates/ui-core/tests/elements_tests.rs` covers picker label cache reuse and dirty glyph-atlas upload behavior, with `cpu.system.picker_text_cached_encode` and `cpu.system.picker_text_legacy_shape_upload` covering the same hot path in the workspace perf suite.
+- `crates/ui-core/tests/coalesce_tests.rs` covers adjacency-preserving coalescing and caller-owned scratch reuse.
 
 ## Examples
 ```rust
@@ -175,6 +179,7 @@ assert_eq!(text.value(), "");
 ```
 
 ## Changelog
+- 2026-06-02: Added `coalesce_adjacent_draws_reuse` so hot host frame loops can reuse draw-command coalescing scratch storage.
 - 2026-06-01: fixed child layout skip logic so stable child geometry cannot bypass dirty descendants during an ancestor relayout.
 - 2026-06-01: bounded `CollectionView` variable measurement cache entries and added cold-entry eviction coverage for large key/revision churn.
 - 2026-06-01: ASCII wrapped-label cache misses now shape once for break decisions instead of reshaping every growing word candidate, with `cpu.system.wrapped_label_cached_encode` and `cpu.system.wrapped_label_legacy_fit_shape` guarding current-vs-legacy workspace A/B evidence.

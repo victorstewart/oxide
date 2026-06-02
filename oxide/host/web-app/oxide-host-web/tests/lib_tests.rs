@@ -315,6 +315,23 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("pub async fn bench_webgpu_command_family_matrix"));
     assert!(source.contains("pub async fn bench_webgpu_draw_state_cache_ab"));
     assert!(source.contains("pub async fn bench_webgpu_clip_state_ab"));
+    assert!(source.contains("OXIDE_WASM_ALLOCATOR"));
+    assert!(source.contains("oxide_wasm_alloc_counter::CountingAllocator"));
+    assert!(source.contains("WebGpuAllocationSummary"));
+    assert!(source.contains("WebGpuFrameStageAllocationSummary"));
+    assert!(source.contains("frame_at_profiled"));
+    assert!(source.contains("fn frame_stage_allocation_metrics"));
+    assert!(source.contains("fn add_allocation_frame"));
+    assert!(source.contains("fn allocation_metrics"));
+    assert!(source.contains("oxide_wasm_alloc_counter::snapshot()"));
+    assert!(source.contains("damage_rects: Vec<gfx::RectI>"));
+    assert!(source.contains("take_damage_into(&mut self.damage_rects)"));
+    assert!(source.contains("wasm_alloc_count={}"));
+    assert!(source.contains("wasm_realloc_count={}"));
+    assert!(source.contains("wasm_allocating_frames={}"));
+    assert!(source.contains("WebGpuFrameStage::RouterDraw"));
+    assert!(source.contains("WebGpuFrameStage::EncodePass"));
+    assert!(source.contains("wasm_stage_{name}_alloc_count={}"));
     assert!(source.contains("pub fn render_webgpu_app_snapshot"));
     assert!(source.contains("pub fn render_webgpu_scene3d_snapshot"));
     assert!(source.contains("pub fn render_webgpu_id_mask_snapshot"));
@@ -770,6 +787,21 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
         script.contains("texture_upload_bytes: numberMetric(metrics, \"texture_upload_bytes\")")
     );
     assert!(script.contains("function resourceMetricFields"));
+    assert!(script.contains("function allocationMetricFields"));
+    assert!(script.contains("const WASM_FRAME_STAGE_NAMES"));
+    assert!(script.contains("function frameStageAllocationMetricFields"));
+    assert!(script.contains("function frameLoopWasmStageSummary"));
+    assert!(script.contains("function assertFrameLoopWasmStageAllocation"));
+    assert!(script.contains("function wasmAllocationSummary"));
+    assert!(script.contains("function assertWasmAllocationAudit"));
+    assert!(script.contains("wasm_allocation_audit"));
+    assert!(script.contains("frame_loop_wasm_allocation_stages"));
+    assert!(script.contains("wasm_alloc_count: numberMetric(metrics, key(\"wasm_alloc_count\"))"));
+    assert!(script.contains("wasm_realloc_count: numberMetric(metrics, key(\"wasm_realloc_count\"))"));
+    assert!(script.contains("wasm_allocating_frames: numberMetric(metrics, key(\"wasm_allocating_frames\"))"));
+    assert!(script.contains("wasm_peak_frame_alloc_bytes"));
+    assert!(script.contains("let prefix = `wasm_stage_${name}_`;"));
+    assert!(script.contains("web.wasm.webgpu.frame_loop_wasm_allocation_stages"));
     assert!(script.contains("buffer_grows: numberMetric(metrics, key(\"buffer_grows\"))"));
     assert!(script.contains("draw_buffer_grows: numberMetric(metrics, key(\"draw_buffer_grows\"))"));
     assert!(script.contains("image_texture_creates: numberMetric(metrics, key(\"image_texture_creates\"))"));
@@ -874,6 +906,7 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(report.contains("\"capture_target\": \"app\""));
     assert!(report.contains("\"browser_trace\": {"));
     assert!(report.contains("\"warm_resource_churn\": {"));
+    assert!(report.contains("\"wasm_allocation_audit\": {"));
 
     let frame = report_case_slice(report, "web.wasm.webgpu.frame_loop");
     let current = report_case_slice(report, "web.wasm.webgpu.id_mask_compositor.current");
@@ -949,6 +982,12 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(report_f64(frame, "pipeline_creates") >= 0.0);
     assert_eq!(report_u64(frame, "sampler_creates"), 0);
     assert!(report_f64(frame, "mesh3d_creates") >= 0.0);
+    assert!(report_f64(frame, "wasm_alloc_count") >= 0.0);
+    assert!(report_f64(frame, "wasm_alloc_bytes") >= 0.0);
+    assert!(report_f64(frame, "wasm_realloc_count") >= 0.0);
+    assert!(report_f64(frame, "wasm_realloc_grow_bytes") >= 0.0);
+    assert!(report_f64(frame, "wasm_allocating_frames") >= 0.0);
+    assert!(report_f64(frame, "wasm_peak_frame_alloc_bytes") >= 0.0);
     assert_eq!(report_u64(frame, "draw_buffer_grows"), 0);
     assert_eq!(report_u64(frame, "image_texture_creates"), 0);
     assert_eq!(report_u64(frame, "image_bind_group_creates"), 0);
@@ -1544,6 +1583,46 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert_eq!(report_u64(warm_resource_churn, "total_cpu_image_upload_scratch_growth_bytes"), 0);
     assert_eq!(report_u64(warm_resource_churn, "total_cpu_resource_table_scratch_grows"), 0);
     assert_eq!(report_u64(warm_resource_churn, "total_cpu_resource_table_scratch_growth_bytes"), 0);
+
+    let wasm_allocation_audit = report_section_slice(report, "wasm_allocation_audit");
+    assert!(wasm_allocation_audit
+        .contains("\"id\": \"web.wasm.webgpu.wasm_allocation_audit.current_rows\""));
+    assert_eq!(report_u64(wasm_allocation_audit, "checked_count"), 14);
+    assert_eq!(report_u64(wasm_allocation_audit, "excluded_count"), 13);
+    assert_eq!(report_u64(wasm_allocation_audit, "row_detail_count"), 14);
+    assert!(report_u64(wasm_allocation_audit, "total_wasm_alloc_count") > 0);
+    assert!(report_u64(wasm_allocation_audit, "total_wasm_alloc_bytes") > 0);
+    assert_eq!(report_u64(wasm_allocation_audit, "total_wasm_realloc_count"), 0);
+    assert_eq!(report_u64(wasm_allocation_audit, "total_wasm_realloc_grow_bytes"), 0);
+    assert!(
+        report_f64(wasm_allocation_audit, "max_wasm_allocs_per_frame")
+            <= report_f64(wasm_allocation_audit, "budget_wasm_allocs_per_frame")
+    );
+    assert!(
+        report_f64(wasm_allocation_audit, "max_wasm_alloc_bytes_per_frame")
+            <= report_f64(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame")
+    );
+
+    let frame_stage_allocations = report_section_slice(report, "frame_loop_wasm_allocation_stages");
+    assert!(frame_stage_allocations
+        .contains("\"id\": \"web.wasm.webgpu.frame_loop_wasm_allocation_stages\""));
+    assert!(frame_stage_allocations.contains("\"row_id\": \"web.wasm.webgpu.frame_loop\""));
+    assert_eq!(report_u64(frame_stage_allocations, "stage_count"), 11);
+    assert_eq!(
+        report_u64(frame_stage_allocations, "total_stage_wasm_alloc_count"),
+        report_u64(frame, "wasm_alloc_count"),
+    );
+    assert_eq!(
+        report_u64(frame_stage_allocations, "total_stage_wasm_alloc_bytes"),
+        report_u64(frame, "wasm_alloc_bytes"),
+    );
+    assert_eq!(report_u64(frame_stage_allocations, "total_stage_wasm_realloc_count"), 0);
+    assert_eq!(
+        report_u64(frame_stage_allocations, "total_stage_wasm_realloc_grow_bytes"),
+        0,
+    );
+    assert!(frame_stage_allocations.contains("\"stage\": \"router_draw\""));
+    assert!(frame_stage_allocations.contains("\"stage\": \"encode_pass\""));
     let backend_path_coverage = report_section_slice(report, "backend_path_coverage");
     assert!(
         backend_path_coverage.contains("\"id\": \"web.wasm.webgpu.backend_path_coverage\"")

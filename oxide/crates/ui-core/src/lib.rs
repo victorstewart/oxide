@@ -528,6 +528,18 @@ pub fn sort_for_batching(
 ///
 /// This does not reorder anything and is safe under blending and z-order.
 pub fn coalesce_adjacent_draws(list: &mut gfx::DrawList) {
+    let mut scratch = alloc::vec::Vec::with_capacity(list.items.len());
+    coalesce_adjacent_draws_reuse(list, &mut scratch);
+}
+
+/// Coalesce adjacent draw commands using caller-owned scratch storage.
+///
+/// This preserves the public `DrawList` contents while allowing hot frame loops to
+/// prewarm and reuse both the input and output command buffers.
+pub fn coalesce_adjacent_draws_reuse(
+    list: &mut gfx::DrawList,
+    scratch: &mut alloc::vec::Vec<gfx::DrawCmd>,
+) {
     use gfx::DrawCmd as C;
 
     #[inline]
@@ -577,24 +589,31 @@ pub fn coalesce_adjacent_draws(list: &mut gfx::DrawList) {
         return;
     }
 
-    let items = core::mem::take(&mut list.items);
-    let mut out = alloc::vec::Vec::with_capacity(items.len());
-    let mut iter = items.into_iter();
-    let Some(mut current) = iter.next() else {
-        return;
-    };
+    let mut items = core::mem::take(&mut list.items);
+    scratch.clear();
+    scratch.reserve(items.len());
+    {
+        let mut iter = items.drain(..);
+        let Some(mut current) = iter.next() else {
+            drop(iter);
+            list.items = items;
+            return;
+        };
 
-    for next in iter {
-        if can_merge(&current, &next) {
-            merge_into(&mut current, next);
-        } else {
-            out.push(current);
-            current = next;
+        for next in iter {
+            if can_merge(&current, &next) {
+                merge_into(&mut current, next);
+            } else {
+                scratch.push(current);
+                current = next;
+            }
         }
+
+        scratch.push(current);
     }
 
-    out.push(current);
-    list.items = out;
+    list.items = core::mem::take(scratch);
+    *scratch = items;
 }
 
 extern crate alloc;

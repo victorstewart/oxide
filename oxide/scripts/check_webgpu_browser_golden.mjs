@@ -950,6 +950,8 @@ function frameLoopCase(metrics)
       peak_ms: numberMetric(metrics, "peak_ms"),
       avg_ms: numberMetric(metrics, "avg_ms"),
       ...pacingMetricFields(metrics, ""),
+      ...allocationMetricFields(metrics, ""),
+      ...frameStageAllocationMetricFields(metrics),
       draws: numberMetric(metrics, "draws"),
       draw_items: numberMetric(metrics, "draw_items"),
       draw_pipeline_binds: numberMetric(metrics, "draw_pipeline_binds"),
@@ -1037,6 +1039,53 @@ function timestampMetricFields(metrics, prefix)
    };
 }
 
+function allocationMetricFields(metrics, prefix)
+{
+   let key = name => `${prefix}${name}`;
+   return {
+      wasm_alloc_count: numberMetric(metrics, key("wasm_alloc_count")),
+      wasm_alloc_bytes: numberMetric(metrics, key("wasm_alloc_bytes")),
+      wasm_dealloc_count: numberMetric(metrics, key("wasm_dealloc_count")),
+      wasm_dealloc_bytes: numberMetric(metrics, key("wasm_dealloc_bytes")),
+      wasm_realloc_count: numberMetric(metrics, key("wasm_realloc_count")),
+      wasm_realloc_grow_bytes: numberMetric(metrics, key("wasm_realloc_grow_bytes")),
+      wasm_realloc_shrink_bytes: numberMetric(metrics, key("wasm_realloc_shrink_bytes")),
+      wasm_allocating_frames: numberMetric(metrics, key("wasm_allocating_frames")),
+      wasm_peak_frame_alloc_bytes: numberMetric(metrics, key("wasm_peak_frame_alloc_bytes")),
+   };
+}
+
+const WASM_FRAME_STAGE_NAMES = [
+   "canvas_resize",
+   "frame_timing",
+   "builder_clear",
+   "router_update",
+   "router_draw",
+   "damage_handoff",
+   "draw_coalesce",
+   "begin_frame",
+   "encode_pass",
+   "submit",
+   "post_submit",
+];
+
+function frameStageAllocationMetricFields(metrics)
+{
+   let fields = {};
+   for (let name of WASM_FRAME_STAGE_NAMES) {
+      let prefix = `wasm_stage_${name}_`;
+      fields[`${prefix}alloc_count`] = numberMetric(metrics, `${prefix}alloc_count`);
+      fields[`${prefix}alloc_bytes`] = numberMetric(metrics, `${prefix}alloc_bytes`);
+      fields[`${prefix}realloc_count`] = numberMetric(metrics, `${prefix}realloc_count`);
+      fields[`${prefix}realloc_grow_bytes`] = numberMetric(metrics, `${prefix}realloc_grow_bytes`);
+      fields[`${prefix}peak_frame_alloc_bytes`] = numberMetric(
+         metrics,
+         `${prefix}peak_frame_alloc_bytes`,
+      );
+   }
+   return fields;
+}
+
 function resourceMetricFields(metrics, prefix)
 {
    let key = name => `${prefix}${name}`;
@@ -1110,6 +1159,7 @@ function idMaskCase(metrics, id, variant, prefix)
       peak_ms: numberMetric(metrics, `${prefix}_peak_ms`),
       avg_ms: numberMetric(metrics, `${prefix}_avg_ms`),
       ...pacingMetricFields(metrics, `${prefix}_`),
+      ...allocationMetricFields(metrics, `${prefix}_`),
       draws: numberMetric(metrics, `${prefix}_draws`),
       draw_items: numberMetric(metrics, `${prefix}_draw_items`),
       draw_pipeline_binds: numberMetric(metrics, `${prefix}_draw_pipeline_binds`),
@@ -1180,6 +1230,7 @@ function prefixedBackendCase(metrics, id, variant, prefix, extra)
       peak_ms: numberMetric(metrics, `${prefix}_peak_ms`),
       avg_ms: numberMetric(metrics, `${prefix}_avg_ms`),
       ...pacingMetricFields(metrics, `${prefix}_`),
+      ...allocationMetricFields(metrics, `${prefix}_`),
       draws: numberMetric(metrics, `${prefix}_draws`),
       draw_items: numberMetric(metrics, `${prefix}_draw_items`),
       draw_pipeline_binds: numberMetric(metrics, `${prefix}_draw_pipeline_binds`),
@@ -1534,6 +1585,135 @@ function warmResourceChurnSummary(cases)
       excluded,
       row_details: rowDetails,
       ...totals,
+   };
+}
+
+function wasmAllocationSummary(cases)
+{
+   let rows = [];
+   let rowDetails = [];
+   let excluded = [];
+   let totalAllocCount = 0;
+   let totalAllocBytes = 0;
+   let totalReallocCount = 0;
+   let totalReallocGrowBytes = 0;
+   let maxAllocsPerFrame = 0;
+   let maxAllocBytesPerFrame = 0;
+   let maxPeakFrameAllocBytes = 0;
+   for (let row of cases) {
+      if (WARM_RESOURCE_CHURN_EXCLUDED_IDS.has(row.id)) {
+         excluded.push(row.id);
+         continue;
+      }
+      let frames = Number(row.frames);
+      let allocCount = Number(row.wasm_alloc_count);
+      let allocBytes = Number(row.wasm_alloc_bytes);
+      let reallocCount = Number(row.wasm_realloc_count);
+      let reallocGrowBytes = Number(row.wasm_realloc_grow_bytes);
+      let allocatingFrames = Number(row.wasm_allocating_frames);
+      let peakFrameAllocBytes = Number(row.wasm_peak_frame_alloc_bytes);
+      let allocsPerFrame = frames > 0 ? allocCount / frames : 0;
+      let allocBytesPerFrame = frames > 0 ? allocBytes / frames : 0;
+      rows.push(row.id);
+      totalAllocCount += allocCount;
+      totalAllocBytes += allocBytes;
+      totalReallocCount += reallocCount;
+      totalReallocGrowBytes += reallocGrowBytes;
+      maxAllocsPerFrame = Math.max(maxAllocsPerFrame, allocsPerFrame);
+      maxAllocBytesPerFrame = Math.max(maxAllocBytesPerFrame, allocBytesPerFrame);
+      maxPeakFrameAllocBytes = Math.max(maxPeakFrameAllocBytes, peakFrameAllocBytes);
+      rowDetails.push({
+         id: row.id,
+         frames,
+         wasm_alloc_count: allocCount,
+         wasm_alloc_bytes: allocBytes,
+         wasm_allocs_per_frame: allocsPerFrame,
+         wasm_alloc_bytes_per_frame: allocBytesPerFrame,
+         wasm_dealloc_count: numberMetric(row, "wasm_dealloc_count"),
+         wasm_dealloc_bytes: numberMetric(row, "wasm_dealloc_bytes"),
+         wasm_realloc_count: reallocCount,
+         wasm_realloc_grow_bytes: reallocGrowBytes,
+         wasm_realloc_shrink_bytes: numberMetric(row, "wasm_realloc_shrink_bytes"),
+         wasm_allocating_frames: allocatingFrames,
+         wasm_peak_frame_alloc_bytes: peakFrameAllocBytes,
+      });
+   }
+   return {
+      id: "web.wasm.webgpu.wasm_allocation_audit.current_rows",
+      status: "measured",
+      checked_count: rows.length,
+      excluded_count: excluded.length,
+      total_wasm_alloc_count: totalAllocCount,
+      total_wasm_alloc_bytes: totalAllocBytes,
+      total_wasm_realloc_count: totalReallocCount,
+      total_wasm_realloc_grow_bytes: totalReallocGrowBytes,
+      max_wasm_allocs_per_frame: maxAllocsPerFrame,
+      max_wasm_alloc_bytes_per_frame: maxAllocBytesPerFrame,
+      max_wasm_peak_frame_alloc_bytes: maxPeakFrameAllocBytes,
+      budget_wasm_allocs_per_frame: 18,
+      budget_wasm_alloc_bytes_per_frame: 3072,
+      rows,
+      excluded,
+      row_detail_count: rowDetails.length,
+      row_details: rowDetails,
+   };
+}
+
+function frameLoopWasmStageSummary(cases)
+{
+   let frame = cases.find(row => row.id === "web.wasm.webgpu.frame_loop");
+   if (!frame) {
+      throw new Error("web report missing frame-loop row for WASM stage allocation summary");
+   }
+   let totalAllocCount = 0;
+   let totalAllocBytes = 0;
+   let totalReallocCount = 0;
+   let totalReallocGrowBytes = 0;
+   let maxPeakFrameAllocBytes = 0;
+   let dominantStage = "";
+   let dominantStageAllocCount = 0;
+   let stages = [];
+   for (let name of WASM_FRAME_STAGE_NAMES) {
+      let prefix = `wasm_stage_${name}_`;
+      let allocCount = numberMetric(frame, `${prefix}alloc_count`);
+      let allocBytes = numberMetric(frame, `${prefix}alloc_bytes`);
+      let reallocCount = numberMetric(frame, `${prefix}realloc_count`);
+      let reallocGrowBytes = numberMetric(frame, `${prefix}realloc_grow_bytes`);
+      let peakFrameAllocBytes = numberMetric(frame, `${prefix}peak_frame_alloc_bytes`);
+      totalAllocCount += allocCount;
+      totalAllocBytes += allocBytes;
+      totalReallocCount += reallocCount;
+      totalReallocGrowBytes += reallocGrowBytes;
+      maxPeakFrameAllocBytes = Math.max(maxPeakFrameAllocBytes, peakFrameAllocBytes);
+      if (allocCount > dominantStageAllocCount) {
+         dominantStage = name;
+         dominantStageAllocCount = allocCount;
+      }
+      stages.push({
+         stage: name,
+         wasm_alloc_count: allocCount,
+         wasm_alloc_bytes: allocBytes,
+         wasm_realloc_count: reallocCount,
+         wasm_realloc_grow_bytes: reallocGrowBytes,
+         wasm_peak_frame_alloc_bytes: peakFrameAllocBytes,
+      });
+   }
+   return {
+      id: "web.wasm.webgpu.frame_loop_wasm_allocation_stages",
+      row_id: frame.id,
+      frames: numberMetric(frame, "frames"),
+      stage_count: stages.length,
+      total_stage_wasm_alloc_count: totalAllocCount,
+      total_stage_wasm_alloc_bytes: totalAllocBytes,
+      total_stage_wasm_realloc_count: totalReallocCount,
+      total_stage_wasm_realloc_grow_bytes: totalReallocGrowBytes,
+      max_stage_peak_frame_alloc_bytes: maxPeakFrameAllocBytes,
+      row_wasm_alloc_count: numberMetric(frame, "wasm_alloc_count"),
+      row_wasm_alloc_bytes: numberMetric(frame, "wasm_alloc_bytes"),
+      row_wasm_realloc_count: numberMetric(frame, "wasm_realloc_count"),
+      dominant_stage: dominantStage,
+      dominant_stage_wasm_alloc_count: dominantStageAllocCount,
+      stages,
    };
 }
 
@@ -1947,6 +2127,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          "The WebGPU clip-state A/B rows use real Oxide ClipPush/ClipPop commands to measure scissor-state caching.",
          "Pass-family counters provide browser GPU-stage attribution when direct timestamp queries are unavailable.",
          "Warm current-path WebGPU rows are gated against post-warmup resource creation, buffer growth, mesh creation, image-upload temp allocation, and CPU/image scratch growth.",
+         "WASM allocation counters measure Rust allocator activity inside each post-warmup benchmark frame loop and are reported separately from renderer-owned resource churn.",
          "Chrome startup tracing is captured from a duplicate benchmark-report run so GPU/browser-process activity is tied to the same report workload without perturbing persisted timing rows.",
          "Browser User Timing marks surround every benchmark family and are persisted to prove the traced report run exercised the expected workload phases.",
       ],
@@ -1986,6 +2167,8 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
       browser_trace: traceSummary,
       benchmark_marks: benchmarkMarks,
       warm_resource_churn: warmResourceChurn,
+      wasm_allocation_audit: wasmAllocationSummary(cases),
+      frame_loop_wasm_allocation_stages: frameLoopWasmStageSummary(cases),
       backend_path_coverage: backendPathCoverage,
       cases,
       ab_summary: {
@@ -2449,6 +2632,21 @@ function renderMarkdown(report)
       if (row.mesh3d_creates !== undefined) {
          notes.push(`mesh3d_creates=${row.mesh3d_creates}`);
       }
+      if (row.wasm_alloc_count !== undefined) {
+         notes.push(`wasm_alloc_count=${row.wasm_alloc_count}`);
+      }
+      if (row.wasm_alloc_bytes !== undefined) {
+         notes.push(`wasm_alloc_bytes=${row.wasm_alloc_bytes}`);
+      }
+      if (row.wasm_realloc_count !== undefined) {
+         notes.push(`wasm_realloc_count=${row.wasm_realloc_count}`);
+      }
+      if (row.wasm_realloc_grow_bytes !== undefined) {
+         notes.push(`wasm_realloc_grow_bytes=${row.wasm_realloc_grow_bytes}`);
+      }
+      if (row.wasm_allocating_frames !== undefined) {
+         notes.push(`wasm_allocating_frames=${row.wasm_allocating_frames}`);
+      }
       if (row.image_upload_temp_allocs !== undefined) {
          notes.push(`image_upload_temp_allocs=${row.image_upload_temp_allocs}`);
       }
@@ -2628,6 +2826,28 @@ function renderMarkdown(report)
       lines.push(`| \`${row.id}\` | ${row.cpu_draw_scratch_grows} | ${row.cpu_draw_scratch_growth_bytes} | ${row.cpu_scene3d_scratch_grows} | ${row.cpu_scene3d_scratch_growth_bytes} | ${row.cpu_effect_scratch_grows} | ${row.cpu_effect_scratch_growth_bytes} | ${row.cpu_id_mask_scratch_grows} | ${row.cpu_id_mask_scratch_growth_bytes} | ${row.cpu_image_upload_scratch_grows} | ${row.cpu_image_upload_scratch_growth_bytes} | ${row.cpu_resource_table_scratch_grows} | ${row.cpu_resource_table_scratch_growth_bytes} |`);
    }
    lines.push("");
+   lines.push("## WASM Allocation Audit");
+   lines.push("");
+   lines.push("| Check | Rows | Total Allocs | Total Bytes | Reallocs | Realloc Grow Bytes | Max Allocs/Frame | Max Bytes/Frame | Max Peak Frame Bytes | Budget Allocs/Frame | Budget Bytes/Frame |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+   lines.push(`| \`${report.wasm_allocation_audit.id}\` | ${report.wasm_allocation_audit.checked_count} checked / ${report.wasm_allocation_audit.excluded_count} excluded | ${report.wasm_allocation_audit.total_wasm_alloc_count} | ${report.wasm_allocation_audit.total_wasm_alloc_bytes} | ${report.wasm_allocation_audit.total_wasm_realloc_count} | ${report.wasm_allocation_audit.total_wasm_realloc_grow_bytes} | ${report.wasm_allocation_audit.max_wasm_allocs_per_frame.toFixed(3)} | ${report.wasm_allocation_audit.max_wasm_alloc_bytes_per_frame.toFixed(3)} | ${report.wasm_allocation_audit.max_wasm_peak_frame_alloc_bytes} | ${report.wasm_allocation_audit.budget_wasm_allocs_per_frame} | ${report.wasm_allocation_audit.budget_wasm_alloc_bytes_per_frame} |`);
+   lines.push("");
+   lines.push("### WASM Allocation Rows");
+   lines.push("");
+   lines.push("| Row | Frames | Allocs | Bytes | Allocs/Frame | Bytes/Frame | Reallocs | Realloc Grow Bytes | Allocating Frames | Peak Frame Bytes |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+   for (let row of report.wasm_allocation_audit.row_details) {
+      lines.push(`| \`${row.id}\` | ${row.frames} | ${row.wasm_alloc_count} | ${row.wasm_alloc_bytes} | ${row.wasm_allocs_per_frame.toFixed(3)} | ${row.wasm_alloc_bytes_per_frame.toFixed(3)} | ${row.wasm_realloc_count} | ${row.wasm_realloc_grow_bytes} | ${row.wasm_allocating_frames} | ${row.wasm_peak_frame_alloc_bytes} |`);
+   }
+   lines.push("");
+   lines.push("## Frame Loop WASM Allocation Stages");
+   lines.push("");
+   lines.push("| Stage | Allocs | Bytes | Reallocs | Realloc Grow Bytes | Peak Frame Bytes |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: |");
+   for (let row of report.frame_loop_wasm_allocation_stages.stages) {
+      lines.push(`| \`${row.stage}\` | ${row.wasm_alloc_count} | ${row.wasm_alloc_bytes} | ${row.wasm_realloc_count} | ${row.wasm_realloc_grow_bytes} | ${row.wasm_peak_frame_alloc_bytes} |`);
+   }
+   lines.push("");
    lines.push("## Backend Path Coverage");
    lines.push("");
    lines.push("| Path | Status | Comparison | Rows | Counters |");
@@ -2791,7 +3011,12 @@ function assertWarmResourceChurn(report, byId)
       }
       let total = summary[`total_${field}`];
       if (!Number.isFinite(total) || total !== 0) {
-         throw new Error(`web report contract found warm resource churn ${field}=${total}`);
+         let offenders = rows
+            .map(id => rowDetailById.get(id))
+            .filter(detail => detail && Number(detail[field]) !== 0)
+            .map(detail => `${detail.id}:${detail[field]}`)
+            .join(",");
+         throw new Error(`web report contract found warm resource churn ${field}=${total} rows=${offenders}`);
       }
       for (let id of rows) {
          let detail = rowDetailById.get(id);
@@ -2807,6 +3032,191 @@ function assertWarmResourceChurn(report, byId)
             throw new Error(`web report contract found warm resource churn row ${id}.${field}=${value}`);
          }
       }
+   }
+}
+
+function assertWasmAllocationAudit(report, byId)
+{
+   let summary = report.wasm_allocation_audit;
+   if (!summary || summary.id !== "web.wasm.webgpu.wasm_allocation_audit.current_rows") {
+      throw new Error("web report contract missing WASM allocation audit summary");
+   }
+   let rows = Array.isArray(summary.rows) ? summary.rows : [];
+   let excluded = Array.isArray(summary.excluded) ? summary.excluded : [];
+   let rowDetails = Array.isArray(summary.row_details) ? summary.row_details : [];
+   if (summary.checked_count !== rows.length || summary.excluded_count !== excluded.length) {
+      throw new Error("web report contract has inconsistent WASM allocation row counts");
+   }
+   if (summary.row_detail_count !== rowDetails.length || rowDetails.length !== rows.length) {
+      throw new Error("web report contract has inconsistent WASM allocation row detail counts");
+   }
+   assertNumber(summary.total_wasm_alloc_count, "wasm_allocation_audit.total_wasm_alloc_count");
+   assertNumber(summary.total_wasm_alloc_bytes, "wasm_allocation_audit.total_wasm_alloc_bytes");
+   assertNumber(summary.total_wasm_realloc_count, "wasm_allocation_audit.total_wasm_realloc_count");
+   assertNumber(
+      summary.total_wasm_realloc_grow_bytes,
+      "wasm_allocation_audit.total_wasm_realloc_grow_bytes",
+   );
+   assertNumber(summary.max_wasm_allocs_per_frame, "wasm_allocation_audit.max_wasm_allocs_per_frame");
+   assertNumber(
+      summary.max_wasm_alloc_bytes_per_frame,
+      "wasm_allocation_audit.max_wasm_alloc_bytes_per_frame",
+   );
+   assertNumber(
+      summary.max_wasm_peak_frame_alloc_bytes,
+      "wasm_allocation_audit.max_wasm_peak_frame_alloc_bytes",
+   );
+   assertNumber(summary.budget_wasm_allocs_per_frame, "wasm_allocation_audit.budget_wasm_allocs_per_frame");
+   assertNumber(
+      summary.budget_wasm_alloc_bytes_per_frame,
+      "wasm_allocation_audit.budget_wasm_alloc_bytes_per_frame",
+   );
+   if (summary.total_wasm_alloc_count <= 0 || summary.total_wasm_alloc_bytes <= 0) {
+      throw new Error("web report contract expected measured WASM allocation activity");
+   }
+   if (summary.total_wasm_realloc_count !== 0 || summary.total_wasm_realloc_grow_bytes !== 0) {
+      throw new Error("web report contract found current-row WASM reallocations");
+   }
+   if (
+      summary.max_wasm_allocs_per_frame > summary.budget_wasm_allocs_per_frame
+      || summary.max_wasm_alloc_bytes_per_frame > summary.budget_wasm_alloc_bytes_per_frame
+   ) {
+      throw new Error("web report contract found WASM allocation budget regression");
+   }
+   let rowSet = new Set(rows);
+   for (let id of [
+      "web.wasm.webgpu.frame_loop",
+      "web.wasm.webgpu.id_mask_compositor.current",
+      "web.wasm.webgpu.glyph_atlas_upload.current_dirty",
+      "web.wasm.webgpu.image_upload.current_dirty",
+      "web.wasm.webgpu.upload_scratch.current_reuse",
+      "web.wasm.webgpu.effect_uniform.current_batched",
+      "web.wasm.webgpu.backdrop_batch.current_coalesced",
+      "web.wasm.webgpu.scene3d.reused_mesh",
+      "web.wasm.webgpu.scene3d.stress_reused_mesh",
+      "web.wasm.webgpu.mixed_text_image_effects",
+      "web.wasm.webgpu.layer_damage_effects",
+      "web.wasm.webgpu.command_family_matrix",
+      "web.wasm.webgpu.draw_state_cache.current",
+      "web.wasm.webgpu.clip_state_cache.current",
+   ]) {
+      if (!rowSet.has(id)) {
+         throw new Error(`web report contract missing WASM allocation row ${id}`);
+      }
+   }
+   for (let detail of rowDetails) {
+      let source = byId.get(detail.id);
+      if (!source || !rowSet.has(detail.id)) {
+         throw new Error("web report contract has unexpected WASM allocation row detail");
+      }
+      for (let field of [
+         "frames",
+         "wasm_alloc_count",
+         "wasm_alloc_bytes",
+         "wasm_allocs_per_frame",
+         "wasm_alloc_bytes_per_frame",
+         "wasm_dealloc_count",
+         "wasm_dealloc_bytes",
+         "wasm_realloc_count",
+         "wasm_realloc_grow_bytes",
+         "wasm_realloc_shrink_bytes",
+         "wasm_allocating_frames",
+         "wasm_peak_frame_alloc_bytes",
+      ]) {
+         assertNumber(detail[field], `wasm_allocation_audit.${detail.id}.${field}`);
+      }
+      if (
+         detail.wasm_alloc_count !== source.wasm_alloc_count
+         || detail.wasm_alloc_bytes !== source.wasm_alloc_bytes
+         || detail.wasm_realloc_count !== source.wasm_realloc_count
+         || detail.wasm_realloc_grow_bytes !== source.wasm_realloc_grow_bytes
+      ) {
+         throw new Error(`web report contract WASM allocation row detail mismatch ${detail.id}`);
+      }
+      if (detail.wasm_realloc_count !== 0 || detail.wasm_realloc_grow_bytes !== 0) {
+         throw new Error(`web report contract found WASM reallocations in ${detail.id}`);
+      }
+      if (
+         detail.wasm_allocs_per_frame > summary.budget_wasm_allocs_per_frame
+         || detail.wasm_alloc_bytes_per_frame > summary.budget_wasm_alloc_bytes_per_frame
+      ) {
+         throw new Error(`web report contract found WASM allocation budget regression in ${detail.id}`);
+      }
+   }
+}
+
+function assertFrameLoopWasmStageAllocation(report, byId)
+{
+   let summary = report.frame_loop_wasm_allocation_stages;
+   if (
+      !summary
+      || summary.id !== "web.wasm.webgpu.frame_loop_wasm_allocation_stages"
+      || summary.row_id !== "web.wasm.webgpu.frame_loop"
+   ) {
+      throw new Error("web report contract missing frame-loop WASM allocation stage summary");
+   }
+   let frame = byId.get("web.wasm.webgpu.frame_loop");
+   if (!frame) {
+      throw new Error("web report contract missing frame-loop row for stage allocation summary");
+   }
+   let stages = Array.isArray(summary.stages) ? summary.stages : [];
+   if (summary.stage_count !== WASM_FRAME_STAGE_NAMES.length || stages.length !== WASM_FRAME_STAGE_NAMES.length) {
+      throw new Error("web report contract has inconsistent frame-loop WASM stage counts");
+   }
+   assertNumber(summary.total_stage_wasm_alloc_count, "frame_loop_wasm_stages.total_stage_wasm_alloc_count");
+   assertNumber(summary.total_stage_wasm_alloc_bytes, "frame_loop_wasm_stages.total_stage_wasm_alloc_bytes");
+   assertNumber(summary.total_stage_wasm_realloc_count, "frame_loop_wasm_stages.total_stage_wasm_realloc_count");
+   assertNumber(
+      summary.total_stage_wasm_realloc_grow_bytes,
+      "frame_loop_wasm_stages.total_stage_wasm_realloc_grow_bytes",
+   );
+   if (
+      summary.total_stage_wasm_alloc_count !== frame.wasm_alloc_count
+      || summary.total_stage_wasm_alloc_bytes !== frame.wasm_alloc_bytes
+      || summary.row_wasm_alloc_count !== frame.wasm_alloc_count
+      || summary.row_wasm_alloc_bytes !== frame.wasm_alloc_bytes
+   ) {
+      throw new Error("web report contract found unattributed frame-loop WASM allocations");
+   }
+   if (
+      summary.total_stage_wasm_realloc_count !== 0
+      || summary.total_stage_wasm_realloc_grow_bytes !== 0
+      || summary.row_wasm_realloc_count !== 0
+   ) {
+      throw new Error("web report contract found frame-loop WASM stage reallocations");
+   }
+   let stageNames = new Set(stages.map(stage => stage.stage));
+   for (let name of WASM_FRAME_STAGE_NAMES) {
+      if (!stageNames.has(name)) {
+         throw new Error(`web report contract missing frame-loop WASM allocation stage ${name}`);
+      }
+   }
+   let totalAllocCount = 0;
+   let totalAllocBytes = 0;
+   for (let stage of stages) {
+      for (let field of [
+         "wasm_alloc_count",
+         "wasm_alloc_bytes",
+         "wasm_realloc_count",
+         "wasm_realloc_grow_bytes",
+         "wasm_peak_frame_alloc_bytes",
+      ]) {
+         assertNumber(stage[field], `frame_loop_wasm_stages.${stage.stage}.${field}`);
+      }
+      if (stage.wasm_realloc_count !== 0 || stage.wasm_realloc_grow_bytes !== 0) {
+         throw new Error(`web report contract found WASM reallocations in frame stage ${stage.stage}`);
+      }
+      totalAllocCount += stage.wasm_alloc_count;
+      totalAllocBytes += stage.wasm_alloc_bytes;
+   }
+   if (
+      totalAllocCount !== summary.total_stage_wasm_alloc_count
+      || totalAllocBytes !== summary.total_stage_wasm_alloc_bytes
+   ) {
+      throw new Error("web report contract frame-loop WASM stage totals do not match stage rows");
+   }
+   if (summary.total_stage_wasm_alloc_count <= 0 || !stageNames.has(summary.dominant_stage)) {
+      throw new Error("web report contract missing dominant frame-loop WASM allocation stage");
    }
 }
 
@@ -3311,6 +3721,8 @@ function assertWebReportContract(report)
    assertBenchmarkMarks(report);
    let byId = new Map(report.cases.map(row => [row.id, row]));
    assertWarmResourceChurn(report, byId);
+   assertWasmAllocationAudit(report, byId);
+   assertFrameLoopWasmStageAllocation(report, byId);
    assertBackendPathCoverage(report, byId);
    if (byId.get("web.wasm.webgpu.id_mask_compositor.current").id_mask_draws <= 0) {
       throw new Error("web report contract missing ID-mask draw counter");

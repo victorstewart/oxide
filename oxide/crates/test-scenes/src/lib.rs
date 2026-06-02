@@ -1101,6 +1101,11 @@ impl<U: elements::ImageUploader> Router<U> {
         core::mem::take(&mut self.last_damage)
     }
 
+    pub fn take_damage_into(&mut self, out: &mut alloc::vec::Vec<gfx::RectI>) {
+        out.clear();
+        core::mem::swap(out, &mut self.last_damage);
+    }
+
     fn push_damage(&mut self, r: gfx::RectI) {
         if r.w > 0 && r.h > 0 {
             self.last_damage.push(r);
@@ -1136,7 +1141,10 @@ impl Default for Controls {
             t: 0.0,
             progress: 0.32,
             progress_indeterminate: false,
-            button: elements::Button::default(),
+            button: elements::Button {
+                text: alloc::string::String::from("Press Me"),
+                ..elements::Button::default()
+            },
             button_state: elements::ButtonState::default(),
             toggle: elements::Toggle::default(),
             toggle_state: elements::ToggleState::default(),
@@ -1199,15 +1207,19 @@ impl Controls {
         );
         b.rrect(panel, [8.0; 4], gfx::Color::rgba(0.96, 0.97, 0.99, 1.0));
         // Label
-        let lbl = elements::Label {
-            text: "Controls Showcase".into(),
-            color: gfx::Color::rgba(0.1, 0.1, 0.1, 1.0),
-            align: elements::Align::Left,
-            wrap: false,
-            font_id: 0,
-            font_px: 18.0,
-        };
-        lbl.encode(gfx::RectF::new(panel.x + 16.0, panel.y + 12.0, 300.0, 24.0), ds, text, up, b);
+        elements::encode_label_text(
+            "Controls Showcase",
+            gfx::Color::rgba(0.1, 0.1, 0.1, 1.0),
+            elements::Align::Left,
+            false,
+            0,
+            18.0,
+            gfx::RectF::new(panel.x + 16.0, panel.y + 12.0, 300.0, 24.0),
+            ds,
+            text,
+            up,
+            b,
+        );
         // Progress
         let pb = elements::ProgressBar {
             value: if self.progress_indeterminate { None } else { Some(self.progress) },
@@ -1218,7 +1230,6 @@ impl Controls {
         let sp = elements::Spinner { alpha: 1.0 };
         sp.encode(gfx::RectF::new(panel.x + 16.0, panel.y + 72.0, 24.0, 24.0), b);
         // Button
-        self.button.text = "Press Me".into();
         self.button.encode(
             gfx::RectF::new(panel.x + 16.0, panel.y + 108.0, 140.0, 40.0),
             ds,

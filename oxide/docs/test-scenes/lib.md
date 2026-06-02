@@ -29,6 +29,9 @@
 - `oxide_test_scenes::Router<U>::draw(&mut self, viewport: RectF, device_scale: f32, b: &mut DrawListBuilder)`
   - Encodes the active scene into a draw list.
   - Main callers: host app frame path and snapshot/perf tools.
+- `oxide_test_scenes::Router<U>::take_damage_into(&mut self, out: &mut Vec<RectI>)`
+  - Moves the last frame's damage rectangles into caller-owned reusable storage.
+  - Main callers: allocation-audited host frame loops.
 - `oxide_test_scenes::Router<U>::input_touch(&mut self, event: &TouchEvent)`
   - Feeds raw touch contacts into the Oxide-owned surface recognizer and forwards one-finger pans plus pinch deltas to scenes that support them.
   - Main callers: iOS host raw touch callback.
@@ -63,18 +66,19 @@ Unknown or unsupported touch gestures are ignored. Invalid coordinates are filte
 
 ## Concurrency and memory behavior
 
-The router is single-threaded scene state. Benchmark stepping reuses existing scene allocations after prepare; per-frame allocation behavior is governed by the underlying UI-core scene primitives and renderer.
+The router is single-threaded scene state. Benchmark stepping reuses existing scene allocations after prepare; per-frame allocation behavior is governed by the underlying UI-core scene primitives and renderer. Host frame loops can use `take_damage_into` to keep damage handoff storage caller-owned after warmup.
 
 Raw touch recognition stores a bounded inline set of active contacts with overflow only for unusually high touch counts. The router consumes the recognizer synchronously on the host input thread.
 
 ## Performance notes
 
-The headline cases deliberately avoid new benchmark-only abstractions. Reusing existing scenes keeps code surface small and ensures the measured cost includes the same draw-list paths app authors use.
+The headline cases deliberately avoid new benchmark-only abstractions. Reusing existing scenes keeps code surface small and ensures the measured cost includes the same draw-list paths app authors use. Damage handoff supports caller-owned vector reuse so browser/host allocation audits can distinguish scene damage content from per-frame storage churn. The default Controls scene keeps static label/button text out of the per-frame allocation path.
 
 ## Testing and benchmarks
 
 - `oxide/crates/test-scenes/tests/onscreen_benchmark_tests.rs` verifies the new headline benchmark keys prepare the expected scenes and accept a step.
 - `oxide/crates/test-scenes/tests/onscreen_benchmark_tests.rs` verifies raw two-touch pinch events change the Zoom Image scene through the router without applying two-touch pan as a drag.
+- `oxide/crates/test-scenes/tests/damage_rect_tests.rs` verifies damage scene switching, partial damage, and caller-owned damage storage reuse.
 - Device benchmark rows are selected by `oxide/xtask/src/lib.rs` and persisted under `oxide/benchmarks/oxide-device/`.
 
 ## Examples
@@ -87,6 +91,8 @@ assert!(router.step_onscreen_benchmark("component_button_encode", 1));
 
 ## Changelog
 
+- 2026-06-02: Added `take_damage_into` so allocation-audited hosts can reuse caller-owned damage storage.
+- 2026-06-02: Removed per-frame static label/button string allocations from the Controls scene draw path.
 - 2026-05-16: Merged duplicate Controls-scene benchmark prepare arms into one grouped reset.
 - 2026-05-13: Collapsed duplicate spinner, slider, and nine-slice on-screen benchmark step bodies while preserving their case-specific action labels.
 - 2026-05-11: Removed the redundant component-benchmark reset assignment for `Controls::progress_indeterminate`; `Controls::default()` already starts determinate progress.

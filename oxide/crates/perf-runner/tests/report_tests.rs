@@ -940,6 +940,15 @@ fn assert_web_frame_case_contract(case: &Value) {
         "pipeline_creates",
         "sampler_creates",
         "mesh3d_creates",
+        "wasm_alloc_count",
+        "wasm_alloc_bytes",
+        "wasm_dealloc_count",
+        "wasm_dealloc_bytes",
+        "wasm_realloc_count",
+        "wasm_realloc_grow_bytes",
+        "wasm_realloc_shrink_bytes",
+        "wasm_allocating_frames",
+        "wasm_peak_frame_alloc_bytes",
         "draw_buffer_grows",
         "image_texture_creates",
         "image_bind_group_creates",
@@ -1359,6 +1368,124 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
                 "warm resource churn row {id}.{field} was nonzero",
             );
         }
+    }
+
+    let wasm_allocation_audit = &report["wasm_allocation_audit"];
+    assert_eq!(
+        wasm_allocation_audit["id"].as_str(),
+        Some("web.wasm.webgpu.wasm_allocation_audit.current_rows"),
+    );
+    assert_eq!(wasm_allocation_audit["status"].as_str(), Some("measured"));
+    assert_eq!(web_report_number(wasm_allocation_audit, "checked_count"), 14.0);
+    assert_eq!(web_report_number(wasm_allocation_audit, "excluded_count"), 13.0);
+    assert_eq!(
+        web_report_number(wasm_allocation_audit, "row_detail_count"),
+        web_report_number(wasm_allocation_audit, "checked_count"),
+    );
+    assert!(web_report_number(wasm_allocation_audit, "total_wasm_alloc_count") > 0.0);
+    assert!(web_report_number(wasm_allocation_audit, "total_wasm_alloc_bytes") > 0.0);
+    assert_eq!(web_report_number(wasm_allocation_audit, "total_wasm_realloc_count"), 0.0);
+    assert_eq!(
+        web_report_number(wasm_allocation_audit, "total_wasm_realloc_grow_bytes"),
+        0.0,
+    );
+    assert!(
+        web_report_number(wasm_allocation_audit, "max_wasm_allocs_per_frame")
+            <= web_report_number(wasm_allocation_audit, "budget_wasm_allocs_per_frame")
+    );
+    assert!(
+        web_report_number(wasm_allocation_audit, "max_wasm_alloc_bytes_per_frame")
+            <= web_report_number(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame")
+    );
+    let wasm_allocation_rows: Vec<&str> = wasm_allocation_audit["rows"]
+        .as_array()
+        .expect("wasm allocation rows")
+        .iter()
+        .map(|value| value.as_str().expect("wasm allocation row id"))
+        .collect();
+    let wasm_allocation_details = wasm_allocation_audit["row_details"]
+        .as_array()
+        .expect("wasm allocation row details");
+    assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.frame_loop"));
+    assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.id_mask_compositor.current"));
+    for detail in wasm_allocation_details {
+        let id = detail["id"].as_str().expect("wasm allocation row detail id");
+        assert!(wasm_allocation_rows.contains(&id));
+        let source = web_report_case(&report, id);
+        assert_eq!(
+            web_report_number(detail, "wasm_alloc_count"),
+            web_report_number(source, "wasm_alloc_count"),
+        );
+        assert_eq!(
+            web_report_number(detail, "wasm_alloc_bytes"),
+            web_report_number(source, "wasm_alloc_bytes"),
+        );
+        assert_eq!(web_report_number(detail, "wasm_realloc_count"), 0.0);
+        assert_eq!(web_report_number(detail, "wasm_realloc_grow_bytes"), 0.0);
+        assert!(
+            web_report_number(detail, "wasm_allocs_per_frame")
+                <= web_report_number(wasm_allocation_audit, "budget_wasm_allocs_per_frame")
+        );
+        assert!(
+            web_report_number(detail, "wasm_alloc_bytes_per_frame")
+                <= web_report_number(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame")
+        );
+    }
+
+    let frame_loop = web_report_case(&report, "web.wasm.webgpu.frame_loop");
+    let frame_stage_allocations = &report["frame_loop_wasm_allocation_stages"];
+    assert_eq!(
+        frame_stage_allocations["id"].as_str(),
+        Some("web.wasm.webgpu.frame_loop_wasm_allocation_stages"),
+    );
+    assert_eq!(
+        frame_stage_allocations["row_id"].as_str(),
+        Some("web.wasm.webgpu.frame_loop"),
+    );
+    assert_eq!(web_report_number(frame_stage_allocations, "stage_count"), 11.0);
+    assert_eq!(
+        web_report_number(frame_stage_allocations, "total_stage_wasm_alloc_count"),
+        web_report_number(frame_loop, "wasm_alloc_count"),
+    );
+    assert_eq!(
+        web_report_number(frame_stage_allocations, "total_stage_wasm_alloc_bytes"),
+        web_report_number(frame_loop, "wasm_alloc_bytes"),
+    );
+    assert_eq!(
+        web_report_number(frame_stage_allocations, "total_stage_wasm_realloc_count"),
+        0.0,
+    );
+    assert_eq!(
+        web_report_number(frame_stage_allocations, "total_stage_wasm_realloc_grow_bytes"),
+        0.0,
+    );
+    let stage_details = frame_stage_allocations["stages"]
+        .as_array()
+        .expect("frame-loop wasm allocation stage details");
+    let stage_names: Vec<&str> = stage_details
+        .iter()
+        .map(|stage| stage["stage"].as_str().expect("stage name"))
+        .collect();
+    for name in [
+        "canvas_resize",
+        "frame_timing",
+        "builder_clear",
+        "router_update",
+        "router_draw",
+        "damage_handoff",
+        "draw_coalesce",
+        "begin_frame",
+        "encode_pass",
+        "submit",
+        "post_submit",
+    ] {
+        assert!(stage_names.contains(&name), "missing frame-loop allocation stage {name}");
+    }
+    for stage in stage_details {
+        assert!(web_report_number(stage, "wasm_alloc_count") >= 0.0);
+        assert!(web_report_number(stage, "wasm_alloc_bytes") >= 0.0);
+        assert_eq!(web_report_number(stage, "wasm_realloc_count"), 0.0);
+        assert_eq!(web_report_number(stage, "wasm_realloc_grow_bytes"), 0.0);
     }
 
     let backend_path_coverage = &report["backend_path_coverage"];

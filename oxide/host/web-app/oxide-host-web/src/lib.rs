@@ -30,8 +30,14 @@ pub fn generate_checker_rgba(width: u32, height: u32) -> Vec<u8> {
 }
 
 #[cfg(target_arch = "wasm32")]
+#[global_allocator]
+static OXIDE_WASM_ALLOCATOR: oxide_wasm_alloc_counter::CountingAllocator<std::alloc::System> =
+    oxide_wasm_alloc_counter::CountingAllocator::new(std::alloc::System);
+
+#[cfg(target_arch = "wasm32")]
 mod wasm_host {
     use super::generate_checker_rgba;
+    use oxide_wasm_alloc_counter::AllocationSnapshot;
     use oxide_platform_api as platform_api;
     use oxide_platform_api::Platform;
     use oxide_renderer_api as gfx;
@@ -116,6 +122,8 @@ mod wasm_host {
         renderer: Rc<RefCell<BrowserRenderer>>,
         router: scenes::Router<WebUploader>,
         builder: ui::DrawListBuilder,
+        damage_rects: Vec<gfx::RectI>,
+        coalesce_items: Vec<gfx::DrawCmd>,
         bench_resources: Option<WebGpuUploadBenchResources>,
         last_ms: u64,
         ime_focused: bool,
@@ -135,9 +143,32 @@ mod wasm_host {
 
     impl AppState {
         fn frame_at(&mut self, timestamp_ms: f64) -> Result<(), JsValue> {
+            self.frame_at_inner(timestamp_ms, None)
+        }
+
+        fn frame_at_profiled(
+            &mut self,
+            timestamp_ms: f64,
+            allocation_stages: &mut WebGpuFrameStageAllocationSummary,
+        ) -> Result<(), JsValue> {
+            self.frame_at_inner(timestamp_ms, Some(allocation_stages))
+        }
+
+        fn frame_at_inner(
+            &mut self,
+            timestamp_ms: f64,
+            mut allocation_stages: Option<&mut WebGpuFrameStageAllocationSummary>,
+        ) -> Result<(), JsValue> {
+            let stage_before = allocation_stage_begin(allocation_stages.as_deref());
             let (physical_w, physical_h, scale) = canvas_backing_size(&self.canvas);
             self.renderer.borrow_mut().resize(physical_w, physical_h, scale).map_err(render_err)?;
+            allocation_stage_end(
+                allocation_stages.as_deref_mut(),
+                WebGpuFrameStage::CanvasResize,
+                stage_before,
+            );
 
+            let stage_before = allocation_stage_begin(allocation_stages.as_deref());
             let now_ms = timestamp_ms.max(0.0).round() as u64;
             let dt_ms = if self.last_ms == 0 {
                 16
@@ -145,28 +176,99 @@ mod wasm_host {
                 now_ms.saturating_sub(self.last_ms).min(u32::MAX as u64) as u32
             };
             self.last_ms = now_ms;
+            allocation_stage_end(
+                allocation_stages.as_deref_mut(),
+                WebGpuFrameStage::FrameTiming,
+                stage_before,
+            );
 
+            let stage_before = allocation_stage_begin(allocation_stages.as_deref());
             self.builder.clear();
+            allocation_stage_end(
+                allocation_stages.as_deref_mut(),
+                WebGpuFrameStage::BuilderClear,
+                stage_before,
+            );
             let viewport = gfx::RectF::new(
                 0.0,
                 0.0,
                 physical_w as f32 / scale.max(1.0),
                 physical_h as f32 / scale.max(1.0),
             );
+
+            let stage_before = allocation_stage_begin(allocation_stages.as_deref());
             self.router.update(now_ms, dt_ms);
+            allocation_stage_end(
+                allocation_stages.as_deref_mut(),
+                WebGpuFrameStage::RouterUpdate,
+                stage_before,
+            );
+
+            let stage_before = allocation_stage_begin(allocation_stages.as_deref());
             self.router.draw(viewport, scale, &mut self.builder);
-            let damage = gfx::Damage { rects: self.router.take_damage() };
-            ui::coalesce_adjacent_draws(self.builder.drawlist_mut());
+            allocation_stage_end(
+                allocation_stages.as_deref_mut(),
+                WebGpuFrameStage::RouterDraw,
+                stage_before,
+            );
+
+            let stage_before = allocation_stage_begin(allocation_stages.as_deref());
+            self.router.take_damage_into(&mut self.damage_rects);
+            let mut damage = gfx::Damage { rects: core::mem::take(&mut self.damage_rects) };
+            allocation_stage_end(
+                allocation_stages.as_deref_mut(),
+                WebGpuFrameStage::DamageHandoff,
+                stage_before,
+            );
+
+            let stage_before = allocation_stage_begin(allocation_stages.as_deref());
+            ui::coalesce_adjacent_draws_reuse(
+                self.builder.drawlist_mut(),
+                &mut self.coalesce_items,
+            );
+            allocation_stage_end(
+                allocation_stages.as_deref_mut(),
+                WebGpuFrameStage::DrawCoalesce,
+                stage_before,
+            );
 
             let mut renderer = self.renderer.borrow_mut();
+            let stage_before = allocation_stage_begin(allocation_stages.as_deref());
             let token = renderer.begin_frame(&gfx::FrameTarget, Some(&damage));
+            self.damage_rects = core::mem::take(&mut damage.rects);
+            allocation_stage_end(
+                allocation_stages.as_deref_mut(),
+                WebGpuFrameStage::BeginFrame,
+                stage_before,
+            );
+
+            let stage_before = allocation_stage_begin(allocation_stages.as_deref());
             renderer.encode_pass(self.builder.drawlist());
+            allocation_stage_end(
+                allocation_stages.as_deref_mut(),
+                WebGpuFrameStage::EncodePass,
+                stage_before,
+            );
+
+            let stage_before = allocation_stage_begin(allocation_stages.as_deref());
             renderer.submit(token).map_err(render_err)?;
+            allocation_stage_end(
+                allocation_stages.as_deref_mut(),
+                WebGpuFrameStage::Submit,
+                stage_before,
+            );
+
+            let stage_before = allocation_stage_begin(allocation_stages.as_deref());
             self.submitted_frames = self.submitted_frames.saturating_add(1);
             if self.settle_frames_remaining > 0 {
                 self.settle_frames_remaining -= 1;
             }
             self.frame_dirty = false;
+            allocation_stage_end(
+                allocation_stages.as_deref_mut(),
+                WebGpuFrameStage::PostSubmit,
+                stage_before,
+            );
             Ok(())
         }
 
@@ -240,6 +342,8 @@ mod wasm_host {
                 renderer,
                 router,
                 builder: ui::DrawListBuilder::new(),
+                damage_rects: Vec::new(),
+                coalesce_items: Vec::new(),
                 bench_resources: None,
                 last_ms: 0,
                 ime_focused: false,
@@ -341,11 +445,22 @@ mod wasm_host {
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
             let mut values = Vec::with_capacity(sample_count.saturating_mul(frames) as usize);
             let mut timestamp = perf_now();
+            for _warmup in 0..4 {
+                self.state.borrow_mut().frame_at(timestamp)?;
+                timestamp += 16.666_667;
+            }
 
+            let mut allocations = WebGpuAllocationSummary::default();
+            let mut allocation_stages = WebGpuFrameStageAllocationSummary::default();
             for _sample in 0..sample_count {
                 for _frame in 0..frames {
                     let start = perf_now();
-                    self.state.borrow_mut().frame_at(timestamp)?;
+                    let alloc_before = oxide_wasm_alloc_counter::snapshot();
+                    self.state
+                        .borrow_mut()
+                        .frame_at_profiled(timestamp, &mut allocation_stages)?;
+                    let alloc_after = oxide_wasm_alloc_counter::snapshot();
+                    add_allocation_frame(&mut allocations, alloc_before, alloc_after);
                     values.push((perf_now() - start).max(0.0));
                     timestamp += 16.666_667;
                 }
@@ -360,9 +475,11 @@ mod wasm_host {
             let peak_ms = values.last().copied().unwrap_or(0.0);
             let stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             let pacing = frame_pacing_metrics(&values, "");
+            let allocations = allocation_metrics(&allocations, "");
+            let allocation_stages = frame_stage_allocation_metrics(&allocation_stages);
             let backend_stats = renderer_stats_metrics(stats, "");
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames};frames={total_frames};p50_ms={p50_ms:.3};p95_ms={p95_ms:.3};p99_ms={p99_ms:.3};peak_ms={peak_ms:.3};avg_ms={avg_ms:.3}{backend_stats}{pacing}",
+                "samples={sample_count};frames_per_sample={frames};frames={total_frames};p50_ms={p50_ms:.3};p95_ms={p95_ms:.3};p99_ms={p99_ms:.3};peak_ms={peak_ms:.3};avg_ms={avg_ms:.3}{backend_stats}{pacing}{allocations}{allocation_stages}",
             ))
         }
 
@@ -389,10 +506,12 @@ mod wasm_host {
             let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             let current_pacing = frame_pacing_metrics(&current.frame_values, "current");
             let legacy_pacing = frame_pacing_metrics(&legacy.frame_values, "legacy");
+            let current_allocations = allocation_metrics(&current.allocations, "current");
+            let legacy_allocations = allocation_metrics(&legacy.allocations, "legacy");
             let current_stats = renderer_stats_metrics(current.stats, "current");
             let legacy_stats = renderer_stats_metrics(legacy.stats, "legacy");
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames};current_p50_ms={:.3};current_p95_ms={:.3};current_p99_ms={:.3};current_peak_ms={:.3};current_avg_ms={:.3}{current_pacing}{current_stats};legacy_p50_ms={:.3};legacy_p95_ms={:.3};legacy_p99_ms={:.3};legacy_peak_ms={:.3};legacy_avg_ms={:.3}{legacy_pacing}{legacy_stats};legacy_over_current={ratio:.3};vertices={};vertex_bytes={}",
+                "samples={sample_count};frames_per_sample={frames};current_p50_ms={:.3};current_p95_ms={:.3};current_p99_ms={:.3};current_peak_ms={:.3};current_avg_ms={:.3}{current_pacing}{current_allocations}{current_stats};legacy_p50_ms={:.3};legacy_p95_ms={:.3};legacy_p99_ms={:.3};legacy_peak_ms={:.3};legacy_avg_ms={:.3}{legacy_pacing}{legacy_allocations}{legacy_stats};legacy_over_current={ratio:.3};vertices={};vertex_bytes={}",
                 current.p50_ms,
                 current.p95_ms,
                 current.p99_ms,
@@ -1093,6 +1212,7 @@ mod wasm_host {
         peak_ms: f64,
         avg_ms: f64,
         frame_values: Vec<f64>,
+        allocations: WebGpuAllocationSummary,
         vertices: usize,
         vertex_bytes: usize,
         stats: WebRendererStats,
@@ -1105,7 +1225,51 @@ mod wasm_host {
         peak_ms: f64,
         avg_ms: f64,
         frame_values: Vec<f64>,
+        allocations: WebGpuAllocationSummary,
         stats: WebRendererStats,
+    }
+
+    #[derive(Clone, Copy, Default)]
+    struct WebGpuAllocationSummary {
+        alloc_count: u64,
+        alloc_bytes: u64,
+        dealloc_count: u64,
+        dealloc_bytes: u64,
+        realloc_count: u64,
+        realloc_grow_bytes: u64,
+        realloc_shrink_bytes: u64,
+        allocating_frames: u64,
+        peak_frame_alloc_bytes: u64,
+    }
+
+    #[derive(Clone, Copy, Default)]
+    struct WebGpuFrameStageAllocationSummary {
+        canvas_resize: WebGpuAllocationSummary,
+        frame_timing: WebGpuAllocationSummary,
+        builder_clear: WebGpuAllocationSummary,
+        router_update: WebGpuAllocationSummary,
+        router_draw: WebGpuAllocationSummary,
+        damage_handoff: WebGpuAllocationSummary,
+        draw_coalesce: WebGpuAllocationSummary,
+        begin_frame: WebGpuAllocationSummary,
+        encode_pass: WebGpuAllocationSummary,
+        submit: WebGpuAllocationSummary,
+        post_submit: WebGpuAllocationSummary,
+    }
+
+    #[derive(Clone, Copy)]
+    enum WebGpuFrameStage {
+        CanvasResize,
+        FrameTiming,
+        BuilderClear,
+        RouterUpdate,
+        RouterDraw,
+        DamageHandoff,
+        DrawCoalesce,
+        BeginFrame,
+        EncodePass,
+        Submit,
+        PostSubmit,
     }
 
     struct WebGpuUploadBenchResources {
@@ -1755,13 +1919,17 @@ mod wasm_host {
         }
 
         let mut values = Vec::with_capacity(sample_count as usize);
+        let mut allocations = WebGpuAllocationSummary::default();
         for sample in 0..sample_count {
             // Browser timer resolution can round the fast retained path to zero if each frame is timed alone.
             let sample_start = perf_now();
             for frame in 0..frames {
                 let seq = sample.saturating_mul(frames).saturating_add(frame) as u64;
                 let revision = if stable_revision { 1 } else { seq + 64 };
+                let alloc_before = oxide_wasm_alloc_counter::snapshot();
                 webgpu_id_mask_frame(renderer, &vertices, revision, timestamp)?;
+                let alloc_after = oxide_wasm_alloc_counter::snapshot();
+                add_allocation_frame(&mut allocations, alloc_before, alloc_after);
                 timestamp += 16.666_667;
             }
             values.push(((perf_now() - sample_start).max(0.0)) / frames as f64);
@@ -1776,6 +1944,7 @@ mod wasm_host {
             peak_ms: values.last().copied().unwrap_or(0.0),
             avg_ms: average(&values),
             frame_values: values,
+            allocations,
             vertices: vertices.len(),
             vertex_bytes,
             stats,
@@ -1798,11 +1967,15 @@ mod wasm_host {
         }
 
         let mut values = Vec::with_capacity(sample_count as usize);
+        let mut allocations = WebGpuAllocationSummary::default();
         for sample in 0..sample_count {
             let sample_start = perf_now();
             for frame_index in 0..frames {
                 let seq = sample.saturating_mul(frames).saturating_add(frame_index) as u64;
+                let alloc_before = oxide_wasm_alloc_counter::snapshot();
                 frame(renderer, seq + 64, timestamp)?;
+                let alloc_after = oxide_wasm_alloc_counter::snapshot();
+                add_allocation_frame(&mut allocations, alloc_before, alloc_after);
                 timestamp += 16.666_667;
             }
             values.push(((perf_now() - sample_start).max(0.0)) / frames as f64);
@@ -1817,6 +1990,7 @@ mod wasm_host {
             peak_ms: values.last().copied().unwrap_or(0.0),
             avg_ms: average(&values),
             frame_values: values,
+            allocations,
             stats,
         })
     }
@@ -1833,6 +2007,7 @@ mod wasm_host {
             summary.avg_ms,
         );
         out.push_str(&frame_pacing_metrics(&summary.frame_values, prefix));
+        out.push_str(&allocation_metrics(&summary.allocations, prefix));
         out.push_str(&renderer_stats_metrics(summary.stats, prefix));
         out
     }
@@ -2789,6 +2964,143 @@ mod wasm_host {
             .ceil()
             .clamp(0.0, sorted_values.len().saturating_sub(1) as f64) as usize;
         sorted_values[index]
+    }
+
+    const WEBGPU_FRAME_STAGES: [(WebGpuFrameStage, &str); 11] = [
+        (WebGpuFrameStage::CanvasResize, "canvas_resize"),
+        (WebGpuFrameStage::FrameTiming, "frame_timing"),
+        (WebGpuFrameStage::BuilderClear, "builder_clear"),
+        (WebGpuFrameStage::RouterUpdate, "router_update"),
+        (WebGpuFrameStage::RouterDraw, "router_draw"),
+        (WebGpuFrameStage::DamageHandoff, "damage_handoff"),
+        (WebGpuFrameStage::DrawCoalesce, "draw_coalesce"),
+        (WebGpuFrameStage::BeginFrame, "begin_frame"),
+        (WebGpuFrameStage::EncodePass, "encode_pass"),
+        (WebGpuFrameStage::Submit, "submit"),
+        (WebGpuFrameStage::PostSubmit, "post_submit"),
+    ];
+
+    fn allocation_stage_begin(
+        stages: Option<&WebGpuFrameStageAllocationSummary>,
+    ) -> Option<AllocationSnapshot> {
+        stages.map(|_| oxide_wasm_alloc_counter::snapshot())
+    }
+
+    fn allocation_stage_end(
+        stages: Option<&mut WebGpuFrameStageAllocationSummary>,
+        stage: WebGpuFrameStage,
+        before: Option<AllocationSnapshot>,
+    ) {
+        if let (Some(stages), Some(before)) = (stages, before) {
+            add_allocation_frame(
+                frame_stage_summary_mut(stages, stage),
+                before,
+                oxide_wasm_alloc_counter::snapshot(),
+            );
+        }
+    }
+
+    fn frame_stage_summary_mut(
+        stages: &mut WebGpuFrameStageAllocationSummary,
+        stage: WebGpuFrameStage,
+    ) -> &mut WebGpuAllocationSummary {
+        match stage {
+            WebGpuFrameStage::CanvasResize => &mut stages.canvas_resize,
+            WebGpuFrameStage::FrameTiming => &mut stages.frame_timing,
+            WebGpuFrameStage::BuilderClear => &mut stages.builder_clear,
+            WebGpuFrameStage::RouterUpdate => &mut stages.router_update,
+            WebGpuFrameStage::RouterDraw => &mut stages.router_draw,
+            WebGpuFrameStage::DamageHandoff => &mut stages.damage_handoff,
+            WebGpuFrameStage::DrawCoalesce => &mut stages.draw_coalesce,
+            WebGpuFrameStage::BeginFrame => &mut stages.begin_frame,
+            WebGpuFrameStage::EncodePass => &mut stages.encode_pass,
+            WebGpuFrameStage::Submit => &mut stages.submit,
+            WebGpuFrameStage::PostSubmit => &mut stages.post_submit,
+        }
+    }
+
+    fn frame_stage_summary(
+        stages: &WebGpuFrameStageAllocationSummary,
+        stage: WebGpuFrameStage,
+    ) -> &WebGpuAllocationSummary {
+        match stage {
+            WebGpuFrameStage::CanvasResize => &stages.canvas_resize,
+            WebGpuFrameStage::FrameTiming => &stages.frame_timing,
+            WebGpuFrameStage::BuilderClear => &stages.builder_clear,
+            WebGpuFrameStage::RouterUpdate => &stages.router_update,
+            WebGpuFrameStage::RouterDraw => &stages.router_draw,
+            WebGpuFrameStage::DamageHandoff => &stages.damage_handoff,
+            WebGpuFrameStage::DrawCoalesce => &stages.draw_coalesce,
+            WebGpuFrameStage::BeginFrame => &stages.begin_frame,
+            WebGpuFrameStage::EncodePass => &stages.encode_pass,
+            WebGpuFrameStage::Submit => &stages.submit,
+            WebGpuFrameStage::PostSubmit => &stages.post_submit,
+        }
+    }
+
+    fn add_allocation_frame(
+        summary: &mut WebGpuAllocationSummary,
+        before: AllocationSnapshot,
+        after: AllocationSnapshot,
+    ) {
+        let alloc_count = after.alloc_count.saturating_sub(before.alloc_count);
+        let alloc_bytes = after.alloc_bytes.saturating_sub(before.alloc_bytes);
+        let dealloc_count = after.dealloc_count.saturating_sub(before.dealloc_count);
+        let dealloc_bytes = after.dealloc_bytes.saturating_sub(before.dealloc_bytes);
+        let realloc_count = after.realloc_count.saturating_sub(before.realloc_count);
+        let realloc_grow_bytes = after.realloc_grow_bytes.saturating_sub(before.realloc_grow_bytes);
+        let realloc_shrink_bytes =
+            after.realloc_shrink_bytes.saturating_sub(before.realloc_shrink_bytes);
+        summary.alloc_count = summary.alloc_count.saturating_add(alloc_count);
+        summary.alloc_bytes = summary.alloc_bytes.saturating_add(alloc_bytes);
+        summary.dealloc_count = summary.dealloc_count.saturating_add(dealloc_count);
+        summary.dealloc_bytes = summary.dealloc_bytes.saturating_add(dealloc_bytes);
+        summary.realloc_count = summary.realloc_count.saturating_add(realloc_count);
+        summary.realloc_grow_bytes =
+            summary.realloc_grow_bytes.saturating_add(realloc_grow_bytes);
+        summary.realloc_shrink_bytes =
+            summary.realloc_shrink_bytes.saturating_add(realloc_shrink_bytes);
+        let frame_alloc_bytes = alloc_bytes.saturating_add(realloc_grow_bytes);
+        if alloc_count > 0 || realloc_count > 0 {
+            summary.allocating_frames = summary.allocating_frames.saturating_add(1);
+            summary.peak_frame_alloc_bytes = summary.peak_frame_alloc_bytes.max(frame_alloc_bytes);
+        }
+    }
+
+    fn allocation_metrics(summary: &WebGpuAllocationSummary, prefix: &str) -> String {
+        let mut out = String::new();
+        let key_prefix = if prefix.is_empty() { String::new() } else { format!("{prefix}_") };
+        let _ = write!(
+            out,
+            ";{key_prefix}wasm_alloc_count={};{key_prefix}wasm_alloc_bytes={};{key_prefix}wasm_dealloc_count={};{key_prefix}wasm_dealloc_bytes={};{key_prefix}wasm_realloc_count={};{key_prefix}wasm_realloc_grow_bytes={};{key_prefix}wasm_realloc_shrink_bytes={};{key_prefix}wasm_allocating_frames={};{key_prefix}wasm_peak_frame_alloc_bytes={}",
+            summary.alloc_count,
+            summary.alloc_bytes,
+            summary.dealloc_count,
+            summary.dealloc_bytes,
+            summary.realloc_count,
+            summary.realloc_grow_bytes,
+            summary.realloc_shrink_bytes,
+            summary.allocating_frames,
+            summary.peak_frame_alloc_bytes,
+        );
+        out
+    }
+
+    fn frame_stage_allocation_metrics(stages: &WebGpuFrameStageAllocationSummary) -> String {
+        let mut out = String::new();
+        for (stage, name) in WEBGPU_FRAME_STAGES {
+            let summary = frame_stage_summary(stages, stage);
+            let _ = write!(
+                out,
+                ";wasm_stage_{name}_alloc_count={};wasm_stage_{name}_alloc_bytes={};wasm_stage_{name}_realloc_count={};wasm_stage_{name}_realloc_grow_bytes={};wasm_stage_{name}_peak_frame_alloc_bytes={}",
+                summary.alloc_count,
+                summary.alloc_bytes,
+                summary.realloc_count,
+                summary.realloc_grow_bytes,
+                summary.peak_frame_alloc_bytes,
+            );
+        }
+        out
     }
 
     fn frame_pacing_metrics(frame_values_ms: &[f64], prefix: &str) -> String {

@@ -807,6 +807,7 @@ dependencies = [
  "oxide-test-scenes",
  "oxide-text",
  "oxide-ui-core",
+ "oxide-wasm-alloc-counter",
  "png",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -967,6 +968,10 @@ dependencies = [
  "oxide-ui-core",
  "png",
 ]
+
+[[package]]
+name = "oxide-wasm-alloc-counter"
+version = "0.1.0"
 
 [[package]]
 name = "oxide-telemetry"
