@@ -74,6 +74,9 @@ mod wasm_host {
     const WEBGPU_LAYER_EFFECT_IMAGE_TILES: usize = 64;
     const WEBGPU_LAYER_EFFECT_IMAGE_COLUMNS: usize = 8;
     const WEBGPU_LAYER_EFFECT_BACKDROPS: usize = 4;
+    const WEBGPU_CLEAN_LAYER_GLYPHS: usize = 96;
+    const WEBGPU_CLEAN_LAYER_IMAGE_TILES: usize = 144;
+    const WEBGPU_CLEAN_LAYER_IMAGE_COLUMNS: usize = 16;
     const WEBGPU_EFFECT_UNIFORM_BACKDROPS: usize = 48;
     const WEBGPU_BACKDROP_BATCH_BACKDROPS: usize = 12;
     const WEBGPU_COMMAND_FAMILY_SDF_GLYPHS: usize = 36;
@@ -896,6 +899,45 @@ mod wasm_host {
                 sampled_case_metrics(&current, "current"),
                 sampled_case_metrics(&legacy, "legacy"),
                 WEBGPU_LAYER_EFFECT_GLYPHS,
+                WEBGPU_UPLOAD_IMAGE_SIZE,
+                WEBGPU_UPLOAD_IMAGE_SIZE,
+            ))
+        }
+
+        pub async fn bench_webgpu_clean_layer_ab(
+            &self,
+            samples: u32,
+            frames_per_sample: u32,
+        ) -> Result<String, JsValue> {
+            let sample_count = samples.clamp(1, 30);
+            let frames = frames_per_sample.clamp(1, 120);
+            let renderer = self.ensure_upload_bench_resources()?;
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_draw_state_cache_enabled_for_benchmark(true);
+                renderer.set_effect_uniform_batch_enabled_for_benchmark(true);
+                renderer.set_backdrop_batch_enabled_for_benchmark(true);
+            }
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut clean = self.with_upload_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    resources.clean_layer_frame(renderer, false)
+                })
+            })?;
+            clean.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut dirty = self.with_upload_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    resources.clean_layer_frame(renderer, true)
+                })
+            })?;
+            dirty.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            let ratio = if clean.p50_ms > 0.0 { dirty.p50_ms / clean.p50_ms } else { 0.0 };
+            Ok(format!(
+                "samples={sample_count};frames_per_sample={frames}{}{};dirty_over_clean={ratio:.3};glyphs={};image_tiles={WEBGPU_CLEAN_LAYER_IMAGE_TILES};image_width={};image_height={};expected_layers=1;expected_clean_hits=1;expected_dirty_misses=1",
+                sampled_case_metrics(&clean, "clean"),
+                sampled_case_metrics(&dirty, "dirty"),
+                WEBGPU_CLEAN_LAYER_GLYPHS,
                 WEBGPU_UPLOAD_IMAGE_SIZE,
                 WEBGPU_UPLOAD_IMAGE_SIZE,
             ))
@@ -1901,6 +1943,71 @@ mod wasm_host {
             self.builder.layer_end();
             self.builder.clip_pop();
             self.builder.layer_end();
+            renderer.encode_pass(self.builder.drawlist());
+            renderer.submit(token).map_err(render_err)
+        }
+
+        fn clean_layer_frame(
+            &mut self,
+            renderer: &mut BrowserRenderer,
+            dirty: bool,
+        ) -> Result<(), JsValue> {
+            renderer.resize(512, 512, 2.0).map_err(render_err)?;
+            let token = renderer.begin_frame(&gfx::FrameTarget, None);
+            self.builder.clear();
+            self.builder.rrect(
+                gfx::RectF::new(0.0, 0.0, 256.0, 256.0),
+                [0.0; 4],
+                gfx::Color::rgba(0.035, 0.043, 0.055, 1.0),
+            );
+            self.builder.layer_begin(301, gfx::RectF::new(18.0, 18.0, 220.0, 220.0), dirty);
+            self.builder.clip_push(gfx::RectI::new(18, 18, 220, 220));
+            self.builder.rrect(
+                gfx::RectF::new(20.0, 20.0, 216.0, 216.0),
+                [18.0; 4],
+                gfx::Color::rgba(0.08, 0.16, 0.22, 0.92),
+            );
+            for index in 0..WEBGPU_CLEAN_LAYER_IMAGE_TILES {
+                let col = index % WEBGPU_CLEAN_LAYER_IMAGE_COLUMNS;
+                let row = index / WEBGPU_CLEAN_LAYER_IMAGE_COLUMNS;
+                let x = 24.0 + col as f32 * 13.0;
+                let y = 82.0 + row as f32 * 11.0;
+                self.builder.image(
+                    self.image,
+                    gfx::RectF::new(x, y, 10.0, 8.0),
+                    gfx::RectF::new(
+                        0.0,
+                        0.0,
+                        WEBGPU_UPLOAD_IMAGE_SIZE as f32,
+                        WEBGPU_UPLOAD_IMAGE_SIZE as f32,
+                    ),
+                    0.42,
+                );
+            }
+            if !append_glyph_grid(
+                &mut self.builder,
+                self.glyph_atlas,
+                WEBGPU_CLEAN_LAYER_GLYPHS,
+                30.0,
+                38.0,
+                10.0,
+                false,
+                gfx::Color::rgba(0.94, 0.98, 1.0, 0.95),
+            ) {
+                return Err(JsValue::from_str("failed to build clean layer glyph draw list"));
+            }
+            self.builder.rrect(
+                gfx::RectF::new(50.0, 194.0, 164.0, 20.0),
+                [8.0; 4],
+                gfx::Color::rgba(0.88, 0.43, 0.14, 0.82),
+            );
+            self.builder.clip_pop();
+            self.builder.layer_end();
+            self.builder.rrect(
+                gfx::RectF::new(22.0, 22.0, 212.0, 212.0),
+                [18.0; 4],
+                gfx::Color::rgba(0.02, 0.04, 0.05, 0.10),
+            );
             renderer.encode_pass(self.builder.drawlist());
             renderer.submit(token).map_err(render_err)
         }
@@ -3501,7 +3608,7 @@ mod wasm_host {
         let key_prefix = if prefix.is_empty() { String::new() } else { format!("{prefix}_") };
         let _ = write!(
             out,
-            ";{key_prefix}draws={};{key_prefix}draw_items={};{key_prefix}draw_pipeline_binds={};{key_prefix}draw_bind_group_binds={};{key_prefix}draw_scissor_sets={};{key_prefix}solid_tris={};{key_prefix}image_draws={};{key_prefix}image_mesh_draws={};{key_prefix}nine_slice_draws={};{key_prefix}glyph_quads={};{key_prefix}sdf_glyph_quads={};{key_prefix}clip_depth_peak={};{key_prefix}damage_rects={};{key_prefix}layer_draws={};{key_prefix}scene3d_draws={};{key_prefix}id_mask_draws={};{key_prefix}backdrop_draws={};{key_prefix}visual_effect_draws={};{key_prefix}effect_uniform_writes={};{key_prefix}effect_uniform_bytes={};{key_prefix}effect_uniform_slots={};{key_prefix}spinner_draws={};{key_prefix}camera_bg_draws={};{key_prefix}render_passes={};{key_prefix}clear_passes={};{key_prefix}draw_passes={};{key_prefix}scene3d_passes={};{key_prefix}scene3d_overlay_passes={};{key_prefix}id_mask_raster_passes={};{key_prefix}id_mask_field_seed_passes={};{key_prefix}id_mask_field_jump_passes={};{key_prefix}id_mask_compositor_passes={};{key_prefix}present_passes={};{key_prefix}texture_copies={};{key_prefix}command_buffers={};{key_prefix}gpu_timestamp_query_supported={};{key_prefix}gpu_timestamp_frame_id={};{key_prefix}gpu_timestamp_passes={};{key_prefix}gpu_timestamp_total_ns={};{key_prefix}gpu_timestamp_clear_ns={};{key_prefix}gpu_timestamp_draw_ns={};{key_prefix}gpu_timestamp_scene3d_ns={};{key_prefix}gpu_timestamp_scene3d_overlay_ns={};{key_prefix}gpu_timestamp_id_mask_raster_ns={};{key_prefix}gpu_timestamp_id_mask_field_seed_ns={};{key_prefix}gpu_timestamp_id_mask_field_jump_ns={};{key_prefix}gpu_timestamp_id_mask_compositor_ns={};{key_prefix}gpu_timestamp_present_ns={};{key_prefix}gpu_timestamp_max_pass_ns={};{key_prefix}gpu_timestamp_readback_skips={};{key_prefix}gpu_timestamp_readback_interval={};{key_prefix}buffer_upload_bytes={};{key_prefix}texture_upload_bytes={};{key_prefix}buffer_grows={};{key_prefix}texture_creates={};{key_prefix}bind_group_creates={};{key_prefix}pipeline_creates={};{key_prefix}sampler_creates={};{key_prefix}mesh3d_creates={};{key_prefix}draw_buffer_grows={};{key_prefix}image_texture_creates={};{key_prefix}image_bind_group_creates={};{key_prefix}target_texture_creates={};{key_prefix}target_bind_group_creates={};{key_prefix}scene3d_buffer_grows={};{key_prefix}scene3d_bind_group_creates={};{key_prefix}effect_buffer_grows={};{key_prefix}effect_bind_group_creates={};{key_prefix}id_mask_texture_creates={};{key_prefix}id_mask_buffer_grows={};{key_prefix}id_mask_bind_group_creates={};{key_prefix}image_upload_temp_allocs={};{key_prefix}image_upload_temp_bytes={};{key_prefix}image_upload_scratch_bytes={};{key_prefix}image_upload_scratch_grows={};{key_prefix}cpu_scratch_bytes={};{key_prefix}cpu_scratch_grows={};{key_prefix}cpu_scratch_growth_bytes={};{key_prefix}cpu_draw_scratch_bytes={};{key_prefix}cpu_draw_scratch_grows={};{key_prefix}cpu_draw_scratch_growth_bytes={};{key_prefix}cpu_scene3d_scratch_bytes={};{key_prefix}cpu_scene3d_scratch_grows={};{key_prefix}cpu_scene3d_scratch_growth_bytes={};{key_prefix}cpu_effect_scratch_bytes={};{key_prefix}cpu_effect_scratch_grows={};{key_prefix}cpu_effect_scratch_growth_bytes={};{key_prefix}cpu_id_mask_scratch_bytes={};{key_prefix}cpu_id_mask_scratch_grows={};{key_prefix}cpu_id_mask_scratch_growth_bytes={};{key_prefix}cpu_image_upload_scratch_bytes={};{key_prefix}cpu_image_upload_scratch_grows={};{key_prefix}cpu_image_upload_scratch_growth_bytes={};{key_prefix}cpu_resource_table_scratch_bytes={};{key_prefix}cpu_resource_table_scratch_grows={};{key_prefix}cpu_resource_table_scratch_growth_bytes={}",
+            ";{key_prefix}draws={};{key_prefix}draw_items={};{key_prefix}draw_pipeline_binds={};{key_prefix}draw_bind_group_binds={};{key_prefix}draw_scissor_sets={};{key_prefix}solid_tris={};{key_prefix}image_draws={};{key_prefix}image_mesh_draws={};{key_prefix}nine_slice_draws={};{key_prefix}glyph_quads={};{key_prefix}sdf_glyph_quads={};{key_prefix}clip_depth_peak={};{key_prefix}damage_rects={};{key_prefix}layer_draws={};{key_prefix}layer_cache_hits={};{key_prefix}layer_cache_misses={};{key_prefix}layer_cache_skipped_draws={};{key_prefix}layer_passes={};{key_prefix}scene3d_draws={};{key_prefix}id_mask_draws={};{key_prefix}backdrop_draws={};{key_prefix}visual_effect_draws={};{key_prefix}effect_uniform_writes={};{key_prefix}effect_uniform_bytes={};{key_prefix}effect_uniform_slots={};{key_prefix}spinner_draws={};{key_prefix}camera_bg_draws={};{key_prefix}render_passes={};{key_prefix}clear_passes={};{key_prefix}draw_passes={};{key_prefix}scene3d_passes={};{key_prefix}scene3d_overlay_passes={};{key_prefix}id_mask_raster_passes={};{key_prefix}id_mask_field_seed_passes={};{key_prefix}id_mask_field_jump_passes={};{key_prefix}id_mask_compositor_passes={};{key_prefix}present_passes={};{key_prefix}texture_copies={};{key_prefix}command_buffers={};{key_prefix}gpu_timestamp_query_supported={};{key_prefix}gpu_timestamp_frame_id={};{key_prefix}gpu_timestamp_passes={};{key_prefix}gpu_timestamp_total_ns={};{key_prefix}gpu_timestamp_clear_ns={};{key_prefix}gpu_timestamp_draw_ns={};{key_prefix}gpu_timestamp_scene3d_ns={};{key_prefix}gpu_timestamp_scene3d_overlay_ns={};{key_prefix}gpu_timestamp_id_mask_raster_ns={};{key_prefix}gpu_timestamp_id_mask_field_seed_ns={};{key_prefix}gpu_timestamp_id_mask_field_jump_ns={};{key_prefix}gpu_timestamp_id_mask_compositor_ns={};{key_prefix}gpu_timestamp_present_ns={};{key_prefix}gpu_timestamp_max_pass_ns={};{key_prefix}gpu_timestamp_readback_skips={};{key_prefix}gpu_timestamp_readback_interval={};{key_prefix}buffer_upload_bytes={};{key_prefix}texture_upload_bytes={};{key_prefix}buffer_grows={};{key_prefix}texture_creates={};{key_prefix}bind_group_creates={};{key_prefix}pipeline_creates={};{key_prefix}sampler_creates={};{key_prefix}mesh3d_creates={};{key_prefix}draw_buffer_grows={};{key_prefix}image_texture_creates={};{key_prefix}image_bind_group_creates={};{key_prefix}target_texture_creates={};{key_prefix}target_bind_group_creates={};{key_prefix}layer_texture_creates={};{key_prefix}layer_bind_group_creates={};{key_prefix}scene3d_buffer_grows={};{key_prefix}scene3d_bind_group_creates={};{key_prefix}effect_buffer_grows={};{key_prefix}effect_bind_group_creates={};{key_prefix}id_mask_texture_creates={};{key_prefix}id_mask_buffer_grows={};{key_prefix}id_mask_bind_group_creates={};{key_prefix}image_upload_temp_allocs={};{key_prefix}image_upload_temp_bytes={};{key_prefix}image_upload_scratch_bytes={};{key_prefix}image_upload_scratch_grows={};{key_prefix}cpu_scratch_bytes={};{key_prefix}cpu_scratch_grows={};{key_prefix}cpu_scratch_growth_bytes={};{key_prefix}cpu_draw_scratch_bytes={};{key_prefix}cpu_draw_scratch_grows={};{key_prefix}cpu_draw_scratch_growth_bytes={};{key_prefix}cpu_scene3d_scratch_bytes={};{key_prefix}cpu_scene3d_scratch_grows={};{key_prefix}cpu_scene3d_scratch_growth_bytes={};{key_prefix}cpu_effect_scratch_bytes={};{key_prefix}cpu_effect_scratch_grows={};{key_prefix}cpu_effect_scratch_growth_bytes={};{key_prefix}cpu_id_mask_scratch_bytes={};{key_prefix}cpu_id_mask_scratch_grows={};{key_prefix}cpu_id_mask_scratch_growth_bytes={};{key_prefix}cpu_image_upload_scratch_bytes={};{key_prefix}cpu_image_upload_scratch_grows={};{key_prefix}cpu_image_upload_scratch_growth_bytes={};{key_prefix}cpu_resource_table_scratch_bytes={};{key_prefix}cpu_resource_table_scratch_grows={};{key_prefix}cpu_resource_table_scratch_growth_bytes={}",
             stats.draws,
             stats.draw_items,
             stats.draw_pipeline_binds,
@@ -3516,6 +3623,10 @@ mod wasm_host {
             stats.clip_depth_peak,
             stats.damage_rects,
             stats.layer_draws,
+            stats.layer_cache_hits,
+            stats.layer_cache_misses,
+            stats.layer_cache_skipped_draws,
+            stats.layer_passes,
             stats.scene3d_draws,
             stats.id_mask_draws,
             stats.backdrop_draws,
@@ -3566,6 +3677,8 @@ mod wasm_host {
             stats.image_bind_group_creates,
             stats.target_texture_creates,
             stats.target_bind_group_creates,
+            stats.layer_texture_creates,
+            stats.layer_bind_group_creates,
             stats.scene3d_buffer_grows,
             stats.scene3d_bind_group_creates,
             stats.effect_buffer_grows,

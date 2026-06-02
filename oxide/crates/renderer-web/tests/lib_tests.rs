@@ -94,7 +94,9 @@ fn wasm_webgpu_submits_directly_to_surface_without_backdrop_effects() {
         source.split("impl api::Renderer for WebGpuRenderer").nth(1).expect("webgpu renderer impl");
     let submit = renderer_impl.split("fn resize(&mut self").next().expect("webgpu submit body");
 
-    assert!(submit.contains("if self.frame_uses_backdrop() || !self.direct_surface_enabled"));
+    assert!(submit.contains("self.render_layer_passes(&mut encoder);"));
+    assert!(submit
+        .contains("if self.target_uses_backdrop(None, 0, self.frame.draws.len()) || !self.direct_surface_enabled"));
     assert!(submit.contains("self.render_scene_with_effects(&mut encoder);"));
     assert!(submit.contains("self.render_present(&mut encoder, &surface_view);"));
     assert!(submit.contains("self.render_direct(&mut encoder, &surface_view);"));
@@ -218,13 +220,13 @@ fn wasm_webgpu_draw_encoding_reuses_scratch_storage() {
 #[test]
 fn wasm_webgpu_effect_path_avoids_redundant_hot_work() {
     let source = include_str!("../src/wasm/webgpu.rs");
-    let frame_uses_backdrop = source
-        .split("fn frame_uses_backdrop")
+    let target_uses_backdrop = source
+        .split("fn target_uses_backdrop")
         .nth(1)
-        .expect("frame_uses_backdrop")
+        .expect("target_uses_backdrop")
         .split("fn backdrop_sample_rect")
         .next()
-        .expect("frame_uses_backdrop end");
+        .expect("target_uses_backdrop end");
     let prepare_effect_uniforms = source
         .split("fn prepare_effect_uniforms")
         .nth(1)
@@ -240,16 +242,17 @@ fn wasm_webgpu_effect_path_avoids_redundant_hot_work() {
         .next()
         .expect("single effect uniform slot end");
 
-    assert!(frame_uses_backdrop.contains("self.frame.effect_count != 0"));
-    assert!(!frame_uses_backdrop.contains(".iter().any"));
+    assert!(target_uses_backdrop.contains("draw.target == target"));
+    assert!(target_uses_backdrop.contains("matches!(draw.kind, DrawKind::Backdrop { .. })"));
     assert!(single_uniform_slot.contains("self.queue.write_buffer(&self.effect_buffer, 0, &bytes);"));
     assert!(!single_uniform_slot.contains("self.effect_uniform_bytes.clear();"));
     assert!(!single_uniform_slot.contains("self.effect_uniform_bytes.extend_from_slice"));
     assert!(source.contains("Backdrop { rect: api::RectF, sigma: f32 }"));
     assert!(source.contains("fn backdrop_sample_rect("));
-    assert!(source.contains("fn backdrop_batch_end("));
+    assert!(source.contains("fn backdrop_batch_end(&self, start: usize, target: Option<u32>, limit: usize)"));
     assert!(source.contains("self.backdrop_batch_enabled"));
-    assert!(source.contains("self.render_draw_range(encoder, &scene_view, start, end"));
+    assert!(source.contains("fn render_draw_target_with_effects("));
+    assert!(source.contains("self.render_draw_range(encoder, target_view, start, end, target"));
     assert!(source.contains("set_backdrop_batch_enabled_for_benchmark"));
 }
 
@@ -517,6 +520,12 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
         assert!(source.contains(field), "missing WebGPU scratch growth attribution {field}");
     }
     assert!(source.contains("self.stats.layer_draws = self.stats.layer_draws.saturating_add(1);"));
+    assert!(source.contains("self.stats.layer_cache_hits = self.stats.layer_cache_hits.saturating_add(1);"));
+    assert!(source.contains("self.stats.layer_cache_misses = self.stats.layer_cache_misses.saturating_add(1);"));
+    assert!(source.contains("self.stats.layer_cache_skipped_draws"));
+    assert!(source.contains("self.stats.layer_passes = self.stats.layer_passes.saturating_add(1);"));
+    assert!(source.contains("self.stats.layer_texture_creates"));
+    assert!(source.contains("self.stats.layer_bind_group_creates"));
     assert!(
         source.contains("self.stats.scene3d_draws = self.stats.scene3d_draws.saturating_add(1);")
     );
@@ -563,6 +572,10 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(host.contains("{key_prefix}draw_bind_group_binds={}"));
     assert!(host.contains("{key_prefix}draw_scissor_sets={}"));
     assert!(host.contains("{key_prefix}layer_draws={}"));
+    assert!(host.contains("{key_prefix}layer_cache_hits={}"));
+    assert!(host.contains("{key_prefix}layer_cache_misses={}"));
+    assert!(host.contains("{key_prefix}layer_cache_skipped_draws={}"));
+    assert!(host.contains("{key_prefix}layer_passes={}"));
     assert!(host.contains("{key_prefix}image_mesh_draws={}"));
     assert!(host.contains("{key_prefix}nine_slice_draws={}"));
     assert!(host.contains("{key_prefix}sdf_glyph_quads={}"));
@@ -579,6 +592,8 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(host.contains("{key_prefix}image_bind_group_creates={}"));
     assert!(host.contains("{key_prefix}target_texture_creates={}"));
     assert!(host.contains("{key_prefix}target_bind_group_creates={}"));
+    assert!(host.contains("{key_prefix}layer_texture_creates={}"));
+    assert!(host.contains("{key_prefix}layer_bind_group_creates={}"));
     assert!(host.contains("{key_prefix}scene3d_buffer_grows={}"));
     assert!(host.contains("{key_prefix}scene3d_bind_group_creates={}"));
     assert!(host.contains("{key_prefix}effect_buffer_grows={}"));

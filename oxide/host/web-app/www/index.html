@@ -215,6 +215,7 @@
          window.oxideWebGpuScene3dAB = "";
          window.oxideWebGpuMixedMatrix = "";
          window.oxideWebGpuLayerEffectsMatrix = "";
+         window.oxideWebGpuCleanLayerAB = "";
          window.oxideWebGpuCommandFamilyMatrix = "";
          window.oxideWebGpuGlyphRunAB = "";
          window.oxideWebGpuNeonMarkerAB = "";
@@ -242,6 +243,8 @@
             console.log("oxide-webgpu-mixed-matrix", window.oxideWebGpuMixedMatrix);
             window.oxideWebGpuLayerEffectsMatrix = await runBench("layer_effects_matrix", () => window.oxideApp.bench_webgpu_layer_effects_matrix(mixedSamples, mixedFrames));
             console.log("oxide-webgpu-layer-effects-matrix", window.oxideWebGpuLayerEffectsMatrix);
+            window.oxideWebGpuCleanLayerAB = await runBench("clean_layer_ab", () => window.oxideApp.bench_webgpu_clean_layer_ab(mixedSamples, mixedFrames));
+            console.log("oxide-webgpu-clean-layer-ab", window.oxideWebGpuCleanLayerAB);
             window.oxideWebGpuCommandFamilyMatrix = await runBench("command_family_matrix", () => window.oxideApp.bench_webgpu_command_family_matrix(mixedSamples, mixedFrames));
             console.log("oxide-webgpu-command-family-matrix", window.oxideWebGpuCommandFamilyMatrix);
             window.oxideWebGpuGlyphRunAB = await runBench("glyph_run_ab", () => window.oxideApp.bench_webgpu_glyph_run_ab(mixedSamples, mixedFrames));
@@ -274,6 +277,7 @@
             scene3d_ab: window.oxideWebGpuScene3dAB,
             mixed_matrix: window.oxideWebGpuMixedMatrix,
             layer_effects_matrix: window.oxideWebGpuLayerEffectsMatrix,
+            clean_layer_ab: window.oxideWebGpuCleanLayerAB,
             command_family_matrix: window.oxideWebGpuCommandFamilyMatrix,
             glyph_run_ab: window.oxideWebGpuGlyphRunAB,
             neon_marker_ab: window.oxideWebGpuNeonMarkerAB,

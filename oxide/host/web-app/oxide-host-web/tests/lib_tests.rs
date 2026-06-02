@@ -273,6 +273,7 @@ fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     assert!(html.contains("bench_webgpu_scene3d_ab"));
     assert!(html.contains("bench_webgpu_mixed_matrix"));
     assert!(html.contains("bench_webgpu_layer_effects_matrix"));
+    assert!(html.contains("bench_webgpu_clean_layer_ab"));
     assert!(html.contains("bench_webgpu_command_family_matrix"));
     assert!(html.contains("bench_webgpu_glyph_run_ab"));
     assert!(html.contains("bench_webgpu_neon_marker_ab"));
@@ -292,6 +293,7 @@ fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     assert!(html.contains("scene3d_ab"));
     assert!(html.contains("mixed_matrix"));
     assert!(html.contains("layer_effects_matrix"));
+    assert!(html.contains("clean_layer_ab"));
     assert!(html.contains("command_family_matrix"));
     assert!(html.contains("glyph_run_ab"));
     assert!(html.contains("neon_marker_ab"));
@@ -330,6 +332,7 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("pub async fn bench_webgpu_scene3d_ab"));
     assert!(source.contains("pub async fn bench_webgpu_mixed_matrix"));
     assert!(source.contains("pub async fn bench_webgpu_layer_effects_matrix"));
+    assert!(source.contains("pub async fn bench_webgpu_clean_layer_ab"));
     assert!(source.contains("pub async fn bench_webgpu_command_family_matrix"));
     assert!(source.contains("pub async fn bench_webgpu_glyph_run_ab"));
     assert!(source.contains("pub async fn bench_webgpu_neon_marker_ab"));
@@ -390,6 +393,8 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("resources.backdrop_batch_frame(renderer)"));
     assert!(source.contains("resources.mixed_frame(renderer)"));
     assert!(source.contains("resources.layer_effects_frame(renderer)"));
+    assert!(source.contains("resources.clean_layer_frame(renderer, false)"));
+    assert!(source.contains("resources.clean_layer_frame(renderer, true)"));
     assert!(source.contains("resources.command_family_frame(renderer)"));
     assert!(source.contains("resources.glyph_run_frame(renderer)"));
     assert!(source.contains("resources.neon_marker_frame(renderer)"));
@@ -400,6 +405,7 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("fn effect_uniform_frame"));
     assert!(source.contains("fn backdrop_batch_frame"));
     assert!(source.contains("fn layer_effects_frame"));
+    assert!(source.contains("fn clean_layer_frame"));
     assert!(source.contains("fn command_family_frame"));
     assert!(source.contains("fn glyph_run_frame"));
     assert!(source.contains("fn neon_marker_frame"));
@@ -541,6 +547,8 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("image_bind_group_creates={}"));
     assert!(source.contains("target_texture_creates={}"));
     assert!(source.contains("target_bind_group_creates={}"));
+    assert!(source.contains("layer_texture_creates={}"));
+    assert!(source.contains("layer_bind_group_creates={}"));
     assert!(source.contains("scene3d_buffer_grows={}"));
     assert!(source.contains("scene3d_bind_group_creates={}"));
     assert!(source.contains("effect_buffer_grows={}"));
@@ -587,11 +595,14 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("Some(&self.layer_effects_damage)"));
     let mixed_frame = source_fn_slice(source, "fn mixed_frame", "fn layer_effects_frame");
     let layer_effects_frame =
-        source_fn_slice(source, "fn layer_effects_frame", "fn command_family_frame");
+        source_fn_slice(source, "fn layer_effects_frame", "fn clean_layer_frame");
+    let clean_layer_frame =
+        source_fn_slice(source, "fn clean_layer_frame", "fn command_family_frame");
     let neon_marker_frame =
         source_fn_slice(source, "fn neon_marker_frame", "fn draw_state_cache_frame");
     assert!(!mixed_frame.contains("vec!["));
     assert!(!layer_effects_frame.contains("vec!["));
+    assert!(!clean_layer_frame.contains("vec!["));
     assert!(!neon_marker_frame.contains("vec!["));
     assert!(source.contains("{key_prefix}render_passes={}"));
     assert!(source.contains("{key_prefix}clear_passes={}"));
@@ -603,6 +614,10 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("{key_prefix}nine_slice_draws={}"));
     assert!(source.contains("{key_prefix}sdf_glyph_quads={}"));
     assert!(source.contains("{key_prefix}layer_draws={}"));
+    assert!(source.contains("{key_prefix}layer_cache_hits={}"));
+    assert!(source.contains("{key_prefix}layer_cache_misses={}"));
+    assert!(source.contains("{key_prefix}layer_cache_skipped_draws={}"));
+    assert!(source.contains("{key_prefix}layer_passes={}"));
     assert!(source.contains("{key_prefix}scene3d_draws={}"));
     assert!(source.contains("{key_prefix}backdrop_draws={}"));
     assert!(source.contains("{key_prefix}buffer_upload_bytes={}"));
@@ -764,6 +779,7 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("scene3d_ab"));
     assert!(script.contains("mixed_matrix"));
     assert!(script.contains("layer_effects_matrix"));
+    assert!(script.contains("clean_layer_ab"));
     assert!(script.contains("command_family_matrix"));
     assert!(script.contains("glyph_run_ab"));
     assert!(script.contains("neon_marker_ab"));
@@ -790,6 +806,8 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched"));
     assert!(script.contains("web.wasm.webgpu.layer_damage_effects"));
     assert!(script.contains("web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched"));
+    assert!(script.contains("web.wasm.webgpu.clean_layer.clean_reuse"));
+    assert!(script.contains("web.wasm.webgpu.clean_layer.dirty_rerender"));
     assert!(script.contains("web.wasm.webgpu.command_family_matrix"));
     assert!(script.contains("web.wasm.webgpu.command_family_matrix.legacy_rebind"));
     assert!(script.contains("web.wasm.webgpu.glyph_run.current"));
@@ -809,12 +827,14 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("backdrop_batch_summary"));
     assert!(script.contains("mixed_summary"));
     assert!(script.contains("layer_effects_summary"));
+    assert!(script.contains("clean_layer_summary"));
     assert!(script.contains("command_family_summary"));
     assert!(script.contains("glyph_run_summary"));
     assert!(script.contains("neon_marker_summary"));
     assert!(script.contains("direct_surface_summary"));
     assert!(script.contains("Mixed Scene Summary"));
     assert!(script.contains("Layer Effects Summary"));
+    assert!(script.contains("Clean Layer Summary"));
     assert!(script.contains("Command Family Summary"));
     assert!(script.contains("Glyph Run Summary"));
     assert!(script.contains("Neon Marker Summary"));
@@ -847,6 +867,10 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("clip_depth_peak: numberMetric(metrics, \"clip_depth_peak\")"));
     assert!(script.contains("damage_rects: numberMetric(metrics, \"damage_rects\")"));
     assert!(script.contains("layer_draws: numberMetric(metrics, \"layer_draws\")"));
+    assert!(script.contains("layer_cache_hits: numberMetric(metrics, \"layer_cache_hits\")"));
+    assert!(script.contains("layer_cache_misses: numberMetric(metrics, \"layer_cache_misses\")"));
+    assert!(script.contains("layer_cache_skipped_draws: numberMetric(metrics, \"layer_cache_skipped_draws\")"));
+    assert!(script.contains("layer_passes: numberMetric(metrics, \"layer_passes\")"));
     assert!(script.contains("scene3d_draws: numberMetric(metrics, \"scene3d_draws\")"));
     assert!(script.contains("id_mask_draws: numberMetric(metrics, \"id_mask_draws\")"));
     assert!(script.contains("backdrop_draws: numberMetric(metrics, \"backdrop_draws\")"));
@@ -903,6 +927,8 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("draw_buffer_grows: numberMetric(metrics, key(\"draw_buffer_grows\"))"));
     assert!(script.contains("image_texture_creates: numberMetric(metrics, key(\"image_texture_creates\"))"));
     assert!(script.contains("target_bind_group_creates: numberMetric(metrics, key(\"target_bind_group_creates\"))"));
+    assert!(script.contains("layer_texture_creates: numberMetric(metrics, key(\"layer_texture_creates\"))"));
+    assert!(script.contains("layer_bind_group_creates: numberMetric(metrics, key(\"layer_bind_group_creates\"))"));
     assert!(script.contains("scene3d_buffer_grows: numberMetric(metrics, key(\"scene3d_buffer_grows\"))"));
     assert!(script.contains("effect_bind_group_creates: numberMetric(metrics, key(\"effect_bind_group_creates\"))"));
     assert!(script.contains("id_mask_buffer_grows: numberMetric(metrics, key(\"id_mask_buffer_grows\"))"));
@@ -926,6 +952,10 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("`${prefix}_id_mask_field_jump_passes`"));
     assert!(script.contains("`${prefix}_texture_copies`"));
     assert!(script.contains("`${prefix}_layer_draws`"));
+    assert!(script.contains("`${prefix}_layer_cache_hits`"));
+    assert!(script.contains("`${prefix}_layer_cache_misses`"));
+    assert!(script.contains("`${prefix}_layer_cache_skipped_draws`"));
+    assert!(script.contains("`${prefix}_layer_passes`"));
     assert!(script.contains("`${prefix}_scene3d_draws`"));
     assert!(script.contains("`${prefix}_effect_uniform_writes`"));
     assert!(script.contains("`${prefix}_buffer_upload_bytes`"));
@@ -1038,6 +1068,8 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     let layer_effects = report_case_slice(report, "web.wasm.webgpu.layer_damage_effects");
     let layer_effects_legacy =
         report_case_slice(report, "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched");
+    let clean_layer = report_case_slice(report, "web.wasm.webgpu.clean_layer.clean_reuse");
+    let dirty_layer = report_case_slice(report, "web.wasm.webgpu.clean_layer.dirty_rerender");
     let command_family = report_case_slice(report, "web.wasm.webgpu.command_family_matrix");
     let command_family_legacy =
         report_case_slice(report, "web.wasm.webgpu.command_family_matrix.legacy_rebind");
@@ -1068,6 +1100,10 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(report_f64(frame, "clip_depth_peak") >= 0.0);
     assert!(report_f64(frame, "damage_rects") >= 0.0);
     assert!(report_f64(frame, "layer_draws") >= 0.0);
+    assert!(report_f64(frame, "layer_cache_hits") >= 0.0);
+    assert!(report_f64(frame, "layer_cache_misses") >= 0.0);
+    assert!(report_f64(frame, "layer_cache_skipped_draws") >= 0.0);
+    assert!(report_f64(frame, "layer_passes") >= 0.0);
     assert!(report_f64(frame, "scene3d_draws") >= 0.0);
     assert!(report_f64(frame, "id_mask_draws") >= 0.0);
     assert!(report_f64(frame, "backdrop_draws") >= 0.0);
@@ -1088,6 +1124,8 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(report_f64(frame, "buffer_grows") >= 0.0);
     assert!(report_f64(frame, "texture_creates") >= 0.0);
     assert!(report_f64(frame, "bind_group_creates") >= 0.0);
+    assert!(report_f64(frame, "layer_texture_creates") >= 0.0);
+    assert!(report_f64(frame, "layer_bind_group_creates") >= 0.0);
     assert!(report_f64(frame, "pipeline_creates") >= 0.0);
     assert_eq!(report_u64(frame, "sampler_creates"), 0);
     assert!(report_f64(frame, "mesh3d_creates") >= 0.0);
@@ -1453,6 +1491,35 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
         report_f64(layer_effects_legacy, "gpu_timestamp_passes"),
         report_f64(layer_effects_legacy, "render_passes")
     );
+    assert_eq!(report_f64(clean_layer, "layer_cache_hits"), 1.0);
+    assert_eq!(report_f64(clean_layer, "layer_cache_misses"), 0.0);
+    assert!(report_f64(clean_layer, "layer_cache_skipped_draws") > report_f64(clean_layer, "draw_items"));
+    assert_eq!(report_f64(clean_layer, "layer_passes"), 0.0);
+    assert_eq!(report_f64(dirty_layer, "layer_cache_hits"), 0.0);
+    assert_eq!(report_f64(dirty_layer, "layer_cache_misses"), 1.0);
+    assert_eq!(report_f64(dirty_layer, "layer_cache_skipped_draws"), 0.0);
+    assert_eq!(report_f64(dirty_layer, "layer_passes"), 1.0);
+    assert!(report_f64(clean_layer, "draw_items") < report_f64(dirty_layer, "draw_items"));
+    assert!(
+        report_f64(clean_layer, "draw_pipeline_binds")
+            < report_f64(dirty_layer, "draw_pipeline_binds")
+    );
+    assert!(
+        report_f64(clean_layer, "draw_bind_group_binds")
+            < report_f64(dirty_layer, "draw_bind_group_binds")
+    );
+    assert!(report_f64(clean_layer, "draw_scissor_sets") < report_f64(dirty_layer, "draw_scissor_sets"));
+    assert!(report_f64(clean_layer, "render_passes") < report_f64(dirty_layer, "render_passes"));
+    assert_eq!(report_pass_family_total(clean_layer), report_f64(clean_layer, "render_passes"));
+    assert_eq!(report_pass_family_total(dirty_layer), report_f64(dirty_layer, "render_passes"));
+    assert_eq!(
+        report_f64(clean_layer, "gpu_timestamp_passes"),
+        report_f64(clean_layer, "render_passes")
+    );
+    assert_eq!(
+        report_f64(dirty_layer, "gpu_timestamp_passes"),
+        report_f64(dirty_layer, "render_passes")
+    );
     assert!(
         report_f64(command_family, "image_mesh_draws")
             >= report_f64(command_family, "expected_image_meshes")
@@ -1804,7 +1871,7 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(report_f64(browser_trace, "gpu_related_events") > 0.0);
     assert!(report_f64(browser_trace, "duration_us") > 0.0);
     assert!(report_f64(browser_trace, "category_count") > 0.0);
-    assert_eq!(report_u64(browser_trace, "benchmark_trace_interval_count"), 15);
+    assert_eq!(report_u64(browser_trace, "benchmark_trace_interval_count"), 16);
     assert!(browser_trace.contains("\"benchmark_trace_interval_labels\""));
     assert!(browser_trace.contains("\"benchmark_trace_intervals\""));
     assert!(report_f64(browser_trace, "webgpu_related_events") > 0.0);
@@ -1812,11 +1879,11 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
         report_section_slice(report, "gpu_timestamp_stage_breakdown");
     assert!(gpu_timestamp_stage_breakdown
         .contains("\"id\": \"web.wasm.webgpu.gpu_timestamp_stage_breakdown\""));
-    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "row_count"), 33);
-    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "collected_rows"), 33);
+    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "row_count"), 35);
+    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "collected_rows"), 35);
     assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "stage_count"), 9);
-    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "row_detail_count"), 33);
-    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "total_render_passes"), 200);
+    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "row_detail_count"), 35);
+    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "total_render_passes"), 212);
     assert_eq!(
         report_u64(gpu_timestamp_stage_breakdown, "total_render_passes"),
         report_u64(gpu_timestamp_stage_breakdown, "total_timestamp_passes"),
@@ -1836,9 +1903,9 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     let warm_resource_churn = report_section_slice(report, "warm_resource_churn");
     assert!(warm_resource_churn
         .contains("\"id\": \"web.wasm.webgpu.warm_resource_churn.current_rows\""));
-    assert_eq!(report_u64(warm_resource_churn, "checked_rows"), 17);
-    assert_eq!(report_u64(warm_resource_churn, "excluded_rows"), 16);
-    assert_eq!(report_u64(warm_resource_churn, "row_detail_count"), 17);
+    assert_eq!(report_u64(warm_resource_churn, "checked_rows"), 18);
+    assert_eq!(report_u64(warm_resource_churn, "excluded_rows"), 17);
+    assert_eq!(report_u64(warm_resource_churn, "row_detail_count"), 18);
     assert!(warm_resource_churn.contains("\"row_details\": ["));
     assert_eq!(report_u64(warm_resource_churn, "total_buffer_grows"), 0);
     assert_eq!(report_u64(warm_resource_churn, "total_texture_creates"), 0);
@@ -1851,6 +1918,8 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert_eq!(report_u64(warm_resource_churn, "total_image_bind_group_creates"), 0);
     assert_eq!(report_u64(warm_resource_churn, "total_target_texture_creates"), 0);
     assert_eq!(report_u64(warm_resource_churn, "total_target_bind_group_creates"), 0);
+    assert_eq!(report_u64(warm_resource_churn, "total_layer_texture_creates"), 0);
+    assert_eq!(report_u64(warm_resource_churn, "total_layer_bind_group_creates"), 0);
     assert_eq!(report_u64(warm_resource_churn, "total_scene3d_buffer_grows"), 0);
     assert_eq!(report_u64(warm_resource_churn, "total_scene3d_bind_group_creates"), 0);
     assert_eq!(report_u64(warm_resource_churn, "total_effect_buffer_grows"), 0);
@@ -1879,9 +1948,9 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     let wasm_allocation_audit = report_section_slice(report, "wasm_allocation_audit");
     assert!(wasm_allocation_audit
         .contains("\"id\": \"web.wasm.webgpu.wasm_allocation_audit.current_rows\""));
-    assert_eq!(report_u64(wasm_allocation_audit, "checked_count"), 17);
-    assert_eq!(report_u64(wasm_allocation_audit, "excluded_count"), 16);
-    assert_eq!(report_u64(wasm_allocation_audit, "row_detail_count"), 17);
+    assert_eq!(report_u64(wasm_allocation_audit, "checked_count"), 18);
+    assert_eq!(report_u64(wasm_allocation_audit, "excluded_count"), 17);
+    assert_eq!(report_u64(wasm_allocation_audit, "row_detail_count"), 18);
     assert!(report_u64(wasm_allocation_audit, "total_wasm_alloc_count") > 0);
     assert!(report_u64(wasm_allocation_audit, "total_wasm_alloc_bytes") > 0);
     assert_eq!(report_u64(wasm_allocation_audit, "total_wasm_realloc_count"), 0);
@@ -1986,8 +2055,8 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(
         backend_path_coverage.contains("\"id\": \"web.wasm.webgpu.backend_path_coverage\"")
     );
-    assert_eq!(report_u64(backend_path_coverage, "expected_path_count"), 17);
-    assert_eq!(report_u64(backend_path_coverage, "covered_path_count"), 17);
+    assert_eq!(report_u64(backend_path_coverage, "expected_path_count"), 18);
+    assert_eq!(report_u64(backend_path_coverage, "covered_path_count"), 18);
     assert_eq!(report_u64(backend_path_coverage, "missing_path_count"), 0);
     assert!(backend_path_coverage.contains("\"id\": \"glyph_atlas_upload\""));
     assert!(backend_path_coverage.contains("\"id\": \"image_upload\""));
@@ -1998,6 +2067,9 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(backend_path_coverage.contains("\"id\": \"layer_damage_effects\""));
     assert!(backend_path_coverage
         .contains("\"web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched\""));
+    assert!(backend_path_coverage.contains("\"id\": \"clean_layer_reuse\""));
+    assert!(backend_path_coverage
+        .contains("\"web.wasm.webgpu.clean_layer.dirty_rerender\""));
     assert!(backend_path_coverage.contains("\"id\": \"command_family_matrix\""));
     assert!(backend_path_coverage
         .contains("\"web.wasm.webgpu.command_family_matrix.legacy_rebind\""));
@@ -2179,6 +2251,36 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(
         report_f64(layer_effects_summary, "current_render_passes")
             < report_f64(layer_effects_summary, "legacy_render_passes")
+    );
+    let clean_layer_summary = report_section_slice(report, "clean_layer_summary");
+    assert!(clean_layer_summary.contains(
+        "\"id\": \"web.wasm.webgpu.clean_layer.clean_reuse_vs_dirty_rerender\""
+    ));
+    assert_eq!(
+        report_f64(clean_layer_summary, "clean_p50_ms"),
+        report_f64(clean_layer, "p50_ms")
+    );
+    assert_eq!(
+        report_f64(clean_layer_summary, "dirty_p50_ms"),
+        report_f64(dirty_layer, "p50_ms")
+    );
+    assert_eq!(report_f64(clean_layer_summary, "clean_layer_cache_hits"), 1.0);
+    assert_eq!(report_f64(clean_layer_summary, "clean_layer_cache_misses"), 0.0);
+    assert_eq!(report_f64(clean_layer_summary, "clean_layer_passes"), 0.0);
+    assert_eq!(report_f64(clean_layer_summary, "dirty_layer_cache_hits"), 0.0);
+    assert_eq!(report_f64(clean_layer_summary, "dirty_layer_cache_misses"), 1.0);
+    assert_eq!(report_f64(clean_layer_summary, "dirty_layer_passes"), 1.0);
+    assert!(
+        report_f64(clean_layer_summary, "clean_layer_cache_skipped_draws")
+            > report_f64(clean_layer_summary, "clean_draw_items")
+    );
+    assert!(
+        report_f64(clean_layer_summary, "clean_draw_items")
+            < report_f64(clean_layer_summary, "dirty_draw_items")
+    );
+    assert!(
+        report_f64(clean_layer_summary, "clean_render_passes")
+            < report_f64(clean_layer_summary, "dirty_render_passes")
     );
     let command_family_summary = report_section_slice(report, "command_family_summary");
     assert!(command_family_summary

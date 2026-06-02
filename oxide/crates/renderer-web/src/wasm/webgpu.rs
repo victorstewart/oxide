@@ -9,6 +9,7 @@ use js_sys::Reflect;
 use oxide_wasm_alloc_counter::AllocationSnapshot;
 use oxide_renderer_api as api;
 use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::HtmlCanvasElement;
@@ -60,6 +61,16 @@ struct GpuImage {
     width: u32,
     height: u32,
     kind: GpuImageKind,
+}
+
+struct GpuLayer {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+    rect: api::RectF,
+    width: u32,
+    height: u32,
+    scale: f32,
 }
 
 struct GpuMesh3d {
@@ -120,6 +131,7 @@ enum DrawKind {
     Rgba { image: usize },
     A8 { image: usize },
     Sdf { image: usize },
+    Layer { id: u32 },
     Backdrop { rect: api::RectF, sigma: f32 },
 }
 
@@ -136,6 +148,7 @@ enum DrawPipelineKey {
 enum DrawBindKey {
     None,
     Texture { image: usize },
+    Layer { id: u32 },
     Effect { offset: u32 },
 }
 
@@ -153,12 +166,21 @@ struct GpuDraw {
     index_count: u32,
     clip: api::RectI,
     effect_uniform_offset: u32,
+    target: Option<u32>,
+}
+
+#[derive(Clone, Copy)]
+struct FrameLayerPass {
+    id: u32,
+    start: usize,
+    end: usize,
 }
 
 struct FrameData {
     vertices: Vec<GpuVertex>,
     indices: Vec<u32>,
     draws: Vec<GpuDraw>,
+    layer_passes: Vec<FrameLayerPass>,
     effect_count: usize,
     effect_first_sigma_bits: u32,
     effect_shared_sigma: f32,
@@ -170,6 +192,7 @@ impl FrameData {
         self.vertices.clear();
         self.indices.clear();
         self.draws.clear();
+        self.layer_passes.clear();
         self.effect_count = 0;
         self.effect_first_sigma_bits = 0;
         self.effect_shared_sigma = 0.0;
@@ -740,6 +763,7 @@ pub struct WebGpuRenderer {
     scene3d_clear_depth: bool,
     scene3d_active: bool,
     images: Vec<Option<GpuImage>>,
+    layers: BTreeMap<u32, GpuLayer>,
     meshes_3d: Vec<Option<GpuMesh3d>>,
     frame: FrameData,
     scratch_vertices: Vec<GpuVertex>,
@@ -749,6 +773,7 @@ pub struct WebGpuRenderer {
     id_mask_raster_uniform_bytes: Vec<u8>,
     id_mask_compositor_uniform_bytes: Vec<u8>,
     clip_stack: Vec<api::RectI>,
+    target_stack: Vec<u32>,
     width: u32,
     height: u32,
     scale: f32,
@@ -980,11 +1005,13 @@ impl WebGpuRenderer {
             scene3d_clear_depth: true,
             scene3d_active: false,
             images: vec![None],
+            layers: BTreeMap::new(),
             meshes_3d: vec![None],
             frame: FrameData {
                 vertices: Vec::new(),
                 indices: Vec::new(),
                 draws: Vec::new(),
+                layer_passes: Vec::new(),
                 effect_count: 0,
                 effect_first_sigma_bits: 0,
                 effect_shared_sigma: 0.0,
@@ -997,6 +1024,7 @@ impl WebGpuRenderer {
             id_mask_raster_uniform_bytes: Vec::new(),
             id_mask_compositor_uniform_bytes: Vec::new(),
             clip_stack: Vec::new(),
+            target_stack: Vec::new(),
             width,
             height,
             scale: 1.0,
@@ -1098,6 +1126,12 @@ impl WebGpuRenderer {
             self.frame.draws.capacity().saturating_mul(core::mem::size_of::<GpuDraw>()),
         );
         capacity.draw = capacity.draw.saturating_add(
+            self.frame
+                .layer_passes
+                .capacity()
+                .saturating_mul(core::mem::size_of::<FrameLayerPass>()),
+        );
+        capacity.draw = capacity.draw.saturating_add(
             self.scratch_vertices.capacity().saturating_mul(core::mem::size_of::<GpuVertex>()),
         );
         capacity.draw = capacity.draw.saturating_add(
@@ -1111,6 +1145,9 @@ impl WebGpuRenderer {
         capacity.id_mask = capacity.id_mask.saturating_add(self.id_mask_compositor_uniform_bytes.capacity());
         capacity.draw = capacity.draw.saturating_add(
             self.clip_stack.capacity().saturating_mul(core::mem::size_of::<api::RectI>()),
+        );
+        capacity.draw = capacity.draw.saturating_add(
+            self.target_stack.capacity().saturating_mul(core::mem::size_of::<u32>()),
         );
         capacity
     }
@@ -1749,6 +1786,10 @@ impl WebGpuRenderer {
         })
     }
 
+    fn current_target(&self) -> Option<u32> {
+        self.target_stack.last().copied()
+    }
+
     fn push_draw(&mut self, kind: DrawKind, vertices: &[GpuVertex], indices: &[u32]) {
         if vertices.is_empty() || indices.is_empty() {
             return;
@@ -1764,6 +1805,7 @@ impl WebGpuRenderer {
             index_count: indices.len() as u32,
             clip: self.current_clip(),
             effect_uniform_offset: 0,
+            target: self.current_target(),
         });
     }
 
@@ -1790,16 +1832,121 @@ impl WebGpuRenderer {
             index_count: self.scratch_indices.len() as u32,
             clip,
             effect_uniform_offset: 0,
+            target: self.current_target(),
         });
+    }
+
+    fn cached_layer(&self, id: u32, rect: api::RectF) -> Option<&GpuLayer> {
+        let layer = self.layers.get(&id)?;
+        if layer.width == self.width
+            && layer.height == self.height
+            && (layer.scale - self.scale).abs() <= f32::EPSILON
+            && layer.rect == rect
+        {
+            Some(layer)
+        } else {
+            None
+        }
+    }
+
+    fn ensure_layer(&mut self, id: u32, rect: api::RectF) {
+        let width = self.width.max(1);
+        let height = self.height.max(1);
+        let recreate = self.layers.get(&id).map_or(true, |layer| {
+            layer.width != width
+                || layer.height != height
+                || (layer.scale - self.scale).abs() > f32::EPSILON
+        });
+        if recreate {
+            let (texture, view, bind_group) = create_target_texture(
+                &self.device,
+                &self.programs,
+                "oxide-webgpu-layer",
+                self.config.format,
+                width,
+                height,
+            );
+            self.layers.insert(id, GpuLayer {
+                texture,
+                view,
+                bind_group,
+                rect,
+                width,
+                height,
+                scale: self.scale,
+            });
+            self.stats.texture_creates = self.stats.texture_creates.saturating_add(1);
+            self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
+            self.stats.target_texture_creates =
+                self.stats.target_texture_creates.saturating_add(1);
+            self.stats.target_bind_group_creates =
+                self.stats.target_bind_group_creates.saturating_add(1);
+            self.stats.layer_texture_creates = self.stats.layer_texture_creates.saturating_add(1);
+            self.stats.layer_bind_group_creates =
+                self.stats.layer_bind_group_creates.saturating_add(1);
+        } else if let Some(layer) = self.layers.get_mut(&id) {
+            layer.rect = rect;
+        }
+    }
+
+    fn push_layer_draw(&mut self, id: u32, rect: api::RectF) {
+        let logical_w = logical_dimension(self.width, self.scale).max(1.0);
+        let logical_h = logical_dimension(self.height, self.scale).max(1.0);
+        let u0 = rect.x / logical_w;
+        let v0 = rect.y / logical_h;
+        let u1 = (rect.x + rect.w) / logical_w;
+        let v1 = (rect.y + rect.h) / logical_h;
+        let color = api::Color::rgba(1.0, 1.0, 1.0, 1.0);
+        let vertices = quad_vertices(rect, u0, v0, u1, v1, color);
+        self.push_draw(DrawKind::Layer { id }, &vertices, &[0, 1, 2, 2, 1, 3]);
+    }
+
+    fn encode_layer(
+        &mut self,
+        list: &api::DrawList,
+        index: &mut usize,
+        id: u32,
+        rect: api::RectF,
+        dirty: bool,
+    ) {
+        self.stats.layer_draws = self.stats.layer_draws.saturating_add(1);
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            let skipped = skip_layer_body(list, index);
+            self.stats.layer_cache_skipped_draws =
+                self.stats.layer_cache_skipped_draws.saturating_add(skipped);
+            return;
+        }
+        if id == 0 {
+            self.encode_items(list, index, true);
+            return;
+        }
+
+        if !dirty && self.cached_layer(id, rect).is_some() {
+            let skipped = skip_layer_body(list, index);
+            self.stats.layer_cache_hits = self.stats.layer_cache_hits.saturating_add(1);
+            self.stats.layer_cache_skipped_draws =
+                self.stats.layer_cache_skipped_draws.saturating_add(skipped);
+            self.push_layer_draw(id, rect);
+            return;
+        }
+
+        self.stats.layer_cache_misses = self.stats.layer_cache_misses.saturating_add(1);
+        self.ensure_layer(id, rect);
+        let start = self.frame.draws.len();
+        self.target_stack.push(id);
+        self.encode_items(list, index, true);
+        let _ = self.target_stack.pop();
+        let end = self.frame.draws.len();
+        self.frame.layer_passes.push(FrameLayerPass { id, start, end });
+        self.push_layer_draw(id, rect);
     }
 
     fn encode_items(&mut self, list: &api::DrawList, index: &mut usize, stop_at_layer_end: bool) {
         while *index < list.items.len() {
             match &list.items[*index] {
-                api::DrawCmd::LayerBegin { .. } => {
-                    self.stats.layer_draws = self.stats.layer_draws.saturating_add(1);
+                api::DrawCmd::LayerBegin { id, rect, dirty } => {
                     *index += 1;
-                    self.encode_items(list, index, true);
+                    self.encode_layer(list, index, *id, *rect, *dirty);
                 }
                 api::DrawCmd::LayerEnd => {
                     *index += 1;
@@ -2567,6 +2714,7 @@ impl api::Renderer for WebGpuRenderer {
         self.scene3d_clear_depth = true;
         self.scene3d_active = false;
         self.clip_stack.clear();
+        self.target_stack.clear();
         if let Some(timestamps) = &mut self.timestamp_queries {
             timestamps.harvest();
             timestamps.begin_frame();
@@ -2627,7 +2775,8 @@ impl api::Renderer for WebGpuRenderer {
         self.record_submit_allocation_stage(SubmitAllocationStage::Encoder, alloc_before);
 
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
-        if self.frame_uses_backdrop() || !self.direct_surface_enabled {
+        self.render_layer_passes(&mut encoder);
+        if self.target_uses_backdrop(None, 0, self.frame.draws.len()) || !self.direct_surface_enabled {
             self.render_scene_with_effects(&mut encoder);
             self.render_present(&mut encoder, &surface_view);
         } else {
@@ -2680,6 +2829,7 @@ impl api::Renderer for WebGpuRenderer {
         self.config.height = self.height;
         self.surface.configure(&self.device, &self.config);
         self.recreate_targets();
+        self.layers.clear();
         Ok(())
     }
 }
@@ -2725,8 +2875,11 @@ impl WebGpuRenderer {
         None
     }
 
-    fn frame_uses_backdrop(&self) -> bool {
-        self.frame.effect_count != 0
+    fn target_uses_backdrop(&self, target: Option<u32>, start: usize, end: usize) -> bool {
+        let end = end.min(self.frame.draws.len());
+        self.frame.draws[start.min(end)..end]
+            .iter()
+            .any(|draw| draw.target == target && matches!(draw.kind, DrawKind::Backdrop { .. }))
     }
 
     fn backdrop_sample_rect(&self, rect: api::RectF, sigma: f32) -> api::RectF {
@@ -2748,24 +2901,39 @@ impl WebGpuRenderer {
         a.x < bx1 && ax1 > b.x && a.y < by1 && ay1 > b.y
     }
 
-    fn backdrop_batch_end(&self, start: usize) -> usize {
+    fn backdrop_batch_end(&self, start: usize, target: Option<u32>, limit: usize) -> usize {
         if !self.backdrop_batch_enabled {
             return start + 1;
         }
-        let DrawKind::Backdrop { rect, sigma } = self.frame.draws[start].kind else {
+        let first = self.frame.draws[start];
+        if first.target != target {
+            return start + 1;
+        }
+        let DrawKind::Backdrop { rect, sigma } = first.kind else {
             return start + 1;
         };
         let mut end = start + 1;
         let first_sample = self.backdrop_sample_rect(rect, sigma);
-        while end < self.frame.draws.len() {
-            let DrawKind::Backdrop { rect, sigma } = self.frame.draws[end].kind else {
+        let limit = limit.min(self.frame.draws.len());
+        while end < limit {
+            let draw = self.frame.draws[end];
+            if draw.target != target {
+                end += 1;
+                continue;
+            }
+            let DrawKind::Backdrop { rect, sigma } = draw.kind else {
                 break;
             };
             let candidate = self.backdrop_sample_rect(rect, sigma);
             let mut overlaps = self.backdrop_sample_rects_overlap(first_sample, candidate);
             let mut prior = start + 1;
             while !overlaps && prior < end {
-                let DrawKind::Backdrop { rect, sigma } = self.frame.draws[prior].kind else {
+                let prior_draw = self.frame.draws[prior];
+                if prior_draw.target != target {
+                    prior += 1;
+                    continue;
+                }
+                let DrawKind::Backdrop { rect, sigma } = prior_draw.kind else {
                     break;
                 };
                 overlaps = self.backdrop_sample_rects_overlap(
@@ -2864,6 +3032,7 @@ impl WebGpuRenderer {
             surface_view,
             0,
             self.frame.draws.len(),
+            None,
             if self.scene3d_active
                 || !self.id_mask_draws.is_empty()
                 || !self.scene3d_overlay_draws.is_empty()
@@ -2889,13 +3058,61 @@ impl WebGpuRenderer {
         if !self.scene3d_overlay_draws.is_empty() {
             self.render_scene3d_overlay(encoder, &scene_view);
         }
-        let mut start = 0_usize;
-        while start < self.frame.draws.len() {
+        let scene_texture = self.scene_texture.clone();
+        self.render_draw_target_with_effects(
+            encoder,
+            &scene_texture,
+            &scene_view,
+            None,
+            0,
+            self.frame.draws.len(),
+        );
+    }
+
+    fn render_layer_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        for pass_index in 0..self.frame.layer_passes.len() {
+            let layer_pass = self.frame.layer_passes[pass_index];
+            let Some(layer) = self.layers.get(&layer_pass.id) else {
+                continue;
+            };
+            let texture = layer.texture.clone();
+            let view = layer.view.clone();
+            self.clear_target(encoder, &view, "oxide-webgpu-clear-layer");
+            self.render_draw_target_with_effects(
+                encoder,
+                &texture,
+                &view,
+                Some(layer_pass.id),
+                layer_pass.start,
+                layer_pass.end,
+            );
+            self.stats.layer_passes = self.stats.layer_passes.saturating_add(1);
+        }
+    }
+
+    fn render_draw_target_with_effects(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target_texture: &wgpu::Texture,
+        target_view: &wgpu::TextureView,
+        target: Option<u32>,
+        start: usize,
+        end: usize,
+    ) {
+        let limit = end.min(self.frame.draws.len());
+        let mut start = start.min(limit);
+        while start < limit {
+            while start < limit && self.frame.draws[start].target != target {
+                start += 1;
+            }
+            if start >= limit {
+                break;
+            }
             if let DrawKind::Backdrop { sigma, .. } = self.frame.draws[start].kind {
-                let end = self.backdrop_batch_end(start);
+                let end = self.backdrop_batch_end(start, target, limit);
                 encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
-                        texture: &self.scene_texture,
+                        texture: target_texture,
                         mip_level: 0,
                         origin: wgpu::Origin3d::ZERO,
                         aspect: wgpu::TextureAspect::All,
@@ -2917,30 +3134,42 @@ impl WebGpuRenderer {
                     self.write_effect_uniform(sigma);
                     self.frame.draws[start].effect_uniform_offset = 0;
                 }
-                self.render_draw_range(encoder, &scene_view, start, end, wgpu::LoadOp::Load);
+                self.render_draw_range(encoder, target_view, start, end, target, wgpu::LoadOp::Load);
                 start = end;
             } else {
                 let mut end = start + 1;
-                while end < self.frame.draws.len()
-                    && !matches!(self.frame.draws[end].kind, DrawKind::Backdrop { .. })
-                {
+                while end < limit {
+                    let draw = self.frame.draws[end];
+                    if draw.target == target && matches!(draw.kind, DrawKind::Backdrop { .. }) {
+                        break;
+                    }
                     end += 1;
                 }
-                self.render_draw_range(encoder, &scene_view, start, end, wgpu::LoadOp::Load);
+                self.render_draw_range(encoder, target_view, start, end, target, wgpu::LoadOp::Load);
                 start = end;
             }
         }
     }
 
     fn clear_scene(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        let scene_view = self.scene_view.clone();
+        self.clear_target(encoder, &scene_view, "oxide-webgpu-clear-scene");
+    }
+
+    fn clear_target(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target_view: &wgpu::TextureView,
+        label: &'static str,
+    ) {
         self.stats.render_passes = self.stats.render_passes.saturating_add(1);
         self.stats.clear_passes = self.stats.clear_passes.saturating_add(1);
         let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Clear);
         let timestamp_writes = self.timestamp_writes(timestamp_pair);
         let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("oxide-webgpu-clear-scene"),
+            label: Some(label),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.scene_view,
+                view: target_view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -3384,6 +3613,10 @@ impl WebGpuRenderer {
                 self.images.get(image).and_then(Option::as_ref)?;
                 (DrawPipelineKey::Sdf, DrawBindKey::Texture { image })
             }
+            DrawKind::Layer { id } => {
+                self.layers.get(&id)?;
+                (DrawPipelineKey::Rgba, DrawBindKey::Layer { id })
+            }
             DrawKind::Backdrop { .. } => (
                 DrawPipelineKey::Effect,
                 DrawBindKey::Effect { offset: draw.effect_uniform_offset },
@@ -3398,12 +3631,16 @@ impl WebGpuRenderer {
         target_view: &wgpu::TextureView,
         start: usize,
         end: usize,
+        target: Option<u32>,
         load: wgpu::LoadOp<wgpu::Color>,
     ) {
         if start >= end {
             return;
         }
         if self.vertex_buffer.is_none() || self.index_buffer.is_none() {
+            return;
+        }
+        if !self.frame.draws[start..end].iter().any(|draw| draw.target == target) {
             return;
         }
         self.stats.render_passes = self.stats.render_passes.saturating_add(1);
@@ -3443,6 +3680,9 @@ impl WebGpuRenderer {
         let mut bound_clip: Option<api::RectI> = None;
         for draw_index in start..end {
             let draw = self.frame.draws[draw_index];
+            if draw.target != target {
+                continue;
+            }
             let Some(state) = self.draw_state_key(draw) else {
                 continue;
             };
@@ -3472,6 +3712,13 @@ impl WebGpuRenderer {
                             continue;
                         };
                         pass.set_bind_group(1, &image.bind_group, &[]);
+                        draw_bind_group_binds = draw_bind_group_binds.saturating_add(1);
+                    }
+                    DrawBindKey::Layer { id } => {
+                        let Some(layer) = self.layers.get(&id) else {
+                            continue;
+                        };
+                        pass.set_bind_group(1, &layer.bind_group, &[]);
                         draw_bind_group_binds = draw_bind_group_binds.saturating_add(1);
                     }
                     DrawBindKey::Effect { offset } => {
@@ -4817,6 +5064,20 @@ fn append_gpu_vertices(
     } else {
         idx.extend(base..out.len() as u32);
     }
+}
+
+fn skip_layer_body(list: &api::DrawList, index: &mut usize) -> u32 {
+    let mut depth = 1_u32;
+    let mut skipped = 0_u32;
+    while *index < list.items.len() && depth > 0 {
+        match list.items[*index] {
+            api::DrawCmd::LayerBegin { .. } => depth = depth.saturating_add(1),
+            api::DrawCmd::LayerEnd => depth = depth.saturating_sub(1),
+            _ => skipped = skipped.saturating_add(1),
+        }
+        *index += 1;
+    }
+    skipped
 }
 
 fn logical_dimension(physical: u32, scale: f32) -> f32 {

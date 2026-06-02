@@ -967,6 +967,10 @@ function frameLoopCase(metrics)
       clip_depth_peak: numberMetric(metrics, "clip_depth_peak"),
       damage_rects: numberMetric(metrics, "damage_rects"),
       layer_draws: numberMetric(metrics, "layer_draws"),
+      layer_cache_hits: numberMetric(metrics, "layer_cache_hits"),
+      layer_cache_misses: numberMetric(metrics, "layer_cache_misses"),
+      layer_cache_skipped_draws: numberMetric(metrics, "layer_cache_skipped_draws"),
+      layer_passes: numberMetric(metrics, "layer_passes"),
       scene3d_draws: numberMetric(metrics, "scene3d_draws"),
       id_mask_draws: numberMetric(metrics, "id_mask_draws"),
       backdrop_draws: numberMetric(metrics, "backdrop_draws"),
@@ -1133,6 +1137,8 @@ function resourceMetricFields(metrics, prefix)
       image_bind_group_creates: numberMetric(metrics, key("image_bind_group_creates")),
       target_texture_creates: numberMetric(metrics, key("target_texture_creates")),
       target_bind_group_creates: numberMetric(metrics, key("target_bind_group_creates")),
+      layer_texture_creates: numberMetric(metrics, key("layer_texture_creates")),
+      layer_bind_group_creates: numberMetric(metrics, key("layer_bind_group_creates")),
       scene3d_buffer_grows: numberMetric(metrics, key("scene3d_buffer_grows")),
       scene3d_bind_group_creates: numberMetric(metrics, key("scene3d_bind_group_creates")),
       effect_buffer_grows: numberMetric(metrics, key("effect_buffer_grows")),
@@ -1207,6 +1213,10 @@ function idMaskCase(metrics, id, variant, prefix)
       clip_depth_peak: numberMetric(metrics, `${prefix}_clip_depth_peak`),
       damage_rects: numberMetric(metrics, `${prefix}_damage_rects`),
       layer_draws: numberMetric(metrics, `${prefix}_layer_draws`),
+      layer_cache_hits: numberMetric(metrics, `${prefix}_layer_cache_hits`),
+      layer_cache_misses: numberMetric(metrics, `${prefix}_layer_cache_misses`),
+      layer_cache_skipped_draws: numberMetric(metrics, `${prefix}_layer_cache_skipped_draws`),
+      layer_passes: numberMetric(metrics, `${prefix}_layer_passes`),
       scene3d_draws: numberMetric(metrics, `${prefix}_scene3d_draws`),
       id_mask_draws: numberMetric(metrics, `${prefix}_id_mask_draws`),
       backdrop_draws: numberMetric(metrics, `${prefix}_backdrop_draws`),
@@ -1279,6 +1289,10 @@ function prefixedBackendCase(metrics, id, variant, prefix, extra)
       clip_depth_peak: numberMetric(metrics, `${prefix}_clip_depth_peak`),
       damage_rects: numberMetric(metrics, `${prefix}_damage_rects`),
       layer_draws: numberMetric(metrics, `${prefix}_layer_draws`),
+      layer_cache_hits: numberMetric(metrics, `${prefix}_layer_cache_hits`),
+      layer_cache_misses: numberMetric(metrics, `${prefix}_layer_cache_misses`),
+      layer_cache_skipped_draws: numberMetric(metrics, `${prefix}_layer_cache_skipped_draws`),
+      layer_passes: numberMetric(metrics, `${prefix}_layer_passes`),
       scene3d_draws: numberMetric(metrics, `${prefix}_scene3d_draws`),
       id_mask_draws: numberMetric(metrics, `${prefix}_id_mask_draws`),
       backdrop_draws: numberMetric(metrics, `${prefix}_backdrop_draws`),
@@ -1325,6 +1339,7 @@ const WARM_RESOURCE_CHURN_EXCLUDED_IDS = new Set([
    "web.wasm.webgpu.scene3d.stress_recreate_mesh",
    "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched",
    "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched",
+   "web.wasm.webgpu.clean_layer.dirty_rerender",
    "web.wasm.webgpu.command_family_matrix.legacy_rebind",
    "web.wasm.webgpu.glyph_run.legacy_rebind",
    "web.wasm.webgpu.neon_marker.legacy_rebind",
@@ -1345,6 +1360,8 @@ const WARM_RESOURCE_CHURN_FIELDS = [
    "image_bind_group_creates",
    "target_texture_creates",
    "target_bind_group_creates",
+   "layer_texture_creates",
+   "layer_bind_group_creates",
    "scene3d_buffer_grows",
    "scene3d_bind_group_creates",
    "effect_buffer_grows",
@@ -1393,6 +1410,7 @@ const EXPECTED_BENCHMARK_MARKS = [
    "scene3d_ab",
    "mixed_matrix",
    "layer_effects_matrix",
+   "clean_layer_ab",
    "command_family_matrix",
    "glyph_run_ab",
    "neon_marker_ab",
@@ -1413,6 +1431,12 @@ const WEBGPU_BACKEND_PATHS = [
       rows: ["web.wasm.webgpu.id_mask_compositor.current", "web.wasm.webgpu.id_mask_compositor.legacy_upload"],
       counters: ["id_mask_draws", "id_mask_raster_passes", "id_mask_field_seed_passes", "id_mask_field_jump_passes", "id_mask_compositor_passes", "buffer_upload_bytes", "vertices", "gpu_timestamp_passes"],
       comparison: "current_vs_legacy",
+   },
+   {
+      id: "clean_layer_reuse",
+      rows: ["web.wasm.webgpu.clean_layer.clean_reuse", "web.wasm.webgpu.clean_layer.dirty_rerender"],
+      counters: ["layer_draws", "layer_cache_hits", "layer_cache_misses", "layer_cache_skipped_draws", "layer_passes", "draw_items", "draw_passes", "gpu_timestamp_passes"],
+      comparison: "clean_vs_dirty",
    },
    {
       id: "glyph_atlas_upload",
@@ -2016,6 +2040,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
    let scene3dMetrics = parseMetricString(pageReport.scene3d_ab);
    let mixedMetrics = parseMetricString(pageReport.mixed_matrix);
    let layerEffectsMetrics = parseMetricString(pageReport.layer_effects_matrix);
+   let cleanLayerMetrics = parseMetricString(pageReport.clean_layer_ab);
    let commandFamilyMetrics = parseMetricString(pageReport.command_family_matrix);
    let glyphRunMetrics = parseMetricString(pageReport.glyph_run_ab);
    let neonMarkerMetrics = parseMetricString(pageReport.neon_marker_ab);
@@ -2246,6 +2271,36 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          },
       ),
       prefixedBackendCase(
+         cleanLayerMetrics,
+         "web.wasm.webgpu.clean_layer.clean_reuse",
+         "webgpu-clean-layer-clean-reuse",
+         "clean",
+         {
+            glyphs: numberMetric(cleanLayerMetrics, "glyphs"),
+            image_tiles: numberMetric(cleanLayerMetrics, "image_tiles"),
+            image_width: numberMetric(cleanLayerMetrics, "image_width"),
+            image_height: numberMetric(cleanLayerMetrics, "image_height"),
+            expected_layers: numberMetric(cleanLayerMetrics, "expected_layers"),
+            expected_clean_hits: numberMetric(cleanLayerMetrics, "expected_clean_hits"),
+            expected_dirty_misses: numberMetric(cleanLayerMetrics, "expected_dirty_misses"),
+         },
+      ),
+      prefixedBackendCase(
+         cleanLayerMetrics,
+         "web.wasm.webgpu.clean_layer.dirty_rerender",
+         "webgpu-clean-layer-dirty-rerender",
+         "dirty",
+         {
+            glyphs: numberMetric(cleanLayerMetrics, "glyphs"),
+            image_tiles: numberMetric(cleanLayerMetrics, "image_tiles"),
+            image_width: numberMetric(cleanLayerMetrics, "image_width"),
+            image_height: numberMetric(cleanLayerMetrics, "image_height"),
+            expected_layers: numberMetric(cleanLayerMetrics, "expected_layers"),
+            expected_clean_hits: numberMetric(cleanLayerMetrics, "expected_clean_hits"),
+            expected_dirty_misses: numberMetric(cleanLayerMetrics, "expected_dirty_misses"),
+         },
+      ),
+      prefixedBackendCase(
          commandFamilyMetrics,
          "web.wasm.webgpu.command_family_matrix",
          "webgpu-command-family-current",
@@ -2434,6 +2489,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          "The WebGPU effect-uniform A/B rows draw the same backdrop scene while comparing one batched dynamic-uniform upload against one queue write per backdrop.",
          "The WebGPU backdrop-batch A/B rows draw separated consecutive backdrops while comparing one shared scene-copy pass against the legacy per-backdrop copy path.",
          "The WebGPU layer/damage/effects A/B rows draw the same nested layer, damage, image, glyph, backdrop, visual-effect, and spinner workload while comparing current state/effect batching against legacy rebinding/unbatched toggles.",
+         "The WebGPU clean-layer A/B rows warm a retained layer, then compare `dirty=false` cache reuse against `dirty=true` rerendering for the same image/glyph/clip scene.",
          "The WebGPU command-family A/B rows draw the same generic ImageMesh, NineSlice, and SDF glyph workload while comparing current draw-state caching against a legacy rebind path and keeping web CameraBg work unavailable.",
          "The WebGPU glyph-run A/B rows draw the same atlas-backed A8 and SDF GlyphRun workload while comparing current draw-state caching against a legacy rebind path.",
          "The WebGPU direct-surface A/B rows draw the same no-effect image workload while comparing direct surface rendering against a benchmark-only forced scene-present path.",
@@ -2457,6 +2513,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          scene3d_ab: pageReport.scene3d_ab,
          mixed_matrix: pageReport.mixed_matrix,
          layer_effects_matrix: pageReport.layer_effects_matrix,
+         clean_layer_ab: pageReport.clean_layer_ab,
          command_family_matrix: pageReport.command_family_matrix,
          glyph_run_ab: pageReport.glyph_run_ab,
          neon_marker_ab: pageReport.neon_marker_ab,
@@ -2721,6 +2778,37 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          expected_layers: numberMetric(layerEffectsMetrics, "expected_layers"),
          expected_damage_rects: numberMetric(layerEffectsMetrics, "expected_damage_rects"),
          expected_backdrops: numberMetric(layerEffectsMetrics, "expected_backdrops"),
+      },
+      clean_layer_summary: {
+         id: "web.wasm.webgpu.clean_layer.clean_reuse_vs_dirty_rerender",
+         dirty_over_clean: numberMetric(cleanLayerMetrics, "dirty_over_clean"),
+         clean_p50_ms: numberMetric(cleanLayerMetrics, "clean_p50_ms"),
+         dirty_p50_ms: numberMetric(cleanLayerMetrics, "dirty_p50_ms"),
+         clean_draw_items: numberMetric(cleanLayerMetrics, "clean_draw_items"),
+         dirty_draw_items: numberMetric(cleanLayerMetrics, "dirty_draw_items"),
+         clean_draw_pipeline_binds: numberMetric(cleanLayerMetrics, "clean_draw_pipeline_binds"),
+         dirty_draw_pipeline_binds: numberMetric(cleanLayerMetrics, "dirty_draw_pipeline_binds"),
+         clean_draw_bind_group_binds: numberMetric(cleanLayerMetrics, "clean_draw_bind_group_binds"),
+         dirty_draw_bind_group_binds: numberMetric(cleanLayerMetrics, "dirty_draw_bind_group_binds"),
+         clean_draw_scissor_sets: numberMetric(cleanLayerMetrics, "clean_draw_scissor_sets"),
+         dirty_draw_scissor_sets: numberMetric(cleanLayerMetrics, "dirty_draw_scissor_sets"),
+         clean_layer_cache_hits: numberMetric(cleanLayerMetrics, "clean_layer_cache_hits"),
+         dirty_layer_cache_hits: numberMetric(cleanLayerMetrics, "dirty_layer_cache_hits"),
+         clean_layer_cache_misses: numberMetric(cleanLayerMetrics, "clean_layer_cache_misses"),
+         dirty_layer_cache_misses: numberMetric(cleanLayerMetrics, "dirty_layer_cache_misses"),
+         clean_layer_cache_skipped_draws: numberMetric(cleanLayerMetrics, "clean_layer_cache_skipped_draws"),
+         dirty_layer_cache_skipped_draws: numberMetric(cleanLayerMetrics, "dirty_layer_cache_skipped_draws"),
+         clean_layer_passes: numberMetric(cleanLayerMetrics, "clean_layer_passes"),
+         dirty_layer_passes: numberMetric(cleanLayerMetrics, "dirty_layer_passes"),
+         clean_render_passes: numberMetric(cleanLayerMetrics, "clean_render_passes"),
+         dirty_render_passes: numberMetric(cleanLayerMetrics, "dirty_render_passes"),
+         clean_gpu_timestamp_total_ns: numberMetric(cleanLayerMetrics, "clean_gpu_timestamp_total_ns"),
+         dirty_gpu_timestamp_total_ns: numberMetric(cleanLayerMetrics, "dirty_gpu_timestamp_total_ns"),
+         glyphs: numberMetric(cleanLayerMetrics, "glyphs"),
+         image_tiles: numberMetric(cleanLayerMetrics, "image_tiles"),
+         expected_layers: numberMetric(cleanLayerMetrics, "expected_layers"),
+         expected_clean_hits: numberMetric(cleanLayerMetrics, "expected_clean_hits"),
+         expected_dirty_misses: numberMetric(cleanLayerMetrics, "expected_dirty_misses"),
       },
       command_family_summary: {
          id: "web.wasm.webgpu.command_family_matrix.current_vs_legacy_rebind",
@@ -3335,6 +3423,12 @@ function renderMarkdown(report)
    lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
    lines.push(`| \`${report.layer_effects_summary.id}\` | ${report.layer_effects_summary.current_p50_ms.toFixed(3)} | ${report.layer_effects_summary.legacy_p50_ms.toFixed(3)} | ${report.layer_effects_summary.legacy_over_current.toFixed(3)} | ${report.layer_effects_summary.current_draw_items} | ${report.layer_effects_summary.legacy_draw_items} | ${report.layer_effects_summary.current_draw_pipeline_binds} | ${report.layer_effects_summary.legacy_draw_pipeline_binds} | ${report.layer_effects_summary.current_draw_bind_group_binds} | ${report.layer_effects_summary.legacy_draw_bind_group_binds} | ${report.layer_effects_summary.current_draw_scissor_sets} | ${report.layer_effects_summary.legacy_draw_scissor_sets} | ${report.layer_effects_summary.current_effect_uniform_writes} | ${report.layer_effects_summary.legacy_effect_uniform_writes} | ${report.layer_effects_summary.current_texture_copies} | ${report.layer_effects_summary.legacy_texture_copies} | ${report.layer_effects_summary.current_render_passes} | ${report.layer_effects_summary.legacy_render_passes} |`);
    lines.push("");
+   lines.push("## Clean Layer Summary");
+   lines.push("");
+   lines.push("| Comparison | Clean p50 ms | Dirty p50 ms | Dirty / Clean | Clean Items | Dirty Items | Clean Hits | Dirty Hits | Clean Misses | Dirty Misses | Clean Skipped | Dirty Skipped | Clean Layer Passes | Dirty Layer Passes | Clean Passes | Dirty Passes | Clean GPU ns | Dirty GPU ns |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+   lines.push(`| \`${report.clean_layer_summary.id}\` | ${report.clean_layer_summary.clean_p50_ms.toFixed(3)} | ${report.clean_layer_summary.dirty_p50_ms.toFixed(3)} | ${report.clean_layer_summary.dirty_over_clean.toFixed(3)} | ${report.clean_layer_summary.clean_draw_items} | ${report.clean_layer_summary.dirty_draw_items} | ${report.clean_layer_summary.clean_layer_cache_hits} | ${report.clean_layer_summary.dirty_layer_cache_hits} | ${report.clean_layer_summary.clean_layer_cache_misses} | ${report.clean_layer_summary.dirty_layer_cache_misses} | ${report.clean_layer_summary.clean_layer_cache_skipped_draws} | ${report.clean_layer_summary.dirty_layer_cache_skipped_draws} | ${report.clean_layer_summary.clean_layer_passes} | ${report.clean_layer_summary.dirty_layer_passes} | ${report.clean_layer_summary.clean_render_passes} | ${report.clean_layer_summary.dirty_render_passes} | ${report.clean_layer_summary.clean_gpu_timestamp_total_ns} | ${report.clean_layer_summary.dirty_gpu_timestamp_total_ns} |`);
+   lines.push("");
    lines.push("## Command Family Summary");
    lines.push("");
    lines.push("| Comparison | Current p50 ms | Legacy p50 ms | Legacy / Current | Current Items | Legacy Items | Current Pipeline Binds | Legacy Pipeline Binds | Current Bind Groups | Legacy Bind Groups | Current Scissors | Legacy Scissors | Image Meshes | Nine Slices | SDF Glyphs | CameraBg Draws |");
@@ -3544,6 +3638,7 @@ function assertWarmResourceChurn(report, byId)
       "web.wasm.webgpu.scene3d.stress_reused_mesh",
       "web.wasm.webgpu.mixed_text_image_effects",
       "web.wasm.webgpu.layer_damage_effects",
+      "web.wasm.webgpu.clean_layer.clean_reuse",
       "web.wasm.webgpu.command_family_matrix",
       "web.wasm.webgpu.glyph_run.current",
       "web.wasm.webgpu.neon_marker.current",
@@ -3655,6 +3750,7 @@ function assertWasmAllocationAudit(report, byId)
       "web.wasm.webgpu.scene3d.stress_reused_mesh",
       "web.wasm.webgpu.mixed_text_image_effects",
       "web.wasm.webgpu.layer_damage_effects",
+      "web.wasm.webgpu.clean_layer.clean_reuse",
       "web.wasm.webgpu.command_family_matrix",
       "web.wasm.webgpu.draw_state_cache.current",
       "web.wasm.webgpu.clip_state_cache.current",
@@ -4100,6 +4196,8 @@ function assertWebReportContract(report)
       "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched",
       "web.wasm.webgpu.layer_damage_effects",
       "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched",
+      "web.wasm.webgpu.clean_layer.clean_reuse",
+      "web.wasm.webgpu.clean_layer.dirty_rerender",
       "web.wasm.webgpu.command_family_matrix",
       "web.wasm.webgpu.command_family_matrix.legacy_rebind",
       "web.wasm.webgpu.draw_state_cache.current",
@@ -4142,6 +4240,10 @@ function assertWebReportContract(report)
          "clip_depth_peak",
          "damage_rects",
          "layer_draws",
+         "layer_cache_hits",
+         "layer_cache_misses",
+         "layer_cache_skipped_draws",
+         "layer_passes",
          "scene3d_draws",
          "id_mask_draws",
          "backdrop_draws",
@@ -4192,6 +4294,8 @@ function assertWebReportContract(report)
          "image_bind_group_creates",
          "target_texture_creates",
          "target_bind_group_creates",
+         "layer_texture_creates",
+         "layer_bind_group_creates",
          "scene3d_buffer_grows",
          "scene3d_bind_group_creates",
          "effect_buffer_grows",
@@ -4578,6 +4682,50 @@ function assertWebReportContract(report)
       throw new Error(
          `layer/effects current row must beat legacy rebind/unbatched p50: current=${report.layer_effects_summary.current_p50_ms.toFixed(3)}ms legacy=${report.layer_effects_summary.legacy_p50_ms.toFixed(3)}ms ratio=${report.layer_effects_summary.legacy_over_current.toFixed(3)}`
       );
+   }
+   let cleanLayer = byId.get("web.wasm.webgpu.clean_layer.clean_reuse");
+   let dirtyLayer = byId.get("web.wasm.webgpu.clean_layer.dirty_rerender");
+   if (
+      cleanLayer.layer_draws < cleanLayer.expected_layers
+      || dirtyLayer.layer_draws < dirtyLayer.expected_layers
+      || cleanLayer.layer_cache_hits < cleanLayer.expected_clean_hits
+      || cleanLayer.layer_cache_misses !== 0
+      || cleanLayer.layer_passes !== 0
+      || cleanLayer.layer_cache_skipped_draws <= cleanLayer.draw_items
+      || dirtyLayer.layer_cache_hits !== 0
+      || dirtyLayer.layer_cache_misses < dirtyLayer.expected_dirty_misses
+      || dirtyLayer.layer_passes < dirtyLayer.expected_dirty_misses
+      || dirtyLayer.layer_cache_skipped_draws !== 0
+      || cleanLayer.draw_items >= dirtyLayer.draw_items
+      || cleanLayer.draw_pipeline_binds >= dirtyLayer.draw_pipeline_binds
+      || cleanLayer.draw_bind_group_binds >= dirtyLayer.draw_bind_group_binds
+      || cleanLayer.draw_scissor_sets >= dirtyLayer.draw_scissor_sets
+      || cleanLayer.render_passes >= dirtyLayer.render_passes
+      || cleanLayer.gpu_timestamp_passes !== cleanLayer.render_passes
+      || dirtyLayer.gpu_timestamp_passes !== dirtyLayer.render_passes
+   ) {
+      throw new Error(
+         "clean-layer WebGPU A/B rows must prove clean cache reuse skipped body work versus dirty rerender: "
+            + `items=${cleanLayer.draw_items}/${dirtyLayer.draw_items} `
+            + `hits=${cleanLayer.layer_cache_hits}/${dirtyLayer.layer_cache_hits} `
+            + `misses=${cleanLayer.layer_cache_misses}/${dirtyLayer.layer_cache_misses} `
+            + `skipped=${cleanLayer.layer_cache_skipped_draws}/${dirtyLayer.layer_cache_skipped_draws} `
+            + `layer_passes=${cleanLayer.layer_passes}/${dirtyLayer.layer_passes} `
+            + `pipeline_binds=${cleanLayer.draw_pipeline_binds}/${dirtyLayer.draw_pipeline_binds} `
+            + `bind_groups=${cleanLayer.draw_bind_group_binds}/${dirtyLayer.draw_bind_group_binds} `
+            + `scissors=${cleanLayer.draw_scissor_sets}/${dirtyLayer.draw_scissor_sets} `
+            + `passes=${cleanLayer.render_passes}/${dirtyLayer.render_passes}`
+      );
+   }
+   if (
+      report.clean_layer_summary.clean_p50_ms !== cleanLayer.p50_ms
+      || report.clean_layer_summary.dirty_p50_ms !== dirtyLayer.p50_ms
+      || report.clean_layer_summary.clean_layer_cache_hits !== cleanLayer.layer_cache_hits
+      || report.clean_layer_summary.dirty_layer_cache_misses !== dirtyLayer.layer_cache_misses
+      || report.clean_layer_summary.clean_layer_passes !== cleanLayer.layer_passes
+      || report.clean_layer_summary.dirty_layer_passes !== dirtyLayer.layer_passes
+   ) {
+      throw new Error("clean-layer WebGPU summary must match clean and dirty source rows");
    }
    let commandFamily = byId.get("web.wasm.webgpu.command_family_matrix");
    let commandFamilyLegacy = byId.get("web.wasm.webgpu.command_family_matrix.legacy_rebind");
