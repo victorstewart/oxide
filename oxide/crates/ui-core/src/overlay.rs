@@ -1,6 +1,6 @@
 //! Overlay and popup window management for Oxide surfaces.
 
-use crate::{DrawListBuilder, LayoutRect, NodeId, UiSurface};
+use crate::{DrawListBuilder, LayoutRect, NodeId, RetainedDrawStatus, UiSurface};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use oxide_renderer_api as gfx;
@@ -51,6 +51,25 @@ pub enum OverlayPointerResult {
     Consumed { handle: OverlayHandle, node: Option<(NodeId, [f32; 2])> },
     Dismissed { handle: OverlayHandle },
     Ignored,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RetainedOverlayStats {
+    pub reused_surfaces: usize,
+    pub rebuilt_surfaces: usize,
+}
+
+impl RetainedOverlayStats {
+    fn record(&mut self, status: RetainedDrawStatus) {
+        match status {
+            RetainedDrawStatus::Rebuilt => {
+                self.rebuilt_surfaces = self.rebuilt_surfaces.saturating_add(1);
+            }
+            RetainedDrawStatus::Reused => {
+                self.reused_surfaces = self.reused_surfaces.saturating_add(1);
+            }
+        }
+    }
 }
 
 struct OverlayEntry {
@@ -172,6 +191,29 @@ impl OverlayStack {
             );
             entry.surface.encode(builder);
         }
+    }
+
+    pub fn encode_retained(
+        &mut self,
+        builder: &mut DrawListBuilder,
+        text_atlases: Option<&[(gfx::ImageHandle, u64)]>,
+    ) -> RetainedOverlayStats {
+        let mut stats = RetainedOverlayStats::default();
+        for entry in &mut self.entries {
+            builder.backdrop(
+                self.viewport,
+                entry.visual.blur_sigma,
+                entry.visual.tint,
+                entry.visual.alpha,
+            );
+            let status = if let Some(atlases) = text_atlases {
+                entry.surface.encode_retained_with_text_atlas_revisions(builder, atlases)
+            } else {
+                entry.surface.encode_retained(builder)
+            };
+            stats.record(status);
+        }
+        stats
     }
 
     pub fn capture(&self) -> gfx::DrawList {
@@ -432,6 +474,29 @@ impl PopupManager {
             );
             entry.surface.encode(builder);
         }
+    }
+
+    pub fn encode_retained(
+        &mut self,
+        builder: &mut DrawListBuilder,
+        text_atlases: Option<&[(gfx::ImageHandle, u64)]>,
+    ) -> RetainedOverlayStats {
+        let mut stats = RetainedOverlayStats::default();
+        for entry in &mut self.entries {
+            builder.backdrop(
+                self.viewport,
+                entry.visual.blur_sigma,
+                entry.visual.tint,
+                entry.visual.alpha,
+            );
+            let status = if let Some(atlases) = text_atlases {
+                entry.surface.encode_retained_with_text_atlas_revisions(builder, atlases)
+            } else {
+                entry.surface.encode_retained(builder)
+            };
+            stats.record(status);
+        }
+        stats
     }
 
     pub fn focus_target(&self) -> Option<NodeId> {

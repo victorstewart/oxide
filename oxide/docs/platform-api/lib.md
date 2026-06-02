@@ -3,7 +3,7 @@
 ## Intention and purpose
 - Define Oxide's platform contract and the shared process-global platform registry used by host and app code.
 - Provide one source of truth for generic OS services such as redraw, permissions, sensors, haptics, IME, clipboard, telephony, and media-library access.
-- Define the camera service split between app-visible frame streams and host-native preview planes.
+- Define camera services around app-visible frame streams so Oxide owns visible preview rendering.
 
 ## Relation to the rest of the code
 - Host crates install concrete platform implementations through `set_current_platform`.
@@ -27,14 +27,13 @@
   Issues a redraw through the installed platform when available.
 - `SharedPlatform`
   Adapter that forwards boxed `Platform` calls to a shared `Arc`.
-- `CameraManager::start_native_preview(cfg) -> Result<Box<dyn CameraStream + Send>, PlatformError>`
-  Starts camera capture for a host-native preview plane without forcing app-visible frame callbacks; platforms without a native plane fall back to `start_stream` with an ignored frame callback.
 
 ## Logic narrative
 - The new registry keeps one `Arc<dyn Platform + Send + Sync>` behind an `RwLock`.
 - Hosts install a concrete implementation once per process.
 - Callers that still need a boxed trait object wrap the shared instance in `SharedPlatform`, avoiding duplicate host-bridge graphs while preserving existing constructor signatures.
-- Camera consumers choose `start_stream` only when app code needs pixels and `start_native_preview` when the host compositor can present camera frames directly below app-drawn UI.
+- Camera consumers use `start_stream` for preview pixels; native compositor preview planes are not a public product path.
+- Raw `TouchEvent` samples carry `timestamp_ns` so input routing and latency measurement use the OS sample time instead of an out-of-band helper value.
 
 ## Preconditions and postconditions
 - A host must install the current platform before app code calls `current_platform()`.
@@ -43,7 +42,7 @@
 ## Edge cases and failure modes
 - `current_platform()` aborts loudly when called before registration because there is no safe fallback for missing host services.
 - `request_redraw_if_registered()` returns `false` instead of aborting so callers can use it opportunistically during early boot/teardown.
-- The default native-preview implementation still opens a normal stream, so platform implementations that can avoid frame delivery should override it.
+- Host-native visible preview transports are benchmark diagnostics only and are not exposed through `platform-api`.
 
 ## Concurrency and memory behavior
 - Registry state is guarded by an `RwLock`.
@@ -52,7 +51,8 @@
 ## Performance notes
 - Generic service lookups are one `RwLock` read plus an `Arc` clone.
 - This replaces duplicate app-local singleton lookups with one framework-owned registry.
-- Native camera preview avoids app-level redraw pressure only on platforms that override the default `start_native_preview` path.
+- Camera preview performance is measured through Oxide-owned frame delivery, composition, pacing, and presentation.
+- Touch latency attribution starts from `TouchEvent::timestamp_ns`, which is populated by iOS, macOS, and Web hosts.
 
 ## Feature flags and cfgs
 - Registry behavior is target-agnostic and always enabled.
@@ -67,5 +67,6 @@ platform.request_redraw();
 ```
 
 ## Changelog
-- 2026-05-15: added `CameraManager::start_native_preview` so camera-backed UI can request a compositor-owned preview plane instead of receiving every camera frame in the app renderer.
+- 2026-05-31: added `TouchEvent::timestamp_ns` to keep raw input sample time in the platform event contract.
+- 2026-05-31: removed the public native-preview API so product preview rendering stays Oxide-owned.
 - 2026-03-12: added the current-platform registry helpers and `SharedPlatform` adapter so apps can consume a single Oxide-owned platform instance instead of maintaining duplicate bridge registries.

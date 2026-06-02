@@ -1,11 +1,14 @@
 use super::{
-    a8_to_rgba, copy_a8_rows, copy_rgba_rows, document, index_slice, normalized_index_mode,
-    resolve_index, sanitize_scale, source_rect, vertex_slice,
+    a8_to_rgba, copy_a8_rows, copy_a8_rows_to_rgba_into, copy_rgba_rows,
+    copy_rgba_rows_into, document, index_slice, normalized_index_mode, resolve_index,
+    sanitize_scale, source_rect, vertex_slice,
 };
 use crate::WebRendererStats;
 use crate::{id_mask_compositor, neon_marker, scene3d};
 use js_sys::Reflect;
 use oxide_renderer_api as api;
+use std::cell::Cell;
+use std::rc::Rc;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::HtmlCanvasElement;
 
@@ -18,13 +21,18 @@ const ID_MASK_VERTEX_STRIDE: wgpu::BufferAddress = 32;
 const ID_MASK_RASTER_UNIFORM_SIZE_BYTES: usize = 176;
 const ID_MASK_RASTER_UNIFORM_SIZE: u64 = ID_MASK_RASTER_UNIFORM_SIZE_BYTES as u64;
 // The ID-mask polish path must keep nearest-city / nearest-seam search out of the
-// final compositor fragment shader. Chrome traces for the Nametag Topomap showed
+// final compositor fragment shader. Chrome traces for a dense map workload showed
 // per-fragment radius walks stalling Dawn/IOSurface at 16.708ms p95; seeding and
 // jump-flooding these fields first brought that p95 to 0.235ms at mask scale 4.
 const ID_MASK_FIELD_UNIFORM_SIZE_BYTES: usize = 16;
 const ID_MASK_FIELD_UNIFORM_SIZE: u64 = ID_MASK_FIELD_UNIFORM_SIZE_BYTES as u64;
 const ID_MASK_FIELD_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const EFFECT_UNIFORM_SIZE_BYTES: usize = 16;
+const EFFECT_UNIFORM_SIZE: u64 = EFFECT_UNIFORM_SIZE_BYTES as u64;
 const MAX_BLUR_SIGMA: f32 = 96.0;
+const TIMESTAMP_MAX_PASSES: u32 = 64;
+const TIMESTAMP_QUERY_COUNT: u32 = TIMESTAMP_MAX_PASSES * 2;
+const TIMESTAMP_READBACK_SLOTS: usize = 48;
 
 #[derive(Clone, Copy)]
 struct GpuVertex {
@@ -95,7 +103,7 @@ struct IdMaskDraw {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct IdMaskVertexCacheKey {
-    ptr: usize,
+    revision: u64,
     len: usize,
 }
 
@@ -110,7 +118,30 @@ enum DrawKind {
     Rgba { image: usize },
     A8 { image: usize },
     Sdf { image: usize },
-    Backdrop { sigma: f32 },
+    Backdrop { rect: api::RectF, sigma: f32 },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DrawPipelineKey {
+    Solid,
+    Rgba,
+    A8,
+    Sdf,
+    Effect,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DrawBindKey {
+    None,
+    Texture { image: usize },
+    Effect { offset: u32 },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct DrawStateKey {
+    pipeline: DrawPipelineKey,
+    bind: DrawBindKey,
+    clip: api::RectI,
 }
 
 #[derive(Clone, Copy)]
@@ -119,12 +150,17 @@ struct GpuDraw {
     first_index: u32,
     index_count: u32,
     clip: api::RectI,
+    effect_uniform_offset: u32,
 }
 
 struct FrameData {
     vertices: Vec<GpuVertex>,
     indices: Vec<u32>,
     draws: Vec<GpuDraw>,
+    effect_count: usize,
+    effect_first_sigma_bits: u32,
+    effect_shared_sigma: f32,
+    effect_single_uniform_slot: bool,
 }
 
 impl FrameData {
@@ -132,6 +168,269 @@ impl FrameData {
         self.vertices.clear();
         self.indices.clear();
         self.draws.clear();
+        self.effect_count = 0;
+        self.effect_first_sigma_bits = 0;
+        self.effect_shared_sigma = 0.0;
+        self.effect_single_uniform_slot = true;
+    }
+
+    fn record_draw_kind(&mut self, kind: DrawKind) {
+        let DrawKind::Backdrop { sigma, .. } = kind else {
+            return;
+        };
+        let sigma_bits = sigma.to_bits();
+        if self.effect_count == 0 {
+            self.effect_first_sigma_bits = sigma_bits;
+            self.effect_shared_sigma = sigma;
+            self.effect_single_uniform_slot = true;
+        } else if self.effect_first_sigma_bits != sigma_bits {
+            self.effect_single_uniform_slot = false;
+        }
+        self.effect_count = self.effect_count.saturating_add(1);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TimestampPassFamily {
+    Clear,
+    Draw,
+    Scene3d,
+    Scene3dOverlay,
+    IdMaskRaster,
+    IdMaskFieldSeed,
+    IdMaskFieldJump,
+    IdMaskCompositor,
+    Present,
+}
+
+#[derive(Clone, Copy)]
+struct TimestampPassRecord {
+    family: TimestampPassFamily,
+    begin_query: u32,
+    end_query: u32,
+}
+
+#[derive(Clone, Copy, Default)]
+struct TimestampSummary {
+    frame_id: u64,
+    passes: u32,
+    total_ns: u64,
+    clear_ns: u64,
+    draw_ns: u64,
+    scene3d_ns: u64,
+    scene3d_overlay_ns: u64,
+    id_mask_raster_ns: u64,
+    id_mask_field_seed_ns: u64,
+    id_mask_field_jump_ns: u64,
+    id_mask_compositor_ns: u64,
+    present_ns: u64,
+    max_pass_ns: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TimestampReadbackState {
+    Idle,
+    Pending,
+}
+
+struct TimestampReadbackSlot {
+    buffer: wgpu::Buffer,
+    mapped: Rc<Cell<bool>>,
+    failed: Rc<Cell<bool>>,
+    state: TimestampReadbackState,
+    frame_id: u64,
+    query_count: u32,
+    records: Vec<TimestampPassRecord>,
+}
+
+struct WebGpuTimestampQueries {
+    query_set: wgpu::QuerySet,
+    resolve_buffer: wgpu::Buffer,
+    slots: Vec<TimestampReadbackSlot>,
+    next_slot: usize,
+    current_records: Vec<TimestampPassRecord>,
+    current_query_count: u32,
+    timestamp_period_ns: f64,
+    latest: TimestampSummary,
+    readback_skips: u32,
+}
+
+impl TimestampSummary {
+    fn add(&mut self, family: TimestampPassFamily, ns: u64) {
+        self.passes = self.passes.saturating_add(1);
+        self.total_ns = self.total_ns.saturating_add(ns);
+        self.max_pass_ns = self.max_pass_ns.max(ns);
+        match family {
+            TimestampPassFamily::Clear => self.clear_ns = self.clear_ns.saturating_add(ns),
+            TimestampPassFamily::Draw => self.draw_ns = self.draw_ns.saturating_add(ns),
+            TimestampPassFamily::Scene3d => self.scene3d_ns = self.scene3d_ns.saturating_add(ns),
+            TimestampPassFamily::Scene3dOverlay => {
+                self.scene3d_overlay_ns = self.scene3d_overlay_ns.saturating_add(ns);
+            }
+            TimestampPassFamily::IdMaskRaster => {
+                self.id_mask_raster_ns = self.id_mask_raster_ns.saturating_add(ns);
+            }
+            TimestampPassFamily::IdMaskFieldSeed => {
+                self.id_mask_field_seed_ns = self.id_mask_field_seed_ns.saturating_add(ns);
+            }
+            TimestampPassFamily::IdMaskFieldJump => {
+                self.id_mask_field_jump_ns = self.id_mask_field_jump_ns.saturating_add(ns);
+            }
+            TimestampPassFamily::IdMaskCompositor => {
+                self.id_mask_compositor_ns = self.id_mask_compositor_ns.saturating_add(ns);
+            }
+            TimestampPassFamily::Present => self.present_ns = self.present_ns.saturating_add(ns),
+        }
+    }
+}
+
+impl WebGpuTimestampQueries {
+    fn new(device: &wgpu::Device, timestamp_period_ns: f64) -> Self {
+        let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("oxide-webgpu-timestamp-queries"),
+            ty: wgpu::QueryType::Timestamp,
+            count: TIMESTAMP_QUERY_COUNT,
+        });
+        let resolve_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("oxide-webgpu-timestamp-resolve"),
+            size: timestamp_readback_bytes(TIMESTAMP_QUERY_COUNT),
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let mut slots = Vec::with_capacity(TIMESTAMP_READBACK_SLOTS);
+        for index in 0..TIMESTAMP_READBACK_SLOTS {
+            slots.push(TimestampReadbackSlot {
+                buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("oxide-webgpu-timestamp-readback"),
+                    size: timestamp_readback_bytes(TIMESTAMP_QUERY_COUNT),
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+                mapped: Rc::new(Cell::new(false)),
+                failed: Rc::new(Cell::new(false)),
+                state: TimestampReadbackState::Idle,
+                frame_id: index as u64,
+                query_count: 0,
+                records: Vec::with_capacity(TIMESTAMP_MAX_PASSES as usize),
+            });
+        }
+        Self {
+            query_set,
+            resolve_buffer,
+            slots,
+            next_slot: 0,
+            current_records: Vec::with_capacity(TIMESTAMP_MAX_PASSES as usize),
+            current_query_count: 0,
+            timestamp_period_ns,
+            latest: TimestampSummary::default(),
+            readback_skips: 0,
+        }
+    }
+
+    fn begin_frame(&mut self) {
+        self.current_records.clear();
+        self.current_query_count = 0;
+    }
+
+    fn reserve(&mut self, family: TimestampPassFamily) -> Option<(u32, u32)> {
+        if self.current_query_count.saturating_add(2) > TIMESTAMP_QUERY_COUNT {
+            return None;
+        }
+        let begin_query = self.current_query_count;
+        let end_query = begin_query + 1;
+        self.current_query_count += 2;
+        self.current_records.push(TimestampPassRecord { family, begin_query, end_query });
+        Some((begin_query, end_query))
+    }
+
+    fn prepare_readback(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        frame_id: u64,
+    ) -> Option<(usize, u64)> {
+        if self.current_query_count == 0 {
+            return None;
+        }
+        self.harvest();
+        let Some(slot_index) = self.next_idle_slot() else {
+            self.readback_skips = self.readback_skips.saturating_add(1);
+            return None;
+        };
+        let bytes = timestamp_readback_bytes(self.current_query_count);
+        encoder.resolve_query_set(&self.query_set, 0..self.current_query_count, &self.resolve_buffer, 0);
+        encoder.copy_buffer_to_buffer(&self.resolve_buffer, 0, &self.slots[slot_index].buffer, 0, bytes);
+        let slot = &mut self.slots[slot_index];
+        slot.records.clear();
+        slot.records.extend_from_slice(&self.current_records);
+        slot.frame_id = frame_id;
+        slot.query_count = self.current_query_count;
+        slot.mapped.set(false);
+        slot.failed.set(false);
+        slot.state = TimestampReadbackState::Pending;
+        self.next_slot = (slot_index + 1) % self.slots.len().max(1);
+        Some((slot_index, bytes))
+    }
+
+    fn map_readback(&mut self, slot_index: usize, bytes: u64) {
+        let Some(slot) = self.slots.get_mut(slot_index) else {
+            return;
+        };
+        let mapped = Rc::clone(&slot.mapped);
+        let failed = Rc::clone(&slot.failed);
+        slot.buffer.map_async(wgpu::MapMode::Read, 0..bytes, move |result| {
+            failed.set(result.is_err());
+            mapped.set(true);
+        });
+    }
+
+    fn harvest(&mut self) {
+        for slot in &mut self.slots {
+            if slot.state != TimestampReadbackState::Pending || !slot.mapped.get() {
+                continue;
+            }
+            if !slot.failed.get() {
+                let bytes = timestamp_readback_bytes(slot.query_count);
+                let view = slot.buffer.slice(0..bytes).get_mapped_range();
+                let mut summary = TimestampSummary { frame_id: slot.frame_id, ..TimestampSummary::default() };
+                for record in &slot.records {
+                    let Some(begin) = timestamp_sample(&view, record.begin_query) else {
+                        continue;
+                    };
+                    let Some(end) = timestamp_sample(&view, record.end_query) else {
+                        continue;
+                    };
+                    let ns = ((end.saturating_sub(begin) as f64) * self.timestamp_period_ns).round() as u64;
+                    summary.add(record.family, ns);
+                }
+                drop(view);
+                self.latest = summary;
+            }
+            slot.buffer.unmap();
+            slot.state = TimestampReadbackState::Idle;
+            slot.query_count = 0;
+            slot.records.clear();
+        }
+    }
+
+    fn pending_count(&self) -> u32 {
+        self.slots
+            .iter()
+            .filter(|slot| slot.state == TimestampReadbackState::Pending)
+            .count()
+            .min(u32::MAX as usize) as u32
+    }
+
+    fn next_idle_slot(&self) -> Option<usize> {
+        if self.slots.is_empty() {
+            return None;
+        }
+        for offset in 0..self.slots.len() {
+            let index = (self.next_slot + offset) % self.slots.len();
+            if self.slots[index].state == TimestampReadbackState::Idle {
+                return Some(index);
+            }
+        }
+        None
     }
 }
 
@@ -209,6 +508,31 @@ impl BrowserRenderer {
         self.inner.last_stats()
     }
 
+    pub fn collect_timestamp_readbacks(&mut self) -> WebRendererStats {
+        self.inner.collect_timestamp_readbacks()
+    }
+
+    #[must_use]
+    pub fn pending_timestamp_readbacks(&self) -> u32 {
+        self.inner.pending_timestamp_readbacks()
+    }
+
+    pub fn set_draw_state_cache_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.inner.set_draw_state_cache_enabled_for_benchmark(enabled);
+    }
+
+    pub fn set_image_upload_scratch_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.inner.set_image_upload_scratch_enabled_for_benchmark(enabled);
+    }
+
+    pub fn set_effect_uniform_batch_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.inner.set_effect_uniform_batch_enabled_for_benchmark(enabled);
+    }
+
+    pub fn set_backdrop_batch_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.inner.set_backdrop_batch_enabled_for_benchmark(enabled);
+    }
+
     #[must_use]
     pub fn image_create_rgba8(
         &mut self,
@@ -244,14 +568,17 @@ impl BrowserRenderer {
         self.inner.image_update_a8(handle, x, y, width, height, data, row_bytes);
     }
 
-    pub fn set_camera_background_rgba8(
+    pub fn image_update_rgba8(
         &mut self,
+        handle: api::ImageHandle,
+        x: u32,
+        y: u32,
         width: u32,
         height: u32,
         data: &[u8],
         row_bytes: usize,
     ) -> Result<(), api::RenderError> {
-        self.inner.set_camera_background_rgba8(width, height, data, row_bytes)
+        self.inner.try_image_update_rgba8(handle, x, y, width, height, data, row_bytes)
     }
 
     pub fn mesh3d_create_colored(
@@ -330,6 +657,8 @@ pub struct WebGpuRenderer {
     viewport_bind_group: wgpu::BindGroup,
     effect_buffer: wgpu::Buffer,
     effect_bind_group: wgpu::BindGroup,
+    effect_uniform_capacity: u64,
+    effect_uniform_stride: u64,
     vertex_buffer: Option<wgpu::Buffer>,
     vertex_capacity: u64,
     index_buffer: Option<wgpu::Buffer>,
@@ -345,6 +674,7 @@ pub struct WebGpuRenderer {
     vertex_bytes: Vec<u8>,
     index_bytes: Vec<u8>,
     scene3d_uniform_bytes: Vec<u8>,
+    effect_uniform_bytes: Vec<u8>,
     scene3d_draws: Vec<Scene3dDraw>,
     scene3d_overlay_draws: Vec<Scene3dDraw>,
     id_mask_draws: Vec<IdMaskDraw>,
@@ -380,15 +710,75 @@ pub struct WebGpuRenderer {
     scene3d_active: bool,
     images: Vec<Option<GpuImage>>,
     meshes_3d: Vec<Option<GpuMesh3d>>,
-    camera_background: Option<api::ImageHandle>,
     frame: FrameData,
+    scratch_vertices: Vec<GpuVertex>,
+    scratch_indices: Vec<u32>,
+    scratch_points: Vec<(f32, f32)>,
+    image_upload_scratch: Vec<u8>,
+    id_mask_raster_uniform_bytes: Vec<u8>,
+    id_mask_compositor_uniform_bytes: Vec<u8>,
     clip_stack: Vec<api::RectI>,
     width: u32,
     height: u32,
     scale: f32,
     frame_id: u64,
+    frame_scratch_capacity_bytes: usize,
     active_token: Option<api::FrameToken>,
     stats: WebRendererStats,
+    timestamp_queries: Option<WebGpuTimestampQueries>,
+    draw_state_cache_enabled: bool,
+    image_upload_scratch_enabled: bool,
+    effect_uniform_batch_enabled: bool,
+    backdrop_batch_enabled: bool,
+}
+
+fn image_for_update<'a>(
+    images: &'a [Option<GpuImage>],
+    handle: api::ImageHandle,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    kind: GpuImageKind,
+) -> Result<&'a GpuImage, api::RenderError> {
+    let Some(image) = images.get(handle.0 as usize).and_then(Option::as_ref) else {
+        return Err(api::RenderError::ResourceNotFound("image handle not found"));
+    };
+    if core::mem::discriminant(&image.kind) != core::mem::discriminant(&kind) {
+        return Err(api::RenderError::InvalidOperation("image kind mismatch"));
+    }
+    if x.saturating_add(width) > image.width || y.saturating_add(height) > image.height {
+        return Err(api::RenderError::InvalidOperation("image update outside bounds"));
+    }
+    Ok(image)
+}
+
+fn write_image_update(
+    queue: &wgpu::Queue,
+    stats: &mut WebRendererStats,
+    image: &GpuImage,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) {
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &image.texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x, y, z: 0 },
+            aspect: wgpu::TextureAspect::All,
+        },
+        rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width.saturating_mul(4)),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+    );
+    stats.texture_upload_bytes = stats.texture_upload_bytes.saturating_add(rgba.len() as u64);
 }
 
 impl WebGpuRenderer {
@@ -416,15 +806,26 @@ impl WebGpuRenderer {
             })
             .await
             .map_err(|_| api::RenderError::Unsupported("webgpu adapter unavailable"))?;
+        let timestamp_query_supported = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+        let required_features = if timestamp_query_supported {
+            wgpu::Features::TIMESTAMP_QUERY
+        } else {
+            wgpu::Features::empty()
+        };
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("oxide-webgpu-device"),
-                required_features: wgpu::Features::empty(),
+                required_features,
                 required_limits: wgpu::Limits::default(),
                 ..Default::default()
             })
             .await
             .map_err(|err| api::RenderError::Io(format!("webgpu device unavailable: {err}")))?;
+        let timestamp_queries = if timestamp_query_supported {
+            Some(WebGpuTimestampQueries::new(&device, queue.get_timestamp_period() as f64))
+        } else {
+            None
+        };
         let width = canvas.width().max(1);
         let height = canvas.height().max(1);
         let mut config = surface
@@ -456,7 +857,12 @@ impl WebGpuRenderer {
             height,
         );
         let (viewport_buffer, viewport_bind_group) = create_viewport_bind_group(&device, &programs);
-        let (effect_buffer, effect_bind_group) = create_effect_bind_group(&device, &programs);
+        let effect_uniform_stride = align_to(
+            EFFECT_UNIFORM_SIZE,
+            device.limits().min_uniform_buffer_offset_alignment.max(EFFECT_UNIFORM_SIZE as u32) as u64,
+        );
+        let (effect_buffer, effect_bind_group, effect_uniform_capacity) =
+            create_effect_bind_group(&device, &programs, EFFECT_UNIFORM_SIZE);
         let present_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("oxide-webgpu-present-vertices"),
             size: 4 * VERTEX_STRIDE,
@@ -489,6 +895,8 @@ impl WebGpuRenderer {
             viewport_bind_group,
             effect_buffer,
             effect_bind_group,
+            effect_uniform_capacity,
+            effect_uniform_stride,
             vertex_buffer: None,
             vertex_capacity: 0,
             index_buffer: None,
@@ -504,6 +912,7 @@ impl WebGpuRenderer {
             vertex_bytes: Vec::new(),
             index_bytes: Vec::new(),
             scene3d_uniform_bytes: Vec::new(),
+            effect_uniform_bytes: Vec::new(),
             scene3d_draws: Vec::new(),
             scene3d_overlay_draws: Vec::new(),
             id_mask_draws: Vec::new(),
@@ -539,15 +948,34 @@ impl WebGpuRenderer {
             scene3d_active: false,
             images: vec![None],
             meshes_3d: vec![None],
-            camera_background: None,
-            frame: FrameData { vertices: Vec::new(), indices: Vec::new(), draws: Vec::new() },
+            frame: FrameData {
+                vertices: Vec::new(),
+                indices: Vec::new(),
+                draws: Vec::new(),
+                effect_count: 0,
+                effect_first_sigma_bits: 0,
+                effect_shared_sigma: 0.0,
+                effect_single_uniform_slot: true,
+            },
+            scratch_vertices: Vec::new(),
+            scratch_indices: Vec::new(),
+            scratch_points: Vec::new(),
+            image_upload_scratch: Vec::new(),
+            id_mask_raster_uniform_bytes: Vec::new(),
+            id_mask_compositor_uniform_bytes: Vec::new(),
             clip_stack: Vec::new(),
             width,
             height,
             scale: 1.0,
             frame_id: 0,
+            frame_scratch_capacity_bytes: 0,
             active_token: None,
             stats: WebRendererStats::default(),
+            timestamp_queries,
+            draw_state_cache_enabled: true,
+            image_upload_scratch_enabled: true,
+            effect_uniform_batch_enabled: true,
+            backdrop_batch_enabled: true,
         })
     }
 
@@ -559,6 +987,159 @@ impl WebGpuRenderer {
     #[must_use]
     pub fn last_stats(&self) -> WebRendererStats {
         self.stats
+    }
+
+    pub fn collect_timestamp_readbacks(&mut self) -> WebRendererStats {
+        if let Some(timestamps) = &mut self.timestamp_queries {
+            timestamps.harvest();
+        }
+        self.apply_timestamp_stats();
+        self.stats
+    }
+
+    #[must_use]
+    pub fn pending_timestamp_readbacks(&self) -> u32 {
+        self.timestamp_queries.as_ref().map_or(0, WebGpuTimestampQueries::pending_count)
+    }
+
+    pub fn set_draw_state_cache_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.draw_state_cache_enabled = enabled;
+    }
+
+    pub fn set_image_upload_scratch_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.image_upload_scratch_enabled = enabled;
+    }
+
+    pub fn set_effect_uniform_batch_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.effect_uniform_batch_enabled = enabled;
+    }
+
+    pub fn set_backdrop_batch_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.backdrop_batch_enabled = enabled;
+    }
+
+    fn scratch_capacity_bytes(&self) -> usize {
+        let mut bytes = 0_usize;
+        bytes = bytes.saturating_add(self.vertex_bytes.capacity());
+        bytes = bytes.saturating_add(self.index_bytes.capacity());
+        bytes = bytes.saturating_add(self.scene3d_uniform_bytes.capacity());
+        bytes = bytes.saturating_add(self.effect_uniform_bytes.capacity());
+        bytes = bytes.saturating_add(
+            self.scene3d_draws.capacity().saturating_mul(core::mem::size_of::<Scene3dDraw>()),
+        );
+        bytes = bytes.saturating_add(
+            self.scene3d_overlay_draws
+                .capacity()
+                .saturating_mul(core::mem::size_of::<Scene3dDraw>()),
+        );
+        bytes = bytes.saturating_add(
+            self.id_mask_draws.capacity().saturating_mul(core::mem::size_of::<IdMaskDraw>()),
+        );
+        bytes = bytes.saturating_add(
+            self.id_mask_vertex_caches
+                .capacity()
+                .saturating_mul(core::mem::size_of::<IdMaskVertexCache>()),
+        );
+        for cache in &self.id_mask_vertex_caches {
+            bytes = bytes.saturating_add(cache.bytes.capacity());
+        }
+        bytes = bytes.saturating_add(
+            self.images.capacity().saturating_mul(core::mem::size_of::<Option<GpuImage>>()),
+        );
+        bytes = bytes.saturating_add(
+            self.meshes_3d.capacity().saturating_mul(core::mem::size_of::<Option<GpuMesh3d>>()),
+        );
+        bytes = bytes.saturating_add(
+            self.frame.vertices.capacity().saturating_mul(core::mem::size_of::<GpuVertex>()),
+        );
+        bytes = bytes.saturating_add(
+            self.frame.indices.capacity().saturating_mul(core::mem::size_of::<u32>()),
+        );
+        bytes = bytes.saturating_add(
+            self.frame.draws.capacity().saturating_mul(core::mem::size_of::<GpuDraw>()),
+        );
+        bytes = bytes.saturating_add(
+            self.scratch_vertices.capacity().saturating_mul(core::mem::size_of::<GpuVertex>()),
+        );
+        bytes = bytes.saturating_add(
+            self.scratch_indices.capacity().saturating_mul(core::mem::size_of::<u32>()),
+        );
+        bytes = bytes.saturating_add(
+            self.scratch_points.capacity().saturating_mul(core::mem::size_of::<(f32, f32)>()),
+        );
+        bytes = bytes.saturating_add(self.image_upload_scratch.capacity());
+        bytes = bytes.saturating_add(self.id_mask_raster_uniform_bytes.capacity());
+        bytes = bytes.saturating_add(self.id_mask_compositor_uniform_bytes.capacity());
+        bytes = bytes.saturating_add(
+            self.clip_stack.capacity().saturating_mul(core::mem::size_of::<api::RectI>()),
+        );
+        bytes
+    }
+
+    fn record_scratch_growth_stats(&mut self) {
+        let capacity = self.scratch_capacity_bytes();
+        self.stats.cpu_scratch_bytes = capacity as u64;
+        self.stats.image_upload_scratch_bytes = self.image_upload_scratch.capacity() as u64;
+        if capacity > self.frame_scratch_capacity_bytes {
+            self.stats.cpu_scratch_grows = self.stats.cpu_scratch_grows.saturating_add(1);
+            self.stats.cpu_scratch_growth_bytes =
+                capacity.saturating_sub(self.frame_scratch_capacity_bytes) as u64;
+        }
+    }
+
+    fn apply_timestamp_stats(&mut self) {
+        let Some(timestamps) = &self.timestamp_queries else {
+            self.stats.gpu_timestamp_query_supported = false;
+            return;
+        };
+        let latest = timestamps.latest;
+        self.stats.gpu_timestamp_query_supported = true;
+        self.stats.gpu_timestamp_frame_id = latest.frame_id;
+        self.stats.gpu_timestamp_passes = latest.passes;
+        self.stats.gpu_timestamp_total_ns = latest.total_ns;
+        self.stats.gpu_timestamp_clear_ns = latest.clear_ns;
+        self.stats.gpu_timestamp_draw_ns = latest.draw_ns;
+        self.stats.gpu_timestamp_scene3d_ns = latest.scene3d_ns;
+        self.stats.gpu_timestamp_scene3d_overlay_ns = latest.scene3d_overlay_ns;
+        self.stats.gpu_timestamp_id_mask_raster_ns = latest.id_mask_raster_ns;
+        self.stats.gpu_timestamp_id_mask_field_seed_ns = latest.id_mask_field_seed_ns;
+        self.stats.gpu_timestamp_id_mask_field_jump_ns = latest.id_mask_field_jump_ns;
+        self.stats.gpu_timestamp_id_mask_compositor_ns = latest.id_mask_compositor_ns;
+        self.stats.gpu_timestamp_present_ns = latest.present_ns;
+        self.stats.gpu_timestamp_max_pass_ns = latest.max_pass_ns;
+        self.stats.gpu_timestamp_readback_skips = timestamps.readback_skips;
+    }
+
+    fn reserve_timestamp_pass(&mut self, family: TimestampPassFamily) -> Option<(u32, u32)> {
+        self.timestamp_queries.as_mut().and_then(|timestamps| timestamps.reserve(family))
+    }
+
+    fn timestamp_writes(
+        &self,
+        pair: Option<(u32, u32)>,
+    ) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+        let (begin_query, end_query) = pair?;
+        let timestamps = self.timestamp_queries.as_ref()?;
+        Some(wgpu::RenderPassTimestampWrites {
+            query_set: &timestamps.query_set,
+            beginning_of_pass_write_index: Some(begin_query),
+            end_of_pass_write_index: Some(end_query),
+        })
+    }
+
+    fn prepare_timestamp_readback(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Option<(usize, u64)> {
+        self.timestamp_queries
+            .as_mut()
+            .and_then(|timestamps| timestamps.prepare_readback(encoder, self.frame_id))
+    }
+
+    fn map_timestamp_readback(&mut self, slot_index: usize, bytes: u64) {
+        if let Some(timestamps) = &mut self.timestamp_queries {
+            timestamps.map_readback(slot_index, bytes);
+        }
     }
 
     #[must_use]
@@ -602,28 +1183,6 @@ impl WebGpuRenderer {
         let _ = self.try_image_update_a8(handle, x, y, width, height, data, row_bytes);
     }
 
-    pub fn set_camera_background_rgba8(
-        &mut self,
-        width: u32,
-        height: u32,
-        data: &[u8],
-        row_bytes: usize,
-    ) -> Result<(), api::RenderError> {
-        if let Some(handle) = self.camera_background {
-            let same_size = self
-                .image(handle)
-                .map(|image| image.width == width && image.height == height)
-                .unwrap_or(false);
-            if same_size {
-                self.try_image_update_rgba8(handle, 0, 0, width, height, data, row_bytes)?;
-                return Ok(());
-            }
-        }
-        let handle = self.try_image_create_rgba8(width, height, data, row_bytes)?;
-        self.camera_background = Some(handle);
-        Ok(())
-    }
-
     pub fn try_image_create_rgba8(
         &mut self,
         width: u32,
@@ -658,9 +1217,18 @@ impl WebGpuRenderer {
         data: &[u8],
         row_bytes: usize,
     ) -> Result<(), api::RenderError> {
+        if self.image_upload_scratch_enabled {
+            let grew =
+                copy_a8_rows_to_rgba_into(&mut self.image_upload_scratch, width, height, data, row_bytes)
+                    .ok_or(api::RenderError::InvalidOperation("invalid a8 update rows"))?;
+            self.record_image_upload_scratch(grew);
+            return self.update_image_from_upload_scratch(handle, x, y, width, height, GpuImageKind::A8);
+        }
         let alpha = copy_a8_rows(width, height, data, row_bytes)
             .ok_or(api::RenderError::InvalidOperation("invalid a8 update rows"))?;
-        self.update_image(handle, x, y, width, height, GpuImageKind::A8, &a8_to_rgba(&alpha))
+        let rgba = a8_to_rgba(&alpha);
+        self.record_image_upload_temp(alpha.len().saturating_add(rgba.len()), 2);
+        self.update_image(handle, x, y, width, height, GpuImageKind::A8, &rgba)
     }
 
     pub fn try_image_update_rgba8(
@@ -673,8 +1241,16 @@ impl WebGpuRenderer {
         data: &[u8],
         row_bytes: usize,
     ) -> Result<(), api::RenderError> {
+        if self.image_upload_scratch_enabled {
+            let grew =
+                copy_rgba_rows_into(&mut self.image_upload_scratch, width, height, data, row_bytes)
+                    .ok_or(api::RenderError::InvalidOperation("invalid rgba update rows"))?;
+            self.record_image_upload_scratch(grew);
+            return self.update_image_from_upload_scratch(handle, x, y, width, height, GpuImageKind::Rgba);
+        }
         let rgba = copy_rgba_rows(width, height, data, row_bytes)
             .ok_or(api::RenderError::InvalidOperation("invalid rgba update rows"))?;
+        self.record_image_upload_temp(rgba.len(), 1);
         self.update_image(handle, x, y, width, height, GpuImageKind::Rgba, &rgba)
     }
 
@@ -727,6 +1303,12 @@ impl WebGpuRenderer {
         });
         self.queue.write_buffer(&vertex_buffer, 0, &vertex_bytes);
         self.queue.write_buffer(&index_buffer, 0, &index_bytes);
+        self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(2);
+        self.stats.mesh3d_creates = self.stats.mesh3d_creates.saturating_add(1);
+        self.stats.buffer_upload_bytes = self
+            .stats
+            .buffer_upload_bytes
+            .saturating_add(vertex_bytes.len().saturating_add(index_bytes.len()) as u64);
         let handle = scene3d::MeshHandle3d(self.meshes_3d.len() as u32);
         self.meshes_3d.push(Some(GpuMesh3d {
             vertex_buffer,
@@ -768,6 +1350,7 @@ impl WebGpuRenderer {
             if !instance.color_write {
                 continue;
             }
+            self.stats.scene3d_draws = self.stats.scene3d_draws.saturating_add(1);
             let uniform_offset = push_scene3d_uniform(
                 &mut self.scene3d_uniform_bytes,
                 scene3d::mat4_mul(&pass.view_proj, &instance.transform),
@@ -815,7 +1398,9 @@ impl WebGpuRenderer {
                 "id-mask GPU raster vertices must be non-empty triangles",
             ));
         }
-        let vertex_cache_index = self.id_mask_vertex_cache_index(pass.raster.vertices);
+        self.stats.id_mask_draws = self.stats.id_mask_draws.saturating_add(1);
+        let vertex_cache_index =
+            self.id_mask_vertex_cache_index(pass.raster.vertex_revision, pass.raster.vertices);
         self.id_mask_draws.push(IdMaskDraw {
             viewport: pass.raster.viewport,
             mask_width: pass.raster.mask_width as u32,
@@ -888,7 +1473,7 @@ impl WebGpuRenderer {
     }
 
     fn create_image(
-        &self,
+        &mut self,
         width: u32,
         height: u32,
         kind: GpuImageKind,
@@ -907,6 +1492,7 @@ impl WebGpuRenderer {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        self.stats.texture_creates = self.stats.texture_creates.saturating_add(1);
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -922,11 +1508,52 @@ impl WebGpuRenderer {
             },
             wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
         );
+        self.stats.texture_upload_bytes =
+            self.stats.texture_upload_bytes.saturating_add(rgba.len() as u64);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group =
             create_texture_bind_group(&self.device, &self.programs, &view, &self.programs.sampler);
+        self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
         drop(view);
         Ok(GpuImage { texture, bind_group, width, height, kind })
+    }
+
+    fn record_image_upload_scratch(&mut self, grew: bool) {
+        self.stats.image_upload_scratch_bytes = self.image_upload_scratch.capacity() as u64;
+        if grew {
+            self.stats.image_upload_scratch_grows =
+                self.stats.image_upload_scratch_grows.saturating_add(1);
+        }
+    }
+
+    fn record_image_upload_temp(&mut self, bytes: usize, allocs: u32) {
+        self.stats.image_upload_temp_allocs =
+            self.stats.image_upload_temp_allocs.saturating_add(allocs);
+        self.stats.image_upload_temp_bytes =
+            self.stats.image_upload_temp_bytes.saturating_add(bytes as u64);
+    }
+
+    fn update_image_from_upload_scratch(
+        &mut self,
+        handle: api::ImageHandle,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        kind: GpuImageKind,
+    ) -> Result<(), api::RenderError> {
+        let image = image_for_update(&self.images, handle, x, y, width, height, kind)?;
+        write_image_update(
+            &self.queue,
+            &mut self.stats,
+            image,
+            x,
+            y,
+            width,
+            height,
+            &self.image_upload_scratch,
+        );
+        Ok(())
     }
 
     fn update_image(
@@ -939,30 +1566,8 @@ impl WebGpuRenderer {
         kind: GpuImageKind,
         rgba: &[u8],
     ) -> Result<(), api::RenderError> {
-        let Some(image) = self.image(handle) else {
-            return Err(api::RenderError::ResourceNotFound("image handle not found"));
-        };
-        if core::mem::discriminant(&image.kind) != core::mem::discriminant(&kind) {
-            return Err(api::RenderError::InvalidOperation("image kind mismatch"));
-        }
-        if x.saturating_add(width) > image.width || y.saturating_add(height) > image.height {
-            return Err(api::RenderError::InvalidOperation("image update outside bounds"));
-        }
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &image.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x, y, z: 0 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            rgba,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(width.saturating_mul(4)),
-                rows_per_image: Some(height),
-            },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-        );
+        let image = image_for_update(&self.images, handle, x, y, width, height, kind)?;
+        write_image_update(&self.queue, &mut self.stats, image, x, y, width, height, rgba);
         Ok(())
     }
 
@@ -989,11 +1594,39 @@ impl WebGpuRenderer {
         let first_index = self.frame.indices.len() as u32;
         self.frame.vertices.extend_from_slice(vertices);
         self.frame.indices.extend(indices.iter().map(|index| base.saturating_add(*index)));
+        self.frame.record_draw_kind(kind);
         self.frame.draws.push(GpuDraw {
             kind,
             first_index,
             index_count: indices.len() as u32,
             clip: self.current_clip(),
+            effect_uniform_offset: 0,
+        });
+    }
+
+    fn clear_scratch_draw(&mut self) {
+        self.scratch_vertices.clear();
+        self.scratch_indices.clear();
+    }
+
+    fn push_scratch_draw(&mut self, kind: DrawKind) {
+        if self.scratch_vertices.is_empty() || self.scratch_indices.is_empty() {
+            return;
+        }
+        let clip = self.current_clip();
+        let base = self.frame.vertices.len() as u32;
+        let first_index = self.frame.indices.len() as u32;
+        self.frame.vertices.extend_from_slice(&self.scratch_vertices);
+        self.frame
+            .indices
+            .extend(self.scratch_indices.iter().map(|index| base.saturating_add(*index)));
+        self.frame.record_draw_kind(kind);
+        self.frame.draws.push(GpuDraw {
+            kind,
+            first_index,
+            index_count: self.scratch_indices.len() as u32,
+            clip,
+            effect_uniform_offset: 0,
         });
     }
 
@@ -1001,6 +1634,7 @@ impl WebGpuRenderer {
         while *index < list.items.len() {
             match &list.items[*index] {
                 api::DrawCmd::LayerBegin { .. } => {
+                    self.stats.layer_draws = self.stats.layer_draws.saturating_add(1);
                     *index += 1;
                     self.encode_items(list, index, true);
                 }
@@ -1034,35 +1668,24 @@ impl WebGpuRenderer {
                 self.encode_nine_slice(*tex, *rect, *slice, *alpha)
             }
             api::DrawCmd::Backdrop { rect, sigma, tint, alpha } => {
+                self.stats.backdrop_draws = self.stats.backdrop_draws.saturating_add(1);
                 self.encode_backdrop(*rect, *sigma, *tint, *alpha)
             }
             api::DrawCmd::VisualEffect { rect, effect } => {
                 let tint = effect.tint();
+                self.stats.visual_effect_draws = self.stats.visual_effect_draws.saturating_add(1);
                 self.encode_backdrop(*rect, effect.blur_intensity() * 72.0, tint, tint.a);
             }
-            api::DrawCmd::CameraBg { rect, tint, alpha, .. } => {
-                if let Some(handle) = self.camera_background {
-                    self.encode_image(
-                        handle,
-                        *rect,
-                        api::RectF::new(0.0, 0.0, 0.0, 0.0),
-                        *alpha,
-                        false,
-                    );
-                }
-                if tint.a > 0.0 {
-                    self.encode_rect(
-                        *rect,
-                        api::Color::rgba(tint.r, tint.g, tint.b, tint.a * alpha.clamp(0.0, 1.0)),
-                    );
-                }
-            }
-            api::DrawCmd::NativeCameraPreview { .. } => {}
-            api::DrawCmd::TopomapGlobe { .. } => {}
+            api::DrawCmd::CameraBg { .. } => {}
             api::DrawCmd::Spinner { center, atom, alpha } => {
+                self.stats.spinner_draws = self.stats.spinner_draws.saturating_add(1);
                 self.encode_spinner(*center, *atom, *alpha)
             }
-            api::DrawCmd::ClipPush { rect } => self.clip_stack.push(*rect),
+            api::DrawCmd::ClipPush { rect } => {
+                self.clip_stack.push(*rect);
+                self.stats.clip_depth_peak =
+                    self.stats.clip_depth_peak.max(self.clip_stack.len() as u32);
+            }
             api::DrawCmd::ClipPop => {
                 let _ = self.clip_stack.pop();
             }
@@ -1079,8 +1702,7 @@ impl WebGpuRenderer {
         let Some(vertices) = vertex_slice(list, vb) else {
             return;
         };
-        let mut out = Vec::new();
-        let mut idx = Vec::new();
+        self.clear_scratch_draw();
         if ib.len > 0 {
             let Some(indices) = index_slice(list, ib) else {
                 return;
@@ -1093,23 +1715,30 @@ impl WebGpuRenderer {
                     if let Some(vertex) =
                         resolve_index(*index, mode).and_then(|offset| vertices.get(offset))
                     {
-                        idx.push(out.len() as u32);
-                        out.push(gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, color));
+                        self.scratch_indices.push(self.scratch_vertices.len() as u32);
+                        self.scratch_vertices
+                            .push(gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, color));
                     }
                 }
             }
         } else if vertices.len() == 4 {
-            out.extend(
+            self.scratch_vertices.extend(
                 vertices
                     .iter()
                     .map(|vertex| gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, color)),
             );
-            idx.extend_from_slice(&[0, 1, 2, 2, 1, 3]);
+            self.scratch_indices.extend_from_slice(&[0, 1, 2, 2, 1, 3]);
         } else {
-            append_gpu_vertices(&mut out, &mut idx, vertices, color);
+            append_gpu_vertices(
+                &mut self.scratch_vertices,
+                &mut self.scratch_indices,
+                vertices,
+                color,
+            );
         }
-        self.push_draw(DrawKind::Solid, &out, &idx);
-        self.stats.solid_tris = self.stats.solid_tris.saturating_add((idx.len() / 3) as u32);
+        let triangles = self.scratch_indices.len() / 3;
+        self.push_scratch_draw(DrawKind::Solid);
+        self.stats.solid_tris = self.stats.solid_tris.saturating_add(triangles as u32);
     }
 
     fn encode_image(
@@ -1170,8 +1799,7 @@ impl WebGpuRenderer {
             GpuImageKind::A8 => DrawKind::A8 { image: handle.0 as usize },
         };
         let color = api::Color::rgba(1.0, 1.0, 1.0, alpha.clamp(0.0, 1.0));
-        let mut out = Vec::new();
-        let mut idx = Vec::new();
+        self.clear_scratch_draw();
         if !indices.is_empty() {
             let Some(mode) = normalized_index_mode(indices, vb.offset, vb.len) else {
                 return;
@@ -1181,14 +1809,21 @@ impl WebGpuRenderer {
                 else {
                     return;
                 };
-                idx.push(out.len() as u32);
-                out.push(gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, color));
+                self.scratch_indices.push(self.scratch_vertices.len() as u32);
+                self.scratch_vertices
+                    .push(gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, color));
             }
         } else {
-            append_gpu_vertices(&mut out, &mut idx, vertices, color);
+            append_gpu_vertices(
+                &mut self.scratch_vertices,
+                &mut self.scratch_indices,
+                vertices,
+                color,
+            );
         }
-        self.push_draw(kind, &out, &idx);
+        self.push_scratch_draw(kind);
         self.stats.image_draws = self.stats.image_draws.saturating_add(1);
+        self.stats.image_mesh_draws = self.stats.image_mesh_draws.saturating_add(1);
     }
 
     fn encode_glyph_vertices(
@@ -1208,35 +1843,44 @@ impl WebGpuRenderer {
                 GpuImageKind::A8 => DrawKind::A8 { image: run.atlas.0 as usize },
             }
         };
-        let mut out = Vec::new();
-        let mut idx = Vec::new();
+        self.clear_scratch_draw();
         if !indices.is_empty() {
             for index in indices {
                 if let Some(vertex) = vertices.get(*index as usize) {
-                    idx.push(out.len() as u32);
-                    out.push(gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, run.color));
+                    self.scratch_indices.push(self.scratch_vertices.len() as u32);
+                    self.scratch_vertices
+                        .push(gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, run.color));
                 }
             }
         } else {
-            append_gpu_vertices(&mut out, &mut idx, vertices, run.color);
+            append_gpu_vertices(
+                &mut self.scratch_vertices,
+                &mut self.scratch_indices,
+                vertices,
+                run.color,
+            );
         }
-        self.push_draw(kind, &out, &idx);
-        self.stats.glyph_quads = self.stats.glyph_quads.saturating_add((idx.len() / 6) as u32);
-    }
-
-    fn encode_rect(&mut self, rect: api::RectF, color: api::Color) {
-        if rect.w <= 0.0 || rect.h <= 0.0 || color.a <= 0.0 {
-            return;
+        let quads = self.scratch_indices.len() / 6;
+        self.push_scratch_draw(kind);
+        self.stats.glyph_quads = self.stats.glyph_quads.saturating_add(quads as u32);
+        if run.sdf {
+            self.stats.sdf_glyph_quads = self.stats.sdf_glyph_quads.saturating_add(quads as u32);
         }
-        let vertices = quad_vertices(rect, 0.0, 0.0, 1.0, 1.0, color);
-        self.push_draw(DrawKind::Solid, &vertices, &[0, 1, 2, 2, 1, 3]);
-        self.stats.solid_tris = self.stats.solid_tris.saturating_add(2);
     }
 
     fn encode_rrect(&mut self, rect: api::RectF, radii: [f32; 4], color: api::Color) {
-        let (vertices, indices) = rounded_rect_mesh(rect, radii, color);
-        self.push_draw(DrawKind::Solid, &vertices, &indices);
-        self.stats.solid_tris = self.stats.solid_tris.saturating_add((indices.len() / 3) as u32);
+        self.clear_scratch_draw();
+        rounded_rect_mesh_into(
+            rect,
+            radii,
+            color,
+            &mut self.scratch_points,
+            &mut self.scratch_vertices,
+            &mut self.scratch_indices,
+        );
+        let triangles = self.scratch_indices.len() / 3;
+        self.push_scratch_draw(DrawKind::Solid);
+        self.stats.solid_tris = self.stats.solid_tris.saturating_add(triangles as u32);
     }
 
     fn encode_nine_slice(
@@ -1251,6 +1895,7 @@ impl WebGpuRenderer {
         };
         let iw = image.width as f32;
         let ih = image.height as f32;
+        self.stats.nine_slice_draws = self.stats.nine_slice_draws.saturating_add(1);
         let left = slice.left.clamp(0.0, iw);
         let right = slice.right.clamp(0.0, iw - left);
         let top = slice.top.clamp(0.0, ih);
@@ -1283,8 +1928,9 @@ impl WebGpuRenderer {
         let v1 = (rect.y + rect.h) / logical_h;
         let color = api::Color::rgba(tint.r, tint.g, tint.b, tint.a * alpha.clamp(0.0, 1.0));
         let vertices = quad_vertices(rect, u0, v0, u1, v1, color);
+        let sigma = sigma.clamp(0.0, MAX_BLUR_SIGMA);
         self.push_draw(
-            DrawKind::Backdrop { sigma: sigma.clamp(0.0, MAX_BLUR_SIGMA) },
+            DrawKind::Backdrop { rect, sigma },
             &vertices,
             &[0, 1, 2, 2, 1, 3],
         );
@@ -1330,6 +1976,8 @@ impl WebGpuRenderer {
         self.scratch_texture = scratch_texture;
         self.scratch_view = scratch_view;
         self.scratch_bind_group = scratch_bind_group;
+        self.stats.texture_creates = self.stats.texture_creates.saturating_add(3);
+        self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(2);
     }
 
     fn upload_frame_buffers(&mut self) {
@@ -1337,27 +1985,35 @@ impl WebGpuRenderer {
         self.index_bytes.clear();
         encode_vertices(&self.frame.vertices, &mut self.vertex_bytes);
         encode_indices(&self.frame.indices, &mut self.index_bytes);
-        ensure_buffer(
+        if ensure_buffer(
             &self.device,
             &mut self.vertex_buffer,
             &mut self.vertex_capacity,
             self.vertex_bytes.len() as u64,
             wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             "oxide-webgpu-vertices",
-        );
-        ensure_buffer(
+        ) {
+            self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+        }
+        if ensure_buffer(
             &self.device,
             &mut self.index_buffer,
             &mut self.index_capacity,
             self.index_bytes.len() as u64,
             wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             "oxide-webgpu-indices",
-        );
+        ) {
+            self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+        }
         if let Some(buffer) = &self.vertex_buffer {
             self.queue.write_buffer(buffer, 0, &self.vertex_bytes);
+            self.stats.buffer_upload_bytes =
+                self.stats.buffer_upload_bytes.saturating_add(self.vertex_bytes.len() as u64);
         }
         if let Some(buffer) = &self.index_buffer {
             self.queue.write_buffer(buffer, 0, &self.index_bytes);
+            self.stats.buffer_upload_bytes =
+                self.stats.buffer_upload_bytes.saturating_add(self.index_bytes.len() as u64);
         }
     }
 
@@ -1389,25 +2045,110 @@ impl WebGpuRenderer {
             self.scene3d_uniform_buffer = Some(buffer);
             self.scene3d_bind_group = Some(bind_group);
             self.scene3d_uniform_capacity = next;
+            self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+            self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
         }
         if let Some(buffer) = &self.scene3d_uniform_buffer {
             self.queue.write_buffer(buffer, 0, &self.scene3d_uniform_bytes);
+            self.stats.buffer_upload_bytes = self
+                .stats
+                .buffer_upload_bytes
+                .saturating_add(self.scene3d_uniform_bytes.len() as u64);
         }
     }
 
-    fn write_viewport_uniform(&self) {
+    fn write_viewport_uniform(&mut self) {
         let logical_w = logical_dimension(self.width, self.scale).max(1.0);
         let logical_h = logical_dimension(self.height, self.scale).max(1.0);
         let bytes = f32x4_bytes([logical_w, logical_h, 0.0, 0.0]);
         self.queue.write_buffer(&self.viewport_buffer, 0, &bytes);
+        self.stats.buffer_upload_bytes =
+            self.stats.buffer_upload_bytes.saturating_add(bytes.len() as u64);
     }
 
-    fn write_effect_uniform(&self, sigma: f32) {
+    fn write_effect_uniform(&mut self, sigma: f32) {
+        self.ensure_effect_uniform_capacity(1);
         let radius = sigma.clamp(0.0, MAX_BLUR_SIGMA);
         let texel_x = 1.0 / self.width.max(1) as f32;
         let texel_y = 1.0 / self.height.max(1) as f32;
         let bytes = f32x4_bytes([texel_x, texel_y, radius, 0.0]);
         self.queue.write_buffer(&self.effect_buffer, 0, &bytes);
+        self.stats.buffer_upload_bytes =
+            self.stats.buffer_upload_bytes.saturating_add(bytes.len() as u64);
+        self.stats.effect_uniform_writes = self.stats.effect_uniform_writes.saturating_add(1);
+        self.stats.effect_uniform_bytes =
+            self.stats.effect_uniform_bytes.saturating_add(bytes.len() as u64);
+        self.stats.effect_uniform_slots = self.stats.effect_uniform_slots.saturating_add(1);
+    }
+
+    fn prepare_effect_uniforms(&mut self) {
+        if !self.effect_uniform_batch_enabled {
+            return;
+        }
+        let effect_count = self.frame.effect_count;
+        if effect_count == 0 {
+            return;
+        }
+        let texel_x = 1.0 / self.width.max(1) as f32;
+        let texel_y = 1.0 / self.height.max(1) as f32;
+        if self.frame.effect_single_uniform_slot {
+            self.ensure_effect_uniform_capacity(1);
+            let radius = self.frame.effect_shared_sigma.clamp(0.0, MAX_BLUR_SIGMA);
+            let bytes = f32x4_bytes([texel_x, texel_y, radius, 0.0]);
+            self.queue.write_buffer(&self.effect_buffer, 0, &bytes);
+            self.stats.buffer_upload_bytes = self
+                .stats
+                .buffer_upload_bytes
+                .saturating_add(bytes.len() as u64);
+            self.stats.effect_uniform_writes =
+                self.stats.effect_uniform_writes.saturating_add(1);
+            self.stats.effect_uniform_bytes =
+                self.stats.effect_uniform_bytes.saturating_add(bytes.len() as u64);
+            self.stats.effect_uniform_slots =
+                self.stats.effect_uniform_slots.saturating_add(effect_count as u32);
+            return;
+        }
+        self.ensure_effect_uniform_capacity(effect_count);
+        let needed = effect_uniform_needed_bytes(effect_count, self.effect_uniform_stride);
+        self.effect_uniform_bytes.clear();
+        self.effect_uniform_bytes.resize(needed as usize, 0);
+        let mut effect_index = 0_u32;
+        for draw in &mut self.frame.draws {
+            let DrawKind::Backdrop { sigma, .. } = draw.kind else {
+                continue;
+            };
+            let offset = (effect_index as u64).saturating_mul(self.effect_uniform_stride);
+            let offset_usize = offset as usize;
+            let radius = sigma.clamp(0.0, MAX_BLUR_SIGMA);
+            let bytes = f32x4_bytes([texel_x, texel_y, radius, 0.0]);
+            self.effect_uniform_bytes[offset_usize..offset_usize + EFFECT_UNIFORM_SIZE_BYTES]
+                .copy_from_slice(&bytes);
+            draw.effect_uniform_offset = offset as u32;
+            effect_index = effect_index.saturating_add(1);
+        }
+        self.queue.write_buffer(&self.effect_buffer, 0, &self.effect_uniform_bytes);
+        self.stats.buffer_upload_bytes =
+            self.stats.buffer_upload_bytes.saturating_add(self.effect_uniform_bytes.len() as u64);
+        self.stats.effect_uniform_writes = self.stats.effect_uniform_writes.saturating_add(1);
+        self.stats.effect_uniform_bytes =
+            self.stats.effect_uniform_bytes.saturating_add(self.effect_uniform_bytes.len() as u64);
+        self.stats.effect_uniform_slots =
+            self.stats.effect_uniform_slots.saturating_add(effect_count as u32);
+    }
+
+    fn ensure_effect_uniform_capacity(&mut self, count: usize) {
+        let needed = effect_uniform_needed_bytes(count.max(1), self.effect_uniform_stride);
+        if self.effect_uniform_capacity >= needed {
+            return;
+        }
+        let next = needed.next_power_of_two().max(EFFECT_UNIFORM_SIZE);
+        let (buffer, bind_group, capacity) =
+            create_effect_bind_group(&self.device, &self.programs, next);
+        self.effect_buffer = buffer;
+        self.effect_bind_group = bind_group;
+        self.effect_uniform_capacity = capacity;
+        self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+        self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
     }
 
     fn ensure_id_mask_resources(
@@ -1478,19 +2219,19 @@ impl WebGpuRenderer {
             self.id_mask_field_bind_group_b = None;
             self.id_mask_compositor_bind_group_a = None;
             self.id_mask_compositor_bind_group_b = None;
+            self.stats.texture_creates = self.stats.texture_creates.saturating_add(6);
         }
 
-        let old_vertex_capacity = self.id_mask_vertex_capacity;
-        ensure_buffer(
+        if ensure_buffer(
             &self.device,
             &mut self.id_mask_vertex_buffer,
             &mut self.id_mask_vertex_capacity,
             vertex_bytes_len.max(1) as u64,
             wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             "oxide-webgpu-id-mask-raster-vertices",
-        );
-        if self.id_mask_vertex_capacity != old_vertex_capacity {
+        ) {
             self.id_mask_uploaded_vertex_cache = None;
+            self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
         }
 
         if self.id_mask_raster_uniform_buffer.is_none() {
@@ -1510,6 +2251,8 @@ impl WebGpuRenderer {
             });
             self.id_mask_raster_uniform_buffer = Some(buffer);
             self.id_mask_raster_bind_group = Some(bind_group);
+            self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+            self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
         }
 
         if self.id_mask_field_uniform_buffer.is_none() {
@@ -1522,6 +2265,7 @@ impl WebGpuRenderer {
                 }));
             self.id_mask_field_bind_group_a = None;
             self.id_mask_field_bind_group_b = None;
+            self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
         }
 
         let compositor_needed = compositor_uniform_len.max(1) as u64;
@@ -1539,6 +2283,7 @@ impl WebGpuRenderer {
             self.id_mask_compositor_uniform_capacity = capacity;
             self.id_mask_compositor_bind_group_a = None;
             self.id_mask_compositor_bind_group_b = None;
+            self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
         }
 
         if self.id_mask_field_bind_group_a.is_none() || self.id_mask_field_bind_group_b.is_none() {
@@ -1571,6 +2316,7 @@ impl WebGpuRenderer {
                 seam_field_b_view,
                 "oxide-webgpu-id-mask-field-bind-group-b",
             ));
+            self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(2);
         }
 
         if self.id_mask_compositor_bind_group_a.is_none()
@@ -1605,6 +2351,7 @@ impl WebGpuRenderer {
                 seam_field_b_view,
                 "oxide-webgpu-id-mask-compositor-bind-group-b",
             ));
+            self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(2);
         }
     }
 }
@@ -1634,6 +2381,10 @@ impl api::Renderer for WebGpuRenderer {
         self.scene3d_clear_depth = true;
         self.scene3d_active = false;
         self.clip_stack.clear();
+        if let Some(timestamps) = &mut self.timestamp_queries {
+            timestamps.harvest();
+            timestamps.begin_frame();
+        }
         self.stats = WebRendererStats {
             frame_id: self.frame_id,
             width: self.width,
@@ -1642,6 +2393,10 @@ impl api::Renderer for WebGpuRenderer {
             damage_rects: damage.map(|d| d.rects.len() as u32).unwrap_or(0),
             ..WebRendererStats::default()
         };
+        self.apply_timestamp_stats();
+        self.frame_scratch_capacity_bytes = self.scratch_capacity_bytes();
+        self.stats.cpu_scratch_bytes = self.frame_scratch_capacity_bytes as u64;
+        self.stats.image_upload_scratch_bytes = self.image_upload_scratch.capacity() as u64;
         let token = api::FrameToken(self.frame_id);
         self.active_token = Some(token);
         token
@@ -1660,6 +2415,7 @@ impl api::Renderer for WebGpuRenderer {
         self.upload_frame_buffers();
         self.upload_scene3d_uniforms();
         self.write_viewport_uniform();
+        self.prepare_effect_uniforms();
 
         let surface_texture = match self.surface.get_current_texture() {
             Ok(texture) => texture,
@@ -1675,14 +2431,21 @@ impl api::Renderer for WebGpuRenderer {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("oxide-webgpu-frame"),
         });
+        self.stats.command_buffers = self.stats.command_buffers.saturating_add(1);
         if self.frame_uses_backdrop() {
             self.render_scene_with_effects(&mut encoder);
             self.render_present(&mut encoder, &surface_view);
         } else {
             self.render_direct(&mut encoder, &surface_view);
         }
+        let timestamp_readback = self.prepare_timestamp_readback(&mut encoder);
+        self.record_scratch_growth_stats();
         self.queue.submit([encoder.finish()]);
         surface_texture.present();
+        if let Some((slot_index, bytes)) = timestamp_readback {
+            self.map_timestamp_readback(slot_index, bytes);
+            self.apply_timestamp_stats();
+        }
         Ok(())
     }
 
@@ -1712,19 +2475,99 @@ impl api::Renderer for WebGpuRenderer {
 impl WebGpuRenderer {
     fn id_mask_vertex_cache_index(
         &mut self,
+        revision: u64,
         vertices: &[id_mask_compositor::IdMaskRasterVertex],
     ) -> usize {
-        let key = IdMaskVertexCacheKey { ptr: vertices.as_ptr() as usize, len: vertices.len() };
+        let key = IdMaskVertexCacheKey { revision, len: vertices.len() };
         if let Some(index) = self.id_mask_vertex_caches.iter().position(|cache| cache.key == key) {
             return index;
         }
-        self.id_mask_vertex_caches
-            .push(IdMaskVertexCache { key, bytes: id_mask_raster_vertex_bytes(vertices) });
+        if let Some(index) = self.id_mask_reusable_vertex_cache_index() {
+            let cache = &mut self.id_mask_vertex_caches[index];
+            cache.key = key;
+            write_id_mask_raster_vertex_bytes(vertices, &mut cache.bytes);
+            if self.id_mask_uploaded_vertex_cache == Some(index) {
+                self.id_mask_uploaded_vertex_cache = None;
+            }
+            return index;
+        }
+        let mut bytes = Vec::new();
+        write_id_mask_raster_vertex_bytes(vertices, &mut bytes);
+        self.id_mask_vertex_caches.push(IdMaskVertexCache { key, bytes });
         self.id_mask_vertex_caches.len() - 1
     }
 
+    fn id_mask_reusable_vertex_cache_index(&self) -> Option<usize> {
+        for index in 0..self.id_mask_vertex_caches.len() {
+            let mut in_use = false;
+            for draw in &self.id_mask_draws {
+                if draw.vertex_cache_index == index {
+                    in_use = true;
+                    break;
+                }
+            }
+            if !in_use {
+                return Some(index);
+            }
+        }
+        None
+    }
+
     fn frame_uses_backdrop(&self) -> bool {
-        self.frame.draws.iter().any(|draw| matches!(draw.kind, DrawKind::Backdrop { .. }))
+        self.frame.effect_count != 0
+    }
+
+    fn backdrop_sample_rect(&self, rect: api::RectF, sigma: f32) -> api::RectF {
+        let radius = sigma.clamp(0.0, MAX_BLUR_SIGMA);
+        let sample_step = (radius * 0.35).max(1.0) / self.scale.max(1.0);
+        api::RectF::new(
+            rect.x - sample_step,
+            rect.y - sample_step,
+            rect.w + sample_step * 2.0,
+            rect.h + sample_step * 2.0,
+        )
+    }
+
+    fn backdrop_sample_rects_overlap(&self, a: api::RectF, b: api::RectF) -> bool {
+        let ax1 = a.x + a.w;
+        let ay1 = a.y + a.h;
+        let bx1 = b.x + b.w;
+        let by1 = b.y + b.h;
+        a.x < bx1 && ax1 > b.x && a.y < by1 && ay1 > b.y
+    }
+
+    fn backdrop_batch_end(&self, start: usize) -> usize {
+        if !self.backdrop_batch_enabled {
+            return start + 1;
+        }
+        let DrawKind::Backdrop { rect, sigma } = self.frame.draws[start].kind else {
+            return start + 1;
+        };
+        let mut end = start + 1;
+        let first_sample = self.backdrop_sample_rect(rect, sigma);
+        while end < self.frame.draws.len() {
+            let DrawKind::Backdrop { rect, sigma } = self.frame.draws[end].kind else {
+                break;
+            };
+            let candidate = self.backdrop_sample_rect(rect, sigma);
+            let mut overlaps = self.backdrop_sample_rects_overlap(first_sample, candidate);
+            let mut prior = start + 1;
+            while !overlaps && prior < end {
+                let DrawKind::Backdrop { rect, sigma } = self.frame.draws[prior].kind else {
+                    break;
+                };
+                overlaps = self.backdrop_sample_rects_overlap(
+                    self.backdrop_sample_rect(rect, sigma),
+                    candidate,
+                );
+                prior += 1;
+            }
+            if overlaps {
+                break;
+            }
+            end += 1;
+        }
+        end
     }
 
     fn ensure_solid_pipeline(&mut self) {
@@ -1741,6 +2584,7 @@ impl WebGpuRenderer {
             &color_target,
             "fs_solid",
         ));
+        self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
     }
 
     fn ensure_rgba_pipeline(&mut self) {
@@ -1757,6 +2601,7 @@ impl WebGpuRenderer {
             &color_target,
             "fs_rgba",
         ));
+        self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
     }
 
     fn ensure_a8_pipeline(&mut self) {
@@ -1773,6 +2618,7 @@ impl WebGpuRenderer {
             &color_target,
             "fs_a8",
         ));
+        self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
     }
 
     fn ensure_sdf_pipeline(&mut self) {
@@ -1789,6 +2635,7 @@ impl WebGpuRenderer {
             &color_target,
             "fs_sdf",
         ));
+        self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
     }
 
     fn ensure_effect_pipeline(&mut self) {
@@ -1805,6 +2652,7 @@ impl WebGpuRenderer {
             &color_target,
             "fs_backdrop",
         ));
+        self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
     }
 
     fn ensure_scene3d_pipeline(&mut self, kind: Scene3dPipelineKind) {
@@ -1897,6 +2745,7 @@ impl WebGpuRenderer {
                 self.programs.scene3d_color_tri_add_pipeline = Some(pipeline);
             }
         }
+        self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
     }
 
     fn ensure_id_mask_raster_pipeline(&mut self) {
@@ -1910,6 +2759,7 @@ impl WebGpuRenderer {
             &self.programs.id_mask_raster_pipeline_layout,
             &vertex_layout,
         ));
+        self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
     }
 
     fn ensure_id_mask_field_pipelines(&mut self) {
@@ -1921,6 +2771,7 @@ impl WebGpuRenderer {
                 "fs_id_mask_field_seed",
                 "oxide-webgpu-id-mask-field-seed",
             ));
+            self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
         }
         if self.programs.id_mask_field_jump_pipeline.is_none() {
             self.programs.id_mask_field_jump_pipeline = Some(create_id_mask_field_pipeline(
@@ -1930,6 +2781,7 @@ impl WebGpuRenderer {
                 "fs_id_mask_field_jump",
                 "oxide-webgpu-id-mask-field-jump",
             ));
+            self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
         }
     }
 
@@ -1943,6 +2795,7 @@ impl WebGpuRenderer {
             &self.programs.id_mask_compositor_pipeline_layout,
             self.programs.format,
         ));
+        self.stats.pipeline_creates = self.stats.pipeline_creates.saturating_add(1);
     }
 
     fn ensure_draw_pipeline(&mut self, kind: DrawKind) {
@@ -2089,7 +2942,8 @@ impl WebGpuRenderer {
         }
         let mut start = 0_usize;
         while start < self.frame.draws.len() {
-            if let DrawKind::Backdrop { sigma } = self.frame.draws[start].kind {
+            if let DrawKind::Backdrop { sigma, .. } = self.frame.draws[start].kind {
+                let end = self.backdrop_batch_end(start);
                 encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: &self.scene_texture,
@@ -2109,9 +2963,13 @@ impl WebGpuRenderer {
                         depth_or_array_layers: 1,
                     },
                 );
-                self.write_effect_uniform(sigma);
-                self.render_draw_range(encoder, &scene_view, start, start + 1, wgpu::LoadOp::Load);
-                start += 1;
+                self.stats.texture_copies = self.stats.texture_copies.saturating_add(1);
+                if !self.effect_uniform_batch_enabled {
+                    self.write_effect_uniform(sigma);
+                    self.frame.draws[start].effect_uniform_offset = 0;
+                }
+                self.render_draw_range(encoder, &scene_view, start, end, wgpu::LoadOp::Load);
+                start = end;
             } else {
                 let mut end = start + 1;
                 while end < self.frame.draws.len()
@@ -2125,7 +2983,11 @@ impl WebGpuRenderer {
         }
     }
 
-    fn clear_scene(&self, encoder: &mut wgpu::CommandEncoder) {
+    fn clear_scene(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        self.stats.render_passes = self.stats.render_passes.saturating_add(1);
+        self.stats.clear_passes = self.stats.clear_passes.saturating_add(1);
+        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Clear);
+        let timestamp_writes = self.timestamp_writes(timestamp_pair);
         let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("oxide-webgpu-clear-scene"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2138,7 +3000,7 @@ impl WebGpuRenderer {
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes,
             occlusion_query_set: None,
         });
     }
@@ -2148,10 +3010,15 @@ impl WebGpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         target_view: &wgpu::TextureView,
     ) {
-        let draws = self.scene3d_draws.clone();
-        for draw in &draws {
+        for draw_index in 0..self.scene3d_draws.len() {
+            let draw = self.scene3d_draws[draw_index];
             self.ensure_scene3d_pipeline(draw.pipeline);
         }
+        if self.scene3d_bind_group.is_none() {
+            return;
+        }
+        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Scene3d);
+        let timestamp_writes = self.timestamp_writes(timestamp_pair);
         let Some(bind_group) = self.scene3d_bind_group.as_ref() else {
             return;
         };
@@ -2183,11 +3050,13 @@ impl WebGpuRenderer {
                 depth_ops: Some(depth_ops),
                 stencil_ops: None,
             }),
-            timestamp_writes: None,
+            timestamp_writes,
             occlusion_query_set: None,
         });
 
-        for draw in &draws {
+        let mut encoded_draws = 0_u32;
+        for draw_index in 0..self.scene3d_draws.len() {
+            let draw = self.scene3d_draws[draw_index];
             let Some(mesh) = self.meshes_3d.get(draw.mesh).and_then(Option::as_ref) else {
                 continue;
             };
@@ -2197,8 +3066,12 @@ impl WebGpuRenderer {
             pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
             pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..mesh.index_count, 0, 0..1);
-            self.stats.draws = self.stats.draws.saturating_add(1);
+            encoded_draws = encoded_draws.saturating_add(1);
         }
+        drop(pass);
+        self.stats.draws = self.stats.draws.saturating_add(encoded_draws);
+        self.stats.render_passes = self.stats.render_passes.saturating_add(1);
+        self.stats.scene3d_passes = self.stats.scene3d_passes.saturating_add(1);
     }
 
     fn render_scene3d_overlay(
@@ -2206,10 +3079,15 @@ impl WebGpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         target_view: &wgpu::TextureView,
     ) {
-        let draws = self.scene3d_overlay_draws.clone();
-        for draw in &draws {
+        for draw_index in 0..self.scene3d_overlay_draws.len() {
+            let draw = self.scene3d_overlay_draws[draw_index];
             self.ensure_scene3d_pipeline(draw.pipeline);
         }
+        if self.scene3d_bind_group.is_none() {
+            return;
+        }
+        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Scene3dOverlay);
+        let timestamp_writes = self.timestamp_writes(timestamp_pair);
         let Some(bind_group) = self.scene3d_bind_group.as_ref() else {
             return;
         };
@@ -2229,11 +3107,13 @@ impl WebGpuRenderer {
                 }),
                 stencil_ops: None,
             }),
-            timestamp_writes: None,
+            timestamp_writes,
             occlusion_query_set: None,
         });
 
-        for draw in &draws {
+        let mut encoded_draws = 0_u32;
+        for draw_index in 0..self.scene3d_overlay_draws.len() {
+            let draw = self.scene3d_overlay_draws[draw_index];
             let Some(mesh) = self.meshes_3d.get(draw.mesh).and_then(Option::as_ref) else {
                 continue;
             };
@@ -2243,8 +3123,12 @@ impl WebGpuRenderer {
             pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
             pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..mesh.index_count, 0, 0..1);
-            self.stats.draws = self.stats.draws.saturating_add(1);
+            encoded_draws = encoded_draws.saturating_add(1);
         }
+        drop(pass);
+        self.stats.draws = self.stats.draws.saturating_add(encoded_draws);
+        self.stats.render_passes = self.stats.render_passes.saturating_add(1);
+        self.stats.scene3d_overlay_passes = self.stats.scene3d_overlay_passes.saturating_add(1);
     }
 
     fn render_id_mask_compositors(
@@ -2255,6 +3139,8 @@ impl WebGpuRenderer {
     ) {
         let mut load = first_load;
         let mut encoded_draws = 0_u32;
+        let mut encoded_render_passes = 0_u32;
+        let mut encoded_buffer_upload_bytes = 0_u64;
         for draw_index in 0..self.id_mask_draws.len() {
             let draw = self.id_mask_draws[draw_index];
             let Some(vertex_bytes_len) = self
@@ -2267,15 +3153,19 @@ impl WebGpuRenderer {
             let width = draw.mask_width.max(1);
             let height = draw.mask_height.max(1);
             let vertex_count = draw.vertex_count;
-            let raster_uniform_bytes = id_mask_raster_uniform_bytes(width, height, draw.projection);
-            let compositor_uniform_bytes = id_mask_compositor_uniform_bytes(&draw);
-
-            self.ensure_id_mask_resources(
+            write_id_mask_raster_uniform_bytes(
+                &mut self.id_mask_raster_uniform_bytes,
                 width,
                 height,
-                vertex_bytes_len,
-                compositor_uniform_bytes.len(),
+                draw.projection,
             );
+            write_id_mask_compositor_uniform_bytes(
+                &mut self.id_mask_compositor_uniform_bytes,
+                &draw,
+            );
+            let compositor_uniform_len = self.id_mask_compositor_uniform_bytes.len();
+
+            self.ensure_id_mask_resources(width, height, vertex_bytes_len, compositor_uniform_len);
             self.ensure_id_mask_raster_pipeline();
             self.ensure_id_mask_field_pipelines();
             self.ensure_id_mask_compositor_pipeline();
@@ -2333,12 +3223,27 @@ impl WebGpuRenderer {
                     continue;
                 };
                 self.queue.write_buffer(vertex_buffer, 0, vertex_bytes);
+                encoded_buffer_upload_bytes =
+                    encoded_buffer_upload_bytes.saturating_add(vertex_bytes.len() as u64);
                 self.id_mask_uploaded_vertex_cache = Some(draw.vertex_cache_index);
             }
-            self.queue.write_buffer(raster_uniform_buffer, 0, &raster_uniform_bytes);
-            self.queue.write_buffer(compositor_uniform_buffer, 0, &compositor_uniform_bytes);
+            self.queue.write_buffer(raster_uniform_buffer, 0, &self.id_mask_raster_uniform_bytes);
+            encoded_buffer_upload_bytes = encoded_buffer_upload_bytes
+                .saturating_add(self.id_mask_raster_uniform_bytes.len() as u64);
+            self.queue.write_buffer(
+                compositor_uniform_buffer,
+                0,
+                &self.id_mask_compositor_uniform_bytes,
+            );
+            encoded_buffer_upload_bytes = encoded_buffer_upload_bytes
+                .saturating_add(self.id_mask_compositor_uniform_bytes.len() as u64);
 
             {
+                let timestamp_pair = reserve_webgpu_timestamp_pass(
+                    &mut self.timestamp_queries,
+                    TimestampPassFamily::IdMaskRaster,
+                );
+                let timestamp_writes = webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("oxide-webgpu-id-mask-raster-pass"),
                     color_attachments: &[
@@ -2362,7 +3267,7 @@ impl WebGpuRenderer {
                         }),
                     ],
                     depth_stencil_attachment: None,
-                    timestamp_writes: None,
+                    timestamp_writes,
                     occlusion_query_set: None,
                 });
                 pass.set_pipeline(self.id_mask_raster_pipeline());
@@ -2370,17 +3275,24 @@ impl WebGpuRenderer {
                 pass.set_vertex_buffer(0, vertex_buffer.slice(..));
                 pass.draw(0..vertex_count, 0..1);
             }
+            encoded_render_passes = encoded_render_passes.saturating_add(1);
+            self.stats.id_mask_raster_passes =
+                self.stats.id_mask_raster_passes.saturating_add(1);
 
             // Seed nearest-city and seam fields from the exact rasterized masks,
             // then jump-flood them. The final beauty compositor should only read
             // these fields; reintroducing radius searches there recreates the GPU
             // scheduling stalls this path was built to remove.
-            self.queue.write_buffer(
-                field_uniform_buffer,
-                0,
-                &id_mask_field_uniform_bytes(width, height, 0.0),
-            );
+            let seed_field_uniform = id_mask_field_uniform_bytes(width, height, 0.0);
+            self.queue.write_buffer(field_uniform_buffer, 0, &seed_field_uniform);
+            encoded_buffer_upload_bytes =
+                encoded_buffer_upload_bytes.saturating_add(seed_field_uniform.len() as u64);
             {
+                let timestamp_pair = reserve_webgpu_timestamp_pass(
+                    &mut self.timestamp_queries,
+                    TimestampPassFamily::IdMaskFieldSeed,
+                );
+                let timestamp_writes = webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("oxide-webgpu-id-mask-field-seed-pass"),
                     color_attachments: &[
@@ -2404,28 +3316,36 @@ impl WebGpuRenderer {
                         }),
                     ],
                     depth_stencil_attachment: None,
-                    timestamp_writes: None,
+                    timestamp_writes,
                     occlusion_query_set: None,
                 });
                 pass.set_pipeline(self.id_mask_field_seed_pipeline());
                 pass.set_bind_group(0, field_bind_group_b, &[]);
                 pass.draw(0..6, 0..1);
             }
+            encoded_render_passes = encoded_render_passes.saturating_add(1);
+            self.stats.id_mask_field_seed_passes =
+                self.stats.id_mask_field_seed_passes.saturating_add(1);
 
             let mut src_is_a = true;
             let mut jump = width.max(height).next_power_of_two() / 2;
             while jump >= 1 {
-                self.queue.write_buffer(
-                    field_uniform_buffer,
-                    0,
-                    &id_mask_field_uniform_bytes(width, height, jump as f32),
-                );
+                let jump_field_uniform = id_mask_field_uniform_bytes(width, height, jump as f32);
+                self.queue.write_buffer(field_uniform_buffer, 0, &jump_field_uniform);
+                encoded_buffer_upload_bytes =
+                    encoded_buffer_upload_bytes.saturating_add(jump_field_uniform.len() as u64);
                 let (src_bind_group, dst_city_view, dst_seam_view) = if src_is_a {
                     (field_bind_group_a, city_field_b_view, seam_field_b_view)
                 } else {
                     (field_bind_group_b, city_field_a_view, seam_field_a_view)
                 };
                 {
+                    let timestamp_pair = reserve_webgpu_timestamp_pass(
+                        &mut self.timestamp_queries,
+                        TimestampPassFamily::IdMaskFieldJump,
+                    );
+                    let timestamp_writes =
+                        webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("oxide-webgpu-id-mask-field-jump-pass"),
                         color_attachments: &[
@@ -2449,13 +3369,16 @@ impl WebGpuRenderer {
                             }),
                         ],
                         depth_stencil_attachment: None,
-                        timestamp_writes: None,
+                        timestamp_writes,
                         occlusion_query_set: None,
                     });
                     pass.set_pipeline(self.id_mask_field_jump_pipeline());
                     pass.set_bind_group(0, src_bind_group, &[]);
                     pass.draw(0..6, 0..1);
                 }
+                encoded_render_passes = encoded_render_passes.saturating_add(1);
+                self.stats.id_mask_field_jump_passes =
+                    self.stats.id_mask_field_jump_passes.saturating_add(1);
                 src_is_a = !src_is_a;
                 jump /= 2;
             }
@@ -2463,6 +3386,11 @@ impl WebGpuRenderer {
                 if src_is_a { compositor_bind_group_a } else { compositor_bind_group_b };
 
             {
+                let timestamp_pair = reserve_webgpu_timestamp_pass(
+                    &mut self.timestamp_queries,
+                    TimestampPassFamily::IdMaskCompositor,
+                );
+                let timestamp_writes = webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("oxide-webgpu-id-mask-compositor-pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2472,7 +3400,7 @@ impl WebGpuRenderer {
                         ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
                     })],
                     depth_stencil_attachment: None,
-                    timestamp_writes: None,
+                    timestamp_writes,
                     occlusion_query_set: None,
                 });
                 // Keep the expensive beauty compositor bounded to the requested
@@ -2489,12 +3417,41 @@ impl WebGpuRenderer {
                 pass.set_bind_group(0, compositor_bind_group, &[]);
                 pass.draw(0..6, 0..1);
             }
+            encoded_render_passes = encoded_render_passes.saturating_add(1);
+            self.stats.id_mask_compositor_passes =
+                self.stats.id_mask_compositor_passes.saturating_add(1);
             load = wgpu::LoadOp::Load;
             encoded_draws = encoded_draws
                 .saturating_add(3)
                 .saturating_add(width.max(height).next_power_of_two().trailing_zeros());
         }
         self.stats.draws = self.stats.draws.saturating_add(encoded_draws);
+        self.stats.render_passes = self.stats.render_passes.saturating_add(encoded_render_passes);
+        self.stats.buffer_upload_bytes =
+            self.stats.buffer_upload_bytes.saturating_add(encoded_buffer_upload_bytes);
+    }
+
+    fn draw_state_key(&self, draw: GpuDraw) -> Option<DrawStateKey> {
+        let (pipeline, bind) = match draw.kind {
+            DrawKind::Solid => (DrawPipelineKey::Solid, DrawBindKey::None),
+            DrawKind::Rgba { image } => {
+                self.images.get(image).and_then(Option::as_ref)?;
+                (DrawPipelineKey::Rgba, DrawBindKey::Texture { image })
+            }
+            DrawKind::A8 { image } => {
+                self.images.get(image).and_then(Option::as_ref)?;
+                (DrawPipelineKey::A8, DrawBindKey::Texture { image })
+            }
+            DrawKind::Sdf { image } => {
+                self.images.get(image).and_then(Option::as_ref)?;
+                (DrawPipelineKey::Sdf, DrawBindKey::Texture { image })
+            }
+            DrawKind::Backdrop { .. } => (
+                DrawPipelineKey::Effect,
+                DrawBindKey::Effect { offset: draw.effect_uniform_offset },
+            ),
+        };
+        Some(DrawStateKey { pipeline, bind, clip: draw.clip })
     }
 
     fn render_draw_range(
@@ -2511,13 +3468,20 @@ impl WebGpuRenderer {
         for draw_index in start..end {
             self.ensure_draw_pipeline(self.frame.draws[draw_index].kind);
         }
+        if self.vertex_buffer.is_none() || self.index_buffer.is_none() {
+            return;
+        }
+        self.stats.render_passes = self.stats.render_passes.saturating_add(1);
+        self.stats.draw_passes = self.stats.draw_passes.saturating_add(1);
+
+        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Draw);
+        let timestamp_writes = self.timestamp_writes(timestamp_pair);
         let Some(vertex_buffer) = &self.vertex_buffer else {
             return;
         };
         let Some(index_buffer) = &self.index_buffer else {
             return;
         };
-
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("oxide-webgpu-draw-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2527,50 +3491,76 @@ impl WebGpuRenderer {
                 ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes,
             occlusion_query_set: None,
         });
         pass.set_bind_group(0, &self.viewport_bind_group, &[]);
         pass.set_vertex_buffer(0, vertex_buffer.slice(..));
         pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
+        let mut encoded_draws = 0_u32;
+        let mut draw_items = 0_u32;
+        let mut pipeline_binds = 0_u32;
+        let mut draw_bind_group_binds = 0_u32;
+        let mut scissor_sets = 0_u32;
+        let mut bound_pipeline: Option<DrawPipelineKey> = None;
+        let mut bound_bind: Option<DrawBindKey> = None;
+        let mut bound_clip: Option<api::RectI> = None;
         for draw_index in start..end {
             let draw = self.frame.draws[draw_index];
-            set_scissor(&mut pass, draw.clip, self.scale, self.width, self.height);
-            match draw.kind {
-                DrawKind::Solid => {
-                    pass.set_pipeline(self.solid_pipeline());
+            let Some(state) = self.draw_state_key(draw) else {
+                continue;
+            };
+            let force_bind = !self.draw_state_cache_enabled;
+            draw_items = draw_items.saturating_add(1);
+            if force_bind || bound_clip != Some(state.clip) {
+                set_scissor(&mut pass, state.clip, self.scale, self.width, self.height);
+                scissor_sets = scissor_sets.saturating_add(1);
+                bound_clip = Some(state.clip);
+            }
+            if force_bind || bound_pipeline != Some(state.pipeline) {
+                match state.pipeline {
+                    DrawPipelineKey::Solid => pass.set_pipeline(self.solid_pipeline()),
+                    DrawPipelineKey::Rgba => pass.set_pipeline(self.rgba_pipeline()),
+                    DrawPipelineKey::A8 => pass.set_pipeline(self.a8_pipeline()),
+                    DrawPipelineKey::Sdf => pass.set_pipeline(self.sdf_pipeline()),
+                    DrawPipelineKey::Effect => pass.set_pipeline(self.effect_pipeline()),
                 }
-                DrawKind::Rgba { image } => {
-                    let Some(image) = self.images.get(image).and_then(Option::as_ref) else {
-                        continue;
-                    };
-                    pass.set_pipeline(self.rgba_pipeline());
-                    pass.set_bind_group(1, &image.bind_group, &[]);
+                pipeline_binds = pipeline_binds.saturating_add(1);
+                bound_pipeline = Some(state.pipeline);
+            }
+            if force_bind || bound_bind != Some(state.bind) {
+                match state.bind {
+                    DrawBindKey::None => {}
+                    DrawBindKey::Texture { image } => {
+                        let Some(image) = self.images.get(image).and_then(Option::as_ref) else {
+                            continue;
+                        };
+                        pass.set_bind_group(1, &image.bind_group, &[]);
+                        draw_bind_group_binds = draw_bind_group_binds.saturating_add(1);
+                    }
+                    DrawBindKey::Effect { offset } => {
+                        pass.set_bind_group(1, &self.scratch_bind_group, &[]);
+                        pass.set_bind_group(2, &self.effect_bind_group, &[offset]);
+                        draw_bind_group_binds = draw_bind_group_binds.saturating_add(2);
+                    }
                 }
-                DrawKind::A8 { image } => {
-                    let Some(image) = self.images.get(image).and_then(Option::as_ref) else {
-                        continue;
-                    };
-                    pass.set_pipeline(self.a8_pipeline());
-                    pass.set_bind_group(1, &image.bind_group, &[]);
-                }
-                DrawKind::Sdf { image } => {
-                    let Some(image) = self.images.get(image).and_then(Option::as_ref) else {
-                        continue;
-                    };
-                    pass.set_pipeline(self.sdf_pipeline());
-                    pass.set_bind_group(1, &image.bind_group, &[]);
-                }
-                DrawKind::Backdrop { .. } => {
-                    pass.set_pipeline(self.effect_pipeline());
-                    pass.set_bind_group(1, &self.scratch_bind_group, &[]);
-                    pass.set_bind_group(2, &self.effect_bind_group, &[]);
-                }
+                bound_bind = Some(state.bind);
+            }
+            if force_bind && matches!(state.bind, DrawBindKey::None) {
+                bound_bind = None;
             }
             pass.draw_indexed(draw.first_index..draw.first_index + draw.index_count, 0, 0..1);
-            self.stats.draws = self.stats.draws.saturating_add(1);
+            encoded_draws = encoded_draws.saturating_add(1);
         }
+        drop(pass);
+        self.stats.draws = self.stats.draws.saturating_add(encoded_draws);
+        self.stats.draw_items = self.stats.draw_items.saturating_add(draw_items);
+        self.stats.draw_pipeline_binds =
+            self.stats.draw_pipeline_binds.saturating_add(pipeline_binds);
+        self.stats.draw_bind_group_binds =
+            self.stats.draw_bind_group_binds.saturating_add(draw_bind_group_binds);
+        self.stats.draw_scissor_sets = self.stats.draw_scissor_sets.saturating_add(scissor_sets);
     }
 
     fn ensure_present_buffers(&mut self) {
@@ -2597,6 +3587,10 @@ impl WebGpuRenderer {
         let index_bytes = index6_bytes([0, 1, 2, 2, 1, 3]);
         self.queue.write_buffer(&self.present_vertex_buffer, 0, &vertex_bytes);
         self.queue.write_buffer(&self.present_index_buffer, 0, &index_bytes);
+        self.stats.buffer_upload_bytes = self
+            .stats
+            .buffer_upload_bytes
+            .saturating_add(vertex_bytes.len().saturating_add(index_bytes.len()) as u64);
         self.present_width = self.width;
         self.present_height = self.height;
         self.present_scale = self.scale;
@@ -2609,6 +3603,10 @@ impl WebGpuRenderer {
     ) {
         self.ensure_present_buffers();
         self.ensure_rgba_pipeline();
+        self.stats.render_passes = self.stats.render_passes.saturating_add(1);
+        self.stats.present_passes = self.stats.present_passes.saturating_add(1);
+        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Present);
+        let timestamp_writes = self.timestamp_writes(timestamp_pair);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("oxide-webgpu-present-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2621,7 +3619,7 @@ impl WebGpuRenderer {
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes,
             occlusion_query_set: None,
         });
         pass.set_pipeline(self.rgba_pipeline());
@@ -2651,6 +3649,45 @@ fn browser_webgpu_present() -> bool {
         .ok()
         .filter(|value| !value.is_undefined() && !value.is_null())
         .is_some()
+}
+
+fn timestamp_readback_bytes(query_count: u32) -> u64 {
+    u64::from(query_count).saturating_mul(u64::from(wgpu::QUERY_SIZE))
+}
+
+fn timestamp_sample(data: &[u8], query_index: u32) -> Option<u64> {
+    let start = (query_index as usize).checked_mul(wgpu::QUERY_SIZE as usize)?;
+    let bytes = data.get(start..start.checked_add(8)?)?;
+    Some(u64::from_le_bytes([
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+    ]))
+}
+
+fn reserve_webgpu_timestamp_pass(
+    timestamps: &mut Option<WebGpuTimestampQueries>,
+    family: TimestampPassFamily,
+) -> Option<(u32, u32)> {
+    timestamps.as_mut().and_then(|timestamps| timestamps.reserve(family))
+}
+
+fn webgpu_timestamp_writes(
+    timestamps: &Option<WebGpuTimestampQueries>,
+    pair: Option<(u32, u32)>,
+) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+    let (begin_query, end_query) = pair?;
+    let timestamps = timestamps.as_ref()?;
+    Some(wgpu::RenderPassTimestampWrites {
+        query_set: &timestamps.query_set,
+        beginning_of_pass_write_index: Some(begin_query),
+        end_of_pass_write_index: Some(end_query),
+    })
 }
 
 fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPrograms {
@@ -2695,7 +3732,7 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
             visibility: wgpu::ShaderStages::FRAGMENT,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
+                has_dynamic_offset: true,
                 min_binding_size: None,
             },
             count: None,
@@ -3299,19 +4336,50 @@ fn create_viewport_bind_group(
 fn create_effect_bind_group(
     device: &wgpu::Device,
     programs: &GpuPrograms,
-) -> (wgpu::Buffer, wgpu::BindGroup) {
+    size: u64,
+) -> (wgpu::Buffer, wgpu::BindGroup, u64) {
+    let capacity = size.max(EFFECT_UNIFORM_SIZE);
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("oxide-webgpu-effect-buffer"),
-        size: 16,
+        size: capacity,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("oxide-webgpu-effect-bind-group"),
         layout: &programs.effect_layout,
-        entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: &buffer,
+                offset: 0,
+                size: core::num::NonZeroU64::new(EFFECT_UNIFORM_SIZE),
+            }),
+        }],
     });
-    (buffer, bind_group)
+    (buffer, bind_group, capacity)
+}
+
+fn align_to(value: u64, alignment: u64) -> u64 {
+    if alignment <= 1 {
+        return value;
+    }
+    let rem = value % alignment;
+    if rem == 0 {
+        value
+    } else {
+        value.saturating_add(alignment.saturating_sub(rem))
+    }
+}
+
+fn effect_uniform_needed_bytes(count: usize, stride: u64) -> u64 {
+    if count == 0 {
+        return EFFECT_UNIFORM_SIZE;
+    }
+    (count as u64)
+        .saturating_sub(1)
+        .saturating_mul(stride)
+        .saturating_add(EFFECT_UNIFORM_SIZE)
 }
 
 fn create_target_texture(
@@ -3505,12 +4573,12 @@ fn ensure_buffer(
     needed: u64,
     usage: wgpu::BufferUsages,
     label: &'static str,
-) {
+) -> bool {
     if needed == 0 {
-        return;
+        return false;
     }
     if buffer.is_some() && *capacity >= needed {
-        return;
+        return false;
     }
     let next = needed.next_power_of_two().max(1024);
     *buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
@@ -3520,6 +4588,7 @@ fn ensure_buffer(
         mapped_at_creation: false,
     }));
     *capacity = next;
+    true
 }
 
 fn set_scissor(
@@ -3577,13 +4646,19 @@ fn quad_vertices(
     ]
 }
 
-fn rounded_rect_mesh(
+fn rounded_rect_mesh_into(
     rect: api::RectF,
     radii: [f32; 4],
     color: api::Color,
-) -> (Vec<GpuVertex>, Vec<u32>) {
+    points: &mut Vec<(f32, f32)>,
+    vertices: &mut Vec<GpuVertex>,
+    indices: &mut Vec<u32>,
+) {
+    points.clear();
+    vertices.clear();
+    indices.clear();
     if rect.w <= 0.0 || rect.h <= 0.0 || color.a <= 0.0 {
-        return (Vec::new(), Vec::new());
+        return;
     }
     let max_r = (rect.w.abs() * 0.5).min(rect.h.abs() * 0.5);
     let radii = [
@@ -3592,9 +4667,8 @@ fn rounded_rect_mesh(
         radii[2].clamp(0.0, max_r),
         radii[3].clamp(0.0, max_r),
     ];
-    let mut points = Vec::new();
     append_arc(
-        &mut points,
+        points,
         rect.x + radii[0],
         rect.y + radii[0],
         radii[0],
@@ -3602,7 +4676,7 @@ fn rounded_rect_mesh(
         1.5 * core::f32::consts::PI,
     );
     append_arc(
-        &mut points,
+        points,
         rect.x + rect.w - radii[1],
         rect.y + radii[1],
         radii[1],
@@ -3610,7 +4684,7 @@ fn rounded_rect_mesh(
         2.0 * core::f32::consts::PI,
     );
     append_arc(
-        &mut points,
+        points,
         rect.x + rect.w - radii[2],
         rect.y + rect.h - radii[2],
         radii[2],
@@ -3618,7 +4692,7 @@ fn rounded_rect_mesh(
         0.5 * core::f32::consts::PI,
     );
     append_arc(
-        &mut points,
+        points,
         rect.x + radii[3],
         rect.y + rect.h - radii[3],
         radii[3],
@@ -3626,20 +4700,21 @@ fn rounded_rect_mesh(
         core::f32::consts::PI,
     );
     if points.len() < 3 {
-        return (quad_vertices(rect, 0.0, 0.0, 1.0, 1.0, color).to_vec(), vec![0, 1, 2, 2, 1, 3]);
+        vertices.extend_from_slice(&quad_vertices(rect, 0.0, 0.0, 1.0, 1.0, color));
+        indices.extend_from_slice(&[0, 1, 2, 2, 1, 3]);
+        return;
     }
-    let mut vertices = Vec::with_capacity(points.len() + 1);
+    vertices.reserve(points.len() + 1);
     vertices.push(gpu_vertex(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5, 0.5, 0.5, color));
-    for (x, y) in points {
+    for (x, y) in points.iter().copied() {
         vertices.push(gpu_vertex(x, y, 0.0, 0.0, color));
     }
-    let mut indices = Vec::with_capacity((vertices.len() - 1) * 3);
+    indices.reserve((vertices.len() - 1) * 3);
     for idx in 1..vertices.len() {
         indices.push(0);
         indices.push(idx as u32);
         indices.push(if idx + 1 < vertices.len() { idx as u32 + 1 } else { 1 });
     }
-    (vertices, indices)
 }
 
 fn append_arc(points: &mut Vec<(f32, f32)>, cx: f32, cy: f32, radius: f32, start: f32, end: f32) {
@@ -3668,9 +4743,16 @@ fn gpu_vertex(x: f32, y: f32, u: f32, v: f32, color: api::Color) -> GpuVertex {
     }
 }
 
-fn append_gpu_vertices(out: &mut Vec<GpuVertex>, idx: &mut Vec<u32>, vertices: &[api::Vertex], color: api::Color) {
+fn append_gpu_vertices(
+    out: &mut Vec<GpuVertex>,
+    idx: &mut Vec<u32>,
+    vertices: &[api::Vertex],
+    color: api::Color,
+) {
     let base = out.len() as u32;
-    out.extend(vertices.iter().map(|vertex| gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, color)));
+    out.extend(
+        vertices.iter().map(|vertex| gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, color)),
+    );
     if vertices.len() == 4 {
         idx.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 1, base + 3]);
     } else {
@@ -3703,43 +4785,48 @@ fn scene3d_index_bytes(indices: &[u32]) -> Vec<u8> {
     out
 }
 
-fn id_mask_raster_vertex_bytes(vertices: &[id_mask_compositor::IdMaskRasterVertex]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(vertices.len().saturating_mul(ID_MASK_VERTEX_STRIDE as usize));
+fn write_id_mask_raster_vertex_bytes(
+    vertices: &[id_mask_compositor::IdMaskRasterVertex],
+    out: &mut Vec<u8>,
+) {
+    out.clear();
+    out.reserve(vertices.len().saturating_mul(ID_MASK_VERTEX_STRIDE as usize));
     for vertex in vertices {
-        push_f32(&mut out, vertex.position_px[0]);
-        push_f32(&mut out, vertex.position_px[1]);
-        push_f32(&mut out, vertex.position_world[0]);
-        push_f32(&mut out, vertex.position_world[1]);
-        push_f32(&mut out, vertex.position_world[2]);
-        push_f32(&mut out, vertex.position_world[3]);
+        push_f32(out, vertex.position_px[0]);
+        push_f32(out, vertex.position_px[1]);
+        push_f32(out, vertex.position_world[0]);
+        push_f32(out, vertex.position_world[1]);
+        push_f32(out, vertex.position_world[2]);
+        push_f32(out, vertex.position_world[3]);
         out.extend_from_slice(&vertex.city_id.to_le_bytes());
         out.extend_from_slice(&vertex.neighborhood_id.to_le_bytes());
     }
-    out
 }
 
-fn id_mask_raster_uniform_bytes(
+fn write_id_mask_raster_uniform_bytes(
+    out: &mut Vec<u8>,
     width: u32,
     height: u32,
     projection: id_mask_compositor::IdMaskRasterProjection,
-) -> Vec<u8> {
-    let mut out = Vec::with_capacity(ID_MASK_RASTER_UNIFORM_SIZE_BYTES);
+) {
+    out.clear();
+    out.reserve(ID_MASK_RASTER_UNIFORM_SIZE_BYTES);
     for value in [
         width as f32,
         height as f32,
         if projection.use_world_position { 1.0 } else { 0.0 },
         if projection.visible_hemisphere { 1.0 } else { 0.0 },
     ] {
-        push_f32(&mut out, value);
+        push_f32(out, value);
     }
     for column in projection.world_to_clip {
         for value in column {
-            push_f32(&mut out, value);
+            push_f32(out, value);
         }
     }
     for column in projection.model_to_world {
         for value in column {
-            push_f32(&mut out, value);
+            push_f32(out, value);
         }
     }
     for value in [
@@ -3748,17 +4835,13 @@ fn id_mask_raster_uniform_bytes(
         projection.camera_eye_unit[2],
         projection.visible_front_min,
     ] {
-        push_f32(&mut out, value);
+        push_f32(out, value);
     }
-    for value in [
-        projection.normal_scale[0],
-        projection.normal_scale[1],
-        projection.normal_scale[2],
-        0.0,
-    ] {
-        push_f32(&mut out, value);
+    for value in
+        [projection.normal_scale[0], projection.normal_scale[1], projection.normal_scale[2], 0.0]
+    {
+        push_f32(out, value);
     }
-    out
 }
 
 fn id_mask_field_uniform_bytes(
@@ -3774,12 +4857,11 @@ fn id_mask_field_uniform_bytes(
     out
 }
 
-fn id_mask_compositor_uniform_bytes(draw: &IdMaskDraw) -> Vec<u8> {
-    let mut out = Vec::with_capacity(
-        16 * (4 + 4 + 4 + 4 + id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS),
-    );
+fn write_id_mask_compositor_uniform_bytes(out: &mut Vec<u8>, draw: &IdMaskDraw) {
+    out.clear();
+    out.reserve(16 * (4 + 4 + 4 + 4 + id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS));
     for value in [draw.viewport.x, draw.viewport.y, draw.viewport.w, draw.viewport.h] {
-        push_f32(&mut out, value);
+        push_f32(out, value);
     }
     for value in [
         draw.mask_width as f32,
@@ -3787,7 +4869,7 @@ fn id_mask_compositor_uniform_bytes(draw: &IdMaskDraw) -> Vec<u8> {
         draw.mask_scale.max(1.0),
         draw.darken_background_alpha.clamp(0.0, 1.0),
     ] {
-        push_f32(&mut out, value);
+        push_f32(out, value);
     }
     for value in [
         draw.mode as u32 as f32,
@@ -3795,7 +4877,7 @@ fn id_mask_compositor_uniform_bytes(draw: &IdMaskDraw) -> Vec<u8> {
         draw.polish.smooth_radius_px.max(0.0),
         draw.polish.fallback_radius_px.max(0.0),
     ] {
-        push_f32(&mut out, value);
+        push_f32(out, value);
     }
     for value in [
         draw.polish.exterior_halo_inner_sigma_px.max(0.0),
@@ -3803,33 +4885,32 @@ fn id_mask_compositor_uniform_bytes(draw: &IdMaskDraw) -> Vec<u8> {
         draw.polish.exterior_halo_outer_sigma_px.max(0.0),
         draw.polish.exterior_halo_outer_alpha.max(0.0),
     ] {
-        push_f32(&mut out, value);
+        push_f32(out, value);
     }
     for style in draw.city_styles {
-        push_f32(&mut out, style.fill_rgb[0]);
-        push_f32(&mut out, style.fill_rgb[1]);
-        push_f32(&mut out, style.fill_rgb[2]);
-        push_f32(&mut out, 1.0);
+        push_f32(out, style.fill_rgb[0]);
+        push_f32(out, style.fill_rgb[1]);
+        push_f32(out, style.fill_rgb[2]);
+        push_f32(out, 1.0);
     }
     for style in draw.city_styles {
-        push_f32(&mut out, style.edge_rgb[0]);
-        push_f32(&mut out, style.edge_rgb[1]);
-        push_f32(&mut out, style.edge_rgb[2]);
-        push_f32(&mut out, 1.0);
+        push_f32(out, style.edge_rgb[0]);
+        push_f32(out, style.edge_rgb[1]);
+        push_f32(out, style.edge_rgb[2]);
+        push_f32(out, 1.0);
     }
     for style in draw.city_styles {
-        push_f32(&mut out, style.seam_rgb[0]);
-        push_f32(&mut out, style.seam_rgb[1]);
-        push_f32(&mut out, style.seam_rgb[2]);
-        push_f32(&mut out, 1.0);
+        push_f32(out, style.seam_rgb[0]);
+        push_f32(out, style.seam_rgb[1]);
+        push_f32(out, style.seam_rgb[2]);
+        push_f32(out, 1.0);
     }
     for rgb in draw.neighborhood_colors {
-        push_f32(&mut out, rgb[0]);
-        push_f32(&mut out, rgb[1]);
-        push_f32(&mut out, rgb[2]);
-        push_f32(&mut out, 1.0);
+        push_f32(out, rgb[0]);
+        push_f32(out, rgb[1]);
+        push_f32(out, rgb[2]);
+        push_f32(out, 1.0);
     }
-    out
 }
 
 fn push_scene3d_uniform(out: &mut Vec<u8>, mvp: scene3d::Mat4, color: api::Color) -> u32 {
@@ -4044,7 +5125,7 @@ fn fs_scene3d_color(input: Scene3dColorVertexOut) -> @location(0) vec4<f32> {
 const ID_MASK_FIELD_WGSL: &str = r#"
 // Precompute nearest-city and seam seeds with jump flooding so the beauty
 // compositor stays constant-cost per pixel. This is intentionally more passes,
-// less fragment work: that was the winning Chrome/Dawn profile for Topomap.
+// less fragment work: that was the winning Chrome/Dawn profile for dense maps.
 struct IdMaskFieldParams {
    mask_size_jump_pad: vec4<f32>,
 };

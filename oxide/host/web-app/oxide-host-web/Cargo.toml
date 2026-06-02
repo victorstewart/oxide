@@ -38,6 +38,9 @@ web-sys = { version = "0.3.98", features = [
    "Window",
 ] }
 
+[dev-dependencies]
+png = "0.17"
+
 [lib]
 path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]

@@ -355,6 +355,7 @@ pub enum PointerDevice {
 pub struct TouchEvent {
     pub id: TouchId,
     pub phase: TouchPhase,
+    pub timestamp_ns: u64,
     pub x: f32,
     pub y: f32,
     pub pressure: Option<f32>,
@@ -861,17 +862,6 @@ pub trait CameraManager: Send + Sync {
         on_frame: alloc::boxed::Box<dyn Fn(CameraFrame) + Send>,
         on_audio: Option<alloc::boxed::Box<dyn Fn(AudioSample) + Send>>,
     ) -> Result<alloc::boxed::Box<dyn CameraStream + Send>, PlatformError>;
-
-    /// Starts camera capture for a host-native preview plane without requiring
-    /// app-visible frame delivery. Platform hosts can then present the running
-    /// session with a native compositor layer, while the app renderer draws only
-    /// UI and effects above it.
-    fn start_native_preview(
-        &self,
-        cfg: CameraConfig,
-    ) -> Result<alloc::boxed::Box<dyn CameraStream + Send>, PlatformError> {
-        self.start_stream(cfg, alloc::boxed::Box::new(|_| {}), None)
-    }
 
     fn start_recording(
         &self,

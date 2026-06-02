@@ -12,10 +12,11 @@ use xtask::{
     apply_xctestrun_environment_overrides, build_entitlements_dict,
     compare_device_comparisons_pass, compare_device_missing_promotion_families,
     compare_device_official_families, compare_uikit_reports, console_output_contains_marker,
-    device_process_name, device_support_dir_matches, devicectl_notification_observed,
-    display_value_to_base, extract_oxide_device_report_json, extract_trace_windows_from_tables,
-    find_device_process_ids, format_uikit_only_testing_identifier,
-    is_expected_devicectl_console_termination, is_primary_built_xctestrun_file,
+    device_console_failure_line, device_process_name, device_support_dir_matches,
+    devicectl_notification_observed, display_value_to_base, extract_oxide_device_report_json,
+    extract_trace_windows_from_tables, find_device_process_ids,
+    format_uikit_only_testing_identifier, is_expected_devicectl_console_termination,
+    is_primary_built_xctestrun_file, is_retryable_devicectl_install_error,
     is_retryable_devicectl_json_error, is_retryable_uikit_trace_handshake_error,
     is_retryable_xctrace_record_timeout_error, is_unsupported_gpu_counter_profile_error,
     is_xctrace_trace_bundle, latest_benchmark_build_failure, map_uikit_case,
@@ -25,29 +26,31 @@ use xtask::{
     parse_apple_development_team_from_security_output, parse_available_ios_sim_destination,
     parse_devicectl_display_backlight_active, parse_devicectl_lock_state_text,
     parse_oxide_app_host_debug_summary, parse_oxide_benchmark_metadata,
-    parse_oxide_camera_contract_summary, parse_oxide_memory_summary, parse_oxide_stage_summary,
-    parse_oxide_static_idle_summary, parse_oxide_tick_ring,
-    parse_provisioning_profile_team_identifier, parse_react_native_device_report_json,
-    parse_uikit_report_json, parse_xctrace_summary_window, parse_xctrace_tables,
-    parse_xctrace_toc_tables, perf_frame_capture_relative_source_for_test_name,
-    perf_report_matches_case_ids, preferred_xctrace_toc_tables,
-    prepare_resumable_uikit_device_result_root, prepare_uikit_device_perf_xctestrun,
-    render_oxide_app_host_debug_summary_note, render_oxide_tick_ring_note,
-    resolve_existing_uikit_power_trace, start_console_marker_or_completion_observed,
-    summarize_device_gpu_metrics_from_tables, summarize_energy_table,
-    summarize_time_profile_from_xml, summarize_trace_signpost_metrics_from_tables,
-    uikit_case_in_compare_device_family, uikit_case_in_compare_device_watchable_smoke,
-    uikit_case_in_official_device_battery, uikit_case_requires_normalized_camera_contract,
-    uikit_device_metrics_case_stdout_path, uikit_device_perf_environment_for_test_name,
-    uikit_device_support_required, uikit_device_trace_artifact_exists, uikit_device_trace_enabled,
+    parse_oxide_camera_contract_summary, parse_oxide_frame_cadence_summary,
+    parse_oxide_memory_summary, parse_oxide_stage_summary, parse_oxide_static_idle_summary,
+    parse_oxide_tick_ring, parse_provisioning_profile_team_identifier,
+    parse_react_native_device_report_json, parse_uikit_report_json, parse_xctrace_summary_window,
+    parse_xctrace_tables, parse_xctrace_toc_tables,
+    perf_frame_capture_relative_source_for_test_name, perf_report_matches_case_ids,
+    preferred_xctrace_toc_tables, prepare_resumable_uikit_device_result_root,
+    prepare_uikit_device_perf_xctestrun, render_oxide_app_host_debug_summary_note,
+    render_oxide_tick_ring_note, resolve_existing_uikit_power_trace,
+    start_console_marker_or_completion_observed, summarize_device_gpu_metrics_from_tables,
+    summarize_energy_table, summarize_time_profile_from_xml,
+    summarize_trace_signpost_metrics_from_tables, uikit_case_in_compare_device_family,
+    uikit_case_in_compare_device_watchable_smoke, uikit_case_in_official_device_battery,
+    uikit_case_requires_normalized_camera_contract, uikit_device_metrics_case_stdout_path,
+    uikit_device_perf_environment_for_test_name, uikit_device_support_required,
+    uikit_device_trace_artifact_exists, uikit_device_trace_enabled,
     uikit_only_testing_identifier_for_test_name, uikit_perf_environment_json_for_test_name,
     uikit_perf_environment_json_for_test_name_with_watch_capture,
     uikit_power_trace_candidate_paths, uikit_report_matches_case_ids,
-    validate_normalized_camera_contract, CompareDeviceProofFamilyStatus, CompareDeviceProofStatus,
-    Entitlements, LocationMode, TraceWindow, UIKitCanonicalSignpostSource,
-    UIKitContractCoverageReport, UIKitHostBuildStamp, UIKitMetricFallbackMode, UIKitMetricSource,
-    UIKitMetricSummary, UIKitPerfCase, UIKitPerfComparison, UIKitPerfReport, XctraceCell,
-    XctraceTocTable,
+    validate_normalized_camera_contract, validate_oxide_device_report_metric_contract,
+    validate_uikit_device_report_metric_contract, xctrace_export_input_path_for_args,
+    CompareDeviceProofFamilyStatus, CompareDeviceProofStatus, Entitlements, LocationMode,
+    TraceWindow, UIKitCanonicalSignpostSource, UIKitContractCoverageReport, UIKitHostBuildStamp,
+    UIKitMetricFallbackMode, UIKitMetricSource, UIKitMetricSummary, UIKitPerfCase,
+    UIKitPerfComparison, UIKitPerfReport, XctraceCell, XctraceTocTable,
 };
 
 fn env_test_lock() -> &'static Mutex<()> {
@@ -81,11 +84,38 @@ fn sample_perf_report(case_ids: &[&str]) -> PerfReport {
         generated_label: None,
         cases: case_ids
             .iter()
-            .map(|id| PerfCaseResult { id: String::from(*id), ..PerfCaseResult::default() })
+            .map(|id| PerfCaseResult {
+                id: String::from(*id),
+                refresh_mode: String::from("native"),
+                gated: true,
+                metrics: sample_oxide_device_metrics(),
+                ..PerfCaseResult::default()
+            })
             .collect(),
         coverage: CoverageReport::default(),
         contract: ContractCoverageReport::default(),
         findings: Vec::new(),
+    }
+}
+
+#[test]
+fn oxide_device_contract_source_lists_canonical_families() {
+    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+    for id in [
+        "launch-lifecycle",
+        "primitive-lifecycle",
+        "layout-invalidation",
+        "text-input",
+        "image-pipeline",
+        "lists-grids-chat",
+        "navigation-input-latency",
+        "animation-effects",
+        "state-reconciliation",
+        "os-bridge-overhead",
+        "endurance-memory-thermal",
+        "stress-pathological",
+    ] {
+        assert!(source.contains(id), "missing canonical Oxide device contract family `{id}`");
     }
 }
 
@@ -137,6 +167,24 @@ fn uikit_device_trace_enabled_treats_zero_as_console_only_mode() {
     assert!(!uikit_device_trace_enabled(0));
     assert!(uikit_device_trace_enabled(1));
     assert!(uikit_device_trace_enabled(3));
+}
+
+#[test]
+fn xctrace_export_input_path_is_extracted_for_retry_settle() {
+    let args = vec![
+        String::from("xctrace"),
+        String::from("export"),
+        String::from("--input"),
+        String::from("/tmp/case/metal.trace"),
+        String::from("--xpath"),
+        String::from("/trace-toc/run[1]/data[1]/table[107]"),
+    ];
+
+    assert_eq!(
+        xctrace_export_input_path_for_args(&args),
+        Some(PathBuf::from("/tmp/case/metal.trace"))
+    );
+    assert_eq!(xctrace_export_input_path_for_args(&args[0..2]), None);
 }
 
 #[test]
@@ -598,6 +646,24 @@ fn parse_oxide_memory_summary_maps_memory_metrics() {
     assert_eq!(memory["memory.camera.peak_active_sample_surface_surfaces"].max, 3.0);
     assert_eq!(memory["memory.camera.peak_active_sample_buffers"].max, 4.0);
     assert_eq!(memory["memory.known.total_bytes_est"].samples, 4);
+}
+
+#[test]
+fn parse_oxide_frame_cadence_summary_maps_hitch_and_missed_frames() {
+    let stdout = concat!(
+        "OXIDE_READY testSpinnerSpin\n",
+        "OXIDE_FRAME_CADENCE_SUMMARY {\"metrics\":{\"frame_interval_ms\":{\"unit\":\"ms\",\"min\":8.0,\"max\":20.0,\"mean\":10.0,\"median\":8.3,\"p95\":18.0,\"p99\":20.0,\"samples\":12},\"frame_budget_ms\":{\"unit\":\"ms\",\"min\":8.3,\"max\":8.3,\"mean\":8.3,\"median\":8.3,\"p95\":8.3,\"p99\":8.3,\"samples\":13},\"hitch_ms_per_s\":{\"unit\":\"ms/s\",\"min\":3.5,\"max\":3.5,\"mean\":3.5,\"median\":3.5,\"p95\":3.5,\"p99\":3.5,\"samples\":1},\"missed_frames\":{\"unit\":\"frames\",\"min\":2.0,\"max\":2.0,\"mean\":2.0,\"median\":2.0,\"p95\":2.0,\"p99\":2.0,\"samples\":1},\"missed_frames_per_s\":{\"unit\":\"frames/s\",\"min\":4.0,\"max\":4.0,\"mean\":4.0,\"median\":4.0,\"p95\":4.0,\"p99\":4.0,\"samples\":1}}}\n",
+        "OXIDE_COMPLETE testSpinnerSpin\n"
+    );
+
+    let cadence = parse_oxide_frame_cadence_summary(stdout).expect("parse cadence summary");
+
+    assert_eq!(cadence["hitch_ms_per_s"].median, 3.5);
+    assert_eq!(cadence["missed_frames"].median, 2.0);
+    assert_eq!(cadence["missed_frames_per_s"].unit, "frames/s");
+    assert_eq!(cadence["frame_interval_ms"].p99, 20.0);
+    assert_eq!(cadence["frame_budget_ms"].samples, 13);
+    assert_eq!(cadence["hitch_ms_per_s"].source, UIKitMetricSource::DeviceConsoleFrameCadence);
 }
 
 #[test]
@@ -1168,6 +1234,20 @@ OXIDE_STAGE two\n\
 OXIDE_BENCHMARK_BUILD_FAIL failed - second\n";
 
     assert_eq!(latest_benchmark_build_failure(stdout).as_deref(), Some("failed - second"));
+}
+
+#[test]
+fn device_console_failure_line_returns_last_parked_or_runner_failure() {
+    let stdout = "\
+OXIDE_STAGE parked.fail.foreground failed - parked benchmark lost active foreground state\n\
+noise\n\
+OXIDE_COMPLETE oxide-perf-runner failed\n";
+
+    assert_eq!(
+        device_console_failure_line(stdout).as_deref(),
+        Some("OXIDE_COMPLETE oxide-perf-runner failed")
+    );
+    assert_eq!(device_console_failure_line("OXIDE_COMPLETE testCamera\n"), None);
 }
 
 #[test]
@@ -2458,9 +2538,20 @@ fn retryable_devicectl_json_error_matches_streaming_device_failures() {
     assert!(is_retryable_devicectl_json_error(
         "StreamingAction: Couldn't get the message from the device."
     ));
+    assert!(is_retryable_devicectl_json_error(
+        "ERROR: Failed to allocate RSD device. (com.apple.mobiledevice error -402653181 (0xE8000003))"
+    ));
     assert!(!is_retryable_devicectl_json_error(
         "devicectl device info processes --device 00008150 failed with status 1"
     ));
+}
+
+#[test]
+fn retryable_devicectl_install_error_matches_installcoordination_failures() {
+    assert!(is_retryable_devicectl_install_error(
+        "ERROR: Failed to install the app on the device. Could not get service com.apple.remote.installcoordination_proxy (IXRemoteErrorDomain error 5)"
+    ));
+    assert!(!is_retryable_devicectl_install_error("codesign failed before install"));
 }
 
 #[test]
@@ -2559,6 +2650,9 @@ fn compare_uikit_reports_device_suite_gates_direct_counters() {
                 (String::from("memory_peak_kb"), sample_metric(1.0)),
                 (String::from("gpu_time_s"), sample_metric(1.0)),
                 (String::from("gpu_latency_s"), sample_metric(1.0)),
+                (String::from("hitch_ms_per_s"), sample_metric(0.0)),
+                (String::from("missed_frames"), sample_metric(0.0)),
+                (String::from("missed_frames_per_s"), sample_metric(0.0)),
                 (String::from("gpu_counter.shader_cycles"), sample_metric(1.30)),
             ]),
             ..UIKitPerfCase::default()
@@ -2591,6 +2685,9 @@ fn compare_uikit_reports_device_suite_gates_direct_counters() {
                 (String::from("memory_peak_kb"), sample_metric(1.0)),
                 (String::from("gpu_time_s"), sample_metric(1.0)),
                 (String::from("gpu_latency_s"), sample_metric(1.0)),
+                (String::from("hitch_ms_per_s"), sample_metric(0.0)),
+                (String::from("missed_frames"), sample_metric(0.0)),
+                (String::from("missed_frames_per_s"), sample_metric(0.0)),
                 (String::from("energy_j"), sample_metric(1.0)),
                 (String::from("gpu_counter.shader_cycles"), sample_metric(1.0)),
             ]),
@@ -2602,6 +2699,177 @@ fn compare_uikit_reports_device_suite_gates_direct_counters() {
     assert!(comparison.missing_baseline.is_empty());
     assert_eq!(comparison.regressions.len(), 1);
     assert_eq!(comparison.regressions[0].metric, "gpu_counter.shader_cycles");
+}
+
+#[test]
+fn compare_uikit_reports_device_suite_requires_direct_gpu_and_frame_cadence_metrics() {
+    for metric_name in
+        ["gpu_time_s", "gpu_latency_s", "hitch_ms_per_s", "missed_frames", "missed_frames_per_s"]
+    {
+        let mut metrics = sample_uikit_device_metrics();
+        metrics.remove(metric_name);
+        let current = sample_uikit_device_report(metrics);
+        let baseline = sample_uikit_device_report(sample_uikit_device_metrics());
+
+        let comparison = compare_uikit_reports(&current, &baseline);
+
+        assert_eq!(comparison.matched, 1);
+        assert_eq!(
+            comparison.missing_baseline,
+            vec![format!("uikit.component.label.encode::native::{}", metric_name)]
+        );
+    }
+}
+
+#[test]
+fn validate_uikit_device_report_metric_contract_rejects_missing_gpu_and_cadence_metrics() {
+    assert!(validate_uikit_device_report_metric_contract(&sample_uikit_device_report(
+        sample_uikit_device_metrics()
+    ))
+    .is_ok());
+
+    for metric_name in
+        ["gpu_time_s", "gpu_latency_s", "hitch_ms_per_s", "missed_frames", "missed_frames_per_s"]
+    {
+        let mut metrics = sample_uikit_device_metrics();
+        metrics.remove(metric_name);
+        let report = sample_uikit_device_report(metrics);
+        let err =
+            validate_uikit_device_report_metric_contract(&report).expect_err("missing metric");
+
+        assert!(err.to_string().contains(metric_name), "{err}");
+        assert!(!uikit_report_matches_case_ids(&report, &["uikit.component.label.encode"]));
+    }
+}
+
+#[test]
+fn validate_uikit_device_report_metric_contract_rejects_invalid_distribution_fields() {
+    let mut metrics = sample_uikit_device_metrics();
+    metrics.get_mut("gpu_time_s").expect("gpu metric").p95 = f64::NAN;
+    let report = sample_uikit_device_report(metrics);
+    let err =
+        validate_uikit_device_report_metric_contract(&report).expect_err("invalid distribution");
+
+    assert!(err.to_string().contains("gpu_time_s"), "{err}");
+    assert!(!uikit_report_matches_case_ids(&report, &["uikit.component.label.encode"]));
+
+    let mut metrics = sample_uikit_device_metrics();
+    metrics.get_mut("missed_frames").expect("cadence metric").samples = 0;
+    let report = sample_uikit_device_report(metrics);
+    let err = validate_uikit_device_report_metric_contract(&report)
+        .expect_err("invalid distribution samples");
+
+    assert!(err.to_string().contains("missed_frames"), "{err}");
+    assert!(!uikit_report_matches_case_ids(&report, &["uikit.component.label.encode"]));
+}
+
+#[test]
+fn validate_oxide_device_report_metric_contract_rejects_missing_gpu_memory_and_cadence_metrics() {
+    assert!(validate_oxide_device_report_metric_contract(&sample_oxide_device_report(
+        sample_oxide_device_metrics()
+    ))
+    .is_ok());
+
+    for metric_name in [
+        "memory_peak_kb",
+        "gpu_time_s",
+        "gpu_latency_s",
+        "hitch_ms_per_s",
+        "missed_frames",
+        "missed_frames_per_s",
+    ] {
+        let mut metrics = sample_oxide_device_metrics();
+        metrics.remove(metric_name);
+        let report = sample_oxide_device_report(metrics);
+        let err =
+            validate_oxide_device_report_metric_contract(&report).expect_err("missing metric");
+
+        assert!(err.to_string().contains(metric_name), "{err}");
+        assert!(!perf_report_matches_case_ids(&report, &["cpu.animation.spinner_spin"]));
+    }
+}
+
+#[test]
+fn validate_oxide_device_report_metric_contract_rejects_missing_gpu_and_cadence_distributions() {
+    for metric_key in [
+        "gpu_time_s_p95",
+        "gpu_latency_s_p99",
+        "hitch_ms_per_s_peak",
+        "missed_frames_p50",
+        "missed_frames_per_s_samples",
+    ] {
+        let mut metrics = sample_oxide_device_metrics();
+        metrics.remove(metric_key);
+        let report = sample_oxide_device_report(metrics);
+        let err = validate_oxide_device_report_metric_contract(&report)
+            .expect_err("missing distribution metric");
+
+        assert!(err.to_string().contains(metric_key), "{err}");
+        assert!(!perf_report_matches_case_ids(&report, &["cpu.animation.spinner_spin"]));
+    }
+}
+
+#[test]
+fn validate_oxide_device_report_metric_contract_rejects_invalid_distribution_values() {
+    let mut metrics = sample_oxide_device_metrics();
+    metrics.insert(String::from("gpu_time_s_p95"), f64::NAN);
+    let report = sample_oxide_device_report(metrics);
+    let err = validate_oxide_device_report_metric_contract(&report)
+        .expect_err("invalid distribution metric");
+
+    assert!(err.to_string().contains("gpu_time_s_p95"), "{err}");
+    assert!(!perf_report_matches_case_ids(&report, &["cpu.animation.spinner_spin"]));
+
+    let mut metrics = sample_oxide_device_metrics();
+    metrics.insert(String::from("hitch_ms_per_s_samples"), 0.0);
+    let report = sample_oxide_device_report(metrics);
+    let err = validate_oxide_device_report_metric_contract(&report)
+        .expect_err("invalid distribution samples");
+
+    assert!(err.to_string().contains("hitch_ms_per_s_samples"), "{err}");
+    assert!(!perf_report_matches_case_ids(&report, &["cpu.animation.spinner_spin"]));
+}
+
+#[test]
+fn committed_oxide_device_latest_is_strict_or_explicitly_stale() {
+    let report: PerfReport = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../benchmarks/oxide-device/latest.json"
+    )))
+    .expect("committed Oxide device latest JSON");
+
+    let Err(err) = validate_oxide_device_report_metric_contract(&report) else {
+        return;
+    };
+    let err = err.to_string();
+
+    assert!(err.contains("memory_peak_kb"), "{err}");
+    assert!(err.contains("hitch_ms_per_s"), "{err}");
+    assert!(
+        notes_contain(&report.contract.notes, "metric contract status: stale partial"),
+        "stale Oxide device baseline must explicitly mark its metric contract gap: {err}"
+    );
+}
+
+#[test]
+fn committed_uikit_device_latest_is_strict_or_explicitly_stale() {
+    let report: UIKitPerfReport = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../benchmarks/uikit-device/latest.json"
+    )))
+    .expect("committed UIKit device latest JSON");
+
+    let Err(err) = validate_uikit_device_report_metric_contract(&report) else {
+        return;
+    };
+    let err = err.to_string();
+
+    assert!(err.contains("hitch_ms_per_s"), "{err}");
+    assert!(err.contains("missed_frames"), "{err}");
+    assert!(
+        notes_contain(&report.contract.notes, "metric contract status: stale partial"),
+        "stale UIKit device baseline must explicitly mark its metric contract gap: {err}"
+    );
 }
 
 #[test]
@@ -2632,6 +2900,9 @@ fn compare_uikit_reports_device_suite_gates_energy_when_present() {
                 (String::from("memory_peak_kb"), sample_metric(1.0)),
                 (String::from("gpu_time_s"), sample_metric(1.0)),
                 (String::from("gpu_latency_s"), sample_metric(1.0)),
+                (String::from("hitch_ms_per_s"), sample_metric(0.0)),
+                (String::from("missed_frames"), sample_metric(0.0)),
+                (String::from("missed_frames_per_s"), sample_metric(0.0)),
                 (String::from("energy_j"), sample_metric(1.30)),
             ]),
             ..UIKitPerfCase::default()
@@ -2664,6 +2935,9 @@ fn compare_uikit_reports_device_suite_gates_energy_when_present() {
                 (String::from("memory_peak_kb"), sample_metric(1.0)),
                 (String::from("gpu_time_s"), sample_metric(1.0)),
                 (String::from("gpu_latency_s"), sample_metric(1.0)),
+                (String::from("hitch_ms_per_s"), sample_metric(0.0)),
+                (String::from("missed_frames"), sample_metric(0.0)),
+                (String::from("missed_frames_per_s"), sample_metric(0.0)),
                 (String::from("energy_j"), sample_metric(1.0)),
             ]),
             ..UIKitPerfCase::default()
@@ -3819,6 +4093,103 @@ fn parse_provisioning_profile_team_identifier_reads_team_identifier() {
 
     let team = parse_provisioning_profile_team_identifier(plist);
     assert_eq!(team.as_deref(), Some("6GQ7T2VDQ5"));
+}
+
+fn sample_uikit_device_metrics() -> BTreeMap<String, UIKitMetricSummary> {
+    BTreeMap::from([
+        (String::from("clock_s"), sample_metric(1.0)),
+        (String::from("cpu_time_s"), sample_metric(1.0)),
+        (String::from("cpu_cycles_kc"), sample_metric(1.0)),
+        (String::from("memory_peak_kb"), sample_metric(1.0)),
+        (String::from("gpu_time_s"), sample_metric(1.0)),
+        (String::from("gpu_latency_s"), sample_metric(1.0)),
+        (String::from("hitch_ms_per_s"), sample_metric(0.0)),
+        (String::from("missed_frames"), sample_metric(0.0)),
+        (String::from("missed_frames_per_s"), sample_metric(0.0)),
+    ])
+}
+
+fn sample_uikit_device_report(metrics: BTreeMap<String, UIKitMetricSummary>) -> UIKitPerfReport {
+    UIKitPerfReport {
+        version: 1,
+        suite: String::from("device"),
+        generated_label: None,
+        device_name: String::from("Victor’s iPhone"),
+        energy_status: String::from("direct device"),
+        contract: UIKitContractCoverageReport::default(),
+        notes: Vec::new(),
+        cases: vec![UIKitPerfCase {
+            id: String::from("uikit.component.label.encode"),
+            oxide_case_id: String::from("cpu.component.label.encode"),
+            test_name: String::from("testLabelEncode"),
+            layer: String::from("engine"),
+            scenario: String::from("primitive-view"),
+            style: String::from("idiomatic"),
+            cache_state: String::from("warm"),
+            refresh_mode: String::from("native"),
+            threshold_pct: 0.10,
+            notes: Vec::new(),
+            metrics,
+            ..UIKitPerfCase::default()
+        }],
+    }
+}
+
+fn sample_oxide_device_metrics() -> BTreeMap<String, f64> {
+    let mut metrics = BTreeMap::from([
+        (String::from("clock_s"), 1.0),
+        (String::from("memory_peak_kb"), 42.0),
+        (String::from("gpu_time_s"), 0.1),
+        (String::from("gpu_latency_s"), 0.001),
+        (String::from("hitch_ms_per_s"), 0.0),
+        (String::from("missed_frames"), 0.0),
+        (String::from("missed_frames_per_s"), 0.0),
+    ]);
+    for (metric_name, value) in [
+        ("gpu_time_s", 0.1),
+        ("gpu_latency_s", 0.001),
+        ("hitch_ms_per_s", 0.0),
+        ("missed_frames", 0.0),
+        ("missed_frames_per_s", 0.0),
+    ] {
+        insert_sample_oxide_distribution(&mut metrics, metric_name, value);
+    }
+    metrics
+}
+
+fn insert_sample_oxide_distribution(
+    metrics: &mut BTreeMap<String, f64>,
+    metric_name: &str,
+    value: f64,
+) {
+    metrics.insert(format!("{}_p50", metric_name), value);
+    metrics.insert(format!("{}_p95", metric_name), value);
+    metrics.insert(format!("{}_p99", metric_name), value);
+    metrics.insert(format!("{}_peak", metric_name), value);
+    metrics.insert(format!("{}_samples", metric_name), 3.0);
+}
+
+fn sample_oxide_device_report(metrics: BTreeMap<String, f64>) -> PerfReport {
+    PerfReport {
+        version: 1,
+        suite: String::from("oxide-device"),
+        generated_label: None,
+        cases: vec![PerfCaseResult {
+            id: String::from("cpu.animation.spinner_spin"),
+            refresh_mode: String::from("native"),
+            gated: true,
+            metrics,
+            ..PerfCaseResult::default()
+        }],
+        coverage: CoverageReport::default(),
+        contract: ContractCoverageReport::default(),
+        findings: Vec::new(),
+    }
+}
+
+fn notes_contain(notes: &[String], needle: &str) -> bool {
+    let needle = needle.to_ascii_lowercase();
+    notes.iter().any(|note| note.to_ascii_lowercase().contains(&needle))
 }
 
 fn sample_metric(median: f64) -> UIKitMetricSummary {

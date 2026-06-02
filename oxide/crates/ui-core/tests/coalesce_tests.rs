@@ -13,6 +13,7 @@ fn glyph(vb_off: u32, vb_len: u32, ib_off: u32, ib_len: u32) -> DrawCmd {
     DrawCmd::GlyphRun {
         run: GlyphRun {
             atlas: ImageHandle(7),
+            atlas_revision: 0,
             vb: VertexSpan { offset: vb_off, len: vb_len },
             ib: IndexSpan { offset: ib_off, len: ib_len },
             sdf: false,

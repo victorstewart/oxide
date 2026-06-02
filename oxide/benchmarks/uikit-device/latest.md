@@ -33,6 +33,7 @@
 - The UIKit reports now persist explicit contract coverage so the suite does not over-claim comprehensiveness.
 - Official camera preview rows use the parked microscope full-custom NV12 path (`testCameraNV12LegacyLivePreview`) against the parked AVFoundation preview-layer baseline (`testCameraAVFoundationPreviewLayerLivePreview`). Hybrid preview-layer visible-preview cases remain diagnostic-only and stay out of the default battery.
 - The device report is the authoritative GPU source. Manual per-case Power Profiler traces still gate true energy coverage.
+- Metric contract status: stale partial. This 2026-04-05 baseline predates required frame-cadence hitch and missed-frame distributions; rerun the physical-device baseline before using it as a complete official comparison.
 - The shipping-oriented actual app-host camera comparison remains an explicit bucket. Keep `testCameraNV12LegacyRealAppLivePreview` and `testCameraAVFoundationPreviewLayerRealAppLivePreview` out of the default device battery until the UI-test runner launch path is stable enough to produce repeatable JSON and trace outputs.
 
 ## Case Table

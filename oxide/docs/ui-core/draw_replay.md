@@ -22,7 +22,7 @@ Call flow:
 
 ## Logic narrative
 
-`replay_drawlist` rounds the origin for integer clip translation and keeps the floating origin for geometry. It sets the translated fallback clip first, then walks commands in order. Solid, image-mesh, and glyph commands resolve their vertex spans from the draw-list backing storage; solid vertices, image-mesh vertices, and glyph vertices are translated before they are passed to the encoder. Image-mesh indices are normalized against the resolved vertex span because draw-list producers may store either local span indices or absolute backing-store indices. Rect-based commands, including native camera preview plane markers, translate their rectangles, spinner commands translate their center, and clip pushes are translated on the integer clip stack. Layer markers are ignored because this helper replays already-selected command bodies rather than managing retained layer caches.
+`replay_drawlist` rounds the origin for integer clip translation and keeps the floating origin for geometry. It sets the translated fallback clip first, then walks commands in order. Solid, image-mesh, and glyph commands resolve their vertex spans from the draw-list backing storage; solid vertices, image-mesh vertices, and glyph vertices are translated before they are passed to the encoder. Image-mesh indices are normalized against the resolved vertex span because draw-list producers may store either local span indices or absolute backing-store indices. Rect-based commands, including Oxide-owned `CameraBg` preview commands, translate their rectangles, spinner commands translate their center, and clip pushes are translated on the integer clip stack. Layer markers are ignored because this helper replays already-selected command bodies rather than managing retained layer caches.
 
 ## Preconditions and postconditions; invariants maintained; unsafe invariants if any
 
@@ -30,7 +30,7 @@ The draw list may contain invalid spans; invalid vertex or index spans are treat
 
 ## Edge cases and failure modes
 
-Empty draw lists still set the fallback clip. Invalid solid vertex spans are skipped because there is no geometry to draw. Invalid image-mesh vertex spans or out-of-span image-mesh indices are skipped so the downstream encoder never receives indices that point outside the compact translated span. Invalid glyph spans replay as empty resolved geometry, matching the generic encoder fallback while preventing web backends from reading outside the list storage. Native camera preview replay remains a marker command; unsupported encoders keep the default no-op behavior. Non-finite coordinates are not sanitized here because draw-list producers and renderer backends own those validation contracts.
+Empty draw lists still set the fallback clip. Invalid solid vertex spans are skipped because there is no geometry to draw. Invalid image-mesh vertex spans or out-of-span image-mesh indices are skipped so the downstream encoder never receives indices that point outside the compact translated span. Invalid glyph spans replay as empty resolved geometry, matching the generic encoder fallback while preventing web backends from reading outside the list storage. Camera preview replay remains an Oxide renderer command through `RenderEncoder::draw_camera_bg`; there is no host-native visible preview marker in this path. Non-finite coordinates are not sanitized here because draw-list producers and renderer backends own those validation contracts.
 
 ## Concurrency and memory behavior
 
@@ -63,6 +63,6 @@ pub fn replay_into_encoder(
 
 ## Changelog
 
+- 2026-06-01: updated camera replay documentation after removal of host-native visible preview markers from the product draw-list contract.
 - 2026-05-19: rebased absolute image-mesh indices during translated replay so encoders receive indices relative to the compact translated vertex span.
-- 2026-05-15: translated native camera preview marker rects during replay so host-composited preview planes stay aligned in translated layer/composition paths.
 - 2026-05-14: Translated resolved glyph vertices during replay so web and layer fallback paths place text at the same origin as every other primitive.

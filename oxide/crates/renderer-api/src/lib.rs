@@ -162,6 +162,7 @@ pub struct ImageHandle(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GlyphRun {
     pub atlas: ImageHandle,
+    pub atlas_revision: u64,
     pub vb: VertexSpan,
     pub ib: IndexSpan,
     pub sdf: bool,
@@ -195,7 +196,7 @@ impl fmt::Display for RenderError {
 impl std::error::Error for RenderError {}
 
 // Draw list and encoder API (crate-agnostic)
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct DrawList {
     pub items: alloc::vec::Vec<DrawCmd>,
     // Optional backing arrays for span-based draws. When present, spans
@@ -204,8 +205,26 @@ pub struct DrawList {
     pub indices: alloc::vec::Vec<u16>,
 }
 
+impl DrawList {
+    #[inline]
+    #[must_use]
+    pub fn text_atlas_revision_compatible(&self, atlas: ImageHandle, revision: u64) -> bool {
+        self.text_atlas_revisions_compatible(&[(atlas, revision)])
+    }
+
+    #[must_use]
+    pub fn text_atlas_revisions_compatible(&self, atlases: &[(ImageHandle, u64)]) -> bool {
+        self.items.iter().all(|cmd| match cmd {
+            DrawCmd::GlyphRun { run } => atlases
+                .iter()
+                .any(|(atlas, revision)| run.atlas == *atlas && run.atlas_revision == *revision),
+            _ => true,
+        })
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DrawCmd {
     // Layered rendering: render nested items into an offscreen texture, then composite.
     // Nested items appear between LayerBegin and LayerEnd and are not drawn directly to target.
@@ -223,13 +242,6 @@ pub enum DrawCmd {
     // as a request to composite the latest camera frame behind UI.
     // When unsupported on a platform, it is a no-op.
     CameraBg { rect: RectF, tint: Color, alpha: f32, grayscale: bool, blur: bool, sigma: f32 },
-    // Native compositor camera preview plane. Platform hosts that support this keep
-    // camera frames outside the app renderer and place UI/blur/tint draws above it.
-    // When unsupported on a platform, it is a no-op.
-    NativeCameraPreview { rect: RectF },
-    // Shared native/web hook for app-owned renderers that embed a Topomap globe
-    // at a specific draw-list position. Generic backends ignore it.
-    TopomapGlobe { rect: RectF },
     Spinner { center: [f32; 2], atom: f32, alpha: f32 },
     ClipPush { rect: RectI },
     ClipPop,
@@ -279,8 +291,6 @@ pub trait RenderEncoder {
         _sigma: f32,
     ) {
     }
-    fn draw_native_camera_preview(&mut self, _rect: RectF) {}
-    fn draw_topomap_globe(&mut self, _rect: RectF) {}
     fn draw_spinner(&mut self, center: [f32; 2], atom: f32, alpha: f32);
     fn draw_glyph_run(&mut self, run: &GlyphRun);
     fn draw_glyph_run_resolved(&mut self, run: &GlyphRun, _vertices: &[Vertex], _indices: &[u16]) {

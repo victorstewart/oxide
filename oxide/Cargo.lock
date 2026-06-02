@@ -807,6 +807,7 @@ dependencies = [
  "oxide-test-scenes",
  "oxide-text",
  "oxide-ui-core",
+ "png",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -1001,6 +1002,7 @@ dependencies = [
  "rustybuzz",
  "swash",
  "ttf-parser 0.20.0",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -1030,6 +1032,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -1673,6 +1676,12 @@ name = "unicode-script"
 version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9fb421b350c9aff471779e262955939f565ec18b86c15364e6bdf0d662ca7c1f"
+
+[[package]]
+name = "unicode-segmentation"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6ccf251212114b54433ec949fd6a7841275f9ada20dddd2f29e9ceea4501493"
 
 [[package]]
 name = "unicode-width"

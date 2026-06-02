@@ -32,8 +32,14 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
     private var refreshUpdateLink: UIUpdateLink?
     private var visibleTestOverlay: PerfVisibleTestOverlay?
     private var didRunBenchmark = false
+    private var didFinishBenchmark = false
     private var didScheduleTraceAutostart = false
     private var oxidePerfRunnerSmoke = false
+    private var previousIdleTimerDisabled: Bool?
+    private var foregroundFailure: String?
+    private var pendingReadyName: String?
+    private var pendingReadyRetryScheduled = false
+    private var pendingReadyRetryCount = 0
     private var pendingLaunchScenario: (
         scenario: OxideUIKitLaunchScenario,
         route: String?,
@@ -48,6 +54,89 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
     private var watchModeEnabled: Bool
     {
         perfWatchModeEnabled()
+    }
+
+    private func holdForegroundExecution()
+    {
+        if previousIdleTimerDisabled == nil
+        {
+            previousIdleTimerDisabled = UIApplication.shared.isIdleTimerDisabled
+        }
+        UIApplication.shared.isIdleTimerDisabled = true
+    }
+
+    private func restoreForegroundExecution()
+    {
+        if let previousIdleTimerDisabled
+        {
+            UIApplication.shared.isIdleTimerDisabled = previousIdleTimerDisabled
+            self.previousIdleTimerDisabled = nil
+        }
+    }
+
+    private func publishReadyWhenForegroundActive(_ name: String)
+    {
+        pendingReadyName = name
+        pendingReadyRetryCount = 0
+        publishPendingReadyIfForegroundActive()
+    }
+
+    private func publishPendingReadyIfForegroundActive()
+    {
+        guard let name = pendingReadyName,
+              UIApplication.shared.applicationState == .active,
+              window?.windowScene?.activationState == .foregroundActive else
+        {
+            schedulePendingReadyRetryIfNeeded()
+            return
+        }
+        pendingReadyName = nil
+        pendingReadyRetryScheduled = false
+        emitConsoleLine("OXIDE_READY \(name)")
+        postDarwinNotification(readyNotificationName)
+        schedulePendingTraceAutostartIfNeeded()
+    }
+
+    private func schedulePendingReadyRetryIfNeeded()
+    {
+        guard pendingReadyName != nil,
+              !pendingReadyRetryScheduled,
+              pendingReadyRetryCount < 300,
+              !didFinishBenchmark else
+        {
+            return
+        }
+        pendingReadyRetryScheduled = true
+        pendingReadyRetryCount += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1)
+        {
+            [weak self] in
+            self?.pendingReadyRetryScheduled = false
+            self?.publishPendingReadyIfForegroundActive()
+        }
+    }
+
+    private func markForegroundFailure(_ failure: String)
+    {
+        guard foregroundFailure == nil,
+              !didFinishBenchmark else
+        {
+            return
+        }
+        didFinishBenchmark = true
+        foregroundFailure = failure
+        emitConsoleLine("OXIDE_STAGE parked.fail.foreground \(failure)")
+        postDarwinNotification(failedNotificationName)
+    }
+
+    private func requiresForegroundHandshake() -> Bool
+    {
+        if didFinishBenchmark
+        {
+            return false
+        }
+        return pendingReadyName != nil || benchmark != nil || pendingLaunchScenario != nil ||
+            ProcessInfo.processInfo.environment[perfOxideRunnerEnv] == "1"
     }
 
     private func scheduleTraceAutostartIfRequested(_ body: @escaping @MainActor () -> Void)
@@ -158,6 +247,7 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
         {
             fatalError("expected UIWindowScene for parked benchmark mode")
         }
+        holdForegroundExecution()
         let environment = ProcessInfo.processInfo.environment
         refreshUpdateLink = makeUIKitRefreshUpdateLink(for: windowScene, environment: environment)
         if environment[perfOxideRunnerEnv] == "1"
@@ -169,8 +259,7 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
                 [weak self] in
                 self?.runOxidePerfSuiteIfNeeded()
             }
-            emitConsoleLine("OXIDE_READY oxide-perf-runner")
-            postDarwinNotification(readyNotificationName)
+            publishReadyWhenForegroundActive("oxide-perf-runner")
             return
         }
         guard let caseName = environment[parkedCaseEnv],
@@ -187,8 +276,7 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
                         [weak self] in
                         self?.runLaunchScenarioIfNeeded()
                     }
-                    emitConsoleLine("OXIDE_READY \(launch.scenario.rawValue)")
-                    postDarwinNotification(readyNotificationName)
+                    publishReadyWhenForegroundActive(launch.scenario.rawValue)
                     return
                 }
                 let window = UIWindow(windowScene: windowScene)
@@ -230,20 +318,57 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
             self?.runBenchmarkIfNeeded()
         }
 
-        emitConsoleLine("OXIDE_READY \(caseName)")
-        postDarwinNotification(readyNotificationName)
+        publishReadyWhenForegroundActive(caseName)
     }
 
     func sceneDidBecomeActive(_ scene: UIScene)
     {
         emitConsoleLine("OXIDE_STAGE parked.sceneDidBecomeActive")
+        holdForegroundExecution()
+        publishPendingReadyIfForegroundActive()
         schedulePendingTraceAutostartIfNeeded()
         scheduleWatchAutostartIfNeeded()
     }
 
+    func sceneWillResignActive(_ scene: UIScene)
+    {
+        emitConsoleLine("OXIDE_STAGE parked.sceneWillResignActive")
+        if didRunBenchmark || requiresForegroundHandshake()
+        {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25)
+            {
+                [weak self] in
+                guard let self,
+                      !self.didFinishBenchmark,
+                      UIApplication.shared.applicationState != .active ||
+                          self.window?.windowScene?.activationState != .foregroundActive else
+                {
+                    return
+                }
+                self.markForegroundFailure("failed - parked benchmark lost active foreground state")
+            }
+        }
+    }
+
+    func sceneDidEnterBackground(_ scene: UIScene)
+    {
+        emitConsoleLine("OXIDE_STAGE parked.sceneDidEnterBackground")
+        if didRunBenchmark || requiresForegroundHandshake()
+        {
+            markForegroundFailure("failed - parked benchmark entered background")
+        }
+    }
+
+    func sceneDidDisconnect(_ scene: UIScene)
+    {
+        restoreForegroundExecution()
+    }
+
     private func runBenchmarkIfNeeded()
     {
-        guard !didRunBenchmark, let benchmark else
+        guard !didRunBenchmark,
+              !didFinishBenchmark,
+              let benchmark else
         {
             return
         }
@@ -254,7 +379,11 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
             measureIterations: benchmark.consoleMeasureIterations,
             benchmarkIterations: benchmark.iterations
         )
-        let consoleSamples = runConsoleMeasuredBenchmarkPasses(benchmark)
+        let consoleSamples = runConsoleMeasuredBenchmarkPassesWithCadence(benchmark)
+        if let cadenceLine = consoleSamples.frameCadenceSummaryLine
+        {
+            emitConsoleLine(cadenceLine)
+        }
         if benchmark.emitGenericWorkloadSummary,
            let workloadSummary = summarizeStageSamples(consoleSamples.workloadMs),
            let stageLine = encodeOxideStageSummaryLine(stages: ["workload": workloadSummary])
@@ -276,17 +405,21 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
         {
             emitConsoleLine(line)
         }
-        if let failure = takeBenchmarkBuildFailure()
+        if let failure = foregroundFailure ?? takeBenchmarkBuildFailure()
         {
+            didFinishBenchmark = true
             emitConsoleLine("OXIDE_STAGE parked.fail \(benchmark.testName) \(failure)")
+            restoreForegroundExecution()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1)
             {
                 _exit(1)
             }
             return
         }
+        didFinishBenchmark = true
         emitConsoleLine("OXIDE_COMPLETE \(benchmark.testName)")
         postDarwinNotification(completeNotificationName)
+        restoreForegroundExecution()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1)
         {
             _exit(0)
@@ -296,6 +429,7 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
     private func runLaunchScenarioIfNeeded()
     {
         guard !didRunBenchmark,
+              !didFinishBenchmark,
               let launch = pendingLaunchScenario,
               let window else
         {
@@ -318,6 +452,7 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
         CATransaction.flush()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05)
         {
+            self.didFinishBenchmark = true
             emitConsoleLine("OXIDE_COMPLETE \(launch.scenario.rawValue)")
             postDarwinNotification(completeNotificationName)
         }
@@ -325,7 +460,8 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
 
     private func runOxidePerfSuiteIfNeeded()
     {
-        guard !didRunBenchmark else
+        guard !didRunBenchmark,
+              !didFinishBenchmark else
         {
             return
         }
@@ -333,6 +469,7 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
         emitConsoleLine("OXIDE_START oxide-perf-runner")
         guard let json = collectOxidePerfRunnerJSON(smoke: oxidePerfRunnerSmoke) else
         {
+            didFinishBenchmark = true
             emitConsoleLine("OXIDE_COMPLETE oxide-perf-runner failed")
             postDarwinNotification(completeNotificationName)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1)
@@ -342,6 +479,7 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
             return
         }
         emitOxidePerfRunnerJSON(json)
+        didFinishBenchmark = true
         emitConsoleLine("OXIDE_COMPLETE oxide-perf-runner")
         postDarwinNotification(completeNotificationName)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1)

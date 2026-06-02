@@ -158,3 +158,73 @@ fn recommend_for_preset_none_when_unavailable() {
 
     assert!(recommend_for_preset_from(1440, 60, false, false, &pix, &presets).is_none());
 }
+
+fn source_block<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+    let start_idx = source.find(start).expect("source block start");
+    let rest = &source[start_idx..];
+    let end_idx = rest.find(end).expect("source block end");
+    &rest[..end_idx]
+}
+
+#[test]
+fn metal_app_host_uses_window_raw_touch_stream_and_low_latency_layer() {
+    let source = include_str!("../src/OxideMetalAppHost.m");
+    let window_block = source_block(
+        source,
+        "@implementation OxideMetalHostWindow",
+        "@interface OxideMetalHostViewController",
+    );
+    let app_block = source_block(
+        source,
+        "@implementation OxideMetalHostApplication",
+        "@interface OxideMetalHostWindow",
+    );
+    assert!(
+        window_block.contains("- (void)sendEvent:(UIEvent *)event")
+            && window_block.contains("event.allTouches")
+            && window_block.contains("[gOxideMetalHostView emitTouch:touch phase:phase];")
+            && window_block.find("[gOxideMetalHostView emitTouch:touch phase:phase];")
+                < window_block.find("[super sendEvent:event];"),
+        "the standalone iOS Metal host must forward raw UIEvent.allTouches through its Oxide-owned UIWindow before UIKit view dispatch"
+    );
+    assert!(
+        !app_block.contains("event.allTouches") && !app_block.contains("emitTouch:touch"),
+        "UIApplication sendEvent must not duplicate the Oxide-owned window raw touch stream"
+    );
+    assert!(
+        source.contains("self.multipleTouchEnabled = YES;")
+            && source.contains("layer.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;")
+            && source.contains("layer.framebufferOnly = YES;")
+            && source.contains("layer.presentsWithTransaction = NO;")
+            && source.contains("layer.allowsNextDrawableTimeout = YES;")
+            && source.contains("layer.maximumDrawableCount = 3;"),
+        "the standalone iOS Metal host should use timeout-capable low-latency CAMetalLayer defaults required by the Oxide performance contract"
+    );
+}
+
+#[test]
+fn metal_app_host_prepares_frame_before_acquiring_drawable() {
+    let source = include_str!("../src/OxideMetalAppHost.m");
+    let tick =
+        source.split("- (void)onTick:").nth(1).expect("standalone Metal host tick implementation");
+    let prepare = tick.find("config->prepare_frame").expect("prepare frame call");
+    let acquire = tick.find("nextDrawable").expect("drawable acquisition");
+    let submit = tick
+        .find("config->submit_prepared_frame((__bridge void *)drawable)")
+        .expect("prepared frame submit call");
+    let cancel = tick.find("config->cancel_prepared_frame();").expect("prepared frame cancel call");
+
+    assert!(
+        prepare < acquire,
+        "standalone iOS Metal host must prepare CPU work before nextDrawable"
+    );
+    assert!(
+        acquire < submit,
+        "standalone iOS Metal host must acquire drawable immediately before submit"
+    );
+    assert!(acquire < cancel && cancel < submit, "nil drawable branch must cancel prepared frame");
+    assert!(
+        !tick.contains("config->frame("),
+        "standalone iOS Metal host must not use early-drawable frame callback"
+    );
+}

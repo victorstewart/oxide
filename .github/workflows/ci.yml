@@ -36,20 +36,20 @@ jobs:
 
       - name: Unit tests (ui-core, timing)
         working-directory: oxide
-        run: cargo test -j$(sysctl -n hw.ncpu) -p oxide-ui-core -p oxide-timing
+        run: cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-ui-core -p oxide-timing
 
       - name: Perf tooling tests
         working-directory: oxide
         run: |
-          cargo test -j$(sysctl -n hw.ncpu) -p oxide-perf-runner --test report_tests
-          cargo test -j$(sysctl -n hw.ncpu) -p xtask --tests
-          cargo test -j$(sysctl -n hw.ncpu) -p oxide-renderer-metal glyph_icb_cpu_recording_uses_shared_storage
-          cargo test -j$(sysctl -n hw.ncpu) -p oxide-renderer-metal macos_defaults_disable_icb_but_keep_layer_cache
+          cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner --test report_tests
+          cargo test --locked -j$(sysctl -n hw.ncpu) -p xtask --tests
+          cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-renderer-metal glyph_icb_cpu_recording_uses_shared_storage
+          cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-renderer-metal macos_defaults_disable_icb_but_keep_layer_cache
 
       - name: Perf sweep
         run: |
           ./scripts/sweep_local.sh "0.6,0.7,0.75,0.8,0.9" "0.15,0.25,0.33" "oxide/Cargo.toml"
-          cargo run --release -j$(sysctl -n hw.ncpu) --manifest-path tools/sweep_agg/Cargo.toml -- --input sweep.txt --csv sweep.csv --json sweep.json
+          cargo run --release --locked -j$(sysctl -n hw.ncpu) --manifest-path tools/sweep_agg/Cargo.toml -- --input sweep.txt --csv sweep.csv --json sweep.json
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -57,7 +57,7 @@ jobs:
       - name: Workspace perf compare
         working-directory: oxide
         run: |
-          cargo run --release -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --compare benchmarks/workspace/latest.json --json-out benchmarks/workspace/ci-current.json --markdown-out benchmarks/workspace/ci-current.md
+          cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --compare benchmarks/workspace/latest.json --json-out benchmarks/workspace/ci-current.json --markdown-out benchmarks/workspace/ci-current.md
 
       - name: Static goldens
         env:
@@ -69,7 +69,7 @@ jobs:
           SNAPSHOT_FONT_PATH: fonts/Inter-Regular.ttf
         run: |
           ./scripts/run_anim.sh
-          cargo run --release -j$(sysctl -n hw.ncpu) --manifest-path tools/anim_agg/Cargo.toml -- --input artifacts/anim/sweep.txt --csv artifacts/anim/sweep.csv --json artifacts/anim/summary.json
+          cargo run --release --locked -j$(sysctl -n hw.ncpu) --manifest-path tools/anim_agg/Cargo.toml -- --input artifacts/anim/sweep.txt --csv artifacts/anim/summary.json
 
       - name: Upload artifacts
         if: always()

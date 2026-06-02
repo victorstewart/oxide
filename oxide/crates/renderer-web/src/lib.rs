@@ -26,12 +26,70 @@ pub struct WebRendererStats {
     pub height: u32,
     pub scale: f32,
     pub draws: u32,
+    pub draw_items: u32,
+    pub draw_pipeline_binds: u32,
+    pub draw_bind_group_binds: u32,
+    pub draw_scissor_sets: u32,
     pub solid_tris: u32,
     pub image_draws: u32,
+    pub image_mesh_draws: u32,
+    pub nine_slice_draws: u32,
     pub glyph_quads: u32,
+    pub sdf_glyph_quads: u32,
     pub layer_draws: u32,
+    pub scene3d_draws: u32,
+    pub id_mask_draws: u32,
+    pub backdrop_draws: u32,
+    pub visual_effect_draws: u32,
+    pub effect_uniform_writes: u32,
+    pub effect_uniform_bytes: u64,
+    pub effect_uniform_slots: u32,
+    pub spinner_draws: u32,
+    pub camera_bg_draws: u32,
     pub clip_depth_peak: u32,
     pub damage_rects: u32,
+    pub render_passes: u32,
+    pub clear_passes: u32,
+    pub draw_passes: u32,
+    pub scene3d_passes: u32,
+    pub scene3d_overlay_passes: u32,
+    pub id_mask_raster_passes: u32,
+    pub id_mask_field_seed_passes: u32,
+    pub id_mask_field_jump_passes: u32,
+    pub id_mask_compositor_passes: u32,
+    pub present_passes: u32,
+    pub texture_copies: u32,
+    pub command_buffers: u32,
+    pub gpu_timestamp_query_supported: bool,
+    pub gpu_timestamp_frame_id: u64,
+    pub gpu_timestamp_passes: u32,
+    pub gpu_timestamp_total_ns: u64,
+    pub gpu_timestamp_clear_ns: u64,
+    pub gpu_timestamp_draw_ns: u64,
+    pub gpu_timestamp_scene3d_ns: u64,
+    pub gpu_timestamp_scene3d_overlay_ns: u64,
+    pub gpu_timestamp_id_mask_raster_ns: u64,
+    pub gpu_timestamp_id_mask_field_seed_ns: u64,
+    pub gpu_timestamp_id_mask_field_jump_ns: u64,
+    pub gpu_timestamp_id_mask_compositor_ns: u64,
+    pub gpu_timestamp_present_ns: u64,
+    pub gpu_timestamp_max_pass_ns: u64,
+    pub gpu_timestamp_readback_skips: u32,
+    pub buffer_upload_bytes: u64,
+    pub texture_upload_bytes: u64,
+    pub buffer_grows: u32,
+    pub texture_creates: u32,
+    pub bind_group_creates: u32,
+    pub pipeline_creates: u32,
+    pub sampler_creates: u32,
+    pub mesh3d_creates: u32,
+    pub image_upload_temp_allocs: u32,
+    pub image_upload_temp_bytes: u64,
+    pub image_upload_scratch_bytes: u64,
+    pub image_upload_scratch_grows: u32,
+    pub cpu_scratch_bytes: u64,
+    pub cpu_scratch_grows: u32,
+    pub cpu_scratch_growth_bytes: u64,
 }
 
 impl Default for WebRendererStats {
@@ -42,12 +100,70 @@ impl Default for WebRendererStats {
             height: 0,
             scale: 1.0,
             draws: 0,
+            draw_items: 0,
+            draw_pipeline_binds: 0,
+            draw_bind_group_binds: 0,
+            draw_scissor_sets: 0,
             solid_tris: 0,
             image_draws: 0,
+            image_mesh_draws: 0,
+            nine_slice_draws: 0,
             glyph_quads: 0,
+            sdf_glyph_quads: 0,
             layer_draws: 0,
+            scene3d_draws: 0,
+            id_mask_draws: 0,
+            backdrop_draws: 0,
+            visual_effect_draws: 0,
+            effect_uniform_writes: 0,
+            effect_uniform_bytes: 0,
+            effect_uniform_slots: 0,
+            spinner_draws: 0,
+            camera_bg_draws: 0,
             clip_depth_peak: 0,
             damage_rects: 0,
+            render_passes: 0,
+            clear_passes: 0,
+            draw_passes: 0,
+            scene3d_passes: 0,
+            scene3d_overlay_passes: 0,
+            id_mask_raster_passes: 0,
+            id_mask_field_seed_passes: 0,
+            id_mask_field_jump_passes: 0,
+            id_mask_compositor_passes: 0,
+            present_passes: 0,
+            texture_copies: 0,
+            command_buffers: 0,
+            gpu_timestamp_query_supported: false,
+            gpu_timestamp_frame_id: 0,
+            gpu_timestamp_passes: 0,
+            gpu_timestamp_total_ns: 0,
+            gpu_timestamp_clear_ns: 0,
+            gpu_timestamp_draw_ns: 0,
+            gpu_timestamp_scene3d_ns: 0,
+            gpu_timestamp_scene3d_overlay_ns: 0,
+            gpu_timestamp_id_mask_raster_ns: 0,
+            gpu_timestamp_id_mask_field_seed_ns: 0,
+            gpu_timestamp_id_mask_field_jump_ns: 0,
+            gpu_timestamp_id_mask_compositor_ns: 0,
+            gpu_timestamp_present_ns: 0,
+            gpu_timestamp_max_pass_ns: 0,
+            gpu_timestamp_readback_skips: 0,
+            buffer_upload_bytes: 0,
+            texture_upload_bytes: 0,
+            buffer_grows: 0,
+            texture_creates: 0,
+            bind_group_creates: 0,
+            pipeline_creates: 0,
+            sampler_creates: 0,
+            mesh3d_creates: 0,
+            image_upload_temp_allocs: 0,
+            image_upload_temp_bytes: 0,
+            image_upload_scratch_bytes: 0,
+            image_upload_scratch_grows: 0,
+            cpu_scratch_bytes: 0,
+            cpu_scratch_grows: 0,
+            cpu_scratch_growth_bytes: 0,
         }
     }
 }
@@ -149,8 +265,66 @@ fn copy_rgba_rows(width: u32, height: u32, data: &[u8], row_bytes: usize) -> Opt
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn copy_rgba_rows_into(
+    out: &mut Vec<u8>,
+    width: u32,
+    height: u32,
+    data: &[u8],
+    row_bytes: usize,
+) -> Option<bool> {
+    let row_width = (width as usize).checked_mul(4)?;
+    let total = (height as usize).checked_mul(row_width)?;
+    if row_bytes < row_width {
+        return None;
+    }
+    if data.len() < row_bytes.checked_mul(height as usize)? {
+        return None;
+    }
+    let grew = out.capacity() < total;
+    out.clear();
+    if grew {
+        out.reserve_exact(total.saturating_sub(out.capacity()));
+    }
+    for y in 0..height as usize {
+        let src = y.checked_mul(row_bytes)?;
+        out.extend_from_slice(&data[src..src + row_width]);
+    }
+    Some(grew)
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn copy_a8_rows(width: u32, height: u32, data: &[u8], row_bytes: usize) -> Option<Vec<u8>> {
     copy_rows(width, height, 1, data, row_bytes)
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn copy_a8_rows_to_rgba_into(
+    out: &mut Vec<u8>,
+    width: u32,
+    height: u32,
+    data: &[u8],
+    row_bytes: usize,
+) -> Option<bool> {
+    let row_width = width as usize;
+    let total_pixels = (height as usize).checked_mul(row_width)?;
+    let total = total_pixels.checked_mul(4)?;
+    if row_bytes < row_width {
+        return None;
+    }
+    if data.len() < row_bytes.checked_mul(height as usize)? {
+        return None;
+    }
+    let grew = out.capacity() < total;
+    out.resize(total, 255);
+    out.fill(255);
+    for y in 0..height as usize {
+        let src = y.checked_mul(row_bytes)?;
+        let dst = y.checked_mul(row_width)?.checked_mul(4)?;
+        for x in 0..row_width {
+            out[dst + x * 4 + 3] = data[src + x];
+        }
+    }
+    Some(grew)
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -216,9 +390,10 @@ mod wasm {
     mod webgpu;
 
     use super::{
-        a8_to_rgba, color_cache_key, color_to_css, copy_a8_rows, copy_rgba_rows,
-        layer_physical_dimension, logical_dimension, normalized_index_mode, resolve_index,
-        sanitize_scale, NormalizedIndexMode, WebRendererStats,
+        a8_to_rgba, color_cache_key, color_to_css, copy_a8_rows, copy_a8_rows_to_rgba_into,
+        copy_rgba_rows, copy_rgba_rows_into, layer_physical_dimension, logical_dimension,
+        normalized_index_mode, resolve_index, sanitize_scale, NormalizedIndexMode,
+        WebRendererStats,
     };
     use oxide_renderer_api as api;
     use std::collections::BTreeMap;
@@ -262,7 +437,6 @@ mod wasm {
         images: Vec<Option<WebImage>>,
         layers: BTreeMap<u32, CachedLayer>,
         layer_stack: Vec<LayerFrame>,
-        camera_background: Option<api::ImageHandle>,
         width: u32,
         height: u32,
         scale: f32,
@@ -296,7 +470,6 @@ mod wasm {
                 images: vec![None],
                 layers: BTreeMap::new(),
                 layer_stack: Vec::new(),
-                camera_background: None,
                 width: 0,
                 height: 0,
                 scale: 1.0,
@@ -361,28 +534,6 @@ mod wasm {
             row_bytes: usize,
         ) {
             let _ = self.try_image_update_a8(handle, x, y, width, height, data, row_bytes);
-        }
-
-        /// Publishes the latest camera frame for subsequent `DrawCmd::CameraBg` commands.
-        pub fn set_camera_background_rgba8(
-            &mut self,
-            width: u32,
-            height: u32,
-            data: &[u8],
-            row_bytes: usize,
-        ) -> Result<(), api::RenderError> {
-            if let Some(handle) = self.camera_background {
-                if self
-                    .image(handle)
-                    .is_some_and(|image| image.width == width && image.height == height)
-                {
-                    return self
-                        .try_image_update_rgba8(handle, 0, 0, width, height, data, row_bytes);
-                }
-            }
-            self.camera_background =
-                Some(self.try_image_create_rgba8(width, height, data, row_bytes)?);
-            Ok(())
         }
 
         pub fn try_image_create_rgba8(
@@ -584,10 +735,13 @@ mod wasm {
                     self.draw_nine_slice(*tex, *rect, *slice, *alpha)
                 }
                 api::DrawCmd::Backdrop { rect, sigma, tint, alpha } => {
+                    self.stats.backdrop_draws = self.stats.backdrop_draws.saturating_add(1);
                     self.draw_backdrop_fallback(*rect, *sigma, *tint, *alpha)
                 }
                 api::DrawCmd::VisualEffect { rect, effect } => {
                     let tint = effect.tint();
+                    self.stats.visual_effect_draws =
+                        self.stats.visual_effect_draws.saturating_add(1);
                     self.draw_backdrop_fallback(
                         *rect,
                         effect.blur_intensity() * 72.0,
@@ -595,12 +749,9 @@ mod wasm {
                         tint.a,
                     );
                 }
-                api::DrawCmd::CameraBg { rect, tint, alpha, grayscale, blur, sigma } => {
-                    self.draw_camera_background(*rect, *tint, *alpha, *grayscale, *blur, *sigma);
-                }
-                api::DrawCmd::NativeCameraPreview { .. } => {}
-                api::DrawCmd::TopomapGlobe { .. } => {}
+                api::DrawCmd::CameraBg { .. } => {}
                 api::DrawCmd::Spinner { center, atom, alpha } => {
+                    self.stats.spinner_draws = self.stats.spinner_draws.saturating_add(1);
                     self.draw_spinner_shape(*center, *atom, *alpha)
                 }
                 api::DrawCmd::ClipPush { rect } => self.push_clip(*rect),
@@ -836,6 +987,9 @@ mod wasm {
             ib: api::IndexSpan,
             alpha: f32,
         ) {
+            if self.image(handle).is_none() {
+                return;
+            }
             let Some(vertices) = vertex_slice(list, vb) else {
                 return;
             };
@@ -848,6 +1002,7 @@ mod wasm {
                 };
                 Some(mode)
             };
+            self.stats.image_mesh_draws = self.stats.image_mesh_draws.saturating_add(1);
             draw_vertex_quads(vertices, indices, mode, |quad| {
                 self.draw_image_mesh_quad(handle, quad, alpha);
             });
@@ -921,6 +1076,9 @@ mod wasm {
             if result.is_ok() {
                 self.stats.draws = self.stats.draws.saturating_add(1);
                 self.stats.glyph_quads = self.stats.glyph_quads.saturating_add(1);
+                if run.sdf {
+                    self.stats.sdf_glyph_quads = self.stats.sdf_glyph_quads.saturating_add(1);
+                }
             }
         }
 
@@ -957,6 +1115,7 @@ mod wasm {
             };
             let iw = image.width as f32;
             let ih = image.height as f32;
+            self.stats.nine_slice_draws = self.stats.nine_slice_draws.saturating_add(1);
             let left = slice.left.clamp(0.0, iw);
             let right = slice.right.clamp(0.0, iw - left);
             let top = slice.top.clamp(0.0, ih);
@@ -1077,32 +1236,6 @@ mod wasm {
 
         fn current_surface_origin(&self) -> (f32, f32) {
             self.layer_stack.last().map(|frame| (frame.rect.x, frame.rect.y)).unwrap_or((0.0, 0.0))
-        }
-
-        fn draw_camera_background(
-            &mut self,
-            rect: api::RectF,
-            tint: api::Color,
-            alpha: f32,
-            grayscale: bool,
-            blur: bool,
-            sigma: f32,
-        ) {
-            let Some(handle) = self.camera_background else {
-                return;
-            };
-            let Some(image) = self.image(handle) else {
-                return;
-            };
-            let src = api::RectF::new(0.0, 0.0, image.width as f32, image.height as f32);
-            let filter = camera_filter(grayscale, blur, sigma);
-            self.draw_image_rect_with_filter(handle, rect, src, alpha, filter.as_deref());
-            if tint.a > 0.0 {
-                let fill = api::Color::rgba(tint.r, tint.g, tint.b, tint.a * alpha.clamp(0.0, 1.0));
-                self.ctx.set_fill_style_str(&color_to_css(fill));
-                self.ctx.fill_rect(rect.x as f64, rect.y as f64, rect.w as f64, rect.h as f64);
-                self.stats.draws = self.stats.draws.saturating_add(1);
-            }
         }
 
         fn draw_spinner_shape(&mut self, center: [f32; 2], atom: f32, alpha: f32) {
@@ -1376,8 +1509,12 @@ mod wasm {
         }
     }
 
-    fn draw_vertex_quads<F>(vertices: &[api::Vertex], indices: &[u16], mode: Option<NormalizedIndexMode>, mut draw: F)
-    where
+    fn draw_vertex_quads<F>(
+        vertices: &[api::Vertex],
+        indices: &[u16],
+        mode: Option<NormalizedIndexMode>,
+        mut draw: F,
+    ) where
         F: FnMut(&[api::Vertex]),
     {
         let Some(mode) = mode else {
@@ -1387,7 +1524,9 @@ mod wasm {
         for quad_indices in indices.chunks_exact(6) {
             let quad = quad_indices
                 .iter()
-                .filter_map(|index| resolve_index(*index, mode).and_then(|idx| vertices.get(idx)).copied())
+                .filter_map(|index| {
+                    resolve_index(*index, mode).and_then(|idx| vertices.get(idx)).copied()
+                })
                 .collect::<Vec<_>>();
             if quad.len() == 6 {
                 draw(&quad);
@@ -1426,27 +1565,6 @@ mod wasm {
             (max_u - min_u).clamp(0.0, 1.0) * width as f32,
             (max_v - min_v).clamp(0.0, 1.0) * height as f32,
         )
-    }
-
-    fn camera_filter(grayscale: bool, blur: bool, sigma: f32) -> Option<String> {
-        let mut filter = String::new();
-        if grayscale {
-            filter.push_str("grayscale(100%)");
-        }
-        if blur && sigma.is_finite() && sigma > 0.0 {
-            if !filter.is_empty() {
-                filter.push(' ');
-            }
-            let _ = core::fmt::Write::write_fmt(
-                &mut filter,
-                format_args!("blur({:.1}px)", sigma.min(96.0)),
-            );
-        }
-        if filter.is_empty() {
-            None
-        } else {
-            Some(filter)
-        }
     }
 
     fn rounded_rect_path(ctx: &CanvasRenderingContext2d, rect: api::RectF, radii: [f32; 4]) {
@@ -1534,7 +1652,22 @@ mod native_stub {
         }
 
         fn encode_pass(&mut self, list: &api::DrawList) {
-            self.stats.draws = list.items.len() as u32;
+            let draw_count = list
+                .items
+                .iter()
+                .filter(|item| {
+                    !matches!(
+                        item,
+                        api::DrawCmd::CameraBg { .. }
+                            | api::DrawCmd::LayerBegin { .. }
+                            | api::DrawCmd::LayerEnd
+                            | api::DrawCmd::ClipPush { .. }
+                            | api::DrawCmd::ClipPop
+                    )
+                })
+                .count()
+                .min(u32::MAX as usize) as u32;
+            self.stats.draws = draw_count;
         }
 
         fn submit(&mut self, _token: api::FrameToken) -> Result<(), api::RenderError> {

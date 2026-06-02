@@ -100,12 +100,6 @@ pub fn replay_drawlist(
                     *blur,
                     *sigma,
                 ),
-            DrawCmd::NativeCameraPreview { rect } => {
-                encoder.draw_native_camera_preview(translate_rect(*rect, offset_x, offset_y))
-            }
-            DrawCmd::TopomapGlobe { rect } => {
-                encoder.draw_topomap_globe(translate_rect(*rect, offset_x, offset_y));
-            }
             DrawCmd::ClipPush { rect } => {
                 let translated = translate_clip(*rect, offset_ix, offset_iy);
                 clip_stack.push(translated);

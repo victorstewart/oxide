@@ -43,26 +43,31 @@ fn source_between<'a>(source: &'a str, start_marker: &str, end_marker: &str) -> 
     &source[start..end]
 }
 
-fn write_rgba_stub(ptr: *const u8, len: usize, expected: &str, out: *mut TestOxideImageData, rgba: [u8; 4])
-{
-   let identifier = unsafe {
-      std::str::from_utf8(std::slice::from_raw_parts(ptr, len)).expect("valid asset id")
-   };
-   assert_eq!(identifier, expected);
-   assert!(!out.is_null());
+fn write_rgba_stub(
+    ptr: *const u8,
+    len: usize,
+    expected: &str,
+    out: *mut TestOxideImageData,
+    rgba: [u8; 4],
+) {
+    let identifier = unsafe {
+        std::str::from_utf8(std::slice::from_raw_parts(ptr, len)).expect("valid asset id")
+    };
+    assert_eq!(identifier, expected);
+    assert!(!out.is_null());
 
-   let mut bytes = rgba.to_vec();
-   let data_ptr = bytes.as_mut_ptr();
-   let data_len = bytes.len();
-   std::mem::forget(bytes);
+    let mut bytes = rgba.to_vec();
+    let data_ptr = bytes.as_mut_ptr();
+    let data_len = bytes.len();
+    std::mem::forget(bytes);
 
-   unsafe {
-      (*out).data_ptr = data_ptr.cast_const();
-      (*out).data_len = data_len;
-      (*out).width = 1;
-      (*out).height = 1;
-      (*out).row_bytes = 4;
-   }
+    unsafe {
+        (*out).data_ptr = data_ptr.cast_const();
+        (*out).data_len = data_len;
+        (*out).width = 1;
+        (*out).height = 1;
+        (*out).row_bytes = 4;
+    }
 }
 
 #[unsafe(no_mangle)]

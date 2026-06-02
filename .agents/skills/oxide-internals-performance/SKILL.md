@@ -188,11 +188,11 @@ Current draw-command families include:
 - images: `Image`, `ImageMesh`, `NineSlice`;
 - text: `GlyphRun`;
 - effects: `Backdrop`, `VisualEffect`;
-- camera: `CameraBg`, `NativeCameraPreview`;
-- embedded/custom: `TopomapGlobe`;
+- camera: `CameraBg`;
 - clips: `ClipPush`, `ClipPop`.
 
 Add new commands only when they create a measurable renderer win or a clear semantic boundary. Do not add command variants that bake scene-specific business logic into the renderer.
+External app objects, including product-specific globes or maps, must use generic Oxide APIs such as Scene3D or app-owned draw lists instead of adding named app commands to Oxide internals.
 
 ### Render-list lowering
 
@@ -236,7 +236,7 @@ Text is a performance and correctness subsystem, not a primitive draw detail.
 
 - Keep camera/video/image frames on the GPU after acquisition.
 - Use platform APIs only for the lowest necessary acquisition bridge; Oxide owns visible preview rendering/composition/pacing unless the path is explicitly diagnostic.
-- Keep `CameraBg` and `NativeCameraPreview` measurement buckets separate.
+- Keep product camera preview measurements separate from diagnostic visible-preview-layer baselines.
 - For camera preview work, instrument fine-grained stages: frame acquisition, texture bridge/publication, renderer fetch, command-buffer creation, encoder creation, bind, draw, end encoding, present, commit, submission polling, and host tick overhead.
 - Do not treat `AVCaptureVideoPreviewLayer` as a shipping renderer path for Oxide. Use it only as a diagnostic baseline.
 - Use NV12/YUV paths where applicable; avoid CPU color conversion in the frame loop.

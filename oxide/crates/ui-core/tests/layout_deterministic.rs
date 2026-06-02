@@ -53,7 +53,11 @@ fn layout_respects_margin_padding_and_transform() {
     );
     tree.layout(200.0, 120.0);
 
-    // The node's top-left should factor in root padding, its margin, and transform.
+    let logical = tree.layout_rect(node).expect("logical layout");
+    assert!((logical.x - (10.0 + 5.0)).abs() < 1e-3);
+    assert!((logical.y - (8.0 + 7.0)).abs() < 1e-3);
+
+    // Hit testing applies translation on top of stable logical layout.
     let expected_x = 10.0 + 5.0 + 3.0; // root padding + margin + transform
     let expected_y = 8.0 + 7.0 + 4.0;
     let (hit_node, offset) = tree.hit_test(expected_x + 1.0, expected_y + 1.0).expect("hit node");
@@ -78,7 +82,7 @@ fn zero_sized_layout_has_no_hits() {
 }
 
 #[test]
-fn remove_node_removes_descendants_and_reuses_slots() {
+fn remove_node_removes_descendants_without_reusing_public_ids() {
     let mut tree = NodeTree::new_root(root_style());
     let root = tree.root();
     let parent = tree.add_node(
@@ -103,10 +107,12 @@ fn remove_node_removes_descendants_and_reuses_slots() {
     assert!(tree.style(parent).is_none());
     assert!(tree.style(child).is_none());
     assert!(tree.style(sibling).is_some());
-    let reused_a = tree.add_node(root, NodeStyle { ..NodeStyle::default() });
-    let reused_b = tree.add_node(root, NodeStyle { ..NodeStyle::default() });
-    assert!([reused_a, reused_b].contains(&parent));
-    assert!([reused_a, reused_b].contains(&child));
+    let next_a = tree.add_node(root, NodeStyle { ..NodeStyle::default() });
+    let next_b = tree.add_node(root, NodeStyle { ..NodeStyle::default() });
+    assert_ne!(next_a, parent);
+    assert_ne!(next_a, child);
+    assert_ne!(next_b, parent);
+    assert_ne!(next_b, child);
 }
 
 #[test]
@@ -155,7 +161,7 @@ fn row_layout_and_hit() {
 }
 
 #[test]
-fn reuse_node_slots_and_preserve_root() {
+fn node_ids_are_stable_and_root_is_preserved() {
     let mut tree = NodeTree::new_root(NodeStyle { ..NodeStyle::default() });
     let a = tree.add_node(tree.root(), NodeStyle { ..NodeStyle::default() });
     let b = tree.add_node(tree.root(), NodeStyle { ..NodeStyle::default() });
@@ -165,7 +171,8 @@ fn reuse_node_slots_and_preserve_root() {
     tree.remove_node(a);
     let c = tree.add_node(tree.root(), NodeStyle { ..NodeStyle::default() });
 
-    assert_eq!(c.0, a.0);
+    assert!(c.0 > b.0);
+    assert_ne!(c, a);
     tree.remove_node(tree.root());
     assert!(tree.style(tree.root()).is_some());
 }

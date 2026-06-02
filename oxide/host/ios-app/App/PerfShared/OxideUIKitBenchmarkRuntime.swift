@@ -59,6 +59,7 @@ let oxideStageSummaryPrefix = "OXIDE_STAGE_SUMMARY "
 let oxideCameraContractSummaryPrefix = "OXIDE_CAMERA_CONTRACT_SUMMARY "
 let oxidePreviewPlanSummaryPrefix = "OXIDE_PREVIEW_PLAN_SUMMARY "
 let oxideMemorySummaryPrefix = "OXIDE_MEMORY_SUMMARY "
+let oxideFrameCadenceSummaryPrefix = "OXIDE_FRAME_CADENCE_SUMMARY "
 let oxideTickDebugSummaryPrefix = "OXIDE_TICK_DEBUG_SUMMARY "
 let oxideTickRingPrefix = "OXIDE_TICK_RING "
 let oxideAppHostDebugSummaryPrefix = "OXIDE_APP_HOST_DEBUG_SUMMARY "
@@ -769,6 +770,15 @@ private func oxideHostAppFrameWithDrawable(
     _ drawable: UnsafeMutableRawPointer?
 ) -> Int32
 
+@_silgen_name("oxide_host_app_prepare_frame")
+private func oxideHostAppPrepareFrame(_ width: UInt32, _ height: UInt32, _ scale: Float) -> Int32
+
+@_silgen_name("oxide_host_app_submit_prepared_frame_with_drawable")
+private func oxideHostAppSubmitPreparedFrameWithDrawable(_ drawable: UnsafeMutableRawPointer?) -> Int32
+
+@_silgen_name("oxide_host_app_cancel_prepared_frame")
+private func oxideHostAppCancelPreparedFrame()
+
 @_silgen_name("oxide_host_camera_preview_plan")
 private func oxideHostCameraPreviewPlan(
     _ width: UInt32,
@@ -1061,6 +1071,11 @@ private struct OxideMemorySummaryPayload: Codable
     let categories: [String: OxideStageMetricSummary]
 }
 
+private struct OxideFrameCadenceSummaryPayload: Codable
+{
+    let metrics: [String: OxideStageMetricSummary]
+}
+
 private struct OxidePreviewPlanSummaryPayload: Codable
 {
     let counts: [String: Int]
@@ -1222,6 +1237,112 @@ func encodeOxideMemorySummaryLine(
         return nil
     }
     return "\(oxideMemorySummaryPrefix)\(json)"
+}
+
+func encodeOxideFrameCadenceSummaryLine(
+    metrics: [String: OxideStageMetricSummary]
+) -> String?
+{
+    guard let data = try? JSONEncoder().encode(OxideFrameCadenceSummaryPayload(metrics: metrics)),
+          let json = String(data: data, encoding: .utf8)
+    else
+    {
+        return nil
+    }
+    return "\(oxideFrameCadenceSummaryPrefix)\(json)"
+}
+
+@MainActor
+final class PerfFrameCadenceProbe: NSObject
+{
+    private var displayLink: CADisplayLink?
+    private var lastTimestamp: CFTimeInterval?
+    private var frameIntervalsMs: [Double] = []
+    private var frameBudgetsMs: [Double] = []
+    private var hitchMs: Double = 0
+    private var missedFrames: Double = 0
+
+    deinit
+    {
+        displayLink?.invalidate()
+    }
+
+    func begin()
+    {
+        displayLink?.invalidate()
+        lastTimestamp = nil
+        frameIntervalsMs.removeAll(keepingCapacity: true)
+        frameBudgetsMs.removeAll(keepingCapacity: true)
+        hitchMs = 0
+        missedFrames = 0
+        let link = CADisplayLink(target: self, selector: #selector(handleDisplayLink(_:)))
+        if #available(iOS 15.0, *)
+        {
+            let maximumFramesPerSecond = Float(max(UIScreen.main.maximumFramesPerSecond, 60))
+            link.preferredFrameRateRange = CAFrameRateRange(
+                minimum: min(60.0, maximumFramesPerSecond),
+                maximum: maximumFramesPerSecond,
+                preferred: maximumFramesPerSecond
+            )
+        }
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    func endSummaryLine() -> String?
+    {
+        displayLink?.invalidate()
+        displayLink = nil
+        guard let intervalSummary = summarizeSamples(frameIntervalsMs, unit: "ms"),
+              let budgetSummary = summarizeSamples(frameBudgetsMs, unit: "ms")
+        else
+        {
+            return nil
+        }
+        let elapsedSeconds = max(frameIntervalsMs.reduce(0, +) / 1000.0, 0.000_001)
+        let metrics = [
+            "frame_interval_ms": intervalSummary,
+            "frame_budget_ms": budgetSummary,
+            "hitch_ms_per_s": singleCadenceSummary(hitchMs / elapsedSeconds, unit: "ms/s"),
+            "missed_frames": singleCadenceSummary(missedFrames, unit: "frames"),
+            "missed_frames_per_s": singleCadenceSummary(missedFrames / elapsedSeconds, unit: "frames/s"),
+        ]
+        return encodeOxideFrameCadenceSummaryLine(metrics: metrics)
+    }
+
+    @objc
+    private func handleDisplayLink(_ displayLink: CADisplayLink)
+    {
+        let budgetMs = max((displayLink.targetTimestamp - displayLink.timestamp) * 1000.0, 0.000_001)
+        frameBudgetsMs.append(budgetMs)
+        defer
+        {
+            lastTimestamp = displayLink.timestamp
+        }
+        guard let lastTimestamp else
+        {
+            return
+        }
+        let intervalMs = max((displayLink.timestamp - lastTimestamp) * 1000.0, 0)
+        frameIntervalsMs.append(intervalMs)
+        hitchMs += max(intervalMs - budgetMs, 0)
+        missedFrames += max(floor(intervalMs / budgetMs) - 1, 0)
+    }
+}
+
+private func singleCadenceSummary(_ value: Double, unit: String) -> OxideStageMetricSummary
+{
+    let clamped = value.isFinite ? max(value, 0) : 0
+    return OxideStageMetricSummary(
+        unit: unit,
+        min: clamped,
+        max: clamped,
+        mean: clamped,
+        median: clamped,
+        p95: clamped,
+        p99: clamped,
+        samples: 1
+    )
 }
 
 private func currentResidentMemoryBytes() -> UInt64?
@@ -1594,6 +1715,24 @@ func visibleOutputLooksMeaningful(_ signature: BenchVisibleOutputSignature) -> B
     return true
 }
 
+func cameraVisibleOutputLooksPresent(_ signature: BenchVisibleOutputSignature) -> Bool
+{
+    let dynamicRange = Int(signature.maxLuma) - Int(signature.minLuma)
+    if signature.darkFraction > 0.98 &&
+       signature.meanLuma < 10.0 &&
+       dynamicRange < 8
+    {
+        return false
+    }
+    if signature.brightFraction > 0.98 &&
+       signature.meanLuma > 245.0 &&
+       dynamicRange < 8
+    {
+        return false
+    }
+    return true
+}
+
 private func formatVisibleOutputSignature(_ signature: BenchVisibleOutputSignature) -> String
 {
     String(
@@ -1606,6 +1745,81 @@ private func formatVisibleOutputSignature(_ signature: BenchVisibleOutputSignatu
         signature.distinctBucketCount,
         signature.rollingHash
     )
+}
+
+func cameraAuthorizationStatusName(_ status: AVAuthorizationStatus) -> String
+{
+    switch status
+    {
+    case .authorized:
+        return "authorized"
+    case .denied:
+        return "denied"
+    case .restricted:
+        return "restricted"
+    case .notDetermined:
+        return "notDetermined"
+    @unknown default:
+        return "unknown(\(status.rawValue))"
+    }
+}
+
+@MainActor
+private func ensureCameraAuthorizationForBenchmark(
+    description: String,
+    timeout: TimeInterval = 15.0
+) -> Bool
+{
+    let status = AVCaptureDevice.authorizationStatus(for: .video)
+    switch status
+    {
+    case .authorized:
+        return true
+    case .denied, .restricted:
+        recordBenchmarkBuildFailure(
+            "failed - \(description) requires camera permission " +
+            "(status=\(cameraAuthorizationStatusName(status)))"
+        )
+        return false
+    case .notDetermined:
+        var completed = false
+        var granted = false
+        AVCaptureDevice.requestAccess(for: .video)
+        {
+            requestGranted in
+            granted = requestGranted
+            completed = true
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while !completed && Date() < deadline
+        {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        guard completed else
+        {
+            recordBenchmarkBuildFailure(
+                "failed - \(description) camera permission prompt did not resolve " +
+                "within \(String(format: "%.1f", timeout))s"
+            )
+            return false
+        }
+        guard granted else
+        {
+            let resolved = AVCaptureDevice.authorizationStatus(for: .video)
+            recordBenchmarkBuildFailure(
+                "failed - \(description) requires camera permission " +
+                "(status=\(cameraAuthorizationStatusName(resolved)))"
+            )
+            return false
+        }
+        return true
+    @unknown default:
+        recordBenchmarkBuildFailure(
+            "failed - \(description) requires camera permission " +
+            "(status=\(cameraAuthorizationStatusName(status)))"
+        )
+        return false
+    }
 }
 
 @MainActor
@@ -1908,6 +2122,23 @@ func runConsoleMeasuredBenchmarkPasses(
         }
     }
     return (workloadMs, residentBytes)
+}
+
+@MainActor
+func runConsoleMeasuredBenchmarkPassesWithCadence(
+    _ benchmark: OxideUIKitBenchmark
+) -> (workloadMs: [Double], residentBytes: [Double], frameCadenceSummaryLine: String?)
+{
+    let cadenceProbe = PerfFrameCadenceProbe()
+    cadenceProbe.begin()
+    RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+    let samples = runConsoleMeasuredBenchmarkPasses(benchmark)
+    RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+    return (
+        samples.workloadMs,
+        samples.residentBytes,
+        cadenceProbe.endSummaryLine()
+    )
 }
 
 private final class OxideCameraStageAccumulator
@@ -3148,6 +3379,26 @@ private final class OxideCameraBenchmarkHarness
                 return true
             }
             let noVisiblePresent = cameraNoVisiblePresentEnabled()
+            let hostFrameT0 = perfNowMs()
+            let prepareResult: Int32
+            if tracePhases
+            {
+                prepareResult = withPerfSignpost("draw.prepare")
+                {
+                    return oxideHostAppPrepareFrame(width, height, scale)
+                }
+            }
+            else
+            {
+                prepareResult = oxideHostAppPrepareFrame(width, height, scale)
+            }
+            if prepareResult != 0
+            {
+                recordBenchmarkBuildFailure(
+                    "failed - camera preview benchmark oxideHostAppPrepareFrame returned \(prepareResult)"
+                )
+                return false
+            }
             let drawableAcquireMs: Double
             let drawablePtr: UnsafeMutableRawPointer?
             let drawableAcquired: Bool
@@ -3175,13 +3426,13 @@ private final class OxideCameraBenchmarkHarness
                 drawableAcquireMs = perfNowMs() - drawableAcquireT0
                 guard let drawable else
                 {
+                    oxideHostAppCancelPreparedFrame()
                     recordBenchmarkBuildFailure("failed - camera preview benchmark could not acquire CAMetalLayer drawable")
                     return false
                 }
                 drawablePtr = Unmanaged.passUnretained(drawable).toOpaque()
                 drawableAcquired = true
             }
-            let hostFrameT0 = perfNowMs()
             let frameResult: Int32
             if tracePhases
             {
@@ -3189,19 +3440,19 @@ private final class OxideCameraBenchmarkHarness
                 {
                     withPerfSignpost("camera.host.frame")
                     {
-                        return oxideHostAppFrameWithDrawable(width, height, scale, drawablePtr)
+                        return oxideHostAppSubmitPreparedFrameWithDrawable(drawablePtr)
                     }
                 }
             }
             else
             {
-                frameResult = oxideHostAppFrameWithDrawable(width, height, scale, drawablePtr)
+                frameResult = oxideHostAppSubmitPreparedFrameWithDrawable(drawablePtr)
             }
             let hostFrameMs = perfNowMs() - hostFrameT0
             if frameResult != 0
             {
                 recordBenchmarkBuildFailure(
-                    "failed - camera preview benchmark oxideHostAppFrameWithDrawable returned \(frameResult)"
+                    "failed - camera preview benchmark oxideHostAppSubmitPreparedFrameWithDrawable returned \(frameResult)"
                 )
             }
             if recordStageMetrics
@@ -3918,25 +4169,38 @@ private final class OxideOnscreenBenchmarkHarness
     {
         emitPerfTraceDebugStage("onscreen.frame.layout \(benchmarkKey)")
         host.containerView.layoutIfNeeded()
+        let (width, height, scale) = currentDrawableMetrics()
+        emitPerfTraceDebugStage("onscreen.frame.prepare \(benchmarkKey) \(width)x\(height)@\(scale)")
+        let prepareResult = withPerfSignpost("frame.prepare")
+        {
+            oxideHostAppPrepareFrame(width, height, scale)
+        }
+        guard prepareResult == 0 else
+        {
+            recordBenchmarkBuildFailure(
+                "failed - on-screen Oxide benchmark oxideHostAppPrepareFrame returned \(prepareResult)"
+            )
+            return false
+        }
         emitPerfTraceDebugStage("onscreen.frame.drawable \(benchmarkKey)")
         guard let drawable = layer.nextDrawable() else
         {
+            oxideHostAppCancelPreparedFrame()
             recordBenchmarkBuildFailure("failed - on-screen Oxide benchmark could not acquire CAMetalLayer drawable")
             return false
         }
         emitPerfTraceDebugStage("onscreen.frame.drawable.ok \(benchmarkKey)")
         let drawablePtr = Unmanaged.passUnretained(drawable).toOpaque()
-        let (width, height, scale) = currentDrawableMetrics()
         emitPerfTraceDebugStage("onscreen.frame.host \(benchmarkKey) \(width)x\(height)@\(scale)")
         let result = withPerfSignpost("frame.present")
         {
-            oxideHostAppFrameWithDrawable(width, height, scale, drawablePtr)
+            oxideHostAppSubmitPreparedFrameWithDrawable(drawablePtr)
         }
         emitPerfTraceDebugStage("onscreen.frame.host.result \(benchmarkKey) \(result)")
         guard result == 0 else
         {
             recordBenchmarkBuildFailure(
-                "failed - on-screen Oxide benchmark oxideHostAppFrameWithDrawable returned \(result)"
+                "failed - on-screen Oxide benchmark oxideHostAppSubmitPreparedFrameWithDrawable returned \(result)"
             )
             return false
         }
@@ -4634,9 +4898,10 @@ private final class AVFoundationPreviewBenchmarkHarness
 
     init?(host: PerfSurfaceHost, includeVideoDataOutputSidecar: Bool = false)
     {
-        guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else
+        guard ensureCameraAuthorizationForBenchmark(
+            description: "AVFoundation preview baseline"
+        ) else
         {
-            recordBenchmarkBuildFailure("failed - AVFoundation preview baseline requires camera permission")
             return nil
         }
         self.host = host
@@ -5399,10 +5664,10 @@ private func validateBenchmarkVisibleRendering(
         {
             return
         }
-        guard visibleOutputLooksMeaningful(signature) else
+        guard cameraVisibleOutputLooksPresent(signature) else
         {
             recordBenchmarkBuildFailure(
-                "failed - \(testName) camera visible output was black or near-uniform " +
+                "failed - \(testName) camera visible output was blank or clipped " +
                 "(\(formatVisibleOutputSignature(signature)))"
             )
             return

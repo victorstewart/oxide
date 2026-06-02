@@ -2,33 +2,26 @@ use oxide_ui_core::layout_async::AsyncLayoutCoordinator;
 use std::sync::mpsc;
 use std::time::Duration;
 
-struct ReleaseOnDrop
-{
-   sender: Option<mpsc::Sender<()>>,
+struct ReleaseOnDrop {
+    sender: Option<mpsc::Sender<()>>,
 }
 
-impl ReleaseOnDrop
-{
-   fn new(sender: mpsc::Sender<()>) -> Self
-   {
-      Self { sender: Some(sender) }
-   }
+impl ReleaseOnDrop {
+    fn new(sender: mpsc::Sender<()>) -> Self {
+        Self { sender: Some(sender) }
+    }
 
-   fn release(&mut self)
-   {
-      if let Some(sender) = self.sender.take()
-      {
-         let _ = sender.send(());
-      }
-   }
+    fn release(&mut self) {
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.send(());
+        }
+    }
 }
 
-impl Drop for ReleaseOnDrop
-{
-   fn drop(&mut self)
-   {
-      self.release();
-   }
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 #[test]

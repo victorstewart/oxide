@@ -52,7 +52,7 @@ Renderer GPU timing is collected in-app instead of depending on Instruments hard
 
 Frame-level camera/effect metadata is gathered in one draw-list scan. Camera coverage, camera-blur sigma, backdrop presence, and the strongest visual-effect blur plan are reused by the later policy and prepass blocks instead of rediscovering the same facts with separate passes.
 
-Native camera preview commands are treated as compositor-plane markers. The Metal renderer uses them to keep the drawable clear alpha transparent for the frame and otherwise performs no camera-frame texture work, leaving preview presentation to the host layer below the Metal layer.
+Camera preview rendering remains Oxide-owned. The renderer consumes `CameraBg` frame data and no longer accepts a native visible-preview draw marker in the product draw-list path.
 
 Synthetic camera benchmark textures keep the BGRA reference and optimized NV12 shader on the same BT.709 full-range contract. The optimized shader uses normalized chroma offsets directly, while the legacy shader intentionally preserves its older divergent full-range conversion so the snapshot benchmark can detect regressions against the BGRA reference.
 
@@ -73,12 +73,13 @@ ID-mask composition is GPU-owned. Semantic region/subregion triangles are raster
 
 ## Changelog
 
+- 2026-06-01: added a renderer source-contract gate that keeps `wait_until_completed` confined to explicit readback helpers and out of frame hot paths.
 - 2026-05-25: shared layer-sublist geometry offset/rebase handling between image meshes and glyph runs.
 - 2026-05-25: reused the existing unindexed-vertex primitive selector for Metal image meshes so four-vertex quads encode as triangle strips instead of incomplete triangle lists.
 - 2026-05-30: Aligned optimized full-range NV12 camera shader chroma handling with the BGRA benchmark reference.
 - 2026-05-22: Shared the Metal API vertex descriptor across solid, image-mesh, text, and SDF text PSO setup.
 - 2026-05-18: Compact ID-mask render-target reuse and shared the clear/store setup used by raster and field passes.
-- 2026-05-15: made `NativeCameraPreview` a no-op Metal draw marker that requests transparent clear so host compositor camera layers can show through under Oxide UI.
+- 2026-05-31: removed the `NativeCameraPreview` draw marker from the product renderer path so visible camera preview composition remains Oxide-owned.
 - 2026-05-15: Shared overlay color-target attachment setup between ID-mask and neon-marker encoders.
 - 2026-05-14: Shared scene3d mesh validation, buffer upload, and handle insertion between position-only and colored mesh uploads.
 - 2026-04-23: Added the reusable retained `scene3d` mesh pass with depth buffering and same-frame 2D overlay interop.

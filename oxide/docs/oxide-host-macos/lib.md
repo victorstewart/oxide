@@ -47,6 +47,7 @@
 ## Edge cases and failure modes
 - Renderer creation failure returns `-1`.
 - Headless frame calls preserve the non-drawable path used by tests.
+- Drawable-backed frame submission preserves pending damage when a prepared frame is canceled or fails before presentation, so a timeout from late `nextDrawable` acquisition retries the dirty region on the next frame instead of losing the redraw.
 - Poisoned lifecycle or callback mutexes are recovered instead of panicking, preserving native host liveness after an earlier Rust-side unwind.
 - Missing callback registrations simply drop the emitted host event.
 - Secure-storage tests use a unique key and delete before and after the round trip so stale Keychain data does not affect results.
@@ -69,8 +70,10 @@
 - Covered by `cargo test -p oxide-host-macos --features host-testing --tests --locked`.
 - `tests/headless_harness.rs` verifies host initialization, frame routing, platform installation, live Keychain secure-storage round-trip/delete, native loopback HTTP GET, installed-platform TCP/UDP loopback networking, installed-platform TCP keepalive, installed-platform unsupported transport rejection, and callback fanout for touch, pointer, key, text, pinch, and rotate paths.
 - `tests/web_view_harness.rs` verifies installed-platform basic services, permission-status snapshots, network-status snapshots/subscription callbacks, no-prompt location/motion/camera/push/media-library behavior, opt-in live location updates on pre-authorized Location Services, opt-in live camera frame/photo/recording behavior on pre-authorized hardware, opt-in live media image/video extraction on pre-authorized Photos libraries, and WebView lifecycle/script behavior through live hidden `WKWebView` instances.
+- `tests/metal_drawable_lifetime_tests.rs` statically verifies late drawable acquisition, timeout-capable `nextDrawable`, cancellation, and pending-damage retention after skipped prepared frames.
 
 ## Changelog
+- 2026-06-01: retained prepared-frame damage across macOS drawable timeout or submit failure so dirty regions retry after pressure.
 - 2026-05-19: moved the macOS secure-storage host ABI to the shared Apple native Keychain bridge.
 - 2026-05-19: moved the macOS HTTP host ABI to the shared Apple native URLSession bridge.
 - 2026-05-19: added installed-platform TCP keepalive loopback coverage through the shared Apple socket backend.

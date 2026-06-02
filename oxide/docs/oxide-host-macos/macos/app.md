@@ -45,13 +45,14 @@
 - Media-library host return codes distinguish Photos permission denial, invalid ABI inputs, allocation/copy/export I/O failures, unsupported video export paths, and missing assets.
 - Push uses APNs registration and UserNotifications delegate callbacks to publish device tokens and notification user-info dictionaries through the shared Apple push ABI. Badge updates use `NSApplication.dockTile.badgeLabel`, and delivered notification clearing also clears the Dock badge.
 - UserNotifications access goes through a guarded notification-center helper. Non-bundled host-test processes report notifications as not-determined instead of allowing `UNUserNotificationCenter` to abort the process.
-- Camera uses an AVFoundation `AVCaptureSession` with `AVCaptureVideoDataOutput` for NV12 frame delivery, optional `AVCaptureAudioDataOutput` for audio samples, `AVCaptureMovieFileOutput` for recording, and next-frame NV12 extraction for photo capture. The host-native preview-layer entrypoint returns unsupported on macOS because visible preview rendering must stay Oxide-owned.
+- Camera uses an AVFoundation `AVCaptureSession` with `AVCaptureVideoDataOutput` for NV12 frame delivery, optional `AVCaptureAudioDataOutput` for audio samples, `AVCaptureMovieFileOutput` for recording, and next-frame NV12 extraction for photo capture. Visible preview rendering stays Oxide-owned through app-visible frames.
 - Camera availability for `Platform::capabilities()` is based on AVFoundation capture-device discovery, so camera bits are not advertised on a Mac with no available camera.
 - Bluetooth is compiled from `oxide-platform-apple/src/apple/bluetooth.m`; this host links CoreBluetooth and provides the shared permission callback symbol used by the bridge.
 - WebView uses hidden `WKWebView` instances owned on the main queue. Navigation delegate callbacks publish load-finished/load-failed events through Rust, script execution waits for WebKit completion without blocking renderer frame encode/present paths, and close stops loading plus removes the hidden view.
 - WebView create returns busy for duplicate view IDs, script execution returns not-found for missing handles, and script-result copy allocation failures return I/O so Rust does not confuse them with JavaScript `undefined`.
 - Permissions map Oxide domains onto macOS frameworks: UserNotifications, CoreLocation, AVFoundation, Contacts, CoreBluetooth, and Photos. Requests emit callback snapshots through the shared Apple permission raw-code ABI.
 - Haptics use `NSHapticFeedbackManager` on the main queue instead of silently dropping feedback requests.
+- The Metal view prepares the Rust/Oxide frame before acquiring a `CAMetalDrawable`, then uses timeout-capable late drawable acquisition and cancels the prepared frame when no drawable is available so drawable pressure skips a frame instead of blocking indefinitely. The Rust host retains the prepared damage on that skip so the next drawable-backed submit retries the same dirty region.
 
 ## Preconditions and postconditions
 - AppKit, AVFoundation, Contacts, CoreBluetooth, CoreLocation, CoreMedia, Network.framework, Photos, Security.framework, UserNotifications.framework, and WebKit.framework must be linked by `build.rs`.
@@ -73,17 +74,21 @@
 - Bluetooth live scan/connect/GATT/advertising behavior depends on hardware, permissions, and CoreBluetooth state restoration availability.
 - WebView create rejects empty or scheme-less URLs, unavailable WebKit setup, and duplicate view IDs distinctly. Script execution reports missing handles after close, JavaScript evaluation failures, and result-copy I/O failures distinctly.
 - If Network.framework monitor creation fails, `macos_network_status` reports failure to Rust.
+- If `CAMetalLayer.nextDrawable` times out under drawable pressure, the host cancels the prepared frame and returns without submitting stale work. The dirty region remains pending and `frame_dirty` is rearmed for retry.
 
 ## Testing and benchmarks
 - Linkage and host lifecycle are covered by `cargo check -p oxide-host-macos --features host-testing --tests --locked` and `cargo test -p oxide-host-macos --features host-testing --tests --locked`.
 - HTTP GET behavior is covered by the host harness through a loopback TCP server, the installed macOS platform, the shared native `NSURLSession` bridge, and the shared Apple response-copy/free wrapper.
 - Keychain save/load/delete behavior is covered by the host harness through the installed macOS platform, shared Apple secure-storage wrapper, and shared Apple native Keychain bridge.
 - Permission status snapshots, network status snapshots/subscription callbacks, no-prompt location/motion/camera/push behavior, and live hidden-WebView local navigation/script execution are covered by the main-thread WebView harness.
+- `metal_drawable_lifetime_tests.rs` statically enforces late drawable acquisition, timeout-capable `nextDrawable`, cancellation of prepared frames when acquisition fails, and pending-damage retention for the retry frame.
 
 ## Changelog
+- 2026-06-01: retained prepared-frame damage across macOS drawable timeout or submit failure so dirty regions retry after pressure.
+- 2026-06-01: made macOS drawable acquisition timeout-capable and documented the skip-on-pressure frame contract.
 - 2026-05-19: moved the native Keychain secure-storage bridge out of `app.m` and into shared `oxide-platform-apple`.
 - 2026-05-19: moved the native HTTP URLSession bridge out of `app.m` and into shared `oxide-platform-apple`.
-- 2026-05-19: verified no-prompt location, motion no-provider, camera unsupported-control/native-preview, and push non-bundled paths through the installed macOS platform.
+- 2026-05-31: verified no-prompt location, motion no-provider, camera unsupported-control, and push non-bundled paths through the installed macOS platform after removing the public native-preview contract.
 - 2026-05-19: guarded UserNotifications access so non-bundled host-test processes report notification unavailability instead of aborting.
 - 2026-05-19: verified permission status snapshots, network status snapshots/subscription callbacks, and live hidden-WebView navigation/script execution through a main-thread host harness.
 - 2026-05-19: verified the native HTTP GET ABI with a loopback `NSURLSession` host test.

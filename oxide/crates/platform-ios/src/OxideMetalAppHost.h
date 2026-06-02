@@ -3,8 +3,10 @@
 #include <stdint.h>
 
 typedef int32_t (*OxideMetalAppInitFn)(uint32_t width, uint32_t height, float scale);
-typedef int32_t (*OxideMetalAppFrameFn)(uint32_t width, uint32_t height, float scale,
-                                        void *drawable);
+typedef int32_t (*OxideMetalAppPrepareFrameFn)(uint32_t width, uint32_t height,
+                                               float scale);
+typedef int32_t (*OxideMetalAppSubmitPreparedFrameFn)(void *drawable);
+typedef void (*OxideMetalAppCancelPreparedFrameFn)(void);
 typedef void (*OxideMetalAppShutdownFn)(void);
 typedef void (*OxideMetalAppTouchFn)(uint64_t id, uint32_t phase, float x, float y,
                                      uint64_t time_ns);
@@ -15,7 +17,9 @@ typedef struct OxideMetalAppHostConfig {
   NSString *touch_log_env_name;
   NSString *touch_log_filename;
   OxideMetalAppInitFn init;
-  OxideMetalAppFrameFn frame;
+  OxideMetalAppPrepareFrameFn prepare_frame;
+  OxideMetalAppSubmitPreparedFrameFn submit_prepared_frame;
+  OxideMetalAppCancelPreparedFrameFn cancel_prepared_frame;
   OxideMetalAppShutdownFn shutdown;
   OxideMetalAppTouchFn touch;
 } OxideMetalAppHostConfig;

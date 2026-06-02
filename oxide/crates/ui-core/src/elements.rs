@@ -1,13 +1,12 @@
 //! Basic UI elements: Label, ProgressBar, Spinner
 #![allow(clippy::module_name_repetitions)]
 
-use crate::DrawListBuilder;
+use crate::{text_boundary, DrawListBuilder};
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::cmp;
 use core::ops::Range;
 use oxide_platform_api::{
     clipboard, AutoCapitalization, KeyCode, KeyEvent, KeyboardAppearance, Modifiers, ReturnKeyType,
@@ -94,6 +93,9 @@ pub trait ImageUploader {
 
 const LABEL_LAYOUT_CACHE_CAP: usize = 2_048;
 const LABEL_LAYOUT_CACHE_PRUNE_TARGET: usize = LABEL_LAYOUT_CACHE_CAP / 2;
+const TEXT_PREFIX_CACHE_CAP: usize = 512;
+const TEXT_PREFIX_CACHE_PRUNE_TARGET: usize = TEXT_PREFIX_CACHE_CAP / 2;
+const WRAP_WIDTH_CONFIRM_EPS: f32 = 8.0;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 struct LabelLayoutStyleKey {
@@ -103,9 +105,20 @@ struct LabelLayoutStyleKey {
     max_w_bits: u32,
 }
 
+struct CachedLabelRun {
+    font_id: usize,
+    x_offset: f32,
+    shape: text::OwnedShape,
+}
+
+enum CachedLabelShape {
+    Single(CachedLabelRun),
+    Fallback(text::FallbackShape),
+}
+
 struct CachedLabelLine {
     width: f32,
-    shape: text::OwnedShape,
+    shape: CachedLabelShape,
 }
 
 struct CachedLabelLayout {
@@ -114,6 +127,15 @@ struct CachedLabelLayout {
 
 struct CachedLabelLayoutEntry {
     layout: Arc<CachedLabelLayout>,
+    last_used: u64,
+}
+
+struct CachedTextPrefixMetrics {
+    map: text::ShapedCursorMap,
+}
+
+struct CachedTextPrefixEntry {
+    metrics: Arc<CachedTextPrefixMetrics>,
     last_used: u64,
 }
 
@@ -136,6 +158,27 @@ impl LabelLayoutStyleKey {
     }
 }
 
+fn cached_label_line_from_owned_shape(font_id: usize, shape: text::OwnedShape) -> CachedLabelLine {
+    CachedLabelLine {
+        width: shape.width(),
+        shape: CachedLabelShape::Single(CachedLabelRun { font_id, x_offset: 0.0, shape }),
+    }
+}
+
+fn ascii_wrap_word_ranges(text_value: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::with_capacity(16);
+    let mut offset = 0usize;
+    for segment in text_value.split_inclusive(' ') {
+        let trailing_spaces = segment.as_bytes().iter().rev().take_while(|b| **b == b' ').count();
+        let word_len = segment.len().saturating_sub(trailing_spaces);
+        if word_len > 0 {
+            ranges.push((offset, offset + word_len));
+        }
+        offset = offset.saturating_add(segment.len());
+    }
+    ranges
+}
+
 pub struct TextCtx {
     pub fonts: text::FontDb,
     pub shaper: text::TextShaper,
@@ -146,7 +189,11 @@ pub struct TextCtx {
     label_layouts:
         HashMap<LabelLayoutStyleKey, HashMap<alloc::string::String, CachedLabelLayoutEntry>>,
     label_layout_len: usize,
+    text_prefixes:
+        HashMap<LabelLayoutStyleKey, HashMap<alloc::string::String, CachedTextPrefixEntry>>,
+    text_prefix_len: usize,
     label_layout_clock: u64,
+    fallback_fonts: Vec<usize>,
 }
 
 impl Default for TextCtx {
@@ -160,12 +207,28 @@ impl Default for TextCtx {
             atlas_gpu_size: None,
             label_layouts: HashMap::new(),
             label_layout_len: 0,
+            text_prefixes: HashMap::new(),
+            text_prefix_len: 0,
             label_layout_clock: 0,
+            fallback_fonts: Vec::new(),
         }
     }
 }
 
 impl TextCtx {
+    #[inline]
+    pub fn atlas_revision(&self) -> u64 {
+        self.atlas.revision()
+    }
+
+    #[inline]
+    pub fn retained_text_atlas_revision(&self) -> Option<(gfx::ImageHandle, u64)> {
+        if self.atlas.dirty_rect().is_some() {
+            return None;
+        }
+        self.atlas_handle.map(|handle| (handle, self.atlas.revision()))
+    }
+
     pub fn ensure_gpu<U: ImageUploader>(&mut self, up: &mut U) -> gfx::ImageHandle {
         let (data, w, h) = self.atlas.image();
         if let Some(hdl) = self.atlas_handle {
@@ -201,7 +264,21 @@ impl TextCtx {
         self.atlas_gpu_size = None;
         self.label_layouts.clear();
         self.label_layout_len = 0;
+        self.text_prefixes.clear();
+        self.text_prefix_len = 0;
         self.label_layout_clock = 0;
+    }
+
+    pub fn set_fallback_fonts(&mut self, font_ids: &[usize]) {
+        if self.fallback_fonts.as_slice() == font_ids {
+            return;
+        }
+        self.fallback_fonts.clear();
+        self.fallback_fonts.extend_from_slice(font_ids);
+        self.label_layouts.clear();
+        self.label_layout_len = 0;
+        self.text_prefixes.clear();
+        self.text_prefix_len = 0;
     }
 
     fn cached_label_layout(
@@ -233,6 +310,103 @@ impl TextCtx {
             self.label_layout_len = self.label_layout_len.saturating_add(1);
         }
         Some(layout)
+    }
+
+    fn cached_prefix_metrics(
+        &mut self,
+        text_value: &str,
+        font_id: usize,
+        font_px: f32,
+    ) -> Option<Arc<CachedTextPrefixMetrics>> {
+        let key = LabelLayoutStyleKey::new(font_id, font_px, false, 0.0);
+        self.label_layout_clock = self.label_layout_clock.wrapping_add(1);
+        if let Some(entries) = self.text_prefixes.get_mut(&key) {
+            if let Some(entry) = entries.get_mut(text_value) {
+                entry.last_used = self.label_layout_clock;
+                return Some(entry.metrics.clone());
+            }
+        }
+        let metrics = Arc::new(self.build_prefix_metrics(text_value, font_id, font_px)?);
+        if self.text_prefix_len >= TEXT_PREFIX_CACHE_CAP {
+            self.evict_cold_prefix_metrics();
+        }
+        let entries = self.text_prefixes.entry(key).or_insert_with(HashMap::new);
+        let prior = entries.insert(
+            alloc::string::String::from(text_value),
+            CachedTextPrefixEntry { metrics: metrics.clone(), last_used: self.label_layout_clock },
+        );
+        if prior.is_none() {
+            self.text_prefix_len = self.text_prefix_len.saturating_add(1);
+        }
+        Some(metrics)
+    }
+
+    fn build_prefix_metrics(
+        &mut self,
+        text_value: &str,
+        font_id: usize,
+        font_px: f32,
+    ) -> Option<CachedTextPrefixMetrics> {
+        if !self.fallback_fonts.is_empty() {
+            let map = self.shaper.cursor_map_with_fallback_fonts(
+                &self.fonts,
+                font_id,
+                &self.fallback_fonts,
+                text_value,
+                font_px,
+            )?;
+            return Some(CachedTextPrefixMetrics { map });
+        }
+        let key = LabelLayoutStyleKey::new(font_id, font_px, false, 0.0);
+        if let Some(entries) = self.label_layouts.get_mut(&key) {
+            if let Some(entry) = entries.get_mut(text_value) {
+                entry.last_used = self.label_layout_clock;
+                if let Some(line) = entry.layout.lines.first() {
+                    if let CachedLabelShape::Single(run) = &line.shape {
+                        let map = run.shape.cursor_map_for_text(text_value);
+                        return Some(CachedTextPrefixMetrics { map });
+                    }
+                }
+            }
+        }
+        let font = self.fonts.font(font_id)?;
+        let shape = self.shaper.shape(font, font_id, text_value, font_px).ok()?.to_owned_shape();
+        let map = shape.cursor_map_for_text(text_value);
+        self.cache_unwrapped_label_shape(key, font_id, text_value, shape);
+        Some(CachedTextPrefixMetrics { map })
+    }
+
+    fn cache_unwrapped_label_shape(
+        &mut self,
+        key: LabelLayoutStyleKey,
+        font_id: usize,
+        text_value: &str,
+        shape: text::OwnedShape,
+    ) {
+        if self.label_layout_len >= LABEL_LAYOUT_CACHE_CAP {
+            self.evict_cold_label_layouts();
+        }
+        let entries = self.label_layouts.entry(key).or_insert_with(HashMap::new);
+        let width = shape.width();
+        let prior = entries.insert(
+            alloc::string::String::from(text_value),
+            CachedLabelLayoutEntry {
+                layout: Arc::new(CachedLabelLayout {
+                    lines: alloc::vec![CachedLabelLine {
+                        width,
+                        shape: CachedLabelShape::Single(CachedLabelRun {
+                            font_id,
+                            x_offset: 0.0,
+                            shape,
+                        }),
+                    }],
+                }),
+                last_used: self.label_layout_clock,
+            },
+        );
+        if prior.is_none() {
+            self.label_layout_len = self.label_layout_len.saturating_add(1);
+        }
     }
 
     fn evict_cold_label_layouts(&mut self) {
@@ -276,6 +450,47 @@ impl TextCtx {
         }
     }
 
+    fn evict_cold_prefix_metrics(&mut self) {
+        if self.text_prefix_len < TEXT_PREFIX_CACHE_CAP {
+            return;
+        }
+        let prune_before =
+            self.label_layout_clock.saturating_sub(TEXT_PREFIX_CACHE_PRUNE_TARGET as u64);
+        let mut removed = 0usize;
+        self.text_prefixes.retain(|_, entries| {
+            let before = entries.len();
+            entries.retain(|_, entry| entry.last_used >= prune_before);
+            removed = removed.saturating_add(before.saturating_sub(entries.len()));
+            !entries.is_empty()
+        });
+        self.text_prefix_len = self.text_prefix_len.saturating_sub(removed);
+        if self.text_prefix_len < TEXT_PREFIX_CACHE_CAP {
+            return;
+        }
+        let Some((old_style_key, old_text_key)) = self
+            .text_prefixes
+            .iter()
+            .flat_map(|(style_key, entries)| {
+                entries.iter().map(move |(text_key, entry)| (*style_key, text_key, entry.last_used))
+            })
+            .min_by_key(|(_, _, last_used)| *last_used)
+            .map(|(style_key, text_key, _)| (style_key, text_key.clone()))
+        else {
+            return;
+        };
+        let remove_style = if let Some(entries) = self.text_prefixes.get_mut(&old_style_key) {
+            if entries.remove(&old_text_key).is_some() {
+                self.text_prefix_len = self.text_prefix_len.saturating_sub(1);
+            }
+            entries.is_empty()
+        } else {
+            false
+        };
+        if remove_style {
+            self.text_prefixes.remove(&old_style_key);
+        }
+    }
+
     fn build_label_layout(
         &mut self,
         text_value: &str,
@@ -284,18 +499,22 @@ impl TextCtx {
         wrap: bool,
         max_w: f32,
     ) -> Option<CachedLabelLayout> {
-        let font = self.fonts.font(font_id)?;
         if !wrap {
-            let shape = self.shaper.shape(font, font_id, text_value, font_px).ok()?;
-            let shape = shape.to_owned_shape();
             return Some(CachedLabelLayout {
-                lines: alloc::vec![CachedLabelLine { width: shape.width(), shape }],
+                lines: alloc::vec![self.build_label_line(text_value, font_id, font_px)?],
             });
+        }
+        if self.fallback_fonts.is_empty() && text_value.is_ascii() {
+            if let Some(layout) =
+                self.build_primary_ascii_wrapped_label_layout(text_value, font_id, font_px, max_w)
+            {
+                return Some(layout);
+            }
         }
 
         let mut lines: alloc::vec::Vec<CachedLabelLine> = alloc::vec::Vec::with_capacity(4);
         let mut cur = alloc::string::String::with_capacity(text_value.len().min(128));
-        let mut cur_shape: Option<(f32, text::OwnedShape)> = None;
+        let mut cur_line: Option<CachedLabelLine> = None;
         let mut pending_spaces = 0usize;
         for w in text_value.split_inclusive(' ') {
             let trailing_spaces = w.as_bytes().iter().rev().take_while(|b| **b == b' ').count();
@@ -310,36 +529,137 @@ impl TextCtx {
             }
             cur.push_str(word);
             pending_spaces = trailing_spaces;
-            let Ok(shape) = self.shaper.shape(font, font_id, &cur, font_px) else {
+            let Some(line) = self.build_label_line(&cur, font_id, font_px) else {
                 cur.truncate(prior_len);
                 continue;
             };
-            let shape = shape.to_owned_shape();
-            let width = shape.width();
-            if width > max_w && prior_len > 0 {
+            if line.width > max_w && prior_len > 0 {
                 cur.truncate(prior_len);
-                if let Some((line_width, line_shape)) = cur_shape.take() {
-                    lines.push(CachedLabelLine { width: line_width, shape: line_shape });
+                if let Some(line) = cur_line.take() {
+                    lines.push(line);
                 }
                 cur.clear();
                 cur.push_str(word);
-                let Ok(shape) = self.shaper.shape(font, font_id, &cur, font_px) else {
+                let Some(line) = self.build_label_line(&cur, font_id, font_px) else {
                     cur.clear();
                     pending_spaces = 0;
                     continue;
                 };
-                let shape = shape.to_owned_shape();
-                cur_shape = Some((shape.width(), shape));
+                cur_line = Some(line);
             } else {
-                cur_shape = Some((width, shape));
+                cur_line = Some(line);
             }
         }
         if !cur.is_empty() {
-            if let Some((width, shape)) = cur_shape.take() {
-                lines.push(CachedLabelLine { width, shape });
+            if let Some(line) = cur_line.take() {
+                lines.push(line);
             }
         }
         Some(CachedLabelLayout { lines })
+    }
+
+    fn build_primary_ascii_wrapped_label_layout(
+        &mut self,
+        text_value: &str,
+        font_id: usize,
+        font_px: f32,
+        max_w: f32,
+    ) -> Option<CachedLabelLayout> {
+        if text_value.is_empty() {
+            return Some(CachedLabelLayout { lines: Vec::new() });
+        }
+        let font = self.fonts.font(font_id)?;
+        let whole_shape =
+            self.shaper.shape(font, font_id, text_value, font_px).ok()?.to_owned_shape();
+        let words = ascii_wrap_word_ranges(text_value);
+        if words.is_empty() {
+            return Some(CachedLabelLayout { lines: Vec::new() });
+        }
+
+        let mut boundaries = Vec::with_capacity(words.len().saturating_mul(2).saturating_add(1));
+        boundaries.push(0);
+        for (start, end) in words.iter().copied() {
+            if boundaries.last().copied() != Some(start) {
+                boundaries.push(start);
+            }
+            if boundaries.last().copied() != Some(end) {
+                boundaries.push(end);
+            }
+        }
+        let widths = whole_shape.prefix_widths_for_boundaries(&boundaries);
+        let width_at = |byte: usize| -> f32 {
+            match boundaries.binary_search(&byte) {
+                Ok(index) => widths.get(index).copied().unwrap_or(0.0),
+                Err(_) => 0.0,
+            }
+        };
+
+        let mut lines: Vec<CachedLabelLine> = Vec::with_capacity(4);
+        let mut line_start: Option<usize> = None;
+        let mut line_end = 0usize;
+        for (word_start, word_end) in words.iter().copied() {
+            let start = line_start.unwrap_or(0);
+            let candidate_width = (width_at(word_end) - width_at(start)).max(0.0);
+            let mut should_wrap = line_end > start && candidate_width > max_w;
+            if !should_wrap
+                && line_end > start
+                && max_w.is_finite()
+                && candidate_width + WRAP_WIDTH_CONFIRM_EPS >= max_w
+            {
+                if let Some(line) =
+                    self.build_label_line(&text_value[start..word_end], font_id, font_px)
+                {
+                    should_wrap = line.width > max_w;
+                }
+            }
+            if should_wrap {
+                if let Some(line) =
+                    self.build_label_line(&text_value[start..line_end], font_id, font_px)
+                {
+                    lines.push(line);
+                }
+                line_start = Some(word_start);
+                line_end = word_end;
+            } else {
+                line_start = Some(start);
+                line_end = word_end;
+            }
+        }
+
+        if let Some(start) = line_start {
+            if start < line_end {
+                if lines.is_empty() && start == 0 && line_end == text_value.len() {
+                    lines.push(cached_label_line_from_owned_shape(font_id, whole_shape));
+                } else if let Some(line) =
+                    self.build_label_line(&text_value[start..line_end], font_id, font_px)
+                {
+                    lines.push(line);
+                }
+            }
+        }
+        Some(CachedLabelLayout { lines })
+    }
+
+    fn build_label_line(
+        &mut self,
+        text_value: &str,
+        font_id: usize,
+        font_px: f32,
+    ) -> Option<CachedLabelLine> {
+        if !self.fallback_fonts.is_empty() {
+            let fallback = self.shaper.shape_with_fallback_fonts(
+                &self.fonts,
+                font_id,
+                &self.fallback_fonts,
+                text_value,
+                font_px,
+            )?;
+            let width = fallback.width();
+            return Some(CachedLabelLine { width, shape: CachedLabelShape::Fallback(fallback) });
+        }
+        let font = self.fonts.font(font_id)?;
+        let shape = self.shaper.shape(font, font_id, text_value, font_px).ok()?.to_owned_shape();
+        Some(cached_label_line_from_owned_shape(font_id, shape))
     }
 }
 
@@ -372,6 +692,59 @@ impl Default for Label {
             font_px: 14.0,
         }
     }
+}
+
+fn bake_cached_label_line(
+    line: &CachedLabelLine,
+    color: gfx::Color,
+    atlas_handle: gfx::ImageHandle,
+    origin_x: f32,
+    origin_y: f32,
+    device_scale: f32,
+    txt: &mut TextCtx,
+    b: &mut DrawListBuilder,
+) -> (u32, u32) {
+    let glyph_run = match &line.shape {
+        CachedLabelShape::Single(run) => {
+            let Some(font) = txt.fonts.font(run.font_id) else {
+                return (0, 0);
+            };
+            let dl = b.drawlist_mut();
+            run.shape.bake_into_with(
+                font,
+                &mut txt.raster,
+                &mut txt.atlas,
+                &mut dl.vertices,
+                &mut dl.indices,
+                color,
+                atlas_handle,
+                origin_x + run.x_offset,
+                origin_y,
+                device_scale,
+            )
+        }
+        CachedLabelShape::Fallback(shape) => {
+            let dl = b.drawlist_mut();
+            shape.bake_into_with(
+                &txt.fonts,
+                &mut txt.raster,
+                &mut txt.atlas,
+                &mut dl.vertices,
+                &mut dl.indices,
+                color,
+                atlas_handle,
+                origin_x,
+                origin_y,
+                device_scale,
+            )
+        }
+    };
+    let vertex_count = glyph_run.vb.len;
+    let index_count = glyph_run.ib.len;
+    if vertex_count > 0 && index_count > 0 {
+        b.glyph_run(glyph_run);
+    }
+    (vertex_count, index_count)
 }
 
 #[inline]
@@ -418,36 +791,23 @@ fn encode_label_cached<U: ImageUploader>(
         format!("count={} wrap={}", layout.lines.len(), wrap)
     });
 
-    let Some(font) = txt.fonts.font(font_id) else { return };
     for line in layout.lines.iter() {
         let dx = match align {
             Align::Left => 0.0,
             Align::Center => (rect.w - line.width) * 0.5,
             Align::Right => rect.w - line.width,
         };
-        let dl = b.drawlist_mut();
-        let run = line.shape.bake_into_with(
-            font,
-            &mut txt.raster,
-            &mut txt.atlas,
-            &mut dl.vertices,
-            &mut dl.indices,
-            color,
-            handle,
-            ox + dx,
-            oy,
-            scale,
-        );
+        let (verts, indices) =
+            bake_cached_label_line(line, color, handle, ox + dx, oy, scale, txt, b);
         watch_text_event_lazy("label.glyph_run", font_id, text_value, || {
             format!(
                 "width={:.1} verts={} indices={} atlas_handle={}",
                 line.width,
-                run.vb.len,
-                run.ib.len,
+                verts,
+                indices,
                 txt.atlas_handle.is_some()
             )
         });
-        b.glyph_run(run);
         oy += line_h;
     }
 
@@ -596,7 +956,6 @@ pub struct UICameraView {
     pub grayscale: bool,
     pub blur: bool,
     pub sigma: f32,
-    pub native_preview: bool,
 }
 
 impl Default for UICameraView {
@@ -607,18 +966,13 @@ impl Default for UICameraView {
             grayscale: false,
             blur: true,
             sigma: 6.0,
-            native_preview: false,
         }
     }
 }
 
 impl UICameraView {
     pub fn encode(&self, rect: gfx::RectF, b: &mut DrawListBuilder) {
-        if self.native_preview {
-            b.native_camera_preview(rect);
-        } else {
-            b.camera_bg(rect, self.tint, self.alpha, self.grayscale, self.blur, self.sigma);
-        }
+        b.camera_bg(rect, self.tint, self.alpha, self.grayscale, self.blur, self.sigma);
     }
 }
 
@@ -1240,6 +1594,7 @@ pub enum TextValidation {
 #[derive(Clone, Debug)]
 struct CompositionRange {
     range: Range<usize>,
+    text: String,
 }
 
 #[derive(Clone)]
@@ -1282,6 +1637,7 @@ pub struct OtpConfig {
 
 pub struct TextInputState {
     text: String,
+    text_is_ascii: bool,
     placeholder: String,
     secure: bool,
     focused: bool,
@@ -1306,6 +1662,7 @@ impl TextInputState {
     pub fn new(placeholder: impl Into<String>) -> Self {
         Self {
             text: String::new(),
+            text_is_ascii: true,
             placeholder: placeholder.into(),
             secure: false,
             focused: false,
@@ -1351,6 +1708,7 @@ impl TextInputState {
 
     pub fn set_text(&mut self, value: impl Into<String>) {
         self.text = value.into();
+        self.text_is_ascii = self.text.is_ascii();
         self.selection = None;
         self.apply_constraints();
         self.revalidate();
@@ -1491,6 +1849,10 @@ impl TextInputState {
         self.focused
     }
 
+    pub fn cursor_index(&self) -> usize {
+        self.cursor
+    }
+
     pub fn focus(&mut self) {
         if !self.focused {
             self.focused = true;
@@ -1509,10 +1871,10 @@ impl TextInputState {
     pub fn set_selection(&mut self, start: usize, end: usize) {
         if start >= end {
             self.selection = None;
-            self.cursor = clamp_index(&self.text, end);
+            self.cursor = self.clamp_cursor_index(end);
         } else {
-            let s = clamp_index(&self.text, start);
-            let e = clamp_index(&self.text, end);
+            let s = self.clamp_cursor_index(start);
+            let e = self.clamp_cursor_index(end);
             self.selection = Some(s..e);
             self.cursor = e;
         }
@@ -1520,7 +1882,7 @@ impl TextInputState {
     }
 
     pub fn move_cursor_to_end(&mut self) {
-        self.cursor = text_char_len(&self.text);
+        self.cursor = self.text_cursor_len();
         self.selection = None;
         self.reset_caret();
     }
@@ -1528,7 +1890,7 @@ impl TextInputState {
     pub fn copy_selection_to_clipboard(&self) -> bool {
         if let Some(sel) = &self.selection {
             if sel.start < sel.end {
-                let range = char_range_to_byte(&self.text, sel.start..sel.end);
+                let range = self.cursor_range_to_byte(sel.start..sel.end);
                 if let Some(slice) = self.text.get(range) {
                     return clipboard::write_string(slice);
                 }
@@ -1540,11 +1902,11 @@ impl TextInputState {
     pub fn cut_selection_to_clipboard(&mut self) -> bool {
         if let Some(sel) = self.selection.clone() {
             if sel.start < sel.end {
-                let range = char_range_to_byte(&self.text, sel.start..sel.end);
+                let range = self.cursor_range_to_byte(sel.start..sel.end);
                 let success =
                     self.text.get(range).map_or(false, |slice| clipboard::write_string(slice));
                 self.erase(sel.clone());
-                self.cursor = sel.start.min(text_char_len(&self.text));
+                self.cursor = sel.start.min(self.text_cursor_len());
                 self.reset_caret();
                 return success;
             }
@@ -1557,9 +1919,9 @@ impl TextInputState {
             if data.is_empty() {
                 return false;
             }
-            let before = self.text.chars().count();
+            let before = self.text_cursor_len();
             let _ = self.insert(&data);
-            return self.text.chars().count() != before;
+            return self.text_cursor_len() != before;
         }
         false
     }
@@ -1620,7 +1982,7 @@ impl TextInputState {
                 self.reset_caret();
             }
             KeyCode::ArrowRight => {
-                let end = self.text.chars().count();
+                let end = self.text_cursor_len();
                 if self.cursor < end {
                     self.cursor += 1;
                 }
@@ -1631,7 +1993,7 @@ impl TextInputState {
                 self.submit = true;
             }
             KeyCode::Letter('A') if key.modifiers.contains(Modifiers::META) => {
-                let len = self.text.chars().count();
+                let len = self.text_cursor_len();
                 if len > 0 {
                     self.selection = Some(0..len);
                 }
@@ -1643,24 +2005,34 @@ impl TextInputState {
     pub fn handle_text_event(&mut self, event: &TextEvent) {
         match event {
             TextEvent::Commit { text } => {
+                if !self.focused {
+                    return;
+                }
                 if text == "\n" {
                     self.submit = true;
                 } else {
+                    if let Some(comp) = self.composition.take() {
+                        self.selection = None;
+                        self.erase(comp.range.clone());
+                        self.cursor = comp.range.start.min(self.text_cursor_len());
+                    }
                     let _ = self.insert(text);
                 }
             }
             TextEvent::Composition { range, text } => {
-                if text.is_empty() || range.start >= range.end {
+                if text.is_empty() {
                     self.composition = None;
                 } else {
-                    let start = clamp_index(&self.text, range.start as usize);
-                    let end = clamp_index(&self.text, range.end as usize);
-                    self.composition = Some(CompositionRange { range: start..end });
+                    let start = self.clamp_cursor_index(range.start as usize);
+                    let end = self.clamp_cursor_index(range.end as usize);
+                    let (start, end) = if start <= end { (start, end) } else { (end, start) };
+                    self.composition =
+                        Some(CompositionRange { range: start..end, text: text.clone() });
                 }
             }
             TextEvent::SelectionChanged { range } => {
-                let start = clamp_index(&self.text, range.start as usize);
-                let end = clamp_index(&self.text, range.end as usize);
+                let start = self.clamp_cursor_index(range.start as usize);
+                let end = self.clamp_cursor_index(range.end as usize);
                 if start >= end {
                     self.selection = None;
                     self.cursor = end;
@@ -1697,7 +2069,7 @@ impl TextInputState {
             self.erase(range.clone());
             self.cursor = range.start;
         } else {
-            let len = self.text.chars().count();
+            let len = self.text_cursor_len();
             if self.cursor < len {
                 self.erase(self.cursor..self.cursor + 1);
             }
@@ -1719,9 +2091,12 @@ impl TextInputState {
             return false;
         }
         let inserted = sanitized.as_ref();
-        let inserted_len = text_char_len(inserted);
-        let byte = char_range_to_byte(&self.text, self.cursor..self.cursor).start;
+        let inserted_is_ascii = inserted.is_ascii();
+        let inserted_len =
+            if inserted_is_ascii { inserted.len() } else { text_cursor_len(inserted) };
+        let byte = self.cursor_range_to_byte(self.cursor..self.cursor).start;
         self.text.insert_str(byte, inserted);
+        self.text_is_ascii &= inserted_is_ascii;
         self.cursor += inserted_len;
         if !self.accepts_unconstrained_text() {
             self.apply_constraints();
@@ -1732,7 +2107,7 @@ impl TextInputState {
     }
 
     fn erase(&mut self, range: Range<usize>) {
-        let bytes = char_range_to_byte(&self.text, range);
+        let bytes = self.cursor_range_to_byte(range);
         if bytes.start < bytes.end {
             self.text.drain(bytes);
             if self.accepts_unconstrained_text()
@@ -1781,10 +2156,12 @@ impl TextInputState {
             return Cow::Borrowed(value);
         }
         let mut out = String::new();
-        let current_len = self.max_len_chars.map(|_| text_char_len(&self.text)).unwrap_or(0);
+        let current_len = self.max_len_chars.map(|_| self.text_cursor_len()).unwrap_or(0);
         let mut added = 0usize;
-        for ch in value.chars() {
-            if !self.filter.allows(ch) {
+        let boundaries = text_boundary::cluster_boundaries(value);
+        for pair in boundaries.windows(2) {
+            let cluster = &value[pair[0]..pair[1]];
+            if !cluster.chars().all(|ch| self.filter.allows(ch)) {
                 continue;
             }
             if let Some(max) = self.max_len_chars {
@@ -1792,7 +2169,7 @@ impl TextInputState {
                     break;
                 }
             }
-            out.push(ch);
+            out.push_str(cluster);
             added += 1;
         }
         Cow::Owned(out)
@@ -1800,12 +2177,14 @@ impl TextInputState {
 
     fn apply_constraints(&mut self) {
         let len = if self.accepts_unconstrained_text() {
-            text_char_len(&self.text)
+            self.text_cursor_len()
         } else {
             let mut filtered = String::new();
             let mut count = 0usize;
-            for ch in self.text.chars() {
-                if !self.filter.allows(ch) {
+            let boundaries = text_boundary::cluster_boundaries(&self.text);
+            for pair in boundaries.windows(2) {
+                let cluster = &self.text[pair[0]..pair[1]];
+                if !cluster.chars().all(|ch| self.filter.allows(ch)) {
                     continue;
                 }
                 if let Some(max) = self.max_len_chars {
@@ -1813,13 +2192,14 @@ impl TextInputState {
                         break;
                     }
                 }
-                filtered.push(ch);
+                filtered.push_str(cluster);
                 count += 1;
             }
             if filtered != self.text {
                 self.text = filtered;
+                self.text_is_ascii = self.text.is_ascii();
             }
-            text_char_len(&self.text)
+            self.text_cursor_len()
         };
         self.cursor = self.cursor.min(len);
         if let Some(sel) = &mut self.selection {
@@ -1835,7 +2215,7 @@ impl TextInputState {
         if let Some(comp) = &mut self.composition {
             comp.range.start = comp.range.start.min(len);
             comp.range.end = comp.range.end.min(len);
-            if comp.range.start >= comp.range.end {
+            if comp.range.start > comp.range.end || comp.text.is_empty() {
                 self.composition = None;
             }
         }
@@ -1843,19 +2223,12 @@ impl TextInputState {
 
     fn pick_cursor(&self, x: f32, style: &TextInputStyle, text_ctx: &mut TextCtx) -> usize {
         let display = self.display_text();
-        let mut best = 0usize;
-        let mut best_dist = f32::MAX;
-        for idx in 0..=display.chars().count() {
-            let width = measure_prefix(text_ctx, style.font_id, style.font_px, &display, idx)
-                .unwrap_or(0.0);
-            let caret = style.padding.left + width;
-            let d = (caret - x).abs();
-            if d < best_dist {
-                best_dist = d;
-                best = idx;
-            }
-        }
-        best
+        let len = text_cursor_len(&display);
+        let Some(metrics) = text_ctx.cached_prefix_metrics(&display, style.font_id, style.font_px)
+        else {
+            return 0;
+        };
+        metrics.map.cursor_for_x(x - style.padding.left).min(len)
     }
 
     fn display_text(&self) -> String {
@@ -1863,10 +2236,44 @@ impl TextInputState {
             return self.text.clone();
         }
         if !self.secure {
-            self.text.clone()
+            if let Some(comp) = &self.composition {
+                let bytes = cursor_range_to_byte(&self.text, comp.range.clone());
+                let mut display = String::with_capacity(
+                    self.text.len().saturating_sub(bytes.end.saturating_sub(bytes.start))
+                        + comp.text.len(),
+                );
+                display.push_str(&self.text[..bytes.start]);
+                display.push_str(&comp.text);
+                display.push_str(&self.text[bytes.end..]);
+                display
+            } else {
+                self.text.clone()
+            }
         } else {
-            core::iter::repeat('•').take(self.text.chars().count()).collect()
+            core::iter::repeat('•').take(self.text_cursor_len()).collect()
         }
+    }
+
+    #[inline]
+    fn text_cursor_len(&self) -> usize {
+        if self.text_is_ascii {
+            self.text.len()
+        } else {
+            text_cursor_len(&self.text)
+        }
+    }
+
+    #[inline]
+    fn clamp_cursor_index(&self, idx: usize) -> usize {
+        idx.min(self.text_cursor_len())
+    }
+
+    #[inline]
+    fn cursor_range_to_byte(&self, range: Range<usize>) -> Range<usize> {
+        if self.text_is_ascii {
+            return range.start.min(self.text.len())..range.end.min(self.text.len());
+        }
+        cursor_range_to_byte(&self.text, range)
     }
 }
 
@@ -1940,19 +2347,22 @@ impl TextInput {
                 handle,
                 &display,
             );
-            let (atlas_data, aw, ah) = text_ctx.atlas.image();
-            uploader.update_a8(handle, 0, 0, aw, ah, atlas_data, aw as usize);
+            let _ = text_ctx.ensure_gpu(uploader);
             return;
         }
+
+        let prefix_metrics = text_ctx.cached_prefix_metrics(&display, style.font_id, style.font_px);
 
         if let Some(sel) = &state.selection {
             if sel.start < sel.end {
                 let sx = content.x
-                    + measure_prefix(text_ctx, style.font_id, style.font_px, &display, sel.start)
-                        .unwrap_or(0.0);
+                    + prefix_metrics
+                        .as_ref()
+                        .map_or(0.0, |metrics| metrics.map.width_at(sel.start));
                 let ex = content.x
-                    + measure_prefix(text_ctx, style.font_id, style.font_px, &display, sel.end)
-                        .unwrap_or(sx);
+                    + prefix_metrics
+                        .as_ref()
+                        .map_or(sx - content.x, |metrics| metrics.map.width_at(sel.end));
                 let highlight =
                     gfx::RectF::new(sx, content.y - 2.0, (ex - sx).max(1.0), style.font_px + 6.0);
                 builder.rrect(highlight, [4.0; 4], style.selection);
@@ -1960,57 +2370,49 @@ impl TextInput {
         }
 
         if let Some(comp) = &state.composition {
-            if comp.range.start < comp.range.end {
+            let marked_len = text_cursor_len(&comp.text);
+            let display_end = comp.range.start.saturating_add(marked_len).max(comp.range.end);
+            if comp.range.start < display_end {
                 let sx = content.x
-                    + measure_prefix(
-                        text_ctx,
-                        style.font_id,
-                        style.font_px,
-                        &display,
-                        comp.range.start,
-                    )
-                    .unwrap_or(0.0);
+                    + prefix_metrics
+                        .as_ref()
+                        .map_or(0.0, |metrics| metrics.map.width_at(comp.range.start));
                 let ex = content.x
-                    + measure_prefix(
-                        text_ctx,
-                        style.font_id,
-                        style.font_px,
-                        &display,
-                        comp.range.end,
-                    )
-                    .unwrap_or(sx);
+                    + prefix_metrics
+                        .as_ref()
+                        .map_or(sx - content.x, |metrics| metrics.map.width_at(display_end));
                 let underline =
                     gfx::RectF::new(sx, content.y + style.font_px + 2.0, (ex - sx).max(1.0), 2.0);
                 builder.rrect(underline, [1.0; 4], style.composition);
             }
         }
 
-        if let Some(font) = text_ctx.fonts.font(style.font_id) {
-            if let Ok(shape) = text_ctx.shaper.shape(font, style.font_id, &display, style.font_px) {
-                let dl = builder.drawlist_mut();
-                let run = shape.bake_into(
-                    &mut text_ctx.atlas,
-                    &mut dl.vertices,
-                    &mut dl.indices,
-                    style.text,
-                    handle,
-                    content.x,
-                    content.y,
-                    device_scale,
-                );
-                let _ = dl;
-                builder.glyph_run(run);
-            } else {
-                return;
-            }
-        } else {
+        let Some(layout) = text_ctx.cached_label_layout(
+            &display,
+            style.font_id,
+            style.font_px,
+            false,
+            f32::INFINITY,
+        ) else {
             return;
-        }
+        };
+        let Some(line) = layout.lines.first() else {
+            return;
+        };
+        let _ = bake_cached_label_line(
+            line,
+            style.text,
+            handle,
+            content.x,
+            content.y,
+            device_scale,
+            text_ctx,
+            builder,
+        );
 
         if state.focused && state.caret_on {
             let caret_w =
-                measure_prefix(text_ctx, style.font_id, style.font_px, &display, state.cursor)
-                    .unwrap_or(0.0);
+                prefix_metrics.as_ref().map_or(0.0, |metrics| metrics.map.width_at(state.cursor));
             let caret_rect =
                 gfx::RectF::new(content.x + caret_w, content.y - 1.0, 1.5, style.font_px + 4.0);
             builder.rrect(caret_rect, [0.8; 4], style.caret);
@@ -2035,8 +2437,7 @@ impl TextInput {
             );
         }
 
-        let (atlas_data, aw, ah) = text_ctx.atlas.image();
-        uploader.update_a8(handle, 0, 0, aw, ah, atlas_data, aw as usize);
+        let _ = text_ctx.ensure_gpu(uploader);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2123,55 +2524,14 @@ impl TextInput {
     }
 }
 
-fn measure_prefix(
-    text_ctx: &mut TextCtx,
-    font_id: usize,
-    font_px: f32,
-    text: &str,
-    count: usize,
-) -> Option<f32> {
-    let slice: String = text.chars().take(count).collect();
-    if slice.is_empty() {
-        return Some(0.0);
-    }
-    let font = text_ctx.fonts.font(font_id)?;
-    let shape = text_ctx.shaper.shape(font, font_id, &slice, font_px).ok()?;
-    Some(shape.width())
-}
-
-fn char_range_to_byte(s: &str, range: Range<usize>) -> Range<usize> {
-    if s.is_ascii() {
-        return range.start.min(s.len())..range.end.min(s.len());
-    }
-    let mut start = if range.start == 0 { Some(0) } else { None };
-    let mut end = if range.end == 0 { Some(0) } else { None };
-    if start.is_none() || end.is_none() {
-        for (i, (byte, _)) in s.char_indices().enumerate() {
-            if start.is_none() && i == range.start {
-                start = Some(byte);
-            }
-            if end.is_none() && i == range.end {
-                end = Some(byte);
-            }
-            if start.is_some() && end.is_some() {
-                break;
-            }
-        }
-    }
-    start.unwrap_or(s.len())..end.unwrap_or(s.len())
+#[inline]
+fn cursor_range_to_byte(s: &str, range: Range<usize>) -> Range<usize> {
+    text_boundary::cluster_range_to_byte(s, range)
 }
 
 #[inline]
-fn text_char_len(s: &str) -> usize {
-    if s.is_ascii() {
-        s.len()
-    } else {
-        s.chars().count()
-    }
-}
-
-fn clamp_index(s: &str, idx: usize) -> usize {
-    cmp::min(idx, text_char_len(s))
+fn text_cursor_len(s: &str) -> usize {
+    text_boundary::cluster_count(s)
 }
 
 /// Fullscreen modal-overlay blur parameters after resolving the current viewport and animation state.
@@ -2591,9 +2951,9 @@ impl PickerState {
         builder.rrect(highlight, [style.center_band_radius(rect); 4], style.highlight);
 
         let handle = text_ctx.ensure_gpu(uploader);
-        let Some(font) = text_ctx.fonts.font(style.font_id) else {
+        if text_ctx.fonts.font(style.font_id).is_none() {
             return;
-        };
+        }
         builder.clip_push(gfx::RectI::new(
             rect.x.floor() as i32,
             rect.y.floor() as i32,
@@ -2615,32 +2975,38 @@ impl PickerState {
                 if item_rect.y + item_rect.h <= rect.y || item_rect.y >= rect.y + rect.h {
                     continue;
                 }
-                let Ok(shape) = text_ctx.shaper.shape(font, style.font_id, label, style.font_px)
-                else {
+                let Some(layout) = text_ctx.cached_label_layout(
+                    label,
+                    style.font_id,
+                    style.font_px,
+                    false,
+                    f32::INFINITY,
+                ) else {
                     continue;
                 };
-                let text_x = item_rect.x + (item_rect.w - shape.width()) * 0.50;
+                let Some(line) = layout.lines.first() else {
+                    continue;
+                };
+                let text_x = item_rect.x + (item_rect.w - line.width) * 0.50;
                 let text_y =
                     item_rect.y + (item_rect.h - style.font_px) * 0.50 + style.baseline_shift;
-                let dl = builder.drawlist_mut();
-                let run = shape.bake_into(
-                    &mut text_ctx.atlas,
-                    &mut dl.vertices,
-                    &mut dl.indices,
+                let _ = bake_cached_label_line(
+                    line,
                     style.text_color,
                     handle,
                     text_x,
                     text_y,
                     device_scale,
+                    text_ctx,
+                    builder,
                 );
-                let _ = dl;
-                builder.glyph_run(run);
             }
         }
 
         builder.clip_pop();
-        let (data, w, h) = text_ctx.atlas.image();
-        uploader.update_a8(handle, 0, 0, w, h, data, w as usize);
+        if text_ctx.atlas.dirty_rect().is_some() {
+            let _ = text_ctx.ensure_gpu(uploader);
+        }
     }
 }
 

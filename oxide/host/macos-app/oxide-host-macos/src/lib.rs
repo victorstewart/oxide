@@ -67,6 +67,8 @@ struct AppState {
     renderer: Option<Box<metal::MetalRenderer>>,
     router: Option<test_scenes::Router<MtlUploader>>,
     builder: ui::DrawListBuilder,
+    pending_damage_rects: Vec<gfx_api::RectI>,
+    prepared_frame: bool,
     touch: PrimaryTouchTracker,
     last_ms: u64,
     inited: bool,
@@ -108,6 +110,20 @@ const IDLE_SETTLE_FRAMES: u8 = 2;
 fn mark_frame_dirty(app: &mut AppState) {
     app.frame_dirty = true;
     app.settle_frames_remaining = IDLE_SETTLE_FRAMES;
+}
+
+fn retain_pending_damage_for_retry(
+    pending: &mut Vec<gfx_api::RectI>,
+    mut damage: Vec<gfx_api::RectI>,
+) {
+    if damage.is_empty() {
+        return;
+    }
+    if pending.is_empty() {
+        *pending = damage;
+    } else {
+        pending.append(&mut damage);
+    }
 }
 
 #[no_mangle]
@@ -307,15 +323,15 @@ pub extern "C" fn macos_app_frame_with_drawable(
     scale: f32,
     drawable_ptr: *mut ::libc::c_void,
 ) -> ::libc::c_int {
-    macos_app_frame_inner(w, h, scale, drawable_ptr)
+    let rc = macos_app_prepare_frame(w, h, scale);
+    if rc != 0 {
+        return rc;
+    }
+    macos_app_submit_prepared_frame_with_drawable(drawable_ptr)
 }
 
-fn macos_app_frame_inner(
-    w: u32,
-    h: u32,
-    scale: f32,
-    drawable_ptr: *mut ::libc::c_void,
-) -> ::libc::c_int {
+#[no_mangle]
+pub extern "C" fn macos_app_prepare_frame(w: u32, h: u32, scale: f32) -> ::libc::c_int {
     let mut app = lock_or_recover(app_state());
     if !app.inited {
         return -1;
@@ -324,36 +340,23 @@ fn macos_app_frame_inner(
     let now = timing::now_ms();
     let dt_ms = (now.saturating_sub(app.last_ms)) as u32;
     app.last_ms = now;
-    // Resize with a short renderer borrow
     {
         let renderer = match app.renderer.as_mut().map(|b| b.as_mut()) {
             Some(r) => r,
             None => return -2,
         };
         let _ = renderer.resize(w, h, scale);
-        if !drawable_ptr.is_null() {
-            let present_result = unsafe { renderer.prepare_present_drawable(drawable_ptr.cast()) };
-            if present_result.is_err() {
-                return -5;
-            }
-        }
     }
-    // Build draws via router
+
     let mut builder = core::mem::take(&mut app.builder);
     builder.clear();
     let vp =
         gfx_api::RectF::new(0.0, 0.0, (w as f32) / scale.max(1.0), (h as f32) / scale.max(1.0));
-    // Compute draws and collect damage rects from the router
     let damage_rects = {
         let router = match app.router.as_mut() {
             Some(r) => r,
             None => {
                 app.builder = builder;
-                if !drawable_ptr.is_null() {
-                    if let Some(renderer) = app.renderer.as_mut().map(|b| b.as_mut()) {
-                        let _ = renderer.cancel_present_drawable();
-                    }
-                }
                 return -3;
             }
         };
@@ -361,35 +364,58 @@ fn macos_app_frame_inner(
         router.draw(vp, scale, &mut builder);
         router.take_damage()
     };
-    // Encode and submit with a fresh renderer borrow
-    let submit_result = {
-        let Some(renderer) = app.renderer.as_mut().map(|b| b.as_mut()) else {
-            app.builder = builder;
-            return -2;
-        };
-        // Build Damage object (dp units); renderer will ignore it if the flag is disabled
-        let damage_obj = gfx_api::Damage { rects: damage_rects };
-        let token = renderer.begin_frame(&gfx_api::FrameTarget, Some(&damage_obj));
-        {
-            // Coalesce adjacent compatible draws for fewer submissions
-            let dl = builder.drawlist_mut();
-            oxide_ui_core::coalesce_adjacent_draws(dl);
-        }
-        renderer.encode_pass(builder.drawlist());
-        if let Err(_) = renderer.submit(token) {
-            if !drawable_ptr.is_null() {
-                let _ = renderer.cancel_present_drawable();
-            }
-            Err(-4)
-        } else {
-            Ok(())
-        }
-    };
-    if let Err(code) = submit_result {
-        app.builder = builder;
-        return code;
+    {
+        let dl = builder.drawlist_mut();
+        oxide_ui_core::coalesce_adjacent_draws(dl);
     }
     app.builder = builder;
+    retain_pending_damage_for_retry(&mut app.pending_damage_rects, damage_rects);
+    app.prepared_frame = true;
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn macos_app_submit_prepared_frame_with_drawable(
+    drawable_ptr: *mut ::libc::c_void,
+) -> ::libc::c_int {
+    let mut app = lock_or_recover(app_state());
+    if !app.inited {
+        return -1;
+    }
+    if !app.prepared_frame {
+        return -6;
+    }
+    let mut damage_rects = core::mem::take(&mut app.pending_damage_rects);
+    let builder = core::mem::take(&mut app.builder);
+    let submit_result = if let Some(renderer) = app.renderer.as_mut().map(|b| b.as_mut()) {
+        let present_result = if drawable_ptr.is_null() {
+            Ok(())
+        } else {
+            unsafe { renderer.prepare_present_drawable(drawable_ptr.cast()) }
+        };
+        if present_result.is_err() {
+            Err(-5)
+        } else {
+            let damage_obj = gfx_api::Damage { rects: core::mem::take(&mut damage_rects) };
+            let token = renderer.begin_frame(&gfx_api::FrameTarget, Some(&damage_obj));
+            renderer.encode_pass(builder.drawlist());
+            if let Err(_) = renderer.submit(token) {
+                let _ = renderer.cancel_present_drawable();
+                damage_rects = damage_obj.rects;
+                Err(-4)
+            } else {
+                Ok(())
+            }
+        }
+    } else {
+        Err(-2)
+    };
+    app.builder = builder;
+    app.prepared_frame = false;
+    if let Err(code) = submit_result {
+        retain_pending_damage_for_retry(&mut app.pending_damage_rects, damage_rects);
+        return code;
+    }
     app.submitted_frames = app.submitted_frames.saturating_add(1);
     if app.settle_frames_remaining > 0 {
         app.settle_frames_remaining -= 1;
@@ -397,6 +423,26 @@ fn macos_app_frame_inner(
     app.frame_dirty = false;
     process_telemetry_commands(&mut app);
     0
+}
+
+#[no_mangle]
+pub extern "C" fn macos_app_cancel_prepared_frame() {
+    let mut app = lock_or_recover(app_state());
+    app.prepared_frame = false;
+    mark_frame_dirty(&mut app);
+}
+
+fn macos_app_frame_inner(
+    w: u32,
+    h: u32,
+    scale: f32,
+    drawable_ptr: *mut ::libc::c_void,
+) -> ::libc::c_int {
+    let rc = macos_app_prepare_frame(w, h, scale);
+    if rc != 0 {
+        return rc;
+    }
+    macos_app_submit_prepared_frame_with_drawable(drawable_ptr)
 }
 
 #[no_mangle]
@@ -495,6 +541,7 @@ extern "C" fn touch_cb(id: u64, phase: u32, x: f32, y: f32, ts_ns: u64) {
         let touch_event = platform_api::TouchEvent {
             id: platform_api::TouchId(id),
             phase: touch_phase,
+            timestamp_ns: ts_ns,
             x,
             y,
             pressure: None,

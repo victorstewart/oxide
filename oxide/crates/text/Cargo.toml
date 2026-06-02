@@ -15,3 +15,4 @@ ttf-parser = "0.20"
 oxide-renderer-api = { path = "../renderer-api" }
 alloc-no-stdlib = { version = "2", optional = true }
 anyhow = "1.0"
+unicode-segmentation = "=1.12.0"

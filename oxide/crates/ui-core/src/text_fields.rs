@@ -1,6 +1,7 @@
 use crate::{
     bitmap_text::{draw_text_aligned, line_height, text_width, TextAlign, TextStyle},
     elements::{CharFilter, ShiftingTextInputState, ShiftingTextValidation},
+    text_boundary,
 };
 use core::ops::Range;
 use oxide_platform_api::TouchId;
@@ -384,25 +385,26 @@ pub fn draw_text_input_options_popover(
 
 #[must_use]
 pub fn text_word_range_at_char_index(text: &str, char_index: usize) -> Range<usize> {
-    let chars: alloc::vec::Vec<char> = text.chars().collect();
-    if chars.is_empty() {
+    let boundaries = text_boundary::cluster_boundaries(text);
+    let cluster_len = boundaries.len().saturating_sub(1);
+    if cluster_len == 0 {
         return 0..0;
     }
-    let mut index = char_index.min(chars.len());
-    if index == chars.len() || !text_word_char(chars[index]) {
-        if index > 0 && text_word_char(chars[index - 1]) {
+    let mut index = char_index.min(cluster_len);
+    if index == cluster_len || !text_word_cluster(text, &boundaries, index) {
+        if index > 0 && text_word_cluster(text, &boundaries, index - 1) {
             index -= 1;
         }
     }
-    if index >= chars.len() || !text_word_char(chars[index]) {
-        return char_index.min(chars.len())..char_index.min(chars.len());
+    if index >= cluster_len || !text_word_cluster(text, &boundaries, index) {
+        return char_index.min(cluster_len)..char_index.min(cluster_len);
     }
     let mut start = index;
-    while start > 0 && text_word_char(chars[start - 1]) {
+    while start > 0 && text_word_cluster(text, &boundaries, start - 1) {
         start -= 1;
     }
     let mut end = index + 1;
-    while end < chars.len() && text_word_char(chars[end]) {
+    while end < cluster_len && text_word_cluster(text, &boundaries, end) {
         end += 1;
     }
     start..end
@@ -410,9 +412,7 @@ pub fn text_word_range_at_char_index(text: &str, char_index: usize) -> Range<usi
 
 #[must_use]
 pub fn text_char_slice(input: &str, range: Range<usize>) -> String {
-    let start = byte_index_for_char(input, range.start);
-    let end = byte_index_for_char(input, range.end);
-    input[start..end].to_owned()
+    text_boundary::cluster_slice(input, range)
 }
 
 #[must_use]
@@ -479,39 +479,37 @@ pub fn single_line_text_selection_index_for_x(
     x: f32,
     anchor: TextSelectionDragAnchor,
 ) -> usize {
-    let char_len = char_count(text);
-    if char_len == 0 {
+    let cluster_len = char_count(text);
+    if cluster_len == 0 {
         return 0;
     }
-    let mut boundaries = alloc::vec::Vec::with_capacity(char_len + 1);
-    boundaries.push(text_x);
-    let mut prefix = String::new();
-    for ch in text.chars() {
-        prefix.push(ch);
-        boundaries.push(text_x + text_width(prefix.as_str(), style));
+    let byte_boundaries = text_boundary::cluster_boundaries(text);
+    let mut x_boundaries = alloc::vec::Vec::with_capacity(cluster_len + 1);
+    for byte in byte_boundaries {
+        x_boundaries.push(text_x + text_width(&text[..byte], style));
     }
     match anchor {
         TextSelectionDragAnchor::Start => {
-            if x <= boundaries[0] {
+            if x <= x_boundaries[0] {
                 return 0;
             }
-            for index in 1..boundaries.len() {
-                if x < boundaries[index] {
+            for index in 1..x_boundaries.len() {
+                if x < x_boundaries[index] {
                     return index - 1;
                 }
             }
-            char_len
+            cluster_len
         }
         TextSelectionDragAnchor::End => {
-            if x <= boundaries[0] {
+            if x <= x_boundaries[0] {
                 return 0;
             }
-            for index in 1..boundaries.len() {
-                if x <= boundaries[index] {
+            for index in 1..x_boundaries.len() {
+                if x <= x_boundaries[index] {
                     return index;
                 }
             }
-            char_len
+            cluster_len
         }
     }
 }
@@ -635,7 +633,7 @@ impl TextFieldPolicy {
 
     #[must_use]
     pub fn accepts_edit(&self, input: &str) -> bool {
-        input.chars().count() <= self.max_length.unwrap_or(usize::MAX)
+        char_count(input) <= self.max_length.unwrap_or(usize::MAX)
             && input.chars().all(|ch| self.filter.allows(ch))
     }
 
@@ -1187,7 +1185,12 @@ impl EditableText {
     }
 
     pub fn pop_last(&mut self) {
-        let _ = self.value.pop();
+        let len = char_count(&self.value);
+        if len == 0 {
+            return;
+        }
+        let keep = byte_index_for_char(&self.value, len - 1);
+        self.value.truncate(keep);
     }
 
     pub fn apply_commit(&mut self, input: &str) {
@@ -1264,7 +1267,7 @@ impl SecureText {
         if self.revealed_ms_remaining > 0 {
             self.inner.value().to_owned()
         } else {
-            "*".repeat(self.inner.value().chars().count())
+            "*".repeat(char_count(self.inner.value()))
         }
     }
 
@@ -1276,7 +1279,7 @@ impl SecureText {
         if self.revealed_ms_remaining > 0 {
             self.inner.text_before_caret().to_owned()
         } else {
-            "*".repeat(self.inner.text_before_caret().chars().count())
+            "*".repeat(char_count(self.inner.text_before_caret()))
         }
     }
 
@@ -1404,28 +1407,16 @@ fn truncate(input: &str, max: usize) -> String {
         return input.to_owned();
     }
 
-    let mut count = 0usize;
-    let mut end = input.len();
-    for (idx, _) in input.char_indices() {
-        if count == max {
-            end = idx;
-            break;
-        }
-        count += 1;
-    }
-
+    let end = text_boundary::byte_index_for_cluster(input, max);
     input[..end].to_owned()
 }
 
 fn char_count(input: &str) -> usize {
-    input.chars().count()
+    text_boundary::cluster_count(input)
 }
 
 fn byte_index_for_char(input: &str, char_index: usize) -> usize {
-    if char_index == 0 {
-        return 0;
-    }
-    input.char_indices().nth(char_index).map(|(idx, _)| idx).unwrap_or(input.len())
+    text_boundary::byte_index_for_cluster(input, char_index)
 }
 
 fn rect_contains(rect: gfx::RectF, x: f32, y: f32) -> bool {
@@ -1449,4 +1440,14 @@ fn vertex(x: f32, y: f32) -> gfx::Vertex {
 
 fn text_word_char(ch: char) -> bool {
     !ch.is_whitespace()
+}
+
+fn text_word_cluster(text: &str, boundaries: &[usize], index: usize) -> bool {
+    let Some(start) = boundaries.get(index).copied() else {
+        return false;
+    };
+    let Some(end) = boundaries.get(index + 1).copied() else {
+        return false;
+    };
+    text[start..end].chars().any(text_word_char)
 }

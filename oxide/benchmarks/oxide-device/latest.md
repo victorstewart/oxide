@@ -8,16 +8,17 @@
 
 | Section | Status | Notes |
 | --- | --- | --- |
-| `Oxide On-Screen Host Battery` | `implemented` | This device report is captured through the real on-screen Oxide MetalView host path instead of the offscreen Rust perf runner. |
+| `Oxide On-Screen Host Battery` | `partial` | This stale baseline is captured through the real on-screen Oxide MetalView host path, but it predates the required memory and frame-cadence metric contract. |
 | `Workspace Engine Battery` | `separate` | The broader offscreen engine and microbenchmark suite remains in benchmarks/workspace and is intentionally not mixed into this device comparison report. |
-| `Animation & Visual Effects` | `implemented` | The official matched device battery now carries representative Oxide on-screen animation workloads through the live host path. |
-| `Navigation & Input Latency` | `implemented` | The official matched device battery now carries direct Oxide button-press and text-focus response workloads through the live host path. |
-| `Representative Journeys` | `implemented` | The official matched device battery now carries representative Oxide journey workloads through the live host path. |
-| `Camera Preview` | `implemented` | The official custom-camera row uses the real on-screen Oxide preview path with Oxide owning the visible preview on the phone. |
+| `Animation & Visual Effects` | `partial` | The stale baseline carries representative Oxide on-screen animation workloads through the live host path, but lacks required hitch and missed-frame distributions. |
+| `Navigation & Input Latency` | `partial` | The stale baseline carries direct Oxide button-press and text-focus response workloads through the live host path, but lacks required hitch and missed-frame distributions. |
+| `Representative Journeys` | `partial` | The stale baseline carries representative Oxide journey workloads through the live host path, but lacks required hitch and missed-frame distributions. |
+| `Camera Preview` | `partial` | The stale baseline uses the real on-screen Oxide preview path with Oxide owning the visible preview on the phone, but lacks required memory and frame-cadence metrics. |
 
 - Device: `Victor’s iPhone`
 - Executable: `OxideHost`
 - Device flow: launch the parked host app on the physical iPhone with a live on-screen Oxide workload selected, collect workload and memory summaries from the app console, and collect direct GPU/signpost metrics from a process-scoped launched Metal System Trace when tracing is enabled.
+- Metric contract status: stale partial. This 2026-04-05 baseline predates required memory and frame-cadence distributions; rerun the physical-device baseline before using it as a complete official comparison.
 - Comparison scope: only on-screen Oxide host cases are persisted here. Offscreen Rust workspace numbers remain separate and are not part of the official device comparison.
 
 ## Results

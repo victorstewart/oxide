@@ -3987,10 +3987,6 @@ int32_t oxide_cam_start_default_preview_only(void) {
   return oxide_cam_start_default_impl(NO, 0, YES);
 }
 
-int32_t oxide_cam_start_native_preview_layer(void) {
-  return oxide_cam_start_default_impl(NO, g_oxide_camera_default_mode, NO);
-}
-
 void oxide_cam_stop(void) {
   dispatch_sync(CameraRegistryQueue(), ^{
     if (g_default_stream) {

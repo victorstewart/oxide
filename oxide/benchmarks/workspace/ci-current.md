@@ -57,6 +57,6 @@
 
 ## Baseline Workflow
 
-- Update the committed baseline only with review: `PERF_REPORT_DATE=$(date +%F) cargo run --release -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --write-baseline`
+- Update the committed baseline only with review: `PERF_REPORT_DATE=$(date +%F) cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --write-baseline`
 - Latest JSON baseline: `benchmarks/workspace/latest.json`
 - Latest Markdown baseline: `benchmarks/workspace/latest.md`

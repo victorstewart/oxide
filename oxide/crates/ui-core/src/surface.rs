@@ -3,11 +3,13 @@
 //! scatter-style transition helpers inspired by AsyncDisplayKit flows.
 
 use crate::{
-    anim,
+    anim, append_retained_drawlist,
     capture::SurfaceCapture,
+    drawlist_retained_replay_safe_for,
+    elements::TextCtx,
     layout_async::AsyncLayoutCoordinator,
-    overlay::{OverlayPointerResult, OverlayStack, PopupManager},
-    DrawListBuilder, LayoutRect, NodeId, NodeStyle, NodeTree,
+    overlay::{OverlayPointerResult, OverlayStack, PopupManager, RetainedOverlayStats},
+    DrawListBuilder, LayoutRect, LayoutStats, NodeId, NodeStyle, NodeTree, RetainedNodeStats,
 };
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
@@ -15,7 +17,7 @@ use oxide_renderer_api as gfx;
 use oxide_timing as timing;
 
 /// Safe-area and chrome metadata supplied by the host platform.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ChromeMetrics {
     pub safe_insets: gfx::Insets,
     pub status_bar_height: f32,
@@ -24,6 +26,161 @@ pub struct ChromeMetrics {
 impl Default for ChromeMetrics {
     fn default() -> Self {
         Self { safe_insets: gfx::Insets::new(0.0, 0.0, 0.0, 0.0), status_bar_height: 0.0 }
+    }
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DirtyClass {
+    Style = 0,
+    Layout = 1,
+    Text = 2,
+    Paint = 3,
+    Transform = 4,
+    Opacity = 5,
+    Clip = 6,
+    ImageContent = 7,
+    CameraFrame = 8,
+    Accessibility = 9,
+    HitTest = 10,
+}
+
+impl DirtyClass {
+    #[inline]
+    const fn bit(self) -> u16 {
+        1_u16 << (self as u8)
+    }
+}
+
+const DRAW_DIRTY_BITS: u16 = DirtyClass::Style.bit()
+    | DirtyClass::Layout.bit()
+    | DirtyClass::Text.bit()
+    | DirtyClass::Paint.bit()
+    | DirtyClass::Transform.bit()
+    | DirtyClass::Opacity.bit()
+    | DirtyClass::Clip.bit()
+    | DirtyClass::ImageContent.bit()
+    | DirtyClass::CameraFrame.bit();
+
+const ALL_DIRTY_BITS: u16 =
+    DRAW_DIRTY_BITS | DirtyClass::Accessibility.bit() | DirtyClass::HitTest.bit();
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DirtySet {
+    bits: u16,
+}
+
+impl DirtySet {
+    #[inline]
+    pub const fn empty() -> Self {
+        Self { bits: 0 }
+    }
+
+    #[inline]
+    pub const fn all() -> Self {
+        Self { bits: ALL_DIRTY_BITS }
+    }
+
+    #[inline]
+    pub fn mark(&mut self, class: DirtyClass) {
+        self.bits |= class.bit();
+    }
+
+    #[inline]
+    pub fn clear(&mut self, class: DirtyClass) {
+        self.bits &= !class.bit();
+    }
+
+    #[inline]
+    pub const fn contains(self, class: DirtyClass) -> bool {
+        self.bits & class.bit() != 0
+    }
+
+    #[inline]
+    pub const fn is_empty(self) -> bool {
+        self.bits == 0
+    }
+
+    #[inline]
+    pub const fn affects_draw(self) -> bool {
+        self.bits & DRAW_DIRTY_BITS != 0
+    }
+
+    #[inline]
+    pub fn clear_draw_affecting(&mut self) {
+        self.bits &= !DRAW_DIRTY_BITS;
+    }
+}
+
+fn transform_changed(before: &NodeStyle, after: &NodeStyle) -> bool {
+    before.transform.tx != after.transform.tx
+        || before.transform.ty != after.transform.ty
+        || before.transform.sx != after.transform.sx
+        || before.transform.sy != after.transform.sy
+        || before.transform.rot_rad != after.transform.rot_rad
+}
+
+fn style_change_affects_parent_layout(before: &NodeStyle, after: &NodeStyle) -> bool {
+    before.size != after.size
+        || before.min_size != after.min_size
+        || before.max_size != after.max_size
+        || before.margin != after.margin
+        || before.flex_grow != after.flex_grow
+        || before.overflow != after.overflow
+}
+
+fn style_change_affects_content_layout(before: &NodeStyle, after: &NodeStyle) -> bool {
+    style_change_affects_parent_layout(before, after)
+        || before.axis != after.axis
+        || before.padding != after.padding
+        || before.gap != after.gap
+}
+
+fn style_change_affects_paint(before: &NodeStyle, after: &NodeStyle) -> bool {
+    style_change_affects_content_layout(before, after)
+        || before.background != after.background
+        || before.corner_radii != after.corner_radii
+        || before.opacity != after.opacity
+        || before.shadow_alpha != after.shadow_alpha
+        || before.clip != after.clip
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetainedDrawStatus {
+    Rebuilt,
+    Reused,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RetainedCompositionStats {
+    pub current_reused: usize,
+    pub current_rebuilt: usize,
+    pub overlay_reused: usize,
+    pub overlay_rebuilt: usize,
+    pub popup_reused: usize,
+    pub popup_rebuilt: usize,
+}
+
+impl RetainedCompositionStats {
+    fn record_current(&mut self, status: RetainedDrawStatus) {
+        match status {
+            RetainedDrawStatus::Rebuilt => {
+                self.current_rebuilt = self.current_rebuilt.saturating_add(1);
+            }
+            RetainedDrawStatus::Reused => {
+                self.current_reused = self.current_reused.saturating_add(1);
+            }
+        }
+    }
+
+    fn record_overlays(&mut self, stats: RetainedOverlayStats) {
+        self.overlay_reused = self.overlay_reused.saturating_add(stats.reused_surfaces);
+        self.overlay_rebuilt = self.overlay_rebuilt.saturating_add(stats.rebuilt_surfaces);
+    }
+
+    fn record_popups(&mut self, stats: RetainedOverlayStats) {
+        self.popup_reused = self.popup_reused.saturating_add(stats.reused_surfaces);
+        self.popup_rebuilt = self.popup_rebuilt.saturating_add(stats.rebuilt_surfaces);
     }
 }
 
@@ -113,11 +270,16 @@ pub struct UiSurface {
     tree: NodeTree,
     layout_worker: AsyncLayoutCoordinator<Vec<(NodeId, LayoutRect)>>,
     pending_layout: Option<u64>,
+    last_layout_size: Option<(u32, u32)>,
     chrome: ChromeMetrics,
     animator: anim::Animator,
     overrides: BTreeMap<NodeId, anim::AnimOverrides>,
     gate: InteractionGate,
     scatter: ScatterState,
+    dirty: DirtySet,
+    retained_draws: Option<gfx::DrawList>,
+    retained_node_stats: RetainedNodeStats,
+    last_layout_stats: LayoutStats,
 }
 
 impl UiSurface {
@@ -126,11 +288,16 @@ impl UiSurface {
             tree: NodeTree::new_root(root_style),
             layout_worker: AsyncLayoutCoordinator::new(),
             pending_layout: None,
+            last_layout_size: None,
             chrome: ChromeMetrics::default(),
             animator: anim::Animator::new(),
             overrides: BTreeMap::new(),
             gate: InteractionGate::default(),
             scatter: ScatterState::default(),
+            dirty: DirtySet::all(),
+            retained_draws: None,
+            retained_node_stats: RetainedNodeStats::default(),
+            last_layout_stats: LayoutStats::default(),
         }
     }
 
@@ -146,7 +313,156 @@ impl UiSurface {
 
     #[inline]
     pub fn tree_mut(&mut self) -> &mut NodeTree {
+        self.mark_tree_mutated();
         &mut self.tree
+    }
+
+    pub fn add_node(&mut self, parent: NodeId, style: NodeStyle) -> Option<NodeId> {
+        self.tree.style(parent)?;
+        let id = self.tree.add_node(parent, style);
+        self.mark_scoped_tree_mutated();
+        Some(id)
+    }
+
+    pub fn remove_node(&mut self, id: NodeId) -> bool {
+        if id == self.tree.root() || self.tree.style(id).is_none() {
+            return false;
+        }
+        if !self.tree.remove_node(id) {
+            return false;
+        }
+        self.mark_scoped_tree_mutated();
+        true
+    }
+
+    #[inline]
+    pub fn dirty(&self) -> DirtySet {
+        self.dirty
+    }
+
+    #[inline]
+    pub fn mark_dirty(&mut self, class: DirtyClass) {
+        self.dirty.mark(class);
+        if class == DirtyClass::Layout {
+            self.tree.mark_layout_dirty(self.tree.root());
+        }
+        if class.bit() & DRAW_DIRTY_BITS != 0 {
+            self.retained_draws = None;
+            self.retained_node_stats = RetainedNodeStats::default();
+            self.tree.mark_all_draw_dirty();
+        }
+    }
+
+    pub fn mark_node_dirty(&mut self, id: NodeId, class: DirtyClass) -> bool {
+        if self.tree.style(id).is_none() {
+            return false;
+        }
+
+        self.dirty.mark(class);
+        match class {
+            DirtyClass::Layout => {
+                self.tree.mark_layout_dirty(id);
+                self.dirty.mark(DirtyClass::Accessibility);
+                self.dirty.mark(DirtyClass::HitTest);
+            }
+            DirtyClass::Transform => {
+                self.tree.mark_subtree_draw_dirty(id);
+                self.dirty.mark(DirtyClass::Paint);
+                self.dirty.mark(DirtyClass::Accessibility);
+                self.dirty.mark(DirtyClass::HitTest);
+            }
+            DirtyClass::Clip => {
+                self.tree.mark_node_and_ancestors_draw_dirty(id);
+                self.dirty.mark(DirtyClass::HitTest);
+            }
+            DirtyClass::Text => {
+                self.tree.mark_node_and_ancestors_draw_dirty(id);
+                self.dirty.mark(DirtyClass::Accessibility);
+            }
+            DirtyClass::Style
+            | DirtyClass::Paint
+            | DirtyClass::Opacity
+            | DirtyClass::ImageContent
+            | DirtyClass::CameraFrame => {
+                self.tree.mark_node_and_ancestors_draw_dirty(id);
+            }
+            DirtyClass::Accessibility | DirtyClass::HitTest => {}
+        }
+        if class.bit() & DRAW_DIRTY_BITS != 0 {
+            self.retained_draws = None;
+            self.retained_node_stats = RetainedNodeStats::default();
+        }
+        true
+    }
+
+    pub fn edit_style<F: FnOnce(&mut NodeStyle)>(&mut self, id: NodeId, edit: F) -> bool {
+        let Some((before, after)) = self.tree.edit_style(id, edit) else {
+            return false;
+        };
+        if before == after {
+            return false;
+        }
+
+        self.retained_draws = None;
+        self.retained_node_stats = RetainedNodeStats::default();
+        self.dirty.mark(DirtyClass::Style);
+        if style_change_affects_parent_layout(&before, &after) {
+            self.tree.mark_layout_dirty(id);
+            self.dirty.mark(DirtyClass::Layout);
+            self.dirty.mark(DirtyClass::Accessibility);
+            self.dirty.mark(DirtyClass::HitTest);
+        } else if style_change_affects_content_layout(&before, &after) {
+            self.tree.mark_node_layout_dirty(id);
+            self.dirty.mark(DirtyClass::Layout);
+            self.dirty.mark(DirtyClass::Accessibility);
+            self.dirty.mark(DirtyClass::HitTest);
+        }
+        if transform_changed(&before, &after) {
+            self.dirty.mark(DirtyClass::Transform);
+            self.dirty.mark(DirtyClass::Accessibility);
+            self.dirty.mark(DirtyClass::HitTest);
+            self.tree.mark_subtree_draw_dirty(id);
+        }
+        if before.opacity != after.opacity {
+            self.dirty.mark(DirtyClass::Opacity);
+        }
+        if before.clip != after.clip {
+            self.dirty.mark(DirtyClass::Clip);
+            self.dirty.mark(DirtyClass::HitTest);
+        }
+        if style_change_affects_paint(&before, &after) {
+            self.dirty.mark(DirtyClass::Paint);
+        }
+        true
+    }
+
+    #[inline]
+    pub fn retained_node_stats(&self) -> RetainedNodeStats {
+        self.retained_node_stats
+    }
+
+    #[inline]
+    pub fn last_layout_stats(&self) -> LayoutStats {
+        self.last_layout_stats
+    }
+
+    fn mark_tree_mutated(&mut self) {
+        self.dirty.mark(DirtyClass::Style);
+        self.dirty.mark(DirtyClass::Layout);
+        self.dirty.mark(DirtyClass::Paint);
+        self.dirty.mark(DirtyClass::Accessibility);
+        self.dirty.mark(DirtyClass::HitTest);
+        self.tree.mark_layout_dirty(self.tree.root());
+    }
+
+    fn mark_scoped_tree_mutated(&mut self) {
+        self.retained_draws = None;
+        self.retained_node_stats = RetainedNodeStats::default();
+        self.dirty.mark(DirtyClass::Style);
+        self.dirty.mark(DirtyClass::Layout);
+        self.dirty.mark(DirtyClass::Paint);
+        self.dirty.mark(DirtyClass::Accessibility);
+        self.dirty.mark(DirtyClass::HitTest);
     }
 
     #[inline]
@@ -160,21 +476,53 @@ impl UiSurface {
     }
 
     pub fn set_chrome_metrics(&mut self, metrics: ChromeMetrics) {
+        if self.chrome == metrics {
+            return;
+        }
         self.chrome = metrics;
+        self.dirty.mark(DirtyClass::Layout);
+        self.dirty.mark(DirtyClass::Paint);
+        self.dirty.mark(DirtyClass::Accessibility);
+        self.dirty.mark(DirtyClass::HitTest);
     }
 
     /// Apply the chrome insets to the root node padding.
     pub fn apply_chrome_padding_to_root(&mut self) {
+        let Some(current) = self.tree.style(self.tree.root()) else {
+            return;
+        };
+        if current.padding.left == self.chrome.safe_insets.left
+            && current.padding.top == self.chrome.safe_insets.top
+            && current.padding.right == self.chrome.safe_insets.right
+            && current.padding.bottom == self.chrome.safe_insets.bottom
+        {
+            return;
+        }
         if let Some(style) = self.tree.root_style_mut() {
             style.padding.left = self.chrome.safe_insets.left;
             style.padding.top = self.chrome.safe_insets.top;
             style.padding.right = self.chrome.safe_insets.right;
             style.padding.bottom = self.chrome.safe_insets.bottom;
+            self.dirty.mark(DirtyClass::Layout);
+            self.dirty.mark(DirtyClass::Paint);
+            self.dirty.mark(DirtyClass::Accessibility);
+            self.dirty.mark(DirtyClass::HitTest);
         }
     }
 
-    pub fn layout(&mut self, width: f32, height: f32) {
-        self.tree.layout(width, height);
+    pub fn layout(&mut self, width: f32, height: f32) -> LayoutStats {
+        let size = (width.to_bits(), height.to_bits());
+        if self.last_layout_size == Some(size) && !self.dirty.contains(DirtyClass::Layout) {
+            self.last_layout_stats = LayoutStats::default();
+            return self.last_layout_stats;
+        }
+        let stats = self.tree.layout(width, height);
+        self.last_layout_size = Some(size);
+        self.dirty.clear(DirtyClass::Layout);
+        self.dirty.mark(DirtyClass::Paint);
+        self.dirty.mark(DirtyClass::HitTest);
+        self.last_layout_stats = stats;
+        stats
     }
 
     pub fn request_async_layout<F>(&mut self, job: F) -> u64
@@ -192,6 +540,11 @@ impl UiSurface {
             if self.pending_layout == Some(seq) {
                 self.pending_layout = None;
             }
+            self.last_layout_stats = LayoutStats::default();
+            self.dirty.clear(DirtyClass::Layout);
+            self.dirty.mark(DirtyClass::Paint);
+            self.dirty.mark(DirtyClass::Accessibility);
+            self.dirty.mark(DirtyClass::HitTest);
             true
         } else {
             false
@@ -210,6 +563,77 @@ impl UiSurface {
         } else {
             self.tree.encode_draws_with_anims(b, &self.overrides);
         }
+    }
+
+    pub fn encode_retained(&mut self, b: &mut DrawListBuilder) -> RetainedDrawStatus {
+        self.encode_retained_impl(b, None)
+    }
+
+    pub fn encode_retained_with_text_atlas_revisions(
+        &mut self,
+        b: &mut DrawListBuilder,
+        atlases: &[(gfx::ImageHandle, u64)],
+    ) -> RetainedDrawStatus {
+        self.encode_retained_impl(b, Some(atlases))
+    }
+
+    pub fn encode_retained_with_text_ctx(
+        &mut self,
+        b: &mut DrawListBuilder,
+        text: &TextCtx,
+    ) -> RetainedDrawStatus {
+        if let Some(atlas) = text.retained_text_atlas_revision() {
+            self.encode_retained_impl(b, Some(core::slice::from_ref(&atlas)))
+        } else {
+            self.encode_retained_impl(b, None)
+        }
+    }
+
+    fn encode_retained_impl(
+        &mut self,
+        b: &mut DrawListBuilder,
+        text_atlases: Option<&[(gfx::ImageHandle, u64)]>,
+    ) -> RetainedDrawStatus {
+        if !self.dirty.affects_draw() {
+            if let Some(draws) = self.retained_draws.as_ref() {
+                if append_retained_drawlist(b, draws, text_atlases) {
+                    self.retained_node_stats =
+                        RetainedNodeStats { reused_nodes: 1, rebuilt_nodes: 0 };
+                    return RetainedDrawStatus::Reused;
+                }
+            }
+        }
+
+        let mut next = DrawListBuilder::new();
+        let node_stats = if self.overrides.is_empty() {
+            let retained = match text_atlases {
+                Some(atlases) => {
+                    self.tree.encode_draws_retained_with_text_atlas_revisions(&mut next, atlases)
+                }
+                None => self.tree.encode_draws_retained(&mut next),
+            };
+            if let Some(stats) = retained {
+                stats
+            } else {
+                next.clear();
+                self.encode(&mut next);
+                RetainedNodeStats::default()
+            }
+        } else {
+            self.encode(&mut next);
+            RetainedNodeStats::default()
+        };
+        let draws = next.into_inner();
+        self.retained_draws = None;
+        let cache_safe = drawlist_retained_replay_safe_for(&draws, text_atlases);
+        if b.append_drawlist(&draws) {
+            if cache_safe {
+                self.retained_draws = Some(draws);
+            }
+            self.dirty.clear_draw_affecting();
+            self.retained_node_stats = node_stats;
+        }
+        RetainedDrawStatus::Rebuilt
     }
 
     pub fn capture(&self, viewport: gfx::RectF, device_scale: f32) -> SurfaceCapture {
@@ -238,6 +662,9 @@ impl UiSurface {
 
     #[inline]
     pub fn overrides_mut(&mut self) -> &mut BTreeMap<NodeId, anim::AnimOverrides> {
+        self.dirty.mark(DirtyClass::Transform);
+        self.dirty.mark(DirtyClass::Opacity);
+        self.dirty.mark(DirtyClass::Paint);
         &mut self.overrides
     }
 
@@ -257,6 +684,11 @@ impl UiSurface {
         } else if new_overrides != self.overrides {
             self.overrides = new_overrides;
             changed = true;
+        }
+        if changed {
+            self.dirty.mark(DirtyClass::Transform);
+            self.dirty.mark(DirtyClass::Opacity);
+            self.dirty.mark(DirtyClass::Paint);
         }
         self.update_scatter_state();
         changed
@@ -283,6 +715,9 @@ impl UiSurface {
             engaged = true;
         }
         if engaged {
+            self.dirty.mark(DirtyClass::Transform);
+            self.dirty.mark(DirtyClass::Opacity);
+            self.dirty.mark(DirtyClass::Paint);
             self.gate.begin();
         }
     }
@@ -334,6 +769,7 @@ pub struct SurfaceRouter {
     popups: PopupManager,
     viewport: gfx::RectF,
     device_scale: f32,
+    retained_composition_stats: RetainedCompositionStats,
 }
 
 impl SurfaceRouter {
@@ -345,6 +781,7 @@ impl SurfaceRouter {
             popups: PopupManager::new(),
             viewport: gfx::RectF::new(0.0, 0.0, 0.0, 0.0),
             device_scale: 1.0,
+            retained_composition_stats: RetainedCompositionStats::default(),
         }
     }
 
@@ -396,6 +833,10 @@ impl SurfaceRouter {
         &mut self.popups
     }
 
+    pub fn retained_composition_stats(&self) -> RetainedCompositionStats {
+        self.retained_composition_stats
+    }
+
     pub fn set_viewport(&mut self, viewport: gfx::RectF, device_scale: f32) {
         self.viewport = viewport;
         self.device_scale = device_scale.max(0.1);
@@ -409,12 +850,53 @@ impl SurfaceRouter {
         device_scale: f32,
         builder: &mut DrawListBuilder,
     ) {
-        self.set_viewport(viewport, device_scale);
-        if let Some(surface) = self.surfaces.get(self.current) {
-            surface.encode(builder);
+        self.encode_with_overlays_impl(viewport, device_scale, builder, None);
+    }
+
+    pub fn encode_with_overlays_with_text_atlas_revisions(
+        &mut self,
+        viewport: gfx::RectF,
+        device_scale: f32,
+        builder: &mut DrawListBuilder,
+        atlases: &[(gfx::ImageHandle, u64)],
+    ) {
+        self.encode_with_overlays_impl(viewport, device_scale, builder, Some(atlases));
+    }
+
+    pub fn encode_with_overlays_with_text_ctx(
+        &mut self,
+        viewport: gfx::RectF,
+        device_scale: f32,
+        builder: &mut DrawListBuilder,
+        text: &TextCtx,
+    ) {
+        if let Some(atlas) = text.retained_text_atlas_revision() {
+            self.encode_with_overlays_impl(
+                viewport,
+                device_scale,
+                builder,
+                Some(core::slice::from_ref(&atlas)),
+            );
+        } else {
+            self.encode_with_overlays_impl(viewport, device_scale, builder, None);
         }
-        self.overlays.encode(builder);
-        self.popups.encode(builder);
+    }
+
+    fn encode_with_overlays_impl(
+        &mut self,
+        viewport: gfx::RectF,
+        device_scale: f32,
+        builder: &mut DrawListBuilder,
+        text_atlases: Option<&[(gfx::ImageHandle, u64)]>,
+    ) {
+        self.set_viewport(viewport, device_scale);
+        let mut retained_stats = RetainedCompositionStats::default();
+        if let Some(surface) = self.surfaces.get_mut(self.current) {
+            retained_stats.record_current(surface.encode_retained_impl(builder, text_atlases));
+        }
+        retained_stats.record_overlays(self.overlays.encode_retained(builder, text_atlases));
+        retained_stats.record_popups(self.popups.encode_retained(builder, text_atlases));
+        self.retained_composition_stats = retained_stats;
     }
 
     pub fn capture(&mut self, viewport: gfx::RectF, device_scale: f32) -> SurfaceCapture {

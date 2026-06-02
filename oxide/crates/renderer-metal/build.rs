@@ -25,6 +25,9 @@ fn main() -> anyhow::Result<()> {
     println!("cargo:rerun-if-changed={}", shader_dir.display());
 
     if !shader_dir.exists() {
+        if target_is_apple(&env::var("TARGET").unwrap_or_default()) {
+            anyhow::bail!("Metal shader directory missing at {}", shader_dir.display());
+        }
         ensure_placeholder(&out_dir)?;
         return Ok(());
     }
@@ -44,9 +47,9 @@ fn main() -> anyhow::Result<()> {
     };
 
     if !have_tool(sdk, "metal") || !have_tool(sdk, "metallib") {
-        println!("cargo:warning=Metal toolchain not found; emitting placeholder metallib");
-        ensure_placeholder(&out_dir)?;
-        return Ok(());
+        anyhow::bail!(
+            "Metal toolchain not found for sdk {sdk}; cannot build renderer-metal default.metallib"
+        );
     }
 
     let mut air_files: Vec<PathBuf> = Vec::new();
@@ -63,17 +66,14 @@ fn main() -> anyhow::Result<()> {
                 .arg(&air)
                 .status()?;
             if !status.success() {
-                println!("cargo:warning=metal compile failed for {}", path.display());
-                ensure_placeholder(&out_dir)?;
-                return Ok(());
+                anyhow::bail!("metal compile failed for {}", path.display());
             }
             air_files.push(air);
         }
     }
 
     if air_files.is_empty() {
-        ensure_placeholder(&out_dir)?;
-        return Ok(());
+        anyhow::bail!("no Metal shader sources found in {}", shader_dir.display());
     }
 
     let metallib = out_dir.join("default.metallib");
@@ -82,10 +82,12 @@ fn main() -> anyhow::Result<()> {
     cmd.arg("-o").arg(&metallib);
     let status = cmd.status()?;
     if !status.success() {
-        println!("cargo:warning=metallib link failed; emitting placeholder metallib");
-        ensure_placeholder(&out_dir)?;
-        return Ok(());
+        anyhow::bail!("metallib link failed for renderer-metal default.metallib");
     }
     println!("cargo:warning=Generated {}", metallib.display());
     Ok(())
+}
+
+fn target_is_apple(target: &str) -> bool {
+    target.contains("apple-ios") || target.contains("apple-darwin")
 }

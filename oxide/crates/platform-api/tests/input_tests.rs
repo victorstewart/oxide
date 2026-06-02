@@ -35,6 +35,7 @@ fn touch_event_equality_and_device() {
     let t0 = TouchEvent {
         id: oxide_platform_api::TouchId(7),
         phase: TouchPhase::Start,
+        timestamp_ns: 123,
         x: 12.0,
         y: 34.0,
         pressure: Some(0.5),
@@ -43,6 +44,7 @@ fn touch_event_equality_and_device() {
     };
     let mut t1 = t0;
     assert_eq!(t0, t1);
+    assert_eq!(t0.timestamp_ns, 123);
     t1.phase = TouchPhase::Move;
     assert_ne!(t0, t1);
 }

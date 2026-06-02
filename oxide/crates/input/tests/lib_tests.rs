@@ -8,6 +8,7 @@ fn touch(id: api::TouchId, phase: api::TouchPhase, x: f32, y: f32) -> api::Touch
     api::TouchEvent {
         id,
         phase,
+        timestamp_ns: 0,
         x,
         y,
         pressure: None,
@@ -38,6 +39,18 @@ fn tap_emitted_within_thresholds() {
     let evs = gr.on_touch(&end, 1100);
     assert_eq!(evs.len(), 1);
     assert_eq!(evs[0], GestureEvent::Tap { id: api::TouchId(1), x: 10.5, y: 19.5 });
+}
+
+#[test]
+fn touch_event_timestamp_drives_gesture_timing() {
+    let mut gr = GestureRecognizer::with_defaults();
+    let mut start = touch(api::TouchId(1), api::TouchPhase::Start, 10.0, 20.0);
+    start.timestamp_ns = 1_000_000_000;
+    assert!(gr.on_touch(&start, 0).is_empty());
+
+    let mut end = touch(api::TouchId(1), api::TouchPhase::End, 10.0, 20.0);
+    end.timestamp_ns = 1_400_000_000;
+    assert!(gr.on_touch(&end, 0).is_empty());
 }
 
 #[test]

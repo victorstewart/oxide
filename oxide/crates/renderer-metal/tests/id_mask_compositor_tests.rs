@@ -10,6 +10,7 @@ fn id_mask_gpu_raster_rejects_empty_or_non_triangle_vertices() {
         mask_width: 8,
         mask_height: 8,
         mask_scale: 1.0,
+        vertex_revision: 0,
         vertices: &[],
         projection: IdMaskRasterProjection::screen_px(),
     };
@@ -32,6 +33,7 @@ fn id_mask_gpu_raster_accepts_triangle_vertices_and_generic_style_alias() {
         mask_width: 8,
         mask_height: 8,
         mask_scale: 1.0,
+        vertex_revision: 7,
         vertices: &vertices,
         projection: IdMaskRasterProjection::screen_px(),
     };
@@ -42,4 +44,24 @@ fn id_mask_gpu_raster_accepts_triangle_vertices_and_generic_style_alias() {
     assert_eq!(SEMANTIC_MASK_MAX_REGION_STYLES, 4);
     assert_eq!(SEMANTIC_MASK_MAX_SUBREGION_COLORS, 32);
     assert_eq!(style.fill_rgb, [1.0, 1.0, 1.0]);
+}
+
+#[test]
+fn id_mask_gpu_upload_cache_is_revision_keyed() {
+    let renderer_source = include_str!("../src/lib.rs");
+    let gpu_source = include_str!("../src/id_mask_gpu.rs");
+    assert!(
+        renderer_source
+            .contains("id_mask_vb_keys: [Option<IdMaskVertexUploadKey>; FRAME_RING_SIZE]")
+            && renderer_source.contains("struct IdMaskVertexUploadKey")
+            && renderer_source.contains("revision: u64")
+            && renderer_source.contains("byte_len: usize"),
+        "Metal id-mask raster upload cache must be keyed by stable caller revision plus byte size"
+    );
+    assert!(
+        gpu_source.contains("revision: pass.raster.vertex_revision")
+            && gpu_source.contains("if self.id_mask_vb_keys[slot] != Some(vertex_key)")
+            && gpu_source.contains("self.id_mask_vb_keys[slot] = Some(vertex_key);"),
+        "Metal id-mask raster vertices should only be recopied when the revision-keyed upload changes"
+    );
 }

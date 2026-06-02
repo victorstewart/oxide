@@ -3,7 +3,9 @@ fn main() {
         println!("cargo:rerun-if-changed=src/macos/app.m");
         println!("cargo:rerun-if-changed=../../../crates/platform-apple/src/apple/bluetooth.m");
         println!("cargo:rerun-if-changed=../../../crates/platform-apple/src/apple/http.m");
-        println!("cargo:rerun-if-changed=../../../crates/platform-apple/src/apple/secure_storage.m");
+        println!(
+            "cargo:rerun-if-changed=../../../crates/platform-apple/src/apple/secure_storage.m"
+        );
         let mut b = cc::Build::new();
         b.file("src/macos/app.m")
             .file("../../../crates/platform-apple/src/apple/bluetooth.m")

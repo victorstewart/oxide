@@ -243,7 +243,7 @@ fn elapsed_ms(start: Option<Instant>) -> f64 {
     start.map(|value| value.elapsed().as_secs_f64() * 1000.0).unwrap_or(0.0)
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "macos"))]
 #[inline(always)]
 unsafe fn command_buffer_gpu_duration_ms(buffer: &CommandBufferRef) -> f64 {
     let gpu_start_time: f64 = msg_send![buffer.as_ptr(), GPUStartTime];
@@ -258,7 +258,7 @@ unsafe fn command_buffer_gpu_duration_ms(buffer: &CommandBufferRef) -> f64 {
     0.0
 }
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "macos")))]
 #[inline(always)]
 unsafe fn command_buffer_gpu_duration_ms(_buffer: &CommandBufferRef) -> f64 {
     0.0
@@ -330,6 +330,7 @@ struct GpuStageTrace;
 
 #[derive(Clone, Copy, Debug, Default)]
 struct CompletedGpuStats {
+    frame_id: u64,
     command_ms: f64,
     render_ms: f64,
     vertex_ms: f64,
@@ -586,8 +587,6 @@ fn draw_cmd_kind(cmd: &api::DrawCmd) -> &'static str {
         api::DrawCmd::Backdrop { .. } => "backdrop",
         api::DrawCmd::VisualEffect { .. } => "visual_effect",
         api::DrawCmd::CameraBg { .. } => "camera_bg",
-        api::DrawCmd::NativeCameraPreview { .. } => "native_camera_preview",
-        api::DrawCmd::TopomapGlobe { .. } => "topomap_globe",
         api::DrawCmd::Spinner { .. } => "spinner",
         api::DrawCmd::ClipPush { .. } => "clip_push",
         api::DrawCmd::ClipPop => "clip_pop",
@@ -759,23 +758,7 @@ fn pipeline_mentions_indirect_command_buffers(err: &MetalInitError) -> bool {
     }
 }
 
-const SHADERS_SRC: &str = concat!(
-    include_str!("../shaders/solid.metal"),
-    "\n",
-    include_str!("../shaders/effects.metal"),
-    "\n",
-    include_str!("../shaders/ui.metal"),
-    "\n",
-    include_str!("../shaders/text.metal"),
-    "\n",
-    include_str!("../shaders/camera.metal"),
-    "\n",
-    include_str!("../shaders/scene3d.metal"),
-    "\n",
-    include_str!("../shaders/id_mask_compositor.metal"),
-    "\n",
-    include_str!("../shaders/neon_marker.metal"),
-);
+const DEFAULT_METALLIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/default.metallib"));
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MetalRendererConfig {
@@ -910,6 +893,8 @@ pub struct MetalRenderer {
     sample_count: u32,
     hdr_enabled: bool,
     frame_id: u64,
+    frame_slot: usize,
+    frame_backpressure_skipped: bool,
     frames: [PerFrame; FRAME_RING_SIZE],
     vb: Ring,
     ib: Ring,
@@ -948,6 +933,7 @@ pub struct MetalRenderer {
     scene3d_bloom_tmp_tex: Option<Texture>,
     id_mask_targets: [Option<id_mask_gpu::RenderTargets>; FRAME_RING_SIZE],
     id_mask_vb: Ring,
+    id_mask_vb_keys: [Option<IdMaskVertexUploadKey>; FRAME_RING_SIZE],
     images: HashMap<u32, Texture>,
     next_image_id: u32,
     meshes_3d: HashMap<u32, Mesh3dGpu>,
@@ -1016,7 +1002,6 @@ pub struct MetalRenderer {
     pending_present_drawable: usize,
     pending_present_texture: usize,
     frame_present_direct_to_drawable: bool,
-    frame_native_camera_preview: bool,
     frame_2d_encoded: bool,
     frame_color_initialized: bool,
     frame_depth_initialized: bool,
@@ -1267,6 +1252,11 @@ impl CameraPreviewRenderer {
 }
 
 impl MetalRenderer {
+    #[inline]
+    fn current_frame_slot(&self) -> usize {
+        self.frame_slot
+    }
+
     fn new_with_config_impl(config: MetalRendererConfig) -> Result<Self, MetalInitError> {
         let simulator = running_on_ios_simulator();
         ios_log(&format!(
@@ -1289,15 +1279,16 @@ impl MetalRenderer {
         ios_log("oxide.renderer-metal: init after device resolve");
         let queue = device.new_command_queue();
         ios_log("oxide.renderer-metal: init after new_command_queue");
-        let compile_opts = CompileOptions::new();
-        // Target explicit Metal Shading Language version for cross-macOS consistency
-        // Highest available in metal-rs 0.32.0 (MSL 3.2 not yet exposed)
-        compile_opts.set_language_version(MTLLanguageVersion::V3_0);
-        ios_log("oxide.renderer-metal: init before shader library compile");
+        if DEFAULT_METALLIB.is_empty() {
+            return Err(MetalInitError::Library(String::from(
+                "renderer-metal default.metallib is empty; build-time shader compilation is required",
+            )));
+        }
+        ios_log("oxide.renderer-metal: init before shader library load");
         let library = device
-            .new_library_with_source(SHADERS_SRC, &compile_opts)
+            .new_library_with_data(DEFAULT_METALLIB)
             .map_err(|e| MetalInitError::Library(format!("{}", e)))?;
-        ios_log("oxide.renderer-metal: init after shader library compile");
+        ios_log("oxide.renderer-metal: init after shader library load");
         let mut sample_count = apply_simulator_sample_count(simulator, config.sample_count);
         while sample_count > 1 && !device.supports_texture_sample_count(sample_count as u64) {
             sample_count = sample_count / 2;
@@ -1689,6 +1680,7 @@ impl MetalRenderer {
         };
         let gpu_stage_timing = GpuStageTimingSupport::new(&device);
         let id_mask_vb = Ring::new(&device, 4096, MTLResourceOptions::StorageModeShared);
+        let id_mask_vb_keys = [None; FRAME_RING_SIZE];
 
         Ok(Self {
             device,
@@ -1740,6 +1732,8 @@ impl MetalRenderer {
             sample_count,
             hdr_enabled,
             frame_id: 0,
+            frame_slot: 0,
+            frame_backpressure_skipped: false,
             frames: core::array::from_fn(|_| PerFrame::new()),
             vb,
             ib,
@@ -1778,6 +1772,7 @@ impl MetalRenderer {
             scene3d_bloom_tmp_tex: None,
             id_mask_targets: core::array::from_fn(|_| None),
             id_mask_vb,
+            id_mask_vb_keys,
             images: HashMap::new(),
             next_image_id: 1,
             meshes_3d: HashMap::new(),
@@ -1842,7 +1837,6 @@ impl MetalRenderer {
             pending_present_drawable: 0,
             pending_present_texture: 0,
             frame_present_direct_to_drawable: false,
-            frame_native_camera_preview: false,
             frame_2d_encoded: false,
             frame_color_initialized: false,
             frame_depth_initialized: false,
@@ -1967,6 +1961,7 @@ impl MetalRenderer {
     #[inline]
     fn apply_completed_gpu_stats(&self, stats: &mut PerfStats) {
         let gpu = self.latest_completed_gpu_stats();
+        stats.gpu_frame_id = gpu.frame_id;
         stats.gpu_ms = gpu.command_ms;
         stats.gpu_render_ms = gpu.render_ms;
         stats.gpu_vertex_ms = gpu.vertex_ms;
@@ -3646,12 +3641,7 @@ impl MetalRenderer {
         let ca0 = rpd.color_attachments().object_at(0).unwrap();
         ca0.set_texture(Some(&tex));
         ca0.set_load_action(MTLLoadAction::Clear);
-        let clear_alpha =
-            if transparent_drawable_clear_enabled() || self.frame_native_camera_preview {
-                0.0
-            } else {
-                1.0
-            };
+        let clear_alpha = if transparent_drawable_clear_enabled() { 0.0 } else { 1.0 };
         ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: clear_alpha });
         ca0.set_store_action(MTLStoreAction::Store);
         let enc = cmd.new_render_command_encoder(&rpd);
@@ -3840,9 +3830,12 @@ impl MetalRenderer {
     /// Encodes one scene3d pass into the current frame.
     ///
     /// Scene3D and ID-mask passes may be interleaved with 2D passes so app
-    /// shells can embed shared renderers, such as Topomap, at the correct
+    /// shells can embed shared renderers at the correct
     /// draw-list depth without forcing the whole frame into that renderer.
     pub fn encode_scene3d(&mut self, pass: &scene3d::Pass3d<'_>) -> Result<(), api::RenderError> {
+        if self.frame_backpressure_skipped {
+            return Ok(());
+        }
         if self.sample_count != 1 {
             return Err(api::RenderError::Unsupported(
                 "scene3d currently requires MetalRenderer sample_count == 1",
@@ -3856,7 +3849,7 @@ impl MetalRenderer {
 
         self.ensure_target();
         self.ensure_depth_target();
-        let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
+        let slot = self.current_frame_slot();
         let cmd = self.ensure_frame_command_buffer(slot);
         let Some(target_tex) = self.target_tex.as_ref().map(Texture::to_owned) else {
             return Err(api::RenderError::InvalidOperation("scene3d target texture unavailable"));
@@ -4268,8 +4261,6 @@ fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI, out: &mut
             | api::DrawCmd::VisualEffect { rect, .. }
             | api::DrawCmd::RRect { rect, .. }
             | api::DrawCmd::CameraBg { rect, .. }
-            | api::DrawCmd::NativeCameraPreview { rect }
-            | api::DrawCmd::TopomapGlobe { rect }
             | api::DrawCmd::NineSlice { rect, .. } => {
                 if rect_intersects(rect, &sc) {
                     out.items.push(list.items[i].clone());
@@ -4387,21 +4378,34 @@ impl api::Renderer for MetalRenderer {
         damage: Option<&api::Damage>,
     ) -> api::FrameToken {
         self.frame_id = self.frame_id.wrapping_add(1);
-        let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
-        self.frames[slot].prepare_for_encode();
+        let preferred_slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
+        let slot = (0..FRAME_RING_SIZE)
+            .map(|offset| (preferred_slot + offset) % FRAME_RING_SIZE)
+            .find(|slot| self.frames[*slot].is_available());
+        self.frame_backpressure_skipped = slot.is_none();
+        self.frame_slot = slot.unwrap_or(preferred_slot);
+        if let Some(slot) = slot {
+            self.frames[slot].prepare_for_encode();
+        }
         self.acc_draws = 0;
         self.acc_instanced = 0;
         self.acc_icb_cmds = 0;
         self.acc_culled = 0;
         // Defer command buffer creation until either encode_scene3d or encode_pass.
-        self.frames[slot].cmd = None;
+        if !self.frame_backpressure_skipped {
+            self.frames[self.frame_slot].cmd = None;
+        }
         self.frame_2d_encoded = false;
         self.frame_present_direct_to_drawable = false;
-        self.frame_native_camera_preview = false;
         self.frame_color_initialized = false;
         self.frame_depth_initialized = false;
         self.frame_gpu_trace = None;
         self.frame_encode_started_at = Some(Instant::now());
+        if self.frame_backpressure_skipped {
+            self.last_stats = PerfStats { frame_backpressure_skipped: 1, ..PerfStats::default() };
+        } else {
+            self.last_stats.frame_backpressure_skipped = 0;
+        }
         // Reset per-frame accumulators
         self.scissor_changes = 0;
         self.prepass_shaded_px = 0;
@@ -4475,6 +4479,9 @@ impl api::Renderer for MetalRenderer {
 
     fn encode_pass(&mut self, list: &api::DrawList) {
         let cpu_t0 = std::time::Instant::now();
+        if self.frame_backpressure_skipped {
+            return;
+        }
         if self.target_tex.is_none() {
             return;
         }
@@ -4484,7 +4491,7 @@ impl api::Renderer for MetalRenderer {
             }
             return;
         }
-        let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
+        let slot = self.current_frame_slot();
         let cmd = self.ensure_frame_command_buffer(slot);
 
         // Adaptive policy: compute camera coverage and environment (iOS thermal/LPM),
@@ -4508,11 +4515,6 @@ impl api::Renderer for MetalRenderer {
                         need_cam_blur = true;
                         requested_cam_blur_sigma = requested_cam_blur_sigma.max(*sigma);
                     }
-                }
-                api::DrawCmd::NativeCameraPreview { rect } => {
-                    let a = (rect.w.max(0.0) * rect.h.max(0.0)).min(vp_area_dp);
-                    cam_area += a;
-                    self.frame_native_camera_preview = true;
                 }
                 api::DrawCmd::Backdrop { .. } => {
                     has_backdrop = true;
@@ -4870,6 +4872,7 @@ impl api::Renderer for MetalRenderer {
                                         sub.items.push(api::DrawCmd::GlyphRun {
                                             run: api::GlyphRun {
                                                 atlas: run.atlas,
+                                                atlas_revision: run.atlas_revision,
                                                 vb,
                                                 ib,
                                                 sdf: run.sdf,
@@ -5396,21 +5399,14 @@ impl api::Renderer for MetalRenderer {
             }
             ca0.set_store_action(MTLStoreAction::Store);
         }
-        if self.frame_native_camera_preview && !self.frame_color_initialized {
-            ca0.set_load_action(MTLLoadAction::Clear);
-        } else if self.frame_color_initialized {
+        if self.frame_color_initialized {
             ca0.set_load_action(MTLLoadAction::Load);
         } else if use_damage {
             ca0.set_load_action(MTLLoadAction::Load);
         } else {
             ca0.set_load_action(MTLLoadAction::Clear);
         }
-        let clear_alpha =
-            if transparent_drawable_clear_enabled() || self.frame_native_camera_preview {
-                0.0
-            } else {
-                1.0
-            };
+        let clear_alpha = if transparent_drawable_clear_enabled() { 0.0 } else { 1.0 };
         ca0.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: clear_alpha });
         let frame_gpu_trace =
             self.gpu_stage_timing.as_ref().and_then(|timing| timing.begin_submission(&self.device));
@@ -5470,6 +5466,7 @@ impl api::Renderer for MetalRenderer {
         self.last_stats.cam_video_range = self.last_cam_vr.max(0) as u8;
         self.last_stats.cam_color_space = self.last_cam_cs.max(0) as u8;
         let completed_gpu_stats = self.latest_completed_gpu_stats();
+        self.last_stats.gpu_frame_id = completed_gpu_stats.frame_id;
         self.last_stats.gpu_ms = completed_gpu_stats.command_ms;
         self.last_stats.gpu_render_ms = completed_gpu_stats.render_ms;
         self.last_stats.gpu_vertex_ms = completed_gpu_stats.vertex_ms;
@@ -5521,7 +5518,7 @@ impl api::Renderer for MetalRenderer {
             }
             return Err(api::RenderError::DeviceLost);
         }
-        let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
+        let slot = self.current_frame_slot();
         let pending_present_drawable = self.pending_present_drawable as *mut core::ffi::c_void;
         let present_direct_to_drawable = self.frame_present_direct_to_drawable;
         let has_present_drawable = !pending_present_drawable.is_null();
@@ -5606,6 +5603,7 @@ impl api::Renderer for MetalRenderer {
                         .unwrap_or_default();
                     if let Ok(mut stats) = completed_gpu_stats.lock() {
                         *stats = CompletedGpuStats {
+                            frame_id,
                             command_ms,
                             render_ms: stage_stats.render_ms,
                             vertex_ms: stage_stats.vertex_ms,
@@ -5790,7 +5788,7 @@ fn encode_draws_range(
     global_scissor_dp: Option<api::RectI>,
 ) {
     let debug_stride = encode_debug_stride();
-    let slot = (r.frame_id % FRAME_RING_SIZE as u64) as usize;
+    let slot = r.current_frame_slot();
     // Scissor state
     let mut stack = r.clip_stack_pool.pop().unwrap_or_default();
     stack.clear();
@@ -6040,11 +6038,6 @@ fn encode_draws_range(
                             });
                             ((adj.x.to_bits() ^ adj.y.to_bits()) as u64).hash(&mut hasher);
                         }
-                        api::DrawCmd::NativeCameraPreview { rect: r0 } => {
-                            let adj = api::RectF::new(r0.x - ox, r0.y - oy, r0.w, r0.h);
-                            sub.items.push(api::DrawCmd::NativeCameraPreview { rect: adj });
-                            ((adj.x.to_bits() ^ adj.y.to_bits()) as u64).hash(&mut hasher);
-                        }
                         api::DrawCmd::ClipPop => sub.items.push(api::DrawCmd::ClipPop),
                         api::DrawCmd::RRect { rect: r0, radii, color } => {
                             let adj = api::RectF::new(r0.x - ox, r0.y - oy, r0.w, r0.h);
@@ -6131,6 +6124,7 @@ fn encode_draws_range(
                                 sub.items.push(api::DrawCmd::GlyphRun {
                                     run: api::GlyphRun {
                                         atlas: run.atlas,
+                                        atlas_revision: run.atlas_revision,
                                         vb,
                                         ib,
                                         sdf: run.sdf,
@@ -6226,7 +6220,7 @@ fn encode_draws_range(
                 enc.set_render_pipeline_state(&r.pso_solid);
                 let v_count = vb.len as usize;
                 let v_bytes = v_count * core::mem::size_of::<api::Vertex>();
-                let slot = (r.frame_id % FRAME_RING_SIZE as u64) as usize;
+                let slot = r.current_frame_slot();
                 r.vb.ensure_capacity(&r.device, slot, pf.vb_used + v_bytes);
                 let src_slice =
                     &list.vertices[(vb.offset as usize)..(vb.offset as usize + v_count)];
@@ -6292,12 +6286,6 @@ fn encode_draws_range(
                         r.acc_draws += 1;
                     }
                 }
-                i += 1;
-            }
-            api::DrawCmd::NativeCameraPreview { .. } => {
-                i += 1;
-            }
-            api::DrawCmd::TopomapGlobe { .. } => {
                 i += 1;
             }
             api::DrawCmd::RRect { .. } => {
@@ -8138,15 +8126,14 @@ impl PerFrame {
         self.ub_used = 0;
     }
 
+    #[inline]
+    fn is_available(&self) -> bool {
+        !self.in_flight.load(Ordering::Acquire)
+    }
+
     fn prepare_for_encode(&mut self) {
-        if self.in_flight.load(Ordering::Acquire) {
-            if let Some(cmd) = self.submitted.take() {
-                cmd.wait_until_completed();
-            }
-            self.in_flight.store(false, Ordering::Release);
-        } else {
-            self.submitted = None;
-        }
+        debug_assert!(self.is_available());
+        self.submitted = None;
         self.reset();
         self.cmd = None;
     }
@@ -8161,6 +8148,12 @@ struct Ring {
     bufs: [Buffer; FRAME_RING_SIZE],
     cap: [usize; FRAME_RING_SIZE],
     opts: MTLResourceOptions,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct IdMaskVertexUploadKey {
+    revision: u64,
+    byte_len: usize,
 }
 
 impl Ring {
@@ -8243,10 +8236,12 @@ pub struct PerfStats {
     pub instanced: u32,
     pub icb_cmds: u32,
     pub encode_ms: f64,
+    pub gpu_frame_id: u64,
     pub gpu_ms: f64,
     pub gpu_render_ms: f64,
     pub gpu_vertex_ms: f64,
     pub gpu_fragment_ms: f64,
+    pub frame_backpressure_skipped: u32,
     pub damage_px: u64,
     pub damage_pct: f32,
     pub damage_rects: u32,

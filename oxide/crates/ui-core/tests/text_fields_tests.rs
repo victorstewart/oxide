@@ -3,10 +3,10 @@ use oxide_ui_core::elements::CharFilter;
 use oxide_ui_core::{
     bitmap_text::{text_width, TextStyle},
     single_line_text_selection_highlight_layout, single_line_text_selection_index_for_x,
-    single_line_text_selection_rect, text_input_option_at, text_input_options_layout,
-    text_selection_drag_anchor_at, text_word_range_at_char_index, EditableText,
-    FieldFailRestoreMode, HorizontalShiftingText, SecureText, TextFieldPolicy, TextInputOption,
-    TextInputOptionsConfig, TextSelectionDragAnchor, TextSelectionDragState,
+    single_line_text_selection_rect, text_char_slice, text_input_option_at,
+    text_input_options_layout, text_selection_drag_anchor_at, text_word_range_at_char_index,
+    EditableText, FieldFailRestoreMode, HorizontalShiftingText, SecureText, TextFieldPolicy,
+    TextInputOption, TextInputOptionsConfig, TextSelectionDragAnchor, TextSelectionDragState,
     TextSelectionHighlightStyle, TextSelectionState, TextTapMemory,
 };
 use std::sync::Arc;
@@ -112,6 +112,50 @@ fn text_fields_horizontal_supports_caret_movement_and_mid_string_insertions() {
     text.apply_commit("\u{8}");
     assert_eq!(text.value(), "Vict or");
     assert_eq!(text.caret_index(), 5);
+}
+
+#[test]
+fn text_fields_horizontal_edits_by_grapheme_cluster() {
+    let policy = TextFieldPolicy::new(CharFilter::None).with_max_length(Some(30));
+    let mut text = HorizontalShiftingText::new(policy, 32.0, 1_200).with_text("e\u{301}👨‍👩‍👧‍👦x");
+    text.focus();
+    text.move_caret_left();
+    text.move_caret_left();
+    assert_eq!(text.caret_index(), 1);
+
+    text.apply_commit("!");
+    assert_eq!(text.value(), "e\u{301}!👨‍👩‍👧‍👦x");
+    assert_eq!(text.caret_index(), 2);
+
+    assert_eq!(text.apply_selection_commit(2..3, "\u{8}"), Some(true));
+    assert_eq!(text.value(), "e\u{301}!x");
+    assert_eq!(text_char_slice("e\u{301}👨‍👩‍👧‍👦x", 0..1), "e\u{301}");
+    assert_eq!(text_char_slice("e\u{301}👨‍👩‍👧‍👦x", 1..2), "👨‍👩‍👧‍👦");
+}
+
+#[test]
+fn text_fields_editable_backspace_removes_grapheme_cluster() {
+    let policy = TextFieldPolicy::new(CharFilter::None).with_max_length(Some(30));
+    let mut text = EditableText::new(policy);
+    text.set("e\u{301}x");
+
+    text.apply_commit("\u{8}");
+    assert_eq!(text.value(), "e\u{301}");
+    text.apply_commit("\u{8}");
+    assert_eq!(text.value(), "");
+}
+
+#[test]
+fn text_fields_secure_mask_counts_grapheme_clusters() {
+    let policy = TextFieldPolicy::new(CharFilter::None).with_max_length(Some(30));
+    let mut editable = EditableText::new(policy);
+    let family = "👨‍👩‍👧‍👦";
+    editable.set(&format!("e\u{301}{family}x"));
+    let mut secure = SecureText::new(editable);
+
+    assert_eq!(secure.display_text(), "***");
+    secure.set_caret_index(2);
+    assert_eq!(secure.display_text_before_caret(), "**");
 }
 
 #[test]

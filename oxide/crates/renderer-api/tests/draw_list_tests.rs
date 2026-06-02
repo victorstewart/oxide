@@ -31,6 +31,24 @@ fn validate_draw_list(list: &DrawList) -> Result<(), &'static str> {
 }
 
 #[test]
+fn draw_list_api_has_no_native_preview_or_app_specific_commands() {
+    let source = include_str!("../src/lib.rs");
+    assert!(
+        !source.contains("NativeCameraPreview") && !source.contains("draw_native_camera_preview"),
+        "renderer-api must keep visible camera preview in Oxide-owned renderer commands"
+    );
+    assert!(
+        !source.contains("TopomapGlobe")
+            && !source.contains("TopomapGlobeWebApp")
+            && !source.contains("topomap_globe")
+            && !source.contains("topomap_app_")
+            && !source.contains("draw_topomap_globe")
+            && !source.contains("DrawCmd::TopomapGlobe"),
+        "renderer-api must not expose app-specific Topomap globe commands"
+    );
+}
+
+#[test]
 fn balanced_layers_and_clips_validate() {
     let mut list = DrawList::default();
     list.items.push(DrawCmd::LayerBegin {
@@ -47,6 +65,7 @@ fn balanced_layers_and_clips_validate() {
     list.items.push(DrawCmd::GlyphRun {
         run: GlyphRun {
             atlas: ImageHandle(7),
+            atlas_revision: 11,
             vb: VertexSpan { offset: 10, len: 12 },
             ib: IndexSpan { offset: 20, len: 18 },
             sdf: false,
@@ -57,6 +76,27 @@ fn balanced_layers_and_clips_validate() {
     list.items.push(DrawCmd::LayerEnd);
 
     assert!(validate_draw_list(&list).is_ok());
+}
+
+#[test]
+fn draw_list_detects_stale_text_atlas_revision() {
+    let mut list = DrawList::default();
+    list.items.push(DrawCmd::GlyphRun {
+        run: GlyphRun {
+            atlas: ImageHandle(7),
+            atlas_revision: 2,
+            vb: VertexSpan { offset: 0, len: 4 },
+            ib: IndexSpan { offset: 0, len: 6 },
+            sdf: false,
+            color: Color::rgba(0.1, 0.2, 0.3, 1.0),
+        },
+    });
+
+    assert!(list.text_atlas_revision_compatible(ImageHandle(7), 2));
+    assert!(!list.text_atlas_revision_compatible(ImageHandle(7), 3));
+    assert!(!list.text_atlas_revision_compatible(ImageHandle(8), 99));
+    assert!(list.text_atlas_revisions_compatible(&[(ImageHandle(7), 2)]));
+    assert!(!list.text_atlas_revisions_compatible(&[]));
 }
 
 #[test]

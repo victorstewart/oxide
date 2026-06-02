@@ -34,7 +34,7 @@ struct IdMaskRasterVertexIn
   // Matches the packed Rust/WebGPU byte layout exactly:
   // f32x2 position, f32x4 world position, u32 city, u32 neighborhood.
   // Plain float vectors would add Metal-side alignment padding and corrupt
-  // native Topomap masks.
+  // native map masks.
   packed_float2 position_px;
   packed_float4 position_world;
   uint city_id;

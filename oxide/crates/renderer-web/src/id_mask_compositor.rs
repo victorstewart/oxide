@@ -149,6 +149,7 @@ pub struct IdMaskGpuRasterPass<'a> {
     pub mask_width: usize,
     pub mask_height: usize,
     pub mask_scale: f32,
+    pub vertex_revision: u64,
     pub vertices: &'a [IdMaskRasterVertex],
     pub projection: IdMaskRasterProjection,
 }

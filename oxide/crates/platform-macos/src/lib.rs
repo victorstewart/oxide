@@ -7,14 +7,14 @@ extern crate alloc;
 use std::sync::{Arc, Mutex, Once};
 
 use once_cell::sync::Lazy;
-use oxide_platform_apple::{
-    network_status_from_apple_interface_mask, permission_domain_from_apple_code,
-    permission_domain_to_apple_code, permission_status_from_apple_code, AppleHttpClient,
-    AppleBluetooth, AppleCameraManager, AppleLocationService, AppleMediaLibraryManager, AppleMotionService,
-    AppleSecureStorage, ApplePushManager, AppleSocketNetworking, AppleWebViewService,
-    apple_bluetooth_with_restoration,
-};
 use oxide_platform_api as api;
+use oxide_platform_apple::{
+    apple_bluetooth_with_restoration, network_status_from_apple_interface_mask,
+    permission_domain_from_apple_code, permission_domain_to_apple_code,
+    permission_status_from_apple_code, AppleBluetooth, AppleCameraManager, AppleHttpClient,
+    AppleLocationService, AppleMediaLibraryManager, AppleMotionService, ApplePushManager,
+    AppleSecureStorage, AppleSocketNetworking, AppleWebViewService,
+};
 
 extern "C" {
     fn macos_request_redraw();
@@ -85,11 +85,13 @@ fn clipboard_set(s: &str) {
 }
 
 static HAPTICS: Lazy<std::sync::Arc<MacHaptics>> = Lazy::new(|| std::sync::Arc::new(MacHaptics));
-type NetworkStatusCallback = Arc<Mutex<alloc::boxed::Box<dyn Fn(api::network_status::NetworkStatus) + Send>>>;
+type NetworkStatusCallback =
+    Arc<Mutex<alloc::boxed::Box<dyn Fn(api::network_status::NetworkStatus) + Send>>>;
 static NETWORK_STATUS_CALLBACKS: Lazy<Mutex<alloc::vec::Vec<NetworkStatusCallback>>> =
     Lazy::new(|| Mutex::new(alloc::vec::Vec::new()));
 static NETWORK_STATUS_INIT: Once = Once::new();
-type PermissionStatusCallback = Arc<Mutex<alloc::boxed::Box<dyn Fn(api::PermissionDomain, api::PermissionStatus) + Send>>>;
+type PermissionStatusCallback =
+    Arc<Mutex<alloc::boxed::Box<dyn Fn(api::PermissionDomain, api::PermissionStatus) + Send>>>;
 static PERMISSION_CALLBACKS: Lazy<Mutex<alloc::vec::Vec<PermissionStatusCallback>>> =
     Lazy::new(|| Mutex::new(alloc::vec::Vec::new()));
 static PERMISSION_INIT: Once = Once::new();
@@ -146,7 +148,11 @@ impl api::Platform for MacPlatform {
         let max_framerate_hz = unsafe { macos_max_framerate_hz() }.max(60);
         let native_scale = {
             let scale = unsafe { macos_native_scale() };
-            if scale.is_finite() && scale > 0.0 { scale } else { 1.0 }
+            if scale.is_finite() && scale > 0.0 {
+                scale
+            } else {
+                1.0
+            }
         };
         api::DeviceCaps {
             max_framerate_hz,
@@ -309,7 +315,8 @@ impl api::network_status::NetworkStatusService for MacNetworkStatus {
     }
 }
 
-fn permission_callbacks() -> std::sync::MutexGuard<'static, alloc::vec::Vec<PermissionStatusCallback>> {
+fn permission_callbacks(
+) -> std::sync::MutexGuard<'static, alloc::vec::Vec<PermissionStatusCallback>> {
     PERMISSION_CALLBACKS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
@@ -332,7 +339,8 @@ fn start_permission_bridge() {
     });
 }
 
-fn network_status_callbacks() -> std::sync::MutexGuard<'static, alloc::vec::Vec<NetworkStatusCallback>> {
+fn network_status_callbacks(
+) -> std::sync::MutexGuard<'static, alloc::vec::Vec<NetworkStatusCallback>> {
     NETWORK_STATUS_CALLBACKS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 

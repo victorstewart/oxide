@@ -28,6 +28,8 @@
   Bridge raw input samples into Oxide.
 - `oxide_host_app_init(...)`, `oxide_host_app_frame(...)`, and related state/configuration exports
   Initialize and drive the renderer, scene router, camera paths, and perf harness.
+- `oxide_host_app_prepare_frame(...)`, `oxide_host_app_submit_prepared_frame_with_drawable(...)`, and `oxide_host_app_cancel_prepared_frame()`
+  Split CPU frame preparation from drawable-backed present work so UIKit acquires a `CAMetalDrawable` only after Rust has updated state, built the draw list, and decided the frame will submit.
 
 ## Logic narrative
 - Callback registries store plain `extern "C" fn` pointers in `OnceLock<Mutex<Option<_>>>` slots because Objective-C code can install callbacks before the app renderer is active.
@@ -35,6 +37,7 @@
 - Emitters copy the function pointer out of the slot before invoking it, so callback code does not run while holding the registry mutex.
 - Fallback logging for text, key, and push payloads validates null/length pairs before constructing slices; a null pointer with zero length is treated as an empty payload.
 - Renderer and app lifecycle behavior remains unchanged by callback hardening.
+- The drawable-backed iOS path now mirrors macOS: prepare Rust frame work first, acquire `nextDrawable` late with timeout enabled in Objective-C or the Swift perf runtime, then submit the prepared frame to Metal or cancel it if no drawable is returned.
 
 ## Preconditions and postconditions
 - Native callers must pass valid payload pointers when `len > 0`.
@@ -50,6 +53,7 @@
 ## Concurrency and memory behavior
 - Callback slots are process-global and protected by small mutexes.
 - The hot input callback path performs a mutex lock to copy the callback pointer, then releases it before dispatch.
+- Raw touch callbacks preserve the OS sample timestamp in `TouchEvent::timestamp_ns` before routing through `oxide-input`.
 - No heap allocation is added to the callback-installed input path; fallback logging may format strings only when no callback is registered.
 
 ## Performance notes
@@ -64,6 +68,7 @@
 ## Testing and benchmarks
 - Covered by `cargo test -p oxide-host-ios --tests --locked`.
 - Device-target compile coverage uses `cargo check -p oxide-host-ios --target aarch64-apple-ios --tests --locked`.
+- Camera benchmark contract coverage lives in [camera_benchmark_tests.md](tests/camera_benchmark_tests.md); it statically gates `AVCaptureVideoPreviewLayer` to explicit baseline or diagnostic-only paths.
 
 ## Examples
 ```rust
@@ -72,5 +77,9 @@ oxide_host_emit_touch(10, 0, 1.0, 2.0, 0.5, 1, 0.0, 0.0, 0, 0, 100);
 ```
 
 ## Changelog
+- 2026-06-01: added macOS-side source gates keeping `AVCaptureVideoPreviewLayer` out of the product custom camera preview path.
+- 2026-06-01: enabled timeout-capable `CAMetalLayer.nextDrawable` acquisition on the product iOS host so prepared frames can cancel instead of blocking indefinitely under drawable pressure.
+- 2026-05-31: split iOS frame preparation from drawable submission so `nextDrawable` is acquired after CPU frame work in app and perf-host paths.
+- 2026-05-31: preserved raw touch sample timestamps in `TouchEvent::timestamp_ns`.
 - 2026-05-19: removed secure-storage ABI definitions from `perf-host-stubs` so iOS host builds use the shared Apple Keychain bridge.
 - 2026-05-19: recovered iOS host callback mutex poisoning, hardened null/empty fallback payload handling, and aligned callback bridge behavior with the macOS host.

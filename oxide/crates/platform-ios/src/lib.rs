@@ -13,9 +13,9 @@ use oxide_networking::ReachabilityManager;
 #[cfg(feature = "tokio-runtime")]
 use oxide_platform_api::runtime;
 use oxide_platform_api::telephony::{normalize_country_iso, TelephonyService};
-use oxide_platform_api::{PlatformError, TimeService};
 use oxide_platform_api::{HapticPattern, Haptics as HapticsTrait};
 use oxide_platform_api::{PermissionDomain, PermissionStatus, Permissions};
+use oxide_platform_api::{PlatformError, TimeService};
 
 use core::time::Duration;
 use once_cell::sync::Lazy;
@@ -147,10 +147,8 @@ impl Permissions for IosPermissions {
 // ===== Location and motion =====
 
 pub use oxide_platform_apple::{
-    AppleLocationConfig as OxideLocationConfig,
-    AppleLocationSample as OxideLocationSample,
-    AppleLocationService as IosLocation,
-    AppleMotionSample as OxideMotionSample,
+    AppleLocationConfig as OxideLocationConfig, AppleLocationSample as OxideLocationSample,
+    AppleLocationService as IosLocation, AppleMotionSample as OxideMotionSample,
     AppleMotionService as IosMotion,
 };
 
@@ -173,7 +171,11 @@ pub extern "C" fn oxide_reachability_trampoline(status: u32, iface: u32, expensi
     }
 }
 
-fn decode_reachability(status: u32, iface: u32, expensive: bool) -> oxide_networking::ReachabilityState {
+fn decode_reachability(
+    status: u32,
+    iface: u32,
+    expensive: bool,
+) -> oxide_networking::ReachabilityState {
     oxide_platform_apple::reachability_state_from_apple_path(status, iface, expensive)
 }
 
@@ -234,17 +236,14 @@ impl Drop for IosReachability {
 // ===== Push Manager =====
 
 pub use oxide_platform_apple::{
-    oxide_push_notify_trampoline,
-    oxide_push_token_trampoline,
-    ApplePushManager as IosPushManager,
+    oxide_push_notify_trampoline, oxide_push_token_trampoline, ApplePushManager as IosPushManager,
 };
 
 // ===== Bluetooth =====
 
 pub use oxide_platform_apple::{
     apple_bluetooth_with_restoration as bluetooth_with_restoration,
-    AppleBleScanConfig as OxideBleScanConfig,
-    AppleBleScanInfo as OxideBleScanInfo,
+    AppleBleScanConfig as OxideBleScanConfig, AppleBleScanInfo as OxideBleScanInfo,
     AppleBluetooth as IosBluetooth,
 };
 
@@ -465,10 +464,8 @@ unsafe fn c_str_to_string(ptr: *const u8, len: usize) -> String {
 // ===== Media Library =====
 
 pub use oxide_platform_apple::{
-    AppleMediaAsset as OxideMediaAsset,
-    AppleMediaImageData as OxideImageData,
-    AppleMediaLibraryManager as IosMediaLibraryManager,
-    AppleRawImageData as IosRawImageData,
+    AppleMediaAsset as OxideMediaAsset, AppleMediaImageData as OxideImageData,
+    AppleMediaLibraryManager as IosMediaLibraryManager, AppleRawImageData as IosRawImageData,
 };
 
 // ===== Telephony =====

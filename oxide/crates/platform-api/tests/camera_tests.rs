@@ -7,6 +7,17 @@ use oxide_platform_api::{
     RecordingOptions, RecordingResult, TorchMode,
 };
 
+#[test]
+fn public_camera_api_has_no_native_visible_preview_surface() {
+    let source = include_str!("../src/lib.rs");
+    assert!(
+        !source.contains("start_native_preview")
+            && !source.contains("host-native preview")
+            && !source.contains("native compositor layer"),
+        "platform-api must not expose host-native visible preview as a product camera path"
+    );
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CamStateSnapshot {
     started: bool,

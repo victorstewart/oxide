@@ -1,4 +1,150 @@
 use oxide_host_web::generate_checker_rgba;
+use std::io::Cursor;
+
+fn decode_png_rgba(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
+    let decoder = png::Decoder::new(Cursor::new(bytes));
+    let mut reader = decoder.read_info().expect("decode PNG header");
+    let mut out = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut out).expect("decode PNG pixels");
+    let pixels = &out[..info.buffer_size()];
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => pixels.to_vec(),
+        png::ColorType::Rgb => {
+            let mut converted = Vec::with_capacity(info.width as usize * info.height as usize * 4);
+            for pixel in pixels.chunks_exact(3) {
+                converted.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+            }
+            converted
+        }
+        other => panic!("unsupported PNG color type {other:?}"),
+    };
+    (info.width, info.height, rgba)
+}
+
+fn report_case_slice<'a>(report: &'a str, id: &str) -> &'a str {
+    let marker = format!("\"id\": \"{id}\"");
+    let start = report.find(&marker).unwrap_or_else(|| panic!("missing web report case {id}"));
+    let tail = &report[start..];
+    let end = tail.find("\n    }").unwrap_or(tail.len());
+    &tail[..end]
+}
+
+fn report_section_slice<'a>(report: &'a str, section: &str) -> &'a str {
+    let marker = format!("\"{section}\": {{");
+    let start =
+        report.find(&marker).unwrap_or_else(|| panic!("missing web report section {section}"));
+    let tail = &report[start..];
+    let end = tail.find("\n  }").unwrap_or(tail.len());
+    &tail[..end]
+}
+
+fn report_f64(section: &str, key: &str) -> f64 {
+    let marker = format!("\"{key}\": ");
+    let start =
+        section.find(&marker).unwrap_or_else(|| panic!("missing numeric report field {key}"))
+            + marker.len();
+    let rest = &section[start..];
+    let end = rest.find(|ch: char| ch == ',' || ch == '\n' || ch == '}').unwrap_or(rest.len());
+    rest[..end]
+        .trim()
+        .parse::<f64>()
+        .unwrap_or_else(|_| panic!("invalid numeric report field {key}"))
+}
+
+fn report_u64(section: &str, key: &str) -> u64 {
+    report_f64(section, key) as u64
+}
+
+fn report_pass_family_total(section: &str) -> f64 {
+    report_f64(section, "clear_passes")
+        + report_f64(section, "draw_passes")
+        + report_f64(section, "scene3d_passes")
+        + report_f64(section, "scene3d_overlay_passes")
+        + report_f64(section, "id_mask_raster_passes")
+        + report_f64(section, "id_mask_field_seed_passes")
+        + report_f64(section, "id_mask_field_jump_passes")
+        + report_f64(section, "id_mask_compositor_passes")
+        + report_f64(section, "present_passes")
+}
+
+fn assert_webgpu_id_mask_pixels(width: u32, height: u32, rgba: &[u8]) {
+    assert_eq!((width, height), (512, 512));
+
+    let mut colorful_pixels = 0usize;
+    let mut green_pixels = 0usize;
+    let mut blue_pixels = 0usize;
+    let mut bright_pixels = 0usize;
+    let mut dark_pixels = 0usize;
+    for pixel in rgba.chunks_exact(4) {
+        let r = pixel[0];
+        let g = pixel[1];
+        let b = pixel[2];
+        let a = pixel[3];
+        assert_eq!(a, 255);
+        let hi = r.max(g).max(b);
+        let lo = r.min(g).min(b);
+        if hi.saturating_sub(lo) > 48 {
+            colorful_pixels += 1;
+        }
+        if g > r.saturating_add(16) && g > b.saturating_add(16) {
+            green_pixels += 1;
+        }
+        if b > r.saturating_add(20) && b > g.saturating_add(20) {
+            blue_pixels += 1;
+        }
+        if r > 180 || g > 180 || b > 180 {
+            bright_pixels += 1;
+        }
+        if r < 24 && g < 24 && b < 24 {
+            dark_pixels += 1;
+        }
+    }
+
+    assert!(colorful_pixels > 100000, "WebGPU ID-mask golden is not colorful enough");
+    assert!(green_pixels > 25000, "WebGPU ID-mask golden is missing green city fills");
+    assert!(blue_pixels > 50000, "WebGPU ID-mask golden is missing blue/purple city fills");
+    assert!(bright_pixels > 5000, "WebGPU ID-mask golden is missing bright seam/edge pixels");
+    assert!(
+        bright_pixels < 80000,
+        "WebGPU ID-mask golden looks like the app capture, not the compositor"
+    );
+    assert!(dark_pixels < 80000, "WebGPU ID-mask golden has too many untouched pixels");
+}
+
+fn assert_webgpu_scene3d_pixels(width: u32, height: u32, rgba: &[u8]) {
+    let pixel_count = (width as usize).saturating_mul(height as usize);
+    let mut colorful = 0usize;
+    let mut blue = 0usize;
+    let mut orange = 0usize;
+    let mut dark = 0usize;
+    for pixel in rgba.chunks_exact(4) {
+        let r = pixel[0];
+        let g = pixel[1];
+        let b = pixel[2];
+        let hi = r.max(g).max(b);
+        let lo = r.min(g).min(b);
+        if hi > 48 && hi.saturating_sub(lo) > 36 {
+            colorful += 1;
+        }
+        if b > r.saturating_add(36) && b > g.saturating_add(16) {
+            blue += 1;
+        }
+        if r > b.saturating_add(36) && g > b.saturating_add(8) {
+            orange += 1;
+        }
+        if r < 24 && g < 24 && b < 32 {
+            dark += 1;
+        }
+    }
+
+    assert!(colorful > pixel_count / 12, "WebGPU Scene3D golden is missing colored geometry");
+    assert!(blue > pixel_count / 35, "WebGPU Scene3D golden is missing the blue back triangle");
+    assert!(
+        orange > pixel_count / 55,
+        "WebGPU Scene3D golden is missing the orange front triangle"
+    );
+    assert!(dark > pixel_count / 3, "WebGPU Scene3D golden is missing the dark clear background");
+}
 
 #[test]
 fn checker_texture_has_expected_size_and_alpha() {
@@ -21,21 +167,105 @@ fn checker_texture_alternates_tiles() {
 fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     let html = include_str!("../../www/index.html");
     assert!(html.contains("./pkg/oxide_host_web.js"));
+    assert!(html.contains("OxideWebApp"));
     assert!(html.contains("platform_smoke_report"));
     assert!(html.contains("webgpu_smoke_report"));
+    assert!(html.contains("webgpu_timing_report"));
     assert!(html.contains("start_oxide_async"));
     assert!(html.contains("background: transparent"));
     assert!(html.contains("window.oxidePlatformSmoke"));
     assert!(html.contains("window.oxideWebGpuSmoke"));
+    assert!(html.contains("window.oxideWebGpuTiming"));
     assert!(html.contains("window.oxideWebPerf"));
+    assert!(html.contains("window.oxideWebGpuIdMaskAB"));
+    assert!(html.contains("window.oxideWebGpuUploadAB"));
+    assert!(html.contains("window.oxideWebGpuUploadScratchAB"));
+    assert!(html.contains("window.oxideWebGpuScene3dAB"));
+    assert!(html.contains("window.oxideWebGpuMixedMatrix"));
+    assert!(html.contains("window.oxideWebGpuLayerEffectsMatrix"));
+    assert!(html.contains("window.oxideWebGpuCommandFamilyMatrix"));
+    assert!(html.contains("window.oxideWebGpuDrawStateCacheAB"));
+    assert!(html.contains("window.oxideWebGpuClipStateAB"));
+    assert!(html.contains("window.oxideWebGpuEffectUniformAB"));
+    assert!(html.contains("prewarm_webgpu_bench_resources"));
+    assert!(html.contains("oxide-webgpu-bench"));
+    assert!(html.contains("window.oxideWebBenchmarkMarks"));
+    assert!(html.contains("benchmark_marks"));
+    assert!(html.contains("performance.mark(start)"));
+    assert!(html.contains("performance.measure(measure, start, end)"));
+    assert!(html.contains("bench_timeout_ms"));
+    assert!(html.contains("benchmark_error"));
+    assert!(html.contains("postErrorReport"));
+    assert!(html.contains("wasmMemoryBytes"));
+    assert!(html.contains("wasm_memory_before_bytes"));
+    assert!(html.contains("wasm_memory_after_bytes"));
+    assert!(html.contains("wasm_memory_growth_bytes"));
+    assert!(html.contains("window.oxideWebGpuAppSnapshot"));
+    assert!(html.contains("window.oxideWebGpuScene3dSnapshot"));
+    assert!(html.contains("window.oxideWebGpuIdMaskSnapshot"));
+    assert!(html.contains("oxide-browser-report-json"));
+    assert!(html.contains("await fetch(\"/__oxide_report\""));
+    assert!(!html.contains("keepalive"));
+    assert!(html.contains("frame_samples"));
+    assert!(html.contains("id_mask_samples"));
+    assert!(html.contains("upload_samples"));
+    assert!(html.contains("scene3d_samples"));
+    assert!(html.contains("mixed_samples"));
+    assert!(html.contains("capture_target"));
+    assert!(html.contains("capture_width"));
+    assert!(html.contains("capture_height"));
+    assert!(html.contains("capture_only"));
+    assert!(html.contains("captureTarget === \"scene3d\""));
+    assert!(html.contains("captureTarget === \"id-mask\""));
+    assert!(html.contains("await nextAnimationFrame();"));
     assert!(html.contains("oxide-platform-smoke"));
     assert!(html.contains("oxide-webgpu-smoke"));
+    assert!(html.contains("oxide-webgpu-app-snapshot"));
+    assert!(html.contains("oxide-webgpu-scene3d-snapshot"));
+    assert!(html.contains("oxide-webgpu-id-mask-ab"));
+    assert!(html.contains("oxide-webgpu-upload-ab"));
+    assert!(html.contains("oxide-webgpu-upload-scratch-ab"));
+    assert!(html.contains("oxide-webgpu-effect-uniform-ab"));
+    assert!(html.contains("oxide-webgpu-scene3d-ab"));
+    assert!(html.contains("oxide-webgpu-mixed-matrix"));
+    assert!(html.contains("oxide-webgpu-layer-effects-matrix"));
+    assert!(html.contains("oxide-webgpu-command-family-matrix"));
+    assert!(html.contains("oxide-webgpu-draw-state-cache-ab"));
+    assert!(html.contains("oxide-webgpu-clip-state-ab"));
+    assert!(html.contains("oxide-webgpu-id-mask-snapshot"));
     assert!(html.contains("oxide-renderer-backend"));
     assert!(html.contains("oxide-render-smoke"));
     assert!(html.contains("oxide-web-perf"));
     assert!(html.contains("renderer_backend"));
     assert!(html.contains("last_draw_count"));
     assert!(html.contains("bench_frame_samples"));
+    assert!(html.contains("bench_webgpu_id_mask_ab"));
+    assert!(html.contains("bench_webgpu_upload_ab"));
+    assert!(html.contains("bench_webgpu_upload_scratch_ab"));
+    assert!(html.contains("bench_webgpu_effect_uniform_ab"));
+    assert!(html.contains("bench_webgpu_backdrop_batch_ab"));
+    assert!(html.contains("bench_webgpu_scene3d_ab"));
+    assert!(html.contains("bench_webgpu_mixed_matrix"));
+    assert!(html.contains("bench_webgpu_layer_effects_matrix"));
+    assert!(html.contains("bench_webgpu_command_family_matrix"));
+    assert!(html.contains("bench_webgpu_draw_state_cache_ab"));
+    assert!(html.contains("bench_webgpu_clip_state_ab"));
+    assert!(html.contains("render_webgpu_app_snapshot"));
+    assert!(html.contains("render_webgpu_scene3d_snapshot"));
+    assert!(html.contains("render_webgpu_id_mask_snapshot"));
+    assert!(html.contains("app_snapshot"));
+    assert!(html.contains("scene3d_snapshot"));
+    assert!(html.contains("id_mask_snapshot"));
+    assert!(html.contains("upload_ab"));
+    assert!(html.contains("upload_scratch_ab"));
+    assert!(html.contains("effect_uniform_ab"));
+    assert!(html.contains("backdrop_batch_ab"));
+    assert!(html.contains("scene3d_ab"));
+    assert!(html.contains("mixed_matrix"));
+    assert!(html.contains("layer_effects_matrix"));
+    assert!(html.contains("command_family_matrix"));
+    assert!(html.contains("draw_state_cache_ab"));
+    assert!(html.contains("clip_state_ab"));
 }
 
 #[test]
@@ -55,4 +285,1008 @@ fn host_visual_startup_requires_async_webgpu() {
     assert!(source.contains("from_canvas_id_webgpu"));
     assert!(source.contains("webgpu renderer requires async browser initialization"));
     assert!(!source.contains("from_canvas_id_canvas2d"));
+}
+
+#[test]
+fn host_exposes_webgpu_id_mask_ab_benchmark() {
+    let source = include_str!("../src/lib.rs");
+    assert!(source.contains("pub async fn bench_webgpu_id_mask_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_upload_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_upload_scratch_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_effect_uniform_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_backdrop_batch_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_scene3d_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_mixed_matrix"));
+    assert!(source.contains("pub async fn bench_webgpu_layer_effects_matrix"));
+    assert!(source.contains("pub async fn bench_webgpu_command_family_matrix"));
+    assert!(source.contains("pub async fn bench_webgpu_draw_state_cache_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_clip_state_ab"));
+    assert!(source.contains("pub fn render_webgpu_app_snapshot"));
+    assert!(source.contains("pub fn render_webgpu_scene3d_snapshot"));
+    assert!(source.contains("pub fn render_webgpu_id_mask_snapshot"));
+    assert!(source.contains("SNAPSHOT_TIMESTAMP_MS"));
+    assert!(source.contains("pub fn render_webgpu_scene3d_snapshot("));
+    assert!(source.contains("width: u32"));
+    assert!(source.contains("height: u32"));
+    assert!(source.contains("webgpu_scene3d_frame(&mut renderer, physical_w, physical_h, 1.0)"));
+    assert!(source.contains("WebGpuScene3dBenchResources"));
+    assert!(source.contains("WebGpuScene3dStressBenchResources"));
+    assert!(source.contains("WebGpuScene3dStressRecreateResources"));
+    assert!(source.contains("WEBGPU_SCENE3D_STRESS_INSTANCES"));
+    assert!(source.contains("resources.frame(renderer)"));
+    assert!(source.contains("stress_resources.frame(renderer)"));
+    assert!(source.contains("stress_recreate.frame(renderer)"));
+    assert!(source.contains("webgpu_scene3d_recreate_frame(renderer, 512, 512, 2.0)"));
+    assert!(source.contains("recreate_over_reused"));
+    assert!(source.contains("stress_recreate_over_reused"));
+    assert!(source.contains("mesh3d_create_colored"));
+    assert!(source.contains("encode_scene3d(&pass)"));
+    assert!(source.contains("mesh3d_release(back)"));
+    assert!(source.contains("mesh3d_release(front)"));
+    assert!(source.contains("bench_webgpu_id_mask_case(&mut renderer, true"));
+    assert!(source.contains("bench_webgpu_id_mask_case(&mut renderer, false"));
+    assert!(source.contains("WebGpuUploadBenchResources"));
+    assert!(source.contains("bench_webgpu_sampled_case"));
+    assert!(source.contains("resources.glyph_frame(renderer, true)"));
+    assert!(source.contains("resources.glyph_frame(renderer, false)"));
+    assert!(source.contains("resources.image_frame(renderer, true)"));
+    assert!(source.contains("resources.image_frame(renderer, false)"));
+    assert!(source.contains("resources.upload_scratch_frame(renderer)"));
+    assert!(source.contains("resources.effect_uniform_frame(renderer)"));
+    assert!(source.contains("resources.backdrop_batch_frame(renderer)"));
+    assert!(source.contains("resources.mixed_frame(renderer)"));
+    assert!(source.contains("resources.layer_effects_frame(renderer)"));
+    assert!(source.contains("resources.command_family_frame(renderer)"));
+    assert!(source.contains("resources.draw_state_cache_frame(renderer)"));
+    assert!(source.contains("resources.clip_state_frame(renderer)"));
+    assert!(source.contains("fn upload_scratch_frame"));
+    assert!(source.contains("fn effect_uniform_frame"));
+    assert!(source.contains("fn backdrop_batch_frame"));
+    assert!(source.contains("fn layer_effects_frame"));
+    assert!(source.contains("fn command_family_frame"));
+    assert!(source.contains("fn draw_state_cache_frame"));
+    assert!(source.contains("fn clip_state_frame"));
+    assert!(source.contains("bench_resources: Option<WebGpuUploadBenchResources>"));
+    assert!(source.contains("fn ensure_upload_bench_resources"));
+    assert!(source.contains("fn with_upload_bench_resources"));
+    assert!(source.contains("WEBGPU_LAYER_EFFECT_GLYPHS"));
+    assert!(source.contains("WEBGPU_EFFECT_UNIFORM_BACKDROPS"));
+    assert!(source.contains("WEBGPU_BACKDROP_BATCH_BACKDROPS"));
+    assert!(source.contains("WEBGPU_UPLOAD_SCRATCH_UPDATES"));
+    assert!(source.contains("WEBGPU_COMMAND_FAMILY_SDF_GLYPHS"));
+    assert!(source.contains("WEBGPU_DRAW_STATE_CACHE_DRAWS"));
+    assert!(source.contains("WEBGPU_DRAW_STATE_CACHE_COLUMNS"));
+    assert!(source.contains("WEBGPU_CLIP_STATE_DRAWS"));
+    assert!(source.contains("WEBGPU_CLIP_STATE_RUNS"));
+    assert!(source.contains("expected_layers=3"));
+    assert!(source.contains("expected_damage_rects=3"));
+    assert!(source.contains("expected_image_meshes=1"));
+    assert!(source.contains("expected_nine_slices=1"));
+    assert!(source.contains("expected_camera_bg=0"));
+    assert!(source.contains("expected_draw_items={WEBGPU_DRAW_STATE_CACHE_DRAWS}"));
+    assert!(source.contains("expected_draw_items={WEBGPU_CLIP_STATE_DRAWS}"));
+    assert!(source.contains("expected_clip_runs={WEBGPU_CLIP_STATE_RUNS}"));
+    assert!(source.contains("expected_clip_depth=2"));
+    assert!(source.contains("expected_backdrops={WEBGPU_EFFECT_UNIFORM_BACKDROPS}"));
+    assert!(source.contains("expected_backdrops={WEBGPU_BACKDROP_BATCH_BACKDROPS}"));
+    assert!(source.contains("set_draw_state_cache_enabled_for_benchmark"));
+    assert!(source.contains("set_image_upload_scratch_enabled_for_benchmark"));
+    assert!(source.contains("set_effect_uniform_batch_enabled_for_benchmark"));
+    assert!(source.contains("set_backdrop_batch_enabled_for_benchmark"));
+    assert!(source.contains("append_glyph_grid"));
+    assert!(!source.contains("set_camera_background_rgba8"));
+    assert!(!source.contains("builder.camera_bg("));
+    assert!(source.contains("glyph_upload_a8"));
+    assert!(source.contains("image_update_rgba8"));
+    assert!(source.contains("image_upload_temp_allocs={}"));
+    assert!(source.contains("image_upload_scratch_bytes={}"));
+    assert!(source.contains("effect_uniform_writes={}"));
+    assert!(source.contains("webgpu_id_mask_frame(&mut renderer, &vertices, 1"));
+    assert!(source.contains("direct_capture_active"));
+    assert!(source.contains("state.direct_capture_active = true"));
+    assert!(source.contains("if state.direct_capture_active"));
+    assert!(source.contains("current_p99_ms"));
+    assert!(source.contains("legacy_avg_ms"));
+    assert!(source.contains("webgpu_timing_report"));
+    assert!(source.contains("webgpu_adapter_feature_supported(&adapter, \"timestamp-query\")"));
+    assert!(source.contains("pub async fn bench_frame_samples"));
+    assert!(source.contains("pub async fn bench_webgpu_id_mask_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_upload_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_effect_uniform_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_backdrop_batch_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_scene3d_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_mixed_matrix"));
+    assert!(source.contains("pub async fn bench_webgpu_clip_state_ab"));
+    assert!(source.contains("settle_renderer_timestamps"));
+    assert!(source.contains("WEBGPU_TIMESTAMP_SETTLE_RAFS"));
+    assert!(source.contains("fn timestamp_stats_cover_row"));
+    assert!(source.contains("let target_frame_id = renderer.borrow().last_stats().frame_id"));
+    assert!(source.contains("stats.gpu_timestamp_frame_id > after_frame_id"));
+    assert!(source.contains("stats.gpu_timestamp_passes == stats.render_passes"));
+    assert!(source.contains("pending_timestamp_readbacks"));
+    assert!(source.contains("pending_readbacks == 0"));
+    assert!(source.contains("pending readbacks {}"));
+    assert!(source.contains("WebGPU timestamp readback did not settle for row"));
+    assert!(source.contains("collect_timestamp_readbacks"));
+    assert!(source.contains("solid_tris={}"));
+    assert!(source.contains("image_draws={}"));
+    assert!(source.contains("image_mesh_draws={}"));
+    assert!(source.contains("nine_slice_draws={}"));
+    assert!(source.contains("glyph_quads={}"));
+    assert!(source.contains("sdf_glyph_quads={}"));
+    assert!(source.contains("clip_depth_peak={}"));
+    assert!(source.contains("damage_rects={}"));
+    assert!(source.contains("layer_draws={}"));
+    assert!(source.contains("scene3d_draws={}"));
+    assert!(source.contains("id_mask_draws={}"));
+    assert!(source.contains("backdrop_draws={}"));
+    assert!(source.contains("visual_effect_draws={}"));
+    assert!(source.contains("spinner_draws={}"));
+    assert!(source.contains("camera_bg_draws={}"));
+    assert!(source.contains("render_passes={}"));
+    assert!(source.contains("clear_passes={}"));
+    assert!(source.contains("draw_passes={}"));
+    assert!(source.contains("scene3d_passes={}"));
+    assert!(source.contains("scene3d_overlay_passes={}"));
+    assert!(source.contains("id_mask_raster_passes={}"));
+    assert!(source.contains("id_mask_field_seed_passes={}"));
+    assert!(source.contains("id_mask_field_jump_passes={}"));
+    assert!(source.contains("id_mask_compositor_passes={}"));
+    assert!(source.contains("present_passes={}"));
+    assert!(source.contains("texture_copies={}"));
+    assert!(source.contains("command_buffers={}"));
+    assert!(source.contains("gpu_timestamp_query_supported={}"));
+    assert!(source.contains("gpu_timestamp_total_ns={}"));
+    assert!(source.contains("gpu_timestamp_id_mask_field_jump_ns={}"));
+    assert!(source.contains("gpu_timestamp_readback_skips={}"));
+    assert!(source.contains("buffer_upload_bytes={}"));
+    assert!(source.contains("texture_upload_bytes={}"));
+    assert!(source.contains("buffer_grows={}"));
+    assert!(source.contains("texture_creates={}"));
+    assert!(source.contains("bind_group_creates={}"));
+    assert!(source.contains("pipeline_creates={}"));
+    assert!(source.contains("sampler_creates={}"));
+    assert!(source.contains("mesh3d_creates={}"));
+    assert!(source.contains("image_upload_temp_allocs={}"));
+    assert!(source.contains("image_upload_temp_bytes={}"));
+    assert!(source.contains("image_upload_scratch_bytes={}"));
+    assert!(source.contains("image_upload_scratch_grows={}"));
+    assert!(source.contains("cpu_scratch_bytes={}"));
+    assert!(source.contains("cpu_scratch_grows={}"));
+    assert!(source.contains("cpu_scratch_growth_bytes={}"));
+    assert!(source.contains("fn renderer_stats_metrics"));
+    assert!(source.contains("renderer_stats_metrics(current.stats, \"current\")"));
+    assert!(source.contains("renderer_stats_metrics(legacy.stats, \"legacy\")"));
+    assert!(source.contains("{key_prefix}render_passes={}"));
+    assert!(source.contains("{key_prefix}clear_passes={}"));
+    assert!(source.contains("{key_prefix}id_mask_field_jump_passes={}"));
+    assert!(source.contains("{key_prefix}texture_copies={}"));
+    assert!(source.contains("{key_prefix}gpu_timestamp_passes={}"));
+    assert!(source.contains("{key_prefix}image_mesh_draws={}"));
+    assert!(source.contains("{key_prefix}nine_slice_draws={}"));
+    assert!(source.contains("{key_prefix}sdf_glyph_quads={}"));
+    assert!(source.contains("{key_prefix}layer_draws={}"));
+    assert!(source.contains("{key_prefix}scene3d_draws={}"));
+    assert!(source.contains("{key_prefix}backdrop_draws={}"));
+    assert!(source.contains("{key_prefix}buffer_upload_bytes={}"));
+    assert!(source.contains("{key_prefix}image_upload_temp_allocs={}"));
+    assert!(source.contains("{key_prefix}image_upload_scratch_bytes={}"));
+    assert!(source.contains("frame_pacing_metrics"));
+    assert!(source.contains("missed_frame_ratio_{refresh_hz}hz"));
+    assert!(source.contains("hitch_ratio_{refresh_hz}hz"));
+    assert!(source.contains("vertex_revision: revision"));
+    assert!(source.contains("glyph_legacy_over_current"));
+    assert!(source.contains("image_legacy_over_current"));
+}
+
+#[test]
+fn committed_webgpu_browser_golden_is_present_and_sized() {
+    let png = include_bytes!("../../../../goldens/snapshots/webgpu_browser.png");
+    assert!(png.len() > 1024, "webgpu browser golden should contain rendered canvas pixels");
+    assert_eq!(&png[0..8], b"\x89PNG\r\n\x1a\n");
+    assert_eq!(&png[12..16], b"IHDR");
+    let width = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+    let height = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+    assert_eq!((width, height), (320, 240));
+}
+
+#[test]
+fn committed_webgpu_id_mask_golden_is_present_and_sized() {
+    let png = include_bytes!("../../../../goldens/snapshots/webgpu_id_mask_compositor.png");
+    assert!(png.len() > 1024, "webgpu ID-mask golden should contain rendered canvas pixels");
+    assert_eq!(&png[0..8], b"\x89PNG\r\n\x1a\n");
+    assert_eq!(&png[12..16], b"IHDR");
+    let width = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+    let height = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+    assert_eq!((width, height), (512, 512));
+}
+
+#[test]
+fn committed_webgpu_scene3d_golden_is_present_and_sized() {
+    let cases: [(&[u8], (u32, u32), &str); 3] = [
+        (
+            include_bytes!("../../../../goldens/snapshots/webgpu_scene3d.png"),
+            (512, 512),
+            "webgpu_scene3d.png",
+        ),
+        (
+            include_bytes!("../../../../goldens/snapshots/webgpu_scene3d_wide.png"),
+            (640, 360),
+            "webgpu_scene3d_wide.png",
+        ),
+        (
+            include_bytes!("../../../../goldens/snapshots/webgpu_scene3d_portrait.png"),
+            (360, 640),
+            "webgpu_scene3d_portrait.png",
+        ),
+    ];
+    for (png, size, name) in cases {
+        assert!(png.len() > 1024, "{name} should contain rendered canvas pixels");
+        assert_eq!(&png[0..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(&png[12..16], b"IHDR");
+        let width = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+        let height = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+        assert_eq!((width, height), size, "{name} has wrong PNG dimensions");
+    }
+}
+
+#[test]
+fn committed_webgpu_browser_golden_contains_rendered_pixels() {
+    let png = include_bytes!("../../../../goldens/snapshots/webgpu_browser.png");
+    let (width, height, rgba) = decode_png_rgba(png);
+    assert_eq!((width, height), (320, 240));
+
+    let mut blue_pixels = 0usize;
+    let mut dark_pixels = 0usize;
+    let mut background_pixels = 0usize;
+    for pixel in rgba.chunks_exact(4) {
+        let r = pixel[0];
+        let g = pixel[1];
+        let b = pixel[2];
+        let a = pixel[3];
+        assert_eq!(a, 255);
+        if b > 180 && r < 120 && g > 80 {
+            blue_pixels += 1;
+        }
+        if r < 16 && g < 16 && b < 16 {
+            dark_pixels += 1;
+        }
+        if r > 235 && g > 235 && b > 235 {
+            background_pixels += 1;
+        }
+    }
+
+    assert!(blue_pixels > 4000, "WebGPU golden is missing the blue control surfaces");
+    assert!(dark_pixels > 3000, "WebGPU golden is missing the captured page bounds");
+    assert!(background_pixels > 20000, "WebGPU golden is missing the light scene background");
+}
+
+#[test]
+fn committed_webgpu_id_mask_golden_contains_rendered_pixels() {
+    let png = include_bytes!("../../../../goldens/snapshots/webgpu_id_mask_compositor.png");
+    let (width, height, rgba) = decode_png_rgba(png);
+    assert_webgpu_id_mask_pixels(width, height, &rgba);
+}
+
+#[test]
+fn committed_webgpu_scene3d_golden_contains_rendered_pixels() {
+    for png in [
+        include_bytes!("../../../../goldens/snapshots/webgpu_scene3d.png").as_slice(),
+        include_bytes!("../../../../goldens/snapshots/webgpu_scene3d_wide.png").as_slice(),
+        include_bytes!("../../../../goldens/snapshots/webgpu_scene3d_portrait.png").as_slice(),
+    ] {
+        let (width, height, rgba) = decode_png_rgba(png);
+        assert_webgpu_scene3d_pixels(width, height, &rgba);
+    }
+}
+
+#[test]
+fn webgpu_browser_capture_script_compares_pixels_against_golden() {
+    let script = include_str!("../../../../scripts/check_webgpu_browser_golden.mjs");
+    assert!(script.contains("--enable-unsafe-webgpu"));
+    assert!(script.contains("--screenshot"));
+    assert!(script.contains("goldens\", \"snapshots\", \"webgpu_browser.png"));
+    assert!(script.contains("webgpu_id_mask_compositor.png"));
+    assert!(script.contains("webgpu_scene3d.png"));
+    assert!(script.contains("--target"));
+    assert!(script.contains("function comparePngs"));
+    assert!(script.contains("function assertIdMaskRendered"));
+    assert!(script.contains("function assertScene3dRendered"));
+    assert!(script.contains("pixelTolerance"));
+    assert!(script.contains("golden mismatch"));
+    assert!(script.contains("capture_target"));
+    assert!(script.contains("capture_width"));
+    assert!(script.contains("capture_height"));
+    assert!(script.contains("capture_only"));
+    assert!(script.contains("--capture-retries"));
+    assert!(script.contains("captureAndCompare"));
+    assert!(script.contains("retrying WebGPU browser capture attempt"));
+    assert!(script.contains("webgpu_timing"));
+    assert!(script.contains("gpu_stage_attribution"));
+    assert!(script.contains("--trace-json"));
+    assert!(script.contains("--trace-startup="));
+    assert!(script.contains("browser_trace"));
+    assert!(script.contains("capture_phase = \"benchmark-report\""));
+    assert!(script.contains("timing_source = \"untraced-baseline-report\""));
+    assert!(script.contains("Browser Trace"));
+    assert!(script.contains("upload_samples"));
+    assert!(script.contains("scene3d_samples"));
+    assert!(script.contains("mixed_samples"));
+    assert!(script.contains("app_snapshot"));
+    assert!(script.contains("scene3d_snapshot"));
+    assert!(script.contains("id_mask_snapshot"));
+    assert!(script.contains("upload_ab"));
+    assert!(script.contains("upload_scratch_ab"));
+    assert!(script.contains("backdrop_batch_ab"));
+    assert!(script.contains("scene3d_ab"));
+    assert!(script.contains("mixed_matrix"));
+    assert!(script.contains("layer_effects_matrix"));
+    assert!(script.contains("command_family_matrix"));
+    assert!(script.contains("draw_state_cache_ab"));
+    assert!(script.contains("clip_state_ab"));
+    assert!(script.contains("--json-report"));
+    assert!(script.contains("--markdown-report"));
+    assert!(script.contains("web.wasm.webgpu.id_mask_compositor.current"));
+    assert!(script.contains("web.wasm.webgpu.glyph_atlas_upload.current_dirty"));
+    assert!(script.contains("web.wasm.webgpu.glyph_atlas_upload.legacy_full"));
+    assert!(script.contains("web.wasm.webgpu.image_upload.current_dirty"));
+    assert!(script.contains("web.wasm.webgpu.image_upload.legacy_full"));
+    assert!(script.contains("web.wasm.webgpu.upload_scratch.current_reuse"));
+    assert!(script.contains("web.wasm.webgpu.upload_scratch.legacy_temp_alloc"));
+    assert!(script.contains("web.wasm.webgpu.effect_uniform.current_batched"));
+    assert!(script.contains("web.wasm.webgpu.effect_uniform.legacy_write_each"));
+    assert!(script.contains("web.wasm.webgpu.backdrop_batch.current_coalesced"));
+    assert!(script.contains("web.wasm.webgpu.backdrop_batch.legacy_per_backdrop_copy"));
+    assert!(script.contains("web.wasm.webgpu.scene3d.reused_mesh"));
+    assert!(script.contains("web.wasm.webgpu.scene3d.recreate_mesh"));
+    assert!(script.contains("web.wasm.webgpu.scene3d.stress_reused_mesh"));
+    assert!(script.contains("web.wasm.webgpu.scene3d.stress_recreate_mesh"));
+    assert!(script.contains("web.wasm.webgpu.mixed_text_image_effects"));
+    assert!(script.contains("web.wasm.webgpu.layer_damage_effects"));
+    assert!(script.contains("web.wasm.webgpu.command_family_matrix"));
+    assert!(script.contains("web.wasm.webgpu.draw_state_cache.current"));
+    assert!(script.contains("web.wasm.webgpu.draw_state_cache.legacy_rebind"));
+    assert!(script.contains("web.wasm.webgpu.clip_state_cache.current"));
+    assert!(script.contains("web.wasm.webgpu.clip_state_cache.legacy_rebind"));
+    assert!(script.contains("legacy_over_current"));
+    assert!(script.contains("glyph_legacy_over_current"));
+    assert!(script.contains("image_legacy_over_current"));
+    assert!(script.contains("effect_uniform_summary"));
+    assert!(script.contains("backdrop_batch_summary"));
+    assert!(script.contains("recreate_over_reused"));
+    assert!(script.contains("draw_state_summary"));
+    assert!(script.contains("clip_state_summary"));
+    assert!(script.contains("warmResourceChurnSummary"));
+    assert!(script.contains("warm_resource_churn"));
+    assert!(script.contains("WARM_RESOURCE_CHURN_FIELDS"));
+    assert!(script.contains("Warm Resource Churn"));
+    assert!(script.contains("solid_tris: numberMetric(metrics, \"solid_tris\")"));
+    assert!(script.contains("draw_items: numberMetric(metrics, \"draw_items\")"));
+    assert!(script.contains("draw_pipeline_binds: numberMetric(metrics, \"draw_pipeline_binds\")"));
+    assert!(script
+        .contains("draw_bind_group_binds: numberMetric(metrics, \"draw_bind_group_binds\")"));
+    assert!(script.contains("draw_scissor_sets: numberMetric(metrics, \"draw_scissor_sets\")"));
+    assert!(script.contains("image_draws: numberMetric(metrics, \"image_draws\")"));
+    assert!(script.contains("image_mesh_draws: numberMetric(metrics, \"image_mesh_draws\")"));
+    assert!(script.contains("nine_slice_draws: numberMetric(metrics, \"nine_slice_draws\")"));
+    assert!(script.contains("glyph_quads: numberMetric(metrics, \"glyph_quads\")"));
+    assert!(script.contains("sdf_glyph_quads: numberMetric(metrics, \"sdf_glyph_quads\")"));
+    assert!(script.contains("clip_depth_peak: numberMetric(metrics, \"clip_depth_peak\")"));
+    assert!(script.contains("damage_rects: numberMetric(metrics, \"damage_rects\")"));
+    assert!(script.contains("layer_draws: numberMetric(metrics, \"layer_draws\")"));
+    assert!(script.contains("scene3d_draws: numberMetric(metrics, \"scene3d_draws\")"));
+    assert!(script.contains("id_mask_draws: numberMetric(metrics, \"id_mask_draws\")"));
+    assert!(script.contains("backdrop_draws: numberMetric(metrics, \"backdrop_draws\")"));
+    assert!(script.contains("visual_effect_draws: numberMetric(metrics, \"visual_effect_draws\")"));
+    assert!(script.contains("effect_uniform_writes: numberMetric(metrics, \"effect_uniform_writes\")"));
+    assert!(script.contains("effect_uniform_bytes: numberMetric(metrics, \"effect_uniform_bytes\")"));
+    assert!(script.contains("effect_uniform_slots: numberMetric(metrics, \"effect_uniform_slots\")"));
+    assert!(script.contains("spinner_draws: numberMetric(metrics, \"spinner_draws\")"));
+    assert!(script.contains("camera_bg_draws: numberMetric(metrics, \"camera_bg_draws\")"));
+    assert!(script.contains("render_passes: numberMetric(metrics, \"render_passes\")"));
+    assert!(script.contains("clear_passes: numberMetric(metrics, \"clear_passes\")"));
+    assert!(script.contains("draw_passes: numberMetric(metrics, \"draw_passes\")"));
+    assert!(script.contains("scene3d_passes: numberMetric(metrics, \"scene3d_passes\")"));
+    assert!(script.contains("id_mask_field_jump_passes: numberMetric(metrics, \"id_mask_field_jump_passes\")"));
+    assert!(script.contains("present_passes: numberMetric(metrics, \"present_passes\")"));
+    assert!(script.contains("texture_copies: numberMetric(metrics, \"texture_copies\")"));
+    assert!(script.contains("command_buffers: numberMetric(metrics, \"command_buffers\")"));
+    assert!(script.contains("buffer_upload_bytes: numberMetric(metrics, \"buffer_upload_bytes\")"));
+    assert!(
+        script.contains("texture_upload_bytes: numberMetric(metrics, \"texture_upload_bytes\")")
+    );
+    assert!(script.contains("buffer_grows: numberMetric(metrics, \"buffer_grows\")"));
+    assert!(script.contains("texture_creates: numberMetric(metrics, \"texture_creates\")"));
+    assert!(script.contains("bind_group_creates: numberMetric(metrics, \"bind_group_creates\")"));
+    assert!(script.contains("pipeline_creates: numberMetric(metrics, \"pipeline_creates\")"));
+    assert!(script.contains("sampler_creates: numberMetric(metrics, \"sampler_creates\")"));
+    assert!(script.contains("mesh3d_creates: numberMetric(metrics, \"mesh3d_creates\")"));
+    assert!(script
+        .contains("image_upload_temp_allocs: numberMetric(metrics, `${prefix}_image_upload_temp_allocs`)"));
+    assert!(script
+        .contains("image_upload_scratch_bytes: numberMetric(metrics, `${prefix}_image_upload_scratch_bytes`)"));
+    assert!(script.contains("cpu_scratch_bytes: numberMetric(metrics, \"cpu_scratch_bytes\")"));
+    assert!(script.contains("cpu_scratch_grows: numberMetric(metrics, \"cpu_scratch_grows\")"));
+    assert!(script
+        .contains("cpu_scratch_growth_bytes: numberMetric(metrics, \"cpu_scratch_growth_bytes\")"));
+    assert!(script.contains("`${prefix}_render_passes`"));
+    assert!(script.contains("`${prefix}_clear_passes`"));
+    assert!(script.contains("`${prefix}_id_mask_field_jump_passes`"));
+    assert!(script.contains("`${prefix}_texture_copies`"));
+    assert!(script.contains("`${prefix}_layer_draws`"));
+    assert!(script.contains("`${prefix}_scene3d_draws`"));
+    assert!(script.contains("`${prefix}_effect_uniform_writes`"));
+    assert!(script.contains("`${prefix}_buffer_upload_bytes`"));
+    assert!(script.contains("function prefixedBackendCase"));
+    assert!(script.contains("upload_summary"));
+    assert!(script.contains("Upload Summary"));
+    assert!(script.contains("upload_scratch_summary"));
+    assert!(script.contains("Upload Scratch Summary"));
+    assert!(script.contains("Effect Uniform Summary"));
+    assert!(script.contains("current_gpu_timestamp_total_ns"));
+    assert!(script.contains("legacy_gpu_timestamp_total_ns"));
+    assert!(script.contains("legacy_gpu_over_current"));
+    assert!(script.contains("scene3d_summary"));
+    assert!(script.contains("scene3d_stress_summary"));
+    assert!(script.contains("Scene3D Summary"));
+    assert!(script.contains("Scene3D Stress Summary"));
+    assert!(script.contains("expected_layers"));
+    assert!(script.contains("expected_damage_rects"));
+    assert!(script.contains("expected_image_meshes"));
+    assert!(script.contains("expected_nine_slices"));
+    assert!(script.contains("expected_sdf_glyphs"));
+    assert!(script.contains("expected_camera_bg"));
+    assert!(script.contains("expected_draw_items"));
+    assert!(script.contains("expected_clip_runs"));
+    assert!(script.contains("expected_clip_depth"));
+    assert!(script.contains("expected_backdrops"));
+    assert!(script.contains("effect-uniform WebGPU A/B rows"));
+    assert!(script.contains("wasm_memory_total_growth_bytes"));
+    assert!(script.contains("wasm_memory_max_growth_bytes"));
+    assert!(script.contains("wasm_memory_growth_labels"));
+    assert!(script.contains("wasm_memory_growth_bytes"));
+    assert!(script.contains("summary.wasm_memory_total_growth_bytes !== 0"));
+    assert!(script.contains("summary.wasm_memory_max_growth_bytes !== 0"));
+    assert!(script.contains("summary.wasm_memory_growth_labels.length !== 0"));
+    assert!(script.contains("mark.wasm_memory_growth_bytes !== 0"));
+    assert!(script.contains("web benchmark report failed during"));
+    assert!(script.contains("draw-state cache WebGPU A/B rows"));
+    assert!(script.contains("clip-state cache WebGPU A/B rows"));
+    assert!(script.contains("upload-scratch WebGPU A/B rows"));
+    assert!(script.contains("function assertWebReportContract"));
+    assert!(script.contains("GPU Stage Attribution"));
+    assert!(script.contains("timestampMetricFields"));
+    assert!(script.contains("timestamp-query-collected"));
+    assert!(script.contains("adapter.features+renderer.timestamp_writes"));
+    assert!(script.contains("pass-family total"));
+    assert!(script.contains("post-warmup resource creation"));
+    assert!(script.contains("post-warmup CPU scratch growth"));
+    assert!(script.contains("function pacingMetricFields"));
+    assert!(script.contains("missed_frame_ratio_120hz"));
+    assert!(script.contains("hitch_ratio_120hz"));
+}
+
+#[test]
+fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
+    let report = include_str!("../../../../benchmarks/web/latest.json");
+    assert!(report.contains("\"suite\": \"web-wasm\""));
+    assert!(report.contains("\"webgpu\": \"webgpu=device-ok\""));
+    assert!(report.contains("\"webgpu_timing\": \"timestamp_query="));
+    assert!(report.contains("\"gpu_stage_attribution\": {"));
+    assert!(report.contains("\"status\": \"timestamp-query-collected\""));
+    assert!(report.contains("\"source\": \"adapter.features+renderer.timestamp_writes\""));
+    assert!(report.contains("\"backend\": \"webgpu\""));
+    assert!(report.contains("\"capture_target\": \"app\""));
+    assert!(report.contains("\"browser_trace\": {"));
+    assert!(report.contains("\"warm_resource_churn\": {"));
+
+    let frame = report_case_slice(report, "web.wasm.webgpu.frame_loop");
+    let current = report_case_slice(report, "web.wasm.webgpu.id_mask_compositor.current");
+    let legacy = report_case_slice(report, "web.wasm.webgpu.id_mask_compositor.legacy_upload");
+    let glyph_current =
+        report_case_slice(report, "web.wasm.webgpu.glyph_atlas_upload.current_dirty");
+    let glyph_legacy = report_case_slice(report, "web.wasm.webgpu.glyph_atlas_upload.legacy_full");
+    let image_current = report_case_slice(report, "web.wasm.webgpu.image_upload.current_dirty");
+    let image_legacy = report_case_slice(report, "web.wasm.webgpu.image_upload.legacy_full");
+    let upload_scratch_current =
+        report_case_slice(report, "web.wasm.webgpu.upload_scratch.current_reuse");
+    let upload_scratch_legacy =
+        report_case_slice(report, "web.wasm.webgpu.upload_scratch.legacy_temp_alloc");
+    let effect_current = report_case_slice(report, "web.wasm.webgpu.effect_uniform.current_batched");
+    let effect_legacy = report_case_slice(report, "web.wasm.webgpu.effect_uniform.legacy_write_each");
+    let backdrop_batch_current =
+        report_case_slice(report, "web.wasm.webgpu.backdrop_batch.current_coalesced");
+    let backdrop_batch_legacy =
+        report_case_slice(report, "web.wasm.webgpu.backdrop_batch.legacy_per_backdrop_copy");
+    let scene3d_reused = report_case_slice(report, "web.wasm.webgpu.scene3d.reused_mesh");
+    let scene3d_recreate = report_case_slice(report, "web.wasm.webgpu.scene3d.recreate_mesh");
+    let scene3d_stress_reused =
+        report_case_slice(report, "web.wasm.webgpu.scene3d.stress_reused_mesh");
+    let scene3d_stress_recreate =
+        report_case_slice(report, "web.wasm.webgpu.scene3d.stress_recreate_mesh");
+    let mixed = report_case_slice(report, "web.wasm.webgpu.mixed_text_image_effects");
+    let layer_effects = report_case_slice(report, "web.wasm.webgpu.layer_damage_effects");
+    let command_family = report_case_slice(report, "web.wasm.webgpu.command_family_matrix");
+    let draw_state_current = report_case_slice(report, "web.wasm.webgpu.draw_state_cache.current");
+    let draw_state_legacy =
+        report_case_slice(report, "web.wasm.webgpu.draw_state_cache.legacy_rebind");
+    let clip_state_current = report_case_slice(report, "web.wasm.webgpu.clip_state_cache.current");
+    let clip_state_legacy =
+        report_case_slice(report, "web.wasm.webgpu.clip_state_cache.legacy_rebind");
+
+    assert!(
+        report_f64(frame, "p50_ms") > 0.0,
+        "frame-loop timing must be real, not virtual-time zero"
+    );
+    assert_eq!(report_f64(frame, "missed_frame_ratio_120hz"), 0.0);
+    assert_eq!(report_f64(frame, "hitch_ratio_120hz"), 0.0);
+    assert!(report_f64(frame, "solid_tris") > 0.0);
+    assert!(report_f64(frame, "image_draws") >= 0.0);
+    assert!(report_f64(frame, "glyph_quads") > 0.0);
+    assert!(report_f64(frame, "clip_depth_peak") >= 0.0);
+    assert!(report_f64(frame, "damage_rects") >= 0.0);
+    assert!(report_f64(frame, "layer_draws") >= 0.0);
+    assert!(report_f64(frame, "scene3d_draws") >= 0.0);
+    assert!(report_f64(frame, "id_mask_draws") >= 0.0);
+    assert!(report_f64(frame, "backdrop_draws") >= 0.0);
+    assert!(report_f64(frame, "visual_effect_draws") >= 0.0);
+    assert!(report_f64(frame, "spinner_draws") >= 0.0);
+    assert!(report_f64(frame, "camera_bg_draws") >= 0.0);
+    assert!(report_f64(frame, "render_passes") > 0.0);
+    assert_eq!(report_pass_family_total(frame), report_f64(frame, "render_passes"));
+    assert!(report_f64(frame, "draw_passes") > 0.0);
+    assert!(report_f64(frame, "texture_copies") >= 0.0);
+    assert!(report_f64(frame, "command_buffers") > 0.0);
+    assert_eq!(report_u64(frame, "gpu_timestamp_query_supported"), 1);
+    assert!(report_f64(frame, "gpu_timestamp_passes") > 0.0);
+    assert!(report_f64(frame, "gpu_timestamp_total_ns") >= 0.0);
+    assert!(report_f64(frame, "buffer_upload_bytes") > 0.0);
+    assert!(report_f64(frame, "texture_upload_bytes") >= 0.0);
+    assert!(report_f64(frame, "buffer_grows") >= 0.0);
+    assert!(report_f64(frame, "texture_creates") >= 0.0);
+    assert!(report_f64(frame, "bind_group_creates") >= 0.0);
+    assert!(report_f64(frame, "pipeline_creates") >= 0.0);
+    assert_eq!(report_u64(frame, "sampler_creates"), 0);
+    assert!(report_f64(frame, "mesh3d_creates") >= 0.0);
+    assert!(report_f64(frame, "cpu_scratch_bytes") > 0.0);
+    assert_eq!(report_u64(frame, "cpu_scratch_grows"), 0);
+    assert_eq!(report_u64(frame, "cpu_scratch_growth_bytes"), 0);
+    assert!(report_f64(current, "p50_ms") > 0.0, "current WebGPU A/B row must have nonzero timing");
+    assert!(report_f64(legacy, "p50_ms") > report_f64(current, "p50_ms"));
+    assert!(report_f64(current, "p99_ms") >= report_f64(current, "p50_ms"));
+    assert!(report_f64(legacy, "p99_ms") >= report_f64(legacy, "p50_ms"));
+    assert_eq!(report_f64(current, "missed_frame_ratio_120hz"), 0.0);
+    assert!(report_f64(legacy, "hitch_ratio_60hz") >= 0.0);
+    assert!(report_f64(current, "draws") > 0.0);
+    assert!(report_f64(current, "id_mask_draws") > 0.0);
+    assert!(report_f64(current, "id_mask_raster_passes") > 0.0);
+    assert!(report_f64(current, "id_mask_field_jump_passes") > 0.0);
+    assert!(report_f64(current, "id_mask_compositor_passes") > 0.0);
+    assert_eq!(report_pass_family_total(current), report_f64(current, "render_passes"));
+    assert!(report_f64(current, "layer_draws") >= 0.0);
+    assert!(report_f64(current, "render_passes") > 0.0);
+    assert!(report_f64(current, "command_buffers") > 0.0);
+    assert_eq!(report_u64(current, "gpu_timestamp_query_supported"), 1);
+    assert!(report_f64(current, "gpu_timestamp_passes") > 0.0);
+    assert!(report_f64(current, "gpu_timestamp_id_mask_field_jump_ns") >= 0.0);
+    assert!(report_f64(current, "buffer_upload_bytes") > 0.0);
+    assert_eq!(report_u64(current, "sampler_creates"), 0);
+    assert_eq!(report_u64(current, "cpu_scratch_grows"), 0);
+    assert_eq!(report_u64(current, "cpu_scratch_growth_bytes"), 0);
+    assert!(report_f64(legacy, "render_passes") > 0.0);
+    assert_eq!(report_pass_family_total(legacy), report_f64(legacy, "render_passes"));
+    assert!(report_f64(legacy, "command_buffers") > 0.0);
+    assert!(
+        report_f64(legacy, "buffer_upload_bytes") >= report_f64(current, "buffer_upload_bytes")
+    );
+    assert!(report_f64(legacy, "texture_upload_bytes") >= 0.0);
+    assert!(report_f64(legacy, "pipeline_creates") >= 0.0);
+    assert_eq!(report_u64(current, "vertices"), 9600);
+    assert_eq!(report_u64(legacy, "vertex_bytes"), 307200);
+    assert!(report_f64(scene3d_reused, "p50_ms") > 0.0);
+    assert!(report_f64(scene3d_recreate, "p50_ms") > 0.0);
+    assert!(report_f64(scene3d_reused, "scene3d_draws") > 0.0);
+    assert!(report_f64(scene3d_reused, "scene3d_passes") > 0.0);
+    assert_eq!(report_pass_family_total(scene3d_reused), report_f64(scene3d_reused, "render_passes"));
+    assert!(report_f64(scene3d_recreate, "scene3d_draws") > 0.0);
+    assert_eq!(report_u64(scene3d_reused, "mesh3d_creates"), 0);
+    assert!(report_u64(scene3d_recreate, "mesh3d_creates") > 0);
+    assert_eq!(report_u64(scene3d_reused, "buffer_grows"), 0);
+    assert!(report_u64(scene3d_recreate, "buffer_grows") > 0);
+    assert_eq!(report_u64(scene3d_reused, "cpu_scratch_grows"), 0);
+    assert_eq!(report_u64(scene3d_reused, "cpu_scratch_growth_bytes"), 0);
+    assert_eq!(report_u64(scene3d_reused, "meshes"), 2);
+    assert_eq!(report_u64(scene3d_reused, "instances"), 2);
+    assert!(report_f64(scene3d_stress_reused, "p50_ms") > 0.0);
+    assert!(report_f64(scene3d_stress_recreate, "p50_ms") > 0.0);
+    assert!(report_u64(scene3d_stress_reused, "scene3d_draws") >= 64);
+    assert!(report_u64(scene3d_stress_recreate, "scene3d_draws") >= 64);
+    assert_eq!(report_u64(scene3d_stress_reused, "mesh3d_creates"), 0);
+    assert!(report_u64(scene3d_stress_recreate, "mesh3d_creates") > 0);
+    assert_eq!(report_u64(scene3d_stress_reused, "buffer_grows"), 0);
+    assert!(report_u64(scene3d_stress_recreate, "buffer_grows") > 0);
+    assert_eq!(report_u64(scene3d_stress_reused, "cpu_scratch_grows"), 0);
+    assert_eq!(report_u64(scene3d_stress_reused, "cpu_scratch_growth_bytes"), 0);
+    assert_eq!(report_u64(scene3d_stress_reused, "meshes"), 2);
+    assert!(report_u64(scene3d_stress_reused, "instances") >= 64);
+    assert!(report_f64(glyph_current, "p50_ms") > 0.0);
+    assert!(report_f64(glyph_legacy, "p50_ms") > 0.0);
+    assert!(report_f64(glyph_current, "glyph_quads") > 0.0);
+    assert!(report_f64(glyph_legacy, "glyph_quads") > 0.0);
+    assert!(
+        report_f64(glyph_current, "texture_upload_bytes")
+            < report_f64(glyph_legacy, "texture_upload_bytes")
+    );
+    assert!(report_f64(glyph_current, "buffer_upload_bytes") > 0.0);
+    assert_eq!(report_u64(glyph_current, "atlas_width"), 1024);
+    assert_eq!(report_u64(glyph_current, "dirty_width"), 64);
+    assert!(report_f64(image_current, "p50_ms") > 0.0);
+    assert!(report_f64(image_legacy, "p50_ms") > 0.0);
+    assert!(report_f64(image_current, "image_draws") > 0.0);
+    assert!(report_f64(image_legacy, "image_draws") > 0.0);
+    assert!(
+        report_f64(image_current, "texture_upload_bytes")
+            < report_f64(image_legacy, "texture_upload_bytes")
+    );
+    assert_eq!(report_u64(image_current, "image_width"), 256);
+    assert_eq!(report_u64(image_current, "dirty_width"), 64);
+    assert_eq!(report_u64(upload_scratch_current, "image_upload_temp_allocs"), 0);
+    assert_eq!(report_u64(upload_scratch_current, "image_upload_temp_bytes"), 0);
+    assert!(report_u64(upload_scratch_current, "image_upload_scratch_bytes") > 0);
+    assert!(report_u64(upload_scratch_legacy, "image_upload_temp_allocs") > 0);
+    assert!(report_u64(upload_scratch_legacy, "image_upload_temp_bytes") > 0);
+    assert_eq!(
+        report_f64(upload_scratch_current, "texture_upload_bytes"),
+        report_f64(upload_scratch_legacy, "texture_upload_bytes"),
+    );
+    assert!(report_u64(upload_scratch_current, "updates") > 0);
+    assert!(report_f64(upload_scratch_current, "image_draws") > 0.0);
+    assert!(report_f64(upload_scratch_current, "glyph_quads") > 0.0);
+    assert!(report_f64(effect_current, "backdrop_draws") >= report_f64(effect_current, "expected_backdrops"));
+    assert!(report_f64(effect_legacy, "backdrop_draws") >= report_f64(effect_legacy, "expected_backdrops"));
+    assert_eq!(report_u64(effect_current, "effect_uniform_writes"), 1);
+    assert!(
+        report_u64(effect_legacy, "effect_uniform_writes")
+            > report_u64(effect_current, "effect_uniform_writes")
+    );
+    assert_eq!(
+        report_f64(effect_current, "effect_uniform_slots"),
+        report_f64(effect_current, "expected_backdrops")
+    );
+    assert_eq!(
+        report_f64(effect_legacy, "effect_uniform_slots"),
+        report_f64(effect_legacy, "expected_backdrops")
+    );
+    assert_eq!(
+        report_f64(effect_current, "texture_copies"),
+        report_f64(effect_legacy, "texture_copies")
+    );
+    assert_eq!(
+        report_f64(effect_current, "gpu_timestamp_passes"),
+        report_f64(effect_current, "render_passes")
+    );
+    assert_eq!(
+        report_f64(effect_legacy, "gpu_timestamp_passes"),
+        report_f64(effect_legacy, "render_passes")
+    );
+    assert!(
+        report_f64(backdrop_batch_current, "backdrop_draws")
+            >= report_f64(backdrop_batch_current, "expected_backdrops")
+    );
+    assert!(
+        report_f64(backdrop_batch_legacy, "backdrop_draws")
+            >= report_f64(backdrop_batch_legacy, "expected_backdrops")
+    );
+    assert_eq!(
+        report_f64(backdrop_batch_current, "effect_uniform_writes"),
+        report_f64(backdrop_batch_legacy, "effect_uniform_writes")
+    );
+    assert_eq!(
+        report_f64(backdrop_batch_current, "effect_uniform_slots"),
+        report_f64(backdrop_batch_legacy, "effect_uniform_slots")
+    );
+    assert!(
+        report_f64(backdrop_batch_current, "texture_copies")
+            < report_f64(backdrop_batch_legacy, "texture_copies")
+    );
+    assert!(
+        report_f64(backdrop_batch_current, "render_passes")
+            < report_f64(backdrop_batch_legacy, "render_passes")
+    );
+    assert_eq!(
+        report_f64(backdrop_batch_current, "gpu_timestamp_passes"),
+        report_f64(backdrop_batch_current, "render_passes")
+    );
+    assert_eq!(
+        report_f64(backdrop_batch_legacy, "gpu_timestamp_passes"),
+        report_f64(backdrop_batch_legacy, "render_passes")
+    );
+    assert!(report_f64(mixed, "image_draws") > 0.0);
+    assert!(report_f64(mixed, "glyph_quads") > 0.0);
+    assert!(report_f64(mixed, "layer_draws") > 0.0);
+    assert!(report_f64(mixed, "clip_depth_peak") > 0.0);
+    assert!(report_f64(mixed, "backdrop_draws") > 0.0);
+    assert!(report_f64(mixed, "visual_effect_draws") > 0.0);
+    assert!(report_f64(mixed, "spinner_draws") > 0.0);
+    assert!(report_f64(mixed, "render_passes") > 1.0);
+    assert!(report_f64(mixed, "texture_copies") > 0.0);
+    assert_eq!(report_pass_family_total(mixed), report_f64(mixed, "render_passes"));
+    assert!(report_f64(mixed, "damage_rects") > 0.0);
+    assert!(report_f64(layer_effects, "image_draws") > 0.0);
+    assert!(report_f64(layer_effects, "glyph_quads") > 0.0);
+    assert!(
+        report_f64(layer_effects, "layer_draws")
+            >= report_f64(layer_effects, "expected_layers")
+    );
+    assert!(report_f64(layer_effects, "backdrop_draws") > 0.0);
+    assert!(report_f64(layer_effects, "visual_effect_draws") > 0.0);
+    assert!(report_f64(layer_effects, "spinner_draws") > 0.0);
+    assert!(report_f64(layer_effects, "clip_depth_peak") > 0.0);
+    assert!(report_f64(layer_effects, "texture_copies") > 0.0);
+    assert!(
+        report_f64(layer_effects, "damage_rects")
+            >= report_f64(layer_effects, "expected_damage_rects")
+    );
+    assert_eq!(report_pass_family_total(layer_effects), report_f64(layer_effects, "render_passes"));
+    assert_eq!(
+        report_f64(layer_effects, "gpu_timestamp_passes"),
+        report_f64(layer_effects, "render_passes")
+    );
+    assert!(
+        report_f64(command_family, "image_mesh_draws")
+            >= report_f64(command_family, "expected_image_meshes")
+    );
+    assert!(
+        report_f64(command_family, "nine_slice_draws")
+            >= report_f64(command_family, "expected_nine_slices")
+    );
+    assert!(
+        report_f64(command_family, "sdf_glyph_quads")
+            >= report_f64(command_family, "expected_sdf_glyphs")
+    );
+    assert_eq!(report_f64(command_family, "expected_camera_bg"), 0.0);
+    assert_eq!(report_f64(command_family, "camera_bg_draws"), 0.0);
+    assert!(report_f64(command_family, "image_draws") >= 10.0);
+    assert_eq!(
+        report_f64(command_family, "gpu_timestamp_passes"),
+        report_f64(command_family, "render_passes")
+    );
+    assert!(
+        report_f64(draw_state_current, "draw_items")
+            >= report_f64(draw_state_current, "expected_draw_items")
+    );
+    assert!(
+        report_f64(draw_state_legacy, "draw_items")
+            >= report_f64(draw_state_legacy, "expected_draw_items")
+    );
+    assert_eq!(
+        report_f64(draw_state_current, "draws"),
+        report_f64(draw_state_current, "draw_items")
+    );
+    assert_eq!(
+        report_f64(draw_state_legacy, "draws"),
+        report_f64(draw_state_legacy, "draw_items")
+    );
+    assert!(
+        report_f64(draw_state_current, "draw_pipeline_binds")
+            < report_f64(draw_state_legacy, "draw_pipeline_binds")
+    );
+    assert!(
+        report_f64(draw_state_current, "draw_bind_group_binds")
+            < report_f64(draw_state_legacy, "draw_bind_group_binds")
+    );
+    assert!(
+        report_f64(draw_state_current, "draw_scissor_sets")
+            < report_f64(draw_state_legacy, "draw_scissor_sets")
+    );
+    assert_eq!(
+        report_f64(draw_state_current, "gpu_timestamp_passes"),
+        report_f64(draw_state_current, "render_passes")
+    );
+    assert_eq!(
+        report_f64(draw_state_legacy, "gpu_timestamp_passes"),
+        report_f64(draw_state_legacy, "render_passes")
+    );
+    assert!(
+        report_f64(clip_state_current, "draw_items")
+            >= report_f64(clip_state_current, "expected_draw_items")
+    );
+    assert!(
+        report_f64(clip_state_legacy, "draw_items")
+            >= report_f64(clip_state_legacy, "expected_draw_items")
+    );
+    assert_eq!(
+        report_f64(clip_state_current, "draws"),
+        report_f64(clip_state_current, "draw_items")
+    );
+    assert_eq!(
+        report_f64(clip_state_legacy, "draws"),
+        report_f64(clip_state_legacy, "draw_items")
+    );
+    assert!(
+        report_f64(clip_state_current, "clip_depth_peak")
+            >= report_f64(clip_state_current, "expected_clip_depth")
+    );
+    assert!(
+        report_f64(clip_state_legacy, "clip_depth_peak")
+            >= report_f64(clip_state_legacy, "expected_clip_depth")
+    );
+    assert!(
+        report_f64(clip_state_current, "draw_pipeline_binds")
+            < report_f64(clip_state_legacy, "draw_pipeline_binds")
+    );
+    assert!(
+        report_f64(clip_state_current, "draw_bind_group_binds")
+            < report_f64(clip_state_legacy, "draw_bind_group_binds")
+    );
+    assert!(
+        report_f64(clip_state_current, "draw_scissor_sets")
+            <= report_f64(clip_state_current, "expected_clip_runs")
+    );
+    assert!(
+        report_f64(clip_state_current, "draw_scissor_sets")
+            < report_f64(clip_state_legacy, "draw_scissor_sets")
+    );
+    assert_eq!(
+        report_f64(clip_state_current, "gpu_timestamp_passes"),
+        report_f64(clip_state_current, "render_passes")
+    );
+    assert_eq!(
+        report_f64(clip_state_legacy, "gpu_timestamp_passes"),
+        report_f64(clip_state_legacy, "render_passes")
+    );
+
+    let summary = report_section_slice(report, "ab_summary");
+    assert!(
+        summary.contains("\"id\": \"web.wasm.webgpu.id_mask_compositor.current_vs_legacy_upload\"")
+    );
+    assert!(report_f64(summary, "legacy_over_current") > 1.0);
+    assert!(report_f64(summary, "current_render_passes") > 0.0);
+    assert!(report_f64(summary, "legacy_render_passes") > 0.0);
+    assert!(
+        report_f64(summary, "legacy_buffer_upload_bytes")
+            >= report_f64(summary, "current_buffer_upload_bytes")
+    );
+    let draw_state_summary = report_section_slice(report, "draw_state_summary");
+    assert!(draw_state_summary
+        .contains("\"id\": \"web.wasm.webgpu.draw_state_cache.current_vs_legacy_rebind\""));
+    assert!(report_f64(draw_state_summary, "legacy_over_current") > 1.0);
+    assert!(
+        report_f64(draw_state_summary, "current_draw_pipeline_binds")
+            < report_f64(draw_state_summary, "legacy_draw_pipeline_binds")
+    );
+    let clip_state_summary = report_section_slice(report, "clip_state_summary");
+    assert!(clip_state_summary
+        .contains("\"id\": \"web.wasm.webgpu.clip_state_cache.current_vs_legacy_rebind\""));
+    assert!(report_f64(clip_state_summary, "legacy_over_current") > 1.0);
+    assert!(
+        report_f64(clip_state_summary, "current_clip_depth_peak")
+            >= report_f64(clip_state_summary, "expected_clip_depth")
+    );
+    assert!(
+        report_f64(clip_state_summary, "current_draw_scissor_sets")
+            <= report_f64(clip_state_summary, "expected_clip_runs")
+    );
+    assert!(
+        report_f64(clip_state_summary, "current_draw_scissor_sets")
+            < report_f64(clip_state_summary, "legacy_draw_scissor_sets")
+    );
+    let browser_trace = report_section_slice(report, "browser_trace");
+    assert!(browser_trace.contains("\"status\": \"collected\""));
+    assert!(browser_trace.contains("\"capture_phase\": \"benchmark-report\""));
+    assert!(browser_trace.contains("\"timing_source\": \"untraced-baseline-report\""));
+    assert!(report_f64(browser_trace, "events") > 0.0);
+    assert!(report_f64(browser_trace, "gpu_related_events") > 0.0);
+    assert!(report_f64(browser_trace, "duration_us") > 0.0);
+    assert!(report_f64(browser_trace, "category_count") > 0.0);
+    let warm_resource_churn = report_section_slice(report, "warm_resource_churn");
+    assert!(warm_resource_churn
+        .contains("\"id\": \"web.wasm.webgpu.warm_resource_churn.current_rows\""));
+    assert_eq!(report_u64(warm_resource_churn, "checked_rows"), 14);
+    assert_eq!(report_u64(warm_resource_churn, "excluded_rows"), 10);
+    assert_eq!(report_u64(warm_resource_churn, "total_buffer_grows"), 0);
+    assert_eq!(report_u64(warm_resource_churn, "total_texture_creates"), 0);
+    assert_eq!(report_u64(warm_resource_churn, "total_bind_group_creates"), 0);
+    assert_eq!(report_u64(warm_resource_churn, "total_pipeline_creates"), 0);
+    assert_eq!(report_u64(warm_resource_churn, "total_sampler_creates"), 0);
+    assert_eq!(report_u64(warm_resource_churn, "total_mesh3d_creates"), 0);
+    assert_eq!(report_u64(warm_resource_churn, "total_image_upload_temp_allocs"), 0);
+    assert_eq!(report_u64(warm_resource_churn, "total_image_upload_temp_bytes"), 0);
+    assert_eq!(report_u64(warm_resource_churn, "total_image_upload_scratch_grows"), 0);
+    assert_eq!(report_u64(warm_resource_churn, "total_cpu_scratch_grows"), 0);
+    assert_eq!(report_u64(warm_resource_churn, "total_cpu_scratch_growth_bytes"), 0);
+    let upload_summary = report_section_slice(report, "upload_summary");
+    assert!(
+        upload_summary.contains("\"id\": \"web.wasm.webgpu.upload.current_dirty_vs_legacy_full\"")
+    );
+    assert!(report_f64(upload_summary, "glyph_legacy_over_current") >= 0.0);
+    assert!(report_f64(upload_summary, "image_legacy_over_current") >= 0.0);
+    assert!(
+        report_f64(upload_summary, "glyph_current_texture_upload_bytes")
+            < report_f64(upload_summary, "glyph_legacy_texture_upload_bytes")
+    );
+    assert!(
+        report_f64(upload_summary, "image_current_texture_upload_bytes")
+            < report_f64(upload_summary, "image_legacy_texture_upload_bytes")
+    );
+    let upload_scratch_summary = report_section_slice(report, "upload_scratch_summary");
+    assert!(upload_scratch_summary
+        .contains("\"id\": \"web.wasm.webgpu.upload_scratch.current_reuse_vs_legacy_temp_alloc\""));
+    assert!(report_f64(upload_scratch_summary, "legacy_over_current") > 1.0);
+    assert_eq!(report_u64(upload_scratch_summary, "current_temp_allocs"), 0);
+    assert!(report_u64(upload_scratch_summary, "legacy_temp_allocs") > 0);
+    assert_eq!(report_u64(upload_scratch_summary, "current_temp_bytes"), 0);
+    assert!(report_u64(upload_scratch_summary, "legacy_temp_bytes") > 0);
+    assert_eq!(
+        report_f64(upload_scratch_summary, "current_texture_upload_bytes"),
+        report_f64(upload_scratch_summary, "legacy_texture_upload_bytes")
+    );
+    let effect_uniform_summary = report_section_slice(report, "effect_uniform_summary");
+    assert!(effect_uniform_summary
+        .contains("\"id\": \"web.wasm.webgpu.effect_uniform.batched_vs_legacy_write_each\""));
+    assert!(report_f64(effect_uniform_summary, "legacy_over_current") >= 0.0);
+    assert_eq!(report_u64(effect_uniform_summary, "current_effect_uniform_writes"), 1);
+    assert!(
+        report_u64(effect_uniform_summary, "legacy_effect_uniform_writes")
+            > report_u64(effect_uniform_summary, "current_effect_uniform_writes")
+    );
+    assert_eq!(
+        report_f64(effect_uniform_summary, "current_effect_uniform_slots"),
+        report_f64(effect_uniform_summary, "expected_backdrops")
+    );
+    assert_eq!(
+        report_f64(effect_uniform_summary, "legacy_effect_uniform_slots"),
+        report_f64(effect_uniform_summary, "expected_backdrops")
+    );
+    assert_eq!(
+        report_f64(effect_uniform_summary, "current_texture_copies"),
+        report_f64(effect_uniform_summary, "legacy_texture_copies")
+    );
+    let backdrop_batch_summary = report_section_slice(report, "backdrop_batch_summary");
+    assert!(backdrop_batch_summary
+        .contains("\"id\": \"web.wasm.webgpu.backdrop_batch.coalesced_vs_per_backdrop_copy\""));
+    assert!(report_f64(backdrop_batch_summary, "legacy_over_current") > 1.0);
+    assert_eq!(
+        report_f64(backdrop_batch_summary, "current_effect_uniform_writes"),
+        report_f64(backdrop_batch_summary, "legacy_effect_uniform_writes")
+    );
+    assert_eq!(
+        report_f64(backdrop_batch_summary, "current_effect_uniform_slots"),
+        report_f64(backdrop_batch_summary, "legacy_effect_uniform_slots")
+    );
+    assert!(
+        report_f64(backdrop_batch_summary, "current_texture_copies")
+            < report_f64(backdrop_batch_summary, "legacy_texture_copies")
+    );
+    assert!(
+        report_f64(backdrop_batch_summary, "current_render_passes")
+            < report_f64(backdrop_batch_summary, "legacy_render_passes")
+    );
+    let scene3d_summary = report_section_slice(report, "scene3d_summary");
+    assert!(scene3d_summary
+        .contains("\"id\": \"web.wasm.webgpu.scene3d.reused_mesh_vs_recreate_mesh\""));
+    assert!(report_f64(scene3d_summary, "recreate_over_reused") >= 0.0);
+    assert_eq!(report_u64(scene3d_summary, "reused_mesh3d_creates"), 0);
+    assert!(report_u64(scene3d_summary, "recreate_mesh3d_creates") > 0);
+    assert_eq!(report_u64(scene3d_summary, "reused_buffer_grows"), 0);
+    assert!(report_u64(scene3d_summary, "recreate_buffer_grows") > 0);
+    assert_eq!(report_u64(scene3d_summary, "reused_cpu_scratch_grows"), 0);
+    assert_eq!(report_u64(scene3d_summary, "reused_cpu_scratch_growth_bytes"), 0);
+    let scene3d_stress_summary = report_section_slice(report, "scene3d_stress_summary");
+    assert!(scene3d_stress_summary.contains(
+        "\"id\": \"web.wasm.webgpu.scene3d.stress_reused_mesh_vs_stress_recreate_mesh\""
+    ));
+    assert!(report_f64(scene3d_stress_summary, "recreate_over_reused") >= 0.0);
+    assert_eq!(report_u64(scene3d_stress_summary, "reused_mesh3d_creates"), 0);
+    assert!(report_u64(scene3d_stress_summary, "recreate_mesh3d_creates") > 0);
+    assert_eq!(report_u64(scene3d_stress_summary, "reused_buffer_grows"), 0);
+    assert!(report_u64(scene3d_stress_summary, "recreate_buffer_grows") > 0);
+    assert_eq!(report_u64(scene3d_stress_summary, "reused_cpu_scratch_grows"), 0);
+    assert_eq!(report_u64(scene3d_stress_summary, "reused_cpu_scratch_growth_bytes"), 0);
+    assert!(report_u64(scene3d_stress_summary, "instances") >= 64);
+    let pixel_check = report_section_slice(report, "pixel_check");
+    assert!(pixel_check.contains("\"target\": \"app\""));
+    assert_eq!(report_f64(pixel_check, "mse"), 0.0);
+    assert_eq!(report_u64(pixel_check, "pixdiff"), 0);
+    assert_eq!(report_u64(pixel_check, "max_err"), 0);
 }

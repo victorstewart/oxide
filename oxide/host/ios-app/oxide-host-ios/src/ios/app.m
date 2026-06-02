@@ -204,6 +204,16 @@ static NSString *OxidePerfCaseName(void) {
   return caseName;
 }
 
+static BOOL OxidePerfParkedBenchmarkLaunchEnabled(void) {
+  NSDictionary<NSString *, NSString *> *environment =
+      NSProcessInfo.processInfo.environment;
+  NSString *parked = [environment objectForKey:@"OXIDE_PERF_PARKED"];
+  NSString *uikitLaunch =
+      [environment objectForKey:@"OXIDE_PERF_UIKIT_LAUNCH"];
+  return (parked != nil && parked.intValue != 0) ||
+         (uikitLaunch != nil && uikitLaunch.intValue != 0);
+}
+
 static BOOL OxidePerfActualAppCustomCameraBenchmarkEnabled(void) {
   return OxidePerfCameraRealAppHostEnabled() &&
          [OxidePerfCaseName()
@@ -486,6 +496,9 @@ int32_t oxide_host_camera_preview_plan_reason(uint32_t w, uint32_t h,
                                               float scale);
 int32_t oxide_host_app_frame_with_drawable(uint32_t w, uint32_t h, float scale,
                                            void *drawable_ptr);
+int32_t oxide_host_app_prepare_frame(uint32_t w, uint32_t h, float scale);
+int32_t oxide_host_app_submit_prepared_frame_with_drawable(void *drawable_ptr);
+void oxide_host_app_cancel_prepared_frame(void);
 int32_t oxide_host_app_stats(void *stats_out);
 uint32_t oxide_host_scene_count(void);
 uint32_t oxide_host_scene_name(uint32_t idx, char *out_ptr, uint32_t out_len);
@@ -2935,7 +2948,7 @@ int32_t oxide_host_thermal_state(void) {
   layer.framebufferOnly = YES;
   layer.presentsWithTransaction = NO;
   if (@available(iOS 13.0, *)) {
-    layer.allowsNextDrawableTimeout = NO;
+    layer.allowsNextDrawableTimeout = YES;
   }
   if (@available(iOS 11.2, *)) {
     layer.maximumDrawableCount = OxidePerfCameraMaximumDrawableCount();
@@ -3474,6 +3487,7 @@ int32_t oxide_host_thermal_state(void) {
 @property(nonatomic) uint8_t perfStaticIdleEndHostFrameDirty;
 @property(nonatomic) uint8_t perfStaticIdleEndHostSettleFramesRemaining;
 @property(nonatomic) BOOL hasRealScenes;
+@property(nonatomic, strong) id<UIWindowSceneDelegate> parkedPerfSceneDelegate;
 - (IBAction)sceneChanged:(UISegmentedControl *)control;
 - (IBAction)onOverlaySwitch:(UISwitch *)sw;
 - (IBAction)onReduceMotionSwitch:(UISwitch *)sw;
@@ -3491,6 +3505,7 @@ int32_t oxide_host_thermal_state(void) {
 - (void)updateCameraDrivenDisplayLinkState;
 - (void)installCameraDrivenSchedulingCallbackIfNeeded;
 - (void)handleActualAppBenchmarkStart;
+- (id<UIWindowSceneDelegate>)parkedPerfSceneDelegateIfNeeded;
 @end
 
 static void OxideCameraPreviewPublishDidAdvance(uint64_t generation,
@@ -3582,6 +3597,23 @@ static void OxidePerfCameraBenchmarkStartCallback(
 }
 
 @implementation RustSceneDelegate
+- (id<UIWindowSceneDelegate>)parkedPerfSceneDelegateIfNeeded {
+  if (!OxidePerfParkedBenchmarkLaunchEnabled()) {
+    return nil;
+  }
+  if (self.parkedPerfSceneDelegate != nil) {
+    return self.parkedPerfSceneDelegate;
+  }
+  Class delegateClass = NSClassFromString(@"OxidePerfParkedSceneDelegate");
+  if (delegateClass == nil) {
+    @throw [NSException exceptionWithName:NSInternalInconsistencyException
+                                   reason:@"missing OxidePerfParkedSceneDelegate"
+                                 userInfo:nil];
+  }
+  self.parkedPerfSceneDelegate = [[delegateClass alloc] init];
+  return self.parkedPerfSceneDelegate;
+}
+
 - (void)updateActualAppCameraBenchmarkIterationStartObserver {
   CFNotificationCenterRef center = CFNotificationCenterGetDarwinNotifyCenter();
   if (self.perfBenchmarkIterationStartNotificationName.length > 0) {
@@ -4714,6 +4746,16 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 - (void)scene:(UIScene *)scene
     willConnectToSession:(UISceneSession *)session
                  options:(UISceneConnectionOptions *)connectionOptions {
+  id<UIWindowSceneDelegate> parkedDelegate =
+      [self parkedPerfSceneDelegateIfNeeded];
+  if (parkedDelegate != nil) {
+    if ([parkedDelegate respondsToSelector:_cmd]) {
+      [parkedDelegate scene:scene
+       willConnectToSession:session
+                    options:connectionOptions];
+    }
+    return;
+  }
   (void)session;
   (void)connectionOptions;
   if (![scene isKindOfClass:[UIWindowScene class]]) {
@@ -5325,6 +5367,14 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 }
 
 - (void)sceneDidBecomeActive:(UIScene *)scene {
+  id<UIWindowSceneDelegate> parkedDelegate =
+      [self parkedPerfSceneDelegateIfNeeded];
+  if (parkedDelegate != nil) {
+    if ([parkedDelegate respondsToSelector:_cmd]) {
+      [parkedDelegate sceneDidBecomeActive:scene];
+    }
+    return;
+  }
   (void)scene;
   gAppDebugPerf.scene_did_become_active_calls += 1;
   self.fpsLastSample = CACurrentMediaTime();
@@ -5345,6 +5395,14 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 }
 
 - (void)sceneWillResignActive:(UIScene *)scene {
+  id<UIWindowSceneDelegate> parkedDelegate =
+      [self parkedPerfSceneDelegateIfNeeded];
+  if (parkedDelegate != nil) {
+    if ([parkedDelegate respondsToSelector:_cmd]) {
+      [parkedDelegate sceneWillResignActive:scene];
+    }
+    return;
+  }
   (void)scene;
   if (self.displayLink) {
     OXLOG(@"sceneWillResignActive: pausing DisplayLink");
@@ -5353,6 +5411,14 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 }
 
 - (void)sceneDidEnterBackground:(UIScene *)scene {
+  id<UIWindowSceneDelegate> parkedDelegate =
+      [self parkedPerfSceneDelegateIfNeeded];
+  if (parkedDelegate != nil) {
+    if ([parkedDelegate respondsToSelector:_cmd]) {
+      [parkedDelegate sceneDidEnterBackground:scene];
+    }
+    return;
+  }
   (void)scene;
   if (self.displayLink) {
     OXLOG(@"sceneDidEnterBackground: pausing DisplayLink");
@@ -5362,6 +5428,14 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 }
 
 - (void)sceneWillEnterForeground:(UIScene *)scene {
+  id<UIWindowSceneDelegate> parkedDelegate =
+      [self parkedPerfSceneDelegateIfNeeded];
+  if (parkedDelegate != nil) {
+    if ([parkedDelegate respondsToSelector:_cmd]) {
+      [parkedDelegate sceneWillEnterForeground:scene];
+    }
+    return;
+  }
   (void)scene;
   gAppDebugPerf.scene_will_enter_foreground_calls += 1;
   if (!self.displayLink) {
@@ -5376,6 +5450,15 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 }
 
 - (void)sceneDidDisconnect:(UIScene *)scene {
+  id<UIWindowSceneDelegate> parkedDelegate =
+      [self parkedPerfSceneDelegateIfNeeded];
+  if (parkedDelegate != nil) {
+    if ([parkedDelegate respondsToSelector:_cmd]) {
+      [parkedDelegate sceneDidDisconnect:scene];
+    }
+    self.parkedPerfSceneDelegate = nil;
+    return;
+  }
   (void)scene;
   OXLOG(@"sceneDidDisconnect: tearing down DisplayLink");
   [self.displayLink invalidate];
@@ -5553,6 +5636,19 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
     [self updateCameraDrivenDisplayLinkState];
     return;
   }
+  double frameCallT0Ms = OxidePerfNowMs();
+  int32_t rc_prepare = oxide_host_app_prepare_frame(
+      (uint32_t)lrintf((float)size.width), (uint32_t)lrintf((float)size.height),
+      (float)scale);
+  if (rc_prepare != 0) {
+    tickPerf.frame_call_ms = (float)(OxidePerfNowMs() - frameCallT0Ms);
+    tickPerf.tick_total_ms = (float)(OxidePerfNowMs() - tickT0Ms);
+    gLastCameraTickPerf = tickPerf;
+    [self updateCameraDrivenDisplayLinkState];
+    OXLOG(@"app_prepare_frame rc=%d", rc_prepare);
+    UILog([NSString stringWithFormat:@"prepare rc=%d", rc_prepare]);
+    return;
+  }
   id<CAMetalDrawable> drawable = nil;
   if (!noVisiblePresent) {
     double drawableAcquireT0Ms = OxidePerfNowMs();
@@ -5560,6 +5656,7 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
     tickPerf.drawable_acquire_ms =
         (float)(OxidePerfNowMs() - drawableAcquireT0Ms);
     if (!drawable) {
+      oxide_host_app_cancel_prepared_frame();
       tickPerf.tick_total_ms = (float)(OxidePerfNowMs() - tickT0Ms);
       gLastCameraTickPerf = tickPerf;
       [self updateCameraDrivenDisplayLinkState];
@@ -5575,10 +5672,8 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
           [NSString stringWithFormat:@"present %p", (__bridge void *)drawable]);
     }
   }
-  double frameCallT0Ms = OxidePerfNowMs();
-  int32_t rc_frame = oxide_host_app_frame_with_drawable(
-      (uint32_t)lrintf((float)size.width), (uint32_t)lrintf((float)size.height),
-      (float)scale, drawable != nil ? (__bridge void *)drawable : NULL);
+  int32_t rc_frame = oxide_host_app_submit_prepared_frame_with_drawable(
+      drawable != nil ? (__bridge void *)drawable : NULL);
   tickPerf.frame_call_ms = (float)(OxidePerfNowMs() - frameCallT0Ms);
   tickPerf.frame_submitted = (uint8_t)(rc_frame == 0);
   if (rc_frame == 0) {

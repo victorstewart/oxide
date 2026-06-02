@@ -62,9 +62,15 @@ The Oxide device flow installs the host app on the same physical iPhone, launche
 
 For the on-screen Oxide battery, the authoritative device workload window is no longer inferred from the older offscreen Rust suite. The parked host app now emits the bounded `PerfWorkload` interval through the host-side `com.oxide.perf` Points-of-Interest log, and the device harness traces that same live process through a launched Metal trace on the real app-hosted MetalView surface. That keeps the on-screen Oxide path on the real host view, preserves the parked-app console summaries when they are available, and lets the harness stop the trace on the app's `com.oxide.perf.complete` notification instead of relying on a blind wall-clock timeout.
 
+Oxide on-screen device reports emit the same canonical workload-family contract rows as the workspace battery. Families not yet captured on physical hardware are reported as `missing` or `partial` instead of being omitted, so the device report cannot imply comprehensive launch, layout, text-input, bridge, endurance, or stress coverage before those rows exist.
+
 Headline comparisons use visible workload, transition, interaction, or present signposts as the first-order statistic. CPU and memory columns remain process-attribution metrics, because UIKit and iOS can place some framework, compositor, or service work outside the app process; the report labels that scope instead of treating uncharged system work as free.
 
 The report schema carries layer/scenario/style/cache/refresh metadata so the UIKit results can be compared directly against the Oxide-side battery. For the official physical-device path, `refresh_mode` is now intentionally native-only; the old 60 Hz/device-default matrix was removed from the committed harness to cut wall time and keep the battery aligned with the target shipping path. The schema also persists `measure_iterations`, `benchmark_iterations`, `canonical_signpost_source`, and per-metric `source` plus `fallback_modes`, so the timing provenance is explicit instead of inferred from notes. On device runs, `signpost_*` keys are reserved for `xctrace`; any XCTest signpost metrics are preserved separately under `xctest_*`.
+
+Official device reports now validate their metric contract before cache reuse, JSON writes, markdown writes, baseline comparisons, and baseline promotion. UIKit device rows must carry wall-clock, CPU, memory, direct GPU time, GPU latency, hitch, and missed-frame metrics with finite distribution fields. Oxide on-screen device rows must carry headline clock, memory, direct GPU time, GPU latency, hitch, and missed-frame metrics; GPU and cadence metrics also persist flattened `_p50`, `_p95`, `_p99`, `_peak`, and `_samples` keys. Missing values fail the local report path instead of rendering as zero-valued markdown cells.
+
+The committed `benchmarks/oxide-device/latest.json` and `benchmarks/uikit-device/latest.json` files are also read by the macOS xtask test suite. A refreshed baseline may satisfy the strict metric contract directly; a stale checked-in baseline that predates the contract must explicitly mark its metric-contract status as stale partial so it cannot imply complete official device coverage while the physical phone rerun is pending.
 
 ## Preconditions and postconditions
 
@@ -74,16 +80,20 @@ The report schema carries layer/scenario/style/cache/refresh metadata so the UIK
   - The requested physical-device destination must exist for the official workflow.
   - Imported power traces, when supplied, must correspond to the same workload/device/build being compared.
 - Postconditions:
-- Successful device runs emit a device report with Oxide in-app GPU timing, external Metal System Trace GPU timing, any available GPU counters, plus direct energy when imported traces are present.
+  - Successful device runs emit a device report with Oxide in-app GPU timing, external Metal System Trace GPU timing, any available GPU counters, plus direct energy when imported traces are present.
+  - Device report writes and cache reuse fail if required direct GPU, frame-cadence, or memory metrics are missing from the physical-device report rows.
   - The emitted UIKit case rows persist actual measure-loop counts, actual benchmark-loop counts, explicit canonical signpost source, and per-metric provenance/fallback metadata.
   - Repeated unchanged local runs should skip the expensive iOS rebuild path and reuse the previously fingerprinted derived data plus hashed `.xctestrun` variants.
 - Invariants maintained:
   - The UIKit case mapping is the single source of truth for report IDs and parity notes.
   - Local debug and device reports use the same case identity and metadata surface.
-  - Regression gating only uses metrics that are actually present in both the current and baseline reports.
+  - Device report validation fails required metric omissions before regression gating; optional metric regressions are gated only when those metrics are present in both current and baseline reports.
 
 ## Changelog
 
+- 2026-06-01: added macOS-only static tests for the committed Oxide/UIKit device baseline files so stale baselines must either satisfy the strict direct GPU/cadence/memory contract or explicitly mark the metric-contract gap as stale partial.
+- 2026-05-31: added explicit Oxide/UIKit device report metric-contract validation for direct GPU timing, GPU latency, frame cadence, and memory before cache reuse, report writes, and baseline comparisons; Oxide GPU/cadence rows now persist flattened p50/p95/p99/peak/sample distribution keys.
+- 2026-05-31: made Oxide on-screen device contract reports list the canonical workload families and mark absent device rows as partial or missing.
 - 2026-05-05: Collapsed duplicate resumable report case-set checks and table-backed Oxide contract status checks.
 - 2026-05-04: Added UIKit `current.json` case-set validation before resumable device-report reuse.
 - 2026-04-26: Added headline UI object and common animation cases to the official Oxide/UIKit device battery, plus fairness wording for system-attributed iOS work.

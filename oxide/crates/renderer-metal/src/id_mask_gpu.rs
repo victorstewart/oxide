@@ -272,7 +272,7 @@ impl MetalRenderer {
         let enc = cmd.new_render_command_encoder(&rpd);
         // The compositor shader builds a local full-quad for mask sampling.
         // Hardware viewport/scissor maps that quad into the requested widget
-        // rect so embedded Topomap does not leak fullscreen pixels or shade
+        // rect so embedded map renderers do not leak fullscreen pixels or shade
         // outside the visible surface.
         set_viewport_and_scissor_dp(&enc, self, viewport);
         enc.set_render_pipeline_state(&self.pso_id_mask_compositor);
@@ -306,15 +306,18 @@ impl MetalRenderer {
         &mut self,
         pass: &id_mask_compositor::IdMaskGpuCompositorPass<'_>,
     ) -> Result<(), api::RenderError> {
+        if self.frame_backpressure_skipped {
+            return Ok(());
+        }
         if self.sample_count != 1 {
             return Err(api::RenderError::Unsupported(
                 "id-mask GPU compositor currently requires MetalRenderer sample_count == 1",
             ));
         }
         // The compositor deliberately supports interleaving with 2D passes.
-        // Topomap embeds its high-resolution JFA/ID-mask polish at a draw-list
-        // position inside app UI, so this pass must load the current frame when
-        // earlier 2D content has already initialized it.
+        // High-resolution JFA/ID-mask polish may appear at a draw-list position
+        // inside app UI, so this pass must load the current frame when earlier
+        // 2D content has already initialized it.
         if pass.raster.mask_width == 0 || pass.raster.mask_height == 0 {
             return Err(api::RenderError::InvalidOperation(
                 "id-mask GPU raster has zero dimensions",
@@ -327,7 +330,7 @@ impl MetalRenderer {
         }
 
         self.ensure_target();
-        let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
+        let slot = self.current_frame_slot();
         let targets = self.ensure_id_mask_render_targets(
             slot,
             pass.raster.mask_width,
@@ -339,18 +342,23 @@ impl MetalRenderer {
             .len()
             .checked_mul(core::mem::size_of::<id_mask_compositor::IdMaskRasterVertex>())
             .ok_or(api::RenderError::InvalidOperation("id-mask raster vertex data overflow"))?;
+        let vertex_key =
+            IdMaskVertexUploadKey { revision: pass.raster.vertex_revision, byte_len: vertex_bytes };
         self.id_mask_vb.ensure_capacity(&self.device, slot, vertex_bytes);
         let vertex_buf = self.id_mask_vb.bufs[slot].to_owned();
-        let vertex_ptr = self.id_mask_vb.contents_ptr(slot).as_ptr();
-        if vertex_ptr.is_null() {
-            return Err(api::RenderError::OutOfMemory);
-        }
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                pass.raster.vertices.as_ptr() as *const u8,
-                vertex_ptr,
-                vertex_bytes,
-            );
+        if self.id_mask_vb_keys[slot] != Some(vertex_key) {
+            let vertex_ptr = self.id_mask_vb.contents_ptr(slot).as_ptr();
+            if vertex_ptr.is_null() {
+                return Err(api::RenderError::OutOfMemory);
+            }
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    pass.raster.vertices.as_ptr() as *const u8,
+                    vertex_ptr,
+                    vertex_bytes,
+                );
+            }
+            self.id_mask_vb_keys[slot] = Some(vertex_key);
         }
         let params = RasterGpuParams {
             mask_size: [pass.raster.mask_width as f32, pass.raster.mask_height as f32],

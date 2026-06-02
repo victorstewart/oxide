@@ -36,6 +36,10 @@ void macos_app_will_resign_active(void);
 void macos_app_will_terminate(void);
 void macos_app_on_memory_pressure(uint32_t level);
 uint8_t macos_app_should_render(void);
+int32_t macos_app_init(uint32_t w, uint32_t h, float scale);
+int32_t macos_app_prepare_frame(uint32_t w, uint32_t h, float scale);
+int32_t macos_app_submit_prepared_frame_with_drawable(void *drawable_ptr);
+void macos_app_cancel_prepared_frame(void);
 
 @interface MetalView : NSView <NSTextInputClient> {
     id<MTLDevice> _device;
@@ -61,7 +65,7 @@ uint8_t macos_app_should_render(void);
         layer.framebufferOnly = YES;
         layer.presentsWithTransaction = NO;
         layer.maximumDrawableCount = 3;
-        layer.allowsNextDrawableTimeout = NO;
+        layer.allowsNextDrawableTimeout = YES;
         CGFloat scale = NSScreen.mainScreen.backingScaleFactor;
         layer.contentsScale = scale;
         _marked = [[NSMutableAttributedString alloc] initWithString:@""];
@@ -77,18 +81,19 @@ uint8_t macos_app_should_render(void);
 {
     (void)dirtyRect;
     CAMetalLayer *layer = (CAMetalLayer *)self.layer;
-    // Late acquire
-    id<CAMetalDrawable> drawable = [layer nextDrawable];
-    if (!drawable) { return; }
     CGSize ds = layer.drawableSize;
     CGFloat scale = layer.contentsScale;
-    extern int32_t macos_app_init(uint32_t w, uint32_t h, float scale);
-    extern int32_t macos_app_frame_with_drawable(uint32_t w, uint32_t h, float scale,
-                                                 void *drawable_ptr);
     static BOOL sInited = NO;
     if (!sInited) { macos_app_init((uint32_t)ds.width, (uint32_t)ds.height, (float)scale); sInited = YES; }
-    macos_app_frame_with_drawable((uint32_t)ds.width, (uint32_t)ds.height, (float)scale,
-                                  (__bridge void*)drawable);
+    if (macos_app_prepare_frame((uint32_t)ds.width, (uint32_t)ds.height, (float)scale) != 0) {
+        return;
+    }
+    id<CAMetalDrawable> drawable = [layer nextDrawable];
+    if (!drawable) {
+        macos_app_cancel_prepared_frame();
+        return;
+    }
+    macos_app_submit_prepared_frame_with_drawable((__bridge void*)drawable);
 }
 
 - (BOOL)acceptsFirstResponder { return YES; }
@@ -833,11 +838,6 @@ int32_t oxide_cam_start_default_preview_only(void)
         result = [MacCameraController() startDeliverFrames:YES enableAudio:NO];
     });
     return result;
-}
-
-int32_t oxide_cam_start_native_preview_layer(void)
-{
-    return OxideCamErrUnsupported;
 }
 
 void oxide_cam_stop(void)

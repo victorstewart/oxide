@@ -38,6 +38,7 @@ fn touch(id: u64, phase: api::TouchPhase, x: f32, y: f32) -> api::TouchEvent {
     api::TouchEvent {
         id: api::TouchId(id),
         phase,
+        timestamp_ns: 0,
         x,
         y,
         pressure: None,

@@ -30,11 +30,8 @@ fn forced_tcp_tls_retries_stay_on_tls_parameters() {
 #[test]
 fn network_bridge_ignores_stale_connection_state_events() {
     let source = include_str!("../src/ios/network.m");
-    let body = source_between(
-        source,
-        "_connection = connection;",
-        "nw_connection_start(_connection);",
-    );
+    let body =
+        source_between(source, "_connection = connection;", "nw_connection_start(_connection);");
 
     assert!(body.contains("NSUInteger attemptNumber = self.attempt;"));
     assert!(body.contains("strongSelf->_connection != connection"));

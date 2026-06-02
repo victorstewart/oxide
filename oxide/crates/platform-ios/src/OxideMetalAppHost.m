@@ -184,29 +184,6 @@ static __weak OxideMetalHostView *gOxideMetalHostView = nil;
 @implementation OxideMetalHostApplication
 - (void)sendEvent:(UIEvent *)event {
   [super sendEvent:event];
-  if (event.type != UIEventTypeTouches || gOxideMetalHostView == nil) {
-    return;
-  }
-  for (UITouch *touch in event.allTouches) {
-    uint32_t phase = 1;
-    switch (touch.phase) {
-    case UITouchPhaseBegan:
-      phase = 0;
-      break;
-    case UITouchPhaseMoved:
-    case UITouchPhaseStationary:
-      phase = 1;
-      break;
-    case UITouchPhaseEnded:
-      phase = 2;
-      break;
-    case UITouchPhaseCancelled:
-    default:
-      phase = 3;
-      break;
-    }
-    [gOxideMetalHostView emitTouch:touch phase:phase];
-  }
 }
 @end
 
@@ -214,6 +191,31 @@ static __weak OxideMetalHostView *gOxideMetalHostView = nil;
 @end
 
 @implementation OxideMetalHostWindow
+- (void)sendEvent:(UIEvent *)event {
+  if (event.type == UIEventTypeTouches && gOxideMetalHostView != nil) {
+    for (UITouch *touch in event.allTouches) {
+      uint32_t phase = 1;
+      switch (touch.phase) {
+      case UITouchPhaseBegan:
+        phase = 0;
+        break;
+      case UITouchPhaseMoved:
+      case UITouchPhaseStationary:
+        phase = 1;
+        break;
+      case UITouchPhaseEnded:
+        phase = 2;
+        break;
+      case UITouchPhaseCancelled:
+      default:
+        phase = 3;
+        break;
+      }
+      [gOxideMetalHostView emitTouch:touch phase:phase];
+    }
+  }
+  [super sendEvent:event];
+}
 @end
 
 @interface OxideMetalHostViewController : UIViewController
@@ -244,8 +246,12 @@ static __weak OxideMetalHostView *gOxideMetalHostView = nil;
   self.opaque = YES;
   self.backgroundColor = UIColor.blackColor;
   CAMetalLayer *layer = (CAMetalLayer *)self.layer;
-  layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+  layer.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
   layer.framebufferOnly = YES;
+  layer.presentsWithTransaction = NO;
+  if (@available(iOS 13.0, *)) {
+    layer.allowsNextDrawableTimeout = YES;
+  }
   if (@available(iOS 13.0, *)) {
     layer.maximumDrawableCount = 3;
   }
@@ -343,7 +349,8 @@ static __weak OxideMetalHostView *gOxideMetalHostView = nil;
     return;
   }
   const OxideMetalAppHostConfig *config = OxideMetalHostConfig();
-  if (config == NULL || config->init == NULL || config->frame == NULL) {
+  if (config == NULL || config->init == NULL || config->prepare_frame == NULL ||
+      config->submit_prepared_frame == NULL || config->cancel_prepared_frame == NULL) {
     OxideMetalHostLog(@"missing app callbacks");
     return;
   }
@@ -360,11 +367,17 @@ static __weak OxideMetalHostView *gOxideMetalHostView = nil;
     }
     self.initialized = YES;
   }
-  id<CAMetalDrawable> drawable = [layer nextDrawable];
-  if (!drawable) {
+  int32_t rc_prepare = config->prepare_frame(width, height, (float)scale);
+  if (rc_prepare != 0) {
+    OxideMetalHostLog([NSString stringWithFormat:@"prepare frame failed rc=%d", rc_prepare]);
     return;
   }
-  int32_t rc = config->frame(width, height, (float)scale, (__bridge void *)drawable);
+  id<CAMetalDrawable> drawable = [layer nextDrawable];
+  if (!drawable) {
+    config->cancel_prepared_frame();
+    return;
+  }
+  int32_t rc = config->submit_prepared_frame((__bridge void *)drawable);
   if (rc != 0) {
     OxideMetalHostLog([NSString stringWithFormat:@"frame failed rc=%d", rc]);
   }

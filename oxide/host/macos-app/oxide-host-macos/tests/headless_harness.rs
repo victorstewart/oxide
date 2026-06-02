@@ -13,17 +13,17 @@ mod harness {
         ConnectionEvent, ConnectionOptions, PlatformError, ProtocolOptions, QuicOptions,
         TcpOptions, TlsOptions, UdpEvent, UdpPacket,
     };
+    use oxide_telemetry::TelemetryLifecycleState;
+    use oxide_test_scenes::SceneKind;
     use std::future::Future;
     use std::io::{Read, Write};
     use std::net::{TcpListener, UdpSocket};
     use std::pin::Pin;
-    use std::thread;
-    use oxide_telemetry::TelemetryLifecycleState;
-    use oxide_test_scenes::SceneKind;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::sync::{Mutex, MutexGuard, OnceLock};
     use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+    use std::thread;
     use std::time::{Duration, Instant};
 
     static TOUCH_EVENTS: AtomicUsize = AtomicUsize::new(0);
@@ -37,16 +37,12 @@ mod harness {
 
     fn test_lock() -> MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    extern "C" fn touch_cb(
-        _id: u64,
-        _phase: u32,
-        _x: f32,
-        _y: f32,
-        _timestamp_ns: u64,
-    ) {
+    extern "C" fn touch_cb(_id: u64, _phase: u32, _x: f32, _y: f32, _timestamp_ns: u64) {
         TOUCH_EVENTS.fetch_add(1, Ordering::SeqCst);
     }
 
@@ -77,12 +73,7 @@ mod harness {
         TEXT_COMMIT_EVENTS.fetch_add(1, Ordering::SeqCst);
     }
 
-    extern "C" fn text_compose_cb(
-        _start: u32,
-        _end: u32,
-        _text_ptr: *const u8,
-        _text_len: usize,
-    ) {
+    extern "C" fn text_compose_cb(_start: u32, _end: u32, _text_ptr: *const u8, _text_len: usize) {
         TEXT_COMPOSE_EVENTS.fetch_add(1, Ordering::SeqCst);
     }
 
@@ -184,10 +175,7 @@ mod harness {
         (port, handle)
     }
 
-    fn recv_tcp_read(
-        events: &mpsc::Receiver<ConnectionEvent>,
-        expected: &[u8],
-    ) -> ConnectionEvent {
+    fn recv_tcp_read(events: &mpsc::Receiver<ConnectionEvent>, expected: &[u8]) -> ConnectionEvent {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -413,7 +401,8 @@ mod harness {
             )
             .expect("connect TCP through installed macOS platform");
 
-        block_on_ready(connection.write(b"ping")).expect("write TCP request through installed macOS platform");
+        block_on_ready(connection.write(b"ping"))
+            .expect("write TCP request through installed macOS platform");
         let event = recv_tcp_read(&events_rx, b"pong");
         assert!(matches!(event, ConnectionEvent::Read(_)));
 
@@ -453,7 +442,8 @@ mod harness {
             )
             .expect("connect keepalive TCP through installed macOS platform");
 
-        block_on_ready(connection.write(b"ping")).expect("write keepalive TCP request through installed macOS platform");
+        block_on_ready(connection.write(b"ping"))
+            .expect("write keepalive TCP request through installed macOS platform");
         let event = recv_tcp_read(&events_rx, b"pong");
         assert!(matches!(event, ConnectionEvent::Read(_)));
 
@@ -477,17 +467,16 @@ mod harness {
         let (events_tx, events_rx) = mpsc::channel();
         let socket = platform
             .networking()
-            .bind_udp(0, Box::new(move |event| {
-                let _ = events_tx.send(event);
-            }))
+            .bind_udp(
+                0,
+                Box::new(move |event| {
+                    let _ = events_tx.send(event);
+                }),
+            )
             .expect("bind UDP through installed macOS platform");
 
         socket
-            .send(&UdpPacket {
-                host: String::from("127.0.0.1"),
-                port,
-                data: b"ping".to_vec(),
-            })
+            .send(&UdpPacket { host: String::from("127.0.0.1"), port, data: b"ping".to_vec() })
             .expect("send UDP packet through installed macOS platform");
         let packet = recv_udp_read(&events_rx, b"pong");
         assert_eq!(packet.host, "127.0.0.1");
@@ -518,10 +507,7 @@ mod harness {
         match platform.networking().connect_tcp(
             tcp_options(
                 TcpOptions::default(),
-                Some(TlsOptions {
-                    client_identity: None,
-                    pinned_public_keys: Vec::new(),
-                }),
+                Some(TlsOptions { client_identity: None, pinned_public_keys: Vec::new() }),
             ),
             Box::new(|_| {}),
         ) {

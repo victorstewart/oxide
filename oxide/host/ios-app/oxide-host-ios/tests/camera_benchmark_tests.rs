@@ -41,6 +41,16 @@ fn lock_tests() -> std::sync::MutexGuard<'static, ()> {
     test_lock().lock().expect("test lock")
 }
 
+fn source_between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+    source
+        .split(start)
+        .nth(1)
+        .unwrap_or_else(|| panic!("missing source marker `{}`", start))
+        .split(end)
+        .next()
+        .unwrap_or_else(|| panic!("missing source end marker `{}`", end))
+}
+
 fn init_benchmark_camera_scene() {
     oxide_host_app_shutdown();
     assert_eq!(oxide_host_set_benchmark_mode(1), 0);
@@ -54,6 +64,133 @@ fn shutdown_benchmark_camera_scene() {
     assert_eq!(oxide_host_set_camera_texture_source(0), 0);
     assert_eq!(oxide_host_set_camera_render_mode(0), 0);
     oxide_host_app_shutdown();
+}
+
+#[test]
+fn avfoundation_preview_layer_transport_stays_benchmark_diagnostic_only() {
+    let source = include_str!("../src/ios/app.m");
+
+    assert!(
+        !source.contains("NativeCameraPreview") && !source.contains("draw_native_camera_preview"),
+        "product camera preview must stay on Oxide-owned draw commands, not a native visible-preview API"
+    );
+    assert!(source.contains("@interface OxidePerfCameraPreviewView"));
+    assert!(!source.contains("@interface OxideCameraPreviewView"));
+
+    let preview_view = source_between(
+        source,
+        "@interface OxidePerfCameraPreviewView",
+        "@interface RustSceneDelegate",
+    );
+    assert!(
+        preview_view.contains("AVCaptureVideoPreviewLayer")
+            && preview_view.contains("@implementation OxidePerfCameraPreviewView"),
+        "AVCaptureVideoPreviewLayer must remain isolated to the explicitly perf-named view"
+    );
+
+    let avfoundation_enabled = source_between(
+        source,
+        "static BOOL OxidePerfActualAppAVFoundationCameraBenchmarkEnabled(void)",
+        "static BOOL OxidePerfActualAppCameraBenchmarkEnabled(void)",
+    );
+    assert!(avfoundation_enabled.contains("OxidePerfCameraRealAppHostEnabled()"));
+    assert!(avfoundation_enabled.contains("testCameraAVFoundationPreviewLayerRealAppLivePreview"));
+
+    let scene_install =
+        source_between(source, "BOOL useAVFoundationVisiblePreview =", "vc.view = container;");
+    assert!(scene_install.contains("OxidePerfActualAppAVFoundationCameraBenchmarkEnabled();"));
+    assert!(scene_install.contains("if (!useAVFoundationVisiblePreview)"));
+    assert!(scene_install.contains("mv = [MetalView new];"));
+    assert!(
+        scene_install.contains(
+            "OxidePerfCameraRealAppHybridVisiblePreviewEnabled() ||\n        useAVFoundationVisiblePreview"
+        ),
+        "preview-layer view installation must require an explicit AVFoundation or hybrid perf mode"
+    );
+    assert!(scene_install.contains("[OxidePerfCameraPreviewView new]"));
+
+    let configure = source_between(
+        source,
+        "- (void)configureActualAppCameraBenchmarkIfNeeded {",
+        "int32_t sceneIndex = OxideResolveSceneIndexNamed(\"Camera\");",
+    );
+    assert!(configure
+        .contains("if (!OxidePerfActualAppBenchmarkEnabled() || self.perfBenchmarkConfigured)"));
+    assert!(configure.contains("if (OxidePerfActualAppAVFoundationCameraBenchmarkEnabled())"));
+    assert!(configure.contains("configureActualAppAVFoundationSessionIfNeeded"));
+
+    let custom = source_between(
+        source,
+        "int32_t sceneIndex = OxideResolveSceneIndexNamed(\"Camera\");",
+        "- (void)handleActualAppBenchmarkStart {",
+    );
+    assert!(custom.contains("oxide_host_set_benchmark_mode(1);"));
+    assert!(custom.contains("oxide_host_set_camera_texture_source(0);"));
+    assert!(custom.contains("oxide_host_set_camera_running_mode(1, 1);"));
+    assert!(
+        !custom.contains("previewLayer.session = session"),
+        "shipping-oriented custom app-host camera path must not bind AVCaptureVideoPreviewLayer"
+    );
+
+    let hybrid_tick = source_between(
+        source,
+        "if (OxidePerfCameraRealAppHybridVisiblePreviewEnabled()) {",
+        "if (rc_plan == 0) {",
+    );
+    assert!(hybrid_tick.contains("[self bindPerfCameraPreviewLayerIfNeeded];"));
+    assert!(hybrid_tick.contains("return;"));
+}
+
+#[test]
+fn uikit_preview_layer_cases_are_labeled_as_baseline_or_diagnostic() {
+    let source = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../App/PerfShared/OxideUIKitBenchmarkRuntime.swift"
+    ));
+    let catalog =
+        source_between(source, "switch normalizedTestName", "case \"testCollectionViewEncode\":");
+
+    assert!(catalog.contains("case \"testCameraNV12LegacyLivePreview\":"));
+    assert!(catalog.contains("case \"testCameraNV12LegacyHybridPreviewLayerLivePreview\":"));
+    assert!(catalog.contains("case \"testCameraNV12LegacyRealAppHybridPreviewLayerLivePreview\":"));
+    assert!(catalog.contains("case \"testCameraAVFoundationPreviewLayerLivePreview\":"));
+    assert!(catalog.contains("case \"testCameraAVFoundationPreviewLayerSidecarLivePreview\":"));
+
+    let parked_hybrid = source_between(
+        catalog,
+        "case \"testCameraNV12LegacyHybridPreviewLayerLivePreview\":",
+        "case \"testCameraNV12LegacyRealAppLivePreview\":",
+    );
+    assert!(parked_hybrid.contains("visibleTransport: .avFoundationPreviewLayer"));
+
+    let real_app_hybrid = source_between(
+        catalog,
+        "case \"testCameraNV12LegacyRealAppHybridPreviewLayerLivePreview\":",
+        "case \"testCameraAVFoundationPreviewLayerLivePreview\":",
+    );
+    assert!(real_app_hybrid.contains("visibleTransport: .avFoundationPreviewLayer"));
+
+    let avfoundation_baseline = source_between(
+        catalog,
+        "case \"testCameraAVFoundationPreviewLayerLivePreview\":",
+        "case \"testCameraAVFoundationPreviewLayerSidecarLivePreview\":",
+    );
+    assert!(avfoundation_baseline.contains("makeAVFoundationPreviewBenchmark"));
+
+    let avfoundation_sidecar = source_between(
+        source,
+        "case \"testCameraAVFoundationPreviewLayerSidecarLivePreview\":",
+        "case \"testCollectionViewEncode\":",
+    );
+    assert!(avfoundation_sidecar.contains("includeVideoDataOutputSidecar: true"));
+
+    let xtask = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../xtask/src/lib.rs"));
+    assert!(
+        xtask.contains("Official parked microscope AVFoundation baseline")
+            && xtask.contains("Diagnostic-only hybrid live camera preview")
+            && xtask.contains("Diagnostic-only actual app-host hybrid camera preview"),
+        "UIKit preview-layer cases must stay explicitly labeled as baseline or diagnostic-only"
+    );
 }
 
 #[test]

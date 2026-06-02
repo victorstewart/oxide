@@ -1,17 +1,20 @@
 use oxide_platform_api::{
-    clipboard, AutoCapitalization, KeyboardAppearance, ReturnKeyType, TextContentType, TextEvent,
+    clipboard, AutoCapitalization, KeyCode, KeyEvent, KeyboardAppearance, Modifiers, ReturnKeyType,
+    TextContentType, TextEvent,
 };
 use oxide_renderer_api::{Color, DrawCmd, ImageHandle, RectF};
 use oxide_ui_core::elements::{
     encode_label_text, Align, Badge, BadgeState, ButtonState, ImageUploader, Label, Overlay,
     OverlayState, PickerState, PickerStyle, PopupWindow, SliderState, SlidingSwitchMode,
-    SlidingSwitchState, SlidingSwitchStyle, Spinner, TextCtx, TextInputState, TextValidation,
-    ToggleState, UICameraView,
+    SlidingSwitchState, SlidingSwitchStyle, Spinner, TextCtx, TextInput, TextInputState,
+    TextInputStyle, TextValidation, ToggleState, UICameraView,
 };
 use oxide_ui_core::DrawListBuilder;
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
+
+const MACOS_HEBREW_FONT: &str = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf";
 
 #[test]
 fn text_input_validates_and_commits() {
@@ -329,6 +332,80 @@ impl ImageUploader for CountingUploader {
 }
 
 #[test]
+fn picker_reuses_cached_label_shapes_and_dirty_atlas_uploads() {
+    let picker = PickerState::new(vec![
+        "Red".to_string(),
+        "Green".to_string(),
+        "Blue".to_string(),
+        "Orange".to_string(),
+    ]);
+    let mut text = TextCtx::default();
+    let font_id = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let style = PickerStyle { font_id, ..PickerStyle::default() };
+    let rect = RectF::new(0.0, 0.0, 200.0, 180.0);
+    let mut builder = DrawListBuilder::new();
+    let mut uploader = CountingUploader::default();
+
+    picker.encode(&style, rect, 2.0, &mut text, &mut uploader, &mut builder);
+    assert_eq!(uploader.creates, 1);
+    assert_eq!(uploader.updates, 1);
+    let Some((_, _, w, h, row_bytes)) = uploader.last_update else {
+        panic!("expected dirty picker atlas upload");
+    };
+    assert!(w < 1024);
+    assert!(h < 1024);
+    assert_eq!(row_bytes, 1024);
+    assert!(builder.drawlist().items.iter().any(|cmd| matches!(cmd, DrawCmd::GlyphRun { .. })));
+
+    builder.clear();
+    picker.encode(&style, rect, 2.0, &mut text, &mut uploader, &mut builder);
+    assert_eq!(uploader.creates, 1);
+    assert_eq!(uploader.updates, 1);
+    assert!(builder.drawlist().items.iter().any(|cmd| matches!(cmd, DrawCmd::GlyphRun { .. })));
+}
+
+#[test]
+fn label_batches_configured_fallback_font_runs() {
+    let mut text = TextCtx::default();
+    let latin_id = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../../text/tests/fixtures/test_text_latin.ttf").to_vec(),
+    ));
+    let cjk_id = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../../text/tests/fixtures/test_text_cjk.ttf").to_vec(),
+    ));
+    text.set_fallback_fonts(&[cjk_id]);
+    let mut builder = DrawListBuilder::new();
+    let mut uploader = CountingUploader::default();
+
+    encode_label_text(
+        "A漢B",
+        Color::rgba(0.1, 0.1, 0.1, 1.0),
+        Align::Left,
+        false,
+        latin_id,
+        22.0,
+        RectF::new(0.0, 0.0, 160.0, 40.0),
+        2.0,
+        &mut text,
+        &mut uploader,
+        &mut builder,
+    );
+
+    let glyph_runs = builder
+        .drawlist()
+        .items
+        .iter()
+        .filter(|cmd| matches!(cmd, DrawCmd::GlyphRun { .. }))
+        .count();
+    assert_eq!(glyph_runs, 1);
+    assert!(builder.drawlist().vertices.len() >= 12);
+    assert_eq!(uploader.creates, 1);
+    assert_eq!(uploader.updates, 1);
+}
+
+#[test]
 fn label_reuses_layout_and_skips_clean_atlas_upload() {
     let mut text = TextCtx::default();
     let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
@@ -364,6 +441,162 @@ fn label_reuses_layout_and_skips_clean_atlas_upload() {
         0,
         13.0,
         RectF::new(0.0, 0.0, 160.0, 40.0),
+        2.0,
+        &mut text,
+        &mut uploader,
+        &mut builder,
+    );
+    assert_eq!(uploader.creates, 1);
+    assert_eq!(uploader.updates, 1);
+}
+
+#[test]
+fn wrapped_ascii_label_reuses_fast_fit_layout_and_clean_atlas() {
+    let mut text = TextCtx::default();
+    let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let label = Label {
+        text: "Orbit telemetry cache labels wrap across several narrow rows without reshaping every candidate word".to_string(),
+        color: Color::rgba(0.1, 0.1, 0.1, 1.0),
+        align: Align::Left,
+        wrap: true,
+        font_id: 0,
+        font_px: 13.0,
+    };
+    let rect = RectF::new(0.0, 0.0, 118.0, 180.0);
+    let mut builder = DrawListBuilder::new();
+    let mut uploader = CountingUploader::default();
+
+    label.encode(rect, 2.0, &mut text, &mut uploader, &mut builder);
+    let first_glyph_runs = builder
+        .drawlist()
+        .items
+        .iter()
+        .filter(|cmd| matches!(cmd, DrawCmd::GlyphRun { .. }))
+        .count();
+    assert!(first_glyph_runs > 1);
+    assert_eq!(uploader.creates, 1);
+    assert_eq!(uploader.updates, 1);
+
+    builder.clear();
+    label.encode(rect, 2.0, &mut text, &mut uploader, &mut builder);
+    let warm_glyph_runs = builder
+        .drawlist()
+        .items
+        .iter()
+        .filter(|cmd| matches!(cmd, DrawCmd::GlyphRun { .. }))
+        .count();
+    assert_eq!(warm_glyph_runs, first_glyph_runs);
+    assert_eq!(uploader.creates, 1);
+    assert_eq!(uploader.updates, 1);
+}
+
+#[test]
+fn wrapped_ascii_fast_fit_preserves_leading_space_advance() {
+    let mut text = TextCtx::default();
+    let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let rect = RectF::new(0.0, 0.0, 220.0, 80.0);
+    let mut builder = DrawListBuilder::new();
+    let mut uploader = CountingUploader::default();
+
+    encode_label_text(
+        "Lead",
+        Color::rgba(0.1, 0.1, 0.1, 1.0),
+        Align::Left,
+        true,
+        0,
+        14.0,
+        rect,
+        2.0,
+        &mut text,
+        &mut uploader,
+        &mut builder,
+    );
+    let plain_x =
+        builder.drawlist().vertices.iter().map(|vertex| vertex.x).fold(f32::INFINITY, f32::min);
+
+    builder.clear();
+    encode_label_text(
+        "   Lead",
+        Color::rgba(0.1, 0.1, 0.1, 1.0),
+        Align::Left,
+        true,
+        0,
+        14.0,
+        rect,
+        2.0,
+        &mut text,
+        &mut uploader,
+        &mut builder,
+    );
+    let leading_x =
+        builder.drawlist().vertices.iter().map(|vertex| vertex.x).fold(f32::INFINITY, f32::min);
+
+    assert!(leading_x > plain_x + 6.0);
+}
+
+#[test]
+fn text_ctx_retained_atlas_snapshot_requires_clean_gpu_upload() {
+    let mut text = TextCtx::default();
+    let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let label = Label {
+        text: "Retained atlas".to_string(),
+        color: Color::rgba(0.1, 0.1, 0.1, 1.0),
+        align: Align::Left,
+        wrap: false,
+        font_id: 0,
+        font_px: 14.0,
+    };
+    let mut builder = DrawListBuilder::new();
+    let mut uploader = CountingUploader::default();
+
+    assert_eq!(text.retained_text_atlas_revision(), None);
+    label.encode(RectF::new(0.0, 0.0, 160.0, 40.0), 2.0, &mut text, &mut uploader, &mut builder);
+    assert_eq!(text.retained_text_atlas_revision(), Some((ImageHandle(41), text.atlas_revision())),);
+
+    text.atlas.reset();
+    assert_eq!(text.retained_text_atlas_revision(), None);
+}
+
+#[test]
+fn text_input_reuses_shape_cache_and_dirty_atlas_uploads() {
+    let mut text = TextCtx::default();
+    let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let input = TextInput::default();
+    let mut state = TextInputState::new("Name");
+    state.focus();
+    state.handle_text_event(&TextEvent::Commit { text: "cached text".into() });
+    let mut builder = DrawListBuilder::new();
+    let mut uploader = CountingUploader::default();
+
+    input.encode(
+        &state,
+        RectF::new(0.0, 0.0, 180.0, 44.0),
+        2.0,
+        &mut text,
+        &mut uploader,
+        &mut builder,
+    );
+    assert_eq!(uploader.creates, 1);
+    assert_eq!(uploader.updates, 1);
+    let Some((_, _, w, h, row_bytes)) = uploader.last_update else {
+        panic!("expected dirty text-input atlas upload");
+    };
+    assert!(w < 1024);
+    assert!(h < 1024);
+    assert_eq!(row_bytes, 1024);
+
+    builder.clear();
+    input.encode(
+        &state,
+        RectF::new(0.0, 0.0, 180.0, 44.0),
         2.0,
         &mut text,
         &mut uploader,
@@ -423,6 +656,214 @@ fn text_input_filter_and_length() {
 }
 
 #[test]
+fn text_input_max_length_counts_grapheme_clusters() {
+    let mut st = TextInputState::new("Name");
+    st.set_max_length(Some(1));
+    st.focus();
+    st.handle_text_event(&TextEvent::Commit { text: "e\u{301}x".into() });
+
+    assert_eq!(st.text(), "e\u{301}");
+    assert_eq!(st.cursor_index(), 1);
+}
+
+#[test]
+fn text_input_composition_replaces_marked_range_on_commit() {
+    let mut st = TextInputState::new("Name");
+    st.focus();
+    st.handle_text_event(&TextEvent::Commit { text: "oxide".into() });
+    st.handle_text_event(&TextEvent::Composition { range: 1..4, text: "化".into() });
+    assert_eq!(st.text(), "oxide");
+
+    st.handle_text_event(&TextEvent::Commit { text: "化".into() });
+
+    assert_eq!(st.text(), "o化e");
+}
+
+#[test]
+fn text_input_composition_can_insert_at_cursor_and_cancel() {
+    let mut st = TextInputState::new("Name");
+    st.focus();
+    st.handle_text_event(&TextEvent::Commit { text: "ab".into() });
+    st.handle_text_event(&TextEvent::SelectionChanged { range: 1..1 });
+    st.handle_text_event(&TextEvent::Composition { range: 1..1, text: "日".into() });
+    assert_eq!(st.text(), "ab");
+    st.handle_text_event(&TextEvent::Composition { range: 1..1, text: String::new() });
+    st.handle_text_event(&TextEvent::Commit { text: "c".into() });
+
+    assert_eq!(st.text(), "acb");
+}
+
+#[test]
+fn text_input_cursor_and_delete_preserve_grapheme_clusters() {
+    let mut st = TextInputState::new("Name");
+    st.focus();
+    st.handle_text_event(&TextEvent::Commit { text: "e\u{301}👨‍👩‍👧‍👦x".into() });
+    st.move_cursor_to_end();
+    let left = KeyEvent {
+        code: KeyCode::ArrowLeft,
+        chars: None,
+        repeat: false,
+        modifiers: Modifiers::empty(),
+    };
+    st.handle_key(&left);
+    st.handle_key(&left);
+    st.handle_text_event(&TextEvent::Commit { text: "!".into() });
+    assert_eq!(st.text(), "e\u{301}!👨‍👩‍👧‍👦x");
+
+    st.handle_key(&KeyEvent {
+        code: KeyCode::Delete,
+        chars: None,
+        repeat: false,
+        modifiers: Modifiers::empty(),
+    });
+    assert_eq!(st.text(), "e\u{301}!x");
+
+    st.handle_key(&KeyEvent {
+        code: KeyCode::Backspace,
+        chars: None,
+        repeat: false,
+        modifiers: Modifiers::empty(),
+    });
+    st.handle_key(&KeyEvent {
+        code: KeyCode::Backspace,
+        chars: None,
+        repeat: false,
+        modifiers: Modifiers::empty(),
+    });
+    assert_eq!(st.text(), "x");
+}
+
+#[test]
+fn text_input_pointer_pick_uses_grapheme_prefix_map() {
+    let mut text = TextCtx::default();
+    let font_id = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let style = TextInputStyle { font_id, font_px: 16.0, ..TextInputStyle::default() };
+    let mut shaper = oxide_text::TextShaper::default();
+    let measure_font =
+        oxide_text::Font::from_bytes(include_bytes!("../assets/Asap-Regular.ttf").to_vec());
+    let first_width = shaper
+        .shape(&measure_font, font_id, "e\u{301}", style.font_px)
+        .expect("shape first cluster")
+        .width();
+    let mut st = TextInputState::new("Name");
+    st.set_text("e\u{301}x");
+
+    st.handle_pointer([style.padding.left + first_width + 1.0, 0.0], &style, &mut text);
+    assert_eq!(st.cursor_index(), 1);
+    st.handle_text_event(&TextEvent::Commit { text: "!".into() });
+
+    assert_eq!(st.text(), "e\u{301}!x");
+}
+
+#[test]
+fn text_input_pointer_pick_keeps_zwj_cluster_atomic() {
+    let mut text = TextCtx::default();
+    let font_bytes = include_bytes!("../assets/Asap-Regular.ttf").to_vec();
+    let font_id = text.fonts.add_font(oxide_text::Font::from_bytes(font_bytes.clone()));
+    let style = TextInputStyle { font_id, font_px: 16.0, ..TextInputStyle::default() };
+    let measure_font = oxide_text::Font::from_bytes(font_bytes);
+    let mut shaper = oxide_text::TextShaper::default();
+    let first_width = shaper
+        .shape(&measure_font, font_id, "a", style.font_px)
+        .expect("shape first cluster")
+        .width();
+    let family = "👨‍👩‍👧‍👦";
+    let mut st = TextInputState::new("Name");
+    st.set_text(format!("a{family}b"));
+
+    st.handle_pointer([style.padding.left + first_width + 1.0, 0.0], &style, &mut text);
+    assert_eq!(st.cursor_index(), 1);
+    st.handle_text_event(&TextEvent::Commit { text: "!".into() });
+
+    assert_eq!(st.text(), format!("a!{family}b"));
+}
+
+#[test]
+fn text_input_pointer_pick_handles_rtl_visual_order() {
+    let Ok(font_bytes) = std::fs::read(MACOS_HEBREW_FONT) else {
+        eprintln!("skipping RTL text-input pick test; {MACOS_HEBREW_FONT} is unavailable");
+        return;
+    };
+    let mut text = TextCtx::default();
+    let font_id = text.fonts.add_font(oxide_text::Font::from_bytes(font_bytes.clone()));
+    let style = TextInputStyle { font_id, font_px: 16.0, ..TextInputStyle::default() };
+    let measure_font = oxide_text::Font::from_bytes(font_bytes);
+    let mut shaper = oxide_text::TextShaper::default();
+    let rtl = "אבגדה";
+    let width = shaper
+        .shape(&measure_font, font_id, rtl, style.font_px)
+        .expect("shape rtl text")
+        .cursor_map_for_text(rtl)
+        .width_at(0);
+    let mut st = TextInputState::new("Name");
+    st.set_text(rtl);
+
+    st.handle_pointer([style.padding.left - 4.0, 0.0], &style, &mut text);
+    assert_eq!(st.cursor_index(), 5);
+    st.handle_text_event(&TextEvent::Commit { text: "!".into() });
+    assert_eq!(st.text(), "אבגדה!");
+
+    st.set_text(rtl);
+    st.handle_pointer([style.padding.left + width + 4.0, 0.0], &style, &mut text);
+    assert_eq!(st.cursor_index(), 0);
+    st.handle_text_event(&TextEvent::Commit { text: "!".into() });
+    assert_eq!(st.text(), "!אבגדה");
+}
+
+#[test]
+fn text_input_pointer_pick_handles_mixed_bidi_run_interior() {
+    let Ok(font_bytes) = std::fs::read(MACOS_HEBREW_FONT) else {
+        eprintln!("skipping mixed-bidi text-input pick test; {MACOS_HEBREW_FONT} is unavailable");
+        return;
+    };
+    let mut text = TextCtx::default();
+    let font_id = text.fonts.add_font(oxide_text::Font::from_bytes(font_bytes.clone()));
+    let style = TextInputStyle { font_id, font_px: 16.0, ..TextInputStyle::default() };
+    let measure_font = oxide_text::Font::from_bytes(font_bytes);
+    let mut shaper = oxide_text::TextShaper::default();
+    let mixed = "AאבB";
+    let map = shaper
+        .shape(&measure_font, font_id, mixed, style.font_px)
+        .expect("shape mixed-bidi text")
+        .cursor_map_for_text(mixed);
+    let mut st = TextInputState::new("Name");
+    st.set_text(mixed);
+
+    st.handle_pointer([style.padding.left + map.width_at(2), 0.0], &style, &mut text);
+    assert_eq!(st.cursor_index(), 2);
+    st.handle_text_event(&TextEvent::Commit { text: "!".into() });
+
+    assert_eq!(st.text(), "Aא!בB");
+}
+
+#[test]
+fn text_input_pointer_pick_uses_configured_fallback_font_widths() {
+    let latin_bytes = include_bytes!("../../text/tests/fixtures/test_text_latin.ttf").to_vec();
+    let cjk_bytes = include_bytes!("../../text/tests/fixtures/test_text_cjk.ttf").to_vec();
+    let mut text = TextCtx::default();
+    let latin_id = text.fonts.add_font(oxide_text::Font::from_bytes(latin_bytes.clone()));
+    let cjk_id = text.fonts.add_font(oxide_text::Font::from_bytes(cjk_bytes.clone()));
+    text.set_fallback_fonts(&[cjk_id]);
+    let style = TextInputStyle { font_id: latin_id, font_px: 16.0, ..TextInputStyle::default() };
+    let latin_font = oxide_text::Font::from_bytes(latin_bytes);
+    let cjk_font = oxide_text::Font::from_bytes(cjk_bytes);
+    let mut shaper = oxide_text::TextShaper::default();
+    let a_width = shaper.shape(&latin_font, latin_id, "A", style.font_px).expect("shape A").width();
+    let cjk_width =
+        shaper.shape(&cjk_font, cjk_id, "漢", style.font_px).expect("shape cjk").width();
+    let mut st = TextInputState::new("Name");
+    st.set_text("A漢B");
+
+    st.handle_pointer([style.padding.left + a_width + cjk_width + 1.0, 0.0], &style, &mut text);
+    assert_eq!(st.cursor_index(), 2);
+    st.handle_text_event(&TextEvent::Commit { text: "!".into() });
+
+    assert_eq!(st.text(), "A漢!B");
+}
+
+#[test]
 fn text_input_one_time_code_setup() {
     let mut st = TextInputState::new("OTP");
     st.configure_one_time_code(6);
@@ -466,7 +907,6 @@ fn camera_view_encodes_draw_cmd() {
         grayscale: true,
         blur: true,
         sigma: 8.0,
-        native_preview: false,
     };
     cam.encode(rect, &mut dl);
     let items = dl.drawlist().items.clone();

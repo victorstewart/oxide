@@ -1,9 +1,11 @@
 #[cfg(all(target_os = "macos", feature = "host-testing"))]
 mod harness {
-    use oxide_host_macos::{
-        host_harness_reset, macos_app_init,
+    use oxide_host_macos::{host_harness_reset, macos_app_init};
+    use oxide_platform_api::media_library::{
+        AssetData, AssetId, AssetType, ImageFormat, ImageQuality,
     };
-    use oxide_platform_api::media_library::{AssetData, AssetId, AssetType, ImageFormat, ImageQuality};
+    use oxide_platform_api::network_status::NetworkStatus;
+    use oxide_platform_api::web_view::WebViewEvent;
     use oxide_platform_api::{
         CameraConfig, CameraFrame, CameraImage, Capabilities, CaptureMode, ColorSpace, FlashMode,
         HapticPattern, LocationAccuracy, LocationEvent, LocationOptions, LocationReading,
@@ -11,8 +13,6 @@ mod harness {
         RecordingContainer, RecordingDestination, RecordingEvent, RecordingOptions, StandardPath,
         TorchMode,
     };
-    use oxide_platform_api::network_status::NetworkStatus;
-    use oxide_platform_api::web_view::WebViewEvent;
     use std::ffi::c_void;
     use std::future::Future;
     use std::path::PathBuf;
@@ -26,7 +26,11 @@ mod harness {
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {
         static kCFRunLoopDefaultMode: CFStringRef;
-        fn CFRunLoopRunInMode(mode: CFStringRef, seconds: f64, return_after_source_handled: u8) -> i32;
+        fn CFRunLoopRunInMode(
+            mode: CFStringRef,
+            seconds: f64,
+            return_after_source_handled: u8,
+        ) -> i32;
     }
 
     fn block_on_ready<F: Future>(future: F) -> F::Output {
@@ -57,7 +61,9 @@ mod harness {
         loop {
             match events.try_recv() {
                 Ok(event) => return event,
-                Err(mpsc::TryRecvError::Disconnected) => panic!("web view event channel disconnected"),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    panic!("web view event channel disconnected")
+                }
                 Err(mpsc::TryRecvError::Empty) => {}
             }
             assert!(Instant::now() < deadline, "timed out waiting for WebView event");
@@ -72,21 +78,15 @@ mod harness {
     }
 
     fn recv_camera_frame(events: &mpsc::Receiver<CameraFrame>) -> CameraFrame {
-        events
-            .recv_timeout(Duration::from_secs(5))
-            .expect("receive live macOS camera frame")
+        events.recv_timeout(Duration::from_secs(5)).expect("receive live macOS camera frame")
     }
 
     fn recv_photo_event(events: &mpsc::Receiver<PhotoEvent>) -> PhotoEvent {
-        events
-            .recv_timeout(Duration::from_secs(5))
-            .expect("receive live macOS photo event")
+        events.recv_timeout(Duration::from_secs(5)).expect("receive live macOS photo event")
     }
 
     fn recv_recording_event(events: &mpsc::Receiver<RecordingEvent>) -> RecordingEvent {
-        events
-            .recv_timeout(Duration::from_secs(10))
-            .expect("receive live macOS recording event")
+        events.recv_timeout(Duration::from_secs(10)).expect("receive live macOS recording event")
     }
 
     fn recv_location_update(events: &mpsc::Receiver<LocationEvent>) -> LocationReading {
@@ -94,9 +94,13 @@ mod harness {
         loop {
             match events.try_recv() {
                 Ok(LocationEvent::Update(reading)) => return reading,
-                Ok(LocationEvent::Error(error)) => panic!("live macOS location update failed: {:?}", error),
+                Ok(LocationEvent::Error(error)) => {
+                    panic!("live macOS location update failed: {:?}", error)
+                }
                 Ok(LocationEvent::EnteredRegion(_)) | Ok(LocationEvent::ExitedRegion(_)) => {}
-                Err(mpsc::TryRecvError::Disconnected) => panic!("location event channel disconnected"),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    panic!("location event channel disconnected")
+                }
                 Err(mpsc::TryRecvError::Empty) => {}
             }
             assert!(Instant::now() < deadline, "timed out waiting for live macOS location update");
@@ -147,21 +151,16 @@ mod harness {
     fn assert_camera_frame_shape(frame: &CameraFrame) {
         assert!(frame.size.0 > 0 && frame.size.1 > 0, "camera frame dimensions must be non-zero");
         match &frame.image {
-            CameraImage::Nv12 {
-                y_plane,
-                uv_plane,
-                stride_y,
-                stride_uv,
-                bit_depth,
-                ..
-            } => {
+            CameraImage::Nv12 { y_plane, uv_plane, stride_y, stride_uv, bit_depth, .. } => {
                 assert_eq!(*bit_depth, 8, "macOS host currently publishes 8-bit NV12 frames");
                 assert!(!y_plane.is_empty(), "NV12 Y plane should not be empty");
                 assert!(!uv_plane.is_empty(), "NV12 UV plane should not be empty");
                 assert!(*stride_y >= frame.size.0, "Y stride should cover frame width");
                 assert!(*stride_uv >= frame.size.0, "UV stride should cover frame width");
             }
-            CameraImage::Gpu { .. } => panic!("macOS camera host should publish Oxide-owned NV12 frames"),
+            CameraImage::Gpu { .. } => {
+                panic!("macOS camera host should publish Oxide-owned NV12 frames")
+            }
         }
     }
 
@@ -254,7 +253,8 @@ mod harness {
 
     fn assert_media_expected_error<T>(result: Result<T, PlatformError>, context: &str) {
         match result {
-            Err(PlatformError::PermissionDenied("media_library")) | Err(PlatformError::NotFound(_)) => {}
+            Err(PlatformError::PermissionDenied("media_library"))
+            | Err(PlatformError::NotFound(_)) => {}
             Err(error) => panic!("{context} returned unexpected error: {:?}", error),
             Ok(_) => panic!("{context} should not resolve data for a synthetic asset id"),
         }
@@ -285,14 +285,18 @@ mod harness {
                     }
                 }
             }
-            AssetData::Image { .. } => panic!("{context} returned image data instead of a video path"),
+            AssetData::Image { .. } => {
+                panic!("{context} returned image data instead of a video path")
+            }
         }
     }
 
     fn assert_not_found<T>(result: Result<T, PlatformError>, context: &str) {
         match result {
             Err(PlatformError::NotFound(_)) => {}
-            Err(error) => panic!("{context} should report a missing native session, got {:?}", error),
+            Err(error) => {
+                panic!("{context} should report a missing native session, got {:?}", error)
+            }
             Ok(_) => panic!("{context} should report a missing native session, got Ok"),
         }
     }
@@ -315,7 +319,9 @@ mod harness {
         let result = platform.camera().start_stream(camera_smoke_config(), Box::new(|_| {}), None);
         match result {
             Err(PlatformError::PermissionDenied(_)) => {}
-            Err(error) => panic!("unauthorized macOS camera start returned unexpected error: {:?}", error),
+            Err(error) => {
+                panic!("unauthorized macOS camera start returned unexpected error: {:?}", error)
+            }
             Ok(stream) => {
                 stream.stop();
                 panic!("unauthorized macOS camera start should not create a stream");
@@ -325,16 +331,13 @@ mod harness {
 
     fn verify_inactive_camera_session_errors(platform: &dyn Platform) {
         assert_not_found(
-            platform
-                .camera()
-                .capture_photo(PhotoOptions::default(), Box::new(|_| {})),
+            platform.camera().capture_photo(PhotoOptions::default(), Box::new(|_| {})),
             "macOS camera photo capture without a running session",
         );
         assert_not_found(
-            platform.camera().start_recording(
-                temporary_video_recording_options(),
-                Box::new(|_| {}),
-            ),
+            platform
+                .camera()
+                .start_recording(temporary_video_recording_options(), Box::new(|_| {})),
             "macOS camera recording without a running session",
         );
     }
@@ -379,7 +382,8 @@ mod harness {
         let reading = recv_location_update(&events_rx);
         assert_location_reading(reading);
 
-        let last = platform.location().last().expect("live macOS location should cache last reading");
+        let last =
+            platform.location().last().expect("live macOS location should cache last reading");
         assert_location_reading(last);
         assert!(
             !platform.location().history().is_empty(),
@@ -405,9 +409,13 @@ mod harness {
         let (frames_tx, frames_rx) = mpsc::channel();
         let stream = platform
             .camera()
-            .start_stream(camera_smoke_config(), Box::new(move |frame| {
-                let _ = frames_tx.send(frame);
-            }), None)
+            .start_stream(
+                camera_smoke_config(),
+                Box::new(move |frame| {
+                    let _ = frames_tx.send(frame);
+                }),
+                None,
+            )
             .expect("start live macOS camera stream");
         let frame = recv_camera_frame(&frames_rx);
         assert_camera_frame_shape(&frame);
@@ -473,10 +481,6 @@ mod harness {
         platform.motion().stop();
 
         let camera = platform.camera();
-        assert_unsupported(
-            camera.start_native_preview(CameraConfig::default()),
-            "macOS native camera preview",
-        );
         assert_unsupported(camera.set_zoom_factor(2.0), "macOS camera zoom");
         camera.set_flash_mode(FlashMode::Off).expect("macOS flash off should be accepted");
         assert_unsupported(camera.set_flash_mode(FlashMode::On), "macOS camera flash on");
@@ -498,7 +502,11 @@ mod harness {
         platform.push().clear_all_delivered();
     }
 
-    fn first_media_asset(platform: &dyn Platform, asset_type: AssetType, limit: u32) -> Option<AssetId> {
+    fn first_media_asset(
+        platform: &dyn Platform,
+        asset_type: AssetType,
+        limit: u32,
+    ) -> Option<AssetId> {
         match block_on_ready(platform.media_library().query_assets(asset_type, limit, 0)) {
             Ok(assets) => {
                 assert!(assets.len() <= limit as usize, "media query limit should be honored");
@@ -521,9 +529,7 @@ mod harness {
         if let Some(image_id) = first_image.as_ref() {
             assert_image_data(
                 block_on_ready(
-                    platform
-                        .media_library()
-                        .request_image_data(image_id, ImageQuality::Thumbnail),
+                    platform.media_library().request_image_data(image_id, ImageQuality::Thumbnail),
                 )
                 .expect("load authorized macOS media thumbnail"),
                 "authorized macOS media thumbnail",
@@ -532,16 +538,24 @@ mod harness {
 
         let missing = AssetId(String::from("oxide-macos-missing-media-asset"));
         assert_media_expected_error(
-            block_on_ready(platform.media_library().request_image_data(&missing, ImageQuality::Thumbnail)),
+            block_on_ready(
+                platform.media_library().request_image_data(&missing, ImageQuality::Thumbnail),
+            ),
             "thumbnail request for missing media asset",
         );
         assert_media_expected_error(
-            block_on_ready(platform.media_library().request_image_data(&missing, ImageQuality::Display)),
+            block_on_ready(
+                platform.media_library().request_image_data(&missing, ImageQuality::Display),
+            ),
             "display image request for missing media asset",
         );
         match block_on_ready(platform.media_library().request_video_data(&missing)) {
-            Err(PlatformError::PermissionDenied("media_library")) | Err(PlatformError::NotFound(_)) => {}
-            Err(error) => panic!("video request for missing media asset returned unexpected error: {:?}", error),
+            Err(PlatformError::PermissionDenied("media_library"))
+            | Err(PlatformError::NotFound(_)) => {}
+            Err(error) => panic!(
+                "video request for missing media asset returned unexpected error: {:?}",
+                error
+            ),
             Ok(AssetData::Video { file_path }) => {
                 panic!("video request for missing media asset returned path: {file_path}")
             }
@@ -565,19 +579,19 @@ mod harness {
             "OXIDE_MACOS_LIVE_MEDIA=1 requires pre-authorized Photos access"
         );
 
-        let image_id = first_image.or_else(|| first_media_asset(platform, AssetType::Image, 16))
+        let image_id = first_image
+            .or_else(|| first_media_asset(platform, AssetType::Image, 16))
             .expect("OXIDE_MACOS_LIVE_MEDIA=1 requires at least one image asset");
         assert_image_data(
             block_on_ready(
-                platform
-                    .media_library()
-                    .request_image_data(&image_id, ImageQuality::Display),
+                platform.media_library().request_image_data(&image_id, ImageQuality::Display),
             )
             .expect("load authorized macOS display image"),
             "authorized macOS display image",
         );
 
-        let video_id = first_video.or_else(|| first_media_asset(platform, AssetType::Video, 16))
+        let video_id = first_video
+            .or_else(|| first_media_asset(platform, AssetType::Video, 16))
             .expect("OXIDE_MACOS_LIVE_MEDIA=1 requires at least one video asset");
         assert_video_data(
             block_on_ready(platform.media_library().request_video_data(&video_id))
@@ -614,10 +628,7 @@ window.oxideValue = "oxide-webview:" + document.getElementById("answer").textCon
         }
     }
 
-    fn assert_web_view_script_error(
-        result: Result<Option<String>, PlatformError>,
-        context: &str,
-    ) {
+    fn assert_web_view_script_error(result: Result<Option<String>, PlatformError>, context: &str) {
         match result {
             Err(PlatformError::Unknown(_)) => {}
             Err(error) => panic!("{context} should return a script failure, got {:?}", error),
@@ -642,15 +653,21 @@ window.oxideValue = "oxide-webview:" + document.getElementById("answer").textCon
 
         let view_a = platform
             .web_view_service()
-            .create_view(&url_a, Box::new(move |event| {
-                let _ = events_a_tx.send(event);
-            }))
+            .create_view(
+                &url_a,
+                Box::new(move |event| {
+                    let _ = events_a_tx.send(event);
+                }),
+            )
             .expect("create first hidden macOS WebView through installed platform");
         let view_b = platform
             .web_view_service()
-            .create_view(&url_b, Box::new(move |event| {
-                let _ = events_b_tx.send(event);
-            }))
+            .create_view(
+                &url_b,
+                Box::new(move |event| {
+                    let _ = events_b_tx.send(event);
+                }),
+            )
             .expect("create second hidden macOS WebView through installed platform");
 
         assert_load_finished(&events_a_rx, "first hidden macOS");

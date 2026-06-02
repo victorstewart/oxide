@@ -1353,6 +1353,12 @@ struct AppState {
     renderer: Option<Box<metal::MetalRenderer>>,
     router: Option<test_scenes::Router<MtlUploader>>,
     builder: ui::DrawListBuilder,
+    pending_damage_rects: Vec<gfx_api::RectI>,
+    pending_frame_stats: StatsSnapshot,
+    pending_frame_w: u32,
+    pending_frame_h: u32,
+    pending_frame_scale: f32,
+    prepared_frame: bool,
     benchmark_scene_index: u32,
     last_ms: u64,
     inited: bool,
@@ -1394,6 +1400,12 @@ impl Default for AppState {
             renderer: None,
             router: None,
             builder: ui::DrawListBuilder::new(),
+            pending_damage_rects: Vec::new(),
+            pending_frame_stats: StatsSnapshot::default(),
+            pending_frame_w: 0,
+            pending_frame_h: 0,
+            pending_frame_scale: 1.0,
+            prepared_frame: false,
             benchmark_scene_index: benchmark_camera_scene_index(),
             last_ms: 0,
             inited: false,
@@ -1930,52 +1942,29 @@ pub extern "C" fn oxide_host_app_frame_with_drawable(
     scale: f32,
     drawable_ptr: *mut ::libc::c_void,
 ) -> ::libc::c_int {
-    oxide_host_app_frame_inner(w, h, scale, drawable_ptr)
+    let rc = oxide_host_app_prepare_frame(w, h, scale);
+    if rc != 0 {
+        return rc;
+    }
+    oxide_host_app_submit_prepared_frame_with_drawable(drawable_ptr)
 }
 
-fn oxide_host_app_frame_inner(
-    w: u32,
-    h: u32,
-    scale: f32,
-    drawable_ptr: *mut ::libc::c_void,
-) -> ::libc::c_int {
+#[no_mangle]
+pub extern "C" fn oxide_host_app_prepare_frame(w: u32, h: u32, scale: f32) -> ::libc::c_int {
     let mut app = app_state().lock().expect("app_state mutex");
     if !app.inited {
         return -1;
     }
     if benchmark_camera_fast_path_active(&app) {
-        let Some(mut renderer) = app.renderer.take() else {
-            return -2;
-        };
-        let camera_running = app.camera_running;
-        drop(app);
-
-        let render_result = render_camera_benchmark_fast_path(
-            &mut renderer,
-            camera_running,
-            w,
-            h,
-            scale,
-            drawable_ptr,
-        );
-
-        let mut app = app_state().lock().expect("app_state mutex");
-        debug_assert!(app.renderer.is_none(), "benchmark fast path renderer unexpectedly replaced");
-        app.renderer = Some(renderer);
-        match render_result {
-            Ok(stats) => {
-                app.last_stats = stats;
-                if ios_log_enabled() {
-                    ios_log("app_frame: camera fast path ok");
-                }
-                return 0;
-            }
-            Err(code) => return code,
-        }
+        app.pending_frame_w = w;
+        app.pending_frame_h = h;
+        app.pending_frame_scale = scale;
+        app.prepared_frame = true;
+        return 0;
     }
     process_telemetry_commands_locked(&mut app);
     if ios_log_enabled() {
-        ios_log(&format!("app_frame: w={} h={} scale={:.2}", w, h, scale));
+        ios_log(&format!("app_prepare_frame: w={} h={} scale={:.2}", w, h, scale));
     }
     let now = timing::now_ms();
     let dt_ms = (now.saturating_sub(app.last_ms)) as u32;
@@ -1999,16 +1988,6 @@ fn oxide_host_app_frame_inner(
                 return -2;
             }
         };
-        if !drawable_ptr.is_null() {
-            let present_result = unsafe {
-                with_perf_signpost("camera.host.present", || {
-                    renderer.prepare_present_drawable(drawable_ptr.cast())
-                })
-            };
-            if present_result.is_err() {
-                return -5;
-            }
-        }
         let _ = with_perf_signpost("camera.renderer.resize", || renderer.resize(w, h, scale));
     }
     let mut builder = core::mem::take(&mut app.builder);
@@ -2038,36 +2017,115 @@ fn oxide_host_app_frame_inner(
         Some(value) => value,
         None => {
             app.builder = builder;
-            if !drawable_ptr.is_null() {
-                if let Some(renderer) = app.renderer.as_mut().map(|b| b.as_mut()) {
-                    let _ = renderer.cancel_present_drawable();
-                }
-            }
             return -3;
         }
     };
+    if builder.drawlist().items.len() > 1 {
+        with_perf_signpost("camera.renderer.coalesce", || {
+            let dl = builder.drawlist_mut();
+            oxide_ui_core::coalesce_adjacent_draws(dl);
+        });
+    }
+    app.builder = builder;
+    app.pending_damage_rects = damage_rects;
+    app.pending_frame_stats = stats;
+    app.pending_frame_w = w;
+    app.pending_frame_h = h;
+    app.pending_frame_scale = scale;
+    app.prepared_frame = true;
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_app_submit_prepared_frame_with_drawable(
+    drawable_ptr: *mut ::libc::c_void,
+) -> ::libc::c_int {
+    let mut app = app_state().lock().expect("app_state mutex");
+    if !app.inited {
+        return -1;
+    }
+    if !app.prepared_frame {
+        return -6;
+    }
+    if benchmark_camera_fast_path_active(&app) {
+        let Some(mut renderer) = app.renderer.take() else {
+            app.prepared_frame = false;
+            return -2;
+        };
+        let camera_running = app.camera_running;
+        let w = app.pending_frame_w;
+        let h = app.pending_frame_h;
+        let scale = app.pending_frame_scale;
+        app.prepared_frame = false;
+        drop(app);
+
+        let render_result = render_camera_benchmark_fast_path(
+            &mut renderer,
+            camera_running,
+            w,
+            h,
+            scale,
+            drawable_ptr,
+        );
+
+        let mut app = app_state().lock().expect("app_state mutex");
+        debug_assert!(app.renderer.is_none(), "benchmark fast path renderer unexpectedly replaced");
+        app.renderer = Some(renderer);
+        match render_result {
+            Ok(stats) => {
+                app.last_stats = stats;
+                if ios_log_enabled() {
+                    ios_log("app_frame: camera fast path ok");
+                }
+                return 0;
+            }
+            Err(code) => return code,
+        }
+    }
+    let damage_rects = core::mem::take(&mut app.pending_damage_rects);
+    let mut stats = app.pending_frame_stats;
+    let builder = core::mem::take(&mut app.builder);
     let perf_stats_result = {
         if let Some(renderer) = app.renderer.as_mut().map(|b| b.as_mut()) {
-            let damage = gfx_api::Damage { rects: damage_rects };
-            let token = with_perf_signpost("camera.renderer.begin_frame", || {
-                renderer.begin_frame(&gfx_api::FrameTarget, Some(&damage))
-            });
-            if builder.drawlist().items.len() > 1 {
-                with_perf_signpost("camera.renderer.coalesce", || {
-                    let dl = builder.drawlist_mut();
-                    oxide_ui_core::coalesce_adjacent_draws(dl);
-                });
-            }
-            with_perf_signpost("camera.renderer.encode_pass", || {
-                renderer.encode_pass(builder.drawlist());
-            });
-            if with_perf_signpost("camera.renderer.submit", || renderer.submit(token)).is_err() {
-                if !drawable_ptr.is_null() {
-                    let _ = renderer.cancel_present_drawable();
+            if !drawable_ptr.is_null() {
+                let present_result = unsafe {
+                    with_perf_signpost("camera.host.present", || {
+                        renderer.prepare_present_drawable(drawable_ptr.cast())
+                    })
+                };
+                if present_result.is_err() {
+                    Err(-5)
+                } else {
+                    let damage = gfx_api::Damage { rects: damage_rects };
+                    let token = with_perf_signpost("camera.renderer.begin_frame", || {
+                        renderer.begin_frame(&gfx_api::FrameTarget, Some(&damage))
+                    });
+                    with_perf_signpost("camera.renderer.encode_pass", || {
+                        renderer.encode_pass(builder.drawlist());
+                    });
+                    if with_perf_signpost("camera.renderer.submit", || renderer.submit(token))
+                        .is_err()
+                    {
+                        let _ = renderer.cancel_present_drawable();
+                        Err(-4)
+                    } else {
+                        Ok(renderer.last_stats())
+                    }
                 }
-                Err(-4)
             } else {
-                Ok(renderer.last_stats())
+                let damage = gfx_api::Damage { rects: damage_rects };
+                let token = with_perf_signpost("camera.renderer.begin_frame", || {
+                    renderer.begin_frame(&gfx_api::FrameTarget, Some(&damage))
+                });
+                with_perf_signpost("camera.renderer.encode_pass", || {
+                    renderer.encode_pass(builder.drawlist());
+                });
+                if with_perf_signpost("camera.renderer.submit", || renderer.submit(token)).is_err()
+                {
+                    Err(-4)
+                } else {
+                    Ok(renderer.last_stats())
+                }
             }
         } else {
             Err(-2)
@@ -2077,10 +2135,12 @@ fn oxide_host_app_frame_inner(
         Ok(stats) => stats,
         Err(code) => {
             app.builder = builder;
+            app.prepared_frame = false;
             return code;
         }
     };
     app.builder = builder;
+    app.prepared_frame = false;
     let paused = perf_stats.cam_paused != 0 || !app.camera_running;
     let running = app.camera_running;
     let overlay_visible = app.overlay_visible;
@@ -2111,7 +2171,6 @@ fn oxide_host_app_frame_inner(
             router.camera_set_metrics(metrics);
         }
     }
-    let mut stats = stats;
     stats.damage_pct = perf_stats.damage_pct;
     stats.damage_rects = perf_stats.damage_rects;
     stats.cam_coverage_pct = perf_stats.cam_coverage_pct;
@@ -2145,6 +2204,26 @@ fn oxide_host_app_frame_inner(
     app.frame_dirty = false;
     ios_log("app_frame: ok");
     0
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_app_cancel_prepared_frame() {
+    let mut app = app_state().lock().expect("app_state mutex");
+    app.prepared_frame = false;
+    app.pending_damage_rects.clear();
+}
+
+fn oxide_host_app_frame_inner(
+    w: u32,
+    h: u32,
+    scale: f32,
+    drawable_ptr: *mut ::libc::c_void,
+) -> ::libc::c_int {
+    let rc = oxide_host_app_prepare_frame(w, h, scale);
+    if rc != 0 {
+        return rc;
+    }
+    oxide_host_app_submit_prepared_frame_with_drawable(drawable_ptr)
 }
 
 #[no_mangle]
@@ -2621,6 +2700,7 @@ extern "C" fn touch_cb(
         let touch_event = oxide_platform_api::TouchEvent {
             id: oxide_platform_api::TouchId(id),
             phase: touch_phase,
+            timestamp_ns: ts_ns,
             x,
             y,
             pressure,

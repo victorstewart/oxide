@@ -149,6 +149,7 @@ fn build_test_drawlist() -> DrawList {
     list.items.push(DrawCmd::GlyphRun {
         run: GlyphRun {
             atlas: ImageHandle(9),
+            atlas_revision: 0,
             vb: VertexSpan { offset: 0, len: 4 },
             ib: IndexSpan { offset: 0, len: 6 },
             sdf: false,

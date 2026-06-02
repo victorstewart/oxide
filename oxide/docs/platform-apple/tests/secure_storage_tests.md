@@ -18,7 +18,7 @@
 - Defines test-local `oxide_media_*` symbols so the shared media-library service can exercise asset paging and host-buffer release without a live Photos library.
 - Defines test-local `oxide_host_push_*` symbols and callback registration cells so the shared push manager can exercise token, badge, clearing, and notification fanout without APNs.
 - Defines test-local `oxide_ble_*` symbols so the shared Bluetooth manager can exercise scan/connect/read/write/notify/advertise controls without live CoreBluetooth hardware.
-- Defines test-local `oxide_cam_*` symbols so the shared camera manager can exercise stream startup, preview-only startup, native-preview leases, controls, photo capture, recording, and callback trampolines without live AVFoundation hardware.
+- Defines test-local `oxide_cam_*` symbols so the shared camera manager can exercise stream startup, preview-only startup, controls, photo capture, recording, and callback trampolines without live AVFoundation hardware.
 - Defines feature-gated test-local `oxide_web_view_*` symbols so the shared WebView wrapper can exercise create, load events, script results, and close behavior without WebKit.
 - Checks the network path and interface helpers consumed by `oxide-platform-ios` and `oxide-platform-macos`.
 - Checks the permission domain/status helpers consumed by the iOS and macOS permission bridges.
@@ -59,7 +59,7 @@
 - `apple_camera_manager_forwards_stream_controls_and_trampolines()`
   Verifies stream startup, settings forwarding, frame/audio callback delivery, focus/zoom/flash/torch controls, and stream teardown through the shared camera ABI.
 - `apple_camera_manager_uses_preview_only_without_audio_and_handles_record_photo()`
-  Verifies preview-only startup without audio subscribers, native-preview lease handling, photo callback delivery, recording callback delivery, and host recording controls.
+  Verifies preview-only startup without audio subscribers, photo callback delivery, recording callback delivery, and host recording controls.
 - `apple_camera_manager_maps_host_return_codes_to_platform_errors()`
   Verifies native camera return codes map to permission-denied, not-found, busy, invalid, and unsupported `PlatformError` variants.
 - `apple_web_view_service_creates_executes_emits_and_closes()`

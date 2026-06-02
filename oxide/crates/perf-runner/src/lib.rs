@@ -21,12 +21,13 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const DEFAULT_BASELINE_JSON: &str = "benchmarks/workspace/latest.json";
 const DEFAULT_BASELINE_MARKDOWN: &str = "benchmarks/workspace/latest.md";
 const LATIN_FONT: &[u8] = include_bytes!("../../text/tests/fixtures/test_text_latin.ttf");
 const CJK_FONT: &[u8] = include_bytes!("../../text/tests/fixtures/test_text_cjk.ttf");
+const MACOS_HEBREW_FONT: &str = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf";
 const DAMAGE_USE_THRESH: f32 = 0.75;
 const DAMAGE_PREFILTER_THRESH: f32 = 0.25;
 const PERF_DEVICE_SCALE: f32 = 2.0;
@@ -173,6 +174,10 @@ const PERF_SCENE_SPECS: &[ScenePerfSpec] = &[
 
 const PERF_JOURNEY_SPECS: &[JourneyPerfSpec] = &[
     JourneyPerfSpec { id: "cpu.journey.input_form_submit", name: "Input Form Submit" },
+    JourneyPerfSpec {
+        id: "cpu.journey.text_ime_composition_cycle",
+        name: "Text IME Composition Cycle",
+    },
     JourneyPerfSpec { id: "cpu.journey.collection_navigation", name: "Collection Navigation" },
     JourneyPerfSpec {
         id: "cpu.journey.zoom_image_gesture_cycle",
@@ -193,6 +198,11 @@ const PERF_JOURNEY_SPECS: &[JourneyPerfSpec] = &[
     },
 ];
 
+const PERF_GPU_JOURNEY_SPECS: &[NamedPerfSpec] = &[NamedPerfSpec {
+    id: "gpu.journey.collection_navigation.frame_pacing",
+    name: "Collection Navigation Frame Pacing",
+}];
+
 const POPUP_WHEEL_PICKER_CASE_ID: &str = "cpu.authoring.popup_wheel_picker.interaction";
 
 const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
@@ -202,6 +212,42 @@ const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
     AuthoringPerfSpec {
         id: "cpu.authoring.surface_router.compose",
         name: "Surface Router Composition",
+    },
+    AuthoringPerfSpec {
+        id: "cpu.authoring.surface_retained.clean_encode",
+        name: "Surface Retained Clean Encode",
+    },
+    AuthoringPerfSpec {
+        id: "cpu.authoring.surface_retained.dirty_leaf_encode",
+        name: "Surface Retained Dirty Leaf Encode",
+    },
+    AuthoringPerfSpec {
+        id: "cpu.authoring.surface_retained.text_atlas_context",
+        name: "Surface Retained Text Atlas Context",
+    },
+    AuthoringPerfSpec {
+        id: "cpu.authoring.drawlist_text_replay.multi_atlas",
+        name: "DrawList Text Replay Multi Atlas",
+    },
+    AuthoringPerfSpec {
+        id: "cpu.authoring.collection_key_reconcile.indexed",
+        name: "Collection Key Reconcile Indexed",
+    },
+    AuthoringPerfSpec {
+        id: "cpu.authoring.collection_key_reconcile.scan",
+        name: "Collection Key Reconcile Scan",
+    },
+    AuthoringPerfSpec {
+        id: "cpu.authoring.collection_measure_cache.bounded_churn",
+        name: "Collection Measure Cache Bounded Churn",
+    },
+    AuthoringPerfSpec {
+        id: "cpu.authoring.collection_prefix_update.incremental",
+        name: "Collection Prefix Update Incremental",
+    },
+    AuthoringPerfSpec {
+        id: "cpu.authoring.collection_prefix_update.full_scan",
+        name: "Collection Prefix Update Full Scan",
     },
     AuthoringPerfSpec { id: "gpu.authoring.scene3d.mixed_frame", name: "Scene3D Mixed Frame" },
 ];
@@ -224,6 +270,28 @@ const PERF_LAYOUT_SPECS: &[NamedPerfSpec] = &[
     },
     NamedPerfSpec { id: "cpu.layout.deep_stack.theme_swap", name: "Deep Stack Theme Swap" },
     NamedPerfSpec { id: "cpu.layout.grid.safe_area_swap", name: "Grid Safe Area Swap" },
+    NamedPerfSpec {
+        id: "cpu.layout.dirty_subtree.incremental_relayout",
+        name: "Dirty Subtree Incremental Relayout",
+    },
+    NamedPerfSpec {
+        id: "cpu.layout.descendant_only.incremental_relayout",
+        name: "Descendant-Only Incremental Relayout",
+    },
+    NamedPerfSpec { id: "cpu.layout.transform_only.reposition", name: "Transform-Only Reposition" },
+    NamedPerfSpec { id: "cpu.layout.paint_only.opacity_clip", name: "Paint-Only Opacity Clip" },
+    NamedPerfSpec {
+        id: "cpu.layout.node_content_dirty.retained_replay",
+        name: "Node Content Dirty Retained Replay",
+    },
+    NamedPerfSpec {
+        id: "cpu.layout.non_draw_dirty.retained_reuse",
+        name: "Non-Draw Dirty Retained Reuse",
+    },
+    NamedPerfSpec {
+        id: "cpu.layout.scoped_tree_mutation.add_remove",
+        name: "Scoped Tree Mutation Add Remove",
+    },
 ];
 
 const PERF_TEXT_INPUT_SPECS: &[NamedPerfSpec] = &[
@@ -235,6 +303,23 @@ const PERF_TEXT_INPUT_SPECS: &[NamedPerfSpec] = &[
     NamedPerfSpec {
         id: "cpu.text_input.large_editor.selection_replace",
         name: "Large Editor Selection Replace",
+    },
+    NamedPerfSpec {
+        id: "cpu.text_input.ime.composition_commit_cycle",
+        name: "IME Composition Commit Cycle",
+    },
+    NamedPerfSpec { id: "cpu.text_input.cursor_pick.cluster_map", name: "Cursor Pick Cluster Map" },
+    NamedPerfSpec {
+        id: "cpu.text_input.cursor_pick.rtl_cluster_map",
+        name: "RTL Cursor Pick Cluster Map",
+    },
+    NamedPerfSpec {
+        id: "cpu.text_input.cursor_pick.fallback_cluster_map",
+        name: "Fallback Font Cursor Pick Cluster Map",
+    },
+    NamedPerfSpec {
+        id: "cpu.text_input.cursor_pick.mixed_bidi_affinity",
+        name: "Mixed Bidi Cursor Pick Affinity",
     },
 ];
 
@@ -612,6 +697,63 @@ struct SampleSummary {
 }
 
 #[derive(Default)]
+struct TextAtlasUploadStats {
+    checksum: u64,
+    creates: u64,
+    updates: u64,
+    dirty_upload_pixels: u64,
+    full_upload_pixels: u64,
+    max_update_pixels: u64,
+    row_bytes: u64,
+    glyph_runs: u64,
+    vertices: u64,
+    indices: u64,
+    shape_calls: u64,
+}
+
+#[derive(Default)]
+struct TextAtlasPressureStats {
+    checksum: u64,
+    shape_count: u64,
+    rendered_runs: u64,
+    evictions: u64,
+    resident_glyphs: u64,
+    revision: u64,
+    dirty_rects: u64,
+    dirty_pixels: u64,
+    max_dirty_pixels: u64,
+    vertices: u64,
+    indices: u64,
+}
+
+#[derive(Default)]
+struct TextFallbackLabelStats {
+    checksum: u64,
+    glyph_runs: u64,
+    vertices: u64,
+    indices: u64,
+    atlas_revision: u64,
+}
+
+#[derive(Default)]
+struct TextPrefixWidthMapStats {
+    checksum: u64,
+    text_bytes: u64,
+    prefix_boundaries: u64,
+    width_entries: u64,
+    shaped_runs: u64,
+}
+
+#[derive(Default)]
+struct TextCursorMapStats {
+    cursor_count: u64,
+    byte_boundaries: u64,
+    boundary_checksum: u64,
+    affinity_splits: u64,
+    width_span: f64,
+}
+
+#[derive(Default)]
 struct CpuUploader {
     next: u32,
 }
@@ -632,6 +774,40 @@ impl ui::elements::ImageUploader for CpuUploader {
         _data: &[u8],
         _row_bytes: usize,
     ) {
+    }
+}
+
+#[derive(Default)]
+struct CountingTextUploader {
+    next: u32,
+    stats: TextAtlasUploadStats,
+}
+
+impl ui::elements::ImageUploader for CountingTextUploader {
+    fn create_a8(&mut self, w: u32, h: u32, _data: &[u8], row_bytes: usize) -> api::ImageHandle {
+        self.next = self.next.saturating_add(1).max(1);
+        self.stats.creates = self.stats.creates.saturating_add(1);
+        self.stats.full_upload_pixels =
+            self.stats.full_upload_pixels.saturating_add(w as u64 * h as u64);
+        self.stats.row_bytes = row_bytes as u64;
+        api::ImageHandle(self.next)
+    }
+
+    fn update_a8(
+        &mut self,
+        _handle: api::ImageHandle,
+        _x: u32,
+        _y: u32,
+        w: u32,
+        h: u32,
+        _data: &[u8],
+        row_bytes: usize,
+    ) {
+        let pixels = w as u64 * h as u64;
+        self.stats.updates = self.stats.updates.saturating_add(1);
+        self.stats.dirty_upload_pixels = self.stats.dirty_upload_pixels.saturating_add(pixels);
+        self.stats.max_update_pixels = self.stats.max_update_pixels.max(pixels);
+        self.stats.row_bytes = row_bytes as u64;
     }
 }
 
@@ -667,11 +843,78 @@ struct FeedMeasure;
 struct FeedRender;
 struct ChatMeasure;
 struct ChatRender;
+struct KeyReconcileRender;
+
+struct CollectionMeasureCacheChurnStats {
+    checksum: u64,
+    initial_measure_calls: u64,
+    repair_measure_calls: u64,
+    repair_draw_items: u64,
+    content_h: u64,
+}
+
+struct CollectionMeasureCacheChurnMeasure {
+    calls: u64,
+}
+
+struct CountingCollectionMeasure<M> {
+    inner: M,
+    calls: Arc<AtomicU64>,
+    revision_queries: Arc<AtomicU64>,
+}
+
+impl<M: ui::collection::Measure> ui::collection::Measure for CountingCollectionMeasure<M> {
+    fn measure(&mut self, index: usize, constraint: f32) -> f32 {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        self.inner.measure(index, constraint)
+    }
+
+    fn item_key(&self, index: usize) -> ui::collection::ItemKey {
+        self.inner.item_key(index)
+    }
+
+    fn item_index_for_key(&self, key: ui::collection::ItemKey) -> Option<usize> {
+        self.inner.item_index_for_key(key)
+    }
+
+    fn item_revision(&self, index: usize) -> u64 {
+        self.revision_queries.fetch_add(1, Ordering::Relaxed);
+        self.inner.item_revision(index)
+    }
+
+    fn collection_revision(&self) -> Option<u64> {
+        self.inner.collection_revision()
+    }
+
+    fn changed_item_range(&self) -> Option<core::ops::Range<usize>> {
+        self.inner.changed_item_range()
+    }
+
+    fn fixed_extent(&self, constraint: f32) -> Option<f32> {
+        self.inner.fixed_extent(constraint)
+    }
+}
 
 impl ui::collection::Measure for GridMeasure {
     fn measure(&mut self, index: usize, constraint: f32) -> f32 {
         let wobble = (index % 7) as f32 * 2.0;
         (constraint * 0.55 + wobble).max(24.0)
+    }
+
+    fn collection_revision(&self) -> Option<u64> {
+        Some(1)
+    }
+}
+
+impl ui::collection::Measure for CollectionMeasureCacheChurnMeasure {
+    fn measure(&mut self, index: usize, constraint: f32) -> f32 {
+        self.calls = self.calls.saturating_add(1);
+        let wobble = (index % 7) as f32 * 2.0;
+        (constraint * 0.55 + wobble).max(24.0)
+    }
+
+    fn collection_revision(&self) -> Option<u64> {
+        Some(1)
     }
 }
 
@@ -694,6 +937,10 @@ impl ui::collection::Measure for FeedMeasure {
     fn measure(&mut self, index: usize, constraint: f32) -> f32 {
         let wobble = (index % 5) as f32 * 9.0;
         (constraint * 0.34 + 72.0 + wobble).max(96.0)
+    }
+
+    fn collection_revision(&self) -> Option<u64> {
+        Some(1)
     }
 }
 
@@ -738,6 +985,10 @@ impl ui::collection::Measure for ChatMeasure {
     fn measure(&mut self, index: usize, _constraint: f32) -> f32 {
         54.0 + (index % 4) as f32 * 10.0
     }
+
+    fn collection_revision(&self) -> Option<u64> {
+        Some(1)
+    }
 }
 
 impl ui::collection::CellRenderer for ChatRender {
@@ -777,6 +1028,152 @@ impl ui::collection::CellRenderer for ChatRender {
             [4.0; 4],
             line,
         );
+    }
+}
+
+struct KeyReconcileMeasure {
+    order: Vec<u64>,
+    index_by_key: BTreeMap<u64, usize>,
+    item_key_queries: Arc<AtomicU64>,
+    key_index_queries: Arc<AtomicU64>,
+    key_index_hits: Arc<AtomicU64>,
+    indexed: bool,
+}
+
+impl KeyReconcileMeasure {
+    fn new(
+        count: usize,
+        indexed: bool,
+        item_key_queries: Arc<AtomicU64>,
+        key_index_queries: Arc<AtomicU64>,
+        key_index_hits: Arc<AtomicU64>,
+    ) -> Self {
+        let mut measure = Self {
+            order: (0..count as u64).collect(),
+            index_by_key: BTreeMap::new(),
+            item_key_queries,
+            key_index_queries,
+            key_index_hits,
+            indexed,
+        };
+        measure.move_key_to(200, 220);
+        measure
+    }
+
+    fn move_key_to(&mut self, key: u64, target: usize) {
+        let Some(source) = self.order.iter().position(|candidate| *candidate == key) else {
+            self.rebuild_index();
+            return;
+        };
+        let key = self.order.remove(source);
+        self.order.insert(target.min(self.order.len()), key);
+        self.rebuild_index();
+    }
+
+    fn rebuild_index(&mut self) {
+        self.index_by_key.clear();
+        for (index, key) in self.order.iter().enumerate() {
+            self.index_by_key.insert(*key, index);
+        }
+    }
+}
+
+impl ui::collection::Measure for KeyReconcileMeasure {
+    fn measure(&mut self, _index: usize, _constraint: f32) -> f32 {
+        40.0
+    }
+
+    fn item_key(&self, index: usize) -> ui::collection::ItemKey {
+        self.item_key_queries.fetch_add(1, Ordering::Relaxed);
+        ui::collection::ItemKey(self.order[index])
+    }
+
+    fn item_index_for_key(&self, key: ui::collection::ItemKey) -> Option<usize> {
+        self.key_index_queries.fetch_add(1, Ordering::Relaxed);
+        if !self.indexed {
+            return None;
+        }
+        let index = self.index_by_key.get(&key.0).copied();
+        if index.is_some() {
+            self.key_index_hits.fetch_add(1, Ordering::Relaxed);
+        }
+        index
+    }
+
+    fn fixed_extent(&self, _constraint: f32) -> Option<f32> {
+        Some(40.0)
+    }
+}
+
+impl ui::collection::CellRenderer for KeyReconcileRender {
+    fn render(
+        &mut self,
+        _cell_id: u32,
+        _index: usize,
+        _rect: api::RectF,
+        _focused: bool,
+        _hovered: bool,
+        _builder: &mut ui::DrawListBuilder,
+    ) {
+    }
+}
+
+struct PrefixUpdateMeasure {
+    revisions: Vec<u64>,
+    epoch: u64,
+    changed_index: usize,
+    changed_range_enabled: bool,
+    measure_calls: Arc<AtomicU64>,
+    revision_queries: Arc<AtomicU64>,
+}
+
+impl PrefixUpdateMeasure {
+    fn new(
+        count: usize,
+        changed_index: usize,
+        changed_range_enabled: bool,
+        measure_calls: Arc<AtomicU64>,
+        revision_queries: Arc<AtomicU64>,
+    ) -> Self {
+        Self {
+            revisions: vec![0; count],
+            epoch: 1,
+            changed_index,
+            changed_range_enabled,
+            measure_calls,
+            revision_queries,
+        }
+    }
+
+    fn bump_revision(&mut self) {
+        let current = self.revisions[self.changed_index];
+        self.revisions[self.changed_index] = if current == 1 { 2 } else { 1 };
+        self.epoch = self.epoch.wrapping_add(1);
+    }
+}
+
+impl ui::collection::Measure for PrefixUpdateMeasure {
+    fn measure(&mut self, index: usize, constraint: f32) -> f32 {
+        self.measure_calls.fetch_add(1, Ordering::Relaxed);
+        let wobble = (index % 7) as f32 * 2.0;
+        (constraint * 0.55 + wobble).max(24.0)
+    }
+
+    fn item_revision(&self, index: usize) -> u64 {
+        self.revision_queries.fetch_add(1, Ordering::Relaxed);
+        self.revisions[index]
+    }
+
+    fn collection_revision(&self) -> Option<u64> {
+        Some(self.epoch)
+    }
+
+    fn changed_item_range(&self) -> Option<core::ops::Range<usize>> {
+        if self.changed_range_enabled {
+            Some(self.changed_index..self.changed_index.saturating_add(1))
+        } else {
+            None
+        }
     }
 }
 
@@ -847,6 +1244,8 @@ fn run_suite(cli: Cli) -> Result<()> {
     let report = collect_suite(cli.smoke)?;
     if perf_case_filters().is_empty() {
         assert_full_coverage(&report.coverage)?;
+        assert_contract_coverage(&report.contract)?;
+        assert_case_metric_contract(&report.cases)?;
     }
 
     let comparison = if let Some(path) = cli.compare.as_ref() {
@@ -918,14 +1317,17 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
     let mut covered_stress = BTreeSet::new();
     let mut covered_bridges = BTreeSet::new();
 
-    if perf_case_prefix_allowed("cpu.system.") {
-        push_system_cases(&mut cases, smoke);
+    if perf_case_prefix_allowed("cpu.system.") || perf_case_prefix_allowed("gpu.system.") {
+        push_system_cases(&mut cases, smoke)?;
     }
     if perf_case_prefix_allowed("cpu.component.") {
         push_component_cases(&mut cases, smoke, &mut covered_components);
     }
     if perf_case_prefix_allowed("cpu.animation.") {
         push_animation_cases(&mut cases, smoke, &mut covered_animations);
+    }
+    if perf_case_prefix_allowed("gpu.animation.") {
+        push_gpu_animation_cases(&mut cases, smoke)?;
     }
     if perf_case_prefix_allowed("cpu.launch.") {
         push_launch_cases(&mut cases, smoke, &mut covered_launch)?;
@@ -938,6 +1340,9 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
     }
     if perf_case_prefix_allowed("gpu.scene.") {
         push_gpu_scene_cases(&mut cases, smoke, &mut covered_gpu_scenes)?;
+    }
+    if perf_case_prefix_allowed("gpu.journey.") {
+        push_gpu_journey_cases(&mut cases, smoke)?;
     }
     if perf_case_prefix_allowed("cpu.journey.") {
         push_journey_cases(&mut cases, smoke, &mut covered_journeys)?;
@@ -1061,6 +1466,18 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
       AuditFinding {
          status: String::from("fixed"),
          summary: String::from(
+            "oxide-ui-core ASCII wrapped labels now shape once for break decisions on cache misses and keep a current-vs-legacy wrapped-label A/B perf row.",
+         ),
+      },
+      AuditFinding {
+         status: String::from("fixed"),
+         summary: String::from(
+            "CollectionView variable measurement caches are now bounded and prune cold key/constraint/revision entries under large churn while preserving prefix-repair A/B coverage.",
+         ),
+      },
+      AuditFinding {
+         status: String::from("fixed"),
+         summary: String::from(
             "renderer-metal now batches consecutive rounded rectangles through the instanced shader path, reducing per-rect command encoding and parameter binding.",
          ),
       },
@@ -1082,12 +1499,6 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
             "The macOS glyph indirect-command-buffer path is now default-disabled because Metal validation exposed CPU access to private ICB storage and an invalid ICB pipeline configuration; restoring it with a truly valid text ICB path remains a high-value GPU follow-up.",
          ),
       },
-      AuditFinding {
-         status: String::from("candidate"),
-         summary: String::from(
-            "Label wrapping still re-shapes tentative strings per word and clones intermediate Strings, which is likely the next CPU hotspot for text-heavy wrapped layouts.",
-         ),
-      },
    ];
 
     Ok(PerfReport {
@@ -1103,6 +1514,7 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
 
 fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageReport {
     let has = |prefix: &str| cases.iter().any(|case| case.id.starts_with(prefix));
+    let has_case = |needle: &str| cases.iter().any(|case| case.id == needle);
     let layers = vec![
         contract_entry(
             "engine",
@@ -1124,13 +1536,9 @@ fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageRe
         contract_entry(
             "flow",
             "Representative Screen Flows",
-            if has("cpu.scene.") && has("gpu.scene.") && has("cpu.journey.") {
-                "implemented"
-            } else {
-                "partial"
-            },
+            "partial",
             vec![String::from(
-                "Flow coverage now spans offscreen launch/lifecycle, router scenes, and explicit user journeys, but hitch and device refresh-mode batteries are still incomplete.",
+                "Flow coverage now spans offscreen launch/lifecycle, router scenes, explicit CPU user journeys, and a macOS Metal collection-navigation journey frame-pacing row, but physical-device refresh-mode batteries remain incomplete.",
             )],
         ),
         contract_entry(
@@ -1142,7 +1550,6 @@ fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageRe
             )],
         ),
     ];
-    let has_case = |needle: &str| cases.iter().any(|case| case.id == needle);
     let has_all = |needles: &[&str]| needles.iter().all(|needle| has_case(needle));
     let battery = vec![
         contract_battery_entry(
@@ -1178,20 +1585,37 @@ fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageRe
                 "cpu.layout.flat_grid.rotation_relayout",
                 "cpu.layout.deep_stack.theme_swap",
                 "cpu.layout.grid.safe_area_swap",
+                "cpu.layout.dirty_subtree.incremental_relayout",
+                "cpu.layout.descendant_only.incremental_relayout",
+                "cpu.layout.transform_only.reposition",
+                "cpu.layout.paint_only.opacity_clip",
+                "cpu.layout.node_content_dirty.retained_replay",
+                "cpu.layout.non_draw_dirty.retained_reuse",
+                "cpu.layout.scoped_tree_mutation.add_remove",
             ]),
-            "Flat-grid rotation, deep-stack theme swap, and safe-area inset relayout batteries are all implemented.",
+            "Flat-grid rotation, deep-stack theme swap, safe-area inset relayout, dirty-subtree relayout, descendant-only relayout, transform-only reposition, paint-only opacity/clip, node content-dirty retained-replay, non-draw dirty retained-reuse, and scoped tree add/remove batteries are all implemented.",
             "Dedicated relayout batteries now exist, but not every required flat/deep/grid invalidation slice is present yet.",
         ),
         contract_battery_entry(
             "text-input",
             "Text & Text Input",
             has_all(&[
+                "cpu.system.text_atlas_pressure",
+                "cpu.system.text_atlas_dirty_rect_upload",
+                "cpu.system.text_fallback_label_encode",
+                "cpu.system.wrapped_label_cached_encode",
                 "cpu.text_input.large_editor.keystroke_burst",
                 "cpu.text_input.large_editor.paste_10kb",
                 "cpu.text_input.large_editor.selection_replace",
+                "cpu.text_input.ime.composition_commit_cycle",
+                "cpu.text_input.cursor_pick.cluster_map",
+                "cpu.text_input.cursor_pick.rtl_cluster_map",
+                "cpu.text_input.cursor_pick.fallback_cluster_map",
+                "cpu.text_input.cursor_pick.mixed_bidi_affinity",
+                "cpu.journey.text_ime_composition_cycle",
             ]),
-            "Large-editor keystroke, paste, and selection-replace workloads now complement the existing text-field and input-form coverage.",
-            "Text fields, wrapped labels, and the input-form journey are covered, but the full large-editor typing, paste, and selection battery is still incomplete.",
+            "Large-editor keystroke, paste, selection-replace, IME composition, LTR/RTL/fallback-font/mixed-bidi cursor-pick cluster-map, fallback-font label encoding, wrapped-label cache-miss fitting, atlas eviction pressure, and dirty-rect atlas upload workloads now complement the text-field and routed input-form coverage.",
+            "Text fields, wrapped labels, and the input-form journey are covered, but the full large-editor, IME composition, atlas eviction, and dirty-rect upload battery is still incomplete.",
         ),
         contract_battery_entry(
             "image-pipeline",
@@ -1229,10 +1653,16 @@ fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageRe
         contract_entry(
             "animation-effects",
             "Animation & Visual Effects",
-            "partial",
-            vec![String::from(
-                "Representative animations exist, but there is no dedicated hitch-ratio or refresh-mode matrix yet for 60 Hz versus native refresh.",
-            )],
+            if has_case("gpu.animation.effects.refresh_matrix") { "partial" } else { "missing" },
+            if has_case("gpu.animation.effects.refresh_matrix") {
+                vec![String::from(
+                    "A dedicated macOS Metal animation/effects refresh-matrix row now persists direct GPU, missed-frame, and hitch distributions; physical-device refresh-mode coverage remains pending.",
+                )]
+            } else {
+                vec![String::from(
+                    "Representative animations exist, but the dedicated hitch-ratio and refresh-mode matrix is absent.",
+                )]
+            },
         ),
         contract_battery_entry(
             "state-reconcile",
@@ -1328,7 +1758,7 @@ fn contract_battery_entry(
     )
 }
 
-fn push_system_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) {
+fn push_system_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) -> Result<()> {
     let prepare_template = build_prepare_drawlist();
     let prepare_template_legacy = build_prepare_drawlist();
     let coalesce_template = build_coalesce_items();
@@ -1470,6 +1900,258 @@ fn push_system_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) {
             move || run_text_shape_bake(),
         ));
     }
+
+    if perf_case_allowed("cpu.system.text_prefix_width_map") {
+        cases.push(text_prefix_width_map_case(smoke, text_loops));
+    }
+
+    if perf_case_allowed("cpu.system.text_fallback_label_encode") {
+        cases.push(text_fallback_label_encode_case(smoke, text_loops));
+    }
+
+    if perf_case_allowed("cpu.system.text_atlas_pressure") {
+        cases.push(text_atlas_pressure_case(smoke, text_loops));
+    }
+
+    if perf_case_allowed("cpu.system.text_atlas_dirty_rect_upload") {
+        cases.push(text_atlas_dirty_rect_upload_case(smoke, text_loops));
+    }
+
+    if perf_case_allowed("cpu.system.wrapped_label_cached_encode") {
+        cases.push(wrapped_label_cached_encode_case(smoke, text_loops));
+    }
+
+    if perf_case_allowed("cpu.system.wrapped_label_legacy_fit_shape") {
+        cases.push(wrapped_label_legacy_fit_shape_case(smoke, text_loops));
+    }
+
+    if perf_case_allowed("cpu.system.picker_text_cached_encode") {
+        cases.push(picker_text_cached_encode_case(smoke, text_loops));
+    }
+
+    if perf_case_allowed("cpu.system.picker_text_legacy_shape_upload") {
+        cases.push(picker_text_legacy_shape_upload_case(smoke, text_loops));
+    }
+
+    if perf_case_allowed("gpu.system.id_mask_compositor.current") {
+        cases.push(gpu_system_id_mask_compositor_case(
+            "gpu.system.id_mask_compositor.current",
+            true,
+            smoke,
+        )?);
+    }
+
+    if perf_case_allowed("gpu.system.id_mask_compositor.legacy_upload") {
+        cases.push(gpu_system_id_mask_compositor_case(
+            "gpu.system.id_mask_compositor.legacy_upload",
+            false,
+            smoke,
+        )?);
+    }
+
+    Ok(())
+}
+
+fn id_mask_perf_vertices(
+    cells: usize,
+    extent: f32,
+) -> Vec<metal::id_mask_compositor::IdMaskRasterVertex> {
+    let mut vertices = Vec::with_capacity(cells * cells * 6);
+    let step = extent / cells as f32;
+    let origin = -extent * 0.5;
+    for y in 0..cells {
+        for x in 0..cells {
+            let x0 = origin + x as f32 * step;
+            let y0 = origin + y as f32 * step;
+            let x1 = x0 + step;
+            let y1 = y0 + step;
+            let city = ((x + y) & 3) as u8;
+            let neighborhood = ((x * 3 + y * 5) & 31) as u8;
+            vertices.push(metal::id_mask_compositor::IdMaskRasterVertex::new(
+                [x0, y0],
+                city,
+                neighborhood,
+            ));
+            vertices.push(metal::id_mask_compositor::IdMaskRasterVertex::new(
+                [x1, y0],
+                city,
+                neighborhood,
+            ));
+            vertices.push(metal::id_mask_compositor::IdMaskRasterVertex::new(
+                [x0, y1],
+                city,
+                neighborhood,
+            ));
+            vertices.push(metal::id_mask_compositor::IdMaskRasterVertex::new(
+                [x1, y0],
+                city,
+                neighborhood,
+            ));
+            vertices.push(metal::id_mask_compositor::IdMaskRasterVertex::new(
+                [x1, y1],
+                city,
+                neighborhood,
+            ));
+            vertices.push(metal::id_mask_compositor::IdMaskRasterVertex::new(
+                [x0, y1],
+                city,
+                neighborhood,
+            ));
+        }
+    }
+    vertices
+}
+
+fn id_mask_perf_pass<'a>(
+    vertices: &'a [metal::id_mask_compositor::IdMaskRasterVertex],
+    revision: u64,
+) -> metal::id_mask_compositor::IdMaskGpuCompositorPass<'a> {
+    let city_styles = [
+        metal::id_mask_compositor::IdMaskCityStyle {
+            fill_rgb: [0.95, 0.26, 0.22],
+            edge_rgb: [0.58, 0.10, 0.10],
+            seam_rgb: [1.0, 0.78, 0.32],
+        },
+        metal::id_mask_compositor::IdMaskCityStyle {
+            fill_rgb: [0.15, 0.55, 0.95],
+            edge_rgb: [0.05, 0.18, 0.42],
+            seam_rgb: [0.70, 0.90, 1.0],
+        },
+        metal::id_mask_compositor::IdMaskCityStyle {
+            fill_rgb: [0.20, 0.72, 0.38],
+            edge_rgb: [0.06, 0.26, 0.11],
+            seam_rgb: [0.75, 1.0, 0.62],
+        },
+        metal::id_mask_compositor::IdMaskCityStyle {
+            fill_rgb: [0.72, 0.36, 0.92],
+            edge_rgb: [0.28, 0.12, 0.44],
+            seam_rgb: [0.94, 0.74, 1.0],
+        },
+    ];
+    let mut neighborhood_colors =
+        [[0.0_f32; 3]; metal::id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS];
+    for (index, color) in neighborhood_colors.iter_mut().enumerate() {
+        let t = index as f32 / metal::id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS as f32;
+        *color = [0.20 + t * 0.55, 0.34 + (1.0 - t) * 0.38, 0.52 + (t * 0.27)];
+    }
+
+    metal::id_mask_compositor::IdMaskGpuCompositorPass {
+        raster: metal::id_mask_compositor::IdMaskGpuRasterPass {
+            viewport: api::RectF::new(0.0, 0.0, 256.0, 256.0),
+            mask_width: 512,
+            mask_height: 512,
+            mask_scale: 2.0,
+            vertex_revision: revision,
+            vertices,
+            projection: metal::id_mask_compositor::IdMaskRasterProjection::screen_px(),
+        },
+        city_styles,
+        neighborhood_colors,
+        mode: metal::id_mask_compositor::IdMaskCompositorMode::Beauty,
+        glow_enabled: false,
+        darken_background_alpha: 0.0,
+        polish: metal::id_mask_compositor::IdMaskPolishConfig::default(),
+    }
+}
+
+fn last_metal_stats_after_submit(
+    renderer: &metal::MetalRenderer,
+    frame_id: u64,
+) -> metal::PerfStats {
+    let mut stats = renderer.last_stats();
+    for _ in 0..10 {
+        if stats.gpu_frame_id == frame_id {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+        stats = renderer.last_stats();
+    }
+    stats
+}
+
+fn gpu_system_id_mask_compositor_case(
+    id: &str,
+    stable_revision: bool,
+    smoke: bool,
+) -> Result<PerfCaseResult> {
+    let mut renderer =
+        Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
+    renderer.resize(512, 512, 2.0).context("resizing Metal renderer")?;
+    let vertices = id_mask_perf_vertices(if smoke { 40 } else { 72 }, 256.0);
+    let vertex_bytes =
+        vertices.len() * core::mem::size_of::<metal::id_mask_compositor::IdMaskRasterVertex>();
+    let warmups = 4;
+    let frames = if smoke { 8 } else { 24 };
+    let mut frame_samples = Vec::with_capacity(frames);
+    let mut encode_samples = Vec::with_capacity(frames);
+    let mut gpu_samples = Vec::with_capacity(frames);
+    let mut draws_sum = 0.0;
+    let mut skipped_sum = 0.0;
+
+    for index in 0..(warmups + frames) {
+        let revision = if stable_revision { 1 } else { index as u64 + 1 };
+        let pass = id_mask_perf_pass(&vertices, revision);
+        let frame_t0 = Instant::now();
+        let token = renderer.begin_frame(&api::FrameTarget, None);
+        let frame_id = token.0;
+        renderer
+            .encode_id_mask_gpu_compositor(&pass)
+            .with_context(|| format!("encoding {}", id))?;
+        renderer.submit(token).with_context(|| format!("submitting {}", id))?;
+        let frame_ms = frame_t0.elapsed().as_secs_f64() * 1000.0;
+        let stats = last_metal_stats_after_submit(&renderer, frame_id);
+        if index >= warmups {
+            frame_samples.push(frame_ms);
+            encode_samples.push(stats.encode_ms);
+            gpu_samples.push(stats.gpu_ms);
+            draws_sum += stats.draws as f64;
+            skipped_sum += stats.frame_backpressure_skipped as f64;
+        }
+    }
+
+    let summary = summarize(&frame_samples);
+    let (layer, scenario, variant, cache_state, refresh_mode) =
+        perf_case_contract_metadata(id, "system");
+    let mut metrics = BTreeMap::new();
+    metrics.insert(String::from("encode_ms_median"), summarize(&encode_samples).median);
+    metrics.insert(String::from("draws_avg"), draws_sum / frames as f64);
+    metrics.insert(String::from("frame_backpressure_skips"), skipped_sum);
+    insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+    insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+    insert_frame_pacing_metrics(&mut metrics, &frame_samples);
+    metrics.insert(String::from("vertex_count"), vertices.len() as f64);
+    metrics.insert(String::from("vertex_bytes"), vertex_bytes as f64);
+    metrics.insert(
+        String::from("revision_changes_per_frame"),
+        if stable_revision { 0.0 } else { 1.0 },
+    );
+
+    Ok(PerfCaseResult {
+        id: String::from(id),
+        family: String::from("system"),
+        layer: String::from(layer),
+        scenario: String::from(scenario),
+        variant: String::from(variant),
+        cache_state: String::from(cache_state),
+        refresh_mode: String::from(refresh_mode),
+        unit: String::from("ms/frame"),
+        gated: stable_revision,
+        threshold_pct: if stable_revision { 0.20 } else { 0.0 },
+        median: summary.median,
+        p95: summary.p95,
+        p99: summary.p99,
+        min: summary.min,
+        max: summary.max,
+        mean: summary.mean,
+        samples: frame_samples.len(),
+        ops_per_sample: 1,
+        notes: vec![if stable_revision {
+            String::from("Current macOS Metal id-mask compositor path with stable vertex_revision, proving cached raster vertex uploads.")
+        } else {
+            String::from("A/B baseline that changes vertex_revision every frame to force id-mask raster vertex uploads.")
+        }],
+        metrics,
+    })
 }
 
 fn push_component_cases(
@@ -1512,6 +2194,13 @@ fn push_animation_cases(
         };
         cases.push(case);
     }
+}
+
+fn push_gpu_animation_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) -> Result<()> {
+    if perf_case_allowed("gpu.animation.effects.refresh_matrix") {
+        cases.push(gpu_animation_effects_refresh_matrix_case(smoke)?);
+    }
+    Ok(())
 }
 
 fn push_launch_cases(
@@ -1606,6 +2295,7 @@ fn push_journey_cases(
         covered.insert(spec.name.to_string());
         let case = match spec.id {
             "cpu.journey.input_form_submit" => journey_input_form_case(smoke),
+            "cpu.journey.text_ime_composition_cycle" => journey_text_ime_composition_case(smoke),
             "cpu.journey.collection_navigation" => journey_collection_navigation_case(smoke),
             "cpu.journey.zoom_image_gesture_cycle" => journey_zoom_image_case(smoke),
             "cpu.journey.orchestration_transition_modal" => journey_orchestration_case(smoke),
@@ -1615,6 +2305,22 @@ fn push_journey_cases(
             other => bail!("unknown journey perf case `{}`", other),
         };
         cases.push(case?);
+    }
+    Ok(())
+}
+
+fn push_gpu_journey_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) -> Result<()> {
+    for spec in PERF_GPU_JOURNEY_SPECS {
+        if !perf_case_allowed(spec.id) {
+            continue;
+        }
+        let case = match spec.id {
+            "gpu.journey.collection_navigation.frame_pacing" => {
+                gpu_journey_collection_navigation_frame_pacing_case(smoke)?
+            }
+            other => bail!("unknown gpu journey perf case `{}`", other),
+        };
+        cases.push(case);
     }
     Ok(())
 }
@@ -1634,6 +2340,33 @@ fn push_authoring_cases(
             POPUP_WHEEL_PICKER_CASE_ID => authoring_popup_wheel_picker_case(smoke),
             "cpu.authoring.burst_emitter.sample" => authoring_burst_emitter_case(smoke),
             "cpu.authoring.surface_router.compose" => authoring_surface_router_case(smoke),
+            "cpu.authoring.surface_retained.clean_encode" => {
+                authoring_surface_retained_clean_encode_case(smoke)
+            }
+            "cpu.authoring.surface_retained.dirty_leaf_encode" => {
+                authoring_surface_retained_dirty_leaf_encode_case(smoke)
+            }
+            "cpu.authoring.surface_retained.text_atlas_context" => {
+                authoring_surface_retained_text_atlas_context_case(smoke)
+            }
+            "cpu.authoring.drawlist_text_replay.multi_atlas" => {
+                authoring_drawlist_text_replay_multi_atlas_case(smoke)
+            }
+            "cpu.authoring.collection_key_reconcile.indexed" => {
+                authoring_collection_key_reconcile_case(smoke, true)
+            }
+            "cpu.authoring.collection_key_reconcile.scan" => {
+                authoring_collection_key_reconcile_case(smoke, false)
+            }
+            "cpu.authoring.collection_measure_cache.bounded_churn" => {
+                authoring_collection_measure_cache_bounded_churn_case(smoke)
+            }
+            "cpu.authoring.collection_prefix_update.incremental" => {
+                authoring_collection_prefix_update_case(smoke, true)
+            }
+            "cpu.authoring.collection_prefix_update.full_scan" => {
+                authoring_collection_prefix_update_case(smoke, false)
+            }
             "gpu.authoring.scene3d.mixed_frame" => authoring_scene3d_mixed_frame_case(smoke)?,
             other => bail!("unknown authoring perf case `{}`", other),
         };
@@ -1656,6 +2389,23 @@ fn push_layout_cases(
             "cpu.layout.flat_grid.rotation_relayout" => layout_flat_grid_rotation_case(smoke),
             "cpu.layout.deep_stack.theme_swap" => layout_deep_stack_theme_swap_case(smoke),
             "cpu.layout.grid.safe_area_swap" => layout_grid_safe_area_case(smoke),
+            "cpu.layout.dirty_subtree.incremental_relayout" => {
+                layout_dirty_subtree_incremental_case(smoke)
+            }
+            "cpu.layout.descendant_only.incremental_relayout" => {
+                layout_descendant_only_incremental_case(smoke)
+            }
+            "cpu.layout.transform_only.reposition" => layout_transform_only_reposition_case(smoke),
+            "cpu.layout.paint_only.opacity_clip" => layout_paint_only_opacity_clip_case(smoke),
+            "cpu.layout.node_content_dirty.retained_replay" => {
+                layout_node_content_dirty_retained_replay_case(smoke)
+            }
+            "cpu.layout.non_draw_dirty.retained_reuse" => {
+                layout_non_draw_dirty_retained_reuse_case(smoke)
+            }
+            "cpu.layout.scoped_tree_mutation.add_remove" => {
+                layout_scoped_tree_mutation_add_remove_case(smoke)
+            }
             other => bail!("unknown layout perf case `{}`", other),
         };
         cases.push(case);
@@ -1680,6 +2430,19 @@ fn push_text_input_cases(
             "cpu.text_input.large_editor.paste_10kb" => text_input_large_editor_paste_case(smoke),
             "cpu.text_input.large_editor.selection_replace" => {
                 text_input_large_editor_selection_case(smoke)
+            }
+            "cpu.text_input.ime.composition_commit_cycle" => text_input_ime_composition_case(smoke),
+            "cpu.text_input.cursor_pick.cluster_map" => {
+                text_input_cursor_pick_cluster_map_case(smoke)
+            }
+            "cpu.text_input.cursor_pick.rtl_cluster_map" => {
+                text_input_cursor_pick_rtl_cluster_map_case(smoke)
+            }
+            "cpu.text_input.cursor_pick.fallback_cluster_map" => {
+                text_input_cursor_pick_fallback_cluster_map_case(smoke)
+            }
+            "cpu.text_input.cursor_pick.mixed_bidi_affinity" => {
+                text_input_cursor_pick_mixed_bidi_affinity_case(smoke)
             }
             other => bail!("unknown text-input perf case `{}`", other),
         };
@@ -3008,6 +3771,7 @@ fn gpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
     let mut frame_samples = Vec::with_capacity(frames);
     let mut draw_samples = Vec::with_capacity(frames);
     let mut encode_samples = Vec::with_capacity(frames);
+    let mut gpu_samples = Vec::with_capacity(frames);
     let mut draws_sum = 0.0f64;
     let mut instanced_sum = 0.0f64;
     let mut culled_sum = 0.0f64;
@@ -3028,15 +3792,18 @@ fn gpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
         } else {
             renderer.begin_frame(&api::FrameTarget, None)
         };
+        let frame_id = token.0;
         renderer.encode_pass(builder.drawlist());
         renderer
             .submit(token)
             .with_context(|| format!("submitting Metal frame for gpu.scene.{}.frame", spec.slug))?;
-        let stats = renderer.last_stats();
+        let frame_ms = frame_t0.elapsed().as_secs_f64() * 1000.0;
+        let stats = last_metal_stats_after_submit(&renderer, frame_id);
         if index >= warmups {
-            frame_samples.push(frame_t0.elapsed().as_secs_f64() * 1000.0);
+            frame_samples.push(frame_ms);
             draw_samples.push(draw_ms);
             encode_samples.push(stats.encode_ms);
+            gpu_samples.push(stats.gpu_ms);
             draws_sum += stats.draws as f64;
             instanced_sum += stats.instanced as f64;
             culled_sum += stats.culled as f64;
@@ -3048,6 +3815,9 @@ fn gpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
     let mut metrics = BTreeMap::new();
     metrics.insert(String::from("draw_ms_median"), summarize(&draw_samples).median);
     metrics.insert(String::from("encode_ms_median"), summarize(&encode_samples).median);
+    insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+    insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+    insert_frame_pacing_metrics(&mut metrics, &frame_samples);
     metrics.insert(String::from("draws_avg"), draws_sum / frames as f64);
     metrics.insert(String::from("instanced_avg"), instanced_sum / frames as f64);
     metrics.insert(String::from("culled_avg"), culled_sum / frames as f64);
@@ -3076,6 +3846,146 @@ fn gpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
         samples: frame_samples.len(),
         ops_per_sample: 1,
         notes: vec![format!("Metal scene frame for {}", spec.name)],
+        metrics,
+    })
+}
+
+fn gpu_animation_effects_refresh_matrix_case(smoke: bool) -> Result<PerfCaseResult> {
+    let spec = ScenePerfSpec { slug: "anim_timeline", name: "Animation Effects", index: 3 };
+    let mut case = gpu_scene_case(&spec, smoke)?;
+    case.id = String::from("gpu.animation.effects.refresh_matrix");
+    case.family = String::from("animation-effects");
+    case.layer = String::from("flow");
+    case.scenario = String::from("animation-effects");
+    case.variant = String::from("oxide-metal");
+    case.refresh_mode = String::from("60hz-and-120hz-budget");
+    case.threshold_pct = 0.35;
+    case.notes = vec![String::from(
+        "Dedicated Metal animation/effects frame-pacing row with direct GPU distribution plus 60 Hz and 120 Hz missed-frame and hitch metrics.",
+    )];
+    case.metrics.insert(String::from("refresh_matrix_rows"), 2.0);
+    Ok(case)
+}
+
+fn gpu_journey_collection_navigation_frame_pacing_case(smoke: bool) -> Result<PerfCaseResult> {
+    set_env_if_unset("OXIDE_ENABLE_DAMAGE", "1");
+    let damage_enabled = env_bool("OXIDE_PERF_DAMAGE_ENABLED", true);
+    let damage_use_thresh = env_f32("OXIDE_PERF_DAMAGE_USE_THRESH", DAMAGE_USE_THRESH);
+    let damage_prefilter_thresh =
+        env_f32("OXIDE_PERF_DAMAGE_PREFILTER_THRESH", DAMAGE_PREFILTER_THRESH);
+
+    let mut renderer =
+        Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
+    let w = PERF_SCENE_W;
+    let h = PERF_SCENE_H;
+    let scale = PERF_DEVICE_SCALE;
+    renderer.resize(w, h, scale).context("resizing Metal renderer")?;
+    renderer.set_damage_options(damage_enabled, damage_use_thresh, damage_prefilter_thresh);
+
+    let ptr: *mut metal::MetalRenderer = &mut *renderer;
+    let checker = gen_checker_rgba(512, 512);
+    let tex = unsafe { (*ptr).image_create_rgba8(512, 512, &checker, 512 * 4) };
+    let mut router = prepare_gpu_router(ptr, tex);
+    router.set_scene(4);
+
+    let mut builder = ui::DrawListBuilder::new();
+    let vp = api::RectF::new(0.0, 0.0, (w as f32) / scale, (h as f32) / scale);
+    let warmups = if smoke { 4 } else { 8 };
+    let frames = if smoke { 12 } else { 48 };
+    let mut now = timing::now_ms();
+    let mut frame_samples = Vec::with_capacity(frames);
+    let mut event_samples = Vec::with_capacity(frames);
+    let mut draw_samples = Vec::with_capacity(frames);
+    let mut encode_samples = Vec::with_capacity(frames);
+    let mut gpu_samples = Vec::with_capacity(frames);
+    let mut draws_sum = 0.0f64;
+    let mut damage_rects_sum = 0.0f64;
+    let mut skipped_sum = 0.0f64;
+    let mut navigation_events = 0.0f64;
+
+    for index in 0..(warmups + frames) {
+        let frame_t0 = Instant::now();
+        match index % 4 {
+            0 => router.key_arrow_right(),
+            1 => router.key_arrow_down(),
+            2 => router.key_arrow_down(),
+            _ => router.key_arrow_left(),
+        }
+        builder.clear();
+        now = now.saturating_add(16);
+        router.update(now, 16);
+        let draw_t0 = Instant::now();
+        router.draw(vp, scale, &mut builder);
+        ui::coalesce_adjacent_draws(builder.drawlist_mut());
+        let draw_ms = draw_t0.elapsed().as_secs_f64() * 1000.0;
+        let damage_rects = router.take_damage();
+        let damage_rect_count = damage_rects.len();
+        let damage = api::Damage { rects: damage_rects };
+        let token = if damage_enabled {
+            renderer.begin_frame(&api::FrameTarget, Some(&damage))
+        } else {
+            renderer.begin_frame(&api::FrameTarget, None)
+        };
+        let frame_id = token.0;
+        renderer.encode_pass(builder.drawlist());
+        renderer
+            .submit(token)
+            .context("submitting Metal frame for gpu.journey.collection_navigation.frame_pacing")?;
+        let event_ms = frame_t0.elapsed().as_secs_f64() * 1000.0;
+        let stats = last_metal_stats_after_submit(&renderer, frame_id);
+        if index >= warmups {
+            frame_samples.push(event_ms);
+            event_samples.push(event_ms);
+            draw_samples.push(draw_ms);
+            encode_samples.push(stats.encode_ms);
+            gpu_samples.push(stats.gpu_ms);
+            draws_sum += stats.draws as f64;
+            damage_rects_sum += damage_rect_count as f64;
+            skipped_sum += stats.frame_backpressure_skipped as f64;
+            navigation_events += 1.0;
+        }
+    }
+
+    let summary = summarize(&frame_samples);
+    let (layer, scenario, _, cache_state, _) =
+        perf_case_contract_metadata("gpu.journey.collection_navigation.frame_pacing", "journey");
+    let mut metrics = BTreeMap::new();
+    metrics.insert(String::from("draw_ms_median"), summarize(&draw_samples).median);
+    metrics.insert(String::from("encode_ms_median"), summarize(&encode_samples).median);
+    insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+    insert_distribution_metrics(&mut metrics, "event_to_visible_ms", &event_samples);
+    insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+    insert_frame_pacing_metrics(&mut metrics, &frame_samples);
+    metrics.insert(String::from("draws_avg"), draws_sum / frames as f64);
+    metrics.insert(String::from("damage_rects_avg"), damage_rects_sum / frames as f64);
+    metrics.insert(String::from("frame_backpressure_skips"), skipped_sum);
+    metrics.insert(String::from("navigation_events"), navigation_events);
+    metrics.insert(String::from("damage_enabled"), if damage_enabled { 1.0 } else { 0.0 });
+    metrics.insert(String::from("damage_use_thresh"), damage_use_thresh as f64);
+    metrics.insert(String::from("damage_prefilter_thresh"), damage_prefilter_thresh as f64);
+
+    Ok(PerfCaseResult {
+        id: String::from("gpu.journey.collection_navigation.frame_pacing"),
+        family: String::from("journey-gpu"),
+        layer: String::from(layer),
+        scenario: String::from(scenario),
+        variant: String::from("oxide-metal"),
+        cache_state: String::from(cache_state),
+        refresh_mode: String::from("60hz-and-120hz-budget"),
+        unit: String::from("ms/frame"),
+        gated: true,
+        threshold_pct: 0.45,
+        median: summary.median,
+        p95: summary.p95,
+        p99: summary.p99,
+        min: summary.min,
+        max: summary.max,
+        mean: summary.mean,
+        samples: frame_samples.len(),
+        ops_per_sample: 1,
+        notes: vec![String::from(
+            "Metal collection-navigation journey row with event-to-visible, direct GPU, missed-frame, and hitch distributions.",
+        )],
         metrics,
     })
 }
@@ -3115,6 +4025,38 @@ fn journey_input_form_case(smoke: bool) -> Result<PerfCaseResult> {
                 repeat: false,
                 modifiers: platform::Modifiers::empty(),
             });
+            router.input_hide_ime();
+
+            work + advance_cpu_router_frame(&mut router, &mut builder, vp, &mut now)
+        },
+    )
+}
+
+fn journey_text_ime_composition_case(smoke: bool) -> Result<PerfCaseResult> {
+    measure_journey_case(
+        "cpu.journey.text_ime_composition_cycle",
+        smoke,
+        0.15,
+        vec![String::from(
+            "Input scene IME composition, marked-text update, commit, selection sync, keyboard hide, and composed redraw.",
+        )],
+        move || {
+            let mut router = prepare_cpu_router();
+            router.set_scene(6);
+            let mut builder = ui::DrawListBuilder::new();
+            let vp = perf_viewport();
+            let mut now = timing::now_ms();
+            let work = advance_cpu_router_frame(&mut router, &mut builder, vp, &mut now);
+
+            router.input_pointer(72.0, 108.0, 0.0, 0.0, 1);
+            router.input_pointer(72.0, 108.0, 0.0, 0.0, 0);
+            router.input_set_selection(0, 0);
+            router.input_set_composition(0, 0, "に");
+            router.input_set_composition(0, 0, "日本");
+            router.input_commit("日本語");
+            router.input_set_selection(0, 3);
+            router.input_set_composition(0, 3, "かな");
+            router.input_commit("かな入力");
             router.input_hide_ime();
 
             work + advance_cpu_router_frame(&mut router, &mut builder, vp, &mut now)
@@ -3348,7 +4290,19 @@ fn authoring_burst_emitter_case(smoke: bool) -> PerfCaseResult {
 fn authoring_surface_router_case(smoke: bool) -> PerfCaseResult {
     let loops = if smoke { 8 } else { 32 };
     let viewport = api::RectF::new(0.0, 0.0, 240.0, 240.0);
-    measure_cpu_case(
+    let current_reused = Arc::new(AtomicU64::new(0));
+    let current_rebuilt = Arc::new(AtomicU64::new(0));
+    let overlay_reused = Arc::new(AtomicU64::new(0));
+    let overlay_rebuilt = Arc::new(AtomicU64::new(0));
+    let popup_reused = Arc::new(AtomicU64::new(0));
+    let popup_rebuilt = Arc::new(AtomicU64::new(0));
+    let current_reused_for_run = Arc::clone(&current_reused);
+    let current_rebuilt_for_run = Arc::clone(&current_rebuilt);
+    let overlay_reused_for_run = Arc::clone(&overlay_reused);
+    let overlay_rebuilt_for_run = Arc::clone(&overlay_rebuilt);
+    let popup_reused_for_run = Arc::clone(&popup_reused);
+    let popup_rebuilt_for_run = Arc::clone(&popup_rebuilt);
+    let mut case = measure_cpu_case(
         "cpu.authoring.surface_router.compose",
         "authoring",
         smoke,
@@ -3444,6 +4398,15 @@ fn authoring_surface_router_case(smoke: bool) -> PerfCaseResult {
 
             let mut builder = ui::DrawListBuilder::new();
             router.encode_with_overlays(viewport, 1.0, &mut builder);
+            builder.clear();
+            router.encode_with_overlays(viewport, 1.0, &mut builder);
+            let retained = router.retained_composition_stats();
+            current_reused_for_run.fetch_add(retained.current_reused as u64, Ordering::Relaxed);
+            current_rebuilt_for_run.fetch_add(retained.current_rebuilt as u64, Ordering::Relaxed);
+            overlay_reused_for_run.fetch_add(retained.overlay_reused as u64, Ordering::Relaxed);
+            overlay_rebuilt_for_run.fetch_add(retained.overlay_rebuilt as u64, Ordering::Relaxed);
+            popup_reused_for_run.fetch_add(retained.popup_reused as u64, Ordering::Relaxed);
+            popup_rebuilt_for_run.fetch_add(retained.popup_rebuilt as u64, Ordering::Relaxed);
             let capture = router.capture(viewport, 1.0);
             let mut hits = 0u64;
             router.pointer_event(20.0, 20.0, 1, |_, _| hits = hits.saturating_add(1));
@@ -3491,7 +4454,512 @@ fn authoring_surface_router_case(smoke: bool) -> PerfCaseResult {
                 + manual_dismissed
                 + hits
         },
-    )
+    );
+    case.metrics.insert(
+        String::from("router_current_reused_total"),
+        current_reused.load(Ordering::Relaxed) as f64,
+    );
+    case.metrics.insert(
+        String::from("router_current_rebuilt_total"),
+        current_rebuilt.load(Ordering::Relaxed) as f64,
+    );
+    case.metrics.insert(
+        String::from("router_overlay_reused_total"),
+        overlay_reused.load(Ordering::Relaxed) as f64,
+    );
+    case.metrics.insert(
+        String::from("router_overlay_rebuilt_total"),
+        overlay_rebuilt.load(Ordering::Relaxed) as f64,
+    );
+    case.metrics.insert(
+        String::from("router_popup_reused_total"),
+        popup_reused.load(Ordering::Relaxed) as f64,
+    );
+    case.metrics.insert(
+        String::from("router_popup_rebuilt_total"),
+        popup_rebuilt.load(Ordering::Relaxed) as f64,
+    );
+    case
+}
+
+fn authoring_collection_key_reconcile_case(smoke: bool, indexed: bool) -> PerfCaseResult {
+    let loops = if smoke { 64 } else { 256 };
+    let item_key_queries = Arc::new(AtomicU64::new(0));
+    let key_index_queries = Arc::new(AtomicU64::new(0));
+    let key_index_hits = Arc::new(AtomicU64::new(0));
+    let mut measure = KeyReconcileMeasure::new(
+        256,
+        indexed,
+        Arc::clone(&item_key_queries),
+        Arc::clone(&key_index_queries),
+        Arc::clone(&key_index_hits),
+    );
+    let mut collection =
+        ui::collection::CollectionView::new(ui::collection::CollectionMode::VerticalGrid {
+            col_width: 80.0,
+            spacing: 4.0,
+        });
+    collection.set_count(256);
+    let mut render = KeyReconcileRender;
+    let mut builder = ui::DrawListBuilder::new();
+    let viewport = api::RectF::new(0.0, 0.0, 100.0, 180.0);
+    let id = if indexed {
+        "cpu.authoring.collection_key_reconcile.indexed"
+    } else {
+        "cpu.authoring.collection_key_reconcile.scan"
+    };
+    let note = if indexed {
+        "Keyed CollectionView focus reconciliation using Measure::item_index_for_key after a far reorder."
+    } else {
+        "Keyed CollectionView focus reconciliation using the legacy item_key scan fallback after a far reorder."
+    };
+    let mut case = measure_cpu_case(
+        id,
+        "authoring",
+        smoke,
+        true,
+        0.20,
+        loops,
+        vec![String::from(note)],
+        || {
+            builder.clear();
+            collection.focus_set_key(Some(200), Some(ui::collection::ItemKey(200)));
+            collection.layout_and_render(viewport, &mut measure, &mut render, &mut builder);
+            collection.focus().unwrap_or_default() as u64
+                + builder.drawlist().items.len() as u64
+                + builder.drawlist().vertices.len() as u64
+        },
+    );
+    let item_key_total = item_key_queries.load(Ordering::Relaxed);
+    let index_query_total = key_index_queries.load(Ordering::Relaxed);
+    let index_hit_total = key_index_hits.load(Ordering::Relaxed);
+    case.metrics.insert(String::from("collection_item_key_queries_total"), item_key_total as f64);
+    case.metrics
+        .insert(String::from("collection_key_index_queries_total"), index_query_total as f64);
+    case.metrics.insert(String::from("collection_key_index_hits_total"), index_hit_total as f64);
+    case.metrics.insert(
+        String::from("collection_item_key_queries_per_lookup"),
+        item_key_total as f64 / index_query_total.max(1) as f64,
+    );
+    case.metrics
+        .insert(String::from("collection_key_index_enabled"), if indexed { 1.0 } else { 0.0 });
+    case.metrics.insert(String::from("collection_count"), 256.0);
+    case.metrics.insert(String::from("collection_reconciled_index"), 220.0);
+    case
+}
+
+fn authoring_collection_measure_cache_bounded_churn_case(smoke: bool) -> PerfCaseResult {
+    let loops = 1;
+    let count = 20_000usize;
+    let mut op_total = 0u64;
+    let mut initial_total = 0u64;
+    let mut repair_total = 0u64;
+    let mut repair_draw_total = 0u64;
+    let mut content_h_total = 0u64;
+    let mut case = measure_cpu_case(
+        "cpu.authoring.collection_measure_cache.bounded_churn",
+        "authoring",
+        smoke,
+        true,
+        0.25,
+        loops,
+        vec![String::from(
+            "Large variable CollectionView grid proves bounded measurement-cache repair after cold key churn.",
+        )],
+        || {
+            let stats = run_collection_measure_cache_bounded_churn(count);
+            op_total = op_total.saturating_add(1);
+            initial_total = initial_total.saturating_add(stats.initial_measure_calls);
+            repair_total = repair_total.saturating_add(stats.repair_measure_calls);
+            repair_draw_total = repair_draw_total.saturating_add(stats.repair_draw_items);
+            content_h_total = content_h_total.saturating_add(stats.content_h);
+            stats.checksum
+        },
+    );
+    let measured_ops = op_total.max(1);
+    let initial_per_op = initial_total as f64 / measured_ops as f64;
+    let repair_per_op = repair_total as f64 / measured_ops as f64;
+    case.metrics.insert(String::from("collection_count"), count as f64);
+    case.metrics
+        .insert(String::from("collection_measure_cache_churn_ops_total"), measured_ops as f64);
+    case.metrics.insert(String::from("collection_initial_measure_calls_per_op"), initial_per_op);
+    case.metrics.insert(String::from("collection_repair_measure_calls_per_op"), repair_per_op);
+    case.metrics.insert(
+        String::from("collection_repair_to_initial_measure_ratio"),
+        repair_per_op / initial_per_op.max(1.0),
+    );
+    case.metrics.insert(
+        String::from("collection_repair_draw_items_per_op"),
+        repair_draw_total as f64 / measured_ops as f64,
+    );
+    case.metrics.insert(
+        String::from("collection_content_h_per_op"),
+        content_h_total as f64 / measured_ops as f64,
+    );
+    case
+}
+
+fn run_collection_measure_cache_bounded_churn(count: usize) -> CollectionMeasureCacheChurnStats {
+    let mut collection =
+        ui::collection::CollectionView::new(ui::collection::CollectionMode::VerticalGrid {
+            col_width: 50.0,
+            spacing: 4.0,
+        });
+    collection.set_count(count);
+    let mut measure = CollectionMeasureCacheChurnMeasure { calls: 0 };
+    let mut render = GridRender;
+    let mut builder = ui::DrawListBuilder::new();
+    let viewport = api::RectF::new(0.0, 0.0, 120.0, 140.0);
+    let initial = collection.layout_and_render(viewport, &mut measure, &mut render, &mut builder);
+    let initial_measure_calls = measure.calls;
+    measure.calls = 0;
+    builder.clear();
+    collection.set_scroll(42_000.0);
+    let repaired = collection.layout_and_render(viewport, &mut measure, &mut render, &mut builder);
+    let repair_measure_calls = measure.calls;
+    let repair_draw_items = builder.drawlist().items.len() as u64;
+    let content_h = repaired.content_h.max(initial.content_h).round().max(0.0) as u64;
+    CollectionMeasureCacheChurnStats {
+        checksum: initial_measure_calls
+            .wrapping_add(repair_measure_calls)
+            .wrapping_add(repair_draw_items)
+            .wrapping_add(content_h),
+        initial_measure_calls,
+        repair_measure_calls,
+        repair_draw_items,
+        content_h,
+    }
+}
+
+fn authoring_collection_prefix_update_case(smoke: bool, incremental: bool) -> PerfCaseResult {
+    let loops = if smoke { 16 } else { 64 };
+    let count = 4_096usize;
+    let changed_index = 4_000usize;
+    let measure_calls = Arc::new(AtomicU64::new(0));
+    let revision_queries = Arc::new(AtomicU64::new(0));
+    let ops = Arc::new(AtomicU64::new(0));
+    let mut measure = PrefixUpdateMeasure::new(
+        count,
+        changed_index,
+        incremental,
+        Arc::clone(&measure_calls),
+        Arc::clone(&revision_queries),
+    );
+    let mut collection =
+        ui::collection::CollectionView::new(ui::collection::CollectionMode::VerticalGrid {
+            col_width: 104.0,
+            spacing: 8.0,
+        });
+    collection.set_count(count);
+    let mut render = KeyReconcileRender;
+    let mut builder = ui::DrawListBuilder::new();
+    let viewport = api::RectF::new(0.0, 0.0, 360.0, 640.0);
+    collection.layout_and_render(viewport, &mut measure, &mut render, &mut builder);
+    measure_calls.store(0, Ordering::Relaxed);
+    revision_queries.store(0, Ordering::Relaxed);
+    let id = if incremental {
+        "cpu.authoring.collection_prefix_update.incremental"
+    } else {
+        "cpu.authoring.collection_prefix_update.full_scan"
+    };
+    let note = if incremental {
+        "Variable CollectionView prefix repair with Measure::changed_item_range after one tail item revision."
+    } else {
+        "Variable CollectionView prefix repair through the full item-revision scan fallback after one tail item revision."
+    };
+    let mut case = measure_cpu_case(
+        id,
+        "authoring",
+        smoke,
+        true,
+        0.20,
+        loops,
+        vec![String::from(note)],
+        || {
+            builder.clear();
+            measure.bump_revision();
+            ops.fetch_add(1, Ordering::Relaxed);
+            let metrics =
+                collection.layout_and_render(viewport, &mut measure, &mut render, &mut builder);
+            builder.drawlist().items.len() as u64
+                + builder.drawlist().vertices.len() as u64
+                + metrics.content_h.round().max(0.0) as u64
+        },
+    );
+    let op_total = ops.load(Ordering::Relaxed).max(1);
+    let revision_query_total = revision_queries.load(Ordering::Relaxed);
+    case.metrics.insert(String::from("collection_count"), count as f64);
+    case.metrics.insert(String::from("collection_changed_index"), changed_index as f64);
+    case.metrics.insert(
+        String::from("collection_changed_range_enabled"),
+        if incremental { 1.0 } else { 0.0 },
+    );
+    case.metrics.insert(String::from("collection_prefix_update_ops_total"), op_total as f64);
+    case.metrics.insert(
+        String::from("collection_measure_calls_total"),
+        measure_calls.load(Ordering::Relaxed) as f64,
+    );
+    case.metrics.insert(
+        String::from("collection_item_revision_queries_total"),
+        revision_query_total as f64,
+    );
+    case.metrics.insert(
+        String::from("collection_item_revision_queries_per_op"),
+        revision_query_total as f64 / op_total as f64,
+    );
+    case
+}
+
+fn authoring_surface_retained_clean_encode_case(smoke: bool) -> PerfCaseResult {
+    let loops = if smoke { 16 } else { 64 };
+    let mut surface = ui::UiSurface::new(flat_rect_surface_root_style(420.0));
+    populate_flat_rect_surface(&mut surface, 1_000, 0);
+    surface.layout(420.0, 760.0);
+    let mut warm = ui::DrawListBuilder::new();
+    let _ = surface.encode_retained(&mut warm);
+    let cached_draws = warm.drawlist().items.len() as u64;
+    let cached_vertices = warm.drawlist().vertices.len() as u64;
+    let cached_indices = warm.drawlist().indices.len() as u64;
+    let mut builder = ui::DrawListBuilder::new();
+    let mut reused = 0u64;
+    let mut rebuilt = 0u64;
+    let mut case = measure_cpu_case(
+        "cpu.authoring.surface_retained.clean_encode",
+        "authoring",
+        smoke,
+        true,
+        0.16,
+        loops,
+        vec![String::from(
+            "Clean retained UiSurface encode over a 1000-node flat-rect tree; expected path replays the cached draw list without tree traversal.",
+        )],
+        || {
+            builder.clear();
+            match surface.encode_retained(&mut builder) {
+                ui::RetainedDrawStatus::Reused => {
+                    reused = reused.saturating_add(1);
+                }
+                ui::RetainedDrawStatus::Rebuilt => {
+                    rebuilt = rebuilt.saturating_add(1);
+                }
+            }
+            let dl = builder.drawlist();
+            (dl.items.len() as u64)
+                .saturating_add(dl.vertices.len() as u64)
+                .saturating_add(dl.indices.len() as u64)
+        },
+    );
+    let total = reused.saturating_add(rebuilt).max(1);
+    case.metrics.insert(String::from("retained_reused_ops"), reused as f64);
+    case.metrics.insert(String::from("retained_rebuilt_ops"), rebuilt as f64);
+    case.metrics.insert(String::from("retained_reuse_ratio"), reused as f64 / total as f64);
+    case.metrics.insert(String::from("draw_items"), cached_draws as f64);
+    case.metrics.insert(String::from("vertex_count"), cached_vertices as f64);
+    case.metrics.insert(String::from("index_count"), cached_indices as f64);
+    case
+}
+
+fn authoring_surface_retained_dirty_leaf_encode_case(smoke: bool) -> PerfCaseResult {
+    let loops = if smoke { 8 } else { 32 };
+    let mut surface = ui::UiSurface::new(flat_rect_surface_root_style(420.0));
+    let nodes = populate_flat_rect_surface(&mut surface, 1_000, 0);
+    surface.layout(420.0, 760.0);
+    let mut warm = ui::DrawListBuilder::new();
+    let _ = surface.encode_retained(&mut warm);
+    let cached_draws = warm.drawlist().items.len() as u64;
+    let cached_vertices = warm.drawlist().vertices.len() as u64;
+    let cached_indices = warm.drawlist().indices.len() as u64;
+    let mut builder = ui::DrawListBuilder::new();
+    let mut step = 0usize;
+    let mut ops = 0u64;
+    let mut reused_nodes = 0u64;
+    let mut rebuilt_nodes = 0u64;
+    let mut case = measure_cpu_case(
+        "cpu.authoring.surface_retained.dirty_leaf_encode",
+        "authoring",
+        smoke,
+        true,
+        0.18,
+        loops,
+        vec![String::from(
+            "Dirty-leaf retained UiSurface encode over a 1000-node flat-rect tree; expected path rebuilds the changed leaf/ancestors while replaying clean sibling subtrees.",
+        )],
+        || {
+            let target = nodes.cells[step % nodes.cells.len()];
+            step = step.wrapping_add(1);
+            surface.edit_style(target, |style| {
+                let phase = (step % 31) as f32 / 31.0;
+                style.background = api::Color::rgba(0.92, 0.18 + phase * 0.42, 0.22, 1.0);
+            });
+            surface.layout(420.0, 760.0);
+            builder.clear();
+            let _ = surface.encode_retained(&mut builder);
+            let stats = surface.retained_node_stats();
+            reused_nodes = reused_nodes.saturating_add(stats.reused_nodes as u64);
+            rebuilt_nodes = rebuilt_nodes.saturating_add(stats.rebuilt_nodes as u64);
+            ops = ops.saturating_add(1);
+            let dl = builder.drawlist();
+            (dl.items.len() as u64)
+                .saturating_add(dl.vertices.len() as u64)
+                .saturating_add(dl.indices.len() as u64)
+                .saturating_add(stats.reused_nodes as u64)
+        },
+    );
+    let total_nodes = reused_nodes.saturating_add(rebuilt_nodes).max(1);
+    let total_ops = ops.max(1);
+    case.metrics.insert(
+        String::from("retained_reused_nodes_per_op"),
+        reused_nodes as f64 / total_ops as f64,
+    );
+    case.metrics.insert(
+        String::from("retained_rebuilt_nodes_per_op"),
+        rebuilt_nodes as f64 / total_ops as f64,
+    );
+    case.metrics.insert(
+        String::from("retained_node_reuse_ratio"),
+        reused_nodes as f64 / total_nodes as f64,
+    );
+    case.metrics.insert(String::from("dirty_nodes"), 1.0);
+    case.metrics.insert(String::from("tracked_nodes"), nodes.cells.len() as f64);
+    case.metrics.insert(String::from("draw_items"), cached_draws as f64);
+    case.metrics.insert(String::from("vertex_count"), cached_vertices as f64);
+    case.metrics.insert(String::from("index_count"), cached_indices as f64);
+    case
+}
+
+fn authoring_surface_retained_text_atlas_context_case(smoke: bool) -> PerfCaseResult {
+    let loops = if smoke { 16 } else { 64 };
+    let mut surface = ui::UiSurface::new(flat_rect_surface_root_style(420.0));
+    populate_flat_rect_surface(&mut surface, 1_000, 0);
+    surface.layout(420.0, 760.0);
+    let mut text = perf_text_ctx();
+    let mut text_uploader = CpuUploader::default();
+    let mut text_builder = ui::DrawListBuilder::new();
+    let seed_label = ui::elements::Label {
+        text: String::from("Retained text atlas context"),
+        color: api::Color::rgba(0.12, 0.16, 0.20, 1.0),
+        align: ui::elements::Align::Left,
+        wrap: false,
+        font_id: 0,
+        font_px: 14.0,
+    };
+    seed_label.encode(
+        api::RectF::new(0.0, 0.0, 260.0, 32.0),
+        2.0,
+        &mut text,
+        &mut text_uploader,
+        &mut text_builder,
+    );
+    let text_atlas_ready = text.retained_text_atlas_revision().is_some();
+    let mut warm = ui::DrawListBuilder::new();
+    let _ = surface.encode_retained_with_text_ctx(&mut warm, &text);
+    let cached_draws = warm.drawlist().items.len() as u64;
+    let cached_vertices = warm.drawlist().vertices.len() as u64;
+    let cached_indices = warm.drawlist().indices.len() as u64;
+    let mut builder = ui::DrawListBuilder::new();
+    let mut reused = 0u64;
+    let mut rebuilt = 0u64;
+    let mut case = measure_cpu_case(
+        "cpu.authoring.surface_retained.text_atlas_context",
+        "authoring",
+        smoke,
+        true,
+        0.16,
+        loops,
+        vec![String::from(
+            "Clean retained UiSurface encode through the explicit text-atlas revision context path; expected path replays cached surface draws while validating current atlas revisions.",
+        )],
+        || {
+            builder.clear();
+            match surface.encode_retained_with_text_ctx(&mut builder, &text) {
+                ui::RetainedDrawStatus::Reused => {
+                    reused = reused.saturating_add(1);
+                }
+                ui::RetainedDrawStatus::Rebuilt => {
+                    rebuilt = rebuilt.saturating_add(1);
+                }
+            }
+            let dl = builder.drawlist();
+            (dl.items.len() as u64)
+                .saturating_add(dl.vertices.len() as u64)
+                .saturating_add(dl.indices.len() as u64)
+        },
+    );
+    let total = reused.saturating_add(rebuilt).max(1);
+    case.metrics.insert(String::from("retained_reused_ops"), reused as f64);
+    case.metrics.insert(String::from("retained_rebuilt_ops"), rebuilt as f64);
+    case.metrics.insert(String::from("retained_reuse_ratio"), reused as f64 / total as f64);
+    case.metrics
+        .insert(String::from("text_atlases_checked"), if text_atlas_ready { 1.0 } else { 0.0 });
+    case.metrics.insert(String::from("draw_items"), cached_draws as f64);
+    case.metrics.insert(String::from("vertex_count"), cached_vertices as f64);
+    case.metrics.insert(String::from("index_count"), cached_indices as f64);
+    case
+}
+
+fn authoring_drawlist_text_replay_multi_atlas_case(smoke: bool) -> PerfCaseResult {
+    let loops = if smoke { 64 } else { 256 };
+    let cached = authoring_text_replay_drawlist();
+    let atlases = [(api::ImageHandle(4), 3), (api::ImageHandle(9), 7)];
+    let mut builder = ui::DrawListBuilder::new();
+    let mut accepted = 0u64;
+    let mut case = measure_cpu_case(
+        "cpu.authoring.drawlist_text_replay.multi_atlas",
+        "authoring",
+        smoke,
+        true,
+        0.12,
+        loops,
+        vec![String::from(
+            "Public cached draw-list replay with explicit text-atlas revision checks for a multi-atlas glyph drawlist.",
+        )],
+        || {
+            builder.clear();
+            if builder.append_retained_drawlist_with_text_atlas_revisions(&cached, &atlases) {
+                accepted = accepted.saturating_add(1);
+            }
+            let dl = builder.drawlist();
+            (dl.items.len() as u64)
+                .saturating_add(dl.vertices.len() as u64)
+                .saturating_add(dl.indices.len() as u64)
+        },
+    );
+    case.metrics.insert(String::from("text_atlases_checked"), atlases.len() as f64);
+    case.metrics.insert(String::from("glyph_runs_replayed"), cached.items.len() as f64);
+    case.metrics.insert(String::from("accepted_replays"), accepted as f64);
+    case
+}
+
+fn authoring_text_replay_drawlist() -> api::DrawList {
+    let mut cached = api::DrawList::default();
+    cached.vertices.extend_from_slice(&[
+        api::Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: u32::MAX },
+        api::Vertex { x: 1.0, y: 0.0, u: 1.0, v: 0.0, rgba: u32::MAX },
+        api::Vertex { x: 0.0, y: 1.0, u: 0.0, v: 1.0, rgba: u32::MAX },
+        api::Vertex { x: 1.0, y: 1.0, u: 1.0, v: 1.0, rgba: u32::MAX },
+    ]);
+    cached.indices.extend_from_slice(&[0, 1, 2, 2, 1, 3]);
+    cached.items.push(api::DrawCmd::GlyphRun {
+        run: api::GlyphRun {
+            atlas: api::ImageHandle(4),
+            atlas_revision: 3,
+            vb: api::VertexSpan { offset: 0, len: 4 },
+            ib: api::IndexSpan { offset: 0, len: 6 },
+            sdf: false,
+            color: api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+        },
+    });
+    cached.items.push(api::DrawCmd::GlyphRun {
+        run: api::GlyphRun {
+            atlas: api::ImageHandle(9),
+            atlas_revision: 7,
+            vb: api::VertexSpan { offset: 0, len: 4 },
+            ib: api::IndexSpan { offset: 0, len: 6 },
+            sdf: true,
+            color: api::Color::rgba(0.8, 0.9, 1.0, 1.0),
+        },
+    });
+    cached
 }
 
 fn authoring_scene3d_identity() -> metal::scene3d::Mat4 {
@@ -3561,20 +5029,24 @@ fn authoring_scene3d_mixed_frame_case(smoke: bool) -> Result<PerfCaseResult> {
     let frames = if smoke { 6 } else { 12 };
     let mut frame_samples = Vec::with_capacity(frames);
     let mut encode_samples = Vec::with_capacity(frames);
+    let mut gpu_samples = Vec::with_capacity(frames);
     let mut draws_sum = 0.0;
 
     for index in 0..(warmups + frames) {
         let frame_t0 = Instant::now();
         let token = renderer.begin_frame(&api::FrameTarget, None);
+        let frame_id = token.0;
         renderer
             .encode_scene3d(&scene)
             .with_context(|| "encoding authoring scene3d mixed frame")?;
         renderer.encode_pass(&overlay);
         renderer.submit(token).with_context(|| "submitting authoring scene3d mixed frame")?;
-        let stats = renderer.last_stats();
+        let frame_ms = frame_t0.elapsed().as_secs_f64() * 1000.0;
+        let stats = last_metal_stats_after_submit(&renderer, frame_id);
         if index >= warmups {
-            frame_samples.push(frame_t0.elapsed().as_secs_f64() * 1000.0);
+            frame_samples.push(frame_ms);
             encode_samples.push(stats.encode_ms);
+            gpu_samples.push(stats.gpu_ms);
             draws_sum += stats.draws as f64;
         }
     }
@@ -3588,6 +5060,9 @@ fn authoring_scene3d_mixed_frame_case(smoke: bool) -> Result<PerfCaseResult> {
     let mut metrics = BTreeMap::new();
     metrics.insert(String::from("draws_avg"), draws_sum / frames as f64);
     metrics.insert(String::from("encode_ms_median"), summarize(&encode_samples).median);
+    insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+    insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+    insert_frame_pacing_metrics(&mut metrics, &frame_samples);
     metrics
         .insert(String::from("mesh_vertices"), (fill_vertices.len() + line_vertices.len()) as f64);
     metrics.insert(String::from("mesh_indices"), (fill_indices.len() + line_indices.len()) as f64);
@@ -3846,6 +5321,617 @@ fn layout_grid_safe_area_case(smoke: bool) -> PerfCaseResult {
     case
 }
 
+fn layout_dirty_subtree_incremental_case(smoke: bool) -> PerfCaseResult {
+    let loops = layout_case_iterations(smoke);
+    let mut surface = ui::UiSurface::new(flat_rect_surface_root_style(420.0));
+    let nodes = populate_flat_rect_surface(&mut surface, 1_000, 0);
+    let cold = surface.layout(420.0, 760.0);
+    let mut step = 0usize;
+    let mut ops = 0u64;
+    let mut visited_nodes = 0u64;
+    let mut skipped_subtrees = 0u64;
+    let mut layout_updates = 0u64;
+    let mut measured_children = 0u64;
+    let mut case = measure_cpu_case(
+        "cpu.layout.dirty_subtree.incremental_relayout",
+        "layout",
+        smoke,
+        true,
+        0.18,
+        loops,
+        vec![String::from(
+            "One-cell layout mutation over a 1000-node retained surface; clean sibling rows should skip through per-node layout dirtiness.",
+        )],
+        || {
+            let target = nodes.cells[step % nodes.cells.len()];
+            let width = 29.0 + (step % 7) as f32;
+            step = step.wrapping_add(1);
+            let _ = surface.edit_style(target, |style| {
+                style.size.w = ui::Dim::Px(width);
+            });
+            let stats = surface.layout(420.0, 760.0);
+            ops = ops.saturating_add(1);
+            visited_nodes = visited_nodes.saturating_add(stats.visited_nodes as u64);
+            skipped_subtrees = skipped_subtrees.saturating_add(stats.skipped_subtrees as u64);
+            layout_updates = layout_updates.saturating_add(stats.layout_updates as u64);
+            measured_children = measured_children.saturating_add(stats.measured_children as u64);
+            stats.visited_nodes as u64
+                + stats.skipped_subtrees as u64
+                + stats.layout_updates as u64
+                + stats.measured_children as u64
+        },
+    );
+    let total_ops = ops.max(1) as f64;
+    case.metrics.insert(String::from("dirty_nodes"), 1.0);
+    case.metrics.insert(String::from("layout_passes"), 1.0);
+    case.metrics.insert(String::from("layout_ops_sampled"), ops as f64);
+    case.metrics.insert(String::from("cold_visited_nodes"), cold.visited_nodes as f64);
+    case.metrics.insert(String::from("cold_measured_children"), cold.measured_children as f64);
+    case.metrics
+        .insert(String::from("layout_visited_nodes_per_op"), visited_nodes as f64 / total_ops);
+    case.metrics.insert(
+        String::from("layout_skipped_subtrees_per_op"),
+        skipped_subtrees as f64 / total_ops,
+    );
+    case.metrics.insert(String::from("layout_updates_per_op"), layout_updates as f64 / total_ops);
+    case.metrics.insert(
+        String::from("layout_measured_children_per_op"),
+        measured_children as f64 / total_ops,
+    );
+    case
+}
+
+fn descendant_only_layout_surface() -> (ui::UiSurface, ui::NodeId) {
+    let mut surface = ui::UiSurface::new(ui::NodeStyle {
+        axis: ui::Axis::Row,
+        size: ui::Size2D { w: ui::Dim::Px(420.0), h: ui::Dim::Px(160.0) },
+        gap: 4.0,
+        ..ui::NodeStyle::default()
+    });
+    let root = surface.root();
+    for column in 0..64 {
+        let branch = surface.tree_mut().add_node(
+            root,
+            ui::NodeStyle {
+                axis: ui::Axis::Column,
+                size: ui::Size2D { w: ui::Dim::Px(5.0), h: ui::Dim::Px(140.0) },
+                background: flat_rect_fill_color(column, 0),
+                ..ui::NodeStyle::default()
+            },
+        );
+        let _ = surface.tree_mut().add_node(
+            branch,
+            ui::NodeStyle {
+                size: ui::Size2D { w: ui::Dim::Px(3.0), h: ui::Dim::Px(40.0) },
+                background: flat_rect_fill_color(column, 2),
+                ..ui::NodeStyle::default()
+            },
+        );
+    }
+    (surface, ui::NodeId(66))
+}
+
+fn scoped_tree_mutation_surface() -> (ui::UiSurface, ui::NodeId) {
+    let mut surface = ui::UiSurface::new(ui::NodeStyle {
+        axis: ui::Axis::Row,
+        size: ui::Size2D { w: ui::Dim::Px(420.0), h: ui::Dim::Px(160.0) },
+        gap: 4.0,
+        ..ui::NodeStyle::default()
+    });
+    let root = surface.root();
+    let mut target = root;
+    for column in 0..64 {
+        let branch = surface
+            .add_node(
+                root,
+                ui::NodeStyle {
+                    axis: ui::Axis::Column,
+                    size: ui::Size2D { w: ui::Dim::Px(5.0), h: ui::Dim::Px(140.0) },
+                    background: flat_rect_fill_color(column, 0),
+                    ..ui::NodeStyle::default()
+                },
+            )
+            .unwrap_or(root);
+        let _ = surface.add_node(
+            branch,
+            ui::NodeStyle {
+                size: ui::Size2D { w: ui::Dim::Px(3.0), h: ui::Dim::Px(40.0) },
+                background: flat_rect_fill_color(column, 2),
+                ..ui::NodeStyle::default()
+            },
+        );
+        if column == 47 {
+            target = branch;
+        }
+    }
+    (surface, target)
+}
+
+fn layout_descendant_only_incremental_case(smoke: bool) -> PerfCaseResult {
+    let loops = layout_case_iterations(smoke);
+    let (mut surface, target) = descendant_only_layout_surface();
+    let cold = surface.layout(420.0, 160.0);
+    let mut step = 0usize;
+    let mut ops = 0u64;
+    let mut visited_nodes = 0u64;
+    let mut skipped_subtrees = 0u64;
+    let mut layout_updates = 0u64;
+    let mut measured_children = 0u64;
+    let mut case = measure_cpu_case(
+        "cpu.layout.descendant_only.incremental_relayout",
+        "layout",
+        smoke,
+        true,
+        0.18,
+        loops,
+        vec![String::from(
+            "Fixed-size child padding mutation over a wide retained row; parent geometry remains stable so clean siblings should skip without parent child-measure scans.",
+        )],
+        || {
+            let pad = if step & 1 == 0 { 1.0 } else { 2.0 };
+            step = step.wrapping_add(1);
+            let _ = surface.edit_style(target, |style| {
+                style.padding = ui::Edges { left: pad, top: 0.0, right: 0.0, bottom: 0.0 };
+            });
+            let stats = surface.layout(420.0, 160.0);
+            ops = ops.saturating_add(1);
+            visited_nodes = visited_nodes.saturating_add(stats.visited_nodes as u64);
+            skipped_subtrees = skipped_subtrees.saturating_add(stats.skipped_subtrees as u64);
+            layout_updates = layout_updates.saturating_add(stats.layout_updates as u64);
+            measured_children = measured_children.saturating_add(stats.measured_children as u64);
+            stats.visited_nodes as u64
+                + stats.skipped_subtrees as u64
+                + stats.layout_updates as u64
+                + stats.measured_children as u64
+        },
+    );
+    let total_ops = ops.max(1) as f64;
+    case.metrics.insert(String::from("dirty_nodes"), 1.0);
+    case.metrics.insert(String::from("layout_passes"), 1.0);
+    case.metrics.insert(String::from("layout_ops_sampled"), ops as f64);
+    case.metrics.insert(String::from("cold_visited_nodes"), cold.visited_nodes as f64);
+    case.metrics.insert(String::from("cold_measured_children"), cold.measured_children as f64);
+    case.metrics
+        .insert(String::from("layout_visited_nodes_per_op"), visited_nodes as f64 / total_ops);
+    case.metrics.insert(
+        String::from("layout_skipped_subtrees_per_op"),
+        skipped_subtrees as f64 / total_ops,
+    );
+    case.metrics.insert(String::from("layout_updates_per_op"), layout_updates as f64 / total_ops);
+    case.metrics.insert(
+        String::from("layout_measured_children_per_op"),
+        measured_children as f64 / total_ops,
+    );
+    case
+}
+
+fn layout_transform_only_reposition_case(smoke: bool) -> PerfCaseResult {
+    let loops = layout_case_iterations(smoke);
+    let (mut surface, target) = descendant_only_layout_surface();
+    let cold = surface.layout(420.0, 160.0);
+    let mut builder = ui::DrawListBuilder::new();
+    let _ = surface.encode_retained(&mut builder);
+    let mut step = 0usize;
+    let mut ops = 0u64;
+    let mut visited_nodes = 0u64;
+    let mut skipped_subtrees = 0u64;
+    let mut layout_updates = 0u64;
+    let mut measured_children = 0u64;
+    let mut reused_nodes = 0u64;
+    let mut rebuilt_nodes = 0u64;
+    let mut case = measure_cpu_case(
+        "cpu.layout.transform_only.reposition",
+        "layout",
+        smoke,
+        true,
+        0.18,
+        loops,
+        vec![String::from(
+            "Transform-only child reposition over a retained row; logical layout should remain clean while draw and hit-test state update.",
+        )],
+        || {
+            let tx = if step & 1 == 0 { 3.0 } else { 9.0 };
+            let ty = if step & 1 == 0 { 2.0 } else { 5.0 };
+            step = step.wrapping_add(1);
+            let _ = surface.edit_style(target, |style| {
+                style.transform = platform::Transform2D { tx, ty, sx: 1.0, sy: 1.0, rot_rad: 0.0 };
+            });
+            let stats = surface.layout(420.0, 160.0);
+            builder.clear();
+            let _ = surface.encode_retained(&mut builder);
+            let retained = surface.retained_node_stats();
+            ops = ops.saturating_add(1);
+            visited_nodes = visited_nodes.saturating_add(stats.visited_nodes as u64);
+            skipped_subtrees = skipped_subtrees.saturating_add(stats.skipped_subtrees as u64);
+            layout_updates = layout_updates.saturating_add(stats.layout_updates as u64);
+            measured_children = measured_children.saturating_add(stats.measured_children as u64);
+            reused_nodes = reused_nodes.saturating_add(retained.reused_nodes as u64);
+            rebuilt_nodes = rebuilt_nodes.saturating_add(retained.rebuilt_nodes as u64);
+            builder.drawlist().items.len() as u64
+                + stats.visited_nodes as u64
+                + stats.measured_children as u64
+                + retained.reused_nodes as u64
+                + retained.rebuilt_nodes as u64
+        },
+    );
+    let total_ops = ops.max(1) as f64;
+    case.metrics.insert(String::from("dirty_nodes"), 1.0);
+    case.metrics.insert(String::from("layout_passes"), 0.0);
+    case.metrics.insert(String::from("layout_ops_sampled"), ops as f64);
+    case.metrics.insert(String::from("cold_visited_nodes"), cold.visited_nodes as f64);
+    case.metrics.insert(String::from("cold_measured_children"), cold.measured_children as f64);
+    case.metrics
+        .insert(String::from("layout_visited_nodes_per_op"), visited_nodes as f64 / total_ops);
+    case.metrics.insert(
+        String::from("layout_skipped_subtrees_per_op"),
+        skipped_subtrees as f64 / total_ops,
+    );
+    case.metrics.insert(String::from("layout_updates_per_op"), layout_updates as f64 / total_ops);
+    case.metrics.insert(
+        String::from("layout_measured_children_per_op"),
+        measured_children as f64 / total_ops,
+    );
+    case.metrics
+        .insert(String::from("retained_reused_nodes_per_op"), reused_nodes as f64 / total_ops);
+    case.metrics
+        .insert(String::from("retained_rebuilt_nodes_per_op"), rebuilt_nodes as f64 / total_ops);
+    case
+}
+
+fn layout_paint_only_opacity_clip_case(smoke: bool) -> PerfCaseResult {
+    let loops = layout_case_iterations(smoke);
+    let (mut surface, target) = descendant_only_layout_surface();
+    let cold = surface.layout(420.0, 160.0);
+    let mut builder = ui::DrawListBuilder::new();
+    let _ = surface.encode_retained(&mut builder);
+    let mut step = 0usize;
+    let mut ops = 0u64;
+    let mut opacity_ops = 0u64;
+    let mut clip_ops = 0u64;
+    let mut visited_nodes = 0u64;
+    let mut skipped_subtrees = 0u64;
+    let mut layout_updates = 0u64;
+    let mut measured_children = 0u64;
+    let mut reused_nodes = 0u64;
+    let mut rebuilt_nodes = 0u64;
+    let mut case = measure_cpu_case(
+        "cpu.layout.paint_only.opacity_clip",
+        "layout",
+        smoke,
+        true,
+        0.18,
+        loops,
+        vec![String::from(
+            "Opacity and clip edits over a retained row; layout should stay clean while affected ancestors rebuild and clean sibling subtrees replay.",
+        )],
+        || {
+            let phase = step;
+            step = step.wrapping_add(1);
+            if phase & 1 == 0 {
+                let opacity = if phase & 2 == 0 { 0.56 } else { 0.84 };
+                let _ = surface.edit_style(target, |style| {
+                    style.opacity = opacity;
+                });
+                opacity_ops = opacity_ops.saturating_add(1);
+            } else {
+                let clip = phase & 2 == 0;
+                let _ = surface.edit_style(target, |style| {
+                    style.clip = clip;
+                });
+                clip_ops = clip_ops.saturating_add(1);
+            }
+            let stats = surface.layout(420.0, 160.0);
+            builder.clear();
+            let _ = surface.encode_retained(&mut builder);
+            let retained = surface.retained_node_stats();
+            ops = ops.saturating_add(1);
+            visited_nodes = visited_nodes.saturating_add(stats.visited_nodes as u64);
+            skipped_subtrees = skipped_subtrees.saturating_add(stats.skipped_subtrees as u64);
+            layout_updates = layout_updates.saturating_add(stats.layout_updates as u64);
+            measured_children = measured_children.saturating_add(stats.measured_children as u64);
+            reused_nodes = reused_nodes.saturating_add(retained.reused_nodes as u64);
+            rebuilt_nodes = rebuilt_nodes.saturating_add(retained.rebuilt_nodes as u64);
+            builder.drawlist().items.len() as u64
+                + stats.visited_nodes as u64
+                + stats.measured_children as u64
+                + retained.reused_nodes as u64
+                + retained.rebuilt_nodes as u64
+        },
+    );
+    let total_ops = ops.max(1) as f64;
+    case.metrics.insert(String::from("dirty_nodes"), 1.0);
+    case.metrics.insert(String::from("layout_passes"), 0.0);
+    case.metrics.insert(String::from("layout_ops_sampled"), ops as f64);
+    case.metrics.insert(String::from("opacity_ops"), opacity_ops as f64);
+    case.metrics.insert(String::from("clip_ops"), clip_ops as f64);
+    case.metrics.insert(String::from("cold_visited_nodes"), cold.visited_nodes as f64);
+    case.metrics.insert(String::from("cold_measured_children"), cold.measured_children as f64);
+    case.metrics
+        .insert(String::from("layout_visited_nodes_per_op"), visited_nodes as f64 / total_ops);
+    case.metrics.insert(
+        String::from("layout_skipped_subtrees_per_op"),
+        skipped_subtrees as f64 / total_ops,
+    );
+    case.metrics.insert(String::from("layout_updates_per_op"), layout_updates as f64 / total_ops);
+    case.metrics.insert(
+        String::from("layout_measured_children_per_op"),
+        measured_children as f64 / total_ops,
+    );
+    case.metrics
+        .insert(String::from("retained_reused_nodes_per_op"), reused_nodes as f64 / total_ops);
+    case.metrics
+        .insert(String::from("retained_rebuilt_nodes_per_op"), rebuilt_nodes as f64 / total_ops);
+    case
+}
+
+fn layout_node_content_dirty_retained_replay_case(smoke: bool) -> PerfCaseResult {
+    let loops = layout_case_iterations(smoke);
+    let (mut surface, target) = descendant_only_layout_surface();
+    let cold = surface.layout(420.0, 160.0);
+    let mut builder = ui::DrawListBuilder::new();
+    let _ = surface.encode_retained(&mut builder);
+    let mut step = 0usize;
+    let mut ops = 0u64;
+    let mut text_ops = 0u64;
+    let mut image_ops = 0u64;
+    let mut camera_ops = 0u64;
+    let mut visited_nodes = 0u64;
+    let mut skipped_subtrees = 0u64;
+    let mut layout_updates = 0u64;
+    let mut measured_children = 0u64;
+    let mut reused_nodes = 0u64;
+    let mut rebuilt_nodes = 0u64;
+    let mut case = measure_cpu_case(
+        "cpu.layout.node_content_dirty.retained_replay",
+        "layout",
+        smoke,
+        true,
+        0.18,
+        loops,
+        vec![String::from(
+            "Node-scoped text/image/camera content dirtying over a retained row; layout should stay clean while clean sibling subtrees replay.",
+        )],
+        || {
+            let class = match step % 3 {
+                0 => {
+                    text_ops = text_ops.saturating_add(1);
+                    ui::DirtyClass::Text
+                }
+                1 => {
+                    image_ops = image_ops.saturating_add(1);
+                    ui::DirtyClass::ImageContent
+                }
+                _ => {
+                    camera_ops = camera_ops.saturating_add(1);
+                    ui::DirtyClass::CameraFrame
+                }
+            };
+            step = step.wrapping_add(1);
+            let _ = surface.mark_node_dirty(target, class);
+            let stats = surface.layout(420.0, 160.0);
+            builder.clear();
+            let _ = surface.encode_retained(&mut builder);
+            let retained = surface.retained_node_stats();
+            ops = ops.saturating_add(1);
+            visited_nodes = visited_nodes.saturating_add(stats.visited_nodes as u64);
+            skipped_subtrees = skipped_subtrees.saturating_add(stats.skipped_subtrees as u64);
+            layout_updates = layout_updates.saturating_add(stats.layout_updates as u64);
+            measured_children = measured_children.saturating_add(stats.measured_children as u64);
+            reused_nodes = reused_nodes.saturating_add(retained.reused_nodes as u64);
+            rebuilt_nodes = rebuilt_nodes.saturating_add(retained.rebuilt_nodes as u64);
+            builder.drawlist().items.len() as u64
+                + stats.visited_nodes as u64
+                + stats.measured_children as u64
+                + retained.reused_nodes as u64
+                + retained.rebuilt_nodes as u64
+        },
+    );
+    let total_ops = ops.max(1) as f64;
+    case.metrics.insert(String::from("dirty_nodes"), 1.0);
+    case.metrics.insert(String::from("layout_passes"), 0.0);
+    case.metrics.insert(String::from("layout_ops_sampled"), ops as f64);
+    case.metrics.insert(String::from("text_dirty_ops"), text_ops as f64);
+    case.metrics.insert(String::from("image_dirty_ops"), image_ops as f64);
+    case.metrics.insert(String::from("camera_dirty_ops"), camera_ops as f64);
+    case.metrics.insert(String::from("cold_visited_nodes"), cold.visited_nodes as f64);
+    case.metrics.insert(String::from("cold_measured_children"), cold.measured_children as f64);
+    case.metrics
+        .insert(String::from("layout_visited_nodes_per_op"), visited_nodes as f64 / total_ops);
+    case.metrics.insert(
+        String::from("layout_skipped_subtrees_per_op"),
+        skipped_subtrees as f64 / total_ops,
+    );
+    case.metrics.insert(String::from("layout_updates_per_op"), layout_updates as f64 / total_ops);
+    case.metrics.insert(
+        String::from("layout_measured_children_per_op"),
+        measured_children as f64 / total_ops,
+    );
+    case.metrics
+        .insert(String::from("retained_reused_nodes_per_op"), reused_nodes as f64 / total_ops);
+    case.metrics
+        .insert(String::from("retained_rebuilt_nodes_per_op"), rebuilt_nodes as f64 / total_ops);
+    case
+}
+
+fn layout_non_draw_dirty_retained_reuse_case(smoke: bool) -> PerfCaseResult {
+    let loops = layout_case_iterations(smoke);
+    let (mut surface, target) = descendant_only_layout_surface();
+    let cold = surface.layout(420.0, 160.0);
+    let mut builder = ui::DrawListBuilder::new();
+    let _ = surface.encode_retained(&mut builder);
+    let mut step = 0usize;
+    let mut ops = 0u64;
+    let mut accessibility_ops = 0u64;
+    let mut hit_test_ops = 0u64;
+    let mut retained_reused_ops = 0u64;
+    let mut retained_rebuilt_ops = 0u64;
+    let mut visited_nodes = 0u64;
+    let mut skipped_subtrees = 0u64;
+    let mut layout_updates = 0u64;
+    let mut measured_children = 0u64;
+    let mut reused_nodes = 0u64;
+    let mut rebuilt_nodes = 0u64;
+    let mut case = measure_cpu_case(
+        "cpu.layout.non_draw_dirty.retained_reuse",
+        "layout",
+        smoke,
+        true,
+        0.18,
+        loops,
+        vec![String::from(
+            "Node-scoped accessibility and hit-test dirtying over a retained row; layout and draw caches should stay reusable.",
+        )],
+        || {
+            let class = if step & 1 == 0 {
+                accessibility_ops = accessibility_ops.saturating_add(1);
+                ui::DirtyClass::Accessibility
+            } else {
+                hit_test_ops = hit_test_ops.saturating_add(1);
+                ui::DirtyClass::HitTest
+            };
+            step = step.wrapping_add(1);
+            let _ = surface.mark_node_dirty(target, class);
+            let stats = surface.layout(420.0, 160.0);
+            builder.clear();
+            let status = surface.encode_retained(&mut builder);
+            match status {
+                ui::RetainedDrawStatus::Reused => {
+                    retained_reused_ops = retained_reused_ops.saturating_add(1);
+                }
+                ui::RetainedDrawStatus::Rebuilt => {
+                    retained_rebuilt_ops = retained_rebuilt_ops.saturating_add(1);
+                }
+            }
+            let retained = surface.retained_node_stats();
+            ops = ops.saturating_add(1);
+            visited_nodes = visited_nodes.saturating_add(stats.visited_nodes as u64);
+            skipped_subtrees = skipped_subtrees.saturating_add(stats.skipped_subtrees as u64);
+            layout_updates = layout_updates.saturating_add(stats.layout_updates as u64);
+            measured_children = measured_children.saturating_add(stats.measured_children as u64);
+            reused_nodes = reused_nodes.saturating_add(retained.reused_nodes as u64);
+            rebuilt_nodes = rebuilt_nodes.saturating_add(retained.rebuilt_nodes as u64);
+            builder.drawlist().items.len() as u64
+                + stats.visited_nodes as u64
+                + stats.measured_children as u64
+                + retained.reused_nodes as u64
+                + retained.rebuilt_nodes as u64
+        },
+    );
+    let total_ops = ops.max(1) as f64;
+    case.metrics.insert(String::from("dirty_nodes"), 1.0);
+    case.metrics.insert(String::from("layout_passes"), 0.0);
+    case.metrics.insert(String::from("layout_ops_sampled"), ops as f64);
+    case.metrics.insert(String::from("accessibility_dirty_ops"), accessibility_ops as f64);
+    case.metrics.insert(String::from("hit_test_dirty_ops"), hit_test_ops as f64);
+    case.metrics.insert(String::from("retained_reused_ops"), retained_reused_ops as f64);
+    case.metrics.insert(String::from("retained_rebuilt_ops"), retained_rebuilt_ops as f64);
+    case.metrics.insert(String::from("cold_visited_nodes"), cold.visited_nodes as f64);
+    case.metrics.insert(String::from("cold_measured_children"), cold.measured_children as f64);
+    case.metrics
+        .insert(String::from("layout_visited_nodes_per_op"), visited_nodes as f64 / total_ops);
+    case.metrics.insert(
+        String::from("layout_skipped_subtrees_per_op"),
+        skipped_subtrees as f64 / total_ops,
+    );
+    case.metrics.insert(String::from("layout_updates_per_op"), layout_updates as f64 / total_ops);
+    case.metrics.insert(
+        String::from("layout_measured_children_per_op"),
+        measured_children as f64 / total_ops,
+    );
+    case.metrics
+        .insert(String::from("retained_reused_nodes_per_op"), reused_nodes as f64 / total_ops);
+    case.metrics
+        .insert(String::from("retained_rebuilt_nodes_per_op"), rebuilt_nodes as f64 / total_ops);
+    case
+}
+
+fn layout_scoped_tree_mutation_add_remove_case(smoke: bool) -> PerfCaseResult {
+    let loops = layout_case_iterations(smoke);
+    let (mut surface, target) = scoped_tree_mutation_surface();
+    let cold = surface.layout(420.0, 160.0);
+    let mut builder = ui::DrawListBuilder::new();
+    let _ = surface.encode_retained(&mut builder);
+    let mut inserted: Option<ui::NodeId> = None;
+    let mut step = 0usize;
+    let mut ops = 0u64;
+    let mut add_ops = 0u64;
+    let mut remove_ops = 0u64;
+    let mut visited_nodes = 0u64;
+    let mut skipped_subtrees = 0u64;
+    let mut layout_updates = 0u64;
+    let mut measured_children = 0u64;
+    let mut reused_nodes = 0u64;
+    let mut rebuilt_nodes = 0u64;
+    let mut case = measure_cpu_case(
+        "cpu.layout.scoped_tree_mutation.add_remove",
+        "layout",
+        smoke,
+        true,
+        0.18,
+        loops,
+        vec![String::from(
+            "Scoped add/remove child mutation inside one retained branch; clean sibling branches should skip layout and replay retained draws.",
+        )],
+        || {
+            if let Some(node) = inserted.take() {
+                let _ = surface.remove_node(node);
+                remove_ops = remove_ops.saturating_add(1);
+            } else {
+                inserted = surface.add_node(
+                    target,
+                    ui::NodeStyle {
+                        size: ui::Size2D { w: ui::Dim::Px(3.0), h: ui::Dim::Px(24.0) },
+                        background: flat_rect_fill_color(step, 3),
+                        ..ui::NodeStyle::default()
+                    },
+                );
+                add_ops = add_ops.saturating_add(1);
+            }
+            step = step.wrapping_add(1);
+            let stats = surface.layout(420.0, 160.0);
+            builder.clear();
+            let _ = surface.encode_retained(&mut builder);
+            let retained = surface.retained_node_stats();
+            ops = ops.saturating_add(1);
+            visited_nodes = visited_nodes.saturating_add(stats.visited_nodes as u64);
+            skipped_subtrees = skipped_subtrees.saturating_add(stats.skipped_subtrees as u64);
+            layout_updates = layout_updates.saturating_add(stats.layout_updates as u64);
+            measured_children = measured_children.saturating_add(stats.measured_children as u64);
+            reused_nodes = reused_nodes.saturating_add(retained.reused_nodes as u64);
+            rebuilt_nodes = rebuilt_nodes.saturating_add(retained.rebuilt_nodes as u64);
+            builder.drawlist().items.len() as u64
+                + stats.visited_nodes as u64
+                + stats.skipped_subtrees as u64
+                + retained.reused_nodes as u64
+                + retained.rebuilt_nodes as u64
+        },
+    );
+    let total_ops = ops.max(1) as f64;
+    case.metrics.insert(String::from("dirty_nodes"), 1.0);
+    case.metrics.insert(String::from("layout_passes"), 1.0);
+    case.metrics.insert(String::from("layout_ops_sampled"), ops as f64);
+    case.metrics.insert(String::from("scoped_add_ops"), add_ops as f64);
+    case.metrics.insert(String::from("scoped_remove_ops"), remove_ops as f64);
+    case.metrics.insert(String::from("cold_visited_nodes"), cold.visited_nodes as f64);
+    case.metrics.insert(String::from("cold_measured_children"), cold.measured_children as f64);
+    case.metrics
+        .insert(String::from("layout_visited_nodes_per_op"), visited_nodes as f64 / total_ops);
+    case.metrics.insert(
+        String::from("layout_skipped_subtrees_per_op"),
+        skipped_subtrees as f64 / total_ops,
+    );
+    case.metrics.insert(String::from("layout_updates_per_op"), layout_updates as f64 / total_ops);
+    case.metrics.insert(
+        String::from("layout_measured_children_per_op"),
+        measured_children as f64 / total_ops,
+    );
+    case.metrics
+        .insert(String::from("retained_reused_nodes_per_op"), reused_nodes as f64 / total_ops);
+    case.metrics
+        .insert(String::from("retained_rebuilt_nodes_per_op"), rebuilt_nodes as f64 / total_ops);
+    case
+}
+
 fn large_editor_seed_text(lines: usize) -> String {
     let mut text = String::new();
     for line in 0..lines {
@@ -3959,6 +6045,365 @@ fn text_input_large_editor_selection_case(smoke: bool) -> PerfCaseResult {
         },
     );
     case.metrics.insert(String::from("dirty_nodes"), 1.0);
+    case
+}
+
+fn text_input_ime_composition_case(smoke: bool) -> PerfCaseResult {
+    let loops = text_input_iterations(smoke);
+    let seed = large_editor_seed_text(32);
+    let base_cursor = seed.chars().count() as u32;
+    let mut case = measure_cpu_case(
+        "cpu.text_input.ime.composition_commit_cycle",
+        "text-input",
+        smoke,
+        true,
+        0.18,
+        loops,
+        vec![String::from(
+            "Focused text-input IME marked-text updates, Unicode commit, selection sync, cancellation, and keyboard geometry events.",
+        )],
+        move || {
+            let mut state = ui::elements::TextInputState::new("Message");
+            state.focus();
+            state.set_text(seed.clone());
+            state.move_cursor_to_end();
+            state.handle_text_event(&platform::TextEvent::IMEShown(api::RectF::new(
+                0.0, 520.0, 390.0, 324.0,
+            )));
+            state.handle_text_event(&platform::TextEvent::Composition {
+                range: base_cursor..base_cursor,
+                text: String::from("に"),
+            });
+            state.handle_text_event(&platform::TextEvent::Composition {
+                range: base_cursor..base_cursor,
+                text: String::from("日本"),
+            });
+            state.handle_text_event(&platform::TextEvent::Commit {
+                text: String::from("日本語"),
+            });
+            state.handle_text_event(&platform::TextEvent::SelectionChanged {
+                range: base_cursor..base_cursor + 3,
+            });
+            state.handle_text_event(&platform::TextEvent::Composition {
+                range: base_cursor..base_cursor + 3,
+                text: String::from("かな"),
+            });
+            state.handle_text_event(&platform::TextEvent::IMEHidden);
+            state.handle_text_event(&platform::TextEvent::Composition {
+                range: base_cursor..base_cursor,
+                text: String::from("한"),
+            });
+            state.handle_text_event(&platform::TextEvent::Commit {
+                text: String::from("한글"),
+            });
+            state.tick(16);
+            state.text().len() as u64 + state.ime_rect().is_some() as u64
+        },
+    );
+    case.metrics.insert(String::from("dirty_nodes"), 1.0);
+    case.metrics.insert(String::from("composition_updates_per_op"), 4.0);
+    case.metrics.insert(String::from("selection_sync_events_per_op"), 1.0);
+    case.metrics.insert(String::from("ime_geometry_events_per_op"), 2.0);
+    case
+}
+
+fn text_cursor_map_stats(map: &text::ShapedCursorMap) -> TextCursorMapStats {
+    let mut boundary_checksum = 0xcbf2_9ce4_8422_2325_u64;
+    let mut affinity_splits = 0_u64;
+    let mut min_width = f32::MAX;
+    let mut max_width = f32::MIN;
+    for cursor in 0..=map.len() {
+        boundary_checksum =
+            boundary_checksum.wrapping_mul(0x1000_0000_01b3) ^ (map.byte_index(cursor) as u64);
+        let downstream = map.width_at_with_affinity(cursor, text::CaretAffinity::Downstream);
+        let upstream = map.width_at_with_affinity(cursor, text::CaretAffinity::Upstream);
+        if (downstream - upstream).abs() > 0.001 {
+            affinity_splits = affinity_splits.saturating_add(1);
+        }
+        min_width = min_width.min(downstream).min(upstream);
+        max_width = max_width.max(downstream).max(upstream);
+    }
+    TextCursorMapStats {
+        cursor_count: map.len() as u64,
+        byte_boundaries: map.len().saturating_add(1) as u64,
+        boundary_checksum,
+        affinity_splits,
+        width_span: (max_width - min_width).max(0.0) as f64,
+    }
+}
+
+fn shaped_cursor_map_stats(
+    fonts: &text::FontDb,
+    font_id: usize,
+    text_value: &str,
+    font_px: f32,
+) -> TextCursorMapStats {
+    let Some(font) = fonts.font(font_id) else {
+        return TextCursorMapStats::default();
+    };
+    let mut shaper = text::TextShaper::default();
+    shaper
+        .shape(font, font_id, text_value, font_px)
+        .ok()
+        .map(|shape| text_cursor_map_stats(&shape.cursor_map_for_text(text_value)))
+        .unwrap_or_default()
+}
+
+fn fallback_cursor_map_stats(
+    fonts: &text::FontDb,
+    primary_id: usize,
+    fallback_ids: &[usize],
+    text_value: &str,
+    font_px: f32,
+) -> (TextCursorMapStats, u64) {
+    let mut shaper = text::TextShaper::default();
+    let stats = shaper
+        .cursor_map_with_fallback_fonts(fonts, primary_id, fallback_ids, text_value, font_px)
+        .map(|map| text_cursor_map_stats(&map))
+        .unwrap_or_default();
+    let mut shaper = text::TextShaper::default();
+    let runs = shaper
+        .shape_with_fallback_fonts(fonts, primary_id, fallback_ids, text_value, font_px)
+        .map(|shape| shape.runs.len() as u64)
+        .unwrap_or(0);
+    (stats, runs)
+}
+
+fn insert_text_cursor_map_metrics(
+    case: &mut PerfCaseResult,
+    stats: TextCursorMapStats,
+    prefix: &str,
+) {
+    case.metrics.insert(format!("{prefix}_cursor_count"), stats.cursor_count as f64);
+    case.metrics.insert(format!("{prefix}_byte_boundaries"), stats.byte_boundaries as f64);
+    case.metrics.insert(format!("{prefix}_boundary_checksum"), stats.boundary_checksum as f64);
+    case.metrics.insert(format!("{prefix}_affinity_splits"), stats.affinity_splits as f64);
+    case.metrics.insert(format!("{prefix}_width_span"), stats.width_span);
+}
+
+fn text_input_cursor_pick_cluster_map_case(smoke: bool) -> PerfCaseResult {
+    let loops = if smoke { 24 } else { 192 };
+    let mut text_ctx = perf_text_ctx();
+    let style = ui::elements::TextInputStyle {
+        font_id: 0,
+        font_px: 16.0,
+        ..ui::elements::TextInputStyle::default()
+    };
+    let seed = format!(
+        "{} {}",
+        large_editor_seed_text(24),
+        "Cafe\u{301} 👨‍👩‍👧‍👦 日本語 Hangul 한글 cursor pressure."
+    );
+    let map_stats = shaped_cursor_map_stats(&text_ctx.fonts, style.font_id, &seed, style.font_px);
+    let mut state = ui::elements::TextInputState::new("Editor");
+    state.focus();
+    state.set_text(seed.clone());
+    let positions = [
+        style.padding.left,
+        style.padding.left + 24.0,
+        style.padding.left + 96.0,
+        style.padding.left + 188.0,
+        style.padding.left + 320.0,
+        style.padding.left + 520.0,
+    ];
+    let mut cursor_sum = 0u64;
+    let mut step = 0usize;
+    let mut case = measure_cpu_case(
+        "cpu.text_input.cursor_pick.cluster_map",
+        "text-input",
+        smoke,
+        true,
+        0.16,
+        loops,
+        vec![String::from(
+            "Hot pointer-to-cursor mapping over a long Unicode text-input line using a shaped cluster prefix map.",
+        )],
+        || {
+            let x = positions[step % positions.len()];
+            step = step.wrapping_add(1);
+            state.handle_pointer([black_box(x), 0.0], &style, &mut text_ctx);
+            let cursor = state.cursor_index() as u64;
+            cursor_sum = cursor_sum.wrapping_add(cursor);
+            cursor
+        },
+    );
+    case.metrics.insert(String::from("cursor_pick_positions"), positions.len() as f64);
+    case.metrics.insert(String::from("text_bytes"), seed.len() as f64);
+    case.metrics.insert(String::from("cursor_checksum"), cursor_sum as f64);
+    insert_text_cursor_map_metrics(&mut case, map_stats, "cursor_map");
+    case
+}
+
+fn text_input_cursor_pick_rtl_cluster_map_case(smoke: bool) -> PerfCaseResult {
+    let loops = if smoke { 24 } else { 192 };
+    let mut text_ctx = perf_text_ctx();
+    let font_id = load_rtl_perf_font(&mut text_ctx);
+    let style = ui::elements::TextInputStyle {
+        font_id,
+        font_px: 16.0,
+        ..ui::elements::TextInputStyle::default()
+    };
+    let seed = "אבגדה וזחטי כלמנס עפצקר שת אבגדה וזחטי כלמנס עפצקר שת ".repeat(24);
+    let map_stats = shaped_cursor_map_stats(&text_ctx.fonts, font_id, &seed, style.font_px);
+    let mut state = ui::elements::TextInputState::new("Editor");
+    state.focus();
+    state.set_text(seed.clone());
+    let positions = [
+        style.padding.left - 8.0,
+        style.padding.left + 24.0,
+        style.padding.left + 96.0,
+        style.padding.left + 188.0,
+        style.padding.left + 320.0,
+        style.padding.left + 520.0,
+    ];
+    let mut cursor_sum = 0u64;
+    let mut step = 0usize;
+    let mut case = measure_cpu_case(
+        "cpu.text_input.cursor_pick.rtl_cluster_map",
+        "text-input",
+        smoke,
+        true,
+        0.16,
+        loops,
+        vec![String::from(
+            "Hot pointer-to-cursor mapping over a long pure RTL text-input line using a descending shaped cluster map.",
+        )],
+        || {
+            let x = positions[step % positions.len()];
+            step = step.wrapping_add(1);
+            state.handle_pointer([black_box(x), 0.0], &style, &mut text_ctx);
+            let cursor = state.cursor_index() as u64;
+            cursor_sum = cursor_sum.wrapping_add(cursor);
+            cursor
+        },
+    );
+    case.metrics.insert(String::from("cursor_pick_positions"), positions.len() as f64);
+    case.metrics.insert(String::from("text_bytes"), seed.len() as f64);
+    case.metrics.insert(String::from("rtl_cursor_checksum"), cursor_sum as f64);
+    insert_text_cursor_map_metrics(&mut case, map_stats, "rtl_cursor_map");
+    case
+}
+
+fn text_input_cursor_pick_fallback_cluster_map_case(smoke: bool) -> PerfCaseResult {
+    let loops = if smoke { 24 } else { 192 };
+    let mut text_ctx = perf_text_ctx();
+    text_ctx.set_fallback_fonts(&[1]);
+    let style = ui::elements::TextInputStyle {
+        font_id: 0,
+        font_px: 16.0,
+        ..ui::elements::TextInputStyle::default()
+    };
+    let seed = "ABÉ 漢 AB漢 ÉB漢 ".repeat(96);
+    let (map_stats, fallback_runs) =
+        fallback_cursor_map_stats(&text_ctx.fonts, 0, &[1], &seed, style.font_px);
+    let mut state = ui::elements::TextInputState::new("Editor");
+    state.focus();
+    state.set_text(seed.clone());
+    let positions = [
+        style.padding.left,
+        style.padding.left + 18.0,
+        style.padding.left + 48.0,
+        style.padding.left + 96.0,
+        style.padding.left + 188.0,
+        style.padding.left + 320.0,
+    ];
+    let mut cursor_sum = 0u64;
+    let mut step = 0usize;
+    let mut case = measure_cpu_case(
+        "cpu.text_input.cursor_pick.fallback_cluster_map",
+        "text-input",
+        smoke,
+        true,
+        0.16,
+        loops,
+        vec![String::from(
+            "Hot pointer-to-cursor mapping over mixed Latin/CJK text using configured fallback-font shaped cursor widths.",
+        )],
+        || {
+            let x = positions[step % positions.len()];
+            step = step.wrapping_add(1);
+            state.handle_pointer([black_box(x), 0.0], &style, &mut text_ctx);
+            let cursor = state.cursor_index() as u64;
+            cursor_sum = cursor_sum.wrapping_add(cursor);
+            cursor
+        },
+    );
+    case.metrics.insert(String::from("cursor_pick_positions"), positions.len() as f64);
+    case.metrics.insert(String::from("fallback_fonts"), 1.0);
+    case.metrics.insert(String::from("fallback_shape_runs"), fallback_runs as f64);
+    case.metrics.insert(String::from("text_bytes"), seed.len() as f64);
+    case.metrics.insert(String::from("fallback_cursor_checksum"), cursor_sum as f64);
+    insert_text_cursor_map_metrics(&mut case, map_stats, "fallback_cursor_map");
+    case
+}
+
+fn text_input_cursor_pick_mixed_bidi_affinity_case(smoke: bool) -> PerfCaseResult {
+    let loops = if smoke { 24 } else { 192 };
+    let mut text_ctx = perf_text_ctx();
+    let font_id = load_rtl_perf_font(&mut text_ctx);
+    let style = ui::elements::TextInputStyle {
+        font_id,
+        font_px: 16.0,
+        ..ui::elements::TextInputStyle::default()
+    };
+    let sample = if font_id == 0 { "AABB" } else { "AאבB" };
+    let seed = format!("{} ", sample).repeat(192);
+    let mut shaper = text::TextShaper::default();
+    let map = text_ctx
+        .fonts
+        .font(font_id)
+        .and_then(|font| shaper.shape(font, font_id, sample, style.font_px).ok())
+        .map(|shape| shape.cursor_map_for_text(sample));
+    let positions = if let Some(map) = map.as_ref() {
+        [
+            style.padding.left + map.width_at_with_affinity(1, text::CaretAffinity::Downstream),
+            style.padding.left + map.width_at(2),
+            style.padding.left + map.width_at_with_affinity(3, text::CaretAffinity::Upstream),
+            style.padding.left + map.width_at_with_affinity(3, text::CaretAffinity::Downstream),
+            style.padding.left + map.width_at(sample.chars().count()) + 24.0,
+            style.padding.left + 180.0,
+        ]
+    } else {
+        [
+            style.padding.left,
+            style.padding.left + 24.0,
+            style.padding.left + 48.0,
+            style.padding.left + 72.0,
+            style.padding.left + 96.0,
+            style.padding.left + 180.0,
+        ]
+    };
+    let map_stats = map.as_ref().map(text_cursor_map_stats).unwrap_or_default();
+    let mut state = ui::elements::TextInputState::new("Editor");
+    state.focus();
+    state.set_text(seed.clone());
+    let mut cursor_sum = 0u64;
+    let mut step = 0usize;
+    let mut case = measure_cpu_case(
+        "cpu.text_input.cursor_pick.mixed_bidi_affinity",
+        "text-input",
+        smoke,
+        true,
+        0.16,
+        loops,
+        vec![String::from(
+            "Hot pointer-to-cursor mapping over mixed LTR/RTL text with affinity-aware boundary positions.",
+        )],
+        || {
+            let x = positions[step % positions.len()];
+            step = step.wrapping_add(1);
+            state.handle_pointer([black_box(x), 0.0], &style, &mut text_ctx);
+            let cursor = state.cursor_index() as u64;
+            cursor_sum = cursor_sum.wrapping_add(cursor);
+            cursor
+        },
+    );
+    case.metrics.insert(String::from("cursor_pick_positions"), positions.len() as f64);
+    case.metrics.insert(String::from("mixed_bidi_boundary_positions"), 2.0);
+    case.metrics.insert(String::from("rtl_font_loaded"), if font_id == 0 { 0.0 } else { 1.0 });
+    case.metrics.insert(String::from("text_bytes"), seed.len() as f64);
+    case.metrics.insert(String::from("mixed_bidi_cursor_checksum"), cursor_sum as f64);
+    insert_text_cursor_map_metrics(&mut case, map_stats, "mixed_bidi_cursor_map");
     case
 }
 
@@ -4131,6 +6576,7 @@ fn image_pipeline_png_first_visible_case(smoke: bool) -> Result<PerfCaseResult> 
 
     let mut frame_samples = Vec::with_capacity(sample_count);
     let mut encode_samples = Vec::with_capacity(sample_count);
+    let mut gpu_samples = Vec::with_capacity(sample_count);
     let mut draws_sum = 0.0f64;
     for _ in 0..sample_count {
         let handle = renderer.image_create_rgba8(w, h, &rgba, (w as usize) * 4);
@@ -4146,12 +6592,15 @@ fn image_pipeline_png_first_visible_case(smoke: bool) -> Result<PerfCaseResult> 
         let frame_t0 = Instant::now();
         let token =
             renderer.begin_frame(&api::FrameTarget, Some(&api::Damage { rects: Vec::new() }));
+        let frame_id = token.0;
         renderer.encode_pass(builder.drawlist());
         renderer.submit(token).context("submitting image first-visible frame")?;
-        let stats = renderer.last_stats();
+        let frame_ms = frame_t0.elapsed().as_secs_f64() * 1000.0;
+        let stats = last_metal_stats_after_submit(&renderer, frame_id);
         renderer.image_release(handle);
-        frame_samples.push(frame_t0.elapsed().as_secs_f64() * 1000.0);
+        frame_samples.push(frame_ms);
         encode_samples.push(stats.encode_ms);
+        gpu_samples.push(stats.gpu_ms);
         draws_sum += stats.draws as f64;
     }
 
@@ -4163,6 +6612,9 @@ fn image_pipeline_png_first_visible_case(smoke: bool) -> Result<PerfCaseResult> 
     metrics.insert(String::from("texture_bytes"), rgba.len() as f64);
     metrics.insert(String::from("draw_calls"), draws_sum / frame_samples.len().max(1) as f64);
     metrics.insert(String::from("encode_ms_median"), summarize(&encode_samples).median);
+    insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+    insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+    insert_frame_pacing_metrics(&mut metrics, &frame_samples);
 
     Ok(PerfCaseResult {
         id: String::from("gpu.image_pipeline.png.first_visible"),
@@ -4386,14 +6838,24 @@ fn collection_flow_case<M, R>(
     smoke: bool,
     count: usize,
     mode: ui::collection::CollectionMode,
-    mut measure: M,
+    measure: M,
     mut render: R,
 ) -> Result<PerfCaseResult>
 where
     M: ui::collection::Measure,
     R: ui::collection::CellRenderer,
 {
-    measure_journey_case(
+    let measure_calls = Arc::new(AtomicU64::new(0));
+    let revision_queries = Arc::new(AtomicU64::new(0));
+    let measure_calls_for_run = Arc::clone(&measure_calls);
+    let revision_queries_for_run = Arc::clone(&revision_queries);
+    let has_collection_revision = measure.collection_revision().is_some();
+    let mut measure = CountingCollectionMeasure {
+        inner: measure,
+        calls: measure_calls_for_run,
+        revision_queries: revision_queries_for_run,
+    };
+    let mut case = measure_journey_case(
         id,
         smoke,
         0.18,
@@ -4428,7 +6890,20 @@ where
             }
             work
         },
-    )
+    )?;
+    case.metrics.insert(
+        String::from("collection_measure_calls_total"),
+        measure_calls.load(Ordering::Relaxed) as f64,
+    );
+    case.metrics.insert(
+        String::from("collection_item_revision_queries_total"),
+        revision_queries.load(Ordering::Relaxed) as f64,
+    );
+    case.metrics.insert(
+        String::from("collection_revision_hint"),
+        if has_collection_revision { 1.0 } else { 0.0 },
+    );
+    Ok(case)
 }
 
 fn journey_feed_scroll_case(smoke: bool) -> Result<PerfCaseResult> {
@@ -5157,6 +7632,13 @@ fn load_perf_fonts(txt: &mut ui::elements::TextCtx) {
     }
 }
 
+fn load_rtl_perf_font(txt: &mut ui::elements::TextCtx) -> usize {
+    if let Ok(bytes) = fs::read(MACOS_HEBREW_FONT) {
+        return txt.fonts.add_font(text::Font::from_bytes(bytes));
+    }
+    0
+}
+
 fn perf_viewport() -> api::RectF {
     api::RectF::new(
         0.0,
@@ -5429,6 +7911,42 @@ fn quantile(sorted: &[f64], q: f64) -> f64 {
     (1.0 - weight) * sorted[lo] + weight * sorted[hi]
 }
 
+fn insert_distribution_metrics(metrics: &mut BTreeMap<String, f64>, prefix: &str, samples: &[f64]) {
+    if samples.is_empty() {
+        return;
+    }
+    let summary = summarize(samples);
+    metrics.insert(format!("{}_p50", prefix), summary.median);
+    metrics.insert(format!("{}_p95", prefix), summary.p95);
+    metrics.insert(format!("{}_p99", prefix), summary.p99);
+    metrics.insert(format!("{}_peak", prefix), summary.max);
+}
+
+fn insert_frame_pacing_metrics(metrics: &mut BTreeMap<String, f64>, frame_samples_ms: &[f64]) {
+    insert_frame_pacing_metrics_for_refresh(metrics, frame_samples_ms, 60);
+    insert_frame_pacing_metrics_for_refresh(metrics, frame_samples_ms, 120);
+}
+
+fn insert_frame_pacing_metrics_for_refresh(
+    metrics: &mut BTreeMap<String, f64>,
+    frame_samples_ms: &[f64],
+    refresh_hz: u32,
+) {
+    if frame_samples_ms.is_empty() {
+        return;
+    }
+    let budget_ms = 1000.0 / refresh_hz as f64;
+    let missed_frames = frame_samples_ms.iter().filter(|sample| **sample > budget_ms).count();
+    let hitch_frames = frame_samples_ms.iter().filter(|sample| **sample > budget_ms * 2.0).count();
+    let denom = frame_samples_ms.len() as f64;
+    let label = format!("{}hz", refresh_hz);
+    metrics.insert(format!("frame_budget_{}_ms", label), budget_ms);
+    metrics.insert(format!("missed_frames_{}", label), missed_frames as f64);
+    metrics.insert(format!("missed_frame_ratio_{}", label), missed_frames as f64 / denom);
+    metrics.insert(format!("hitch_frames_{}", label), hitch_frames as f64);
+    metrics.insert(format!("hitch_ratio_{}", label), hitch_frames as f64 / denom);
+}
+
 fn regression_allowed_median(current: &PerfCaseResult, base: &PerfCaseResult) -> f64 {
     let mut allowed = base.median * (1.0 + current.threshold_pct);
     if base.median > 0.0 {
@@ -5567,6 +8085,84 @@ pub fn assert_full_coverage(coverage: &CoverageReport) -> Result<()> {
     Ok(())
 }
 
+pub fn assert_contract_coverage(contract: &ContractCoverageReport) -> Result<()> {
+    for entry in contract.layers.iter().chain(contract.battery.iter()) {
+        match entry.status.as_str() {
+            "implemented" | "partial" | "missing" | "separate" => {}
+            _ => bail!("unknown contract coverage status `{}` for `{}`", entry.status, entry.id),
+        }
+        if entry.status == "implemented" {
+            for note in &entry.notes {
+                let lower = note.to_ascii_lowercase();
+                if lower.contains("missing")
+                    || lower.contains("incomplete")
+                    || lower.contains("not yet")
+                    || lower.contains("no dedicated")
+                    || lower.contains("still not")
+                {
+                    bail!(
+                        "implemented contract row `{}` contains unresolved-gap note: {}",
+                        entry.id,
+                        note
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn assert_case_metric_contract(cases: &[PerfCaseResult]) -> Result<()> {
+    let mut missing = Vec::new();
+    for case in cases {
+        if case_requires_frame_metrics(case) {
+            push_missing_frame_metrics(case, &mut missing);
+        }
+        if case_requires_gpu_metrics(case) {
+            push_missing_gpu_metrics(case, &mut missing);
+        }
+    }
+    if !missing.is_empty() {
+        bail!("case metric contract is incomplete: {}", missing.join("; "));
+    }
+    Ok(())
+}
+
+fn case_requires_frame_metrics(case: &PerfCaseResult) -> bool {
+    case.unit == "ms/frame" || case.metrics.contains_key("frame_ms_p50")
+}
+
+fn case_requires_gpu_metrics(case: &PerfCaseResult) -> bool {
+    (case.id.starts_with("gpu.") && case.unit == "ms/frame")
+        || case.metrics.contains_key("gpu_ms_p50")
+}
+
+fn push_missing_frame_metrics(case: &PerfCaseResult, missing: &mut Vec<String>) {
+    for suffix in ["p50", "p95", "p99", "peak"] {
+        push_missing_metric(case, &format!("frame_ms_{}", suffix), missing);
+    }
+    for refresh_hz in [60, 120] {
+        let label = format!("{}hz", refresh_hz);
+        push_missing_metric(case, &format!("frame_budget_{}_ms", label), missing);
+        push_missing_metric(case, &format!("missed_frames_{}", label), missing);
+        push_missing_metric(case, &format!("missed_frame_ratio_{}", label), missing);
+        push_missing_metric(case, &format!("hitch_frames_{}", label), missing);
+        push_missing_metric(case, &format!("hitch_ratio_{}", label), missing);
+    }
+}
+
+fn push_missing_gpu_metrics(case: &PerfCaseResult, missing: &mut Vec<String>) {
+    for suffix in ["p50", "p95", "p99", "peak"] {
+        push_missing_metric(case, &format!("gpu_ms_{}", suffix), missing);
+    }
+}
+
+fn push_missing_metric(case: &PerfCaseResult, key: &str, missing: &mut Vec<String>) {
+    if !case.metrics.contains_key(key) {
+        missing.push(format!("{} missing `{}`", case.id, key));
+    }
+}
+
 fn load_report(path: &Path) -> Result<PerfReport> {
     let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
@@ -5613,7 +8209,7 @@ fn render_markdown(report: &PerfReport, comparison: Option<&PerfComparison>) -> 
         out.push_str(&format!("- Label: `{}`\n", label));
     }
     out.push_str(&format!(
-        "- Coverage: {}/{} components, {}/{} animations, {}/{} launch cases, {}/{} primitive lifecycle cases, {}/{} CPU scenes, {}/{} GPU scenes, {}/{} journeys, {}/{} authoring APIs, {}/{} image pipeline cases, {}/{} navigation cases, {}/{} reconcile cases, {}/{} bridge paths\n",
+        "- Coverage: {}/{} components, {}/{} animations, {}/{} launch cases, {}/{} primitive lifecycle cases, {}/{} CPU scenes, {}/{} GPU scenes, {}/{} journeys, {}/{} authoring APIs, {}/{} layout cases, {}/{} text-input cases, {}/{} image pipeline cases, {}/{} navigation cases, {}/{} reconcile cases, {}/{} endurance cases, {}/{} stress cases, {}/{} bridge paths\n",
         report.coverage.components_covered.len(),
         report.coverage.components_total,
         report.coverage.animations_covered.len(),
@@ -5630,12 +8226,20 @@ fn render_markdown(report: &PerfReport, comparison: Option<&PerfComparison>) -> 
         report.coverage.journeys_total,
         report.coverage.authoring_covered.len(),
         report.coverage.authoring_total,
+        report.coverage.layout_covered.len(),
+        report.coverage.layout_total,
+        report.coverage.text_input_covered.len(),
+        report.coverage.text_input_total,
         report.coverage.image_pipeline_covered.len(),
         report.coverage.image_pipeline_total,
         report.coverage.navigation_covered.len(),
         report.coverage.navigation_total,
         report.coverage.reconcile_covered.len(),
         report.coverage.reconcile_total,
+        report.coverage.endurance_covered.len(),
+        report.coverage.endurance_total,
+        report.coverage.stress_covered.len(),
+        report.coverage.stress_total,
         report.coverage.bridges_covered.len(),
         report.coverage.bridges_total
     ));
@@ -5734,7 +8338,7 @@ fn render_markdown(report: &PerfReport, comparison: Option<&PerfComparison>) -> 
     }
 
     out.push_str("\n## Baseline Workflow\n\n");
-    out.push_str("- Update the committed baseline only with review: `PERF_REPORT_DATE=$(date +%F) cargo run --release -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --write-baseline`\n");
+    out.push_str("- Update the committed baseline only with review: `PERF_REPORT_DATE=$(date +%F) cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --write-baseline`\n");
     out.push_str(&format!("- Latest JSON baseline: `{}`\n", DEFAULT_BASELINE_JSON));
     out.push_str(&format!("- Latest Markdown baseline: `{}`\n", DEFAULT_BASELINE_MARKDOWN));
     out
@@ -5744,11 +8348,43 @@ fn render_case_metrics_summary(metrics: &BTreeMap<String, f64>) -> String {
     if metrics.is_empty() {
         return String::from("`-`");
     }
-    let parts = metrics
-        .iter()
-        .take(4)
-        .map(|(name, value)| format!("{}={:.3}", name, value))
-        .collect::<Vec<_>>();
+    let mut parts = Vec::new();
+    let mut emitted = Vec::new();
+    for name in [
+        "gpu_ms_p50",
+        "gpu_ms_p95",
+        "gpu_ms_p99",
+        "gpu_ms_peak",
+        "hitch_ms_per_s",
+        "missed_frames",
+        "missed_frames_per_s",
+        "missed_frame_ratio_120hz",
+        "hitch_ratio_120hz",
+        "missed_frame_ratio_60hz",
+        "hitch_ratio_60hz",
+        "frame_interval_ms_p50",
+        "frame_interval_ms_p95",
+        "frame_ms_p50",
+        "frame_ms_p95",
+        "frame_backpressure_skips",
+    ] {
+        if let Some(value) = metrics.get(name) {
+            parts.push(format!("{}={:.3}", name, value));
+            emitted.push(name);
+            if parts.len() == 6 {
+                break;
+            }
+        }
+    }
+    for (name, value) in metrics {
+        if parts.len() == 6 {
+            break;
+        }
+        if emitted.iter().any(|emitted| *emitted == name.as_str()) {
+            continue;
+        }
+        parts.push(format!("{}={:.3}", name, value));
+    }
     format!("`{}`", parts.join("; "))
 }
 
@@ -5770,12 +8406,20 @@ fn compute_audit_speedups(report: &PerfReport) -> Vec<(String, f64)> {
             out.push((String::from("coalesce_adjacent_draws"), legacy.median / current.median));
         }
     }
+    if let (Some(current), Some(legacy)) = (
+        map.get("cpu.system.wrapped_label_cached_encode"),
+        map.get("cpu.system.wrapped_label_legacy_fit_shape"),
+    ) {
+        if current.median > 0.0 {
+            out.push((String::from("wrapped_label_fit"), legacy.median / current.median));
+        }
+    }
     out
 }
 
 fn print_summary(report: &PerfReport, comparison: Option<&PerfComparison>) {
     println!(
-        "suite={} cases={} components={}/{} animations={}/{} launch={}/{} primitive_lifecycle={}/{} scenes_cpu={}/{} scenes_gpu={}/{} journeys={}/{} authoring={}/{} image_pipeline={}/{} navigation={}/{} reconcile={}/{} bridges={}/{}",
+        "suite={} cases={} components={}/{} animations={}/{} launch={}/{} primitive_lifecycle={}/{} scenes_cpu={}/{} scenes_gpu={}/{} journeys={}/{} authoring={}/{} layout={}/{} text_input={}/{} image_pipeline={}/{} navigation={}/{} reconcile={}/{} endurance={}/{} stress={}/{} bridges={}/{}",
         report.suite,
         report.cases.len(),
         report.coverage.components_covered.len(),
@@ -5794,12 +8438,20 @@ fn print_summary(report: &PerfReport, comparison: Option<&PerfComparison>) {
         report.coverage.journeys_total,
         report.coverage.authoring_covered.len(),
         report.coverage.authoring_total,
+        report.coverage.layout_covered.len(),
+        report.coverage.layout_total,
+        report.coverage.text_input_covered.len(),
+        report.coverage.text_input_total,
         report.coverage.image_pipeline_covered.len(),
         report.coverage.image_pipeline_total,
         report.coverage.navigation_covered.len(),
         report.coverage.navigation_total,
         report.coverage.reconcile_covered.len(),
         report.coverage.reconcile_total,
+        report.coverage.endurance_covered.len(),
+        report.coverage.endurance_total,
+        report.coverage.stress_covered.len(),
+        report.coverage.stress_total,
         report.coverage.bridges_covered.len(),
         report.coverage.bridges_total
     );
@@ -5999,6 +8651,764 @@ fn run_text_shape_bake() -> u64 {
     (run_latin.vb.len + run_cjk.vb.len + indices.len() as u32) as u64
 }
 
+fn text_prefix_width_map_case(smoke: bool, text_loops: u64) -> PerfCaseResult {
+    let mut case = measure_cpu_case(
+        "cpu.system.text_prefix_width_map",
+        "system",
+        smoke,
+        true,
+        0.12,
+        text_loops,
+        vec![String::from(
+            "Single shaped-run cursor prefix width map over a long unwrapped text input line.",
+        )],
+        move || run_text_prefix_width_map_stats().checksum,
+    );
+    let stats = run_text_prefix_width_map_stats();
+    case.metrics.insert(String::from("text_bytes"), stats.text_bytes as f64);
+    case.metrics.insert(String::from("prefix_boundaries"), stats.prefix_boundaries as f64);
+    case.metrics.insert(String::from("width_entries"), stats.width_entries as f64);
+    case.metrics.insert(String::from("shaped_runs"), stats.shaped_runs as f64);
+    case
+}
+
+fn run_text_prefix_width_map_stats() -> TextPrefixWidthMapStats {
+    let mut db = text::FontDb::default();
+    let latin_id = db.add_font(text::Font::from_bytes(LATIN_FONT.to_vec()));
+    let mut shaper = text::TextShaper::default();
+    let Some(latin) = db.font(latin_id) else {
+        return TextPrefixWidthMapStats::default();
+    };
+    let text_value =
+        "Orbit telemetry cache line carries enough unwrapped text for cursor map pressure. "
+            .repeat(12);
+    let mut boundaries = Vec::with_capacity(text_value.len() + 1);
+    for index in 0..=text_value.len() {
+        boundaries.push(index);
+    }
+    let Ok(shaped) = shaper.shape(latin, latin_id, &text_value, 16.0) else {
+        return TextPrefixWidthMapStats::default();
+    };
+    let widths = shaped.prefix_widths_for_boundaries(&boundaries);
+    let last = widths.last().copied().map_or(0.0, |width| width);
+    TextPrefixWidthMapStats {
+        checksum: widths.len() as u64 + (last.max(0.0) * 64.0) as u64,
+        text_bytes: text_value.len() as u64,
+        prefix_boundaries: boundaries.len() as u64,
+        width_entries: widths.len() as u64,
+        shaped_runs: 1,
+    }
+}
+
+fn text_fallback_label_encode_case(smoke: bool, text_loops: u64) -> PerfCaseResult {
+    let mut case = measure_cpu_case(
+        "cpu.system.text_fallback_label_encode",
+        "system",
+        smoke,
+        true,
+        0.12,
+        text_loops,
+        vec![String::from(
+            "Visible label encoding for mixed Latin/CJK text using configured fallback-font shaped runs.",
+        )],
+        move || run_text_fallback_label_encode_stats().checksum,
+    );
+    let stats = run_text_fallback_label_encode_stats();
+    case.metrics.insert(String::from("fallback_fonts"), 1.0);
+    case.metrics.insert(String::from("fallback_label_glyph_runs"), stats.glyph_runs as f64);
+    case.metrics.insert(String::from("fallback_label_vertices"), stats.vertices as f64);
+    case.metrics.insert(String::from("fallback_label_indices"), stats.indices as f64);
+    case.metrics.insert(String::from("atlas_revision"), stats.atlas_revision as f64);
+    case
+}
+
+fn run_text_fallback_label_encode_stats() -> TextFallbackLabelStats {
+    let mut text_ctx = perf_text_ctx();
+    text_ctx.set_fallback_fonts(&[1]);
+    let mut uploader = CpuUploader::default();
+    let mut builder = ui::DrawListBuilder::new();
+    let text_value = "ABÉ 漢 AB漢 ÉB漢 ".repeat(16);
+
+    ui::elements::encode_label_text(
+        &text_value,
+        api::Color::rgba(0.1, 0.1, 0.1, 1.0),
+        ui::elements::Align::Left,
+        false,
+        0,
+        18.0,
+        api::RectF::new(0.0, 0.0, 720.0, 28.0),
+        2.0,
+        &mut text_ctx,
+        &mut uploader,
+        &mut builder,
+    );
+
+    let dl = builder.drawlist();
+    let glyph_runs =
+        dl.items.iter().filter(|cmd| matches!(cmd, api::DrawCmd::GlyphRun { .. })).count() as u64;
+    let vertices = dl.vertices.len() as u64;
+    let indices = dl.indices.len() as u64;
+    let atlas_revision = text_ctx.atlas_revision();
+    TextFallbackLabelStats {
+        checksum: glyph_runs
+            .wrapping_add(vertices)
+            .wrapping_add(indices)
+            .wrapping_add(atlas_revision),
+        glyph_runs,
+        vertices,
+        indices,
+        atlas_revision,
+    }
+}
+
+fn text_atlas_pressure_case(smoke: bool, text_loops: u64) -> PerfCaseResult {
+    let mut case = measure_cpu_case(
+        "cpu.system.text_atlas_pressure",
+        "system",
+        smoke,
+        true,
+        0.12,
+        text_loops,
+        vec![String::from("Glyph atlas packing under constrained capacity and LRU slot eviction.")],
+        move || run_text_atlas_pressure_stats().checksum,
+    );
+    let stats = run_text_atlas_pressure_stats();
+    case.metrics.insert(String::from("atlas_shape_count"), stats.shape_count as f64);
+    case.metrics.insert(String::from("atlas_rendered_glyph_runs"), stats.rendered_runs as f64);
+    case.metrics.insert(String::from("atlas_evictions"), stats.evictions as f64);
+    case.metrics.insert(String::from("atlas_resident_glyphs"), stats.resident_glyphs as f64);
+    case.metrics.insert(String::from("atlas_revision"), stats.revision as f64);
+    case.metrics.insert(String::from("atlas_dirty_rects"), stats.dirty_rects as f64);
+    case.metrics.insert(String::from("atlas_dirty_pixels"), stats.dirty_pixels as f64);
+    case.metrics.insert(String::from("atlas_max_dirty_pixels"), stats.max_dirty_pixels as f64);
+    case.metrics.insert(String::from("atlas_pressure_vertices"), stats.vertices as f64);
+    case.metrics.insert(String::from("atlas_pressure_indices"), stats.indices as f64);
+    case
+}
+
+fn run_text_atlas_pressure_stats() -> TextAtlasPressureStats {
+    let mut db = text::FontDb::default();
+    let latin_id = db.add_font(text::Font::from_bytes(LATIN_FONT.to_vec()));
+    let mut shaper = text::TextShaper::default();
+    let Some(latin) = db.font(latin_id) else {
+        return TextAtlasPressureStats::default();
+    };
+    let shapes: Vec<_> = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        .chars()
+        .filter_map(|ch| {
+            let mut buf = [0u8; 4];
+            let s = ch.encode_utf8(&mut buf);
+            shaper.shape(latin, latin_id, s, 22.0).ok().map(|shape| shape.to_owned_shape())
+        })
+        .collect();
+    let mut atlas = text::Atlas::new(24, 24);
+    let mut raster = text::RasterCtx::default();
+    let mut verts = Vec::new();
+    let mut indices = Vec::new();
+    let mut checksum = 0u64;
+    let mut rendered_runs = 0u64;
+    let mut dirty_rects = 0u64;
+    let mut dirty_pixels = 0u64;
+    let mut max_dirty_pixels = 0u64;
+
+    for (index, shape) in shapes.iter().enumerate() {
+        atlas.clear_dirty();
+        let run = shape.bake_into_with(
+            latin,
+            &mut raster,
+            &mut atlas,
+            &mut verts,
+            &mut indices,
+            api::Color::rgba(0.2, 0.2, 0.2, 1.0),
+            api::ImageHandle(1),
+            0.0,
+            index as f32,
+            1.0,
+        );
+        checksum = checksum
+            .wrapping_add(run.vb.len as u64)
+            .wrapping_add(run.ib.len as u64)
+            .wrapping_add(atlas.eviction_count());
+        if run.vb.len > 0 {
+            rendered_runs = rendered_runs.saturating_add(1);
+        }
+        if let Some(rect) = atlas.dirty_rect() {
+            let pixels = u64::from(rect.w).saturating_mul(u64::from(rect.h));
+            dirty_rects = dirty_rects.saturating_add(1);
+            dirty_pixels = dirty_pixels.saturating_add(pixels);
+            max_dirty_pixels = max_dirty_pixels.max(pixels);
+        }
+    }
+
+    let evictions = atlas.eviction_count();
+    let resident_glyphs = atlas.glyph_count() as u64;
+    let revision = atlas.revision();
+    let vertices = verts.len() as u64;
+    let index_count = indices.len() as u64;
+    TextAtlasPressureStats {
+        checksum: checksum
+            .wrapping_add(resident_glyphs)
+            .wrapping_add(index_count)
+            .wrapping_add(evictions)
+            .wrapping_add(dirty_pixels),
+        shape_count: shapes.len() as u64,
+        rendered_runs,
+        evictions,
+        resident_glyphs,
+        revision,
+        dirty_rects,
+        dirty_pixels,
+        max_dirty_pixels,
+        vertices,
+        indices: index_count,
+    }
+}
+
+fn text_atlas_dirty_rect_upload_case(smoke: bool, text_loops: u64) -> PerfCaseResult {
+    let mut case = measure_cpu_case(
+        "cpu.system.text_atlas_dirty_rect_upload",
+        "system",
+        smoke,
+        true,
+        0.12,
+        text_loops,
+        vec![String::from(
+            "TextCtx atlas publication through one full A8 create followed by incremental dirty-rect uploads for new glyphs.",
+        )],
+        move || run_text_atlas_dirty_rect_upload_stats().checksum,
+    );
+    let stats = run_text_atlas_dirty_rect_upload_stats();
+    case.metrics.insert(String::from("atlas_create_calls"), stats.creates as f64);
+    case.metrics.insert(String::from("atlas_update_calls"), stats.updates as f64);
+    case.metrics.insert(String::from("dirty_upload_pixels"), stats.dirty_upload_pixels as f64);
+    case.metrics.insert(String::from("full_upload_pixels"), stats.full_upload_pixels as f64);
+    case.metrics.insert(String::from("max_dirty_update_pixels"), stats.max_update_pixels as f64);
+    case.metrics.insert(String::from("atlas_row_bytes"), stats.row_bytes as f64);
+    let ratio = if stats.full_upload_pixels == 0 {
+        0.0
+    } else {
+        stats.dirty_upload_pixels as f64 / stats.full_upload_pixels as f64
+    };
+    case.metrics.insert(String::from("dirty_to_full_upload_ratio"), ratio);
+    case
+}
+
+fn run_text_atlas_dirty_rect_upload_stats() -> TextAtlasUploadStats {
+    let mut text_ctx = perf_text_ctx();
+    let mut uploader = CountingTextUploader::default();
+    let mut builder = ui::DrawListBuilder::new();
+    let texts = ["A", "B", "É", "C"];
+    let mut checksum = 0u64;
+
+    for (index, text_value) in texts.iter().enumerate() {
+        ui::elements::encode_label_text(
+            text_value,
+            api::Color::rgba(0.1, 0.1, 0.1, 1.0),
+            ui::elements::Align::Left,
+            false,
+            0,
+            18.0,
+            api::RectF::new(0.0, index as f32 * 24.0, 360.0, 28.0),
+            2.0,
+            &mut text_ctx,
+            &mut uploader,
+            &mut builder,
+        );
+        let dl = builder.drawlist();
+        checksum = checksum
+            .wrapping_add(dl.items.len() as u64)
+            .wrapping_add(dl.vertices.len() as u64)
+            .wrapping_add(dl.indices.len() as u64)
+            .wrapping_add(text_ctx.atlas_revision());
+        builder.clear();
+    }
+
+    uploader.stats.checksum = checksum
+        .wrapping_add(text_ctx.atlas.glyph_count() as u64)
+        .wrapping_add(uploader.stats.dirty_upload_pixels)
+        .wrapping_add(uploader.stats.full_upload_pixels);
+    uploader.stats
+}
+
+const WRAPPED_LABEL_VARIANTS: usize = 4_096;
+
+struct WrappedLabelEncodeBench {
+    texts: Vec<Arc<str>>,
+    text_index: usize,
+    rect: api::RectF,
+    text_ctx: ui::elements::TextCtx,
+    uploader: CountingTextUploader,
+    builder: ui::DrawListBuilder,
+    legacy_shape_calls: u64,
+}
+
+impl WrappedLabelEncodeBench {
+    fn new() -> Self {
+        let stem = "Orbit telemetry cache labels wrap across narrow rows while preserving glyph atlas updates and final line output";
+        let mut texts = Vec::with_capacity(WRAPPED_LABEL_VARIANTS);
+        for index in 0..WRAPPED_LABEL_VARIANTS {
+            texts.push(Arc::<str>::from(format!(
+                "{stem} sample {:04} with stable ASCII words for wrapped label cache miss pressure",
+                index
+            )));
+        }
+        Self {
+            texts,
+            text_index: 0,
+            rect: api::RectF::new(0.0, 0.0, 164.0, 220.0),
+            text_ctx: perf_text_ctx(),
+            uploader: CountingTextUploader::default(),
+            builder: ui::DrawListBuilder::new(),
+            legacy_shape_calls: 0,
+        }
+    }
+
+    fn encode_cached_once(&mut self) -> u64 {
+        let Self { texts, text_index, rect, text_ctx, uploader, builder, .. } = self;
+        let index = *text_index % texts.len();
+        *text_index = text_index.saturating_add(1);
+        let text_value = Arc::clone(&texts[index]);
+        builder.clear();
+        ui::elements::encode_label_text(
+            text_value.as_ref(),
+            api::Color::rgba(0.1, 0.1, 0.1, 1.0),
+            ui::elements::Align::Left,
+            true,
+            0,
+            13.0,
+            *rect,
+            PERF_DEVICE_SCALE,
+            text_ctx,
+            uploader,
+            builder,
+        );
+        let dl = builder.drawlist();
+        dl.items.len() as u64
+            + dl.vertices.len() as u64
+            + dl.indices.len() as u64
+            + text_ctx.atlas_revision()
+    }
+
+    fn encode_legacy_once(&mut self) -> u64 {
+        let index = self.text_index % self.texts.len();
+        self.text_index = self.text_index.saturating_add(1);
+        let text_value = Arc::clone(&self.texts[index]);
+        self.builder.clear();
+        let lines = self.legacy_wrapped_shapes(text_value.as_ref());
+        let handle = self.text_ctx.ensure_gpu(&mut self.uploader);
+        let Some(font) = self.text_ctx.fonts.font(0) else {
+            return 0;
+        };
+        let mut y = self.rect.y;
+        let line_h = (13.0_f32 * 1.25).ceil();
+        for shape in lines {
+            let glyph_run = {
+                let dl = self.builder.drawlist_mut();
+                shape.bake_into_with(
+                    font,
+                    &mut self.text_ctx.raster,
+                    &mut self.text_ctx.atlas,
+                    &mut dl.vertices,
+                    &mut dl.indices,
+                    api::Color::rgba(0.1, 0.1, 0.1, 1.0),
+                    handle,
+                    self.rect.x,
+                    y,
+                    PERF_DEVICE_SCALE,
+                )
+            };
+            if glyph_run.vb.len > 0 && glyph_run.ib.len > 0 {
+                self.builder.glyph_run(glyph_run);
+            }
+            y += line_h;
+        }
+        if self.text_ctx.atlas.dirty_rect().is_some() {
+            let _ = self.text_ctx.ensure_gpu(&mut self.uploader);
+        }
+        let dl = self.builder.drawlist();
+        dl.items.len() as u64
+            + dl.vertices.len() as u64
+            + dl.indices.len() as u64
+            + self.text_ctx.atlas_revision()
+    }
+
+    fn legacy_wrapped_shapes(&mut self, text_value: &str) -> Vec<text::OwnedShape> {
+        let mut lines = Vec::with_capacity(4);
+        let mut cur = String::with_capacity(text_value.len().min(128));
+        let mut cur_shape: Option<text::OwnedShape> = None;
+        let mut pending_spaces = 0usize;
+        for segment in text_value.split_inclusive(' ') {
+            let trailing_spaces =
+                segment.as_bytes().iter().rev().take_while(|b| **b == b' ').count();
+            let word = &segment[..segment.len() - trailing_spaces];
+            if word.is_empty() {
+                pending_spaces = pending_spaces.saturating_add(trailing_spaces);
+                continue;
+            }
+            let prior_len = cur.len();
+            for _ in 0..pending_spaces {
+                cur.push(' ');
+            }
+            cur.push_str(word);
+            pending_spaces = trailing_spaces;
+            let Some(shape) = self.legacy_shape_line(&cur) else {
+                cur.truncate(prior_len);
+                continue;
+            };
+            if shape.width() > self.rect.w && prior_len > 0 {
+                cur.truncate(prior_len);
+                if let Some(shape) = cur_shape.take() {
+                    lines.push(shape);
+                }
+                cur.clear();
+                cur.push_str(word);
+                let Some(shape) = self.legacy_shape_line(&cur) else {
+                    cur.clear();
+                    pending_spaces = 0;
+                    continue;
+                };
+                cur_shape = Some(shape);
+            } else {
+                cur_shape = Some(shape);
+            }
+        }
+        if !cur.is_empty() {
+            if let Some(shape) = cur_shape.take() {
+                lines.push(shape);
+            }
+        }
+        lines
+    }
+
+    fn legacy_shape_line(&mut self, text_value: &str) -> Option<text::OwnedShape> {
+        let font = self.text_ctx.fonts.font(0)?;
+        self.legacy_shape_calls = self.legacy_shape_calls.saturating_add(1);
+        self.text_ctx
+            .shaper
+            .shape(font, 0, text_value, 13.0)
+            .ok()
+            .map(|shape| shape.to_owned_shape())
+    }
+}
+
+fn wrapped_label_cached_encode_case(smoke: bool, text_loops: u64) -> PerfCaseResult {
+    let mut bench = WrappedLabelEncodeBench::new();
+    let mut case = measure_cpu_case(
+        "cpu.system.wrapped_label_cached_encode",
+        "system",
+        smoke,
+        true,
+        0.12,
+        text_loops,
+        vec![String::from(
+            "Current TextCtx ASCII wrapped-label cache-miss path using one shaped run for break decisions and final-line shaping only.",
+        )],
+        move || bench.encode_cached_once(),
+    );
+    let stats = run_wrapped_label_cached_encode_stats();
+    case.metrics.insert(String::from("wrapped_label_variants"), WRAPPED_LABEL_VARIANTS as f64);
+    case.metrics.insert(String::from("atlas_create_calls"), stats.creates as f64);
+    case.metrics.insert(String::from("atlas_update_calls"), stats.updates as f64);
+    case.metrics.insert(String::from("dirty_upload_pixels"), stats.dirty_upload_pixels as f64);
+    case.metrics.insert(String::from("full_upload_pixels"), stats.full_upload_pixels as f64);
+    case.metrics.insert(String::from("max_dirty_update_pixels"), stats.max_update_pixels as f64);
+    case.metrics.insert(String::from("wrapped_label_glyph_runs"), stats.glyph_runs as f64);
+    case.metrics.insert(String::from("wrapped_label_vertices"), stats.vertices as f64);
+    case.metrics.insert(String::from("wrapped_label_indices"), stats.indices as f64);
+    let ratio = if stats.full_upload_pixels == 0 {
+        0.0
+    } else {
+        stats.dirty_upload_pixels as f64 / stats.full_upload_pixels as f64
+    };
+    case.metrics.insert(String::from("dirty_to_full_upload_ratio"), ratio);
+    case
+}
+
+fn wrapped_label_legacy_fit_shape_case(smoke: bool, text_loops: u64) -> PerfCaseResult {
+    let mut bench = WrappedLabelEncodeBench::new();
+    let mut case = measure_cpu_case(
+        "cpu.system.wrapped_label_legacy_fit_shape",
+        "audit-baseline",
+        smoke,
+        false,
+        0.0,
+        text_loops,
+        vec![String::from(
+            "Legacy wrapped-label fitting loop that reshapes the growing candidate string for every word.",
+        )],
+        move || bench.encode_legacy_once(),
+    );
+    let stats = run_wrapped_label_legacy_fit_shape_stats();
+    case.metrics.insert(String::from("wrapped_label_variants"), WRAPPED_LABEL_VARIANTS as f64);
+    case.metrics.insert(String::from("legacy_shape_calls"), stats.shape_calls as f64);
+    case.metrics.insert(String::from("atlas_create_calls"), stats.creates as f64);
+    case.metrics.insert(String::from("atlas_update_calls"), stats.updates as f64);
+    case.metrics.insert(String::from("dirty_upload_pixels"), stats.dirty_upload_pixels as f64);
+    case.metrics.insert(String::from("full_upload_pixels"), stats.full_upload_pixels as f64);
+    case.metrics.insert(String::from("max_dirty_update_pixels"), stats.max_update_pixels as f64);
+    case.metrics.insert(String::from("wrapped_label_glyph_runs"), stats.glyph_runs as f64);
+    case.metrics.insert(String::from("wrapped_label_vertices"), stats.vertices as f64);
+    case.metrics.insert(String::from("wrapped_label_indices"), stats.indices as f64);
+    case
+}
+
+fn run_wrapped_label_cached_encode_stats() -> TextAtlasUploadStats {
+    let mut bench = WrappedLabelEncodeBench::new();
+    let mut checksum = 0u64;
+    for _ in 0..32 {
+        checksum = checksum.wrapping_add(bench.encode_cached_once());
+    }
+    let dl = bench.builder.drawlist();
+    let glyph_runs =
+        dl.items.iter().filter(|cmd| matches!(cmd, api::DrawCmd::GlyphRun { .. })).count() as u64;
+    let mut stats = bench.uploader.stats;
+    stats.glyph_runs = glyph_runs;
+    stats.vertices = dl.vertices.len() as u64;
+    stats.indices = dl.indices.len() as u64;
+    stats.checksum =
+        checksum.wrapping_add(stats.dirty_upload_pixels).wrapping_add(stats.full_upload_pixels);
+    stats
+}
+
+fn run_wrapped_label_legacy_fit_shape_stats() -> TextAtlasUploadStats {
+    let mut bench = WrappedLabelEncodeBench::new();
+    let mut checksum = 0u64;
+    for _ in 0..32 {
+        checksum = checksum.wrapping_add(bench.encode_legacy_once());
+    }
+    let dl = bench.builder.drawlist();
+    let glyph_runs =
+        dl.items.iter().filter(|cmd| matches!(cmd, api::DrawCmd::GlyphRun { .. })).count() as u64;
+    let mut stats = bench.uploader.stats;
+    stats.glyph_runs = glyph_runs;
+    stats.vertices = dl.vertices.len() as u64;
+    stats.indices = dl.indices.len() as u64;
+    stats.shape_calls = bench.legacy_shape_calls;
+    stats.checksum = checksum
+        .wrapping_add(stats.dirty_upload_pixels)
+        .wrapping_add(stats.full_upload_pixels)
+        .wrapping_add(stats.shape_calls);
+    stats
+}
+
+struct PickerTextEncodeBench {
+    picker: ui::elements::PickerState,
+    labels: Vec<String>,
+    style: ui::elements::PickerStyle,
+    rect: api::RectF,
+    text_ctx: ui::elements::TextCtx,
+    uploader: CountingTextUploader,
+    builder: ui::DrawListBuilder,
+}
+
+impl PickerTextEncodeBench {
+    fn new() -> Self {
+        let items: Vec<String> = [
+            "Alpine", "Brass", "Cerulean", "Dawn", "Emerald", "Frost", "Graphite", "Harbor",
+            "Ivory",
+        ]
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect();
+        Self {
+            picker: ui::elements::PickerState::new(items.clone()),
+            labels: items,
+            style: ui::elements::PickerStyle { font_id: 0, ..ui::elements::PickerStyle::default() },
+            rect: api::RectF::new(0.0, 0.0, 240.0, 180.0),
+            text_ctx: perf_text_ctx(),
+            uploader: CountingTextUploader::default(),
+            builder: ui::DrawListBuilder::new(),
+        }
+    }
+
+    fn encode_cached_once(&mut self) -> u64 {
+        self.builder.clear();
+        self.picker.encode(
+            &self.style,
+            self.rect,
+            PERF_DEVICE_SCALE,
+            &mut self.text_ctx,
+            &mut self.uploader,
+            &mut self.builder,
+        );
+        let dl = self.builder.drawlist();
+        dl.items.len() as u64
+            + dl.vertices.len() as u64
+            + dl.indices.len() as u64
+            + self.text_ctx.atlas_revision()
+    }
+
+    fn encode_legacy_once(&mut self) -> u64 {
+        self.builder.clear();
+        let highlight = self.style.center_band_rect(self.rect);
+        self.builder.rrect(
+            highlight,
+            [self.style.center_band_radius(self.rect); 4],
+            self.style.highlight,
+        );
+        let handle = self.text_ctx.ensure_gpu(&mut self.uploader);
+        let Some(font) = self.text_ctx.fonts.font(self.style.font_id) else {
+            return 0;
+        };
+        self.builder.clip_push(api::RectI::new(
+            self.rect.x.floor() as i32,
+            self.rect.y.floor() as i32,
+            self.rect.w.ceil() as i32,
+            self.rect.h.ceil() as i32,
+        ));
+        let position = self.picker.column_position(0).unwrap_or(0.0);
+        for (item_index, label) in self.labels.iter().enumerate() {
+            let Some(item_rect) = self.style.item_rect(self.rect, 1, 0, position, item_index)
+            else {
+                continue;
+            };
+            if item_rect.y + item_rect.h <= self.rect.y || item_rect.y >= self.rect.y + self.rect.h
+            {
+                continue;
+            }
+            let Ok(shape) =
+                self.text_ctx.shaper.shape(font, self.style.font_id, label, self.style.font_px)
+            else {
+                continue;
+            };
+            let text_x = item_rect.x + (item_rect.w - shape.width()) * 0.50;
+            let text_y =
+                item_rect.y + (item_rect.h - self.style.font_px) * 0.50 + self.style.baseline_shift;
+            let glyph_run = {
+                let dl = self.builder.drawlist_mut();
+                shape.bake_into_with(
+                    &mut self.text_ctx.raster,
+                    &mut self.text_ctx.atlas,
+                    &mut dl.vertices,
+                    &mut dl.indices,
+                    self.style.text_color,
+                    handle,
+                    text_x,
+                    text_y,
+                    PERF_DEVICE_SCALE,
+                )
+            };
+            if glyph_run.vb.len > 0 && glyph_run.ib.len > 0 {
+                self.builder.glyph_run(glyph_run);
+            }
+        }
+        self.builder.clip_pop();
+        let (data, w, h) = self.text_ctx.atlas.image();
+        ui::elements::ImageUploader::update_a8(
+            &mut self.uploader,
+            handle,
+            0,
+            0,
+            w,
+            h,
+            data,
+            w as usize,
+        );
+        self.text_ctx.atlas.clear_dirty();
+        let dl = self.builder.drawlist();
+        dl.items.len() as u64
+            + dl.vertices.len() as u64
+            + dl.indices.len() as u64
+            + self.text_ctx.atlas_revision()
+    }
+}
+
+fn picker_text_cached_encode_case(smoke: bool, text_loops: u64) -> PerfCaseResult {
+    let mut bench = PickerTextEncodeBench::new();
+    let mut case = measure_cpu_case(
+        "cpu.system.picker_text_cached_encode",
+        "system",
+        smoke,
+        true,
+        0.12,
+        text_loops,
+        vec![String::from(
+            "Visible picker label encoding through TextCtx cached shaped runs and dirty atlas publication.",
+        )],
+        move || bench.encode_cached_once(),
+    );
+    let stats = run_picker_text_cached_encode_stats();
+    case.metrics.insert(String::from("atlas_create_calls"), stats.creates as f64);
+    case.metrics.insert(String::from("atlas_update_calls"), stats.updates as f64);
+    case.metrics.insert(String::from("dirty_upload_pixels"), stats.dirty_upload_pixels as f64);
+    case.metrics.insert(String::from("full_upload_pixels"), stats.full_upload_pixels as f64);
+    case.metrics.insert(String::from("max_dirty_update_pixels"), stats.max_update_pixels as f64);
+    case.metrics.insert(String::from("atlas_row_bytes"), stats.row_bytes as f64);
+    case.metrics.insert(String::from("picker_glyph_runs"), stats.glyph_runs as f64);
+    case.metrics.insert(String::from("picker_vertices"), stats.vertices as f64);
+    case.metrics.insert(String::from("picker_indices"), stats.indices as f64);
+    let ratio = if stats.full_upload_pixels == 0 {
+        0.0
+    } else {
+        stats.dirty_upload_pixels as f64 / stats.full_upload_pixels as f64
+    };
+    case.metrics.insert(String::from("dirty_to_full_upload_ratio"), ratio);
+    case
+}
+
+fn picker_text_legacy_shape_upload_case(smoke: bool, text_loops: u64) -> PerfCaseResult {
+    let mut bench = PickerTextEncodeBench::new();
+    let mut case = measure_cpu_case(
+        "cpu.system.picker_text_legacy_shape_upload",
+        "audit-baseline",
+        smoke,
+        false,
+        0.0,
+        text_loops,
+        vec![String::from(
+            "Legacy picker label path that reshapes visible labels and full-updates the A8 atlas every encode.",
+        )],
+        move || bench.encode_legacy_once(),
+    );
+    let stats = run_picker_text_legacy_shape_upload_stats();
+    case.metrics.insert(String::from("atlas_create_calls"), stats.creates as f64);
+    case.metrics.insert(String::from("atlas_update_calls"), stats.updates as f64);
+    case.metrics.insert(String::from("atlas_update_pixels"), stats.dirty_upload_pixels as f64);
+    case.metrics.insert(String::from("full_upload_pixels"), stats.full_upload_pixels as f64);
+    case.metrics.insert(String::from("max_update_pixels"), stats.max_update_pixels as f64);
+    case.metrics.insert(String::from("atlas_row_bytes"), stats.row_bytes as f64);
+    case.metrics.insert(String::from("picker_glyph_runs"), stats.glyph_runs as f64);
+    case.metrics.insert(String::from("picker_vertices"), stats.vertices as f64);
+    case.metrics.insert(String::from("picker_indices"), stats.indices as f64);
+    case
+}
+
+fn run_picker_text_cached_encode_stats() -> TextAtlasUploadStats {
+    let mut bench = PickerTextEncodeBench::new();
+    let cold_checksum = bench.encode_cached_once();
+    let warm_checksum = bench.encode_cached_once();
+    let dl = bench.builder.drawlist();
+    let glyph_runs =
+        dl.items.iter().filter(|cmd| matches!(cmd, api::DrawCmd::GlyphRun { .. })).count() as u64;
+    let mut stats = bench.uploader.stats;
+    stats.glyph_runs = glyph_runs;
+    stats.vertices = dl.vertices.len() as u64;
+    stats.indices = dl.indices.len() as u64;
+    stats.checksum = cold_checksum
+        .wrapping_add(warm_checksum)
+        .wrapping_add(stats.dirty_upload_pixels)
+        .wrapping_add(stats.full_upload_pixels);
+    stats
+}
+
+fn run_picker_text_legacy_shape_upload_stats() -> TextAtlasUploadStats {
+    let mut bench = PickerTextEncodeBench::new();
+    let cold_checksum = bench.encode_legacy_once();
+    let warm_checksum = bench.encode_legacy_once();
+    let dl = bench.builder.drawlist();
+    let glyph_runs =
+        dl.items.iter().filter(|cmd| matches!(cmd, api::DrawCmd::GlyphRun { .. })).count() as u64;
+    let mut stats = bench.uploader.stats;
+    stats.glyph_runs = glyph_runs;
+    stats.vertices = dl.vertices.len() as u64;
+    stats.indices = dl.indices.len() as u64;
+    stats.checksum = cold_checksum
+        .wrapping_add(warm_checksum)
+        .wrapping_add(stats.dirty_upload_pixels)
+        .wrapping_add(stats.full_upload_pixels);
+    stats
+}
+
 fn touch(
     id: platform::TouchId,
     phase: platform::TouchPhase,
@@ -6008,6 +9418,7 @@ fn touch(
     platform::TouchEvent {
         id,
         phase,
+        timestamp_ns: 0,
         x,
         y,
         pressure: None,

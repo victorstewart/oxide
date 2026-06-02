@@ -1,5 +1,8 @@
 use oxide_renderer_api as gfx;
-use oxide_ui_core::{prepare_draws, sort_for_batching, DrawListBuilder, PreparedDraw};
+use oxide_ui_core::{
+    drawlist_retained_replay_safe_with_text_atlas_revisions, prepare_draws, sort_for_batching,
+    DrawListBuilder, PreparedDraw,
+};
 
 #[test]
 fn builder_records_advanced_draws() {
@@ -155,6 +158,307 @@ fn builder_clear_drops_geometry_buffers() {
     assert!(list.items.is_empty());
     assert!(list.vertices.is_empty());
     assert!(list.indices.is_empty());
+}
+
+#[test]
+fn builder_appends_drawlist_and_rebases_geometry_spans() {
+    let mut builder = DrawListBuilder::new();
+    {
+        let list = builder.drawlist_mut();
+        list.vertices.push(gfx::Vertex { x: -1.0, y: -1.0, u: 0.0, v: 0.0, rgba: 0 });
+        list.indices.push(0);
+    }
+
+    let mut cached = gfx::DrawList::default();
+    cached.vertices.extend_from_slice(&[
+        gfx::Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: u32::MAX },
+        gfx::Vertex { x: 1.0, y: 0.0, u: 1.0, v: 0.0, rgba: u32::MAX },
+        gfx::Vertex { x: 0.0, y: 1.0, u: 0.0, v: 1.0, rgba: u32::MAX },
+        gfx::Vertex { x: 1.0, y: 1.0, u: 1.0, v: 1.0, rgba: u32::MAX },
+    ]);
+    cached.indices.extend_from_slice(&[0, 1, 2, 2, 1, 3]);
+    cached.items.push(gfx::DrawCmd::ImageMesh {
+        tex: gfx::ImageHandle(3),
+        vb: gfx::VertexSpan { offset: 0, len: 4 },
+        ib: gfx::IndexSpan { offset: 0, len: 6 },
+        alpha: 1.0,
+    });
+    cached.items.push(gfx::DrawCmd::GlyphRun {
+        run: gfx::GlyphRun {
+            atlas: gfx::ImageHandle(4),
+            atlas_revision: 9,
+            vb: gfx::VertexSpan { offset: 1, len: 2 },
+            ib: gfx::IndexSpan { offset: 2, len: 3 },
+            sdf: false,
+            color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
+        },
+    });
+
+    assert!(builder.append_drawlist(&cached));
+
+    let list = builder.drawlist();
+    assert_eq!(list.vertices.len(), 5);
+    assert_eq!(list.indices.len(), 10);
+    assert_eq!(&list.indices[1..7], &[0, 1, 2, 2, 1, 3]);
+    assert_eq!(&list.indices[7..10], &[1, 1, 0]);
+    match &list.items[0] {
+        gfx::DrawCmd::ImageMesh { vb, ib, .. } => {
+            assert_eq!(*vb, gfx::VertexSpan { offset: 1, len: 4 });
+            assert_eq!(*ib, gfx::IndexSpan { offset: 1, len: 6 });
+        }
+        other => panic!("expected appended image mesh, found {other:?}"),
+    }
+    match &list.items[1] {
+        gfx::DrawCmd::GlyphRun { run } => {
+            assert_eq!(run.vb, gfx::VertexSpan { offset: 2, len: 2 });
+            assert_eq!(run.ib, gfx::IndexSpan { offset: 7, len: 3 });
+        }
+        other => panic!("expected appended glyph run, found {other:?}"),
+    }
+}
+
+#[test]
+fn builder_appends_absolute_index_drawlist_as_local_indices() {
+    let mut builder = DrawListBuilder::new();
+    builder.drawlist_mut().vertices.push(gfx::Vertex { x: -1.0, y: -1.0, u: 0.0, v: 0.0, rgba: 0 });
+
+    let mut cached = gfx::DrawList::default();
+    cached.vertices.extend_from_slice(&[
+        gfx::Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: u32::MAX },
+        gfx::Vertex { x: 1.0, y: 0.0, u: 1.0, v: 0.0, rgba: u32::MAX },
+        gfx::Vertex { x: 0.0, y: 1.0, u: 0.0, v: 1.0, rgba: u32::MAX },
+        gfx::Vertex { x: 1.0, y: 1.0, u: 1.0, v: 1.0, rgba: u32::MAX },
+    ]);
+    cached.indices.extend_from_slice(&[1, 2, 3]);
+    cached.items.push(gfx::DrawCmd::ImageMesh {
+        tex: gfx::ImageHandle(9),
+        vb: gfx::VertexSpan { offset: 1, len: 3 },
+        ib: gfx::IndexSpan { offset: 0, len: 3 },
+        alpha: 1.0,
+    });
+
+    assert!(builder.append_drawlist(&cached));
+    let list = builder.drawlist();
+    assert_eq!(&list.indices[..], &[0, 1, 2]);
+    match &list.items[0] {
+        gfx::DrawCmd::ImageMesh { vb, ib, .. } => {
+            assert_eq!(*vb, gfx::VertexSpan { offset: 2, len: 3 });
+            assert_eq!(*ib, gfx::IndexSpan { offset: 0, len: 3 });
+        }
+        other => panic!("expected appended image mesh, found {other:?}"),
+    }
+}
+
+#[test]
+fn builder_append_drawlist_is_atomic_on_invalid_geometry() {
+    let mut builder = DrawListBuilder::new();
+    builder.rrect(
+        gfx::RectF::new(0.0, 0.0, 10.0, 10.0),
+        [2.0, 2.0, 2.0, 2.0],
+        gfx::Color::rgba(0.3, 0.4, 0.5, 1.0),
+    );
+    let before = builder.drawlist().clone();
+
+    let mut cached = gfx::DrawList::default();
+    cached.vertices.push(gfx::Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: u32::MAX });
+    cached.indices.extend_from_slice(&[0, 1, 2]);
+    cached.items.push(gfx::DrawCmd::ImageMesh {
+        tex: gfx::ImageHandle(9),
+        vb: gfx::VertexSpan { offset: 2, len: 4 },
+        ib: gfx::IndexSpan { offset: 0, len: 3 },
+        alpha: 1.0,
+    });
+
+    assert!(!builder.append_drawlist(&cached));
+    assert_eq!(builder.drawlist(), &before);
+}
+
+#[test]
+fn builder_refuses_cached_text_draws_after_atlas_revision_changes() {
+    let atlas = gfx::ImageHandle(4);
+    let mut cached = gfx::DrawList::default();
+    cached.vertices.extend_from_slice(&[
+        gfx::Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: u32::MAX },
+        gfx::Vertex { x: 1.0, y: 0.0, u: 1.0, v: 0.0, rgba: u32::MAX },
+        gfx::Vertex { x: 0.0, y: 1.0, u: 0.0, v: 1.0, rgba: u32::MAX },
+        gfx::Vertex { x: 1.0, y: 1.0, u: 1.0, v: 1.0, rgba: u32::MAX },
+    ]);
+    cached.indices.extend_from_slice(&[0, 1, 2, 2, 1, 3]);
+    cached.items.push(gfx::DrawCmd::GlyphRun {
+        run: gfx::GlyphRun {
+            atlas,
+            atlas_revision: 3,
+            vb: gfx::VertexSpan { offset: 0, len: 4 },
+            ib: gfx::IndexSpan { offset: 0, len: 6 },
+            sdf: false,
+            color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
+        },
+    });
+
+    let mut stale = DrawListBuilder::new();
+    assert!(!stale.append_drawlist_with_text_atlas_revision(&cached, atlas, 4));
+    assert!(stale.drawlist().items.is_empty());
+
+    let mut unknown = DrawListBuilder::new();
+    assert!(!unknown.append_drawlist_with_text_atlas_revision(&cached, gfx::ImageHandle(9), 3));
+    assert!(unknown.drawlist().items.is_empty());
+
+    let mut fresh = DrawListBuilder::new();
+    assert!(fresh.append_drawlist_with_text_atlas_revision(&cached, atlas, 3));
+    assert_eq!(fresh.drawlist().items.len(), 1);
+}
+
+#[test]
+fn builder_accepts_cached_text_draws_with_all_atlas_revisions() {
+    let atlas_a = gfx::ImageHandle(4);
+    let atlas_b = gfx::ImageHandle(9);
+    let mut cached = gfx::DrawList::default();
+    cached.vertices.extend_from_slice(&[
+        gfx::Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: u32::MAX },
+        gfx::Vertex { x: 1.0, y: 0.0, u: 1.0, v: 0.0, rgba: u32::MAX },
+        gfx::Vertex { x: 0.0, y: 1.0, u: 0.0, v: 1.0, rgba: u32::MAX },
+        gfx::Vertex { x: 1.0, y: 1.0, u: 1.0, v: 1.0, rgba: u32::MAX },
+    ]);
+    cached.indices.extend_from_slice(&[0, 1, 2, 2, 1, 3]);
+    cached.items.push(gfx::DrawCmd::GlyphRun {
+        run: gfx::GlyphRun {
+            atlas: atlas_a,
+            atlas_revision: 3,
+            vb: gfx::VertexSpan { offset: 0, len: 4 },
+            ib: gfx::IndexSpan { offset: 0, len: 6 },
+            sdf: false,
+            color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
+        },
+    });
+    cached.items.push(gfx::DrawCmd::GlyphRun {
+        run: gfx::GlyphRun {
+            atlas: atlas_b,
+            atlas_revision: 7,
+            vb: gfx::VertexSpan { offset: 0, len: 4 },
+            ib: gfx::IndexSpan { offset: 0, len: 6 },
+            sdf: true,
+            color: gfx::Color::rgba(0.8, 0.9, 1.0, 1.0),
+        },
+    });
+
+    let mut partial = DrawListBuilder::new();
+    assert!(!partial.append_drawlist_with_text_atlas_revisions(&cached, &[(atlas_a, 3)]));
+    assert!(partial.drawlist().items.is_empty());
+
+    let mut complete = DrawListBuilder::new();
+    assert!(
+        complete.append_drawlist_with_text_atlas_revisions(&cached, &[(atlas_a, 3), (atlas_b, 7)],)
+    );
+    assert_eq!(complete.drawlist().items.len(), 2);
+}
+
+#[test]
+fn retained_replay_safety_accepts_only_complete_text_atlas_context() {
+    let atlas_a = gfx::ImageHandle(4);
+    let atlas_b = gfx::ImageHandle(9);
+    let mut cached = gfx::DrawList::default();
+    cached.vertices.extend_from_slice(&[
+        gfx::Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: u32::MAX },
+        gfx::Vertex { x: 1.0, y: 0.0, u: 1.0, v: 0.0, rgba: u32::MAX },
+        gfx::Vertex { x: 0.0, y: 1.0, u: 0.0, v: 1.0, rgba: u32::MAX },
+        gfx::Vertex { x: 1.0, y: 1.0, u: 1.0, v: 1.0, rgba: u32::MAX },
+    ]);
+    cached.indices.extend_from_slice(&[0, 1, 2, 2, 1, 3]);
+    cached.items.push(gfx::DrawCmd::GlyphRun {
+        run: gfx::GlyphRun {
+            atlas: atlas_a,
+            atlas_revision: 3,
+            vb: gfx::VertexSpan { offset: 0, len: 4 },
+            ib: gfx::IndexSpan { offset: 0, len: 6 },
+            sdf: false,
+            color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
+        },
+    });
+    cached.items.push(gfx::DrawCmd::GlyphRun {
+        run: gfx::GlyphRun {
+            atlas: atlas_b,
+            atlas_revision: 7,
+            vb: gfx::VertexSpan { offset: 0, len: 4 },
+            ib: gfx::IndexSpan { offset: 0, len: 6 },
+            sdf: true,
+            color: gfx::Color::rgba(0.8, 0.9, 1.0, 1.0),
+        },
+    });
+
+    assert!(!drawlist_retained_replay_safe_with_text_atlas_revisions(&cached, &[(atlas_a, 3)],));
+    assert!(!drawlist_retained_replay_safe_with_text_atlas_revisions(
+        &cached,
+        &[(atlas_a, 4), (atlas_b, 7)],
+    ));
+    assert!(drawlist_retained_replay_safe_with_text_atlas_revisions(
+        &cached,
+        &[(atlas_a, 3), (atlas_b, 7)],
+    ));
+
+    cached.items.push(gfx::DrawCmd::LayerBegin {
+        id: 1,
+        rect: gfx::RectF::new(0.0, 0.0, 10.0, 10.0),
+        dirty: false,
+    });
+    assert!(!drawlist_retained_replay_safe_with_text_atlas_revisions(
+        &cached,
+        &[(atlas_a, 3), (atlas_b, 7)],
+    ));
+}
+
+#[test]
+fn builder_retained_append_requires_current_text_atlas_context() {
+    let atlas = gfx::ImageHandle(4);
+    let mut cached = gfx::DrawList::default();
+    cached.vertices.extend_from_slice(&[
+        gfx::Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: u32::MAX },
+        gfx::Vertex { x: 1.0, y: 0.0, u: 1.0, v: 0.0, rgba: u32::MAX },
+        gfx::Vertex { x: 0.0, y: 1.0, u: 0.0, v: 1.0, rgba: u32::MAX },
+        gfx::Vertex { x: 1.0, y: 1.0, u: 1.0, v: 1.0, rgba: u32::MAX },
+    ]);
+    cached.indices.extend_from_slice(&[0, 1, 2, 2, 1, 3]);
+    cached.items.push(gfx::DrawCmd::GlyphRun {
+        run: gfx::GlyphRun {
+            atlas,
+            atlas_revision: 3,
+            vb: gfx::VertexSpan { offset: 0, len: 4 },
+            ib: gfx::IndexSpan { offset: 0, len: 6 },
+            sdf: false,
+            color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
+        },
+    });
+
+    let mut missing = DrawListBuilder::new();
+    assert!(!missing.append_retained_drawlist(&cached));
+    assert!(missing.drawlist().items.is_empty());
+
+    let mut stale = DrawListBuilder::new();
+    assert!(!stale.append_retained_drawlist_with_text_atlas_revisions(&cached, &[(atlas, 4)]));
+    assert!(stale.drawlist().items.is_empty());
+
+    let mut fresh = DrawListBuilder::new();
+    assert!(fresh.append_retained_drawlist_with_text_atlas_revisions(&cached, &[(atlas, 3)]));
+    assert_eq!(fresh.drawlist().items.len(), 1);
+
+    let mut layered = cached.clone();
+    layered.items.push(gfx::DrawCmd::LayerBegin {
+        id: 1,
+        rect: gfx::RectF::new(0.0, 0.0, 10.0, 10.0),
+        dirty: false,
+    });
+    let mut layer = DrawListBuilder::new();
+    assert!(!layer.append_retained_drawlist_with_text_atlas_revisions(&layered, &[(atlas, 3)]));
+    assert!(layer.drawlist().items.is_empty());
+
+    let mut primitive_source = DrawListBuilder::new();
+    primitive_source.rrect(
+        gfx::RectF::new(0.0, 0.0, 24.0, 12.0),
+        [2.0, 2.0, 2.0, 2.0],
+        gfx::Color::rgba(0.2, 0.3, 0.4, 1.0),
+    );
+    let mut primitive_replay = DrawListBuilder::new();
+    assert!(primitive_replay.append_retained_drawlist(primitive_source.drawlist()));
+    assert_eq!(primitive_replay.drawlist().items.len(), 1);
 }
 
 #[test]

@@ -194,6 +194,22 @@ final class OxideHostPerfTests: XCTestCase
         let signature = visibleOutputSignature(from: image)
         XCTAssertNotNil(signature)
         XCTAssertFalse(visibleOutputLooksMeaningful(signature!))
+        XCTAssertFalse(cameraVisibleOutputLooksPresent(signature!))
+    }
+
+    func testCameraVisibleOutputValidationAcceptsUniformMidtoneImage()
+    {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 32, height: 32))
+        let image = renderer.image
+        {
+            context in
+            UIColor(white: 0.28, alpha: 1.0).setFill()
+            context.cgContext.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+        }
+        let signature = visibleOutputSignature(from: image)
+        XCTAssertNotNil(signature)
+        XCTAssertFalse(visibleOutputLooksMeaningful(signature!))
+        XCTAssertTrue(cameraVisibleOutputLooksPresent(signature!))
     }
 
     func testVisibleOutputValidationAcceptsRenderedCheckerImage()
@@ -214,6 +230,15 @@ final class OxideHostPerfTests: XCTestCase
         let signature = visibleOutputSignature(from: image)
         XCTAssertNotNil(signature)
         XCTAssertTrue(visibleOutputLooksMeaningful(signature!))
+        XCTAssertTrue(cameraVisibleOutputLooksPresent(signature!))
+    }
+
+    func testCameraAuthorizationStatusNameCoversKnownStates()
+    {
+        XCTAssertEqual(cameraAuthorizationStatusName(.authorized), "authorized")
+        XCTAssertEqual(cameraAuthorizationStatusName(.denied), "denied")
+        XCTAssertEqual(cameraAuthorizationStatusName(.restricted), "restricted")
+        XCTAssertEqual(cameraAuthorizationStatusName(.notDetermined), "notDetermined")
     }
 
     func testPerfDisplayLabelTextClassifiesOxideUIKitAndOptimizedCases()
@@ -377,6 +402,25 @@ final class OxideHostPerfTests: XCTestCase
         XCTAssertGreaterThanOrEqual(elapsedSeconds, 0.05)
     }
 
+    func testConsoleMeasuredBenchmarkPassesEmitCadenceSummary()
+    {
+        let benchmark = OxideUIKitBenchmark(
+            testName: "testConsoleCadenceProbe",
+            iterations: 3,
+            consoleMeasureIterations: 1
+        )
+        {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+        }
+
+        let samples = runConsoleMeasuredBenchmarkPassesWithCadence(benchmark)
+
+        XCTAssertEqual(samples.workloadMs.count, 1)
+        XCTAssertTrue(
+            samples.frameCadenceSummaryLine?.contains(oxideFrameCadenceSummaryPrefix) == true
+        )
+    }
+
     private func measureBenchmark(_ benchmark: OxideUIKitBenchmark)
     {
         defer
@@ -407,13 +451,19 @@ final class OxideHostPerfTests: XCTestCase
             measureIterations: options.iterationCount,
             benchmarkIterations: benchmark.iterations
         )
+        let cadenceProbe = PerfFrameCadenceProbe()
         // Camera signpost metrics are collected from the dedicated xctrace path.
         // Keeping them out of XCTest avoids per-iteration metric-set drift on device.
         let metrics = standardMetrics()
             + (isCameraBenchmark ? [] : deviceSignpostMetrics(names: benchmark.signpostNames))
+        cadenceProbe.begin()
         measure(metrics: metrics, options: options)
         {
             runMeasuredBenchmarkPass(benchmark)
+        }
+        if let cadenceLine = cadenceProbe.endSummaryLine()
+        {
+            emitConsoleLine(cadenceLine)
         }
         for line in benchmark.summaryLines()
         {
@@ -479,8 +529,43 @@ final class OxideHostPerfTests: XCTestCase
         measureBenchmark(benchmark)
 
         XCTAssertTrue(lines.contains(where: { $0.contains(oxideBenchmarkMetadataPrefix) }))
+        XCTAssertTrue(lines.contains(where: { $0.contains(oxideFrameCadenceSummaryPrefix) }))
         XCTAssertTrue(lines.contains("OXIDE_STAGE_SUMMARY {\"stages\":{}}"))
         XCTAssertTrue(lines.contains("OXIDE_MEMORY_SUMMARY {\"categories\":{}}"))
+    }
+
+    func testFrameCadenceSummaryLineEncodesHitchAndMissedMetrics()
+    {
+        let summary = OxideStageMetricSummary(
+            unit: "frames",
+            min: 1,
+            max: 1,
+            mean: 1,
+            median: 1,
+            p95: 1,
+            p99: 1,
+            samples: 1
+        )
+        let line = encodeOxideFrameCadenceSummaryLine(
+            metrics: [
+                "missed_frames": summary,
+                "hitch_ms_per_s": OxideStageMetricSummary(
+                    unit: "ms/s",
+                    min: 2,
+                    max: 2,
+                    mean: 2,
+                    median: 2,
+                    p95: 2,
+                    p99: 2,
+                    samples: 1
+                ),
+            ]
+        )
+
+        XCTAssertNotNil(line)
+        XCTAssertTrue(line!.contains(oxideFrameCadenceSummaryPrefix))
+        XCTAssertTrue(line!.contains("missed_frames"))
+        XCTAssertTrue(line!.contains("hitch_ms_per_s"))
     }
 
     func testLabelEncode()
