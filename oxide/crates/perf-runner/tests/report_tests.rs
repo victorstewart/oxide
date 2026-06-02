@@ -1097,6 +1097,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "mixed_matrix",
         "layer_effects_matrix",
         "command_family_matrix",
+        "neon_marker_ab",
         "draw_state_cache_ab",
         "clip_state_cache_ab",
     ];
@@ -1236,6 +1237,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched",
         "web.wasm.webgpu.command_family_matrix",
         "web.wasm.webgpu.command_family_matrix.legacy_rebind",
+        "web.wasm.webgpu.neon_marker.current",
+        "web.wasm.webgpu.neon_marker.legacy_rebind",
         "web.wasm.webgpu.draw_state_cache.current",
         "web.wasm.webgpu.draw_state_cache.legacy_rebind",
         "web.wasm.webgpu.clip_state_cache.current",
@@ -1255,8 +1258,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         warm_resource_churn["id"].as_str(),
         Some("web.wasm.webgpu.warm_resource_churn.current_rows"),
     );
-    assert_eq!(web_report_number(warm_resource_churn, "checked_rows"), 14.0);
-    assert_eq!(web_report_number(warm_resource_churn, "excluded_rows"), 13.0);
+    assert_eq!(web_report_number(warm_resource_churn, "checked_rows"), 15.0);
+    assert_eq!(web_report_number(warm_resource_churn, "excluded_rows"), 14.0);
     let warm_rows: Vec<&str> = warm_resource_churn["rows"]
         .as_array()
         .expect("warm resource churn rows")
@@ -1292,6 +1295,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "web.wasm.webgpu.mixed_text_image_effects",
         "web.wasm.webgpu.layer_damage_effects",
         "web.wasm.webgpu.command_family_matrix",
+        "web.wasm.webgpu.neon_marker.current",
         "web.wasm.webgpu.draw_state_cache.current",
         "web.wasm.webgpu.clip_state_cache.current",
     ] {
@@ -1309,6 +1313,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched",
         "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched",
         "web.wasm.webgpu.command_family_matrix.legacy_rebind",
+        "web.wasm.webgpu.neon_marker.legacy_rebind",
         "web.wasm.webgpu.draw_state_cache.legacy_rebind",
         "web.wasm.webgpu.clip_state_cache.legacy_rebind",
     ] {
@@ -1378,8 +1383,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         Some("web.wasm.webgpu.wasm_allocation_audit.current_rows"),
     );
     assert_eq!(wasm_allocation_audit["status"].as_str(), Some("measured"));
-    assert_eq!(web_report_number(wasm_allocation_audit, "checked_count"), 14.0);
-    assert_eq!(web_report_number(wasm_allocation_audit, "excluded_count"), 13.0);
+    assert_eq!(web_report_number(wasm_allocation_audit, "checked_count"), 15.0);
+    assert_eq!(web_report_number(wasm_allocation_audit, "excluded_count"), 14.0);
     assert_eq!(
         web_report_number(wasm_allocation_audit, "row_detail_count"),
         web_report_number(wasm_allocation_audit, "checked_count"),
@@ -1412,9 +1417,10 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         .expect("wasm allocation row details");
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.frame_loop"));
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.id_mask_compositor.current"));
-   for detail in wasm_allocation_details {
-       let id = detail["id"].as_str().expect("wasm allocation row detail id");
-       assert!(wasm_allocation_rows.contains(&id));
+    assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.neon_marker.current"));
+    for detail in wasm_allocation_details {
+        let id = detail["id"].as_str().expect("wasm allocation row detail id");
+        assert!(wasm_allocation_rows.contains(&id));
         let source = web_report_case(&report, id);
         assert_eq!(
             web_report_number(detail, "wasm_alloc_count"),
@@ -1604,6 +1610,11 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
             &["image_mesh_draws", "nine_slice_draws", "sdf_glyph_quads", "camera_bg_draws", "expected_camera_bg", "draw_items", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
         ),
         (
+            "neon_marker",
+            &["web.wasm.webgpu.neon_marker.current", "web.wasm.webgpu.neon_marker.legacy_rebind"],
+            &["expected_markers", "expected_draw_items", "draw_items", "solid_tris", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
+        ),
+        (
             "draw_state_cache",
             &["web.wasm.webgpu.draw_state_cache.current", "web.wasm.webgpu.draw_state_cache.legacy_rebind"],
             &["draw_items", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
@@ -1695,6 +1706,9 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     let command_family = web_report_case(&report, "web.wasm.webgpu.command_family_matrix");
     let command_family_legacy =
         web_report_case(&report, "web.wasm.webgpu.command_family_matrix.legacy_rebind");
+    let neon_marker_current = web_report_case(&report, "web.wasm.webgpu.neon_marker.current");
+    let neon_marker_legacy =
+        web_report_case(&report, "web.wasm.webgpu.neon_marker.legacy_rebind");
     let draw_state_current = web_report_case(&report, "web.wasm.webgpu.draw_state_cache.current");
     let draw_state_legacy =
         web_report_case(&report, "web.wasm.webgpu.draw_state_cache.legacy_rebind");
@@ -1724,6 +1738,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         layer_effects_legacy,
         command_family,
         command_family_legacy,
+        neon_marker_current,
+        neon_marker_legacy,
         draw_state_current,
         draw_state_legacy,
         clip_state_current,
@@ -2167,6 +2183,59 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     assert_eq!(
         web_report_number(&report["command_family_summary"], "legacy_draw_pipeline_binds"),
         web_report_number(command_family_legacy, "draw_pipeline_binds"),
+    );
+    assert_eq!(web_report_number(neon_marker_current, "expected_markers"), 64.0);
+    assert_eq!(web_report_number(neon_marker_legacy, "expected_markers"), 64.0);
+    assert_eq!(web_report_number(neon_marker_current, "expected_draw_items"), 192.0);
+    assert_eq!(web_report_number(neon_marker_legacy, "expected_draw_items"), 192.0);
+    assert_eq!(
+        web_report_number(neon_marker_current, "draw_items"),
+        web_report_number(neon_marker_current, "expected_draw_items"),
+    );
+    assert_eq!(
+        web_report_number(neon_marker_legacy, "draw_items"),
+        web_report_number(neon_marker_legacy, "expected_draw_items"),
+    );
+    assert_eq!(
+        web_report_number(neon_marker_current, "solid_tris"),
+        web_report_number(neon_marker_legacy, "solid_tris"),
+    );
+    assert!(web_report_number(neon_marker_current, "solid_tris") > 0.0);
+    assert!(
+        web_report_number(neon_marker_current, "draw_pipeline_binds")
+            < web_report_number(neon_marker_legacy, "draw_pipeline_binds")
+    );
+    assert_eq!(
+        web_report_number(neon_marker_current, "draw_bind_group_binds"),
+        web_report_number(neon_marker_legacy, "draw_bind_group_binds"),
+    );
+    assert!(
+        web_report_number(neon_marker_current, "draw_scissor_sets")
+            < web_report_number(neon_marker_legacy, "draw_scissor_sets")
+    );
+    assert_eq!(
+        web_report_number(neon_marker_current, "gpu_timestamp_passes"),
+        web_report_number(neon_marker_current, "render_passes"),
+    );
+    assert_eq!(
+        web_report_number(neon_marker_legacy, "gpu_timestamp_passes"),
+        web_report_number(neon_marker_legacy, "render_passes"),
+    );
+    assert_eq!(
+        web_report_number(&report["neon_marker_summary"], "current_p50_ms"),
+        web_report_number(neon_marker_current, "p50_ms"),
+    );
+    assert_eq!(
+        web_report_number(&report["neon_marker_summary"], "legacy_p50_ms"),
+        web_report_number(neon_marker_legacy, "p50_ms"),
+    );
+    assert_eq!(
+        web_report_number(&report["neon_marker_summary"], "current_draw_pipeline_binds"),
+        web_report_number(neon_marker_current, "draw_pipeline_binds"),
+    );
+    assert_eq!(
+        web_report_number(&report["neon_marker_summary"], "legacy_draw_pipeline_binds"),
+        web_report_number(neon_marker_legacy, "draw_pipeline_binds"),
     );
     assert!(
         web_report_number(draw_state_current, "draw_items")

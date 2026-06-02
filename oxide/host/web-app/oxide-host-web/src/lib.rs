@@ -42,7 +42,9 @@ mod wasm_host {
     use oxide_platform_api::Platform;
     use oxide_renderer_api as gfx;
     use oxide_renderer_api::Renderer;
-    use oxide_renderer_web::{id_mask_compositor, scene3d, BrowserRenderer, WebRendererStats};
+    use oxide_renderer_web::{
+        id_mask_compositor, neon_marker, scene3d, BrowserRenderer, WebRendererStats,
+    };
     use oxide_test_scenes as scenes;
     use oxide_text as text;
     use oxide_ui_core as ui;
@@ -82,6 +84,8 @@ mod wasm_host {
     const WEBGPU_DRAW_STATE_CACHE_COLUMNS: usize = 32;
     const WEBGPU_CLIP_STATE_DRAWS: usize = 512;
     const WEBGPU_CLIP_STATE_RUNS: usize = 16;
+    const WEBGPU_NEON_MARKERS: usize = 64;
+    const WEBGPU_NEON_MARKER_COLUMNS: usize = 8;
     const WEBGPU_SCENE3D_STRESS_INSTANCES: usize = 96;
     const WEBGPU_TIMESTAMP_SETTLE_RAFS: u32 = 60;
 
@@ -927,6 +931,46 @@ mod wasm_host {
             ))
         }
 
+        pub async fn bench_webgpu_neon_marker_ab(
+            &self,
+            samples: u32,
+            frames_per_sample: u32,
+        ) -> Result<String, JsValue> {
+            let sample_count = samples.clamp(1, 30);
+            let frames = frames_per_sample.clamp(1, 120);
+            let renderer = self.ensure_upload_bench_resources()?;
+            {
+                renderer.borrow_mut().set_draw_state_cache_enabled_for_benchmark(true);
+            }
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut current = self.with_upload_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    resources.neon_marker_frame(renderer)
+                })
+            })?;
+            current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            {
+                renderer.borrow_mut().set_draw_state_cache_enabled_for_benchmark(false);
+            }
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut legacy = self.with_upload_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    resources.neon_marker_frame(renderer)
+                })
+            })?;
+            legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            {
+                renderer.borrow_mut().set_draw_state_cache_enabled_for_benchmark(true);
+            }
+            let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
+            Ok(format!(
+                "samples={sample_count};frames_per_sample={frames}{}{};legacy_over_current={ratio:.3};expected_markers={WEBGPU_NEON_MARKERS};expected_draw_items={}",
+                sampled_case_metrics(&current, "current"),
+                sampled_case_metrics(&legacy, "legacy"),
+                WEBGPU_NEON_MARKERS.saturating_mul(3),
+            ))
+        }
+
         pub async fn bench_webgpu_draw_state_cache_ab(
             &self,
             samples: u32,
@@ -1279,6 +1323,7 @@ mod wasm_host {
         dirty_a8: Vec<u8>,
         full_rgba: Vec<u8>,
         dirty_rgba: Vec<u8>,
+        neon_markers: Vec<neon_marker::NeonMarker>,
         builder: ui::DrawListBuilder,
         mixed_damage: gfx::Damage,
         layer_effects_damage: gfx::Damage,
@@ -1293,6 +1338,8 @@ mod wasm_host {
                 generate_checker_rgba(WEBGPU_UPLOAD_IMAGE_SIZE, WEBGPU_UPLOAD_IMAGE_SIZE);
             let dirty_rgba =
                 generate_checker_rgba(WEBGPU_UPLOAD_DIRTY_SIZE, WEBGPU_UPLOAD_DIRTY_SIZE);
+            let mut neon_markers = Vec::with_capacity(WEBGPU_NEON_MARKERS);
+            webgpu_fill_neon_markers(&mut neon_markers);
             let glyph_atlas = renderer.image_create_a8(
                 WEBGPU_UPLOAD_ATLAS_SIZE,
                 WEBGPU_UPLOAD_ATLAS_SIZE,
@@ -1312,6 +1359,7 @@ mod wasm_host {
                 dirty_a8,
                 full_rgba,
                 dirty_rgba,
+                neon_markers,
                 builder: ui::DrawListBuilder::new(),
                 mixed_damage: gfx::Damage {
                     rects: vec![
@@ -1774,6 +1822,18 @@ mod wasm_host {
             renderer.submit(token).map_err(render_err)
         }
 
+        fn neon_marker_frame(&mut self, renderer: &mut BrowserRenderer) -> Result<(), JsValue> {
+            renderer.resize(512, 512, 2.0).map_err(render_err)?;
+            let token = renderer.begin_frame(&gfx::FrameTarget, None);
+            renderer
+                .encode_neon_markers(&neon_marker::NeonMarkerPass {
+                    viewport: gfx::RectF::new(0.0, 0.0, 256.0, 256.0),
+                    markers: &self.neon_markers,
+                })
+                .map_err(render_err)?;
+            renderer.submit(token).map_err(render_err)
+        }
+
         fn draw_state_cache_frame(&mut self, renderer: &mut BrowserRenderer) -> Result<(), JsValue> {
             renderer.resize(512, 512, 2.0).map_err(render_err)?;
             let token = renderer.begin_frame(&gfx::FrameTarget, None);
@@ -2220,6 +2280,30 @@ mod wasm_host {
             instance.cull = scene3d::CullMode3d::None;
             instance.depth_write = row % 2 == 0;
             out.push(instance);
+        }
+    }
+
+    fn webgpu_fill_neon_markers(out: &mut Vec<neon_marker::NeonMarker>) {
+        out.clear();
+        out.reserve(WEBGPU_NEON_MARKERS);
+        for index in 0..WEBGPU_NEON_MARKERS {
+            let col = index % WEBGPU_NEON_MARKER_COLUMNS;
+            let row = index / WEBGPU_NEON_MARKER_COLUMNS;
+            let x = 24.0 + col as f32 * 28.0;
+            let y = 26.0 + row as f32 * 22.0;
+            let hue = index as f32 / WEBGPU_NEON_MARKERS as f32;
+            out.push(neon_marker::NeonMarker {
+                center: [x, y],
+                core_radius_px: 2.5 + (index % 3) as f32 * 0.4,
+                ring_radius_px: 5.5 + (index % 4) as f32 * 0.35,
+                ring_width_px: 1.5,
+                halo_radius_px: 11.0 + (index % 5) as f32 * 0.5,
+                halo_sigma_px: 7.0,
+                core_color: gfx::Color::rgba(0.92, 0.98, 1.0, 0.96),
+                ring_color: gfx::Color::rgba(0.20 + hue * 0.60, 0.70, 1.0 - hue * 0.45, 0.85),
+                halo_alpha_max: 0.22,
+                ring_alpha_max: 0.74,
+            });
         }
     }
 

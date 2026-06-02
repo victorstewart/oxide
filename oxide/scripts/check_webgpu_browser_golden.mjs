@@ -1293,6 +1293,7 @@ const WARM_RESOURCE_CHURN_EXCLUDED_IDS = new Set([
    "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched",
    "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched",
    "web.wasm.webgpu.command_family_matrix.legacy_rebind",
+   "web.wasm.webgpu.neon_marker.legacy_rebind",
    "web.wasm.webgpu.draw_state_cache.legacy_rebind",
    "web.wasm.webgpu.clip_state_cache.legacy_rebind",
 ]);
@@ -1346,6 +1347,7 @@ const EXPECTED_BENCHMARK_MARKS = [
    "mixed_matrix",
    "layer_effects_matrix",
    "command_family_matrix",
+   "neon_marker_ab",
    "draw_state_cache_ab",
    "clip_state_cache_ab",
 ];
@@ -1421,6 +1423,12 @@ const WEBGPU_BACKEND_PATHS = [
       id: "command_family_matrix",
       rows: ["web.wasm.webgpu.command_family_matrix", "web.wasm.webgpu.command_family_matrix.legacy_rebind"],
       counters: ["image_mesh_draws", "nine_slice_draws", "sdf_glyph_quads", "camera_bg_draws", "expected_camera_bg", "draw_items", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
+      comparison: "current_vs_legacy",
+   },
+   {
+      id: "neon_marker",
+      rows: ["web.wasm.webgpu.neon_marker.current", "web.wasm.webgpu.neon_marker.legacy_rebind"],
+      counters: ["expected_markers", "expected_draw_items", "draw_items", "solid_tris", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
       comparison: "current_vs_legacy",
    },
    {
@@ -1832,6 +1840,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
    let mixedMetrics = parseMetricString(pageReport.mixed_matrix);
    let layerEffectsMetrics = parseMetricString(pageReport.layer_effects_matrix);
    let commandFamilyMetrics = parseMetricString(pageReport.command_family_matrix);
+   let neonMarkerMetrics = parseMetricString(pageReport.neon_marker_ab);
    let drawStateMetrics = parseMetricString(pageReport.draw_state_cache_ab);
    let clipStateMetrics = parseMetricString(pageReport.clip_state_ab);
    let timingMetrics = parseMetricString(pageReport.webgpu_timing);
@@ -2088,6 +2097,26 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          },
       ),
       prefixedBackendCase(
+         neonMarkerMetrics,
+         "web.wasm.webgpu.neon_marker.current",
+         "webgpu-neon-marker-current",
+         "current",
+         {
+            expected_markers: numberMetric(neonMarkerMetrics, "expected_markers"),
+            expected_draw_items: numberMetric(neonMarkerMetrics, "expected_draw_items"),
+         },
+      ),
+      prefixedBackendCase(
+         neonMarkerMetrics,
+         "web.wasm.webgpu.neon_marker.legacy_rebind",
+         "webgpu-neon-marker-legacy-rebind",
+         "legacy",
+         {
+            expected_markers: numberMetric(neonMarkerMetrics, "expected_markers"),
+            expected_draw_items: numberMetric(neonMarkerMetrics, "expected_draw_items"),
+         },
+      ),
+      prefixedBackendCase(
          drawStateMetrics,
          "web.wasm.webgpu.draw_state_cache.current",
          "webgpu-draw-state-cache-current",
@@ -2189,6 +2218,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          mixed_matrix: pageReport.mixed_matrix,
          layer_effects_matrix: pageReport.layer_effects_matrix,
          command_family_matrix: pageReport.command_family_matrix,
+         neon_marker_ab: pageReport.neon_marker_ab,
          draw_state_cache_ab: pageReport.draw_state_cache_ab,
          clip_state_ab: pageReport.clip_state_ab,
          capture_target: pageReport.capture_target,
@@ -2474,6 +2504,30 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          expected_sdf_glyphs: numberMetric(commandFamilyMetrics, "expected_sdf_glyphs"),
          expected_sdf_runs: numberMetric(commandFamilyMetrics, "expected_sdf_runs"),
          expected_camera_bg: numberMetric(commandFamilyMetrics, "expected_camera_bg"),
+      },
+      neon_marker_summary: {
+         id: "web.wasm.webgpu.neon_marker.current_vs_legacy_rebind",
+         legacy_over_current: numberMetric(neonMarkerMetrics, "legacy_over_current"),
+         current_p50_ms: numberMetric(neonMarkerMetrics, "current_p50_ms"),
+         legacy_p50_ms: numberMetric(neonMarkerMetrics, "legacy_p50_ms"),
+         current_draw_items: numberMetric(neonMarkerMetrics, "current_draw_items"),
+         legacy_draw_items: numberMetric(neonMarkerMetrics, "legacy_draw_items"),
+         current_solid_tris: numberMetric(neonMarkerMetrics, "current_solid_tris"),
+         legacy_solid_tris: numberMetric(neonMarkerMetrics, "legacy_solid_tris"),
+         current_draw_pipeline_binds: numberMetric(neonMarkerMetrics, "current_draw_pipeline_binds"),
+         legacy_draw_pipeline_binds: numberMetric(neonMarkerMetrics, "legacy_draw_pipeline_binds"),
+         current_draw_bind_group_binds: numberMetric(
+            neonMarkerMetrics,
+            "current_draw_bind_group_binds",
+         ),
+         legacy_draw_bind_group_binds: numberMetric(
+            neonMarkerMetrics,
+            "legacy_draw_bind_group_binds",
+         ),
+         current_draw_scissor_sets: numberMetric(neonMarkerMetrics, "current_draw_scissor_sets"),
+         legacy_draw_scissor_sets: numberMetric(neonMarkerMetrics, "legacy_draw_scissor_sets"),
+         expected_markers: numberMetric(neonMarkerMetrics, "expected_markers"),
+         expected_draw_items: numberMetric(neonMarkerMetrics, "expected_draw_items"),
       },
       draw_state_summary: {
          id: "web.wasm.webgpu.draw_state_cache.current_vs_legacy_rebind",
@@ -2966,6 +3020,12 @@ function renderMarkdown(report)
    lines.push("| Comparison | Current p50 ms | Legacy p50 ms | Legacy / Current | Current Items | Legacy Items | Current Pipeline Binds | Legacy Pipeline Binds | Current Bind Groups | Legacy Bind Groups | Current Scissors | Legacy Scissors | Image Meshes | Nine Slices | SDF Glyphs | CameraBg Draws |");
    lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
    lines.push(`| \`${report.command_family_summary.id}\` | ${report.command_family_summary.current_p50_ms.toFixed(3)} | ${report.command_family_summary.legacy_p50_ms.toFixed(3)} | ${report.command_family_summary.legacy_over_current.toFixed(3)} | ${report.command_family_summary.current_draw_items} | ${report.command_family_summary.legacy_draw_items} | ${report.command_family_summary.current_draw_pipeline_binds} | ${report.command_family_summary.legacy_draw_pipeline_binds} | ${report.command_family_summary.current_draw_bind_group_binds} | ${report.command_family_summary.legacy_draw_bind_group_binds} | ${report.command_family_summary.current_draw_scissor_sets} | ${report.command_family_summary.legacy_draw_scissor_sets} | ${report.command_family_summary.current_image_mesh_draws}/${report.command_family_summary.legacy_image_mesh_draws} | ${report.command_family_summary.current_nine_slice_draws}/${report.command_family_summary.legacy_nine_slice_draws} | ${report.command_family_summary.current_sdf_glyph_quads}/${report.command_family_summary.legacy_sdf_glyph_quads} | ${report.command_family_summary.current_camera_bg_draws}/${report.command_family_summary.legacy_camera_bg_draws} |`);
+   lines.push("");
+   lines.push("## Neon Marker Summary");
+   lines.push("");
+   lines.push("| Comparison | Current p50 ms | Legacy p50 ms | Legacy / Current | Markers | Current Items | Legacy Items | Current Solid Tris | Legacy Solid Tris | Current Pipeline Binds | Legacy Pipeline Binds | Current Bind Groups | Legacy Bind Groups | Current Scissors | Legacy Scissors |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+   lines.push(`| \`${report.neon_marker_summary.id}\` | ${report.neon_marker_summary.current_p50_ms.toFixed(3)} | ${report.neon_marker_summary.legacy_p50_ms.toFixed(3)} | ${report.neon_marker_summary.legacy_over_current.toFixed(3)} | ${report.neon_marker_summary.expected_markers} | ${report.neon_marker_summary.current_draw_items} | ${report.neon_marker_summary.legacy_draw_items} | ${report.neon_marker_summary.current_solid_tris} | ${report.neon_marker_summary.legacy_solid_tris} | ${report.neon_marker_summary.current_draw_pipeline_binds} | ${report.neon_marker_summary.legacy_draw_pipeline_binds} | ${report.neon_marker_summary.current_draw_bind_group_binds} | ${report.neon_marker_summary.legacy_draw_bind_group_binds} | ${report.neon_marker_summary.current_draw_scissor_sets} | ${report.neon_marker_summary.legacy_draw_scissor_sets} |`);
    lines.push("");
    lines.push("## Draw State Cache Summary");
    lines.push("");
@@ -4049,6 +4109,50 @@ function assertWebReportContract(report)
       throw new Error(
          `command-family current row must beat legacy rebind p50: current=${report.command_family_summary.current_p50_ms.toFixed(3)}ms legacy=${report.command_family_summary.legacy_p50_ms.toFixed(3)}ms ratio=${report.command_family_summary.legacy_over_current.toFixed(3)}`
       );
+   }
+   let neonMarker = byId.get("web.wasm.webgpu.neon_marker.current");
+   let neonMarkerLegacy = byId.get("web.wasm.webgpu.neon_marker.legacy_rebind");
+   if (
+      neonMarker.expected_markers <= 0
+      || neonMarkerLegacy.expected_markers !== neonMarker.expected_markers
+      || neonMarker.expected_draw_items !== neonMarker.expected_markers * 3
+      || neonMarkerLegacy.expected_draw_items !== neonMarker.expected_draw_items
+      || neonMarker.draw_items !== neonMarker.expected_draw_items
+      || neonMarkerLegacy.draw_items !== neonMarkerLegacy.expected_draw_items
+      || neonMarker.solid_tris <= 0
+      || neonMarkerLegacy.solid_tris <= 0
+      || neonMarker.gpu_timestamp_passes !== neonMarker.render_passes
+      || neonMarkerLegacy.gpu_timestamp_passes !== neonMarkerLegacy.render_passes
+   ) {
+      throw new Error("neon marker WebGPU A/B rows must cover marker-derived solid draws and timestamped passes");
+   }
+   if (
+      neonMarker.draw_items !== neonMarkerLegacy.draw_items
+      || neonMarker.solid_tris !== neonMarkerLegacy.solid_tris
+      || neonMarker.draw_pipeline_binds >= neonMarkerLegacy.draw_pipeline_binds
+      || neonMarker.draw_bind_group_binds !== neonMarkerLegacy.draw_bind_group_binds
+      || neonMarker.draw_scissor_sets >= neonMarkerLegacy.draw_scissor_sets
+   ) {
+      throw new Error(
+         "neon marker WebGPU A/B rows must prove equivalent marker work and fewer current pipeline/scissor binds: "
+            + `items=${neonMarker.draw_items}/${neonMarkerLegacy.draw_items} `
+            + `solid_tris=${neonMarker.solid_tris}/${neonMarkerLegacy.solid_tris} `
+            + `pipeline_binds=${neonMarker.draw_pipeline_binds}/${neonMarkerLegacy.draw_pipeline_binds} `
+            + `bind_groups=${neonMarker.draw_bind_group_binds}/${neonMarkerLegacy.draw_bind_group_binds} `
+            + `scissors=${neonMarker.draw_scissor_sets}/${neonMarkerLegacy.draw_scissor_sets}`
+      );
+   }
+   if (
+      report.neon_marker_summary.current_p50_ms !== neonMarker.p50_ms
+      || report.neon_marker_summary.legacy_p50_ms !== neonMarkerLegacy.p50_ms
+      || report.neon_marker_summary.current_draw_pipeline_binds !== neonMarker.draw_pipeline_binds
+      || report.neon_marker_summary.legacy_draw_pipeline_binds !== neonMarkerLegacy.draw_pipeline_binds
+      || report.neon_marker_summary.current_draw_bind_group_binds !== neonMarker.draw_bind_group_binds
+      || report.neon_marker_summary.legacy_draw_bind_group_binds !== neonMarkerLegacy.draw_bind_group_binds
+      || report.neon_marker_summary.current_draw_scissor_sets !== neonMarker.draw_scissor_sets
+      || report.neon_marker_summary.legacy_draw_scissor_sets !== neonMarkerLegacy.draw_scissor_sets
+   ) {
+      throw new Error("neon marker WebGPU summary must match current and legacy source rows");
    }
    let glyphUploadCurrent = byId.get("web.wasm.webgpu.glyph_atlas_upload.current_dirty");
    let glyphUploadLegacy = byId.get("web.wasm.webgpu.glyph_atlas_upload.legacy_full");
