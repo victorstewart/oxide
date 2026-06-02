@@ -59,6 +59,16 @@
          let pendingBenchmarkId = "";
          let postedErrorReport = false;
          const wasmMemoryBytes = () => wasmModule?.memory?.buffer?.byteLength ?? 0;
+         const jsHeapSupported = () => !!performance.memory && Number.isFinite(performance.memory.usedJSHeapSize);
+         const jsHeapBytes = () => jsHeapSupported() ? Math.max(0, Math.trunc(performance.memory.usedJSHeapSize)) : 0;
+         const collectJsHeapBytes = async () => {
+            if (typeof window.gc === "function") {
+               window.gc();
+               await Promise.resolve();
+               window.gc();
+            }
+            return jsHeapBytes();
+         };
          const errorDetail = error => {
             if (error && typeof error.message === "string") {
                return error.message;
@@ -102,7 +112,10 @@
             const start = `${benchMarkPrefix}:${id}:start`;
             const end = `${benchMarkPrefix}:${id}:end`;
             const measure = `${benchMarkPrefix}:${id}`;
+            const jsHeapBeforeBytes = await collectJsHeapBytes();
             const wasmBeforeBytes = wasmMemoryBytes();
+            const jsHeapSampleSupported = jsHeapSupported();
+            const jsHeapGcAvailable = typeof window.gc === "function";
             let benchError = null;
             let result = "";
             pendingBenchmarkId = id;
@@ -115,6 +128,7 @@
                const wasmAfterBytes = wasmMemoryBytes();
                performance.mark(end);
                performance.measure(measure, start, end);
+               const jsHeapAfterBytes = await collectJsHeapBytes();
                const entries = performance.getEntriesByName(measure, "measure");
                const entry = entries[entries.length - 1];
                benchMarks.push({
@@ -125,6 +139,11 @@
                   wasm_memory_before_bytes: wasmBeforeBytes,
                   wasm_memory_after_bytes: wasmAfterBytes,
                   wasm_memory_growth_bytes: Math.max(0, wasmAfterBytes - wasmBeforeBytes),
+                  js_heap_sample_supported: jsHeapSampleSupported ? 1 : 0,
+                  js_heap_gc_available: jsHeapGcAvailable ? 1 : 0,
+                  js_heap_before_bytes: jsHeapBeforeBytes,
+                  js_heap_after_bytes: jsHeapAfterBytes,
+                  js_heap_growth_bytes: Math.max(0, jsHeapAfterBytes - jsHeapBeforeBytes),
                });
                pendingBenchmarkId = "";
             }

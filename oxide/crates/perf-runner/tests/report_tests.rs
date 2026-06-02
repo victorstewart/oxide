@@ -816,12 +816,45 @@ fn assert_web_report_zero_resource_churn(case: &Value, allow_buffer_grows: bool)
     assert_eq!(web_report_number(case, "bind_group_creates"), 0.0);
     assert_eq!(web_report_number(case, "texture_creates"), 0.0);
     assert_eq!(web_report_number(case, "sampler_creates"), 0.0);
+    for field in [
+        "draw_buffer_grows",
+        "image_texture_creates",
+        "image_bind_group_creates",
+        "target_texture_creates",
+        "target_bind_group_creates",
+        "scene3d_bind_group_creates",
+        "effect_buffer_grows",
+        "effect_bind_group_creates",
+        "id_mask_texture_creates",
+        "id_mask_buffer_grows",
+        "id_mask_bind_group_creates",
+    ] {
+        assert_eq!(web_report_number(case, field), 0.0);
+    }
     assert_eq!(web_report_number(case, "cpu_scratch_grows"), 0.0);
     assert_eq!(web_report_number(case, "cpu_scratch_growth_bytes"), 0.0);
+    for field in [
+        "cpu_draw_scratch_grows",
+        "cpu_draw_scratch_growth_bytes",
+        "cpu_scene3d_scratch_grows",
+        "cpu_scene3d_scratch_growth_bytes",
+        "cpu_effect_scratch_grows",
+        "cpu_effect_scratch_growth_bytes",
+        "cpu_id_mask_scratch_grows",
+        "cpu_id_mask_scratch_growth_bytes",
+        "cpu_image_upload_scratch_grows",
+        "cpu_image_upload_scratch_growth_bytes",
+        "cpu_resource_table_scratch_grows",
+        "cpu_resource_table_scratch_growth_bytes",
+    ] {
+        assert_eq!(web_report_number(case, field), 0.0);
+    }
     if allow_buffer_grows {
         assert!(web_report_number(case, "buffer_grows") > 0.0);
     } else {
         assert_eq!(web_report_number(case, "buffer_grows"), 0.0);
+        assert_eq!(web_report_number(case, "scene3d_buffer_grows"), 0.0);
+        assert_eq!(web_report_number(case, "id_mask_buffer_grows"), 0.0);
     }
 }
 
@@ -907,6 +940,18 @@ fn assert_web_frame_case_contract(case: &Value) {
         "pipeline_creates",
         "sampler_creates",
         "mesh3d_creates",
+        "draw_buffer_grows",
+        "image_texture_creates",
+        "image_bind_group_creates",
+        "target_texture_creates",
+        "target_bind_group_creates",
+        "scene3d_buffer_grows",
+        "scene3d_bind_group_creates",
+        "effect_buffer_grows",
+        "effect_bind_group_creates",
+        "id_mask_texture_creates",
+        "id_mask_buffer_grows",
+        "id_mask_bind_group_creates",
         "image_upload_temp_allocs",
         "image_upload_temp_bytes",
         "image_upload_scratch_bytes",
@@ -914,6 +959,24 @@ fn assert_web_frame_case_contract(case: &Value) {
         "cpu_scratch_bytes",
         "cpu_scratch_grows",
         "cpu_scratch_growth_bytes",
+        "cpu_draw_scratch_bytes",
+        "cpu_draw_scratch_grows",
+        "cpu_draw_scratch_growth_bytes",
+        "cpu_scene3d_scratch_bytes",
+        "cpu_scene3d_scratch_grows",
+        "cpu_scene3d_scratch_growth_bytes",
+        "cpu_effect_scratch_bytes",
+        "cpu_effect_scratch_grows",
+        "cpu_effect_scratch_growth_bytes",
+        "cpu_id_mask_scratch_bytes",
+        "cpu_id_mask_scratch_grows",
+        "cpu_id_mask_scratch_growth_bytes",
+        "cpu_image_upload_scratch_bytes",
+        "cpu_image_upload_scratch_grows",
+        "cpu_image_upload_scratch_growth_bytes",
+        "cpu_resource_table_scratch_bytes",
+        "cpu_resource_table_scratch_grows",
+        "cpu_resource_table_scratch_growth_bytes",
     ] {
         assert!(web_report_number(case, key) >= 0.0, "{} missing or negative", key);
     }
@@ -938,6 +1001,29 @@ fn assert_web_frame_case_contract(case: &Value) {
         );
     }
     assert!(web_report_number(case, "cpu_scratch_bytes") > 0.0);
+    assert!(web_report_number(case, "cpu_draw_scratch_bytes") > 0.0);
+    assert!(web_report_number(case, "cpu_resource_table_scratch_bytes") > 0.0);
+    assert_eq!(
+        web_report_number(case, "bind_group_creates"),
+        web_report_number(case, "image_bind_group_creates")
+            + web_report_number(case, "target_bind_group_creates")
+            + web_report_number(case, "scene3d_bind_group_creates")
+            + web_report_number(case, "effect_bind_group_creates")
+            + web_report_number(case, "id_mask_bind_group_creates"),
+    );
+    assert_eq!(
+        web_report_number(case, "texture_creates"),
+        web_report_number(case, "image_texture_creates")
+            + web_report_number(case, "target_texture_creates")
+            + web_report_number(case, "id_mask_texture_creates"),
+    );
+    assert_eq!(
+        web_report_number(case, "buffer_grows"),
+        web_report_number(case, "draw_buffer_grows")
+            + web_report_number(case, "scene3d_buffer_grows")
+            + web_report_number(case, "effect_buffer_grows")
+            + web_report_number(case, "id_mask_buffer_grows"),
+    );
 }
 
 #[test]
@@ -1032,6 +1118,21 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         .as_array()
         .expect("wasm memory growth labels")
         .is_empty());
+    assert!(
+        web_report_number(benchmark_marks, "js_heap_sample_supported_count")
+            >= expected_benchmark_marks.len() as f64
+    );
+    assert!(
+        web_report_number(benchmark_marks, "js_heap_gc_available_count")
+            >= expected_benchmark_marks.len() as f64
+    );
+    assert!(web_report_number(benchmark_marks, "js_heap_total_growth_bytes") >= 0.0);
+    assert!(web_report_number(benchmark_marks, "js_heap_max_growth_bytes") >= 0.0);
+    assert!(benchmark_marks["js_heap_growth_labels"]
+        .as_array()
+        .expect("js heap growth labels")
+        .iter()
+        .all(|value| value.as_str().is_some()));
     let traced_labels: Vec<&str> = benchmark_marks["traced_labels"]
         .as_array()
         .expect("benchmark traced labels")
@@ -1093,6 +1194,11 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
             web_report_number(mark, "wasm_memory_before_bytes"),
         );
         assert_eq!(web_report_number(mark, "wasm_memory_growth_bytes"), 0.0);
+        assert!(web_report_number(mark, "js_heap_sample_supported") > 0.0);
+        assert!(web_report_number(mark, "js_heap_gc_available") > 0.0);
+        assert!(web_report_number(mark, "js_heap_before_bytes") > 0.0);
+        assert!(web_report_number(mark, "js_heap_after_bytes") > 0.0);
+        assert!(web_report_number(mark, "js_heap_growth_bytes") >= 0.0);
     }
 
     let expected_ids = [
@@ -1208,11 +1314,35 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "pipeline_creates",
         "sampler_creates",
         "mesh3d_creates",
+        "draw_buffer_grows",
+        "image_texture_creates",
+        "image_bind_group_creates",
+        "target_texture_creates",
+        "target_bind_group_creates",
+        "scene3d_buffer_grows",
+        "scene3d_bind_group_creates",
+        "effect_buffer_grows",
+        "effect_bind_group_creates",
+        "id_mask_texture_creates",
+        "id_mask_buffer_grows",
+        "id_mask_bind_group_creates",
         "image_upload_temp_allocs",
         "image_upload_temp_bytes",
         "image_upload_scratch_grows",
         "cpu_scratch_grows",
         "cpu_scratch_growth_bytes",
+        "cpu_draw_scratch_grows",
+        "cpu_draw_scratch_growth_bytes",
+        "cpu_scene3d_scratch_grows",
+        "cpu_scene3d_scratch_growth_bytes",
+        "cpu_effect_scratch_grows",
+        "cpu_effect_scratch_growth_bytes",
+        "cpu_id_mask_scratch_grows",
+        "cpu_id_mask_scratch_growth_bytes",
+        "cpu_image_upload_scratch_grows",
+        "cpu_image_upload_scratch_growth_bytes",
+        "cpu_resource_table_scratch_grows",
+        "cpu_resource_table_scratch_growth_bytes",
     ] {
         assert_eq!(web_report_number(warm_resource_churn, &format!("total_{field}")), 0.0);
         for detail in &warm_row_details {

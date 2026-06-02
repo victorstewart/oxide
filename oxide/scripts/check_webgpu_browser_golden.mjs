@@ -273,6 +273,8 @@ function runChrome(args, url, out)
          "--disable-sync",
          "--disable-gpu-sandbox",
          "--enable-unsafe-webgpu",
+         "--enable-precise-memory-info",
+         "--js-flags=--expose-gc",
          "--metrics-recording-only",
          "--noerrdialogs",
          "--use-angle=metal",
@@ -332,6 +334,8 @@ function runChromeForReport(args, url, reportPromise)
          "--disable-sync",
          "--disable-gpu-sandbox",
          "--enable-unsafe-webgpu",
+         "--enable-precise-memory-info",
+         "--js-flags=--expose-gc",
          "--metrics-recording-only",
          "--noerrdialogs",
          "--use-angle=metal",
@@ -984,19 +988,12 @@ function frameLoopCase(metrics)
       ...timestampMetricFields(metrics, ""),
       buffer_upload_bytes: numberMetric(metrics, "buffer_upload_bytes"),
       texture_upload_bytes: numberMetric(metrics, "texture_upload_bytes"),
-      buffer_grows: numberMetric(metrics, "buffer_grows"),
-      texture_creates: numberMetric(metrics, "texture_creates"),
-      bind_group_creates: numberMetric(metrics, "bind_group_creates"),
-      pipeline_creates: numberMetric(metrics, "pipeline_creates"),
-      sampler_creates: numberMetric(metrics, "sampler_creates"),
-      mesh3d_creates: numberMetric(metrics, "mesh3d_creates"),
+      ...resourceMetricFields(metrics, ""),
       image_upload_temp_allocs: numberMetric(metrics, "image_upload_temp_allocs"),
       image_upload_temp_bytes: numberMetric(metrics, "image_upload_temp_bytes"),
       image_upload_scratch_bytes: numberMetric(metrics, "image_upload_scratch_bytes"),
       image_upload_scratch_grows: numberMetric(metrics, "image_upload_scratch_grows"),
-      cpu_scratch_bytes: numberMetric(metrics, "cpu_scratch_bytes"),
-      cpu_scratch_grows: numberMetric(metrics, "cpu_scratch_grows"),
-      cpu_scratch_growth_bytes: numberMetric(metrics, "cpu_scratch_growth_bytes"),
+      ...scratchMetricFields(metrics, ""),
       unit: "ms/frame",
    };
 }
@@ -1037,6 +1034,59 @@ function timestampMetricFields(metrics, prefix)
       gpu_timestamp_present_ns: numberMetric(metrics, key("gpu_timestamp_present_ns")),
       gpu_timestamp_max_pass_ns: numberMetric(metrics, key("gpu_timestamp_max_pass_ns")),
       gpu_timestamp_readback_skips: numberMetric(metrics, key("gpu_timestamp_readback_skips")),
+   };
+}
+
+function resourceMetricFields(metrics, prefix)
+{
+   let key = name => `${prefix}${name}`;
+   return {
+      buffer_grows: numberMetric(metrics, key("buffer_grows")),
+      texture_creates: numberMetric(metrics, key("texture_creates")),
+      bind_group_creates: numberMetric(metrics, key("bind_group_creates")),
+      pipeline_creates: numberMetric(metrics, key("pipeline_creates")),
+      sampler_creates: numberMetric(metrics, key("sampler_creates")),
+      mesh3d_creates: numberMetric(metrics, key("mesh3d_creates")),
+      draw_buffer_grows: numberMetric(metrics, key("draw_buffer_grows")),
+      image_texture_creates: numberMetric(metrics, key("image_texture_creates")),
+      image_bind_group_creates: numberMetric(metrics, key("image_bind_group_creates")),
+      target_texture_creates: numberMetric(metrics, key("target_texture_creates")),
+      target_bind_group_creates: numberMetric(metrics, key("target_bind_group_creates")),
+      scene3d_buffer_grows: numberMetric(metrics, key("scene3d_buffer_grows")),
+      scene3d_bind_group_creates: numberMetric(metrics, key("scene3d_bind_group_creates")),
+      effect_buffer_grows: numberMetric(metrics, key("effect_buffer_grows")),
+      effect_bind_group_creates: numberMetric(metrics, key("effect_bind_group_creates")),
+      id_mask_texture_creates: numberMetric(metrics, key("id_mask_texture_creates")),
+      id_mask_buffer_grows: numberMetric(metrics, key("id_mask_buffer_grows")),
+      id_mask_bind_group_creates: numberMetric(metrics, key("id_mask_bind_group_creates")),
+   };
+}
+
+function scratchMetricFields(metrics, prefix)
+{
+   let key = name => `${prefix}${name}`;
+   return {
+      cpu_scratch_bytes: numberMetric(metrics, key("cpu_scratch_bytes")),
+      cpu_scratch_grows: numberMetric(metrics, key("cpu_scratch_grows")),
+      cpu_scratch_growth_bytes: numberMetric(metrics, key("cpu_scratch_growth_bytes")),
+      cpu_draw_scratch_bytes: numberMetric(metrics, key("cpu_draw_scratch_bytes")),
+      cpu_draw_scratch_grows: numberMetric(metrics, key("cpu_draw_scratch_grows")),
+      cpu_draw_scratch_growth_bytes: numberMetric(metrics, key("cpu_draw_scratch_growth_bytes")),
+      cpu_scene3d_scratch_bytes: numberMetric(metrics, key("cpu_scene3d_scratch_bytes")),
+      cpu_scene3d_scratch_grows: numberMetric(metrics, key("cpu_scene3d_scratch_grows")),
+      cpu_scene3d_scratch_growth_bytes: numberMetric(metrics, key("cpu_scene3d_scratch_growth_bytes")),
+      cpu_effect_scratch_bytes: numberMetric(metrics, key("cpu_effect_scratch_bytes")),
+      cpu_effect_scratch_grows: numberMetric(metrics, key("cpu_effect_scratch_grows")),
+      cpu_effect_scratch_growth_bytes: numberMetric(metrics, key("cpu_effect_scratch_growth_bytes")),
+      cpu_id_mask_scratch_bytes: numberMetric(metrics, key("cpu_id_mask_scratch_bytes")),
+      cpu_id_mask_scratch_grows: numberMetric(metrics, key("cpu_id_mask_scratch_grows")),
+      cpu_id_mask_scratch_growth_bytes: numberMetric(metrics, key("cpu_id_mask_scratch_growth_bytes")),
+      cpu_image_upload_scratch_bytes: numberMetric(metrics, key("cpu_image_upload_scratch_bytes")),
+      cpu_image_upload_scratch_grows: numberMetric(metrics, key("cpu_image_upload_scratch_grows")),
+      cpu_image_upload_scratch_growth_bytes: numberMetric(metrics, key("cpu_image_upload_scratch_growth_bytes")),
+      cpu_resource_table_scratch_bytes: numberMetric(metrics, key("cpu_resource_table_scratch_bytes")),
+      cpu_resource_table_scratch_grows: numberMetric(metrics, key("cpu_resource_table_scratch_grows")),
+      cpu_resource_table_scratch_growth_bytes: numberMetric(metrics, key("cpu_resource_table_scratch_growth_bytes")),
    };
 }
 
@@ -1098,19 +1148,12 @@ function idMaskCase(metrics, id, variant, prefix)
       ...timestampMetricFields(metrics, `${prefix}_`),
       buffer_upload_bytes: numberMetric(metrics, `${prefix}_buffer_upload_bytes`),
       texture_upload_bytes: numberMetric(metrics, `${prefix}_texture_upload_bytes`),
-      buffer_grows: numberMetric(metrics, `${prefix}_buffer_grows`),
-      texture_creates: numberMetric(metrics, `${prefix}_texture_creates`),
-      bind_group_creates: numberMetric(metrics, `${prefix}_bind_group_creates`),
-      pipeline_creates: numberMetric(metrics, `${prefix}_pipeline_creates`),
-      sampler_creates: numberMetric(metrics, `${prefix}_sampler_creates`),
-      mesh3d_creates: numberMetric(metrics, `${prefix}_mesh3d_creates`),
+      ...resourceMetricFields(metrics, `${prefix}_`),
       image_upload_temp_allocs: numberMetric(metrics, `${prefix}_image_upload_temp_allocs`),
       image_upload_temp_bytes: numberMetric(metrics, `${prefix}_image_upload_temp_bytes`),
       image_upload_scratch_bytes: numberMetric(metrics, `${prefix}_image_upload_scratch_bytes`),
       image_upload_scratch_grows: numberMetric(metrics, `${prefix}_image_upload_scratch_grows`),
-      cpu_scratch_bytes: numberMetric(metrics, `${prefix}_cpu_scratch_bytes`),
-      cpu_scratch_grows: numberMetric(metrics, `${prefix}_cpu_scratch_grows`),
-      cpu_scratch_growth_bytes: numberMetric(metrics, `${prefix}_cpu_scratch_growth_bytes`),
+      ...scratchMetricFields(metrics, `${prefix}_`),
       vertices: numberMetric(metrics, "vertices"),
       vertex_bytes: numberMetric(metrics, "vertex_bytes"),
       unit: "ms/frame",
@@ -1175,19 +1218,12 @@ function prefixedBackendCase(metrics, id, variant, prefix, extra)
       ...timestampMetricFields(metrics, `${prefix}_`),
       buffer_upload_bytes: numberMetric(metrics, `${prefix}_buffer_upload_bytes`),
       texture_upload_bytes: numberMetric(metrics, `${prefix}_texture_upload_bytes`),
-      buffer_grows: numberMetric(metrics, `${prefix}_buffer_grows`),
-      texture_creates: numberMetric(metrics, `${prefix}_texture_creates`),
-      bind_group_creates: numberMetric(metrics, `${prefix}_bind_group_creates`),
-      pipeline_creates: numberMetric(metrics, `${prefix}_pipeline_creates`),
-      sampler_creates: numberMetric(metrics, `${prefix}_sampler_creates`),
-      mesh3d_creates: numberMetric(metrics, `${prefix}_mesh3d_creates`),
+      ...resourceMetricFields(metrics, `${prefix}_`),
       image_upload_temp_allocs: numberMetric(metrics, `${prefix}_image_upload_temp_allocs`),
       image_upload_temp_bytes: numberMetric(metrics, `${prefix}_image_upload_temp_bytes`),
       image_upload_scratch_bytes: numberMetric(metrics, `${prefix}_image_upload_scratch_bytes`),
       image_upload_scratch_grows: numberMetric(metrics, `${prefix}_image_upload_scratch_grows`),
-      cpu_scratch_bytes: numberMetric(metrics, `${prefix}_cpu_scratch_bytes`),
-      cpu_scratch_grows: numberMetric(metrics, `${prefix}_cpu_scratch_grows`),
-      cpu_scratch_growth_bytes: numberMetric(metrics, `${prefix}_cpu_scratch_growth_bytes`),
+      ...scratchMetricFields(metrics, `${prefix}_`),
       ...extra,
       unit: "ms/frame",
    };
@@ -1216,11 +1252,35 @@ const WARM_RESOURCE_CHURN_FIELDS = [
    "pipeline_creates",
    "sampler_creates",
    "mesh3d_creates",
+   "draw_buffer_grows",
+   "image_texture_creates",
+   "image_bind_group_creates",
+   "target_texture_creates",
+   "target_bind_group_creates",
+   "scene3d_buffer_grows",
+   "scene3d_bind_group_creates",
+   "effect_buffer_grows",
+   "effect_bind_group_creates",
+   "id_mask_texture_creates",
+   "id_mask_buffer_grows",
+   "id_mask_bind_group_creates",
    "image_upload_temp_allocs",
    "image_upload_temp_bytes",
    "image_upload_scratch_grows",
    "cpu_scratch_grows",
    "cpu_scratch_growth_bytes",
+   "cpu_draw_scratch_grows",
+   "cpu_draw_scratch_growth_bytes",
+   "cpu_scene3d_scratch_grows",
+   "cpu_scene3d_scratch_growth_bytes",
+   "cpu_effect_scratch_grows",
+   "cpu_effect_scratch_growth_bytes",
+   "cpu_id_mask_scratch_grows",
+   "cpu_id_mask_scratch_growth_bytes",
+   "cpu_image_upload_scratch_grows",
+   "cpu_image_upload_scratch_growth_bytes",
+   "cpu_resource_table_scratch_grows",
+   "cpu_resource_table_scratch_growth_bytes",
 ];
 
 const EXPECTED_BENCHMARK_MARKS = [
@@ -1354,6 +1414,26 @@ function benchmarkMarkSummary(pageReport, traceSummary)
       if (!Number.isFinite(wasmGrowthBytes) || wasmGrowthBytes < 0.0) {
          throw new Error(`web report benchmark mark ${mark.id} missing wasm memory growth bytes`);
       }
+      let jsHeapSampleSupported = Number(mark.js_heap_sample_supported);
+      let jsHeapGcAvailable = Number(mark.js_heap_gc_available);
+      let jsHeapBeforeBytes = Number(mark.js_heap_before_bytes);
+      let jsHeapAfterBytes = Number(mark.js_heap_after_bytes);
+      let jsHeapGrowthBytes = Number(mark.js_heap_growth_bytes);
+      if (!Number.isFinite(jsHeapSampleSupported) || jsHeapSampleSupported < 0.0) {
+         throw new Error(`web report benchmark mark ${mark.id} missing JS heap sample support`);
+      }
+      if (!Number.isFinite(jsHeapGcAvailable) || jsHeapGcAvailable < 0.0) {
+         throw new Error(`web report benchmark mark ${mark.id} missing JS heap GC support`);
+      }
+      if (!Number.isFinite(jsHeapBeforeBytes) || jsHeapBeforeBytes < 0.0) {
+         throw new Error(`web report benchmark mark ${mark.id} missing JS heap before bytes`);
+      }
+      if (!Number.isFinite(jsHeapAfterBytes) || jsHeapAfterBytes < 0.0) {
+         throw new Error(`web report benchmark mark ${mark.id} missing JS heap after bytes`);
+      }
+      if (!Number.isFinite(jsHeapGrowthBytes) || jsHeapGrowthBytes < 0.0) {
+         throw new Error(`web report benchmark mark ${mark.id} missing JS heap growth bytes`);
+      }
       let entry = {
          id: mark.id,
          name: typeof mark.name === "string" ? mark.name : "",
@@ -1362,6 +1442,11 @@ function benchmarkMarkSummary(pageReport, traceSummary)
          wasm_memory_before_bytes: wasmBeforeBytes,
          wasm_memory_after_bytes: wasmAfterBytes,
          wasm_memory_growth_bytes: wasmGrowthBytes,
+         js_heap_sample_supported: jsHeapSampleSupported,
+         js_heap_gc_available: jsHeapGcAvailable,
+         js_heap_before_bytes: jsHeapBeforeBytes,
+         js_heap_after_bytes: jsHeapAfterBytes,
+         js_heap_growth_bytes: jsHeapGrowthBytes,
       };
       normalized.push(entry);
       byId.set(mark.id, entry);
@@ -1380,11 +1465,23 @@ function benchmarkMarkSummary(pageReport, traceSummary)
       : [];
    let traced = EXPECTED_BENCHMARK_MARKS.filter(id => traceLabels.includes(id));
    let growthMarks = normalized.filter(mark => mark.wasm_memory_growth_bytes > 0.0);
+   let jsHeapGrowthMarks = normalized.filter(mark => mark.js_heap_growth_bytes > 0.0);
    return {
       id: "web.wasm.webgpu.benchmark_mark_coverage",
       expected_count: EXPECTED_BENCHMARK_MARKS.length,
       page_mark_count: normalized.length,
       traced_mark_count: traced.length,
+      js_heap_sample_supported_count: normalized.filter(mark => mark.js_heap_sample_supported > 0.0).length,
+      js_heap_gc_available_count: normalized.filter(mark => mark.js_heap_gc_available > 0.0).length,
+      js_heap_total_growth_bytes: normalized.reduce(
+         (sum, mark) => sum + mark.js_heap_growth_bytes,
+         0,
+      ),
+      js_heap_max_growth_bytes: normalized.reduce(
+         (max, mark) => Math.max(max, mark.js_heap_growth_bytes),
+         0,
+      ),
+      js_heap_growth_labels: jsHeapGrowthMarks.map(mark => mark.id),
       wasm_memory_total_growth_bytes: normalized.reduce(
          (sum, mark) => sum + mark.wasm_memory_growth_bytes,
          0,
@@ -2492,11 +2589,11 @@ function renderMarkdown(report)
    lines.push("");
    lines.push("## Benchmark Marks");
    lines.push("");
-   lines.push("| Mark | Duration ms | Trace label | WASM before bytes | WASM after bytes | WASM growth bytes |");
-   lines.push("| --- | ---: | --- | ---: | ---: | ---: |");
+   lines.push("| Mark | Duration ms | Trace label | WASM before bytes | WASM after bytes | WASM growth bytes | JS heap before bytes | JS heap after bytes | JS heap growth bytes | JS heap sampled | GC exposed |");
+   lines.push("| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
    for (let mark of report.benchmark_marks.marks) {
       let traced = report.benchmark_marks.traced_labels.includes(mark.id) ? "yes" : "no";
-      lines.push(`| \`${mark.id}\` | ${mark.duration_ms.toFixed(3)} | \`${traced}\` | ${mark.wasm_memory_before_bytes} | ${mark.wasm_memory_after_bytes} | ${mark.wasm_memory_growth_bytes} |`);
+      lines.push(`| \`${mark.id}\` | ${mark.duration_ms.toFixed(3)} | \`${traced}\` | ${mark.wasm_memory_before_bytes} | ${mark.wasm_memory_after_bytes} | ${mark.wasm_memory_growth_bytes} | ${mark.js_heap_before_bytes} | ${mark.js_heap_after_bytes} | ${mark.js_heap_growth_bytes} | ${mark.js_heap_sample_supported} | ${mark.js_heap_gc_available} |`);
    }
    lines.push("");
    lines.push("## Warm Resource Churn");
@@ -2511,6 +2608,24 @@ function renderMarkdown(report)
    lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
    for (let row of report.warm_resource_churn.row_details) {
       lines.push(`| \`${row.id}\` | ${row.buffer_grows} | ${row.texture_creates} | ${row.bind_group_creates} | ${row.pipeline_creates} | ${row.sampler_creates} | ${row.mesh3d_creates} | ${row.image_upload_temp_allocs} | ${row.image_upload_temp_bytes} | ${row.image_upload_scratch_grows} | ${row.cpu_scratch_grows} | ${row.cpu_scratch_growth_bytes} |`);
+   }
+   lines.push("");
+   lines.push("### Warm GPU Resource Family Churn");
+   lines.push("");
+   lines.push("| Row | Draw Buffers | Image Textures | Image Bind Groups | Target Textures | Target Bind Groups | Scene3D Buffers | Scene3D Bind Groups | Effect Buffers | Effect Bind Groups | ID Mask Textures | ID Mask Buffers | ID Mask Bind Groups |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+   lines.push(`| \`${report.warm_resource_churn.id}\` | ${report.warm_resource_churn.total_draw_buffer_grows} | ${report.warm_resource_churn.total_image_texture_creates} | ${report.warm_resource_churn.total_image_bind_group_creates} | ${report.warm_resource_churn.total_target_texture_creates} | ${report.warm_resource_churn.total_target_bind_group_creates} | ${report.warm_resource_churn.total_scene3d_buffer_grows} | ${report.warm_resource_churn.total_scene3d_bind_group_creates} | ${report.warm_resource_churn.total_effect_buffer_grows} | ${report.warm_resource_churn.total_effect_bind_group_creates} | ${report.warm_resource_churn.total_id_mask_texture_creates} | ${report.warm_resource_churn.total_id_mask_buffer_grows} | ${report.warm_resource_churn.total_id_mask_bind_group_creates} |`);
+   for (let row of report.warm_resource_churn.row_details) {
+      lines.push(`| \`${row.id}\` | ${row.draw_buffer_grows} | ${row.image_texture_creates} | ${row.image_bind_group_creates} | ${row.target_texture_creates} | ${row.target_bind_group_creates} | ${row.scene3d_buffer_grows} | ${row.scene3d_bind_group_creates} | ${row.effect_buffer_grows} | ${row.effect_bind_group_creates} | ${row.id_mask_texture_creates} | ${row.id_mask_buffer_grows} | ${row.id_mask_bind_group_creates} |`);
+   }
+   lines.push("");
+   lines.push("### Warm Scratch Family Churn");
+   lines.push("");
+   lines.push("| Row | Draw Grows | Draw Bytes | Scene3D Grows | Scene3D Bytes | Effect Grows | Effect Bytes | ID Mask Grows | ID Mask Bytes | Image Upload Grows | Image Upload Bytes | Resource Table Grows | Resource Table Bytes |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+   lines.push(`| \`${report.warm_resource_churn.id}\` | ${report.warm_resource_churn.total_cpu_draw_scratch_grows} | ${report.warm_resource_churn.total_cpu_draw_scratch_growth_bytes} | ${report.warm_resource_churn.total_cpu_scene3d_scratch_grows} | ${report.warm_resource_churn.total_cpu_scene3d_scratch_growth_bytes} | ${report.warm_resource_churn.total_cpu_effect_scratch_grows} | ${report.warm_resource_churn.total_cpu_effect_scratch_growth_bytes} | ${report.warm_resource_churn.total_cpu_id_mask_scratch_grows} | ${report.warm_resource_churn.total_cpu_id_mask_scratch_growth_bytes} | ${report.warm_resource_churn.total_cpu_image_upload_scratch_grows} | ${report.warm_resource_churn.total_cpu_image_upload_scratch_growth_bytes} | ${report.warm_resource_churn.total_cpu_resource_table_scratch_grows} | ${report.warm_resource_churn.total_cpu_resource_table_scratch_growth_bytes} |`);
+   for (let row of report.warm_resource_churn.row_details) {
+      lines.push(`| \`${row.id}\` | ${row.cpu_draw_scratch_grows} | ${row.cpu_draw_scratch_growth_bytes} | ${row.cpu_scene3d_scratch_grows} | ${row.cpu_scene3d_scratch_growth_bytes} | ${row.cpu_effect_scratch_grows} | ${row.cpu_effect_scratch_growth_bytes} | ${row.cpu_id_mask_scratch_grows} | ${row.cpu_id_mask_scratch_growth_bytes} | ${row.cpu_image_upload_scratch_grows} | ${row.cpu_image_upload_scratch_growth_bytes} | ${row.cpu_resource_table_scratch_grows} | ${row.cpu_resource_table_scratch_growth_bytes} |`);
    }
    lines.push("");
    lines.push("## Backend Path Coverage");
@@ -2791,6 +2906,19 @@ function assertBenchmarkMarks(report)
    if (summary.page_mark_count !== pageLabels.length || summary.page_mark_count < EXPECTED_BENCHMARK_MARKS.length) {
       throw new Error("web report contract benchmark mark page count mismatch");
    }
+   assertNumber(summary.js_heap_sample_supported_count, "benchmark_marks.js_heap_sample_supported_count");
+   assertNumber(summary.js_heap_gc_available_count, "benchmark_marks.js_heap_gc_available_count");
+   assertNumber(summary.js_heap_total_growth_bytes, "benchmark_marks.js_heap_total_growth_bytes");
+   assertNumber(summary.js_heap_max_growth_bytes, "benchmark_marks.js_heap_max_growth_bytes");
+   if (!Array.isArray(summary.js_heap_growth_labels)) {
+      throw new Error("web report contract benchmark mark missing JS heap growth labels");
+   }
+   if (
+      summary.js_heap_sample_supported_count < EXPECTED_BENCHMARK_MARKS.length
+      || summary.js_heap_gc_available_count < EXPECTED_BENCHMARK_MARKS.length
+   ) {
+      throw new Error("web report contract benchmark marks require Chrome JS heap sampling and exposed GC");
+   }
    assertNumber(summary.wasm_memory_total_growth_bytes, "benchmark_marks.wasm_memory_total_growth_bytes");
    assertNumber(summary.wasm_memory_max_growth_bytes, "benchmark_marks.wasm_memory_max_growth_bytes");
    if (!Array.isArray(summary.wasm_memory_growth_labels)) {
@@ -2819,6 +2947,11 @@ function assertBenchmarkMarks(report)
       assertNumber(mark.wasm_memory_before_bytes, `${mark.id}.wasm_memory_before_bytes`);
       assertNumber(mark.wasm_memory_after_bytes, `${mark.id}.wasm_memory_after_bytes`);
       assertNumber(mark.wasm_memory_growth_bytes, `${mark.id}.wasm_memory_growth_bytes`);
+      assertNumber(mark.js_heap_sample_supported, `${mark.id}.js_heap_sample_supported`);
+      assertNumber(mark.js_heap_gc_available, `${mark.id}.js_heap_gc_available`);
+      assertNumber(mark.js_heap_before_bytes, `${mark.id}.js_heap_before_bytes`);
+      assertNumber(mark.js_heap_after_bytes, `${mark.id}.js_heap_after_bytes`);
+      assertNumber(mark.js_heap_growth_bytes, `${mark.id}.js_heap_growth_bytes`);
       if (
          mark.wasm_memory_before_bytes <= 0.0
          || mark.wasm_memory_after_bytes < mark.wasm_memory_before_bytes
@@ -2831,6 +2964,15 @@ function assertBenchmarkMarks(report)
          || mark.wasm_memory_growth_bytes !== 0
       ) {
          throw new Error(`web report contract benchmark mark grew WASM memory after prewarm ${mark.id}`);
+      }
+      if (
+         mark.js_heap_sample_supported <= 0.0
+         || mark.js_heap_gc_available <= 0.0
+         || mark.js_heap_before_bytes <= 0.0
+         || mark.js_heap_after_bytes <= 0.0
+         || mark.js_heap_growth_bytes < 0.0
+      ) {
+         throw new Error(`web report contract benchmark mark has invalid JS heap fields ${mark.id}`);
       }
    }
    if (report.browser_trace.benchmark_trace_mark_status === "collected") {
@@ -2955,6 +3097,18 @@ function assertWebReportContract(report)
          "pipeline_creates",
          "sampler_creates",
          "mesh3d_creates",
+         "draw_buffer_grows",
+         "image_texture_creates",
+         "image_bind_group_creates",
+         "target_texture_creates",
+         "target_bind_group_creates",
+         "scene3d_buffer_grows",
+         "scene3d_bind_group_creates",
+         "effect_buffer_grows",
+         "effect_bind_group_creates",
+         "id_mask_texture_creates",
+         "id_mask_buffer_grows",
+         "id_mask_bind_group_creates",
          "image_upload_temp_allocs",
          "image_upload_temp_bytes",
          "image_upload_scratch_bytes",
@@ -2962,6 +3116,24 @@ function assertWebReportContract(report)
          "cpu_scratch_bytes",
          "cpu_scratch_grows",
          "cpu_scratch_growth_bytes",
+         "cpu_draw_scratch_bytes",
+         "cpu_draw_scratch_grows",
+         "cpu_draw_scratch_growth_bytes",
+         "cpu_scene3d_scratch_bytes",
+         "cpu_scene3d_scratch_grows",
+         "cpu_scene3d_scratch_growth_bytes",
+         "cpu_effect_scratch_bytes",
+         "cpu_effect_scratch_grows",
+         "cpu_effect_scratch_growth_bytes",
+         "cpu_id_mask_scratch_bytes",
+         "cpu_id_mask_scratch_grows",
+         "cpu_id_mask_scratch_growth_bytes",
+         "cpu_image_upload_scratch_bytes",
+         "cpu_image_upload_scratch_grows",
+         "cpu_image_upload_scratch_growth_bytes",
+         "cpu_resource_table_scratch_bytes",
+         "cpu_resource_table_scratch_grows",
+         "cpu_resource_table_scratch_growth_bytes",
       ]) {
          assertNumber(row[key], `${row.id}.${key}`);
       }
@@ -2998,6 +3170,15 @@ function assertWebReportContract(report)
       ) {
          throw new Error(`web report contract found post-warmup resource creation in ${row.id}`);
       }
+      if (row.bind_group_creates !== row.image_bind_group_creates + row.target_bind_group_creates + row.scene3d_bind_group_creates + row.effect_bind_group_creates + row.id_mask_bind_group_creates) {
+         throw new Error(`web report contract bind-group family mismatch in ${row.id}`);
+      }
+      if (row.texture_creates !== row.image_texture_creates + row.target_texture_creates + row.id_mask_texture_creates) {
+         throw new Error(`web report contract texture family mismatch in ${row.id}`);
+      }
+      if (row.buffer_grows !== row.draw_buffer_grows + row.scene3d_buffer_grows + row.effect_buffer_grows + row.id_mask_buffer_grows) {
+         throw new Error(`web report contract buffer family mismatch in ${row.id}`);
+      }
       if (
          row.id !== "web.wasm.webgpu.scene3d.recreate_mesh"
          && row.id !== "web.wasm.webgpu.scene3d.stress_recreate_mesh"
@@ -3008,11 +3189,31 @@ function assertWebReportContract(report)
       if (row.cpu_scratch_bytes <= 0) {
          throw new Error(`web report contract missing CPU scratch capacity in ${row.id}`);
       }
+      if (row.cpu_draw_scratch_bytes <= 0 || row.cpu_resource_table_scratch_bytes <= 0) {
+         throw new Error(`web report contract missing family CPU scratch capacity in ${row.id}`);
+      }
       if (
          !cpuScratchGrowthAllowed.has(row.id)
          && (row.cpu_scratch_grows !== 0 || row.cpu_scratch_growth_bytes !== 0)
       ) {
          throw new Error(`web report contract found post-warmup CPU scratch growth in ${row.id}`);
+      }
+      if (!cpuScratchGrowthAllowed.has(row.id)) {
+         for (let field of WARM_RESOURCE_CHURN_FIELDS) {
+            if (field.startsWith("cpu_") && row[field] !== 0) {
+               throw new Error(`web report contract found post-warmup family CPU scratch growth in ${row.id}.${field}`);
+            }
+            if (
+               (
+                  field.endsWith("_buffer_grows")
+                  || field.endsWith("_texture_creates")
+                  || field.endsWith("_bind_group_creates")
+               )
+               && row[field] !== 0
+            ) {
+               throw new Error(`web report contract found post-warmup family GPU resource churn in ${row.id}.${field}`);
+            }
+         }
       }
    }
    if (expected.size > 0) {

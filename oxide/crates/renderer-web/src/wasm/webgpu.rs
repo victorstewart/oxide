@@ -625,6 +625,27 @@ impl api::Renderer for BrowserRenderer {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+struct ScratchCapacityBreakdown {
+    draw: usize,
+    scene3d: usize,
+    effect: usize,
+    id_mask: usize,
+    image_upload: usize,
+    resource_table: usize,
+}
+
+impl ScratchCapacityBreakdown {
+    fn total(self) -> usize {
+        self.draw
+            .saturating_add(self.scene3d)
+            .saturating_add(self.effect)
+            .saturating_add(self.id_mask)
+            .saturating_add(self.image_upload)
+            .saturating_add(self.resource_table)
+    }
+}
+
 /// WebGPU implementation of the Oxide browser renderer.
 pub struct WebGpuRenderer {
     canvas: HtmlCanvasElement,
@@ -710,6 +731,7 @@ pub struct WebGpuRenderer {
     height: u32,
     scale: f32,
     frame_id: u64,
+    frame_scratch_capacity: ScratchCapacityBreakdown,
     frame_scratch_capacity_bytes: usize,
     active_token: Option<api::FrameToken>,
     stats: WebRendererStats,
@@ -956,6 +978,7 @@ impl WebGpuRenderer {
             height,
             scale: 1.0,
             frame_id: 0,
+            frame_scratch_capacity: ScratchCapacityBreakdown::default(),
             frame_scratch_capacity_bytes: 0,
             active_token: None,
             stats: WebRendererStats::default(),
@@ -1006,73 +1029,132 @@ impl WebGpuRenderer {
         self.backdrop_batch_enabled = enabled;
     }
 
-    fn scratch_capacity_bytes(&self) -> usize {
-        let mut bytes = 0_usize;
-        bytes = bytes.saturating_add(self.vertex_bytes.capacity());
-        bytes = bytes.saturating_add(self.index_bytes.capacity());
-        bytes = bytes.saturating_add(self.scene3d_uniform_bytes.capacity());
-        bytes = bytes.saturating_add(self.effect_uniform_bytes.capacity());
-        bytes = bytes.saturating_add(
+    fn scratch_capacity_breakdown(&self) -> ScratchCapacityBreakdown {
+        let mut capacity = ScratchCapacityBreakdown::default();
+        capacity.draw = capacity.draw.saturating_add(self.vertex_bytes.capacity());
+        capacity.draw = capacity.draw.saturating_add(self.index_bytes.capacity());
+        capacity.scene3d = capacity.scene3d.saturating_add(self.scene3d_uniform_bytes.capacity());
+        capacity.effect = capacity.effect.saturating_add(self.effect_uniform_bytes.capacity());
+        capacity.scene3d = capacity.scene3d.saturating_add(
             self.scene3d_draws.capacity().saturating_mul(core::mem::size_of::<Scene3dDraw>()),
         );
-        bytes = bytes.saturating_add(
+        capacity.scene3d = capacity.scene3d.saturating_add(
             self.scene3d_overlay_draws
                 .capacity()
                 .saturating_mul(core::mem::size_of::<Scene3dDraw>()),
         );
-        bytes = bytes.saturating_add(
+        capacity.id_mask = capacity.id_mask.saturating_add(
             self.id_mask_draws.capacity().saturating_mul(core::mem::size_of::<IdMaskDraw>()),
         );
-        bytes = bytes.saturating_add(
+        capacity.id_mask = capacity.id_mask.saturating_add(
             self.id_mask_vertex_caches
                 .capacity()
                 .saturating_mul(core::mem::size_of::<IdMaskVertexCache>()),
         );
         for cache in &self.id_mask_vertex_caches {
-            bytes = bytes.saturating_add(cache.bytes.capacity());
+            capacity.id_mask = capacity.id_mask.saturating_add(cache.bytes.capacity());
         }
-        bytes = bytes.saturating_add(
+        capacity.resource_table = capacity.resource_table.saturating_add(
             self.images.capacity().saturating_mul(core::mem::size_of::<Option<GpuImage>>()),
         );
-        bytes = bytes.saturating_add(
+        capacity.resource_table = capacity.resource_table.saturating_add(
             self.meshes_3d.capacity().saturating_mul(core::mem::size_of::<Option<GpuMesh3d>>()),
         );
-        bytes = bytes.saturating_add(
+        capacity.draw = capacity.draw.saturating_add(
             self.frame.vertices.capacity().saturating_mul(core::mem::size_of::<GpuVertex>()),
         );
-        bytes = bytes.saturating_add(
+        capacity.draw = capacity.draw.saturating_add(
             self.frame.indices.capacity().saturating_mul(core::mem::size_of::<u32>()),
         );
-        bytes = bytes.saturating_add(
+        capacity.draw = capacity.draw.saturating_add(
             self.frame.draws.capacity().saturating_mul(core::mem::size_of::<GpuDraw>()),
         );
-        bytes = bytes.saturating_add(
+        capacity.draw = capacity.draw.saturating_add(
             self.scratch_vertices.capacity().saturating_mul(core::mem::size_of::<GpuVertex>()),
         );
-        bytes = bytes.saturating_add(
+        capacity.draw = capacity.draw.saturating_add(
             self.scratch_indices.capacity().saturating_mul(core::mem::size_of::<u32>()),
         );
-        bytes = bytes.saturating_add(
+        capacity.draw = capacity.draw.saturating_add(
             self.scratch_points.capacity().saturating_mul(core::mem::size_of::<(f32, f32)>()),
         );
-        bytes = bytes.saturating_add(self.image_upload_scratch.capacity());
-        bytes = bytes.saturating_add(self.id_mask_raster_uniform_bytes.capacity());
-        bytes = bytes.saturating_add(self.id_mask_compositor_uniform_bytes.capacity());
-        bytes = bytes.saturating_add(
+        capacity.image_upload = capacity.image_upload.saturating_add(self.image_upload_scratch.capacity());
+        capacity.id_mask = capacity.id_mask.saturating_add(self.id_mask_raster_uniform_bytes.capacity());
+        capacity.id_mask = capacity.id_mask.saturating_add(self.id_mask_compositor_uniform_bytes.capacity());
+        capacity.draw = capacity.draw.saturating_add(
             self.clip_stack.capacity().saturating_mul(core::mem::size_of::<api::RectI>()),
         );
-        bytes
+        capacity
+    }
+
+    fn apply_scratch_capacity_stats(&mut self, capacity: ScratchCapacityBreakdown) {
+        self.stats.cpu_scratch_bytes = capacity.total() as u64;
+        self.stats.cpu_draw_scratch_bytes = capacity.draw as u64;
+        self.stats.cpu_scene3d_scratch_bytes = capacity.scene3d as u64;
+        self.stats.cpu_effect_scratch_bytes = capacity.effect as u64;
+        self.stats.cpu_id_mask_scratch_bytes = capacity.id_mask as u64;
+        self.stats.cpu_image_upload_scratch_bytes = capacity.image_upload as u64;
+        self.stats.cpu_resource_table_scratch_bytes = capacity.resource_table as u64;
+        self.stats.image_upload_scratch_bytes = capacity.image_upload as u64;
+    }
+
+    fn record_scratch_growth(
+        current: usize,
+        previous: usize,
+        grows: &mut u32,
+        growth_bytes: &mut u64,
+    ) {
+        if current > previous {
+            *grows = (*grows).saturating_add(1);
+            *growth_bytes = current.saturating_sub(previous) as u64;
+        }
     }
 
     fn record_scratch_growth_stats(&mut self) {
-        let capacity = self.scratch_capacity_bytes();
-        self.stats.cpu_scratch_bytes = capacity as u64;
-        self.stats.image_upload_scratch_bytes = self.image_upload_scratch.capacity() as u64;
-        if capacity > self.frame_scratch_capacity_bytes {
-            self.stats.cpu_scratch_grows = self.stats.cpu_scratch_grows.saturating_add(1);
-            self.stats.cpu_scratch_growth_bytes =
-                capacity.saturating_sub(self.frame_scratch_capacity_bytes) as u64;
-        }
+        let capacity = self.scratch_capacity_breakdown();
+        self.apply_scratch_capacity_stats(capacity);
+        Self::record_scratch_growth(
+            capacity.total(),
+            self.frame_scratch_capacity_bytes,
+            &mut self.stats.cpu_scratch_grows,
+            &mut self.stats.cpu_scratch_growth_bytes,
+        );
+        Self::record_scratch_growth(
+            capacity.draw,
+            self.frame_scratch_capacity.draw,
+            &mut self.stats.cpu_draw_scratch_grows,
+            &mut self.stats.cpu_draw_scratch_growth_bytes,
+        );
+        Self::record_scratch_growth(
+            capacity.scene3d,
+            self.frame_scratch_capacity.scene3d,
+            &mut self.stats.cpu_scene3d_scratch_grows,
+            &mut self.stats.cpu_scene3d_scratch_growth_bytes,
+        );
+        Self::record_scratch_growth(
+            capacity.effect,
+            self.frame_scratch_capacity.effect,
+            &mut self.stats.cpu_effect_scratch_grows,
+            &mut self.stats.cpu_effect_scratch_growth_bytes,
+        );
+        Self::record_scratch_growth(
+            capacity.id_mask,
+            self.frame_scratch_capacity.id_mask,
+            &mut self.stats.cpu_id_mask_scratch_grows,
+            &mut self.stats.cpu_id_mask_scratch_growth_bytes,
+        );
+        Self::record_scratch_growth(
+            capacity.image_upload,
+            self.frame_scratch_capacity.image_upload,
+            &mut self.stats.cpu_image_upload_scratch_grows,
+            &mut self.stats.cpu_image_upload_scratch_growth_bytes,
+        );
+        Self::record_scratch_growth(
+            capacity.resource_table,
+            self.frame_scratch_capacity.resource_table,
+            &mut self.stats.cpu_resource_table_scratch_grows,
+            &mut self.stats.cpu_resource_table_scratch_growth_bytes,
+        );
     }
 
     fn apply_timestamp_stats(&mut self) {
@@ -1292,6 +1374,7 @@ impl WebGpuRenderer {
         self.queue.write_buffer(&vertex_buffer, 0, &vertex_bytes);
         self.queue.write_buffer(&index_buffer, 0, &index_bytes);
         self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(2);
+        self.stats.scene3d_buffer_grows = self.stats.scene3d_buffer_grows.saturating_add(2);
         self.stats.mesh3d_creates = self.stats.mesh3d_creates.saturating_add(1);
         self.stats.buffer_upload_bytes = self
             .stats
@@ -1481,6 +1564,7 @@ impl WebGpuRenderer {
             view_formats: &[],
         });
         self.stats.texture_creates = self.stats.texture_creates.saturating_add(1);
+        self.stats.image_texture_creates = self.stats.image_texture_creates.saturating_add(1);
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -1502,6 +1586,8 @@ impl WebGpuRenderer {
         let bind_group =
             create_texture_bind_group(&self.device, &self.programs, &view, &self.programs.sampler);
         self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
+        self.stats.image_bind_group_creates =
+            self.stats.image_bind_group_creates.saturating_add(1);
         drop(view);
         Ok(GpuImage { texture, bind_group, width, height, kind })
     }
@@ -1966,6 +2052,9 @@ impl WebGpuRenderer {
         self.scratch_bind_group = scratch_bind_group;
         self.stats.texture_creates = self.stats.texture_creates.saturating_add(3);
         self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(2);
+        self.stats.target_texture_creates = self.stats.target_texture_creates.saturating_add(3);
+        self.stats.target_bind_group_creates =
+            self.stats.target_bind_group_creates.saturating_add(2);
     }
 
     fn upload_frame_buffers(&mut self) {
@@ -1982,6 +2071,7 @@ impl WebGpuRenderer {
             "oxide-webgpu-vertices",
         ) {
             self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+            self.stats.draw_buffer_grows = self.stats.draw_buffer_grows.saturating_add(1);
         }
         if ensure_buffer(
             &self.device,
@@ -1992,6 +2082,7 @@ impl WebGpuRenderer {
             "oxide-webgpu-indices",
         ) {
             self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+            self.stats.draw_buffer_grows = self.stats.draw_buffer_grows.saturating_add(1);
         }
         if let Some(buffer) = &self.vertex_buffer {
             self.queue.write_buffer(buffer, 0, &self.vertex_bytes);
@@ -2035,6 +2126,9 @@ impl WebGpuRenderer {
             self.scene3d_uniform_capacity = next;
             self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
             self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
+            self.stats.scene3d_buffer_grows = self.stats.scene3d_buffer_grows.saturating_add(1);
+            self.stats.scene3d_bind_group_creates =
+                self.stats.scene3d_bind_group_creates.saturating_add(1);
         }
         if let Some(buffer) = &self.scene3d_uniform_buffer {
             self.queue.write_buffer(buffer, 0, &self.scene3d_uniform_bytes);
@@ -2137,6 +2231,9 @@ impl WebGpuRenderer {
         self.effect_uniform_capacity = capacity;
         self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
         self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
+        self.stats.effect_buffer_grows = self.stats.effect_buffer_grows.saturating_add(1);
+        self.stats.effect_bind_group_creates =
+            self.stats.effect_bind_group_creates.saturating_add(1);
     }
 
     fn ensure_id_mask_resources(
@@ -2208,6 +2305,8 @@ impl WebGpuRenderer {
             self.id_mask_compositor_bind_group_a = None;
             self.id_mask_compositor_bind_group_b = None;
             self.stats.texture_creates = self.stats.texture_creates.saturating_add(6);
+            self.stats.id_mask_texture_creates =
+                self.stats.id_mask_texture_creates.saturating_add(6);
         }
 
         if ensure_buffer(
@@ -2220,6 +2319,7 @@ impl WebGpuRenderer {
         ) {
             self.id_mask_uploaded_vertex_cache = None;
             self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+            self.stats.id_mask_buffer_grows = self.stats.id_mask_buffer_grows.saturating_add(1);
         }
 
         if self.id_mask_raster_uniform_buffer.is_none() {
@@ -2241,6 +2341,9 @@ impl WebGpuRenderer {
             self.id_mask_raster_bind_group = Some(bind_group);
             self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
             self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
+            self.stats.id_mask_buffer_grows = self.stats.id_mask_buffer_grows.saturating_add(1);
+            self.stats.id_mask_bind_group_creates =
+                self.stats.id_mask_bind_group_creates.saturating_add(1);
         }
 
         if self.id_mask_field_uniform_buffer.is_none() {
@@ -2254,6 +2357,7 @@ impl WebGpuRenderer {
             self.id_mask_field_bind_group_a = None;
             self.id_mask_field_bind_group_b = None;
             self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+            self.stats.id_mask_buffer_grows = self.stats.id_mask_buffer_grows.saturating_add(1);
         }
 
         let compositor_needed = compositor_uniform_len.max(1) as u64;
@@ -2272,6 +2376,7 @@ impl WebGpuRenderer {
             self.id_mask_compositor_bind_group_a = None;
             self.id_mask_compositor_bind_group_b = None;
             self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+            self.stats.id_mask_buffer_grows = self.stats.id_mask_buffer_grows.saturating_add(1);
         }
 
         if self.id_mask_field_bind_group_a.is_none() || self.id_mask_field_bind_group_b.is_none() {
@@ -2305,6 +2410,8 @@ impl WebGpuRenderer {
                 "oxide-webgpu-id-mask-field-bind-group-b",
             ));
             self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(2);
+            self.stats.id_mask_bind_group_creates =
+                self.stats.id_mask_bind_group_creates.saturating_add(2);
         }
 
         if self.id_mask_compositor_bind_group_a.is_none()
@@ -2340,6 +2447,8 @@ impl WebGpuRenderer {
                 "oxide-webgpu-id-mask-compositor-bind-group-b",
             ));
             self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(2);
+            self.stats.id_mask_bind_group_creates =
+                self.stats.id_mask_bind_group_creates.saturating_add(2);
         }
     }
 }
@@ -2382,9 +2491,9 @@ impl api::Renderer for WebGpuRenderer {
             ..WebRendererStats::default()
         };
         self.apply_timestamp_stats();
-        self.frame_scratch_capacity_bytes = self.scratch_capacity_bytes();
-        self.stats.cpu_scratch_bytes = self.frame_scratch_capacity_bytes as u64;
-        self.stats.image_upload_scratch_bytes = self.image_upload_scratch.capacity() as u64;
+        self.frame_scratch_capacity = self.scratch_capacity_breakdown();
+        self.frame_scratch_capacity_bytes = self.frame_scratch_capacity.total();
+        self.apply_scratch_capacity_stats(self.frame_scratch_capacity);
         let token = api::FrameToken(self.frame_id);
         self.active_token = Some(token);
         token

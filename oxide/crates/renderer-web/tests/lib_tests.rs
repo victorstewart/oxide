@@ -332,6 +332,18 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
         "pub pipeline_creates: u32",
         "pub sampler_creates: u32",
         "pub mesh3d_creates: u32",
+        "pub draw_buffer_grows: u32",
+        "pub image_texture_creates: u32",
+        "pub image_bind_group_creates: u32",
+        "pub target_texture_creates: u32",
+        "pub target_bind_group_creates: u32",
+        "pub scene3d_buffer_grows: u32",
+        "pub scene3d_bind_group_creates: u32",
+        "pub effect_buffer_grows: u32",
+        "pub effect_bind_group_creates: u32",
+        "pub id_mask_texture_creates: u32",
+        "pub id_mask_buffer_grows: u32",
+        "pub id_mask_bind_group_creates: u32",
         "pub image_upload_temp_allocs: u32",
         "pub image_upload_temp_bytes: u64",
         "pub image_upload_scratch_bytes: u64",
@@ -347,6 +359,24 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
         "pub cpu_scratch_bytes: u64",
         "pub cpu_scratch_grows: u32",
         "pub cpu_scratch_growth_bytes: u64",
+        "pub cpu_draw_scratch_bytes: u64",
+        "pub cpu_draw_scratch_grows: u32",
+        "pub cpu_draw_scratch_growth_bytes: u64",
+        "pub cpu_scene3d_scratch_bytes: u64",
+        "pub cpu_scene3d_scratch_grows: u32",
+        "pub cpu_scene3d_scratch_growth_bytes: u64",
+        "pub cpu_effect_scratch_bytes: u64",
+        "pub cpu_effect_scratch_grows: u32",
+        "pub cpu_effect_scratch_growth_bytes: u64",
+        "pub cpu_id_mask_scratch_bytes: u64",
+        "pub cpu_id_mask_scratch_grows: u32",
+        "pub cpu_id_mask_scratch_growth_bytes: u64",
+        "pub cpu_image_upload_scratch_bytes: u64",
+        "pub cpu_image_upload_scratch_grows: u32",
+        "pub cpu_image_upload_scratch_growth_bytes: u64",
+        "pub cpu_resource_table_scratch_bytes: u64",
+        "pub cpu_resource_table_scratch_grows: u32",
+        "pub cpu_resource_table_scratch_growth_bytes: u64",
         "pub scene3d_draws: u32",
         "pub id_mask_draws: u32",
         "pub backdrop_draws: u32",
@@ -416,6 +446,22 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(source.contains("self.stats.texture_creates"));
     assert!(source.contains("self.stats.bind_group_creates"));
     assert!(!source.contains("self.stats.pipeline_creates"));
+    for field in [
+        "self.stats.draw_buffer_grows",
+        "self.stats.image_texture_creates",
+        "self.stats.image_bind_group_creates",
+        "self.stats.target_texture_creates",
+        "self.stats.target_bind_group_creates",
+        "self.stats.scene3d_buffer_grows",
+        "self.stats.scene3d_bind_group_creates",
+        "self.stats.effect_buffer_grows",
+        "self.stats.effect_bind_group_creates",
+        "self.stats.id_mask_texture_creates",
+        "self.stats.id_mask_buffer_grows",
+        "self.stats.id_mask_bind_group_creates",
+    ] {
+        assert!(source.contains(field), "missing WebGPU resource attribution {field}");
+    }
     assert!(source.contains("draw_state_cache_enabled: bool"));
     assert!(source.contains("image_upload_scratch: Vec<u8>"));
     assert!(source.contains("image_upload_scratch_enabled: bool"));
@@ -445,10 +491,28 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert_eq!(source.matches("device.create_sampler(").count(), 1);
     assert!(source.contains("let sampler = device.create_sampler(&wgpu::SamplerDescriptor"));
     assert!(source.contains("self.stats.mesh3d_creates"));
-    assert!(source.contains("fn scratch_capacity_bytes(&self) -> usize"));
+    assert!(source.contains("struct ScratchCapacityBreakdown"));
+    assert!(source.contains("fn scratch_capacity_breakdown(&self) -> ScratchCapacityBreakdown"));
+    assert!(source.contains("fn apply_scratch_capacity_stats(&mut self, capacity: ScratchCapacityBreakdown)"));
     assert!(source.contains("fn record_scratch_growth_stats(&mut self)"));
     assert!(source.contains("self.stats.cpu_scratch_grows"));
     assert!(source.contains("self.stats.cpu_scratch_growth_bytes"));
+    for field in [
+        "self.stats.cpu_draw_scratch_grows",
+        "self.stats.cpu_draw_scratch_growth_bytes",
+        "self.stats.cpu_scene3d_scratch_grows",
+        "self.stats.cpu_scene3d_scratch_growth_bytes",
+        "self.stats.cpu_effect_scratch_grows",
+        "self.stats.cpu_effect_scratch_growth_bytes",
+        "self.stats.cpu_id_mask_scratch_grows",
+        "self.stats.cpu_id_mask_scratch_growth_bytes",
+        "self.stats.cpu_image_upload_scratch_grows",
+        "self.stats.cpu_image_upload_scratch_growth_bytes",
+        "self.stats.cpu_resource_table_scratch_grows",
+        "self.stats.cpu_resource_table_scratch_growth_bytes",
+    ] {
+        assert!(source.contains(field), "missing WebGPU scratch growth attribution {field}");
+    }
     assert!(source.contains("self.stats.layer_draws = self.stats.layer_draws.saturating_add(1);"));
     assert!(
         source.contains("self.stats.scene3d_draws = self.stats.scene3d_draws.saturating_add(1);")
@@ -507,6 +571,18 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(host.contains("{key_prefix}effect_uniform_slots={}"));
     assert!(host.contains("{key_prefix}sampler_creates={}"));
     assert!(host.contains("{key_prefix}mesh3d_creates={}"));
+    assert!(host.contains("{key_prefix}draw_buffer_grows={}"));
+    assert!(host.contains("{key_prefix}image_texture_creates={}"));
+    assert!(host.contains("{key_prefix}image_bind_group_creates={}"));
+    assert!(host.contains("{key_prefix}target_texture_creates={}"));
+    assert!(host.contains("{key_prefix}target_bind_group_creates={}"));
+    assert!(host.contains("{key_prefix}scene3d_buffer_grows={}"));
+    assert!(host.contains("{key_prefix}scene3d_bind_group_creates={}"));
+    assert!(host.contains("{key_prefix}effect_buffer_grows={}"));
+    assert!(host.contains("{key_prefix}effect_bind_group_creates={}"));
+    assert!(host.contains("{key_prefix}id_mask_texture_creates={}"));
+    assert!(host.contains("{key_prefix}id_mask_buffer_grows={}"));
+    assert!(host.contains("{key_prefix}id_mask_bind_group_creates={}"));
     assert!(host.contains("{key_prefix}image_upload_temp_allocs={}"));
     assert!(host.contains("{key_prefix}image_upload_temp_bytes={}"));
     assert!(host.contains("{key_prefix}image_upload_scratch_bytes={}"));
@@ -526,6 +602,24 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(host.contains("{key_prefix}cpu_scratch_bytes={}"));
     assert!(host.contains("{key_prefix}cpu_scratch_grows={}"));
     assert!(host.contains("{key_prefix}cpu_scratch_growth_bytes={}"));
+    assert!(host.contains("{key_prefix}cpu_draw_scratch_bytes={}"));
+    assert!(host.contains("{key_prefix}cpu_draw_scratch_grows={}"));
+    assert!(host.contains("{key_prefix}cpu_draw_scratch_growth_bytes={}"));
+    assert!(host.contains("{key_prefix}cpu_scene3d_scratch_bytes={}"));
+    assert!(host.contains("{key_prefix}cpu_scene3d_scratch_grows={}"));
+    assert!(host.contains("{key_prefix}cpu_scene3d_scratch_growth_bytes={}"));
+    assert!(host.contains("{key_prefix}cpu_effect_scratch_bytes={}"));
+    assert!(host.contains("{key_prefix}cpu_effect_scratch_grows={}"));
+    assert!(host.contains("{key_prefix}cpu_effect_scratch_growth_bytes={}"));
+    assert!(host.contains("{key_prefix}cpu_id_mask_scratch_bytes={}"));
+    assert!(host.contains("{key_prefix}cpu_id_mask_scratch_grows={}"));
+    assert!(host.contains("{key_prefix}cpu_id_mask_scratch_growth_bytes={}"));
+    assert!(host.contains("{key_prefix}cpu_image_upload_scratch_bytes={}"));
+    assert!(host.contains("{key_prefix}cpu_image_upload_scratch_grows={}"));
+    assert!(host.contains("{key_prefix}cpu_image_upload_scratch_growth_bytes={}"));
+    assert!(host.contains("{key_prefix}cpu_resource_table_scratch_bytes={}"));
+    assert!(host.contains("{key_prefix}cpu_resource_table_scratch_grows={}"));
+    assert!(host.contains("{key_prefix}cpu_resource_table_scratch_growth_bytes={}"));
     assert!(host.contains("{key_prefix}buffer_upload_bytes={}"));
 }
 
