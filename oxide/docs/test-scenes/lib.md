@@ -66,19 +66,19 @@ Unknown or unsupported touch gestures are ignored. Invalid coordinates are filte
 
 ## Concurrency and memory behavior
 
-The router is single-threaded scene state. Benchmark stepping reuses existing scene allocations after prepare; per-frame allocation behavior is governed by the underlying UI-core scene primitives and renderer. Host frame loops can use `take_damage_into` to keep damage handoff storage caller-owned after warmup.
+The router is single-threaded scene state. Benchmark stepping reuses existing scene allocations after prepare; per-frame allocation behavior is governed by the underlying UI-core scene primitives and renderer. Host frame loops can use `take_damage_into` to keep damage handoff storage caller-owned after warmup. The overlay path keeps router-owned text scratch buffers so the default visible overlay does not allocate after warmup.
 
 Raw touch recognition stores a bounded inline set of active contacts with overflow only for unusually high touch counts. The router consumes the recognizer synchronously on the host input thread.
 
 ## Performance notes
 
-The headline cases deliberately avoid new benchmark-only abstractions. Reusing existing scenes keeps code surface small and ensures the measured cost includes the same draw-list paths app authors use. Damage handoff supports caller-owned vector reuse so browser/host allocation audits can distinguish scene damage content from per-frame storage churn. The default Controls scene keeps static label/button text out of the per-frame allocation path.
+The headline cases deliberately avoid new benchmark-only abstractions. Reusing existing scenes keeps code surface small and ensures the measured cost includes the same draw-list paths app authors use. Damage handoff supports caller-owned vector reuse so browser/host allocation audits can distinguish scene damage content from per-frame storage churn. The default Controls scene keeps static label/button text and overlay status text out of the per-frame allocation path.
 
 ## Testing and benchmarks
 
 - `oxide/crates/test-scenes/tests/onscreen_benchmark_tests.rs` verifies the new headline benchmark keys prepare the expected scenes and accept a step.
 - `oxide/crates/test-scenes/tests/onscreen_benchmark_tests.rs` verifies raw two-touch pinch events change the Zoom Image scene through the router without applying two-touch pan as a drag.
-- `oxide/crates/test-scenes/tests/damage_rect_tests.rs` verifies damage scene switching, partial damage, and caller-owned damage storage reuse.
+- `oxide/crates/test-scenes/tests/damage_rect_tests.rs` verifies damage scene switching, partial damage, caller-owned damage storage reuse, and warmed overlay draw allocation reuse.
 - Device benchmark rows are selected by `oxide/xtask/src/lib.rs` and persisted under `oxide/benchmarks/oxide-device/`.
 
 ## Examples
@@ -91,6 +91,7 @@ assert!(router.step_onscreen_benchmark("component_button_encode", 1));
 
 ## Changelog
 
+- 2026-06-02: Added router-owned overlay text scratch and warmed overlay draw allocation coverage.
 - 2026-06-02: Added `take_damage_into` so allocation-audited hosts can reuse caller-owned damage storage.
 - 2026-06-02: Removed per-frame static label/button string allocations from the Controls scene draw path.
 - 2026-05-16: Merged duplicate Controls-scene benchmark prepare arms into one grouped reset.

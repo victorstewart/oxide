@@ -1392,7 +1392,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         0.0,
     );
     assert!(web_report_number(wasm_allocation_audit, "budget_wasm_allocs_per_frame") <= 8.0);
-    assert!(web_report_number(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame") <= 256.0);
+    assert!(web_report_number(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame") <= 192.0);
     assert!(
         web_report_number(wasm_allocation_audit, "max_wasm_allocs_per_frame")
             <= web_report_number(wasm_allocation_audit, "budget_wasm_allocs_per_frame")

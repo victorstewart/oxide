@@ -12,6 +12,7 @@ mod stress_test;
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::format;
+use core::fmt::Write;
 use oxide_input::{TouchSurfaceEvent, TouchSurfaceRecognizer};
 use oxide_permissions::{PermissionManager, PermissionState, SensorBridge};
 use oxide_platform_api as api;
@@ -161,6 +162,8 @@ pub struct Router<U: elements::ImageUploader> {
     damage_stats_rects: u32,
     sensors: Option<oxide_ui_core::sensors::SensorView>,
     telemetry: Option<oxide_ui_core::telemetry::TelemetryView>,
+    overlay_text: alloc::string::String,
+    overlay_extra: alloc::string::String,
 }
 
 impl<U: elements::ImageUploader> Router<U> {
@@ -197,6 +200,8 @@ impl<U: elements::ImageUploader> Router<U> {
             damage_stats_rects: 0,
             sensors: None,
             telemetry: None,
+            overlay_text: alloc::string::String::with_capacity(160),
+            overlay_extra: alloc::string::String::with_capacity(96),
         }
     }
 
@@ -897,16 +902,21 @@ impl<U: elements::ImageUploader> Router<U> {
         // Overlay (toggleable)
         if self.overlay_visible {
             let rm = if self.reduce_motion_on { "RM:on" } else { "RM:off" };
-            let mut extra = alloc::string::String::new();
+            self.overlay_extra.clear();
             match self.current {
                 SceneKind::AnimTimeline => {
                     let play = if self.anim_timeline.playing() { "play" } else { "pause" };
-                    extra =
-                        alloc::format!(" anim:{} phase={:.2}", play, self.anim_timeline.progress());
+                    let _ = write!(
+                        self.overlay_extra,
+                        " anim:{} phase={:.2}",
+                        play,
+                        self.anim_timeline.progress(),
+                    );
                 }
                 SceneKind::DamageLab => {
                     let dmg = if self.damage_lab.enabled { "on" } else { "off" };
-                    extra = alloc::format!(
+                    let _ = write!(
+                        self.overlay_extra,
                         " damage:{} use={:.2} pre={:.2} rects={} pct={:.0}%",
                         dmg,
                         self.damage_lab.use_thresh,
@@ -917,55 +927,40 @@ impl<U: elements::ImageUploader> Router<U> {
                 }
                 SceneKind::InputLab => {
                     if let Some(summary) = self.input_lab.overlay_summary() {
-                        extra = summary;
+                        self.overlay_extra.push_str(&summary);
                     }
                 }
                 SceneKind::NineSlice => {
-                    extra = alloc::format!(
+                    let _ = write!(
+                        self.overlay_extra,
                         " slice={:.1}px alpha={:.2}",
                         self.nine_slice.slice_px,
                         self.nine_slice.alpha
                     );
                 }
                 SceneKind::SdfText => {
-                    extra = alloc::format!(" font_px={:.1}", self.sdf_demo.font_px);
+                    let _ = write!(self.overlay_extra, " font_px={:.1}", self.sdf_demo.font_px);
                 }
                 SceneKind::Snapshot => {
-                    extra = alloc::format!(" status: {}", self.readback.status());
+                    let _ = write!(self.overlay_extra, " status: {}", self.readback.status());
                 }
                 SceneKind::Camera => {
-                    extra = self.camera.overlay_line();
+                    let line = self.camera.overlay_line();
+                    self.overlay_extra.push_str(&line);
                 }
                 _ => {}
             }
-            let base = if extra.is_empty() {
-                alloc::format!(
-                    "{} | {:.0} fps | draws={} | anims={} | {}",
-                    Self::scene_names()[self.current as usize],
-                    self.counters.fps,
-                    self.counters.draws,
-                    self.counters.anims,
-                    rm
-                )
-            } else {
-                alloc::format!(
-                    "{} | {:.0} fps | draws={} | anims={} | {}{}",
-                    Self::scene_names()[self.current as usize],
-                    self.counters.fps,
-                    self.counters.draws,
-                    self.counters.anims,
-                    rm,
-                    extra
-                )
-            };
-            let overlay = elements::Label {
-                text: base,
-                color: gfx::Color::rgba(0.1, 0.1, 0.1, 1.0),
-                align: elements::Align::Left,
-                wrap: false,
-                font_id: 0,
-                font_px: 12.0,
-            };
+            self.overlay_text.clear();
+            let _ = write!(
+                self.overlay_text,
+                "{} | {:.0} fps | draws={} | anims={} | {}",
+                Self::scene_names()[self.current as usize],
+                self.counters.fps,
+                self.counters.draws,
+                self.counters.anims,
+                rm,
+            );
+            self.overlay_text.push_str(&self.overlay_extra);
             let bg = gfx::Color::rgba(1.0, 1.0, 1.0, 0.85);
             let rect = gfx::RectF::new(viewport.x + 8.0, viewport.y + 8.0, 440.0, 18.0);
             // Blur the backdrop behind overlay, then draw overlay panel
@@ -973,7 +968,13 @@ impl<U: elements::ImageUploader> Router<U> {
             b.rrect(rect, [4.0; 4], bg);
             // Overlay damage (panel rect)
             self.push_damage(rectf_to_recti(rect));
-            overlay.encode(
+            elements::encode_label_text(
+                self.overlay_text.as_str(),
+                gfx::Color::rgba(0.1, 0.1, 0.1, 1.0),
+                elements::Align::Left,
+                false,
+                0,
+                12.0,
                 gfx::RectF::new(viewport.x + 12.0, viewport.y + 10.0, 352.0, 14.0),
                 device_scale,
                 &mut self.text,

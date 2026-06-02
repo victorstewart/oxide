@@ -1598,7 +1598,7 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert_eq!(report_u64(wasm_allocation_audit, "total_wasm_realloc_count"), 0);
     assert_eq!(report_u64(wasm_allocation_audit, "total_wasm_realloc_grow_bytes"), 0);
     assert!(report_f64(wasm_allocation_audit, "budget_wasm_allocs_per_frame") <= 8.0);
-    assert!(report_f64(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame") <= 256.0);
+    assert!(report_f64(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame") <= 192.0);
     assert!(
         report_f64(wasm_allocation_audit, "max_wasm_allocs_per_frame")
             <= report_f64(wasm_allocation_audit, "budget_wasm_allocs_per_frame")

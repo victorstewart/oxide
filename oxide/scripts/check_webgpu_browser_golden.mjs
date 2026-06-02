@@ -1652,7 +1652,7 @@ function wasmAllocationSummary(cases)
       max_wasm_alloc_bytes_per_frame: maxAllocBytesPerFrame,
       max_wasm_peak_frame_alloc_bytes: maxPeakFrameAllocBytes,
       budget_wasm_allocs_per_frame: 8,
-      budget_wasm_alloc_bytes_per_frame: 256,
+      budget_wasm_alloc_bytes_per_frame: 192,
       rows,
       excluded,
       row_detail_count: rowDetails.length,

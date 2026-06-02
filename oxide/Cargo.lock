@@ -991,6 +991,7 @@ dependencies = [
  "oxide-telemetry",
  "oxide-timing",
  "oxide-ui-core",
+ "oxide-wasm-alloc-counter",
 ]
 
 [[package]]

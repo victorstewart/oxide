@@ -13,3 +13,6 @@ oxide-permissions = { path = "../permissions" }
 oxide-telemetry = { path = "../telemetry" }
 oxide-timing = { path = "../timing" }
 once_cell = { version = "1.20", default-features = false }
+
+[dev-dependencies]
+oxide-wasm-alloc-counter = { path = "../wasm-alloc-counter" }
