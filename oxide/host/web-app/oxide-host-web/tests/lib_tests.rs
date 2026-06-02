@@ -573,6 +573,11 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("cpu_resource_table_scratch_bytes={}"));
     assert!(source.contains("cpu_resource_table_scratch_grows={}"));
     assert!(source.contains("cpu_resource_table_scratch_growth_bytes={}"));
+    assert!(source.contains("submit_allocation_metrics(&summary.submit_allocations"));
+    assert!(source.contains("fn add_submit_allocation_frame"));
+    assert!(source.contains("submit_surface_alloc_count"));
+    assert!(source.contains("submit_finish_queue_alloc_count"));
+    assert!(source.contains("submit_timestamp_map_alloc_count"));
     assert!(source.contains("fn renderer_stats_metrics"));
     assert!(source.contains("renderer_stats_metrics(current.stats, \"current\")"));
     assert!(source.contains("renderer_stats_metrics(legacy.stats, \"legacy\")"));
@@ -866,9 +871,13 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("function resourceMetricFields"));
     assert!(script.contains("function allocationMetricFields"));
     assert!(script.contains("const WASM_FRAME_STAGE_NAMES"));
+    assert!(script.contains("const WASM_SUBMIT_STAGE_NAMES"));
     assert!(script.contains("function frameStageAllocationMetricFields"));
+    assert!(script.contains("function submitAllocationMetricFields"));
     assert!(script.contains("function frameLoopWasmStageSummary"));
+    assert!(script.contains("function frameLoopWasmSubmitStageSummary"));
     assert!(script.contains("function assertFrameLoopWasmStageAllocation"));
+    assert!(script.contains("function assertFrameLoopWasmSubmitStageAllocation"));
     assert!(script.contains("function wasmAllocationSummary"));
     assert!(script.contains("function assertWasmAllocationAudit"));
     assert!(script.contains("wasm_allocation_audit"));
@@ -877,8 +886,15 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("wasm_realloc_count: numberMetric(metrics, key(\"wasm_realloc_count\"))"));
     assert!(script.contains("wasm_allocating_frames: numberMetric(metrics, key(\"wasm_allocating_frames\"))"));
     assert!(script.contains("wasm_peak_frame_alloc_bytes"));
+    assert!(script.contains("submit_total_alloc_count"));
+    assert!(script.contains("\"surface\""));
+    assert!(script.contains("\"finish_queue\""));
+    assert!(script.contains("\"timestamp_map\""));
+    assert!(script.contains("let key = `submit_${name}_`;"));
+    assert!(script.contains("fields[`${key}alloc_count`]"));
     assert!(script.contains("let prefix = `wasm_stage_${name}_`;"));
     assert!(script.contains("web.wasm.webgpu.frame_loop_wasm_allocation_stages"));
+    assert!(script.contains("web.wasm.webgpu.frame_loop_wasm_submit_allocation_stages"));
     assert!(script.contains("buffer_grows: numberMetric(metrics, key(\"buffer_grows\"))"));
     assert!(script.contains("draw_buffer_grows: numberMetric(metrics, key(\"draw_buffer_grows\"))"));
     assert!(script.contains("image_texture_creates: numberMetric(metrics, key(\"image_texture_creates\"))"));
@@ -1898,6 +1914,45 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     );
     assert!(frame_stage_allocations.contains("\"stage\": \"router_draw\""));
     assert!(frame_stage_allocations.contains("\"stage\": \"encode_pass\""));
+    let submit_stage_allocations =
+        report_section_slice(report, "frame_loop_wasm_submit_allocation_stages");
+    assert!(submit_stage_allocations
+        .contains("\"id\": \"web.wasm.webgpu.frame_loop_wasm_submit_allocation_stages\""));
+    assert!(submit_stage_allocations.contains("\"row_id\": \"web.wasm.webgpu.frame_loop\""));
+    assert_eq!(report_u64(submit_stage_allocations, "stage_count"), 9);
+    assert_eq!(
+        report_u64(submit_stage_allocations, "total_stage_wasm_alloc_count"),
+        report_u64(frame, "submit_total_alloc_count"),
+    );
+    assert_eq!(
+        report_u64(submit_stage_allocations, "total_stage_wasm_alloc_bytes"),
+        report_u64(frame, "submit_total_alloc_bytes"),
+    );
+    assert_eq!(
+        report_u64(submit_stage_allocations, "frame_stage_submit_wasm_alloc_count"),
+        report_u64(frame, "wasm_stage_submit_alloc_count"),
+    );
+    assert_eq!(
+        report_u64(frame, "submit_total_alloc_count"),
+        report_u64(frame, "wasm_stage_submit_alloc_count"),
+    );
+    assert_eq!(
+        report_u64(frame, "submit_total_alloc_bytes"),
+        report_u64(frame, "wasm_stage_submit_alloc_bytes"),
+    );
+    assert_eq!(report_u64(frame, "submit_total_realloc_count"), 0);
+    assert_eq!(report_u64(frame, "submit_total_realloc_grow_bytes"), 0);
+    assert_eq!(report_u64(frame, "submit_upload_alloc_count"), 0);
+    assert_eq!(report_u64(frame, "submit_encoder_alloc_count"), 0);
+    assert_eq!(report_u64(frame, "submit_render_alloc_count"), 0);
+    assert_eq!(report_u64(frame, "submit_timestamp_alloc_count"), 0);
+    assert_eq!(report_u64(frame, "submit_scratch_stats_alloc_count"), 0);
+    assert_eq!(report_u64(frame, "submit_present_alloc_count"), 0);
+    assert!(report_u64(frame, "submit_surface_alloc_count") > 0);
+    assert!(report_u64(frame, "submit_finish_queue_alloc_count") > 0);
+    assert!(report_u64(frame, "submit_timestamp_map_alloc_count") > 0);
+    assert!(submit_stage_allocations.contains("\"dominant_stage\": \"surface\""));
+    assert!(submit_stage_allocations.contains("\"stage\": \"finish_queue\""));
     let backend_path_coverage = report_section_slice(report, "backend_path_coverage");
     assert!(
         backend_path_coverage.contains("\"id\": \"web.wasm.webgpu.backend_path_coverage\"")

@@ -461,6 +461,7 @@ mod wasm_host {
 
             let mut allocations = WebGpuAllocationSummary::default();
             let mut allocation_stages = WebGpuFrameStageAllocationSummary::default();
+            let mut submit_allocations = WebGpuSubmitAllocationSummary::default();
             for _sample in 0..sample_count {
                 for _frame in 0..frames {
                     let start = perf_now();
@@ -470,6 +471,10 @@ mod wasm_host {
                         .frame_at_profiled(timestamp, &mut allocation_stages)?;
                     let alloc_after = oxide_wasm_alloc_counter::snapshot();
                     add_allocation_frame(&mut allocations, alloc_before, alloc_after);
+                    add_submit_allocation_frame(
+                        &mut submit_allocations,
+                        renderer.borrow().last_stats(),
+                    );
                     values.push((perf_now() - start).max(0.0));
                     timestamp += 16.666_667;
                 }
@@ -486,9 +491,10 @@ mod wasm_host {
             let pacing = frame_pacing_metrics(&values, "");
             let allocations = allocation_metrics(&allocations, "");
             let allocation_stages = frame_stage_allocation_metrics(&allocation_stages);
+            let submit_allocations = submit_allocation_metrics(&submit_allocations, "");
             let backend_stats = renderer_stats_metrics(stats, "");
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames};frames={total_frames};p50_ms={p50_ms:.3};p95_ms={p95_ms:.3};p99_ms={p99_ms:.3};peak_ms={peak_ms:.3};avg_ms={avg_ms:.3}{backend_stats}{pacing}{allocations}{allocation_stages}",
+                "samples={sample_count};frames_per_sample={frames};frames={total_frames};p50_ms={p50_ms:.3};p95_ms={p95_ms:.3};p99_ms={p99_ms:.3};peak_ms={peak_ms:.3};avg_ms={avg_ms:.3}{backend_stats}{pacing}{allocations}{allocation_stages}{submit_allocations}",
             ))
         }
 
@@ -517,10 +523,14 @@ mod wasm_host {
             let legacy_pacing = frame_pacing_metrics(&legacy.frame_values, "legacy");
             let current_allocations = allocation_metrics(&current.allocations, "current");
             let legacy_allocations = allocation_metrics(&legacy.allocations, "legacy");
+            let current_submit_allocations =
+                submit_allocation_metrics(&current.submit_allocations, "current");
+            let legacy_submit_allocations =
+                submit_allocation_metrics(&legacy.submit_allocations, "legacy");
             let current_stats = renderer_stats_metrics(current.stats, "current");
             let legacy_stats = renderer_stats_metrics(legacy.stats, "legacy");
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames};current_p50_ms={:.3};current_p95_ms={:.3};current_p99_ms={:.3};current_peak_ms={:.3};current_avg_ms={:.3}{current_pacing}{current_allocations}{current_stats};legacy_p50_ms={:.3};legacy_p95_ms={:.3};legacy_p99_ms={:.3};legacy_peak_ms={:.3};legacy_avg_ms={:.3}{legacy_pacing}{legacy_allocations}{legacy_stats};legacy_over_current={ratio:.3};vertices={};vertex_bytes={}",
+                "samples={sample_count};frames_per_sample={frames};current_p50_ms={:.3};current_p95_ms={:.3};current_p99_ms={:.3};current_peak_ms={:.3};current_avg_ms={:.3}{current_pacing}{current_allocations}{current_submit_allocations}{current_stats};legacy_p50_ms={:.3};legacy_p95_ms={:.3};legacy_p99_ms={:.3};legacy_peak_ms={:.3};legacy_avg_ms={:.3}{legacy_pacing}{legacy_allocations}{legacy_submit_allocations}{legacy_stats};legacy_over_current={ratio:.3};vertices={};vertex_bytes={}",
                 current.p50_ms,
                 current.p95_ms,
                 current.p99_ms,
@@ -1349,6 +1359,7 @@ mod wasm_host {
         avg_ms: f64,
         frame_values: Vec<f64>,
         allocations: WebGpuAllocationSummary,
+        submit_allocations: WebGpuSubmitAllocationSummary,
         vertices: usize,
         vertex_bytes: usize,
         stats: WebRendererStats,
@@ -1362,6 +1373,7 @@ mod wasm_host {
         avg_ms: f64,
         frame_values: Vec<f64>,
         allocations: WebGpuAllocationSummary,
+        submit_allocations: WebGpuSubmitAllocationSummary,
         stats: WebRendererStats,
     }
 
@@ -1376,6 +1388,32 @@ mod wasm_host {
         realloc_shrink_bytes: u64,
         allocating_frames: u64,
         peak_frame_alloc_bytes: u64,
+    }
+
+    #[derive(Clone, Copy, Default)]
+    struct WebGpuSubmitAllocationSummary {
+        upload_alloc_count: u64,
+        upload_alloc_bytes: u64,
+        surface_alloc_count: u64,
+        surface_alloc_bytes: u64,
+        encoder_alloc_count: u64,
+        encoder_alloc_bytes: u64,
+        render_alloc_count: u64,
+        render_alloc_bytes: u64,
+        timestamp_alloc_count: u64,
+        timestamp_alloc_bytes: u64,
+        scratch_stats_alloc_count: u64,
+        scratch_stats_alloc_bytes: u64,
+        finish_queue_alloc_count: u64,
+        finish_queue_alloc_bytes: u64,
+        present_alloc_count: u64,
+        present_alloc_bytes: u64,
+        timestamp_map_alloc_count: u64,
+        timestamp_map_alloc_bytes: u64,
+        total_alloc_count: u64,
+        total_alloc_bytes: u64,
+        total_realloc_count: u64,
+        total_realloc_grow_bytes: u64,
     }
 
     #[derive(Clone, Copy, Default)]
@@ -2142,6 +2180,7 @@ mod wasm_host {
 
         let mut values = Vec::with_capacity(sample_count as usize);
         let mut allocations = WebGpuAllocationSummary::default();
+        let mut submit_allocations = WebGpuSubmitAllocationSummary::default();
         for sample in 0..sample_count {
             // Browser timer resolution can round the fast retained path to zero if each frame is timed alone.
             let sample_start = perf_now();
@@ -2152,6 +2191,7 @@ mod wasm_host {
                 webgpu_id_mask_frame(renderer, &vertices, revision, timestamp)?;
                 let alloc_after = oxide_wasm_alloc_counter::snapshot();
                 add_allocation_frame(&mut allocations, alloc_before, alloc_after);
+                add_submit_allocation_frame(&mut submit_allocations, renderer.last_stats());
                 timestamp += 16.666_667;
             }
             values.push(((perf_now() - sample_start).max(0.0)) / frames as f64);
@@ -2167,6 +2207,7 @@ mod wasm_host {
             avg_ms: average(&values),
             frame_values: values,
             allocations,
+            submit_allocations,
             vertices: vertices.len(),
             vertex_bytes,
             stats,
@@ -2190,6 +2231,7 @@ mod wasm_host {
 
         let mut values = Vec::with_capacity(sample_count as usize);
         let mut allocations = WebGpuAllocationSummary::default();
+        let mut submit_allocations = WebGpuSubmitAllocationSummary::default();
         for sample in 0..sample_count {
             let sample_start = perf_now();
             for frame_index in 0..frames {
@@ -2198,6 +2240,7 @@ mod wasm_host {
                 frame(renderer, seq + 64, timestamp)?;
                 let alloc_after = oxide_wasm_alloc_counter::snapshot();
                 add_allocation_frame(&mut allocations, alloc_before, alloc_after);
+                add_submit_allocation_frame(&mut submit_allocations, renderer.last_stats());
                 timestamp += 16.666_667;
             }
             values.push(((perf_now() - sample_start).max(0.0)) / frames as f64);
@@ -2213,6 +2256,7 @@ mod wasm_host {
             avg_ms: average(&values),
             frame_values: values,
             allocations,
+            submit_allocations,
             stats,
         })
     }
@@ -2230,6 +2274,7 @@ mod wasm_host {
         );
         out.push_str(&frame_pacing_metrics(&summary.frame_values, prefix));
         out.push_str(&allocation_metrics(&summary.allocations, prefix));
+        out.push_str(&submit_allocation_metrics(&summary.submit_allocations, prefix));
         out.push_str(&renderer_stats_metrics(summary.stats, prefix));
         out
     }
@@ -3328,6 +3373,88 @@ mod wasm_host {
             summary.realloc_shrink_bytes,
             summary.allocating_frames,
             summary.peak_frame_alloc_bytes,
+        );
+        out
+    }
+
+    fn add_submit_allocation_frame(
+        summary: &mut WebGpuSubmitAllocationSummary,
+        stats: WebRendererStats,
+    ) {
+        summary.upload_alloc_count =
+            summary.upload_alloc_count.saturating_add(stats.submit_upload_alloc_count);
+        summary.upload_alloc_bytes =
+            summary.upload_alloc_bytes.saturating_add(stats.submit_upload_alloc_bytes);
+        summary.surface_alloc_count =
+            summary.surface_alloc_count.saturating_add(stats.submit_surface_alloc_count);
+        summary.surface_alloc_bytes =
+            summary.surface_alloc_bytes.saturating_add(stats.submit_surface_alloc_bytes);
+        summary.encoder_alloc_count =
+            summary.encoder_alloc_count.saturating_add(stats.submit_encoder_alloc_count);
+        summary.encoder_alloc_bytes =
+            summary.encoder_alloc_bytes.saturating_add(stats.submit_encoder_alloc_bytes);
+        summary.render_alloc_count =
+            summary.render_alloc_count.saturating_add(stats.submit_render_alloc_count);
+        summary.render_alloc_bytes =
+            summary.render_alloc_bytes.saturating_add(stats.submit_render_alloc_bytes);
+        summary.timestamp_alloc_count =
+            summary.timestamp_alloc_count.saturating_add(stats.submit_timestamp_alloc_count);
+        summary.timestamp_alloc_bytes =
+            summary.timestamp_alloc_bytes.saturating_add(stats.submit_timestamp_alloc_bytes);
+        summary.scratch_stats_alloc_count =
+            summary.scratch_stats_alloc_count.saturating_add(stats.submit_scratch_stats_alloc_count);
+        summary.scratch_stats_alloc_bytes =
+            summary.scratch_stats_alloc_bytes.saturating_add(stats.submit_scratch_stats_alloc_bytes);
+        summary.finish_queue_alloc_count =
+            summary.finish_queue_alloc_count.saturating_add(stats.submit_finish_queue_alloc_count);
+        summary.finish_queue_alloc_bytes =
+            summary.finish_queue_alloc_bytes.saturating_add(stats.submit_finish_queue_alloc_bytes);
+        summary.present_alloc_count =
+            summary.present_alloc_count.saturating_add(stats.submit_present_alloc_count);
+        summary.present_alloc_bytes =
+            summary.present_alloc_bytes.saturating_add(stats.submit_present_alloc_bytes);
+        summary.timestamp_map_alloc_count =
+            summary.timestamp_map_alloc_count.saturating_add(stats.submit_timestamp_map_alloc_count);
+        summary.timestamp_map_alloc_bytes =
+            summary.timestamp_map_alloc_bytes.saturating_add(stats.submit_timestamp_map_alloc_bytes);
+        summary.total_alloc_count =
+            summary.total_alloc_count.saturating_add(stats.submit_total_alloc_count);
+        summary.total_alloc_bytes =
+            summary.total_alloc_bytes.saturating_add(stats.submit_total_alloc_bytes);
+        summary.total_realloc_count =
+            summary.total_realloc_count.saturating_add(stats.submit_total_realloc_count);
+        summary.total_realloc_grow_bytes =
+            summary.total_realloc_grow_bytes.saturating_add(stats.submit_total_realloc_grow_bytes);
+    }
+
+    fn submit_allocation_metrics(summary: &WebGpuSubmitAllocationSummary, prefix: &str) -> String {
+        let mut out = String::new();
+        let key_prefix = if prefix.is_empty() { String::new() } else { format!("{prefix}_") };
+        let _ = write!(
+            out,
+            ";{key_prefix}submit_upload_alloc_count={};{key_prefix}submit_upload_alloc_bytes={};{key_prefix}submit_surface_alloc_count={};{key_prefix}submit_surface_alloc_bytes={};{key_prefix}submit_encoder_alloc_count={};{key_prefix}submit_encoder_alloc_bytes={};{key_prefix}submit_render_alloc_count={};{key_prefix}submit_render_alloc_bytes={};{key_prefix}submit_timestamp_alloc_count={};{key_prefix}submit_timestamp_alloc_bytes={};{key_prefix}submit_scratch_stats_alloc_count={};{key_prefix}submit_scratch_stats_alloc_bytes={};{key_prefix}submit_finish_queue_alloc_count={};{key_prefix}submit_finish_queue_alloc_bytes={};{key_prefix}submit_present_alloc_count={};{key_prefix}submit_present_alloc_bytes={};{key_prefix}submit_timestamp_map_alloc_count={};{key_prefix}submit_timestamp_map_alloc_bytes={};{key_prefix}submit_total_alloc_count={};{key_prefix}submit_total_alloc_bytes={};{key_prefix}submit_total_realloc_count={};{key_prefix}submit_total_realloc_grow_bytes={}",
+            summary.upload_alloc_count,
+            summary.upload_alloc_bytes,
+            summary.surface_alloc_count,
+            summary.surface_alloc_bytes,
+            summary.encoder_alloc_count,
+            summary.encoder_alloc_bytes,
+            summary.render_alloc_count,
+            summary.render_alloc_bytes,
+            summary.timestamp_alloc_count,
+            summary.timestamp_alloc_bytes,
+            summary.scratch_stats_alloc_count,
+            summary.scratch_stats_alloc_bytes,
+            summary.finish_queue_alloc_count,
+            summary.finish_queue_alloc_bytes,
+            summary.present_alloc_count,
+            summary.present_alloc_bytes,
+            summary.timestamp_map_alloc_count,
+            summary.timestamp_map_alloc_bytes,
+            summary.total_alloc_count,
+            summary.total_alloc_bytes,
+            summary.total_realloc_count,
+            summary.total_realloc_grow_bytes,
         );
         out
     }

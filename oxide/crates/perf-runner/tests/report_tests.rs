@@ -1553,6 +1553,73 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         assert_eq!(web_report_number(stage, "wasm_realloc_grow_bytes"), 0.0);
     }
 
+    let submit_stage_allocations = &report["frame_loop_wasm_submit_allocation_stages"];
+    assert_eq!(
+        submit_stage_allocations["id"].as_str(),
+        Some("web.wasm.webgpu.frame_loop_wasm_submit_allocation_stages"),
+    );
+    assert_eq!(
+        submit_stage_allocations["row_id"].as_str(),
+        Some("web.wasm.webgpu.frame_loop"),
+    );
+    assert_eq!(web_report_number(submit_stage_allocations, "stage_count"), 9.0);
+    assert_eq!(
+        web_report_number(submit_stage_allocations, "total_stage_wasm_alloc_count"),
+        web_report_number(frame_loop, "submit_total_alloc_count"),
+    );
+    assert_eq!(
+        web_report_number(submit_stage_allocations, "total_stage_wasm_alloc_bytes"),
+        web_report_number(frame_loop, "submit_total_alloc_bytes"),
+    );
+    assert_eq!(
+        web_report_number(submit_stage_allocations, "frame_stage_submit_wasm_alloc_count"),
+        web_report_number(frame_loop, "wasm_stage_submit_alloc_count"),
+    );
+    assert_eq!(
+        web_report_number(frame_loop, "submit_total_alloc_count"),
+        web_report_number(frame_loop, "wasm_stage_submit_alloc_count"),
+    );
+    assert_eq!(
+        web_report_number(frame_loop, "submit_total_alloc_bytes"),
+        web_report_number(frame_loop, "wasm_stage_submit_alloc_bytes"),
+    );
+    assert_eq!(web_report_number(frame_loop, "submit_total_realloc_count"), 0.0);
+    assert_eq!(web_report_number(frame_loop, "submit_total_realloc_grow_bytes"), 0.0);
+    for field in [
+        "submit_upload_alloc_count",
+        "submit_encoder_alloc_count",
+        "submit_render_alloc_count",
+        "submit_timestamp_alloc_count",
+        "submit_scratch_stats_alloc_count",
+        "submit_present_alloc_count",
+    ] {
+        assert_eq!(web_report_number(frame_loop, field), 0.0);
+    }
+    assert!(web_report_number(frame_loop, "submit_surface_alloc_count") > 0.0);
+    assert!(web_report_number(frame_loop, "submit_finish_queue_alloc_count") > 0.0);
+    assert!(web_report_number(frame_loop, "submit_timestamp_map_alloc_count") > 0.0);
+    assert_eq!(submit_stage_allocations["dominant_stage"].as_str(), Some("surface"));
+    let submit_stage_details = submit_stage_allocations["stages"]
+        .as_array()
+        .expect("frame-loop wasm submit allocation stage details");
+    let submit_stage_names: Vec<&str> = submit_stage_details
+        .iter()
+        .map(|stage| stage["stage"].as_str().expect("submit stage name"))
+        .collect();
+    for name in [
+        "upload",
+        "surface",
+        "encoder",
+        "render",
+        "timestamp",
+        "scratch_stats",
+        "finish_queue",
+        "present",
+        "timestamp_map",
+    ] {
+        assert!(submit_stage_names.contains(&name), "missing frame-loop submit allocation stage {name}");
+    }
+
     let backend_path_coverage = &report["backend_path_coverage"];
     assert_eq!(
         backend_path_coverage["id"].as_str(),

@@ -6,6 +6,7 @@ use super::{
 use crate::WebRendererStats;
 use crate::{id_mask_compositor, neon_marker, scene3d};
 use js_sys::Reflect;
+use oxide_wasm_alloc_counter::AllocationSnapshot;
 use oxide_renderer_api as api;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -232,6 +233,19 @@ struct TimestampSummary {
 enum TimestampReadbackState {
     Idle,
     Pending,
+}
+
+#[derive(Clone, Copy)]
+enum SubmitAllocationStage {
+    Upload,
+    Surface,
+    Encoder,
+    Render,
+    Timestamp,
+    ScratchStats,
+    FinishQueue,
+    Present,
+    TimestampMap,
 }
 
 struct TimestampReadbackSlot {
@@ -1225,6 +1239,66 @@ impl WebGpuRenderer {
         if let Some(timestamps) = &mut self.timestamp_queries {
             timestamps.map_readback(slot_index, bytes);
         }
+    }
+
+    fn record_submit_allocation_stage(
+        &mut self,
+        stage: SubmitAllocationStage,
+        before: AllocationSnapshot,
+    ) {
+        let after = oxide_wasm_alloc_counter::snapshot();
+        let alloc_count = after.alloc_count.saturating_sub(before.alloc_count);
+        let alloc_bytes = after.alloc_bytes.saturating_sub(before.alloc_bytes);
+        let realloc_count = after.realloc_count.saturating_sub(before.realloc_count);
+        let realloc_grow_bytes = after.realloc_grow_bytes.saturating_sub(before.realloc_grow_bytes);
+        self.stats.submit_total_alloc_count =
+            self.stats.submit_total_alloc_count.saturating_add(alloc_count);
+        self.stats.submit_total_alloc_bytes =
+            self.stats.submit_total_alloc_bytes.saturating_add(alloc_bytes);
+        self.stats.submit_total_realloc_count =
+            self.stats.submit_total_realloc_count.saturating_add(realloc_count);
+        self.stats.submit_total_realloc_grow_bytes =
+            self.stats.submit_total_realloc_grow_bytes.saturating_add(realloc_grow_bytes);
+        let (stage_alloc_count, stage_alloc_bytes) = match stage {
+            SubmitAllocationStage::Upload => (
+                &mut self.stats.submit_upload_alloc_count,
+                &mut self.stats.submit_upload_alloc_bytes,
+            ),
+            SubmitAllocationStage::Surface => (
+                &mut self.stats.submit_surface_alloc_count,
+                &mut self.stats.submit_surface_alloc_bytes,
+            ),
+            SubmitAllocationStage::Encoder => (
+                &mut self.stats.submit_encoder_alloc_count,
+                &mut self.stats.submit_encoder_alloc_bytes,
+            ),
+            SubmitAllocationStage::Render => (
+                &mut self.stats.submit_render_alloc_count,
+                &mut self.stats.submit_render_alloc_bytes,
+            ),
+            SubmitAllocationStage::Timestamp => (
+                &mut self.stats.submit_timestamp_alloc_count,
+                &mut self.stats.submit_timestamp_alloc_bytes,
+            ),
+            SubmitAllocationStage::ScratchStats => (
+                &mut self.stats.submit_scratch_stats_alloc_count,
+                &mut self.stats.submit_scratch_stats_alloc_bytes,
+            ),
+            SubmitAllocationStage::FinishQueue => (
+                &mut self.stats.submit_finish_queue_alloc_count,
+                &mut self.stats.submit_finish_queue_alloc_bytes,
+            ),
+            SubmitAllocationStage::Present => (
+                &mut self.stats.submit_present_alloc_count,
+                &mut self.stats.submit_present_alloc_bytes,
+            ),
+            SubmitAllocationStage::TimestampMap => (
+                &mut self.stats.submit_timestamp_map_alloc_count,
+                &mut self.stats.submit_timestamp_map_alloc_bytes,
+            ),
+        };
+        *stage_alloc_count = stage_alloc_count.saturating_add(alloc_count);
+        *stage_alloc_bytes = stage_alloc_bytes.saturating_add(alloc_bytes);
     }
 
     #[must_use]
@@ -2524,11 +2598,14 @@ impl api::Renderer for WebGpuRenderer {
             return Err(api::RenderError::InvalidOperation("frame token mismatch"));
         }
         self.active_token = None;
+        let alloc_before = oxide_wasm_alloc_counter::snapshot();
         self.upload_frame_buffers();
         self.upload_scene3d_uniforms();
         self.write_viewport_uniform();
         self.prepare_effect_uniforms();
+        self.record_submit_allocation_stage(SubmitAllocationStage::Upload, alloc_before);
 
+        let alloc_before = oxide_wasm_alloc_counter::snapshot();
         let surface_texture = match self.surface.get_current_texture() {
             Ok(texture) => texture,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -2540,24 +2617,47 @@ impl api::Renderer for WebGpuRenderer {
         };
         let surface_view =
             surface_texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.record_submit_allocation_stage(SubmitAllocationStage::Surface, alloc_before);
+
+        let alloc_before = oxide_wasm_alloc_counter::snapshot();
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("oxide-webgpu-frame"),
         });
         self.stats.command_buffers = self.stats.command_buffers.saturating_add(1);
+        self.record_submit_allocation_stage(SubmitAllocationStage::Encoder, alloc_before);
+
+        let alloc_before = oxide_wasm_alloc_counter::snapshot();
         if self.frame_uses_backdrop() || !self.direct_surface_enabled {
             self.render_scene_with_effects(&mut encoder);
             self.render_present(&mut encoder, &surface_view);
         } else {
             self.render_direct(&mut encoder, &surface_view);
         }
+        self.record_submit_allocation_stage(SubmitAllocationStage::Render, alloc_before);
+
+        let alloc_before = oxide_wasm_alloc_counter::snapshot();
         let timestamp_readback = self.prepare_timestamp_readback(&mut encoder);
+        self.record_submit_allocation_stage(SubmitAllocationStage::Timestamp, alloc_before);
+
+        let alloc_before = oxide_wasm_alloc_counter::snapshot();
         self.record_scratch_growth_stats();
-        self.queue.submit([encoder.finish()]);
+        self.record_submit_allocation_stage(SubmitAllocationStage::ScratchStats, alloc_before);
+
+        let alloc_before = oxide_wasm_alloc_counter::snapshot();
+        let command_buffer = encoder.finish();
+        self.queue.submit(core::iter::once(command_buffer));
+        self.record_submit_allocation_stage(SubmitAllocationStage::FinishQueue, alloc_before);
+
+        let alloc_before = oxide_wasm_alloc_counter::snapshot();
         surface_texture.present();
+        self.record_submit_allocation_stage(SubmitAllocationStage::Present, alloc_before);
+
+        let alloc_before = oxide_wasm_alloc_counter::snapshot();
         if let Some((slot_index, bytes)) = timestamp_readback {
             self.map_timestamp_readback(slot_index, bytes);
             self.apply_timestamp_stats();
         }
+        self.record_submit_allocation_stage(SubmitAllocationStage::TimestampMap, alloc_before);
         Ok(())
     }
 

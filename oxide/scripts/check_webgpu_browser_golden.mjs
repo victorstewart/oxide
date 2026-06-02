@@ -951,6 +951,7 @@ function frameLoopCase(metrics)
       avg_ms: numberMetric(metrics, "avg_ms"),
       ...pacingMetricFields(metrics, ""),
       ...allocationMetricFields(metrics, ""),
+      ...submitAllocationMetricFields(metrics, ""),
       ...frameStageAllocationMetricFields(metrics),
       draws: numberMetric(metrics, "draws"),
       draw_items: numberMetric(metrics, "draw_items"),
@@ -1054,6 +1055,36 @@ function allocationMetricFields(metrics, prefix)
       wasm_allocating_frames: numberMetric(metrics, key("wasm_allocating_frames")),
       wasm_peak_frame_alloc_bytes: numberMetric(metrics, key("wasm_peak_frame_alloc_bytes")),
    };
+}
+
+const WASM_SUBMIT_STAGE_NAMES = [
+   "upload",
+   "surface",
+   "encoder",
+   "render",
+   "timestamp",
+   "scratch_stats",
+   "finish_queue",
+   "present",
+   "timestamp_map",
+];
+
+function submitAllocationMetricFields(metrics, prefix)
+{
+   let fields = {};
+   for (let name of WASM_SUBMIT_STAGE_NAMES) {
+      let key = `submit_${name}_`;
+      fields[`${key}alloc_count`] = numberMetric(metrics, `${prefix}${key}alloc_count`);
+      fields[`${key}alloc_bytes`] = numberMetric(metrics, `${prefix}${key}alloc_bytes`);
+   }
+   fields.submit_total_alloc_count = numberMetric(metrics, `${prefix}submit_total_alloc_count`);
+   fields.submit_total_alloc_bytes = numberMetric(metrics, `${prefix}submit_total_alloc_bytes`);
+   fields.submit_total_realloc_count = numberMetric(metrics, `${prefix}submit_total_realloc_count`);
+   fields.submit_total_realloc_grow_bytes = numberMetric(
+      metrics,
+      `${prefix}submit_total_realloc_grow_bytes`,
+   );
+   return fields;
 }
 
 const WASM_FRAME_STAGE_NAMES = [
@@ -1161,6 +1192,7 @@ function idMaskCase(metrics, id, variant, prefix)
       avg_ms: numberMetric(metrics, `${prefix}_avg_ms`),
       ...pacingMetricFields(metrics, `${prefix}_`),
       ...allocationMetricFields(metrics, `${prefix}_`),
+      ...submitAllocationMetricFields(metrics, `${prefix}_`),
       draws: numberMetric(metrics, `${prefix}_draws`),
       draw_items: numberMetric(metrics, `${prefix}_draw_items`),
       draw_pipeline_binds: numberMetric(metrics, `${prefix}_draw_pipeline_binds`),
@@ -1232,6 +1264,7 @@ function prefixedBackendCase(metrics, id, variant, prefix, extra)
       avg_ms: numberMetric(metrics, `${prefix}_avg_ms`),
       ...pacingMetricFields(metrics, `${prefix}_`),
       ...allocationMetricFields(metrics, `${prefix}_`),
+      ...submitAllocationMetricFields(metrics, `${prefix}_`),
       draws: numberMetric(metrics, `${prefix}_draws`),
       draw_items: numberMetric(metrics, `${prefix}_draw_items`),
       draw_pipeline_binds: numberMetric(metrics, `${prefix}_draw_pipeline_binds`),
@@ -1783,6 +1816,55 @@ function frameLoopWasmStageSummary(cases)
    };
 }
 
+function frameLoopWasmSubmitStageSummary(cases)
+{
+   let frame = cases.find(row => row.id === "web.wasm.webgpu.frame_loop");
+   if (!frame) {
+      throw new Error("web report missing frame-loop row for WASM submit allocation summary");
+   }
+   let stages = [];
+   let totalAllocCount = 0;
+   let totalAllocBytes = 0;
+   let dominantStage = "";
+   let dominantStageAllocCount = 0;
+   for (let name of WASM_SUBMIT_STAGE_NAMES) {
+      let key = `submit_${name}_`;
+      let allocCount = numberMetric(frame, `${key}alloc_count`);
+      let allocBytes = numberMetric(frame, `${key}alloc_bytes`);
+      totalAllocCount += allocCount;
+      totalAllocBytes += allocBytes;
+      if (allocCount > dominantStageAllocCount) {
+         dominantStage = name;
+         dominantStageAllocCount = allocCount;
+      }
+      stages.push({
+         stage: name,
+         wasm_alloc_count: allocCount,
+         wasm_alloc_bytes: allocBytes,
+      });
+   }
+   return {
+      id: "web.wasm.webgpu.frame_loop_wasm_submit_allocation_stages",
+      row_id: frame.id,
+      frames: numberMetric(frame, "frames"),
+      stage_count: stages.length,
+      total_stage_wasm_alloc_count: totalAllocCount,
+      total_stage_wasm_alloc_bytes: totalAllocBytes,
+      row_submit_wasm_alloc_count: numberMetric(frame, "submit_total_alloc_count"),
+      row_submit_wasm_alloc_bytes: numberMetric(frame, "submit_total_alloc_bytes"),
+      row_submit_wasm_realloc_count: numberMetric(frame, "submit_total_realloc_count"),
+      row_submit_wasm_realloc_grow_bytes: numberMetric(
+         frame,
+         "submit_total_realloc_grow_bytes",
+      ),
+      frame_stage_submit_wasm_alloc_count: numberMetric(frame, "wasm_stage_submit_alloc_count"),
+      frame_stage_submit_wasm_alloc_bytes: numberMetric(frame, "wasm_stage_submit_alloc_bytes"),
+      dominant_stage: dominantStage,
+      dominant_stage_wasm_alloc_count: dominantStageAllocCount,
+      stages,
+   };
+}
+
 function backendPathCoverageSummary(cases)
 {
    let byId = new Map(cases.map(row => [row.id, row]));
@@ -2324,6 +2406,7 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
       wasm_allocation_audit: wasmAllocationAudit,
       wasm_allocation_invariance: wasmAllocationInvariance,
       frame_loop_wasm_allocation_stages: frameLoopWasmStageSummary(cases),
+      frame_loop_wasm_submit_allocation_stages: frameLoopWasmSubmitStageSummary(cases),
       backend_path_coverage: backendPathCoverage,
       cases,
       ab_summary: {
@@ -3085,6 +3168,14 @@ function renderMarkdown(report)
       lines.push(`| \`${row.stage}\` | ${row.wasm_alloc_count} | ${row.wasm_alloc_bytes} | ${row.wasm_realloc_count} | ${row.wasm_realloc_grow_bytes} | ${row.wasm_peak_frame_alloc_bytes} |`);
    }
    lines.push("");
+   lines.push("## Frame Loop WASM Submit Allocation Stages");
+   lines.push("");
+   lines.push("| Submit Stage | Allocs | Bytes |");
+   lines.push("| --- | ---: | ---: |");
+   for (let row of report.frame_loop_wasm_submit_allocation_stages.stages) {
+      lines.push(`| \`${row.stage}\` | ${row.wasm_alloc_count} | ${row.wasm_alloc_bytes} |`);
+   }
+   lines.push("");
    lines.push("## Backend Path Coverage");
    lines.push("");
    lines.push("| Path | Status | Comparison | Rows | Counters |");
@@ -3519,6 +3610,82 @@ function assertFrameLoopWasmStageAllocation(report, byId)
    }
    if (summary.total_stage_wasm_alloc_count <= 0 || !stageNames.has(summary.dominant_stage)) {
       throw new Error("web report contract missing dominant frame-loop WASM allocation stage");
+   }
+}
+
+function assertFrameLoopWasmSubmitStageAllocation(report, byId)
+{
+   let summary = report.frame_loop_wasm_submit_allocation_stages;
+   if (
+      !summary
+      || summary.id !== "web.wasm.webgpu.frame_loop_wasm_submit_allocation_stages"
+      || summary.row_id !== "web.wasm.webgpu.frame_loop"
+   ) {
+      throw new Error("web report contract missing frame-loop WASM submit allocation stage summary");
+   }
+   let frame = byId.get("web.wasm.webgpu.frame_loop");
+   if (!frame) {
+      throw new Error("web report contract missing frame-loop row for submit allocation summary");
+   }
+   let stages = Array.isArray(summary.stages) ? summary.stages : [];
+   if (summary.stage_count !== WASM_SUBMIT_STAGE_NAMES.length || stages.length !== WASM_SUBMIT_STAGE_NAMES.length) {
+      throw new Error("web report contract has inconsistent frame-loop WASM submit stage counts");
+   }
+   assertNumber(summary.total_stage_wasm_alloc_count, "frame_loop_wasm_submit_stages.total_stage_wasm_alloc_count");
+   assertNumber(summary.total_stage_wasm_alloc_bytes, "frame_loop_wasm_submit_stages.total_stage_wasm_alloc_bytes");
+   assertNumber(summary.row_submit_wasm_alloc_count, "frame_loop_wasm_submit_stages.row_submit_wasm_alloc_count");
+   assertNumber(summary.row_submit_wasm_alloc_bytes, "frame_loop_wasm_submit_stages.row_submit_wasm_alloc_bytes");
+   assertNumber(summary.row_submit_wasm_realloc_count, "frame_loop_wasm_submit_stages.row_submit_wasm_realloc_count");
+   assertNumber(
+      summary.row_submit_wasm_realloc_grow_bytes,
+      "frame_loop_wasm_submit_stages.row_submit_wasm_realloc_grow_bytes",
+   );
+   if (
+      summary.total_stage_wasm_alloc_count !== frame.submit_total_alloc_count
+      || summary.total_stage_wasm_alloc_bytes !== frame.submit_total_alloc_bytes
+      || summary.row_submit_wasm_alloc_count !== frame.submit_total_alloc_count
+      || summary.row_submit_wasm_alloc_bytes !== frame.submit_total_alloc_bytes
+      || summary.frame_stage_submit_wasm_alloc_count !== frame.wasm_stage_submit_alloc_count
+      || summary.frame_stage_submit_wasm_alloc_bytes !== frame.wasm_stage_submit_alloc_bytes
+   ) {
+      throw new Error("web report contract found unattributed frame-loop WASM submit allocations");
+   }
+   if (
+      frame.submit_total_alloc_count !== frame.wasm_stage_submit_alloc_count
+      || frame.submit_total_alloc_bytes !== frame.wasm_stage_submit_alloc_bytes
+   ) {
+      throw new Error("web report contract submit sub-stages do not match parent submit stage");
+   }
+   if (
+      summary.row_submit_wasm_realloc_count !== 0
+      || summary.row_submit_wasm_realloc_grow_bytes !== 0
+      || frame.submit_total_realloc_count !== 0
+      || frame.submit_total_realloc_grow_bytes !== 0
+   ) {
+      throw new Error("web report contract found frame-loop WASM submit reallocations");
+   }
+   let stageNames = new Set(stages.map(stage => stage.stage));
+   let totalAllocCount = 0;
+   let totalAllocBytes = 0;
+   for (let name of WASM_SUBMIT_STAGE_NAMES) {
+      if (!stageNames.has(name)) {
+         throw new Error(`web report contract missing WASM submit allocation stage ${name}`);
+      }
+   }
+   for (let stage of stages) {
+      assertNumber(stage.wasm_alloc_count, `frame_loop_wasm_submit_stages.${stage.stage}.wasm_alloc_count`);
+      assertNumber(stage.wasm_alloc_bytes, `frame_loop_wasm_submit_stages.${stage.stage}.wasm_alloc_bytes`);
+      totalAllocCount += stage.wasm_alloc_count;
+      totalAllocBytes += stage.wasm_alloc_bytes;
+   }
+   if (
+      totalAllocCount !== summary.total_stage_wasm_alloc_count
+      || totalAllocBytes !== summary.total_stage_wasm_alloc_bytes
+   ) {
+      throw new Error("web report contract frame-loop WASM submit stage totals do not match stage rows");
+   }
+   if (summary.total_stage_wasm_alloc_count <= 0 || !stageNames.has(summary.dominant_stage)) {
+      throw new Error("web report contract missing dominant frame-loop WASM submit allocation stage");
    }
 }
 
@@ -4030,6 +4197,7 @@ function assertWebReportContract(report)
    assertWasmAllocationAudit(report, byId);
    assertWasmAllocationInvariance(report);
    assertFrameLoopWasmStageAllocation(report, byId);
+   assertFrameLoopWasmSubmitStageAllocation(report, byId);
    assertBackendPathCoverage(report, byId);
    if (byId.get("web.wasm.webgpu.id_mask_compositor.current").id_mask_draws <= 0) {
       throw new Error("web report contract missing ID-mask draw counter");

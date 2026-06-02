@@ -947,6 +947,7 @@ version = "0.1.0"
 dependencies = [
  "js-sys",
  "oxide-renderer-api",
+ "oxide-wasm-alloc-counter",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
