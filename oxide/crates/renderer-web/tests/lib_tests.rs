@@ -5,6 +5,10 @@ use oxide_renderer_web::{
     WebRenderer,
 };
 
+fn source_without_whitespace(source: &str) -> String {
+    source.chars().filter(|ch| !ch.is_whitespace()).collect()
+}
+
 #[test]
 fn color_conversion_clamps_channels() {
     let css = color_to_css(api::Color::rgba(1.4, -0.2, 0.5, 2.0));
@@ -95,8 +99,10 @@ fn wasm_webgpu_submits_directly_to_surface_without_backdrop_effects() {
     let submit = renderer_impl.split("fn resize(&mut self").next().expect("webgpu submit body");
 
     assert!(submit.contains("self.render_layer_passes(&mut encoder);"));
-    assert!(submit
-        .contains("if self.target_uses_backdrop(None, 0, self.frame.draws.len()) || !self.direct_surface_enabled"));
+    let compact_submit = source_without_whitespace(submit);
+    assert!(compact_submit.contains(
+        "ifself.target_uses_backdrop(None,0,self.frame.draws.len())||!self.direct_surface_enabled"
+    ));
     assert!(submit.contains("self.render_scene_with_effects(&mut encoder);"));
     assert!(submit.contains("self.render_present(&mut encoder, &surface_view);"));
     assert!(submit.contains("self.render_direct(&mut encoder, &surface_view);"));
@@ -244,15 +250,19 @@ fn wasm_webgpu_effect_path_avoids_redundant_hot_work() {
 
     assert!(target_uses_backdrop.contains("draw.target == target"));
     assert!(target_uses_backdrop.contains("matches!(draw.kind, DrawKind::Backdrop { .. })"));
-    assert!(single_uniform_slot.contains("self.queue.write_buffer(&self.effect_buffer, 0, &bytes);"));
+    assert!(
+        single_uniform_slot.contains("self.queue.write_buffer(&self.effect_buffer, 0, &bytes);")
+    );
     assert!(!single_uniform_slot.contains("self.effect_uniform_bytes.clear();"));
     assert!(!single_uniform_slot.contains("self.effect_uniform_bytes.extend_from_slice"));
     assert!(source.contains("Backdrop { rect: api::RectF, sigma: f32 }"));
     assert!(source.contains("fn backdrop_sample_rect("));
-    assert!(source.contains("fn backdrop_batch_end(&self, start: usize, target: Option<u32>, limit: usize)"));
+    assert!(source
+        .contains("fn backdrop_batch_end(&self, start: usize, target: Option<u32>, limit: usize)"));
     assert!(source.contains("self.backdrop_batch_enabled"));
     assert!(source.contains("fn render_draw_target_with_effects("));
-    assert!(source.contains("self.render_draw_range(encoder, target_view, start, end, target"));
+    assert!(source_without_whitespace(source)
+        .contains("self.render_draw_range(encoder,target_view,start,end,target"));
     assert!(source.contains("set_backdrop_batch_enabled_for_benchmark"));
 }
 
@@ -473,8 +483,9 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(source.contains("image_upload_scratch: Vec<u8>"));
     assert!(source.contains("image_upload_scratch_enabled: bool"));
     assert!(source.contains("set_image_upload_scratch_enabled_for_benchmark"));
-    assert!(source.contains("copy_a8_rows_to_rgba_into(&mut self.image_upload_scratch"));
-    assert!(source.contains("copy_rgba_rows_into(&mut self.image_upload_scratch"));
+    let compact_source = source_without_whitespace(source);
+    assert!(compact_source.contains("copy_a8_rows_to_rgba_into(&mutself.image_upload_scratch"));
+    assert!(compact_source.contains("copy_rgba_rows_into(&mutself.image_upload_scratch"));
     assert!(!source.contains("core::mem::take(&mut self.image_upload_scratch)"));
     assert!(source.contains("fn update_image_from_upload_scratch("));
     assert!(source.contains("fn write_image_update("));
@@ -506,7 +517,9 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(source.contains("self.stats.mesh3d_creates"));
     assert!(source.contains("struct ScratchCapacityBreakdown"));
     assert!(source.contains("fn scratch_capacity_breakdown(&self) -> ScratchCapacityBreakdown"));
-    assert!(source.contains("fn apply_scratch_capacity_stats(&mut self, capacity: ScratchCapacityBreakdown)"));
+    assert!(source.contains(
+        "fn apply_scratch_capacity_stats(&mut self, capacity: ScratchCapacityBreakdown)"
+    ));
     assert!(source.contains("fn record_scratch_growth_stats(&mut self)"));
     assert!(source.contains("self.stats.cpu_scratch_grows"));
     assert!(source.contains("self.stats.cpu_scratch_growth_bytes"));
@@ -527,8 +540,11 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
         assert!(source.contains(field), "missing WebGPU scratch growth attribution {field}");
     }
     assert!(source.contains("self.stats.layer_draws = self.stats.layer_draws.saturating_add(1);"));
-    assert!(source.contains("self.stats.layer_cache_hits = self.stats.layer_cache_hits.saturating_add(1);"));
-    assert!(source.contains("self.stats.layer_cache_misses = self.stats.layer_cache_misses.saturating_add(1);"));
+    assert!(source
+        .contains("self.stats.layer_cache_hits = self.stats.layer_cache_hits.saturating_add(1);"));
+    assert!(source.contains(
+        "self.stats.layer_cache_misses = self.stats.layer_cache_misses.saturating_add(1);"
+    ));
     assert!(source.contains("self.stats.layer_cache_skipped_draws"));
     assert!(source.contains("self.stats.layer_passes = self.stats.layer_passes.saturating_add(1);"));
     assert!(source.contains("self.stats.layer_texture_creates"));
@@ -549,7 +565,8 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(source.contains("api::DrawCmd::CameraBg { .. } => {}"));
     assert!(!source.contains("set_camera_background_rgba8"));
     assert!(!source.contains("camera_background:"));
-    assert!(!source.contains("self.stats.camera_bg_draws = self.stats.camera_bg_draws.saturating_add(1);"));
+    assert!(!source
+        .contains("self.stats.camera_bg_draws = self.stats.camera_bg_draws.saturating_add(1);"));
     assert!(source.contains("self.stats.clip_depth_peak ="));
     assert!(source.contains("self.stats.clip_depth_peak.max(self.clip_stack.len() as u32)"));
     assert!(source

@@ -1,13 +1,13 @@
 use super::{
-    a8_to_rgba, copy_a8_rows, copy_a8_rows_to_rgba_into, copy_rgba_rows,
-    copy_rgba_rows_into, document, index_slice, normalized_index_mode, resolve_index,
-    sanitize_scale, source_rect, vertex_slice,
+    a8_to_rgba, copy_a8_rows, copy_a8_rows_to_rgba_into, copy_rgba_rows, copy_rgba_rows_into,
+    document, index_slice, normalized_index_mode, resolve_index, sanitize_scale, source_rect,
+    vertex_slice,
 };
 use crate::WebRendererStats;
 use crate::{id_mask_compositor, neon_marker, scene3d};
 use js_sys::Reflect;
-use oxide_wasm_alloc_counter::AllocationSnapshot;
 use oxide_renderer_api as api;
+use oxide_wasm_alloc_counter::AllocationSnapshot;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -409,8 +409,19 @@ impl WebGpuTimestampQueries {
             return None;
         };
         let bytes = timestamp_readback_bytes(self.current_query_count);
-        encoder.resolve_query_set(&self.query_set, 0..self.current_query_count, &self.resolve_buffer, 0);
-        encoder.copy_buffer_to_buffer(&self.resolve_buffer, 0, &self.slots[slot_index].buffer, 0, bytes);
+        encoder.resolve_query_set(
+            &self.query_set,
+            0..self.current_query_count,
+            &self.resolve_buffer,
+            0,
+        );
+        encoder.copy_buffer_to_buffer(
+            &self.resolve_buffer,
+            0,
+            &self.slots[slot_index].buffer,
+            0,
+            bytes,
+        );
         let slot = &mut self.slots[slot_index];
         slot.records.clear();
         slot.records.extend_from_slice(&self.current_records);
@@ -443,7 +454,8 @@ impl WebGpuTimestampQueries {
             if !slot.failed.get() {
                 let bytes = timestamp_readback_bytes(slot.query_count);
                 let view = slot.buffer.slice(0..bytes).get_mapped_range();
-                let mut summary = TimestampSummary { frame_id: slot.frame_id, ..TimestampSummary::default() };
+                let mut summary =
+                    TimestampSummary { frame_id: slot.frame_id, ..TimestampSummary::default() };
                 for record in &slot.records {
                     let Some(begin) = timestamp_sample(&view, record.begin_query) else {
                         continue;
@@ -451,7 +463,8 @@ impl WebGpuTimestampQueries {
                     let Some(end) = timestamp_sample(&view, record.end_query) else {
                         continue;
                     };
-                    let ns = ((end.saturating_sub(begin) as f64) * self.timestamp_period_ns).round() as u64;
+                    let ns = ((end.saturating_sub(begin) as f64) * self.timestamp_period_ns).round()
+                        as u64;
                     summary.add(record.family, ns);
                 }
                 drop(view);
@@ -880,7 +893,8 @@ impl WebGpuRenderer {
             })
             .await
             .map_err(|_| api::RenderError::Unsupported("webgpu adapter unavailable"))?;
-        let timestamp_query_supported = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+        let timestamp_query_supported =
+            adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
         let required_features = if timestamp_query_supported {
             wgpu::Features::TIMESTAMP_QUERY
         } else {
@@ -933,7 +947,8 @@ impl WebGpuRenderer {
         let (viewport_buffer, viewport_bind_group) = create_viewport_bind_group(&device, &programs);
         let effect_uniform_stride = align_to(
             EFFECT_UNIFORM_SIZE,
-            device.limits().min_uniform_buffer_offset_alignment.max(EFFECT_UNIFORM_SIZE as u32) as u64,
+            device.limits().min_uniform_buffer_offset_alignment.max(EFFECT_UNIFORM_SIZE as u32)
+                as u64,
         );
         let (effect_buffer, effect_bind_group, effect_uniform_capacity) =
             create_effect_bind_group(&device, &programs, EFFECT_UNIFORM_SIZE);
@@ -1161,9 +1176,12 @@ impl WebGpuRenderer {
         capacity.draw = capacity.draw.saturating_add(
             self.scratch_points.capacity().saturating_mul(core::mem::size_of::<(f32, f32)>()),
         );
-        capacity.image_upload = capacity.image_upload.saturating_add(self.image_upload_scratch.capacity());
-        capacity.id_mask = capacity.id_mask.saturating_add(self.id_mask_raster_uniform_bytes.capacity());
-        capacity.id_mask = capacity.id_mask.saturating_add(self.id_mask_compositor_uniform_bytes.capacity());
+        capacity.image_upload =
+            capacity.image_upload.saturating_add(self.image_upload_scratch.capacity());
+        capacity.id_mask =
+            capacity.id_mask.saturating_add(self.id_mask_raster_uniform_bytes.capacity());
+        capacity.id_mask =
+            capacity.id_mask.saturating_add(self.id_mask_compositor_uniform_bytes.capacity());
         capacity.draw = capacity.draw.saturating_add(
             self.clip_stack.capacity().saturating_mul(core::mem::size_of::<api::RectI>()),
         );
@@ -1435,11 +1453,23 @@ impl WebGpuRenderer {
         row_bytes: usize,
     ) -> Result<(), api::RenderError> {
         if self.image_upload_scratch_enabled {
-            let grew =
-                copy_a8_rows_to_rgba_into(&mut self.image_upload_scratch, width, height, data, row_bytes)
-                    .ok_or(api::RenderError::InvalidOperation("invalid a8 update rows"))?;
+            let grew = copy_a8_rows_to_rgba_into(
+                &mut self.image_upload_scratch,
+                width,
+                height,
+                data,
+                row_bytes,
+            )
+            .ok_or(api::RenderError::InvalidOperation("invalid a8 update rows"))?;
             self.record_image_upload_scratch(grew);
-            return self.update_image_from_upload_scratch(handle, x, y, width, height, GpuImageKind::A8);
+            return self.update_image_from_upload_scratch(
+                handle,
+                x,
+                y,
+                width,
+                height,
+                GpuImageKind::A8,
+            );
         }
         let alpha = copy_a8_rows(width, height, data, row_bytes)
             .ok_or(api::RenderError::InvalidOperation("invalid a8 update rows"))?;
@@ -1463,7 +1493,14 @@ impl WebGpuRenderer {
                 copy_rgba_rows_into(&mut self.image_upload_scratch, width, height, data, row_bytes)
                     .ok_or(api::RenderError::InvalidOperation("invalid rgba update rows"))?;
             self.record_image_upload_scratch(grew);
-            return self.update_image_from_upload_scratch(handle, x, y, width, height, GpuImageKind::Rgba);
+            return self.update_image_from_upload_scratch(
+                handle,
+                x,
+                y,
+                width,
+                height,
+                GpuImageKind::Rgba,
+            );
         }
         let rgba = copy_rgba_rows(width, height, data, row_bytes)
             .ok_or(api::RenderError::InvalidOperation("invalid rgba update rows"))?;
@@ -1733,8 +1770,7 @@ impl WebGpuRenderer {
         let bind_group =
             create_texture_bind_group(&self.device, &self.programs, &view, &self.programs.sampler);
         self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
-        self.stats.image_bind_group_creates =
-            self.stats.image_bind_group_creates.saturating_add(1);
+        self.stats.image_bind_group_creates = self.stats.image_bind_group_creates.saturating_add(1);
         drop(view);
         Ok(GpuImage { texture, bind_group, width, height, kind })
     }
@@ -1811,7 +1847,14 @@ impl WebGpuRenderer {
         self.target_stack.last().copied()
     }
 
-    fn try_coalesce_draw_item(&mut self, kind: DrawKind, first_index: u32, index_count: u32, clip: api::RectI, target: Option<u32>) -> bool {
+    fn try_coalesce_draw_item(
+        &mut self,
+        kind: DrawKind,
+        first_index: u32,
+        index_count: u32,
+        clip: api::RectI,
+        target: Option<u32>,
+    ) -> bool {
         if !self.draw_item_coalescing_enabled {
             return false;
         }
@@ -1919,19 +1962,13 @@ impl WebGpuRenderer {
                 width,
                 height,
             );
-            self.layers.insert(id, GpuLayer {
-                texture,
-                view,
-                bind_group,
-                rect,
-                width,
-                height,
-                scale: self.scale,
-            });
+            self.layers.insert(
+                id,
+                GpuLayer { texture, view, bind_group, rect, width, height, scale: self.scale },
+            );
             self.stats.texture_creates = self.stats.texture_creates.saturating_add(1);
             self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
-            self.stats.target_texture_creates =
-                self.stats.target_texture_creates.saturating_add(1);
+            self.stats.target_texture_creates = self.stats.target_texture_creates.saturating_add(1);
             self.stats.target_bind_group_creates =
                 self.stats.target_bind_group_creates.saturating_add(1);
             self.stats.layer_texture_creates = self.stats.layer_texture_creates.saturating_add(1);
@@ -2292,11 +2329,7 @@ impl WebGpuRenderer {
         let color = api::Color::rgba(tint.r, tint.g, tint.b, tint.a * alpha.clamp(0.0, 1.0));
         let vertices = quad_vertices(rect, u0, v0, u1, v1, color);
         let sigma = sigma.clamp(0.0, MAX_BLUR_SIGMA);
-        self.push_draw(
-            DrawKind::Backdrop { rect, sigma },
-            &vertices,
-            &[0, 1, 2, 2, 1, 3],
-        );
+        self.push_draw(DrawKind::Backdrop { rect, sigma }, &vertices, &[0, 1, 2, 2, 1, 3]);
     }
 
     fn encode_spinner(&mut self, center: [f32; 2], atom: f32, alpha: f32) {
@@ -2467,12 +2500,9 @@ impl WebGpuRenderer {
             let radius = self.frame.effect_shared_sigma.clamp(0.0, MAX_BLUR_SIGMA);
             let bytes = f32x4_bytes([texel_x, texel_y, radius, 0.0]);
             self.queue.write_buffer(&self.effect_buffer, 0, &bytes);
-            self.stats.buffer_upload_bytes = self
-                .stats
-                .buffer_upload_bytes
-                .saturating_add(bytes.len() as u64);
-            self.stats.effect_uniform_writes =
-                self.stats.effect_uniform_writes.saturating_add(1);
+            self.stats.buffer_upload_bytes =
+                self.stats.buffer_upload_bytes.saturating_add(bytes.len() as u64);
+            self.stats.effect_uniform_writes = self.stats.effect_uniform_writes.saturating_add(1);
             self.stats.effect_uniform_bytes =
                 self.stats.effect_uniform_bytes.saturating_add(bytes.len() as u64);
             self.stats.effect_uniform_slots =
@@ -2829,7 +2859,9 @@ impl api::Renderer for WebGpuRenderer {
 
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         self.render_layer_passes(&mut encoder);
-        if self.target_uses_backdrop(None, 0, self.frame.draws.len()) || !self.direct_surface_enabled {
+        if self.target_uses_backdrop(None, 0, self.frame.draws.len())
+            || !self.direct_surface_enabled
+        {
             self.render_scene_with_effects(&mut encoder);
             self.render_present(&mut encoder, &surface_view);
         } else {
@@ -3187,7 +3219,14 @@ impl WebGpuRenderer {
                     self.write_effect_uniform(sigma);
                     self.frame.draws[start].effect_uniform_offset = 0;
                 }
-                self.render_draw_range(encoder, target_view, start, end, target, wgpu::LoadOp::Load);
+                self.render_draw_range(
+                    encoder,
+                    target_view,
+                    start,
+                    end,
+                    target,
+                    wgpu::LoadOp::Load,
+                );
                 start = end;
             } else {
                 let mut end = start + 1;
@@ -3198,7 +3237,14 @@ impl WebGpuRenderer {
                     }
                     end += 1;
                 }
-                self.render_draw_range(encoder, target_view, start, end, target, wgpu::LoadOp::Load);
+                self.render_draw_range(
+                    encoder,
+                    target_view,
+                    start,
+                    end,
+                    target,
+                    wgpu::LoadOp::Load,
+                );
                 start = end;
             }
         }
@@ -3463,7 +3509,8 @@ impl WebGpuRenderer {
                     &mut self.timestamp_queries,
                     TimestampPassFamily::IdMaskRaster,
                 );
-                let timestamp_writes = webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
+                let timestamp_writes =
+                    webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("oxide-webgpu-id-mask-raster-pass"),
                     color_attachments: &[
@@ -3496,8 +3543,7 @@ impl WebGpuRenderer {
                 pass.draw(0..vertex_count, 0..1);
             }
             encoded_render_passes = encoded_render_passes.saturating_add(1);
-            self.stats.id_mask_raster_passes =
-                self.stats.id_mask_raster_passes.saturating_add(1);
+            self.stats.id_mask_raster_passes = self.stats.id_mask_raster_passes.saturating_add(1);
 
             // Seed nearest-city and seam fields from the exact rasterized masks,
             // then jump-flood them. The final beauty compositor should only read
@@ -3512,7 +3558,8 @@ impl WebGpuRenderer {
                     &mut self.timestamp_queries,
                     TimestampPassFamily::IdMaskFieldSeed,
                 );
-                let timestamp_writes = webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
+                let timestamp_writes =
+                    webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("oxide-webgpu-id-mask-field-seed-pass"),
                     color_attachments: &[
@@ -3610,7 +3657,8 @@ impl WebGpuRenderer {
                     &mut self.timestamp_queries,
                     TimestampPassFamily::IdMaskCompositor,
                 );
-                let timestamp_writes = webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
+                let timestamp_writes =
+                    webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("oxide-webgpu-id-mask-compositor-pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -3893,14 +3941,7 @@ fn timestamp_sample(data: &[u8], query_index: u32) -> Option<u64> {
     let start = (query_index as usize).checked_mul(wgpu::QUERY_SIZE as usize)?;
     let bytes = data.get(start..start.checked_add(8)?)?;
     Some(u64::from_le_bytes([
-        bytes[0],
-        bytes[1],
-        bytes[2],
-        bytes[3],
-        bytes[4],
-        bytes[5],
-        bytes[6],
-        bytes[7],
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ]))
 }
 
@@ -4735,10 +4776,7 @@ fn effect_uniform_needed_bytes(count: usize, stride: u64) -> u64 {
     if count == 0 {
         return EFFECT_UNIFORM_SIZE;
     }
-    (count as u64)
-        .saturating_sub(1)
-        .saturating_mul(stride)
-        .saturating_add(EFFECT_UNIFORM_SIZE)
+    (count as u64).saturating_sub(1).saturating_mul(stride).saturating_add(EFFECT_UNIFORM_SIZE)
 }
 
 fn create_target_texture(
@@ -5676,7 +5714,8 @@ fn vs_id_mask_raster(input: IdMaskRasterVertexIn) -> IdMaskRasterOut {
    out.visible_front_min = vec2<f32>(raster_params.mask_size_mode.w, raster_params.camera_eye_front_min.w);
    if (raster_params.mask_size_mode.z > 0.5) {
       let position_world = vec4<f32>(input.position_world, 1.0);
-      out.position = raster_params.world_to_clip * position_world;
+      let clip = raster_params.world_to_clip * position_world;
+      out.position = vec4<f32>(clip.x, clip.y, clip.z * 0.5 + clip.w * 0.5, clip.w);
       if (raster_params.mask_size_mode.w > 0.5) {
          let normal = normalize((raster_params.model_to_world * position_world).xyz * raster_params.normal_scale.xyz);
          out.frontness = dot(normal, normalize(raster_params.camera_eye_front_min.xyz));
