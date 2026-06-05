@@ -152,7 +152,7 @@ fn wasm_webgpu_unindexed_quad_vertices_emit_two_triangles() {
 }
 
 #[test]
-fn wasm_webgpu_id_mask_vertex_cache_is_revision_keyed() {
+fn wasm_webgpu_id_mask_vertex_cache_is_content_hash_keyed_and_inflight_safe() {
     let source = include_str!("../src/wasm/webgpu.rs");
     let cache_key = source
         .split("struct IdMaskVertexCacheKey")
@@ -168,15 +168,25 @@ fn wasm_webgpu_id_mask_vertex_cache_is_revision_keyed() {
         .split("fn logical_dimension")
         .next()
         .expect("id-mask vertex cache helper end");
+    let reusable = source
+        .split("fn id_mask_reusable_vertex_cache_index")
+        .nth(1)
+        .expect("id-mask reusable vertex cache helper")
+        .split("fn ensure_id_mask_vertex_cache_uploaded")
+        .next()
+        .expect("id-mask reusable vertex cache helper end");
 
-    assert!(cache_key.contains("revision: u64"));
+    assert!(cache_key.contains("content_hash: u64"));
+    assert!(cache_key.contains("len: usize"));
     assert!(!cache_key.contains("ptr: usize"));
-    assert!(helper.contains("revision,"));
+    assert!(helper.contains("IdMaskVertexCacheKey { content_hash, len: vertices.len() }"));
     assert!(helper.contains("IdMaskVertexCacheKey"));
     assert!(helper.contains("fn id_mask_reusable_vertex_cache_index"));
-    assert!(helper.contains("!in_use"));
     assert!(helper.contains("write_id_mask_raster_vertex_bytes(vertices, &mut cache.bytes);"));
-    assert!(helper.contains("self.id_mask_uploaded_vertex_cache = None;"));
+    assert!(helper.contains("cache.uploaded = false;"));
+    assert!(reusable.contains("'caches: for index in 0..self.id_mask_vertex_caches.len()"));
+    assert!(reusable.contains("for entry in &self.id_mask_draw_chunk_indices"));
+    assert!(reusable.contains("continue 'caches;"));
 }
 
 #[test]

@@ -2955,30 +2955,15 @@ impl WebGpuRenderer {
     }
 
     fn id_mask_reusable_vertex_cache_index(&self) -> Option<usize> {
-        for index in 0..self.id_mask_vertex_caches.len() {
-            let mut in_use = false;
-            for draw in &self.id_mask_draws {
-                if self.id_mask_draw_uses_vertex_cache(draw, index) {
-                    in_use = true;
-                    break;
+        'caches: for index in 0..self.id_mask_vertex_caches.len() {
+            for entry in &self.id_mask_draw_chunk_indices {
+                if *entry == index {
+                    continue 'caches;
                 }
             }
-            if !in_use {
-                return Some(index);
-            }
+            return Some(index);
         }
         None
-    }
-
-    fn id_mask_draw_uses_vertex_cache(&self, draw: &IdMaskDraw, index: usize) -> bool {
-        let start = draw.vertex_cache_first as usize;
-        let end = start.saturating_add(draw.vertex_cache_count as usize);
-        for entry in self.id_mask_draw_chunk_indices.get(start..end).unwrap_or(&[]) {
-            if *entry == index {
-                return true;
-            }
-        }
-        false
     }
 
     fn ensure_id_mask_vertex_cache_uploaded(&mut self, index: usize) -> Option<u64> {
