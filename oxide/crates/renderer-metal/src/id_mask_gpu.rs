@@ -187,6 +187,38 @@ impl MetalRenderer {
         Ok(targets.clone())
     }
 
+    fn id_mask_vertex_cache_index(
+        &mut self,
+        content_hash: u64,
+        vertices: &[id_mask_compositor::IdMaskRasterVertex],
+    ) -> Result<usize, api::RenderError> {
+        let byte_len = vertices
+            .len()
+            .checked_mul(core::mem::size_of::<id_mask_compositor::IdMaskRasterVertex>())
+            .ok_or(api::RenderError::InvalidOperation("id-mask raster vertex data overflow"))?;
+        let key = IdMaskVertexUploadKey { content_hash, byte_len };
+        if let Some(index) = self.id_mask_vertex_caches.iter().position(|cache| cache.key == key) {
+            return Ok(index);
+        }
+
+        let buffer = self
+            .device
+            .new_buffer(byte_len.max(1) as u64, MTLResourceOptions::StorageModeShared);
+        let vertex_ptr = buffer.contents().cast::<u8>();
+        if vertex_ptr.is_null() {
+            return Err(api::RenderError::OutOfMemory);
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                vertices.as_ptr() as *const u8,
+                vertex_ptr,
+                byte_len,
+            );
+        }
+        self.id_mask_vertex_caches.push(IdMaskVertexUploadCache { key, buffer });
+        Ok(self.id_mask_vertex_caches.len() - 1)
+    }
+
     fn new_rgba32_float_render_texture(
         &self,
         width: usize,
@@ -336,29 +368,14 @@ impl MetalRenderer {
             pass.raster.mask_width,
             pass.raster.mask_height,
         )?;
-        let vertex_bytes = pass
-            .raster
-            .vertices
-            .len()
-            .checked_mul(core::mem::size_of::<id_mask_compositor::IdMaskRasterVertex>())
-            .ok_or(api::RenderError::InvalidOperation("id-mask raster vertex data overflow"))?;
-        let vertex_key =
-            IdMaskVertexUploadKey { revision: pass.raster.vertex_revision, byte_len: vertex_bytes };
-        self.id_mask_vb.ensure_capacity(&self.device, slot, vertex_bytes);
-        let vertex_buf = self.id_mask_vb.bufs[slot].to_owned();
-        if self.id_mask_vb_keys[slot] != Some(vertex_key) {
-            let vertex_ptr = self.id_mask_vb.contents_ptr(slot).as_ptr();
-            if vertex_ptr.is_null() {
-                return Err(api::RenderError::OutOfMemory);
-            }
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    pass.raster.vertices.as_ptr() as *const u8,
-                    vertex_ptr,
-                    vertex_bytes,
-                );
-            }
-            self.id_mask_vb_keys[slot] = Some(vertex_key);
+        for chunk in pass.raster.chunks {
+            let end = chunk.first_vertex.saturating_add(chunk.vertex_count);
+            let Some(vertices) = pass.raster.vertices.get(chunk.first_vertex..end) else {
+                return Err(api::RenderError::InvalidOperation(
+                    "id-mask GPU raster chunk range is outside vertex data",
+                ));
+            };
+            self.id_mask_vertex_cache_index(chunk.content_hash, vertices)?;
         }
         let params = RasterGpuParams {
             mask_size: [pass.raster.mask_width as f32, pass.raster.mask_height as f32],
@@ -385,13 +402,23 @@ impl MetalRenderer {
         configure_clear_store_attachments(&rpd, &targets.city, &targets.neighborhood);
         let enc = cmd.new_render_command_encoder(&rpd);
         enc.set_render_pipeline_state(&self.pso_id_mask_raster);
-        enc.set_vertex_buffer(0, Some(&vertex_buf), 0);
         enc.set_vertex_bytes(
             1,
             core::mem::size_of_val(&params) as u64,
             (&params as *const RasterGpuParams).cast(),
         );
-        enc.draw_primitives(MTLPrimitiveType::Triangle, 0, pass.raster.vertex_count() as u64);
+        for chunk in pass.raster.chunks {
+            let end = chunk.first_vertex.saturating_add(chunk.vertex_count);
+            let Some(vertices) = pass.raster.vertices.get(chunk.first_vertex..end) else {
+                continue;
+            };
+            let cache_index = self.id_mask_vertex_cache_index(chunk.content_hash, vertices)?;
+            let Some(cache) = self.id_mask_vertex_caches.get(cache_index) else {
+                continue;
+            };
+            enc.set_vertex_buffer(0, Some(&cache.buffer), 0);
+            enc.draw_primitives(MTLPrimitiveType::Triangle, 0, chunk.vertex_count as u64);
+        }
         enc.end_encoding();
 
         let field_params = FieldGpuParams {

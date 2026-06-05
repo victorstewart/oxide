@@ -932,8 +932,7 @@ pub struct MetalRenderer {
     scene3d_bloom_tex: Option<Texture>,
     scene3d_bloom_tmp_tex: Option<Texture>,
     id_mask_targets: [Option<id_mask_gpu::RenderTargets>; FRAME_RING_SIZE],
-    id_mask_vb: Ring,
-    id_mask_vb_keys: [Option<IdMaskVertexUploadKey>; FRAME_RING_SIZE],
+    id_mask_vertex_caches: alloc::vec::Vec<IdMaskVertexUploadCache>,
     images: HashMap<u32, Texture>,
     next_image_id: u32,
     meshes_3d: HashMap<u32, Mesh3dGpu>,
@@ -1679,8 +1678,6 @@ impl MetalRenderer {
             None
         };
         let gpu_stage_timing = GpuStageTimingSupport::new(&device);
-        let id_mask_vb = Ring::new(&device, 4096, MTLResourceOptions::StorageModeShared);
-        let id_mask_vb_keys = [None; FRAME_RING_SIZE];
 
         Ok(Self {
             device,
@@ -1771,8 +1768,7 @@ impl MetalRenderer {
             scene3d_bloom_tex: None,
             scene3d_bloom_tmp_tex: None,
             id_mask_targets: core::array::from_fn(|_| None),
-            id_mask_vb,
-            id_mask_vb_keys,
+            id_mask_vertex_caches: alloc::vec::Vec::new(),
             images: HashMap::new(),
             next_image_id: 1,
             meshes_3d: HashMap::new(),
@@ -8152,8 +8148,13 @@ struct Ring {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct IdMaskVertexUploadKey {
-    revision: u64,
+    content_hash: u64,
     byte_len: usize,
+}
+
+struct IdMaskVertexUploadCache {
+    key: IdMaskVertexUploadKey,
+    buffer: Buffer,
 }
 
 impl Ring {

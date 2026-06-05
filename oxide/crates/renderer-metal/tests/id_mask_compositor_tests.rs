@@ -1,6 +1,6 @@
 use oxide_renderer_metal::id_mask_compositor::{
-    IdMaskGpuRasterPass, IdMaskRasterProjection, IdMaskRasterVertex, SemanticMaskRegionStyle,
-    SEMANTIC_MASK_MAX_REGION_STYLES, SEMANTIC_MASK_MAX_SUBREGION_COLORS,
+    IdMaskGpuRasterPass, IdMaskRasterChunk, IdMaskRasterProjection, IdMaskRasterVertex,
+    SemanticMaskRegionStyle, SEMANTIC_MASK_MAX_REGION_STYLES, SEMANTIC_MASK_MAX_SUBREGION_COLORS,
 };
 
 #[test]
@@ -12,12 +12,14 @@ fn id_mask_gpu_raster_rejects_empty_or_non_triangle_vertices() {
         mask_scale: 1.0,
         vertex_revision: 0,
         vertices: &[],
+        chunks: &[],
         projection: IdMaskRasterProjection::screen_px(),
     };
     assert!(!empty.valid_triangle_vertex_count());
 
     let vertices = [IdMaskRasterVertex::new([0.0, 0.0], 1, 2)];
-    let partial = IdMaskGpuRasterPass { vertices: &vertices, ..empty };
+    let partial_chunk = [IdMaskRasterChunk { content_hash: 1, first_vertex: 0, vertex_count: 1 }];
+    let partial = IdMaskGpuRasterPass { vertices: &vertices, chunks: &partial_chunk, ..empty };
     assert!(!partial.valid_triangle_vertex_count());
 }
 
@@ -28,6 +30,7 @@ fn id_mask_gpu_raster_accepts_triangle_vertices_and_generic_style_alias() {
         IdMaskRasterVertex::new([4.0, 0.0], 1, 2),
         IdMaskRasterVertex::new([0.0, 4.0], 1, 2),
     ];
+    let chunks = [IdMaskRasterChunk { content_hash: 7, first_vertex: 0, vertex_count: 3 }];
     let pass = IdMaskGpuRasterPass {
         viewport: oxide_renderer_api::RectF::new(0.0, 0.0, 10.0, 10.0),
         mask_width: 8,
@@ -35,6 +38,7 @@ fn id_mask_gpu_raster_accepts_triangle_vertices_and_generic_style_alias() {
         mask_scale: 1.0,
         vertex_revision: 7,
         vertices: &vertices,
+        chunks: &chunks,
         projection: IdMaskRasterProjection::screen_px(),
     };
 
@@ -47,21 +51,21 @@ fn id_mask_gpu_raster_accepts_triangle_vertices_and_generic_style_alias() {
 }
 
 #[test]
-fn id_mask_gpu_upload_cache_is_revision_keyed() {
+fn id_mask_gpu_upload_cache_is_content_hash_chunk_keyed() {
     let renderer_source = include_str!("../src/lib.rs");
     let gpu_source = include_str!("../src/id_mask_gpu.rs");
     assert!(
         renderer_source
-            .contains("id_mask_vb_keys: [Option<IdMaskVertexUploadKey>; FRAME_RING_SIZE]")
+            .contains("id_mask_vertex_caches: alloc::vec::Vec<IdMaskVertexUploadCache>")
             && renderer_source.contains("struct IdMaskVertexUploadKey")
-            && renderer_source.contains("revision: u64")
+            && renderer_source.contains("content_hash: u64")
             && renderer_source.contains("byte_len: usize"),
-        "Metal id-mask raster upload cache must be keyed by stable caller revision plus byte size"
+        "Metal id-mask raster upload cache must be keyed by stable content hash plus byte size"
     );
     assert!(
-        gpu_source.contains("revision: pass.raster.vertex_revision")
-            && gpu_source.contains("if self.id_mask_vb_keys[slot] != Some(vertex_key)")
-            && gpu_source.contains("self.id_mask_vb_keys[slot] = Some(vertex_key);"),
-        "Metal id-mask raster vertices should only be recopied when the revision-keyed upload changes"
+        gpu_source.contains("fn id_mask_vertex_cache_index")
+            && gpu_source.contains("chunk.content_hash")
+            && gpu_source.contains("self.id_mask_vertex_caches.push(IdMaskVertexUploadCache"),
+        "Metal id-mask raster chunks should stay in content-hash keyed GPU buffers"
     );
 }

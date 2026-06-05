@@ -149,6 +149,13 @@ impl Default for IdMaskPolishConfig {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct IdMaskRasterChunk {
+    pub content_hash: u64,
+    pub first_vertex: usize,
+    pub vertex_count: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct IdMaskGpuRasterPass<'a> {
     pub viewport: api::RectF,
     pub mask_width: usize,
@@ -156,6 +163,7 @@ pub struct IdMaskGpuRasterPass<'a> {
     pub mask_scale: f32,
     pub vertex_revision: u64,
     pub vertices: &'a [IdMaskRasterVertex],
+    pub chunks: &'a [IdMaskRasterChunk],
     pub projection: IdMaskRasterProjection,
 }
 
@@ -167,7 +175,18 @@ impl<'a> IdMaskGpuRasterPass<'a> {
 
     #[must_use]
     pub fn valid_triangle_vertex_count(&self) -> bool {
-        !self.vertices.is_empty() && self.vertices.len() % 3 == 0
+        if self.vertices.is_empty() || self.chunks.is_empty() {
+            return false;
+        }
+        let mut total = 0usize;
+        for chunk in self.chunks {
+            let end = chunk.first_vertex.saturating_add(chunk.vertex_count);
+            if chunk.vertex_count == 0 || chunk.vertex_count % 3 != 0 || end > self.vertices.len() {
+                return false;
+            }
+            total = total.saturating_add(chunk.vertex_count);
+        }
+        total == self.vertices.len() && total % 3 == 0
     }
 }
 

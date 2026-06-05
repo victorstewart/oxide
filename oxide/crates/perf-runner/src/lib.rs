@@ -2004,6 +2004,7 @@ fn id_mask_perf_vertices(
 
 fn id_mask_perf_pass<'a>(
     vertices: &'a [metal::id_mask_compositor::IdMaskRasterVertex],
+    chunks: &'a [metal::id_mask_compositor::IdMaskRasterChunk],
     revision: u64,
 ) -> metal::id_mask_compositor::IdMaskGpuCompositorPass<'a> {
     let city_styles = [
@@ -2043,6 +2044,7 @@ fn id_mask_perf_pass<'a>(
             mask_scale: 2.0,
             vertex_revision: revision,
             vertices,
+            chunks,
             projection: metal::id_mask_compositor::IdMaskRasterProjection::screen_px(),
         },
         city_styles,
@@ -2090,7 +2092,12 @@ fn gpu_system_id_mask_compositor_case(
 
     for index in 0..(warmups + frames) {
         let revision = if stable_revision { 1 } else { index as u64 + 1 };
-        let pass = id_mask_perf_pass(&vertices, revision);
+        let chunks = [metal::id_mask_compositor::IdMaskRasterChunk {
+            content_hash: revision,
+            first_vertex: 0,
+            vertex_count: vertices.len(),
+        }];
+        let pass = id_mask_perf_pass(&vertices, &chunks, revision);
         let frame_t0 = Instant::now();
         let token = renderer.begin_frame(&api::FrameTarget, None);
         let frame_id = token.0;

@@ -103,7 +103,8 @@ struct IdMaskDraw {
     mask_width: u32,
     mask_height: u32,
     mask_scale: f32,
-    vertex_cache_index: usize,
+    vertex_cache_first: u32,
+    vertex_cache_count: u32,
     vertex_count: u32,
     projection: id_mask_compositor::IdMaskRasterProjection,
     city_styles: [id_mask_compositor::IdMaskCityStyle; id_mask_compositor::ID_MASK_MAX_CITY_STYLES],
@@ -116,13 +117,16 @@ struct IdMaskDraw {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct IdMaskVertexCacheKey {
-    revision: u64,
+    content_hash: u64,
     len: usize,
 }
 
 struct IdMaskVertexCache {
     key: IdMaskVertexCacheKey,
     bytes: Vec<u8>,
+    buffer: Option<wgpu::Buffer>,
+    buffer_capacity: u64,
+    uploaded: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -760,8 +764,8 @@ pub struct WebGpuRenderer {
     scene3d_draws: Vec<Scene3dDraw>,
     scene3d_overlay_draws: Vec<Scene3dDraw>,
     id_mask_draws: Vec<IdMaskDraw>,
+    id_mask_draw_chunk_indices: Vec<usize>,
     id_mask_vertex_caches: Vec<IdMaskVertexCache>,
-    id_mask_uploaded_vertex_cache: Option<usize>,
     id_mask_width: u32,
     id_mask_height: u32,
     id_mask_city_texture: Option<wgpu::Texture>,
@@ -776,8 +780,6 @@ pub struct WebGpuRenderer {
     id_mask_city_field_b_view: Option<wgpu::TextureView>,
     id_mask_seam_field_a_view: Option<wgpu::TextureView>,
     id_mask_seam_field_b_view: Option<wgpu::TextureView>,
-    id_mask_vertex_buffer: Option<wgpu::Buffer>,
-    id_mask_vertex_capacity: u64,
     id_mask_raster_uniform_buffer: Option<wgpu::Buffer>,
     id_mask_raster_bind_group: Option<wgpu::BindGroup>,
     id_mask_field_uniform_buffer: Option<wgpu::Buffer>,
@@ -1005,8 +1007,8 @@ impl WebGpuRenderer {
             scene3d_draws: Vec::new(),
             scene3d_overlay_draws: Vec::new(),
             id_mask_draws: Vec::new(),
+            id_mask_draw_chunk_indices: Vec::new(),
             id_mask_vertex_caches: Vec::new(),
-            id_mask_uploaded_vertex_cache: None,
             id_mask_width: 0,
             id_mask_height: 0,
             id_mask_city_texture: None,
@@ -1021,8 +1023,6 @@ impl WebGpuRenderer {
             id_mask_city_field_b_view: None,
             id_mask_seam_field_a_view: None,
             id_mask_seam_field_b_view: None,
-            id_mask_vertex_buffer: None,
-            id_mask_vertex_capacity: 0,
             id_mask_raster_uniform_buffer: None,
             id_mask_raster_bind_group: None,
             id_mask_field_uniform_buffer: None,
@@ -1137,6 +1137,11 @@ impl WebGpuRenderer {
         );
         capacity.id_mask = capacity.id_mask.saturating_add(
             self.id_mask_draws.capacity().saturating_mul(core::mem::size_of::<IdMaskDraw>()),
+        );
+        capacity.id_mask = capacity.id_mask.saturating_add(
+            self.id_mask_draw_chunk_indices
+                .capacity()
+                .saturating_mul(core::mem::size_of::<usize>()),
         );
         capacity.id_mask = capacity.id_mask.saturating_add(
             self.id_mask_vertex_caches
@@ -1654,15 +1659,29 @@ impl WebGpuRenderer {
             ));
         }
         self.stats.id_mask_draws = self.stats.id_mask_draws.saturating_add(1);
-        let vertex_cache_index =
-            self.id_mask_vertex_cache_index(pass.raster.vertex_revision, pass.raster.vertices);
+        let vertex_cache_first = self.id_mask_draw_chunk_indices.len() as u32;
+        let mut vertex_count = 0usize;
+        for chunk in pass.raster.chunks {
+            let end = chunk.first_vertex.saturating_add(chunk.vertex_count);
+            let Some(vertices) = pass.raster.vertices.get(chunk.first_vertex..end) else {
+                return Err(api::RenderError::InvalidOperation(
+                    "id-mask GPU raster chunk range is outside vertex data",
+                ));
+            };
+            let vertex_cache_index = self.id_mask_vertex_cache_index(chunk.content_hash, vertices);
+            self.id_mask_draw_chunk_indices.push(vertex_cache_index);
+            vertex_count = vertex_count.saturating_add(chunk.vertex_count);
+        }
+        let vertex_cache_count =
+            self.id_mask_draw_chunk_indices.len().saturating_sub(vertex_cache_first as usize) as u32;
         self.id_mask_draws.push(IdMaskDraw {
             viewport: pass.raster.viewport,
             mask_width: pass.raster.mask_width as u32,
             mask_height: pass.raster.mask_height as u32,
             mask_scale: pass.raster.mask_scale,
-            vertex_cache_index,
-            vertex_count: pass.raster.vertices.len() as u32,
+            vertex_cache_first,
+            vertex_cache_count,
+            vertex_count: vertex_count as u32,
             projection: pass.raster.projection,
             city_styles: pass.city_styles,
             neighborhood_colors: pass.neighborhood_colors,
@@ -2559,7 +2578,6 @@ impl WebGpuRenderer {
         &mut self,
         width: u32,
         height: u32,
-        vertex_bytes_len: usize,
         compositor_uniform_len: usize,
     ) {
         let size_changed = self.id_mask_width != width
@@ -2626,19 +2644,6 @@ impl WebGpuRenderer {
             self.stats.texture_creates = self.stats.texture_creates.saturating_add(6);
             self.stats.id_mask_texture_creates =
                 self.stats.id_mask_texture_creates.saturating_add(6);
-        }
-
-        if ensure_buffer(
-            &self.device,
-            &mut self.id_mask_vertex_buffer,
-            &mut self.id_mask_vertex_capacity,
-            vertex_bytes_len.max(1) as u64,
-            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            "oxide-webgpu-id-mask-raster-vertices",
-        ) {
-            self.id_mask_uploaded_vertex_cache = None;
-            self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
-            self.stats.id_mask_buffer_grows = self.stats.id_mask_buffer_grows.saturating_add(1);
         }
 
         if self.id_mask_raster_uniform_buffer.is_none() {
@@ -2793,6 +2798,7 @@ impl api::Renderer for WebGpuRenderer {
         self.scene3d_draws.clear();
         self.scene3d_overlay_draws.clear();
         self.id_mask_draws.clear();
+        self.id_mask_draw_chunk_indices.clear();
         self.scene3d_clear_color = None;
         self.scene3d_clear_depth = true;
         self.scene3d_active = false;
@@ -2922,10 +2928,10 @@ impl api::Renderer for WebGpuRenderer {
 impl WebGpuRenderer {
     fn id_mask_vertex_cache_index(
         &mut self,
-        revision: u64,
+        content_hash: u64,
         vertices: &[id_mask_compositor::IdMaskRasterVertex],
     ) -> usize {
-        let key = IdMaskVertexCacheKey { revision, len: vertices.len() };
+        let key = IdMaskVertexCacheKey { content_hash, len: vertices.len() };
         if let Some(index) = self.id_mask_vertex_caches.iter().position(|cache| cache.key == key) {
             return index;
         }
@@ -2933,14 +2939,18 @@ impl WebGpuRenderer {
             let cache = &mut self.id_mask_vertex_caches[index];
             cache.key = key;
             write_id_mask_raster_vertex_bytes(vertices, &mut cache.bytes);
-            if self.id_mask_uploaded_vertex_cache == Some(index) {
-                self.id_mask_uploaded_vertex_cache = None;
-            }
+            cache.uploaded = false;
             return index;
         }
         let mut bytes = Vec::new();
         write_id_mask_raster_vertex_bytes(vertices, &mut bytes);
-        self.id_mask_vertex_caches.push(IdMaskVertexCache { key, bytes });
+        self.id_mask_vertex_caches.push(IdMaskVertexCache {
+            key,
+            bytes,
+            buffer: None,
+            buffer_capacity: 0,
+            uploaded: false,
+        });
         self.id_mask_vertex_caches.len() - 1
     }
 
@@ -2948,7 +2958,7 @@ impl WebGpuRenderer {
         for index in 0..self.id_mask_vertex_caches.len() {
             let mut in_use = false;
             for draw in &self.id_mask_draws {
-                if draw.vertex_cache_index == index {
+                if self.id_mask_draw_uses_vertex_cache(draw, index) {
                     in_use = true;
                     break;
                 }
@@ -2958,6 +2968,25 @@ impl WebGpuRenderer {
             }
         }
         None
+    }
+
+    fn id_mask_draw_uses_vertex_cache(&self, draw: &IdMaskDraw, index: usize) -> bool {
+        let start = draw.vertex_cache_first as usize;
+        let end = start.saturating_add(draw.vertex_cache_count as usize);
+        for entry in self.id_mask_draw_chunk_indices.get(start..end).unwrap_or(&[]) {
+            if *entry == index {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn ensure_id_mask_vertex_cache_uploaded(&mut self, index: usize) -> Option<u64> {
+        let device = &self.device;
+        let queue = &self.queue;
+        let stats = &mut self.stats;
+        let cache = self.id_mask_vertex_caches.get_mut(index)?;
+        ensure_id_mask_vertex_cache_uploaded(device, queue, stats, cache)
     }
 
     fn target_uses_backdrop(&self, target: Option<u32>, start: usize, end: usize) -> bool {
@@ -3412,16 +3441,13 @@ impl WebGpuRenderer {
         let mut encoded_buffer_upload_bytes = 0_u64;
         for draw_index in 0..self.id_mask_draws.len() {
             let draw = self.id_mask_draws[draw_index];
-            let Some(vertex_bytes_len) = self
-                .id_mask_vertex_caches
-                .get(draw.vertex_cache_index)
-                .map(|cache| cache.bytes.len())
-            else {
-                continue;
-            };
             let width = draw.mask_width.max(1);
             let height = draw.mask_height.max(1);
-            let vertex_count = draw.vertex_count;
+            let cache_start = draw.vertex_cache_first as usize;
+            let cache_end = cache_start.saturating_add(draw.vertex_cache_count as usize);
+            if draw.vertex_count == 0 || cache_end > self.id_mask_draw_chunk_indices.len() {
+                continue;
+            }
             write_id_mask_raster_uniform_bytes(
                 &mut self.id_mask_raster_uniform_bytes,
                 width,
@@ -3434,7 +3460,15 @@ impl WebGpuRenderer {
             );
             let compositor_uniform_len = self.id_mask_compositor_uniform_bytes.len();
 
-            self.ensure_id_mask_resources(width, height, vertex_bytes_len, compositor_uniform_len);
+            for cache_pos in cache_start..cache_end {
+                let cache_index = self.id_mask_draw_chunk_indices[cache_pos];
+                if let Some(upload_bytes) = self.ensure_id_mask_vertex_cache_uploaded(cache_index) {
+                    encoded_buffer_upload_bytes =
+                        encoded_buffer_upload_bytes.saturating_add(upload_bytes);
+                }
+            }
+
+            self.ensure_id_mask_resources(width, height, compositor_uniform_len);
             let Some(city_view) = self.id_mask_city_view.as_ref() else { continue };
             let Some(neighborhood_view) = self.id_mask_neighborhood_view.as_ref() else {
                 continue;
@@ -3451,7 +3485,6 @@ impl WebGpuRenderer {
             let Some(seam_field_b_view) = self.id_mask_seam_field_b_view.as_ref() else {
                 continue;
             };
-            let Some(vertex_buffer) = self.id_mask_vertex_buffer.as_ref() else { continue };
             let Some(raster_uniform_buffer) = self.id_mask_raster_uniform_buffer.as_ref() else {
                 continue;
             };
@@ -3480,19 +3513,6 @@ impl WebGpuRenderer {
                 continue;
             };
 
-            if self.id_mask_uploaded_vertex_cache != Some(draw.vertex_cache_index) {
-                let Some(vertex_bytes) = self
-                    .id_mask_vertex_caches
-                    .get(draw.vertex_cache_index)
-                    .map(|cache| cache.bytes.as_slice())
-                else {
-                    continue;
-                };
-                self.queue.write_buffer(vertex_buffer, 0, vertex_bytes);
-                encoded_buffer_upload_bytes =
-                    encoded_buffer_upload_bytes.saturating_add(vertex_bytes.len() as u64);
-                self.id_mask_uploaded_vertex_cache = Some(draw.vertex_cache_index);
-            }
             self.queue.write_buffer(raster_uniform_buffer, 0, &self.id_mask_raster_uniform_bytes);
             encoded_buffer_upload_bytes = encoded_buffer_upload_bytes
                 .saturating_add(self.id_mask_raster_uniform_bytes.len() as u64);
@@ -3539,8 +3559,16 @@ impl WebGpuRenderer {
                 });
                 pass.set_pipeline(self.id_mask_raster_pipeline());
                 pass.set_bind_group(0, raster_bind_group, &[]);
-                pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-                pass.draw(0..vertex_count, 0..1);
+                for cache_pos in cache_start..cache_end {
+                    let cache_index = self.id_mask_draw_chunk_indices[cache_pos];
+                    let Some(cache) = self.id_mask_vertex_caches.get(cache_index) else {
+                        continue;
+                    };
+                    let Some(vertex_buffer) = cache.buffer.as_ref() else { continue };
+                    let vertex_count = (cache.bytes.len() / ID_MASK_VERTEX_STRIDE as usize) as u32;
+                    pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                    pass.draw(0..vertex_count, 0..1);
+                }
             }
             encoded_render_passes = encoded_render_passes.saturating_add(1);
             self.stats.id_mask_raster_passes = self.stats.id_mask_raster_passes.saturating_add(1);
@@ -5212,6 +5240,35 @@ fn write_id_mask_raster_vertex_bytes(
         out.extend_from_slice(&vertex.city_id.to_le_bytes());
         out.extend_from_slice(&vertex.neighborhood_id.to_le_bytes());
     }
+}
+
+fn ensure_id_mask_vertex_cache_uploaded(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    stats: &mut WebRendererStats,
+    cache: &mut IdMaskVertexCache,
+) -> Option<u64> {
+    let needed = cache.bytes.len().max(1) as u64;
+    if cache.buffer.is_none() || cache.buffer_capacity < needed {
+        let capacity = needed.next_power_of_two();
+        cache.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("oxide-webgpu-id-mask-raster-chunk-vertices"),
+            size: capacity,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+        cache.buffer_capacity = capacity;
+        cache.uploaded = false;
+        stats.buffer_grows = stats.buffer_grows.saturating_add(1);
+        stats.id_mask_buffer_grows = stats.id_mask_buffer_grows.saturating_add(1);
+    }
+    if cache.uploaded {
+        return Some(0);
+    }
+    let buffer = cache.buffer.as_ref()?;
+    queue.write_buffer(buffer, 0, &cache.bytes);
+    cache.uploaded = true;
+    Some(cache.bytes.len() as u64)
 }
 
 fn write_id_mask_raster_uniform_bytes(

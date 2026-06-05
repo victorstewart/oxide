@@ -793,6 +793,11 @@ fn encode_id_mask_snapshot(
         let t = index as f32 / metal::id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS as f32;
         *color = [0.15 + t * 0.70, 0.20 + (1.0 - t) * 0.50, 0.45 + t * 0.35];
     }
+    let chunks = [metal::id_mask_compositor::IdMaskRasterChunk {
+        content_hash: 1,
+        first_vertex: 0,
+        vertex_count: vertices.len(),
+    }];
     let pass = metal::id_mask_compositor::IdMaskGpuCompositorPass {
         raster: metal::id_mask_compositor::IdMaskGpuRasterPass {
             viewport: api::RectF::new(0.0, 0.0, w_dp, h_dp),
@@ -801,6 +806,7 @@ fn encode_id_mask_snapshot(
             mask_scale: scale,
             vertex_revision: 1,
             vertices: &vertices,
+            chunks: &chunks,
             projection: metal::id_mask_compositor::IdMaskRasterProjection::screen_px(),
         },
         city_styles,
