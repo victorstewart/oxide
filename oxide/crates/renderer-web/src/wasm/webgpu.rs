@@ -3,7 +3,7 @@ use super::{
     document, index_slice, normalized_index_mode, resolve_index, sanitize_scale, source_rect,
     vertex_slice,
 };
-use crate::WebRendererStats;
+use crate::{NormalizedIndexMode, WebRendererStats};
 use crate::{id_mask_compositor, neon_marker, scene3d};
 use js_sys::Reflect;
 use oxide_renderer_api as api;
@@ -2129,16 +2129,16 @@ impl WebGpuRenderer {
             let Some(mode) = normalized_index_mode(indices, vb.offset, vb.len) else {
                 return;
             };
-            for tri in indices.chunks_exact(3) {
-                for index in tri {
-                    if let Some(vertex) =
-                        resolve_index(*index, mode).and_then(|offset| vertices.get(offset))
-                    {
-                        self.scratch_indices.push(self.scratch_vertices.len() as u32);
-                        self.scratch_vertices
-                            .push(gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, color));
-                    }
-                }
+            if !append_indexed_gpu_vertices(
+                &mut self.scratch_vertices,
+                &mut self.scratch_indices,
+                vertices,
+                indices,
+                mode,
+                color,
+            ) {
+                self.clear_scratch_draw();
+                return;
             }
         } else if vertices.len() == 4 {
             self.scratch_vertices.extend(
@@ -2223,14 +2223,16 @@ impl WebGpuRenderer {
             let Some(mode) = normalized_index_mode(indices, vb.offset, vb.len) else {
                 return;
             };
-            for index in indices {
-                let Some(vertex) = resolve_index(*index, mode).and_then(|idx| vertices.get(idx))
-                else {
-                    return;
-                };
-                self.scratch_indices.push(self.scratch_vertices.len() as u32);
-                self.scratch_vertices
-                    .push(gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, color));
+            if !append_indexed_gpu_vertices(
+                &mut self.scratch_vertices,
+                &mut self.scratch_indices,
+                vertices,
+                indices,
+                mode,
+                color,
+            ) {
+                self.clear_scratch_draw();
+                return;
             }
         } else {
             append_gpu_vertices(
@@ -2264,12 +2266,15 @@ impl WebGpuRenderer {
         };
         self.clear_scratch_draw();
         if !indices.is_empty() {
-            for index in indices {
-                if let Some(vertex) = vertices.get(*index as usize) {
-                    self.scratch_indices.push(self.scratch_vertices.len() as u32);
-                    self.scratch_vertices
-                        .push(gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, run.color));
-                }
+            if !append_local_indexed_gpu_vertices(
+                &mut self.scratch_vertices,
+                &mut self.scratch_indices,
+                vertices,
+                indices,
+                run.color,
+            ) {
+                self.clear_scratch_draw();
+                return;
             }
         } else {
             append_gpu_vertices(
@@ -5168,6 +5173,56 @@ fn append_gpu_vertices(
     } else {
         idx.extend(base..out.len() as u32);
     }
+}
+
+fn append_indexed_gpu_vertices(
+    out: &mut Vec<GpuVertex>,
+    idx: &mut Vec<u32>,
+    vertices: &[api::Vertex],
+    indices: &[u16],
+    mode: NormalizedIndexMode,
+    color: api::Color,
+) -> bool {
+    for index in indices {
+        let Some(local_index) = resolve_index(*index, mode) else {
+            return false;
+        };
+        if local_index >= vertices.len() {
+            return false;
+        }
+    }
+
+    let base = out.len() as u32;
+    out.extend(
+        vertices.iter().map(|vertex| gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, color)),
+    );
+    for index in indices {
+        if let Some(local_index) = resolve_index(*index, mode) {
+            idx.push(base.saturating_add(local_index as u32));
+        }
+    }
+    true
+}
+
+fn append_local_indexed_gpu_vertices(
+    out: &mut Vec<GpuVertex>,
+    idx: &mut Vec<u32>,
+    vertices: &[api::Vertex],
+    indices: &[u16],
+    color: api::Color,
+) -> bool {
+    for index in indices {
+        if *index as usize >= vertices.len() {
+            return false;
+        }
+    }
+
+    let base = out.len() as u32;
+    out.extend(
+        vertices.iter().map(|vertex| gpu_vertex(vertex.x, vertex.y, vertex.u, vertex.v, color)),
+    );
+    idx.extend(indices.iter().map(|index| base.saturating_add(*index as u32)));
+    true
 }
 
 fn skip_layer_body(list: &api::DrawList, index: &mut usize) -> u32 {
