@@ -1077,10 +1077,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     assert!(web_report_number(&report["gpu_stage_attribution"], "collected_passes") > 0.0);
     assert_eq!(report["browser_trace"]["status"].as_str(), Some("collected"));
     assert_eq!(report["browser_trace"]["capture_phase"].as_str(), Some("benchmark-report"));
-    assert_eq!(
-        report["browser_trace"]["timing_source"].as_str(),
-        Some("untraced-baseline-report"),
-    );
+    assert_eq!(report["browser_trace"]["timing_source"].as_str(), Some("untraced-baseline-report"),);
     assert!(web_report_number(&report["browser_trace"], "events") > 0.0);
     assert!(web_report_number(&report["browser_trace"], "gpu_related_events") > 0.0);
     assert!(web_report_number(&report["browser_trace"], "duration_us") > 0.0);
@@ -1089,10 +1086,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         .as_array()
         .expect("browser trace sample categories")
         .is_empty());
-    assert_eq!(
-        report["browser_trace"]["benchmark_trace_mark_status"].as_str(),
-        Some("collected"),
-    );
+    assert_eq!(report["browser_trace"]["benchmark_trace_mark_status"].as_str(), Some("collected"),);
     assert!(web_report_number(&report["browser_trace"], "benchmark_trace_mark_count") > 0.0);
     assert!(report["browser_trace"]["benchmark_trace_mark_labels"].as_array().is_some());
     assert!(report["browser_trace"]["benchmark_trace_marks"].as_array().is_some());
@@ -1117,15 +1111,15 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "clip_state_cache_ab",
     ];
     let benchmark_marks = &report["benchmark_marks"];
-    assert_eq!(
-        benchmark_marks["id"].as_str(),
-        Some("web.wasm.webgpu.benchmark_mark_coverage"),
-    );
+    assert_eq!(benchmark_marks["id"].as_str(), Some("web.wasm.webgpu.benchmark_mark_coverage"),);
     assert_eq!(
         web_report_number(benchmark_marks, "expected_count"),
         expected_benchmark_marks.len() as f64,
     );
-    assert!(web_report_number(benchmark_marks, "page_mark_count") >= expected_benchmark_marks.len() as f64);
+    assert!(
+        web_report_number(benchmark_marks, "page_mark_count")
+            >= expected_benchmark_marks.len() as f64
+    );
     let page_labels: Vec<&str> = benchmark_marks["page_labels"]
         .as_array()
         .expect("benchmark page labels")
@@ -1176,7 +1170,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         web_report_number(&report["browser_trace"], "benchmark_trace_interval_count"),
         expected_benchmark_marks.len() as f64,
     );
-    let trace_interval_labels: Vec<&str> = report["browser_trace"]["benchmark_trace_interval_labels"]
+    let trace_interval_labels: Vec<&str> = report["browser_trace"]
+        ["benchmark_trace_interval_labels"]
         .as_array()
         .expect("browser trace benchmark interval labels")
         .iter()
@@ -1314,9 +1309,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     for stage in ["draw", "scene3d", "id_mask_field_jump", "present"] {
         assert!(gpu_timestamp_stages.contains(&stage), "missing gpu timestamp stage {stage}");
     }
-    let gpu_timestamp_rows = gpu_timestamp_stage_breakdown["row_details"]
-        .as_array()
-        .expect("gpu timestamp row details");
+    let gpu_timestamp_rows =
+        gpu_timestamp_stage_breakdown["row_details"].as_array().expect("gpu timestamp row details");
     let frame_loop_timestamp_row = gpu_timestamp_rows
         .iter()
         .find(|row| row["id"].as_str() == Some("web.wasm.webgpu.frame_loop"))
@@ -1327,7 +1321,10 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     );
     assert_eq!(
         web_report_number(frame_loop_timestamp_row, "family_timestamp_ns"),
-        web_report_number(web_report_case(&report, "web.wasm.webgpu.frame_loop"), "gpu_timestamp_total_ns"),
+        web_report_number(
+            web_report_case(&report, "web.wasm.webgpu.frame_loop"),
+            "gpu_timestamp_total_ns"
+        ),
     );
 
     let warm_resource_churn = &report["warm_resource_churn"];
@@ -1354,10 +1351,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         .expect("warm resource churn row details")
         .iter()
         .collect();
-    assert_eq!(
-        web_report_number(warm_resource_churn, "row_detail_count"),
-        warm_rows.len() as f64,
-    );
+    assert_eq!(web_report_number(warm_resource_churn, "row_detail_count"), warm_rows.len() as f64,);
     assert_eq!(warm_row_details.len(), warm_rows.len());
     for id in [
         "web.wasm.webgpu.frame_loop",
@@ -1477,10 +1471,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     assert!(web_report_number(wasm_allocation_audit, "total_wasm_alloc_count") > 0.0);
     assert!(web_report_number(wasm_allocation_audit, "total_wasm_alloc_bytes") > 0.0);
     assert_eq!(web_report_number(wasm_allocation_audit, "total_wasm_realloc_count"), 0.0);
-    assert_eq!(
-        web_report_number(wasm_allocation_audit, "total_wasm_realloc_grow_bytes"),
-        0.0,
-    );
+    assert_eq!(web_report_number(wasm_allocation_audit, "total_wasm_realloc_grow_bytes"), 0.0,);
     assert!(web_report_number(wasm_allocation_audit, "budget_wasm_allocs_per_frame") <= 7.0);
     assert!(web_report_number(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame") <= 144.0);
     assert!(
@@ -1497,9 +1488,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         .iter()
         .map(|value| value.as_str().expect("wasm allocation row id"))
         .collect();
-    let wasm_allocation_details = wasm_allocation_audit["row_details"]
-        .as_array()
-        .expect("wasm allocation row details");
+    let wasm_allocation_details =
+        wasm_allocation_audit["row_details"].as_array().expect("wasm allocation row details");
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.frame_loop"));
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.id_mask_compositor.current"));
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.glyph_run.current"));
@@ -1526,65 +1516,56 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         );
         assert!(
             web_report_number(detail, "wasm_alloc_bytes_per_frame")
-            <= web_report_number(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame")
-       );
-   }
+                <= web_report_number(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame")
+        );
+    }
 
-   let frame_loop = web_report_case(&report, "web.wasm.webgpu.frame_loop");
-   let wasm_allocation_invariance = &report["wasm_allocation_invariance"];
-   assert_eq!(
-      wasm_allocation_invariance["id"].as_str(),
-      Some("web.wasm.webgpu.wasm_allocation_invariance.current_rows"),
-   );
-   assert_eq!(
-      wasm_allocation_invariance["status"].as_str(),
-      Some("shared-submit-boundary-profile"),
-   );
-   assert_eq!(
-      wasm_allocation_invariance["reference_row"].as_str(),
-      Some("web.wasm.webgpu.frame_loop"),
-   );
-   assert_eq!(
-      web_report_number(wasm_allocation_invariance, "checked_count"),
-      web_report_number(wasm_allocation_audit, "checked_count"),
-   );
-   assert_eq!(
-      web_report_number(wasm_allocation_invariance, "unique_signature_count"),
-      1.0,
-   );
-   assert_eq!(
-      web_report_number(wasm_allocation_invariance, "shared_wasm_alloc_count"),
-      web_report_number(frame_loop, "wasm_alloc_count"),
-   );
-   assert_eq!(
-      web_report_number(wasm_allocation_invariance, "shared_wasm_alloc_bytes"),
-      web_report_number(frame_loop, "wasm_alloc_bytes"),
-   );
-   assert_eq!(
-      web_report_number(wasm_allocation_invariance, "shared_wasm_realloc_count"),
-      0.0,
-   );
-   assert_eq!(
-      web_report_number(wasm_allocation_invariance, "shared_wasm_realloc_grow_bytes"),
-      0.0,
-   );
-   assert_eq!(
-      wasm_allocation_invariance["signature_rows"]
-         .as_array()
-         .expect("wasm allocation invariance signature rows")
-         .len(),
-      1,
-   );
+    let frame_loop = web_report_case(&report, "web.wasm.webgpu.frame_loop");
+    let wasm_allocation_invariance = &report["wasm_allocation_invariance"];
+    assert_eq!(
+        wasm_allocation_invariance["id"].as_str(),
+        Some("web.wasm.webgpu.wasm_allocation_invariance.current_rows"),
+    );
+    assert_eq!(
+        wasm_allocation_invariance["status"].as_str(),
+        Some("shared-submit-boundary-profile"),
+    );
+    assert_eq!(
+        wasm_allocation_invariance["reference_row"].as_str(),
+        Some("web.wasm.webgpu.frame_loop"),
+    );
+    assert_eq!(
+        web_report_number(wasm_allocation_invariance, "checked_count"),
+        web_report_number(wasm_allocation_audit, "checked_count"),
+    );
+    assert_eq!(web_report_number(wasm_allocation_invariance, "unique_signature_count"), 1.0,);
+    assert_eq!(
+        web_report_number(wasm_allocation_invariance, "shared_wasm_alloc_count"),
+        web_report_number(frame_loop, "wasm_alloc_count"),
+    );
+    assert_eq!(
+        web_report_number(wasm_allocation_invariance, "shared_wasm_alloc_bytes"),
+        web_report_number(frame_loop, "wasm_alloc_bytes"),
+    );
+    assert_eq!(web_report_number(wasm_allocation_invariance, "shared_wasm_realloc_count"), 0.0,);
+    assert_eq!(
+        web_report_number(wasm_allocation_invariance, "shared_wasm_realloc_grow_bytes"),
+        0.0,
+    );
+    assert_eq!(
+        wasm_allocation_invariance["signature_rows"]
+            .as_array()
+            .expect("wasm allocation invariance signature rows")
+            .len(),
+        1,
+    );
 
-   let frame_stage_allocations = &report["frame_loop_wasm_allocation_stages"];
+    let frame_stage_allocations = &report["frame_loop_wasm_allocation_stages"];
     assert_eq!(
         frame_stage_allocations["id"].as_str(),
         Some("web.wasm.webgpu.frame_loop_wasm_allocation_stages"),
     );
-    assert_eq!(
-        frame_stage_allocations["row_id"].as_str(),
-        Some("web.wasm.webgpu.frame_loop"),
-    );
+    assert_eq!(frame_stage_allocations["row_id"].as_str(), Some("web.wasm.webgpu.frame_loop"),);
     assert_eq!(web_report_number(frame_stage_allocations, "stage_count"), 11.0);
     assert_eq!(
         web_report_number(frame_stage_allocations, "total_stage_wasm_alloc_count"),
@@ -1594,10 +1575,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         web_report_number(frame_stage_allocations, "total_stage_wasm_alloc_bytes"),
         web_report_number(frame_loop, "wasm_alloc_bytes"),
     );
-    assert_eq!(
-        web_report_number(frame_stage_allocations, "total_stage_wasm_realloc_count"),
-        0.0,
-    );
+    assert_eq!(web_report_number(frame_stage_allocations, "total_stage_wasm_realloc_count"), 0.0,);
     assert_eq!(
         web_report_number(frame_stage_allocations, "total_stage_wasm_realloc_grow_bytes"),
         0.0,
@@ -1605,10 +1583,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     let stage_details = frame_stage_allocations["stages"]
         .as_array()
         .expect("frame-loop wasm allocation stage details");
-    let stage_names: Vec<&str> = stage_details
-        .iter()
-        .map(|stage| stage["stage"].as_str().expect("stage name"))
-        .collect();
+    let stage_names: Vec<&str> =
+        stage_details.iter().map(|stage| stage["stage"].as_str().expect("stage name")).collect();
     for name in [
         "canvas_resize",
         "frame_timing",
@@ -1636,10 +1612,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         submit_stage_allocations["id"].as_str(),
         Some("web.wasm.webgpu.frame_loop_wasm_submit_allocation_stages"),
     );
-    assert_eq!(
-        submit_stage_allocations["row_id"].as_str(),
-        Some("web.wasm.webgpu.frame_loop"),
-    );
+    assert_eq!(submit_stage_allocations["row_id"].as_str(), Some("web.wasm.webgpu.frame_loop"),);
     assert_eq!(web_report_number(submit_stage_allocations, "stage_count"), 9.0);
     assert_eq!(
         web_report_number(submit_stage_allocations, "total_stage_wasm_alloc_count"),
@@ -1695,109 +1668,310 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "present",
         "timestamp_map",
     ] {
-        assert!(submit_stage_names.contains(&name), "missing frame-loop submit allocation stage {name}");
+        assert!(
+            submit_stage_names.contains(&name),
+            "missing frame-loop submit allocation stage {name}"
+        );
     }
 
     let backend_path_coverage = &report["backend_path_coverage"];
-    assert_eq!(
-        backend_path_coverage["id"].as_str(),
-        Some("web.wasm.webgpu.backend_path_coverage"),
-    );
+    assert_eq!(backend_path_coverage["id"].as_str(), Some("web.wasm.webgpu.backend_path_coverage"),);
     let expected_backend_paths: &[(&str, &[&str], &[&str])] = &[
         (
             "frame_loop",
             &["web.wasm.webgpu.frame_loop"],
-            &["draws", "draw_items", "draw_passes", "command_buffers", "buffer_upload_bytes", "gpu_timestamp_passes"],
+            &[
+                "draws",
+                "draw_items",
+                "draw_passes",
+                "command_buffers",
+                "buffer_upload_bytes",
+                "gpu_timestamp_passes",
+            ],
         ),
         (
             "id_mask_compositor",
-            &["web.wasm.webgpu.id_mask_compositor.current", "web.wasm.webgpu.id_mask_compositor.legacy_upload"],
-            &["id_mask_draws", "id_mask_raster_passes", "id_mask_field_seed_passes", "id_mask_field_jump_passes", "id_mask_compositor_passes", "buffer_upload_bytes", "vertices", "gpu_timestamp_passes"],
+            &[
+                "web.wasm.webgpu.id_mask_compositor.current",
+                "web.wasm.webgpu.id_mask_compositor.legacy_upload",
+            ],
+            &[
+                "id_mask_draws",
+                "id_mask_raster_passes",
+                "id_mask_field_seed_passes",
+                "id_mask_field_jump_passes",
+                "id_mask_compositor_passes",
+                "buffer_upload_bytes",
+                "vertices",
+                "gpu_timestamp_passes",
+            ],
         ),
         (
             "glyph_atlas_upload",
-            &["web.wasm.webgpu.glyph_atlas_upload.current_dirty", "web.wasm.webgpu.glyph_atlas_upload.legacy_full"],
+            &[
+                "web.wasm.webgpu.glyph_atlas_upload.current_dirty",
+                "web.wasm.webgpu.glyph_atlas_upload.legacy_full",
+            ],
             &["glyph_quads", "texture_upload_bytes", "buffer_upload_bytes", "gpu_timestamp_passes"],
         ),
         (
             "image_upload",
-            &["web.wasm.webgpu.image_upload.current_dirty", "web.wasm.webgpu.image_upload.legacy_full"],
+            &[
+                "web.wasm.webgpu.image_upload.current_dirty",
+                "web.wasm.webgpu.image_upload.legacy_full",
+            ],
             &["image_draws", "texture_upload_bytes", "buffer_upload_bytes", "gpu_timestamp_passes"],
         ),
         (
             "upload_scratch",
-            &["web.wasm.webgpu.upload_scratch.current_reuse", "web.wasm.webgpu.upload_scratch.legacy_temp_alloc"],
-            &["image_upload_temp_allocs", "image_upload_temp_bytes", "image_upload_scratch_bytes", "texture_upload_bytes", "gpu_timestamp_passes"],
+            &[
+                "web.wasm.webgpu.upload_scratch.current_reuse",
+                "web.wasm.webgpu.upload_scratch.legacy_temp_alloc",
+            ],
+            &[
+                "image_upload_temp_allocs",
+                "image_upload_temp_bytes",
+                "image_upload_scratch_bytes",
+                "texture_upload_bytes",
+                "gpu_timestamp_passes",
+            ],
         ),
         (
             "effect_uniform",
-            &["web.wasm.webgpu.effect_uniform.current_batched", "web.wasm.webgpu.effect_uniform.legacy_write_each"],
-            &["backdrop_draws", "visual_effect_draws", "effect_uniform_writes", "effect_uniform_slots", "texture_copies", "render_passes", "gpu_timestamp_total_ns"],
+            &[
+                "web.wasm.webgpu.effect_uniform.current_batched",
+                "web.wasm.webgpu.effect_uniform.legacy_write_each",
+            ],
+            &[
+                "backdrop_draws",
+                "visual_effect_draws",
+                "effect_uniform_writes",
+                "effect_uniform_slots",
+                "texture_copies",
+                "render_passes",
+                "gpu_timestamp_total_ns",
+            ],
         ),
         (
             "backdrop_batch",
-            &["web.wasm.webgpu.backdrop_batch.current_coalesced", "web.wasm.webgpu.backdrop_batch.legacy_per_backdrop_copy"],
-            &["backdrop_draws", "effect_uniform_slots", "texture_copies", "render_passes", "gpu_timestamp_passes"],
+            &[
+                "web.wasm.webgpu.backdrop_batch.current_coalesced",
+                "web.wasm.webgpu.backdrop_batch.legacy_per_backdrop_copy",
+            ],
+            &[
+                "backdrop_draws",
+                "effect_uniform_slots",
+                "texture_copies",
+                "render_passes",
+                "gpu_timestamp_passes",
+            ],
         ),
         (
             "scene3d_mesh_reuse",
             &["web.wasm.webgpu.scene3d.reused_mesh", "web.wasm.webgpu.scene3d.recreate_mesh"],
-            &["scene3d_draws", "mesh3d_creates", "buffer_grows", "cpu_scratch_grows", "gpu_timestamp_passes"],
+            &[
+                "scene3d_draws",
+                "mesh3d_creates",
+                "buffer_grows",
+                "cpu_scratch_grows",
+                "gpu_timestamp_passes",
+            ],
         ),
         (
             "scene3d_stress_mesh_reuse",
-            &["web.wasm.webgpu.scene3d.stress_reused_mesh", "web.wasm.webgpu.scene3d.stress_recreate_mesh"],
-            &["scene3d_draws", "mesh3d_creates", "buffer_grows", "cpu_scratch_grows", "gpu_timestamp_passes"],
+            &[
+                "web.wasm.webgpu.scene3d.stress_reused_mesh",
+                "web.wasm.webgpu.scene3d.stress_recreate_mesh",
+            ],
+            &[
+                "scene3d_draws",
+                "mesh3d_creates",
+                "buffer_grows",
+                "cpu_scratch_grows",
+                "gpu_timestamp_passes",
+            ],
         ),
         (
             "mixed_text_image_effects",
-            &["web.wasm.webgpu.mixed_text_image_effects", "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched"],
-            &["glyph_quads", "image_draws", "image_tiles", "backdrop_draws", "visual_effect_draws", "spinner_draws", "layer_draws", "damage_rects", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "effect_uniform_writes", "texture_copies", "render_passes", "gpu_timestamp_passes"],
+            &[
+                "web.wasm.webgpu.mixed_text_image_effects",
+                "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched",
+            ],
+            &[
+                "glyph_quads",
+                "image_draws",
+                "image_tiles",
+                "backdrop_draws",
+                "visual_effect_draws",
+                "spinner_draws",
+                "layer_draws",
+                "damage_rects",
+                "draw_pipeline_binds",
+                "draw_bind_group_binds",
+                "draw_scissor_sets",
+                "effect_uniform_writes",
+                "texture_copies",
+                "render_passes",
+                "gpu_timestamp_passes",
+            ],
         ),
         (
             "layer_damage_effects",
-            &["web.wasm.webgpu.layer_damage_effects", "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched"],
-            &["glyph_quads", "image_draws", "image_tiles", "layer_draws", "damage_rects", "clip_depth_peak", "backdrop_draws", "visual_effect_draws", "spinner_draws", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "effect_uniform_writes", "texture_copies", "render_passes", "gpu_timestamp_passes"],
+            &[
+                "web.wasm.webgpu.layer_damage_effects",
+                "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched",
+            ],
+            &[
+                "glyph_quads",
+                "image_draws",
+                "image_tiles",
+                "layer_draws",
+                "damage_rects",
+                "clip_depth_peak",
+                "backdrop_draws",
+                "visual_effect_draws",
+                "spinner_draws",
+                "draw_pipeline_binds",
+                "draw_bind_group_binds",
+                "draw_scissor_sets",
+                "effect_uniform_writes",
+                "texture_copies",
+                "render_passes",
+                "gpu_timestamp_passes",
+            ],
         ),
         (
             "clean_layer_reuse",
-            &["web.wasm.webgpu.clean_layer.clean_reuse", "web.wasm.webgpu.clean_layer.dirty_rerender"],
-            &["layer_draws", "layer_cache_hits", "layer_cache_misses", "layer_cache_skipped_draws", "layer_passes", "draw_items", "draw_passes", "gpu_timestamp_passes"],
+            &[
+                "web.wasm.webgpu.clean_layer.clean_reuse",
+                "web.wasm.webgpu.clean_layer.dirty_rerender",
+            ],
+            &[
+                "layer_draws",
+                "layer_cache_hits",
+                "layer_cache_misses",
+                "layer_cache_skipped_draws",
+                "layer_passes",
+                "draw_items",
+                "draw_passes",
+                "gpu_timestamp_passes",
+            ],
         ),
         (
             "command_family_matrix",
-            &["web.wasm.webgpu.command_family_matrix", "web.wasm.webgpu.command_family_matrix.legacy_rebind"],
-            &["image_mesh_draws", "nine_slice_draws", "sdf_glyph_quads", "camera_bg_draws", "expected_camera_bg", "draw_items", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
+            &[
+                "web.wasm.webgpu.command_family_matrix",
+                "web.wasm.webgpu.command_family_matrix.legacy_rebind",
+            ],
+            &[
+                "image_mesh_draws",
+                "nine_slice_draws",
+                "sdf_glyph_quads",
+                "camera_bg_draws",
+                "expected_camera_bg",
+                "draw_items",
+                "draw_pipeline_binds",
+                "draw_bind_group_binds",
+                "draw_scissor_sets",
+                "gpu_timestamp_passes",
+            ],
         ),
         (
             "glyph_run",
             &["web.wasm.webgpu.glyph_run.current", "web.wasm.webgpu.glyph_run.legacy_rebind"],
-            &["expected_glyph_runs", "expected_glyph_quads", "expected_sdf_glyph_quads", "expected_draw_items", "draw_items", "glyph_quads", "sdf_glyph_quads", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "render_passes", "gpu_timestamp_passes"],
+            &[
+                "expected_glyph_runs",
+                "expected_glyph_quads",
+                "expected_sdf_glyph_quads",
+                "expected_draw_items",
+                "draw_items",
+                "glyph_quads",
+                "sdf_glyph_quads",
+                "draw_pipeline_binds",
+                "draw_bind_group_binds",
+                "draw_scissor_sets",
+                "render_passes",
+                "gpu_timestamp_passes",
+            ],
         ),
         (
             "neon_marker",
             &["web.wasm.webgpu.neon_marker.current", "web.wasm.webgpu.neon_marker.legacy_rebind"],
-            &["expected_markers", "expected_draw_items", "draw_items", "solid_tris", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
+            &[
+                "expected_markers",
+                "expected_draw_items",
+                "draw_items",
+                "solid_tris",
+                "draw_pipeline_binds",
+                "draw_bind_group_binds",
+                "draw_scissor_sets",
+                "gpu_timestamp_passes",
+            ],
         ),
         (
             "direct_surface",
-            &["web.wasm.webgpu.direct_surface.current", "web.wasm.webgpu.direct_surface.legacy_scene_present"],
-            &["expected_draw_items", "expected_image_draws", "draw_items", "image_draws", "render_passes", "draw_passes", "clear_passes", "present_passes", "texture_copies", "gpu_timestamp_passes"],
+            &[
+                "web.wasm.webgpu.direct_surface.current",
+                "web.wasm.webgpu.direct_surface.legacy_scene_present",
+            ],
+            &[
+                "expected_draw_items",
+                "expected_image_draws",
+                "draw_items",
+                "image_draws",
+                "render_passes",
+                "draw_passes",
+                "clear_passes",
+                "present_passes",
+                "texture_copies",
+                "gpu_timestamp_passes",
+            ],
         ),
         (
             "draw_item_coalescing",
-            &["web.wasm.webgpu.draw_item_coalescing.current", "web.wasm.webgpu.draw_item_coalescing.legacy_uncoalesced"],
-            &["expected_source_draw_items", "expected_current_draw_items", "draw_items", "draw_items_coalesced", "draws", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
+            &[
+                "web.wasm.webgpu.draw_item_coalescing.current",
+                "web.wasm.webgpu.draw_item_coalescing.legacy_uncoalesced",
+            ],
+            &[
+                "expected_source_draw_items",
+                "expected_current_draw_items",
+                "draw_items",
+                "draw_items_coalesced",
+                "draws",
+                "draw_pipeline_binds",
+                "draw_bind_group_binds",
+                "draw_scissor_sets",
+                "gpu_timestamp_passes",
+            ],
         ),
         (
             "draw_state_cache",
-            &["web.wasm.webgpu.draw_state_cache.current", "web.wasm.webgpu.draw_state_cache.legacy_rebind"],
-            &["draw_items", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
+            &[
+                "web.wasm.webgpu.draw_state_cache.current",
+                "web.wasm.webgpu.draw_state_cache.legacy_rebind",
+            ],
+            &[
+                "draw_items",
+                "draw_pipeline_binds",
+                "draw_bind_group_binds",
+                "draw_scissor_sets",
+                "gpu_timestamp_passes",
+            ],
         ),
         (
             "clip_state_cache",
-            &["web.wasm.webgpu.clip_state_cache.current", "web.wasm.webgpu.clip_state_cache.legacy_rebind"],
-            &["clip_depth_peak", "draw_scissor_sets", "draw_pipeline_binds", "draw_bind_group_binds", "gpu_timestamp_passes"],
+            &[
+                "web.wasm.webgpu.clip_state_cache.current",
+                "web.wasm.webgpu.clip_state_cache.legacy_rebind",
+            ],
+            &[
+                "clip_depth_peak",
+                "draw_scissor_sets",
+                "draw_pipeline_binds",
+                "draw_bind_group_binds",
+                "gpu_timestamp_passes",
+            ],
         ),
     ];
     assert_eq!(
@@ -1809,9 +1983,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         expected_backend_paths.len() as f64,
     );
     assert_eq!(web_report_number(backend_path_coverage, "missing_path_count"), 0.0);
-    let backend_paths = backend_path_coverage["paths"]
-        .as_array()
-        .expect("backend path coverage paths");
+    let backend_paths =
+        backend_path_coverage["paths"].as_array().expect("backend path coverage paths");
     assert_eq!(backend_paths.len(), expected_backend_paths.len());
     for (path_id, row_ids, counters) in expected_backend_paths {
         let path = backend_paths
@@ -1822,10 +1995,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         assert_eq!(web_report_number(path, "row_count"), row_ids.len() as f64);
         assert_eq!(web_report_number(path, "counter_count"), counters.len() as f64);
         assert!(path["missing_rows"].as_array().expect("backend missing rows").is_empty());
-        assert!(path["missing_counters"]
-            .as_array()
-            .expect("backend missing counters")
-            .is_empty());
+        assert!(path["missing_counters"].as_array().expect("backend missing counters").is_empty());
         let detail_rows = path["row_details"].as_array().expect("backend row details");
         assert_eq!(detail_rows.len(), row_ids.len());
         for row_id in *row_ids {
@@ -1873,8 +2043,10 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     let scene3d_stress_recreate =
         web_report_case(&report, "web.wasm.webgpu.scene3d.stress_recreate_mesh");
     let mixed = web_report_case(&report, "web.wasm.webgpu.mixed_text_image_effects");
-    let mixed_legacy =
-        web_report_case(&report, "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched");
+    let mixed_legacy = web_report_case(
+        &report,
+        "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched",
+    );
     let layer_effects = web_report_case(&report, "web.wasm.webgpu.layer_damage_effects");
     let layer_effects_legacy =
         web_report_case(&report, "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched");
@@ -1886,8 +2058,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     let glyph_run_current = web_report_case(&report, "web.wasm.webgpu.glyph_run.current");
     let glyph_run_legacy = web_report_case(&report, "web.wasm.webgpu.glyph_run.legacy_rebind");
     let neon_marker_current = web_report_case(&report, "web.wasm.webgpu.neon_marker.current");
-    let neon_marker_legacy =
-        web_report_case(&report, "web.wasm.webgpu.neon_marker.legacy_rebind");
+    let neon_marker_legacy = web_report_case(&report, "web.wasm.webgpu.neon_marker.legacy_rebind");
     let direct_surface_current = web_report_case(&report, "web.wasm.webgpu.direct_surface.current");
     let direct_surface_legacy =
         web_report_case(&report, "web.wasm.webgpu.direct_surface.legacy_scene_present");
@@ -2037,12 +2208,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         web_report_number(effect_legacy, "gpu_timestamp_passes"),
         web_report_number(effect_legacy, "render_passes"),
     );
-    assert!(
-        web_report_number(effect_current, "gpu_timestamp_total_ns") >= 0.0
-    );
-    assert!(
-        web_report_number(effect_legacy, "gpu_timestamp_total_ns") >= 0.0
-    );
+    assert!(web_report_number(effect_current, "gpu_timestamp_total_ns") >= 0.0);
+    assert!(web_report_number(effect_legacy, "gpu_timestamp_total_ns") >= 0.0);
     assert!(
         web_report_number(backdrop_batch_current, "backdrop_draws")
             >= web_report_number(backdrop_batch_current, "expected_backdrops")
@@ -2104,9 +2271,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         web_report_number(mixed, "image_draws"),
         web_report_number(mixed_legacy, "image_draws"),
     );
-    assert!(
-        web_report_number(mixed, "image_draws") >= web_report_number(mixed, "image_tiles")
-    );
+    assert!(web_report_number(mixed, "image_draws") >= web_report_number(mixed, "image_tiles"));
     assert!(
         web_report_number(mixed_legacy, "image_draws")
             >= web_report_number(mixed_legacy, "image_tiles")
@@ -2285,9 +2450,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         web_report_number(&report["layer_effects_summary"], "legacy_p50_ms"),
         web_report_number(layer_effects_legacy, "p50_ms"),
     );
-    assert!(
-        web_report_number(&report["layer_effects_summary"], "legacy_over_current") > 1.0
-    );
+    assert!(web_report_number(&report["layer_effects_summary"], "legacy_over_current") > 1.0);
     assert_eq!(
         web_report_number(&report["layer_effects_summary"], "current_draw_pipeline_binds"),
         web_report_number(layer_effects, "draw_pipeline_binds"),
@@ -2308,8 +2471,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     assert_eq!(web_report_number(dirty_layer, "layer_cache_skipped_draws"), 0.0);
     assert_eq!(web_report_number(dirty_layer, "layer_passes"), 1.0);
     assert!(
-        web_report_number(clean_layer, "draw_items")
-            < web_report_number(dirty_layer, "draw_items")
+        web_report_number(clean_layer, "draw_items") < web_report_number(dirty_layer, "draw_items")
     );
     assert!(
         web_report_number(clean_layer, "render_passes")
@@ -2620,14 +2782,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         web_report_number(draw_item_coalescing_legacy, "expected_source_draw_items"),
         1024.0,
     );
-    assert_eq!(
-        web_report_number(draw_item_coalescing_current, "expected_current_draw_items"),
-        1.0,
-    );
-    assert_eq!(
-        web_report_number(draw_item_coalescing_legacy, "expected_current_draw_items"),
-        1.0,
-    );
+    assert_eq!(web_report_number(draw_item_coalescing_current, "expected_current_draw_items"), 1.0,);
+    assert_eq!(web_report_number(draw_item_coalescing_legacy, "expected_current_draw_items"), 1.0,);
     assert_eq!(
         web_report_number(draw_item_coalescing_current, "draw_items"),
         web_report_number(draw_item_coalescing_current, "expected_current_draw_items"),
@@ -2641,10 +2797,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         web_report_number(draw_item_coalescing_current, "expected_source_draw_items")
             - web_report_number(draw_item_coalescing_current, "expected_current_draw_items"),
     );
-    assert_eq!(
-        web_report_number(draw_item_coalescing_legacy, "draw_items_coalesced"),
-        0.0,
-    );
+    assert_eq!(web_report_number(draw_item_coalescing_legacy, "draw_items_coalesced"), 0.0,);
     assert_eq!(
         web_report_number(draw_item_coalescing_current, "draws"),
         web_report_number(draw_item_coalescing_current, "draw_items"),
@@ -2831,6 +2984,14 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         Some("web.wasm.webgpu.upload_scratch.current_reuse_vs_legacy_temp_alloc"),
     );
     assert!(web_report_number(upload_scratch, "legacy_over_current") > 1.0);
+    assert_eq!(
+        web_report_number(upload_scratch, "current_p50_ms"),
+        web_report_number(upload_scratch_current, "p50_ms"),
+    );
+    assert_eq!(
+        web_report_number(upload_scratch, "legacy_p50_ms"),
+        web_report_number(upload_scratch_legacy, "p50_ms"),
+    );
     assert_eq!(web_report_number(upload_scratch, "current_temp_allocs"), 0.0);
     assert!(web_report_number(upload_scratch, "legacy_temp_allocs") > 0.0);
     assert_eq!(web_report_number(upload_scratch, "current_temp_bytes"), 0.0);

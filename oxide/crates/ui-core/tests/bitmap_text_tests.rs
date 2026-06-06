@@ -4,12 +4,15 @@ use oxide_renderer_api::{
 };
 use oxide_ui_core::bitmap_text::{
     draw_text, draw_text_aligned, line_height, resolve_text_with_placeholder, text_width,
-    text_width_pixel_snapped, text_width_spans, TextAlign, TextSpan, TextStyle,
+    text_width_pixel_snapped, text_width_spans, BitmapTextAtlas, TextAlign, TextSpan, TextStyle,
 };
 
 #[derive(Default)]
 struct CollectingEncoder {
     rects: Vec<RectF>,
+    glyph_runs: usize,
+    resolved_glyph_vertices: usize,
+    resolved_glyph_indices: usize,
 }
 
 impl RenderEncoder for CollectingEncoder {
@@ -49,7 +52,15 @@ impl RenderEncoder for CollectingEncoder {
 
     fn draw_spinner(&mut self, _center: [f32; 2], _atom: f32, _alpha: f32) {}
 
-    fn draw_glyph_run(&mut self, _run: &GlyphRun) {}
+    fn draw_glyph_run(&mut self, _run: &GlyphRun) {
+        self.glyph_runs += 1;
+    }
+
+    fn draw_glyph_run_resolved(&mut self, run: &GlyphRun, vertices: &[Vertex], indices: &[u16]) {
+        self.draw_glyph_run(run);
+        self.resolved_glyph_vertices += vertices.len();
+        self.resolved_glyph_indices += indices.len();
+    }
 }
 
 #[test]
@@ -124,6 +135,26 @@ fn resolve_text_with_placeholder_prefers_entered_text_when_present() {
     let placeholder_style = TextStyle::new(5.0, Color::rgba(0.6, 0.6, 0.6, 1.0));
     let span = resolve_text_with_placeholder("victor", "username", text_style, placeholder_style);
     assert_eq!(span, TextSpan::new("victor", text_style));
+}
+
+#[test]
+fn atlas_text_records_resolved_glyphs_instead_of_solid_runs() {
+    let mut atlas = BitmapTextAtlas::new();
+    let (pixels, width, height) = atlas.image();
+    assert_eq!(pixels.len(), width as usize * height as usize);
+    atlas.set_handle(ImageHandle(77));
+
+    let mut encoder = CollectingEncoder::default();
+    let style = TextStyle::new(18.0, Color::rgba(1.0, 1.0, 1.0, 1.0)).bold();
+    assert!(atlas.draw_text(&mut encoder, "followers", 12.0, 24.0, style, 2.0));
+
+    assert!(encoder.rects.is_empty(), "atlas text must not emit solid alpha runs");
+    assert!(encoder.glyph_runs > 0, "expected glyph run command");
+    assert!(encoder.resolved_glyph_vertices > 0, "expected resolved glyph vertices");
+    assert!(encoder.resolved_glyph_indices > 0, "expected resolved glyph indices");
+    assert!(atlas.dirty_rect().is_some(), "new glyphs should dirty the A8 atlas");
+    atlas.clear_dirty();
+    assert!(atlas.dirty_rect().is_none());
 }
 
 #[test]

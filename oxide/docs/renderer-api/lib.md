@@ -22,11 +22,14 @@
   Enumerates renderer-neutral commands for layers, solids, images, glyphs, rounded rectangles, effects, camera backgrounds, custom embeds, spinners, and clips.
 - `RenderEncoder`
   Backend-facing immediate encoder trait used by replay and test encoders.
+- `RuntimeImageUploader`
+  Narrow renderer-owned upload boundary for runtime A8 image resources such as app-generated text/icon atlases. Apps call through this trait instead of constructing backend-specific textures.
 
 ## Logic narrative
 - Draw commands reference geometry by span so retained or translated replay can rebase buffer offsets without reconstructing high-level widgets.
 - Text atlas revision is part of `GlyphRun` because atlas slot eviction can make old UVs point at different glyph pixels while the texture handle stays the same.
 - Cached draw-list replay rejects stale or unknown text geometry while preserving normal replay for non-text commands.
+- Runtime image uploads stay outside draw commands: app code publishes changed atlas bytes to the renderer, then emits normal `ImageHandle`/`GlyphRun` draw work for the frame.
 
 ## Preconditions and postconditions
 - Span offsets and lengths must address the `DrawList` backing arrays.
@@ -51,5 +54,6 @@
 - Retained replay integration is covered by `crates/ui-core/tests/draw_builder_tests.rs`.
 
 ## Changelog
+- 2026-06-06: added `RuntimeImageUploader` so apps can publish runtime A8 atlas resources through a renderer-neutral boundary.
 - 2026-05-31: tightened retained text replay checks so every glyph atlas handle must have an explicit matching revision, including multi-atlas draw lists.
 - 2026-05-31: added glyph atlas revision metadata and compatibility checks for retained text draw caches.

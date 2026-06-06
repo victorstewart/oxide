@@ -24,10 +24,15 @@ type PostTaskFn = dyn Fn(alloc::boxed::Box<dyn FnOnce() + Send>) + Send + Sync;
 
 // ===== Public app interface =====
 
-pub trait App: Send + Sync {
-    fn init(&mut self, ctx: &mut InitContext);
-    fn event(&mut self, e: AppEvent, ctx: &mut UpdateContext);
-    fn draw(&mut self, r: &mut rend::RenderContext);
+pub trait App: Send + Sync
+{
+   fn init(&mut self, ctx: &mut InitContext);
+   fn event(&mut self, e: AppEvent, ctx: &mut UpdateContext);
+   fn draw(&mut self, r: &mut rend::RenderContext);
+
+   fn upload_runtime_images(&mut self, _uploader: &mut dyn rend::RuntimeImageUploader)
+   {
+   }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

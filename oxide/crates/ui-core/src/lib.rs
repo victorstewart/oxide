@@ -242,6 +242,36 @@ impl DrawListBuilder {
         self.list.items.push(gfx::DrawCmd::GlyphRun { run });
     }
 
+    pub fn glyph_run_resolved(
+        &mut self,
+        run: gfx::GlyphRun,
+        vertices: &[gfx::Vertex],
+        indices: &[u16],
+    ) {
+        if vertices.is_empty() || indices.is_empty() {
+            return;
+        }
+        let Ok(vb_len) = u32::try_from(vertices.len()) else {
+            return;
+        };
+        let Ok(ib_len) = u32::try_from(indices.len()) else {
+            return;
+        };
+        let Ok(vb_offset) = u32::try_from(self.list.vertices.len()) else {
+            return;
+        };
+        let Ok(ib_offset) = u32::try_from(self.list.indices.len()) else {
+            return;
+        };
+        self.list.vertices.extend_from_slice(vertices);
+        self.list.indices.extend_from_slice(indices);
+        self.glyph_run(gfx::GlyphRun {
+            vb: gfx::VertexSpan { offset: vb_offset, len: vb_len },
+            ib: gfx::IndexSpan { offset: ib_offset, len: ib_len },
+            ..run
+        });
+    }
+
     pub fn rrect(&mut self, rect: gfx::RectF, radii: [f32; 4], color: gfx::Color) {
         self.list.items.push(gfx::DrawCmd::RRect { rect, radii, color });
     }

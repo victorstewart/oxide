@@ -37,7 +37,6 @@ static OXIDE_WASM_ALLOCATOR: oxide_wasm_alloc_counter::CountingAllocator<std::al
 #[cfg(target_arch = "wasm32")]
 mod wasm_host {
     use super::generate_checker_rgba;
-    use oxide_wasm_alloc_counter::AllocationSnapshot;
     use oxide_platform_api as platform_api;
     use oxide_platform_api::Platform;
     use oxide_renderer_api as gfx;
@@ -48,6 +47,7 @@ mod wasm_host {
     use oxide_test_scenes as scenes;
     use oxide_text as text;
     use oxide_ui_core as ui;
+    use oxide_wasm_alloc_counter::AllocationSnapshot;
     use std::cell::RefCell;
     use std::fmt::Write;
     use std::rc::Rc;
@@ -564,28 +564,32 @@ mod wasm_host {
                     resources.glyph_frame(renderer, true)
                 })
             })?;
-            glyph_current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            glyph_current.stats =
+                settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
             let mut glyph_legacy = self.with_upload_bench_resources(|renderer, resources| {
                 bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
                     resources.glyph_frame(renderer, false)
                 })
             })?;
-            glyph_legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            glyph_legacy.stats =
+                settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
             let mut image_current = self.with_upload_bench_resources(|renderer, resources| {
                 bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
                     resources.image_frame(renderer, true)
                 })
             })?;
-            image_current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            image_current.stats =
+                settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
             let mut image_legacy = self.with_upload_bench_resources(|renderer, resources| {
                 bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
                     resources.image_frame(renderer, false)
                 })
             })?;
-            image_legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            image_legacy.stats =
+                settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             let glyph_ratio = if glyph_current.p50_ms > 0.0 {
                 glyph_legacy.p50_ms / glyph_current.p50_ms
             } else {
@@ -637,9 +641,7 @@ mod wasm_host {
                 })
             })?;
             legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
-            renderer
-                .borrow_mut()
-                .set_image_upload_scratch_enabled_for_benchmark(true);
+            renderer.borrow_mut().set_image_upload_scratch_enabled_for_benchmark(true);
             let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             Ok(format!(
                 "samples={sample_count};frames_per_sample={frames}{}{};legacy_over_current={ratio:.3};updates={WEBGPU_UPLOAD_SCRATCH_UPDATES};atlas_dirty_width={WEBGPU_UPLOAD_DIRTY_SIZE};atlas_dirty_height={WEBGPU_UPLOAD_DIRTY_SIZE};image_dirty_width={WEBGPU_UPLOAD_DIRTY_SIZE};image_dirty_height={WEBGPU_UPLOAD_DIRTY_SIZE}",
@@ -778,7 +780,8 @@ mod wasm_host {
                     stress_resources.frame(renderer)
                 })?
             };
-            stress_reused.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            stress_reused.stats =
+                settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
             let mut stress_recreate_summary = {
                 let mut renderer = renderer.borrow_mut();
@@ -1460,10 +1463,7 @@ mod wasm_host {
         }
         let has = js_sys::Reflect::get(&features, &JsValue::from_str("has"))?
             .dyn_into::<js_sys::Function>()?;
-        Ok(has
-            .call1(&features, &JsValue::from_str(feature))?
-            .as_bool()
-            .unwrap_or(false))
+        Ok(has.call1(&features, &JsValue::from_str(feature))?.as_bool().unwrap_or(false))
     }
 
     struct WebGpuIdMaskBenchSummary {
@@ -1607,10 +1607,7 @@ mod wasm_host {
                 neon_markers,
                 builder: ui::DrawListBuilder::new(),
                 mixed_damage: gfx::Damage {
-                    rects: vec![
-                        gfx::RectI::new(0, 0, 128, 128),
-                        gfx::RectI::new(64, 64, 192, 192),
-                    ],
+                    rects: vec![gfx::RectI::new(0, 0, 128, 128), gfx::RectI::new(64, 64, 192, 192)],
                 },
                 layer_effects_damage: gfx::Damage {
                     rects: vec![
@@ -2125,7 +2122,9 @@ mod wasm_host {
                     true,
                     gfx::Color::rgba(0.90, 0.96, 1.0, 0.92),
                 ) {
-                    return Err(JsValue::from_str("failed to build command family SDF glyph draw list"));
+                    return Err(JsValue::from_str(
+                        "failed to build command family SDF glyph draw list",
+                    ));
                 }
             }
             renderer.encode_pass(self.builder.drawlist());
@@ -2183,7 +2182,10 @@ mod wasm_host {
             renderer.submit(token).map_err(render_err)
         }
 
-        fn draw_state_cache_frame(&mut self, renderer: &mut BrowserRenderer) -> Result<(), JsValue> {
+        fn draw_state_cache_frame(
+            &mut self,
+            renderer: &mut BrowserRenderer,
+        ) -> Result<(), JsValue> {
             renderer.resize(512, 512, 2.0).map_err(render_err)?;
             let token = renderer.begin_frame(&gfx::FrameTarget, None);
             self.builder.clear();
@@ -2715,7 +2717,12 @@ mod wasm_host {
         _timestamp: f64,
     ) -> Result<(), JsValue> {
         renderer.resize(512, 512, 2.0).map_err(render_err)?;
-        let pass = webgpu_id_mask_pass(vertices, revision);
+        let chunks = [id_mask_compositor::IdMaskRasterChunk {
+            content_hash: revision,
+            first_vertex: 0,
+            vertex_count: vertices.len(),
+        }];
+        let pass = webgpu_id_mask_pass(vertices, &chunks, revision);
         let token = renderer.begin_frame(&gfx::FrameTarget, None);
         renderer.encode_id_mask_gpu_compositor(&pass).map_err(render_err)?;
         renderer.submit(token).map_err(render_err)
@@ -2773,6 +2780,7 @@ mod wasm_host {
 
     fn webgpu_id_mask_pass<'a>(
         vertices: &'a [id_mask_compositor::IdMaskRasterVertex],
+        chunks: &'a [id_mask_compositor::IdMaskRasterChunk],
         revision: u64,
     ) -> id_mask_compositor::IdMaskGpuCompositorPass<'a> {
         let city_styles = [
@@ -2812,6 +2820,7 @@ mod wasm_host {
                 mask_scale: 2.0,
                 vertex_revision: revision,
                 vertices,
+                chunks,
                 projection: id_mask_compositor::IdMaskRasterProjection::screen_px(),
             },
             city_styles,
@@ -2847,10 +2856,7 @@ mod wasm_host {
         let _ = destroy.call0(device);
     }
 
-    fn timestamp_stats_cover_row(
-        stats: &WebRendererStats,
-        after_frame_id: u64,
-    ) -> bool {
+    fn timestamp_stats_cover_row(stats: &WebRendererStats, after_frame_id: u64) -> bool {
         stats.gpu_timestamp_passes > 0
             && stats.gpu_timestamp_frame_id > after_frame_id
             && stats.gpu_timestamp_passes == stats.render_passes
@@ -2896,7 +2902,8 @@ mod wasm_host {
                 let _ = resolve.call0(&JsValue::UNDEFINED);
             });
             let Some(function) = callback.dyn_ref::<js_sys::Function>() else {
-                let _ = reject.call1(&JsValue::UNDEFINED, &JsValue::from_str("raf callback unavailable"));
+                let _ = reject
+                    .call1(&JsValue::UNDEFINED, &JsValue::from_str("raf callback unavailable"));
                 return;
             };
             if let Err(error) = window.request_animation_frame(function) {
@@ -3527,8 +3534,7 @@ mod wasm_host {
         summary.dealloc_count = summary.dealloc_count.saturating_add(dealloc_count);
         summary.dealloc_bytes = summary.dealloc_bytes.saturating_add(dealloc_bytes);
         summary.realloc_count = summary.realloc_count.saturating_add(realloc_count);
-        summary.realloc_grow_bytes =
-            summary.realloc_grow_bytes.saturating_add(realloc_grow_bytes);
+        summary.realloc_grow_bytes = summary.realloc_grow_bytes.saturating_add(realloc_grow_bytes);
         summary.realloc_shrink_bytes =
             summary.realloc_shrink_bytes.saturating_add(realloc_shrink_bytes);
         let frame_alloc_bytes = alloc_bytes.saturating_add(realloc_grow_bytes);
@@ -3581,10 +3587,12 @@ mod wasm_host {
             summary.timestamp_alloc_count.saturating_add(stats.submit_timestamp_alloc_count);
         summary.timestamp_alloc_bytes =
             summary.timestamp_alloc_bytes.saturating_add(stats.submit_timestamp_alloc_bytes);
-        summary.scratch_stats_alloc_count =
-            summary.scratch_stats_alloc_count.saturating_add(stats.submit_scratch_stats_alloc_count);
-        summary.scratch_stats_alloc_bytes =
-            summary.scratch_stats_alloc_bytes.saturating_add(stats.submit_scratch_stats_alloc_bytes);
+        summary.scratch_stats_alloc_count = summary
+            .scratch_stats_alloc_count
+            .saturating_add(stats.submit_scratch_stats_alloc_count);
+        summary.scratch_stats_alloc_bytes = summary
+            .scratch_stats_alloc_bytes
+            .saturating_add(stats.submit_scratch_stats_alloc_bytes);
         summary.finish_queue_alloc_count =
             summary.finish_queue_alloc_count.saturating_add(stats.submit_finish_queue_alloc_count);
         summary.finish_queue_alloc_bytes =
@@ -3593,10 +3601,12 @@ mod wasm_host {
             summary.present_alloc_count.saturating_add(stats.submit_present_alloc_count);
         summary.present_alloc_bytes =
             summary.present_alloc_bytes.saturating_add(stats.submit_present_alloc_bytes);
-        summary.timestamp_map_alloc_count =
-            summary.timestamp_map_alloc_count.saturating_add(stats.submit_timestamp_map_alloc_count);
-        summary.timestamp_map_alloc_bytes =
-            summary.timestamp_map_alloc_bytes.saturating_add(stats.submit_timestamp_map_alloc_bytes);
+        summary.timestamp_map_alloc_count = summary
+            .timestamp_map_alloc_count
+            .saturating_add(stats.submit_timestamp_map_alloc_count);
+        summary.timestamp_map_alloc_bytes = summary
+            .timestamp_map_alloc_bytes
+            .saturating_add(stats.submit_timestamp_map_alloc_bytes);
         summary.total_alloc_count =
             summary.total_alloc_count.saturating_add(stats.submit_total_alloc_count);
         summary.total_alloc_bytes =
