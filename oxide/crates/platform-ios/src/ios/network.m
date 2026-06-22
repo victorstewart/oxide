@@ -13,6 +13,7 @@ struct NametagQuicConfig
 {
    uint32_t idle_timeout_ms;
    uint16_t max_datagram_size;
+   uint16_t keepalive_interval_secs;
    bool allow_fallback;
    const char *alpn;
    bool force_tcp_tls;
@@ -240,7 +241,8 @@ static SecIdentityRef copy_identity(const struct NametagQuicTlsConfig *tls)
 static void configure_sec_options(sec_protocol_options_t sec_options,
                                   const struct NametagQuicTlsConfig *tls,
                                   const char *server_name,
-                                  NSString *alpn)
+                                  NSString *alpn,
+                                  BOOL tls13Only)
 {
    if (sec_options == NULL)
    {
@@ -255,6 +257,16 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    if (alpn != nil && alpn.length > 0)
    {
       sec_protocol_options_add_tls_application_protocol(sec_options, alpn.UTF8String);
+   }
+
+   sec_protocol_options_set_tls_tickets_enabled(sec_options, true);
+   sec_protocol_options_set_tls_resumption_enabled(sec_options, true);
+   if (tls13Only)
+   {
+      sec_protocol_options_set_min_tls_protocol_version(
+          sec_options, tls_protocol_version_TLSv13);
+      sec_protocol_options_set_max_tls_protocol_version(
+          sec_options, tls_protocol_version_TLSv13);
    }
 
    if (tls != NULL && !tls->enforce_hostname)
@@ -354,9 +366,11 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 - (void)handleFailure:(nw_error_t)error fallback:(BOOL)attemptedFallback;
 - (void)scheduleRetryWithParameters:(nw_parameters_t)parameters
                             fallback:(BOOL)fallback;
+- (void)configureReadyKeepalive;
 - (void)startReceiveLoop;
 - (void)drainIncomingBytes;
 - (BOOL)waitForReady:(uint64_t)timeoutMs;
+- (BOOL)waitForWritableConnection:(uint64_t)timeoutMs;
 - (BOOL)sendBytes:(const uint8_t *)data
             length:(size_t)len
            timeout:(uint64_t)timeoutMs;
@@ -387,6 +401,9 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    {
       alpn = [NSString stringWithUTF8String:cfg->alpn];
    }
+   uint32_t idleTimeoutMs = _quicConfig.idle_timeout_ms;
+   uint16_t maxUdpPayloadSize = _quicConfig.max_datagram_size;
+   uint16_t keepaliveIntervalSecs = _quicConfig.keepalive_interval_secs;
    _metrics = (struct NametagQuicMetrics){0};
    _receiveBuffer = [[NSMutableArray alloc] init];
    _incomingBytes = [[NSMutableData alloc] init];
@@ -398,7 +415,9 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
        nw_protocol_options_t quic_options) {
      sec_protocol_options_t sec_options =
          nw_quic_copy_sec_protocol_options(quic_options);
-     configure_sec_options(sec_options, tls, endpoint.UTF8String, alpn);
+     configure_sec_options(sec_options, tls, endpoint.UTF8String, alpn, NO);
+     nw_quic_set_idle_timeout(quic_options, idleTimeoutMs);
+     nw_quic_set_max_udp_payload_size(quic_options, maxUdpPayloadSize);
    });
    if (_quicParameters == NULL)
    {
@@ -408,17 +427,24 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    nw_parameters_set_reuse_local_address(_quicParameters, true);
 
    _tlsParameters = nw_parameters_create_secure_tcp(^(
-       nw_protocol_options_t tls_options) {
+     nw_protocol_options_t tls_options) {
      sec_protocol_options_t sec_options =
          nw_tls_copy_sec_protocol_options(tls_options);
-     configure_sec_options(sec_options, tls, endpoint.UTF8String, alpn);
+     configure_sec_options(sec_options, tls, endpoint.UTF8String, alpn, YES);
    }, ^(nw_protocol_options_t tcp_options) {
-     (void)tcp_options;
+     nw_tcp_options_set_enable_fast_open(tcp_options, true);
+     if (keepaliveIntervalSecs > 0)
+     {
+        nw_tcp_options_set_enable_keepalive(tcp_options, true);
+        nw_tcp_options_set_keepalive_idle_time(tcp_options, keepaliveIntervalSecs);
+        nw_tcp_options_set_keepalive_interval(tcp_options, keepaliveIntervalSecs);
+     }
    });
    if (_tlsParameters != NULL)
    {
       nw_parameters_set_prefer_no_proxy(_tlsParameters, true);
       nw_parameters_set_reuse_local_address(_tlsParameters, true);
+      nw_parameters_set_fast_open_enabled(_tlsParameters, true);
    }
 
    return self;
@@ -470,7 +496,6 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
       self.fallbackUsed = YES;
       _metrics.fallback_used = true;
    }
-   self.currentFallback = fallback;
 
    if (_connection != NULL)
    {
@@ -493,6 +518,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
       return;
    }
    _connection = connection;
+   self.currentFallback = fallback;
    nw_connection_set_queue(_connection, self.queue);
    NSUInteger attemptNumber = self.attempt;
    if (network_debug_enabled())
@@ -554,7 +580,30 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    _metrics.resume_ms = 0;
    self.ready = YES;
    dispatch_semaphore_signal(self.readySignal);
+   [self configureReadyKeepalive];
    [self startReceiveLoop];
+}
+
+- (void)configureReadyKeepalive
+{
+   if (self.currentFallback || self.quicConfig.keepalive_interval_secs == 0 ||
+       _connection == NULL)
+   {
+      return;
+   }
+
+   nw_protocol_definition_t quicDefinition = nw_protocol_copy_quic_definition();
+   if (quicDefinition == NULL)
+   {
+      return;
+   }
+   nw_protocol_metadata_t quicMetadata =
+       nw_connection_copy_protocol_metadata(_connection, quicDefinition);
+   if (quicMetadata != NULL)
+   {
+      nw_quic_set_keepalive_interval(quicMetadata,
+                                     self.quicConfig.keepalive_interval_secs);
+   }
 }
 
 - (void)handleFailure:(nw_error_t)error fallback:(BOOL)attemptedFallback
@@ -661,6 +710,55 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    return result == 0 && self.ready;
 }
 
+- (BOOL)waitForWritableConnection:(uint64_t)timeoutMs
+{
+   if (self.closed)
+   {
+      return NO;
+   }
+   if (self.ready || (self.currentFallback && _connection != NULL))
+   {
+      return YES;
+   }
+
+   NSDate *until =
+       [NSDate dateWithTimeIntervalSinceNow:((NSTimeInterval)timeoutMs) /
+                                             1000.0];
+   while (!self.closed)
+   {
+      if (self.ready || (self.currentFallback && _connection != NULL))
+      {
+         return YES;
+      }
+      NSTimeInterval remaining = [until timeIntervalSinceNow];
+      if (remaining <= 0.0)
+      {
+         break;
+      }
+      uint64_t sliceMs = (uint64_t)ceil(MIN(remaining * 1000.0, 50.0));
+      if (sliceMs == 0)
+      {
+         sliceMs = 1;
+      }
+      dispatch_time_t sliceDeadline = dispatch_time(
+          DISPATCH_TIME_NOW, (int64_t)(sliceMs * NSEC_PER_MSEC));
+      if (dispatch_semaphore_wait(self.readySignal, sliceDeadline) == 0 &&
+          self.ready)
+      {
+         return YES;
+      }
+   }
+
+   if (network_debug_enabled())
+   {
+      NSLog(@"Nametag network wait writable timeout transport=%@ "
+            @"timeout_ms=%llu ready=%d",
+            network_transport_name(self.currentFallback),
+            (unsigned long long)timeoutMs, self.ready ? 1 : 0);
+   }
+   return NO;
+}
+
 - (BOOL)sendBytes:(const uint8_t *)data
             length:(size_t)len
            timeout:(uint64_t)timeoutMs
@@ -669,7 +767,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    {
       return NO;
    }
-   if (![self waitForReady:timeoutMs])
+   if (![self waitForWritableConnection:timeoutMs])
    {
       return NO;
    }
@@ -1081,7 +1179,7 @@ NametagQuicHandle nametag_ios_quic_connect(
    }
 
    struct NametagQuicConfig localCfg =
-       cfg ? *cfg : (struct NametagQuicConfig){60000, 1350, true, NULL, false};
+       cfg ? *cfg : (struct NametagQuicConfig){60000, 1350, 30, true, NULL, false};
    struct NametagRetryPolicy localRetry =
        retry ? *retry : (struct NametagRetryPolicy){3, 500, 8000};
 
