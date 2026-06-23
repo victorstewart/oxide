@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_OXIDE_DEVICE_BASELINE_JSON: &str = "benchmarks/oxide-device/latest.json";
 const DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN: &str = "benchmarks/oxide-device/latest.md";
@@ -29,6 +29,8 @@ const DEFAULT_UIKIT_DEVICE_RESULT_ROOT: &str = "/tmp/oxide-uikit-device-perf";
 const DEFAULT_REACT_DEVICE_BASELINE_JSON: &str = "benchmarks/react-native-device/latest.json";
 const DEFAULT_REACT_DEVICE_BASELINE_MARKDOWN: &str = "benchmarks/react-native-device/latest.md";
 const DEFAULT_REACT_DEVICE_RESULT_ROOT: &str = "/tmp/react-native-device-perf";
+const DEFAULT_EXPERIMENT_MANIFEST: &str = "perf-experiments.toml";
+const EXPERIMENT_PERF_AB_GATE_PREFIX: &str = "perf-ab";
 const COMPARE_DEVICE_PROOF_STATUS_FILE: &str = "proof-status.json";
 const COMPARE_DEVICE_PROOF_STATUS_MARKDOWN_FILE: &str = "proof-status.md";
 const DEFAULT_UIKIT_SCHEME: &str = "OxideUIKitPerf";
@@ -1542,6 +1544,58 @@ pub enum LocationMode {
     Always,
 }
 
+#[derive(Debug, Deserialize)]
+struct ExperimentManifest {
+    #[serde(default)]
+    experiments: Vec<ExperimentEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExperimentEntry {
+    id: String,
+    introduced_commit: String,
+    introduced_date: String,
+    expires: String,
+    #[serde(default)]
+    required_backends: Vec<String>,
+    #[serde(default)]
+    required_devices: Vec<String>,
+    correctness_gate: String,
+    performance_gate: String,
+    decision_state: ExperimentDecisionState,
+    #[serde(default)]
+    perf_ab_gate: Option<String>,
+    #[serde(default)]
+    decision: String,
+    #[serde(default)]
+    proof: Vec<String>,
+    #[serde(default)]
+    cleanup: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ExperimentDecisionState {
+    Undecided,
+    Accepted,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExperimentCheckSummary {
+    pub total: usize,
+    pub undecided: usize,
+    pub accepted: usize,
+    pub rejected: usize,
+}
+
+#[derive(Debug, Default)]
+struct ExperimentsCheckCli {
+    manifest: Option<PathBuf>,
+    today: Option<String>,
+    help: bool,
+}
+
 #[derive(Debug, Default)]
 struct IosPerfCli {
     compare: Option<PathBuf>,
@@ -2063,6 +2117,7 @@ pub fn run_cli(args: &[String]) -> Result<()> {
     let first = args.first().map(String::as_str);
     let second = args.get(1).map(String::as_str);
     match (first, second) {
+        (Some("experiments"), Some("check")) => experiments_check(&args[2..]),
         (Some("ios"), Some("prepare")) => ios_prepare(),
         (Some("ios"), Some("perf")) => ios_perf(&args[2..]),
         (Some("ios"), Some("device-perf")) => ios_device_perf(&args[2..]),
@@ -2073,7 +2128,7 @@ pub fn run_cli(args: &[String]) -> Result<()> {
         (Some("test-all"), _) => test_all(),
         _ => {
             eprintln!(
-                "Usage:\n  cargo xtask ios prepare\n  cargo xtask ios perf [disabled: use `ios device-perf`]\n  cargo xtask ios device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR]\n    note: `--trace-seconds 0` skips the attached Metal trace and collects only xcodebuild CPU metrics plus parked console summaries.\n  cargo xtask ios compare-device-perf [--write-baseline] [--uikit-compare PATH] [--oxide-compare PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR] [--watchable-smoke|--smoke] [--family component|animation|navigation|journey|camera]\n    staged flow: run watchable smoke first, then `--family ...` proofs, then `--write-baseline` from the same result root once proof status is green.\n  cargo xtask ios react-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--reuse-derived-data PATH] [--trace-seconds N]\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
+                "Usage:\n  cargo xtask experiments check [--manifest PATH] [--today YYYY-MM-DD]\n  cargo xtask ios prepare\n  cargo xtask ios perf [disabled: use `ios device-perf`]\n  cargo xtask ios device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR]\n    note: `--trace-seconds 0` skips the attached Metal trace and collects only xcodebuild CPU metrics plus parked console summaries.\n  cargo xtask ios compare-device-perf [--write-baseline] [--uikit-compare PATH] [--oxide-compare PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR] [--watchable-smoke|--smoke] [--family component|animation|navigation|journey|camera]\n    staged flow: run watchable smoke first, then `--family ...` proofs, then `--write-baseline` from the same result root once proof status is green.\n  cargo xtask ios react-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--reuse-derived-data PATH] [--trace-seconds N]\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
             );
             Ok(())
         }
@@ -2136,6 +2191,229 @@ fn test_all() -> Result<()> {
     run_xcui_smoke(&root)?;
 
     Ok(())
+}
+
+fn experiments_check(args: &[String]) -> Result<()> {
+    let cli = parse_experiments_check_cli(args)?;
+    if cli.help {
+        print_experiments_check_usage();
+        return Ok(());
+    }
+    let manifest_path = match cli.manifest {
+        Some(path) => path,
+        None => locate_workspace_root()?.join(DEFAULT_EXPERIMENT_MANIFEST),
+    };
+    let text = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    let today = match cli.today {
+        Some(today) => today,
+        None => current_utc_date_string()?,
+    };
+    let summary = check_experiment_manifest_text(&text, &today)?;
+    println!(
+        "Experiment manifest OK: total={} undecided={} accepted={} rejected={} today={}",
+        summary.total, summary.undecided, summary.accepted, summary.rejected, today
+    );
+    Ok(())
+}
+
+fn parse_experiments_check_cli(args: &[String]) -> Result<ExperimentsCheckCli> {
+    let mut cli = ExperimentsCheckCli::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--manifest" => {
+                i += 1;
+                let Some(path) = args.get(i) else {
+                    bail!("--manifest requires a path")
+                };
+                cli.manifest = Some(PathBuf::from(path));
+            }
+            "--today" => {
+                i += 1;
+                let Some(today) = args.get(i) else {
+                    bail!("--today requires YYYY-MM-DD")
+                };
+                cli.today = Some(today.clone());
+            }
+            "--help" | "-h" => {
+                cli.help = true;
+            }
+            other => bail!("unknown experiments check argument `{}`", other),
+        }
+        i += 1;
+    }
+    Ok(cli)
+}
+
+fn print_experiments_check_usage() {
+    println!("Usage: cargo xtask experiments check [--manifest PATH] [--today YYYY-MM-DD]");
+}
+
+pub fn check_experiment_manifest_text(text: &str, today: &str) -> Result<ExperimentCheckSummary> {
+    validate_experiment_date(today, "today")?;
+    let manifest: ExperimentManifest =
+        toml::from_str(text).with_context(|| "parsing experiment manifest")?;
+    if manifest.experiments.is_empty() {
+        bail!("experiment manifest must contain at least one [[experiments]] entry");
+    }
+
+    let mut seen = BTreeSet::new();
+    let mut summary = ExperimentCheckSummary::default();
+    for entry in manifest.experiments {
+        validate_experiment_entry(&entry, today, &mut seen)?;
+        summary.total += 1;
+        match entry.decision_state {
+            ExperimentDecisionState::Undecided => summary.undecided += 1,
+            ExperimentDecisionState::Accepted => summary.accepted += 1,
+            ExperimentDecisionState::Rejected => summary.rejected += 1,
+        }
+    }
+    Ok(summary)
+}
+
+fn validate_experiment_entry(entry: &ExperimentEntry, today: &str, seen: &mut BTreeSet<String>) -> Result<()> {
+    validate_experiment_text_field(&entry.id, "id", "<unknown>")?;
+    if !seen.insert(entry.id.clone()) {
+        bail!("duplicate experiment id `{}`", entry.id);
+    }
+    validate_experiment_text_field(&entry.introduced_commit, "introduced_commit", &entry.id)?;
+    validate_experiment_date(&entry.introduced_date, "introduced_date")?;
+    validate_experiment_date(&entry.expires, "expires")?;
+    if entry.expires.as_str() < entry.introduced_date.as_str() {
+        bail!(
+            "experiment `{}` expires on {} before introduced_date {}",
+            entry.id,
+            entry.expires,
+            entry.introduced_date
+        );
+    }
+    validate_experiment_list_field(&entry.required_backends, "required_backends", &entry.id)?;
+    validate_experiment_list_field(&entry.required_devices, "required_devices", &entry.id)?;
+    validate_experiment_text_field(&entry.correctness_gate, "correctness_gate", &entry.id)?;
+    validate_experiment_text_field(&entry.performance_gate, "performance_gate", &entry.id)?;
+
+    match entry.decision_state {
+        ExperimentDecisionState::Undecided => validate_undecided_experiment(entry, today),
+        ExperimentDecisionState::Accepted | ExperimentDecisionState::Rejected => {
+            validate_decided_experiment(entry)
+        }
+    }
+}
+
+fn validate_undecided_experiment(entry: &ExperimentEntry, today: &str) -> Result<()> {
+    let Some(gate) = entry.perf_ab_gate.as_deref().map(str::trim).filter(|gate| !gate.is_empty())
+    else {
+        bail!(
+            "undecided experiment `{}` must set perf_ab_gate with a `{}` prefix",
+            entry.id,
+            EXPERIMENT_PERF_AB_GATE_PREFIX
+        );
+    };
+    if !gate.starts_with(EXPERIMENT_PERF_AB_GATE_PREFIX) {
+        bail!(
+            "undecided experiment `{}` perf_ab_gate `{}` must start with `{}`",
+            entry.id,
+            gate,
+            EXPERIMENT_PERF_AB_GATE_PREFIX
+        );
+    }
+    if entry.expires.as_str() < today {
+        bail!(
+            "expired undecided experiment `{}` expired on {} before today {}",
+            entry.id,
+            entry.expires,
+            today
+        );
+    }
+    Ok(())
+}
+
+fn validate_decided_experiment(entry: &ExperimentEntry) -> Result<()> {
+    validate_experiment_text_field(&entry.decision, "decision", &entry.id)?;
+    validate_experiment_list_field(&entry.proof, "proof", &entry.id)?;
+    validate_experiment_list_field(&entry.cleanup, "cleanup", &entry.id)?;
+    Ok(())
+}
+
+fn validate_experiment_text_field(value: &str, field: &str, id: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        bail!("experiment `{}` has empty `{}`", id, field);
+    }
+    Ok(())
+}
+
+fn validate_experiment_list_field(values: &[String], field: &str, id: &str) -> Result<()> {
+    if values.is_empty() || values.iter().any(|value| value.trim().is_empty()) {
+        bail!("experiment `{}` must provide non-empty `{}` entries", id, field);
+    }
+    Ok(())
+}
+
+fn validate_experiment_date(value: &str, field: &str) -> Result<()> {
+    let Some((year, month, day)) = parse_experiment_date(value) else {
+        bail!("invalid `{}` value `{}`; expected YYYY-MM-DD", field, value);
+    };
+    let max_day = days_in_month(year, month);
+    if month == 0 || month > 12 || day == 0 || day > max_day {
+        bail!("invalid `{}` value `{}`; expected a real calendar date", field, value);
+    }
+    Ok(())
+}
+
+fn parse_experiment_date(value: &str) -> Option<(u32, u32, u32)> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return None;
+    }
+    if !bytes
+        .iter()
+        .enumerate()
+        .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let year = value[0..4].parse().ok()?;
+    let month = value[5..7].parse().ok()?;
+    let day = value[8..10].parse().ok()?;
+    Some((year, month, day))
+}
+
+fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+fn is_leap_year(year: u32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+fn current_utc_date_string() -> Result<String> {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .with_context(|| "system clock is before UNIX epoch")?;
+    let days = (elapsed.as_secs() / 86_400) as i64;
+    let (year, month, day) = civil_date_from_unix_days(days);
+    Ok(format!("{:04}-{:02}-{:02}", year, month, day))
+}
+
+fn civil_date_from_unix_days(days_since_epoch: i64) -> (i32, u32, u32) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if month <= 2 { 1 } else { 0 };
+    (year as i32, month as u32, day as u32)
 }
 
 fn run_command(root: &Path, program: &str, args: &[&str], allow_fail: bool) -> Result<()> {

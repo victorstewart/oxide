@@ -135,7 +135,7 @@
 - `elements::Label` keeps disabled watch logging off the allocation path, preallocates the common wrapped-line buffers, and lets internal non-wrapped label call sites encode borrowed text directly instead of cloning through temporary `Label` values.
 - Wrapped `elements::Label` now reuses the shaped line outputs it created during width fitting and uploads the text atlas once after all line baking, avoiding the old second shape pass over every final wrapped line.
 - Primary-font ASCII wrapped labels now shape once for break decisions on cache misses, then shape only the final emitted lines; fallback-font and non-ASCII wrapping keep the conservative legacy path for correctness.
-- `PickerState::encode` reuses `TextCtx` cached shaped label lines and publishes only dirty glyph-atlas rectangles, so warm picker redraws do not reshape visible row labels or re-upload the full atlas. The workspace perf suite keeps the former direct-shape/full-upload path as `cpu.system.picker_text_legacy_shape_upload` for A/B audit evidence.
+- `PickerState::encode` reuses `TextCtx` cached shaped label lines and publishes only dirty glyph-atlas rectangles, so warm picker redraws do not reshape visible row labels or re-upload the full atlas. The former direct-shape/full-upload audit row was retired after same-workload A/B proof; `cpu.system.picker_text_cached_encode` remains the gated workspace perf signal.
 
 ## Feature flags and cfgs
 - The text-fields export is always enabled.
@@ -164,8 +164,8 @@
 - `crates/ui-core/tests/text_fields_tests.rs` covers the text-input surface.
 - `crates/ui-core/tests/picker_popup_tests.rs` covers the popup-picker interaction surface.
 - `crates/ui-core/tests/emitter_tests.rs` covers the CAEmitter-style burst surface.
-- `crates/ui-core/tests/elements_tests.rs` covers multi-line ASCII wrapped-label cache reuse and clean warm atlas redraws, with `cpu.system.wrapped_label_cached_encode` and `cpu.system.wrapped_label_legacy_fit_shape` covering current-vs-legacy workspace A/B evidence.
-- `crates/ui-core/tests/elements_tests.rs` covers picker label cache reuse and dirty glyph-atlas upload behavior, with `cpu.system.picker_text_cached_encode` and `cpu.system.picker_text_legacy_shape_upload` covering the same hot path in the workspace perf suite.
+- `crates/ui-core/tests/elements_tests.rs` covers multi-line ASCII wrapped-label cache reuse and clean warm atlas redraws, with `cpu.system.wrapped_label_cached_encode` retained as the gated workspace perf signal after the slower legacy fitting row was retired.
+- `crates/ui-core/tests/elements_tests.rs` covers picker label cache reuse and dirty glyph-atlas upload behavior, with `cpu.system.picker_text_cached_encode` retained as the gated workspace perf signal after the slower direct-shape/full-upload row was retired.
 - `crates/ui-core/tests/coalesce_tests.rs` covers adjacency-preserving coalescing and caller-owned scratch reuse.
 
 ## Examples
@@ -182,8 +182,8 @@ assert_eq!(text.value(), "");
 - 2026-06-02: Added `coalesce_adjacent_draws_reuse` so hot host frame loops can reuse draw-command coalescing scratch storage.
 - 2026-06-01: fixed child layout skip logic so stable child geometry cannot bypass dirty descendants during an ancestor relayout.
 - 2026-06-01: bounded `CollectionView` variable measurement cache entries and added cold-entry eviction coverage for large key/revision churn.
-- 2026-06-01: ASCII wrapped-label cache misses now shape once for break decisions instead of reshaping every growing word candidate, with `cpu.system.wrapped_label_cached_encode` and `cpu.system.wrapped_label_legacy_fit_shape` guarding current-vs-legacy workspace A/B evidence.
-- 2026-06-01: picker label encoding now reuses cached shaped label lines and dirty glyph-atlas uploads, with `cpu.system.picker_text_cached_encode` and `cpu.system.picker_text_legacy_shape_upload` guarding current-vs-legacy workspace A/B evidence.
+- 2026-06-01: ASCII wrapped-label cache misses now shape once for break decisions instead of reshaping every growing word candidate; `cpu.system.wrapped_label_cached_encode` remains the gated workspace perf row after the slower legacy audit row was retired.
+- 2026-06-01: picker label encoding now reuses cached shaped label lines and dirty glyph-atlas uploads; `cpu.system.picker_text_cached_encode` remains the gated workspace perf row after the slower direct-shape/full-upload audit row was retired.
 - 2026-05-31: added `UiSurface::add_node` and `UiSurface::remove_node` scoped structural mutations so common add/remove paths skip clean sibling layout and replay retained sibling draw lists.
 - 2026-05-31: text inputs now consume `oxide_text::ShapedCursorMap` for cached caret widths and pointer hit testing, with grapheme-safe max-length filtering.
 - 2026-05-31: `SurfaceRouter::encode_with_overlays` now retained-encodes overlay and popup surfaces and exposes `RetainedCompositionStats`.

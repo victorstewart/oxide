@@ -1008,6 +1008,10 @@ private struct OxideHostStats
     var rendererPreviewSubmissionDepth: UInt32 = 0
     var rendererPreviewSubmissionSkipped: UInt32 = 0
     var rendererPreviewSubmissionFrameAgeMs: Float = 0
+    var hostIdleSkippedFrames: UInt64 = 0
+    var hostSubmittedFrames: UInt64 = 0
+    var hostFrameDirty: UInt8 = 0
+    var hostSettleFramesRemaining: UInt8 = 0
 }
 
 private struct OxideHostCameraTickPerf

@@ -706,6 +706,11 @@ typedef struct oxide_host_stats_t {
   uint8_t host_settle_frames_remaining;
 } oxide_host_stats_t;
 
+_Static_assert(sizeof(oxide_host_stats_t) == 512,
+               "oxide_host_stats_t ABI size changed");
+_Static_assert(_Alignof(oxide_host_stats_t) == 8,
+               "oxide_host_stats_t ABI alignment changed");
+
 typedef struct oxide_host_camera_tick_perf_t {
   uint64_t serial;
   uint32_t drawable_width;
@@ -721,6 +726,11 @@ typedef struct oxide_host_camera_tick_perf_t {
   uint8_t frame_submitted;
   uint8_t reserved;
 } oxide_host_camera_tick_perf_t;
+
+_Static_assert(sizeof(oxide_host_camera_tick_perf_t) == 48,
+               "oxide_host_camera_tick_perf_t ABI size changed");
+_Static_assert(_Alignof(oxide_host_camera_tick_perf_t) == 8,
+               "oxide_host_camera_tick_perf_t ABI alignment changed");
 
 typedef struct oxide_host_app_debug_perf_t {
   uint32_t scene_will_connect_calls;
@@ -742,6 +752,11 @@ typedef struct oxide_host_app_debug_perf_t {
   uint8_t should_render;
   uint8_t host_ready;
 } oxide_host_app_debug_perf_t;
+
+_Static_assert(sizeof(oxide_host_app_debug_perf_t) == 60,
+               "oxide_host_app_debug_perf_t ABI size changed");
+_Static_assert(_Alignof(oxide_host_app_debug_perf_t) == 4,
+               "oxide_host_app_debug_perf_t ABI alignment changed");
 
 __attribute__((weak)) void nametag_host_update_permission(int32_t domain,
                                                           int32_t status) {
@@ -1402,6 +1417,19 @@ typedef struct {
   const uint8_t *error_msg_ptr;
   size_t error_msg_len;
 } OxCameraRecordEvent;
+
+_Static_assert(sizeof(OxCameraFrame) == 72,
+               "OxCameraFrame ABI size changed");
+_Static_assert(_Alignof(OxCameraFrame) == 8,
+               "OxCameraFrame ABI alignment changed");
+_Static_assert(sizeof(OxCameraAudio) == 32,
+               "OxCameraAudio ABI size changed");
+_Static_assert(_Alignof(OxCameraAudio) == 8,
+               "OxCameraAudio ABI alignment changed");
+_Static_assert(sizeof(OxCameraRecordEvent) == 64,
+               "OxCameraRecordEvent ABI size changed");
+_Static_assert(_Alignof(OxCameraRecordEvent) == 8,
+               "OxCameraRecordEvent ABI alignment changed");
 
 enum {
   kOxCamRecordEventCompleted = 0,

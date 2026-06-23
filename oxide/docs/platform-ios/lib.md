@@ -71,8 +71,10 @@
 - Validated indirectly through downstream workspace builds/tests that consume these services.
 - `tests/network_bridge_tests.rs` checks Objective-C bridge invariants that are difficult to exercise without a real Network.framework endpoint, including forced TCP/TLS retry routing.
 - `tests/camera_capture_mode_tests.rs` checks the shared Apple camera start-mode invariant from `crates/platform-apple/src/lib.rs`.
+- `tests/abi_layout_tests.rs` freezes iOS camera, location, motion, and contact ABI layouts plus native camera/location/motion static-assert retention.
 
 ## Changelog
+- 2026-06-22: added iOS platform ABI layout freeze coverage for camera, location, motion, and contact bridge payloads.
 - 2026-06-01: split the standalone Metal app host frame ABI into prepare/submit/cancel phases and enabled timeout-capable drawable acquisition so it matches the late-drawable performance contract.
 - 2026-06-01: removed stale native visible-preview wording from the platform API docs; diagnostic `AVCaptureVideoPreviewLayer` comparisons remain host-perf-only.
 - 2026-05-19: moved the iOS native Keychain secure-storage bridge into shared `oxide-platform-apple`.

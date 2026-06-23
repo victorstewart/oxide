@@ -10,6 +10,7 @@ use std::sync::{Mutex, OnceLock};
 use tempfile::tempdir;
 use xtask::{
     apply_xctestrun_environment_overrides, build_entitlements_dict,
+    check_experiment_manifest_text,
     compare_device_comparisons_pass, compare_device_missing_promotion_families,
     compare_device_official_families, compare_uikit_reports, console_output_contains_marker,
     device_console_failure_line, device_process_name, device_support_dir_matches,
@@ -48,9 +49,10 @@ use xtask::{
     validate_normalized_camera_contract, validate_oxide_device_report_metric_contract,
     validate_uikit_device_report_metric_contract, xctrace_export_input_path_for_args,
     CompareDeviceProofFamilyStatus, CompareDeviceProofStatus, Entitlements, LocationMode,
-    TraceWindow, UIKitCanonicalSignpostSource, UIKitContractCoverageReport, UIKitHostBuildStamp,
-    UIKitMetricFallbackMode, UIKitMetricSource, UIKitMetricSummary, UIKitPerfCase,
-    UIKitPerfComparison, UIKitPerfReport, XctraceCell, XctraceTocTable,
+    ExperimentCheckSummary, TraceWindow, UIKitCanonicalSignpostSource,
+    UIKitContractCoverageReport, UIKitHostBuildStamp, UIKitMetricFallbackMode, UIKitMetricSource,
+    UIKitMetricSummary, UIKitPerfCase, UIKitPerfComparison, UIKitPerfReport, XctraceCell,
+    XctraceTocTable,
 };
 
 fn env_test_lock() -> &'static Mutex<()> {
@@ -116,6 +118,163 @@ fn oxide_device_contract_source_lists_canonical_families() {
         "stress-pathological",
     ] {
         assert!(source.contains(id), "missing canonical Oxide device contract family `{id}`");
+    }
+}
+
+#[test]
+fn experiment_manifest_checker_accepts_current_manifest() {
+    let text = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../perf-experiments.toml"));
+    for id in [
+        "native-audit-row-retirement",
+        "webgpu-default-standalone-cache-row-retirement",
+        "webgpu-default-upload-scratch-row-retirement",
+        "webgpu-default-id-mask-legacy-row-retirement",
+        "webgpu-default-upload-legacy-row-retirement",
+        "webgpu-default-glyph-run-legacy-row-retirement",
+        "webgpu-default-backdrop-batch-legacy-row-retirement",
+        "webgpu-default-command-family-legacy-row-retirement",
+        "webgpu-clip-state-diagnostic-export-retirement",
+        "canvas-indexed-quad-stack-array",
+        "perf-runner-markdown-metric-summary-direct-streaming",
+        "perf-runner-markdown-results-row-direct-streaming",
+        "perf-runner-markdown-inline-metric-summary-streaming",
+        "perf-runner-markdown-contract-row-direct-streaming",
+        "perf-runner-markdown-summary-direct-streaming",
+        "perf-runner-markdown-tail-line-direct-streaming",
+        "perf-runner-markdown-metric-priority-index-lookup",
+        "perf-runner-case-filter-cache",
+        "perf-runner-case-filter-starts-with-match",
+        "perf-runner-case-filter-state-fast-paths-rejected",
+        "perf-runner-markdown-comparison-line-direct-streaming",
+        "perf-runner-compare-reports-hash-map-rejected",
+        "perf-runner-compare-reports-small-baseline-linear-scan",
+        "perf-runner-compare-reports-output-vector-capacity",
+        "perf-runner-compare-reports-missing-capacity-ceiling",
+        "perf-runner-compare-reports-lookup-improvement-before-envelope",
+        "perf-runner-compare-reports-same-order-fast-path",
+        "perf-runner-compare-reports-same-order-single-pass",
+        "perf-runner-compare-reports-same-order-lazy-improvements-rejected",
+        "perf-runner-compare-reports-same-order-equal-median-fast-path",
+        "perf-runner-compare-reports-same-order-before-small-baseline",
+        "perf-runner-compare-reports-regression-vector-capacity-rejected",
+        "perf-runner-compare-reports-specialized-small-baseline-loop-rejected",
+        "perf-runner-markdown-latest-dated-single-render",
+        "perf-runner-json-pre-sized-serialization",
+        "perf-runner-json-capacity-hint-tightening",
+        "perf-runner-json-string-pre-sized-serialization-rejected",
+        "webgpu-mixed-legacy-row-retirement",
+        "webgpu-effect-uniform-legacy-row-retirement",
+        "webgpu-direct-surface-legacy-row-retirement",
+        "webgpu-neon-marker-legacy-row-retirement",
+        "webgpu-clean-layer-dirty-row-retirement",
+        "webgpu-id-mask-diagnostic-export-retirement-rejected",
+        "ui-core-coalesce-in-place-compaction-rejected",
+        "perf-runner-markdown-audit-branch-retirement-rejected",
+        "webgpu-upload-scratch-diagnostic-export-retirement-rejected",
+        "webgpu-upload-scratch-export-only-retirement-rejected",
+        "webgpu-standalone-cache-diagnostic-exports-retirement-rejected",
+        "webgpu-draw-item-diagnostic-export-retirement-rejected",
+        "webgpu-draw-state-diagnostic-export-retirement-rejected",
+        "perf-runner-markdown-preallocation-rejected",
+        "perf-runner-metric-summary-vector-capacity-rejected",
+        "perf-runner-markdown-metric-priority-table-hoist-rejected",
+        "perf-runner-markdown-metric-priority-bitmask-rejected",
+        "perf-runner-markdown-literal-string-line-writes-rejected",
+        "perf-runner-markdown-metric-summary-cap-early-return-rejected",
+        "perf-runner-markdown-empty-priority-fast-path-rejected",
+        "perf-runner-contract-coverage-allocation-free-gap-scan",
+        "perf-runner-contract-coverage-first-byte-ascii-fold",
+        "perf-runner-contract-coverage-tail-only-phrase-match",
+        "perf-runner-distribution-summary-unused-fields",
+        "perf-runner-distribution-stack-summary-buffer",
+        "perf-runner-distribution-fixed-24-summary",
+        "perf-runner-sample-summary-stack-buffer",
+        "perf-runner-sample-summary-fixed-count-quantiles",
+        "perf-runner-sample-summary-unstable-sort",
+        "permissions-bluetooth-discovery-cache-move",
+        "permissions-sensor-permission-cache-fixed-slots",
+        "permissions-manager-state-fixed-slots",
+    ] {
+        assert!(text.contains(id), "manifest missing `{id}`");
+    }
+    let summary =
+        check_experiment_manifest_text(text, "2026-06-22").expect("current manifest should pass");
+    assert_eq!(
+        summary,
+        ExperimentCheckSummary { total: 73, undecided: 0, accepted: 52, rejected: 21 }
+    );
+}
+
+#[test]
+fn experiment_manifest_checker_rejects_expired_undecided_entries() {
+    let text = r#"
+[[experiments]]
+id = "renderer-packed-stream"
+introduced_commit = "abc123"
+introduced_date = "2026-06-01"
+expires = "2026-06-21"
+required_backends = ["renderer-metal"]
+required_devices = ["macOS host"]
+correctness_gate = "snapshot parity"
+performance_gate = "same-workload A/B"
+decision_state = "undecided"
+perf_ab_gate = "perf-ab:renderer-packed-stream"
+"#;
+    let err = check_experiment_manifest_text(text, "2026-06-22")
+        .expect_err("expired undecided experiment should fail");
+    assert!(err.to_string().contains("expired undecided experiment"));
+}
+
+#[test]
+fn experiment_manifest_checker_requires_perf_ab_gate_for_undecided_entries() {
+    let text = r#"
+[[experiments]]
+id = "renderer-packed-stream"
+introduced_commit = "abc123"
+introduced_date = "2026-06-01"
+expires = "2026-06-23"
+required_backends = ["renderer-metal"]
+required_devices = ["macOS host"]
+correctness_gate = "snapshot parity"
+performance_gate = "same-workload A/B"
+decision_state = "undecided"
+"#;
+    let err = check_experiment_manifest_text(text, "2026-06-22")
+        .expect_err("undecided experiment without perf-ab gate should fail");
+    assert!(err.to_string().contains("perf_ab_gate"));
+}
+
+#[test]
+fn experiment_manifest_checker_requires_proof_for_decided_entries() {
+    let text = r#"
+[[experiments]]
+id = "renderer-packed-stream"
+introduced_commit = "abc123"
+introduced_date = "2026-06-01"
+expires = "2026-06-23"
+required_backends = ["renderer-metal"]
+required_devices = ["macOS host"]
+correctness_gate = "snapshot parity"
+performance_gate = "same-workload A/B"
+decision_state = "accepted"
+decision = "accepted after proof"
+cleanup = ["deleted loser path"]
+"#;
+    let err = check_experiment_manifest_text(text, "2026-06-22")
+        .expect_err("decided experiment without proof should fail");
+    assert!(err.to_string().contains("proof"));
+}
+
+#[test]
+fn xtask_docs_describe_experiment_manifest_check() {
+    let docs = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/xtask/lib.md"));
+    for needle in [
+        "cargo xtask experiments check",
+        "perf-experiments.toml",
+        "perf-ab",
+        "check_experiment_manifest_text",
+    ] {
+        assert!(docs.contains(needle), "xtask docs missing `{needle}`");
     }
 }
 

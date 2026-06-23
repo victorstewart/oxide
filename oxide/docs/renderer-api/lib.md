@@ -50,10 +50,11 @@
 - No feature-specific draw-list behavior.
 
 ## Testing and benchmarks
-- `crates/renderer-api/tests/draw_list_tests.rs` covers draw-list structure and stale text-atlas revision detection.
+- `crates/renderer-api/tests/draw_list_tests.rs` covers draw-list structure, `DrawCmd` taxonomy freeze, and stale text-atlas revision detection.
 - Retained replay integration is covered by `crates/ui-core/tests/draw_builder_tests.rs`.
 
 ## Changelog
+- 2026-06-22: added a measurement-harness freeze for the `DrawCmd` variant set and declaration order before packed draw-stream work.
 - 2026-06-06: added `RuntimeImageUploader` so apps can publish runtime A8 atlas resources through a renderer-neutral boundary.
 - 2026-05-31: tightened retained text replay checks so every glyph atlas handle must have an explicit matching revision, including multi-atlas draw lists.
 - 2026-05-31: added glyph atlas revision metadata and compatibility checks for retained text draw caches.

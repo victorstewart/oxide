@@ -157,6 +157,11 @@ struct OxideCamPerfSnapshot {
 }
 
 #[cfg(target_os = "ios")]
+const _: [(); 208] = [(); core::mem::size_of::<OxideCamPerfSnapshot>()];
+#[cfg(target_os = "ios")]
+const _: [(); 8] = [(); core::mem::align_of::<OxideCamPerfSnapshot>()];
+
+#[cfg(target_os = "ios")]
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct OxideCamContractSnapshot {
@@ -166,6 +171,11 @@ struct OxideCamContractSnapshot {
     video_range: u32,
     color_space: u32,
 }
+
+#[cfg(target_os = "ios")]
+const _: [(); 20] = [(); core::mem::size_of::<OxideCamContractSnapshot>()];
+#[cfg(target_os = "ios")]
+const _: [(); 4] = [(); core::mem::align_of::<OxideCamContractSnapshot>()];
 
 #[cfg(target_os = "ios")]
 unsafe extern "C" {
@@ -2973,6 +2983,9 @@ pub struct OxideHostStats {
     pub host_frame_dirty: u8,
     pub host_settle_frames_remaining: u8,
 }
+
+const _: [(); 512] = [(); core::mem::size_of::<OxideHostStats>()];
+const _: [(); 8] = [(); core::mem::align_of::<OxideHostStats>()];
 
 #[no_mangle]
 pub extern "C" fn oxide_host_app_stats(out: *mut OxideHostStats) -> ::libc::c_int {

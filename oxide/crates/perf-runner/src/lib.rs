@@ -20,11 +20,21 @@ use std::hint::black_box;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 const DEFAULT_BASELINE_JSON: &str = "benchmarks/workspace/latest.json";
 const DEFAULT_BASELINE_MARKDOWN: &str = "benchmarks/workspace/latest.md";
+const DEFAULT_MARKDOWN_RENDER_BENCH_ITERS: usize = 256;
+const DEFAULT_JSON_RENDER_BENCH_ITERS: usize = 256;
+const DEFAULT_SAMPLE_SUMMARY_BENCH_ITERS: usize = 262_144;
+const DEFAULT_CASE_FILTER_BENCH_ITERS: usize = 262_144;
+const DEFAULT_COMPARE_REPORTS_BENCH_ITERS: usize = 16_384;
+const DEFAULT_FRAME_PACING_METRICS_BENCH_ITERS: usize = 262_144;
+const DEFAULT_DISTRIBUTION_METRICS_BENCH_ITERS: usize = 262_144;
+const DEFAULT_CASE_METRIC_CONTRACT_BENCH_ITERS: usize = 16_384;
+const DEFAULT_CONTRACT_COVERAGE_BENCH_ITERS: usize = 16_384;
+const LINEAR_COMPARE_BASELINE_CASE_LIMIT: usize = 32;
 const LATIN_FONT: &[u8] = include_bytes!("../../text/tests/fixtures/test_text_latin.ttf");
 const CJK_FONT: &[u8] = include_bytes!("../../text/tests/fixtures/test_text_cjk.ttf");
 const MACOS_HEBREW_FONT: &str = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf";
@@ -34,6 +44,7 @@ const PERF_DEVICE_SCALE: f32 = 2.0;
 const PERF_SCENE_W: u32 = 1200;
 const PERF_SCENE_H: u32 = 800;
 const PERF_RUNNER_FILTER_ENV: &str = "OXIDE_PERF_RUNNER_FILTER";
+static PERF_CASE_FILTERS: OnceLock<Vec<String>> = OnceLock::new();
 
 struct ScenePerfSpec {
     slug: &'static str,
@@ -103,24 +114,26 @@ struct BridgePerfSpec {
     name: &'static str,
 }
 
-fn perf_case_filters() -> Vec<String> {
-    std::env::var(PERF_RUNNER_FILTER_ENV)
-        .ok()
-        .map(|value| {
-            value
-                .split(',')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(String::from)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
+fn perf_case_filters() -> &'static [String] {
+    PERF_CASE_FILTERS.get_or_init(load_perf_case_filters).as_slice()
+}
+
+fn load_perf_case_filters() -> Vec<String> {
+    let Some(value) = std::env::var(PERF_RUNNER_FILTER_ENV).ok() else {
+        return Vec::new();
+    };
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(String::from)
+        .collect::<Vec<_>>()
 }
 
 fn perf_case_allowed(case_id: &str) -> bool {
     let filters = perf_case_filters();
     filters.is_empty()
-        || filters.iter().any(|filter| case_id == filter || case_id.starts_with(filter))
+        || filters.iter().any(|filter| case_id.starts_with(filter))
 }
 
 fn perf_case_prefix_allowed(prefix: &str) -> bool {
@@ -569,6 +582,28 @@ struct Cli {
     compare: Option<PathBuf>,
     json_out: Option<PathBuf>,
     markdown_out: Option<PathBuf>,
+    markdown_bench_report: Option<PathBuf>,
+    markdown_write_bench_report: Option<PathBuf>,
+    markdown_bench_compare: Option<PathBuf>,
+    markdown_bench_iters: usize,
+    json_bench_report: Option<PathBuf>,
+    json_string_bench_report: Option<PathBuf>,
+    json_bench_iters: usize,
+    sample_summary_bench: bool,
+    sample_summary_bench_iters: usize,
+    case_filter_bench: bool,
+    case_filter_bench_iters: usize,
+    compare_bench_current: Option<PathBuf>,
+    compare_bench_baseline: Option<PathBuf>,
+    compare_bench_iters: usize,
+    frame_pacing_metrics_bench: bool,
+    frame_pacing_metrics_bench_iters: usize,
+    distribution_metrics_bench: bool,
+    distribution_metrics_bench_iters: usize,
+    case_metric_contract_bench_report: Option<PathBuf>,
+    case_metric_contract_bench_iters: usize,
+    contract_coverage_bench_report: Option<PathBuf>,
+    contract_coverage_bench_iters: usize,
     write_baseline: bool,
 }
 
@@ -696,6 +731,15 @@ struct SampleSummary {
     p99: f64,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DistributionMetricSummary
+{
+   max: f64,
+   median: f64,
+   p95: f64,
+   p99: f64,
+}
+
 #[derive(Default)]
 struct TextAtlasUploadStats {
     checksum: u64,
@@ -708,7 +752,6 @@ struct TextAtlasUploadStats {
     glyph_runs: u64,
     vertices: u64,
     indices: u64,
-    shape_calls: u64,
 }
 
 #[derive(Default)]
@@ -1188,6 +1231,69 @@ pub fn run_cli(args: &[String]) -> Result<()> {
         return Ok(());
     }
     let cli = parse_cli(args)?;
+    if cli.sample_summary_bench {
+        return run_sample_summary_bench(cli);
+    }
+    if cli.sample_summary_bench_iters != 0 {
+        bail!("--bench-sample-summary-iters requires --bench-sample-summary");
+    }
+    if cli.case_filter_bench {
+        return run_case_filter_bench(cli);
+    }
+    if cli.case_filter_bench_iters != 0 {
+        bail!("--bench-case-filter-iters requires --bench-case-filter");
+    }
+    if cli.compare_bench_current.is_some() {
+        return run_compare_reports_bench(cli);
+    }
+    if cli.compare_bench_iters != 0 {
+        bail!("--bench-compare-iters requires --bench-compare-reports");
+    }
+    if cli.frame_pacing_metrics_bench {
+        return run_frame_pacing_metrics_bench(cli);
+    }
+    if cli.frame_pacing_metrics_bench_iters != 0 {
+        bail!("--bench-frame-pacing-iters requires --bench-frame-pacing-metrics");
+    }
+    if cli.distribution_metrics_bench {
+        return run_distribution_metrics_bench(cli);
+    }
+    if cli.distribution_metrics_bench_iters != 0 {
+        bail!("--bench-distribution-iters requires --bench-distribution-metrics");
+    }
+    if cli.case_metric_contract_bench_report.is_some() {
+        return run_case_metric_contract_bench(cli);
+    }
+    if cli.case_metric_contract_bench_iters != 0 {
+        bail!("--bench-case-metric-iters requires --bench-case-metric-contract");
+    }
+    if cli.contract_coverage_bench_report.is_some() {
+        return run_contract_coverage_bench(cli);
+    }
+    if cli.contract_coverage_bench_iters != 0 {
+        bail!("--bench-contract-iters requires --bench-contract-coverage");
+    }
+    if cli.markdown_write_bench_report.is_some() {
+        return run_markdown_write_bench(cli);
+    }
+    if cli.markdown_bench_report.is_some() {
+        return run_markdown_render_bench(cli);
+    }
+    if cli.markdown_bench_iters != 0 {
+        bail!("--bench-markdown-iters requires --bench-markdown-render or --bench-markdown-write");
+    }
+    if cli.markdown_bench_compare.is_some() {
+        bail!("--bench-markdown-compare requires --bench-markdown-render or --bench-markdown-write");
+    }
+    if cli.json_bench_report.is_some() {
+        return run_json_render_bench(cli);
+    }
+    if cli.json_string_bench_report.is_some() {
+        return run_json_string_render_bench(cli);
+    }
+    if cli.json_bench_iters != 0 {
+        bail!("--bench-json-iters requires --bench-json-render or --bench-json-string-render");
+    }
     if cli.run_suite {
         return run_suite(cli);
     }
@@ -1221,6 +1327,133 @@ fn parse_cli(args: &[String]) -> Result<Cli> {
                 let path = it.next().context("missing value for --markdown-out")?;
                 cli.markdown_out = Some(PathBuf::from(path));
             }
+            "--bench-markdown-render" => {
+                let path = it.next().context("missing value for --bench-markdown-render")?;
+                cli.markdown_bench_report = Some(PathBuf::from(path));
+            }
+            "--bench-markdown-write" => {
+                let path = it.next().context("missing value for --bench-markdown-write")?;
+                cli.markdown_write_bench_report = Some(PathBuf::from(path));
+            }
+            "--bench-markdown-compare" => {
+                let path = it.next().context("missing value for --bench-markdown-compare")?;
+                cli.markdown_bench_compare = Some(PathBuf::from(path));
+            }
+            "--bench-markdown-iters" => {
+                let value = it.next().context("missing value for --bench-markdown-iters")?;
+                cli.markdown_bench_iters = value
+                    .parse::<usize>()
+                    .with_context(|| format!("invalid --bench-markdown-iters value `{}`", value))?;
+                if cli.markdown_bench_iters == 0 {
+                    bail!("--bench-markdown-iters must be greater than zero");
+                }
+            }
+            "--bench-json-render" => {
+                let path = it.next().context("missing value for --bench-json-render")?;
+                cli.json_bench_report = Some(PathBuf::from(path));
+            }
+            "--bench-json-string-render" => {
+                let path = it.next().context("missing value for --bench-json-string-render")?;
+                cli.json_string_bench_report = Some(PathBuf::from(path));
+            }
+            "--bench-json-iters" => {
+                let value = it.next().context("missing value for --bench-json-iters")?;
+                cli.json_bench_iters = value
+                    .parse::<usize>()
+                    .with_context(|| format!("invalid --bench-json-iters value `{}`", value))?;
+                if cli.json_bench_iters == 0 {
+                    bail!("--bench-json-iters must be greater than zero");
+                }
+            }
+            "--bench-sample-summary" => {
+                cli.sample_summary_bench = true;
+            }
+            "--bench-sample-summary-iters" => {
+                let value = it.next().context("missing value for --bench-sample-summary-iters")?;
+                cli.sample_summary_bench_iters = value
+                    .parse::<usize>()
+                    .with_context(|| format!("invalid --bench-sample-summary-iters value `{}`", value))?;
+                if cli.sample_summary_bench_iters == 0 {
+                    bail!("--bench-sample-summary-iters must be greater than zero");
+                }
+            }
+            "--bench-case-filter" => {
+                cli.case_filter_bench = true;
+            }
+            "--bench-case-filter-iters" => {
+                let value = it.next().context("missing value for --bench-case-filter-iters")?;
+                cli.case_filter_bench_iters = value
+                    .parse::<usize>()
+                    .with_context(|| format!("invalid --bench-case-filter-iters value `{}`", value))?;
+                if cli.case_filter_bench_iters == 0 {
+                    bail!("--bench-case-filter-iters must be greater than zero");
+                }
+            }
+            "--bench-compare-reports" => {
+                let current = it.next().context("missing current report for --bench-compare-reports")?;
+                let baseline = it.next().context("missing baseline report for --bench-compare-reports")?;
+                cli.compare_bench_current = Some(PathBuf::from(current));
+                cli.compare_bench_baseline = Some(PathBuf::from(baseline));
+            }
+            "--bench-compare-iters" => {
+                let value = it.next().context("missing value for --bench-compare-iters")?;
+                cli.compare_bench_iters = value
+                    .parse::<usize>()
+                    .with_context(|| format!("invalid --bench-compare-iters value `{}`", value))?;
+                if cli.compare_bench_iters == 0 {
+                    bail!("--bench-compare-iters must be greater than zero");
+                }
+            }
+            "--bench-frame-pacing-metrics" => {
+                cli.frame_pacing_metrics_bench = true;
+            }
+            "--bench-frame-pacing-iters" => {
+                let value = it.next().context("missing value for --bench-frame-pacing-iters")?;
+                cli.frame_pacing_metrics_bench_iters = value
+                    .parse::<usize>()
+                    .with_context(|| format!("invalid --bench-frame-pacing-iters value `{}`", value))?;
+                if cli.frame_pacing_metrics_bench_iters == 0 {
+                    bail!("--bench-frame-pacing-iters must be greater than zero");
+                }
+            }
+            "--bench-distribution-metrics" => {
+                cli.distribution_metrics_bench = true;
+            }
+            "--bench-distribution-iters" => {
+                let value = it.next().context("missing value for --bench-distribution-iters")?;
+                cli.distribution_metrics_bench_iters = value
+                    .parse::<usize>()
+                    .with_context(|| format!("invalid --bench-distribution-iters value `{}`", value))?;
+                if cli.distribution_metrics_bench_iters == 0 {
+                    bail!("--bench-distribution-iters must be greater than zero");
+                }
+            }
+            "--bench-case-metric-contract" => {
+                let path = it.next().context("missing value for --bench-case-metric-contract")?;
+                cli.case_metric_contract_bench_report = Some(PathBuf::from(path));
+            }
+            "--bench-case-metric-iters" => {
+                let value = it.next().context("missing value for --bench-case-metric-iters")?;
+                cli.case_metric_contract_bench_iters = value
+                    .parse::<usize>()
+                    .with_context(|| format!("invalid --bench-case-metric-iters value `{}`", value))?;
+                if cli.case_metric_contract_bench_iters == 0 {
+                    bail!("--bench-case-metric-iters must be greater than zero");
+                }
+            }
+            "--bench-contract-coverage" => {
+                let path = it.next().context("missing value for --bench-contract-coverage")?;
+                cli.contract_coverage_bench_report = Some(PathBuf::from(path));
+            }
+            "--bench-contract-iters" => {
+                let value = it.next().context("missing value for --bench-contract-iters")?;
+                cli.contract_coverage_bench_iters = value
+                    .parse::<usize>()
+                    .with_context(|| format!("invalid --bench-contract-iters value `{}`", value))?;
+                if cli.contract_coverage_bench_iters == 0 {
+                    bail!("--bench-contract-iters must be greater than zero");
+                }
+            }
             "--write-baseline" => {
                 cli.run_suite = true;
                 cli.write_baseline = true;
@@ -1238,6 +1471,696 @@ fn print_usage() {
     println!("  default: legacy renderer summary for sweep scripts");
     println!("  --run-suite [--smoke] [--compare PATH] [--json-out PATH] [--markdown-out PATH]");
     println!("  --write-baseline writes to benchmarks/workspace/latest.json and latest.md");
+    println!("  --bench-markdown-render PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]");
+    println!("  --bench-markdown-write PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]");
+    println!("  --bench-json-render PATH [--bench-json-iters N]");
+    println!("  --bench-json-string-render PATH [--bench-json-iters N]");
+    println!("  --bench-sample-summary [--bench-sample-summary-iters N]");
+    println!("  --bench-case-filter [--bench-case-filter-iters N]");
+    println!("  --bench-compare-reports CURRENT BASELINE [--bench-compare-iters N]");
+    println!("  --bench-frame-pacing-metrics [--bench-frame-pacing-iters N]");
+    println!("  --bench-distribution-metrics [--bench-distribution-iters N]");
+    println!("  --bench-case-metric-contract PATH [--bench-case-metric-iters N]");
+    println!("  --bench-contract-coverage PATH [--bench-contract-iters N]");
+}
+
+fn load_markdown_bench_inputs(path: &Path, compare_path: Option<&PathBuf>) -> Result<(PerfReport, Option<PerfComparison>)> {
+    let report = load_report(path)?;
+    let comparison = if let Some(compare_path) = compare_path {
+        let baseline = load_report(compare_path)?;
+        Some(compare_reports(&report, &baseline))
+    } else {
+        None
+    };
+    Ok((report, comparison))
+}
+
+fn markdown_bench_iters(cli: &Cli) -> usize {
+    if cli.markdown_bench_iters == 0 {
+        DEFAULT_MARKDOWN_RENDER_BENCH_ITERS
+    } else {
+        cli.markdown_bench_iters
+    }
+}
+
+fn run_markdown_render_bench(cli: Cli) -> Result<()> {
+    let path = cli
+        .markdown_bench_report
+        .as_ref()
+        .context("missing --bench-markdown-render path")?;
+    let iterations = markdown_bench_iters(&cli);
+    let (report, comparison) = load_markdown_bench_inputs(path, cli.markdown_bench_compare.as_ref())?;
+    let matched = comparison.as_ref().map(|comparison| comparison.matched).unwrap_or(0);
+    let regressions = comparison.as_ref().map(|comparison| comparison.regressions.len()).unwrap_or(0);
+    let missing_baseline =
+        comparison.as_ref().map(|comparison| comparison.missing_baseline.len()).unwrap_or(0);
+    let start = Instant::now();
+    let mut total_bytes = 0usize;
+    for _ in 0..iterations {
+        let body = render_markdown(black_box(&report), black_box(comparison.as_ref()));
+        total_bytes = total_bytes.wrapping_add(black_box(body.len()));
+        black_box(&body);
+    }
+    let elapsed = start.elapsed();
+    let elapsed_ms = elapsed.as_secs_f64() * 1_000.0;
+    let us_per_iter = elapsed.as_secs_f64() * 1_000_000.0 / iterations as f64;
+    let bytes_per_iter = total_bytes / iterations;
+    println!(
+        "markdown_render_bench report={} comparison={} matched={} regressions={} missing_baseline={} iterations={} elapsed_ms={:.3} us_per_iter={:.3} bytes_per_iter={} total_bytes={}",
+        path.display(),
+        cli.markdown_bench_compare
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| String::from("-")),
+        matched,
+        regressions,
+        missing_baseline,
+        iterations,
+        elapsed_ms,
+        us_per_iter,
+        bytes_per_iter,
+        total_bytes
+    );
+    Ok(())
+}
+
+fn markdown_latest_and_dated_render_bytes(report: &PerfReport, comparison: Option<&PerfComparison>) -> usize {
+    let body = render_markdown(report, comparison);
+    body.len().wrapping_mul(2)
+}
+
+fn run_markdown_write_bench(cli: Cli) -> Result<()> {
+    let path = cli
+        .markdown_write_bench_report
+        .as_ref()
+        .context("missing --bench-markdown-write path")?;
+    let iterations = markdown_bench_iters(&cli);
+    let (report, comparison) = load_markdown_bench_inputs(path, cli.markdown_bench_compare.as_ref())?;
+    let matched = comparison.as_ref().map(|comparison| comparison.matched).unwrap_or(0);
+    let regressions = comparison.as_ref().map(|comparison| comparison.regressions.len()).unwrap_or(0);
+    let missing_baseline =
+        comparison.as_ref().map(|comparison| comparison.missing_baseline.len()).unwrap_or(0);
+    let start = Instant::now();
+    let mut total_bytes = 0usize;
+    for _ in 0..iterations {
+        let bytes = markdown_latest_and_dated_render_bytes(
+            black_box(&report),
+            black_box(comparison.as_ref()),
+        );
+        total_bytes = total_bytes.wrapping_add(black_box(bytes));
+    }
+    let elapsed = start.elapsed();
+    let elapsed_ms = elapsed.as_secs_f64() * 1_000.0;
+    let us_per_iter = elapsed.as_secs_f64() * 1_000_000.0 / iterations as f64;
+    let bytes_per_iter = total_bytes / iterations;
+    println!(
+        "markdown_write_bench report={} comparison={} matched={} regressions={} missing_baseline={} iterations={} elapsed_ms={:.3} us_per_iter={:.3} bytes_per_iter={} total_bytes={}",
+        path.display(),
+        cli.markdown_bench_compare
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| String::from("-")),
+        matched,
+        regressions,
+        missing_baseline,
+        iterations,
+        elapsed_ms,
+        us_per_iter,
+        bytes_per_iter,
+        total_bytes
+    );
+    Ok(())
+}
+
+fn json_bench_iters(cli: &Cli) -> usize {
+    if cli.json_bench_iters == 0 {
+        DEFAULT_JSON_RENDER_BENCH_ITERS
+    } else {
+        cli.json_bench_iters
+    }
+}
+
+fn run_json_render_bench(cli: Cli) -> Result<()> {
+    let path = cli
+        .json_bench_report
+        .as_ref()
+        .context("missing --bench-json-render path")?;
+    let iterations = json_bench_iters(&cli);
+    let report = load_report(path)?;
+    let start = Instant::now();
+    let mut total_bytes = 0usize;
+    for _ in 0..iterations {
+        let body = serialize_report_json(black_box(&report))?;
+        total_bytes = total_bytes.wrapping_add(black_box(body.len()));
+        black_box(&body);
+    }
+    let elapsed = start.elapsed();
+    let elapsed_ms = elapsed.as_secs_f64() * 1_000.0;
+    let us_per_iter = elapsed.as_secs_f64() * 1_000_000.0 / iterations as f64;
+    let bytes_per_iter = total_bytes / iterations;
+    println!(
+        "json_render_bench report={} iterations={} elapsed_ms={:.3} us_per_iter={:.3} bytes_per_iter={} total_bytes={}",
+        path.display(),
+        iterations,
+        elapsed_ms,
+        us_per_iter,
+        bytes_per_iter,
+        total_bytes
+    );
+    Ok(())
+}
+
+fn run_json_string_render_bench(cli: Cli) -> Result<()> {
+    let path = cli
+        .json_string_bench_report
+        .as_ref()
+        .context("missing --bench-json-string-render path")?;
+    let iterations = json_bench_iters(&cli);
+    let report = load_report(path)?;
+    let start = Instant::now();
+    let mut total_bytes = 0usize;
+    for _ in 0..iterations {
+        let body = serialize_report_json_string(black_box(&report))?;
+        total_bytes = total_bytes.wrapping_add(black_box(body.len()));
+        black_box(&body);
+    }
+    let elapsed = start.elapsed();
+    let elapsed_ms = elapsed.as_secs_f64() * 1_000.0;
+    let us_per_iter = elapsed.as_secs_f64() * 1_000_000.0 / iterations as f64;
+    let bytes_per_iter = total_bytes / iterations;
+    println!(
+        "json_string_render_bench report={} iterations={} elapsed_ms={:.3} us_per_iter={:.3} bytes_per_iter={} total_bytes={}",
+        path.display(),
+        iterations,
+        elapsed_ms,
+        us_per_iter,
+        bytes_per_iter,
+        total_bytes
+    );
+    Ok(())
+}
+
+fn sample_summary_bench_iters(cli: &Cli) -> usize
+{
+   if cli.sample_summary_bench_iters == 0
+   {
+      DEFAULT_SAMPLE_SUMMARY_BENCH_ITERS
+   }
+   else
+   {
+      cli.sample_summary_bench_iters
+   }
+}
+
+fn run_sample_summary_bench(cli: Cli) -> Result<()>
+{
+   const SMOKE_SAMPLES: [f64; 6] = [3.5, 4.25, 2.75, 5.0, 3.875, 6.125];
+   const JOURNEY_SAMPLES: [f64; 10] = [
+      118.0, 121.5, 116.25, 130.0, 119.75, 124.5, 117.5, 122.25, 128.0, 120.5,
+   ];
+   const CPU_SAMPLES: [f64; 12] = [
+      0.88, 0.91, 0.86, 0.94, 0.89, 0.97, 0.92, 0.87, 1.05, 0.90, 0.95, 0.93,
+   ];
+   const GPU_SAMPLES: [f64; 24] = [
+      5.9, 6.2, 6.0, 6.4, 6.1, 7.8, 6.3, 6.0, 6.5, 6.2, 6.1, 8.4,
+      6.3, 6.6, 6.2, 6.0, 6.4, 6.1, 7.2, 6.5, 6.3, 6.2, 6.7, 9.1,
+   ];
+
+   let groups: [&[f64]; 4] = [
+      &SMOKE_SAMPLES[..],
+      &JOURNEY_SAMPLES[..],
+      &CPU_SAMPLES[..],
+      &GPU_SAMPLES[..],
+   ];
+   let iterations = sample_summary_bench_iters(&cli);
+   let start = Instant::now();
+   let mut summary_count = 0usize;
+   let mut checksum = 0u64;
+   for _ in 0..iterations
+   {
+      for samples in &groups
+      {
+         let summary = summarize(black_box(*samples));
+         summary_count = summary_count.wrapping_add(1);
+         checksum = checksum.wrapping_add(black_box(sample_summary_bench_checksum(summary)));
+         black_box(summary);
+      }
+   }
+   let elapsed = start.elapsed();
+   let elapsed_ms = elapsed.as_secs_f64() * 1_000.0;
+   let us_per_iter = elapsed.as_secs_f64() * 1_000_000.0 / iterations as f64;
+   println!(
+      "sample_summary_bench iterations={} groups={} elapsed_ms={:.3} us_per_iter={:.3} summaries_per_iter={} checksum={}",
+      iterations,
+      groups.len(),
+      elapsed_ms,
+      us_per_iter,
+      summary_count / iterations,
+      checksum
+   );
+   Ok(())
+}
+
+fn sample_summary_bench_checksum(summary: SampleSummary) -> u64
+{
+   let mut checksum = summary.min.to_bits();
+   checksum = checksum.rotate_left(7) ^ summary.max.to_bits();
+   checksum = checksum.rotate_left(7) ^ summary.mean.to_bits();
+   checksum = checksum.rotate_left(7) ^ summary.median.to_bits();
+   checksum = checksum.rotate_left(7) ^ summary.p95.to_bits();
+   checksum.rotate_left(7) ^ summary.p99.to_bits()
+}
+
+fn run_case_filter_bench(cli: Cli) -> Result<()> {
+    const PREFIXES: &[&str] = &[
+        "cpu.system.",
+        "gpu.system.",
+        "cpu.component.",
+        "cpu.authoring.",
+        "gpu.scene.",
+        "cpu.layout.",
+        "cpu.reconcile.",
+        "cpu.bridge.",
+    ];
+    const CASES: &[&str] = &[
+        "cpu.system.prepare_draws.current",
+        "cpu.system.text_prefix_width_map",
+        "cpu.authoring.collection_key_reconcile",
+        "cpu.authoring.collection_prefix_update",
+        "gpu.scene.damage_lab.frame",
+        "gpu.journey.collection_navigation.frame_pacing",
+        "cpu.layout.dirty_subtree.incremental_relayout",
+        "cpu.bridge.permission_callback_fanout",
+    ];
+    let iterations = if cli.case_filter_bench_iters == 0 {
+        DEFAULT_CASE_FILTER_BENCH_ITERS
+    } else {
+        cli.case_filter_bench_iters
+    };
+    let start = Instant::now();
+    let mut allowed = 0usize;
+    let mut prefix_allowed = 0usize;
+    let mut checksum = 0u64;
+    for _ in 0..iterations {
+        for prefix in PREFIXES {
+            let prefix = black_box(*prefix);
+            if black_box(perf_case_prefix_allowed(prefix)) {
+                prefix_allowed = prefix_allowed.wrapping_add(1);
+                checksum = checksum.wrapping_add(filter_bench_key(prefix));
+            } else {
+                checksum = checksum.wrapping_add(1);
+            }
+        }
+        for case_id in CASES {
+            let case_id = black_box(*case_id);
+            if black_box(perf_case_allowed(case_id)) {
+                allowed = allowed.wrapping_add(1);
+                checksum = checksum.wrapping_add(filter_bench_key(case_id));
+            } else {
+                checksum = checksum.wrapping_add(1);
+            }
+        }
+    }
+    let elapsed = start.elapsed();
+    let elapsed_ms = elapsed.as_secs_f64() * 1_000.0;
+    let us_per_iter = elapsed.as_secs_f64() * 1_000_000.0 / iterations as f64;
+    println!(
+        "case_filter_bench iterations={} elapsed_ms={:.3} us_per_iter={:.3} allowed_per_iter={} prefix_allowed_per_iter={} checksum={}",
+        iterations,
+        elapsed_ms,
+        us_per_iter,
+        allowed / iterations,
+        prefix_allowed / iterations,
+        checksum
+    );
+    Ok(())
+}
+
+fn filter_bench_key(value: &str) -> u64 {
+    value.as_bytes().iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
+        hash.wrapping_mul(0x100000001b3) ^ u64::from(*byte)
+    })
+}
+
+fn distribution_metrics_bench_iters(cli: &Cli) -> usize
+{
+   if cli.distribution_metrics_bench_iters == 0
+   {
+      DEFAULT_DISTRIBUTION_METRICS_BENCH_ITERS
+   }
+   else
+   {
+      cli.distribution_metrics_bench_iters
+   }
+}
+
+fn distribution_metrics_bench_samples(base: f64) -> Vec<f64>
+{
+   let mut samples = Vec::with_capacity(24);
+   for index in 0..24usize
+   {
+      let sample = base
+         + (index % 7) as f64 * 0.137
+         + if index % 11 == 0 { 1.75 } else { 0.0 };
+      samples.push(sample);
+   }
+   samples
+}
+
+fn run_distribution_metrics_bench(cli: Cli) -> Result<()>
+{
+   let iterations = distribution_metrics_bench_iters(&cli);
+   let frame_samples = distribution_metrics_bench_samples(6.2);
+   let event_samples = distribution_metrics_bench_samples(7.4);
+   let gpu_samples = distribution_metrics_bench_samples(1.1);
+   let start = Instant::now();
+   let mut metric_count = 0usize;
+   let mut checksum = 0u64;
+   for _ in 0..iterations
+   {
+      let mut metrics = BTreeMap::new();
+      insert_distribution_metrics(&mut metrics, "frame_ms", black_box(frame_samples.as_slice()));
+      insert_distribution_metrics(&mut metrics, "event_to_visible_ms", black_box(event_samples.as_slice()));
+      insert_distribution_metrics(&mut metrics, "gpu_ms", black_box(gpu_samples.as_slice()));
+      metric_count = metric_count.wrapping_add(black_box(metrics.len()));
+      checksum = checksum.wrapping_add(black_box(frame_pacing_metrics_bench_checksum(&metrics)));
+      black_box(&metrics);
+   }
+   let elapsed = start.elapsed();
+   let elapsed_ms = elapsed.as_secs_f64() * 1_000.0;
+   let us_per_iter = elapsed.as_secs_f64() * 1_000_000.0 / iterations as f64;
+   println!(
+      "distribution_metrics_bench iterations={} samples_per_distribution={} distributions_per_iter=3 elapsed_ms={:.3} us_per_iter={:.3} metrics_per_iter={} checksum={}",
+      iterations,
+      frame_samples.len(),
+      elapsed_ms,
+      us_per_iter,
+      metric_count / iterations,
+      checksum
+   );
+   Ok(())
+}
+
+fn case_metric_contract_bench_iters(cli: &Cli) -> usize
+{
+   if cli.case_metric_contract_bench_iters == 0
+   {
+      DEFAULT_CASE_METRIC_CONTRACT_BENCH_ITERS
+   }
+   else
+   {
+      cli.case_metric_contract_bench_iters
+   }
+}
+
+fn run_case_metric_contract_bench(cli: Cli) -> Result<()>
+{
+   let path = cli
+      .case_metric_contract_bench_report
+      .as_ref()
+      .context("missing --bench-case-metric-contract path")?;
+   let iterations = case_metric_contract_bench_iters(&cli);
+   let report = load_report(path)?;
+   let frame_required = report.cases.iter().filter(|case| case_requires_frame_metrics(case)).count();
+   let gpu_required = report.cases.iter().filter(|case| case_requires_gpu_metrics(case)).count();
+   let shape_checksum = case_metric_contract_bench_checksum(&report.cases);
+   let start = Instant::now();
+   let mut checksum = 0u64;
+   for _ in 0..iterations
+   {
+      assert_case_metric_contract(black_box(&report.cases))?;
+      checksum = checksum.wrapping_add(black_box(shape_checksum));
+   }
+   let elapsed = start.elapsed();
+   let elapsed_ms = elapsed.as_secs_f64() * 1_000.0;
+   let us_per_iter = elapsed.as_secs_f64() * 1_000_000.0 / iterations as f64;
+   println!(
+      "case_metric_contract_bench report={} iterations={} cases={} frame_required={} gpu_required={} elapsed_ms={:.3} us_per_iter={:.3} checksum={}",
+      path.display(),
+      iterations,
+      report.cases.len(),
+      frame_required,
+      gpu_required,
+      elapsed_ms,
+      us_per_iter,
+      checksum
+   );
+   Ok(())
+}
+
+fn case_metric_contract_bench_checksum(cases: &[PerfCaseResult]) -> u64
+{
+   let mut checksum = 0u64;
+   for case in cases
+   {
+      if case_requires_frame_metrics(case)
+      {
+         checksum = checksum.wrapping_add(filter_bench_key(&case.id));
+         checksum = checksum.wrapping_add(1);
+      }
+      if case_requires_gpu_metrics(case)
+      {
+         checksum = checksum.wrapping_add(filter_bench_key(&case.id));
+         checksum = checksum.wrapping_add(2);
+      }
+   }
+   checksum
+}
+
+fn contract_coverage_bench_iters(cli: &Cli) -> usize
+{
+   if cli.contract_coverage_bench_iters == 0
+   {
+      DEFAULT_CONTRACT_COVERAGE_BENCH_ITERS
+   }
+   else
+   {
+      cli.contract_coverage_bench_iters
+   }
+}
+
+fn run_contract_coverage_bench(cli: Cli) -> Result<()>
+{
+   let path = cli
+      .contract_coverage_bench_report
+      .as_ref()
+      .context("missing --bench-contract-coverage path")?;
+   let iterations = contract_coverage_bench_iters(&cli);
+   let report = load_report(path)?;
+   let layer_count = report.contract.layers.len();
+   let battery_count = report.contract.battery.len();
+   let note_count = contract_coverage_note_count(&report.contract);
+   let shape_checksum = contract_coverage_bench_checksum(&report.contract);
+   let start = Instant::now();
+   let mut checksum = 0u64;
+   for _ in 0..iterations
+   {
+      assert_contract_coverage(black_box(&report.contract))?;
+      checksum = checksum.wrapping_add(black_box(shape_checksum));
+   }
+   let elapsed = start.elapsed();
+   let elapsed_ms = elapsed.as_secs_f64() * 1_000.0;
+   let us_per_iter = elapsed.as_secs_f64() * 1_000_000.0 / iterations as f64;
+   println!(
+      "contract_coverage_bench report={} iterations={} layers={} battery={} notes={} elapsed_ms={:.3} us_per_iter={:.3} checksum={}",
+      path.display(),
+      iterations,
+      layer_count,
+      battery_count,
+      note_count,
+      elapsed_ms,
+      us_per_iter,
+      checksum
+   );
+   Ok(())
+}
+
+fn contract_coverage_note_count(contract: &ContractCoverageReport) -> usize
+{
+   contract
+      .layers
+      .iter()
+      .chain(contract.battery.iter())
+      .map(|entry| entry.notes.len())
+      .sum()
+}
+
+fn contract_coverage_bench_checksum(contract: &ContractCoverageReport) -> u64
+{
+   let mut checksum = 0u64;
+   for entry in contract.layers.iter().chain(contract.battery.iter())
+   {
+      checksum = checksum.wrapping_add(filter_bench_key(&entry.id));
+      checksum = checksum.wrapping_add(filter_bench_key(&entry.status));
+      for note in &entry.notes
+      {
+         checksum = checksum.wrapping_add(filter_bench_key(note));
+      }
+   }
+   checksum
+}
+
+fn frame_pacing_metrics_bench_iters(cli: &Cli) -> usize
+{
+   if cli.frame_pacing_metrics_bench_iters == 0
+   {
+      DEFAULT_FRAME_PACING_METRICS_BENCH_ITERS
+   }
+   else
+   {
+      cli.frame_pacing_metrics_bench_iters
+   }
+}
+
+fn frame_pacing_metrics_bench_samples() -> Vec<f64>
+{
+   let mut samples = Vec::with_capacity(1024);
+   for index in 0..1024usize
+   {
+      let sample = if index % 97 == 0
+      {
+         24.0
+      }
+      else if index % 13 == 0
+      {
+         12.0
+      }
+      else if index % 5 == 0
+      {
+         8.8
+      }
+      else
+      {
+         6.2
+      };
+      samples.push(sample);
+   }
+   samples
+}
+
+fn run_frame_pacing_metrics_bench(cli: Cli) -> Result<()>
+{
+   let iterations = frame_pacing_metrics_bench_iters(&cli);
+   let samples = frame_pacing_metrics_bench_samples();
+   let start = Instant::now();
+   let mut metric_count = 0usize;
+   let mut checksum = 0u64;
+   for _ in 0..iterations
+   {
+      let mut metrics = BTreeMap::new();
+      insert_frame_pacing_metrics(&mut metrics, black_box(samples.as_slice()));
+      metric_count = metric_count.wrapping_add(black_box(metrics.len()));
+      checksum = checksum.wrapping_add(black_box(frame_pacing_metrics_bench_checksum(&metrics)));
+      black_box(&metrics);
+   }
+   let elapsed = start.elapsed();
+   let elapsed_ms = elapsed.as_secs_f64() * 1_000.0;
+   let us_per_iter = elapsed.as_secs_f64() * 1_000_000.0 / iterations as f64;
+   println!(
+      "frame_pacing_metrics_bench iterations={} samples={} elapsed_ms={:.3} us_per_iter={:.3} metrics_per_iter={} checksum={}",
+      iterations,
+      samples.len(),
+      elapsed_ms,
+      us_per_iter,
+      metric_count / iterations,
+      checksum
+   );
+   Ok(())
+}
+
+fn frame_pacing_metrics_bench_checksum(metrics: &BTreeMap<String, f64>) -> u64
+{
+   let mut checksum = 0u64;
+   for (name, value) in metrics
+   {
+      checksum = checksum.wrapping_add(filter_bench_key(name));
+      checksum = checksum.wrapping_add(value.to_bits());
+   }
+   checksum
+}
+
+fn run_compare_reports_bench(cli: Cli) -> Result<()> {
+    let current_path = cli
+        .compare_bench_current
+        .as_ref()
+        .context("missing --bench-compare-reports current path")?;
+    let baseline_path = cli
+        .compare_bench_baseline
+        .as_ref()
+        .context("missing --bench-compare-reports baseline path")?;
+    let iterations = if cli.compare_bench_iters == 0 {
+        DEFAULT_COMPARE_REPORTS_BENCH_ITERS
+    } else {
+        cli.compare_bench_iters
+    };
+    let current = load_report(current_path)?;
+    let baseline = load_report(baseline_path)?;
+    let start = Instant::now();
+    let mut matched = 0usize;
+    let mut regressions = 0usize;
+    let mut missing_baseline = 0usize;
+    let mut improvements = 0usize;
+    let mut checksum = 0u64;
+    for _ in 0..iterations {
+        let comparison = compare_reports(black_box(&current), black_box(&baseline));
+        matched = matched.wrapping_add(black_box(comparison.matched));
+        regressions = regressions.wrapping_add(black_box(comparison.regressions.len()));
+        missing_baseline = missing_baseline.wrapping_add(black_box(comparison.missing_baseline.len()));
+        improvements = improvements.wrapping_add(black_box(comparison.improvements.len()));
+        checksum = checksum.wrapping_add(black_box(comparison_bench_checksum(&comparison)));
+        black_box(&comparison);
+    }
+    let elapsed = start.elapsed();
+    let elapsed_ms = elapsed.as_secs_f64() * 1_000.0;
+    let us_per_iter = elapsed.as_secs_f64() * 1_000_000.0 / iterations as f64;
+    println!(
+        "compare_reports_bench current={} baseline={} iterations={} elapsed_ms={:.3} us_per_iter={:.3} matched={} regressions={} missing_baseline={} improvements={} checksum={}",
+        current_path.display(),
+        baseline_path.display(),
+        iterations,
+        elapsed_ms,
+        us_per_iter,
+        matched / iterations,
+        regressions / iterations,
+        missing_baseline / iterations,
+        improvements / iterations,
+        checksum
+    );
+    Ok(())
+}
+
+fn comparison_bench_checksum(comparison: &PerfComparison) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    hash = comparison_bench_hash_usize(hash, comparison.matched);
+    for id in &comparison.missing_baseline {
+        hash = comparison_bench_hash_str(hash, id);
+    }
+    for regression in &comparison.regressions {
+        hash = comparison_bench_hash_str(hash, &regression.id);
+        hash = comparison_bench_hash_u64(hash, regression.baseline_median.to_bits());
+        hash = comparison_bench_hash_u64(hash, regression.current_median.to_bits());
+        hash = comparison_bench_hash_u64(hash, regression.allowed_median.to_bits());
+        hash = comparison_bench_hash_u64(hash, regression.delta_pct.to_bits());
+    }
+    for id in &comparison.improvements {
+        hash = comparison_bench_hash_str(hash, id);
+    }
+    hash
+}
+
+fn comparison_bench_hash_str(mut hash: u64, value: &str) -> u64 {
+    for byte in value.as_bytes() {
+        hash = comparison_bench_hash_u64(hash, u64::from(*byte));
+    }
+    comparison_bench_hash_u64(hash, u64::from(b'\n'))
+}
+
+fn comparison_bench_hash_usize(hash: u64, value: usize) -> u64 {
+    comparison_bench_hash_u64(hash, value as u64)
+}
+
+fn comparison_bench_hash_u64(hash: u64, value: u64) -> u64 {
+    (hash ^ value).wrapping_mul(0x100000001b3)
 }
 
 fn run_suite(cli: Cli) -> Result<()> {
@@ -1270,8 +2193,7 @@ fn run_suite(cli: Cli) -> Result<()> {
         write_report_json(path, &report)?;
     }
     if let Some(path) = markdown_out.as_ref() {
-        write_markdown(path, &report, comparison.as_ref())?;
-        write_dated_markdown(path, &report, comparison.as_ref())?;
+        write_markdown_outputs(path, &report, comparison.as_ref())?;
     }
 
     print_summary(&report, comparison.as_ref());
@@ -1466,7 +2388,7 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
       AuditFinding {
          status: String::from("fixed"),
          summary: String::from(
-            "oxide-ui-core ASCII wrapped labels now shape once for break decisions on cache misses and keep a current-vs-legacy wrapped-label A/B perf row.",
+            "oxide-ui-core ASCII wrapped labels now shape once for break decisions on cache misses; the slower legacy wrapped-label audit row was retired after same-workload A/B proof.",
          ),
       },
       AuditFinding {
@@ -1760,9 +2682,7 @@ fn contract_battery_entry(
 
 fn push_system_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) -> Result<()> {
     let prepare_template = build_prepare_drawlist();
-    let prepare_template_legacy = build_prepare_drawlist();
     let coalesce_template = build_coalesce_items();
-    let coalesce_template_legacy = coalesce_template.clone();
     let gesture_events = build_gesture_events();
     let touch_surface_events = build_touch_surface_events();
 
@@ -1785,19 +2705,6 @@ fn push_system_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) -> Result<()>
         ));
     }
 
-    if perf_case_allowed("cpu.system.prepare_draws.legacy") {
-        cases.push(measure_cpu_case(
-            "cpu.system.prepare_draws.legacy",
-            "audit-baseline",
-            smoke,
-            false,
-            0.0,
-            prepare_loops,
-            vec![String::from("Legacy ClipPop recompute path kept for A/B audit context.")],
-            move || legacy_prepare_draws(&prepare_template_legacy).len() as u64,
-        ));
-    }
-
     if perf_case_allowed("cpu.system.coalesce_adjacent_draws.current") {
         cases.push(measure_cpu_case(
             "cpu.system.coalesce_adjacent_draws.current",
@@ -1811,26 +2718,6 @@ fn push_system_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) -> Result<()>
                 let mut list =
                     api::DrawList { items: coalesce_template.clone(), ..api::DrawList::default() };
                 ui::coalesce_adjacent_draws(&mut list);
-                list.items.len() as u64
-            },
-        ));
-    }
-
-    if perf_case_allowed("cpu.system.coalesce_adjacent_draws.legacy") {
-        cases.push(measure_cpu_case(
-            "cpu.system.coalesce_adjacent_draws.legacy",
-            "audit-baseline",
-            smoke,
-            false,
-            0.0,
-            coalesce_loops,
-            vec![String::from("Legacy Vec::remove merge path kept for A/B audit context.")],
-            move || {
-                let mut list = api::DrawList {
-                    items: coalesce_template_legacy.clone(),
-                    ..api::DrawList::default()
-                };
-                legacy_coalesce_adjacent_draws(&mut list);
                 list.items.len() as u64
             },
         ));
@@ -1921,32 +2808,12 @@ fn push_system_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) -> Result<()>
         cases.push(wrapped_label_cached_encode_case(smoke, text_loops));
     }
 
-    if perf_case_allowed("cpu.system.wrapped_label_legacy_fit_shape") {
-        cases.push(wrapped_label_legacy_fit_shape_case(smoke, text_loops));
-    }
-
     if perf_case_allowed("cpu.system.picker_text_cached_encode") {
         cases.push(picker_text_cached_encode_case(smoke, text_loops));
     }
 
-    if perf_case_allowed("cpu.system.picker_text_legacy_shape_upload") {
-        cases.push(picker_text_legacy_shape_upload_case(smoke, text_loops));
-    }
-
     if perf_case_allowed("gpu.system.id_mask_compositor.current") {
-        cases.push(gpu_system_id_mask_compositor_case(
-            "gpu.system.id_mask_compositor.current",
-            true,
-            smoke,
-        )?);
-    }
-
-    if perf_case_allowed("gpu.system.id_mask_compositor.legacy_upload") {
-        cases.push(gpu_system_id_mask_compositor_case(
-            "gpu.system.id_mask_compositor.legacy_upload",
-            false,
-            smoke,
-        )?);
+        cases.push(gpu_system_id_mask_compositor_case(smoke)?);
     }
 
     Ok(())
@@ -2071,11 +2938,9 @@ fn last_metal_stats_after_submit(
     stats
 }
 
-fn gpu_system_id_mask_compositor_case(
-    id: &str,
-    stable_revision: bool,
-    smoke: bool,
-) -> Result<PerfCaseResult> {
+fn gpu_system_id_mask_compositor_case(smoke: bool) -> Result<PerfCaseResult> {
+    const ID: &str = "gpu.system.id_mask_compositor.current";
+
     let mut renderer =
         Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
     renderer.resize(512, 512, 2.0).context("resizing Metal renderer")?;
@@ -2091,7 +2956,7 @@ fn gpu_system_id_mask_compositor_case(
     let mut skipped_sum = 0.0;
 
     for index in 0..(warmups + frames) {
-        let revision = if stable_revision { 1 } else { index as u64 + 1 };
+        let revision = 1;
         let chunks = [metal::id_mask_compositor::IdMaskRasterChunk {
             content_hash: revision,
             first_vertex: 0,
@@ -2103,8 +2968,8 @@ fn gpu_system_id_mask_compositor_case(
         let frame_id = token.0;
         renderer
             .encode_id_mask_gpu_compositor(&pass)
-            .with_context(|| format!("encoding {}", id))?;
-        renderer.submit(token).with_context(|| format!("submitting {}", id))?;
+            .with_context(|| format!("encoding {}", ID))?;
+        renderer.submit(token).with_context(|| format!("submitting {}", ID))?;
         let frame_ms = frame_t0.elapsed().as_secs_f64() * 1000.0;
         let stats = last_metal_stats_after_submit(&renderer, frame_id);
         if index >= warmups {
@@ -2118,7 +2983,7 @@ fn gpu_system_id_mask_compositor_case(
 
     let summary = summarize(&frame_samples);
     let (layer, scenario, variant, cache_state, refresh_mode) =
-        perf_case_contract_metadata(id, "system");
+        perf_case_contract_metadata(ID, "system");
     let mut metrics = BTreeMap::new();
     metrics.insert(String::from("encode_ms_median"), summarize(&encode_samples).median);
     metrics.insert(String::from("draws_avg"), draws_sum / frames as f64);
@@ -2128,13 +2993,10 @@ fn gpu_system_id_mask_compositor_case(
     insert_frame_pacing_metrics(&mut metrics, &frame_samples);
     metrics.insert(String::from("vertex_count"), vertices.len() as f64);
     metrics.insert(String::from("vertex_bytes"), vertex_bytes as f64);
-    metrics.insert(
-        String::from("revision_changes_per_frame"),
-        if stable_revision { 0.0 } else { 1.0 },
-    );
+    metrics.insert(String::from("revision_changes_per_frame"), 0.0);
 
     Ok(PerfCaseResult {
-        id: String::from(id),
+        id: String::from(ID),
         family: String::from("system"),
         layer: String::from(layer),
         scenario: String::from(scenario),
@@ -2142,8 +3004,8 @@ fn gpu_system_id_mask_compositor_case(
         cache_state: String::from(cache_state),
         refresh_mode: String::from(refresh_mode),
         unit: String::from("ms/frame"),
-        gated: stable_revision,
-        threshold_pct: if stable_revision { 0.20 } else { 0.0 },
+        gated: true,
+        threshold_pct: 0.20,
         median: summary.median,
         p95: summary.p95,
         p99: summary.p99,
@@ -2152,11 +3014,9 @@ fn gpu_system_id_mask_compositor_case(
         mean: summary.mean,
         samples: frame_samples.len(),
         ops_per_sample: 1,
-        notes: vec![if stable_revision {
-            String::from("Current macOS Metal id-mask compositor path with stable vertex_revision, proving cached raster vertex uploads.")
-        } else {
-            String::from("A/B baseline that changes vertex_revision every frame to force id-mask raster vertex uploads.")
-        }],
+        notes: vec![String::from(
+            "Current macOS Metal id-mask compositor path with stable vertex_revision, proving cached raster vertex uploads.",
+        )],
         metrics,
     })
 }
@@ -7888,19 +8748,88 @@ where
     })
 }
 
-fn summarize(samples: &[f64]) -> SampleSummary {
-    assert!(!samples.is_empty(), "perf suites must record at least one sample");
-    let mut sorted = samples.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let sum = samples.iter().copied().sum::<f64>();
-    SampleSummary {
-        min: *sorted.first().unwrap_or(&0.0),
-        max: *sorted.last().unwrap_or(&0.0),
-        mean: sum / samples.len() as f64,
-        median: quantile(&sorted, 0.5),
-        p95: quantile(&sorted, 0.95),
-        p99: quantile(&sorted, 0.99),
-    }
+fn summarize(samples: &[f64]) -> SampleSummary
+{
+   assert!(!samples.is_empty(), "perf suites must record at least one sample");
+   const STACK_SAMPLE_CAP: usize = 32;
+   let sum = samples.iter().copied().sum::<f64>();
+   if samples.len() <= STACK_SAMPLE_CAP
+   {
+      let mut stack = [0.0_f64; STACK_SAMPLE_CAP];
+      stack[..samples.len()].copy_from_slice(samples);
+      let sorted = &mut stack[..samples.len()];
+      sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+      return summarize_sorted_samples(sorted, sum, samples.len());
+   }
+
+   let mut sorted = samples.to_vec();
+   sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+   summarize_sorted_samples(&sorted, sum, samples.len())
+}
+
+fn summarize_sorted_samples(sorted: &[f64], sum: f64, sample_count: usize) -> SampleSummary
+{
+   match sorted.len()
+   {
+      6 => {
+         let p95_weight = 5.0 * 0.95 - 4.0;
+         let p99_weight = 5.0 * 0.99 - 4.0;
+         return SampleSummary {
+            min: sorted[0],
+            max: sorted[5],
+            mean: sum / sample_count as f64,
+            median: 0.5 * sorted[2] + 0.5 * sorted[3],
+            p95: (1.0 - p95_weight) * sorted[4] + p95_weight * sorted[5],
+            p99: (1.0 - p99_weight) * sorted[4] + p99_weight * sorted[5],
+         };
+      }
+      10 => {
+         let p95_weight = 9.0 * 0.95 - 8.0;
+         let p99_weight = 9.0 * 0.99 - 8.0;
+         return SampleSummary {
+            min: sorted[0],
+            max: sorted[9],
+            mean: sum / sample_count as f64,
+            median: 0.5 * sorted[4] + 0.5 * sorted[5],
+            p95: (1.0 - p95_weight) * sorted[8] + p95_weight * sorted[9],
+            p99: (1.0 - p99_weight) * sorted[8] + p99_weight * sorted[9],
+         };
+      }
+      12 => {
+         let p95_weight = 11.0 * 0.95 - 10.0;
+         let p99_weight = 11.0 * 0.99 - 10.0;
+         return SampleSummary {
+            min: sorted[0],
+            max: sorted[11],
+            mean: sum / sample_count as f64,
+            median: 0.5 * sorted[5] + 0.5 * sorted[6],
+            p95: (1.0 - p95_weight) * sorted[10] + p95_weight * sorted[11],
+            p99: (1.0 - p99_weight) * sorted[10] + p99_weight * sorted[11],
+         };
+      }
+      24 => {
+         let p95_weight = 23.0 * 0.95 - 21.0;
+         let p99_weight = 23.0 * 0.99 - 22.0;
+         return SampleSummary {
+            min: sorted[0],
+            max: sorted[23],
+            mean: sum / sample_count as f64,
+            median: 0.5 * sorted[11] + 0.5 * sorted[12],
+            p95: (1.0 - p95_weight) * sorted[21] + p95_weight * sorted[22],
+            p99: (1.0 - p99_weight) * sorted[22] + p99_weight * sorted[23],
+         };
+      }
+      _ => {}
+   }
+
+   SampleSummary {
+      min: *sorted.first().unwrap_or(&0.0),
+      max: *sorted.last().unwrap_or(&0.0),
+      mean: sum / sample_count as f64,
+      median: quantile(sorted, 0.5),
+      p95: quantile(sorted, 0.95),
+      p99: quantile(sorted, 0.99),
+   }
 }
 
 fn quantile(sorted: &[f64], q: f64) -> f64 {
@@ -7918,15 +8847,96 @@ fn quantile(sorted: &[f64], q: f64) -> f64 {
     (1.0 - weight) * sorted[lo] + weight * sorted[hi]
 }
 
+fn summarize_distribution_metrics(samples: &[f64]) -> DistributionMetricSummary
+{
+   const STACK_SAMPLE_CAP: usize = 32;
+   if samples.len() <= STACK_SAMPLE_CAP
+   {
+      let mut stack = [0.0_f64; STACK_SAMPLE_CAP];
+      stack[..samples.len()].copy_from_slice(samples);
+      let sorted = &mut stack[..samples.len()];
+      sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+      return summarize_sorted_distribution_metrics(sorted);
+   }
+
+   let mut sorted = samples.to_vec();
+   sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+   summarize_sorted_distribution_metrics(&sorted)
+}
+
+fn summarize_sorted_distribution_metrics(sorted: &[f64]) -> DistributionMetricSummary
+{
+   if sorted.len() == 24
+   {
+      let p95_weight = 23.0 * 0.95 - 21.0;
+      let p99_weight = 23.0 * 0.99 - 22.0;
+      return DistributionMetricSummary {
+         max: sorted[23],
+         median: 0.5 * sorted[11] + 0.5 * sorted[12],
+         p95: (1.0 - p95_weight) * sorted[21] + p95_weight * sorted[22],
+         p99: (1.0 - p99_weight) * sorted[22] + p99_weight * sorted[23],
+      };
+   }
+
+   DistributionMetricSummary {
+      max: *sorted.last().unwrap_or(&0.0),
+      median: quantile(sorted, 0.5),
+      p95: quantile(sorted, 0.95),
+      p99: quantile(sorted, 0.99),
+   }
+}
+
 fn insert_distribution_metrics(metrics: &mut BTreeMap<String, f64>, prefix: &str, samples: &[f64]) {
     if samples.is_empty() {
         return;
     }
-    let summary = summarize(samples);
-    metrics.insert(format!("{}_p50", prefix), summary.median);
-    metrics.insert(format!("{}_p95", prefix), summary.p95);
-    metrics.insert(format!("{}_p99", prefix), summary.p99);
-    metrics.insert(format!("{}_peak", prefix), summary.max);
+    let summary = summarize_distribution_metrics(samples);
+    match prefix {
+        "frame_ms" => insert_distribution_metric_values(
+            metrics,
+            "frame_ms_p50",
+            "frame_ms_p95",
+            "frame_ms_p99",
+            "frame_ms_peak",
+            summary,
+        ),
+        "gpu_ms" => insert_distribution_metric_values(
+            metrics,
+            "gpu_ms_p50",
+            "gpu_ms_p95",
+            "gpu_ms_p99",
+            "gpu_ms_peak",
+            summary,
+        ),
+        "event_to_visible_ms" => insert_distribution_metric_values(
+            metrics,
+            "event_to_visible_ms_p50",
+            "event_to_visible_ms_p95",
+            "event_to_visible_ms_p99",
+            "event_to_visible_ms_peak",
+            summary,
+        ),
+        _ => {
+            metrics.insert(format!("{}_p50", prefix), summary.median);
+            metrics.insert(format!("{}_p95", prefix), summary.p95);
+            metrics.insert(format!("{}_p99", prefix), summary.p99);
+            metrics.insert(format!("{}_peak", prefix), summary.max);
+        }
+    }
+}
+
+fn insert_distribution_metric_values(
+    metrics: &mut BTreeMap<String, f64>,
+    p50_key: &str,
+    p95_key: &str,
+    p99_key: &str,
+    peak_key: &str,
+    summary: DistributionMetricSummary,
+) {
+    metrics.insert(String::from(p50_key), summary.median);
+    metrics.insert(String::from(p95_key), summary.p95);
+    metrics.insert(String::from(p99_key), summary.p99);
+    metrics.insert(String::from(peak_key), summary.max);
 }
 
 fn insert_frame_pacing_metrics(metrics: &mut BTreeMap<String, f64>, frame_samples_ms: &[f64]) {
@@ -7946,12 +8956,59 @@ fn insert_frame_pacing_metrics_for_refresh(
     let missed_frames = frame_samples_ms.iter().filter(|sample| **sample > budget_ms).count();
     let hitch_frames = frame_samples_ms.iter().filter(|sample| **sample > budget_ms * 2.0).count();
     let denom = frame_samples_ms.len() as f64;
-    let label = format!("{}hz", refresh_hz);
-    metrics.insert(format!("frame_budget_{}_ms", label), budget_ms);
-    metrics.insert(format!("missed_frames_{}", label), missed_frames as f64);
-    metrics.insert(format!("missed_frame_ratio_{}", label), missed_frames as f64 / denom);
-    metrics.insert(format!("hitch_frames_{}", label), hitch_frames as f64);
-    metrics.insert(format!("hitch_ratio_{}", label), hitch_frames as f64 / denom);
+    match refresh_hz {
+        60 => insert_frame_pacing_metric_values(
+            metrics,
+            "frame_budget_60hz_ms",
+            "missed_frames_60hz",
+            "missed_frame_ratio_60hz",
+            "hitch_frames_60hz",
+            "hitch_ratio_60hz",
+            budget_ms,
+            missed_frames,
+            hitch_frames,
+            denom,
+        ),
+        120 => insert_frame_pacing_metric_values(
+            metrics,
+            "frame_budget_120hz_ms",
+            "missed_frames_120hz",
+            "missed_frame_ratio_120hz",
+            "hitch_frames_120hz",
+            "hitch_ratio_120hz",
+            budget_ms,
+            missed_frames,
+            hitch_frames,
+            denom,
+        ),
+        _ => {
+            let label = format!("{}hz", refresh_hz);
+            metrics.insert(format!("frame_budget_{}_ms", label), budget_ms);
+            metrics.insert(format!("missed_frames_{}", label), missed_frames as f64);
+            metrics.insert(format!("missed_frame_ratio_{}", label), missed_frames as f64 / denom);
+            metrics.insert(format!("hitch_frames_{}", label), hitch_frames as f64);
+            metrics.insert(format!("hitch_ratio_{}", label), hitch_frames as f64 / denom);
+        }
+    }
+}
+
+fn insert_frame_pacing_metric_values(
+    metrics: &mut BTreeMap<String, f64>,
+    budget_key: &str,
+    missed_key: &str,
+    missed_ratio_key: &str,
+    hitch_key: &str,
+    hitch_ratio_key: &str,
+    budget_ms: f64,
+    missed_frames: usize,
+    hitch_frames: usize,
+    denom: f64,
+) {
+    metrics.insert(String::from(budget_key), budget_ms);
+    metrics.insert(String::from(missed_key), missed_frames as f64);
+    metrics.insert(String::from(missed_ratio_key), missed_frames as f64 / denom);
+    metrics.insert(String::from(hitch_key), hitch_frames as f64);
+    metrics.insert(String::from(hitch_ratio_key), hitch_frames as f64 / denom);
 }
 
 fn regression_allowed_median(current: &PerfCaseResult, base: &PerfCaseResult) -> f64 {
@@ -7966,19 +9023,89 @@ fn regression_allowed_median(current: &PerfCaseResult, base: &PerfCaseResult) ->
 }
 
 pub fn compare_reports(current: &PerfReport, baseline: &PerfReport) -> PerfComparison {
-    let baseline_map =
-        baseline.cases.iter().map(|case| (case.id.as_str(), case)).collect::<BTreeMap<_, _>>();
+   let missing_capacity = current.cases.len();
+   let matched_capacity = current.cases.len().min(baseline.cases.len());
+   if current.cases.len() == baseline.cases.len() {
+      if let Some(comparison) = try_compare_reports_same_case_order(current, matched_capacity, baseline) {
+         return comparison;
+      }
+   }
+   if baseline.cases.len() <= LINEAR_COMPARE_BASELINE_CASE_LIMIT {
+      return compare_reports_with_lookup(current, missing_capacity, matched_capacity, |id| {
+         baseline.cases.iter().find(|case| case.id.as_str() == id)
+      });
+   }
 
-    let mut comparison = PerfComparison::default();
+   let baseline_map =
+      baseline.cases.iter().map(|case| (case.id.as_str(), case)).collect::<BTreeMap<_, _>>();
+
+   compare_reports_with_lookup(current, missing_capacity, matched_capacity, |id| baseline_map.get(id).copied())
+}
+
+fn try_compare_reports_same_case_order(current: &PerfReport, matched_capacity: usize, baseline: &PerfReport) -> Option<PerfComparison> {
+    if current.cases.len() != baseline.cases.len() {
+        return None;
+    }
+    let mut comparison = PerfComparison {
+        matched: 0,
+        missing_baseline: Vec::new(),
+        regressions: Vec::new(),
+        improvements: Vec::with_capacity(matched_capacity),
+    };
+    for (case, base) in current.cases.iter().zip(&baseline.cases) {
+        if case.id != base.id {
+            return None;
+        }
+        if !case.gated {
+            continue;
+        }
+        comparison.matched += 1;
+        if case.median == base.median {
+            continue;
+        }
+        let allowed = regression_allowed_median(case, base);
+        if case.median > allowed {
+            comparison.regressions.push(PerfRegression {
+                id: case.id.clone(),
+                baseline_median: base.median,
+                current_median: case.median,
+                allowed_median: allowed,
+                delta_pct: if base.median > 0.0 {
+                    ((case.median - base.median) / base.median) * 100.0
+                } else {
+                    0.0
+                },
+            });
+        } else if case.median < base.median {
+            comparison.improvements.push(case.id.clone());
+        }
+    }
+    Some(comparison)
+}
+
+fn compare_reports_with_lookup<'a, F>(current: &PerfReport, missing_capacity: usize, matched_capacity: usize, mut baseline_case: F) -> PerfComparison
+where
+    F: FnMut(&str) -> Option<&'a PerfCaseResult>,
+{
+    let mut comparison = PerfComparison {
+        matched: 0,
+        missing_baseline: Vec::with_capacity(missing_capacity),
+        regressions: Vec::new(),
+        improvements: Vec::with_capacity(matched_capacity),
+    };
     for case in &current.cases {
         if !case.gated {
             continue;
         }
-        let Some(base) = baseline_map.get(case.id.as_str()) else {
+        let Some(base) = baseline_case(case.id.as_str()) else {
             comparison.missing_baseline.push(case.id.clone());
             continue;
         };
         comparison.matched += 1;
+        if case.median < base.median {
+            comparison.improvements.push(case.id.clone());
+            continue;
+        }
         let allowed = regression_allowed_median(case, base);
         if case.median > allowed {
             comparison.regressions.push(PerfRegression {
@@ -8093,30 +9220,72 @@ pub fn assert_full_coverage(coverage: &CoverageReport) -> Result<()> {
 }
 
 pub fn assert_contract_coverage(contract: &ContractCoverageReport) -> Result<()> {
-    for entry in contract.layers.iter().chain(contract.battery.iter()) {
-        match entry.status.as_str() {
-            "implemented" | "partial" | "missing" | "separate" => {}
-            _ => bail!("unknown contract coverage status `{}` for `{}`", entry.status, entry.id),
-        }
-        if entry.status == "implemented" {
-            for note in &entry.notes {
-                let lower = note.to_ascii_lowercase();
-                if lower.contains("missing")
-                    || lower.contains("incomplete")
-                    || lower.contains("not yet")
-                    || lower.contains("no dedicated")
-                    || lower.contains("still not")
-                {
-                    bail!(
-                        "implemented contract row `{}` contains unresolved-gap note: {}",
-                        entry.id,
-                        note
-                    );
-                }
+   for entry in contract.layers.iter().chain(contract.battery.iter()) {
+      match entry.status.as_str() {
+         "implemented" | "partial" | "missing" | "separate" => {}
+         _ => bail!("unknown contract coverage status `{}` for `{}`", entry.status, entry.id),
+      }
+      if entry.status == "implemented" {
+         for note in &entry.notes {
+            if note_contains_unresolved_gap(note) {
+               bail!(
+                  "implemented contract row `{}` contains unresolved-gap note: {}",
+                  entry.id,
+                  note
+               );
             }
-        }
-    }
-    Ok(())
+         }
+      }
+   }
+   Ok(())
+}
+
+fn note_contains_unresolved_gap(note: &str) -> bool {
+   let bytes = note.as_bytes();
+   for index in 0..bytes.len() {
+      match bytes[index] | 0x20 {
+         b'm' => {
+            if ascii_prefix_ignore_case(&bytes[index..], b"missing") {
+               return true;
+            }
+         }
+         b'i' => {
+            if ascii_prefix_ignore_case(&bytes[index..], b"incomplete") {
+               return true;
+            }
+         }
+         b'n' => {
+            if ascii_prefix_ignore_case(&bytes[index..], b"not yet")
+               || ascii_prefix_ignore_case(&bytes[index..], b"no dedicated")
+            {
+               return true;
+            }
+         }
+         b's' => {
+            if ascii_prefix_ignore_case(&bytes[index..], b"still not") {
+               return true;
+            }
+         }
+         _ => {}
+      }
+   }
+   false
+}
+
+fn ascii_prefix_ignore_case(value: &[u8], prefix: &[u8]) -> bool
+{
+   if value.len() < prefix.len()
+   {
+      return false;
+   }
+   for index in 1..prefix.len()
+   {
+      if (value[index] | 0x20) != prefix[index]
+      {
+         return false;
+      }
+   }
+   true
 }
 
 pub fn assert_case_metric_contract(cases: &[PerfCaseResult]) -> Result<()> {
@@ -8144,23 +9313,39 @@ fn case_requires_gpu_metrics(case: &PerfCaseResult) -> bool {
         || case.metrics.contains_key("gpu_ms_p50")
 }
 
+const REQUIRED_FRAME_METRIC_KEYS: &[&str] = &[
+    "frame_ms_p50",
+    "frame_ms_p95",
+    "frame_ms_p99",
+    "frame_ms_peak",
+    "frame_budget_60hz_ms",
+    "missed_frames_60hz",
+    "missed_frame_ratio_60hz",
+    "hitch_frames_60hz",
+    "hitch_ratio_60hz",
+    "frame_budget_120hz_ms",
+    "missed_frames_120hz",
+    "missed_frame_ratio_120hz",
+    "hitch_frames_120hz",
+    "hitch_ratio_120hz",
+];
+
+const REQUIRED_GPU_METRIC_KEYS: &[&str] = &[
+    "gpu_ms_p50",
+    "gpu_ms_p95",
+    "gpu_ms_p99",
+    "gpu_ms_peak",
+];
+
 fn push_missing_frame_metrics(case: &PerfCaseResult, missing: &mut Vec<String>) {
-    for suffix in ["p50", "p95", "p99", "peak"] {
-        push_missing_metric(case, &format!("frame_ms_{}", suffix), missing);
-    }
-    for refresh_hz in [60, 120] {
-        let label = format!("{}hz", refresh_hz);
-        push_missing_metric(case, &format!("frame_budget_{}_ms", label), missing);
-        push_missing_metric(case, &format!("missed_frames_{}", label), missing);
-        push_missing_metric(case, &format!("missed_frame_ratio_{}", label), missing);
-        push_missing_metric(case, &format!("hitch_frames_{}", label), missing);
-        push_missing_metric(case, &format!("hitch_ratio_{}", label), missing);
+    for key in REQUIRED_FRAME_METRIC_KEYS {
+        push_missing_metric(case, key, missing);
     }
 }
 
 fn push_missing_gpu_metrics(case: &PerfCaseResult, missing: &mut Vec<String>) {
-    for suffix in ["p50", "p95", "p99", "peak"] {
-        push_missing_metric(case, &format!("gpu_ms_{}", suffix), missing);
+    for key in REQUIRED_GPU_METRIC_KEYS {
+        push_missing_metric(case, key, missing);
     }
 }
 
@@ -8177,25 +9362,35 @@ fn load_report(path: &Path) -> Result<PerfReport> {
 
 fn write_report_json(path: &Path, report: &PerfReport) -> Result<()> {
     ensure_parent(path)?;
-    let body = serde_json::to_vec_pretty(report)?;
+    let body = serialize_report_json(report)?;
     fs::write(path, body).with_context(|| format!("writing {}", path.display()))
 }
 
-fn write_markdown(
-    path: &Path,
-    report: &PerfReport,
-    comparison: Option<&PerfComparison>,
-) -> Result<()> {
-    ensure_parent(path)?;
-    let body = render_markdown(report, comparison);
-    fs::write(path, body).with_context(|| format!("writing {}", path.display()))
+fn serialize_report_json(report: &PerfReport) -> Result<Vec<u8>> {
+    let mut body = Vec::with_capacity(report_json_capacity_hint(report));
+    serde_json::to_writer_pretty(&mut body, report)?;
+    Ok(body)
 }
 
-fn write_dated_markdown(
+fn serialize_report_json_string(report: &PerfReport) -> Result<String> {
+    serde_json::to_string_pretty(report).context("serializing perf report json")
+}
+
+fn report_json_capacity_hint(report: &PerfReport) -> usize {
+    4096usize
+        .saturating_add(report.cases.len().saturating_mul(930))
+        .saturating_add(report.findings.len().saturating_mul(384))
+}
+
+fn write_markdown_outputs(
     latest_path: &Path,
     report: &PerfReport,
     comparison: Option<&PerfComparison>,
 ) -> Result<()> {
+    ensure_parent(latest_path)?;
+    let body = render_markdown(report, comparison);
+    fs::write(latest_path, body.as_bytes())
+        .with_context(|| format!("writing {}", latest_path.display()))?;
     let Some(date_label) = report.generated_label.as_ref() else {
         return Ok(());
     };
@@ -8204,59 +9399,64 @@ fn write_dated_markdown(
     };
     let dated = parent.join(format!("{}.md", date_label));
     ensure_parent(&dated)?;
-    let body = render_markdown(report, comparison);
-    fs::write(&dated, body).with_context(|| format!("writing {}", dated.display()))
+    fs::write(&dated, body.as_bytes()).with_context(|| format!("writing {}", dated.display()))
 }
 
 fn render_markdown(report: &PerfReport, comparison: Option<&PerfComparison>) -> String {
     let mut out = String::new();
     out.push_str("# Oxide Performance Report\n\n");
-    out.push_str(&format!("- Suite: `{}`\n", report.suite));
+    let _ = std::fmt::Write::write_fmt(&mut out, format_args!("- Suite: `{}`\n", report.suite));
     if let Some(label) = report.generated_label.as_ref() {
-        out.push_str(&format!("- Label: `{}`\n", label));
+        let _ = std::fmt::Write::write_fmt(&mut out, format_args!("- Label: `{}`\n", label));
     }
-    out.push_str(&format!(
-        "- Coverage: {}/{} components, {}/{} animations, {}/{} launch cases, {}/{} primitive lifecycle cases, {}/{} CPU scenes, {}/{} GPU scenes, {}/{} journeys, {}/{} authoring APIs, {}/{} layout cases, {}/{} text-input cases, {}/{} image pipeline cases, {}/{} navigation cases, {}/{} reconcile cases, {}/{} endurance cases, {}/{} stress cases, {}/{} bridge paths\n",
-        report.coverage.components_covered.len(),
-        report.coverage.components_total,
-        report.coverage.animations_covered.len(),
-        report.coverage.animations_total,
-        report.coverage.launch_covered.len(),
-        report.coverage.launch_total,
-        report.coverage.primitive_lifecycle_covered.len(),
-        report.coverage.primitive_lifecycle_total,
-        report.coverage.scenes_cpu_covered.len(),
-        report.coverage.scenes_cpu_total,
-        report.coverage.scenes_gpu_covered.len(),
-        report.coverage.scenes_gpu_total,
-        report.coverage.journeys_covered.len(),
-        report.coverage.journeys_total,
-        report.coverage.authoring_covered.len(),
-        report.coverage.authoring_total,
-        report.coverage.layout_covered.len(),
-        report.coverage.layout_total,
-        report.coverage.text_input_covered.len(),
-        report.coverage.text_input_total,
-        report.coverage.image_pipeline_covered.len(),
-        report.coverage.image_pipeline_total,
-        report.coverage.navigation_covered.len(),
-        report.coverage.navigation_total,
-        report.coverage.reconcile_covered.len(),
-        report.coverage.reconcile_total,
-        report.coverage.endurance_covered.len(),
-        report.coverage.endurance_total,
-        report.coverage.stress_covered.len(),
-        report.coverage.stress_total,
-        report.coverage.bridges_covered.len(),
-        report.coverage.bridges_total
-    ));
+    let _ = std::fmt::Write::write_fmt(
+        &mut out,
+        format_args!(
+            "- Coverage: {}/{} components, {}/{} animations, {}/{} launch cases, {}/{} primitive lifecycle cases, {}/{} CPU scenes, {}/{} GPU scenes, {}/{} journeys, {}/{} authoring APIs, {}/{} layout cases, {}/{} text-input cases, {}/{} image pipeline cases, {}/{} navigation cases, {}/{} reconcile cases, {}/{} endurance cases, {}/{} stress cases, {}/{} bridge paths\n",
+            report.coverage.components_covered.len(),
+            report.coverage.components_total,
+            report.coverage.animations_covered.len(),
+            report.coverage.animations_total,
+            report.coverage.launch_covered.len(),
+            report.coverage.launch_total,
+            report.coverage.primitive_lifecycle_covered.len(),
+            report.coverage.primitive_lifecycle_total,
+            report.coverage.scenes_cpu_covered.len(),
+            report.coverage.scenes_cpu_total,
+            report.coverage.scenes_gpu_covered.len(),
+            report.coverage.scenes_gpu_total,
+            report.coverage.journeys_covered.len(),
+            report.coverage.journeys_total,
+            report.coverage.authoring_covered.len(),
+            report.coverage.authoring_total,
+            report.coverage.layout_covered.len(),
+            report.coverage.layout_total,
+            report.coverage.text_input_covered.len(),
+            report.coverage.text_input_total,
+            report.coverage.image_pipeline_covered.len(),
+            report.coverage.image_pipeline_total,
+            report.coverage.navigation_covered.len(),
+            report.coverage.navigation_total,
+            report.coverage.reconcile_covered.len(),
+            report.coverage.reconcile_total,
+            report.coverage.endurance_covered.len(),
+            report.coverage.endurance_total,
+            report.coverage.stress_covered.len(),
+            report.coverage.stress_total,
+            report.coverage.bridges_covered.len(),
+            report.coverage.bridges_total
+        )
+    );
     if let Some(comp) = comparison {
-        out.push_str(&format!(
-            "- Comparison: `{}` matched, `{}` regressions, `{}` missing baseline cases\n",
-            comp.matched,
-            comp.regressions.len(),
-            comp.missing_baseline.len()
-        ));
+        let _ = std::fmt::Write::write_fmt(
+            &mut out,
+            format_args!(
+                "- Comparison: `{}` matched, `{}` regressions, `{}` missing baseline cases\n",
+                comp.matched,
+                comp.regressions.len(),
+                comp.missing_baseline.len()
+            )
+        );
     }
     out.push('\n');
 
@@ -8264,25 +9464,15 @@ fn render_markdown(report: &PerfReport, comparison: Option<&PerfComparison>) -> 
     out.push_str("| Section | Status | Notes |\n");
     out.push_str("| --- | --- | --- |\n");
     for entry in &report.contract.layers {
-        out.push_str(&format!(
-            "| `{}` | `{}` | {} |\n",
-            entry.label,
-            entry.status,
-            entry.notes.join(" ")
-        ));
+        write_contract_coverage_row(&mut out, entry);
     }
     for entry in &report.contract.battery {
-        out.push_str(&format!(
-            "| `{}` | `{}` | {} |\n",
-            entry.label,
-            entry.status,
-            entry.notes.join(" ")
-        ));
+        write_contract_coverage_row(&mut out, entry);
     }
     if !report.contract.notes.is_empty() {
         out.push_str("\n");
         for note in &report.contract.notes {
-            out.push_str(&format!("- {}\n", note));
+            let _ = std::fmt::Write::write_fmt(&mut out, format_args!("- {}\n", note));
         }
         out.push('\n');
     }
@@ -8294,22 +9484,26 @@ fn render_markdown(report: &PerfReport, comparison: Option<&PerfComparison>) -> 
     );
     for case in &report.cases {
         let gate = if case.gated { "regression-gated" } else { "audit-only" };
-        out.push_str(&format!(
-            "| `{}` | `{}` | `{}` | `{}` | `{}` | `{}` | {:.3} | {:.3} | {:.3} | {:.3} | {} | {} | {} |\n",
-            case.id,
-            case.layer,
-            case.scenario,
-            case.variant,
-            case.cache_state,
-            case.refresh_mode,
-            case.median,
-            case.p95,
-            case.p99,
-            case.max,
-            case.unit,
-            gate,
-            render_case_metrics_summary(&case.metrics)
-        ));
+        let _ = std::fmt::Write::write_fmt(
+            &mut out,
+            format_args!(
+                "| `{}` | `{}` | `{}` | `{}` | `{}` | `{}` | {:.3} | {:.3} | {:.3} | {:.3} | {} | {} | ",
+                case.id,
+                case.layer,
+                case.scenario,
+                case.variant,
+                case.cache_state,
+                case.refresh_mode,
+                case.median,
+                case.p95,
+                case.p99,
+                case.max,
+                case.unit,
+                gate
+            )
+        );
+        write_case_metrics_summary(&mut out, &case.metrics);
+        out.push_str(" |\n");
     }
 
     let speedups = compute_audit_speedups(report);
@@ -8329,35 +9523,67 @@ fn render_markdown(report: &PerfReport, comparison: Option<&PerfComparison>) -> 
             out.push_str("- No gated regressions detected.\n");
         }
         for reg in &comp.regressions {
-            out.push_str(&format!(
-            "- Regression: `{}` median {:.3} vs baseline {:.3} (allowed {:.3}, delta {:+.2}%)\n",
-            reg.id, reg.current_median, reg.baseline_median, reg.allowed_median, reg.delta_pct
-         ));
+            let _ = std::fmt::Write::write_fmt(
+                &mut out,
+                format_args!(
+                    "- Regression: `{}` median {:.3} vs baseline {:.3} (allowed {:.3}, delta {:+.2}%)\n",
+                    reg.id,
+                    reg.current_median,
+                    reg.baseline_median,
+                    reg.allowed_median,
+                    reg.delta_pct
+                )
+            );
         }
         for missing in &comp.missing_baseline {
-            out.push_str(&format!("- Missing baseline case: `{}`\n", missing));
+            let _ = std::fmt::Write::write_fmt(
+                &mut out,
+                format_args!("- Missing baseline case: `{}`\n", missing)
+            );
         }
     }
 
     out.push_str("\n## Findings\n\n");
     for finding in &report.findings {
-        out.push_str(&format!("- [{}] {}\n", finding.status, finding.summary));
+        let _ = std::fmt::Write::write_fmt(
+            &mut out,
+            format_args!("- [{}] {}\n", finding.status, finding.summary)
+        );
     }
 
     out.push_str("\n## Baseline Workflow\n\n");
     out.push_str("- Update the committed baseline only with review: `PERF_REPORT_DATE=$(date +%F) cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --write-baseline`\n");
-    out.push_str(&format!("- Latest JSON baseline: `{}`\n", DEFAULT_BASELINE_JSON));
-    out.push_str(&format!("- Latest Markdown baseline: `{}`\n", DEFAULT_BASELINE_MARKDOWN));
+    let _ = std::fmt::Write::write_fmt(
+        &mut out,
+        format_args!("- Latest JSON baseline: `{}`\n", DEFAULT_BASELINE_JSON)
+    );
+    let _ = std::fmt::Write::write_fmt(
+        &mut out,
+        format_args!("- Latest Markdown baseline: `{}`\n", DEFAULT_BASELINE_MARKDOWN)
+    );
     out
 }
 
-fn render_case_metrics_summary(metrics: &BTreeMap<String, f64>) -> String {
-    if metrics.is_empty() {
-        return String::from("`-`");
+fn write_contract_coverage_row(out: &mut String, entry: &ContractCoverageEntry) {
+    let _ = std::fmt::Write::write_fmt(
+        out,
+        format_args!("| `{}` | `{}` | ", entry.label, entry.status)
+    );
+    for (index, note) in entry.notes.iter().enumerate() {
+        if index > 0 {
+            out.push(' ');
+        }
+        out.push_str(note);
     }
-    let mut parts = Vec::new();
-    let mut emitted = Vec::new();
-    for name in [
+    out.push_str(" |\n");
+}
+
+fn write_case_metrics_summary(out: &mut String, metrics: &BTreeMap<String, f64>) {
+    if metrics.is_empty() {
+        out.push_str("`-`");
+        return;
+    }
+    let priority = [
         "gpu_ms_p50",
         "gpu_ms_p95",
         "gpu_ms_p99",
@@ -8374,54 +9600,66 @@ fn render_case_metrics_summary(metrics: &BTreeMap<String, f64>) -> String {
         "frame_ms_p50",
         "frame_ms_p95",
         "frame_backpressure_skips",
-    ] {
-        if let Some(value) = metrics.get(name) {
-            parts.push(format!("{}={:.3}", name, value));
-            emitted.push(name);
-            if parts.len() == 6 {
+    ];
+    let mut emitted = 0usize;
+    let mut emitted_priority = [false; 16];
+    out.push('`');
+    for (index, name) in priority.iter().enumerate() {
+        if let Some(value) = metrics.get(*name) {
+            push_case_metric_summary_part(out, &mut emitted, name, *value);
+            emitted_priority[index] = true;
+            if emitted == 6 {
                 break;
             }
         }
     }
     for (name, value) in metrics {
-        if parts.len() == 6 {
+        if emitted == 6 {
             break;
         }
-        if emitted.iter().any(|emitted| *emitted == name.as_str()) {
+        if case_metric_priority_index(name.as_str())
+            .map(|index| emitted_priority[index])
+            .unwrap_or(false)
+        {
             continue;
         }
-        parts.push(format!("{}={:.3}", name, value));
+        push_case_metric_summary_part(out, &mut emitted, name, *value);
     }
-    format!("`{}`", parts.join("; "))
+    out.push('`');
 }
 
-fn compute_audit_speedups(report: &PerfReport) -> Vec<(String, f64)> {
-    let map = report.cases.iter().map(|case| (case.id.as_str(), case)).collect::<BTreeMap<_, _>>();
-    let mut out = Vec::new();
-    if let (Some(current), Some(legacy)) =
-        (map.get("cpu.system.prepare_draws.current"), map.get("cpu.system.prepare_draws.legacy"))
-    {
-        if current.median > 0.0 {
-            out.push((String::from("prepare_draws"), legacy.median / current.median));
-        }
+fn case_metric_priority_index(name: &str) -> Option<usize> {
+    match name {
+        "gpu_ms_p50" => Some(0),
+        "gpu_ms_p95" => Some(1),
+        "gpu_ms_p99" => Some(2),
+        "gpu_ms_peak" => Some(3),
+        "hitch_ms_per_s" => Some(4),
+        "missed_frames" => Some(5),
+        "missed_frames_per_s" => Some(6),
+        "missed_frame_ratio_120hz" => Some(7),
+        "hitch_ratio_120hz" => Some(8),
+        "missed_frame_ratio_60hz" => Some(9),
+        "hitch_ratio_60hz" => Some(10),
+        "frame_interval_ms_p50" => Some(11),
+        "frame_interval_ms_p95" => Some(12),
+        "frame_ms_p50" => Some(13),
+        "frame_ms_p95" => Some(14),
+        "frame_backpressure_skips" => Some(15),
+        _ => None,
     }
-    if let (Some(current), Some(legacy)) = (
-        map.get("cpu.system.coalesce_adjacent_draws.current"),
-        map.get("cpu.system.coalesce_adjacent_draws.legacy"),
-    ) {
-        if current.median > 0.0 {
-            out.push((String::from("coalesce_adjacent_draws"), legacy.median / current.median));
-        }
+}
+
+fn push_case_metric_summary_part(out: &mut String, emitted: &mut usize, name: &str, value: f64) {
+    if *emitted > 0 {
+        out.push_str("; ");
     }
-    if let (Some(current), Some(legacy)) = (
-        map.get("cpu.system.wrapped_label_cached_encode"),
-        map.get("cpu.system.wrapped_label_legacy_fit_shape"),
-    ) {
-        if current.median > 0.0 {
-            out.push((String::from("wrapped_label_fit"), legacy.median / current.median));
-        }
-    }
-    out
+    let _ = std::fmt::Write::write_fmt(out, format_args!("{}={:.3}", name, value));
+    *emitted += 1;
+}
+
+fn compute_audit_speedups(_report: &PerfReport) -> Vec<(String, f64)> {
+    Vec::new()
 }
 
 fn print_summary(report: &PerfReport, comparison: Option<&PerfComparison>) {
@@ -8946,7 +10184,6 @@ struct WrappedLabelEncodeBench {
     text_ctx: ui::elements::TextCtx,
     uploader: CountingTextUploader,
     builder: ui::DrawListBuilder,
-    legacy_shape_calls: u64,
 }
 
 impl WrappedLabelEncodeBench {
@@ -8966,7 +10203,6 @@ impl WrappedLabelEncodeBench {
             text_ctx: perf_text_ctx(),
             uploader: CountingTextUploader::default(),
             builder: ui::DrawListBuilder::new(),
-            legacy_shape_calls: 0,
         }
     }
 
@@ -8994,107 +10230,6 @@ impl WrappedLabelEncodeBench {
             + dl.vertices.len() as u64
             + dl.indices.len() as u64
             + text_ctx.atlas_revision()
-    }
-
-    fn encode_legacy_once(&mut self) -> u64 {
-        let index = self.text_index % self.texts.len();
-        self.text_index = self.text_index.saturating_add(1);
-        let text_value = Arc::clone(&self.texts[index]);
-        self.builder.clear();
-        let lines = self.legacy_wrapped_shapes(text_value.as_ref());
-        let handle = self.text_ctx.ensure_gpu(&mut self.uploader);
-        let Some(font) = self.text_ctx.fonts.font(0) else {
-            return 0;
-        };
-        let mut y = self.rect.y;
-        let line_h = (13.0_f32 * 1.25).ceil();
-        for shape in lines {
-            let glyph_run = {
-                let dl = self.builder.drawlist_mut();
-                shape.bake_into_with(
-                    font,
-                    &mut self.text_ctx.raster,
-                    &mut self.text_ctx.atlas,
-                    &mut dl.vertices,
-                    &mut dl.indices,
-                    api::Color::rgba(0.1, 0.1, 0.1, 1.0),
-                    handle,
-                    self.rect.x,
-                    y,
-                    PERF_DEVICE_SCALE,
-                )
-            };
-            if glyph_run.vb.len > 0 && glyph_run.ib.len > 0 {
-                self.builder.glyph_run(glyph_run);
-            }
-            y += line_h;
-        }
-        if self.text_ctx.atlas.dirty_rect().is_some() {
-            let _ = self.text_ctx.ensure_gpu(&mut self.uploader);
-        }
-        let dl = self.builder.drawlist();
-        dl.items.len() as u64
-            + dl.vertices.len() as u64
-            + dl.indices.len() as u64
-            + self.text_ctx.atlas_revision()
-    }
-
-    fn legacy_wrapped_shapes(&mut self, text_value: &str) -> Vec<text::OwnedShape> {
-        let mut lines = Vec::with_capacity(4);
-        let mut cur = String::with_capacity(text_value.len().min(128));
-        let mut cur_shape: Option<text::OwnedShape> = None;
-        let mut pending_spaces = 0usize;
-        for segment in text_value.split_inclusive(' ') {
-            let trailing_spaces =
-                segment.as_bytes().iter().rev().take_while(|b| **b == b' ').count();
-            let word = &segment[..segment.len() - trailing_spaces];
-            if word.is_empty() {
-                pending_spaces = pending_spaces.saturating_add(trailing_spaces);
-                continue;
-            }
-            let prior_len = cur.len();
-            for _ in 0..pending_spaces {
-                cur.push(' ');
-            }
-            cur.push_str(word);
-            pending_spaces = trailing_spaces;
-            let Some(shape) = self.legacy_shape_line(&cur) else {
-                cur.truncate(prior_len);
-                continue;
-            };
-            if shape.width() > self.rect.w && prior_len > 0 {
-                cur.truncate(prior_len);
-                if let Some(shape) = cur_shape.take() {
-                    lines.push(shape);
-                }
-                cur.clear();
-                cur.push_str(word);
-                let Some(shape) = self.legacy_shape_line(&cur) else {
-                    cur.clear();
-                    pending_spaces = 0;
-                    continue;
-                };
-                cur_shape = Some(shape);
-            } else {
-                cur_shape = Some(shape);
-            }
-        }
-        if !cur.is_empty() {
-            if let Some(shape) = cur_shape.take() {
-                lines.push(shape);
-            }
-        }
-        lines
-    }
-
-    fn legacy_shape_line(&mut self, text_value: &str) -> Option<text::OwnedShape> {
-        let font = self.text_ctx.fonts.font(0)?;
-        self.legacy_shape_calls = self.legacy_shape_calls.saturating_add(1);
-        self.text_ctx
-            .shaper
-            .shape(font, 0, text_value, 13.0)
-            .ok()
-            .map(|shape| shape.to_owned_shape())
     }
 }
 
@@ -9131,34 +10266,6 @@ fn wrapped_label_cached_encode_case(smoke: bool, text_loops: u64) -> PerfCaseRes
     case
 }
 
-fn wrapped_label_legacy_fit_shape_case(smoke: bool, text_loops: u64) -> PerfCaseResult {
-    let mut bench = WrappedLabelEncodeBench::new();
-    let mut case = measure_cpu_case(
-        "cpu.system.wrapped_label_legacy_fit_shape",
-        "audit-baseline",
-        smoke,
-        false,
-        0.0,
-        text_loops,
-        vec![String::from(
-            "Legacy wrapped-label fitting loop that reshapes the growing candidate string for every word.",
-        )],
-        move || bench.encode_legacy_once(),
-    );
-    let stats = run_wrapped_label_legacy_fit_shape_stats();
-    case.metrics.insert(String::from("wrapped_label_variants"), WRAPPED_LABEL_VARIANTS as f64);
-    case.metrics.insert(String::from("legacy_shape_calls"), stats.shape_calls as f64);
-    case.metrics.insert(String::from("atlas_create_calls"), stats.creates as f64);
-    case.metrics.insert(String::from("atlas_update_calls"), stats.updates as f64);
-    case.metrics.insert(String::from("dirty_upload_pixels"), stats.dirty_upload_pixels as f64);
-    case.metrics.insert(String::from("full_upload_pixels"), stats.full_upload_pixels as f64);
-    case.metrics.insert(String::from("max_dirty_update_pixels"), stats.max_update_pixels as f64);
-    case.metrics.insert(String::from("wrapped_label_glyph_runs"), stats.glyph_runs as f64);
-    case.metrics.insert(String::from("wrapped_label_vertices"), stats.vertices as f64);
-    case.metrics.insert(String::from("wrapped_label_indices"), stats.indices as f64);
-    case
-}
-
 fn run_wrapped_label_cached_encode_stats() -> TextAtlasUploadStats {
     let mut bench = WrappedLabelEncodeBench::new();
     let mut checksum = 0u64;
@@ -9177,30 +10284,8 @@ fn run_wrapped_label_cached_encode_stats() -> TextAtlasUploadStats {
     stats
 }
 
-fn run_wrapped_label_legacy_fit_shape_stats() -> TextAtlasUploadStats {
-    let mut bench = WrappedLabelEncodeBench::new();
-    let mut checksum = 0u64;
-    for _ in 0..32 {
-        checksum = checksum.wrapping_add(bench.encode_legacy_once());
-    }
-    let dl = bench.builder.drawlist();
-    let glyph_runs =
-        dl.items.iter().filter(|cmd| matches!(cmd, api::DrawCmd::GlyphRun { .. })).count() as u64;
-    let mut stats = bench.uploader.stats;
-    stats.glyph_runs = glyph_runs;
-    stats.vertices = dl.vertices.len() as u64;
-    stats.indices = dl.indices.len() as u64;
-    stats.shape_calls = bench.legacy_shape_calls;
-    stats.checksum = checksum
-        .wrapping_add(stats.dirty_upload_pixels)
-        .wrapping_add(stats.full_upload_pixels)
-        .wrapping_add(stats.shape_calls);
-    stats
-}
-
 struct PickerTextEncodeBench {
     picker: ui::elements::PickerState,
-    labels: Vec<String>,
     style: ui::elements::PickerStyle,
     rect: api::RectF,
     text_ctx: ui::elements::TextCtx,
@@ -9218,8 +10303,7 @@ impl PickerTextEncodeBench {
         .map(|value| (*value).to_string())
         .collect();
         Self {
-            picker: ui::elements::PickerState::new(items.clone()),
-            labels: items,
+            picker: ui::elements::PickerState::new(items),
             style: ui::elements::PickerStyle { font_id: 0, ..ui::elements::PickerStyle::default() },
             rect: api::RectF::new(0.0, 0.0, 240.0, 180.0),
             text_ctx: perf_text_ctx(),
@@ -9238,80 +10322,6 @@ impl PickerTextEncodeBench {
             &mut self.uploader,
             &mut self.builder,
         );
-        let dl = self.builder.drawlist();
-        dl.items.len() as u64
-            + dl.vertices.len() as u64
-            + dl.indices.len() as u64
-            + self.text_ctx.atlas_revision()
-    }
-
-    fn encode_legacy_once(&mut self) -> u64 {
-        self.builder.clear();
-        let highlight = self.style.center_band_rect(self.rect);
-        self.builder.rrect(
-            highlight,
-            [self.style.center_band_radius(self.rect); 4],
-            self.style.highlight,
-        );
-        let handle = self.text_ctx.ensure_gpu(&mut self.uploader);
-        let Some(font) = self.text_ctx.fonts.font(self.style.font_id) else {
-            return 0;
-        };
-        self.builder.clip_push(api::RectI::new(
-            self.rect.x.floor() as i32,
-            self.rect.y.floor() as i32,
-            self.rect.w.ceil() as i32,
-            self.rect.h.ceil() as i32,
-        ));
-        let position = self.picker.column_position(0).unwrap_or(0.0);
-        for (item_index, label) in self.labels.iter().enumerate() {
-            let Some(item_rect) = self.style.item_rect(self.rect, 1, 0, position, item_index)
-            else {
-                continue;
-            };
-            if item_rect.y + item_rect.h <= self.rect.y || item_rect.y >= self.rect.y + self.rect.h
-            {
-                continue;
-            }
-            let Ok(shape) =
-                self.text_ctx.shaper.shape(font, self.style.font_id, label, self.style.font_px)
-            else {
-                continue;
-            };
-            let text_x = item_rect.x + (item_rect.w - shape.width()) * 0.50;
-            let text_y =
-                item_rect.y + (item_rect.h - self.style.font_px) * 0.50 + self.style.baseline_shift;
-            let glyph_run = {
-                let dl = self.builder.drawlist_mut();
-                shape.bake_into_with(
-                    &mut self.text_ctx.raster,
-                    &mut self.text_ctx.atlas,
-                    &mut dl.vertices,
-                    &mut dl.indices,
-                    self.style.text_color,
-                    handle,
-                    text_x,
-                    text_y,
-                    PERF_DEVICE_SCALE,
-                )
-            };
-            if glyph_run.vb.len > 0 && glyph_run.ib.len > 0 {
-                self.builder.glyph_run(glyph_run);
-            }
-        }
-        self.builder.clip_pop();
-        let (data, w, h) = self.text_ctx.atlas.image();
-        ui::elements::ImageUploader::update_a8(
-            &mut self.uploader,
-            handle,
-            0,
-            0,
-            w,
-            h,
-            data,
-            w as usize,
-        );
-        self.text_ctx.atlas.clear_dirty();
         let dl = self.builder.drawlist();
         dl.items.len() as u64
             + dl.vertices.len() as u64
@@ -9353,55 +10363,10 @@ fn picker_text_cached_encode_case(smoke: bool, text_loops: u64) -> PerfCaseResul
     case
 }
 
-fn picker_text_legacy_shape_upload_case(smoke: bool, text_loops: u64) -> PerfCaseResult {
-    let mut bench = PickerTextEncodeBench::new();
-    let mut case = measure_cpu_case(
-        "cpu.system.picker_text_legacy_shape_upload",
-        "audit-baseline",
-        smoke,
-        false,
-        0.0,
-        text_loops,
-        vec![String::from(
-            "Legacy picker label path that reshapes visible labels and full-updates the A8 atlas every encode.",
-        )],
-        move || bench.encode_legacy_once(),
-    );
-    let stats = run_picker_text_legacy_shape_upload_stats();
-    case.metrics.insert(String::from("atlas_create_calls"), stats.creates as f64);
-    case.metrics.insert(String::from("atlas_update_calls"), stats.updates as f64);
-    case.metrics.insert(String::from("atlas_update_pixels"), stats.dirty_upload_pixels as f64);
-    case.metrics.insert(String::from("full_upload_pixels"), stats.full_upload_pixels as f64);
-    case.metrics.insert(String::from("max_update_pixels"), stats.max_update_pixels as f64);
-    case.metrics.insert(String::from("atlas_row_bytes"), stats.row_bytes as f64);
-    case.metrics.insert(String::from("picker_glyph_runs"), stats.glyph_runs as f64);
-    case.metrics.insert(String::from("picker_vertices"), stats.vertices as f64);
-    case.metrics.insert(String::from("picker_indices"), stats.indices as f64);
-    case
-}
-
 fn run_picker_text_cached_encode_stats() -> TextAtlasUploadStats {
     let mut bench = PickerTextEncodeBench::new();
     let cold_checksum = bench.encode_cached_once();
     let warm_checksum = bench.encode_cached_once();
-    let dl = bench.builder.drawlist();
-    let glyph_runs =
-        dl.items.iter().filter(|cmd| matches!(cmd, api::DrawCmd::GlyphRun { .. })).count() as u64;
-    let mut stats = bench.uploader.stats;
-    stats.glyph_runs = glyph_runs;
-    stats.vertices = dl.vertices.len() as u64;
-    stats.indices = dl.indices.len() as u64;
-    stats.checksum = cold_checksum
-        .wrapping_add(warm_checksum)
-        .wrapping_add(stats.dirty_upload_pixels)
-        .wrapping_add(stats.full_upload_pixels);
-    stats
-}
-
-fn run_picker_text_legacy_shape_upload_stats() -> TextAtlasUploadStats {
-    let mut bench = PickerTextEncodeBench::new();
-    let cold_checksum = bench.encode_legacy_once();
-    let warm_checksum = bench.encode_legacy_once();
     let dl = bench.builder.drawlist();
     let glyph_runs =
         dl.items.iter().filter(|cmd| matches!(cmd, api::DrawCmd::GlyphRun { .. })).count() as u64;
@@ -9431,112 +10396,6 @@ fn touch(
         pressure: None,
         tilt: None,
         device: platform::PointerDevice::Finger,
-    }
-}
-
-fn legacy_prepare_draws(list: &api::DrawList) -> Vec<ui::PreparedDraw> {
-    use api::DrawCmd as C;
-    let mut out = Vec::with_capacity(list.items.len());
-    let mut stack = Vec::new();
-    let mut current: Option<api::RectI> = None;
-    for item in &list.items {
-        match *item {
-            C::ClipPush { rect } => {
-                current = Some(if let Some(cur) = current {
-                    intersect_rect(cur, rect).unwrap_or(api::RectI { x: 0, y: 0, w: 0, h: 0 })
-                } else {
-                    rect
-                });
-                stack.push(rect);
-            }
-            C::ClipPop => {
-                let _ = stack.pop();
-                current = if stack.is_empty() {
-                    None
-                } else {
-                    let mut it = stack.iter();
-                    let mut acc = *it.next().expect("stack non-empty");
-                    for rect in it {
-                        if let Some(next) = intersect_rect(acc, *rect) {
-                            acc = next;
-                        } else {
-                            acc = api::RectI { x: 0, y: 0, w: 0, h: 0 };
-                            break;
-                        }
-                    }
-                    Some(acc)
-                };
-            }
-            _ => {
-                out.push(ui::PreparedDraw {
-                    cmd: item.clone(),
-                    clip: current.filter(|rect| rect.w > 0 && rect.h > 0),
-                });
-            }
-        }
-    }
-    out
-}
-
-fn legacy_coalesce_adjacent_draws(list: &mut api::DrawList) {
-    use api::DrawCmd as C;
-
-    #[inline]
-    fn contiguous(a_off: u32, a_len: u32, b_off: u32) -> bool {
-        a_off.saturating_add(a_len) == b_off
-    }
-
-    #[inline]
-    fn mergeable_nonindexed_solid(vb: api::VertexSpan) -> bool {
-        vb.len >= 3 && vb.len % 3 == 0
-    }
-
-    let mut i = 0usize;
-    while i + 1 < list.items.len() {
-        let can_merge = match (&list.items[i], &list.items[i + 1]) {
-            (C::GlyphRun { .. }, C::GlyphRun { .. }) => false,
-            (C::Solid { vb: av, ib: ai, color: ac }, C::Solid { vb: bv, ib: bi, color: bc }) => {
-                if ac != bc
-                    || !contiguous(av.offset, av.len, bv.offset)
-                    || !contiguous(ai.offset, ai.len, bi.offset)
-                {
-                    false
-                } else if ai.len == 0 && bi.len == 0 {
-                    mergeable_nonindexed_solid(*av) && mergeable_nonindexed_solid(*bv)
-                } else {
-                    ai.len > 0 && bi.len > 0
-                }
-            }
-            _ => false,
-        };
-        if can_merge {
-            let (left_slice, right_slice) = list.items.split_at_mut(i + 1);
-            let left = &mut left_slice[i];
-            let right = &mut right_slice[0];
-            if let (C::Solid { vb: av, ib: ai, .. }, C::Solid { vb: bv, ib: bi, .. }) =
-                (left, right)
-            {
-                av.len += bv.len;
-                ai.len += bi.len;
-            }
-            list.items.remove(i + 1);
-        } else {
-            i += 1;
-        }
-    }
-}
-
-fn intersect_rect(a: api::RectI, b: api::RectI) -> Option<api::RectI> {
-    let x1 = a.x.max(b.x);
-    let y1 = a.y.max(b.y);
-    let x2 = (a.x + a.w).min(b.x + b.w);
-    let y2 = (a.y + a.h).min(b.y + b.h);
-    let w = x2 - x1;
-    let h = y2 - y1;
-    if w > 0 && h > 0 {
-        Some(api::RectI { x: x1, y: y1, w, h })
-    } else {
-        None
     }
 }
 

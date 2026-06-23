@@ -1,6 +1,7 @@
 #import <CoreMotion/CoreMotion.h>
 #import <Foundation/Foundation.h>
 #import <stdbool.h>
+#import <stddef.h>
 #import <stdint.h>
 
 typedef struct {
@@ -10,6 +11,11 @@ typedef struct {
   uint8_t has_pressure;
   uint8_t has_relative_altitude;
 } OxideMotionSample;
+
+_Static_assert(sizeof(OxideMotionSample) == 32,
+               "OxideMotionSample ABI size changed");
+_Static_assert(_Alignof(OxideMotionSample) == 8,
+               "OxideMotionSample ABI alignment changed");
 
 static void (*g_motion_callback)(const OxideMotionSample *) = NULL;
 static CMAltimeter *g_altimeter = nil;

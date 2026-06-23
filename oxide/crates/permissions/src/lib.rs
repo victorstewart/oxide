@@ -7,6 +7,7 @@ use std::{collections::HashMap, sync::Arc};
 
 type PermissionCallback = Arc<dyn Fn(PermissionState) + Send + Sync>;
 type PermissionListeners = HashMap<PermissionDomain, Vec<(u64, PermissionCallback)>>;
+const PERMISSION_DOMAIN_COUNT: usize = 8;
 
 pub mod sensors;
 pub use sensors::SensorBridge;
@@ -32,14 +33,49 @@ pub struct PermissionManager {
 }
 
 struct PermissionInner {
-    states: HashMap<PermissionDomain, PermissionState>,
+    states: PermissionStates,
     listeners: PermissionListeners,
     next_listener_id: u64,
 }
 
 impl PermissionInner {
     fn new() -> Self {
-        Self { states: HashMap::new(), listeners: HashMap::new(), next_listener_id: 1 }
+        Self { states: PermissionStates::default(), listeners: HashMap::new(), next_listener_id: 1 }
+    }
+}
+
+#[derive(Default)]
+struct PermissionStates {
+    slots: [Option<PermissionState>; PERMISSION_DOMAIN_COUNT],
+}
+
+impl PermissionStates {
+    #[inline]
+    fn domain_index(domain: PermissionDomain) -> usize {
+        match domain {
+            PermissionDomain::Notifications => 0,
+            PermissionDomain::Location => 1,
+            PermissionDomain::Camera => 2,
+            PermissionDomain::Contacts => 3,
+            PermissionDomain::Bluetooth => 4,
+            PermissionDomain::Motion => 5,
+            PermissionDomain::Microphone => 6,
+            PermissionDomain::MediaLibrary => 7,
+        }
+    }
+
+    #[inline]
+    fn insert(&mut self, state: PermissionState) {
+        self.slots[Self::domain_index(state.domain)] = Some(state);
+    }
+
+    #[inline]
+    fn get(&self, domain: PermissionDomain) -> Option<PermissionState> {
+        self.slots[Self::domain_index(domain)]
+    }
+
+    fn values(&self) -> impl Iterator<Item = PermissionState> + '_ {
+        self.slots.iter().filter_map(|state| *state)
     }
 }
 
@@ -76,7 +112,7 @@ impl PermissionManager {
                 let mut guard = upgraded.lock();
                 let now = clock_cb();
                 let state = PermissionState::new(domain, status, now);
-                guard.states.insert(domain, state);
+                guard.states.insert(state);
                 let callbacks: Vec<_> = guard
                     .listeners
                     .get(&domain)
@@ -98,14 +134,14 @@ impl PermissionManager {
     pub fn status(&self, domain: PermissionDomain) -> PermissionStatus {
         {
             let guard = self.inner.lock();
-            if let Some(state) = guard.states.get(&domain) {
+            if let Some(state) = guard.states.get(domain) {
                 return state.status;
             }
         }
         let status = self.permissions.status(domain);
         let now = (self.clock)();
         let mut guard = self.inner.lock();
-        guard.states.insert(domain, PermissionState::new(domain, status, now));
+        guard.states.insert(PermissionState::new(domain, status, now));
         status
     }
 
@@ -115,7 +151,7 @@ impl PermissionManager {
 
     pub fn snapshot(&self) -> Vec<PermissionState> {
         let guard = self.inner.lock();
-        guard.states.values().copied().collect()
+        guard.states.values().collect()
     }
 
     pub fn subscribe<F>(&self, domain: PermissionDomain, callback: F) -> PermissionSubscription
@@ -129,7 +165,7 @@ impl PermissionManager {
         let entry = guard.listeners.entry(domain).or_default();
         let arc_cb: PermissionCallback = Arc::new(callback);
         entry.push((id, Arc::clone(&arc_cb)));
-        let current = guard.states.get(&domain).copied();
+        let current = guard.states.get(domain);
         drop(guard);
         if let Some(state) = current {
             arc_cb(state);

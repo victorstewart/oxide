@@ -48,6 +48,39 @@ fn manager_tracks_status_updates() {
 }
 
 #[test]
+fn manager_cache_tracks_every_domain_slot_and_snapshot() {
+    let fake = Arc::new(FakePermissions::new());
+    let now = Arc::new(|| 77u64);
+    let mgr = PermissionManager::new(fake.clone(), now);
+    let cases = [
+        (PermissionDomain::Notifications, PermissionStatus::NotDetermined),
+        (PermissionDomain::Location, PermissionStatus::Authorized),
+        (PermissionDomain::Camera, PermissionStatus::Denied),
+        (PermissionDomain::Contacts, PermissionStatus::Limited),
+        (PermissionDomain::Bluetooth, PermissionStatus::Authorized),
+        (PermissionDomain::Motion, PermissionStatus::Limited),
+        (PermissionDomain::Microphone, PermissionStatus::Denied),
+        (PermissionDomain::MediaLibrary, PermissionStatus::Authorized),
+    ];
+
+    for (domain, status) in cases {
+        fake.notify(domain, status);
+    }
+
+    for (domain, status) in cases {
+        assert_eq!(mgr.status(domain), status);
+    }
+
+    let snapshot = mgr.snapshot();
+    assert_eq!(snapshot.len(), cases.len());
+    for (domain, status) in cases {
+        assert!(snapshot
+            .iter()
+            .any(|state| state.domain == domain && state.status == status && state.last_changed_ms == 77));
+    }
+}
+
+#[test]
 fn subscription_receives_initial_and_updates() {
     let fake = Arc::new(FakePermissions::new());
     let now = Arc::new(|| 100u64);
@@ -63,4 +96,6 @@ fn subscription_receives_initial_and_updates() {
     let statuses = seen.lock().clone();
     assert_eq!(statuses, vec![PermissionStatus::Denied, PermissionStatus::Authorized]);
     drop(subscription);
+    fake.notify(PermissionDomain::Camera, PermissionStatus::Denied);
+    assert_eq!(*seen.lock(), vec![PermissionStatus::Denied, PermissionStatus::Authorized]);
 }

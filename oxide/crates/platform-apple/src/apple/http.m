@@ -2,6 +2,7 @@
 #import <TargetConditionals.h>
 #import <dispatch/dispatch.h>
 #import <stdbool.h>
+#import <stddef.h>
 #import <stdint.h>
 #import <stdlib.h>
 #import <string.h>
@@ -16,6 +17,11 @@ struct OxideHttpResponse
    uint8_t *content_type_ptr;
    size_t content_type_len;
 };
+
+_Static_assert(sizeof(struct OxideHttpResponse) == 56,
+               "OxideHttpResponse ABI size changed");
+_Static_assert(_Alignof(struct OxideHttpResponse) == 8,
+               "OxideHttpResponse ABI alignment changed");
 
 void oxide_host_http_response_free(struct OxideHttpResponse *response);
 

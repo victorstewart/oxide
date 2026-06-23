@@ -37,6 +37,30 @@ fn permit(bridge: &SensorBridge, domain: PermissionDomain, status: PermissionSta
 }
 
 #[test]
+fn permission_status_tracks_every_domain_slot() {
+   let (_, clock) = test_clock_pair();
+   let bridge = SensorBridge::with_clock(clock);
+   let cases = [
+      (PermissionDomain::Notifications, PermissionStatus::NotDetermined),
+      (PermissionDomain::Location, PermissionStatus::Authorized),
+      (PermissionDomain::Camera, PermissionStatus::Denied),
+      (PermissionDomain::Contacts, PermissionStatus::Limited),
+      (PermissionDomain::Bluetooth, PermissionStatus::Authorized),
+      (PermissionDomain::Motion, PermissionStatus::Limited),
+      (PermissionDomain::Microphone, PermissionStatus::Denied),
+      (PermissionDomain::MediaLibrary, PermissionStatus::Authorized),
+   ];
+
+   for (domain, status) in cases {
+      permit(&bridge, domain, status);
+   }
+
+   for (domain, status) in cases {
+      assert_eq!(bridge.permission_status(domain), Some(status));
+   }
+}
+
+#[test]
 fn location_history_prunes_by_length_and_age() {
     let (now, clock) = test_clock_pair();
     let config = oxide_permissions::sensors::SensorBridgeConfig {
@@ -115,6 +139,41 @@ fn bluetooth_prunes_by_age_limit() {
 
     let snapshot = bridge.bluetooth_snapshot();
     assert!(snapshot.devices.is_empty());
+}
+
+#[test]
+fn bluetooth_discovery_snapshot_preserves_payload_fields() {
+   let (now, clock) = test_clock_pair();
+   let bridge = SensorBridge::with_clock(clock);
+   permit(&bridge, PermissionDomain::Bluetooth, PermissionStatus::Authorized);
+
+   let service = oxide_platform_api::BleUuid([9; 16]);
+   let info = oxide_platform_api::PeripheralInfo {
+      id: 88,
+      name: Some("bench-device".into()),
+      rssi_dbm: -51,
+      advertisement: oxide_platform_api::AdvertisementData {
+         services: vec![service],
+         manufacturer_data: Some(vec![1, 2, 3, 4]),
+         connectable: true,
+      },
+   };
+   now.store(42, Ordering::SeqCst);
+   bridge.handle_bluetooth_event(BluetoothEvent::Discovered(info));
+
+   let snapshot = bridge.bluetooth_snapshot();
+   assert_eq!(snapshot.devices.len(), 1);
+   let entry = &snapshot.devices[0];
+   assert_eq!(entry.last_seen_ms, 42);
+   assert_eq!(entry.peripheral.id, 88);
+   assert_eq!(entry.peripheral.name.as_deref(), Some("bench-device"));
+   assert_eq!(entry.peripheral.rssi_dbm, -51);
+   assert_eq!(entry.peripheral.advertisement.services.as_slice(), &[service]);
+   assert_eq!(
+      entry.peripheral.advertisement.manufacturer_data.as_deref(),
+      Some(&[1, 2, 3, 4][..])
+   );
+   assert!(entry.peripheral.advertisement.connectable);
 }
 
 #[test]

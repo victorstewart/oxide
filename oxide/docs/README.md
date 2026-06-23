@@ -8,6 +8,8 @@ This directory mirrors Rust source units with design notes, entry points, behavi
 - [oxide-host-ios](oxide-host-ios/lib.md)
 - [oxide-host-macos](oxide-host-macos/lib.md)
 - [perf-runner](perf-runner/lib.md)
+- [permissions manager](permissions/lib.md)
+- [permissions sensor bridge](permissions/sensors.md)
 - [platform-apple](platform-apple/lib.md)
 - [platform-api](platform-api/lib.md)
 - [platform-ios](platform-ios/lib.md)

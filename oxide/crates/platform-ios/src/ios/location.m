@@ -3,6 +3,7 @@
 #import <UIKit/UIKit.h>
 #import <dispatch/dispatch.h>
 #import <stdbool.h>
+#import <stddef.h>
 #import <stdint.h>
 
 typedef struct {
@@ -16,12 +17,22 @@ typedef struct {
   uint64_t timestamp_ms;
 } OxideLocationSample;
 
+_Static_assert(sizeof(OxideLocationSample) == 64,
+               "OxideLocationSample ABI size changed");
+_Static_assert(_Alignof(OxideLocationSample) == 8,
+               "OxideLocationSample ABI alignment changed");
+
 typedef struct {
   uint32_t accuracy_kind;
   double distance_filter_m;
   uint8_t allow_background;
   uint8_t precise;
 } OxideLocationConfig;
+
+_Static_assert(sizeof(OxideLocationConfig) == 24,
+               "OxideLocationConfig ABI size changed");
+_Static_assert(_Alignof(OxideLocationConfig) == 8,
+               "OxideLocationConfig ABI alignment changed");
 
 static void (*g_location_callback)(const OxideLocationSample *) = NULL;
 static void (*g_location_error_callback)(const uint8_t *, size_t) = NULL;

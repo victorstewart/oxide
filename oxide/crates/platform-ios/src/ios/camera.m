@@ -13,6 +13,7 @@
 #include <dispatch/dispatch.h>
 #include <limits.h>
 #include <mach/mach_time.h>
+#include <stddef.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -230,6 +231,15 @@ struct OxideCamContractSnapshot {
   uint32_t color_space;
 };
 
+_Static_assert(sizeof(struct OxideCamPerfSnapshot) == 208,
+               "OxideCamPerfSnapshot ABI size changed");
+_Static_assert(_Alignof(struct OxideCamPerfSnapshot) == 8,
+               "OxideCamPerfSnapshot ABI alignment changed");
+_Static_assert(sizeof(struct OxideCamContractSnapshot) == 20,
+               "OxideCamContractSnapshot ABI size changed");
+_Static_assert(_Alignof(struct OxideCamContractSnapshot) == 4,
+               "OxideCamContractSnapshot ABI alignment changed");
+
 struct OxideCamAcquiredFrame {
   void *y_tex;
   void *uv_tex;
@@ -296,6 +306,23 @@ struct OxideCamPhotoEvent {
   const uint8_t *error_msg_ptr;
   size_t error_msg_len;
 };
+
+_Static_assert(sizeof(struct OxideCamFrame) == 72,
+               "OxideCamFrame ABI size changed");
+_Static_assert(_Alignof(struct OxideCamFrame) == 8,
+               "OxideCamFrame ABI alignment changed");
+_Static_assert(sizeof(struct OxideCamAudio) == 32,
+               "OxideCamAudio ABI size changed");
+_Static_assert(_Alignof(struct OxideCamAudio) == 8,
+               "OxideCamAudio ABI alignment changed");
+_Static_assert(sizeof(struct OxideCamRecordEvent) == 64,
+               "OxideCamRecordEvent ABI size changed");
+_Static_assert(_Alignof(struct OxideCamRecordEvent) == 8,
+               "OxideCamRecordEvent ABI alignment changed");
+_Static_assert(sizeof(struct OxideCamPhotoEvent) == 104,
+               "OxideCamPhotoEvent ABI size changed");
+_Static_assert(_Alignof(struct OxideCamPhotoEvent) == 8,
+               "OxideCamPhotoEvent ABI alignment changed");
 
 typedef void (*OxideCameraFrameCallback)(const struct OxideCamFrame *);
 typedef void (*OxideCameraAudioCallback)(const struct OxideCamAudio *);

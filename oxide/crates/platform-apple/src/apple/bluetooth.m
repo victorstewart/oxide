@@ -4,6 +4,7 @@
 #import <uuid/uuid.h>
 #import <dispatch/dispatch.h>
 #import <stdbool.h>
+#import <stddef.h>
 #import <stdint.h>
 #import <stdlib.h>
 
@@ -45,6 +46,11 @@ struct OxideBleScanConfig
    uint8_t allow_duplicates;
 };
 
+_Static_assert(sizeof(struct OxideBleScanConfig) == 24,
+               "OxideBleScanConfig ABI size changed");
+_Static_assert(_Alignof(struct OxideBleScanConfig) == 8,
+               "OxideBleScanConfig ABI alignment changed");
+
 struct OxideBleScanInfo
 {
    uint8_t id[16];
@@ -57,6 +63,11 @@ struct OxideBleScanInfo
    size_t manufacturer_len;
    uint8_t connectable;
 };
+
+_Static_assert(sizeof(struct OxideBleScanInfo) == 80,
+               "OxideBleScanInfo ABI size changed");
+_Static_assert(_Alignof(struct OxideBleScanInfo) == 8,
+               "OxideBleScanInfo ABI alignment changed");
 
 struct NametagBleUuid
 {

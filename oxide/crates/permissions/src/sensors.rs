@@ -4,7 +4,7 @@ use oxide_platform_api::{
 };
 use parking_lot::Mutex;
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{BTreeMap, VecDeque},
     sync::Arc,
 };
 
@@ -16,6 +16,7 @@ const DEFAULT_LOCATION_MAX_AGE_MS: u64 = 60_000;
 const DEFAULT_MOTION_HISTORY_MAX: usize = 64;
 const DEFAULT_BLE_MAX_AGE_MS: u64 = 5 * 60_000;
 const DEFAULT_PUSH_HISTORY_MAX: usize = 8;
+const PERMISSION_DOMAIN_COUNT: usize = 8;
 
 #[derive(Clone, Debug)]
 pub struct SensorBridgeConfig {
@@ -66,23 +67,32 @@ struct PushState {
 
 #[derive(Default)]
 struct PermissionCache {
-    statuses: HashMap<oxide_platform_api::PermissionDomain, oxide_platform_api::PermissionStatus>,
+    statuses: [Option<PermissionStatus>; PERMISSION_DOMAIN_COUNT],
 }
 
 impl PermissionCache {
-    fn set(
-        &mut self,
-        domain: oxide_platform_api::PermissionDomain,
-        status: oxide_platform_api::PermissionStatus,
-    ) {
-        self.statuses.insert(domain, status);
+    #[inline]
+    fn domain_index(domain: PermissionDomain) -> usize {
+        match domain {
+            PermissionDomain::Notifications => 0,
+            PermissionDomain::Location => 1,
+            PermissionDomain::Camera => 2,
+            PermissionDomain::Contacts => 3,
+            PermissionDomain::Bluetooth => 4,
+            PermissionDomain::Motion => 5,
+            PermissionDomain::Microphone => 6,
+            PermissionDomain::MediaLibrary => 7,
+        }
     }
 
-    fn get(
-        &self,
-        domain: oxide_platform_api::PermissionDomain,
-    ) -> Option<oxide_platform_api::PermissionStatus> {
-        self.statuses.get(&domain).copied()
+    #[inline]
+    fn set(&mut self, domain: PermissionDomain, status: PermissionStatus) {
+        self.statuses[Self::domain_index(domain)] = Some(status);
+    }
+
+    #[inline]
+    fn get(&self, domain: PermissionDomain) -> Option<PermissionStatus> {
+        self.statuses[Self::domain_index(domain)]
     }
 }
 
@@ -320,9 +330,9 @@ impl SensorBridge {
                 }
             }
             BluetoothEvent::Discovered(info) => {
-                let entry =
-                    BleCacheEntry { peripheral: info.clone(), last_seen_ms: (self.clock)() };
-                bt.devices.insert(info.id, entry);
+                let id = info.id;
+                let entry = BleCacheEntry { peripheral: info, last_seen_ms: (self.clock)() };
+                bt.devices.insert(id, entry);
             }
             BluetoothEvent::CacheUpdated(entry) => {
                 bt.devices.insert(entry.peripheral.id, entry);

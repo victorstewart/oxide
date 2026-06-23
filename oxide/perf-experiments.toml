@@ -1,0 +1,1541 @@
+[[experiments]]
+id = "native-audit-row-retirement"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner --test report_tests && cargo check --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner && git diff --check"
+performance_gate = "Same-workload filtered A/B for prepare-draws, coalesce, text, and Metal id-mask rows; current rows must beat retired audit rows before deletion remains."
+decision_state = "accepted"
+decision = "Retired native audit-only loser rows after the current rows proved faster and remained as the gated benchmarks."
+proof = [
+   "prepare-draws current 27.470 us/op vs legacy 50.786 us/op; after deletion current-only 27.050 us/op",
+   "coalesce current 45.838 us/op vs legacy 253.177 us/op; after deletion current-only 45.567 us/op",
+   "wrapped-label current 1119.378 us/op vs legacy 2075.733 us/op; picker current 6.633 us/op vs legacy 77.552 us/op; after deletion current-only 983.400 us/op and 5.979 us/op",
+   "id-mask current 0.124 ms/frame vs legacy-upload 0.313 ms/frame; after deletion current-only 0.136 ms/frame",
+]
+cleanup = [
+   "Deleted duplicate legacy benchmark helpers and audit-only case registrations.",
+   "Refreshed workspace latest baseline to 161 cases with no retired native audit rows.",
+]
+
+[[experiments]]
+id = "webgpu-default-standalone-cache-row-retirement"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "node oxide/scripts/check_webgpu_browser_golden.mjs ... pixel diff 0 && cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-host-web --test lib_tests && cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner --test report_tests && node --check oxide/scripts/check_webgpu_browser_golden.mjs && git diff --check"
+performance_gate = "Same-workload browser A/B for default standalone draw-item, draw-state, and clip-state rows; default report work must fall while remaining golden pixels stay identical."
+decision_state = "accepted"
+decision = "Retired three standalone browser WebGPU default report families after current rows proved faster and broader default rows kept coverage."
+proof = [
+   "draw-item current 0.092 ms vs legacy 0.125 ms",
+   "draw-state current 0.108 ms vs legacy 0.217 ms",
+   "clip-state current 0.067 ms vs legacy 0.117 ms",
+   "after deletion: cases 37 -> 31, benchmark marks 17 -> 14, backend paths 19 -> 16, total mark duration 836.500 ms -> 769.000 ms, pixel diff 0",
+]
+cleanup = [
+   "Removed default page/report rows, summaries, marks, and backend-path entries for the three standalone families.",
+   "Kept explicit diagnostic exports as cleanup candidates requiring separate A/B proof.",
+]
+
+[[experiments]]
+id = "webgpu-default-upload-scratch-row-retirement"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "node oxide/scripts/check_webgpu_browser_golden.mjs ... pixel diff 0 && cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-host-web --test lib_tests && cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner --test report_tests && node --check oxide/scripts/check_webgpu_browser_golden.mjs && git diff --check"
+performance_gate = "Same-workload browser A/B for default upload-scratch current versus legacy temporary-allocation rows; default report work must fall while remaining golden pixels stay identical."
+decision_state = "accepted"
+decision = "Retired the upload-scratch browser WebGPU default report family after reusable scratch proved faster and broader default upload/resource rows kept coverage."
+proof = [
+   "upload-scratch current p50 0.300 ms vs legacy p50 0.417 ms",
+   "current temp allocs/bytes 0/0 vs legacy temp allocs/bytes 72/884736 with equal texture upload bytes 786432",
+   "after deletion: cases 31 -> 29, benchmark marks 14 -> 13, backend paths 16 -> 15, total mark duration 762.2 ms -> 702.1 ms, pixel diff 0",
+]
+cleanup = [
+   "Removed default page/report rows, summary, mark, and backend-path entry for upload-scratch.",
+   "Kept the explicit diagnostic export and renderer benchmark toggle as cleanup candidates requiring separate A/B proof.",
+]
+
+[[experiments]]
+id = "webgpu-default-id-mask-legacy-row-retirement"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "node oxide/scripts/check_webgpu_browser_golden.mjs ... pixel diff 0 && cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-host-web --test lib_tests && cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner --test report_tests && node --check oxide/scripts/check_webgpu_browser_golden.mjs && git diff --check"
+performance_gate = "Same-workload browser A/B for default ID-mask current versus legacy-upload rows; default report work must fall while current ID-mask coverage and golden pixels stay identical."
+decision_state = "accepted"
+decision = "Retired the default ID-mask legacy row after the existing A/B report showed current was faster and the current-only default kept coverage."
+proof = [
+   "A side default ID-mask A/B: cases 29, id_mask_ab mark 54.8 ms, current p50/p95/p99 0.075/0.083/0.083 ms, legacy p50/p95/p99 0.150/0.175/0.175 ms, current upload bytes 1120, legacy upload bytes 308320, pixel diff 0",
+   "B side current-only default: cases 28, id_mask_current mark 27.5 ms, current p50/p95/p99 0.075/0.083/0.083 ms, upload bytes 1120, no legacy row, pixel diff 0",
+   "total benchmark mark duration fell 712.4 ms -> 694.9 ms while backend-path coverage stayed at 15 paths and current ID-mask counters stayed equivalent",
+]
+cleanup = [
+   "Removed the default browser page/report legacy ID-mask row, A/B summary, and default backend-path legacy row.",
+   "Kept bench_webgpu_id_mask_ab as an explicit diagnostic export requiring separate proof before deletion.",
+]
+
+[[experiments]]
+id = "webgpu-default-upload-legacy-row-retirement"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "node oxide/scripts/check_webgpu_browser_golden.mjs ... pixel diff 0 && wasm32 release build plus wasm-bindgen package regeneration && cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-host-web --test lib_tests && cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner --test report_tests && node --check oxide/scripts/check_webgpu_browser_golden.mjs && git diff --check"
+performance_gate = "Same-workload browser A/B for default glyph-atlas/RGBA upload current versus legacy full-upload rows; default report work and package bytes must fall while current upload coverage and golden pixels stay identical."
+decision_state = "accepted"
+decision = "Retired the default upload legacy rows and the upload A/B diagnostic export after dirty-subrect upload remained covered by current rows and the same browser workload got faster."
+proof = [
+   "A side default upload A/B: cases 26, upload_ab mark 138.1 ms, total benchmark marks 632.1 ms, package 3169439 bytes, glyph current p50 0.050 ms vs legacy 2.633 ms, image current p50 0.025 ms vs legacy 0.100 ms, pixel diff 0",
+   "B side current-only upload: cases 24, upload_current mark 21.0 ms, total benchmark marks 528.4 ms, package 3147333 bytes, no glyph/image legacy upload rows, pixel diff 0",
+   "the retained current rows kept texture upload bytes at 16384 for glyph and image dirty updates with nonzero direct GPU timestamp totals",
+]
+cleanup = [
+   "Removed bench_webgpu_upload_ab and the benchmark-only full-upload glyph/image sampling from the wasm host.",
+   "Changed the default browser page, report schema, backend-path coverage, and persisted web baseline to current-only upload rows.",
+]
+
+[[experiments]]
+id = "webgpu-clip-state-diagnostic-export-retirement"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Repeated startup A/B must keep every sample on WebGPU with render smoke draws=8; full browser report must keep pixel diff 0; node --check, host-web tests, perf-runner report tests, and git diff --check must pass."
+performance_gate = "Same-workload browser startup A/B for removing only the non-default clip-state diagnostic export; package bytes, WASM init p50/p95, first-frame p50/p95, and report-ready p50/p95 must not regress."
+decision_state = "accepted"
+decision = "Retired the explicit clip-state diagnostic wasm export after isolated repeated startup proof showed package and startup/report-ready wins while broader default rows preserved clip-depth coverage."
+proof = [
+   "A side 25-repeat startup: package 3133142 bytes, WASM init p50/p95 8.0/15.7 ms, first-frame p50/p95 16.0/16.6 ms, report-ready p50/p95 71.7/79.5 ms",
+   "B side 25-repeat startup: package 3109596 bytes, WASM init p50/p95 8.0/15.1 ms, first-frame p50/p95 16.0/16.5 ms, report-ready p50/p95 71.2/78.7 ms",
+   "full browser report after deletion kept version 3, 29 cases, no clip_state case, and pixel diff 0",
+]
+cleanup = [
+   "Removed the non-default bench_webgpu_clip_state_ab export, private clip_state_frame builder, and clip-state diagnostic constants.",
+   "Kept draw-item, draw-state, and upload-scratch explicit diagnostics as cleanup candidates requiring separate A/B proof.",
+]
+
+[[experiments]]
+id = "canvas-indexed-quad-stack-array"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "canvas2d"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Hidden Canvas diagnostic workload must preserve draws=512, image_draws=512, image_mesh_draws=1, expected_image_draws=512; renderer-web and host-web source tests, wasm build/bindgen, node --check, and git diff --check must pass."
+performance_gate = "Same-workload hidden Canvas indexed-quad A/B; allocation and realloc counters must drop, latency distributions must not regress, and renderer counters must stay equivalent."
+decision_state = "accepted"
+decision = "Replaced the per-indexed-quad Canvas temporary Vec with a fixed stack array after the hidden Canvas workload removed measured Rust/WASM heap churn and improved p95/average timing."
+proof = [
+   "A side median: p50 0.300 ms, p95 0.500 ms, p99 0.500 ms, peak 0.500 ms, avg 0.342 ms, allocations 18432, allocated bytes 1474560, reallocations 18432, peak frame allocated bytes 81920",
+   "B side median: p50 0.300 ms, p95 0.400 ms, p99 0.500 ms, peak 0.500 ms, avg 0.336 ms, allocations 0, allocated bytes 0, reallocations 0, peak frame allocated bytes 0",
+   "workload counters preserved: draws=512, image_draws=512, image_mesh_draws=1, expected_image_draws=512",
+]
+cleanup = [
+   "Removed the per-quad temporary Vec allocation/reallocation path from Canvas indexed quad walking.",
+   "Kept the non-default Canvas diagnostic harness as proof infrastructure for Canvas fallback changes.",
+]
+
+[[experiments]]
+id = "perf-runner-markdown-metric-summary-direct-streaming"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Markdown render bytes_per_iter must stay identical at 43547 bytes for benchmarks/workspace/latest.json; focused report markdown tests, manifest checks, and git diff checks must pass."
+performance_gate = "Same-workload markdown render A/B for streaming render_case_metrics_summary directly into one output string; repeated long-run us_per_iter must improve after rebuilding the changed binary before the patch remains."
+decision_state = "accepted"
+decision = "Streamed Markdown metric summaries directly into one bounded output string after same-workload proof showed a stable report-generation win with byte-identical Markdown."
+proof = [
+   "A side 65536 iterations: 170.952 and 169.768 us_per_iter, bytes_per_iter 43547",
+   "initial B side 65536 iterations: 136.950 and 136.593 us_per_iter, bytes_per_iter 43547",
+   "rebuilt A side 65536 iterations: 172.635 us_per_iter, final rebuilt B side 65536 iterations: 139.736 us_per_iter, bytes_per_iter 43547",
+]
+cleanup = [
+   "Deleted the per-row Vec<String> metric part collection, emitted-name Vec, per-part format allocations, and final join from render_case_metrics_summary.",
+   "Kept the existing metric priority order and six-metric summary limit, covered through render_report_markdown.",
+]
+
+[[experiments]]
+id = "perf-runner-markdown-results-row-direct-streaming"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Markdown render bytes_per_iter must stay identical at 43547 bytes for benchmarks/workspace/latest.json; full report tests, manifest checks, and git diff checks must pass."
+performance_gate = "Same-workload markdown render A/B for streaming Markdown result rows directly into the report body; repeated long-run us_per_iter must improve after rebuilding the changed binary before the patch remains."
+decision_state = "accepted"
+decision = "Streamed Markdown result table rows directly into the report body after same-workload proof showed a stable report-generation win with byte-identical Markdown."
+proof = [
+   "A side 65536 iterations: 137.074 and 137.195 us_per_iter, bytes_per_iter 43547",
+   "initial B side 65536 iterations: 123.150 and 123.737 us_per_iter, bytes_per_iter 43547",
+   "rebuilt A side 65536 iterations: 137.006 us_per_iter, final rebuilt B side 65536 iterations: 127.069 us_per_iter, bytes_per_iter 43547",
+]
+cleanup = [
+   "Deleted the per-case intermediate formatted result-row String allocation and append copy from render_markdown.",
+   "Kept the existing table row fields, ordering, and metric-summary bytes.",
+]
+
+[[experiments]]
+id = "perf-runner-markdown-inline-metric-summary-streaming"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Markdown render bytes_per_iter must stay identical at 43547 bytes for benchmarks/workspace/latest.json; full report tests, manifest checks, and git diff checks must pass."
+performance_gate = "Same-workload markdown render A/B for streaming case metric summaries inline into result rows; repeated long-run us_per_iter must improve after rebuilding the changed binary before the patch remains."
+decision_state = "accepted"
+decision = "Streamed Markdown case metric summaries inline into result rows after same-workload proof showed a stable report-generation win with byte-identical Markdown."
+proof = [
+   "A side 65536 iterations: 123.489 and 123.950 us_per_iter, bytes_per_iter 43547",
+   "initial B side 65536 iterations: 117.488 and 116.095 us_per_iter, bytes_per_iter 43547",
+   "rebuilt A side 65536 iterations: 124.487 us_per_iter, final rebuilt B side 65536 iterations: 119.396 us_per_iter, bytes_per_iter 43547",
+]
+cleanup = [
+   "Deleted the per-case metric-summary String allocation from render_markdown result-row emission.",
+   "Kept the existing metric priority order, duplicate suppression, six-metric limit, and empty metric marker.",
+]
+
+[[experiments]]
+id = "perf-runner-markdown-contract-row-direct-streaming"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Markdown render bytes_per_iter must stay identical at 43547 bytes for benchmarks/workspace/latest.json; full report tests, manifest checks, and git diff checks must pass."
+performance_gate = "Same-workload markdown render A/B for streaming contract coverage rows and notes directly into the report body; repeated long-run us_per_iter must improve after rebuilding the changed binary before the patch remains."
+decision_state = "accepted"
+decision = "Streamed Markdown contract coverage rows directly into the report body after same-workload proof showed a report-generation win with byte-identical Markdown."
+proof = [
+   "A side 65536 iterations: 116.624 and 116.943 us_per_iter, bytes_per_iter 43547",
+   "initial B side 65536 iterations: 115.359 and 114.584 us_per_iter, bytes_per_iter 43547",
+   "rebuilt A side 65536 iterations: 119.769 us_per_iter, final rebuilt B side 65536 iterations: 118.592 and 117.077 us_per_iter, bytes_per_iter 43547",
+]
+cleanup = [
+   "Deleted the per-contract-row intermediate formatted String allocation and notes join from render_markdown.",
+   "Kept the existing contract table fields, row order, and single-space note separator.",
+]
+
+[[experiments]]
+id = "perf-runner-markdown-summary-direct-streaming"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Markdown render bytes_per_iter must stay identical at 43547 bytes for benchmarks/workspace/latest.json; full report tests, manifest checks, and git diff checks must pass."
+performance_gate = "Same-workload markdown render A/B for streaming summary/header lines directly into the report body; repeated long-run us_per_iter must improve after rebuilding the changed binary before the patch remains."
+decision_state = "accepted"
+decision = "Streamed Markdown summary/header lines directly into the report body after same-workload proof showed a report-generation win with byte-identical Markdown."
+proof = [
+   "A side 65536 iterations: 115.550 and 116.149 us_per_iter, bytes_per_iter 43547",
+   "initial B side 65536 iterations: 114.360 and 114.716 us_per_iter, bytes_per_iter 43547",
+   "rebuilt A side 65536 iterations: 117.639 us_per_iter, final rebuilt B side 65536 iterations: 116.537 and 116.556 us_per_iter, bytes_per_iter 43547",
+]
+cleanup = [
+   "Deleted intermediate formatted String allocations for the Markdown suite, label, coverage, and comparison summary lines.",
+   "Kept the existing summary fields, ordering, punctuation, and optional comparison behavior.",
+]
+
+[[experiments]]
+id = "perf-runner-markdown-tail-line-direct-streaming"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Markdown render bytes_per_iter must stay identical at 43547 bytes for benchmarks/workspace/latest.json; full report tests, manifest checks, and git diff checks must pass."
+performance_gate = "Same-workload markdown render A/B for streaming exercised contract note, finding, and baseline footer lines directly into the report body; repeated long-run us_per_iter must improve after rebuilding the changed binary before the patch remains."
+decision_state = "accepted"
+decision = "Streamed Markdown contract notes, findings, and baseline footer lines directly into the report body after same-workload proof showed a report-generation win with byte-identical Markdown."
+proof = [
+   "A side 65536 iterations: 113.876 and 114.049 us_per_iter, bytes_per_iter 43547",
+   "initial B side 65536 iterations: 112.544 and 112.298 us_per_iter, bytes_per_iter 43547",
+   "rebuilt A side 65536 iterations: 116.961 us_per_iter, final rebuilt B side 65536 iterations: 115.823 and 115.822 us_per_iter, bytes_per_iter 43547",
+]
+cleanup = [
+   "Deleted intermediate formatted String allocations for exercised Markdown contract note, finding, and baseline footer lines.",
+   "Left the unexercised comparison and A/B Audit branches unchanged because they require separate same-workload proof.",
+]
+
+[[experiments]]
+id = "perf-runner-markdown-metric-priority-index-lookup"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Markdown render bytes_per_iter must stay identical at 43547 bytes for benchmarks/workspace/latest.json; full report tests, manifest checks, and git diff checks must pass."
+performance_gate = "Same-workload markdown render A/B for replacing per-metric priority-name scans with direct priority-index lookup in metric summary duplicate suppression; repeated long-run us_per_iter must improve after rebuilding the changed binary before the patch remains."
+decision_state = "accepted"
+decision = "Replaced Markdown metric-summary fallback duplicate suppression's per-key priority-name scan with a direct priority-index lookup after same-workload proof showed a report-generation win with byte-identical Markdown."
+proof = [
+   "A side 65536 iterations: 112.431 and 112.868 us_per_iter, bytes_per_iter 43547",
+   "initial B side 65536 iterations: 111.285 and 111.283 us_per_iter, bytes_per_iter 43547",
+   "rebuilt A side 65536 iterations: 114.411 us_per_iter, final rebuilt B side 65536 iterations: 112.988 and 113.451 us_per_iter, bytes_per_iter 43547",
+]
+cleanup = [
+   "Deleted the per-metric loop over all 16 priority metric names in write_case_metrics_summary fallback duplicate suppression.",
+   "Kept the existing priority order, duplicate suppression semantics, six-metric limit, and empty marker.",
+]
+
+[[experiments]]
+id = "webgpu-id-mask-diagnostic-export-retirement-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Repeated startup A/B must keep every sample on WebGPU with render smoke draws=8; restored package bytes must match the A-side package after rejection; host-web tests, node --check, and git diff --check must pass."
+performance_gate = "Same-workload browser startup A/B for removing only the non-default ID-mask diagnostic export and legacy-revision branch; package bytes must decrease and every declared p50/p95 startup metric must avoid regression."
+decision_state = "rejected"
+decision = "Kept the explicit ID-mask diagnostic export because isolated startup/package proof was mixed rather than a clean win under the strict p50/p95 gate."
+proof = [
+   "A side 25-repeat startup: package 3187864 bytes, WASM init p50/p95 8.3/22.5 ms, app init p50/p95 9.3/12.4 ms, first-frame p50/p95 16.2/16.4 ms, report-ready p50/p95 70.6/77.7 ms",
+   "B side 25-repeat startup: package 3178294 bytes, WASM init p50/p95 8.4/11.6 ms, app init p50/p95 9.2/13.0 ms, first-frame p50/p95 16.1/16.4 ms, report-ready p50/p95 70.4/76.0 ms",
+   "the attempted cleanup reduced package bytes by 9570 but regressed WASM init p50 by 0.1 ms and app init p95 by 0.6 ms",
+]
+cleanup = [
+   "Restored bench_webgpu_id_mask_ab, the legacy-revision diagnostic branch, and the ignored wasm-bindgen package back to the A-side byte counts.",
+   "No source/docs/tests/report/schema cleanup from the attempted deletion remains in the patch.",
+]
+
+[[experiments]]
+id = "ui-core-coalesce-in-place-compaction-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner", "ui-core"]
+required_devices = ["macOS host"]
+correctness_gate = "cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-ui-core --test coalesce_tests; source diff must be empty after rejection."
+performance_gate = "Same-workload filtered coalesce A/B; B-side current median must beat A-side current median before the in-place compaction remains."
+decision_state = "rejected"
+decision = "Kept the existing public coalescing path because the attempted in-place compaction slowed the gated current row."
+proof = [
+   "A side cpu.system.coalesce_adjacent_draws.current median/p95/p99 45.838/46.987/47.344 us/op",
+   "B side in-place compaction current median/p95/p99 71.727/73.986/74.054 us/op",
+   "focused coalesce tests passed before and after rollback, and git diff for oxide/crates/ui-core/src/lib.rs was empty after rejection",
+]
+cleanup = [
+   "Restored oxide/crates/ui-core/src/lib.rs to the A-side implementation.",
+   "No source/docs/tests/report/schema cleanup from the attempted in-place compaction remains in the patch.",
+]
+
+[[experiments]]
+id = "perf-runner-markdown-audit-branch-retirement-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Markdown render output must remain generated from the same benchmarks/workspace/latest.json fixture; git diff must be restored after rejection."
+performance_gate = "Same-workload markdown render A/B; removing compute_audit_speedups and the conditional A/B Audit branch must improve the long repeated render workload before deletion remains."
+decision_state = "rejected"
+decision = "Kept the inert Markdown A/B Audit branch because the dedicated render harness did not prove a stable report-generation win."
+proof = [
+   "4096-iteration A side rendered at 185.941 us_per_iter while B side rendered at 177.148 us_per_iter",
+   "32768-iteration A side rendered at 170.084 us_per_iter while B side rendered at 174.184 us_per_iter",
+   "alternating saved binaries on the 32768 workload produced A 169.726/169.807 us_per_iter versus B 171.568/170.188 us_per_iter",
+]
+cleanup = [
+   "Restored compute_audit_speedups and the conditional A/B Audit Markdown branch.",
+   "No report-generation source cleanup from the attempted deletion remains in the patch.",
+]
+
+[[experiments]]
+id = "webgpu-upload-scratch-diagnostic-export-retirement-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Compact browser WebGPU report must keep pixel diff 0 and 29 cases; source diffs for host-web and renderer-web diagnostic deletion must be empty after rejection."
+performance_gate = "Same-workload compact browser A/B for deleting upload-scratch diagnostic export, frame builder, and renderer toggle; package/runtime/report work must be a clean win."
+decision_state = "rejected"
+decision = "Kept the upload-scratch diagnostic export and renderer toggle because compact browser-report evidence was mixed."
+proof = [
+   "A side package 3133142 bytes, report-ready 838.4 ms, total benchmark marks 710.4 ms",
+   "first B side package 3108587 bytes and WASM init 10.4 -> 9.5 ms, but app init 9.4 -> 11.8 ms, report-ready 838.4 -> 838.8 ms, and total marks 710.4 -> 713.0 ms regressed",
+   "second B side package stayed smaller but report-ready regressed to 883.1 ms and total marks to 756.5 ms",
+]
+cleanup = [
+   "Restored bench_webgpu_upload_scratch_ab, upload_scratch_frame, and the renderer benchmark toggle/temp-allocation branch.",
+   "Rebuilt the ignored wasm-bindgen package back to the A-side byte counts.",
+]
+
+[[experiments]]
+id = "webgpu-upload-scratch-export-only-retirement-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Repeated startup A/B must keep every sample on WebGPU with render smoke draws=8; restored package bytes must match the A-side package after rejection."
+performance_gate = "Same-workload browser startup A/B for removing only bench_webgpu_upload_scratch_ab and its frame builder; package bytes must decrease and p50/p95 startup metrics must avoid regression."
+decision_state = "rejected"
+decision = "Kept the upload-scratch export-only diagnostic path because startup distributions regressed despite a smaller package."
+proof = [
+   "A side 7-repeat startup: package 3133142 bytes, WASM init p50/p95 8.4/17.1 ms, first-frame p50/p95 16.1/16.4 ms, report-ready p50/p95 70.4/77.9 ms",
+   "B side 7-repeat startup: package 3109842 bytes, WASM init p50/p95 8.9/22.1 ms, first-frame p50/p95 16.0/16.4 ms, report-ready p50/p95 75.2/340.6 ms",
+   "the attempted cleanup reduced package bytes by 23300 but regressed WASM init p50/p95 and report-ready p50/p95",
+]
+cleanup = [
+   "Restored bench_webgpu_upload_scratch_ab, upload_scratch_frame, and WEBGPU_UPLOAD_SCRATCH_UPDATES.",
+   "Rebuilt the ignored wasm-bindgen package back to the A-side byte counts.",
+]
+
+[[experiments]]
+id = "webgpu-standalone-cache-diagnostic-exports-retirement-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Repeated startup A/B must keep every sample on WebGPU with render smoke draws=8; restored package bytes must match the A-side package after rejection."
+performance_gate = "Same-workload browser startup A/B for removing standalone draw-item, draw-state, and clip-state diagnostic exports together; package bytes and all declared p50/p95 startup metrics must avoid regression."
+decision_state = "rejected"
+decision = "Kept the combined standalone-cache diagnostic exports because report-ready p50 regressed."
+proof = [
+   "A side 15-repeat startup: package 3133142 bytes, WASM init p50/p95 8.5/16.7 ms, first-frame p50/p95 16.3/16.7 ms, report-ready p50/p95 70.2/84.3 ms",
+   "B side 15-repeat startup: package 3063756 bytes, WASM init p50/p95 8.1/14.9 ms, first-frame p50/p95 16.3/16.7 ms, report-ready p50/p95 71.1/79.1 ms",
+   "the attempted cleanup reduced package bytes by 69386 and improved WASM init p50/p95 plus report-ready p95, but report-ready p50 regressed by 0.9 ms",
+]
+cleanup = [
+   "Restored the non-default standalone cache diagnostic exports, private frame builders, constants, and ignored wasm-bindgen package.",
+   "No source/docs/tests/report/schema cleanup from the combined deletion remains in the patch.",
+]
+
+[[experiments]]
+id = "webgpu-draw-item-diagnostic-export-retirement-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Repeated startup A/B must keep every sample on WebGPU with render smoke draws=8; restored package bytes must match the A-side package after rejection."
+performance_gate = "Same-workload browser startup A/B for removing only bench_webgpu_draw_item_coalescing_ab; package bytes must decrease and p50/p95 startup metrics must avoid regression."
+decision_state = "rejected"
+decision = "Kept the draw-item diagnostic export because startup and report-ready distributions regressed despite a smaller package."
+proof = [
+   "A side 25-repeat startup: package 3109596 bytes, WASM init p50/p95 8.3/15.2 ms, first-frame p50/p95 16.1/16.5 ms, report-ready p50/p95 70.9/78.1 ms",
+   "B side 25-repeat startup: package 3086827 bytes, WASM init p50/p95 8.8/16.5 ms, first-frame p50/p95 16.2/16.4 ms, report-ready p50/p95 71.2/79.8 ms",
+   "the attempted cleanup reduced package bytes by 22769 but regressed WASM init p50/p95, app init p95, first-frame p50, and report-ready p50/p95",
+]
+cleanup = [
+   "Restored bench_webgpu_draw_item_coalescing_ab and WEBGPU_DRAW_ITEM_COALESCE_EXPECTED_ITEMS.",
+   "Rebuilt the ignored wasm-bindgen package back to the A-side byte counts.",
+]
+
+[[experiments]]
+id = "webgpu-draw-state-diagnostic-export-retirement-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Repeated startup A/B must keep every sample on WebGPU with render smoke draws=8; restored package bytes must match the A-side package after rejection."
+performance_gate = "Same-workload browser startup A/B for removing only bench_webgpu_draw_state_cache_ab; package bytes must decrease and p50/p95 startup metrics must avoid regression."
+decision_state = "rejected"
+decision = "Kept the draw-state diagnostic export because startup, first-frame, and report-ready distributions regressed despite a smaller package."
+proof = [
+   "A side 25-repeat startup: package 3109596 bytes, WASM init p50/p95 8.1/15.3 ms, first-frame p50/p95 16.1/16.4 ms, report-ready p50/p95 71.5/77.1 ms",
+   "B side 25-repeat startup: package 3086999 bytes, WASM init p50/p95 8.1/15.9 ms, first-frame p50/p95 16.2/16.6 ms, report-ready p50/p95 70.7/77.8 ms",
+   "the attempted cleanup reduced package bytes by 22597 but regressed WASM init p95, first-frame p50/p95, and report-ready p95",
+]
+cleanup = [
+   "Restored bench_webgpu_draw_state_cache_ab and the ignored wasm-bindgen package back to the A-side byte counts.",
+   "No source/docs/tests/report/schema cleanup from the export-only deletion remains in the patch.",
+]
+
+[[experiments]]
+id = "perf-runner-markdown-preallocation-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Markdown render bytes_per_iter must stay identical at 43547 bytes for benchmarks/workspace/latest.json; focused report markdown tests and git diff checks must pass after restoring source."
+performance_gate = "Same-workload markdown render A/B for preallocating the output String; repeated long-run us_per_iter must improve after rebuilding the changed binary before the patch remains."
+decision_state = "rejected"
+decision = "Kept the existing render_markdown allocation path because output preallocation was not a stable same-workload win after a rebuilt long B run."
+proof = [
+   "A side 32768 iterations: 171.871 and 170.562 us_per_iter, bytes_per_iter 43547",
+   "initial B side 32768 iterations: 169.219 and 168.738 us_per_iter, bytes_per_iter 43547",
+   "long B side 65536 iterations: 169.217 us_per_iter, rebuilt A side 65536 iterations: 169.752 us_per_iter, final rebuilt B side 65536 iterations regressed to 171.817 us_per_iter",
+]
+cleanup = [
+   "Restored render_markdown to the original String::new construction.",
+   "No source/docs/tests/report/schema cleanup from the attempted preallocation remains in the patch.",
+]
+
+[[experiments]]
+id = "perf-runner-metric-summary-vector-capacity-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Markdown render bytes_per_iter must stay identical at 43547 bytes for benchmarks/workspace/latest.json; focused manifest checks and git diff checks must pass after restoring source."
+performance_gate = "Same-workload markdown render A/B for preallocating render_case_metrics_summary vectors; repeated long-run us_per_iter must improve after rebuilding the changed binary before the patch remains."
+decision_state = "rejected"
+decision = "Kept the existing metric-summary vector construction because fixed vector capacity was not a stable same-workload win after a rebuilt long B run."
+proof = [
+   "A side 65536 iterations: 170.123 and 171.163 us_per_iter, bytes_per_iter 43547",
+   "initial B side 65536 iterations: 168.948 and 170.828 us_per_iter, bytes_per_iter 43547",
+   "rebuilt A side 65536 iterations: 172.584 us_per_iter, final rebuilt B side 65536 iterations regressed to 174.132 us_per_iter",
+]
+cleanup = [
+   "Restored render_case_metrics_summary to Vec::new for both small vectors.",
+   "No source/docs/tests/report/schema cleanup from the attempted vector-capacity change remains in the patch.",
+]
+
+[[experiments]]
+id = "perf-runner-markdown-metric-priority-table-hoist-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Markdown render bytes_per_iter must stay identical at 43547 bytes for benchmarks/workspace/latest.json; focused manifest checks and git diff checks must pass after restoring source."
+performance_gate = "Same-workload markdown render A/B for hoisting the write_case_metrics_summary priority table; repeated long-run us_per_iter must improve after rebuilding the changed binary before the patch remains."
+decision_state = "rejected"
+decision = "Kept the local priority table in write_case_metrics_summary because the module-level table hoist was not a stable same-workload win after a rebuilt long B run."
+proof = [
+   "A side 65536 iterations: 111.217 and 110.691 us_per_iter, bytes_per_iter 43547",
+   "initial B side 65536 iterations: 110.249 and 110.751 us_per_iter, bytes_per_iter 43547",
+   "rebuilt A side 65536 iterations: 111.333 us_per_iter, final rebuilt B side 65536 iterations regressed to 113.203 us_per_iter",
+]
+cleanup = [
+   "Restored write_case_metrics_summary to the local priority array.",
+   "No source/docs/tests/report/schema cleanup from the attempted priority-table hoist remains in the patch.",
+]
+
+[[experiments]]
+id = "perf-runner-markdown-metric-priority-bitmask-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Markdown render bytes_per_iter must stay identical at 43547 bytes for benchmarks/workspace/latest.json; focused manifest checks and git diff checks must pass after restoring source."
+performance_gate = "Same-workload markdown render A/B for replacing the write_case_metrics_summary emitted-priority bool array with a u16 bitmask; repeated long-run us_per_iter must improve after rebuilding the changed binary before the patch remains."
+decision_state = "rejected"
+decision = "Kept the bool emitted-priority array in write_case_metrics_summary because the u16 bitmask was not a stable same-workload win after a rebuilt long B run."
+proof = [
+   "A side 65536 iterations: 110.667 and 110.869 us_per_iter, bytes_per_iter 43547",
+   "initial B side 65536 iterations: 111.767 and 110.268 us_per_iter, bytes_per_iter 43547",
+   "rebuilt A side 65536 iterations: 112.430 us_per_iter, final rebuilt B side 65536 iterations regressed to 114.348 us_per_iter",
+]
+cleanup = [
+   "Restored write_case_metrics_summary to the bool emitted-priority array.",
+   "No source/docs/tests/report/schema cleanup from the attempted priority-bitmask change remains in the patch.",
+]
+
+[[experiments]]
+id = "perf-runner-markdown-literal-string-line-writes-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Markdown render bytes_per_iter must stay identical at 43547 bytes for benchmarks/workspace/latest.json; focused manifest checks and git diff checks must pass after restoring source."
+performance_gate = "Same-workload markdown render A/B for replacing string-only render_markdown write_fmt calls with literal push_str/push sequences; repeated long-run us_per_iter must improve before the patch remains."
+decision_state = "rejected"
+decision = "Kept the existing write_fmt string-only lines in render_markdown because literal push_str/push sequences regressed the same-workload long-run render cost."
+proof = [
+   "A side 65536 iterations: 110.581 and 110.289 us_per_iter, bytes_per_iter 43547",
+   "B side 65536 iterations: 111.628 and 111.701 us_per_iter, bytes_per_iter 43547",
+   "the attempted cleanup preserved output bytes but regressed both B-side runs versus both A-side runs",
+]
+cleanup = [
+   "Restored render_markdown suite, label, contract-note, finding, and baseline footer lines to write_fmt.",
+   "No source/docs/tests/report/schema cleanup from the attempted literal string-line writes remains in the patch.",
+]
+
+[[experiments]]
+id = "perf-runner-markdown-metric-summary-cap-early-return-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Markdown render bytes_per_iter must stay identical at 43547 bytes for benchmarks/workspace/latest.json; focused manifest checks and git diff checks must pass after restoring source."
+performance_gate = "Same-workload markdown render A/B for returning early when write_case_metrics_summary reaches the six-metric cap during the priority pass; repeated long-run us_per_iter must improve before the patch remains."
+decision_state = "rejected"
+decision = "Kept the existing fallback-pass entry path because the priority-cap early return did not prove a same-workload report-rendering win."
+proof = [
+   "A side 65536 iterations: 110.603 and 110.980 us_per_iter, bytes_per_iter 43547",
+   "first attempted B changed bytes_per_iter to 45929 and was rejected by the correctness gate before promotion",
+   "corrected B side 65536 iterations: 113.745 and 111.606 us_per_iter, bytes_per_iter 43547",
+]
+cleanup = [
+   "Restored write_case_metrics_summary to the existing priority-loop break plus fallback-loop cap guard.",
+   "No source/docs/tests/report/schema cleanup from the attempted metric-summary cap early return remains in the patch.",
+]
+
+[[experiments]]
+id = "perf-runner-markdown-empty-priority-fast-path-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Markdown render bytes_per_iter must stay identical at 43547 bytes for benchmarks/workspace/latest.json; focused manifest checks and git diff checks must pass after restoring source."
+performance_gate = "Same-workload markdown render A/B for skipping priority-index duplicate checks when a metric row emitted no priority metrics; repeated long-run us_per_iter must improve before the patch remains."
+decision_state = "rejected"
+decision = "Kept the existing unified fallback metric loop because the empty-priority fast path regressed the same-workload long-run render cost."
+proof = [
+   "A side 65536 iterations: 116.126 and 116.167 us_per_iter, bytes_per_iter 43547",
+   "B side 65536 iterations: 117.211 and 117.036 us_per_iter, bytes_per_iter 43547",
+   "the attempted cleanup preserved output bytes but regressed both B-side runs versus both A-side runs",
+]
+cleanup = [
+   "Restored write_case_metrics_summary to the existing unified fallback loop and priority-index duplicate check.",
+   "No source/docs/tests/report/schema cleanup from the attempted empty-priority fast path remains in the patch.",
+]
+
+[[experiments]]
+id = "webgpu-default-glyph-run-legacy-row-retirement"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Full browser report must keep pixel diff 0, retain the current glyph-run row, remove the legacy glyph-run row, keep backend-path coverage complete, and focused host-web/report/manifest/diff checks must pass."
+performance_gate = "Same-workload browser A/B for default glyph-run current versus legacy-rebind rows; current must beat legacy on p50 with equivalent glyph work, and the current-only default report must reduce benchmark-mark work before the deletion remains."
+decision_state = "accepted"
+decision = "Retired the default browser glyph-run legacy-rebind row after current glyph-run draw-state caching proved faster and the current-only report reduced default benchmark work."
+proof = [
+   "A side glyph-run current p50/p95/p99 0.050/0.067/0.067 ms vs legacy 0.067/0.075/0.075 ms with equal draw_items 65, glyph_quads 512, sdf_glyph_quads 256, and render_passes/gpu_timestamp_passes 1",
+   "A side current state binds were lower: pipeline 3 vs 65, bind groups 1 vs 64, scissors 1 vs 65",
+   "B side current-only report kept glyph-run current p50/p95/p99 0.058/0.067/0.067 ms, removed web.wasm.webgpu.glyph_run.legacy_rebind, kept pixel diff 0, kept 15/15 backend paths, and kept 13 benchmark marks",
+   "benchmark mark duration fell from A total 694.4 ms to accepted B rerun total 684.4 ms; glyph mark fell from glyph_run_ab 20.9 ms to glyph_run_current 12.8 ms",
+]
+cleanup = [
+   "Removed the default browser glyph-run legacy benchmark pass, legacy report row, legacy summary fields, and current-vs-legacy script/test expectations.",
+   "Regenerated oxide/benchmarks/web/latest.json and latest.md as a 27-row browser report with current glyph-run coverage and no default glyph-run legacy row.",
+]
+
+[[experiments]]
+id = "webgpu-default-backdrop-batch-legacy-row-retirement"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Full browser report must keep pixel diff 0, retain the current backdrop-batch row, remove the legacy per-backdrop-copy row, keep backend-path coverage complete, and focused host-web/report/manifest/diff checks must pass."
+performance_gate = "Same-workload browser A/B for default backdrop-batch current versus legacy per-backdrop-copy rows; current must beat legacy on p50 with equivalent backdrop work, and the current-only default report must reduce benchmark-mark work before the deletion remains."
+decision_state = "accepted"
+decision = "Retired the default browser backdrop-batch legacy per-copy row after coalesced backdrop copying proved faster and the current-only report reduced default benchmark work."
+proof = [
+   "A side backdrop-batch current p50/p95/p99 0.025/0.033/0.033 ms vs legacy 0.075/0.075/0.075 ms with equal backdrop_draws 12, effect_uniform_writes 1, and effect_uniform_slots 12",
+   "A side current did less renderer work: texture_copies 1 vs 12, render_passes/gpu_timestamp_passes 4 vs 15, pipeline binds 3 vs 14, bind groups 3 vs 25, scissors 2 vs 13",
+   "B side current-only report kept backdrop current p50/p95/p99 0.025/0.033/0.033 ms, removed web.wasm.webgpu.backdrop_batch.legacy_per_backdrop_copy, kept pixel diff 0, kept 15/15 backend paths, and kept 13 benchmark marks",
+   "benchmark mark duration fell from A total 696.4 ms to B total 628.7 ms; backdrop mark fell from backdrop_batch_ab 52.6 ms to backdrop_batch_current 11.1 ms",
+]
+cleanup = [
+   "Removed the default browser backdrop-batch legacy benchmark pass, legacy report row, legacy summary fields, and current-vs-legacy script/test expectations.",
+   "Regenerated oxide/benchmarks/web/latest.json and latest.md as a 26-row browser report with current backdrop-batch coverage and no default per-backdrop-copy legacy row.",
+]
+
+[[experiments]]
+id = "webgpu-default-command-family-legacy-row-retirement"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Full browser report must keep pixel diff 0, retain the current command-family row, remove the command-family legacy rebind row, keep backend-path coverage complete, and focused host-web/report/manifest/diff checks must pass."
+performance_gate = "Same-workload browser A/B for default command-family current versus legacy-rebind rows; current must beat legacy on p50 with equivalent ImageMesh, NineSlice, SDF glyph, and zero CameraBg work, and the current-only command-family benchmark mark must fall before the deletion remains."
+decision_state = "accepted"
+decision = "Retired the default browser command-family legacy-rebind row after current draw-state caching proved faster and the current-only command-family benchmark mark reduced default report work for that family."
+proof = [
+   "A side command-family current p50/p95/p99 0.108/0.117/0.117 ms vs legacy 0.167/0.167/0.167 ms with equal image_mesh_draws 64, nine_slice_draws 64, sdf_glyph_quads 288, expected_camera_bg 0, camera_bg_draws 0, and render_passes/gpu_timestamp_passes 1",
+   "A side current state binds were lower: pipeline 3 vs 649, bind groups 2 vs 648, scissors 1 vs 649",
+   "B side current-only report kept command-family current p50 0.108 ms, removed web.wasm.webgpu.command_family_matrix.legacy_rebind, kept pixel diff 0, kept 15/15 backend paths, and kept 13 benchmark marks",
+   "command_family_matrix benchmark mark fell from 21.5 ms to 12.8 ms while the default report case count fell 24 -> 23; summed benchmark marks moved 533.0 ms -> 553.6 ms due unrelated row variance and were not used as the promotion metric",
+]
+cleanup = [
+   "Removed the default browser command-family legacy benchmark pass, legacy report row, legacy summary fields, and current-vs-legacy script/test expectations.",
+   "Regenerated oxide/benchmarks/web/latest.json and latest.md as a 23-row browser report with current command-family coverage and no default command-family legacy row.",
+]
+
+[[experiments]]
+id = "perf-runner-case-filter-cache"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Case-filter bench must keep allowed_per_iter=5, prefix_allowed_per_iter=3, and checksum=5488559772177268736 for the declared representative filter; focused perf-runner/manifest/diff checks must pass."
+performance_gate = "Same-workload case-filter bench A/B for caching parsed OXIDE_PERF_RUNNER_FILTER values; repeated long-run us_per_iter must improve before the cache remains."
+decision_state = "accepted"
+decision = "Cached the parsed perf-runner case filter after same-workload proof showed lower case-selection overhead with unchanged representative filter semantics."
+proof = [
+   "A side 1048576 iterations: 3.432 and 3.365 us_per_iter, allowed_per_iter=5, prefix_allowed_per_iter=3, checksum=5488559772177268736",
+   "B side 1048576 iterations: 0.233 and 0.233 us_per_iter, allowed_per_iter=5, prefix_allowed_per_iter=3, checksum=5488559772177268736",
+   "the retained cache removes repeated environment lookup, split, trim, String allocation, and Vec construction from each filter check in the measured case-selection workload",
+]
+cleanup = [
+   "Added a non-default case-filter bench harness for future case-selection A/B proof.",
+   "Replaced repeated filter parsing with a single process-local parsed filter cache for perf-runner case selection.",
+]
+
+[[experiments]]
+id = "perf-runner-case-filter-starts-with-match"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Case-filter bench must keep allowed_per_iter=5, prefix_allowed_per_iter=3, and checksum=10977119544354537472 for the declared representative filter; focused perf-runner/manifest/diff checks must pass."
+performance_gate = "Same-workload case-filter bench A/B for removing the redundant exact string equality check before starts_with; repeated long-run us_per_iter must improve before the branch removal remains."
+decision_state = "accepted"
+decision = "Removed the redundant exact-match branch from perf-runner case filters after same-workload proof showed lower case-selection overhead with unchanged exact and prefix filter semantics."
+proof = [
+   "A side 2097152 iterations: 0.224 and 0.224 us_per_iter, allowed_per_iter=5, prefix_allowed_per_iter=3, checksum=10977119544354537472",
+   "B side 2097152 iterations: 0.216 and 0.216 us_per_iter, allowed_per_iter=5, prefix_allowed_per_iter=3, checksum=10977119544354537472",
+   "starts_with preserves exact-match semantics, so the retained path removes one redundant comparison per candidate filter in perf_case_allowed",
+]
+cleanup = [
+   "Removed the duplicate exact equality check from perf-runner case-filter matching.",
+   "Kept the prefix-family helper unchanged because its two starts_with directions encode distinct selection semantics.",
+]
+
+[[experiments]]
+id = "perf-runner-case-filter-state-fast-paths-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Case-filter bench must keep no-filter allowed_per_iter=8 and prefix_allowed_per_iter=8 with checksum=5898428115874480128; single-filter allowed_per_iter=1 and prefix_allowed_per_iter=1 with checksum=17643746480147660800; multi-filter allowed_per_iter=5 and prefix_allowed_per_iter=3 with checksum=10977119544354537472; source must be restored after rejection."
+performance_gate = "Same-workload case-filter bench A/B for replacing the cached Vec<String> with explicit None/One/Many filter states; repeated long-run us_per_iter must improve across no-filter, single-filter, and representative multi-filter workloads before the state split remains."
+decision_state = "rejected"
+decision = "Kept the retained cached Vec<String> filter representation because the explicit state split regressed the no-filter case-selection workload."
+proof = [
+   "A side no-filter 2,097,152 iterations: 0.200 and 0.195 us_per_iter, allowed_per_iter=8, prefix_allowed_per_iter=8, checksum=5898428115874480128",
+   "A side single-filter 2,097,152 iterations: 0.072 and 0.083 us_per_iter, allowed_per_iter=1, prefix_allowed_per_iter=1, checksum=17643746480147660800",
+   "A side multi-filter 2,097,152 iterations: 0.211 and 0.211 us_per_iter, allowed_per_iter=5, prefix_allowed_per_iter=3, checksum=10977119544354537472",
+   "B side no-filter with explicit None/One/Many state split: 0.205 us_per_iter, allowed_per_iter=8, prefix_allowed_per_iter=8, checksum=5898428115874480128",
+   "the first B-side no-filter run failed to beat either no-filter A-side run, so the single-filter and multi-filter B-side runs were skipped and source was restored",
+]
+cleanup = [
+   "Restored PERF_CASE_FILTERS to OnceLock<Vec<String>> and restored perf_case_filters, perf_case_allowed, perf_case_prefix_allowed, and run_suite full-coverage gating.",
+   "No source/docs/tests/report/schema cleanup from the attempted case-filter state split remains in the patch.",
+]
+
+[[experiments]]
+id = "perf-runner-markdown-comparison-line-direct-streaming"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Markdown comparison render bytes_per_iter must stay identical at 52224 bytes for benchmarks/workspace/latest.json compared with benchmarks/workspace/ci-current.json; matched=26, regressions=1, and missing_baseline=135 must stay unchanged; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload markdown comparison render A/B for streaming regression and missing-baseline lines directly into the report body; repeated long-run us_per_iter must improve before the patch remains."
+decision_state = "accepted"
+decision = "Streamed Markdown comparison lines directly into the report body after same-workload proof showed lower comparison report-generation cost with byte-identical Markdown."
+proof = [
+   "A side 32768 iterations: 125.236 and 124.734 us_per_iter, bytes_per_iter 52224, matched=26, regressions=1, missing_baseline=135",
+   "B side 32768 iterations: 119.716 and 119.505 us_per_iter, bytes_per_iter 52224, matched=26, regressions=1, missing_baseline=135",
+   "the retained implementation removes intermediate formatted String allocations for exercised regression and missing-baseline comparison lines",
+]
+cleanup = [
+   "Added a non-default comparison-aware Markdown render bench harness for future comparison report-generation A/B proof.",
+   "Deleted the per-line intermediate formatted String allocation from the exercised Markdown comparison section.",
+]
+
+[[experiments]]
+id = "perf-runner-compare-reports-hash-map-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Compare-reports bench must keep matched=26, regressions=1, missing_baseline=135, improvements=25, and checksum=2109305402227294208 for benchmarks/workspace/latest.json compared with benchmarks/workspace/ci-current.json; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload compare-reports A/B for replacing the baseline BTreeMap lookup table with HashMap; repeated long-run us_per_iter must improve before the lookup replacement remains."
+decision_state = "rejected"
+decision = "Rejected replacing the baseline comparison BTreeMap with HashMap because the same-workload compare-reports bench regressed despite identical counts and checksum."
+proof = [
+   "A side 65536 iterations with BTreeMap: 13.320 and 13.342 us_per_iter, matched=26, regressions=1, missing_baseline=135, improvements=25, checksum=2109305402227294208",
+   "B side 65536 iterations with HashMap: 14.727 and 14.730 us_per_iter, matched=26, regressions=1, missing_baseline=135, improvements=25, checksum=2109305402227294208",
+   "the HashMap candidate was slower on the measured current-vs-baseline report pair, so the source implementation was restored to BTreeMap",
+]
+cleanup = [
+   "Restored compare_reports to the existing BTreeMap baseline lookup table.",
+   "Kept the non-default compare-reports bench harness so future comparison changes can be A/B tested without rerunning suite workloads.",
+]
+
+[[experiments]]
+id = "perf-runner-compare-reports-small-baseline-linear-scan"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Compare-reports bench must keep matched=26, regressions=1, missing_baseline=135, improvements=25, and checksum=2109305402227294208 for benchmarks/workspace/latest.json compared with benchmarks/workspace/ci-current.json; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload compare-reports A/B for using a direct linear scan when the baseline has 32 or fewer cases while preserving the existing BTreeMap lookup path for larger baselines; repeated long-run us_per_iter must improve before the small-baseline path remains."
+decision_state = "accepted"
+decision = "Used a direct small-baseline scan in compare_reports after same-workload proof showed lower comparison cost with unchanged counts and checksum."
+proof = [
+   "A side 65536 iterations with BTreeMap: 13.579 and 13.467 us_per_iter, matched=26, regressions=1, missing_baseline=135, improvements=25, checksum=2109305402227294208",
+   "B side 65536 iterations with the small-baseline scan: 12.130 and 12.150 us_per_iter, matched=26, regressions=1, missing_baseline=135, improvements=25, checksum=2109305402227294208",
+   "the retained implementation avoids lookup-table allocation and tree construction for baselines with 32 or fewer cases, while keeping the BTreeMap path for larger baselines",
+]
+cleanup = [
+   "Added a cutoff-gated direct baseline scan for small compare_reports baselines.",
+   "Kept the existing BTreeMap lookup path for larger baselines and added a focused large-baseline semantics test.",
+]
+
+[[experiments]]
+id = "perf-runner-compare-reports-output-vector-capacity"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Compare-reports bench must keep matched=26, regressions=1, missing_baseline=135, improvements=25, and checksum=2109305402227294208 for benchmarks/workspace/latest.json compared with benchmarks/workspace/ci-current.json; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload compare-reports A/B for sizing missing-baseline and improvement output vectors from current/baseline case counts; repeated long-run us_per_iter must improve before the capacity hints remain."
+decision_state = "accepted"
+decision = "Sized compare_reports output vectors after same-workload proof showed lower comparison cost with unchanged counts and checksum."
+proof = [
+   "A side 65536 iterations with retained helper-based small-baseline scan: 12.144 and 12.100 us_per_iter, matched=26, regressions=1, missing_baseline=135, improvements=25, checksum=2109305402227294208",
+   "B side 65536 iterations with output vector capacity hints: 11.802 and 11.779 us_per_iter, matched=26, regressions=1, missing_baseline=135, improvements=25, checksum=2109305402227294208",
+   "the retained implementation avoids repeated Vec growth for the measured 135 missing-baseline IDs and 25 improvements while preserving output ordering and lookup strategy",
+]
+cleanup = [
+   "Initialized compare_reports missing-baseline and improvement output vectors with capacity hints derived from current and baseline case counts.",
+   "Kept regression output allocation unchanged because the measured workload has one regression and the extra reserve would add unnecessary memory.",
+]
+
+[[experiments]]
+id = "perf-runner-compare-reports-regression-vector-capacity-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Compare-reports bench must keep matched=26, regressions=1, missing_baseline=135, improvements=25, and checksum=2109305402227294208 for benchmarks/workspace/latest.json compared with benchmarks/workspace/ci-current.json; focused manifest/diff checks must pass after restoring source."
+performance_gate = "Same-workload compare-reports A/B for giving the regression output vector a one-element capacity; repeated long-run us_per_iter must improve before the capacity hint remains."
+decision_state = "rejected"
+decision = "Rejected the regression vector capacity hint because it did not repeatedly beat the retained output-vector-capacity path."
+proof = [
+   "A side 65536 iterations with retained output-vector-capacity path: 12.041 and 11.958 us_per_iter, matched=26, regressions=1, missing_baseline=135, improvements=25, checksum=2109305402227294208",
+   "B side 65536 iterations with regressions Vec::with_capacity(1): 11.822 and 11.963 us_per_iter, matched=26, regressions=1, missing_baseline=135, improvements=25, checksum=2109305402227294208",
+   "the second B-side run did not beat the second A-side run, so the source implementation was restored to Vec::new for regressions",
+]
+cleanup = [
+   "Restored compare_reports regression output allocation to Vec::new.",
+   "Recorded the failed one-element regression capacity hint so future comparison allocation changes continue to require same-workload A/B proof.",
+]
+
+[[experiments]]
+id = "perf-runner-compare-reports-specialized-small-baseline-loop-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Compare-reports bench must keep matched=26, regressions=1, missing_baseline=135, improvements=25, and checksum=2109305402227294208 for benchmarks/workspace/latest.json compared with benchmarks/workspace/ci-current.json; focused manifest/diff checks must pass."
+performance_gate = "Same-workload compare-reports A/B for replacing the small-baseline helper lookup with a specialized direct loop; repeated long-run us_per_iter must improve before the specialized loop remains."
+decision_state = "rejected"
+decision = "Rejected the specialized small-baseline comparison loop because it did not repeatedly beat the retained helper-based small-baseline scan."
+proof = [
+   "A side 65536 iterations with retained helper-based small-baseline scan: 12.134 and 12.054 us_per_iter, matched=26, regressions=1, missing_baseline=135, improvements=25, checksum=2109305402227294208",
+   "B side 65536 iterations with specialized direct loop: 12.114 and 12.065 us_per_iter, matched=26, regressions=1, missing_baseline=135, improvements=25, checksum=2109305402227294208",
+   "the specialized direct loop was not a repeated improvement over the retained path, so the source implementation was restored",
+]
+cleanup = [
+   "Restored the helper-based small-baseline compare_reports path.",
+   "Recorded the failed specialization so future comparison changes continue to require same-workload A/B proof.",
+]
+
+[[experiments]]
+id = "perf-runner-markdown-latest-dated-single-render"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Markdown latest+dated write bench must keep bytes_per_iter and comparison counts identical for benchmarks/workspace/latest.json compared with benchmarks/workspace/ci-current.json; focused report tests, manifest checks, cargo check, and git diff checks must pass."
+performance_gate = "Same-workload Markdown latest+dated write A/B; rendering once and writing the same bytes to both outputs must improve repeated long-run us_per_iter after rebuilding the changed binary while preserving bytes and comparison counts."
+decision_state = "accepted"
+decision = "Rendered Markdown once for latest plus dated baseline outputs after same-workload proof showed the baseline-write path was about half the cost with identical output bytes."
+proof = [
+   "A side 65536 iterations: 245.139 and 250.237 us_per_iter, bytes_per_iter 104448, matched=26, regressions=1, missing_baseline=135",
+   "B side 65536 iterations: 125.709 and 125.452 us_per_iter, bytes_per_iter 104448, matched=26, regressions=1, missing_baseline=135",
+]
+cleanup = [
+   "Deleted the second render_markdown call from latest-plus-dated Markdown baseline writes.",
+   "Kept the non-default --bench-markdown-write harness for future baseline-write report-generation A/B proof.",
+]
+
+[[experiments]]
+id = "webgpu-layer-effects-legacy-row-retirement"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Browser golden diff must stay zero, backend path coverage must stay 15/15, the current web.wasm.webgpu.layer_damage_effects row must remain, and the default web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched row must be absent; focused host-web/report/manifest checks, node --check, and git diff checks must pass."
+performance_gate = "Same-workload browser report A/B for retiring the default layer-effects legacy rebind/unbatched row; layer_effects_matrix mark duration and case count must decrease while current-row counters remain covered."
+decision_state = "accepted"
+decision = "Retired the default browser WebGPU layer-effects legacy row after same-workload proof showed the current row was faster and the default report mark dropped with current coverage preserved."
+proof = [
+   "A side browser report: pixel diff 0, cases 23, backend paths 15/15, current p50 0.067 ms versus legacy p50 0.100 ms, current GPU timestamp 63997 ns versus legacy 163039 ns, current passes 9 versus legacy 13, current pipeline/bind/scissor 8/15/6 versus legacy 89/79/89, layer_effects_matrix mark 54.3 ms",
+   "B side browser report: pixel diff 0, cases 22, backend paths 15/15, no layer-effects legacy row, current p50 0.058 ms, current GPU timestamp 77497 ns, current passes 9, current pipeline/bind/scissor 8/15/6, layer_effects_matrix mark 21.3 ms",
+   "the retained current row still reports glyphs 72, image draws 65, layer draws 3, damage rects 3, one effect uniform write, one texture copy, and matching timestamp/render pass counts",
+]
+cleanup = [
+   "Removed the default layer-effects legacy benchmark run, report row, summary fields, Markdown columns, backend-path row, warm-resource exclusion, and current-vs-legacy contract assertions.",
+   "Kept the current layer/damage/effects benchmark mark and row so nested layer, damage, effect, texture-copy, pass, timestamp, and resource-churn coverage remains in the default browser report.",
+]
+
+[[experiments]]
+id = "webgpu-mixed-legacy-row-retirement"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Browser golden diff must stay zero, backend path coverage must stay 15/15, the current web.wasm.webgpu.mixed_text_image_effects row must remain, and the default web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched row must be absent; focused host-web/report/manifest checks, node --check, and git diff checks must pass."
+performance_gate = "Same-workload browser report A/B for retiring the default mixed text/image/effects legacy rebind/unbatched row; mixed_matrix mark duration and case count must decrease while current-row counters remain covered."
+decision_state = "accepted"
+decision = "Retired the default browser WebGPU mixed text/image/effects legacy row after same-workload proof showed the current row was faster and the default report mark dropped with current coverage preserved."
+proof = [
+   "A side browser report: pixel diff 0, cases 22, backend paths 15/15, current p50 0.067 ms versus legacy p50 0.083 ms, current GPU timestamp 87497 ns versus legacy 126121 ns, current passes 6 versus legacy 6, current pipeline/bind/scissor 9/8/5 versus legacy 115/103/115, mixed_matrix mark 37.8 ms",
+   "B side browser report: pixel diff 0, cases 21, backend paths 15/15, no mixed legacy row, current p50 0.067 ms, current GPU timestamp 99369 ns, current passes 6, current pipeline/bind/scissor 9/8/5, mixed_matrix mark 21.1 ms",
+   "the retained current row still reports draw items 115, glyph quads 96, image draws 97, image tiles 96, one backdrop, one visual effect, one layer, clip depth 1, damage rects 2, one effect uniform write, two texture copies, and matching timestamp/render pass counts",
+]
+cleanup = [
+   "Removed the default mixed legacy benchmark run, report row, summary fields, Markdown columns, backend-path row, warm-resource exclusion, and current-vs-legacy contract assertions.",
+   "Kept the current mixed text/image/effects benchmark mark and row so glyph, image, layer, clip, damage, backdrop, visual-effect, spinner, texture-copy, pass, timestamp, and resource-churn coverage remains in the default browser report.",
+]
+
+[[experiments]]
+id = "webgpu-effect-uniform-legacy-row-retirement"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Browser golden diff must stay zero, backend path coverage must stay 15/15, the current web.wasm.webgpu.effect_uniform.current_batched row must remain, and the default web.wasm.webgpu.effect_uniform.legacy_write_each row must be absent; focused host-web/report/manifest checks, node --check, and git diff checks must pass."
+performance_gate = "Same-workload browser report A/B for retiring the default effect-uniform legacy per-backdrop uniform-write row; effect_uniform_ab mark duration and case count must decrease while current-row counters remain covered."
+decision_state = "accepted"
+decision = "Retired the default browser WebGPU effect-uniform legacy row after same-workload proof showed the current row was faster and the default report mark dropped with current coverage preserved."
+proof = [
+   "A side browser report: pixel diff 0, cases 21, backend paths 15/15, current p50 0.208 ms versus legacy p50 0.225 ms, current GPU timestamp 1451051 ns versus legacy 1860346 ns, current writes/bytes/slots 1/16/48 versus legacy writes/bytes/slots 48/768/48, equal render passes 51, effect_uniform_ab mark 208.2 ms",
+   "B side browser report: pixel diff 0, cases 20, backend paths 15/15, no effect-uniform legacy row, current p50 0.217 ms, current GPU timestamp 1588544 ns, current writes/bytes/slots 1/16/48, render passes 51, effect_uniform_ab mark 99.5 ms",
+   "the retained current row still reports 48 backdrop draws, 48 texture copies, one batched uniform write, matching effect slots/backdrops, and matching timestamp/render pass counts",
+]
+cleanup = [
+   "Removed the default effect-uniform legacy benchmark run, report row, summary fields, Markdown columns, backend-path row, warm-resource exclusion, and current-vs-legacy contract assertions.",
+   "Kept the current effect-uniform benchmark mark and row so batched uniform write, byte, slot, backdrop, texture-copy, pass, timestamp, and resource-churn coverage remains in the default browser report.",
+]
+
+[[experiments]]
+id = "webgpu-direct-surface-legacy-row-retirement"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Browser golden diff must stay zero, backend path coverage must stay 15/15, the current web.wasm.webgpu.direct_surface.current row must remain, and the default web.wasm.webgpu.direct_surface.legacy_scene_present row must be absent; focused host-web/report/manifest checks, node --check, and git diff checks must pass."
+performance_gate = "Same-workload browser report A/B for retiring the default direct-surface forced scene-present row; direct_surface_ab mark duration and case count must decrease while the current row preserves one-pass no-scene-present coverage."
+decision_state = "accepted"
+decision = "Retired the default browser WebGPU direct-surface forced scene-present row after same-workload proof showed the current direct-surface path used fewer passes and lower direct GPU time while the default report mark dropped."
+proof = [
+   "A side browser report: pixel diff 0, cases 20, backend paths 15/15, current p50 0.058 ms versus legacy p50 0.067 ms, current GPU timestamp 22500 ns versus legacy 38374 ns, current render/draw/clear/present passes 1/1/0/0 versus legacy 3/1/1/1, direct_surface_ab mark 21.4 ms",
+   "B side browser report: pixel diff 0, cases 19, backend paths 15/15, no direct-surface legacy row, current p50 0.058 ms, current GPU timestamp 22375 ns, current render/draw/clear/present passes 1/1/0/0, direct_surface_ab mark 12.6 ms",
+   "the retained current row still reports 385 draw items, 384 image draws, zero texture copies, matching timestamp/render pass counts, warm-resource and WASM allocation current-row coverage, and report GPU timestamp rows falling to 19 rows / 102 render passes",
+]
+cleanup = [
+   "Removed the default direct-surface forced scene-present benchmark run, report row, summary fields, Markdown columns, backend-path row, warm-resource exclusion, and current-vs-legacy contract assertions.",
+   "Kept the current direct-surface benchmark mark and row so one-pass no-scene-present image draw, pass, timestamp, and resource-churn coverage remains in the default browser report.",
+]
+
+[[experiments]]
+id = "webgpu-neon-marker-legacy-row-retirement"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Browser golden diff must stay zero, backend path coverage must stay 15/15, the current web.wasm.webgpu.neon_marker.current row must remain, and the default web.wasm.webgpu.neon_marker.legacy_rebind row must be absent; focused host-web/report/manifest checks, node --check, and git diff checks must pass."
+performance_gate = "Same-workload browser report A/B for retiring the default neon-marker legacy rebind row; neon_marker_ab mark duration and case count must decrease while the current row preserves marker-derived solid work and cached draw-state counters."
+decision_state = "accepted"
+decision = "Retired the default browser WebGPU neon-marker legacy rebind row after same-workload proof showed the default report mark dropped while the retained current row preserved equivalent marker work and cached state-bind counters."
+proof = [
+   "A side browser report: pixel diff 0, cases 19, backend paths 15/15, current p50/p95 0.242/0.250 ms versus legacy p50/p95 0.242/0.250 ms, current marker work 192 draw items and 6912 solid tris matching legacy, current pipeline/scissor binds 1/1 versus legacy 192/192, neon_marker_ab mark 29.8 ms",
+   "B side browser report: pixel diff 0, cases 18, backend paths 15/15, no neon-marker legacy row, current p50/p95 0.242/0.250 ms, current marker work 192 draw items and 6912 solid tris, current pipeline/bind-group/scissor binds 1/0/1, neon_marker_ab mark 13.6 ms",
+   "the retained current row still reports matching timestamp/render pass counts, warm-resource and WASM allocation current-row coverage, and report GPU timestamp rows falling to 18 rows / 101 render passes",
+]
+cleanup = [
+   "Removed the default neon-marker legacy benchmark run, report row, summary fields, Markdown columns, backend-path row, warm-resource exclusion, and current-vs-legacy contract assertions.",
+   "Kept the current neon-marker benchmark mark and row so marker-derived solid draw, draw-state, timestamp, and resource-churn coverage remains in the default browser report.",
+]
+
+[[experiments]]
+id = "webgpu-clean-layer-dirty-row-retirement"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Browser golden diff must stay zero, backend path coverage must stay 15/15, the current web.wasm.webgpu.clean_layer.clean_reuse row must remain, and the default web.wasm.webgpu.clean_layer.dirty_rerender row must be absent; focused host-web/report/manifest checks, node --check, and git diff checks must pass."
+performance_gate = "Same-workload browser report A/B for retiring the default clean-layer dirty rerender row; clean_layer_ab mark duration and case count must decrease while the current row preserves retained-layer cache-hit and skipped-draw coverage."
+decision_state = "accepted"
+decision = "Retired the default browser WebGPU clean-layer dirty rerender row after same-workload proof showed the clean retained-layer reuse row did less work and the default report mark dropped with current coverage preserved."
+proof = [
+   "A side browser report: pixel diff 0, cases 18, backend paths 15/15, clean p50/p95 0.017/0.025 ms versus dirty p50/p95 0.050/0.075 ms, clean GPU timestamp 13874 ns versus dirty 41666 ns, clean draw items 3 versus dirty 150, clean render passes 1 versus dirty 3, clean_layer_ab mark 21.9 ms",
+   "B side browser report: pixel diff 0, cases 17, backend paths 15/15, no clean-layer dirty row, clean p50/p95 0.017/0.017 ms, clean GPU timestamp 11415 ns, clean draw items 3, clean cache hits/misses/skipped 1/0/149, clean render/timestamp passes 1/1, clean_layer_ab mark 5.0 ms",
+   "the retained current row still reports expected layer count, expected clean hit count, zero layer passes, matching timestamp/render pass counts, warm-resource and WASM allocation current-row coverage, and report GPU timestamp rows falling to 17 rows / 98 render passes",
+]
+cleanup = [
+   "Removed the default clean-layer dirty benchmark run, report row, summary fields, Markdown columns, backend-path row, warm-resource exclusion, and current-vs-dirty contract assertions.",
+   "Kept the current clean-layer benchmark mark and row so retained-layer cache hit, skipped body draw, pass, timestamp, and resource-churn coverage remains in the default browser report.",
+]
+
+[[experiments]]
+id = "perf-runner-json-pre-sized-serialization"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "JSON render bytes_per_iter must stay identical at 158970 bytes for benchmarks/workspace/latest.json; focused perf-runner/manifest/diff checks must pass."
+performance_gate = "Same-workload JSON render A/B for serializing PerfReport into a pre-sized Vec via serde_json::to_writer_pretty; repeated long-run us_per_iter must improve before the helper remains."
+decision_state = "accepted"
+decision = "Serialized persisted PerfReport JSON through a pre-sized Vec after same-workload proof showed lower pretty JSON render cost with byte-identical output."
+proof = [
+   "A side 65,536 iterations: 152.833 and 152.066 us_per_iter, bytes_per_iter 158970",
+   "B side 65,536 iterations: 151.467 and 151.210 us_per_iter, bytes_per_iter 158970",
+   "the retained helper is used by write_report_json and the JSON render bench so persisted baseline writes use the measured path",
+]
+cleanup = [
+   "Replaced serde_json::to_vec_pretty in write_report_json and the JSON render bench with a shared pre-sized Vec serializer.",
+   "Kept collect_suite_json unchanged because the measured persisted JSON write path already uses the retained helper.",
+]
+
+[[experiments]]
+id = "perf-runner-json-capacity-hint-tightening"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "JSON render bytes_per_iter must stay identical at 158970 bytes for benchmarks/workspace/latest.json; focused perf-runner/manifest/diff checks must pass."
+performance_gate = "Same-workload JSON render A/B for tightening report_json_capacity_hint; repeated long-run us_per_iter must improve before the smaller hint remains."
+decision_state = "accepted"
+decision = "Tightened the persisted PerfReport JSON serializer capacity hint after same-workload proof showed lower pretty JSON render cost with byte-identical output."
+proof = [
+   "A side 65,536 iterations: 151.329 and 151.194 us_per_iter, bytes_per_iter 158970",
+   "B side 65,536 iterations: 150.422 and 150.060 us_per_iter, bytes_per_iter 158970",
+   "the first trial at 930 bytes per case and 512 bytes per finding did not beat the fastest A-side run at 151.286 us_per_iter, so only the tighter 930/384 hint was retained",
+]
+cleanup = [
+   "Reduced report_json_capacity_hint from 1024 bytes per case plus 512 bytes per finding to 930 bytes per case plus 384 bytes per finding.",
+   "Kept the same serializer and output bytes; only the allocation hint changed.",
+]
+
+[[experiments]]
+id = "perf-runner-json-string-pre-sized-serialization-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "JSON String render bytes_per_iter must stay identical at 158970 bytes for benchmarks/workspace/latest.json; focused perf-runner/manifest/diff checks must pass."
+performance_gate = "Same-workload JSON String render A/B for routing collect_suite_json-style output through the pre-sized byte serializer plus String::from_utf8; repeated long-run us_per_iter must improve before the production String path changes."
+decision_state = "rejected"
+decision = "Rejected routing host-facing PerfReport JSON String serialization through the pre-sized byte serializer because the same-workload B-side regressed versus the existing serde_json::to_string_pretty path."
+proof = [
+   "A side 65,536 iterations with serde_json::to_string_pretty: 153.650 and 153.894 us_per_iter, bytes_per_iter 158970",
+   "B side 65,536 iterations with pre-sized Vec plus String::from_utf8: 154.297 us_per_iter, bytes_per_iter 158970",
+   "because B did not beat either A-side run, collect_suite_json and the JSON String helper were restored to serde_json::to_string_pretty",
+]
+cleanup = [
+   "Restored the production String-return serializer path after the failed B-side proof.",
+   "Kept only the non-default --bench-json-string-render harness so future host-facing JSON export changes can collect same-workload proof.",
+]
+
+[[experiments]]
+id = "perf-runner-compare-reports-missing-capacity-ceiling"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Compare-reports bench must keep matched=26, regressions=1, missing_baseline=135, improvements=25, and checksum=8437221608909176832 for benchmarks/workspace/latest.json compared with benchmarks/workspace/ci-current.json; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload compare-reports A/B for reserving missing_baseline to current.cases.len() so the measured report pair avoids the remaining under-reserve growth; repeated long-run us_per_iter must improve before the capacity ceiling remains."
+decision_state = "accepted"
+decision = "Reserved compare_reports missing-baseline output to the current case count after same-workload proof showed lower comparison cost with unchanged counts and checksum."
+proof = [
+   "A side 262,144 iterations with retained output-vector-capacity path: 11.472 and 11.432 us_per_iter, matched=26, regressions=1, missing_baseline=135, improvements=25, checksum=8437221608909176832",
+   "B side 262,144 iterations with missing_baseline reserved to current case count: 11.421 and 11.356 us_per_iter, matched=26, regressions=1, missing_baseline=135, improvements=25, checksum=8437221608909176832",
+   "the retained path avoids a remaining vector growth because the old current-minus-baseline hint reserved 133 slots while the measured workload emits 135 missing-baseline IDs",
+]
+cleanup = [
+   "Changed compare_reports missing_baseline capacity from current.cases.len() - baseline.cases.len() to current.cases.len().",
+   "Kept matched/improvement capacity, regression allocation, lookup strategy, output order, and comparison semantics unchanged.",
+]
+
+[[experiments]]
+id = "perf-runner-compare-reports-lookup-improvement-before-envelope"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Compare-reports bench must keep matched=26, regressions=1, missing_baseline=135, improvements=25, and checksum=15302142361927155712 for benchmarks/workspace/latest.json compared with benchmarks/workspace/ci-current.json; companion same-order smoke checks must preserve zero-regression counts; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload compare-reports A/B for recording strict lookup-path improvements before computing the regression envelope; repeated long-run us_per_iter must improve before the branch order remains."
+decision_state = "accepted"
+decision = "Recorded strict lookup-path improvements before computing the regression envelope after same-workload proof showed lower comparison cost with unchanged counts and checksum."
+proof = [
+   "A side 1,048,576 iterations with retained lookup ordering: 11.836 and 11.839 us_per_iter, matched=26, regressions=1, missing_baseline=135, improvements=25, checksum=15302142361927155712",
+   "B side 1,048,576 iterations with lookup improvements emitted before regression-envelope calculation: 11.817 and 11.804 us_per_iter, matched=26, regressions=1, missing_baseline=135, improvements=25, checksum=15302142361927155712",
+   "companion same-order smoke checks preserved latest.json versus itself matched=161/regressions=0/missing_baseline=0/improvements=0 and ci-current.json versus itself matched=26/regressions=0/missing_baseline=0/improvements=0",
+]
+cleanup = [
+   "Moved strict improvement handling ahead of regression_allowed_median in compare_reports_with_lookup.",
+   "Kept same-order comparison, lookup strategy, missing-baseline capacity, regression allocation, output ordering, and regression-envelope semantics unchanged for non-improvement rows.",
+]
+
+[[experiments]]
+id = "perf-runner-compare-reports-same-order-fast-path"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Compare-reports bench must keep matched=161, regressions=0, missing_baseline=0, improvements=0, and checksum=8156608303752806400 for benchmarks/workspace/latest.json compared with itself; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload compare-reports A/B for comparing large same-order baseline reports by zipped rows instead of building a lookup table; repeated long-run us_per_iter must improve before the fast path remains."
+decision_state = "accepted"
+decision = "Compared large same-order PerfReport baselines directly after same-workload proof showed much lower comparison cost with unchanged counts and checksum."
+proof = [
+   "A side 262,144 iterations with the retained BTreeMap large-baseline path: 7.483 and 7.449 us_per_iter, matched=161, regressions=0, missing_baseline=0, improvements=0, checksum=8156608303752806400",
+   "B side 262,144 iterations with the same-order fast path: 0.694 and 0.660 us_per_iter, matched=161, regressions=0, missing_baseline=0, improvements=0, checksum=8156608303752806400",
+   "the retained path preserves the existing small-baseline scan and BTreeMap fallback for nonmatching large baselines while avoiding lookup-table construction for same-shape reports",
+]
+cleanup = [
+   "Added a same-order comparison path for large baselines before the BTreeMap lookup table is built.",
+   "Kept existing missing-baseline, regression, improvement, and fallback comparison semantics for nonmatching report shapes.",
+]
+
+[[experiments]]
+id = "perf-runner-compare-reports-same-order-single-pass"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Compare-reports bench must keep matched=161, regressions=0, missing_baseline=0, improvements=0, and checksum=8156608303752806400 for benchmarks/workspace/latest.json compared with itself; focused report/manifest/diff checks must pass; equal-length reordered large baselines must preserve lookup semantics."
+performance_gate = "Same-workload compare-reports A/B for combining same-order ID validation and comparison into one pass while avoiding impossible missing-baseline reservation; repeated long-run us_per_iter must improve before the refinement remains."
+decision_state = "accepted"
+decision = "Merged same-order validation and comparison into one pass after same-workload proof showed lower comparison cost with unchanged counts and checksum."
+proof = [
+   "A side 262,144 iterations with the retained same-order fast path: 0.686 and 0.658 us_per_iter, matched=161, regressions=0, missing_baseline=0, improvements=0, checksum=8156608303752806400",
+   "B side 262,144 iterations with the single-pass same-order helper: 0.615 and 0.584 us_per_iter, matched=161, regressions=0, missing_baseline=0, improvements=0, checksum=8156608303752806400",
+   "the retained path still falls back to the BTreeMap lookup path for reordered equal-length large baselines and now avoids reserving missing_baseline capacity when aligned IDs prove no baseline rows can be missing",
+]
+cleanup = [
+   "Replaced the separate reports_have_same_case_order validation walk and compare_reports_same_case_order walk with one try_compare_reports_same_case_order helper.",
+   "Kept the small-baseline scan and nonmatching large-baseline BTreeMap fallback behavior intact.",
+]
+
+[[experiments]]
+id = "perf-runner-compare-reports-same-order-lazy-improvements-rejected"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Compare-reports bench must keep matched=161, regressions=0, missing_baseline=0, improvements=0, and checksum=8156608303752806400 for benchmarks/workspace/latest.json compared with itself; source must be restored after rejection."
+performance_gate = "Same-workload compare-reports A/B for lazily reserving same-order improvements capacity only on the first emitted improvement; repeated long-run us_per_iter must improve before the lazy allocation remains."
+decision_state = "rejected"
+decision = "Kept the retained same-order improvements preallocation because lazy reservation did not beat both fresh same-workload A-side runs."
+proof = [
+   "A side 262,144 iterations with retained same-order improvements preallocation: 0.609 and 0.596 us_per_iter, matched=161, regressions=0, missing_baseline=0, improvements=0, checksum=8156608303752806400",
+   "B side 262,144 iterations with lazy improvements reservation: 0.603 us_per_iter, matched=161, regressions=0, missing_baseline=0, improvements=0, checksum=8156608303752806400",
+   "the first B-side run failed to beat the faster A-side run, so the source implementation was restored before further work",
+]
+cleanup = [
+   "Restored try_compare_reports_same_case_order to Vec::with_capacity(matched_capacity) for improvements.",
+   "No source/docs/tests/report/schema cleanup from the attempted lazy improvements allocation remains in the patch.",
+]
+
+[[experiments]]
+id = "perf-runner-compare-reports-same-order-equal-median-fast-path"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Compare-reports bench must keep matched=161, regressions=0, missing_baseline=0, improvements=0, and checksum=8156608303752806400 for benchmarks/workspace/latest.json compared with itself; focused compare-report tests must preserve non-equal regression and improvement behavior."
+performance_gate = "Same-workload compare-reports A/B for skipping regression-envelope calculation on same-order rows whose current and baseline medians are equal; repeated long-run us_per_iter must improve before the fast path remains."
+decision_state = "accepted"
+decision = "Skipped regression-envelope calculation for equal-median same-order report rows after same-workload proof showed lower identical-report comparison cost with unchanged counts and checksum."
+proof = [
+   "A side 262,144 iterations with retained same-order comparison: 0.608 and 0.580 us_per_iter, matched=161, regressions=0, missing_baseline=0, improvements=0, checksum=8156608303752806400",
+   "B side 262,144 iterations with equal-median fast path: 0.516 and 0.492 us_per_iter, matched=161, regressions=0, missing_baseline=0, improvements=0, checksum=8156608303752806400",
+   "existing same-order regression/improvement tests keep non-equal medians on the original regression envelope path",
+]
+cleanup = [
+   "Added an early continue for equal medians inside try_compare_reports_same_case_order.",
+   "Kept small-baseline, nonmatching large-baseline, reordered fallback, regression, and improvement semantics unchanged.",
+]
+
+[[experiments]]
+id = "perf-runner-compare-reports-same-order-before-small-baseline"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Compare-reports bench must keep matched=26, regressions=0, missing_baseline=0, improvements=0, and checksum=6715456415125995520 for benchmarks/workspace/ci-current.json compared with itself; companion checks must preserve latest-vs-latest and latest-vs-ci-current counts/checksums; focused compare-report tests must preserve reordered fallback behavior."
+performance_gate = "Same-workload compare-reports A/B for trying the same-order helper before small-baseline lookup when current and baseline reports have equal case counts; repeated long-run us_per_iter must improve before the branch-order change remains."
+decision_state = "accepted"
+decision = "Tried the same-order helper before small-baseline lookup for equal-length reports after same-workload proof showed lower small same-order comparison cost with unchanged counts and checksum."
+proof = [
+   "A side 262,144 iterations with retained small-baseline lookup for ci-current.json versus itself: 0.429 and 0.369 us_per_iter, matched=26, regressions=0, missing_baseline=0, improvements=0, checksum=6715456415125995520",
+   "B side 262,144 iterations with same-order-before-small-baseline lookup: 0.190 and 0.170 us_per_iter, matched=26, regressions=0, missing_baseline=0, improvements=0, checksum=6715456415125995520",
+   "large same-order companion latest.json versus itself preserved matched=161, regressions=0, missing_baseline=0, improvements=0, checksum=8156608303752806400 with A side 0.471/0.491 us_per_iter and B side 0.480/0.429 us_per_iter",
+   "small fallback companion latest.json versus ci-current.json preserved matched=26, regressions=1, missing_baseline=135, improvements=25; interleaved 1,048,576-iteration fallback check improved from restored A 11.706 us_per_iter to B 11.293 us_per_iter with checksum=15302142361927155712",
+]
+cleanup = [
+   "Runs try_compare_reports_same_case_order before the small-baseline lookup when current and baseline reports have equal case counts.",
+   "Leaves unequal-length small-baseline reports on the retained lookup scan and nonmatching large reports on the BTreeMap fallback.",
+]
+
+[[experiments]]
+id = "perf-runner-frame-pacing-static-metric-keys"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Frame-pacing metrics bench must keep samples=1024, metrics_per_iter=10, and checksum=3689668351076859904; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload frame-pacing metrics A/B for replacing 60/120 Hz metric-key formatting with static metric keys while preserving the generic formatted fallback; repeated long-run us_per_iter must improve before the static-key path remains."
+decision_state = "accepted"
+decision = "Inserted frame-pacing metrics with static 60/120 Hz key strings after same-workload proof showed lower metric insertion cost with unchanged metric count and checksum."
+proof = [
+   "A side 1,048,576 iterations with retained formatted keys: 0.889 and 0.915 us_per_iter, samples=1024, metrics_per_iter=10, checksum=3689668351076859904",
+   "B side 1,048,576 iterations with static 60/120 Hz keys: 0.763 and 0.753 us_per_iter, samples=1024, metrics_per_iter=10, checksum=3689668351076859904",
+   "the retained path keeps the formatted-key fallback for nonstandard refresh tiers while the current report generator continues to call only the 60 Hz and 120 Hz fixed-key paths",
+]
+cleanup = [
+   "Avoided per-call label formatting and five formatted metric-key constructions for the two current frame-pacing refresh tiers.",
+   "Kept missed/hitch counting, metric values, output key names, checksum, metric count, and the nonstandard refresh fallback semantics unchanged.",
+]
+
+[[experiments]]
+id = "perf-runner-distribution-static-metric-keys"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Distribution metrics bench must keep samples_per_distribution=24, distributions_per_iter=3, metrics_per_iter=12, and checksum=17190773103943221248; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload distribution metrics A/B for replacing frame_ms/gpu_ms/event_to_visible_ms metric-key formatting with static metric keys while preserving the generic formatted fallback; repeated long-run us_per_iter must improve before the static-key path remains."
+decision_state = "accepted"
+decision = "Inserted distribution metrics with static frame_ms, gpu_ms, and event_to_visible_ms key strings after same-workload proof showed lower metric insertion cost with unchanged metric count and checksum."
+proof = [
+   "A side 1,048,576 iterations with retained formatted keys: 1.309 and 1.306 us_per_iter, samples_per_distribution=24, distributions_per_iter=3, metrics_per_iter=12, checksum=17190773103943221248",
+   "B side 1,048,576 iterations with static frame_ms/gpu_ms/event_to_visible_ms keys: 0.880 and 0.871 us_per_iter, samples_per_distribution=24, distributions_per_iter=3, metrics_per_iter=12, checksum=17190773103943221248",
+   "the retained path keeps the formatted-key fallback for uncommon prefixes while current report generation uses the fixed-key prefixes for frame, GPU, and event-to-visible distributions",
+]
+cleanup = [
+   "Avoided four formatted metric-key constructions for each current frame_ms, gpu_ms, and event_to_visible_ms distribution insertion.",
+   "Kept distribution summaries, metric values, output key names, checksum, metric count, and the uncommon-prefix fallback semantics unchanged.",
+]
+
+[[experiments]]
+id = "perf-runner-case-metric-contract-static-required-keys"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Case metric contract bench must keep cases=161, frame_required=22, gpu_required=22, and checksum=17743537733841715200 for benchmarks/workspace/latest.json; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload case metric contract A/B for replacing formatted required metric keys with static required-key arrays; repeated long-run us_per_iter must improve before the static-key validator remains."
+decision_state = "accepted"
+decision = "Validated case metric contracts with static required-key arrays after same-workload proof showed lower validation cost with unchanged required counts and checksum."
+proof = [
+   "A side 262,144 iterations with retained formatted required keys: 19.370 and 19.371 us_per_iter, cases=161, frame_required=22, gpu_required=22, checksum=17743537733841715200",
+   "B side 262,144 iterations with static required-key arrays: 7.539 and 7.570 us_per_iter, cases=161, frame_required=22, gpu_required=22, checksum=17743537733841715200",
+   "the retained validator preserves missing-metric error order while avoiding repeated key formatting for passing frame and GPU report rows",
+]
+cleanup = [
+   "Replaced per-validation frame/GPU required-key formatting with static required-key arrays.",
+   "Kept case metric contract trigger rules, missing-key error order, report shape, required counts, and checksum unchanged.",
+]
+
+[[experiments]]
+id = "perf-runner-contract-coverage-allocation-free-gap-scan"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Contract coverage bench must keep layers=3, battery=12, notes=15, and checksum=2523456553655730176 for benchmarks/workspace/latest.json; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload contract coverage A/B for replacing per-note to_ascii_lowercase allocation with allocation-free ASCII phrase matching; repeated long-run us_per_iter must improve before the allocation-free validator remains."
+decision_state = "accepted"
+decision = "Validated contract coverage gap notes with an allocation-free ASCII phrase scan after same-workload proof showed lower validation cost with unchanged contract row counts and checksum."
+proof = [
+   "A side 262,144 iterations with retained to_ascii_lowercase gap scan: 4.311 and 4.292 us_per_iter, layers=3, battery=12, notes=15, checksum=2523456553655730176",
+   "B side 262,144 iterations with allocation-free ASCII phrase scan: 2.465 and 2.441 us_per_iter, layers=3, battery=12, notes=15, checksum=2523456553655730176",
+   "the retained validator preserves ASCII case-insensitive forbidden phrase detection while avoiding per-note lower-case string allocation for passing implemented contract rows",
+]
+cleanup = [
+   "Replaced per-note lower-case String allocation with byte-level ASCII phrase matching.",
+   "Kept contract row status validation, forbidden phrase set, error behavior, report shape, row counts, note counts, and checksum unchanged.",
+]
+
+[[experiments]]
+id = "perf-runner-contract-coverage-first-byte-ascii-fold"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Contract coverage bench must keep layers=3, battery=12, notes=15, and checksum=2523456553655730176 for benchmarks/workspace/latest.json; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload contract coverage A/B for replacing the per-byte ascii_lower helper dispatch with a direct first-byte ASCII fold; repeated long-run us_per_iter must improve before the folded dispatch remains."
+decision_state = "accepted"
+decision = "Dispatched contract coverage gap-note phrase checks with a first-byte ASCII fold after same-workload proof showed lower validation cost with unchanged contract row counts and checksum."
+proof = [
+   "A side 262,144 iterations with retained ascii_lower first-byte dispatch: 2.436 and 2.450 us_per_iter, layers=3, battery=12, notes=15, checksum=2523456553655730176",
+   "B side 262,144 iterations with first-byte ASCII fold dispatch: 1.990 and 1.965 us_per_iter, layers=3, battery=12, notes=15, checksum=2523456553655730176",
+   "the retained validator preserves the existing ASCII-insensitive prefix checks for forbidden phrases while avoiding one helper call and uppercase branch per scanned note byte",
+]
+cleanup = [
+   "Replaced the per-byte ascii_lower dispatch helper with direct `byte | 0x20` ASCII first-byte folding.",
+   "Kept contract row status validation, forbidden phrase set, prefix checks, error behavior, report shape, row counts, note counts, and checksum unchanged.",
+]
+
+[[experiments]]
+id = "perf-runner-contract-coverage-tail-only-phrase-match"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Contract coverage bench must keep layers=3, battery=12, notes=15, and checksum=2523456553655730176 for benchmarks/workspace/latest.json; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload contract coverage A/B for replacing first-byte-inclusive eq_ignore_ascii_case prefix checks with tail-only ASCII phrase matching; repeated long-run us_per_iter must improve before the tail-only matcher remains."
+decision_state = "accepted"
+decision = "Matched contract coverage gap-note phrase tails after same-workload proof showed lower validation cost with unchanged contract row counts and checksum."
+proof = [
+   "A side 262,144 iterations with retained first-byte-inclusive prefix checks: 2.119 and 2.100 us_per_iter, layers=3, battery=12, notes=15, checksum=2523456553655730176",
+   "B side 262,144 iterations with tail-only ASCII phrase matching: 1.869 and 1.852 us_per_iter, layers=3, battery=12, notes=15, checksum=2523456553655730176",
+   "the retained matcher keeps the existing first-byte dispatch and forbidden phrase set while avoiding redundant first-byte comparison inside the prefix check",
+]
+cleanup = [
+   "Replaced first-byte-inclusive prefix checks with a tail-only ASCII phrase loop after the first byte has already matched.",
+   "Kept contract row status validation, forbidden phrase set, error behavior, report shape, row counts, note counts, and checksum unchanged.",
+]
+
+[[experiments]]
+id = "perf-runner-distribution-summary-unused-fields"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Distribution metrics bench must keep samples_per_distribution=24, distributions_per_iter=3, metrics_per_iter=12, and checksum=17190773103943221248; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload distribution metrics A/B for replacing the general SampleSummary path with a distribution-only summary that skips unused min and mean fields; repeated long-run us_per_iter must improve before the specialized summary remains."
+decision_state = "accepted"
+decision = "Summarized distribution metric rows with a distribution-only summary after same-workload proof showed lower insertion cost with unchanged metric count and checksum."
+proof = [
+   "A side 1,048,576 iterations with retained general SampleSummary path: 0.880 and 0.861 us_per_iter, samples_per_distribution=24, distributions_per_iter=3, metrics_per_iter=12, checksum=17190773103943221248",
+   "B side 1,048,576 iterations with distribution-only summary: 0.859 and 0.846 us_per_iter, samples_per_distribution=24, distributions_per_iter=3, metrics_per_iter=12, checksum=17190773103943221248",
+   "the retained summary preserves sorted p50/p95/p99/peak metric values while avoiding unused min and mean work for distribution metric insertion",
+]
+cleanup = [
+   "Replaced the general sample summary in distribution metric insertion with a distribution-only summary carrying only max, median, p95, and p99.",
+   "Kept distribution metric keys, quantile values, peak values, metric count, checksum, and uncommon-prefix fallback semantics unchanged.",
+]
+
+[[experiments]]
+id = "perf-runner-distribution-stack-summary-buffer"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Distribution metrics bench must keep samples_per_distribution=24, distributions_per_iter=3, metrics_per_iter=12, and checksum=17190773103943221248; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload distribution metrics A/B for sorting common short distribution sample slices in a fixed stack buffer while preserving the heap fallback for larger slices; repeated long-run us_per_iter must improve before the stack summary buffer remains."
+decision_state = "accepted"
+decision = "Summarized common short distribution metric rows through a fixed stack buffer after same-workload proof showed lower insertion cost with unchanged metric count and checksum."
+proof = [
+   "A side 1,048,576 iterations with retained heap-vector summary: 0.888 and 0.900 us_per_iter, samples_per_distribution=24, distributions_per_iter=3, metrics_per_iter=12, checksum=17190773103943221248",
+   "B side 1,048,576 iterations with stack summary buffer: 0.881 and 0.868 us_per_iter, samples_per_distribution=24, distributions_per_iter=3, metrics_per_iter=12, checksum=17190773103943221248",
+   "the retained path preserves stable sorting semantics, sorted p50/p95/p99/peak values, metric count, checksum, and the heap fallback for larger sample slices",
+]
+cleanup = [
+   "Avoided heap Vec allocation for common short distribution metric sample summaries by sorting up to 32 samples in a fixed stack buffer.",
+   "Kept larger distribution sample slices on the existing heap-vector path and preserved distribution metric keys, quantile values, peak values, metric count, checksum, and uncommon-prefix fallback semantics unchanged.",
+]
+
+[[experiments]]
+id = "perf-runner-distribution-fixed-24-summary"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Distribution metrics bench must keep samples_per_distribution=24, distributions_per_iter=3, metrics_per_iter=12, and checksum=17190773103943221248; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload distribution metrics A/B for replacing generic quantile calls with exact fixed-24 interpolation on the common sorted summary path; repeated long-run us_per_iter must improve before the fixed-24 summary remains."
+decision_state = "accepted"
+decision = "Summarized fixed 24-sample distribution metric rows with direct interpolation after same-workload proof showed lower insertion cost with unchanged metric count and checksum."
+proof = [
+   "A side 1,048,576 iterations with retained stack-buffer generic quantiles: 0.894 and 0.906 us_per_iter, samples_per_distribution=24, distributions_per_iter=3, metrics_per_iter=12, checksum=17190773103943221248",
+   "B side 1,048,576 iterations with fixed-24 direct interpolation: 0.876 and 0.877 us_per_iter, samples_per_distribution=24, distributions_per_iter=3, metrics_per_iter=12, checksum=17190773103943221248",
+   "the retained path preserves the generic quantile fallback for non-24 sample counts while preserving sorted p50/p95/p99/peak values for the current report-summary workload",
+]
+cleanup = [
+   "Avoided three generic quantile helper calls for fixed 24-sample distribution metric summaries.",
+   "Kept other distribution sample counts on the existing generic quantile path and preserved distribution metric keys, quantile values, peak values, metric count, checksum, and uncommon-prefix fallback semantics unchanged.",
+]
+
+[[experiments]]
+id = "perf-runner-sample-summary-stack-buffer"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Sample summary bench must keep groups=4, summaries_per_iter=4, and checksum=18015267435921276928; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload sample-summary A/B for sorting common suite sample slices in a fixed stack buffer while preserving the heap fallback for larger slices; repeated long-run us_per_iter must improve before the stack summary buffer remains."
+decision_state = "accepted"
+decision = "Summarized common short suite sample slices through a fixed stack buffer after same-workload proof showed lower summary cost with unchanged group count, summary count, and checksum."
+proof = [
+   "A side 1,048,576 iterations with retained heap-vector summary: 0.223 and 0.221 us_per_iter, groups=4, summaries_per_iter=4, checksum=18015267435921276928",
+   "B side 1,048,576 iterations with stack summary buffer: 0.220, 0.214, and 0.195 us_per_iter, groups=4, summaries_per_iter=4, checksum=18015267435921276928",
+   "the retained path preserves stable sorting semantics, min/max/mean, p50/p95/p99, the empty-slice assertion, and the heap fallback for larger sample slices",
+]
+cleanup = [
+   "Avoided heap Vec allocation for common short suite sample summaries by sorting up to 32 samples in a fixed stack buffer.",
+   "Kept larger suite sample slices on the existing heap-vector path and preserved summary fields, quantile values, group count, summary count, checksum, and benchmark harness output semantics unchanged.",
+]
+
+[[experiments]]
+id = "perf-runner-sample-summary-fixed-count-quantiles"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-22"
+expires = "2026-07-22"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Sample summary bench must keep groups=4, summaries_per_iter=4, and checksum=18015267435921276928; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload sample-summary A/B for replacing generic quantile calls with exact direct interpolation for fixed 6-, 10-, 12-, and 24-sample suite summary counts; repeated long-run us_per_iter must improve before the fixed-count summary path remains."
+decision_state = "accepted"
+decision = "Summarized fixed-count suite sample groups with direct interpolation after same-workload proof showed lower summary cost with unchanged group count, summary count, and checksum."
+proof = [
+   "A side 1,048,576 iterations with retained stack-buffer generic quantiles: 0.218 and 0.192 us_per_iter, groups=4, summaries_per_iter=4, checksum=18015267435921276928",
+   "B side 1,048,576 iterations with fixed-count direct interpolation: 0.187 and 0.186 us_per_iter, groups=4, summaries_per_iter=4, checksum=18015267435921276928",
+   "the retained path preserves the generic quantile fallback for nonrepresentative sample counts while preserving min/max/mean and p50/p95/p99 bits for the current suite-summary workload",
+]
+cleanup = [
+   "Avoided three generic quantile helper calls for fixed 6-, 10-, 12-, and 24-sample suite summaries.",
+   "Kept other suite sample counts on the existing generic quantile path and preserved summary fields, group count, summary count, checksum, and benchmark harness output semantics unchanged.",
+]
+
+[[experiments]]
+id = "perf-runner-sample-summary-unstable-sort"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-23"
+expires = "2026-07-23"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Sample summary bench must keep groups=4, summaries_per_iter=4, and checksum=18015267435921276928; focused report/manifest/diff checks must pass."
+performance_gate = "Same-workload sample-summary A/B for replacing stable sorting with unstable sorting on common suite summary slices; repeated long-run us_per_iter must improve before the unstable sort path remains."
+decision_state = "accepted"
+decision = "Sorted suite sample summary slices with unstable sorting after same-workload proof showed lower summary cost with unchanged group count, summary count, and checksum."
+proof = [
+   "A side 1,048,576 iterations with retained stable sorting: 0.196 and 0.198 us_per_iter, groups=4, summaries_per_iter=4, checksum=18015267435921276928",
+   "B side 1,048,576 iterations with unstable sorting: 0.183 and 0.180 us_per_iter, groups=4, summaries_per_iter=4, checksum=18015267435921276928",
+   "the retained path preserves sorted sample values, min/max/mean, p50/p95/p99 bits, the heap fallback for larger slices, group count, summary count, checksum, and benchmark harness output semantics",
+]
+cleanup = [
+   "Avoided stable sorting overhead for common suite sample summaries whose output does not observe equal-value ordering.",
+   "Kept the same comparison predicate, stack-buffer path, heap fallback, summary fields, group count, summary count, checksum, and benchmark harness output semantics unchanged.",
+]
+
+[[experiments]]
+id = "permissions-bluetooth-discovery-cache-move"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-23"
+expires = "2026-07-23"
+required_backends = ["oxide-permissions", "oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Bluetooth discovery snapshot test must preserve id, name, RSSI, services, manufacturer data, connectability, and last_seen_ms; focused permissions tests, manifest checks, and git diff checks must pass."
+performance_gate = "Same-workload filtered A/B for moving discovered PeripheralInfo into the Bluetooth cache entry; both B medians must beat both A medians and B p95/p99 must not exceed the fastest A p95/p99."
+decision_state = "accepted"
+decision = "Moved discovered Bluetooth peripheral payloads directly into SensorBridge cache entries after same-workload proof showed lower bridge update latency with preserved snapshot payloads."
+proof = [
+   "A side retained clone: median/p95/p99 1.205/2.819/3.224 us/op and 1.193/1.954/2.130 us/op for cpu.bridge.bluetooth_cache_update",
+   "B side move into cache entry: median/p95/p99 0.802/0.922/0.977 us/op and 0.922/1.293/1.346 us/op for the same filtered workload",
+   "the retained path preserves discovered peripheral id, name, RSSI, services, manufacturer data, connectability, cache key, and last-seen timestamp in bluetooth_snapshot",
+]
+cleanup = [
+   "Removed one measured PeripheralInfo clone from the Bluetooth discovery cache insert path.",
+   "Kept the same BTreeMap cache, pruning policy, snapshot ownership boundary, event type, and perf-runner workload.",
+]
+
+[[experiments]]
+id = "permissions-sensor-permission-cache-fixed-slots"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-23"
+expires = "2026-07-23"
+required_backends = ["oxide-permissions", "oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Sensor bridge tests must prove every PermissionDomain slot preserves the exact cached status and existing revocation cleanup still passes; focused permissions tests, manifest checks, and git diff checks must pass."
+performance_gate = "Same-workload filtered A/B for replacing the SensorBridge permission HashMap with fixed domain slots; both B medians for location and Bluetooth must beat both matching A medians, and B p95/p99 must not exceed the fastest matching A p95/p99."
+decision_state = "accepted"
+decision = "Replaced the bridge-local permission HashMap with fixed domain slots after same-workload proof showed lower location and Bluetooth bridge latency with preserved permission status semantics."
+proof = [
+   "A side retained HashMap location median/p95/p99 0.091/0.175/0.186 us/op and 0.092/0.168/0.199 us/op for cpu.bridge.sensor_location_snapshot",
+   "A side retained HashMap Bluetooth median/p95/p99 0.823/0.860/0.861 us/op and 0.823/0.857/0.865 us/op for cpu.bridge.bluetooth_cache_update",
+   "B side fixed-slot cache location median/p95/p99 0.087/0.124/0.137 us/op and 0.087/0.132/0.151 us/op for the same location workload",
+   "B side fixed-slot cache Bluetooth median/p95/p99 0.793/0.819/0.826 us/op and 0.786/0.813/0.823 us/op for the same Bluetooth workload",
+   "the retained path preserves exact permission status reads for Notifications, Location, Camera, Contacts, Bluetooth, Motion, Microphone, and MediaLibrary plus existing revocation cleanup",
+]
+cleanup = [
+   "Removed HashMap hashing/probing from SensorBridge permission status reads by storing the eight fixed permission domains in an Option<PermissionStatus> array.",
+   "Kept the public permission_status API, permission update flow, sensor revocation cleanup, event gates, and perf-runner workloads unchanged.",
+]
+
+[[experiments]]
+id = "permissions-manager-state-fixed-slots"
+introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
+introduced_date = "2026-06-23"
+expires = "2026-07-23"
+required_backends = ["oxide-permissions", "oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Permission manager tests must prove all-domain cached status reads, snapshot contents, initial subscription callbacks, update callbacks, and unsubscribe behavior; focused permissions tests, manifest checks, and git diff checks must pass."
+performance_gate = "Same-workload filtered A/B for replacing the PermissionManager status HashMap with fixed domain slots; both B medians must beat both A medians and B p95/p99 must not exceed the fastest A p95/p99."
+decision_state = "accepted"
+decision = "Replaced the PermissionManager status HashMap with fixed domain slots after same-workload proof showed lower permission callback fanout latency with preserved manager semantics."
+proof = [
+   "A side retained HashMap median/p95/p99 0.075/0.212/0.226 us/op and 0.075/0.183/0.206 us/op for cpu.bridge.permission_callback_fanout",
+   "B side fixed-slot cache median/p95/p99 0.071/0.168/0.195 us/op and 0.070/0.179/0.201 us/op for the same filtered workload",
+   "the retained path preserves exact cached status reads for all eight permission domains, snapshot contents, initial subscription callbacks, update callbacks, and unsubscribe behavior",
+]
+cleanup = [
+   "Removed HashMap hashing/probing from PermissionManager status update/read paths by storing the eight fixed permission domains in an Option<PermissionState> array.",
+   "Kept listener storage, listener callback order, lock-drop-before-callback behavior, subscription API, snapshot API, and perf-runner workload unchanged.",
+]

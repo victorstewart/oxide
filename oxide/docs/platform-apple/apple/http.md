@@ -20,6 +20,7 @@
 - The session uses no URL cache and reloads from origin so loopback tests and callers do not observe stale cached responses.
 - iOS enables cellular access and `NSURLSessionMultipathServiceTypeHandover`; macOS builds omit those iOS-only session policies.
 - Empty response bodies, final URLs, and content types are represented as null pointers with zero lengths, matching the Rust wrapper's native-buffer handoff contract.
+- `_Static_assert` guards keep the native `OxideHttpResponse` mirror aligned with the Rust `AppleHttpResponse` layout before future ABI-generation work changes this boundary.
 
 ## Preconditions and postconditions
 - Foundation and dispatch must be linked by the consuming Apple host.
@@ -34,8 +35,10 @@
 
 ## Testing and benchmarks
 - Rust-side ABI mapping is covered by `cargo test -p oxide-platform-apple --locked`.
+- ABI layout coverage is frozen by `cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-platform-apple --test abi_layout_tests`.
 - macOS installed-platform behavior is covered by `cargo test -p oxide-host-macos --features host-testing --tests --locked`, which fetches a loopback HTTP response through `MacPlatform::http()`.
 - iOS target linkage is covered by `cargo check -p oxide-platform-ios --target aarch64-apple-ios --locked`.
 
 ## Changelog
+- 2026-06-22: added native `_Static_assert` guards for the shared HTTP response ABI layout.
 - 2026-05-19: added shared native Apple HTTP bridge and removed duplicated iOS/macOS implementations.

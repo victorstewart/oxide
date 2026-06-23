@@ -9,6 +9,17 @@ fn source_without_whitespace(source: &str) -> String {
     source.chars().filter(|ch| !ch.is_whitespace()).collect()
 }
 
+fn source_block<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+    let start_idx = source.find(start).expect("source block start");
+    let tail = &source[start_idx..];
+    let end_idx = tail.find(end).expect("source block end");
+    &tail[..end_idx]
+}
+
+fn compact_source_block(source: &str, start: &str, end: &str) -> String {
+    source_without_whitespace(source_block(source, start, end))
+}
+
 #[test]
 fn color_conversion_clamps_channels() {
     let css = color_to_css(api::Color::rgba(1.4, -0.2, 0.5, 2.0));
@@ -87,8 +98,12 @@ fn web_renderer_has_no_topomap_specific_command_hook() {
 #[test]
 fn wasm_public_exports_are_webgpu_only() {
     let source = include_str!("../src/lib.rs");
-    assert!(source.contains("pub use wasm::{BrowserRenderer, WebGpuRenderer};"));
+    assert!(source.contains("pub use wasm::{bench_canvas_indexed_quads, BrowserRenderer, WebGpuRenderer};"));
     assert!(!source.contains("pub use wasm::{BrowserRenderer, WebGpuRenderer, WebRenderer};"));
+    assert!(source.contains("pub fn bench_canvas_indexed_quads("));
+    assert!(source.contains("fn canvas_indexed_quad_draw_list"));
+    assert!(source.contains("expected_image_meshes=1"));
+    assert!(source.contains("expected_image_draws={quad_count}"));
 }
 
 #[test]
@@ -300,6 +315,66 @@ fn wasm_webgpu_scene3d_render_does_not_clone_draw_lists() {
     assert!(
         render_scene3d_overlay.contains("for draw_index in 0..self.scene3d_overlay_draws.len()")
     );
+}
+
+#[test]
+fn wasm_webgpu_backend_packet_vocabulary_is_frozen() {
+    let source = include_str!("../src/wasm/webgpu.rs");
+    let draw_kind = compact_source_block(
+        source,
+        "enum DrawKind {",
+        "#[derive(Clone, Copy, PartialEq, Eq)]\nenum DrawPipelineKey",
+    );
+    let gpu_draw = compact_source_block(
+        source,
+        "struct GpuDraw {",
+        "#[derive(Clone, Copy)]\nstruct FrameLayerPass",
+    );
+    let coalescible = compact_source_block(
+        source,
+        "fn coalescible_draw_kind",
+        "#[derive(Clone, Copy)]\nenum TimestampPassFamily",
+    );
+    let encode_draw_cmd = compact_source_block(
+        source,
+        "fn encode_draw_cmd",
+        "fn encode_solid",
+    );
+
+    assert_eq!(
+        draw_kind,
+        "enumDrawKind{Solid,Rgba{image:usize},A8{image:usize},Sdf{image:usize},Layer{id:u32},Backdrop{rect:api::RectF,sigma:f32},}"
+    );
+    assert_eq!(
+        gpu_draw,
+        "structGpuDraw{kind:DrawKind,first_index:u32,index_count:u32,clip:api::RectI,effect_uniform_offset:u32,target:Option<u32>,}"
+    );
+    for pattern in [
+        "(DrawKind::Solid,DrawKind::Solid)=>true",
+        "(DrawKind::Rgba{image:a},DrawKind::Rgba{image:b})=>a==b",
+        "(DrawKind::A8{image:a},DrawKind::A8{image:b})=>a==b",
+        "(DrawKind::Sdf{image:a},DrawKind::Sdf{image:b})=>a==b",
+        "(DrawKind::Layer{id:a},DrawKind::Layer{id:b})=>a==b",
+        "_=>false",
+    ] {
+        assert!(coalescible.contains(pattern), "missing coalescing packet rule {pattern}");
+    }
+    for pattern in [
+        "api::DrawCmd::Solid{vb,ib,color}=>self.encode_solid(list,*vb,*ib,*color)",
+        "api::DrawCmd::Image{tex,dst,src,alpha}=>{self.encode_image(*tex,*dst,*src,*alpha,false)}",
+        "api::DrawCmd::ImageMesh{tex,vb,ib,alpha}=>{self.encode_image_mesh(list,*tex,*vb,*ib,*alpha)}",
+        "api::DrawCmd::GlyphRun{run}=>self.encode_glyph_run(list,run)",
+        "api::DrawCmd::RRect{rect,radii,color}=>self.encode_rrect(*rect,*radii,*color)",
+        "api::DrawCmd::NineSlice{tex,rect,slice,alpha}=>{self.encode_nine_slice(*tex,*rect,*slice,*alpha)}",
+        "api::DrawCmd::Backdrop{rect,sigma,tint,alpha}=>{self.stats.backdrop_draws=self.stats.backdrop_draws.saturating_add(1);self.encode_backdrop(*rect,*sigma,*tint,*alpha)}",
+        "api::DrawCmd::VisualEffect{rect,effect}=>{lettint=effect.tint();self.stats.visual_effect_draws=self.stats.visual_effect_draws.saturating_add(1);self.encode_backdrop(*rect,effect.blur_intensity()*72.0,tint,tint.a);}",
+        "api::DrawCmd::CameraBg{..}=>{}",
+        "api::DrawCmd::Spinner{center,atom,alpha}=>{self.stats.spinner_draws=self.stats.spinner_draws.saturating_add(1);self.encode_spinner(*center,*atom,*alpha)}",
+        "api::DrawCmd::ClipPush{rect}=>{self.clip_stack.push(*rect);self.stats.clip_depth_peak=self.stats.clip_depth_peak.max(self.clip_stack.len()asu32);}",
+        "api::DrawCmd::ClipPop=>{let_=self.clip_stack.pop();}",
+    ] {
+        assert!(encode_draw_cmd.contains(pattern), "missing WebGPU lowering rule {pattern}");
+    }
 }
 
 #[test]

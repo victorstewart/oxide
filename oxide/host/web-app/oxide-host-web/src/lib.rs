@@ -89,8 +89,6 @@ mod wasm_host {
     const WEBGPU_DRAW_STATE_CACHE_DRAWS: usize = 1024;
     const WEBGPU_DRAW_STATE_CACHE_COLUMNS: usize = 32;
     const WEBGPU_DRAW_ITEM_COALESCE_EXPECTED_ITEMS: usize = 1;
-    const WEBGPU_CLIP_STATE_DRAWS: usize = 512;
-    const WEBGPU_CLIP_STATE_RUNS: usize = 16;
     const WEBGPU_NEON_MARKERS: usize = 64;
     const WEBGPU_NEON_MARKER_COLUMNS: usize = 8;
     const WEBGPU_DIRECT_SURFACE_DRAWS: usize = 384;
@@ -550,7 +548,38 @@ mod wasm_host {
             ))
         }
 
-        pub async fn bench_webgpu_upload_ab(
+        pub async fn bench_webgpu_id_mask_current(
+            &self,
+            samples: u32,
+            frames_per_sample: u32,
+        ) -> Result<String, JsValue> {
+            let sample_count = samples.clamp(1, 30);
+            let frames = frames_per_sample.clamp(1, 120);
+            let renderer = self.state.borrow().renderer.clone();
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut current = {
+                let mut renderer = renderer.borrow_mut();
+                bench_webgpu_id_mask_case(&mut renderer, true, sample_count, frames)?
+            };
+            current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            let current_pacing = frame_pacing_metrics(&current.frame_values, "current");
+            let current_allocations = allocation_metrics(&current.allocations, "current");
+            let current_submit_allocations =
+                submit_allocation_metrics(&current.submit_allocations, "current");
+            let current_stats = renderer_stats_metrics(current.stats, "current");
+            Ok(format!(
+                "samples={sample_count};frames_per_sample={frames};current_p50_ms={:.3};current_p95_ms={:.3};current_p99_ms={:.3};current_peak_ms={:.3};current_avg_ms={:.3}{current_pacing}{current_allocations}{current_submit_allocations}{current_stats};vertices={};vertex_bytes={}",
+                current.p50_ms,
+                current.p95_ms,
+                current.p99_ms,
+                current.peak_ms,
+                current.avg_ms,
+                current.vertices,
+                current.vertex_bytes,
+            ))
+        }
+
+        pub async fn bench_webgpu_upload_current(
             &self,
             samples: u32,
             frames_per_sample: u32,
@@ -567,14 +596,6 @@ mod wasm_host {
             glyph_current.stats =
                 settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
-            let mut glyph_legacy = self.with_upload_bench_resources(|renderer, resources| {
-                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
-                    resources.glyph_frame(renderer, false)
-                })
-            })?;
-            glyph_legacy.stats =
-                settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
-            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
             let mut image_current = self.with_upload_bench_resources(|renderer, resources| {
                 bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
                     resources.image_frame(renderer, true)
@@ -582,30 +603,10 @@ mod wasm_host {
             })?;
             image_current.stats =
                 settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
-            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
-            let mut image_legacy = self.with_upload_bench_resources(|renderer, resources| {
-                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
-                    resources.image_frame(renderer, false)
-                })
-            })?;
-            image_legacy.stats =
-                settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
-            let glyph_ratio = if glyph_current.p50_ms > 0.0 {
-                glyph_legacy.p50_ms / glyph_current.p50_ms
-            } else {
-                0.0
-            };
-            let image_ratio = if image_current.p50_ms > 0.0 {
-                image_legacy.p50_ms / image_current.p50_ms
-            } else {
-                0.0
-            };
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames}{}{}{}{};glyph_legacy_over_current={glyph_ratio:.3};image_legacy_over_current={image_ratio:.3};atlas_width={};atlas_height={};atlas_dirty_width={};atlas_dirty_height={};image_width={};image_height={};image_dirty_width={};image_dirty_height={}",
+                "samples={sample_count};frames_per_sample={frames}{}{};atlas_width={};atlas_height={};atlas_dirty_width={};atlas_dirty_height={};image_width={};image_height={};image_dirty_width={};image_dirty_height={}",
                 sampled_case_metrics(&glyph_current, "glyph_current"),
-                sampled_case_metrics(&glyph_legacy, "glyph_legacy"),
                 sampled_case_metrics(&image_current, "image_current"),
-                sampled_case_metrics(&image_legacy, "image_legacy"),
                 WEBGPU_UPLOAD_ATLAS_SIZE,
                 WEBGPU_UPLOAD_ATLAS_SIZE,
                 WEBGPU_UPLOAD_DIRTY_SIZE,
@@ -672,30 +673,16 @@ mod wasm_host {
             current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             {
                 let mut renderer = renderer.borrow_mut();
-                renderer.set_effect_uniform_batch_enabled_for_benchmark(false);
-                renderer.set_backdrop_batch_enabled_for_benchmark(false);
-            }
-            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
-            let mut legacy = self.with_upload_bench_resources(|renderer, resources| {
-                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
-                    resources.effect_uniform_frame(renderer)
-                })
-            })?;
-            legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
-            {
-                let mut renderer = renderer.borrow_mut();
                 renderer.set_effect_uniform_batch_enabled_for_benchmark(true);
                 renderer.set_backdrop_batch_enabled_for_benchmark(true);
             }
-            let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames}{}{};legacy_over_current={ratio:.3};expected_backdrops={WEBGPU_EFFECT_UNIFORM_BACKDROPS};sigma=18.0",
+                "samples={sample_count};frames_per_sample={frames}{};expected_backdrops={WEBGPU_EFFECT_UNIFORM_BACKDROPS};sigma=18.0",
                 sampled_case_metrics(&current, "current"),
-                sampled_case_metrics(&legacy, "legacy"),
             ))
         }
 
-        pub async fn bench_webgpu_backdrop_batch_ab(
+        pub async fn bench_webgpu_backdrop_batch_current(
             &self,
             samples: u32,
             frames_per_sample: u32,
@@ -715,28 +702,9 @@ mod wasm_host {
                 })
             })?;
             current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
-            {
-                let mut renderer = renderer.borrow_mut();
-                renderer.set_effect_uniform_batch_enabled_for_benchmark(true);
-                renderer.set_backdrop_batch_enabled_for_benchmark(false);
-            }
-            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
-            let mut legacy = self.with_upload_bench_resources(|renderer, resources| {
-                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
-                    resources.backdrop_batch_frame(renderer)
-                })
-            })?;
-            legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
-            {
-                let mut renderer = renderer.borrow_mut();
-                renderer.set_effect_uniform_batch_enabled_for_benchmark(true);
-                renderer.set_backdrop_batch_enabled_for_benchmark(true);
-            }
-            let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames}{}{};legacy_over_current={ratio:.3};expected_backdrops={WEBGPU_BACKDROP_BATCH_BACKDROPS};sigma=6.0",
+                "samples={sample_count};frames_per_sample={frames}{};expected_backdrops={WEBGPU_BACKDROP_BATCH_BACKDROPS};sigma=6.0",
                 sampled_case_metrics(&current, "current"),
-                sampled_case_metrics(&legacy, "legacy"),
             ))
         }
 
@@ -830,29 +798,14 @@ mod wasm_host {
             current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             {
                 let mut renderer = renderer.borrow_mut();
-                renderer.set_draw_state_cache_enabled_for_benchmark(false);
-                renderer.set_effect_uniform_batch_enabled_for_benchmark(false);
-                renderer.set_backdrop_batch_enabled_for_benchmark(false);
-            }
-            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
-            let mut legacy = self.with_upload_bench_resources(|renderer, resources| {
-                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
-                    resources.mixed_frame(renderer)
-                })
-            })?;
-            legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
-            {
-                let mut renderer = renderer.borrow_mut();
                 renderer.set_draw_state_cache_enabled_for_benchmark(true);
                 renderer.set_draw_item_coalescing_enabled_for_benchmark(true);
                 renderer.set_effect_uniform_batch_enabled_for_benchmark(true);
                 renderer.set_backdrop_batch_enabled_for_benchmark(true);
             }
-            let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames}{}{};legacy_over_current={ratio:.3};glyphs={};image_tiles={WEBGPU_MIXED_IMAGE_TILES};image_width={};image_height={}",
+                "samples={sample_count};frames_per_sample={frames}{};glyphs={};image_tiles={WEBGPU_MIXED_IMAGE_TILES};image_width={};image_height={}",
                 sampled_case_metrics(&current, "current"),
-                sampled_case_metrics(&legacy, "legacy"),
                 WEBGPU_MIXED_GLYPHS,
                 WEBGPU_UPLOAD_IMAGE_SIZE,
                 WEBGPU_UPLOAD_IMAGE_SIZE,
@@ -883,29 +836,14 @@ mod wasm_host {
             current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             {
                 let mut renderer = renderer.borrow_mut();
-                renderer.set_draw_state_cache_enabled_for_benchmark(false);
-                renderer.set_effect_uniform_batch_enabled_for_benchmark(false);
-                renderer.set_backdrop_batch_enabled_for_benchmark(false);
-            }
-            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
-            let mut legacy = self.with_upload_bench_resources(|renderer, resources| {
-                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
-                    resources.layer_effects_frame(renderer)
-                })
-            })?;
-            legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
-            {
-                let mut renderer = renderer.borrow_mut();
                 renderer.set_draw_state_cache_enabled_for_benchmark(true);
                 renderer.set_draw_item_coalescing_enabled_for_benchmark(true);
                 renderer.set_effect_uniform_batch_enabled_for_benchmark(true);
                 renderer.set_backdrop_batch_enabled_for_benchmark(true);
             }
-            let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames}{}{};legacy_over_current={ratio:.3};glyphs={};image_tiles={WEBGPU_LAYER_EFFECT_IMAGE_TILES};image_width={};image_height={};expected_layers=3;expected_damage_rects=3;expected_backdrops={WEBGPU_LAYER_EFFECT_BACKDROPS}",
+                "samples={sample_count};frames_per_sample={frames}{};glyphs={};image_tiles={WEBGPU_LAYER_EFFECT_IMAGE_TILES};image_width={};image_height={};expected_layers=3;expected_damage_rects=3;expected_backdrops={WEBGPU_LAYER_EFFECT_BACKDROPS}",
                 sampled_case_metrics(&current, "current"),
-                sampled_case_metrics(&legacy, "legacy"),
                 WEBGPU_LAYER_EFFECT_GLYPHS,
                 WEBGPU_UPLOAD_IMAGE_SIZE,
                 WEBGPU_UPLOAD_IMAGE_SIZE,
@@ -934,21 +872,12 @@ mod wasm_host {
                 })
             })?;
             clean.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
-            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
-            let mut dirty = self.with_upload_bench_resources(|renderer, resources| {
-                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
-                    resources.clean_layer_frame(renderer, true)
-                })
-            })?;
-            dirty.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             {
                 renderer.borrow_mut().set_draw_item_coalescing_enabled_for_benchmark(true);
             }
-            let ratio = if clean.p50_ms > 0.0 { dirty.p50_ms / clean.p50_ms } else { 0.0 };
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames}{}{};dirty_over_clean={ratio:.3};glyphs={};image_tiles={WEBGPU_CLEAN_LAYER_IMAGE_TILES};image_width={};image_height={};expected_layers=1;expected_clean_hits=1;expected_dirty_misses=1",
+                "samples={sample_count};frames_per_sample={frames}{};glyphs={};image_tiles={WEBGPU_CLEAN_LAYER_IMAGE_TILES};image_width={};image_height={};expected_layers=1;expected_clean_hits=1",
                 sampled_case_metrics(&clean, "clean"),
-                sampled_case_metrics(&dirty, "dirty"),
                 WEBGPU_CLEAN_LAYER_GLYPHS,
                 WEBGPU_UPLOAD_IMAGE_SIZE,
                 WEBGPU_UPLOAD_IMAGE_SIZE,
@@ -977,32 +906,19 @@ mod wasm_host {
             current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             {
                 let mut renderer = renderer.borrow_mut();
-                renderer.set_draw_state_cache_enabled_for_benchmark(false);
-            }
-            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
-            let mut legacy = self.with_upload_bench_resources(|renderer, resources| {
-                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
-                    resources.command_family_frame(renderer)
-                })
-            })?;
-            legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
-            {
-                let mut renderer = renderer.borrow_mut();
                 renderer.set_draw_state_cache_enabled_for_benchmark(true);
                 renderer.set_draw_item_coalescing_enabled_for_benchmark(true);
             }
-            let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames}{}{};legacy_over_current={ratio:.3};expected_image_meshes={WEBGPU_COMMAND_FAMILY_REPEATS};expected_nine_slices={WEBGPU_COMMAND_FAMILY_REPEATS};expected_sdf_glyphs={};expected_sdf_runs={WEBGPU_COMMAND_FAMILY_SDF_RUNS};expected_camera_bg=0;image_width={};image_height={}",
+                "samples={sample_count};frames_per_sample={frames}{};expected_image_meshes={WEBGPU_COMMAND_FAMILY_REPEATS};expected_nine_slices={WEBGPU_COMMAND_FAMILY_REPEATS};expected_sdf_glyphs={};expected_sdf_runs={WEBGPU_COMMAND_FAMILY_SDF_RUNS};expected_camera_bg=0;image_width={};image_height={}",
                 sampled_case_metrics(&current, "current"),
-                sampled_case_metrics(&legacy, "legacy"),
                 WEBGPU_COMMAND_FAMILY_SDF_GLYPHS.saturating_mul(WEBGPU_COMMAND_FAMILY_SDF_RUNS),
                 WEBGPU_UPLOAD_IMAGE_SIZE,
                 WEBGPU_UPLOAD_IMAGE_SIZE,
             ))
         }
 
-        pub async fn bench_webgpu_glyph_run_ab(
+        pub async fn bench_webgpu_glyph_run_current(
             &self,
             samples: u32,
             frames_per_sample: u32,
@@ -1023,28 +939,16 @@ mod wasm_host {
             })?;
             current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             {
-                renderer.borrow_mut().set_draw_state_cache_enabled_for_benchmark(false);
-            }
-            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
-            let mut legacy = self.with_upload_bench_resources(|renderer, resources| {
-                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
-                    resources.glyph_run_frame(renderer)
-                })
-            })?;
-            legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
-            {
                 let mut renderer = renderer.borrow_mut();
                 renderer.set_draw_state_cache_enabled_for_benchmark(true);
                 renderer.set_draw_item_coalescing_enabled_for_benchmark(true);
             }
-            let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             let expected_glyph_quads =
                 WEBGPU_GLYPH_RUN_RUNS.saturating_mul(WEBGPU_GLYPH_RUN_GLYPHS_PER_RUN);
             let expected_draw_items = WEBGPU_GLYPH_RUN_RUNS.saturating_add(1);
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames}{}{};legacy_over_current={ratio:.3};expected_glyph_runs={WEBGPU_GLYPH_RUN_RUNS};expected_glyphs_per_run={WEBGPU_GLYPH_RUN_GLYPHS_PER_RUN};expected_glyph_quads={expected_glyph_quads};expected_sdf_runs={WEBGPU_GLYPH_RUN_SDF_RUNS};expected_sdf_glyph_quads={};expected_draw_items={expected_draw_items};atlas_width={WEBGPU_UPLOAD_ATLAS_SIZE};atlas_height={WEBGPU_UPLOAD_ATLAS_SIZE}",
+                "samples={sample_count};frames_per_sample={frames}{};expected_glyph_runs={WEBGPU_GLYPH_RUN_RUNS};expected_glyphs_per_run={WEBGPU_GLYPH_RUN_GLYPHS_PER_RUN};expected_glyph_quads={expected_glyph_quads};expected_sdf_runs={WEBGPU_GLYPH_RUN_SDF_RUNS};expected_sdf_glyph_quads={};expected_draw_items={expected_draw_items};atlas_width={WEBGPU_UPLOAD_ATLAS_SIZE};atlas_height={WEBGPU_UPLOAD_ATLAS_SIZE}",
                 sampled_case_metrics(&current, "current"),
-                sampled_case_metrics(&legacy, "legacy"),
                 WEBGPU_GLYPH_RUN_SDF_RUNS.saturating_mul(WEBGPU_GLYPH_RUN_GLYPHS_PER_RUN),
             ))
         }
@@ -1070,25 +974,13 @@ mod wasm_host {
             })?;
             current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             {
-                renderer.borrow_mut().set_draw_state_cache_enabled_for_benchmark(false);
-            }
-            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
-            let mut legacy = self.with_upload_bench_resources(|renderer, resources| {
-                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
-                    resources.neon_marker_frame(renderer)
-                })
-            })?;
-            legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
-            {
                 let mut renderer = renderer.borrow_mut();
                 renderer.set_draw_state_cache_enabled_for_benchmark(true);
                 renderer.set_draw_item_coalescing_enabled_for_benchmark(true);
             }
-            let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames}{}{};legacy_over_current={ratio:.3};expected_markers={WEBGPU_NEON_MARKERS};expected_draw_items={}",
+                "samples={sample_count};frames_per_sample={frames}{};expected_markers={WEBGPU_NEON_MARKERS};expected_draw_items={}",
                 sampled_case_metrics(&current, "current"),
-                sampled_case_metrics(&legacy, "legacy"),
                 WEBGPU_NEON_MARKERS.saturating_mul(3),
             ))
         }
@@ -1115,25 +1007,13 @@ mod wasm_host {
             })?;
             current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
             {
-                renderer.borrow_mut().set_direct_surface_enabled_for_benchmark(false);
-            }
-            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
-            let mut legacy = self.with_upload_bench_resources(|renderer, resources| {
-                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
-                    resources.direct_surface_frame(renderer)
-                })
-            })?;
-            legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
-            {
                 let mut renderer = renderer.borrow_mut();
                 renderer.set_draw_item_coalescing_enabled_for_benchmark(true);
                 renderer.set_direct_surface_enabled_for_benchmark(true);
             }
-            let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames}{}{};legacy_over_current={ratio:.3};expected_draw_items={};expected_image_draws={WEBGPU_DIRECT_SURFACE_DRAWS};columns={WEBGPU_DIRECT_SURFACE_COLUMNS};image_width={};image_height={}",
+                "samples={sample_count};frames_per_sample={frames}{};expected_draw_items={};expected_image_draws={WEBGPU_DIRECT_SURFACE_DRAWS};columns={WEBGPU_DIRECT_SURFACE_COLUMNS};image_width={};image_height={}",
                 sampled_case_metrics(&current, "current"),
-                sampled_case_metrics(&legacy, "legacy"),
                 WEBGPU_DIRECT_SURFACE_DRAWS.saturating_add(1),
                 WEBGPU_UPLOAD_IMAGE_SIZE,
                 WEBGPU_UPLOAD_IMAGE_SIZE,
@@ -1228,51 +1108,6 @@ mod wasm_host {
             ))
         }
 
-        pub async fn bench_webgpu_clip_state_ab(
-            &self,
-            samples: u32,
-            frames_per_sample: u32,
-        ) -> Result<String, JsValue> {
-            let sample_count = samples.clamp(1, 30);
-            let frames = frames_per_sample.clamp(1, 120);
-            let renderer = self.ensure_upload_bench_resources()?;
-            {
-                let mut renderer = renderer.borrow_mut();
-                renderer.set_draw_state_cache_enabled_for_benchmark(true);
-                renderer.set_draw_item_coalescing_enabled_for_benchmark(false);
-            }
-            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
-            let mut current = self.with_upload_bench_resources(|renderer, resources| {
-                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
-                    resources.clip_state_frame(renderer)
-                })
-            })?;
-            current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
-            {
-                renderer.borrow_mut().set_draw_state_cache_enabled_for_benchmark(false);
-            }
-            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
-            let mut legacy = self.with_upload_bench_resources(|renderer, resources| {
-                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
-                    resources.clip_state_frame(renderer)
-                })
-            })?;
-            legacy.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
-            {
-                let mut renderer = renderer.borrow_mut();
-                renderer.set_draw_state_cache_enabled_for_benchmark(true);
-                renderer.set_draw_item_coalescing_enabled_for_benchmark(true);
-            }
-            let ratio = if current.p50_ms > 0.0 { legacy.p50_ms / current.p50_ms } else { 0.0 };
-            Ok(format!(
-                "samples={sample_count};frames_per_sample={frames}{}{};legacy_over_current={ratio:.3};expected_draw_items={WEBGPU_CLIP_STATE_DRAWS};expected_clip_runs={WEBGPU_CLIP_STATE_RUNS};expected_clip_depth=2;image_width={};image_height={}",
-                sampled_case_metrics(&current, "current"),
-                sampled_case_metrics(&legacy, "legacy"),
-                WEBGPU_UPLOAD_IMAGE_SIZE,
-                WEBGPU_UPLOAD_IMAGE_SIZE,
-            ))
-        }
-
         pub fn render_webgpu_id_mask_snapshot(&self) -> Result<String, JsValue> {
             let renderer = {
                 let mut state = self.state.borrow_mut();
@@ -1350,6 +1185,25 @@ mod wasm_host {
         let app = OxideWebApp::new_async(canvas_id).await?;
         app.start()?;
         Ok(app)
+    }
+
+    /// Runs the non-default Canvas2D indexed-quad diagnostic workload.
+    #[wasm_bindgen]
+    pub fn bench_canvas_indexed_quads(
+        samples: u32,
+        frames_per_sample: u32,
+        quads: u32,
+    ) -> Result<String, JsValue> {
+        let canvas = create_hidden_canvas(512, 512)?;
+        let report = oxide_renderer_web::bench_canvas_indexed_quads(
+            canvas.clone(),
+            samples,
+            frames_per_sample,
+            quads,
+        )
+        .map_err(render_err);
+        remove_hidden_canvas(&canvas);
+        report
     }
 
     /// Runs a browser-backed platform smoke check for the static test page.
@@ -2240,39 +2094,6 @@ mod wasm_host {
             renderer.submit(token).map_err(render_err)
         }
 
-        fn clip_state_frame(&mut self, renderer: &mut BrowserRenderer) -> Result<(), JsValue> {
-            renderer.resize(512, 512, 2.0).map_err(render_err)?;
-            let token = renderer.begin_frame(&gfx::FrameTarget, None);
-            self.builder.clear();
-            let src = gfx::RectF::new(
-                0.0,
-                0.0,
-                WEBGPU_UPLOAD_IMAGE_SIZE as f32,
-                WEBGPU_UPLOAD_IMAGE_SIZE as f32,
-            );
-            self.builder.clip_push(gfx::RectI::new(0, 0, 256, 256));
-            let per_run = WEBGPU_CLIP_STATE_DRAWS / WEBGPU_CLIP_STATE_RUNS;
-            let size = 256.0 / WEBGPU_DRAW_STATE_CACHE_COLUMNS as f32;
-            for run in 0..WEBGPU_CLIP_STATE_RUNS {
-                let y = ((run % WEBGPU_CLIP_STATE_RUNS) as i32 * 16).min(240);
-                self.builder.clip_push(gfx::RectI::new(0, y, 256, 16));
-                for slot in 0..per_run {
-                    let index = run * per_run + slot;
-                    let col = index % WEBGPU_DRAW_STATE_CACHE_COLUMNS;
-                    let row = index / WEBGPU_DRAW_STATE_CACHE_COLUMNS;
-                    self.builder.image(
-                        self.image,
-                        gfx::RectF::new(col as f32 * size, row as f32 * size, size, size),
-                        src,
-                        0.86,
-                    );
-                }
-                self.builder.clip_pop();
-            }
-            self.builder.clip_pop();
-            renderer.encode_pass(self.builder.drawlist());
-            renderer.submit(token).map_err(render_err)
-        }
     }
 
     struct WebGpuScene3dBenchResources {
@@ -2975,6 +2796,36 @@ mod wasm_host {
         document_body.append_child(textarea.unchecked_ref())?;
         canvas.set_attribute("tabindex", "0")?;
         Ok(textarea)
+    }
+
+    fn create_hidden_canvas(width: u32, height: u32) -> Result<HtmlCanvasElement, JsValue> {
+        let document = web_sys::window()
+            .and_then(|window| window.document())
+            .ok_or_else(|| JsValue::from_str("document is unavailable"))?;
+        let canvas = document
+            .create_element("canvas")?
+            .dyn_into::<HtmlCanvasElement>()
+            .map_err(|_| JsValue::from_str("created element was not a canvas"))?;
+        canvas.set_width(width.max(1));
+        canvas.set_height(height.max(1));
+        let style = canvas.style();
+        style.set_property("position", "fixed")?;
+        style.set_property("left", "-10000px")?;
+        style.set_property("top", "-10000px")?;
+        style.set_property("width", "1px")?;
+        style.set_property("height", "1px")?;
+        style.set_property("opacity", "0")?;
+        style.set_property("pointer-events", "none")?;
+        if let Some(body) = document.body() {
+            let _ = body.append_child(canvas.unchecked_ref());
+        }
+        Ok(canvas)
+    }
+
+    fn remove_hidden_canvas(canvas: &HtmlCanvasElement) {
+        if let Some(parent) = canvas.parent_node() {
+            let _ = parent.remove_child(canvas.unchecked_ref());
+        }
     }
 
     fn retain_listener(
@@ -3818,8 +3669,8 @@ mod wasm_host {
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_host::{
-    platform_smoke_report, start_oxide, start_oxide_async, webgpu_smoke_report,
-    webgpu_timing_report, OxideWebApp,
+    bench_canvas_indexed_quads, platform_smoke_report, start_oxide, start_oxide_async,
+    webgpu_smoke_report, webgpu_timing_report, OxideWebApp,
 };
 
 #[cfg(not(target_arch = "wasm32"))]

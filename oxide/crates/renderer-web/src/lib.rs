@@ -516,7 +516,9 @@ mod wasm {
         WebRendererStats,
     };
     use oxide_renderer_api as api;
+    use oxide_renderer_api::Renderer;
     use std::collections::BTreeMap;
+    use std::fmt::Write;
     use wasm_bindgen::{Clamped, JsCast, JsValue};
     use web_sys::{CanvasRenderingContext2d, Document, HtmlCanvasElement, ImageData};
 
@@ -1517,6 +1519,257 @@ mod wasm {
         }
     }
 
+    struct CanvasAllocationSummary {
+        alloc_count: u64,
+        alloc_bytes: u64,
+        dealloc_count: u64,
+        dealloc_bytes: u64,
+        realloc_count: u64,
+        realloc_grow_bytes: u64,
+        realloc_shrink_bytes: u64,
+        allocating_frames: u64,
+        peak_frame_alloc_bytes: u64,
+    }
+
+    /// Runs the non-default Canvas2D indexed-quad diagnostic workload on the supplied canvas.
+    pub fn bench_canvas_indexed_quads(
+        canvas: HtmlCanvasElement,
+        samples: u32,
+        frames_per_sample: u32,
+        quads: u32,
+    ) -> Result<String, api::RenderError> {
+        let sample_count = samples.clamp(1, 30);
+        let frames = frames_per_sample.clamp(1, 120);
+        let quad_count = quads.clamp(1, 4096);
+        let mut renderer = WebRenderer::from_canvas(canvas)?;
+        renderer.resize(512, 512, 1.0)?;
+        let image = {
+            let pixels = canvas_checker_rgba(16, 16);
+            renderer.image_create_rgba8(16, 16, &pixels, 16 * 4)
+        };
+        let draw_list = canvas_indexed_quad_draw_list(image, quad_count);
+        let damage = api::Damage { rects: vec![api::RectI::new(0, 0, 512, 512)] };
+        for _warmup in 0..4 {
+            let token = renderer.begin_frame(&api::FrameTarget, Some(&damage));
+            renderer.encode_pass(&draw_list);
+            renderer.submit(token)?;
+        }
+
+        let mut values = Vec::with_capacity(sample_count.saturating_mul(frames) as usize);
+        let mut allocations = CanvasAllocationSummary {
+            alloc_count: 0,
+            alloc_bytes: 0,
+            dealloc_count: 0,
+            dealloc_bytes: 0,
+            realloc_count: 0,
+            realloc_grow_bytes: 0,
+            realloc_shrink_bytes: 0,
+            allocating_frames: 0,
+            peak_frame_alloc_bytes: 0,
+        };
+        for _sample in 0..sample_count {
+            for _frame in 0..frames {
+                let start = perf_now();
+                let alloc_before = oxide_wasm_alloc_counter::snapshot();
+                let token = renderer.begin_frame(&api::FrameTarget, Some(&damage));
+                renderer.encode_pass(&draw_list);
+                renderer.submit(token)?;
+                let alloc_after = oxide_wasm_alloc_counter::snapshot();
+                add_canvas_allocation_frame(&mut allocations, alloc_before, alloc_after);
+                values.push((perf_now() - start).max(0.0));
+            }
+        }
+
+        values.sort_by(|a, b| a.total_cmp(b));
+        let total_frames = sample_count.saturating_mul(frames);
+        let avg_ms = average(&values);
+        let p50_ms = percentile(&values, 0.50);
+        let p95_ms = percentile(&values, 0.95);
+        let p99_ms = percentile(&values, 0.99);
+        let peak_ms = values.last().copied().unwrap_or(0.0);
+        let stats = canvas_stats_metrics(renderer.last_stats());
+        let pacing = frame_pacing_metrics(&values);
+        let allocations = canvas_allocation_metrics(&allocations);
+        Ok(format!(
+            "samples={sample_count};frames_per_sample={frames};frames={total_frames};p50_ms={p50_ms:.3};p95_ms={p95_ms:.3};p99_ms={p99_ms:.3};peak_ms={peak_ms:.3};avg_ms={avg_ms:.3};quads={quad_count};expected_image_meshes=1;expected_image_draws={quad_count}{stats}{pacing}{allocations}",
+        ))
+    }
+
+    fn canvas_checker_rgba(width: u32, height: u32) -> Vec<u8> {
+        let mut rgba =
+            vec![0_u8; (width as usize).saturating_mul(height as usize).saturating_mul(4)];
+        for y in 0..height {
+            for x in 0..width {
+                let idx = ((y as usize).saturating_mul(width as usize).saturating_add(x as usize))
+                    .saturating_mul(4);
+                let tile = ((x / 8) + (y / 8)) % 2 == 0;
+                let (r, g, b) =
+                    if tile { (42_u8, 122_u8, 255_u8) } else { (245_u8, 248_u8, 252_u8) };
+                rgba[idx] = r;
+                rgba[idx + 1] = g;
+                rgba[idx + 2] = b;
+                rgba[idx + 3] = 255;
+            }
+        }
+        rgba
+    }
+
+    fn canvas_indexed_quad_draw_list(tex: api::ImageHandle, quads: u32) -> api::DrawList {
+        let quad_count = quads.clamp(1, 4096) as usize;
+        let mut list = api::DrawList::default();
+        list.vertices.reserve(quad_count.saturating_mul(4));
+        list.indices.reserve(quad_count.saturating_mul(6));
+        let columns = 32_usize;
+        let tile = 8.0_f32;
+        for index in 0..quad_count {
+            let col = index % columns;
+            let row = index / columns;
+            let x = (col as f32) * tile;
+            let y = (row as f32) * tile;
+            let base = list.vertices.len() as u16;
+            list.vertices.extend_from_slice(&[
+                api::Vertex { x, y, u: 0.0, v: 0.0, rgba: 0xffff_ffff },
+                api::Vertex { x: x + tile, y, u: 1.0, v: 0.0, rgba: 0xffff_ffff },
+                api::Vertex { x, y: y + tile, u: 0.0, v: 1.0, rgba: 0xffff_ffff },
+                api::Vertex { x: x + tile, y: y + tile, u: 1.0, v: 1.0, rgba: 0xffff_ffff },
+            ]);
+            list.indices.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 1, base + 3]);
+        }
+        list.items.push(api::DrawCmd::ImageMesh {
+            tex,
+            vb: api::VertexSpan { offset: 0, len: list.vertices.len() as u32 },
+            ib: api::IndexSpan { offset: 0, len: list.indices.len() as u32 },
+            alpha: 1.0,
+        });
+        list
+    }
+
+    fn add_canvas_allocation_frame(
+        summary: &mut CanvasAllocationSummary,
+        before: oxide_wasm_alloc_counter::AllocationSnapshot,
+        after: oxide_wasm_alloc_counter::AllocationSnapshot,
+    ) {
+        let alloc_count = after.alloc_count.saturating_sub(before.alloc_count);
+        let alloc_bytes = after.alloc_bytes.saturating_sub(before.alloc_bytes);
+        let dealloc_count = after.dealloc_count.saturating_sub(before.dealloc_count);
+        let dealloc_bytes = after.dealloc_bytes.saturating_sub(before.dealloc_bytes);
+        let realloc_count = after.realloc_count.saturating_sub(before.realloc_count);
+        let realloc_grow_bytes =
+            after.realloc_grow_bytes.saturating_sub(before.realloc_grow_bytes);
+        let realloc_shrink_bytes =
+            after.realloc_shrink_bytes.saturating_sub(before.realloc_shrink_bytes);
+        summary.alloc_count = summary.alloc_count.saturating_add(alloc_count);
+        summary.alloc_bytes = summary.alloc_bytes.saturating_add(alloc_bytes);
+        summary.dealloc_count = summary.dealloc_count.saturating_add(dealloc_count);
+        summary.dealloc_bytes = summary.dealloc_bytes.saturating_add(dealloc_bytes);
+        summary.realloc_count = summary.realloc_count.saturating_add(realloc_count);
+        summary.realloc_grow_bytes =
+            summary.realloc_grow_bytes.saturating_add(realloc_grow_bytes);
+        summary.realloc_shrink_bytes =
+            summary.realloc_shrink_bytes.saturating_add(realloc_shrink_bytes);
+        let frame_alloc_bytes = alloc_bytes.saturating_add(realloc_grow_bytes);
+        if alloc_count > 0 || realloc_count > 0 {
+            summary.allocating_frames = summary.allocating_frames.saturating_add(1);
+        }
+        summary.peak_frame_alloc_bytes = summary.peak_frame_alloc_bytes.max(frame_alloc_bytes);
+    }
+
+    fn canvas_allocation_metrics(summary: &CanvasAllocationSummary) -> String {
+        format!(
+            ";wasm_alloc_count={};wasm_alloc_bytes={};wasm_dealloc_count={};wasm_dealloc_bytes={};wasm_realloc_count={};wasm_realloc_grow_bytes={};wasm_realloc_shrink_bytes={};wasm_allocating_frames={};wasm_peak_frame_alloc_bytes={}",
+            summary.alloc_count,
+            summary.alloc_bytes,
+            summary.dealloc_count,
+            summary.dealloc_bytes,
+            summary.realloc_count,
+            summary.realloc_grow_bytes,
+            summary.realloc_shrink_bytes,
+            summary.allocating_frames,
+            summary.peak_frame_alloc_bytes,
+        )
+    }
+
+    fn frame_pacing_metrics(frame_values_ms: &[f64]) -> String {
+        let mut out = String::new();
+        let denom = frame_values_ms.len().max(1) as f64;
+        for refresh_hz in [60_u32, 120_u32] {
+            let budget_ms = 1000.0 / refresh_hz as f64;
+            let missed_frames =
+                frame_values_ms.iter().filter(|sample| **sample > budget_ms).count();
+            let hitch_frames =
+                frame_values_ms.iter().filter(|sample| **sample > budget_ms * 2.0).count();
+            let _ = write!(
+                out,
+                ";frame_budget_{refresh_hz}hz_ms={budget_ms:.6};missed_frames_{refresh_hz}hz={missed_frames};missed_frame_ratio_{refresh_hz}hz={:.6};hitch_frames_{refresh_hz}hz={hitch_frames};hitch_ratio_{refresh_hz}hz={:.6}",
+                missed_frames as f64 / denom,
+                hitch_frames as f64 / denom,
+            );
+        }
+        out
+    }
+
+    fn canvas_stats_metrics(stats: WebRendererStats) -> String {
+        format!(
+            ";draws={};draw_items={};draw_items_coalesced={};draw_pipeline_binds={};draw_bind_group_binds={};draw_scissor_sets={};solid_tris={};image_draws={};image_mesh_draws={};nine_slice_draws={};glyph_quads={};sdf_glyph_quads={};clip_depth_peak={};damage_rects={};render_passes={};clear_passes={};draw_passes={};present_passes={};texture_copies={};command_buffers={};buffer_upload_bytes={};texture_upload_bytes={};buffer_grows={};texture_creates={};bind_group_creates={};pipeline_creates={};sampler_creates={};image_texture_creates={};image_bind_group_creates={};cpu_scratch_bytes={};cpu_scratch_grows={};cpu_scratch_growth_bytes={}",
+            stats.draws,
+            stats.draw_items,
+            stats.draw_items_coalesced,
+            stats.draw_pipeline_binds,
+            stats.draw_bind_group_binds,
+            stats.draw_scissor_sets,
+            stats.solid_tris,
+            stats.image_draws,
+            stats.image_mesh_draws,
+            stats.nine_slice_draws,
+            stats.glyph_quads,
+            stats.sdf_glyph_quads,
+            stats.clip_depth_peak,
+            stats.damage_rects,
+            stats.render_passes,
+            stats.clear_passes,
+            stats.draw_passes,
+            stats.present_passes,
+            stats.texture_copies,
+            stats.command_buffers,
+            stats.buffer_upload_bytes,
+            stats.texture_upload_bytes,
+            stats.buffer_grows,
+            stats.texture_creates,
+            stats.bind_group_creates,
+            stats.pipeline_creates,
+            stats.sampler_creates,
+            stats.image_texture_creates,
+            stats.image_bind_group_creates,
+            stats.cpu_scratch_bytes,
+            stats.cpu_scratch_grows,
+            stats.cpu_scratch_growth_bytes,
+        )
+    }
+
+    fn average(values: &[f64]) -> f64 {
+        if values.is_empty() {
+            return 0.0;
+        }
+        values.iter().copied().sum::<f64>() / values.len() as f64
+    }
+
+    fn percentile(sorted_values: &[f64], percentile: f64) -> f64 {
+        if sorted_values.is_empty() {
+            return 0.0;
+        }
+        let index = ((sorted_values.len().saturating_sub(1)) as f64 * percentile)
+            .ceil()
+            .clamp(0.0, sorted_values.len().saturating_sub(1) as f64) as usize;
+        sorted_values[index]
+    }
+
+    fn perf_now() -> f64 {
+        web_sys::window()
+            .and_then(|window| window.performance())
+            .map(|perf| perf.now())
+            .unwrap_or(0.0)
+    }
+
     fn document() -> Result<Document, api::RenderError> {
         let Some(window) = web_sys::window() else {
             return Err(api::RenderError::Unsupported("window unavailable"));
@@ -1642,13 +1895,18 @@ mod wasm {
             return;
         };
         for quad_indices in indices.chunks_exact(6) {
-            let quad = quad_indices
-                .iter()
-                .filter_map(|index| {
-                    resolve_index(*index, mode).and_then(|idx| vertices.get(idx)).copied()
-                })
-                .collect::<Vec<_>>();
-            if quad.len() == 6 {
+            let mut quad = [api::Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: 0 }; 6];
+            let mut valid = true;
+            for (dst, index) in quad.iter_mut().zip(quad_indices.iter().copied()) {
+                let Some(vertex) =
+                    resolve_index(index, mode).and_then(|idx| vertices.get(idx)).copied()
+                else {
+                    valid = false;
+                    break;
+                };
+                *dst = vertex;
+            }
+            if valid {
                 draw(&quad);
             }
         }
@@ -1806,4 +2064,4 @@ mod native_stub {
 #[cfg(not(target_arch = "wasm32"))]
 pub use native_stub::WebRenderer;
 #[cfg(target_arch = "wasm32")]
-pub use wasm::{BrowserRenderer, WebGpuRenderer};
+pub use wasm::{bench_canvas_indexed_quads, BrowserRenderer, WebGpuRenderer};

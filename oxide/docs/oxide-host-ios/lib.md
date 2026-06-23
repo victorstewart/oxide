@@ -30,6 +30,8 @@
   Initialize and drive the renderer, scene router, camera paths, and perf harness.
 - `oxide_host_app_prepare_frame(...)`, `oxide_host_app_submit_prepared_frame_with_drawable(...)`, and `oxide_host_app_cancel_prepared_frame()`
   Split CPU frame preparation from drawable-backed present work so UIKit acquires a `CAMetalDrawable` only after Rust has updated state, built the draw list, and decided the frame will submit.
+- `oxide_host_app_stats(out) -> libc::c_int`
+  Exports the host stats ABI consumed by Objective-C and Swift benchmark harnesses.
 
 ## Logic narrative
 - Callback registries store plain `extern "C" fn` pointers in `OnceLock<Mutex<Option<_>>>` slots because Objective-C code can install callbacks before the app renderer is active.
@@ -38,6 +40,7 @@
 - Fallback logging for text, key, and push payloads validates null/length pairs before constructing slices; a null pointer with zero length is treated as an empty payload.
 - Renderer and app lifecycle behavior remains unchanged by callback hardening.
 - The drawable-backed iOS path now mirrors macOS: prepare Rust frame work first, acquire `nextDrawable` late with timeout enabled in Objective-C or the Swift perf runtime, then submit the prepared frame to Metal or cancel it if no drawable is returned.
+- Compile-time layout assertions freeze `OxideHostStats` and the private camera perf/contract snapshot mirrors so benchmark out-parameters cannot silently drift from their native or Swift consumers.
 
 ## Preconditions and postconditions
 - Native callers must pass valid payload pointers when `len > 0`.
@@ -68,6 +71,7 @@
 ## Testing and benchmarks
 - Covered by `cargo test -p oxide-host-ios --tests --locked`.
 - Device-target compile coverage uses `cargo check -p oxide-host-ios --target aarch64-apple-ios --tests --locked`.
+- Host camera typedef, stats, tick/debug perf, and camera snapshot ABI guard retention is covered by [abi_layout_tests.md](tests/abi_layout_tests.md).
 - Camera benchmark contract coverage lives in [camera_benchmark_tests.md](tests/camera_benchmark_tests.md); it statically gates `AVCaptureVideoPreviewLayer` to explicit baseline or diagnostic-only paths.
 
 ## Examples
@@ -77,6 +81,8 @@ oxide_host_emit_touch(10, 0, 1.0, 2.0, 0.5, 1, 0.0, 0.0, 0, 0, 100);
 ```
 
 ## Changelog
+- 2026-06-22: froze host stats and camera benchmark snapshot ABI layouts, including Swift benchmark-runtime host-stat mirror fields.
+- 2026-06-22: added iOS host camera typedef ABI static-assert retention coverage.
 - 2026-06-01: added macOS-side source gates keeping `AVCaptureVideoPreviewLayer` out of the product custom camera preview path.
 - 2026-06-01: enabled timeout-capable `CAMetalLayer.nextDrawable` acquisition on the product iOS host so prepared frames can cancel instead of blocking indefinitely under drawable pressure.
 - 2026-05-31: split iOS frame preparation from drawable submission so `nextDrawable` is acquired after CPU frame work in app and perf-host paths.

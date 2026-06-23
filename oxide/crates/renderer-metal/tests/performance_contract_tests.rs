@@ -83,11 +83,50 @@ fn completed_gpu_duration_is_attributed_to_frame_id() {
     );
 }
 
+#[test]
+fn metal_draw_cmd_debug_capture_names_are_frozen() {
+    let source = include_str!("../src/lib.rs");
+    let mapping = source_without_whitespace(source_block(
+        source,
+        "fn draw_cmd_kind",
+        "#[inline(always)]\nfn running_on_ios_simulator",
+    ));
+    let expected = [
+        r#"api::DrawCmd::LayerBegin{..}=>"layer_begin""#,
+        r#"api::DrawCmd::LayerEnd=>"layer_end""#,
+        r#"api::DrawCmd::Solid{..}=>"solid""#,
+        r#"api::DrawCmd::Image{..}=>"image""#,
+        r#"api::DrawCmd::ImageMesh{..}=>"image_mesh""#,
+        r#"api::DrawCmd::GlyphRun{..}=>"glyph_run""#,
+        r#"api::DrawCmd::RRect{..}=>"rrect""#,
+        r#"api::DrawCmd::NineSlice{..}=>"nine_slice""#,
+        r#"api::DrawCmd::Backdrop{..}=>"backdrop""#,
+        r#"api::DrawCmd::VisualEffect{..}=>"visual_effect""#,
+        r#"api::DrawCmd::CameraBg{..}=>"camera_bg""#,
+        r#"api::DrawCmd::Spinner{..}=>"spinner""#,
+        r#"api::DrawCmd::ClipPush{..}=>"clip_push""#,
+        r#"api::DrawCmd::ClipPop=>"clip_pop""#,
+    ];
+    let mut previous = 0usize;
+    for pattern in expected {
+        let offset = mapping[previous..]
+            .find(pattern)
+            .map(|relative| previous + relative)
+            .unwrap_or_else(|| panic!("missing Metal draw command debug mapping {pattern}"));
+        previous = offset + pattern.len();
+    }
+    assert_eq!(mapping.matches("api::DrawCmd::").count(), expected.len());
+}
+
 fn source_block<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     let start_idx = source.find(start).expect("source block start");
     let tail = &source[start_idx..];
     let end_idx = tail.find(end).expect("source block end");
     &tail[..end_idx]
+}
+
+fn source_without_whitespace(source: &str) -> String {
+    source.chars().filter(|ch| !ch.is_whitespace()).collect()
 }
 
 #[cfg(target_os = "macos")]

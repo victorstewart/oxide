@@ -12,6 +12,47 @@ fn run_cli_unknown_command_shows_usage() {
     assert!(run_cli(&["unknown".into()]).is_ok());
 }
 
+#[test]
+fn experiments_check_cli_accepts_manifest_path() {
+    let workspace = tempdir().expect("workspace");
+    let manifest = workspace.path().join("perf-experiments.toml");
+    fs::write(
+        &manifest,
+        r#"
+[[experiments]]
+id = "sample-accepted"
+introduced_commit = "abc123"
+introduced_date = "2026-06-01"
+expires = "2026-06-23"
+required_backends = ["oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "focused tests"
+performance_gate = "same-workload A/B"
+decision_state = "accepted"
+decision = "accepted after proof"
+proof = ["current 1.0 ms vs legacy 2.0 ms"]
+cleanup = ["deleted loser path"]
+"#,
+    )
+    .expect("write manifest");
+
+    let args = vec![
+        String::from("experiments"),
+        String::from("check"),
+        String::from("--manifest"),
+        manifest.to_string_lossy().into_owned(),
+        String::from("--today"),
+        String::from("2026-06-22"),
+    ];
+    assert!(run_cli(&args).is_ok());
+}
+
+#[test]
+fn experiments_check_cli_help_does_not_require_manifest() {
+    let args = vec![String::from("experiments"), String::from("check"), String::from("--help")];
+    assert!(run_cli(&args).is_ok());
+}
+
 fn with_stub_xcrun<F>(f: F)
 where
     F: FnOnce(&Path),

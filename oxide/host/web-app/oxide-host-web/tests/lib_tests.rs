@@ -186,15 +186,15 @@ fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     assert!(html.contains("platform_smoke_report"));
     assert!(html.contains("webgpu_smoke_report"));
     assert!(html.contains("webgpu_timing_report"));
+    assert!(html.contains("bench_canvas_indexed_quads"));
     assert!(html.contains("start_oxide_async"));
     assert!(html.contains("background: transparent"));
     assert!(html.contains("window.oxidePlatformSmoke"));
     assert!(html.contains("window.oxideWebGpuSmoke"));
     assert!(html.contains("window.oxideWebGpuTiming"));
     assert!(html.contains("window.oxideWebPerf"));
-    assert!(html.contains("window.oxideWebGpuIdMaskAB"));
-    assert!(html.contains("window.oxideWebGpuUploadAB"));
-    assert!(html.contains("window.oxideWebGpuUploadScratchAB"));
+    assert!(html.contains("window.oxideWebGpuIdMaskCurrent"));
+    assert!(html.contains("window.oxideWebGpuUploadCurrent"));
     assert!(html.contains("window.oxideWebGpuScene3dAB"));
     assert!(html.contains("window.oxideWebGpuMixedMatrix"));
     assert!(html.contains("window.oxideWebGpuLayerEffectsMatrix"));
@@ -205,6 +205,9 @@ fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     assert!(html.contains("window.oxideWebGpuEffectUniformAB"));
     assert!(html.contains("prewarm_webgpu_bench_resources"));
     assert!(html.contains("oxide-webgpu-bench"));
+    assert!(html.contains("oxide-canvas-bench"));
+    assert!(html.contains("window.oxideCanvasIndexedQuads"));
+    assert!(html.contains("oxide-canvas-indexed-quads"));
     assert!(html.contains("window.oxideWebBenchmarkMarks"));
     assert!(html.contains("benchmark_marks"));
     assert!(html.contains("performance.mark(start)"));
@@ -229,6 +232,13 @@ fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     assert!(html.contains("oxide-browser-report-json"));
     assert!(html.contains("await fetch(\"/__oxide_report\""));
     assert!(!html.contains("keepalive"));
+    assert!(html.contains("startup_only"));
+    assert!(html.contains("!captureOnly && !startupOnly"));
+    assert!(html.contains("canvas_diag"));
+    assert!(html.contains("canvas_samples"));
+    assert!(html.contains("canvas_frames"));
+    assert!(html.contains("canvas_quads"));
+    assert!(html.contains("backend: \"canvas2d\""));
     assert!(html.contains("frame_samples"));
     assert!(html.contains("id_mask_samples"));
     assert!(html.contains("upload_samples"));
@@ -245,20 +255,16 @@ fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     assert!(html.contains("oxide-webgpu-smoke"));
     assert!(html.contains("oxide-webgpu-app-snapshot"));
     assert!(html.contains("oxide-webgpu-scene3d-snapshot"));
-    assert!(html.contains("oxide-webgpu-id-mask-ab"));
-    assert!(html.contains("oxide-webgpu-upload-ab"));
-    assert!(html.contains("oxide-webgpu-upload-scratch-ab"));
+    assert!(html.contains("oxide-webgpu-id-mask-current"));
+    assert!(html.contains("oxide-webgpu-upload-current"));
     assert!(html.contains("oxide-webgpu-effect-uniform-ab"));
     assert!(html.contains("oxide-webgpu-scene3d-ab"));
     assert!(html.contains("oxide-webgpu-mixed-matrix"));
     assert!(html.contains("oxide-webgpu-layer-effects-matrix"));
     assert!(html.contains("oxide-webgpu-command-family-matrix"));
-    assert!(html.contains("oxide-webgpu-glyph-run-ab"));
+    assert!(html.contains("oxide-webgpu-glyph-run-current"));
     assert!(html.contains("oxide-webgpu-neon-marker-ab"));
     assert!(html.contains("oxide-webgpu-direct-surface-ab"));
-    assert!(html.contains("oxide-webgpu-draw-item-coalescing-ab"));
-    assert!(html.contains("oxide-webgpu-draw-state-cache-ab"));
-    assert!(html.contains("oxide-webgpu-clip-state-ab"));
     assert!(html.contains("oxide-webgpu-id-mask-snapshot"));
     assert!(html.contains("oxide-renderer-backend"));
     assert!(html.contains("oxide-render-smoke"));
@@ -266,43 +272,35 @@ fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     assert!(html.contains("renderer_backend"));
     assert!(html.contains("last_draw_count"));
     assert!(html.contains("bench_frame_samples"));
-    assert!(html.contains("bench_webgpu_id_mask_ab"));
-    assert!(html.contains("bench_webgpu_upload_ab"));
-    assert!(html.contains("bench_webgpu_upload_scratch_ab"));
+    assert!(html.contains("bench_webgpu_id_mask_current"));
+    assert!(html.contains("bench_webgpu_upload_current"));
     assert!(html.contains("bench_webgpu_effect_uniform_ab"));
-    assert!(html.contains("bench_webgpu_backdrop_batch_ab"));
+    assert!(html.contains("bench_webgpu_backdrop_batch_current"));
     assert!(html.contains("bench_webgpu_scene3d_ab"));
     assert!(html.contains("bench_webgpu_mixed_matrix"));
     assert!(html.contains("bench_webgpu_layer_effects_matrix"));
     assert!(html.contains("bench_webgpu_clean_layer_ab"));
     assert!(html.contains("bench_webgpu_command_family_matrix"));
-    assert!(html.contains("bench_webgpu_glyph_run_ab"));
+    assert!(html.contains("bench_webgpu_glyph_run_current"));
     assert!(html.contains("bench_webgpu_neon_marker_ab"));
     assert!(html.contains("bench_webgpu_direct_surface_ab"));
-    assert!(html.contains("bench_webgpu_draw_item_coalescing_ab"));
-    assert!(html.contains("bench_webgpu_draw_state_cache_ab"));
-    assert!(html.contains("bench_webgpu_clip_state_ab"));
     assert!(html.contains("render_webgpu_app_snapshot"));
     assert!(html.contains("render_webgpu_scene3d_snapshot"));
     assert!(html.contains("render_webgpu_id_mask_snapshot"));
     assert!(html.contains("app_snapshot"));
     assert!(html.contains("scene3d_snapshot"));
     assert!(html.contains("id_mask_snapshot"));
-    assert!(html.contains("upload_ab"));
-    assert!(html.contains("upload_scratch_ab"));
+    assert!(html.contains("upload_current"));
     assert!(html.contains("effect_uniform_ab"));
-    assert!(html.contains("backdrop_batch_ab"));
+    assert!(html.contains("backdrop_batch_current"));
     assert!(html.contains("scene3d_ab"));
     assert!(html.contains("mixed_matrix"));
     assert!(html.contains("layer_effects_matrix"));
     assert!(html.contains("clean_layer_ab"));
     assert!(html.contains("command_family_matrix"));
-    assert!(html.contains("glyph_run_ab"));
+    assert!(html.contains("glyph_run_current"));
     assert!(html.contains("neon_marker_ab"));
     assert!(html.contains("direct_surface_ab"));
-    assert!(html.contains("draw_item_coalescing_ab"));
-    assert!(html.contains("draw_state_cache_ab"));
-    assert!(html.contains("clip_state_ab"));
 }
 
 #[test]
@@ -327,22 +325,27 @@ fn host_visual_startup_requires_async_webgpu() {
 #[test]
 fn host_exposes_webgpu_id_mask_ab_benchmark() {
     let source = include_str!("../src/lib.rs");
+    assert!(source.contains("pub fn bench_canvas_indexed_quads"));
+    assert!(source.contains("oxide_renderer_web::bench_canvas_indexed_quads"));
+    assert!(source.contains("create_hidden_canvas"));
     assert!(source.contains("pub async fn bench_webgpu_id_mask_ab"));
-    assert!(source.contains("pub async fn bench_webgpu_upload_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_id_mask_current"));
+    assert!(source.contains("pub async fn bench_webgpu_upload_current"));
+    assert!(!source.contains("pub async fn bench_webgpu_upload_ab"));
     assert!(source.contains("pub async fn bench_webgpu_upload_scratch_ab"));
     assert!(source.contains("pub async fn bench_webgpu_effect_uniform_ab"));
-    assert!(source.contains("pub async fn bench_webgpu_backdrop_batch_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_backdrop_batch_current"));
     assert!(source.contains("pub async fn bench_webgpu_scene3d_ab"));
     assert!(source.contains("pub async fn bench_webgpu_mixed_matrix"));
     assert!(source.contains("pub async fn bench_webgpu_layer_effects_matrix"));
     assert!(source.contains("pub async fn bench_webgpu_clean_layer_ab"));
     assert!(source.contains("pub async fn bench_webgpu_command_family_matrix"));
-    assert!(source.contains("pub async fn bench_webgpu_glyph_run_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_glyph_run_current"));
     assert!(source.contains("pub async fn bench_webgpu_neon_marker_ab"));
     assert!(source.contains("pub async fn bench_webgpu_direct_surface_ab"));
     assert!(source.contains("pub async fn bench_webgpu_draw_item_coalescing_ab"));
     assert!(source.contains("pub async fn bench_webgpu_draw_state_cache_ab"));
-    assert!(source.contains("pub async fn bench_webgpu_clip_state_ab"));
+    assert!(!source.contains("pub async fn bench_webgpu_clip_state_ab"));
     assert!(source.contains("OXIDE_WASM_ALLOCATOR"));
     assert!(source.contains("oxide_wasm_alloc_counter::CountingAllocator"));
     assert!(source.contains("WebGpuAllocationSummary"));
@@ -389,22 +392,20 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("WebGpuUploadBenchResources"));
     assert!(source.contains("bench_webgpu_sampled_case"));
     assert!(source.contains("resources.glyph_frame(renderer, true)"));
-    assert!(source.contains("resources.glyph_frame(renderer, false)"));
     assert!(source.contains("resources.image_frame(renderer, true)"));
-    assert!(source.contains("resources.image_frame(renderer, false)"));
     assert!(source.contains("resources.upload_scratch_frame(renderer)"));
     assert!(source.contains("resources.effect_uniform_frame(renderer)"));
     assert!(source.contains("resources.backdrop_batch_frame(renderer)"));
     assert!(source.contains("resources.mixed_frame(renderer)"));
     assert!(source.contains("resources.layer_effects_frame(renderer)"));
     assert!(source.contains("resources.clean_layer_frame(renderer, false)"));
-    assert!(source.contains("resources.clean_layer_frame(renderer, true)"));
+    assert!(!source.contains("resources.clean_layer_frame(renderer, true)"));
     assert!(source.contains("resources.command_family_frame(renderer)"));
     assert!(source.contains("resources.glyph_run_frame(renderer)"));
     assert!(source.contains("resources.neon_marker_frame(renderer)"));
     assert!(source.contains("resources.direct_surface_frame(renderer)"));
     assert!(source.contains("resources.draw_state_cache_frame(renderer)"));
-    assert!(source.contains("resources.clip_state_frame(renderer)"));
+    assert!(!source.contains("resources.clip_state_frame(renderer)"));
     assert!(source.contains("fn upload_scratch_frame"));
     assert!(source.contains("fn effect_uniform_frame"));
     assert!(source.contains("fn backdrop_batch_frame"));
@@ -415,7 +416,7 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("fn neon_marker_frame"));
     assert!(source.contains("fn direct_surface_frame"));
     assert!(source.contains("fn draw_state_cache_frame"));
-    assert!(source.contains("fn clip_state_frame"));
+    assert!(!source.contains("fn clip_state_frame"));
     assert!(source.contains("bench_resources: Option<WebGpuUploadBenchResources>"));
     assert!(source.contains("fn ensure_upload_bench_resources"));
     assert!(source.contains("fn with_upload_bench_resources"));
@@ -440,8 +441,6 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("WEBGPU_DRAW_STATE_CACHE_DRAWS"));
     assert!(source.contains("WEBGPU_DRAW_STATE_CACHE_COLUMNS"));
     assert!(source.contains("WEBGPU_DRAW_ITEM_COALESCE_EXPECTED_ITEMS"));
-    assert!(source.contains("WEBGPU_CLIP_STATE_DRAWS"));
-    assert!(source.contains("WEBGPU_CLIP_STATE_RUNS"));
     assert!(source.contains("expected_layers=3"));
     assert!(source.contains("expected_damage_rects=3"));
     assert!(source.contains("expected_backdrops={WEBGPU_LAYER_EFFECT_BACKDROPS}"));
@@ -463,9 +462,6 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
         source.contains("expected_current_draw_items={WEBGPU_DRAW_ITEM_COALESCE_EXPECTED_ITEMS}")
     );
     assert!(source.contains("expected_draw_items={WEBGPU_DRAW_STATE_CACHE_DRAWS}"));
-    assert!(source.contains("expected_draw_items={WEBGPU_CLIP_STATE_DRAWS}"));
-    assert!(source.contains("expected_clip_runs={WEBGPU_CLIP_STATE_RUNS}"));
-    assert!(source.contains("expected_clip_depth=2"));
     assert!(source.contains("expected_backdrops={WEBGPU_EFFECT_UNIFORM_BACKDROPS}"));
     assert!(source.contains("expected_backdrops={WEBGPU_BACKDROP_BATCH_BACKDROPS}"));
     assert!(source.contains("set_draw_state_cache_enabled_for_benchmark"));
@@ -492,15 +488,16 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("webgpu_adapter_feature_supported(&adapter, \"timestamp-query\")"));
     assert!(source.contains("pub async fn bench_frame_samples"));
     assert!(source.contains("pub async fn bench_webgpu_id_mask_ab"));
-    assert!(source.contains("pub async fn bench_webgpu_upload_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_id_mask_current"));
+    assert!(source.contains("pub async fn bench_webgpu_upload_current"));
+    assert!(!source.contains("pub async fn bench_webgpu_upload_ab"));
     assert!(source.contains("pub async fn bench_webgpu_effect_uniform_ab"));
-    assert!(source.contains("pub async fn bench_webgpu_backdrop_batch_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_backdrop_batch_current"));
     assert!(source.contains("pub async fn bench_webgpu_scene3d_ab"));
     assert!(source.contains("pub async fn bench_webgpu_mixed_matrix"));
     assert!(source.contains("pub async fn bench_webgpu_command_family_matrix"));
-    assert!(source.contains("pub async fn bench_webgpu_glyph_run_ab"));
+    assert!(source.contains("pub async fn bench_webgpu_glyph_run_current"));
     assert!(source.contains("pub async fn bench_webgpu_direct_surface_ab"));
-    assert!(source.contains("pub async fn bench_webgpu_clip_state_ab"));
     assert!(source.contains("settle_renderer_timestamps"));
     assert!(source.contains("WEBGPU_TIMESTAMP_SETTLE_RAFS"));
     assert!(source.contains("fn timestamp_stats_cover_row"));
@@ -637,8 +634,8 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("missed_frame_ratio_{refresh_hz}hz"));
     assert!(source.contains("hitch_ratio_{refresh_hz}hz"));
     assert!(source.contains("vertex_revision: revision"));
-    assert!(source.contains("glyph_legacy_over_current"));
-    assert!(source.contains("image_legacy_over_current"));
+    assert!(source.contains("sampled_case_metrics(&glyph_current, \"glyph_current\")"));
+    assert!(source.contains("sampled_case_metrics(&image_current, \"image_current\")"));
 }
 
 #[test]
@@ -777,65 +774,69 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("benchmark_trace_intervals"));
     assert!(script.contains("traceBenchmarkIntervals"));
     assert!(script.contains("Browser Trace"));
+    assert!(script.contains("browser_startup"));
+    assert!(script.contains("function webPackageStats"));
+    assert!(script.contains("--startup-report"));
+    assert!(script.contains("--startup-repeats"));
+    assert!(script.contains("startup_only"));
+    assert!(script.contains("--canvas-report"));
+    assert!(script.contains("--canvas-repeats"));
+    assert!(script.contains("--canvas-samples"));
+    assert!(script.contains("--canvas-frames"));
+    assert!(script.contains("--canvas-quads"));
+    assert!(script.contains("canvas_diag=1"));
+    assert!(script.contains("function canvasDiagnosticReport"));
+    assert!(script.contains("web.wasm.canvas.indexed_quads"));
+    assert!(script.contains("web.wasm.canvas.browser_startup"));
+    assert!(script.contains("function startupRepeatReport"));
+    assert!(script.contains("web.wasm.webgpu.browser_startup_repeats"));
+    assert!(script.contains("Browser Startup"));
+    assert!(script.contains("package_bytes"));
     assert!(script.contains("upload_samples"));
     assert!(script.contains("scene3d_samples"));
     assert!(script.contains("mixed_samples"));
     assert!(script.contains("app_snapshot"));
     assert!(script.contains("scene3d_snapshot"));
     assert!(script.contains("id_mask_snapshot"));
-    assert!(script.contains("upload_ab"));
-    assert!(script.contains("upload_scratch_ab"));
-    assert!(script.contains("backdrop_batch_ab"));
+    assert!(script.contains("upload_current"));
+    assert!(script.contains("backdrop_batch_current"));
     assert!(script.contains("scene3d_ab"));
     assert!(script.contains("mixed_matrix"));
     assert!(script.contains("layer_effects_matrix"));
     assert!(script.contains("clean_layer_ab"));
     assert!(script.contains("command_family_matrix"));
-    assert!(script.contains("glyph_run_ab"));
+    assert!(script.contains("glyph_run_current"));
     assert!(script.contains("neon_marker_ab"));
-    assert!(script.contains("draw_item_coalescing_ab"));
-    assert!(script.contains("draw_state_cache_ab"));
-    assert!(script.contains("clip_state_ab"));
     assert!(script.contains("--json-report"));
     assert!(script.contains("--markdown-report"));
     assert!(script.contains("web.wasm.webgpu.id_mask_compositor.current"));
     assert!(script.contains("web.wasm.webgpu.glyph_atlas_upload.current_dirty"));
-    assert!(script.contains("web.wasm.webgpu.glyph_atlas_upload.legacy_full"));
     assert!(script.contains("web.wasm.webgpu.image_upload.current_dirty"));
-    assert!(script.contains("web.wasm.webgpu.image_upload.legacy_full"));
-    assert!(script.contains("web.wasm.webgpu.upload_scratch.current_reuse"));
-    assert!(script.contains("web.wasm.webgpu.upload_scratch.legacy_temp_alloc"));
     assert!(script.contains("web.wasm.webgpu.effect_uniform.current_batched"));
-    assert!(script.contains("web.wasm.webgpu.effect_uniform.legacy_write_each"));
+    assert!(!script.contains("rows: [\"web.wasm.webgpu.effect_uniform.current_batched\", \"web.wasm.webgpu.effect_uniform.legacy_write_each\"]"));
     assert!(script.contains("web.wasm.webgpu.backdrop_batch.current_coalesced"));
-    assert!(script.contains("web.wasm.webgpu.backdrop_batch.legacy_per_backdrop_copy"));
+    assert!(!script.contains("web.wasm.webgpu.backdrop_batch.legacy_per_backdrop_copy"));
     assert!(script.contains("web.wasm.webgpu.scene3d.reused_mesh"));
     assert!(script.contains("web.wasm.webgpu.scene3d.recreate_mesh"));
     assert!(script.contains("web.wasm.webgpu.scene3d.stress_reused_mesh"));
     assert!(script.contains("web.wasm.webgpu.scene3d.stress_recreate_mesh"));
     assert!(script.contains("web.wasm.webgpu.mixed_text_image_effects"));
-    assert!(script.contains("web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched"));
+    assert!(!script.contains("rows: [\"web.wasm.webgpu.mixed_text_image_effects\", \"web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched\"]"));
     assert!(script.contains("web.wasm.webgpu.layer_damage_effects"));
-    assert!(script.contains("web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched"));
+    assert!(!script.contains("web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched"));
     assert!(script.contains("web.wasm.webgpu.clean_layer.clean_reuse"));
-    assert!(script.contains("web.wasm.webgpu.clean_layer.dirty_rerender"));
+    assert!(script.contains("clean-layer dirty rerender row must stay retired"));
+    assert!(!script.contains("rows: [\"web.wasm.webgpu.clean_layer.clean_reuse\", \"web.wasm.webgpu.clean_layer.dirty_rerender\"]"));
     assert!(script.contains("web.wasm.webgpu.command_family_matrix"));
-    assert!(script.contains("web.wasm.webgpu.command_family_matrix.legacy_rebind"));
+    assert!(!script.contains("web.wasm.webgpu.command_family_matrix.legacy_rebind"));
     assert!(script.contains("web.wasm.webgpu.glyph_run.current"));
-    assert!(script.contains("web.wasm.webgpu.glyph_run.legacy_rebind"));
+    assert!(!script.contains("web.wasm.webgpu.glyph_run.legacy_rebind"));
     assert!(script.contains("web.wasm.webgpu.neon_marker.current"));
-    assert!(script.contains("web.wasm.webgpu.neon_marker.legacy_rebind"));
+    assert!(!script.contains("rows: [\"web.wasm.webgpu.neon_marker.current\", \"web.wasm.webgpu.neon_marker.legacy_rebind\"]"));
+    assert!(script.contains("neon-marker legacy row must stay retired"));
     assert!(script.contains("web.wasm.webgpu.direct_surface.current"));
-    assert!(script.contains("web.wasm.webgpu.direct_surface.legacy_scene_present"));
-    assert!(script.contains("web.wasm.webgpu.draw_item_coalescing.current"));
-    assert!(script.contains("web.wasm.webgpu.draw_item_coalescing.legacy_uncoalesced"));
-    assert!(script.contains("web.wasm.webgpu.draw_state_cache.current"));
-    assert!(script.contains("web.wasm.webgpu.draw_state_cache.legacy_rebind"));
-    assert!(script.contains("web.wasm.webgpu.clip_state_cache.current"));
-    assert!(script.contains("web.wasm.webgpu.clip_state_cache.legacy_rebind"));
-    assert!(script.contains("legacy_over_current"));
-    assert!(script.contains("glyph_legacy_over_current"));
-    assert!(script.contains("image_legacy_over_current"));
+    assert!(!script.contains("rows: [\"web.wasm.webgpu.direct_surface.current\", \"web.wasm.webgpu.direct_surface.legacy_scene_present\"]"));
+    assert!(script.contains("direct-surface legacy row must stay retired"));
     assert!(script.contains("effect_uniform_summary"));
     assert!(script.contains("backdrop_batch_summary"));
     assert!(script.contains("mixed_summary"));
@@ -845,7 +846,6 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("glyph_run_summary"));
     assert!(script.contains("neon_marker_summary"));
     assert!(script.contains("direct_surface_summary"));
-    assert!(script.contains("draw_item_coalescing_summary"));
     assert!(script.contains("Mixed Scene Summary"));
     assert!(script.contains("Layer Effects Summary"));
     assert!(script.contains("Clean Layer Summary"));
@@ -853,10 +853,7 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("Glyph Run Summary"));
     assert!(script.contains("Neon Marker Summary"));
     assert!(script.contains("Direct Surface Summary"));
-    assert!(script.contains("Draw Item Coalescing Summary"));
     assert!(script.contains("recreate_over_reused"));
-    assert!(script.contains("draw_state_summary"));
-    assert!(script.contains("clip_state_summary"));
     assert!(script.contains("warmResourceChurnSummary"));
     assert!(script.contains("warm_resource_churn"));
     assert!(script.contains("WARM_RESOURCE_CHURN_FIELDS"));
@@ -1014,16 +1011,11 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("function prefixedBackendCase"));
     assert!(script.contains("upload_summary"));
     assert!(script.contains("Upload Summary"));
-    assert!(script.contains("upload_scratch_summary"));
-    assert!(script.contains("Upload Scratch Summary"));
     assert!(script.contains("Effect Uniform Summary"));
     assert!(script.contains("current_gpu_timestamp_total_ns"));
-    assert!(script.contains("legacy_gpu_timestamp_total_ns"));
-    assert!(script.contains("legacy_gpu_over_current"));
+    assert!(script.contains("current_gpu_timestamp_passes"));
     assert!(script.contains("glyph_current_gpu_timestamp_total_ns"));
-    assert!(script.contains("glyph_legacy_gpu_timestamp_total_ns"));
     assert!(script.contains("image_current_gpu_timestamp_total_ns"));
-    assert!(script.contains("image_legacy_gpu_timestamp_total_ns"));
     assert!(script.contains("scene3d_summary"));
     assert!(script.contains("scene3d_stress_summary"));
     assert!(script.contains("Scene3D Summary"));
@@ -1040,7 +1032,7 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("expected_clip_runs"));
     assert!(script.contains("expected_clip_depth"));
     assert!(script.contains("expected_backdrops"));
-    assert!(script.contains("effect-uniform WebGPU A/B rows"));
+    assert!(script.contains("effect-uniform WebGPU current row"));
     assert!(script.contains("wasm_memory_total_growth_bytes"));
     assert!(script.contains("wasm_memory_max_growth_bytes"));
     assert!(script.contains("wasm_memory_growth_labels"));
@@ -1058,14 +1050,12 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("mark.js_heap_growth_bytes < 0.0"));
     assert!(script.contains("Chrome JS heap sampling and exposed GC"));
     assert!(script.contains("web benchmark report failed during"));
-    assert!(script.contains("draw-state cache WebGPU A/B rows"));
-    assert!(script.contains("clip-state cache WebGPU A/B rows"));
-    assert!(script.contains("glyph-run WebGPU A/B rows"));
-    assert!(script.contains("upload-scratch WebGPU A/B rows"));
+    assert!(script.contains("glyph-run WebGPU current row"));
     assert!(script.contains("function assertWebReportContract"));
     assert!(script.contains("GPU Stage Attribution"));
     assert!(script.contains("timestampMetricFields"));
     assert!(script.contains("timestamp-query-collected"));
+    assert!(script.contains("effect-uniform legacy row must stay retired"));
     assert!(script.contains("adapter.features+renderer.timestamp_writes"));
     assert!(script.contains("pass-family total"));
     assert!(script.contains("post-warmup resource creation"));
@@ -1076,8 +1066,9 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
 }
 
 #[test]
-fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
+fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
     let report = include_str!("../../../../benchmarks/web/latest.json");
+    assert!(report.contains("\"version\": 5"));
     assert!(report.contains("\"suite\": \"web-wasm\""));
     assert!(report.contains("\"webgpu\": \"webgpu=device-ok\""));
     assert!(report.contains("\"webgpu_timing\": \"timestamp_query="));
@@ -1086,30 +1077,21 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(report.contains("\"source\": \"adapter.features+renderer.timestamp_writes\""));
     assert!(report.contains("\"backend\": \"webgpu\""));
     assert!(report.contains("\"capture_target\": \"app\""));
+    assert!(report.contains("\"browser_startup\": {"));
     assert!(report.contains("\"browser_trace\": {"));
     assert!(report.contains("\"warm_resource_churn\": {"));
     assert!(report.contains("\"wasm_allocation_audit\": {"));
 
     let frame = report_case_slice(report, "web.wasm.webgpu.frame_loop");
     let current = report_case_slice(report, "web.wasm.webgpu.id_mask_compositor.current");
-    let legacy = report_case_slice(report, "web.wasm.webgpu.id_mask_compositor.legacy_upload");
     let glyph_current =
         report_case_slice(report, "web.wasm.webgpu.glyph_atlas_upload.current_dirty");
-    let glyph_legacy = report_case_slice(report, "web.wasm.webgpu.glyph_atlas_upload.legacy_full");
     let image_current = report_case_slice(report, "web.wasm.webgpu.image_upload.current_dirty");
-    let image_legacy = report_case_slice(report, "web.wasm.webgpu.image_upload.legacy_full");
-    let upload_scratch_current =
-        report_case_slice(report, "web.wasm.webgpu.upload_scratch.current_reuse");
-    let upload_scratch_legacy =
-        report_case_slice(report, "web.wasm.webgpu.upload_scratch.legacy_temp_alloc");
     let effect_current =
         report_case_slice(report, "web.wasm.webgpu.effect_uniform.current_batched");
-    let effect_legacy =
-        report_case_slice(report, "web.wasm.webgpu.effect_uniform.legacy_write_each");
+    assert!(!report.contains("\"id\": \"web.wasm.webgpu.effect_uniform.legacy_write_each\""));
     let backdrop_batch_current =
         report_case_slice(report, "web.wasm.webgpu.backdrop_batch.current_coalesced");
-    let backdrop_batch_legacy =
-        report_case_slice(report, "web.wasm.webgpu.backdrop_batch.legacy_per_backdrop_copy");
     let scene3d_reused = report_case_slice(report, "web.wasm.webgpu.scene3d.reused_mesh");
     let scene3d_recreate = report_case_slice(report, "web.wasm.webgpu.scene3d.recreate_mesh");
     let scene3d_stress_reused =
@@ -1117,36 +1099,20 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     let scene3d_stress_recreate =
         report_case_slice(report, "web.wasm.webgpu.scene3d.stress_recreate_mesh");
     let mixed = report_case_slice(report, "web.wasm.webgpu.mixed_text_image_effects");
-    let mixed_legacy = report_case_slice(
-        report,
-        "web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched",
-    );
+    assert!(!report.contains("\"id\": \"web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched\""));
     let layer_effects = report_case_slice(report, "web.wasm.webgpu.layer_damage_effects");
-    let layer_effects_legacy =
-        report_case_slice(report, "web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched");
+    assert!(!report.contains("\"id\": \"web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched\""));
     let clean_layer = report_case_slice(report, "web.wasm.webgpu.clean_layer.clean_reuse");
-    let dirty_layer = report_case_slice(report, "web.wasm.webgpu.clean_layer.dirty_rerender");
+    assert!(!report.contains("\"id\": \"web.wasm.webgpu.clean_layer.dirty_rerender\""));
     let command_family = report_case_slice(report, "web.wasm.webgpu.command_family_matrix");
-    let command_family_legacy =
-        report_case_slice(report, "web.wasm.webgpu.command_family_matrix.legacy_rebind");
+    assert!(!report.contains("\"id\": \"web.wasm.webgpu.command_family_matrix.legacy_rebind\""));
     let glyph_run_current = report_case_slice(report, "web.wasm.webgpu.glyph_run.current");
-    let glyph_run_legacy = report_case_slice(report, "web.wasm.webgpu.glyph_run.legacy_rebind");
+    assert!(!report.contains("\"id\": \"web.wasm.webgpu.glyph_run.legacy_rebind\""));
     let neon_marker_current = report_case_slice(report, "web.wasm.webgpu.neon_marker.current");
-    let neon_marker_legacy = report_case_slice(report, "web.wasm.webgpu.neon_marker.legacy_rebind");
+    assert!(!report.contains("\"id\": \"web.wasm.webgpu.neon_marker.legacy_rebind\""));
     let direct_surface_current =
         report_case_slice(report, "web.wasm.webgpu.direct_surface.current");
-    let direct_surface_legacy =
-        report_case_slice(report, "web.wasm.webgpu.direct_surface.legacy_scene_present");
-    let draw_item_coalescing_current =
-        report_case_slice(report, "web.wasm.webgpu.draw_item_coalescing.current");
-    let draw_item_coalescing_legacy =
-        report_case_slice(report, "web.wasm.webgpu.draw_item_coalescing.legacy_uncoalesced");
-    let draw_state_current = report_case_slice(report, "web.wasm.webgpu.draw_state_cache.current");
-    let draw_state_legacy =
-        report_case_slice(report, "web.wasm.webgpu.draw_state_cache.legacy_rebind");
-    let clip_state_current = report_case_slice(report, "web.wasm.webgpu.clip_state_cache.current");
-    let clip_state_legacy =
-        report_case_slice(report, "web.wasm.webgpu.clip_state_cache.legacy_rebind");
+    assert!(!report.contains("\"id\": \"web.wasm.webgpu.direct_surface.legacy_scene_present\""));
 
     assert!(
         report_f64(frame, "p50_ms") > 0.0,
@@ -1216,12 +1182,12 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(report_f64(frame, "cpu_resource_table_scratch_bytes") > 0.0);
     assert_eq!(report_u64(frame, "cpu_resource_table_scratch_grows"), 0);
     assert_eq!(report_u64(frame, "cpu_resource_table_scratch_growth_bytes"), 0);
-    assert!(report_f64(current, "p50_ms") > 0.0, "current WebGPU A/B row must have nonzero timing");
-    assert!(report_f64(legacy, "p50_ms") > report_f64(current, "p50_ms"));
+    assert!(
+        report_f64(current, "p50_ms") > 0.0,
+        "current WebGPU ID-mask row must have nonzero timing"
+    );
     assert!(report_f64(current, "p99_ms") >= report_f64(current, "p50_ms"));
-    assert!(report_f64(legacy, "p99_ms") >= report_f64(legacy, "p50_ms"));
     assert_eq!(report_f64(current, "missed_frame_ratio_120hz"), 0.0);
-    assert!(report_f64(legacy, "hitch_ratio_60hz") >= 0.0);
     assert!(report_f64(current, "draws") > 0.0);
     assert!(report_f64(current, "id_mask_draws") > 0.0);
     assert!(report_f64(current, "id_mask_raster_passes") > 0.0);
@@ -1238,16 +1204,8 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert_eq!(report_u64(current, "sampler_creates"), 0);
     assert_eq!(report_u64(current, "cpu_scratch_grows"), 0);
     assert_eq!(report_u64(current, "cpu_scratch_growth_bytes"), 0);
-    assert!(report_f64(legacy, "render_passes") > 0.0);
-    assert_eq!(report_pass_family_total(legacy), report_f64(legacy, "render_passes"));
-    assert!(report_f64(legacy, "command_buffers") > 0.0);
-    assert!(
-        report_f64(legacy, "buffer_upload_bytes") >= report_f64(current, "buffer_upload_bytes")
-    );
-    assert!(report_f64(legacy, "texture_upload_bytes") >= 0.0);
-    assert!(report_f64(legacy, "pipeline_creates") >= 0.0);
     assert_eq!(report_u64(current, "vertices"), 9600);
-    assert_eq!(report_u64(legacy, "vertex_bytes"), 307200);
+    assert_eq!(report_u64(current, "vertex_bytes"), 307200);
     assert!(report_f64(scene3d_reused, "p50_ms") > 0.0);
     assert!(report_f64(scene3d_recreate, "p50_ms") > 0.0);
     assert!(report_f64(scene3d_reused, "scene3d_draws") > 0.0);
@@ -1278,276 +1236,95 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert_eq!(report_u64(scene3d_stress_reused, "meshes"), 2);
     assert!(report_u64(scene3d_stress_reused, "instances") >= 64);
     assert!(report_f64(glyph_current, "p50_ms") > 0.0);
-    assert!(report_f64(glyph_legacy, "p50_ms") > 0.0);
     assert!(report_f64(glyph_current, "glyph_quads") > 0.0);
-    assert!(report_f64(glyph_legacy, "glyph_quads") > 0.0);
     assert_eq!(
         report_f64(glyph_current, "gpu_timestamp_passes"),
         report_f64(glyph_current, "render_passes")
     );
-    assert_eq!(
-        report_f64(glyph_legacy, "gpu_timestamp_passes"),
-        report_f64(glyph_legacy, "render_passes")
-    );
     assert!(report_f64(glyph_current, "gpu_timestamp_total_ns") > 0.0);
-    assert!(report_f64(glyph_legacy, "gpu_timestamp_total_ns") > 0.0);
-    assert!(
-        report_f64(glyph_current, "texture_upload_bytes")
-            < report_f64(glyph_legacy, "texture_upload_bytes")
-    );
     assert!(report_f64(glyph_current, "buffer_upload_bytes") > 0.0);
     assert_eq!(report_u64(glyph_current, "atlas_width"), 1024);
     assert_eq!(report_u64(glyph_current, "dirty_width"), 64);
     assert!(report_f64(image_current, "p50_ms") > 0.0);
-    assert!(report_f64(image_legacy, "p50_ms") > 0.0);
     assert!(report_f64(image_current, "image_draws") > 0.0);
-    assert!(report_f64(image_legacy, "image_draws") > 0.0);
     assert_eq!(
         report_f64(image_current, "gpu_timestamp_passes"),
         report_f64(image_current, "render_passes")
     );
-    assert_eq!(
-        report_f64(image_legacy, "gpu_timestamp_passes"),
-        report_f64(image_legacy, "render_passes")
-    );
     assert!(report_f64(image_current, "gpu_timestamp_total_ns") > 0.0);
-    assert!(report_f64(image_legacy, "gpu_timestamp_total_ns") > 0.0);
-    assert!(
-        report_f64(image_current, "texture_upload_bytes")
-            < report_f64(image_legacy, "texture_upload_bytes")
-    );
     assert_eq!(report_u64(image_current, "image_width"), 256);
     assert_eq!(report_u64(image_current, "dirty_width"), 64);
-    assert_eq!(report_u64(upload_scratch_current, "image_upload_temp_allocs"), 0);
-    assert_eq!(report_u64(upload_scratch_current, "image_upload_temp_bytes"), 0);
-    assert!(report_u64(upload_scratch_current, "image_upload_scratch_bytes") > 0);
-    assert!(report_u64(upload_scratch_legacy, "image_upload_temp_allocs") > 0);
-    assert!(report_u64(upload_scratch_legacy, "image_upload_temp_bytes") > 0);
-    assert_eq!(
-        report_f64(upload_scratch_current, "texture_upload_bytes"),
-        report_f64(upload_scratch_legacy, "texture_upload_bytes"),
-    );
-    assert!(report_u64(upload_scratch_current, "updates") > 0);
-    assert!(report_f64(upload_scratch_current, "image_draws") > 0.0);
-    assert!(report_f64(upload_scratch_current, "glyph_quads") > 0.0);
     assert!(
         report_f64(effect_current, "backdrop_draws")
             >= report_f64(effect_current, "expected_backdrops")
     );
-    assert!(
-        report_f64(effect_legacy, "backdrop_draws")
-            >= report_f64(effect_legacy, "expected_backdrops")
-    );
     assert_eq!(report_u64(effect_current, "effect_uniform_writes"), 1);
-    assert!(
-        report_u64(effect_legacy, "effect_uniform_writes")
-            > report_u64(effect_current, "effect_uniform_writes")
-    );
+    assert!(report_u64(effect_current, "effect_uniform_bytes") > 0);
     assert_eq!(
         report_f64(effect_current, "effect_uniform_slots"),
         report_f64(effect_current, "expected_backdrops")
     );
     assert_eq!(
-        report_f64(effect_legacy, "effect_uniform_slots"),
-        report_f64(effect_legacy, "expected_backdrops")
-    );
-    assert_eq!(
-        report_f64(effect_current, "texture_copies"),
-        report_f64(effect_legacy, "texture_copies")
-    );
-    assert_eq!(
         report_f64(effect_current, "gpu_timestamp_passes"),
         report_f64(effect_current, "render_passes")
     );
-    assert_eq!(
-        report_f64(effect_legacy, "gpu_timestamp_passes"),
-        report_f64(effect_legacy, "render_passes")
-    );
+    assert!(report_f64(effect_current, "gpu_timestamp_total_ns") > 0.0);
     assert!(
         report_f64(backdrop_batch_current, "backdrop_draws")
             >= report_f64(backdrop_batch_current, "expected_backdrops")
     );
-    assert!(
-        report_f64(backdrop_batch_legacy, "backdrop_draws")
-            >= report_f64(backdrop_batch_legacy, "expected_backdrops")
-    );
-    assert_eq!(
-        report_f64(backdrop_batch_current, "effect_uniform_writes"),
-        report_f64(backdrop_batch_legacy, "effect_uniform_writes")
-    );
+    assert_eq!(report_u64(backdrop_batch_current, "effect_uniform_writes"), 1);
     assert_eq!(
         report_f64(backdrop_batch_current, "effect_uniform_slots"),
-        report_f64(backdrop_batch_legacy, "effect_uniform_slots")
+        report_f64(backdrop_batch_current, "expected_backdrops")
     );
-    assert!(
-        report_f64(backdrop_batch_current, "texture_copies")
-            < report_f64(backdrop_batch_legacy, "texture_copies")
-    );
-    assert!(
-        report_f64(backdrop_batch_current, "render_passes")
-            < report_f64(backdrop_batch_legacy, "render_passes")
-    );
+    assert_eq!(report_u64(backdrop_batch_current, "texture_copies"), 1);
+    assert_eq!(report_u64(backdrop_batch_current, "render_passes"), 4);
     assert_eq!(
         report_f64(backdrop_batch_current, "gpu_timestamp_passes"),
         report_f64(backdrop_batch_current, "render_passes")
     );
-    assert_eq!(
-        report_f64(backdrop_batch_legacy, "gpu_timestamp_passes"),
-        report_f64(backdrop_batch_legacy, "render_passes")
-    );
     assert!(report_f64(mixed, "image_draws") > 0.0);
-    assert!(report_f64(mixed_legacy, "image_draws") > 0.0);
     assert!(report_f64(mixed, "glyph_quads") > 0.0);
-    assert!(report_f64(mixed_legacy, "glyph_quads") > 0.0);
     assert!(report_f64(mixed, "layer_draws") > 0.0);
-    assert!(report_f64(mixed_legacy, "layer_draws") > 0.0);
     assert!(report_f64(mixed, "clip_depth_peak") > 0.0);
-    assert!(report_f64(mixed_legacy, "clip_depth_peak") > 0.0);
     assert!(report_f64(mixed, "backdrop_draws") > 0.0);
-    assert!(report_f64(mixed_legacy, "backdrop_draws") > 0.0);
     assert!(report_f64(mixed, "visual_effect_draws") > 0.0);
-    assert!(report_f64(mixed_legacy, "visual_effect_draws") > 0.0);
     assert!(report_f64(mixed, "spinner_draws") > 0.0);
-    assert!(report_f64(mixed_legacy, "spinner_draws") > 0.0);
     assert!(report_f64(mixed, "render_passes") > 1.0);
     assert!(report_f64(mixed, "texture_copies") > 0.0);
     assert_eq!(report_pass_family_total(mixed), report_f64(mixed, "render_passes"));
-    assert_eq!(report_pass_family_total(mixed_legacy), report_f64(mixed_legacy, "render_passes"));
     assert!(report_f64(mixed, "damage_rects") > 0.0);
-    assert!(report_f64(mixed_legacy, "damage_rects") > 0.0);
-    assert_eq!(report_f64(mixed, "draw_items"), report_f64(mixed_legacy, "draw_items"));
-    assert_eq!(report_f64(mixed, "glyph_quads"), report_f64(mixed_legacy, "glyph_quads"));
-    assert_eq!(report_f64(mixed, "image_draws"), report_f64(mixed_legacy, "image_draws"));
     assert!(report_f64(mixed, "image_draws") >= report_f64(mixed, "image_tiles"));
-    assert!(report_f64(mixed_legacy, "image_draws") >= report_f64(mixed_legacy, "image_tiles"));
-    assert_eq!(report_f64(mixed, "backdrop_draws"), report_f64(mixed_legacy, "backdrop_draws"));
-    assert_eq!(
-        report_f64(mixed, "visual_effect_draws"),
-        report_f64(mixed_legacy, "visual_effect_draws")
-    );
-    assert_eq!(report_f64(mixed, "layer_draws"), report_f64(mixed_legacy, "layer_draws"));
-    assert_eq!(report_f64(mixed, "damage_rects"), report_f64(mixed_legacy, "damage_rects"));
-    assert!(
-        report_f64(mixed, "draw_pipeline_binds") < report_f64(mixed_legacy, "draw_pipeline_binds")
-    );
-    assert!(
-        report_f64(mixed, "draw_bind_group_binds")
-            <= report_f64(mixed_legacy, "draw_bind_group_binds")
-    );
-    assert!(report_f64(mixed, "draw_scissor_sets") < report_f64(mixed_legacy, "draw_scissor_sets"));
-    assert!(
-        report_f64(mixed, "effect_uniform_writes")
-            < report_f64(mixed_legacy, "effect_uniform_writes")
-    );
-    assert!(report_f64(mixed, "texture_copies") <= report_f64(mixed_legacy, "texture_copies"));
-    assert!(report_f64(mixed, "render_passes") <= report_f64(mixed_legacy, "render_passes"));
+    assert!(report_f64(mixed, "draw_pipeline_binds") > 0.0);
+    assert!(report_f64(mixed, "draw_bind_group_binds") > 0.0);
+    assert!(report_f64(mixed, "draw_scissor_sets") > 0.0);
+    assert!(report_f64(mixed, "effect_uniform_writes") > 0.0);
     assert_eq!(report_f64(mixed, "gpu_timestamp_passes"), report_f64(mixed, "render_passes"));
-    assert_eq!(
-        report_f64(mixed_legacy, "gpu_timestamp_passes"),
-        report_f64(mixed_legacy, "render_passes")
-    );
     assert!(report_f64(layer_effects, "image_draws") > 0.0);
-    assert!(report_f64(layer_effects_legacy, "image_draws") > 0.0);
     assert!(report_f64(layer_effects, "glyph_quads") > 0.0);
-    assert!(report_f64(layer_effects_legacy, "glyph_quads") > 0.0);
     assert!(
         report_f64(layer_effects, "layer_draws") >= report_f64(layer_effects, "expected_layers")
     );
-    assert!(
-        report_f64(layer_effects_legacy, "layer_draws")
-            >= report_f64(layer_effects_legacy, "expected_layers")
-    );
     assert!(report_f64(layer_effects, "backdrop_draws") > 0.0);
-    assert!(report_f64(layer_effects_legacy, "backdrop_draws") > 0.0);
     assert!(report_f64(layer_effects, "visual_effect_draws") > 0.0);
-    assert!(report_f64(layer_effects_legacy, "visual_effect_draws") > 0.0);
     assert!(report_f64(layer_effects, "spinner_draws") > 0.0);
-    assert!(report_f64(layer_effects_legacy, "spinner_draws") > 0.0);
     assert!(report_f64(layer_effects, "clip_depth_peak") > 0.0);
-    assert!(report_f64(layer_effects_legacy, "clip_depth_peak") > 0.0);
     assert!(report_f64(layer_effects, "texture_copies") > 0.0);
-    assert!(report_f64(layer_effects_legacy, "texture_copies") > 0.0);
     assert!(
         report_f64(layer_effects, "damage_rects")
             >= report_f64(layer_effects, "expected_damage_rects")
     );
-    assert!(
-        report_f64(layer_effects_legacy, "damage_rects")
-            >= report_f64(layer_effects_legacy, "expected_damage_rects")
-    );
-    assert_eq!(
-        report_f64(layer_effects, "draw_items"),
-        report_f64(layer_effects_legacy, "draw_items")
-    );
-    assert_eq!(
-        report_f64(layer_effects, "glyph_quads"),
-        report_f64(layer_effects_legacy, "glyph_quads")
-    );
-    assert_eq!(
-        report_f64(layer_effects, "image_draws"),
-        report_f64(layer_effects_legacy, "image_draws")
-    );
     assert!(report_f64(layer_effects, "image_draws") >= report_f64(layer_effects, "image_tiles"));
-    assert!(
-        report_f64(layer_effects_legacy, "image_draws")
-            >= report_f64(layer_effects_legacy, "image_tiles")
-    );
-    assert_eq!(
-        report_f64(layer_effects, "layer_draws"),
-        report_f64(layer_effects_legacy, "layer_draws")
-    );
-    assert_eq!(
-        report_f64(layer_effects, "damage_rects"),
-        report_f64(layer_effects_legacy, "damage_rects")
-    );
-    assert_eq!(
-        report_f64(layer_effects, "backdrop_draws"),
-        report_f64(layer_effects_legacy, "backdrop_draws")
-    );
-    assert_eq!(
-        report_f64(layer_effects, "visual_effect_draws"),
-        report_f64(layer_effects_legacy, "visual_effect_draws")
-    );
-    assert_eq!(
-        report_f64(layer_effects, "spinner_draws"),
-        report_f64(layer_effects_legacy, "spinner_draws")
-    );
-    assert!(
-        report_f64(layer_effects, "draw_pipeline_binds")
-            < report_f64(layer_effects_legacy, "draw_pipeline_binds")
-    );
-    assert!(
-        report_f64(layer_effects, "draw_bind_group_binds")
-            < report_f64(layer_effects_legacy, "draw_bind_group_binds")
-    );
-    assert!(
-        report_f64(layer_effects, "draw_scissor_sets")
-            < report_f64(layer_effects_legacy, "draw_scissor_sets")
-    );
-    assert!(
-        report_f64(layer_effects, "effect_uniform_writes")
-            < report_f64(layer_effects_legacy, "effect_uniform_writes")
-    );
-    assert!(
-        report_f64(layer_effects, "texture_copies")
-            < report_f64(layer_effects_legacy, "texture_copies")
-    );
-    assert!(
-        report_f64(layer_effects, "render_passes")
-            < report_f64(layer_effects_legacy, "render_passes")
-    );
+    assert!(report_f64(layer_effects, "draw_pipeline_binds") > 0.0);
+    assert!(report_f64(layer_effects, "draw_bind_group_binds") > 0.0);
+    assert!(report_f64(layer_effects, "draw_scissor_sets") > 0.0);
+    assert!(report_f64(layer_effects, "effect_uniform_writes") > 0.0);
+    assert!(report_f64(layer_effects, "render_passes") > 0.0);
     assert_eq!(report_pass_family_total(layer_effects), report_f64(layer_effects, "render_passes"));
-    assert_eq!(
-        report_pass_family_total(layer_effects_legacy),
-        report_f64(layer_effects_legacy, "render_passes")
-    );
     assert_eq!(
         report_f64(layer_effects, "gpu_timestamp_passes"),
         report_f64(layer_effects, "render_passes")
-    );
-    assert_eq!(
-        report_f64(layer_effects_legacy, "gpu_timestamp_passes"),
-        report_f64(layer_effects_legacy, "render_passes")
     );
     assert_eq!(report_f64(clean_layer, "layer_cache_hits"), 1.0);
     assert_eq!(report_f64(clean_layer, "layer_cache_misses"), 0.0);
@@ -1556,431 +1333,159 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
             > report_f64(clean_layer, "draw_items")
     );
     assert_eq!(report_f64(clean_layer, "layer_passes"), 0.0);
-    assert_eq!(report_f64(dirty_layer, "layer_cache_hits"), 0.0);
-    assert_eq!(report_f64(dirty_layer, "layer_cache_misses"), 1.0);
-    assert_eq!(report_f64(dirty_layer, "layer_cache_skipped_draws"), 0.0);
-    assert_eq!(report_f64(dirty_layer, "layer_passes"), 1.0);
-    assert!(report_f64(clean_layer, "draw_items") < report_f64(dirty_layer, "draw_items"));
-    assert!(
-        report_f64(clean_layer, "draw_pipeline_binds")
-            < report_f64(dirty_layer, "draw_pipeline_binds")
-    );
-    assert!(
-        report_f64(clean_layer, "draw_bind_group_binds")
-            < report_f64(dirty_layer, "draw_bind_group_binds")
-    );
-    assert!(
-        report_f64(clean_layer, "draw_scissor_sets") < report_f64(dirty_layer, "draw_scissor_sets")
-    );
-    assert!(report_f64(clean_layer, "render_passes") < report_f64(dirty_layer, "render_passes"));
     assert_eq!(report_pass_family_total(clean_layer), report_f64(clean_layer, "render_passes"));
-    assert_eq!(report_pass_family_total(dirty_layer), report_f64(dirty_layer, "render_passes"));
     assert_eq!(
         report_f64(clean_layer, "gpu_timestamp_passes"),
         report_f64(clean_layer, "render_passes")
-    );
-    assert_eq!(
-        report_f64(dirty_layer, "gpu_timestamp_passes"),
-        report_f64(dirty_layer, "render_passes")
     );
     assert!(
         report_f64(command_family, "image_mesh_draws")
             >= report_f64(command_family, "expected_image_meshes")
     );
     assert!(
-        report_f64(command_family_legacy, "image_mesh_draws")
-            >= report_f64(command_family_legacy, "expected_image_meshes")
-    );
-    assert!(
         report_f64(command_family, "nine_slice_draws")
             >= report_f64(command_family, "expected_nine_slices")
-    );
-    assert!(
-        report_f64(command_family_legacy, "nine_slice_draws")
-            >= report_f64(command_family_legacy, "expected_nine_slices")
     );
     assert!(
         report_f64(command_family, "sdf_glyph_quads")
             >= report_f64(command_family, "expected_sdf_glyphs")
     );
-    assert!(
-        report_f64(command_family_legacy, "sdf_glyph_quads")
-            >= report_f64(command_family_legacy, "expected_sdf_glyphs")
-    );
     assert_eq!(report_f64(command_family, "expected_camera_bg"), 0.0);
-    assert_eq!(report_f64(command_family_legacy, "expected_camera_bg"), 0.0);
     assert_eq!(report_f64(command_family, "camera_bg_draws"), 0.0);
-    assert_eq!(report_f64(command_family_legacy, "camera_bg_draws"), 0.0);
     assert!(report_f64(command_family, "image_draws") >= 10.0);
     assert_eq!(
-        report_f64(command_family, "draw_items"),
-        report_f64(command_family_legacy, "draw_items")
-    );
-    assert_eq!(
         report_f64(command_family, "image_mesh_draws"),
-        report_f64(command_family_legacy, "image_mesh_draws")
+        report_f64(command_family, "expected_image_meshes")
     );
     assert_eq!(
         report_f64(command_family, "nine_slice_draws"),
-        report_f64(command_family_legacy, "nine_slice_draws")
+        report_f64(command_family, "expected_nine_slices")
     );
     assert_eq!(
         report_f64(command_family, "sdf_glyph_quads"),
-        report_f64(command_family_legacy, "sdf_glyph_quads")
+        report_f64(command_family, "expected_sdf_glyphs")
     );
-    assert!(
-        report_f64(command_family, "draw_pipeline_binds")
-            < report_f64(command_family_legacy, "draw_pipeline_binds")
-    );
-    assert!(
-        report_f64(command_family, "draw_bind_group_binds")
-            < report_f64(command_family_legacy, "draw_bind_group_binds")
-    );
-    assert!(
-        report_f64(command_family, "draw_scissor_sets")
-            < report_f64(command_family_legacy, "draw_scissor_sets")
+    assert_eq!(
+        report_pass_family_total(command_family),
+        report_f64(command_family, "render_passes")
     );
     assert_eq!(
         report_f64(command_family, "gpu_timestamp_passes"),
         report_f64(command_family, "render_passes")
     );
-    assert_eq!(
-        report_f64(command_family_legacy, "gpu_timestamp_passes"),
-        report_f64(command_family_legacy, "render_passes")
-    );
     assert_eq!(report_u64(glyph_run_current, "expected_glyph_runs"), 64);
-    assert_eq!(report_u64(glyph_run_legacy, "expected_glyph_runs"), 64);
     assert_eq!(report_u64(glyph_run_current, "expected_glyphs_per_run"), 8);
-    assert_eq!(report_u64(glyph_run_legacy, "expected_glyphs_per_run"), 8);
     assert_eq!(report_u64(glyph_run_current, "expected_glyph_quads"), 512);
-    assert_eq!(report_u64(glyph_run_legacy, "expected_glyph_quads"), 512);
     assert_eq!(report_u64(glyph_run_current, "expected_sdf_runs"), 32);
-    assert_eq!(report_u64(glyph_run_legacy, "expected_sdf_runs"), 32);
     assert_eq!(report_u64(glyph_run_current, "expected_sdf_glyph_quads"), 256);
-    assert_eq!(report_u64(glyph_run_legacy, "expected_sdf_glyph_quads"), 256);
     assert_eq!(report_u64(glyph_run_current, "expected_draw_items"), 65);
-    assert_eq!(report_u64(glyph_run_legacy, "expected_draw_items"), 65);
     assert_eq!(
         report_f64(glyph_run_current, "draw_items"),
         report_f64(glyph_run_current, "expected_draw_items")
-    );
-    assert_eq!(
-        report_f64(glyph_run_legacy, "draw_items"),
-        report_f64(glyph_run_legacy, "expected_draw_items")
     );
     assert_eq!(
         report_f64(glyph_run_current, "glyph_quads"),
         report_f64(glyph_run_current, "expected_glyph_quads")
     );
     assert_eq!(
-        report_f64(glyph_run_legacy, "glyph_quads"),
-        report_f64(glyph_run_legacy, "expected_glyph_quads")
-    );
-    assert_eq!(
         report_f64(glyph_run_current, "sdf_glyph_quads"),
         report_f64(glyph_run_current, "expected_sdf_glyph_quads")
     );
-    assert_eq!(
-        report_f64(glyph_run_legacy, "sdf_glyph_quads"),
-        report_f64(glyph_run_legacy, "expected_sdf_glyph_quads")
-    );
-    assert_eq!(
-        report_f64(glyph_run_current, "render_passes"),
-        report_f64(glyph_run_legacy, "render_passes")
-    );
-    assert_eq!(
-        report_f64(glyph_run_current, "draw_passes"),
-        report_f64(glyph_run_legacy, "draw_passes")
-    );
-    assert!(
-        report_f64(glyph_run_current, "draw_pipeline_binds")
-            < report_f64(glyph_run_legacy, "draw_pipeline_binds")
-    );
-    assert!(
-        report_f64(glyph_run_current, "draw_bind_group_binds")
-            < report_f64(glyph_run_legacy, "draw_bind_group_binds")
-    );
-    assert!(
-        report_f64(glyph_run_current, "draw_scissor_sets")
-            < report_f64(glyph_run_legacy, "draw_scissor_sets")
-    );
+    assert_eq!(report_f64(glyph_run_current, "render_passes"), 1.0);
+    assert_eq!(report_f64(glyph_run_current, "draw_passes"), 1.0);
+    assert!(report_f64(glyph_run_current, "draw_pipeline_binds") > 0.0);
+    assert!(report_f64(glyph_run_current, "draw_bind_group_binds") > 0.0);
+    assert!(report_f64(glyph_run_current, "draw_scissor_sets") > 0.0);
     assert_eq!(
         report_f64(glyph_run_current, "gpu_timestamp_passes"),
         report_f64(glyph_run_current, "render_passes")
-    );
-    assert_eq!(
-        report_f64(glyph_run_legacy, "gpu_timestamp_passes"),
-        report_f64(glyph_run_legacy, "render_passes")
-    );
-    assert_eq!(report_u64(neon_marker_current, "expected_markers"), 64);
-    assert_eq!(report_u64(neon_marker_legacy, "expected_markers"), 64);
-    assert_eq!(report_u64(neon_marker_current, "expected_draw_items"), 192);
-    assert_eq!(report_u64(neon_marker_legacy, "expected_draw_items"), 192);
-    assert_eq!(
-        report_f64(neon_marker_current, "draw_items"),
-        report_f64(neon_marker_current, "expected_draw_items")
-    );
-    assert_eq!(
-        report_f64(neon_marker_legacy, "draw_items"),
-        report_f64(neon_marker_legacy, "expected_draw_items")
-    );
-    assert_eq!(
-        report_f64(neon_marker_current, "solid_tris"),
-        report_f64(neon_marker_legacy, "solid_tris")
-    );
-    assert!(report_f64(neon_marker_current, "solid_tris") > 0.0);
-    assert!(
-        report_f64(neon_marker_current, "draw_pipeline_binds")
-            < report_f64(neon_marker_legacy, "draw_pipeline_binds")
-    );
-    assert_eq!(
-        report_f64(neon_marker_current, "draw_bind_group_binds"),
-        report_f64(neon_marker_legacy, "draw_bind_group_binds")
-    );
-    assert!(
-        report_f64(neon_marker_current, "draw_scissor_sets")
-            < report_f64(neon_marker_legacy, "draw_scissor_sets")
-    );
-    assert_eq!(
-        report_f64(neon_marker_current, "gpu_timestamp_passes"),
-        report_f64(neon_marker_current, "render_passes")
-    );
-    assert_eq!(
-        report_f64(neon_marker_legacy, "gpu_timestamp_passes"),
-        report_f64(neon_marker_legacy, "render_passes")
-    );
-    assert_eq!(report_f64(direct_surface_current, "expected_image_draws"), 384.0);
-    assert_eq!(report_f64(direct_surface_legacy, "expected_image_draws"), 384.0);
+   );
+   assert_eq!(report_u64(neon_marker_current, "expected_markers"), 64);
+   assert_eq!(report_u64(neon_marker_current, "expected_draw_items"), 192);
+   assert_eq!(
+       report_f64(neon_marker_current, "draw_items"),
+       report_f64(neon_marker_current, "expected_draw_items")
+   );
+   assert!(report_f64(neon_marker_current, "solid_tris") > 0.0);
+   assert_eq!(report_f64(neon_marker_current, "draw_pipeline_binds"), 1.0);
+   assert_eq!(report_f64(neon_marker_current, "draw_bind_group_binds"), 0.0);
+   assert_eq!(report_f64(neon_marker_current, "draw_scissor_sets"), 1.0);
+   assert_eq!(
+       report_f64(neon_marker_current, "gpu_timestamp_passes"),
+       report_f64(neon_marker_current, "render_passes")
+   );
+   assert_eq!(report_f64(direct_surface_current, "expected_image_draws"), 384.0);
     assert_eq!(report_f64(direct_surface_current, "expected_draw_items"), 385.0);
-    assert_eq!(report_f64(direct_surface_legacy, "expected_draw_items"), 385.0);
     assert_eq!(
         report_f64(direct_surface_current, "draw_items"),
         report_f64(direct_surface_current, "expected_draw_items")
     );
     assert_eq!(
-        report_f64(direct_surface_legacy, "draw_items"),
-        report_f64(direct_surface_legacy, "expected_draw_items")
-    );
-    assert_eq!(
         report_f64(direct_surface_current, "image_draws"),
         report_f64(direct_surface_current, "expected_image_draws")
     );
-    assert_eq!(
-        report_f64(direct_surface_legacy, "image_draws"),
-        report_f64(direct_surface_legacy, "expected_image_draws")
-    );
-    assert_eq!(
-        report_f64(direct_surface_current, "draw_passes"),
-        report_f64(direct_surface_legacy, "draw_passes")
-    );
+    assert_eq!(report_f64(direct_surface_current, "draw_passes"), 1.0);
     assert_eq!(report_f64(direct_surface_current, "clear_passes"), 0.0);
-    assert!(report_f64(direct_surface_legacy, "clear_passes") > 0.0);
     assert_eq!(report_f64(direct_surface_current, "present_passes"), 0.0);
-    assert!(report_f64(direct_surface_legacy, "present_passes") > 0.0);
-    assert!(
-        report_f64(direct_surface_current, "render_passes")
-            < report_f64(direct_surface_legacy, "render_passes")
-    );
-    assert!(
-        report_f64(direct_surface_current, "gpu_timestamp_total_ns")
-            < report_f64(direct_surface_legacy, "gpu_timestamp_total_ns")
-    );
+    assert_eq!(report_f64(direct_surface_current, "render_passes"), 1.0);
+    assert_eq!(report_f64(direct_surface_current, "texture_copies"), 0.0);
+    assert!(report_f64(direct_surface_current, "gpu_timestamp_total_ns") > 0.0);
     assert_eq!(
         report_f64(direct_surface_current, "gpu_timestamp_passes"),
         report_f64(direct_surface_current, "render_passes")
     );
-    assert_eq!(
-        report_f64(direct_surface_legacy, "gpu_timestamp_passes"),
-        report_f64(direct_surface_legacy, "render_passes")
-    );
-    assert_eq!(report_f64(draw_item_coalescing_current, "expected_source_draw_items"), 1024.0);
-    assert_eq!(report_f64(draw_item_coalescing_legacy, "expected_source_draw_items"), 1024.0);
-    assert_eq!(report_f64(draw_item_coalescing_current, "expected_current_draw_items"), 1.0);
-    assert_eq!(report_f64(draw_item_coalescing_legacy, "expected_current_draw_items"), 1.0);
-    assert_eq!(
-        report_f64(draw_item_coalescing_current, "draw_items"),
-        report_f64(draw_item_coalescing_current, "expected_current_draw_items")
-    );
-    assert_eq!(
-        report_f64(draw_item_coalescing_legacy, "draw_items"),
-        report_f64(draw_item_coalescing_legacy, "expected_source_draw_items")
-    );
-    assert_eq!(
-        report_f64(draw_item_coalescing_current, "draw_items_coalesced"),
-        report_f64(draw_item_coalescing_current, "expected_source_draw_items")
-            - report_f64(draw_item_coalescing_current, "expected_current_draw_items")
-    );
-    assert_eq!(report_f64(draw_item_coalescing_legacy, "draw_items_coalesced"), 0.0);
-    assert_eq!(
-        report_f64(draw_item_coalescing_current, "draws"),
-        report_f64(draw_item_coalescing_current, "draw_items")
-    );
-    assert_eq!(
-        report_f64(draw_item_coalescing_legacy, "draws"),
-        report_f64(draw_item_coalescing_legacy, "draw_items")
-    );
-    assert!(
-        report_f64(draw_item_coalescing_current, "draw_items")
-            < report_f64(draw_item_coalescing_legacy, "draw_items")
-    );
-    assert!(
-        report_f64(draw_item_coalescing_current, "draw_pipeline_binds")
-            <= report_f64(draw_item_coalescing_legacy, "draw_pipeline_binds")
-    );
-    assert!(
-        report_f64(draw_item_coalescing_current, "draw_bind_group_binds")
-            <= report_f64(draw_item_coalescing_legacy, "draw_bind_group_binds")
-    );
-    assert!(
-        report_f64(draw_item_coalescing_current, "draw_scissor_sets")
-            <= report_f64(draw_item_coalescing_legacy, "draw_scissor_sets")
-    );
-    assert_eq!(
-        report_f64(draw_item_coalescing_current, "gpu_timestamp_passes"),
-        report_f64(draw_item_coalescing_current, "render_passes")
-    );
-    assert_eq!(
-        report_f64(draw_item_coalescing_legacy, "gpu_timestamp_passes"),
-        report_f64(draw_item_coalescing_legacy, "render_passes")
-    );
-    assert!(
-        report_f64(draw_state_current, "draw_items")
-            >= report_f64(draw_state_current, "expected_draw_items")
-    );
-    assert!(
-        report_f64(draw_state_legacy, "draw_items")
-            >= report_f64(draw_state_legacy, "expected_draw_items")
-    );
-    assert_eq!(
-        report_f64(draw_state_current, "draws"),
-        report_f64(draw_state_current, "draw_items")
-    );
-    assert_eq!(report_f64(draw_state_legacy, "draws"), report_f64(draw_state_legacy, "draw_items"));
-    assert!(
-        report_f64(draw_state_current, "draw_pipeline_binds")
-            < report_f64(draw_state_legacy, "draw_pipeline_binds")
-    );
-    assert!(
-        report_f64(draw_state_current, "draw_bind_group_binds")
-            < report_f64(draw_state_legacy, "draw_bind_group_binds")
-    );
-    assert!(
-        report_f64(draw_state_current, "draw_scissor_sets")
-            < report_f64(draw_state_legacy, "draw_scissor_sets")
-    );
-    assert_eq!(
-        report_f64(draw_state_current, "gpu_timestamp_passes"),
-        report_f64(draw_state_current, "render_passes")
-    );
-    assert_eq!(
-        report_f64(draw_state_legacy, "gpu_timestamp_passes"),
-        report_f64(draw_state_legacy, "render_passes")
-    );
-    assert!(
-        report_f64(clip_state_current, "draw_items")
-            >= report_f64(clip_state_current, "expected_draw_items")
-    );
-    assert!(
-        report_f64(clip_state_legacy, "draw_items")
-            >= report_f64(clip_state_legacy, "expected_draw_items")
-    );
-    assert_eq!(
-        report_f64(clip_state_current, "draws"),
-        report_f64(clip_state_current, "draw_items")
-    );
-    assert_eq!(report_f64(clip_state_legacy, "draws"), report_f64(clip_state_legacy, "draw_items"));
-    assert!(
-        report_f64(clip_state_current, "clip_depth_peak")
-            >= report_f64(clip_state_current, "expected_clip_depth")
-    );
-    assert!(
-        report_f64(clip_state_legacy, "clip_depth_peak")
-            >= report_f64(clip_state_legacy, "expected_clip_depth")
-    );
-    assert!(
-        report_f64(clip_state_current, "draw_pipeline_binds")
-            < report_f64(clip_state_legacy, "draw_pipeline_binds")
-    );
-    assert!(
-        report_f64(clip_state_current, "draw_bind_group_binds")
-            < report_f64(clip_state_legacy, "draw_bind_group_binds")
-    );
-    assert!(
-        report_f64(clip_state_current, "draw_scissor_sets")
-            <= report_f64(clip_state_current, "expected_clip_runs")
-    );
-    assert!(
-        report_f64(clip_state_current, "draw_scissor_sets")
-            < report_f64(clip_state_legacy, "draw_scissor_sets")
-    );
-    assert_eq!(
-        report_f64(clip_state_current, "gpu_timestamp_passes"),
-        report_f64(clip_state_current, "render_passes")
-    );
-    assert_eq!(
-        report_f64(clip_state_legacy, "gpu_timestamp_passes"),
-        report_f64(clip_state_legacy, "render_passes")
-    );
 
-    let summary = report_section_slice(report, "ab_summary");
-    assert!(
-        summary.contains("\"id\": \"web.wasm.webgpu.id_mask_compositor.current_vs_legacy_upload\"")
-    );
-    assert!(report_f64(summary, "legacy_over_current") > 1.0);
+    let summary = report_section_slice(report, "id_mask_summary");
+    assert!(summary.contains("\"id\": \"web.wasm.webgpu.id_mask_compositor.current\""));
     assert!(report_f64(summary, "current_render_passes") > 0.0);
-    assert!(report_f64(summary, "legacy_render_passes") > 0.0);
-    assert!(
-        report_f64(summary, "legacy_buffer_upload_bytes")
-            >= report_f64(summary, "current_buffer_upload_bytes")
-    );
-    let draw_state_summary = report_section_slice(report, "draw_state_summary");
-    assert!(draw_state_summary
-        .contains("\"id\": \"web.wasm.webgpu.draw_state_cache.current_vs_legacy_rebind\""));
-    assert!(report_f64(draw_state_summary, "legacy_over_current") > 1.0);
-    assert!(
-        report_f64(draw_state_summary, "current_draw_pipeline_binds")
-            < report_f64(draw_state_summary, "legacy_draw_pipeline_binds")
-    );
-    let clip_state_summary = report_section_slice(report, "clip_state_summary");
-    assert!(clip_state_summary
-        .contains("\"id\": \"web.wasm.webgpu.clip_state_cache.current_vs_legacy_rebind\""));
-    assert!(report_f64(clip_state_summary, "legacy_over_current") > 1.0);
-    assert!(
-        report_f64(clip_state_summary, "current_clip_depth_peak")
-            >= report_f64(clip_state_summary, "expected_clip_depth")
-    );
-    assert!(
-        report_f64(clip_state_summary, "current_draw_scissor_sets")
-            <= report_f64(clip_state_summary, "expected_clip_runs")
-    );
-    assert!(
-        report_f64(clip_state_summary, "current_draw_scissor_sets")
-            < report_f64(clip_state_summary, "legacy_draw_scissor_sets")
-    );
+    assert!(report_f64(summary, "current_buffer_upload_bytes") > 0.0);
+    assert_eq!(report_u64(summary, "vertices"), 9600);
     let direct_surface_summary = report_section_slice(report, "direct_surface_summary");
     assert!(direct_surface_summary
-        .contains("\"id\": \"web.wasm.webgpu.direct_surface.current_vs_legacy_scene_present\""));
+        .contains("\"id\": \"web.wasm.webgpu.direct_surface.current\""));
+    assert!(!direct_surface_summary.contains("legacy_"));
+    assert_eq!(
+        report_f64(direct_surface_summary, "current_p50_ms"),
+        report_f64(direct_surface_current, "p50_ms")
+    );
+    assert_eq!(
+        report_f64(direct_surface_summary, "current_draw_items"),
+        report_f64(direct_surface_current, "draw_items")
+    );
+    assert_eq!(
+        report_f64(direct_surface_summary, "current_image_draws"),
+        report_f64(direct_surface_current, "image_draws")
+    );
+    assert_eq!(
+        report_f64(direct_surface_summary, "current_render_passes"),
+        report_f64(direct_surface_current, "render_passes")
+    );
+    assert_eq!(
+        report_f64(direct_surface_summary, "current_draw_passes"),
+        report_f64(direct_surface_current, "draw_passes")
+    );
+    assert_eq!(report_f64(direct_surface_summary, "current_clear_passes"), 0.0);
     assert_eq!(report_f64(direct_surface_summary, "current_present_passes"), 0.0);
-    assert!(report_f64(direct_surface_summary, "legacy_present_passes") > 0.0);
-    assert!(
-        report_f64(direct_surface_summary, "current_render_passes")
-            < report_f64(direct_surface_summary, "legacy_render_passes")
+    assert_eq!(
+        report_f64(direct_surface_summary, "current_texture_copies"),
+        report_f64(direct_surface_current, "texture_copies")
     );
-    assert!(
-        report_f64(direct_surface_summary, "current_gpu_timestamp_total_ns")
-            < report_f64(direct_surface_summary, "legacy_gpu_timestamp_total_ns")
+    assert_eq!(
+        report_f64(direct_surface_summary, "current_gpu_timestamp_total_ns"),
+        report_f64(direct_surface_current, "gpu_timestamp_total_ns")
     );
-    let draw_item_coalescing_summary = report_section_slice(report, "draw_item_coalescing_summary");
-    assert!(draw_item_coalescing_summary.contains(
-        "\"id\": \"web.wasm.webgpu.draw_item_coalescing.current_vs_legacy_uncoalesced\""
-    ));
-    assert!(report_f64(draw_item_coalescing_summary, "legacy_over_current") > 1.0);
-    assert_eq!(report_f64(draw_item_coalescing_summary, "expected_source_draw_items"), 1024.0);
-    assert_eq!(report_f64(draw_item_coalescing_summary, "expected_current_draw_items"), 1.0);
-    assert_eq!(report_f64(draw_item_coalescing_summary, "current_draw_items"), 1.0);
-    assert_eq!(report_f64(draw_item_coalescing_summary, "legacy_draw_items"), 1024.0);
-    assert_eq!(report_f64(draw_item_coalescing_summary, "current_draw_items_coalesced"), 1023.0);
-    assert_eq!(report_f64(draw_item_coalescing_summary, "legacy_draw_items_coalesced"), 0.0);
+    assert_eq!(
+        report_f64(direct_surface_summary, "current_gpu_timestamp_passes"),
+        report_f64(direct_surface_current, "gpu_timestamp_passes")
+    );
+    assert_eq!(
+        report_f64(direct_surface_summary, "expected_draw_items"),
+        report_f64(direct_surface_current, "expected_draw_items")
+    );
+    assert_eq!(
+        report_f64(direct_surface_summary, "expected_image_draws"),
+        report_f64(direct_surface_current, "expected_image_draws")
+    );
     let browser_trace = report_section_slice(report, "browser_trace");
     assert!(browser_trace.contains("\"status\": \"collected\""));
     assert!(browser_trace.contains("\"capture_phase\": \"benchmark-report\""));
@@ -1989,19 +1494,30 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(report_f64(browser_trace, "gpu_related_events") > 0.0);
     assert!(report_f64(browser_trace, "duration_us") > 0.0);
     assert!(report_f64(browser_trace, "category_count") > 0.0);
-    assert_eq!(report_u64(browser_trace, "benchmark_trace_interval_count"), 17);
+    assert_eq!(report_u64(browser_trace, "benchmark_trace_interval_count"), 13);
     assert!(browser_trace.contains("\"benchmark_trace_interval_labels\""));
     assert!(browser_trace.contains("\"benchmark_trace_intervals\""));
     assert!(report_f64(browser_trace, "webgpu_related_events") > 0.0);
+    let browser_startup = report_section_slice(report, "browser_startup");
+    assert!(browser_startup.contains("\"id\": \"web.wasm.webgpu.browser_startup\""));
+    assert!(browser_startup.contains("\"source\": \"performance.now+node.fs.stat\""));
+    assert!(report_f64(browser_startup, "wasm_init_ms") > 0.0);
+    assert!(report_f64(browser_startup, "app_init_ms") > 0.0);
+    assert!(report_f64(browser_startup, "report_ready_ms") > 0.0);
+    assert!(report_f64(browser_startup, "wasm_memory_bytes") > 0.0);
+    assert_eq!(report_u64(browser_startup, "package_file_count"), 4);
+    assert!(report_f64(browser_startup, "package_bytes") > 0.0);
+    assert!(report_f64(browser_startup, "wasm_bytes") > 0.0);
+    assert!(report_f64(browser_startup, "js_bytes") > 0.0);
     let gpu_timestamp_stage_breakdown =
         report_section_slice(report, "gpu_timestamp_stage_breakdown");
     assert!(gpu_timestamp_stage_breakdown
         .contains("\"id\": \"web.wasm.webgpu.gpu_timestamp_stage_breakdown\""));
-    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "row_count"), 37);
-    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "collected_rows"), 37);
+    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "row_count"), 17);
+    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "collected_rows"), 17);
     assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "stage_count"), 9);
-    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "row_detail_count"), 37);
-    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "total_render_passes"), 214);
+    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "row_detail_count"), 17);
+    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "total_render_passes"), 98);
     assert_eq!(
         report_u64(gpu_timestamp_stage_breakdown, "total_render_passes"),
         report_u64(gpu_timestamp_stage_breakdown, "total_timestamp_passes"),
@@ -2021,9 +1537,9 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     let warm_resource_churn = report_section_slice(report, "warm_resource_churn");
     assert!(warm_resource_churn
         .contains("\"id\": \"web.wasm.webgpu.warm_resource_churn.current_rows\""));
-    assert_eq!(report_u64(warm_resource_churn, "checked_rows"), 19);
-    assert_eq!(report_u64(warm_resource_churn, "excluded_rows"), 18);
-    assert_eq!(report_u64(warm_resource_churn, "row_detail_count"), 19);
+    assert_eq!(report_u64(warm_resource_churn, "checked_rows"), 15);
+    assert_eq!(report_u64(warm_resource_churn, "excluded_rows"), 2);
+    assert_eq!(report_u64(warm_resource_churn, "row_detail_count"), 15);
     assert!(warm_resource_churn.contains("\"row_details\": ["));
     assert_eq!(report_u64(warm_resource_churn, "total_buffer_grows"), 0);
     assert_eq!(report_u64(warm_resource_churn, "total_texture_creates"), 0);
@@ -2063,15 +1579,15 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert_eq!(report_u64(warm_resource_churn, "total_cpu_resource_table_scratch_grows"), 0);
     assert_eq!(report_u64(warm_resource_churn, "total_cpu_resource_table_scratch_growth_bytes"), 0);
 
-    let wasm_allocation_audit = report_section_slice(report, "wasm_allocation_audit");
-    assert!(wasm_allocation_audit
-        .contains("\"id\": \"web.wasm.webgpu.wasm_allocation_audit.current_rows\""));
-    assert_eq!(report_u64(wasm_allocation_audit, "checked_count"), 19);
-    assert_eq!(report_u64(wasm_allocation_audit, "excluded_count"), 18);
-    assert_eq!(report_u64(wasm_allocation_audit, "row_detail_count"), 19);
-    assert!(report_u64(wasm_allocation_audit, "total_wasm_alloc_count") > 0);
-    assert!(report_u64(wasm_allocation_audit, "total_wasm_alloc_bytes") > 0);
-    assert_eq!(report_u64(wasm_allocation_audit, "total_wasm_realloc_count"), 0);
+   let wasm_allocation_audit = report_section_slice(report, "wasm_allocation_audit");
+   assert!(wasm_allocation_audit
+       .contains("\"id\": \"web.wasm.webgpu.wasm_allocation_audit.current_rows\""));
+   assert_eq!(report_u64(wasm_allocation_audit, "checked_count"), 15);
+   assert_eq!(report_u64(wasm_allocation_audit, "excluded_count"), 2);
+   assert_eq!(report_u64(wasm_allocation_audit, "row_detail_count"), 15);
+   assert!(report_u64(wasm_allocation_audit, "total_wasm_alloc_count") > 0);
+   assert!(report_u64(wasm_allocation_audit, "total_wasm_alloc_bytes") > 0);
+   assert_eq!(report_u64(wasm_allocation_audit, "total_wasm_realloc_count"), 0);
     assert_eq!(report_u64(wasm_allocation_audit, "total_wasm_realloc_grow_bytes"), 0);
     assert!(report_f64(wasm_allocation_audit, "budget_wasm_allocs_per_frame") <= 7.0);
     assert!(report_f64(wasm_allocation_audit, "budget_wasm_alloc_bytes_per_frame") <= 144.0);
@@ -2164,123 +1680,108 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(submit_stage_allocations.contains("\"stage\": \"finish_queue\""));
     let backend_path_coverage = report_section_slice(report, "backend_path_coverage");
     assert!(backend_path_coverage.contains("\"id\": \"web.wasm.webgpu.backend_path_coverage\""));
-    assert_eq!(report_u64(backend_path_coverage, "expected_path_count"), 19);
-    assert_eq!(report_u64(backend_path_coverage, "covered_path_count"), 19);
+    assert_eq!(report_u64(backend_path_coverage, "expected_path_count"), 15);
+    assert_eq!(report_u64(backend_path_coverage, "covered_path_count"), 15);
     assert_eq!(report_u64(backend_path_coverage, "missing_path_count"), 0);
     assert!(backend_path_coverage.contains("\"id\": \"glyph_atlas_upload\""));
     assert!(backend_path_coverage.contains("\"id\": \"image_upload\""));
     assert!(backend_path_coverage.contains("\"id\": \"backdrop_batch\""));
-    assert!(backend_path_coverage.contains("\"id\": \"mixed_text_image_effects\""));
     assert!(backend_path_coverage
+        .contains("\"web.wasm.webgpu.backdrop_batch.current_coalesced\""));
+    assert!(!backend_path_coverage
+        .contains("\"web.wasm.webgpu.backdrop_batch.legacy_per_backdrop_copy\""));
+    assert!(backend_path_coverage.contains("\"id\": \"mixed_text_image_effects\""));
+    assert!(!backend_path_coverage
         .contains("\"web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched\""));
     assert!(backend_path_coverage.contains("\"id\": \"layer_damage_effects\""));
-    assert!(backend_path_coverage
+    assert!(!backend_path_coverage
         .contains("\"web.wasm.webgpu.layer_damage_effects.legacy_rebind_unbatched\""));
     assert!(backend_path_coverage.contains("\"id\": \"clean_layer_reuse\""));
-    assert!(backend_path_coverage.contains("\"web.wasm.webgpu.clean_layer.dirty_rerender\""));
+    assert!(backend_path_coverage.contains("\"web.wasm.webgpu.clean_layer.clean_reuse\""));
+    assert!(!backend_path_coverage.contains("\"web.wasm.webgpu.clean_layer.dirty_rerender\""));
     assert!(backend_path_coverage.contains("\"id\": \"command_family_matrix\""));
+    assert!(backend_path_coverage.contains("\"web.wasm.webgpu.command_family_matrix\""));
     assert!(
-        backend_path_coverage.contains("\"web.wasm.webgpu.command_family_matrix.legacy_rebind\"")
+        !backend_path_coverage.contains("\"web.wasm.webgpu.command_family_matrix.legacy_rebind\"")
     );
     assert!(backend_path_coverage.contains("\"id\": \"glyph_run\""));
-    assert!(backend_path_coverage.contains("\"web.wasm.webgpu.glyph_run.legacy_rebind\""));
+    assert!(backend_path_coverage.contains("\"web.wasm.webgpu.glyph_run.current\""));
+    assert!(!backend_path_coverage.contains("\"web.wasm.webgpu.glyph_run.legacy_rebind\""));
     assert!(backend_path_coverage.contains("\"id\": \"neon_marker\""));
-    assert!(backend_path_coverage.contains("\"web.wasm.webgpu.neon_marker.legacy_rebind\""));
+    assert!(backend_path_coverage.contains("\"web.wasm.webgpu.neon_marker.current\""));
+    assert!(!backend_path_coverage.contains("\"web.wasm.webgpu.neon_marker.legacy_rebind\""));
     assert!(backend_path_coverage.contains("\"id\": \"direct_surface\""));
+    assert!(backend_path_coverage.contains("\"web.wasm.webgpu.direct_surface.current\""));
     assert!(
-        backend_path_coverage.contains("\"web.wasm.webgpu.direct_surface.legacy_scene_present\"")
+        !backend_path_coverage.contains("\"web.wasm.webgpu.direct_surface.legacy_scene_present\"")
     );
-    assert!(backend_path_coverage.contains("\"id\": \"draw_item_coalescing\""));
-    assert!(backend_path_coverage
-        .contains("\"web.wasm.webgpu.draw_item_coalescing.legacy_uncoalesced\""));
     let upload_summary = report_section_slice(report, "upload_summary");
-    assert!(
-        upload_summary.contains("\"id\": \"web.wasm.webgpu.upload.current_dirty_vs_legacy_full\"")
+    assert!(upload_summary.contains("\"id\": \"web.wasm.webgpu.upload.current_dirty\""));
+    assert!(!report.contains("\"id\": \"web.wasm.webgpu.glyph_atlas_upload.legacy_full\""));
+    assert!(!report.contains("\"id\": \"web.wasm.webgpu.image_upload.legacy_full\""));
+    assert_eq!(
+        report_f64(upload_summary, "glyph_current_texture_upload_bytes"),
+        report_f64(glyph_current, "texture_upload_bytes")
     );
-    assert!(report_f64(upload_summary, "glyph_legacy_over_current") >= 0.0);
-    assert!(report_f64(upload_summary, "image_legacy_over_current") >= 0.0);
-    assert!(
-        report_f64(upload_summary, "glyph_current_texture_upload_bytes")
-            < report_f64(upload_summary, "glyph_legacy_texture_upload_bytes")
-    );
-    assert!(
-        report_f64(upload_summary, "image_current_texture_upload_bytes")
-            < report_f64(upload_summary, "image_legacy_texture_upload_bytes")
+    assert_eq!(
+        report_f64(upload_summary, "image_current_texture_upload_bytes"),
+        report_f64(image_current, "texture_upload_bytes")
     );
     assert_eq!(
         report_f64(upload_summary, "glyph_current_gpu_timestamp_total_ns"),
         report_f64(glyph_current, "gpu_timestamp_total_ns")
     );
     assert_eq!(
-        report_f64(upload_summary, "glyph_legacy_gpu_timestamp_total_ns"),
-        report_f64(glyph_legacy, "gpu_timestamp_total_ns")
-    );
-    assert_eq!(
         report_f64(upload_summary, "image_current_gpu_timestamp_total_ns"),
         report_f64(image_current, "gpu_timestamp_total_ns")
     );
     assert_eq!(
-        report_f64(upload_summary, "image_legacy_gpu_timestamp_total_ns"),
-        report_f64(image_legacy, "gpu_timestamp_total_ns")
-    );
-    assert!(report_f64(upload_summary, "glyph_legacy_gpu_over_current") > 0.0);
-    assert!(report_f64(upload_summary, "image_legacy_gpu_over_current") > 0.0);
-    let upload_scratch_summary = report_section_slice(report, "upload_scratch_summary");
-    assert!(upload_scratch_summary
-        .contains("\"id\": \"web.wasm.webgpu.upload_scratch.current_reuse_vs_legacy_temp_alloc\""));
-    assert!(report_f64(upload_scratch_summary, "legacy_over_current") >= 0.0);
-    assert_eq!(report_u64(upload_scratch_summary, "current_temp_allocs"), 0);
-    assert!(report_u64(upload_scratch_summary, "legacy_temp_allocs") > 0);
-    assert_eq!(report_u64(upload_scratch_summary, "current_temp_bytes"), 0);
-    assert!(report_u64(upload_scratch_summary, "legacy_temp_bytes") > 0);
-    assert!(
-        report_u64(upload_scratch_summary, "current_scratch_grows")
-            <= report_u64(upload_scratch_summary, "legacy_scratch_grows")
+        report_f64(upload_summary, "atlas_dirty_width"),
+        report_f64(glyph_current, "dirty_width")
     );
     assert_eq!(
-        report_f64(upload_scratch_summary, "current_texture_upload_bytes"),
-        report_f64(upload_scratch_summary, "legacy_texture_upload_bytes")
+        report_f64(upload_summary, "image_dirty_width"),
+        report_f64(image_current, "dirty_width")
     );
     let effect_uniform_summary = report_section_slice(report, "effect_uniform_summary");
     assert!(effect_uniform_summary
-        .contains("\"id\": \"web.wasm.webgpu.effect_uniform.batched_vs_legacy_write_each\""));
-    assert!(report_f64(effect_uniform_summary, "legacy_over_current") >= 0.0);
+        .contains("\"id\": \"web.wasm.webgpu.effect_uniform.current_batched\""));
     assert_eq!(report_u64(effect_uniform_summary, "current_effect_uniform_writes"), 1);
-    assert!(
-        report_u64(effect_uniform_summary, "legacy_effect_uniform_writes")
-            > report_u64(effect_uniform_summary, "current_effect_uniform_writes")
-    );
+    assert!(report_u64(effect_uniform_summary, "current_effect_uniform_bytes") > 0);
     assert_eq!(
         report_f64(effect_uniform_summary, "current_effect_uniform_slots"),
         report_f64(effect_uniform_summary, "expected_backdrops")
     );
     assert_eq!(
-        report_f64(effect_uniform_summary, "legacy_effect_uniform_slots"),
-        report_f64(effect_uniform_summary, "expected_backdrops")
+        report_f64(effect_uniform_summary, "current_texture_copies"),
+        report_f64(effect_current, "texture_copies")
     );
     assert_eq!(
-        report_f64(effect_uniform_summary, "current_texture_copies"),
-        report_f64(effect_uniform_summary, "legacy_texture_copies")
+        report_f64(effect_uniform_summary, "current_gpu_timestamp_passes"),
+        report_f64(effect_current, "gpu_timestamp_passes")
+    );
+    assert_eq!(
+        report_f64(effect_uniform_summary, "current_gpu_timestamp_total_ns"),
+        report_f64(effect_current, "gpu_timestamp_total_ns")
     );
     let backdrop_batch_summary = report_section_slice(report, "backdrop_batch_summary");
     assert!(backdrop_batch_summary
-        .contains("\"id\": \"web.wasm.webgpu.backdrop_batch.coalesced_vs_per_backdrop_copy\""));
-    assert!(report_f64(backdrop_batch_summary, "legacy_over_current") > 1.0);
+        .contains("\"id\": \"web.wasm.webgpu.backdrop_batch.current\""));
     assert_eq!(
         report_f64(backdrop_batch_summary, "current_effect_uniform_writes"),
-        report_f64(backdrop_batch_summary, "legacy_effect_uniform_writes")
+        report_f64(backdrop_batch_current, "effect_uniform_writes")
     );
     assert_eq!(
         report_f64(backdrop_batch_summary, "current_effect_uniform_slots"),
-        report_f64(backdrop_batch_summary, "legacy_effect_uniform_slots")
+        report_f64(backdrop_batch_current, "effect_uniform_slots")
     );
-    assert!(
-        report_f64(backdrop_batch_summary, "current_texture_copies")
-            < report_f64(backdrop_batch_summary, "legacy_texture_copies")
+    assert_eq!(
+        report_f64(backdrop_batch_summary, "current_texture_copies"),
+        report_f64(backdrop_batch_current, "texture_copies")
     );
-    assert!(
-        report_f64(backdrop_batch_summary, "current_render_passes")
-            < report_f64(backdrop_batch_summary, "legacy_render_passes")
+    assert_eq!(
+        report_f64(backdrop_batch_summary, "current_render_passes"),
+        report_f64(backdrop_batch_current, "render_passes")
     );
     let scene3d_summary = report_section_slice(report, "scene3d_summary");
     assert!(scene3d_summary
@@ -2306,165 +1807,169 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_ab_rows() {
     assert!(report_u64(scene3d_stress_summary, "instances") >= 64);
     let mixed_summary = report_section_slice(report, "mixed_summary");
     assert!(mixed_summary.contains(
-        "\"id\": \"web.wasm.webgpu.mixed_text_image_effects.current_vs_legacy_rebind_unbatched\""
+        "\"id\": \"web.wasm.webgpu.mixed_text_image_effects.current\""
     ));
     assert_eq!(report_f64(mixed_summary, "current_p50_ms"), report_f64(mixed, "p50_ms"));
-    assert_eq!(report_f64(mixed_summary, "legacy_p50_ms"), report_f64(mixed_legacy, "p50_ms"));
-    assert!(
-        report_f64(mixed_summary, "current_draw_pipeline_binds")
-            < report_f64(mixed_summary, "legacy_draw_pipeline_binds")
+    assert_eq!(
+        report_f64(mixed_summary, "current_draw_pipeline_binds"),
+        report_f64(mixed, "draw_pipeline_binds")
     );
-    assert!(
-        report_f64(mixed_summary, "current_draw_bind_group_binds")
-            <= report_f64(mixed_summary, "legacy_draw_bind_group_binds")
+    assert_eq!(
+        report_f64(mixed_summary, "current_draw_bind_group_binds"),
+        report_f64(mixed, "draw_bind_group_binds")
     );
-    assert!(
-        report_f64(mixed_summary, "current_draw_scissor_sets")
-            < report_f64(mixed_summary, "legacy_draw_scissor_sets")
+    assert_eq!(
+        report_f64(mixed_summary, "current_draw_scissor_sets"),
+        report_f64(mixed, "draw_scissor_sets")
     );
-    assert!(
-        report_f64(mixed_summary, "current_effect_uniform_writes")
-            < report_f64(mixed_summary, "legacy_effect_uniform_writes")
+    assert_eq!(
+        report_f64(mixed_summary, "current_effect_uniform_writes"),
+        report_f64(mixed, "effect_uniform_writes")
     );
     let layer_effects_summary = report_section_slice(report, "layer_effects_summary");
     assert!(layer_effects_summary.contains(
-        "\"id\": \"web.wasm.webgpu.layer_damage_effects.current_vs_legacy_rebind_unbatched\""
+        "\"id\": \"web.wasm.webgpu.layer_damage_effects.current\""
     ));
     assert_eq!(
         report_f64(layer_effects_summary, "current_p50_ms"),
         report_f64(layer_effects, "p50_ms")
     );
     assert_eq!(
-        report_f64(layer_effects_summary, "legacy_p50_ms"),
-        report_f64(layer_effects_legacy, "p50_ms")
+        report_f64(layer_effects_summary, "current_draw_pipeline_binds"),
+        report_f64(layer_effects, "draw_pipeline_binds")
     );
-    assert!(report_f64(layer_effects_summary, "legacy_over_current") > 1.0);
-    assert!(
-        report_f64(layer_effects_summary, "current_draw_pipeline_binds")
-            < report_f64(layer_effects_summary, "legacy_draw_pipeline_binds")
+    assert_eq!(
+        report_f64(layer_effects_summary, "current_draw_bind_group_binds"),
+        report_f64(layer_effects, "draw_bind_group_binds")
     );
-    assert!(
-        report_f64(layer_effects_summary, "current_draw_bind_group_binds")
-            < report_f64(layer_effects_summary, "legacy_draw_bind_group_binds")
+    assert_eq!(
+        report_f64(layer_effects_summary, "current_draw_scissor_sets"),
+        report_f64(layer_effects, "draw_scissor_sets")
     );
-    assert!(
-        report_f64(layer_effects_summary, "current_draw_scissor_sets")
-            < report_f64(layer_effects_summary, "legacy_draw_scissor_sets")
+    assert_eq!(
+        report_f64(layer_effects_summary, "current_effect_uniform_writes"),
+        report_f64(layer_effects, "effect_uniform_writes")
     );
-    assert!(
-        report_f64(layer_effects_summary, "current_effect_uniform_writes")
-            < report_f64(layer_effects_summary, "legacy_effect_uniform_writes")
+    assert_eq!(
+        report_f64(layer_effects_summary, "current_texture_copies"),
+        report_f64(layer_effects, "texture_copies")
     );
-    assert!(
-        report_f64(layer_effects_summary, "current_texture_copies")
-            < report_f64(layer_effects_summary, "legacy_texture_copies")
-    );
-    assert!(
-        report_f64(layer_effects_summary, "current_render_passes")
-            < report_f64(layer_effects_summary, "legacy_render_passes")
+    assert_eq!(
+        report_f64(layer_effects_summary, "current_render_passes"),
+        report_f64(layer_effects, "render_passes")
     );
     let clean_layer_summary = report_section_slice(report, "clean_layer_summary");
     assert!(clean_layer_summary
-        .contains("\"id\": \"web.wasm.webgpu.clean_layer.clean_reuse_vs_dirty_rerender\""));
+        .contains("\"id\": \"web.wasm.webgpu.clean_layer.clean_reuse\""));
+    assert!(!clean_layer_summary.contains("dirty_"));
     assert_eq!(report_f64(clean_layer_summary, "clean_p50_ms"), report_f64(clean_layer, "p50_ms"));
-    assert_eq!(report_f64(clean_layer_summary, "dirty_p50_ms"), report_f64(dirty_layer, "p50_ms"));
+    assert_eq!(
+        report_f64(clean_layer_summary, "clean_draw_items"),
+        report_f64(clean_layer, "draw_items")
+    );
     assert_eq!(report_f64(clean_layer_summary, "clean_layer_cache_hits"), 1.0);
     assert_eq!(report_f64(clean_layer_summary, "clean_layer_cache_misses"), 0.0);
     assert_eq!(report_f64(clean_layer_summary, "clean_layer_passes"), 0.0);
-    assert_eq!(report_f64(clean_layer_summary, "dirty_layer_cache_hits"), 0.0);
-    assert_eq!(report_f64(clean_layer_summary, "dirty_layer_cache_misses"), 1.0);
-    assert_eq!(report_f64(clean_layer_summary, "dirty_layer_passes"), 1.0);
     assert!(
         report_f64(clean_layer_summary, "clean_layer_cache_skipped_draws")
             > report_f64(clean_layer_summary, "clean_draw_items")
     );
     assert!(
-        report_f64(clean_layer_summary, "clean_draw_items")
-            < report_f64(clean_layer_summary, "dirty_draw_items")
-    );
-    assert!(
-        report_f64(clean_layer_summary, "clean_render_passes")
-            < report_f64(clean_layer_summary, "dirty_render_passes")
+        report_f64(clean_layer_summary, "clean_gpu_timestamp_total_ns")
+            == report_f64(clean_layer, "gpu_timestamp_total_ns")
     );
     let command_family_summary = report_section_slice(report, "command_family_summary");
     assert!(command_family_summary
-        .contains("\"id\": \"web.wasm.webgpu.command_family_matrix.current_vs_legacy_rebind\""));
+        .contains("\"id\": \"web.wasm.webgpu.command_family_matrix.current\""));
     assert_eq!(
         report_f64(command_family_summary, "current_p50_ms"),
         report_f64(command_family, "p50_ms")
     );
     assert_eq!(
-        report_f64(command_family_summary, "legacy_p50_ms"),
-        report_f64(command_family_legacy, "p50_ms")
+        report_f64(command_family_summary, "current_draw_items"),
+        report_f64(command_family, "draw_items")
     );
-    assert!(report_f64(command_family_summary, "legacy_over_current") > 1.0);
-    assert!(
-        report_f64(command_family_summary, "current_draw_pipeline_binds")
-            < report_f64(command_family_summary, "legacy_draw_pipeline_binds")
+    assert_eq!(
+        report_f64(command_family_summary, "current_draw_pipeline_binds"),
+        report_f64(command_family, "draw_pipeline_binds")
     );
-    assert!(
-        report_f64(command_family_summary, "current_draw_bind_group_binds")
-            < report_f64(command_family_summary, "legacy_draw_bind_group_binds")
+    assert_eq!(
+        report_f64(command_family_summary, "current_draw_bind_group_binds"),
+        report_f64(command_family, "draw_bind_group_binds")
     );
-    assert!(
-        report_f64(command_family_summary, "current_draw_scissor_sets")
-            < report_f64(command_family_summary, "legacy_draw_scissor_sets")
+    assert_eq!(
+        report_f64(command_family_summary, "current_draw_scissor_sets"),
+        report_f64(command_family, "draw_scissor_sets")
+    );
+    assert_eq!(
+        report_f64(command_family_summary, "current_image_mesh_draws"),
+        report_f64(command_family, "image_mesh_draws")
+    );
+    assert_eq!(
+        report_f64(command_family_summary, "current_nine_slice_draws"),
+        report_f64(command_family, "nine_slice_draws")
+    );
+    assert_eq!(
+        report_f64(command_family_summary, "current_sdf_glyph_quads"),
+        report_f64(command_family, "sdf_glyph_quads")
     );
     assert_eq!(report_f64(command_family_summary, "current_camera_bg_draws"), 0.0);
-    assert_eq!(report_f64(command_family_summary, "legacy_camera_bg_draws"), 0.0);
+    assert_eq!(report_f64(command_family_summary, "expected_camera_bg"), 0.0);
     let glyph_run_summary = report_section_slice(report, "glyph_run_summary");
-    assert!(glyph_run_summary
-        .contains("\"id\": \"web.wasm.webgpu.glyph_run.current_vs_legacy_rebind\""));
+    assert!(glyph_run_summary.contains("\"id\": \"web.wasm.webgpu.glyph_run.current\""));
     assert_eq!(
         report_f64(glyph_run_summary, "current_p50_ms"),
         report_f64(glyph_run_current, "p50_ms")
     );
-    assert_eq!(
-        report_f64(glyph_run_summary, "legacy_p50_ms"),
-        report_f64(glyph_run_legacy, "p50_ms")
-    );
-    assert!(report_f64(glyph_run_summary, "legacy_over_current") >= 0.0);
     assert_eq!(report_u64(glyph_run_summary, "expected_glyph_runs"), 64);
     assert_eq!(report_u64(glyph_run_summary, "expected_glyphs_per_run"), 8);
     assert_eq!(report_u64(glyph_run_summary, "expected_glyph_quads"), 512);
     assert_eq!(report_u64(glyph_run_summary, "expected_sdf_runs"), 32);
     assert_eq!(report_u64(glyph_run_summary, "expected_sdf_glyph_quads"), 256);
-    assert!(
-        report_f64(glyph_run_summary, "current_draw_pipeline_binds")
-            < report_f64(glyph_run_summary, "legacy_draw_pipeline_binds")
+    assert_eq!(
+        report_f64(glyph_run_summary, "current_draw_items"),
+        report_f64(glyph_run_current, "draw_items")
     );
-    assert!(
-        report_f64(glyph_run_summary, "current_draw_bind_group_binds")
-            < report_f64(glyph_run_summary, "legacy_draw_bind_group_binds")
+    assert_eq!(
+        report_f64(glyph_run_summary, "current_glyph_quads"),
+        report_f64(glyph_run_current, "glyph_quads")
     );
-    assert!(
-        report_f64(glyph_run_summary, "current_draw_scissor_sets")
-            < report_f64(glyph_run_summary, "legacy_draw_scissor_sets")
+    assert_eq!(
+        report_f64(glyph_run_summary, "current_sdf_glyph_quads"),
+        report_f64(glyph_run_current, "sdf_glyph_quads")
     );
+    assert!(report_f64(glyph_run_summary, "current_draw_pipeline_binds") > 0.0);
+    assert!(report_f64(glyph_run_summary, "current_draw_bind_group_binds") > 0.0);
+    assert!(report_f64(glyph_run_summary, "current_draw_scissor_sets") > 0.0);
     let neon_marker_summary = report_section_slice(report, "neon_marker_summary");
     assert!(neon_marker_summary
-        .contains("\"id\": \"web.wasm.webgpu.neon_marker.current_vs_legacy_rebind\""));
+        .contains("\"id\": \"web.wasm.webgpu.neon_marker.current\""));
+    assert!(!neon_marker_summary.contains("legacy_"));
     assert_eq!(
         report_f64(neon_marker_summary, "current_p50_ms"),
         report_f64(neon_marker_current, "p50_ms")
     );
     assert_eq!(
-        report_f64(neon_marker_summary, "legacy_p50_ms"),
-        report_f64(neon_marker_legacy, "p50_ms")
+        report_f64(neon_marker_summary, "current_draw_items"),
+        report_f64(neon_marker_current, "draw_items")
+    );
+    assert_eq!(
+        report_f64(neon_marker_summary, "current_solid_tris"),
+        report_f64(neon_marker_current, "solid_tris")
     );
     assert_eq!(report_u64(neon_marker_summary, "expected_markers"), 64);
     assert_eq!(report_u64(neon_marker_summary, "expected_draw_items"), 192);
-    assert!(
-        report_f64(neon_marker_summary, "current_draw_pipeline_binds")
-            < report_f64(neon_marker_summary, "legacy_draw_pipeline_binds")
-    );
     assert_eq!(
         report_f64(neon_marker_summary, "current_draw_bind_group_binds"),
-        report_f64(neon_marker_summary, "legacy_draw_bind_group_binds")
+        report_f64(neon_marker_current, "draw_bind_group_binds")
     );
-    assert!(
-        report_f64(neon_marker_summary, "current_draw_scissor_sets")
-            < report_f64(neon_marker_summary, "legacy_draw_scissor_sets")
+    assert_eq!(
+        report_f64(neon_marker_summary, "current_draw_pipeline_binds"),
+        report_f64(neon_marker_current, "draw_pipeline_binds")
+    );
+    assert_eq!(
+        report_f64(neon_marker_summary, "current_draw_scissor_sets"),
+        report_f64(neon_marker_current, "draw_scissor_sets")
     );
     let pixel_check = report_section_slice(report, "pixel_check");
     assert!(pixel_check.contains("\"target\": \"app\""));

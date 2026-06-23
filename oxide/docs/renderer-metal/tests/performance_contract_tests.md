@@ -26,12 +26,14 @@ This test file protects renderer performance contracts that are easy to regress 
   Confirms command-buffer GPU timestamp support is compiled for macOS and iOS.
 - `completed_gpu_duration_is_attributed_to_frame_id()`
   Confirms completed GPU timing is associated with the frame id that produced it.
+- `metal_draw_cmd_debug_capture_names_are_frozen()`
+  Freezes the private `DrawCmd` debug/capture tag names emitted by the Metal encode diagnostics before backend packet migrations.
 - `renderer_initializes_default_pipelines_from_embedded_metallib_on_macos()`
   Constructs the default macOS Metal renderer, proving the embedded metallib and default PSO set initialize at runtime.
 
 ## Logic narrative
 
-Source-contract tests catch forbidden APIs and required guard strings before runtime. The macOS runtime initializer test then exercises the actual Metal path: device resolution, command queue creation, embedded shader-library loading, and default pipeline-state creation. A placeholder metallib or a missing shader entry point cannot satisfy this test because `MetalRenderer::new_default` must complete successfully.
+Source-contract tests catch forbidden APIs and required guard strings before runtime. The debug/capture-name freeze keeps Metal's command tags deterministic for future capture and A/B packet comparisons. The macOS runtime initializer test then exercises the actual Metal path: device resolution, command queue creation, embedded shader-library loading, and default pipeline-state creation. A placeholder metallib or a missing shader entry point cannot satisfy this test because `MetalRenderer::new_default` must complete successfully.
 
 ## Preconditions and postconditions
 
@@ -56,6 +58,7 @@ The source tests allocate only small strings borrowed from `include_str!`. The r
 ## Performance notes
 
 The runtime test is an initialization guard, not a throughput benchmark. It protects the startup discipline required before frame-time A/B tests are meaningful: all default Metal pipelines must be resident before normal frame encoding.
+The debug/capture-name freeze is measurement harness only. It changes no runtime path and does not claim a performance win.
 
 ## Feature flags and cfgs
 
@@ -70,7 +73,7 @@ Run with:
 cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-renderer-metal --test performance_contract_tests
 ```
 
-Related local Metal A/B evidence is produced by the perf-runner filtered GPU rows, for example `gpu.system.id_mask_compositor.current` and `gpu.system.id_mask_compositor.legacy_upload`.
+Related local Metal evidence is produced by the perf-runner filtered GPU row `gpu.system.id_mask_compositor.current`; the slower legacy-upload audit row was retired after same-workload A/B proof.
 
 ## Examples
 
@@ -85,4 +88,5 @@ fn initialize_renderer_for_contract_check() -> Result<(), oxide_renderer_metal::
 
 ## Changelog
 
+- 2026-06-22: froze Metal draw-command debug/capture names as measurement harness for architecture densification A/B work.
 - 2026-06-01: added a macOS runtime initialization test proving the default Metal renderer starts from the embedded metallib and default PSO set.

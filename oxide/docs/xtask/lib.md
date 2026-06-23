@@ -19,9 +19,15 @@
 
 ## Entry points list
 
-- `xtask::run(args: Vec<String>) -> anyhow::Result<()>`
+- `xtask::run() -> anyhow::Result<()>`
   - Dispatches command-line tasks, including the official iOS device perf flow and the Oxide device-report flow.
   - Main callers: `oxide/xtask/src/main.rs`.
+- `xtask::run_cli(args: &[String]) -> anyhow::Result<()>`
+  - Dispatches explicit command arguments for tests and local tooling, including `experiments check`.
+  - Main callers: `oxide/xtask/src/main.rs` and xtask CLI tests.
+- `xtask::check_experiment_manifest_text(text: &str, today: &str) -> anyhow::Result<ExperimentCheckSummary>`
+  - Validates `perf-experiments.toml`, rejects expired undecided experiments, requires undecided alternatives to name a `perf-ab` gate, and requires accepted/rejected experiments to carry proof and cleanup notes.
+  - Main callers: `cargo xtask experiments check` and xtask tests.
 - `xtask::parse_uikit_report_json(text: &str) -> anyhow::Result<UIKitPerfReport>`
   - Converts exported XCTest metric JSON into the UIKit report schema used by tests and any non-official local debug tools.
   - Main callers: tests.
@@ -41,6 +47,10 @@
 ## Logic narrative
 
 The crate maintains one authoritative UIKit case table that maps XCTest methods to Oxide benchmark identifiers and contract metadata. That table now spans idiomatic UIKit coverage for components, animation effects, primitive lifecycle slices such as empty-root mount, retained-view remove-all/remount, and a shared control-set mount/mutate case, plus the first hand-optimized UIKit flat-rect family.
+
+`cargo xtask experiments check` validates `perf-experiments.toml` before Phase 4 alternatives can age into permanent architecture. Each manifest entry records an id, introduced commit/date, required backends and devices, correctness and performance gates, an expiry date, and a decision state. Undecided entries must name a `perf-ab...` gate because alternate implementations must stay off the default path until same-workload A/B evidence promotes them. Accepted or rejected entries must keep proof and cleanup notes because the losing path, runtime switch, comparison rows, tests, and docs are expected to be deleted after a decision.
+
+The current manifest records accepted proof for the native audit-row retirement, default browser WebGPU standalone-row retirement, default browser upload-scratch row retirement, default browser ID-mask legacy-row retirement, default browser upload legacy-row retirement, default browser glyph-run legacy-row retirement, default browser backdrop-batch legacy-row retirement, clip-state diagnostic export retirement, Canvas indexed-quad stack-array cleanup, Markdown metric-summary direct streaming, Markdown result-row direct streaming, Markdown inline metric-summary streaming, Markdown contract-row direct streaming, Markdown summary direct streaming, Markdown tail-line direct streaming, Markdown metric-priority index lookup, Markdown latest-plus-dated baseline single rendering, persisted PerfReport JSON pre-sized serialization and capacity-hint tightening, compare-reports small-baseline scanning, compare-reports output-vector capacity hints, compare-reports missing-baseline capacity ceiling, compare-reports lookup-path improvement ordering, compare-reports same-order fast path, compare-reports same-order single-pass refinement, compare-reports same-order equal-median fast path, compare-reports same-order-before-small-baseline lookup, distribution metric static keys, distribution-only summaries, distribution stack summary buffers, fixed 24-sample distribution summaries, sample summary stack buffers, fixed-count sample summary quantiles, sample summary unstable sorting, permissions Bluetooth discovery cache move, permissions sensor permission-cache fixed slots, and permissions manager state fixed slots. It also records rejected cleanup attempts for coalescing compaction, Markdown A/B audit branch deletion, Markdown preallocation, Markdown metric-summary vector capacity, Markdown metric-priority table hoisting, Markdown metric-priority bitmasking, Markdown literal string-line writes, Markdown metric-summary cap early return, Markdown empty-priority fast paths, case-filter explicit state fast paths, compare-reports HashMap lookup, compare-reports regression-vector capacity, compare-reports specialized small-baseline looping, compare-reports same-order lazy improvements allocation, upload-scratch diagnostics, standalone WebGPU diagnostics, and draw-item, draw-state, and ID-mask diagnostic exports so mixed or losing A/B evidence remains machine-checkable. The checker treats those entries as evidence metadata; it does not rerun the original browser or perf workloads.
 
 Device perf runs reuse the same case mapping but add process-scoped Instruments attachment. CPU metrics still come from XCTest, while external GPU timing, GPU counters, and the canonical device phase/signpost timings come from process-scoped Metal System Trace on the same case. Oxide on-screen rows also merge host-console stage summaries so in-app Metal command-buffer and timestamp-counter timings survive even when Apple rejects the optional Instruments hardware-counter profile. Energy remains an optional imported input sourced from manual Power Profiler traces, and the report marks it as manual-pending when those traces are absent.
 
@@ -79,7 +89,10 @@ The committed `benchmarks/oxide-device/latest.json` and `benchmarks/uikit-device
   - Required Apple command-line tools must be installed and resolvable through `xcrun`.
   - The requested physical-device destination must exist for the official workflow.
   - Imported power traces, when supplied, must correspond to the same workload/device/build being compared.
+  - Experiment manifest entries must use `YYYY-MM-DD` calendar dates and non-empty proof fields for decided entries.
 - Postconditions:
+  - `cargo xtask experiments check` fails expired undecided experiments before their alternate paths can remain in default architecture.
+  - Undecided experiment entries are required to name a `perf-ab` gate, while decided entries are required to name proof and cleanup notes.
   - Successful device runs emit a device report with Oxide in-app GPU timing, external Metal System Trace GPU timing, any available GPU counters, plus direct energy when imported traces are present.
   - Device report writes and cache reuse fail if required direct GPU, frame-cadence, or memory metrics are missing from the physical-device report rows.
   - The emitted UIKit case rows persist actual measure-loop counts, actual benchmark-loop counts, explicit canonical signpost source, and per-metric provenance/fallback metadata.
@@ -91,6 +104,32 @@ The committed `benchmarks/oxide-device/latest.json` and `benchmarks/uikit-device
 
 ## Changelog
 
+- 2026-06-23: recorded the accepted permissions manager state fixed-slots cleanup, bringing the manifest to 73 decided entries with 52 accepted and 21 rejected.
+- 2026-06-23: recorded the accepted permissions sensor permission-cache fixed-slots cleanup, bringing the manifest to 72 decided entries with 51 accepted and 21 rejected.
+- 2026-06-23: recorded the accepted permissions Bluetooth discovery cache move, bringing the manifest to 71 decided entries with 50 accepted and 21 rejected.
+- 2026-06-23: recorded the accepted perf-runner sample summary unstable-sort cleanup, bringing the manifest to 70 decided entries with 49 accepted and 21 rejected.
+- 2026-06-22: recorded the accepted perf-runner sample summary fixed-count quantile cleanup, bringing the manifest to 69 decided entries with 48 accepted and 21 rejected.
+- 2026-06-22: recorded the accepted perf-runner sample summary stack-buffer cleanup, bringing the manifest to 68 decided entries with 47 accepted and 21 rejected.
+- 2026-06-22: recorded the accepted perf-runner fixed 24-sample distribution summary cleanup, bringing the manifest to 67 decided entries with 46 accepted and 21 rejected.
+- 2026-06-22: recorded the accepted perf-runner distribution stack summary buffer cleanup, bringing the manifest to 66 decided entries with 45 accepted and 21 rejected.
+- 2026-06-22: recorded the accepted perf-runner distribution summary unused-field cleanup, bringing the manifest to 65 decided entries with 44 accepted and 21 rejected.
+- 2026-06-22: recorded the accepted perf-runner contract coverage tail-only phrase match, bringing the manifest to 64 decided entries with 43 accepted and 21 rejected.
+- 2026-06-22: recorded the accepted perf-runner contract coverage first-byte ASCII fold, bringing the manifest to 63 decided entries with 42 accepted and 21 rejected.
+- 2026-06-22: recorded the accepted perf-runner contract coverage allocation-free gap-note scan, bringing the manifest to 62 decided entries with 41 accepted and 21 rejected.
+- 2026-06-22: recorded the accepted perf-runner case metric contract static required-key validation, bringing the manifest to 61 decided entries with 40 accepted and 21 rejected.
+- 2026-06-22: recorded the accepted perf-runner distribution metric static-key insertion, bringing the manifest to 60 decided entries with 39 accepted and 21 rejected.
+- 2026-06-22: recorded the accepted perf-runner frame-pacing static metric-key insertion, bringing the manifest to 59 decided entries with 38 accepted and 21 rejected.
+- 2026-06-22: recorded the accepted perf-runner compare-reports lookup-path improvement ordering, bringing the manifest to 58 decided entries with 37 accepted and 21 rejected.
+- 2026-06-22: recorded the accepted perf-runner compare-reports same-order-before-small-baseline lookup, bringing the manifest to 57 decided entries with 36 accepted and 21 rejected.
+- 2026-06-22: recorded the accepted perf-runner compare-reports same-order equal-median fast path, bringing the manifest to 56 decided entries with 35 accepted and 21 rejected.
+- 2026-06-22: recorded the rejected perf-runner compare-reports same-order lazy improvements allocation attempt, bringing the manifest to 55 decided entries with 34 accepted and 21 rejected.
+- 2026-06-22: recorded the rejected perf-runner case-filter state fast-path attempt, bringing the manifest to 54 decided entries with 34 accepted and 20 rejected.
+- 2026-06-22: recorded the accepted perf-runner compare-reports same-order single-pass refinement, bringing the manifest to 53 decided entries with 34 accepted and 19 rejected.
+- 2026-06-22: recorded the accepted perf-runner compare-reports same-order fast path, bringing the manifest to 52 decided entries with 33 accepted and 19 rejected.
+- 2026-06-22: recorded the rejected perf-runner JSON String pre-sized serialization attempt, bringing the manifest to 51 decided entries with 32 accepted and 19 rejected.
+- 2026-06-22: recorded the rejected compare-reports regression-vector capacity attempt, bringing the manifest to 38 decided entries with 20 accepted and 18 rejected.
+- 2026-06-22: updated `perf-experiments.toml` validation expectations for the accepted compare-reports output-vector capacity proof, bringing the manifest to 37 decided entries with 20 accepted and 17 rejected.
+- 2026-06-22: added `perf-experiments.toml` validation through `cargo xtask experiments check` so undecided A/B alternatives must remain behind `perf-ab` gates and expire unless accepted or rejected with proof and cleanup notes; the manifest now includes the accepted default browser glyph-run/backdrop-batch legacy-row retirement proof, accepted perf-runner case-filter, Markdown comparison-render, and compare-reports small-baseline proof, plus rejected perf-runner compare-reports HashMap and specialized-loop proof.
 - 2026-06-01: added macOS-only static tests for the committed Oxide/UIKit device baseline files so stale baselines must either satisfy the strict direct GPU/cadence/memory contract or explicitly mark the metric-contract gap as stale partial.
 - 2026-05-31: added explicit Oxide/UIKit device report metric-contract validation for direct GPU timing, GPU latency, frame cadence, and memory before cache reuse, report writes, and baseline comparisons; Oxide GPU/cadence rows now persist flattened p50/p95/p99/peak/sample distribution keys.
 - 2026-05-31: made Oxide on-screen device contract reports list the canonical workload families and mark absent device rows as partial or missing.

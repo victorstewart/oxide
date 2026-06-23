@@ -101,10 +101,12 @@
 
 ## Testing and benchmarks
 - Covered by `crates/platform-apple/tests/secure_storage_tests.rs`.
+- Shared Apple ABI layout and native guard retention are covered by `crates/platform-apple/tests/abi_layout_tests.rs`.
 - macOS host-backed HTTP, secure-storage, and raw TCP/UDP networking behavior is additionally exercised by `host/macos-app/oxide-host-macos/tests/headless_harness.rs`, which verifies the shared Apple wrappers through the shared native `NSURLSession` bridge, Keychain, installed-platform loopback socket paths, installed-platform TCP keepalive, and installed-platform unsupported TLS/QUIC/TFO rejection.
 - macOS host-backed WebView behavior is additionally exercised by `host/macos-app/oxide-host-macos/tests/web_view_harness.rs`, which verifies live hidden `WKWebView` load callbacks, concurrent view isolation, JavaScript result/error behavior, and teardown through the shared Apple wrapper. The same harness verifies macOS camera missing-session and unauthorized-start error mapping by default, validates authorized media-thumbnail extraction when available, and has opt-in live location/camera/media paths for pre-authorized Location Services, frame/photo/recording, and image/video extraction validation.
 
 ## Changelog
+- 2026-06-22: added shared Apple ABI layout freeze coverage for HTTP, Bluetooth, camera, location, motion, media, and camera-format structs.
 - 2026-05-19: moved the native Apple Keychain secure-storage bridge into `src/apple/secure_storage.m` and compiled it into both iOS and macOS hosts.
 - 2026-05-19: moved the native Apple HTTP `NSURLSession` bridge into `src/apple/http.m` and compiled it into both iOS and macOS hosts.
 - 2026-05-19: added shared Apple TCP keepalive socket-option support and installed macOS loopback verification.
