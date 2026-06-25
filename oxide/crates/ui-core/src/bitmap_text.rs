@@ -65,12 +65,7 @@ impl TextWidthKey {
             return None;
         }
         let px_tenths = (style.px * 10.0).round().clamp(1.0, u16::MAX as f32) as u16;
-        Some(Self {
-            face: style.face,
-            px_tenths,
-            pixel_snapped,
-            text: text.to_owned(),
-        })
+        Some(Self { face: style.face, px_tenths, pixel_snapped, text: text.to_owned() })
     }
 }
 

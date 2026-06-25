@@ -468,9 +468,7 @@ mod wasm_host {
                 for _frame in 0..frames {
                     let start = perf_now();
                     let alloc_before = oxide_wasm_alloc_counter::snapshot();
-                    self.state
-                        .borrow_mut()
-                        .frame_at_profiled(timestamp, &mut allocation_stages)?;
+                    self.state.borrow_mut().frame_at_profiled(timestamp, &mut allocation_stages)?;
                     let alloc_after = oxide_wasm_alloc_counter::snapshot();
                     add_allocation_frame(&mut allocations, alloc_before, alloc_after);
                     add_submit_allocation_frame(

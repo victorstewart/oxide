@@ -20,6 +20,111 @@ const TEXT_INPUT_OPTIONS_OUTLINE_PT: f32 = 1.0;
 const TEXT_INPUT_OPTIONS_VIEWPORT_MARGIN_PT: f32 = 8.0;
 const TEXT_INPUT_OPTIONS_FIELD_GAP_PT: f32 = 5.0;
 const TEXT_INPUT_OPTIONS_HORIZONTAL_PADDING_PT: f32 = 10.0;
+const TEXT_FLOATING_PLACEHOLDER_ANIMATION_MS: u64 = 160;
+
+#[must_use]
+pub fn text_caret_visible(now_ms: u64) -> bool {
+    const TEXT_CARET_BLINK_HALF_PERIOD_MS: u64 = 530;
+    ((now_ms / TEXT_CARET_BLINK_HALF_PERIOD_MS) & 1) == 0
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextFloatingPlaceholderLayout {
+    pub inline_rect: gfx::RectF,
+    pub floating_rect: gfx::RectF,
+    pub rect: gfx::RectF,
+    pub style: TextStyle,
+    pub progress: f32,
+}
+
+#[must_use]
+pub fn text_floating_placeholder_target(focused: bool, text_empty: bool) -> f32 {
+    if focused || !text_empty {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+#[must_use]
+pub fn text_floating_placeholder_tick(
+    progress: f32,
+    focused: bool,
+    text_empty: bool,
+    dt_ms: u32,
+) -> f32 {
+    let current = progress.clamp(0.0, 1.0);
+    let target = text_floating_placeholder_target(focused, text_empty);
+    let step = ((target - current) * (dt_ms as f32 / 140.0)).clamp(-0.08, 0.08);
+    (current + step).clamp(0.0, 1.0)
+}
+
+#[must_use]
+pub fn text_floating_placeholder_elapsed_progress(started_at_ms: u64, now_ms: u64) -> f32 {
+    (now_ms.saturating_sub(started_at_ms) as f32 / TEXT_FLOATING_PLACEHOLDER_ANIMATION_MS as f32)
+        .clamp(0.0, 1.0)
+}
+
+#[must_use]
+pub fn text_floating_placeholder_layout(
+    field_rect: gfx::RectF,
+    placeholder: &str,
+    inline_style: TextStyle,
+    floating_style: TextStyle,
+    progress: f32,
+    floating_y: f32,
+) -> TextFloatingPlaceholderLayout {
+    let progress = progress.clamp(0.0, 1.0);
+    let style = TextStyle {
+        px: lerp_f32(inline_style.px, floating_style.px, progress),
+        color: lerp_color(inline_style.color, floating_style.color, progress),
+        face: if progress < 0.5 { inline_style.face } else { floating_style.face },
+    };
+    let inline_rect = centered_placeholder_rect(field_rect, placeholder, inline_style, None);
+    let floating_rect =
+        centered_placeholder_rect(field_rect, placeholder, floating_style, Some(floating_y));
+    let text_w = text_width(placeholder, style);
+    let text_h = line_height(style);
+    let rect = gfx::RectF::new(
+        field_rect.x + (field_rect.w - text_w) * 0.50,
+        lerp_f32(inline_rect.y, floating_rect.y, progress),
+        text_w,
+        text_h,
+    );
+    TextFloatingPlaceholderLayout { inline_rect, floating_rect, rect, style, progress }
+}
+
+#[inline]
+fn centered_placeholder_rect(
+    field_rect: gfx::RectF,
+    placeholder: &str,
+    style: TextStyle,
+    y: Option<f32>,
+) -> gfx::RectF {
+    let text_w = text_width(placeholder, style);
+    let text_h = line_height(style);
+    gfx::RectF::new(
+        field_rect.x + (field_rect.w - text_w) * 0.50,
+        y.unwrap_or(field_rect.y + (field_rect.h - text_h) * 0.50),
+        text_w,
+        text_h,
+    )
+}
+
+#[inline]
+fn lerp_f32(start: f32, end: f32, progress: f32) -> f32 {
+    start + (end - start) * progress.clamp(0.0, 1.0)
+}
+
+#[inline]
+fn lerp_color(start: gfx::Color, end: gfx::Color, progress: f32) -> gfx::Color {
+    gfx::Color::rgba(
+        lerp_f32(start.r, end.r, progress),
+        lerp_f32(start.g, end.g, progress),
+        lerp_f32(start.b, end.b, progress),
+        lerp_f32(start.a, end.a, progress),
+    )
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldFailRestoreMode {
@@ -180,6 +285,8 @@ pub struct TextSelectionHighlightLayout {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextInputOption {
+    Cut,
+    Copy,
     SelectAll,
     Paste,
 }
@@ -188,6 +295,8 @@ impl TextInputOption {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
+            Self::Cut => "cut",
+            Self::Copy => "copy",
             Self::SelectAll => "select all",
             Self::Paste => "paste",
         }
@@ -196,6 +305,8 @@ impl TextInputOption {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TextInputOptionsConfig {
+    pub cut: bool,
+    pub copy: bool,
     pub select_all: bool,
     pub paste: bool,
 }
@@ -203,17 +314,22 @@ pub struct TextInputOptionsConfig {
 impl TextInputOptionsConfig {
     #[must_use]
     pub const fn none() -> Self {
-        Self { select_all: false, paste: false }
+        Self { cut: false, copy: false, select_all: false, paste: false }
+    }
+
+    #[must_use]
+    pub const fn select_all_paste() -> Self {
+        Self { cut: false, copy: false, select_all: true, paste: true }
     }
 
     #[must_use]
     pub const fn all() -> Self {
-        Self { select_all: true, paste: true }
+        Self { cut: true, copy: true, select_all: true, paste: true }
     }
 
     #[must_use]
     pub const fn option_count(self) -> usize {
-        self.select_all as usize + self.paste as usize
+        self.cut as usize + self.copy as usize + self.select_all as usize + self.paste as usize
     }
 }
 
@@ -233,6 +349,8 @@ impl<FieldId> TextInputOptionsPopoverState<FieldId> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextInputOptionsLayout {
     pub bubble_rect: gfx::RectF,
+    pub cut_rect: Option<gfx::RectF>,
+    pub copy_rect: Option<gfx::RectF>,
     pub select_all_rect: Option<gfx::RectF>,
     pub paste_rect: Option<gfx::RectF>,
 }
@@ -259,10 +377,15 @@ pub fn text_input_options_layout(
     }
     let label_style = TextStyle::new(text_px, gfx::Color::rgba(1.0, 1.0, 1.0, 1.0)).bold();
     let padding = TEXT_INPUT_OPTIONS_HORIZONTAL_PADDING_PT * scale;
+    let cut_w = config.cut.then(|| text_width(TextInputOption::Cut.label(), label_style));
+    let copy_w = config.copy.then(|| text_width(TextInputOption::Copy.label(), label_style));
     let select_all_w =
         config.select_all.then(|| text_width(TextInputOption::SelectAll.label(), label_style));
     let paste_w = config.paste.then(|| text_width(TextInputOption::Paste.label(), label_style));
-    let content_w = select_all_w.unwrap_or(0.0) + paste_w.unwrap_or(0.0);
+    let content_w = cut_w.unwrap_or(0.0)
+        + copy_w.unwrap_or(0.0)
+        + select_all_w.unwrap_or(0.0)
+        + paste_w.unwrap_or(0.0);
     let bubble_w = content_w + padding * option_count as f32 * 2.0;
     let bubble_h = TEXT_INPUT_OPTIONS_HEIGHT_PT * scale;
     let arrow_h = TEXT_INPUT_OPTIONS_ARROW_HEIGHT_PT * scale;
@@ -275,6 +398,16 @@ pub fn text_input_options_layout(
     let bubble_y = (field_rect.y - bubble_h - arrow_h - gap).max(viewport.y + margin);
     let bubble_rect = gfx::RectF::new(bubble_x, bubble_y, bubble_w, bubble_h);
     let mut option_x = bubble_rect.x;
+    let cut_rect = cut_w.map(|width| {
+        let rect = gfx::RectF::new(option_x, bubble_rect.y, width + padding * 2.0, bubble_rect.h);
+        option_x += rect.w;
+        rect
+    });
+    let copy_rect = copy_w.map(|width| {
+        let rect = gfx::RectF::new(option_x, bubble_rect.y, width + padding * 2.0, bubble_rect.h);
+        option_x += rect.w;
+        rect
+    });
     let select_all_rect = select_all_w.map(|width| {
         let rect = gfx::RectF::new(option_x, bubble_rect.y, width + padding * 2.0, bubble_rect.h);
         option_x += rect.w;
@@ -283,7 +416,7 @@ pub fn text_input_options_layout(
     let paste_rect = paste_w.map(|width| {
         gfx::RectF::new(option_x, bubble_rect.y, width + padding * 2.0, bubble_rect.h)
     });
-    Some(TextInputOptionsLayout { bubble_rect, select_all_rect, paste_rect })
+    Some(TextInputOptionsLayout { bubble_rect, cut_rect, copy_rect, select_all_rect, paste_rect })
 }
 
 #[must_use]
@@ -292,6 +425,12 @@ pub fn text_input_option_at(
     x: f32,
     y: f32,
 ) -> Option<TextInputOption> {
+    if layout.cut_rect.is_some_and(|rect| rect_contains(rect, x, y)) {
+        return Some(TextInputOption::Cut);
+    }
+    if layout.copy_rect.is_some_and(|rect| rect_contains(rect, x, y)) {
+        return Some(TextInputOption::Copy);
+    }
     if layout.select_all_rect.is_some_and(|rect| rect_contains(rect, x, y)) {
         return Some(TextInputOption::SelectAll);
     }
@@ -340,21 +479,47 @@ pub fn draw_text_input_options_popover(
         style.background,
     );
     let text_style = TextStyle::new(style.text_px, style.text).bold();
-    if let (Some(select_all), Some(_)) = (layout.select_all_rect, layout.paste_rect) {
-        let divider_x = select_all.x + select_all.w;
-        let divider_w =
-            (1.0 * (layout.bubble_rect.h / TEXT_INPUT_OPTIONS_HEIGHT_PT).max(1.0)).clamp(1.0, 2.0);
-        let divider_margin = layout.bubble_rect.h * 0.22;
-        encoder.draw_rrect(
-            gfx::RectF::new(
-                divider_x - divider_w * 0.50,
-                select_all.y + divider_margin,
-                divider_w,
-                select_all.h - divider_margin * 2.0,
-            ),
-            [0.0; 4],
-            style.divider,
+    let option_rects =
+        [layout.cut_rect, layout.copy_rect, layout.select_all_rect, layout.paste_rect];
+    let divider_w =
+        (1.0 * (layout.bubble_rect.h / TEXT_INPUT_OPTIONS_HEIGHT_PT).max(1.0)).clamp(1.0, 2.0);
+    let divider_margin = layout.bubble_rect.h * 0.22;
+    let mut previous_rect: Option<gfx::RectF> = None;
+    for rect in option_rects.into_iter().flatten() {
+        if let Some(previous_rect) = previous_rect {
+            let divider_x = previous_rect.x + previous_rect.w;
+            encoder.draw_rrect(
+                gfx::RectF::new(
+                    divider_x - divider_w * 0.50,
+                    previous_rect.y + divider_margin,
+                    divider_w,
+                    previous_rect.h - divider_margin * 2.0,
+                ),
+                [0.0; 4],
+                style.divider,
+            );
+        }
+        previous_rect = Some(rect);
+    }
+    if let Some(rect) = layout.cut_rect {
+        let label_gap = TEXT_INPUT_OPTIONS_HORIZONTAL_PADDING_PT * scale;
+        let label_rect = gfx::RectF::new(
+            rect.x + label_gap,
+            rect.y,
+            (rect.w - label_gap * 2.0).max(1.0),
+            rect.h,
         );
+        draw_input_option_label(encoder, TextInputOption::Cut.label(), label_rect, text_style);
+    }
+    if let Some(rect) = layout.copy_rect {
+        let label_gap = TEXT_INPUT_OPTIONS_HORIZONTAL_PADDING_PT * scale;
+        let label_rect = gfx::RectF::new(
+            rect.x + label_gap,
+            rect.y,
+            (rect.w - label_gap * 2.0).max(1.0),
+            rect.h,
+        );
+        draw_input_option_label(encoder, TextInputOption::Copy.label(), label_rect, text_style);
     }
     if let Some(rect) = layout.select_all_rect {
         let label_gap = TEXT_INPUT_OPTIONS_HORIZONTAL_PADDING_PT * scale;

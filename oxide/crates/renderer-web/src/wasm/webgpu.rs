@@ -3,8 +3,8 @@ use super::{
     document, index_slice, normalized_index_mode, resolve_index, sanitize_scale, source_rect,
     vertex_slice,
 };
-use crate::{NormalizedIndexMode, WebRendererStats};
 use crate::{id_mask_compositor, neon_marker, scene3d};
+use crate::{NormalizedIndexMode, WebRendererStats};
 use js_sys::Reflect;
 use oxide_renderer_api as api;
 use oxide_wasm_alloc_counter::AllocationSnapshot;
@@ -925,6 +925,7 @@ impl WebGpuRenderer {
         config.height = height;
         config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
         config.desired_maximum_frame_latency = 1;
+        config.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
         surface.configure(&device, &config);
 
         let programs = create_programs(&device, config.format);
@@ -1673,7 +1674,8 @@ impl WebGpuRenderer {
             vertex_count = vertex_count.saturating_add(chunk.vertex_count);
         }
         let vertex_cache_count =
-            self.id_mask_draw_chunk_indices.len().saturating_sub(vertex_cache_first as usize) as u32;
+            self.id_mask_draw_chunk_indices.len().saturating_sub(vertex_cache_first as usize)
+                as u32;
         self.id_mask_draws.push(IdMaskDraw {
             viewport: pass.raster.viewport,
             mask_width: pass.raster.mask_width as u32,
@@ -2579,12 +2581,7 @@ impl WebGpuRenderer {
             self.stats.effect_bind_group_creates.saturating_add(1);
     }
 
-    fn ensure_id_mask_resources(
-        &mut self,
-        width: u32,
-        height: u32,
-        compositor_uniform_len: usize,
-    ) {
+    fn ensure_id_mask_resources(&mut self, width: u32, height: u32, compositor_uniform_len: usize) {
         let size_changed = self.id_mask_width != width
             || self.id_mask_height != height
             || self.id_mask_city_view.is_none()

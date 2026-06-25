@@ -201,19 +201,14 @@ impl MetalRenderer {
             return Ok(index);
         }
 
-        let buffer = self
-            .device
-            .new_buffer(byte_len.max(1) as u64, MTLResourceOptions::StorageModeShared);
+        let buffer =
+            self.device.new_buffer(byte_len.max(1) as u64, MTLResourceOptions::StorageModeShared);
         let vertex_ptr = buffer.contents().cast::<u8>();
         if vertex_ptr.is_null() {
             return Err(api::RenderError::OutOfMemory);
         }
         unsafe {
-            core::ptr::copy_nonoverlapping(
-                vertices.as_ptr() as *const u8,
-                vertex_ptr,
-                byte_len,
-            );
+            core::ptr::copy_nonoverlapping(vertices.as_ptr() as *const u8, vertex_ptr, byte_len);
         }
         self.id_mask_vertex_caches.push(IdMaskVertexUploadCache { key, buffer });
         Ok(self.id_mask_vertex_caches.len() - 1)

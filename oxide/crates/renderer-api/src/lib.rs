@@ -159,20 +159,19 @@ pub struct IndexSpan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ImageHandle(pub u32);
 
-pub trait RuntimeImageUploader
-{
-   fn create_a8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize) -> ImageHandle;
+pub trait RuntimeImageUploader {
+    fn create_a8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize) -> ImageHandle;
 
-   fn update_a8(
-      &mut self,
-      handle: ImageHandle,
-      x: u32,
-      y: u32,
-      width: u32,
-      height: u32,
-      data: &[u8],
-      row_bytes: usize,
-   );
+    fn update_a8(
+        &mut self,
+        handle: ImageHandle,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        data: &[u8],
+        row_bytes: usize,
+    );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

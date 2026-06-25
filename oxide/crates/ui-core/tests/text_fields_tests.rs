@@ -3,7 +3,9 @@ use oxide_ui_core::elements::CharFilter;
 use oxide_ui_core::{
     bitmap_text::{text_width, TextStyle},
     single_line_text_selection_highlight_layout, single_line_text_selection_index_for_x,
-    single_line_text_selection_rect, text_char_slice, text_input_option_at,
+    single_line_text_selection_rect, text_caret_visible, text_char_slice,
+    text_floating_placeholder_elapsed_progress, text_floating_placeholder_layout,
+    text_floating_placeholder_target, text_floating_placeholder_tick, text_input_option_at,
     text_input_options_layout, text_selection_drag_anchor_at, text_word_range_at_char_index,
     EditableText, FieldFailRestoreMode, HorizontalShiftingText, SecureText, TextFieldPolicy,
     TextInputOption, TextInputOptionsConfig, TextSelectionDragAnchor, TextSelectionDragState,
@@ -34,6 +36,10 @@ fn bio_policy() -> TextFieldPolicy {
 
 fn login_password_policy() -> TextFieldPolicy {
     TextFieldPolicy::new(CharFilter::None).with_max_length(Some(30)).with_lowercase(true)
+}
+
+fn assert_close(actual: f32, expected: f32) {
+    assert!((actual - expected).abs() <= 0.01, "expected {expected}, got {actual}");
 }
 
 #[test]
@@ -293,11 +299,54 @@ fn text_fields_tap_memory_detects_same_field_double_taps_only() {
 }
 
 #[test]
+fn text_fields_caret_visibility_blinks_half_period() {
+    assert!(text_caret_visible(0));
+    assert!(text_caret_visible(529));
+    assert!(!text_caret_visible(530));
+    assert!(!text_caret_visible(1059));
+    assert!(text_caret_visible(1060));
+}
+
+#[test]
+fn text_fields_floating_placeholder_centers_shrinks_and_returns_on_empty_blur() {
+    let field = RectF::new(80.0, 120.0, 156.0, 32.0);
+    let inline = TextStyle::new(18.0, Color::rgba(0.7, 0.7, 0.7, 0.52));
+    let floating = TextStyle::new(11.0, Color::rgba(0.7, 0.7, 0.7, 0.62));
+    let floating_y = field.y - 15.0;
+
+    assert_eq!(text_floating_placeholder_target(false, true), 0.0);
+    assert_eq!(text_floating_placeholder_target(true, true), 1.0);
+    assert_eq!(text_floating_placeholder_target(false, false), 1.0);
+
+    let centered =
+        text_floating_placeholder_layout(field, "username", inline, floating, 0.0, floating_y);
+    let floated =
+        text_floating_placeholder_layout(field, "username", inline, floating, 1.0, floating_y);
+    let halfway =
+        text_floating_placeholder_layout(field, "username", inline, floating, 0.5, floating_y);
+
+    assert_close(centered.rect.x + centered.rect.w * 0.50, field.x + field.w * 0.50);
+    assert_close(floated.rect.x + floated.rect.w * 0.50, field.x + field.w * 0.50);
+    assert!(floated.rect.w < centered.rect.w);
+    assert!(floated.rect.y < centered.rect.y);
+    assert!(halfway.rect.y < centered.rect.y);
+    assert!(halfway.rect.y > floated.rect.y);
+    assert_close(floated.rect.y, floating_y);
+
+    let advancing = text_floating_placeholder_tick(0.0, true, true, 16);
+    assert!(advancing > 0.0);
+    let returning = text_floating_placeholder_tick(advancing, false, true, 16);
+    assert!(returning < advancing);
+    assert_eq!(text_floating_placeholder_elapsed_progress(1_000, 1_000), 0.0);
+    assert_eq!(text_floating_placeholder_elapsed_progress(1_000, 1_160), 1.0);
+}
+
+#[test]
 fn text_fields_input_options_layout_matches_field_width_and_hit_tests_options() {
-    let field = RectF::new(40.0, 80.0, 120.0, 44.0);
+    let field = RectF::new(260.0, 80.0, 120.0, 44.0);
     let layout = text_input_options_layout(
         field,
-        RectF::new(0.0, 0.0, 320.0, 480.0),
+        RectF::new(0.0, 0.0, 640.0, 480.0),
         1.0,
         TextInputOptionsConfig::all(),
         10.6,
@@ -305,22 +354,41 @@ fn text_fields_input_options_layout_matches_field_width_and_hit_tests_options() 
     .expect("enabled options should lay out");
 
     let style = TextStyle::new(10.6, Color::rgba(1.0, 1.0, 1.0, 1.0)).bold();
+    let cut_w = text_width(TextInputOption::Cut.label(), style);
+    let copy_w = text_width(TextInputOption::Copy.label(), style);
     let select_all_w = text_width(TextInputOption::SelectAll.label(), style);
     let paste_w = text_width(TextInputOption::Paste.label(), style);
     let padding = 10.0;
-    assert!((layout.bubble_rect.w - (select_all_w + paste_w + padding * 4.0)).abs() < 0.001);
+    assert!(
+        (layout.bubble_rect.w - (cut_w + copy_w + select_all_w + paste_w + padding * 8.0)).abs()
+            < 0.001
+    );
     assert_eq!(layout.bubble_rect.h, 30.0);
     assert!(
         (layout.bubble_rect.x - (field.x + field.w * 0.50 - layout.bubble_rect.w * 0.50)).abs()
             < 0.001
     );
+    let cut = layout.cut_rect.expect("cut rect");
+    let copy = layout.copy_rect.expect("copy rect");
     let select_all = layout.select_all_rect.expect("select all rect");
     let paste = layout.paste_rect.expect("paste rect");
+    assert!((cut.w - (cut_w + padding * 2.0)).abs() < 0.001);
+    assert!((copy.w - (copy_w + padding * 2.0)).abs() < 0.001);
     assert!((select_all.w - (select_all_w + padding * 2.0)).abs() < 0.001);
     assert!((paste.w - (paste_w + padding * 2.0)).abs() < 0.001);
-    assert!((select_all.x - layout.bubble_rect.x).abs() < 0.001);
+    assert!((cut.x - layout.bubble_rect.x).abs() < 0.001);
+    assert!((copy.x - (cut.x + cut.w)).abs() < 0.001);
+    assert!((select_all.x - (copy.x + copy.w)).abs() < 0.001);
     assert!((paste.x - (select_all.x + select_all.w)).abs() < 0.001);
     assert!((paste.x + paste.w - (layout.bubble_rect.x + layout.bubble_rect.w)).abs() < 0.001);
+    assert_eq!(
+        text_input_option_at(layout, cut.x + cut.w * 0.50, layout.bubble_rect.y + 8.0),
+        Some(TextInputOption::Cut)
+    );
+    assert_eq!(
+        text_input_option_at(layout, copy.x + copy.w * 0.50, layout.bubble_rect.y + 8.0),
+        Some(TextInputOption::Copy)
+    );
     assert_eq!(
         text_input_option_at(
             layout,
@@ -339,7 +407,7 @@ fn text_fields_input_options_layout_matches_field_width_and_hit_tests_options() 
         RectF::new(10.0, 40.0, 500.0, 30.0),
         RectF::new(0.0, 0.0, 320.0, 480.0),
         1.0,
-        TextInputOptionsConfig { select_all: true, paste: false },
+        TextInputOptionsConfig { cut: false, copy: false, select_all: true, paste: false },
         10.6,
     )
     .expect("oversized fields should still produce a layout");
