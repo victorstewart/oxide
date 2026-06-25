@@ -934,8 +934,7 @@ impl<U: elements::ImageUploader> Router<U> {
                     let _ = write!(
                         self.overlay_extra,
                         " slice={:.1}px alpha={:.2}",
-                        self.nine_slice.slice_px,
-                        self.nine_slice.alpha
+                        self.nine_slice.slice_px, self.nine_slice.alpha
                     );
                 }
                 SceneKind::SdfText => {

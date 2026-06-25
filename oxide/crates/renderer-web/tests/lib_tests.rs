@@ -85,6 +85,13 @@ fn web_renderer_has_no_topomap_specific_command_hook() {
 }
 
 #[test]
+fn webgpu_surface_config_uses_premultiplied_alpha() {
+    let webgpu_source = include_str!("../src/wasm/webgpu.rs");
+
+    assert!(webgpu_source.contains("config.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;"));
+}
+
+#[test]
 fn wasm_public_exports_are_webgpu_only() {
     let source = include_str!("../src/lib.rs");
     assert!(source.contains("pub use wasm::{BrowserRenderer, WebGpuRenderer};"));

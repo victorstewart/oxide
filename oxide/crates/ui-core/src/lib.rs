@@ -658,13 +658,15 @@ pub mod text_fields;
 pub use text_fields::{
     draw_text_input_options_popover, draw_text_selection_highlight,
     single_line_text_selection_highlight_layout, single_line_text_selection_index_for_x,
-    single_line_text_selection_rect, text_char_slice, text_input_option_at,
+    single_line_text_selection_rect, text_caret_visible, text_char_slice,
+    text_floating_placeholder_elapsed_progress, text_floating_placeholder_layout,
+    text_floating_placeholder_target, text_floating_placeholder_tick, text_input_option_at,
     text_input_options_layout, text_selection_drag_anchor_at, text_word_range_at_char_index,
     EditableText, FieldFailRestoreMode, HorizontalShiftingText, SecureText, TextCaretDragState,
-    TextFieldPolicy, TextInputOption, TextInputOptionsConfig, TextInputOptionsLayout,
-    TextInputOptionsPopoverState, TextInputOptionsPopoverStyle, TextSelectionDragAnchor,
-    TextSelectionDragState, TextSelectionHighlightLayout, TextSelectionHighlightStyle,
-    TextSelectionState, TextTapMemory,
+    TextFieldPolicy, TextFloatingPlaceholderLayout, TextInputOption, TextInputOptionsConfig,
+    TextInputOptionsLayout, TextInputOptionsPopoverState, TextInputOptionsPopoverStyle,
+    TextSelectionDragAnchor, TextSelectionDragState, TextSelectionHighlightLayout,
+    TextSelectionHighlightStyle, TextSelectionState, TextTapMemory,
 };
 
 // ===== UI Node Tree (layout + routing) =====

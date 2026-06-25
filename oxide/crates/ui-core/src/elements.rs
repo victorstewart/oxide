@@ -1,7 +1,7 @@
 //! Basic UI elements: Label, ProgressBar, Spinner
 #![allow(clippy::module_name_repetitions)]
 
-use crate::{text_boundary, DrawListBuilder};
+use crate::{text_boundary, text_fields::text_floating_placeholder_tick, DrawListBuilder};
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -1927,9 +1927,12 @@ impl TextInputState {
     }
 
     pub fn tick(&mut self, dt_ms: u32) {
-        let target = if self.focused || !self.text.is_empty() { 1.0 } else { 0.0 };
-        let step = ((target - self.placeholder_t) * (dt_ms as f32 / 140.0)).clamp(-0.08, 0.08);
-        self.placeholder_t = (self.placeholder_t + step).clamp(0.0, 1.0);
+        self.placeholder_t = text_floating_placeholder_tick(
+            self.placeholder_t,
+            self.focused,
+            self.text.is_empty(),
+            dt_ms,
+        );
         if self.focused && self.selection.is_none() {
             self.caret_timer = self.caret_timer.saturating_add(dt_ms);
             if self.caret_timer >= 520 {
@@ -2418,15 +2421,18 @@ impl TextInput {
             builder.rrect(caret_rect, [0.8; 4], style.caret);
         }
 
-        if state.text.is_empty() {
-            let offset = style.placeholder_offset * (1.0 - state.placeholder_t);
-            let px = style.placeholder_font_px
-                + (style.font_px - style.placeholder_font_px) * state.placeholder_t;
-            let ph_rect = gfx::RectF::new(content.x, content.y - offset, content.w, px + 2.0);
+        if state.text.is_empty() || state.placeholder_t > 0.01 {
+            let px =
+                style.font_px + (style.placeholder_font_px - style.font_px) * state.placeholder_t;
+            let line_h = (px * 1.25).ceil();
+            let inline_y = content.y + (content.h - line_h) * 0.50;
+            let floating_y = content.y - style.placeholder_offset;
+            let y = inline_y + (floating_y - inline_y) * state.placeholder_t;
+            let ph_rect = gfx::RectF::new(content.x, y, content.w, line_h + 2.0);
             encode_label_unwrapped(
                 &state.placeholder,
                 style.placeholder,
-                Align::Left,
+                Align::Center,
                 style.font_id,
                 px,
                 ph_rect,

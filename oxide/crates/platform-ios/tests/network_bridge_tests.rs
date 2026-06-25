@@ -120,12 +120,11 @@ fn network_bridge_configures_tcp_tls13_fast_open_and_early_writes() {
         "- (NSData *)popReceived:(uint64_t)timeoutMs",
     );
 
-    assert!(source.contains(
-        "configure_sec_options(sec_options, tls, endpoint.UTF8String, alpn, NO);"
-    ));
-    assert!(tcp_body.contains(
-        "configure_sec_options(sec_options, tls, endpoint.UTF8String, alpn, YES);"
-    ));
+    assert!(
+        source.contains("configure_sec_options(sec_options, tls, endpoint.UTF8String, alpn, NO);")
+    );
+    assert!(tcp_body
+        .contains("configure_sec_options(sec_options, tls, endpoint.UTF8String, alpn, YES);"));
     assert!(tcp_body.contains("nw_tcp_options_set_enable_fast_open(tcp_options, true);"));
     assert!(source.contains("nw_parameters_set_fast_open_enabled(_tlsParameters, true);"));
     assert!(source.contains("self.ready || (self.currentFallback && _connection != NULL)"));
@@ -142,7 +141,9 @@ fn network_bridge_applies_rust_quic_transport_fields() {
         "  if (_quicParameters == NULL)",
     );
 
-    assert!(source.contains("uint16_t keepaliveIntervalSecs = _quicConfig.keepalive_interval_secs;"));
+    assert!(
+        source.contains("uint16_t keepaliveIntervalSecs = _quicConfig.keepalive_interval_secs;")
+    );
     assert!(body.contains("nw_quic_set_idle_timeout(quic_options, idleTimeoutMs);"));
     assert!(body.contains("nw_quic_set_max_udp_payload_size(quic_options, maxUdpPayloadSize);"));
 }
@@ -162,11 +163,17 @@ fn network_bridge_configures_client_keepalive_for_quic_and_tcp_tls() {
     );
 
     assert!(tcp_body.contains("nw_tcp_options_set_enable_keepalive(tcp_options, true);"));
-    assert!(tcp_body.contains("nw_tcp_options_set_keepalive_idle_time(tcp_options, keepaliveIntervalSecs);"));
-    assert!(tcp_body.contains("nw_tcp_options_set_keepalive_interval(tcp_options, keepaliveIntervalSecs);"));
+    assert!(tcp_body
+        .contains("nw_tcp_options_set_keepalive_idle_time(tcp_options, keepaliveIntervalSecs);"));
+    assert!(tcp_body
+        .contains("nw_tcp_options_set_keepalive_interval(tcp_options, keepaliveIntervalSecs);"));
     assert!(ready_body.contains("[self configureReadyKeepalive];"));
-    assert!(ready_body.contains("self.currentFallback || self.quicConfig.keepalive_interval_secs == 0"));
-    assert!(ready_body.contains("nw_connection_copy_protocol_metadata(_connection, quicDefinition);"));
+    assert!(
+        ready_body.contains("self.currentFallback || self.quicConfig.keepalive_interval_secs == 0")
+    );
+    assert!(
+        ready_body.contains("nw_connection_copy_protocol_metadata(_connection, quicDefinition);")
+    );
     assert!(ready_body.contains("nw_quic_set_keepalive_interval(quicMetadata,"));
 }
 

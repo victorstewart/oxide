@@ -21,11 +21,12 @@ Call flow:
 - `sanitize_scale_rejects_invalid_values()`: verifies invalid scale fallback.
 - `native_stub_tracks_frame_shape_and_reports_unsupported_submit()`: verifies native frame counters and unsupported submit behavior.
 - `native_stub_ignores_web_camera_background_commands()`: verifies unsupported web `CameraBg` commands do not count as web draw work.
+- `webgpu_surface_config_uses_premultiplied_alpha()`: verifies browser WebGPU surfaces request premultiplied alpha for DOM composition.
 - `wasm_webgpu_resource_counters_cover_uploads_and_passes()`: verifies the WebGPU stats struct, renderer source, and web host metric strings keep draw, clip-depth/scissor, pass, timestamp, upload, scratch, Scene3D, ID-mask, effect-uniform, and resource-creation counters synchronized.
 
 ## Logic narrative
 
-The tests intentionally avoid browser APIs. Color tests clamp overrange and underrange values. Scale tests cover valid, zero, and NaN values. The native stub tests start frames, inspect counters, prove `CameraBg` is zero-work on web, and check that submitting on a non-wasm target returns `RenderError::Unsupported`. Source-inspection tests keep WebGPU-only public exports, hot-path scratch reuse, timestamp-query readbacks, upload-scratch wiring, draw-state caching, clip-depth tracking, and effect-uniform batching visible to native CI.
+The tests intentionally avoid browser APIs. Color tests clamp overrange and underrange values. Scale tests cover valid, zero, and NaN values. The native stub tests start frames, inspect counters, prove `CameraBg` is zero-work on web, and check that submitting on a non-wasm target returns `RenderError::Unsupported`. Source-inspection tests keep WebGPU-only public exports, premultiplied-alpha surface setup, hot-path scratch reuse, timestamp-query readbacks, upload-scratch wiring, draw-state caching, clip-depth tracking, and effect-uniform batching visible to native CI.
 
 ## Preconditions and postconditions; invariants maintained; unsafe invariants if any
 
@@ -62,6 +63,7 @@ pub fn scale() -> f32
 
 ## Changelog
 
+- 2026-06-22: added static coverage for browser WebGPU premultiplied-alpha surface setup.
 - 2026-06-02: added native stub regression coverage proving web `CameraBg` commands remain zero-work.
 - 2026-06-01: added static coverage for WebGPU effect-uniform batching, dynamic-offset wiring, and effect uniform report counters.
 - 2026-06-01: added static coverage for WebGPU clip-depth tracking and clip-state cache A/B counters.

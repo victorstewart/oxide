@@ -55,8 +55,7 @@ fn id_mask_gpu_upload_cache_is_content_hash_chunk_keyed() {
     let renderer_source = include_str!("../src/lib.rs");
     let gpu_source = include_str!("../src/id_mask_gpu.rs");
     assert!(
-        renderer_source
-            .contains("id_mask_vertex_caches: alloc::vec::Vec<IdMaskVertexUploadCache>")
+        renderer_source.contains("id_mask_vertex_caches: alloc::vec::Vec<IdMaskVertexUploadCache>")
             && renderer_source.contains("struct IdMaskVertexUploadKey")
             && renderer_source.contains("content_hash: u64")
             && renderer_source.contains("byte_len: usize"),
