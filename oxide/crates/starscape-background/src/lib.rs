@@ -128,7 +128,7 @@ impl StarscapeAtmosphereConfig {
             max_alpha: 0.16,
             coverage_fraction: 0.54,
             falloff_power: 2.15,
-            rows: 80,
+            rows: 96,
             seed: 0x4E54_4158,
         }
     }
@@ -386,12 +386,16 @@ fn atmosphere_strips(rect: RectF, config: StarscapeAtmosphereConfig) -> Vec<Atmo
         }
         let mut color = mix_color(config.pink, config.evening, eased);
         color.a *= alpha;
-        let y = match config.origin {
-            StarscapeAtmosphereOrigin::Top => rect.y + t0 * coverage_h,
-            StarscapeAtmosphereOrigin::Bottom => rect.y + rect.h - t1 * coverage_h,
+        let (y0, y1) = match config.origin {
+            StarscapeAtmosphereOrigin::Top => {
+                (rect.y + t0 * coverage_h, rect.y + t1 * coverage_h)
+            }
+            StarscapeAtmosphereOrigin::Bottom => {
+                (rect.y + rect.h - t1 * coverage_h, rect.y + rect.h - t0 * coverage_h)
+            }
         };
         strips.push(AtmosphereStrip {
-            rect: RectF::new(rect.x, y, rect.w, ((t1 - t0) * coverage_h).ceil() + 1.0),
+            rect: RectF::new(rect.x, y0, rect.w, (y1 - y0).max(0.0)),
             color,
             t: tm,
         });
