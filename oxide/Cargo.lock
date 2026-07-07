@@ -971,6 +971,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxide-starscape-background"
+version = "0.1.0"
+dependencies = [
+ "oxide-renderer-api",
+]
+
+[[package]]
 name = "oxide-telemetry"
 version = "0.1.0"
 dependencies = [
