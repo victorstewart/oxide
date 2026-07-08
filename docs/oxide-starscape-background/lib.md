@@ -30,7 +30,7 @@ Call graph:
 
 `StarscapeBackground::new` precomputes normalized star and dust positions from a deterministic RNG. During draw, the crate fills the base rectangle first, draws the optional atmosphere before particles, then draws dust and stars over it so stars remain crisp.
 
-The atmosphere uses horizontal strips because the current shared `RenderEncoder::draw_solid` path accepts one color per draw. Strip rectangles are exactly contiguous: each row's lower edge matches the next row's upper edge. This avoids alpha-amplifying overlap lines while preserving backend portability. `ComplexSoftMesh` starts from the same vertical wash and adds a few very broad, low-alpha ellipse fans partially offscreen to break perfect linearity without changing the effect into an illustration.
+The atmosphere uses horizontal strips because the current shared `RenderEncoder::draw_solid` path accepts one color per draw. Strip rectangles are exactly contiguous: each row's lower edge matches the next row's upper edge. This avoids alpha-amplifying overlap lines while preserving backend portability. The origin edge holds the caller-supplied pink hue before it eases toward evening, so brand colors do not immediately muddy over a black base. `ComplexSoftMesh` starts from the same vertical wash and adds a few very broad, low-alpha ellipse fans partially offscreen to break perfect linearity without changing the effect into an illustration.
 
 ## Preconditions And Postconditions
 
@@ -46,7 +46,7 @@ Rows are clamped to the crate's supported range. Coverage is clamped to the view
 
 ## Performance Notes
 
-Draw complexity is `O(rows + dust + visible_stars)`. The complex atmosphere adds three bounded ellipse fans. No image assets, CSS layers, or backend-specific shader paths are required. The strip-contiguity invariant avoids overdraw at every row boundary, which is both visually cleaner and cheaper than overlapping rows.
+Draw complexity is `O(rows + dust + visible_stars)`. The complex atmosphere adds three bounded ellipse fans. No image assets, CSS layers, or backend-specific shader paths are required. The strip-contiguity invariant avoids overdraw at every row boundary, which is both visually cleaner and cheaper than overlapping rows. Dust particles are deliberately tiny and low-alpha so they read as sparse texture instead of visible round haze marks over the atmosphere.
 
 ## Feature Flags And Cfgs
 
@@ -54,7 +54,7 @@ The crate currently exposes one portable path without feature-flagged behavior.
 
 ## Testing And Benchmarks
 
-`oxide/crates/starscape-background/tests/atmosphere.rs` verifies alpha falloff, top/bottom mirroring, disabled-atmosphere invariance for star/dust draws, exact Nametag color inputs, and non-overlapping atmosphere strip boundaries.
+`oxide/crates/starscape-background/tests/atmosphere.rs` verifies alpha falloff, top/bottom mirroring, disabled-atmosphere invariance for star/dust draws, exact Nametag color inputs, pink-hue retention at the origin edge, tiny dust bounds, and non-overlapping atmosphere strip boundaries.
 
 ## Examples
 
@@ -74,3 +74,4 @@ background.draw(encoder, rect, &config);
 
 - Added the reusable starscape background crate with atmosphere presets and Nametag integration support.
 - Adjusted atmosphere strip geometry so rows are contiguous rather than overlapping, preventing visible alpha bands in Canvas/Web and native backends.
+- Retuned the Nametag atmosphere presets to keep the supplied pink hue at the origin edge and reduced dust size/alpha so the atmosphere does not reveal circular haze artifacts.

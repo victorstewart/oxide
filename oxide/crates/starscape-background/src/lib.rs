@@ -110,9 +110,9 @@ impl StarscapeAtmosphereConfig {
             mode: StarscapeAtmosphereMode::SimpleVertical,
             pink,
             evening,
-            max_alpha: 0.14,
-            coverage_fraction: 0.46,
-            falloff_power: 2.1,
+            max_alpha: 0.17,
+            coverage_fraction: 0.42,
+            falloff_power: 2.45,
             rows: 64,
             seed: 0x4E54_4153,
         }
@@ -125,9 +125,9 @@ impl StarscapeAtmosphereConfig {
             mode: StarscapeAtmosphereMode::ComplexSoftMesh,
             pink,
             evening,
-            max_alpha: 0.16,
-            coverage_fraction: 0.54,
-            falloff_power: 2.15,
+            max_alpha: 0.22,
+            coverage_fraction: 0.46,
+            falloff_power: 2.65,
             rows: 96,
             seed: 0x4E54_4158,
         }
@@ -200,16 +200,11 @@ impl StarscapeBackground {
             } else {
                 (rng.range_f32(-0.12, 1.12), rng.range_f32(-0.12, 1.12))
             };
-            let haze = rng.next_f32() > 0.78;
             dust.push(StarscapeBackgroundDust {
                 x,
                 y,
-                radius: if haze {
-                    rng.range_f32(0.012, 0.030)
-                } else {
-                    rng.range_f32(0.003, 0.012)
-                },
-                alpha: if haze { rng.range_f32(0.004, 0.009) } else { rng.range_f32(0.006, 0.018) },
+                radius: rng.range_f32(0.0024, 0.0072),
+                alpha: rng.range_f32(0.0025, 0.0075),
             });
         }
 
@@ -384,7 +379,7 @@ fn atmosphere_strips(rect: RectF, config: StarscapeAtmosphereConfig) -> Vec<Atmo
         if alpha <= 0.001 {
             continue;
         }
-        let mut color = mix_color(config.pink, config.evening, eased);
+        let mut color = mix_color(config.pink, config.evening, atmosphere_color_mix_t(tm));
         color.a *= alpha;
         let (y0, y1) = match config.origin {
             StarscapeAtmosphereOrigin::Top => {
@@ -408,7 +403,7 @@ fn draw_soft_lobes(
     rect: RectF,
     config: StarscapeAtmosphereConfig,
 ) {
-    let color = mix_color(config.pink, config.evening, 0.34);
+    let color = mix_color(config.pink, config.evening, 0.10);
     for lobe in atmosphere_lobes(config.seed) {
         let center = [
             rect.x + rect.w * lobe.x,
@@ -504,6 +499,12 @@ pub fn generated_background_seed(load_timestamp: u64, salt: &str) -> u64 {
 fn smoothstep(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+#[inline]
+#[must_use]
+fn atmosphere_color_mix_t(t: f32) -> f32 {
+    smoothstep((t - 0.32) / 0.68)
 }
 
 #[inline]

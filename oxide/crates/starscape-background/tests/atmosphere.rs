@@ -108,6 +108,28 @@ fn simple_atmosphere_strips_are_contiguous_without_overlap() {
 }
 
 #[test]
+fn atmosphere_origin_edge_uses_supplied_pink_hue() {
+    let pink = color_from_srgb_u8(255, 57, 117, 1.0);
+    let config = StarscapeAtmosphereConfig::nametag_top_complex(
+        pink,
+        color_from_srgb_u8(35, 37, 44, 1.0),
+    );
+    let encoder = draw_with_atmosphere(Some(config), RectF::new(0.0, 0.0, 100.0, 240.0));
+    let first_strip = encoder.solids[1];
+    assert_eq!(first_strip.1.r, pink.r);
+    assert_eq!(first_strip.1.g, pink.g);
+    assert_eq!(first_strip.1.b, pink.b);
+    assert!(first_strip.1.a >= 0.20);
+}
+
+#[test]
+fn generated_dust_stays_tiny_enough_to_avoid_haze_circles() {
+    let background = StarscapeBackground::new(12345);
+    assert!(background.dust().iter().all(|particle| particle.radius <= 0.0072));
+    assert!(background.dust().iter().all(|particle| particle.alpha <= 0.0075));
+}
+
+#[test]
 fn bottom_origin_is_top_origin_vertical_mirror() {
     let mut top = StarscapeAtmosphereConfig::nametag_top_simple(
         color_from_srgb_u8(255, 57, 117, 1.0),
@@ -161,8 +183,11 @@ fn nametag_presets_keep_exact_srgb_color_inputs() {
     let complex = StarscapeAtmosphereConfig::nametag_top_complex(pink, evening);
     assert_eq!(simple.pink, Color::rgba(255.0 / 255.0, 57.0 / 255.0, 117.0 / 255.0, 1.0));
     assert_eq!(simple.evening, Color::rgba(35.0 / 255.0, 37.0 / 255.0, 44.0 / 255.0, 1.0));
+    assert_eq!(simple.coverage_fraction, 0.42);
     assert_eq!(complex.origin, StarscapeAtmosphereOrigin::Top);
     assert_eq!(complex.mode, StarscapeAtmosphereMode::ComplexSoftMesh);
+    assert_eq!(complex.max_alpha, 0.22);
+    assert_eq!(complex.coverage_fraction, 0.46);
     assert_eq!(complex.rows, 96);
     assert_eq!(complex.pink, simple.pink);
     assert_eq!(complex.evening, simple.evening);
