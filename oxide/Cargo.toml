@@ -2,7 +2,6 @@
 members = [
     "crates/platform-api",
     "crates/renderer-api",
-    "crates/starscape-background",
     "crates/ui-core",
     "crates/platform-apple",
     "crates/platform-ios",
