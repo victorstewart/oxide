@@ -646,6 +646,12 @@ impl BrowserRenderer {
         self.inner.try_image_update_rgba8(handle, x, y, width, height, data, row_bytes)
     }
 
+   /// Releases a renderer-owned image and invalidates its handle.
+   pub fn image_release(&mut self, handle: api::ImageHandle) -> bool
+   {
+      self.inner.image_release(handle)
+   }
+
     pub fn mesh3d_create_colored(
         &mut self,
         data: &scene3d::MeshColor3dData<'_>,
@@ -1513,6 +1519,14 @@ impl WebGpuRenderer {
         self.record_image_upload_temp(rgba.len(), 1);
         self.update_image(handle, x, y, width, height, GpuImageKind::Rgba, &rgba)
     }
+
+   /// Releases a renderer-owned image and returns whether the handle was live.
+   pub fn image_release(&mut self, handle: api::ImageHandle) -> bool
+   {
+      self.images
+         .get_mut(handle.0 as usize)
+         .is_some_and(|image| image.take().is_some())
+   }
 
     pub fn mesh3d_create_colored(
         &mut self,

@@ -21,6 +21,7 @@ Call flow:
 - `sanitize_scale_rejects_invalid_values()`: verifies invalid scale fallback.
 - `native_stub_tracks_frame_shape_and_reports_unsupported_submit()`: verifies native frame counters and unsupported submit behavior.
 - `native_stub_ignores_web_camera_background_commands()`: verifies unsupported web `CameraBg` commands do not count as web draw work.
+- `wasm_webgpu_runtime_images_are_explicitly_reclaimable()`: verifies the production wrapper delegates image release and the WebGPU resource table removes live slot ownership idempotently.
 - `wasm_public_exports_are_webgpu_only()`: verifies wasm public exports remain limited to WebGPU production renderer types plus the narrow Canvas indexed-quad diagnostic helper, without exposing the raw Canvas renderer type.
 - `wasm_webgpu_backend_packet_vocabulary_is_frozen()`: freezes private WebGPU `DrawKind`, `GpuDraw`, coalescing, and `DrawCmd` lowering vocabulary before backend packet migrations.
 - `webgpu_surface_config_uses_premultiplied_alpha()`: verifies browser WebGPU surfaces request premultiplied alpha for DOM composition.
@@ -28,7 +29,7 @@ Call flow:
 
 ## Logic narrative
 
-The tests intentionally avoid browser APIs. Color tests clamp overrange and underrange values. Scale tests cover valid, zero, and NaN values. The native stub tests start frames, inspect counters, prove `CameraBg` is zero-work on web, and check that submitting on a non-wasm target returns `RenderError::Unsupported`. Source-inspection tests keep WebGPU production exports, the narrow Canvas indexed-quad diagnostic export, premultiplied-alpha surface setup, hot-path scratch reuse, timestamp-query readbacks, upload-scratch wiring, draw-state caching, clip-depth tracking, effect-uniform batching, and private packet vocabulary visible to native CI.
+The tests intentionally avoid browser APIs. Color tests clamp overrange and underrange values. Scale tests cover valid, zero, and NaN values. The native stub tests start frames, inspect counters, prove `CameraBg` is zero-work on web, and check that submitting on a non-wasm target returns `RenderError::Unsupported`. Source-inspection tests keep WebGPU production exports, the narrow Canvas indexed-quad diagnostic export, premultiplied-alpha surface setup, explicit image release, hot-path scratch reuse, timestamp-query readbacks, upload-scratch wiring, draw-state caching, clip-depth tracking, effect-uniform batching, and private packet vocabulary visible to native CI.
 
 ## Preconditions and postconditions; invariants maintained; unsafe invariants if any
 
@@ -66,6 +67,7 @@ pub fn scale() -> f32
 
 ## Changelog
 
+- 2026-07-09: added source-contract coverage for idempotent BrowserRenderer/WebGpuRenderer image reclamation.
 - 2026-06-22: froze private WebGPU packet/lowering vocabulary as measurement harness for architecture densification A/B work.
 - 2026-06-22: added static coverage for the narrow Canvas indexed-quad diagnostic export while keeping the raw Canvas renderer type private.
 - 2026-06-22: added static coverage for browser WebGPU premultiplied-alpha surface setup.

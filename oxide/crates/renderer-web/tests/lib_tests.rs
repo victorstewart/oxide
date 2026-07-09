@@ -103,6 +103,24 @@ fn webgpu_surface_config_uses_premultiplied_alpha() {
 }
 
 #[test]
+fn wasm_webgpu_runtime_images_are_explicitly_reclaimable()
+{
+   let source = include_str!("../src/wasm/webgpu.rs");
+   let compact = source_without_whitespace(source);
+
+   assert_eq!(
+      source
+         .matches("pub fn image_release(&mut self, handle: api::ImageHandle) -> bool")
+         .count(),
+      2
+   );
+   assert!(compact.contains("self.inner.image_release(handle)"));
+   assert!(compact.contains(
+      "self.images.get_mut(handle.0asusize).is_some_and(|image|image.take().is_some())"
+   ));
+}
+
+#[test]
 fn wasm_public_exports_are_webgpu_only() {
     let source = include_str!("../src/lib.rs");
     assert!(source.contains("pub use wasm::{bench_canvas_indexed_quads, BrowserRenderer, WebGpuRenderer};"));
