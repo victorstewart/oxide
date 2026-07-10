@@ -8,6 +8,7 @@
 #import <math.h>
 #import <stdbool.h>
 #import <stdint.h>
+#import <time.h>
 
 struct NametagQuicConfig
 {
@@ -65,6 +66,8 @@ typedef void *NametagReachabilityHandle;
 
 static const uint32_t kNametagDefaultPort = 443;
 static const size_t kNametagMaxFrameBytes = 16 * 1024 * 1024;
+static const NSUInteger kNametagMaxQueuedReceiveFrames = 64;
+static const NSUInteger kNametagMaxQueuedReceiveBytes = 32 * 1024 * 1024;
 static void (*g_oxide_reachability_callback)(uint32_t status, uint32_t iface,
                                              uint8_t expensive) = NULL;
 static id g_oxide_reachability_monitor = nil;
@@ -95,6 +98,29 @@ static BOOL env_truthy(const char *name)
 static BOOL network_debug_enabled(void)
 {
    return env_truthy("NAMETAG_NETWORK_DEBUG_LOG");
+}
+
+static uint64_t monotonic_deadline_after_ms(uint64_t timeoutMs)
+{
+   uint64_t nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC);
+   if (timeoutMs > (UINT64_MAX - nowNs) / NSEC_PER_MSEC)
+   {
+      return UINT64_MAX;
+   }
+   return nowNs + timeoutMs * NSEC_PER_MSEC;
+}
+
+static uint64_t monotonic_remaining_ns(uint64_t deadlineNs)
+{
+   uint64_t nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC);
+   return deadlineNs > nowNs ? deadlineNs - nowNs : 0;
+}
+
+static dispatch_time_t dispatch_deadline_for_remaining(uint64_t remainingNs)
+{
+   int64_t deltaNs = remainingNs > INT64_MAX ? INT64_MAX
+                                              : (int64_t)remainingNs;
+   return dispatch_time(DISPATCH_TIME_NOW, deltaNs);
 }
 
 static NSString *network_transport_name(BOOL fallback)
@@ -345,6 +371,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 @property(nonatomic, assign) uint16_t port;
 @property(nonatomic, strong) NSDate *handshakeStart;
 @property(nonatomic, strong) NSMutableArray<NSData *> *receiveBuffer;
+@property(nonatomic, assign) NSUInteger queuedReceiveBytes;
 @property(nonatomic, strong) NSMutableData *incomingBytes;
 
 - (instancetype)initWithEndpoint:(NSString *)endpoint
@@ -370,7 +397,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 - (void)startReceiveLoop;
 - (void)drainIncomingBytes;
 - (BOOL)waitForReady:(uint64_t)timeoutMs;
-- (BOOL)waitForWritableConnection:(uint64_t)timeoutMs;
+- (BOOL)waitForWritableConnection:(uint64_t)deadlineNs;
 - (BOOL)sendBytes:(const uint8_t *)data
             length:(size_t)len
            timeout:(uint64_t)timeoutMs;
@@ -406,6 +433,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    uint16_t keepaliveIntervalSecs = _quicConfig.keepalive_interval_secs;
    _metrics = (struct NametagQuicMetrics){0};
    _receiveBuffer = [[NSMutableArray alloc] init];
+   _queuedReceiveBytes = 0;
    _incomingBytes = [[NSMutableData alloc] init];
    _ready = NO;
    _readySignal = dispatch_semaphore_create(0);
@@ -486,6 +514,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    self.ready = NO;
    self.receiveSignal = dispatch_semaphore_create(0);
    [self.receiveBuffer removeAllObjects];
+   self.queuedReceiveBytes = 0;
    [self.incomingBytes setLength:0];
 
    self.handshakeStart = [NSDate date];
@@ -710,7 +739,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    return result == 0 && self.ready;
 }
 
-- (BOOL)waitForWritableConnection:(uint64_t)timeoutMs
+- (BOOL)waitForWritableConnection:(uint64_t)deadlineNs
 {
    if (self.closed)
    {
@@ -721,27 +750,20 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
       return YES;
    }
 
-   NSDate *until =
-       [NSDate dateWithTimeIntervalSinceNow:((NSTimeInterval)timeoutMs) /
-                                             1000.0];
    while (!self.closed)
    {
       if (self.ready || (self.currentFallback && _connection != NULL))
       {
          return YES;
       }
-      NSTimeInterval remaining = [until timeIntervalSinceNow];
-      if (remaining <= 0.0)
+      uint64_t remainingNs = monotonic_remaining_ns(deadlineNs);
+      if (remainingNs == 0)
       {
          break;
       }
-      uint64_t sliceMs = (uint64_t)ceil(MIN(remaining * 1000.0, 50.0));
-      if (sliceMs == 0)
-      {
-         sliceMs = 1;
-      }
-      dispatch_time_t sliceDeadline = dispatch_time(
-          DISPATCH_TIME_NOW, (int64_t)(sliceMs * NSEC_PER_MSEC));
+      uint64_t sliceNs = MIN(remainingNs, 50 * NSEC_PER_MSEC);
+      dispatch_time_t sliceDeadline =
+          dispatch_deadline_for_remaining(sliceNs);
       if (dispatch_semaphore_wait(self.readySignal, sliceDeadline) == 0 &&
           self.ready)
       {
@@ -752,9 +774,8 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    if (network_debug_enabled())
    {
       NSLog(@"Nametag network wait writable timeout transport=%@ "
-            @"timeout_ms=%llu ready=%d",
-            network_transport_name(self.currentFallback),
-            (unsigned long long)timeoutMs, self.ready ? 1 : 0);
+            @"ready=%d",
+            network_transport_name(self.currentFallback), self.ready ? 1 : 0);
    }
    return NO;
 }
@@ -767,7 +788,8 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    {
       return NO;
    }
-   if (![self waitForWritableConnection:timeoutMs])
+   uint64_t overallDeadlineNs = monotonic_deadline_after_ms(timeoutMs);
+   if (![self waitForWritableConnection:overallDeadlineNs])
    {
       return NO;
    }
@@ -792,8 +814,8 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
                         dispatch_semaphore_signal(sem);
                       });
 
-   dispatch_time_t deadline = dispatch_time(
-       DISPATCH_TIME_NOW, (int64_t)(timeoutMs * NSEC_PER_MSEC));
+   uint64_t remainingNs = monotonic_remaining_ns(overallDeadlineNs);
+   dispatch_time_t deadline = dispatch_deadline_for_remaining(remainingNs);
    if (dispatch_semaphore_wait(sem, deadline) != 0 && network_debug_enabled())
    {
       NSLog(@"Nametag network send timeout transport=%@ len=%zu "
@@ -806,36 +828,23 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 
 - (NSData *)popReceived:(uint64_t)timeoutMs
 {
-   __block NSData *payload = nil;
-   __weak typeof(self) weakSelf = self;
-   dispatch_sync(self.queue, ^{
-     __strong typeof(self) strongSelf = weakSelf;
-     if (strongSelf && strongSelf.receiveBuffer.count > 0)
-     {
-        payload = strongSelf.receiveBuffer.firstObject;
-        [strongSelf.receiveBuffer removeObjectAtIndex:0];
-     }
-   });
-
-   if (payload != nil || timeoutMs == 0)
-   {
-      return payload;
-   }
-
-   dispatch_time_t deadline = dispatch_time(
-       DISPATCH_TIME_NOW, (int64_t)(timeoutMs * NSEC_PER_MSEC));
+   uint64_t deadlineNs = monotonic_deadline_after_ms(timeoutMs);
+   dispatch_time_t deadline =
+       dispatch_deadline_for_remaining(monotonic_remaining_ns(deadlineNs));
    if (dispatch_semaphore_wait(self.receiveSignal, deadline) != 0)
    {
       return nil;
    }
 
    __block NSData *after = nil;
+   __weak typeof(self) weakSelf = self;
    dispatch_sync(self.queue, ^{
      __strong typeof(self) strongSelf = weakSelf;
      if (strongSelf && strongSelf.receiveBuffer.count > 0)
      {
         after = strongSelf.receiveBuffer.firstObject;
         [strongSelf.receiveBuffer removeObjectAtIndex:0];
+        strongSelf.queuedReceiveBytes -= after.length;
      }
    });
    return after;
@@ -928,11 +937,30 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
          return;
       }
 
+      if (self.receiveBuffer.count >= kNametagMaxQueuedReceiveFrames ||
+          self.queuedReceiveBytes > kNametagMaxQueuedReceiveBytes ||
+          frameLength >
+              kNametagMaxQueuedReceiveBytes - self.queuedReceiveBytes)
+      {
+         NSLog(@"Nametag network receive queue overflow transport=%@ "
+               @"frame_length=%u queued_frames=%lu queued_bytes=%lu",
+               network_transport_name(self.currentFallback), frameLength,
+               (unsigned long)self.receiveBuffer.count,
+               (unsigned long)self.queuedReceiveBytes);
+         [self.incomingBytes setLength:0];
+         self.ready = NO;
+         [self close];
+         dispatch_semaphore_signal(self.readySignal);
+         dispatch_semaphore_signal(self.receiveSignal);
+         return;
+      }
+
       NSData *frame =
           [self.incomingBytes subdataWithRange:NSMakeRange(0, frameLength)];
       _metrics.payload_bytes += frame.length;
       _metrics.total_bytes += frame.length;
       [self.receiveBuffer addObject:frame];
+      self.queuedReceiveBytes += frame.length;
       if (network_debug_enabled())
       {
          NSLog(@"Nametag network receive frame transport=%@ length=%lu "

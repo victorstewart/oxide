@@ -128,8 +128,77 @@ fn network_bridge_configures_tcp_tls13_fast_open_and_early_writes() {
     assert!(tcp_body.contains("nw_tcp_options_set_enable_fast_open(tcp_options, true);"));
     assert!(source.contains("nw_parameters_set_fast_open_enabled(_tlsParameters, true);"));
     assert!(source.contains("self.ready || (self.currentFallback && _connection != NULL)"));
-    assert!(send_body.contains("[self waitForWritableConnection:timeoutMs]"));
+    assert!(send_body.contains("[self waitForWritableConnection:overallDeadlineNs]"));
     assert!(!send_body.contains("[self waitForReady:timeoutMs]"));
+}
+
+#[test]
+fn network_bridge_consumes_one_receive_permit_before_each_frame_pop() {
+    let source = include_str!("../src/ios/network.m");
+    let body = source_between(
+        source,
+        "- (NSData *)popReceived:(uint64_t)timeoutMs",
+        "- (void)startReceiveLoop",
+    );
+    let wait = body
+        .find("dispatch_semaphore_wait(self.receiveSignal, deadline)")
+        .expect("receive permit wait");
+    let pop = body
+        .find("after = strongSelf.receiveBuffer.firstObject;")
+        .expect("receive queue pop");
+
+    assert!(wait < pop, "a receive permit must be consumed before queue removal");
+    assert_eq!(body.matches("receiveBuffer.firstObject").count(), 1);
+    assert!(body.contains("strongSelf.queuedReceiveBytes -= after.length;"));
+}
+
+#[test]
+fn network_bridge_bounds_receive_queue_by_frames_and_bytes() {
+    let source = include_str!("../src/ios/network.m");
+    let body = source_between(
+        source,
+        "- (void)drainIncomingBytes",
+        "- (BOOL)copyMetrics:(struct NametagQuicMetrics *)outMetrics",
+    );
+    let capacity_check = body
+        .find("self.receiveBuffer.count >= kNametagMaxQueuedReceiveFrames")
+        .expect("frame capacity check");
+    let frame_copy = body
+        .find("[self.incomingBytes subdataWithRange:NSMakeRange(0, frameLength)]")
+        .expect("frame copy");
+    let queue_add = body
+        .find("[self.receiveBuffer addObject:frame];")
+        .expect("receive queue append");
+
+    assert!(source.contains("kNametagMaxQueuedReceiveFrames = 64"));
+    assert!(source.contains("kNametagMaxQueuedReceiveBytes = 32 * 1024 * 1024"));
+    assert!(capacity_check < frame_copy && frame_copy < queue_add);
+    assert!(body.contains("kNametagMaxQueuedReceiveBytes - self.queuedReceiveBytes"));
+    assert!(body.contains("Nametag network receive queue overflow"));
+    assert!(body.contains("[self close];"));
+    assert!(body.contains("self.queuedReceiveBytes += frame.length;"));
+}
+
+#[test]
+fn network_bridge_uses_one_monotonic_deadline_for_send() {
+    let source = include_str!("../src/ios/network.m");
+    let wait_body = source_between(
+        source,
+        "- (BOOL)waitForWritableConnection:(uint64_t)deadlineNs",
+        "- (BOOL)sendBytes:(const uint8_t *)data",
+    );
+    let send_body = source_between(
+        source,
+        "- (BOOL)sendBytes:(const uint8_t *)data",
+        "- (NSData *)popReceived:(uint64_t)timeoutMs",
+    );
+
+    assert!(source.contains("clock_gettime_nsec_np(CLOCK_MONOTONIC)"));
+    assert!(wait_body.contains("monotonic_remaining_ns(deadlineNs)"));
+    assert!(!wait_body.contains("NSDate"));
+    assert!(send_body.contains("uint64_t overallDeadlineNs ="));
+    assert!(send_body.contains("[self waitForWritableConnection:overallDeadlineNs]"));
+    assert!(send_body.contains("monotonic_remaining_ns(overallDeadlineNs)"));
 }
 
 #[test]
