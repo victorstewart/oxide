@@ -103,10 +103,11 @@ fn webgpu_surface_config_uses_premultiplied_alpha() {
 }
 
 #[test]
-fn wasm_webgpu_runtime_images_are_explicitly_reclaimable()
+fn wasm_webgpu_runtime_images_are_explicitly_reclaimable_without_arena_tombstones()
 {
    let source = include_str!("../src/wasm/webgpu.rs");
    let compact = source_without_whitespace(source);
+   let slots = source_without_whitespace(include_str!("../src/wasm/image_slots.rs"));
 
    assert_eq!(
       source
@@ -115,9 +116,17 @@ fn wasm_webgpu_runtime_images_are_explicitly_reclaimable()
       2
    );
    assert!(compact.contains("self.inner.image_release(handle)"));
-   assert!(compact.contains(
-      "self.images.get_mut(handle.0asusize).is_some_and(|image|image.take().is_some())"
-   ));
+   assert!(compact.contains("images:ImageSlots<GpuImage>"));
+   assert!(compact.contains("self.images.remove(handle.0).is_some()"));
+   assert!(compact.contains("self.images.get(handle.0)"));
+   assert!(slots.contains("slots:Vec<Slot<T>>"));
+   assert!(slots.contains("free:Vec<u16>"));
+   assert!(slots.contains("(encoded_slot!=0&&generation!=0).then(||"));
+   assert!(!slots.contains("(encoded_slot!=0&&generation!=0).then_some("));
+   assert!(slots.contains("filter(|slot|slot.generation==generation)"));
+   assert!(slots.contains("ifletSome(next_generation)=slot.generation.checked_add(1)"));
+   assert!(!compact.contains("Vec<Option<GpuImage>>"));
+   assert!(!compact.contains("self.images.push(Some(image))"));
 }
 
 #[test]
@@ -368,7 +377,7 @@ fn wasm_webgpu_backend_packet_vocabulary_is_frozen() {
 
     assert_eq!(
         draw_kind,
-        "enumDrawKind{Solid,Rgba{image:usize},A8{image:usize},Sdf{image:usize},Layer{id:u32},Backdrop{rect:api::RectF,sigma:f32},}"
+        "enumDrawKind{Solid,Rgba{image:u32},A8{image:u32},Sdf{image:u32},Layer{id:u32},Backdrop{rect:api::RectF,sigma:f32},}"
     );
     assert_eq!(
         gpu_draw,

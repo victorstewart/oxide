@@ -504,6 +504,10 @@ fn resolve_index(index: u16, mode: NormalizedIndexMode) -> Option<usize> {
     }
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[path = "wasm/image_slots.rs"]
+mod image_slots;
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     #[path = "webgpu.rs"]

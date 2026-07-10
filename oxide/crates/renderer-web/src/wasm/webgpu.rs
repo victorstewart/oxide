@@ -3,6 +3,7 @@ use super::{
     document, index_slice, normalized_index_mode, resolve_index, sanitize_scale, source_rect,
     vertex_slice,
 };
+use crate::image_slots::ImageSlots;
 use crate::{id_mask_compositor, neon_marker, scene3d};
 use crate::{NormalizedIndexMode, WebRendererStats};
 use js_sys::Reflect;
@@ -132,9 +133,9 @@ struct IdMaskVertexCache {
 #[derive(Clone, Copy)]
 enum DrawKind {
     Solid,
-    Rgba { image: usize },
-    A8 { image: usize },
-    Sdf { image: usize },
+    Rgba { image: u32 },
+    A8 { image: u32 },
+    Sdf { image: u32 },
     Layer { id: u32 },
     Backdrop { rect: api::RectF, sigma: f32 },
 }
@@ -151,7 +152,7 @@ enum DrawPipelineKey {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DrawBindKey {
     None,
-    Texture { image: usize },
+    Texture { image: u32 },
     Layer { id: u32 },
     Effect { offset: u32 },
 }
@@ -798,7 +799,7 @@ pub struct WebGpuRenderer {
     scene3d_clear_color: Option<api::Color>,
     scene3d_clear_depth: bool,
     scene3d_active: bool,
-    images: Vec<Option<GpuImage>>,
+    images: ImageSlots<GpuImage>,
     layers: BTreeMap<u32, GpuLayer>,
     meshes_3d: Vec<Option<GpuMesh3d>>,
     frame: FrameData,
@@ -828,7 +829,7 @@ pub struct WebGpuRenderer {
 }
 
 fn image_for_update<'a>(
-    images: &'a [Option<GpuImage>],
+    images: &'a ImageSlots<GpuImage>,
     handle: api::ImageHandle,
     x: u32,
     y: u32,
@@ -836,7 +837,7 @@ fn image_for_update<'a>(
     height: u32,
     kind: GpuImageKind,
 ) -> Result<&'a GpuImage, api::RenderError> {
-    let Some(image) = images.get(handle.0 as usize).and_then(Option::as_ref) else {
+    let Some(image) = images.get(handle.0) else {
         return Err(api::RenderError::ResourceNotFound("image handle not found"));
     };
     if core::mem::discriminant(&image.kind) != core::mem::discriminant(&kind) {
@@ -1042,7 +1043,7 @@ impl WebGpuRenderer {
             scene3d_clear_color: None,
             scene3d_clear_depth: true,
             scene3d_active: false,
-            images: vec![None],
+            images: ImageSlots::new(),
             layers: BTreeMap::new(),
             meshes_3d: vec![None],
             frame: FrameData {
@@ -1159,7 +1160,7 @@ impl WebGpuRenderer {
             capacity.id_mask = capacity.id_mask.saturating_add(cache.bytes.capacity());
         }
         capacity.resource_table = capacity.resource_table.saturating_add(
-            self.images.capacity().saturating_mul(core::mem::size_of::<Option<GpuImage>>()),
+            self.images.storage_capacity_bytes(),
         );
         capacity.resource_table = capacity.resource_table.saturating_add(
             self.meshes_3d.capacity().saturating_mul(core::mem::size_of::<Option<GpuMesh3d>>()),
@@ -1523,9 +1524,7 @@ impl WebGpuRenderer {
    /// Releases a renderer-owned image and returns whether the handle was live.
    pub fn image_release(&mut self, handle: api::ImageHandle) -> bool
    {
-      self.images
-         .get_mut(handle.0 as usize)
-         .is_some_and(|image| image.take().is_some())
+      self.images.remove(handle.0).is_some()
    }
 
     pub fn mesh3d_create_colored(
@@ -1756,10 +1755,14 @@ impl WebGpuRenderer {
         kind: GpuImageKind,
         rgba: &[u8],
     ) -> Result<api::ImageHandle, api::RenderError> {
+        if !self.images.has_capacity() {
+            return Err(api::RenderError::InvalidOperation("gpu image slot capacity exhausted"));
+        }
         let image = self.create_image(width, height, kind, rgba)?;
-        let handle = api::ImageHandle(self.images.len() as u32);
-        self.images.push(Some(image));
-        Ok(handle)
+        self.images
+            .insert(image)
+            .map(api::ImageHandle)
+            .map_err(|_| api::RenderError::InvalidOperation("gpu image slot capacity exhausted"))
     }
 
     fn create_image(
@@ -1864,7 +1867,7 @@ impl WebGpuRenderer {
     }
 
     fn image(&self, handle: api::ImageHandle) -> Option<&GpuImage> {
-        self.images.get(handle.0 as usize).and_then(Option::as_ref)
+        self.images.get(handle.0)
     }
 
     fn current_clip(&self) -> api::RectI {
@@ -2198,9 +2201,9 @@ impl WebGpuRenderer {
         let color = api::Color::rgba(1.0, 1.0, 1.0, alpha.clamp(0.0, 1.0));
         let vertices = quad_vertices(dst, u0, v0, u1, v1, color);
         let kind = match (image.kind, sdf) {
-            (GpuImageKind::Rgba, _) => DrawKind::Rgba { image: handle.0 as usize },
-            (GpuImageKind::A8, false) => DrawKind::A8 { image: handle.0 as usize },
-            (GpuImageKind::A8, true) => DrawKind::Sdf { image: handle.0 as usize },
+            (GpuImageKind::Rgba, _) => DrawKind::Rgba { image: handle.0 },
+            (GpuImageKind::A8, false) => DrawKind::A8 { image: handle.0 },
+            (GpuImageKind::A8, true) => DrawKind::Sdf { image: handle.0 },
         };
         self.push_draw(kind, &vertices, &[0, 1, 2, 2, 1, 3]);
         self.stats.image_draws = self.stats.image_draws.saturating_add(1);
@@ -2230,8 +2233,8 @@ impl WebGpuRenderer {
         };
         let indices = index_slice(list, ib).unwrap_or(&[]);
         let kind = match image.kind {
-            GpuImageKind::Rgba => DrawKind::Rgba { image: handle.0 as usize },
-            GpuImageKind::A8 => DrawKind::A8 { image: handle.0 as usize },
+            GpuImageKind::Rgba => DrawKind::Rgba { image: handle.0 },
+            GpuImageKind::A8 => DrawKind::A8 { image: handle.0 },
         };
         let color = api::Color::rgba(1.0, 1.0, 1.0, alpha.clamp(0.0, 1.0));
         self.clear_scratch_draw();
@@ -2273,11 +2276,11 @@ impl WebGpuRenderer {
             return;
         };
         let kind = if run.sdf {
-            DrawKind::Sdf { image: run.atlas.0 as usize }
+            DrawKind::Sdf { image: run.atlas.0 }
         } else {
             match image.kind {
-                GpuImageKind::Rgba => DrawKind::Rgba { image: run.atlas.0 as usize },
-                GpuImageKind::A8 => DrawKind::A8 { image: run.atlas.0 as usize },
+                GpuImageKind::Rgba => DrawKind::Rgba { image: run.atlas.0 },
+                GpuImageKind::A8 => DrawKind::A8 { image: run.atlas.0 },
             }
         };
         self.clear_scratch_draw();
@@ -3732,15 +3735,15 @@ impl WebGpuRenderer {
         let (pipeline, bind) = match draw.kind {
             DrawKind::Solid => (DrawPipelineKey::Solid, DrawBindKey::None),
             DrawKind::Rgba { image } => {
-                self.images.get(image).and_then(Option::as_ref)?;
+                self.image(api::ImageHandle(image))?;
                 (DrawPipelineKey::Rgba, DrawBindKey::Texture { image })
             }
             DrawKind::A8 { image } => {
-                self.images.get(image).and_then(Option::as_ref)?;
+                self.image(api::ImageHandle(image))?;
                 (DrawPipelineKey::A8, DrawBindKey::Texture { image })
             }
             DrawKind::Sdf { image } => {
-                self.images.get(image).and_then(Option::as_ref)?;
+                self.image(api::ImageHandle(image))?;
                 (DrawPipelineKey::Sdf, DrawBindKey::Texture { image })
             }
             DrawKind::Layer { id } => {
@@ -3838,7 +3841,7 @@ impl WebGpuRenderer {
                 match state.bind {
                     DrawBindKey::None => {}
                     DrawBindKey::Texture { image } => {
-                        let Some(image) = self.images.get(image).and_then(Option::as_ref) else {
+                        let Some(image) = self.image(api::ImageHandle(image)) else {
                             continue;
                         };
                         pass.set_bind_group(1, &image.bind_group, &[]);
