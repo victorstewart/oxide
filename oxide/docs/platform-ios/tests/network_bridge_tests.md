@@ -20,10 +20,20 @@
   Verifies that `popReceived` waits on the receive semaphore before its sole queue removal and decrements queued-byte accounting with the removed frame.
 - `network_bridge_bounds_receive_queue_by_frames_and_bytes()`
   Verifies that admission checks the 64-frame and 32-MiB budgets before copying or appending a frame, and closes on overflow.
+- `network_bridge_closes_terminally_on_invalid_frame_length()`
+  Verifies that the actual parser branch clears malformed input, closes the session, marks it terminal, and wakes receive polling.
 - `network_bridge_uses_one_monotonic_deadline_for_send()`
   Verifies that send readiness and completion share one `CLOCK_MONOTONIC` deadline instead of receiving independent full timeout budgets.
+- `network_bridge_serializes_rust_facing_session_state()`
+  Verifies that readiness, writable-state, close, and closed-state entry points cross the queue-specific serialization boundary rather than reading nonatomic session fields from Rust worker threads.
+- `network_bridge_serializes_send_start_timeout_and_completion()`
+  Verifies that the deadline/state admission gate precedes `nw_connection_send`, timeout and completion share one serialized outcome, and timeout closes only the exact sending connection.
 - `network_bridge_exposes_nonblocking_tri_state_receive_contract()`
   Freezes the public header's `-1/0/1` values, symbol signature, zero-timeout pop, output length handling, terminal close path, and build-script header tracking.
+- `network_bridge_real_state_handler_treats_invalid_as_terminal()`
+  Extracts the actual `nw_connection_set_state_changed_handler` block and verifies that it records state and routes `nw_connection_state_invalid` through terminal failure handling.
+- `network_bridge_ignores_stale_connection_receive_events()`
+  Verifies that the receive callback captures its exact `nw_connection_t` and rejects bytes, EOF, or errors from canceled attempts.
 - `network_bridge_marks_only_terminal_connection_events_closed()`
   Verifies that failed/cancelled states close only after retries, waiting remains nonterminal, and receive error/EOF closes the session.
 - `network_bridge_applies_rust_quic_transport_fields()`
@@ -42,6 +52,10 @@
 - The receive-permit test proves the semaphore wait text precedes the only `firstObject` removal in `popReceived`, preventing a second call from consuming an old permit after a fast-path pop.
 - The queue-budget test proves both limits are checked before the frame copy and append, byte accounting grows and shrinks with the queue, and overflow reaches the connection close path.
 - The deadline test proves send creates one absolute monotonic deadline, passes it through readiness polling, and computes the completion wait from the same deadline.
+- The send-arbitration test extracts the production `sendBytes` method and orders its serialized deadline/state gates before the actual Network.framework send. It also requires exact-connection checks in both timeout paths, so a late completion cannot mutate the result or cancel a replacement attempt.
+- The session-state test extracts each Rust-facing Objective-C method and requires the queue-specific `quic_sync` boundary around nonatomic state access and terminal closure.
+- The invalid-frame test extracts the actual length-validation branch and follows it through `closeOnQueue`, rather than accepting a log message or parser constant as evidence of terminal behavior.
+- The real-handler test starts at `nw_connection_set_state_changed_handler` so the unrelated diagnostic `network_state_name` switch cannot satisfy connection-state coverage.
 - The tri-state test reads both the public header and implementation to keep the Rust-facing ABI and native behavior aligned.
 - The terminal-state test distinguishes recoverable Network.framework waiting from failed/cancelled events and verifies receive-loop terminal paths.
 - The keepalive test extracts both the TCP/TLS parameter block and the ready-state QUIC metadata path because Network.framework exposes keepalive at different phases for those transports.
@@ -54,6 +68,8 @@
 - A passing TCP/TLS fast-open test means the fallback path remains TLS 1.3-only and keeps the public Network.framework hooks required for TCP Fast Open and TLS early-data attempts.
 - Passing receive-accounting tests mean complete frames cannot grow the queue beyond either budget and each normal queue removal consumes the permit emitted for that frame.
 - A passing deadline test means readiness and completion cannot each consume the caller's entire timeout.
+- Passing send-arbitration and state-confinement tests mean the source keeps timeout, close, connection replacement, and completion ordered on the same queue used by Network.framework callbacks.
+- Passing invalid-frame and real-handler tests mean malformed wire input and Network.framework's invalid state cannot leave retained polling indefinitely idle.
 - Passing tri-state tests mean polling can distinguish frame, idle, and terminal without changing the blocking receive entry point.
 - A passing keepalive test means the native bridge keeps client connections active against the server on both the QUIC path and TCP/TLS fallback path.
 - A passing migration/cache test means the bridge leaves Network.framework free to handle path changes and share in-process TLS session cache state in the default privacy context.
@@ -64,10 +80,27 @@
 - Source-contract tests do not exercise scheduler timing or live overflow; the Objective-C syntax build provides the native compile gate while higher-level transport integration exercises live request/response behavior.
 - The early-data guard stays negative for `sec_protocol_options_set_tls_early_data_enabled` because the installed public SDK headers do not expose that Security.framework setter; the supported TCP/TLS route is guarded through Network.framework fast-open APIs instead.
 
+## Concurrency and memory behavior
+- Tests read compile-time `include_str!` snapshots and perform no network, filesystem, or concurrent runtime work.
+- Concurrency assertions target queue placement, exact connection identity, deadline ordering, and serialized outcome text in the production handler; native compiler and target checks validate the Blocks/ARC representation those assertions rely on.
+
+## Performance notes
+- Each assertion scans a bounded source file during the test process. The suite has no product runtime cost and no persisted performance baseline effect.
+
+## Feature flags and cfgs
+- The source-contract suite runs on the host without an iOS runtime or feature flag because it inspects the native source and public header directly.
+- Apple-target Cargo checks and explicit Objective-C device/simulator syntax builds remain separate required compile evidence.
+
 ## Testing and benchmarks
 - Run with `cargo test -p oxide-platform-ios --test network_bridge_tests`.
 
+## Examples
+```bash
+cargo test -p oxide-platform-ios --test network_bridge_tests --locked
+```
+
 ## Changelog
+- 2026-07-10: added actual-handler, malformed-frame terminal closure, stale receive identity, queue-confinement, and serialized send timeout/completion coverage.
 - 2026-07-10: added tri-state receive ABI and terminal connection-state contract coverage.
 - 2026-07-10: added source-contract coverage for receive permits, frame/byte queue limits, fail-closed overflow, and one monotonic send deadline.
 - 2026-06-11: added guards for TLS 1.3-only TCP/TLS, public fast-open/early-data eligibility, and the pre-ready TCP/TLS write path.

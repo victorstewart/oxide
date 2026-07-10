@@ -69,9 +69,18 @@ static const uint32_t kNametagDefaultPort = 443;
 static const size_t kNametagMaxFrameBytes = 16 * 1024 * 1024;
 static const NSUInteger kNametagMaxQueuedReceiveFrames = 64;
 static const NSUInteger kNametagMaxQueuedReceiveBytes = 32 * 1024 * 1024;
+static char kNametagQuicQueueContext;
 static void (*g_oxide_reachability_callback)(uint32_t status, uint32_t iface,
                                              uint8_t expensive) = NULL;
 static id g_oxide_reachability_monitor = nil;
+
+enum NametagSendOutcome
+{
+   NametagSendOutcomePending = 0,
+   NametagSendOutcomeSucceeded = 1,
+   NametagSendOutcomeFailed = 2,
+   NametagSendOutcomeTimedOut = 3,
+};
 
 static dispatch_queue_t quic_queue(void)
 {
@@ -81,8 +90,23 @@ static dispatch_queue_t quic_queue(void)
       queue =
           dispatch_queue_create("com.oxide.platform.network.quic",
                                 DISPATCH_QUEUE_SERIAL);
+      dispatch_queue_set_specific(queue, &kNametagQuicQueueContext,
+                                  &kNametagQuicQueueContext, NULL);
    });
    return queue;
+}
+
+static void quic_sync(dispatch_block_t block)
+{
+   // Session fields are queue-confined; callbacks execute inline to avoid a
+   // recursive dispatch_sync deadlock.
+   if (dispatch_get_specific(&kNametagQuicQueueContext) ==
+       &kNametagQuicQueueContext)
+   {
+      block();
+      return;
+   }
+   dispatch_sync(quic_queue(), block);
 }
 
 static BOOL env_truthy(const char *name)
@@ -357,14 +381,15 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    nw_parameters_t _tlsParameters;
 }
 
-@property(nonatomic, strong) dispatch_queue_t queue;
+@property(nonatomic, strong, readonly) dispatch_queue_t queue;
 @property(nonatomic, assign) struct NametagQuicConfig quicConfig;
 @property(nonatomic, assign) struct NametagRetryPolicy retryPolicy;
 @property(nonatomic, assign) struct NametagQuicMetrics metrics;
 @property(nonatomic, assign) BOOL fallbackUsed;
 @property(nonatomic, assign) BOOL ready;
-@property(nonatomic, strong) dispatch_semaphore_t readySignal;
-@property(nonatomic, strong) dispatch_semaphore_t receiveSignal;
+@property(nonatomic, assign) nw_connection_state_t state;
+@property(nonatomic, strong, readonly) dispatch_semaphore_t readySignal;
+@property(nonatomic, strong, readonly) dispatch_semaphore_t receiveSignal;
 @property(nonatomic, assign) NSUInteger attempt;
 @property(nonatomic, assign) BOOL closed;
 @property(nonatomic, assign) BOOL currentFallback;
@@ -400,11 +425,13 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 - (void)startReceiveLoop;
 - (void)drainIncomingBytes;
 - (BOOL)waitForReady:(uint64_t)timeoutMs;
+- (BOOL)isWritableOnQueue;
 - (BOOL)waitForWritableConnection:(uint64_t)deadlineNs;
 - (BOOL)sendBytes:(const uint8_t *)data
             length:(size_t)len
            timeout:(uint64_t)timeoutMs;
 - (NSData *)popReceived:(uint64_t)timeoutMs;
+- (void)closeOnQueue;
 - (BOOL)copyClosedState;
 
 @end
@@ -440,6 +467,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    _queuedReceiveBytes = 0;
    _incomingBytes = [[NSMutableData alloc] init];
    _ready = NO;
+   _state = nw_connection_state_invalid;
    _readySignal = dispatch_semaphore_create(0);
    _receiveSignal = dispatch_semaphore_create(0);
 
@@ -491,7 +519,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 
 - (void)start
 {
-   dispatch_sync(self.queue, ^{
+   quic_sync(^{
      if (self.closed)
      {
         return;
@@ -516,7 +544,6 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    }
 
    self.ready = NO;
-   self.receiveSignal = dispatch_semaphore_create(0);
    [self.receiveBuffer removeAllObjects];
    self.queuedReceiveBytes = 0;
    [self.incomingBytes setLength:0];
@@ -535,6 +562,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
       nw_connection_cancel(_connection);
       _connection = NULL;
    }
+   self.state = nw_connection_state_invalid;
 
    const char *hostCString = self.host.UTF8String;
    char portCString[8] = {0};
@@ -551,6 +579,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
       return;
    }
    _connection = connection;
+   self.state = nw_connection_state_preparing;
    self.currentFallback = fallback;
    nw_connection_set_queue(_connection, self.queue);
    NSUInteger attemptNumber = self.attempt;
@@ -574,6 +603,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
          {
             return;
          }
+         strongSelf.state = state;
          if (network_debug_enabled())
          {
             NSLog(@"Nametag network state transport=%@ endpoint=%@:%u "
@@ -587,6 +617,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
          case nw_connection_state_ready:
             [strongSelf handleReady];
             break;
+         case nw_connection_state_invalid:
          case nw_connection_state_failed:
          case nw_connection_state_cancelled:
             [strongSelf handleFailure:error
@@ -686,11 +717,9 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    if (terminalEvent)
    {
       [self close];
+      return;
    }
-   else
-   {
-      self.ready = NO;
-   }
+   self.ready = NO;
    dispatch_semaphore_signal(self.readySignal);
    dispatch_semaphore_signal(self.receiveSignal);
 }
@@ -738,44 +767,76 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 
 - (BOOL)waitForReady:(uint64_t)timeoutMs
 {
-   if (self.closed)
+   uint64_t deadlineNs = monotonic_deadline_after_ms(timeoutMs);
+   __block BOOL ready = NO;
+   __block BOOL closed = NO;
+   __block BOOL fallback = NO;
+   while (YES)
    {
-      return NO;
+      quic_sync(^{
+        ready = self.ready;
+        closed = self.closed;
+        fallback = self.currentFallback;
+      });
+      if (ready)
+      {
+         return YES;
+      }
+      if (closed)
+      {
+         return NO;
+      }
+
+      uint64_t remainingNs = monotonic_remaining_ns(deadlineNs);
+      if (remainingNs == 0)
+      {
+         break;
+      }
+      dispatch_time_t deadline =
+          dispatch_deadline_for_remaining(remainingNs);
+      dispatch_semaphore_wait(_readySignal, deadline);
    }
-   if (self.ready)
-   {
-      return YES;
-   }
-   dispatch_time_t deadline = dispatch_time(
-       DISPATCH_TIME_NOW, (int64_t)(timeoutMs * NSEC_PER_MSEC));
-   long result = dispatch_semaphore_wait(self.readySignal, deadline);
-   if ((result != 0 || !self.ready) && network_debug_enabled())
+
+   if (network_debug_enabled())
    {
       NSLog(@"Nametag network wait ready timeout transport=%@ timeout_ms=%llu "
             @"ready=%d",
-            network_transport_name(self.currentFallback),
-            (unsigned long long)timeoutMs, self.ready ? 1 : 0);
+            network_transport_name(fallback),
+            (unsigned long long)timeoutMs, ready ? 1 : 0);
    }
-   return result == 0 && self.ready;
+   return NO;
+}
+
+- (BOOL)isWritableOnQueue
+{
+   return !self.closed && _connection != NULL &&
+          (self.ready || (self.currentFallback &&
+                          self.state == nw_connection_state_preparing));
 }
 
 - (BOOL)waitForWritableConnection:(uint64_t)deadlineNs
 {
-   if (self.closed)
+   __block BOOL writable = NO;
+   __block BOOL closed = NO;
+   __block BOOL ready = NO;
+   __block BOOL fallback = NO;
+   while (YES)
    {
-      return NO;
-   }
-   if (self.ready || (self.currentFallback && _connection != NULL))
-   {
-      return YES;
-   }
-
-   while (!self.closed)
-   {
-      if (self.ready || (self.currentFallback && _connection != NULL))
+      quic_sync(^{
+        writable = [self isWritableOnQueue];
+        closed = self.closed;
+        ready = self.ready;
+        fallback = self.currentFallback;
+      });
+      if (writable)
       {
          return YES;
       }
+      if (closed)
+      {
+         return NO;
+      }
+
       uint64_t remainingNs = monotonic_remaining_ns(deadlineNs);
       if (remainingNs == 0)
       {
@@ -784,18 +845,14 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
       uint64_t sliceNs = MIN(remainingNs, 50 * NSEC_PER_MSEC);
       dispatch_time_t sliceDeadline =
           dispatch_deadline_for_remaining(sliceNs);
-      if (dispatch_semaphore_wait(self.readySignal, sliceDeadline) == 0 &&
-          self.ready)
-      {
-         return YES;
-      }
+      dispatch_semaphore_wait(_readySignal, sliceDeadline);
    }
 
    if (network_debug_enabled())
    {
       NSLog(@"Nametag network wait writable timeout transport=%@ "
             @"ready=%d",
-            network_transport_name(self.currentFallback), self.ready ? 1 : 0);
+            network_transport_name(fallback), ready ? 1 : 0);
    }
    return NO;
 }
@@ -804,7 +861,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
             length:(size_t)len
            timeout:(uint64_t)timeoutMs
 {
-   if (data == NULL || len == 0 || self.closed)
+   if (data == NULL || len == 0)
    {
       return NO;
    }
@@ -814,36 +871,85 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
       return NO;
    }
 
-   __block BOOL ok = NO;
+   __block enum NametagSendOutcome outcome = NametagSendOutcomePending;
+   __block nw_connection_t sendConnection = NULL;
+   __block BOOL started = NO;
    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
    dispatch_data_t content =
        dispatch_data_create(data, len, NULL, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
-   nw_connection_send(_connection, content, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT,
-                      true, ^(nw_error_t error) {
-                        if (error == NULL)
-                        {
-                           ok = YES;
-                        }
-                        else if (network_debug_enabled())
-                        {
-                           NSLog(@"Nametag network send error transport=%@ "
-                                 @"len=%zu error=%@",
-                                 network_transport_name(self.currentFallback),
-                                 len, error);
-                        }
-                        dispatch_semaphore_signal(sem);
-                      });
+   // Admission and completion share the callback queue so timeout has one
+   // winner and can only cancel the connection that accepted this send.
+   quic_sync(^{
+     if (monotonic_remaining_ns(overallDeadlineNs) == 0 ||
+         ![self isWritableOnQueue])
+     {
+        return;
+     }
+
+     sendConnection = self->_connection;
+     started = YES;
+     nw_connection_send(
+         sendConnection, content, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT, true,
+         ^(nw_error_t error) {
+           if (outcome != NametagSendOutcomePending)
+           {
+              dispatch_semaphore_signal(sem);
+              return;
+           }
+           if (monotonic_remaining_ns(overallDeadlineNs) == 0)
+           {
+              outcome = NametagSendOutcomeTimedOut;
+              if (self->_connection == sendConnection)
+              {
+                 [self closeOnQueue];
+              }
+           }
+           else if (error == NULL)
+           {
+              outcome = NametagSendOutcomeSucceeded;
+           }
+           else
+           {
+              outcome = NametagSendOutcomeFailed;
+              if (network_debug_enabled())
+              {
+                 NSLog(@"Nametag network send error transport=%@ "
+                       @"len=%zu error=%@",
+                       network_transport_name(self.currentFallback), len,
+                       error);
+              }
+           }
+           dispatch_semaphore_signal(sem);
+         });
+   });
+   if (!started)
+   {
+      return NO;
+   }
 
    uint64_t remainingNs = monotonic_remaining_ns(overallDeadlineNs);
    dispatch_time_t deadline = dispatch_deadline_for_remaining(remainingNs);
-   if (dispatch_semaphore_wait(sem, deadline) != 0 && network_debug_enabled())
+   if (dispatch_semaphore_wait(sem, deadline) != 0)
    {
-      NSLog(@"Nametag network send timeout transport=%@ len=%zu "
-            @"timeout_ms=%llu",
-            network_transport_name(self.currentFallback), len,
-            (unsigned long long)timeoutMs);
+      quic_sync(^{
+        if (outcome == NametagSendOutcomePending)
+        {
+           outcome = NametagSendOutcomeTimedOut;
+           if (self->_connection == sendConnection)
+           {
+              [self closeOnQueue];
+           }
+        }
+        if (outcome == NametagSendOutcomeTimedOut && network_debug_enabled())
+        {
+           NSLog(@"Nametag network send timeout transport=%@ len=%zu "
+                 @"timeout_ms=%llu",
+                 network_transport_name(self.currentFallback), len,
+                 (unsigned long long)timeoutMs);
+        }
+      });
    }
-   return ok;
+   return outcome == NametagSendOutcomeSucceeded;
 }
 
 - (NSData *)popReceived:(uint64_t)timeoutMs
@@ -851,14 +957,14 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    uint64_t deadlineNs = monotonic_deadline_after_ms(timeoutMs);
    dispatch_time_t deadline =
        dispatch_deadline_for_remaining(monotonic_remaining_ns(deadlineNs));
-   if (dispatch_semaphore_wait(self.receiveSignal, deadline) != 0)
+   if (dispatch_semaphore_wait(_receiveSignal, deadline) != 0)
    {
       return nil;
    }
 
    __block NSData *after = nil;
    __weak typeof(self) weakSelf = self;
-   dispatch_sync(self.queue, ^{
+   quic_sync(^{
      __strong typeof(self) strongSelf = weakSelf;
      if (strongSelf && strongSelf.receiveBuffer.count > 0)
      {
@@ -876,14 +982,16 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    {
       return;
    }
+   nw_connection_t connection = _connection;
    __weak typeof(self) weakSelf = self;
    nw_connection_receive(
-       _connection, 1, 65536,
+       connection, 1, 65536,
        ^(dispatch_data_t content, nw_content_context_t context, bool isComplete,
          nw_error_t receiveError) {
          (void)context;
          __strong typeof(self) strongSelf = weakSelf;
-         if (!strongSelf || strongSelf.closed)
+         if (!strongSelf || strongSelf.closed ||
+             strongSelf->_connection != connection)
          {
             return;
          }
@@ -913,7 +1021,6 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
                      receiveError);
             }
             [strongSelf close];
-            dispatch_semaphore_signal(strongSelf.receiveSignal);
             return;
          }
 
@@ -925,7 +1032,6 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
                      network_transport_name(strongSelf.currentFallback));
             }
             [strongSelf close];
-            dispatch_semaphore_signal(strongSelf.receiveSignal);
             return;
          }
          [strongSelf startReceiveLoop];
@@ -951,7 +1057,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
                   (unsigned long)self.incomingBytes.length);
          }
          [self.incomingBytes setLength:0];
-         dispatch_semaphore_signal(self.receiveSignal);
+         [self close];
          return;
       }
       if (self.incomingBytes.length < frameLength)
@@ -971,8 +1077,6 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
                (unsigned long)self.queuedReceiveBytes);
          [self.incomingBytes setLength:0];
          [self close];
-         dispatch_semaphore_signal(self.readySignal);
-         dispatch_semaphore_signal(self.receiveSignal);
          return;
       }
 
@@ -1005,7 +1109,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    }
 
    __block BOOL ok = NO;
-   dispatch_sync(self.queue, ^{
+   quic_sync(^{
      *outMetrics = self->_metrics;
      ok = YES;
    });
@@ -1014,23 +1118,33 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 
 - (void)close
 {
+   quic_sync(^{
+     [self closeOnQueue];
+   });
+}
+
+- (void)closeOnQueue
+{
    if (self.closed)
    {
       return;
    }
    self.ready = NO;
    self.closed = YES;
+   self.state = nw_connection_state_cancelled;
    if (_connection != NULL)
    {
       nw_connection_cancel(_connection);
       _connection = NULL;
    }
+   dispatch_semaphore_signal(_readySignal);
+   dispatch_semaphore_signal(_receiveSignal);
 }
 
 - (BOOL)copyClosedState
 {
    __block BOOL closed = NO;
-   dispatch_sync(self.queue, ^{
+   quic_sync(^{
      closed = self.closed;
    });
    return closed;

@@ -39,6 +39,43 @@ fn network_bridge_ignores_stale_connection_state_events() {
 }
 
 #[test]
+fn network_bridge_real_state_handler_treats_invalid_as_terminal() {
+    let source = include_str!("../src/ios/network.m");
+    let body = source_between(
+        source,
+        "nw_connection_set_state_changed_handler(",
+        "nw_connection_start(_connection);",
+    );
+    let invalid = body
+        .find("case nw_connection_state_invalid:")
+        .expect("invalid connection state arm");
+    let failed = body
+        .find("case nw_connection_state_failed:")
+        .expect("failed connection state arm");
+    let terminal = body[invalid..]
+        .find("terminal:YES")
+        .expect("terminal invalid-state handling")
+        + invalid;
+
+    assert!(body.contains("strongSelf.state = state;"));
+    assert!(invalid < failed && failed < terminal);
+}
+
+#[test]
+fn network_bridge_ignores_stale_connection_receive_events() {
+    let source = include_str!("../src/ios/network.m");
+    let body = source_between(
+        source,
+        "- (void)startReceiveLoop",
+        "- (void)drainIncomingBytes",
+    );
+
+    assert!(body.contains("nw_connection_t connection = _connection;"));
+    assert!(body.contains("nw_connection_receive(\n       connection, 1, 65536"));
+    assert!(body.contains("strongSelf->_connection != connection"));
+}
+
+#[test]
 fn network_bridge_skips_stale_delayed_retry_after_ready() {
     let source = include_str!("../src/ios/network.m");
     let body = source_between(
@@ -65,6 +102,10 @@ fn network_bridge_ready_signal_spans_retries() {
         !body.contains("self.readySignal = dispatch_semaphore_create(0);"),
         "send waiters must survive QUIC-to-TCP fallback attempts"
     );
+    assert!(
+        !body.contains("self.receiveSignal = dispatch_semaphore_create(0);"),
+        "receive pollers must never race a semaphore replacement"
+    );
     assert!(source.contains("Nametag network wait ready timeout"));
 }
 
@@ -73,7 +114,7 @@ fn network_bridge_receives_stream_frames_not_messages() {
     let source = include_str!("../src/ios/network.m");
 
     assert!(
-        source.contains("nw_connection_receive(\n       _connection, 1, 65536"),
+        source.contains("nw_connection_receive(\n       connection, 1, 65536"),
         "stream transports must use byte receive"
     );
     assert!(
@@ -127,8 +168,9 @@ fn network_bridge_configures_tcp_tls13_fast_open_and_early_writes() {
         .contains("configure_sec_options(sec_options, tls, endpoint.UTF8String, alpn, YES);"));
     assert!(tcp_body.contains("nw_tcp_options_set_enable_fast_open(tcp_options, true);"));
     assert!(source.contains("nw_parameters_set_fast_open_enabled(_tlsParameters, true);"));
-    assert!(source.contains("self.ready || (self.currentFallback && _connection != NULL)"));
+    assert!(source.contains("self.state == nw_connection_state_preparing"));
     assert!(send_body.contains("[self waitForWritableConnection:overallDeadlineNs]"));
+    assert!(send_body.contains("![self isWritableOnQueue]"));
     assert!(!send_body.contains("[self waitForReady:timeoutMs]"));
 }
 
@@ -141,7 +183,7 @@ fn network_bridge_consumes_one_receive_permit_before_each_frame_pop() {
         "- (void)startReceiveLoop",
     );
     let wait = body
-        .find("dispatch_semaphore_wait(self.receiveSignal, deadline)")
+        .find("dispatch_semaphore_wait(_receiveSignal, deadline)")
         .expect("receive permit wait");
     let pop = body
         .find("after = strongSelf.receiveBuffer.firstObject;")
@@ -196,7 +238,7 @@ fn network_bridge_marks_only_terminal_connection_events_closed() {
     );
     let close_body = source_between(
         source,
-        "- (void)close",
+        "- (void)close\n{",
         "- (BOOL)copyClosedState",
     );
     let final_retry = failure_body
@@ -242,6 +284,31 @@ fn network_bridge_bounds_receive_queue_by_frames_and_bytes() {
 }
 
 #[test]
+fn network_bridge_closes_terminally_on_invalid_frame_length() {
+    let source = include_str!("../src/ios/network.m");
+    let drain_body = source_between(
+        source,
+        "- (void)drainIncomingBytes",
+        "- (BOOL)copyMetrics:(struct NametagQuicMetrics *)outMetrics",
+    );
+    let invalid_body = source_between(
+        drain_body,
+        "if (frameLength < 16 || frameLength > kNametagMaxFrameBytes)",
+        "if (self.incomingBytes.length < frameLength)",
+    );
+    let close_body = source_between(
+        source,
+        "- (void)closeOnQueue",
+        "- (BOOL)copyClosedState",
+    );
+
+    assert!(invalid_body.contains("[self.incomingBytes setLength:0];"));
+    assert!(invalid_body.contains("[self close];"));
+    assert!(close_body.contains("self.closed = YES;"));
+    assert!(close_body.contains("dispatch_semaphore_signal(_receiveSignal);"));
+}
+
+#[test]
 fn network_bridge_uses_one_monotonic_deadline_for_send() {
     let source = include_str!("../src/ios/network.m");
     let wait_body = source_between(
@@ -261,6 +328,78 @@ fn network_bridge_uses_one_monotonic_deadline_for_send() {
     assert!(send_body.contains("uint64_t overallDeadlineNs ="));
     assert!(send_body.contains("[self waitForWritableConnection:overallDeadlineNs]"));
     assert!(send_body.contains("monotonic_remaining_ns(overallDeadlineNs)"));
+}
+
+#[test]
+fn network_bridge_serializes_rust_facing_session_state() {
+    let source = include_str!("../src/ios/network.m");
+    let ready_body = source_between(
+        source,
+        "- (BOOL)waitForReady:(uint64_t)timeoutMs",
+        "- (BOOL)isWritableOnQueue",
+    );
+    let writable_body = source_between(
+        source,
+        "- (BOOL)waitForWritableConnection:(uint64_t)deadlineNs",
+        "- (BOOL)sendBytes:(const uint8_t *)data",
+    );
+    let close_body = source_between(
+        source,
+        "- (void)close\n{",
+        "- (BOOL)copyClosedState",
+    );
+    let closed_body = source_between(
+        source,
+        "- (BOOL)copyClosedState",
+        "@end",
+    );
+
+    assert!(source.contains("dispatch_queue_set_specific("));
+    assert!(source.contains("static void quic_sync(dispatch_block_t block)"));
+    assert!(source.contains("@property(nonatomic, strong, readonly) dispatch_queue_t queue;"));
+    assert!(source
+        .contains("@property(nonatomic, strong, readonly) dispatch_semaphore_t readySignal;"));
+    assert!(source
+        .contains("@property(nonatomic, strong, readonly) dispatch_semaphore_t receiveSignal;"));
+    assert!(ready_body.contains("quic_sync(^{"));
+    assert!(writable_body.contains("quic_sync(^{"));
+    assert!(close_body.contains("quic_sync(^{"));
+    assert!(close_body.contains("[self closeOnQueue];"));
+    assert!(closed_body.contains("quic_sync(^{"));
+}
+
+#[test]
+fn network_bridge_serializes_send_start_timeout_and_completion() {
+    let source = include_str!("../src/ios/network.m");
+    let body = source_between(
+        source,
+        "- (BOOL)sendBytes:(const uint8_t *)data",
+        "- (NSData *)popReceived:(uint64_t)timeoutMs",
+    );
+    let begin_gate = body
+        .find("monotonic_remaining_ns(overallDeadlineNs) == 0")
+        .expect("send start deadline gate");
+    let state_gate = body
+        .find("![self isWritableOnQueue]")
+        .expect("send start state gate");
+    let send = body
+        .find("nw_connection_send(")
+        .expect("serialized Network.framework send");
+    let completion_deadline = body[send..]
+        .find("monotonic_remaining_ns(overallDeadlineNs) == 0")
+        .expect("completion deadline arbitration")
+        + send;
+
+    assert!(body.contains("__block enum NametagSendOutcome outcome"));
+    assert!(!body.contains("__block BOOL ok"));
+    assert!(begin_gate < state_gate && state_gate < send);
+    assert!(body[..send].contains("quic_sync(^{"));
+    assert!(body.contains("sendConnection = self->_connection;"));
+    assert!(completion_deadline > send);
+    assert!(body.matches("outcome = NametagSendOutcomeTimedOut;").count() >= 2);
+    assert!(body.matches("self->_connection == sendConnection").count() >= 2);
+    assert!(body.matches("[self closeOnQueue];").count() >= 2);
+    assert!(body.contains("return outcome == NametagSendOutcomeSucceeded;"));
 }
 
 #[test]
