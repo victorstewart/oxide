@@ -22,6 +22,10 @@
   Verifies that admission checks the 64-frame and 32-MiB budgets before copying or appending a frame, and closes on overflow.
 - `network_bridge_uses_one_monotonic_deadline_for_send()`
   Verifies that send readiness and completion share one `CLOCK_MONOTONIC` deadline instead of receiving independent full timeout budgets.
+- `network_bridge_exposes_nonblocking_tri_state_receive_contract()`
+  Freezes the public header's `-1/0/1` values, symbol signature, zero-timeout pop, output length handling, terminal close path, and build-script header tracking.
+- `network_bridge_marks_only_terminal_connection_events_closed()`
+  Verifies that failed/cancelled states close only after retries, waiting remains nonterminal, and receive error/EOF closes the session.
 - `network_bridge_applies_rust_quic_transport_fields()`
   Verifies that Rust's QUIC idle timeout and UDP payload size fields are applied to Network.framework QUIC options.
 - `network_bridge_configures_client_keepalive_for_quic_and_tcp_tls()`
@@ -38,6 +42,8 @@
 - The receive-permit test proves the semaphore wait text precedes the only `firstObject` removal in `popReceived`, preventing a second call from consuming an old permit after a fast-path pop.
 - The queue-budget test proves both limits are checked before the frame copy and append, byte accounting grows and shrinks with the queue, and overflow reaches the connection close path.
 - The deadline test proves send creates one absolute monotonic deadline, passes it through readiness polling, and computes the completion wait from the same deadline.
+- The tri-state test reads both the public header and implementation to keep the Rust-facing ABI and native behavior aligned.
+- The terminal-state test distinguishes recoverable Network.framework waiting from failed/cancelled events and verifies receive-loop terminal paths.
 - The keepalive test extracts both the TCP/TLS parameter block and the ready-state QUIC metadata path because Network.framework exposes keepalive at different phases for those transports.
 - The migration/cache test scans the whole source for Network.framework calls that would constrain interface choice or isolate TLS session cache state.
 
@@ -48,6 +54,7 @@
 - A passing TCP/TLS fast-open test means the fallback path remains TLS 1.3-only and keeps the public Network.framework hooks required for TCP Fast Open and TLS early-data attempts.
 - Passing receive-accounting tests mean complete frames cannot grow the queue beyond either budget and each normal queue removal consumes the permit emitted for that frame.
 - A passing deadline test means readiness and completion cannot each consume the caller's entire timeout.
+- Passing tri-state tests mean polling can distinguish frame, idle, and terminal without changing the blocking receive entry point.
 - A passing keepalive test means the native bridge keeps client connections active against the server on both the QUIC path and TCP/TLS fallback path.
 - A passing migration/cache test means the bridge leaves Network.framework free to handle path changes and share in-process TLS session cache state in the default privacy context.
 
@@ -61,6 +68,7 @@
 - Run with `cargo test -p oxide-platform-ios --test network_bridge_tests`.
 
 ## Changelog
+- 2026-07-10: added tri-state receive ABI and terminal connection-state contract coverage.
 - 2026-07-10: added source-contract coverage for receive permits, frame/byte queue limits, fail-closed overflow, and one monotonic send deadline.
 - 2026-06-11: added guards for TLS 1.3-only TCP/TLS, public fast-open/early-data eligibility, and the pre-ready TCP/TLS write path.
 - 2026-06-11: added guards for TLS tickets/resumption, Rust QUIC option application, client keepalive, public-API-only early-data handling, and path/cache unpinning.

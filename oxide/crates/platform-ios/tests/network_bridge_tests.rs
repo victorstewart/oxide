@@ -9,7 +9,7 @@ fn forced_tcp_tls_retries_stay_on_tls_parameters() {
     let source = include_str!("../src/ios/network.m");
     let body = source_between(
         source,
-        "- (void)handleFailure:(nw_error_t)error fallback:(BOOL)attemptedFallback",
+        "- (void)handleFailure:(nw_error_t)error",
         "- (void)scheduleRetryWithParameters:(nw_parameters_t)parameters",
     );
     let forced_branch = body.find("BOOL forceTcpTls").expect("forced TCP/TLS retry branch");
@@ -153,6 +153,68 @@ fn network_bridge_consumes_one_receive_permit_before_each_frame_pop() {
 }
 
 #[test]
+fn network_bridge_exposes_nonblocking_tri_state_receive_contract() {
+    let header = include_str!("../src/ios/network.h");
+    let source = include_str!("../src/ios/network.m");
+    let build = include_str!("../build.rs");
+    let body = source_between(
+        source,
+        "int32_t nametag_ios_quic_poll_recv(NametagQuicHandle handle,",
+        "NametagReachabilityHandle nametag_ios_reachability_start(void)",
+    );
+
+    assert!(header.contains("NAMETAG_IOS_QUIC_POLL_TERMINAL = -1"));
+    assert!(header.contains("NAMETAG_IOS_QUIC_POLL_IDLE = 0"));
+    assert!(header.contains("NAMETAG_IOS_QUIC_POLL_FRAME = 1"));
+    assert!(header.contains("int32_t nametag_ios_quic_poll_recv("));
+    assert!(build.contains("cargo:rerun-if-changed=src/ios/network.h"));
+    assert!(body.contains("*out_len = 0;"));
+    assert!(body.contains("NSData *payload = [connection popReceived:0];"));
+    assert!(body.contains("[connection copyClosedState]"));
+    assert!(body.contains("[connection close];"));
+    assert!(body.contains("*out_len = payload.length;"));
+    assert!(body.contains("return NAMETAG_IOS_QUIC_POLL_FRAME;"));
+}
+
+#[test]
+fn network_bridge_marks_only_terminal_connection_events_closed() {
+    let source = include_str!("../src/ios/network.m");
+    let state_body = source_between(
+        source,
+        "switch (state)",
+        "nw_connection_start(_connection);",
+    );
+    let failure_body = source_between(
+        source,
+        "- (void)handleFailure:(nw_error_t)error",
+        "- (void)scheduleRetryWithParameters:(nw_parameters_t)parameters",
+    );
+    let receive_body = source_between(
+        source,
+        "- (void)startReceiveLoop",
+        "- (void)drainIncomingBytes",
+    );
+    let close_body = source_between(
+        source,
+        "- (void)close",
+        "- (BOOL)copyClosedState",
+    );
+    let final_retry = failure_body
+        .find("[self scheduleRetryWithParameters:_quicParameters fallback:NO];")
+        .expect("final retry branch");
+    let terminal_close = failure_body.find("[self close];").expect("terminal close");
+
+    assert!(state_body.contains("terminal:YES"));
+    assert!(state_body.contains("terminal:NO"));
+    assert!(final_retry < terminal_close, "retry paths must precede terminal closure");
+    assert!(failure_body.contains("if (terminalEvent)"));
+    assert!(failure_body.contains("self.ready = NO;"));
+    assert_eq!(receive_body.matches("[strongSelf close];").count(), 2);
+    assert!(close_body.contains("self.ready = NO;"));
+    assert!(close_body.contains("self.closed = YES;"));
+}
+
+#[test]
 fn network_bridge_bounds_receive_queue_by_frames_and_bytes() {
     let source = include_str!("../src/ios/network.m");
     let body = source_between(
@@ -228,7 +290,7 @@ fn network_bridge_configures_client_keepalive_for_quic_and_tcp_tls() {
     let ready_body = source_between(
         source,
         "- (void)handleReady",
-        "- (void)handleFailure:(nw_error_t)error fallback:(BOOL)attemptedFallback",
+        "- (void)handleFailure:(nw_error_t)error",
     );
 
     assert!(tcp_body.contains("nw_tcp_options_set_enable_keepalive(tcp_options, true);"));

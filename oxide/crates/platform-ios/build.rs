@@ -12,6 +12,7 @@ fn main() {
     let nametag_host_bridge = std::env::var_os("CARGO_FEATURE_NAMETAG_HOST_BRIDGE").is_some();
     let mut build = cc::Build::new();
     build.flag("-fobjc-arc").flag("-fmodules").flag("-fcxx-modules");
+    println!("cargo:rerun-if-changed=src/ios/network.h");
     add_objc_source(&mut build, "src/ios/network.m");
     add_objc_source(&mut build, "../platform-apple/src/apple/http.m");
     add_objc_source(&mut build, "../platform-apple/src/apple/secure_storage.m");

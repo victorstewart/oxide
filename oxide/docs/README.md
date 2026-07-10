@@ -13,6 +13,7 @@ This directory mirrors Rust source units with design notes, entry points, behavi
 - [platform-apple](platform-apple/lib.md)
 - [platform-api](platform-api/lib.md)
 - [platform-ios](platform-ios/lib.md)
+- [platform-ios native network ABI](platform-ios/ios/network.h.md)
 - [platform-macos](platform-macos/lib.md)
 - [platform-web](platform-web/lib.md)
 - [oxide-text](oxide-text/lib.md)

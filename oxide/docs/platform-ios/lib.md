@@ -13,7 +13,7 @@
 - `IosCameraManager`
   Alias for the shared `AppleCameraManager`, covering app-visible frame streams, audio samples, photo capture, recording, and camera-scene texture export. When the optional `native-camera-bridge` feature is enabled, the crate also compiles the iOS Objective-C AVFoundation bridge it binds to.
 - Shared native bridges
-  `../platform-apple/src/apple/bluetooth.m`, `../platform-apple/src/apple/http.m`, `../platform-apple/src/apple/secure_storage.m`, `src/ios/host_services.m`, `src/ios/network.m`, and `src/ios/push.m` now provide shared Objective-C ownership for generic BLE, HTTP, secure storage, clipboard/haptics/permissions/open-URL helpers, QUIC/reachability, and APNs plumbing used by Oxide host apps and downstream apps such as Nametag.
+  `../platform-apple/src/apple/bluetooth.m`, `../platform-apple/src/apple/http.m`, `../platform-apple/src/apple/secure_storage.m`, `src/ios/host_services.m`, `src/ios/network.h`, `src/ios/network.m`, and `src/ios/push.m` now provide shared Objective-C ownership for generic BLE, HTTP, secure storage, clipboard/haptics/permissions/open-URL helpers, QUIC/reachability, and APNs plumbing used by Oxide host apps and downstream apps such as Nametag.
 - `IosMediaLibraryManager`
   Alias for the shared `AppleMediaLibraryManager`, including raw BGRA image extraction for app-specific post-processing.
 - `IosTelephonyService`
@@ -44,6 +44,7 @@
 - Rust-side location callback fanout, bounded history, last-sample caching, and geofence-region tracking live in `oxide-platform-apple` and are shared with macOS.
 - Rust-side motion callback fanout and bounded pressure history live in `oxide-platform-apple` and are shared with macOS.
 - The Network.framework transport bridge honors forced TCP/TLS selection across every retry, because retrying the QUIC parameter set after a forced TCP/TLS failure would silently change the caller-requested transport.
+- The native network header exposes frame/idle/terminal polling for retained sessions; the build script watches that header so ABI changes always rebuild the Objective-C bridge.
 - Reachability path decoding is shared with macOS through `oxide-platform-apple` so Wi-Fi, cellular, wired, and other path kinds map consistently across Apple hosts.
 - Permission domain/status raw-code mapping is shared with macOS through `oxide-platform-apple`; native permission prompts remain platform-specific.
 - The HTTP bridge is compiled from `oxide-platform-apple/src/apple/http.m` so iOS and macOS use the same native byte-copy path for response bodies and UTF-8 metadata, while iOS-specific multipath behavior stays platform-gated.
@@ -74,6 +75,7 @@
 - `tests/abi_layout_tests.rs` freezes iOS camera, location, motion, and contact ABI layouts plus native camera/location/motion static-assert retention.
 
 ## Changelog
+- 2026-07-10: published the tri-state retained-session polling header and added it to native build dependency tracking.
 - 2026-06-22: added iOS platform ABI layout freeze coverage for camera, location, motion, and contact bridge payloads.
 - 2026-06-01: split the standalone Metal app host frame ABI into prepare/submit/cancel phases and enabled timeout-capable drawable acquisition so it matches the late-drawable performance contract.
 - 2026-06-01: removed stale native visible-preview wording from the platform API docs; diagnostic `AVCaptureVideoPreviewLayer` comparisons remain host-perf-only.

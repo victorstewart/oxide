@@ -10,6 +10,8 @@
 #import <stdint.h>
 #import <time.h>
 
+#import "network.h"
+
 struct NametagQuicConfig
 {
    uint32_t idle_timeout_ms;
@@ -61,7 +63,6 @@ struct NametagReachabilityStatus
    uint8_t path_kind;
 };
 
-typedef void *NametagQuicHandle;
 typedef void *NametagReachabilityHandle;
 
 static const uint32_t kNametagDefaultPort = 443;
@@ -390,7 +391,9 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 - (void)startAttemptWithParameters:(nw_parameters_t)parameters
                           fallback:(BOOL)fallback;
 - (void)handleReady;
-- (void)handleFailure:(nw_error_t)error fallback:(BOOL)attemptedFallback;
+- (void)handleFailure:(nw_error_t)error
+              fallback:(BOOL)attemptedFallback
+              terminal:(BOOL)terminalEvent;
 - (void)scheduleRetryWithParameters:(nw_parameters_t)parameters
                             fallback:(BOOL)fallback;
 - (void)configureReadyKeepalive;
@@ -402,6 +405,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
             length:(size_t)len
            timeout:(uint64_t)timeoutMs;
 - (NSData *)popReceived:(uint64_t)timeoutMs;
+- (BOOL)copyClosedState;
 
 @end
 
@@ -585,8 +589,14 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
             break;
          case nw_connection_state_failed:
          case nw_connection_state_cancelled:
+            [strongSelf handleFailure:error
+                              fallback:fallback
+                              terminal:YES];
+            break;
          case nw_connection_state_waiting:
-            [strongSelf handleFailure:error fallback:fallback];
+            [strongSelf handleFailure:error
+                              fallback:fallback
+                              terminal:NO];
             break;
          default:
             break;
@@ -635,7 +645,9 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    }
 }
 
-- (void)handleFailure:(nw_error_t)error fallback:(BOOL)attemptedFallback
+- (void)handleFailure:(nw_error_t)error
+              fallback:(BOOL)attemptedFallback
+              terminal:(BOOL)terminalEvent
 {
    if (self.closed)
    {
@@ -670,6 +682,14 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    {
       NSLog(@"Nametag network connection failed transport=%@: %@",
             network_transport_name(self.currentFallback), error);
+   }
+   if (terminalEvent)
+   {
+      [self close];
+   }
+   else
+   {
+      self.ready = NO;
    }
    dispatch_semaphore_signal(self.readySignal);
    dispatch_semaphore_signal(self.receiveSignal);
@@ -892,6 +912,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
                      network_transport_name(strongSelf.currentFallback),
                      receiveError);
             }
+            [strongSelf close];
             dispatch_semaphore_signal(strongSelf.receiveSignal);
             return;
          }
@@ -903,6 +924,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
                NSLog(@"Nametag network receive closed transport=%@",
                      network_transport_name(strongSelf.currentFallback));
             }
+            [strongSelf close];
             dispatch_semaphore_signal(strongSelf.receiveSignal);
             return;
          }
@@ -948,7 +970,6 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
                (unsigned long)self.receiveBuffer.count,
                (unsigned long)self.queuedReceiveBytes);
          [self.incomingBytes setLength:0];
-         self.ready = NO;
          [self close];
          dispatch_semaphore_signal(self.readySignal);
          dispatch_semaphore_signal(self.receiveSignal);
@@ -997,12 +1018,22 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    {
       return;
    }
+   self.ready = NO;
    self.closed = YES;
    if (_connection != NULL)
    {
       nw_connection_cancel(_connection);
       _connection = NULL;
    }
+}
+
+- (BOOL)copyClosedState
+{
+   __block BOOL closed = NO;
+   dispatch_sync(self.queue, ^{
+     closed = self.closed;
+   });
+   return closed;
 }
 
 @end
@@ -1300,6 +1331,43 @@ bool nametag_ios_quic_recv(NametagQuicHandle handle,
    memcpy(buffer, payload.bytes, payload.length);
    *out_len = payload.length;
    return true;
+}
+
+int32_t nametag_ios_quic_poll_recv(NametagQuicHandle handle,
+                                   uint8_t *buffer,
+                                   size_t buffer_len,
+                                   size_t *out_len)
+{
+   if (out_len != NULL)
+   {
+      *out_len = 0;
+   }
+   if (handle == NULL || buffer == NULL || out_len == NULL)
+   {
+      return NAMETAG_IOS_QUIC_POLL_TERMINAL;
+   }
+
+   NametagQuicConnection *connection =
+       (__bridge NametagQuicConnection *)handle;
+   NSData *payload = [connection popReceived:0];
+   if (payload == nil)
+   {
+      return [connection copyClosedState]
+                 ? NAMETAG_IOS_QUIC_POLL_TERMINAL
+                 : NAMETAG_IOS_QUIC_POLL_IDLE;
+   }
+   if (payload.length > buffer_len)
+   {
+      NSLog(@"Nametag network poll buffer too small frame_length=%lu "
+            @"buffer_length=%zu",
+            (unsigned long)payload.length, buffer_len);
+      [connection close];
+      return NAMETAG_IOS_QUIC_POLL_TERMINAL;
+   }
+
+   memcpy(buffer, payload.bytes, payload.length);
+   *out_len = payload.length;
+   return NAMETAG_IOS_QUIC_POLL_FRAME;
 }
 
 NametagReachabilityHandle nametag_ios_reachability_start(void)
