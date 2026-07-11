@@ -22,9 +22,81 @@ fn forced_tcp_tls_retries_stay_on_tls_parameters() {
         "forced TCP/TLS retry must be checked before the generic QUIC retry"
     );
     assert!(body.contains("self.quicConfig.force_tcp_tls"));
-    assert!(body.contains("env_truthy(\"NAMETAG_NETWORK_FORCE_TCP_TLS\")"));
+    assert!(!source.contains("OXIDE_NETWORK_FORCE_TCP_TLS"));
     assert!(body.contains("forceTcpTls && _tlsParameters != NULL && canRetry && connectFailed"));
     assert!(body.contains("[self scheduleRetryWithParameters:_tlsParameters fallback:YES];"));
+}
+
+#[test]
+fn network_bridge_public_abi_is_oxide_owned_and_complete()
+{
+   let header = include_str!("../src/ios/network.h");
+   let source = include_str!("../src/ios/network.m");
+
+   for declaration in [
+      "struct OxideQuicConfig",
+      "struct OxideQuicRetryPolicy",
+      "struct OxideTlsTrustAnchor",
+      "struct OxideQuicTlsConfig",
+      "struct OxideQuicMetrics",
+      "struct OxideReachabilityStatus",
+      "oxide_ios_quic_connect(",
+      "oxide_ios_quic_metrics(",
+      "oxide_ios_quic_wait_ready(",
+      "oxide_ios_quic_send(",
+      "oxide_ios_quic_recv(",
+      "oxide_ios_quic_poll_recv(",
+      "oxide_ios_quic_close(",
+      "oxide_ios_reachability_start(",
+      "oxide_ios_reachability_poll(",
+      "oxide_ios_reachability_close(",
+      "oxide_host_net_set_reachability_callback(",
+      "oxide_host_net_start_reachability(",
+      "oxide_host_net_stop_reachability(",
+   ]
+   {
+      assert!(header.contains(declaration), "missing public ABI declaration: {declaration}");
+   }
+   assert!(!header.contains("Nametag"));
+   assert!(!header.contains("nametag"));
+   assert!(!source.contains("Nametag"));
+   assert!(!source.contains("nametag"));
+}
+
+#[test]
+fn network_bridge_requires_caller_owned_connection_policy()
+{
+   let source = include_str!("../src/ios/network.m");
+   let body = source_between(
+      source,
+      "OxideQuicHandle oxide_ios_quic_connect(",
+      "bool oxide_ios_quic_metrics(",
+   );
+
+   assert!(body.contains("retry->max_attempts == 0"));
+   assert!(!body.contains("(struct OxideQuicConfig){"));
+   assert!(!body.contains("(struct OxideQuicRetryPolicy){"));
+   assert!(!source.contains("kOxideDefaultPort"));
+   assert!(!source.contains("MAX(self.retryPolicy.max_attempts, 1)"));
+}
+
+#[test]
+fn network_bridge_strictly_parses_explicit_ports()
+{
+   let source = include_str!("../src/ios/network.m");
+   let body = source_between(
+      source,
+      "static BOOL parse_endpoint(const char *endpoint, NSString **host,",
+      "OxideQuicHandle oxide_ios_quic_connect(",
+   );
+
+   assert!(body.contains("if (portPart.length == 0)"), "missing ports must fail");
+   assert!(body.contains("if (parsed == 0)"), "port zero must fail");
+   assert!(body.contains("if (parsed > UINT16_MAX)"), "ports above 65535 must fail");
+   assert!(body.contains("if (digit < '0' || digit > '9')"), "suffix junk must fail");
+   assert!(body.contains("[mutable hasPrefix:@\"[\"]"), "bracketed IPv6 must be parsed");
+   assert!(body.contains("[hostPart containsString:@\":\"]"), "unbracketed IPv6 must fail");
+   assert!(!body.contains("integerValue"));
 }
 
 #[test]
@@ -86,7 +158,7 @@ fn network_bridge_skips_stale_delayed_retry_after_ready() {
 
     assert!(body.contains("NSUInteger expectedAttempt = self.attempt;"));
     assert!(body.contains("strongSelf.attempt != expectedAttempt || strongSelf.ready"));
-    assert!(body.contains("Nametag network retry skipped"));
+    assert!(body.contains("Oxide network retry skipped"));
 }
 
 #[test]
@@ -106,7 +178,7 @@ fn network_bridge_ready_signal_spans_retries() {
         !body.contains("self.receiveSignal = dispatch_semaphore_create(0);"),
         "receive pollers must never race a semaphore replacement"
     );
-    assert!(source.contains("Nametag network wait ready timeout"));
+    assert!(source.contains("Oxide network wait ready timeout"));
 }
 
 #[test]
@@ -121,10 +193,10 @@ fn network_bridge_receives_stream_frames_not_messages() {
         !source.contains("nw_connection_receive_message("),
         "message receive reports No message available on STREAM"
     );
-    assert!(source.contains("kNametagMaxFrameBytes"));
+    assert!(source.contains("kOxideMaxFrameBytes"));
     assert!(source.contains("frameLength < 16"));
     assert!(source.contains("[strongSelf drainIncomingBytes];"));
-    assert!(source.contains("Nametag network receive frame"));
+    assert!(source.contains("Oxide network receive frame"));
 }
 
 #[test]
@@ -201,21 +273,21 @@ fn network_bridge_exposes_nonblocking_tri_state_receive_contract() {
     let build = include_str!("../build.rs");
     let body = source_between(
         source,
-        "int32_t nametag_ios_quic_poll_recv(NametagQuicHandle handle,",
-        "NametagReachabilityHandle nametag_ios_reachability_start(void)",
+        "int32_t oxide_ios_quic_poll_recv(OxideQuicHandle handle,",
+        "OxideReachabilityHandle oxide_ios_reachability_start(void)",
     );
 
-    assert!(header.contains("NAMETAG_IOS_QUIC_POLL_TERMINAL = -1"));
-    assert!(header.contains("NAMETAG_IOS_QUIC_POLL_IDLE = 0"));
-    assert!(header.contains("NAMETAG_IOS_QUIC_POLL_FRAME = 1"));
-    assert!(header.contains("int32_t nametag_ios_quic_poll_recv("));
+    assert!(header.contains("OXIDE_IOS_QUIC_POLL_TERMINAL = -1"));
+    assert!(header.contains("OXIDE_IOS_QUIC_POLL_IDLE = 0"));
+    assert!(header.contains("OXIDE_IOS_QUIC_POLL_FRAME = 1"));
+    assert!(header.contains("int32_t oxide_ios_quic_poll_recv("));
     assert!(build.contains("cargo:rerun-if-changed=src/ios/network.h"));
     assert!(body.contains("*out_len = 0;"));
     assert!(body.contains("NSData *payload = [connection popReceived:0];"));
     assert!(body.contains("[connection copyClosedState]"));
     assert!(body.contains("[connection close];"));
     assert!(body.contains("*out_len = payload.length;"));
-    assert!(body.contains("return NAMETAG_IOS_QUIC_POLL_FRAME;"));
+    assert!(body.contains("return OXIDE_IOS_QUIC_POLL_FRAME;"));
 }
 
 #[test]
@@ -262,10 +334,10 @@ fn network_bridge_bounds_receive_queue_by_frames_and_bytes() {
     let body = source_between(
         source,
         "- (void)drainIncomingBytes",
-        "- (BOOL)copyMetrics:(struct NametagQuicMetrics *)outMetrics",
+        "- (BOOL)copyMetrics:(struct OxideQuicMetrics *)outMetrics",
     );
     let capacity_check = body
-        .find("self.receiveBuffer.count >= kNametagMaxQueuedReceiveFrames")
+        .find("self.receiveBuffer.count >= kOxideMaxQueuedReceiveFrames")
         .expect("frame capacity check");
     let frame_copy = body
         .find("[self.incomingBytes subdataWithRange:NSMakeRange(0, frameLength)]")
@@ -274,11 +346,11 @@ fn network_bridge_bounds_receive_queue_by_frames_and_bytes() {
         .find("[self.receiveBuffer addObject:frame];")
         .expect("receive queue append");
 
-    assert!(source.contains("kNametagMaxQueuedReceiveFrames = 64"));
-    assert!(source.contains("kNametagMaxQueuedReceiveBytes = 32 * 1024 * 1024"));
+    assert!(source.contains("kOxideMaxQueuedReceiveFrames = 64"));
+    assert!(source.contains("kOxideMaxQueuedReceiveBytes = 32 * 1024 * 1024"));
     assert!(capacity_check < frame_copy && frame_copy < queue_add);
-    assert!(body.contains("kNametagMaxQueuedReceiveBytes - self.queuedReceiveBytes"));
-    assert!(body.contains("Nametag network receive queue overflow"));
+    assert!(body.contains("kOxideMaxQueuedReceiveBytes - self.queuedReceiveBytes"));
+    assert!(body.contains("Oxide network receive queue overflow"));
     assert!(body.contains("[self close];"));
     assert!(body.contains("self.queuedReceiveBytes += frame.length;"));
 }
@@ -289,11 +361,11 @@ fn network_bridge_closes_terminally_on_invalid_frame_length() {
     let drain_body = source_between(
         source,
         "- (void)drainIncomingBytes",
-        "- (BOOL)copyMetrics:(struct NametagQuicMetrics *)outMetrics",
+        "- (BOOL)copyMetrics:(struct OxideQuicMetrics *)outMetrics",
     );
     let invalid_body = source_between(
         drain_body,
-        "if (frameLength < 16 || frameLength > kNametagMaxFrameBytes)",
+        "if (frameLength < 16 || frameLength > kOxideMaxFrameBytes)",
         "if (self.incomingBytes.length < frameLength)",
     );
     let close_body = source_between(
@@ -390,16 +462,16 @@ fn network_bridge_serializes_send_start_timeout_and_completion() {
         .expect("completion deadline arbitration")
         + send;
 
-    assert!(body.contains("__block enum NametagSendOutcome outcome"));
+    assert!(body.contains("__block enum OxideSendOutcome outcome"));
     assert!(!body.contains("__block BOOL ok"));
     assert!(begin_gate < state_gate && state_gate < send);
     assert!(body[..send].contains("quic_sync(^{"));
     assert!(body.contains("sendConnection = self->_connection;"));
     assert!(completion_deadline > send);
-    assert!(body.matches("outcome = NametagSendOutcomeTimedOut;").count() >= 2);
+    assert!(body.matches("outcome = OxideSendOutcomeTimedOut;").count() >= 2);
     assert!(body.matches("self->_connection == sendConnection").count() >= 2);
     assert!(body.matches("[self closeOnQueue];").count() >= 2);
-    assert!(body.contains("return outcome == NametagSendOutcomeSucceeded;"));
+    assert!(body.contains("return outcome == OxideSendOutcomeSucceeded;"));
 }
 
 #[test]

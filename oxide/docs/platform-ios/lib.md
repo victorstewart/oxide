@@ -44,7 +44,7 @@
 - Rust-side location callback fanout, bounded history, last-sample caching, and geofence-region tracking live in `oxide-platform-apple` and are shared with macOS.
 - Rust-side motion callback fanout and bounded pressure history live in `oxide-platform-apple` and are shared with macOS.
 - The Network.framework transport bridge honors forced TCP/TLS selection across every retry, because retrying the QUIC parameter set after a forced TCP/TLS failure would silently change the caller-requested transport.
-- The native network header exposes frame/idle/terminal polling for retained sessions; the build script watches that header so ABI changes always rebuild the Objective-C bridge.
+- The native network header owns the complete Oxide-named retained-session and reachability ABI, including frame/idle/terminal polling; the build script watches that header so ABI changes always rebuild the Objective-C bridge.
 - Reachability path decoding is shared with macOS through `oxide-platform-apple` so Wi-Fi, cellular, wired, and other path kinds map consistently across Apple hosts.
 - Permission domain/status raw-code mapping is shared with macOS through `oxide-platform-apple`; native permission prompts remain platform-specific.
 - The HTTP bridge is compiled from `oxide-platform-apple/src/apple/http.m` so iOS and macOS use the same native byte-copy path for response bodies and UTF-8 metadata, while iOS-specific multipath behavior stays platform-gated.
@@ -75,6 +75,7 @@
 - `tests/abi_layout_tests.rs` freezes iOS camera, location, motion, and contact ABI layouts plus native camera/location/motion static-assert retention.
 
 ## Changelog
+- 2026-07-11: hard-cut the iOS transport/reachability C ABI to Oxide-owned names and explicit caller-owned connection/retry policy.
 - 2026-07-10: published the tri-state retained-session polling header and added it to native build dependency tracking.
 - 2026-06-22: added iOS platform ABI layout freeze coverage for camera, location, motion, and contact bridge payloads.
 - 2026-06-01: split the standalone Metal app host frame ABI into prepare/submit/cancel phases and enabled timeout-capable drawable acquisition so it matches the late-drawable performance contract.

@@ -12,74 +12,20 @@
 
 #import "network.h"
 
-struct NametagQuicConfig
-{
-   uint32_t idle_timeout_ms;
-   uint16_t max_datagram_size;
-   uint16_t keepalive_interval_secs;
-   bool allow_fallback;
-   const char *alpn;
-   bool force_tcp_tls;
-};
-
-struct NametagRetryPolicy
-{
-   uint32_t max_attempts;
-   uint64_t initial_backoff_ms;
-   uint64_t max_backoff_ms;
-};
-
-struct NametagTrustAnchor
-{
-   const uint8_t *data;
-   size_t len;
-};
-
-struct NametagQuicTlsConfig
-{
-   const uint8_t *identity_der;
-   size_t identity_der_len;
-   const uint8_t *private_key_pkcs8;
-   size_t private_key_pkcs8_len;
-   const struct NametagTrustAnchor *trust_anchors;
-   size_t trust_anchor_count;
-   bool enforce_hostname;
-};
-
-struct NametagQuicMetrics
-{
-   uint64_t handshake_ms;
-   uint64_t resume_ms;
-   uint64_t payload_bytes;
-   uint64_t total_bytes;
-   uint32_t attempts;
-   bool fallback_used;
-};
-
-struct NametagReachabilityStatus
-{
-   bool reachable;
-   bool expensive;
-   uint8_t path_kind;
-};
-
-typedef void *NametagReachabilityHandle;
-
-static const uint32_t kNametagDefaultPort = 443;
-static const size_t kNametagMaxFrameBytes = 16 * 1024 * 1024;
-static const NSUInteger kNametagMaxQueuedReceiveFrames = 64;
-static const NSUInteger kNametagMaxQueuedReceiveBytes = 32 * 1024 * 1024;
-static char kNametagQuicQueueContext;
+static const size_t kOxideMaxFrameBytes = 16 * 1024 * 1024;
+static const NSUInteger kOxideMaxQueuedReceiveFrames = 64;
+static const NSUInteger kOxideMaxQueuedReceiveBytes = 32 * 1024 * 1024;
+static char kOxideQuicQueueContext;
 static void (*g_oxide_reachability_callback)(uint32_t status, uint32_t iface,
                                              uint8_t expensive) = NULL;
 static id g_oxide_reachability_monitor = nil;
 
-enum NametagSendOutcome
+enum OxideSendOutcome
 {
-   NametagSendOutcomePending = 0,
-   NametagSendOutcomeSucceeded = 1,
-   NametagSendOutcomeFailed = 2,
-   NametagSendOutcomeTimedOut = 3,
+   OxideSendOutcomePending = 0,
+   OxideSendOutcomeSucceeded = 1,
+   OxideSendOutcomeFailed = 2,
+   OxideSendOutcomeTimedOut = 3,
 };
 
 static dispatch_queue_t quic_queue(void)
@@ -90,8 +36,8 @@ static dispatch_queue_t quic_queue(void)
       queue =
           dispatch_queue_create("com.oxide.platform.network.quic",
                                 DISPATCH_QUEUE_SERIAL);
-      dispatch_queue_set_specific(queue, &kNametagQuicQueueContext,
-                                  &kNametagQuicQueueContext, NULL);
+      dispatch_queue_set_specific(queue, &kOxideQuicQueueContext,
+                                  &kOxideQuicQueueContext, NULL);
    });
    return queue;
 }
@@ -100,8 +46,8 @@ static void quic_sync(dispatch_block_t block)
 {
    // Session fields are queue-confined; callbacks execute inline to avoid a
    // recursive dispatch_sync deadlock.
-   if (dispatch_get_specific(&kNametagQuicQueueContext) ==
-       &kNametagQuicQueueContext)
+   if (dispatch_get_specific(&kOxideQuicQueueContext) ==
+       &kOxideQuicQueueContext)
    {
       block();
       return;
@@ -122,7 +68,7 @@ static BOOL env_truthy(const char *name)
 
 static BOOL network_debug_enabled(void)
 {
-   return env_truthy("NAMETAG_NETWORK_DEBUG_LOG");
+   return env_truthy("OXIDE_NETWORK_DEBUG_LOG");
 }
 
 static uint64_t monotonic_deadline_after_ms(uint64_t timeoutMs)
@@ -208,7 +154,7 @@ static uint8_t path_kind_for_path(nw_path_t path)
    return kind;
 }
 
-static NSArray *copy_trust_anchors(const struct NametagQuicTlsConfig *tls)
+static NSArray *copy_trust_anchors(const struct OxideQuicTlsConfig *tls)
 {
    if (tls == NULL || tls->trust_anchors == NULL ||
        tls->trust_anchor_count == 0)
@@ -219,7 +165,7 @@ static NSArray *copy_trust_anchors(const struct NametagQuicTlsConfig *tls)
        [[NSMutableArray alloc] initWithCapacity:tls->trust_anchor_count];
    for (size_t index = 0; index < tls->trust_anchor_count; index++)
    {
-      const struct NametagTrustAnchor anchor = tls->trust_anchors[index];
+      const struct OxideTlsTrustAnchor anchor = tls->trust_anchors[index];
       CFDataRef data =
           CFDataCreate(kCFAllocatorDefault, anchor.data, (CFIndex)anchor.len);
       if (data == NULL)
@@ -237,7 +183,7 @@ static NSArray *copy_trust_anchors(const struct NametagQuicTlsConfig *tls)
    return anchors.count > 0 ? anchors : nil;
 }
 
-static SecIdentityRef copy_identity(const struct NametagQuicTlsConfig *tls)
+static SecIdentityRef copy_identity(const struct OxideQuicTlsConfig *tls)
 {
    if (tls == NULL || tls->identity_der == NULL || tls->identity_der_len == 0
        || tls->private_key_pkcs8 == NULL ||
@@ -290,7 +236,7 @@ static SecIdentityRef copy_identity(const struct NametagQuicTlsConfig *tls)
 }
 
 static void configure_sec_options(sec_protocol_options_t sec_options,
-                                  const struct NametagQuicTlsConfig *tls,
+                                  const struct OxideQuicTlsConfig *tls,
                                   const char *server_name,
                                   NSString *alpn,
                                   BOOL tls13Only)
@@ -374,7 +320,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    }
 }
 
-@interface NametagQuicConnection : NSObject
+@interface OxideQuicConnection : NSObject
 {
    nw_connection_t _connection;
    nw_parameters_t _quicParameters;
@@ -382,9 +328,9 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 }
 
 @property(nonatomic, strong, readonly) dispatch_queue_t queue;
-@property(nonatomic, assign) struct NametagQuicConfig quicConfig;
-@property(nonatomic, assign) struct NametagRetryPolicy retryPolicy;
-@property(nonatomic, assign) struct NametagQuicMetrics metrics;
+@property(nonatomic, assign) struct OxideQuicConfig quicConfig;
+@property(nonatomic, assign) struct OxideQuicRetryPolicy retryPolicy;
+@property(nonatomic, assign) struct OxideQuicMetrics metrics;
 @property(nonatomic, assign) BOOL fallbackUsed;
 @property(nonatomic, assign) BOOL ready;
 @property(nonatomic, assign) nw_connection_state_t state;
@@ -402,16 +348,16 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 
 - (instancetype)initWithEndpoint:(NSString *)endpoint
                             port:(uint16_t)port
-                             cfg:(const struct NametagQuicConfig *)cfg
-                           retry:(const struct NametagRetryPolicy *)retry
-                             tls:(const struct NametagQuicTlsConfig *)tls;
+                             cfg:(const struct OxideQuicConfig *)cfg
+                           retry:(const struct OxideQuicRetryPolicy *)retry
+                             tls:(const struct OxideQuicTlsConfig *)tls;
 - (void)start;
 - (void)close;
-- (BOOL)copyMetrics:(struct NametagQuicMetrics *)outMetrics;
+- (BOOL)copyMetrics:(struct OxideQuicMetrics *)outMetrics;
 
 @end
 
-@interface NametagQuicConnection ()
+@interface OxideQuicConnection ()
 
 - (void)startAttemptWithParameters:(nw_parameters_t)parameters
                           fallback:(BOOL)fallback;
@@ -436,13 +382,13 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 
 @end
 
-@implementation NametagQuicConnection
+@implementation OxideQuicConnection
 
 - (instancetype)initWithEndpoint:(NSString *)endpoint
                             port:(uint16_t)port
-                             cfg:(const struct NametagQuicConfig *)cfg
-                           retry:(const struct NametagRetryPolicy *)retry
-                             tls:(const struct NametagQuicTlsConfig *)tls
+                             cfg:(const struct OxideQuicConfig *)cfg
+                           retry:(const struct OxideQuicRetryPolicy *)retry
+                             tls:(const struct OxideQuicTlsConfig *)tls
 {
    self = [super init];
    if (!self)
@@ -462,7 +408,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    uint32_t idleTimeoutMs = _quicConfig.idle_timeout_ms;
    uint16_t maxUdpPayloadSize = _quicConfig.max_datagram_size;
    uint16_t keepaliveIntervalSecs = _quicConfig.keepalive_interval_secs;
-   _metrics = (struct NametagQuicMetrics){0};
+   _metrics = (struct OxideQuicMetrics){0};
    _receiveBuffer = [[NSMutableArray alloc] init];
    _queuedReceiveBytes = 0;
    _incomingBytes = [[NSMutableData alloc] init];
@@ -524,9 +470,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
      {
         return;
      }
-     if ((self.quicConfig.force_tcp_tls ||
-          env_truthy("NAMETAG_NETWORK_FORCE_TCP_TLS")) &&
-         self->_tlsParameters != NULL)
+     if (self.quicConfig.force_tcp_tls && self->_tlsParameters != NULL)
      {
         [self startAttemptWithParameters:self->_tlsParameters fallback:YES];
         return;
@@ -585,7 +529,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    NSUInteger attemptNumber = self.attempt;
    if (network_debug_enabled())
    {
-      NSLog(@"Nametag network connect attempt transport=%@ endpoint=%@:%u "
+      NSLog(@"Oxide network connect attempt transport=%@ endpoint=%@:%u "
             @"attempt=%lu",
             network_transport_name(fallback), self.host, self.port,
             (unsigned long)attemptNumber);
@@ -606,7 +550,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
          strongSelf.state = state;
          if (network_debug_enabled())
          {
-            NSLog(@"Nametag network state transport=%@ endpoint=%@:%u "
+            NSLog(@"Oxide network state transport=%@ endpoint=%@:%u "
                   @"attempt=%lu state=%@ error=%@",
                   network_transport_name(fallback), strongSelf.host,
                   strongSelf.port, (unsigned long)attemptNumber,
@@ -685,11 +629,9 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
       return;
    }
 
-   BOOL canRetry = self.attempt < MAX(self.retryPolicy.max_attempts, 1);
+   BOOL canRetry = self.attempt < self.retryPolicy.max_attempts;
    BOOL connectFailed = !self.ready;
-   BOOL forceTcpTls =
-       self.quicConfig.force_tcp_tls ||
-       env_truthy("NAMETAG_NETWORK_FORCE_TCP_TLS");
+   BOOL forceTcpTls = self.quicConfig.force_tcp_tls;
    if (forceTcpTls && _tlsParameters != NULL && canRetry && connectFailed)
    {
       [self scheduleRetryWithParameters:_tlsParameters fallback:YES];
@@ -711,7 +653,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 
    if (error != NULL)
    {
-      NSLog(@"Nametag network connection failed transport=%@: %@",
+      NSLog(@"Oxide network connection failed transport=%@: %@",
             network_transport_name(self.currentFallback), error);
    }
    if (terminalEvent)
@@ -752,7 +694,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
      {
         if (network_debug_enabled())
         {
-           NSLog(@"Nametag network retry skipped transport=%@ "
+           NSLog(@"Oxide network retry skipped transport=%@ "
                  @"expected_attempt=%lu current_attempt=%lu ready=%d",
                  network_transport_name(fallback),
                  (unsigned long)expectedAttempt,
@@ -799,7 +741,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 
    if (network_debug_enabled())
    {
-      NSLog(@"Nametag network wait ready timeout transport=%@ timeout_ms=%llu "
+      NSLog(@"Oxide network wait ready timeout transport=%@ timeout_ms=%llu "
             @"ready=%d",
             network_transport_name(fallback),
             (unsigned long long)timeoutMs, ready ? 1 : 0);
@@ -850,7 +792,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 
    if (network_debug_enabled())
    {
-      NSLog(@"Nametag network wait writable timeout transport=%@ "
+      NSLog(@"Oxide network wait writable timeout transport=%@ "
             @"ready=%d",
             network_transport_name(fallback), ready ? 1 : 0);
    }
@@ -871,7 +813,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
       return NO;
    }
 
-   __block enum NametagSendOutcome outcome = NametagSendOutcomePending;
+   __block enum OxideSendOutcome outcome = OxideSendOutcomePending;
    __block nw_connection_t sendConnection = NULL;
    __block BOOL started = NO;
    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
@@ -891,14 +833,14 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
      nw_connection_send(
          sendConnection, content, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT, true,
          ^(nw_error_t error) {
-           if (outcome != NametagSendOutcomePending)
+           if (outcome != OxideSendOutcomePending)
            {
               dispatch_semaphore_signal(sem);
               return;
            }
            if (monotonic_remaining_ns(overallDeadlineNs) == 0)
            {
-              outcome = NametagSendOutcomeTimedOut;
+              outcome = OxideSendOutcomeTimedOut;
               if (self->_connection == sendConnection)
               {
                  [self closeOnQueue];
@@ -906,14 +848,14 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
            }
            else if (error == NULL)
            {
-              outcome = NametagSendOutcomeSucceeded;
+              outcome = OxideSendOutcomeSucceeded;
            }
            else
            {
-              outcome = NametagSendOutcomeFailed;
+              outcome = OxideSendOutcomeFailed;
               if (network_debug_enabled())
               {
-                 NSLog(@"Nametag network send error transport=%@ "
+                 NSLog(@"Oxide network send error transport=%@ "
                        @"len=%zu error=%@",
                        network_transport_name(self.currentFallback), len,
                        error);
@@ -932,24 +874,24 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    if (dispatch_semaphore_wait(sem, deadline) != 0)
    {
       quic_sync(^{
-        if (outcome == NametagSendOutcomePending)
+        if (outcome == OxideSendOutcomePending)
         {
-           outcome = NametagSendOutcomeTimedOut;
+           outcome = OxideSendOutcomeTimedOut;
            if (self->_connection == sendConnection)
            {
               [self closeOnQueue];
            }
         }
-        if (outcome == NametagSendOutcomeTimedOut && network_debug_enabled())
+        if (outcome == OxideSendOutcomeTimedOut && network_debug_enabled())
         {
-           NSLog(@"Nametag network send timeout transport=%@ len=%zu "
+           NSLog(@"Oxide network send timeout transport=%@ len=%zu "
                  @"timeout_ms=%llu",
                  network_transport_name(self.currentFallback), len,
                  (unsigned long long)timeoutMs);
         }
       });
    }
-   return outcome == NametagSendOutcomeSucceeded;
+   return outcome == OxideSendOutcomeSucceeded;
 }
 
 - (NSData *)popReceived:(uint64_t)timeoutMs
@@ -1016,7 +958,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
          {
             if (network_debug_enabled())
             {
-               NSLog(@"Nametag network receive error transport=%@ error=%@",
+               NSLog(@"Oxide network receive error transport=%@ error=%@",
                      network_transport_name(strongSelf.currentFallback),
                      receiveError);
             }
@@ -1028,7 +970,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
          {
             if (network_debug_enabled())
             {
-               NSLog(@"Nametag network receive closed transport=%@",
+               NSLog(@"Oxide network receive closed transport=%@",
                      network_transport_name(strongSelf.currentFallback));
             }
             [strongSelf close];
@@ -1047,11 +989,11 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
                              ((uint32_t)bytes[1] << 8) |
                              ((uint32_t)bytes[2] << 16) |
                              ((uint32_t)bytes[3] << 24);
-      if (frameLength < 16 || frameLength > kNametagMaxFrameBytes)
+      if (frameLength < 16 || frameLength > kOxideMaxFrameBytes)
       {
          if (network_debug_enabled())
          {
-            NSLog(@"Nametag network receive invalid frame length "
+            NSLog(@"Oxide network receive invalid frame length "
                   @"transport=%@ length=%u buffered=%lu",
                   network_transport_name(self.currentFallback), frameLength,
                   (unsigned long)self.incomingBytes.length);
@@ -1065,12 +1007,12 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
          return;
       }
 
-      if (self.receiveBuffer.count >= kNametagMaxQueuedReceiveFrames ||
-          self.queuedReceiveBytes > kNametagMaxQueuedReceiveBytes ||
+      if (self.receiveBuffer.count >= kOxideMaxQueuedReceiveFrames ||
+          self.queuedReceiveBytes > kOxideMaxQueuedReceiveBytes ||
           frameLength >
-              kNametagMaxQueuedReceiveBytes - self.queuedReceiveBytes)
+              kOxideMaxQueuedReceiveBytes - self.queuedReceiveBytes)
       {
-         NSLog(@"Nametag network receive queue overflow transport=%@ "
+         NSLog(@"Oxide network receive queue overflow transport=%@ "
                @"frame_length=%u queued_frames=%lu queued_bytes=%lu",
                network_transport_name(self.currentFallback), frameLength,
                (unsigned long)self.receiveBuffer.count,
@@ -1088,7 +1030,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
       self.queuedReceiveBytes += frame.length;
       if (network_debug_enabled())
       {
-         NSLog(@"Nametag network receive frame transport=%@ length=%lu "
+         NSLog(@"Oxide network receive frame transport=%@ length=%lu "
                @"queued=%lu",
                network_transport_name(self.currentFallback),
                (unsigned long)frame.length,
@@ -1101,7 +1043,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
    }
 }
 
-- (BOOL)copyMetrics:(struct NametagQuicMetrics *)outMetrics
+- (BOOL)copyMetrics:(struct OxideQuicMetrics *)outMetrics
 {
    if (!outMetrics)
    {
@@ -1152,7 +1094,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 
 @end
 
-@interface NametagReachabilityMonitor : NSObject
+@interface OxideReachabilityMonitor : NSObject
 {
    nw_path_monitor_t _monitor;
 }
@@ -1165,7 +1107,7 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
 - (instancetype)init;
 - (void)start;
 - (void)stop;
-- (BOOL)copyStatus:(struct NametagReachabilityStatus *)outStatus;
+- (BOOL)copyStatus:(struct OxideReachabilityStatus *)outStatus;
 
 @end
 
@@ -1179,7 +1121,7 @@ static void emit_oxide_reachability_snapshot(BOOL reachable, uint8_t pathKind,
    }
 }
 
-@implementation NametagReachabilityMonitor
+@implementation OxideReachabilityMonitor
 
 - (instancetype)init
 {
@@ -1240,7 +1182,7 @@ static void emit_oxide_reachability_snapshot(BOOL reachable, uint8_t pathKind,
    }
 }
 
-- (BOOL)copyStatus:(struct NametagReachabilityStatus *)outStatus
+- (BOOL)copyStatus:(struct OxideReachabilityStatus *)outStatus
 {
    if (outStatus == NULL)
    {
@@ -1311,6 +1253,10 @@ static BOOL parse_endpoint(const char *endpoint, NSString **host,
       {
          hostPart = [mutable substringToIndex:colon.location];
          portPart = [mutable substringFromIndex:colon.location + 1];
+         if ([hostPart containsString:@":"])
+         {
+            return NO;
+         }
       }
       else
       {
@@ -1322,45 +1268,56 @@ static BOOL parse_endpoint(const char *endpoint, NSString **host,
    {
       return NO;
    }
-   uint16_t resolvedPort = kNametagDefaultPort;
-   if (portPart.length > 0)
+   if (portPart.length == 0)
    {
-      NSInteger parsed = portPart.integerValue;
-      if (parsed <= 0 || parsed > UINT16_MAX)
+      return NO;
+   }
+   uint32_t parsed = 0;
+   for (NSUInteger index = 0; index < portPart.length; index++)
+   {
+      unichar digit = [portPart characterAtIndex:index];
+      if (digit < '0' || digit > '9')
       {
          return NO;
       }
-      resolvedPort = (uint16_t)parsed;
+      parsed = parsed * 10 + (uint32_t)(digit - '0');
+      if (parsed > UINT16_MAX)
+      {
+         return NO;
+      }
+   }
+   if (parsed == 0)
+   {
+      return NO;
    }
 
    *host = hostPart;
-   *port = resolvedPort;
+   *port = (uint16_t)parsed;
    return YES;
 }
 
-NametagQuicHandle nametag_ios_quic_connect(
+OxideQuicHandle oxide_ios_quic_connect(
     const char *endpoint,
-    const struct NametagQuicConfig *cfg,
-    const struct NametagRetryPolicy *retry,
-    const struct NametagQuicTlsConfig *tls)
+    const struct OxideQuicConfig *cfg,
+    const struct OxideQuicRetryPolicy *retry,
+    const struct OxideQuicTlsConfig *tls)
 {
+   if (cfg == NULL || retry == NULL || retry->max_attempts == 0)
+   {
+      return NULL;
+   }
    NSString *host = nil;
-   uint16_t port = kNametagDefaultPort;
+   uint16_t port = 0;
    if (!parse_endpoint(endpoint, &host, &port))
    {
       return NULL;
    }
 
-   struct NametagQuicConfig localCfg =
-       cfg ? *cfg : (struct NametagQuicConfig){60000, 1350, 30, true, NULL, false};
-   struct NametagRetryPolicy localRetry =
-       retry ? *retry : (struct NametagRetryPolicy){3, 500, 8000};
-
-   NametagQuicConnection *connection = [[NametagQuicConnection alloc]
+   OxideQuicConnection *connection = [[OxideQuicConnection alloc]
        initWithEndpoint:host
                    port:port
-                    cfg:&localCfg
-                  retry:&localRetry
+                    cfg:cfg
+                  retry:retry
                     tls:tls];
    if (!connection)
    {
@@ -1370,42 +1327,42 @@ NametagQuicHandle nametag_ios_quic_connect(
    return (void *)CFBridgingRetain(connection);
 }
 
-bool nametag_ios_quic_metrics(NametagQuicHandle handle,
-                              struct NametagQuicMetrics *outMetrics)
+bool oxide_ios_quic_metrics(OxideQuicHandle handle,
+                              struct OxideQuicMetrics *outMetrics)
 {
    if (handle == NULL || outMetrics == NULL)
    {
       return false;
    }
-   NametagQuicConnection *connection =
-       (__bridge NametagQuicConnection *)handle;
+   OxideQuicConnection *connection =
+       (__bridge OxideQuicConnection *)handle;
    return [connection copyMetrics:outMetrics];
 }
 
-bool nametag_ios_quic_wait_ready(NametagQuicHandle handle,
+bool oxide_ios_quic_wait_ready(OxideQuicHandle handle,
                                  uint64_t timeout_ms)
 {
    if (handle == NULL)
    {
       return false;
    }
-   NametagQuicConnection *connection =
-       (__bridge NametagQuicConnection *)handle;
+   OxideQuicConnection *connection =
+       (__bridge OxideQuicConnection *)handle;
    return [connection waitForReady:timeout_ms];
 }
 
-void nametag_ios_quic_close(NametagQuicHandle handle)
+void oxide_ios_quic_close(OxideQuicHandle handle)
 {
    if (handle == NULL)
    {
       return;
    }
-   NametagQuicConnection *connection =
-       (__bridge_transfer NametagQuicConnection *)handle;
+   OxideQuicConnection *connection =
+       (__bridge_transfer OxideQuicConnection *)handle;
    [connection close];
 }
 
-bool nametag_ios_quic_send(NametagQuicHandle handle,
+bool oxide_ios_quic_send(OxideQuicHandle handle,
                            const uint8_t *data,
                            size_t len,
                            uint64_t timeout_ms)
@@ -1414,12 +1371,12 @@ bool nametag_ios_quic_send(NametagQuicHandle handle,
    {
       return false;
    }
-   NametagQuicConnection *connection =
-       (__bridge NametagQuicConnection *)handle;
+   OxideQuicConnection *connection =
+       (__bridge OxideQuicConnection *)handle;
    return [connection sendBytes:data length:len timeout:timeout_ms];
 }
 
-bool nametag_ios_quic_recv(NametagQuicHandle handle,
+bool oxide_ios_quic_recv(OxideQuicHandle handle,
                            uint8_t *buffer,
                            size_t buffer_len,
                            size_t *out_len,
@@ -1430,8 +1387,8 @@ bool nametag_ios_quic_recv(NametagQuicHandle handle,
       return false;
    }
 
-   NametagQuicConnection *connection =
-       (__bridge NametagQuicConnection *)handle;
+   OxideQuicConnection *connection =
+       (__bridge OxideQuicConnection *)handle;
    NSData *payload = [connection popReceived:timeout_ms];
    if (payload == nil || payload.length == 0)
    {
@@ -1447,7 +1404,7 @@ bool nametag_ios_quic_recv(NametagQuicHandle handle,
    return true;
 }
 
-int32_t nametag_ios_quic_poll_recv(NametagQuicHandle handle,
+int32_t oxide_ios_quic_poll_recv(OxideQuicHandle handle,
                                    uint8_t *buffer,
                                    size_t buffer_len,
                                    size_t *out_len)
@@ -1458,36 +1415,36 @@ int32_t nametag_ios_quic_poll_recv(NametagQuicHandle handle,
    }
    if (handle == NULL || buffer == NULL || out_len == NULL)
    {
-      return NAMETAG_IOS_QUIC_POLL_TERMINAL;
+      return OXIDE_IOS_QUIC_POLL_TERMINAL;
    }
 
-   NametagQuicConnection *connection =
-       (__bridge NametagQuicConnection *)handle;
+   OxideQuicConnection *connection =
+       (__bridge OxideQuicConnection *)handle;
    NSData *payload = [connection popReceived:0];
    if (payload == nil)
    {
       return [connection copyClosedState]
-                 ? NAMETAG_IOS_QUIC_POLL_TERMINAL
-                 : NAMETAG_IOS_QUIC_POLL_IDLE;
+                 ? OXIDE_IOS_QUIC_POLL_TERMINAL
+                 : OXIDE_IOS_QUIC_POLL_IDLE;
    }
    if (payload.length > buffer_len)
    {
-      NSLog(@"Nametag network poll buffer too small frame_length=%lu "
+      NSLog(@"Oxide network poll buffer too small frame_length=%lu "
             @"buffer_length=%zu",
             (unsigned long)payload.length, buffer_len);
       [connection close];
-      return NAMETAG_IOS_QUIC_POLL_TERMINAL;
+      return OXIDE_IOS_QUIC_POLL_TERMINAL;
    }
 
    memcpy(buffer, payload.bytes, payload.length);
    *out_len = payload.length;
-   return NAMETAG_IOS_QUIC_POLL_FRAME;
+   return OXIDE_IOS_QUIC_POLL_FRAME;
 }
 
-NametagReachabilityHandle nametag_ios_reachability_start(void)
+OxideReachabilityHandle oxide_ios_reachability_start(void)
 {
-   NametagReachabilityMonitor *monitor =
-       [[NametagReachabilityMonitor alloc] init];
+   OxideReachabilityMonitor *monitor =
+       [[OxideReachabilityMonitor alloc] init];
    if (!monitor)
    {
       return NULL;
@@ -1496,52 +1453,50 @@ NametagReachabilityHandle nametag_ios_reachability_start(void)
    return (void *)CFBridgingRetain(monitor);
 }
 
-bool nametag_ios_reachability_poll(
-    NametagReachabilityHandle handle,
-    struct NametagReachabilityStatus *outStatus)
+bool oxide_ios_reachability_poll(
+    OxideReachabilityHandle handle,
+    struct OxideReachabilityStatus *outStatus)
 {
    if (handle == NULL || outStatus == NULL)
    {
       return false;
    }
-   NametagReachabilityMonitor *monitor =
-       (__bridge NametagReachabilityMonitor *)handle;
+   OxideReachabilityMonitor *monitor =
+       (__bridge OxideReachabilityMonitor *)handle;
    return [monitor copyStatus:outStatus];
 }
 
-void nametag_ios_reachability_close(NametagReachabilityHandle handle)
+void oxide_ios_reachability_close(OxideReachabilityHandle handle)
 {
    if (handle == NULL)
    {
       return;
    }
-   NametagReachabilityMonitor *monitor =
-       (__bridge_transfer NametagReachabilityMonitor *)handle;
+   OxideReachabilityMonitor *monitor =
+       (__bridge_transfer OxideReachabilityMonitor *)handle;
    [monitor stop];
 }
 
-void oxide_host_net_set_reachability_callback(void (*cb)(uint32_t status,
-                                                         uint32_t iface,
-                                                         uint8_t expensive))
+void oxide_host_net_set_reachability_callback(OxideReachabilityCallback callback)
 {
-   g_oxide_reachability_callback = cb;
+   g_oxide_reachability_callback = callback;
 }
 
 int32_t oxide_host_net_start_reachability(void)
 {
    if (g_oxide_reachability_monitor == nil)
    {
-      g_oxide_reachability_monitor = [[NametagReachabilityMonitor alloc] init];
+      g_oxide_reachability_monitor = [[OxideReachabilityMonitor alloc] init];
       if (g_oxide_reachability_monitor == nil)
       {
          return -1;
       }
-      [(NametagReachabilityMonitor *)g_oxide_reachability_monitor start];
+      [(OxideReachabilityMonitor *)g_oxide_reachability_monitor start];
    }
 
-   struct NametagReachabilityStatus snapshot;
+   struct OxideReachabilityStatus snapshot;
    memset(&snapshot, 0, sizeof(snapshot));
-   if ([(NametagReachabilityMonitor *)g_oxide_reachability_monitor
+   if ([(OxideReachabilityMonitor *)g_oxide_reachability_monitor
            copyStatus:&snapshot])
    {
       emit_oxide_reachability_snapshot(snapshot.reachable, snapshot.path_kind,
@@ -1554,7 +1509,7 @@ void oxide_host_net_stop_reachability(void)
 {
    if (g_oxide_reachability_monitor != nil)
    {
-      [(NametagReachabilityMonitor *)g_oxide_reachability_monitor stop];
+      [(OxideReachabilityMonitor *)g_oxide_reachability_monitor stop];
       g_oxide_reachability_monitor = nil;
    }
 }

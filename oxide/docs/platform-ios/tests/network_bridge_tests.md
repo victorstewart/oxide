@@ -11,7 +11,13 @@
 
 ## Entry points list
 - `forced_tcp_tls_retries_stay_on_tls_parameters()`
-  Verifies that `NametagQuicConnection::handleFailure` checks forced TCP/TLS mode before the generic QUIC retry branch and schedules `_tlsParameters`.
+  Verifies that `OxideQuicConnection::handleFailure` checks forced TCP/TLS mode before the generic QUIC retry branch and schedules `_tlsParameters`.
+- `network_bridge_public_abi_is_oxide_owned_and_complete()`
+  Verifies that `network.h` declares every transport/reachability layout and operation with Oxide-owned names and that neither the header nor implementation retains a Nametag identifier.
+- `network_bridge_requires_caller_owned_connection_policy()`
+  Verifies that connection and retry policy are mandatory and that the native connect path contains no hidden aggregate defaults.
+- `network_bridge_strictly_parses_explicit_ports()`
+  Verifies rejection paths for missing, zero, overflow, suffix-junk, and unbracketed-IPv6 ports plus the bracketed-IPv6 parse branch.
 - `network_bridge_enables_ticket_resumption_on_public_security_options()`
   Verifies that the Objective-C bridge enables TLS tickets, TLS resumption, and the TLS 1.3 min/max setters while avoiding private early-data setters.
 - `network_bridge_configures_tcp_tls13_fast_open_and_early_writes()`
@@ -46,7 +52,10 @@
 ## Logic narrative
 - The helper extracts the Objective-C `handleFailure` method body between stable method markers.
 - The test confirms the forced TCP/TLS branch appears before the generic `_quicParameters` retry.
-- It also checks both request sources for forced mode: the config field and the environment override.
+- It also confirms forced mode comes only from the explicit config field and that no process-global override remains.
+- The ABI ownership test scans the header's complete declaration set and rejects product-prefixed names in both public and implementation files.
+- The caller-policy test isolates the native connect entry point and rejects missing pointer validation or hard-coded config/retry aggregates.
+- The strict-port test isolates `parse_endpoint`, requires digit-by-digit bounded accumulation, and rejects Foundation's permissive numeric-prefix coercion.
 - The ticket/resumption test extracts `configure_sec_options` and checks only public Security.framework options.
 - The TCP/TLS fast-open test extracts the secure-TCP parameter block and send method to make sure early-data eligibility is not configured without a matching pre-ready write path.
 - The receive-permit test proves the semaphore wait text precedes the only `firstObject` removal in `popReceived`, preventing a second call from consuming an old permit after a fast-path pop.
@@ -64,6 +73,7 @@
 ## Preconditions and postconditions
 - The Objective-C method markers must remain present in `network.m`.
 - A passing test means the source keeps forced TCP/TLS retries on TLS parameters before any generic QUIC retry can run.
+- Passing ABI and policy tests mean consumers can bind one Oxide-owned header and native code cannot silently substitute application transport policy.
 - A passing ticket/resumption test means the bridge keeps asking Security.framework to issue/cache resumable TLS sessions for future QUIC/TCP-TLS connections and keeps the TLS 1.3 protocol setters in the shared security-options path.
 - A passing TCP/TLS fast-open test means the fallback path remains TLS 1.3-only and keeps the public Network.framework hooks required for TCP Fast Open and TLS early-data attempts.
 - Passing receive-accounting tests mean complete frames cannot grow the queue beyond either budget and each normal queue removal consumes the permit emitted for that frame.
@@ -100,6 +110,7 @@ cargo test -p oxide-platform-ios --test network_bridge_tests --locked
 ```
 
 ## Changelog
+- 2026-07-11: added complete Oxide ABI ownership and explicit caller-policy guards while removing the process-global forced-transport contract.
 - 2026-07-10: added actual-handler, malformed-frame terminal closure, stale receive identity, queue-confinement, and serialized send timeout/completion coverage.
 - 2026-07-10: added tri-state receive ABI and terminal connection-state contract coverage.
 - 2026-07-10: added source-contract coverage for receive permits, frame/byte queue limits, fail-closed overflow, and one monotonic send deadline.
