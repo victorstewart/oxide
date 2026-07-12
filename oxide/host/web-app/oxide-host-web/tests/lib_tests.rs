@@ -544,7 +544,13 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("image_upload_temp_allocs={}"));
     assert!(source.contains("image_upload_scratch_bytes={}"));
     assert!(source.contains("effect_uniform_writes={}"));
+    assert!(source.contains("id_mask_uniform_writes={}"));
+    assert!(source.contains("id_mask_uniform_bytes={}"));
+    assert!(source.contains("id_mask_uniform_slots={}"));
+    assert!(source.contains("current_warmup_ms={:.3}"));
     assert!(source.contains("webgpu_id_mask_frame(&mut renderer, &vertices, 1"));
+    assert!(source.contains("renderer.encode_id_mask_gpu_compositor(&distractor)"));
+    assert!(source.contains(r#"\"uniform_writes\":{}"#));
     assert!(source.contains("direct_capture_active"));
     assert!(source.contains("state.direct_capture_active = true"));
     assert!(source.contains("if state.direct_capture_active"));
@@ -980,6 +986,15 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     );
     assert!(
         script.contains("effect_uniform_slots: numberMetric(metrics, \"effect_uniform_slots\")")
+    );
+    assert!(
+        script.contains("id_mask_uniform_writes: numberMetric(metrics, \"id_mask_uniform_writes\")")
+    );
+    assert!(
+        script.contains("id_mask_uniform_bytes: numberMetric(metrics, \"id_mask_uniform_bytes\")")
+    );
+    assert!(
+        script.contains("id_mask_uniform_slots: numberMetric(metrics, \"id_mask_uniform_slots\")")
     );
     assert!(script.contains("spinner_draws: numberMetric(metrics, \"spinner_draws\")"));
     assert!(script.contains("camera_bg_draws: numberMetric(metrics, \"camera_bg_draws\")"));

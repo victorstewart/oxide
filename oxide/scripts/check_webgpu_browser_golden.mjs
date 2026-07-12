@@ -1479,6 +1479,9 @@ function cpuSubmitCase(metrics)
       effect_uniform_writes: numberMetric(metrics, "effect_uniform_writes"),
       effect_uniform_bytes: numberMetric(metrics, "effect_uniform_bytes"),
       effect_uniform_slots: numberMetric(metrics, "effect_uniform_slots"),
+      id_mask_uniform_writes: numberMetric(metrics, "id_mask_uniform_writes"),
+      id_mask_uniform_bytes: numberMetric(metrics, "id_mask_uniform_bytes"),
+      id_mask_uniform_slots: numberMetric(metrics, "id_mask_uniform_slots"),
       spinner_draws: numberMetric(metrics, "spinner_draws"),
       camera_bg_draws: numberMetric(metrics, "camera_bg_draws"),
       render_passes: numberMetric(metrics, "render_passes"),
@@ -1856,6 +1859,7 @@ function idMaskCase(metrics, id, variant, prefix)
       samples,
       frames_per_sample: framesPerSample,
       frames: samples * framesPerSample,
+      warmup_ms: numberMetric(metrics, `${prefix}_warmup_ms`),
       p50_ms: numberMetric(metrics, `${prefix}_p50_ms`),
       p95_ms: numberMetric(metrics, `${prefix}_p95_ms`),
       p99_ms: numberMetric(metrics, `${prefix}_p99_ms`),
@@ -1889,6 +1893,9 @@ function idMaskCase(metrics, id, variant, prefix)
       effect_uniform_writes: numberMetric(metrics, `${prefix}_effect_uniform_writes`),
       effect_uniform_bytes: numberMetric(metrics, `${prefix}_effect_uniform_bytes`),
       effect_uniform_slots: numberMetric(metrics, `${prefix}_effect_uniform_slots`),
+      id_mask_uniform_writes: numberMetric(metrics, `${prefix}_id_mask_uniform_writes`),
+      id_mask_uniform_bytes: numberMetric(metrics, `${prefix}_id_mask_uniform_bytes`),
+      id_mask_uniform_slots: numberMetric(metrics, `${prefix}_id_mask_uniform_slots`),
       spinner_draws: numberMetric(metrics, `${prefix}_spinner_draws`),
       camera_bg_draws: numberMetric(metrics, `${prefix}_camera_bg_draws`),
       render_passes: numberMetric(metrics, `${prefix}_render_passes`),
@@ -1965,6 +1972,9 @@ function prefixedBackendCase(metrics, id, variant, prefix, extra)
       effect_uniform_writes: numberMetric(metrics, `${prefix}_effect_uniform_writes`),
       effect_uniform_bytes: numberMetric(metrics, `${prefix}_effect_uniform_bytes`),
       effect_uniform_slots: numberMetric(metrics, `${prefix}_effect_uniform_slots`),
+      id_mask_uniform_writes: numberMetric(metrics, `${prefix}_id_mask_uniform_writes`),
+      id_mask_uniform_bytes: numberMetric(metrics, `${prefix}_id_mask_uniform_bytes`),
+      id_mask_uniform_slots: numberMetric(metrics, `${prefix}_id_mask_uniform_slots`),
       spinner_draws: numberMetric(metrics, `${prefix}_spinner_draws`),
       camera_bg_draws: numberMetric(metrics, `${prefix}_camera_bg_draws`),
       render_passes: numberMetric(metrics, `${prefix}_render_passes`),
@@ -2084,7 +2094,7 @@ const WEBGPU_BACKEND_PATHS = [
    {
       id: "id_mask_compositor",
       rows: ["web.wasm.webgpu.id_mask_compositor.current"],
-      counters: ["id_mask_draws", "id_mask_raster_passes", "id_mask_field_seed_passes", "id_mask_field_jump_passes", "id_mask_compositor_passes", "buffer_upload_bytes", "vertices", "gpu_timestamp_passes"],
+      counters: ["id_mask_draws", "id_mask_uniform_writes", "id_mask_uniform_bytes", "id_mask_uniform_slots", "id_mask_raster_passes", "id_mask_field_seed_passes", "id_mask_field_jump_passes", "id_mask_compositor_passes", "buffer_upload_bytes", "vertices", "gpu_timestamp_passes"],
       comparison: "coverage",
    },
    {
@@ -2973,6 +2983,9 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          current_p50_ms: numberMetric(idMaskMetrics, "current_p50_ms"),
          current_render_passes: numberMetric(idMaskMetrics, "current_render_passes"),
          current_buffer_upload_bytes: numberMetric(idMaskMetrics, "current_buffer_upload_bytes"),
+         current_uniform_writes: numberMetric(idMaskMetrics, "current_id_mask_uniform_writes"),
+         current_uniform_bytes: numberMetric(idMaskMetrics, "current_id_mask_uniform_bytes"),
+         current_uniform_slots: numberMetric(idMaskMetrics, "current_id_mask_uniform_slots"),
          vertices: numberMetric(idMaskMetrics, "vertices"),
          vertex_bytes: numberMetric(idMaskMetrics, "vertex_bytes"),
       },
@@ -3628,9 +3641,9 @@ function renderMarkdown(report)
    lines.push("");
    lines.push("## ID-Mask Summary");
    lines.push("");
-   lines.push("| Case | Current p50 ms | Current Passes | Current Upload Bytes | Vertices | Vertex Bytes |");
-   lines.push("| --- | ---: | ---: | ---: | ---: | ---: |");
-   lines.push(`| \`${report.id_mask_summary.id}\` | ${report.id_mask_summary.current_p50_ms.toFixed(3)} | ${report.id_mask_summary.current_render_passes} | ${report.id_mask_summary.current_buffer_upload_bytes} | ${report.id_mask_summary.vertices} | ${report.id_mask_summary.vertex_bytes} |`);
+   lines.push("| Case | Current p50 ms | Current Passes | Uniform Writes | Uniform Bytes | Uniform Slots | Current Upload Bytes | Vertices | Vertex Bytes |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+   lines.push(`| \`${report.id_mask_summary.id}\` | ${report.id_mask_summary.current_p50_ms.toFixed(3)} | ${report.id_mask_summary.current_render_passes} | ${report.id_mask_summary.current_uniform_writes} | ${report.id_mask_summary.current_uniform_bytes} | ${report.id_mask_summary.current_uniform_slots} | ${report.id_mask_summary.current_buffer_upload_bytes} | ${report.id_mask_summary.vertices} | ${report.id_mask_summary.vertex_bytes} |`);
    lines.push("");
    lines.push("## Upload Summary");
    lines.push("");

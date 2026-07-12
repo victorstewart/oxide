@@ -566,42 +566,35 @@ fn wasm_webgpu_backend_packet_vocabulary_is_frozen() {
 }
 
 #[test]
-fn wasm_webgpu_id_mask_uniform_bytes_reuse_scratch_storage() {
-    let source = include_str!("../src/wasm/webgpu.rs");
-    let render_id_mask = source
-        .split("fn render_id_mask_compositors")
-        .nth(1)
-        .expect("render_id_mask_compositors")
-        .split("fn render_draw_range")
-        .next()
-        .expect("render_id_mask_compositors end");
-    let raster_writer = source
-        .split("fn write_id_mask_raster_uniform_bytes")
-        .nth(1)
-        .expect("raster uniform writer")
-        .split("fn id_mask_field_uniform_bytes")
-        .next()
-        .expect("raster uniform writer end");
-    let compositor_writer = source
-        .split("fn write_id_mask_compositor_uniform_bytes")
-        .nth(1)
-        .expect("compositor uniform writer")
-        .split("fn push_scene3d_uniform")
-        .next()
-        .expect("compositor uniform writer end");
+fn wasm_webgpu_id_mask_uniform_arena_isolates_every_encoded_pass()
+{
+   let source = include_str!("../src/wasm/webgpu.rs");
+   let prepare = source
+      .split("fn prepare_id_mask_uniforms")
+      .nth(1)
+      .expect("prepare_id_mask_uniforms")
+      .split("fn ensure_id_mask_resources")
+      .next()
+      .expect("prepare_id_mask_uniforms end");
+   let render = source
+      .split("fn render_id_mask_compositors")
+      .nth(1)
+      .expect("render_id_mask_compositors")
+      .split("fn draw_state_key")
+      .next()
+      .expect("render_id_mask_compositors end");
 
-    assert!(source.contains("id_mask_raster_uniform_bytes: Vec<u8>"));
-    assert!(source.contains("id_mask_compositor_uniform_bytes: Vec<u8>"));
-    assert!(render_id_mask.contains("write_id_mask_raster_uniform_bytes("));
-    assert!(render_id_mask.contains("write_id_mask_compositor_uniform_bytes("));
-    assert!(!render_id_mask.contains("id_mask_raster_uniform_bytes(width"));
-    assert!(!render_id_mask.contains("id_mask_compositor_uniform_bytes(&draw)"));
-    assert!(raster_writer.contains("out.clear();"));
-    assert!(raster_writer.contains("out.reserve(ID_MASK_RASTER_UNIFORM_SIZE_BYTES);"));
-    assert!(!raster_writer.contains("Vec::with_capacity"));
-    assert!(compositor_writer.contains("out.clear();"));
-    assert!(compositor_writer.contains("out.reserve("));
-    assert!(!compositor_writer.contains("Vec::with_capacity"));
+   assert!(source.contains("id_mask_uniform_bytes: Vec<u8>"));
+   assert!(source.contains("id_mask_uniform_offsets: Vec<IdMaskUniformOffsets>"));
+   assert!(source.contains("min_uniform_buffer_offset_alignment"));
+   assert!(prepare.contains("0.0,"));
+   assert!(prepare.contains("while jump >= 1"));
+   assert!(prepare.contains("self.id_mask_field_uniform_offsets.push(offset)"));
+   assert_eq!(render.matches("self.queue.write_buffer(").count(), 1);
+   assert!(render.contains("&[uniform_offsets.raster]"));
+   assert!(render.contains("&[self.id_mask_field_uniform_offsets[field_offset_index]]"));
+   assert!(render.contains("&[uniform_offsets.compositor]"));
+   assert!(!render.contains("id_mask_field_uniform_bytes("));
 }
 
 #[test]
@@ -709,6 +702,9 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
         "pub effect_uniform_writes: u32",
         "pub effect_uniform_bytes: u64",
         "pub effect_uniform_slots: u32",
+        "pub id_mask_uniform_writes: u32",
+        "pub id_mask_uniform_bytes: u64",
+        "pub id_mask_uniform_slots: u32",
         "pub spinner_draws: u32",
         "pub camera_bg_draws: u32",
         "pub clear_passes: u32",
@@ -918,6 +914,9 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(host.contains("{key_prefix}effect_uniform_writes={}"));
     assert!(host.contains("{key_prefix}effect_uniform_bytes={}"));
     assert!(host.contains("{key_prefix}effect_uniform_slots={}"));
+    assert!(host.contains("{key_prefix}id_mask_uniform_writes={}"));
+    assert!(host.contains("{key_prefix}id_mask_uniform_bytes={}"));
+    assert!(host.contains("{key_prefix}id_mask_uniform_slots={}"));
     assert!(host.contains("{key_prefix}sampler_creates={}"));
     assert!(host.contains("{key_prefix}mesh3d_creates={}"));
     assert!(host.contains("{key_prefix}draw_buffer_grows={}"));

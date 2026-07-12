@@ -106,6 +106,7 @@ pub async fn build_renderer() -> Result<oxide_renderer_web::BrowserRenderer, oxi
 
 ## Changelog
 
+- 2026-07-12: replaced shared mutable ID-mask uniforms with one reusable aligned frame arena, immutable dynamic offsets per raster/seed/jump/compositor pass, one queue upload, and uniform write/byte/slot counters.
 - 2026-07-12: added sampled, saturating WebGPU resident-memory snapshots and complete frame-work/report counters with explicit logical-versus-allocated semantics.
 - 2026-07-12: added snapshot-only asynchronous ID-mask raster/final-field readback for CPU-reference parity.
 - 2026-07-12: added packed solid-color WebGPU lowering and the narrow six-vertex Canvas flat/opposing-edge gradient path.

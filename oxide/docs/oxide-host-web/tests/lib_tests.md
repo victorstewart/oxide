@@ -65,6 +65,7 @@ pub fn texture() -> Vec<u8>
 
 ## Changelog
 
+- 2026-07-12: added static coverage for the two-draw asymmetric ID-mask oracle and uniform arena counters in host and browser report schemas.
 - 2026-06-22: updated static and committed-report checks after retiring the default backdrop-batch per-copy row with same-workload A/B proof.
 - 2026-06-02: added static and committed-report checks for WebGPU draw-item coalescing A/B rows and counters.
 - 2026-06-22: retired default committed-report checks for draw-item coalescing, draw-state cache, and clip-state cache standalone rows after same-workload A/B proof showed current wins.

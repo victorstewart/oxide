@@ -608,12 +608,14 @@ mod wasm_host {
             let current_stats = renderer_stats_metrics(current.stats, "current");
             let legacy_stats = renderer_stats_metrics(legacy.stats, "legacy");
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames};current_p50_ms={:.3};current_p95_ms={:.3};current_p99_ms={:.3};current_peak_ms={:.3};current_avg_ms={:.3}{current_allocations}{current_submit_allocations}{current_stats};legacy_p50_ms={:.3};legacy_p95_ms={:.3};legacy_p99_ms={:.3};legacy_peak_ms={:.3};legacy_avg_ms={:.3}{legacy_allocations}{legacy_submit_allocations}{legacy_stats};legacy_over_current={ratio:.3};vertices={};vertex_bytes={}",
+                "samples={sample_count};frames_per_sample={frames};current_warmup_ms={:.3};current_p50_ms={:.3};current_p95_ms={:.3};current_p99_ms={:.3};current_peak_ms={:.3};current_avg_ms={:.3}{current_allocations}{current_submit_allocations}{current_stats};legacy_warmup_ms={:.3};legacy_p50_ms={:.3};legacy_p95_ms={:.3};legacy_p99_ms={:.3};legacy_peak_ms={:.3};legacy_avg_ms={:.3}{legacy_allocations}{legacy_submit_allocations}{legacy_stats};legacy_over_current={ratio:.3};vertices={};vertex_bytes={}",
+                current.warmup_ms,
                 current.p50_ms,
                 current.p95_ms,
                 current.p99_ms,
                 current.peak_ms,
                 current.avg_ms,
+                legacy.warmup_ms,
                 legacy.p50_ms,
                 legacy.p95_ms,
                 legacy.p99_ms,
@@ -643,7 +645,8 @@ mod wasm_host {
                 submit_allocation_metrics(&current.submit_allocations, "current");
             let current_stats = renderer_stats_metrics(current.stats, "current");
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames};current_p50_ms={:.3};current_p95_ms={:.3};current_p99_ms={:.3};current_peak_ms={:.3};current_avg_ms={:.3}{current_allocations}{current_submit_allocations}{current_stats};vertices={};vertex_bytes={}",
+                "samples={sample_count};frames_per_sample={frames};current_warmup_ms={:.3};current_p50_ms={:.3};current_p95_ms={:.3};current_p99_ms={:.3};current_peak_ms={:.3};current_avg_ms={:.3}{current_allocations}{current_submit_allocations}{current_stats};vertices={};vertex_bytes={}",
+                current.warmup_ms,
                 current.p50_ms,
                 current.p95_ms,
                 current.p99_ms,
@@ -1314,9 +1317,13 @@ mod wasm_host {
             for _ in 0..WEBGPU_TIMESTAMP_SETTLE_RAFS
             {
                 wait_animation_frame_once().await?;
-                if let Some(readback) = renderer.borrow_mut().collect_id_mask_snapshot_readback()
+                let readback = renderer.borrow_mut().collect_id_mask_snapshot_readback();
+                if let Some(readback) = readback
                 {
-                    return readback.map(|readback| id_mask_snapshot_json(&readback)).map_err(render_err);
+                    let stats = renderer.borrow().last_stats();
+                    return readback
+                        .map(|readback| id_mask_snapshot_json(&readback, stats))
+                        .map_err(render_err);
                 }
             }
             Err(JsValue::from_str("WebGPU asymmetric ID-mask readback did not settle"))
@@ -1517,6 +1524,7 @@ mod wasm_host {
     }
 
     struct WebGpuIdMaskBenchSummary {
+        warmup_ms: f64,
         p50_ms: f64,
         p95_ms: f64,
         p99_ms: f64,
@@ -2439,9 +2447,12 @@ mod wasm_host {
         let vertex_bytes =
             vertices.len() * core::mem::size_of::<id_mask_compositor::IdMaskRasterVertex>();
         let mut timestamp = perf_now();
+        let mut warmup_values = [0.0_f64; 4];
         for warmup in 0..4 {
             let revision = if stable_revision { 1 } else { warmup as u64 + 1 };
+            let warmup_start = perf_now();
             webgpu_id_mask_frame(renderer, &vertices, revision, timestamp)?;
+            warmup_values[warmup as usize] = (perf_now() - warmup_start).max(0.0);
             timestamp += 16.666_667;
         }
 
@@ -2467,6 +2478,7 @@ mod wasm_host {
         let stats = renderer.last_stats();
 
         Ok(WebGpuIdMaskBenchSummary {
+            warmup_ms: average(&warmup_values),
             p50_ms: percentile(&values, 0.50),
             p95_ms: percentile(&values, 0.95),
             p99_ms: percentile(&values, 0.99),
@@ -2856,13 +2868,35 @@ mod wasm_host {
         pass.raster.mask_width = WIDTH;
         pass.raster.mask_height = HEIGHT;
         pass.raster.mask_scale = 1.0;
+        let distractor_vertex = |position| {
+            id_mask_compositor::IdMaskRasterVertex::new(position, 4, 31)
+        };
+        let distractor_vertices = [
+            distractor_vertex([0.0, 0.0]),
+            distractor_vertex([WIDTH as f32, 0.0]),
+            distractor_vertex([0.0, HEIGHT as f32]),
+            distractor_vertex([WIDTH as f32, 0.0]),
+            distractor_vertex([WIDTH as f32, HEIGHT as f32]),
+            distractor_vertex([0.0, HEIGHT as f32]),
+        ];
+        let distractor_chunks = [id_mask_compositor::IdMaskRasterChunk {
+            content_hash: 0xC04,
+            first_vertex: 0,
+            vertex_count: distractor_vertices.len(),
+        }];
+        let mut distractor = webgpu_id_mask_pass(&distractor_vertices, &distractor_chunks, 0);
+        distractor.raster.viewport = pass.raster.viewport;
+        distractor.raster.mask_width = WIDTH;
+        distractor.raster.mask_height = HEIGHT;
+        distractor.raster.mask_scale = 1.0;
         renderer.resize(WIDTH as u32, HEIGHT as u32, 1.0).map_err(render_err)?;
         let token = renderer.begin_frame(&gfx::FrameTarget, None);
+        renderer.encode_id_mask_gpu_compositor(&distractor).map_err(render_err)?;
         renderer.encode_id_mask_gpu_compositor(&pass).map_err(render_err)?;
         renderer.submit(token).map_err(render_err)
     }
 
-    fn id_mask_snapshot_json(readback: &WebIdMaskSnapshotReadback) -> String
+    fn id_mask_snapshot_json(readback: &WebIdMaskSnapshotReadback, stats: WebRendererStats) -> String
     {
         let mut json = String::with_capacity(
             readback.city.len().saturating_mul(48),
@@ -2889,7 +2923,14 @@ mod wasm_host {
         write_field_json(&mut json, &readback.city_field);
         json.push_str("],\"seam_field\":[");
         write_field_json(&mut json, &readback.seam_field);
-        json.push_str("]}");
+        let _ = write!(
+            json,
+            "],\"encoded_id_mask_draws\":{},\"uniform_writes\":{},\"uniform_bytes\":{},\"uniform_slots\":{}}}",
+            stats.id_mask_draws,
+            stats.id_mask_uniform_writes,
+            stats.id_mask_uniform_bytes,
+            stats.id_mask_uniform_slots,
+        );
         json
     }
 
@@ -4017,7 +4058,7 @@ mod wasm_host {
         let key_prefix = if prefix.is_empty() { String::new() } else { format!("{prefix}_") };
         let _ = write!(
             out,
-            ";{key_prefix}draws={};{key_prefix}draw_items={};{key_prefix}draw_items_coalesced={};{key_prefix}draw_pipeline_binds={};{key_prefix}draw_bind_group_binds={};{key_prefix}draw_scissor_sets={};{key_prefix}solid_tris={};{key_prefix}image_draws={};{key_prefix}image_mesh_draws={};{key_prefix}nine_slice_draws={};{key_prefix}glyph_quads={};{key_prefix}sdf_glyph_quads={};{key_prefix}clip_depth_peak={};{key_prefix}damage_rects={};{key_prefix}layer_draws={};{key_prefix}layer_cache_hits={};{key_prefix}layer_cache_misses={};{key_prefix}layer_cache_skipped_draws={};{key_prefix}layer_passes={};{key_prefix}scene3d_draws={};{key_prefix}id_mask_draws={};{key_prefix}backdrop_draws={};{key_prefix}visual_effect_draws={};{key_prefix}effect_uniform_writes={};{key_prefix}effect_uniform_bytes={};{key_prefix}effect_uniform_slots={};{key_prefix}spinner_draws={};{key_prefix}camera_bg_draws={};{key_prefix}render_passes={};{key_prefix}clear_passes={};{key_prefix}draw_passes={};{key_prefix}scene3d_passes={};{key_prefix}scene3d_overlay_passes={};{key_prefix}id_mask_raster_passes={};{key_prefix}id_mask_field_seed_passes={};{key_prefix}id_mask_field_jump_passes={};{key_prefix}id_mask_compositor_passes={};{key_prefix}present_passes={};{key_prefix}texture_copies={};{key_prefix}command_buffers={};{key_prefix}gpu_timestamp_query_supported={};{key_prefix}gpu_timestamp_frame_id={};{key_prefix}gpu_timestamp_passes={};{key_prefix}gpu_timestamp_total_ns={};{key_prefix}gpu_timestamp_clear_ns={};{key_prefix}gpu_timestamp_draw_ns={};{key_prefix}gpu_timestamp_scene3d_ns={};{key_prefix}gpu_timestamp_scene3d_overlay_ns={};{key_prefix}gpu_timestamp_id_mask_raster_ns={};{key_prefix}gpu_timestamp_id_mask_field_seed_ns={};{key_prefix}gpu_timestamp_id_mask_field_jump_ns={};{key_prefix}gpu_timestamp_id_mask_compositor_ns={};{key_prefix}gpu_timestamp_present_ns={};{key_prefix}gpu_timestamp_max_pass_ns={};{key_prefix}gpu_timestamp_readback_skips={};{key_prefix}gpu_timestamp_readback_interval={};{key_prefix}buffer_upload_bytes={};{key_prefix}texture_upload_bytes={};{key_prefix}buffer_grows={};{key_prefix}texture_creates={};{key_prefix}bind_group_creates={};{key_prefix}pipeline_creates={};{key_prefix}sampler_creates={};{key_prefix}mesh3d_creates={};{key_prefix}draw_buffer_grows={};{key_prefix}image_texture_creates={};{key_prefix}image_bind_group_creates={};{key_prefix}target_texture_creates={};{key_prefix}target_bind_group_creates={};{key_prefix}layer_texture_creates={};{key_prefix}layer_bind_group_creates={};{key_prefix}scene3d_buffer_grows={};{key_prefix}scene3d_bind_group_creates={};{key_prefix}effect_buffer_grows={};{key_prefix}effect_bind_group_creates={};{key_prefix}id_mask_texture_creates={};{key_prefix}id_mask_buffer_grows={};{key_prefix}id_mask_bind_group_creates={};{key_prefix}image_upload_temp_allocs={};{key_prefix}image_upload_temp_bytes={};{key_prefix}image_upload_scratch_bytes={};{key_prefix}image_upload_scratch_grows={};{key_prefix}cpu_scratch_bytes={};{key_prefix}cpu_scratch_grows={};{key_prefix}cpu_scratch_growth_bytes={};{key_prefix}cpu_draw_scratch_bytes={};{key_prefix}cpu_draw_scratch_grows={};{key_prefix}cpu_draw_scratch_growth_bytes={};{key_prefix}cpu_scene3d_scratch_bytes={};{key_prefix}cpu_scene3d_scratch_grows={};{key_prefix}cpu_scene3d_scratch_growth_bytes={};{key_prefix}cpu_effect_scratch_bytes={};{key_prefix}cpu_effect_scratch_grows={};{key_prefix}cpu_effect_scratch_growth_bytes={};{key_prefix}cpu_id_mask_scratch_bytes={};{key_prefix}cpu_id_mask_scratch_grows={};{key_prefix}cpu_id_mask_scratch_growth_bytes={};{key_prefix}cpu_image_upload_scratch_bytes={};{key_prefix}cpu_image_upload_scratch_grows={};{key_prefix}cpu_image_upload_scratch_growth_bytes={};{key_prefix}cpu_resource_table_scratch_bytes={};{key_prefix}cpu_resource_table_scratch_grows={};{key_prefix}cpu_resource_table_scratch_growth_bytes={}",
+            ";{key_prefix}draws={};{key_prefix}draw_items={};{key_prefix}draw_items_coalesced={};{key_prefix}draw_pipeline_binds={};{key_prefix}draw_bind_group_binds={};{key_prefix}draw_scissor_sets={};{key_prefix}solid_tris={};{key_prefix}image_draws={};{key_prefix}image_mesh_draws={};{key_prefix}nine_slice_draws={};{key_prefix}glyph_quads={};{key_prefix}sdf_glyph_quads={};{key_prefix}clip_depth_peak={};{key_prefix}damage_rects={};{key_prefix}layer_draws={};{key_prefix}layer_cache_hits={};{key_prefix}layer_cache_misses={};{key_prefix}layer_cache_skipped_draws={};{key_prefix}layer_passes={};{key_prefix}scene3d_draws={};{key_prefix}id_mask_draws={};{key_prefix}backdrop_draws={};{key_prefix}visual_effect_draws={};{key_prefix}effect_uniform_writes={};{key_prefix}effect_uniform_bytes={};{key_prefix}effect_uniform_slots={};{key_prefix}id_mask_uniform_writes={};{key_prefix}id_mask_uniform_bytes={};{key_prefix}id_mask_uniform_slots={};{key_prefix}spinner_draws={};{key_prefix}camera_bg_draws={};{key_prefix}render_passes={};{key_prefix}clear_passes={};{key_prefix}draw_passes={};{key_prefix}scene3d_passes={};{key_prefix}scene3d_overlay_passes={};{key_prefix}id_mask_raster_passes={};{key_prefix}id_mask_field_seed_passes={};{key_prefix}id_mask_field_jump_passes={};{key_prefix}id_mask_compositor_passes={};{key_prefix}present_passes={};{key_prefix}texture_copies={};{key_prefix}command_buffers={};{key_prefix}gpu_timestamp_query_supported={};{key_prefix}gpu_timestamp_frame_id={};{key_prefix}gpu_timestamp_passes={};{key_prefix}gpu_timestamp_total_ns={};{key_prefix}gpu_timestamp_clear_ns={};{key_prefix}gpu_timestamp_draw_ns={};{key_prefix}gpu_timestamp_scene3d_ns={};{key_prefix}gpu_timestamp_scene3d_overlay_ns={};{key_prefix}gpu_timestamp_id_mask_raster_ns={};{key_prefix}gpu_timestamp_id_mask_field_seed_ns={};{key_prefix}gpu_timestamp_id_mask_field_jump_ns={};{key_prefix}gpu_timestamp_id_mask_compositor_ns={};{key_prefix}gpu_timestamp_present_ns={};{key_prefix}gpu_timestamp_max_pass_ns={};{key_prefix}gpu_timestamp_readback_skips={};{key_prefix}gpu_timestamp_readback_interval={};{key_prefix}buffer_upload_bytes={};{key_prefix}texture_upload_bytes={};{key_prefix}buffer_grows={};{key_prefix}texture_creates={};{key_prefix}bind_group_creates={};{key_prefix}pipeline_creates={};{key_prefix}sampler_creates={};{key_prefix}mesh3d_creates={};{key_prefix}draw_buffer_grows={};{key_prefix}image_texture_creates={};{key_prefix}image_bind_group_creates={};{key_prefix}target_texture_creates={};{key_prefix}target_bind_group_creates={};{key_prefix}layer_texture_creates={};{key_prefix}layer_bind_group_creates={};{key_prefix}scene3d_buffer_grows={};{key_prefix}scene3d_bind_group_creates={};{key_prefix}effect_buffer_grows={};{key_prefix}effect_bind_group_creates={};{key_prefix}id_mask_texture_creates={};{key_prefix}id_mask_buffer_grows={};{key_prefix}id_mask_bind_group_creates={};{key_prefix}image_upload_temp_allocs={};{key_prefix}image_upload_temp_bytes={};{key_prefix}image_upload_scratch_bytes={};{key_prefix}image_upload_scratch_grows={};{key_prefix}cpu_scratch_bytes={};{key_prefix}cpu_scratch_grows={};{key_prefix}cpu_scratch_growth_bytes={};{key_prefix}cpu_draw_scratch_bytes={};{key_prefix}cpu_draw_scratch_grows={};{key_prefix}cpu_draw_scratch_growth_bytes={};{key_prefix}cpu_scene3d_scratch_bytes={};{key_prefix}cpu_scene3d_scratch_grows={};{key_prefix}cpu_scene3d_scratch_growth_bytes={};{key_prefix}cpu_effect_scratch_bytes={};{key_prefix}cpu_effect_scratch_grows={};{key_prefix}cpu_effect_scratch_growth_bytes={};{key_prefix}cpu_id_mask_scratch_bytes={};{key_prefix}cpu_id_mask_scratch_grows={};{key_prefix}cpu_id_mask_scratch_growth_bytes={};{key_prefix}cpu_image_upload_scratch_bytes={};{key_prefix}cpu_image_upload_scratch_grows={};{key_prefix}cpu_image_upload_scratch_growth_bytes={};{key_prefix}cpu_resource_table_scratch_bytes={};{key_prefix}cpu_resource_table_scratch_grows={};{key_prefix}cpu_resource_table_scratch_growth_bytes={}",
             stats.draws,
             stats.draw_items,
             stats.draw_items_coalesced,
@@ -4044,6 +4085,9 @@ mod wasm_host {
             stats.effect_uniform_writes,
             stats.effect_uniform_bytes,
             stats.effect_uniform_slots,
+            stats.id_mask_uniform_writes,
+            stats.id_mask_uniform_bytes,
+            stats.id_mask_uniform_slots,
             stats.spinner_draws,
             stats.camera_bg_draws,
             stats.render_passes,

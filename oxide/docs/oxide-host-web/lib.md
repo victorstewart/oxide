@@ -121,6 +121,7 @@ console.log("oxide-webgpu-scene3d-ab", window.oxideWebGpuScene3dAB);
 
 ## Changelog
 
+- 2026-07-12: made the asymmetric WebGPU oracle encode a distractor and reference draw in one submission, persisted ID-mask warmup timing for paired analysis, and exposed exact uniform arena writes, bytes, and slots in browser reports.
 - 2026-07-12: added the opt-in ten-row C01 WebGPU architecture primitive matrix with fixed scaling points, direct timestamps, queue completion, one-submission-per-RAF pacing, and zero-pass rejection; normal app execution does not invoke this matrix.
 - 2026-06-22: retired the default browser WebGPU neon-marker legacy-rebind row after same-workload A/B proof while keeping current marker-overlay coverage.
 - 2026-06-22: retired the default browser WebGPU effect-uniform per-backdrop uniform-write row after same-workload A/B proof while keeping current batched effect-uniform coverage.

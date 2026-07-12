@@ -12,6 +12,7 @@ use oxide_renderer_api as api;
 use oxide_wasm_alloc_counter::AllocationSnapshot;
 use std::cell::Cell;
 use std::collections::{BTreeMap, VecDeque};
+use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -32,6 +33,9 @@ const ID_MASK_RASTER_UNIFORM_SIZE: u64 = ID_MASK_RASTER_UNIFORM_SIZE_BYTES as u6
 // jump-flooding these fields first brought that p95 to 0.235ms at mask scale 4.
 const ID_MASK_FIELD_UNIFORM_SIZE_BYTES: usize = 16;
 const ID_MASK_FIELD_UNIFORM_SIZE: u64 = ID_MASK_FIELD_UNIFORM_SIZE_BYTES as u64;
+const ID_MASK_COMPOSITOR_UNIFORM_SIZE_BYTES: usize =
+    16 * (16 + id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS);
+const ID_MASK_COMPOSITOR_UNIFORM_SIZE: u64 = ID_MASK_COMPOSITOR_UNIFORM_SIZE_BYTES as u64;
 const ID_MASK_FIELD_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const EFFECT_UNIFORM_SIZE_BYTES: usize = 16;
 const EFFECT_UNIFORM_SIZE: u64 = EFFECT_UNIFORM_SIZE_BYTES as u64;
@@ -135,6 +139,14 @@ struct IdMaskDraw {
     glow_enabled: bool,
     darken_background_alpha: f32,
     polish: id_mask_compositor::IdMaskPolishConfig,
+}
+
+#[derive(Clone, Copy, Default)]
+struct IdMaskUniformOffsets {
+    raster: u32,
+    field_first: usize,
+    field_count: usize,
+    compositor: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -964,13 +976,11 @@ pub struct WebGpuRenderer {
     id_mask_city_field_b_view: Option<wgpu::TextureView>,
     id_mask_seam_field_a_view: Option<wgpu::TextureView>,
     id_mask_seam_field_b_view: Option<wgpu::TextureView>,
-    id_mask_raster_uniform_buffer: Option<wgpu::Buffer>,
+    id_mask_uniform_buffer: Option<wgpu::Buffer>,
+    id_mask_uniform_capacity: u64,
     id_mask_raster_bind_group: Option<wgpu::BindGroup>,
-    id_mask_field_uniform_buffer: Option<wgpu::Buffer>,
     id_mask_field_bind_group_a: Option<wgpu::BindGroup>,
     id_mask_field_bind_group_b: Option<wgpu::BindGroup>,
-    id_mask_compositor_uniform_buffer: Option<wgpu::Buffer>,
-    id_mask_compositor_uniform_capacity: u64,
     id_mask_compositor_bind_group_a: Option<wgpu::BindGroup>,
     id_mask_compositor_bind_group_b: Option<wgpu::BindGroup>,
     #[cfg(feature = "snapshot-tests")]
@@ -986,8 +996,9 @@ pub struct WebGpuRenderer {
     scratch_indices: Vec<u32>,
     scratch_points: Vec<(f32, f32)>,
     image_upload_scratch: Vec<u8>,
-    id_mask_raster_uniform_bytes: Vec<u8>,
-    id_mask_compositor_uniform_bytes: Vec<u8>,
+    id_mask_uniform_bytes: Vec<u8>,
+    id_mask_uniform_offsets: Vec<IdMaskUniformOffsets>,
+    id_mask_field_uniform_offsets: Vec<u32>,
     clip_stack: Vec<api::RectI>,
     target_stack: Vec<u32>,
     width: u32,
@@ -1130,17 +1141,7 @@ impl WebGpuRenderer {
                 self.scene3d_uniform_buffer.as_ref().map_or(0, wgpu::Buffer::size),
             )
             .saturating_add(
-                self.id_mask_raster_uniform_buffer
-                    .as_ref()
-                    .map_or(0, wgpu::Buffer::size),
-            )
-            .saturating_add(
-                self.id_mask_field_uniform_buffer
-                    .as_ref()
-                    .map_or(0, wgpu::Buffer::size),
-            )
-            .saturating_add(
-                self.id_mask_compositor_uniform_buffer
+                self.id_mask_uniform_buffer
                     .as_ref()
                     .map_or(0, wgpu::Buffer::size),
             );
@@ -1366,13 +1367,11 @@ impl WebGpuRenderer {
             id_mask_city_field_b_view: None,
             id_mask_seam_field_a_view: None,
             id_mask_seam_field_b_view: None,
-            id_mask_raster_uniform_buffer: None,
+            id_mask_uniform_buffer: None,
+            id_mask_uniform_capacity: 0,
             id_mask_raster_bind_group: None,
-            id_mask_field_uniform_buffer: None,
             id_mask_field_bind_group_a: None,
             id_mask_field_bind_group_b: None,
-            id_mask_compositor_uniform_buffer: None,
-            id_mask_compositor_uniform_capacity: 0,
             id_mask_compositor_bind_group_a: None,
             id_mask_compositor_bind_group_b: None,
             #[cfg(feature = "snapshot-tests")]
@@ -1397,8 +1396,9 @@ impl WebGpuRenderer {
             scratch_indices: Vec::new(),
             scratch_points: Vec::new(),
             image_upload_scratch: Vec::new(),
-            id_mask_raster_uniform_bytes: Vec::new(),
-            id_mask_compositor_uniform_bytes: Vec::new(),
+            id_mask_uniform_bytes: Vec::new(),
+            id_mask_uniform_offsets: Vec::new(),
+            id_mask_field_uniform_offsets: Vec::new(),
             clip_stack: Vec::new(),
             target_stack: Vec::new(),
             width,
@@ -1587,10 +1587,17 @@ impl WebGpuRenderer {
         );
         capacity.image_upload =
             capacity.image_upload.saturating_add(self.image_upload_scratch.capacity());
-        capacity.id_mask =
-            capacity.id_mask.saturating_add(self.id_mask_raster_uniform_bytes.capacity());
-        capacity.id_mask =
-            capacity.id_mask.saturating_add(self.id_mask_compositor_uniform_bytes.capacity());
+        capacity.id_mask = capacity.id_mask.saturating_add(self.id_mask_uniform_bytes.capacity());
+        capacity.id_mask = capacity.id_mask.saturating_add(
+            self.id_mask_uniform_offsets
+                .capacity()
+                .saturating_mul(core::mem::size_of::<IdMaskUniformOffsets>()),
+        );
+        capacity.id_mask = capacity.id_mask.saturating_add(
+            self.id_mask_field_uniform_offsets
+                .capacity()
+                .saturating_mul(core::mem::size_of::<u32>()),
+        );
         capacity.draw = capacity.draw.saturating_add(
             self.clip_stack.capacity().saturating_mul(core::mem::size_of::<api::RectI>()),
         );
@@ -3034,7 +3041,75 @@ impl WebGpuRenderer {
             self.stats.effect_bind_group_creates.saturating_add(1);
     }
 
-    fn ensure_id_mask_resources(&mut self, width: u32, height: u32, compositor_uniform_len: usize) {
+    fn ensure_id_mask_uniform_capacity(&mut self, needed: usize) {
+        let needed = needed.max(ID_MASK_COMPOSITOR_UNIFORM_SIZE_BYTES) as u64;
+        if self.id_mask_uniform_capacity >= needed {
+            return;
+        }
+        let capacity = needed.next_power_of_two();
+        self.id_mask_uniform_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("oxide-webgpu-id-mask-uniform-arena"),
+            size: capacity,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+        self.id_mask_uniform_capacity = capacity;
+        self.id_mask_raster_bind_group = None;
+        self.id_mask_field_bind_group_a = None;
+        self.id_mask_field_bind_group_b = None;
+        self.id_mask_compositor_bind_group_a = None;
+        self.id_mask_compositor_bind_group_b = None;
+        self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+        self.stats.id_mask_buffer_grows = self.stats.id_mask_buffer_grows.saturating_add(1);
+    }
+
+    fn prepare_id_mask_uniforms(&mut self) {
+        self.id_mask_uniform_bytes.clear();
+        self.id_mask_uniform_offsets.clear();
+        self.id_mask_field_uniform_offsets.clear();
+        self.id_mask_uniform_offsets.reserve(self.id_mask_draws.len());
+        let alignment = self.device.limits().min_uniform_buffer_offset_alignment.max(1) as usize;
+        for draw in &self.id_mask_draws {
+            let raster = align_uniform_bytes(&mut self.id_mask_uniform_bytes, alignment);
+            write_id_mask_raster_uniform_bytes(
+                &mut self.id_mask_uniform_bytes,
+                draw.mask_width.max(1),
+                draw.mask_height.max(1),
+                draw.projection,
+            );
+
+            let field_first = self.id_mask_field_uniform_offsets.len();
+            let offset = align_uniform_bytes(&mut self.id_mask_uniform_bytes, alignment);
+            self.id_mask_uniform_bytes.extend_from_slice(&id_mask_field_uniform_bytes(
+                draw.mask_width.max(1),
+                draw.mask_height.max(1),
+                0.0,
+            ));
+            self.id_mask_field_uniform_offsets.push(offset);
+            let mut jump = draw.mask_width.max(draw.mask_height).max(1).next_power_of_two() / 2;
+            while jump >= 1 {
+                let offset = align_uniform_bytes(&mut self.id_mask_uniform_bytes, alignment);
+                self.id_mask_uniform_bytes.extend_from_slice(&id_mask_field_uniform_bytes(
+                    draw.mask_width.max(1),
+                    draw.mask_height.max(1),
+                    jump as f32,
+                ));
+                self.id_mask_field_uniform_offsets.push(offset);
+                jump /= 2;
+            }
+
+            let compositor = align_uniform_bytes(&mut self.id_mask_uniform_bytes, alignment);
+            write_id_mask_compositor_uniform_bytes(&mut self.id_mask_uniform_bytes, draw);
+            self.id_mask_uniform_offsets.push(IdMaskUniformOffsets {
+                raster,
+                field_first,
+                field_count: self.id_mask_field_uniform_offsets.len() - field_first,
+                compositor,
+            });
+        }
+    }
+
+    fn ensure_id_mask_resources(&mut self, width: u32, height: u32) {
         let size_changed = self.id_mask_width != width
             || self.id_mask_height != height
             || self.id_mask_city_view.is_none()
@@ -3101,67 +3176,24 @@ impl WebGpuRenderer {
                 self.stats.id_mask_texture_creates.saturating_add(6);
         }
 
-        if self.id_mask_raster_uniform_buffer.is_none() {
-            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("oxide-webgpu-id-mask-raster-uniforms"),
-                size: ID_MASK_RASTER_UNIFORM_SIZE,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        if self.id_mask_raster_bind_group.is_none() {
+            let Some(uniform_buffer) = self.id_mask_uniform_buffer.as_ref() else { return };
+            self.id_mask_raster_bind_group = Some(self.device.create_bind_group(
+                &wgpu::BindGroupDescriptor {
                 label: Some("oxide-webgpu-id-mask-raster-bind-group"),
                 layout: &self.programs.id_mask_raster_layout,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: buffer.as_entire_binding(),
+                    resource: uniform_binding(uniform_buffer, ID_MASK_RASTER_UNIFORM_SIZE),
                 }],
-            });
-            self.id_mask_raster_uniform_buffer = Some(buffer);
-            self.id_mask_raster_bind_group = Some(bind_group);
-            self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+            }));
             self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
-            self.stats.id_mask_buffer_grows = self.stats.id_mask_buffer_grows.saturating_add(1);
             self.stats.id_mask_bind_group_creates =
                 self.stats.id_mask_bind_group_creates.saturating_add(1);
         }
 
-        if self.id_mask_field_uniform_buffer.is_none() {
-            self.id_mask_field_uniform_buffer =
-                Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("oxide-webgpu-id-mask-field-uniforms"),
-                    size: ID_MASK_FIELD_UNIFORM_SIZE,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
-            self.id_mask_field_bind_group_a = None;
-            self.id_mask_field_bind_group_b = None;
-            self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
-            self.stats.id_mask_buffer_grows = self.stats.id_mask_buffer_grows.saturating_add(1);
-        }
-
-        let compositor_needed = compositor_uniform_len.max(1) as u64;
-        if self.id_mask_compositor_uniform_buffer.is_none()
-            || self.id_mask_compositor_uniform_capacity < compositor_needed
-        {
-            let capacity = compositor_needed.next_power_of_two();
-            self.id_mask_compositor_uniform_buffer =
-                Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("oxide-webgpu-id-mask-compositor-uniforms"),
-                    size: capacity,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
-            self.id_mask_compositor_uniform_capacity = capacity;
-            self.id_mask_compositor_bind_group_a = None;
-            self.id_mask_compositor_bind_group_b = None;
-            self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
-            self.stats.id_mask_buffer_grows = self.stats.id_mask_buffer_grows.saturating_add(1);
-        }
-
         if self.id_mask_field_bind_group_a.is_none() || self.id_mask_field_bind_group_b.is_none() {
-            let Some(uniform_buffer) = self.id_mask_field_uniform_buffer.as_ref() else {
-                return;
-            };
+            let Some(uniform_buffer) = self.id_mask_uniform_buffer.as_ref() else { return };
             let Some(city_view) = self.id_mask_city_view.as_ref() else { return };
             let Some(neighborhood_view) = self.id_mask_neighborhood_view.as_ref() else { return };
             let Some(city_field_a_view) = self.id_mask_city_field_a_view.as_ref() else { return };
@@ -3196,9 +3228,7 @@ impl WebGpuRenderer {
         if self.id_mask_compositor_bind_group_a.is_none()
             || self.id_mask_compositor_bind_group_b.is_none()
         {
-            let Some(uniform_buffer) = self.id_mask_compositor_uniform_buffer.as_ref() else {
-                return;
-            };
+            let Some(uniform_buffer) = self.id_mask_uniform_buffer.as_ref() else { return };
             let Some(city_view) = self.id_mask_city_view.as_ref() else { return };
             let Some(neighborhood_view) = self.id_mask_neighborhood_view.as_ref() else { return };
             let Some(city_field_a_view) = self.id_mask_city_field_a_view.as_ref() else { return };
@@ -4105,8 +4135,25 @@ impl WebGpuRenderer {
         let mut encoded_draws = 0_u32;
         let mut encoded_render_passes = 0_u32;
         let mut encoded_buffer_upload_bytes = 0_u64;
+        self.prepare_id_mask_uniforms();
+        if self.id_mask_uniform_bytes.is_empty() {
+            return;
+        }
+        self.ensure_id_mask_uniform_capacity(self.id_mask_uniform_bytes.len());
+        let Some(uniform_buffer) = self.id_mask_uniform_buffer.as_ref() else { return };
+        self.queue.write_buffer(uniform_buffer, 0, &self.id_mask_uniform_bytes);
+        let uniform_bytes = self.id_mask_uniform_bytes.len() as u64;
+        let uniform_slots = self.id_mask_uniform_offsets.len().saturating_mul(2)
+            .saturating_add(self.id_mask_field_uniform_offsets.len()) as u32;
+        encoded_buffer_upload_bytes = encoded_buffer_upload_bytes.saturating_add(uniform_bytes);
+        self.stats.id_mask_uniform_writes = self.stats.id_mask_uniform_writes.saturating_add(1);
+        self.stats.id_mask_uniform_bytes =
+            self.stats.id_mask_uniform_bytes.saturating_add(uniform_bytes);
+        self.stats.id_mask_uniform_slots =
+            self.stats.id_mask_uniform_slots.saturating_add(uniform_slots);
         for draw_index in 0..self.id_mask_draws.len() {
             let draw = self.id_mask_draws[draw_index];
+            let uniform_offsets = self.id_mask_uniform_offsets[draw_index];
             let width = draw.mask_width.max(1);
             let height = draw.mask_height.max(1);
             let cache_start = draw.vertex_cache_first as usize;
@@ -4114,18 +4161,6 @@ impl WebGpuRenderer {
             if draw.vertex_count == 0 || cache_end > self.id_mask_draw_chunk_indices.len() {
                 continue;
             }
-            write_id_mask_raster_uniform_bytes(
-                &mut self.id_mask_raster_uniform_bytes,
-                width,
-                height,
-                draw.projection,
-            );
-            write_id_mask_compositor_uniform_bytes(
-                &mut self.id_mask_compositor_uniform_bytes,
-                &draw,
-            );
-            let compositor_uniform_len = self.id_mask_compositor_uniform_bytes.len();
-
             for cache_pos in cache_start..cache_end {
                 let cache_index = self.id_mask_draw_chunk_indices[cache_pos];
                 if let Some(upload_bytes) = self.ensure_id_mask_vertex_cache_uploaded(cache_index) {
@@ -4134,7 +4169,7 @@ impl WebGpuRenderer {
                 }
             }
 
-            self.ensure_id_mask_resources(width, height, compositor_uniform_len);
+            self.ensure_id_mask_resources(width, height);
             let Some(city_view) = self.id_mask_city_view.as_ref() else { continue };
             let Some(neighborhood_view) = self.id_mask_neighborhood_view.as_ref() else {
                 continue;
@@ -4151,23 +4186,13 @@ impl WebGpuRenderer {
             let Some(seam_field_b_view) = self.id_mask_seam_field_b_view.as_ref() else {
                 continue;
             };
-            let Some(raster_uniform_buffer) = self.id_mask_raster_uniform_buffer.as_ref() else {
-                continue;
-            };
             let Some(raster_bind_group) = self.id_mask_raster_bind_group.as_ref() else {
-                continue;
-            };
-            let Some(field_uniform_buffer) = self.id_mask_field_uniform_buffer.as_ref() else {
                 continue;
             };
             let Some(field_bind_group_a) = self.id_mask_field_bind_group_a.as_ref() else {
                 continue;
             };
             let Some(field_bind_group_b) = self.id_mask_field_bind_group_b.as_ref() else {
-                continue;
-            };
-            let Some(compositor_uniform_buffer) = self.id_mask_compositor_uniform_buffer.as_ref()
-            else {
                 continue;
             };
             let Some(compositor_bind_group_a) = self.id_mask_compositor_bind_group_a.as_ref()
@@ -4178,17 +4203,6 @@ impl WebGpuRenderer {
             else {
                 continue;
             };
-
-            self.queue.write_buffer(raster_uniform_buffer, 0, &self.id_mask_raster_uniform_bytes);
-            encoded_buffer_upload_bytes = encoded_buffer_upload_bytes
-                .saturating_add(self.id_mask_raster_uniform_bytes.len() as u64);
-            self.queue.write_buffer(
-                compositor_uniform_buffer,
-                0,
-                &self.id_mask_compositor_uniform_bytes,
-            );
-            encoded_buffer_upload_bytes = encoded_buffer_upload_bytes
-                .saturating_add(self.id_mask_compositor_uniform_bytes.len() as u64);
 
             {
                 let timestamp_pair = reserve_webgpu_timestamp_pass(
@@ -4224,7 +4238,7 @@ impl WebGpuRenderer {
                     occlusion_query_set: None,
                 });
                 pass.set_pipeline(self.id_mask_raster_pipeline());
-                pass.set_bind_group(0, raster_bind_group, &[]);
+                pass.set_bind_group(0, raster_bind_group, &[uniform_offsets.raster]);
                 for cache_pos in cache_start..cache_end {
                     let cache_index = self.id_mask_draw_chunk_indices[cache_pos];
                     let Some(cache) = self.id_mask_vertex_caches.get(cache_index) else {
@@ -4243,10 +4257,7 @@ impl WebGpuRenderer {
             // then jump-flood them. The final beauty compositor should only read
             // these fields; reintroducing radius searches there recreates the GPU
             // scheduling stalls this path was built to remove.
-            let seed_field_uniform = id_mask_field_uniform_bytes(width, height, 0.0);
-            self.queue.write_buffer(field_uniform_buffer, 0, &seed_field_uniform);
-            encoded_buffer_upload_bytes =
-                encoded_buffer_upload_bytes.saturating_add(seed_field_uniform.len() as u64);
+            let mut field_offset_index = uniform_offsets.field_first;
             {
                 let timestamp_pair = reserve_webgpu_timestamp_pass(
                     &mut self.timestamp_queries,
@@ -4281,9 +4292,14 @@ impl WebGpuRenderer {
                     occlusion_query_set: None,
                 });
                 pass.set_pipeline(self.id_mask_field_seed_pipeline());
-                pass.set_bind_group(0, field_bind_group_b, &[]);
+                pass.set_bind_group(
+                    0,
+                    field_bind_group_b,
+                    &[self.id_mask_field_uniform_offsets[field_offset_index]],
+                );
                 pass.draw(0..6, 0..1);
             }
+            field_offset_index += 1;
             encoded_render_passes = encoded_render_passes.saturating_add(1);
             self.stats.id_mask_field_seed_passes =
                 self.stats.id_mask_field_seed_passes.saturating_add(1);
@@ -4291,10 +4307,6 @@ impl WebGpuRenderer {
             let mut src_is_a = true;
             let mut jump = width.max(height).next_power_of_two() / 2;
             while jump >= 1 {
-                let jump_field_uniform = id_mask_field_uniform_bytes(width, height, jump as f32);
-                self.queue.write_buffer(field_uniform_buffer, 0, &jump_field_uniform);
-                encoded_buffer_upload_bytes =
-                    encoded_buffer_upload_bytes.saturating_add(jump_field_uniform.len() as u64);
                 let (src_bind_group, dst_city_view, dst_seam_view) = if src_is_a {
                     (field_bind_group_a, city_field_b_view, seam_field_b_view)
                 } else {
@@ -4334,15 +4346,21 @@ impl WebGpuRenderer {
                         occlusion_query_set: None,
                     });
                     pass.set_pipeline(self.id_mask_field_jump_pipeline());
-                    pass.set_bind_group(0, src_bind_group, &[]);
+                    pass.set_bind_group(
+                        0,
+                        src_bind_group,
+                        &[self.id_mask_field_uniform_offsets[field_offset_index]],
+                    );
                     pass.draw(0..6, 0..1);
                 }
+                field_offset_index += 1;
                 encoded_render_passes = encoded_render_passes.saturating_add(1);
                 self.stats.id_mask_field_jump_passes =
                     self.stats.id_mask_field_jump_passes.saturating_add(1);
                 src_is_a = !src_is_a;
                 jump /= 2;
             }
+            debug_assert_eq!(field_offset_index, uniform_offsets.field_first + uniform_offsets.field_count);
             let compositor_bind_group =
                 if src_is_a { compositor_bind_group_a } else { compositor_bind_group_b };
 
@@ -4376,7 +4394,7 @@ impl WebGpuRenderer {
                     self.height,
                 );
                 pass.set_pipeline(self.id_mask_compositor_pipeline());
-                pass.set_bind_group(0, compositor_bind_group, &[]);
+                pass.set_bind_group(0, compositor_bind_group, &[uniform_offsets.compositor]);
                 pass.draw(0..6, 0..1);
             }
             encoded_render_passes = encoded_render_passes.saturating_add(1);
@@ -4727,8 +4745,8 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
             visibility: wgpu::ShaderStages::VERTEX,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
+                has_dynamic_offset: true,
+                min_binding_size: NonZeroU64::new(ID_MASK_RASTER_UNIFORM_SIZE),
             },
             count: None,
         }],
@@ -4741,8 +4759,8 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
                 visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+                    has_dynamic_offset: true,
+                    min_binding_size: NonZeroU64::new(ID_MASK_FIELD_UNIFORM_SIZE),
                 },
                 count: None,
             },
@@ -4797,8 +4815,8 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                        has_dynamic_offset: true,
+                        min_binding_size: NonZeroU64::new(ID_MASK_COMPOSITOR_UNIFORM_SIZE),
                     },
                     count: None,
                 },
@@ -5717,7 +5735,10 @@ fn create_id_mask_field_bind_group(
         label: Some(label),
         layout,
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: uniform_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_binding(uniform_buffer, ID_MASK_FIELD_UNIFORM_SIZE),
+            },
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: wgpu::BindingResource::TextureView(city_view),
@@ -5752,7 +5773,10 @@ fn create_id_mask_compositor_bind_group(
         label: Some(label),
         layout,
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: uniform_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_binding(uniform_buffer, ID_MASK_COMPOSITOR_UNIFORM_SIZE),
+            },
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: wgpu::BindingResource::TextureView(city_view),
@@ -5770,6 +5794,14 @@ fn create_id_mask_compositor_bind_group(
                 resource: wgpu::BindingResource::TextureView(seam_field_view),
             },
         ],
+    })
+}
+
+fn uniform_binding(buffer: &wgpu::Buffer, size: u64) -> wgpu::BindingResource<'_> {
+    wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+        buffer,
+        offset: 0,
+        size: NonZeroU64::new(size),
     })
 }
 
@@ -6140,7 +6172,7 @@ fn write_id_mask_raster_uniform_bytes(
     height: u32,
     projection: id_mask_compositor::IdMaskRasterProjection,
 ) {
-    out.clear();
+    let start = out.len();
     out.reserve(ID_MASK_RASTER_UNIFORM_SIZE_BYTES);
     for value in [
         width as f32,
@@ -6173,6 +6205,7 @@ fn write_id_mask_raster_uniform_bytes(
     {
         push_f32(out, value);
     }
+    debug_assert_eq!(out.len() - start, ID_MASK_RASTER_UNIFORM_SIZE_BYTES);
 }
 
 fn id_mask_field_uniform_bytes(
@@ -6189,8 +6222,8 @@ fn id_mask_field_uniform_bytes(
 }
 
 fn write_id_mask_compositor_uniform_bytes(out: &mut Vec<u8>, draw: &IdMaskDraw) {
-    out.clear();
-    out.reserve(16 * (4 + 4 + 4 + 4 + id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS));
+    let start = out.len();
+    out.reserve(ID_MASK_COMPOSITOR_UNIFORM_SIZE_BYTES);
     for value in [draw.viewport.x, draw.viewport.y, draw.viewport.w, draw.viewport.h] {
         push_f32(out, value);
     }
@@ -6242,6 +6275,7 @@ fn write_id_mask_compositor_uniform_bytes(out: &mut Vec<u8>, draw: &IdMaskDraw) 
         push_f32(out, rgb[2]);
         push_f32(out, 1.0);
     }
+    debug_assert_eq!(out.len() - start, ID_MASK_COMPOSITOR_UNIFORM_SIZE_BYTES);
 }
 
 fn push_scene3d_uniform(out: &mut Vec<u8>, mvp: scene3d::Mat4, color: api::Color) -> u32 {
@@ -6266,6 +6300,12 @@ fn push_scene3d_uniform(out: &mut Vec<u8>, mvp: scene3d::Mat4, color: api::Color
 fn align_usize(value: usize, alignment: usize) -> usize {
     let mask = alignment - 1;
     (value + mask) & !mask
+}
+
+fn align_uniform_bytes(out: &mut Vec<u8>, alignment: usize) -> u32 {
+    let offset = align_usize(out.len(), alignment);
+    out.resize(offset, 0);
+    u32::try_from(offset).expect("ID-mask uniform arena exceeds dynamic-offset range")
 }
 
 fn encode_vertices(vertices: &[GpuVertex], out: &mut Vec<u8>) {
