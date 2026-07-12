@@ -8,7 +8,7 @@ struct MarkerGpuParams {
     _pad: [u32; 3],
 }
 
-#[repr(C)]
+#[repr(C, align(8))]
 #[derive(Clone, Copy)]
 struct MarkerGpuInstance {
     center: [f32; 2],
@@ -21,7 +21,22 @@ struct MarkerGpuInstance {
     ring_alpha_max: f32,
     core_color: [f32; 4],
     ring_color: [f32; 4],
+    _tail_pad: u32,
 }
+
+const _: [(); 72] = [(); core::mem::size_of::<MarkerGpuInstance>()];
+const _: [(); 8] = [(); core::mem::align_of::<MarkerGpuInstance>()];
+const _: [(); 0] = [(); core::mem::offset_of!(MarkerGpuInstance, center)];
+const _: [(); 8] = [(); core::mem::offset_of!(MarkerGpuInstance, core_radius_px)];
+const _: [(); 12] = [(); core::mem::offset_of!(MarkerGpuInstance, ring_radius_px)];
+const _: [(); 16] = [(); core::mem::offset_of!(MarkerGpuInstance, ring_width_px)];
+const _: [(); 20] = [(); core::mem::offset_of!(MarkerGpuInstance, halo_radius_px)];
+const _: [(); 24] = [(); core::mem::offset_of!(MarkerGpuInstance, halo_sigma_px)];
+const _: [(); 28] = [(); core::mem::offset_of!(MarkerGpuInstance, halo_alpha_max)];
+const _: [(); 32] = [(); core::mem::offset_of!(MarkerGpuInstance, ring_alpha_max)];
+const _: [(); 36] = [(); core::mem::offset_of!(MarkerGpuInstance, core_color)];
+const _: [(); 52] = [(); core::mem::offset_of!(MarkerGpuInstance, ring_color)];
+const _: [(); 68] = [(); core::mem::offset_of!(MarkerGpuInstance, _tail_pad)];
 
 pub(super) fn build_pso(
     device: &Device,
@@ -65,11 +80,6 @@ impl MetalRenderer {
             ));
         };
 
-        let params = MarkerGpuParams {
-            viewport: [pass.viewport.x, pass.viewport.y, pass.viewport.w, pass.viewport.h],
-            marker_count: marker_count as u32,
-            _pad: [0, 0, 0],
-        };
         let mut markers = [MarkerGpuInstance {
             center: [0.0, 0.0],
             core_radius_px: 0.0,
@@ -81,6 +91,7 @@ impl MetalRenderer {
             ring_alpha_max: 0.0,
             core_color: [0.0, 0.0, 0.0, 0.0],
             ring_color: [0.0, 0.0, 0.0, 0.0],
+            _tail_pad: 0,
         }; neon_marker::NEON_MARKER_MAX_INSTANCES];
         for (dst, marker) in markers.iter_mut().zip(pass.markers.iter()).take(marker_count) {
             *dst = MarkerGpuInstance {
@@ -104,6 +115,7 @@ impl MetalRenderer {
                     marker.ring_color.b.clamp(0.0, 1.0),
                     marker.ring_color.a.clamp(0.0, 1.0),
                 ],
+                _tail_pad: 0,
             };
         }
 
@@ -113,27 +125,34 @@ impl MetalRenderer {
 
         let enc = cmd.new_render_command_encoder(&rpd);
         enc.set_render_pipeline_state(&self.pso_neon_marker);
-        enc.set_vertex_bytes(
-            0,
-            core::mem::size_of_val(&params) as u64,
-            (&params as *const MarkerGpuParams).cast(),
-        );
-        enc.set_vertex_bytes(
-            1,
-            (core::mem::size_of::<MarkerGpuInstance>() * marker_count) as u64,
-            markers.as_ptr().cast(),
-        );
-        enc.set_fragment_bytes(
-            0,
-            core::mem::size_of_val(&params) as u64,
-            (&params as *const MarkerGpuParams).cast(),
-        );
-        enc.set_fragment_bytes(
-            1,
-            (core::mem::size_of::<MarkerGpuInstance>() * marker_count) as u64,
-            markers.as_ptr().cast(),
-        );
-        enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, marker_count as u64);
+        let instances_per_draw = METAL_SET_BYTES_LIMIT / core::mem::size_of::<MarkerGpuInstance>();
+        for markers in markers[..marker_count].chunks(instances_per_draw)
+        {
+            let params = MarkerGpuParams {
+                viewport: [pass.viewport.x, pass.viewport.y, pass.viewport.w, pass.viewport.h],
+                marker_count: markers.len() as u32,
+                _pad: [0, 0, 0],
+            };
+            let marker_bytes = core::mem::size_of_val(markers);
+            enc.set_vertex_bytes(
+                0,
+                core::mem::size_of_val(&params) as u64,
+                (&params as *const MarkerGpuParams).cast(),
+            );
+            enc.set_vertex_bytes(1, marker_bytes as u64, markers.as_ptr().cast());
+            enc.set_fragment_bytes(
+                0,
+                core::mem::size_of_val(&params) as u64,
+                (&params as *const MarkerGpuParams).cast(),
+            );
+            enc.set_fragment_bytes(1, marker_bytes as u64, markers.as_ptr().cast());
+            enc.draw_primitives_instanced(
+                MTLPrimitiveType::Triangle,
+                0,
+                6,
+                markers.len() as u64,
+            );
+        }
         enc.end_encoding();
 
         self.acc_draws = self.acc_draws.saturating_add(marker_count as u32);

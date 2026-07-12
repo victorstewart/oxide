@@ -167,6 +167,26 @@ fn image_argument_tables_are_immutable_per_frame_and_report_reuse()
    assert!(!source.contains("argument_encoder.set_argument_buffer(buffer, 0)"));
 }
 
+#[test]
+fn neon_marker_instance_abi_is_explicit_and_chunks_inline_uploads()
+{
+   let source = include_str!("../src/neon_marker_gpu.rs");
+   assert!(source.contains("#[repr(C, align(8))]"));
+   assert!(source.contains("const _: [(); 72] = [(); core::mem::size_of::<MarkerGpuInstance>()]"));
+   assert!(source.contains("offset_of!(MarkerGpuInstance, core_color)") && source.contains("const _: [(); 36]"));
+   assert!(source.contains("offset_of!(MarkerGpuInstance, ring_color)") && source.contains("const _: [(); 52]"));
+   assert!(source.contains("offset_of!(MarkerGpuInstance, _tail_pad)") && source.contains("const _: [(); 68]"));
+   assert!(source.contains("METAL_SET_BYTES_LIMIT / core::mem::size_of::<MarkerGpuInstance>()"));
+   assert!(source.contains("markers[..marker_count].chunks(instances_per_draw)"));
+   assert!(source.contains("enc.set_vertex_bytes(1, marker_bytes as u64, markers.as_ptr().cast())"));
+   assert!(source.contains("enc.set_fragment_bytes(1, marker_bytes as u64, markers.as_ptr().cast())"));
+
+   let shader = include_str!("../shaders/neon_marker.metal");
+   assert!(shader.contains("packed_float4 core_color;"));
+   assert!(shader.contains("packed_float4 ring_color;"));
+   assert!(shader.contains("uint _tail_pad;"));
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn layer_cache_clean_and_dirty_frames_have_single_body_owner()

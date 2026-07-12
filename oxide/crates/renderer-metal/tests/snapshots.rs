@@ -625,3 +625,64 @@ fn snapshot_image_argument_table_growth_preserves_bound_slices_and_warms_up()
       }
    }
 }
+
+#[test]
+fn snapshot_neon_marker_instance_arrays_match_distinctive_colors()
+{
+   use oxide_renderer_metal::neon_marker::{NeonMarker, NeonMarkerPass};
+
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   let width = 208_u32;
+   let height = 112_u32;
+   renderer.resize(width, height, 1.0).expect("resize");
+   let colors = [
+      (api::Color::rgba(1.0, 0.0, 0.0, 1.0), [0, 0, 252, 249]),
+      (api::Color::rgba(0.0, 1.0, 0.0, 1.0), [0, 252, 0, 249]),
+      (api::Color::rgba(0.0, 0.0, 1.0, 1.0), [252, 0, 0, 249]),
+      (api::Color::rgba(1.0, 1.0, 0.0, 1.0), [0, 252, 252, 249]),
+      (api::Color::rgba(1.0, 0.0, 1.0, 1.0), [252, 0, 252, 249]),
+      (api::Color::rgba(0.0, 1.0, 1.0, 1.0), [252, 252, 0, 249]),
+      (api::Color::rgba(1.0, 1.0, 1.0, 1.0), [252, 252, 252, 249]),
+   ];
+
+   for count in [1_usize, 2, 51, 52, 60, 61, 128]
+   {
+      let markers = (0..count)
+         .map(|index| {
+            let column = index % 16;
+            let row = index / 16;
+            NeonMarker {
+               center: [8.0 + column as f32 * 12.0, 8.0 + row as f32 * 12.0],
+               core_radius_px: 2.5,
+               ring_radius_px: 3.0,
+               ring_width_px: 1.0,
+               halo_radius_px: 4.0,
+               halo_sigma_px: 2.0,
+               core_color: colors[index % colors.len()].0,
+               ring_color: colors[(index + 3) % colors.len()].0,
+               halo_alpha_max: 0.0,
+               ring_alpha_max: 1.0,
+            }
+         })
+         .collect::<Vec<_>>();
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      renderer
+         .encode_neon_markers(&NeonMarkerPass {
+            viewport: api::RectF::new(0.0, 0.0, width as f32, height as f32),
+            markers: &markers,
+         })
+         .expect("encode neon markers");
+      renderer.submit(token).expect("submit");
+      let (_, _, pixels) = renderer.readback_bgra8().expect("readback");
+      for (index, marker) in markers.iter().enumerate()
+      {
+         assert_pixel_eq(
+            readback_pixel(&pixels, width, marker.center[0] as u32, marker.center[1] as u32),
+            colors[index % colors.len()].1,
+            &format!("marker count {count}, instance {index}"),
+         );
+      }
+      let stats = renderer.last_stats();
+      assert_eq!(stats.draws, count as u32, "marker draw count changed: {stats:?}");
+   }
+}

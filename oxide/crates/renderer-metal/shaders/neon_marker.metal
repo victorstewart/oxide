@@ -20,8 +20,9 @@ struct NeonMarkerInstance
    float halo_sigma_px;
    float halo_alpha_max;
    float ring_alpha_max;
-   float4 core_color;
-   float4 ring_color;
+   packed_float4 core_color;
+   packed_float4 ring_color;
+   uint _tail_pad;
 };
 
 struct NeonMarkerRaster
