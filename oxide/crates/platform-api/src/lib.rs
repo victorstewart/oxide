@@ -1034,62 +1034,147 @@ pub trait UdpSocket: Send + Sync {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpMethod {
-    Get,
+   Get,
+   Post,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HttpCredentials {
+   Omit,
+   SameOrigin,
+}
+
+/// One caller-supplied request header or caller-selected response header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpHeader {
+   pub name: alloc::string::String,
+   pub value: alloc::string::String,
+}
+
+/// A single manual-redirect HTTP hop.
+///
+/// Platform adapters must not follow redirects. Callers preserve one absolute budget across
+/// redirect hops and pass only the remaining timeout to each operation. Ambient credentials are
+/// omitted unless the caller explicitly selects `HttpCredentials::SameOrigin`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpRequest {
-    pub method: HttpMethod,
-    pub url: alloc::string::String,
-    pub timeout_ms: u32,
-    pub max_response_bytes: usize,
+   pub method: HttpMethod,
+   pub url: alloc::string::String,
+   pub timeout: std::time::Duration,
+   pub max_response_bytes: usize,
+   pub headers: alloc::vec::Vec<HttpHeader>,
+   pub response_headers: alloc::vec::Vec<alloc::string::String>,
+   pub body: alloc::vec::Vec<u8>,
+   pub credentials: HttpCredentials,
 }
 
 impl HttpRequest {
-    pub const DEFAULT_TIMEOUT_MS: u32 = 10_000;
-    pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 1_048_576;
+   pub const DEFAULT_TIMEOUT_MS: u32 = 10_000;
+   pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 1_048_576;
 
-    #[must_use]
-    pub fn get(url: impl Into<alloc::string::String>) -> Self {
-        Self {
-            method: HttpMethod::Get,
-            url: url.into(),
-            timeout_ms: Self::DEFAULT_TIMEOUT_MS,
-            max_response_bytes: Self::DEFAULT_MAX_RESPONSE_BYTES,
-        }
-    }
+   #[must_use]
+   pub fn get(url: impl Into<alloc::string::String>) -> Self {
+      Self {
+         method: HttpMethod::Get,
+         url: url.into(),
+         timeout: std::time::Duration::from_millis(u64::from(Self::DEFAULT_TIMEOUT_MS)),
+         max_response_bytes: Self::DEFAULT_MAX_RESPONSE_BYTES,
+         headers: alloc::vec::Vec::new(),
+         response_headers: alloc::vec::Vec::new(),
+         body: alloc::vec::Vec::new(),
+         credentials: HttpCredentials::Omit,
+      }
+   }
 
-    #[must_use]
-    pub fn with_timeout_ms(mut self, timeout_ms: u32) -> Self {
-        self.timeout_ms = timeout_ms;
-        self
-    }
+   #[must_use]
+   pub fn post(url: impl Into<alloc::string::String>, body: alloc::vec::Vec<u8>) -> Self {
+      let mut request = Self::get(url);
+      request.method = HttpMethod::Post;
+      request.body = body;
+      request
+   }
 
-    #[must_use]
-    pub fn with_max_response_bytes(mut self, max_response_bytes: usize) -> Self {
-        self.max_response_bytes = max_response_bytes;
-        self
-    }
+   #[must_use]
+   pub fn with_timeout_ms(mut self, timeout_ms: u32) -> Self {
+      self.timeout = std::time::Duration::from_millis(u64::from(timeout_ms));
+      self
+   }
+
+   #[must_use]
+   pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
+      self.timeout = timeout;
+      self
+   }
+
+   #[must_use]
+   pub fn with_max_response_bytes(mut self, max_response_bytes: usize) -> Self {
+      self.max_response_bytes = max_response_bytes;
+      self
+   }
+
+   #[must_use]
+   pub fn with_header(mut self, name: impl Into<alloc::string::String>, value: impl Into<alloc::string::String>) -> Self {
+      self.headers.push(HttpHeader { name: name.into(), value: value.into() });
+      self
+   }
+
+   #[must_use]
+   pub fn select_response_header(mut self, name: impl Into<alloc::string::String>) -> Self {
+      self.response_headers.push(name.into());
+      self
+   }
+
+   #[must_use]
+   pub fn with_credentials(mut self, credentials: HttpCredentials) -> Self {
+      self.credentials = credentials;
+      self
+   }
 }
 
+/// Response metadata for one HTTP hop. Bodies arrive incrementally as `HttpEvent::Body`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpResponse {
-    pub final_url: alloc::string::String,
-    pub status: u16,
-    pub content_type: Option<alloc::string::String>,
-    pub body: alloc::vec::Vec<u8>,
+   pub final_url: alloc::string::String,
+   pub status: u16,
+   pub content_length: Option<u64>,
+   pub headers: alloc::vec::Vec<HttpHeader>,
 }
 
+/// Serialized events for one accepted HTTP operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HttpEvent {
+   Response(HttpResponse),
+   Body(alloc::vec::Vec<u8>),
+   Complete,
+   Failed(PlatformError),
+   Cancelled,
+}
+
+impl HttpEvent {
+   #[must_use]
+   pub const fn terminal(&self) -> bool {
+      matches!(self, Self::Complete | Self::Failed(_) | Self::Cancelled)
+   }
+}
+
+/// Cancellation ownership for one accepted HTTP operation.
+pub trait HttpOperation: Send + Sync {
+   /// Requests cancellation. Implementations deliver at most one terminal callback overall.
+   fn cancel(&self);
+}
+
+/// Object-safe, nonblocking HTTP service.
 pub trait HttpClient: Send + Sync {
-    fn fetch(&self, request: &HttpRequest) -> Result<HttpResponse, PlatformError>;
+   /// Starts one hop and returns before network progress. Events are serialized per operation.
+   fn start(&self, request: HttpRequest, on_event: alloc::boxed::Box<dyn Fn(HttpEvent) + Send + Sync>) -> Result<alloc::boxed::Box<dyn HttpOperation + Send + Sync>, PlatformError>;
 }
 
 pub struct UnsupportedHttpClient;
 
 impl HttpClient for UnsupportedHttpClient {
-    fn fetch(&self, _request: &HttpRequest) -> Result<HttpResponse, PlatformError> {
-        Err(PlatformError::Unsupported("platform HTTP service not implemented"))
-    }
+   fn start(&self, _request: HttpRequest, _on_event: alloc::boxed::Box<dyn Fn(HttpEvent) + Send + Sync>) -> Result<alloc::boxed::Box<dyn HttpOperation + Send + Sync>, PlatformError> {
+      Err(PlatformError::Unsupported("platform HTTP service not implemented"))
+   }
 }
 
 static UNSUPPORTED_HTTP_CLIENT: UnsupportedHttpClient = UnsupportedHttpClient;
@@ -1195,7 +1280,7 @@ pub trait TimeService: Send + Sync {
 
 // ===== Platform and errors =====
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlatformError {
     CapabilityDisabled(&'static str),
     PermissionDenied(&'static str),

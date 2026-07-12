@@ -356,14 +356,28 @@ mod harness {
         let (url, server) = spawn_loopback_http_response(BODY, CONTENT_TYPE);
         let request = oxide_platform_api::HttpRequest::get(url.clone())
             .with_timeout_ms(2_000)
-            .with_max_response_bytes(1024);
-
-        let response = platform.http().fetch(&request).expect("fetch loopback HTTP response");
+            .with_max_response_bytes(1024)
+            .select_response_header("Content-Type");
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let _operation = platform.http().start(request, Box::new(move |event| {
+            let _ = sender.send(event);
+        })).expect("start loopback HTTP response");
+        let mut response = None;
+        let mut body = Vec::new();
+        loop {
+            match receiver.recv_timeout(Duration::from_secs(3)).expect("loopback HTTP event") {
+                oxide_platform_api::HttpEvent::Response(head) => response = Some(head),
+                oxide_platform_api::HttpEvent::Body(chunk) => body.extend_from_slice(&chunk),
+                oxide_platform_api::HttpEvent::Complete => break,
+                event => panic!("unexpected loopback HTTP event: {event:?}"),
+            }
+        }
+        let response = response.expect("loopback HTTP response metadata");
 
         server.join().expect("loopback HTTP server should exit");
         assert_eq!(response.status, 200);
-        assert_eq!(response.body, BODY);
-        assert_eq!(response.content_type.as_deref(), Some(CONTENT_TYPE));
+        assert_eq!(body, BODY);
+        assert!(response.headers.iter().any(|header| header.name.eq_ignore_ascii_case("content-type") && header.value == CONTENT_TYPE));
         assert!(
             response.final_url.starts_with(&url),
             "final URL should preserve loopback URL: {}",

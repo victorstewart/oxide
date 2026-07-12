@@ -13,7 +13,7 @@
 
 ## Relation to the rest of the code
 - Defines test-local `oxide_secure_storage_*` symbols so `AppleSecureStorage` exercises the same C ABI exported by the shared native Keychain bridge used by the iOS and macOS hosts.
-- Defines test-local `oxide_host_http_*` symbols so `AppleHttpClient` exercises the same response-copy/free ABI used by the iOS and macOS hosts.
+- Defines test-local `oxide_host_http_*` symbols so `AppleHttpClient` exercises the same asynchronous event/cancellation ABI used by the iOS and macOS hosts.
 - Defines test-local `oxide_host_location_*` and `oxide_host_motion_*` symbols so the shared location/motion services can link without a live Apple host.
 - Defines test-local `oxide_media_*` symbols so the shared media-library service can exercise asset paging and host-buffer release without a live Photos library.
 - Defines test-local `oxide_host_push_*` symbols and callback registration cells so the shared push manager can exercise token, badge, clearing, and notification fanout without APNs.
@@ -26,8 +26,8 @@
 ## Entry points list
 - `apple_secure_storage_round_trips_c_abi()`
   Saves, loads, overwrites empty values, deletes, and confirms missing-key behavior.
-- `apple_http_client_fetches_through_c_abi()`
-  Verifies status, final URL, content type, body copy, and native response-free behavior through the shared HTTP ABI.
+- `apple_http_client_streams_through_c_abi()`
+  Verifies response metadata, body chunks, terminal delivery, selected headers, and cancellation through the shared HTTP ABI.
 - `apple_path_kinds_decode_to_reachability()`
   Verifies shared Apple path kinds map to Oxide reachability states.
 - `apple_network_status_reports_interface_bits()`
@@ -77,7 +77,7 @@
 
 ## Logic narrative
 - The test ABI stores secrets in a process-local `HashMap`.
-- The HTTP test ABI allocates response fields the same way native hosts do and relies on the shared free path to reclaim them.
+- The HTTP test ABI borrows event fields for each callback exactly as the native delegate does; the Rust wrapper copies owned event values before returning.
 - Loads allocate a copied buffer and rely on `oxide_secure_storage_free_data` to reclaim it, matching the host-owned allocation handoff.
 - Network tests stay pure and deterministic by passing raw constants directly into the shared decoder functions.
 - Permission tests stay pure by exercising the raw-code conversion helpers directly.

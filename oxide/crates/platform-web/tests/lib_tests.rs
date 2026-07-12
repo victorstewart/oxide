@@ -1,5 +1,7 @@
 use oxide_platform_api::{HapticPattern, Platform};
 use oxide_platform_web::{hex_decode, hex_encode, refresh_rate_hz_from_frame_deltas, WebPlatform};
+use std::fs;
+use std::path::PathBuf;
 
 #[test]
 fn hex_round_trips_secret_bytes() {
@@ -80,4 +82,24 @@ fn haptics_service_accepts_all_patterns() {
     let haptics = platform.haptics();
     haptics.play(HapticPattern::ImpactLight);
     haptics.play(HapticPattern::NotificationError);
+}
+
+#[test]
+fn browser_http_registry_and_wire_surfaces_are_strictly_bounded()
+{
+    let source = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/http.rs"),
+    ).expect("browser HTTP source");
+    for contract in [
+        "const MAXIMUM_ACTIVE_OPERATIONS: usize = 128;",
+        "const MAXIMUM_REQUEST_BODY_BYTES: usize = 16 * 1024 * 1024;",
+        "const MAXIMUM_HEADER_COUNT: usize = 64;",
+        "const MAXIMUM_HEADER_BYTES: usize = 32 * 1024;",
+        "selected HTTP response headers exceed limit",
+        "RequestRedirect::Manual",
+        "AbortController",
+        "HttpEvent::Cancelled",
+    ] {
+        assert!(source.contains(contract), "missing browser HTTP contract: {contract}");
+    }
 }

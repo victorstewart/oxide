@@ -7,7 +7,7 @@ use oxide_platform_api::network_status::NetworkInterface;
 use oxide_platform_api::web_view::{WebViewEvent, WebViewService};
 use oxide_platform_api::{
     AudioSample, BleUuid, Bluetooth, BluetoothEvent, CameraFrame, CameraImage, CameraManager,
-    ConnectionEvent, ConnectionOptions, GattChar, GeoHash, GeoRegion, HttpClient, HttpRequest,
+    ConnectionEvent, ConnectionOptions, GattChar, GeoHash, GeoRegion, HttpClient, HttpEvent, HttpRequest,
     LocationEvent, LocationService, MotionService, Networking, PermissionDomain, PermissionStatus,
     PhotoEvent, PlatformError, ProtocolOptions, PushManager, QuicOptions, RecordingEvent,
     ScanOptions, TcpOptions, UdpEvent, UdpPacket,
@@ -26,8 +26,8 @@ use oxide_platform_apple::{
 use oxide_platform_apple::{oxide_web_view_event_trampoline, AppleWebViewService};
 use oxide_platform_apple::{
     AppleBleScanConfig, AppleBleScanInfo, AppleBluetooth, AppleCamAudio, AppleCamFrame,
-    AppleCamPhotoEvent, AppleCamRecordEvent, AppleCameraManager, AppleHttpClient,
-    AppleHttpResponse, AppleLocationConfig, AppleLocationSample, AppleLocationService,
+    AppleCamPhotoEvent, AppleCamRecordEvent, AppleCameraManager, AppleHttpClient, AppleHttpEvent,
+    AppleHttpHeader, AppleLocationConfig, AppleLocationSample, AppleLocationService,
     AppleMediaAsset, AppleMediaImageData, AppleMediaLibraryManager, AppleMotionSample,
     AppleMotionService, ApplePushManager, AppleSecureStorage, AppleSocketNetworking,
 };
@@ -206,72 +206,74 @@ fn web_view_closed_ids() -> &'static Mutex<Vec<u64>> {
 }
 
 #[no_mangle]
-pub extern "C" fn oxide_host_http_get(
+pub extern "C" fn oxide_host_http_start(
     url_ptr: *const u8,
     url_len: usize,
     _timeout_ms: u32,
     max_response_bytes: usize,
-    out_response: *mut AppleHttpResponse,
+    _request_headers: *const AppleHttpHeader,
+    _request_header_count: usize,
+    _response_headers: *const AppleHttpHeader,
+    _response_header_count: usize,
+    callback: Option<unsafe extern "C" fn(*mut core::ffi::c_void, *const AppleHttpEvent)>,
+    context: *mut core::ffi::c_void,
+    out_request_id: *mut u64,
 ) -> i32 {
-    if url_ptr.is_null() || url_len == 0 || out_response.is_null() {
+    if url_ptr.is_null() || url_len == 0 || callback.is_none() || context.is_null() || out_request_id.is_null() {
         return -1;
     }
     let url = unsafe { std::slice::from_raw_parts(url_ptr, url_len) };
     if max_response_bytes < 2 {
         return -4;
     }
-    let (body_ptr, body_len) = heap_bytes(b"ok");
-    let (final_url_ptr, final_url_len) = heap_bytes(url);
-    let (content_type_ptr, content_type_len) = heap_bytes(b"text/plain");
     unsafe {
-        *out_response = AppleHttpResponse {
+        *out_request_id = 1;
+        let callback = callback.unwrap_unchecked();
+        callback(context, &AppleHttpEvent {
+            kind: 1,
+            error: 0,
             status: 200,
-            body_ptr,
-            body_len,
-            final_url_ptr,
-            final_url_len,
-            content_type_ptr,
-            content_type_len,
-        };
+            reserved: 0,
+            content_length: 2,
+            data_ptr: std::ptr::null(),
+            data_len: 0,
+            final_url_ptr: url.as_ptr(),
+            final_url_len: url.len(),
+            headers_ptr: std::ptr::null(),
+            header_count: 0,
+        });
+        callback(context, &AppleHttpEvent {
+            kind: 2,
+            error: 0,
+            status: 0,
+            reserved: 0,
+            content_length: -1,
+            data_ptr: b"ok".as_ptr(),
+            data_len: 2,
+            final_url_ptr: std::ptr::null(),
+            final_url_len: 0,
+            headers_ptr: std::ptr::null(),
+            header_count: 0,
+        });
+        callback(context, &AppleHttpEvent {
+            kind: 3,
+            error: 0,
+            status: 0,
+            reserved: 0,
+            content_length: -1,
+            data_ptr: std::ptr::null(),
+            data_len: 0,
+            final_url_ptr: std::ptr::null(),
+            final_url_len: 0,
+            headers_ptr: std::ptr::null(),
+            header_count: 0,
+        });
     }
     0
 }
 
 #[no_mangle]
-pub extern "C" fn oxide_host_http_response_free(response: *mut AppleHttpResponse) {
-    if response.is_null() {
-        return;
-    }
-    unsafe {
-        let response = &mut *response;
-        if !response.body_ptr.is_null() {
-            drop(Vec::from_raw_parts(response.body_ptr, response.body_len, response.body_len));
-        }
-        if !response.final_url_ptr.is_null() {
-            drop(Vec::from_raw_parts(
-                response.final_url_ptr,
-                response.final_url_len,
-                response.final_url_len,
-            ));
-        }
-        if !response.content_type_ptr.is_null() {
-            drop(Vec::from_raw_parts(
-                response.content_type_ptr,
-                response.content_type_len,
-                response.content_type_len,
-            ));
-        }
-        *response = AppleHttpResponse {
-            status: 0,
-            body_ptr: std::ptr::null_mut(),
-            body_len: 0,
-            final_url_ptr: std::ptr::null_mut(),
-            final_url_len: 0,
-            content_type_ptr: std::ptr::null_mut(),
-            content_type_len: 0,
-        };
-    }
-}
+pub extern "C" fn oxide_host_http_cancel(_request_id: u64) {}
 
 #[no_mangle]
 pub extern "C" fn oxide_ble_init() {
@@ -1037,16 +1039,20 @@ fn apple_secure_storage_round_trips_c_abi() {
 }
 
 #[test]
-fn apple_http_client_fetches_through_c_abi() {
+fn apple_http_client_streams_through_c_abi() {
     let client = AppleHttpClient::new();
-    let response = client
-        .fetch(&HttpRequest::get("https://oxide.test/health"))
-        .expect("HTTP fetch through test ABI");
-
-    assert_eq!(response.status, 200);
-    assert_eq!(response.final_url, "https://oxide.test/health");
-    assert_eq!(response.content_type.as_deref(), Some("text/plain"));
-    assert_eq!(response.body, b"ok");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let _operation = client.start(
+        HttpRequest::get("https://oxide.test/health"),
+        Box::new(move |event| sink.lock().expect("HTTP events").push(event)),
+    ).expect("HTTP start through test ABI");
+    let events = events.lock().expect("HTTP events");
+    assert_eq!(events.len(), 3);
+    assert!(matches!(&events[0], HttpEvent::Response(response)
+        if response.status == 200 && response.final_url == "https://oxide.test/health"));
+    assert_eq!(events[1], HttpEvent::Body(b"ok".to_vec()));
+    assert_eq!(events[2], HttpEvent::Complete);
 }
 
 #[test]

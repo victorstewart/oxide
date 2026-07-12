@@ -28,7 +28,8 @@ use oxide_platform_api::{
     Bluetooth, BluetoothEvent, CameraConfig, CameraDevice, CameraFrame, CameraImage, CameraManager,
     CameraRecording, CameraStream, CaptureMode, ColorSpace, Connection, ConnectionEvent,
     ConnectionGroup, ConnectionOptions, FlashMode, GattChar, GeoHash, GeoRegion, GeoRegionTracker,
-    HttpClient, HttpMethod, HttpRequest, HttpResponse, LocationAccuracy, LocationEvent,
+    HttpClient, HttpEvent, HttpHeader, HttpMethod, HttpOperation, HttpRequest, HttpResponse,
+    LocationAccuracy, LocationEvent,
     LocationOptions, LocationReading, LocationService, MotionSample, MotionService, NetworkError,
     NetworkErrorDomain, Networking, PeripheralId, PeripheralInfo, PhotoEvent, PhotoOptions,
     PlatformError, ProtocolOptions, PushManager, PushNotification, PushPresentation, PushProvider,
@@ -58,15 +59,21 @@ pub const APPLE_PERMISSION_MICROPHONE: u32 = 6;
 pub const APPLE_PERMISSION_MEDIA_LIBRARY: u32 = 7;
 
 extern "C" {
-    fn oxide_host_http_get(
+    fn oxide_host_http_start(
         url_ptr: *const u8,
         url_len: usize,
         timeout_ms: u32,
         max_response_bytes: usize,
-        out_response: *mut AppleHttpResponse,
+        request_headers: *const AppleHttpHeader,
+        request_header_count: usize,
+        response_headers: *const AppleHttpHeader,
+        response_header_count: usize,
+        callback: Option<unsafe extern "C" fn(*mut core::ffi::c_void, *const AppleHttpEvent)>,
+        context: *mut core::ffi::c_void,
+        out_request_id: *mut u64,
     ) -> i32;
 
-    fn oxide_host_http_response_free(response: *mut AppleHttpResponse);
+    fn oxide_host_http_cancel(request_id: u64);
 
     fn oxide_ble_init();
 
@@ -244,28 +251,27 @@ extern "C" {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct AppleHttpResponse {
-    pub status: u16,
-    pub body_ptr: *mut u8,
-    pub body_len: usize,
-    pub final_url_ptr: *mut u8,
-    pub final_url_len: usize,
-    pub content_type_ptr: *mut u8,
-    pub content_type_len: usize,
+pub struct AppleHttpHeader {
+   pub name_ptr: *const u8,
+   pub name_len: usize,
+   pub value_ptr: *const u8,
+   pub value_len: usize,
 }
 
-impl AppleHttpResponse {
-    fn empty() -> Self {
-        Self {
-            status: 0,
-            body_ptr: core::ptr::null_mut(),
-            body_len: 0,
-            final_url_ptr: core::ptr::null_mut(),
-            final_url_len: 0,
-            content_type_ptr: core::ptr::null_mut(),
-            content_type_len: 0,
-        }
-    }
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct AppleHttpEvent {
+   pub kind: u32,
+   pub error: i32,
+   pub status: u16,
+   pub reserved: u16,
+   pub content_length: i64,
+   pub data_ptr: *const u8,
+   pub data_len: usize,
+   pub final_url_ptr: *const u8,
+   pub final_url_len: usize,
+   pub headers_ptr: *const AppleHttpHeader,
+   pub header_count: usize,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -278,39 +284,165 @@ impl AppleHttpClient {
     }
 }
 
+struct AppleHttpCallbackState {
+   terminal: AtomicBool,
+   callback: alloc::boxed::Box<dyn Fn(HttpEvent) + Send + Sync>,
+}
+
+struct AppleHttpOperation {
+   request_id: u64,
+   cancelled: AtomicBool,
+}
+
+impl HttpOperation for AppleHttpOperation {
+   fn cancel(&self) {
+      if !self.cancelled.swap(true, Ordering::AcqRel) {
+         unsafe { oxide_host_http_cancel(self.request_id) };
+      }
+   }
+}
+
+impl Drop for AppleHttpOperation {
+   fn drop(&mut self) {
+      self.cancel();
+   }
+}
+
 impl HttpClient for AppleHttpClient {
-    fn fetch(&self, request: &HttpRequest) -> Result<HttpResponse, PlatformError> {
-        if request.method != HttpMethod::Get {
-            return Err(PlatformError::Unsupported("Apple HTTP bridge only supports GET"));
-        }
-        if request.url.trim().is_empty() {
-            return Err(PlatformError::Invalid("HTTP URL is empty"));
-        }
-        let mut raw = AppleHttpResponse::empty();
-        let rc = unsafe {
-            oxide_host_http_get(
-                request.url.as_ptr(),
-                request.url.len(),
-                request.timeout_ms,
-                request.max_response_bytes,
-                &mut raw,
-            )
-        };
-        if rc != 0 {
-            return Err(http_error(rc));
-        }
+   fn start(&self, request: HttpRequest, on_event: alloc::boxed::Box<dyn Fn(HttpEvent) + Send + Sync>) -> Result<alloc::boxed::Box<dyn HttpOperation + Send + Sync>, PlatformError> {
+      validate_http_request(&request)?;
+      let remaining = request.timeout;
+      if remaining.is_zero() {
+         return Err(PlatformError::Io(alloc::string::String::from("HTTP deadline exceeded")));
+      }
+      let timeout_ms = remaining.as_millis().clamp(1, u128::from(u32::MAX)) as u32;
+      let request_headers = request.headers.iter().map(raw_http_header).collect::<alloc::vec::Vec<_>>();
+      let response_headers = request.response_headers.iter().map(|name| AppleHttpHeader {
+         name_ptr: name.as_ptr(),
+         name_len: name.len(),
+         value_ptr: core::ptr::null(),
+         value_len: 0,
+      }).collect::<alloc::vec::Vec<_>>();
+      let callback = Arc::new(AppleHttpCallbackState {
+         terminal: AtomicBool::new(false),
+         callback: on_event,
+      });
+      let context = Arc::into_raw(callback).cast_mut().cast::<core::ffi::c_void>();
+      let mut request_id = 0;
+      let result = unsafe {
+         oxide_host_http_start(
+            request.url.as_ptr(),
+            request.url.len(),
+            timeout_ms,
+            request.max_response_bytes,
+            request_headers.as_ptr(),
+            request_headers.len(),
+            response_headers.as_ptr(),
+            response_headers.len(),
+            Some(apple_http_event),
+            context,
+            &mut request_id,
+         )
+      };
+      if result != 0 || request_id == 0 {
+         unsafe { drop(Arc::from_raw(context.cast::<AppleHttpCallbackState>())) };
+         return Err(http_error(if result == 0 { -1 } else { result }));
+      }
+      Ok(alloc::boxed::Box::new(AppleHttpOperation {
+         request_id,
+         cancelled: AtomicBool::new(false),
+      }))
+   }
+}
 
-        let body = copy_bytes(raw.body_ptr, raw.body_len);
-        let final_url = copy_string(raw.final_url_ptr, raw.final_url_len)
-            .unwrap_or_else(|| request.url.clone());
-        let content_type = copy_string(raw.content_type_ptr, raw.content_type_len);
-        let status = raw.status;
-        unsafe {
-            oxide_host_http_response_free(&mut raw);
-        }
+fn raw_http_header(header: &HttpHeader) -> AppleHttpHeader {
+   AppleHttpHeader {
+      name_ptr: header.name.as_ptr(),
+      name_len: header.name.len(),
+      value_ptr: header.value.as_ptr(),
+      value_len: header.value.len(),
+   }
+}
 
-        Ok(HttpResponse { final_url, status, content_type, body })
-    }
+fn valid_http_header_name(name: &str) -> bool {
+   !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+}
+
+fn validate_http_request(request: &HttpRequest) -> Result<(), PlatformError> {
+   if request.method != HttpMethod::Get {
+      return Err(PlatformError::Unsupported("Apple HTTP bridge only supports GET"));
+   }
+   if !request.body.is_empty() || request.credentials != oxide_platform_api::HttpCredentials::Omit {
+      return Err(PlatformError::Unsupported("Apple HTTP bridge does not accept request bodies or ambient credentials"));
+   }
+   if request.url.trim().is_empty() || request.max_response_bytes == 0 {
+      return Err(PlatformError::Invalid("HTTP URL or response limit is invalid"));
+   }
+   for header in &request.headers {
+      if !valid_http_header_name(header.name.as_str())
+         || header.value.bytes().any(|byte| byte == b'\r' || byte == b'\n')
+         || header.name.eq_ignore_ascii_case("cookie")
+         || header.name.eq_ignore_ascii_case("authorization")
+         || header.name.eq_ignore_ascii_case("proxy-authorization")
+      {
+         return Err(PlatformError::Invalid("HTTP request header is invalid"));
+      }
+   }
+   for name in &request.response_headers {
+      if !valid_http_header_name(name.as_str()) {
+         return Err(PlatformError::Invalid("selected HTTP response header is invalid"));
+      }
+   }
+   Ok(())
+}
+
+unsafe extern "C" fn apple_http_event(context: *mut core::ffi::c_void, raw: *const AppleHttpEvent) {
+   if context.is_null() || raw.is_null() {
+      return;
+   }
+   let state = unsafe { &*context.cast::<AppleHttpCallbackState>() };
+   if state.terminal.load(Ordering::Acquire) {
+      return;
+   }
+   let event = unsafe { decode_apple_http_event(&*raw) };
+   let terminal = event.terminal();
+   if terminal && state.terminal.swap(true, Ordering::AcqRel) {
+      return;
+   }
+   if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (state.callback)(event))).is_err() {
+      std::process::abort();
+   }
+   if terminal {
+      unsafe { drop(Arc::from_raw(context.cast::<AppleHttpCallbackState>())) };
+   }
+}
+
+unsafe fn decode_apple_http_event(raw: &AppleHttpEvent) -> HttpEvent {
+   match raw.kind {
+      1 => {
+         let headers = if raw.headers_ptr.is_null() || raw.header_count == 0 {
+            alloc::vec::Vec::new()
+         } else {
+            unsafe { core::slice::from_raw_parts(raw.headers_ptr, raw.header_count) }.iter().filter_map(|header| {
+               Some(HttpHeader {
+                  name: copy_string(header.name_ptr, header.name_len)?,
+                  value: copy_string(header.value_ptr, header.value_len).unwrap_or_default(),
+               })
+            }).collect()
+         };
+         HttpEvent::Response(HttpResponse {
+            final_url: copy_string(raw.final_url_ptr, raw.final_url_len).unwrap_or_default(),
+            status: raw.status,
+            content_length: u64::try_from(raw.content_length).ok(),
+            headers,
+         })
+      }
+      2 => HttpEvent::Body(copy_bytes(raw.data_ptr, raw.data_len)),
+      3 => HttpEvent::Complete,
+      4 => HttpEvent::Cancelled,
+      5 => HttpEvent::Failed(http_error(raw.error)),
+      _ => HttpEvent::Failed(PlatformError::Unknown(alloc::string::String::from("native HTTP event was invalid"))),
+   }
 }
 
 #[repr(C)]

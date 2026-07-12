@@ -14,7 +14,6 @@ fn main() {
     build.flag("-fobjc-arc").flag("-fmodules").flag("-fcxx-modules");
     println!("cargo:rerun-if-changed=src/ios/network.h");
     add_objc_source(&mut build, "src/ios/network.m");
-    add_objc_source(&mut build, "../platform-apple/src/apple/http.m");
     add_objc_source(&mut build, "../platform-apple/src/apple/secure_storage.m");
     if target_os == "ios" {
         for source in [

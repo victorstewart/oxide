@@ -2,14 +2,12 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "macos" {
         println!("cargo:rerun-if-changed=src/macos/app.m");
         println!("cargo:rerun-if-changed=../../../crates/platform-apple/src/apple/bluetooth.m");
-        println!("cargo:rerun-if-changed=../../../crates/platform-apple/src/apple/http.m");
         println!(
             "cargo:rerun-if-changed=../../../crates/platform-apple/src/apple/secure_storage.m"
         );
         let mut b = cc::Build::new();
         b.file("src/macos/app.m")
             .file("../../../crates/platform-apple/src/apple/bluetooth.m")
-            .file("../../../crates/platform-apple/src/apple/http.m")
             .file("../../../crates/platform-apple/src/apple/secure_storage.m")
             .flag("-fobjc-arc");
         b.compile("oxide_host_macos_app");

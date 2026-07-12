@@ -22,6 +22,7 @@ Call flow:
 - `oxide_platform_web::platform() -> WebPlatform`: returns a standalone platform value.
 - `oxide_platform_web::install_current_platform() -> Arc<WebPlatform>`: installs `WebPlatform` and its clipboard provider in global Oxide registries.
 - `impl oxide_platform_api::Platform for WebPlatform`: implements redraw signaling, refresh/idling toggles, URL opening, clipboard, IME events, device caps, haptics, service accessors, and browser capability reporting.
+- `oxide_platform_web::BrowserHttpClient`: implements asynchronous browser `fetch` with explicit same-origin credentials, manual redirects, streamed response limits, caller-supplied remaining timeouts, and `AbortController` cancellation.
 - `impl oxide_platform_api::clipboard::ClipboardProvider for WebPlatform`: lets registry-based clipboard callers use the browser adapter.
 - `impl oxide_platform_api::LocationService for WebLocation`: maps browser geolocation watch/current-position callbacks into Oxide location events on wasm and explicit unsupported fallbacks on native test builds.
 - `impl oxide_platform_api::network_status::NetworkStatusService for WebNetworkStatus`: reports `navigator.onLine` and installs `online`/`offline` window listeners for subscriptions on wasm.
@@ -35,7 +36,7 @@ Call flow:
 
 ## Logic narrative
 
-`WebPlatform` deliberately stores no DOM handles so it can satisfy Oxide's `Platform: Send + Sync` bound. Browser objects are fetched on demand inside wasm-only helper functions, while non-`Send` browser handles and closures live in thread-local registries behind integer handles. `request_redraw`, `ime_show`, and `ime_hide` dispatch custom window events for the host runtime. Clipboard writes cache the last app-written string synchronously and best-effort forward to `navigator.clipboard.writeText`; async helper functions expose the real browser Clipboard promise path for callers that can await. Secure storage uses localStorage with a fixed key prefix and hex-encoded bytes.
+`WebPlatform` deliberately stores no DOM handles so it can satisfy Oxide's `Platform: Send + Sync` bound. Browser objects are fetched on demand inside wasm-only helper functions, while non-`Send` browser handles and closures live in thread-local registries behind integer handles. The HTTP registry is capped at 128 active operations; request bodies, header count/bytes, declared response length, and streamed bytes are independently bounded. Cancellation and timeout remove registry ownership before aborting, so browser callbacks can emit exactly one terminal event and every later callback is ignored. `request_redraw`, `ime_show`, and `ime_hide` dispatch custom window events for the host runtime. Clipboard writes cache the last app-written string synchronously and best-effort forward to `navigator.clipboard.writeText`; async helper functions expose the real browser Clipboard promise path for callers that can await. Secure storage uses localStorage with a fixed key prefix and hex-encoded bytes.
 
 Browser network status maps to `navigator.onLine`; subscriptions install one `online` and one `offline` window listener and fan out the updated status. Browser geolocation uses `watchPosition` for `start`, `getCurrentPosition` for `request_once`, a bounded 256-reading history, cached last reading, and permission status updates driven by browser callbacks. Hidden web views are same-origin iframes; cross-origin URLs are rejected because browser security prevents script execution through the current Oxide trait. `set_idle_timer_disabled(true)` requests a screen wake lock where supported and releases it when disabled. Display refresh starts at 60 Hz and is refined from a short requestAnimationFrame delta probe.
 
@@ -63,7 +64,7 @@ Browser integrations compile only under `target_arch = "wasm32"`. Non-wasm build
 
 ## Testing and benchmarks
 
-`oxide/crates/platform-web/tests/lib_tests.rs` covers secure-storage hex encoding, refresh-rate estimation, device caps fallbacks, unsupported OS service behavior, browser-only native fallback boundaries, clipboard caching, and haptics no-op acceptance. The static wasm host page also calls `platform_smoke_report`, which exercises browser capability reporting, network subscription installation, and same-origin iframe WebView create/close in Chromium. `oxide-perf-runner` includes `cpu.bridge.web_backend_surface` so the native fallback surface remains represented in the persisted workspace performance contract.
+`oxide/crates/platform-web/tests/lib_tests.rs` covers secure-storage hex encoding, refresh-rate estimation, device caps fallbacks, unsupported OS service behavior, HTTP bounds, browser-only native fallback boundaries, clipboard caching, and haptics no-op acceptance. `tests/http_browser_tests.rs` compiles and exercises streamed fetch, exact cancellation, late-callback suppression, and response-cap failure in a browser runner. The static wasm host page also calls `platform_smoke_report`, which exercises browser capability reporting, network subscription installation, and same-origin iframe WebView create/close in Chromium. `oxide-perf-runner` includes `cpu.bridge.web_backend_surface` so the native fallback surface remains represented in the persisted workspace performance contract.
 
 ## Examples
 
@@ -79,3 +80,4 @@ pub fn install_platform()
 - Added native perf-runner bridge coverage for the web backend surface.
 - Added wake lock, RAF refresh-rate probing, async clipboard helpers, and async browser media stream adapter support.
 - Added browser network subscriptions, geolocation callbacks, same-origin iframe WebViews, and the host smoke hook.
+- Added the bounded, cancellable asynchronous browser HTTP adapter.

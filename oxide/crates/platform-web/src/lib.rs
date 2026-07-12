@@ -11,6 +11,9 @@
 )]
 
 use oxide_platform_api as api;
+mod http;
+
+pub use http::BrowserHttpClient;
 #[cfg(target_arch = "wasm32")]
 use std::cell::{Cell, RefCell};
 #[cfg(target_arch = "wasm32")]
@@ -227,6 +230,10 @@ impl api::Platform for WebPlatform {
 
     fn capabilities(&self) -> api::Capabilities {
         browser_capabilities()
+    }
+
+    fn http(&self) -> &dyn api::HttpClient {
+        http::client()
     }
 
     fn networking(&self) -> &dyn api::Networking {

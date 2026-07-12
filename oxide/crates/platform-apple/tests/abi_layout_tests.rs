@@ -1,7 +1,7 @@
 use oxide_platform_apple::camera::{CamFormat, CamPixFmt};
 use oxide_platform_apple::{
    AppleBleScanConfig, AppleBleScanInfo, AppleCamAudio, AppleCamFrame, AppleCamPhotoEvent,
-   AppleCamRecordEvent, AppleHttpResponse, AppleLocationConfig, AppleLocationSample,
+   AppleCamRecordEvent, AppleHttpEvent, AppleHttpHeader, AppleLocationConfig, AppleLocationSample,
    AppleMediaAsset, AppleMediaImageData, AppleMotionSample,
 };
 use std::mem::{align_of, size_of};
@@ -15,7 +15,8 @@ fn assert_layout<T>(name: &str, expected_size: usize, expected_align: usize)
 #[test]
 fn shared_apple_ffi_layouts_are_frozen()
 {
-   assert_layout::<AppleHttpResponse>("AppleHttpResponse", 56, 8);
+   assert_layout::<AppleHttpHeader>("AppleHttpHeader", 32, 8);
+   assert_layout::<AppleHttpEvent>("AppleHttpEvent", 72, 8);
    assert_layout::<AppleBleScanConfig>("AppleBleScanConfig", 24, 8);
    assert_layout::<AppleBleScanInfo>("AppleBleScanInfo", 80, 8);
    assert_layout::<AppleCamFrame>("AppleCamFrame", 72, 8);
@@ -35,8 +36,10 @@ fn shared_apple_ffi_layouts_are_frozen()
 fn shared_apple_objc_bridges_keep_abi_static_asserts()
 {
    let http = include_str!("../src/apple/http.m");
-   assert!(http.contains("_Static_assert(sizeof(struct OxideHttpResponse) == 56"));
-   assert!(http.contains("_Static_assert(_Alignof(struct OxideHttpResponse) == 8"));
+   assert!(http.contains("_Static_assert(sizeof(struct OxideHttpHeader) == 32"));
+   assert!(http.contains("_Static_assert(_Alignof(struct OxideHttpHeader) == 8"));
+   assert!(http.contains("_Static_assert(sizeof(struct OxideHttpEvent) == 72"));
+   assert!(http.contains("_Static_assert(_Alignof(struct OxideHttpEvent) == 8"));
 
    let bluetooth = include_str!("../src/apple/bluetooth.m");
    assert!(bluetooth.contains("_Static_assert(sizeof(struct OxideBleScanConfig) == 24"));

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/platform-api",
+    "crates/platform-android",
     "crates/renderer-api",
     "crates/ui-core",
     "crates/platform-apple",

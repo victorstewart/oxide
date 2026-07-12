@@ -54,7 +54,7 @@
 
 ## Logic narrative
 - The secure-storage adapter owns Rust-side status-code handling. The shared native Keychain bridge owns generic-password save/load/delete, host-buffer allocation, and host-buffer release for both iOS and macOS.
-- The HTTP adapter owns Rust-side request validation and return-code mapping. The shared native `NSURLSession` bridge owns URL loading, response byte/string copying, and native buffer release for both iOS and macOS, with iOS multipath configuration kept behind platform cfg.
+- The HTTP adapter owns Rust-side request validation and event mapping. One shared native `NSURLSession` delegate owns streaming response delivery and cancellation for both iOS and macOS.
 - The location adapter owns Rust-side last-sample caching, bounded history, callback fanout, and geofence-region enter/exit detection; native hosts own CoreLocation manager configuration and permission prompts.
 - The motion adapter owns Rust-side bounded history and callback fanout; unavailable host providers return `PlatformError::Unsupported` through the shared service.
 - The media-library adapter owns Rust-side paging, asset mapping, image/video result conversion, optional BGRA helper loading, host-buffer release, and host return-code mapping; native hosts own Photos authorization and data extraction.
@@ -68,7 +68,7 @@
 
 ## Preconditions and postconditions
 - Apple hosts must compile `src/apple/secure_storage.m` or export ABI-compatible `oxide_secure_storage_save`, `oxide_secure_storage_load`, `oxide_secure_storage_delete`, and `oxide_secure_storage_free_data` symbols.
-- Apple hosts must compile `src/apple/http.m` or export ABI-compatible `oxide_host_http_get` and `oxide_host_http_response_free` symbols to use `AppleHttpClient`.
+- Apple builds of this crate compile `src/apple/http.m` and export `oxide_host_http_start` and `oxide_host_http_cancel` for `AppleHttpClient` automatically.
 - Apple hosts must export ABI-compatible `oxide_host_location_*` symbols to use `AppleLocationService`.
 - Apple hosts must export ABI-compatible `oxide_host_motion_*` symbols to use `AppleMotionService`.
 - Apple hosts must export ABI-compatible `oxide_media_*` symbols to use `AppleMediaLibraryManager`.
@@ -83,7 +83,7 @@
 - Missing secure-storage keys map to `Ok(None)`.
 - Empty secure-storage values map to `Ok(Some(Vec::new()))`.
 - HTTP is intentionally GET-only and returns `PlatformError::Unsupported` for other methods.
-- Native HTTP calls can return `PlatformError::Busy` when a host rejects a synchronous call on the main thread.
+- Native HTTP admission returns immediately with an operation handle or a typed validation/admission error.
 - Native location start failures map to `PlatformError::Unsupported("location start failed")`.
 - Native motion start failures map to `PlatformError::Unsupported("motion unavailable")`.
 - Native media permission failures map to `PlatformError::PermissionDenied("media_library")`.
@@ -106,6 +106,7 @@
 - macOS host-backed WebView behavior is additionally exercised by `host/macos-app/oxide-host-macos/tests/web_view_harness.rs`, which verifies live hidden `WKWebView` load callbacks, concurrent view isolation, JavaScript result/error behavior, and teardown through the shared Apple wrapper. The same harness verifies macOS camera missing-session and unauthorized-start error mapping by default, validates authorized media-thumbnail extraction when available, and has opt-in live location/camera/media paths for pre-authorized Location Services, frame/photo/recording, and image/video extraction validation.
 
 ## Changelog
+- 2026-07-11: made the asynchronous HTTP native bridge self-contained in this crate and removed duplicate host compilation.
 - 2026-06-22: added shared Apple ABI layout freeze coverage for HTTP, Bluetooth, camera, location, motion, media, and camera-format structs.
 - 2026-05-19: moved the native Apple Keychain secure-storage bridge into `src/apple/secure_storage.m` and compiled it into both iOS and macOS hosts.
 - 2026-05-19: moved the native Apple HTTP `NSURLSession` bridge into `src/apple/http.m` and compiled it into both iOS and macOS hosts.
