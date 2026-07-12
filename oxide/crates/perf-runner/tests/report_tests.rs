@@ -4654,6 +4654,46 @@ fn filtered_run_suite_supports_rendering_architecture_contract() {
     let _ = std::fs::remove_file(json_out);
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn metal_architecture_reports_reconciled_renderer_resource_families()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-accounting-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env(
+         "OXIDE_PERF_RUNNER_FILTER",
+         "gpu.architecture.layers.clean_100x100,gpu.architecture.id_mask.static.size_512.chunks_1,gpu.architecture.scene3d.instances_96.bloom_1",
+      )
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run Metal renderer accounting smoke suite");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "Metal accounting suite failed: {stderr}");
+   assert!(stdout.contains("cases=4"), "stdout: {stdout}");
+   let report = std::fs::read_to_string(&json_out).expect("read Metal accounting report");
+   let layer = report_case_slice(&report, "gpu.architecture.layers.clean_100x100");
+   let id_mask =
+      report_case_slice(&report, "gpu.architecture.id_mask.static.size_512.chunks_1");
+   let scene3d =
+      report_case_slice(&report, "gpu.architecture.scene3d.instances_96.bloom_1");
+   assert!(report_f64(layer, "layer_cache_bytes_peak") > 0.0);
+   assert!(report_f64(id_mask, "id_mask_target_bytes_peak") > 0.0);
+   assert!(report_f64(id_mask, "id_mask_vertex_bytes_peak") > 0.0);
+   assert!(report_f64(id_mask, "chunks_prepared_avg") > 0.0);
+   assert!(report_f64(id_mask, "render_passes_avg") > 0.0);
+   assert!(report_f64(scene3d, "depth_target_bytes_peak") > 0.0);
+   assert!(report_f64(scene3d, "bloom_target_bytes_peak") > 0.0);
+   assert!(report_f64(scene3d, "mesh_buffer_bytes_peak") > 0.0);
+   assert!(report_f64(scene3d, "render_passes_avg") > 0.0);
+   let _ = std::fs::remove_file(json_out);
+}
+
 #[test]
 fn filtered_run_suite_supports_gpu_journey_frame_pacing_case() {
     let mut json_out = std::env::temp_dir();

@@ -20,6 +20,11 @@ pub mod scene3d;
 
 const MAX_LAYER_DIMENSION: u32 = 16_384;
 
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+fn saturating_texture_bytes(width: u64, height: u64, bytes_per_pixel: u64) -> u64 {
+    width.saturating_mul(height).saturating_mul(bytes_per_pixel)
+}
+
 /// Per-frame counters emitted by the web renderer.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WebRendererStats {
@@ -67,6 +72,22 @@ pub struct WebRendererStats {
     pub present_passes: u32,
     pub texture_copies: u32,
     pub command_buffers: u32,
+    pub commands_traversed: u64,
+    pub commands_copied: u64,
+    pub geometry_bytes_copied: u64,
+    pub chunks_reused: u64,
+    pub chunks_rebuilt: u64,
+    pub chunks_prepared: u64,
+    pub backend_cache_hits: u64,
+    pub backend_cache_misses: u64,
+    pub render_encoders: u32,
+    pub texture_copy_pixels: u64,
+    pub texture_copy_bytes: u64,
+    pub shaded_damage_pixels: u64,
+    pub cache_evictions: u32,
+    pub wakeups: u32,
+    pub skipped_submissions: u32,
+    pub actual_submissions: u32,
     pub submit_upload_alloc_count: u64,
     pub submit_upload_alloc_bytes: u64,
     pub submit_surface_alloc_count: u64,
@@ -152,6 +173,25 @@ pub struct WebRendererStats {
     pub cpu_resource_table_scratch_bytes: u64,
     pub cpu_resource_table_scratch_grows: u32,
     pub cpu_resource_table_scratch_growth_bytes: u64,
+    pub gpu_allocated_bytes_available: bool,
+    pub gpu_logical_total_bytes: u64,
+    pub gpu_allocated_total_bytes: u64,
+    pub gpu_vertex_buffer_bytes: u64,
+    pub gpu_index_buffer_bytes: u64,
+    pub gpu_uniform_buffer_bytes: u64,
+    pub gpu_persistent_asset_bytes: u64,
+    pub gpu_transient_target_bytes: u64,
+    pub gpu_depth_target_bytes: u64,
+    pub gpu_bloom_target_bytes: u64,
+    pub gpu_layer_texture_bytes: u64,
+    pub gpu_id_mask_texture_bytes: u64,
+    pub gpu_atlas_texture_bytes: u64,
+    pub gpu_image_texture_bytes: u64,
+    pub gpu_scene3d_mesh_bytes: u64,
+    pub gpu_staging_buffer_bytes: u64,
+    pub gpu_bind_buffer_bytes: u64,
+    pub gpu_frame_ring_bytes: u64,
+    pub gpu_cache_bytes: u64,
 }
 
 /// One completed per-frame WebGPU timestamp-query sample.
@@ -233,6 +273,22 @@ impl Default for WebRendererStats {
             present_passes: 0,
             texture_copies: 0,
             command_buffers: 0,
+            commands_traversed: 0,
+            commands_copied: 0,
+            geometry_bytes_copied: 0,
+            chunks_reused: 0,
+            chunks_rebuilt: 0,
+            chunks_prepared: 0,
+            backend_cache_hits: 0,
+            backend_cache_misses: 0,
+            render_encoders: 0,
+            texture_copy_pixels: 0,
+            texture_copy_bytes: 0,
+            shaded_damage_pixels: 0,
+            cache_evictions: 0,
+            wakeups: 0,
+            skipped_submissions: 0,
+            actual_submissions: 0,
             submit_upload_alloc_count: 0,
             submit_upload_alloc_bytes: 0,
             submit_surface_alloc_count: 0,
@@ -318,6 +374,25 @@ impl Default for WebRendererStats {
             cpu_resource_table_scratch_bytes: 0,
             cpu_resource_table_scratch_grows: 0,
             cpu_resource_table_scratch_growth_bytes: 0,
+            gpu_allocated_bytes_available: false,
+            gpu_logical_total_bytes: 0,
+            gpu_allocated_total_bytes: 0,
+            gpu_vertex_buffer_bytes: 0,
+            gpu_index_buffer_bytes: 0,
+            gpu_uniform_buffer_bytes: 0,
+            gpu_persistent_asset_bytes: 0,
+            gpu_transient_target_bytes: 0,
+            gpu_depth_target_bytes: 0,
+            gpu_bloom_target_bytes: 0,
+            gpu_layer_texture_bytes: 0,
+            gpu_id_mask_texture_bytes: 0,
+            gpu_atlas_texture_bytes: 0,
+            gpu_image_texture_bytes: 0,
+            gpu_scene3d_mesh_bytes: 0,
+            gpu_staging_buffer_bytes: 0,
+            gpu_bind_buffer_bytes: 0,
+            gpu_frame_ring_bytes: 0,
+            gpu_cache_bytes: 0,
         }
     }
 }
@@ -551,7 +626,8 @@ mod wasm {
         a8_to_rgba, color_cache_key, color_to_css, copy_a8_rows,
         copy_a8_rows_to_rgba_into, copy_rgba_rows, copy_rgba_rows_into,
         layer_physical_dimension, logical_dimension, normalized_index_mode, packed_rgba_to_css,
-        resolve_index, sanitize_scale, NormalizedIndexMode, WebRendererStats,
+        resolve_index, sanitize_scale, saturating_texture_bytes, NormalizedIndexMode,
+        WebRendererStats,
     };
     use crate::solid_color::colored_quad;
     use oxide_renderer_api as api;

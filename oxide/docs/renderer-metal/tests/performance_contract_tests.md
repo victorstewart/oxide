@@ -30,6 +30,8 @@ This test file protects renderer performance contracts that are easy to regress 
   Freezes the private `DrawCmd` debug/capture tag names emitted by the Metal encode diagnostics before backend packet migrations.
 - `renderer_initializes_default_pipelines_from_embedded_metallib_on_macos()`
   Constructs the default macOS Metal renderer, proving the embedded metallib and default PSO set initialize at runtime.
+- `disabled_accounting_path_keeps_new_stats_zero()`
+  Submits a real Metal frame with accounting disabled and verifies every new work and memory statistic remains zero.
 
 ## Logic narrative
 
@@ -75,6 +77,8 @@ cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-renderer-metal --test perfor
 
 Related local Metal evidence is produced by the perf-runner filtered GPU row `gpu.system.id_mask_compositor.current`; the slower legacy-upload audit row was retired after same-workload A/B proof.
 
+The accounting schema test constructs the public stats value, freezes the previously omitted depth, bloom, ID-mask, Scene3D mesh, and layer fields, and source-checks saturating arithmetic plus separate retained texture/buffer identity sets whose capacity survives each scan. The disabled-path runtime test proves a real submission leaves the new fields zero. Actual nonzero resource ownership is verified by the filtered architecture report test.
+
 ## Examples
 
 ```rust
@@ -88,5 +92,7 @@ fn initialize_renderer_for_contract_check() -> Result<(), oxide_renderer_metal::
 
 ## Changelog
 
+- 2026-07-12: added renderer memory-schema coverage for omitted resource families, overflow-safe accumulation, and cross-kind identity separation.
+- 2026-07-12: added a real-frame guard for the complete disabled accounting path.
 - 2026-06-22: froze Metal draw-command debug/capture names as measurement harness for architecture densification A/B work.
 - 2026-06-01: added a macOS runtime initialization test proving the default Metal renderer starts from the embedded metallib and default PSO set.

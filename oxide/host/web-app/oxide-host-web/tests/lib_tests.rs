@@ -656,6 +656,12 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("cpu_resource_table_scratch_bytes={}"));
     assert!(source.contains("cpu_resource_table_scratch_grows={}"));
     assert!(source.contains("cpu_resource_table_scratch_growth_bytes={}"));
+    assert!(source.contains("commands_traversed={}"));
+    assert!(source.contains("geometry_bytes_copied={}"));
+    assert!(source.contains("actual_submissions={}"));
+    assert!(source.contains("gpu_logical_total_bytes={}"));
+    assert!(source.contains("gpu_allocated_total_bytes={}"));
+    assert!(source.contains("gpu_scene3d_mesh_bytes={}"));
     assert!(source.contains("submit_allocation_metrics(&summary.submit_allocations"));
     assert!(source.contains("fn add_submit_allocation_frame"));
     assert!(source.contains("submit_surface_alloc_count"));
@@ -1064,6 +1070,11 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     ));
     assert!(script.contains("cpu_image_upload_scratch_growth_bytes: numberMetric(metrics, key(\"cpu_image_upload_scratch_growth_bytes\"))"));
     assert!(script.contains("cpu_resource_table_scratch_grows: numberMetric(metrics, key(\"cpu_resource_table_scratch_grows\"))"));
+    assert!(script.contains("commands_traversed: numberMetric(metrics, key(\"commands_traversed\"))"));
+    assert!(script.contains("geometry_bytes_copied: numberMetric(metrics, key(\"geometry_bytes_copied\"))"));
+    assert!(script.contains("actual_submissions: numberMetric(metrics, key(\"actual_submissions\"))"));
+    assert!(script.contains("gpu_logical_total_bytes: numberMetric(metrics, key(\"gpu_logical_total_bytes\"))"));
+    assert!(script.contains("gpu_allocated_total_bytes: numberMetric(metrics, key(\"gpu_allocated_total_bytes\"))"));
     assert!(script.contains("`${prefix}_render_passes`"));
     assert!(script.contains("`${prefix}_clear_passes`"));
     assert!(script.contains("`${prefix}_id_mask_field_jump_passes`"));

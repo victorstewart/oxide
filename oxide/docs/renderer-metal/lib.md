@@ -23,6 +23,10 @@
   - Encodes one retained 3D pass into the current frame before `encode_pass`.
 - `MetalRenderer::encode_id_mask_gpu_compositor(pass) -> Result<(), RenderError>`
   - Rasterizes semantic region/subregion ID triangles into renderer-owned R8 targets before running the compositor shader. Implementation lives in `id_mask_gpu.rs`.
+- `MetalRenderer::set_memory_stats_enabled_for_benchmark(enabled)`
+  - Enables or disables sampled resident-resource scans for explicit accounting-overhead controls; rendering behavior is unchanged.
+- `MetalRenderer::set_accounting_stats_enabled_for_benchmark(enabled)`
+  - Enables or disables the complete renderer-accounting path, including work snapshots and sampled resident-resource scans, for paired overhead controls; rendering behavior is unchanged.
 - `MetalRenderer::encode_neon_markers(pass) -> Result<(), RenderError>`
   - Encodes bounded neon marker instances over the current color target before `encode_pass`. Implementation lives in `neon_marker_gpu.rs`.
 - `MetalRenderer::encode_pass(list)`
@@ -52,6 +56,8 @@ Layer texture sublists share one geometry-span offset/rebase helper for image me
 
 Renderer GPU timing is collected in-app instead of depending on Instruments hardware-counter availability. Completed frame command buffers update renderer stats from Metal's command-buffer GPU start/end timestamps, and iOS devices that expose the common timestamp counter set attach an `MTLCounterSampleBuffer` to the main 2D render pass for vertex/fragment/pass attribution. Those values are read after command-buffer completion and surfaced through `last_stats()` without waiting on the GPU from the frame hot path.
 
+Renderer accounting keeps allocated GPU bytes and logical payload bytes separate. Metal's exposed `allocated_size` is deduplicated by resource identity into draw/MSAA, depth, effect, bloom, camera, layer, image, ID-mask, Scene3D mesh, frame-ring, and argument-buffer owners; logical texture extents and buffer lengths are reported independently. The identity sets are renderer-retained and cleared without releasing capacity, so scans allocate only while warming to a new peak resource count. The resident-resource walk is sampled once every 60 frames, while ordinary frames reuse the last snapshot. Work counters use saturating arithmetic for traversed/copied commands, copied geometry, ID-mask chunk reuse/rebuild, cache outcomes, encoders, copies, uploads, shaded pixels, submissions, and resource creation/growth. Explicit benchmark controls may disable the complete accounting snapshot path or only the resident scan without changing rendering.
+
 Frame-level camera/effect metadata is gathered in one draw-list scan. Camera coverage, camera-blur sigma, backdrop presence, and the strongest visual-effect blur plan are reused by the later policy and prepass blocks instead of rediscovering the same facts with separate passes.
 
 Camera preview rendering remains Oxide-owned. The renderer consumes `CameraBg` frame data and no longer accepts a native visible-preview draw marker in the product draw-list path.
@@ -75,6 +81,7 @@ ID-mask composition is GPU-owned. Semantic region/subregion triangles are raster
 
 ## Changelog
 
+- 2026-07-12: completed saturating logical/allocated resource accounting and frame-work counters, including previously omitted depth, bloom, ID-mask, Scene3D mesh, layer, argument-buffer, and frame-ring storage.
 - 2026-07-12: moved solid uniform selection to the vertex stage and enabled interpolated packed vertex colors without changing draw or upload counts.
 
 - 2026-06-01: added a renderer source-contract gate that keeps `wait_until_completed` confined to explicit readback helpers and out of frame hot paths.

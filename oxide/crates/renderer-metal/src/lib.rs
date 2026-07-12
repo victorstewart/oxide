@@ -55,6 +55,7 @@ use objc::runtime::Object;
 use objc::sel;
 use objc::sel_impl;
 use oxide_renderer_api as api;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::CStr;
 use std::hash::{Hash, Hasher};
@@ -943,6 +944,21 @@ pub struct MetalRenderer {
     acc_draws: u32,
     acc_instanced: u32,
     acc_icb_cmds: u32,
+    acc_commands_traversed: u64,
+    acc_commands_copied: u64,
+    acc_geometry_bytes_copied: u64,
+    acc_chunks_reused: u64,
+    acc_chunks_rebuilt: u64,
+    acc_chunks_prepared: u64,
+    acc_backend_cache_hits: u64,
+    acc_backend_cache_misses: u64,
+    acc_render_passes: u32,
+    acc_blit_passes: u32,
+    acc_texture_copies: u32,
+    acc_texture_copy_pixels: u64,
+    acc_texture_copy_bytes: u64,
+    acc_resource_creates: u32,
+    acc_resource_grows: u32,
     use_glyph_icb: bool,
     // Damage rendering flag and per-frame scissor (dp) if provided
     damage_enabled: bool,
@@ -1005,6 +1021,10 @@ pub struct MetalRenderer {
     frame_color_initialized: bool,
     frame_depth_initialized: bool,
     frame_encode_started_at: Option<Instant>,
+    accounting_stats_enabled: bool,
+    memory_stats_enabled: bool,
+    memory_texture_seen: RefCell<HashSet<usize>>,
+    memory_buffer_seen: RefCell<HashSet<usize>>,
 }
 
 #[allow(dead_code)]
@@ -1779,6 +1799,21 @@ impl MetalRenderer {
             acc_draws: 0,
             acc_instanced: 0,
             acc_icb_cmds: 0,
+            acc_commands_traversed: 0,
+            acc_commands_copied: 0,
+            acc_geometry_bytes_copied: 0,
+            acc_chunks_reused: 0,
+            acc_chunks_rebuilt: 0,
+            acc_chunks_prepared: 0,
+            acc_backend_cache_hits: 0,
+            acc_backend_cache_misses: 0,
+            acc_render_passes: 0,
+            acc_blit_passes: 0,
+            acc_texture_copies: 0,
+            acc_texture_copy_pixels: 0,
+            acc_texture_copy_bytes: 0,
+            acc_resource_creates: 0,
+            acc_resource_grows: 0,
             use_glyph_icb,
             damage_enabled,
             frame_scissor_dp: None,
@@ -1837,6 +1872,10 @@ impl MetalRenderer {
             frame_color_initialized: false,
             frame_depth_initialized: false,
             frame_encode_started_at: None,
+            accounting_stats_enabled: true,
+            memory_stats_enabled: true,
+            memory_texture_seen: RefCell::new(HashSet::with_capacity(64)),
+            memory_buffer_seen: RefCell::new(HashSet::with_capacity(32)),
         })
     }
 
@@ -2319,6 +2358,7 @@ impl MetalRenderer {
             desc.set_storage_mode(MTLStorageMode::Private);
             desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
             self.target_tex = Some(self.device.new_texture(&desc));
+            self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
         }
 
         if self.sample_count > 1 {
@@ -2340,6 +2380,7 @@ impl MetalRenderer {
                 desc.set_usage(MTLTextureUsage::RenderTarget);
                 desc.set_sample_count(self.sample_count as u64);
                 self.target_msaa_tex = Some(self.device.new_texture(&desc));
+                self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
             }
         } else {
             self.target_msaa_tex = None;
@@ -2368,6 +2409,7 @@ impl MetalRenderer {
         desc.set_storage_mode(MTLStorageMode::Private);
         desc.set_usage(MTLTextureUsage::RenderTarget);
         self.depth_tex = Some(self.device.new_texture(&desc));
+        self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
     }
 
     fn ensure_frame_command_buffer(&mut self, slot: usize) -> CommandBuffer {
@@ -2558,6 +2600,7 @@ impl MetalRenderer {
             d.set_storage_mode(MTLStorageMode::Private);
             d.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
             self.scene3d_bloom_tex = Some(self.device.new_texture(&d));
+            self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
         }
         if need_tmp {
             let d = TextureDescriptor::new();
@@ -2568,6 +2611,7 @@ impl MetalRenderer {
             d.set_storage_mode(MTLStorageMode::Private);
             d.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
             self.scene3d_bloom_tmp_tex = Some(self.device.new_texture(&d));
+            self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
         }
     }
 
@@ -2596,6 +2640,11 @@ impl MetalRenderer {
         };
         let bpr = if row_bytes == 0 { w as usize } else { row_bytes } as u64;
         tex.replace_region(region, 0, data.as_ptr() as *const _, bpr);
+        self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
+        self.last_stats.texture_upload_bytes = self
+            .last_stats
+            .texture_upload_bytes
+            .saturating_add(data.len() as u64);
         let id = self.next_image_id;
         self.next_image_id = self.next_image_id.wrapping_add(1).max(1);
         self.images.insert(id, tex);
@@ -2619,6 +2668,10 @@ impl MetalRenderer {
             };
             let bpr = if row_bytes == 0 { w as usize } else { row_bytes } as u64;
             tex.replace_region(region, 0, data.as_ptr() as *const _, bpr);
+            self.last_stats.texture_upload_bytes = self
+                .last_stats
+                .texture_upload_bytes
+                .saturating_add(data.len() as u64);
         }
     }
 
@@ -2643,6 +2696,11 @@ impl MetalRenderer {
         };
         let bpr = if row_bytes == 0 { (w as usize) * 4 } else { row_bytes } as u64;
         tex.replace_region(region, 0, data.as_ptr() as *const _, bpr);
+        self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
+        self.last_stats.texture_upload_bytes = self
+            .last_stats
+            .texture_upload_bytes
+            .saturating_add(data.len() as u64);
         let id = self.next_image_id;
         self.next_image_id = self.next_image_id.wrapping_add(1).max(1);
         self.images.insert(id, tex);
@@ -2666,11 +2724,17 @@ impl MetalRenderer {
             };
             let bpr = if row_bytes == 0 { (w as usize) * 4 } else { row_bytes } as u64;
             tex.replace_region(region, 0, data.as_ptr() as *const _, bpr);
+            self.last_stats.texture_upload_bytes = self
+                .last_stats
+                .texture_upload_bytes
+                .saturating_add(data.len() as u64);
         }
     }
 
     pub fn image_release(&mut self, handle: api::ImageHandle) {
-        let _ = self.images.remove(&handle.0);
+        if self.images.remove(&handle.0).is_some() {
+            self.last_stats.cache_evictions = self.last_stats.cache_evictions.saturating_add(1);
+        }
     }
 
     fn ensure_benchmark_camera_textures(&mut self) {
@@ -3095,6 +3159,23 @@ impl MetalRenderer {
         self.acc_draws = 0;
         self.acc_instanced = 0;
         self.acc_icb_cmds = 0;
+        if self.accounting_stats_enabled {
+            self.acc_commands_traversed = 0;
+            self.acc_commands_copied = 0;
+            self.acc_geometry_bytes_copied = 0;
+            self.acc_chunks_reused = 0;
+            self.acc_chunks_rebuilt = 0;
+            self.acc_chunks_prepared = 0;
+            self.acc_backend_cache_hits = 0;
+            self.acc_backend_cache_misses = 0;
+            self.acc_render_passes = 0;
+            self.acc_blit_passes = 0;
+            self.acc_texture_copies = 0;
+            self.acc_texture_copy_pixels = 0;
+            self.acc_texture_copy_bytes = 0;
+            self.acc_resource_creates = 0;
+            self.acc_resource_grows = 0;
+        }
         self.acc_culled = 0;
         self.last_cam_fetch_ms = 0.0;
         let mut poll_submissions_ms = 0.0;
@@ -3163,10 +3244,20 @@ impl MetalRenderer {
             self.last_cam_cs = preview.camera_color_space.max(0);
             self.acc_draws = if preview.drew_live_frame { 1 } else { 0 };
             self.last_stats = PerfStats {
-                memory: self.memory_stats(),
+                memory: self.collected_memory_stats(),
                 draws: self.acc_draws,
                 instanced: self.acc_instanced,
                 icb_cmds: self.acc_icb_cmds,
+                commands_traversed: self.acc_draws as u64,
+                render_passes: self.acc_draws,
+                command_buffers: self.acc_draws,
+                shaded_damage_px: if preview.drew_live_frame {
+                    u64::from(w).saturating_mul(u64::from(h))
+                } else {
+                    0
+                },
+                skipped_submissions: self.direct_preview_last_submission_skipped,
+                actual_submissions: (self.direct_preview_last_submission_skipped == 0) as u32,
                 encode_ms: elapsed_ms(cpu_t0),
                 damage_px: 0,
                 damage_pct: 0.0,
@@ -3295,6 +3386,7 @@ impl MetalRenderer {
                 )?;
                 setup_ms = elapsed_ms(setup_t0);
                 let encoder_t0 = collect_stage_stats.then(Instant::now);
+                self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                 let enc = with_perf_signpost("camera.renderer.direct.encoder", || {
                     cmd.new_render_command_encoder(&rpd)
                 });
@@ -3375,10 +3467,20 @@ impl MetalRenderer {
             }
             self.acc_draws = if drew_live_frame { 1 } else { 0 };
             self.last_stats = PerfStats {
-                memory: self.memory_stats(),
+                memory: self.collected_memory_stats(),
                 draws: self.acc_draws,
                 instanced: self.acc_instanced,
                 icb_cmds: self.acc_icb_cmds,
+                commands_traversed: self.acc_draws as u64,
+                render_passes: self.acc_render_passes,
+                command_buffers: 1,
+                shaded_damage_px: if drew_live_frame {
+                    u64::from(w).saturating_mul(u64::from(h))
+                } else {
+                    0
+                },
+                skipped_submissions: self.direct_preview_last_submission_skipped,
+                actual_submissions: (self.direct_preview_last_submission_skipped == 0) as u32,
                 encode_ms: elapsed_ms(cpu_t0),
                 damage_px: 0,
                 damage_pct: 0.0,
@@ -3477,6 +3579,7 @@ impl MetalRenderer {
         })?;
         let setup_ms = elapsed_ms(setup_t0);
         let encoder_t0 = collect_stage_stats.then(Instant::now);
+        self.acc_render_passes = self.acc_render_passes.saturating_add(1);
         let enc = cmd.new_render_command_encoder(&rpd);
         let encoder_ms = elapsed_ms(encoder_t0);
         let vp_dp = [
@@ -3533,10 +3636,19 @@ impl MetalRenderer {
         let commit_ms = elapsed_ms(commit_t0);
         self.track_direct_preview_submission(self.frame_id, 0, &cmd, None);
         self.last_stats = PerfStats {
-            memory: self.memory_stats(),
+            memory: self.collected_memory_stats(),
             draws: self.acc_draws,
             instanced: self.acc_instanced,
             icb_cmds: self.acc_icb_cmds,
+            commands_traversed: self.acc_draws as u64,
+            render_passes: self.acc_render_passes,
+            command_buffers: 1,
+            shaded_damage_px: if camera_props.is_some() {
+                u64::from(w).saturating_mul(u64::from(h))
+            } else {
+                0
+            },
+            actual_submissions: 1,
             encode_ms: elapsed_ms(cpu_t0),
             damage_px: 0,
             damage_pct: 0.0,
@@ -3799,6 +3911,12 @@ impl MetalRenderer {
     ) -> Result<scene3d::MeshHandle3d, api::RenderError> {
         Self::validate_mesh3d_upload(data.vertices.len(), data.indices, data.topology, false)?;
         let (vb, ib) = self.upload_mesh3d_buffers(data.vertices, data.indices)?;
+        self.acc_resource_creates = self.acc_resource_creates.saturating_add(2);
+        self.last_stats.buffer_upload_bytes = self
+            .last_stats
+            .buffer_upload_bytes
+            .saturating_add(vb.length())
+            .saturating_add(ib.length());
         Ok(self.insert_mesh3d(vb, ib, data.indices.len(), data.topology, MeshFormat3d::Position))
     }
 
@@ -3809,6 +3927,12 @@ impl MetalRenderer {
     ) -> Result<scene3d::MeshHandle3d, api::RenderError> {
         Self::validate_mesh3d_upload(data.vertices.len(), data.indices, data.topology, true)?;
         let (vb, ib) = self.upload_mesh3d_buffers(data.vertices, data.indices)?;
+        self.acc_resource_creates = self.acc_resource_creates.saturating_add(2);
+        self.last_stats.buffer_upload_bytes = self
+            .last_stats
+            .buffer_upload_bytes
+            .saturating_add(vb.length())
+            .saturating_add(ib.length());
         Ok(self.insert_mesh3d(
             vb,
             ib,
@@ -3882,6 +4006,7 @@ impl MetalRenderer {
             da.set_clear_depth(1.0);
         }
 
+        self.acc_render_passes = self.acc_render_passes.saturating_add(1);
         let enc = cmd.new_render_command_encoder(&rpd);
         enc.set_front_facing_winding(MTLWinding::CounterClockwise);
         if let Some(viewport) = pass.viewport {
@@ -3932,6 +4057,7 @@ impl MetalRenderer {
             ca.set_load_action(MTLLoadAction::Clear);
             ca.set_store_action(MTLStoreAction::Store);
             ca.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0 });
+            self.acc_render_passes = self.acc_render_passes.saturating_add(1);
             let enc = cmd.new_render_command_encoder(&rpd);
             enc.set_front_facing_winding(MTLWinding::CounterClockwise);
             for instance in bloom.emissive_instances {
@@ -3970,6 +4096,7 @@ impl MetalRenderer {
         ca.set_texture(Some(dst));
         ca.set_load_action(MTLLoadAction::DontCare);
         ca.set_store_action(MTLStoreAction::Store);
+        self.acc_render_passes = self.acc_render_passes.saturating_add(1);
         let enc = cmd.new_render_command_encoder(&rpd);
         enc.set_render_pipeline_state(&self.pso_bloom_blur);
         if let Some(sam) = &self.sampler {
@@ -3998,6 +4125,7 @@ impl MetalRenderer {
         ca.set_texture(Some(dst));
         ca.set_load_action(MTLLoadAction::Load);
         ca.set_store_action(MTLStoreAction::Store);
+        self.acc_render_passes = self.acc_render_passes.saturating_add(1);
         let enc = cmd.new_render_command_encoder(&rpd);
         enc.set_render_pipeline_state(&self.pso_bloom_composite);
         if let Some(sam) = &self.sampler {
@@ -4386,6 +4514,23 @@ impl api::Renderer for MetalRenderer {
         self.acc_draws = 0;
         self.acc_instanced = 0;
         self.acc_icb_cmds = 0;
+        if self.accounting_stats_enabled {
+            self.acc_commands_traversed = 0;
+            self.acc_commands_copied = 0;
+            self.acc_geometry_bytes_copied = 0;
+            self.acc_chunks_reused = 0;
+            self.acc_chunks_rebuilt = 0;
+            self.acc_chunks_prepared = 0;
+            self.acc_backend_cache_hits = 0;
+            self.acc_backend_cache_misses = 0;
+            self.acc_render_passes = 0;
+            self.acc_blit_passes = 0;
+            self.acc_texture_copies = 0;
+            self.acc_texture_copy_pixels = 0;
+            self.acc_texture_copy_bytes = 0;
+            self.acc_resource_creates = 0;
+            self.acc_resource_grows = 0;
+        }
         self.acc_culled = 0;
         // Defer command buffer creation until either encode_scene3d or encode_pass.
         if !self.frame_backpressure_skipped {
@@ -4397,11 +4542,13 @@ impl api::Renderer for MetalRenderer {
         self.frame_depth_initialized = false;
         self.frame_gpu_trace = None;
         self.frame_encode_started_at = Some(Instant::now());
-        if self.frame_backpressure_skipped {
-            self.last_stats = PerfStats { frame_backpressure_skipped: 1, ..PerfStats::default() };
-        } else {
-            self.last_stats.frame_backpressure_skipped = 0;
-        }
+        let memory = self.last_stats.memory;
+        self.last_stats = PerfStats {
+            memory,
+            frame_backpressure_skipped: self.frame_backpressure_skipped as u32,
+            skipped_submissions: self.frame_backpressure_skipped as u32,
+            ..PerfStats::default()
+        };
         // Reset per-frame accumulators
         self.scissor_changes = 0;
         self.prepass_shaded_px = 0;
@@ -4475,6 +4622,11 @@ impl api::Renderer for MetalRenderer {
 
     fn encode_pass(&mut self, list: &api::DrawList) {
         let cpu_t0 = std::time::Instant::now();
+        if self.accounting_stats_enabled {
+            self.acc_commands_traversed = self
+                .acc_commands_traversed
+                .saturating_add(list.items.len() as u64);
+        }
         if self.frame_backpressure_skipped {
             return;
         }
@@ -4613,6 +4765,7 @@ impl api::Renderer for MetalRenderer {
                         alpha: 1.0,
                     });
                     ca.set_store_action(MTLStoreAction::Store);
+                    self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                     let enc0 = cmd.new_render_command_encoder(&rpd0);
                     if let Some((cw, ch, bd, mx, vr, cs)) = self.encode_camera_quad(
                         &enc0,
@@ -4652,6 +4805,7 @@ impl api::Renderer for MetalRenderer {
                     ca.set_texture(Some(half));
                     ca.set_load_action(MTLLoadAction::DontCare);
                     ca.set_store_action(MTLStoreAction::Store);
+                    self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                     let enc = cmd.new_render_command_encoder(&rpd);
                     enc.set_render_pipeline_state(&self.pso_downsample);
                     if let Some(sam) = &self.sampler {
@@ -4677,6 +4831,7 @@ impl api::Renderer for MetalRenderer {
                     ca.set_texture(Some(q));
                     ca.set_load_action(MTLLoadAction::DontCare);
                     ca.set_store_action(MTLStoreAction::Store);
+                    self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                     let enc = cmd.new_render_command_encoder(&rpd);
                     enc.set_render_pipeline_state(&self.pso_downsample);
                     if let Some(sam) = &self.sampler {
@@ -4703,6 +4858,7 @@ impl api::Renderer for MetalRenderer {
                         ca.set_texture(Some(qtmp));
                         ca.set_load_action(MTLLoadAction::DontCare);
                         ca.set_store_action(MTLStoreAction::Store);
+                        self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                         let enc = cmd.new_render_command_encoder(&rpd);
                         enc.set_render_pipeline_state(&self.pso_blur);
                         if let Some(sam) = &self.sampler {
@@ -4732,6 +4888,7 @@ impl api::Renderer for MetalRenderer {
                         ca2.set_texture(Some(q));
                         ca2.set_load_action(MTLLoadAction::DontCare);
                         ca2.set_store_action(MTLStoreAction::Store);
+                        self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                         let enc2 = cmd.new_render_command_encoder(&rpd2);
                         enc2.set_render_pipeline_state(&self.pso_blur);
                         if let Some(sam) = &self.sampler {
@@ -4916,6 +5073,7 @@ impl api::Renderer for MetalRenderer {
                                 alpha: 0.0,
                             });
                             ca_l.set_store_action(MTLStoreAction::Store);
+                            self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                             let encl = cmd.new_render_command_encoder(&rpdl);
                             let mut pf_l =
                                 self.layer_scratch_frame.take().unwrap_or_else(PerFrame::new);
@@ -4943,6 +5101,8 @@ impl api::Renderer for MetalRenderer {
                             encl.end_encoding();
                             self.layer_scratch_frame = Some(pf_l);
                             self.layers.insert(*id, LayerEntry { tex, w: w_px, h: h_px, hash });
+                            self.acc_resource_creates =
+                                self.acc_resource_creates.saturating_add(1);
                         }
                         self.layer_sublist = sub;
                     }
@@ -4965,6 +5125,7 @@ impl api::Renderer for MetalRenderer {
             ca_pre.set_load_action(MTLLoadAction::Clear);
             ca_pre.set_clear_color(MTLClearColor { red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0 });
             ca_pre.set_store_action(MTLStoreAction::Store);
+            self.acc_render_passes = self.acc_render_passes.saturating_add(1);
             let enc0 = cmd.new_render_command_encoder(&rpd0);
             // Move out per-frame to avoid double-borrow
             let mut pf0 = core::mem::take(&mut self.frames[slot]);
@@ -5041,6 +5202,9 @@ impl api::Renderer for MetalRenderer {
             }
             encode_draws(&enc0, &mut pf0, self, list_pre_view, true, prepass_scissor_dp);
             if used_filtered_prepass {
+                self.acc_commands_copied = self
+                    .acc_commands_copied
+                    .saturating_add(filtered_prepass.items.len() as u64);
                 filtered_prepass.items.clear();
             }
             self.filtered_prepass = filtered_prepass;
@@ -5110,6 +5274,7 @@ impl api::Renderer for MetalRenderer {
                 }
                 ca_ds1.set_load_action(MTLLoadAction::DontCare);
                 ca_ds1.set_store_action(MTLStoreAction::Store);
+                self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                 let enc_ds1 = cmd.new_render_command_encoder(&rpd_ds1);
                 enc_ds1.set_render_pipeline_state(&self.pso_downsample);
                 if let Some(sam) = &self.sampler {
@@ -5133,6 +5298,7 @@ impl api::Renderer for MetalRenderer {
                 }
                 ca_ds2.set_load_action(MTLLoadAction::DontCare);
                 ca_ds2.set_store_action(MTLStoreAction::Store);
+                self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                 let enc_ds2 = cmd.new_render_command_encoder(&rpd_ds2);
                 enc_ds2.set_render_pipeline_state(&self.pso_downsample);
                 if let Some(sam) = &self.sampler {
@@ -5156,6 +5322,7 @@ impl api::Renderer for MetalRenderer {
                     }
                     ca_ds3.set_load_action(MTLLoadAction::DontCare);
                     ca_ds3.set_store_action(MTLStoreAction::Store);
+                    self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                     let enc_ds3 = cmd.new_render_command_encoder(&rpd_ds3);
                     enc_ds3.set_render_pipeline_state(&self.pso_downsample);
                     if let Some(sam) = &self.sampler {
@@ -5193,6 +5360,7 @@ impl api::Renderer for MetalRenderer {
                 }
                 ca_blur_h.set_load_action(MTLLoadAction::DontCare);
                 ca_blur_h.set_store_action(MTLStoreAction::Store);
+                self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                 let enc1 = cmd.new_render_command_encoder(&rpd1);
                 enc1.set_render_pipeline_state(&self.pso_blur);
                 if let Some(sam) = &self.sampler {
@@ -5229,6 +5397,7 @@ impl api::Renderer for MetalRenderer {
                 }
                 ca_blur_v.set_load_action(MTLLoadAction::DontCare);
                 ca_blur_v.set_store_action(MTLStoreAction::Store);
+                self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                 let enc2 = cmd.new_render_command_encoder(&rpd2);
                 enc2.set_render_pipeline_state(&self.pso_blur);
                 if let Some(sam) = &self.sampler {
@@ -5262,6 +5431,7 @@ impl api::Renderer for MetalRenderer {
                     }
                     ca_us0.set_load_action(MTLLoadAction::DontCare);
                     ca_us0.set_store_action(MTLStoreAction::Store);
+                    self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                     let enc_us0 = cmd.new_render_command_encoder(&rpd_us0);
                     enc_us0.set_render_pipeline_state(&self.pso_upsample);
                     if let Some(sam) = &self.sampler {
@@ -5292,6 +5462,7 @@ impl api::Renderer for MetalRenderer {
                 }
                 ca_us1.set_load_action(MTLLoadAction::DontCare);
                 ca_us1.set_store_action(MTLStoreAction::Store);
+                self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                 let enc_us1 = cmd.new_render_command_encoder(&rpd_us1);
                 enc_us1.set_render_pipeline_state(&self.pso_upsample);
                 if let Some(sam) = &self.sampler {
@@ -5321,6 +5492,7 @@ impl api::Renderer for MetalRenderer {
                 }
                 ca_us2.set_load_action(MTLLoadAction::DontCare);
                 ca_us2.set_store_action(MTLStoreAction::Store);
+                self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                 let enc_us2 = cmd.new_render_command_encoder(&rpd_us2);
                 enc_us2.set_render_pipeline_state(&self.pso_upsample);
                 if let Some(sam) = &self.sampler {
@@ -5410,6 +5582,9 @@ impl api::Renderer for MetalRenderer {
             gpu_trace.configure_render_pass(&rpd);
         }
         self.frame_gpu_trace = frame_gpu_trace;
+        if self.accounting_stats_enabled {
+            self.acc_render_passes = self.acc_render_passes.saturating_add(1);
+        }
         let enc = cmd.new_render_command_encoder(&rpd);
         // Move out per-frame to avoid double-borrow on &mut self
         let mut pf = core::mem::take(&mut self.frames[slot]);
@@ -5428,6 +5603,9 @@ impl api::Renderer for MetalRenderer {
         }
         encode_draws(&enc, &mut pf, self, list_main_view, false, main_scissor);
         if used_filtered_main {
+            self.acc_commands_copied = self
+                .acc_commands_copied
+                .saturating_add(filtered_main.items.len() as u64);
             filtered_main.items.clear();
         }
         self.filtered_main = filtered_main;
@@ -5441,6 +5619,42 @@ impl api::Renderer for MetalRenderer {
         self.last_stats.draws = self.acc_draws;
         self.last_stats.instanced = self.acc_instanced;
         self.last_stats.icb_cmds = self.acc_icb_cmds;
+        if self.accounting_stats_enabled {
+            self.last_stats.commands_traversed = self.acc_commands_traversed;
+            self.last_stats.commands_copied = self.acc_commands_copied;
+            self.last_stats.geometry_bytes_copied = self.acc_geometry_bytes_copied;
+            self.last_stats.chunks_reused = self.acc_chunks_reused;
+            self.last_stats.chunks_rebuilt = self.acc_chunks_rebuilt;
+            self.last_stats.chunks_prepared = self.acc_chunks_prepared;
+            self.last_stats.backend_cache_hits = self.acc_backend_cache_hits;
+            self.last_stats.backend_cache_misses = self.acc_backend_cache_misses;
+            self.last_stats.render_passes = self.acc_render_passes;
+            self.last_stats.blit_passes = self.acc_blit_passes;
+            self.last_stats.command_buffers = self.frames[slot].cmd.is_some() as u32;
+            self.last_stats.texture_copies = self.acc_texture_copies;
+            self.last_stats.texture_copy_pixels = self.acc_texture_copy_pixels;
+            self.last_stats.texture_copy_bytes = self.acc_texture_copy_bytes;
+            self.last_stats.buffer_upload_bytes = (self.frames[slot].vb_used as u64)
+                .saturating_add(self.frames[slot].ib_used as u64)
+                .saturating_add(self.frames[slot].ub_used as u64);
+            self.last_stats.geometry_bytes_copied = self
+                .last_stats
+                .geometry_bytes_copied
+                .saturating_add(self.last_stats.buffer_upload_bytes);
+            self.last_stats.shaded_damage_px =
+                self.main_shaded_px.saturating_add(self.prepass_shaded_px);
+            self.last_stats.resource_creates = self.acc_resource_creates;
+            self.last_stats.resource_grows = self.acc_resource_grows;
+            if self.memory_stats_enabled && self.frame_id.saturating_sub(1) % 60 == 0 {
+                self.last_stats.memory = self.memory_stats();
+            }
+            self.last_stats.cache_bytes = self
+                .last_stats
+                .memory
+                .layer_cache_bytes
+                .saturating_add(self.last_stats.memory.image_cache_bytes)
+                .saturating_add(self.last_stats.memory.id_mask_vertex_buffer_bytes);
+        }
         self.last_stats.encode_ms = cpu_t0.elapsed().as_secs_f64() * 1000.0;
         self.last_stats.damage_px = self.frame_damage_px;
         self.last_stats.damage_pct = self.frame_damage_pct;
@@ -5523,6 +5737,31 @@ impl api::Renderer for MetalRenderer {
         self.pending_present_drawable = 0;
         self.pending_present_texture = 0;
         self.frame_present_direct_to_drawable = false;
+        if self.accounting_stats_enabled {
+            self.last_stats.commands_traversed = self.acc_commands_traversed;
+            self.last_stats.commands_copied = self.acc_commands_copied;
+            self.last_stats.geometry_bytes_copied = self
+                .last_stats
+                .geometry_bytes_copied
+                .max(self.acc_geometry_bytes_copied);
+            self.last_stats.chunks_reused = self.acc_chunks_reused;
+            self.last_stats.chunks_rebuilt = self.acc_chunks_rebuilt;
+            self.last_stats.chunks_prepared = self.acc_chunks_prepared;
+            self.last_stats.backend_cache_hits = self.acc_backend_cache_hits;
+            self.last_stats.backend_cache_misses = self.acc_backend_cache_misses;
+            self.last_stats.render_passes = self.acc_render_passes;
+            self.last_stats.resource_creates = self.acc_resource_creates;
+            self.last_stats.resource_grows = self.acc_resource_grows;
+            if self.memory_stats_enabled && self.frame_id.saturating_sub(1) % 60 == 0 {
+                self.last_stats.memory = self.memory_stats();
+            }
+            self.last_stats.cache_bytes = self
+                .last_stats
+                .memory
+                .layer_cache_bytes
+                .saturating_add(self.last_stats.memory.image_cache_bytes)
+                .saturating_add(self.last_stats.memory.id_mask_vertex_buffer_bytes);
+        }
         if let Some(cmd) = self.frames[slot].cmd.take() {
             let frame_id = self.frame_id;
             let log_enabled = ios_log_enabled();
@@ -5548,6 +5787,7 @@ impl api::Renderer for MetalRenderer {
                     }
                     let dst = unsafe { TextureRef::from_ptr(raw_dst_tex) };
                     let blit = cmd.new_blit_command_encoder();
+                    self.last_stats.blit_passes = self.last_stats.blit_passes.saturating_add(1);
                     let origin = MTLOrigin { x: 0, y: 0, z: 0 };
                     let copy_w = src.width().min(dst.width());
                     let copy_h = src.height().min(dst.height());
@@ -5558,6 +5798,17 @@ impl api::Renderer for MetalRenderer {
                     }
                     let size = MTLSize { width: copy_w, height: copy_h, depth: 1 };
                     blit.copy_from_texture(src, 0, 0, origin, size, dst, 0, 0, origin);
+                    let copy_pixels = copy_w.saturating_mul(copy_h);
+                    self.last_stats.texture_copies =
+                        self.last_stats.texture_copies.saturating_add(1);
+                    self.last_stats.texture_copy_pixels = self
+                        .last_stats
+                        .texture_copy_pixels
+                        .saturating_add(copy_pixels);
+                    self.last_stats.texture_copy_bytes = self
+                        .last_stats
+                        .texture_copy_bytes
+                        .saturating_add(copy_pixels.saturating_mul(4));
                     blit.end_encoding();
                     cmd.present_drawable(drawable);
                 } else {
@@ -5613,6 +5864,10 @@ impl api::Renderer for MetalRenderer {
             cmd.add_completed_handler(&completion);
             self.frames[slot].mark_submitted(&cmd);
             cmd.commit();
+            if self.accounting_stats_enabled {
+                self.last_stats.actual_submissions =
+                    self.last_stats.actual_submissions.saturating_add(1);
+            }
             if trace {
                 let total_ms = trace_started_at
                     .map(|start| start.elapsed().as_secs_f64() * 1000.0)
@@ -5628,19 +5883,26 @@ impl api::Renderer for MetalRenderer {
                     self.gpu_stage_timing.is_some()
                 ));
             }
-        } else if trace {
-            let total_ms =
-                trace_started_at.map(|start| start.elapsed().as_secs_f64() * 1000.0).unwrap_or(0.0);
-            renderer_trace_log(&format!(
-                "OXIDE_METAL_TRACE phase=submit frame={} total_ms={:.3} had_command=0 slot={} present_drawable={} direct_present={} blit_present={} gpu_timestamps={}",
-                self.frame_id,
-                total_ms,
-                slot,
-                has_present_drawable,
-                present_direct_to_drawable,
-                blit_present_to_drawable,
-                self.gpu_stage_timing.is_some()
-            ));
+        } else {
+            if self.accounting_stats_enabled {
+                self.last_stats.skipped_submissions =
+                    self.last_stats.skipped_submissions.saturating_add(1);
+            }
+            if trace {
+                let total_ms = trace_started_at
+                    .map(|start| start.elapsed().as_secs_f64() * 1000.0)
+                    .unwrap_or(0.0);
+                renderer_trace_log(&format!(
+                    "OXIDE_METAL_TRACE phase=submit frame={} total_ms={:.3} had_command=0 slot={} present_drawable={} direct_present={} blit_present={} gpu_timestamps={}",
+                    self.frame_id,
+                    total_ms,
+                    slot,
+                    has_present_drawable,
+                    present_direct_to_drawable,
+                    blit_present_to_drawable,
+                    self.gpu_stage_timing.is_some()
+                ));
+            }
         }
         Ok(())
     }
@@ -6133,6 +6395,17 @@ fn encode_draws_range(
                     }
                 }
                 let hash = hasher.finish();
+                r.acc_commands_copied = r
+                    .acc_commands_copied
+                    .saturating_add(sub.items.len() as u64);
+                r.acc_geometry_bytes_copied = r.acc_geometry_bytes_copied.saturating_add(
+                    (sub.vertices.len() as u64)
+                        .saturating_mul(core::mem::size_of::<api::Vertex>() as u64)
+                        .saturating_add(
+                            (sub.indices.len() as u64)
+                                .saturating_mul(core::mem::size_of::<u16>() as u64),
+                        ),
+                );
                 r.layer_sublist = sub;
                 // Ensure layer texture exists (px)
                 let w_px = (rect.w * r.target_scale.max(1.0)).ceil() as u32;
@@ -6144,6 +6417,7 @@ fn encode_draws_range(
                         .map(|e| e.w != w_px || e.h != h_px || e.hash != hash)
                         .unwrap_or(true);
                 if do_render {
+                    r.acc_backend_cache_misses = r.acc_backend_cache_misses.saturating_add(1);
                     // If the cache did not get refreshed in pre-scan, render inline.
                     // This avoids composing stale or empty layer textures.
                     let resume_scissor = effective_scissor_dp(current, global_scissor_dp);
@@ -6152,6 +6426,7 @@ fn encode_draws_range(
                     i = end + 1;
                     continue;
                 }
+                r.acc_backend_cache_hits = r.acc_backend_cache_hits.saturating_add(1);
                 // Composite the cached layer via nine-slice (no slicing)
                 if let Some(layer) = r.layers.get(id) {
                     enc.set_render_pipeline_state(&r.pso_nine_slice);
@@ -6217,7 +6492,9 @@ fn encode_draws_range(
                 let v_count = vb.len as usize;
                 let v_bytes = v_count * core::mem::size_of::<api::Vertex>();
                 let slot = r.current_frame_slot();
-                r.vb.ensure_capacity(&r.device, slot, pf.vb_used + v_bytes);
+                if r.vb.ensure_capacity(&r.device, slot, pf.vb_used + v_bytes) {
+                    r.acc_resource_grows = r.acc_resource_grows.saturating_add(1);
+                }
                 let src_slice =
                     &list.vertices[(vb.offset as usize)..(vb.offset as usize + v_count)];
                 let dst_vertices = unsafe {
@@ -6234,7 +6511,9 @@ fn encode_draws_range(
                 let rgba = [color.r, color.g, color.b, color.a];
                 let ub_off = pf.ub_used as u64;
                 let u_bytes = core::mem::size_of_val(&rgba);
-                r.ub.ensure_capacity(&r.device, slot, pf.ub_used + u_bytes);
+                if r.ub.ensure_capacity(&r.device, slot, pf.ub_used + u_bytes) {
+                    r.acc_resource_grows = r.acc_resource_grows.saturating_add(1);
+                }
                 unsafe {
                     core::ptr::copy_nonoverlapping(
                         rgba.as_ptr() as *const u8,
@@ -6251,7 +6530,9 @@ fn encode_draws_range(
                     let isrc_slice =
                         &list.indices[(ib.offset as usize)..(ib.offset as usize + idx_count)];
                     let i_bytes = isrc_slice.len() * core::mem::size_of::<u16>();
-                    r.ib.ensure_capacity(&r.device, slot, pf.ib_used + i_bytes);
+                    if r.ib.ensure_capacity(&r.device, slot, pf.ib_used + i_bytes) {
+                        r.acc_resource_grows = r.acc_resource_grows.saturating_add(1);
+                    }
                     let idst = unsafe {
                         core::slice::from_raw_parts_mut(
                             r.ib.contents_ptr(slot).as_ptr().add(pf.ib_used),
@@ -6434,7 +6715,9 @@ fn encode_draws_range(
                     );
 
                     let v_bytes = v_count * core::mem::size_of::<api::Vertex>();
-                    r.vb.ensure_capacity(&r.device, slot, pf.vb_used + v_bytes);
+                    if r.vb.ensure_capacity(&r.device, slot, pf.vb_used + v_bytes) {
+                        r.acc_resource_grows = r.acc_resource_grows.saturating_add(1);
+                    }
                     let dst = unsafe {
                         core::slice::from_raw_parts_mut(
                             r.vb.contents_ptr(slot).as_ptr().add(pf.vb_used),
@@ -6450,7 +6733,9 @@ fn encode_draws_range(
                     let rgba = [1.0_f32, 1.0, 1.0, alpha.clamp(0.0, 1.0)];
                     let ub_off = pf.ub_used as u64;
                     let u_bytes = core::mem::size_of_val(&rgba);
-                    r.ub.ensure_capacity(&r.device, slot, pf.ub_used + u_bytes);
+                    if r.ub.ensure_capacity(&r.device, slot, pf.ub_used + u_bytes) {
+                        r.acc_resource_grows = r.acc_resource_grows.saturating_add(1);
+                    }
                     unsafe {
                         core::ptr::copy_nonoverlapping(
                             rgba.as_ptr().cast::<u8>(),
@@ -6471,7 +6756,9 @@ fn encode_draws_range(
                             continue;
                         };
                         let i_bytes = isrc_slice.len() * core::mem::size_of::<u16>();
-                        r.ib.ensure_capacity(&r.device, slot, pf.ib_used + i_bytes);
+                        if r.ib.ensure_capacity(&r.device, slot, pf.ib_used + i_bytes) {
+                            r.acc_resource_grows = r.acc_resource_grows.saturating_add(1);
+                        }
                         let idst = unsafe {
                             core::slice::from_raw_parts_mut(
                                 r.ib.contents_ptr(slot).as_ptr().add(pf.ib_used),
@@ -6680,7 +6967,9 @@ fn encode_draws_range(
                         // Upload VB
                         let v_count = run.vb.len as usize;
                         let v_bytes = v_count * core::mem::size_of::<api::Vertex>();
-                        r.vb.ensure_capacity(&r.device, slot, pf.vb_used + v_bytes);
+                        if r.vb.ensure_capacity(&r.device, slot, pf.vb_used + v_bytes) {
+                            r.acc_resource_grows = r.acc_resource_grows.saturating_add(1);
+                        }
                         let dst = unsafe {
                             core::slice::from_raw_parts_mut(
                                 r.vb.contents_ptr(slot).as_ptr().add(pf.vb_used),
@@ -6699,7 +6988,9 @@ fn encode_draws_range(
                         let rgba = [run.color.r, run.color.g, run.color.b, run.color.a];
                         let ub_off = pf.ub_used as u64;
                         let u_bytes = core::mem::size_of_val(&rgba);
-                        r.ub.ensure_capacity(&r.device, slot, pf.ub_used + u_bytes);
+                        if r.ub.ensure_capacity(&r.device, slot, pf.ub_used + u_bytes) {
+                            r.acc_resource_grows = r.acc_resource_grows.saturating_add(1);
+                        }
                         unsafe {
                             core::ptr::copy_nonoverlapping(
                                 rgba.as_ptr() as *const u8,
@@ -6716,7 +7007,9 @@ fn encode_draws_range(
                             let isrc_slice = &list.indices
                                 [(run.ib.offset as usize)..(run.ib.offset as usize + idx_count)];
                             let i_bytes = isrc_slice.len() * core::mem::size_of::<u16>();
-                            r.ib.ensure_capacity(&r.device, slot, pf.ib_used + i_bytes);
+                            if r.ib.ensure_capacity(&r.device, slot, pf.ib_used + i_bytes) {
+                                r.acc_resource_grows = r.acc_resource_grows.saturating_add(1);
+                            }
                             let idst = unsafe {
                                 core::slice::from_raw_parts_mut(
                                     r.ib.contents_ptr(slot).as_ptr().add(pf.ib_used),
@@ -8090,6 +8383,10 @@ fn build_sampler(device: &Device) -> Option<SamplerState> {
     Some(device.new_sampler(&desc))
 }
 
+fn saturating_resource_bytes(dimensions: &[u64], bytes_per_element: u64) -> u64 {
+    dimensions.iter().copied().fold(bytes_per_element, u64::saturating_mul)
+}
+
 struct PerFrame {
     cmd: Option<CommandBuffer>,
     submitted: Option<CommandBuffer>,
@@ -8165,9 +8462,9 @@ impl Ring {
             opts,
         }
     }
-    fn ensure_capacity(&mut self, device: &Device, slot: usize, needed: usize) {
+    fn ensure_capacity(&mut self, device: &Device, slot: usize, needed: usize) -> bool {
         if needed <= self.cap[slot] {
-            return;
+            return false;
         }
         let mut new_cap = self.cap[slot] + self.cap[slot] / 2;
         if new_cap < needed {
@@ -8188,6 +8485,7 @@ impl Ring {
         }
         self.bufs[slot] = new_buf;
         self.cap[slot] = new_cap;
+        true
     }
     fn contents_ptr(&self, slot: usize) -> NonNull<u8> {
         let p = self.bufs[slot].contents();
@@ -8207,6 +8505,9 @@ struct LayerEntry {
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PerfMemoryStats {
+    pub logical_total_bytes: u64,
+    pub logical_texture_bytes: u64,
+    pub logical_buffer_bytes: u64,
     pub total_bytes: u64,
     pub draw_targets_bytes: u64,
     pub draw_target_main_bytes: u64,
@@ -8214,6 +8515,9 @@ pub struct PerfMemoryStats {
     pub effect_targets_bytes: u64,
     pub effect_prepass_bytes: u64,
     pub effect_blur_chain_bytes: u64,
+    pub depth_target_bytes: u64,
+    pub bloom_targets_bytes: u64,
+    pub id_mask_target_bytes: u64,
     pub live_camera_bytes: u64,
     pub camera_cache_bytes: u64,
     pub camera_blur_cache_bytes: u64,
@@ -8221,7 +8525,15 @@ pub struct PerfMemoryStats {
     pub benchmark_camera_bytes: u64,
     pub layer_cache_bytes: u64,
     pub image_cache_bytes: u64,
+    pub scene3d_mesh_buffer_bytes: u64,
+    pub id_mask_vertex_buffer_bytes: u64,
+    pub frame_ring_buffer_bytes: u64,
+    pub vertex_buffer_bytes: u64,
+    pub index_buffer_bytes: u64,
+    pub uniform_buffer_bytes: u64,
+    pub argument_buffer_bytes: u64,
     pub buffer_bytes: u64,
+    pub cpu_staging_bytes: u64,
     pub pending_command_buffers: u32,
     pub pending_present_drawables: u32,
     pub pending_present_textures: u32,
@@ -8236,6 +8548,30 @@ pub struct PerfStats {
     pub draws: u32,
     pub instanced: u32,
     pub icb_cmds: u32,
+    pub commands_traversed: u64,
+    pub commands_copied: u64,
+    pub geometry_bytes_copied: u64,
+    pub chunks_reused: u64,
+    pub chunks_rebuilt: u64,
+    pub chunks_prepared: u64,
+    pub backend_cache_hits: u64,
+    pub backend_cache_misses: u64,
+    pub render_passes: u32,
+    pub blit_passes: u32,
+    pub command_buffers: u32,
+    pub texture_copies: u32,
+    pub texture_copy_pixels: u64,
+    pub texture_copy_bytes: u64,
+    pub buffer_upload_bytes: u64,
+    pub texture_upload_bytes: u64,
+    pub shaded_damage_px: u64,
+    pub cache_bytes: u64,
+    pub cache_evictions: u32,
+    pub wakeups: u32,
+    pub skipped_submissions: u32,
+    pub actual_submissions: u32,
+    pub resource_creates: u32,
+    pub resource_grows: u32,
     pub encode_ms: f64,
     pub gpu_frame_id: u64,
     pub gpu_ms: f64,
@@ -8294,12 +8630,68 @@ impl MetalRenderer {
         self.damage_prefilter_thresh = prefilter.clamp(0.0, 1.0);
     }
 
+    pub fn set_memory_stats_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.memory_stats_enabled = enabled;
+        if !enabled {
+            self.last_stats.memory = PerfMemoryStats::default();
+        }
+    }
+
+    pub fn set_accounting_stats_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.accounting_stats_enabled = enabled;
+        self.set_memory_stats_enabled_for_benchmark(enabled);
+    }
+
     fn texture_allocated_bytes(tex: &TextureRef) -> u64 {
         tex.allocated_size() as u64
     }
 
     fn buffer_allocated_bytes(buf: &BufferRef) -> u64 {
         buf.allocated_size() as u64
+    }
+
+    fn texture_logical_bytes(tex: &TextureRef) -> u64 {
+        let bytes_per_pixel = match tex.pixel_format() {
+            MTLPixelFormat::R8Unorm | MTLPixelFormat::R8Uint => 1,
+            MTLPixelFormat::RG8Unorm => 2,
+            MTLPixelFormat::BGRA8Unorm_sRGB | MTLPixelFormat::BGRA10_XR
+                | MTLPixelFormat::Depth32Float => 4,
+            MTLPixelFormat::RGBA16Float => 8,
+            MTLPixelFormat::RGBA32Float => 16,
+            _ => return Self::texture_allocated_bytes(tex),
+        };
+        saturating_resource_bytes(
+            &[
+                tex.width() as u64,
+                tex.height() as u64,
+                tex.depth() as u64,
+                tex.array_length() as u64,
+                tex.sample_count() as u64,
+            ],
+            bytes_per_pixel,
+        )
+    }
+
+    fn push_unique_texture_logical_bytes(
+        seen: &mut HashSet<usize>,
+        total: &mut u64,
+        tex: &TextureRef,
+    ) {
+        let key = tex.as_ptr() as usize;
+        if seen.insert(key) {
+            *total = total.saturating_add(Self::texture_logical_bytes(tex));
+        }
+    }
+
+    fn push_unique_buffer_logical_bytes(
+        seen: &mut HashSet<usize>,
+        total: &mut u64,
+        buf: &BufferRef,
+    ) {
+        let key = buf.as_ptr() as usize;
+        if seen.insert(key) {
+            *total = total.saturating_add(buf.length());
+        }
     }
 
     fn push_unique_texture_bytes(seen: &mut HashSet<usize>, total: &mut u64, tex: &TextureRef) {
@@ -8338,8 +8730,17 @@ impl MetalRenderer {
         total
     }
 
+    fn collected_memory_stats(&self) -> PerfMemoryStats {
+        if self.memory_stats_enabled {
+            self.memory_stats()
+        } else {
+            PerfMemoryStats::default()
+        }
+    }
+
     fn memory_stats(&self) -> PerfMemoryStats {
-        let mut seen = HashSet::new();
+        let mut seen = self.memory_texture_seen.borrow_mut();
+        seen.clear();
         let draw_target_main_bytes = Self::unique_texture_category_bytes(
             &mut seen,
             self.target_tex.iter().map(|tex| tex.as_ref()),
@@ -8365,6 +8766,32 @@ impl MetalRenderer {
                 .chain(self.eighth_tmp_tex.iter().map(|tex| tex.as_ref())),
         );
         let effect_targets_bytes = effect_prepass_bytes.saturating_add(effect_blur_chain_bytes);
+        let depth_target_bytes = Self::unique_texture_category_bytes(
+            &mut seen,
+            self.depth_tex.iter().map(|tex| tex.as_ref()),
+        );
+        let bloom_targets_bytes = Self::unique_texture_category_bytes(
+            &mut seen,
+            self.scene3d_bloom_tex
+                .iter()
+                .map(|tex| tex.as_ref())
+                .chain(self.scene3d_bloom_tmp_tex.iter().map(|tex| tex.as_ref())),
+        );
+        let id_mask_target_bytes = Self::unique_texture_category_bytes(
+            &mut seen,
+            self.id_mask_targets.iter().filter_map(|targets| targets.as_ref()).flat_map(
+                |targets| {
+                    [
+                        targets.city.as_ref(),
+                        targets.neighborhood.as_ref(),
+                        targets.city_field_a.as_ref(),
+                        targets.city_field_b.as_ref(),
+                        targets.seam_field_a.as_ref(),
+                        targets.seam_field_b.as_ref(),
+                    ]
+                },
+            ),
+        );
         let camera_blur_cache_bytes = Self::unique_texture_category_bytes(
             &mut seen,
             self.cam_blur_tex.iter().map(|tex| tex.as_ref()),
@@ -8398,33 +8825,189 @@ impl MetalRenderer {
             &mut seen,
             self.images.values().map(|tex| tex.as_ref()),
         );
-        let buffer_bytes = Self::unique_buffer_category_bytes(
-            &mut seen,
-            self.vb
-                .bufs
-                .iter()
-                .map(|buf| buf.as_ref())
-                .chain(self.ib.bufs.iter().map(|buf| buf.as_ref()))
-                .chain(self.ub.bufs.iter().map(|buf| buf.as_ref()))
-                .chain(
-                    self.img_arg_bufs.iter().flat_map(|bufs| bufs.iter().map(|buf| buf.as_ref())),
-                ),
+        drop(seen);
+        let mut buffer_seen = self.memory_buffer_seen.borrow_mut();
+        buffer_seen.clear();
+        let vertex_buffer_bytes = Self::unique_buffer_category_bytes(
+            &mut buffer_seen,
+            self.vb.bufs.iter().map(|buf| buf.as_ref()),
         );
+        let index_buffer_bytes = Self::unique_buffer_category_bytes(
+            &mut buffer_seen,
+            self.ib.bufs.iter().map(|buf| buf.as_ref()),
+        );
+        let uniform_buffer_bytes = Self::unique_buffer_category_bytes(
+            &mut buffer_seen,
+            self.ub.bufs.iter().map(|buf| buf.as_ref()),
+        );
+        let frame_ring_buffer_bytes = vertex_buffer_bytes
+            .saturating_add(index_buffer_bytes)
+            .saturating_add(uniform_buffer_bytes);
+        let argument_buffer_bytes = Self::unique_buffer_category_bytes(
+            &mut buffer_seen,
+            self.img_arg_bufs.iter().flat_map(|bufs| bufs.iter().map(|buf| buf.as_ref())),
+        );
+        let id_mask_vertex_buffer_bytes = Self::unique_buffer_category_bytes(
+            &mut buffer_seen,
+            self.id_mask_vertex_caches.iter().map(|cache| cache.buffer.as_ref()),
+        );
+        let scene3d_mesh_buffer_bytes = Self::unique_buffer_category_bytes(
+            &mut buffer_seen,
+            self.meshes_3d
+                .values()
+                .flat_map(|mesh| [mesh.vb.as_ref(), mesh.ib.as_ref()]),
+        );
+        let buffer_bytes = frame_ring_buffer_bytes
+            .saturating_add(argument_buffer_bytes)
+            .saturating_add(id_mask_vertex_buffer_bytes)
+            .saturating_add(scene3d_mesh_buffer_bytes);
+        drop(buffer_seen);
+        let total_bytes = draw_targets_bytes
+            .saturating_add(effect_targets_bytes)
+            .saturating_add(depth_target_bytes)
+            .saturating_add(bloom_targets_bytes)
+            .saturating_add(id_mask_target_bytes)
+            .saturating_add(live_camera_bytes)
+            .saturating_add(camera_cache_bytes)
+            .saturating_add(benchmark_camera_bytes)
+            .saturating_add(layer_cache_bytes)
+            .saturating_add(image_cache_bytes)
+            .saturating_add(buffer_bytes);
+        let mut logical_seen = self.memory_texture_seen.borrow_mut();
+        logical_seen.clear();
+        let mut logical_total_bytes = 0;
+        for texture in self
+            .target_tex
+            .iter()
+            .chain(self.target_msaa_tex.iter())
+            .chain(self.depth_tex.iter())
+            .chain(self.prepass_tex.iter())
+            .chain(self.blur_tmp_tex.iter())
+            .chain(self.half_tex.iter())
+            .chain(self.quarter_tex.iter())
+            .chain(self.quarter_tmp_tex.iter())
+            .chain(self.eighth_tex.iter())
+            .chain(self.eighth_tmp_tex.iter())
+            .chain(self.scene3d_bloom_tex.iter())
+            .chain(self.scene3d_bloom_tmp_tex.iter())
+            .chain(self.cam_blur_tex.iter())
+            .chain(self.cam_xfade_prev_tex.iter())
+            .chain(self.bench_cam_y_tex.iter())
+            .chain(self.bench_cam_uv_tex.iter())
+            .chain(self.bench_cam_bgra_tex.iter())
+            .chain(self.layers.values().map(|entry| &entry.tex))
+            .chain(self.images.values())
+        {
+            Self::push_unique_texture_logical_bytes(
+                &mut logical_seen,
+                &mut logical_total_bytes,
+                texture,
+            );
+        }
+        for targets in self.id_mask_targets.iter().filter_map(|targets| targets.as_ref()) {
+            for texture in [
+                &targets.city,
+                &targets.neighborhood,
+                &targets.city_field_a,
+                &targets.city_field_b,
+                &targets.seam_field_a,
+                &targets.seam_field_b,
+            ] {
+                Self::push_unique_texture_logical_bytes(
+                    &mut logical_seen,
+                    &mut logical_total_bytes,
+                    texture,
+                );
+            }
+        }
+        if let Some(frame) = &self.current_live_camera_frame {
+            let y_tex = unsafe { TextureRef::from_ptr(frame.y_tex as *mut MTLTexture) };
+            let uv_tex = unsafe { TextureRef::from_ptr(frame.uv_tex as *mut MTLTexture) };
+            Self::push_unique_texture_logical_bytes(
+                &mut logical_seen,
+                &mut logical_total_bytes,
+                y_tex,
+            );
+            Self::push_unique_texture_logical_bytes(
+                &mut logical_seen,
+                &mut logical_total_bytes,
+                uv_tex,
+            );
+        }
+        let logical_texture_bytes = logical_total_bytes;
+        drop(logical_seen);
+        let mut logical_buffer_seen = self.memory_buffer_seen.borrow_mut();
+        logical_buffer_seen.clear();
+        for buffer in self
+            .vb
+            .bufs
+            .iter()
+            .chain(self.ib.bufs.iter())
+            .chain(self.ub.bufs.iter())
+            .chain(self.img_arg_bufs.iter().flat_map(|buffers| buffers.iter()))
+            .chain(self.id_mask_vertex_caches.iter().map(|cache| &cache.buffer))
+            .chain(self.meshes_3d.values().flat_map(|mesh| [&mesh.vb, &mesh.ib]))
+        {
+            Self::push_unique_buffer_logical_bytes(
+                &mut logical_buffer_seen,
+                &mut logical_total_bytes,
+                buffer,
+            );
+        }
+        let logical_buffer_bytes = logical_total_bytes.saturating_sub(logical_texture_bytes);
+        drop(logical_buffer_seen);
+        let cpu_staging_bytes = (self.rrect_vbuf.capacity() as u64)
+            .saturating_mul(core::mem::size_of::<f32>() as u64)
+            .saturating_add(
+                (self.rrect_fbuf.capacity() as u64)
+                    .saturating_mul(core::mem::size_of::<RRectGpuParams>() as u64),
+            )
+            .saturating_add(
+                (self.nine_slice_vbuf.capacity() as u64)
+                    .saturating_mul(core::mem::size_of::<f32>() as u64),
+            )
+            .saturating_add(
+                (self.nine_slice_fbuf.capacity() as u64)
+                    .saturating_mul(core::mem::size_of::<NineSliceGpuParams>() as u64),
+            )
+            .saturating_add(
+                (self.image_vbuf.capacity() as u64)
+                    .saturating_mul(core::mem::size_of::<f32>() as u64),
+            )
+            .saturating_add(
+                (self.image_fbuf.capacity() as u64)
+                    .saturating_mul(core::mem::size_of::<ImageGpuParams>() as u64),
+            )
+            .saturating_add(
+                (self.spinner_vbuf.capacity() as u64)
+                    .saturating_mul(core::mem::size_of::<f32>() as u64),
+            )
+            .saturating_add(
+                (self.spinner_fbuf.capacity() as u64)
+                    .saturating_mul(core::mem::size_of::<SpinnerGpuParams>() as u64),
+            )
+            .saturating_add(
+                (self.effect_vbuf.capacity() as u64)
+                    .saturating_mul(core::mem::size_of::<f32>() as u64),
+            )
+            .saturating_add(
+                (self.effect_fbuf.capacity() as u64)
+                    .saturating_mul(core::mem::size_of::<f32>() as u64),
+            );
         PerfMemoryStats {
-            total_bytes: draw_targets_bytes
-                .saturating_add(effect_targets_bytes)
-                .saturating_add(live_camera_bytes)
-                .saturating_add(camera_cache_bytes)
-                .saturating_add(benchmark_camera_bytes)
-                .saturating_add(layer_cache_bytes)
-                .saturating_add(image_cache_bytes)
-                .saturating_add(buffer_bytes),
+            logical_total_bytes,
+            logical_texture_bytes,
+            logical_buffer_bytes,
+            total_bytes,
             draw_targets_bytes,
             draw_target_main_bytes,
             draw_target_msaa_bytes,
             effect_targets_bytes,
             effect_prepass_bytes,
             effect_blur_chain_bytes,
+            depth_target_bytes,
+            bloom_targets_bytes,
+            id_mask_target_bytes,
             live_camera_bytes,
             camera_cache_bytes,
             camera_blur_cache_bytes,
@@ -8432,7 +9015,15 @@ impl MetalRenderer {
             benchmark_camera_bytes,
             layer_cache_bytes,
             image_cache_bytes,
+            scene3d_mesh_buffer_bytes,
+            id_mask_vertex_buffer_bytes,
+            frame_ring_buffer_bytes,
+            vertex_buffer_bytes,
+            index_buffer_bytes,
+            uniform_buffer_bytes,
+            argument_buffer_bytes,
             buffer_bytes,
+            cpu_staging_bytes,
             pending_command_buffers: self
                 .camera_preview_renderer
                 .as_ref()

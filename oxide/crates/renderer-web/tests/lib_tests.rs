@@ -2,7 +2,7 @@ use oxide_renderer_api as api;
 use oxide_renderer_api::Renderer;
 use oxide_renderer_web::{
     color_cache_key, color_to_css, layer_physical_dimension, packed_rgba_to_css, sanitize_scale,
-    WebGpuTimestampSample, WebRenderer,
+    WebGpuTimestampSample, WebRenderer, WebRendererStats,
 };
 
 #[path = "../src/solid_color.rs"]
@@ -59,6 +59,24 @@ fn native_stub_tracks_frame_shape_and_reports_unsupported_submit() {
     assert_eq!(stats.scale, 2.0);
     assert_eq!(stats.damage_rects, 1);
     assert!(matches!(renderer.submit(token), Err(api::RenderError::Unsupported(_))));
+}
+
+#[test]
+fn renderer_accounting_schema_defaults_to_explicit_unavailable_allocated_bytes()
+{
+   let stats = WebRendererStats::default();
+   assert_eq!(stats.commands_traversed, 0);
+   assert_eq!(stats.gpu_logical_total_bytes, 0);
+   assert_eq!(stats.gpu_allocated_total_bytes, 0);
+   assert!(!stats.gpu_allocated_bytes_available);
+
+   let source = include_str!("../src/lib.rs");
+   let webgpu = include_str!("../src/wasm/webgpu.rs");
+   assert!(source.contains("width.saturating_mul(height).saturating_mul(bytes_per_pixel)"));
+   assert!(webgpu.contains("pub fn set_memory_stats_interval_for_benchmark"));
+   assert!(webgpu.contains("self.memory_stats_interval = frames.max(1);"));
+   assert!(webgpu.contains("pub fn set_memory_stats_enabled_for_benchmark"));
+   assert!(webgpu.contains("self.memory_snapshot = WebGpuMemorySnapshot::default();"));
 }
 
 #[test]
@@ -638,6 +656,41 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
         "pub cpu_resource_table_scratch_bytes: u64",
         "pub cpu_resource_table_scratch_grows: u32",
         "pub cpu_resource_table_scratch_growth_bytes: u64",
+        "pub commands_traversed: u64",
+        "pub commands_copied: u64",
+        "pub geometry_bytes_copied: u64",
+        "pub chunks_reused: u64",
+        "pub chunks_rebuilt: u64",
+        "pub chunks_prepared: u64",
+        "pub backend_cache_hits: u64",
+        "pub backend_cache_misses: u64",
+        "pub render_encoders: u32",
+        "pub texture_copy_pixels: u64",
+        "pub texture_copy_bytes: u64",
+        "pub shaded_damage_pixels: u64",
+        "pub cache_evictions: u32",
+        "pub wakeups: u32",
+        "pub skipped_submissions: u32",
+        "pub actual_submissions: u32",
+        "pub gpu_allocated_bytes_available: bool",
+        "pub gpu_logical_total_bytes: u64",
+        "pub gpu_allocated_total_bytes: u64",
+        "pub gpu_vertex_buffer_bytes: u64",
+        "pub gpu_index_buffer_bytes: u64",
+        "pub gpu_uniform_buffer_bytes: u64",
+        "pub gpu_persistent_asset_bytes: u64",
+        "pub gpu_transient_target_bytes: u64",
+        "pub gpu_depth_target_bytes: u64",
+        "pub gpu_bloom_target_bytes: u64",
+        "pub gpu_layer_texture_bytes: u64",
+        "pub gpu_id_mask_texture_bytes: u64",
+        "pub gpu_atlas_texture_bytes: u64",
+        "pub gpu_image_texture_bytes: u64",
+        "pub gpu_scene3d_mesh_bytes: u64",
+        "pub gpu_staging_buffer_bytes: u64",
+        "pub gpu_bind_buffer_bytes: u64",
+        "pub gpu_frame_ring_bytes: u64",
+        "pub gpu_cache_bytes: u64",
         "pub scene3d_draws: u32",
         "pub id_mask_draws: u32",
         "pub backdrop_draws: u32",
@@ -908,6 +961,13 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(host.contains("{key_prefix}cpu_resource_table_scratch_grows={}"));
     assert!(host.contains("{key_prefix}cpu_resource_table_scratch_growth_bytes={}"));
     assert!(host.contains("{key_prefix}buffer_upload_bytes={}"));
+    assert!(host.contains("{key_prefix}commands_traversed={}"));
+    assert!(host.contains("{key_prefix}geometry_bytes_copied={}"));
+    assert!(host.contains("{key_prefix}actual_submissions={}"));
+    assert!(host.contains("{key_prefix}gpu_logical_total_bytes={}"));
+    assert!(host.contains("{key_prefix}gpu_allocated_total_bytes={}"));
+    assert!(host.contains("{key_prefix}gpu_id_mask_texture_bytes={}"));
+    assert!(host.contains("{key_prefix}gpu_scene3d_mesh_bytes={}"));
 }
 
 #[test]

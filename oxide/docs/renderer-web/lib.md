@@ -29,6 +29,8 @@ Call flow:
 - `oxide_renderer_web::WebGpuTimestampSample`: stores one completed frame's pass count and total/per-family WebGPU timestamp durations.
 - `oxide_renderer_web::WebGpuCpuSubmitTimingSample`: stores optional high-resolution upload, surface acquisition, encoder creation, command encoding, timestamp-readback, scratch-accounting, queue-submit, present, and timestamp-map CPU durations for one explicitly profiled WebGPU submit.
 - `oxide_renderer_web::BrowserRenderer::set_timestamp_readback_interval_for_benchmark(&mut self, frames: u64)`: selects bounded timestamp sampling cadence for explicit measurement; normal production cadence remains every eight frames.
+- `oxide_renderer_web::BrowserRenderer::set_memory_stats_interval_for_benchmark(&mut self, frames: u64)`: selects the bounded resident-resource sampling cadence for explicit measurement; normal production cadence remains every 60 frames.
+- `oxide_renderer_web::BrowserRenderer::set_memory_stats_enabled_for_benchmark(&mut self, enabled: bool)`: enables or disables resident-resource scans for an accounting-overhead control without changing rendering.
 - `oxide_renderer_web::BrowserRenderer::clear_completed_timestamp_samples(&mut self)`: clears completed measurement samples before a declared workload.
 - `oxide_renderer_web::BrowserRenderer::drain_completed_timestamp_samples_into(&mut self, output: &mut Vec<WebGpuTimestampSample>)`: harvests and drains completed samples into caller-owned reusable storage.
 - `oxide_renderer_web::BrowserRenderer::set_cpu_submit_timing_enabled_for_benchmark(&mut self, enabled: bool)`: enables bounded submit-stage timing only around an explicit profiled frame; normal production submission leaves it disabled.
@@ -69,6 +71,8 @@ Invalid scales collapse to `1.0`. Invalid image rows return `RenderError::Invali
 
 Browser renderers are intended for the browser main thread and store DOM/GPU handles only on wasm32. Native builds expose a small stub so macOS workspace checks can compile. The production WebGPU renderer reuses prebuilt pipelines, its sampler, texture bind groups, present buffers, scene/scratch textures, timestamp query/readback resources, ID-mask vertex-cache slots, generation-checked image slots, and grow-only frame vertex/index buffers after warmup. Releasing an uploaded image drops its texture and bind group without waiting on the CPU; wgpu retains any internal ownership needed by already submitted GPU work. Free-slot lookup and draw-time handle validation are constant-time vector operations without locks or hashing.
 
+Resident accounting reports declared WebGPU texture extents and buffer sizes as logical bytes. Allocated bytes stay explicitly unavailable and zero because wgpu does not expose driver allocation, heap padding, or residency. Vertex/index/uniform buffers, present assets, transient color/depth targets, retained layers, ID-mask fields, atlas/image textures, Scene3D meshes, and timestamp staging buffers reconcile into one saturating logical total. Resource-table scans are sampled once every 60 frames and the cached snapshot is copied into ordinary frame stats in constant time; benchmark controls can select a one-frame cadence or disable the scan. Frame-work counters separately expose command traversal/copying, copied geometry, ID-mask chunk reuse/rebuild, cache outcomes, pass/encoder counts, texture-copy pixels/bytes, uploads, shaded pixels, submissions, evictions, and resource creation/growth.
+
 ## Performance notes
 
 Metal-independent web draw counts, pipeline state, and upload sizes remain unchanged. WebGPU adds bounded packed-byte decoding per solid vertex; the Canvas colored path classifies six vertices and creates one gradient only when its endpoints differ.
@@ -100,6 +104,7 @@ pub async fn build_renderer() -> Result<oxide_renderer_web::BrowserRenderer, oxi
 
 ## Changelog
 
+- 2026-07-12: added sampled, saturating WebGPU resident-memory snapshots and complete frame-work/report counters with explicit logical-versus-allocated semantics.
 - 2026-07-12: added packed solid-color WebGPU lowering and the narrow six-vertex Canvas flat/opposing-edge gradient path.
 - 2026-07-10: replaced append-only WebGPU image tombstones with a constant-time generation-checked slot arena that reclaims metadata without stale-handle ABA.
 - 2026-07-09: added explicit, idempotent browser image release so Rust-owned runtime asset lifetimes reclaim WebGPU textures and bind groups.

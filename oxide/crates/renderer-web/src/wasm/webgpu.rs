@@ -1,7 +1,7 @@
 use super::{
     a8_to_rgba, copy_a8_rows, copy_a8_rows_to_rgba_into, copy_rgba_rows, copy_rgba_rows_into,
     document, index_slice, normalized_index_mode, resolve_index, sanitize_scale, source_rect,
-    vertex_slice,
+    saturating_texture_bytes, vertex_slice,
 };
 use crate::image_slots::ImageSlots;
 use crate::{id_mask_compositor, neon_marker, scene3d};
@@ -539,6 +539,12 @@ impl WebGpuTimestampQueries {
             .min(u32::MAX as usize) as u32
     }
 
+    fn buffer_bytes(&self) -> u64 {
+        self.slots.iter().fold(self.resolve_buffer.size(), |total, slot| {
+            total.saturating_add(slot.buffer.size())
+        })
+    }
+
     fn set_readback_interval_for_benchmark(&mut self, frames: u64) {
         self.readback_interval_frames = frames.max(1);
     }
@@ -644,6 +650,14 @@ impl BrowserRenderer {
 
     pub fn set_timestamp_readback_interval_for_benchmark(&mut self, frames: u64) {
         self.inner.set_timestamp_readback_interval_for_benchmark(frames);
+    }
+
+    pub fn set_memory_stats_interval_for_benchmark(&mut self, frames: u64) {
+        self.inner.set_memory_stats_interval_for_benchmark(frames);
+    }
+
+    pub fn set_memory_stats_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.inner.set_memory_stats_enabled_for_benchmark(enabled);
     }
 
     pub fn queue_completion_flag_for_benchmark(&self) -> Arc<AtomicBool> {
@@ -814,6 +828,27 @@ struct ScratchCapacityBreakdown {
     resource_table: usize,
 }
 
+#[derive(Clone, Copy, Default)]
+struct WebGpuMemorySnapshot {
+    logical_total_bytes: u64,
+    vertex_buffer_bytes: u64,
+    index_buffer_bytes: u64,
+    uniform_buffer_bytes: u64,
+    persistent_asset_bytes: u64,
+    transient_target_bytes: u64,
+    depth_target_bytes: u64,
+    bloom_target_bytes: u64,
+    layer_texture_bytes: u64,
+    id_mask_texture_bytes: u64,
+    atlas_texture_bytes: u64,
+    image_texture_bytes: u64,
+    scene3d_mesh_bytes: u64,
+    staging_buffer_bytes: u64,
+    bind_buffer_bytes: u64,
+    frame_ring_bytes: u64,
+    cache_bytes: u64,
+}
+
 impl ScratchCapacityBreakdown {
     fn total(self) -> usize {
         self.draw
@@ -923,6 +958,9 @@ pub struct WebGpuRenderer {
     direct_surface_enabled: bool,
     cpu_submit_timing_enabled: bool,
     cpu_submit_timing: WebGpuCpuSubmitTimingSample,
+    memory_stats_interval: u64,
+    memory_stats_enabled: bool,
+    memory_snapshot: WebGpuMemorySnapshot,
 }
 
 fn image_for_update<'a>(
@@ -974,9 +1012,160 @@ fn write_image_update(
     stats.texture_upload_bytes = stats.texture_upload_bytes.saturating_add(rgba.len() as u64);
 }
 
+fn color_texture_bytes_per_pixel(format: wgpu::TextureFormat) -> u64 {
+    match format {
+        wgpu::TextureFormat::Rgba16Float => 8,
+        _ => 4,
+    }
+}
+
 impl WebGpuRenderer {
     pub async fn from_canvas_id(id: &str) -> Result<Self, api::RenderError> {
         Self::from_canvas(canvas_by_id(id)?).await
+    }
+
+    fn sample_memory_stats(&mut self) {
+        let color_bytes = color_texture_bytes_per_pixel(self.config.format);
+        let target_bytes =
+            saturating_texture_bytes(u64::from(self.width), u64::from(self.height), color_bytes);
+        let transient_target_bytes = target_bytes.saturating_mul(2);
+        let depth_target_bytes =
+            saturating_texture_bytes(u64::from(self.width), u64::from(self.height), 4);
+        let layer_texture_bytes = self.layers.values().fold(0_u64, |total, layer| {
+            total.saturating_add(saturating_texture_bytes(
+                u64::from(layer.width),
+                u64::from(layer.height),
+                color_bytes,
+            ))
+        });
+        let mut atlas_texture_bytes = 0_u64;
+        let mut image_texture_bytes = 0_u64;
+        for image in self.images.values() {
+            let bytes = saturating_texture_bytes(
+                u64::from(image.width),
+                u64::from(image.height),
+                4,
+            );
+            match image.kind {
+                GpuImageKind::Rgba => {
+                    image_texture_bytes = image_texture_bytes.saturating_add(bytes);
+                }
+                GpuImageKind::A8 => {
+                    atlas_texture_bytes = atlas_texture_bytes.saturating_add(bytes);
+                }
+            }
+        }
+        let id_mask_texture_bytes = if self.id_mask_city_texture.is_some() {
+            saturating_texture_bytes(
+                u64::from(self.id_mask_width),
+                u64::from(self.id_mask_height),
+                66,
+            )
+        } else {
+            0
+        };
+        let id_mask_vertex_bytes = self.id_mask_vertex_caches.iter().fold(0_u64, |total, cache| {
+            total.saturating_add(cache.buffer.as_ref().map_or(0, wgpu::Buffer::size))
+        });
+        let vertex_buffer_bytes = self
+            .vertex_buffer
+            .as_ref()
+            .map_or(0, wgpu::Buffer::size)
+            .saturating_add(id_mask_vertex_bytes);
+        let index_buffer_bytes = self.index_buffer.as_ref().map_or(0, wgpu::Buffer::size);
+        let uniform_buffer_bytes = self
+            .viewport_buffer
+            .size()
+            .saturating_add(self.effect_buffer.size())
+            .saturating_add(
+                self.scene3d_uniform_buffer.as_ref().map_or(0, wgpu::Buffer::size),
+            )
+            .saturating_add(
+                self.id_mask_raster_uniform_buffer
+                    .as_ref()
+                    .map_or(0, wgpu::Buffer::size),
+            )
+            .saturating_add(
+                self.id_mask_field_uniform_buffer
+                    .as_ref()
+                    .map_or(0, wgpu::Buffer::size),
+            )
+            .saturating_add(
+                self.id_mask_compositor_uniform_buffer
+                    .as_ref()
+                    .map_or(0, wgpu::Buffer::size),
+            );
+        let persistent_asset_bytes = self
+            .present_vertex_buffer
+            .size()
+            .saturating_add(self.present_index_buffer.size());
+        let scene3d_mesh_bytes = self.meshes_3d.iter().flatten().fold(0_u64, |total, mesh| {
+            total
+                .saturating_add(mesh.vertex_buffer.size())
+                .saturating_add(mesh.index_buffer.size())
+        });
+        let staging_buffer_bytes = self
+            .timestamp_queries
+            .as_ref()
+            .map_or(0, WebGpuTimestampQueries::buffer_bytes);
+        let cache_bytes = layer_texture_bytes
+            .saturating_add(atlas_texture_bytes)
+            .saturating_add(image_texture_bytes)
+            .saturating_add(id_mask_vertex_bytes);
+        let logical_total_bytes = vertex_buffer_bytes
+            .saturating_add(index_buffer_bytes)
+            .saturating_add(uniform_buffer_bytes)
+            .saturating_add(persistent_asset_bytes)
+            .saturating_add(transient_target_bytes)
+            .saturating_add(depth_target_bytes)
+            .saturating_add(layer_texture_bytes)
+            .saturating_add(id_mask_texture_bytes)
+            .saturating_add(atlas_texture_bytes)
+            .saturating_add(image_texture_bytes)
+            .saturating_add(scene3d_mesh_bytes)
+            .saturating_add(staging_buffer_bytes);
+        self.memory_snapshot = WebGpuMemorySnapshot {
+            logical_total_bytes,
+            vertex_buffer_bytes,
+            index_buffer_bytes,
+            uniform_buffer_bytes,
+            persistent_asset_bytes,
+            transient_target_bytes,
+            depth_target_bytes,
+            bloom_target_bytes: 0,
+            layer_texture_bytes,
+            id_mask_texture_bytes,
+            atlas_texture_bytes,
+            image_texture_bytes,
+            scene3d_mesh_bytes,
+            staging_buffer_bytes,
+            bind_buffer_bytes: 0,
+            frame_ring_bytes: 0,
+            cache_bytes,
+        };
+    }
+
+    fn apply_memory_stats(&mut self) {
+        let memory = self.memory_snapshot;
+        self.stats.gpu_allocated_bytes_available = false;
+        self.stats.gpu_logical_total_bytes = memory.logical_total_bytes;
+        self.stats.gpu_allocated_total_bytes = 0;
+        self.stats.gpu_vertex_buffer_bytes = memory.vertex_buffer_bytes;
+        self.stats.gpu_index_buffer_bytes = memory.index_buffer_bytes;
+        self.stats.gpu_uniform_buffer_bytes = memory.uniform_buffer_bytes;
+        self.stats.gpu_persistent_asset_bytes = memory.persistent_asset_bytes;
+        self.stats.gpu_transient_target_bytes = memory.transient_target_bytes;
+        self.stats.gpu_depth_target_bytes = memory.depth_target_bytes;
+        self.stats.gpu_bloom_target_bytes = memory.bloom_target_bytes;
+        self.stats.gpu_layer_texture_bytes = memory.layer_texture_bytes;
+        self.stats.gpu_id_mask_texture_bytes = memory.id_mask_texture_bytes;
+        self.stats.gpu_atlas_texture_bytes = memory.atlas_texture_bytes;
+        self.stats.gpu_image_texture_bytes = memory.image_texture_bytes;
+        self.stats.gpu_scene3d_mesh_bytes = memory.scene3d_mesh_bytes;
+        self.stats.gpu_staging_buffer_bytes = memory.staging_buffer_bytes;
+        self.stats.gpu_bind_buffer_bytes = memory.bind_buffer_bytes;
+        self.stats.gpu_frame_ring_bytes = memory.frame_ring_bytes;
+        self.stats.gpu_cache_bytes = memory.cache_bytes;
     }
 
     pub async fn from_canvas(canvas: HtmlCanvasElement) -> Result<Self, api::RenderError> {
@@ -1178,6 +1367,9 @@ impl WebGpuRenderer {
             direct_surface_enabled: true,
             cpu_submit_timing_enabled: false,
             cpu_submit_timing: WebGpuCpuSubmitTimingSample::default(),
+            memory_stats_interval: 60,
+            memory_stats_enabled: true,
+            memory_snapshot: WebGpuMemorySnapshot::default(),
         })
     }
 
@@ -1207,6 +1399,18 @@ impl WebGpuRenderer {
     pub fn set_timestamp_readback_interval_for_benchmark(&mut self, frames: u64) {
         if let Some(timestamps) = &mut self.timestamp_queries {
             timestamps.set_readback_interval_for_benchmark(frames);
+        }
+    }
+
+    pub fn set_memory_stats_interval_for_benchmark(&mut self, frames: u64) {
+        self.memory_stats_interval = frames.max(1);
+    }
+
+    pub fn set_memory_stats_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.memory_stats_enabled = enabled;
+        if !enabled {
+            self.memory_snapshot = WebGpuMemorySnapshot::default();
+            self.apply_memory_stats();
         }
     }
 
@@ -1667,7 +1871,9 @@ impl WebGpuRenderer {
    /// Releases a renderer-owned image and returns whether the handle was live.
    pub fn image_release(&mut self, handle: api::ImageHandle) -> bool
    {
-      self.images.remove(handle.0).is_some()
+      let released = self.images.remove(handle.0).is_some();
+      self.stats.cache_evictions = self.stats.cache_evictions.saturating_add(released as u32);
+      released
    }
 
     pub fn mesh3d_create_colored(
@@ -1819,6 +2025,7 @@ impl WebGpuRenderer {
         let vertex_cache_first = self.id_mask_draw_chunk_indices.len() as u32;
         let mut vertex_count = 0usize;
         for chunk in pass.raster.chunks {
+            self.stats.chunks_prepared = self.stats.chunks_prepared.saturating_add(1);
             let end = chunk.first_vertex.saturating_add(chunk.vertex_count);
             let Some(vertices) = pass.raster.vertices.get(chunk.first_vertex..end) else {
                 return Err(api::RenderError::InvalidOperation(
@@ -2067,6 +2274,13 @@ impl WebGpuRenderer {
         let target = self.current_target();
         self.frame.vertices.extend_from_slice(vertices);
         self.frame.indices.extend(indices.iter().map(|index| base.saturating_add(*index)));
+        self.stats.geometry_bytes_copied = self.stats.geometry_bytes_copied.saturating_add(
+            (vertices.len() as u64)
+                .saturating_mul(core::mem::size_of::<GpuVertex>() as u64)
+                .saturating_add(
+                    (indices.len() as u64).saturating_mul(core::mem::size_of::<u32>() as u64),
+                ),
+        );
         self.frame.record_draw_kind(kind);
         if self.try_coalesce_draw_item(kind, first_index, index_count, clip, target) {
             return;
@@ -2079,6 +2293,7 @@ impl WebGpuRenderer {
             effect_uniform_offset: 0,
             target,
         });
+        self.stats.commands_copied = self.stats.commands_copied.saturating_add(1);
     }
 
     fn clear_scratch_draw(&mut self) {
@@ -2099,6 +2314,14 @@ impl WebGpuRenderer {
         self.frame
             .indices
             .extend(self.scratch_indices.iter().map(|index| base.saturating_add(*index)));
+        self.stats.geometry_bytes_copied = self.stats.geometry_bytes_copied.saturating_add(
+            (self.scratch_vertices.len() as u64)
+                .saturating_mul(core::mem::size_of::<GpuVertex>() as u64)
+                .saturating_add(
+                    (self.scratch_indices.len() as u64)
+                        .saturating_mul(core::mem::size_of::<u32>() as u64),
+                ),
+        );
         self.frame.record_draw_kind(kind);
         if self.try_coalesce_draw_item(kind, first_index, index_count, clip, target) {
             return;
@@ -2111,6 +2334,7 @@ impl WebGpuRenderer {
             effect_uniform_offset: 0,
             target,
         });
+        self.stats.commands_copied = self.stats.commands_copied.saturating_add(1);
     }
 
     fn cached_layer(&self, id: u32, rect: api::RectF) -> Option<&GpuLayer> {
@@ -2214,6 +2438,7 @@ impl WebGpuRenderer {
 
     fn encode_items(&mut self, list: &api::DrawList, index: &mut usize, stop_at_layer_end: bool) {
         while *index < list.items.len() {
+            self.stats.commands_traversed = self.stats.commands_traversed.saturating_add(1);
             match &list.items[*index] {
                 api::DrawCmd::LayerBegin { id, rect, dirty } => {
                     *index += 1;
@@ -2995,6 +3220,7 @@ impl api::Renderer for WebGpuRenderer {
             damage_rects: damage.map(|d| d.rects.len() as u32).unwrap_or(0),
             ..WebRendererStats::default()
         };
+        self.apply_memory_stats();
         self.apply_timestamp_stats();
         self.frame_scratch_capacity = self.scratch_capacity_breakdown();
         self.frame_scratch_capacity_bytes = self.frame_scratch_capacity.total();
@@ -3011,6 +3237,7 @@ impl api::Renderer for WebGpuRenderer {
 
     fn submit(&mut self, token: api::FrameToken) -> Result<(), api::RenderError> {
         if self.active_token != Some(token) {
+            self.stats.skipped_submissions = self.stats.skipped_submissions.saturating_add(1);
             return Err(api::RenderError::InvalidOperation("frame token mismatch"));
         }
         self.active_token = None;
@@ -3034,8 +3261,14 @@ impl api::Renderer for WebGpuRenderer {
                 self.surface.configure(&self.device, &self.config);
                 self.surface.get_current_texture().map_err(|_| api::RenderError::DeviceLost)?
             }
-            Err(wgpu::SurfaceError::OutOfMemory) => return Err(api::RenderError::OutOfMemory),
-            Err(_) => return Err(api::RenderError::DeviceLost),
+            Err(wgpu::SurfaceError::OutOfMemory) => {
+                self.stats.skipped_submissions = self.stats.skipped_submissions.saturating_add(1);
+                return Err(api::RenderError::OutOfMemory);
+            }
+            Err(_) => {
+                self.stats.skipped_submissions = self.stats.skipped_submissions.saturating_add(1);
+                return Err(api::RenderError::DeviceLost);
+            }
         };
         let surface_view =
             surface_texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -3081,6 +3314,8 @@ impl api::Renderer for WebGpuRenderer {
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         let command_buffer = encoder.finish();
         self.queue.submit(core::iter::once(command_buffer));
+        self.stats.actual_submissions = self.stats.actual_submissions.saturating_add(1);
+        self.stats.shaded_damage_pixels = u64::from(self.width).saturating_mul(u64::from(self.height));
         self.record_submit_allocation_stage(SubmitAllocationStage::FinishQueue, alloc_before);
         cpu_submit_timing_end(&mut self.cpu_submit_timing.queue_submit_ms, timing_before);
 
@@ -3098,6 +3333,21 @@ impl api::Renderer for WebGpuRenderer {
         }
         self.record_submit_allocation_stage(SubmitAllocationStage::TimestampMap, alloc_before);
         cpu_submit_timing_end(&mut self.cpu_submit_timing.timestamp_map_ms, timing_before);
+        if self.memory_stats_enabled
+            && self.frame_id.saturating_sub(1) % self.memory_stats_interval == 0
+        {
+            self.sample_memory_stats();
+            self.apply_memory_stats();
+        }
+        self.stats.backend_cache_hits = self
+            .stats
+            .backend_cache_hits
+            .saturating_add(u64::from(self.stats.layer_cache_hits));
+        self.stats.backend_cache_misses = self
+            .stats
+            .backend_cache_misses
+            .saturating_add(u64::from(self.stats.layer_cache_misses));
+        self.stats.render_encoders = self.stats.render_passes;
         Ok(())
     }
 
@@ -3120,6 +3370,10 @@ impl api::Renderer for WebGpuRenderer {
         self.config.height = self.height;
         self.surface.configure(&self.device, &self.config);
         self.recreate_targets();
+        self.stats.cache_evictions = self
+            .stats
+            .cache_evictions
+            .saturating_add(self.layers.len().min(u32::MAX as usize) as u32);
         self.layers.clear();
         Ok(())
     }
@@ -3133,13 +3387,17 @@ impl WebGpuRenderer {
     ) -> usize {
         let key = IdMaskVertexCacheKey { content_hash, len: vertices.len() };
         if let Some(index) = self.id_mask_vertex_caches.iter().position(|cache| cache.key == key) {
+            self.stats.chunks_reused = self.stats.chunks_reused.saturating_add(1);
+            self.stats.backend_cache_hits = self.stats.backend_cache_hits.saturating_add(1);
             return index;
         }
+        self.stats.backend_cache_misses = self.stats.backend_cache_misses.saturating_add(1);
         if let Some(index) = self.id_mask_reusable_vertex_cache_index() {
             let cache = &mut self.id_mask_vertex_caches[index];
             cache.key = key;
             write_id_mask_raster_vertex_bytes(vertices, &mut cache.bytes);
             cache.uploaded = false;
+            self.stats.chunks_rebuilt = self.stats.chunks_rebuilt.saturating_add(1);
             return index;
         }
         let mut bytes = Vec::new();
@@ -3151,6 +3409,7 @@ impl WebGpuRenderer {
             buffer_capacity: 0,
             uploaded: false,
         });
+        self.stats.chunks_rebuilt = self.stats.chunks_rebuilt.saturating_add(1);
         self.id_mask_vertex_caches.len() - 1
     }
 
@@ -3429,6 +3688,12 @@ impl WebGpuRenderer {
                     },
                 );
                 self.stats.texture_copies = self.stats.texture_copies.saturating_add(1);
+                let copy_pixels = u64::from(self.width).saturating_mul(u64::from(self.height));
+                self.stats.texture_copy_pixels =
+                    self.stats.texture_copy_pixels.saturating_add(copy_pixels);
+                self.stats.texture_copy_bytes = self.stats.texture_copy_bytes.saturating_add(
+                    copy_pixels.saturating_mul(color_texture_bytes_per_pixel(self.config.format)),
+                );
                 if !self.effect_uniform_batch_enabled {
                     self.write_effect_uniform(sigma);
                     self.frame.draws[start].effect_uniform_offset = 0;

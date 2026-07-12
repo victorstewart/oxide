@@ -153,7 +153,7 @@ impl MetalRenderer {
         Ok(self.device.new_texture(&desc))
     }
 
-    fn ensure_id_mask_render_targets(
+    pub(super) fn ensure_id_mask_render_targets(
         &mut self,
         slot: usize,
         width: usize,
@@ -180,6 +180,7 @@ impl MetalRenderer {
                 seam_field_a,
                 seam_field_b,
             });
+            self.acc_resource_creates = self.acc_resource_creates.saturating_add(6);
         }
         let Some(targets) = &self.id_mask_targets[slot] else {
             return Err(api::RenderError::OutOfMemory);
@@ -198,8 +199,12 @@ impl MetalRenderer {
             .ok_or(api::RenderError::InvalidOperation("id-mask raster vertex data overflow"))?;
         let key = IdMaskVertexUploadKey { content_hash, byte_len };
         if let Some(index) = self.id_mask_vertex_caches.iter().position(|cache| cache.key == key) {
+            self.acc_chunks_reused = self.acc_chunks_reused.saturating_add(1);
+            self.acc_backend_cache_hits = self.acc_backend_cache_hits.saturating_add(1);
             return Ok(index);
         }
+        self.acc_chunks_rebuilt = self.acc_chunks_rebuilt.saturating_add(1);
+        self.acc_backend_cache_misses = self.acc_backend_cache_misses.saturating_add(1);
 
         let buffer =
             self.device.new_buffer(byte_len.max(1) as u64, MTLResourceOptions::StorageModeShared);
@@ -211,6 +216,7 @@ impl MetalRenderer {
             core::ptr::copy_nonoverlapping(vertices.as_ptr() as *const u8, vertex_ptr, byte_len);
         }
         self.id_mask_vertex_caches.push(IdMaskVertexUploadCache { key, buffer });
+        self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
         Ok(self.id_mask_vertex_caches.len() - 1)
     }
 
@@ -296,6 +302,7 @@ impl MetalRenderer {
         let ca0 = rpd.color_attachments().object_at(0).unwrap();
         configure_frame_color_attachment(ca0, &target_tex, self.frame_color_initialized);
 
+        self.acc_render_passes = self.acc_render_passes.saturating_add(1);
         let enc = cmd.new_render_command_encoder(&rpd);
         // The compositor shader builds a local full-quad for mask sampling.
         // Hardware viewport/scissor maps that quad into the requested widget
@@ -364,6 +371,7 @@ impl MetalRenderer {
             pass.raster.mask_height,
         )?;
         for chunk in pass.raster.chunks {
+            self.acc_chunks_prepared = self.acc_chunks_prepared.saturating_add(1);
             let end = chunk.first_vertex.saturating_add(chunk.vertex_count);
             let Some(vertices) = pass.raster.vertices.get(chunk.first_vertex..end) else {
                 return Err(api::RenderError::InvalidOperation(
@@ -395,6 +403,7 @@ impl MetalRenderer {
         let cmd = self.ensure_frame_command_buffer(slot);
         let rpd = RenderPassDescriptor::new();
         configure_clear_store_attachments(&rpd, &targets.city, &targets.neighborhood);
+        self.acc_render_passes = self.acc_render_passes.saturating_add(1);
         let enc = cmd.new_render_command_encoder(&rpd);
         enc.set_render_pipeline_state(&self.pso_id_mask_raster);
         enc.set_vertex_bytes(
@@ -423,6 +432,7 @@ impl MetalRenderer {
         };
         let rpd = RenderPassDescriptor::new();
         configure_clear_store_attachments(&rpd, &targets.city_field_a, &targets.seam_field_a);
+        self.acc_render_passes = self.acc_render_passes.saturating_add(1);
         let enc = cmd.new_render_command_encoder(&rpd);
         enc.set_render_pipeline_state(&self.pso_id_mask_field_seed);
         enc.set_fragment_bytes(
@@ -463,6 +473,7 @@ impl MetalRenderer {
             };
             let rpd = RenderPassDescriptor::new();
             configure_clear_store_attachments(&rpd, dst_city, dst_seam);
+            self.acc_render_passes = self.acc_render_passes.saturating_add(1);
             let enc = cmd.new_render_command_encoder(&rpd);
             enc.set_render_pipeline_state(&self.pso_id_mask_field_jump);
             enc.set_fragment_bytes(

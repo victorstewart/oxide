@@ -1183,6 +1183,13 @@ fn id_mask_matrix_case(id: &str, smoke: bool, change: &str, size: usize, chunk_c
    let mut skips_sum = 0.0;
    let mut upload_sum = 0.0;
    let mut renderer_bytes_peak = 0_u64;
+   let mut id_mask_target_bytes_peak = 0_u64;
+   let mut id_mask_vertex_bytes_peak = 0_u64;
+   let mut commands_traversed_sum = 0_u64;
+   let mut chunks_reused_sum = 0_u64;
+   let mut chunks_rebuilt_sum = 0_u64;
+   let mut chunks_prepared_sum = 0_u64;
+   let mut render_passes_sum = 0_u64;
 
    for frame in 0..(warmups + frames)
    {
@@ -1218,6 +1225,16 @@ fn id_mask_matrix_case(id: &str, smoke: bool, change: &str, size: usize, chunk_c
          skips_sum += stats.frame_backpressure_skipped as f64;
          upload_sum += (stats.vb_bytes + stats.ib_bytes + stats.ub_bytes) as f64;
          renderer_bytes_peak = renderer_bytes_peak.max(stats.memory.total_bytes);
+         id_mask_target_bytes_peak =
+            id_mask_target_bytes_peak.max(stats.memory.id_mask_target_bytes);
+         id_mask_vertex_bytes_peak =
+            id_mask_vertex_bytes_peak.max(stats.memory.id_mask_vertex_buffer_bytes);
+         commands_traversed_sum =
+            commands_traversed_sum.saturating_add(stats.commands_traversed);
+         chunks_reused_sum = chunks_reused_sum.saturating_add(stats.chunks_reused);
+         chunks_rebuilt_sum = chunks_rebuilt_sum.saturating_add(stats.chunks_rebuilt);
+         chunks_prepared_sum = chunks_prepared_sum.saturating_add(stats.chunks_prepared);
+         render_passes_sum = render_passes_sum.saturating_add(u64::from(stats.render_passes));
       }
    }
 
@@ -1235,6 +1252,13 @@ fn id_mask_matrix_case(id: &str, smoke: bool, change: &str, size: usize, chunk_c
    metrics.insert(String::from("draws_avg"), draws_sum / frames as f64);
    metrics.insert(String::from("upload_bytes_avg"), upload_sum / frames as f64);
    metrics.insert(String::from("renderer_bytes_peak"), renderer_bytes_peak as f64);
+   metrics.insert(String::from("id_mask_target_bytes_peak"), id_mask_target_bytes_peak as f64);
+   metrics.insert(String::from("id_mask_vertex_bytes_peak"), id_mask_vertex_bytes_peak as f64);
+   metrics.insert(String::from("commands_traversed_avg"), commands_traversed_sum as f64 / frames as f64);
+   metrics.insert(String::from("chunks_reused_avg"), chunks_reused_sum as f64 / frames as f64);
+   metrics.insert(String::from("chunks_rebuilt_avg"), chunks_rebuilt_sum as f64 / frames as f64);
+   metrics.insert(String::from("chunks_prepared_avg"), chunks_prepared_sum as f64 / frames as f64);
+   metrics.insert(String::from("render_passes_avg"), render_passes_sum as f64 / frames as f64);
    metrics.insert(String::from("frame_backpressure_skips"), skips_sum);
    metrics.insert(String::from("geometry_changes_per_frame"), if change == "static" || change == "style" { 0.0 } else { 1.0 });
    metrics.insert(String::from("style_changes_per_frame"), if change == "style" { 1.0 } else { 0.0 });
@@ -1326,6 +1350,10 @@ fn scene3d_matrix_case(id: &str, smoke: bool, instance_count: usize, feature: &s
    let mut draws_sum = 0.0;
    let mut upload_sum = 0.0;
    let mut renderer_bytes_peak = 0_u64;
+   let mut depth_target_bytes_peak = 0_u64;
+   let mut bloom_target_bytes_peak = 0_u64;
+   let mut mesh_buffer_bytes_peak = 0_u64;
+   let mut render_passes_sum = 0_u64;
 
    for frame in 0..(warmups + frames)
    {
@@ -1365,6 +1393,13 @@ fn scene3d_matrix_case(id: &str, smoke: bool, instance_count: usize, feature: &s
          draws_sum += stats.draws as f64;
          upload_sum += (stats.vb_bytes + stats.ib_bytes + stats.ub_bytes) as f64;
          renderer_bytes_peak = renderer_bytes_peak.max(stats.memory.total_bytes);
+         depth_target_bytes_peak =
+            depth_target_bytes_peak.max(stats.memory.depth_target_bytes);
+         bloom_target_bytes_peak =
+            bloom_target_bytes_peak.max(stats.memory.bloom_targets_bytes);
+         mesh_buffer_bytes_peak =
+            mesh_buffer_bytes_peak.max(stats.memory.scene3d_mesh_buffer_bytes);
+         render_passes_sum = render_passes_sum.saturating_add(u64::from(stats.render_passes));
       }
    }
 
@@ -1385,6 +1420,10 @@ fn scene3d_matrix_case(id: &str, smoke: bool, instance_count: usize, feature: &s
    metrics.insert(String::from("draws_avg"), draws_sum / frames as f64);
    metrics.insert(String::from("upload_bytes_avg"), upload_sum / frames as f64);
    metrics.insert(String::from("renderer_bytes_peak"), renderer_bytes_peak as f64);
+   metrics.insert(String::from("depth_target_bytes_peak"), depth_target_bytes_peak as f64);
+   metrics.insert(String::from("bloom_target_bytes_peak"), bloom_target_bytes_peak as f64);
+   metrics.insert(String::from("mesh_buffer_bytes_peak"), mesh_buffer_bytes_peak as f64);
+   metrics.insert(String::from("render_passes_avg"), render_passes_sum as f64 / frames as f64);
 
    Ok(PerfCaseResult {
       id: String::from(id),

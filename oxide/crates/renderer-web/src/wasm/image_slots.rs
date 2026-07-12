@@ -83,6 +83,11 @@ impl<T> ImageSlots<T>
                .saturating_mul(core::mem::size_of::<u16>()),
          )
    }
+
+   pub(crate) fn values(&self) -> impl Iterator<Item = &T>
+   {
+      self.slots.iter().filter_map(|slot| slot.value.as_ref())
+   }
 }
 
 fn decode_handle(handle: u32) -> Option<(usize, u16)>

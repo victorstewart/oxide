@@ -84,6 +84,38 @@ fn completed_gpu_duration_is_attributed_to_frame_id() {
 }
 
 #[test]
+fn renderer_memory_schema_covers_omitted_resource_families_and_saturates()
+{
+   use oxide_renderer_metal::PerfMemoryStats;
+
+   let memory = PerfMemoryStats {
+      depth_target_bytes: 1,
+      bloom_targets_bytes: 2,
+      id_mask_target_bytes: 3,
+      scene3d_mesh_buffer_bytes: 4,
+      id_mask_vertex_buffer_bytes: 5,
+      layer_cache_bytes: 6,
+      ..PerfMemoryStats::default()
+   };
+   assert_eq!(memory.depth_target_bytes, 1);
+   assert_eq!(memory.bloom_targets_bytes, 2);
+   assert_eq!(memory.id_mask_target_bytes, 3);
+   assert_eq!(memory.scene3d_mesh_buffer_bytes, 4);
+   assert_eq!(memory.id_mask_vertex_buffer_bytes, 5);
+   assert_eq!(memory.layer_cache_bytes, 6);
+
+   let source = include_str!("../src/lib.rs");
+   assert!(source.contains("fold(bytes_per_element, u64::saturating_mul)"));
+   assert!(source.contains("memory_texture_seen: RefCell<HashSet<usize>>"));
+   assert!(source.contains("memory_buffer_seen: RefCell<HashSet<usize>>"));
+   assert!(source.contains("let mut buffer_seen = self.memory_buffer_seen.borrow_mut();"));
+   assert!(source.contains("buffer_seen.clear();"));
+   assert!(source.contains("pub fn set_memory_stats_enabled_for_benchmark"));
+   assert!(source.contains("pub fn set_accounting_stats_enabled_for_benchmark"));
+   assert!(source.contains("self.last_stats.memory = PerfMemoryStats::default();"));
+}
+
+#[test]
 fn metal_draw_cmd_debug_capture_names_are_frozen() {
     let source = include_str!("../src/lib.rs");
     let mapping = source_without_whitespace(source_block(
@@ -145,4 +177,38 @@ fn renderer_initializes_default_pipelines_from_embedded_metallib_on_macos() {
          )
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn disabled_accounting_path_keeps_new_stats_zero()
+{
+   use oxide_renderer_api::{self as api, Renderer};
+   use oxide_renderer_metal::{MetalInitError, MetalRenderer};
+
+   let mut renderer = match MetalRenderer::new_default()
+   {
+      Ok(renderer) => renderer,
+      Err(MetalInitError::NoDevice) => panic!("macOS accounting contract requires Metal"),
+      Err(error) => panic!("create Metal renderer: {error}"),
+   };
+   renderer.set_accounting_stats_enabled_for_benchmark(false);
+   renderer.resize(64, 64, 1.0).expect("resize renderer");
+   let mut list = api::DrawList::default();
+   list.items.push(api::DrawCmd::RRect {
+      rect: api::RectF::new(8.0, 8.0, 48.0, 48.0),
+      radii: [4.0; 4],
+      color: api::Color::rgba(0.2, 0.4, 0.8, 1.0),
+   });
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_pass(&list);
+   renderer.submit(token).expect("submit frame");
+   let stats = renderer.last_stats();
+
+   assert_eq!(stats.commands_traversed, 0);
+   assert_eq!(stats.render_passes, 0);
+   assert_eq!(stats.command_buffers, 0);
+   assert_eq!(stats.actual_submissions, 0);
+   assert_eq!(stats.memory.logical_total_bytes, 0);
+   assert_eq!(stats.memory.total_bytes, 0);
 }

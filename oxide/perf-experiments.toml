@@ -1,4 +1,73 @@
 [[experiments]]
+id = "c02-complete-renderer-resource-and-work-accounting"
+introduced_commit = "C02 staged tree recorded in commit proof"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-metal", "renderer-web", "browser-webgpu"]
+required_devices = ["macOS host", "Chrome arm64"]
+correctness_gate = "Focused Metal/Web renderer tests, host/report schema tests, wasm check, browser accounting identities, manifest check, and git diff checks must pass."
+performance_gate = "Same-workload paired parent/candidate distributions must show no material regression; the 60-frame sampled resident-memory path and explicitly disabled scan path must remain below the measurement floor on ordinary frames."
+decision_state = "accepted"
+decision = "Added saturating renderer-owned memory and work accounting, with exact Metal allocated sizes, explicit WebGPU logical-only semantics, and bounded resident-resource scans."
+proof = [
+   "Metal tests exercise overflow saturation and keep depth, bloom, ID-mask targets/uploads, Scene3D meshes, and layer storage as independently addressable schema families.",
+   "Browser proof and paired overhead distributions are recorded in benchmarks/experiments/c02-renderer-accounting/README.md and the C02 commit proof.",
+]
+cleanup = [
+   "Allocated WebGPU bytes remain explicitly unavailable because wgpu does not expose backend allocation size; no logical estimate is mislabeled as allocated storage.",
+   "Official workspace, web, and device baseline promotion remains deferred to C62.",
+]
+
+[[experiments]]
+id = "c02-every-frame-resource-table-scan"
+introduced_commit = "rejected during C02"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-metal", "renderer-web"]
+required_devices = ["macOS host", "Chrome arm64"]
+correctness_gate = "Resident totals must reconcile after resource creation without making an unbounded resource-table walk part of every frame."
+performance_gate = "Measurement design only; no performance claim."
+decision_state = "rejected"
+decision = "Rejected scanning every image, layer, mesh, and ID-mask cache on every frame because resource-table cardinality is workload-controlled and would make observability cost unbounded."
+proof = [
+   "The accepted path samples resident-resource tables once every 60 frames and copies the latest snapshot into ordinary frame stats in constant time.",
+   "Explicit benchmark setters can select a one-frame cadence for validation or disable the resident scan for overhead controls.",
+]
+cleanup = ["No every-frame resource-table traversal remains on the normal renderer path."]
+
+[[experiments]]
+id = "c02-webgpu-estimated-allocated-bytes"
+introduced_commit = "rejected during C02"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-web"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Report fields must distinguish declared logical resource bytes from backend allocation sizes exposed by the API."
+performance_gate = "Measurement design only; no performance claim."
+decision_state = "rejected"
+decision = "Rejected reporting WebGPU texture extents and buffer sizes as allocated bytes because wgpu does not expose padding, heap, residency, or driver allocation size."
+proof = [
+   "WebRendererStats reports gpu_allocated_bytes_available=false and gpu_allocated_total_bytes=0 while preserving reconciled logical category totals.",
+]
+cleanup = ["No inferred WebGPU value uses an allocated-bytes field."]
+
+[[experiments]]
+id = "c02-cross-kind-resource-pointer-deduplication"
+introduced_commit = "rejected during C02"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-metal"]
+required_devices = ["macOS host"]
+correctness_gate = "Texture aliases and buffer aliases must each count once without allowing an address collision between different Metal object kinds to suppress a resource."
+performance_gate = "Measurement design only; no performance claim."
+decision_state = "rejected"
+decision = "Rejected sharing one pointer set across textures and buffers; deduplication now uses separate resource-kind sets while retaining one category owner per resource."
+proof = [
+   "Metal texture categories share one texture identity set and buffer categories share a separate buffer identity set; total bytes are the saturating sum of disjoint category results.",
+]
+cleanup = ["The cross-kind identity set is absent from the accepted accounting path."]
+
+[[experiments]]
 id = "c00-paired-renderer-experiments-and-raf-distributions"
 introduced_commit = "C00 staged tree recorded in commit proof"
 introduced_date = "2026-07-12"
