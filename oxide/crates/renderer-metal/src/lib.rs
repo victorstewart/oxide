@@ -58,7 +58,6 @@ use oxide_renderer_api as api;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::CStr;
-use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{atomic::AtomicBool, Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -866,18 +865,28 @@ pub struct MetalRenderer {
     queue: CommandQueue,
     pso_solid: RenderPipelineState,
     pso_image: RenderPipelineState,
+    pso_layer_image: RenderPipelineState,
     pso_image_single: RenderPipelineState,
+    pso_layer_image_single: RenderPipelineState,
     pso_image_mesh: RenderPipelineState,
+    pso_layer_image_mesh: RenderPipelineState,
     pso_blur: RenderPipelineState,
     pso_downsample: RenderPipelineState,
     pso_upsample: RenderPipelineState,
     pso_backdrop: RenderPipelineState,
     pso_visual_effect: RenderPipelineState,
     pso_rrect: RenderPipelineState,
+    pso_layer_rrect: RenderPipelineState,
     pso_nine_slice: RenderPipelineState,
+    pso_layer_nine_slice: RenderPipelineState,
+    pso_layer_composite: RenderPipelineState,
+    pso_layer_composite_aligned: RenderPipelineState,
     pso_spinner: RenderPipelineState,
+    pso_layer_spinner: RenderPipelineState,
     pso_text: RenderPipelineState,
+    pso_layer_text: RenderPipelineState,
     pso_text_sdf: RenderPipelineState,
+    pso_layer_text_sdf: RenderPipelineState,
     pso_camera: RenderPipelineState,
     pso_camera_legacy: RenderPipelineState,
     pso_camera_preview_fast_full: RenderPipelineState,
@@ -932,6 +941,8 @@ pub struct MetalRenderer {
     effect_fbuf: alloc::vec::Vec<f32>,
     filtered_prepass: FilteredDrawList,
     filtered_main: FilteredDrawList,
+    layer_plans: alloc::vec::Vec<LayerPlan>,
+    layer_plan_stack: alloc::vec::Vec<LayerPlanStackEntry>,
     layer_sublist: api::DrawList,
     layer_scratch_frame: Option<PerFrame>,
     clip_stack_pool: alloc::vec::Vec<alloc::vec::Vec<api::RectI>>,
@@ -958,6 +969,8 @@ pub struct MetalRenderer {
     next_mesh3d_id: u32,
     layers: HashMap<u32, LayerEntry>,
     layer_cache_enabled: bool,
+    encoding_layer: bool,
+    inline_layer_counter_active: bool,
     last_stats: PerfStats,
     acc_draws: u32,
     acc_instanced: u32,
@@ -970,6 +983,14 @@ pub struct MetalRenderer {
     acc_chunks_prepared: u64,
     acc_backend_cache_hits: u64,
     acc_backend_cache_misses: u64,
+    acc_layer_body_commands_scanned: u64,
+    acc_layer_body_commands_copied: u64,
+    acc_layer_texture_creates: u32,
+    acc_layer_cache_hits: u32,
+    acc_layer_cache_misses: u32,
+    acc_layer_offscreen_draws: u64,
+    acc_layer_inline_draws: u64,
+    acc_layer_double_render_prevented: u32,
     acc_render_passes: u32,
     acc_blit_passes: u32,
     acc_texture_copies: u32,
@@ -1403,13 +1424,13 @@ impl MetalRenderer {
                 build_solid_pso(&device, &library, fmt, sample_count)
             })?;
             let pso_image = build_init_stage("pso.image", || {
-                build_image_pso(&device, &library, fmt, sample_count)
+                build_image_pso(&device, &library, fmt, sample_count, false)
             })?;
             let pso_image_single = build_init_stage("pso.image_single", || {
-                build_image_single_pso(&device, &library, fmt, sample_count)
+                build_image_single_pso(&device, &library, fmt, sample_count, false)
             })?;
             let pso_image_mesh = build_init_stage("pso.image_mesh", || {
-                build_image_mesh_pso(&device, &library, fmt, sample_count)
+                build_image_mesh_pso(&device, &library, fmt, sample_count, false)
             })?;
             let pso_blur = build_init_stage("pso.blur", || build_blur_pso(&device, &library, fmt))?;
             let pso_downsample = build_init_stage("pso.downsample", || {
@@ -1426,16 +1447,30 @@ impl MetalRenderer {
                 build_rrect_pso(&device, &library, fmt, sample_count)
             })?;
             let pso_nine = build_init_stage("pso.nine_slice", || {
-                build_nine_slice_pso(&device, &library, fmt, sample_count)
+                build_nine_slice_pso(&device, &library, fmt, sample_count, false)
             })?;
             let pso_spin = build_init_stage("pso.spinner", || {
-                build_spinner_pso(&device, &library, fmt, sample_count)
+                build_spinner_pso(&device, &library, fmt, sample_count, false)
             })?;
             let pso_text = build_init_stage("pso.text", || {
-                build_text_pso(&device, &library, fmt, sample_count, supports_glyph_icb)
+                build_text_pso(
+                    &device,
+                    &library,
+                    fmt,
+                    sample_count,
+                    supports_glyph_icb,
+                    false,
+                )
             })?;
             let pso_text_sdf = build_init_stage("pso.text_sdf", || {
-                build_text_sdf_pso(&device, &library, fmt, sample_count, supports_glyph_icb)
+                build_text_sdf_pso(
+                    &device,
+                    &library,
+                    fmt,
+                    sample_count,
+                    supports_glyph_icb,
+                    false,
+                )
             })?;
             Ok((
                 pso_solid,
@@ -1499,6 +1534,84 @@ impl MetalRenderer {
                     return Err(err);
                 }
             }
+        };
+        let pso_layer_composite = if direct_preview_only {
+            pso_nine.to_owned()
+        } else {
+            build_init_stage("pso.layer_composite", || {
+                build_layer_composite_pso(&device, &library, color_format, sample_count)
+            })?
+        };
+        let pso_layer_composite_aligned = if direct_preview_only {
+            pso_nine.to_owned()
+        } else {
+            build_init_stage("pso.layer_composite_aligned", || {
+                build_layer_composite_aligned_pso(&device, &library, color_format, sample_count)
+            })?
+        };
+        let pso_layer_rrect = if direct_preview_only {
+            pso_rrect.to_owned()
+        } else {
+            build_init_stage("pso.layer_rrect", || {
+                build_layer_rrect_pso(&device, &library, color_format, sample_count)
+            })?
+        };
+        let (
+            pso_layer_image,
+            pso_layer_image_single,
+            pso_layer_image_mesh,
+            pso_layer_nine_slice,
+            pso_layer_spinner,
+            pso_layer_text,
+            pso_layer_text_sdf,
+        ) = if direct_preview_only {
+            (
+                pso_image.to_owned(),
+                pso_image_single.to_owned(),
+                pso_image_mesh.to_owned(),
+                pso_nine.to_owned(),
+                pso_spin.to_owned(),
+                pso_text.to_owned(),
+                pso_text_sdf.to_owned(),
+            )
+        } else {
+            (
+                build_init_stage("pso.layer_image", || {
+                    build_image_pso(&device, &library, color_format, sample_count, true)
+                })?,
+                build_init_stage("pso.layer_image_single", || {
+                    build_image_single_pso(&device, &library, color_format, sample_count, true)
+                })?,
+                build_init_stage("pso.layer_image_mesh", || {
+                    build_image_mesh_pso(&device, &library, color_format, sample_count, true)
+                })?,
+                build_init_stage("pso.layer_nine_slice", || {
+                    build_nine_slice_pso(&device, &library, color_format, sample_count, true)
+                })?,
+                build_init_stage("pso.layer_spinner", || {
+                    build_spinner_pso(&device, &library, color_format, sample_count, true)
+                })?,
+                build_init_stage("pso.layer_text", || {
+                    build_text_pso(
+                        &device,
+                        &library,
+                        color_format,
+                        sample_count,
+                        use_glyph_icb,
+                        true,
+                    )
+                })?,
+                build_init_stage("pso.layer_text_sdf", || {
+                    build_text_sdf_pso(
+                        &device,
+                        &library,
+                        color_format,
+                        sample_count,
+                        use_glyph_icb,
+                        true,
+                    )
+                })?,
+            )
         };
         let pso_scene3d_tri = build_init_stage("pso.scene3d.tri", || {
             build_scene3d_pso(
@@ -1722,18 +1835,28 @@ impl MetalRenderer {
             queue,
             pso_solid,
             pso_image,
+            pso_layer_image,
             pso_image_single,
+            pso_layer_image_single,
             pso_image_mesh,
+            pso_layer_image_mesh,
             pso_blur,
             pso_downsample,
             pso_upsample,
             pso_backdrop,
             pso_visual_effect,
             pso_rrect,
+            pso_layer_rrect,
             pso_nine_slice: pso_nine,
+            pso_layer_nine_slice,
+            pso_layer_composite,
+            pso_layer_composite_aligned,
             pso_spinner: pso_spin,
+            pso_layer_spinner,
             pso_text,
+            pso_layer_text,
             pso_text_sdf,
+            pso_layer_text_sdf,
             pso_camera,
             pso_camera_legacy,
             pso_camera_preview_fast_full,
@@ -1787,6 +1910,8 @@ impl MetalRenderer {
             effect_fbuf: alloc::vec::Vec::new(),
             filtered_prepass: FilteredDrawList::default(),
             filtered_main: FilteredDrawList::default(),
+            layer_plans: alloc::vec::Vec::new(),
+            layer_plan_stack: alloc::vec::Vec::new(),
             layer_sublist: api::DrawList::default(),
             layer_scratch_frame: None,
             clip_stack_pool: alloc::vec::Vec::new(),
@@ -1813,6 +1938,8 @@ impl MetalRenderer {
             next_mesh3d_id: 1,
             layers: HashMap::new(),
             layer_cache_enabled,
+            encoding_layer: false,
+            inline_layer_counter_active: false,
             last_stats: PerfStats::default(),
             acc_draws: 0,
             acc_instanced: 0,
@@ -1825,6 +1952,14 @@ impl MetalRenderer {
             acc_chunks_prepared: 0,
             acc_backend_cache_hits: 0,
             acc_backend_cache_misses: 0,
+            acc_layer_body_commands_scanned: 0,
+            acc_layer_body_commands_copied: 0,
+            acc_layer_texture_creates: 0,
+            acc_layer_cache_hits: 0,
+            acc_layer_cache_misses: 0,
+            acc_layer_offscreen_draws: 0,
+            acc_layer_inline_draws: 0,
+            acc_layer_double_render_prevented: 0,
             acc_render_passes: 0,
             acc_blit_passes: 0,
             acc_texture_copies: 0,
@@ -3186,6 +3321,14 @@ impl MetalRenderer {
             self.acc_chunks_prepared = 0;
             self.acc_backend_cache_hits = 0;
             self.acc_backend_cache_misses = 0;
+            self.acc_layer_body_commands_scanned = 0;
+            self.acc_layer_body_commands_copied = 0;
+            self.acc_layer_texture_creates = 0;
+            self.acc_layer_cache_hits = 0;
+            self.acc_layer_cache_misses = 0;
+            self.acc_layer_offscreen_draws = 0;
+            self.acc_layer_inline_draws = 0;
+            self.acc_layer_double_render_prevented = 0;
             self.acc_render_passes = 0;
             self.acc_blit_passes = 0;
             self.acc_texture_copies = 0;
@@ -4520,6 +4663,211 @@ fn clear_layer_sublist(sub: &mut api::DrawList, item_capacity: usize) {
     }
 }
 
+fn build_layer_sublist(
+    list: &api::DrawList,
+    begin: usize,
+    end: usize,
+    origin: [f32; 2],
+    sub: &mut api::DrawList,
+) {
+    clear_layer_sublist(sub, end.saturating_sub(begin + 1));
+    let ox = origin[0];
+    let oy = origin[1];
+    for command in &list.items[begin + 1..end] {
+        match command {
+            api::DrawCmd::LayerBegin { id, rect, dirty } => {
+                sub.items.push(api::DrawCmd::LayerBegin {
+                    id: *id,
+                    rect: api::RectF::new(rect.x - ox, rect.y - oy, rect.w, rect.h),
+                    dirty: *dirty,
+                });
+            }
+            api::DrawCmd::LayerEnd => sub.items.push(api::DrawCmd::LayerEnd),
+            api::DrawCmd::ClipPush { rect } => {
+                let mut rect = *rect;
+                rect.x -= ox as i32;
+                rect.y -= oy as i32;
+                sub.items.push(api::DrawCmd::ClipPush { rect });
+            }
+            api::DrawCmd::ClipPop => sub.items.push(api::DrawCmd::ClipPop),
+            api::DrawCmd::RRect { rect, radii, color } => {
+                sub.items.push(api::DrawCmd::RRect {
+                    rect: api::RectF::new(rect.x - ox, rect.y - oy, rect.w, rect.h),
+                    radii: *radii,
+                    color: *color,
+                });
+            }
+            api::DrawCmd::NineSlice { tex, rect, slice, alpha } => {
+                sub.items.push(api::DrawCmd::NineSlice {
+                    tex: *tex,
+                    rect: api::RectF::new(rect.x - ox, rect.y - oy, rect.w, rect.h),
+                    slice: *slice,
+                    alpha: *alpha,
+                });
+            }
+            api::DrawCmd::Image { tex, dst, src, alpha } => {
+                sub.items.push(api::DrawCmd::Image {
+                    tex: *tex,
+                    dst: api::RectF::new(dst.x - ox, dst.y - oy, dst.w, dst.h),
+                    src: *src,
+                    alpha: *alpha,
+                });
+            }
+            api::DrawCmd::ImageMesh { tex, vb, ib, alpha } => {
+                if let Some((vb, ib)) = append_offset_geometry_to_sublist(
+                    &list.vertices,
+                    &list.indices,
+                    sub,
+                    *vb,
+                    *ib,
+                    ox,
+                    oy,
+                ) {
+                    sub.items.push(api::DrawCmd::ImageMesh { tex: *tex, vb, ib, alpha: *alpha });
+                }
+            }
+            api::DrawCmd::Spinner { center, atom, alpha } => {
+                sub.items.push(api::DrawCmd::Spinner {
+                    center: [center[0] - ox, center[1] - oy],
+                    atom: *atom,
+                    alpha: *alpha,
+                });
+            }
+            api::DrawCmd::GlyphRun { run } => {
+                if let Some((vb, ib)) = append_offset_geometry_to_sublist(
+                    &list.vertices,
+                    &list.indices,
+                    sub,
+                    run.vb,
+                    run.ib,
+                    ox,
+                    oy,
+                ) {
+                    sub.items.push(api::DrawCmd::GlyphRun {
+                        run: api::GlyphRun {
+                            atlas: run.atlas,
+                            atlas_revision: run.atlas_revision,
+                            vb,
+                            ib,
+                            sdf: run.sdf,
+                            color: run.color,
+                        },
+                    });
+                }
+            }
+            api::DrawCmd::CameraBg {
+                rect,
+                tint,
+                alpha,
+                grayscale,
+                blur,
+                sigma,
+            } => {
+                sub.items.push(api::DrawCmd::CameraBg {
+                    rect: api::RectF::new(rect.x - ox, rect.y - oy, rect.w, rect.h),
+                    tint: *tint,
+                    alpha: *alpha,
+                    grayscale: *grayscale,
+                    blur: *blur,
+                    sigma: *sigma,
+                });
+            }
+            api::DrawCmd::Solid { .. }
+            | api::DrawCmd::Backdrop { .. }
+            | api::DrawCmd::VisualEffect { .. } => {}
+        }
+    }
+}
+
+impl MetalRenderer {
+    fn build_layer_plans(&mut self, list: &api::DrawList) {
+        self.layer_plans.clear();
+        self.layer_plan_stack.clear();
+        if !self.layer_cache_enabled {
+            return;
+        }
+        for (index, command) in list.items.iter().enumerate() {
+            if !self.layer_plan_stack.is_empty() {
+                self.acc_layer_body_commands_scanned =
+                    self.acc_layer_body_commands_scanned.saturating_add(1);
+            }
+            match command {
+                api::DrawCmd::LayerBegin { id, rect, dirty } => {
+                    self.layer_plan_stack.push(LayerPlanStackEntry {
+                        id: *id,
+                        begin: index,
+                        rect: *rect,
+                        dirty: *dirty,
+                        unsupported: false,
+                    });
+                }
+                api::DrawCmd::LayerEnd => {
+                    let Some(mut pending) = self.layer_plan_stack.pop() else { continue };
+                    let w = (pending.rect.w * self.target_scale.max(1.0)).ceil() as u32;
+                    let h = (pending.rect.h * self.target_scale.max(1.0)).ceil() as u32;
+                    pending.unsupported |= w == 0
+                        || h == 0
+                        || !pending.rect.x.is_finite()
+                        || !pending.rect.y.is_finite()
+                        || !pending.rect.w.is_finite()
+                        || !pending.rect.h.is_finite();
+                    let existing = self.layers.get(&pending.id);
+                    let valid_size = existing.map(|entry| entry.w == w && entry.h == h).unwrap_or(false);
+                    let refresh = !pending.unsupported && (pending.dirty || !valid_size);
+                    let generation = existing.map_or(1, |entry| {
+                        if refresh { entry.generation.wrapping_add(1) } else { entry.generation }
+                    });
+                    let action = if pending.unsupported {
+                        LayerPlanAction::Inline
+                    } else {
+                        LayerPlanAction::Composite
+                    };
+                    if pending.unsupported {
+                        if let Some(parent) = self.layer_plan_stack.last_mut() {
+                            parent.unsupported = true;
+                        }
+                    } else if refresh {
+                        if let Some(parent) = self.layer_plan_stack.last_mut() {
+                            parent.dirty = true;
+                        }
+                        self.acc_backend_cache_misses = self.acc_backend_cache_misses.saturating_add(1);
+                        self.acc_layer_cache_misses = self.acc_layer_cache_misses.saturating_add(1);
+                    } else {
+                        self.acc_backend_cache_hits = self.acc_backend_cache_hits.saturating_add(1);
+                        self.acc_layer_cache_hits = self.acc_layer_cache_hits.saturating_add(1);
+                    }
+                    self.layer_plans.push(LayerPlan {
+                        id: pending.id,
+                        begin: pending.begin,
+                        end: index,
+                        rect: pending.rect,
+                        generation,
+                        refresh,
+                        action,
+                    });
+                }
+                api::DrawCmd::Solid { .. }
+                | api::DrawCmd::Backdrop { .. }
+                | api::DrawCmd::VisualEffect { .. } => {
+                    for pending in &mut self.layer_plan_stack {
+                        pending.unsupported = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.layer_plan_stack.clear();
+    }
+
+    fn layer_plan(&self, id: u32, begin: usize) -> Option<LayerPlan> {
+        self.layer_plans
+            .iter()
+            .copied()
+            .find(|plan| plan.id == id && plan.begin == begin)
+            .or_else(|| self.layer_plans.iter().copied().find(|plan| plan.id == id))
+    }
+}
+
 impl Drop for MetalRenderer {
     fn drop(&mut self) {
         self.release_live_camera_frame();
@@ -4563,6 +4911,14 @@ impl api::Renderer for MetalRenderer {
             self.acc_chunks_prepared = 0;
             self.acc_backend_cache_hits = 0;
             self.acc_backend_cache_misses = 0;
+            self.acc_layer_body_commands_scanned = 0;
+            self.acc_layer_body_commands_copied = 0;
+            self.acc_layer_texture_creates = 0;
+            self.acc_layer_cache_hits = 0;
+            self.acc_layer_cache_misses = 0;
+            self.acc_layer_offscreen_draws = 0;
+            self.acc_layer_inline_draws = 0;
+            self.acc_layer_double_render_prevented = 0;
             self.acc_render_passes = 0;
             self.acc_blit_passes = 0;
             self.acc_texture_copies = 0;
@@ -4962,195 +5318,101 @@ impl api::Renderer for MetalRenderer {
             }
         }
 
-        // Pre-render cacheable layers into textures.
-        // Simulator defaults this off for correctness; layers are then rendered inline.
-        if self.layer_cache_enabled {
-            let mut i = 0usize;
-            while i < list.items.len() {
-                if let api::DrawCmd::LayerBegin { id, rect, dirty } = &list.items[i] {
-                    // find end
-                    let mut depth = 1usize;
-                    let mut j = i + 1;
-                    let mut unsupported = false;
-                    while j < list.items.len() && depth > 0 {
-                        match &list.items[j] {
-                            api::DrawCmd::LayerBegin { .. } => depth += 1,
-                            api::DrawCmd::LayerEnd => depth -= 1,
-                            api::DrawCmd::Solid { .. }
-                            | api::DrawCmd::Backdrop { .. }
-                            | api::DrawCmd::VisualEffect { .. } => unsupported = true,
-                            _ => {}
-                        }
-                        j += 1;
-                    }
-                    let end = j - 1;
-                    if !unsupported {
-                        // Build offset sublist like in encode_draws
-                        let ox = rect.x;
-                        let oy = rect.y;
-                        let mut sub = core::mem::take(&mut self.layer_sublist);
-                        clear_layer_sublist(&mut sub, end.saturating_sub(i + 1));
-                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                        for k in i + 1..end {
-                            match &list.items[k] {
-                                api::DrawCmd::ClipPush { rect: r0 } => {
-                                    let mut rr = *r0;
-                                    rr.x -= ox as i32;
-                                    rr.y -= oy as i32;
-                                    sub.items.push(api::DrawCmd::ClipPush { rect: rr });
-                                }
-                                api::DrawCmd::ClipPop => sub.items.push(api::DrawCmd::ClipPop),
-                                api::DrawCmd::RRect { rect: r0, radii, color } => {
-                                    let adj = api::RectF::new(r0.x - ox, r0.y - oy, r0.w, r0.h);
-                                    sub.items.push(api::DrawCmd::RRect {
-                                        rect: adj,
-                                        radii: *radii,
-                                        color: *color,
-                                    });
-                                }
-                                api::DrawCmd::NineSlice { tex, rect: r0, slice, alpha } => {
-                                    let adj = api::RectF::new(r0.x - ox, r0.y - oy, r0.w, r0.h);
-                                    sub.items.push(api::DrawCmd::NineSlice {
-                                        tex: *tex,
-                                        rect: adj,
-                                        slice: *slice,
-                                        alpha: *alpha,
-                                    });
-                                }
-                                api::DrawCmd::Image { tex, dst, src, alpha } => {
-                                    let adj = api::RectF::new(dst.x - ox, dst.y - oy, dst.w, dst.h);
-                                    sub.items.push(api::DrawCmd::Image {
-                                        tex: *tex,
-                                        dst: adj,
-                                        src: *src,
-                                        alpha: *alpha,
-                                    });
-                                }
-                                api::DrawCmd::ImageMesh { tex, vb, ib, alpha } => {
-                                    if let Some((vb, ib)) = append_offset_geometry_to_sublist(
-                                        &list.vertices,
-                                        &list.indices,
-                                        &mut sub,
-                                        *vb,
-                                        *ib,
-                                        ox,
-                                        oy,
-                                    ) {
-                                        sub.items.push(api::DrawCmd::ImageMesh {
-                                            tex: *tex,
-                                            vb,
-                                            ib,
-                                            alpha: *alpha,
-                                        });
-                                    }
-                                }
-                                api::DrawCmd::Spinner { center, atom, alpha } => {
-                                    let adj = [center[0] - ox, center[1] - oy];
-                                    sub.items.push(api::DrawCmd::Spinner {
-                                        center: adj,
-                                        atom: *atom,
-                                        alpha: *alpha,
-                                    });
-                                }
-                                api::DrawCmd::GlyphRun { run } => {
-                                    if let Some((vb, ib)) = append_offset_geometry_to_sublist(
-                                        &list.vertices,
-                                        &list.indices,
-                                        &mut sub,
-                                        run.vb,
-                                        run.ib,
-                                        ox,
-                                        oy,
-                                    ) {
-                                        sub.items.push(api::DrawCmd::GlyphRun {
-                                            run: api::GlyphRun {
-                                                atlas: run.atlas,
-                                                atlas_revision: run.atlas_revision,
-                                                vb,
-                                                ib,
-                                                sdf: run.sdf,
-                                                color: run.color,
-                                            },
-                                        });
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        // Hash: use number of items and vertex count
-                        use std::hash::Hash;
-                        (sub.items.len() as u64).hash(&mut hasher);
-                        (sub.vertices.len() as u64).hash(&mut hasher);
-                        let hash = hasher.finish();
-                        let w_px = (rect.w * self.target_scale.max(1.0)).ceil() as u32;
-                        let h_px = (rect.h * self.target_scale.max(1.0)).ceil() as u32;
-                        let need = *dirty
-                            || !self.layers.get(id).is_some()
-                            || self
-                                .layers
-                                .get(id)
-                                .map(|e| e.w != w_px || e.h != h_px || e.hash != hash)
-                                .unwrap_or(true);
-                        if need {
-                            let d = TextureDescriptor::new();
-                            d.set_pixel_format(self.color_format);
-                            d.set_texture_type(MTLTextureType::D2);
-                            d.set_width(w_px as u64);
-                            d.set_height(h_px as u64);
-                            d.set_storage_mode(MTLStorageMode::Private);
-                            d.set_usage(
-                                MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead,
-                            );
-                            let tex = self.device.new_texture(&d);
-                            let rpdl = RenderPassDescriptor::new();
-                            let ca_l = rpdl.color_attachments().object_at(0).unwrap();
-                            ca_l.set_texture(Some(&tex));
-                            ca_l.set_load_action(MTLLoadAction::Clear);
-                            ca_l.set_clear_color(MTLClearColor {
-                                red: 0.0,
-                                green: 0.0,
-                                blue: 0.0,
-                                alpha: 0.0,
-                            });
-                            ca_l.set_store_action(MTLStoreAction::Store);
-                            self.acc_render_passes = self.acc_render_passes.saturating_add(1);
-                            let encl = cmd.new_render_command_encoder(&rpdl);
-                            let mut pf_l =
-                                self.layer_scratch_frame.take().unwrap_or_else(PerFrame::new);
-                            pf_l.reset();
-                            pf_l.cmd = None;
-                            pf_l.submitted = None;
-                            // Temporarily change viewport values
-                            let old_w = self.target_w;
-                            let old_h = self.target_h;
-                            let old_scale = self.target_scale;
-                            self.target_w = w_px;
-                            self.target_h = h_px;
-                            self.target_scale = old_scale;
-                            encode_draws(
-                                &encl,
-                                &mut pf_l,
-                                self,
-                                DrawListView::from_draw_list(&sub),
-                                false,
-                                None,
-                            );
-                            self.target_w = old_w;
-                            self.target_h = old_h;
-                            self.target_scale = old_scale;
-                            encl.end_encoding();
-                            self.layer_scratch_frame = Some(pf_l);
-                            self.layers.insert(*id, LayerEntry { tex, w: w_px, h: h_px, hash });
-                            self.acc_resource_creates =
-                                self.acc_resource_creates.saturating_add(1);
-                        }
-                        self.layer_sublist = sub;
-                    }
-                    i = end + 1;
-                    continue;
-                }
-                i += 1;
+        self.build_layer_plans(list);
+        for plan_index in 0..self.layer_plans.len() {
+            let plan = self.layer_plans[plan_index];
+            if !plan.refresh {
+                continue;
             }
+            let mut sub = core::mem::take(&mut self.layer_sublist);
+            build_layer_sublist(list, plan.begin, plan.end, [plan.rect.x, plan.rect.y], &mut sub);
+            self.acc_layer_body_commands_copied = self
+                .acc_layer_body_commands_copied
+                .saturating_add(sub.items.len() as u64);
+            self.acc_commands_copied =
+                self.acc_commands_copied.saturating_add(sub.items.len() as u64);
+            self.acc_geometry_bytes_copied = self.acc_geometry_bytes_copied.saturating_add(
+                (sub.vertices.len() as u64)
+                    .saturating_mul(core::mem::size_of::<api::Vertex>() as u64)
+                    .saturating_add(
+                        (sub.indices.len() as u64)
+                            .saturating_mul(core::mem::size_of::<u16>() as u64),
+                    ),
+            );
+            let w = (plan.rect.w * self.target_scale.max(1.0)).ceil() as u32;
+            let h = (plan.rect.h * self.target_scale.max(1.0)).ceil() as u32;
+            let existing_texture = self
+                .layers
+                .get(&plan.id)
+                .filter(|entry| entry.w == w && entry.h == h)
+                .map(|entry| entry.tex.to_owned());
+            let texture = existing_texture.unwrap_or_else(|| {
+                let descriptor = TextureDescriptor::new();
+                descriptor.set_pixel_format(self.color_format);
+                descriptor.set_texture_type(MTLTextureType::D2);
+                descriptor.set_width(w as u64);
+                descriptor.set_height(h as u64);
+                descriptor.set_storage_mode(MTLStorageMode::Private);
+                descriptor.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+                self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
+                self.acc_layer_texture_creates = self.acc_layer_texture_creates.saturating_add(1);
+                self.device.new_texture(&descriptor)
+            });
+            let pass_descriptor = RenderPassDescriptor::new();
+            let attachment = pass_descriptor.color_attachments().object_at(0).unwrap();
+            attachment.set_texture(Some(&texture));
+            attachment.set_load_action(MTLLoadAction::Clear);
+            attachment.set_clear_color(MTLClearColor {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 0.0,
+            });
+            attachment.set_store_action(MTLStoreAction::Store);
+            self.acc_render_passes = self.acc_render_passes.saturating_add(1);
+            let layer_encoder = cmd.new_render_command_encoder(&pass_descriptor);
+            let mut layer_frame = self.layer_scratch_frame.take().unwrap_or_else(PerFrame::new);
+            layer_frame.reset();
+            layer_frame.cmd = None;
+            layer_frame.submitted = None;
+            let old_size = (self.target_w, self.target_h);
+            let old_encoding_layer = self.encoding_layer;
+            self.target_w = w;
+            self.target_h = h;
+            self.encoding_layer = true;
+            let draws_before = u64::from(self.acc_draws).saturating_add(u64::from(self.acc_instanced));
+            encode_draws(
+                &layer_encoder,
+                &mut layer_frame,
+                self,
+                DrawListView::from_draw_list(&sub),
+                false,
+                None,
+            );
+            let draws_after = u64::from(self.acc_draws).saturating_add(u64::from(self.acc_instanced));
+            self.acc_layer_offscreen_draws = self
+                .acc_layer_offscreen_draws
+                .saturating_add(draws_after.saturating_sub(draws_before));
+            self.target_w = old_size.0;
+            self.target_h = old_size.1;
+            self.encoding_layer = old_encoding_layer;
+            layer_encoder.end_encoding();
+            self.layer_scratch_frame = Some(layer_frame);
+            if let Some(entry) = self
+                .layers
+                .get_mut(&plan.id)
+                .filter(|entry| entry.w == w && entry.h == h)
+            {
+                entry.generation = plan.generation;
+            } else {
+                self.layers.insert(
+                    plan.id,
+                    LayerEntry { tex: texture, w, h, generation: plan.generation },
+                );
+            }
+            self.acc_layer_double_render_prevented =
+                self.acc_layer_double_render_prevented.saturating_add(1);
+            self.layer_sublist = sub;
         }
 
         // Effects prepass: if there is any Backdrop, render a prepass and blur it.
@@ -5668,6 +5930,15 @@ impl api::Renderer for MetalRenderer {
             self.last_stats.chunks_prepared = self.acc_chunks_prepared;
             self.last_stats.backend_cache_hits = self.acc_backend_cache_hits;
             self.last_stats.backend_cache_misses = self.acc_backend_cache_misses;
+            self.last_stats.layer_body_commands_scanned = self.acc_layer_body_commands_scanned;
+            self.last_stats.layer_body_commands_copied = self.acc_layer_body_commands_copied;
+            self.last_stats.layer_texture_creates = self.acc_layer_texture_creates;
+            self.last_stats.layer_cache_hits = self.acc_layer_cache_hits;
+            self.last_stats.layer_cache_misses = self.acc_layer_cache_misses;
+            self.last_stats.layer_offscreen_draws = self.acc_layer_offscreen_draws;
+            self.last_stats.layer_inline_draws = self.acc_layer_inline_draws;
+            self.last_stats.layer_double_render_prevented =
+                self.acc_layer_double_render_prevented;
             self.last_stats.render_passes = self.acc_render_passes;
             self.last_stats.blit_passes = self.acc_blit_passes;
             self.last_stats.command_buffers = self.frames[slot].cmd.is_some() as u32;
@@ -5789,6 +6060,15 @@ impl api::Renderer for MetalRenderer {
             self.last_stats.chunks_prepared = self.acc_chunks_prepared;
             self.last_stats.backend_cache_hits = self.acc_backend_cache_hits;
             self.last_stats.backend_cache_misses = self.acc_backend_cache_misses;
+            self.last_stats.layer_body_commands_scanned = self.acc_layer_body_commands_scanned;
+            self.last_stats.layer_body_commands_copied = self.acc_layer_body_commands_copied;
+            self.last_stats.layer_texture_creates = self.acc_layer_texture_creates;
+            self.last_stats.layer_cache_hits = self.acc_layer_cache_hits;
+            self.last_stats.layer_cache_misses = self.acc_layer_cache_misses;
+            self.last_stats.layer_offscreen_draws = self.acc_layer_offscreen_draws;
+            self.last_stats.layer_inline_draws = self.acc_layer_inline_draws;
+            self.last_stats.layer_double_render_prevented =
+                self.acc_layer_double_render_prevented;
             self.last_stats.render_passes = self.acc_render_passes;
             self.last_stats.resource_creates = self.acc_resource_creates;
             self.last_stats.resource_grows = self.acc_resource_grows;
@@ -6075,6 +6355,87 @@ fn encode_draws(
     encode_draws_range(enc, pf, r, list, 0, list.items.len(), prepass, global_scissor_dp);
 }
 
+fn encode_cached_layer(
+    enc: &RenderCommandEncoderRef,
+    r: &mut MetalRenderer,
+    plan: LayerPlan,
+    rect: api::RectF,
+    viewport: [f32; 2],
+) {
+    let Some(layer) = r
+        .layers
+        .get(&plan.id)
+        .filter(|entry| entry.generation == plan.generation)
+    else {
+        debug_assert!(false, "planned Metal layer generation must exist before composition");
+        return;
+    };
+    let scale = r.target_scale.max(1.0);
+    let pixel_aligned = !plan.refresh
+        && [rect.x, rect.y, rect.w, rect.h]
+        .into_iter()
+        .all(|value| {
+            let pixels = value * scale;
+            (pixels - pixels.round()).abs() <= f32::EPSILON
+        })
+        && (rect.w * scale).round() as u32 == layer.w
+        && (rect.h * scale).round() as u32 == layer.h;
+    enc.set_render_pipeline_state(if pixel_aligned {
+        &r.pso_layer_composite_aligned
+    } else {
+        &r.pso_layer_composite
+    });
+    if !pixel_aligned {
+        if let Some(sampler) = &r.sampler {
+            enc.set_fragment_sampler_state(0, Some(sampler));
+        }
+    }
+    enc.set_fragment_texture(0, Some(&layer.tex));
+    enc.set_vertex_bytes(
+        1,
+        core::mem::size_of_val(&viewport) as u64,
+        viewport.as_ptr().cast(),
+    );
+    let vertex = [rect.x, rect.y, rect.w, rect.h, viewport[0], viewport[1]];
+    enc.set_vertex_bytes(0, core::mem::size_of_val(&vertex) as u64, vertex.as_ptr().cast());
+    let fragment = pack_nine_slice_params(
+        rect,
+        layer.w as f32,
+        layer.h as f32,
+        api::Insets::new(0.0, 0.0, 0.0, 0.0),
+        1.0,
+    );
+    enc.set_fragment_bytes(
+        1,
+        core::mem::size_of_val(&fragment) as u64,
+        (&fragment as *const NineSliceGpuParams).cast(),
+    );
+    enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
+    r.acc_draws = r.acc_draws.saturating_add(1);
+}
+
+fn encode_inline_layer(
+    enc: &RenderCommandEncoderRef,
+    pf: &mut PerFrame,
+    r: &mut MetalRenderer,
+    list: DrawListView<'_>,
+    item_start: usize,
+    item_end: usize,
+    global_scissor_dp: Option<api::RectI>,
+) {
+    let owns_counter = !r.inline_layer_counter_active;
+    let draws_before = u64::from(r.acc_draws).saturating_add(u64::from(r.acc_instanced));
+    r.inline_layer_counter_active = true;
+    encode_draws_range(enc, pf, r, list, item_start, item_end, false, global_scissor_dp);
+    r.inline_layer_counter_active = !owns_counter;
+    if owns_counter {
+        let draws_after = u64::from(r.acc_draws).saturating_add(u64::from(r.acc_instanced));
+        r.acc_layer_inline_draws = r
+            .acc_layer_inline_draws
+            .saturating_add(draws_after.saturating_sub(draws_before));
+    }
+}
+
 fn encode_draws_range(
     enc: &RenderCommandEncoderRef,
     pf: &mut PerFrame,
@@ -6128,7 +6489,9 @@ fn encode_draws_range(
                         [0.0, 0.0, 0.0, 0.0],
                         api::Color::rgba(tint.r, tint.g, tint.b, a),
                     );
-                    enc.set_render_pipeline_state(&r.pso_rrect);
+                    let pipeline =
+                        if r.encoding_layer { &r.pso_layer_rrect } else { &r.pso_rrect };
+                    enc.set_render_pipeline_state(pipeline);
                     enc.set_vertex_bytes(
                         1,
                         core::mem::size_of_val(&vp_dp) as u64,
@@ -6253,255 +6616,59 @@ fn encode_draws_range(
                 i += 1;
                 continue;
             }
-            api::DrawCmd::LayerBegin { id, rect, dirty } => {
-                // Find matching LayerEnd and collect sublist
-                let mut depth = 1usize;
-                let mut j = i + 1;
-                while j < item_end && depth > 0 {
-                    match &list.items[j] {
-                        api::DrawCmd::LayerBegin { .. } => depth += 1,
-                        api::DrawCmd::LayerEnd => depth -= 1,
-                        _ => {}
+            api::DrawCmd::LayerBegin { id, rect, dirty: _ } => {
+                let plan = if prepass { None } else { r.layer_plan(*id, i) };
+                let planned_end = plan.and_then(|plan| {
+                    let end = i.checked_add(plan.end.saturating_sub(plan.begin))?;
+                    matches!(list.items.get(end), Some(api::DrawCmd::LayerEnd)).then_some(end)
+                });
+                let end = if let Some(end) = planned_end {
+                    end
+                } else {
+                    let mut depth = 1usize;
+                    let mut cursor = i + 1;
+                    while cursor < item_end && depth > 0 {
+                        match &list.items[cursor] {
+                            api::DrawCmd::LayerBegin { .. } => depth += 1,
+                            api::DrawCmd::LayerEnd => depth -= 1,
+                            _ => {}
+                        }
+                        cursor += 1;
                     }
-                    j += 1;
-                }
-                let end = j - 1; // points to LayerEnd
-                                 // If in prepass, render sublist inline (no caching)
+                    cursor.saturating_sub(1)
+                };
                 if prepass {
-                    // Encode sublist directly
                     let resume_scissor = effective_scissor_dp(current, global_scissor_dp);
                     encode_draws_range(enc, pf, r, list, i + 1, end, true, global_scissor_dp);
                     apply_scissor_dp(enc, r, resume_scissor, &mut last_applied);
                     i = end + 1;
                     continue;
                 }
-                // Determine if sublist contains unsupported commands (Solid)
-                let mut unsupported = false;
-                for k in i + 1..end {
-                    if matches!(list.items[k], api::DrawCmd::Solid { .. }) {
-                        unsupported = true;
-                        break;
+                if let Some(plan) = plan {
+                    match plan.action {
+                        LayerPlanAction::Inline => {
+                            let resume_scissor = effective_scissor_dp(current, global_scissor_dp);
+                            encode_inline_layer(
+                                enc,
+                                pf,
+                                r,
+                                list,
+                                i + 1,
+                                end,
+                                global_scissor_dp,
+                            );
+                            apply_scissor_dp(enc, r, resume_scissor, &mut last_applied);
+                        }
+                        LayerPlanAction::Composite => {
+                            encode_cached_layer(enc, r, plan, *rect, vp_dp);
+                        }
                     }
-                }
-                if unsupported {
-                    // Fallback to inline encode
-                    let resume_scissor = effective_scissor_dp(current, global_scissor_dp);
-                    encode_draws_range(enc, pf, r, list, i + 1, end, false, global_scissor_dp);
-                    apply_scissor_dp(enc, r, resume_scissor, &mut last_applied);
                     i = end + 1;
                     continue;
                 }
-                if !r.layer_cache_enabled {
-                    // Correctness-first path: disable layer texture caching and render inline.
-                    let resume_scissor = effective_scissor_dp(current, global_scissor_dp);
-                    encode_draws_range(enc, pf, r, list, i + 1, end, false, global_scissor_dp);
-                    apply_scissor_dp(enc, r, resume_scissor, &mut last_applied);
-                    i = end + 1;
-                    continue;
-                }
-                // Build offset sublist in local coordinates (dp) and compute hash
-                let ox = rect.x;
-                let oy = rect.y;
-                let mut sub = core::mem::take(&mut r.layer_sublist);
-                clear_layer_sublist(&mut sub, end.saturating_sub(i + 1));
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                for k in i + 1..end {
-                    match &list.items[k] {
-                        api::DrawCmd::ClipPush { rect: r0 } => {
-                            let mut rr = *r0;
-                            rr.x -= ox as i32;
-                            rr.y -= oy as i32;
-                            sub.items.push(api::DrawCmd::ClipPush { rect: rr });
-                            rr.x.hash(&mut hasher);
-                            rr.y.hash(&mut hasher);
-                            rr.w.hash(&mut hasher);
-                            rr.h.hash(&mut hasher);
-                        }
-                        api::DrawCmd::CameraBg {
-                            rect: r0,
-                            tint,
-                            alpha,
-                            grayscale,
-                            blur,
-                            sigma,
-                        } => {
-                            let adj = api::RectF::new(r0.x - ox, r0.y - oy, r0.w, r0.h);
-                            sub.items.push(api::DrawCmd::CameraBg {
-                                rect: adj,
-                                tint: *tint,
-                                alpha: *alpha,
-                                grayscale: *grayscale,
-                                blur: *blur,
-                                sigma: *sigma,
-                            });
-                            ((adj.x.to_bits() ^ adj.y.to_bits()) as u64).hash(&mut hasher);
-                        }
-                        api::DrawCmd::ClipPop => sub.items.push(api::DrawCmd::ClipPop),
-                        api::DrawCmd::RRect { rect: r0, radii, color } => {
-                            let adj = api::RectF::new(r0.x - ox, r0.y - oy, r0.w, r0.h);
-                            sub.items.push(api::DrawCmd::RRect {
-                                rect: adj,
-                                radii: *radii,
-                                color: *color,
-                            });
-                            ((adj.x.to_bits() ^ adj.y.to_bits()) as u64).hash(&mut hasher);
-                        }
-                        api::DrawCmd::NineSlice { tex, rect: r0, slice, alpha } => {
-                            let adj = api::RectF::new(r0.x - ox, r0.y - oy, r0.w, r0.h);
-                            sub.items.push(api::DrawCmd::NineSlice {
-                                tex: *tex,
-                                rect: adj,
-                                slice: *slice,
-                                alpha: *alpha,
-                            });
-                            tex.0.hash(&mut hasher);
-                        }
-                        api::DrawCmd::Image { tex, dst, src, alpha } => {
-                            let adj = api::RectF::new(dst.x - ox, dst.y - oy, dst.w, dst.h);
-                            sub.items.push(api::DrawCmd::Image {
-                                tex: *tex,
-                                dst: adj,
-                                src: *src,
-                                alpha: *alpha,
-                            });
-                            tex.0.hash(&mut hasher);
-                        }
-                        api::DrawCmd::ImageMesh { tex, vb, ib, alpha } => {
-                            if let Some((local_vb, local_ib)) = append_offset_geometry_to_sublist(
-                                list.vertices,
-                                list.indices,
-                                &mut sub,
-                                *vb,
-                                *ib,
-                                ox,
-                                oy,
-                            ) {
-                                sub.items.push(api::DrawCmd::ImageMesh {
-                                    tex: *tex,
-                                    vb: local_vb,
-                                    ib: local_ib,
-                                    alpha: *alpha,
-                                });
-                                tex.0.hash(&mut hasher);
-                                vb.offset.hash(&mut hasher);
-                                vb.len.hash(&mut hasher);
-                            }
-                        }
-                        api::DrawCmd::Spinner { center, atom, alpha } => {
-                            let adj = [center[0] - ox, center[1] - oy];
-                            sub.items.push(api::DrawCmd::Spinner {
-                                center: adj,
-                                atom: *atom,
-                                alpha: *alpha,
-                            });
-                        }
-                        api::DrawCmd::Backdrop { rect: r0, sigma, tint, alpha } => {
-                            let adj = api::RectF::new(r0.x - ox, r0.y - oy, r0.w, r0.h);
-                            sub.items.push(api::DrawCmd::Backdrop {
-                                rect: adj,
-                                sigma: *sigma,
-                                tint: *tint,
-                                alpha: *alpha,
-                            });
-                        }
-                        api::DrawCmd::VisualEffect { rect: r0, effect } => {
-                            let adj = api::RectF::new(r0.x - ox, r0.y - oy, r0.w, r0.h);
-                            sub.items
-                                .push(api::DrawCmd::VisualEffect { rect: adj, effect: *effect });
-                        }
-                        api::DrawCmd::GlyphRun { run } => {
-                            if let Some((vb, ib)) = append_offset_geometry_to_sublist(
-                                list.vertices,
-                                list.indices,
-                                &mut sub,
-                                run.vb,
-                                run.ib,
-                                ox,
-                                oy,
-                            ) {
-                                sub.items.push(api::DrawCmd::GlyphRun {
-                                    run: api::GlyphRun {
-                                        atlas: run.atlas,
-                                        atlas_revision: run.atlas_revision,
-                                        vb,
-                                        ib,
-                                        sdf: run.sdf,
-                                        color: run.color,
-                                    },
-                                });
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                let hash = hasher.finish();
-                r.acc_commands_copied = r
-                    .acc_commands_copied
-                    .saturating_add(sub.items.len() as u64);
-                r.acc_geometry_bytes_copied = r.acc_geometry_bytes_copied.saturating_add(
-                    (sub.vertices.len() as u64)
-                        .saturating_mul(core::mem::size_of::<api::Vertex>() as u64)
-                        .saturating_add(
-                            (sub.indices.len() as u64)
-                                .saturating_mul(core::mem::size_of::<u16>() as u64),
-                        ),
-                );
-                r.layer_sublist = sub;
-                // Ensure layer texture exists (px)
-                let w_px = (rect.w * r.target_scale.max(1.0)).ceil() as u32;
-                let h_px = (rect.h * r.target_scale.max(1.0)).ceil() as u32;
-                let do_render = *dirty
-                    || !r.layers.get(id).is_some()
-                    || r.layers
-                        .get(id)
-                        .map(|e| e.w != w_px || e.h != h_px || e.hash != hash)
-                        .unwrap_or(true);
-                if do_render {
-                    r.acc_backend_cache_misses = r.acc_backend_cache_misses.saturating_add(1);
-                    // If the cache did not get refreshed in pre-scan, render inline.
-                    // This avoids composing stale or empty layer textures.
-                    let resume_scissor = effective_scissor_dp(current, global_scissor_dp);
-                    encode_draws_range(enc, pf, r, list, i + 1, end, false, global_scissor_dp);
-                    apply_scissor_dp(enc, r, resume_scissor, &mut last_applied);
-                    i = end + 1;
-                    continue;
-                }
-                r.acc_backend_cache_hits = r.acc_backend_cache_hits.saturating_add(1);
-                // Composite the cached layer via nine-slice (no slicing)
-                if let Some(layer) = r.layers.get(id) {
-                    enc.set_render_pipeline_state(&r.pso_nine_slice);
-                    if let Some(sam) = &r.sampler {
-                        enc.set_fragment_sampler_state(0, Some(sam));
-                    }
-                    enc.set_fragment_texture(0, Some(&layer.tex));
-                    // Vertex params: rect dp + vp dp
-                    enc.set_vertex_bytes(
-                        1,
-                        core::mem::size_of_val(&vp_dp) as u64,
-                        vp_dp.as_ptr() as *const _,
-                    );
-                    let vparams: [f32; 6] = [rect.x, rect.y, rect.w, rect.h, vp_dp[0], vp_dp[1]];
-                    enc.set_vertex_bytes(
-                        0,
-                        core::mem::size_of_val(&vparams) as u64,
-                        vparams.as_ptr() as *const _,
-                    );
-                    // Fragment params are in dp space for rect, with texture size in px.
-                    let params = pack_nine_slice_params(
-                        *rect,
-                        layer.w as f32,
-                        layer.h as f32,
-                        api::Insets::new(0.0, 0.0, 0.0, 0.0),
-                        1.0,
-                    );
-                    enc.set_fragment_bytes(
-                        1,
-                        core::mem::size_of_val(&params) as u64,
-                        (&params as *const NineSliceGpuParams).cast(),
-                    );
-                    enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
-                    r.acc_draws += 1;
-                }
+                let resume_scissor = effective_scissor_dp(current, global_scissor_dp);
+                encode_inline_layer(enc, pf, r, list, i + 1, end, global_scissor_dp);
+                apply_scissor_dp(enc, r, resume_scissor, &mut last_applied);
                 i = end + 1;
                 continue;
             }
@@ -6606,7 +6773,8 @@ fn encode_draws_range(
                 i += 1;
             }
             api::DrawCmd::RRect { .. } => {
-                enc.set_render_pipeline_state(&r.pso_rrect);
+                let pipeline = if r.encoding_layer { &r.pso_layer_rrect } else { &r.pso_rrect };
+                enc.set_render_pipeline_state(pipeline);
                 let mut j = i;
                 let emitted = {
                     let vbuf = &mut r.rrect_vbuf;
@@ -6666,7 +6834,12 @@ fn encode_draws_range(
             }
             api::DrawCmd::NineSlice { tex, rect, slice, alpha } => {
                 if let Some(img) = r.get_image_tex(*tex) {
-                    enc.set_render_pipeline_state(&r.pso_nine_slice);
+                    let pipeline = if r.encoding_layer {
+                        &r.pso_layer_nine_slice
+                    } else {
+                        &r.pso_nine_slice
+                    };
+                    enc.set_render_pipeline_state(pipeline);
                     if let Some(sam) = &r.sampler {
                         enc.set_fragment_sampler_state(0, Some(sam));
                     }
@@ -6743,7 +6916,9 @@ fn encode_draws_range(
                         i += 1;
                         continue;
                     };
-                    enc.set_render_pipeline_state(&r.pso_image_mesh);
+                    let pipeline =
+                        if r.encoding_layer { &r.pso_layer_image_mesh } else { &r.pso_image_mesh };
+                    enc.set_render_pipeline_state(pipeline);
                     if let Some(sam) = &r.sampler {
                         enc.set_fragment_sampler_state(0, Some(sam));
                     }
@@ -6835,7 +7010,12 @@ fn encode_draws_range(
                 // Simulator-safe image path: avoid argument-buffer texturing, which has
                 // repeatedly produced MTLSim command-buffer faults under heavy scene loads.
                 if !r.use_image_arg_buffer {
-                    enc.set_render_pipeline_state(&r.pso_image_single);
+                    let pipeline = if r.encoding_layer {
+                        &r.pso_layer_image_single
+                    } else {
+                        &r.pso_image_single
+                    };
+                    enc.set_render_pipeline_state(pipeline);
                     enc.set_vertex_bytes(
                         1,
                         core::mem::size_of_val(&vp_dp) as u64,
@@ -6879,7 +7059,9 @@ fn encode_draws_range(
                     continue;
                 }
 
-                enc.set_render_pipeline_state(&r.pso_image);
+                let pipeline =
+                    if r.encoding_layer { &r.pso_layer_image } else { &r.pso_image };
+                enc.set_render_pipeline_state(pipeline);
                 // Bind the per-frame argument buffer once, then populate texture slots
                 // and explicitly mark those textures resident for the fragment stage.
                 let img_arg_encoder = if let (Some(encdr), Some(bufs)) =
@@ -7099,9 +7281,16 @@ fn encode_draws_range(
                         ));
                     }
                     if group_sdf {
-                        enc.set_render_pipeline_state(&r.pso_text_sdf);
+                        let pipeline = if r.encoding_layer {
+                            &r.pso_layer_text_sdf
+                        } else {
+                            &r.pso_text_sdf
+                        };
+                        enc.set_render_pipeline_state(pipeline);
                     } else {
-                        enc.set_render_pipeline_state(&r.pso_text);
+                        let pipeline =
+                            if r.encoding_layer { &r.pso_layer_text } else { &r.pso_text };
+                        enc.set_render_pipeline_state(pipeline);
                     }
                     if let Some(sam) = &r.sampler {
                         enc.set_fragment_sampler_state(0, Some(sam));
@@ -7128,9 +7317,19 @@ fn encode_draws_range(
                         for (ci, gr) in r.glyph_group.iter().enumerate() {
                             let cmd_i = icb.indirect_render_command_at_index(ci as u64);
                             if group_sdf {
-                                cmd_i.set_render_pipeline_state(&r.pso_text_sdf);
+                                let pipeline = if r.encoding_layer {
+                                    &r.pso_layer_text_sdf
+                                } else {
+                                    &r.pso_text_sdf
+                                };
+                                cmd_i.set_render_pipeline_state(pipeline);
                             } else {
-                                cmd_i.set_render_pipeline_state(&r.pso_text);
+                                let pipeline = if r.encoding_layer {
+                                    &r.pso_layer_text
+                                } else {
+                                    &r.pso_text
+                                };
+                                cmd_i.set_render_pipeline_state(pipeline);
                             }
                             cmd_i.set_vertex_buffer(0, Some(&r.vb.bufs[slot]), gr.vb_off);
                             cmd_i.set_fragment_buffer(0, Some(&r.ub.bufs[slot]), gr.ub_off);
@@ -7178,7 +7377,9 @@ fn encode_draws_range(
                 continue;
             }
             api::DrawCmd::Spinner { center, atom, alpha } => {
-                enc.set_render_pipeline_state(&r.pso_spinner);
+                let pipeline =
+                    if r.encoding_layer { &r.pso_layer_spinner } else { &r.pso_spinner };
+                enc.set_render_pipeline_state(pipeline);
                 let phase = legacy_spinner_phase(spinner_now_ms());
                 // Batch consecutive spinners
                 let mut count = 0usize;
@@ -7968,6 +8169,29 @@ fn configure_source_alpha_blend(ca: &RenderPipelineColorAttachmentDescriptorRef)
 }
 
 #[inline]
+fn configure_layer_source_alpha_blend(ca: &RenderPipelineColorAttachmentDescriptorRef) {
+    ca.set_blending_enabled(true);
+    ca.set_rgb_blend_operation(MTLBlendOperation::Add);
+    ca.set_alpha_blend_operation(MTLBlendOperation::Add);
+    ca.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
+    ca.set_source_alpha_blend_factor(MTLBlendFactor::One);
+    ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+    ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+}
+
+#[inline]
+fn configure_ui_source_alpha_blend(
+    ca: &RenderPipelineColorAttachmentDescriptorRef,
+    layer: bool,
+) {
+    if layer {
+        configure_layer_source_alpha_blend(ca);
+    } else {
+        configure_source_alpha_blend(ca);
+    }
+}
+
+#[inline]
 fn configure_frame_color_attachment(
     ca: &RenderPassColorAttachmentDescriptorRef,
     texture: &TextureRef,
@@ -8089,6 +8313,7 @@ fn build_image_pso(
     lib: &Library,
     fmt: MTLPixelFormat,
     sample_count: u32,
+    layer: bool,
 ) -> Result<RenderPipelineState, MetalInitError> {
     let v = pipeline_function(lib, "image.vertex", "v_inst_rect")?;
     let f = pipeline_function(lib, "image.fragment", "f_image")?;
@@ -8098,8 +8323,9 @@ fn build_image_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_source_alpha_blend(ca);
-    pipeline_state(device, "pso.image.create", &desc)
+    configure_ui_source_alpha_blend(ca, layer);
+    let stage = if layer { "pso.layer_image.create" } else { "pso.image.create" };
+    pipeline_state(device, stage, &desc)
 }
 
 fn build_image_single_pso(
@@ -8107,6 +8333,7 @@ fn build_image_single_pso(
     lib: &Library,
     fmt: MTLPixelFormat,
     sample_count: u32,
+    layer: bool,
 ) -> Result<RenderPipelineState, MetalInitError> {
     let v = pipeline_function(lib, "image_single.vertex", "v_inst_rect")?;
     let f = pipeline_function(lib, "image_single.fragment", "f_image_single")?;
@@ -8116,8 +8343,13 @@ fn build_image_single_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_source_alpha_blend(ca);
-    pipeline_state(device, "pso.image_single.create", &desc)
+    configure_ui_source_alpha_blend(ca, layer);
+    let stage = if layer {
+        "pso.layer_image_single.create"
+    } else {
+        "pso.image_single.create"
+    };
+    pipeline_state(device, stage, &desc)
 }
 
 fn build_image_mesh_pso(
@@ -8125,6 +8357,7 @@ fn build_image_mesh_pso(
     lib: &Library,
     fmt: MTLPixelFormat,
     sample_count: u32,
+    layer: bool,
 ) -> Result<RenderPipelineState, MetalInitError> {
     let v = pipeline_function(lib, "image_mesh.vertex", "v_text")?;
     let f = pipeline_function(lib, "image_mesh.fragment", "f_image_mesh")?;
@@ -8136,8 +8369,9 @@ fn build_image_mesh_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_source_alpha_blend(ca);
-    pipeline_state(device, "pso.image_mesh.create", &desc)
+    configure_ui_source_alpha_blend(ca, layer);
+    let stage = if layer { "pso.layer_image_mesh.create" } else { "pso.image_mesh.create" };
+    pipeline_state(device, stage, &desc)
 }
 
 fn build_rrect_pso(
@@ -8158,11 +8392,30 @@ fn build_rrect_pso(
     pipeline_state(device, "pso.rrect.create", &desc)
 }
 
+fn build_layer_rrect_pso(
+    device: &Device,
+    lib: &Library,
+    fmt: MTLPixelFormat,
+    sample_count: u32,
+) -> Result<RenderPipelineState, MetalInitError> {
+    let vertex = pipeline_function(lib, "layer_rrect.vertex", "v_inst_rect")?;
+    let fragment = pipeline_function(lib, "layer_rrect.fragment", "f_rrect")?;
+    let descriptor = RenderPipelineDescriptor::new();
+    descriptor.set_vertex_function(Some(&vertex));
+    descriptor.set_fragment_function(Some(&fragment));
+    descriptor.set_sample_count(sample_count as u64);
+    let attachment = descriptor.color_attachments().object_at(0).unwrap();
+    attachment.set_pixel_format(fmt);
+    configure_layer_source_alpha_blend(attachment);
+    pipeline_state(device, "pso.layer_rrect.create", &descriptor)
+}
+
 fn build_nine_slice_pso(
     device: &Device,
     lib: &Library,
     fmt: MTLPixelFormat,
     sample_count: u32,
+    layer: bool,
 ) -> Result<RenderPipelineState, MetalInitError> {
     let v = pipeline_function(lib, "nine_slice.vertex", "v_inst_rect")?;
     let f = pipeline_function(lib, "nine_slice.fragment", "f_nine_slice")?;
@@ -8172,8 +8425,58 @@ fn build_nine_slice_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_source_alpha_blend(ca);
-    pipeline_state(device, "pso.nine_slice.create", &desc)
+    configure_ui_source_alpha_blend(ca, layer);
+    let stage = if layer { "pso.layer_nine_slice.create" } else { "pso.nine_slice.create" };
+    pipeline_state(device, stage, &desc)
+}
+
+fn build_layer_composite_pso(
+    device: &Device,
+    lib: &Library,
+    fmt: MTLPixelFormat,
+    sample_count: u32,
+) -> Result<RenderPipelineState, MetalInitError> {
+    let vertex = pipeline_function(lib, "layer_composite.vertex", "v_inst_rect")?;
+    let fragment = pipeline_function(lib, "layer_composite.fragment", "f_nine_slice")?;
+    let descriptor = RenderPipelineDescriptor::new();
+    descriptor.set_vertex_function(Some(&vertex));
+    descriptor.set_fragment_function(Some(&fragment));
+    descriptor.set_sample_count(sample_count as u64);
+    let attachment = descriptor.color_attachments().object_at(0).unwrap();
+    attachment.set_pixel_format(fmt);
+    attachment.set_blending_enabled(true);
+    attachment.set_rgb_blend_operation(MTLBlendOperation::Add);
+    attachment.set_alpha_blend_operation(MTLBlendOperation::Add);
+    attachment.set_source_rgb_blend_factor(MTLBlendFactor::One);
+    attachment.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
+    attachment.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+    attachment.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+    pipeline_state(device, "pso.layer_composite.create", &descriptor)
+}
+
+fn build_layer_composite_aligned_pso(
+    device: &Device,
+    lib: &Library,
+    fmt: MTLPixelFormat,
+    sample_count: u32,
+) -> Result<RenderPipelineState, MetalInitError> {
+    let vertex = pipeline_function(lib, "layer_composite_aligned.vertex", "v_inst_rect")?;
+    let fragment =
+        pipeline_function(lib, "layer_composite_aligned.fragment", "f_layer_composite_aligned")?;
+    let descriptor = RenderPipelineDescriptor::new();
+    descriptor.set_vertex_function(Some(&vertex));
+    descriptor.set_fragment_function(Some(&fragment));
+    descriptor.set_sample_count(sample_count as u64);
+    let attachment = descriptor.color_attachments().object_at(0).unwrap();
+    attachment.set_pixel_format(fmt);
+    attachment.set_blending_enabled(true);
+    attachment.set_rgb_blend_operation(MTLBlendOperation::Add);
+    attachment.set_alpha_blend_operation(MTLBlendOperation::Add);
+    attachment.set_source_rgb_blend_factor(MTLBlendFactor::One);
+    attachment.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
+    attachment.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+    attachment.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+    pipeline_state(device, "pso.layer_composite_aligned.create", &descriptor)
 }
 
 fn build_spinner_pso(
@@ -8181,6 +8484,7 @@ fn build_spinner_pso(
     lib: &Library,
     fmt: MTLPixelFormat,
     sample_count: u32,
+    layer: bool,
 ) -> Result<RenderPipelineState, MetalInitError> {
     let v = pipeline_function(lib, "spinner.vertex", "v_inst_rect")?;
     let f = pipeline_function(lib, "spinner.fragment", "f_spinner")?;
@@ -8190,8 +8494,9 @@ fn build_spinner_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_source_alpha_blend(ca);
-    pipeline_state(device, "pso.spinner.create", &desc)
+    configure_ui_source_alpha_blend(ca, layer);
+    let stage = if layer { "pso.layer_spinner.create" } else { "pso.spinner.create" };
+    pipeline_state(device, stage, &desc)
 }
 
 fn build_text_pso(
@@ -8200,6 +8505,7 @@ fn build_text_pso(
     fmt: MTLPixelFormat,
     sample_count: u32,
     supports_icb: bool,
+    layer: bool,
 ) -> Result<RenderPipelineState, MetalInitError> {
     let v = pipeline_function(lib, "text.vertex", "v_text")?;
     let f = pipeline_function(lib, "text.fragment", "f_text")?;
@@ -8215,8 +8521,9 @@ fn build_text_pso(
     }
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_source_alpha_blend(ca);
-    pipeline_state(device, "pso.text.create", &desc)
+    configure_ui_source_alpha_blend(ca, layer);
+    let stage = if layer { "pso.layer_text.create" } else { "pso.text.create" };
+    pipeline_state(device, stage, &desc)
 }
 
 fn build_text_sdf_pso(
@@ -8225,6 +8532,7 @@ fn build_text_sdf_pso(
     fmt: MTLPixelFormat,
     sample_count: u32,
     supports_icb: bool,
+    layer: bool,
 ) -> Result<RenderPipelineState, MetalInitError> {
     let v = pipeline_function(lib, "text_sdf.vertex", "v_text")?;
     let f = pipeline_function(lib, "text_sdf.fragment", "f_text_sdf")?;
@@ -8240,8 +8548,9 @@ fn build_text_sdf_pso(
     }
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_source_alpha_blend(ca);
-    pipeline_state(device, "pso.text_sdf.create", &desc)
+    configure_ui_source_alpha_blend(ca, layer);
+    let stage = if layer { "pso.layer_text_sdf.create" } else { "pso.text_sdf.create" };
+    pipeline_state(device, stage, &desc)
 }
 
 fn build_camera_pso(
@@ -8540,7 +8849,33 @@ struct LayerEntry {
     tex: Texture,
     w: u32,
     h: u32,
-    hash: u64,
+    generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LayerPlanAction {
+    Inline,
+    Composite,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LayerPlan {
+    id: u32,
+    begin: usize,
+    end: usize,
+    rect: api::RectF,
+    generation: u64,
+    refresh: bool,
+    action: LayerPlanAction,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LayerPlanStackEntry {
+    id: u32,
+    begin: usize,
+    rect: api::RectF,
+    dirty: bool,
+    unsupported: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -8596,6 +8931,14 @@ pub struct PerfStats {
     pub chunks_prepared: u64,
     pub backend_cache_hits: u64,
     pub backend_cache_misses: u64,
+    pub layer_body_commands_scanned: u64,
+    pub layer_body_commands_copied: u64,
+    pub layer_texture_creates: u32,
+    pub layer_cache_hits: u32,
+    pub layer_cache_misses: u32,
+    pub layer_offscreen_draws: u64,
+    pub layer_inline_draws: u64,
+    pub layer_double_render_prevented: u32,
     pub render_passes: u32,
     pub blit_passes: u32,
     pub command_buffers: u32,

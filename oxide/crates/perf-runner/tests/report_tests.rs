@@ -4665,6 +4665,9 @@ fn metal_architecture_reports_reconciled_renderer_resource_families()
          "OXIDE_PERF_RUNNER_FILTER",
          "gpu.architecture.layers.clean_100x100,gpu.architecture.id_mask.static.size_512.chunks_1,gpu.architecture.scene3d.instances_96.bloom_1",
       )
+      .env("OXIDE_ARCHITECTURE_METAL_FRAMES", "4")
+      .env("OXIDE_ARCHITECTURE_METAL_WARMUPS", "2")
+      .env("OXIDE_ARCHITECTURE_METAL_RAW_SAMPLES", "1")
       .arg("--run-suite")
       .arg("--smoke")
       .arg("--json-out")
@@ -4683,6 +4686,22 @@ fn metal_architecture_reports_reconciled_renderer_resource_families()
    let scene3d =
       report_case_slice(&report, "gpu.architecture.scene3d.instances_96.bloom_1");
    assert!(report_f64(layer, "layer_cache_bytes_peak") > 0.0);
+   assert!(report_f64(layer, "layer_body_commands_scanned_avg") > 0.0);
+   assert_eq!(report_f64(layer, "layer_body_commands_copied_avg"), 0.0);
+   assert_eq!(report_f64(layer, "layer_texture_creates_avg"), 0.0);
+   assert_eq!(report_f64(layer, "layer_cache_hits_avg"), 100.0);
+   assert_eq!(report_f64(layer, "layer_cache_misses_avg"), 0.0);
+   assert_eq!(report_f64(layer, "layer_offscreen_draws_avg"), 0.0);
+   assert_eq!(report_f64(layer, "layer_inline_draws_avg"), 0.0);
+   assert_eq!(report_f64(layer, "layer_double_render_prevented_avg"), 0.0);
+   assert!(report_f64(layer, "raw_frame_ms_0000") > 0.0);
+   assert!(report_f64(layer, "raw_frame_ms_0003") > 0.0);
+   assert!(report_f64(layer, "raw_encode_ms_0003") > 0.0);
+   assert!(report_f64(layer, "raw_gpu_ms_0003") > 0.0);
+   assert!(report_f64(layer, "warmup_frame_ms_0000") > 0.0);
+   assert!(report_f64(layer, "warmup_encode_ms_0000") > 0.0);
+   assert!(report_f64(layer, "warmup_gpu_ms_0000") > 0.0);
+   assert!(report_f64(layer, "warmup_gpu_ms_0001") > 0.0);
    assert!(report_f64(id_mask, "id_mask_target_bytes_peak") > 0.0);
    assert!(report_f64(id_mask, "id_mask_vertex_bytes_peak") > 0.0);
    assert!(report_f64(id_mask, "chunks_prepared_avg") > 0.0);

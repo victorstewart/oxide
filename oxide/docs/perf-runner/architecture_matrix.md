@@ -16,7 +16,9 @@
 
 ## Measurement boundary
 
-Rust rows are selected with `OXIDE_PERF_RUNNER_FILTER=cpu.architecture.,gpu.architecture.`. GPU rows use production Metal begin/encode/submit methods and collect command-buffer GPU distributions, encode distributions, upload bytes, damage, draw, memory, and backpressure data. Layer rows persist retained texture bytes; ID-mask rows persist target/upload-cache bytes plus chunk/pass work; Scene3D rows persist depth, bloom, and mesh-buffer bytes plus pass work. Smoke mode shortens warmup/sample counts but preserves every declared workload size.
+Rust rows are selected with `OXIDE_PERF_RUNNER_FILTER=cpu.architecture.,gpu.architecture.`. GPU rows use production Metal begin/encode/submit methods and collect command-buffer GPU distributions, encode distributions, upload bytes, damage, draw, memory, and backpressure data. Layer rows persist retained texture bytes plus average structural body scans, body copies, texture creates, hits/misses, offscreen/inline draws, and prevented duplicate renders; ID-mask rows persist target/upload-cache bytes plus chunk/pass work; Scene3D rows persist depth, bloom, and mesh-buffer bytes plus pass work. Smoke mode shortens warmup/sample counts but preserves every declared workload size.
+
+`OXIDE_ARCHITECTURE_METAL_WARMUPS` and `OXIDE_ARCHITECTURE_METAL_FRAMES` override the warmup and measured frame counts for non-default statistical runs. When `OXIDE_ARCHITECTURE_METAL_RAW_SAMPLES` is present, each warmup and measured frame/encode/GPU duration is persisted under an indexed metric key. Normal reports omit those raw keys, so the expanded evidence shape is confined to explicit experiment runs.
 
 The WebGPU matrix is absent from normal page execution. `scripts/check_webgpu_browser_golden.mjs --architecture-matrix` opts in, prewarms resources, runs one submission per RAF, waits for both `GPUQueue.onSubmittedWorkDone` and browser presentation, collects exactly one timestamp per measured frame, rejects missing samples and zero-pass rows, and restores the normal timestamp sampling interval. Every row reports CPU and GPU p50/p95/p99/peak, draw/pass/bind/upload/resource/scratch counters, and allocation attribution.
 
@@ -30,5 +32,6 @@ The current memory-warning layer row recreates the renderer after an explicit be
 
 ## Changelog
 
+- 2026-07-12: Added C05 Metal layer ownership counters to the clean, dirty, resize, churn, nested, unsupported-effect, and rebuild rows.
 - 2026-07-12: Added C02 Metal resource-family and frame-work report metrics for layers, ID masks, depth, bloom, meshes, chunks, and render passes.
 - 2026-07-12: Added the C01 rendering architecture proof matrix with isolated CPU, Metal, and opt-in RAF-paced WebGPU workloads.

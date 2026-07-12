@@ -802,8 +802,20 @@ where
    let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
    renderer.resize(1_200, 800, 1.0).context("resizing Metal renderer")?;
    renderer.set_damage_options(true, DAMAGE_USE_THRESH, DAMAGE_PREFILTER_THRESH);
-   let warmups = if smoke { 1 } else { 3 };
-   let frames = if smoke { 3 } else { 12 };
+   let warmups = std::env::var("OXIDE_ARCHITECTURE_METAL_WARMUPS")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|warmups| *warmups > 0)
+      .unwrap_or(if smoke { 1 } else { 3 });
+   let frames = std::env::var("OXIDE_ARCHITECTURE_METAL_FRAMES")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|frames| *frames > 0)
+      .unwrap_or(if smoke { 3 } else { 12 });
+   let persist_raw = std::env::var_os("OXIDE_ARCHITECTURE_METAL_RAW_SAMPLES").is_some();
+   let mut warmup_frame_samples = Vec::with_capacity(if persist_raw { warmups } else { 0 });
+   let mut warmup_encode_samples = Vec::with_capacity(if persist_raw { warmups } else { 0 });
+   let mut warmup_gpu_samples = Vec::with_capacity(if persist_raw { warmups } else { 0 });
    let mut frame_samples = Vec::with_capacity(frames);
    let mut encode_samples = Vec::with_capacity(frames);
    let mut gpu_samples = Vec::with_capacity(frames);
@@ -816,6 +828,14 @@ where
    let mut layer_bytes_peak = 0_u64;
    let mut total_bytes_peak = 0_u64;
    let mut skips_sum = 0.0;
+   let mut layer_body_commands_scanned_sum = 0.0;
+   let mut layer_body_commands_copied_sum = 0.0;
+   let mut layer_texture_creates_sum = 0.0;
+   let mut layer_cache_hits_sum = 0.0;
+   let mut layer_cache_misses_sum = 0.0;
+   let mut layer_offscreen_draws_sum = 0.0;
+   let mut layer_inline_draws_sum = 0.0;
+   let mut layer_double_render_prevented_sum = 0.0;
 
    for frame in 0..(warmups + frames)
    {
@@ -850,6 +870,20 @@ where
          layer_bytes_peak = layer_bytes_peak.max(stats.memory.layer_cache_bytes);
          total_bytes_peak = total_bytes_peak.max(stats.memory.total_bytes);
          skips_sum += stats.frame_backpressure_skipped as f64;
+         layer_body_commands_scanned_sum += stats.layer_body_commands_scanned as f64;
+         layer_body_commands_copied_sum += stats.layer_body_commands_copied as f64;
+         layer_texture_creates_sum += stats.layer_texture_creates as f64;
+         layer_cache_hits_sum += stats.layer_cache_hits as f64;
+         layer_cache_misses_sum += stats.layer_cache_misses as f64;
+         layer_offscreen_draws_sum += stats.layer_offscreen_draws as f64;
+         layer_inline_draws_sum += stats.layer_inline_draws as f64;
+         layer_double_render_prevented_sum += stats.layer_double_render_prevented as f64;
+      }
+      else if persist_raw
+      {
+         warmup_frame_samples.push(frame_t0.elapsed().as_secs_f64() * 1_000.0);
+         warmup_encode_samples.push(stats.encode_ms);
+         warmup_gpu_samples.push(stats.gpu_ms);
       }
    }
 
@@ -869,6 +903,23 @@ where
    metrics.insert(String::from("layer_cache_bytes_peak"), layer_bytes_peak as f64);
    metrics.insert(String::from("renderer_bytes_peak"), total_bytes_peak as f64);
    metrics.insert(String::from("frame_backpressure_skips"), skips_sum);
+   metrics.insert(String::from("layer_body_commands_scanned_avg"), layer_body_commands_scanned_sum / frames as f64);
+   metrics.insert(String::from("layer_body_commands_copied_avg"), layer_body_commands_copied_sum / frames as f64);
+   metrics.insert(String::from("layer_texture_creates_avg"), layer_texture_creates_sum / frames as f64);
+   metrics.insert(String::from("layer_cache_hits_avg"), layer_cache_hits_sum / frames as f64);
+   metrics.insert(String::from("layer_cache_misses_avg"), layer_cache_misses_sum / frames as f64);
+   metrics.insert(String::from("layer_offscreen_draws_avg"), layer_offscreen_draws_sum / frames as f64);
+   metrics.insert(String::from("layer_inline_draws_avg"), layer_inline_draws_sum / frames as f64);
+   metrics.insert(String::from("layer_double_render_prevented_avg"), layer_double_render_prevented_sum / frames as f64);
+   if persist_raw
+   {
+      insert_indexed_samples(&mut metrics, "raw_frame_ms", &frame_samples);
+      insert_indexed_samples(&mut metrics, "raw_encode_ms", &encode_samples);
+      insert_indexed_samples(&mut metrics, "raw_gpu_ms", &gpu_samples);
+      insert_indexed_samples(&mut metrics, "warmup_frame_ms", &warmup_frame_samples);
+      insert_indexed_samples(&mut metrics, "warmup_encode_ms", &warmup_encode_samples);
+      insert_indexed_samples(&mut metrics, "warmup_gpu_ms", &warmup_gpu_samples);
+   }
 
    Ok(PerfCaseResult {
       id: String::from(id),
@@ -892,6 +943,14 @@ where
       notes: vec![notes],
       metrics,
    })
+}
+
+fn insert_indexed_samples(metrics: &mut BTreeMap<String, f64>, prefix: &str, samples: &[f64])
+{
+   for (index, sample) in samples.iter().copied().enumerate()
+   {
+      metrics.insert(format!("{prefix}_{index:04}"), sample);
+   }
 }
 
 fn layer_drawlist(name: &str, phase: usize) -> api::DrawList

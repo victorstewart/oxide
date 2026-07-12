@@ -2,7 +2,7 @@
 
 ## Intention and purpose
 
-This test file protects renderer performance contracts that are easy to regress silently: build-time Metal shader compilation, no runtime Metal source compilation, frame-ring reuse without CPU/GPU waits, explicit readback-only blocking waits, and direct GPU-duration attribution.
+This test file protects renderer performance contracts that are easy to regress silently: build-time Metal shader compilation, no runtime Metal source compilation, frame-ring reuse without CPU/GPU waits, explicit readback-only blocking waits, direct GPU-duration attribution, and single-owner layer-cache rendering.
 
 ## Relation to the rest of the code
 
@@ -26,6 +26,12 @@ This test file protects renderer performance contracts that are easy to regress 
   Confirms command-buffer GPU timestamp support is compiled for macOS and iOS.
 - `completed_gpu_duration_is_attributed_to_frame_id()`
   Confirms completed GPU timing is associated with the frame id that produced it.
+- `layer_cache_uses_one_plan_and_reports_single_ownership()`
+  Freezes the generation-based plan, nested invalidation, same-size texture reuse, one materialization site, and public ownership counters.
+- `layer_cache_clean_and_dirty_frames_have_single_body_owner()`
+  Submits missing, clean, and dirty frames on macOS and proves clean frames only composite while refresh frames render one offscreen body, reuse same-size textures, and never inline the same body.
+- `dirty_nested_child_refreshes_its_cached_parent_once()`
+  Proves a dirty child invalidates and refreshes both retained nesting levels once, while the intervening clean frame skips both bodies.
 - `metal_draw_cmd_debug_capture_names_are_frozen()`
   Freezes the private `DrawCmd` debug/capture tag names emitted by the Metal encode diagnostics before backend packet migrations.
 - `renderer_initializes_default_pipelines_from_embedded_metallib_on_macos()`
@@ -35,7 +41,7 @@ This test file protects renderer performance contracts that are easy to regress 
 
 ## Logic narrative
 
-Source-contract tests catch forbidden APIs and required guard strings before runtime. The debug/capture-name freeze keeps Metal's command tags deterministic for future capture and A/B packet comparisons. The macOS runtime initializer test then exercises the actual Metal path: device resolution, command queue creation, embedded shader-library loading, and default pipeline-state creation. A placeholder metallib or a missing shader entry point cannot satisfy this test because `MetalRenderer::new_default` must complete successfully.
+Source-contract tests catch forbidden APIs and required guard strings before runtime. The layer source contract rejects the former independent hash/materialization path and requires child-to-parent invalidation propagation. The debug/capture-name freeze keeps Metal's command tags deterministic for future capture and A/B packet comparisons. The macOS runtime tests then exercise the actual Metal path: device resolution, command queue creation, embedded shader-library loading, default pipeline-state creation, and three consecutive cache states. A placeholder metallib, a missing shader entry point, or duplicate layer-body ownership cannot satisfy these tests.
 
 ## Preconditions and postconditions
 
@@ -55,7 +61,7 @@ Source-contract tests catch forbidden APIs and required guard strings before run
 
 ## Concurrency and memory behavior
 
-The source tests allocate only small strings borrowed from `include_str!`. The runtime test constructs and drops one renderer instance; no frame loop is started and no command buffer is submitted.
+The source tests allocate only small strings borrowed from `include_str!`. The initializer runtime test constructs and drops one renderer instance. The layer runtime test submits three bounded frames through the production command queue and reuses the same renderer/cache.
 
 ## Performance notes
 
@@ -92,6 +98,7 @@ fn initialize_renderer_for_contract_check() -> Result<(), oxide_renderer_metal::
 
 ## Changelog
 
+- 2026-07-12: added source and real-Metal missing/clean/dirty layer-cache ownership, nested invalidation, and same-size texture-reuse coverage.
 - 2026-07-12: added renderer memory-schema coverage for omitted resource families, overflow-safe accumulation, and cross-kind identity separation.
 - 2026-07-12: added a real-frame guard for the complete disabled accounting path.
 - 2026-06-22: froze Metal draw-command debug/capture names as measurement harness for architecture densification A/B work.

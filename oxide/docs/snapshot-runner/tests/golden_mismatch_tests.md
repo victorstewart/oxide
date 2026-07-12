@@ -18,14 +18,14 @@
 - `allow_mismatch_keeps_pixel_and_size_mismatch_explicit`
   Verifies `--allow-mismatch` allows exit success while retaining diagnostics.
 - `committed_renderer_goldens_cover_scene3d_damage_camera_and_id_mask`
-  Verifies required renderer-family PNG goldens exist and match current output, including exact primitive/glyph/image/nested-composition fixtures, 1x/2x/3x and aspect-specific Scene3D output, Damage Lab and router scenes, deterministic text-input fixtures, camera variants, and 1x/2x/3x square/wide/portrait ID-mask compositor modes with signal checks.
+  Verifies required renderer-family PNG goldens exist and match current output, including primitive/glyph/image/nested-composition fixtures, exact cache-disabled inline references for the nested composition/effect fixtures, 1x/2x/3x and aspect-specific Scene3D output, Damage Lab and router scenes, deterministic text-input fixtures, camera variants, and 1x/2x/3x square/wide/portrait ID-mask compositor modes with signal checks.
 - `committed_webgpu_browser_golden_exists_with_expected_size`
   Verifies the browser WebGPU app goldens are present at 320x240, 640x360, and 360x640 with visible-scene signal, the browser WebGPU Scene3D goldens are present at 512x512, 640x360, and 360x640 with colored-geometry signal, the square browser WebGPU ID-mask compositor golden is present at 512x512 with visible-compositor signal, and the wide and portrait browser WebGPU ID-mask compositor goldens are present at 640x360 and 360x640 with visible-compositor signal.
 
 ## Logic narrative
 - The test harness resolves the runner binary from the current Cargo profile and builds it if needed.
 - Temporary button goldens exercise mismatch behavior without changing the repo.
-- The committed renderer test asserts each required golden exists before invoking the runner so missing files cannot be silently generated during tests. It then rerenders every required component through Metal and compares dimensions with an explicit maximum of 16 changed pixels, 3 channel levels, and 0.02 MSE.
+- The committed renderer test asserts each required golden exists before invoking the runner so missing files cannot be silently generated during tests. It then rerenders every required component through Metal and compares dimensions with an explicit maximum of 16 changed pixels, 3 channel levels, and 0.02 MSE. `nested_layer_composite` alone permits 96 changed pixels because its transparent BGRA8 cache target introduces a one-level quantization difference along antialiased rounded edges; its max-channel and MSE gates remain unchanged, so systematic drift still fails.
 - Router-scene coverage uses the draw-list path rather than a direct renderer shim, because these scenes are meant to catch UI scene-state visual drift in ordinary Oxide composition. The snapshot runner disables the router HUD overlay for these cases so the committed images verify scene content instead of debug chrome.
 - Scale-specific required goldens pass their expected scale into the runner so logical-coordinate to pixel-coordinate paths are tested instead of only PNG dimensions.
 - Aspect-specific required goldens pass landscape and portrait dimensions into the runner so viewport, camera crop, ID-mask projection, and seam-coordinate paths are tested outside square-target assumptions.
@@ -65,6 +65,7 @@ cargo test --locked -p oxide-snapshot-runner --test golden_mismatch_tests
 ```
 
 ## Changelog
+- 2026-07-12: added a fixture-specific changed-pixel budget for the BGRA8 nested-layer intermediate while retaining the existing max-channel and MSE limits.
 - 2026-07-12: added primitive, A8/Unicode glyph, crop/zoom, nested layer/transform/opacity/effect, Scene3D 3x, and ID-mask square/wide/portrait 3x goldens.
 - 2026-06-01: expanded WebGPU browser golden enforcement to include a 512x512 Scene3D capture with colored-geometry signal checks.
 - 2026-06-01: expanded WebGPU browser Scene3D golden enforcement to include wide and portrait captures.

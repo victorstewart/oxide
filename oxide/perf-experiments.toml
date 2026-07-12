@@ -1,4 +1,127 @@
 [[experiments]]
+id = "c05-metal-layer-single-owner-direct-load"
+introduced_commit = "C05 staged tree recorded in commit proof"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-metal", "oxide-perf-runner"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Missing, clean, dirty, nested-dirty, and nested unsupported layers must have one body owner; cached and inline nested/effect goldens must pass; same-size dirty refreshes must create zero textures."
+performance_gate = "Clean and one-dirty layer CPU encode plus GPU timestamp distributions must pass the paired performance policy against C04 parent 787ae4e with exact staged-tree and binary identities."
+decision_state = "accepted"
+decision = "Replaced independent count/content hashes with one generation plan per nesting range, single-owner body rendering, same-size texture reuse, and pixel-coordinate nearest sampling for clean aligned retained composites."
+proof = [
+   "Exact staged-tree clean/dirty CPU and GPU paired reports are persisted under benchmarks/experiments/c05-metal-layer-cache/raw with raw warmups, individual samples, fixed order, bootstrap intervals, pair wins, tails, peaks, identities, and hashes.",
+   "Clean counters move scan/copy/hit/miss/inline from 50200/20000/0/100/10000 to 10100/0/100/0/0; dirty moves texture-create/prerender-inline from 1/1 to 0/0 and reports one miss, 100 offscreen logical draws, zero inline draws, and one prevented duplicate render.",
+]
+cleanup = [
+   "Removed both layer-cache hash domains and the second body materialization site.",
+   "Kept fractional and just-refreshed composites on linear sampling; pixel-coordinate nearest sampling is restricted to clean integer pixel-aligned origins/extents whose retained texture dimensions match the target scale.",
+   "Official latest baselines remain deferred to C62; raw paired inputs, rejected attempts, counters, hashes, and environment controls are under benchmarks/experiments/c05-metal-layer-cache/raw.",
+]
+
+[[experiments]]
+id = "c05-metal-layer-sampled-full-composite"
+introduced_commit = "rejected during C05"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-metal"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Single-owner counters and nested/effect goldens must pass."
+performance_gate = "Clean GPU timestamps must pass the paired performance policy."
+decision_state = "rejected"
+decision = "Rejected linearly sampling the full retained layer for every pixel-aligned composite because removing duplicate CPU work alone made clean GPU duration slower."
+proof = [
+   "15 pairs/2160 timestamps per side: GPU p50/p95/p99 0.321313/0.329375/0.333100 ms -> 0.341687/0.354625/0.358889 ms.",
+   "Median speedup was -6.57%, paired 95% CI [-7.23%,-4.45%], with 2/15 candidate wins.",
+]
+cleanup = ["The sampled full-target composite remains only as the correctness fallback for fractional placement; aligned composites use direct texel loads."]
+
+[[experiments]]
+id = "c05-metal-layer-sampled-content-scissor"
+introduced_commit = "rejected during C05"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-metal"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Conservative bounds must preserve every nested/effect golden and fall back for geometry-backed commands."
+performance_gate = "Clean GPU timestamps must pass the paired performance policy."
+decision_state = "rejected"
+decision = "Rejected planner-derived content scissors with linear sampling because reduced transparent shading did not offset sampled composite cost."
+proof = [
+   "15 pairs/2160 timestamps per side: GPU p50/p95/p99 0.319292/0.327750/0.353674 ms -> 0.332750/0.338125/0.341443 ms.",
+   "Median speedup was -4.36%, paired 95% CI [-4.92%,-3.91%], with 1/15 candidate wins.",
+]
+cleanup = ["Removed planner content-bound state, per-layer scissor changes, and the associated composite-pixel counter."]
+
+[[experiments]]
+id = "c05-metal-layer-direct-load-content-scissor"
+introduced_commit = "rejected during C05"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-metal"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Direct cached-texel reads and content scissors must preserve the cached and inline reference goldens."
+performance_gate = "Clean GPU timestamps must pass median, confidence, win, tail, and peak gates."
+decision_state = "rejected"
+decision = "Rejected retaining content scissors around the direct-load path because the extra state machinery was unnecessary and the doubled run missed the strict peak gate."
+proof = [
+   "30 pairs/4320 timestamps per side: p50/p95/p99/peak 0.319792/0.346271/0.491384/1.117875 ms -> 0.244583/0.256375/0.434814/1.180875 ms.",
+   "Median speedup was 23.52%, paired 95% CI [23.45%,23.55%], 30/30 wins, but candidate peak regressed 5.64%.",
+]
+cleanup = ["Removed the conservative content-bounds union and two scissor state changes per layer; the accepted direct-load path composites the complete layer rectangle."]
+
+[[experiments]]
+id = "c05-metal-layer-direct-load-three-warmups"
+introduced_commit = "rejected during C05"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-metal", "oxide-perf-runner"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Measured samples must represent a genuinely warm retained cache and prebuilt Metal pipeline state."
+performance_gate = "Clean GPU timestamps must pass every performance gate after the one permitted sample-count doubling."
+decision_state = "rejected"
+decision = "Rejected three warmup frames as insufficient steady-state proof for the newly exercised Metal direct-load pipeline."
+proof = [
+   "30 pairs/4320 timestamps per side showed p50/p95/p99 0.319875/0.324379/0.457187 ms -> 0.246708/0.249875/0.384917 ms and 29/30 wins.",
+   "The candidate peak was 0.886125 ms versus 0.824250 ms (+7.51%), so the run failed despite a 22.84% median speedup.",
+]
+cleanup = ["The shared non-default Metal evidence harness now accepts an explicit warmup count and the accepted runs use 20 warmup frames on both sides."]
+
+[[experiments]]
+id = "c05-metal-layer-direct-load-steady-state-peak"
+introduced_commit = "rejected during C05"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-metal", "oxide-perf-runner"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Direct texture reads must preserve cached and inline reference goldens."
+performance_gate = "Clean GPU timestamps must pass every gate after 20 warmups and the one permitted doubling."
+decision_state = "rejected"
+decision = "Rejected direct texture reads because isolated clean-cache GPU spikes continued to fail the peak gate after 20 warmups and 60 pairs."
+proof = [
+   "Exact staged tree 4394a038: 60 pairs/8640 timestamps per side produced p50/p95/p99/peak 0.319083/0.321000/0.322000/0.329000 ms -> 0.246125/0.248083/0.249301/0.391542 ms.",
+   "Median speedup was 22.88%, paired 95% CI [22.83%,22.92%], 60/60 wins, but candidate peak regressed 19.01%.",
+]
+cleanup = ["Replaced access::read with a pixel-coordinate nearest sample in the aligned composite shader; the direct-read function and pipeline no longer remain."]
+
+[[experiments]]
+id = "c05-metal-layer-nearest-sample-fresh-texture"
+introduced_commit = "rejected during C05"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-metal", "oxide-perf-runner"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Dirty refresh must render once offscreen and composite once with exact nested/effect pixels."
+performance_gate = "AC-controlled dirty GPU timestamps must pass every gate after 20 warmups and the one permitted doubling."
+decision_state = "rejected"
+decision = "Rejected nearest sampling for a texture written earlier in the same command buffer because rare render-to-sample transition spikes failed the dirty peak gate."
+proof = [
+   "AC-controlled exact staged tree 7ced9991: 120 pairs/17280 timestamps per side produced p50/p95/p99/peak 0.342625/0.349625/0.391927/1.065250 ms -> 0.252500/0.289669/0.354265/1.349417 ms.",
+   "Median speedup was 26.33%, paired 95% CI [26.26%,26.38%], 120/120 wins, but candidate peak regressed 26.68%.",
+]
+cleanup = ["The accepted path uses nearest sampling only for clean hits; a just-refreshed generation uses the established linear sampled composite pipeline."]
+
+[[experiments]]
 id = "c03-cross-backend-reference-correctness-goldens"
 introduced_commit = "C03 staged tree recorded in commit proof"
 introduced_date = "2026-07-12"

@@ -82,8 +82,11 @@ fn run_snapshot_checked(
     scale: f32,
     out: &Path,
     golden: &Path,
+    pixel_tolerance: usize,
+    layer_cache: Option<&str>,
 ) -> Output {
-    Command::new(runner_bin())
+    let mut command = Command::new(runner_bin());
+    command
         .arg("--suite")
         .arg("static")
         .arg("--component")
@@ -99,13 +102,15 @@ fn run_snapshot_checked(
         .arg("--golden")
         .arg(golden)
         .arg("--pixel-tolerance")
-        .arg("16")
+        .arg(pixel_tolerance.to_string())
         .arg("--max-error-tolerance")
         .arg("3")
         .arg("--mse-tolerance")
-        .arg("0.02")
-        .output()
-        .expect("run checked snapshot")
+        .arg("0.02");
+    if let Some(enabled) = layer_cache {
+        command.env("OXIDE_ENABLE_LAYER_CACHE", enabled);
+    }
+    command.output().expect("run checked snapshot")
 }
 
 fn format_snapshot_scale(scale: f32) -> String {
@@ -431,10 +436,36 @@ fn committed_renderer_goldens_cover_scene3d_damage_camera_and_id_mask() {
         let golden = golden_dir.join(format!("{golden_name}.png"));
         assert!(golden.exists(), "missing committed golden {}", golden.display());
         let out = dir.join(format!("{golden_name}.png"));
-        let output = run_snapshot_checked(component, width, height, scale, &out, &golden);
+        let pixel_tolerance = if golden_name == "nested_layer_composite" { 96 } else { 16 };
+        let output =
+            run_snapshot_checked(
+                component,
+                width,
+                height,
+                scale,
+                &out,
+                &golden,
+                pixel_tolerance,
+                None,
+            );
         assert!(
             output.status.success(),
             "committed golden mismatch for {golden_name}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    for (component, golden_name) in [
+        ("style_effects", "nested_transform_opacity_effect"),
+        ("layer_composite", "nested_layer_composite"),
+    ] {
+        let golden = golden_dir.join(format!("{golden_name}.png"));
+        let out = dir.join(format!("{golden_name}-inline-reference.png"));
+        let output = run_snapshot_checked(component, 320, 240, 1.0, &out, &golden, 16, Some("0"));
+        assert!(
+            output.status.success(),
+            "inline layer reference mismatch for {golden_name}\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );

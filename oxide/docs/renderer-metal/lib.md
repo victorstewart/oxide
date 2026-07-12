@@ -54,7 +54,9 @@ Inline layer fallbacks encode the original draw-list range directly. That keeps 
 
 Damage prefiltering stays allocation-light. It now builds a compact temporary command list that borrows the original vertex and index backing arrays, so geometry-backed `Solid`, `GlyphRun`, and inline layer ranges can still be culled without cloning the full vertex/index payload just to discard off-scissor commands.
 
-Layer texture sublists share one geometry-span offset/rebase helper for image meshes and glyph runs. That keeps local layer coordinates and rebased index spans consistent across the pre-render cache pass and the inline encode fallback path.
+Layer caching builds one reusable `LayerPlan` table while walking the frame draw list. A valid clean plan composites its retained texture without copying the body or inspecting its geometry; a dirty, missing, or resized plan materializes the body once, renders it once offscreen, and composites it once. Unsupported bodies remain inline. A refreshed nested child marks its cached parent dirty, and same-size private textures are reused across refreshes. Clean pixel-aligned, same-scale composites use a pixel-coordinate nearest sample without nine-slice mapping, while fractional or just-refreshed composites retain linear sampling. Layer-target pipelines preserve source alpha in the transparent cache target, while both composite pipelines treat the cached RGB as premultiplied. The renderer reports structural body scans, copied commands, texture creation, hits/misses, offscreen/inline draws, and prevented duplicate body renders.
+
+Layer texture sublists share one geometry-span offset/rebase helper for image meshes and glyph runs. That keeps local layer coordinates and rebased index spans consistent across the single cache refresh pass and the inline encode fallback path.
 
 Renderer GPU timing is collected in-app instead of depending on Instruments hardware-counter availability. Completed frame command buffers update renderer stats from Metal's command-buffer GPU start/end timestamps, and iOS devices that expose the common timestamp counter set attach an `MTLCounterSampleBuffer` to the main 2D render pass for vertex/fragment/pass attribution. Those values are read after command-buffer completion and surfaced through `last_stats()` without waiting on the GPU from the frame hot path.
 
@@ -82,6 +84,7 @@ ID-mask composition is GPU-owned. Semantic region/subregion triangles are raster
   - A mixed 3D/2D frame reuses one frame command buffer and one color target initialization path.
 
 ## Changelog
+- 2026-07-12: replaced independent layer-cache prescan/lowering decisions with one generation-based plan per nesting range, single-owner body rendering, same-size texture reuse, nested invalidation propagation, and explicit ownership counters.
 - 2026-07-12: added snapshot-feature raw color-target readback for exact BGRA8, 4x MSAA resolve, and packed BGRA10_XR correctness goldens.
 
 - 2026-07-12: completed saturating logical/allocated resource accounting and frame-work counters, including previously omitted depth, bloom, ID-mask, Scene3D mesh, layer, argument-buffer, and frame-ring storage.

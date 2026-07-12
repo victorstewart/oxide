@@ -97,6 +97,18 @@ fragment float4 f_nine_slice(UIVSOut in [[stage_in]],
     return c;
 }
 
+fragment float4 f_layer_composite_aligned(UIVSOut in [[stage_in]],
+                                          texture2d<float> img [[texture(0)]],
+                                          constant NineSliceParams* parr [[buffer(1)]])
+{
+    constexpr sampler alignedSampler(coord::pixel, address::clamp_to_edge, filter::nearest);
+    NineSliceParams p = parr[in.iid];
+    float2 xy = in.pos_px - p.rect.xy;
+    if (xy.x < 0.0 || xy.y < 0.0 || xy.x > p.rect.z || xy.y > p.rect.w) discard_fragment();
+    float2 texel = xy * (p.texSize / max(p.rect.zw, float2(1e-5)));
+    return img.sample(alignedSampler, texel);
+}
+
 struct SpinnerParams { float2 center; float radius; float thickness; float phase; float alpha; };
 
 fragment float4 f_spinner(UIVSOut in [[stage_in]], constant SpinnerParams* sarr [[buffer(1)]])

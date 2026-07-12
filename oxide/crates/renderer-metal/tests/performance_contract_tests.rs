@@ -87,6 +87,209 @@ fn completed_gpu_duration_is_attributed_to_frame_id() {
 }
 
 #[test]
+fn layer_cache_uses_one_plan_and_reports_single_ownership()
+{
+   use oxide_renderer_metal::PerfStats;
+
+   let stats = PerfStats {
+      layer_body_commands_scanned: 1,
+      layer_body_commands_copied: 2,
+      layer_texture_creates: 3,
+      layer_cache_hits: 4,
+      layer_cache_misses: 5,
+      layer_offscreen_draws: 6,
+      layer_inline_draws: 7,
+      layer_double_render_prevented: 8,
+      ..PerfStats::default()
+   };
+   assert_eq!(stats.layer_body_commands_scanned, 1);
+   assert_eq!(stats.layer_body_commands_copied, 2);
+   assert_eq!(stats.layer_texture_creates, 3);
+   assert_eq!(stats.layer_cache_hits, 4);
+   assert_eq!(stats.layer_cache_misses, 5);
+   assert_eq!(stats.layer_offscreen_draws, 6);
+   assert_eq!(stats.layer_inline_draws, 7);
+   assert_eq!(stats.layer_double_render_prevented, 8);
+
+   let source = include_str!("../src/lib.rs");
+   assert!(source.contains("struct LayerPlan"));
+   assert!(source.contains("self.build_layer_plans(list);"));
+   assert!(source.contains("if !plan.refresh"));
+   assert!(source.contains("entry.generation = plan.generation;"));
+   assert!(source.contains("entry.generation == plan.generation"));
+   assert!(source.contains("parent.dirty = true;"));
+   assert!(source.contains(".filter(|entry| entry.w == w && entry.h == h)"));
+   assert!(source.contains("pso_layer_composite_aligned"));
+   assert!(source.contains("let pixel_aligned = !plan.refresh"));
+   assert!(source.contains("(pixels - pixels.round()).abs() <= f32::EPSILON"));
+   let shader = include_str!("../shaders/ui.metal");
+   assert!(shader.contains("fragment float4 f_layer_composite_aligned"));
+   assert!(shader.contains("coord::pixel"));
+   assert!(shader.contains("filter::nearest"));
+   assert!(source.contains("self.acc_layer_double_render_prevented.saturating_add(1)"));
+   assert_eq!(source.matches("build_layer_sublist(").count(), 2);
+   assert!(!source.contains("DefaultHasher"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn layer_cache_clean_and_dirty_frames_have_single_body_owner()
+{
+   use oxide_renderer_api::{self as api, Renderer};
+   use oxide_renderer_metal::{MetalInitError, MetalRenderer};
+
+   let mut renderer = match MetalRenderer::new_default()
+   {
+      Ok(renderer) => renderer,
+      Err(MetalInitError::NoDevice) => panic!("macOS layer-cache contract requires Metal"),
+      Err(error) => panic!("create Metal renderer: {error}"),
+   };
+   renderer.resize(96, 96, 1.0).expect("resize renderer");
+
+   for (frame, dirty) in [false, false, true].into_iter().enumerate()
+   {
+      let mut list = api::DrawList::default();
+      list.items.push(api::DrawCmd::LayerBegin {
+         id: 7,
+         rect: api::RectF::new(8.0, 8.0, 64.0, 64.0),
+         dirty,
+      });
+      list.items.push(api::DrawCmd::RRect {
+         rect: api::RectF::new(12.0, 12.0, 48.0, 48.0),
+         radii: [6.0; 4],
+         color: api::Color::rgba(0.2, 0.5, 0.9, 0.75),
+      });
+      list.items.push(api::DrawCmd::LayerEnd);
+
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      renderer.encode_pass(&list);
+      renderer.submit(token).expect("submit layer frame");
+      let stats = renderer.last_stats();
+
+      assert_eq!(stats.layer_body_commands_scanned, 2);
+      assert_eq!(stats.layer_inline_draws, 0);
+      if frame == 1
+      {
+         assert_eq!(stats.layer_body_commands_copied, 0);
+         assert_eq!(stats.layer_texture_creates, 0);
+         assert_eq!(stats.layer_cache_hits, 1);
+         assert_eq!(stats.layer_cache_misses, 0);
+         assert_eq!(stats.layer_offscreen_draws, 0);
+         assert_eq!(stats.layer_double_render_prevented, 0);
+         assert_eq!(stats.draws + stats.instanced, 1);
+      }
+      else
+      {
+         assert_eq!(stats.layer_body_commands_copied, 1);
+         assert_eq!(stats.layer_texture_creates, if frame == 0 { 1 } else { 0 });
+         assert_eq!(stats.layer_cache_hits, 0);
+         assert_eq!(stats.layer_cache_misses, 1);
+         assert_eq!(stats.layer_offscreen_draws, 1);
+         assert_eq!(stats.layer_double_render_prevented, 1);
+         assert_eq!(stats.draws + stats.instanced, 2);
+      }
+   }
+
+   let mut unsupported = api::DrawList::default();
+   unsupported.items.push(api::DrawCmd::LayerBegin {
+      id: 8,
+      rect: api::RectF::new(4.0, 4.0, 80.0, 80.0),
+      dirty: true,
+   });
+   unsupported.items.push(api::DrawCmd::LayerBegin {
+      id: 9,
+      rect: api::RectF::new(8.0, 8.0, 64.0, 64.0),
+      dirty: true,
+   });
+   unsupported.items.push(api::DrawCmd::RRect {
+      rect: api::RectF::new(12.0, 12.0, 48.0, 48.0),
+      radii: [6.0; 4],
+      color: api::Color::rgba(0.2, 0.5, 0.9, 0.75),
+   });
+   unsupported.items.push(api::DrawCmd::Backdrop {
+      rect: api::RectF::new(16.0, 16.0, 32.0, 32.0),
+      sigma: 4.0,
+      tint: api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+      alpha: 0.25,
+   });
+   unsupported.items.push(api::DrawCmd::LayerEnd);
+   unsupported.items.push(api::DrawCmd::LayerEnd);
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_pass(&unsupported);
+   renderer.submit(token).expect("submit unsupported layer frame");
+   let stats = renderer.last_stats();
+   assert_eq!(stats.layer_texture_creates, 0);
+   assert_eq!(stats.layer_cache_hits, 0);
+   assert_eq!(stats.layer_cache_misses, 0);
+   assert_eq!(stats.layer_offscreen_draws, 0);
+   assert_eq!(stats.layer_inline_draws, 2);
+   assert_eq!(stats.layer_double_render_prevented, 0);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn dirty_nested_child_refreshes_its_cached_parent_once()
+{
+   use oxide_renderer_api::{self as api, Renderer};
+   use oxide_renderer_metal::{MetalInitError, MetalRenderer};
+
+   let mut renderer = match MetalRenderer::new_default()
+   {
+      Ok(renderer) => renderer,
+      Err(MetalInitError::NoDevice) => panic!("macOS nested-layer contract requires Metal"),
+      Err(error) => panic!("create Metal renderer: {error}"),
+   };
+   renderer.resize(96, 96, 1.0).expect("resize renderer");
+
+   for (frame, child_dirty) in [false, false, true].into_iter().enumerate()
+   {
+      let mut list = api::DrawList::default();
+      list.items.push(api::DrawCmd::LayerBegin {
+         id: 10,
+         rect: api::RectF::new(4.0, 4.0, 80.0, 80.0),
+         dirty: false,
+      });
+      list.items.push(api::DrawCmd::LayerBegin {
+         id: 11,
+         rect: api::RectF::new(8.0, 8.0, 64.0, 64.0),
+         dirty: child_dirty,
+      });
+      list.items.push(api::DrawCmd::RRect {
+         rect: api::RectF::new(12.0, 12.0, 48.0, 48.0),
+         radii: [6.0; 4],
+         color: api::Color::rgba(0.8, 0.3, 0.2, 0.75),
+      });
+      list.items.push(api::DrawCmd::LayerEnd);
+      list.items.push(api::DrawCmd::LayerEnd);
+
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      renderer.encode_pass(&list);
+      renderer.submit(token).expect("submit nested layer frame");
+      let stats = renderer.last_stats();
+
+      assert_eq!(stats.layer_inline_draws, 0);
+      if frame == 1
+      {
+         assert_eq!(stats.layer_body_commands_copied, 0);
+         assert_eq!(stats.layer_cache_hits, 2);
+         assert_eq!(stats.layer_cache_misses, 0);
+         assert_eq!(stats.layer_offscreen_draws, 0);
+         assert_eq!(stats.layer_double_render_prevented, 0);
+      }
+      else
+      {
+         assert_eq!(stats.layer_body_commands_copied, 4);
+         assert_eq!(stats.layer_texture_creates, if frame == 0 { 2 } else { 0 });
+         assert_eq!(stats.layer_cache_hits, 0);
+         assert_eq!(stats.layer_cache_misses, 2);
+         assert_eq!(stats.layer_offscreen_draws, 2);
+         assert_eq!(stats.layer_double_render_prevented, 2);
+      }
+   }
+}
+
+#[test]
 fn renderer_memory_schema_covers_omitted_resource_families_and_saturates()
 {
    use oxide_renderer_metal::PerfMemoryStats;
