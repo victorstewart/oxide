@@ -42,7 +42,7 @@ The complete file is gated to `target_arch = "wasm32"`.
 
 ## Testing and benchmarks
 
-Run with `wasm-pack test --headless --chrome -- --test http_browser_tests` using a browser-compatible WebDriver.
+Run with `wasm-pack test --headless --chrome --test http_browser_tests` using a browser-compatible WebDriver.
 
 ## Examples
 
