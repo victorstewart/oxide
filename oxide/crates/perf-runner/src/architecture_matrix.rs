@@ -1109,6 +1109,12 @@ fn metal_image_case(id: &str, smoke: bool, name: &str, count: usize) -> Result<P
    let mut upload_sum = 0.0;
    let mut image_bytes_peak = 0_u64;
    let mut total_bytes_peak = 0_u64;
+   let mut image_argument_encodes_sum = 0.0;
+   let mut image_argument_binds_sum = 0.0;
+   let mut image_argument_tables_finalized_sum = 0.0;
+   let mut image_argument_table_reuses_sum = 0.0;
+   let mut image_argument_bytes_sum = 0.0;
+   let mut image_argument_buffer_grows_sum = 0.0;
 
    for frame in 0..(warmups + frames)
    {
@@ -1152,6 +1158,12 @@ fn metal_image_case(id: &str, smoke: bool, name: &str, count: usize) -> Result<P
          upload_sum += (stats.vb_bytes + stats.ib_bytes + stats.ub_bytes) as f64;
          image_bytes_peak = image_bytes_peak.max(stats.memory.image_cache_bytes);
          total_bytes_peak = total_bytes_peak.max(stats.memory.total_bytes);
+         image_argument_encodes_sum += stats.image_argument_encodes as f64;
+         image_argument_binds_sum += stats.image_argument_binds as f64;
+         image_argument_tables_finalized_sum += stats.image_argument_tables_finalized as f64;
+         image_argument_table_reuses_sum += stats.image_argument_table_reuses as f64;
+         image_argument_bytes_sum += stats.image_argument_bytes as f64;
+         image_argument_buffer_grows_sum += stats.image_argument_buffer_grows as f64;
       }
    }
 
@@ -1169,6 +1181,12 @@ fn metal_image_case(id: &str, smoke: bool, name: &str, count: usize) -> Result<P
    metrics.insert(String::from("upload_bytes_avg"), upload_sum / frames as f64);
    metrics.insert(String::from("image_cache_bytes_peak"), image_bytes_peak as f64);
    metrics.insert(String::from("renderer_bytes_peak"), total_bytes_peak as f64);
+   metrics.insert(String::from("image_argument_encodes_avg"), image_argument_encodes_sum / frames as f64);
+   metrics.insert(String::from("image_argument_binds_avg"), image_argument_binds_sum / frames as f64);
+   metrics.insert(String::from("image_argument_tables_finalized_avg"), image_argument_tables_finalized_sum / frames as f64);
+   metrics.insert(String::from("image_argument_table_reuses_avg"), image_argument_table_reuses_sum / frames as f64);
+   metrics.insert(String::from("image_argument_bytes_avg"), image_argument_bytes_sum / frames as f64);
+   metrics.insert(String::from("image_argument_buffer_grows_avg"), image_argument_buffer_grows_sum / frames as f64);
    metrics.insert(String::from("device_scale"), if name.ends_with("3x") { 3.0 } else { 1.0 });
    metrics.insert(String::from("decode_at_display_size"), if name == "decode_display_size" { 1.0 } else { 0.0 });
    metrics.insert(String::from("released_recreated_per_frame"), if name == "release_reuse" { 128.0 } else { 0.0 });

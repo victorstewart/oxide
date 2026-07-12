@@ -657,9 +657,28 @@ fn glyph_icb_resource_options() -> MTLResourceOptions {
 const METAL_SET_BYTES_LIMIT: usize = 4096;
 const FRAME_RING_SIZE: usize = 8;
 const IMAGE_ARG_TEXTURE_SLOTS: u32 = 128;
+const IMAGE_ARG_SMALL_TABLE_COUNT: usize = 8;
 const LEGACY_SPINNER_LARGE_ATOM: f32 = 37.0;
 const LEGACY_SPINNER_LARGE_STROKE: f32 = 2.5;
 const LEGACY_SPINNER_ROTATION_MS: u64 = 1_000;
+
+#[inline]
+fn align_up_usize(value: usize, alignment: usize) -> usize
+{
+    (value.saturating_add(alignment.saturating_sub(1)) / alignment).saturating_mul(alignment)
+}
+
+#[inline]
+fn image_argument_table_key(handles: &[u32]) -> u64
+{
+    let mut key = 0xcbf2_9ce4_8422_2325_u64 ^ handles.len() as u64;
+    for handle in handles
+    {
+        key ^= *handle as u64;
+        key = key.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    key
+}
 
 #[inline]
 fn legacy_spinner_thickness(atom: f32) -> f32 {
@@ -914,7 +933,13 @@ pub struct MetalRenderer {
     depth_state_3d_write: DepthStencilState,
     // Argument buffer for image textures
     img_arg: Option<ArgumentEncoder>,
-    img_arg_bufs: Option<[Buffer; FRAME_RING_SIZE]>,
+    img_arg_bufs: Option<Ring>,
+    img_arg_stride: usize,
+    img_arg_used: usize,
+    image_arg_tables: alloc::vec::Vec<ImageArgTable>,
+    image_arg_table_index: HashMap<u64, usize>,
+    image_arg_table_count: usize,
+    image_arg_handles: alloc::vec::Vec<u32>,
     sampler: Option<SamplerState>,
     color_format: MTLPixelFormat,
     config: MetalRendererConfig,
@@ -991,6 +1016,12 @@ pub struct MetalRenderer {
     acc_layer_offscreen_draws: u64,
     acc_layer_inline_draws: u64,
     acc_layer_double_render_prevented: u32,
+    acc_image_argument_encodes: u32,
+    acc_image_argument_binds: u32,
+    acc_image_argument_tables_finalized: u32,
+    acc_image_argument_table_reuses: u32,
+    acc_image_argument_bytes: u64,
+    acc_image_argument_buffer_grows: u32,
     acc_render_passes: u32,
     acc_blit_passes: u32,
     acc_texture_copies: u32,
@@ -1735,16 +1766,22 @@ impl MetalRenderer {
         let depth_state_3d_write =
             build_depth_stencil_state(&device, true, true, "depth.scene3d.write");
         // Prepare argument encoder for image textures
-        let (img_arg, img_arg_bufs) = if direct_preview_only {
-            (None, None)
+        let (img_arg, img_arg_bufs, img_arg_stride) = if direct_preview_only {
+            (None, None, 0)
         } else {
             let f_image_fn = pipeline_function(&library, "function.f_image", "f_image")?;
             let img_arg = Some(f_image_fn.new_argument_encoder(2));
-            let img_ab_len = img_arg.as_ref().unwrap().encoded_length();
-            let img_arg_bufs = Some(core::array::from_fn(|_| {
-                device.new_buffer(img_ab_len, MTLResourceOptions::StorageModeShared)
-            }));
-            (img_arg, img_arg_bufs)
+            let encoder = img_arg.as_ref().unwrap();
+            let img_arg_stride = align_up_usize(
+                encoder.encoded_length() as usize,
+                encoder.alignment().max(1) as usize,
+            );
+            let img_arg_bufs = Some(Ring::new(
+                &device,
+                img_arg_stride.saturating_mul(IMAGE_ARG_SMALL_TABLE_COUNT),
+                MTLResourceOptions::StorageModeShared,
+            ));
+            (img_arg, img_arg_bufs, img_arg_stride)
         };
         let sampler = build_sampler(&device);
         let opts =
@@ -1884,6 +1921,12 @@ impl MetalRenderer {
             depth_state_3d_write,
             img_arg,
             img_arg_bufs,
+            img_arg_stride,
+            img_arg_used: 0,
+            image_arg_tables: alloc::vec::Vec::new(),
+            image_arg_table_index: HashMap::new(),
+            image_arg_table_count: 0,
+            image_arg_handles: alloc::vec::Vec::new(),
             sampler,
             color_format,
             config: applied_config,
@@ -1960,6 +2003,12 @@ impl MetalRenderer {
             acc_layer_offscreen_draws: 0,
             acc_layer_inline_draws: 0,
             acc_layer_double_render_prevented: 0,
+            acc_image_argument_encodes: 0,
+            acc_image_argument_binds: 0,
+            acc_image_argument_tables_finalized: 0,
+            acc_image_argument_table_reuses: 0,
+            acc_image_argument_bytes: 0,
+            acc_image_argument_buffer_grows: 0,
             acc_render_passes: 0,
             acc_blit_passes: 0,
             acc_texture_copies: 0,
@@ -3312,6 +3361,9 @@ impl MetalRenderer {
         self.acc_draws = 0;
         self.acc_instanced = 0;
         self.acc_icb_cmds = 0;
+        self.img_arg_used = 0;
+        self.image_arg_table_index.clear();
+        self.image_arg_table_count = 0;
         if self.accounting_stats_enabled {
             self.acc_commands_traversed = 0;
             self.acc_commands_copied = 0;
@@ -3329,6 +3381,12 @@ impl MetalRenderer {
             self.acc_layer_offscreen_draws = 0;
             self.acc_layer_inline_draws = 0;
             self.acc_layer_double_render_prevented = 0;
+            self.acc_image_argument_encodes = 0;
+            self.acc_image_argument_binds = 0;
+            self.acc_image_argument_tables_finalized = 0;
+            self.acc_image_argument_table_reuses = 0;
+            self.acc_image_argument_bytes = 0;
+            self.acc_image_argument_buffer_grows = 0;
             self.acc_render_passes = 0;
             self.acc_blit_passes = 0;
             self.acc_texture_copies = 0;
@@ -4780,6 +4838,33 @@ fn build_layer_sublist(
 }
 
 impl MetalRenderer {
+    fn ensure_image_argument_capacity(&mut self, slot: usize, needed: usize)
+    {
+        if !self.use_image_arg_buffer || self.img_arg_stride == 0
+        {
+            return;
+        }
+        if let Some(buffers) = self.img_arg_bufs.as_mut()
+        {
+            if buffers.ensure_capacity(&self.device, slot, needed)
+            {
+                self.acc_resource_grows = self.acc_resource_grows.saturating_add(1);
+                self.acc_image_argument_buffer_grows =
+                    self.acc_image_argument_buffer_grows.saturating_add(1);
+            }
+        }
+    }
+
+    fn prepare_image_argument_buffers(&mut self, slot: usize)
+    {
+        let retained_high_water = self
+            .image_arg_tables
+            .len()
+            .max(1)
+            .saturating_mul(self.img_arg_stride);
+        self.ensure_image_argument_capacity(slot, retained_high_water);
+    }
+
     fn build_layer_plans(&mut self, list: &api::DrawList) {
         self.layer_plans.clear();
         self.layer_plan_stack.clear();
@@ -4902,6 +4987,9 @@ impl api::Renderer for MetalRenderer {
         self.acc_draws = 0;
         self.acc_instanced = 0;
         self.acc_icb_cmds = 0;
+        self.img_arg_used = 0;
+        self.image_arg_table_index.clear();
+        self.image_arg_table_count = 0;
         if self.accounting_stats_enabled {
             self.acc_commands_traversed = 0;
             self.acc_commands_copied = 0;
@@ -4919,6 +5007,12 @@ impl api::Renderer for MetalRenderer {
             self.acc_layer_offscreen_draws = 0;
             self.acc_layer_inline_draws = 0;
             self.acc_layer_double_render_prevented = 0;
+            self.acc_image_argument_encodes = 0;
+            self.acc_image_argument_binds = 0;
+            self.acc_image_argument_tables_finalized = 0;
+            self.acc_image_argument_table_reuses = 0;
+            self.acc_image_argument_bytes = 0;
+            self.acc_image_argument_buffer_grows = 0;
             self.acc_render_passes = 0;
             self.acc_blit_passes = 0;
             self.acc_texture_copies = 0;
@@ -5036,6 +5130,7 @@ impl api::Renderer for MetalRenderer {
             return;
         }
         let slot = self.current_frame_slot();
+        self.prepare_image_argument_buffers(slot);
         let cmd = self.ensure_frame_command_buffer(slot);
 
         // Adaptive policy: compute camera coverage and environment (iOS thermal/LPM),
@@ -5939,6 +6034,15 @@ impl api::Renderer for MetalRenderer {
             self.last_stats.layer_inline_draws = self.acc_layer_inline_draws;
             self.last_stats.layer_double_render_prevented =
                 self.acc_layer_double_render_prevented;
+            self.last_stats.image_argument_encodes = self.acc_image_argument_encodes;
+            self.last_stats.image_argument_binds = self.acc_image_argument_binds;
+            self.last_stats.image_argument_tables_finalized =
+                self.acc_image_argument_tables_finalized;
+            self.last_stats.image_argument_table_reuses =
+                self.acc_image_argument_table_reuses;
+            self.last_stats.image_argument_bytes = self.acc_image_argument_bytes;
+            self.last_stats.image_argument_buffer_grows =
+                self.acc_image_argument_buffer_grows;
             self.last_stats.render_passes = self.acc_render_passes;
             self.last_stats.blit_passes = self.acc_blit_passes;
             self.last_stats.command_buffers = self.frames[slot].cmd.is_some() as u32;
@@ -6069,6 +6173,15 @@ impl api::Renderer for MetalRenderer {
             self.last_stats.layer_inline_draws = self.acc_layer_inline_draws;
             self.last_stats.layer_double_render_prevented =
                 self.acc_layer_double_render_prevented;
+            self.last_stats.image_argument_encodes = self.acc_image_argument_encodes;
+            self.last_stats.image_argument_binds = self.acc_image_argument_binds;
+            self.last_stats.image_argument_tables_finalized =
+                self.acc_image_argument_tables_finalized;
+            self.last_stats.image_argument_table_reuses =
+                self.acc_image_argument_table_reuses;
+            self.last_stats.image_argument_bytes = self.acc_image_argument_bytes;
+            self.last_stats.image_argument_buffer_grows =
+                self.acc_image_argument_buffer_grows;
             self.last_stats.render_passes = self.acc_render_passes;
             self.last_stats.resource_creates = self.acc_resource_creates;
             self.last_stats.resource_grows = self.acc_resource_grows;
@@ -7062,23 +7175,12 @@ fn encode_draws_range(
                 let pipeline =
                     if r.encoding_layer { &r.pso_layer_image } else { &r.pso_image };
                 enc.set_render_pipeline_state(pipeline);
-                // Bind the per-frame argument buffer once, then populate texture slots
-                // and explicitly mark those textures resident for the fragment stage.
-                let img_arg_encoder = if let (Some(encdr), Some(bufs)) =
-                    (r.img_arg.as_ref(), r.img_arg_bufs.as_ref())
-                {
-                    let buf = &bufs[slot];
-                    enc.set_fragment_buffer(2, Some(buf), 0);
-                    encdr.set_argument_buffer(buf, 0);
-                    Some(encdr)
-                } else {
-                    None
-                };
                 // Batch consecutive Images regardless of texture using argument buffer
                 let mut count = 0usize;
                 r.image_vbuf.clear();
                 r.image_fbuf.clear();
                 r.image_tex_map.clear();
+                r.image_arg_handles.clear();
                 let mut next_slot: u32 = 0;
                 let mut j = i;
                 while j < item_end {
@@ -7100,15 +7202,13 @@ fn encode_draws_range(
                             }
                             let s = next_slot;
                             next_slot += 1;
-                            if let Some(encdr) = img_arg_encoder {
-                                encdr.set_texture(s as u64, tref);
-                            }
                             enc.use_resource_at(
                                 tref,
                                 MTLResourceUsage::Read,
                                 MTLRenderStages::Fragment,
                             );
                             r.image_tex_map.insert(tex.0, s);
+                            r.image_arg_handles.push(tex.0);
                             s
                         };
                         // Vertex params
@@ -7131,6 +7231,98 @@ fn encode_draws_range(
                     i = j;
                     continue;
                 }
+                let table_key = if r.image_arg_table_count < IMAGE_ARG_SMALL_TABLE_COUNT
+                {
+                    None
+                }
+                else
+                {
+                    if r.image_arg_table_index.is_empty()
+                    {
+                        for index in 0..r.image_arg_table_count
+                        {
+                            let key = image_argument_table_key(&r.image_arg_tables[index].handles);
+                            r.image_arg_table_index.insert(key, index);
+                        }
+                    }
+                    Some(image_argument_table_key(&r.image_arg_handles))
+                };
+                let reused_table = if let Some(table_key) = table_key
+                {
+                    r.image_arg_table_index
+                        .get(&table_key)
+                        .copied()
+                        .filter(|index| r.image_arg_tables[*index].handles == r.image_arg_handles)
+                }
+                else
+                {
+                    (0..r.image_arg_table_count)
+                        .find(|index| r.image_arg_tables[*index].handles == r.image_arg_handles)
+                };
+                let table_index = if let Some(index) = reused_table
+                {
+                    r.acc_image_argument_table_reuses =
+                        r.acc_image_argument_table_reuses.saturating_add(1);
+                    index
+                }
+                else
+                {
+                    let index = r.image_arg_table_count;
+                    if index == r.image_arg_tables.len()
+                    {
+                        r.image_arg_tables.push(ImageArgTable::default());
+                    }
+                    let offset = r.img_arg_used;
+                    let needed = r.img_arg_used.saturating_add(r.img_arg_stride);
+                    r.ensure_image_argument_capacity(slot, needed);
+                    r.img_arg_used = needed;
+                    let (Some(argument_encoder), Some(argument_buffers)) =
+                        (r.img_arg.as_ref(), r.img_arg_bufs.as_ref())
+                    else
+                    {
+                        i = j;
+                        continue;
+                    };
+                    debug_assert!(r.img_arg_used <= argument_buffers.cap[slot]);
+                    let buffer = &argument_buffers.bufs[slot];
+                    argument_encoder.set_argument_buffer(buffer, offset as u64);
+                    for (texture_index, handle) in r.image_arg_handles.iter().copied().enumerate()
+                    {
+                        if let Some(texture) = r.images.get(&handle)
+                        {
+                            argument_encoder.set_texture(texture_index as u64, texture);
+                        }
+                    }
+                    let table = &mut r.image_arg_tables[index];
+                    table.handles.clear();
+                    table.handles.extend_from_slice(&r.image_arg_handles);
+                    table.offset = offset as u64;
+                    r.image_arg_table_count += 1;
+                    if let Some(table_key) = table_key
+                    {
+                        r.image_arg_table_index.insert(table_key, index);
+                    }
+                    r.acc_image_argument_encodes =
+                        r.acc_image_argument_encodes.saturating_add(1);
+                    r.acc_image_argument_tables_finalized =
+                        r.acc_image_argument_tables_finalized.saturating_add(1);
+                    r.acc_image_argument_bytes = r
+                        .acc_image_argument_bytes
+                        .saturating_add(r.img_arg_stride as u64);
+                    index
+                };
+                let Some(argument_buffers) = r.img_arg_bufs.as_ref()
+                else
+                {
+                    i = j;
+                    continue;
+                };
+                enc.set_fragment_buffer(
+                    2,
+                    Some(&argument_buffers.bufs[slot]),
+                    r.image_arg_tables[table_index].offset,
+                );
+                r.acc_image_argument_binds = r.acc_image_argument_binds.saturating_add(1);
                 // Set vp
                 enc.set_vertex_bytes(
                     1,
@@ -8852,6 +9044,13 @@ struct LayerEntry {
     generation: u64,
 }
 
+#[derive(Debug, Default)]
+struct ImageArgTable
+{
+    handles: alloc::vec::Vec<u32>,
+    offset: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LayerPlanAction {
     Inline,
@@ -8939,6 +9138,12 @@ pub struct PerfStats {
     pub layer_offscreen_draws: u64,
     pub layer_inline_draws: u64,
     pub layer_double_render_prevented: u32,
+    pub image_argument_encodes: u32,
+    pub image_argument_binds: u32,
+    pub image_argument_tables_finalized: u32,
+    pub image_argument_table_reuses: u32,
+    pub image_argument_bytes: u64,
+    pub image_argument_buffer_grows: u32,
     pub render_passes: u32,
     pub blit_passes: u32,
     pub command_buffers: u32,
@@ -9228,7 +9433,9 @@ impl MetalRenderer {
             .saturating_add(uniform_buffer_bytes);
         let argument_buffer_bytes = Self::unique_buffer_category_bytes(
             &mut buffer_seen,
-            self.img_arg_bufs.iter().flat_map(|bufs| bufs.iter().map(|buf| buf.as_ref())),
+            self.img_arg_bufs
+                .iter()
+                .flat_map(|buffers| buffers.bufs.iter().map(|buffer| buffer.as_ref())),
         );
         let id_mask_vertex_buffer_bytes = Self::unique_buffer_category_bytes(
             &mut buffer_seen,
@@ -9327,7 +9534,7 @@ impl MetalRenderer {
             .iter()
             .chain(self.ib.bufs.iter())
             .chain(self.ub.bufs.iter())
-            .chain(self.img_arg_bufs.iter().flat_map(|buffers| buffers.iter()))
+            .chain(self.img_arg_bufs.iter().flat_map(|buffers| buffers.bufs.iter()))
             .chain(self.id_mask_vertex_caches.iter().map(|cache| &cache.buffer))
             .chain(self.meshes_3d.values().flat_map(|mesh| [&mesh.vb, &mesh.ib]))
         {

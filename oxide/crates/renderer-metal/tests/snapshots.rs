@@ -418,3 +418,210 @@ fn snapshot_camera_nv12_optimized_tracks_bgra_benchmark() {
         "legacy NV12 path no longer meaningfully diverges from BGRA reference: optimized={optimized_mean:.3} legacy={legacy_mean:.3}"
     );
 }
+
+fn solid_image(renderer: &mut MetalRenderer, bgra: [u8; 4]) -> api::ImageHandle
+{
+   let pixels = [bgra, bgra, bgra, bgra].concat();
+   renderer.image_create_rgba8(2, 2, &pixels, 8)
+}
+
+fn readback_pixel(bgra: &[u8], width: u32, x: u32, y: u32) -> [u8; 4]
+{
+   let index = ((y * width + x) * 4) as usize;
+   [bgra[index], bgra[index + 1], bgra[index + 2], bgra[index + 3]]
+}
+
+fn assert_pixel_eq(actual: [u8; 4], expected: [u8; 4], label: &str)
+{
+   assert_eq!(actual, expected, "{label}");
+}
+
+#[test]
+fn snapshot_image_argument_tables_survive_separators_layers_and_effects()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   let width = 128_u32;
+   renderer.resize(width, 32, 1.0).expect("resize");
+   let red = solid_image(&mut renderer, [0, 0, 255, 255]);
+   let green = solid_image(&mut renderer, [0, 255, 0, 255]);
+   let blue = solid_image(&mut renderer, [255, 0, 0, 255]);
+   let image = |tex, x| api::DrawCmd::Image {
+      tex,
+      dst: api::RectF::new(x, 4.0, 16.0, 16.0),
+      src: api::RectF::new(0.0, 0.0, 2.0, 2.0),
+      alpha: 1.0,
+   };
+   let mut list = api::DrawList::default();
+   list.items.extend_from_slice(&[
+      image(red, 0.0),
+      api::DrawCmd::RRect {
+         rect: api::RectF::new(16.0, 24.0, 4.0, 4.0),
+         radii: [1.0; 4],
+         color: api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+      },
+      api::DrawCmd::ClipPush { rect: api::RectI::new(20, 0, 16, 32) },
+      image(green, 20.0),
+      api::DrawCmd::ClipPop,
+      api::DrawCmd::LayerBegin {
+         id: 6_001,
+         rect: api::RectF::new(40.0, 4.0, 16.0, 16.0),
+         dirty: true,
+      },
+      image(blue, 40.0),
+      api::DrawCmd::LayerEnd,
+      image(red, 60.0),
+      api::DrawCmd::VisualEffect {
+         rect: api::RectF::new(80.0, 4.0, 16.0, 16.0),
+         effect: api::VisualEffect::DarkPopup {
+            blur_intensity: 0.25,
+            tint: api::Color::rgba(0.1, 0.1, 0.1, 0.2),
+         },
+      },
+      image(green, 104.0),
+   ]);
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_pass(&list);
+   renderer.submit(token).expect("submit");
+   let (_, _, pixels) = renderer.readback_bgra8().expect("readback");
+   for (x, expected, label) in [
+      (8, [0, 0, 255, 255], "first table before rrect"),
+      (28, [0, 255, 0, 255], "table inside clip"),
+      (48, [255, 0, 0, 255], "table inside cached layer"),
+      (68, [0, 0, 255, 255], "reused table after layer"),
+      (112, [0, 255, 0, 255], "reused table after effect"),
+   ]
+   {
+      assert_pixel_eq(readback_pixel(&pixels, width, x, 12), expected, label);
+   }
+   let stats = renderer.last_stats();
+   assert!(stats.render_passes > 1, "fixture must exercise multiple Metal passes: {stats:?}");
+   assert!(
+      stats.image_argument_tables_finalized >= 3,
+      "expected distinct immutable image tables: {stats:?}",
+   );
+   assert!(
+      stats.image_argument_table_reuses >= 2,
+      "expected identical tables to be reused without re-encoding: {stats:?}",
+   );
+   assert!(
+      stats.image_argument_binds > stats.image_argument_tables_finalized,
+      "expected reused immutable tables to remain bindable: {stats:?}",
+   );
+}
+
+#[test]
+fn snapshot_image_argument_tables_split_more_than_128_textures()
+{
+   const IMAGE_COUNT: usize = 130;
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   let width = IMAGE_COUNT as u32 * 4;
+   renderer.resize(width, 8, 1.0).expect("resize");
+   let mut expected = Vec::with_capacity(IMAGE_COUNT);
+   let mut list = api::DrawList::default();
+   for index in 0..IMAGE_COUNT
+   {
+      let color = [
+         (index as u8).wrapping_mul(31),
+         (index as u8).wrapping_mul(47),
+         (index as u8).wrapping_mul(61),
+         255,
+      ];
+      let texture = solid_image(&mut renderer, color);
+      expected.push(color);
+      list.items.push(api::DrawCmd::Image {
+         tex: texture,
+         dst: api::RectF::new(index as f32 * 4.0, 0.0, 4.0, 8.0),
+         src: api::RectF::new(0.0, 0.0, 2.0, 2.0),
+         alpha: 1.0,
+      });
+   }
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_pass(&list);
+   renderer.submit(token).expect("submit");
+   let (_, _, pixels) = renderer.readback_bgra8().expect("readback");
+   for (index, expected) in expected.into_iter().enumerate()
+   {
+      assert_pixel_eq(
+         readback_pixel(&pixels, width, index as u32 * 4 + 2, 4),
+         expected,
+         &format!("unique image {index}"),
+      );
+   }
+   let stats = renderer.last_stats();
+   assert_eq!(stats.image_argument_tables_finalized, 2, "128-slot split changed: {stats:?}");
+   assert_eq!(stats.image_argument_binds, 2, "each table should bind once: {stats:?}");
+   assert_eq!(stats.image_argument_table_reuses, 0, "unique tables cannot be reused: {stats:?}");
+}
+
+#[test]
+fn snapshot_image_argument_table_growth_preserves_bound_slices_and_warms_up()
+{
+   const TABLE_COUNT: usize = 24;
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   let width = (TABLE_COUNT as u32 + 1) * 8;
+   renderer.resize(width, 16, 1.0).expect("resize");
+   let mut expected = Vec::with_capacity(TABLE_COUNT + 1);
+   let mut list = api::DrawList::default();
+   let mut first_texture = None;
+   for index in 0..TABLE_COUNT
+   {
+      let color = [
+         (index as u8).wrapping_mul(17),
+         (index as u8).wrapping_mul(37),
+         (index as u8).wrapping_mul(67),
+         255,
+      ];
+      expected.push(color);
+      let texture = solid_image(&mut renderer, color);
+      first_texture.get_or_insert(texture);
+      list.items.push(api::DrawCmd::Image {
+         tex: texture,
+         dst: api::RectF::new(index as f32 * 8.0, 0.0, 6.0, 8.0),
+         src: api::RectF::new(0.0, 0.0, 2.0, 2.0),
+         alpha: 1.0,
+      });
+      list.items.push(api::DrawCmd::RRect {
+         rect: api::RectF::new(index as f32 * 8.0, 12.0, 2.0, 2.0),
+         radii: [0.0; 4],
+         color: api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+      });
+   }
+   let first_color = expected[0];
+   expected.push(first_color);
+   list.items.push(api::DrawCmd::Image {
+      tex: first_texture.unwrap(),
+      dst: api::RectF::new(TABLE_COUNT as f32 * 8.0, 0.0, 6.0, 8.0),
+      src: api::RectF::new(0.0, 0.0, 2.0, 2.0),
+      alpha: 1.0,
+   });
+
+   for frame in 0..9
+   {
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      renderer.encode_pass(&list);
+      renderer.submit(token).expect("submit");
+      let (_, _, pixels) = renderer.readback_bgra8().expect("readback");
+      for (index, expected) in expected.iter().copied().enumerate()
+      {
+         assert_pixel_eq(
+            readback_pixel(&pixels, width, index as u32 * 8 + 3, 4),
+            expected,
+            &format!("frame {frame} immutable table {index}"),
+         );
+      }
+      let stats = renderer.last_stats();
+      assert_eq!(stats.image_argument_tables_finalized, TABLE_COUNT as u32, "table count changed: {stats:?}");
+      assert_eq!(stats.image_argument_binds, TABLE_COUNT as u32 + 1, "bind count changed: {stats:?}");
+      assert_eq!(stats.image_argument_table_reuses, 1, "indexed reuse changed: {stats:?}");
+      if frame < 8
+      {
+         assert!(stats.image_argument_buffer_grows > 0, "cold ring slot must grow: {stats:?}");
+      }
+      else
+      {
+         assert_eq!(stats.image_argument_buffer_grows, 0, "warm frame allocated: {stats:?}");
+      }
+   }
+}

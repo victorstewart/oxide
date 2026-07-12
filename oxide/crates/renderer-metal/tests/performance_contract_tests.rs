@@ -131,6 +131,42 @@ fn layer_cache_uses_one_plan_and_reports_single_ownership()
    assert!(!source.contains("DefaultHasher"));
 }
 
+#[test]
+fn image_argument_tables_are_immutable_per_frame_and_report_reuse()
+{
+   use oxide_renderer_metal::PerfStats;
+
+   let stats = PerfStats {
+      image_argument_encodes: 1,
+      image_argument_binds: 2,
+      image_argument_tables_finalized: 3,
+      image_argument_table_reuses: 4,
+      image_argument_bytes: 5,
+      image_argument_buffer_grows: 6,
+      ..PerfStats::default()
+   };
+   assert_eq!(stats.image_argument_encodes, 1);
+   assert_eq!(stats.image_argument_binds, 2);
+   assert_eq!(stats.image_argument_tables_finalized, 3);
+   assert_eq!(stats.image_argument_table_reuses, 4);
+   assert_eq!(stats.image_argument_bytes, 5);
+   assert_eq!(stats.image_argument_buffer_grows, 6);
+
+   let source = include_str!("../src/lib.rs");
+   assert!(source.contains("struct ImageArgTable"));
+   assert!(source.contains("fn ensure_image_argument_capacity"));
+   assert!(source.contains("fn prepare_image_argument_buffers"));
+   assert!(source.contains("retained_high_water"));
+   assert!(source.contains("argument_encoder.set_argument_buffer(buffer, offset as u64)"));
+   assert!(source.contains("let needed = r.img_arg_used.saturating_add(r.img_arg_stride)"));
+   assert!(source.contains("r.image_arg_table_count < IMAGE_ARG_SMALL_TABLE_COUNT"));
+   assert!(source.contains("r.image_arg_table_index"));
+   assert!(source.contains("r.image_arg_tables[*index].handles == r.image_arg_handles"));
+   assert!(source.contains("r.acc_image_argument_table_reuses.saturating_add(1)"));
+   assert_eq!(source.matches("argument_encoder.set_argument_buffer(buffer, offset as u64)").count(), 1);
+   assert!(!source.contains("argument_encoder.set_argument_buffer(buffer, 0)"));
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn layer_cache_clean_and_dirty_frames_have_single_body_owner()
