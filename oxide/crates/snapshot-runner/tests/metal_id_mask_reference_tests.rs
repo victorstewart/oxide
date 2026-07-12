@@ -89,8 +89,22 @@ fn metal_asymmetric_id_mask_raster_and_final_fields_match_cpu_reference()
    };
    let mut renderer = MetalRenderer::new_default().expect("create Metal renderer");
    renderer.resize(width as u32, height as u32, 1.0).expect("resize Metal renderer");
+   let preferred_slot = renderer.mark_next_preferred_frame_slot_busy_for_snapshot();
    let token = renderer.begin_frame(&api::FrameTarget, None);
+   let selected_slot = renderer.current_frame_slot_for_snapshot();
+   assert_ne!(selected_slot, preferred_slot, "busy preferred slot was selected");
+   assert_eq!(renderer.last_stats().frame_backpressure_skipped, 0, "one busy slot caused backpressure");
+   renderer.release_frame_slot_for_snapshot(preferred_slot);
    renderer.encode_id_mask_gpu_compositor(&pass).expect("encode ID mask");
+   assert_eq!(
+      renderer.current_frame_command_buffer_slot_for_snapshot(),
+      Some(selected_slot),
+      "ID-mask compositor encoded outside the selected frame slot",
+   );
+   assert!(
+      !renderer.frame_slot_has_command_buffer_for_snapshot(preferred_slot),
+      "ID-mask compositor created a second command buffer on the busy preferred slot",
+   );
    renderer.submit(token).expect("submit ID mask");
    let readback = renderer.readback_id_mask_snapshot().expect("read ID-mask fields");
 

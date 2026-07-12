@@ -187,6 +187,25 @@ fn neon_marker_instance_abi_is_explicit_and_chunks_inline_uploads()
    assert!(shader.contains("uint _tail_pad;"));
 }
 
+#[test]
+fn auxiliary_encoders_use_the_selected_frame_slot()
+{
+   let neon = include_str!("../src/neon_marker_gpu.rs");
+   let id_mask = include_str!("../src/id_mask_gpu.rs");
+   for source in [neon, id_mask]
+   {
+      assert!(!source.contains("frame_id % FRAME_RING_SIZE"));
+      assert!(!source.contains("frame_id % FRAME_RING_SIZE as u64"));
+   }
+   assert!(neon.contains("let slot = self.current_frame_slot();"));
+   assert!(id_mask.matches("let slot = self.current_frame_slot();").count() >= 3);
+
+   let renderer = include_str!("../src/lib.rs");
+   assert!(renderer.contains("mark_next_preferred_frame_slot_busy_for_snapshot"));
+   assert!(renderer.contains("current_frame_command_buffer_slot_for_snapshot"));
+   assert!(renderer.contains("frame_slot_has_command_buffer_for_snapshot"));
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn layer_cache_clean_and_dirty_frames_have_single_body_owner()

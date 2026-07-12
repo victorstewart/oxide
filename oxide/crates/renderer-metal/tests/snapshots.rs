@@ -665,13 +665,27 @@ fn snapshot_neon_marker_instance_arrays_match_distinctive_colors()
             }
          })
          .collect::<Vec<_>>();
+      let preferred_slot = renderer.mark_next_preferred_frame_slot_busy_for_snapshot();
       let token = renderer.begin_frame(&api::FrameTarget, None);
+      let selected_slot = renderer.current_frame_slot_for_snapshot();
+      assert_ne!(selected_slot, preferred_slot, "busy preferred slot was selected");
+      assert_eq!(renderer.last_stats().frame_backpressure_skipped, 0, "one busy slot caused backpressure");
+      renderer.release_frame_slot_for_snapshot(preferred_slot);
       renderer
          .encode_neon_markers(&NeonMarkerPass {
             viewport: api::RectF::new(0.0, 0.0, width as f32, height as f32),
             markers: &markers,
          })
          .expect("encode neon markers");
+      assert_eq!(
+         renderer.current_frame_command_buffer_slot_for_snapshot(),
+         Some(selected_slot),
+         "neon markers encoded outside the selected frame slot",
+      );
+      assert!(
+         !renderer.frame_slot_has_command_buffer_for_snapshot(preferred_slot),
+         "neon markers created a command buffer on the busy preferred slot",
+      );
       renderer.submit(token).expect("submit");
       let (_, _, pixels) = renderer.readback_bgra8().expect("readback");
       for (index, marker) in markers.iter().enumerate()

@@ -1346,6 +1346,44 @@ impl MetalRenderer {
         self.frame_slot
     }
 
+    #[cfg(feature = "snapshot-tests")]
+    pub fn mark_next_preferred_frame_slot_busy_for_snapshot(&mut self) -> usize
+    {
+        let preferred = (self.frame_id.wrapping_add(1) % FRAME_RING_SIZE as u64) as usize;
+        self.frames[preferred].in_flight.store(true, Ordering::Release);
+        preferred
+    }
+
+    #[cfg(feature = "snapshot-tests")]
+    pub fn release_frame_slot_for_snapshot(&mut self, slot: usize)
+    {
+        if let Some(frame) = self.frames.get(slot)
+        {
+            frame.in_flight.store(false, Ordering::Release);
+        }
+    }
+
+    #[cfg(feature = "snapshot-tests")]
+    pub fn current_frame_slot_for_snapshot(&self) -> usize
+    {
+        self.current_frame_slot()
+    }
+
+    #[cfg(feature = "snapshot-tests")]
+    pub fn current_frame_command_buffer_slot_for_snapshot(&self) -> Option<usize>
+    {
+        self.frames[self.current_frame_slot()]
+            .cmd
+            .as_ref()
+            .map(|_| self.current_frame_slot())
+    }
+
+    #[cfg(feature = "snapshot-tests")]
+    pub fn frame_slot_has_command_buffer_for_snapshot(&self, slot: usize) -> bool
+    {
+        self.frames.get(slot).is_some_and(|frame| frame.cmd.is_some())
+    }
+
     fn new_with_config_impl(config: MetalRendererConfig) -> Result<Self, MetalInitError> {
         let simulator = running_on_ios_simulator();
         ios_log(&format!(

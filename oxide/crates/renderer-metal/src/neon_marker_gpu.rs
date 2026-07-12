@@ -72,7 +72,7 @@ impl MetalRenderer {
         }
 
         self.ensure_target();
-        let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
+        let slot = self.current_frame_slot();
         let cmd = self.ensure_frame_command_buffer(slot);
         let Some(target_tex) = self.target_tex.as_ref().map(Texture::to_owned) else {
             return Err(api::RenderError::InvalidOperation(

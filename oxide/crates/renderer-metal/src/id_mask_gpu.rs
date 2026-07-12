@@ -342,7 +342,7 @@ impl MetalRenderer {
             neighborhood_colors,
         };
 
-        let slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
+        let slot = self.current_frame_slot();
         let cmd = self.ensure_frame_command_buffer(slot);
         let rpd = RenderPassDescriptor::new();
         let ca0 = rpd.color_attachments().object_at(0).unwrap();
