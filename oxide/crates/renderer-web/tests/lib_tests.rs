@@ -80,6 +80,17 @@ fn renderer_accounting_schema_defaults_to_explicit_unavailable_allocated_bytes()
 }
 
 #[test]
+fn wasm_snapshot_feature_exposes_exact_id_mask_texture_and_field_readback()
+{
+   let source = include_str!("../src/wasm/webgpu.rs");
+   assert!(source.contains("pub fn begin_id_mask_snapshot_readback"));
+   assert!(source.contains("pub fn collect_id_mask_snapshot_readback"));
+   assert!(source.contains("copy_id_mask_texture_to_plane"));
+   assert!(source.contains("decode_web_rgba16_float"));
+   assert!(source.contains("wgpu::TextureUsages::COPY_SRC"));
+}
+
+#[test]
 fn native_stub_ignores_web_camera_background_commands() {
     let mut renderer = WebRenderer::new_for_tests(100, 50, 1.0);
     let mut list = api::DrawList::default();

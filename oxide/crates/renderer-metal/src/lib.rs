@@ -770,6 +770,24 @@ pub struct MetalRendererConfig {
     pub direct_preview_only: bool,
 }
 
+#[cfg(feature = "snapshot-tests")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MetalSnapshotColorFormat
+{
+   Bgra8Srgb,
+   Bgra10Xr,
+}
+
+#[cfg(feature = "snapshot-tests")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MetalSnapshotColorReadback
+{
+   pub width: u32,
+   pub height: u32,
+   pub format: MetalSnapshotColorFormat,
+   pub bytes: alloc::vec::Vec<u8>,
+}
+
 impl Default for MetalRendererConfig {
     fn default() -> Self {
         Self {
@@ -3690,13 +3708,17 @@ impl MetalRenderer {
         Ok(self.last_stats)
     }
 
-    fn readback_texture_bgra8(&self, tex: &TextureRef) -> Option<(u32, u32, alloc::vec::Vec<u8>)> {
+    fn readback_texture_bytes(
+        &self,
+        tex: &TextureRef,
+        bytes_per_pixel: usize,
+    ) -> Option<(u32, u32, alloc::vec::Vec<u8>)> {
         let w = tex.width() as u32;
         let h = tex.height() as u32;
-        if w == 0 || h == 0 {
+        if w == 0 || h == 0 || bytes_per_pixel == 0 {
             return None;
         }
-        let row_bytes = (w as usize) * 4;
+        let row_bytes = (w as usize).checked_mul(bytes_per_pixel)?;
         let buf_bytes = row_bytes * (h as usize);
         let opts =
             MTLResourceOptions::CPUCacheModeDefaultCache | MTLResourceOptions::StorageModeShared;
@@ -3726,6 +3748,10 @@ impl MetalRenderer {
         }
         let out = unsafe { core::slice::from_raw_parts(ptr as *const u8, buf_bytes) };
         Some((w, h, out.to_vec()))
+    }
+
+    fn readback_texture_bgra8(&self, tex: &TextureRef) -> Option<(u32, u32, alloc::vec::Vec<u8>)> {
+        self.readback_texture_bytes(tex, 4)
     }
 
     fn readback_direct_live_camera_bgra8(&self) -> Option<(u32, u32, alloc::vec::Vec<u8>)> {
@@ -3804,6 +3830,20 @@ impl MetalRenderer {
             return self.readback_texture_bgra8(tex.as_ref());
         }
         self.readback_direct_live_camera_bgra8()
+    }
+
+    #[cfg(feature = "snapshot-tests")]
+    pub fn readback_color_snapshot(&self) -> Option<MetalSnapshotColorReadback>
+    {
+        let texture = self.target_tex.as_ref()?;
+        let (format, bytes_per_pixel) = match self.color_format {
+            MTLPixelFormat::BGRA8Unorm_sRGB => (MetalSnapshotColorFormat::Bgra8Srgb, 4),
+            MTLPixelFormat::BGRA10_XR => (MetalSnapshotColorFormat::Bgra10Xr, 8),
+            _ => return None,
+        };
+        let (width, height, bytes) =
+            self.readback_texture_bytes(texture.as_ref(), bytes_per_pixel)?;
+        Some(MetalSnapshotColorReadback { width, height, format, bytes })
     }
 
     fn validate_mesh3d_upload(

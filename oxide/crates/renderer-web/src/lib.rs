@@ -638,6 +638,8 @@ mod wasm {
     use web_sys::{CanvasRenderingContext2d, Document, HtmlCanvasElement, ImageData};
 
     pub use webgpu::{BrowserRenderer, WebGpuRenderer};
+    #[cfg(feature = "snapshot-tests")]
+    pub use webgpu::WebIdMaskSnapshotReadback;
 
     #[allow(dead_code)]
     enum WebImageKind {
@@ -2210,3 +2212,5 @@ mod native_stub {
 pub use native_stub::WebRenderer;
 #[cfg(target_arch = "wasm32")]
 pub use wasm::{bench_canvas_indexed_quads, BrowserRenderer, WebGpuRenderer};
+#[cfg(all(target_arch = "wasm32", feature = "snapshot-tests"))]
+pub use wasm::WebIdMaskSnapshotReadback;

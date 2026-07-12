@@ -30,3 +30,6 @@ wgpu = { version = "=26.0.1", default-features = false, features = ["std", "webg
 [lib]
 path = "src/lib.rs"
 crate-type = ["rlib"]
+
+[features]
+snapshot-tests = []

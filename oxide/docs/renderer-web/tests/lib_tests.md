@@ -70,6 +70,7 @@ pub fn scale() -> f32
 
 ## Changelog
 
+- 2026-07-12: added a source contract for snapshot-only R8/RGBA16F ID-mask readback.
 - 2026-07-12: added explicit logical-versus-allocated accounting defaults and overflow-safe texture-byte source coverage.
 - 2026-07-12: added packed solid-color decode/interpolation coverage and behavioral Canvas gradient admission/rejection tests.
 - 2026-07-10: added source contracts for bounded generation-checked WebGPU image-slot reuse and stale-handle rejection.

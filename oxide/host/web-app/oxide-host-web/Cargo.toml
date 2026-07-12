@@ -9,7 +9,7 @@ description = "WebAssembly browser host for Oxide"
 oxide-platform-api = { path = "../../../crates/platform-api" }
 oxide-platform-web = { path = "../../../crates/platform-web" }
 oxide-renderer-api = { path = "../../../crates/renderer-api" }
-oxide-renderer-web = { path = "../../../crates/renderer-web" }
+oxide-renderer-web = { path = "../../../crates/renderer-web", features = ["snapshot-tests"] }
 oxide-test-scenes = { path = "../../../crates/test-scenes" }
 oxide-text = { path = "../../../crates/text" }
 oxide-ui-core = { path = "../../../crates/ui-core" }

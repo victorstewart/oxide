@@ -62,6 +62,7 @@
          const captureTarget = params.get("capture_target") || "app";
          const captureOnly = params.get("capture_only") === "1";
          const startupOnly = params.get("startup_only") === "1";
+         const idMaskReferenceOnly = params.get("id_mask_reference_only") === "1";
          const captureWidth = boundedNumber("capture_width", Math.max(1, Math.trunc(window.innerWidth || 512)), 1, 4096);
          const captureHeight = boundedNumber("capture_height", Math.max(1, Math.trunc(window.innerHeight || 512)), 1, 4096);
          const benchTimeoutMs = boundedNumber("bench_timeout_ms", 60000, 1000, 300000);
@@ -371,7 +372,12 @@
          window.oxideWebGpuAppSnapshot = "";
          window.oxideWebGpuScene3dSnapshot = "";
          window.oxideWebGpuIdMaskSnapshot = "";
-         if (captureTarget === "app" && captureOnly) {
+         window.oxideWebGpuIdMaskReference = "";
+         if (idMaskReferenceOnly) {
+            window.oxideApp = await newMeasuredOxideApp();
+            window.oxideWebGpuIdMaskReference = await window.oxideApp.read_webgpu_asymmetric_id_mask_fields();
+            console.log("oxide-webgpu-id-mask-reference", window.oxideWebGpuIdMaskReference);
+         } else if (captureTarget === "app" && captureOnly) {
             window.oxideApp = await newMeasuredOxideApp();
             window.oxideWebGpuAppSnapshot = measureFirstFrame(() => window.oxideApp.render_webgpu_app_snapshot());
             console.log("oxide-webgpu-app-snapshot", window.oxideWebGpuAppSnapshot);
@@ -426,7 +432,7 @@
          window.oxideWebGpuDrawStateCacheAB = "";
          window.oxideWebGpuClipStateAB = "";
          window.oxideWebBenchmarkMarks = benchMarks;
-         if (!captureOnly && !startupOnly) {
+         if (!captureOnly && !startupOnly && !idMaskReferenceOnly) {
             window.oxideApp.prewarm_webgpu_bench_resources();
             if (architectureMatrix) {
                window.oxideWebGpuArchitecturePrimitives = await runBench("architecture_primitives", () => window.oxideApp.bench_webgpu_architecture_primitives(mixedSamples, mixedFrames));
@@ -500,6 +506,7 @@
             app_snapshot: window.oxideWebGpuAppSnapshot,
             scene3d_snapshot: window.oxideWebGpuScene3dSnapshot,
             id_mask_snapshot: window.oxideWebGpuIdMaskSnapshot,
+            id_mask_reference: window.oxideWebGpuIdMaskReference,
          };
          document.getElementById("oxide-browser-report-json").textContent = JSON.stringify(report);
          document.documentElement.dataset.oxideReportReady = "1";

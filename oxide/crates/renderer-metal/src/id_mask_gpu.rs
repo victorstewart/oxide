@@ -30,6 +30,18 @@ pub(super) struct RenderTargets {
     pub(super) seam_field_b: Texture,
 }
 
+#[cfg(feature = "snapshot-tests")]
+#[derive(Clone, Debug, PartialEq)]
+pub struct IdMaskSnapshotReadback
+{
+   pub width: usize,
+   pub height: usize,
+   pub city: Vec<u8>,
+   pub neighborhood: Vec<u8>,
+   pub city_field: Vec<[f32; 4]>,
+   pub seam_field: Vec<[f32; 4]>,
+}
+
 #[inline]
 fn configure_clear_store_attachments(
     rpd: &RenderPassDescriptorRef,
@@ -135,6 +147,40 @@ fn build_field_pso(
 }
 
 impl MetalRenderer {
+    #[cfg(feature = "snapshot-tests")]
+    pub fn readback_id_mask_snapshot(&self) -> Option<IdMaskSnapshotReadback>
+    {
+        let slot = self.current_frame_slot();
+        let targets = self.id_mask_targets.get(slot)?.as_ref()?;
+        let (_, _, city) = self.readback_texture_bytes(&targets.city, 1)?;
+        let (_, _, neighborhood) = self.readback_texture_bytes(&targets.neighborhood, 1)?;
+        let mut src_is_a = true;
+        let mut jump = targets.width.max(targets.height).next_power_of_two() / 2;
+        while jump >= 1
+        {
+            src_is_a = !src_is_a;
+            jump /= 2;
+        }
+        let (city_field, seam_field) = if src_is_a
+        {
+            (&targets.city_field_a, &targets.seam_field_a)
+        }
+        else
+        {
+            (&targets.city_field_b, &targets.seam_field_b)
+        };
+        let (_, _, city_field) = self.readback_texture_bytes(city_field, 16)?;
+        let (_, _, seam_field) = self.readback_texture_bytes(seam_field, 16)?;
+        Some(IdMaskSnapshotReadback {
+            width: targets.width,
+            height: targets.height,
+            city,
+            neighborhood,
+            city_field: decode_rgba32_float(&city_field),
+            seam_field: decode_rgba32_float(&seam_field),
+        })
+    }
+
     fn new_r8_mask_render_texture(
         &self,
         width: usize,
@@ -511,4 +557,20 @@ impl MetalRenderer {
             pass.polish,
         )
     }
+}
+
+#[cfg(feature = "snapshot-tests")]
+fn decode_rgba32_float(bytes: &[u8]) -> Vec<[f32; 4]>
+{
+   bytes
+      .chunks_exact(16)
+      .map(|pixel| {
+         [
+            f32::from_ne_bytes(pixel[0..4].try_into().unwrap()),
+            f32::from_ne_bytes(pixel[4..8].try_into().unwrap()),
+            f32::from_ne_bytes(pixel[8..12].try_into().unwrap()),
+            f32::from_ne_bytes(pixel[12..16].try_into().unwrap()),
+         ]
+      })
+      .collect()
 }

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-oxide-renderer-metal = { path = "../renderer-metal" }
+oxide-renderer-metal = { path = "../renderer-metal", features = ["snapshot-tests"] }
 oxide-renderer-api = { path = "../renderer-api" }
 oxide-ui-core = { path = "../ui-core" }
 oxide-timing = { path = "../timing" }

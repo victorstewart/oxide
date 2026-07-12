@@ -1,0 +1,1211 @@
+{
+  "version": 1,
+  "id": "web.wasm.webgpu.browser_startup_repeats",
+  "source": "performance.now+node.fs.stat",
+  "repeats": 25,
+  "package": {
+    "package_root": "host/web-app/www/pkg",
+    "package_file_count": 4,
+    "package_bytes": 3201283,
+    "wasm_bytes": 3075438,
+    "js_bytes": 110646,
+    "typescript_bytes": 9888,
+    "wasm_typescript_bytes": 5311,
+    "files": [
+      {
+        "kind": "wasm",
+        "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+        "bytes": 3075438
+      },
+      {
+        "kind": "js",
+        "path": "host/web-app/www/pkg/oxide_host_web.js",
+        "bytes": 110646
+      },
+      {
+        "kind": "typescript",
+        "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+        "bytes": 9888
+      },
+      {
+        "kind": "wasm_typescript",
+        "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+        "bytes": 5311
+      }
+    ]
+  },
+  "summaries": {
+    "wasm_init_ms": {
+      "samples": 25,
+      "min": 8.47,
+      "p50": 14.965,
+      "p95": 22.07,
+      "p99": 25.795,
+      "max": 25.795,
+      "avg": 14.983799999999999
+    },
+    "app_init_ms": {
+      "samples": 25,
+      "min": 9.86,
+      "p50": 10.49,
+      "p95": 20.37,
+      "p99": 20.76,
+      "max": 20.76,
+      "avg": 12.198999999999998
+    },
+    "first_frame_ms": {
+      "samples": 25,
+      "min": 17.16,
+      "p50": 17.49,
+      "p95": 17.715,
+      "p99": 18.355,
+      "max": 18.355,
+      "avg": 17.498
+    },
+    "report_ready_ms": {
+      "samples": 25,
+      "min": 52.56,
+      "p50": 69.47,
+      "p95": 99.045,
+      "p99": 99.045,
+      "max": 99.045,
+      "avg": 74.47180000000002
+    },
+    "wasm_memory_bytes": {
+      "samples": 25,
+      "min": 8781824,
+      "p50": 8781824,
+      "p95": 8781824,
+      "p99": 8781824,
+      "max": 8781824,
+      "avg": 8781824
+    }
+  },
+  "samples": [
+    {
+      "index": 0,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.22,
+      "wasm_init_ms": 17.215,
+      "app_init_start_ms": 31.775,
+      "app_init_ms": 10.13,
+      "first_frame_start_ms": 41.935,
+      "first_frame_ms": 17.62,
+      "report_ready_ms": 59.71,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.17,
+      "wasm_init_ms": 15.69,
+      "app_init_start_ms": 62.36,
+      "app_init_ms": 18.985,
+      "first_frame_start_ms": 81.375,
+      "first_frame_ms": 17.505,
+      "report_ready_ms": 99.045,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.175,
+      "wasm_init_ms": 17.1,
+      "app_init_start_ms": 61.225,
+      "app_init_ms": 20.21,
+      "first_frame_start_ms": 81.465,
+      "first_frame_ms": 17.425,
+      "report_ready_ms": 99.045,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.17,
+      "wasm_init_ms": 10.245,
+      "app_init_start_ms": 62.89,
+      "app_init_ms": 11.05,
+      "first_frame_start_ms": 73.965,
+      "first_frame_ms": 17.68,
+      "report_ready_ms": 91.805,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.19,
+      "wasm_init_ms": 15.31,
+      "app_init_start_ms": 33.05,
+      "app_init_ms": 10.185,
+      "first_frame_start_ms": 43.265,
+      "first_frame_ms": 17.16,
+      "report_ready_ms": 60.59,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.17,
+      "wasm_init_ms": 16.33,
+      "app_init_start_ms": 65.74,
+      "app_init_ms": 10.34,
+      "first_frame_start_ms": 76.105,
+      "first_frame_ms": 17.18,
+      "report_ready_ms": 93.43,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.19,
+      "wasm_init_ms": 11.37,
+      "app_init_start_ms": 62.31,
+      "app_init_ms": 15.855,
+      "first_frame_start_ms": 78.195,
+      "first_frame_ms": 17.675,
+      "report_ready_ms": 96.025,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.18,
+      "wasm_init_ms": 9.03,
+      "app_init_start_ms": 43.04,
+      "app_init_ms": 10.335,
+      "first_frame_start_ms": 53.4,
+      "first_frame_ms": 18.355,
+      "report_ready_ms": 71.905,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.185,
+      "wasm_init_ms": 22.07,
+      "app_init_start_ms": 67.275,
+      "app_init_ms": 10.825,
+      "first_frame_start_ms": 78.13,
+      "first_frame_ms": 17.71,
+      "report_ready_ms": 95.99,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.19,
+      "wasm_init_ms": 16.79,
+      "app_init_start_ms": 59.605,
+      "app_init_ms": 10.395,
+      "first_frame_start_ms": 70.03,
+      "first_frame_ms": 17.225,
+      "report_ready_ms": 87.405,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 10,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.19,
+      "wasm_init_ms": 21.105,
+      "app_init_start_ms": 33.14,
+      "app_init_ms": 10.01,
+      "first_frame_start_ms": 43.18,
+      "first_frame_ms": 17.24,
+      "report_ready_ms": 60.57,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 11,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.18,
+      "wasm_init_ms": 16.265,
+      "app_init_start_ms": 28.65,
+      "app_init_ms": 10.34,
+      "first_frame_start_ms": 39.015,
+      "first_frame_ms": 17.495,
+      "report_ready_ms": 56.655,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 12,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.18,
+      "wasm_init_ms": 11.08,
+      "app_init_start_ms": 55.125,
+      "app_init_ms": 20.76,
+      "first_frame_start_ms": 75.915,
+      "first_frame_ms": 17.375,
+      "report_ready_ms": 93.445,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 13,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.175,
+      "wasm_init_ms": 16.845,
+      "app_init_start_ms": 29.565,
+      "app_init_ms": 10.135,
+      "first_frame_start_ms": 39.725,
+      "first_frame_ms": 17.305,
+      "report_ready_ms": 57.175,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 14,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.18,
+      "wasm_init_ms": 14.605,
+      "app_init_start_ms": 33.56,
+      "app_init_ms": 10.465,
+      "first_frame_start_ms": 44.055,
+      "first_frame_ms": 17.51,
+      "report_ready_ms": 61.72,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 15,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.19,
+      "wasm_init_ms": 14.025,
+      "app_init_start_ms": 54.715,
+      "app_init_ms": 10.7,
+      "first_frame_start_ms": 65.445,
+      "first_frame_ms": 17.32,
+      "report_ready_ms": 82.93,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 16,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.21,
+      "wasm_init_ms": 8.47,
+      "app_init_start_ms": 24.31,
+      "app_init_ms": 10.355,
+      "first_frame_start_ms": 34.695,
+      "first_frame_ms": 17.715,
+      "report_ready_ms": 52.56,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 17,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.175,
+      "wasm_init_ms": 14.965,
+      "app_init_start_ms": 32.305,
+      "app_init_ms": 9.86,
+      "first_frame_start_ms": 42.19,
+      "first_frame_ms": 17.445,
+      "report_ready_ms": 59.8,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 18,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.175,
+      "wasm_init_ms": 10.985,
+      "app_init_start_ms": 26.215,
+      "app_init_ms": 10.665,
+      "first_frame_start_ms": 36.91,
+      "first_frame_ms": 17.545,
+      "report_ready_ms": 54.605,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 19,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.17,
+      "wasm_init_ms": 11.725,
+      "app_init_start_ms": 26.48,
+      "app_init_ms": 10.49,
+      "first_frame_start_ms": 37,
+      "first_frame_ms": 17.39,
+      "report_ready_ms": 54.545,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 20,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.175,
+      "wasm_init_ms": 13.2,
+      "app_init_start_ms": 57.1,
+      "app_init_ms": 20.37,
+      "first_frame_start_ms": 77.5,
+      "first_frame_ms": 17.49,
+      "report_ready_ms": 95.135,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 21,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.18,
+      "wasm_init_ms": 25.795,
+      "app_init_start_ms": 41.07,
+      "app_init_ms": 10.79,
+      "first_frame_start_ms": 51.89,
+      "first_frame_ms": 17.43,
+      "report_ready_ms": 69.47,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 22,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.17,
+      "wasm_init_ms": 16.775,
+      "app_init_start_ms": 38.915,
+      "app_init_ms": 10.94,
+      "first_frame_start_ms": 49.88,
+      "first_frame_ms": 17.39,
+      "report_ready_ms": 67.425,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 23,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.18,
+      "wasm_init_ms": 14.515,
+      "app_init_start_ms": 29.69,
+      "app_init_ms": 10.06,
+      "first_frame_start_ms": 39.77,
+      "first_frame_ms": 17.68,
+      "report_ready_ms": 57.605,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "index": 24,
+      "backend": "webgpu",
+      "render": "draws=8",
+      "id": "web.wasm.webgpu.browser_startup",
+      "source": "performance.now+node.fs.stat",
+      "page_start_ms": 0,
+      "wasm_init_start_ms": 0.19,
+      "wasm_init_ms": 13.09,
+      "app_init_start_ms": 54.7,
+      "app_init_ms": 10.725,
+      "first_frame_start_ms": 65.455,
+      "first_frame_ms": 17.585,
+      "report_ready_ms": 83.205,
+      "wasm_memory_bytes": 8781824,
+      "package_root": "host/web-app/www/pkg",
+      "package_file_count": 4,
+      "package_bytes": 3201283,
+      "wasm_bytes": 3075438,
+      "js_bytes": 110646,
+      "typescript_bytes": 9888,
+      "wasm_typescript_bytes": 5311,
+      "files": [
+        {
+          "kind": "wasm",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm",
+          "bytes": 3075438
+        },
+        {
+          "kind": "js",
+          "path": "host/web-app/www/pkg/oxide_host_web.js",
+          "bytes": 110646
+        },
+        {
+          "kind": "typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web.d.ts",
+          "bytes": 9888
+        },
+        {
+          "kind": "wasm_typescript",
+          "path": "host/web-app/www/pkg/oxide_host_web_bg.wasm.d.ts",
+          "bytes": 5311
+        }
+      ]
+    }
+  ]
+}

@@ -23,6 +23,8 @@
   - Encodes one retained 3D pass into the current frame before `encode_pass`.
 - `MetalRenderer::encode_id_mask_gpu_compositor(pass) -> Result<(), RenderError>`
   - Rasterizes semantic region/subregion ID triangles into renderer-owned R8 targets before running the compositor shader. Implementation lives in `id_mask_gpu.rs`.
+- `MetalRenderer::readback_id_mask_snapshot()` (`snapshot-tests`)
+  - Reads exact raster IDs and the final city/seam RGBA32F fields for CPU-reference parity tests.
 - `MetalRenderer::set_memory_stats_enabled_for_benchmark(enabled)`
   - Enables or disables sampled resident-resource scans for explicit accounting-overhead controls; rendering behavior is unchanged.
 - `MetalRenderer::set_accounting_stats_enabled_for_benchmark(enabled)`
@@ -80,6 +82,7 @@ ID-mask composition is GPU-owned. Semantic region/subregion triangles are raster
   - A mixed 3D/2D frame reuses one frame command buffer and one color target initialization path.
 
 ## Changelog
+- 2026-07-12: added snapshot-feature raw color-target readback for exact BGRA8, 4x MSAA resolve, and packed BGRA10_XR correctness goldens.
 
 - 2026-07-12: completed saturating logical/allocated resource accounting and frame-work counters, including previously omitted depth, bloom, ID-mask, Scene3D mesh, layer, argument-buffer, and frame-ring storage.
 - 2026-07-12: moved solid uniform selection to the vertex stage and enabled interpolated packed vertex colors without changing draw or upload counts.

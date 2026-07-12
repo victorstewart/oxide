@@ -1,4 +1,43 @@
 [[experiments]]
+id = "c03-cross-backend-reference-correctness-goldens"
+introduced_commit = "C03 staged tree recorded in commit proof"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["cpu-reference", "renderer-metal", "renderer-web", "browser-webgpu"]
+required_devices = ["macOS Metal host", "Chrome arm64", "physical iPhone"]
+correctness_gate = "Exact CPU/Metal ID-mask fields, committed primitive/glyph/image/layer/effect/Scene3D/MSAA/EDR/sequence goldens, WebGPU parent-defect comparison, full snapshot-runner suite, renderer-web/host tests, wasm check, experiment manifest, and git diff checks must pass."
+performance_gate = "Correctness foundation: performance claim none. Capture same-day starting-SHA workspace, WebGPU, 25-launch browser-startup, macOS Metal, and physical-iPhone context before C03 commit."
+decision_state = "accepted"
+decision = "Added deterministic CPU reference fields, snapshot-only exact backend readback, narrow committed Metal goldens, structural cross-backend DPR/layout coverage, and parent-defect evidence for C04 and C10."
+proof = [
+   "The 17x11 asymmetric fixture changes at jumps 16, 8, 4, 2, and 1; Metal raster and final city/seam fields match every CPU record exactly while WebGPU preserves raster IDs and exposes the known C04 final-field mismatch.",
+   "Capability goldens use real 4x MSAA and Apple's documented 64-bit BGRA10_XR layout; five multi-frame sequence families are independently regenerated and rerun.",
+   "Same-day raw reports and hashes are recorded under benchmarks/experiments/c03-renderer-parity/README.md, including the physical iPhone's in-app command-buffer GPU and CADisplayLink distributions.",
+]
+cleanup = [
+   "C04 must flip the WebGPU asymmetric-field comparison from expected mismatch to exact match.",
+   "C10 must replace the Metal partial-damage parent inequality with exact complete-scene parity and intentionally refresh the defective sequence golden.",
+   "Official workspace, web, and device baseline promotion remains deferred to C62.",
+]
+
+[[experiments]]
+id = "c03-bgra10xr-as-bgr10a2-readback"
+introduced_commit = "rejected during C03"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-metal"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "BGRA10_XR component readback must be deterministic across independent runs and follow Apple's documented storage layout."
+performance_gate = "Correctness design only; no performance claim."
+decision_state = "rejected"
+decision = "Rejected treating BGRA10_XR as a 32-bit BGR10A2 word; it is a 64-bit format with one padded 16-bit storage chunk per XR10 component."
+proof = [
+   "The invalid decoder changed 2537 of 6912 pixels between independent runs with maximum channel error 223 and MSE 1860.261502.",
+   "The corrected 8-byte readback and four-component decoder match the committed EDR golden byte-for-byte across independent runs.",
+]
+cleanup = ["No 32-bit BGRA10_XR decoder or broad EDR tolerance remains."]
+
+[[experiments]]
 id = "c02-complete-renderer-resource-and-work-accounting"
 introduced_commit = "C02 staged tree recorded in commit proof"
 introduced_date = "2026-07-12"

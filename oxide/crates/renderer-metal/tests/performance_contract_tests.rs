@@ -46,8 +46,11 @@ fn per_frame_reuse_never_waits_for_gpu_completion() {
 fn blocking_gpu_waits_are_limited_to_explicit_readback_helpers() {
     let source = include_str!("../src/lib.rs");
     let total_waits = source.matches("wait_until_completed").count();
-    let readback_texture =
-        source_block(source, "fn readback_texture_bgra8", "fn readback_direct_live_camera_bgra8");
+    let readback_texture = source_block(
+        source,
+        "fn readback_texture_bytes",
+        "fn readback_direct_live_camera_bgra8",
+    );
     let readback_camera =
         source_block(source, "fn readback_direct_live_camera_bgra8", "pub fn readback_bgra8");
     let allowed_waits = readback_texture.matches("wait_until_completed").count()

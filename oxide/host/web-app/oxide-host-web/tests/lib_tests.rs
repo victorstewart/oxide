@@ -429,6 +429,9 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("pub fn render_webgpu_app_snapshot"));
     assert!(source.contains("pub fn render_webgpu_scene3d_snapshot"));
     assert!(source.contains("pub fn render_webgpu_id_mask_snapshot"));
+    assert!(source.contains("pub async fn read_webgpu_asymmetric_id_mask_fields"));
+    assert!(source.contains("webgpu_asymmetric_id_mask_frame"));
+    assert!(source.contains("id_mask_snapshot_json"));
     assert!(source.contains("SNAPSHOT_TIMESTAMP_MS"));
     assert!(source.contains("pub fn render_webgpu_scene3d_snapshot("));
     assert!(source.contains("width: u32"));
@@ -872,6 +875,8 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("app_snapshot"));
     assert!(script.contains("scene3d_snapshot"));
     assert!(script.contains("id_mask_snapshot"));
+    assert!(script.contains("--id-mask-reference-out"));
+    assert!(script.contains("id_mask_reference_only"));
     assert!(script.contains("upload_current"));
     assert!(script.contains("backdrop_batch_current"));
     assert!(script.contains("scene3d_ab"));

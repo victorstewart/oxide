@@ -603,6 +603,39 @@ struct GpuPrograms {
     sampler: wgpu::Sampler,
 }
 
+#[cfg(feature = "snapshot-tests")]
+#[derive(Clone, Debug, PartialEq)]
+pub struct WebIdMaskSnapshotReadback
+{
+   pub width: usize,
+   pub height: usize,
+   pub city: Vec<u8>,
+   pub neighborhood: Vec<u8>,
+   pub city_field: Vec<[f32; 4]>,
+   pub seam_field: Vec<[f32; 4]>,
+}
+
+#[cfg(feature = "snapshot-tests")]
+struct IdMaskReadbackPlane
+{
+   buffer: wgpu::Buffer,
+   padded_row_bytes: u32,
+   packed_row_bytes: u32,
+}
+
+#[cfg(feature = "snapshot-tests")]
+struct PendingIdMaskReadback
+{
+   width: u32,
+   height: u32,
+   city: IdMaskReadbackPlane,
+   neighborhood: IdMaskReadbackPlane,
+   city_field: IdMaskReadbackPlane,
+   seam_field: IdMaskReadbackPlane,
+   remaining: Rc<Cell<u8>>,
+   failed: Rc<Cell<bool>>,
+}
+
 /// Browser renderer for production WebAssembly hosts.
 ///
 /// WebGPU device creation is asynchronous in browsers. If WebGPU is unavailable, construction
@@ -658,6 +691,20 @@ impl BrowserRenderer {
 
     pub fn set_memory_stats_enabled_for_benchmark(&mut self, enabled: bool) {
         self.inner.set_memory_stats_enabled_for_benchmark(enabled);
+    }
+
+    #[cfg(feature = "snapshot-tests")]
+    pub fn begin_id_mask_snapshot_readback(&mut self) -> Result<(), api::RenderError>
+    {
+        self.inner.begin_id_mask_snapshot_readback()
+    }
+
+    #[cfg(feature = "snapshot-tests")]
+    pub fn collect_id_mask_snapshot_readback(
+        &mut self,
+    ) -> Option<Result<WebIdMaskSnapshotReadback, api::RenderError>>
+    {
+        self.inner.collect_id_mask_snapshot_readback()
     }
 
     pub fn queue_completion_flag_for_benchmark(&self) -> Arc<AtomicBool> {
@@ -926,6 +973,8 @@ pub struct WebGpuRenderer {
     id_mask_compositor_uniform_capacity: u64,
     id_mask_compositor_bind_group_a: Option<wgpu::BindGroup>,
     id_mask_compositor_bind_group_b: Option<wgpu::BindGroup>,
+    #[cfg(feature = "snapshot-tests")]
+    id_mask_snapshot_readback: Option<PendingIdMaskReadback>,
     scene3d_clear_color: Option<api::Color>,
     scene3d_clear_depth: bool,
     scene3d_active: bool,
@@ -1326,6 +1375,8 @@ impl WebGpuRenderer {
             id_mask_compositor_uniform_capacity: 0,
             id_mask_compositor_bind_group_a: None,
             id_mask_compositor_bind_group_b: None,
+            #[cfg(feature = "snapshot-tests")]
+            id_mask_snapshot_readback: None,
             scene3d_clear_color: None,
             scene3d_clear_depth: true,
             scene3d_active: false,
@@ -3178,6 +3229,171 @@ impl WebGpuRenderer {
             self.stats.id_mask_bind_group_creates =
                 self.stats.id_mask_bind_group_creates.saturating_add(2);
         }
+    }
+
+    #[cfg(feature = "snapshot-tests")]
+    fn begin_id_mask_snapshot_readback(&mut self) -> Result<(), api::RenderError>
+    {
+        if self.id_mask_snapshot_readback.is_some()
+        {
+            return Err(api::RenderError::InvalidOperation("ID-mask snapshot readback pending"));
+        }
+        let width = self.id_mask_width;
+        let height = self.id_mask_height;
+        if width == 0 || height == 0
+        {
+            return Err(api::RenderError::InvalidOperation("ID-mask snapshot unavailable"));
+        }
+        let city_texture = self.id_mask_city_texture.as_ref().ok_or(
+            api::RenderError::InvalidOperation("ID-mask city texture unavailable"),
+        )?;
+        let neighborhood_texture = self.id_mask_neighborhood_texture.as_ref().ok_or(
+            api::RenderError::InvalidOperation("ID-mask neighborhood texture unavailable"),
+        )?;
+        let mut src_is_a = true;
+        let mut jump = width.max(height).next_power_of_two() / 2;
+        while jump >= 1
+        {
+            src_is_a = !src_is_a;
+            jump /= 2;
+        }
+        let (city_field_texture, seam_field_texture) = if src_is_a
+        {
+            (
+                self.id_mask_city_field_a_texture.as_ref(),
+                self.id_mask_seam_field_a_texture.as_ref(),
+            )
+        }
+        else
+        {
+            (
+                self.id_mask_city_field_b_texture.as_ref(),
+                self.id_mask_seam_field_b_texture.as_ref(),
+            )
+        };
+        let city_field_texture = city_field_texture.ok_or(
+            api::RenderError::InvalidOperation("ID-mask city field unavailable"),
+        )?;
+        let seam_field_texture = seam_field_texture.ok_or(
+            api::RenderError::InvalidOperation("ID-mask seam field unavailable"),
+        )?;
+        let city = create_id_mask_readback_plane(
+            &self.device,
+            "oxide-webgpu-id-mask-city-readback",
+            width,
+            height,
+            1,
+        );
+        let neighborhood = create_id_mask_readback_plane(
+            &self.device,
+            "oxide-webgpu-id-mask-neighborhood-readback",
+            width,
+            height,
+            1,
+        );
+        let city_field = create_id_mask_readback_plane(
+            &self.device,
+            "oxide-webgpu-id-mask-city-field-readback",
+            width,
+            height,
+            8,
+        );
+        let seam_field = create_id_mask_readback_plane(
+            &self.device,
+            "oxide-webgpu-id-mask-seam-field-readback",
+            width,
+            height,
+            8,
+        );
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("oxide-webgpu-id-mask-snapshot-readback"),
+        });
+        copy_id_mask_texture_to_plane(&mut encoder, city_texture, &city, width, height);
+        copy_id_mask_texture_to_plane(
+            &mut encoder,
+            neighborhood_texture,
+            &neighborhood,
+            width,
+            height,
+        );
+        copy_id_mask_texture_to_plane(
+            &mut encoder,
+            city_field_texture,
+            &city_field,
+            width,
+            height,
+        );
+        copy_id_mask_texture_to_plane(
+            &mut encoder,
+            seam_field_texture,
+            &seam_field,
+            width,
+            height,
+        );
+        self.queue.submit(Some(encoder.finish()));
+        let remaining = Rc::new(Cell::new(4_u8));
+        let failed = Rc::new(Cell::new(false));
+        for plane in [&city, &neighborhood, &city_field, &seam_field]
+        {
+            let remaining = Rc::clone(&remaining);
+            let failed = Rc::clone(&failed);
+            plane.buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+                failed.set(failed.get() || result.is_err());
+                remaining.set(remaining.get().saturating_sub(1));
+            });
+        }
+        self.id_mask_snapshot_readback = Some(PendingIdMaskReadback {
+            width,
+            height,
+            city,
+            neighborhood,
+            city_field,
+            seam_field,
+            remaining,
+            failed,
+        });
+        Ok(())
+    }
+
+    #[cfg(feature = "snapshot-tests")]
+    fn collect_id_mask_snapshot_readback(
+        &mut self,
+    ) -> Option<Result<WebIdMaskSnapshotReadback, api::RenderError>>
+    {
+        let pending = self.id_mask_snapshot_readback.as_ref()?;
+        if pending.remaining.get() != 0
+        {
+            return None;
+        }
+        let pending = self.id_mask_snapshot_readback.take().unwrap();
+        if pending.failed.get()
+        {
+            return Some(Err(api::RenderError::Io(String::from(
+                "ID-mask snapshot buffer mapping failed",
+            ))));
+        }
+        let city = read_id_mask_plane(&pending.city, pending.height);
+        let neighborhood = read_id_mask_plane(&pending.neighborhood, pending.height);
+        let city_field = decode_web_rgba16_float(&read_id_mask_plane(
+            &pending.city_field,
+            pending.height,
+        ));
+        let seam_field = decode_web_rgba16_float(&read_id_mask_plane(
+            &pending.seam_field,
+            pending.height,
+        ));
+        pending.city.buffer.unmap();
+        pending.neighborhood.buffer.unmap();
+        pending.city_field.buffer.unmap();
+        pending.seam_field.buffer.unmap();
+        Some(Ok(WebIdMaskSnapshotReadback {
+            width: pending.width as usize,
+            height: pending.height as usize,
+            city,
+            neighborhood,
+            city_field,
+            seam_field,
+        }))
     }
 }
 
@@ -5305,13 +5521,18 @@ fn create_id_mask_texture(
     width: u32,
     height: u32,
 ) -> wgpu::Texture {
+    let mut usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
+    #[cfg(feature = "snapshot-tests")]
+    {
+        usage |= wgpu::TextureUsages::COPY_SRC;
+    }
     create_texture_2d(
         device,
         label,
         wgpu::TextureFormat::R8Uint,
         width,
         height,
-        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        usage,
     )
 }
 
@@ -5321,14 +5542,125 @@ fn create_id_mask_field_texture(
     width: u32,
     height: u32,
 ) -> wgpu::Texture {
+    let mut usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
+    #[cfg(feature = "snapshot-tests")]
+    {
+        usage |= wgpu::TextureUsages::COPY_SRC;
+    }
     create_texture_2d(
         device,
         label,
         ID_MASK_FIELD_FORMAT,
         width,
         height,
-        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        usage,
     )
+}
+
+#[cfg(feature = "snapshot-tests")]
+fn create_id_mask_readback_plane(
+    device: &wgpu::Device,
+    label: &'static str,
+    width: u32,
+    height: u32,
+    bytes_per_pixel: u32,
+) -> IdMaskReadbackPlane
+{
+    let packed_row_bytes = width.saturating_mul(bytes_per_pixel);
+    let alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let padded_row_bytes = packed_row_bytes.div_ceil(alignment).saturating_mul(alignment);
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: u64::from(padded_row_bytes).saturating_mul(u64::from(height)),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    IdMaskReadbackPlane { buffer, padded_row_bytes, packed_row_bytes }
+}
+
+#[cfg(feature = "snapshot-tests")]
+fn copy_id_mask_texture_to_plane(
+    encoder: &mut wgpu::CommandEncoder,
+    texture: &wgpu::Texture,
+    plane: &IdMaskReadbackPlane,
+    width: u32,
+    height: u32,
+)
+{
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &plane.buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(plane.padded_row_bytes),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+    );
+}
+
+#[cfg(feature = "snapshot-tests")]
+fn read_id_mask_plane(plane: &IdMaskReadbackPlane, height: u32) -> Vec<u8>
+{
+    let mapped = plane.buffer.slice(..).get_mapped_range();
+    let mut packed =
+        Vec::with_capacity(plane.packed_row_bytes as usize * height as usize);
+    for row in mapped.chunks_exact(plane.padded_row_bytes as usize).take(height as usize)
+    {
+        packed.extend_from_slice(&row[..plane.packed_row_bytes as usize]);
+    }
+    drop(mapped);
+    packed
+}
+
+#[cfg(feature = "snapshot-tests")]
+fn decode_web_rgba16_float(bytes: &[u8]) -> Vec<[f32; 4]>
+{
+    bytes
+        .chunks_exact(8)
+        .map(|pixel| {
+            [
+                half_to_f32(u16::from_le_bytes(pixel[0..2].try_into().unwrap())),
+                half_to_f32(u16::from_le_bytes(pixel[2..4].try_into().unwrap())),
+                half_to_f32(u16::from_le_bytes(pixel[4..6].try_into().unwrap())),
+                half_to_f32(u16::from_le_bytes(pixel[6..8].try_into().unwrap())),
+            ]
+        })
+        .collect()
+}
+
+#[cfg(feature = "snapshot-tests")]
+fn half_to_f32(bits: u16) -> f32
+{
+    let sign = u32::from(bits & 0x8000) << 16;
+    let exponent = u32::from((bits >> 10) & 0x1f);
+    let mantissa = u32::from(bits & 0x03ff);
+    let value = match exponent
+    {
+        0 => {
+            if mantissa == 0
+            {
+                sign
+            }
+            else
+            {
+                let shift = mantissa.leading_zeros().saturating_sub(21);
+                let normalized = (mantissa << shift) & 0x03ff;
+                let exponent = 113_u32.saturating_sub(shift);
+                sign | (exponent << 23) | (normalized << 13)
+            }
+        }
+        0x1f => sign | 0x7f80_0000 | (mantissa << 13),
+        _ => sign | ((exponent + 112) << 23) | (mantissa << 13),
+    };
+    f32::from_bits(value)
 }
 
 fn create_texture_2d(

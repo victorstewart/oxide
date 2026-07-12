@@ -51,6 +51,7 @@ function parseArgs(argv)
       jsonReport: "",
       markdownReport: "",
       rawReport: "",
+      idMaskReferenceOut: "",
       validateRawReport: "",
       selfTestMeasurement: false,
       reportOnly: false,
@@ -128,6 +129,8 @@ function parseArgs(argv)
          args.markdownReport = next();
       } else if (arg === "--raw-report") {
          args.rawReport = next();
+      } else if (arg === "--id-mask-reference-out") {
+         args.idMaskReferenceOut = next();
       } else if (arg === "--validate-raw-report") {
          args.validateRawReport = next();
       } else if (arg === "--self-test-measurement") {
@@ -5460,6 +5463,23 @@ async function main()
       }
       if (args.canvasReport) {
          await writeCanvasDiagnosticReport(args, url, nextReportPromise);
+         return;
+      }
+      if (args.idMaskReferenceOut) {
+         let referenceUrl = new URL(browserUrl(args, url, true));
+         referenceUrl.searchParams.set("id_mask_reference_only", "1");
+         let pageReport = await runChromeForReport(
+            { ...args, traceJson: "" },
+            referenceUrl.toString(),
+            nextReportPromise(),
+         );
+         if (typeof pageReport.id_mask_reference !== "string" || pageReport.id_mask_reference.length === 0) {
+            throw new Error("browser report omitted asymmetric ID-mask reference fields");
+         }
+         let reference = JSON.parse(pageReport.id_mask_reference);
+         mkdirSync(dirname(args.idMaskReferenceOut), { recursive: true });
+         writeFileSync(args.idMaskReferenceOut, `${JSON.stringify(reference, null, 2)}\n`);
+         console.log(`wrote ${args.idMaskReferenceOut}`);
          return;
       }
       if (args.reportOnly) {

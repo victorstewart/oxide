@@ -43,7 +43,7 @@ mod wasm_host {
     use oxide_renderer_api::Renderer;
     use oxide_renderer_web::{
         id_mask_compositor, neon_marker, scene3d, BrowserRenderer, WebGpuCpuSubmitTimingSample,
-        WebGpuTimestampSample, WebRendererStats,
+        WebGpuTimestampSample, WebIdMaskSnapshotReadback, WebRendererStats,
     };
     use oxide_test_scenes as scenes;
     use oxide_text as text;
@@ -1297,6 +1297,29 @@ mod wasm_host {
                 "vertices={};vertex_bytes={vertex_bytes};revision=1;draws={draws}",
                 vertices.len(),
             ))
+        }
+
+        pub async fn read_webgpu_asymmetric_id_mask_fields(&self) -> Result<String, JsValue>
+        {
+            let renderer = {
+                let mut state = self.state.borrow_mut();
+                state.direct_capture_active = true;
+                state.renderer.clone()
+            };
+            {
+                let mut renderer = renderer.borrow_mut();
+                webgpu_asymmetric_id_mask_frame(&mut renderer)?;
+                renderer.begin_id_mask_snapshot_readback().map_err(render_err)?;
+            }
+            for _ in 0..WEBGPU_TIMESTAMP_SETTLE_RAFS
+            {
+                wait_animation_frame_once().await?;
+                if let Some(readback) = renderer.borrow_mut().collect_id_mask_snapshot_readback()
+                {
+                    return readback.map(|readback| id_mask_snapshot_json(&readback)).map_err(render_err);
+                }
+            }
+            Err(JsValue::from_str("WebGPU asymmetric ID-mask readback did not settle"))
         }
 
         pub fn set_scene(&self, scene_index: usize) {
@@ -2793,6 +2816,97 @@ mod wasm_host {
         let token = renderer.begin_frame(&gfx::FrameTarget, None);
         renderer.encode_id_mask_gpu_compositor(&pass).map_err(render_err)?;
         renderer.submit(token).map_err(render_err)
+    }
+
+    fn webgpu_asymmetric_id_mask_frame(renderer: &mut BrowserRenderer) -> Result<(), JsValue>
+    {
+        const WIDTH: usize = 17;
+        const HEIGHT: usize = 11;
+        let mut vertices = Vec::with_capacity(24);
+        for (x, y, city, neighborhood) in [
+            (0_usize, 5_usize, 1_u8, 3_u8),
+            (1, 5, 1, 7),
+            (5, 1, 2, 11),
+            (13, 8, 3, 19),
+        ]
+        {
+            let x0 = x as f32;
+            let y0 = y as f32;
+            let x1 = x0 + 1.0;
+            let y1 = y0 + 1.0;
+            let vertex = |position| {
+                id_mask_compositor::IdMaskRasterVertex::new(position, city, neighborhood)
+            };
+            vertices.extend_from_slice(&[
+                vertex([x0, y0]),
+                vertex([x1, y0]),
+                vertex([x0, y1]),
+                vertex([x1, y0]),
+                vertex([x1, y1]),
+                vertex([x0, y1]),
+            ]);
+        }
+        let chunks = [id_mask_compositor::IdMaskRasterChunk {
+            content_hash: 0xC03,
+            first_vertex: 0,
+            vertex_count: vertices.len(),
+        }];
+        let mut pass = webgpu_id_mask_pass(&vertices, &chunks, 1);
+        pass.raster.viewport = gfx::RectF::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32);
+        pass.raster.mask_width = WIDTH;
+        pass.raster.mask_height = HEIGHT;
+        pass.raster.mask_scale = 1.0;
+        renderer.resize(WIDTH as u32, HEIGHT as u32, 1.0).map_err(render_err)?;
+        let token = renderer.begin_frame(&gfx::FrameTarget, None);
+        renderer.encode_id_mask_gpu_compositor(&pass).map_err(render_err)?;
+        renderer.submit(token).map_err(render_err)
+    }
+
+    fn id_mask_snapshot_json(readback: &WebIdMaskSnapshotReadback) -> String
+    {
+        let mut json = String::with_capacity(
+            readback.city.len().saturating_mul(48),
+        );
+        let _ = write!(json, "{{\"width\":{},\"height\":{},\"city\":[", readback.width, readback.height);
+        for (index, value) in readback.city.iter().enumerate()
+        {
+            if index != 0
+            {
+                json.push(',');
+            }
+            let _ = write!(json, "{value}");
+        }
+        json.push_str("],\"neighborhood\":[");
+        for (index, value) in readback.neighborhood.iter().enumerate()
+        {
+            if index != 0
+            {
+                json.push(',');
+            }
+            let _ = write!(json, "{value}");
+        }
+        json.push_str("],\"city_field\":[");
+        write_field_json(&mut json, &readback.city_field);
+        json.push_str("],\"seam_field\":[");
+        write_field_json(&mut json, &readback.seam_field);
+        json.push_str("]}");
+        json
+    }
+
+    fn write_field_json(json: &mut String, field: &[[f32; 4]])
+    {
+        for (index, pixel) in field.iter().enumerate()
+        {
+            if index != 0
+            {
+                json.push(',');
+            }
+            let _ = write!(
+                json,
+                "[{:.1},{:.1},{:.1},{:.1}]",
+                pixel[0], pixel[1], pixel[2], pixel[3],
+            );
+        }
     }
 
     fn webgpu_id_mask_vertices(

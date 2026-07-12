@@ -271,6 +271,12 @@ fn committed_renderer_goldens_cover_scene3d_damage_camera_and_id_mask() {
         ("scene3d_viewport_clip", "scene3d_viewport_clip_scale2", 384, 384, 2.0),
         ("scene3d_material_cull", "scene3d_material_cull_scale2", 384, 384, 2.0),
         ("scene3d_blend_modes", "scene3d_blend_modes_scale2", 384, 384, 2.0),
+        ("scene3d_mixed", "scene3d_mixed_scale3", 576, 576, 3.0),
+        ("scene3d_bloom", "scene3d_bloom_scale3", 576, 576, 3.0),
+        ("scene3d_depth_stack", "scene3d_depth_stack_scale3", 576, 576, 3.0),
+        ("scene3d_viewport_clip", "scene3d_viewport_clip_scale3", 576, 576, 3.0),
+        ("scene3d_material_cull", "scene3d_material_cull_scale3", 576, 576, 3.0),
+        ("scene3d_blend_modes", "scene3d_blend_modes_scale3", 576, 576, 3.0),
         ("scene3d_mixed", "scene3d_mixed_wide", 320, 192, 1.0),
         ("scene3d_bloom", "scene3d_bloom_wide", 320, 192, 1.0),
         ("scene3d_depth_stack", "scene3d_depth_stack_wide", 320, 192, 1.0),
@@ -299,6 +305,17 @@ fn committed_renderer_goldens_cover_scene3d_damage_camera_and_id_mask() {
         ("text_input_ime_composition", "text_input_ime_composition", 384, 192, 1.0),
         ("text_input_grapheme_selection", "text_input_grapheme_selection", 384, 192, 1.0),
         ("text_input_fallback_cjk", "text_input_fallback_cjk", 384, 192, 1.0),
+        ("progressbar", "primitive_progressbar", 192, 192, 1.0),
+        ("spinner", "primitive_spinner", 192, 192, 1.0),
+        ("button", "primitive_button_a8", 192, 192, 1.0),
+        ("toggle", "primitive_toggle", 192, 192, 1.0),
+        ("slider", "primitive_slider", 192, 192, 1.0),
+        ("imageview", "image_crop_contain", 192, 192, 1.0),
+        ("imageview_zoom", "image_crop_zoom", 192, 192, 1.0),
+        ("nine_slice", "primitive_nine_slice", 192, 192, 1.0),
+        ("text_unicode", "glyph_a8_unicode", 384, 192, 1.0),
+        ("style_effects", "nested_transform_opacity_effect", 320, 240, 1.0),
+        ("layer_composite", "nested_layer_composite", 320, 240, 1.0),
         ("camera_preview", "camera_preview", 192, 192, 1.0),
         ("camera_preview_legacy", "camera_preview_legacy", 192, 192, 1.0),
         ("camera_preview_bgra", "camera_preview_bgra", 192, 192, 1.0),
@@ -339,6 +356,16 @@ fn committed_renderer_goldens_cover_scene3d_damage_camera_and_id_mask() {
             2.0,
         ),
         ("id_mask_compositor_seams", "id_mask_compositor_seams_scale2", 384, 384, 2.0),
+        ("id_mask_compositor", "id_mask_compositor_scale3", 576, 576, 3.0),
+        ("id_mask_compositor_city_ids", "id_mask_compositor_city_ids_scale3", 576, 576, 3.0),
+        (
+            "id_mask_compositor_neighborhood_ids",
+            "id_mask_compositor_neighborhood_ids_scale3",
+            576,
+            576,
+            3.0,
+        ),
+        ("id_mask_compositor_seams", "id_mask_compositor_seams_scale3", 576, 576, 3.0),
         ("id_mask_compositor", "id_mask_compositor_wide", 320, 192, 1.0),
         ("id_mask_compositor_city_ids", "id_mask_compositor_city_ids_wide", 320, 192, 1.0),
         (
@@ -349,6 +376,22 @@ fn committed_renderer_goldens_cover_scene3d_damage_camera_and_id_mask() {
             1.0,
         ),
         ("id_mask_compositor_seams", "id_mask_compositor_seams_wide", 320, 192, 1.0),
+        ("id_mask_compositor", "id_mask_compositor_wide_scale3", 960, 576, 3.0),
+        (
+            "id_mask_compositor_city_ids",
+            "id_mask_compositor_city_ids_wide_scale3",
+            960,
+            576,
+            3.0,
+        ),
+        (
+            "id_mask_compositor_neighborhood_ids",
+            "id_mask_compositor_neighborhood_ids_wide_scale3",
+            960,
+            576,
+            3.0,
+        ),
+        ("id_mask_compositor_seams", "id_mask_compositor_seams_wide_scale3", 960, 576, 3.0),
         ("id_mask_compositor", "id_mask_compositor_portrait", 192, 320, 1.0),
         ("id_mask_compositor_city_ids", "id_mask_compositor_city_ids_portrait", 192, 320, 1.0),
         (
@@ -359,6 +402,28 @@ fn committed_renderer_goldens_cover_scene3d_damage_camera_and_id_mask() {
             1.0,
         ),
         ("id_mask_compositor_seams", "id_mask_compositor_seams_portrait", 192, 320, 1.0),
+        ("id_mask_compositor", "id_mask_compositor_portrait_scale3", 576, 960, 3.0),
+        (
+            "id_mask_compositor_city_ids",
+            "id_mask_compositor_city_ids_portrait_scale3",
+            576,
+            960,
+            3.0,
+        ),
+        (
+            "id_mask_compositor_neighborhood_ids",
+            "id_mask_compositor_neighborhood_ids_portrait_scale3",
+            576,
+            960,
+            3.0,
+        ),
+        (
+            "id_mask_compositor_seams",
+            "id_mask_compositor_seams_portrait_scale3",
+            576,
+            960,
+            3.0,
+        ),
     ];
     let dir = temp_case_dir("committed-renderer");
 
@@ -380,6 +445,9 @@ fn committed_renderer_goldens_cover_scene3d_damage_camera_and_id_mask() {
         "id_mask_compositor_seams_scale2.png",
         "id_mask_compositor_seams_wide.png",
         "id_mask_compositor_seams_portrait.png",
+        "id_mask_compositor_seams_scale3.png",
+        "id_mask_compositor_seams_wide_scale3.png",
+        "id_mask_compositor_seams_portrait_scale3.png",
     ] {
         let (bright, dark) = png_signal_counts(&golden_dir.join(name));
         assert!(
@@ -401,6 +469,15 @@ fn committed_renderer_goldens_cover_scene3d_damage_camera_and_id_mask() {
         "id_mask_compositor_portrait.png",
         "id_mask_compositor_city_ids_portrait.png",
         "id_mask_compositor_neighborhood_ids_portrait.png",
+        "id_mask_compositor_scale3.png",
+        "id_mask_compositor_city_ids_scale3.png",
+        "id_mask_compositor_neighborhood_ids_scale3.png",
+        "id_mask_compositor_wide_scale3.png",
+        "id_mask_compositor_city_ids_wide_scale3.png",
+        "id_mask_compositor_neighborhood_ids_wide_scale3.png",
+        "id_mask_compositor_portrait_scale3.png",
+        "id_mask_compositor_city_ids_portrait_scale3.png",
+        "id_mask_compositor_neighborhood_ids_portrait_scale3.png",
     ] {
         let color_signal = png_color_signal_count(&golden_dir.join(name));
         assert!(
@@ -422,6 +499,12 @@ fn committed_renderer_goldens_cover_scene3d_damage_camera_and_id_mask() {
         "scene3d_viewport_clip_scale2.png",
         "scene3d_material_cull_scale2.png",
         "scene3d_blend_modes_scale2.png",
+        "scene3d_mixed_scale3.png",
+        "scene3d_bloom_scale3.png",
+        "scene3d_depth_stack_scale3.png",
+        "scene3d_viewport_clip_scale3.png",
+        "scene3d_material_cull_scale3.png",
+        "scene3d_blend_modes_scale3.png",
         "scene3d_mixed_wide.png",
         "scene3d_bloom_wide.png",
         "scene3d_depth_stack_wide.png",
@@ -493,6 +576,23 @@ fn committed_renderer_goldens_cover_scene3d_damage_camera_and_id_mask() {
             non_white > 900,
             "router-scene golden {name} lost visible scene signal: non_white={non_white}"
         );
+    }
+
+    for name in [
+        "primitive_progressbar.png",
+        "primitive_spinner.png",
+        "primitive_button_a8.png",
+        "primitive_toggle.png",
+        "primitive_slider.png",
+        "image_crop_contain.png",
+        "image_crop_zoom.png",
+        "primitive_nine_slice.png",
+        "glyph_a8_unicode.png",
+        "nested_transform_opacity_effect.png",
+        "nested_layer_composite.png",
+    ] {
+        let non_white = png_non_white_count(&golden_dir.join(name));
+        assert!(non_white > 128, "renderer golden {name} lost visible signal: non_white={non_white}");
     }
 
     let _ = fs::remove_dir_all(dir);
