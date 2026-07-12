@@ -24,6 +24,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 pub mod paired;
+mod architecture_matrix;
 
 const DEFAULT_BASELINE_JSON: &str = "benchmarks/workspace/latest.json";
 const DEFAULT_BASELINE_MARKDOWN: &str = "benchmarks/workspace/latest.md";
@@ -2338,6 +2339,11 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
 
     if perf_case_prefix_allowed("cpu.system.") || perf_case_prefix_allowed("gpu.system.") {
         push_system_cases(&mut cases, smoke)?;
+    }
+    if perf_case_prefix_allowed("cpu.architecture.")
+        || perf_case_prefix_allowed("gpu.architecture.")
+    {
+        architecture_matrix::push_architecture_matrix_cases(&mut cases, smoke)?;
     }
     if perf_case_prefix_allowed("cpu.component.") {
         push_component_cases(&mut cases, smoke, &mut covered_components);
@@ -8712,6 +8718,9 @@ fn perf_case_contract_metadata(
     }
     if family == "stress" {
         return ("engine", "stress-pathological", "oxide", "warm", "offscreen");
+    }
+    if family == "architecture" {
+        return ("engine", "rendering-architecture", "oxide", "warm", "offscreen");
     }
     if family == "audit-baseline" {
         return ("engine", "audit-baseline", "legacy-baseline", "warm", "offscreen");

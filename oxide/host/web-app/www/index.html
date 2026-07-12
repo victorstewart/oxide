@@ -54,6 +54,7 @@
          const scene3dFrames = boundedNumber("scene3d_frames", 24, 1, 120);
          const mixedSamples = boundedNumber("mixed_samples", 6, 1, 30);
          const mixedFrames = boundedNumber("mixed_frames", 24, 1, 120);
+         const architectureMatrix = params.get("architecture_matrix") === "1";
          const canvasDiag = params.get("canvas_diag") === "1";
          const canvasSamples = boundedNumber("canvas_samples", 6, 1, 30);
          const canvasFrames = boundedNumber("canvas_frames", 24, 1, 120);
@@ -420,12 +421,17 @@
          window.oxideWebGpuGlyphRunCurrent = "";
          window.oxideWebGpuNeonMarkerAB = "";
          window.oxideWebGpuDirectSurfaceAB = "";
+         window.oxideWebGpuArchitecturePrimitives = "";
          window.oxideWebGpuDrawItemCoalescingAB = "";
          window.oxideWebGpuDrawStateCacheAB = "";
          window.oxideWebGpuClipStateAB = "";
          window.oxideWebBenchmarkMarks = benchMarks;
          if (!captureOnly && !startupOnly) {
             window.oxideApp.prewarm_webgpu_bench_resources();
+            if (architectureMatrix) {
+               window.oxideWebGpuArchitecturePrimitives = await runBench("architecture_primitives", () => window.oxideApp.bench_webgpu_architecture_primitives(mixedSamples, mixedFrames));
+               console.log("oxide-webgpu-architecture-primitives", window.oxideWebGpuArchitecturePrimitives);
+            }
             window.oxideWebPerf = await runBench("cpu_submit_throughput", () => window.oxideApp.bench_cpu_submit_samples(frameSamples, framesPerSample));
             console.log("oxide-web-cpu-submit-throughput", window.oxideWebPerf);
             window.oxideWebRafPerf = await runBench("raf_frame_loop", () => runRafFrameHarness(rafFrames));
@@ -480,6 +486,7 @@
             glyph_run_current: window.oxideWebGpuGlyphRunCurrent,
             neon_marker_ab: window.oxideWebGpuNeonMarkerAB,
             direct_surface_ab: window.oxideWebGpuDirectSurfaceAB,
+            architecture_primitives: window.oxideWebGpuArchitecturePrimitives,
             benchmark_marks: window.oxideWebBenchmarkMarks,
             capture_target: captureTarget,
             browser_environment: {

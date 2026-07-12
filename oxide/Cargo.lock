@@ -939,6 +939,7 @@ dependencies = [
  "oxide-platform-web",
  "oxide-renderer-api",
  "oxide-renderer-metal",
+ "oxide-renderer-web",
  "oxide-test-scenes",
  "oxide-text",
  "oxide-timing",

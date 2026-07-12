@@ -78,6 +78,7 @@ function parseArgs(argv)
       scene3dFrames: 24,
       mixedSamples: 6,
       mixedFrames: 24,
+      architectureMatrix: false,
    };
 
    for (let i = 0; i < argv.length; i++) {
@@ -181,6 +182,8 @@ function parseArgs(argv)
          args.mixedSamples = Number(next());
       } else if (arg === "--mixed-frames") {
          args.mixedFrames = Number(next());
+      } else if (arg === "--architecture-matrix") {
+         args.architectureMatrix = true;
       } else {
          throw new Error(`unknown argument ${arg}`);
       }
@@ -528,6 +531,9 @@ function browserUrl(args, baseUrl, reportEndpoint, startupOnly = false, canvasDi
    url.searchParams.set("scene3d_frames", String(args.scene3dFrames));
    url.searchParams.set("mixed_samples", String(args.mixedSamples));
    url.searchParams.set("mixed_frames", String(args.mixedFrames));
+   if (args.architectureMatrix) {
+      url.searchParams.set("architecture_matrix", "1");
+   }
    if (canvasDiag) {
       url.searchParams.set("canvas_diag", "1");
       url.searchParams.set("canvas_samples", String(args.canvasSamples));

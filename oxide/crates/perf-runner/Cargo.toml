@@ -15,6 +15,7 @@ oxide-platform-api = { path = "../platform-api" }
 oxide-platform-web = { path = "../platform-web" }
 oxide-renderer-metal = { path = "../renderer-metal" }
 oxide-renderer-api = { path = "../renderer-api" }
+oxide-renderer-web = { path = "../renderer-web" }
 oxide-test-scenes = { path = "../test-scenes" }
 oxide-text = { path = "../text" }
 oxide-timing = { path = "../timing" }

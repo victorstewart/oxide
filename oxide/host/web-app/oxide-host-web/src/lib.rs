@@ -52,6 +52,7 @@ mod wasm_host {
     use std::cell::RefCell;
     use std::fmt::Write;
     use std::rc::Rc;
+    use std::sync::atomic::Ordering;
     use wasm_bindgen::prelude::*;
     use wasm_bindgen::{closure::Closure, JsCast};
     use wasm_bindgen_futures::JsFuture;
@@ -91,6 +92,7 @@ mod wasm_host {
     const WEBGPU_DRAW_STATE_CACHE_COLUMNS: usize = 32;
     const WEBGPU_DRAW_ITEM_COALESCE_EXPECTED_ITEMS: usize = 1;
     const WEBGPU_NEON_MARKERS: usize = 64;
+    const WEBGPU_ARCHITECTURE_NEON_MARKERS: usize = 1_024;
     const WEBGPU_NEON_MARKER_COLUMNS: usize = 8;
     const WEBGPU_DIRECT_SURFACE_DRAWS: usize = 384;
     const WEBGPU_DIRECT_SURFACE_COLUMNS: usize = 24;
@@ -1058,6 +1060,104 @@ mod wasm_host {
             ))
         }
 
+        pub async fn bench_webgpu_architecture_primitives(
+            &self,
+            samples: u32,
+            frames_per_sample: u32,
+        ) -> Result<String, JsValue> {
+            let sample_count = samples.clamp(1, 30);
+            let frames = frames_per_sample.clamp(1, 120);
+            let variants = [
+                ("rrect_1", "rrect", 1_usize),
+                ("rrect_64", "rrect", 64),
+                ("rrect_1024", "rrect", 1_024),
+                ("spinner_1", "spinner", 1),
+                ("spinner_64", "spinner", 64),
+                ("spinner_512", "spinner", 512),
+                ("neon_64", "neon", 64),
+                ("neon_1024", "neon", 1_024),
+                ("nine_slice_64", "nine_slice", 64),
+                ("nine_slice_512", "nine_slice", 512),
+            ];
+            let renderer = self.ensure_upload_bench_resources()?;
+            renderer.borrow_mut().set_timestamp_readback_interval_for_benchmark(1);
+            let mut report = String::new();
+            for (name, kind, count) in variants {
+                for _ in 0..4 {
+                    self.with_upload_bench_resources(|renderer, resources| {
+                        resources.architecture_primitive_frame(renderer, kind, count)
+                    })?;
+                    wait_renderer_queue_idle(&renderer).await?;
+                    renderer.borrow_mut().collect_timestamp_readbacks();
+                }
+                let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+                renderer.borrow_mut().clear_completed_timestamp_samples();
+                let mut values = Vec::with_capacity(sample_count as usize);
+                let mut timestamp_samples = Vec::with_capacity(sample_count.saturating_mul(frames) as usize);
+                let mut drained_samples = Vec::with_capacity(1);
+                let mut allocations = WebGpuAllocationSummary::default();
+                let mut submit_allocations = WebGpuSubmitAllocationSummary::default();
+                for _ in 0..sample_count {
+                    let mut cpu_ms = 0.0;
+                    for _ in 0..frames {
+                        let alloc_before = oxide_wasm_alloc_counter::snapshot();
+                        let start_ms = perf_now();
+                        self.with_upload_bench_resources(|renderer, resources| {
+                            resources.architecture_primitive_frame(renderer, kind, count)
+                        })?;
+                        cpu_ms += (perf_now() - start_ms).max(0.0);
+                        let alloc_after = oxide_wasm_alloc_counter::snapshot();
+                        add_allocation_frame(&mut allocations, alloc_before, alloc_after);
+                        add_submit_allocation_frame(&mut submit_allocations, renderer.borrow().last_stats());
+                        wait_renderer_queue_idle(&renderer).await?;
+                        let mut renderer = renderer.borrow_mut();
+                        renderer.collect_timestamp_readbacks();
+                        renderer.drain_completed_timestamp_samples_into(&mut drained_samples);
+                        timestamp_samples.extend_from_slice(&drained_samples);
+                    }
+                    values.push(cpu_ms / frames as f64);
+                }
+                values.sort_by(|a, b| a.total_cmp(b));
+                let expected_gpu_samples = sample_count.saturating_mul(frames) as usize;
+                if timestamp_samples.len() != expected_gpu_samples {
+                    return Err(JsValue::from_str(&format!(
+                        "architecture primitive {name} expected {expected_gpu_samples} GPU samples, observed {}",
+                        timestamp_samples.len(),
+                    )));
+                }
+                let mut gpu_values = timestamp_samples
+                    .iter()
+                    .map(|sample| sample.total_ns as f64 / 1_000_000.0)
+                    .collect::<Vec<_>>();
+                gpu_values.sort_by(|a, b| a.total_cmp(b));
+                let summary = WebGpuBenchSummary {
+                    p50_ms: percentile(&values, 0.50),
+                    p95_ms: percentile(&values, 0.95),
+                    p99_ms: percentile(&values, 0.99),
+                    peak_ms: values.last().copied().unwrap_or(0.0),
+                    avg_ms: average(&values),
+                    allocations,
+                    submit_allocations,
+                    stats: settle_renderer_timestamps(&renderer, timestamp_after_frame).await?,
+                };
+                if !report.is_empty() {
+                    report.push('\n');
+                }
+                let _ = write!(
+                    report,
+                    "case=web.architecture.primitive.{name};samples={sample_count};frames_per_sample={frames};primitive_count={count};current_gpu_samples={};current_gpu_p50_ms={:.6};current_gpu_p95_ms={:.6};current_gpu_p99_ms={:.6};current_gpu_peak_ms={:.6}{}",
+                    gpu_values.len(),
+                    percentile(&gpu_values, 0.50),
+                    percentile(&gpu_values, 0.95),
+                    percentile(&gpu_values, 0.99),
+                    gpu_values.last().copied().unwrap_or(0.0),
+                    sampled_case_metrics(&summary, "current"),
+                );
+            }
+            renderer.borrow_mut().set_timestamp_readback_interval_for_benchmark(8);
+            Ok(report)
+        }
+
         pub async fn bench_webgpu_direct_surface_ab(
             &self,
             samples: u32,
@@ -1502,6 +1602,7 @@ mod wasm_host {
         full_rgba: Vec<u8>,
         dirty_rgba: Vec<u8>,
         neon_markers: Vec<neon_marker::NeonMarker>,
+        architecture_neon_markers: Vec<neon_marker::NeonMarker>,
         builder: ui::DrawListBuilder,
         mixed_damage: gfx::Damage,
         layer_effects_damage: gfx::Damage,
@@ -1517,7 +1618,9 @@ mod wasm_host {
             let dirty_rgba =
                 generate_checker_rgba(WEBGPU_UPLOAD_DIRTY_SIZE, WEBGPU_UPLOAD_DIRTY_SIZE);
             let mut neon_markers = Vec::with_capacity(WEBGPU_NEON_MARKERS);
-            webgpu_fill_neon_markers(&mut neon_markers);
+            webgpu_fill_neon_markers(&mut neon_markers, WEBGPU_NEON_MARKERS, WEBGPU_NEON_MARKER_COLUMNS, 24.0, 26.0, 28.0, 22.0);
+            let mut architecture_neon_markers = Vec::with_capacity(WEBGPU_ARCHITECTURE_NEON_MARKERS);
+            webgpu_fill_neon_markers(&mut architecture_neon_markers, WEBGPU_ARCHITECTURE_NEON_MARKERS, 32, 4.0, 4.0, 7.75, 7.75);
             let glyph_atlas = renderer.image_create_a8(
                 WEBGPU_UPLOAD_ATLAS_SIZE,
                 WEBGPU_UPLOAD_ATLAS_SIZE,
@@ -1538,6 +1641,7 @@ mod wasm_host {
                 full_rgba,
                 dirty_rgba,
                 neon_markers,
+                architecture_neon_markers,
                 builder: ui::DrawListBuilder::new(),
                 mixed_damage: gfx::Damage {
                     rects: vec![gfx::RectI::new(0, 0, 128, 128), gfx::RectI::new(64, 64, 192, 192)],
@@ -2109,10 +2213,68 @@ mod wasm_host {
             renderer
                 .encode_neon_markers(&neon_marker::NeonMarkerPass {
                     viewport: gfx::RectF::new(0.0, 0.0, 256.0, 256.0),
-                    markers: &self.neon_markers,
+                    markers: &self.neon_markers[..WEBGPU_NEON_MARKERS],
                 })
                 .map_err(render_err)?;
             renderer.submit(token).map_err(render_err)
+        }
+
+        fn architecture_primitive_frame(
+            &mut self,
+            renderer: &mut BrowserRenderer,
+            kind: &str,
+            count: usize,
+        ) -> Result<(), JsValue> {
+            renderer.resize(512, 512, 2.0).map_err(render_err)?;
+            let token = renderer.begin_frame(&gfx::FrameTarget, None);
+            if kind == "neon" {
+                for markers in self.architecture_neon_markers[..count]
+                    .chunks(neon_marker::NEON_MARKER_MAX_INSTANCES)
+                {
+                    renderer
+                        .encode_neon_markers(&neon_marker::NeonMarkerPass {
+                            viewport: gfx::RectF::new(0.0, 0.0, 256.0, 256.0),
+                            markers,
+                        })
+                        .map_err(render_err)?;
+                }
+            } else {
+                self.builder.clear();
+                for index in 0..count {
+                    let x = (index % 32) as f32 * 8.0;
+                    let y = (index / 32) as f32 * 8.0;
+                    if kind == "rrect" {
+                        self.builder.rrect(
+                            gfx::RectF::new(x, y, 7.0, 7.0),
+                            [2.0; 4],
+                            gfx::Color::rgba(0.18, 0.62, 0.94, 0.92),
+                        );
+                    } else if kind == "spinner" {
+                        self.builder.spinner([x + 3.5, y + 3.5], 3.0 + (index % 7) as f32 * 0.05, 1.0);
+                    } else {
+                        self.builder.nine_slice(
+                            self.image,
+                            gfx::RectF::new(x, y, 7.0, 7.0),
+                            gfx::Insets::new(2.0, 2.0, 2.0, 2.0),
+                            0.92,
+                        );
+                    }
+                }
+                renderer.encode_pass(self.builder.drawlist());
+            }
+            renderer.submit(token).map_err(render_err)?;
+            let stats = renderer.last_stats();
+            if stats.render_passes == 0 {
+                return Err(JsValue::from_str(&format!(
+                    "architecture primitive {kind}/{count} produced zero render passes: draws={} items={} command_buffers={} frame_id={} timestamp_interval={}",
+                    stats.draws,
+                    stats.draw_items,
+                    stats.command_buffers,
+                    stats.frame_id,
+                    stats.gpu_timestamp_readback_interval,
+                )));
+            }
+            Ok(())
         }
 
         fn draw_state_cache_frame(
@@ -2568,15 +2730,23 @@ mod wasm_host {
         }
     }
 
-    fn webgpu_fill_neon_markers(out: &mut Vec<neon_marker::NeonMarker>) {
+    fn webgpu_fill_neon_markers(
+        out: &mut Vec<neon_marker::NeonMarker>,
+        count: usize,
+        columns: usize,
+        origin_x: f32,
+        origin_y: f32,
+        step_x: f32,
+        step_y: f32,
+    ) {
         out.clear();
-        out.reserve(WEBGPU_NEON_MARKERS);
-        for index in 0..WEBGPU_NEON_MARKERS {
-            let col = index % WEBGPU_NEON_MARKER_COLUMNS;
-            let row = index / WEBGPU_NEON_MARKER_COLUMNS;
-            let x = 24.0 + col as f32 * 28.0;
-            let y = 26.0 + row as f32 * 22.0;
-            let hue = index as f32 / WEBGPU_NEON_MARKERS as f32;
+        out.reserve(count);
+        for index in 0..count {
+            let col = index % columns;
+            let row = index / columns;
+            let x = origin_x + col as f32 * step_x;
+            let y = origin_y + row as f32 * step_y;
+            let hue = index as f32 / count as f32;
             out.push(neon_marker::NeonMarker {
                 center: [x, y],
                 core_radius_px: 2.5 + (index % 3) as f32 * 0.4,
@@ -2846,6 +3016,20 @@ mod wasm_host {
             }
         });
         JsFuture::from(promise).await.map(|_| ())
+    }
+
+    async fn wait_renderer_queue_idle(
+        renderer: &Rc<RefCell<BrowserRenderer>>,
+    ) -> Result<(), JsValue> {
+        let completed = renderer.borrow().queue_completion_flag_for_benchmark();
+        for _ in 0..WEBGPU_TIMESTAMP_SETTLE_RAFS {
+            if completed.load(Ordering::Acquire) {
+                wait_animation_frame_once().await?;
+                return Ok(());
+            }
+            wait_animation_frame_once().await?;
+        }
+        Err(JsValue::from_str("WebGPU architecture benchmark queue did not drain"))
     }
 
     fn request_next_frame(state: &Rc<RefCell<AppState>>) {

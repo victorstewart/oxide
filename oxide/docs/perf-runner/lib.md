@@ -122,6 +122,7 @@ Persisted report and evidence schemas are part of the performance contract becau
 
 ## Changelog
 
+- 2026-07-12: Added 132 C01 CPU/Metal rendering-architecture rows plus the opt-in ten-row WebGPU primitive matrix; isolated cache/feature variants, direct GPU distributions, workload counters, and queue/RAF pacing are documented in `architecture_matrix.md`.
 - 2026-07-12: Bumped generated browser WebGPU reports to version 6 for the C00 hard cutover from synchronous batch pacing claims to distinct CPU-submit throughput and raw one-submit-per-RAF distributions with environment, stage, GPU, queue-drain, and instrumentation-overhead evidence; historical version 5 baselines remain unchanged until C62 promotion.
 - 2026-06-22: Used direct interpolation for fixed 6-, 10-, 12-, and 24-sample suite summaries after same-workload A/B proof lowered summary cost from `0.218`/`0.192 us_per_iter` to `0.187`/`0.186 us_per_iter` with unchanged group count, summary count, and checksum.
 - 2026-06-22: Sorted common suite sample summaries in a fixed stack buffer after same-workload A/B proof lowered summary cost from `0.223`/`0.221 us_per_iter` to `0.220`/`0.214`/`0.195 us_per_iter` with unchanged group count, summary count, and checksum.

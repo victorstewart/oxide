@@ -53,6 +53,42 @@ fn source_fn_slice<'a>(source: &'a str, start_marker: &str, end_marker: &str) ->
     &tail[..end]
 }
 
+#[test]
+fn host_exposes_opt_in_webgpu_architecture_primitive_matrix() {
+    let source = include_str!("../src/lib.rs");
+    let page = include_str!("../../www/index.html");
+    let method = source_fn_slice(
+        source,
+        "pub async fn bench_webgpu_architecture_primitives",
+        "pub async fn bench_webgpu_direct_surface_ab",
+    );
+
+    for case in [
+        "rrect_1",
+        "rrect_64",
+        "rrect_1024",
+        "spinner_1",
+        "spinner_64",
+        "spinner_512",
+        "neon_64",
+        "neon_1024",
+        "nine_slice_64",
+        "nine_slice_512",
+    ] {
+        assert!(method.contains(case), "missing WebGPU architecture primitive {case}");
+    }
+    assert!(method.contains("architecture_primitive_frame"));
+    assert!(method.contains("wait_renderer_queue_idle"));
+    assert!(method.contains("settle_renderer_timestamps"));
+    assert!(method.contains("sampled_case_metrics"));
+    assert!(method.contains("current_gpu_samples"));
+    assert!(method.contains("current_gpu_p99_ms"));
+    assert!(source.contains("queue_completion_flag_for_benchmark"));
+    assert!(source.contains("wait_animation_frame_once().await?"));
+    assert!(page.contains("params.get(\"architecture_matrix\") === \"1\""));
+    assert!(page.contains("bench_webgpu_architecture_primitives"));
+}
+
 fn report_f64(section: &str, key: &str) -> f64 {
     let marker = format!("\"{key}\": ");
     let start =

@@ -4616,6 +4616,45 @@ fn filtered_run_suite_supports_metal_id_mask_current_case() {
 }
 
 #[test]
+fn filtered_run_suite_supports_rendering_architecture_contract() {
+    let mut json_out = std::env::temp_dir();
+    json_out.push(format!("oxide-perf-runner-architecture-{}.json", std::process::id()));
+    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+        .env(
+            "OXIDE_PERF_RUNNER_FILTER",
+            "cpu.architecture.retained.depth_16.clean,cpu.architecture.animation.surface_300,cpu.architecture.idle.static_foreground",
+        )
+        .arg("--run-suite")
+        .arg("--smoke")
+        .arg("--json-out")
+        .arg(&json_out)
+        .output()
+        .expect("run filtered rendering architecture smoke suite");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "filtered suite failed: {stderr}");
+    assert!(stdout.contains("cases=3"), "stdout: {stdout}");
+    assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
+    let report = std::fs::read_to_string(&json_out).expect("read rendering architecture report");
+    let retained = report_case_slice(&report, "cpu.architecture.retained.depth_16.clean");
+    let animation = report_case_slice(&report, "cpu.architecture.animation.surface_300");
+    let idle = report_case_slice(&report, "cpu.architecture.idle.static_foreground");
+    for row in [retained, animation, idle] {
+        assert!(row.contains("\"family\": \"architecture\""));
+        assert!(row.contains("\"scenario\": \"rendering-architecture\""));
+    }
+    assert_eq!(report_f64(retained, "tree_depth"), 16.0);
+    assert_eq!(report_f64(retained, "label_nodes"), 1_000.0);
+    assert_eq!(report_f64(retained, "image_nodes"), 500.0);
+    assert_eq!(report_f64(animation, "animated_nodes"), 300.0);
+    assert_eq!(report_f64(animation, "active_animations"), 600.0);
+    assert_eq!(report_f64(idle, "submissions"), 0.0);
+    assert_eq!(report_f64(idle, "wakeups"), 0.0);
+    let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
 fn filtered_run_suite_supports_gpu_journey_frame_pacing_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-gpu-journey-{}.json", std::process::id()));

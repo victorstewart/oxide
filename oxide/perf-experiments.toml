@@ -2,7 +2,7 @@
 id = "c00-paired-renderer-experiments-and-raf-distributions"
 introduced_commit = "C00 staged tree recorded in commit proof"
 introduced_date = "2026-07-12"
-expires = "never"
+expires = "2027-07-12"
 required_backends = ["oxide-perf-runner", "browser-webgpu", "renderer-web"]
 required_devices = ["macOS host", "Chrome arm64"]
 correctness_gate = "cargo test --locked -p oxide-perf-runner --test paired_experiment_tests && cargo test --locked -p oxide-perf-runner --test report_tests && cargo test --locked -p oxide-renderer-web --test lib_tests && cargo test --locked -p oxide-host-web --test lib_tests && cargo check --locked -p oxide-host-web --target wasm32-unknown-unknown && node scripts/check_webgpu_browser_golden.mjs --self-test-measurement && node --check scripts/check_webgpu_browser_golden.mjs && git diff --check"
@@ -23,10 +23,101 @@ cleanup = [
 ]
 
 [[experiments]]
+id = "c01-rendering-architecture-proof-workloads"
+introduced_commit = "C01 staged tree recorded in commit proof"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["oxide-perf-runner", "renderer-metal", "browser-webgpu"]
+required_devices = ["macOS host", "Chrome arm64"]
+correctness_gate = "cargo test --locked -p oxide-perf-runner --lib architecture_matrix::tests && cargo test --locked -p oxide-perf-runner --test report_tests && cargo test --locked -p oxide-host-web --test lib_tests && cargo test --locked -p oxide-renderer-web --test lib_tests && cargo check --locked -p oxide-host-web --target wasm32-unknown-unknown && node --check scripts/check_webgpu_browser_golden.mjs && cargo run --locked -p xtask -- experiments check && git diff --check"
+performance_gate = "Measurement-only commit: all 132 Rust architecture rows and ten opt-in WebGPU rows must execute their exact declared sizes; parent/candidate unchanged production-path timing tails, visuals, startup memory, and default resource layout must satisfy no-material-regression parity. Performance claim: none."
+decision_state = "accepted"
+decision = "Established isolated CPU, Metal, and RAF-paced WebGPU proof workloads for retained UI, animation, text, layers, ID masks, primitives, effects, damage, Scene3D, images, and idle behavior without enabling alternate production paths."
+proof = [
+   "Rust smoke contract emits 132 rendering-architecture rows while preserving exact depth, node, layer/draw, damage, ID-mask resolution/chunk, Scene3D instance/feature, image-count, and idle scaling points.",
+   "The ten-row WebGPU matrix is explicit opt-in, uses production encoders, serializes GPUQueue completion plus one RAF per submission, rejects zero-pass work, collects row-local timestamp queries, and restores the normal timestamp sampling interval.",
+   "ID-mask chunk counts and Scene3D features are isolated into stable row IDs so changing variants cannot invalidate or contaminate a neighboring cache-state distribution.",
+   "Measurement resources live in perf-runner or opt-in browser benchmark storage; normal app execution never creates the expanded architecture resource set or calls the queue fence.",
+]
+cleanup = [
+   "The layer memory-warning row currently recreates the renderer because no production cache-purge hook exists; move the stable row to that hook when C13 adds it.",
+   "C02 must replace currently unavailable explanatory counters with complete renderer-owned accounting while preserving these case IDs and workload sizes.",
+   "Official benchmarks/workspace/latest.* and benchmarks/web/latest.* promotion remains deferred to C62.",
+]
+
+[[experiments]]
+id = "c01-mixed-cache-variant-rows"
+introduced_commit = "rejected during C01"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["oxide-perf-runner", "renderer-metal"]
+required_devices = ["macOS host"]
+correctness_gate = "Static cache rows must keep one resolution, chunk count, invalidation class, instance count, and feature mode stable across warmup and measured frames."
+performance_gate = "Measurement design only; no performance claim."
+decision_state = "rejected"
+decision = "Rejected aggregating 1/16/256 ID-mask chunks and seven Scene3D feature modes inside one timing row because switching variants continuously invalidated cache state and hid per-variant distributions."
+proof = [
+   "The initial ID-mask row submitted chunk counts 1, 16, and 256 sequentially before every sample, so its nominal static row never observed a stable chunk topology.",
+   "The initial Scene3D row mixed one/many meshes, alpha, viewport, culling, and bloom submissions into one aggregate, preventing feature-specific regression gates.",
+]
+cleanup = ["Replaced the aggregates with 36 isolated ID-mask IDs and 21 isolated Scene3D IDs."]
+
+[[experiments]]
+id = "c01-unpaced-webgpu-primitive-loop"
+introduced_commit = "rejected during C01"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Every measured primitive frame must produce a render pass and a row-local completed GPU timestamp before the next drawable is acquired."
+performance_gate = "Measurement design only; no performance claim."
+decision_state = "rejected"
+decision = "Rejected tight synchronous and RAF-only primitive loops because Chrome exhausted presentable drawables after four submissions and later rows carried zero render passes or stale timestamps."
+proof = [
+   "The fail-closed harness reported target frame 49, latest timestamp frame 37, render_passes=0 after four valid warmup submissions.",
+   "Queue completion alone was insufficient to release the presentable surface; the accepted loop waits for GPUQueue completion and then one RAF before the next submission.",
+]
+cleanup = ["No unpaced primitive timing path remains in the accepted C01 matrix."]
+
+[[experiments]]
+id = "c01-single-pass-neon-1024"
+introduced_commit = "rejected during C01"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-web", "browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "The 1,024-marker row must encode all 1,024 markers without changing the production 128-instance per-pass safety cap."
+performance_gate = "Measurement design only; no performance claim."
+decision_state = "rejected"
+decision = "Rejected passing 1,024 markers through one NeonMarkerPass because the production safety contract correctly clamped the workload to 128 markers."
+proof = [
+   "The rejected row reported 13,824 solid triangles, equivalent to 128 markers rather than the declared 1,024.",
+   "The accepted row emits eight 128-marker passes and reports 110,592 solid triangles, 3,071 coalesced source items, and 4,964,368 uploaded bytes.",
+]
+cleanup = ["Kept NEON_MARKER_MAX_INSTANCES=128 unchanged and moved workload scaling into the benchmark caller."]
+
+[[experiments]]
+id = "c01-zero-area-spinner-fixture"
+introduced_commit = "rejected during C01"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "The one-spinner row must produce nonzero geometry, one spinner command, and one render pass."
+performance_gate = "Measurement design only; no performance claim."
+decision_state = "rejected"
+decision = "Rejected a one-spinner fixture with atom=0 because production lowering correctly generated zero-area RRects and no render pass."
+proof = [
+   "The zero-pass gate reported spinner/1 draws=0, items=0, render_passes=0 at timestamp interval 1.",
+   "The accepted fixture uses nonzero atom radius and alpha 1, reporting one spinner, 432 solid triangles, and one render pass.",
+]
+cleanup = ["The zero-area fixture is absent; the zero-pass validation remains active for every primitive row."]
+
+[[experiments]]
 id = "c00-nonisolated-browser-stage-timing"
 introduced_commit = "rejected during C00"
 introduced_date = "2026-07-12"
-expires = "never"
+expires = "2027-07-12"
 required_backends = ["browser-webgpu"]
 required_devices = ["Chrome arm64"]
 correctness_gate = "Exactly 2000 raw samples existed for every declared stage, but the timer source also had to resolve the measured stage durations."
@@ -43,7 +134,7 @@ cleanup = ["None; the rejected server mode is absent from the accepted harness."
 id = "c00-synchronous-batch-frame-pacing"
 introduced_commit = "rejected legacy measurement repaired by C00"
 introduced_date = "2026-07-12"
-expires = "never"
+expires = "2027-07-12"
 required_backends = ["browser-webgpu"]
 required_devices = ["Chrome arm64"]
 correctness_gate = "A displayed-frame row must have one real RAF callback and one production submission for every persisted frame sample."

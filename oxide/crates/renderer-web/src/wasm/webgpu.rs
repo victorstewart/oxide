@@ -13,6 +13,8 @@ use oxide_wasm_alloc_counter::AllocationSnapshot;
 use std::cell::Cell;
 use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::HtmlCanvasElement;
 
@@ -644,6 +646,10 @@ impl BrowserRenderer {
         self.inner.set_timestamp_readback_interval_for_benchmark(frames);
     }
 
+    pub fn queue_completion_flag_for_benchmark(&self) -> Arc<AtomicBool> {
+        self.inner.queue_completion_flag_for_benchmark()
+    }
+
     pub fn clear_completed_timestamp_samples(&mut self) {
         self.inner.clear_completed_timestamp_samples();
     }
@@ -1202,6 +1208,15 @@ impl WebGpuRenderer {
         if let Some(timestamps) = &mut self.timestamp_queries {
             timestamps.set_readback_interval_for_benchmark(frames);
         }
+    }
+
+    pub fn queue_completion_flag_for_benchmark(&self) -> Arc<AtomicBool> {
+        let completed = Arc::new(AtomicBool::new(false));
+        let callback_flag = Arc::clone(&completed);
+        self.queue.on_submitted_work_done(move || {
+            callback_flag.store(true, Ordering::Release);
+        });
+        completed
     }
 
     pub fn clear_completed_timestamp_samples(&mut self) {

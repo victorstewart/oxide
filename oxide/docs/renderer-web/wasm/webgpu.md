@@ -11,6 +11,7 @@ Consumes renderer-api values and `solid_color` decoding; embedded WGSL interpola
 ## Entry points list
 
 - `BrowserRenderer::set_timestamp_readback_interval_for_benchmark`, `clear_completed_timestamp_samples`, and `drain_completed_timestamp_samples_into` control and collect bounded C00 GPU timestamp distributions without changing the normal eight-frame production sampling cadence.
+- `BrowserRenderer::queue_completion_flag_for_benchmark` registers a benchmark-only completion fence used to serialize C01 primitive submissions before the next presented drawable.
 - `BrowserRenderer::set_cpu_submit_timing_enabled_for_benchmark` and `last_cpu_submit_timing` expose bounded, opt-in CPU attribution for upload, surface, command encoding, queue submit, present, and readback bookkeeping; the normal renderer path retains only a disabled branch.
 - `encode_solid`, `gpu_vertex`, and the three `append_*gpu_vertices` helpers implement this boundary.
 
@@ -50,6 +51,7 @@ Packed `0xFFFF_0000` uploads as opaque blue; packed zero uploads the draw unifor
 
 ## Changelog
 
+- 2026-07-12: exposed a benchmark-only queue completion flag for the opt-in C01 one-submit-per-RAF primitive matrix without changing normal submission behavior.
 - 2026-07-12: added bounded per-frame timestamp history and caller-owned draining for C00 GPU distributions.
 - 2026-07-12: added opt-in high-resolution WebGPU submit-stage CPU timing for the C00 one-submit-per-RAF harness.
 - 2026-07-12: preserved packed colors on every solid lowering topology.
