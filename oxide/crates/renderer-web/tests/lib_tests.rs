@@ -2,7 +2,7 @@ use oxide_renderer_api as api;
 use oxide_renderer_api::Renderer;
 use oxide_renderer_web::{
     color_cache_key, color_to_css, layer_physical_dimension, packed_rgba_to_css, sanitize_scale,
-    WebRenderer,
+    WebGpuTimestampSample, WebRenderer,
 };
 
 #[path = "../src/solid_color.rs"]
@@ -186,6 +186,29 @@ fn wasm_webgpu_present_quad_uploads_are_cached_across_frames() {
     assert!(cache.contains("self.queue.write_buffer(&self.present_index_buffer"));
     assert!(present.contains("self.ensure_present_buffers();"));
     assert!(!present.contains("queue.write_buffer"));
+}
+
+#[test]
+fn wasm_webgpu_timestamp_samples_are_bounded_and_drainable()
+{
+   let source = include_str!("../src/wasm/webgpu.rs");
+   let sample = WebGpuTimestampSample::default();
+
+   assert_eq!(sample.frame_id, 0);
+   assert_eq!(sample.total_ns, 0);
+   assert!(source.contains("const TIMESTAMP_COMPLETED_CAPACITY: usize = 4_096;"));
+   assert!(source.contains("completed: Option<Box<VecDeque<WebGpuTimestampSample>>>"));
+   assert!(source.contains("VecDeque::with_capacity(TIMESTAMP_COMPLETED_CAPACITY)"));
+   assert!(source.contains("if completed.len() == TIMESTAMP_COMPLETED_CAPACITY"));
+   assert!(source.contains("completed.pop_front();"));
+   assert!(source.contains("completed.push_back(summary.sample());"));
+   assert!(source.contains("set_timestamp_readback_interval_for_benchmark"));
+   assert!(source.contains("drain_completed_timestamp_samples_into"));
+   assert!(source.contains("cpu_submit_timing_enabled"));
+   assert!(source.contains("set_cpu_submit_timing_enabled_for_benchmark"));
+   assert!(source.contains("cpu_submit_timing_end(&mut self.cpu_submit_timing.upload_ms"));
+   assert!(source.contains("cpu_submit_timing_end(&mut self.cpu_submit_timing.command_encoding_ms"));
+   assert!(source.contains("cpu_submit_timing_end(&mut self.cpu_submit_timing.queue_submit_ms"));
 }
 
 #[test]

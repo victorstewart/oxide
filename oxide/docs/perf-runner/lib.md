@@ -20,6 +20,7 @@
   - Main callers: `oxide/crates/perf-runner/src/main.rs`.
 - `oxide_perf_runner::run_cli(args: &[String]) -> anyhow::Result<()>`
   - Handles the suite CLI, baseline writes, comparisons, and legacy fallback.
+  - Also exposes `--paired-run PLAN --paired-json-out PATH`, which executes fresh-process workspace CPU, Metal, WebGPU, browser-startup, or device A/B commands through the shared source/artifact identity and raw-evidence contract, plus `--paired-analyze INPUT --paired-json-out PATH` for byte-deterministic reanalysis and `--paired-create-instrumentation-patch` for a hashed binary patch applied identically to both sides.
   - Also exposes `--bench-markdown-render PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]`, a non-default measurement harness that loads an existing `PerfReport` JSON and optional comparison baseline, then repeatedly renders Markdown so report-generation changes can be A/B tested without rerunning the suite workloads.
   - Also exposes `--bench-markdown-write PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]`, a non-default measurement harness that loads an existing `PerfReport` JSON and optional comparison baseline, then repeatedly exercises the latest-plus-dated Markdown output path so baseline-write changes can be A/B tested without rerunning the suite workloads.
   - Also exposes `--bench-json-render PATH [--bench-json-iters N]`, a non-default measurement harness that loads an existing `PerfReport` JSON and repeatedly exercises the shared pre-sized pretty JSON serializer used by the persisted JSON write path so report schema and artifact-density changes can be A/B tested without rerunning the suite workloads.
@@ -121,6 +122,7 @@ Persisted report and evidence schemas are part of the performance contract becau
 
 ## Changelog
 
+- 2026-07-12: Bumped generated browser WebGPU reports to version 6 for the C00 hard cutover from synchronous batch pacing claims to distinct CPU-submit throughput and raw one-submit-per-RAF distributions with environment, stage, GPU, queue-drain, and instrumentation-overhead evidence; historical version 5 baselines remain unchanged until C62 promotion.
 - 2026-06-22: Used direct interpolation for fixed 6-, 10-, 12-, and 24-sample suite summaries after same-workload A/B proof lowered summary cost from `0.218`/`0.192 us_per_iter` to `0.187`/`0.186 us_per_iter` with unchanged group count, summary count, and checksum.
 - 2026-06-22: Sorted common suite sample summaries in a fixed stack buffer after same-workload A/B proof lowered summary cost from `0.223`/`0.221 us_per_iter` to `0.220`/`0.214`/`0.195 us_per_iter` with unchanged group count, summary count, and checksum.
 - 2026-06-22: Used direct interpolation for fixed 24-sample distribution metric summaries after same-workload A/B proof lowered insertion cost from `0.894`/`0.906 us_per_iter` to `0.876`/`0.877 us_per_iter` with unchanged metric count and checksum.

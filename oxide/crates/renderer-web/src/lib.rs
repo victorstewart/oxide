@@ -154,6 +154,38 @@ pub struct WebRendererStats {
     pub cpu_resource_table_scratch_growth_bytes: u64,
 }
 
+/// One completed per-frame WebGPU timestamp-query sample.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WebGpuTimestampSample {
+    pub frame_id: u64,
+    pub passes: u32,
+    pub total_ns: u64,
+    pub clear_ns: u64,
+    pub draw_ns: u64,
+    pub scene3d_ns: u64,
+    pub scene3d_overlay_ns: u64,
+    pub id_mask_raster_ns: u64,
+    pub id_mask_field_seed_ns: u64,
+    pub id_mask_field_jump_ns: u64,
+    pub id_mask_compositor_ns: u64,
+    pub present_ns: u64,
+    pub max_pass_ns: u64,
+}
+
+/// Optional CPU timing for the app-owned phases inside one WebGPU submit.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct WebGpuCpuSubmitTimingSample {
+    pub upload_ms: f64,
+    pub surface_ms: f64,
+    pub encoder_create_ms: f64,
+    pub command_encoding_ms: f64,
+    pub timestamp_readback_ms: f64,
+    pub scratch_stats_ms: f64,
+    pub queue_submit_ms: f64,
+    pub present_ms: f64,
+    pub timestamp_map_ms: f64,
+}
+
 impl Default for WebRendererStats {
     fn default() -> Self {
         Self {

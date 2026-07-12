@@ -26,6 +26,13 @@ Call flow:
 - `oxide_renderer_web::WebGpuRenderer::from_canvas_id(id: &str) -> Future<Result<Self, RenderError>>`: wasm-only WebGPU constructor.
 - `oxide_renderer_web::BrowserRenderer::canvas(&self) -> HtmlCanvasElement`: returns the backing canvas wrapper for host integration.
 - `oxide_renderer_web::BrowserRenderer::last_stats(&self) -> WebRendererStats`: exposes the most recent frame counters.
+- `oxide_renderer_web::WebGpuTimestampSample`: stores one completed frame's pass count and total/per-family WebGPU timestamp durations.
+- `oxide_renderer_web::WebGpuCpuSubmitTimingSample`: stores optional high-resolution upload, surface acquisition, encoder creation, command encoding, timestamp-readback, scratch-accounting, queue-submit, present, and timestamp-map CPU durations for one explicitly profiled WebGPU submit.
+- `oxide_renderer_web::BrowserRenderer::set_timestamp_readback_interval_for_benchmark(&mut self, frames: u64)`: selects bounded timestamp sampling cadence for explicit measurement; normal production cadence remains every eight frames.
+- `oxide_renderer_web::BrowserRenderer::clear_completed_timestamp_samples(&mut self)`: clears completed measurement samples before a declared workload.
+- `oxide_renderer_web::BrowserRenderer::drain_completed_timestamp_samples_into(&mut self, output: &mut Vec<WebGpuTimestampSample>)`: harvests and drains completed samples into caller-owned reusable storage.
+- `oxide_renderer_web::BrowserRenderer::set_cpu_submit_timing_enabled_for_benchmark(&mut self, enabled: bool)`: enables bounded submit-stage timing only around an explicit profiled frame; normal production submission leaves it disabled.
+- `oxide_renderer_web::BrowserRenderer::last_cpu_submit_timing(&self) -> WebGpuCpuSubmitTimingSample`: returns the most recently collected submit-stage sample.
 - `oxide_renderer_web::BrowserRenderer::image_create_rgba8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize) -> ImageHandle`: uploads an RGBA texture to WebGPU.
 - `oxide_renderer_web::BrowserRenderer::image_update_rgba8(&mut self, handle: ImageHandle, x: u32, y: u32, width: u32, height: u32, data: &[u8], row_bytes: usize) -> Result<(), RenderError>`: updates an RGBA texture subrectangle on WebGPU.
 - `oxide_renderer_web::BrowserRenderer::image_release(&mut self, handle: ImageHandle) -> bool`: invalidates an uploaded image handle and releases its renderer-owned texture and bind group; returns whether the handle was live.

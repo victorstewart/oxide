@@ -23,6 +23,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
+pub mod paired;
+
 const DEFAULT_BASELINE_JSON: &str = "benchmarks/workspace/latest.json";
 const DEFAULT_BASELINE_MARKDOWN: &str = "benchmarks/workspace/latest.md";
 const DEFAULT_MARKDOWN_RENDER_BENCH_ITERS: usize = 256;
@@ -582,6 +584,12 @@ struct Cli {
     compare: Option<PathBuf>,
     json_out: Option<PathBuf>,
     markdown_out: Option<PathBuf>,
+    paired_run: Option<PathBuf>,
+    paired_analyze: Option<PathBuf>,
+    paired_json_out: Option<PathBuf>,
+    paired_create_instrumentation_patch: Option<PathBuf>,
+    paired_instrumentation_root: Option<PathBuf>,
+    paired_instrumentation_paths: Vec<PathBuf>,
     markdown_bench_report: Option<PathBuf>,
     markdown_write_bench_report: Option<PathBuf>,
     markdown_bench_compare: Option<PathBuf>,
@@ -1231,6 +1239,18 @@ pub fn run_cli(args: &[String]) -> Result<()> {
         return Ok(());
     }
     let cli = parse_cli(args)?;
+    if cli.paired_create_instrumentation_patch.is_some() {
+        return run_create_instrumentation_patch(cli);
+    }
+    if cli.paired_run.is_some() {
+        return run_paired_workflow(cli);
+    }
+    if cli.paired_analyze.is_some() {
+        return run_paired_analysis(cli);
+    }
+    if cli.paired_json_out.is_some() {
+        bail!("--paired-json-out requires --paired-run or --paired-analyze");
+    }
     if cli.sample_summary_bench {
         return run_sample_summary_bench(cli);
     }
@@ -1326,6 +1346,30 @@ fn parse_cli(args: &[String]) -> Result<Cli> {
                 cli.run_suite = true;
                 let path = it.next().context("missing value for --markdown-out")?;
                 cli.markdown_out = Some(PathBuf::from(path));
+            }
+            "--paired-analyze" => {
+                let path = it.next().context("missing value for --paired-analyze")?;
+                cli.paired_analyze = Some(PathBuf::from(path));
+            }
+            "--paired-run" => {
+                let path = it.next().context("missing value for --paired-run")?;
+                cli.paired_run = Some(PathBuf::from(path));
+            }
+            "--paired-json-out" => {
+                let path = it.next().context("missing value for --paired-json-out")?;
+                cli.paired_json_out = Some(PathBuf::from(path));
+            }
+            "--paired-create-instrumentation-patch" => {
+                let path = it.next().context("missing value for --paired-create-instrumentation-patch")?;
+                cli.paired_create_instrumentation_patch = Some(PathBuf::from(path));
+            }
+            "--paired-instrumentation-root" => {
+                let path = it.next().context("missing value for --paired-instrumentation-root")?;
+                cli.paired_instrumentation_root = Some(PathBuf::from(path));
+            }
+            "--paired-instrumentation-path" => {
+                let path = it.next().context("missing value for --paired-instrumentation-path")?;
+                cli.paired_instrumentation_paths.push(PathBuf::from(path));
             }
             "--bench-markdown-render" => {
                 let path = it.next().context("missing value for --bench-markdown-render")?;
@@ -1471,6 +1515,9 @@ fn print_usage() {
     println!("  default: legacy renderer summary for sweep scripts");
     println!("  --run-suite [--smoke] [--compare PATH] [--json-out PATH] [--markdown-out PATH]");
     println!("  --write-baseline writes to benchmarks/workspace/latest.json and latest.md");
+    println!("  --paired-run PLAN --paired-json-out PATH");
+    println!("  --paired-analyze INPUT --paired-json-out PATH");
+    println!("  --paired-create-instrumentation-patch OUT --paired-instrumentation-root ROOT --paired-instrumentation-path PATH [...]");
     println!("  --bench-markdown-render PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]");
     println!("  --bench-markdown-write PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]");
     println!("  --bench-json-render PATH [--bench-json-iters N]");
@@ -1482,6 +1529,56 @@ fn print_usage() {
     println!("  --bench-distribution-metrics [--bench-distribution-iters N]");
     println!("  --bench-case-metric-contract PATH [--bench-case-metric-iters N]");
     println!("  --bench-contract-coverage PATH [--bench-contract-iters N]");
+}
+
+fn run_paired_analysis(cli: Cli) -> Result<()> {
+    let input_path = cli.paired_analyze.context("missing paired experiment input")?;
+    let output_path = cli.paired_json_out.context("--paired-analyze requires --paired-json-out")?;
+    let input_bytes = fs::read(&input_path)
+        .with_context(|| format!("read paired experiment input {}", input_path.display()))?;
+    let input = serde_json::from_slice::<paired::PairedExperimentInput>(&input_bytes)
+        .with_context(|| format!("parse paired experiment input {}", input_path.display()))?;
+    let report = paired::analyze_paired_experiment(input)?;
+    let report_bytes = paired::report_json(&report)?;
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create paired report directory {}", parent.display()))?;
+    }
+    fs::write(&output_path, report_bytes)
+        .with_context(|| format!("write paired experiment report {}", output_path.display()))?;
+    Ok(())
+}
+
+fn run_paired_workflow(cli: Cli) -> Result<()> {
+    let plan_path = cli.paired_run.context("missing paired workflow plan")?;
+    let output_path = cli.paired_json_out.context("--paired-run requires --paired-json-out")?;
+    let plan_bytes = fs::read(&plan_path)
+        .with_context(|| format!("read paired workflow plan {}", plan_path.display()))?;
+    let plan = serde_json::from_slice::<paired::PairedWorkflowPlan>(&plan_bytes)
+        .with_context(|| format!("parse paired workflow plan {}", plan_path.display()))?;
+    let report = paired::run_paired_workflow(plan)?;
+    let report_bytes = paired::report_json(&report)?;
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create paired report directory {}", parent.display()))?;
+    }
+    fs::write(&output_path, report_bytes)
+        .with_context(|| format!("write paired workflow report {}", output_path.display()))?;
+    Ok(())
+}
+
+fn run_create_instrumentation_patch(cli: Cli) -> Result<()> {
+    let output_path = cli
+        .paired_create_instrumentation_patch
+        .context("missing instrumentation patch output")?;
+    let source_root = cli.paired_instrumentation_root.unwrap_or_else(|| PathBuf::from("."));
+    let sha256 = paired::create_instrumentation_patch(
+        &source_root,
+        &cli.paired_instrumentation_paths,
+        &output_path,
+    )?;
+    println!("{}  {}", sha256, output_path.display());
+    Ok(())
 }
 
 fn load_markdown_bench_inputs(path: &Path, compare_path: Option<&PathBuf>) -> Result<(PerfReport, Option<PerfComparison>)> {

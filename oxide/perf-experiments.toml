@@ -1,4 +1,62 @@
 [[experiments]]
+id = "c00-paired-renderer-experiments-and-raf-distributions"
+introduced_commit = "C00 staged tree recorded in commit proof"
+introduced_date = "2026-07-12"
+expires = "never"
+required_backends = ["oxide-perf-runner", "browser-webgpu", "renderer-web"]
+required_devices = ["macOS host", "Chrome arm64"]
+correctness_gate = "cargo test --locked -p oxide-perf-runner --test paired_experiment_tests && cargo test --locked -p oxide-perf-runner --test report_tests && cargo test --locked -p oxide-renderer-web --test lib_tests && cargo test --locked -p oxide-host-web --test lib_tests && cargo check --locked -p oxide-host-web --target wasm32-unknown-unknown && node scripts/check_webgpu_browser_golden.mjs --self-test-measurement && node --check scripts/check_webgpu_browser_golden.mjs && git diff --check"
+performance_gate = "Measurement-foundation commit: reproduce invalid synchronous pacing semantics on A, validate 15 fresh-process CPU-submit A/B pairs under no-material-regression tails, validate at least 10 fresh Chrome displayed-frame B sessions with 2000 RAF and GPU samples each, and quantify bounded instrumentation overhead. Performance claim: none."
+decision_state = "accepted"
+decision = "Established one manifest-driven paired workflow for workspace CPU, Metal, WebGPU, browser startup, and device commands; separated synchronous CPU-submit throughput from one-submit-per-RAF displayed frames; and added raw stage/GPU/queue/long-task/environment evidence with strict cardinality and identity validation."
+proof = [
+   "Synthetic contract: 8 paired tests pass, including fixed balanced order, 100000-resample deterministic bootstrap, raw percentile cardinality, ties, regressions, insufficient samples, mixed sessions, stale binaries, parity policy, patch creation, and a complete 15-pair fresh-process workflow.",
+   "Fresh isolated Chrome diagnostic: 2000 RAF timestamps, deltas, CPU samples, every CPU-stage sample, submissions, and GPU timestamp samples; GPU p50/p95/p99/peak 0.117622/0.142414/0.155456/0.214830 ms; queue drain 7.215 ms in one RAF with pending 1 -> 0.",
+   "Cross-origin-isolated CPU stage p50: draw extraction 0.010 ms, backend lowering 0.020 ms, upload 0.020 ms, command encoding 0.045 ms, queue submit 0.010 ms, post-submit 0.010 ms; layout/text are explicitly fused into draw extraction.",
+   "Bounded 200/200 ABBA instrumentation control: enabled p50 0.205 ms, disabled p50 0.150 ms, measured overhead 0.055 ms; production frames call the unprofiled path unless the explicit harness requests profiling.",
+   "Generated browser schema version 6 reclassifies synchronous rows as unpaced ms/cpu-submit and rejects displayed-frame cardinality, production-toggle, high-resolution isolation, GPU sample, or queue-drain violations.",
+]
+cleanup = [
+   "Official benchmarks/web/latest.* remains historical version 5 and is intentionally not promoted before C62.",
+   "Event-to-submit and event-to-visible remain not-applicable for the no-input C00 RAF scene; C01 input journeys must collect them for initiated-event workloads.",
+   "Physical-device adapters are implemented but device proof remains hardware-gated while attached iPhones are unavailable.",
+]
+
+[[experiments]]
+id = "c00-nonisolated-browser-stage-timing"
+introduced_commit = "rejected during C00"
+introduced_date = "2026-07-12"
+expires = "never"
+required_backends = ["browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "Exactly 2000 raw samples existed for every declared stage, but the timer source also had to resolve the measured stage durations."
+performance_gate = "Measurement design only; no performance claim."
+decision_state = "rejected"
+decision = "Rejected ordinary localhost timing because Chrome quantized most sub-0.1 ms stage medians to zero; enabled COOP/COEP cross-origin isolation in the local benchmark server and reran the same workload."
+proof = [
+   "Non-isolated report stage p50 values were zero for every stage despite nonzero total CPU time.",
+   "Isolated rerun reported cross_origin_isolated=true and resolved 0.010-0.045 ms p50 values for the separable draw/lowering/upload/encode/submit stages.",
+]
+cleanup = ["None; the rejected server mode is absent from the accepted harness."]
+
+[[experiments]]
+id = "c00-synchronous-batch-frame-pacing"
+introduced_commit = "rejected legacy measurement repaired by C00"
+introduced_date = "2026-07-12"
+expires = "never"
+required_backends = ["browser-webgpu"]
+required_devices = ["Chrome arm64"]
+correctness_gate = "A displayed-frame row must have one real RAF callback and one production submission for every persisted frame sample."
+performance_gate = "Measurement design only; no performance claim."
+decision_state = "rejected"
+decision = "Rejected treating tight synchronous frame batches as displayed frames; retained the loop only as explicitly unpaced CPU-submit throughput and moved pacing/hitch metrics to raw RAF deltas."
+proof = [
+   "Legacy-style tight-loop evidence reported CPU-submit average 0.094 ms while the simultaneously collected displayed GPU distribution was about 0.118 ms p50, demonstrating that the old batch number could not represent presented frame cadence.",
+   "Accepted schema carries no frame-budget, missed-frame, hitch, or event-to-visible keys on web.wasm.webgpu.cpu_submit_throughput and requires 2000 raw RAF deltas for web.wasm.webgpu.raf_frame_loop.",
+]
+cleanup = ["Removed synchronous pacing metric generation and schema requirements; historical version 5 baselines remain unmodified until C62."]
+
+[[experiments]]
 id = "native-audit-row-retirement"
 introduced_commit = "f09227b4212e32aa3834041dc344bf2d70a0870f"
 introduced_date = "2026-06-22"

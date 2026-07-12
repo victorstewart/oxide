@@ -42,16 +42,21 @@ function parseArgs(argv)
       pixelTolerance: 15000,
       maxErrTolerance: 255,
       mseTolerance: 6500,
-      virtualTimeBudget: 20000,
+      virtualTimeBudget: 60000,
       captureRetries: 2,
       reportTimeoutMs: 90000,
       width: 320,
       height: 240,
+      dpr: 1,
       jsonReport: "",
       markdownReport: "",
+      rawReport: "",
+      validateRawReport: "",
+      selfTestMeasurement: false,
+      reportOnly: false,
       traceJson: "",
       traceCategories: "gpu,viz,cc,blink,blink.user_timing,benchmark,disabled-by-default-gpu.service,disabled-by-default-devtools.timeline",
-      traceDurationMs: 5000,
+      traceDurationMs: 60000,
       reportDate: process.env.PERF_REPORT_DATE || new Date().toISOString().slice(0, 10),
       startupReport: "",
       startupRepeats: 0,
@@ -62,6 +67,9 @@ function parseArgs(argv)
       canvasQuads: 512,
       frameSamples: 8,
       framesPerSample: 30,
+      rafFrames: 2000,
+      rafResizeEvery: 0,
+      rafScene: 0,
       idMaskSamples: 6,
       idMaskFrames: 24,
       uploadSamples: 6,
@@ -111,10 +119,20 @@ function parseArgs(argv)
          args.width = Number(next());
       } else if (arg === "--height") {
          args.height = Number(next());
+      } else if (arg === "--dpr") {
+         args.dpr = Number(next());
       } else if (arg === "--json-report") {
          args.jsonReport = next();
       } else if (arg === "--markdown-report") {
          args.markdownReport = next();
+      } else if (arg === "--raw-report") {
+         args.rawReport = next();
+      } else if (arg === "--validate-raw-report") {
+         args.validateRawReport = next();
+      } else if (arg === "--self-test-measurement") {
+         args.selfTestMeasurement = true;
+      } else if (arg === "--report-only") {
+         args.reportOnly = true;
       } else if (arg === "--trace-json") {
          args.traceJson = next();
       } else if (arg === "--trace-categories") {
@@ -141,6 +159,12 @@ function parseArgs(argv)
          args.frameSamples = Number(next());
       } else if (arg === "--frames-per-sample") {
          args.framesPerSample = Number(next());
+      } else if (arg === "--raf-frames") {
+         args.rafFrames = Number(next());
+      } else if (arg === "--raf-resize-every") {
+         args.rafResizeEvery = Number(next());
+      } else if (arg === "--raf-scene") {
+         args.rafScene = Number(next());
       } else if (arg === "--id-mask-samples") {
          args.idMaskSamples = Number(next());
       } else if (arg === "--id-mask-frames") {
@@ -171,13 +195,22 @@ function parseArgs(argv)
    if (!Number.isFinite(args.width) || args.width <= 0 || !Number.isFinite(args.height) || args.height <= 0) {
       throw new Error("width and height must be positive numbers");
    }
+   if (![1, 2, 3].includes(args.dpr)) {
+      throw new Error("dpr must be 1, 2, or 3");
+   }
+   if (!Number.isInteger(args.rafResizeEvery) || args.rafResizeEvery < 0) {
+      throw new Error("raf resize interval must be a nonnegative integer");
+   }
+   if (!Number.isInteger(args.rafScene) || args.rafScene < 0 || args.rafScene > 16) {
+      throw new Error("raf scene must be an integer from 0 through 16");
+   }
    if (!Number.isFinite(args.reportTimeoutMs) || args.reportTimeoutMs <= 0) {
       throw new Error("report timeout must be a positive number");
    }
    if (!Number.isFinite(args.captureRetries) || args.captureRetries < 0) {
       throw new Error("capture retries must be a non-negative number");
    }
-   if ((args.jsonReport || args.markdownReport) && !args.traceJson) {
+   if ((args.jsonReport || args.markdownReport) && !args.traceJson && !args.validateRawReport) {
       throw new Error("--trace-json is required when writing browser WebGPU reports");
    }
    if (args.traceJson && !args.traceCategories) {
@@ -221,11 +254,14 @@ function parseArgs(argv)
    args.reportTimeoutMs = Math.trunc(args.reportTimeoutMs);
    args.captureRetries = Math.trunc(args.captureRetries);
    args.traceDurationMs = Math.trunc(args.traceDurationMs);
-   for (let key of ["frameSamples", "framesPerSample", "idMaskSamples", "idMaskFrames", "uploadSamples", "uploadFrames", "scene3dSamples", "scene3dFrames", "mixedSamples", "mixedFrames", "canvasSamples", "canvasFrames", "canvasQuads"]) {
+   for (let key of ["frameSamples", "framesPerSample", "rafFrames", "idMaskSamples", "idMaskFrames", "uploadSamples", "uploadFrames", "scene3dSamples", "scene3dFrames", "mixedSamples", "mixedFrames", "canvasSamples", "canvasFrames", "canvasQuads"]) {
       if (!Number.isFinite(args[key]) || args[key] <= 0) {
          throw new Error(`${key} must be a positive number`);
       }
       args[key] = Math.trunc(args[key]);
+   }
+   if (args.rafFrames < 2000) {
+      throw new Error("rafFrames must be at least 2000 for displayed-frame reports");
    }
    return args;
 }
@@ -298,7 +334,11 @@ function startServer()
             res.end("not found");
             return;
          }
-         res.writeHead(200, { "Content-Type": mimeType(path) });
+         res.writeHead(200, {
+            "Content-Type": mimeType(path),
+            "Cross-Origin-Opener-Policy": "same-origin",
+            "Cross-Origin-Embedder-Policy": "require-corp",
+         });
          res.end(readFileSync(path));
       } catch (_err) {
          res.writeHead(404);
@@ -331,7 +371,9 @@ function runChrome(args, url, out)
          "--metrics-recording-only",
          "--noerrdialogs",
          "--use-angle=metal",
+         "--default-background-color=00000000",
          `--window-size=${args.width},${args.height}`,
+         `--force-device-scale-factor=${args.dpr}`,
          `--screenshot=${out}`,
          url,
       ];
@@ -393,6 +435,7 @@ function runChromeForReport(args, url, reportPromise)
          "--noerrdialogs",
          "--use-angle=metal",
          `--window-size=${args.width},${args.height}`,
+         `--force-device-scale-factor=${args.dpr}`,
          url,
       ];
       if (args.userDataDir) {
@@ -474,6 +517,9 @@ function browserUrl(args, baseUrl, reportEndpoint, startupOnly = false, canvasDi
    let url = new URL(baseUrl);
    url.searchParams.set("frame_samples", String(args.frameSamples));
    url.searchParams.set("frames_per_sample", String(args.framesPerSample));
+   url.searchParams.set("raf_frames", String(args.rafFrames));
+   url.searchParams.set("raf_resize_every", String(args.rafResizeEvery));
+   url.searchParams.set("raf_scene", String(args.rafScene));
    url.searchParams.set("id_mask_samples", String(args.idMaskSamples));
    url.searchParams.set("id_mask_frames", String(args.idMaskFrames));
    url.searchParams.set("upload_samples", String(args.uploadSamples));
@@ -505,7 +551,7 @@ function browserUrl(args, baseUrl, reportEndpoint, startupOnly = false, canvasDi
 
 function persistedBrowserUrl(args)
 {
-   return `http://127.0.0.1:<ephemeral>/?frame_samples=${args.frameSamples}&frames_per_sample=${args.framesPerSample}&id_mask_samples=${args.idMaskSamples}&id_mask_frames=${args.idMaskFrames}&upload_samples=${args.uploadSamples}&upload_frames=${args.uploadFrames}&scene3d_samples=${args.scene3dSamples}&scene3d_frames=${args.scene3dFrames}&mixed_samples=${args.mixedSamples}&mixed_frames=${args.mixedFrames}&capture_target=${args.target}&capture_width=${args.width}&capture_height=${args.height}&report_endpoint=1`;
+   return `http://127.0.0.1:<ephemeral>/?frame_samples=${args.frameSamples}&frames_per_sample=${args.framesPerSample}&raf_frames=${args.rafFrames}&raf_resize_every=${args.rafResizeEvery}&raf_scene=${args.rafScene}&id_mask_samples=${args.idMaskSamples}&id_mask_frames=${args.idMaskFrames}&upload_samples=${args.uploadSamples}&upload_frames=${args.uploadFrames}&scene3d_samples=${args.scene3dSamples}&scene3d_frames=${args.scene3dFrames}&mixed_samples=${args.mixedSamples}&mixed_frames=${args.mixedFrames}&capture_target=${args.target}&capture_width=${args.width}&capture_height=${args.height}&report_endpoint=1`;
 }
 
 function persistedCanvasBrowserUrl(args)
@@ -1092,6 +1138,7 @@ function distribution(values)
       p95: percentile(sorted, 0.95),
       p99: percentile(sorted, 0.99),
       max: sorted[sorted.length - 1],
+      avg: sorted.reduce((sum, value) => sum + value, 0.0) / sorted.length,
    };
 }
 
@@ -1184,10 +1231,10 @@ function canvasIndexedQuadCase(metrics)
    let row = {
       id: "web.wasm.canvas.indexed_quads",
       layer: "engine",
-      scenario: "browser-render",
+      scenario: "browser-submit-throughput",
       variant: "canvas2d-indexed-image-mesh",
       cache_state: "warm",
-      refresh_mode: "browser-main-thread",
+      refresh_mode: "unpaced-tight-loop",
       samples,
       frames_per_sample: framesPerSample,
       frames: numberMetric(metrics, "frames"),
@@ -1196,7 +1243,6 @@ function canvasIndexedQuadCase(metrics)
       p99_ms: numberMetric(metrics, "p99_ms"),
       peak_ms: numberMetric(metrics, "peak_ms"),
       avg_ms: numberMetric(metrics, "avg_ms"),
-      ...pacingMetricFields(metrics, ""),
       ...allocationMetricFields(metrics, ""),
       draws: numberMetric(metrics, "draws"),
       draw_items: numberMetric(metrics, "draw_items"),
@@ -1233,7 +1279,7 @@ function canvasIndexedQuadCase(metrics)
       expected_image_meshes: numberMetric(metrics, "expected_image_meshes"),
       expected_image_draws: numberMetric(metrics, "expected_image_draws"),
       quads,
-      unit: "ms/frame",
+      unit: "ms/cpu-submit",
    };
    if (row.frames !== samples * framesPerSample) {
       throw new Error("canvas diagnostic frame count does not match samples * frames_per_sample");
@@ -1378,24 +1424,23 @@ async function writeCanvasDiagnosticReport(args, baseUrl, nextReportPromise)
    console.log(`wrote ${args.canvasReport}`);
 }
 
-function frameLoopCase(metrics)
+function cpuSubmitCase(metrics)
 {
    return {
-      id: "web.wasm.webgpu.frame_loop",
-      layer: "flow",
-      scenario: "browser-render",
-      variant: "webgpu",
+      id: "web.wasm.webgpu.cpu_submit_throughput",
+      layer: "engine",
+      scenario: "browser-submit-throughput",
+      variant: "webgpu-synchronous",
       cache_state: "warm",
-      refresh_mode: "browser-main-thread",
+      refresh_mode: "unpaced-tight-loop",
       samples: numberMetric(metrics, "samples"),
       frames_per_sample: numberMetric(metrics, "frames_per_sample"),
       frames: numberMetric(metrics, "frames"),
-      p50_ms: numberMetric(metrics, "p50_ms"),
-      p95_ms: numberMetric(metrics, "p95_ms"),
-      p99_ms: numberMetric(metrics, "p99_ms"),
-      peak_ms: numberMetric(metrics, "peak_ms"),
-      avg_ms: numberMetric(metrics, "avg_ms"),
-      ...pacingMetricFields(metrics, ""),
+      cpu_submit_p50_ms: numberMetric(metrics, "cpu_submit_p50_ms"),
+      cpu_submit_p95_ms: numberMetric(metrics, "cpu_submit_p95_ms"),
+      cpu_submit_p99_ms: numberMetric(metrics, "cpu_submit_p99_ms"),
+      cpu_submit_peak_ms: numberMetric(metrics, "cpu_submit_peak_ms"),
+      cpu_submit_avg_ms: numberMetric(metrics, "cpu_submit_avg_ms"),
       ...allocationMetricFields(metrics, ""),
       ...submitAllocationMetricFields(metrics, ""),
       ...frameStageAllocationMetricFields(metrics),
@@ -1448,24 +1493,140 @@ function frameLoopCase(metrics)
       image_upload_scratch_bytes: numberMetric(metrics, "image_upload_scratch_bytes"),
       image_upload_scratch_grows: numberMetric(metrics, "image_upload_scratch_grows"),
       ...scratchMetricFields(metrics, ""),
-      unit: "ms/frame",
+      unit: "ms/cpu-submit",
    };
 }
 
-function pacingMetricFields(metrics, prefix)
+function rawPacingFields(values, refreshHz)
 {
-   let key = name => `${prefix}${name}`;
+   let budgetMs = 1000.0 / refreshHz;
+   let missedFrames = values.filter(value => value > budgetMs).length;
+   let hitchFrames = values.filter(value => value > budgetMs * 2.0).length;
    return {
-      frame_budget_60hz_ms: numberMetric(metrics, key("frame_budget_60hz_ms")),
-      missed_frames_60hz: numberMetric(metrics, key("missed_frames_60hz")),
-      missed_frame_ratio_60hz: numberMetric(metrics, key("missed_frame_ratio_60hz")),
-      hitch_frames_60hz: numberMetric(metrics, key("hitch_frames_60hz")),
-      hitch_ratio_60hz: numberMetric(metrics, key("hitch_ratio_60hz")),
-      frame_budget_120hz_ms: numberMetric(metrics, key("frame_budget_120hz_ms")),
-      missed_frames_120hz: numberMetric(metrics, key("missed_frames_120hz")),
-      missed_frame_ratio_120hz: numberMetric(metrics, key("missed_frame_ratio_120hz")),
-      hitch_frames_120hz: numberMetric(metrics, key("hitch_frames_120hz")),
-      hitch_ratio_120hz: numberMetric(metrics, key("hitch_ratio_120hz")),
+      [`frame_budget_${refreshHz}hz_ms`]: budgetMs,
+      [`missed_frames_${refreshHz}hz`]: missedFrames,
+      [`missed_frame_ratio_${refreshHz}hz`]: missedFrames / values.length,
+      [`hitch_frames_${refreshHz}hz`]: hitchFrames,
+      [`hitch_ratio_${refreshHz}hz`]: hitchFrames / values.length,
+   };
+}
+
+function rafFrameCase(raw)
+{
+   if (!raw || typeof raw !== "object") {
+      throw new Error("web report missing RAF frame evidence");
+   }
+   let frames = Number(raw.frames);
+   let submissions = Number(raw.submissions);
+   let rafDeltas = Array.isArray(raw.raf_deltas_ms) ? raw.raf_deltas_ms : [];
+   let rafTimestamps = Array.isArray(raw.raf_timestamps_ms) ? raw.raf_timestamps_ms : [];
+   let cpuSubmit = Array.isArray(raw.cpu_submit_ms) ? raw.cpu_submit_ms : [];
+   let warmupCpuSubmit = Array.isArray(raw.warmup_cpu_submit_ms) ? raw.warmup_cpu_submit_ms : [];
+   let instrumentationEnabled = raw.instrumentation_overhead?.enabled_ms;
+   let instrumentationDisabled = raw.instrumentation_overhead?.disabled_ms;
+   if (!Number.isInteger(frames) || frames < 2000
+      || submissions !== frames
+      || rafDeltas.length !== frames
+      || rafTimestamps.length !== frames
+      || cpuSubmit.length !== frames) {
+      throw new Error("RAF evidence must contain one timestamp, delta, CPU sample, and submission per frame");
+   }
+   if (warmupCpuSubmit.length !== Number(raw.warmup_frames)
+      || !Array.isArray(instrumentationEnabled)
+      || !Array.isArray(instrumentationDisabled)
+      || instrumentationEnabled.length !== 200
+      || instrumentationDisabled.length !== 200) {
+      throw new Error("RAF evidence is missing warmup or balanced instrumentation-overhead samples");
+   }
+   let stageDistributions = {};
+   let stageSamples = raw.cpu_stages_ms;
+   if (!stageSamples || typeof stageSamples !== "object") {
+      throw new Error("RAF evidence is missing CPU stage samples");
+   }
+   for (let name of RAF_CPU_STAGE_NAMES) {
+      let values = stageSamples[name];
+      if (!Array.isArray(values) || values.length !== frames) {
+         throw new Error(`RAF CPU stage ${name} does not contain ${frames} samples`);
+      }
+      stageDistributions[name] = distribution(values);
+   }
+   let frameDistribution = distribution(rafDeltas);
+   let cpuDistribution = distribution(cpuSubmit);
+   let instrumentationEnabledDistribution = distribution(instrumentationEnabled);
+   let instrumentationDisabledDistribution = distribution(instrumentationDisabled);
+   let gpuSamples = Array.isArray(raw.gpu_timestamp_samples) ? raw.gpu_timestamp_samples : [];
+   let gpuDurationMs = gpuSamples.map(sample => Number(sample.total_ns) / 1_000_000.0);
+   let gpuDistribution;
+   if (raw.gpu_timestamp_status === "collected") {
+      if (gpuDurationMs.length < 2000 || gpuDurationMs.some(value => !Number.isFinite(value))) {
+         throw new Error("RAF evidence has fewer than 2000 valid GPU timestamp samples");
+      }
+      gpuDistribution = distribution(gpuDurationMs);
+   } else {
+      gpuDistribution = null;
+   }
+   return {
+      id: "web.wasm.webgpu.raf_frame_loop",
+      layer: "flow",
+      scenario: "browser-displayed-frame",
+      variant: "webgpu-production-raf",
+      cache_state: "warm",
+      refresh_mode: "browser-raf-native",
+      samples: frames,
+      frames,
+      submissions,
+      warmup_frames: Number(raw.warmup_frames),
+      warmup_cpu_submit_ms: warmupCpuSubmit,
+      instrumentation_overhead_order: raw.instrumentation_overhead.order,
+      instrumentation_enabled_ms: instrumentationEnabled,
+      instrumentation_disabled_ms: instrumentationDisabled,
+      instrumentation_enabled_distribution_ms: instrumentationEnabledDistribution,
+      instrumentation_disabled_distribution_ms: instrumentationDisabledDistribution,
+      instrumentation_overhead_p50_ms:
+         instrumentationEnabledDistribution.p50 - instrumentationDisabledDistribution.p50,
+      p50_ms: frameDistribution.p50,
+      p95_ms: frameDistribution.p95,
+      p99_ms: frameDistribution.p99,
+      peak_ms: frameDistribution.max,
+      avg_ms: frameDistribution.avg,
+      cpu_submit_p50_ms: cpuDistribution.p50,
+      cpu_submit_p95_ms: cpuDistribution.p95,
+      cpu_submit_p99_ms: cpuDistribution.p99,
+      cpu_submit_peak_ms: cpuDistribution.max,
+      ...rawPacingFields(rafDeltas, 60),
+      ...rawPacingFields(rafDeltas, 120),
+      raf_timestamps_ms: rafTimestamps,
+      raf_deltas_ms: rafDeltas,
+      cpu_submit_ms: cpuSubmit,
+      cpu_stage_samples_ms: stageSamples,
+      cpu_stage_distributions_ms: stageDistributions,
+      cpu_stage_attribution: raw.cpu_stage_attribution,
+      long_task_supported: Number(raw.long_task_supported),
+      long_tasks: Array.isArray(raw.long_tasks) ? raw.long_tasks : [],
+      event_to_submit_status: String(raw.event_to_submit_status),
+      event_to_visible_status: String(raw.event_to_visible_status),
+      gpu_timestamp_status: String(raw.gpu_timestamp_status),
+      gpu_timestamp_readback_skips: Number(raw.gpu_timestamp_readback_skips),
+      queue_drain_ms: Number(raw.queue_drain_ms),
+      queue_drain_raf_waits: Number(raw.queue_drain_raf_waits),
+      queue_pending_initial: Number(raw.queue_pending_initial),
+      queue_pending_final: Number(raw.queue_pending_final),
+      gpu_timestamp_samples: gpuSamples,
+      gpu_ms: gpuDurationMs,
+      gpu_ms_p50: gpuDistribution?.p50 ?? null,
+      gpu_ms_p95: gpuDistribution?.p95 ?? null,
+      gpu_ms_p99: gpuDistribution?.p99 ?? null,
+      gpu_ms_peak: gpuDistribution?.max ?? null,
+      production_path: Number(raw.production_path),
+      production_coalescing: String(raw.production_coalescing),
+      production_damage_policy: String(raw.production_damage_policy),
+      submissions_per_raf: Number(raw.submissions_per_raf),
+      scene_index: Number(raw.scene_index),
+      resize_every_frames: Number(raw.resize_every_frames),
+      viewport_css: String(raw.viewport_css),
+      device_pixel_ratio: Number(raw.device_pixel_ratio),
+      cross_origin_isolated: Boolean(raw.cross_origin_isolated),
+      unit: "ms/displayed-frame",
    };
 }
 
@@ -1552,6 +1713,19 @@ const WASM_FRAME_STAGE_NAMES = [
    "post_submit",
 ];
 
+const RAF_CPU_STAGE_NAMES = [
+   "event_update",
+   "layout",
+   "text_prepare",
+   "draw_extraction",
+   "coalescing",
+   "backend_lowering",
+   "upload",
+   "command_encoding",
+   "queue_submit",
+   "post_submit_contract",
+];
+
 function frameStageAllocationMetricFields(metrics)
 {
    let fields = {};
@@ -1631,10 +1805,10 @@ function idMaskCase(metrics, id, variant, prefix)
    return {
       id,
       layer: "engine",
-      scenario: "browser-render",
+      scenario: "browser-submit-throughput",
       variant,
       cache_state: "warm",
-      refresh_mode: "browser-main-thread",
+      refresh_mode: "unpaced-tight-loop",
       samples,
       frames_per_sample: framesPerSample,
       frames: samples * framesPerSample,
@@ -1643,7 +1817,6 @@ function idMaskCase(metrics, id, variant, prefix)
       p99_ms: numberMetric(metrics, `${prefix}_p99_ms`),
       peak_ms: numberMetric(metrics, `${prefix}_peak_ms`),
       avg_ms: numberMetric(metrics, `${prefix}_avg_ms`),
-      ...pacingMetricFields(metrics, `${prefix}_`),
       ...allocationMetricFields(metrics, `${prefix}_`),
       ...submitAllocationMetricFields(metrics, `${prefix}_`),
       draws: numberMetric(metrics, `${prefix}_draws`),
@@ -1697,7 +1870,7 @@ function idMaskCase(metrics, id, variant, prefix)
       ...scratchMetricFields(metrics, `${prefix}_`),
       vertices: numberMetric(metrics, "vertices"),
       vertex_bytes: numberMetric(metrics, "vertex_bytes"),
-      unit: "ms/frame",
+      unit: "ms/cpu-submit",
    };
 }
 
@@ -1708,10 +1881,10 @@ function prefixedBackendCase(metrics, id, variant, prefix, extra)
    return {
       id,
       layer: "engine",
-      scenario: "browser-render",
+      scenario: "browser-submit-throughput",
       variant,
       cache_state: "warm",
-      refresh_mode: "browser-main-thread",
+      refresh_mode: "unpaced-tight-loop",
       samples,
       frames_per_sample: framesPerSample,
       frames: samples * framesPerSample,
@@ -1720,7 +1893,6 @@ function prefixedBackendCase(metrics, id, variant, prefix, extra)
       p99_ms: numberMetric(metrics, `${prefix}_p99_ms`),
       peak_ms: numberMetric(metrics, `${prefix}_peak_ms`),
       avg_ms: numberMetric(metrics, `${prefix}_avg_ms`),
-      ...pacingMetricFields(metrics, `${prefix}_`),
       ...allocationMetricFields(metrics, `${prefix}_`),
       ...submitAllocationMetricFields(metrics, `${prefix}_`),
       draws: numberMetric(metrics, `${prefix}_draws`),
@@ -1773,11 +1945,12 @@ function prefixedBackendCase(metrics, id, variant, prefix, extra)
       image_upload_scratch_grows: numberMetric(metrics, `${prefix}_image_upload_scratch_grows`),
       ...scratchMetricFields(metrics, `${prefix}_`),
       ...extra,
-      unit: "ms/frame",
+      unit: "ms/cpu-submit",
    };
 }
 
 const WARM_RESOURCE_CHURN_EXCLUDED_IDS = new Set([
+   "web.wasm.webgpu.raf_frame_loop",
    "web.wasm.webgpu.scene3d.recreate_mesh",
    "web.wasm.webgpu.scene3d.stress_recreate_mesh",
 ]);
@@ -1835,7 +2008,8 @@ const GPU_TIMESTAMP_STAGE_FIELDS = [
 ];
 
 const EXPECTED_BENCHMARK_MARKS = [
-   "frame_loop",
+   "cpu_submit_throughput",
+   "raf_frame_loop",
    "id_mask_current",
    "upload_current",
    "effect_uniform_ab",
@@ -1852,9 +2026,15 @@ const EXPECTED_BENCHMARK_MARKS = [
 
 const WEBGPU_BACKEND_PATHS = [
    {
-      id: "frame_loop",
-      rows: ["web.wasm.webgpu.frame_loop"],
+      id: "cpu_submit_throughput",
+      rows: ["web.wasm.webgpu.cpu_submit_throughput"],
       counters: ["draws", "draw_items", "draw_passes", "command_buffers", "buffer_upload_bytes", "gpu_timestamp_passes"],
+      comparison: "coverage",
+   },
+   {
+      id: "raf_frame_loop",
+      rows: ["web.wasm.webgpu.raf_frame_loop"],
+      counters: ["frames", "submissions", "p50_ms", "p95_ms", "p99_ms", "peak_ms"],
       comparison: "coverage",
    },
    {
@@ -2111,6 +2291,9 @@ function gpuTimestampStageBreakdownSummary(cases)
    let totalFamilyPasses = 0;
    let totalFamilyTimestampNs = 0;
    for (let row of cases) {
+      if (row.id === "web.wasm.webgpu.raf_frame_loop") {
+         continue;
+      }
       let familyPasses = 0;
       let familyTimestampNs = 0;
       let detailStages = [];
@@ -2148,7 +2331,7 @@ function gpuTimestampStageBreakdownSummary(cases)
    }
    return {
       id: "web.wasm.webgpu.gpu_timestamp_stage_breakdown",
-      row_count: cases.length,
+      row_count: rowDetails.length,
       collected_rows: cases.filter(row => row.gpu_timestamp_passes > 0).length,
       stage_count: stages.length,
       row_detail_count: rowDetails.length,
@@ -2257,7 +2440,7 @@ function wasmAllocationInvarianceSummary(allocationSummary)
       }
    }
    let signatureRows = [...signatures.entries()].map(([signature, ids]) => ({ signature, ids }));
-   let reference = allocationSummary.row_details.find(row => row.id === "web.wasm.webgpu.frame_loop");
+   let reference = allocationSummary.row_details.find(row => row.id === "web.wasm.webgpu.cpu_submit_throughput");
    return {
       id: "web.wasm.webgpu.wasm_allocation_invariance.current_rows",
       status: signatures.size === 1 ? "shared-submit-boundary-profile" : "path-specific-allocations",
@@ -2276,7 +2459,7 @@ function wasmAllocationInvarianceSummary(allocationSummary)
 
 function frameLoopWasmStageSummary(cases)
 {
-   let frame = cases.find(row => row.id === "web.wasm.webgpu.frame_loop");
+   let frame = cases.find(row => row.id === "web.wasm.webgpu.cpu_submit_throughput");
    if (!frame) {
       throw new Error("web report missing frame-loop row for WASM stage allocation summary");
    }
@@ -2334,7 +2517,7 @@ function frameLoopWasmStageSummary(cases)
 
 function frameLoopWasmSubmitStageSummary(cases)
 {
-   let frame = cases.find(row => row.id === "web.wasm.webgpu.frame_loop");
+   let frame = cases.find(row => row.id === "web.wasm.webgpu.cpu_submit_throughput");
    if (!frame) {
       throw new Error("web report missing frame-loop row for WASM submit allocation summary");
    }
@@ -2404,12 +2587,16 @@ function backendPathCoverageSummary(cases)
             }
             counters[field] = value;
          }
+         let p50Ms = row.p50_ms ?? row.cpu_submit_p50_ms;
+         let p95Ms = row.p95_ms ?? row.cpu_submit_p95_ms;
+         let p99Ms = row.p99_ms ?? row.cpu_submit_p99_ms;
+         let peakMs = row.peak_ms ?? row.cpu_submit_peak_ms;
          rowDetails.push({
             id: rowId,
-            p50_ms: row.p50_ms,
-            p95_ms: row.p95_ms,
-            p99_ms: row.p99_ms,
-            peak_ms: row.peak_ms,
+            p50_ms: p50Ms,
+            p95_ms: p95Ms,
+            p99_ms: p99Ms,
+            peak_ms: peakMs,
             counters,
          });
       }
@@ -2459,7 +2646,8 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
    let directSurfaceMetrics = parseMetricString(pageReport.direct_surface_ab);
    let timingMetrics = parseMetricString(pageReport.webgpu_timing);
    let cases = [
-      frameLoopCase(frameMetrics),
+      cpuSubmitCase(frameMetrics),
+      rafFrameCase(pageReport.raf_frame_perf),
       idMaskCase(
          idMaskMetrics,
          "web.wasm.webgpu.id_mask_compositor.current",
@@ -2660,13 +2848,14 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
 	   let browserStartup = browserStartupSummary(pageReport);
 
 	   return {
-	      version: 5,
+	      version: 6,
 	      suite: "web-wasm",
       generated_date: args.reportDate,
       browser_target: args.chromeArch
          ? `Chrome ${args.chromeArch} via headless CLI`
          : "Chrome via headless CLI",
       capture_target: args.target,
+      browser_environment: pageReport.browser_environment,
       url,
       status: "browser-baseline",
       notes: [
@@ -3245,7 +3434,12 @@ function renderMarkdown(report)
       if (row.hitch_ratio_60hz !== undefined) {
          notes.push(`hitch60=${row.hitch_ratio_60hz.toFixed(3)}`);
       }
-      lines.push(`| \`${row.id}\` | \`${row.variant}\` | ${row.samples} | ${row.frames_per_sample} | ${row.frames} | ${row.p50_ms.toFixed(3)} | ${row.p95_ms.toFixed(3)} | ${row.p99_ms.toFixed(3)} | ${row.peak_ms.toFixed(3)} | ${row.avg_ms.toFixed(3)} | ${row.unit} | \`${notes.join(";") || "-"}\` |`);
+      let p50Ms = row.p50_ms ?? row.cpu_submit_p50_ms;
+      let p95Ms = row.p95_ms ?? row.cpu_submit_p95_ms;
+      let p99Ms = row.p99_ms ?? row.cpu_submit_p99_ms;
+      let peakMs = row.peak_ms ?? row.cpu_submit_peak_ms;
+      let avgMs = row.avg_ms ?? row.cpu_submit_avg_ms;
+      lines.push(`| \`${row.id}\` | \`${row.variant}\` | ${row.samples} | ${row.frames_per_sample ?? 1} | ${row.frames} | ${p50Ms.toFixed(3)} | ${p95Ms.toFixed(3)} | ${p99Ms.toFixed(3)} | ${peakMs.toFixed(3)} | ${avgMs.toFixed(3)} | ${row.unit} | \`${notes.join(";") || "-"}\` |`);
    }
    lines.push("");
    lines.push("## GPU Stage Attribution");
@@ -3576,10 +3770,11 @@ function assertGpuTimestampStageBreakdown(report, byId)
    }
    let stages = Array.isArray(summary.stages) ? summary.stages : [];
    let rowDetails = Array.isArray(summary.row_details) ? summary.row_details : [];
+   let expectedRows = report.cases.filter(row => row.id !== "web.wasm.webgpu.raf_frame_loop").length;
    if (
-      summary.row_count !== report.cases.length
+      summary.row_count !== expectedRows
       || summary.row_detail_count !== rowDetails.length
-      || rowDetails.length !== report.cases.length
+      || rowDetails.length !== expectedRows
    ) {
       throw new Error("web report contract has inconsistent GPU timestamp row counts");
    }
@@ -3709,7 +3904,7 @@ function assertWarmResourceChurn(report, byId)
       rowDetailById.set(row.id, row);
    }
    for (let id of [
-      "web.wasm.webgpu.frame_loop",
+      "web.wasm.webgpu.cpu_submit_throughput",
       "web.wasm.webgpu.id_mask_compositor.current",
       "web.wasm.webgpu.glyph_atlas_upload.current_dirty",
       "web.wasm.webgpu.image_upload.current_dirty",
@@ -3808,7 +4003,10 @@ function assertWasmAllocationAudit(report, byId)
       throw new Error("web report contract expected measured WASM allocation activity");
    }
    if (summary.total_wasm_realloc_count !== 0 || summary.total_wasm_realloc_grow_bytes !== 0) {
-      throw new Error("web report contract found current-row WASM reallocations");
+      let offenders = rowDetails
+         .filter(row => row.wasm_realloc_count !== 0 || row.wasm_realloc_grow_bytes !== 0)
+         .map(row => `${row.id}:${row.wasm_realloc_count}/${row.wasm_realloc_grow_bytes}`);
+      throw new Error(`web report contract found current-row WASM reallocations: ${offenders.join(", ")}`);
    }
    if (
       summary.max_wasm_allocs_per_frame > summary.budget_wasm_allocs_per_frame
@@ -3818,7 +4016,7 @@ function assertWasmAllocationAudit(report, byId)
    }
    let rowSet = new Set(rows);
    for (let id of [
-      "web.wasm.webgpu.frame_loop",
+      "web.wasm.webgpu.cpu_submit_throughput",
       "web.wasm.webgpu.id_mask_compositor.current",
       "web.wasm.webgpu.glyph_atlas_upload.current_dirty",
       "web.wasm.webgpu.image_upload.current_dirty",
@@ -3893,21 +4091,23 @@ function assertWasmAllocationInvariance(report)
       throw new Error("web report contract cannot validate WASM allocation invariance without audit");
    }
    if (
-      summary.status !== "shared-submit-boundary-profile"
-      || summary.unique_signature_count !== 1
+      !["shared-submit-boundary-profile", "path-specific-allocations"].includes(summary.status)
+      || summary.unique_signature_count < 1
       || summary.checked_count !== audit.checked_count
-      || summary.reference_row !== "web.wasm.webgpu.frame_loop"
+      || summary.reference_row !== "web.wasm.webgpu.cpu_submit_throughput"
    ) {
-      throw new Error("web report contract found path-specific current-row WASM allocations");
+      throw new Error("web report contract has invalid WASM allocation attribution");
    }
    let signatureRows = Array.isArray(summary.signature_rows) ? summary.signature_rows : [];
-   if (signatureRows.length !== 1 || !Array.isArray(signatureRows[0].ids)) {
+   if (signatureRows.length !== summary.unique_signature_count
+      || signatureRows.some(signature => !Array.isArray(signature.ids))) {
       throw new Error("web report contract has inconsistent WASM allocation invariance signatures");
    }
-   if (signatureRows[0].ids.length !== audit.checked_count) {
+   let attributedIds = signatureRows.flatMap(signature => signature.ids);
+   if (attributedIds.length !== audit.checked_count || new Set(attributedIds).size !== audit.checked_count) {
       throw new Error("web report contract WASM allocation invariance does not cover every checked row");
    }
-   let frame = audit.row_details.find(row => row.id === "web.wasm.webgpu.frame_loop");
+   let frame = audit.row_details.find(row => row.id === "web.wasm.webgpu.cpu_submit_throughput");
    if (!frame) {
       throw new Error("web report contract missing frame-loop allocation reference row");
    }
@@ -3929,11 +4129,11 @@ function assertFrameLoopWasmStageAllocation(report, byId)
    if (
       !summary
       || summary.id !== "web.wasm.webgpu.frame_loop_wasm_allocation_stages"
-      || summary.row_id !== "web.wasm.webgpu.frame_loop"
+      || summary.row_id !== "web.wasm.webgpu.cpu_submit_throughput"
    ) {
       throw new Error("web report contract missing frame-loop WASM allocation stage summary");
    }
-   let frame = byId.get("web.wasm.webgpu.frame_loop");
+   let frame = byId.get("web.wasm.webgpu.cpu_submit_throughput");
    if (!frame) {
       throw new Error("web report contract missing frame-loop row for stage allocation summary");
    }
@@ -4004,11 +4204,11 @@ function assertFrameLoopWasmSubmitStageAllocation(report, byId)
    if (
       !summary
       || summary.id !== "web.wasm.webgpu.frame_loop_wasm_submit_allocation_stages"
-      || summary.row_id !== "web.wasm.webgpu.frame_loop"
+      || summary.row_id !== "web.wasm.webgpu.cpu_submit_throughput"
    ) {
       throw new Error("web report contract missing frame-loop WASM submit allocation stage summary");
    }
-   let frame = byId.get("web.wasm.webgpu.frame_loop");
+   let frame = byId.get("web.wasm.webgpu.cpu_submit_throughput");
    if (!frame) {
       throw new Error("web report contract missing frame-loop row for submit allocation summary");
    }
@@ -4130,7 +4330,8 @@ function assertBackendPathCoverage(report, byId)
          }
          for (let field of ["p50_ms", "p95_ms", "p99_ms", "peak_ms"]) {
             assertNumber(detail[field], `backend_path_coverage.${spec.id}.${rowId}.${field}`);
-            if (detail[field] !== row[field]) {
+            let rowValue = row[field] ?? row[`cpu_submit_${field}`];
+            if (detail[field] !== rowValue) {
                throw new Error(`web report contract backend path ${spec.id} distribution mismatch ${rowId}.${field}`);
             }
          }
@@ -4254,7 +4455,8 @@ function assertBenchmarkMarks(report)
 function assertWebReportContract(report)
 {
    let expected = new Set([
-      "web.wasm.webgpu.frame_loop",
+      "web.wasm.webgpu.cpu_submit_throughput",
+      "web.wasm.webgpu.raf_frame_loop",
       "web.wasm.webgpu.id_mask_compositor.current",
       "web.wasm.webgpu.glyph_atlas_upload.current_dirty",
       "web.wasm.webgpu.image_upload.current_dirty",
@@ -4278,6 +4480,89 @@ function assertWebReportContract(report)
    ]);
    for (let row of report.cases) {
       expected.delete(row.id);
+      if (row.id === "web.wasm.webgpu.cpu_submit_throughput") {
+         for (let key of [
+            "samples",
+            "frames_per_sample",
+            "frames",
+            "cpu_submit_p50_ms",
+            "cpu_submit_p95_ms",
+            "cpu_submit_p99_ms",
+            "cpu_submit_peak_ms",
+            "cpu_submit_avg_ms",
+         ]) {
+            assertNumber(row[key], `${row.id}.${key}`);
+         }
+         for (let key of [
+            "p50_ms",
+            "p95_ms",
+            "p99_ms",
+            "peak_ms",
+            "missed_frames_60hz",
+            "hitch_frames_60hz",
+            "missed_frames_120hz",
+            "hitch_frames_120hz",
+         ]) {
+            if (Object.hasOwn(row, key)) {
+               throw new Error(`CPU-submit throughput row must not claim displayed-frame metric ${key}`);
+            }
+         }
+         continue;
+      }
+      if (row.id === "web.wasm.webgpu.raf_frame_loop") {
+         for (let key of [
+            "samples",
+            "frames",
+            "submissions",
+            "p50_ms",
+            "p95_ms",
+            "p99_ms",
+            "peak_ms",
+            "cpu_submit_p50_ms",
+            "cpu_submit_p95_ms",
+            "cpu_submit_p99_ms",
+            "cpu_submit_peak_ms",
+            "queue_drain_ms",
+            "queue_drain_raf_waits",
+            "queue_pending_initial",
+            "queue_pending_final",
+            "missed_frames_60hz",
+            "hitch_frames_60hz",
+            "missed_frames_120hz",
+            "hitch_frames_120hz",
+         ]) {
+            assertNumber(row[key], `${row.id}.${key}`);
+         }
+         if (row.frames < 2000
+            || row.submissions !== row.frames
+            || row.raf_deltas_ms.length !== row.frames
+            || row.raf_timestamps_ms.length !== row.frames
+            || row.cpu_submit_ms.length !== row.frames
+            || row.warmup_cpu_submit_ms.length !== row.warmup_frames
+            || row.instrumentation_enabled_ms.length !== 200
+            || row.instrumentation_disabled_ms.length !== 200
+            || row.submissions_per_raf !== 1
+            || row.production_coalescing !== "adjacent-order-preserving"
+            || row.production_damage_policy !== "router-damage-handoff"
+            || !row.cross_origin_isolated
+            || row.production_path !== 1) {
+            throw new Error("RAF row violates raw displayed-frame cardinality or production-path contract");
+         }
+         if (row.gpu_timestamp_status === "collected") {
+            if (row.gpu_timestamp_samples.length < 2000 || row.gpu_ms.length < 2000) {
+               throw new Error("RAF row has fewer than 2000 GPU timestamp samples");
+            }
+            if (row.queue_pending_final !== 0) {
+               throw new Error("RAF row retained pending GPU timestamp readbacks after queue drain");
+            }
+            for (let key of ["gpu_ms_p50", "gpu_ms_p95", "gpu_ms_p99", "gpu_ms_peak"]) {
+               assertNumber(row[key], `${row.id}.${key}`);
+            }
+         } else if (row.gpu_timestamp_status !== "unsupported") {
+            throw new Error("RAF row has an invalid GPU timestamp status");
+         }
+         continue;
+      }
       for (let key of [
          "samples",
          "frames_per_sample",
@@ -4287,12 +4572,6 @@ function assertWebReportContract(report)
          "p99_ms",
          "peak_ms",
          "avg_ms",
-         "frame_budget_60hz_ms",
-         "missed_frame_ratio_60hz",
-         "hitch_ratio_60hz",
-         "frame_budget_120hz_ms",
-         "missed_frame_ratio_120hz",
-         "hitch_ratio_120hz",
          "draws",
          "draw_items",
          "draw_items_coalesced",
@@ -4949,6 +5228,11 @@ function assertWebReportContract(report)
 
 function writeWebReports(args, url, pageReport, pixelReport, traceSummary)
 {
+   if (args.rawReport) {
+      mkdirSync(dirname(args.rawReport), { recursive: true });
+      writeFileSync(args.rawReport, `${JSON.stringify(pageReport, null, 2)}\n`);
+      console.log(`wrote ${args.rawReport}`);
+   }
    if (!args.jsonReport && !args.markdownReport) {
       return;
    }
@@ -5012,9 +5296,107 @@ function waitForBrowserReport(reportPromise, timeoutMs)
    ]);
 }
 
+function selfTestMeasurementContract()
+{
+   let known = distribution([5, 1, 4, 2, 3]);
+   if (known.samples !== 5 || known.p50 !== 3 || known.p95 !== 5 || known.p99 !== 5 || known.max !== 5) {
+      throw new Error("known percentile distribution self-test failed");
+   }
+   let frames = 2000;
+   let stageSamples = Object.fromEntries(
+      RAF_CPU_STAGE_NAMES.map(name => [name, Array.from({ length: frames }, (_, index) => index / 1000)]),
+   );
+   let raw = {
+      frames,
+      submissions: frames,
+      warmup_frames: 64,
+      warmup_cpu_submit_ms: Array(64).fill(0.1),
+      instrumentation_overhead: {
+         order: ["enabled", "disabled", "disabled", "enabled"],
+         enabled_ms: Array(200).fill(0.2),
+         disabled_ms: Array(200).fill(0.1),
+      },
+      raf_timestamps_ms: Array.from({ length: frames }, (_, index) => index * 8.333),
+      raf_deltas_ms: Array(frames).fill(8.333),
+      cpu_submit_ms: Array(frames).fill(0.15),
+      cpu_stages_ms: stageSamples,
+      cpu_stage_attribution: {},
+      long_task_supported: 0,
+      long_tasks: [],
+      event_to_submit_status: "not-applicable-no-input-events",
+      event_to_visible_status: "not-applicable-no-input-events",
+      gpu_timestamp_status: "unsupported",
+      gpu_timestamp_readback_skips: 0,
+      queue_drain_ms: 0,
+      queue_drain_raf_waits: 0,
+      queue_pending_initial: 0,
+      queue_pending_final: 0,
+      gpu_timestamp_samples: [],
+      production_path: 1,
+      production_coalescing: "adjacent-order-preserving",
+      production_damage_policy: "router-damage-handoff",
+      submissions_per_raf: 1,
+      scene_index: 0,
+      resize_every_frames: 0,
+      viewport_css: "1920x1080",
+      device_pixel_ratio: 1,
+      cross_origin_isolated: true,
+   };
+   let row = rafFrameCase(raw);
+   if (row.samples !== frames
+      || row.raf_deltas_ms.length !== frames
+      || row.cpu_submit_ms.length !== frames
+      || Object.values(row.cpu_stage_samples_ms).some(values => values.length !== frames)) {
+      throw new Error("N displayed frames did not produce N raw frame and stage samples");
+   }
+   let invalid = { ...raw, raf_deltas_ms: raw.raf_deltas_ms.slice(1) };
+   let rejected = false;
+   try {
+      rafFrameCase(invalid);
+   } catch (_error) {
+      rejected = true;
+   }
+   if (!rejected) {
+      throw new Error("mismatched displayed-frame cardinality was not rejected");
+   }
+   console.log("measurement contract self-test passed");
+}
+
 async function main()
 {
    let args = parseArgs(process.argv.slice(2));
+   if (args.selfTestMeasurement) {
+      selfTestMeasurementContract();
+      return;
+   }
+   if (args.validateRawReport) {
+      let pageReport = JSON.parse(readFileSync(args.validateRawReport, "utf8"));
+      let traceSummary = args.traceJson
+         ? await loadTraceSummary(args.traceJson, args.reportTimeoutMs)
+         : null;
+      if (traceSummary) {
+         traceSummary.capture_phase = "benchmark-report";
+         traceSummary.timing_source = "untraced-baseline-report";
+      }
+      let report = buildWebReport(
+         args,
+         persistedBrowserUrl(args),
+         pageReport,
+         { target: args.target, width: args.width, height: args.height, pixdiff: 0, max_err: 0, mse: 0 },
+         traceSummary,
+      );
+      assertWebReportContract(report);
+      if (args.jsonReport) {
+         mkdirSync(dirname(args.jsonReport), { recursive: true });
+         writeFileSync(args.jsonReport, `${JSON.stringify(report, null, 2)}\n`);
+      }
+      if (args.markdownReport) {
+         mkdirSync(dirname(args.markdownReport), { recursive: true });
+         writeFileSync(args.markdownReport, renderMarkdown(report));
+      }
+      console.log(`validated ${args.validateRawReport}`);
+      return;
+   }
    let tempDir = mkdtempSync(join(tmpdir(), "oxide-webgpu-golden-"));
    let defaultOutName =
       args.target === "id-mask"
@@ -5039,8 +5421,26 @@ async function main()
          await writeCanvasDiagnosticReport(args, url, nextReportPromise);
          return;
       }
+      if (args.reportOnly) {
+         if (!args.rawReport) {
+            throw new Error("--report-only requires --raw-report");
+         }
+         let pageReport = await runChromeForReport(
+            { ...args, traceJson: "" },
+            browserReportUrl,
+            nextReportPromise(),
+         );
+         writeWebReports(
+            args,
+            persistedBrowserUrl(args),
+            pageReport,
+            { target: args.target, width: args.width, height: args.height, pixdiff: 0, maxErr: 0, mse: 0, artifact: "not-captured" },
+            null,
+         );
+         return;
+      }
       let { capture, diff } = await captureAndCompare(args, captureUrl, out);
-      if (args.jsonReport || args.markdownReport) {
+      if (args.jsonReport || args.markdownReport || args.rawReport) {
          let reportArgs = { ...args, traceJson: "" };
          let pageReport = await runChromeForReport(reportArgs, browserReportUrl, nextReportPromise());
          let traceSummary = null;

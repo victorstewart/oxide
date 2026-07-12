@@ -5,13 +5,13 @@ use super::{
 };
 use crate::image_slots::ImageSlots;
 use crate::{id_mask_compositor, neon_marker, scene3d};
-use crate::{NormalizedIndexMode, WebRendererStats};
+use crate::{NormalizedIndexMode, WebGpuCpuSubmitTimingSample, WebGpuTimestampSample, WebRendererStats};
 use crate::solid_color::resolve_vertex_color;
 use js_sys::Reflect;
 use oxide_renderer_api as api;
 use oxide_wasm_alloc_counter::AllocationSnapshot;
 use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::HtmlCanvasElement;
@@ -38,6 +38,24 @@ const TIMESTAMP_MAX_PASSES: u32 = 64;
 const TIMESTAMP_QUERY_COUNT: u32 = TIMESTAMP_MAX_PASSES * 2;
 const TIMESTAMP_READBACK_SLOTS: usize = 48;
 const TIMESTAMP_READBACK_INTERVAL_FRAMES: u64 = 8;
+const TIMESTAMP_COMPLETED_CAPACITY: usize = 4_096;
+
+fn cpu_submit_timing_begin(enabled: bool) -> Option<f64> {
+    enabled.then(|| {
+        web_sys::window()
+            .and_then(|window| window.performance())
+            .map_or(0.0, |performance| performance.now())
+    })
+}
+
+fn cpu_submit_timing_end(output: &mut f64, before_ms: Option<f64>) {
+    if let Some(before_ms) = before_ms {
+        let after_ms = web_sys::window()
+            .and_then(|window| window.performance())
+            .map_or(before_ms, |performance| performance.now());
+        *output = (after_ms - before_ms).max(0.0);
+    }
+}
 
 #[derive(Clone, Copy)]
 struct GpuVertex {
@@ -307,6 +325,8 @@ struct WebGpuTimestampQueries {
     current_query_count: u32,
     timestamp_period_ns: f64,
     latest: TimestampSummary,
+    completed: Option<Box<VecDeque<WebGpuTimestampSample>>>,
+    readback_interval_frames: u64,
     readback_skips: u32,
 }
 
@@ -335,6 +355,24 @@ impl TimestampSummary {
                 self.id_mask_compositor_ns = self.id_mask_compositor_ns.saturating_add(ns);
             }
             TimestampPassFamily::Present => self.present_ns = self.present_ns.saturating_add(ns),
+        }
+    }
+
+    fn sample(self) -> WebGpuTimestampSample {
+        WebGpuTimestampSample {
+            frame_id: self.frame_id,
+            passes: self.passes,
+            total_ns: self.total_ns,
+            clear_ns: self.clear_ns,
+            draw_ns: self.draw_ns,
+            scene3d_ns: self.scene3d_ns,
+            scene3d_overlay_ns: self.scene3d_overlay_ns,
+            id_mask_raster_ns: self.id_mask_raster_ns,
+            id_mask_field_seed_ns: self.id_mask_field_seed_ns,
+            id_mask_field_jump_ns: self.id_mask_field_jump_ns,
+            id_mask_compositor_ns: self.id_mask_compositor_ns,
+            present_ns: self.present_ns,
+            max_pass_ns: self.max_pass_ns,
         }
     }
 }
@@ -378,6 +416,8 @@ impl WebGpuTimestampQueries {
             current_query_count: 0,
             timestamp_period_ns,
             latest: TimestampSummary::default(),
+            completed: None,
+            readback_interval_frames: TIMESTAMP_READBACK_INTERVAL_FRAMES,
             readback_skips: 0,
         }
     }
@@ -407,7 +447,7 @@ impl WebGpuTimestampQueries {
             return None;
         }
         self.harvest();
-        if frame_id % TIMESTAMP_READBACK_INTERVAL_FRAMES != 0 {
+        if frame_id % self.readback_interval_frames != 0 {
             return None;
         }
         let Some(slot_index) = self.next_idle_slot() else {
@@ -475,6 +515,12 @@ impl WebGpuTimestampQueries {
                 }
                 drop(view);
                 self.latest = summary;
+                if let Some(completed) = &mut self.completed {
+                    if completed.len() == TIMESTAMP_COMPLETED_CAPACITY {
+                        completed.pop_front();
+                    }
+                    completed.push_back(summary.sample());
+                }
             }
             slot.buffer.unmap();
             slot.state = TimestampReadbackState::Idle;
@@ -489,6 +535,24 @@ impl WebGpuTimestampQueries {
             .filter(|slot| slot.state == TimestampReadbackState::Pending)
             .count()
             .min(u32::MAX as usize) as u32
+    }
+
+    fn set_readback_interval_for_benchmark(&mut self, frames: u64) {
+        self.readback_interval_frames = frames.max(1);
+    }
+
+    fn clear_completed(&mut self) {
+        self.completed
+            .get_or_insert_with(|| Box::new(VecDeque::with_capacity(TIMESTAMP_COMPLETED_CAPACITY)))
+            .clear();
+    }
+
+    fn drain_completed_into(&mut self, output: &mut Vec<WebGpuTimestampSample>) {
+        output.clear();
+        if let Some(completed) = &mut self.completed {
+            output.reserve(completed.len());
+            output.extend(completed.drain(..));
+        }
     }
 
     fn next_idle_slot(&self) -> Option<usize> {
@@ -574,6 +638,30 @@ impl BrowserRenderer {
     #[must_use]
     pub fn pending_timestamp_readbacks(&self) -> u32 {
         self.inner.pending_timestamp_readbacks()
+    }
+
+    pub fn set_timestamp_readback_interval_for_benchmark(&mut self, frames: u64) {
+        self.inner.set_timestamp_readback_interval_for_benchmark(frames);
+    }
+
+    pub fn clear_completed_timestamp_samples(&mut self) {
+        self.inner.clear_completed_timestamp_samples();
+    }
+
+    pub fn drain_completed_timestamp_samples_into(
+        &mut self,
+        output: &mut Vec<WebGpuTimestampSample>,
+    ) {
+        self.inner.drain_completed_timestamp_samples_into(output);
+    }
+
+    pub fn set_cpu_submit_timing_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.inner.set_cpu_submit_timing_enabled_for_benchmark(enabled);
+    }
+
+    #[must_use]
+    pub fn last_cpu_submit_timing(&self) -> WebGpuCpuSubmitTimingSample {
+        self.inner.last_cpu_submit_timing()
     }
 
     pub fn set_draw_state_cache_enabled_for_benchmark(&mut self, enabled: bool) {
@@ -827,6 +915,8 @@ pub struct WebGpuRenderer {
     effect_uniform_batch_enabled: bool,
     backdrop_batch_enabled: bool,
     direct_surface_enabled: bool,
+    cpu_submit_timing_enabled: bool,
+    cpu_submit_timing: WebGpuCpuSubmitTimingSample,
 }
 
 fn image_for_update<'a>(
@@ -1080,6 +1170,8 @@ impl WebGpuRenderer {
             effect_uniform_batch_enabled: true,
             backdrop_batch_enabled: true,
             direct_surface_enabled: true,
+            cpu_submit_timing_enabled: false,
+            cpu_submit_timing: WebGpuCpuSubmitTimingSample::default(),
         })
     }
 
@@ -1104,6 +1196,39 @@ impl WebGpuRenderer {
     #[must_use]
     pub fn pending_timestamp_readbacks(&self) -> u32 {
         self.timestamp_queries.as_ref().map_or(0, WebGpuTimestampQueries::pending_count)
+    }
+
+    pub fn set_timestamp_readback_interval_for_benchmark(&mut self, frames: u64) {
+        if let Some(timestamps) = &mut self.timestamp_queries {
+            timestamps.set_readback_interval_for_benchmark(frames);
+        }
+    }
+
+    pub fn clear_completed_timestamp_samples(&mut self) {
+        if let Some(timestamps) = &mut self.timestamp_queries {
+            timestamps.clear_completed();
+        }
+    }
+
+    pub fn drain_completed_timestamp_samples_into(
+        &mut self,
+        output: &mut Vec<WebGpuTimestampSample>,
+    ) {
+        if let Some(timestamps) = &mut self.timestamp_queries {
+            timestamps.harvest();
+            timestamps.drain_completed_into(output);
+        } else {
+            output.clear();
+        }
+    }
+
+    pub fn set_cpu_submit_timing_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.cpu_submit_timing_enabled = enabled;
+    }
+
+    #[must_use]
+    pub fn last_cpu_submit_timing(&self) -> WebGpuCpuSubmitTimingSample {
+        self.cpu_submit_timing
     }
 
     pub fn set_draw_state_cache_enabled_for_benchmark(&mut self, enabled: bool) {
@@ -1296,7 +1421,9 @@ impl WebGpuRenderer {
         self.stats.gpu_timestamp_present_ns = latest.present_ns;
         self.stats.gpu_timestamp_max_pass_ns = latest.max_pass_ns;
         self.stats.gpu_timestamp_readback_skips = timestamps.readback_skips;
-        self.stats.gpu_timestamp_readback_interval = TIMESTAMP_READBACK_INTERVAL_FRAMES as u32;
+        self.stats.gpu_timestamp_readback_interval = timestamps
+            .readback_interval_frames
+            .min(u32::MAX as u64) as u32;
     }
 
     fn reserve_timestamp_pass(&mut self, family: TimestampPassFamily) -> Option<(u32, u32)> {
@@ -2872,13 +2999,19 @@ impl api::Renderer for WebGpuRenderer {
             return Err(api::RenderError::InvalidOperation("frame token mismatch"));
         }
         self.active_token = None;
+        if self.cpu_submit_timing_enabled {
+            self.cpu_submit_timing = WebGpuCpuSubmitTimingSample::default();
+        }
+        let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         self.upload_frame_buffers();
         self.upload_scene3d_uniforms();
         self.write_viewport_uniform();
         self.prepare_effect_uniforms();
         self.record_submit_allocation_stage(SubmitAllocationStage::Upload, alloc_before);
+        cpu_submit_timing_end(&mut self.cpu_submit_timing.upload_ms, timing_before);
 
+        let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         let surface_texture = match self.surface.get_current_texture() {
             Ok(texture) => texture,
@@ -2892,14 +3025,18 @@ impl api::Renderer for WebGpuRenderer {
         let surface_view =
             surface_texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.record_submit_allocation_stage(SubmitAllocationStage::Surface, alloc_before);
+        cpu_submit_timing_end(&mut self.cpu_submit_timing.surface_ms, timing_before);
 
+        let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("oxide-webgpu-frame"),
         });
         self.stats.command_buffers = self.stats.command_buffers.saturating_add(1);
         self.record_submit_allocation_stage(SubmitAllocationStage::Encoder, alloc_before);
+        cpu_submit_timing_end(&mut self.cpu_submit_timing.encoder_create_ms, timing_before);
 
+        let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         self.render_layer_passes(&mut encoder);
         if self.target_uses_backdrop(None, 0, self.frame.draws.len())
@@ -2911,30 +3048,41 @@ impl api::Renderer for WebGpuRenderer {
             self.render_direct(&mut encoder, &surface_view);
         }
         self.record_submit_allocation_stage(SubmitAllocationStage::Render, alloc_before);
+        cpu_submit_timing_end(&mut self.cpu_submit_timing.command_encoding_ms, timing_before);
 
+        let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         let timestamp_readback = self.prepare_timestamp_readback(&mut encoder);
         self.record_submit_allocation_stage(SubmitAllocationStage::Timestamp, alloc_before);
+        cpu_submit_timing_end(&mut self.cpu_submit_timing.timestamp_readback_ms, timing_before);
 
+        let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         self.record_scratch_growth_stats();
         self.record_submit_allocation_stage(SubmitAllocationStage::ScratchStats, alloc_before);
+        cpu_submit_timing_end(&mut self.cpu_submit_timing.scratch_stats_ms, timing_before);
 
+        let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         let command_buffer = encoder.finish();
         self.queue.submit(core::iter::once(command_buffer));
         self.record_submit_allocation_stage(SubmitAllocationStage::FinishQueue, alloc_before);
+        cpu_submit_timing_end(&mut self.cpu_submit_timing.queue_submit_ms, timing_before);
 
+        let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         surface_texture.present();
         self.record_submit_allocation_stage(SubmitAllocationStage::Present, alloc_before);
+        cpu_submit_timing_end(&mut self.cpu_submit_timing.present_ms, timing_before);
 
+        let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         if let Some((slot_index, bytes)) = timestamp_readback {
             self.map_timestamp_readback(slot_index, bytes);
             self.apply_timestamp_stats();
         }
         self.record_submit_allocation_stage(SubmitAllocationStage::TimestampMap, alloc_before);
+        cpu_submit_timing_end(&mut self.cpu_submit_timing.timestamp_map_ms, timing_before);
         Ok(())
     }
 
