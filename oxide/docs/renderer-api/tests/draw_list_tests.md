@@ -8,6 +8,8 @@
 - Complements `ui-core` draw-builder tests that exercise compatibility checks while appending cached draw lists.
 
 ## Entry points list
+- `color_pack_rgba8_uses_aabbggrr_byte_order`
+  Freezes endpoint byte placement, rounding, clamping, and non-finite conversion.
 - `draw_cmd_taxonomy_is_frozen`
   Freezes the `DrawCmd` variant set and source declaration order for later draw-stream migration evidence.
 - `representative_draw_stream_capture_signature_is_frozen`
@@ -26,6 +28,7 @@
   Verifies backing geometry arrays are writable caller-owned storage.
 
 ## Logic narrative
+- Packed-color coverage checks finite endpoints plus negative, above-one, NaN, and infinite channels using only the public API.
 - Tests use plain draw-list values so renderer-api invariants stay independent of UI widgets and backend implementations.
 - The taxonomy freeze constructs one representative value for every draw command and maps it through an exhaustive match, so new variants or field-shape changes force an intentional test update.
 - The same test reads the `DrawCmd` enum declaration order from source to keep the semantic stream order explicit before packed draw-stream work starts.
@@ -37,6 +40,7 @@
 - Passing tests also mean the current draw-command taxonomy and representative capture/replay signature remain the explicit baseline for future backend packet and packed draw-stream freezes.
 
 ## Edge cases and failure modes
+- Invalid floating-point channels must remain deterministic and never panic.
 - A different atlas handle must not make the cached draw list stale.
 
 ## Concurrency and memory behavior
@@ -44,6 +48,7 @@
 
 ## Performance notes
 - The revision check scans draw commands without allocating.
+- Packed conversion is data preparation only and adds no measured renderer path.
 - The capture/replay fixture is measurement harness only. It changes no runtime path and does not claim a performance win.
 
 ## Feature flags and cfgs
@@ -52,7 +57,12 @@
 ## Testing and benchmarks
 - Run with `cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-renderer-api --test draw_list_tests`.
 
+## Examples
+
+The expected `0xBF40_80FF` value documents alpha, blue, green, and red byte positions.
+
 ## Changelog
+- 2026-07-12: added packed-color byte-order and invalid-channel coverage.
 - 2026-06-22: added a representative draw-stream capture/replay signature freeze before backend packet migrations.
 - 2026-06-22: froze the `DrawCmd` variant set and source order as measurement harness for architecture densification A/B work.
 - 2026-05-31: added stale text-atlas revision coverage for retained draw cache safety.

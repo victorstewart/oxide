@@ -5,6 +5,9 @@ use oxide_renderer_web::{
     WebRenderer,
 };
 
+#[path = "../src/solid_color.rs"]
+mod solid_color;
+
 fn source_without_whitespace(source: &str) -> String {
     source.chars().filter(|ch| !ch.is_whitespace()).collect()
 }
@@ -198,6 +201,105 @@ fn wasm_webgpu_unindexed_quad_vertices_emit_two_triangles() {
 
     assert!(helper.contains("vertices.len() == 4"));
     assert!(helper.contains("[base, base + 1, base + 2, base + 2, base + 1, base + 3]"));
+}
+
+#[test]
+fn wasm_webgpu_solid_vertex_colors_decode_aabbggrr_and_interpolate()
+{
+   let source = include_str!("../src/wasm/webgpu.rs");
+   let solid = compact_source_block(source, "fn encode_solid(", "fn encode_image(");
+   let shader = compact_source_block(source, "struct VertexIn", "@fragment\nfn fs_rgba");
+
+   assert!(solid.contains("vertex.rgba,color"));
+   assert!(solid.matches("color,true").count() >= 3);
+   assert!(shader.contains("out.color=input.color"));
+   assert!(shader.contains("fnfs_solid(input:VertexOut)->@location(0)vec4<f32>{returninput.color;"));
+
+   let uniform = api::Color::rgba(0.25, 0.5, 0.75, 1.0);
+   assert_eq!(solid_color::resolve_vertex_color(0, uniform), uniform);
+   assert_eq!(
+      solid_color::resolve_vertex_color(0x8040_2010, uniform),
+      api::Color::rgba(16.0 / 255.0, 32.0 / 255.0, 64.0 / 255.0, 128.0 / 255.0)
+   );
+}
+
+#[test]
+fn canvas_colored_solids_accept_only_six_vertex_axis_aligned_edge_gradients()
+{
+   let source = include_str!("../src/lib.rs");
+   let draw = compact_source_block(source, "fn draw_solid_span(", "fn fill_triangle(");
+
+   assert!(draw.contains("ifib.len!=0{return;"));
+   assert!(draw.contains("colored_quad(vertices,color)"));
+   assert!(draw.contains("create_linear_gradient"));
+   assert!(draw.contains("fill_rect"));
+   assert!(draw.contains("ifvertices.iter().any(|vertex|vertex.rgba!=0)"));
+   assert!(draw.contains("letcss=color_to_css(color)"));
+}
+
+fn colored_quad_vertices(colors: [u32; 4]) -> [api::Vertex; 6]
+{
+   let vertex = |x, y, rgba| api::Vertex { x, y, u: 0.0, v: 0.0, rgba };
+   [
+      vertex(2.0, 3.0, colors[0]),
+      vertex(12.0, 3.0, colors[1]),
+      vertex(2.0, 9.0, colors[2]),
+      vertex(2.0, 9.0, colors[2]),
+      vertex(12.0, 3.0, colors[1]),
+      vertex(12.0, 9.0, colors[3]),
+   ]
+}
+
+#[test]
+fn canvas_colored_quad_classifies_flat_and_opposing_edge_colors()
+{
+   let uniform = api::Color::rgba(0.25, 0.5, 0.75, 1.0);
+   let flat = solid_color::colored_quad(&colored_quad_vertices([0xFF00_00FF; 4]), uniform)
+      .expect("flat colored quad");
+   assert_eq!(flat.3, 0xFF00_00FF);
+   assert_eq!(flat.4, flat.3);
+
+   let horizontal = solid_color::colored_quad(
+      &colored_quad_vertices([0xFF00_00FF, 0xFFFF_0000, 0xFF00_00FF, 0xFFFF_0000]),
+      uniform,
+   )
+   .expect("horizontal edge gradient");
+   assert_eq!(horizontal.1, [2.0, 3.0]);
+   assert_eq!(horizontal.2, [12.0, 3.0]);
+
+   let vertical = solid_color::colored_quad(
+      &colored_quad_vertices([0xFF00_00FF, 0xFF00_00FF, 0xFFFF_0000, 0xFFFF_0000]),
+      uniform,
+   )
+   .expect("vertical edge gradient");
+   assert_eq!(vertical.1, [2.0, 3.0]);
+   assert_eq!(vertical.2, [2.0, 9.0]);
+
+   let inherited = solid_color::colored_quad(&colored_quad_vertices([0; 4]), uniform)
+      .expect("uniform inherited quad");
+   assert_eq!(inherited.3, uniform.pack_rgba8());
+   assert_eq!(inherited.4, inherited.3);
+}
+
+#[test]
+fn canvas_colored_quad_rejects_other_nonzero_topologies()
+{
+   let uniform = api::Color::rgba(1.0, 1.0, 1.0, 1.0);
+   let four_vertices = colored_quad_vertices([0xFFFF_FFFF; 4]);
+   assert!(solid_color::colored_quad(&four_vertices[..4], uniform).is_none());
+   assert!(solid_color::colored_quad(
+      &colored_quad_vertices([0xFF00_00FF, 0xFF00_FF00, 0xFFFF_0000, 0xFFFF_FFFF]),
+      uniform,
+   )
+   .is_none());
+
+   let mut skewed = colored_quad_vertices([0xFFFF_FFFF; 4]);
+   skewed[5].x = 11.0;
+   assert!(solid_color::colored_quad(&skewed, uniform).is_none());
+
+   let mut mismatched_duplicate = colored_quad_vertices([0xFFFF_FFFF; 4]);
+   mismatched_duplicate[3].rgba = 0xFF00_00FF;
+   assert!(solid_color::colored_quad(&mismatched_duplicate, uniform).is_none());
 }
 
 #[test]

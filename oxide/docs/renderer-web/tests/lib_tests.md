@@ -17,6 +17,9 @@ Call flow:
 
 ## Entry points list
 
+- `wasm_webgpu_solid_vertex_colors_decode_aabbggrr_and_interpolate()`: verifies zero inheritance, packed endpoints, all solid topology paths, and WGSL color interpolation.
+- `canvas_colored_quad_classifies_flat_and_opposing_edge_colors()`: accepts flat, horizontal, vertical, and inherited colors.
+- `canvas_colored_quad_rejects_other_nonzero_topologies()`: rejects four-vertex, skewed, per-corner, and duplicate-mismatch shapes.
 - `color_conversion_clamps_channels()`: verifies CSS color conversion and packed color cache keys.
 - `sanitize_scale_rejects_invalid_values()`: verifies invalid scale fallback.
 - `native_stub_tracks_frame_shape_and_reports_unsupported_submit()`: verifies native frame counters and unsupported submit behavior.
@@ -29,7 +32,7 @@ Call flow:
 
 ## Logic narrative
 
-The tests intentionally avoid browser APIs. Color tests clamp overrange and underrange values. Scale tests cover valid, zero, and NaN values. The native stub tests start frames, inspect counters, prove `CameraBg` is zero-work on web, and check that submitting on a non-wasm target returns `RenderError::Unsupported`. Source-inspection tests keep WebGPU production exports, the narrow Canvas indexed-quad diagnostic export, premultiplied-alpha surface setup, generation-checked image release/reuse, hot-path scratch reuse, timestamp-query readbacks, upload-scratch wiring, draw-state caching, clip-depth tracking, effect-uniform batching, and private packet vocabulary visible to native CI.
+The tests intentionally avoid browser APIs. Solid-color tests include the crate-private pure classifier and decoder, while source inspection freezes wasm-only lowering and shader interpolation. Color tests clamp overrange and underrange values. Scale tests cover valid, zero, and NaN values. The native stub tests start frames, inspect counters, prove `CameraBg` is zero-work on web, and check that submitting on a non-wasm target returns `RenderError::Unsupported`. Source-inspection tests keep WebGPU production exports, the narrow Canvas indexed-quad diagnostic export, premultiplied-alpha surface setup, generation-checked image release/reuse, hot-path scratch reuse, timestamp-query readbacks, upload-scratch wiring, draw-state caching, clip-depth tracking, effect-uniform batching, and private packet vocabulary visible to native CI.
 
 ## Preconditions and postconditions; invariants maintained; unsafe invariants if any
 
@@ -37,7 +40,7 @@ The tests require only the native Rust test runner. They maintain the invariant 
 
 ## Edge cases and failure modes
 
-NaN scale collapses to `1.0`. Overrange color channels clamp to byte limits. Native submission must not succeed because it would mask missing browser execution.
+NaN scale collapses to `1.0`. Overrange color channels clamp to byte limits. Colored-solid coverage includes indexed rejection, four vertices, skew, independent corner colors, and conflicting duplicate corners. Native submission must not succeed because it would mask missing browser execution.
 
 ## Concurrency and memory behavior
 
@@ -67,6 +70,7 @@ pub fn scale() -> f32
 
 ## Changelog
 
+- 2026-07-12: added packed solid-color decode/interpolation coverage and behavioral Canvas gradient admission/rejection tests.
 - 2026-07-10: added source contracts for bounded generation-checked WebGPU image-slot reuse and stale-handle rejection.
 - 2026-07-09: added source-contract coverage for idempotent BrowserRenderer/WebGpuRenderer image reclamation.
 - 2026-06-22: froze private WebGPU packet/lowering vocabulary as measurement harness for architecture densification A/B work.

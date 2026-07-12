@@ -6244,7 +6244,7 @@ fn encode_draws_range(
                 }
                 pf.ub_used += u_bytes;
                 enc.set_vertex_buffer(0, Some(&r.vb.bufs[slot]), vb_off);
-                enc.set_fragment_buffer(0, Some(&r.ub.bufs[slot]), ub_off);
+                enc.set_vertex_buffer(1, Some(&r.ub.bufs[slot]), ub_off);
                 let idx_count = ib.len as usize;
                 if idx_count > 0 {
                     // Upload indices and draw indexed

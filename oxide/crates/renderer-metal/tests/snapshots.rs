@@ -216,6 +216,64 @@ fn snapshot_solid_rejects_non_triangle_index_counts() {
 }
 
 #[test]
+fn snapshot_solid_vertex_color_interpolates_and_zero_inherits_uniform()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   let width = 96_u32;
+   let height = 64_u32;
+   renderer.resize(width, height, 1.0).expect("resize");
+
+   let red = api::Color::rgba(1.0, 0.0, 0.0, 1.0).pack_rgba8();
+   let blue = api::Color::rgba(0.0, 0.0, 1.0, 1.0).pack_rgba8();
+   let vertex = |x, y, rgba| api::Vertex { x, y, u: 0.0, v: 0.0, rgba };
+   let mut list = api::DrawList::default();
+   list.vertices.extend_from_slice(&[
+      vertex(8.0, 8.0, red),
+      vertex(88.0, 8.0, blue),
+      vertex(8.0, 28.0, red),
+      vertex(8.0, 28.0, red),
+      vertex(88.0, 8.0, blue),
+      vertex(88.0, 28.0, blue),
+      vertex(8.0, 36.0, 0),
+      vertex(88.0, 36.0, 0),
+      vertex(8.0, 56.0, 0),
+      vertex(8.0, 56.0, 0),
+      vertex(88.0, 36.0, 0),
+      vertex(88.0, 56.0, 0),
+   ]);
+   list.items.extend_from_slice(&[
+      api::DrawCmd::Solid {
+         vb: api::VertexSpan { offset: 0, len: 6 },
+         ib: api::IndexSpan { offset: 0, len: 0 },
+         color: api::Color::rgba(0.0, 1.0, 0.0, 1.0),
+      },
+      api::DrawCmd::Solid {
+         vb: api::VertexSpan { offset: 6, len: 6 },
+         ib: api::IndexSpan { offset: 0, len: 0 },
+         color: api::Color::rgba(0.0, 1.0, 0.0, 1.0),
+      },
+   ]);
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_pass(&list);
+   renderer.submit(token).expect("submit");
+   let (_, _, bgra) = renderer.readback_bgra8().expect("readback");
+   let pixel = |x: u32, y: u32| -> [u8; 4] {
+      let index = ((y * width + x) * 4) as usize;
+      [bgra[index], bgra[index + 1], bgra[index + 2], bgra[index + 3]]
+   };
+
+   let left = pixel(8, 18);
+   assert!(left[2] > 240 && left[0] < 40 && left[1] < 20, "red endpoint: {left:?}");
+   let middle = pixel(48, 18);
+   assert!(middle[2] > 100 && middle[0] > 100 && middle[1] < 20, "interpolation: {middle:?}");
+   let right = pixel(87, 18);
+   assert!(right[0] > 240 && right[2] < 40 && right[1] < 20, "blue endpoint: {right:?}");
+   let inherited = pixel(48, 46);
+   assert_eq!(inherited, [0, 255, 0, 255], "zero rgba uniform byte identity");
+}
+
+#[test]
 fn snapshot_scene3d_mixes_with_2d_overlay() {
     let mut renderer = MetalRenderer::new_default().expect("metal");
     let width = 128u32;

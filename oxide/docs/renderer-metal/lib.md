@@ -30,6 +30,8 @@
 
 ## Logic narrative
 
+Solid draws keep their existing vertex and uniform ring uploads. The solid command color is now bound at vertex buffer index 1 so the shader can replace packed zero before interpolation; nonzero vertex colors pass through without another pipeline, draw, or resource.
+
 The renderer keeps long-lived GPU resources resident and reuses them across frames. Static textures and scene3d meshes are uploaded once, while frame-local rings handle transient 2D geometry and uniforms. The new scene3d path is intentionally small: position-only indexed meshes, per-instance transforms and colors, depth testing, and either triangle or line topology. That is enough for high-throughput globe-style geometry without expanding the public API prematurely.
 
 Mixed 2D/3D frames share the same frame command buffer and color target. `encode_scene3d` initializes color/depth when needed, then `encode_pass` loads the already-rendered target instead of clearing it again. The supported ordering is 3D first, then 2D overlay, which matches the intended Oxide use case of a 3D scene under author-driven 2D interface chrome.
@@ -72,6 +74,8 @@ ID-mask composition is GPU-owned. Semantic region/subregion triangles are raster
   - A mixed 3D/2D frame reuses one frame command buffer and one color target initialization path.
 
 ## Changelog
+
+- 2026-07-12: moved solid uniform selection to the vertex stage and enabled interpolated packed vertex colors without changing draw or upload counts.
 
 - 2026-06-01: added a renderer source-contract gate that keeps `wait_until_completed` confined to explicit readback helpers and out of frame hot paths.
 - 2026-05-25: shared layer-sublist geometry offset/rebase handling between image meshes and glyph runs.

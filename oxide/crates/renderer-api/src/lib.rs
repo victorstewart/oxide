@@ -86,6 +86,24 @@ impl Color {
     pub const fn rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self { r, g, b, a }
     }
+
+    /// Packs clamped channels as `AABBGGRR`, with red in the least-significant byte.
+    #[inline]
+    #[must_use]
+    pub fn pack_rgba8(self) -> u32 {
+        fn channel(value: f32) -> u32 {
+            if value.is_finite() {
+                (value.clamp(0.0, 1.0) * 255.0).round() as u32
+            } else {
+                0
+            }
+        }
+
+        channel(self.r)
+            | (channel(self.g) << 8)
+            | (channel(self.b) << 16)
+            | (channel(self.a) << 24)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -140,6 +158,8 @@ pub struct Vertex {
     pub y: f32,
     pub u: f32,
     pub v: f32,
+    /// Packed `AABBGGRR`. On solid draws, zero inherits the draw's uniform color;
+    /// every nonzero value is the final per-vertex color and is interpolated.
     pub rgba: u32,
 }
 

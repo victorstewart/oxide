@@ -63,6 +63,13 @@ fn sample_color() -> Color
    Color::rgba(0.1, 0.2, 0.3, 0.4)
 }
 
+#[test]
+fn color_pack_rgba8_uses_aabbggrr_byte_order()
+{
+   assert_eq!(Color::rgba(1.0, 0.5, 0.25, 0.75).pack_rgba8(), 0xBF40_80FF);
+   assert_eq!(Color::rgba(-1.0, 2.0, f32::NAN, f32::INFINITY).pack_rgba8(), 0x0000_FF00);
+}
+
 fn sample_vertex_span() -> VertexSpan
 {
    VertexSpan { offset: 5, len: 6 }

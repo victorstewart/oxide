@@ -12,6 +12,8 @@
 
 use oxide_renderer_api as api;
 
+mod solid_color;
+
 pub mod id_mask_compositor;
 pub mod neon_marker;
 pub mod scene3d;
@@ -514,11 +516,12 @@ mod wasm {
     mod webgpu;
 
     use super::{
-        a8_to_rgba, color_cache_key, color_to_css, copy_a8_rows, copy_a8_rows_to_rgba_into,
-        copy_rgba_rows, copy_rgba_rows_into, layer_physical_dimension, logical_dimension,
-        normalized_index_mode, resolve_index, sanitize_scale, NormalizedIndexMode,
-        WebRendererStats,
+        a8_to_rgba, color_cache_key, color_to_css, copy_a8_rows,
+        copy_a8_rows_to_rgba_into, copy_rgba_rows, copy_rgba_rows_into,
+        layer_physical_dimension, logical_dimension, normalized_index_mode, packed_rgba_to_css,
+        resolve_index, sanitize_scale, NormalizedIndexMode, WebRendererStats,
     };
+    use crate::solid_color::colored_quad;
     use oxide_renderer_api as api;
     use oxide_renderer_api::Renderer;
     use std::collections::BTreeMap;
@@ -1010,6 +1013,36 @@ mod wasm {
             let Some(vertices) = vertex_slice(list, vb) else {
                 return;
             };
+            if vertices.iter().any(|vertex| vertex.rgba != 0) {
+                if ib.len != 0 {
+                    return;
+                }
+                let Some((rect, start, end, start_rgba, end_rgba)) =
+                    colored_quad(vertices, color)
+                else {
+                    return;
+                };
+                if start_rgba == end_rgba {
+                    self.ctx.set_fill_style_str(&packed_rgba_to_css(start_rgba));
+                } else {
+                    let gradient = self.ctx.create_linear_gradient(
+                        start[0] as f64,
+                        start[1] as f64,
+                        end[0] as f64,
+                        end[1] as f64,
+                    );
+                    if gradient.add_color_stop(0.0, &packed_rgba_to_css(start_rgba)).is_err()
+                        || gradient.add_color_stop(1.0, &packed_rgba_to_css(end_rgba)).is_err()
+                    {
+                        return;
+                    }
+                    self.ctx.set_fill_style_canvas_gradient(&gradient);
+                }
+                self.ctx.fill_rect(rect.x as f64, rect.y as f64, rect.w as f64, rect.h as f64);
+                self.stats.draws = self.stats.draws.saturating_add(1);
+                self.stats.solid_tris = self.stats.solid_tris.saturating_add(2);
+                return;
+            }
             let css = color_to_css(color);
             self.ctx.set_fill_style_str(&css);
             if ib.len > 0 {
