@@ -229,6 +229,78 @@ pub extern "C" fn oxide_host_http_start(
     unsafe {
         *out_request_id = 1;
         let callback = callback.unwrap_unchecked();
+        if url.ends_with(b"/ffi-null-count") {
+            callback(context, &AppleHttpEvent {
+                kind: 1,
+                error: 0,
+                status: 200,
+                reserved: 0,
+                content_length: 0,
+                data_ptr: std::ptr::null(),
+                data_len: 0,
+                final_url_ptr: url.as_ptr(),
+                final_url_len: url.len(),
+                headers_ptr: std::ptr::null(),
+                header_count: 1,
+            });
+            return 0;
+        }
+        if url.ends_with(b"/ffi-count-over") {
+            callback(context, &AppleHttpEvent {
+                kind: 1,
+                error: 0,
+                status: 200,
+                reserved: 0,
+                content_length: 0,
+                data_ptr: std::ptr::null(),
+                data_len: 0,
+                final_url_ptr: url.as_ptr(),
+                final_url_len: url.len(),
+                headers_ptr: std::ptr::null(),
+                header_count: 65,
+            });
+            return 0;
+        }
+        if url.ends_with(b"/ffi-url-over") {
+            let oversized_url = vec![b'a'; 16 * 1024 + 1];
+            callback(context, &AppleHttpEvent {
+                kind: 1,
+                error: 0,
+                status: 200,
+                reserved: 0,
+                content_length: 0,
+                data_ptr: std::ptr::null(),
+                data_len: 0,
+                final_url_ptr: oversized_url.as_ptr(),
+                final_url_len: oversized_url.len(),
+                headers_ptr: std::ptr::null(),
+                header_count: 0,
+            });
+            return 0;
+        }
+        if url.ends_with(b"/ffi-metadata-over") {
+            let oversized_value = vec![b'a'; 32 * 1024];
+            let header = AppleHttpHeader {
+                name_ptr: b"x".as_ptr(),
+                name_len: 1,
+                value_ptr: oversized_value.as_ptr(),
+                value_len: oversized_value.len(),
+            };
+            callback(context, &AppleHttpEvent {
+                kind: 1,
+                error: 0,
+                status: 200,
+                reserved: 0,
+                content_length: 0,
+                data_ptr: std::ptr::null(),
+                data_len: 0,
+                final_url_ptr: url.as_ptr(),
+                final_url_len: url.len(),
+                headers_ptr: &header,
+                header_count: 1,
+            });
+            return 0;
+        }
         callback(context, &AppleHttpEvent {
             kind: 1,
             error: 0,
@@ -1053,6 +1125,60 @@ fn apple_http_client_streams_through_c_abi() {
         if response.status == 200 && response.final_url == "https://oxide.test/health"));
     assert_eq!(events[1], HttpEvent::Body(b"ok".to_vec()));
     assert_eq!(events[2], HttpEvent::Complete);
+}
+
+#[test]
+fn apple_http_request_metadata_accepts_exact_bounds_and_rejects_overflow() {
+    let client = AppleHttpClient::new();
+    let prefix = "https://oxide.test/";
+    let exact_url = format!("{prefix}{}", "a".repeat(16 * 1024 - prefix.len()));
+    let exact = HttpRequest::get(exact_url).with_header("x", "a".repeat(32 * 1024 - 1));
+    assert!(client.start(exact, Box::new(|_| {})).is_ok());
+
+    let oversized_url = format!("{prefix}{}", "a".repeat(16 * 1024 + 1 - prefix.len()));
+    assert!(matches!(
+        client.start(HttpRequest::get(oversized_url), Box::new(|_| {})),
+        Err(PlatformError::Invalid("HTTP URL exceeds limit"))
+    ));
+    let oversized_metadata = HttpRequest::get("https://oxide.test/metadata")
+        .with_header("x", "a".repeat(32 * 1024));
+    assert!(matches!(
+        client.start(oversized_metadata, Box::new(|_| {})),
+        Err(PlatformError::Invalid("HTTP metadata bytes exceed limit"))
+    ));
+}
+
+#[test]
+fn apple_http_request_header_count_accepts_exact_limit_and_rejects_limit_plus_one() {
+    let client = AppleHttpClient::new();
+    let mut exact = HttpRequest::get("https://oxide.test/count");
+    exact.response_headers = (0..64).map(|index| format!("x-{index}")).collect();
+    assert!(client.start(exact, Box::new(|_| {})).is_ok());
+
+    let mut oversized = HttpRequest::get("https://oxide.test/count");
+    oversized.response_headers = (0..65).map(|index| format!("x-{index}")).collect();
+    assert!(matches!(
+        client.start(oversized, Box::new(|_| {})),
+        Err(PlatformError::Invalid("HTTP header count exceeds limit"))
+    ));
+}
+
+#[test]
+fn apple_http_response_ffi_rejects_inconsistent_and_oversized_metadata() {
+    let client = AppleHttpClient::new();
+    for path in ["ffi-null-count", "ffi-count-over", "ffi-url-over", "ffi-metadata-over"] {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let _operation = client.start(
+            HttpRequest::get(format!("https://oxide.test/{path}")),
+            Box::new(move |event| sink.lock().expect("HTTP events").push(event)),
+        ).expect("HTTP start through malformed test ABI");
+        let events = events.lock().expect("HTTP events");
+        assert_eq!(events.len(), 1, "unexpected event count for {path}");
+        assert!(matches!(events[0], HttpEvent::Failed(PlatformError::Invalid(
+            "native HTTP event bounds are invalid"
+        ))), "malformed FFI event was accepted for {path}");
+    }
 }
 
 #[test]

@@ -368,6 +368,10 @@ fn valid_http_header_name(name: &str) -> bool {
    !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
 }
 
+const MAXIMUM_HTTP_HEADER_COUNT: usize = 64;
+const MAXIMUM_HTTP_METADATA_BYTES: usize = 32 * 1024;
+const MAXIMUM_HTTP_URL_BYTES: usize = 16 * 1024;
+
 fn validate_http_request(request: &HttpRequest) -> Result<(), PlatformError> {
    if request.method != HttpMethod::Get {
       return Err(PlatformError::Unsupported("Apple HTTP bridge only supports GET"));
@@ -378,7 +382,21 @@ fn validate_http_request(request: &HttpRequest) -> Result<(), PlatformError> {
    if request.url.trim().is_empty() || request.max_response_bytes == 0 {
       return Err(PlatformError::Invalid("HTTP URL or response limit is invalid"));
    }
+   if request.url.len() > MAXIMUM_HTTP_URL_BYTES {
+      return Err(PlatformError::Invalid("HTTP URL exceeds limit"));
+   }
+   let Some(header_count) = request.headers.len().checked_add(request.response_headers.len()) else {
+      return Err(PlatformError::Invalid("HTTP header count exceeds limit"));
+   };
+   if header_count > MAXIMUM_HTTP_HEADER_COUNT {
+      return Err(PlatformError::Invalid("HTTP header count exceeds limit"));
+   }
+   let mut metadata_bytes = 0_usize;
    for header in &request.headers {
+      let Some(next_metadata_bytes) = metadata_bytes.checked_add(header.name.len()).and_then(|total| total.checked_add(header.value.len())) else {
+         return Err(PlatformError::Invalid("HTTP metadata bytes exceed limit"));
+      };
+      metadata_bytes = next_metadata_bytes;
       if !valid_http_header_name(header.name.as_str())
          || header.value.bytes().any(|byte| byte == b'\r' || byte == b'\n')
          || header.name.eq_ignore_ascii_case("cookie")
@@ -389,9 +407,16 @@ fn validate_http_request(request: &HttpRequest) -> Result<(), PlatformError> {
       }
    }
    for name in &request.response_headers {
+      let Some(next_metadata_bytes) = metadata_bytes.checked_add(name.len()) else {
+         return Err(PlatformError::Invalid("HTTP metadata bytes exceed limit"));
+      };
+      metadata_bytes = next_metadata_bytes;
       if !valid_http_header_name(name.as_str()) {
          return Err(PlatformError::Invalid("selected HTTP response header is invalid"));
       }
+   }
+   if metadata_bytes > MAXIMUM_HTTP_METADATA_BYTES {
+      return Err(PlatformError::Invalid("HTTP metadata bytes exceed limit"));
    }
    Ok(())
 }
@@ -418,6 +443,9 @@ unsafe extern "C" fn apple_http_event(context: *mut core::ffi::c_void, raw: *con
 }
 
 unsafe fn decode_apple_http_event(raw: &AppleHttpEvent) -> HttpEvent {
+   if !unsafe { valid_apple_http_event(raw) } {
+      return HttpEvent::Failed(PlatformError::Invalid("native HTTP event bounds are invalid"));
+   }
    match raw.kind {
       1 => {
          let headers = if raw.headers_ptr.is_null() || raw.header_count == 0 {
@@ -442,6 +470,55 @@ unsafe fn decode_apple_http_event(raw: &AppleHttpEvent) -> HttpEvent {
       4 => HttpEvent::Cancelled,
       5 => HttpEvent::Failed(http_error(raw.error)),
       _ => HttpEvent::Failed(PlatformError::Unknown(alloc::string::String::from("native HTTP event was invalid"))),
+   }
+}
+
+unsafe fn valid_apple_http_event(raw: &AppleHttpEvent) -> bool {
+   match raw.kind {
+      1 => {
+         if raw.data_ptr.is_null() != (raw.data_len == 0)
+            || raw.data_len != 0
+            || raw.final_url_len == 0
+            || raw.final_url_len > MAXIMUM_HTTP_URL_BYTES
+            || raw.final_url_ptr.is_null()
+            || raw.header_count > MAXIMUM_HTTP_HEADER_COUNT
+            || raw.headers_ptr.is_null() != (raw.header_count == 0)
+            || (!raw.headers_ptr.is_null()
+               && (raw.headers_ptr as usize) % core::mem::align_of::<AppleHttpHeader>() != 0)
+         {
+            return false;
+         }
+         if raw.header_count == 0 {
+            return true;
+         }
+         let headers = unsafe { core::slice::from_raw_parts(raw.headers_ptr, raw.header_count) };
+         let mut metadata_bytes = 0_usize;
+         for header in headers {
+            if header.name_len == 0
+               || header.name_ptr.is_null()
+               || (header.value_len != 0 && header.value_ptr.is_null())
+            {
+               return false;
+            }
+            let Some(next_metadata_bytes) = metadata_bytes.checked_add(header.name_len).and_then(|total| total.checked_add(header.value_len)) else {
+               return false;
+            };
+            metadata_bytes = next_metadata_bytes;
+         }
+         metadata_bytes <= MAXIMUM_HTTP_METADATA_BYTES
+      }
+      2 => raw.data_ptr.is_null() == (raw.data_len == 0)
+         && raw.final_url_ptr.is_null()
+         && raw.final_url_len == 0
+         && raw.headers_ptr.is_null()
+         && raw.header_count == 0,
+      3..=5 => raw.data_ptr.is_null()
+         && raw.data_len == 0
+         && raw.final_url_ptr.is_null()
+         && raw.final_url_len == 0
+         && raw.headers_ptr.is_null()
+         && raw.header_count == 0,
+      _ => false,
    }
 }
 

@@ -16,7 +16,7 @@
 ## Logic narrative
 - The session disables cookies, credential storage, and caching. Requests reject embedded URL credentials and credential-bearing headers.
 - Redirect responses are delivered to Rust and automatic following is disabled, preserving caller-owned redirect and downgrade policy.
-- Declared and streamed body sizes are checked against the request cap. The caller's remaining Rust budget becomes the native request and delegate-queue timeout.
+- Declared and streamed body sizes are checked against the request cap. Request and selected-response metadata are capped at 64 headers and 32 KiB, while request and final URLs are capped at 16 KiB. Response names, values, and the final URL are measured before `NSData`, arrays, `calloc`, or an FFI payload is created. The caller's remaining Rust budget becomes the native request and delegate-queue timeout.
 - All terminal paths remove the operation before invoking the callback, preventing duplicate terminal delivery and callback-after-free.
 
 ## Preconditions and postconditions
@@ -24,14 +24,16 @@
 - The callback context remains owned until a terminal event; cancellation is safe and idempotent.
 
 ## Edge cases and failure modes
-- Invalid methods, URLs, headers, deadlines, byte caps, authentication challenges, oversized bodies, and transport failures fail closed.
+- Invalid methods, URLs, headers, deadlines, byte caps, FFI pointer/count shapes, oversized metadata or bodies, authentication challenges, and transport failures fail closed.
 - Redirects complete as ordinary 3xx responses and are never followed inside the native bridge.
 
 ## Testing and benchmarks
 - Rust ABI/event mapping: `cargo test -p oxide-platform-apple --locked`.
 - iOS linkage: `cargo check -p oxide-platform-ios --target aarch64-apple-ios --locked`.
 - Static contract tests reject semaphore use, automatic redirects, and per-request sessions in this source.
+- A macOS local-`NSURLProtocol` harness covers declared and streamed body overruns, selected-header value/aggregate/count bounds, final URL bounds, cancellation, exact-bound success, and terminal uniqueness.
 
 ## Changelog
 - 2026-07-11: moved native-source compilation into `oxide-platform-apple` so iOS, macOS, and direct consumers share one self-contained adapter.
 - 2026-07-11: replaced the synchronous response-copy bridge with one shared streaming URLSession delegate and explicit cancellation.
+- 2026-07-12: bounded request and response metadata before native allocation and validated the same request limits at the C FFI boundary.

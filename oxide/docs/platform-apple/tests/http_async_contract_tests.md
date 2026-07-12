@@ -41,6 +41,8 @@ The source is compiled only for iOS and macOS.
 
 Run `cargo test -p oxide-platform-apple --test http_async_contract_tests --locked` and the macOS live loopback harness.
 
+The executable local-`NSURLProtocol` limit matrix is driven by `http_native_harness_tests.rs`; this source-contract test remains focused on delegate ownership and serialization.
+
 ## Examples
 
 Not applicable; the C ABI is consumed through `AppleHttpClient`.

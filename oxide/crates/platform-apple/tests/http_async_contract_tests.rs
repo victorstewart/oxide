@@ -12,6 +12,10 @@ fn apple_http_is_shared_streaming_manual_and_credential_free()
    assert!(source.contains("configuration.URLCache = nil"));
    assert!(source.contains("response.expectedContentLength"));
    assert!(source.contains("data.length > state.maximumBytes - state.receivedBytes"));
+   assert!(source.contains("OxideHttpMaximumHeaderCount = 64"));
+   assert!(source.contains("OxideHttpMaximumMetadataBytes = 32 * 1024"));
+   assert!(source.contains("OxideHttpMaximumURLBytes = 16 * 1024"));
+   assert!(source.contains("lengthOfBytesUsingEncoding:NSUTF8StringEncoding"));
    assert!(!source.contains("dispatch_semaphore"));
    assert!(!source.contains("dataTaskWithRequest:request\n                                           completionHandler"));
 }

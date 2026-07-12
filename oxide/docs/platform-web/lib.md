@@ -36,7 +36,7 @@ Call flow:
 
 ## Logic narrative
 
-`WebPlatform` deliberately stores no DOM handles so it can satisfy Oxide's `Platform: Send + Sync` bound. Browser objects are fetched on demand inside wasm-only helper functions, while non-`Send` browser handles and closures live in thread-local registries behind integer handles. The HTTP registry is capped at 128 active operations; request bodies, header count/bytes, declared response length, and streamed bytes are independently bounded. Cancellation and timeout remove registry ownership before aborting, so browser callbacks can emit exactly one terminal event and every later callback is ignored. `request_redraw`, `ime_show`, and `ime_hide` dispatch custom window events for the host runtime. Clipboard writes cache the last app-written string synchronously and best-effort forward to `navigator.clipboard.writeText`; async helper functions expose the real browser Clipboard promise path for callers that can await. Secure storage uses localStorage with a fixed key prefix and hex-encoded bytes.
+`WebPlatform` deliberately stores no DOM handles so it can satisfy Oxide's `Platform: Send + Sync` bound. Browser objects are fetched on demand inside wasm-only helper functions, while non-`Send` browser handles and closures live in thread-local registries behind integer handles. The HTTP registry is capped at 128 active operations; request bodies, header count/bytes, declared response length, streamed bytes, and final URLs are independently bounded. Stream chunks are admitted from JavaScript `byteLength` before `Uint8Array::to_vec` copies them into Rust. Cancellation and timeout remove registry ownership before aborting, so browser callbacks can emit exactly one terminal event and every later callback is ignored. `request_redraw`, `ime_show`, and `ime_hide` dispatch custom window events for the host runtime. Clipboard writes cache the last app-written string synchronously and best-effort forward to `navigator.clipboard.writeText`; async helper functions expose the real browser Clipboard promise path for callers that can await. Secure storage uses localStorage with a fixed key prefix and hex-encoded bytes.
 
 Browser network status maps to `navigator.onLine`; subscriptions install one `online` and one `offline` window listener and fan out the updated status. Browser geolocation uses `watchPosition` for `start`, `getCurrentPosition` for `request_once`, a bounded 256-reading history, cached last reading, and permission status updates driven by browser callbacks. Hidden web views are same-origin iframes; cross-origin URLs are rejected because browser security prevents script execution through the current Oxide trait. `set_idle_timer_disabled(true)` requests a screen wake lock where supported and releases it when disabled. Display refresh starts at 60 Hz and is refined from a short requestAnimationFrame delta probe.
 
@@ -48,7 +48,7 @@ Browser-backed helpers require a wasm32 target and a live browser `window`. Non-
 
 ## Edge cases and failure modes
 
-If browser globals are missing, URL open, localStorage, geolocation, and WebView operations return `Unsupported` or `Unknown` errors. Clipboard reads return only the last app-written value because the browser Clipboard API is asynchronous and user-permission gated, while Oxide's current read trait is synchronous. Browser location permission starts as not determined on wasm and moves to authorized or denied only after browser callbacks. Unsupported service methods do not panic.
+If browser globals are missing, URL open, localStorage, geolocation, and WebView operations return `Unsupported` or `Unknown` errors. HTTP final URLs above 16 KiB and chunks above the remaining response budget fail before an event-owned Rust copy. Clipboard reads return only the last app-written value because the browser Clipboard API is asynchronous and user-permission gated, while Oxide's current read trait is synchronous. Browser location permission starts as not determined on wasm and moves to authorized or denied only after browser callbacks. Unsupported service methods do not panic.
 
 ## Concurrency and memory behavior
 
@@ -81,3 +81,4 @@ pub fn install_platform()
 - Added wake lock, RAF refresh-rate probing, async clipboard helpers, and async browser media stream adapter support.
 - Added browser network subscriptions, geolocation callbacks, same-origin iframe WebViews, and the host smoke hook.
 - Added the bounded, cancellable asynchronous browser HTTP adapter.
+- Moved body admission ahead of Rust copying and capped final response URLs at 16 KiB.

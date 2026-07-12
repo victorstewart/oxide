@@ -94,7 +94,27 @@ async fn streamed_response_cap_fails_closed()
    wait_terminal(&events).await;
    let events = events.lock().expect("events");
    assert_eq!(events.iter().filter(|event| event.terminal()).count(), 1);
+   assert!(!events.iter().any(|event| matches!(event, HttpEvent::Body(_))));
    assert!(matches!(events.last(), Some(HttpEvent::Failed(_))));
+}
+
+#[wasm_bindgen_test(async)]
+async fn streamed_response_exact_cap_succeeds()
+{
+   let events = Arc::new(Mutex::new(Vec::new()));
+   let callback_events = events.clone();
+   let _operation = BrowserHttpClient.start(
+      HttpRequest::get("data:text/plain,abc").with_max_response_bytes(3),
+      Box::new(move |event| callback_events.lock().expect("events").push(event)),
+   ).expect("start browser fetch");
+   wait_terminal(&events).await;
+   let events = events.lock().expect("events");
+   assert_eq!(events.iter().filter(|event| event.terminal()).count(), 1);
+   assert_eq!(events.iter().filter_map(|event| match event {
+      HttpEvent::Body(bytes) => Some(bytes.as_slice()),
+      _ => None,
+   }).flatten().copied().collect::<Vec<_>>(), b"abc");
+   assert!(matches!(events.last(), Some(HttpEvent::Complete)));
 }
 
 #[wasm_bindgen_test(async)]

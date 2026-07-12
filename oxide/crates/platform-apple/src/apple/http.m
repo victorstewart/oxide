@@ -49,6 +49,13 @@ enum
    OxideHttpEventFailed = 5,
 };
 
+enum
+{
+   OxideHttpMaximumHeaderCount = 64,
+   OxideHttpMaximumMetadataBytes = 32 * 1024,
+   OxideHttpMaximumURLBytes = 16 * 1024,
+};
+
 @interface OxideHttpTaskState : NSObject
 @property(nonatomic) uint64_t requestID;
 @property(nonatomic) size_t maximumBytes;
@@ -96,6 +103,13 @@ enum
 
    NSURLSessionConfiguration *configuration =
        [NSURLSessionConfiguration ephemeralSessionConfiguration];
+#if defined(OXIDE_HTTP_TESTING)
+   Class testProtocol = NSClassFromString(@"OxideHttpTestProtocol");
+   if (testProtocol != nil)
+   {
+      configuration.protocolClasses = @[ testProtocol ];
+   }
+#endif
    configuration.HTTPCookieStorage = nil;
    configuration.URLCredentialStorage = nil;
    configuration.URLCache = nil;
@@ -222,8 +236,50 @@ enum
       return NO;
    }
 
-   NSData *finalURL = [response.URL.absoluteString dataUsingEncoding:NSUTF8StringEncoding];
-   const NSUInteger count = state.selectedHeaders.count;
+   NSString *finalURLString = response.URL.absoluteString;
+   const NSUInteger finalURLBytes =
+       [finalURLString lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+   if (finalURLString == nil)
+   {
+      [self failTask:state.task error:-5];
+      return NO;
+   }
+   if (finalURLBytes > OxideHttpMaximumURLBytes)
+   {
+      [self failTask:state.task error:-4];
+      return NO;
+   }
+
+   NSUInteger metadataBytes = 0;
+   NSUInteger count = 0;
+   for (NSString *name in state.selectedHeaders)
+   {
+      NSString *value = [response valueForHTTPHeaderField:name];
+      if (value == nil)
+      {
+         continue;
+      }
+      const NSUInteger nameBytes =
+          [name lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+      const NSUInteger valueBytes =
+          [value lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+      if (count >= OxideHttpMaximumHeaderCount ||
+          nameBytes > OxideHttpMaximumMetadataBytes - metadataBytes ||
+          valueBytes > OxideHttpMaximumMetadataBytes - metadataBytes - nameBytes)
+      {
+         [self failTask:state.task error:-4];
+         return NO;
+      }
+      metadataBytes += nameBytes + valueBytes;
+      count += 1;
+   }
+
+   NSData *finalURL = [finalURLString dataUsingEncoding:NSUTF8StringEncoding];
+   if (finalURL == nil)
+   {
+      [self failTask:state.task error:-5];
+      return NO;
+   }
    struct OxideHttpHeader *headers =
        count == 0 ? NULL : calloc(count, sizeof(struct OxideHttpHeader));
    if (count != 0 && headers == NULL)
@@ -398,9 +454,45 @@ int32_t oxide_host_http_start(const uint8_t *url_ptr,
        max_response_bytes == 0 || callback == NULL || context == NULL ||
        out_request_id == NULL ||
        (request_header_count != 0 && request_headers == NULL) ||
-       (response_header_count != 0 && response_headers == NULL))
+       (response_header_count != 0 && response_headers == NULL) ||
+       (request_headers != NULL &&
+        (uintptr_t)request_headers % _Alignof(struct OxideHttpHeader) != 0) ||
+       (response_headers != NULL &&
+        (uintptr_t)response_headers % _Alignof(struct OxideHttpHeader) != 0) ||
+       url_len > OxideHttpMaximumURLBytes ||
+       request_header_count > OxideHttpMaximumHeaderCount ||
+       response_header_count > OxideHttpMaximumHeaderCount - request_header_count)
    {
       return -1;
+   }
+
+   size_t metadataBytes = 0;
+   for (size_t index = 0; index < request_header_count; index += 1)
+   {
+      const struct OxideHttpHeader *raw = &request_headers[index];
+      if (raw->name_ptr == NULL || raw->name_len == 0 ||
+          (raw->value_len != 0 && raw->value_ptr == NULL) ||
+          raw->name_len > OxideHttpMaximumMetadataBytes - metadataBytes)
+      {
+         return -1;
+      }
+      metadataBytes += raw->name_len;
+      if (raw->value_len > OxideHttpMaximumMetadataBytes - metadataBytes)
+      {
+         return -1;
+      }
+      metadataBytes += raw->value_len;
+   }
+   for (size_t index = 0; index < response_header_count; index += 1)
+   {
+      const struct OxideHttpHeader *raw = &response_headers[index];
+      if (raw->name_ptr == NULL || raw->name_len == 0 ||
+          raw->value_ptr != NULL || raw->value_len != 0 ||
+          raw->name_len > OxideHttpMaximumMetadataBytes - metadataBytes)
+      {
+         return -1;
+      }
+      metadataBytes += raw->name_len;
    }
 
    NSString *urlString = [[NSString alloc] initWithBytes:url_ptr
@@ -504,3 +596,10 @@ void oxide_host_http_cancel(uint64_t request_id)
       }];
    }
 }
+
+#if defined(OXIDE_HTTP_TESTING)
+void oxide_host_http_test_barrier(dispatch_block_t block)
+{
+   [[[OxideHttpDelegate shared] delegateQueue] addOperationWithBlock:block];
+}
+#endif

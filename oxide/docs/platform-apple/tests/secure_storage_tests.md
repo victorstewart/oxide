@@ -106,6 +106,8 @@
 - Run with `cargo test -p oxide-platform-apple --locked`.
 
 ## Changelog
+
+- 2026-07-12: added exact/over request-bound coverage and malformed response-FFI pointer/count/length rejection without constructing invalid nonnull pointers.
 - 2026-05-19: documented that secure-storage ABI tests cover the same ABI exported by the shared native Keychain bridge.
 - 2026-05-19: added shared Apple TCP keepalive socket networking coverage.
 - 2026-05-19: added shared Apple WebView return-code mapping tests.

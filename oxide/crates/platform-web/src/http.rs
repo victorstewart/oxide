@@ -42,6 +42,7 @@ mod browser
    const MAXIMUM_REQUEST_BODY_BYTES: usize = 16 * 1024 * 1024;
    const MAXIMUM_HEADER_COUNT: usize = 64;
    const MAXIMUM_HEADER_BYTES: usize = 32 * 1024;
+   const MAXIMUM_URL_BYTES: usize = 16 * 1024;
 
    struct OperationState
    {
@@ -217,8 +218,13 @@ mod browser
          }
          headers.push(oxide_platform_api::HttpHeader { name, value });
       }
+      let final_url = response.url();
+      if final_url.len() > MAXIMUM_URL_BYTES
+      {
+         return finish(id, HttpEvent::Failed(PlatformError::Io(String::from("HTTP final URL exceeds limit"))));
+      }
       emit(id, HttpEvent::Response(HttpResponse {
-         final_url: response.url(),
+         final_url,
          status: response.status(),
          content_length,
          headers,
@@ -248,16 +254,17 @@ mod browser
             Ok(value) if !value.is_null() && !value.is_undefined() => value,
             _ => return finish(id, HttpEvent::Failed(PlatformError::Io(String::from("HTTP response stream returned no bytes")))),
          };
-         let bytes = Uint8Array::new(&value).to_vec();
-         if bytes.is_empty()
+         let bytes = Uint8Array::new(&value);
+         let length = bytes.byte_length() as usize;
+         if length == 0
          {
             continue;
          }
-         if !admit_chunk(id, bytes.len())
+         if !admit_chunk(id, length)
          {
             return finish(id, HttpEvent::Failed(PlatformError::Io(String::from("HTTP response exceeds limit"))));
          }
-         emit(id, HttpEvent::Body(bytes));
+         emit(id, HttpEvent::Body(bytes.to_vec()));
       }
    }
 

@@ -95,11 +95,16 @@ fn browser_http_registry_and_wire_surfaces_are_strictly_bounded()
         "const MAXIMUM_REQUEST_BODY_BYTES: usize = 16 * 1024 * 1024;",
         "const MAXIMUM_HEADER_COUNT: usize = 64;",
         "const MAXIMUM_HEADER_BYTES: usize = 32 * 1024;",
+        "const MAXIMUM_URL_BYTES: usize = 16 * 1024;",
         "selected HTTP response headers exceed limit",
+        "HTTP final URL exceeds limit",
         "RequestRedirect::Manual",
         "AbortController",
         "HttpEvent::Cancelled",
     ] {
         assert!(source.contains(contract), "missing browser HTTP contract: {contract}");
     }
+    let admission = source.find("if !admit_chunk(id, length)").expect("chunk admission");
+    let copy = source.find("HttpEvent::Body(bytes.to_vec())").expect("body copy");
+    assert!(admission < copy, "browser body chunks must be admitted before copying");
 }
