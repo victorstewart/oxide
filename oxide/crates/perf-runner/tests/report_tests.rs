@@ -4654,6 +4654,49 @@ fn filtered_run_suite_supports_metal_neon_marker_ring_cases()
     let _ = std::fs::remove_file(json_out);
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn filtered_run_suite_supports_central_noop_rejection_cases()
+{
+    let mut json_out = std::env::temp_dir();
+    json_out.push(format!("oxide-perf-runner-noop-{}.json", std::process::id()));
+    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+        .env(
+            "OXIDE_PERF_RUNNER_FILTER",
+            "cpu.architecture.noop.,gpu.architecture.noop.",
+        )
+        .arg("--run-suite")
+        .arg("--smoke")
+        .arg("--json-out")
+        .arg(&json_out)
+        .output()
+        .expect("run filtered no-op rejection smoke suite");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "filtered suite failed: {stderr}");
+    assert!(stdout.contains("cases=4"), "stdout: {stdout}");
+
+    let report = std::fs::read_to_string(&json_out).expect("read no-op rejection report");
+    for id in [
+        "cpu.architecture.noop.transparent_containers",
+        "cpu.architecture.noop.zero_area",
+        "gpu.architecture.noop.transparent_containers",
+        "gpu.architecture.noop.zero_area",
+    ] {
+        let row = report_case_slice(&report, id);
+        assert_eq!(report_f64(row, "input_noop_commands"), 4_096.0);
+        assert_eq!(report_f64(row, "visible_commands"), 64.0);
+        assert_eq!(report_f64(row, "emitted_commands"), 64.0);
+        if id.starts_with("gpu.") {
+            assert_eq!(report_f64(row, "commands_traversed_avg"), 64.0);
+            assert_eq!(report_f64(row, "instances_avg"), 64.0);
+            assert_eq!(report_f64(row, "instanced_draw_calls_avg"), 1.0);
+            assert_eq!(report_f64(row, "parameter_upload_bytes_avg"), 4_104.0);
+        }
+    }
+    let _ = std::fs::remove_file(json_out);
+}
+
 #[test]
 fn filtered_run_suite_supports_rendering_architecture_contract() {
     let mut json_out = std::env::temp_dir();

@@ -2,6 +2,7 @@
 
 use oxide_renderer_api::{self as api, Renderer};
 use oxide_renderer_metal::MetalRenderer;
+use oxide_ui_core::DrawListBuilder;
 use std::fs;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
@@ -76,6 +77,70 @@ fn scene(width: u32, height: u32, accent: api::Color) -> api::DrawList
       },
    ]);
    list
+}
+
+fn noop_ordering_scene(include_noops: bool) -> api::DrawList
+{
+   let mut builder = DrawListBuilder::new();
+   builder.rrect(
+      api::RectF::new(0.0, 0.0, 96.0, 80.0),
+      [0.0; 4],
+      api::Color::rgba(0.06, 0.08, 0.12, 1.0),
+   );
+   builder.layer_begin(13, api::RectF::new(8.0, 8.0, 42.0, 48.0), true);
+   builder.clip_push(api::RectI::new(12, 12, 0, 24));
+   if include_noops
+   {
+      builder.rrect(
+         api::RectF::new(12.0, 12.0, 24.0, 24.0),
+         [3.0; 4],
+         api::Color::rgba(0.92, 0.18, 0.24, 1.0),
+      );
+   }
+   builder.clip_pop();
+   builder.rrect(
+      api::RectF::new(10.0, 10.0, 36.0, 42.0),
+      [5.0; 4],
+      api::Color::rgba(0.18, 0.48, 0.92, 1.0),
+   );
+   if include_noops
+   {
+      builder.image(
+         api::ImageHandle(0),
+         api::RectF::new(12.0, 12.0, 20.0, 20.0),
+         api::RectF::new(0.0, 0.0, 1.0, 1.0),
+         1.0,
+      );
+      builder.backdrop(
+         api::RectF::new(10.0, 10.0, 20.0, 20.0),
+         0.0,
+         api::Color::rgba(1.0, 1.0, 1.0, 0.0),
+         0.0,
+      );
+   }
+   builder.layer_end();
+   builder.backdrop(
+      api::RectF::new(42.0, 18.0, 42.0, 38.0),
+      0.0,
+      api::Color::rgba(0.82, 0.90, 1.0, 0.18),
+      1.0,
+   );
+   if include_noops
+   {
+      builder.visual_effect(
+         api::RectF::new(42.0, 18.0, 42.0, 38.0),
+         api::VisualEffect::DarkPopup {
+            blur_intensity: 0.0,
+            tint: api::Color::rgba(0.0, 0.0, 0.0, 0.0),
+         },
+      );
+   }
+   builder.rrect(
+      api::RectF::new(56.0, 28.0, 20.0, 18.0),
+      [4.0; 4],
+      api::Color::rgba(0.96, 0.54, 0.18, 0.92),
+   );
+   builder.into_inner()
 }
 
 fn render(renderer: &mut MetalRenderer, list: &api::DrawList, damage: Option<&api::Damage>) -> Vec<u8>
@@ -210,6 +275,67 @@ fn direct_and_resize_invalidations_force_complete_damage_refreshes()
       resized_height,
       &resized_partial,
    );
+}
+
+#[test]
+fn filtered_noops_preserve_clip_layer_and_backdrop_ordering_golden()
+{
+   let (width, height) = (96, 80);
+   let filtered = noop_ordering_scene(true);
+   let reference = noop_ordering_scene(false);
+   assert_eq!(filtered, reference);
+   assert_eq!(filtered.items.len(), 8);
+
+   let mut filtered_renderer = renderer(width, height);
+   let filtered_pixels = render(&mut filtered_renderer, &filtered, None);
+   assert_golden("noop_layer_backdrop_ordering", width, height, &filtered_pixels);
+}
+
+#[test]
+fn filtered_transparent_and_zero_area_commands_match_raw_pixels()
+{
+   let (width, height) = (96, 80);
+   let mut builder = DrawListBuilder::new();
+   builder.rrect(
+      api::RectF::new(0.0, 0.0, width as f32, height as f32),
+      [0.0; 4],
+      api::Color::rgba(0.06, 0.08, 0.12, 1.0),
+   );
+   builder.rrect(
+      api::RectF::new(12.0, 12.0, 36.0, 28.0),
+      [4.0; 4],
+      api::Color::rgba(0.92, 0.18, 0.24, 0.0),
+   );
+   builder.rrect(
+      api::RectF::new(52.0, 18.0, 0.0, 24.0),
+      [4.0; 4],
+      api::Color::rgba(0.18, 0.48, 0.92, 1.0),
+   );
+   builder.rrect(
+      api::RectF::new(58.0, 28.0, 22.0, 18.0),
+      [4.0; 4],
+      api::Color::rgba(0.96, 0.54, 0.18, 0.92),
+   );
+   let filtered = builder.into_inner();
+   assert_eq!(filtered.items.len(), 2);
+
+   let mut raw = filtered.clone();
+   raw.items.insert(1, api::DrawCmd::RRect {
+      rect: api::RectF::new(12.0, 12.0, 36.0, 28.0),
+      radii: [4.0; 4],
+      color: api::Color::rgba(0.92, 0.18, 0.24, 0.0),
+   });
+   raw.items.insert(2, api::DrawCmd::RRect {
+      rect: api::RectF::new(52.0, 18.0, 0.0, 24.0),
+      radii: [4.0; 4],
+      color: api::Color::rgba(0.18, 0.48, 0.92, 1.0),
+   });
+
+   let mut filtered_renderer = renderer(width, height);
+   let filtered_pixels = render(&mut filtered_renderer, &filtered, None);
+   let mut raw_renderer = renderer(width, height);
+   let raw_pixels = render(&mut raw_renderer, &raw, None);
+   assert_eq!(filtered_pixels, raw_pixels);
 }
 
 #[test]

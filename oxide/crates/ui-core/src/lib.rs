@@ -92,6 +92,34 @@ impl Default for DrawListBuilder {
 
 impl DrawListBuilder {
     #[inline]
+    fn draw_visible(&self) -> bool {
+        self.clip_stack.last().map_or(true, rect_i_visible)
+    }
+
+    fn push_draw_cmd(&mut self, cmd: gfx::DrawCmd) {
+        match cmd {
+            gfx::DrawCmd::ClipPush { rect } => {
+                let effective = self
+                    .clip_stack
+                    .last()
+                    .copied()
+                    .map_or(rect, |current| intersect_rect_i(current, rect));
+                self.clip_stack.push(effective);
+                self.list.items.push(gfx::DrawCmd::ClipPush { rect });
+            }
+            gfx::DrawCmd::ClipPop => {
+                let _ = self.clip_stack.pop();
+                self.list.items.push(gfx::DrawCmd::ClipPop);
+            }
+            gfx::DrawCmd::LayerBegin { .. } | gfx::DrawCmd::LayerEnd => {
+                self.list.items.push(cmd);
+            }
+            _ if self.draw_visible() && draw_cmd_visible(&cmd) => self.list.items.push(cmd),
+            _ => {}
+        }
+    }
+
+    #[inline]
     pub fn new() -> Self {
         Self::default()
     }
@@ -129,6 +157,9 @@ impl DrawListBuilder {
         let mut adjusted = alloc::vec::Vec::with_capacity(list.items.len());
         let mut indices = alloc::vec::Vec::with_capacity(list.indices.len());
         for item in &list.items {
+            if !draw_cmd_visible(item) {
+                continue;
+            }
             let Some(cmd) = offset_draw_cmd(item, list, vertex_offset, index_offset, &mut indices)
             else {
                 return false;
@@ -137,7 +168,9 @@ impl DrawListBuilder {
         }
         self.list.vertices.extend_from_slice(&list.vertices);
         self.list.indices.extend_from_slice(&indices);
-        self.list.items.extend(adjusted);
+        for cmd in adjusted {
+            self.push_draw_cmd(cmd);
+        }
         true
     }
 
@@ -175,32 +208,30 @@ impl DrawListBuilder {
 
     #[inline]
     pub fn layer_begin(&mut self, id: u32, rect: gfx::RectF, dirty: bool) {
-        self.list.items.push(gfx::DrawCmd::LayerBegin { id, rect, dirty });
+        self.push_draw_cmd(gfx::DrawCmd::LayerBegin { id, rect, dirty });
     }
 
     #[inline]
     pub fn layer_end(&mut self) {
-        self.list.items.push(gfx::DrawCmd::LayerEnd);
+        self.push_draw_cmd(gfx::DrawCmd::LayerEnd);
     }
 
     #[inline]
     pub fn clip_push(&mut self, rect: gfx::RectI) {
-        self.clip_stack.push(rect);
-        self.list.items.push(gfx::DrawCmd::ClipPush { rect });
+        self.push_draw_cmd(gfx::DrawCmd::ClipPush { rect });
     }
 
     #[inline]
     pub fn clip_pop(&mut self) {
-        let _ = self.clip_stack.pop();
-        self.list.items.push(gfx::DrawCmd::ClipPop);
+        self.push_draw_cmd(gfx::DrawCmd::ClipPop);
     }
 
     pub fn solid(&mut self, vb: gfx::VertexSpan, ib: gfx::IndexSpan, color: gfx::Color) {
-        self.list.items.push(gfx::DrawCmd::Solid { vb, ib, color });
+        self.push_draw_cmd(gfx::DrawCmd::Solid { vb, ib, color });
     }
 
     pub fn image(&mut self, tex: gfx::ImageHandle, dst: gfx::RectF, src: gfx::RectF, alpha: f32) {
-        self.list.items.push(gfx::DrawCmd::Image { tex, dst, src, alpha });
+        self.push_draw_cmd(gfx::DrawCmd::Image { tex, dst, src, alpha });
     }
 
     pub fn image_mesh(
@@ -210,7 +241,7 @@ impl DrawListBuilder {
         indices: &[u16],
         alpha: f32,
     ) {
-        if vertices.is_empty() {
+        if tex.0 == 0 || !alpha_visible(alpha) || !vertices_visible(vertices) {
             return;
         }
         let quad_indices = [0_u16, 1, 2, 2, 1, 3];
@@ -230,7 +261,7 @@ impl DrawListBuilder {
         };
         self.list.vertices.extend_from_slice(vertices);
         self.list.indices.extend_from_slice(indices);
-        self.list.items.push(gfx::DrawCmd::ImageMesh {
+        self.push_draw_cmd(gfx::DrawCmd::ImageMesh {
             tex,
             vb: gfx::VertexSpan { offset: vb_offset, len: vb_len },
             ib: gfx::IndexSpan { offset: ib_offset, len: ib_len },
@@ -239,7 +270,7 @@ impl DrawListBuilder {
     }
 
     pub fn glyph_run(&mut self, run: gfx::GlyphRun) {
-        self.list.items.push(gfx::DrawCmd::GlyphRun { run });
+        self.push_draw_cmd(gfx::DrawCmd::GlyphRun { run });
     }
 
     pub fn glyph_run_resolved(
@@ -248,7 +279,11 @@ impl DrawListBuilder {
         vertices: &[gfx::Vertex],
         indices: &[u16],
     ) {
-        if vertices.is_empty() || indices.is_empty() {
+        if run.atlas.0 == 0
+            || !color_visible(run.color)
+            || !vertices_visible(vertices)
+            || indices.is_empty()
+        {
             return;
         }
         let Ok(vb_len) = u32::try_from(vertices.len()) else {
@@ -273,7 +308,7 @@ impl DrawListBuilder {
     }
 
     pub fn rrect(&mut self, rect: gfx::RectF, radii: [f32; 4], color: gfx::Color) {
-        self.list.items.push(gfx::DrawCmd::RRect { rect, radii, color });
+        self.push_draw_cmd(gfx::DrawCmd::RRect { rect, radii, color });
     }
 
     pub fn nine_slice(
@@ -283,15 +318,15 @@ impl DrawListBuilder {
         slice: gfx::Insets,
         alpha: f32,
     ) {
-        self.list.items.push(gfx::DrawCmd::NineSlice { tex, rect, slice, alpha });
+        self.push_draw_cmd(gfx::DrawCmd::NineSlice { tex, rect, slice, alpha });
     }
 
     pub fn backdrop(&mut self, rect: gfx::RectF, sigma: f32, tint: gfx::Color, alpha: f32) {
-        self.list.items.push(gfx::DrawCmd::Backdrop { rect, sigma, tint, alpha });
+        self.push_draw_cmd(gfx::DrawCmd::Backdrop { rect, sigma, tint, alpha });
     }
 
     pub fn visual_effect(&mut self, rect: gfx::RectF, effect: gfx::VisualEffect) {
-        self.list.items.push(gfx::DrawCmd::VisualEffect { rect, effect });
+        self.push_draw_cmd(gfx::DrawCmd::VisualEffect { rect, effect });
     }
 
     pub fn camera_bg(
@@ -303,11 +338,157 @@ impl DrawListBuilder {
         blur: bool,
         sigma: f32,
     ) {
-        self.list.items.push(gfx::DrawCmd::CameraBg { rect, tint, alpha, grayscale, blur, sigma });
+        self.push_draw_cmd(gfx::DrawCmd::CameraBg {
+            rect,
+            tint,
+            alpha,
+            grayscale,
+            blur,
+            sigma,
+        });
     }
 
     pub fn spinner(&mut self, center: [f32; 2], atom: f32, alpha: f32) {
-        self.list.items.push(gfx::DrawCmd::Spinner { center, atom, alpha });
+        self.push_draw_cmd(gfx::DrawCmd::Spinner { center, atom, alpha });
+    }
+}
+
+#[inline]
+fn alpha_visible(alpha: f32) -> bool {
+    alpha.is_finite() && alpha > 0.0
+}
+
+#[inline]
+fn color_finite(color: gfx::Color) -> bool {
+    color.r.is_finite() && color.g.is_finite() && color.b.is_finite() && color.a.is_finite()
+}
+
+#[inline]
+fn color_visible(color: gfx::Color) -> bool {
+    color_finite(color) && color.a > 0.0
+}
+
+#[inline]
+fn rect_f_visible(rect: gfx::RectF) -> bool {
+    rect.x.is_finite()
+        && rect.y.is_finite()
+        && rect.w.is_finite()
+        && rect.h.is_finite()
+        && rect.w > 0.0
+        && rect.h > 0.0
+}
+
+#[inline]
+fn rect_i_visible(rect: &gfx::RectI) -> bool {
+    rect.w > 0 && rect.h > 0
+}
+
+fn intersect_rect_i(a: gfx::RectI, b: gfx::RectI) -> gfx::RectI {
+    let x1 = i64::from(a.x).max(i64::from(b.x));
+    let y1 = i64::from(a.y).max(i64::from(b.y));
+    let x2 = (i64::from(a.x) + i64::from(a.w)).min(i64::from(b.x) + i64::from(b.w));
+    let y2 = (i64::from(a.y) + i64::from(a.h)).min(i64::from(b.y) + i64::from(b.h));
+    let w = (x2 - x1).clamp(0, i64::from(i32::MAX)) as i32;
+    let h = (y2 - y1).clamp(0, i64::from(i32::MAX)) as i32;
+    gfx::RectI {
+        x: x1.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+        y: y1.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+        w,
+        h,
+    }
+}
+
+fn vertices_visible(vertices: &[gfx::Vertex]) -> bool {
+    let Some(first) = vertices.first() else {
+        return false;
+    };
+    if !vertex_finite(first) {
+        return false;
+    }
+    let (mut min_x, mut max_x) = (first.x, first.x);
+    let (mut min_y, mut max_y) = (first.y, first.y);
+    for vertex in &vertices[1..] {
+        if !vertex_finite(vertex) {
+            return false;
+        }
+        min_x = min_x.min(vertex.x);
+        max_x = max_x.max(vertex.x);
+        min_y = min_y.min(vertex.y);
+        max_y = max_y.max(vertex.y);
+    }
+    max_x > min_x && max_y > min_y
+}
+
+#[inline]
+fn vertex_finite(vertex: &gfx::Vertex) -> bool {
+    vertex.x.is_finite()
+        && vertex.y.is_finite()
+        && vertex.u.is_finite()
+        && vertex.v.is_finite()
+}
+
+fn visual_effect_visible(effect: gfx::VisualEffect) -> bool {
+    match effect {
+        gfx::VisualEffect::UIKitDark => true,
+        gfx::VisualEffect::DarkPopup { blur_intensity, tint } => {
+            blur_intensity.is_finite()
+                && color_finite(tint)
+                && (blur_intensity > 0.0 || tint.a > 0.0)
+        }
+    }
+}
+
+fn draw_cmd_visible(cmd: &gfx::DrawCmd) -> bool {
+    match cmd {
+        gfx::DrawCmd::LayerBegin { .. }
+        | gfx::DrawCmd::LayerEnd
+        | gfx::DrawCmd::ClipPush { .. }
+        | gfx::DrawCmd::ClipPop => true,
+        gfx::DrawCmd::Solid { vb, color, .. } => vb.len > 0 && color_visible(*color),
+        gfx::DrawCmd::Image { tex, dst, src, alpha } => {
+            tex.0 != 0 && rect_f_visible(*dst) && rect_f_visible(*src) && alpha_visible(*alpha)
+        }
+        gfx::DrawCmd::ImageMesh { tex, vb, alpha, .. } => {
+            tex.0 != 0 && vb.len > 0 && alpha_visible(*alpha)
+        }
+        gfx::DrawCmd::GlyphRun { run } => {
+            run.atlas.0 != 0 && run.vb.len > 0 && color_visible(run.color)
+        }
+        gfx::DrawCmd::RRect { rect, radii, color } => {
+            rect_f_visible(*rect)
+                && radii.iter().all(|radius| radius.is_finite())
+                && color_visible(*color)
+        }
+        gfx::DrawCmd::NineSlice { tex, rect, slice, alpha } => {
+            tex.0 != 0
+                && rect_f_visible(*rect)
+                && [slice.left, slice.top, slice.right, slice.bottom]
+                    .iter()
+                    .all(|value| value.is_finite())
+                && alpha_visible(*alpha)
+        }
+        gfx::DrawCmd::Backdrop { rect, sigma, tint, alpha } => {
+            rect_f_visible(*rect)
+                && sigma.is_finite()
+                && color_finite(*tint)
+                && alpha.is_finite()
+                && (*sigma > 0.0 || tint.a * *alpha > 0.0)
+        }
+        gfx::DrawCmd::VisualEffect { rect, effect } => {
+            rect_f_visible(*rect) && visual_effect_visible(*effect)
+        }
+        gfx::DrawCmd::CameraBg { rect, tint, alpha, sigma, .. } => {
+            rect_f_visible(*rect)
+                && color_finite(*tint)
+                && alpha_visible(*alpha)
+                && sigma.is_finite()
+        }
+        gfx::DrawCmd::Spinner { center, atom, alpha } => {
+            center.iter().all(|value| value.is_finite())
+                && atom.is_finite()
+                && *atom > 0.0
+                && alpha_visible(*alpha)
+        }
     }
 }
 

@@ -110,6 +110,20 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       }
    }
 
+   for name in ["transparent_containers", "zero_area"]
+   {
+      let cpu_id = format!("cpu.architecture.noop.{name}");
+      if perf_case_allowed(&cpu_id)
+      {
+         cases.push(noop_case(&cpu_id, smoke, name));
+      }
+      let gpu_id = format!("gpu.architecture.noop.{name}");
+      if perf_case_allowed(&gpu_id)
+      {
+         cases.push(metal_noop_case(&gpu_id, smoke, name)?);
+      }
+   }
+
    for name in [
       "caret_blink",
       "isolated_mutation_10000",
@@ -747,6 +761,85 @@ fn damage_rect_for(name: &str, phase: u64) -> api::Damage
    api::Damage { rects }
 }
 
+const METAL_INLINE_BYTES: usize = 4_096;
+const RRECT_FRAGMENT_BYTES: usize = 48;
+const RRECT_PARAMETER_BYTES: usize = 64;
+const VIEWPORT_PARAMETER_BYTES: usize = 8;
+
+fn noop_drawlist(name: &str) -> api::DrawList
+{
+   let mut builder = ui::DrawListBuilder::new();
+   for index in 0..4_096
+   {
+      let x = (index % 64) as f32 * 18.0;
+      let y = (index / 64) as f32 * 12.0;
+      if name == "transparent_containers"
+      {
+         builder.rrect(
+            api::RectF::new(x, y, 16.0, 10.0),
+            [2.0; 4],
+            api::Color::rgba(0.2, 0.6, 0.95, 0.0),
+         );
+      }
+      else
+      {
+         builder.rrect(
+            api::RectF::new(x, y, 0.0, 10.0),
+            [2.0; 4],
+            api::Color::rgba(0.2, 0.6, 0.95, 1.0),
+         );
+      }
+   }
+   for index in 0..64
+   {
+      builder.rrect(
+         api::RectF::new(index as f32 * 18.0, 760.0, 16.0, 10.0),
+         [2.0; 4],
+         api::Color::rgba(0.95, 0.5, 0.16, 1.0),
+      );
+   }
+   builder.into_inner()
+}
+
+fn noop_case(id: &str, smoke: bool, name: &str) -> PerfCaseResult
+{
+   let kind = String::from(name);
+   let mut case = measured_architecture_case(
+      id,
+      smoke,
+      "DrawListBuilder no-op rejection with 4,096 invisible and 64 visible commands.",
+      move || noop_drawlist(&kind).items.len() as u64,
+   );
+   let emitted = noop_drawlist(name).items.len();
+   case.metrics.insert(String::from("input_noop_commands"), 4_096.0);
+   case.metrics.insert(String::from("visible_commands"), 64.0);
+   case.metrics.insert(String::from("emitted_commands"), emitted as f64);
+   case
+}
+
+fn metal_noop_case(id: &str, smoke: bool, name: &str) -> Result<PerfCaseResult>
+{
+   let kind = String::from(name);
+   let mut case = measured_metal_drawlist_case(
+      id,
+      smoke,
+      format!("Metal no-op rejection workload for {name} with 4,096 invisible and 64 visible commands."),
+      move |_| (noop_drawlist(&kind), None, None, false),
+   )?;
+   let emitted = noop_drawlist(name).items.len();
+   case.metrics.insert(String::from("input_noop_commands"), 4_096.0);
+   case.metrics.insert(String::from("visible_commands"), 64.0);
+   case.metrics.insert(String::from("emitted_commands"), emitted as f64);
+   let max_batch = METAL_INLINE_BYTES / RRECT_FRAGMENT_BYTES;
+   let draw_calls = emitted.div_ceil(max_batch);
+   case.metrics.insert(String::from("instanced_draw_calls_avg"), draw_calls as f64);
+   case.metrics.insert(
+      String::from("parameter_upload_bytes_avg"),
+      (VIEWPORT_PARAMETER_BYTES + emitted * RRECT_PARAMETER_BYTES) as f64,
+   );
+   Ok(case)
+}
+
 fn image_case(id: &str, smoke: bool, name: &str, count: usize) -> PerfCaseResult
 {
    let kind = String::from(name);
@@ -829,6 +922,8 @@ where
    let mut encode_samples = Vec::with_capacity(frames);
    let mut gpu_samples = Vec::with_capacity(frames);
    let mut draws_sum = 0.0;
+   let mut instanced_sum = 0.0;
+   let mut commands_traversed_sum = 0.0;
    let mut vb_sum = 0.0;
    let mut ib_sum = 0.0;
    let mut ub_sum = 0.0;
@@ -871,6 +966,8 @@ where
          encode_samples.push(stats.encode_ms);
          gpu_samples.push(stats.gpu_ms);
          draws_sum += stats.draws as f64;
+         instanced_sum += stats.instanced as f64;
+         commands_traversed_sum += stats.commands_traversed as f64;
          vb_sum += stats.vb_bytes as f64;
          ib_sum += stats.ib_bytes as f64;
          ub_sum += stats.ub_bytes as f64;
@@ -904,6 +1001,11 @@ where
    insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
    insert_frame_pacing_metrics(&mut metrics, &frame_samples);
    metrics.insert(String::from("draws_avg"), draws_sum / frames as f64);
+   metrics.insert(String::from("instances_avg"), instanced_sum / frames as f64);
+   metrics.insert(
+      String::from("commands_traversed_avg"),
+      commands_traversed_sum / frames as f64,
+   );
    metrics.insert(String::from("vertex_upload_bytes_avg"), vb_sum / frames as f64);
    metrics.insert(String::from("index_upload_bytes_avg"), ib_sum / frames as f64);
    metrics.insert(String::from("uniform_upload_bytes_avg"), ub_sum / frames as f64);

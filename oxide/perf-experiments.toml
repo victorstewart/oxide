@@ -1,4 +1,43 @@
 [[experiments]]
+id = "c13-ui-central-noop-draw-rejection"
+introduced_commit = "C13 staged tree recorded in commit proof"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["ui-core", "renderer-metal", "oxide-perf-runner"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Every semantic draw family must reject invalid, nonfinite, empty, or noncontributing commands while preserving clip/layer structure and backdrop ordering; raw transparent/zero-area pixels and mixed ordering golden must match exactly."
+performance_gate = "Transparent-container and zero-area workloads must reduce the declared command, parameter-upload, and instanced-draw work counters by at least 10%; 15 paired fresh-process Metal encode runs per workload must pass every performance median, confidence, win, tail, and peak gate."
+decision_state = "accepted"
+decision = "Discarded semantically empty commands at the shared DrawListBuilder boundary after exact pixels and paired Metal evidence proved less backend work with faster backend lowering."
+proof = [
+   "Both workloads reduce emitted/traversed commands and GPU primitive instances from 4,160 to 64, instanced draw calls from 49 to 1, and inline parameter bytes from 266,248 to 4,104 per frame.",
+   "Transparent-container Metal encode p50/p95/p99/peak moved 0.046875/0.060504/0.077142/0.144709 ms to 0.009583/0.019625/0.029755/0.068167 ms; paired median improved 80.08%, 95% CI [76.99%,80.38%], and all 15 pairs won.",
+   "Zero-area Metal encode p50/p95/p99/peak moved 0.043959/0.060970/0.076627/0.132625 ms to 0.009688/0.020210/0.029337/0.068292 ms; paired median improved 78.47%, 95% CI [76.23%,80.17%], and all 15 pairs won.",
+   "Raw-versus-filtered transparent/zero-area Metal pixels match exactly; the mixed alpha/clip/layer/backdrop command stream equals its explicit visible-only reference and reviewed golden.",
+]
+cleanup = [
+   "Kept ClipPush, ClipPop, LayerBegin, and LayerEnd commands because they carry ordering, nesting, cache, or compositing semantics even when their nested drawing is empty.",
+   "Official latest baseline promotion remains deferred to C62; paired plans, raw samples, counters, hashes, and reports are retained under benchmarks/experiments/c13-ui-noop-filter/raw.",
+]
+
+[[experiments]]
+id = "c13-ui-noop-full-frame-wall-control"
+introduced_commit = "rejected during C13"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-metal", "oxide-perf-runner"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "The transparent and zero-area scenes must remain pixel-identical and expose the same deterministic backend work counters as the encode experiment."
+performance_gate = "Full-frame wall time must pass the no-material-regression p50, p95, p99, and peak gates after the one permitted sample-count doubling."
+decision_state = "rejected"
+decision = "Rejected full-frame wall time as the primary C13 metric because unrelated command-buffer completion spikes dominated the zero-area p95 after the permitted doubling; retained it only as a diagnostic control."
+proof = [
+   "The exact staged-tree zero-area 30-pair control improved p50 1.317750 to 1.295750 ms, p99 2.577632 to 2.560216 ms, and peak 2.786000 to 2.754750 ms, but p95 moved 1.424489 to 1.497759 ms and failed the strict gate.",
+   "The exact affected Metal encode phase passes every performance gate for both workloads and is retained as the primary metric; no runtime implementation changed in response to the rejected wall-time measurement.",
+]
+cleanup = ["Full-frame samples remain under the C13 raw evidence root as diagnostic data and are not used for the acceptance claim."]
+
+[[experiments]]
 id = "c05-metal-layer-single-owner-direct-load"
 introduced_commit = "C05 staged tree recorded in commit proof"
 introduced_date = "2026-07-12"
