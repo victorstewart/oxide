@@ -60,7 +60,7 @@
 - No heap allocation is added to the callback-installed input path; fallback logging may format strings only when no callback is registered.
 
 ## Performance notes
-- This change does not touch renderer encode/present hot paths.
+- Renderer construction selects the normal three-slot visible-host resource mode; actual Metal command-buffer completion still protects reuse and saturated frames coalesce without blocking.
 - Callback pointer copying is constant-time and mirrors the macOS host pattern.
 - Real Metal shader compilation is available after installing Apple's Metal Toolchain component; renderer-metal checks now generate `default.metallib` instead of a placeholder.
 
@@ -82,6 +82,7 @@ oxide_host_emit_touch(10, 0, 1.0, 2.0, 0.5, 1, 0.0, 0.0, 0, 0, 100);
 ```
 
 ## Changelog
+- 2026-07-13: selected the three-slot visible Metal frame-resource mode instead of retaining the deeper offscreen/perf allocation.
 - 2026-06-22: froze host stats and camera benchmark snapshot ABI layouts, including Swift benchmark-runtime host-stat mirror fields.
 - 2026-06-22: added iOS host camera typedef ABI static-assert retention coverage.
 - 2026-06-01: added macOS-side source gates keeping `AVCaptureVideoPreviewLayer` out of the product custom camera preview path.

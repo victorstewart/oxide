@@ -62,6 +62,7 @@
 
 ## Concurrency and memory behavior
 - App state is guarded by one process-global mutex and recovered on poison at every host entry point.
+- The visible Metal renderer owns three completion-protected frame slots; it skips/coalesces when all remain in flight rather than waiting or reusing a busy slot.
 - Callback slots are `OnceLock<Mutex<Option<extern "C" fn(...)>>>` values; emitters copy function pointers out of the lock before dispatch.
 - Callback tests serialize access to global callback slots so parallel test execution cannot race the smoke harness.
 - The custom WebView harness runs as process `main`, pumps the CoreFoundation run loop while waiting for WebKit callbacks, and removes its temporary HTML document before teardown.
@@ -73,6 +74,7 @@
 - `tests/metal_drawable_lifetime_tests.rs` statically verifies late drawable acquisition, timeout-capable `nextDrawable`, cancellation, and pending-damage retention after skipped prepared frames.
 
 ## Changelog
+- 2026-07-13: selected the three-slot visible Metal frame-resource mode while leaving eight-slot depth explicit for offscreen/perf construction.
 - 2026-06-01: retained prepared-frame damage across macOS drawable timeout or submit failure so dirty regions retry after pressure.
 - 2026-05-19: moved the macOS secure-storage host ABI to the shared Apple native Keychain bridge.
 - 2026-05-19: moved the macOS HTTP host ABI to the shared Apple native URLSession bridge.

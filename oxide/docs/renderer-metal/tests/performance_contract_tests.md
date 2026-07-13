@@ -2,7 +2,7 @@
 
 ## Intention and purpose
 
-This test file protects renderer performance contracts that are easy to regress silently: build-time Metal shader compilation, no runtime Metal source compilation, frame-ring reuse without CPU/GPU waits, explicit readback-only blocking waits, direct GPU-duration attribution, and single-owner layer-cache rendering.
+This test file protects renderer performance contracts that are easy to regress silently: build-time Metal shader compilation, no runtime Metal source compilation, right-sized completion-protected frame resources, frame-ring reuse without CPU/GPU waits, explicit readback-only blocking waits, direct GPU-duration attribution, and single-owner layer-cache rendering.
 
 ## Relation to the rest of the code
 
@@ -20,6 +20,12 @@ This test file protects renderer performance contracts that are easy to regress 
   Confirms Apple-target shader build failures stop the build instead of emitting a placeholder metallib.
 - `per_frame_reuse_never_waits_for_gpu_completion()`
   Confirms frame-ring slot selection skips under backpressure instead of waiting for GPU completion.
+- `visible_and_offscreen_frame_resource_modes_have_explicit_depths()`
+  Freezes three-slot visible and eight-slot offscreen configuration while requiring one completion-owned bitset to govern reuse without a redundant per-slot command-buffer reference.
+- `visible_frame_resources_cover_measured_high_water_and_skip_only_when_busy()`
+  Constructs the real visible renderer, verifies 512/64/72 KiB slot capacities, saturates every slot, and proves nonblocking skip/recovery.
+- `offscreen_frame_resources_retain_deeper_completion_protected_mode()`
+  Clamps oversized depth to eight, saturates every explicit offscreen slot so visible right-sizing cannot silently collapse the stress mode, and clamps zero depth to one valid slot.
 - `blocking_gpu_waits_are_limited_to_explicit_readback_helpers()`
   Confirms `wait_until_completed` only appears in explicit readback helpers, not frame hot paths.
 - `command_buffer_gpu_duration_is_enabled_on_macos_and_ios()`
@@ -61,7 +67,7 @@ Source-contract tests catch forbidden APIs and required guard strings before run
 
 ## Concurrency and memory behavior
 
-The source tests allocate only small strings borrowed from `include_str!`. The initializer runtime test constructs and drops one renderer instance. The layer runtime test submits three bounded frames through the production command queue and reuses the same renderer/cache.
+The source tests allocate only small strings borrowed from `include_str!`. The frame-resource runtime tests construct fixed-depth vectors once, then mutate one bounded completion bitset while proving saturated selection remains nonblocking. The initializer runtime test constructs and drops one renderer instance. The layer runtime test submits three bounded frames through the production command queue and reuses the same renderer/cache.
 
 ## Performance notes
 
@@ -100,6 +106,7 @@ fn initialize_renderer_for_contract_check() -> Result<(), oxide_renderer_metal::
 
 ## Changelog
 
+- 2026-07-13: added explicit visible/offscreen depth, initial-capacity, completion ownership, saturation skip, and recovery coverage.
 - 2026-07-12: added real-Metal effect target plan, warm reuse, byte-accounting, and purge coverage.
 - 2026-07-12: added source and real-Metal missing/clean/dirty layer-cache ownership, nested invalidation, and same-size texture-reuse coverage.
 - 2026-07-12: added renderer memory-schema coverage for omitted resource families, overflow-safe accumulation, and cross-kind identity separation.

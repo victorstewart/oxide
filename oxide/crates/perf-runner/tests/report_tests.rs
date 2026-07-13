@@ -4898,6 +4898,53 @@ fn metal_effect_target_plan_reports_first_use_and_exact_residency()
    let _ = std::fs::remove_file(json_out);
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-frame-resources-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "gpu.architecture.frame_resources.")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run Metal frame-resource smoke suite");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "Metal frame-resource suite failed: {stderr}");
+   assert!(stdout.contains("cases=2"), "stdout: {stdout}");
+   let report = std::fs::read_to_string(&json_out).expect("read frame-resource report");
+   let visible = report_case_slice(
+      &report,
+      "gpu.architecture.frame_resources.visible_high_water",
+   );
+   let offscreen = report_case_slice(
+      &report,
+      "gpu.architecture.frame_resources.offscreen_growth_stress",
+   );
+
+   assert_eq!(report_f64(visible, "frame_resource_depth"), 3.0);
+   assert_eq!(report_f64(visible, "frame_ring_buffer_bytes_peak"), 2_015_232.0);
+   assert_eq!(report_f64(visible, "cold_resource_grows"), 0.0);
+   assert_eq!(report_f64(visible, "warm_resource_grows"), 0.0);
+   assert_eq!(report_f64(visible, "vertex_upload_bytes"), 327_680.0);
+   assert_eq!(report_f64(visible, "index_upload_bytes"), 49_152.0);
+   assert_eq!(report_f64(visible, "uniform_upload_bytes"), 16.0);
+   assert_eq!(report_f64(offscreen, "frame_resource_depth"), 8.0);
+   assert_eq!(report_f64(offscreen, "frame_ring_buffer_bytes_peak"), 7_733_248.0);
+   assert_eq!(report_f64(offscreen, "cold_resource_grows"), 16.0);
+   assert_eq!(report_f64(offscreen, "warm_resource_grows"), 0.0);
+   assert_eq!(report_f64(offscreen, "frame_backpressure_skips"), 0.0);
+   assert_eq!(report_f64(offscreen, "vertex_upload_bytes"), 655_360.0);
+   assert_eq!(report_f64(offscreen, "index_upload_bytes"), 98_304.0);
+   assert_eq!(report_f64(offscreen, "uniform_upload_bytes"), 16.0);
+   let _ = std::fs::remove_file(json_out);
+}
+
 #[test]
 fn filtered_run_suite_supports_gpu_journey_frame_pacing_case() {
     let mut json_out = std::env::temp_dir();
@@ -4929,5 +4976,9 @@ fn filtered_run_suite_supports_gpu_journey_frame_pacing_case() {
     assert_eq!(report_f64(row, "missed_frame_ratio_120hz"), 0.0);
     assert_eq!(report_f64(row, "hitch_ratio_120hz"), 0.0);
     assert!(report_f64(row, "navigation_events") > 0.0);
+    assert_eq!(report_f64(row, "frame_resource_depth"), 3.0);
+    assert_eq!(report_f64(row, "frame_ring_buffer_bytes_peak"), 2_015_232.0);
+    assert_eq!(report_f64(row, "resource_grows_total"), 0.0);
+    assert_eq!(report_f64(row, "frame_backpressure_skips"), 0.0);
     let _ = std::fs::remove_file(json_out);
 }

@@ -58,8 +58,8 @@ use oxide_renderer_api as api;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::CStr;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{atomic::AtomicBool, Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use thiserror::Error;
 
@@ -655,7 +655,12 @@ fn glyph_icb_resource_options() -> MTLResourceOptions {
 // Metal `set*Bytes` APIs are limited to 4 KiB payloads per call.
 // Keep instanced parameter uploads under this limit by chunking draws.
 const METAL_SET_BYTES_LIMIT: usize = 4096;
-const FRAME_RING_SIZE: usize = 8;
+const VISIBLE_FRAME_RESOURCE_DEPTH: usize = 3;
+const OFFSCREEN_FRAME_RESOURCE_DEPTH: usize = 8;
+const MAX_FRAME_RESOURCE_DEPTH: usize = OFFSCREEN_FRAME_RESOURCE_DEPTH;
+const INITIAL_VERTEX_BUFFER_BYTES: usize = 512 * 1024;
+const INITIAL_INDEX_BUFFER_BYTES: usize = 64 * 1024;
+const INITIAL_UNIFORM_BUFFER_BYTES: usize = 72 * 1024;
 const IMAGE_ARG_TEXTURE_SLOTS: u32 = 128;
 const IMAGE_ARG_SMALL_TABLE_COUNT: usize = 8;
 const LEGACY_SPINNER_LARGE_ATOM: f32 = 37.0;
@@ -786,6 +791,7 @@ pub struct MetalRendererConfig {
     pub camera_render_mode: CameraRenderMode,
     pub camera_texture_source: CameraTextureSource,
     pub direct_preview_only: bool,
+    pub frame_resource_depth: usize,
 }
 
 #[cfg(feature = "snapshot-tests")]
@@ -816,8 +822,20 @@ impl Default for MetalRendererConfig {
             camera_texture_source: camera_texture_source_from_env()
                 .unwrap_or(CameraTextureSource::Live),
             direct_preview_only: false,
+            frame_resource_depth: OFFSCREEN_FRAME_RESOURCE_DEPTH,
         }
     }
+}
+
+impl MetalRendererConfig
+{
+   pub fn visible_host() -> Self
+   {
+      Self {
+         frame_resource_depth: VISIBLE_FRAME_RESOURCE_DEPTH,
+         ..Self::default()
+      }
+   }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -948,7 +966,8 @@ pub struct MetalRenderer {
     frame_id: u64,
     frame_slot: usize,
     frame_backpressure_skipped: bool,
-    frames: [PerFrame; FRAME_RING_SIZE],
+    frame_in_flight: Arc<AtomicU8>,
+    frames: alloc::vec::Vec<PerFrame>,
     vb: Ring,
     ib: Ring,
     ub: Ring,
@@ -985,7 +1004,7 @@ pub struct MetalRenderer {
     eighth_tmp_tex: Option<Texture>,
     scene3d_bloom_tex: Option<Texture>,
     scene3d_bloom_tmp_tex: Option<Texture>,
-    id_mask_targets: [Option<id_mask_gpu::RenderTargets>; FRAME_RING_SIZE],
+    id_mask_targets: alloc::vec::Vec<Option<id_mask_gpu::RenderTargets>>,
     id_mask_vertex_caches: alloc::vec::Vec<IdMaskVertexUploadCache>,
     images: HashMap<u32, Texture>,
     next_image_id: u32,
@@ -1348,20 +1367,27 @@ impl MetalRenderer {
         self.frame_slot
     }
 
+    #[inline]
+    fn next_frame_slot(&self) -> usize
+    {
+        let next = self.frame_slot + 1;
+        if next == self.frames.len() { 0 } else { next }
+    }
+
     #[cfg(feature = "snapshot-tests")]
     pub fn mark_next_preferred_frame_slot_busy_for_snapshot(&mut self) -> usize
     {
-        let preferred = (self.frame_id.wrapping_add(1) % FRAME_RING_SIZE as u64) as usize;
-        self.frames[preferred].in_flight.store(true, Ordering::Release);
+        let preferred = self.next_frame_slot();
+        self.frame_in_flight.fetch_or(frame_slot_bit(preferred), Ordering::Release);
         preferred
     }
 
     #[cfg(feature = "snapshot-tests")]
     pub fn release_frame_slot_for_snapshot(&mut self, slot: usize)
     {
-        if let Some(frame) = self.frames.get(slot)
+        if slot < self.frames.len()
         {
-            frame.in_flight.store(false, Ordering::Release);
+            self.frame_in_flight.fetch_and(!frame_slot_bit(slot), Ordering::Release);
         }
     }
 
@@ -1369,6 +1395,27 @@ impl MetalRenderer {
     pub fn current_frame_slot_for_snapshot(&self) -> usize
     {
         self.current_frame_slot()
+    }
+
+    #[cfg(feature = "snapshot-tests")]
+    pub fn frame_resource_depth_for_snapshot(&self) -> usize
+    {
+        self.frames.len()
+    }
+
+    #[cfg(feature = "snapshot-tests")]
+    pub fn frame_ring_capacities_for_snapshot(&self, slot: usize) -> Option<[usize; 3]>
+    {
+        Some([*self.vb.cap.get(slot)?, *self.ib.cap.get(slot)?, *self.ub.cap.get(slot)?])
+    }
+
+    #[cfg(feature = "snapshot-tests")]
+    pub fn mark_frame_slot_busy_for_snapshot(&mut self, slot: usize)
+    {
+        if slot < self.frames.len()
+        {
+            self.frame_in_flight.fetch_or(frame_slot_bit(slot), Ordering::Release);
+        }
     }
 
     #[cfg(feature = "snapshot-tests")]
@@ -1403,13 +1450,15 @@ impl MetalRenderer {
 
     fn new_with_config_impl(config: MetalRendererConfig) -> Result<Self, MetalInitError> {
         let simulator = running_on_ios_simulator();
+        let frame_resource_depth = config.frame_resource_depth.clamp(1, MAX_FRAME_RESOURCE_DEPTH);
         ios_log(&format!(
-            "oxide.renderer-metal: init begin simulator={} wants_hdr={} sample_count={} camera_mode={:?} camera_source={:?}",
+            "oxide.renderer-metal: init begin simulator={} wants_hdr={} sample_count={} camera_mode={:?} camera_source={:?} frame_resource_depth={}",
             simulator,
             config.wants_hdr,
             config.sample_count,
             config.camera_render_mode,
-            config.camera_texture_source
+            config.camera_texture_source,
+            frame_resource_depth
         ));
         ios_log("oxide.renderer-metal: init before device resolve");
         let device = if let Some(external) = take_external_mtl_device() {
@@ -1833,6 +1882,7 @@ impl MetalRenderer {
             );
             let img_arg_bufs = Some(Ring::new(
                 &device,
+                frame_resource_depth,
                 img_arg_stride.saturating_mul(IMAGE_ARG_SMALL_TABLE_COUNT),
                 MTLResourceOptions::StorageModeShared,
             ));
@@ -1842,21 +1892,24 @@ impl MetalRenderer {
         let opts =
             MTLResourceOptions::CPUCacheModeWriteCombined | MTLResourceOptions::StorageModeShared;
         let direct_preview_ring_size = 4 * 1024;
-        // Pre-size dynamic rings to reduce first-frame growth churn on Simulator.
-        // This path previously hit MTLSim `newBuffer` failures during early growth.
+        // These capacities cover measured 4,096-quad and 1,024-marker high-water workloads.
+        // Larger offscreen/stress frames retain bounded per-slot geometric growth.
         let vb = Ring::new(
             &device,
-            if direct_preview_only { direct_preview_ring_size } else { 4 * 1024 * 1024 },
+            frame_resource_depth,
+            if direct_preview_only { direct_preview_ring_size } else { INITIAL_VERTEX_BUFFER_BYTES },
             opts,
         );
         let ib = Ring::new(
             &device,
-            if direct_preview_only { direct_preview_ring_size } else { 2 * 1024 * 1024 },
+            frame_resource_depth,
+            if direct_preview_only { direct_preview_ring_size } else { INITIAL_INDEX_BUFFER_BYTES },
             opts,
         );
         let ub = Ring::new(
             &device,
-            if direct_preview_only { direct_preview_ring_size } else { 2 * 1024 * 1024 },
+            frame_resource_depth,
+            if direct_preview_only { direct_preview_ring_size } else { INITIAL_UNIFORM_BUFFER_BYTES },
             opts,
         );
         let damage_enabled = !direct_preview_only
@@ -1904,6 +1957,7 @@ impl MetalRenderer {
             camera_render_mode: config.camera_render_mode,
             camera_texture_source: config.camera_texture_source,
             direct_preview_only,
+            frame_resource_depth,
         };
         let camera_preview_renderer = if direct_preview_only
             && experimental_tiny_camera_preview_renderer_enabled()
@@ -1990,7 +2044,8 @@ impl MetalRenderer {
             frame_id: 0,
             frame_slot: 0,
             frame_backpressure_skipped: false,
-            frames: core::array::from_fn(|_| PerFrame::new()),
+            frame_in_flight: Arc::new(AtomicU8::new(0)),
+            frames: (0..frame_resource_depth).map(|_| PerFrame::new()).collect(),
             vb,
             ib,
             ub,
@@ -2027,7 +2082,7 @@ impl MetalRenderer {
             eighth_tmp_tex: None,
             scene3d_bloom_tex: None,
             scene3d_bloom_tmp_tex: None,
-            id_mask_targets: core::array::from_fn(|_| None),
+            id_mask_targets: (0..frame_resource_depth).map(|_| None).collect(),
             id_mask_vertex_caches: alloc::vec::Vec::new(),
             images: HashMap::new(),
             next_image_id: 1,
@@ -2691,7 +2746,10 @@ impl MetalRenderer {
         self.target_msaa_tex = None;
         self.depth_tex = None;
         self.purge_effect_targets();
-        self.id_mask_targets = core::array::from_fn(|_| None);
+        for targets in &mut self.id_mask_targets
+        {
+            *targets = None;
+        }
         self.cam_blur_tex = None;
         self.cam_xfade_prev_tex = None;
     }
@@ -5051,10 +5109,24 @@ impl api::Renderer for MetalRenderer {
         damage: Option<&api::Damage>,
     ) -> api::FrameToken {
         self.frame_id = self.frame_id.wrapping_add(1);
-        let preferred_slot = (self.frame_id % FRAME_RING_SIZE as u64) as usize;
-        let slot = (0..FRAME_RING_SIZE)
-            .map(|offset| (preferred_slot + offset) % FRAME_RING_SIZE)
-            .find(|slot| self.frames[*slot].is_available());
+        let frame_resource_depth = self.frames.len();
+        let preferred_slot = self.next_frame_slot();
+        let busy_slots = self.frame_in_flight.load(Ordering::Acquire);
+        let mut candidate = preferred_slot;
+        let mut slot = None;
+        for _ in 0..frame_resource_depth
+        {
+            if busy_slots & frame_slot_bit(candidate) == 0
+            {
+                slot = Some(candidate);
+                break;
+            }
+            candidate += 1;
+            if candidate == frame_resource_depth
+            {
+                candidate = 0;
+            }
+        }
         self.frame_backpressure_skipped = slot.is_none();
         self.frame_slot = slot.unwrap_or(preferred_slot);
         if let Some(slot) = slot {
@@ -5549,7 +5621,6 @@ impl api::Renderer for MetalRenderer {
             let mut layer_frame = self.layer_scratch_frame.take().unwrap_or_else(PerFrame::new);
             layer_frame.reset();
             layer_frame.cmd = None;
-            layer_frame.submitted = None;
             let old_size = (self.target_w, self.target_h);
             let old_encoding_layer = self.encoding_layer;
             self.target_w = w;
@@ -6312,7 +6383,9 @@ impl api::Renderer for MetalRenderer {
             let completed_gpu_stats = self.completed_gpu_stats.clone();
             let gpu_trace = self.frame_gpu_trace.take();
             let gpu_device = self.device.to_owned();
-            let in_flight = self.frames[slot].in_flight.clone();
+            let frame_in_flight = self.frame_in_flight.clone();
+            let submitted_slot_bit = frame_slot_bit(slot);
+            frame_in_flight.fetch_or(submitted_slot_bit, Ordering::Release);
             if !pending_present_drawable.is_null() {
                 let raw_drawable = pending_present_drawable as *mut MTLDrawable;
                 let drawable = unsafe { DrawableRef::from_ptr(raw_drawable) };
@@ -6400,11 +6473,10 @@ impl api::Renderer for MetalRenderer {
                         };
                     }
                 }
-                in_flight.store(false, Ordering::Release);
+                frame_in_flight.fetch_and(!submitted_slot_bit, Ordering::Release);
             })
             .copy();
             cmd.add_completed_handler(&completion);
-            self.frames[slot].mark_submitted(&cmd);
             cmd.commit();
             if self.accounting_stats_enabled {
                 self.last_stats.actual_submissions =
@@ -6956,8 +7028,8 @@ fn encode_draws_range(
                     );
                 }
                 pf.ub_used += u_bytes;
-                enc.set_vertex_buffer(0, Some(&r.vb.bufs[slot]), vb_off);
-                enc.set_vertex_buffer(1, Some(&r.ub.bufs[slot]), ub_off);
+                enc.set_vertex_buffer(0, Some(r.vb.buffer(slot)), vb_off);
+                enc.set_vertex_buffer(1, Some(r.ub.buffer(slot)), ub_off);
                 let idx_count = ib.len as usize;
                 if idx_count > 0 {
                     // Upload indices and draw indexed
@@ -6986,7 +7058,7 @@ fn encode_draws_range(
                             primitive,
                             local_idx_count as u64,
                             MTLIndexType::UInt16,
-                            &r.ib.bufs[slot],
+                            r.ib.buffer(slot),
                             ib_off,
                         );
                         r.acc_draws += 1;
@@ -7186,8 +7258,8 @@ fn encode_draws_range(
                         );
                     }
                     pf.ub_used += u_bytes;
-                    enc.set_vertex_buffer(0, Some(&r.vb.bufs[slot]), vb_off);
-                    enc.set_fragment_buffer(0, Some(&r.ub.bufs[slot]), ub_off);
+                    enc.set_vertex_buffer(0, Some(r.vb.buffer(slot)), vb_off);
+                    enc.set_fragment_buffer(0, Some(r.ub.buffer(slot)), ub_off);
 
                     let idx_count = ib.len as usize;
                     if idx_count > 0 {
@@ -7219,7 +7291,7 @@ fn encode_draws_range(
                             MTLPrimitiveType::Triangle,
                             local_idx_count as u64,
                             MTLIndexType::UInt16,
-                            &r.ib.bufs[slot],
+                            r.ib.buffer(slot),
                             ib_off,
                         );
                         r.acc_draws = r.acc_draws.saturating_add(1);
@@ -7398,7 +7470,7 @@ fn encode_draws_range(
                         continue;
                     };
                     debug_assert!(r.img_arg_used <= argument_buffers.cap[slot]);
-                    let buffer = &argument_buffers.bufs[slot];
+                    let buffer = argument_buffers.buffer(slot);
                     argument_encoder.set_argument_buffer(buffer, offset as u64);
                     for (texture_index, handle) in r.image_arg_handles.iter().copied().enumerate()
                     {
@@ -7433,7 +7505,7 @@ fn encode_draws_range(
                 };
                 enc.set_fragment_buffer(
                     2,
-                    Some(&argument_buffers.bufs[slot]),
+                    Some(argument_buffers.buffer(slot)),
                     r.image_arg_tables[table_index].offset,
                 );
                 r.acc_image_argument_binds = r.acc_image_argument_binds.saturating_add(1);
@@ -7637,14 +7709,14 @@ fn encode_draws_range(
                                 };
                                 cmd_i.set_render_pipeline_state(pipeline);
                             }
-                            cmd_i.set_vertex_buffer(0, Some(&r.vb.bufs[slot]), gr.vb_off);
-                            cmd_i.set_fragment_buffer(0, Some(&r.ub.bufs[slot]), gr.ub_off);
+                            cmd_i.set_vertex_buffer(0, Some(r.vb.buffer(slot)), gr.vb_off);
+                            cmd_i.set_fragment_buffer(0, Some(r.ub.buffer(slot)), gr.ub_off);
                             if gr.idx_count > 0 {
                                 cmd_i.draw_indexed_primitives(
                                     MTLPrimitiveType::Triangle,
                                     gr.idx_count,
                                     MTLIndexType::UInt16,
-                                    &r.ib.bufs[slot],
+                                    r.ib.buffer(slot),
                                     gr.ib_off,
                                     1,
                                     0,
@@ -7659,14 +7731,14 @@ fn encode_draws_range(
                         r.acc_icb_cmds += count as u32;
                     } else {
                         for gr in &r.glyph_group {
-                            enc.set_vertex_buffer(0, Some(&r.vb.bufs[slot]), gr.vb_off);
-                            enc.set_fragment_buffer(0, Some(&r.ub.bufs[slot]), gr.ub_off);
+                            enc.set_vertex_buffer(0, Some(r.vb.buffer(slot)), gr.vb_off);
+                            enc.set_fragment_buffer(0, Some(r.ub.buffer(slot)), gr.ub_off);
                             if gr.idx_count > 0 {
                                 enc.draw_indexed_primitives(
                                     MTLPrimitiveType::Triangle,
                                     gr.idx_count,
                                     MTLIndexType::UInt16,
-                                    &r.ib.bufs[slot],
+                                    r.ib.buffer(slot),
                                     gr.ib_off,
                                 );
                                 r.acc_draws = r.acc_draws.saturating_add(1);
@@ -9044,8 +9116,6 @@ fn saturating_resource_bytes(dimensions: &[u64], bytes_per_element: u64) -> u64 
 
 struct PerFrame {
     cmd: Option<CommandBuffer>,
-    submitted: Option<CommandBuffer>,
-    in_flight: Arc<AtomicBool>,
     vb_used: usize,
     ib_used: usize,
     ub_used: usize,
@@ -9061,8 +9131,6 @@ impl PerFrame {
     fn new() -> Self {
         Self {
             cmd: None,
-            submitted: None,
-            in_flight: Arc::new(AtomicBool::new(false)),
             vb_used: 0,
             ib_used: 0,
             ub_used: 0,
@@ -9074,27 +9142,21 @@ impl PerFrame {
         self.ub_used = 0;
     }
 
-    #[inline]
-    fn is_available(&self) -> bool {
-        !self.in_flight.load(Ordering::Acquire)
-    }
-
     fn prepare_for_encode(&mut self) {
-        debug_assert!(self.is_available());
-        self.submitted = None;
         self.reset();
         self.cmd = None;
     }
+}
 
-    fn mark_submitted(&mut self, cmd: &CommandBuffer) {
-        self.in_flight.store(true, Ordering::Release);
-        self.submitted = Some(cmd.to_owned());
-    }
+#[inline]
+fn frame_slot_bit(slot: usize) -> u8
+{
+    1_u8 << slot
 }
 
 struct Ring {
-    bufs: [Buffer; FRAME_RING_SIZE],
-    cap: [usize; FRAME_RING_SIZE],
+    bufs: [Buffer; MAX_FRAME_RESOURCE_DEPTH],
+    cap: [usize; MAX_FRAME_RESOURCE_DEPTH],
     opts: MTLResourceOptions,
 }
 
@@ -9110,27 +9172,50 @@ struct IdMaskVertexUploadCache {
 }
 
 impl Ring {
-    fn new(device: &Device, initial: usize, opts: MTLResourceOptions) -> Self {
-        Self {
-            bufs: core::array::from_fn(|_| device.new_buffer(initial as u64, opts)),
-            cap: [initial; FRAME_RING_SIZE],
+    fn new(device: &Device, depth: usize, initial: usize, opts: MTLResourceOptions) -> Self {
+        let first = device.new_buffer(initial as u64, opts);
+        let mut ring = Self {
+            bufs: core::array::from_fn(|_| first.to_owned()),
+            cap: [0; MAX_FRAME_RESOURCE_DEPTH],
             opts,
+        };
+        for slot in 0..depth
+        {
+            if slot > 0
+            {
+                ring.bufs[slot] = device.new_buffer(initial as u64, opts);
+            }
+            ring.cap[slot] = initial;
         }
+        ring
     }
-    fn ensure_capacity(&mut self, device: &Device, slot: usize, needed: usize) -> bool {
-        if needed <= self.cap[slot] {
+    fn ensure_capacity(&mut self, device: &Device, slot: usize, needed: usize) -> bool
+    {
+        if needed <= self.cap[slot]
+        {
             return false;
         }
+        self.grow(device, slot, needed);
+        true
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn grow(&mut self, device: &Device, slot: usize, needed: usize)
+    {
         let mut new_cap = self.cap[slot] + self.cap[slot] / 2;
-        if new_cap < needed {
+        if new_cap < needed
+        {
             new_cap = needed;
         }
-        let old = self.bufs[slot].to_owned();
+        let old = self.buffer(slot).to_owned();
         let old_cap = self.cap[slot];
         let new_buf = device.new_buffer(new_cap as u64, self.opts);
         let copy_len = old_cap.min(new_cap);
-        if copy_len > 0 {
-            unsafe {
+        if copy_len > 0
+        {
+            unsafe
+            {
                 core::ptr::copy_nonoverlapping(
                     old.contents() as *const u8,
                     new_buf.contents() as *mut u8,
@@ -9138,13 +9223,28 @@ impl Ring {
                 );
             }
         }
+        if slot == 0
+        {
+            for alias in 1..MAX_FRAME_RESOURCE_DEPTH
+            {
+                if self.cap[alias] == 0
+                {
+                    self.bufs[alias] = new_buf.to_owned();
+                }
+            }
+        }
         self.bufs[slot] = new_buf;
         self.cap[slot] = new_cap;
-        true
     }
     fn contents_ptr(&self, slot: usize) -> NonNull<u8> {
-        let p = self.bufs[slot].contents();
+        let p = self.buffer(slot).contents();
         NonNull::new(p as *mut u8).expect("non-null")
+    }
+
+    #[inline]
+    fn buffer(&self, slot: usize) -> &Buffer
+    {
+        &self.bufs[slot]
     }
 }
 
@@ -9533,15 +9633,15 @@ impl MetalRenderer {
         buffer_seen.clear();
         let vertex_buffer_bytes = Self::unique_buffer_category_bytes(
             &mut buffer_seen,
-            self.vb.bufs.iter().map(|buf| buf.as_ref()),
+            self.vb.bufs.iter().take(self.frames.len()).map(|buf| buf.as_ref()),
         );
         let index_buffer_bytes = Self::unique_buffer_category_bytes(
             &mut buffer_seen,
-            self.ib.bufs.iter().map(|buf| buf.as_ref()),
+            self.ib.bufs.iter().take(self.frames.len()).map(|buf| buf.as_ref()),
         );
         let uniform_buffer_bytes = Self::unique_buffer_category_bytes(
             &mut buffer_seen,
-            self.ub.bufs.iter().map(|buf| buf.as_ref()),
+            self.ub.bufs.iter().take(self.frames.len()).map(|buf| buf.as_ref()),
         );
         let frame_ring_buffer_bytes = vertex_buffer_bytes
             .saturating_add(index_buffer_bytes)
@@ -9550,7 +9650,9 @@ impl MetalRenderer {
             &mut buffer_seen,
             self.img_arg_bufs
                 .iter()
-                .flat_map(|buffers| buffers.bufs.iter().map(|buffer| buffer.as_ref())),
+                .flat_map(|buffers| {
+                    buffers.bufs.iter().take(self.frames.len()).map(|buffer| buffer.as_ref())
+                }),
         );
         let id_mask_vertex_buffer_bytes = Self::unique_buffer_category_bytes(
             &mut buffer_seen,
@@ -9646,9 +9748,14 @@ impl MetalRenderer {
             .vb
             .bufs
             .iter()
-            .chain(self.ib.bufs.iter())
-            .chain(self.ub.bufs.iter())
-            .chain(self.img_arg_bufs.iter().flat_map(|buffers| buffers.bufs.iter()))
+            .take(self.frames.len())
+            .chain(self.ib.bufs.iter().take(self.frames.len()))
+            .chain(self.ub.bufs.iter().take(self.frames.len()))
+            .chain(
+                self.img_arg_bufs
+                    .iter()
+                    .flat_map(|buffers| buffers.bufs.iter().take(self.frames.len())),
+            )
             .chain(self.id_mask_vertex_caches.iter().map(|cache| &cache.buffer))
             .chain(self.meshes_3d.values().flat_map(|mesh| [&mesh.vb, &mesh.ib]))
         {
@@ -9989,10 +10096,17 @@ mod tests {
     #[test]
     fn ring_resizes_buffers() {
         let Some(device) = Device::system_default() else { return };
-        let mut ring = Ring::new(&device, 128, MTLResourceOptions::StorageModeShared);
+        let mut ring = Ring::new(&device, 3, 128, MTLResourceOptions::StorageModeShared);
         let initial = ring.cap[0];
+        let initial_buffer = ring.buffer(0).as_ptr();
+        assert!((3..MAX_FRAME_RESOURCE_DEPTH)
+            .all(|slot| ring.buffer(slot).as_ptr() == initial_buffer));
         ring.ensure_capacity(&device, 0, initial * 4);
+        let grown_buffer = ring.buffer(0).as_ptr();
+        assert_ne!(grown_buffer, initial_buffer);
         assert!(ring.cap[0] >= initial * 4);
+        assert!((3..MAX_FRAME_RESOURCE_DEPTH)
+            .all(|slot| ring.buffer(slot).as_ptr() == grown_buffer));
         assert!(!ring.contents_ptr(0).as_ptr().is_null());
     }
 
@@ -10000,7 +10114,7 @@ mod tests {
     #[test]
     fn ring_resizes_preserve_buffer_prefix_data() {
         let Some(device) = Device::system_default() else { return };
-        let mut ring = Ring::new(&device, 64, MTLResourceOptions::StorageModeShared);
+        let mut ring = Ring::new(&device, 3, 64, MTLResourceOptions::StorageModeShared);
         let seed: [u8; 32] = [
             0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE,
             0xF0, 0x0F, 0x13, 0x37, 0x42, 0x24, 0x7E, 0xE7, 0x5A, 0xA5, 0xC3, 0x3C, 0x18, 0x81,

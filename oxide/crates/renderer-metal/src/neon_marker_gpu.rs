@@ -159,13 +159,13 @@ impl MetalRenderer {
             core::mem::size_of_val(&params) as u64,
             (&params as *const MarkerGpuParams).cast(),
         );
-        enc.set_vertex_buffer(1, Some(&self.ub.bufs[slot]), marker_offset as u64);
+        enc.set_vertex_buffer(1, Some(self.ub.buffer(slot)), marker_offset as u64);
         enc.set_fragment_bytes(
             0,
             core::mem::size_of_val(&params) as u64,
             (&params as *const MarkerGpuParams).cast(),
         );
-        enc.set_fragment_buffer(1, Some(&self.ub.bufs[slot]), marker_offset as u64);
+        enc.set_fragment_buffer(1, Some(self.ub.buffer(slot)), marker_offset as u64);
         enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, marker_count as u64);
         enc.end_encoding();
 

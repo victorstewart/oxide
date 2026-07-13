@@ -1720,6 +1720,7 @@ pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_i
         camera_render_mode: app.camera_render_mode,
         camera_texture_source: app.camera_texture_source,
         direct_preview_only,
+        ..metal::MetalRendererConfig::visible_host()
     };
     let mut renderer = match metal::MetalRenderer::new_with_config(renderer_cfg) {
         Ok(r) => r,

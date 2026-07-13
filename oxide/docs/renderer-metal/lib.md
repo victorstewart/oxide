@@ -15,8 +15,10 @@
 
 ## Entry points list
 
+- `MetalRendererConfig::visible_host() -> MetalRendererConfig`
+  - Selects the normal three-slot visible-host frame-resource mode; `Default` preserves the separately configured eight-slot offscreen/perf mode.
 - `MetalRenderer::new_with_config(config) -> Result<MetalRenderer, MetalInitError>`
-  - Builds the Metal device/queue, shader library, pipeline state, and frame resources.
+  - Builds the Metal device/queue, shader library, pipeline state, and the clamped one-to-eight-slot frame resources declared by `config.frame_resource_depth`.
 - `MetalRenderer::mesh3d_create(data) -> Result<MeshHandle3d, RenderError>`
   - Uploads a static indexed 3D mesh into persistent Metal buffers for reuse across frames.
 - `MetalRenderer::encode_scene3d(pass) -> Result<(), RenderError>`
@@ -38,7 +40,9 @@
 
 Solid draws keep their existing vertex and uniform ring uploads. The solid command color is now bound at vertex buffer index 1 so the shader can replace packed zero before interpolation; nonzero vertex colors pass through without another pipeline, draw, or resource.
 
-The renderer keeps long-lived GPU resources resident and reuses them across frames. Static textures and scene3d meshes are uploaded once, while frame-local rings handle transient 2D geometry and uniforms. The new scene3d path is intentionally small: position-only indexed meshes, per-instance transforms and colors, depth testing, and either triangle or line topology. That is enough for high-throughput globe-style geometry without expanding the public API prematurely.
+The renderer keeps long-lived GPU resources resident and reuses them across frames. Static textures and scene3d meshes are uploaded once, while frame-local rings handle transient 2D geometry and uniforms. Visible hosts allocate three frame slots, matching their normal safe in-flight limit, while offscreen/perf construction explicitly retains eight slots for deeper stress. The ring's fixed direct-access cells avoid a branch on every bind; inactive cells alias the current slot-zero buffer, refresh that alias if slot zero grows, and are excluded from active-depth accounting, so they do not retain hidden Metal storage. Slot selection loads one bounded completion bitset and scans from the next slot without division; the completion handler clears only its submitted slot. If every configured bit remains set, selection skips nonblockingly. Drawable count is not used as a proxy for command-buffer lifetime. Metal retains committed command buffers until completion, so a frame slot does not take a second command-buffer reference solely for reuse tracking.
+
+Each slot starts with 512 KiB of vertex storage, 64 KiB of index storage, and 72 KiB of uniform storage. Those values cover both the measured 4,096-quad visible workload (327,680/49,152/16 bytes) and the existing 1,024-marker workload's 73,728 uniform bytes without growth. Larger stress frames grow only the active slot geometrically and retain that high-water capacity, replacing the previous unconditional 4/2/2 MiB allocation on all eight slots. Growth, prefix copying, and inactive-alias refresh live in one cold non-inlined path, leaving the ordinary capacity-hit check compact.
 
 Mixed 2D/3D frames share the same frame command buffer and color target. `encode_scene3d` initializes color/depth when needed, then `encode_pass` loads the already-rendered target instead of clearing it again. The supported ordering is 3D first, then 2D overlay, which matches the intended Oxide use case of a 3D scene under author-driven 2D interface chrome.
 
@@ -87,6 +91,7 @@ ID-mask composition is GPU-owned. Semantic region/subregion triangles are raster
 
 ## Changelog
 
+- 2026-07-13: matched visible-host frame resources to three completion-protected slots, consolidated completion state into one bounded bitset, removed variable-modulo scanning and redundant per-slot command-buffer retention, retained explicit eight-slot offscreen mode, and replaced unconditional multi-megabyte per-slot rings with measured initial capacities plus retained geometric growth.
 - 2026-07-12: made effect targets pass-plan-lazy, removed the unused full-size blur texture, and added production memory-pressure purging.
 - 2026-07-12: replaced independent layer-cache prescan/lowering decisions with one generation-based plan per nesting range, single-owner body rendering, same-size texture reuse, nested invalidation propagation, and explicit ownership counters.
 - 2026-07-12: added snapshot-feature raw color-target readback for exact BGRA8, 4x MSAA resolve, and packed BGRA10_XR correctness goldens.

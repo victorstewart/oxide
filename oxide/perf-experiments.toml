@@ -1,4 +1,201 @@
 [[experiments]]
+id = "c18-metal-visible-frame-resources"
+introduced_commit = "C18 staged tree recorded in commit proof"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["renderer-metal", "oxide-host-ios", "oxide-host-macos", "oxide-perf-runner"]
+required_devices = ["macOS Metal host", "iOS host compile path"]
+correctness_gate = "Visible hosts must own exactly three completion-protected frame slots, skip without blocking only when every slot is busy, resume an available slot, and preserve exact renderer output and host configuration ownership."
+performance_gate = "Visible frame-ring bytes and growth must fall at the measured 4,096-quad high-water workload; the collection-navigation event-to-visible journey must pass the paired no-material-regression gate with zero resource growth and backpressure skips."
+decision_state = "accepted"
+decision = "Size visible Metal frame resources to three actual completion-protected slots and measured 512/64/72 KiB initial vertex/index/uniform capacities; select from one completion bitset without variable-modulo scans or redundant command-buffer retention."
+proof = [
+   "Visible frame-ring allocation falls from 67,108,864 to 2,015,232 Metal-allocated bytes (-96.997%) before the separately accounted argument-buffer ring and auxiliary targets; permanent 4,096-quad and 1,024-marker rows report zero growth.",
+   "The permanent visible-host row freezes depth=3, ring bytes=2,015,232 after Metal allocation rounding, vertex/index/uniform high-water use=327,680/49,152/16 bytes, and zero backpressure skips; the existing marker contract freezes 73,728 uniform bytes without growth.",
+   "Renderer tests saturate all three slots in one completion bitset, prove a nonblocking skipped submission, release one slot, and prove immediate completion-safe reuse without any GPU wait.",
+   "The retained static-depth-reporting design's first declared 15-pair collection-navigation journey accepted the no-material-regression policy with -2.266% paired median speedup, 95% CI -3.438..3.863, 6/15 wins, and parent/candidate p95/p99/peak 0.069881/0.087260/0.188666 -> 0.069964/0.082660/0.098959 ms.",
+]
+cleanup = [
+   "Replaced fixed eight-element frame and ID-mask auxiliary arrays with depth-sized storage; fixed ring ownership retains direct array access while inactive cells alias slot zero and accounting scans only configured active slots.",
+   "Consolidated completion ownership into one bounded AtomicU8, removed variable division/modulo from slot scanning, and removed the redundant per-slot retained command-buffer reference; CAMetalLayer drawable count is not consulted.",
+   "Kept configured frame-resource depth out of per-frame PerfStats snapshots and reported it directly from the selected benchmark configuration.",
+   "Isolated bounded buffer growth, prefix copying, and inactive-alias refresh in a cold non-inlined path so ordinary capacity checks remain one comparison and return.",
+   "Official latest baseline promotion remains deferred to C62; C18 raw paired evidence remains local experiment data.",
+]
+
+[[experiments]]
+id = "c18-metal-offscreen-frame-resource-depth"
+introduced_commit = "C18 staged tree recorded in commit proof"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["renderer-metal", "oxide-perf-runner"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Offscreen mode must retain eight independently completion-protected slots, clamp invalid depths to the supported range, and skip without blocking when every slot is busy."
+performance_gate = "An 8,192-quad stress must grow every undersized vertex/index slot during cold traversal and then report zero warm growth and zero backpressure skips."
+decision_state = "accepted"
+decision = "Retain an explicit eight-slot offscreen/perf mode while sharing the measured small initial capacities and bounded per-slot geometric growth."
+proof = [
+   "The permanent stress row freezes depth=8, all-slot cold growth=16, warm growth=0, backpressure skips=0, and post-growth Metal-allocated ring bytes=7,733,248.",
+   "The 8,192-quad row reports exact vertex/index/uniform use of 655,360/98,304/16 bytes and exercises all eight slots before measurement.",
+   "Snapshot controls saturate all eight slots and prove the same completion-protected nonblocking behavior as visible mode; requested depths clamp to 1..8.",
+]
+cleanup = [
+   "No automatic inference from drawable count or benchmark workload was added; callers select the visible or offscreen ownership mode explicitly.",
+]
+
+[[experiments]]
+id = "c18-metal-visible-journey-initial-sample"
+introduced_commit = "rejected during C18"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["renderer-metal", "oxide-perf-runner"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "The paired journey must use identical production-path instrumentation, fresh processes, exact source and binary identities, and complete raw event cardinality."
+performance_gate = "Event-to-visible p50/p95/p99/peak must all satisfy the no-material-regression policy; a failed initial sample may be doubled once under the declared protocol."
+decision_state = "rejected"
+decision = "Rejected the first 15-pair timing sample because isolated candidate p99 and peak outliers failed the strict tail gates; used the protocol's one permitted doubling rather than treating the favorable paired median as acceptance."
+proof = [
+   "The initial 15-pair run improved paired median by 0.743% with 95% CI -2.421..3.307 and 8/15 wins, but raw candidate p99/peak were 0.119812/0.167041 ms versus parent 0.095328/0.149083 ms.",
+   "The independent doubled 30-pair population accepted: parent/candidate p95 0.077142/0.074591 ms, p99 0.104921/0.091473 ms, and peak 0.192625/0.171166 ms.",
+]
+cleanup = [
+   "The rejected 15-pair report remains in local raw evidence and is not used as the final C18 performance decision.",
+]
+
+[[experiments]]
+id = "c18-metal-per-slot-completion-and-command-retain"
+introduced_commit = "rejected during C18"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["renderer-metal", "oxide-perf-runner"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Three-slot reuse must remain completion-safe and nonblocking with exact source identity."
+performance_gate = "After the one permitted doubling, every event-to-visible tail and peak must pass the no-material-regression policy."
+decision_state = "rejected"
+decision = "Rejected keeping one Arc<AtomicBool> and one retained MTLCommandBuffer per slot with variable-modulo scanning; the final exact-tree journey failed the peak guard."
+proof = [
+   "The first doubled exploratory population accepted, but the later exact staged-tree 30-pair run reported parent/candidate p50/p95/p99/peak 0.057542/0.068719/0.084390/0.124250 -> 0.057230/0.070176/0.083579/0.131292 ms.",
+   "Paired median improved 0.038% with 95% CI -1.437..1.323 and 15/30 wins, but the candidate peak regressed 5.668%, so the implementation was not accepted.",
+]
+cleanup = [
+   "Removed the slot-owned command-buffer reference and retained only completion-owned state before redesigning the scan.",
+]
+
+[[experiments]]
+id = "c18-metal-retain-free-per-slot-completion"
+introduced_commit = "rejected during C18"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["renderer-metal", "oxide-perf-runner"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Metal completion handlers must protect all three visible slots after removing the redundant command-buffer reference."
+performance_gate = "The doubled event-to-visible population must pass p50/p95/p99/peak no-material-regression gates."
+decision_state = "rejected"
+decision = "Rejected the retain-free design while it still used one atomic per slot and variable-modulo scanning because its doubled population failed the peak guard."
+proof = [
+   "The doubled 30-pair result moved parent/candidate p50/p95/p99 0.057500/0.083965/0.135378 -> 0.057125/0.078170/0.129721 ms, but peak regressed from 0.220417 to 0.268541 ms.",
+   "Paired median improved 0.550% with 95% CI -1.733..2.129 and 18/30 wins; the strict report rejected only the candidate peak.",
+]
+cleanup = [
+   "Replaced per-slot atomics and repeated modulus operations with one bounded completion bitset and wrap-by-branch slot scan.",
+]
+
+[[experiments]]
+id = "c18-metal-completion-bitset-64k-uniform-ring"
+introduced_commit = "rejected during C18"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["renderer-metal", "oxide-perf-runner"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Measured visible workloads, including the existing 1,024-marker case, must require zero initial ring growth."
+performance_gate = "The collection-navigation journey must pass the no-material-regression policy after functional capacity gates pass."
+decision_state = "rejected"
+decision = "Rejected the timing-accepted 64 KiB uniform ring because the existing 1,024-marker workload requires 73,728 bytes and grew on first use."
+proof = [
+   "The exact staged-tree 30-pair journey accepted with parent/candidate p50/p95/p99/peak 0.056792/0.069419/0.083419/0.244708 -> 0.057125/0.068173/0.081073/0.121459 ms.",
+   "The 1,024-marker snapshot then reported one first-use uniform-ring growth from 65,536 bytes to cover its exact 73,728-byte payload, violating the declared zero-growth visible high-water gate.",
+]
+cleanup = [
+   "Raised initial uniform capacity to the measured 72 KiB high-water mark and retained the existing marker regression as a capacity contract.",
+]
+
+[[experiments]]
+id = "c18-metal-depth-sized-heap-rings"
+introduced_commit = "rejected during C18"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["renderer-metal", "oxide-perf-runner"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Depth-sized ring storage must retain 72 KiB uniform high water, completion-safe reuse, zero visible growth, and exact output."
+performance_gate = "The permitted doubled collection-navigation population must pass every no-material-regression tail and peak guard."
+decision_state = "rejected"
+decision = "Rejected depth-sized heap-Vec ring metadata after correcting the uniform capacity because its doubled journey regressed p95, p99, and peak."
+proof = [
+   "The 60-pair result reported parent/candidate p50/p95/p99/peak 0.057584/0.070668/0.084625/0.202291 -> 0.057875/0.073212/0.088423/0.321209 ms.",
+   "Paired median speedup was -1.066% with 95% CI -2.389..1.103 and 26/60 wins; deterministic depth, memory, capacity, growth, and skip counters passed.",
+]
+cleanup = [
+   "Replaced heap-owned ring metadata with fixed-capacity inline ownership while continuing to allocate Metal buffers only for configured active slots.",
+]
+
+[[experiments]]
+id = "c18-metal-inline-optional-buffer-rings"
+introduced_commit = "rejected during C18"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["renderer-metal", "oxide-perf-runner"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Inline optional rings must allocate only configured active Metal buffers and preserve exact active-slot accounting and completion-safe reuse."
+performance_gate = "The permitted doubled collection-navigation population must pass every no-material-regression tail and peak guard."
+decision_state = "rejected"
+decision = "Rejected fixed inline Option<Buffer> rings because repeated active-buffer unwraps failed the doubled p99 guard."
+proof = [
+   "The 30-pair result reported parent/candidate p50/p95/p99/peak 0.057042/0.069381/0.081802/0.170417 -> 0.057542/0.071211/0.084744/0.126000 ms.",
+   "Paired median speedup was -0.215% with 95% CI -2.636..1.504 and 15/30 wins; candidate p99 regressed 3.598% despite improved peak.",
+]
+cleanup = [
+   "Replaced optional ring cells with direct Buffer cells; inactive cells alias slot zero without allocating additional Metal storage.",
+]
+
+[[experiments]]
+id = "c18-metal-per-frame-depth-stats"
+introduced_commit = "rejected during C18"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["renderer-metal", "oxide-perf-runner"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Direct fixed-buffer rings must preserve configured active-slot accounting, completion-safe reuse, and frame-resource report coverage."
+performance_gate = "The permitted doubled collection-navigation population must pass every no-material-regression tail and peak guard."
+decision_state = "rejected"
+decision = "Rejected copying static frame-resource depth through every PerfStats snapshot after the direct-buffer design failed the doubled peak guard."
+proof = [
+   "The 30-pair result improved parent/candidate p50/p95/p99 0.056125/0.075082/0.086355 -> 0.056000/0.074460/0.084895 ms, but peak regressed from 0.146958 to 0.204167 ms.",
+   "Paired median speedup was 1.095% with 95% CI -2.119..1.778 and 18/30 wins; the strict report rejected only the candidate peak.",
+]
+cleanup = [
+   "Removed static frame-resource depth from per-frame PerfStats and report it directly from the selected renderer configuration.",
+]
+
+[[experiments]]
+id = "c18-metal-inline-alias-refresh-growth"
+introduced_commit = "rejected during C18"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["renderer-metal", "oxide-perf-runner"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Growing slot zero in a shallow custom mode must refresh every inactive alias so old Metal buffers are not retained outside active-depth accounting."
+performance_gate = "The permitted doubled collection-navigation population must pass every no-material-regression tail and peak guard."
+decision_state = "rejected"
+decision = "Rejected keeping alias-refresh maintenance inline in the frequently called capacity check because the reviewed tree failed doubled p95 and peak guards."
+proof = [
+   "The 30-pair result reported parent/candidate p50/p95/p99/peak 0.056916/0.068426/0.079993/0.089500 -> 0.057416/0.070627/0.079859/0.094792 ms.",
+   "Paired median speedup was -0.649% with 95% CI -1.770..0.807 and 13/30 wins; p95 regressed 3.216% and peak regressed 5.913%.",
+]
+cleanup = [
+   "Retained alias refresh for correctness but moved all growth, prefix-copy, and alias-maintenance work into a cold non-inlined function behind the capacity-hit fast path.",
+]
+
+[[experiments]]
 id = "c17-metal-pass-plan-effect-targets"
 introduced_commit = "C17 staged tree recorded in commit proof"
 introduced_date = "2026-07-12"

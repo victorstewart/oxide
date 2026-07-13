@@ -165,7 +165,9 @@ pub extern "C" fn macos_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_int {
         return 0;
     }
     let _platform = oxide_platform_macos::install_current_platform();
-    let mut renderer = match metal::MetalRenderer::new_default() {
+    let mut renderer = match metal::MetalRenderer::new_with_config(
+        metal::MetalRendererConfig::visible_host(),
+    ) {
         Ok(r) => r,
         Err(_) => return -1,
     };

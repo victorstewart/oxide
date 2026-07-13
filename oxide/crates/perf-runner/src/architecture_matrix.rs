@@ -235,8 +235,135 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       }
    }
 
+   for name in ["visible_high_water", "offscreen_growth_stress"]
+   {
+      let id = format!("gpu.architecture.frame_resources.{name}");
+      if perf_case_allowed(&id)
+      {
+         cases.push(metal_frame_resource_case(&id, smoke, name)?);
+      }
+   }
+
    push_if_allowed(cases, "cpu.architecture.idle.static_foreground", || idle_case(smoke));
    Ok(())
+}
+
+fn frame_resource_drawlist(quads: usize) -> api::DrawList
+{
+   let mut list = api::DrawList::default();
+   list.vertices.reserve(quads * 4);
+   list.indices.reserve(quads * 6);
+   for quad in 0..quads
+   {
+      let base = (quad * 4) as u16;
+      let x = (quad % 128) as f32 * 8.0;
+      let y = (quad / 128) as f32 * 8.0;
+      list.vertices.extend_from_slice(&[
+         api::Vertex { x, y, u: 0.0, v: 0.0, rgba: u32::MAX },
+         api::Vertex { x: x + 7.0, y, u: 1.0, v: 0.0, rgba: u32::MAX },
+         api::Vertex { x, y: y + 7.0, u: 0.0, v: 1.0, rgba: u32::MAX },
+         api::Vertex { x: x + 7.0, y: y + 7.0, u: 1.0, v: 1.0, rgba: u32::MAX },
+      ]);
+      list.indices.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 1, base + 3]);
+   }
+   list.items.push(api::DrawCmd::Solid {
+      vb: api::VertexSpan { offset: 0, len: list.vertices.len() as u32 },
+      ib: api::IndexSpan { offset: 0, len: list.indices.len() as u32 },
+      color: api::Color::rgba(0.25, 0.55, 0.9, 1.0),
+   });
+   list
+}
+
+fn metal_frame_resource_case(id: &str, smoke: bool, name: &str) -> Result<PerfCaseResult>
+{
+   let visible = name == "visible_high_water";
+   let config = if visible {
+      metal::MetalRendererConfig::visible_host()
+   } else {
+      metal::MetalRendererConfig::default()
+   };
+   let quads = if visible { 4_096 } else { 8_192 };
+   let warmups = config.frame_resource_depth;
+   let frames = if smoke { 60 } else { 120 };
+   let list = frame_resource_drawlist(quads);
+   let mut renderer = metal::MetalRenderer::new_with_config(config)
+      .context("creating frame-resource Metal renderer")?;
+   renderer.resize(1_200, 800, 1.0).context("resizing frame-resource renderer")?;
+   let mut cold_growths = 0_u64;
+   let mut warm_growths = 0_u64;
+   let mut skips = 0_u64;
+   let mut ring_bytes_peak = 0_u64;
+   let mut encode_samples = Vec::with_capacity(frames);
+   let mut frame_samples = Vec::with_capacity(frames);
+   let mut vb_bytes = 0_u64;
+   let mut ib_bytes = 0_u64;
+   let mut ub_bytes = 0_u64;
+
+   for frame in 0..(warmups + frames)
+   {
+      let frame_t0 = Instant::now();
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      let frame_id = token.0;
+      renderer.encode_pass(&list);
+      renderer.submit(token).with_context(|| format!("submitting {id}"))?;
+      let stats = last_metal_stats_after_submit(&renderer, frame_id);
+      ring_bytes_peak = ring_bytes_peak.max(stats.memory.frame_ring_buffer_bytes);
+      if frame < warmups
+      {
+         cold_growths = cold_growths.saturating_add(stats.resource_grows as u64);
+      }
+      else
+      {
+         frame_samples.push(frame_t0.elapsed().as_secs_f64() * 1_000.0);
+         encode_samples.push(stats.encode_ms);
+         warm_growths = warm_growths.saturating_add(stats.resource_grows as u64);
+         skips = skips.saturating_add(stats.frame_backpressure_skipped as u64);
+         vb_bytes = stats.vb_bytes;
+         ib_bytes = stats.ib_bytes;
+         ub_bytes = stats.ub_bytes;
+      }
+   }
+
+   let summary = summarize(&frame_samples);
+   let mut metrics = BTreeMap::new();
+   insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+   insert_distribution_metrics(&mut metrics, "encode_ms", &encode_samples);
+   insert_frame_pacing_metrics(&mut metrics, &frame_samples);
+   metrics.insert(String::from("frame_resource_depth"), config.frame_resource_depth as f64);
+   metrics.insert(String::from("frame_ring_buffer_bytes_peak"), ring_bytes_peak as f64);
+   metrics.insert(String::from("cold_resource_grows"), cold_growths as f64);
+   metrics.insert(String::from("warm_resource_grows"), warm_growths as f64);
+   metrics.insert(String::from("frame_backpressure_skips"), skips as f64);
+   metrics.insert(String::from("vertex_upload_bytes"), vb_bytes as f64);
+   metrics.insert(String::from("index_upload_bytes"), ib_bytes as f64);
+   metrics.insert(String::from("uniform_upload_bytes"), ub_bytes as f64);
+   metrics.insert(String::from("quads"), quads as f64);
+   Ok(PerfCaseResult {
+      id: String::from(id),
+      family: String::from("architecture"),
+      layer: String::from("engine"),
+      scenario: String::from("rendering-architecture"),
+      variant: String::from("oxide"),
+      cache_state: String::from("warm"),
+      refresh_mode: String::from(if visible { "visible-host" } else { "offscreen" }),
+      unit: String::from("ms/frame"),
+      gated: true,
+      threshold_pct: 0.20,
+      median: summary.median,
+      p95: summary.p95,
+      p99: summary.p99,
+      min: summary.min,
+      max: summary.max,
+      mean: summary.mean,
+      samples: frame_samples.len(),
+      ops_per_sample: 1,
+      notes: vec![if visible {
+         String::from("Three-slot visible renderer at the measured 4,096-quad no-growth high-water workload.")
+      } else {
+         String::from("Eight-slot offscreen renderer grows every slot under 8,192-quad stress, then remains allocation-free when warm.")
+      }],
+      metrics,
+   })
 }
 
 fn push_if_allowed<F>(cases: &mut Vec<PerfCaseResult>, id: &str, build: F)
@@ -1041,7 +1168,20 @@ fn measured_metal_drawlist_case<F>(id: &str, smoke: bool, notes: String, mut bui
 where
    F: FnMut(usize) -> (api::DrawList, Option<api::Damage>, Option<(u32, u32)>, bool),
 {
-   let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
+   measured_metal_drawlist_case_with_config(
+      id,
+      smoke,
+      notes,
+      metal::MetalRendererConfig::default(),
+      &mut build,
+   )
+}
+
+fn measured_metal_drawlist_case_with_config<F>(id: &str, smoke: bool, notes: String, config: metal::MetalRendererConfig, mut build: F) -> Result<PerfCaseResult>
+where
+   F: FnMut(usize) -> (api::DrawList, Option<api::Damage>, Option<(u32, u32)>, bool),
+{
+   let mut renderer = Box::new(metal::MetalRenderer::new_with_config(config).context("creating Metal renderer")?);
    renderer.resize(1_200, 800, 1.0).context("resizing Metal renderer")?;
    renderer.set_damage_options(true, DAMAGE_USE_THRESH, DAMAGE_PREFILTER_THRESH);
    let warmups = std::env::var("OXIDE_ARCHITECTURE_METAL_WARMUPS")
@@ -1076,6 +1216,8 @@ where
    let mut effect_blur_chain_bytes_peak = 0_u64;
    let mut bloom_bytes_peak = 0_u64;
    let mut resource_creates_sum = 0_u64;
+   let mut resource_grows_sum = 0_u64;
+   let mut frame_ring_buffer_bytes_peak = 0_u64;
    let mut first_frame_ms = 0.0;
    let mut first_encode_ms = 0.0;
    let mut first_gpu_ms = 0.0;
@@ -1096,7 +1238,7 @@ where
       let (draws, damage, resize, recreate) = build(frame);
       if recreate
       {
-         renderer = Box::new(metal::MetalRenderer::new_default().context("recreating Metal renderer after benchmark memory warning")?);
+         renderer = Box::new(metal::MetalRenderer::new_with_config(config).context("recreating Metal renderer after benchmark memory warning")?);
          renderer.resize(1_200, 800, 1.0).context("resizing recreated Metal renderer")?;
          renderer.set_damage_options(true, DAMAGE_USE_THRESH, DAMAGE_PREFILTER_THRESH);
       }
@@ -1116,6 +1258,8 @@ where
          effect_blur_chain_bytes_peak.max(stats.memory.effect_blur_chain_bytes);
       bloom_bytes_peak = bloom_bytes_peak.max(stats.memory.bloom_targets_bytes);
       resource_creates_sum = resource_creates_sum.saturating_add(stats.resource_creates as u64);
+      frame_ring_buffer_bytes_peak =
+         frame_ring_buffer_bytes_peak.max(stats.memory.frame_ring_buffer_bytes);
       if frame == 0
       {
          first_frame_ms = frame_t0.elapsed().as_secs_f64() * 1_000.0;
@@ -1138,6 +1282,7 @@ where
          damage_rects_sum += stats.damage_rects as f64;
          layer_bytes_peak = layer_bytes_peak.max(stats.memory.layer_cache_bytes);
          total_bytes_peak = total_bytes_peak.max(stats.memory.total_bytes);
+         resource_grows_sum = resource_grows_sum.saturating_add(stats.resource_grows as u64);
          skips_sum += stats.frame_backpressure_skipped as f64;
          layer_body_commands_scanned_sum += stats.layer_body_commands_scanned as f64;
          layer_body_commands_copied_sum += stats.layer_body_commands_copied as f64;
@@ -1181,6 +1326,12 @@ where
    metrics.insert(String::from("effect_blur_chain_bytes_peak"), effect_blur_chain_bytes_peak as f64);
    metrics.insert(String::from("bloom_targets_bytes_peak"), bloom_bytes_peak as f64);
    metrics.insert(String::from("resource_creates_total"), resource_creates_sum as f64);
+   metrics.insert(String::from("resource_grows_total"), resource_grows_sum as f64);
+   metrics.insert(String::from("frame_resource_depth"), config.frame_resource_depth as f64);
+   metrics.insert(
+      String::from("frame_ring_buffer_bytes_peak"),
+      frame_ring_buffer_bytes_peak as f64,
+   );
    metrics.insert(String::from("first_frame_ms"), first_frame_ms);
    metrics.insert(String::from("first_encode_ms"), first_encode_ms);
    metrics.insert(String::from("first_gpu_ms"), first_gpu_ms);

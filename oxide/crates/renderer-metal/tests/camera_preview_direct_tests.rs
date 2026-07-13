@@ -36,6 +36,7 @@ fn synthetic_direct_preview_renderer() -> Option<MetalRenderer> {
         camera_render_mode: CameraRenderMode::Nv12Legacy,
         camera_texture_source: CameraTextureSource::SyntheticBenchmark,
         direct_preview_only: true,
+        ..MetalRendererConfig::default()
     }) {
         Ok(renderer) => Some(renderer),
         Err(MetalInitError::NoDevice) => None,

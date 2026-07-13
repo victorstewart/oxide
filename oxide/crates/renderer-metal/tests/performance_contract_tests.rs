@@ -29,7 +29,7 @@ fn per_frame_reuse_never_waits_for_gpu_completion() {
     let source = include_str!("../src/lib.rs");
     let start = source.find("fn prepare_for_encode").expect("prepare_for_encode function");
     let tail = &source[start..];
-    let end = tail.find("fn mark_submitted").expect("mark_submitted function");
+    let end = tail.find("struct Ring").expect("Ring source block");
     let prepare_for_encode = &tail[..end];
     assert!(
         !prepare_for_encode.contains("wait_until_completed"),
@@ -37,9 +37,85 @@ fn per_frame_reuse_never_waits_for_gpu_completion() {
     );
     assert!(
         source.contains("frame_backpressure_skipped")
-            && source.contains(".find(|slot| self.frames[*slot].is_available())"),
+            && source.contains("let busy_slots = self.frame_in_flight.load(Ordering::Acquire)")
+            && source.contains("busy_slots & frame_slot_bit(candidate) == 0"),
         "renderer-metal must select an available frame-ring slot or skip instead of blocking"
     );
+}
+
+#[test]
+fn visible_and_offscreen_frame_resource_modes_have_explicit_depths()
+{
+   use oxide_renderer_metal::MetalRendererConfig;
+
+   assert_eq!(MetalRendererConfig::visible_host().frame_resource_depth, 3);
+   assert_eq!(MetalRendererConfig::default().frame_resource_depth, 8);
+
+   let source = include_str!("../src/lib.rs");
+   assert!(source.contains("frame_in_flight.fetch_or(submitted_slot_bit, Ordering::Release)"));
+   assert!(source.contains("frame_in_flight.fetch_and(!submitted_slot_bit, Ordering::Release)"));
+   let per_frame = source
+      .split_once("struct PerFrame")
+      .and_then(|(_, tail)| tail.split_once("struct Ring"))
+      .map(|(body, _)| body)
+      .expect("PerFrame source block");
+   assert!(!per_frame.contains("submitted: Option<CommandBuffer>"));
+   assert!(!per_frame.contains("AtomicBool"));
+   assert!(!source.contains("maximumDrawableCount"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn visible_frame_resources_cover_measured_high_water_and_skip_only_when_busy()
+{
+   use oxide_renderer_api::{self as api, Renderer};
+   use oxide_renderer_metal::{MetalRenderer, MetalRendererConfig};
+
+   let mut renderer = MetalRenderer::new_with_config(MetalRendererConfig::visible_host())
+      .expect("create visible Metal renderer");
+   assert_eq!(renderer.frame_resource_depth_for_snapshot(), 3);
+   for slot in 0..3
+   {
+      assert_eq!(renderer.frame_ring_capacities_for_snapshot(slot), Some([524_288, 65_536, 73_728]));
+      renderer.mark_frame_slot_busy_for_snapshot(slot);
+   }
+
+   let blocked = renderer.begin_frame(&api::FrameTarget, None);
+   assert_eq!(renderer.last_stats().frame_backpressure_skipped, 1);
+   renderer.submit(blocked).expect("coalesce blocked frame");
+
+   renderer.release_frame_slot_for_snapshot(2);
+   let resumed = renderer.begin_frame(&api::FrameTarget, None);
+   assert_eq!(renderer.last_stats().frame_backpressure_skipped, 0);
+   assert_eq!(renderer.current_frame_slot_for_snapshot(), 2);
+   renderer.submit(resumed).expect("submit resumed empty frame");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn offscreen_frame_resources_retain_deeper_completion_protected_mode()
+{
+   use oxide_renderer_api::{self as api, Renderer};
+   use oxide_renderer_metal::{MetalRenderer, MetalRendererConfig};
+
+   let mut config = MetalRendererConfig::default();
+   config.frame_resource_depth = usize::MAX;
+   let mut renderer = MetalRenderer::new_with_config(config)
+      .expect("create offscreen Metal renderer");
+   assert_eq!(renderer.frame_resource_depth_for_snapshot(), 8);
+   for slot in 0..8
+   {
+      renderer.mark_frame_slot_busy_for_snapshot(slot);
+   }
+   let blocked = renderer.begin_frame(&api::FrameTarget, None);
+   assert_eq!(renderer.last_stats().frame_backpressure_skipped, 1);
+   renderer.submit(blocked).expect("coalesce saturated offscreen frame");
+   renderer.release_frame_slot_for_snapshot(7);
+
+   let mut shallow = MetalRendererConfig::default();
+   shallow.frame_resource_depth = 0;
+   let shallow = MetalRenderer::new_with_config(shallow).expect("clamp shallow renderer depth");
+   assert_eq!(shallow.frame_resource_depth_for_snapshot(), 1);
 }
 
 #[test]
@@ -190,8 +266,8 @@ fn neon_marker_instances_stream_once_through_the_frame_ring()
    assert!(source.contains("let marker_offset = align_up_usize("));
    assert!(source.contains("self.ub.ensure_capacity(&self.device, slot, marker_offset + marker_bytes)"));
    assert_eq!(source.matches("core::ptr::copy_nonoverlapping(").count(), 1);
-   assert!(source.contains("enc.set_vertex_buffer(1, Some(&self.ub.bufs[slot]), marker_offset as u64)"));
-   assert!(source.contains("enc.set_fragment_buffer(1, Some(&self.ub.bufs[slot]), marker_offset as u64)"));
+   assert!(source.contains("enc.set_vertex_buffer(1, Some(self.ub.buffer(slot)), marker_offset as u64)"));
+   assert!(source.contains("enc.set_fragment_buffer(1, Some(self.ub.buffer(slot)), marker_offset as u64)"));
    assert!(!source.contains("enc.set_vertex_bytes(1,"));
    assert!(!source.contains("enc.set_fragment_bytes(1,"));
    assert!(source.contains("self.acc_draws.saturating_add(1)"));

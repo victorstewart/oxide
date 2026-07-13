@@ -4723,8 +4723,12 @@ fn gpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
     let damage_prefilter_thresh =
         env_f32("OXIDE_PERF_DAMAGE_PREFILTER_THRESH", DAMAGE_PREFILTER_THRESH);
 
-    let mut renderer =
-        Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
+    let config = metal::MetalRendererConfig::visible_host();
+    let frame_resource_depth = config.frame_resource_depth as u32;
+    let mut renderer = Box::new(
+        metal::MetalRenderer::new_with_config(config)
+            .context("creating visible-host Metal renderer")?,
+    );
     let w = PERF_SCENE_W;
     let h = PERF_SCENE_H;
     let scale = PERF_DEVICE_SCALE;
@@ -4749,6 +4753,9 @@ fn gpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
     let mut instanced_sum = 0.0f64;
     let mut culled_sum = 0.0f64;
     let mut damage_sum = 0.0f64;
+    let mut frame_ring_bytes_peak = 0_u64;
+    let mut resource_grows_sum = 0_u64;
+    let mut skipped_sum = 0_u64;
 
     for index in 0..(warmups + frames) {
         builder.clear();
@@ -4772,6 +4779,7 @@ fn gpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
             .with_context(|| format!("submitting Metal frame for gpu.scene.{}.frame", spec.slug))?;
         let frame_ms = frame_t0.elapsed().as_secs_f64() * 1000.0;
         let stats = last_metal_stats_after_submit(&renderer, frame_id);
+        frame_ring_bytes_peak = frame_ring_bytes_peak.max(stats.memory.frame_ring_buffer_bytes);
         if index >= warmups {
             frame_samples.push(frame_ms);
             draw_samples.push(draw_ms);
@@ -4781,6 +4789,8 @@ fn gpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
             instanced_sum += stats.instanced as f64;
             culled_sum += stats.culled as f64;
             damage_sum += stats.damage_pct as f64 * 100.0;
+            resource_grows_sum = resource_grows_sum.saturating_add(stats.resource_grows as u64);
+            skipped_sum = skipped_sum.saturating_add(stats.frame_backpressure_skipped as u64);
         }
     }
 
@@ -4795,6 +4805,10 @@ fn gpu_scene_case(spec: &ScenePerfSpec, smoke: bool) -> Result<PerfCaseResult> {
     metrics.insert(String::from("instanced_avg"), instanced_sum / frames as f64);
     metrics.insert(String::from("culled_avg"), culled_sum / frames as f64);
     metrics.insert(String::from("damage_pct_avg"), damage_sum / frames as f64);
+    metrics.insert(String::from("frame_resource_depth"), frame_resource_depth as f64);
+    metrics.insert(String::from("frame_ring_buffer_bytes_peak"), frame_ring_bytes_peak as f64);
+    metrics.insert(String::from("resource_grows_total"), resource_grows_sum as f64);
+    metrics.insert(String::from("frame_backpressure_skips"), skipped_sum as f64);
     metrics.insert(String::from("damage_enabled"), if damage_enabled { 1.0 } else { 0.0 });
     metrics.insert(String::from("damage_use_thresh"), damage_use_thresh as f64);
     metrics.insert(String::from("damage_prefilter_thresh"), damage_prefilter_thresh as f64);
@@ -4847,8 +4861,12 @@ fn gpu_journey_collection_navigation_frame_pacing_case(smoke: bool) -> Result<Pe
     let damage_prefilter_thresh =
         env_f32("OXIDE_PERF_DAMAGE_PREFILTER_THRESH", DAMAGE_PREFILTER_THRESH);
 
-    let mut renderer =
-        Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
+    let config = metal::MetalRendererConfig::visible_host();
+    let frame_resource_depth = config.frame_resource_depth as u32;
+    let mut renderer = Box::new(
+        metal::MetalRenderer::new_with_config(config)
+            .context("creating visible-host Metal renderer")?,
+    );
     let w = PERF_SCENE_W;
     let h = PERF_SCENE_H;
     let scale = PERF_DEVICE_SCALE;
@@ -4875,6 +4893,8 @@ fn gpu_journey_collection_navigation_frame_pacing_case(smoke: bool) -> Result<Pe
     let mut damage_rects_sum = 0.0f64;
     let mut skipped_sum = 0.0f64;
     let mut navigation_events = 0.0f64;
+    let mut frame_ring_bytes_peak = 0_u64;
+    let mut resource_grows_sum = 0_u64;
 
     for index in 0..(warmups + frames) {
         let frame_t0 = Instant::now();
@@ -4906,6 +4926,7 @@ fn gpu_journey_collection_navigation_frame_pacing_case(smoke: bool) -> Result<Pe
             .context("submitting Metal frame for gpu.journey.collection_navigation.frame_pacing")?;
         let event_ms = frame_t0.elapsed().as_secs_f64() * 1000.0;
         let stats = last_metal_stats_after_submit(&renderer, frame_id);
+        frame_ring_bytes_peak = frame_ring_bytes_peak.max(stats.memory.frame_ring_buffer_bytes);
         if index >= warmups {
             frame_samples.push(event_ms);
             event_samples.push(event_ms);
@@ -4915,6 +4936,7 @@ fn gpu_journey_collection_navigation_frame_pacing_case(smoke: bool) -> Result<Pe
             draws_sum += stats.draws as f64;
             damage_rects_sum += damage_rect_count as f64;
             skipped_sum += stats.frame_backpressure_skipped as f64;
+            resource_grows_sum = resource_grows_sum.saturating_add(stats.resource_grows as u64);
             navigation_events += 1.0;
         }
     }
@@ -4932,6 +4954,9 @@ fn gpu_journey_collection_navigation_frame_pacing_case(smoke: bool) -> Result<Pe
     metrics.insert(String::from("draws_avg"), draws_sum / frames as f64);
     metrics.insert(String::from("damage_rects_avg"), damage_rects_sum / frames as f64);
     metrics.insert(String::from("frame_backpressure_skips"), skipped_sum);
+    metrics.insert(String::from("frame_resource_depth"), frame_resource_depth as f64);
+    metrics.insert(String::from("frame_ring_buffer_bytes_peak"), frame_ring_bytes_peak as f64);
+    metrics.insert(String::from("resource_grows_total"), resource_grows_sum as f64);
     metrics.insert(String::from("navigation_events"), navigation_events);
     metrics.insert(String::from("damage_enabled"), if damage_enabled { 1.0 } else { 0.0 });
     metrics.insert(String::from("damage_use_thresh"), damage_use_thresh as f64);
