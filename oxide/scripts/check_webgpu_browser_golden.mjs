@@ -84,6 +84,7 @@ function parseArgs(argv)
       mixedSamples: 6,
       mixedFrames: 24,
       architectureMatrix: false,
+      preparedFlat: false,
    };
 
    for (let i = 0; i < argv.length; i++) {
@@ -191,13 +192,15 @@ function parseArgs(argv)
          args.mixedFrames = Number(next());
       } else if (arg === "--architecture-matrix") {
          args.architectureMatrix = true;
+      } else if (arg === "--prepared-flat") {
+         args.preparedFlat = true;
       } else {
          throw new Error(`unknown argument ${arg}`);
       }
    }
 
-   if (args.target !== "app" && args.target !== "glyph" && args.target !== "id-mask" && args.target !== "scene3d") {
-      throw new Error("--target must be app, glyph, id-mask, or scene3d");
+   if (args.target !== "app" && args.target !== "glyph" && args.target !== "id-mask" && args.target !== "scene3d" && args.target !== "prepared") {
+      throw new Error("--target must be app, glyph, id-mask, scene3d, or prepared");
    }
    if (!args.golden) {
       args.golden = defaultGoldenForTarget(args.target);
@@ -548,6 +551,9 @@ function browserUrl(args, baseUrl, reportEndpoint, startupOnly = false, canvasDi
       url.searchParams.set("canvas_quads", String(args.canvasQuads));
    }
    url.searchParams.set("capture_target", args.target);
+   if (args.preparedFlat) {
+      url.searchParams.set("prepared_flat", "1");
+   }
    url.searchParams.set("capture_width", String(args.width));
    url.searchParams.set("capture_height", String(args.height));
    if (!reportEndpoint) {
@@ -933,8 +939,34 @@ function assertRendered(image, target)
       assertScene3dRendered(image);
    } else if (target === "glyph") {
       assertGlyphRendered(image);
+   } else if (target === "prepared") {
+      assertPreparedRendered(image);
    } else {
       assertAppRendered(image);
+   }
+}
+
+function assertPreparedRendered(image)
+{
+   let dark = 0;
+   let colorful = 0;
+   let bright = 0;
+   for (let i = 0; i < image.rgba.length; i += 4) {
+      let r = image.rgba[i];
+      let g = image.rgba[i + 1];
+      let b = image.rgba[i + 2];
+      if (r < 16 && g < 16 && b < 16) {
+         dark += 1;
+      }
+      if (Math.max(r, g, b) - Math.min(r, g, b) > 72) {
+         colorful += 1;
+      }
+      if (r > 210 && g > 210 && b > 210) {
+         bright += 1;
+      }
+   }
+   if (dark < 500000 || colorful < 10000 || bright < 10000) {
+      throw new Error(`capture does not look like the prepared-chunk scene: dark=${dark} colorful=${colorful} bright=${bright}`);
    }
 }
 
@@ -1846,6 +1878,10 @@ function scratchMetricFields(metrics, prefix)
       backend_cache_hits: numberMetric(metrics, key("backend_cache_hits")),
       backend_cache_misses: numberMetric(metrics, key("backend_cache_misses")),
       render_encoders: numberMetric(metrics, key("render_encoders")),
+      render_bundle_creates: numberMetric(metrics, key("render_bundle_creates")),
+      render_bundle_replays: numberMetric(metrics, key("render_bundle_replays")),
+      render_bundle_draws: numberMetric(metrics, key("render_bundle_draws")),
+      prepared_direct_draws: numberMetric(metrics, key("prepared_direct_draws")),
       texture_copy_pixels: numberMetric(metrics, key("texture_copy_pixels")),
       texture_copy_bytes: numberMetric(metrics, key("texture_copy_bytes")),
       shaded_damage_pixels: numberMetric(metrics, key("shaded_damage_pixels")),

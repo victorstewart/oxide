@@ -1122,3 +1122,26 @@ fn wasm_webgpu_static_pipelines_are_created_before_frame_encoding() {
         assert!(create_programs.contains(local), "missing eager pipeline creation {local}");
     }
 }
+
+#[test]
+fn wasm_webgpu_prepared_chunks_are_budgeted_and_resource_invalidated()
+{
+   let source = include_str!("../src/wasm/webgpu.rs");
+   assert!(source.contains("pub fn encode_snapshot"));
+   assert!(source.contains("PreparedChunkCache"));
+   assert!(source.contains("PreparedSnapshotBundle"));
+   assert!(source.contains("bundle_generation"));
+   assert!(source.contains("create_render_bundle_encoder"));
+   assert!(source.contains("execute_bundles"));
+   assert!(source.contains("PREPARED_CACHE_DEFAULT_BUDGET_BYTES"));
+   assert!(source.contains("self.prepared_chunks.invalidate_resource(handle)"));
+   assert!(source.contains("advance_prepared_device_generation_for_benchmark"));
+   assert!(source.contains("instance.origin == [0.0, 0.0]"));
+   assert!(source.contains("instance.property_slots.is_empty()"));
+   assert!(source.contains("PreparedSegment::Bundle"));
+   assert!(source.contains("PreparedSegment::Direct"));
+   assert!(source.contains("render_bundle_execute_calls"));
+   assert!(source.contains("prepared_snapshot_bundle_active"));
+   assert!(source.contains("had_snapshot_bundle"));
+   assert!(source.contains("self.purge_prepared_chunks();"));
+}

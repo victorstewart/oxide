@@ -13,7 +13,7 @@ use js_sys::Reflect;
 use oxide_renderer_api as api;
 use oxide_wasm_alloc_counter::AllocationSnapshot;
 use std::cell::Cell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,6 +47,9 @@ const TIMESTAMP_QUERY_COUNT: u32 = TIMESTAMP_MAX_PASSES * 2;
 const TIMESTAMP_READBACK_SLOTS: usize = 48;
 const TIMESTAMP_READBACK_INTERVAL_FRAMES: u64 = 8;
 const TIMESTAMP_COMPLETED_CAPACITY: usize = 4_096;
+const PREPARED_CACHE_DEFAULT_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
+const PREPARED_BUNDLE_DEFAULT_MIN_DRAWS: usize = 8;
+const PREPARED_BUNDLE_SCENE_MIN_DRAWS: u64 = 64;
 
 fn cpu_submit_timing_begin(enabled: bool) -> Option<f64> {
     enabled.then(|| {
@@ -180,7 +183,7 @@ struct IdMaskVertexCache {
     uploaded: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum DrawKind {
     Solid,
     Rgba { image: u32 },
@@ -214,7 +217,7 @@ struct DrawStateKey {
     clip: api::RectI,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct GpuDraw {
     kind: DrawKind,
     index_kind: PackedIndexKind,
@@ -233,6 +236,7 @@ struct FrameLayerPass {
     end: usize,
 }
 
+#[derive(Default)]
 struct FrameData {
     geometry: PackedGeometry,
     draws: Vec<GpuDraw>,
@@ -241,6 +245,215 @@ struct FrameData {
     effect_first_sigma_bits: u32,
     effect_shared_sigma: f32,
     effect_single_uniform_slot: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PreparedChunkKey
+{
+   id: api::RenderChunkId,
+   structural_revision: u64,
+   geometry_revision: u64,
+   resource_revision: u64,
+   device_generation: u64,
+   format: wgpu::TextureFormat,
+   bundles_enabled: bool,
+}
+
+impl PreparedChunkKey
+{
+   fn new(chunk: &api::RenderChunk, device_generation: u64, format: wgpu::TextureFormat, bundles_enabled: bool) -> Self
+   {
+      let revisions = chunk.revisions();
+      Self {
+         id: chunk.id(),
+         structural_revision: revisions.structural,
+         geometry_revision: revisions.geometry,
+         resource_revision: revisions.resource,
+         device_generation,
+         format,
+         bundles_enabled,
+      }
+   }
+}
+
+struct PreparedChunk
+{
+   vertex_buffer: wgpu::Buffer,
+   index_buffer_u16: Option<wgpu::Buffer>,
+   index_buffer_u32: Option<wgpu::Buffer>,
+   draws: Vec<GpuDraw>,
+   segments: Vec<PreparedSegment>,
+   resources: Box<[api::ImageHandle]>,
+   vertex_bytes: u64,
+   index_bytes: u64,
+   resident_bytes: u64,
+   bundle_generation: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PreparedSnapshotBundleKey
+{
+   id: api::RenderChunkId,
+   generation: u64,
+}
+
+struct PreparedSnapshotBundle
+{
+   keys: Box<[PreparedSnapshotBundleKey]>,
+   bundle: wgpu::RenderBundle,
+   draws: u32,
+}
+
+enum PreparedSegment
+{
+   Bundle { bundle: wgpu::RenderBundle, draws: u32 },
+   Direct { start: usize, end: usize },
+}
+
+struct CachedPreparedChunk
+{
+   key: PreparedChunkKey,
+   chunk: PreparedChunk,
+   last_used: u64,
+   revision_rebuilds: u8,
+}
+
+struct PreparedChunkCache
+{
+   entries: HashMap<api::RenderChunkId, CachedPreparedChunk>,
+   budget_bytes: u64,
+   resident_bytes: u64,
+   clock: u64,
+   evictions: u64,
+}
+
+impl Default for PreparedChunkCache
+{
+   fn default() -> Self
+   {
+      Self {
+         entries: HashMap::new(),
+         budget_bytes: PREPARED_CACHE_DEFAULT_BUDGET_BYTES,
+         resident_bytes: 0,
+         clock: 0,
+         evictions: 0,
+      }
+   }
+}
+
+impl PreparedChunkCache
+{
+   fn clear(&mut self)
+   {
+      self.entries.clear();
+      self.resident_bytes = 0;
+   }
+
+   fn invalidate_resource(&mut self, handle: api::ImageHandle)
+   {
+      let ids = self.entries.iter().filter_map(|(id, entry)| {
+         entry.chunk.resources.contains(&handle).then_some(*id)
+      }).collect::<Vec<_>>();
+      for id in ids
+      {
+         self.evict(id);
+      }
+   }
+
+   fn remove(&mut self, id: api::RenderChunkId) -> Option<CachedPreparedChunk>
+   {
+      let entry = self.entries.remove(&id);
+      if let Some(entry) = entry.as_ref()
+      {
+         self.resident_bytes = self.resident_bytes.saturating_sub(entry.chunk.resident_bytes);
+      }
+      entry
+   }
+
+   fn evict(&mut self, id: api::RenderChunkId)
+   {
+      let resident_bytes = self.resident_bytes;
+      let _ = self.remove(id);
+      if self.resident_bytes != resident_bytes
+      {
+         self.evictions = self.evictions.saturating_add(1);
+      }
+   }
+
+   fn get(&self, key: PreparedChunkKey) -> Option<&PreparedChunk>
+   {
+      self.entries.get(&key.id).filter(|entry| entry.key == key).map(|entry| &entry.chunk)
+   }
+
+   fn touch(&mut self, key: PreparedChunkKey) -> bool
+   {
+      let Some(entry) = self.entries.get_mut(&key.id).filter(|entry| entry.key == key) else
+      {
+         return false;
+      };
+      self.clock = self.clock.wrapping_add(1);
+      entry.last_used = self.clock;
+      entry.revision_rebuilds = 0;
+      true
+   }
+
+   fn revision_rebuild_streak(&self, key: PreparedChunkKey) -> u8
+   {
+      self.entries.get(&key.id).map_or(0, |entry| {
+         if entry.key == key
+         {
+            entry.revision_rebuilds
+         }
+         else
+         {
+            entry.revision_rebuilds.saturating_add(1)
+         }
+      })
+   }
+
+   fn insert(&mut self, key: PreparedChunkKey, chunk: PreparedChunk, revision_rebuilds: u8)
+   {
+      let _ = self.remove(key.id);
+      self.clock = self.clock.wrapping_add(1);
+      self.resident_bytes = self.resident_bytes.saturating_add(chunk.resident_bytes);
+      self.entries.insert(key.id, CachedPreparedChunk {
+         key,
+         chunk,
+         last_used: self.clock,
+         revision_rebuilds,
+      });
+   }
+
+   fn enforce_budget(&mut self, protected: &[PreparedChunkKey])
+   {
+      while self.resident_bytes > self.budget_bytes
+      {
+         let victim = self.entries.iter().filter(|(_, entry)| {
+            !protected.contains(&entry.key)
+         }).min_by_key(|(_, entry)| entry.last_used).map(|(id, _)| *id);
+         let Some(victim) = victim else { break };
+         self.evict(victim);
+      }
+   }
+
+   fn take_evictions(&mut self) -> u64
+   {
+      core::mem::take(&mut self.evictions)
+   }
+
+   fn vertex_bytes(&self) -> u64
+   {
+      self.entries.values().fold(0, |total, entry| {
+         total.saturating_add(entry.chunk.vertex_bytes)
+      })
+   }
+
+   fn index_bytes(&self) -> u64
+   {
+      self.entries.values().fold(0, |total, entry| {
+         total.saturating_add(entry.chunk.index_bytes)
+      })
+   }
 }
 
 impl FrameData {
@@ -792,6 +1005,35 @@ impl BrowserRenderer {
         self.inner.set_direct_surface_enabled_for_benchmark(enabled);
     }
 
+    /// Encodes a retained snapshot through persistent WebGPU buffers and eligible bundles.
+    pub fn encode_snapshot(
+        &mut self,
+        snapshot: &api::RenderSnapshot,
+    ) -> Result<(), api::RenderSnapshotError> {
+        self.inner.encode_snapshot(snapshot)
+    }
+
+    #[must_use]
+    pub fn prepared_cache_resident_bytes(&self) -> u64 {
+        self.inner.prepared_cache_resident_bytes()
+    }
+
+    pub fn set_prepared_cache_budget_bytes(&mut self, budget_bytes: u64) {
+        self.inner.set_prepared_cache_budget_bytes(budget_bytes);
+    }
+
+    pub fn purge_prepared_chunks(&mut self) {
+        self.inner.purge_prepared_chunks();
+    }
+
+    pub fn set_prepared_bundle_min_draws_for_benchmark(&mut self, draws: usize) {
+        self.inner.set_prepared_bundle_min_draws_for_benchmark(draws);
+    }
+
+    pub fn advance_prepared_device_generation_for_benchmark(&mut self) {
+        self.inner.advance_prepared_device_generation_for_benchmark();
+    }
+
     #[must_use]
     pub fn image_create_rgba8(
         &mut self,
@@ -1012,6 +1254,15 @@ pub struct WebGpuRenderer {
     layers: BTreeMap<u32, GpuLayer>,
     meshes_3d: Vec<Option<GpuMesh3d>>,
     frame: FrameData,
+    prepared_chunks: PreparedChunkCache,
+    prepared_frame_plan: Vec<PreparedChunkKey>,
+    prepared_snapshot_bundle: Option<PreparedSnapshotBundle>,
+    prepared_fallback: api::DrawList,
+    prepared_frame_active: bool,
+    prepared_snapshot_bundle_active: bool,
+    prepared_device_generation: u64,
+    prepared_bundle_generation: u64,
+    prepared_bundle_min_draws: usize,
     scratch_vertices: Vec<PackedVertex>,
     scratch_indices: Vec<u32>,
     scratch_points: Vec<(f32, f32)>,
@@ -1188,7 +1439,8 @@ impl WebGpuRenderer {
             .vertex_buffer
             .as_ref()
             .map_or(0, wgpu::Buffer::size)
-            .saturating_add(id_mask_vertex_bytes);
+            .saturating_add(id_mask_vertex_bytes)
+            .saturating_add(self.prepared_chunks.vertex_bytes());
         let index_buffer_bytes = self
             .index_buffer_u16
             .as_ref()
@@ -1197,7 +1449,8 @@ impl WebGpuRenderer {
                 self.index_buffer_u32
                     .as_ref()
                     .map_or(0, wgpu::Buffer::size),
-            );
+            )
+            .saturating_add(self.prepared_chunks.index_bytes());
         let uniform_buffer_bytes = self
             .viewport_buffer
             .size()
@@ -1226,7 +1479,8 @@ impl WebGpuRenderer {
         let cache_bytes = layer_texture_bytes
             .saturating_add(atlas_texture_bytes)
             .saturating_add(image_texture_bytes)
-            .saturating_add(id_mask_vertex_bytes);
+            .saturating_add(id_mask_vertex_bytes)
+            .saturating_add(self.prepared_chunks.resident_bytes);
         let logical_total_bytes = vertex_buffer_bytes
             .saturating_add(index_buffer_bytes)
             .saturating_add(uniform_buffer_bytes)
@@ -1434,6 +1688,15 @@ impl WebGpuRenderer {
                 effect_shared_sigma: 0.0,
                 effect_single_uniform_slot: true,
             },
+            prepared_chunks: PreparedChunkCache::default(),
+            prepared_frame_plan: Vec::new(),
+            prepared_snapshot_bundle: None,
+            prepared_fallback: api::DrawList::default(),
+            prepared_frame_active: false,
+            prepared_snapshot_bundle_active: false,
+            prepared_device_generation: 1,
+            prepared_bundle_generation: 1,
+            prepared_bundle_min_draws: PREPARED_BUNDLE_DEFAULT_MIN_DRAWS,
             scratch_vertices: Vec::new(),
             scratch_indices: Vec::new(),
             scratch_points: Vec::new(),
@@ -1565,6 +1828,39 @@ impl WebGpuRenderer {
 
     pub fn set_direct_surface_enabled_for_benchmark(&mut self, enabled: bool) {
         self.direct_surface_enabled = enabled;
+    }
+
+    #[must_use]
+    pub fn prepared_cache_resident_bytes(&self) -> u64 {
+        self.prepared_chunks.resident_bytes
+    }
+
+    pub fn set_prepared_cache_budget_bytes(&mut self, budget_bytes: u64) {
+        self.prepared_snapshot_bundle = None;
+        self.prepared_snapshot_bundle_active = false;
+        self.prepared_chunks.budget_bytes = budget_bytes;
+        self.prepared_chunks.enforce_budget(&[]);
+    }
+
+    pub fn purge_prepared_chunks(&mut self) {
+        self.prepared_chunks.clear();
+        self.prepared_frame_plan.clear();
+        self.prepared_snapshot_bundle = None;
+        self.prepared_frame_active = false;
+        self.prepared_snapshot_bundle_active = false;
+    }
+
+    pub fn set_prepared_bundle_min_draws_for_benchmark(&mut self, draws: usize) {
+        let draws = draws.max(1);
+        if self.prepared_bundle_min_draws != draws {
+            self.prepared_bundle_min_draws = draws;
+            self.purge_prepared_chunks();
+        }
+    }
+
+    pub fn advance_prepared_device_generation_for_benchmark(&mut self) {
+        self.prepared_device_generation = self.prepared_device_generation.wrapping_add(1).max(1);
+        self.purge_prepared_chunks();
     }
 
     fn scratch_capacity_breakdown(&self) -> ScratchCapacityBreakdown {
@@ -1996,6 +2292,12 @@ impl WebGpuRenderer {
    pub fn image_release(&mut self, handle: api::ImageHandle) -> bool
    {
       let released = self.images.remove(handle.0).is_some();
+      if released
+      {
+         self.prepared_chunks.invalidate_resource(handle);
+         self.prepared_snapshot_bundle = None;
+         self.prepared_snapshot_bundle_active = false;
+      }
       self.stats.cache_evictions = self.stats.cache_evictions.saturating_add(released as u32);
       released
    }
@@ -3565,6 +3867,553 @@ impl WebGpuRenderer {
     }
 }
 
+impl WebGpuRenderer
+{
+   /// Encodes immutable static snapshot chunks through persistent buffers and render bundles.
+   /// Instance transforms, properties, layers, and effects remain on the checked flat path until
+   /// their frame-dynamic state has a completion-safe backend ring.
+   pub fn encode_snapshot(&mut self, snapshot: &api::RenderSnapshot) -> Result<(), api::RenderSnapshotError>
+   {
+      self.prepared_frame_plan.clear();
+      self.prepared_frame_active = false;
+      self.prepared_snapshot_bundle_active = false;
+      if self.prepared_chunks.budget_bytes == 0
+      {
+         return self.encode_snapshot_flat(snapshot);
+      }
+      let mut supported = self.frame.draws.is_empty()
+         && self.frame.layer_passes.is_empty()
+         && !self.scene3d_active
+         && self.id_mask_draws.is_empty()
+         && snapshot.instance_count() != 0;
+      let mut snapshot_commands = 0_u64;
+      snapshot.visit_instances(|instance| {
+         supported = supported
+            && instance.origin == [0.0, 0.0]
+            && instance.property_slots.is_empty()
+            && instance.clip.is_none()
+            && instance.layer.is_none()
+            && self.prepared_chunk_supported(&instance.chunk);
+         snapshot_commands = snapshot_commands.saturating_add(
+            instance.chunk.draw_list().items.len() as u64,
+         );
+      });
+      if !supported
+      {
+         return self.encode_snapshot_flat(snapshot);
+      }
+      let bundles_enabled = snapshot_commands >= PREPARED_BUNDLE_SCENE_MIN_DRAWS;
+
+      let mut cache = core::mem::take(&mut self.prepared_chunks);
+      let mut hits = 0_u64;
+      let mut misses = 0_u64;
+      let mut commands_traversed = 0_u64;
+      let mut upload_bytes = 0_u64;
+      let mut buffer_creates = 0_u32;
+      let mut bundle_creates = 0_u32;
+      snapshot.visit_instances(|instance| {
+         if !supported
+         {
+            return;
+         }
+         let key = PreparedChunkKey::new(
+            &instance.chunk,
+            self.prepared_device_generation,
+            self.config.format,
+            bundles_enabled,
+         );
+         if cache.touch(key)
+         {
+            hits = hits.saturating_add(1);
+            self.prepared_frame_plan.push(key);
+            return;
+         }
+         let revision_rebuilds = cache.revision_rebuild_streak(key);
+         let reusable = cache.remove(key.id).map(|entry| entry.chunk);
+         let command_count = instance.chunk.draw_list().items.len() as u64;
+         let Some((prepared, uploaded, buffers, bundles)) = self.prepare_chunk(
+            &instance.chunk,
+            bundles_enabled && revision_rebuilds < 2,
+            reusable,
+         )
+         else
+         {
+            supported = false;
+            return;
+         };
+         misses = misses.saturating_add(1);
+         commands_traversed = commands_traversed.saturating_add(command_count);
+         upload_bytes = upload_bytes.saturating_add(uploaded);
+         buffer_creates = buffer_creates.saturating_add(buffers);
+         bundle_creates = bundle_creates.saturating_add(bundles);
+         cache.insert(key, prepared, revision_rebuilds);
+         self.prepared_frame_plan.push(key);
+      });
+      if supported
+      {
+         cache.enforce_budget(&self.prepared_frame_plan);
+         supported = cache.resident_bytes <= cache.budget_bytes
+            && self.prepared_frame_plan.iter().all(|key| cache.get(*key).is_some());
+      }
+      if !supported
+      {
+         cache.enforce_budget(&[]);
+         self.prepared_snapshot_bundle = None;
+         self.prepared_chunks = cache;
+         self.prepared_frame_plan.clear();
+         return self.encode_snapshot_flat(snapshot);
+      }
+
+      self.stats.backend_cache_hits = self.stats.backend_cache_hits.saturating_add(hits);
+      self.stats.backend_cache_misses = self.stats.backend_cache_misses.saturating_add(misses);
+      self.stats.chunks_reused = self.stats.chunks_reused.saturating_add(hits);
+      self.stats.chunks_rebuilt = self.stats.chunks_rebuilt.saturating_add(misses);
+      self.stats.chunks_prepared = self.stats.chunks_prepared.saturating_add(misses);
+      self.stats.commands_traversed = self.stats.commands_traversed.saturating_add(commands_traversed);
+      self.stats.geometry_bytes_copied = self.stats.geometry_bytes_copied.saturating_add(upload_bytes);
+      self.stats.buffer_upload_bytes = self.stats.buffer_upload_bytes.saturating_add(upload_bytes);
+      self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(buffer_creates);
+      self.stats.draw_buffer_grows = self.stats.draw_buffer_grows.saturating_add(buffer_creates);
+      self.stats.render_bundle_creates = self.stats.render_bundle_creates.saturating_add(bundle_creates);
+      let snapshot_bundle_eligible = bundles_enabled
+         && self.prepared_frame_plan.iter().all(|key| cache.get(*key).is_some_and(|chunk| {
+            chunk.draws.len() >= self.prepared_bundle_min_draws
+               && chunk.draws.iter().all(|draw| self.prepared_draw_bundle_compatible(*draw))
+         }));
+      if snapshot_bundle_eligible
+      {
+         let had_snapshot_bundle = self.prepared_snapshot_bundle.is_some();
+         let bundle_matches = self.prepared_snapshot_bundle.as_ref().is_some_and(|bundle| {
+            bundle.keys.len() == self.prepared_frame_plan.len()
+               && bundle.keys.iter().zip(&self.prepared_frame_plan).all(|(bundle_key, key)| {
+                  cache.get(*key).is_some_and(|chunk| {
+                     bundle_key.id == key.id && bundle_key.generation == chunk.bundle_generation
+                  })
+               })
+         });
+         if bundle_matches
+         {
+            self.prepared_snapshot_bundle_active = true;
+         }
+         else if !had_snapshot_bundle
+         {
+            self.prepared_snapshot_bundle = self.create_prepared_snapshot_bundle(
+               &cache,
+               &self.prepared_frame_plan,
+            );
+            if self.prepared_snapshot_bundle.is_some()
+            {
+               self.stats.render_bundle_creates = self.stats.render_bundle_creates.saturating_add(1);
+            }
+            self.prepared_snapshot_bundle_active = self.prepared_snapshot_bundle.is_some();
+         }
+         else
+         {
+            self.prepared_snapshot_bundle = None;
+         }
+      }
+      else
+      {
+         self.prepared_snapshot_bundle = None;
+      }
+      self.prepared_chunks = cache;
+      self.prepared_frame_active = true;
+      Ok(())
+   }
+
+   fn encode_snapshot_flat(&mut self, snapshot: &api::RenderSnapshot) -> Result<(), api::RenderSnapshotError>
+   {
+      let mut fallback = core::mem::take(&mut self.prepared_fallback);
+      fallback.items.clear();
+      fallback.vertices.clear();
+      fallback.indices.clear();
+      let stats = snapshot.flatten_into(&mut fallback)?;
+      <Self as api::Renderer>::encode_pass(self, &fallback);
+      self.stats.commands_copied = self.stats.commands_copied.saturating_add(stats.commands_copied);
+      self.stats.geometry_bytes_copied = self.stats.geometry_bytes_copied
+         .saturating_add(stats.vertex_bytes_copied)
+         .saturating_add(stats.index_bytes_copied);
+      self.prepared_fallback = fallback;
+      Ok(())
+   }
+
+   fn prepare_chunk(&mut self, chunk: &api::RenderChunk, bundles_enabled: bool, reusable: Option<PreparedChunk>) -> Option<(PreparedChunk, u64, u32, u32)>
+   {
+      if !self.prepared_chunk_supported(chunk)
+      {
+         return None;
+      }
+
+      let (reusable_vertex, reusable_u16, reusable_u32, reusable_draws, reusable_generation) = reusable.map_or(
+         (None, None, None, None, 0),
+         |prepared| {
+            let PreparedChunk {
+               vertex_buffer,
+               index_buffer_u16,
+               index_buffer_u32,
+               draws,
+               bundle_generation,
+               ..
+            } = prepared;
+            (
+               Some(vertex_buffer),
+               index_buffer_u16,
+               index_buffer_u32,
+               Some(draws),
+               bundle_generation,
+            )
+         },
+      );
+
+      let saved_stats = self.stats;
+      let saved_frame = core::mem::take(&mut self.frame);
+      let saved_clip_stack = core::mem::take(&mut self.clip_stack);
+      let saved_target_stack = core::mem::take(&mut self.target_stack);
+      let mut index = 0;
+      self.encode_items(chunk.draw_list(), &mut index, false);
+      let mut lowered = core::mem::take(&mut self.frame);
+      self.frame = saved_frame;
+      self.clip_stack = saved_clip_stack;
+      self.target_stack = saved_target_stack;
+      self.stats = saved_stats;
+      if !lowered.layer_passes.is_empty() || lowered.effect_count != 0 || lowered.draws.is_empty()
+      {
+         return None;
+      }
+      lowered.geometry.align_uploads();
+      let vertex_bytes = bytemuck::cast_slice(&lowered.geometry.vertices);
+      let index_bytes_u16 = bytemuck::cast_slice(&lowered.geometry.indices_u16);
+      let index_bytes_u32 = bytemuck::cast_slice(&lowered.geometry.indices_u32);
+      let (vertex_buffer, vertex_created) = create_or_update_prepared_buffer(
+         &self.device,
+         &self.queue,
+         "oxide-webgpu-prepared-vertices",
+         vertex_bytes,
+         wgpu::BufferUsages::VERTEX,
+         reusable_vertex,
+      );
+      let (index_buffer_u16, index_u16_created) = if index_bytes_u16.is_empty()
+      {
+         (None, false)
+      }
+      else
+      {
+         let (buffer, created) = create_or_update_prepared_buffer(
+            &self.device,
+            &self.queue,
+            "oxide-webgpu-prepared-indices-u16",
+            index_bytes_u16,
+            wgpu::BufferUsages::INDEX,
+            reusable_u16,
+         );
+         (Some(buffer), created)
+      };
+      let (index_buffer_u32, index_u32_created) = if index_bytes_u32.is_empty()
+      {
+         (None, false)
+      }
+      else
+      {
+         let (buffer, created) = create_or_update_prepared_buffer(
+            &self.device,
+            &self.queue,
+            "oxide-webgpu-prepared-indices-u32",
+            index_bytes_u32,
+            wgpu::BufferUsages::INDEX,
+            reusable_u32,
+         );
+         (Some(buffer), created)
+      };
+      let segments = self.create_prepared_segments(
+         &vertex_buffer,
+         index_buffer_u16.as_ref(),
+         index_buffer_u32.as_ref(),
+         &lowered.draws,
+         bundles_enabled,
+      );
+      let bundle_count = segments.iter().filter(|segment| {
+         matches!(segment, PreparedSegment::Bundle { .. })
+      }).count().min(u32::MAX as usize) as u32;
+      let vertex_bytes = vertex_buffer.size();
+      let index_bytes = index_buffer_u16.as_ref().map_or(0, wgpu::Buffer::size)
+         .saturating_add(index_buffer_u32.as_ref().map_or(0, wgpu::Buffer::size));
+      let plan_bytes = (lowered.draws.len() as u64)
+         .saturating_mul(core::mem::size_of::<GpuDraw>() as u64)
+         .saturating_add(
+            (segments.len() as u64).saturating_mul(core::mem::size_of::<PreparedSegment>() as u64),
+         )
+         .saturating_add(
+            (chunk.resource_dependencies().len() as u64)
+               .saturating_mul(core::mem::size_of::<api::ImageHandle>() as u64),
+         );
+      let resident_bytes = vertex_bytes.saturating_add(index_bytes).saturating_add(plan_bytes);
+      let upload_bytes = lowered.geometry.byte_len() as u64;
+      let buffer_count = u32::from(vertex_created)
+         .saturating_add(u32::from(index_u16_created))
+         .saturating_add(u32::from(index_u32_created));
+      let bundle_generation = if buffer_count == 0
+         && reusable_draws.as_deref() == Some(lowered.draws.as_slice())
+      {
+         reusable_generation
+      }
+      else
+      {
+         self.prepared_bundle_generation = self.prepared_bundle_generation.wrapping_add(1).max(1);
+         self.prepared_bundle_generation
+      };
+      let resources = chunk.resource_dependencies().iter()
+         .map(|dependency| dependency.image)
+         .collect::<Vec<_>>().into_boxed_slice();
+      Some((PreparedChunk {
+         vertex_buffer,
+         index_buffer_u16,
+         index_buffer_u32,
+         draws: lowered.draws,
+         segments,
+         resources,
+         vertex_bytes,
+         index_bytes,
+         resident_bytes,
+         bundle_generation,
+      }, upload_bytes, buffer_count, bundle_count))
+   }
+
+   fn prepared_chunk_supported(&self, chunk: &api::RenderChunk) -> bool
+   {
+      !chunk.ordering().has_layer && !chunk.draw_list().items.iter().any(|item| {
+         matches!(item,
+            api::DrawCmd::LayerBegin { .. }
+            | api::DrawCmd::LayerEnd
+            | api::DrawCmd::Backdrop { .. }
+            | api::DrawCmd::VisualEffect { .. }
+            | api::DrawCmd::CameraBg { .. })
+      }) && !chunk.resource_dependencies().iter().any(|dependency| {
+         self.image(dependency.image).is_none()
+      })
+   }
+
+   fn create_prepared_segments(
+      &self,
+      vertex_buffer: &wgpu::Buffer,
+      index_buffer_u16: Option<&wgpu::Buffer>,
+      index_buffer_u32: Option<&wgpu::Buffer>,
+      draws: &[GpuDraw],
+      bundles_enabled: bool,
+   ) -> Vec<PreparedSegment>
+   {
+      if !bundles_enabled
+      {
+         return vec![PreparedSegment::Direct { start: 0, end: draws.len() }];
+      }
+      let mut segments = Vec::new();
+      let mut start = 0;
+      while start < draws.len()
+      {
+         let compatible = self.prepared_draw_bundle_compatible(draws[start]);
+         let mut end = start + 1;
+         while end < draws.len()
+            && self.prepared_draw_bundle_compatible(draws[end]) == compatible
+         {
+            end += 1;
+         }
+         let bundle = compatible
+            .then(|| self.create_prepared_bundle(
+               vertex_buffer,
+               index_buffer_u16,
+               index_buffer_u32,
+               &draws[start..end],
+            ))
+            .flatten();
+         if let Some(bundle) = bundle
+         {
+            segments.push(PreparedSegment::Bundle {
+               bundle,
+               draws: (end - start).min(u32::MAX as usize) as u32,
+            });
+         }
+         else
+         {
+            segments.push(PreparedSegment::Direct { start, end });
+         }
+         start = end;
+      }
+      segments
+   }
+
+   fn create_prepared_bundle(
+      &self,
+      vertex_buffer: &wgpu::Buffer,
+      index_buffer_u16: Option<&wgpu::Buffer>,
+      index_buffer_u32: Option<&wgpu::Buffer>,
+      draws: &[GpuDraw],
+   ) -> Option<wgpu::RenderBundle>
+   {
+      if draws.len() < self.prepared_bundle_min_draws
+      {
+         return None;
+      }
+      let formats = [Some(self.config.format)];
+      let mut encoder = self.device.create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
+         label: Some("oxide-webgpu-prepared-bundle"),
+         color_formats: &formats,
+         depth_stencil: None,
+         sample_count: 1,
+         multiview: None,
+      });
+      encoder.set_bind_group(0, &self.viewport_bind_group, &[]);
+      encoder.set_vertex_buffer(0, vertex_buffer.slice(..));
+      let mut bound_pipeline = None;
+      let mut bound_bind = None;
+      let mut bound_index = None;
+      for draw in draws
+      {
+         if bound_index != Some(draw.index_kind)
+         {
+            match draw.index_kind
+            {
+               PackedIndexKind::U16 => encoder.set_index_buffer(
+                  index_buffer_u16?.slice(..),
+                  wgpu::IndexFormat::Uint16,
+               ),
+               PackedIndexKind::U32 => encoder.set_index_buffer(
+                  index_buffer_u32?.slice(..),
+                  wgpu::IndexFormat::Uint32,
+               ),
+            }
+            bound_index = Some(draw.index_kind);
+         }
+         let state = self.draw_state_key(*draw)?;
+         if bound_pipeline != Some(state.pipeline)
+         {
+            encoder.set_pipeline(self.pipeline_for_draw(state.pipeline)?);
+            bound_pipeline = Some(state.pipeline);
+         }
+         if bound_bind != Some(state.bind)
+         {
+            if let DrawBindKey::Texture { image } = state.bind
+            {
+               encoder.set_bind_group(1, &self.image(api::ImageHandle(image))?.bind_group, &[]);
+            }
+            bound_bind = Some(state.bind);
+         }
+         encoder.draw_indexed(
+            draw.first_index..draw.first_index.saturating_add(draw.index_count),
+            draw.base_vertex,
+            0..1,
+         );
+      }
+      Some(encoder.finish(&wgpu::RenderBundleDescriptor {
+         label: Some("oxide-webgpu-prepared-bundle"),
+      }))
+   }
+
+   fn create_prepared_snapshot_bundle(
+      &self,
+      cache: &PreparedChunkCache,
+      plan: &[PreparedChunkKey],
+   ) -> Option<PreparedSnapshotBundle>
+   {
+      let formats = [Some(self.config.format)];
+      let mut encoder = self.device.create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
+         label: Some("oxide-webgpu-prepared-snapshot-bundle"),
+         color_formats: &formats,
+         depth_stencil: None,
+         sample_count: 1,
+         multiview: None,
+      });
+      encoder.set_bind_group(0, &self.viewport_bind_group, &[]);
+      let mut bound_pipeline = None;
+      let mut bound_bind = None;
+      let mut draws = 0_u32;
+      for key in plan
+      {
+         let chunk = cache.get(*key)?;
+         encoder.set_vertex_buffer(0, chunk.vertex_buffer.slice(..));
+         let mut bound_index = None;
+         for draw in &chunk.draws
+         {
+            if !self.prepared_draw_bundle_compatible(*draw)
+            {
+               return None;
+            }
+            if bound_index != Some(draw.index_kind)
+            {
+               match draw.index_kind
+               {
+                  PackedIndexKind::U16 => encoder.set_index_buffer(
+                     chunk.index_buffer_u16.as_ref()?.slice(..),
+                     wgpu::IndexFormat::Uint16,
+                  ),
+                  PackedIndexKind::U32 => encoder.set_index_buffer(
+                     chunk.index_buffer_u32.as_ref()?.slice(..),
+                     wgpu::IndexFormat::Uint32,
+                  ),
+               }
+               bound_index = Some(draw.index_kind);
+            }
+            let state = self.draw_state_key(*draw)?;
+            if bound_pipeline != Some(state.pipeline)
+            {
+               encoder.set_pipeline(self.pipeline_for_draw(state.pipeline)?);
+               bound_pipeline = Some(state.pipeline);
+            }
+            if bound_bind != Some(state.bind)
+            {
+               if let DrawBindKey::Texture { image } = state.bind
+               {
+                  encoder.set_bind_group(1, &self.image(api::ImageHandle(image))?.bind_group, &[]);
+               }
+               bound_bind = Some(state.bind);
+            }
+            encoder.draw_indexed(
+               draw.first_index..draw.first_index.saturating_add(draw.index_count),
+               draw.base_vertex,
+               0..1,
+            );
+            draws = draws.saturating_add(1);
+         }
+      }
+      Some(PreparedSnapshotBundle {
+         keys: plan.iter().map(|key| {
+            let chunk = cache.get(*key)?;
+            Some(PreparedSnapshotBundleKey {
+               id: key.id,
+               generation: chunk.bundle_generation,
+            })
+         }).collect::<Option<Vec<_>>>()?.into_boxed_slice(),
+         bundle: encoder.finish(&wgpu::RenderBundleDescriptor {
+            label: Some("oxide-webgpu-prepared-snapshot-bundle"),
+         }),
+         draws,
+      })
+   }
+
+   fn prepared_draw_bundle_compatible(&self, draw: GpuDraw) -> bool
+   {
+      let full_clip = api::RectI::new(
+         0,
+         0,
+         logical_dimension(self.width, self.scale) as i32,
+         logical_dimension(self.height, self.scale) as i32,
+      );
+      draw.target.is_none()
+         && draw.clip == full_clip
+         && !matches!(draw.kind, DrawKind::Layer { .. } | DrawKind::Backdrop { .. })
+   }
+
+   fn pipeline_for_draw(&self, pipeline: DrawPipelineKey) -> Option<&wgpu::RenderPipeline>
+   {
+      match pipeline
+      {
+         DrawPipelineKey::Solid => Some(self.solid_pipeline()),
+         DrawPipelineKey::Rgba => Some(self.rgba_pipeline()),
+         DrawPipelineKey::A8 => Some(self.a8_pipeline()),
+         DrawPipelineKey::Sdf => Some(self.sdf_pipeline()),
+         DrawPipelineKey::Effect => None,
+      }
+   }
+}
+
 impl api::Renderer for WebGpuRenderer {
     fn device_caps(&self) -> api::DeviceCaps {
         api::DeviceCaps {
@@ -3582,6 +4431,9 @@ impl api::Renderer for WebGpuRenderer {
     ) -> api::FrameToken {
         self.frame_id = self.frame_id.wrapping_add(1);
         self.frame.clear();
+        self.prepared_frame_plan.clear();
+        self.prepared_frame_active = false;
+        self.prepared_snapshot_bundle_active = false;
         self.scene3d_uniform_bytes.clear();
         self.scene3d_draws.clear();
         self.scene3d_overlay_draws.clear();
@@ -3730,6 +4582,9 @@ impl api::Renderer for WebGpuRenderer {
             .stats
             .backend_cache_misses
             .saturating_add(u64::from(self.stats.layer_cache_misses));
+        self.stats.cache_evictions = self.stats.cache_evictions.saturating_add(
+            self.prepared_chunks.take_evictions().min(u64::from(u32::MAX)) as u32,
+        );
         self.stats.render_encoders = self.stats.render_passes;
         Ok(())
     }
@@ -3767,6 +4622,7 @@ impl api::Renderer for WebGpuRenderer {
                 .cache_evictions
                 .saturating_add(self.layers.len().min(u32::MAX as usize) as u32);
             self.layers.clear();
+            self.purge_prepared_chunks();
         }
         Ok(())
     }
@@ -3961,6 +4817,10 @@ impl WebGpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         surface_view: &wgpu::TextureView,
     ) {
+        if self.prepared_frame_active {
+            self.render_prepared_direct(encoder, surface_view);
+            return;
+        }
         if self.scene3d_active {
             self.render_scene3d(encoder, surface_view);
         }
@@ -3993,6 +4853,208 @@ impl WebGpuRenderer {
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
             },
         );
+    }
+
+    fn render_prepared_direct(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        surface_view: &wgpu::TextureView,
+    ) {
+        if self.prepared_frame_plan.is_empty() {
+            return;
+        }
+        if self.prepared_snapshot_bundle_active
+        {
+           let Some(snapshot_bundle) = self.prepared_snapshot_bundle.take() else
+           {
+              return;
+           };
+           self.stats.render_passes = self.stats.render_passes.saturating_add(1);
+           self.stats.draw_passes = self.stats.draw_passes.saturating_add(1);
+           let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Draw);
+           let timestamp_writes = self.timestamp_writes(timestamp_pair);
+           {
+              let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                 label: Some("oxide-webgpu-prepared-snapshot-pass"),
+                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: surface_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                       load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                       store: wgpu::StoreOp::Store,
+                    },
+                 })],
+                 depth_stencil_attachment: None,
+                 timestamp_writes,
+                 occlusion_query_set: None,
+              });
+              pass.execute_bundles(core::iter::once(&snapshot_bundle.bundle));
+           }
+           self.stats.draws = self.stats.draws.saturating_add(snapshot_bundle.draws);
+           self.stats.draw_items = self.stats.draw_items.saturating_add(snapshot_bundle.draws);
+           self.stats.render_bundle_replays = self.stats.render_bundle_replays.saturating_add(1);
+           self.stats.render_bundle_execute_calls = self.stats.render_bundle_execute_calls.saturating_add(1);
+           self.stats.render_bundle_draws = self.stats.render_bundle_draws.saturating_add(snapshot_bundle.draws);
+           self.prepared_snapshot_bundle = Some(snapshot_bundle);
+           return;
+        }
+        self.stats.render_passes = self.stats.render_passes.saturating_add(1);
+        self.stats.draw_passes = self.stats.draw_passes.saturating_add(1);
+        let cache = core::mem::take(&mut self.prepared_chunks);
+        let plan = core::mem::take(&mut self.prepared_frame_plan);
+        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Draw);
+        let timestamp_writes = self.timestamp_writes(timestamp_pair);
+        let mut draws = 0_u32;
+        let mut draw_items = 0_u32;
+        let mut pipeline_binds = 0_u32;
+        let mut bind_group_binds = 0_u32;
+        let mut scissor_sets = 0_u32;
+        let mut bundle_replays = 0_u32;
+        let mut bundle_execute_calls = 0_u32;
+        let mut bundle_draws = 0_u32;
+        let mut direct_draws = 0_u32;
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("oxide-webgpu-prepared-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: surface_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes,
+                occlusion_query_set: None,
+            });
+            let mut plan_index = 0;
+            while plan_index < plan.len() {
+                let Some(chunk) = cache.get(plan[plan_index]) else {
+                    plan_index += 1;
+                    continue;
+                };
+                let chunk_draws = chunk.draws.len().min(u32::MAX as usize) as u32;
+                draw_items = draw_items.saturating_add(chunk_draws);
+                draws = draws.saturating_add(chunk_draws);
+                if matches!(chunk.segments.as_slice(), [PreparedSegment::Bundle { .. }]) {
+                    let start = plan_index;
+                    while plan_index < plan.len() {
+                        let Some(chunk) = cache.get(plan[plan_index]) else { break };
+                        let [PreparedSegment::Bundle { draws: segment_draws, .. }] = chunk.segments.as_slice() else { break };
+                        if plan_index != start {
+                            let chunk_draws = chunk.draws.len().min(u32::MAX as usize) as u32;
+                            draw_items = draw_items.saturating_add(chunk_draws);
+                            draws = draws.saturating_add(chunk_draws);
+                        }
+                        bundle_replays = bundle_replays.saturating_add(1);
+                        bundle_draws = bundle_draws.saturating_add(*segment_draws);
+                        plan_index += 1;
+                    }
+                    pass.execute_bundles(plan[start..plan_index].iter().filter_map(|key| {
+                        let chunk = cache.get(*key)?;
+                        let [PreparedSegment::Bundle { bundle, .. }] = chunk.segments.as_slice() else { return None };
+                        Some(bundle)
+                    }));
+                    bundle_execute_calls = bundle_execute_calls.saturating_add(1);
+                    continue;
+                }
+                for segment in &chunk.segments {
+                    match segment {
+                        PreparedSegment::Bundle { bundle, draws } => {
+                            pass.execute_bundles(core::iter::once(bundle));
+                            bundle_replays = bundle_replays.saturating_add(1);
+                            bundle_execute_calls = bundle_execute_calls.saturating_add(1);
+                            bundle_draws = bundle_draws.saturating_add(*draws);
+                        }
+                        PreparedSegment::Direct { start, end } => {
+                            let counters = self.encode_prepared_direct_draws(
+                                &mut pass,
+                                chunk,
+                                &chunk.draws[*start..*end],
+                            );
+                            pipeline_binds = pipeline_binds.saturating_add(counters.0);
+                            bind_group_binds = bind_group_binds.saturating_add(counters.1);
+                            scissor_sets = scissor_sets.saturating_add(counters.2);
+                            direct_draws = direct_draws
+                                .saturating_add((*end - *start).min(u32::MAX as usize) as u32);
+                        }
+                    }
+                }
+                plan_index += 1;
+            }
+        }
+        self.prepared_chunks = cache;
+        self.prepared_frame_plan = plan;
+        self.stats.draws = self.stats.draws.saturating_add(draws);
+        self.stats.draw_items = self.stats.draw_items.saturating_add(draw_items);
+        self.stats.draw_pipeline_binds = self.stats.draw_pipeline_binds.saturating_add(pipeline_binds);
+        self.stats.draw_bind_group_binds = self.stats.draw_bind_group_binds.saturating_add(bind_group_binds);
+        self.stats.draw_scissor_sets = self.stats.draw_scissor_sets.saturating_add(scissor_sets);
+        self.stats.render_bundle_replays = self.stats.render_bundle_replays.saturating_add(bundle_replays);
+        self.stats.render_bundle_execute_calls = self.stats.render_bundle_execute_calls.saturating_add(bundle_execute_calls);
+        self.stats.render_bundle_draws = self.stats.render_bundle_draws.saturating_add(bundle_draws);
+        self.stats.prepared_direct_draws = self.stats.prepared_direct_draws.saturating_add(direct_draws);
+    }
+
+    fn encode_prepared_direct_draws(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        chunk: &PreparedChunk,
+        draws: &[GpuDraw],
+    ) -> (u32, u32, u32) {
+        pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+        pass.set_vertex_buffer(0, chunk.vertex_buffer.slice(..));
+        let mut pipeline_binds = 0_u32;
+        let mut bind_group_binds = 0_u32;
+        let mut scissor_sets = 0_u32;
+        let mut bound_pipeline = None;
+        let mut bound_bind = None;
+        let mut bound_clip = None;
+        let mut bound_index = None;
+        for draw in draws {
+            if bound_index != Some(draw.index_kind) {
+                match draw.index_kind {
+                    PackedIndexKind::U16 => {
+                        let Some(buffer) = chunk.index_buffer_u16.as_ref() else { continue };
+                        pass.set_index_buffer(buffer.slice(..), wgpu::IndexFormat::Uint16);
+                    }
+                    PackedIndexKind::U32 => {
+                        let Some(buffer) = chunk.index_buffer_u32.as_ref() else { continue };
+                        pass.set_index_buffer(buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    }
+                }
+                bound_index = Some(draw.index_kind);
+            }
+            let Some(state) = self.draw_state_key(*draw) else { continue };
+            if bound_clip != Some(state.clip) {
+                set_scissor(pass, state.clip, self.scale, self.width, self.height);
+                scissor_sets = scissor_sets.saturating_add(1);
+                bound_clip = Some(state.clip);
+            }
+            if bound_pipeline != Some(state.pipeline) {
+                let Some(pipeline) = self.pipeline_for_draw(state.pipeline) else { continue };
+                pass.set_pipeline(pipeline);
+                pipeline_binds = pipeline_binds.saturating_add(1);
+                bound_pipeline = Some(state.pipeline);
+            }
+            if bound_bind != Some(state.bind) {
+                if let DrawBindKey::Texture { image } = state.bind {
+                    let Some(image) = self.image(api::ImageHandle(image)) else { continue };
+                    pass.set_bind_group(1, &image.bind_group, &[]);
+                    bind_group_binds = bind_group_binds.saturating_add(1);
+                }
+                bound_bind = Some(state.bind);
+            }
+            pass.draw_indexed(
+                draw.first_index..draw.first_index.saturating_add(draw.index_count),
+                draw.base_vertex,
+                0..1,
+            );
+        }
+        (pipeline_binds, bind_group_binds, scissor_sets)
     }
 
     fn render_scene_with_effects(&mut self, encoder: &mut wgpu::CommandEncoder) {
@@ -6034,6 +7096,37 @@ fn uniform_binding(buffer: &wgpu::Buffer, size: u64) -> wgpu::BindingResource<'_
         offset: 0,
         size: NonZeroU64::new(size),
     })
+}
+
+fn create_or_update_prepared_buffer(
+   device: &wgpu::Device,
+   queue: &wgpu::Queue,
+   label: &'static str,
+   bytes: &[u8],
+   usage: wgpu::BufferUsages,
+   reusable: Option<wgpu::Buffer>,
+) -> (wgpu::Buffer, bool)
+{
+   let needed = bytes.len().max(1) as u64;
+   if let Some(buffer) = reusable.filter(|buffer| buffer.size() >= needed)
+   {
+      if !bytes.is_empty()
+      {
+         queue.write_buffer(&buffer, 0, bytes);
+      }
+      return (buffer, false);
+   }
+   let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+      label: Some(label),
+      size: needed,
+      usage: usage | wgpu::BufferUsages::COPY_DST,
+      mapped_at_creation: false,
+   });
+   if !bytes.is_empty()
+   {
+      queue.write_buffer(&buffer, 0, bytes);
+   }
+   (buffer, true)
 }
 
 fn ensure_buffer(

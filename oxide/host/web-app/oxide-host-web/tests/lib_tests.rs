@@ -89,6 +89,29 @@ fn host_exposes_opt_in_webgpu_architecture_primitive_matrix() {
     assert!(page.contains("bench_webgpu_architecture_primitives"));
 }
 
+#[test]
+fn host_exposes_prepared_chunk_browser_contract()
+{
+   let source = include_str!("../src/lib.rs");
+   let page = include_str!("../../www/index.html");
+   assert!(source.contains("pub async fn bench_webgpu_prepared_chunks"));
+   assert!(source.contains("pub async fn bench_webgpu_prepared_guardrails"));
+   assert!(source.contains("WEBGPU_PREPARED_CHUNKS: usize = 256"));
+   assert!(source.contains("WEBGPU_PREPARED_DRAW_COUNTS: [usize; 4] = [8, 16, 32, 64]"));
+   assert!(source.contains("renderer.encode_snapshot(snapshot)"));
+   assert!(source.contains("snapshot.flatten_into(flat)"));
+   assert!(source.contains("cache_hits_avg"));
+   assert!(source.contains("bundle_replays_avg"));
+   assert!(source.contains("bundle_execute_calls_avg"));
+   assert!(source.contains("active_frame_samples_ms"));
+   assert!(source.contains("queue_wait_samples_ms"));
+   assert!(source.contains("structural_bundle_creates"));
+   assert!(source.contains("webgpu_prepared_structural_snapshot"));
+   assert!(source.contains("budget_upload_bytes"));
+   assert!(page.contains("params.get(\"prepared_only\") === \"1\""));
+   assert!(page.contains("bench_webgpu_prepared_chunks"));
+}
+
 fn report_f64(section: &str, key: &str) -> f64 {
     let marker = format!("\"{key}\": ");
     let start =

@@ -1,4 +1,181 @@
 [[experiments]]
+id = "c25-webgpu-persistent-prepared-chunks"
+introduced_commit = "C25 staged tree recorded in commit proof"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-web", "oxide-host-web", "oxide-perf-runner"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "Prepared and flat 1,200 x 800 mixed captures must be byte-identical; clean replay must traverse, copy, and upload zero immutable work; one dirty chunk must rebuild only that chunk; bundle/direct splitting, tiny and dynamic fallback, effects/layers, device generation, resize, resource update/release/recreation, zero budget, eviction, and cache accounting must remain exact."
+performance_gate = "Fifteen balanced fresh-process clean and one-dirty pairs must materially improve renderer-encode p50 with p95/p99/peak protection; ten independent RAF pairs must contribute at least 2,000 displayed-frame samples per side with no p50/p95/p99/peak regression; the measured 8-draw policy must not force bundles on tiny or dynamic scenes."
+decision_state = "accepted"
+decision = "Persist supported WebGPU chunk buffers and lowering plans under a revision/device-aware logical-byte LRU, replay a wholly static-compatible snapshot through one generation-checked aggregate render bundle, and retain ordered chunk-local bundle/direct or flat boundaries for incompatible work."
+proof = [
+   "The final exact-tree clean-encode, dirty-encode, and RAF reports under benchmarks/experiments/c25-webgpu-prepared-chunks/raw retain source/artifact/instrumentation identities, balanced fresh-process pairs, raw distributions, and strict decisions.",
+   "The pre-documentation populations improved clean and one-dirty renderer encode by 88.500% and 85.302% with every encode tail accepted; 3,000 RAF frames per side preserved p50 and improved p95/p99/peak.",
+   "Every clean candidate process reports 256 hits, zero misses/traversal/copy/upload, one aggregate bundle replay/execute call, 7,680 bundle draws, and zero prepared-direct draws; every dirty candidate process reports 255 hits, one miss, eight traversed commands, 684 uploaded bytes, the same aggregate counts, and zero recurring bundle or buffer creation.",
+   "The final 1,200 x 800 flat/prepared PNGs have pixdiff=0, max error=0, MSE=0.000, and identical SHA-256 a922fb9c671f53252bdaa319d8a657f3789fbf7c4c0b56e85599cf2689c32abe; the browser lifecycle guard passes every declared invalidation and fallback boundary.",
+]
+cleanup = [
+   "Kept the eight-draw aggregate-bundle threshold with a 64-command scene floor after the complete 8/16/32/64 sweep and long tail probes; removed no production fallback required for exact effects, layers, dynamic properties, clips, or target changes.",
+   "Kept same-layout revision churn on generation-stable buffers and one unchanged aggregate bundle rather than rebuilding bundle commands every frame, and made zero budget bypass preparation before resource creation.",
+]
+
+[[experiments]]
+id = "c25-unpaced-completed-frame-primary-and-four-bundle-repair-rejected"
+introduced_commit = "rejected during C25 final tail review"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-web", "oxide-host-web", "oxide-perf-runner"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "Any replacement metric must retain the same 256-chunk presented workload, exact counters and pixels, direct GPU timing, fresh-process isolation, and a separate real requestAnimationFrame distribution."
+performance_gate = "A synthetic unpaced completed-frame metric may remain diagnostic, but acceptance requires a material renderer-encode win plus no regression over at least 2,000 real RAF-presented frame intervals per side."
+decision_state = "rejected"
+decision = "Rejected ten-frame unpaced completed-batch latency as the C25 primary after it coupled faster CPU submission to browser surface backpressure; also rejected splitting the aggregate into four persistent bundles because it did not repair that synthetic p95."
+proof = [
+   "The 60-pair one-bundle population won 60/60 medians by 46.265% and improved peak to 28.501 from 31.251 ms, but failed p95/p99 at 23.066/25.341 versus 21.932/23.666 ms.",
+   "Four bundles in one execute call won all 15 pilot medians by 48.544% and improved p99/peak, but still failed p95 at 22.193 versus 20.311 ms, ruling out one oversized bundle object as the tail cause.",
+   "Phase attribution showed clean renderer encode at 0.080 versus 0.711 ms and direct GPU p50 at about 0.348 versus 0.607 ms; the independent 3,000-frame RAF population accepted p50/p95/p99/peak, so the retained protocol separates lowering throughput from real displayed pacing.",
+]
+cleanup = [
+   "Removed the four-bundle runtime variant and retained one aggregate bundle plus one execute call; kept the unpaced distribution in raw evidence as a rejected diagnostic rather than hiding it.",
+]
+
+[[experiments]]
+id = "c25-one-execute-call-per-render-bundle-rejected"
+introduced_commit = "rejected during C25 tail review"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-web", "oxide-host-web", "oxide-perf-runner"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "Combining execute calls must preserve independent chunk bundle ownership, ordered direct boundaries, exact draw counts, and byte-identical output."
+performance_gate = "Clean direct-GPU p95, p99, and peak must pass after the enlarged fresh-process population; median CPU wins cannot override a repeatable candidate-only GPU peak."
+decision_state = "rejected"
+decision = "Rejected issuing one execute_bundles call for every cached chunk because 256 browser-to-Dawn execute calls produced repeatable candidate-only clean GPU peaks despite much faster medians."
+proof = [
+   "Two independent 30-pair exact-tree clean populations measured candidate direct-GPU peaks of 2.133718 and 1.593809 ms versus parent peaks of 0.842071 and 0.853279 ms; both failed the strict peak gate while p50/p95/p99 improved.",
+   "The retained hybrid renderer keeps every chunk bundle independently invalidatable, while the all-static fast path replaces the independent bundle sequence with one aggregate bundle object and one execute call.",
+]
+cleanup = [
+   "Replaced repeated singleton execute_bundles calls with allocation-free run coalescing and added render_bundle_execute_calls to renderer and browser evidence.",
+]
+
+[[experiments]]
+id = "c25-independent-render-bundle-sequence-rejected"
+introduced_commit = "rejected during C25 completed-frame tail review"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-web", "oxide-host-web", "oxide-perf-runner"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "Replacing independent chunk bundles with an aggregate must preserve chunk-local cache identity, buffer/resource lifetime, ordered hybrid boundaries, same-layout dirty updates, and exact pixels."
+performance_gate = "The all-static path must improve completed-frame, renderer-encode, command-encode, and direct-GPU distributions including p95/p99/peak; favorable lowering medians cannot override surface-progress tails."
+decision_state = "rejected"
+decision = "Rejected replaying a coalesced sequence of independently recorded chunk bundles because Chrome surface progress remained unstable even after reducing the sequence and the in-flight batch."
+proof = [
+   "The 60-pair threshold-32 population won 60/60 medians by 27.127% but failed completed-frame p95 at 29.207 versus 25.049 ms; threshold 64 also failed its p95 pilot.",
+   "A four-submit control worsened candidate p95/p99/peak to 59.880/69.303/99.595 ms versus 33.074/41.749/51.815 ms, proving that merely shrinking the measurement batch did not repair independent-bundle surface progress.",
+   "The retained aggregate-bundle pilots accepted all clean and dirty frame gates while preserving 256/255 chunk hits and rebuilding only the one dirty chunk's buffers/plan.",
+]
+cleanup = [
+   "Replaced the all-static independent bundle sequence with one persistent snapshot bundle keyed by chunk buffer/plan generations; retained chunk-local segments only for hybrid bundle/direct ordering.",
+]
+
+[[experiments]]
+id = "c25-whole-chunk-render-bundles-rejected"
+introduced_commit = "rejected during C25"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-web"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "A prepared chunk containing clip- or target-incompatible draws must preserve exact ordering, clipping, resources, and pixels without recording unsupported commands in a render bundle."
+performance_gate = "Bundle recording must lower compatible encoder calls without forcing clipped or otherwise incompatible draws through a pessimal or invalid bundle."
+decision_state = "rejected"
+decision = "Rejected one render bundle for every prepared chunk because clip and target state can split otherwise static geometry into bundle-compatible and direct ranges."
+proof = [
+   "The retained segmented guard records two bundles around eight clipped direct draws and replays all three ranges in order with exact output.",
+   "PreparedSegment::Bundle and PreparedSegment::Direct share the same persistent geometry buffers, so splitting does not reintroduce flattening or immutable upload.",
+]
+cleanup = [
+   "Replaced whole-chunk recording with ordered bundle/direct segments and kept effects, layers, backdrops, camera input, and property-driven snapshots on the checked flat boundary.",
+]
+
+[[experiments]]
+id = "c25-render-bundle-thresholds-16-32-64-rejected"
+introduced_commit = "rejected during C25"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-web", "oxide-host-web"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "Every threshold variant must draw the same 256 chunks, 7,680 draws, resources, and pixels while reporting exact bundle and direct-draw counts."
+performance_gate = "Fresh-process threshold sweeps and long tail probes must select the fastest policy whose completed-frame, command-encoding, and direct-GPU p95/p99/peak remain stable without forcing a bundle on an isolated eight-draw scene."
+decision_state = "rejected"
+decision = "Rejected thresholds 16, 32, and 64 because they disqualified part of the static snapshot from aggregate replay, left 512, 1,536, or 3,584 draws on the direct encoder, and were slower or less stable than the eight-draw aggregate policy."
+proof = [
+   "The threshold sweep artifacts under benchmarks/experiments/c25-webgpu-prepared-chunks/raw retain fresh Chrome processes per threshold and exact aggregate/hybrid bundle/direct counters.",
+   "Before aggregate replay, threshold 16 produced 24.477--28.509 ms command-encoding peaks in all five long processes, threshold 32 failed the final 60-pair completed-frame p95 gate, and threshold 64 failed its paired p95 pilot. Aggregate replay makes all four workload chunk sizes eligible only at threshold eight.",
+   "A separate tiny-scene guard records zero bundle creates/replays and eight direct draws because the complete scene is below the 64-command floor.",
+]
+cleanup = [
+   "Retained PREPARED_BUNDLE_DEFAULT_MIN_DRAWS=8 plus PREPARED_BUNDLE_SCENE_MIN_DRAWS=64; no alternate production threshold path remains outside the explicit benchmark setter.",
+]
+
+[[experiments]]
+id = "c25-revision-churn-bundle-rebuild-rejected"
+introduced_commit = "rejected during C25"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-web", "oxide-host-web"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "A changing chunk revision must replace only its buffers/plan while preserving 255 clean chunk identities, ordering, resources, and pixels."
+performance_gate = "One-dirty measured frames must not create a new render bundle every frame and must materially beat complete flat traversal, packing, upload, and command encoding."
+decision_state = "rejected"
+decision = "Rejected recurring bundle creation and same-sized buffer-object replacement for repeatedly changing chunks because renderer/driver resource churn consumed the dirty encode win after immutable upload had already been localized."
+proof = [
+   "The retained dirty contract reports one aggregate bundle replay, zero prepared-direct draws, one miss, 684 uploaded bytes, and last_bundle_creates=0 in every measured process.",
+   "The pre-final fifteen-pair dirty screen improved completed-frame, renderer-encode, command-encode, and direct-GPU medians by 30.607%, 74.594%, 81.536%, and 27.574% with every tail gate accepted.",
+   "The first exact-tree dirty population produced a 64.062 ms candidate encode stall, and its independent doubled population reproduced a 69.427 ms stall; both were rejected before capacity-compatible buffer reuse replaced same-sized object creation.",
+]
+cleanup = [
+   "After two changing revisions the cache retains a direct plan and queue-updates capacity-compatible vertex/index buffers instead of replacing same-sized objects; stable revisions remain eligible for bundle replay.",
+]
+
+[[experiments]]
+id = "c25-zero-budget-prepare-then-evict-rejected"
+introduced_commit = "rejected during C25 review"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-web", "oxide-host-web"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "A zero-byte prepared-cache policy must preserve exact flat output, retain zero prepared bytes, and create no transient prepared buffers or bundles."
+performance_gate = "Zero-budget admission must bypass preparation before any persistent buffer upload or bundle construction rather than paying cold preparation and then evicting it."
+decision_state = "rejected"
+decision = "Rejected enforcing a zero-byte budget only after preparation because it created and uploaded resources that were immediately evicted before flat fallback."
+proof = [
+   "The final guard enters encode_snapshot_flat before chunk lowering when budget_bytes is zero, reports zero prepared cache bytes and bundle replays, and records no prepared buffer growth.",
+]
+cleanup = [
+   "Moved the zero-budget decision to the encode_snapshot admission boundary; ordinary positive budgets retain bounded post-prepare LRU enforcement.",
+]
+
+[[experiments]]
+id = "c25-browser-screenshot-polling-and-oversized-batches-rejected"
+introduced_commit = "rejected during C25 measurement"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-host-web", "oxide-perf-runner"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "Every browser result must complete its declared submissions, queue waits, timestamp cardinality, and POST before Chrome exits; capture must remain a separate exact-pixel run."
+performance_gate = "The harness must produce stable per-batch frame/encode/command and per-submit GPU samples without exhausting the presentable WebGPU surface."
+decision_state = "rejected"
+decision = "Rejected screenshot-coupled benchmark launches, zero-delay timestamp polling, and 40-frame surface batches because they exited before result delivery, failed timestamp settlement, or exhausted presentable surface progress."
+proof = [
+   "The retained harness separates capture, waits for queue completion, returns explicit warmup samples, and caps measured batches at ten frames; 15-pair clean and dirty provisional populations completed with no invalid pairs.",
+   "Exact visuals are collected by the existing golden harness from the same candidate WASM rather than by changing benchmark-process lifetime.",
+]
+cleanup = [
+   "Removed the screenshot flag and zero-delay poll loop, reduced the measured batch to ten completed frames, and retained no invalid oversized-batch evidence as a performance sample.",
+]
+
+[[experiments]]
 id = "c24-metal-persistent-prepared-chunks"
 introduced_commit = "C24 staged tree recorded in commit proof"
 introduced_date = "2026-07-13"
