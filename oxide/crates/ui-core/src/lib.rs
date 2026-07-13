@@ -59,7 +59,7 @@ pub use sensors::{
 };
 pub use surface::{
     ChromeMetrics, DirtyClass, DirtySet, InteractionBlockGuard, RetainedCompositionStats,
-    RetainedDrawStatus, ScatterSpec, SurfaceRenderChunk, SurfaceRenderChunkStats,
+    RetainedDrawStatus, ScatterSpec, SurfaceRenderChunkStats,
     SurfaceRenderSnapshot, SurfaceRenderSnapshotError, SurfaceRouter, UiSurface,
 };
 pub use telemetry::TelemetryView;
@@ -209,31 +209,7 @@ impl DrawListBuilder {
 
    pub fn append_render_snapshot_flat(&mut self, snapshot: &gfx::RenderSnapshot) -> Result<gfx::RenderFallbackStats, gfx::RenderSnapshotError>
    {
-      let mut flat = gfx::DrawList::default();
-      let mut stats = snapshot.flatten_into(&mut flat)?;
-      let commands_before = self.list.items.len();
-      let vertices_before = self.list.vertices.len();
-      let indices_before = self.list.indices.len();
-      if !self.append_drawlist(&flat)
-      {
-         return Err(gfx::RenderSnapshotError::GeometryTooLarge);
-      }
-      let commands = self.list.items.len().saturating_sub(commands_before) as u64;
-      let vertices = self.list.vertices.len().saturating_sub(vertices_before) as u64;
-      let indices = self.list.indices.len().saturating_sub(indices_before) as u64;
-      stats.commands_copied = stats.commands_copied.saturating_add(commands);
-      stats.vertices_copied = stats.vertices_copied.saturating_add(vertices);
-      stats.indices_copied = stats.indices_copied.saturating_add(indices);
-      stats.command_bytes_copied = stats.command_bytes_copied.saturating_add(
-         commands.saturating_mul(core::mem::size_of::<gfx::DrawCmd>() as u64),
-      );
-      stats.vertex_bytes_copied = stats.vertex_bytes_copied.saturating_add(
-         vertices.saturating_mul(core::mem::size_of::<gfx::Vertex>() as u64),
-      );
-      stats.index_bytes_copied = stats.index_bytes_copied.saturating_add(
-         indices.saturating_mul(core::mem::size_of::<u16>() as u64),
-      );
-      Ok(stats)
+      snapshot.flatten_into(&mut self.list)
    }
 
     #[inline]
@@ -948,7 +924,7 @@ pub enum Overflow {
     Scroll,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct NodeStyle {
     pub axis: Axis,
     pub size: Size2D,
@@ -1017,14 +993,28 @@ impl Default for NodeStyle {
 struct Node {
     id: NodeId,
     parent: Option<NodeId>,
+    index_in_parent: usize,
     style: NodeStyle,
     children: alloc::vec::Vec<NodeId>,
     layout: LayoutRect,
     last_content: Option<LayoutRect>,
     layout_dirty: bool,
     descendant_layout_dirty: bool,
-    draw_dirty: bool,
-    retained_draws: Option<gfx::DrawList>,
+    chunk_dirty: bool,
+    sequence_dirty: bool,
+    dirty_child: Option<usize>,
+    all_children_dirty: bool,
+    retained_chunk: Option<gfx::RenderChunk>,
+    retained_sequence: Option<gfx::RenderChunkSequence>,
+    retained_composition: Option<NodeCompositionState>,
+    chunk_revisions: gfx::RenderChunkRevisions,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct NodeCompositionState {
+    layout: LayoutRect,
+    translation: [f32; 2],
+    clip: bool,
 }
 
 impl Node {
@@ -1032,14 +1022,21 @@ impl Node {
         Self {
             id,
             parent,
+            index_in_parent: 0,
             style,
             children: alloc::vec::Vec::new(),
             layout: LayoutRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 },
             last_content: None,
             layout_dirty: true,
             descendant_layout_dirty: false,
-            draw_dirty: true,
-            retained_draws: None,
+            chunk_dirty: true,
+            sequence_dirty: true,
+            dirty_child: None,
+            all_children_dirty: true,
+            retained_chunk: None,
+            retained_sequence: None,
+            retained_composition: None,
+            chunk_revisions: gfx::RenderChunkRevisions::default(),
         }
     }
 }
@@ -1047,12 +1044,38 @@ impl Node {
 pub struct NodeTree {
     nodes: alloc::vec::Vec<Option<Node>>, // dense slot map
     root: NodeId,
+    retained_namespace: Option<u32>,
+    retained_chunk_bytes: u64,
+    retained_sequence_bytes: u64,
+}
+
+fn mark_dirty_child(node: &mut Node, index: Option<usize>) {
+    let Some(index) = index else {
+        return;
+    };
+    if node.all_children_dirty {
+        return;
+    }
+    match node.dirty_child {
+        Some(current) if current != index => node.all_children_dirty = true,
+        Some(_) => {}
+        None => node.dirty_child = Some(index),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RetainedNodeStats {
     pub reused_nodes: u32,
     pub rebuilt_nodes: u32,
+    pub chunks_reused: u64,
+    pub chunks_rebuilt: u64,
+    pub sequences_reused: u64,
+    pub sequences_rebuilt: u64,
+    pub command_bytes_copied: u64,
+    pub vertex_bytes_copied: u64,
+    pub index_bytes_copied: u64,
+    pub retained_chunk_bytes: u64,
+    pub retained_sequence_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1064,7 +1087,6 @@ pub struct LayoutStats {
 }
 
 const INLINE_LAYOUT_CHILDREN: usize = 16;
-const MAX_RETAINED_NODE_DRAW_ITEMS: usize = 128;
 
 #[must_use]
 pub fn drawlist_retained_replay_safe_with_text_atlas_revisions(
@@ -1101,21 +1123,19 @@ pub(crate) fn append_retained_drawlist(
     b.append_drawlist(list)
 }
 
-fn should_cache_retained_node_draws(
-    list: &gfx::DrawList,
-    text_atlases: Option<&[(gfx::ImageHandle, u64)]>,
-) -> bool {
-    list.items.len() <= MAX_RETAINED_NODE_DRAW_ITEMS
-        && drawlist_retained_replay_safe_for(list, text_atlases)
-}
-
 impl NodeTree {
     pub fn new_root(style: NodeStyle) -> Self {
         let root = NodeId(1);
         let mut nodes = alloc::vec::Vec::with_capacity(8);
         nodes.push(None); // 0 unused
         nodes.push(Some(Node::new(root, None, style)));
-        Self { nodes, root }
+        Self {
+            nodes,
+            root,
+            retained_namespace: None,
+            retained_chunk_bytes: 0,
+            retained_sequence_bytes: 0,
+        }
     }
 
     pub fn root(&self) -> NodeId {
@@ -1124,7 +1144,10 @@ impl NodeTree {
 
     pub fn add_node(&mut self, parent: NodeId, style: NodeStyle) -> NodeId {
         let id = NodeId(self.nodes.len() as u32);
-        self.nodes.push(Some(Node::new(id, Some(parent), style)));
+        let child_index = self.get(parent).map_or(0, |node| node.children.len());
+        let mut node = Node::new(id, Some(parent), style);
+        node.index_in_parent = child_index;
+        self.nodes.push(Some(node));
         if let Some(p) = self.get_mut(parent) {
             p.children.push(id);
         }
@@ -1144,32 +1167,45 @@ impl NodeTree {
 
     pub(crate) fn mark_node_and_ancestors_draw_dirty(&mut self, id: NodeId) {
         let mut current = Some(id);
+        let mut target = true;
+        let mut child_index = None;
         while let Some(node_id) = current {
             let index = node_id.0 as usize;
             let parent =
                 self.nodes.get(index).and_then(|slot| slot.as_ref()).and_then(|node| node.parent);
             if let Some(Some(node)) = self.nodes.get_mut(index) {
-                node.draw_dirty = true;
+                node.sequence_dirty = true;
+                if target {
+                    node.chunk_dirty = true;
+                }
+                mark_dirty_child(node, child_index);
             }
+            target = false;
+            child_index = self.nodes.get(index).and_then(|slot| slot.as_ref())
+                .map(|node| node.index_in_parent);
+            current = parent;
+        }
+    }
+
+    fn mark_node_and_ancestors_sequence_dirty(&mut self, id: NodeId) {
+        let mut current = Some(id);
+        let mut child_index = None;
+        while let Some(node_id) = current {
+            let index = node_id.0 as usize;
+            let parent =
+                self.nodes.get(index).and_then(|slot| slot.as_ref()).and_then(|node| node.parent);
+            if let Some(Some(node)) = self.nodes.get_mut(index) {
+                node.sequence_dirty = true;
+                mark_dirty_child(node, child_index);
+            }
+            child_index = self.nodes.get(index).and_then(|slot| slot.as_ref())
+                .map(|node| node.index_in_parent);
             current = parent;
         }
     }
 
     pub fn mark_subtree_draw_dirty(&mut self, id: NodeId) {
         self.mark_node_and_ancestors_draw_dirty(id);
-        self.mark_descendants_draw_dirty(id);
-    }
-
-    fn mark_descendants_draw_dirty(&mut self, id: NodeId) {
-        let Some(children) = self.get(id).map(|node| node.children.clone()) else {
-            return;
-        };
-        for child in children {
-            if let Some(node) = self.get_mut(child) {
-                node.draw_dirty = true;
-            }
-            self.mark_descendants_draw_dirty(child);
-        }
     }
 
     pub fn mark_layout_dirty(&mut self, id: NodeId) {
@@ -1181,7 +1217,9 @@ impl NodeTree {
             if let Some(Some(node)) = self.nodes.get_mut(index) {
                 node.layout_dirty = true;
                 node.descendant_layout_dirty = false;
-                node.draw_dirty = true;
+                node.chunk_dirty = true;
+                node.sequence_dirty = true;
+                node.all_children_dirty = true;
             }
             current = parent;
         }
@@ -1200,7 +1238,9 @@ impl NodeTree {
                 } else if !node.layout_dirty {
                     node.descendant_layout_dirty = true;
                 }
-                node.draw_dirty = true;
+                node.chunk_dirty = true;
+                node.sequence_dirty = true;
+                node.all_children_dirty = true;
             }
             first = false;
             current = parent;
@@ -1208,20 +1248,26 @@ impl NodeTree {
     }
 
     fn set_layout(&mut self, id: NodeId, rect: LayoutRect) -> bool {
-        let changed = if let Some(node) = self.get_mut(id) {
+        let change = if let Some(node) = self.get_mut(id) {
             if node.layout == rect {
-                false
+                None
             } else {
+                let resized = node.layout.w != rect.w || node.layout.h != rect.h;
                 node.layout = rect;
-                true
+                Some(resized)
             }
         } else {
-            false
+            None
         };
-        if changed {
-            self.mark_node_and_ancestors_draw_dirty(id);
+        if let Some(resized) = change {
+            self.mark_node_and_ancestors_sequence_dirty(id);
+            if resized {
+                if let Some(node) = self.get_mut(id) {
+                    node.chunk_dirty = true;
+                }
+            }
         }
-        changed
+        change.is_some()
     }
 
     // ---- Layout ----
@@ -1560,29 +1606,25 @@ impl NodeTree {
         self.encode_node(self.root, b, None, 0.0, 0.0);
     }
 
-    pub fn encode_draws_retained(&mut self, b: &mut DrawListBuilder) -> Option<RetainedNodeStats> {
-        self.encode_draws_retained_impl(b, None)
+    pub fn render_sequence(&mut self, namespace: u32) -> Result<(gfx::RenderChunkSequence, RetainedNodeStats), gfx::RenderChunkError> {
+        self.render_sequence_impl(namespace, None)
     }
 
-    pub fn encode_draws_retained_with_text_atlas_revisions(
-        &mut self,
-        b: &mut DrawListBuilder,
-        atlases: &[(gfx::ImageHandle, u64)],
-    ) -> Option<RetainedNodeStats> {
-        self.encode_draws_retained_impl(b, Some(atlases))
+    pub fn render_sequence_with_anims(&mut self, namespace: u32, over: &alloc::collections::BTreeMap<NodeId, crate::anim::AnimOverrides>) -> Result<(gfx::RenderChunkSequence, RetainedNodeStats), gfx::RenderChunkError> {
+        self.render_sequence_impl(namespace, Some(over))
     }
 
-    fn encode_draws_retained_impl(
-        &mut self,
-        b: &mut DrawListBuilder,
-        text_atlases: Option<&[(gfx::ImageHandle, u64)]>,
-    ) -> Option<RetainedNodeStats> {
-        let mut stats = RetainedNodeStats::default();
-        if self.encode_node_retained(self.root, b, &mut stats, text_atlases, 0.0, 0.0) {
-            Some(stats)
-        } else {
-            None
+    fn render_sequence_impl(&mut self, namespace: u32, over: Option<&alloc::collections::BTreeMap<NodeId, crate::anim::AnimOverrides>>) -> Result<(gfx::RenderChunkSequence, RetainedNodeStats), gfx::RenderChunkError> {
+        if self.retained_namespace != Some(namespace) {
+            self.mark_all_draw_dirty();
         }
+        let mut stats = RetainedNodeStats::default();
+        let sequence = self.render_node_sequence(self.root, namespace, over, &mut stats)?;
+        self.retained_namespace = Some(namespace);
+        stats.chunks_reused = sequence.instance_count().saturating_sub(stats.chunks_rebuilt);
+        stats.retained_chunk_bytes = self.retained_chunk_bytes;
+        stats.retained_sequence_bytes = self.retained_sequence_bytes;
+        Ok((sequence, stats))
     }
 
     /// Encode with optional animation overrides per node.
@@ -1612,66 +1654,221 @@ impl NodeTree {
         }
     }
 
-    fn encode_node_retained(
-        &mut self,
-        id: NodeId,
-        b: &mut DrawListBuilder,
-        stats: &mut RetainedNodeStats,
-        text_atlases: Option<&[(gfx::ImageHandle, u64)]>,
-        parent_tx: f32,
-        parent_ty: f32,
-    ) -> bool {
-        if let Some(node) = self.get(id) {
-            if !node.draw_dirty {
-                if let Some(draws) = node.retained_draws.as_ref() {
-                    if append_retained_drawlist(b, draws, text_atlases) {
-                        stats.reused_nodes = stats.reused_nodes.saturating_add(1);
-                        return true;
-                    } else {
-                        return false;
-                    }
-                }
-            }
+    fn render_node_sequence(&mut self, id: NodeId, namespace: u32, over: Option<&alloc::collections::BTreeMap<NodeId, crate::anim::AnimOverrides>>, stats: &mut RetainedNodeStats) -> Result<gfx::RenderChunkSequence, gfx::RenderChunkError> {
+        if let Some(sequence) = self.get(id).and_then(|node| {
+            if node.sequence_dirty { None } else { node.retained_sequence.clone() }
+        }) {
+            stats.reused_nodes = stats.reused_nodes.saturating_add(1);
+            stats.sequences_reused = stats.sequences_reused.saturating_add(1);
+            stats.chunks_reused = stats.chunks_reused.saturating_add(sequence.instance_count());
+            return Ok(sequence);
         }
 
-        let Some((style, layout, children)) =
-            self.get(id).map(|node| (node.style.clone(), node.layout, node.children.clone()))
-        else {
-            return true;
+        let Some((style, layout, chunk_dirty, retained_chunk, revisions, retained_sequence, retained_composition, child_count, dirty_child, all_children_dirty)) = self.get(id).map(|node| {
+            (
+                effective_node_style(id, node.style, over),
+                node.layout,
+                node.chunk_dirty,
+                node.retained_chunk.clone(),
+                node.chunk_revisions,
+                node.retained_sequence.clone(),
+                node.retained_composition,
+                node.children.len(),
+                node.dirty_child,
+                node.all_children_dirty,
+            )
+        }) else {
+            return Ok(gfx::RenderChunkSequence::new(Vec::new()));
         };
-        let mut next = DrawListBuilder::new();
-        let (tx, ty) = encode_node_frame(id, &style, layout, &mut next, None, parent_tx, parent_ty);
-        for child in children {
-            if !self.encode_node_retained(child, &mut next, stats, text_atlases, tx, ty) {
-                return false;
-            }
-        }
-        if style.clip {
-            next.clip_pop();
-        }
-        let draws = next.into_inner();
-        if !b.append_drawlist(&draws) {
-            return false;
-        }
-        if let Some(node) = self.get_mut(id) {
-            node.retained_draws = if should_cache_retained_node_draws(&draws, text_atlases) {
-                Some(draws)
+        let composition = NodeCompositionState {
+            layout,
+            translation: [style.transform.tx, style.transform.ty],
+            clip: style.clip,
+        };
+        if let Some(mut sequence) = retained_sequence.filter(|sequence| {
+            retained_composition == Some(composition) && sequence.child_count() == child_count
+        }) {
+            let chunk = if chunk_dirty {
+                let chunk = self.build_node_chunk(id, namespace, style, layout, revisions, stats)?;
+                let instance = gfx::RenderChunkInstance::new(
+                    chunk.clone(),
+                    [layout.x + style.transform.tx, layout.y + style.transform.ty],
+                );
+                sequence = sequence.replacing_direct_instance(0, instance)
+                    .ok_or(gfx::RenderChunkError::GeometryTooLarge)?;
+                chunk
             } else {
-                None
+                retained_chunk.ok_or(gfx::RenderChunkError::GeometryTooLarge)?
             };
-            node.draw_dirty = false;
+            let child_range = if all_children_dirty {
+                0..child_count
+            } else if let Some(index) = dirty_child {
+                let clean_children = child_count.saturating_sub(1) as u32;
+                stats.reused_nodes = stats.reused_nodes.saturating_add(clean_children);
+                stats.sequences_reused = stats.sequences_reused.saturating_add(u64::from(clean_children));
+                index..index.saturating_add(1).min(child_count)
+            } else {
+                stats.reused_nodes = stats.reused_nodes.saturating_add(child_count as u32);
+                stats.sequences_reused = stats.sequences_reused.saturating_add(child_count as u64);
+                0..0
+            };
+            for index in child_range {
+                let Some(child) = self.get(id).and_then(|node| node.children.get(index).copied()) else {
+                    continue;
+                };
+                if self.get(child).is_some_and(|node| node.sequence_dirty) {
+                    let child_sequence = self.render_node_sequence(child, namespace, over, stats)?;
+                    sequence = sequence.replacing_child(index, child_sequence)
+                        .ok_or(gfx::RenderChunkError::GeometryTooLarge)?;
+                } else {
+                    stats.sequences_reused = stats.sequences_reused.saturating_add(1);
+                }
+            }
+            self.store_node_sequence(id, chunk, sequence.clone(), composition);
+            stats.rebuilt_nodes = stats.rebuilt_nodes.saturating_add(1);
+            stats.sequences_rebuilt = stats.sequences_rebuilt.saturating_add(1);
+            return Ok(sequence);
         }
+
+        let mut child_sequences = Vec::with_capacity(child_count);
+        for index in 0..child_count {
+            let Some(child) = self.get(id).and_then(|node| node.children.get(index).copied()) else {
+                continue;
+            };
+            child_sequences.push(self.render_node_sequence(child, namespace, over, stats)?);
+        }
+
+        let chunk = if !chunk_dirty {
+            if let Some(chunk) = retained_chunk {
+                stats.chunks_reused = stats.chunks_reused.saturating_add(1);
+                chunk
+            } else {
+                self.build_node_chunk(id, namespace, style, layout, revisions, stats)?
+            }
+        } else {
+            self.build_node_chunk(id, namespace, style, layout, revisions, stats)?
+        };
+
+        let instance = gfx::RenderChunkInstance::new(
+            chunk.clone(),
+            [layout.x + style.transform.tx, layout.y + style.transform.ty],
+        );
+        let parent_translation = [style.transform.tx, style.transform.ty];
+        let parent_clip = style.clip.then(|| gfx::RectI::new(
+            (layout.x + style.transform.tx).floor() as i32,
+            (layout.y + style.transform.ty).floor() as i32,
+            layout.w.ceil() as i32,
+            layout.h.ceil() as i32,
+        ));
+        let children = child_sequences.into_iter().map(|sequence| {
+            (sequence, parent_translation, parent_clip)
+        }).collect();
+        let sequence = gfx::RenderChunkSequence::compose(vec![instance], children);
+        self.store_node_sequence(id, chunk, sequence.clone(), composition);
         stats.rebuilt_nodes = stats.rebuilt_nodes.saturating_add(1);
-        true
+        stats.sequences_rebuilt = stats.sequences_rebuilt.saturating_add(1);
+        Ok(sequence)
+    }
+
+    fn store_node_sequence(&mut self, id: NodeId, chunk: gfx::RenderChunk, sequence: gfx::RenderChunkSequence, composition: NodeCompositionState) {
+        let old_chunk_bytes = self.get(id).and_then(|node| node.retained_chunk.as_ref())
+            .map_or(0, gfx::RenderChunk::byte_size);
+        let old_sequence_bytes = self.get(id).and_then(|node| node.retained_sequence.as_ref())
+            .map_or(0, gfx::RenderChunkSequence::metadata_byte_size);
+        self.retained_chunk_bytes = self.retained_chunk_bytes
+            .saturating_sub(old_chunk_bytes)
+            .saturating_add(chunk.byte_size());
+        self.retained_sequence_bytes = self.retained_sequence_bytes
+            .saturating_sub(old_sequence_bytes)
+            .saturating_add(sequence.metadata_byte_size());
+        if let Some(node) = self.get_mut(id) {
+            node.retained_chunk = Some(chunk);
+            node.retained_sequence = Some(sequence);
+            node.retained_composition = Some(composition);
+            node.chunk_dirty = false;
+            node.sequence_dirty = false;
+            node.dirty_child = None;
+            node.all_children_dirty = false;
+        }
+    }
+
+    fn build_node_chunk(&mut self, id: NodeId, namespace: u32, style: NodeStyle, layout: LayoutRect, revisions: gfx::RenderChunkRevisions, stats: &mut RetainedNodeStats) -> Result<gfx::RenderChunk, gfx::RenderChunkError> {
+        let mut builder = DrawListBuilder::new();
+        encode_node_local_frame(&style, layout, &mut builder);
+        let draws = builder.into_inner();
+        stats.command_bytes_copied = stats.command_bytes_copied.saturating_add(
+            (draws.items.len() as u64).saturating_mul(core::mem::size_of::<gfx::DrawCmd>() as u64),
+        );
+        stats.vertex_bytes_copied = stats.vertex_bytes_copied.saturating_add(
+            (draws.vertices.len() as u64).saturating_mul(core::mem::size_of::<gfx::Vertex>() as u64),
+        );
+        stats.index_bytes_copied = stats.index_bytes_copied.saturating_add(
+            (draws.indices.len() as u64).saturating_mul(core::mem::size_of::<u16>() as u64),
+        );
+        let next_revisions = gfx::RenderChunkRevisions {
+            geometry: revisions.geometry.saturating_add(1),
+            dynamic_properties: revisions.dynamic_properties.saturating_add(1),
+            ..revisions
+        };
+        let chunk = gfx::RenderChunk::new(
+            gfx::RenderChunkId((u64::from(namespace) << 32) | u64::from(id.0)),
+            next_revisions,
+            draws,
+            gfx::ChunkIndexMode::Local,
+            &[],
+        )?;
+        if let Some(node) = self.get_mut(id) {
+            node.chunk_revisions = next_revisions;
+        }
+        stats.chunks_rebuilt = stats.chunks_rebuilt.saturating_add(1);
+        Ok(chunk)
     }
 
     pub fn mark_all_draw_dirty(&mut self) {
         for slot in &mut self.nodes {
             if let Some(node) = slot {
-                node.draw_dirty = true;
+                node.chunk_dirty = true;
+                node.sequence_dirty = true;
+                node.all_children_dirty = true;
             }
         }
     }
+}
+
+fn encode_node_local_frame(style: &NodeStyle, layout: LayoutRect, b: &mut DrawListBuilder) {
+    if style.shadow_alpha > 0.0 {
+        b.rrect(
+            gfx::RectF::new(0.0, 2.0, layout.w, layout.h),
+            style.corner_radii,
+            gfx::Color::rgba(0.0, 0.0, 0.0, style.shadow_alpha.clamp(0.0, 1.0)),
+        );
+    }
+    let mut color = style.background;
+    color.a *= style.opacity.clamp(0.0, 1.0);
+    b.rrect(gfx::RectF::new(0.0, 0.0, layout.w, layout.h), style.corner_radii, color);
+}
+
+fn effective_node_style(id: NodeId, mut style: NodeStyle, over: Option<&alloc::collections::BTreeMap<NodeId, crate::anim::AnimOverrides>>) -> NodeStyle {
+    let Some(override_) = over.and_then(|overrides| overrides.get(&id)) else {
+        return style;
+    };
+    if let Some(transform) = override_.transform {
+        style.transform.tx += transform.tx;
+        style.transform.ty += transform.ty;
+    }
+    if let Some(radii) = override_.corner_radii {
+        style.corner_radii = radii;
+    }
+    if let Some(color) = override_.color {
+        style.background = color;
+    }
+    if let Some(opacity) = override_.opacity {
+        style.opacity = opacity;
+    }
+    if let Some(alpha) = override_.shadow_alpha {
+        style.shadow_alpha = alpha;
+    }
+    style
 }
 
 fn encode_node_frame(
@@ -1741,10 +1938,22 @@ impl NodeTree {
         if self.get(id).is_none() {
             return false;
         }
-        let parent = self.get(id).and_then(|node| node.parent);
+        let parent_and_index = self.get(id).map(|node| (node.parent, node.index_in_parent));
+        let (parent, removed_index) = parent_and_index.unwrap_or((None, 0));
         if let Some(parent_id) = parent {
             if let Some(parent) = self.get_mut(parent_id) {
-                parent.children.retain(|c| *c != id);
+                if parent.children.get(removed_index) == Some(&id) {
+                    parent.children.remove(removed_index);
+                } else {
+                    parent.children.retain(|child| *child != id);
+                }
+            }
+            let child_count = self.get(parent_id).map_or(0, |node| node.children.len());
+            for index in removed_index..child_count {
+                let child = self.get(parent_id).and_then(|node| node.children.get(index).copied());
+                if let Some(child) = child.and_then(|child| self.get_mut(child)) {
+                    child.index_in_parent = index;
+                }
             }
         }
         self.remove_subtree(id);
@@ -1763,6 +1972,14 @@ impl NodeTree {
         };
         for child in children {
             self.remove_subtree(child);
+        }
+        let retained_bytes = self.get(id).map(|node| (
+            node.retained_chunk.as_ref().map_or(0, gfx::RenderChunk::byte_size),
+            node.retained_sequence.as_ref().map_or(0, gfx::RenderChunkSequence::metadata_byte_size),
+        ));
+        if let Some((chunk_bytes, sequence_bytes)) = retained_bytes {
+            self.retained_chunk_bytes = self.retained_chunk_bytes.saturating_sub(chunk_bytes);
+            self.retained_sequence_bytes = self.retained_sequence_bytes.saturating_sub(sequence_bytes);
         }
         if let Some(slot) = self.nodes.get_mut(id.0 as usize) {
             if slot.is_some() {
@@ -1829,16 +2046,25 @@ impl Clone for NodeTree {
             .map(|slot| {
                 slot.as_ref().map(|node| {
                     let mut next = node.clone();
-                    next.draw_dirty = true;
+                    next.chunk_dirty = true;
+                    next.sequence_dirty = true;
                     next.layout_dirty = true;
                     next.descendant_layout_dirty = false;
                     next.last_content = None;
-                    next.retained_draws = None;
+                    next.retained_chunk = None;
+                    next.retained_sequence = None;
+                    next.retained_composition = None;
                     next
                 })
             })
             .collect();
-        Self { nodes, root: self.root }
+        Self {
+            nodes,
+            root: self.root,
+            retained_namespace: None,
+            retained_chunk_bytes: 0,
+            retained_sequence_bytes: 0,
+        }
     }
 }
 

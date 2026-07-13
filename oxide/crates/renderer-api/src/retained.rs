@@ -194,6 +194,7 @@ impl RenderChunk
    {
       Arc::ptr_eq(&self.inner, &other.inner)
    }
+
 }
 
 #[repr(transparent)]
@@ -245,6 +246,372 @@ impl RenderChunkInstance
    }
 }
 
+/// Immutable ordered lightweight chunk references that can be shared by snapshots.
+#[derive(Debug)]
+struct RenderChunkSequenceData
+{
+   instances: Arc<[RenderChunkInstance]>,
+   child_blocks: Arc<[Arc<[RenderChunkSequenceChild]>]>,
+   child_count: usize,
+   property_slots: Arc<[RenderPropertySlotId]>,
+   invalid_origin: Option<RenderChunkId>,
+   origin_bounds: Option<[f32; 4]>,
+   instance_count: u64,
+}
+
+#[derive(Debug, Clone)]
+struct RenderChunkSequenceChild
+{
+   sequence: RenderChunkSequence,
+   translation: [f32; 2],
+   clip: Option<RectI>,
+}
+
+const RENDER_SEQUENCE_CHILD_BLOCK: usize = 8;
+
+#[derive(Debug, Clone)]
+pub struct RenderChunkSequence
+{
+   inner: Arc<RenderChunkSequenceData>,
+}
+
+impl RenderChunkSequence
+{
+   #[inline]
+   #[must_use]
+   pub fn new(instances: Vec<RenderChunkInstance>) -> Self
+   {
+      Self::compose(instances, Vec::new())
+   }
+
+   #[must_use]
+   pub fn compose(instances: Vec<RenderChunkInstance>, children: Vec<(Self, [f32; 2], Option<RectI>)>) -> Self
+   {
+      let mut property_slots = Vec::new();
+      let mut invalid_origin = None;
+      let mut origin_bounds = None;
+      for instance in &instances
+      {
+         if invalid_origin.is_none() && !instance.origin.iter().all(|value| value.is_finite())
+         {
+            invalid_origin = Some(instance.chunk.id());
+         }
+         if invalid_origin.is_none()
+         {
+            extend_origin_bounds(&mut origin_bounds, instance.origin);
+         }
+         for slot in instance.property_slots.iter().copied()
+         {
+            if !property_slots.contains(&slot)
+            {
+               property_slots.push(slot);
+            }
+         }
+      }
+      let children = children.into_iter().map(|(sequence, translation, clip)| {
+         if invalid_origin.is_none() && !translation.iter().all(|value| value.is_finite())
+         {
+            invalid_origin = sequence.first_chunk_id();
+         }
+         if invalid_origin.is_none()
+         {
+            invalid_origin = sequence.inner.invalid_origin;
+         }
+         if invalid_origin.is_none()
+         {
+            if let Some(bounds) = sequence.inner.origin_bounds
+            {
+               let min = [bounds[0] + translation[0], bounds[1] + translation[1]];
+               let max = [bounds[2] + translation[0], bounds[3] + translation[1]];
+               if min.iter().chain(max.iter()).all(|value| value.is_finite())
+               {
+                  extend_origin_bounds(&mut origin_bounds, min);
+                  extend_origin_bounds(&mut origin_bounds, max);
+               }
+               else
+               {
+                  invalid_origin = sequence.first_chunk_id();
+               }
+            }
+         }
+         for slot in sequence.inner.property_slots.iter().copied()
+         {
+            if !property_slots.contains(&slot)
+            {
+               property_slots.push(slot);
+            }
+         }
+         RenderChunkSequenceChild { sequence, translation, clip }
+      }).collect::<Vec<_>>();
+      let instance_count = children.iter().fold(instances.len() as u64, |count, child| {
+         count.saturating_add(child.sequence.instance_count())
+      });
+      let child_count = children.len();
+      let child_blocks = children.chunks(RENDER_SEQUENCE_CHILD_BLOCK)
+         .map(Arc::<[RenderChunkSequenceChild]>::from)
+         .collect::<Vec<_>>();
+      Self {
+         inner: Arc::new(RenderChunkSequenceData {
+            instances: instances.into(),
+            child_blocks: child_blocks.into(),
+            child_count,
+            property_slots: property_slots.into(),
+            invalid_origin,
+            origin_bounds,
+            instance_count,
+         }),
+      }
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn direct_instances(&self) -> &[RenderChunkInstance]
+   {
+      &self.inner.instances
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn instance_count(&self) -> u64
+   {
+      self.inner.instance_count
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn metadata_byte_size(&self) -> u64
+   {
+      (self.inner.instances.len() as u64)
+         .saturating_mul(mem::size_of::<RenderChunkInstance>() as u64)
+         .saturating_add(
+            (self.inner.property_slots.len() as u64)
+               .saturating_mul(mem::size_of::<RenderPropertySlotId>() as u64),
+         )
+         .saturating_add(
+            (self.inner.child_count as u64)
+               .saturating_mul(mem::size_of::<RenderChunkSequenceChild>() as u64),
+         )
+         .saturating_add(
+            (self.inner.child_blocks.len() as u64)
+               .saturating_mul(mem::size_of::<Arc<[RenderChunkSequenceChild]>>() as u64),
+         )
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn ptr_eq(&self, other: &Self) -> bool
+   {
+      Arc::ptr_eq(&self.inner, &other.inner)
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn child_count(&self) -> usize
+   {
+      self.inner.child_count
+   }
+
+   #[must_use]
+   pub fn replacing_direct_instance(&self, index: usize, instance: RenderChunkInstance) -> Option<Self>
+   {
+      let current = self.inner.instances.get(index)?;
+      if current.origin == instance.origin
+         && current.property_slots == instance.property_slots
+         && instance.origin.iter().all(|value| value.is_finite())
+      {
+         let mut instances = self.inner.instances.to_vec();
+         instances[index] = instance;
+         return Some(Self {
+            inner: Arc::new(RenderChunkSequenceData {
+               instances: instances.into(),
+               child_blocks: self.inner.child_blocks.clone(),
+               child_count: self.inner.child_count,
+               property_slots: self.inner.property_slots.clone(),
+               invalid_origin: self.inner.invalid_origin,
+               origin_bounds: self.inner.origin_bounds,
+               instance_count: self.inner.instance_count,
+            }),
+         });
+      }
+      let mut instances = self.inner.instances.to_vec();
+      *instances.get_mut(index)? = instance;
+      let children = self.inner.child_blocks.iter().flat_map(|block| block.iter()).map(|child| (
+         child.sequence.clone(),
+         child.translation,
+         child.clip,
+      )).collect();
+      Some(Self::compose(instances, children))
+   }
+
+   #[must_use]
+   pub fn replacing_child(&self, index: usize, sequence: Self) -> Option<Self>
+   {
+      let block_index = index / RENDER_SEQUENCE_CHILD_BLOCK;
+      let child_index = index % RENDER_SEQUENCE_CHILD_BLOCK;
+      let child = self.inner.child_blocks.get(block_index)?.get(child_index)?;
+      let old_count = child.sequence.instance_count();
+      let mut child_blocks = self.inner.child_blocks.to_vec();
+      let mut block = child_blocks[block_index].to_vec();
+      block[child_index].sequence = sequence.clone();
+      child_blocks[block_index] = block.into();
+      let property_slots_unchanged = sequence.inner.property_slots == child.sequence.inner.property_slots;
+      if property_slots_unchanged
+         && self.inner.invalid_origin.is_none()
+         && sequence.inner.invalid_origin.is_none()
+         && sequence.inner.origin_bounds == child.sequence.inner.origin_bounds
+      {
+         return Some(Self {
+            inner: Arc::new(RenderChunkSequenceData {
+               instances: self.inner.instances.clone(),
+               child_blocks: child_blocks.into(),
+               child_count: self.inner.child_count,
+               property_slots: self.inner.property_slots.clone(),
+               invalid_origin: None,
+               origin_bounds: self.inner.origin_bounds,
+               instance_count: self.inner.instance_count
+                  .saturating_sub(old_count)
+                  .saturating_add(sequence.instance_count()),
+            }),
+         });
+      }
+      let children = child_blocks.into_iter().flat_map(|block| {
+         block.iter().cloned().collect::<Vec<_>>()
+      }).map(|child| {
+         (child.sequence, child.translation, child.clip)
+      }).collect();
+      Some(Self::compose(self.inner.instances.to_vec(), children))
+   }
+
+   pub fn visit_instances<F: FnMut(&RenderChunkInstance)>(&self, mut visit: F)
+   {
+      visit_sequence_instances(self, [0.0, 0.0], None, &mut visit);
+   }
+
+   #[must_use]
+   pub fn instance(&self, index: u64) -> Option<RenderChunkInstance>
+   {
+      sequence_instance(self, index, [0.0, 0.0], None)
+   }
+
+   fn first_chunk_id(&self) -> Option<RenderChunkId>
+   {
+      self.inner.instances.first().map(|instance| instance.chunk.id()).or_else(|| {
+         self.inner.child_blocks.first().and_then(|block| block.first())
+            .and_then(|child| child.sequence.first_chunk_id())
+      })
+   }
+}
+
+fn extend_origin_bounds(bounds: &mut Option<[f32; 4]>, origin: [f32; 2])
+{
+   if let Some(bounds) = bounds.as_mut()
+   {
+      bounds[0] = bounds[0].min(origin[0]);
+      bounds[1] = bounds[1].min(origin[1]);
+      bounds[2] = bounds[2].max(origin[0]);
+      bounds[3] = bounds[3].max(origin[1]);
+   }
+   else
+   {
+      *bounds = Some([origin[0], origin[1], origin[0], origin[1]]);
+   }
+}
+
+fn visit_sequence_instances<F: FnMut(&RenderChunkInstance)>(sequence: &RenderChunkSequence, translation: [f32; 2], clip: Option<RectI>, visit: &mut F)
+{
+   for instance in sequence.inner.instances.iter()
+   {
+      if translation == [0.0, 0.0] && clip.is_none()
+      {
+         visit(instance);
+      }
+      else
+      {
+         let transformed = transformed_instance(instance, translation, clip);
+         visit(&transformed);
+      }
+   }
+   for block in sequence.inner.child_blocks.iter()
+   {
+      for child in block.iter()
+      {
+         let child_clip = child.clip.map(|rect| translate_rect_i(rect, translation));
+         let next_clip = intersect_optional_clip(clip, child_clip);
+         let next_translation = [
+            translation[0] + child.translation[0],
+            translation[1] + child.translation[1],
+         ];
+         visit_sequence_instances(&child.sequence, next_translation, next_clip, visit);
+      }
+   }
+}
+
+fn sequence_instance(sequence: &RenderChunkSequence, mut index: u64, translation: [f32; 2], clip: Option<RectI>) -> Option<RenderChunkInstance>
+{
+   if index < sequence.inner.instances.len() as u64
+   {
+      return sequence.inner.instances.get(index as usize)
+         .map(|instance| transformed_instance(instance, translation, clip));
+   }
+   index -= sequence.inner.instances.len() as u64;
+   for block in sequence.inner.child_blocks.iter()
+   {
+      for child in block.iter()
+      {
+         if index < child.sequence.instance_count()
+         {
+            let child_clip = child.clip.map(|rect| translate_rect_i(rect, translation));
+            let next_clip = intersect_optional_clip(clip, child_clip);
+            let next_translation = [
+               translation[0] + child.translation[0],
+               translation[1] + child.translation[1],
+            ];
+            return sequence_instance(&child.sequence, index, next_translation, next_clip);
+         }
+         index -= child.sequence.instance_count();
+      }
+   }
+   None
+}
+
+fn transformed_instance(instance: &RenderChunkInstance, translation: [f32; 2], clip: Option<RectI>) -> RenderChunkInstance
+{
+   let mut transformed = instance.clone();
+   transformed.origin[0] += translation[0];
+   transformed.origin[1] += translation[1];
+   let instance_clip = instance.clip.map(|rect| translate_rect_i(rect, translation));
+   transformed.clip = intersect_optional_clip(clip, instance_clip);
+   if let Some(layer) = transformed.layer.as_mut()
+   {
+      layer.rect = translate_rect(layer.rect, translation);
+   }
+   transformed
+}
+
+fn intersect_optional_clip(a: Option<RectI>, b: Option<RectI>) -> Option<RectI>
+{
+   match (a, b) {
+      (Some(a), Some(b)) => Some(intersect_rect_i(a, b)),
+      (Some(a), None) => Some(a),
+      (None, Some(b)) => Some(b),
+      (None, None) => None,
+   }
+}
+
+fn intersect_rect_i(a: RectI, b: RectI) -> RectI
+{
+   let x0 = i64::from(a.x).max(i64::from(b.x));
+   let y0 = i64::from(a.y).max(i64::from(b.y));
+   let x1 = (i64::from(a.x) + i64::from(a.w)).min(i64::from(b.x) + i64::from(b.w));
+   let y1 = (i64::from(a.y) + i64::from(a.h)).min(i64::from(b.y) + i64::from(b.h));
+   RectI::new(
+      x0.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+      y0.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+      (x1 - x0).clamp(0, i64::from(i32::MAX)) as i32,
+      (y1 - y0).clamp(0, i64::from(i32::MAX)) as i32,
+   )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderSnapshotError
 {
@@ -278,9 +645,11 @@ impl std::error::Error for RenderSnapshotError {}
 #[derive(Debug)]
 struct RenderSnapshotData
 {
-   instances: Arc<[RenderChunkInstance]>,
+   sequences: Arc<[RenderChunkSequence]>,
    properties: Arc<[RenderPropertySlot]>,
    damage: Damage,
+   instance_count: u64,
+   metadata_byte_size: u64,
 }
 
 /// Ordered immutable chunk references plus frame-local property and damage metadata.
@@ -305,34 +674,86 @@ pub struct RenderFallbackStats
 
 impl RenderSnapshot
 {
-   pub fn new(instances: Vec<RenderChunkInstance>, mut properties: Vec<RenderPropertySlot>, damage: Damage) -> Result<Self, RenderSnapshotError>
+   pub fn new(instances: Vec<RenderChunkInstance>, properties: Vec<RenderPropertySlot>, damage: Damage) -> Result<Self, RenderSnapshotError>
+   {
+      Self::from_sequences(vec![RenderChunkSequence::new(instances)], properties, damage)
+   }
+
+   pub fn from_sequences(sequences: Vec<RenderChunkSequence>, mut properties: Vec<RenderPropertySlot>, damage: Damage) -> Result<Self, RenderSnapshotError>
    {
       properties.sort_unstable_by_key(|property| property.id.0);
       validate_properties(&properties)?;
-      for instance in &instances {
-         if !instance.origin.iter().all(|value| value.is_finite()) {
-            return Err(RenderSnapshotError::NonFiniteOrigin(instance.chunk.id()));
+      for sequence in &sequences {
+         if let Some(id) = sequence.inner.invalid_origin {
+            return Err(RenderSnapshotError::NonFiniteOrigin(id));
          }
-         for slot in instance.property_slots.iter().copied() {
+         for slot in sequence.inner.property_slots.iter().copied() {
             if property(&properties, slot).is_none() {
                return Err(RenderSnapshotError::MissingPropertySlot(slot));
             }
          }
       }
+      let instance_count = sequences.iter().fold(0_u64, |count, sequence| {
+         count.saturating_add(sequence.instance_count())
+      });
+      let metadata_byte_size = sequences.iter().fold(0_u64, |bytes, sequence| {
+         bytes.saturating_add(sequence.metadata_byte_size())
+      })
+      .saturating_add(
+         (sequences.len() as u64).saturating_mul(mem::size_of::<RenderChunkSequence>() as u64),
+      )
+      .saturating_add(
+         (properties.len() as u64).saturating_mul(mem::size_of::<RenderPropertySlot>() as u64),
+      );
       Ok(Self {
          inner: Arc::new(RenderSnapshotData {
-            instances: instances.into(),
+            sequences: sequences.into(),
             properties: properties.into(),
             damage,
+            instance_count,
+            metadata_byte_size,
          }),
       })
    }
 
    #[inline]
    #[must_use]
-   pub fn instances(&self) -> &[RenderChunkInstance]
+   pub fn sequences(&self) -> &[RenderChunkSequence]
    {
-      &self.inner.instances
+      &self.inner.sequences
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn instance_count(&self) -> u64
+   {
+      self.inner.instance_count
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn metadata_byte_size(&self) -> u64
+   {
+      self.inner.metadata_byte_size
+   }
+
+   pub fn visit_instances<F: FnMut(&RenderChunkInstance)>(&self, mut visit: F)
+   {
+      for sequence in self.inner.sequences.iter() {
+         sequence.visit_instances(&mut visit);
+      }
+   }
+
+   #[must_use]
+   pub fn instance(&self, mut index: u64) -> Option<RenderChunkInstance>
+   {
+      for sequence in self.inner.sequences.iter() {
+         if index < sequence.instance_count() {
+            return sequence.instance(index);
+         }
+         index -= sequence.instance_count();
+      }
+      None
    }
 
    #[inline]
@@ -358,19 +779,19 @@ impl RenderSnapshot
 
    pub fn collect_incompatible_chunk_ids(&self, resources: &[(ImageHandle, u64)], out: &mut Vec<RenderChunkId>)
    {
-      for instance in self.inner.instances.iter() {
+      self.visit_instances(|instance| {
          let id = instance.chunk.id();
          if !instance.chunk.resources_compatible(resources) && !out.contains(&id) {
             out.push(id);
          }
-      }
+      });
    }
 
    #[must_use]
    pub fn incompatible_chunk_ids(&self, resources: &[RenderResourceDependency]) -> Vec<RenderChunkId>
    {
       let mut ids = Vec::new();
-      for instance in self.inner.instances.iter() {
+      self.visit_instances(|instance| {
          let compatible = instance.chunk.resource_dependencies().iter().all(|required| {
             resources.iter().any(|available| available == required)
          });
@@ -378,23 +799,73 @@ impl RenderSnapshot
          if !compatible && !ids.contains(&id) {
             ids.push(id);
          }
-      }
+      });
       ids
    }
 
-   /// Appends a temporary flat draw list and reports every copied command and geometry byte.
+   /// Appends a compatibility flat draw list and reports every copied command and geometry byte.
    /// Non-translation affine properties are rejected because `DrawList` cannot preserve them.
    pub fn flatten_into(&self, out: &mut DrawList) -> Result<RenderFallbackStats, RenderSnapshotError>
    {
-      for instance in self.inner.instances.iter() {
-         let _ = flat_instance_properties(instance, &self.inner.properties)?;
-      }
+      let mut validation = Ok(());
+      self.visit_instances(|instance| {
+         if validation.is_ok() {
+            validation = flat_instance_properties(instance, &self.inner.properties).map(|_| ());
+         }
+      });
+      validation?;
+
+      let mut command_count = out.items.len();
+      let mut vertex_count = out.vertices.len();
+      let mut index_count = out.indices.len();
+      let mut capacity = Ok(());
+      self.visit_instances(|instance| {
+         if capacity.is_err() {
+            return;
+         }
+         let list = instance.chunk.draw_list();
+         let wrappers = usize::from(instance.layer.is_some()) * 2
+            + usize::from(instance.clip.is_some()) * 2;
+         command_count = match command_count.checked_add(list.items.len()).and_then(|count| count.checked_add(wrappers)) {
+            Some(count) => count,
+            None => {
+               capacity = Err(RenderSnapshotError::GeometryTooLarge);
+               return;
+            }
+         };
+         vertex_count = match vertex_count.checked_add(list.vertices.len()) {
+            Some(count) if count <= u32::MAX as usize => count,
+            _ => {
+               capacity = Err(RenderSnapshotError::GeometryTooLarge);
+               return;
+            }
+         };
+         index_count = match index_count.checked_add(list.indices.len()) {
+            Some(count) if count <= u32::MAX as usize => count,
+            _ => {
+               capacity = Err(RenderSnapshotError::GeometryTooLarge);
+               return;
+            }
+         };
+      });
+      capacity?;
+      out.items.reserve(command_count.saturating_sub(out.items.len()));
+      out.vertices.reserve(vertex_count.saturating_sub(out.vertices.len()));
+      out.indices.reserve(index_count.saturating_sub(out.indices.len()));
 
       let mut stats = RenderFallbackStats { fallback_count: 1, ..RenderFallbackStats::default() };
-      for instance in self.inner.instances.iter() {
-         let (translation, opacity) = flat_instance_properties(instance, &self.inner.properties)?;
-         append_flat_instance(instance, translation, opacity, out, &mut stats)?;
-      }
+      let mut flattened = Ok(());
+      self.visit_instances(|instance| {
+         if flattened.is_err() {
+            return;
+         }
+         flattened = flat_instance_properties(instance, &self.inner.properties).and_then(
+            |(translation, opacity)| {
+               append_flat_instance(instance, translation, opacity, out, &mut stats)
+            },
+         );
+      });
+      flattened?;
       Ok(stats)
    }
 }

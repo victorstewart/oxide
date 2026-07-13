@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use oxide_renderer_api::{
    ChunkIndexMode, Color, Damage, DrawCmd, DrawList, GlyphRun, ImageHandle, IndexSpan, RectF,
-   RectI, RenderChunk, RenderChunkError, RenderChunkId, RenderChunkInstance,
+   RectI, RenderChunk, RenderChunkError, RenderChunkId, RenderChunkInstance, RenderChunkSequence,
    RenderChunkRevisions, RenderLayerInstance, RenderPropertySlot, RenderPropertySlotId,
    RenderPropertyValue, RenderResourceDependency, RenderSnapshot, RenderSnapshotError, Vertex,
    VertexSpan,
@@ -368,7 +368,58 @@ fn revisions_identity_byte_size_order_and_damage_are_retained()
       vec![],
       Damage { rects: vec![RectI::new(1, 2, 3, 4)] },
    ).unwrap_or_else(|error| panic!("snapshot failed: {error}"));
-   assert_eq!(snapshot.instances()[0].chunk.id(), RenderChunkId(50));
-   assert_eq!(snapshot.instances()[1].chunk.id(), RenderChunkId(51));
+   assert_eq!(snapshot.instance(0).unwrap().chunk.id(), RenderChunkId(50));
+   assert_eq!(snapshot.instance(1).unwrap().chunk.id(), RenderChunkId(51));
    assert_eq!(snapshot.damage().rects, [RectI::new(1, 2, 3, 4)]);
+}
+
+#[test]
+fn persistent_sequences_preserve_order_identity_and_composed_metadata()
+{
+   let parent_chunk = shape_chunk(60);
+   let child_chunk = shape_chunk(61);
+   let mut child = RenderChunkInstance::new(child_chunk.clone(), [3.0, 4.0]);
+   child.clip = Some(RectI::new(0, 0, 50, 50));
+   child.layer = Some(RenderLayerInstance {
+      id: 7,
+      rect: RectF::new(1.0, 2.0, 8.0, 9.0),
+      dirty: false,
+   });
+   let child_sequence = RenderChunkSequence::new(vec![child]);
+   let sequence = RenderChunkSequence::compose(
+      vec![RenderChunkInstance::new(parent_chunk.clone(), [0.0, 0.0])],
+      vec![(child_sequence, [10.0, 20.0], Some(RectI::new(5, 10, 30, 30)))],
+   );
+   let snapshot = RenderSnapshot::from_sequences(
+      vec![sequence.clone()],
+      Vec::new(),
+      Damage { rects: Vec::new() },
+   ).unwrap_or_else(|error| panic!("sequence snapshot failed: {error}"));
+   assert_eq!(snapshot.instance_count(), 2);
+   assert!(parent_chunk.ptr_eq(&snapshot.instance(0).unwrap().chunk));
+   let composed = snapshot.instance(1).unwrap();
+   assert!(child_chunk.ptr_eq(&composed.chunk));
+   assert_eq!(composed.origin, [13.0, 24.0]);
+   assert_eq!(composed.clip, Some(RectI::new(10, 20, 25, 20)));
+   assert_eq!(composed.layer.unwrap().rect, RectF::new(11.0, 22.0, 8.0, 9.0));
+
+   let replacement = RenderChunkSequence::new(vec![RenderChunkInstance::new(shape_chunk(62), [3.0, 4.0])]);
+   let replaced = sequence.replacing_child(0, replacement).expect("child exists");
+   assert!(parent_chunk.ptr_eq(&replaced.instance(0).unwrap().chunk));
+   assert_eq!(replaced.instance(1).unwrap().chunk.id(), RenderChunkId(62));
+
+   let overflow = RenderChunkSequence::compose(
+      Vec::new(),
+      vec![(
+         RenderChunkSequence::new(vec![RenderChunkInstance::new(shape_chunk(63), [f32::MAX, 0.0])]),
+         [f32::MAX, 0.0],
+         None,
+      )],
+   );
+   let error = RenderSnapshot::from_sequences(
+      vec![overflow],
+      Vec::new(),
+      Damage { rects: Vec::new() },
+   ).expect_err("composed non-finite origin must fail");
+   assert_eq!(error, RenderSnapshotError::NonFiniteOrigin(RenderChunkId(63)));
 }

@@ -4,7 +4,7 @@ struct RetainedScenario
 {
    surface: ui::UiSurface,
    leaf: ui::NodeId,
-   mixed_instances: Vec<api::RenderChunkInstance>,
+   mixed_sequences: Vec<api::RenderChunkSequence>,
    dirty: bool,
    phase: usize,
 }
@@ -396,13 +396,27 @@ fn retained_tree_case(id: &str, smoke: bool, depth: usize, dirty: bool) -> PerfC
 {
    let mut scenario = build_retained_scenario(depth, dirty);
    let (_, probe) = run_retained_scenario(&mut scenario);
-   let mixed_retained_bytes = scenario.mixed_instances.iter()
-      .map(|instance| instance.chunk.byte_size())
-      .sum::<u64>();
+   let mut mixed_retained_bytes = 0_u64;
+   for sequence in &scenario.mixed_sequences {
+      sequence.visit_instances(|instance| {
+         mixed_retained_bytes = mixed_retained_bytes.saturating_add(instance.chunk.byte_size());
+      });
+   }
+   let traversed = scenario.surface.render_snapshot_retained(
+      api::RenderChunkId(1),
+      &scenario.mixed_sequences,
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("valid retained traversal probe");
+   let mut commands_traversed = 0_u64;
+   traversed.snapshot.visit_instances(|instance| {
+      commands_traversed = commands_traversed
+         .saturating_add(instance.chunk.draw_list().items.len() as u64);
+   });
    let mut case = measured_architecture_case(
       id,
       smoke,
-      "Versioned UiSurface tree composed with immutable glyph and image chunks; clean frames copy zero geometry and a dirty leaf rebuilds one surface chunk without ancestor reflattening.",
+      "Per-node immutable UiSurface chunks composed with retained glyph and image chunks; clean frames copy zero geometry and a dirty leaf rebuilds exactly one chunk.",
       move || run_retained_scenario(&mut scenario).0,
    );
    case.metrics.insert(String::from("tree_depth"), depth as f64);
@@ -412,11 +426,15 @@ fn retained_tree_case(id: &str, smoke: bool, depth: usize, dirty: bool) -> PerfC
    case.metrics.insert(String::from("layout_passes_expected"), if dirty { 1.0 } else { 0.0 });
    case.metrics.insert(String::from("chunks_reused"), probe.chunks_reused as f64);
    case.metrics.insert(String::from("chunks_rebuilt"), probe.chunks_rebuilt as f64);
+   case.metrics.insert(String::from("sequences_reused"), probe.sequences_reused as f64);
+   case.metrics.insert(String::from("sequences_rebuilt"), probe.sequences_rebuilt as f64);
    case.metrics.insert(String::from("commands_copied"), (probe.command_bytes_copied as usize / core::mem::size_of::<api::DrawCmd>()) as f64);
+   case.metrics.insert(String::from("commands_traversed"), commands_traversed as f64);
    case.metrics.insert(String::from("command_bytes_copied"), probe.command_bytes_copied as f64);
    case.metrics.insert(String::from("vertex_bytes_copied"), probe.vertex_bytes_copied as f64);
    case.metrics.insert(String::from("index_bytes_copied"), probe.index_bytes_copied as f64);
    case.metrics.insert(String::from("retained_chunk_bytes"), probe.retained_bytes.saturating_add(mixed_retained_bytes) as f64);
+   case.metrics.insert(String::from("retained_sequence_bytes"), probe.retained_sequence_bytes as f64);
    case.metrics.insert(String::from("flat_fallback_uses"), 0.0);
    case
 }
@@ -434,17 +452,15 @@ fn run_retained_scenario(scenario: &mut RetainedScenario) -> (u64, ui::SurfaceRe
    }
    let rendered = scenario.surface.render_snapshot_retained(
       api::RenderChunkId(1),
-      &scenario.mixed_instances,
+      &scenario.mixed_sequences,
       Vec::new(),
       api::Damage { rects: Vec::new() },
    ).expect("valid retained mixed snapshot");
-   let checksum = rendered.snapshot.instances().iter().fold(0_u64, |sum, instance| {
-      let draws = instance.chunk.draw_list();
-      sum.wrapping_add(instance.chunk.id().0)
-         .wrapping_add(draws.items.len() as u64)
-         .wrapping_add(draws.vertices.len() as u64)
-         .wrapping_add(draws.indices.len() as u64)
-   });
+   let checksum = rendered.snapshot.instance_count()
+      .wrapping_add(rendered.stats.chunks_reused)
+      .wrapping_add(rendered.stats.chunks_rebuilt)
+      .wrapping_add(rendered.stats.sequences_reused)
+      .wrapping_add(rendered.stats.sequences_rebuilt);
    (checksum, rendered.stats)
 }
 
@@ -477,12 +493,17 @@ fn build_retained_scenario(depth: usize, dirty: bool) -> RetainedScenario
       });
    }
    surface.layout(1_200.0, 2_400.0);
-   let mixed_instances = retained_mixed_instances();
-   let _ = surface.render_chunk_retained(api::RenderChunkId(1));
-   RetainedScenario { surface, leaf, mixed_instances, dirty, phase: 0 }
+   let mixed_sequences = retained_mixed_sequences();
+   let _ = surface.render_snapshot_retained(
+      api::RenderChunkId(1),
+      &mixed_sequences,
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   );
+   RetainedScenario { surface, leaf, mixed_sequences, dirty, phase: 0 }
 }
 
-fn retained_mixed_instances() -> Vec<api::RenderChunkInstance>
+fn retained_mixed_sequences() -> Vec<api::RenderChunkSequence>
 {
    let mut text = authoring_text_replay_drawlist();
    let glyph = text.items[0].clone();
@@ -518,11 +539,11 @@ fn retained_mixed_instances() -> Vec<api::RenderChunkInstance>
       api::ChunkIndexMode::Local,
       &image_dependencies,
    ).expect("valid retained image chunk");
-   let mixed_instances = vec![
-      api::RenderChunkInstance::new(text_chunk, [0.0, 0.0]),
-      api::RenderChunkInstance::new(image_chunk, [0.0, 0.0]),
+   let mixed_sequences = vec![
+      api::RenderChunkSequence::new(vec![api::RenderChunkInstance::new(text_chunk, [0.0, 0.0])]),
+      api::RenderChunkSequence::new(vec![api::RenderChunkInstance::new(image_chunk, [0.0, 0.0])]),
    ];
-   mixed_instances
+   mixed_sequences
 }
 
 fn animation_surface_case(smoke: bool) -> PerfCaseResult
@@ -572,7 +593,7 @@ fn animation_surface_case(smoke: bool) -> PerfCaseResult
    }
    let start = timing::now_ms();
    let mut frame = 0_u64;
-   let mixed_instances = retained_mixed_instances();
+   let mixed_sequences = retained_mixed_sequences();
    let mut case = measured_architecture_case(
       "cpu.architecture.animation.surface_300",
       smoke,
@@ -583,12 +604,16 @@ fn animation_surface_case(smoke: bool) -> PerfCaseResult
          let _ = surface.mark_node_dirty(nodes[frame as usize % nodes.len()], ui::DirtyClass::Accessibility);
          let rendered = surface.render_snapshot_retained(
             api::RenderChunkId(10),
-            &mixed_instances,
+            &mixed_sequences,
             Vec::new(),
             api::Damage { rects: Vec::new() },
          ).expect("valid animated mixed snapshot");
          let hit = surface.hit_test((frame % 800) as f32, (frame % 700) as f32).is_some() as u64;
-         rendered.snapshot.instances().iter().map(|instance| instance.chunk.draw_list().items.len() as u64).sum::<u64>()
+         let mut draw_items = 0_u64;
+         rendered.snapshot.visit_instances(|instance| {
+            draw_items = draw_items.saturating_add(instance.chunk.draw_list().items.len() as u64);
+         });
+         draw_items
             + surface.overrides().len() as u64
             + hit
       },

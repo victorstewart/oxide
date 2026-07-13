@@ -5719,10 +5719,15 @@ fn authoring_surface_retained_clean_encode_case(smoke: bool) -> PerfCaseResult {
         Vec::new(),
         api::Damage { rects: Vec::new() },
     ).unwrap();
-    let cached_draws = warm.snapshot.instances()[0].chunk.draw_list().items.len() as u64;
-    let cached_vertices = warm.snapshot.instances()[0].chunk.draw_list().vertices.len() as u64;
-    let cached_indices = warm.snapshot.instances()[0].chunk.draw_list().indices.len() as u64;
-    let retained_bytes = warm.snapshot.instances()[0].chunk.byte_size();
+    let mut cached_draws = 0_u64;
+    let mut cached_vertices = 0_u64;
+    let mut cached_indices = 0_u64;
+    warm.snapshot.visit_instances(|instance| {
+        cached_draws = cached_draws.saturating_add(instance.chunk.draw_list().items.len() as u64);
+        cached_vertices = cached_vertices.saturating_add(instance.chunk.draw_list().vertices.len() as u64);
+        cached_indices = cached_indices.saturating_add(instance.chunk.draw_list().indices.len() as u64);
+    });
+    let retained_bytes = warm.stats.retained_bytes.saturating_add(warm.stats.retained_sequence_bytes);
     let mut reused = 0u64;
     let mut rebuilt = 0u64;
     let mut command_bytes_copied = 0_u64;
@@ -5736,7 +5741,7 @@ fn authoring_surface_retained_clean_encode_case(smoke: bool) -> PerfCaseResult {
         0.16,
         loops,
         vec![String::from(
-            "Clean retained UiSurface snapshot over a 1000-node flat-rect tree; expected path references one immutable chunk without copying commands or geometry.",
+            "Clean retained UiSurface snapshot over a 1000-node flat-rect tree; expected path reuses immutable per-node chunks without copying commands or geometry.",
         )],
         || {
             let rendered = surface.render_snapshot_retained(
@@ -5756,7 +5761,7 @@ fn authoring_surface_retained_clean_encode_case(smoke: bool) -> PerfCaseResult {
             command_bytes_copied = command_bytes_copied.saturating_add(rendered.stats.command_bytes_copied);
             vertex_bytes_copied = vertex_bytes_copied.saturating_add(rendered.stats.vertex_bytes_copied);
             index_bytes_copied = index_bytes_copied.saturating_add(rendered.stats.index_bytes_copied);
-            rendered.snapshot.instances()[0].chunk.byte_size()
+            rendered.snapshot.instance_count()
         },
     );
     let total = reused.saturating_add(rebuilt).max(1);
@@ -5788,9 +5793,14 @@ fn authoring_surface_retained_dirty_leaf_encode_case(smoke: bool) -> PerfCaseRes
         Vec::new(),
         api::Damage { rects: Vec::new() },
     ).unwrap();
-    let cached_draws = warm.snapshot.instances()[0].chunk.draw_list().items.len() as u64;
-    let cached_vertices = warm.snapshot.instances()[0].chunk.draw_list().vertices.len() as u64;
-    let cached_indices = warm.snapshot.instances()[0].chunk.draw_list().indices.len() as u64;
+    let mut cached_draws = 0_u64;
+    let mut cached_vertices = 0_u64;
+    let mut cached_indices = 0_u64;
+    warm.snapshot.visit_instances(|instance| {
+        cached_draws = cached_draws.saturating_add(instance.chunk.draw_list().items.len() as u64);
+        cached_vertices = cached_vertices.saturating_add(instance.chunk.draw_list().vertices.len() as u64);
+        cached_indices = cached_indices.saturating_add(instance.chunk.draw_list().indices.len() as u64);
+    });
     let mut step = 0usize;
     let mut ops = 0u64;
     let mut reused_nodes = 0u64;
@@ -5807,7 +5817,7 @@ fn authoring_surface_retained_dirty_leaf_encode_case(smoke: bool) -> PerfCaseRes
         0.18,
         loops,
         vec![String::from(
-            "Dirty-leaf retained UiSurface snapshot over a 1000-node flat-rect tree; expected path rebuilds one surface chunk without duplicating geometry through ancestor caches.",
+            "Dirty-leaf retained UiSurface snapshot over a 1000-node flat-rect tree; expected path replaces one node chunk without duplicating geometry through ancestors.",
         )],
         || {
             let target = nodes.cells[step % nodes.cells.len()];
@@ -5830,7 +5840,7 @@ fn authoring_surface_retained_dirty_leaf_encode_case(smoke: bool) -> PerfCaseRes
             index_bytes_copied = index_bytes_copied.saturating_add(rendered.stats.index_bytes_copied);
             retained_bytes = retained_bytes.max(rendered.stats.retained_bytes);
             ops = ops.saturating_add(1);
-            rendered.snapshot.instances()[0].chunk.byte_size()
+            rendered.snapshot.instance_count()
         },
     );
     let total_nodes = reused_nodes.saturating_add(rebuilt_nodes).max(1);

@@ -20,6 +20,66 @@ cleanup = [
 ]
 
 [[experiments]]
+id = "c22-persistent-retained-node-chunks"
+introduced_commit = "C22 staged tree recorded in commit proof"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-api", "oxide-ui-core", "oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Clean snapshots must rebuild zero chunks and copy zero command/vertex/index bytes; one dirty leaf must rebuild exactly one chunk; unchanged node, text, and image chunks must retain identity; persistent sequence traversal and compatibility flattening must preserve order, transforms, clips, layers, properties, damage, resource generations, animation output, and finite-origin validation."
+performance_gate = "Fifteen fresh-process parent/candidate pairs for the identical depth-16 and depth-32 1,000-label/500-image clean and dirty-leaf workloads must improve p50 and tails with all candidate pairs winning; dirty allocation calls/bytes, retained-cache live bytes, and commands traversed must be reported, and any regression must be attributed to the immutable path metadata that C23 will budget and evict."
+decision_state = "accepted"
+decision = "Retain each node's local paint as an immutable chunk and update ordered composition through bounded persistent child blocks, with exact-key immutable snapshot reuse on clean frames."
+proof = [
+   "The exact parent/candidate paired reports, individual samples, identities, block-size alternatives, binary hashes, and allocation evidence are retained under benchmarks/experiments/c22-retained-node-chunks/raw.",
+   "Permanent depth-16 and depth-32 probes report zero clean geometry copies and rebuilt chunks, exactly one rebuilt dirty-leaf chunk, unchanged independent text/image identities, retained chunk/sequence bytes, and zero production-path flat fallbacks.",
+   "Depth-32 dirty render allocations regress from 14 calls and 2,864 bytes to 158 calls and 28,752 bytes, while scoped retained-cache live bytes regress from 872 to 862,936; this is the measured cost of replacing one flattened surface chunk with independently replaceable immutable node/path metadata, and C23 owns its hard byte budget, admission, eviction, and churn control.",
+   "Renderer-api and ui-core regression suites cover persistent order and replacement, nested translated clips/layers, non-finite composed origins, resource invalidation, animation equivalence, namespace changes, clean identity reuse, dirty sibling identity preservation, and compatibility output equivalence.",
+]
+cleanup = [
+   "Removed flattened Node and UiSurface DrawList caches, the retained-node item-count cutoff, retained append temporary vectors from the node/surface hot path, and whole-surface retained chunk ownership.",
+   "Kept explicit compatibility flattening and capture outside the snapshot hot path; byte budgeting, eviction, and reuse admission remain owned by C23.",
+]
+
+[[experiments]]
+id = "c22-flat-shared-instance-sequences-rejected"
+introduced_commit = "rejected during C22"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-api", "oxide-ui-core"]
+required_devices = ["macOS host"]
+correctness_gate = "The retained representation must preserve exact order, transforms, clips, layers, resource identity, and compatibility output."
+performance_gate = "A dirty leaf must avoid copying every descendant instance array through its ancestor chain and beat the C21 parent on the required deep and broad workloads."
+decision_state = "rejected"
+decision = "Rejected flat Arc instance arrays per node because a dirty leaf recopied wide descendant metadata through every ancestor and lost the required dirty-tree timing gate."
+proof = [
+   "Depth-16 and depth-32 dirty smoke medians were approximately 273 and 393 us/op while the C21 parent was near 13 us/op on the corresponding retained workload.",
+   "The design copied no geometry and preserved pixels, but metadata work remained proportional to repeated ancestor subtree widths rather than the dirty path.",
+]
+cleanup = [
+   "Removed the flat per-node instance arrays in favor of persistent composition references.",
+]
+
+[[experiments]]
+id = "c22-unblocked-persistent-child-arrays-rejected"
+introduced_commit = "rejected during C22"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-api", "oxide-ui-core"]
+required_devices = ["macOS host"]
+correctness_gate = "Persistent child replacement must retain unchanged child identities and exact sequence output."
+performance_gate = "Replacing one dirty child must not clone every sibling Arc on each ancestor and must reliably beat the C21 parent at depths 16 and 32."
+decision_state = "rejected"
+decision = "Rejected one contiguous persistent child array per composition node because replacement still cloned every sibling reference and left the depth-32 dirty result at parity or a slight loss."
+proof = [
+   "The persistent composition tree reduced dirty smoke medians from hundreds of microseconds to approximately 12.9 and 13.5 us/op, but depth 32 did not reliably beat the C21 parent.",
+   "Chunking child references into bounded blocks reduced replacement to one small block plus a shallow block index while preserving order and identity.",
+]
+cleanup = [
+   "Replaced contiguous child arrays with eight-entry persistent blocks; the 32-entry exploratory block was also discarded after the smaller block improved both required depths.",
+]
+
+[[experiments]]
 id = "c20-web-single-raf-after-input-routing-rejected"
 introduced_commit = "rejected during C20"
 introduced_date = "2026-07-13"

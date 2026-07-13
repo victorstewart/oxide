@@ -16,9 +16,9 @@ mod retained;
 
 pub use retained::{
    ChunkIndexMode, RenderChunk, RenderChunkError, RenderChunkId, RenderChunkInstance,
-   RenderChunkOrdering, RenderChunkRevisions, RenderFallbackStats, RenderLayerInstance,
-   RenderPropertySlot, RenderPropertySlotId, RenderPropertyValue, RenderResourceDependency,
-   RenderSnapshot, RenderSnapshotError,
+   RenderChunkOrdering, RenderChunkRevisions, RenderChunkSequence, RenderFallbackStats,
+   RenderLayerInstance, RenderPropertySlot, RenderPropertySlotId, RenderPropertyValue,
+   RenderResourceDependency, RenderSnapshot, RenderSnapshotError,
 };
 
 // Opaque frame target used by Renderer implementations.
@@ -31,7 +31,7 @@ pub struct FrameToken(pub u64);
 
 /// Optional per-frame damage regions in device-independent pixels (dp).
 /// When provided, renderers may restrict work to these rectangles.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Damage {
     pub rects: alloc::vec::Vec<RectI>,
 }
