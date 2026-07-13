@@ -13,6 +13,8 @@ use crate::{
 };
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
+use core::fmt;
+
 use oxide_renderer_api as gfx;
 use oxide_timing as timing;
 
@@ -151,6 +153,84 @@ pub enum RetainedDrawStatus {
     Reused,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SurfaceRenderChunkStats
+{
+   pub status: RetainedDrawStatus,
+   pub chunks_reused: u64,
+   pub chunks_rebuilt: u64,
+   pub command_bytes_copied: u64,
+   pub vertex_bytes_copied: u64,
+   pub index_bytes_copied: u64,
+   pub retained_bytes: u64,
+}
+
+pub struct SurfaceRenderChunk
+{
+   pub instance: gfx::RenderChunkInstance,
+   pub stats: SurfaceRenderChunkStats,
+}
+
+pub struct SurfaceRenderSnapshot
+{
+   pub snapshot: gfx::RenderSnapshot,
+   pub stats: SurfaceRenderChunkStats,
+}
+
+#[derive(Debug)]
+pub enum SurfaceRenderSnapshotError
+{
+   Chunk(gfx::RenderChunkError),
+   Snapshot(gfx::RenderSnapshotError),
+}
+
+impl From<gfx::RenderChunkError> for SurfaceRenderSnapshotError
+{
+   fn from(error: gfx::RenderChunkError) -> Self
+   {
+      Self::Chunk(error)
+   }
+}
+
+impl From<gfx::RenderSnapshotError> for SurfaceRenderSnapshotError
+{
+   fn from(error: gfx::RenderSnapshotError) -> Self
+   {
+      Self::Snapshot(error)
+   }
+}
+
+impl fmt::Display for SurfaceRenderSnapshotError
+{
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
+   {
+      match self {
+         Self::Chunk(error) => write!(f, "retained surface chunk failed: {error}"),
+         Self::Snapshot(error) => write!(f, "retained surface snapshot failed: {error}"),
+      }
+   }
+}
+
+impl std::error::Error for SurfaceRenderSnapshotError
+{
+   fn source(&self) -> Option<&(dyn std::error::Error + 'static)>
+   {
+      match self {
+         Self::Chunk(error) => Some(error),
+         Self::Snapshot(error) => Some(error),
+      }
+   }
+}
+
+const CHUNK_REVISION_STRUCTURAL: u8 = 1 << 0;
+const CHUNK_REVISION_GEOMETRY: u8 = 1 << 1;
+const CHUNK_REVISION_RESOURCE: u8 = 1 << 2;
+const CHUNK_REVISION_DYNAMIC: u8 = 1 << 3;
+const CHUNK_REVISION_ALL: u8 = CHUNK_REVISION_STRUCTURAL
+   | CHUNK_REVISION_GEOMETRY
+   | CHUNK_REVISION_RESOURCE
+   | CHUNK_REVISION_DYNAMIC;
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RetainedCompositionStats {
     pub current_reused: usize,
@@ -278,6 +358,9 @@ pub struct UiSurface {
     scatter: ScatterState,
     dirty: DirtySet,
     retained_draws: Option<gfx::DrawList>,
+    retained_chunk: Option<gfx::RenderChunk>,
+    chunk_revisions: gfx::RenderChunkRevisions,
+    chunk_revision_dirty: u8,
     retained_node_stats: RetainedNodeStats,
     last_layout_stats: LayoutStats,
 }
@@ -296,6 +379,9 @@ impl UiSurface {
             scatter: ScatterState::default(),
             dirty: DirtySet::all(),
             retained_draws: None,
+            retained_chunk: None,
+            chunk_revisions: gfx::RenderChunkRevisions::default(),
+            chunk_revision_dirty: CHUNK_REVISION_ALL,
             retained_node_stats: RetainedNodeStats::default(),
             last_layout_stats: LayoutStats::default(),
         }
@@ -343,6 +429,7 @@ impl UiSurface {
     #[inline]
     pub fn mark_dirty(&mut self, class: DirtyClass) {
         self.dirty.mark(class);
+        self.mark_chunk_revision_dirty(class);
         if class == DirtyClass::Layout {
             self.tree.mark_layout_dirty(self.tree.root());
         }
@@ -359,6 +446,7 @@ impl UiSurface {
         }
 
         self.dirty.mark(class);
+        self.mark_chunk_revision_dirty(class);
         match class {
             DirtyClass::Layout => {
                 self.tree.mark_layout_dirty(id);
@@ -405,13 +493,16 @@ impl UiSurface {
 
         self.retained_draws = None;
         self.retained_node_stats = RetainedNodeStats::default();
+        self.chunk_revision_dirty |= CHUNK_REVISION_DYNAMIC;
         self.dirty.mark(DirtyClass::Style);
         if style_change_affects_parent_layout(&before, &after) {
+            self.chunk_revision_dirty |= CHUNK_REVISION_GEOMETRY;
             self.tree.mark_layout_dirty(id);
             self.dirty.mark(DirtyClass::Layout);
             self.dirty.mark(DirtyClass::Accessibility);
             self.dirty.mark(DirtyClass::HitTest);
         } else if style_change_affects_content_layout(&before, &after) {
+            self.chunk_revision_dirty |= CHUNK_REVISION_GEOMETRY;
             self.tree.mark_node_layout_dirty(id);
             self.dirty.mark(DirtyClass::Layout);
             self.dirty.mark(DirtyClass::Accessibility);
@@ -427,6 +518,7 @@ impl UiSurface {
             self.dirty.mark(DirtyClass::Opacity);
         }
         if before.clip != after.clip {
+            self.chunk_revision_dirty |= CHUNK_REVISION_STRUCTURAL;
             self.dirty.mark(DirtyClass::Clip);
             self.dirty.mark(DirtyClass::HitTest);
         }
@@ -447,6 +539,7 @@ impl UiSurface {
     }
 
     fn mark_tree_mutated(&mut self) {
+        self.chunk_revision_dirty |= CHUNK_REVISION_STRUCTURAL | CHUNK_REVISION_GEOMETRY;
         self.dirty.mark(DirtyClass::Style);
         self.dirty.mark(DirtyClass::Layout);
         self.dirty.mark(DirtyClass::Paint);
@@ -456,6 +549,7 @@ impl UiSurface {
     }
 
     fn mark_scoped_tree_mutated(&mut self) {
+        self.chunk_revision_dirty |= CHUNK_REVISION_STRUCTURAL | CHUNK_REVISION_GEOMETRY;
         self.retained_draws = None;
         self.retained_node_stats = RetainedNodeStats::default();
         self.dirty.mark(DirtyClass::Style);
@@ -480,6 +574,7 @@ impl UiSurface {
             return;
         }
         self.chrome = metrics;
+        self.chunk_revision_dirty |= CHUNK_REVISION_GEOMETRY;
         self.dirty.mark(DirtyClass::Layout);
         self.dirty.mark(DirtyClass::Paint);
         self.dirty.mark(DirtyClass::Accessibility);
@@ -503,6 +598,7 @@ impl UiSurface {
             style.padding.top = self.chrome.safe_insets.top;
             style.padding.right = self.chrome.safe_insets.right;
             style.padding.bottom = self.chrome.safe_insets.bottom;
+            self.chunk_revision_dirty |= CHUNK_REVISION_GEOMETRY;
             self.dirty.mark(DirtyClass::Layout);
             self.dirty.mark(DirtyClass::Paint);
             self.dirty.mark(DirtyClass::Accessibility);
@@ -517,6 +613,7 @@ impl UiSurface {
             return self.last_layout_stats;
         }
         let stats = self.tree.layout(width, height);
+        self.chunk_revision_dirty |= CHUNK_REVISION_GEOMETRY;
         self.last_layout_size = Some(size);
         self.dirty.clear(DirtyClass::Layout);
         self.dirty.mark(DirtyClass::Paint);
@@ -541,6 +638,7 @@ impl UiSurface {
                 self.pending_layout = None;
             }
             self.last_layout_stats = LayoutStats::default();
+            self.chunk_revision_dirty |= CHUNK_REVISION_GEOMETRY;
             self.dirty.clear(DirtyClass::Layout);
             self.dirty.mark(DirtyClass::Paint);
             self.dirty.mark(DirtyClass::Accessibility);
@@ -556,6 +654,44 @@ impl UiSurface {
         self.layout_worker.has_inflight()
     }
 
+   fn mark_chunk_revision_dirty(&mut self, class: DirtyClass)
+   {
+      self.chunk_revision_dirty |= match class {
+         DirtyClass::Layout => CHUNK_REVISION_GEOMETRY,
+         DirtyClass::Text | DirtyClass::ImageContent | DirtyClass::CameraFrame => {
+            CHUNK_REVISION_RESOURCE
+         }
+         DirtyClass::Clip => CHUNK_REVISION_STRUCTURAL,
+         DirtyClass::Style
+         | DirtyClass::Paint
+         | DirtyClass::Transform
+         | DirtyClass::Opacity => CHUNK_REVISION_DYNAMIC,
+         DirtyClass::Accessibility | DirtyClass::HitTest => 0,
+      };
+   }
+
+   fn next_chunk_revisions(&self) -> gfx::RenderChunkRevisions
+   {
+      let mut revisions = self.chunk_revisions;
+      if self.chunk_revision_dirty & CHUNK_REVISION_STRUCTURAL != 0
+      {
+         revisions.structural = revisions.structural.saturating_add(1);
+      }
+      if self.chunk_revision_dirty & CHUNK_REVISION_GEOMETRY != 0
+      {
+         revisions.geometry = revisions.geometry.saturating_add(1);
+      }
+      if self.chunk_revision_dirty & CHUNK_REVISION_RESOURCE != 0
+      {
+         revisions.resource = revisions.resource.saturating_add(1);
+      }
+      if self.chunk_revision_dirty & CHUNK_REVISION_DYNAMIC != 0
+      {
+         revisions.dynamic_properties = revisions.dynamic_properties.saturating_add(1);
+      }
+      revisions
+   }
+
     #[inline]
     pub fn encode(&self, b: &mut DrawListBuilder) {
         if self.overrides.is_empty() {
@@ -564,6 +700,75 @@ impl UiSurface {
             self.tree.encode_draws_with_anims(b, &self.overrides);
         }
     }
+
+   pub fn render_chunk_retained(&mut self, id: gfx::RenderChunkId) -> Result<SurfaceRenderChunk, gfx::RenderChunkError>
+   {
+      if self.chunk_revision_dirty == 0
+      {
+         if let Some(chunk) = self.retained_chunk.as_ref().filter(|chunk| chunk.id() == id).cloned()
+         {
+            return Ok(SurfaceRenderChunk {
+               instance: gfx::RenderChunkInstance::new(chunk.clone(), [0.0, 0.0]),
+               stats: SurfaceRenderChunkStats {
+                  status: RetainedDrawStatus::Reused,
+                  chunks_reused: 1,
+                  chunks_rebuilt: 0,
+                  command_bytes_copied: 0,
+                  vertex_bytes_copied: 0,
+                  index_bytes_copied: 0,
+                  retained_bytes: chunk.byte_size(),
+               },
+            });
+         }
+      }
+
+      let revisions = self.next_chunk_revisions();
+      let mut builder = DrawListBuilder::new();
+      self.encode(&mut builder);
+      let draws = builder.into_inner();
+      let command_bytes_copied =
+         (draws.items.len() * core::mem::size_of::<gfx::DrawCmd>()) as u64;
+      let vertex_bytes_copied =
+         (draws.vertices.len() * core::mem::size_of::<gfx::Vertex>()) as u64;
+      let index_bytes_copied =
+         (draws.indices.len() * core::mem::size_of::<u16>()) as u64;
+      let chunk = gfx::RenderChunk::new(
+         id,
+         revisions,
+         draws,
+         gfx::ChunkIndexMode::Local,
+         &[],
+      )?;
+      let stats = SurfaceRenderChunkStats {
+         status: RetainedDrawStatus::Rebuilt,
+         chunks_reused: 0,
+         chunks_rebuilt: 1,
+         command_bytes_copied,
+         vertex_bytes_copied,
+         index_bytes_copied,
+         retained_bytes: chunk.byte_size(),
+      };
+      self.retained_draws = None;
+      self.retained_chunk = Some(chunk.clone());
+      self.chunk_revisions = revisions;
+      self.chunk_revision_dirty = 0;
+      self.dirty.clear_draw_affecting();
+
+      Ok(SurfaceRenderChunk {
+         instance: gfx::RenderChunkInstance::new(chunk, [0.0, 0.0]),
+         stats,
+      })
+   }
+
+   pub fn render_snapshot_retained(&mut self, id: gfx::RenderChunkId, content: &[gfx::RenderChunkInstance], properties: Vec<gfx::RenderPropertySlot>, damage: gfx::Damage) -> Result<SurfaceRenderSnapshot, SurfaceRenderSnapshotError>
+   {
+      let surface = self.render_chunk_retained(id)?;
+      let mut instances = Vec::with_capacity(content.len().saturating_add(1));
+      instances.push(surface.instance);
+      instances.extend(content.iter().cloned());
+      let snapshot = gfx::RenderSnapshot::new(instances, properties, damage)?;
+      Ok(SurfaceRenderSnapshot { snapshot, stats: surface.stats })
+   }
 
     pub fn encode_retained(&mut self, b: &mut DrawListBuilder) -> RetainedDrawStatus {
         self.encode_retained_impl(b, None)
@@ -662,6 +867,7 @@ impl UiSurface {
 
     #[inline]
     pub fn overrides_mut(&mut self) -> &mut BTreeMap<NodeId, anim::AnimOverrides> {
+        self.chunk_revision_dirty |= CHUNK_REVISION_DYNAMIC;
         self.dirty.mark(DirtyClass::Transform);
         self.dirty.mark(DirtyClass::Opacity);
         self.dirty.mark(DirtyClass::Paint);
@@ -686,6 +892,7 @@ impl UiSurface {
             changed = true;
         }
         if changed {
+            self.chunk_revision_dirty |= CHUNK_REVISION_DYNAMIC;
             self.dirty.mark(DirtyClass::Transform);
             self.dirty.mark(DirtyClass::Opacity);
             self.dirty.mark(DirtyClass::Paint);
@@ -715,6 +922,7 @@ impl UiSurface {
             engaged = true;
         }
         if engaged {
+            self.chunk_revision_dirty |= CHUNK_REVISION_DYNAMIC;
             self.dirty.mark(DirtyClass::Transform);
             self.dirty.mark(DirtyClass::Opacity);
             self.dirty.mark(DirtyClass::Paint);

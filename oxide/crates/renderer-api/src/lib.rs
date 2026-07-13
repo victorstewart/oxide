@@ -12,6 +12,15 @@
 
 use core::fmt;
 
+mod retained;
+
+pub use retained::{
+   ChunkIndexMode, RenderChunk, RenderChunkError, RenderChunkId, RenderChunkInstance,
+   RenderChunkOrdering, RenderChunkRevisions, RenderFallbackStats, RenderLayerInstance,
+   RenderPropertySlot, RenderPropertySlotId, RenderPropertyValue, RenderResourceDependency,
+   RenderSnapshot, RenderSnapshotError,
+};
+
 // Opaque frame target used by Renderer implementations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FrameTarget;

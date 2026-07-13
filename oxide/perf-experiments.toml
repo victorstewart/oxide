@@ -1,4 +1,25 @@
 [[experiments]]
+id = "c21-immutable-versioned-render-chunks"
+introduced_commit = "C21 staged tree recorded in commit proof"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-api", "oxide-ui-core", "oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Chunk creation must canonicalize explicit local or absolute indices once, reject invalid spans and crossed clip/layer scopes, preserve ordered snapshot/property/damage metadata, invalidate exactly dependent resource generations, replay canonical indices without inference, flatten compatibly only through a counted fallback, and match legacy UiSurface output."
+performance_gate = "Exact parent/candidate fresh-process A/B must improve deep and broad clean/dirty retained CPU distributions, reduce dirty broad allocation calls and bytes, copy zero command/vertex/index bytes on clean reuse, rebuild one surface chunk for a dirty leaf without ancestor duplication, retain unchanged mixed text/image chunk identities, and use zero flat fallbacks on the production-shaped snapshot path."
+decision_state = "accepted"
+decision = "Retain validated local-space draw payloads as immutable versioned chunks and compose real UiSurface, glyph, and image content through ordered lightweight RenderSnapshot references."
+proof = [
+   "Post-review fifteen-pair runs accepted deep clean, deep dirty, broad clean, broad dirty, and animated mixed-content CPU workloads at 13.29%, 86.83%, 99.27%, 53.29%, and 13.14% paired median speedups; every case won 15/15 pairs and every candidate tail remained below the parent tail.",
+   "Clean deep and broad probes report zero command, vertex, and index bytes copied, one reused surface chunk, unchanged text/image chunk identities, and zero flat fallback uses.",
+   "The identical temporary allocation probe measured dirty broad retention at 1022 allocations and 401264 bytes per parent operation versus 17 allocations and 171000 bytes per candidate operation, reductions of 98.34% and 57.38%; final exact-tree evidence is retained under benchmarks/experiments/c21-render-chunks/raw.",
+]
+cleanup = [
+   "Kept legacy flattened Node and UiSurface retained caches for the C22 atomic cutover; the new snapshot path bypasses them and capture/replay compatibility uses the explicitly counted flat adapter.",
+   "Removed the temporary allocation-probe source after collection; only the hashed instrumentation patch and ignored raw evidence remain.",
+]
+
+[[experiments]]
 id = "c20-web-single-raf-after-input-routing-rejected"
 introduced_commit = "rejected during C20"
 introduced_date = "2026-07-13"

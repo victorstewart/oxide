@@ -59,7 +59,8 @@ pub use sensors::{
 };
 pub use surface::{
     ChromeMetrics, DirtyClass, DirtySet, InteractionBlockGuard, RetainedCompositionStats,
-    RetainedDrawStatus, ScatterSpec, SurfaceRouter, UiSurface,
+    RetainedDrawStatus, ScatterSpec, SurfaceRenderChunk, SurfaceRenderChunkStats,
+    SurfaceRenderSnapshot, SurfaceRenderSnapshotError, SurfaceRouter, UiSurface,
 };
 pub use telemetry::TelemetryView;
 pub use visual_tree::{
@@ -205,6 +206,35 @@ impl DrawListBuilder {
     ) -> bool {
         append_retained_drawlist(self, list, Some(atlases))
     }
+
+   pub fn append_render_snapshot_flat(&mut self, snapshot: &gfx::RenderSnapshot) -> Result<gfx::RenderFallbackStats, gfx::RenderSnapshotError>
+   {
+      let mut flat = gfx::DrawList::default();
+      let mut stats = snapshot.flatten_into(&mut flat)?;
+      let commands_before = self.list.items.len();
+      let vertices_before = self.list.vertices.len();
+      let indices_before = self.list.indices.len();
+      if !self.append_drawlist(&flat)
+      {
+         return Err(gfx::RenderSnapshotError::GeometryTooLarge);
+      }
+      let commands = self.list.items.len().saturating_sub(commands_before) as u64;
+      let vertices = self.list.vertices.len().saturating_sub(vertices_before) as u64;
+      let indices = self.list.indices.len().saturating_sub(indices_before) as u64;
+      stats.commands_copied = stats.commands_copied.saturating_add(commands);
+      stats.vertices_copied = stats.vertices_copied.saturating_add(vertices);
+      stats.indices_copied = stats.indices_copied.saturating_add(indices);
+      stats.command_bytes_copied = stats.command_bytes_copied.saturating_add(
+         commands.saturating_mul(core::mem::size_of::<gfx::DrawCmd>() as u64),
+      );
+      stats.vertex_bytes_copied = stats.vertex_bytes_copied.saturating_add(
+         vertices.saturating_mul(core::mem::size_of::<gfx::Vertex>() as u64),
+      );
+      stats.index_bytes_copied = stats.index_bytes_copied.saturating_add(
+         indices.saturating_mul(core::mem::size_of::<u16>() as u64),
+      );
+      Ok(stats)
+   }
 
     #[inline]
     pub fn layer_begin(&mut self, id: u32, rect: gfx::RectF, dirty: bool) {

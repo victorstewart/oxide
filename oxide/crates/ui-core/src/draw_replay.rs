@@ -5,7 +5,9 @@
 //! `RenderEncoder`.
 
 use alloc::vec::Vec;
-use oxide_renderer_api::{DrawCmd, DrawList, RectF, RectI, RenderEncoder, Vertex, VertexSpan};
+use oxide_renderer_api::{
+   DrawCmd, DrawList, RectF, RectI, RenderChunk, RenderEncoder, Vertex, VertexSpan,
+};
 
 /// Converts a floating viewport rectangle into an integer clip rectangle.
 #[must_use]
@@ -28,6 +30,18 @@ pub fn replay_drawlist(
     fallback_clip: RectI,
     origin: [f32; 2],
 ) {
+    replay_drawlist_impl(list, encoder, fallback_clip, origin, false);
+}
+
+/// Replays an immutable render chunk whose command spans and local indices were
+/// validated once when the chunk was created.
+pub fn replay_render_chunk(chunk: &RenderChunk, encoder: &mut dyn RenderEncoder, fallback_clip: RectI, origin: [f32; 2])
+{
+   replay_drawlist_impl(chunk.draw_list(), encoder, fallback_clip, origin, true);
+}
+
+fn replay_drawlist_impl(list: &DrawList, encoder: &mut dyn RenderEncoder, fallback_clip: RectI, origin: [f32; 2], canonical_indices: bool)
+{
     let offset_x = origin[0];
     let offset_y = origin[1];
     let offset_ix = offset_x.round() as i32;
@@ -55,12 +69,16 @@ pub fn replay_drawlist(
                 };
                 let translated = translate_vertices(vertices, offset_x, offset_y);
                 let indices = slice_indices(list, *ib).unwrap_or(&[]);
-                let Some(normalized_indices) =
-                    normalize_indices_for_vertex_span(indices, vb.offset, vb.len)
-                else {
-                    continue;
-                };
-                encoder.draw_image_mesh(*tex, &translated, &normalized_indices, *alpha);
+                if canonical_indices {
+                    encoder.draw_image_mesh(*tex, &translated, indices, *alpha);
+                } else {
+                    let Some(normalized_indices) =
+                        normalize_indices_for_vertex_span(indices, vb.offset, vb.len)
+                    else {
+                        continue;
+                    };
+                    encoder.draw_image_mesh(*tex, &translated, &normalized_indices, *alpha);
+                }
             }
             DrawCmd::GlyphRun { run } => {
                 let vertices = slice_vertices(list, run.vb).unwrap_or(&[]);

@@ -5713,14 +5713,21 @@ fn authoring_surface_retained_clean_encode_case(smoke: bool) -> PerfCaseResult {
     let mut surface = ui::UiSurface::new(flat_rect_surface_root_style(420.0));
     populate_flat_rect_surface(&mut surface, 1_000, 0);
     surface.layout(420.0, 760.0);
-    let mut warm = ui::DrawListBuilder::new();
-    let _ = surface.encode_retained(&mut warm);
-    let cached_draws = warm.drawlist().items.len() as u64;
-    let cached_vertices = warm.drawlist().vertices.len() as u64;
-    let cached_indices = warm.drawlist().indices.len() as u64;
-    let mut builder = ui::DrawListBuilder::new();
+    let warm = surface.render_snapshot_retained(
+        api::RenderChunkId(100),
+        &[],
+        Vec::new(),
+        api::Damage { rects: Vec::new() },
+    ).unwrap();
+    let cached_draws = warm.snapshot.instances()[0].chunk.draw_list().items.len() as u64;
+    let cached_vertices = warm.snapshot.instances()[0].chunk.draw_list().vertices.len() as u64;
+    let cached_indices = warm.snapshot.instances()[0].chunk.draw_list().indices.len() as u64;
+    let retained_bytes = warm.snapshot.instances()[0].chunk.byte_size();
     let mut reused = 0u64;
     let mut rebuilt = 0u64;
+    let mut command_bytes_copied = 0_u64;
+    let mut vertex_bytes_copied = 0_u64;
+    let mut index_bytes_copied = 0_u64;
     let mut case = measure_cpu_case(
         "cpu.authoring.surface_retained.clean_encode",
         "authoring",
@@ -5729,11 +5736,16 @@ fn authoring_surface_retained_clean_encode_case(smoke: bool) -> PerfCaseResult {
         0.16,
         loops,
         vec![String::from(
-            "Clean retained UiSurface encode over a 1000-node flat-rect tree; expected path replays the cached draw list without tree traversal.",
+            "Clean retained UiSurface snapshot over a 1000-node flat-rect tree; expected path references one immutable chunk without copying commands or geometry.",
         )],
         || {
-            builder.clear();
-            match surface.encode_retained(&mut builder) {
+            let rendered = surface.render_snapshot_retained(
+                api::RenderChunkId(100),
+                &[],
+                Vec::new(),
+                api::Damage { rects: Vec::new() },
+            ).unwrap();
+            match rendered.stats.status {
                 ui::RetainedDrawStatus::Reused => {
                     reused = reused.saturating_add(1);
                 }
@@ -5741,10 +5753,10 @@ fn authoring_surface_retained_clean_encode_case(smoke: bool) -> PerfCaseResult {
                     rebuilt = rebuilt.saturating_add(1);
                 }
             }
-            let dl = builder.drawlist();
-            (dl.items.len() as u64)
-                .saturating_add(dl.vertices.len() as u64)
-                .saturating_add(dl.indices.len() as u64)
+            command_bytes_copied = command_bytes_copied.saturating_add(rendered.stats.command_bytes_copied);
+            vertex_bytes_copied = vertex_bytes_copied.saturating_add(rendered.stats.vertex_bytes_copied);
+            index_bytes_copied = index_bytes_copied.saturating_add(rendered.stats.index_bytes_copied);
+            rendered.snapshot.instances()[0].chunk.byte_size()
         },
     );
     let total = reused.saturating_add(rebuilt).max(1);
@@ -5754,6 +5766,14 @@ fn authoring_surface_retained_clean_encode_case(smoke: bool) -> PerfCaseResult {
     case.metrics.insert(String::from("draw_items"), cached_draws as f64);
     case.metrics.insert(String::from("vertex_count"), cached_vertices as f64);
     case.metrics.insert(String::from("index_count"), cached_indices as f64);
+    case.metrics.insert(String::from("command_bytes_copied"), command_bytes_copied as f64);
+    case.metrics.insert(String::from("vertex_bytes_copied"), vertex_bytes_copied as f64);
+    case.metrics.insert(String::from("index_bytes_copied"), index_bytes_copied as f64);
+    case.metrics.insert(String::from("command_bytes_copied_per_op"), command_bytes_copied as f64 / total as f64);
+    case.metrics.insert(String::from("vertex_bytes_copied_per_op"), vertex_bytes_copied as f64 / total as f64);
+    case.metrics.insert(String::from("index_bytes_copied_per_op"), index_bytes_copied as f64 / total as f64);
+    case.metrics.insert(String::from("retained_chunk_bytes"), retained_bytes as f64);
+    case.metrics.insert(String::from("flat_fallback_uses"), 0.0);
     case
 }
 
@@ -5762,16 +5782,23 @@ fn authoring_surface_retained_dirty_leaf_encode_case(smoke: bool) -> PerfCaseRes
     let mut surface = ui::UiSurface::new(flat_rect_surface_root_style(420.0));
     let nodes = populate_flat_rect_surface(&mut surface, 1_000, 0);
     surface.layout(420.0, 760.0);
-    let mut warm = ui::DrawListBuilder::new();
-    let _ = surface.encode_retained(&mut warm);
-    let cached_draws = warm.drawlist().items.len() as u64;
-    let cached_vertices = warm.drawlist().vertices.len() as u64;
-    let cached_indices = warm.drawlist().indices.len() as u64;
-    let mut builder = ui::DrawListBuilder::new();
+    let warm = surface.render_snapshot_retained(
+        api::RenderChunkId(101),
+        &[],
+        Vec::new(),
+        api::Damage { rects: Vec::new() },
+    ).unwrap();
+    let cached_draws = warm.snapshot.instances()[0].chunk.draw_list().items.len() as u64;
+    let cached_vertices = warm.snapshot.instances()[0].chunk.draw_list().vertices.len() as u64;
+    let cached_indices = warm.snapshot.instances()[0].chunk.draw_list().indices.len() as u64;
     let mut step = 0usize;
     let mut ops = 0u64;
     let mut reused_nodes = 0u64;
     let mut rebuilt_nodes = 0u64;
+    let mut command_bytes_copied = 0_u64;
+    let mut vertex_bytes_copied = 0_u64;
+    let mut index_bytes_copied = 0_u64;
+    let mut retained_bytes = 0_u64;
     let mut case = measure_cpu_case(
         "cpu.authoring.surface_retained.dirty_leaf_encode",
         "authoring",
@@ -5780,7 +5807,7 @@ fn authoring_surface_retained_dirty_leaf_encode_case(smoke: bool) -> PerfCaseRes
         0.18,
         loops,
         vec![String::from(
-            "Dirty-leaf retained UiSurface encode over a 1000-node flat-rect tree; expected path rebuilds the changed leaf/ancestors while replaying clean sibling subtrees.",
+            "Dirty-leaf retained UiSurface snapshot over a 1000-node flat-rect tree; expected path rebuilds one surface chunk without duplicating geometry through ancestor caches.",
         )],
         || {
             let target = nodes.cells[step % nodes.cells.len()];
@@ -5790,17 +5817,20 @@ fn authoring_surface_retained_dirty_leaf_encode_case(smoke: bool) -> PerfCaseRes
                 style.background = api::Color::rgba(0.92, 0.18 + phase * 0.42, 0.22, 1.0);
             });
             surface.layout(420.0, 760.0);
-            builder.clear();
-            let _ = surface.encode_retained(&mut builder);
-            let stats = surface.retained_node_stats();
-            reused_nodes = reused_nodes.saturating_add(stats.reused_nodes as u64);
-            rebuilt_nodes = rebuilt_nodes.saturating_add(stats.rebuilt_nodes as u64);
+            let rendered = surface.render_snapshot_retained(
+                api::RenderChunkId(101),
+                &[],
+                Vec::new(),
+                api::Damage { rects: Vec::new() },
+            ).unwrap();
+            reused_nodes = reused_nodes.saturating_add(rendered.stats.chunks_reused);
+            rebuilt_nodes = rebuilt_nodes.saturating_add(rendered.stats.chunks_rebuilt);
+            command_bytes_copied = command_bytes_copied.saturating_add(rendered.stats.command_bytes_copied);
+            vertex_bytes_copied = vertex_bytes_copied.saturating_add(rendered.stats.vertex_bytes_copied);
+            index_bytes_copied = index_bytes_copied.saturating_add(rendered.stats.index_bytes_copied);
+            retained_bytes = retained_bytes.max(rendered.stats.retained_bytes);
             ops = ops.saturating_add(1);
-            let dl = builder.drawlist();
-            (dl.items.len() as u64)
-                .saturating_add(dl.vertices.len() as u64)
-                .saturating_add(dl.indices.len() as u64)
-                .saturating_add(stats.reused_nodes as u64)
+            rendered.snapshot.instances()[0].chunk.byte_size()
         },
     );
     let total_nodes = reused_nodes.saturating_add(rebuilt_nodes).max(1);
@@ -5822,6 +5852,14 @@ fn authoring_surface_retained_dirty_leaf_encode_case(smoke: bool) -> PerfCaseRes
     case.metrics.insert(String::from("draw_items"), cached_draws as f64);
     case.metrics.insert(String::from("vertex_count"), cached_vertices as f64);
     case.metrics.insert(String::from("index_count"), cached_indices as f64);
+    case.metrics.insert(String::from("command_bytes_copied"), command_bytes_copied as f64);
+    case.metrics.insert(String::from("vertex_bytes_copied"), vertex_bytes_copied as f64);
+    case.metrics.insert(String::from("index_bytes_copied"), index_bytes_copied as f64);
+    case.metrics.insert(String::from("command_bytes_copied_per_op"), command_bytes_copied as f64 / total_ops as f64);
+    case.metrics.insert(String::from("vertex_bytes_copied_per_op"), vertex_bytes_copied as f64 / total_ops as f64);
+    case.metrics.insert(String::from("index_bytes_copied_per_op"), index_bytes_copied as f64 / total_ops as f64);
+    case.metrics.insert(String::from("retained_chunk_bytes"), retained_bytes as f64);
+    case.metrics.insert(String::from("flat_fallback_uses"), 0.0);
     case
 }
 

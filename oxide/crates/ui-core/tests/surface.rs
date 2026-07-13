@@ -916,3 +916,186 @@ fn surface_router_transition_triggers_scatter() {
     router.surface(idx_b).unwrap().route_pointer(60.0, 60.0, |id, _| hit_after = Some(id));
     assert_eq!(hit_after, Some(node_b));
 }
+
+#[test]
+fn retained_render_chunk_reuses_without_geometry_copy_and_matches_flat_output()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      size: Size2D { w: Dim::Px(120.0), h: Dim::Px(120.0) },
+      background: gfx::Color::rgba(0.2, 0.3, 0.4, 1.0),
+      ..NodeStyle::default()
+   });
+   let root = surface.root();
+   let leaf = surface.tree_mut().add_node(root, NodeStyle {
+      size: Size2D { w: Dim::Px(40.0), h: Dim::Px(30.0) },
+      background: gfx::Color::rgba(0.8, 0.2, 0.1, 1.0),
+      ..NodeStyle::default()
+   });
+   surface.layout(120.0, 120.0);
+
+   let first = surface.render_chunk_retained(gfx::RenderChunkId(11)).unwrap();
+   assert_eq!(first.stats.status, RetainedDrawStatus::Rebuilt);
+   assert_eq!(first.stats.chunks_rebuilt, 1);
+   let first_chunk = first.instance.chunk.clone();
+   let first_revisions = first_chunk.revisions();
+
+   let clean = surface.render_chunk_retained(gfx::RenderChunkId(11)).unwrap();
+   assert_eq!(clean.stats.status, RetainedDrawStatus::Reused);
+   assert_eq!(clean.stats.chunks_reused, 1);
+   assert_eq!(clean.stats.command_bytes_copied, 0);
+   assert_eq!(clean.stats.vertex_bytes_copied, 0);
+   assert_eq!(clean.stats.index_bytes_copied, 0);
+   assert!(first_chunk.ptr_eq(&clean.instance.chunk));
+
+   surface.edit_style(leaf, |style| {
+      style.background = gfx::Color::rgba(0.1, 0.7, 0.3, 1.0);
+   });
+   let dirty = surface.render_chunk_retained(gfx::RenderChunkId(11)).unwrap();
+   assert_eq!(dirty.stats.status, RetainedDrawStatus::Rebuilt);
+   assert_eq!(dirty.stats.chunks_rebuilt, 1);
+   assert!(!first_chunk.ptr_eq(&dirty.instance.chunk));
+   assert_eq!(dirty.instance.chunk.revisions().structural, first_revisions.structural);
+   assert_eq!(dirty.instance.chunk.revisions().geometry, first_revisions.geometry);
+   assert_eq!(dirty.instance.chunk.revisions().resource, first_revisions.resource);
+   assert_eq!(
+      dirty.instance.chunk.revisions().dynamic_properties,
+      first_revisions.dynamic_properties + 1,
+   );
+   assert_eq!(dirty.stats.vertex_bytes_copied, 0);
+   assert_eq!(dirty.stats.index_bytes_copied, 0);
+
+   let snapshot = gfx::RenderSnapshot::new(
+      vec![dirty.instance],
+      Vec::new(),
+      gfx::Damage { rects: Vec::new() },
+   ).unwrap();
+   let mut compatibility = DrawListBuilder::new();
+   let fallback = compatibility.append_render_snapshot_flat(&snapshot).unwrap();
+   let mut direct = DrawListBuilder::new();
+   surface.encode(&mut direct);
+   assert_eq!(compatibility.drawlist(), direct.drawlist());
+   assert_eq!(fallback.fallback_count, 1);
+   assert_eq!(fallback.commands_copied, (direct.drawlist().items.len() * 2) as u64);
+}
+
+#[test]
+fn mixed_surface_snapshot_invalidates_only_dependent_chunks()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      size: Size2D { w: Dim::Px(80.0), h: Dim::Px(80.0) },
+      background: gfx::Color::rgba(0.2, 0.3, 0.4, 1.0),
+      ..NodeStyle::default()
+   });
+   let root = surface.root();
+   surface.layout(80.0, 80.0);
+
+   let image_list = gfx::DrawList {
+      items: vec![gfx::DrawCmd::Image {
+         tex: gfx::ImageHandle(7),
+         dst: gfx::RectF::new(4.0, 4.0, 24.0, 24.0),
+         src: gfx::RectF::new(0.0, 0.0, 1.0, 1.0),
+         alpha: 1.0,
+      }],
+      vertices: Vec::new(),
+      indices: Vec::new(),
+   };
+   let image_chunk = gfx::RenderChunk::new(
+      gfx::RenderChunkId(22),
+      gfx::RenderChunkRevisions { resource: 1, ..gfx::RenderChunkRevisions::default() },
+      image_list,
+      gfx::ChunkIndexMode::Local,
+      &[gfx::RenderResourceDependency { image: gfx::ImageHandle(7), generation: 3 }],
+   ).unwrap();
+   let expected_image = image_chunk.draw_list().clone();
+   let glyph_list = gfx::DrawList {
+      items: vec![gfx::DrawCmd::GlyphRun { run: gfx::GlyphRun {
+         atlas: gfx::ImageHandle(8),
+         atlas_revision: 5,
+         vb: gfx::VertexSpan { offset: 0, len: 4 },
+         ib: gfx::IndexSpan { offset: 0, len: 6 },
+         sdf: false,
+         color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
+      }}],
+      vertices: vec![
+         gfx::Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: 0 },
+         gfx::Vertex { x: 12.0, y: 0.0, u: 1.0, v: 0.0, rgba: 0 },
+         gfx::Vertex { x: 12.0, y: 16.0, u: 1.0, v: 1.0, rgba: 0 },
+         gfx::Vertex { x: 0.0, y: 16.0, u: 0.0, v: 1.0, rgba: 0 },
+      ],
+      indices: vec![0, 1, 2, 0, 2, 3],
+   };
+   let glyph_chunk = gfx::RenderChunk::new(
+      gfx::RenderChunkId(23),
+      gfx::RenderChunkRevisions { resource: 1, ..gfx::RenderChunkRevisions::default() },
+      glyph_list,
+      gfx::ChunkIndexMode::Local,
+      &[],
+   ).unwrap();
+   let expected_glyph = glyph_chunk.draw_list().clone();
+   let image_identity = image_chunk.clone();
+   let glyph_identity = glyph_chunk.clone();
+   let content = vec![
+      gfx::RenderChunkInstance::new(image_chunk, [0.0, 0.0]),
+      gfx::RenderChunkInstance::new(glyph_chunk, [0.0, 0.0]),
+   ];
+   let rendered = surface.render_snapshot_retained(
+      gfx::RenderChunkId(21),
+      &content,
+      Vec::new(),
+      gfx::Damage { rects: vec![gfx::RectI::new(0, 0, 80, 80)] },
+   ).unwrap();
+   let snapshot = rendered.snapshot;
+   assert_eq!(rendered.stats.status, RetainedDrawStatus::Rebuilt);
+   assert_eq!(
+      snapshot.instances().iter().map(|instance| instance.chunk.id()).collect::<Vec<_>>(),
+      vec![gfx::RenderChunkId(21), gfx::RenderChunkId(22), gfx::RenderChunkId(23)],
+   );
+   assert_eq!(snapshot.damage().rects, vec![gfx::RectI::new(0, 0, 80, 80)]);
+   assert_eq!(
+      snapshot.incompatible_chunk_ids(&[
+         gfx::RenderResourceDependency { image: gfx::ImageHandle(7), generation: 4 },
+         gfx::RenderResourceDependency { image: gfx::ImageHandle(8), generation: 5 },
+      ]),
+      vec![gfx::RenderChunkId(22)],
+   );
+
+   let mut compatibility = DrawListBuilder::new();
+   let fallback = compatibility.append_render_snapshot_flat(&snapshot).unwrap();
+   let mut expected = DrawListBuilder::new();
+   surface.encode(&mut expected);
+   assert!(expected.append_drawlist(&expected_image));
+   assert!(expected.append_drawlist(&expected_glyph));
+   assert_eq!(compatibility.drawlist(), expected.drawlist());
+   assert_eq!(fallback.fallback_count, 1);
+   assert_eq!(fallback.chunks_flattened, 3);
+   assert_eq!(fallback.commands_copied, (expected.drawlist().items.len() * 2) as u64);
+
+   let surface_identity = snapshot.instances()[0].chunk.clone();
+   let clean = surface.render_snapshot_retained(
+      gfx::RenderChunkId(21),
+      &content,
+      Vec::new(),
+      gfx::Damage { rects: Vec::new() },
+   ).unwrap();
+   assert_eq!(clean.stats.status, RetainedDrawStatus::Reused);
+   assert_eq!(clean.stats.command_bytes_copied, 0);
+   assert_eq!(clean.stats.vertex_bytes_copied, 0);
+   assert_eq!(clean.stats.index_bytes_copied, 0);
+   assert!(surface_identity.ptr_eq(&clean.snapshot.instances()[0].chunk));
+   assert!(image_identity.ptr_eq(&clean.snapshot.instances()[1].chunk));
+   assert!(glyph_identity.ptr_eq(&clean.snapshot.instances()[2].chunk));
+
+   surface.edit_style(root, |style| {
+      style.background = gfx::Color::rgba(0.8, 0.1, 0.2, 1.0);
+   });
+   let dirty = surface.render_snapshot_retained(
+      gfx::RenderChunkId(21),
+      &content,
+      Vec::new(),
+      gfx::Damage { rects: Vec::new() },
+   ).unwrap();
+   assert_eq!(dirty.stats.status, RetainedDrawStatus::Rebuilt);
+   assert!(!surface_identity.ptr_eq(&dirty.snapshot.instances()[0].chunk));
+   assert!(image_identity.ptr_eq(&dirty.snapshot.instances()[1].chunk));
+   assert!(glyph_identity.ptr_eq(&dirty.snapshot.instances()[2].chunk));
+}

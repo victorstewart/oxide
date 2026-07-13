@@ -4,7 +4,7 @@ struct RetainedScenario
 {
    surface: ui::UiSurface,
    leaf: ui::NodeId,
-   builder: ui::DrawListBuilder,
+   mixed_instances: Vec<api::RenderChunkInstance>,
    dirty: bool,
    phase: usize,
 }
@@ -395,37 +395,57 @@ where
 fn retained_tree_case(id: &str, smoke: bool, depth: usize, dirty: bool) -> PerfCaseResult
 {
    let mut scenario = build_retained_scenario(depth, dirty);
+   let (_, probe) = run_retained_scenario(&mut scenario);
+   let mixed_retained_bytes = scenario.mixed_instances.iter()
+      .map(|instance| instance.chunk.byte_size())
+      .sum::<u64>();
    let mut case = measured_architecture_case(
       id,
       smoke,
-      "Versioned UiSurface tree with 1000 label-shaped nodes, 500 image-shaped nodes, retained clean replay, and one-leaf mutation coverage.",
-      move || {
-         if scenario.dirty
-         {
-            scenario.phase = scenario.phase.wrapping_add(1);
-            let phase = (scenario.phase % 97) as f32 / 97.0;
-            scenario.surface.edit_style(scenario.leaf, |style| {
-               style.opacity = 0.55 + phase * 0.40;
-            });
-            scenario.surface.layout(1_200.0, 2_400.0);
-         }
-         scenario.builder.clear();
-         let status = scenario.surface.encode_retained(&mut scenario.builder);
-         let stats = scenario.surface.retained_node_stats();
-         let draws = scenario.builder.drawlist();
-         (draws.items.len() as u64)
-            .wrapping_add(draws.vertices.len() as u64)
-            .wrapping_add(draws.indices.len() as u64)
-            .wrapping_add(stats.reused_nodes as u64)
-            .wrapping_add(match status { ui::RetainedDrawStatus::Reused => 1, ui::RetainedDrawStatus::Rebuilt => 2 })
-      },
+      "Versioned UiSurface tree composed with immutable glyph and image chunks; clean frames copy zero geometry and a dirty leaf rebuilds one surface chunk without ancestor reflattening.",
+      move || run_retained_scenario(&mut scenario).0,
    );
    case.metrics.insert(String::from("tree_depth"), depth as f64);
    case.metrics.insert(String::from("label_nodes"), 1_000.0);
    case.metrics.insert(String::from("image_nodes"), 500.0);
    case.metrics.insert(String::from("dirty_nodes"), if dirty { 1.0 } else { 0.0 });
    case.metrics.insert(String::from("layout_passes_expected"), if dirty { 1.0 } else { 0.0 });
+   case.metrics.insert(String::from("chunks_reused"), probe.chunks_reused as f64);
+   case.metrics.insert(String::from("chunks_rebuilt"), probe.chunks_rebuilt as f64);
+   case.metrics.insert(String::from("commands_copied"), (probe.command_bytes_copied as usize / core::mem::size_of::<api::DrawCmd>()) as f64);
+   case.metrics.insert(String::from("command_bytes_copied"), probe.command_bytes_copied as f64);
+   case.metrics.insert(String::from("vertex_bytes_copied"), probe.vertex_bytes_copied as f64);
+   case.metrics.insert(String::from("index_bytes_copied"), probe.index_bytes_copied as f64);
+   case.metrics.insert(String::from("retained_chunk_bytes"), probe.retained_bytes.saturating_add(mixed_retained_bytes) as f64);
+   case.metrics.insert(String::from("flat_fallback_uses"), 0.0);
    case
+}
+
+fn run_retained_scenario(scenario: &mut RetainedScenario) -> (u64, ui::SurfaceRenderChunkStats)
+{
+   if scenario.dirty
+   {
+      scenario.phase = scenario.phase.wrapping_add(1);
+      let phase = (scenario.phase % 97) as f32 / 97.0;
+      scenario.surface.edit_style(scenario.leaf, |style| {
+         style.opacity = 0.55 + phase * 0.40;
+      });
+      scenario.surface.layout(1_200.0, 2_400.0);
+   }
+   let rendered = scenario.surface.render_snapshot_retained(
+      api::RenderChunkId(1),
+      &scenario.mixed_instances,
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("valid retained mixed snapshot");
+   let checksum = rendered.snapshot.instances().iter().fold(0_u64, |sum, instance| {
+      let draws = instance.chunk.draw_list();
+      sum.wrapping_add(instance.chunk.id().0)
+         .wrapping_add(draws.items.len() as u64)
+         .wrapping_add(draws.vertices.len() as u64)
+         .wrapping_add(draws.indices.len() as u64)
+   });
+   (checksum, rendered.stats)
 }
 
 fn build_retained_scenario(depth: usize, dirty: bool) -> RetainedScenario
@@ -457,9 +477,52 @@ fn build_retained_scenario(depth: usize, dirty: bool) -> RetainedScenario
       });
    }
    surface.layout(1_200.0, 2_400.0);
-   let mut builder = ui::DrawListBuilder::new();
-   let _ = surface.encode_retained(&mut builder);
-   RetainedScenario { surface, leaf, builder, dirty, phase: 0 }
+   let mixed_instances = retained_mixed_instances();
+   let _ = surface.render_chunk_retained(api::RenderChunkId(1));
+   RetainedScenario { surface, leaf, mixed_instances, dirty, phase: 0 }
+}
+
+fn retained_mixed_instances() -> Vec<api::RenderChunkInstance>
+{
+   let mut text = authoring_text_replay_drawlist();
+   let glyph = text.items[0].clone();
+   for _ in 2..200
+   {
+      text.items.push(glyph.clone());
+   }
+   let text_chunk = api::RenderChunk::new(
+      api::RenderChunkId(2),
+      api::RenderChunkRevisions { resource: 1, ..api::RenderChunkRevisions::default() },
+      text,
+      api::ChunkIndexMode::Local,
+      &[],
+   ).expect("valid retained text chunk");
+   let mut images = api::DrawList::default();
+   for index in 0..100
+   {
+      images.items.push(api::DrawCmd::Image {
+         tex: api::ImageHandle((index % 8 + 20) as u32),
+         dst: api::RectF::new((index % 20) as f32 * 24.0, (index / 20) as f32 * 24.0, 20.0, 20.0),
+         src: api::RectF::new(0.0, 0.0, 1.0, 1.0),
+         alpha: 1.0,
+      });
+   }
+   let image_dependencies = (20..28).map(|handle| api::RenderResourceDependency {
+      image: api::ImageHandle(handle),
+      generation: 1,
+   }).collect::<Vec<_>>();
+   let image_chunk = api::RenderChunk::new(
+      api::RenderChunkId(3),
+      api::RenderChunkRevisions { resource: 1, ..api::RenderChunkRevisions::default() },
+      images,
+      api::ChunkIndexMode::Local,
+      &image_dependencies,
+   ).expect("valid retained image chunk");
+   let mixed_instances = vec![
+      api::RenderChunkInstance::new(text_chunk, [0.0, 0.0]),
+      api::RenderChunkInstance::new(image_chunk, [0.0, 0.0]),
+   ];
+   mixed_instances
 }
 
 fn animation_surface_case(smoke: bool) -> PerfCaseResult
@@ -509,20 +572,7 @@ fn animation_surface_case(smoke: bool) -> PerfCaseResult
    }
    let start = timing::now_ms();
    let mut frame = 0_u64;
-   let mut builder = ui::DrawListBuilder::new();
-   let mut retained_content = authoring_text_replay_drawlist();
-   let glyph = retained_content.items[0].clone();
-   for _ in 2..200 { retained_content.items.push(glyph.clone()); }
-   for index in 0..100
-   {
-      retained_content.items.push(api::DrawCmd::Image {
-         tex: api::ImageHandle((index % 8 + 20) as u32),
-         dst: api::RectF::new((index % 20) as f32 * 24.0, (index / 20) as f32 * 24.0, 20.0, 20.0),
-         src: api::RectF::new(0.0, 0.0, 1.0, 1.0),
-         alpha: 1.0,
-      });
-   }
-   let atlases = [(api::ImageHandle(4), 3), (api::ImageHandle(9), 7)];
+   let mixed_instances = retained_mixed_instances();
    let mut case = measured_architecture_case(
       "cpu.architecture.animation.surface_300",
       smoke,
@@ -531,11 +581,16 @@ fn animation_surface_case(smoke: bool) -> PerfCaseResult
          frame = frame.wrapping_add(1);
          *surface.overrides_mut() = animator.step(start.saturating_add(frame * 8));
          let _ = surface.mark_node_dirty(nodes[frame as usize % nodes.len()], ui::DirtyClass::Accessibility);
-         builder.clear();
-         let _ = surface.encode_retained(&mut builder);
-         let _ = builder.append_retained_drawlist_with_text_atlas_revisions(&retained_content, &atlases);
+         let rendered = surface.render_snapshot_retained(
+            api::RenderChunkId(10),
+            &mixed_instances,
+            Vec::new(),
+            api::Damage { rects: Vec::new() },
+         ).expect("valid animated mixed snapshot");
          let hit = surface.hit_test((frame % 800) as f32, (frame % 700) as f32).is_some() as u64;
-         builder.drawlist().items.len() as u64 + surface.overrides().len() as u64 + hit
+         rendered.snapshot.instances().iter().map(|instance| instance.chunk.draw_list().items.len() as u64).sum::<u64>()
+            + surface.overrides().len() as u64
+            + hit
       },
    );
    case.metrics.insert(String::from("animated_nodes"), 300.0);

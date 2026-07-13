@@ -2,7 +2,7 @@ use oxide_renderer_api::{
     self as gfx, Color, DrawCmd, DrawList, GlyphRun, ImageHandle, IndexSpan, Insets, RectF, RectI,
     Vertex, VertexSpan, VisualEffect,
 };
-use oxide_ui_core::draw_replay::replay_drawlist;
+use oxide_ui_core::draw_replay::{replay_drawlist, replay_render_chunk};
 
 #[derive(Default)]
 struct RecordingEncoder {
@@ -267,6 +267,44 @@ fn replay_skips_invalid_solid_vertex_span() {
 
     assert!(encoder.solids.is_empty());
     assert_eq!(encoder.clips, vec![RectI::new(0, 0, 10, 10)]);
+}
+
+#[test]
+fn retained_chunk_replay_uses_canonical_local_indices()
+{
+   let mut list = DrawList::default();
+   list.vertices.extend_from_slice(&[
+      Vertex { x: -2.0, y: -2.0, u: 0.0, v: 0.0, rgba: 0 },
+      Vertex { x: -1.0, y: -2.0, u: 0.0, v: 0.0, rgba: 0 },
+      Vertex { x: -1.0, y: -1.0, u: 0.0, v: 0.0, rgba: 0 },
+      Vertex { x: -2.0, y: -1.0, u: 0.0, v: 0.0, rgba: 0 },
+      Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: 0 },
+      Vertex { x: 2.0, y: 0.0, u: 1.0, v: 0.0, rgba: 0 },
+      Vertex { x: 2.0, y: 2.0, u: 1.0, v: 1.0, rgba: 0 },
+      Vertex { x: 0.0, y: 2.0, u: 0.0, v: 1.0, rgba: 0 },
+   ]);
+   list.indices.extend_from_slice(&[4, 5, 6, 4, 6, 7]);
+   list.items.push(DrawCmd::ImageMesh {
+      tex: ImageHandle(44),
+      vb: VertexSpan { offset: 4, len: 4 },
+      ib: IndexSpan { offset: 0, len: 6 },
+      alpha: 1.0,
+   });
+   let chunk = gfx::RenderChunk::new(
+      gfx::RenderChunkId(1),
+      gfx::RenderChunkRevisions::default(),
+      list,
+      gfx::ChunkIndexMode::Absolute,
+      &[gfx::RenderResourceDependency { image: ImageHandle(44), generation: 9 }],
+   ).unwrap();
+   assert_eq!(chunk.draw_list().indices, [0, 1, 2, 0, 2, 3]);
+
+   let mut encoder = RecordingEncoder::default();
+   replay_render_chunk(&chunk, &mut encoder, RectI::new(0, 0, 20, 20), [3.0, 4.0]);
+   assert_eq!(encoder.image_meshes.len(), 1);
+   assert_eq!(encoder.image_meshes[0].2, [0, 1, 2, 0, 2, 3]);
+   assert_eq!(encoder.image_meshes[0].1[0].x, 3.0);
+   assert_eq!(encoder.image_meshes[0].1[0].y, 4.0);
 }
 
 #[test]

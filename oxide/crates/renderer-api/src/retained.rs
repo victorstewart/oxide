@@ -1,0 +1,816 @@
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::fmt;
+use core::mem;
+
+use super::{
+   Color, Damage, DrawCmd, DrawList, GlyphRun, ImageHandle, IndexSpan, RectF, RectI, Vertex,
+   VertexSpan, VisualEffect,
+};
+
+/// Stable caller-owned identity for one independently retained render unit.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RenderChunkId(pub u64);
+
+/// Independent change domains for one retained chunk.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RenderChunkRevisions
+{
+   pub structural: u64,
+   pub geometry: u64,
+   pub resource: u64,
+   pub dynamic_properties: u64,
+}
+
+/// Declares how every index in the source draw list addresses its command's vertex span.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChunkIndexMode
+{
+   Local,
+   Absolute,
+}
+
+/// Resource generation captured when a chunk was built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RenderResourceDependency
+{
+   pub image: ImageHandle,
+   pub generation: u64,
+}
+
+/// Ordering facts proven while the chunk is created.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RenderChunkOrdering
+{
+   pub max_clip_depth: u32,
+   pub max_layer_depth: u32,
+   pub has_clip: bool,
+   pub has_layer: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderChunkError
+{
+   VertexSpanOutOfBounds { command: usize },
+   IndexSpanOutOfBounds { command: usize },
+   IndexOutsideVertexSpan { command: usize, index: u16 },
+   ClipUnderflow { command: usize },
+   LayerUnderflow { command: usize },
+   OrderingMismatch { command: usize },
+   UnbalancedClipStack,
+   UnbalancedLayerStack,
+   MissingResourceGeneration(ImageHandle),
+   ConflictingResourceGeneration(ImageHandle),
+   UnusedResourceGeneration(ImageHandle),
+   GeometryTooLarge,
+}
+
+impl fmt::Display for RenderChunkError
+{
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
+   {
+      match self {
+         Self::VertexSpanOutOfBounds { command } => write!(f, "vertex span is out of bounds at command {command}"),
+         Self::IndexSpanOutOfBounds { command } => write!(f, "index span is out of bounds at command {command}"),
+         Self::IndexOutsideVertexSpan { command, index } => write!(f, "index {index} is outside the vertex span at command {command}"),
+         Self::ClipUnderflow { command } => write!(f, "clip stack underflow at command {command}"),
+         Self::LayerUnderflow { command } => write!(f, "layer stack underflow at command {command}"),
+         Self::OrderingMismatch { command } => write!(f, "clip and layer scopes cross at command {command}"),
+         Self::UnbalancedClipStack => write!(f, "unbalanced clip stack"),
+         Self::UnbalancedLayerStack => write!(f, "unbalanced layer stack"),
+         Self::MissingResourceGeneration(image) => write!(f, "missing generation for image {}", image.0),
+         Self::ConflictingResourceGeneration(image) => write!(f, "conflicting generations for image {}", image.0),
+         Self::UnusedResourceGeneration(image) => write!(f, "unused generation for image {}", image.0),
+         Self::GeometryTooLarge => write!(f, "chunk geometry exceeds renderer span limits"),
+      }
+   }
+}
+
+impl std::error::Error for RenderChunkError {}
+
+#[derive(Debug)]
+struct RenderChunkData
+{
+   id: RenderChunkId,
+   revisions: RenderChunkRevisions,
+   list: DrawList,
+   bounds: Option<RectF>,
+   resources: Arc<[RenderResourceDependency]>,
+   ordering: RenderChunkOrdering,
+   byte_size: u64,
+}
+
+/// Immutable packed commands and canonical local indices for one retained render unit.
+#[derive(Debug, Clone)]
+pub struct RenderChunk
+{
+   inner: Arc<RenderChunkData>,
+}
+
+impl RenderChunk
+{
+   pub fn new(id: RenderChunkId, revisions: RenderChunkRevisions, source: DrawList, index_mode: ChunkIndexMode, resource_dependencies: &[RenderResourceDependency]) -> Result<Self, RenderChunkError>
+   {
+      let (list, ordering) = canonicalize_draw_list(&source, index_mode)?;
+      let resources = validate_resource_dependencies(&list, resource_dependencies)?;
+      let bounds = draw_list_bounds(&list);
+      let byte_size = retained_byte_size(&list, resources.len())?;
+      Ok(Self {
+         inner: Arc::new(RenderChunkData {
+            id,
+            revisions,
+            list,
+            bounds,
+            resources: resources.into(),
+            ordering,
+            byte_size,
+         }),
+      })
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn id(&self) -> RenderChunkId
+   {
+      self.inner.id
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn revisions(&self) -> RenderChunkRevisions
+   {
+      self.inner.revisions
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn draw_list(&self) -> &DrawList
+   {
+      &self.inner.list
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn bounds(&self) -> Option<RectF>
+   {
+      self.inner.bounds
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn resource_dependencies(&self) -> &[RenderResourceDependency]
+   {
+      &self.inner.resources
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn ordering(&self) -> RenderChunkOrdering
+   {
+      self.inner.ordering
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn byte_size(&self) -> u64
+   {
+      self.inner.byte_size
+   }
+
+   #[must_use]
+   pub fn resources_compatible(&self, resources: &[(ImageHandle, u64)]) -> bool
+   {
+      self.inner.resources.iter().all(|dependency| {
+         resources.iter().any(|(image, generation)| {
+            *image == dependency.image && *generation == dependency.generation
+         })
+      })
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn ptr_eq(&self, other: &Self) -> bool
+   {
+      Arc::ptr_eq(&self.inner, &other.inner)
+   }
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RenderPropertySlotId(pub u32);
+
+/// Dynamic data referenced by chunk instances without modifying immutable commands.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RenderPropertyValue
+{
+   /// Column-major 2D affine transform: `[m11, m12, m21, m22, tx, ty]`.
+   Transform([f32; 6]),
+   Opacity(f32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RenderPropertySlot
+{
+   pub id: RenderPropertySlotId,
+   pub revision: u64,
+   pub value: RenderPropertyValue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RenderLayerInstance
+{
+   pub id: u32,
+   pub rect: RectF,
+   pub dirty: bool,
+}
+
+/// One ordered use of an immutable chunk in a render snapshot.
+#[derive(Debug, Clone)]
+pub struct RenderChunkInstance
+{
+   pub chunk: RenderChunk,
+   pub origin: [f32; 2],
+   pub property_slots: Arc<[RenderPropertySlotId]>,
+   pub clip: Option<RectI>,
+   pub layer: Option<RenderLayerInstance>,
+}
+
+impl RenderChunkInstance
+{
+   #[must_use]
+   pub fn new(chunk: RenderChunk, origin: [f32; 2]) -> Self
+   {
+      Self { chunk, origin, property_slots: Arc::from([]), clip: None, layer: None }
+   }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderSnapshotError
+{
+   DuplicatePropertySlot(RenderPropertySlotId),
+   MissingPropertySlot(RenderPropertySlotId),
+   NonFiniteProperty(RenderPropertySlotId),
+   InvalidOpacity(RenderPropertySlotId),
+   NonFiniteOrigin(RenderChunkId),
+   UnsupportedFlatTransform(RenderPropertySlotId),
+   GeometryTooLarge,
+}
+
+impl fmt::Display for RenderSnapshotError
+{
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
+   {
+      match self {
+         Self::DuplicatePropertySlot(id) => write!(f, "duplicate render property slot {}", id.0),
+         Self::MissingPropertySlot(id) => write!(f, "missing render property slot {}", id.0),
+         Self::NonFiniteProperty(id) => write!(f, "non-finite render property slot {}", id.0),
+         Self::InvalidOpacity(id) => write!(f, "opacity slot {} is outside 0...1", id.0),
+         Self::NonFiniteOrigin(id) => write!(f, "chunk {} has a non-finite origin", id.0),
+         Self::UnsupportedFlatTransform(id) => write!(f, "flat fallback cannot preserve transform slot {}", id.0),
+         Self::GeometryTooLarge => write!(f, "flattened snapshot exceeds renderer span limits"),
+      }
+   }
+}
+
+impl std::error::Error for RenderSnapshotError {}
+
+#[derive(Debug)]
+struct RenderSnapshotData
+{
+   instances: Arc<[RenderChunkInstance]>,
+   properties: Arc<[RenderPropertySlot]>,
+   damage: Damage,
+}
+
+/// Ordered immutable chunk references plus frame-local property and damage metadata.
+#[derive(Debug, Clone)]
+pub struct RenderSnapshot
+{
+   inner: Arc<RenderSnapshotData>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RenderFallbackStats
+{
+   pub fallback_count: u64,
+   pub chunks_flattened: u64,
+   pub commands_copied: u64,
+   pub vertices_copied: u64,
+   pub indices_copied: u64,
+   pub command_bytes_copied: u64,
+   pub vertex_bytes_copied: u64,
+   pub index_bytes_copied: u64,
+}
+
+impl RenderSnapshot
+{
+   pub fn new(instances: Vec<RenderChunkInstance>, mut properties: Vec<RenderPropertySlot>, damage: Damage) -> Result<Self, RenderSnapshotError>
+   {
+      properties.sort_unstable_by_key(|property| property.id.0);
+      validate_properties(&properties)?;
+      for instance in &instances {
+         if !instance.origin.iter().all(|value| value.is_finite()) {
+            return Err(RenderSnapshotError::NonFiniteOrigin(instance.chunk.id()));
+         }
+         for slot in instance.property_slots.iter().copied() {
+            if property(&properties, slot).is_none() {
+               return Err(RenderSnapshotError::MissingPropertySlot(slot));
+            }
+         }
+      }
+      Ok(Self {
+         inner: Arc::new(RenderSnapshotData {
+            instances: instances.into(),
+            properties: properties.into(),
+            damage,
+         }),
+      })
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn instances(&self) -> &[RenderChunkInstance]
+   {
+      &self.inner.instances
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn properties(&self) -> &[RenderPropertySlot]
+   {
+      &self.inner.properties
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn damage(&self) -> &Damage
+   {
+      &self.inner.damage
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn ptr_eq(&self, other: &Self) -> bool
+   {
+      Arc::ptr_eq(&self.inner, &other.inner)
+   }
+
+   pub fn collect_incompatible_chunk_ids(&self, resources: &[(ImageHandle, u64)], out: &mut Vec<RenderChunkId>)
+   {
+      for instance in self.inner.instances.iter() {
+         let id = instance.chunk.id();
+         if !instance.chunk.resources_compatible(resources) && !out.contains(&id) {
+            out.push(id);
+         }
+      }
+   }
+
+   #[must_use]
+   pub fn incompatible_chunk_ids(&self, resources: &[RenderResourceDependency]) -> Vec<RenderChunkId>
+   {
+      let mut ids = Vec::new();
+      for instance in self.inner.instances.iter() {
+         let compatible = instance.chunk.resource_dependencies().iter().all(|required| {
+            resources.iter().any(|available| available == required)
+         });
+         let id = instance.chunk.id();
+         if !compatible && !ids.contains(&id) {
+            ids.push(id);
+         }
+      }
+      ids
+   }
+
+   /// Appends a temporary flat draw list and reports every copied command and geometry byte.
+   /// Non-translation affine properties are rejected because `DrawList` cannot preserve them.
+   pub fn flatten_into(&self, out: &mut DrawList) -> Result<RenderFallbackStats, RenderSnapshotError>
+   {
+      for instance in self.inner.instances.iter() {
+         let _ = flat_instance_properties(instance, &self.inner.properties)?;
+      }
+
+      let mut stats = RenderFallbackStats { fallback_count: 1, ..RenderFallbackStats::default() };
+      for instance in self.inner.instances.iter() {
+         let (translation, opacity) = flat_instance_properties(instance, &self.inner.properties)?;
+         append_flat_instance(instance, translation, opacity, out, &mut stats)?;
+      }
+      Ok(stats)
+   }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Scope
+{
+   Clip,
+   Layer,
+}
+
+fn canonicalize_draw_list(source: &DrawList, index_mode: ChunkIndexMode) -> Result<(DrawList, RenderChunkOrdering), RenderChunkError>
+{
+   let mut list = DrawList {
+      items: Vec::with_capacity(source.items.len()),
+      vertices: Vec::new(),
+      indices: Vec::new(),
+   };
+   let mut scopes = Vec::new();
+   let mut ordering = RenderChunkOrdering::default();
+   let mut clip_depth = 0_u32;
+   let mut layer_depth = 0_u32;
+   for (command, item) in source.items.iter().enumerate() {
+      let canonical = match item {
+         DrawCmd::Solid { vb, ib, color } => {
+            let (vb, ib) = canonical_geometry(source, *vb, *ib, index_mode, command, &mut list)?;
+            DrawCmd::Solid { vb, ib, color: *color }
+         }
+         DrawCmd::ImageMesh { tex, vb, ib, alpha } => {
+            let (vb, ib) = canonical_geometry(source, *vb, *ib, index_mode, command, &mut list)?;
+            DrawCmd::ImageMesh { tex: *tex, vb, ib, alpha: *alpha }
+         }
+         DrawCmd::GlyphRun { run } => {
+            let (vb, ib) = canonical_geometry(source, run.vb, run.ib, index_mode, command, &mut list)?;
+            DrawCmd::GlyphRun { run: GlyphRun { vb, ib, ..*run } }
+         }
+         DrawCmd::ClipPush { rect } => {
+            clip_depth = clip_depth.checked_add(1).ok_or(RenderChunkError::GeometryTooLarge)?;
+            ordering.max_clip_depth = ordering.max_clip_depth.max(clip_depth);
+            ordering.has_clip = true;
+            scopes.push(Scope::Clip);
+            DrawCmd::ClipPush { rect: *rect }
+         }
+         DrawCmd::ClipPop => {
+            if clip_depth == 0 {
+               return Err(RenderChunkError::ClipUnderflow { command });
+            }
+            if scopes.pop() != Some(Scope::Clip) {
+               return Err(RenderChunkError::OrderingMismatch { command });
+            }
+            clip_depth -= 1;
+            DrawCmd::ClipPop
+         }
+         DrawCmd::LayerBegin { id, rect, dirty } => {
+            layer_depth = layer_depth.checked_add(1).ok_or(RenderChunkError::GeometryTooLarge)?;
+            ordering.max_layer_depth = ordering.max_layer_depth.max(layer_depth);
+            ordering.has_layer = true;
+            scopes.push(Scope::Layer);
+            DrawCmd::LayerBegin { id: *id, rect: *rect, dirty: *dirty }
+         }
+         DrawCmd::LayerEnd => {
+            if layer_depth == 0 {
+               return Err(RenderChunkError::LayerUnderflow { command });
+            }
+            if scopes.pop() != Some(Scope::Layer) {
+               return Err(RenderChunkError::OrderingMismatch { command });
+            }
+            layer_depth -= 1;
+            DrawCmd::LayerEnd
+         }
+         _ => item.clone(),
+      };
+      list.items.push(canonical);
+   }
+   if clip_depth != 0 {
+      return Err(RenderChunkError::UnbalancedClipStack);
+   }
+   if layer_depth != 0 {
+      return Err(RenderChunkError::UnbalancedLayerStack);
+   }
+   Ok((list, ordering))
+}
+
+fn canonical_geometry(source: &DrawList, vb: VertexSpan, ib: IndexSpan, index_mode: ChunkIndexMode, command: usize, out: &mut DrawList) -> Result<(VertexSpan, IndexSpan), RenderChunkError>
+{
+   let vertex_start = vb.offset as usize;
+   let vertex_end = vertex_start.checked_add(vb.len as usize).ok_or(RenderChunkError::VertexSpanOutOfBounds { command })?;
+   let vertices = source.vertices.get(vertex_start..vertex_end).ok_or(RenderChunkError::VertexSpanOutOfBounds { command })?;
+   let index_start = ib.offset as usize;
+   let index_end = index_start.checked_add(ib.len as usize).ok_or(RenderChunkError::IndexSpanOutOfBounds { command })?;
+   let indices = source.indices.get(index_start..index_end).ok_or(RenderChunkError::IndexSpanOutOfBounds { command })?;
+   let vertex_offset = u32::try_from(out.vertices.len()).map_err(|_| RenderChunkError::GeometryTooLarge)?;
+   let index_offset = u32::try_from(out.indices.len()).map_err(|_| RenderChunkError::GeometryTooLarge)?;
+   out.vertices.extend_from_slice(vertices);
+   out.indices.reserve(indices.len());
+   let vertex_end = vb.offset.checked_add(vb.len).ok_or(RenderChunkError::VertexSpanOutOfBounds { command })?;
+   for index in indices.iter().copied() {
+      let local = match index_mode {
+         ChunkIndexMode::Local => index as u32,
+         ChunkIndexMode::Absolute => {
+            let absolute = index as u32;
+            if absolute < vb.offset || absolute >= vertex_end {
+               return Err(RenderChunkError::IndexOutsideVertexSpan { command, index });
+            }
+            absolute - vb.offset
+         }
+      };
+      if local >= vb.len || local > u16::MAX as u32 {
+         return Err(RenderChunkError::IndexOutsideVertexSpan { command, index });
+      }
+      out.indices.push(local as u16);
+   }
+   Ok((
+      VertexSpan { offset: vertex_offset, len: vb.len },
+      IndexSpan { offset: index_offset, len: ib.len },
+   ))
+}
+
+fn validate_resource_dependencies(list: &DrawList, supplied: &[RenderResourceDependency]) -> Result<Vec<RenderResourceDependency>, RenderChunkError>
+{
+   let mut supplied_unique = Vec::<RenderResourceDependency>::with_capacity(supplied.len());
+   for dependency in supplied.iter().copied() {
+      if let Some(existing) = supplied_unique.iter().find(|existing| existing.image == dependency.image) {
+         if existing.generation != dependency.generation {
+            return Err(RenderChunkError::ConflictingResourceGeneration(dependency.image));
+         }
+      } else {
+         supplied_unique.push(dependency);
+      }
+   }
+
+   let mut resources = Vec::<RenderResourceDependency>::new();
+   for command in &list.items {
+      let dependency = match command {
+         DrawCmd::Image { tex, .. } | DrawCmd::ImageMesh { tex, .. } | DrawCmd::NineSlice { tex, .. } => {
+            supplied_unique.iter().find(|dependency| dependency.image == *tex).copied().ok_or(RenderChunkError::MissingResourceGeneration(*tex))?
+         }
+         DrawCmd::GlyphRun { run } => RenderResourceDependency { image: run.atlas, generation: run.atlas_revision },
+         _ => continue,
+      };
+      if let Some(existing) = resources.iter().find(|existing| existing.image == dependency.image) {
+         if existing.generation != dependency.generation {
+            return Err(RenderChunkError::ConflictingResourceGeneration(dependency.image));
+         }
+      } else {
+         resources.push(dependency);
+      }
+   }
+   for dependency in supplied_unique {
+      if !resources.iter().any(|used| used == &dependency) {
+         return Err(RenderChunkError::UnusedResourceGeneration(dependency.image));
+      }
+   }
+   resources.sort_unstable_by_key(|dependency| dependency.image.0);
+   Ok(resources)
+}
+
+fn retained_byte_size(list: &DrawList, resources: usize) -> Result<u64, RenderChunkError>
+{
+   let commands = list.items.len().checked_mul(mem::size_of::<DrawCmd>()).ok_or(RenderChunkError::GeometryTooLarge)?;
+   let vertices = list.vertices.len().checked_mul(mem::size_of::<Vertex>()).ok_or(RenderChunkError::GeometryTooLarge)?;
+   let indices = list.indices.len().checked_mul(mem::size_of::<u16>()).ok_or(RenderChunkError::GeometryTooLarge)?;
+   let dependencies = resources.checked_mul(mem::size_of::<RenderResourceDependency>()).ok_or(RenderChunkError::GeometryTooLarge)?;
+   u64::try_from(commands.checked_add(vertices).and_then(|size| size.checked_add(indices)).and_then(|size| size.checked_add(dependencies)).ok_or(RenderChunkError::GeometryTooLarge)?).map_err(|_| RenderChunkError::GeometryTooLarge)
+}
+
+fn draw_list_bounds(list: &DrawList) -> Option<RectF>
+{
+   let mut bounds = None;
+   for command in &list.items {
+      let rect = match command {
+         DrawCmd::Solid { vb, .. } | DrawCmd::ImageMesh { vb, .. } => span_bounds(&list.vertices, *vb),
+         DrawCmd::GlyphRun { run } => span_bounds(&list.vertices, run.vb),
+         DrawCmd::LayerBegin { rect, .. }
+         | DrawCmd::Image { dst: rect, .. }
+         | DrawCmd::RRect { rect, .. }
+         | DrawCmd::NineSlice { rect, .. }
+         | DrawCmd::Backdrop { rect, .. }
+         | DrawCmd::VisualEffect { rect, .. }
+         | DrawCmd::CameraBg { rect, .. } => finite_rect(*rect),
+         DrawCmd::Spinner { center, atom, .. } => finite_rect(RectF::new(center[0] - atom, center[1] - atom, atom * 2.0, atom * 2.0)),
+         DrawCmd::LayerEnd | DrawCmd::ClipPush { .. } | DrawCmd::ClipPop => None,
+      };
+      if let Some(rect) = rect {
+         bounds = Some(union_rect(bounds, rect));
+      }
+   }
+   bounds
+}
+
+fn span_bounds(vertices: &[Vertex], span: VertexSpan) -> Option<RectF>
+{
+   let start = span.offset as usize;
+   let end = start.checked_add(span.len as usize)?;
+   let mut iter = vertices.get(start..end)?.iter().filter(|vertex| vertex.x.is_finite() && vertex.y.is_finite());
+   let first = iter.next()?;
+   let mut x0 = first.x;
+   let mut y0 = first.y;
+   let mut x1 = first.x;
+   let mut y1 = first.y;
+   for vertex in iter {
+      x0 = x0.min(vertex.x);
+      y0 = y0.min(vertex.y);
+      x1 = x1.max(vertex.x);
+      y1 = y1.max(vertex.y);
+   }
+   Some(RectF::new(x0, y0, x1 - x0, y1 - y0))
+}
+
+fn finite_rect(rect: RectF) -> Option<RectF>
+{
+   if ![rect.x, rect.y, rect.w, rect.h].iter().all(|value| value.is_finite()) {
+      return None;
+   }
+   let x1 = rect.x + rect.w;
+   let y1 = rect.y + rect.h;
+   if !x1.is_finite() || !y1.is_finite() {
+      return None;
+   }
+   Some(RectF::new(rect.x.min(x1), rect.y.min(y1), (rect.x - x1).abs(), (rect.y - y1).abs()))
+}
+
+fn union_rect(bounds: Option<RectF>, rect: RectF) -> RectF
+{
+   let Some(bounds) = bounds else {
+      return rect;
+   };
+   let x0 = bounds.x.min(rect.x);
+   let y0 = bounds.y.min(rect.y);
+   let x1 = (bounds.x + bounds.w).max(rect.x + rect.w);
+   let y1 = (bounds.y + bounds.h).max(rect.y + rect.h);
+   RectF::new(x0, y0, x1 - x0, y1 - y0)
+}
+
+fn validate_properties(properties: &[RenderPropertySlot]) -> Result<(), RenderSnapshotError>
+{
+   for pair in properties.windows(2) {
+      if pair[0].id == pair[1].id {
+         return Err(RenderSnapshotError::DuplicatePropertySlot(pair[0].id));
+      }
+   }
+   for property in properties {
+      match property.value {
+         RenderPropertyValue::Transform(transform) if !transform.iter().all(|value| value.is_finite()) => {
+            return Err(RenderSnapshotError::NonFiniteProperty(property.id));
+         }
+         RenderPropertyValue::Opacity(opacity) if !opacity.is_finite() => {
+            return Err(RenderSnapshotError::NonFiniteProperty(property.id));
+         }
+         RenderPropertyValue::Opacity(opacity) if !(0.0..=1.0).contains(&opacity) => {
+            return Err(RenderSnapshotError::InvalidOpacity(property.id));
+         }
+         RenderPropertyValue::Transform(_) | RenderPropertyValue::Opacity(_) => {}
+      }
+   }
+   Ok(())
+}
+
+fn property(properties: &[RenderPropertySlot], id: RenderPropertySlotId) -> Option<&RenderPropertySlot>
+{
+   let index = properties.binary_search_by_key(&id.0, |property| property.id.0).ok()?;
+   properties.get(index)
+}
+
+fn flat_instance_properties(instance: &RenderChunkInstance, properties: &[RenderPropertySlot]) -> Result<([f32; 2], f32), RenderSnapshotError>
+{
+   let mut translation = instance.origin;
+   let mut opacity = 1.0;
+   for id in instance.property_slots.iter().copied() {
+      let property = property(properties, id).ok_or(RenderSnapshotError::MissingPropertySlot(id))?;
+      match property.value {
+         RenderPropertyValue::Transform(transform) => {
+            if transform[0] != 1.0 || transform[1] != 0.0 || transform[2] != 0.0 || transform[3] != 1.0 {
+               return Err(RenderSnapshotError::UnsupportedFlatTransform(id));
+            }
+            translation[0] += transform[4];
+            translation[1] += transform[5];
+         }
+         RenderPropertyValue::Opacity(value) => opacity *= value,
+      }
+   }
+   Ok((translation, opacity))
+}
+
+fn append_flat_instance(instance: &RenderChunkInstance, translation: [f32; 2], opacity: f32, out: &mut DrawList, stats: &mut RenderFallbackStats) -> Result<(), RenderSnapshotError>
+{
+   let list = instance.chunk.draw_list();
+   let vertex_base = u32::try_from(out.vertices.len()).map_err(|_| RenderSnapshotError::GeometryTooLarge)?;
+   let index_base = u32::try_from(out.indices.len()).map_err(|_| RenderSnapshotError::GeometryTooLarge)?;
+   let wrapper_commands = u64::from(instance.layer.is_some()) * 2 + u64::from(instance.clip.is_some()) * 2;
+   out.items.reserve(list.items.len() + wrapper_commands as usize);
+   out.vertices.reserve(list.vertices.len());
+   out.indices.reserve(list.indices.len());
+   if let Some(layer) = instance.layer {
+      out.items.push(DrawCmd::LayerBegin {
+         id: layer.id,
+         rect: translate_rect(layer.rect, translation),
+         dirty: layer.dirty,
+      });
+   }
+   if let Some(clip) = instance.clip {
+      out.items.push(DrawCmd::ClipPush { rect: translate_rect_i(clip, translation) });
+   }
+   for command in &list.items {
+      out.items.push(flat_command(command, vertex_base, index_base, translation, opacity)?);
+   }
+   if instance.clip.is_some() {
+      out.items.push(DrawCmd::ClipPop);
+   }
+   if instance.layer.is_some() {
+      out.items.push(DrawCmd::LayerEnd);
+   }
+   out.vertices.extend(list.vertices.iter().copied().map(|vertex| Vertex {
+      x: vertex.x + translation[0],
+      y: vertex.y + translation[1],
+      rgba: rgba_with_opacity(vertex.rgba, opacity),
+      ..vertex
+   }));
+   out.indices.extend_from_slice(&list.indices);
+
+   let commands = u64::try_from(list.items.len()).map_err(|_| RenderSnapshotError::GeometryTooLarge)? + wrapper_commands;
+   let vertices = u64::try_from(list.vertices.len()).map_err(|_| RenderSnapshotError::GeometryTooLarge)?;
+   let indices = u64::try_from(list.indices.len()).map_err(|_| RenderSnapshotError::GeometryTooLarge)?;
+   stats.chunks_flattened += 1;
+   stats.commands_copied += commands;
+   stats.vertices_copied += vertices;
+   stats.indices_copied += indices;
+   stats.command_bytes_copied += commands * mem::size_of::<DrawCmd>() as u64;
+   stats.vertex_bytes_copied += vertices * mem::size_of::<Vertex>() as u64;
+   stats.index_bytes_copied += indices * mem::size_of::<u16>() as u64;
+   Ok(())
+}
+
+fn flat_command(command: &DrawCmd, vertex_base: u32, index_base: u32, translation: [f32; 2], opacity: f32) -> Result<DrawCmd, RenderSnapshotError>
+{
+   let translated = |rect| translate_rect(rect, translation);
+   let offset_vb = |span: VertexSpan| -> Result<VertexSpan, RenderSnapshotError> {
+      Ok(VertexSpan { offset: span.offset.checked_add(vertex_base).ok_or(RenderSnapshotError::GeometryTooLarge)?, len: span.len })
+   };
+   let offset_ib = |span: IndexSpan| -> Result<IndexSpan, RenderSnapshotError> {
+      Ok(IndexSpan { offset: span.offset.checked_add(index_base).ok_or(RenderSnapshotError::GeometryTooLarge)?, len: span.len })
+   };
+   Ok(match command {
+      DrawCmd::LayerBegin { id, rect, dirty } => DrawCmd::LayerBegin { id: *id, rect: translated(*rect), dirty: *dirty },
+      DrawCmd::LayerEnd => DrawCmd::LayerEnd,
+      DrawCmd::Solid { vb, ib, color } => DrawCmd::Solid { vb: offset_vb(*vb)?, ib: offset_ib(*ib)?, color: color_with_opacity(*color, opacity) },
+      DrawCmd::Image { tex, dst, src, alpha } => DrawCmd::Image { tex: *tex, dst: translated(*dst), src: *src, alpha: alpha * opacity },
+      DrawCmd::ImageMesh { tex, vb, ib, alpha } => DrawCmd::ImageMesh { tex: *tex, vb: offset_vb(*vb)?, ib: offset_ib(*ib)?, alpha: alpha * opacity },
+      DrawCmd::GlyphRun { run } => DrawCmd::GlyphRun { run: GlyphRun { vb: offset_vb(run.vb)?, ib: offset_ib(run.ib)?, color: color_with_opacity(run.color, opacity), ..*run } },
+      DrawCmd::RRect { rect, radii, color } => DrawCmd::RRect { rect: translated(*rect), radii: *radii, color: color_with_opacity(*color, opacity) },
+      DrawCmd::NineSlice { tex, rect, slice, alpha } => DrawCmd::NineSlice { tex: *tex, rect: translated(*rect), slice: *slice, alpha: alpha * opacity },
+      DrawCmd::Backdrop { rect, sigma, tint, alpha } => DrawCmd::Backdrop { rect: translated(*rect), sigma: *sigma, tint: *tint, alpha: alpha * opacity },
+      DrawCmd::VisualEffect { rect, effect } => DrawCmd::VisualEffect { rect: translated(*rect), effect: effect_with_opacity(*effect, opacity) },
+      DrawCmd::CameraBg { rect, tint, alpha, grayscale, blur, sigma } => DrawCmd::CameraBg { rect: translated(*rect), tint: *tint, alpha: alpha * opacity, grayscale: *grayscale, blur: *blur, sigma: *sigma },
+      DrawCmd::Spinner { center, atom, alpha } => DrawCmd::Spinner { center: [center[0] + translation[0], center[1] + translation[1]], atom: *atom, alpha: alpha * opacity },
+      DrawCmd::ClipPush { rect } => DrawCmd::ClipPush { rect: translate_rect_i(*rect, translation) },
+      DrawCmd::ClipPop => DrawCmd::ClipPop,
+   })
+}
+
+#[inline]
+fn translate_rect(rect: RectF, translation: [f32; 2]) -> RectF
+{
+   RectF::new(rect.x + translation[0], rect.y + translation[1], rect.w, rect.h)
+}
+
+fn translate_rect_i(rect: RectI, translation: [f32; 2]) -> RectI
+{
+   let x0 = (rect.x as f32 + translation[0]).floor();
+   let y0 = (rect.y as f32 + translation[1]).floor();
+   let x1 = (rect.x.saturating_add(rect.w) as f32 + translation[0]).ceil();
+   let y1 = (rect.y.saturating_add(rect.h) as f32 + translation[1]).ceil();
+   RectI::new(saturating_i32(x0), saturating_i32(y0), saturating_i32(x1 - x0), saturating_i32(y1 - y0))
+}
+
+#[inline]
+fn saturating_i32(value: f32) -> i32
+{
+   if value <= i32::MIN as f32 {
+      i32::MIN
+   } else if value >= i32::MAX as f32 {
+      i32::MAX
+   } else {
+      value as i32
+   }
+}
+
+#[inline]
+fn color_with_opacity(color: Color, opacity: f32) -> Color
+{
+   Color { a: color.a * opacity, ..color }
+}
+
+#[inline]
+fn rgba_with_opacity(rgba: u32, opacity: f32) -> u32
+{
+   if rgba == 0
+   {
+      return 0;
+   }
+   let alpha = ((rgba >> 24) & 0xff) as f32;
+   let alpha = (alpha * opacity).round().clamp(0.0, 255.0) as u32;
+   (rgba & 0x00ff_ffff) | (alpha << 24)
+}
+
+#[inline]
+fn effect_with_opacity(effect: VisualEffect, opacity: f32) -> VisualEffect
+{
+   match effect {
+      VisualEffect::UIKitDark => VisualEffect::DarkPopup {
+         blur_intensity: 1.0,
+         tint: Color::rgba(0.0, 0.0, 0.0, 0.90 * opacity),
+      },
+      VisualEffect::DarkPopup { blur_intensity, tint } => VisualEffect::DarkPopup {
+         blur_intensity,
+         tint: color_with_opacity(tint, opacity),
+      },
+   }
+}
