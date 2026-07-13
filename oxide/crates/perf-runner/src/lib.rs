@@ -242,6 +242,10 @@ const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
         name: "Surface Retained Text Atlas Context",
     },
     AuthoringPerfSpec {
+        id: "cpu.authoring.surface_retained.cache_policy",
+        name: "Surface Retained Cache Policy",
+    },
+    AuthoringPerfSpec {
         id: "cpu.authoring.drawlist_text_replay.multi_atlas",
         name: "DrawList Text Replay Multi Atlas",
     },
@@ -3322,6 +3326,9 @@ fn push_authoring_cases(
             "cpu.authoring.surface_retained.text_atlas_context" => {
                 authoring_surface_retained_text_atlas_context_case(smoke)
             }
+            "cpu.authoring.surface_retained.cache_policy" => {
+                authoring_surface_retained_cache_policy_case(smoke)
+            }
             "cpu.authoring.drawlist_text_replay.multi_atlas" => {
                 authoring_drawlist_text_replay_multi_atlas_case(smoke)
             }
@@ -5780,6 +5787,62 @@ fn authoring_surface_retained_clean_encode_case(smoke: bool) -> PerfCaseResult {
     case.metrics.insert(String::from("retained_chunk_bytes"), retained_bytes as f64);
     case.metrics.insert(String::from("flat_fallback_uses"), 0.0);
     case
+}
+
+fn authoring_surface_retained_cache_policy_case(smoke: bool) -> PerfCaseResult
+{
+   let loops = if smoke { 16 } else { 64 };
+   let mut surface = ui::UiSurface::new(flat_rect_surface_root_style(420.0));
+   populate_flat_rect_surface(&mut surface, 1_000, 0);
+   surface.layout(420.0, 760.0);
+   let policy = ui::RetainedCachePolicy {
+      cpu_budget_bytes: 1024 * 1024,
+      prepared_gpu_budget_bytes: 2 * 1024 * 1024,
+      ..ui::RetainedCachePolicy::default()
+   };
+   surface.set_retained_cache_policy(policy);
+   let _ = surface.render_snapshot_retained(
+      api::RenderChunkId(109),
+      &[],
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).unwrap();
+   let warm_stats = surface.retained_node_stats();
+   let mut case = measure_cpu_case(
+      "cpu.authoring.surface_retained.cache_policy",
+      "authoring",
+      smoke,
+      true,
+      0.16,
+      loops,
+      vec![String::from(
+         "Author-configured UiSurface retained CPU/GPU byte budgets on a reusable 1,000-node tree; setting an unchanged policy preserves the hot snapshot path.",
+      )],
+      || {
+         surface.set_retained_cache_policy(policy);
+         surface.render_snapshot_retained(
+            api::RenderChunkId(109),
+            &[],
+            Vec::new(),
+            api::Damage { rects: Vec::new() },
+         ).unwrap().snapshot.instance_count()
+      },
+   );
+   let _ = surface.render_snapshot_retained(
+      api::RenderChunkId(109),
+      &[],
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).unwrap();
+   let probe_stats = surface.retained_node_stats();
+   case.metrics.insert(String::from("cpu_budget_bytes"), policy.cpu_budget_bytes as f64);
+   case.metrics.insert(String::from("prepared_gpu_budget_bytes"), policy.prepared_gpu_budget_bytes as f64);
+   case.metrics.insert(String::from("retained_chunk_bytes"), warm_stats.retained_chunk_bytes as f64);
+   case.metrics.insert(String::from("retained_sequence_bytes"), warm_stats.retained_sequence_bytes as f64);
+   case.metrics.insert(String::from("cache_hits"), probe_stats.cache_hits as f64);
+   case.metrics.insert(String::from("cache_misses"), probe_stats.cache_misses as f64);
+   case.metrics.insert(String::from("cache_complete"), f64::from(probe_stats.cache_complete));
+   case
 }
 
 fn authoring_surface_retained_dirty_leaf_encode_case(smoke: bool) -> PerfCaseResult {

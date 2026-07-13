@@ -22,6 +22,15 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
          }
       }
    }
+   for churn in [false, true]
+   {
+      let suffix = if churn { "one_use_churn" } else { "hot_reuse" };
+      let id = format!("cpu.architecture.retained.cache_pressure.{suffix}");
+      if perf_case_allowed(&id)
+      {
+         cases.push(retained_cache_pressure_case(&id, smoke, churn));
+      }
+   }
 
    push_if_allowed(cases, "cpu.architecture.animation.surface_300", || animation_surface_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.warm_labels_1000", || text_warm_labels_case(smoke));
@@ -437,6 +446,103 @@ fn retained_tree_case(id: &str, smoke: bool, depth: usize, dirty: bool) -> PerfC
    case.metrics.insert(String::from("retained_sequence_bytes"), probe.retained_sequence_bytes as f64);
    case.metrics.insert(String::from("flat_fallback_uses"), 0.0);
    case
+}
+
+struct RetainedCachePressureScenario
+{
+   surface: ui::UiSurface,
+   content: Vec<api::RenderChunkSequence>,
+   churn: bool,
+}
+
+fn retained_cache_pressure_case(id: &str, smoke: bool, churn: bool) -> PerfCaseResult
+{
+   let node_count = if smoke { 256 } else { 1_500 };
+   let mut scenario = build_retained_cache_pressure_scenario(node_count, churn);
+   let (_, probe) = run_retained_cache_pressure(&mut scenario);
+   let notes = if churn {
+      "One-use retained churn takes the explicit zero-budget direct rebuild path and retains zero cache bytes."
+   } else {
+      "Large reusable text/image content and a broad node tree remain retained under a working-set-sized hard budget."
+   };
+   let mut case = measured_architecture_case(id, smoke, notes, move || {
+      run_retained_cache_pressure(&mut scenario).0
+   });
+   let accesses = probe.cache_hits.saturating_add(probe.cache_misses);
+   case.metrics.insert(String::from("node_count"), node_count as f64);
+   case.metrics.insert(String::from("cache_hits"), probe.cache_hits as f64);
+   case.metrics.insert(String::from("cache_misses"), probe.cache_misses as f64);
+   case.metrics.insert(
+      String::from("cache_hit_rate"),
+      if accesses == 0 { 0.0 } else { probe.cache_hits as f64 / accesses as f64 },
+   );
+   case.metrics.insert(String::from("cache_admissions"), probe.cache_admissions as f64);
+   case.metrics.insert(String::from("cache_admission_rejections"), probe.cache_admission_rejections as f64);
+   case.metrics.insert(String::from("cache_evictions"), probe.cache_evictions as f64);
+   case.metrics.insert(String::from("cache_evicted_bytes"), probe.cache_evicted_bytes as f64);
+   case.metrics.insert(String::from("cache_build_time_ns"), probe.cache_build_time_ns as f64);
+   case.metrics.insert(String::from("retained_chunk_bytes"), probe.retained_chunk_bytes as f64);
+   case.metrics.insert(String::from("retained_sequence_bytes"), probe.retained_sequence_bytes as f64);
+   case.metrics.insert(String::from("prepared_gpu_bytes"), probe.prepared_gpu_bytes as f64);
+   case.metrics.insert(String::from("flat_fallback_uses"), probe.flat_fallback_uses as f64);
+   case.metrics.insert(String::from("hard_budget_bytes"), scenario_budget(churn) as f64);
+   case.metrics.insert(String::from("cache_complete"), f64::from(probe.cache_complete));
+   case
+}
+
+fn scenario_budget(churn: bool) -> u64
+{
+   if churn { 0 } else { 1024 * 1024 }
+}
+
+fn build_retained_cache_pressure_scenario(node_count: usize, churn: bool) -> RetainedCachePressureScenario
+{
+   let width = node_count as f32 * 20.0 + 16.0;
+   let mut surface = ui::UiSurface::new(ui::NodeStyle {
+      axis: ui::Axis::Row,
+      size: ui::Size2D { w: ui::Dim::Px(width), h: ui::Dim::Px(48.0) },
+      background: api::Color::rgba(0.0, 0.0, 0.0, 0.0),
+      ..ui::NodeStyle::default()
+   });
+   let root = surface.root();
+   for index in 0..node_count
+   {
+      surface.tree_mut().add_node(root, ui::NodeStyle {
+         size: ui::Size2D { w: ui::Dim::Px(18.0), h: ui::Dim::Px(18.0) },
+         background: api::Color::rgba(0.15 + (index % 7) as f32 * 0.03, 0.45, 0.75, 1.0),
+         ..ui::NodeStyle::default()
+      });
+   }
+   surface.layout(width, 48.0);
+   surface.set_retained_cache_policy(ui::RetainedCachePolicy {
+      cpu_budget_bytes: scenario_budget(churn),
+      ..ui::RetainedCachePolicy::default()
+   });
+   let content = retained_mixed_sequences();
+   let mut scenario = RetainedCachePressureScenario { surface, content, churn };
+   let _ = run_retained_cache_pressure(&mut scenario);
+   scenario
+}
+
+fn run_retained_cache_pressure(scenario: &mut RetainedCachePressureScenario) -> (u64, ui::RetainedNodeStats)
+{
+   if scenario.churn
+   {
+      scenario.surface.mark_dirty(ui::DirtyClass::Paint);
+   }
+   let rendered = scenario.surface.render_snapshot_retained(
+      api::RenderChunkId(80),
+      &scenario.content,
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("valid cache-pressure snapshot");
+   let stats = scenario.surface.retained_node_stats();
+   let checksum = rendered.snapshot.instance_count()
+      .wrapping_add(stats.cache_hits)
+      .wrapping_add(stats.cache_misses)
+      .wrapping_add(stats.retained_chunk_bytes)
+      .wrapping_add(stats.retained_sequence_bytes);
+   (checksum, stats)
 }
 
 fn run_retained_scenario(scenario: &mut RetainedScenario) -> (u64, ui::SurfaceRenderChunkStats)
@@ -2290,6 +2396,8 @@ mod tests
       let source = include_str!("architecture_matrix.rs");
       for required in [
          "depth in [16_usize, 32]",
+         "\"hot_reuse\"",
+         "\"one_use_churn\"",
          "surface_300",
          "warm_labels_1000",
          "new_labels_200",

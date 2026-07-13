@@ -3,8 +3,8 @@ use oxide_renderer_api as gfx;
 use oxide_timing as timing;
 use oxide_ui_core::{
     elements::TextCtx, Axis, ChromeMetrics, Dim, DirtyClass, DrawListBuilder, Edges, LayoutRect,
-    NodeId, NodeStyle, OverlayBehavior, OverlayVisual, PopupSpec, RetainedDrawStatus, ScatterSpec,
-    Size2D, SurfaceRouter, UiSurface,
+    NodeId, NodeStyle, OverlayBehavior, OverlayVisual, PopupSpec, RetainedCachePolicy,
+    RetainedDrawStatus, RetainedInvalidationReason, ScatterSpec, Size2D, SurfaceRouter, UiSurface,
 };
 
 #[test]
@@ -995,6 +995,218 @@ fn retained_render_sequence_rebuilds_only_dirty_leaf_and_matches_flat_output()
       namespaced.snapshot.instance(0).unwrap().chunk.id(),
       gfx::RenderChunkId((13_u64 << 32) | u64::from(root.0)),
    );
+}
+
+#[test]
+fn retained_cache_enforces_hard_bytes_and_preserves_exact_output()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      axis: Axis::Row,
+      size: Size2D { w: Dim::Px(640.0), h: Dim::Px(80.0) },
+      ..NodeStyle::default()
+   });
+   let root = surface.root();
+   for index in 0..32
+   {
+      surface.tree_mut().add_node(root, NodeStyle {
+         size: Size2D { w: Dim::Px(18.0), h: Dim::Px(18.0) },
+         background: gfx::Color::rgba(0.1 + index as f32 * 0.01, 0.4, 0.7, 1.0),
+         ..NodeStyle::default()
+      });
+   }
+   surface.layout(640.0, 80.0);
+   let policy = RetainedCachePolicy {
+      cpu_budget_bytes: 512,
+      churn_retry_generations: 4,
+      ..RetainedCachePolicy::default()
+   };
+   surface.set_retained_cache_policy(policy);
+   let rendered = surface.render_snapshot_retained(
+      gfx::RenderChunkId(70),
+      &[],
+      Vec::new(),
+      gfx::Damage { rects: Vec::new() },
+   ).unwrap();
+   let stats = surface.retained_node_stats();
+   assert!(stats.cache_evictions > 0);
+   assert!(!stats.cache_complete);
+   assert_eq!(stats.last_invalidation_reason, RetainedInvalidationReason::Budget);
+   assert!(
+      rendered.stats.retained_bytes.saturating_add(rendered.stats.retained_sequence_bytes)
+         <= policy.cpu_budget_bytes,
+   );
+   assert_eq!(stats.prepared_gpu_bytes, 0);
+
+   let mut retained = DrawListBuilder::new();
+   retained.append_render_snapshot_flat(&rendered.snapshot).unwrap();
+   let mut direct = DrawListBuilder::new();
+   surface.encode(&mut direct);
+   assert_eq!(retained.drawlist(), direct.drawlist());
+}
+
+#[test]
+fn retained_cache_suppresses_churn_then_readmits_stable_nodes()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      size: Size2D { w: Dim::Px(100.0), h: Dim::Px(100.0) },
+      ..NodeStyle::default()
+   });
+   let root = surface.root();
+   let leaf = surface.tree_mut().add_node(root, NodeStyle {
+      size: Size2D { w: Dim::Px(40.0), h: Dim::Px(40.0) },
+      ..NodeStyle::default()
+   });
+   surface.layout(100.0, 100.0);
+   surface.set_retained_cache_policy(RetainedCachePolicy {
+      churn_invalidation_threshold: 2,
+      churn_retry_generations: 4,
+      ..RetainedCachePolicy::default()
+   });
+   let render = |surface: &mut UiSurface| {
+      surface.render_snapshot_retained(
+         gfx::RenderChunkId(71),
+         &[],
+         Vec::new(),
+         gfx::Damage { rects: Vec::new() },
+      ).unwrap()
+   };
+   let _ = render(&mut surface);
+   let mut rejected = false;
+   for phase in 0..3
+   {
+      surface.edit_style(leaf, |style| {
+         style.opacity = 0.6 + phase as f32 * 0.1;
+      });
+      let _ = render(&mut surface);
+      rejected |= surface.retained_node_stats().cache_admission_rejections > 0;
+   }
+   assert!(rejected);
+
+   let mut stable = None;
+   for _ in 0..8
+   {
+      stable = Some(render(&mut surface));
+   }
+   let stable = stable.unwrap();
+   let stable_stats = surface.retained_node_stats();
+   assert!(stable_stats.cache_complete);
+   assert_eq!(stable.stats.chunks_rebuilt, 0);
+   assert!(stable_stats.cache_hits >= 2);
+}
+
+#[test]
+fn retained_cache_lru_protects_hot_root_while_evicting_cold_children()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      axis: Axis::Row,
+      size: Size2D { w: Dim::Px(200.0), h: Dim::Px(60.0) },
+      ..NodeStyle::default()
+   });
+   let root = surface.root();
+   for _ in 0..6
+   {
+      surface.tree_mut().add_node(root, NodeStyle {
+         size: Size2D { w: Dim::Px(24.0), h: Dim::Px(24.0) },
+         ..NodeStyle::default()
+      });
+   }
+   surface.layout(200.0, 60.0);
+   let render = |surface: &mut UiSurface| {
+      surface.render_snapshot_retained(
+         gfx::RenderChunkId(75),
+         &[],
+         Vec::new(),
+         gfx::Damage { rects: Vec::new() },
+      ).unwrap()
+   };
+   let first = render(&mut surface);
+   let root_chunk = first.snapshot.instance(0).unwrap().chunk.clone();
+   let _ = render(&mut surface);
+   let hot = render(&mut surface);
+   let retained = hot.stats.retained_bytes.saturating_add(hot.stats.retained_sequence_bytes);
+   surface.set_retained_cache_policy(RetainedCachePolicy {
+      cpu_budget_bytes: retained / 2,
+      hot_hit_threshold: 2,
+      hot_generation_window: 8,
+      ..RetainedCachePolicy::default()
+   });
+   let pressured = render(&mut surface);
+   assert!(surface.retained_node_stats().cache_evictions > 0);
+   assert!(root_chunk.ptr_eq(&pressured.snapshot.instance(0).unwrap().chunk));
+   assert!(pressured.stats.chunks_rebuilt > 0);
+}
+
+#[test]
+fn retained_cache_budget_never_evicts_caller_owned_text_or_image_chunks()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      size: Size2D { w: Dim::Px(80.0), h: Dim::Px(80.0) },
+      ..NodeStyle::default()
+   });
+   surface.layout(80.0, 80.0);
+   surface.set_retained_cache_policy(RetainedCachePolicy {
+      cpu_budget_bytes: 0,
+      ..RetainedCachePolicy::default()
+   });
+   let text = gfx::RenderChunk::new(
+      gfx::RenderChunkId(72),
+      gfx::RenderChunkRevisions::default(),
+      gfx::DrawList {
+         items: vec![gfx::DrawCmd::RRect {
+            rect: gfx::RectF::new(0.0, 0.0, 12.0, 12.0),
+            radii: [1.0; 4],
+            color: gfx::Color::rgba(0.9, 0.9, 0.9, 1.0),
+         }],
+         vertices: Vec::new(),
+         indices: Vec::new(),
+      },
+      gfx::ChunkIndexMode::Local,
+      &[],
+   ).unwrap();
+   let image = gfx::RenderChunk::new(
+      gfx::RenderChunkId(73),
+      gfx::RenderChunkRevisions::default(),
+      gfx::DrawList {
+         items: vec![gfx::DrawCmd::Image {
+            tex: gfx::ImageHandle(9),
+            dst: gfx::RectF::new(0.0, 0.0, 16.0, 16.0),
+            src: gfx::RectF::new(0.0, 0.0, 1.0, 1.0),
+            alpha: 1.0,
+         }],
+         vertices: Vec::new(),
+         indices: Vec::new(),
+      },
+      gfx::ChunkIndexMode::Local,
+      &[gfx::RenderResourceDependency { image: gfx::ImageHandle(9), generation: 4 }],
+   ).unwrap();
+   let content = vec![
+      gfx::RenderChunkSequence::new(vec![gfx::RenderChunkInstance::new(text.clone(), [0.0, 0.0])]),
+      gfx::RenderChunkSequence::new(vec![gfx::RenderChunkInstance::new(image.clone(), [16.0, 0.0])]),
+   ];
+   let rendered = surface.render_snapshot_retained(
+      gfx::RenderChunkId(74),
+      &content,
+      Vec::new(),
+      gfx::Damage { rects: Vec::new() },
+   ).unwrap();
+   let stats = surface.retained_node_stats();
+   assert_eq!(rendered.stats.retained_bytes, 0);
+   assert_eq!(rendered.stats.retained_sequence_bytes, 0);
+   assert_eq!(stats.flat_fallback_uses, 1);
+   assert!(text.ptr_eq(&rendered.snapshot.instance(1).unwrap().chunk));
+   assert!(image.ptr_eq(&rendered.snapshot.instance(2).unwrap().chunk));
+
+   let mut retained = DrawListBuilder::new();
+   retained.append_render_snapshot_flat(&rendered.snapshot).unwrap();
+   let mut direct = DrawListBuilder::new();
+   surface.encode(&mut direct);
+   let external = gfx::RenderSnapshot::from_sequences(
+      content,
+      Vec::new(),
+      gfx::Damage { rects: Vec::new() },
+   ).unwrap();
+   direct.append_render_snapshot_flat(&external).unwrap();
+   assert_eq!(retained.drawlist(), direct.drawlist());
 }
 
 #[test]

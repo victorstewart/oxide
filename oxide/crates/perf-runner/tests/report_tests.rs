@@ -4075,6 +4075,33 @@ fn filtered_run_suite_supports_dirty_leaf_retained_authoring_case() {
 }
 
 #[test]
+fn filtered_run_suite_supports_retained_cache_policy_authoring_case()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-retained-cache-policy-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.surface_retained.cache_policy")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run filtered retained cache-policy authoring smoke suite");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "filtered suite failed: {stderr}");
+   assert!(stdout.contains("cases=1"), "stdout: {stdout}");
+   let report = std::fs::read_to_string(&json_out).expect("read retained cache-policy report");
+   let row = report_case_slice(&report, "cpu.authoring.surface_retained.cache_policy");
+   assert_eq!(report_f64(row, "cpu_budget_bytes"), 1_048_576.0);
+   assert_eq!(report_f64(row, "prepared_gpu_budget_bytes"), 2_097_152.0);
+   assert_eq!(report_f64(row, "cache_complete"), 1.0);
+   assert!(report_f64(row, "cache_hits") > 0.0);
+   let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
 fn filtered_run_suite_supports_surface_router_retained_overlay_metrics() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-surface-router-compose-{}.json", std::process::id()));
@@ -4748,7 +4775,7 @@ fn filtered_run_suite_supports_rendering_architecture_contract() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env(
             "OXIDE_PERF_RUNNER_FILTER",
-            "cpu.architecture.retained.depth_16.clean,cpu.architecture.animation.surface_300,cpu.architecture.idle.static_foreground",
+            "cpu.architecture.retained.depth_16.clean,cpu.architecture.retained.cache_pressure,cpu.architecture.animation.surface_300,cpu.architecture.idle.static_foreground",
         )
         .arg("--run-suite")
         .arg("--smoke")
@@ -4760,19 +4787,32 @@ fn filtered_run_suite_supports_rendering_architecture_contract() {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(output.status.success(), "filtered suite failed: {stderr}");
-    assert!(stdout.contains("cases=3"), "stdout: {stdout}");
+    assert!(stdout.contains("cases=5"), "stdout: {stdout}");
     assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
     let report = std::fs::read_to_string(&json_out).expect("read rendering architecture report");
     let retained = report_case_slice(&report, "cpu.architecture.retained.depth_16.clean");
+    let hot = report_case_slice(&report, "cpu.architecture.retained.cache_pressure.hot_reuse");
+    let churn = report_case_slice(&report, "cpu.architecture.retained.cache_pressure.one_use_churn");
     let animation = report_case_slice(&report, "cpu.architecture.animation.surface_300");
     let idle = report_case_slice(&report, "cpu.architecture.idle.static_foreground");
-    for row in [retained, animation, idle] {
+    for row in [retained, hot, churn, animation, idle] {
         assert!(row.contains("\"family\": \"architecture\""));
         assert!(row.contains("\"scenario\": \"rendering-architecture\""));
     }
     assert_eq!(report_f64(retained, "tree_depth"), 16.0);
     assert_eq!(report_f64(retained, "label_nodes"), 1_000.0);
     assert_eq!(report_f64(retained, "image_nodes"), 500.0);
+    assert_eq!(report_f64(hot, "cache_hit_rate"), 1.0);
+    assert_eq!(report_f64(hot, "cache_complete"), 1.0);
+    assert!(
+        report_f64(hot, "retained_chunk_bytes")
+            + report_f64(hot, "retained_sequence_bytes")
+            <= report_f64(hot, "hard_budget_bytes"),
+    );
+    assert_eq!(report_f64(churn, "cache_hit_rate"), 0.0);
+    assert_eq!(report_f64(churn, "retained_chunk_bytes"), 0.0);
+    assert_eq!(report_f64(churn, "retained_sequence_bytes"), 0.0);
+    assert_eq!(report_f64(churn, "flat_fallback_uses"), 1.0);
     assert_eq!(report_f64(animation, "animated_nodes"), 300.0);
     assert_eq!(report_f64(animation, "active_animations"), 600.0);
     assert_eq!(report_f64(idle, "submissions"), 0.0);

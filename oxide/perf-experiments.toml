@@ -1,4 +1,63 @@
 [[experiments]]
+id = "c23-retained-rendering-byte-budget"
+introduced_commit = "C23 staged tree recorded in commit proof"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-ui-core", "oxide-renderer-api", "oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Hard CPU budgets must hold after every render and policy change; eviction must invalidate every ancestor sequence that indirectly references an evicted chunk; hot chunks and caller-owned text/image chunks must preserve identity; direct and retained snapshots must flatten to exact output; prepared GPU bytes must remain separately reported and zero until backend preparation lands."
+performance_gate = "Fifteen fresh-process parent/candidate pairs for identical 1,500-node whole-tree churn must improve frame time and every tail while reducing allocations and scoped retained live bytes; the permanent hot-reuse row must retain the full working set with a 100% hit rate, and the zero-budget churn row must retain zero node-cache bytes and use one explicit fallback."
+decision_state = "accepted"
+decision = "Budget retained node chunks and persistent sequence metadata by exact logical bytes, evict through a generation-aware intrusive LRU with hot-entry protection, and use a direct immutable chunk when the configured retained CPU budget is zero."
+proof = [
+   "Pre-final exact-source smoke measured whole-tree churn at approximately 1,172 us/op p50 for the C22 parent and 29.2 us/op for the zero-budget C23 path, with candidate p95/p99 approximately 31.5/31.7 us versus 1,263/1,317 us.",
+   "Identical temporary allocation instrumentation measured 19,511 calls and 11,399,424 allocated bytes per C22 churn operation versus 24 calls and 313,888 bytes for C23; scoped retained live bytes moved from 846,648 to zero.",
+   "The permanent 1,500-node hot row reports cache_hit_rate=1, cache_complete=1, retained chunk/sequence bytes 84,000/183,088 under a 1,048,576-byte hard budget; the churn row reports zero retained bytes, one miss, one flat fallback, and preserves the independent text/image chunk identities.",
+]
+cleanup = [
+   "Removed unbounded implicit retained ownership in favor of configurable CPU and prepared-GPU byte budgets plus explicit cache statistics.",
+   "Kept prepared GPU residency at an accurate zero until C24 owns backend-prepared chunk resources; removed temporary probe source after final evidence collection.",
+]
+
+[[experiments]]
+id = "c23-default-invalidation-streak-suppression-rejected"
+introduced_commit = "rejected during C23"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-ui-core", "oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Admission rejection must not leave an ancestor sequence indirectly retaining a rejected descendant, and direct/retained output must remain exact."
+performance_gate = "Default churn resistance must not regress the established depth-16 or depth-32 dirty-leaf retained workloads while preventing repeated one-use admission."
+decision_state = "rejected"
+decision = "Rejected enabling two-invalidation admission suppression by default because rejecting one dirty descendant also prevents ancestor sequence retention and materially regresses ordinary incremental dirty-leaf rendering."
+proof = [
+   "With a default invalidation threshold of two, depth-16 dirty smoke rose to approximately 20.8 us/op and depth-32 dirty smoke rose to approximately 27.0 us/op, versus approximately 2.7 and 5.6 us/op with suppression disabled.",
+   "The suppression behavior remains available through an explicit policy and passes rejection/readmission tests, while the measured one-use workload selects the zero-byte direct policy without changing the default dirty-leaf path.",
+]
+cleanup = [
+   "Set the default churn_invalidation_threshold to zero and retained explicit opt-in suppression with a bounded retry generation.",
+]
+
+[[experiments]]
+id = "c23-complete-telemetry-in-snapshot-result-rejected"
+introduced_commit = "rejected during C23"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-ui-core", "oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Cache hits, misses, admissions, evictions, retained/prepared bytes, build time, fallback count, completeness, and invalidation reason must remain available without changing retained snapshot output."
+performance_gate = "Complete cache telemetry must not be copied through every hot SurfaceRenderSnapshot return when the caller does not inspect it; the 1,500-node mixed text/image hot-reuse distribution must pass the parent timing and tail gates."
+decision_state = "rejected"
+decision = "Rejected embedding every C23 cache diagnostic in SurfaceRenderChunkStats because it expanded every hot snapshot result and materially regressed reuse; complete telemetry remains owner-side through UiSurface::retained_node_stats while the snapshot result keeps its compact C22 summary."
+proof = [
+   "Fifteen fresh-process exact-tree pairs measured the expanded-result design at 0.015910 us/op p50 versus 0.013224 us/op for C22, a 19.610% regression with 0/15 wins; p95, p99, and peak also failed.",
+   "The owner-side diagnostic design measured 0.011505 us/op p50 versus 0.013387 us/op in the first 15-pair source-identical diagnostic, an 18.269% improvement with 15/15 wins and better tails; final exact-tree evidence is retained separately.",
+]
+cleanup = [
+   "Removed cold cache telemetry from SurfaceRenderChunkStats and avoided recopied RetainedNodeStats after the first hit; UiSurface::retained_node_stats retains the full observable contract on demand.",
+]
+
+[[experiments]]
 id = "c21-immutable-versioned-render-chunks"
 introduced_commit = "C21 staged tree recorded in commit proof"
 introduced_date = "2026-07-13"

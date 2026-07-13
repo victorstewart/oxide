@@ -1,0 +1,11 @@
+# C23 retained cache budget evidence
+
+C23 replaces implicit unlimited node retention with explicit logical-byte budgets. Node chunks count command, vertex, index, and resource-dependency payloads; persistent sequences count only their owned composition metadata. The cache maintains an intrusive generation-aware LRU, protects recently reused entries, invalidates ancestor sequence references before eviction, and can suppress repeatedly invalidated entries for a configurable retry window. Prepared-GPU ownership is exposed separately and is zero until C24 introduces backend-prepared chunks.
+
+The permanent architecture rows separate the two required policies. `hot_reuse` keeps a 1,500-node tree plus caller-owned text and image chunks under a 1 MiB budget and requires a complete snapshot, a 100% node-chunk hit rate, and zero fallback use. `one_use_churn` invalidates the complete 1,500-node UI working set and selects a zero-byte retained budget, producing one direct immutable UI chunk while preserving the independent caller-owned text and image chunk identities. Tests flatten both representations and compare exact draw output.
+
+The locally ignored `raw/` directory is the stable location for exact parent/candidate identities, temporary timing/allocation/live-memory instrumentation, randomized pair order, individual samples, statistical reports, binary hashes, and final acceptance checks. Aggregate workspace baseline promotion remains deferred to C62.
+
+An automatic two-invalidation suppression default was rejected. It made the established depth-32 dirty-leaf path rise from roughly 5.6 us/op to roughly 27 us/op because rejecting one descendant prevents an ancestor from retaining a sequence that would indirectly retain that rejected descendant. Churn suppression therefore remains explicit, while a zero-byte policy provides the measured direct path for truly one-use trees without penalizing ordinary incremental invalidation.
+
+Copying the complete C23 telemetry through every `SurfaceRenderSnapshot` was also rejected after the exact hot-reuse run regressed 19.610%. `SurfaceRenderChunkStats` retains its compact per-snapshot summary; the complete counters remain available on demand through `UiSurface::retained_node_stats`, and repeated hot returns do not recopy unchanged owner statistics.

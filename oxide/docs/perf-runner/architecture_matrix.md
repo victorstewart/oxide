@@ -6,7 +6,7 @@
 
 ## Workload contract
 
-- Retained UI: 1,000 label-shaped nodes, 500 image-shaped nodes, depths 16/32, clean replay, and one dirty leaf.
+- Retained UI: 1,000 label-shaped nodes, 500 image-shaped nodes, depths 16/32, clean replay, one dirty leaf, a 1,500-node hot working set under a 1 MiB hard cache budget, and a complete one-use invalidation workload under a zero-byte direct policy.
 - Animation/text: a real 300-node `UiSurface` driven by `Animator`, retained glyph/image replay, nested opacity/clips/transforms, hit testing, and accessibility dirtiness; warm/new/script/fallback/atlas/scale/SDF text cases.
 - Layers/effects/damage: CPU command-construction rows plus production Metal submissions for 100 × 100 layer caching, invalidation/resize/navigation/nesting/backdrop/memory-pressure rebuilds, effect layouts, direct/prepass/quarter/eighth target plans, and exact 5/25/100 percent damage sequences over up to 10,000 items.
 - ID mask: isolated Metal rows for static, style, viewport, and projection changes at 512/1024/2048 with 1/16/256 chunks. Chunk-count variants never alternate inside one timed row, so the static cache state remains static.
@@ -17,7 +17,7 @@
 
 ## Measurement boundary
 
-Rust rows are selected with `OXIDE_PERF_RUNNER_FILTER=cpu.architecture.,gpu.architecture.`. GPU rows use production Metal begin/encode/submit methods and collect command-buffer GPU distributions, encode distributions, upload bytes, damage, draw, memory, and backpressure data. Layer rows persist retained texture bytes plus average structural body scans, body copies, texture creates, hits/misses, offscreen/inline draws, and prevented duplicate renders; effect rows persist prepass/blur-chain/bloom bytes plus first-frame latency and first-use resource creation; ID-mask rows persist target/upload-cache bytes plus chunk/pass work; Scene3D rows persist depth, bloom, and mesh-buffer bytes plus pass work. Frame-resource rows persist configured depth, ring bytes, cold/warm growth, upload high water, and skips; their warmup count equals the configured depth so every slot is exercised before warm evidence. Smoke mode shortens measured sample counts but preserves every declared workload size.
+Rust rows are selected with `OXIDE_PERF_RUNNER_FILTER=cpu.architecture.,gpu.architecture.`. GPU rows use production Metal begin/encode/submit methods and collect command-buffer GPU distributions, encode distributions, upload bytes, damage, draw, memory, and backpressure data. Retained cache-pressure rows persist hits, misses, hit rate, admissions/rejections, evictions and bytes, build time, retained chunk/sequence/prepared-GPU bytes, hard budget, completeness, and fallback count. Layer rows persist retained texture bytes plus average structural body scans, body copies, texture creates, hits/misses, offscreen/inline draws, and prevented duplicate renders; effect rows persist prepass/blur-chain/bloom bytes plus first-frame latency and first-use resource creation; ID-mask rows persist target/upload-cache bytes plus chunk/pass work; Scene3D rows persist depth, bloom, and mesh-buffer bytes plus pass work. Frame-resource rows persist configured depth, ring bytes, cold/warm growth, upload high water, and skips; their warmup count equals the configured depth so every slot is exercised before warm evidence. Smoke mode shortens measured sample counts but preserves every declared workload size.
 
 The C14 rows are selected with `OXIDE_PERF_RUNNER_FILTER=cpu.authoring.image_view_grid.,gpu.authoring.image_view_grid.`. They create unique 29x7 Metal images and encode 24x12 cover cells through the public `ImageView` API, so parent zero-slice nine-slice behavior and candidate source-cropped image behavior share the same authoring and backend path.
 
@@ -32,11 +32,13 @@ The current memory-warning layer row recreates the renderer after an explicit be
 ## Verification
 
 - Unit tests freeze required scaling points, exact damage percentages, and gap-free 1/16/256 chunk coverage.
+- Report tests require the hot retained row to be complete, hit at 100%, and remain within budget; the churn row must retain zero bytes and record one explicit fallback. A separate authoring row covers unchanged-policy hot access through the public `UiSurface` policy API.
 - Report tests exercise retained, animation, idle, layer, ID-mask, and Scene3D rows; freeze `family=architecture` plus `scenario=rendering-architecture` metadata; and require nonzero Metal bytes for every previously omitted resource family.
 - The image-view report test freezes both 100/1,000 authoring rows, zero nine-slices, one crop and quad per image, bounded logical coverage, cross-texture Metal draw-call batching, and total inline-plus-argument parameter bytes.
 - Browser source tests freeze all ten WebGPU primitive IDs, opt-in routing, queue/RAF pacing, timestamp settlement, and counter serialization.
 
 ## Changelog
+- 2026-07-13: Added C23 retained hot-reuse and zero-budget one-use cache-pressure rows with full cache-policy counters.
 
 - 2026-07-13: added visible high-water and offscreen all-slot growth-stress rows with explicit depth, residency, growth, upload, and backpressure contracts.
 - 2026-07-12: added direct/prepass/quarter/eighth Metal effect-target rows with first-use creation, residency, and first-frame metrics.

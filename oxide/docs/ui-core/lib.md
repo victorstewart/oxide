@@ -60,6 +60,14 @@
   Removes a non-root node through the surface-owned mutation path, detaching from the known parent and keeping clean sibling branches eligible for layout skip and retained replay.
 - `UiSurface::mark_node_dirty`
   Marks one node with a dirty class so content-only text/image/camera updates can rebuild the affected retained path, while accessibility/hit-test metadata updates keep renderer-facing draw caches intact.
+- `RetainedCachePolicy`
+  Configures hard logical CPU and future prepared-GPU retained-byte budgets, recent-hit protection, and optional repeated-invalidation suppression.
+- `NodeTree::retained_cache_policy` / `NodeTree::set_retained_cache_policy`
+  Reads or replaces the tree-owned retained-cache policy; reducing the CPU budget evicts immediately through the same generation-aware LRU used after rendering.
+- `UiSurface::retained_cache_policy` / `UiSurface::set_retained_cache_policy`
+  Exposes the same policy at the public surface boundary and clears an incompatible whole-snapshot cache after a policy change.
+- `RetainedNodeStats`
+  Reports chunk/sequence bytes, hits, misses, admissions, rejections, evictions, evicted bytes, build time, fallback use, cache completeness, and the latest invalidation reason.
 - `LayoutStats::measured_children`
   Counts child entries scanned by row/column measurement passes, making parent-side layout work visible in tests and perf reports.
 - `NodeStyle::transform`
@@ -118,6 +126,9 @@
 - When fallback fonts are configured, `TextCtx` builds prefix metrics through `oxide_text::TextShaper::cursor_map_with_fallback_fonts`, so unsupported grapheme clusters contribute the fallback font's shaped advance to caret geometry.
 - Text-input filtering, secure masking, and legacy editable backspace now count grapheme clusters instead of Unicode scalar values.
 - `UiSurface::encode_retained` now tracks bounded, replay-safe retained draw lists per `NodeTree` node so dirty leaf paint/style changes rebuild the leaf and ancestors while replaying clean sibling subtrees.
+- Retained node chunks and persistent sequence metadata are governed by exact logical-byte accounting instead of an item-count cutoff. Eviction removes the selected chunk and every ancestor sequence that indirectly references it before the next render.
+- The cache uses intrusive LRU links in existing nodes, generation windows, and cumulative hit counts to prefer cold eviction without allocating an auxiliary map or queue. Optional invalidation-streak suppression is explicit because enabling it by default regressed ordinary dirty-leaf rendering.
+- A zero CPU budget takes a direct one-chunk UI rebuild path. It retains no node-cache bytes, leaves caller-owned text/image sequences untouched, and prevents one-use trees from constructing thousands of persistent node/path allocations.
 - `UiSurface::edit_style` lets paint-only authoring changes dirty retained draw state without forcing a same-size layout pass.
 - `UiSurface::mark_node_dirty` keeps text/image/camera content dirtiness node-scoped, avoiding full-surface retained invalidation when layout and hit-test geometry are unchanged.
 - `UiSurface::mark_node_dirty` treats accessibility-only and hit-test-only dirtiness as non-draw metadata updates, preserving clean retained draw-list reuse.
@@ -158,6 +169,7 @@
 - `crates/ui-core/tests/elements_tests.rs` covers the live `TextCtx` retained atlas snapshot guard.
 - `crates/ui-core/tests/elements_tests.rs` covers text-input cache and atlas upload paths that consume cached shaped cursor maps, batched visible fallback-font label encoding, plus pointer cursor picking across combining, ZWJ, pure RTL, and configured fallback-font grapheme-cluster boundaries.
 - `crates/ui-core/tests/surface.rs` covers dirty leaf retained encoding, live `TextCtx` atlas context routing, clean sibling subtree replay through `RetainedNodeStats`, and retained current/overlay/popup router composition stats.
+- `crates/ui-core/tests/surface.rs` also covers hard byte enforcement, exact output after eviction, hot-entry protection, explicit churn suppression/readmission, zero-budget direct fallback, and caller-owned text/image chunk identity.
 - `crates/ui-core/tests/surface.rs` covers layout dirty-subtree skipping, descendant-only layout traversal, opacity/clip paint-only dirty-class edits, node-scoped content dirty-class edits, and validates `LayoutStats` visit/skip/measurement counters.
 - `crates/ui-core/tests/surface.rs` also covers the mixed ancestor-layout plus descendant-dirty case where a stable child rect must not hide dirty grandchildren.
 - `crates/ui-core/tests/surface.rs` covers scoped surface add/remove mutations that skip clean sibling layout and replay retained sibling draw lists.
@@ -184,6 +196,7 @@ assert_eq!(text.value(), "");
 ```
 
 ## Changelog
+- 2026-07-13: Added hard retained CPU/prepared-GPU budgets, generation-aware LRU eviction, hot-entry protection, explicit churn suppression, zero-budget direct rebuild, and complete cache diagnostics for C23.
 
 - 2026-07-13: changed `ImageView` to emit bounded `Image` commands with natural-pixel source crops; zero-inset `NineSlice` remains removed from the image-view path.
 - 2026-06-02: Added `coalesce_adjacent_draws_reuse` so hot host frame loops can reuse draw-command coalescing scratch storage.

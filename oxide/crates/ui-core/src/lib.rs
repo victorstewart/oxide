@@ -78,6 +78,7 @@ pub use visual_tree::{
 };
 
 use oxide_renderer_api as gfx;
+use oxide_timing as timing;
 
 /// Builder for renderer-agnostic draw lists with a managed clip stack.
 pub struct DrawListBuilder {
@@ -1008,6 +1009,14 @@ struct Node {
     retained_sequence: Option<gfx::RenderChunkSequence>,
     retained_composition: Option<NodeCompositionState>,
     chunk_revisions: gfx::RenderChunkRevisions,
+    cache_last_used_generation: u64,
+    cache_hits: u32,
+    cache_hit_since_build: bool,
+    cache_invalidation_streak: u8,
+    cache_suppressed_until: u64,
+    cache_lru_prev: Option<NodeId>,
+    cache_lru_next: Option<NodeId>,
+    cache_lru_listed: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1037,8 +1046,54 @@ impl Node {
             retained_sequence: None,
             retained_composition: None,
             chunk_revisions: gfx::RenderChunkRevisions::default(),
+            cache_last_used_generation: 0,
+            cache_hits: 0,
+            cache_hit_since_build: false,
+            cache_invalidation_streak: 0,
+            cache_suppressed_until: 0,
+            cache_lru_prev: None,
+            cache_lru_next: None,
+            cache_lru_listed: false,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RetainedInvalidationReason
+{
+   #[default]
+   None,
+   Namespace,
+   Style,
+   Layout,
+   Animation,
+   Budget,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetainedCachePolicy
+{
+   pub cpu_budget_bytes: u64,
+   pub prepared_gpu_budget_bytes: u64,
+   pub hot_hit_threshold: u32,
+   pub hot_generation_window: u64,
+   pub churn_invalidation_threshold: u8,
+   pub churn_retry_generations: u64,
+}
+
+impl Default for RetainedCachePolicy
+{
+   fn default() -> Self
+   {
+      Self {
+         cpu_budget_bytes: 8 * 1024 * 1024,
+         prepared_gpu_budget_bytes: 8 * 1024 * 1024,
+         hot_hit_threshold: 2,
+         hot_generation_window: 8,
+         churn_invalidation_threshold: 0,
+         churn_retry_generations: 8,
+      }
+   }
 }
 
 pub struct NodeTree {
@@ -1047,6 +1102,13 @@ pub struct NodeTree {
     retained_namespace: Option<u32>,
     retained_chunk_bytes: u64,
     retained_sequence_bytes: u64,
+    retained_cache_policy: RetainedCachePolicy,
+    retained_cache_generation: u64,
+    pending_cache_evictions: u64,
+    pending_cache_evicted_bytes: u64,
+    last_invalidation_reason: RetainedInvalidationReason,
+    retained_cache_lru_head: Option<NodeId>,
+    retained_cache_lru_tail: Option<NodeId>,
 }
 
 fn mark_dirty_child(node: &mut Node, index: Option<usize>) {
@@ -1076,6 +1138,17 @@ pub struct RetainedNodeStats {
     pub index_bytes_copied: u64,
     pub retained_chunk_bytes: u64,
     pub retained_sequence_bytes: u64,
+    pub prepared_gpu_bytes: u64,
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub cache_admissions: u64,
+    pub cache_admission_rejections: u64,
+    pub cache_evictions: u64,
+    pub cache_evicted_bytes: u64,
+    pub cache_build_time_ns: u64,
+    pub flat_fallback_uses: u64,
+    pub cache_complete: bool,
+    pub last_invalidation_reason: RetainedInvalidationReason,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1135,12 +1208,39 @@ impl NodeTree {
             retained_namespace: None,
             retained_chunk_bytes: 0,
             retained_sequence_bytes: 0,
+            retained_cache_policy: RetainedCachePolicy::default(),
+            retained_cache_generation: 0,
+            pending_cache_evictions: 0,
+            pending_cache_evicted_bytes: 0,
+            last_invalidation_reason: RetainedInvalidationReason::None,
+            retained_cache_lru_head: None,
+            retained_cache_lru_tail: None,
         }
     }
 
     pub fn root(&self) -> NodeId {
         self.root
     }
+
+   #[inline]
+   pub fn retained_cache_policy(&self) -> RetainedCachePolicy
+   {
+      self.retained_cache_policy
+   }
+
+   pub fn set_retained_cache_policy(&mut self, policy: RetainedCachePolicy)
+   {
+      if self.retained_cache_policy == policy
+      {
+         return;
+      }
+      self.retained_cache_policy = policy;
+      let mut stats = RetainedNodeStats { cache_complete: true, ..RetainedNodeStats::default() };
+      self.enforce_retained_cache_budget(&mut stats);
+      self.pending_cache_evictions = self.pending_cache_evictions.saturating_add(stats.cache_evictions);
+      self.pending_cache_evicted_bytes = self.pending_cache_evicted_bytes
+         .saturating_add(stats.cache_evicted_bytes);
+   }
 
     pub fn add_node(&mut self, parent: NodeId, style: NodeStyle) -> NodeId {
         let id = NodeId(self.nodes.len() as u32);
@@ -1165,7 +1265,33 @@ impl NodeTree {
         self.nodes.get_mut(id.0 as usize).and_then(|o| o.as_mut())
     }
 
+   fn record_cache_invalidation(&mut self, id: NodeId, reason: RetainedInvalidationReason)
+   {
+      self.last_invalidation_reason = reason;
+      let generation = self.retained_cache_generation;
+      let threshold = self.retained_cache_policy.churn_invalidation_threshold;
+      let retry = self.retained_cache_policy.churn_retry_generations;
+      let Some(node) = self.get_mut(id) else { return };
+      if node.retained_chunk.is_some()
+      {
+         if node.cache_hit_since_build
+         {
+            node.cache_invalidation_streak = 0;
+         }
+         else
+         {
+            node.cache_invalidation_streak = node.cache_invalidation_streak.saturating_add(1);
+         }
+         if threshold > 0 && node.cache_invalidation_streak >= threshold
+         {
+            node.cache_suppressed_until = generation.saturating_add(retry.max(1));
+         }
+      }
+      node.cache_hit_since_build = false;
+   }
+
     pub(crate) fn mark_node_and_ancestors_draw_dirty(&mut self, id: NodeId) {
+        self.record_cache_invalidation(id, RetainedInvalidationReason::Style);
         let mut current = Some(id);
         let mut target = true;
         let mut child_index = None;
@@ -1209,6 +1335,7 @@ impl NodeTree {
     }
 
     pub fn mark_layout_dirty(&mut self, id: NodeId) {
+        self.record_cache_invalidation(id, RetainedInvalidationReason::Layout);
         let mut current = Some(id);
         while let Some(node_id) = current {
             let index = node_id.0 as usize;
@@ -1226,6 +1353,7 @@ impl NodeTree {
     }
 
     pub fn mark_node_layout_dirty(&mut self, id: NodeId) {
+        self.record_cache_invalidation(id, RetainedInvalidationReason::Layout);
         let mut current = Some(id);
         let mut first = true;
         while let Some(node_id) = current {
@@ -1614,18 +1742,82 @@ impl NodeTree {
         self.render_sequence_impl(namespace, Some(over))
     }
 
-    fn render_sequence_impl(&mut self, namespace: u32, over: Option<&alloc::collections::BTreeMap<NodeId, crate::anim::AnimOverrides>>) -> Result<(gfx::RenderChunkSequence, RetainedNodeStats), gfx::RenderChunkError> {
-        if self.retained_namespace != Some(namespace) {
-            self.mark_all_draw_dirty();
-        }
-        let mut stats = RetainedNodeStats::default();
-        let sequence = self.render_node_sequence(self.root, namespace, over, &mut stats)?;
-        self.retained_namespace = Some(namespace);
-        stats.chunks_reused = sequence.instance_count().saturating_sub(stats.chunks_rebuilt);
-        stats.retained_chunk_bytes = self.retained_chunk_bytes;
-        stats.retained_sequence_bytes = self.retained_sequence_bytes;
-        Ok((sequence, stats))
-    }
+   fn render_sequence_impl(&mut self, namespace: u32, over: Option<&alloc::collections::BTreeMap<NodeId, crate::anim::AnimOverrides>>) -> Result<(gfx::RenderChunkSequence, RetainedNodeStats), gfx::RenderChunkError>
+   {
+      self.retained_cache_generation = self.retained_cache_generation.saturating_add(1);
+      if self.retained_namespace != Some(namespace)
+      {
+         self.mark_all_draw_dirty_for(RetainedInvalidationReason::Namespace);
+      }
+      let mut stats = RetainedNodeStats {
+         cache_evictions: core::mem::take(&mut self.pending_cache_evictions),
+         cache_evicted_bytes: core::mem::take(&mut self.pending_cache_evicted_bytes),
+         last_invalidation_reason: self.last_invalidation_reason,
+         ..RetainedNodeStats::default()
+      };
+      if self.retained_cache_policy.cpu_budget_bytes == 0
+      {
+         let sequence = self.render_uncached_sequence(namespace, over, &mut stats)?;
+         self.retained_namespace = Some(namespace);
+         stats.cache_misses = stats.chunks_rebuilt;
+         stats.last_invalidation_reason = RetainedInvalidationReason::Budget;
+         self.last_invalidation_reason = RetainedInvalidationReason::None;
+         return Ok((sequence, stats));
+      }
+      let build_started = self.get(self.root)
+         .is_some_and(|node| node.sequence_dirty)
+         .then(timing::now_ns);
+      let (sequence, fully_cached) = self.render_node_sequence(self.root, namespace, over, &mut stats)?;
+      if let Some(build_started) = build_started
+      {
+         stats.cache_build_time_ns = timing::now_ns().saturating_sub(build_started);
+      }
+      stats.cache_complete = fully_cached;
+      self.enforce_retained_cache_budget(&mut stats);
+      self.retained_namespace = Some(namespace);
+      stats.chunks_reused = sequence.instance_count().saturating_sub(stats.chunks_rebuilt);
+      stats.cache_hits = stats.chunks_reused;
+      stats.cache_misses = stats.chunks_rebuilt;
+      stats.retained_chunk_bytes = self.retained_chunk_bytes;
+      stats.retained_sequence_bytes = self.retained_sequence_bytes;
+      self.last_invalidation_reason = RetainedInvalidationReason::None;
+      Ok((sequence, stats))
+   }
+
+   fn render_uncached_sequence(&self, namespace: u32, over: Option<&alloc::collections::BTreeMap<NodeId, crate::anim::AnimOverrides>>, stats: &mut RetainedNodeStats) -> Result<gfx::RenderChunkSequence, gfx::RenderChunkError>
+   {
+      let started = timing::now_ns();
+      let mut builder = DrawListBuilder::new();
+      if let Some(overrides) = over
+      {
+         self.encode_draws_with_anims(&mut builder, overrides);
+      }
+      else
+      {
+         self.encode_draws(&mut builder);
+      }
+      let draws = builder.into_inner();
+      stats.command_bytes_copied = (draws.items.len() as u64)
+         .saturating_mul(core::mem::size_of::<gfx::DrawCmd>() as u64);
+      stats.vertex_bytes_copied = (draws.vertices.len() as u64)
+         .saturating_mul(core::mem::size_of::<gfx::Vertex>() as u64);
+      stats.index_bytes_copied = (draws.indices.len() as u64)
+         .saturating_mul(core::mem::size_of::<u16>() as u64);
+      let chunk = gfx::RenderChunk::new(
+         gfx::RenderChunkId((u64::from(namespace) << 32) | u64::from(self.root.0)),
+         gfx::RenderChunkRevisions { structural: self.retained_cache_generation, ..gfx::RenderChunkRevisions::default() },
+         draws,
+         gfx::ChunkIndexMode::Local,
+         &[],
+      )?;
+      stats.chunks_rebuilt = 1;
+      stats.sequences_rebuilt = 1;
+      stats.rebuilt_nodes = 1;
+      stats.flat_fallback_uses = 1;
+      stats.cache_complete = false;
+      stats.cache_build_time_ns = timing::now_ns().saturating_sub(started);
+      Ok(gfx::RenderChunkSequence::new(vec![gfx::RenderChunkInstance::new(chunk, [0.0, 0.0])]))
+   }
 
     /// Encode with optional animation overrides per node.
     pub fn encode_draws_with_anims(
@@ -1654,14 +1846,15 @@ impl NodeTree {
         }
     }
 
-    fn render_node_sequence(&mut self, id: NodeId, namespace: u32, over: Option<&alloc::collections::BTreeMap<NodeId, crate::anim::AnimOverrides>>, stats: &mut RetainedNodeStats) -> Result<gfx::RenderChunkSequence, gfx::RenderChunkError> {
+    fn render_node_sequence(&mut self, id: NodeId, namespace: u32, over: Option<&alloc::collections::BTreeMap<NodeId, crate::anim::AnimOverrides>>, stats: &mut RetainedNodeStats) -> Result<(gfx::RenderChunkSequence, bool), gfx::RenderChunkError> {
         if let Some(sequence) = self.get(id).and_then(|node| {
             if node.sequence_dirty { None } else { node.retained_sequence.clone() }
         }) {
+            self.touch_retained_cache(id);
             stats.reused_nodes = stats.reused_nodes.saturating_add(1);
             stats.sequences_reused = stats.sequences_reused.saturating_add(1);
             stats.chunks_reused = stats.chunks_reused.saturating_add(sequence.instance_count());
-            return Ok(sequence);
+            return Ok((sequence, true));
         }
 
         let Some((style, layout, chunk_dirty, retained_chunk, revisions, retained_sequence, retained_composition, child_count, dirty_child, all_children_dirty)) = self.get(id).map(|node| {
@@ -1678,7 +1871,7 @@ impl NodeTree {
                 node.all_children_dirty,
             )
         }) else {
-            return Ok(gfx::RenderChunkSequence::new(Vec::new()));
+            return Ok((gfx::RenderChunkSequence::new(Vec::new()), false));
         };
         let composition = NodeCompositionState {
             layout,
@@ -1688,6 +1881,7 @@ impl NodeTree {
         if let Some(mut sequence) = retained_sequence.filter(|sequence| {
             retained_composition == Some(composition) && sequence.child_count() == child_count
         }) {
+            let mut children_cached = true;
             let chunk = if chunk_dirty {
                 let chunk = self.build_node_chunk(id, namespace, style, layout, revisions, stats)?;
                 let instance = gfx::RenderChunkInstance::new(
@@ -1698,6 +1892,7 @@ impl NodeTree {
                     .ok_or(gfx::RenderChunkError::GeometryTooLarge)?;
                 chunk
             } else {
+                self.touch_retained_cache(id);
                 retained_chunk.ok_or(gfx::RenderChunkError::GeometryTooLarge)?
             };
             let child_range = if all_children_dirty {
@@ -1717,29 +1912,34 @@ impl NodeTree {
                     continue;
                 };
                 if self.get(child).is_some_and(|node| node.sequence_dirty) {
-                    let child_sequence = self.render_node_sequence(child, namespace, over, stats)?;
+                    let (child_sequence, child_cached) = self.render_node_sequence(child, namespace, over, stats)?;
+                    children_cached &= child_cached;
                     sequence = sequence.replacing_child(index, child_sequence)
                         .ok_or(gfx::RenderChunkError::GeometryTooLarge)?;
                 } else {
                     stats.sequences_reused = stats.sequences_reused.saturating_add(1);
                 }
             }
-            self.store_node_sequence(id, chunk, sequence.clone(), composition);
+            let cached = self.store_node_sequence(id, chunk, sequence.clone(), composition, children_cached, stats);
             stats.rebuilt_nodes = stats.rebuilt_nodes.saturating_add(1);
             stats.sequences_rebuilt = stats.sequences_rebuilt.saturating_add(1);
-            return Ok(sequence);
+            return Ok((sequence, cached));
         }
 
         let mut child_sequences = Vec::with_capacity(child_count);
+        let mut children_cached = true;
         for index in 0..child_count {
             let Some(child) = self.get(id).and_then(|node| node.children.get(index).copied()) else {
                 continue;
             };
-            child_sequences.push(self.render_node_sequence(child, namespace, over, stats)?);
+            let (sequence, cached) = self.render_node_sequence(child, namespace, over, stats)?;
+            children_cached &= cached;
+            child_sequences.push(sequence);
         }
 
         let chunk = if !chunk_dirty {
             if let Some(chunk) = retained_chunk {
+                self.touch_retained_cache(id);
                 stats.chunks_reused = stats.chunks_reused.saturating_add(1);
                 chunk
             } else {
@@ -1764,33 +1964,248 @@ impl NodeTree {
             (sequence, parent_translation, parent_clip)
         }).collect();
         let sequence = gfx::RenderChunkSequence::compose(vec![instance], children);
-        self.store_node_sequence(id, chunk, sequence.clone(), composition);
+        let cached = self.store_node_sequence(id, chunk, sequence.clone(), composition, children_cached, stats);
         stats.rebuilt_nodes = stats.rebuilt_nodes.saturating_add(1);
         stats.sequences_rebuilt = stats.sequences_rebuilt.saturating_add(1);
-        Ok(sequence)
+        Ok((sequence, cached))
     }
 
-    fn store_node_sequence(&mut self, id: NodeId, chunk: gfx::RenderChunk, sequence: gfx::RenderChunkSequence, composition: NodeCompositionState) {
-        let old_chunk_bytes = self.get(id).and_then(|node| node.retained_chunk.as_ref())
-            .map_or(0, gfx::RenderChunk::byte_size);
-        let old_sequence_bytes = self.get(id).and_then(|node| node.retained_sequence.as_ref())
-            .map_or(0, gfx::RenderChunkSequence::metadata_byte_size);
-        self.retained_chunk_bytes = self.retained_chunk_bytes
-            .saturating_sub(old_chunk_bytes)
-            .saturating_add(chunk.byte_size());
-        self.retained_sequence_bytes = self.retained_sequence_bytes
-            .saturating_sub(old_sequence_bytes)
-            .saturating_add(sequence.metadata_byte_size());
-        if let Some(node) = self.get_mut(id) {
-            node.retained_chunk = Some(chunk);
-            node.retained_sequence = Some(sequence);
-            node.retained_composition = Some(composition);
-            node.chunk_dirty = false;
-            node.sequence_dirty = false;
-            node.dirty_child = None;
-            node.all_children_dirty = false;
-        }
-    }
+   fn store_node_sequence(&mut self, id: NodeId, chunk: gfx::RenderChunk, sequence: gfx::RenderChunkSequence, composition: NodeCompositionState, children_cached: bool, stats: &mut RetainedNodeStats) -> bool
+   {
+      let generation = self.retained_cache_generation;
+      let suppressed = self.get(id).is_some_and(|node| {
+         generation < node.cache_suppressed_until
+      });
+      let old_chunk_bytes = self.get(id).and_then(|node| node.retained_chunk.as_ref())
+         .map_or(0, gfx::RenderChunk::byte_size);
+      let old_sequence_bytes = self.get(id).and_then(|node| node.retained_sequence.as_ref())
+         .map_or(0, gfx::RenderChunkSequence::metadata_byte_size);
+      let old_chunk_matches = self.get(id).and_then(|node| node.retained_chunk.as_ref())
+         .is_some_and(|old| old.ptr_eq(&chunk));
+      let sequence_bytes = if children_cached && !suppressed
+      {
+         sequence.metadata_byte_size()
+      }
+      else
+      {
+         0
+      };
+      let chunk_bytes = if suppressed { 0 } else { chunk.byte_size() };
+      self.retained_chunk_bytes = self.retained_chunk_bytes
+         .saturating_sub(old_chunk_bytes)
+         .saturating_add(chunk_bytes);
+      self.retained_sequence_bytes = self.retained_sequence_bytes
+         .saturating_sub(old_sequence_bytes)
+         .saturating_add(sequence_bytes);
+      if let Some(node) = self.get_mut(id)
+      {
+         node.retained_chunk = (!suppressed).then_some(chunk);
+         node.retained_sequence = (children_cached && !suppressed).then_some(sequence);
+         node.retained_composition = (children_cached && !suppressed).then_some(composition);
+         node.chunk_dirty = suppressed;
+         node.sequence_dirty = !children_cached || suppressed;
+         node.dirty_child = None;
+         node.all_children_dirty = !children_cached || suppressed;
+         if !suppressed
+         {
+            node.cache_last_used_generation = generation;
+            node.cache_hit_since_build = false;
+         }
+      }
+      if suppressed
+      {
+         self.retained_cache_lru_remove(id);
+         stats.cache_admission_rejections = stats.cache_admission_rejections.saturating_add(1);
+         false
+      }
+      else
+      {
+         self.retained_cache_lru_touch(id);
+         if !old_chunk_matches
+         {
+            stats.cache_admissions = stats.cache_admissions.saturating_add(1);
+         }
+         children_cached
+      }
+   }
+
+   fn touch_retained_cache(&mut self, id: NodeId)
+   {
+      let generation = self.retained_cache_generation;
+      if let Some(node) = self.get_mut(id)
+      {
+         node.cache_last_used_generation = generation;
+         node.cache_hits = node.cache_hits.saturating_add(1);
+         node.cache_hit_since_build = true;
+         node.cache_invalidation_streak = 0;
+      }
+      self.retained_cache_lru_touch(id);
+   }
+
+   fn retained_cache_lru_remove(&mut self, id: NodeId)
+   {
+      let Some((listed, previous, next)) = self.get(id).map(|node| {
+         (node.cache_lru_listed, node.cache_lru_prev, node.cache_lru_next)
+      }) else {
+         return;
+      };
+      if !listed
+      {
+         return;
+      }
+      if let Some(previous) = previous
+      {
+         if let Some(node) = self.get_mut(previous)
+         {
+            node.cache_lru_next = next;
+         }
+      }
+      else
+      {
+         self.retained_cache_lru_head = next;
+      }
+      if let Some(next) = next
+      {
+         if let Some(node) = self.get_mut(next)
+         {
+            node.cache_lru_prev = previous;
+         }
+      }
+      else
+      {
+         self.retained_cache_lru_tail = previous;
+      }
+      if let Some(node) = self.get_mut(id)
+      {
+         node.cache_lru_prev = None;
+         node.cache_lru_next = None;
+         node.cache_lru_listed = false;
+      }
+   }
+
+   fn retained_cache_lru_touch(&mut self, id: NodeId)
+   {
+      if self.get(id).is_none() || self.retained_cache_lru_tail == Some(id)
+      {
+         return;
+      }
+      self.retained_cache_lru_remove(id);
+      let previous = self.retained_cache_lru_tail;
+      if let Some(previous) = previous
+      {
+         if let Some(node) = self.get_mut(previous)
+         {
+            node.cache_lru_next = Some(id);
+         }
+      }
+      else
+      {
+         self.retained_cache_lru_head = Some(id);
+      }
+      if let Some(node) = self.get_mut(id)
+      {
+         node.cache_lru_prev = previous;
+         node.cache_lru_next = None;
+         node.cache_lru_listed = true;
+      }
+      self.retained_cache_lru_tail = Some(id);
+   }
+
+   #[inline]
+   fn retained_cache_bytes(&self) -> u64
+   {
+      self.retained_chunk_bytes.saturating_add(self.retained_sequence_bytes)
+   }
+
+   fn retained_cache_eviction_candidate(&self) -> Option<NodeId>
+   {
+      let generation = self.retained_cache_generation;
+      let policy = self.retained_cache_policy;
+      let fallback = self.retained_cache_lru_head;
+      let mut current = fallback;
+      while let Some(id) = current
+      {
+         let Some(node) = self.get(id) else { break };
+         let hot = node.cache_hits >= policy.hot_hit_threshold
+            && generation.saturating_sub(node.cache_last_used_generation) <= policy.hot_generation_window;
+         if !hot
+         {
+            return Some(id);
+         }
+         current = node.cache_lru_next;
+      }
+      fallback
+   }
+
+   fn evict_retained_cache_entry(&mut self, id: NodeId) -> u64
+   {
+      self.retained_cache_lru_remove(id);
+      let retry_until = self.retained_cache_generation
+         .saturating_add(self.retained_cache_policy.churn_retry_generations.max(1));
+      let Some(mut current) = self.get(id).map(|_| Some(id)) else { return 0 };
+      let mut child_index = None;
+      let mut freed = 0_u64;
+      let mut first = true;
+      while let Some(node_id) = current
+      {
+         let Some((parent, next_index)) = self.get(node_id).map(|node| {
+            (node.parent, node.index_in_parent)
+         }) else {
+            break;
+         };
+         let (chunk_bytes, sequence_bytes) = if let Some(node) = self.get_mut(node_id)
+         {
+            let mut chunk_bytes = 0;
+            if first
+            {
+               if let Some(chunk) = node.retained_chunk.take()
+               {
+                  chunk_bytes = chunk.byte_size();
+               }
+               node.chunk_dirty = true;
+               node.cache_suppressed_until = retry_until;
+               node.cache_hits = 0;
+               node.cache_hit_since_build = false;
+            }
+            let sequence_bytes = node.retained_sequence.take()
+               .map_or(0, |sequence| sequence.metadata_byte_size());
+            node.retained_composition = None;
+            node.sequence_dirty = true;
+            mark_dirty_child(node, child_index);
+            (chunk_bytes, sequence_bytes)
+         }
+         else
+         {
+            (0, 0)
+         };
+         self.retained_chunk_bytes = self.retained_chunk_bytes.saturating_sub(chunk_bytes);
+         self.retained_sequence_bytes = self.retained_sequence_bytes.saturating_sub(sequence_bytes);
+         freed = freed.saturating_add(chunk_bytes).saturating_add(sequence_bytes);
+         first = false;
+         child_index = Some(next_index);
+         current = parent;
+      }
+      self.last_invalidation_reason = RetainedInvalidationReason::Budget;
+      freed
+   }
+
+   fn enforce_retained_cache_budget(&mut self, stats: &mut RetainedNodeStats)
+   {
+      let budget = self.retained_cache_policy.cpu_budget_bytes;
+      while self.retained_cache_bytes() > budget
+      {
+         let Some(candidate) = self.retained_cache_eviction_candidate() else { break };
+         let freed = self.evict_retained_cache_entry(candidate);
+         if freed == 0
+         {
+            break;
+         }
+         stats.cache_evictions = stats.cache_evictions.saturating_add(1);
+         stats.cache_evicted_bytes = stats.cache_evicted_bytes.saturating_add(freed);
+         stats.cache_complete = false;
+         stats.last_invalidation_reason = RetainedInvalidationReason::Budget;
+      }
+   }
 
     fn build_node_chunk(&mut self, id: NodeId, namespace: u32, style: NodeStyle, layout: LayoutRect, revisions: gfx::RenderChunkRevisions, stats: &mut RetainedNodeStats) -> Result<gfx::RenderChunk, gfx::RenderChunkError> {
         let mut builder = DrawListBuilder::new();
@@ -1824,15 +2239,25 @@ impl NodeTree {
         Ok(chunk)
     }
 
-    pub fn mark_all_draw_dirty(&mut self) {
-        for slot in &mut self.nodes {
-            if let Some(node) = slot {
-                node.chunk_dirty = true;
-                node.sequence_dirty = true;
-                node.all_children_dirty = true;
-            }
-        }
-    }
+   pub fn mark_all_draw_dirty(&mut self)
+   {
+      self.mark_all_draw_dirty_for(RetainedInvalidationReason::Style);
+   }
+
+   pub(crate) fn mark_all_draw_dirty_for(&mut self, reason: RetainedInvalidationReason)
+   {
+      for index in 1..self.nodes.len()
+      {
+         let id = NodeId(index as u32);
+         self.record_cache_invalidation(id, reason);
+         if let Some(node) = self.get_mut(id)
+         {
+            node.chunk_dirty = true;
+            node.sequence_dirty = true;
+            node.all_children_dirty = true;
+         }
+      }
+   }
 }
 
 fn encode_node_local_frame(style: &NodeStyle, layout: LayoutRect, b: &mut DrawListBuilder) {
@@ -1973,6 +2398,7 @@ impl NodeTree {
         for child in children {
             self.remove_subtree(child);
         }
+        self.retained_cache_lru_remove(id);
         let retained_bytes = self.get(id).map(|node| (
             node.retained_chunk.as_ref().map_or(0, gfx::RenderChunk::byte_size),
             node.retained_sequence.as_ref().map_or(0, gfx::RenderChunkSequence::metadata_byte_size),
@@ -2054,6 +2480,9 @@ impl Clone for NodeTree {
                     next.retained_chunk = None;
                     next.retained_sequence = None;
                     next.retained_composition = None;
+                    next.cache_lru_prev = None;
+                    next.cache_lru_next = None;
+                    next.cache_lru_listed = false;
                     next
                 })
             })
@@ -2064,6 +2493,13 @@ impl Clone for NodeTree {
             retained_namespace: None,
             retained_chunk_bytes: 0,
             retained_sequence_bytes: 0,
+            retained_cache_policy: self.retained_cache_policy,
+            retained_cache_generation: 0,
+            pending_cache_evictions: 0,
+            pending_cache_evicted_bytes: 0,
+            last_invalidation_reason: RetainedInvalidationReason::None,
+            retained_cache_lru_head: None,
+            retained_cache_lru_tail: None,
         }
     }
 }

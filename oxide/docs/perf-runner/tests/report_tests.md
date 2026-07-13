@@ -22,6 +22,7 @@ Each filtered integration test writes a process-unique temporary report, verifie
 
 - Real Metal row tests require macOS and are compile-time guarded.
 - Passing C18 coverage proves every configured slot was exercised and warm submissions allocate no replacement ring buffers.
+- Passing C23 coverage proves the hot retained working set is complete, reports a 100% hit rate, and remains within its hard byte budget, while the one-use path retains zero node-cache bytes and records one explicit fallback. The public authoring row must preserve its configured CPU/prepared-GPU budgets on unchanged-policy access.
 
 ## Edge cases and failure modes
 
@@ -50,4 +51,5 @@ Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.frame_resources.` with `--run-sui
 
 ## Changelog
 
+- 2026-07-13: added C23 retained cache-pressure and public cache-policy authoring report contracts.
 - 2026-07-13: added exact visible/offscreen frame-resource report contracts.
