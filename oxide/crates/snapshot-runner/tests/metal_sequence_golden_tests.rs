@@ -91,6 +91,24 @@ fn render(renderer: &mut MetalRenderer, list: &api::DrawList, damage: Option<&ap
    bgra
 }
 
+fn render_direct(renderer: &mut MetalRenderer, list: &api::DrawList) -> Vec<u8>
+{
+   let texture = renderer.create_direct_present_texture_for_snapshot();
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.prepare_direct_present_texture_for_snapshot(&texture);
+   renderer.encode_pass(list);
+   assert!(renderer.frame_uses_direct_present_for_snapshot());
+   renderer.submit(token).expect("submit direct sequence frame");
+   let (_, _, mut bgra) = renderer
+      .readback_direct_present_texture_for_snapshot(&texture)
+      .expect("read direct sequence frame");
+   for pixel in bgra.chunks_exact_mut(4)
+   {
+      pixel.swap(0, 2);
+   }
+   bgra
+}
+
 fn renderer(width: u32, height: u32) -> MetalRenderer
 {
    let mut renderer = MetalRenderer::new_default().expect("create sequence renderer");
@@ -139,24 +157,59 @@ fn atlas_bytes() -> Vec<u8>
 }
 
 #[test]
-fn full_direct_then_partial_damage_freezes_parent_defect_and_reference()
+fn direct_and_resize_invalidations_force_complete_damage_refreshes()
 {
    let (width, height) = (96, 80);
    let blue = api::Color::rgba(0.22, 0.72, 0.92, 1.0);
    let orange = api::Color::rgba(0.96, 0.40, 0.12, 1.0);
+   let green = api::Color::rgba(0.20, 0.86, 0.42, 1.0);
+   let purple = api::Color::rgba(0.76, 0.24, 0.94, 1.0);
    let mut retained = renderer(width, height);
    retained.set_damage_options(true, 1.0, 1.0);
-   let first = render(&mut retained, &scene(width, height, blue), None);
+   let first = render_direct(&mut retained, &scene(width, height, blue));
+   assert_eq!(retained.last_stats().persistent_target_valid, 0);
+
    let rect = api::RectI::new(52, 20, 34, 34);
    let damage = api::Damage { rects: vec![rect] };
    let partial = render(&mut retained, &scene(width, height, orange), Some(&damage));
+   assert_eq!(retained.last_stats().damage_forced_full_refreshes, 1);
+   assert_eq!(retained.last_stats().persistent_target_valid, 1);
    let mut fresh = renderer(width, height);
    let expected = render(&mut fresh, &scene(width, height, orange), None);
+   assert_eq!(partial, expected);
 
-   assert_ne!(partial, expected, "C10 should flip this parent-defect proof to exact parity");
+   let full = render(&mut retained, &scene(width, height, green), None);
+   assert_eq!(retained.last_stats().damage_forced_full_refreshes, 0);
+   let (resized_width, resized_height) = (112, 72);
+   retained
+      .resize(resized_width, resized_height, 1.0)
+      .expect("resize retained damage renderer");
+   let resized_rect = api::RectI::new(60, 18, 28, 28);
+   let resized_damage = api::Damage { rects: vec![resized_rect] };
+   let resized_partial = render(
+      &mut retained,
+      &scene(resized_width, resized_height, purple),
+      Some(&resized_damage),
+   );
+   assert_eq!(retained.last_stats().damage_forced_full_refreshes, 1);
+   let mut resized_fresh = renderer(resized_width, resized_height);
+   let resized_expected = render(
+      &mut resized_fresh,
+      &scene(resized_width, resized_height, purple),
+      None,
+   );
+   assert_eq!(resized_partial, resized_expected);
+
    assert_golden("damage_full_direct", width, height, &first);
    assert_golden("damage_partial_result", width, height, &partial);
    assert_golden("damage_complete_reference", width, height, &expected);
+   assert_golden("damage_full_refresh", width, height, &full);
+   assert_golden(
+      "damage_resize_partial_result",
+      resized_width,
+      resized_height,
+      &resized_partial,
+   );
 }
 
 #[test]

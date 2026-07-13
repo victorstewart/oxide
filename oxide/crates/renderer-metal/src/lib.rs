@@ -1087,6 +1087,9 @@ pub struct MetalRenderer {
     pending_present_drawable: usize,
     pending_present_texture: usize,
     frame_present_direct_to_drawable: bool,
+    persistent_target_valid: bool,
+    persistent_target_policy: u8,
+    acc_damage_forced_full_refreshes: u32,
     frame_2d_encoded: bool,
     frame_color_initialized: bool,
     frame_depth_initialized: bool,
@@ -2108,6 +2111,9 @@ impl MetalRenderer {
             pending_present_drawable: 0,
             pending_present_texture: 0,
             frame_present_direct_to_drawable: false,
+            persistent_target_valid: false,
+            persistent_target_policy: 0,
+            acc_damage_forced_full_refreshes: 0,
             frame_2d_encoded: false,
             frame_color_initialized: false,
             frame_depth_initialized: false,
@@ -2128,6 +2134,9 @@ impl MetalRenderer {
     }
 
     pub fn set_camera_render_mode(&mut self, mode: CameraRenderMode) {
+        if self.camera_render_mode != mode {
+            self.persistent_target_valid = false;
+        }
         self.camera_render_mode = mode;
         self.config.camera_render_mode = mode;
     }
@@ -2135,6 +2144,7 @@ impl MetalRenderer {
     pub fn set_camera_texture_source(&mut self, source: CameraTextureSource) {
         if self.camera_texture_source != source {
             self.release_live_camera_frame();
+            self.persistent_target_valid = false;
         }
         self.camera_texture_source = source;
         self.config.camera_texture_source = source;
@@ -2598,6 +2608,7 @@ impl MetalRenderer {
             desc.set_storage_mode(MTLStorageMode::Private);
             desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
             self.target_tex = Some(self.device.new_texture(&desc));
+            self.persistent_target_valid = false;
             self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
         }
 
@@ -2662,6 +2673,7 @@ impl MetalRenderer {
     }
 
     fn drop_direct_preview_offscreen_targets(&mut self) {
+        self.persistent_target_valid = false;
         self.target_tex = None;
         self.target_msaa_tex = None;
         self.depth_tex = None;
@@ -3366,6 +3378,37 @@ impl MetalRenderer {
         self.frame_present_direct_to_drawable = false;
     }
 
+    #[cfg(feature = "snapshot-tests")]
+    pub fn create_direct_present_texture_for_snapshot(&self) -> Texture
+    {
+        let desc = TextureDescriptor::new();
+        desc.set_pixel_format(self.color_format);
+        desc.set_texture_type(MTLTextureType::D2);
+        desc.set_width(self.target_w as u64);
+        desc.set_height(self.target_h as u64);
+        desc.set_storage_mode(MTLStorageMode::Private);
+        desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+        self.device.new_texture(&desc)
+    }
+
+    #[cfg(feature = "snapshot-tests")]
+    pub fn prepare_direct_present_texture_for_snapshot(&mut self, texture: &TextureRef)
+    {
+        self.pending_present_texture = texture.as_ptr() as usize;
+    }
+
+    #[cfg(feature = "snapshot-tests")]
+    pub fn readback_direct_present_texture_for_snapshot(&self, texture: &TextureRef) -> Option<(u32, u32, alloc::vec::Vec<u8>)>
+    {
+        self.readback_texture_bgra8(texture)
+    }
+
+    #[cfg(feature = "snapshot-tests")]
+    pub fn frame_uses_direct_present_for_snapshot(&self) -> bool
+    {
+        self.frame_present_direct_to_drawable
+    }
+
     pub fn cancel_present_drawable(&mut self) -> *mut core::ffi::c_void {
         let drawable = self.pending_present_drawable as *mut core::ffi::c_void;
         self.pending_present_drawable = 0;
@@ -3384,6 +3427,9 @@ impl MetalRenderer {
         let collect_stage_stats = camera_perf_stage_stats_enabled();
         self.pending_present_drawable = 0;
         self.pending_present_texture = 0;
+        if !drawable_ptr.is_null() && self.sample_count == 1 {
+            self.persistent_target_valid = false;
+        }
         if drawable_ptr.is_null() || self.sample_count > 1 {
             with_perf_signpost("camera.renderer.resize", || {
                 <Self as api::Renderer>::resize(self, w, h, scale)
@@ -4260,7 +4306,7 @@ impl MetalRenderer {
         let ca0 = rpd.color_attachments().object_at(0).unwrap();
         ca0.set_texture(Some(&target_tex));
         ca0.set_store_action(MTLStoreAction::Store);
-        if self.frame_color_initialized {
+        if self.frame_color_initialized && self.persistent_target_valid {
             ca0.set_load_action(MTLLoadAction::Load);
         } else if let Some(color) = pass.clear_color {
             ca0.set_load_action(MTLLoadAction::Clear);
@@ -4299,6 +4345,7 @@ impl MetalRenderer {
             self.encode_scene3d_bloom(&cmd, &target_tex, pass.view_proj, bloom)?;
         }
         self.frame_color_initialized = true;
+        self.persistent_target_valid = true;
         self.frame_depth_initialized = true;
         if let Some(t0) = self.frame_encode_started_at {
             self.last_stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -5059,6 +5106,7 @@ impl api::Renderer for MetalRenderer {
             self.acc_resource_creates = 0;
             self.acc_resource_grows = 0;
         }
+        self.acc_damage_forced_full_refreshes = 0;
         self.acc_culled = 0;
         // Defer command buffer creation until either encode_scene3d or encode_pass.
         if !self.frame_backpressure_skipped {
@@ -5954,15 +6002,30 @@ impl api::Renderer for MetalRenderer {
             }
         }
 
-        // Heuristic: use Load (damage) only when enabled and coverage < threshold
+        // Damage may load only a complete persistent target with matching policy.
         let dmg_thresh: f32 = self.damage_use_thresh;
-        let use_damage = self.sample_count == 1
+        let damage_requested = self.sample_count == 1
             && self.damage_enabled
             && self.frame_scissor_dp.is_some()
             && self.frame_damage_pct < dmg_thresh;
+        let target_policy = u8::from(has_backdrop)
+            | u8::from(has_visual_effect) << 1
+            | u8::from(need_cam_blur) << 2
+            | u8::from(has_layer_commands) << 3;
+        if !self.frame_color_initialized
+            && self.persistent_target_valid
+            && self.persistent_target_policy != target_policy
+        {
+            self.persistent_target_valid = false;
+        }
+        let use_damage = damage_requested && self.persistent_target_valid;
+        if damage_requested && !self.persistent_target_valid {
+            self.acc_damage_forced_full_refreshes =
+                self.acc_damage_forced_full_refreshes.saturating_add(1);
+        }
         let pending_present_texture = self.pending_present_texture as *mut MTLTexture;
         let direct_present_texture = if self.sample_count == 1
-            && !use_damage
+            && !damage_requested
             && !self.frame_color_initialized
             && !has_backdrop
             && !has_visual_effect
@@ -5983,6 +6046,9 @@ impl api::Renderer for MetalRenderer {
             None
         };
         self.frame_present_direct_to_drawable = direct_present_texture.is_some();
+        if self.frame_present_direct_to_drawable {
+            self.persistent_target_valid = false;
+        }
         let rpd = RenderPassDescriptor::new();
         let ca0 = rpd.color_attachments().object_at(0).unwrap();
         if self.sample_count > 1 {
@@ -6002,7 +6068,7 @@ impl api::Renderer for MetalRenderer {
             }
             ca0.set_store_action(MTLStoreAction::Store);
         }
-        if self.frame_color_initialized {
+        if self.frame_color_initialized && self.persistent_target_valid {
             ca0.set_load_action(MTLLoadAction::Load);
         } else if use_damage {
             ca0.set_load_action(MTLLoadAction::Load);
@@ -6112,6 +6178,7 @@ impl api::Renderer for MetalRenderer {
         self.last_stats.damage_px = self.frame_damage_px;
         self.last_stats.damage_pct = self.frame_damage_pct;
         self.last_stats.damage_rects = self.frame_damage_rects;
+        self.last_stats.damage_forced_full_refreshes = self.acc_damage_forced_full_refreshes;
         self.last_stats.culled = self.acc_culled;
         // Adaptive stats
         self.last_stats.blur_ms = blur_ms_out;
@@ -6136,6 +6203,13 @@ impl api::Renderer for MetalRenderer {
         self.last_stats.gpu_fragment_ms = completed_gpu_stats.fragment_ms;
         self.frame_2d_encoded = true;
         self.frame_color_initialized = true;
+        if self.frame_present_direct_to_drawable {
+            self.persistent_target_valid = false;
+        } else {
+            self.persistent_target_valid = true;
+            self.persistent_target_policy = target_policy;
+        }
+        self.last_stats.persistent_target_valid = self.persistent_target_valid as u32;
         if let Some(t0) = self.frame_encode_started_at {
             self.last_stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
         }
@@ -6392,6 +6466,7 @@ impl api::Renderer for MetalRenderer {
         self.target_w = next_w;
         self.target_h = next_h;
         self.target_scale = next_scale;
+        self.persistent_target_valid = false;
         self.ensure_target();
         Ok(())
     }
@@ -9208,6 +9283,8 @@ pub struct PerfStats {
     pub damage_px: u64,
     pub damage_pct: f32,
     pub damage_rects: u32,
+    pub damage_forced_full_refreshes: u32,
+    pub persistent_target_valid: u32,
     pub culled: u32,
     // Phase 7 instrumentation
     pub blur_ms: f64,          // time spent updating blurred camera this frame

@@ -141,7 +141,11 @@ impl MetalRenderer {
 
         let rpd = RenderPassDescriptor::new();
         let ca0 = rpd.color_attachments().object_at(0).unwrap();
-        configure_frame_color_attachment(ca0, &target_tex, self.frame_color_initialized);
+        configure_frame_color_attachment(
+            ca0,
+            &target_tex,
+            self.frame_color_initialized && self.persistent_target_valid,
+        );
 
         let enc = cmd.new_render_command_encoder(&rpd);
         enc.set_render_pipeline_state(&self.pso_neon_marker);
@@ -168,6 +172,7 @@ impl MetalRenderer {
         self.acc_draws = self.acc_draws.saturating_add(1);
         self.acc_instanced = self.acc_instanced.saturating_add(marker_count as u32);
         self.frame_color_initialized = true;
+        self.persistent_target_valid = true;
         if let Some(t0) = self.frame_encode_started_at {
             self.last_stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
         }
