@@ -58,7 +58,8 @@ mod wasm_host {
     use wasm_bindgen_futures::JsFuture;
     use web_sys::{
         CompositionEvent, Event, EventTarget, HtmlCanvasElement, HtmlElement, HtmlTextAreaElement,
-        InputEvent, KeyboardEvent, PointerEvent, WheelEvent,
+        InputEvent, KeyboardEvent, MutationObserver, MutationObserverInit, PointerEvent,
+        ResizeObserver, ResizeObserverEntry, WheelEvent,
     };
 
     const DEFAULT_FONT_BYTES: &[u8] =
@@ -132,8 +133,21 @@ mod wasm_host {
         }
     }
 
+    #[derive(Clone, Copy)]
+    struct CanvasMetrics {
+        physical_width: u32,
+        physical_height: u32,
+        css_width: f32,
+        css_height: f32,
+        scale: f32,
+        left: f32,
+        top: f32,
+    }
+
     struct AppState {
         canvas: HtmlCanvasElement,
+        canvas_metrics: CanvasMetrics,
+        canvas_metrics_dirty: bool,
         ime_textarea: HtmlTextAreaElement,
         renderer: Rc<RefCell<BrowserRenderer>>,
         router: scenes::Router<WebUploader>,
@@ -142,15 +156,24 @@ mod wasm_host {
         coalesce_items: Vec<gfx::DrawCmd>,
         bench_resources: Option<WebGpuUploadBenchResources>,
         geometry_bench_resources: Option<WebGpuGeometryBenchResources>,
-        last_ms: u64,
+        last_timestamp_ms: f64,
+        frame_time_remainder_ms: f64,
         ime_focused: bool,
         ime_composing: bool,
         ime_skip_next_input: bool,
         raf: Option<Closure<dyn FnMut(f64)>>,
         raf_pending: bool,
+        pointer_anticipation: bool,
+        resize_observer: Option<ResizeObserver>,
+        resize_observer_callback: Option<Closure<dyn FnMut(js_sys::Array)>>,
+        mutation_observer: Option<MutationObserver>,
+        mutation_observer_callback: Option<Closure<dyn FnMut(js_sys::Array)>>,
         listeners: Vec<Closure<dyn FnMut(Event)>>,
         frame_dirty: bool,
-        settle_frames_remaining: u8,
+        raf_callbacks: u64,
+        raf_requests: u64,
+        invalidations: u64,
+        canvas_metric_reads: u64,
         idle_skipped_frames: u64,
         submitted_frames: u64,
         direct_capture_active: bool,
@@ -158,9 +181,22 @@ mod wasm_host {
         timestamp_samples: Vec<WebGpuTimestampSample>,
     }
 
-    const IDLE_SETTLE_FRAMES: u8 = 2;
-
     impl AppState {
+        fn refresh_canvas_metrics(&mut self) -> Result<(), JsValue> {
+            if !self.canvas_metrics_dirty {
+                return Ok(());
+            }
+            let metrics = measure_canvas_metrics(&self.canvas);
+            self.canvas_metric_reads = self.canvas_metric_reads.saturating_add(1);
+            self.renderer
+                .borrow_mut()
+                .resize(metrics.physical_width, metrics.physical_height, metrics.scale)
+                .map_err(render_err)?;
+            self.canvas_metrics = metrics;
+            self.canvas_metrics_dirty = false;
+            Ok(())
+        }
+
         fn frame_at(&mut self, timestamp_ms: f64) -> Result<(), JsValue> {
             self.frame_at_inner(timestamp_ms, None, None)
         }
@@ -181,8 +217,8 @@ mod wasm_host {
         ) -> Result<(), JsValue> {
             let stage_before = allocation_stage_begin(allocation_stages.as_deref());
             let timing_before = timing_stage_begin(timing_sample.as_deref());
-            let (physical_w, physical_h, scale) = canvas_backing_size(&self.canvas);
-            self.renderer.borrow_mut().resize(physical_w, physical_h, scale).map_err(render_err)?;
+            self.refresh_canvas_metrics()?;
+            let metrics = self.canvas_metrics;
             allocation_stage_end(
                 allocation_stages.as_deref_mut(),
                 WebGpuFrameStage::CanvasResize,
@@ -192,13 +228,18 @@ mod wasm_host {
 
             let stage_before = allocation_stage_begin(allocation_stages.as_deref());
             let timing_before = timing_stage_begin(timing_sample.as_deref());
-            let now_ms = timestamp_ms.max(0.0).round() as u64;
-            let dt_ms = if self.last_ms == 0 {
+            let timestamp_ms = if timestamp_ms.is_finite() { timestamp_ms.max(0.0) } else { 0.0 };
+            let now_ms = timestamp_ms.floor() as u64;
+            let dt_ms = if self.last_timestamp_ms == 0.0 {
                 16
             } else {
-                now_ms.saturating_sub(self.last_ms).min(u32::MAX as u64) as u32
+                let elapsed_ms = (timestamp_ms - self.last_timestamp_ms).max(0.0);
+                let accumulated_ms = elapsed_ms + self.frame_time_remainder_ms;
+                let whole_ms = accumulated_ms.floor().min(u32::MAX as f64);
+                self.frame_time_remainder_ms = accumulated_ms - whole_ms;
+                whole_ms as u32
             };
-            self.last_ms = now_ms;
+            self.last_timestamp_ms = timestamp_ms;
             allocation_stage_end(
                 allocation_stages.as_deref_mut(),
                 WebGpuFrameStage::FrameTiming,
@@ -218,8 +259,8 @@ mod wasm_host {
             let viewport = gfx::RectF::new(
                 0.0,
                 0.0,
-                physical_w as f32 / scale.max(1.0),
-                physical_h as f32 / scale.max(1.0),
+                metrics.physical_width as f32 / metrics.scale.max(1.0),
+                metrics.physical_height as f32 / metrics.scale.max(1.0),
             );
 
             let stage_before = allocation_stage_begin(allocation_stages.as_deref());
@@ -234,7 +275,7 @@ mod wasm_host {
 
             let stage_before = allocation_stage_begin(allocation_stages.as_deref());
             let timing_before = timing_stage_begin(timing_sample.as_deref());
-            self.router.draw(viewport, scale, &mut self.builder);
+            self.router.draw(viewport, metrics.scale, &mut self.builder);
             allocation_stage_end(
                 allocation_stages.as_deref_mut(),
                 WebGpuFrameStage::RouterDraw,
@@ -308,9 +349,6 @@ mod wasm_host {
             let stage_before = allocation_stage_begin(allocation_stages.as_deref());
             let timing_before = timing_stage_begin(timing_sample.as_deref());
             self.submitted_frames = self.submitted_frames.saturating_add(1);
-            if self.settle_frames_remaining > 0 {
-                self.settle_frames_remaining -= 1;
-            }
             self.frame_dirty = false;
             allocation_stage_end(
                 allocation_stages.as_deref_mut(),
@@ -323,11 +361,16 @@ mod wasm_host {
 
         fn mark_frame_dirty(&mut self) {
             self.frame_dirty = true;
-            self.settle_frames_remaining = IDLE_SETTLE_FRAMES;
+            self.invalidations = self.invalidations.saturating_add(1);
+        }
+
+        fn mark_canvas_metrics_dirty(&mut self) {
+            self.canvas_metrics_dirty = true;
+            self.mark_frame_dirty();
         }
 
         fn should_request_next_frame(&self) -> bool {
-            self.frame_dirty || self.settle_frames_remaining > 0 || self.router.wants_next_frame()
+            self.frame_dirty || self.canvas_metrics_dirty || self.router.wants_next_frame()
         }
 
         fn last_draw_count(&self) -> u32 {
@@ -359,18 +402,22 @@ mod wasm_host {
         pub async fn new_async(canvas_id: &str) -> Result<OxideWebApp, JsValue> {
             let _platform = oxide_platform_web::install_current_platform();
             let canvas = canvas_by_id(canvas_id)?;
-            let (physical_w, physical_h, _) = canvas_backing_size(&canvas);
-            canvas.set_width(physical_w);
-            canvas.set_height(physical_h);
+            let metrics = measure_canvas_metrics(&canvas);
+            canvas.set_width(metrics.physical_width);
+            canvas.set_height(metrics.physical_height);
             let renderer = BrowserRenderer::from_canvas_webgpu(canvas).await.map_err(render_err)?;
-            Self::new_with_renderer(renderer)
+            Self::new_with_renderer(renderer, metrics)
         }
 
-        fn new_with_renderer(mut renderer: BrowserRenderer) -> Result<OxideWebApp, JsValue> {
+        fn new_with_renderer(
+            mut renderer: BrowserRenderer,
+            metrics: CanvasMetrics,
+        ) -> Result<OxideWebApp, JsValue> {
             let canvas = renderer.canvas();
             let ime_textarea = create_ime_textarea(&canvas)?;
-            let (physical_w, physical_h, scale) = canvas_backing_size(&canvas);
-            renderer.resize(physical_w, physical_h, scale).map_err(render_err)?;
+            renderer
+                .resize(metrics.physical_width, metrics.physical_height, metrics.scale)
+                .map_err(render_err)?;
 
             let renderer = Rc::new(RefCell::new(renderer));
             let uploader = WebUploader { renderer: Rc::clone(&renderer) };
@@ -390,6 +437,8 @@ mod wasm_host {
 
             let state = Rc::new(RefCell::new(AppState {
                 canvas,
+                canvas_metrics: metrics,
+                canvas_metrics_dirty: false,
                 ime_textarea,
                 renderer,
                 router,
@@ -398,15 +447,24 @@ mod wasm_host {
                 coalesce_items: Vec::new(),
                 bench_resources: None,
                 geometry_bench_resources: None,
-                last_ms: 0,
+                last_timestamp_ms: 0.0,
+                frame_time_remainder_ms: 0.0,
                 ime_focused: false,
                 ime_composing: false,
                 ime_skip_next_input: false,
                 raf: None,
                 raf_pending: false,
+                pointer_anticipation: false,
+                resize_observer: None,
+                resize_observer_callback: None,
+                mutation_observer: None,
+                mutation_observer_callback: None,
                 listeners: Vec::new(),
                 frame_dirty: true,
-                settle_frames_remaining: IDLE_SETTLE_FRAMES,
+                raf_callbacks: 0,
+                raf_requests: 0,
+                invalidations: 1,
+                canvas_metric_reads: 1,
                 idle_skipped_frames: 0,
                 submitted_frames: 0,
                 direct_capture_active: false,
@@ -426,13 +484,21 @@ mod wasm_host {
                 {
                     let mut state = state_for_frame.borrow_mut();
                     state.raf_pending = false;
-                    let _ = state.frame_at(timestamp_ms);
+                    state.raf_callbacks = state.raf_callbacks.saturating_add(1);
+                    if state.should_request_next_frame() {
+                        let _ = state.frame_at(timestamp_ms);
+                    } else {
+                        state.idle_skipped_frames = state.idle_skipped_frames.saturating_add(1);
+                    }
                 }
-                if state_for_frame.borrow().should_request_next_frame() {
-                    request_next_frame(&state_for_frame);
-                } else {
+                let request_anticipation = {
                     let mut state = state_for_frame.borrow_mut();
-                    state.idle_skipped_frames = state.idle_skipped_frames.saturating_add(1);
+                    let request = state.pointer_anticipation;
+                    state.pointer_anticipation = false;
+                    request
+                };
+                if request_anticipation || state_for_frame.borrow().should_request_next_frame() {
+                    request_next_frame(&state_for_frame);
                 }
             }) as Box<dyn FnMut(f64)>);
             self.state.borrow_mut().raf = Some(closure);
@@ -1609,6 +1675,41 @@ mod wasm_host {
                 state.mark_frame_dirty();
             }
             request_next_frame(&self.state);
+        }
+
+        pub fn reset_web_scheduler_metrics(&self) {
+            let mut state = self.state.borrow_mut();
+            state.raf_callbacks = 0;
+            state.raf_requests = 0;
+            state.invalidations = 0;
+            state.canvas_metric_reads = 0;
+            state.idle_skipped_frames = 0;
+            state.submitted_frames = 0;
+        }
+
+        #[must_use]
+        pub fn web_scheduler_metrics(&self) -> String {
+            let state = self.state.borrow();
+            let metrics = state.canvas_metrics;
+            format!(
+                "raf_callbacks={};raf_requests={};invalidations={};canvas_metric_reads={};idle_skipped_frames={};submitted_frames={};raf_pending={};last_timestamp_ms={:.6};frame_time_remainder_ms={:.6};physical_width={};physical_height={};css_width={:.3};css_height={:.3};scale={:.3};left={:.3};top={:.3}",
+                state.raf_callbacks,
+                state.raf_requests,
+                state.invalidations,
+                state.canvas_metric_reads,
+                state.idle_skipped_frames,
+                state.submitted_frames,
+                u8::from(state.raf_pending),
+                state.last_timestamp_ms,
+                state.frame_time_remainder_ms,
+                metrics.physical_width,
+                metrics.physical_height,
+                metrics.css_width,
+                metrics.css_height,
+                metrics.scale,
+                metrics.left,
+                metrics.top,
+            )
         }
 
         #[must_use]
@@ -3697,6 +3798,7 @@ mod wasm_host {
         };
         if window.request_animation_frame(raf.as_ref().unchecked_ref()).is_ok() {
             borrowed.raf_pending = true;
+            borrowed.raf_requests = borrowed.raf_requests.saturating_add(1);
         }
     }
 
@@ -3715,9 +3817,64 @@ mod wasm_host {
         let window_target: &EventTarget = window.unchecked_ref();
         install_keyboard_listener(state, window_target, "keydown")?;
         install_keyboard_listener(state, window_target, "keyup")?;
-        install_frame_event_listener(state, window_target, "resize")?;
-        install_frame_event_listener(state, window_target, "oxide-redraw")?;
+        install_frame_event_listener(state, window_target, "resize", true, false)?;
+        install_frame_event_listener(state, window_target, "scroll", true, true)?;
+        install_frame_event_listener(state, window_target, "oxide-redraw", false, false)?;
+        install_canvas_observers(state)?;
         install_ime_listeners(state, window_target)
+    }
+
+    fn install_canvas_observers(state: &Rc<RefCell<AppState>>) -> Result<(), JsValue> {
+        let canvas = state.borrow().canvas.clone();
+        let state_for_resize = Rc::clone(state);
+        let resize_callback = Closure::wrap(Box::new(move |entries: js_sys::Array| {
+            let Some(entry) = entries.get(0).dyn_into::<ResizeObserverEntry>().ok() else {
+                return;
+            };
+            let rect = entry.content_rect();
+            let css_width = rect.width().max(1.0) as f32;
+            let css_height = rect.height().max(1.0) as f32;
+            let changed = {
+                let state = state_for_resize.borrow();
+                (state.canvas_metrics.css_width - css_width).abs() > f32::EPSILON
+                    || (state.canvas_metrics.css_height - css_height).abs() > f32::EPSILON
+            };
+            if changed {
+                state_for_resize.borrow_mut().mark_canvas_metrics_dirty();
+                request_next_frame(&state_for_resize);
+            }
+        }) as Box<dyn FnMut(js_sys::Array)>);
+        let resize_observer = ResizeObserver::new(resize_callback.as_ref().unchecked_ref())?;
+        resize_observer.observe(canvas.unchecked_ref());
+
+        let document = web_sys::window()
+            .and_then(|window| window.document())
+            .ok_or_else(|| JsValue::from_str("document is unavailable"))?;
+        let document_root = document
+            .document_element()
+            .ok_or_else(|| JsValue::from_str("document root is unavailable"))?;
+        let state_for_mutation = Rc::clone(state);
+        let mutation_callback = Closure::wrap(Box::new(move |_records: js_sys::Array| {
+            state_for_mutation.borrow_mut().mark_canvas_metrics_dirty();
+            request_next_frame(&state_for_mutation);
+        }) as Box<dyn FnMut(js_sys::Array)>);
+        let mutation_observer = MutationObserver::new(mutation_callback.as_ref().unchecked_ref())?;
+        let options = MutationObserverInit::new();
+        let attribute_filter = js_sys::Array::new();
+        attribute_filter.push(&JsValue::from_str("class"));
+        attribute_filter.push(&JsValue::from_str("style"));
+        options.set_attributes(true);
+        options.set_attribute_filter(attribute_filter.as_ref());
+        options.set_child_list(true);
+        options.set_subtree(true);
+        mutation_observer.observe_with_options(document_root.unchecked_ref(), &options)?;
+
+        let mut state = state.borrow_mut();
+        state.resize_observer = Some(resize_observer);
+        state.resize_observer_callback = Some(resize_callback);
+        state.mutation_observer = Some(mutation_observer);
+        state.mutation_observer_callback = Some(mutation_callback);
+        Ok(())
     }
 
     fn create_ime_textarea(canvas: &HtmlCanvasElement) -> Result<HtmlTextAreaElement, JsValue> {
@@ -3800,12 +3957,23 @@ mod wasm_host {
                 return;
             };
             event.prevent_default();
+            {
+                let mut state = state_for_event.borrow_mut();
+                state.mark_frame_dirty();
+                if name == "pointermove" {
+                    state.pointer_anticipation = true;
+                }
+            }
             let phase = touch_phase_for_event(name);
-            let (x, y) = event_point(
-                &state_for_event.borrow().canvas,
-                pointer.client_x() as f32,
-                pointer.client_y() as f32,
-            );
+            let (x, y) = {
+                let mut state = state_for_event.borrow_mut();
+                let _ = state.refresh_canvas_metrics();
+                event_point(
+                    state.canvas_metrics,
+                    pointer.client_x() as f32,
+                    pointer.client_y() as f32,
+                )
+            };
             if pointer.pointer_type() == "touch" || pointer.pointer_type() == "pen" {
                 let device = if pointer.pointer_type() == "pen" {
                     platform_api::PointerDevice::Pencil
@@ -3824,7 +3992,6 @@ mod wasm_host {
                 };
                 let mut state = state_for_event.borrow_mut();
                 state.router.input_touch(&touch);
-                state.mark_frame_dirty();
             } else {
                 let mut state = state_for_event.borrow_mut();
                 state.router.input_pointer(
@@ -3834,7 +4001,6 @@ mod wasm_host {
                     pointer.movement_y() as f32,
                     pointer.buttons() as u32,
                 );
-                state.mark_frame_dirty();
             }
             request_next_frame(&state_for_event);
         }) as Box<dyn FnMut(Event)>);
@@ -3851,20 +4017,23 @@ mod wasm_host {
                 return;
             };
             event.prevent_default();
-            let (x, y) = event_point(
-                &state_for_event.borrow().canvas,
-                wheel.client_x() as f32,
-                wheel.client_y() as f32,
-            );
+            state_for_event.borrow_mut().mark_frame_dirty();
+            let (x, y) = {
+                let mut state = state_for_event.borrow_mut();
+                let _ = state.refresh_canvas_metrics();
+                event_point(
+                    state.canvas_metrics,
+                    wheel.client_x() as f32,
+                    wheel.client_y() as f32,
+                )
+            };
             let delta = wheel.delta_y() as f32;
             if wheel.ctrl_key() || wheel.meta_key() {
                 let mut state = state_for_event.borrow_mut();
                 state.router.input_pinch(x, y, -delta * 0.001);
-                state.mark_frame_dirty();
             } else {
                 let mut state = state_for_event.borrow_mut();
                 state.router.input_pointer(x, y, 0.0, -delta, 0);
-                state.mark_frame_dirty();
             }
             request_next_frame(&state_for_event);
         }) as Box<dyn FnMut(Event)>);
@@ -3883,13 +4052,19 @@ mod wasm_host {
             };
             let mut state = state_for_event.borrow_mut();
             let ime_focused = state.ime_focused;
-            let handled = route_key(&mut state.router, keyboard, name == "keydown", ime_focused);
+            let down = name == "keydown";
+            let handled = route_key(&mut state.router, keyboard, down, ime_focused);
             if handled {
                 event.prevent_default();
             }
-            state.mark_frame_dirty();
+            let needs_frame = handled || ime_focused && down;
+            if needs_frame {
+                state.mark_frame_dirty();
+            }
             drop(state);
-            request_next_frame(&state_for_event);
+            if needs_frame {
+                request_next_frame(&state_for_event);
+            }
         }) as Box<dyn FnMut(Event)>);
         retain_listener(state, target, name, closure)
     }
@@ -3983,8 +4158,8 @@ mod wasm_host {
             textarea_for_show.set_value("");
             let element: &HtmlElement = textarea_for_show.unchecked_ref();
             let _ = element.focus();
-            let (_, physical_h, scale) = canvas_backing_size(&state.canvas);
-            let logical_h = physical_h as f32 / scale.max(1.0);
+            let metrics = state.canvas_metrics;
+            let logical_h = metrics.physical_height as f32 / metrics.scale.max(1.0);
             state.router.input_set_ime_rect(gfx::RectF::new(
                 0.0,
                 logical_h * 0.62,
@@ -4019,6 +4194,8 @@ mod wasm_host {
         state: &Rc<RefCell<AppState>>,
         target: &EventTarget,
         name: &'static str,
+        canvas_metrics_dirty: bool,
+        capture: bool,
     ) -> Result<(), JsValue> {
         let state_for_event = Rc::clone(state);
         let closure = Closure::wrap(Box::new(move |_event: Event| {
@@ -4027,14 +4204,21 @@ mod wasm_host {
                 if state.direct_capture_active {
                     return;
                 }
-                state.mark_frame_dirty();
-                let _ = state.frame_at(perf_now());
+                if canvas_metrics_dirty {
+                    state.mark_canvas_metrics_dirty();
+                } else {
+                    state.mark_frame_dirty();
+                }
             }
-            if state_for_event.borrow().should_request_next_frame() {
-                request_next_frame(&state_for_event);
-            }
+            request_next_frame(&state_for_event);
         }) as Box<dyn FnMut(Event)>);
-        retain_listener(state, target, name, closure)
+        target.add_event_listener_with_callback_and_bool(
+            name,
+            closure.as_ref().unchecked_ref(),
+            capture,
+        )?;
+        state.borrow_mut().listeners.push(closure);
+        Ok(())
     }
 
     fn route_key(
@@ -4200,9 +4384,8 @@ mod wasm_host {
         }
     }
 
-    fn event_point(canvas: &HtmlCanvasElement, client_x: f32, client_y: f32) -> (f32, f32) {
-        let rect = canvas.get_bounding_client_rect();
-        (client_x - rect.left() as f32, client_y - rect.top() as f32)
+    fn event_point(metrics: CanvasMetrics, client_x: f32, client_y: f32) -> (f32, f32) {
+        (client_x - metrics.left, client_y - metrics.top)
     }
 
     fn canvas_by_id(id: &str) -> Result<HtmlCanvasElement, JsValue> {
@@ -4216,16 +4399,23 @@ mod wasm_host {
             .map_err(|_| JsValue::from_str("element is not a canvas"))
     }
 
-    fn canvas_backing_size(canvas: &HtmlCanvasElement) -> (u32, u32, f32) {
+    fn measure_canvas_metrics(canvas: &HtmlCanvasElement) -> CanvasMetrics {
+        let rect = canvas.get_bounding_client_rect();
         let scale = web_sys::window()
             .map(|window| window.device_pixel_ratio() as f32)
             .unwrap_or(1.0)
             .max(1.0);
-        let css_w = canvas.client_width().max(1) as f32;
-        let css_h = canvas.client_height().max(1) as f32;
-        let width = (css_w * scale).round().max(1.0) as u32;
-        let height = (css_h * scale).round().max(1.0) as u32;
-        (width, height, scale)
+        let css_width = rect.width().max(1.0) as f32;
+        let css_height = rect.height().max(1.0) as f32;
+        CanvasMetrics {
+            physical_width: (css_width * scale).round().max(1.0) as u32,
+            physical_height: (css_height * scale).round().max(1.0) as u32,
+            css_width,
+            css_height,
+            scale,
+            left: rect.left() as f32,
+            top: rect.top() as f32,
+        }
     }
 
     fn render_err(err: gfx::RenderError) -> JsValue {

@@ -390,9 +390,13 @@ fn host_sizes_the_canvas_before_webgpu_renderer_construction() {
         .split("fn new_with_renderer")
         .next()
         .expect("async WebGPU constructor body");
-    let backing_size = new_async.find("canvas_backing_size(&canvas)").expect("backing size");
-    let set_width = new_async.find("canvas.set_width(physical_w)").expect("canvas width");
-    let set_height = new_async.find("canvas.set_height(physical_h)").expect("canvas height");
+    let backing_size = new_async.find("measure_canvas_metrics(&canvas)").expect("backing size");
+    let set_width = new_async
+        .find("canvas.set_width(metrics.physical_width)")
+        .expect("canvas width");
+    let set_height = new_async
+        .find("canvas.set_height(metrics.physical_height)")
+        .expect("canvas height");
     let renderer = new_async
         .find("BrowserRenderer::from_canvas_webgpu(canvas).await")
         .expect("WebGPU renderer construction");
@@ -1285,6 +1289,49 @@ fn c19_target_adapter_covers_construction_resize_and_first_declared_use() {
     assert!(script.contains("--force-device-scale-factor=2"));
     assert!(script.contains("warmups, samples, metrics"));
     assert!(script.contains("writeFileSync(output, json)"));
+}
+
+#[test]
+fn c20_web_scheduler_coalesces_invalidations_and_caches_canvas_geometry() {
+    let host = include_str!("../src/lib.rs");
+    let script = include_str!("../../../../scripts/run_web_scheduler_c20.mjs");
+    let frame = source_fn_slice(host, "fn frame_at_inner(", "fn mark_frame_dirty");
+    let frame_event = source_fn_slice(
+        host,
+        "fn install_frame_event_listener(",
+        "fn route_key(",
+    );
+    let pointer = source_fn_slice(host, "fn install_pointer_listener(", "fn install_wheel_listener(");
+
+    assert!(host.contains("struct CanvasMetrics"));
+    assert!(host.contains("ResizeObserver::new"));
+    assert!(host.contains("MutationObserver::new"));
+    assert!(host.contains("install_frame_event_listener(state, window_target, \"scroll\", true, true)"));
+    assert!(frame.contains("self.refresh_canvas_metrics()?"));
+    assert!(!frame.contains("get_bounding_client_rect"));
+    assert!(pointer.contains("state.refresh_canvas_metrics()"));
+    assert!(pointer.contains("state.canvas_metrics"));
+    assert!(pointer.contains("state.pointer_anticipation = true"));
+    assert!(!pointer.contains("get_bounding_client_rect"));
+    assert!(frame_event.contains("state.mark_canvas_metrics_dirty()"));
+    assert!(frame_event.contains("request_next_frame(&state_for_event)"));
+    assert!(!frame_event.contains("frame_at(perf_now())"));
+    assert!(host.contains("last_timestamp_ms: f64"));
+    assert!(host.contains("frame_time_remainder_ms: f64"));
+    assert!(!host.contains("IDLE_SETTLE_FRAMES"));
+    assert!(!host.contains("settle_frames_remaining"));
+    assert!(host.contains("let needs_frame = handled || ime_focused && down"));
+    assert!(host.contains("pub fn web_scheduler_metrics"));
+    assert!(script.contains("const discreteSampleCount = 100"));
+    assert!(script.contains("const pointerSampleCount = 240"));
+    assert!(script.contains("app.set_scene(4)"));
+    assert!(script.contains("key: \"ArrowRight\""));
+    assert!(script.contains("pointer240hz"));
+    assert!(script.contains("window.dispatchEvent(new Event(\"resize\"))"));
+    assert!(script.contains("window.dispatchEvent(new Event(\"oxide-redraw\"))"));
+    assert!(script.contains("canvas.style.width = \"calc(100vw - 32px)\""));
+    assert!(script.contains("missed_frames"));
+    assert!(script.contains("event_to_visible_ms"));
 }
 
 #[test]

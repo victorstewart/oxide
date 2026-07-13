@@ -25,6 +25,8 @@ Call flow:
 - `oxide_host_web::OxideWebApp::new(canvas_id: &str) -> Result<OxideWebApp, JsValue>`: wasm-only synchronous constructor that returns `Unsupported` because browser WebGPU device creation is asynchronous.
 - `oxide_host_web::OxideWebApp::new_async(canvas_id: &str) -> Promise<OxideWebApp>`: wasm-only async constructor that sets the CSS×DPR backing dimensions before WebGPU surface construction, requires WebGPU, and returns `Unsupported` if the browser cannot provide it.
 - `oxide_host_web::OxideWebApp::start(&self) -> Result<(), JsValue>`: starts the requestAnimationFrame loop.
+- `oxide_host_web::OxideWebApp::reset_web_scheduler_metrics(&self)`: resets the non-default C20 scheduler counters after the browser loop reaches idle.
+- `oxide_host_web::OxideWebApp::web_scheduler_metrics(&self) -> String`: reports RAF requests/callbacks, invalidations, submissions, cached-metric reads, high-resolution timing carry, and cached canvas geometry for paired browser evidence.
 - `oxide_host_web::OxideWebApp::frame(&self) -> Result<(), JsValue>`: draws one frame immediately.
 - `oxide_host_web::OxideWebApp::frame_at_timestamp_unprofiled(&self, timestamp_ms: f64) -> Result<(), JsValue>`: submits one normal frame without stage instrumentation for bounded harness-overhead controls.
 - `oxide_host_web::OxideWebApp::frame_at_timestamp_profiled(&self, timestamp_ms: f64) -> Result<String, JsValue>`: submits one normal production frame at a supplied high-resolution RAF timestamp and returns bounded per-stage CPU timing for the displayed-frame harness.
@@ -71,6 +73,8 @@ The snapshot-only `id_mask_reference_only=1` report bypasses the benchmark batte
 The clean-layer dirty rerender row is also retired from the default browser page; layer/damage/effects remains the dirty-layer coverage row.
 
 Async startup reads CSS size and DPR, writes the canvas backing width and height, and only then hands that canvas to the WebGPU constructor. The normal post-construction host resize therefore changes scale without rebuilding the surface at the browser's 300×150 default. Apps that know their first screen uses backdrop or Scene3D may call the renderer's selective prewarm outside a latency-sensitive frame; ordinary direct UI declares neither feature.
+
+The production scheduler caches CSS geometry, backing dimensions, and DPR instead of reading layout on every frame or pointer sample. Resize, scroll, style/class mutation, and DPR-bearing window resize observations invalidate that cache and request at most one pending RAF. Pointer/wheel delivery refreshes a dirty cache before coordinate conversion, while ordinary high-rate samples use cached offsets. Resize and `oxide-redraw` callbacks never render synchronously. After submission, another RAF is requested only when a new invalidation or `Router::wants_next_frame` requires one; the retired two-frame settle policy is not part of production scheduling. RAF timestamps remain `f64`, with fractional milliseconds carried across the existing integer scene-update boundary.
 
 In non-default `canvas_diag=1` mode, the static page skips WebGPU startup and runs `bench_canvas_indexed_quads` on a hidden Canvas2D renderer. That mode exists only to collect same-workload Canvas fallback A/B evidence before retaining renderer changes.
 

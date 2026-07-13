@@ -1,4 +1,145 @@
 [[experiments]]
+id = "c20-web-single-raf-after-input-routing-rejected"
+introduced_commit = "rejected during C20"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-host-web", "renderer-web"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "The coalesced scheduler must preserve click/key/pointer routing, cached canvas geometry, CSS resize, static idle, and exact browser captures."
+performance_gate = "The doubled 30-pair exact-tree population must reduce resize/redraw submissions and canvas metric reads without regressing click/key or 240 Hz pointer event-to-visible p95/p99/peak guardrails."
+decision_state = "rejected"
+decision = "Rejected registering the coalesced RAF only after Rust input routing because the exact doubled population missed the mandatory key and 240 Hz pointer latency-tail guardrails despite large deterministic work reductions."
+proof = [
+   "The rejected tree reduced resize and redraw submissions from 101 to 1, click and key submissions from 2 to 1, and clean 240 Hz pointer canvas metric reads from 97 to 0 in all 30 pairs.",
+   "Key event-to-visible p95 regressed from 9.493 ms to 10.082 ms (+6.2%), failing the 3% guardrail.",
+   "Pointer event-to-visible p99 regressed from 8.599 ms to 9.052 ms (+5.3%) and peak regressed from 8.805 ms to 9.380 ms (+6.5%), failing the 3% and 5% guardrails.",
+]
+cleanup = [
+   "The rejected scheduling order was not retained; valid input now registers its already-required RAF before Rust routing work in the same browser task.",
+]
+
+[[experiments]]
+id = "c20-web-early-input-raf-without-anticipation-rejected"
+introduced_commit = "rejected during C20"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-host-web", "renderer-web"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "The coalesced scheduler and corrected distribution adapter must preserve repeated click/key input, every 240 Hz pointer sample, cached geometry, CSS resize, missed-frame counts, and static idle."
+performance_gate = "The doubled 30-pair exact-tree population with per-event latency distributions must preserve click/key and pointer p95/p99/peak while reducing deterministic submissions and canvas reads."
+decision_state = "rejected"
+decision = "Rejected early input RAF registration without pointer anticipation because removing the pending settle callback exposed a repeatable high-rate pointer latency-tail regression."
+proof = [
+   "The corrected adapter recorded 12 settled click groups, 12 settled key groups, and all 60 pointer event-to-visible samples per browser process, gating each process's p99 across 30 exact-tree pairs.",
+   "Pointer per-process p99 median regressed from 9.386 ms to 9.923 ms (+6.0%), p95 from 10.202 ms to 10.723 ms (+5.1%), and p99 from 10.554 ms to 10.896 ms (+3.2%).",
+   "Click p95/p99/peak also exceeded the no-regression guardrails even though key latency passed, missed frames stayed zero, and deterministic work counters moved as predicted.",
+]
+cleanup = [
+   "Early input RAF registration remains, but the winning design must keep a no-submit pointer anticipation callback armed during active motion to recover the lost deadline opportunity.",
+]
+
+[[experiments]]
+id = "c20-web-early-input-raf-pointer-sentinel-rejected"
+introduced_commit = "rejected during C20"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-host-web", "renderer-web"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "The pointer-only anticipation RAF must submit when motion dirties the scene, skip submission when clean, preserve repeated input distributions, and quiesce to zero static-idle callbacks/submissions."
+performance_gate = "The doubled 30-pair distribution population must preserve click/key/pointer event-to-visible p95/p99/peak and missed frames while retaining deterministic coalescing wins."
+decision_state = "rejected"
+decision = "Rejected combining pre-routing RAF registration with a pointer anticipation sentinel because the exact doubled population still failed pointer and click tail guardrails."
+proof = [
+   "The sentinel kept active pointer submissions at parent-equivalent p95/p99 while its final clean callback skipped submission; static idle and missed frames remained zero.",
+   "Pointer per-process p99 median regressed from 9.481 ms to 9.780 ms (+3.3%) and population p99 regressed from 10.476 ms to 10.840 ms (+3.5%).",
+   "Click p95/p99/peak also failed despite a 1.6% median improvement; key latency and all deterministic work counters passed.",
+]
+cleanup = [
+   "The no-submit pointer sentinel remains for the next design, but RAF registration returns after input routing to isolate and remove the unproven pre-routing order change.",
+]
+
+[[experiments]]
+id = "c20-web-twelve-sample-input-tail-protocol-rejected"
+introduced_commit = "rejected during C20"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-host-web", "renderer-web"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "The input adapter must retain every raw event-to-visible sample and derive per-process distributions without batch-average substitution."
+performance_gate = "Click/key/pointer p99 guardrails require enough individual event samples to estimate tails; a handful of discrete groups cannot decide the runtime design."
+decision_state = "rejected"
+decision = "Rejected the 12-group click/key tail protocol after its doubled population left one p99-only failure while all other runtime gates passed; twelve individual latencies are insufficient for a defensible p99."
+proof = [
+   "The route-then-register pointer-sentinel tree passed pointer event-to-visible, key event-to-visible, missed frames, pointer submissions, and every deterministic work gate across 30 pairs.",
+   "Click p50 improved 1.6% and p95 was neutral, but p99 regressed 3.6% because each process percentile interpolated only 12 individual click-group samples.",
+   "The replacement protocol records 100 settled click groups, 100 settled key groups, and 240 pointer samples per process before deriving p99.",
+]
+cleanup = [
+   "Removed the underpowered 12-group discrete-input protocol; the shared adapter now retains at least 100 individual samples for click/key tail estimates.",
+]
+
+[[experiments]]
+id = "c20-web-route-then-register-unfiltered-key-invalidation-rejected"
+introduced_commit = "rejected during C20"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-host-web", "renderer-web"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "The route-then-register pointer sentinel must preserve click/key/pointer state, focused IME keydown, handled keyup, geometry, static idle, and exact visual output."
+performance_gate = "The doubled 30-pair powered population must preserve click/key/pointer event-to-visible p95/p99/peak while retaining deterministic coalescing wins."
+decision_state = "rejected"
+decision = "Rejected the otherwise-passing route-then-register sentinel because unconditional redraw invalidation for unhandled keyup left key latency tails outside guardrails."
+proof = [
+   "Each process retained 100 click, 100 key, and 240 pointer event-to-visible samples before p99 derivation; click and pointer latency distributions passed across 30 pairs.",
+   "Key median was neutral at 11.026 ms versus 11.060 ms, but candidate population p95/p99/peak were 11.542/11.750/11.811 ms versus 11.146/11.187/11.199 ms.",
+   "The rejected path dirtied and requested a frame for ArrowRight keyup even though route_key returned false and made no state change.",
+]
+cleanup = [
+   "Unhandled keyup no longer dirties or schedules; handled keyup and focused-IME keydown retain their redraw path.",
+]
+
+[[experiments]]
+id = "c20-web-text-layout-noop-key-journey-rejected"
+introduced_commit = "rejected during C20"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-host-web", "renderer-web"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "The key latency journey must mutate visible Oxide scene state before measuring event-to-visible; a handled DOM key with no scene consumer is not valid visible-input proof."
+performance_gate = "Powered key distributions are admissible only when A and B perform the same visible scene mutation and present its resulting frame."
+decision_state = "rejected"
+decision = "Rejected the TextLayout ArrowRight journey because Router accepted the key but scene 1 had no ArrowRight consumer, so the measured submission contained no key-driven visible change."
+proof = [
+   "Router::key_arrow_right mutates only Controls and CollectionStress; the adapter had selected TextLayout before dispatching ArrowRight.",
+   "The invalid 15-pair key-filter population was not doubled or used for an acceptance decision after this production-path mismatch was established.",
+   "The replacement adapter selects CollectionStress for the key journey, where ArrowRight moves collection focus, then restores TextLayout for pointer/resize parity.",
+]
+cleanup = [
+   "Removed the no-op TextLayout key journey; key latency now measures a real CollectionStress focus mutation and visible frame.",
+]
+
+[[experiments]]
+id = "c20-web-single-raf-scheduler"
+introduced_commit = "C20 staged tree recorded in commit proof"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-host-web", "renderer-web"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "Click/key, 240 Hz pointer input, resize/redraw storms, CSS layout mutation, DPR-sized backing, and static idle must preserve input, geometry, animation demand, and visible output; focused tests, wasm compilation, browser visuals, and exact source identities must pass."
+performance_gate = "Fresh-process paired Chrome A/B must materially reduce submissions and forced canvas metric reads for resize/redraw storms, reduce ordinary click/key settle submissions, preserve 240 Hz pointer event-to-visible and missed-frame distributions, and keep static idle at zero callbacks/submissions after quiescence."
+decision_state = "accepted"
+decision = "Cache browser canvas/DPR/pointer geometry, coalesce all host invalidations into one pending RAF, render resize/redraw asynchronously, retire unconditional settle frames, and let Router::wants_next_frame exclusively express continuing work."
+proof = [
+   "The exact staged-tree paired reports, instrumentation patch, source/binary identities, raw process samples, scheduler counters, layout evidence, and browser captures are retained under benchmarks/experiments/c20-web-scheduler/raw and summarized in the C20 commit proof.",
+   "Deterministic gates require 100 resize or redraw events to produce one candidate submission, clean 240 Hz pointer input to perform zero candidate canvas metric reads, CSS mutation to update cached logical/physical dimensions, and static idle to remain at zero callbacks and submissions.",
+   "Click/key, pointer event-to-visible, RAF deadline/missed-frame, app pixels, and startup distributions must pass the shared no-material-regression policy; throughput counters cannot override a latency or correctness failure.",
+]
+cleanup = [
+   "Deleted synchronous rendering from resize and oxide-redraw handlers, per-frame canvas layout reads, per-pointer bounding-rect reads, integer timestamp rounding, and the two-frame settle counter.",
+   "The C20 scheduler adapter and exported counters remain non-default measurement coverage; official latest browser baseline promotion remains deferred to C62.",
+]
+
+[[experiments]]
 id = "c19-webgpu-lazy-auxiliary-targets"
 introduced_commit = "C19 staged tree recorded in commit proof"
 introduced_date = "2026-07-13"
