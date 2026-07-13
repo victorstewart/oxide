@@ -68,6 +68,7 @@ struct AppState {
     router: Option<test_scenes::Router<MtlUploader>>,
     builder: ui::DrawListBuilder,
     coalesce_items: Vec<gfx_api::DrawCmd>,
+    damage_rects: Vec<gfx_api::RectI>,
     pending_damage_rects: Vec<gfx_api::RectI>,
     prepared_frame: bool,
     touch: PrimaryTouchTracker,
@@ -115,15 +116,45 @@ fn mark_frame_dirty(app: &mut AppState) {
 
 fn retain_pending_damage_for_retry(
     pending: &mut Vec<gfx_api::RectI>,
-    mut damage: Vec<gfx_api::RectI>,
+    damage: &mut Vec<gfx_api::RectI>,
 ) {
     if damage.is_empty() {
         return;
     }
     if pending.is_empty() {
-        *pending = damage;
+        core::mem::swap(pending, damage);
     } else {
-        pending.append(&mut damage);
+        pending.append(damage);
+    }
+}
+
+#[cfg(test)]
+mod damage_tests {
+    use super::*;
+
+    #[test]
+    fn retry_merge_preserves_old_new_bounds_and_reusable_capacity() {
+        let old = gfx_api::RectI::new(1, 2, 3, 4);
+        let new_a = gfx_api::RectI::new(5, 6, 7, 8);
+        let new_b = gfx_api::RectI::new(9, 10, 11, 12);
+        let mut pending = Vec::with_capacity(4);
+        pending.push(old);
+        let mut damage = Vec::with_capacity(8);
+        damage.extend_from_slice(&[new_a, new_b]);
+
+        retain_pending_damage_for_retry(&mut pending, &mut damage);
+
+        assert_eq!(pending, vec![old, new_a, new_b]);
+        assert!(damage.is_empty());
+        assert_eq!(damage.capacity(), 8);
+
+        let mut empty_pending = Vec::with_capacity(3);
+        damage.push(new_a);
+        retain_pending_damage_for_retry(&mut empty_pending, &mut damage);
+        assert_eq!(empty_pending, vec![new_a]);
+        assert_eq!(empty_pending.capacity(), 8);
+        assert!(damage.is_empty());
+        assert_eq!(damage.capacity(), 3);
     }
 }
 
@@ -350,27 +381,30 @@ pub extern "C" fn macos_app_prepare_frame(w: u32, h: u32, scale: f32) -> ::libc:
     }
 
     let mut builder = core::mem::take(&mut app.builder);
+    let mut damage_rects = core::mem::take(&mut app.damage_rects);
     builder.clear();
     let vp =
         gfx_api::RectF::new(0.0, 0.0, (w as f32) / scale.max(1.0), (h as f32) / scale.max(1.0));
-    let damage_rects = {
+    {
         let router = match app.router.as_mut() {
             Some(r) => r,
             None => {
                 app.builder = builder;
+                app.damage_rects = damage_rects;
                 return -3;
             }
         };
         router.update(now, dt_ms);
         router.draw(vp, scale, &mut builder);
-        router.take_damage()
+        router.take_damage_into(&mut damage_rects);
     };
     {
         let dl = builder.drawlist_mut();
         oxide_ui_core::coalesce_adjacent_draws_reuse(dl, &mut app.coalesce_items);
     }
     app.builder = builder;
-    retain_pending_damage_for_retry(&mut app.pending_damage_rects, damage_rects);
+    retain_pending_damage_for_retry(&mut app.pending_damage_rects, &mut damage_rects);
+    app.damage_rects = damage_rects;
     app.prepared_frame = true;
     0
 }
@@ -399,10 +433,10 @@ pub extern "C" fn macos_app_submit_prepared_frame_with_drawable(
         } else {
             let damage_obj = gfx_api::Damage { rects: core::mem::take(&mut damage_rects) };
             let token = renderer.begin_frame(&gfx_api::FrameTarget, Some(&damage_obj));
+            damage_rects = damage_obj.rects;
             renderer.encode_pass(builder.drawlist());
             if let Err(_) = renderer.submit(token) {
                 let _ = renderer.cancel_present_drawable();
-                damage_rects = damage_obj.rects;
                 Err(-4)
             } else {
                 Ok(())
@@ -414,9 +448,11 @@ pub extern "C" fn macos_app_submit_prepared_frame_with_drawable(
     app.builder = builder;
     app.prepared_frame = false;
     if let Err(code) = submit_result {
-        retain_pending_damage_for_retry(&mut app.pending_damage_rects, damage_rects);
+        retain_pending_damage_for_retry(&mut app.pending_damage_rects, &mut damage_rects);
         return code;
     }
+    damage_rects.clear();
+    app.damage_rects = damage_rects;
     app.submitted_frames = app.submitted_frames.saturating_add(1);
     if app.settle_frames_remaining > 0 {
         app.settle_frames_remaining -= 1;

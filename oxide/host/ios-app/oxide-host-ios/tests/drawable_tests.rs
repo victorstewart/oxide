@@ -63,6 +63,15 @@ fn native_frame_coalescing_reuses_app_storage() {
 }
 
 #[test]
+fn native_damage_handoff_reuses_router_and_submit_storage() {
+    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+    assert!(source.contains("router.take_damage_into(&mut damage_rects)"));
+    assert!(source.contains("damage_rects = damage.rects"));
+    assert!(source.contains("app.pending_damage_rects = damage_rects"));
+    assert!(!source.contains("router.take_damage()"));
+}
+
+#[test]
 fn app_main_uses_declared_c_environment_apis_for_parked_perf_launch() {
     let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../App/main.m"));
 

@@ -2003,6 +2003,7 @@ pub extern "C" fn oxide_host_app_prepare_frame(w: u32, h: u32, scale: f32) -> ::
         let _ = with_perf_signpost("camera.renderer.resize", || renderer.resize(w, h, scale));
     }
     let mut builder = core::mem::take(&mut app.builder);
+    let mut damage_rects = core::mem::take(&mut app.pending_damage_rects);
     builder.clear();
     let vp =
         gfx_api::RectF::new(0.0, 0.0, (w as f32) / scale.max(1.0), (h as f32) / scale.max(1.0));
@@ -2023,12 +2024,14 @@ pub extern "C" fn oxide_host_app_prepare_frame(w: u32, h: u32, scale: f32) -> ::
             damage_rects: 0,
             ..StatsSnapshot::default()
         };
-        Some((router.take_damage(), stats))
+        router.take_damage_into(&mut damage_rects);
+        Some(stats)
     });
-    let (damage_rects, stats) = match router_update {
+    let stats = match router_update {
         Some(value) => value,
         None => {
             app.builder = builder;
+            app.pending_damage_rects = damage_rects;
             return -3;
         }
     };
@@ -2094,7 +2097,7 @@ pub extern "C" fn oxide_host_app_submit_prepared_frame_with_drawable(
             Err(code) => return code,
         }
     }
-    let damage_rects = core::mem::take(&mut app.pending_damage_rects);
+    let mut damage_rects = core::mem::take(&mut app.pending_damage_rects);
     let mut stats = app.pending_frame_stats;
     let builder = core::mem::take(&mut app.builder);
     let perf_stats_result = {
@@ -2108,10 +2111,11 @@ pub extern "C" fn oxide_host_app_submit_prepared_frame_with_drawable(
                 if present_result.is_err() {
                     Err(-5)
                 } else {
-                    let damage = gfx_api::Damage { rects: damage_rects };
+                    let damage = gfx_api::Damage { rects: core::mem::take(&mut damage_rects) };
                     let token = with_perf_signpost("camera.renderer.begin_frame", || {
                         renderer.begin_frame(&gfx_api::FrameTarget, Some(&damage))
                     });
+                    damage_rects = damage.rects;
                     with_perf_signpost("camera.renderer.encode_pass", || {
                         renderer.encode_pass(builder.drawlist());
                     });
@@ -2125,10 +2129,11 @@ pub extern "C" fn oxide_host_app_submit_prepared_frame_with_drawable(
                     }
                 }
             } else {
-                let damage = gfx_api::Damage { rects: damage_rects };
+                let damage = gfx_api::Damage { rects: core::mem::take(&mut damage_rects) };
                 let token = with_perf_signpost("camera.renderer.begin_frame", || {
                     renderer.begin_frame(&gfx_api::FrameTarget, Some(&damage))
                 });
+                damage_rects = damage.rects;
                 with_perf_signpost("camera.renderer.encode_pass", || {
                     renderer.encode_pass(builder.drawlist());
                 });
@@ -2143,6 +2148,8 @@ pub extern "C" fn oxide_host_app_submit_prepared_frame_with_drawable(
             Err(-2)
         }
     };
+    damage_rects.clear();
+    app.pending_damage_rects = damage_rects;
     let perf_stats = match perf_stats_result {
         Ok(stats) => stats,
         Err(code) => {

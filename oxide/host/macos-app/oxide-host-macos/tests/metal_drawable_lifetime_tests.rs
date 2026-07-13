@@ -49,7 +49,7 @@ fn canceled_prepared_frame_retains_damage_for_retry() {
     let prepare_body = &source[prepare..submit];
     assert!(
         prepare_body.contains(
-            "retain_pending_damage_for_retry(&mut app.pending_damage_rects, damage_rects)"
+            "retain_pending_damage_for_retry(&mut app.pending_damage_rects, &mut damage_rects)"
         ),
         "newly prepared damage must be merged with damage retained from a skipped frame"
     );
@@ -67,7 +67,7 @@ fn canceled_prepared_frame_retains_damage_for_retry() {
     assert!(
         submit_body.contains("core::mem::take(&mut app.pending_damage_rects)")
             && submit_body.contains(
-                "retain_pending_damage_for_retry(&mut app.pending_damage_rects, damage_rects)"
+                "retain_pending_damage_for_retry(&mut app.pending_damage_rects, &mut damage_rects)"
             ),
         "submit failure must restore pending damage for the next drawable-backed frame"
     );
@@ -79,4 +79,14 @@ fn native_frame_coalescing_reuses_app_storage() {
     assert!(source.contains("coalesce_items: Vec<gfx_api::DrawCmd>"));
     assert!(source.contains("coalesce_adjacent_draws_reuse(dl, &mut app.coalesce_items)"));
     assert!(!source.contains("oxide_ui_core::coalesce_adjacent_draws(dl)"));
+}
+
+#[test]
+fn native_damage_handoff_reuses_router_and_submit_storage() {
+    let source = include_str!("../src/lib.rs");
+    assert!(source.contains("damage_rects: Vec<gfx_api::RectI>"));
+    assert!(source.contains("router.take_damage_into(&mut damage_rects)"));
+    assert!(source.contains("damage_rects = damage_obj.rects"));
+    assert!(source.contains("app.damage_rects = damage_rects"));
+    assert!(!source.contains("router.take_damage()"));
 }
