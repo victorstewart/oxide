@@ -1,4 +1,42 @@
 [[experiments]]
+id = "c15-webgpu-r8-glyph-atlas"
+introduced_commit = "C15 staged tree recorded in commit proof"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-web", "oxide-host-web"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "A8 and SDF glyph pixels must match the RGBA-expanded parent exactly; padded 1027-byte full rows and 67-byte dirty rows, tight rows, cold resource creation, release/recreation, and fresh-renderer recreation must pass. RGBA images must remain Rgba8Unorm and unchanged."
+performance_gate = "A 1024x1024 atlas must move from 4,194,304 to 1,048,576 storage/full-upload bytes and a 64x64 dirty update from 16,384 to 4,096 bytes; cold, full, and dirty paired browser timings must pass every no-material-regression tail and peak gate."
+decision_state = "accepted"
+decision = "Store WebGPU A8/SDF atlases as R8Unorm, sample the red channel, write tight rows directly, and repack only genuinely strided rows into retained one-byte scratch."
+proof = [
+   "Deterministic counters require exactly one byte per A8 texel for residency, cold creation, full publication, and dirty publication while RGBA remains four bytes per texel.",
+   "The dedicated 512x512 browser glyph capture covers 48 ordinary A8 runs and 16 SDF runs; preliminary parent/candidate captures are byte-identical.",
+   "A preliminary padded-row cold-create diagnostic moved 3.460 to 0.482 ms/frame after the retained one-byte repack replaced both RGBA expansion and direct padded-row submission; final exact-tree paired results are recorded in the commit proof and retained raw reports.",
+]
+cleanup = [
+   "The A8-to-RGBA conversion-only helper is deleted; Canvas2D retains its separate RGBA materialization because ImageData requires it.",
+   "The C15 cold/full/dirty browser export is non-default measurement coverage; official latest browser baseline promotion remains deferred to C62.",
+]
+
+[[experiments]]
+id = "c15-webgpu-direct-strided-r8-write"
+introduced_commit = "rejected during C15"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-web", "oxide-host-web"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "Padded A8 rows must retain exact A8/SDF pixels and one-byte destination storage."
+performance_gate = "Padded-row cold creation must pass the parent no-material-regression gate."
+decision_state = "rejected"
+decision = "Rejected passing arbitrary padded A8 row strides directly to Queue::write_texture because Dawn's internal handling dominated cold atlas creation."
+proof = [
+   "The first matched 1024x1024, 1027-byte-row diagnostic measured 57.561 ms/frame for direct padded R8 writes versus 3.460 ms/frame for the parent's packed RGBA upload.",
+   "Repacking only strided inputs into one-byte rows measured 0.482 ms/frame in the next diagnostic while preserving the fourfold destination-byte reduction.",
+]
+cleanup = ["Tight A8 rows still write directly; only genuinely strided rows use retained one-byte scratch for updates or one packed allocation during cold creation."]
+
+[[experiments]]
 id = "c14-image-view-source-cropped-image-command"
 introduced_commit = "C14 staged tree recorded in commit proof"
 introduced_date = "2026-07-13"

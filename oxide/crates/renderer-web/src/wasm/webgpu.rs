@@ -1,7 +1,7 @@
 use super::{
-    a8_to_rgba, copy_a8_rows, copy_a8_rows_to_rgba_into, copy_rgba_rows, copy_rgba_rows_into,
-    document, index_slice, normalized_index_mode, resolve_index, sanitize_scale, source_rect,
-    saturating_texture_bytes, vertex_slice,
+    copy_a8_rows_into, copy_rgba_rows, copy_rgba_rows_into, document, index_slice,
+    normalized_index_mode, resolve_index, sanitize_scale, source_rect, saturating_texture_bytes,
+    vertex_slice,
 };
 use crate::image_slots::ImageSlots;
 use crate::{id_mask_compositor, neon_marker, scene3d};
@@ -79,6 +79,22 @@ struct GpuVertex {
 enum GpuImageKind {
     Rgba,
     A8,
+}
+
+impl GpuImageKind {
+    const fn format(self) -> wgpu::TextureFormat {
+        match self {
+            Self::Rgba => wgpu::TextureFormat::Rgba8Unorm,
+            Self::A8 => wgpu::TextureFormat::R8Unorm,
+        }
+    }
+
+    const fn bytes_per_pixel(self) -> u32 {
+        match self {
+            Self::Rgba => 4,
+            Self::A8 => 1,
+        }
+    }
 }
 
 struct GpuImage {
@@ -1052,7 +1068,8 @@ fn write_image_update(
     y: u32,
     width: u32,
     height: u32,
-    rgba: &[u8],
+    data: &[u8],
+    row_bytes: u32,
 ) {
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
@@ -1061,15 +1078,46 @@ fn write_image_update(
             origin: wgpu::Origin3d { x, y, z: 0 },
             aspect: wgpu::TextureAspect::All,
         },
-        rgba,
+        data,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(width.saturating_mul(4)),
+            bytes_per_row: Some(row_bytes),
             rows_per_image: Some(height),
         },
         wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
     );
-    stats.texture_upload_bytes = stats.texture_upload_bytes.saturating_add(rgba.len() as u64);
+    let upload_bytes = u64::from(width)
+        .saturating_mul(u64::from(height))
+        .saturating_mul(u64::from(image.kind.bytes_per_pixel()));
+    stats.texture_upload_bytes = stats.texture_upload_bytes.saturating_add(upload_bytes);
+}
+
+fn image_row_bytes(
+    width: u32,
+    height: u32,
+    kind: GpuImageKind,
+    data: &[u8],
+    row_bytes: usize,
+) -> Result<u32, api::RenderError> {
+    let packed_row_bytes = (width as usize)
+        .checked_mul(kind.bytes_per_pixel() as usize)
+        .ok_or(api::RenderError::InvalidOperation("image row size overflow"))?;
+    if row_bytes < packed_row_bytes {
+        return Err(api::RenderError::InvalidOperation("invalid image rows"));
+    }
+    let required = if height == 0 {
+        0
+    } else {
+        row_bytes
+            .checked_mul(height.saturating_sub(1) as usize)
+            .and_then(|prefix| prefix.checked_add(packed_row_bytes))
+            .ok_or(api::RenderError::InvalidOperation("image byte size overflow"))?
+    };
+    if data.len() < required {
+        return Err(api::RenderError::InvalidOperation("invalid image rows"));
+    }
+    u32::try_from(row_bytes)
+        .map_err(|_| api::RenderError::InvalidOperation("image row stride exceeds WebGPU limit"))
 }
 
 fn color_texture_bytes_per_pixel(format: wgpu::TextureFormat) -> u64 {
@@ -1104,7 +1152,7 @@ impl WebGpuRenderer {
             let bytes = saturating_texture_bytes(
                 u64::from(image.width),
                 u64::from(image.height),
-                4,
+                u64::from(image.kind.bytes_per_pixel()),
             );
             match image.kind {
                 GpuImageKind::Rgba => {
@@ -1845,7 +1893,13 @@ impl WebGpuRenderer {
     ) -> Result<api::ImageHandle, api::RenderError> {
         let rgba = copy_rgba_rows(width, height, data, row_bytes)
             .ok_or(api::RenderError::InvalidOperation("invalid rgba image rows"))?;
-        self.push_image(width, height, GpuImageKind::Rgba, &rgba)
+        self.push_image(
+            width,
+            height,
+            GpuImageKind::Rgba,
+            &rgba,
+            width.saturating_mul(4),
+        )
     }
 
     pub fn try_image_create_a8(
@@ -1855,9 +1909,15 @@ impl WebGpuRenderer {
         data: &[u8],
         row_bytes: usize,
     ) -> Result<api::ImageHandle, api::RenderError> {
-        let alpha = copy_a8_rows(width, height, data, row_bytes)
+        let row_bytes = image_row_bytes(width, height, GpuImageKind::A8, data, row_bytes)?;
+        if row_bytes == width {
+            return self.push_image(width, height, GpuImageKind::A8, data, row_bytes);
+        }
+        let mut alpha = Vec::new();
+        copy_a8_rows_into(&mut alpha, width, height, data, row_bytes as usize)
             .ok_or(api::RenderError::InvalidOperation("invalid a8 image rows"))?;
-        self.push_image(width, height, GpuImageKind::A8, &a8_to_rgba(&alpha))
+        self.record_image_upload_temp(alpha.len(), 1);
+        self.push_image(width, height, GpuImageKind::A8, &alpha, width)
     }
 
     pub fn try_image_update_a8(
@@ -1870,13 +1930,14 @@ impl WebGpuRenderer {
         data: &[u8],
         row_bytes: usize,
     ) -> Result<(), api::RenderError> {
-        if self.image_upload_scratch_enabled {
-            let grew = copy_a8_rows_to_rgba_into(
+        let row_bytes = image_row_bytes(width, height, GpuImageKind::A8, data, row_bytes)?;
+        if row_bytes != width {
+            let grew = copy_a8_rows_into(
                 &mut self.image_upload_scratch,
                 width,
                 height,
                 data,
-                row_bytes,
+                row_bytes as usize,
             )
             .ok_or(api::RenderError::InvalidOperation("invalid a8 update rows"))?;
             self.record_image_upload_scratch(grew);
@@ -1889,11 +1950,27 @@ impl WebGpuRenderer {
                 GpuImageKind::A8,
             );
         }
-        let alpha = copy_a8_rows(width, height, data, row_bytes)
-            .ok_or(api::RenderError::InvalidOperation("invalid a8 update rows"))?;
-        let rgba = a8_to_rgba(&alpha);
-        self.record_image_upload_temp(alpha.len().saturating_add(rgba.len()), 2);
-        self.update_image(handle, x, y, width, height, GpuImageKind::A8, &rgba)
+        let image = image_for_update(
+            &self.images,
+            handle,
+            x,
+            y,
+            width,
+            height,
+            GpuImageKind::A8,
+        )?;
+        write_image_update(
+            &self.queue,
+            &mut self.stats,
+            image,
+            x,
+            y,
+            width,
+            height,
+            data,
+            row_bytes,
+        );
+        Ok(())
     }
 
     pub fn try_image_update_rgba8(
@@ -2161,12 +2238,13 @@ impl WebGpuRenderer {
         width: u32,
         height: u32,
         kind: GpuImageKind,
-        rgba: &[u8],
+        data: &[u8],
+        row_bytes: u32,
     ) -> Result<api::ImageHandle, api::RenderError> {
         if !self.images.has_capacity() {
             return Err(api::RenderError::InvalidOperation("gpu image slot capacity exhausted"));
         }
-        let image = self.create_image(width, height, kind, rgba)?;
+        let image = self.create_image(width, height, kind, data, row_bytes)?;
         self.images
             .insert(image)
             .map(api::ImageHandle)
@@ -2178,7 +2256,8 @@ impl WebGpuRenderer {
         width: u32,
         height: u32,
         kind: GpuImageKind,
-        rgba: &[u8],
+        data: &[u8],
+        row_bytes: u32,
     ) -> Result<GpuImage, api::RenderError> {
         if width == 0 || height == 0 {
             return Err(api::RenderError::InvalidOperation("zero-sized gpu image"));
@@ -2189,7 +2268,7 @@ impl WebGpuRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: kind.format(),
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -2202,16 +2281,19 @@ impl WebGpuRenderer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            rgba,
+            data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(width.saturating_mul(4)),
+                bytes_per_row: Some(row_bytes),
                 rows_per_image: Some(height),
             },
             wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
         );
+        let upload_bytes = u64::from(width)
+            .saturating_mul(u64::from(height))
+            .saturating_mul(u64::from(kind.bytes_per_pixel()));
         self.stats.texture_upload_bytes =
-            self.stats.texture_upload_bytes.saturating_add(rgba.len() as u64);
+            self.stats.texture_upload_bytes.saturating_add(upload_bytes);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group =
             create_texture_bind_group(&self.device, &self.programs, &view, &self.programs.sampler);
@@ -2255,6 +2337,7 @@ impl WebGpuRenderer {
             width,
             height,
             &self.image_upload_scratch,
+            width.saturating_mul(kind.bytes_per_pixel()),
         );
         Ok(())
     }
@@ -2270,7 +2353,17 @@ impl WebGpuRenderer {
         rgba: &[u8],
     ) -> Result<(), api::RenderError> {
         let image = image_for_update(&self.images, handle, x, y, width, height, kind)?;
-        write_image_update(&self.queue, &mut self.stats, image, x, y, width, height, rgba);
+        write_image_update(
+            &self.queue,
+            &mut self.stats,
+            image,
+            x,
+            y,
+            width,
+            height,
+            rgba,
+            width.saturating_mul(kind.bytes_per_pixel()),
+        );
         Ok(())
     }
 
@@ -6429,13 +6522,13 @@ fn fs_rgba(input: VertexOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_a8(input: VertexOut) -> @location(0) vec4<f32> {
-   let coverage = textureSample(source_tex, source_sampler, input.uv).a;
+   let coverage = textureSample(source_tex, source_sampler, input.uv).r;
    return vec4<f32>(input.color.rgb, input.color.a * coverage);
 }
 
 @fragment
 fn fs_sdf(input: VertexOut) -> @location(0) vec4<f32> {
-   let distance = textureSample(source_tex, source_sampler, input.uv).a;
+   let distance = textureSample(source_tex, source_sampler, input.uv).r;
    let width = max(fwidth(distance), 0.001);
    let coverage = smoothstep(0.5 - width, 0.5 + width, distance);
    return vec4<f32>(input.color.rgb, input.color.a * coverage);

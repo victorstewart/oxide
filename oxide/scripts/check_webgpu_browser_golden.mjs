@@ -14,6 +14,7 @@ const webRoot = join(repoRoot, "host", "web-app", "www");
 const defaultAppGolden = join(repoRoot, "goldens", "snapshots", "webgpu_browser.png");
 const defaultIdMaskGolden = join(repoRoot, "goldens", "snapshots", "webgpu_id_mask_compositor.png");
 const defaultScene3dGolden = join(repoRoot, "goldens", "snapshots", "webgpu_scene3d.png");
+const defaultGlyphGolden = join(repoRoot, "goldens", "snapshots", "webgpu_glyph_atlas.png");
 
 function defaultGoldenForTarget(target)
 {
@@ -25,6 +26,9 @@ function defaultGoldenForTarget(target)
    }
    if (target === "scene3d") {
       return defaultScene3dGolden;
+   }
+   if (target === "glyph") {
+      return defaultGlyphGolden;
    }
    throw new Error(`unknown capture target ${target}`);
 }
@@ -192,8 +196,8 @@ function parseArgs(argv)
       }
    }
 
-   if (args.target !== "app" && args.target !== "id-mask" && args.target !== "scene3d") {
-      throw new Error("--target must be app, id-mask, or scene3d");
+   if (args.target !== "app" && args.target !== "glyph" && args.target !== "id-mask" && args.target !== "scene3d") {
+      throw new Error("--target must be app, glyph, id-mask, or scene3d");
    }
    if (!args.golden) {
       args.golden = defaultGoldenForTarget(args.target);
@@ -927,8 +931,34 @@ function assertRendered(image, target)
       assertIdMaskRendered(image);
    } else if (target === "scene3d") {
       assertScene3dRendered(image);
+   } else if (target === "glyph") {
+      assertGlyphRendered(image);
    } else {
       assertAppRendered(image);
+   }
+}
+
+function assertGlyphRendered(image)
+{
+   let dark = 0;
+   let bright = 0;
+   let cyan = 0;
+   for (let i = 0; i < image.rgba.length; i += 4) {
+      let r = image.rgba[i];
+      let g = image.rgba[i + 1];
+      let b = image.rgba[i + 2];
+      if (r < 24 && g < 28 && b < 36) {
+         dark += 1;
+      }
+      if (r > 180 && g > 180 && b > 180) {
+         bright += 1;
+      }
+      if (b > 180 && g > 150 && r < 180) {
+         cyan += 1;
+      }
+   }
+   if (dark < 100000 || bright < 5000 || cyan < 1000) {
+      throw new Error(`capture does not look like the A8/SDF glyph scene: dark=${dark} bright=${bright} cyan=${cyan}`);
    }
 }
 
@@ -5460,6 +5490,8 @@ async function main()
          ? "webgpu_id_mask_compositor.png"
          : args.target === "scene3d"
            ? "webgpu_scene3d.png"
+           : args.target === "glyph"
+             ? "webgpu_glyph_atlas.png"
            : "webgpu_browser.png";
    let out = args.out || join(tempDir, defaultOutName);
    mkdirSync(dirname(out), { recursive: true });

@@ -296,6 +296,7 @@ fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     assert!(html.contains("capture_height"));
     assert!(html.contains("capture_only"));
     assert!(html.contains("captureTarget === \"scene3d\""));
+    assert!(html.contains("captureTarget === \"glyph\""));
     assert!(html.contains("captureTarget === \"id-mask\""));
     assert!(html.contains("await nextAnimationFrame();"));
     assert!(html.contains("oxide-platform-smoke"));
@@ -342,6 +343,7 @@ fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     assert!(html.contains("bench_webgpu_direct_surface_ab"));
     assert!(html.contains("render_webgpu_app_snapshot"));
     assert!(html.contains("render_webgpu_scene3d_snapshot"));
+    assert!(html.contains("render_webgpu_glyph_snapshot"));
     assert!(html.contains("render_webgpu_id_mask_snapshot"));
     assert!(html.contains("app_snapshot"));
     assert!(html.contains("scene3d_snapshot"));
@@ -387,6 +389,7 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("pub async fn bench_webgpu_id_mask_ab"));
     assert!(source.contains("pub async fn bench_webgpu_id_mask_current"));
     assert!(source.contains("pub async fn bench_webgpu_upload_current"));
+    assert!(source.contains("pub async fn bench_webgpu_atlas_c15"));
     assert!(!source.contains("pub async fn bench_webgpu_upload_ab"));
     assert!(source.contains("pub async fn bench_webgpu_upload_scratch_ab"));
     assert!(source.contains("pub async fn bench_webgpu_effect_uniform_ab"));
@@ -428,6 +431,7 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("wasm_stage_{name}_alloc_count={}"));
     assert!(source.contains("pub fn render_webgpu_app_snapshot"));
     assert!(source.contains("pub fn render_webgpu_scene3d_snapshot"));
+    assert!(source.contains("pub fn render_webgpu_glyph_snapshot"));
     assert!(source.contains("pub fn render_webgpu_id_mask_snapshot"));
     assert!(source.contains("pub async fn read_webgpu_asymmetric_id_mask_fields"));
     assert!(source.contains("webgpu_asymmetric_id_mask_frame"));
@@ -744,6 +748,17 @@ fn committed_webgpu_id_mask_golden_is_present_and_sized() {
 }
 
 #[test]
+fn committed_webgpu_glyph_golden_is_present_and_sized() {
+    let png = include_bytes!("../../../../goldens/snapshots/webgpu_glyph_atlas.png");
+    assert!(png.len() > 1024, "webgpu glyph golden should contain rendered atlas pixels");
+    assert_eq!(&png[0..8], b"\x89PNG\r\n\x1a\n");
+    assert_eq!(&png[12..16], b"IHDR");
+    let width = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+    let height = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+    assert_eq!((width, height), (512, 512));
+}
+
+#[test]
 fn committed_webgpu_scene3d_golden_is_present_and_sized() {
     let cases: [(&[u8], (u32, u32), &str); 3] = [
         (
@@ -811,6 +826,26 @@ fn committed_webgpu_id_mask_golden_contains_rendered_pixels() {
 }
 
 #[test]
+fn committed_webgpu_glyph_golden_contains_a8_and_sdf_pixels() {
+    let png = include_bytes!("../../../../goldens/snapshots/webgpu_glyph_atlas.png");
+    let (width, height, rgba) = decode_png_rgba(png);
+    assert_eq!((width, height), (512, 512));
+    let mut bright = 0usize;
+    let mut cyan = 0usize;
+    let mut dark = 0usize;
+    for pixel in rgba.chunks_exact(4) {
+        let [r, g, b, a] = [pixel[0], pixel[1], pixel[2], pixel[3]];
+        assert_eq!(a, 255);
+        bright += usize::from(r > 180 && g > 180 && b > 180);
+        cyan += usize::from(b > 180 && g > 150 && r < 180);
+        dark += usize::from(r < 24 && g < 28 && b < 36);
+    }
+    assert!(bright > 5000, "A8 rows are missing from the WebGPU glyph golden");
+    assert!(cyan > 1000, "SDF rows are missing from the WebGPU glyph golden");
+    assert!(dark > 100000, "glyph golden is missing its dark background");
+}
+
+#[test]
 fn committed_webgpu_scene3d_golden_contains_rendered_pixels() {
     for png in [
         include_bytes!("../../../../goldens/snapshots/webgpu_scene3d.png").as_slice(),
@@ -832,6 +867,7 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("goldens\", \"snapshots\", \"webgpu_browser.png"));
     assert!(script.contains("webgpu_id_mask_compositor.png"));
     assert!(script.contains("webgpu_scene3d.png"));
+    assert!(script.contains("webgpu_glyph_atlas.png"));
     assert!(script.contains("--target"));
     assert!(script.contains("function comparePngs"));
     assert!(script.contains("function assertIdMaskRendered"));
@@ -1173,6 +1209,17 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("--self-test-measurement"));
     assert!(script.contains("--report-only requires --raw-report"));
     assert!(script.contains("N displayed frames did not produce N raw frame and stage samples"));
+}
+
+#[test]
+fn c15_atlas_adapter_runs_real_chrome_and_persists_selected_samples() {
+    let script = include_str!("../../../../scripts/run_webgpu_atlas_c15.mjs");
+    assert!(script.contains("bench_webgpu_atlas_c15"));
+    assert!(script.contains("--enable-unsafe-webgpu"));
+    assert!(script.contains("--use-angle=metal"));
+    assert!(script.contains("CHROME_ARCH"));
+    assert!(script.contains("warmups: [warmup], samples: [sample], metrics"));
+    assert!(script.contains("writeFileSync(output, json)"));
 }
 
 #[test]

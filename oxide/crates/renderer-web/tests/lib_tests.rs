@@ -788,7 +788,14 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(source.contains("image_upload_scratch_enabled: bool"));
     assert!(source.contains("set_image_upload_scratch_enabled_for_benchmark"));
     let compact_source = source_without_whitespace(source);
-    assert!(compact_source.contains("copy_a8_rows_to_rgba_into(&mutself.image_upload_scratch"));
+    assert!(!source.contains("copy_a8_rows_to_rgba_into"));
+    assert!(!compact_source.contains("GpuImageKind::A8,&a8_to_rgba"));
+    assert!(compact_source.contains("Self::A8=>wgpu::TextureFormat::R8Unorm"));
+    assert!(compact_source.contains("format:kind.format()"));
+    assert!(compact_source.contains("ifrow_bytes==width{returnself.push_image"));
+    assert!(compact_source.contains("copy_a8_rows_into(&mutself.image_upload_scratch"));
+    assert!(compact_source.contains("letcoverage=textureSample(source_tex,source_sampler,input.uv).r"));
+    assert!(compact_source.contains("letdistance=textureSample(source_tex,source_sampler,input.uv).r"));
     assert!(compact_source.contains("copy_rgba_rows_into(&mutself.image_upload_scratch"));
     assert!(!source.contains("core::mem::take(&mut self.image_upload_scratch)"));
     assert!(source.contains("fn update_image_from_upload_scratch("));

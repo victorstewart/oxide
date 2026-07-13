@@ -482,7 +482,14 @@ fn copy_rows(
     if row_bytes < row_width {
         return None;
     }
-    if data.len() < row_bytes.checked_mul(height as usize)? {
+    let required = if height == 0 {
+        0
+    } else {
+        row_bytes
+            .checked_mul(height.saturating_sub(1) as usize)?
+            .checked_add(row_width)?
+    };
+    if data.len() < required {
         return None;
     }
     let mut out = vec![0_u8; total];
@@ -507,12 +514,41 @@ fn copy_rgba_rows_into(
     data: &[u8],
     row_bytes: usize,
 ) -> Option<bool> {
-    let row_width = (width as usize).checked_mul(4)?;
+    copy_rows_into(out, width, height, 4, data, row_bytes)
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn copy_a8_rows_into(
+    out: &mut Vec<u8>,
+    width: u32,
+    height: u32,
+    data: &[u8],
+    row_bytes: usize,
+) -> Option<bool> {
+    copy_rows_into(out, width, height, 1, data, row_bytes)
+}
+
+fn copy_rows_into(
+    out: &mut Vec<u8>,
+    width: u32,
+    height: u32,
+    bytes_per_pixel: usize,
+    data: &[u8],
+    row_bytes: usize,
+) -> Option<bool> {
+    let row_width = (width as usize).checked_mul(bytes_per_pixel)?;
     let total = (height as usize).checked_mul(row_width)?;
     if row_bytes < row_width {
         return None;
     }
-    if data.len() < row_bytes.checked_mul(height as usize)? {
+    let required = if height == 0 {
+        0
+    } else {
+        row_bytes
+            .checked_mul(height.saturating_sub(1) as usize)?
+            .checked_add(row_width)?
+    };
+    if data.len() < required {
         return None;
     }
     let grew = out.capacity() < total;
@@ -530,36 +566,6 @@ fn copy_rgba_rows_into(
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn copy_a8_rows(width: u32, height: u32, data: &[u8], row_bytes: usize) -> Option<Vec<u8>> {
     copy_rows(width, height, 1, data, row_bytes)
-}
-
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-fn copy_a8_rows_to_rgba_into(
-    out: &mut Vec<u8>,
-    width: u32,
-    height: u32,
-    data: &[u8],
-    row_bytes: usize,
-) -> Option<bool> {
-    let row_width = width as usize;
-    let total_pixels = (height as usize).checked_mul(row_width)?;
-    let total = total_pixels.checked_mul(4)?;
-    if row_bytes < row_width {
-        return None;
-    }
-    if data.len() < row_bytes.checked_mul(height as usize)? {
-        return None;
-    }
-    let grew = out.capacity() < total;
-    out.resize(total, 255);
-    out.fill(255);
-    for y in 0..height as usize {
-        let src = y.checked_mul(row_bytes)?;
-        let dst = y.checked_mul(row_width)?.checked_mul(4)?;
-        for x in 0..row_width {
-            out[dst + x * 4 + 3] = data[src + x];
-        }
-    }
-    Some(grew)
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -629,8 +635,8 @@ mod wasm {
     mod webgpu;
 
     use super::{
-        a8_to_rgba, color_cache_key, color_to_css, copy_a8_rows,
-        copy_a8_rows_to_rgba_into, copy_rgba_rows, copy_rgba_rows_into,
+        a8_to_rgba, color_cache_key, color_to_css, copy_a8_rows, copy_a8_rows_into,
+        copy_rgba_rows, copy_rgba_rows_into,
         layer_physical_dimension, logical_dimension, normalized_index_mode, packed_rgba_to_css,
         resolve_index, sanitize_scale, saturating_texture_bytes, NormalizedIndexMode,
         WebRendererStats,
@@ -2223,3 +2229,27 @@ pub use native_stub::WebRenderer;
 pub use wasm::{bench_canvas_indexed_quads, BrowserRenderer, WebGpuRenderer};
 #[cfg(all(target_arch = "wasm32", feature = "snapshot-tests"))]
 pub use wasm::WebIdMaskSnapshotReadback;
+
+#[cfg(test)]
+mod tests {
+    use super::{copy_a8_rows_into, copy_rgba_rows_into};
+
+    #[test]
+    fn a8_row_repack_preserves_only_visible_strided_bytes() {
+        let mut scratch = Vec::new();
+        let source = [1_u8, 2, 3, 90, 91, 4, 5, 6, 92, 93];
+        assert_eq!(copy_a8_rows_into(&mut scratch, 3, 2, &source[..8], 5), Some(true));
+        assert_eq!(scratch, [1, 2, 3, 4, 5, 6]);
+        assert_eq!(copy_a8_rows_into(&mut scratch, 3, 2, &source, 5), Some(false));
+    }
+
+    #[test]
+    fn rgba_row_repack_preserves_existing_four_channel_contract() {
+        let mut scratch = Vec::new();
+        let source = [
+            1_u8, 2, 3, 4, 5, 6, 7, 8, 90, 91, 9, 10, 11, 12, 13, 14, 15, 16, 92, 93,
+        ];
+        assert_eq!(copy_rgba_rows_into(&mut scratch, 2, 2, &source, 10), Some(true));
+        assert_eq!(scratch, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    }
+}

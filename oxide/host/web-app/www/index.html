@@ -371,6 +371,7 @@
          console.log("oxide-webgpu-timing", window.oxideWebGpuTiming);
          window.oxideWebGpuAppSnapshot = "";
          window.oxideWebGpuScene3dSnapshot = "";
+         window.oxideWebGpuGlyphSnapshot = "";
          window.oxideWebGpuIdMaskSnapshot = "";
          window.oxideWebGpuIdMaskReference = "";
          if (idMaskReferenceOnly) {
@@ -388,6 +389,15 @@
             window.oxideApp = await newMeasuredOxideApp();
             window.oxideWebGpuScene3dSnapshot = measureFirstFrame(() => window.oxideApp.render_webgpu_scene3d_snapshot(captureWidth, captureHeight));
             console.log("oxide-webgpu-scene3d-snapshot", window.oxideWebGpuScene3dSnapshot);
+            if (captureOnly) {
+               for (let frame = 0; frame < 3; frame += 1) {
+                  await nextAnimationFrame();
+               }
+            }
+         } else if (captureTarget === "glyph") {
+            window.oxideApp = await newMeasuredOxideApp();
+            window.oxideWebGpuGlyphSnapshot = measureFirstFrame(() => window.oxideApp.render_webgpu_glyph_snapshot());
+            console.log("oxide-webgpu-glyph-snapshot", window.oxideWebGpuGlyphSnapshot);
             if (captureOnly) {
                for (let frame = 0; frame < 3; frame += 1) {
                   await nextAnimationFrame();
@@ -505,6 +515,7 @@
             },
             app_snapshot: window.oxideWebGpuAppSnapshot,
             scene3d_snapshot: window.oxideWebGpuScene3dSnapshot,
+            glyph_snapshot: window.oxideWebGpuGlyphSnapshot,
             id_mask_snapshot: window.oxideWebGpuIdMaskSnapshot,
             id_mask_reference: window.oxideWebGpuIdMaskReference,
          };

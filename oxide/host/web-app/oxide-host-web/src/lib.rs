@@ -511,6 +511,24 @@ mod wasm_host {
             ))
         }
 
+        pub fn render_webgpu_glyph_snapshot(&self) -> Result<String, JsValue> {
+            self.state.borrow_mut().direct_capture_active = true;
+            let renderer = self.ensure_upload_bench_resources()?;
+            self.with_upload_bench_resources(|renderer, resources| {
+                resources.glyph_frame(renderer, true)?;
+                resources.glyph_run_frame(renderer)
+            })?;
+            let stats = renderer.borrow().last_stats();
+            Ok(format!(
+                "glyph_quads={};sdf_glyph_quads={};frame_id={};width={};height={}",
+                stats.glyph_quads,
+                stats.sdf_glyph_quads,
+                stats.frame_id,
+                stats.width,
+                stats.height,
+            ))
+        }
+
         pub fn bench_frames(&self, frames: u32) -> Result<String, JsValue> {
             let frame_count = frames.clamp(1, 600);
             let start = perf_now();
@@ -693,6 +711,52 @@ mod wasm_host {
                 WEBGPU_UPLOAD_IMAGE_SIZE,
                 WEBGPU_UPLOAD_DIRTY_SIZE,
                 WEBGPU_UPLOAD_DIRTY_SIZE,
+            ))
+        }
+
+        pub async fn bench_webgpu_atlas_c15(
+            &self,
+            samples: u32,
+            frames_per_sample: u32,
+        ) -> Result<String, JsValue> {
+            let sample_count = samples.clamp(1, 30);
+            let frames = frames_per_sample.clamp(1, 120);
+            let renderer = self.ensure_upload_bench_resources()?;
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut cold = self.with_upload_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    resources.glyph_cold_create_frame(renderer)
+                })
+            })?;
+            cold.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut full = self.with_upload_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    resources.glyph_frame(renderer, false)
+                })
+            })?;
+            full.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut dirty = self.with_upload_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    resources.glyph_frame(renderer, true)
+                })
+            })?;
+            dirty.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            Ok(format!(
+                "samples={sample_count};frames_per_sample={frames};cold_warmup_ms={:.3};full_warmup_ms={:.3};dirty_warmup_ms={:.3}{}{}{};atlas_width={};atlas_height={};atlas_row_bytes={};dirty_width={};dirty_height={};dirty_row_bytes={}",
+                cold.warmup_ms,
+                full.warmup_ms,
+                dirty.warmup_ms,
+                sampled_case_metrics(&cold, "cold"),
+                sampled_case_metrics(&full, "full"),
+                sampled_case_metrics(&dirty, "dirty"),
+                WEBGPU_UPLOAD_ATLAS_SIZE,
+                WEBGPU_UPLOAD_ATLAS_SIZE,
+                WEBGPU_UPLOAD_ATLAS_SIZE + 3,
+                WEBGPU_UPLOAD_DIRTY_SIZE,
+                WEBGPU_UPLOAD_DIRTY_SIZE,
+                WEBGPU_UPLOAD_DIRTY_SIZE + 3,
             ))
         }
 
@@ -1134,6 +1198,7 @@ mod wasm_host {
                     .collect::<Vec<_>>();
                 gpu_values.sort_by(|a, b| a.total_cmp(b));
                 let summary = WebGpuBenchSummary {
+                    warmup_ms: 0.0,
                     p50_ms: percentile(&values, 0.50),
                     p95_ms: percentile(&values, 0.95),
                     p99_ms: percentile(&values, 0.99),
@@ -1538,6 +1603,7 @@ mod wasm_host {
     }
 
     struct WebGpuBenchSummary {
+        warmup_ms: f64,
         p50_ms: f64,
         p95_ms: f64,
         p99_ms: f64,
@@ -1630,6 +1696,8 @@ mod wasm_host {
         image: gfx::ImageHandle,
         full_a8: Vec<u8>,
         dirty_a8: Vec<u8>,
+        full_a8_row_bytes: usize,
+        dirty_a8_row_bytes: usize,
         full_rgba: Vec<u8>,
         dirty_rgba: Vec<u8>,
         neon_markers: Vec<neon_marker::NeonMarker>,
@@ -1642,8 +1710,10 @@ mod wasm_host {
     impl WebGpuUploadBenchResources {
         fn new(renderer: &mut BrowserRenderer) -> Result<Self, JsValue> {
             renderer.resize(512, 512, 2.0).map_err(render_err)?;
-            let full_a8 = glyph_upload_a8(WEBGPU_UPLOAD_ATLAS_SIZE);
-            let dirty_a8 = glyph_upload_a8(WEBGPU_UPLOAD_DIRTY_SIZE);
+            let full_a8_row_bytes = WEBGPU_UPLOAD_ATLAS_SIZE as usize + 3;
+            let dirty_a8_row_bytes = WEBGPU_UPLOAD_DIRTY_SIZE as usize + 3;
+            let full_a8 = glyph_upload_a8(WEBGPU_UPLOAD_ATLAS_SIZE, full_a8_row_bytes);
+            let dirty_a8 = glyph_upload_a8(WEBGPU_UPLOAD_DIRTY_SIZE, dirty_a8_row_bytes);
             let full_rgba =
                 generate_checker_rgba(WEBGPU_UPLOAD_IMAGE_SIZE, WEBGPU_UPLOAD_IMAGE_SIZE);
             let dirty_rgba =
@@ -1656,7 +1726,7 @@ mod wasm_host {
                 WEBGPU_UPLOAD_ATLAS_SIZE,
                 WEBGPU_UPLOAD_ATLAS_SIZE,
                 &full_a8,
-                WEBGPU_UPLOAD_ATLAS_SIZE as usize,
+                full_a8_row_bytes,
             );
             let image = renderer.image_create_rgba8(
                 WEBGPU_UPLOAD_IMAGE_SIZE,
@@ -1669,6 +1739,8 @@ mod wasm_host {
                 image,
                 full_a8,
                 dirty_a8,
+                full_a8_row_bytes,
+                dirty_a8_row_bytes,
                 full_rgba,
                 dirty_rgba,
                 neon_markers,
@@ -1702,7 +1774,7 @@ mod wasm_host {
                     WEBGPU_UPLOAD_DIRTY_SIZE,
                     WEBGPU_UPLOAD_DIRTY_SIZE,
                     &self.dirty_a8,
-                    WEBGPU_UPLOAD_DIRTY_SIZE as usize,
+                    self.dirty_a8_row_bytes,
                 );
             } else {
                 renderer.image_update_a8(
@@ -1712,7 +1784,7 @@ mod wasm_host {
                     WEBGPU_UPLOAD_ATLAS_SIZE,
                     WEBGPU_UPLOAD_ATLAS_SIZE,
                     &self.full_a8,
-                    WEBGPU_UPLOAD_ATLAS_SIZE as usize,
+                    self.full_a8_row_bytes,
                 );
             }
             self.builder.clear();
@@ -1735,6 +1807,40 @@ mod wasm_host {
             }
             renderer.encode_pass(self.builder.drawlist());
             renderer.submit(token).map_err(render_err)
+        }
+
+        fn glyph_cold_create_frame(
+            &mut self,
+            renderer: &mut BrowserRenderer,
+        ) -> Result<(), JsValue> {
+            renderer.resize(512, 512, 2.0).map_err(render_err)?;
+            let token = renderer.begin_frame(&gfx::FrameTarget, None);
+            let atlas = renderer.image_create_a8(
+                WEBGPU_UPLOAD_ATLAS_SIZE,
+                WEBGPU_UPLOAD_ATLAS_SIZE,
+                &self.full_a8,
+                self.full_a8_row_bytes,
+            );
+            if atlas.0 == 0 {
+                return Err(JsValue::from_str("failed to create cold C15 glyph atlas"));
+            }
+            self.builder.clear();
+            if !append_glyph_grid(
+                &mut self.builder,
+                atlas,
+                WEBGPU_MIXED_GLYPHS,
+                18.0,
+                24.0,
+                18.0,
+                true,
+                gfx::Color::rgba(0.95, 0.98, 1.0, 1.0),
+            ) {
+                return Err(JsValue::from_str("failed to build cold C15 glyph draw list"));
+            }
+            renderer.encode_pass(self.builder.drawlist());
+            let result = renderer.submit(token).map_err(render_err);
+            renderer.image_release(atlas);
+            result
         }
 
         fn image_frame(
@@ -1801,7 +1907,7 @@ mod wasm_host {
                     WEBGPU_UPLOAD_DIRTY_SIZE,
                     WEBGPU_UPLOAD_DIRTY_SIZE,
                     &self.dirty_a8,
-                    WEBGPU_UPLOAD_DIRTY_SIZE as usize,
+                    self.dirty_a8_row_bytes,
                 );
                 renderer
                     .image_update_rgba8(
@@ -2502,10 +2608,12 @@ mod wasm_host {
         F: FnMut(&mut BrowserRenderer, u64, f64) -> Result<(), JsValue>,
     {
         let mut timestamp = perf_now();
+        let warmup_start = perf_now();
         for warmup in 0..4 {
             frame(renderer, warmup, timestamp)?;
             timestamp += 16.666_667;
         }
+        let warmup_ms = ((perf_now() - warmup_start).max(0.0)) / 4.0;
 
         let mut values = Vec::with_capacity(sample_count as usize);
         let mut allocations = WebGpuAllocationSummary::default();
@@ -2527,6 +2635,7 @@ mod wasm_host {
         let stats = renderer.last_stats();
 
         Ok(WebGpuBenchSummary {
+            warmup_ms,
             p50_ms: percentile(&values, 0.50),
             p95_ms: percentile(&values, 0.95),
             p99_ms: percentile(&values, 0.99),
@@ -2555,11 +2664,11 @@ mod wasm_host {
         out
     }
 
-    fn glyph_upload_a8(size: u32) -> Vec<u8> {
-        let mut data = vec![0_u8; (size as usize).saturating_mul(size as usize)];
+    fn glyph_upload_a8(size: u32, row_bytes: usize) -> Vec<u8> {
+        let mut data = vec![0_u8; row_bytes.saturating_mul(size as usize)];
         for y in 0..size {
             for x in 0..size {
-                let idx = (y as usize).saturating_mul(size as usize).saturating_add(x as usize);
+                let idx = (y as usize).saturating_mul(row_bytes).saturating_add(x as usize);
                 let edge = x < 4 || y < 4 || x + 4 >= size || y + 4 >= size;
                 data[idx] = if edge || ((x / 8 + y / 8) & 1) == 0 { 220 } else { 96 };
             }
