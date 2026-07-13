@@ -4,9 +4,11 @@ use super::{
     vertex_slice,
 };
 use crate::image_slots::ImageSlots;
+use crate::packed_geometry::{
+    PackedGeometry, PackedIndexKind, PackedIndexRange, PackedVertex, PACKED_VERTEX_BYTES,
+};
 use crate::{id_mask_compositor, neon_marker, scene3d};
 use crate::{NormalizedIndexMode, WebGpuCpuSubmitTimingSample, WebGpuTimestampSample, WebRendererStats};
-use crate::solid_color::resolve_vertex_color;
 use js_sys::Reflect;
 use oxide_renderer_api as api;
 use oxide_wasm_alloc_counter::AllocationSnapshot;
@@ -19,8 +21,8 @@ use std::sync::Arc;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::HtmlCanvasElement;
 
-const VERTEX_STRIDE: wgpu::BufferAddress = 32;
-const VERTEX_STRIDE_BYTES: usize = 32;
+const VERTEX_STRIDE: wgpu::BufferAddress = PACKED_VERTEX_BYTES as wgpu::BufferAddress;
+const VERTEX_STRIDE_BYTES: usize = PACKED_VERTEX_BYTES;
 const SCENE3D_VERTEX_STRIDE: wgpu::BufferAddress = 28;
 const SCENE3D_UNIFORM_STRIDE: usize = 256;
 const SCENE3D_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
@@ -61,18 +63,6 @@ fn cpu_submit_timing_end(output: &mut f64, before_ms: Option<f64>) {
             .map_or(before_ms, |performance| performance.now());
         *output = (after_ms - before_ms).max(0.0);
     }
-}
-
-#[derive(Clone, Copy)]
-struct GpuVertex {
-    x: f32,
-    y: f32,
-    u: f32,
-    v: f32,
-    r: f32,
-    g: f32,
-    b: f32,
-    a: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -216,8 +206,10 @@ struct DrawStateKey {
 #[derive(Clone, Copy)]
 struct GpuDraw {
     kind: DrawKind,
+    index_kind: PackedIndexKind,
     first_index: u32,
     index_count: u32,
+    base_vertex: i32,
     clip: api::RectI,
     effect_uniform_offset: u32,
     target: Option<u32>,
@@ -231,8 +223,7 @@ struct FrameLayerPass {
 }
 
 struct FrameData {
-    vertices: Vec<GpuVertex>,
-    indices: Vec<u32>,
+    geometry: PackedGeometry,
     draws: Vec<GpuDraw>,
     layer_passes: Vec<FrameLayerPass>,
     effect_count: usize,
@@ -243,8 +234,7 @@ struct FrameData {
 
 impl FrameData {
     fn clear(&mut self) {
-        self.vertices.clear();
-        self.indices.clear();
+        self.geometry.clear();
         self.draws.clear();
         self.layer_passes.clear();
         self.effect_count = 0;
@@ -959,8 +949,10 @@ pub struct WebGpuRenderer {
     effect_uniform_stride: u64,
     vertex_buffer: Option<wgpu::Buffer>,
     vertex_capacity: u64,
-    index_buffer: Option<wgpu::Buffer>,
-    index_capacity: u64,
+    index_buffer_u16: Option<wgpu::Buffer>,
+    index_capacity_u16: u64,
+    index_buffer_u32: Option<wgpu::Buffer>,
+    index_capacity_u32: u64,
     scene3d_uniform_buffer: Option<wgpu::Buffer>,
     scene3d_uniform_capacity: u64,
     scene3d_bind_group: Option<wgpu::BindGroup>,
@@ -969,8 +961,6 @@ pub struct WebGpuRenderer {
     present_width: u32,
     present_height: u32,
     present_scale: f32,
-    vertex_bytes: Vec<u8>,
-    index_bytes: Vec<u8>,
     scene3d_uniform_bytes: Vec<u8>,
     effect_uniform_bytes: Vec<u8>,
     scene3d_draws: Vec<Scene3dDraw>,
@@ -1008,7 +998,7 @@ pub struct WebGpuRenderer {
     layers: BTreeMap<u32, GpuLayer>,
     meshes_3d: Vec<Option<GpuMesh3d>>,
     frame: FrameData,
-    scratch_vertices: Vec<GpuVertex>,
+    scratch_vertices: Vec<PackedVertex>,
     scratch_indices: Vec<u32>,
     scratch_points: Vec<(f32, f32)>,
     image_upload_scratch: Vec<u8>,
@@ -1180,7 +1170,15 @@ impl WebGpuRenderer {
             .as_ref()
             .map_or(0, wgpu::Buffer::size)
             .saturating_add(id_mask_vertex_bytes);
-        let index_buffer_bytes = self.index_buffer.as_ref().map_or(0, wgpu::Buffer::size);
+        let index_buffer_bytes = self
+            .index_buffer_u16
+            .as_ref()
+            .map_or(0, wgpu::Buffer::size)
+            .saturating_add(
+                self.index_buffer_u32
+                    .as_ref()
+                    .map_or(0, wgpu::Buffer::size),
+            );
         let uniform_buffer_bytes = self
             .viewport_buffer
             .size()
@@ -1382,8 +1380,10 @@ impl WebGpuRenderer {
             effect_uniform_stride,
             vertex_buffer: None,
             vertex_capacity: 0,
-            index_buffer: None,
-            index_capacity: 0,
+            index_buffer_u16: None,
+            index_capacity_u16: 0,
+            index_buffer_u32: None,
+            index_capacity_u32: 0,
             scene3d_uniform_buffer: None,
             scene3d_uniform_capacity: 0,
             scene3d_bind_group: None,
@@ -1392,8 +1392,6 @@ impl WebGpuRenderer {
             present_width: 0,
             present_height: 0,
             present_scale: 0.0,
-            vertex_bytes: Vec::new(),
-            index_bytes: Vec::new(),
             scene3d_uniform_bytes: Vec::new(),
             effect_uniform_bytes: Vec::new(),
             scene3d_draws: Vec::new(),
@@ -1431,8 +1429,7 @@ impl WebGpuRenderer {
             layers: BTreeMap::new(),
             meshes_3d: vec![None],
             frame: FrameData {
-                vertices: Vec::new(),
-                indices: Vec::new(),
+                geometry: PackedGeometry::default(),
                 draws: Vec::new(),
                 layer_passes: Vec::new(),
                 effect_count: 0,
@@ -1575,8 +1572,6 @@ impl WebGpuRenderer {
 
     fn scratch_capacity_breakdown(&self) -> ScratchCapacityBreakdown {
         let mut capacity = ScratchCapacityBreakdown::default();
-        capacity.draw = capacity.draw.saturating_add(self.vertex_bytes.capacity());
-        capacity.draw = capacity.draw.saturating_add(self.index_bytes.capacity());
         capacity.scene3d = capacity.scene3d.saturating_add(self.scene3d_uniform_bytes.capacity());
         capacity.effect = capacity.effect.saturating_add(self.effect_uniform_bytes.capacity());
         capacity.scene3d = capacity.scene3d.saturating_add(
@@ -1609,12 +1604,7 @@ impl WebGpuRenderer {
         capacity.resource_table = capacity.resource_table.saturating_add(
             self.meshes_3d.capacity().saturating_mul(core::mem::size_of::<Option<GpuMesh3d>>()),
         );
-        capacity.draw = capacity.draw.saturating_add(
-            self.frame.vertices.capacity().saturating_mul(core::mem::size_of::<GpuVertex>()),
-        );
-        capacity.draw = capacity.draw.saturating_add(
-            self.frame.indices.capacity().saturating_mul(core::mem::size_of::<u32>()),
-        );
+        capacity.draw = capacity.draw.saturating_add(self.frame.geometry.capacity_bytes());
         capacity.draw = capacity.draw.saturating_add(
             self.frame.draws.capacity().saturating_mul(core::mem::size_of::<GpuDraw>()),
         );
@@ -1625,7 +1615,9 @@ impl WebGpuRenderer {
                 .saturating_mul(core::mem::size_of::<FrameLayerPass>()),
         );
         capacity.draw = capacity.draw.saturating_add(
-            self.scratch_vertices.capacity().saturating_mul(core::mem::size_of::<GpuVertex>()),
+            self.scratch_vertices
+                .capacity()
+                .saturating_mul(core::mem::size_of::<PackedVertex>()),
         );
         capacity.draw = capacity.draw.saturating_add(
             self.scratch_indices.capacity().saturating_mul(core::mem::size_of::<u32>()),
@@ -2389,8 +2381,7 @@ impl WebGpuRenderer {
     fn try_coalesce_draw_item(
         &mut self,
         kind: DrawKind,
-        first_index: u32,
-        index_count: u32,
+        range: PackedIndexRange,
         clip: api::RectI,
         target: Option<u32>,
     ) -> bool {
@@ -2400,13 +2391,15 @@ impl WebGpuRenderer {
         let Some(last) = self.frame.draws.last_mut() else {
             return false;
         };
-        if last.first_index.saturating_add(last.index_count) == first_index
+        if last.index_kind == range.kind
+            && last.base_vertex == range.base_vertex
+            && last.first_index.saturating_add(last.index_count) == range.first_index
             && last.clip == clip
             && last.target == target
             && last.effect_uniform_offset == 0
             && coalescible_draw_kind(last.kind, kind)
         {
-            last.index_count = last.index_count.saturating_add(index_count);
+            last.index_count = last.index_count.saturating_add(range.index_count);
             self.stats.draw_items_coalesced = self.stats.draw_items_coalesced.saturating_add(1);
             true
         } else {
@@ -2414,32 +2407,28 @@ impl WebGpuRenderer {
         }
     }
 
-    fn push_draw(&mut self, kind: DrawKind, vertices: &[GpuVertex], indices: &[u32]) {
-        if vertices.is_empty() || indices.is_empty() {
-            return;
-        }
-        let base = self.frame.vertices.len() as u32;
-        let first_index = self.frame.indices.len() as u32;
-        let index_count = indices.len() as u32;
+    fn push_draw(&mut self, kind: DrawKind, vertices: &[PackedVertex; 4]) {
         let clip = self.current_clip();
         let target = self.current_target();
-        self.frame.vertices.extend_from_slice(vertices);
-        self.frame.indices.extend(indices.iter().map(|index| base.saturating_add(*index)));
-        self.stats.geometry_bytes_copied = self.stats.geometry_bytes_copied.saturating_add(
-            (vertices.len() as u64)
-                .saturating_mul(core::mem::size_of::<GpuVertex>() as u64)
-                .saturating_add(
-                    (indices.len() as u64).saturating_mul(core::mem::size_of::<u32>() as u64),
-                ),
-        );
+        let before = self.frame.geometry.byte_len();
+        let Some(range) = self.frame.geometry.append_quad(vertices) else {
+            return;
+        };
+        let after = self.frame.geometry.byte_len();
+        self.stats.geometry_bytes_copied = self
+            .stats
+            .geometry_bytes_copied
+            .saturating_add(after.saturating_sub(before) as u64);
         self.frame.record_draw_kind(kind);
-        if self.try_coalesce_draw_item(kind, first_index, index_count, clip, target) {
+        if self.try_coalesce_draw_item(kind, range, clip, target) {
             return;
         }
         self.frame.draws.push(GpuDraw {
             kind,
-            first_index,
-            index_count,
+            index_kind: range.kind,
+            first_index: range.first_index,
+            index_count: range.index_count,
+            base_vertex: range.base_vertex,
             clip,
             effect_uniform_offset: 0,
             target,
@@ -2458,29 +2447,29 @@ impl WebGpuRenderer {
         }
         let clip = self.current_clip();
         let target = self.current_target();
-        let base = self.frame.vertices.len() as u32;
-        let first_index = self.frame.indices.len() as u32;
-        let index_count = self.scratch_indices.len() as u32;
-        self.frame.vertices.extend_from_slice(&self.scratch_vertices);
-        self.frame
-            .indices
-            .extend(self.scratch_indices.iter().map(|index| base.saturating_add(*index)));
-        self.stats.geometry_bytes_copied = self.stats.geometry_bytes_copied.saturating_add(
-            (self.scratch_vertices.len() as u64)
-                .saturating_mul(core::mem::size_of::<GpuVertex>() as u64)
-                .saturating_add(
-                    (self.scratch_indices.len() as u64)
-                        .saturating_mul(core::mem::size_of::<u32>() as u64),
-                ),
-        );
+        let before = self.frame.geometry.byte_len();
+        let Some(range) = self
+            .frame
+            .geometry
+            .append_validated(&self.scratch_vertices, &self.scratch_indices)
+        else {
+            return;
+        };
+        let after = self.frame.geometry.byte_len();
+        self.stats.geometry_bytes_copied = self
+            .stats
+            .geometry_bytes_copied
+            .saturating_add(after.saturating_sub(before) as u64);
         self.frame.record_draw_kind(kind);
-        if self.try_coalesce_draw_item(kind, first_index, index_count, clip, target) {
+        if self.try_coalesce_draw_item(kind, range, clip, target) {
             return;
         }
         self.frame.draws.push(GpuDraw {
             kind,
-            first_index,
-            index_count,
+            index_kind: range.kind,
+            first_index: range.first_index,
+            index_count: range.index_count,
+            base_vertex: range.base_vertex,
             clip,
             effect_uniform_offset: 0,
             target,
@@ -2544,7 +2533,7 @@ impl WebGpuRenderer {
         let v1 = (rect.y + rect.h) / logical_h;
         let color = api::Color::rgba(1.0, 1.0, 1.0, 1.0);
         let vertices = quad_vertices(rect, u0, v0, u1, v1, color);
-        self.push_draw(DrawKind::Layer { id }, &vertices, &[0, 1, 2, 2, 1, 3]);
+        self.push_draw(DrawKind::Layer { id }, &vertices);
     }
 
     fn encode_layer(
@@ -2737,7 +2726,7 @@ impl WebGpuRenderer {
             (GpuImageKind::A8, false) => DrawKind::A8 { image: handle.0 },
             (GpuImageKind::A8, true) => DrawKind::Sdf { image: handle.0 },
         };
-        self.push_draw(kind, &vertices, &[0, 1, 2, 2, 1, 3]);
+        self.push_draw(kind, &vertices);
         self.stats.image_draws = self.stats.image_draws.saturating_add(1);
     }
 
@@ -2908,7 +2897,7 @@ impl WebGpuRenderer {
         let color = api::Color::rgba(tint.r, tint.g, tint.b, tint.a * alpha.clamp(0.0, 1.0));
         let vertices = quad_vertices(rect, u0, v0, u1, v1, color);
         let sigma = sigma.clamp(0.0, MAX_BLUR_SIGMA);
-        self.push_draw(DrawKind::Backdrop { rect, sigma }, &vertices, &[0, 1, 2, 2, 1, 3]);
+        self.push_draw(DrawKind::Backdrop { rect, sigma }, &vertices);
     }
 
     fn encode_spinner(&mut self, center: [f32; 2], atom: f32, alpha: f32) {
@@ -2959,15 +2948,20 @@ impl WebGpuRenderer {
     }
 
     fn upload_frame_buffers(&mut self) {
-        self.vertex_bytes.clear();
-        self.index_bytes.clear();
-        encode_vertices(&self.frame.vertices, &mut self.vertex_bytes);
-        encode_indices(&self.frame.indices, &mut self.index_bytes);
+        let geometry_bytes = self.frame.geometry.byte_len();
+        self.frame.geometry.align_uploads();
+        self.stats.geometry_bytes_copied = self
+            .stats
+            .geometry_bytes_copied
+            .saturating_add(self.frame.geometry.byte_len().saturating_sub(geometry_bytes) as u64);
+        let vertex_bytes = bytemuck::cast_slice(&self.frame.geometry.vertices);
+        let index_bytes_u16 = bytemuck::cast_slice(&self.frame.geometry.indices_u16);
+        let index_bytes_u32 = bytemuck::cast_slice(&self.frame.geometry.indices_u32);
         if ensure_buffer(
             &self.device,
             &mut self.vertex_buffer,
             &mut self.vertex_capacity,
-            self.vertex_bytes.len() as u64,
+            vertex_bytes.len() as u64,
             wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             "oxide-webgpu-vertices",
         ) {
@@ -2976,24 +2970,53 @@ impl WebGpuRenderer {
         }
         if ensure_buffer(
             &self.device,
-            &mut self.index_buffer,
-            &mut self.index_capacity,
-            self.index_bytes.len() as u64,
+            &mut self.index_buffer_u16,
+            &mut self.index_capacity_u16,
+            index_bytes_u16.len() as u64,
             wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            "oxide-webgpu-indices",
+            "oxide-webgpu-indices-u16",
         ) {
             self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
             self.stats.draw_buffer_grows = self.stats.draw_buffer_grows.saturating_add(1);
         }
-        if let Some(buffer) = &self.vertex_buffer {
-            self.queue.write_buffer(buffer, 0, &self.vertex_bytes);
-            self.stats.buffer_upload_bytes =
-                self.stats.buffer_upload_bytes.saturating_add(self.vertex_bytes.len() as u64);
+        if ensure_buffer(
+            &self.device,
+            &mut self.index_buffer_u32,
+            &mut self.index_capacity_u32,
+            index_bytes_u32.len() as u64,
+            wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            "oxide-webgpu-indices-u32",
+        ) {
+            self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+            self.stats.draw_buffer_grows = self.stats.draw_buffer_grows.saturating_add(1);
         }
-        if let Some(buffer) = &self.index_buffer {
-            self.queue.write_buffer(buffer, 0, &self.index_bytes);
-            self.stats.buffer_upload_bytes =
-                self.stats.buffer_upload_bytes.saturating_add(self.index_bytes.len() as u64);
+        if !vertex_bytes.is_empty() {
+            let Some(buffer) = &self.vertex_buffer else {
+                return;
+            };
+            self.queue.write_buffer(buffer, 0, vertex_bytes);
+            self.stats.buffer_upload_bytes = self
+                .stats
+                .buffer_upload_bytes
+                .saturating_add(vertex_bytes.len() as u64);
+        }
+        if !index_bytes_u16.is_empty() {
+            if let Some(buffer) = &self.index_buffer_u16 {
+                self.queue.write_buffer(buffer, 0, index_bytes_u16);
+                self.stats.buffer_upload_bytes = self
+                    .stats
+                    .buffer_upload_bytes
+                    .saturating_add(index_bytes_u16.len() as u64);
+            }
+        }
+        if !index_bytes_u32.is_empty() {
+            if let Some(buffer) = &self.index_buffer_u32 {
+                self.queue.write_buffer(buffer, 0, index_bytes_u32);
+                self.stats.buffer_upload_bytes = self
+                    .stats
+                    .buffer_upload_bytes
+                    .saturating_add(index_bytes_u32.len() as u64);
+            }
         }
     }
 
@@ -4543,7 +4566,7 @@ impl WebGpuRenderer {
         if start >= end {
             return;
         }
-        if self.vertex_buffer.is_none() || self.index_buffer.is_none() {
+        if self.vertex_buffer.is_none() {
             return;
         }
         if !self.frame.draws[start..end].iter().any(|draw| draw.target == target) {
@@ -4555,9 +4578,6 @@ impl WebGpuRenderer {
         let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Draw);
         let timestamp_writes = self.timestamp_writes(timestamp_pair);
         let Some(vertex_buffer) = &self.vertex_buffer else {
-            return;
-        };
-        let Some(index_buffer) = &self.index_buffer else {
             return;
         };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -4574,7 +4594,6 @@ impl WebGpuRenderer {
         });
         pass.set_bind_group(0, &self.viewport_bind_group, &[]);
         pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-        pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
         let mut encoded_draws = 0_u32;
         let mut draw_items = 0_u32;
@@ -4584,10 +4603,28 @@ impl WebGpuRenderer {
         let mut bound_pipeline: Option<DrawPipelineKey> = None;
         let mut bound_bind: Option<DrawBindKey> = None;
         let mut bound_clip: Option<api::RectI> = None;
+        let mut bound_index: Option<PackedIndexKind> = None;
         for draw_index in start..end {
             let draw = self.frame.draws[draw_index];
             if draw.target != target {
                 continue;
+            }
+            if bound_index != Some(draw.index_kind) {
+                match draw.index_kind {
+                    PackedIndexKind::U16 => {
+                        let Some(buffer) = &self.index_buffer_u16 else {
+                            continue;
+                        };
+                        pass.set_index_buffer(buffer.slice(..), wgpu::IndexFormat::Uint16);
+                    }
+                    PackedIndexKind::U32 => {
+                        let Some(buffer) = &self.index_buffer_u32 else {
+                            continue;
+                        };
+                        pass.set_index_buffer(buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    }
+                }
+                bound_index = Some(draw.index_kind);
             }
             let Some(state) = self.draw_state_key(draw) else {
                 continue;
@@ -4638,7 +4675,11 @@ impl WebGpuRenderer {
             if force_bind && matches!(state.bind, DrawBindKey::None) {
                 bound_bind = None;
             }
-            pass.draw_indexed(draw.first_index..draw.first_index + draw.index_count, 0, 0..1);
+            pass.draw_indexed(
+                draw.first_index..draw.first_index + draw.index_count,
+                draw.base_vertex,
+                0..1,
+            );
             encoded_draws = encoded_draws.saturating_add(1);
         }
         drop(pass);
@@ -5458,7 +5499,7 @@ fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
             shader_location: 1,
         },
         wgpu::VertexAttribute {
-            format: wgpu::VertexFormat::Float32x4,
+            format: wgpu::VertexFormat::Unorm8x4,
             offset: 16,
             shader_location: 2,
         },
@@ -5969,12 +6010,13 @@ fn quad_vertices(
     u1: f32,
     v1: f32,
     color: api::Color,
-) -> [GpuVertex; 4] {
+) -> [PackedVertex; 4] {
+    let rgba = color.pack_rgba8();
     [
-        gpu_vertex(rect.x, rect.y, u0, v0, 0, color),
-        gpu_vertex(rect.x + rect.w, rect.y, u1, v0, 0, color),
-        gpu_vertex(rect.x, rect.y + rect.h, u0, v1, 0, color),
-        gpu_vertex(rect.x + rect.w, rect.y + rect.h, u1, v1, 0, color),
+        PackedVertex::new(rect.x, rect.y, u0, v0, rgba),
+        PackedVertex::new(rect.x + rect.w, rect.y, u1, v0, rgba),
+        PackedVertex::new(rect.x, rect.y + rect.h, u0, v1, rgba),
+        PackedVertex::new(rect.x + rect.w, rect.y + rect.h, u1, v1, rgba),
     ]
 }
 
@@ -5983,7 +6025,7 @@ fn rounded_rect_mesh_into(
     radii: [f32; 4],
     color: api::Color,
     points: &mut Vec<(f32, f32)>,
-    vertices: &mut Vec<GpuVertex>,
+    vertices: &mut Vec<PackedVertex>,
     indices: &mut Vec<u32>,
 ) {
     points.clear();
@@ -6062,37 +6104,27 @@ fn append_arc(points: &mut Vec<(f32, f32)>, cx: f32, cy: f32, radius: f32, start
     }
 }
 
-fn gpu_vertex(x: f32, y: f32, u: f32, v: f32, rgba: u32, uniform: api::Color) -> GpuVertex {
-    let color = resolve_vertex_color(rgba, uniform);
-    GpuVertex {
-        x,
-        y,
-        u,
-        v,
-        r: color.r.clamp(0.0, 1.0),
-        g: color.g.clamp(0.0, 1.0),
-        b: color.b.clamp(0.0, 1.0),
-        a: color.a.clamp(0.0, 1.0),
-    }
+fn gpu_vertex(x: f32, y: f32, u: f32, v: f32, rgba: u32, uniform: api::Color) -> PackedVertex {
+    PackedVertex::new(x, y, u, v, if rgba == 0 { uniform.pack_rgba8() } else { rgba })
 }
 
 fn append_gpu_vertices(
-    out: &mut Vec<GpuVertex>,
+    out: &mut Vec<PackedVertex>,
     idx: &mut Vec<u32>,
     vertices: &[api::Vertex],
     color: api::Color,
     preserve_vertex_color: bool,
 ) {
     let base = out.len() as u32;
+    let inherited = color.pack_rgba8();
     out.extend(
         vertices.iter().map(|vertex| {
-            gpu_vertex(
+            PackedVertex::new(
                 vertex.x,
                 vertex.y,
                 vertex.u,
                 vertex.v,
-                if preserve_vertex_color { vertex.rgba } else { 0 },
-                color,
+                if preserve_vertex_color && vertex.rgba != 0 { vertex.rgba } else { inherited },
             )
         }),
     );
@@ -6104,7 +6136,7 @@ fn append_gpu_vertices(
 }
 
 fn append_indexed_gpu_vertices(
-    out: &mut Vec<GpuVertex>,
+    out: &mut Vec<PackedVertex>,
     idx: &mut Vec<u32>,
     vertices: &[api::Vertex],
     indices: &[u16],
@@ -6122,15 +6154,15 @@ fn append_indexed_gpu_vertices(
     }
 
     let base = out.len() as u32;
+    let inherited = color.pack_rgba8();
     out.extend(
         vertices.iter().map(|vertex| {
-            gpu_vertex(
+            PackedVertex::new(
                 vertex.x,
                 vertex.y,
                 vertex.u,
                 vertex.v,
-                if preserve_vertex_color { vertex.rgba } else { 0 },
-                color,
+                if preserve_vertex_color && vertex.rgba != 0 { vertex.rgba } else { inherited },
             )
         }),
     );
@@ -6143,7 +6175,7 @@ fn append_indexed_gpu_vertices(
 }
 
 fn append_local_indexed_gpu_vertices(
-    out: &mut Vec<GpuVertex>,
+    out: &mut Vec<PackedVertex>,
     idx: &mut Vec<u32>,
     vertices: &[api::Vertex],
     indices: &[u16],
@@ -6157,15 +6189,15 @@ fn append_local_indexed_gpu_vertices(
     }
 
     let base = out.len() as u32;
+    let inherited = color.pack_rgba8();
     out.extend(
         vertices.iter().map(|vertex| {
-            gpu_vertex(
+            PackedVertex::new(
                 vertex.x,
                 vertex.y,
                 vertex.u,
                 vertex.v,
-                if preserve_vertex_color { vertex.rgba } else { 0 },
-                color,
+                if preserve_vertex_color && vertex.rgba != 0 { vertex.rgba } else { inherited },
             )
         }),
     );
@@ -6401,27 +6433,6 @@ fn align_uniform_bytes(out: &mut Vec<u8>, alignment: usize) -> u32 {
     u32::try_from(offset).expect("ID-mask uniform arena exceeds dynamic-offset range")
 }
 
-fn encode_vertices(vertices: &[GpuVertex], out: &mut Vec<u8>) {
-    out.reserve(vertices.len().saturating_mul(VERTEX_STRIDE as usize));
-    for vertex in vertices {
-        push_f32(out, vertex.x);
-        push_f32(out, vertex.y);
-        push_f32(out, vertex.u);
-        push_f32(out, vertex.v);
-        push_f32(out, vertex.r);
-        push_f32(out, vertex.g);
-        push_f32(out, vertex.b);
-        push_f32(out, vertex.a);
-    }
-}
-
-fn encode_indices(indices: &[u32], out: &mut Vec<u8>) {
-    out.reserve(indices.len().saturating_mul(4));
-    for index in indices {
-        out.extend_from_slice(&index.to_le_bytes());
-    }
-}
-
 fn f32x4_bytes(values: [f32; 4]) -> [u8; 16] {
     let mut out = [0; 16];
     let mut offset = 0;
@@ -6431,7 +6442,7 @@ fn f32x4_bytes(values: [f32; 4]) -> [u8; 16] {
     out
 }
 
-fn vertex4_bytes(vertices: &[GpuVertex; 4]) -> [u8; VERTEX_STRIDE_BYTES * 4] {
+fn vertex4_bytes(vertices: &[PackedVertex; 4]) -> [u8; VERTEX_STRIDE_BYTES * 4] {
     let mut out = [0; VERTEX_STRIDE_BYTES * 4];
     let mut offset = 0;
     for vertex in vertices {
@@ -6439,10 +6450,7 @@ fn vertex4_bytes(vertices: &[GpuVertex; 4]) -> [u8; VERTEX_STRIDE_BYTES * 4] {
         write_f32(&mut out, &mut offset, vertex.y);
         write_f32(&mut out, &mut offset, vertex.u);
         write_f32(&mut out, &mut offset, vertex.v);
-        write_f32(&mut out, &mut offset, vertex.r);
-        write_f32(&mut out, &mut offset, vertex.g);
-        write_f32(&mut out, &mut offset, vertex.b);
-        write_f32(&mut out, &mut offset, vertex.a);
+        write_u32(&mut out, &mut offset, vertex.rgba);
     }
     out
 }

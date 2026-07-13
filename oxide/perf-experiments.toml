@@ -1,4 +1,42 @@
 [[experiments]]
+id = "c16-webgpu-compact-generic-geometry"
+introduced_commit = "C16 staged tree recorded in commit proof"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-web", "oxide-host-web"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "Packed AABBGGRR bytes, 20-byte POD layout, canonical quad topology, u16 segment rollover/rebasing, 65,536-vertex u32 fallback, post-fallback u16 restart, arbitrary ImageMesh coverage, WebGPU upload alignment, wasm compilation, and browser pixels must pass."
+performance_gate = "Fresh-process paired Chrome A/B must materially reduce CPU lowering for 10,000 glyph quads, 10,000 image quads, and a 70,002-vertex arbitrary solid mesh; copied/uploaded bytes must fall from 32-byte vertices plus u32 indices to 20-byte vertices plus u16 indices where eligible, with no GPU or visual regression."
+decision_state = "accepted"
+decision = "Store generic WebGPU geometry as directly uploaded 20-byte POD vertices plus segmented u16 and fallback u32 index vectors, retaining capacity and draw-local base vertices without frame byte reserialization."
+proof = [
+   "Deterministic 10,000-glyph and 10,000-image counters move geometry bytes from 1,520,000 to 920,000 per frame (-39.47%); the 70,002-vertex u32 fallback moves 2,520,072 to 1,680,048 bytes (-33.33%).",
+   "Preliminary native-arm64 Chrome samples moved glyph/image/large CPU frame cost from 0.643/0.717/1.151 ms to 0.315/0.472/0.494 ms; final exact-tree paired distributions, direct GPU timestamps, hashes, and pixels are retained in the C16 raw evidence and commit proof.",
+   "PackedGeometry unit coverage freezes exact little-endian color bytes, segment rollover, rebasing, canonical triangle order, u32 fallback, u16 restart, invalid-index nonmutation, and four-byte upload alignment; the browser workload reports one warm draw and zero draw-buffer or draw-scratch growth for every case.",
+]
+cleanup = [
+   "Deleted frame-level generic vertex/index byte vectors and their serialization loops; present, Scene3D, and ID-mask specialized formats remain independently owned.",
+   "The C16 browser export is non-default measurement coverage; official latest browser baseline promotion remains deferred to C62.",
+]
+
+[[experiments]]
+id = "c16-webgpu-scalar-packed-byte-writer"
+introduced_commit = "rejected during C16"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-web", "oxide-host-web"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "The direct packed stream must preserve the same 20-byte vertex and segmented index contracts without unsafe alignment casts."
+performance_gate = "All three C16 CPU workloads must materially improve rather than trading large-mesh throughput for slower dense quad lowering."
+decision_state = "rejected"
+decision = "Rejected manually serializing every packed field into Vec<u8>; safe scalar byte writes remained too expensive for dense u16 quad workloads."
+proof = [
+   "An exploratory optimized Chrome run of the best scalar writer measured glyph/image/large p50 at 0.717/0.772/0.534 ms versus parent 0.643/0.717/1.151 ms: the large mesh won, but both required 10,000-quad workloads regressed.",
+   "The retained repr(C)+bytemuck POD stream measured 0.315/0.472/0.494 ms in the next exploratory run while preserving identical 920,000/920,000/1,680,048 byte totals.",
+]
+cleanup = ["Replaced manual scalar serialization with typed retained vectors and derive-checked bytemuck views; no handwritten unsafe cast or duplicate upload vector remains."]
+
+[[experiments]]
 id = "c15-webgpu-r8-glyph-atlas"
 introduced_commit = "C15 staged tree recorded in commit proof"
 introduced_date = "2026-07-12"

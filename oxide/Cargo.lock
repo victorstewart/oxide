@@ -1046,6 +1046,7 @@ dependencies = [
 name = "oxide-renderer-web"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "js-sys",
  "oxide-renderer-api",
  "oxide-wasm-alloc-counter",

@@ -2,20 +2,19 @@
 
 ## Intention and purpose
 
-Own packed solid-color resolution and the narrow Canvas colored-quad classifier.
+Own the narrow Canvas colored-quad classifier.
 
 ## Relation to the rest of the code
 
-WebGPU calls `resolve_vertex_color`; Canvas2D calls `colored_quad`. The module depends only on renderer-api values.
+Canvas2D calls `colored_quad`. WebGPU now preserves packed colors in its POD geometry stream. The module depends only on renderer-api values.
 
 ## Entry points list
 
-- `resolve_vertex_color(rgba, uniform) -> Color`: crate-private zero inheritance and `AABBGGRR` decode.
 - `colored_quad(vertices, uniform) -> Option<...>`: crate-private Canvas admission and gradient endpoints.
 
 ## Logic narrative
 
-Resolution returns the uniform for zero or decodes four bytes. Classification finds four exact rectangle corners, validates two complete triangles and duplicate colors, then accepts flat or one-axis opposing-edge colors.
+Classification finds four exact rectangle corners, validates two complete triangles and duplicate colors, resolves zero to the packed uniform, then accepts flat or one-axis opposing-edge colors.
 
 ## Preconditions and postconditions
 
@@ -31,7 +30,7 @@ Pure bounded stack operations; no allocation or shared state.
 
 ## Performance notes
 
-Classification is O(6); byte decode is constant-time.
+Classification is O(6).
 
 ## Feature flags and cfgs
 
@@ -39,7 +38,7 @@ Used on wasm and retained on native for behavioral integration tests.
 
 ## Testing and benchmarks
 
-Renderer-web tests cover flat, horizontal, vertical, inherited, malformed, and unsupported topologies.
+Renderer-web tests cover flat, horizontal, vertical, inherited, malformed, and unsupported topologies. Packed WebGPU color bytes are covered in `wasm/packed_geometry.rs`.
 
 ## Examples
 
@@ -47,4 +46,5 @@ Equal left-corner colors and equal right-corner colors produce a horizontal grad
 
 ## Changelog
 
+- 2026-07-12: moved WebGPU color ownership into the compact POD geometry stream and removed its obsolete float-decoding helper.
 - 2026-07-12: added packed-color resolution and Canvas quad admission.

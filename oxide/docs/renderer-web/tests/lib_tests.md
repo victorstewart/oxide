@@ -27,12 +27,13 @@ Call flow:
 - `wasm_webgpu_runtime_images_are_explicitly_reclaimable_without_arena_tombstones()`: verifies the production wrapper delegates image release and the WebGPU resource table recycles generation-checked slots without append-only tombstones or stale-handle ABA.
 - `wasm_public_exports_are_webgpu_only()`: verifies wasm public exports remain limited to WebGPU production renderer types plus the narrow Canvas indexed-quad diagnostic helper, without exposing the raw Canvas renderer type.
 - `wasm_webgpu_backend_packet_vocabulary_is_frozen()`: freezes private WebGPU `DrawKind`, `GpuDraw`, coalescing, and `DrawCmd` lowering vocabulary before backend packet migrations.
+- `wasm_webgpu_draw_encoding_reuses_scratch_storage()`: requires retained packed frame streams, reusable primitive scratch, and removal of duplicate frame byte vectors.
 - `webgpu_surface_config_uses_premultiplied_alpha()`: verifies browser WebGPU surfaces request premultiplied alpha for DOM composition.
 - `wasm_webgpu_resource_counters_cover_uploads_and_passes()`: verifies the WebGPU stats struct, renderer source, and web host metric strings keep draw, clip-depth/scissor, pass, timestamp, upload, scratch, Scene3D, ID-mask, effect-uniform, and resource-creation counters synchronized.
 
 ## Logic narrative
 
-The tests intentionally avoid browser APIs. Solid-color tests include the crate-private pure classifier and decoder, while source inspection freezes wasm-only lowering and shader interpolation. Color tests clamp overrange and underrange values. Scale tests cover valid, zero, and NaN values. The native stub tests start frames, inspect counters, prove `CameraBg` is zero-work on web, and check that submitting on a non-wasm target returns `RenderError::Unsupported`. Source-inspection tests keep WebGPU production exports, the narrow Canvas indexed-quad diagnostic export, premultiplied-alpha surface setup, generation-checked image release/reuse, hot-path scratch reuse, timestamp-query readbacks, upload-scratch wiring, draw-state caching, clip-depth tracking, effect-uniform batching, and private packet vocabulary visible to native CI.
+The tests intentionally avoid browser APIs. Solid-color tests include the crate-private pure Canvas classifier, while packed-geometry unit tests own exact WebGPU color bytes. Source inspection freezes wasm-only lowering and shader interpolation. Color tests clamp overrange and underrange values. Scale tests cover valid, zero, and NaN values. The native stub tests start frames, inspect counters, prove `CameraBg` is zero-work on web, and check that submitting on a non-wasm target returns `RenderError::Unsupported`. Source-inspection tests keep WebGPU production exports, the narrow Canvas indexed-quad diagnostic export, premultiplied-alpha surface setup, generation-checked image release/reuse, typed packed streams, u16/u32 draw packets, hot-path scratch reuse, timestamp-query readbacks, upload-scratch wiring, draw-state caching, clip-depth tracking, effect-uniform batching, and private packet vocabulary visible to native CI.
 
 ## Preconditions and postconditions; invariants maintained; unsafe invariants if any
 
@@ -70,6 +71,7 @@ pub fn scale() -> f32
 
 ## Changelog
 
+- 2026-07-12: updated packet and scratch contracts for direct POD vertices, segmented u16/u32 index streams, and removal of duplicate byte vectors.
 - 2026-07-12: added a source contract requiring one aligned ID-mask uniform arena upload and distinct dynamic offsets for raster, seed, every JFA jump, and compositor records.
 - 2026-07-12: added a source contract for snapshot-only R8/RGBA16F ID-mask readback.
 - 2026-07-12: added explicit logical-versus-allocated accounting defaults and overflow-safe texture-byte source coverage.

@@ -2,20 +2,6 @@
 
 use oxide_renderer_api as api;
 
-pub(crate) fn resolve_vertex_color(rgba: u32, uniform: api::Color) -> api::Color
-{
-   if rgba == 0
-   {
-      return uniform;
-   }
-   api::Color::rgba(
-      (rgba & 0xFF) as f32 / 255.0,
-      ((rgba >> 8) & 0xFF) as f32 / 255.0,
-      ((rgba >> 16) & 0xFF) as f32 / 255.0,
-      ((rgba >> 24) & 0xFF) as f32 / 255.0,
-   )
-}
-
 pub(crate) fn colored_quad(
    vertices: &[api::Vertex],
    uniform: api::Color,

@@ -629,6 +629,10 @@ fn resolve_index(index: u16, mode: NormalizedIndexMode) -> Option<usize> {
 #[path = "wasm/image_slots.rs"]
 mod image_slots;
 
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[path = "wasm/packed_geometry.rs"]
+mod packed_geometry;
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     #[path = "webgpu.rs"]

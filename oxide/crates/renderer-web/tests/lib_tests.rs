@@ -260,19 +260,18 @@ fn wasm_webgpu_solid_vertex_colors_decode_aabbggrr_and_interpolate()
 {
    let source = include_str!("../src/wasm/webgpu.rs");
    let solid = compact_source_block(source, "fn encode_solid(", "fn encode_image(");
+   let vertex = compact_source_block(source, "fn gpu_vertex(", "fn append_gpu_vertices(");
    let shader = compact_source_block(source, "struct VertexIn", "@fragment\nfn fs_rgba");
 
    assert!(solid.contains("vertex.rgba,color"));
    assert!(solid.matches("color,true").count() >= 3);
+   assert!(vertex.contains("ifrgba==0{uniform.pack_rgba8()}else{rgba}"));
+   assert!(source.contains("format: wgpu::VertexFormat::Unorm8x4"));
    assert!(shader.contains("out.color=input.color"));
    assert!(shader.contains("fnfs_solid(input:VertexOut)->@location(0)vec4<f32>{returninput.color;"));
 
    let uniform = api::Color::rgba(0.25, 0.5, 0.75, 1.0);
-   assert_eq!(solid_color::resolve_vertex_color(0, uniform), uniform);
-   assert_eq!(
-      solid_color::resolve_vertex_color(0x8040_2010, uniform),
-      api::Color::rgba(16.0 / 255.0, 32.0 / 255.0, 64.0 / 255.0, 128.0 / 255.0)
-   );
+   assert_eq!(uniform.pack_rgba8(), 0xFFBF_8040);
 }
 
 #[test]
@@ -424,10 +423,18 @@ fn wasm_webgpu_draw_encoding_reuses_scratch_storage() {
         .next()
         .expect("encode_rrect end");
 
-    assert!(source.contains("scratch_vertices: Vec<GpuVertex>"));
+    assert!(source.contains("scratch_vertices: Vec<PackedVertex>"));
     assert!(source.contains("scratch_indices: Vec<u32>"));
     assert!(source.contains("scratch_points: Vec<(f32, f32)>"));
     assert!(source.contains("fn push_scratch_draw"));
+    assert!(source.contains("geometry: PackedGeometry"));
+    assert!(!source.contains("vertex_bytes: Vec<u8>"));
+    assert!(!source.contains("index_bytes: Vec<u8>"));
+    assert!(source.contains("let vertex_bytes = bytemuck::cast_slice(&self.frame.geometry.vertices)"));
+    assert!(source.contains("wgpu::IndexFormat::Uint16"));
+    assert!(source.contains("wgpu::IndexFormat::Uint32"));
+    assert!(!source.contains("fn encode_vertices("));
+    assert!(!source.contains("fn encode_indices("));
     for section in [encode_solid, encode_image_mesh, encode_glyph_vertices, encode_rrect] {
         assert!(section.contains("self.clear_scratch_draw();"));
         assert!(section.contains("self.push_scratch_draw("));
@@ -535,7 +542,7 @@ fn wasm_webgpu_backend_packet_vocabulary_is_frozen() {
     );
     assert_eq!(
         gpu_draw,
-        "structGpuDraw{kind:DrawKind,first_index:u32,index_count:u32,clip:api::RectI,effect_uniform_offset:u32,target:Option<u32>,}"
+        "structGpuDraw{kind:DrawKind,index_kind:PackedIndexKind,first_index:u32,index_count:u32,base_vertex:i32,clip:api::RectI,effect_uniform_offset:u32,target:Option<u32>,}"
     );
     for pattern in [
         "(DrawKind::Solid,DrawKind::Solid)=>true",

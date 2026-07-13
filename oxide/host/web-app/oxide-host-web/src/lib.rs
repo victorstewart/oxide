@@ -88,6 +88,8 @@ mod wasm_host {
     const WEBGPU_GLYPH_RUN_RUNS: usize = 64;
     const WEBGPU_GLYPH_RUN_GLYPHS_PER_RUN: usize = 8;
     const WEBGPU_GLYPH_RUN_SDF_RUNS: usize = 32;
+    const WEBGPU_GEOMETRY_QUADS: usize = 10_000;
+    const WEBGPU_GEOMETRY_LARGE_VERTICES: usize = 70_002;
     const WEBGPU_DRAW_STATE_CACHE_DRAWS: usize = 1024;
     const WEBGPU_DRAW_STATE_CACHE_COLUMNS: usize = 32;
     const WEBGPU_DRAW_ITEM_COALESCE_EXPECTED_ITEMS: usize = 1;
@@ -139,6 +141,7 @@ mod wasm_host {
         damage_rects: Vec<gfx::RectI>,
         coalesce_items: Vec<gfx::DrawCmd>,
         bench_resources: Option<WebGpuUploadBenchResources>,
+        geometry_bench_resources: Option<WebGpuGeometryBenchResources>,
         last_ms: u64,
         ime_focused: bool,
         ime_composing: bool,
@@ -391,6 +394,7 @@ mod wasm_host {
                 damage_rects: Vec::new(),
                 coalesce_items: Vec::new(),
                 bench_resources: None,
+                geometry_bench_resources: None,
                 last_ms: 0,
                 ime_focused: false,
                 ime_composing: false,
@@ -757,6 +761,47 @@ mod wasm_host {
                 WEBGPU_UPLOAD_DIRTY_SIZE,
                 WEBGPU_UPLOAD_DIRTY_SIZE,
                 WEBGPU_UPLOAD_DIRTY_SIZE + 3,
+            ))
+        }
+
+        pub async fn bench_webgpu_geometry_c16(
+            &self,
+            samples: u32,
+            frames_per_sample: u32,
+        ) -> Result<String, JsValue> {
+            let sample_count = samples.clamp(1, 30);
+            let frames = frames_per_sample.clamp(1, 120);
+            let renderer = self.ensure_geometry_bench_resources()?;
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut glyphs = self.with_geometry_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    WebGpuGeometryBenchResources::frame(renderer, &resources.glyphs)
+                })
+            })?;
+            glyphs.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut images = self.with_geometry_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    WebGpuGeometryBenchResources::frame(renderer, &resources.images)
+                })
+            })?;
+            images.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut large_mesh = self.with_geometry_bench_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    WebGpuGeometryBenchResources::frame(renderer, &resources.large_mesh)
+                })
+            })?;
+            large_mesh.stats =
+                settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            Ok(format!(
+                "samples={sample_count};frames_per_sample={frames};glyphs_warmup_ms={:.3};images_warmup_ms={:.3};large_mesh_warmup_ms={:.3}{}{}{};glyph_quads={WEBGPU_GEOMETRY_QUADS};image_quads={WEBGPU_GEOMETRY_QUADS};large_vertices={WEBGPU_GEOMETRY_LARGE_VERTICES}",
+                glyphs.warmup_ms,
+                images.warmup_ms,
+                large_mesh.warmup_ms,
+                sampled_case_metrics(&glyphs, "glyphs"),
+                sampled_case_metrics(&images, "images"),
+                sampled_case_metrics(&large_mesh, "large_mesh"),
             ))
         }
 
@@ -1439,6 +1484,35 @@ mod wasm_host {
             let mut renderer = renderer.borrow_mut();
             f(&mut renderer, resources)
         }
+
+        fn ensure_geometry_bench_resources(&self) -> Result<Rc<RefCell<BrowserRenderer>>, JsValue> {
+            let renderer = self.ensure_upload_bench_resources()?;
+            if self.state.borrow().geometry_bench_resources.is_none() {
+                let (glyph_atlas, image) = {
+                    let state = self.state.borrow();
+                    let Some(resources) = state.bench_resources.as_ref() else {
+                        return Err(JsValue::from_str("WebGPU upload benchmark resources unavailable"));
+                    };
+                    (resources.glyph_atlas, resources.image)
+                };
+                let resources = WebGpuGeometryBenchResources::new(glyph_atlas, image)?;
+                self.state.borrow_mut().geometry_bench_resources = Some(resources);
+            }
+            Ok(renderer)
+        }
+
+        fn with_geometry_bench_resources<T>(
+            &self,
+            f: impl FnOnce(&mut BrowserRenderer, &WebGpuGeometryBenchResources) -> Result<T, JsValue>,
+        ) -> Result<T, JsValue> {
+            let renderer = self.ensure_geometry_bench_resources()?;
+            let state = self.state.borrow();
+            let Some(resources) = state.geometry_bench_resources.as_ref() else {
+                return Err(JsValue::from_str("WebGPU geometry benchmark resources unavailable"));
+            };
+            let mut renderer = renderer.borrow_mut();
+            f(&mut renderer, resources)
+        }
     }
 
     /// Returns unsupported because WebGPU renderer initialization is asynchronous in browsers.
@@ -1689,6 +1763,29 @@ mod wasm_host {
         EncodePass,
         Submit,
         PostSubmit,
+    }
+
+    struct WebGpuGeometryBenchResources {
+        glyphs: gfx::DrawList,
+        images: gfx::DrawList,
+        large_mesh: gfx::DrawList,
+    }
+
+    impl WebGpuGeometryBenchResources {
+        fn new(glyph_atlas: gfx::ImageHandle, image: gfx::ImageHandle) -> Result<Self, JsValue> {
+            Ok(Self {
+                glyphs: webgpu_geometry_glyphs(glyph_atlas)?,
+                images: webgpu_geometry_images(image),
+                large_mesh: webgpu_geometry_large_mesh(),
+            })
+        }
+
+        fn frame(renderer: &mut BrowserRenderer, list: &gfx::DrawList) -> Result<(), JsValue> {
+            renderer.resize(512, 512, 2.0).map_err(render_err)?;
+            let token = renderer.begin_frame(&gfx::FrameTarget, None);
+            renderer.encode_pass(list);
+            renderer.submit(token).map_err(render_err)
+        }
     }
 
     struct WebGpuUploadBenchResources {
@@ -2674,6 +2771,67 @@ mod wasm_host {
             }
         }
         data
+    }
+
+    fn webgpu_geometry_glyphs(atlas: gfx::ImageHandle) -> Result<gfx::DrawList, JsValue> {
+        let mut builder = ui::DrawListBuilder::new();
+        if !append_glyph_grid(
+            &mut builder,
+            atlas,
+            WEBGPU_GEOMETRY_QUADS,
+            1.0,
+            1.0,
+            2.0,
+            false,
+            gfx::Color::rgba(0.13, 0.71, 0.94, 0.88),
+        ) {
+            return Err(JsValue::from_str("failed to build C16 glyph geometry"));
+        }
+        Ok(builder.drawlist().clone())
+    }
+
+    fn webgpu_geometry_images(image: gfx::ImageHandle) -> gfx::DrawList {
+        let mut list = gfx::DrawList {
+            items: Vec::with_capacity(WEBGPU_GEOMETRY_QUADS),
+            vertices: Vec::new(),
+            indices: Vec::new(),
+        };
+        for index in 0..WEBGPU_GEOMETRY_QUADS {
+            let column = index % 100;
+            let row = index / 100;
+            list.items.push(gfx::DrawCmd::Image {
+                tex: image,
+                dst: gfx::RectF::new(column as f32 * 2.56, row as f32 * 2.56, 2.4, 2.4),
+                src: gfx::RectF::new(0.0, 0.0, WEBGPU_UPLOAD_IMAGE_SIZE as f32, WEBGPU_UPLOAD_IMAGE_SIZE as f32),
+                alpha: 0.82,
+            });
+        }
+        list
+    }
+
+    fn webgpu_geometry_large_mesh() -> gfx::DrawList {
+        let mut vertices = Vec::with_capacity(WEBGPU_GEOMETRY_LARGE_VERTICES);
+        for triangle in 0..WEBGPU_GEOMETRY_LARGE_VERTICES / 3 {
+            let column = triangle % 154;
+            let row = triangle / 154;
+            let x = column as f32 * (256.0 / 154.0);
+            let y = row as f32 * (256.0 / 152.0);
+            let rgba = 0xD040_80FF_u32.wrapping_add((triangle as u32 & 0x1F) << 8);
+            vertices.extend_from_slice(&[
+                gfx::Vertex { x, y, u: 0.0, v: 0.0, rgba },
+                gfx::Vertex { x: x + 1.5, y, u: 1.0, v: 0.0, rgba },
+                gfx::Vertex { x: x + 0.5, y: y + 1.5, u: 0.5, v: 1.0, rgba },
+            ]);
+        }
+        gfx::DrawList {
+            items: vec![gfx::DrawCmd::Solid {
+                vb: gfx::VertexSpan { offset: 0, len: WEBGPU_GEOMETRY_LARGE_VERTICES as u32 },
+                ib: gfx::IndexSpan { offset: 0, len: 0 },
+                color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
+            }],
+            vertices,
+            indices: Vec::new(),
+        }
     }
 
     fn append_glyph_grid(

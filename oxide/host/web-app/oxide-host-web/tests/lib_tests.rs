@@ -1223,6 +1223,21 @@ fn c15_atlas_adapter_runs_real_chrome_and_persists_selected_samples() {
 }
 
 #[test]
+fn c16_geometry_adapter_covers_compact_and_fallback_streams() {
+    let host = include_str!("../src/lib.rs");
+    let script = include_str!("../../../../scripts/run_webgpu_geometry_c16.mjs");
+    assert!(host.contains("pub async fn bench_webgpu_geometry_c16"));
+    assert!(host.contains("const WEBGPU_GEOMETRY_QUADS: usize = 10_000"));
+    assert!(host.contains("const WEBGPU_GEOMETRY_LARGE_VERTICES: usize = 70_002"));
+    assert!(host.contains("glyphs: webgpu_geometry_glyphs(glyph_atlas)?"));
+    assert!(host.contains("images: webgpu_geometry_images(image)"));
+    assert!(host.contains("large_mesh: webgpu_geometry_large_mesh()"));
+    assert!(script.contains("bench_webgpu_geometry_c16"));
+    assert!(script.contains("warmups: [warmup], samples: [sample], metrics"));
+    assert!(script.contains("--use-angle=metal"));
+}
+
+#[test]
 fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
     let report = include_str!("../../../../benchmarks/web/latest.json");
     assert!(report.contains("\"version\": 5"));
