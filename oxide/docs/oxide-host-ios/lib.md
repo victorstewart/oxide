@@ -67,6 +67,7 @@
 ## Feature flags and cfgs
 - iOS-only native services are compiled behind `target_os = "ios"` guards.
 - Host unit tests compile the Rust callback bridge on the local host without launching UIKit.
+- Critical memory warnings purge renderer-owned effect and bloom targets, then mark the frame dirty so visible effects rebuild through the normal Rust render path.
 
 ## Testing and benchmarks
 - Covered by `cargo test -p oxide-host-ios --tests --locked`.

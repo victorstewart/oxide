@@ -978,7 +978,6 @@ pub struct MetalRenderer {
     target_msaa_tex: Option<Texture>,
     depth_tex: Option<Texture>,
     prepass_tex: Option<Texture>,
-    blur_tmp_tex: Option<Texture>,
     half_tex: Option<Texture>,
     quarter_tex: Option<Texture>,
     quarter_tmp_tex: Option<Texture>,
@@ -1385,6 +1384,21 @@ impl MetalRenderer {
     pub fn frame_slot_has_command_buffer_for_snapshot(&self, slot: usize) -> bool
     {
         self.frames.get(slot).is_some_and(|frame| frame.cmd.is_some())
+    }
+
+    #[cfg(feature = "snapshot-tests")]
+    pub fn effect_target_presence_for_snapshot(&self) -> [bool; 8]
+    {
+        [
+            self.prepass_tex.is_some(),
+            self.half_tex.is_some(),
+            self.quarter_tex.is_some(),
+            self.quarter_tmp_tex.is_some(),
+            self.eighth_tex.is_some(),
+            self.eighth_tmp_tex.is_some(),
+            self.scene3d_bloom_tex.is_some(),
+            self.scene3d_bloom_tmp_tex.is_some(),
+        ]
     }
 
     fn new_with_config_impl(config: MetalRendererConfig) -> Result<Self, MetalInitError> {
@@ -2006,7 +2020,6 @@ impl MetalRenderer {
             target_msaa_tex: None,
             depth_tex: None,
             prepass_tex: None,
-            blur_tmp_tex: None,
             half_tex: None,
             quarter_tex: None,
             quarter_tmp_tex: None,
@@ -2677,15 +2690,7 @@ impl MetalRenderer {
         self.target_tex = None;
         self.target_msaa_tex = None;
         self.depth_tex = None;
-        self.prepass_tex = None;
-        self.blur_tmp_tex = None;
-        self.half_tex = None;
-        self.quarter_tex = None;
-        self.quarter_tmp_tex = None;
-        self.eighth_tex = None;
-        self.eighth_tmp_tex = None;
-        self.scene3d_bloom_tex = None;
-        self.scene3d_bloom_tmp_tex = None;
+        self.purge_effect_targets();
         self.id_mask_targets = core::array::from_fn(|_| None);
         self.cam_blur_tex = None;
         self.cam_xfade_prev_tex = None;
@@ -2706,125 +2711,68 @@ impl MetalRenderer {
         ) {
             return;
         }
+        let target_size_changed = self.target_w != target_w || self.target_h != target_h;
         self.target_w = target_w;
         self.target_h = target_h;
         self.target_scale = target_scale;
         if self.sample_count == 1 {
             self.drop_direct_preview_offscreen_targets();
+        } else if target_size_changed {
+            self.purge_effect_targets();
         }
     }
 
-    fn ensure_effect_targets(&mut self) {
+    fn ensure_effect_targets(&mut self, plan: EffectTargetPlan) {
         if self.target_w == 0 || self.target_h == 0 {
             return;
         }
-        let need_src = match &self.prepass_tex {
-            Some(tex) => {
-                tex.width() as u32 != self.target_w || tex.height() as u32 != self.target_h
+        match plan {
+            EffectTargetPlan::Prepass => {
+                self.half_tex = None;
+                self.quarter_tex = None;
+                self.quarter_tmp_tex = None;
+                self.eighth_tex = None;
+                self.eighth_tmp_tex = None;
             }
-            None => true,
-        };
-        let need_tmp = match &self.blur_tmp_tex {
-            Some(tex) => {
-                tex.width() as u32 != self.target_w || tex.height() as u32 != self.target_h
+            EffectTargetPlan::Quarter => {
+                self.eighth_tex = None;
+                self.eighth_tmp_tex = None;
             }
-            None => true,
-        };
-        if need_src {
-            let d = TextureDescriptor::new();
-            d.set_pixel_format(self.color_format);
-            d.set_texture_type(MTLTextureType::D2);
-            d.set_width(self.target_w as u64);
-            d.set_height(self.target_h as u64);
-            d.set_storage_mode(MTLStorageMode::Private);
-            d.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
-            self.prepass_tex = Some(self.device.new_texture(&d));
+            EffectTargetPlan::Eighth => {
+                self.quarter_tmp_tex = None;
+            }
         }
-        if need_tmp {
-            let d = TextureDescriptor::new();
-            d.set_pixel_format(self.color_format);
-            d.set_texture_type(MTLTextureType::D2);
-            d.set_width(self.target_w as u64);
-            d.set_height(self.target_h as u64);
-            d.set_storage_mode(MTLStorageMode::Private);
-            d.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
-            self.blur_tmp_tex = Some(self.device.new_texture(&d));
+        let full = (self.target_w as u64, self.target_h as u64);
+        let half = (((self.target_w / 2).max(1)) as u64, ((self.target_h / 2).max(1)) as u64);
+        let quarter = (((self.target_w / 4).max(1)) as u64, ((self.target_h / 4).max(1)) as u64);
+        let eighth = (((self.target_w / 8).max(1)) as u64, ((self.target_h / 8).max(1)) as u64);
+        let device = &self.device;
+        let format = self.color_format;
+        let creates = &mut self.acc_resource_creates;
+        ensure_effect_texture(device, format, &mut self.prepass_tex, full, creates);
+        if plan.uses_blur_chain() {
+            ensure_effect_texture(device, format, &mut self.half_tex, half, creates);
+            ensure_effect_texture(device, format, &mut self.quarter_tex, quarter, creates);
         }
+        if plan == EffectTargetPlan::Quarter {
+            ensure_effect_texture(device, format, &mut self.quarter_tmp_tex, quarter, creates);
+        }
+        if plan == EffectTargetPlan::Eighth {
+            ensure_effect_texture(device, format, &mut self.eighth_tex, eighth, creates);
+            ensure_effect_texture(device, format, &mut self.eighth_tmp_tex, eighth, creates);
+        }
+    }
 
-        // Downsample chain targets plus ping-pong buffers for strong visual effects.
-        let (hw, hh) = (((self.target_w / 2).max(1)) as u64, ((self.target_h / 2).max(1)) as u64);
-        let (qw, qh) = (((self.target_w / 4).max(1)) as u64, ((self.target_h / 4).max(1)) as u64);
-        let (ew, eh) = (((self.target_w / 8).max(1)) as u64, ((self.target_h / 8).max(1)) as u64);
-        let need_half = match &self.half_tex {
-            Some(tex) => tex.width() != hw || tex.height() != hh,
-            None => true,
-        };
-        let need_quarter = match &self.quarter_tex {
-            Some(tex) => tex.width() != qw || tex.height() != qh,
-            None => true,
-        };
-        let need_quarter_tmp = match &self.quarter_tmp_tex {
-            Some(tex) => tex.width() != qw || tex.height() != qh,
-            None => true,
-        };
-        let need_eighth = match &self.eighth_tex {
-            Some(tex) => tex.width() != ew || tex.height() != eh,
-            None => true,
-        };
-        let need_eighth_tmp = match &self.eighth_tmp_tex {
-            Some(tex) => tex.width() != ew || tex.height() != eh,
-            None => true,
-        };
-        if need_half {
-            let d = TextureDescriptor::new();
-            d.set_pixel_format(self.color_format);
-            d.set_texture_type(MTLTextureType::D2);
-            d.set_width(hw);
-            d.set_height(hh);
-            d.set_storage_mode(MTLStorageMode::Private);
-            d.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
-            self.half_tex = Some(self.device.new_texture(&d));
-        }
-        if need_quarter {
-            let d = TextureDescriptor::new();
-            d.set_pixel_format(self.color_format);
-            d.set_texture_type(MTLTextureType::D2);
-            d.set_width(qw);
-            d.set_height(qh);
-            d.set_storage_mode(MTLStorageMode::Private);
-            d.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
-            self.quarter_tex = Some(self.device.new_texture(&d));
-        }
-        if need_quarter_tmp {
-            let d = TextureDescriptor::new();
-            d.set_pixel_format(self.color_format);
-            d.set_texture_type(MTLTextureType::D2);
-            d.set_width(qw);
-            d.set_height(qh);
-            d.set_storage_mode(MTLStorageMode::Private);
-            d.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
-            self.quarter_tmp_tex = Some(self.device.new_texture(&d));
-        }
-        if need_eighth {
-            let d = TextureDescriptor::new();
-            d.set_pixel_format(self.color_format);
-            d.set_texture_type(MTLTextureType::D2);
-            d.set_width(ew);
-            d.set_height(eh);
-            d.set_storage_mode(MTLStorageMode::Private);
-            d.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
-            self.eighth_tex = Some(self.device.new_texture(&d));
-        }
-        if need_eighth_tmp {
-            let d = TextureDescriptor::new();
-            d.set_pixel_format(self.color_format);
-            d.set_texture_type(MTLTextureType::D2);
-            d.set_width(ew);
-            d.set_height(eh);
-            d.set_storage_mode(MTLStorageMode::Private);
-            d.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
-            self.eighth_tmp_tex = Some(self.device.new_texture(&d));
-        }
+    /// Releases retained effect and bloom render targets after memory pressure.
+    pub fn purge_effect_targets(&mut self) {
+        self.prepass_tex = None;
+        self.half_tex = None;
+        self.quarter_tex = None;
+        self.quarter_tmp_tex = None;
+        self.eighth_tex = None;
+        self.eighth_tmp_tex = None;
+        self.scene3d_bloom_tex = None;
+        self.scene3d_bloom_tmp_tex = None;
     }
 
     #[allow(dead_code)]
@@ -4577,6 +4525,49 @@ impl MetalRenderer {
 // source DrawList, so command spans remain valid.
 const DARK_POPUP_MAX_BLUR_SIGMA_DP: f32 = 72.0;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EffectTargetPlan {
+    Prepass,
+    Quarter,
+    Eighth,
+}
+
+impl EffectTargetPlan {
+    #[inline]
+    fn for_effects(max_sigma: f32, visual: VisualEffectBlurPlan) -> Self {
+        if max_sigma <= 0.0 {
+            Self::Prepass
+        } else if visual.uses_eighth_downsample() {
+            Self::Eighth
+        } else {
+            Self::Quarter
+        }
+    }
+
+    #[inline]
+    fn uses_blur_chain(self) -> bool {
+        self != Self::Prepass
+    }
+}
+
+fn ensure_effect_texture(device: &Device, format: MTLPixelFormat, target: &mut Option<Texture>, size: (u64, u64), creates: &mut u32) {
+    let compatible = target
+        .as_ref()
+        .is_some_and(|texture| texture.width() == size.0 && texture.height() == size.1);
+    if compatible {
+        return;
+    }
+    let descriptor = TextureDescriptor::new();
+    descriptor.set_pixel_format(format);
+    descriptor.set_texture_type(MTLTextureType::D2);
+    descriptor.set_width(size.0);
+    descriptor.set_height(size.1);
+    descriptor.set_storage_mode(MTLStorageMode::Private);
+    descriptor.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+    *target = Some(device.new_texture(&descriptor));
+    *creates = creates.saturating_add(1);
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct VisualEffectBlurPlan {
     sigma_dp: f32,
@@ -5230,6 +5221,7 @@ impl api::Renderer for MetalRenderer {
         let mut has_backdrop = false;
         let mut has_visual_effect = false;
         let mut has_layer_commands = false;
+        let mut max_effect_sigma = 0.0f32;
         let mut visual_effect_plan = VisualEffectBlurPlan::OFF;
         for it in &list.items {
             match it {
@@ -5241,13 +5233,15 @@ impl api::Renderer for MetalRenderer {
                         requested_cam_blur_sigma = requested_cam_blur_sigma.max(*sigma);
                     }
                 }
-                api::DrawCmd::Backdrop { .. } => {
+                api::DrawCmd::Backdrop { sigma, .. } => {
                     has_backdrop = true;
+                    max_effect_sigma = max_effect_sigma.max(sigma.max(0.0));
                 }
                 api::DrawCmd::VisualEffect { effect, .. } => {
                     has_backdrop = true;
                     has_visual_effect = true;
                     let plan = visual_effect_blur_plan(*effect);
+                    max_effect_sigma = max_effect_sigma.max(plan.sigma_dp);
                     if plan.sigma_dp > visual_effect_plan.sigma_dp {
                         visual_effect_plan = plan;
                     }
@@ -5329,7 +5323,7 @@ impl api::Renderer for MetalRenderer {
                     (self.target_h as f32) / self.target_scale.max(1.0),
                 ];
                 let rect_dp: [f32; 4] = [0.0, 0.0, vp_dp[0], vp_dp[1]];
-                self.ensure_effect_targets();
+                self.ensure_effect_targets(EffectTargetPlan::Quarter);
                 if let Some(src) = &self.prepass_tex {
                     let rpd0 = RenderPassDescriptor::new();
                     let ca = rpd0.color_attachments().object_at(0).unwrap();
@@ -5598,7 +5592,10 @@ impl api::Renderer for MetalRenderer {
 
         // Effects prepass: if there is any Backdrop, render a prepass and blur it.
         if has_backdrop {
-            self.ensure_effect_targets();
+            self.ensure_effect_targets(EffectTargetPlan::for_effects(
+                max_effect_sigma,
+                visual_effect_plan,
+            ));
             // 1) Prepass: render up to the first Backdrop into prepass_tex
             let rpd0 = RenderPassDescriptor::new();
             let ca_pre = rpd0.color_attachments().object_at(0).unwrap();
@@ -6463,10 +6460,14 @@ impl api::Renderer for MetalRenderer {
         {
             return Ok(());
         }
+        let target_size_changed = self.target_w != next_w || self.target_h != next_h;
         self.target_w = next_w;
         self.target_h = next_h;
         self.target_scale = next_scale;
         self.persistent_target_valid = false;
+        if target_size_changed {
+            self.purge_effect_targets();
+        }
         self.ensure_target();
         Ok(())
     }
@@ -9459,10 +9460,9 @@ impl MetalRenderer {
         );
         let effect_blur_chain_bytes = Self::unique_texture_category_bytes(
             &mut seen,
-            self.blur_tmp_tex
+            self.half_tex
                 .iter()
                 .map(|tex| tex.as_ref())
-                .chain(self.half_tex.iter().map(|tex| tex.as_ref()))
                 .chain(self.quarter_tex.iter().map(|tex| tex.as_ref()))
                 .chain(self.quarter_tmp_tex.iter().map(|tex| tex.as_ref()))
                 .chain(self.eighth_tex.iter().map(|tex| tex.as_ref()))
@@ -9587,7 +9587,6 @@ impl MetalRenderer {
             .chain(self.target_msaa_tex.iter())
             .chain(self.depth_tex.iter())
             .chain(self.prepass_tex.iter())
-            .chain(self.blur_tmp_tex.iter())
             .chain(self.half_tex.iter())
             .chain(self.quarter_tex.iter())
             .chain(self.quarter_tmp_tex.iter())
@@ -9907,6 +9906,28 @@ mod tests {
         assert_eq!(high.sigma_dp, 72.0);
         assert_eq!(high.pass_scale, 8.0);
         assert_eq!(off, VisualEffectBlurPlan::OFF);
+    }
+
+    #[test]
+    fn effect_target_plan_matches_declared_pass_resolution() {
+        assert_eq!(
+            EffectTargetPlan::for_effects(0.0, VisualEffectBlurPlan::OFF),
+            EffectTargetPlan::Prepass,
+        );
+        assert_eq!(
+            EffectTargetPlan::for_effects(8.0, VisualEffectBlurPlan::OFF),
+            EffectTargetPlan::Quarter,
+        );
+        let low = visual_effect_blur_plan(api::VisualEffect::DarkPopup {
+            blur_intensity: 0.5,
+            tint: api::Color::rgba(1.0, 1.0, 1.0, 0.9),
+        });
+        let high = visual_effect_blur_plan(api::VisualEffect::DarkPopup {
+            blur_intensity: 1.0,
+            tint: api::Color::rgba(1.0, 1.0, 1.0, 0.9),
+        });
+        assert_eq!(EffectTargetPlan::for_effects(low.sigma_dp, low), EffectTargetPlan::Quarter);
+        assert_eq!(EffectTargetPlan::for_effects(high.sigma_dp, high), EffectTargetPlan::Eighth);
     }
 
     #[test]

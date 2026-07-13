@@ -72,6 +72,18 @@ fn native_damage_handoff_reuses_router_and_submit_storage() {
 }
 
 #[test]
+fn memory_warnings_purge_effect_targets_and_request_a_frame() {
+    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+    let warning = source
+        .split("pub extern \"C\" fn oxide_host_on_memory_warning()")
+        .nth(1)
+        .expect("memory-warning handler");
+    let warning = warning.split("// ===== Camera options control").next().expect("handler end");
+    assert!(warning.contains("renderer.purge_effect_targets();"));
+    assert!(warning.contains("mark_frame_dirty(app);"));
+}
+
+#[test]
 fn app_main_uses_declared_c_environment_apis_for_parked_perf_launch() {
     let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../App/main.m"));
 

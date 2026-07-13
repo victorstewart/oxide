@@ -2279,6 +2279,10 @@ pub extern "C" fn oxide_host_app_will_terminate() {
 pub extern "C" fn oxide_host_on_memory_warning() {
     with_app_mut(|app| {
         app.memory_warnings = app.memory_warnings.saturating_add(1);
+        if let Some(renderer) = app.renderer.as_mut() {
+            renderer.purge_effect_targets();
+        }
+        mark_frame_dirty(app);
         if let Some(ops) = app.telemetry_ops.as_ref() {
             ops.handle_memory_pressure(timing::now_ms(), MemoryPressureLevel::Critical);
         }

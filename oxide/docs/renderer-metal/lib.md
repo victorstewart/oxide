@@ -64,6 +64,8 @@ Renderer accounting keeps allocated GPU bytes and logical payload bytes separate
 
 Frame-level camera/effect metadata is gathered in one draw-list scan. Camera coverage, camera-blur sigma, backdrop presence, and the strongest visual-effect blur plan are reused by the later policy and prepass blocks instead of rediscovering the same facts with separate passes.
 
+Effect target ownership follows that declared plan. A zero-blur backdrop allocates only the full-resolution prepass; ordinary blur adds half/quarter targets and one quarter ping-pong target; strong visual blur substitutes the declared eighth-resolution pair without retaining an unused full-resolution temporary. Compatible textures persist across warm frames. Resize invalidates incompatible targets, while the production memory-warning hook purges both effect and bloom targets and requests a replacement frame. `resource_creates` records first-use construction and the effect/bloom memory categories include every retained target.
+
 Camera preview rendering remains Oxide-owned. The renderer consumes `CameraBg` frame data and no longer accepts a native visible-preview draw marker in the product draw-list path.
 
 Synthetic camera benchmark textures keep the BGRA reference and optimized NV12 shader on the same BT.709 full-range contract. The optimized shader uses normalized chroma offsets directly, while the legacy shader intentionally preserves its older divergent full-range conversion so the snapshot benchmark can detect regressions against the BGRA reference.
@@ -84,6 +86,8 @@ ID-mask composition is GPU-owned. Semantic region/subregion triangles are raster
   - A mixed 3D/2D frame reuses one frame command buffer and one color target initialization path.
 
 ## Changelog
+
+- 2026-07-12: made effect targets pass-plan-lazy, removed the unused full-size blur texture, and added production memory-pressure purging.
 - 2026-07-12: replaced independent layer-cache prescan/lowering decisions with one generation-based plan per nesting range, single-owner body rendering, same-size texture reuse, nested invalidation propagation, and explicit ownership counters.
 - 2026-07-12: added snapshot-feature raw color-target readback for exact BGRA8, 4x MSAA resolve, and packed BGRA10_XR correctness goldens.
 

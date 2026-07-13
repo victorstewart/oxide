@@ -504,3 +504,144 @@ fn disabled_accounting_path_keeps_new_stats_zero()
    assert_eq!(stats.memory.logical_total_bytes, 0);
    assert_eq!(stats.memory.total_bytes, 0);
 }
+
+#[cfg(all(target_os = "macos", feature = "snapshot-tests"))]
+#[test]
+fn effect_targets_follow_the_declared_pass_plan_and_purge()
+{
+   use oxide_renderer_api::{self as api, Renderer};
+   use oxide_renderer_metal::{MetalInitError, MetalRenderer};
+
+   fn render(effect: Option<api::DrawCmd>) -> MetalRenderer
+   {
+      let mut renderer = match MetalRenderer::new_default()
+      {
+         Ok(renderer) => renderer,
+         Err(MetalInitError::NoDevice) => panic!("macOS effect-target contract requires Metal"),
+         Err(error) => panic!("create Metal renderer: {error}"),
+      };
+      renderer.resize(1_200, 800, 1.0).expect("resize renderer");
+      let mut list = api::DrawList::default();
+      list.items.push(api::DrawCmd::RRect {
+         rect: api::RectF::new(0.0, 0.0, 1_200.0, 800.0),
+         radii: [0.0; 4],
+         color: api::Color::rgba(0.15, 0.25, 0.45, 1.0),
+      });
+      if let Some(effect) = effect
+      {
+         list.items.push(effect);
+      }
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      renderer.encode_pass(&list);
+      renderer.submit(token).expect("submit first effect frame");
+      renderer
+   }
+
+   let direct = render(None);
+   assert_eq!(direct.effect_target_presence_for_snapshot(), [false; 8]);
+   assert_eq!(direct.last_stats().resource_creates, 0);
+   assert_eq!(direct.last_stats().memory.effect_targets_bytes, 0);
+   assert_eq!(direct.last_stats().memory.bloom_targets_bytes, 0);
+
+   let zero = render(Some(api::DrawCmd::Backdrop {
+      rect: api::RectF::new(200.0, 160.0, 800.0, 480.0),
+      sigma: 0.0,
+      tint: api::Color::rgba(0.2, 0.2, 0.2, 0.3),
+      alpha: 1.0,
+   }));
+   assert_eq!(
+      zero.effect_target_presence_for_snapshot(),
+      [true, false, false, false, false, false, false, false],
+   );
+   assert_eq!(zero.last_stats().resource_creates, 1);
+   assert!(zero.last_stats().memory.effect_prepass_bytes > 0);
+   assert_eq!(zero.last_stats().memory.effect_blur_chain_bytes, 0);
+
+   let quarter_effect = api::DrawCmd::VisualEffect {
+      rect: api::RectF::new(200.0, 160.0, 800.0, 480.0),
+      effect: api::VisualEffect::DarkPopup {
+         blur_intensity: 0.5,
+         tint: api::Color::rgba(0.1, 0.1, 0.1, 0.8),
+      },
+   };
+   let mut quarter = render(Some(quarter_effect.clone()));
+   assert_eq!(
+      quarter.effect_target_presence_for_snapshot(),
+      [true, true, true, true, false, false, false, false],
+   );
+   assert_eq!(quarter.last_stats().resource_creates, 4);
+   assert!(quarter.last_stats().memory.effect_blur_chain_bytes > 0);
+   let quarter_bytes = quarter.last_stats().memory.effect_targets_bytes;
+
+   let mut warm = api::DrawList::default();
+   warm.items.push(api::DrawCmd::RRect {
+      rect: api::RectF::new(0.0, 0.0, 1_200.0, 800.0),
+      radii: [0.0; 4],
+      color: api::Color::rgba(0.15, 0.25, 0.45, 1.0),
+   });
+   warm.items.push(quarter_effect);
+   let token = quarter.begin_frame(&api::FrameTarget, None);
+   quarter.encode_pass(&warm);
+   quarter.submit(token).expect("submit warm quarter effect frame");
+   assert_eq!(quarter.last_stats().resource_creates, 0);
+
+   let eighth = render(Some(api::DrawCmd::VisualEffect {
+      rect: api::RectF::new(200.0, 160.0, 800.0, 480.0),
+      effect: api::VisualEffect::DarkPopup {
+         blur_intensity: 1.0,
+         tint: api::Color::rgba(0.1, 0.1, 0.1, 0.8),
+      },
+   }));
+   assert_eq!(
+      eighth.effect_target_presence_for_snapshot(),
+      [true, true, true, false, true, true, false, false],
+   );
+   assert_eq!(eighth.last_stats().resource_creates, 5);
+   assert!(eighth.last_stats().memory.effect_targets_bytes < quarter_bytes);
+
+   let mut high = api::DrawList::default();
+   high.items.push(api::DrawCmd::RRect {
+      rect: api::RectF::new(0.0, 0.0, 1_200.0, 800.0),
+      radii: [0.0; 4],
+      color: api::Color::rgba(0.15, 0.25, 0.45, 1.0),
+   });
+   high.items.push(api::DrawCmd::VisualEffect {
+      rect: api::RectF::new(200.0, 160.0, 800.0, 480.0),
+      effect: api::VisualEffect::DarkPopup {
+         blur_intensity: 1.0,
+         tint: api::Color::rgba(0.1, 0.1, 0.1, 0.8),
+      },
+   });
+   let token = quarter.begin_frame(&api::FrameTarget, None);
+   quarter.encode_pass(&high);
+   quarter.submit(token).expect("submit quarter-to-eighth transition");
+   assert_eq!(
+      quarter.effect_target_presence_for_snapshot(),
+      [true, true, true, false, true, true, false, false],
+   );
+   assert_eq!(quarter.last_stats().resource_creates, 2);
+
+   let mut prepass = api::DrawList::default();
+   prepass.items.push(api::DrawCmd::RRect {
+      rect: api::RectF::new(0.0, 0.0, 1_200.0, 800.0),
+      radii: [0.0; 4],
+      color: api::Color::rgba(0.15, 0.25, 0.45, 1.0),
+   });
+   prepass.items.push(api::DrawCmd::Backdrop {
+      rect: api::RectF::new(200.0, 160.0, 800.0, 480.0),
+      sigma: 0.0,
+      tint: api::Color::rgba(0.2, 0.2, 0.2, 0.3),
+      alpha: 1.0,
+   });
+   let token = quarter.begin_frame(&api::FrameTarget, None);
+   quarter.encode_pass(&prepass);
+   quarter.submit(token).expect("submit eighth-to-prepass transition");
+   assert_eq!(
+      quarter.effect_target_presence_for_snapshot(),
+      [true, false, false, false, false, false, false, false],
+   );
+   assert_eq!(quarter.last_stats().resource_creates, 0);
+
+   quarter.purge_effect_targets();
+   assert_eq!(quarter.effect_target_presence_for_snapshot(), [false; 8]);
+}

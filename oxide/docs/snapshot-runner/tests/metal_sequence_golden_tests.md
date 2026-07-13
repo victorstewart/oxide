@@ -15,10 +15,11 @@ They use the production `MetalRenderer` API and committed images under `goldens/
 - `resize_sequence_matches_fresh_target_goldens`
 - `device_loss_recreation_preserves_visible_golden`
 - `atlas_eviction_and_recreation_preserve_glyph_golden`
+- `effect_target_plans_preserve_direct_prepass_quarter_and_eighth_goldens`
 
 ## Logic narrative
 
-The damage case freezes both the retained full-direct then partial-damage parent output and a fresh complete-scene reference. It explicitly proves the known parent mismatch that C10 must remove. Resize compares a retained resized target with a fresh target. Memory-warning and device-loss controls destroy and recreate the renderer, preserving visible state before later work adds narrower production recovery hooks. Atlas eviction releases and recreates the A8 atlas texture, then verifies rebuilt and warm glyph frames.
+The damage case freezes both the retained full-direct then partial-damage parent output and a fresh complete-scene reference. It explicitly proves the known parent mismatch that C10 must remove. Resize compares a retained resized target with a fresh target. Memory-warning and device-loss controls destroy and recreate the renderer, preserving visible state before later work adds narrower production recovery hooks. Atlas eviction releases and recreates the A8 atlas texture, then verifies rebuilt and warm glyph frames. Effect-target coverage renders the direct, zero-blur prepass, quarter-resolution blur, and eighth-resolution blur plans on fresh renderers so target-lifetime changes cannot alter the visible result.
 
 ## Preconditions and postconditions
 
@@ -50,4 +51,5 @@ Set `UPDATE_GOLDENS=1` only for intentional reviewed golden updates.
 
 ## Changelog
 
+- 2026-07-12: added direct/prepass/quarter/eighth effect-target plan goldens.
 - 2026-07-12: added exact damage, recreate, resize, device-loss, and atlas-eviction sequence goldens.

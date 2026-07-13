@@ -4839,6 +4839,65 @@ fn metal_architecture_reports_reconciled_renderer_resource_families()
    let _ = std::fs::remove_file(json_out);
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn metal_effect_target_plan_reports_first_use_and_exact_residency()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-effect-targets-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "gpu.architecture.effects.target_plan_")
+      .env("OXIDE_ARCHITECTURE_METAL_FRAMES", "2")
+      .env("OXIDE_ARCHITECTURE_METAL_WARMUPS", "1")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run Metal effect-target plan smoke suite");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "Metal effect-target suite failed: {stderr}");
+   assert!(stdout.contains("cases=4"), "stdout: {stdout}");
+   let report = std::fs::read_to_string(&json_out).expect("read effect-target report");
+   let direct = report_case_slice(&report, "gpu.architecture.effects.target_plan_direct");
+   let prepass = report_case_slice(&report, "gpu.architecture.effects.target_plan_prepass");
+   let quarter = report_case_slice(&report, "gpu.architecture.effects.target_plan_quarter");
+   let eighth = report_case_slice(&report, "gpu.architecture.effects.target_plan_eighth");
+
+   assert_eq!(report_f64(direct, "first_resource_creates"), 0.0);
+   assert_eq!(report_f64(direct, "resource_creates_total"), 0.0);
+   assert_eq!(report_f64(direct, "effect_targets_bytes_peak"), 0.0);
+   assert_eq!(report_f64(direct, "bloom_targets_bytes_peak"), 0.0);
+   assert_eq!(report_f64(prepass, "first_resource_creates"), 1.0);
+   assert_eq!(report_f64(prepass, "resource_creates_total"), 1.0);
+   assert_eq!(report_f64(prepass, "effect_blur_chain_bytes_peak"), 0.0);
+   assert_eq!(
+      report_f64(prepass, "effect_targets_bytes_peak"),
+      report_f64(prepass, "effect_prepass_bytes_peak"),
+   );
+   assert_eq!(report_f64(quarter, "first_resource_creates"), 4.0);
+   assert_eq!(report_f64(quarter, "resource_creates_total"), 4.0);
+   assert_eq!(report_f64(eighth, "first_resource_creates"), 5.0);
+   assert_eq!(report_f64(eighth, "resource_creates_total"), 5.0);
+   assert_eq!(
+      report_f64(quarter, "effect_prepass_bytes_peak"),
+      report_f64(eighth, "effect_prepass_bytes_peak"),
+   );
+   assert!(
+      report_f64(eighth, "effect_targets_bytes_peak")
+         < report_f64(quarter, "effect_targets_bytes_peak"),
+   );
+   for row in [direct, prepass, quarter, eighth]
+   {
+      assert!(report_f64(row, "first_frame_ms") > 0.0);
+      assert!(report_f64(row, "first_encode_ms") > 0.0);
+      assert!(report_f64(row, "first_gpu_ms") > 0.0);
+   }
+   let _ = std::fs::remove_file(json_out);
+}
+
 #[test]
 fn filtered_run_suite_supports_gpu_journey_frame_pacing_case() {
     let mut json_out = std::env::temp_dir();

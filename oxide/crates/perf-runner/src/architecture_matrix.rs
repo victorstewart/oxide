@@ -83,6 +83,10 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       "blur_mixed_sigma",
       "blur_edges_corners",
       "nested_layer_effects",
+      "target_plan_direct",
+      "target_plan_prepass",
+      "target_plan_quarter",
+      "target_plan_eighth",
    ]
    {
       let id = format!("gpu.architecture.effects.{name}");
@@ -718,6 +722,7 @@ fn effect_region_count(name: &str) -> usize
 {
    match name
    {
+      "target_plan_direct" => 0,
       "backdrop_separated_48" => 48,
       "backdrop_coalescible_12" => 12,
       "blur_mixed_sigma" => 16,
@@ -1066,6 +1071,15 @@ where
    let mut damage_rects_sum = 0.0;
    let mut layer_bytes_peak = 0_u64;
    let mut total_bytes_peak = 0_u64;
+   let mut effect_bytes_peak = 0_u64;
+   let mut effect_prepass_bytes_peak = 0_u64;
+   let mut effect_blur_chain_bytes_peak = 0_u64;
+   let mut bloom_bytes_peak = 0_u64;
+   let mut resource_creates_sum = 0_u64;
+   let mut first_frame_ms = 0.0;
+   let mut first_encode_ms = 0.0;
+   let mut first_gpu_ms = 0.0;
+   let mut first_resource_creates = 0_u32;
    let mut skips_sum = 0.0;
    let mut layer_body_commands_scanned_sum = 0.0;
    let mut layer_body_commands_copied_sum = 0.0;
@@ -1095,6 +1109,20 @@ where
       renderer.encode_pass(&draws);
       renderer.submit(token).with_context(|| format!("submitting {id}"))?;
       let stats = last_metal_stats_after_submit(&renderer, frame_id);
+      effect_bytes_peak = effect_bytes_peak.max(stats.memory.effect_targets_bytes);
+      effect_prepass_bytes_peak =
+         effect_prepass_bytes_peak.max(stats.memory.effect_prepass_bytes);
+      effect_blur_chain_bytes_peak =
+         effect_blur_chain_bytes_peak.max(stats.memory.effect_blur_chain_bytes);
+      bloom_bytes_peak = bloom_bytes_peak.max(stats.memory.bloom_targets_bytes);
+      resource_creates_sum = resource_creates_sum.saturating_add(stats.resource_creates as u64);
+      if frame == 0
+      {
+         first_frame_ms = frame_t0.elapsed().as_secs_f64() * 1_000.0;
+         first_encode_ms = stats.encode_ms;
+         first_gpu_ms = stats.gpu_ms;
+         first_resource_creates = stats.resource_creates;
+      }
       if frame >= warmups
       {
          frame_samples.push(frame_t0.elapsed().as_secs_f64() * 1_000.0);
@@ -1148,6 +1176,15 @@ where
    metrics.insert(String::from("damage_rects_avg"), damage_rects_sum / frames as f64);
    metrics.insert(String::from("layer_cache_bytes_peak"), layer_bytes_peak as f64);
    metrics.insert(String::from("renderer_bytes_peak"), total_bytes_peak as f64);
+   metrics.insert(String::from("effect_targets_bytes_peak"), effect_bytes_peak as f64);
+   metrics.insert(String::from("effect_prepass_bytes_peak"), effect_prepass_bytes_peak as f64);
+   metrics.insert(String::from("effect_blur_chain_bytes_peak"), effect_blur_chain_bytes_peak as f64);
+   metrics.insert(String::from("bloom_targets_bytes_peak"), bloom_bytes_peak as f64);
+   metrics.insert(String::from("resource_creates_total"), resource_creates_sum as f64);
+   metrics.insert(String::from("first_frame_ms"), first_frame_ms);
+   metrics.insert(String::from("first_encode_ms"), first_encode_ms);
+   metrics.insert(String::from("first_gpu_ms"), first_gpu_ms);
+   metrics.insert(String::from("first_resource_creates"), first_resource_creates as f64);
    metrics.insert(String::from("frame_backpressure_skips"), skips_sum);
    metrics.insert(String::from("layer_body_commands_scanned_avg"), layer_body_commands_scanned_sum / frames as f64);
    metrics.insert(String::from("layer_body_commands_copied_avg"), layer_body_commands_copied_sum / frames as f64);
@@ -1250,7 +1287,34 @@ fn metal_layer_case(id: &str, smoke: bool, name: &str) -> Result<PerfCaseResult>
 fn effect_drawlist(name: &str) -> api::DrawList
 {
    let mut builder = ui::DrawListBuilder::new();
-   if name == "backdrop_separated_48"
+   if name.starts_with("target_plan_")
+   {
+      builder.rrect(
+         api::RectF::new(0.0, 0.0, 1_200.0, 800.0),
+         [0.0; 4],
+         api::Color::rgba(0.15, 0.25, 0.45, 1.0),
+      );
+      if name == "target_plan_prepass"
+      {
+         builder.backdrop(
+            api::RectF::new(200.0, 160.0, 800.0, 480.0),
+            0.0,
+            api::Color::rgba(0.2, 0.2, 0.2, 0.3),
+            1.0,
+         );
+      }
+      else if name == "target_plan_quarter" || name == "target_plan_eighth"
+      {
+         builder.visual_effect(
+            api::RectF::new(200.0, 160.0, 800.0, 480.0),
+            api::VisualEffect::DarkPopup {
+               blur_intensity: if name == "target_plan_quarter" { 0.5 } else { 1.0 },
+               tint: api::Color::rgba(0.1, 0.1, 0.1, 0.8),
+            },
+         );
+      }
+   }
+   else if name == "backdrop_separated_48"
    {
       for index in 0..48 { builder.backdrop(api::RectF::new((index % 8) as f32 * 100.0, (index / 8) as f32 * 90.0, 48.0, 42.0), 8.0, api::Color::rgba(1.0, 1.0, 1.0, 1.0), 0.3); }
    }
@@ -1285,13 +1349,22 @@ fn metal_effect_case(id: &str, smoke: bool, name: &str) -> Result<PerfCaseResult
 {
    let kind = String::from(name);
    let note_kind = kind.clone();
+   let cold_first_use = kind.starts_with("target_plan_")
+      && std::env::var_os("OXIDE_ARCHITECTURE_EFFECT_COLD_FIRST_USE").is_some();
    let mut case = measured_metal_drawlist_case(
       id,
       smoke,
       format!("Metal effect workload for {note_kind} through the production effect/layer encoder."),
-      move |_| (effect_drawlist(&kind), None, None, false),
+      move |frame| (effect_drawlist(&kind), None, None, cold_first_use && frame > 0),
    )?;
    case.metrics.insert(String::from("effect_regions"), effect_region_count(name) as f64);
+   if cold_first_use
+   {
+      case.cache_state = String::from("cold");
+      case.notes.push(String::from(
+         "Renderer recreation before every post-initial frame isolates cold target first use.",
+      ));
+   }
    Ok(case)
 }
 

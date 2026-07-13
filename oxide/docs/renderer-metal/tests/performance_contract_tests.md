@@ -85,6 +85,8 @@ Related local Metal evidence is produced by the perf-runner filtered GPU row `gp
 
 The accounting schema test constructs the public stats value, freezes the previously omitted depth, bloom, ID-mask, Scene3D mesh, and layer fields, and source-checks saturating arithmetic plus separate retained texture/buffer identity sets whose capacity survives each scan. The disabled-path runtime test proves a real submission leaves the new fields zero. Actual nonzero resource ownership is verified by the filtered architecture report test.
 
+The effect-target runtime contract renders direct, zero-blur prepass, quarter-resolution blur, and eighth-resolution blur frames on fresh Metal renderers. It freezes exact target presence, first-use creation counts, memory-category movement, warm reuse, and explicit purge behavior.
+
 ## Examples
 
 ```rust
@@ -98,6 +100,7 @@ fn initialize_renderer_for_contract_check() -> Result<(), oxide_renderer_metal::
 
 ## Changelog
 
+- 2026-07-12: added real-Metal effect target plan, warm reuse, byte-accounting, and purge coverage.
 - 2026-07-12: added source and real-Metal missing/clean/dirty layer-cache ownership, nested invalidation, and same-size texture-reuse coverage.
 - 2026-07-12: added renderer memory-schema coverage for omitted resource families, overflow-safe accumulation, and cross-kind identity separation.
 - 2026-07-12: added a real-frame guard for the complete disabled accounting path.

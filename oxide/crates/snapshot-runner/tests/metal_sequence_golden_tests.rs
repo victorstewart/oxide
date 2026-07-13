@@ -408,3 +408,51 @@ fn atlas_eviction_and_recreation_preserve_glyph_golden()
    assert_golden("atlas_rebuilt", width, height, &rebuilt);
    assert_golden("atlas_rebuilt_warm", width, height, &warm);
 }
+
+#[test]
+fn effect_target_plans_preserve_direct_prepass_quarter_and_eighth_goldens()
+{
+   let (width, height) = (192, 128);
+   for (name, effect) in [
+      ("effect_target_direct", None),
+      (
+         "effect_target_prepass",
+         Some(api::DrawCmd::Backdrop {
+            rect: api::RectF::new(40.0, 24.0, 112.0, 80.0),
+            sigma: 0.0,
+            tint: api::Color::rgba(0.7, 0.8, 1.0, 0.35),
+            alpha: 1.0,
+         }),
+      ),
+      (
+         "effect_target_quarter",
+         Some(api::DrawCmd::VisualEffect {
+            rect: api::RectF::new(40.0, 24.0, 112.0, 80.0),
+            effect: api::VisualEffect::DarkPopup {
+               blur_intensity: 0.5,
+               tint: api::Color::rgba(0.12, 0.10, 0.18, 0.72),
+            },
+         }),
+      ),
+      (
+         "effect_target_eighth",
+         Some(api::DrawCmd::VisualEffect {
+            rect: api::RectF::new(40.0, 24.0, 112.0, 80.0),
+            effect: api::VisualEffect::DarkPopup {
+               blur_intensity: 1.0,
+               tint: api::Color::rgba(0.12, 0.10, 0.18, 0.72),
+            },
+         }),
+      ),
+   ]
+   {
+      let mut list = scene(width, height, api::Color::rgba(0.94, 0.42, 0.18, 1.0));
+      if let Some(effect) = effect
+      {
+         list.items.push(effect);
+      }
+      let mut renderer = renderer(width, height);
+      let pixels = render(&mut renderer, &list, None);
+      assert_golden(name, width, height, &pixels);
+   }
+}

@@ -1,4 +1,65 @@
 [[experiments]]
+id = "c17-metal-pass-plan-effect-targets"
+introduced_commit = "C17 staged tree recorded in commit proof"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-metal", "oxide-host-ios", "oxide-perf-runner"]
+required_devices = ["macOS Metal host", "iOS host compile path"]
+correctness_gate = "Direct/prepass/quarter/eighth target presence, exact first-use creates, warm reuse, resize and memory-warning purge, Metal validation, and byte-exact visual goldens must pass."
+performance_gate = "Fresh-process paired Metal A/B must reduce effect-target residency and cold first-effect encode time for prepass, quarter, and eighth plans while the direct path passes the no-material-regression gate."
+decision_state = "accepted"
+decision = "Allocated only the persistent Metal effect targets declared by the active pass plan, removed the unused full-size blur temporary, and purged effect/bloom targets on memory pressure."
+proof = [
+   "At 1200x800, parent effect residency was 10,305,536 bytes for every effect; candidate prepass/quarter/eighth residency is 4,112,384/5,963,776/5,849,088 bytes, while direct UI remains zero on both sides.",
+   "Exploratory 20-pair cold first-use encode A/B improved prepass 38.738% (95% CI 36.973..39.761), quarter 12.732% (9.866..15.006), and eighth 8.960% (7.500..10.044), with 20/20 pair wins each.",
+   "The doubled 40-pair direct encode control was neutral and accepted: 0.018458 -> 0.018458 ms p50, 0.226% paired speedup, 95% CI -0.977..2.837, 21/40 wins, with improved p95/p99/peak.",
+   "Permanent Metal tests freeze target presence and 0/1/4/5 first-use creates; warm quarter reuse creates zero targets; memory warning purges all effect/bloom targets and requests a normal replacement frame.",
+]
+cleanup = [
+   "Deleted blur_tmp_tex and its full-resolution allocation/accounting path.",
+   "Kept compatible plan targets persistent across warm frames and retained existing lazy Scene3D bloom allocation.",
+   "Added non-default cold-first-use perf acquisition without adding a production renderer switch or prewarm path.",
+]
+
+[[experiments]]
+id = "c17-metal-effect-target-prewarm"
+introduced_commit = "rejected during C17"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-metal"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Any prewarm must preserve exact target plans, memory-pressure purging, and visual goldens."
+performance_gate = "Prewarm is allowed only if lazy first-use A/B retains a material hitch that outweighs startup/resident memory cost."
+decision_state = "rejected"
+decision = "Rejected effect-target prewarming because plan-lazy allocation materially improved every measured cold first-effect encode path while direct UI retained zero effect targets."
+proof = [
+   "Cold prepass/quarter/eighth first-use encode improved 38.738%/12.732%/8.960% in the exploratory exact-workload A/B.",
+   "Direct UI owns zero effect and bloom bytes, so prewarming would introduce startup work and residency absent from the declared pass plan.",
+]
+cleanup = [
+   "No prewarm switch, startup allocation, or speculative target cache was retained.",
+]
+
+[[experiments]]
+id = "c17-metal-cold-frame-wall-control"
+introduced_commit = "rejected during C17"
+introduced_date = "2026-07-12"
+expires = "2027-07-12"
+required_backends = ["renderer-metal", "oxide-perf-runner"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "The control must recreate the same renderer and submit the same direct frame on both sides."
+performance_gate = "Wall-clock cold-frame tails and peak must pass the no-material-regression policy before serving as primary evidence."
+decision_state = "rejected"
+decision = "Rejected whole-frame wall time as the C17 primary because OS scheduling produced an isolated candidate peak despite flat paired medians; retained renderer encode CPU time and deterministic memory counters as the scoped evidence."
+proof = [
+   "The 40-pair wall control reported 3.977 -> 4.150 ms p50 with paired CI crossing zero, but one 23.398 ms candidate scheduling peak failed the peak guard against 11.274 ms parent.",
+   "The matching direct encode control passed after the permitted doubling with identical 0.018458 ms p50 and improved p95/p99/peak.",
+]
+cleanup = [
+   "The rejected wall-clock result remains in locally ignored raw evidence and is not used as a performance claim.",
+]
+
+[[experiments]]
 id = "c16-webgpu-compact-generic-geometry"
 introduced_commit = "C16 staged tree recorded in commit proof"
 introduced_date = "2026-07-12"
