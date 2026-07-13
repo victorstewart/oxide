@@ -166,6 +166,15 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       }
    }
 
+   for count in [1_usize, 51, 52, 60, 61, 128, 1_024]
+   {
+      let id = format!("gpu.architecture.neon_markers.count_{count}");
+      if perf_case_allowed(&id)
+      {
+         cases.push(metal_neon_marker_case(&id, smoke, count)?);
+      }
+   }
+
    for change in ["static", "style", "viewport", "projection"]
    {
       for size in [512_usize, 1_024, 2_048]
@@ -1212,6 +1221,102 @@ fn metal_image_case(id: &str, smoke: bool, name: &str, count: usize) -> Result<P
       samples: frame_samples.len(),
       ops_per_sample: 1,
       notes: vec![format!("Metal {name} image-residency workload with {count} unique 2x2 source resources and production image draws.")],
+      metrics,
+   })
+}
+
+fn metal_neon_marker_case(id: &str, smoke: bool, count: usize) -> Result<PerfCaseResult>
+{
+   let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
+   renderer.resize(512, 512, 1.0).context("resizing Metal renderer")?;
+   let markers = (0..count)
+      .map(|index| metal::neon_marker::NeonMarker {
+         center: [8.0 + (index % 32) as f32 * 15.0, 8.0 + (index / 32) as f32 * 15.0],
+         core_radius_px: 2.5,
+         ring_radius_px: 4.0,
+         ring_width_px: 1.0,
+         halo_radius_px: 6.0,
+         halo_sigma_px: 3.0,
+         core_color: api::Color::rgba(1.0, 0.8, 0.2, 1.0),
+         ring_color: api::Color::rgba(0.2, 0.8, 1.0, 1.0),
+         halo_alpha_max: 0.5,
+         ring_alpha_max: 0.8,
+      })
+      .collect::<Vec<_>>();
+   let warmups = if smoke { 1 } else { 3 };
+   let frames = if smoke { 2 } else { 10 };
+   let mut frame_samples = Vec::with_capacity(frames);
+   let mut encode_samples = Vec::with_capacity(frames);
+   let mut gpu_samples = Vec::with_capacity(frames);
+   let mut draws_sum = 0.0;
+   let mut instances_sum = 0.0;
+   let mut upload_bytes_sum = 0.0;
+   let mut resource_grows_sum = 0.0;
+
+   for frame in 0..(warmups + frames)
+   {
+      let frame_t0 = Instant::now();
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      let frame_id = token.0;
+      for markers in markers.chunks(metal::neon_marker::NEON_MARKER_MAX_INSTANCES)
+      {
+         renderer
+            .encode_neon_markers(&metal::neon_marker::NeonMarkerPass {
+               viewport: api::RectF::new(0.0, 0.0, 512.0, 512.0),
+               markers,
+            })
+            .with_context(|| format!("encoding {id}"))?;
+      }
+      renderer.submit(token).with_context(|| format!("submitting {id}"))?;
+      let stats = last_metal_stats_after_submit(&renderer, frame_id);
+      if frame >= warmups
+      {
+         frame_samples.push(frame_t0.elapsed().as_secs_f64() * 1_000.0);
+         encode_samples.push(stats.encode_ms);
+         gpu_samples.push(stats.gpu_ms);
+         draws_sum += stats.draws as f64;
+         instances_sum += stats.instanced as f64;
+         upload_bytes_sum += stats.ub_bytes as f64;
+         resource_grows_sum += stats.resource_grows as f64;
+      }
+   }
+
+   let summary = summarize(&frame_samples);
+   let (layer, scenario, variant, cache_state, refresh_mode) = perf_case_contract_metadata(id, "architecture");
+   let mut metrics = BTreeMap::new();
+   insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+   insert_distribution_metrics(&mut metrics, "encode_ms", &encode_samples);
+   insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+   insert_frame_pacing_metrics(&mut metrics, &frame_samples);
+   metrics.insert(String::from("marker_count"), count as f64);
+   metrics.insert(String::from("marker_batches"), count.div_ceil(metal::neon_marker::NEON_MARKER_MAX_INSTANCES) as f64);
+   metrics.insert(String::from("marker_instance_stride_bytes"), 72.0);
+   metrics.insert(String::from("expected_upload_bytes"), (count * 72) as f64);
+   metrics.insert(String::from("draws_avg"), draws_sum / frames as f64);
+   metrics.insert(String::from("instances_avg"), instances_sum / frames as f64);
+   metrics.insert(String::from("uniform_upload_bytes_avg"), upload_bytes_sum / frames as f64);
+   metrics.insert(String::from("resource_grows_avg"), resource_grows_sum / frames as f64);
+
+   Ok(PerfCaseResult {
+      id: String::from(id),
+      family: String::from("architecture"),
+      layer: String::from(layer),
+      scenario: String::from(scenario),
+      variant: String::from(variant),
+      cache_state: String::from(cache_state),
+      refresh_mode: String::from(refresh_mode),
+      unit: String::from("ms/frame"),
+      gated: true,
+      threshold_pct: 0.20,
+      median: summary.median,
+      p95: summary.p95,
+      p99: summary.p99,
+      min: summary.min,
+      max: summary.max,
+      mean: summary.mean,
+      samples: frame_samples.len(),
+      ops_per_sample: 1,
+      notes: vec![format!("Metal neon-marker frame-ring workload with {count} total markers in 128-marker batches.")],
       metrics,
    })
 }

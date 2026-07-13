@@ -4616,6 +4616,45 @@ fn filtered_run_suite_supports_metal_id_mask_current_case() {
 }
 
 #[test]
+fn filtered_run_suite_supports_metal_neon_marker_ring_cases()
+{
+    let mut json_out = std::env::temp_dir();
+    json_out.push(format!("oxide-perf-runner-neon-marker-{}.json", std::process::id()));
+    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+        .env(
+            "OXIDE_PERF_RUNNER_FILTER",
+            "gpu.architecture.neon_markers.count_128,gpu.architecture.neon_markers.count_1024",
+        )
+        .arg("--run-suite")
+        .arg("--smoke")
+        .arg("--json-out")
+        .arg(&json_out)
+        .output()
+        .expect("run filtered Metal neon-marker smoke suite");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "filtered suite failed: {stderr}");
+    assert!(stdout.contains("cases=2"), "stdout: {stdout}");
+    assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
+
+    let report = std::fs::read_to_string(&json_out).expect("read Metal neon-marker report");
+    let dense = report_case_slice(&report, "gpu.architecture.neon_markers.count_128");
+    let multi = report_case_slice(&report, "gpu.architecture.neon_markers.count_1024");
+    assert_eq!(report_f64(dense, "marker_count"), 128.0);
+    assert_eq!(report_f64(dense, "marker_batches"), 1.0);
+    assert_eq!(report_f64(dense, "draws_avg"), 1.0);
+    assert_eq!(report_f64(dense, "instances_avg"), 128.0);
+    assert_eq!(report_f64(dense, "uniform_upload_bytes_avg"), 9_216.0);
+    assert_eq!(report_f64(multi, "marker_count"), 1_024.0);
+    assert_eq!(report_f64(multi, "marker_batches"), 8.0);
+    assert_eq!(report_f64(multi, "draws_avg"), 8.0);
+    assert_eq!(report_f64(multi, "instances_avg"), 1_024.0);
+    assert_eq!(report_f64(multi, "uniform_upload_bytes_avg"), 73_728.0);
+    assert_eq!(report_f64(multi, "resource_grows_avg"), 0.0);
+    let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
 fn filtered_run_suite_supports_rendering_architecture_contract() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-architecture-{}.json", std::process::id()));

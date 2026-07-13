@@ -119,48 +119,64 @@ impl MetalRenderer {
             };
         }
 
+        let marker_bytes = core::mem::size_of::<MarkerGpuInstance>() * marker_count;
+        let marker_offset = align_up_usize(
+            self.frames[slot].ub_used,
+            core::mem::align_of::<MarkerGpuInstance>(),
+        );
+        if self.ub.ensure_capacity(&self.device, slot, marker_offset + marker_bytes) {
+            self.acc_resource_grows = self.acc_resource_grows.saturating_add(1);
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                markers.as_ptr().cast::<u8>(),
+                self.ub.contents_ptr(slot).as_ptr().add(marker_offset),
+                marker_bytes,
+            );
+        }
+        self.frames[slot].ub_used = marker_offset + marker_bytes;
+        self.acc_geometry_bytes_copied = self
+            .acc_geometry_bytes_copied
+            .saturating_add(marker_bytes as u64);
+
         let rpd = RenderPassDescriptor::new();
         let ca0 = rpd.color_attachments().object_at(0).unwrap();
         configure_frame_color_attachment(ca0, &target_tex, self.frame_color_initialized);
 
         let enc = cmd.new_render_command_encoder(&rpd);
         enc.set_render_pipeline_state(&self.pso_neon_marker);
-        let instances_per_draw = METAL_SET_BYTES_LIMIT / core::mem::size_of::<MarkerGpuInstance>();
-        for markers in markers[..marker_count].chunks(instances_per_draw)
-        {
-            let params = MarkerGpuParams {
-                viewport: [pass.viewport.x, pass.viewport.y, pass.viewport.w, pass.viewport.h],
-                marker_count: markers.len() as u32,
-                _pad: [0, 0, 0],
-            };
-            let marker_bytes = core::mem::size_of_val(markers);
-            enc.set_vertex_bytes(
-                0,
-                core::mem::size_of_val(&params) as u64,
-                (&params as *const MarkerGpuParams).cast(),
-            );
-            enc.set_vertex_bytes(1, marker_bytes as u64, markers.as_ptr().cast());
-            enc.set_fragment_bytes(
-                0,
-                core::mem::size_of_val(&params) as u64,
-                (&params as *const MarkerGpuParams).cast(),
-            );
-            enc.set_fragment_bytes(1, marker_bytes as u64, markers.as_ptr().cast());
-            enc.draw_primitives_instanced(
-                MTLPrimitiveType::Triangle,
-                0,
-                6,
-                markers.len() as u64,
-            );
-        }
+        let params = MarkerGpuParams {
+            viewport: [pass.viewport.x, pass.viewport.y, pass.viewport.w, pass.viewport.h],
+            marker_count: marker_count as u32,
+            _pad: [0, 0, 0],
+        };
+        enc.set_vertex_bytes(
+            0,
+            core::mem::size_of_val(&params) as u64,
+            (&params as *const MarkerGpuParams).cast(),
+        );
+        enc.set_vertex_buffer(1, Some(&self.ub.bufs[slot]), marker_offset as u64);
+        enc.set_fragment_bytes(
+            0,
+            core::mem::size_of_val(&params) as u64,
+            (&params as *const MarkerGpuParams).cast(),
+        );
+        enc.set_fragment_buffer(1, Some(&self.ub.bufs[slot]), marker_offset as u64);
+        enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, marker_count as u64);
         enc.end_encoding();
 
-        self.acc_draws = self.acc_draws.saturating_add(marker_count as u32);
+        self.acc_draws = self.acc_draws.saturating_add(1);
+        self.acc_instanced = self.acc_instanced.saturating_add(marker_count as u32);
         self.frame_color_initialized = true;
         if let Some(t0) = self.frame_encode_started_at {
             self.last_stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
         }
+        self.last_stats.ub_bytes = self.frames[slot].ub_used as u64;
+        self.last_stats.buffer_upload_bytes = (self.frames[slot].vb_used as u64)
+            .saturating_add(self.frames[slot].ib_used as u64)
+            .saturating_add(self.frames[slot].ub_used as u64);
         self.last_stats.draws = self.acc_draws;
+        self.last_stats.instanced = self.acc_instanced;
         Ok(())
     }
 }

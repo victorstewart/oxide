@@ -697,6 +697,72 @@ fn snapshot_neon_marker_instance_arrays_match_distinctive_colors()
          );
       }
       let stats = renderer.last_stats();
-      assert_eq!(stats.draws, count as u32, "marker draw count changed: {stats:?}");
+      assert_eq!(stats.draws, 1, "marker draw count changed: {stats:?}");
+      assert_eq!(stats.instanced, count as u32, "marker instance count changed: {stats:?}");
+      assert_eq!(stats.ub_bytes, (count * 72) as u64, "marker upload bytes changed: {stats:?}");
+      assert_eq!(stats.resource_grows, 0, "warm marker ring grew: {stats:?}");
    }
+}
+
+#[test]
+fn snapshot_neon_marker_batches_keep_nonoverlapping_ring_slices()
+{
+   use oxide_renderer_metal::neon_marker::{NeonMarker, NeonMarkerPass};
+
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   let size = 260_u32;
+   renderer.resize(size, size, 1.0).expect("resize");
+   let colors = [
+      (api::Color::rgba(1.0, 0.0, 0.0, 1.0), [0, 0, 252, 249]),
+      (api::Color::rgba(0.0, 1.0, 0.0, 1.0), [0, 252, 0, 249]),
+      (api::Color::rgba(0.0, 0.0, 1.0, 1.0), [252, 0, 0, 249]),
+      (api::Color::rgba(1.0, 1.0, 0.0, 1.0), [0, 252, 252, 249]),
+      (api::Color::rgba(1.0, 0.0, 1.0, 1.0), [252, 0, 252, 249]),
+      (api::Color::rgba(0.0, 1.0, 1.0, 1.0), [252, 252, 0, 249]),
+      (api::Color::rgba(1.0, 1.0, 1.0, 1.0), [252, 252, 252, 249]),
+      (api::Color::rgba(1.0, 0.0, 0.0, 1.0), [0, 0, 252, 249]),
+   ];
+   let markers = (0..1_024_usize)
+      .map(|index| {
+         let color = colors[index / 128].0;
+         NeonMarker {
+            center: [4.0 + (index % 32) as f32 * 8.0, 4.0 + (index / 32) as f32 * 8.0],
+            core_radius_px: 2.5,
+            ring_radius_px: 3.0,
+            ring_width_px: 0.5,
+            halo_radius_px: 3.5,
+            halo_sigma_px: 2.0,
+            core_color: color,
+            ring_color: color,
+            halo_alpha_max: 0.0,
+            ring_alpha_max: 1.0,
+         }
+      })
+      .collect::<Vec<_>>();
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   for markers in markers.chunks(128)
+   {
+      renderer
+         .encode_neon_markers(&NeonMarkerPass {
+            viewport: api::RectF::new(0.0, 0.0, size as f32, size as f32),
+            markers,
+         })
+         .expect("encode neon marker batch");
+   }
+   renderer.submit(token).expect("submit");
+   let (_, _, pixels) = renderer.readback_bgra8().expect("readback");
+   for (index, marker) in markers.iter().enumerate()
+   {
+      assert_pixel_eq(
+         readback_pixel(&pixels, size, marker.center[0] as u32, marker.center[1] as u32),
+         colors[index / 128].1,
+         &format!("marker batch {}, instance {}", index / 128, index % 128),
+      );
+   }
+   let stats = renderer.last_stats();
+   assert_eq!(stats.draws, 8, "expected one draw per marker batch: {stats:?}");
+   assert_eq!(stats.instanced, 1_024, "marker instance count changed: {stats:?}");
+   assert_eq!(stats.ub_bytes, 1_024 * 72, "marker ring bytes changed: {stats:?}");
+   assert_eq!(stats.resource_grows, 0, "marker ring grew: {stats:?}");
 }

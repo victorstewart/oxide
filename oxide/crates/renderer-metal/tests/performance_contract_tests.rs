@@ -168,7 +168,7 @@ fn image_argument_tables_are_immutable_per_frame_and_report_reuse()
 }
 
 #[test]
-fn neon_marker_instance_abi_is_explicit_and_chunks_inline_uploads()
+fn neon_marker_instance_abi_is_explicit()
 {
    let source = include_str!("../src/neon_marker_gpu.rs");
    assert!(source.contains("#[repr(C, align(8))]"));
@@ -176,15 +176,26 @@ fn neon_marker_instance_abi_is_explicit_and_chunks_inline_uploads()
    assert!(source.contains("offset_of!(MarkerGpuInstance, core_color)") && source.contains("const _: [(); 36]"));
    assert!(source.contains("offset_of!(MarkerGpuInstance, ring_color)") && source.contains("const _: [(); 52]"));
    assert!(source.contains("offset_of!(MarkerGpuInstance, _tail_pad)") && source.contains("const _: [(); 68]"));
-   assert!(source.contains("METAL_SET_BYTES_LIMIT / core::mem::size_of::<MarkerGpuInstance>()"));
-   assert!(source.contains("markers[..marker_count].chunks(instances_per_draw)"));
-   assert!(source.contains("enc.set_vertex_bytes(1, marker_bytes as u64, markers.as_ptr().cast())"));
-   assert!(source.contains("enc.set_fragment_bytes(1, marker_bytes as u64, markers.as_ptr().cast())"));
 
    let shader = include_str!("../shaders/neon_marker.metal");
    assert!(shader.contains("packed_float4 core_color;"));
    assert!(shader.contains("packed_float4 ring_color;"));
    assert!(shader.contains("uint _tail_pad;"));
+}
+
+#[test]
+fn neon_marker_instances_stream_once_through_the_frame_ring()
+{
+   let source = include_str!("../src/neon_marker_gpu.rs");
+   assert!(source.contains("let marker_offset = align_up_usize("));
+   assert!(source.contains("self.ub.ensure_capacity(&self.device, slot, marker_offset + marker_bytes)"));
+   assert_eq!(source.matches("core::ptr::copy_nonoverlapping(").count(), 1);
+   assert!(source.contains("enc.set_vertex_buffer(1, Some(&self.ub.bufs[slot]), marker_offset as u64)"));
+   assert!(source.contains("enc.set_fragment_buffer(1, Some(&self.ub.bufs[slot]), marker_offset as u64)"));
+   assert!(!source.contains("enc.set_vertex_bytes(1,"));
+   assert!(!source.contains("enc.set_fragment_bytes(1,"));
+   assert!(source.contains("self.acc_draws.saturating_add(1)"));
+   assert!(source.contains("self.acc_instanced.saturating_add(marker_count as u32)"));
 }
 
 #[test]
