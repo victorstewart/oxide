@@ -180,6 +180,21 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       }
    }
 
+   for count in [100_usize, 1_000]
+   {
+      let name = format!("image_view_cover_grid_{count}");
+      let cpu_id = format!("cpu.authoring.image_view_grid.cover_{count}");
+      if perf_case_allowed(&cpu_id)
+      {
+         cases.push(image_case(&cpu_id, smoke, &name, count));
+      }
+      let gpu_id = format!("gpu.authoring.image_view_grid.cover_{count}");
+      if perf_case_allowed(&gpu_id)
+      {
+         cases.push(metal_image_case(&gpu_id, smoke, &name, count)?);
+      }
+   }
+
    for count in [1_usize, 51, 52, 60, 61, 128, 1_024]
    {
       let id = format!("gpu.architecture.neon_markers.count_{count}");
@@ -762,6 +777,8 @@ fn damage_rect_for(name: &str, phase: u64) -> api::Damage
 }
 
 const METAL_INLINE_BYTES: usize = 4_096;
+const METAL_IMAGE_TABLE_TEXTURES: usize = 128;
+const IMAGE_FRAGMENT_BYTES: usize = 48;
 const RRECT_FRAGMENT_BYTES: usize = 48;
 const RRECT_PARAMETER_BYTES: usize = 64;
 const VIEWPORT_PARAMETER_BYTES: usize = 8;
@@ -840,9 +857,101 @@ fn metal_noop_case(id: &str, smoke: bool, name: &str) -> Result<PerfCaseResult>
    Ok(case)
 }
 
+struct ImageViewGridWork
+{
+   images: usize,
+   nine_slices: usize,
+   source_crops: usize,
+   draw_calls: usize,
+   inline_parameter_bytes: usize,
+   logical_shaded_pixels: f64,
+}
+
+fn image_view_grid_drawlist(handles: &[api::ImageHandle]) -> api::DrawList
+{
+   let mut builder = ui::DrawListBuilder::new();
+   encode_image_view_grid(handles, &mut builder);
+   builder.into_inner()
+}
+
+fn encode_image_view_grid(handles: &[api::ImageHandle], builder: &mut ui::DrawListBuilder)
+{
+   builder.clear();
+   for (index, handle) in handles.iter().copied().enumerate()
+   {
+      let rect = api::RectF::new(
+         (index % 40) as f32 * 30.0 + 3.0,
+         (index / 40) as f32 * 16.0 + 2.0,
+         24.0,
+         12.0,
+      );
+      ui::elements::ImageView {
+         image: handle,
+         natural_w: 29,
+         natural_h: 7,
+         fit: ui::elements::ImageFit::Cover,
+         alpha: 1.0,
+      }
+      .encode(rect, None, builder);
+   }
+}
+
+fn image_view_grid_work(list: &api::DrawList) -> ImageViewGridWork
+{
+   let mut images = 0usize;
+   let mut nine_slices = 0usize;
+   let mut source_crops = 0usize;
+   let mut logical_shaded_pixels = 0.0;
+   for item in &list.items
+   {
+      match item
+      {
+         api::DrawCmd::Image { dst, src, .. } => {
+            images += 1;
+            source_crops += usize::from(src.x > 0.0 || src.y > 0.0 || src.w < 29.0 || src.h < 7.0);
+            logical_shaded_pixels += f64::from(dst.w) * f64::from(dst.h);
+         }
+         api::DrawCmd::NineSlice { rect, .. } => {
+            nine_slices += 1;
+            logical_shaded_pixels += f64::from(rect.w) * f64::from(rect.h);
+         }
+         _ => {}
+      }
+   }
+   let image_groups = images.div_ceil(METAL_IMAGE_TABLE_TEXTURES);
+   let image_draw_calls = (0..image_groups)
+      .map(|group| {
+         let remaining = images.saturating_sub(group * METAL_IMAGE_TABLE_TEXTURES);
+         let batch = remaining.min(METAL_IMAGE_TABLE_TEXTURES);
+         batch.div_ceil(METAL_INLINE_BYTES / IMAGE_FRAGMENT_BYTES)
+      })
+      .sum::<usize>();
+   ImageViewGridWork {
+      images,
+      nine_slices,
+      source_crops,
+      draw_calls: nine_slices + image_draw_calls,
+      inline_parameter_bytes: nine_slices * 88 + images * 64 + image_groups * VIEWPORT_PARAMETER_BYTES,
+      logical_shaded_pixels,
+   }
+}
+
 fn image_case(id: &str, smoke: bool, name: &str, count: usize) -> PerfCaseResult
 {
    let kind = String::from(name);
+   let image_view_handles = if name.starts_with("image_view_cover_grid_")
+   {
+      (1..=count).map(|value| api::ImageHandle(value as u32)).collect::<Vec<_>>()
+   }
+   else
+   {
+      Vec::new()
+   };
+   let mut image_view_builder = ui::DrawListBuilder::new();
+   if !image_view_handles.is_empty()
+   {
+      encode_image_view_grid(&image_view_handles, &mut image_view_builder);
+   }
    let mut phase = 0_u32;
    let mut case = measured_architecture_case(
       id,
@@ -850,6 +959,19 @@ fn image_case(id: &str, smoke: bool, name: &str, count: usize) -> PerfCaseResult
       "Unique icon/avatar residency command matrix with contain/cover/zoom at 3x, display-size decode accounting, release/reuse churn, and minification/mip intent.",
       move || {
          phase = phase.wrapping_add(1);
+         if kind.starts_with("image_view_cover_grid_")
+         {
+            encode_image_view_grid(&image_view_handles, &mut image_view_builder);
+            return image_view_builder.drawlist().items.iter().fold(phase as u64, |checksum, item| {
+               let value = match item
+               {
+                  api::DrawCmd::Image { src, .. } => u64::from(src.x.to_bits()) ^ u64::from(src.w.to_bits()),
+                  api::DrawCmd::NineSlice { rect, .. } => u64::from(rect.x.to_bits()) ^ u64::from(rect.w.to_bits()),
+                  _ => 0,
+               };
+               checksum.wrapping_add(value)
+            });
+         }
          let mut builder = ui::DrawListBuilder::new();
          for index in 0..count
          {
@@ -867,6 +989,19 @@ fn image_case(id: &str, smoke: bool, name: &str, count: usize) -> PerfCaseResult
    case.metrics.insert(String::from("device_scale"), if name.ends_with("3x") { 3.0 } else { 1.0 });
    case.metrics.insert(String::from("decode_at_display_size"), if name == "decode_display_size" { 1.0 } else { 0.0 });
    case.metrics.insert(String::from("mip_policy_requested"), if name == "minification_mips" { 1.0 } else { 0.0 });
+   if name.starts_with("image_view_cover_grid_")
+   {
+      let handles = (1..=count).map(|value| api::ImageHandle(value as u32)).collect::<Vec<_>>();
+      let work = image_view_grid_work(&image_view_grid_drawlist(&handles));
+      case.family = String::from("authoring");
+      case.layer = String::from("engine");
+      case.scenario = String::from("authoring");
+      case.metrics.insert(String::from("image_draws"), work.images as f64);
+      case.metrics.insert(String::from("nine_slice_draws"), work.nine_slices as f64);
+      case.metrics.insert(String::from("source_crop_commands"), work.source_crops as f64);
+      case.metrics.insert(String::from("quads"), count as f64);
+      case.metrics.insert(String::from("logical_shaded_pixels"), work.logical_shaded_pixels);
+   }
    case
 }
 
@@ -1201,22 +1336,45 @@ fn metal_image_case(id: &str, smoke: bool, name: &str, count: usize) -> Result<P
    let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
    renderer.resize(1_200, 800, 1.0).context("resizing Metal renderer")?;
    let mut handles = Vec::with_capacity(count);
+   let image_view_grid = name.starts_with("image_view_cover_grid_");
+   let grid_pixels = vec![128_u8; 29 * 7 * 4];
    for index in 0..count
    {
-      let pixel = [
-         (index as u8).wrapping_mul(17), 96, 220, 255,
-         32, (index as u8).wrapping_mul(29), 180, 255,
-         210, 64, (index as u8).wrapping_mul(11), 255,
-         245, 210, 80, 255,
-      ];
-      handles.push(renderer.image_create_rgba8(2, 2, &pixel, 8));
+      if image_view_grid
+      {
+         handles.push(renderer.image_create_rgba8(29, 7, &grid_pixels, 29 * 4));
+      }
+      else
+      {
+         let pixel = [
+            (index as u8).wrapping_mul(17), 96, 220, 255,
+            32, (index as u8).wrapping_mul(29), 180, 255,
+            210, 64, (index as u8).wrapping_mul(11), 255,
+            245, 210, 80, 255,
+         ];
+         handles.push(renderer.image_create_rgba8(2, 2, &pixel, 8));
+      }
    }
-   let warmups = if smoke { 1 } else { 3 };
-   let frames = if smoke { 2 } else { 10 };
+   let warmups = std::env::var("OXIDE_ARCHITECTURE_METAL_WARMUPS")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|warmups| *warmups > 0)
+      .unwrap_or(if smoke { 1 } else { 3 });
+   let frames = std::env::var("OXIDE_ARCHITECTURE_METAL_FRAMES")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|frames| *frames > 0)
+      .unwrap_or(if smoke { 2 } else { 10 });
+   let persist_raw = std::env::var_os("OXIDE_ARCHITECTURE_METAL_RAW_SAMPLES").is_some();
+   let mut warmup_frame_samples = Vec::with_capacity(if persist_raw { warmups } else { 0 });
+   let mut warmup_encode_samples = Vec::with_capacity(if persist_raw { warmups } else { 0 });
+   let mut warmup_gpu_samples = Vec::with_capacity(if persist_raw { warmups } else { 0 });
    let mut frame_samples = Vec::with_capacity(frames);
    let mut encode_samples = Vec::with_capacity(frames);
    let mut gpu_samples = Vec::with_capacity(frames);
    let mut draws_sum = 0.0;
+   let mut instances_sum = 0.0;
+   let mut commands_traversed_sum = 0.0;
    let mut upload_sum = 0.0;
    let mut image_bytes_peak = 0_u64;
    let mut total_bytes_peak = 0_u64;
@@ -1226,6 +1384,11 @@ fn metal_image_case(id: &str, smoke: bool, name: &str, count: usize) -> Result<P
    let mut image_argument_table_reuses_sum = 0.0;
    let mut image_argument_bytes_sum = 0.0;
    let mut image_argument_buffer_grows_sum = 0.0;
+   let mut grid_builder = ui::DrawListBuilder::new();
+   if image_view_grid
+   {
+      encode_image_view_grid(&handles, &mut grid_builder);
+   }
 
    for frame in 0..(warmups + frames)
    {
@@ -1240,24 +1403,34 @@ fn metal_image_case(id: &str, smoke: bool, name: &str, count: usize) -> Result<P
             handles[index] = renderer.image_create_rgba8(2, 2, &pixel.concat(), 8);
          }
       }
-      let mut builder = ui::DrawListBuilder::new();
-      for (index, handle) in handles.iter().copied().enumerate()
+      let fallback_draws = if image_view_grid
       {
-         let x = (index % 100) as f32 * 6.0;
-         let y = (index / 100) as f32 * 6.0;
-         let dst = match name
-         {
-            "contain_3x" => api::RectF::new(x, y + 1.0, 6.0, 4.0),
-            "zoom_3x" => api::RectF::new(x - 3.0, y - 3.0, 12.0, 12.0),
-            "minification_mips" => api::RectF::new(x, y, 1.0, 1.0),
-            _ => api::RectF::new(x, y, 5.0, 5.0),
-         };
-         let src = if name == "cover_3x" { api::RectF::new(0.5, 0.0, 1.0, 2.0) } else { api::RectF::new(0.0, 0.0, 2.0, 2.0) };
-         builder.image(handle, dst, src, 1.0);
+         encode_image_view_grid(&handles, &mut grid_builder);
+         None
       }
+      else
+      {
+         let mut builder = ui::DrawListBuilder::new();
+         for (index, handle) in handles.iter().copied().enumerate()
+         {
+            let x = (index % 100) as f32 * 6.0;
+            let y = (index / 100) as f32 * 6.0;
+            let dst = match name
+            {
+               "contain_3x" => api::RectF::new(x, y + 1.0, 6.0, 4.0),
+               "zoom_3x" => api::RectF::new(x - 3.0, y - 3.0, 12.0, 12.0),
+               "minification_mips" => api::RectF::new(x, y, 1.0, 1.0),
+               _ => api::RectF::new(x, y, 5.0, 5.0),
+            };
+            let src = if name == "cover_3x" { api::RectF::new(0.5, 0.0, 1.0, 2.0) } else { api::RectF::new(0.0, 0.0, 2.0, 2.0) };
+            builder.image(handle, dst, src, 1.0);
+         }
+         Some(builder.into_inner())
+      };
+      let draws = fallback_draws.as_ref().unwrap_or_else(|| grid_builder.drawlist());
       let token = renderer.begin_frame(&api::FrameTarget, None);
       let frame_id = token.0;
-      renderer.encode_pass(builder.drawlist());
+      renderer.encode_pass(draws);
       renderer.submit(token).with_context(|| format!("submitting {id}"))?;
       let stats = last_metal_stats_after_submit(&renderer, frame_id);
       if frame >= warmups
@@ -1266,6 +1439,8 @@ fn metal_image_case(id: &str, smoke: bool, name: &str, count: usize) -> Result<P
          encode_samples.push(stats.encode_ms);
          gpu_samples.push(stats.gpu_ms);
          draws_sum += stats.draws as f64;
+         instances_sum += stats.instanced as f64;
+         commands_traversed_sum += stats.commands_traversed as f64;
          upload_sum += (stats.vb_bytes + stats.ib_bytes + stats.ub_bytes) as f64;
          image_bytes_peak = image_bytes_peak.max(stats.memory.image_cache_bytes);
          total_bytes_peak = total_bytes_peak.max(stats.memory.total_bytes);
@@ -1276,11 +1451,17 @@ fn metal_image_case(id: &str, smoke: bool, name: &str, count: usize) -> Result<P
          image_argument_bytes_sum += stats.image_argument_bytes as f64;
          image_argument_buffer_grows_sum += stats.image_argument_buffer_grows as f64;
       }
+      else if persist_raw
+      {
+         warmup_frame_samples.push(frame_t0.elapsed().as_secs_f64() * 1_000.0);
+         warmup_encode_samples.push(stats.encode_ms);
+         warmup_gpu_samples.push(stats.gpu_ms);
+      }
    }
 
+   let grid_work = image_view_grid.then(|| image_view_grid_work(&image_view_grid_drawlist(&handles)));
    for handle in handles { renderer.image_release(handle); }
    let summary = summarize(&frame_samples);
-   let (layer, scenario, variant, cache_state, refresh_mode) = perf_case_contract_metadata(id, "architecture");
    let mut metrics = BTreeMap::new();
    insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
    insert_distribution_metrics(&mut metrics, "encode_ms", &encode_samples);
@@ -1289,6 +1470,8 @@ fn metal_image_case(id: &str, smoke: bool, name: &str, count: usize) -> Result<P
    metrics.insert(String::from("unique_images"), count as f64);
    metrics.insert(String::from("image_draws"), count as f64);
    metrics.insert(String::from("draws_avg"), draws_sum / frames as f64);
+   metrics.insert(String::from("instances_avg"), instances_sum / frames as f64);
+   metrics.insert(String::from("commands_traversed_avg"), commands_traversed_sum / frames as f64);
    metrics.insert(String::from("upload_bytes_avg"), upload_sum / frames as f64);
    metrics.insert(String::from("image_cache_bytes_peak"), image_bytes_peak as f64);
    metrics.insert(String::from("renderer_bytes_peak"), total_bytes_peak as f64);
@@ -1302,10 +1485,37 @@ fn metal_image_case(id: &str, smoke: bool, name: &str, count: usize) -> Result<P
    metrics.insert(String::from("decode_at_display_size"), if name == "decode_display_size" { 1.0 } else { 0.0 });
    metrics.insert(String::from("released_recreated_per_frame"), if name == "release_reuse" { 128.0 } else { 0.0 });
    metrics.insert(String::from("mip_policy_requested"), if name == "minification_mips" { 1.0 } else { 0.0 });
+   if let Some(work) = grid_work
+   {
+      metrics.insert(String::from("image_draws"), work.images as f64);
+      metrics.insert(String::from("nine_slice_draws"), work.nine_slices as f64);
+      metrics.insert(String::from("source_crop_commands"), work.source_crops as f64);
+      metrics.insert(String::from("quads"), count as f64);
+      metrics.insert(String::from("instanced_draw_calls_avg"), work.draw_calls as f64);
+      metrics.insert(String::from("inline_parameter_bytes_avg"), work.inline_parameter_bytes as f64);
+      metrics.insert(
+         String::from("total_parameter_bytes_avg"),
+         work.inline_parameter_bytes as f64 + image_argument_bytes_sum / frames as f64,
+      );
+      metrics.insert(String::from("logical_shaded_pixels"), work.logical_shaded_pixels);
+   }
+   if persist_raw
+   {
+      insert_indexed_samples(&mut metrics, "raw_frame_ms", &frame_samples);
+      insert_indexed_samples(&mut metrics, "raw_encode_ms", &encode_samples);
+      insert_indexed_samples(&mut metrics, "raw_gpu_ms", &gpu_samples);
+      insert_indexed_samples(&mut metrics, "warmup_frame_ms", &warmup_frame_samples);
+      insert_indexed_samples(&mut metrics, "warmup_encode_ms", &warmup_encode_samples);
+      insert_indexed_samples(&mut metrics, "warmup_gpu_ms", &warmup_gpu_samples);
+   }
+
+   let family = if image_view_grid { "authoring" } else { "architecture" };
+   let source_dimensions = if image_view_grid { "29x7" } else { "2x2" };
+   let (layer, scenario, variant, cache_state, refresh_mode) = perf_case_contract_metadata(id, family);
 
    Ok(PerfCaseResult {
       id: String::from(id),
-      family: String::from("architecture"),
+      family: String::from(family),
       layer: String::from(layer),
       scenario: String::from(scenario),
       variant: String::from(variant),
@@ -1322,7 +1532,7 @@ fn metal_image_case(id: &str, smoke: bool, name: &str, count: usize) -> Result<P
       mean: summary.mean,
       samples: frame_samples.len(),
       ops_per_sample: 1,
-      notes: vec![format!("Metal {name} image-residency workload with {count} unique 2x2 source resources and production image draws.")],
+      notes: vec![format!("Metal {name} image-residency workload with {count} unique {source_dimensions} source resources and production image draws.")],
       metrics,
    })
 }

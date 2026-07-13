@@ -4697,6 +4697,50 @@ fn filtered_run_suite_supports_central_noop_rejection_cases()
     let _ = std::fs::remove_file(json_out);
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn filtered_run_suite_supports_image_view_crop_authoring_cases()
+{
+    let mut json_out = std::env::temp_dir();
+    json_out.push(format!("oxide-perf-runner-image-view-crop-{}.json", std::process::id()));
+    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+        .env(
+            "OXIDE_PERF_RUNNER_FILTER",
+            "cpu.authoring.image_view_grid.,gpu.authoring.image_view_grid.",
+        )
+        .arg("--run-suite")
+        .arg("--smoke")
+        .arg("--json-out")
+        .arg(&json_out)
+        .output()
+        .expect("run filtered image-view crop smoke suite");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "filtered suite failed: {stderr}");
+    assert!(stdout.contains("cases=4"), "stdout: {stdout}");
+
+    let report = std::fs::read_to_string(&json_out).expect("read image-view crop report");
+    for count in [100_usize, 1_000]
+    {
+        for prefix in ["cpu", "gpu"]
+        {
+            let id = format!("{prefix}.authoring.image_view_grid.cover_{count}");
+            let row = report_case_slice(&report, &id);
+            assert_eq!(report_f64(row, "image_draws"), count as f64);
+            assert_eq!(report_f64(row, "nine_slice_draws"), 0.0);
+            assert_eq!(report_f64(row, "source_crop_commands"), count as f64);
+            assert_eq!(report_f64(row, "quads"), count as f64);
+            assert_eq!(report_f64(row, "logical_shaded_pixels"), (count * 288) as f64);
+            if prefix == "gpu"
+            {
+                assert_eq!(report_f64(row, "instanced_draw_calls_avg"), if count == 100 { 2.0 } else { 16.0 });
+                assert_eq!(report_f64(row, "total_parameter_bytes_avg"), if count == 100 { 7_432.0 } else { 72_256.0 });
+            }
+        }
+    }
+    let _ = std::fs::remove_file(json_out);
+}
+
 #[test]
 fn filtered_run_suite_supports_rendering_architecture_contract() {
     let mut json_out = std::env::temp_dir();

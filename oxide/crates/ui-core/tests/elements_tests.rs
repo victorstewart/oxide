@@ -4,10 +4,10 @@ use oxide_platform_api::{
 };
 use oxide_renderer_api::{Color, DrawCmd, ImageHandle, RectF};
 use oxide_ui_core::elements::{
-    encode_label_text, Align, Badge, BadgeState, ButtonState, ImageUploader, Label, Overlay,
-    OverlayState, PickerState, PickerStyle, PopupWindow, SliderState, SlidingSwitchMode,
-    SlidingSwitchState, SlidingSwitchStyle, Spinner, TextCtx, TextInput, TextInputState,
-    TextInputStyle, TextValidation, ToggleState, UICameraView,
+    encode_label_text, Align, Badge, BadgeState, ButtonState, ImageFit, ImageUploader, ImageView,
+    ImageZoomState, Label, Overlay, OverlayState, PickerState, PickerStyle, PopupWindow, SliderState,
+    SlidingSwitchMode, SlidingSwitchState, SlidingSwitchStyle, Spinner, TextCtx, TextInput,
+    TextInputState, TextInputStyle, TextValidation, ToggleState, UICameraView,
 };
 use oxide_ui_core::DrawListBuilder;
 use std::sync::{Arc, RwLock};
@@ -15,6 +15,138 @@ use std::thread;
 use std::time::Duration;
 
 const MACOS_HEBREW_FONT: &str = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf";
+
+fn image_draw(image: &ImageView, rect: RectF, zoom: Option<&ImageZoomState>) -> (RectF, RectF, f32) {
+    let mut builder = DrawListBuilder::new();
+    image.encode(rect, zoom, &mut builder);
+    assert_eq!(builder.drawlist().items.len(), 1);
+    match builder.drawlist().items[0] {
+        DrawCmd::Image { dst, src, alpha, .. } => (dst, src, alpha),
+        ref other => panic!("expected image draw, got {other:?}"),
+    }
+}
+
+fn assert_rect_close(actual: RectF, expected: RectF) {
+    for (actual, expected) in [
+        (actual.x, expected.x),
+        (actual.y, expected.y),
+        (actual.w, expected.w),
+        (actual.h, expected.h),
+    ] {
+        assert!((actual - expected).abs() <= 0.0001, "actual={actual} expected={expected}");
+    }
+}
+
+#[test]
+fn image_view_contain_emits_full_source_inside_bounds() {
+    let image = ImageView {
+        image: ImageHandle(7),
+        natural_w: 200,
+        natural_h: 100,
+        fit: ImageFit::Contain,
+        alpha: 0.75,
+    };
+    let (dst, src, alpha) = image_draw(&image, RectF::new(10.0, 20.0, 100.0, 80.0), None);
+    assert_rect_close(dst, RectF::new(10.0, 35.0, 100.0, 50.0));
+    assert_rect_close(src, RectF::new(0.0, 0.0, 200.0, 100.0));
+    assert_eq!(alpha, 0.75);
+}
+
+#[test]
+fn image_view_stretch_preserves_full_source_and_alpha_clamp() {
+    let image = ImageView {
+        image: ImageHandle(7),
+        natural_w: 201,
+        natural_h: 99,
+        fit: ImageFit::Stretch,
+        alpha: 2.0,
+    };
+    let rect = RectF::new(3.0, 5.0, 101.0, 77.0);
+    let (dst, src, alpha) = image_draw(&image, rect, None);
+    assert_rect_close(dst, rect);
+    assert_rect_close(src, RectF::new(0.0, 0.0, 201.0, 99.0));
+    assert_eq!(alpha, 1.0);
+}
+
+#[test]
+fn image_view_cover_bounds_destination_and_crops_source_pixels() {
+    let image = ImageView {
+        image: ImageHandle(7),
+        natural_w: 200,
+        natural_h: 100,
+        fit: ImageFit::Cover,
+        alpha: 1.0,
+    };
+    let rect = RectF::new(10.0, 20.0, 100.0, 80.0);
+    let (dst, src, _) = image_draw(&image, rect, None);
+    assert_rect_close(dst, rect);
+    assert_rect_close(src, RectF::new(37.5, 0.0, 125.0, 100.0));
+}
+
+#[test]
+fn image_view_zoom_and_pan_crop_source_without_clip_commands() {
+    let image = ImageView {
+        image: ImageHandle(7),
+        natural_w: 200,
+        natural_h: 100,
+        fit: ImageFit::Cover,
+        alpha: 1.0,
+    };
+    let zoom = ImageZoomState { scale: 2.0, offset: [20.0, -10.0] };
+    let rect = RectF::new(10.0, 20.0, 100.0, 80.0);
+    let (dst, src, _) = image_draw(&image, rect, Some(&zoom));
+    assert_rect_close(dst, rect);
+    assert_rect_close(src, RectF::new(56.25, 31.25, 62.5, 50.0));
+}
+
+#[test]
+fn image_view_odd_dimensions_keep_fractional_source_crop() {
+    let image = ImageView {
+        image: ImageHandle(7),
+        natural_w: 7,
+        natural_h: 5,
+        fit: ImageFit::Cover,
+        alpha: 1.0,
+    };
+    let rect = RectF::new(0.0, 0.0, 11.0, 9.0);
+    let (dst, src, _) = image_draw(&image, rect, None);
+    assert_rect_close(dst, rect);
+    assert_rect_close(src, RectF::new(0.44444445, 0.0, 6.111111, 5.0));
+}
+
+#[test]
+fn image_view_prevalidated_emission_respects_effective_empty_clip() {
+    let image = ImageView {
+        image: ImageHandle(7),
+        natural_w: 29,
+        natural_h: 7,
+        fit: ImageFit::Cover,
+        alpha: 1.0,
+    };
+    let mut builder = DrawListBuilder::new();
+    builder.clip_push(oxide_renderer_api::RectI::new(0, 0, 0, 12));
+    image.encode(RectF::new(0.0, 0.0, 24.0, 12.0), None, &mut builder);
+    builder.clip_pop();
+    assert_eq!(builder.drawlist().items.len(), 2);
+    assert!(!builder.drawlist().items.iter().any(|item| matches!(item, DrawCmd::Image { .. })));
+}
+
+#[test]
+fn image_view_rejects_invalid_bounds_and_noncontributing_alpha() {
+    let mut image = ImageView {
+        image: ImageHandle(7),
+        natural_w: 29,
+        natural_h: 7,
+        fit: ImageFit::Cover,
+        alpha: 0.0,
+    };
+    let mut builder = DrawListBuilder::new();
+    image.encode(RectF::new(0.0, 0.0, 24.0, 12.0), None, &mut builder);
+    image.alpha = 1.0;
+    image.encode(RectF::new(f32::NAN, 0.0, 24.0, 12.0), None, &mut builder);
+    image.encode(RectF::new(0.0, 0.0, -24.0, 12.0), None, &mut builder);
+    assert!(builder.drawlist().items.is_empty());
+}
 
 #[test]
 fn text_input_validates_and_commits() {

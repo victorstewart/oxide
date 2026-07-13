@@ -234,6 +234,14 @@ impl DrawListBuilder {
         self.push_draw_cmd(gfx::DrawCmd::Image { tex, dst, src, alpha });
     }
 
+    pub(crate) fn image_prevalidated(&mut self, tex: gfx::ImageHandle, dst: gfx::RectF, src: gfx::RectF, alpha: f32) {
+        // ImageView proves intrinsic visibility once while deriving its crop; clip visibility remains builder-owned.
+        debug_assert!(draw_cmd_visible(&gfx::DrawCmd::Image { tex, dst, src, alpha }));
+        if self.draw_visible() {
+            self.list.items.push(gfx::DrawCmd::Image { tex, dst, src, alpha });
+        }
+    }
+
     pub fn image_mesh(
         &mut self,
         tex: gfx::ImageHandle,

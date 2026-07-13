@@ -2342,6 +2342,8 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
     }
     if perf_case_prefix_allowed("cpu.architecture.")
         || perf_case_prefix_allowed("gpu.architecture.")
+        || perf_case_prefix_allowed("cpu.authoring.image_view_grid.")
+        || perf_case_prefix_allowed("gpu.authoring.image_view_grid.")
     {
         architecture_matrix::push_architecture_matrix_cases(&mut cases, smoke)?;
     }

@@ -1494,12 +1494,63 @@ impl ImageZoomState {
 
 impl ImageView {
     pub fn encode(&self, rect: gfx::RectF, zoom: Option<&ImageZoomState>, b: &mut DrawListBuilder) {
-        if self.image.0 == 0 {
+        let alpha = self.alpha.clamp(0.0, 1.0);
+        if self.image.0 == 0
+            || !rect_finite_positive(rect)
+            || !alpha.is_finite()
+            || alpha <= 0.0
+        {
             return;
         }
         let iw = self.natural_w.max(1) as f32;
         let ih = self.natural_h.max(1) as f32;
-        // Base fit scale
+        if zoom.is_none() {
+            let view_cross = rect.w * ih;
+            let image_cross = rect.h * iw;
+            if !view_cross.is_finite() || !image_cross.is_finite() {
+                return;
+            }
+            match self.fit {
+                ImageFit::Contain => {
+                    let (dw, dh) = if view_cross >= image_cross {
+                        (rect.h * iw / ih, rect.h)
+                    } else {
+                        (rect.w, rect.w * ih / iw)
+                    };
+                    let dst = gfx::RectF::new(
+                        rect.x + (rect.w - dw) * 0.5,
+                        rect.y + (rect.h - dh) * 0.5,
+                        dw,
+                        dh,
+                    );
+                    b.image_prevalidated(
+                        self.image,
+                        dst,
+                        gfx::RectF::new(0.0, 0.0, iw, ih),
+                        alpha,
+                    );
+                }
+                ImageFit::Cover => {
+                    let src = if view_cross >= image_cross {
+                        let src_h = rect.h * iw / rect.w;
+                        gfx::RectF::new(0.0, (ih - src_h) * 0.5, iw, src_h)
+                    } else {
+                        let src_w = rect.w * ih / rect.h;
+                        gfx::RectF::new((iw - src_w) * 0.5, 0.0, src_w, ih)
+                    };
+                    b.image_prevalidated(self.image, rect, src, alpha);
+                }
+                ImageFit::Stretch => {
+                    b.image_prevalidated(
+                        self.image,
+                        rect,
+                        gfx::RectF::new(0.0, 0.0, iw, ih),
+                        alpha,
+                    );
+                }
+            }
+            return;
+        }
         let sx = rect.w / iw;
         let sy = rect.h / ih;
         let base = match self.fit {
@@ -1507,24 +1558,76 @@ impl ImageView {
             ImageFit::Cover => sx.max(sy),
             ImageFit::Stretch => 1.0,
         };
-        let scale = base * zoom.map(|z| z.scale).unwrap_or(1.0);
+        let Some(zoom) = zoom else {
+            return;
+        };
+        if zoom.offset == [0.0, 0.0]
+            && (zoom.scale == 1.0 || matches!(self.fit, ImageFit::Stretch))
+        {
+            self.encode(rect, None, b);
+            return;
+        }
+        let scale = base * zoom.scale;
         let dw = if matches!(self.fit, ImageFit::Stretch) { rect.w } else { iw * scale };
         let dh = if matches!(self.fit, ImageFit::Stretch) { rect.h } else { ih * scale };
         let mut dx = rect.x + (rect.w - dw) * 0.5;
         let mut dy = rect.y + (rect.h - dh) * 0.5;
-        if let Some(z) = zoom {
-            dx += z.offset[0];
-            dy += z.offset[1];
-        }
-        let dst = gfx::RectF::new(dx, dy, dw, dh);
-        // Use nine-slice with zero slices as a general image draw (maps full texture)
-        b.nine_slice(
-            self.image,
-            dst,
-            gfx::Insets::new(0.0, 0.0, 0.0, 0.0),
-            self.alpha.clamp(0.0, 1.0),
-        );
+        dx += zoom.offset[0];
+        dy += zoom.offset[1];
+        let Some((dst, src)) = cropped_image_mapping(rect, gfx::RectF::new(dx, dy, dw, dh), iw, ih)
+        else {
+            return;
+        };
+        b.image_prevalidated(self.image, dst, src, alpha);
     }
+}
+
+fn cropped_image_mapping(bounds: gfx::RectF, fitted: gfx::RectF, image_w: f32, image_h: f32) -> Option<(gfx::RectF, gfx::RectF)> {
+    if !rect_finite_positive(bounds)
+        || !rect_finite_positive(fitted)
+        || !image_w.is_finite()
+        || !image_h.is_finite()
+        || image_w <= 0.0
+        || image_h <= 0.0
+    {
+        return None;
+    }
+    let fitted_right = fitted.x + fitted.w;
+    let fitted_bottom = fitted.y + fitted.h;
+    let bounds_right = bounds.x + bounds.w;
+    let bounds_bottom = bounds.y + bounds.h;
+    if !fitted_right.is_finite()
+        || !fitted_bottom.is_finite()
+        || !bounds_right.is_finite()
+        || !bounds_bottom.is_finite()
+    {
+        return None;
+    }
+    let left = fitted.x.max(bounds.x);
+    let top = fitted.y.max(bounds.y);
+    let right = fitted_right.min(bounds_right);
+    let bottom = fitted_bottom.min(bounds_bottom);
+    if right <= left || bottom <= top
+    {
+        return None;
+    }
+    let src_left = ((left - fitted.x) * image_w / fitted.w).clamp(0.0, image_w);
+    let src_top = ((top - fitted.y) * image_h / fitted.h).clamp(0.0, image_h);
+    let src_right = ((right - fitted.x) * image_w / fitted.w).clamp(0.0, image_w);
+    let src_bottom = ((bottom - fitted.y) * image_h / fitted.h).clamp(0.0, image_h);
+    let dst = gfx::RectF::new(left, top, right - left, bottom - top);
+    let src = gfx::RectF::new(src_left, src_top, src_right - src_left, src_bottom - src_top);
+    (rect_finite_positive(src) && rect_finite_positive(dst)).then_some((dst, src))
+}
+
+#[inline]
+fn rect_finite_positive(rect: gfx::RectF) -> bool {
+    rect.x.is_finite()
+        && rect.y.is_finite()
+        && rect.w.is_finite()
+        && rect.h.is_finite()
+        && rect.w > 0.0
+        && rect.h > 0.0
 }
 
 pub struct NineSliceImage {

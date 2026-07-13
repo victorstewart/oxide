@@ -44,6 +44,8 @@
   Configures fallback font ids used for text-input cursor-prefix metrics when the primary font does not cover a grapheme cluster.
 - `elements::TextInputState::cursor_index`
   Exposes the current grapheme-cluster cursor index for host selection sync, tests, and performance diagnostics.
+- `elements::ImageView::encode`
+  Emits one semantic `DrawCmd::Image`: contain and stretch map the complete natural image, while cover/zoom/pan intersect the fitted destination with the view and map that visible interval back into source pixels.
 - `UiSurface::encode_retained_with_text_ctx`
   Replays a retained surface with the live `TextCtx` atlas snapshot when it is safe, otherwise falls back to the no-context fail-closed replay path.
 - `SurfaceRouter::encode_with_overlays_with_text_ctx`
@@ -90,6 +92,7 @@
 - The emitter move follows that same pattern: Oxide owns the reusable burst timing, source-shape, and particle sampling math, while apps keep scene-specific asset choice and draw calls.
 - The spinner move follows the same rule at runtime too: the iOS host can now promote spinner draws into native `UIActivityIndicatorViewStyleLarge` views while non-iOS fallbacks still share one Oxide-owned contract.
 - Camera views encode the renderer-owned `CameraBg` path so visible preview composition stays inside Oxide.
+- Image views reserve `NineSlice` for genuine nonzero slice insets. Axis-aligned source cropping expresses cover, zoom, and pan without a clip command, so renderer backends receive bounded image quads and explicit natural-pixel source rectangles.
 - The popup lifecycle move follows that same rule: Oxide now owns the reusable key-popup, approval-gated dismissal, manual or content-root touch-exception, and content-size refresh contract, while apps keep scene-specific copy and mutation policy.
 - This keeps ownership clear: Oxide owns reusable UI state machines; app crates own field naming, copy, and scene composition.
 
@@ -118,6 +121,7 @@
 - `UiSurface::edit_style` lets paint-only authoring changes dirty retained draw state without forcing a same-size layout pass.
 - `UiSurface::mark_node_dirty` keeps text/image/camera content dirtiness node-scoped, avoiding full-surface retained invalidation when layout and hit-test geometry are unchanged.
 - `UiSurface::mark_node_dirty` treats accessibility-only and hit-test-only dirtiness as non-draw metadata updates, preserving clean retained draw-list reuse.
+- `ImageView::encode` uses aspect cross-products on the no-zoom contain/cover path, avoiding redundant scale divisions while emitting bounded source-cropped image draws. Transformed views use the general fitted-rectangle intersection only when zoom or pan requires it.
 - `UiSurface::add_node` and `UiSurface::remove_node` cover common structural edits without falling back to `tree_mut()`'s whole-tree dirtiness. Existing direct `tree_mut()` access remains the conservative escape hatch.
 - `SurfaceRouter::encode_with_overlays` reuses retained draw lists for the current surface, overlays, and popups while keeping capture paths as fresh non-retained encodes for diagnostics.
 - `NodeTree::layout` returns `LayoutStats` and skips clean subtrees whose content rect is unchanged, keeping layout-affecting leaf edits from walking unrelated sibling branches.
@@ -148,6 +152,7 @@
 - `crates/ui-core/tests/elements_tests.rs` also covers the shared legacy sliding-switch long-press, timeout, and bounds-cancel contract.
 - `crates/ui-core/tests/layout_async.rs` covers native async layout worker ordering and blocked-job cleanup.
 - `crates/ui-core/tests/draw_builder_tests.rs` covers image-mesh quad index synthesis.
+- `crates/ui-core/tests/elements_tests.rs` covers contain, cover, stretch, zoom, pan, alpha, odd natural dimensions, bounded destinations, and fractional source-pixel crops for `ImageView`.
 - `crates/ui-core/tests/draw_builder_tests.rs` covers atomic cached draw-list append plus local/absolute index normalization.
 - `crates/ui-core/tests/draw_builder_tests.rs` also covers retained text draw replay rejection after missing, stale, and incomplete atlas revision contexts.
 - `crates/ui-core/tests/elements_tests.rs` covers the live `TextCtx` retained atlas snapshot guard.
@@ -179,6 +184,8 @@ assert_eq!(text.value(), "");
 ```
 
 ## Changelog
+
+- 2026-07-13: changed `ImageView` to emit bounded `Image` commands with natural-pixel source crops; zero-inset `NineSlice` remains removed from the image-view path.
 - 2026-06-02: Added `coalesce_adjacent_draws_reuse` so hot host frame loops can reuse draw-command coalescing scratch storage.
 - 2026-06-01: fixed child layout skip logic so stable child geometry cannot bypass dirty descendants during an ancestor relayout.
 - 2026-06-01: bounded `CollectionView` variable measurement cache entries and added cold-entry eviction coverage for large key/revision churn.

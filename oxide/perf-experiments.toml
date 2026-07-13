@@ -1,4 +1,43 @@
 [[experiments]]
+id = "c14-image-view-source-cropped-image-command"
+introduced_commit = "C14 staged tree recorded in commit proof"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["ui-core", "renderer-metal", "renderer-web", "oxide-perf-runner"]
+required_devices = ["macOS Metal host"]
+correctness_gate = "Contain, cover, stretch, zoom, pan, alpha, odd natural dimensions, fractional source crops, invalid inputs, and empty effective clips must pass unit tests; DPR 1/2/3 Metal pixels must exactly match the clipped zero-slice NineSlice reference and reviewed goldens."
+performance_gate = "The 100/1,000-image authoring rows must pass the no-material-regression gate; Metal encode and GPU timestamp rows must pass every performance gate; nine-slices must reach zero while draw calls, parameter bytes, and logical shaded pixels decrease without increasing quad count."
+decision_state = "accepted"
+decision = "Emit bounded natural-pixel-cropped Image commands from ImageView and reserve NineSlice for genuine slice insets; use a crate-private prevalidated emission path after ImageView proves geometry so source cropping does not tax authoring throughput."
+proof = [
+   "The 100/1,000 authoring controls improved paired medians 1.49%/1.39%, won 12/15 and 13/15 pairs, and passed every no-material-regression tail and peak gate after prevalidated emission replaced redundant public-builder validation.",
+   "Preliminary Metal encode paired medians improved 28.44% for 100 images and 39.73% for 1,000 images; command-buffer GPU medians improved 14.21% and 61.05%, with all four performance reports accepted.",
+   "Nine-slices fall 100/1,000 to zero, source-cropped images rise zero to 100/1,000, instanced draw calls fall 100/1,000 to 2/16, total parameter bytes fall 8,800/88,000 to 7,432/72,256, logical shaded pixels fall 59,657/596,571 to 28,800/288,000, and quads remain 100/1,000.",
+   "Candidate Image pixels exactly equal the clipped former zero-slice NineSlice mapping at DPR 1, 2, and 3 for contain, cover, stretch, zoom, and pan over an odd 7x5 texture.",
+]
+cleanup = [
+   "NineSliceImage remains the explicit nonzero-slice authoring element; ImageView emits no NineSlice or clip commands.",
+   "Official latest baseline promotion remains deferred to C62; paired samples, plans, counters, captures, and hashes are retained under benchmarks/experiments/c14-image-view-crop/raw.",
+]
+
+[[experiments]]
+id = "c14-image-view-redundant-public-builder-validation"
+introduced_commit = "rejected during C14"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["ui-core", "oxide-perf-runner"]
+required_devices = ["macOS host"]
+correctness_gate = "Source-cropped Image output must preserve the same exact clipped-parent pixels and invalid-input rejection."
+performance_gate = "The 100/1,000-image public authoring controls must pass the no-material-regression gate."
+decision_state = "rejected"
+decision = "Rejected routing already-proven ImageView rectangles through the public generic Image validator because duplicate destination/source validation regressed authoring throughput."
+proof = [
+   "The exact 15-pair 100-image authoring control moved p50/p95/p99/peak 1.079992/1.099460/1.102200/1.102885 us to 1.401241/1.417149/1.424563/1.426416 us; median speedup was -29.53%, CI [-30.88%,-27.03%], with 0/15 wins.",
+   "The 1,000-image control moved 8.344865/8.542754/8.566100/8.571936 us to 11.382924/11.556108/11.632751/11.651912 us; median speedup was -35.16%, CI [-37.76%,-34.58%], with 0/15 wins.",
+]
+cleanup = ["ImageView now validates view bounds and alpha once, proves its derived crop internally, and uses a crate-private emission path that still suppresses drawing under an empty effective clip."]
+
+[[experiments]]
 id = "c13-ui-central-noop-draw-rejection"
 introduced_commit = "C13 staged tree recorded in commit proof"
 introduced_date = "2026-07-12"
