@@ -2809,6 +2809,7 @@ fn push_system_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) -> Result<()>
     }
 
     if perf_case_allowed("cpu.system.coalesce_adjacent_draws.current") {
+        let mut coalesce_scratch = Vec::new();
         cases.push(measure_cpu_case(
             "cpu.system.coalesce_adjacent_draws.current",
             "system",
@@ -2816,11 +2817,11 @@ fn push_system_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) -> Result<()>
             true,
             0.12,
             coalesce_loops,
-            vec![String::from("Current linear ui-core merge path.")],
+            vec![String::from("Current linear ui-core merge path with retained host scratch.")],
             move || {
                 let mut list =
                     api::DrawList { items: coalesce_template.clone(), ..api::DrawList::default() };
-                ui::coalesce_adjacent_draws(&mut list);
+                ui::coalesce_adjacent_draws_reuse(&mut list, &mut coalesce_scratch);
                 list.items.len() as u64
             },
         ));

@@ -72,3 +72,11 @@ fn canceled_prepared_frame_retains_damage_for_retry() {
         "submit failure must restore pending damage for the next drawable-backed frame"
     );
 }
+
+#[test]
+fn native_frame_coalescing_reuses_app_storage() {
+    let source = include_str!("../src/lib.rs");
+    assert!(source.contains("coalesce_items: Vec<gfx_api::DrawCmd>"));
+    assert!(source.contains("coalesce_adjacent_draws_reuse(dl, &mut app.coalesce_items)"));
+    assert!(!source.contains("oxide_ui_core::coalesce_adjacent_draws(dl)"));
+}

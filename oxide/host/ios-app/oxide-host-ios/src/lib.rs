@@ -1363,6 +1363,7 @@ struct AppState {
     renderer: Option<Box<metal::MetalRenderer>>,
     router: Option<test_scenes::Router<MtlUploader>>,
     builder: ui::DrawListBuilder,
+    coalesce_items: Vec<gfx_api::DrawCmd>,
     pending_damage_rects: Vec<gfx_api::RectI>,
     pending_frame_stats: StatsSnapshot,
     pending_frame_w: u32,
@@ -1410,6 +1411,7 @@ impl Default for AppState {
             renderer: None,
             router: None,
             builder: ui::DrawListBuilder::new(),
+            coalesce_items: Vec::new(),
             pending_damage_rects: Vec::new(),
             pending_frame_stats: StatsSnapshot::default(),
             pending_frame_w: 0,
@@ -2033,7 +2035,7 @@ pub extern "C" fn oxide_host_app_prepare_frame(w: u32, h: u32, scale: f32) -> ::
     if builder.drawlist().items.len() > 1 {
         with_perf_signpost("camera.renderer.coalesce", || {
             let dl = builder.drawlist_mut();
-            oxide_ui_core::coalesce_adjacent_draws(dl);
+            oxide_ui_core::coalesce_adjacent_draws_reuse(dl, &mut app.coalesce_items);
         });
     }
     app.builder = builder;

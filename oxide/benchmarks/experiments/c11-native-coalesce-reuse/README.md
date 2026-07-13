@@ -1,0 +1,11 @@
+# C11 native coalescing scratch evidence
+
+This directory records C11 correctness and performance evidence for retaining adjacent-draw coalescing scratch in the iOS and macOS host states.
+
+The performance hypothesis is that `coalesce_adjacent_draws` performs one `DrawCmd`-sized allocation proportional to the input command count on every native frame, while the existing reuse API can alternate the retained input/output capacities with zero allocations after warmup. The affected phase is native CPU draw-list coalescing; target workloads are dense mergeable solids and mixed mergeable/non-mergeable ordering. Expected counters are one allocation and `command_count * size_of::<DrawCmd>()` bytes per parent frame versus zero candidate allocations/bytes after warmup. The risk is altered draw ordering or span merging; existing ui-core semantic tests and native ownership tests freeze those behaviors.
+
+The permanent `cpu.system.coalesce_adjacent_draws.current` case now exercises retained scratch, matching all three production hosts. The locally ignored `raw/` directory records balanced parent-wrapper/candidate-reuse time distributions plus allocation counts and bytes. Official `latest.*` baselines remain unchanged until C62.
+
+The optimized A/B uses 15 balanced fresh-process pairs per workload, with 20 warmups and 200 measured 4,096-command frames per side/process. Every one of the 3,000 parent samples per workload allocated once for 229,376 bytes (`4,096 * size_of::<DrawCmd>()`, with a 56-byte command); every candidate sample reported zero allocations and zero bytes. Mixed parent/candidate p50 was 0.010459/0.010458 ms, p95 was 0.010833/0.010750 ms, p99 was identical at 0.011917 ms, and peak fell from 0.027083 to 0.019458 ms. Dense p50 was 0.007792/0.007625 ms, p95 was 0.007958/0.007792 ms, p99 was 0.008209/0.008000 ms, and peak was 0.009917/0.009625 ms. Both no-material-regression gates accepted; dense reuse won all 15 pairs with a paired 2.14% median speedup and 95% bootstrap interval of 1.61% to 2.66%.
+
+The five ui-core coalescing semantic tests, five macOS host tests, and 31 iOS host tests pass. The permanent filtered release smoke case passes at 3.174 us/op p50, 3.238 us/op p95, and 3.239 us/op p99.

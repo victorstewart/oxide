@@ -67,6 +67,7 @@ struct AppState {
     renderer: Option<Box<metal::MetalRenderer>>,
     router: Option<test_scenes::Router<MtlUploader>>,
     builder: ui::DrawListBuilder,
+    coalesce_items: Vec<gfx_api::DrawCmd>,
     pending_damage_rects: Vec<gfx_api::RectI>,
     prepared_frame: bool,
     touch: PrimaryTouchTracker,
@@ -366,7 +367,7 @@ pub extern "C" fn macos_app_prepare_frame(w: u32, h: u32, scale: f32) -> ::libc:
     };
     {
         let dl = builder.drawlist_mut();
-        oxide_ui_core::coalesce_adjacent_draws(dl);
+        oxide_ui_core::coalesce_adjacent_draws_reuse(dl, &mut app.coalesce_items);
     }
     app.builder = builder;
     retain_pending_damage_for_retry(&mut app.pending_damage_rects, damage_rects);

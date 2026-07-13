@@ -55,6 +55,14 @@ fn ios_perf_runtime_prepares_frame_before_acquiring_drawable() {
 }
 
 #[test]
+fn native_frame_coalescing_reuses_app_storage() {
+    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+    assert!(source.contains("coalesce_items: Vec<gfx_api::DrawCmd>"));
+    assert!(source.contains("coalesce_adjacent_draws_reuse(dl, &mut app.coalesce_items)"));
+    assert!(!source.contains("oxide_ui_core::coalesce_adjacent_draws(dl)"));
+}
+
+#[test]
 fn app_main_uses_declared_c_environment_apis_for_parked_perf_launch() {
     let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../App/main.m"));
 
