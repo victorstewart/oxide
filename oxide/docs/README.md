@@ -20,6 +20,7 @@ This directory mirrors Rust source units with design notes, entry points, behavi
 - [oxide-text](oxide-text/lib.md)
 - [renderer-api](renderer-api/lib.md)
 - [renderer-metal](renderer-metal/lib.md)
+- [renderer-metal prepared chunks](renderer-metal/prepared.md)
 - [renderer-web](renderer-web/lib.md)
 - [snapshot-runner](snapshot-runner/main.md)
 - [test-scenes](test-scenes/lib.md)

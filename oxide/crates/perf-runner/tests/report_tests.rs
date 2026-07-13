@@ -4026,6 +4026,23 @@ fn filtered_run_suite_supports_gpu_authoring_cases() {
 }
 
 #[test]
+fn filtered_run_suite_supports_retained_snapshot_authoring_case() {
+    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+        .env("OXIDE_PERF_RUNNER_FILTER", "gpu.authoring.retained_snapshot.clean_mixed")
+        .arg("--run-suite")
+        .arg("--smoke")
+        .output()
+        .expect("run filtered retained-snapshot authoring smoke suite");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "filtered suite failed: {stderr}");
+    assert!(stdout.contains("cases=1"), "stdout: {stdout}");
+    assert!(stdout.contains("case=gpu.authoring.retained_snapshot.clean_mixed"), "stdout: {stdout}");
+    assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
+}
+
+#[test]
 fn filtered_run_suite_supports_gpu_animation_effects_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-gpu-animation-effects-{}.json", std::process::id()));
@@ -4982,6 +4999,52 @@ fn metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()
    assert_eq!(report_f64(offscreen, "vertex_upload_bytes"), 655_360.0);
    assert_eq!(report_f64(offscreen, "index_upload_bytes"), 98_304.0);
    assert_eq!(report_f64(offscreen, "uniform_upload_bytes"), 16.0);
+   let _ = std::fs::remove_file(json_out);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-prepared-chunks-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "gpu.architecture.prepared_chunks.")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run Metal prepared-chunk smoke suite");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "Metal prepared-chunk suite failed: {stderr}");
+   assert!(stdout.contains("cases=2"), "stdout: {stdout}");
+   let report = std::fs::read_to_string(&json_out).expect("read prepared-chunk report");
+   let clean = report_case_slice(&report, "gpu.architecture.prepared_chunks.clean_mixed");
+   let dirty = report_case_slice(&report, "gpu.architecture.prepared_chunks.one_dirty");
+
+   assert_eq!(report_f64(clean, "chunk_count"), 256.0);
+   assert_eq!(report_f64(clean, "backend_cache_hits_avg"), 256.0);
+   assert_eq!(report_f64(clean, "backend_cache_misses_avg"), 0.0);
+   assert_eq!(report_f64(clean, "chunks_prepared_avg"), 0.0);
+   assert_eq!(report_f64(clean, "commands_traversed_avg"), 0.0);
+   assert_eq!(report_f64(clean, "geometry_bytes_copied_avg"), 0.0);
+   assert_eq!(report_f64(clean, "buffer_upload_bytes_avg"), 0.0);
+   assert_eq!(report_f64(clean, "dynamic_uniform_upload_bytes_avg"), 256.0 * 48.0);
+   assert_eq!(report_f64(dirty, "backend_cache_hits_avg"), 255.0);
+   assert_eq!(report_f64(dirty, "backend_cache_misses_avg"), 1.0);
+   assert_eq!(report_f64(dirty, "chunks_prepared_avg"), 1.0);
+   assert_eq!(report_f64(dirty, "commands_traversed_avg"), 64.0);
+   assert_eq!(report_f64(dirty, "geometry_bytes_copied_avg"), 3_072.0);
+   assert_eq!(report_f64(dirty, "buffer_upload_bytes_avg"), 3_072.0);
+   assert_eq!(report_f64(dirty, "dynamic_uniform_upload_bytes_avg"), 256.0 * 48.0);
+   assert!(report_f64(clean, "prepared_cache_bytes_peak") > 0.0);
+   assert_eq!(
+      report_f64(clean, "prepared_cache_bytes_peak"),
+      report_f64(dirty, "prepared_cache_bytes_peak"),
+   );
    let _ = std::fs::remove_file(json_out);
 }
 

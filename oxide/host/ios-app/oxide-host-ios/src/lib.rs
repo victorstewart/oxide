@@ -2282,6 +2282,7 @@ pub extern "C" fn oxide_host_on_memory_warning() {
         app.memory_warnings = app.memory_warnings.saturating_add(1);
         if let Some(renderer) = app.renderer.as_mut() {
             renderer.purge_effect_targets();
+            renderer.purge_prepared_chunks();
         }
         mark_frame_dirty(app);
         if let Some(ops) = app.telemetry_ops.as_ref() {

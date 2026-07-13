@@ -11,11 +11,12 @@ Transform and color solid geometry through the existing Metal solid pipeline.
 ## Entry points list
 
 - `v_solid(SolidVSIn, SolidUniform) -> SolidVSOut`: resolves zero packed color and emits interpolants.
+- `v_prepared_solid(SolidVSIn, SolidUniform, PreparedInstance) -> SolidVSOut`: applies the frame-dynamic affine transform and opacity to persistent local geometry.
 - `f_solid(SolidVSOut) -> float4`: returns the interpolated final color.
 
 ## Logic narrative
 
-The normalized `uchar4` attribute arrives as RGBA floats. Exact zero selects the draw uniform; every other value passes through and rasterization interpolates it.
+The normalized `uchar4` attribute arrives as RGBA floats. Exact zero selects the draw uniform; every other value passes through and rasterization interpolates it. Prepared replay transforms local points into the current viewport and multiplies alpha in the vertex stage so the immutable vertex/color buffers do not change during animation.
 
 ## Preconditions and postconditions
 
@@ -47,4 +48,5 @@ Packed `0xFF00_00FF` produces opaque red; packed zero uses `SolidUniform::color`
 
 ## Changelog
 
+- 2026-07-13: added prepared local-geometry transform and opacity handling.
 - 2026-07-12: added resolved per-vertex color interpolation.

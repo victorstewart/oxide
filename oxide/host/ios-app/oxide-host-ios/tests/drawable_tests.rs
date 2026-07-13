@@ -80,6 +80,7 @@ fn memory_warnings_purge_effect_targets_and_request_a_frame() {
         .expect("memory-warning handler");
     let warning = warning.split("// ===== Camera options control").next().expect("handler end");
     assert!(warning.contains("renderer.purge_effect_targets();"));
+    assert!(warning.contains("renderer.purge_prepared_chunks();"));
     assert!(warning.contains("mark_frame_dirty(app);"));
 }
 

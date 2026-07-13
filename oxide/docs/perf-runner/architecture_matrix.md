@@ -12,12 +12,17 @@
 - ID mask: isolated Metal rows for static, style, viewport, and projection changes at 512/1024/2048 with 1/16/256 chunks. Chunk-count variants never alternate inside one timed row, so the static cache state remains static.
 - Scene3D: isolated Metal rows for 96/1,000/10,000 instances across one/many meshes, alpha ordering, 25 percent viewport, culling, and one/three bloom layers.
 - Frame resources: a three-slot visible 4,096-quad row freezes no-growth 327,680/49,152/16-byte VB/IB/UB high water, while an eight-slot 8,192-quad offscreen stress row grows every slot once and requires zero warm growth or backpressure skips.
+- Prepared Metal chunks: 256 mixed immutable chunks, each carrying 64 RRects, images, glyph quads, or solid triangles. Clean frames change only a dynamic transform and require 256 hits with zero upload/traversal; the one-dirty row alternates only chunk zero's geometry revision and requires 255 hits plus one bounded rebuild.
 - Images and idle: CPU construction plus Metal resource/draw rows for 100/1,000/10,000 unique images and policy/churn variants; authoring rows exercise 100/1,000 unique `ImageView` cover cells and persist semantic image/nine-slice, crop, quad, draw-call, parameter-byte, and shaded-pixel counters; a foreground static row proves zero timers, animations, camera frames, network publications, damage, submissions, and wakeups.
 - WebGPU primitives: opt-in browser rows for 1/64/1,024 RRects, 1/64/512 spinners, 64/1,024 neon markers, and 64/512 nine-slices. The 1,024-marker row emits eight production-sized 128-marker passes rather than changing the public per-pass safety limit.
 
 ## Measurement boundary
 
 Rust rows are selected with `OXIDE_PERF_RUNNER_FILTER=cpu.architecture.,gpu.architecture.`. GPU rows use production Metal begin/encode/submit methods and collect command-buffer GPU distributions, encode distributions, upload bytes, damage, draw, memory, and backpressure data. Retained cache-pressure rows persist hits, misses, hit rate, admissions/rejections, evictions and bytes, build time, retained chunk/sequence/prepared-GPU bytes, hard budget, completeness, and fallback count. Layer rows persist retained texture bytes plus average structural body scans, body copies, texture creates, hits/misses, offscreen/inline draws, and prevented duplicate renders; effect rows persist prepass/blur-chain/bloom bytes plus first-frame latency and first-use resource creation; ID-mask rows persist target/upload-cache bytes plus chunk/pass work; Scene3D rows persist depth, bloom, and mesh-buffer bytes plus pass work. Frame-resource rows persist configured depth, ring bytes, cold/warm growth, upload high water, and skips; their warmup count equals the configured depth so every slot is exercised before warm evidence. Smoke mode shortens measured sample counts but preserves every declared workload size.
+
+Prepared rows persist full frame, Metal encode, and command-buffer GPU distributions plus immutable buffer uploads, dynamic uniform-ring upload bytes, copied geometry, traversed commands, draws, image argument-table binds, cache hit/miss and prepared/reused counts, evictions, prepared resident bytes, and total renderer bytes. `OXIDE_C24_FLAT_CONTROL=1` is benchmark-only evidence control: it preflattens the identical snapshots before timing and sends the same visible work through `encode_pass`, allowing the prepared lowering boundary to be compared without changing scene content.
+
+`OXIDE_C24_RAW_SAMPLES=1` persists every C24 warmup and measured frame/encode/GPU observation under indexed metric keys for the shared paired runner. Normal reports omit those keys.
 
 The C14 rows are selected with `OXIDE_PERF_RUNNER_FILTER=cpu.authoring.image_view_grid.,gpu.authoring.image_view_grid.`. They create unique 29x7 Metal images and encode 24x12 cover cells through the public `ImageView` API, so parent zero-slice nine-slice behavior and candidate source-cropped image behavior share the same authoring and backend path.
 
@@ -34,10 +39,12 @@ The current memory-warning layer row recreates the renderer after an explicit be
 - Unit tests freeze required scaling points, exact damage percentages, and gap-free 1/16/256 chunk coverage.
 - Report tests require the hot retained row to be complete, hit at 100%, and remain within budget; the churn row must retain zero bytes and record one explicit fallback. A separate authoring row covers unchanged-policy hot access through the public `UiSurface` policy API.
 - Report tests exercise retained, animation, idle, layer, ID-mask, and Scene3D rows; freeze `family=architecture` plus `scenario=rendering-architecture` metadata; and require nonzero Metal bytes for every previously omitted resource family.
+- Prepared report tests require clean 256/0 hit/miss, zero upload/copy/traversal, and one-dirty 255/1 hit/miss with exactly one 64-command, 3,072-byte rebuild. The authoring registry separately exercises the public retained-snapshot Metal entry point.
 - The image-view report test freezes both 100/1,000 authoring rows, zero nine-slices, one crop and quad per image, bounded logical coverage, cross-texture Metal draw-call batching, and total inline-plus-argument parameter bytes.
 - Browser source tests freeze all ten WebGPU primitive IDs, opt-in routing, queue/RAF pacing, timestamp settlement, and counter serialization.
 
 ## Changelog
+- 2026-07-13: added C24 clean and one-dirty persistent Metal prepared-chunk rows plus public retained-snapshot authoring coverage.
 - 2026-07-13: Added C23 retained hot-reuse and zero-budget one-use cache-pressure rows with full cache-policy counters.
 
 - 2026-07-13: added visible high-water and offscreen all-slot growth-stress rows with explicit depth, residency, growth, upload, and backpressure contracts.

@@ -269,6 +269,10 @@ const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
         id: "cpu.authoring.collection_prefix_update.full_scan",
         name: "Collection Prefix Update Full Scan",
     },
+    AuthoringPerfSpec {
+        id: "gpu.authoring.retained_snapshot.clean_mixed",
+        name: "Retained Snapshot Metal Replay",
+    },
     AuthoringPerfSpec { id: "gpu.authoring.scene3d.mixed_frame", name: "Scene3D Mixed Frame" },
 ];
 
@@ -3346,6 +3350,9 @@ fn push_authoring_cases(
             }
             "cpu.authoring.collection_prefix_update.full_scan" => {
                 authoring_collection_prefix_update_case(smoke, false)
+            }
+            "gpu.authoring.retained_snapshot.clean_mixed" => {
+                architecture_matrix::metal_prepared_chunk_case(spec.id, smoke, false)?
             }
             "gpu.authoring.scene3d.mixed_frame" => authoring_scene3d_mixed_frame_case(smoke)?,
             other => bail!("unknown authoring perf case `{}`", other),

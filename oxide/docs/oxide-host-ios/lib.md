@@ -32,6 +32,8 @@
   Split CPU frame preparation from drawable-backed present work so UIKit acquires a `CAMetalDrawable` only after Rust has updated state, built the draw list, and decided the frame will submit.
 - `oxide_host_app_stats(out) -> libc::c_int`
   Exports the host stats ABI consumed by Objective-C and Swift benchmark harnesses.
+- `oxide_host_on_memory_warning()`
+  Purges retained effect/bloom targets and prepared render chunks, marks the frame dirty, and forwards critical pressure to telemetry.
 
 ## Logic narrative
 - Callback registries store plain `extern "C" fn` pointers in `OnceLock<Mutex<Option<_>>>` slots because Objective-C code can install callbacks before the app renderer is active.
@@ -67,7 +69,7 @@
 ## Feature flags and cfgs
 - iOS-only native services are compiled behind `target_os = "ios"` guards.
 - Host unit tests compile the Rust callback bridge on the local host without launching UIKit.
-- Critical memory warnings purge renderer-owned effect and bloom targets, then mark the frame dirty so visible effects rebuild through the normal Rust render path.
+- Critical memory warnings purge renderer-owned effect/bloom targets and persistent prepared chunks, then mark the frame dirty so visible content rebuilds through the normal Rust render path.
 
 ## Testing and benchmarks
 - Covered by `cargo test -p oxide-host-ios --tests --locked`.
@@ -82,6 +84,7 @@ oxide_host_emit_touch(10, 0, 1.0, 2.0, 0.5, 1, 0.0, 0.0, 0, 0, 100);
 ```
 
 ## Changelog
+- 2026-07-13: purged byte-budgeted prepared Metal chunks alongside effect targets on critical memory pressure.
 - 2026-07-13: selected the three-slot visible Metal frame-resource mode instead of retaining the deeper offscreen/perf allocation.
 - 2026-06-22: froze host stats and camera benchmark snapshot ABI layouts, including Swift benchmark-runtime host-stat mirror fields.
 - 2026-06-22: added iOS host camera typedef ABI static-assert retention coverage.

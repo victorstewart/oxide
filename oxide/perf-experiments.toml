@@ -1,4 +1,44 @@
 [[experiments]]
+id = "c24-metal-persistent-prepared-chunks"
+introduced_commit = "C24 staged tree recorded in commit proof"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-metal", "oxide-perf-runner", "oxide-host-ios"]
+required_devices = ["macOS Metal", "iOS host path"]
+correctness_gate = "Prepared and flat mixed/fractional captures must be byte-identical under Metal API Validation; clean replay must upload and traverse zero immutable work; one dirty chunk must rebuild only that chunk; resource generation, device/target identity, LRU eviction, purge, unsupported fallback, memory pressure, and actual draw accounting must remain exact."
+performance_gate = "Fifteen balanced fresh-process parent/candidate pairs must materially improve clean and one-dirty Metal CPU encode distributions without regressing GPU p95/p99/peak, while reporting uploads, draws, binds, resident bytes, cache hits/misses, and raw frame/encode/GPU samples; the real iOS host path must remain validation-clean."
+decision_state = "accepted"
+decision = "Persist supported Metal chunk plans and immutable shared buffers under a generation-aware allocated-byte LRU while keeping transform, opacity, viewport, clip, and damage state dynamic."
+proof = [
+   "The final shared paired-runner reports under benchmarks/experiments/c24-metal-prepared-chunks/raw retain exact source/artifact identities, fifteen balanced fresh-process pairs per clean/dirty workload, all raw distributions, and accepted CPU/GPU tail decisions.",
+   "The permanent clean row reports 256 hits, zero misses, zero command traversal, zero geometry copy, and zero buffer uploads; the dirty row reports 255 hits, one miss, 64 traversed commands, and 3,072 uploaded bytes.",
+   "The 1,200 x 800 mixed parent/candidate captures are byte-identical, and the dedicated opaque fractional RRect/image oracle remains exact under Metal API Validation after exposing the established world-origin rounding convention.",
+]
+cleanup = [
+   "Kept shared immutable buffers after the focused private-staging comparison lost every pair and regressed every GPU distribution gate; no private/staging alternate path remains.",
+   "Kept the per-frame glyph ICB disabled and did not add a reusable ICB because prepared CPU encode no longer dominates the target packet; removed temporary probe source after final collection.",
+]
+
+[[experiments]]
+id = "c24-private-prepared-buffer-staging-rejected"
+introduced_commit = "rejected during C24"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["macOS Metal"]
+correctness_gate = "Shared and private variants must render byte-identical mixed/fractional output and retain exact hit, miss, upload, traversal, draw, bind, and residency accounting."
+performance_gate = "Fifteen balanced same-binary one-dirty pairs must improve command-buffer GPU time and preserve p95, p99, and peak before private immutable buffers can replace shared storage."
+decision_state = "rejected"
+decision = "Rejected private prepared buffers because one miss required a blit encoder and staging copy whose GPU cost overwhelmed the 3 KiB changed payload."
+proof = [
+   "The focused same-binary comparison measured shared/private p50 0.119875/0.213250 ms, p95 0.125002/0.323421 ms, p99 0.127458/0.433710 ms, and peak 0.451792/0.486500 ms.",
+   "Private storage regressed paired median time by 79.132% with 95% CI -85.573%..-77.601%, won 0/15 pairs, and failed every timing/tail gate while pixels and deterministic work counters remained exact.",
+]
+cleanup = [
+   "Removed the environment switch, private destinations, staging ownership, and miss-time blit encoder; retained the shared immutable buffers.",
+]
+
+[[experiments]]
 id = "c23-retained-rendering-byte-budget"
 introduced_commit = "C23 staged tree recorded in commit proof"
 introduced_date = "2026-07-13"

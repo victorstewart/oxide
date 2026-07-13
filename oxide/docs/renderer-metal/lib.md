@@ -35,6 +35,12 @@
   - Encodes bounded neon marker instances over the current color target before `encode_pass`. Implementation lives in `neon_marker_gpu.rs`.
 - `MetalRenderer::encode_pass(list)`
   - Encodes the existing 2D Oxide draw list and reuses the same frame command buffer when a scene3d pass already ran.
+- `MetalRenderer::encode_snapshot(snapshot) -> Result<(), RenderSnapshotError>`
+  - Replays immutable supported chunks from persistent prepared buffers and retains the flat compatibility path for unsupported structures.
+- `MetalRenderer::{prepared_cache_budget_bytes,set_prepared_cache_budget_bytes,prepared_cache_resident_bytes,prepared_cache_entry_count,purge_prepared_chunks}`
+  - Configure, inspect, and release the byte-budgeted prepared cache.
+- `MetalRenderer::image_generation(handle) -> Option<u64>`
+  - Returns the explicit generation required by image and glyph-atlas chunk dependencies.
 
 ## Logic narrative
 
@@ -66,6 +72,8 @@ Renderer GPU timing is collected in-app instead of depending on Instruments hard
 
 Renderer accounting keeps allocated GPU bytes and logical payload bytes separate. Metal's exposed `allocated_size` is deduplicated by resource identity into draw/MSAA, depth, effect, bloom, camera, layer, image, ID-mask, Scene3D mesh, frame-ring, and argument-buffer owners; logical texture extents and buffer lengths are reported independently. The identity sets are renderer-retained and cleared without releasing capacity, so scans allocate only while warming to a new peak resource count. The resident-resource walk is sampled once every 60 frames, while ordinary frames reuse the last snapshot. Work counters use saturating arithmetic for traversed/copied commands, copied geometry, ID-mask chunk reuse/rebuild, cache outcomes, encoders, copies, uploads, shaded pixels, submissions, and resource creation/growth. Explicit benchmark controls may disable the complete accounting snapshot path or only the resident scan without changing rendering.
 
+Immutable render snapshots can bypass flat per-frame lowering through the focused [`prepared`](prepared.md) module. Its key combines chunk revisions, resource generations, device generation, target format, and sample count. Supported RRect/image/glyph/solid/clip payloads live in persistent shared Metal buffers under a 32 MiB default LRU budget, while origin, affine transform, opacity, viewport, clip, and damage remain dynamic. One contiguous completion-protected uniform-ring slice carries all per-frame dynamic records, avoiding one inline Metal constant allocation per chunk. Clean replay reports zero command traversal and geometry upload; resource update/release and iOS memory pressure purge stale ownership immediately. Layer-bearing and otherwise unsupported snapshots keep the established retained-capacity flat path. Flat RRect and argument-table image batches accumulate their instanced GPU calls separately until public frame statistics are finalized, so `draws` reports actual calls without double-counting C05's logical offscreen instances.
+
 Frame-level camera/effect metadata is gathered in one draw-list scan. Camera coverage, camera-blur sigma, backdrop presence, and the strongest visual-effect blur plan are reused by the later policy and prepass blocks instead of rediscovering the same facts with separate passes.
 
 Effect target ownership follows that declared plan. A zero-blur backdrop allocates only the full-resolution prepass; ordinary blur adds half/quarter targets and one quarter ping-pong target; strong visual blur substitutes the declared eighth-resolution pair without retaining an unused full-resolution temporary. Compatible textures persist across warm frames. Resize invalidates incompatible targets, while the production memory-warning hook purges both effect and bloom targets and requests a replacement frame. `resource_creates` records first-use construction and the effect/bloom memory categories include every retained target.
@@ -91,6 +99,7 @@ ID-mask composition is GPU-owned. Semantic region/subregion triangles are raster
 
 ## Changelog
 
+- 2026-07-13: added persistent byte-budgeted prepared render chunks, dynamic transform/opacity records, resource-generation invalidation, prepared-cache accounting, and memory-pressure purge.
 - 2026-07-13: matched visible-host frame resources to three completion-protected slots, consolidated completion state into one bounded bitset, removed variable-modulo scanning and redundant per-slot command-buffer retention, retained explicit eight-slot offscreen mode, and replaced unconditional multi-megabyte per-slot rings with measured initial capacities plus retained geometric growth.
 - 2026-07-12: made effect targets pass-plan-lazy, removed the unused full-size blur texture, and added production memory-pressure purging.
 - 2026-07-12: replaced independent layer-cache prescan/lowering decisions with one generation-based plan per nesting range, single-owner body rendering, same-size texture reuse, nested invalidation propagation, and explicit ownership counters.

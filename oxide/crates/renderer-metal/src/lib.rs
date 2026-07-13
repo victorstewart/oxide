@@ -43,6 +43,7 @@ pub mod scene3d;
 
 mod id_mask_gpu;
 mod neon_marker_gpu;
+mod prepared;
 
 use block::ConcreteBlock;
 use core::f32::consts::TAU;
@@ -58,10 +59,12 @@ use oxide_renderer_api as api;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::CStr;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use thiserror::Error;
+
+static NEXT_DEVICE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(target_os = "ios")]
 extern "C" {
@@ -899,6 +902,7 @@ struct GlyphRunGpuOffsets {
 #[allow(dead_code)]
 pub struct MetalRenderer {
     device: Device,
+    device_generation: u64,
     queue: CommandQueue,
     pso_solid: RenderPipelineState,
     pso_image: RenderPipelineState,
@@ -924,6 +928,7 @@ pub struct MetalRenderer {
     pso_layer_text: RenderPipelineState,
     pso_text_sdf: RenderPipelineState,
     pso_layer_text_sdf: RenderPipelineState,
+    prepared_pipelines: Option<prepared::PreparedPipelines>,
     pso_camera: RenderPipelineState,
     pso_camera_legacy: RenderPipelineState,
     pso_camera_preview_fast_full: RenderPipelineState,
@@ -1007,7 +1012,11 @@ pub struct MetalRenderer {
     id_mask_targets: alloc::vec::Vec<Option<id_mask_gpu::RenderTargets>>,
     id_mask_vertex_caches: alloc::vec::Vec<IdMaskVertexUploadCache>,
     images: HashMap<u32, Texture>,
+    image_generations: HashMap<u32, u64>,
     next_image_id: u32,
+    prepared_chunks: prepared::PreparedChunkCache,
+    prepared_frame_plan: alloc::vec::Vec<prepared::PreparedFrameInstance>,
+    prepared_fallback: api::DrawList,
     meshes_3d: HashMap<u32, Mesh3dGpu>,
     next_mesh3d_id: u32,
     layers: HashMap<u32, LayerEntry>,
@@ -1016,6 +1025,7 @@ pub struct MetalRenderer {
     inline_layer_counter_active: bool,
     last_stats: PerfStats,
     acc_draws: u32,
+    acc_flat_instanced_draws: u32,
     acc_instanced: u32,
     acc_icb_cmds: u32,
     acc_commands_traversed: u64,
@@ -1863,6 +1873,18 @@ impl MetalRenderer {
         let pso_neon_marker = build_init_stage("pso.neon_marker", || {
             neon_marker_gpu::build_pso(&device, &library, color_format)
         })?;
+        let prepared_pipelines = if direct_preview_only {
+            None
+        } else {
+            Some(build_init_stage("pso.prepared", || {
+                prepared::PreparedPipelines::new(
+                    &device,
+                    &library,
+                    color_format,
+                    sample_count,
+                )
+            })?)
+        };
         let depth_state_3d_disabled =
             build_depth_stencil_state(&device, false, false, "depth.scene3d.disabled");
         let depth_state_3d_read =
@@ -1975,9 +1997,11 @@ impl MetalRenderer {
             None
         };
         let gpu_stage_timing = GpuStageTimingSupport::new(&device);
+        let device_generation = NEXT_DEVICE_GENERATION.fetch_add(1, Ordering::Relaxed);
 
         Ok(Self {
             device,
+            device_generation,
             queue,
             pso_solid,
             pso_image,
@@ -2003,6 +2027,7 @@ impl MetalRenderer {
             pso_layer_text,
             pso_text_sdf,
             pso_layer_text_sdf,
+            prepared_pipelines,
             pso_camera,
             pso_camera_legacy,
             pso_camera_preview_fast_full,
@@ -2085,7 +2110,11 @@ impl MetalRenderer {
             id_mask_targets: (0..frame_resource_depth).map(|_| None).collect(),
             id_mask_vertex_caches: alloc::vec::Vec::new(),
             images: HashMap::new(),
+            image_generations: HashMap::new(),
             next_image_id: 1,
+            prepared_chunks: prepared::PreparedChunkCache::default(),
+            prepared_frame_plan: alloc::vec::Vec::new(),
+            prepared_fallback: api::DrawList::default(),
             meshes_3d: HashMap::new(),
             next_mesh3d_id: 1,
             layers: HashMap::new(),
@@ -2094,6 +2123,7 @@ impl MetalRenderer {
             inline_layer_counter_active: false,
             last_stats: PerfStats::default(),
             acc_draws: 0,
+            acc_flat_instanced_draws: 0,
             acc_instanced: 0,
             acc_icb_cmds: 0,
             acc_commands_traversed: 0,
@@ -2833,6 +2863,42 @@ impl MetalRenderer {
         self.scene3d_bloom_tmp_tex = None;
     }
 
+   /// Returns the hard allocated-byte budget for persistent prepared chunks.
+   pub fn prepared_cache_budget_bytes(&self) -> u64
+   {
+      self.prepared_chunks.budget_bytes()
+   }
+
+   /// Applies a new hard prepared-chunk budget and evicts cold entries immediately.
+   pub fn set_prepared_cache_budget_bytes(&mut self, budget_bytes: u64)
+   {
+      self.prepared_chunks.set_budget_bytes(budget_bytes);
+   }
+
+   /// Returns Metal-allocated bytes currently retained by prepared chunk buffers.
+   pub fn prepared_cache_resident_bytes(&self) -> u64
+   {
+      self.prepared_chunks.resident_bytes()
+   }
+
+   /// Returns the number of chunk versions admitted to the prepared cache.
+   pub fn prepared_cache_entry_count(&self) -> usize
+   {
+      self.prepared_chunks.len()
+   }
+
+   /// Releases every prepared chunk, including resource tables and immutable geometry.
+   pub fn purge_prepared_chunks(&mut self)
+   {
+      self.prepared_chunks.clear();
+   }
+
+   /// Returns the current renderer-owned generation for an image or glyph atlas.
+   pub fn image_generation(&self, handle: api::ImageHandle) -> Option<u64>
+   {
+      self.image_generations.get(&handle.0).copied()
+   }
+
     #[allow(dead_code)]
     fn ensure_scene3d_bloom_targets(&mut self, downsample_divisor: u32) {
         if self.target_w == 0 || self.target_h == 0 {
@@ -2906,6 +2972,7 @@ impl MetalRenderer {
         let id = self.next_image_id;
         self.next_image_id = self.next_image_id.wrapping_add(1).max(1);
         self.images.insert(id, tex);
+        self.image_generations.insert(id, 1);
         api::ImageHandle(id)
     }
 
@@ -2930,6 +2997,9 @@ impl MetalRenderer {
                 .last_stats
                 .texture_upload_bytes
                 .saturating_add(data.len() as u64);
+            self.prepared_chunks.invalidate_resource(handle);
+            let generation = self.image_generations.entry(handle.0).or_insert(0);
+            *generation = generation.saturating_add(1);
         }
     }
 
@@ -2962,6 +3032,7 @@ impl MetalRenderer {
         let id = self.next_image_id;
         self.next_image_id = self.next_image_id.wrapping_add(1).max(1);
         self.images.insert(id, tex);
+        self.image_generations.insert(id, 1);
         api::ImageHandle(id)
     }
 
@@ -2986,11 +3057,16 @@ impl MetalRenderer {
                 .last_stats
                 .texture_upload_bytes
                 .saturating_add(data.len() as u64);
+            self.prepared_chunks.invalidate_resource(handle);
+            let generation = self.image_generations.entry(handle.0).or_insert(0);
+            *generation = generation.saturating_add(1);
         }
     }
 
     pub fn image_release(&mut self, handle: api::ImageHandle) {
         if self.images.remove(&handle.0).is_some() {
+            self.prepared_chunks.invalidate_resource(handle);
+            self.image_generations.remove(&handle.0);
             self.last_stats.cache_evictions = self.last_stats.cache_evictions.saturating_add(1);
         }
     }
@@ -3449,6 +3525,7 @@ impl MetalRenderer {
         let cpu_t0 = collect_stage_stats.then(Instant::now);
         self.frame_id = self.frame_id.wrapping_add(1);
         self.acc_draws = 0;
+        self.acc_flat_instanced_draws = 0;
         self.acc_instanced = 0;
         self.acc_icb_cmds = 0;
         self.img_arg_used = 0;
@@ -5133,6 +5210,7 @@ impl api::Renderer for MetalRenderer {
             self.frames[slot].prepare_for_encode();
         }
         self.acc_draws = 0;
+        self.acc_flat_instanced_draws = 0;
         self.acc_instanced = 0;
         self.acc_icb_cmds = 0;
         self.img_arg_used = 0;
@@ -6185,7 +6263,7 @@ impl api::Renderer for MetalRenderer {
         self.last_stats.vb_bytes = self.frames[slot].vb_used as u64;
         self.last_stats.ub_bytes = self.frames[slot].ub_used as u64;
         self.last_stats.ib_bytes = self.frames[slot].ib_used as u64;
-        self.last_stats.draws = self.acc_draws;
+        self.last_stats.draws = self.acc_draws.saturating_add(self.acc_flat_instanced_draws);
         self.last_stats.instanced = self.acc_instanced;
         self.last_stats.icb_cmds = self.acc_icb_cmds;
         if self.accounting_stats_enabled {
@@ -6240,7 +6318,8 @@ impl api::Renderer for MetalRenderer {
                 .memory
                 .layer_cache_bytes
                 .saturating_add(self.last_stats.memory.image_cache_bytes)
-                .saturating_add(self.last_stats.memory.id_mask_vertex_buffer_bytes);
+                .saturating_add(self.last_stats.memory.id_mask_vertex_buffer_bytes)
+                .saturating_add(self.last_stats.memory.prepared_cache_bytes);
         }
         self.last_stats.encode_ms = cpu_t0.elapsed().as_secs_f64() * 1000.0;
         self.last_stats.damage_px = self.frame_damage_px;
@@ -6373,7 +6452,8 @@ impl api::Renderer for MetalRenderer {
                 .memory
                 .layer_cache_bytes
                 .saturating_add(self.last_stats.memory.image_cache_bytes)
-                .saturating_add(self.last_stats.memory.id_mask_vertex_buffer_bytes);
+                .saturating_add(self.last_stats.memory.id_mask_vertex_buffer_bytes)
+                .saturating_add(self.last_stats.memory.prepared_cache_bytes);
         }
         if let Some(cmd) = self.frames[slot].cmd.take() {
             let frame_id = self.frame_id;
@@ -7075,7 +7155,7 @@ fn encode_draws_range(
                 let pipeline = if r.encoding_layer { &r.pso_layer_rrect } else { &r.pso_rrect };
                 enc.set_render_pipeline_state(pipeline);
                 let mut j = i;
-                let emitted = {
+                let (emitted, draw_calls) = {
                     let vbuf = &mut r.rrect_vbuf;
                     let fbuf = &mut r.rrect_fbuf;
                     vbuf.clear();
@@ -7125,8 +7205,9 @@ fn encode_draws_range(
                         emitted += end - start;
                         start = end;
                     }
-                    emitted
+                    (emitted, count.div_ceil(max_batch))
                 };
+                r.acc_flat_instanced_draws = r.acc_flat_instanced_draws.saturating_add(draw_calls as u32);
                 r.acc_instanced = r.acc_instanced.saturating_add(emitted as u32);
                 i = j;
                 continue;
@@ -7544,6 +7625,7 @@ fn encode_draws_range(
                     emitted += end - start;
                     start = end;
                 }
+                r.acc_flat_instanced_draws = r.acc_flat_instanced_draws.saturating_add(count.div_ceil(max_batch) as u32);
                 r.acc_instanced += emitted as u32;
                 i = j;
                 continue;
@@ -9315,6 +9397,7 @@ pub struct PerfMemoryStats {
     pub image_cache_bytes: u64,
     pub scene3d_mesh_buffer_bytes: u64,
     pub id_mask_vertex_buffer_bytes: u64,
+    pub prepared_cache_bytes: u64,
     pub frame_ring_buffer_bytes: u64,
     pub vertex_buffer_bytes: u64,
     pub index_buffer_bytes: u64,
@@ -9664,10 +9747,12 @@ impl MetalRenderer {
                 .values()
                 .flat_map(|mesh| [mesh.vb.as_ref(), mesh.ib.as_ref()]),
         );
+        let prepared_cache_bytes = self.prepared_chunks.resident_bytes();
         let buffer_bytes = frame_ring_buffer_bytes
             .saturating_add(argument_buffer_bytes)
             .saturating_add(id_mask_vertex_buffer_bytes)
-            .saturating_add(scene3d_mesh_buffer_bytes);
+            .saturating_add(scene3d_mesh_buffer_bytes)
+            .saturating_add(prepared_cache_bytes);
         drop(buffer_seen);
         let total_bytes = draw_targets_bytes
             .saturating_add(effect_targets_bytes)
@@ -9766,6 +9851,9 @@ impl MetalRenderer {
             );
         }
         let logical_buffer_bytes = logical_total_bytes.saturating_sub(logical_texture_bytes);
+        let logical_buffer_bytes = logical_buffer_bytes
+            .saturating_add(self.prepared_chunks.logical_resident_bytes());
+        let logical_total_bytes = logical_texture_bytes.saturating_add(logical_buffer_bytes);
         drop(logical_buffer_seen);
         let cpu_staging_bytes = (self.rrect_vbuf.capacity() as u64)
             .saturating_mul(core::mem::size_of::<f32>() as u64)
@@ -9828,6 +9916,7 @@ impl MetalRenderer {
             image_cache_bytes,
             scene3d_mesh_buffer_bytes,
             id_mask_vertex_buffer_bytes,
+            prepared_cache_bytes,
             frame_ring_buffer_bytes,
             vertex_buffer_bytes,
             index_buffer_bytes,

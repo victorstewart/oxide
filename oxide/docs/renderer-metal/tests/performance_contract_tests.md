@@ -35,7 +35,7 @@ This test file protects renderer performance contracts that are easy to regress 
 - `layer_cache_uses_one_plan_and_reports_single_ownership()`
   Freezes the generation-based plan, nested invalidation, same-size texture reuse, one materialization site, and public ownership counters.
 - `layer_cache_clean_and_dirty_frames_have_single_body_owner()`
-  Submits missing, clean, and dirty frames on macOS and proves clean frames only composite while refresh frames render one offscreen body, reuse same-size textures, and never inline the same body.
+  Submits missing, clean, and dirty frames on macOS and proves clean frames only composite while refresh frames render one offscreen body, reuse same-size textures, never inline the same body, and report GPU draw calls separately from instanced primitives.
 - `dirty_nested_child_refreshes_its_cached_parent_once()`
   Proves a dirty child invalidates and refreshes both retained nesting levels once, while the intervening clean frame skips both bodies.
 - `metal_draw_cmd_debug_capture_names_are_frozen()`

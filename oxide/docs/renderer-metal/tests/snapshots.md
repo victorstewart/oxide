@@ -12,6 +12,7 @@ The snapshot tests validate renderer behavior through readback instead of relyin
 - Solid packed red/blue endpoints, midpoint interpolation, and byte-identical zero-rgba uniform inheritance.
 - Mixed `scene3d` plus 2D overlay composition in the same frame.
 - Optimized NV12 camera preview parity against the synthetic BGRA benchmark reference.
+- Persistent prepared-snapshot parity across RRects, images, A8 glyphs, solids, clips, dynamic transform/opacity through the frame uniform ring, opaque fractional raster edges, one-dirty rebuilding, byte-budget eviction, resource generations, explicit purge, and flat fallback accounting.
 
 The pure 2D tests assert Oxide's default opaque black Metal clear on untouched pixels. Snapshot-runner component goldens that need white backgrounds draw that background explicitly in their own draw lists.
 
@@ -44,7 +45,7 @@ The test submits one bounded frame and uses synchronous readback only in the tes
 
 ## Performance notes
 
-Readback is verification-only and never enters the production frame loop.
+Readback is verification-only and never enters the production frame loop. Prepared clean replay assertions require zero command traversal, geometry copy, buffer upload, and frame-ring VB/IB/UB use; the one-dirty case requires three hits, one miss, and only the changed chunk's upload.
 
 ## Feature flags and cfgs
 
@@ -56,4 +57,5 @@ Run the named test with `cargo test --locked -p oxide-renderer-metal --features 
 
 ## Changelog
 
+- 2026-07-13: added exact prepared-versus-flat mixed and fractional opaque pixels, dynamic-property reuse, one-dirty, LRU/purge, generation invalidation, and fallback-work coverage.
 - 2026-07-12: added packed endpoint/interpolation and zero-rgba byte-identity coverage.

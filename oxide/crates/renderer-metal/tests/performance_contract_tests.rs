@@ -338,7 +338,7 @@ fn layer_cache_clean_and_dirty_frames_have_single_body_owner()
          assert_eq!(stats.layer_cache_misses, 0);
          assert_eq!(stats.layer_offscreen_draws, 0);
          assert_eq!(stats.layer_double_render_prevented, 0);
-         assert_eq!(stats.draws + stats.instanced, 1);
+         assert_eq!((stats.draws, stats.instanced), (1, 0));
       }
       else
       {
@@ -348,7 +348,7 @@ fn layer_cache_clean_and_dirty_frames_have_single_body_owner()
          assert_eq!(stats.layer_cache_misses, 1);
          assert_eq!(stats.layer_offscreen_draws, 1);
          assert_eq!(stats.layer_double_render_prevented, 1);
-         assert_eq!(stats.draws + stats.instanced, 2);
+         assert_eq!((stats.draws, stats.instanced), (2, 1));
       }
    }
 

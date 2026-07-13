@@ -121,6 +121,460 @@ fn snapshot_rrect_instanced_batch_draws_consecutive_rects() {
 }
 
 #[test]
+fn prepared_snapshot_reuses_mixed_buffers_and_matches_flat_output()
+{
+   let width = 128_u32;
+   let height = 96_u32;
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(width, height, 1.0).expect("resize");
+   let image = renderer.image_create_rgba8(
+      2,
+      2,
+      &[
+         0, 0, 255, 255, 0, 255, 0, 255,
+         255, 0, 0, 255, 255, 255, 255, 255,
+      ],
+      8,
+   );
+   let atlas = renderer.image_create_a8(2, 2, &[255, 255, 255, 255], 2);
+   let snapshot = prepared_mixed_snapshot(image, atlas, 1);
+   let updated_snapshot = prepared_mixed_snapshot_with_properties(
+      image,
+      atlas,
+      1,
+      [1.0, 0.0, 0.0, 1.0, 5.0, 3.0],
+      0.5,
+   );
+
+   let first = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot).expect("encode first prepared snapshot");
+   renderer.submit(first).expect("submit first prepared snapshot");
+   let first_stats = renderer.last_stats();
+   let (_, _, first_pixels) = renderer.readback_bgra8().expect("read first prepared snapshot");
+   assert_eq!(first_stats.backend_cache_hits, 0);
+   assert_eq!(first_stats.backend_cache_misses, 4);
+   assert_eq!(first_stats.chunks_prepared, 4);
+   assert!(first_stats.buffer_upload_bytes > 0);
+   assert!(renderer.prepared_cache_resident_bytes() > 0);
+   assert_eq!(first_stats.memory.prepared_cache_bytes, renderer.prepared_cache_resident_bytes());
+
+   let second = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&updated_snapshot).expect("encode dynamic prepared snapshot");
+   renderer.submit(second).expect("submit clean prepared snapshot");
+   let second_stats = renderer.last_stats();
+   let (_, _, second_pixels) = renderer.readback_bgra8().expect("read clean prepared snapshot");
+   assert_ne!(first_pixels, second_pixels);
+   assert_eq!(second_stats.backend_cache_hits, 4);
+   assert_eq!(second_stats.backend_cache_misses, 0);
+   assert_eq!(second_stats.chunks_prepared, 0);
+   assert_eq!(second_stats.commands_traversed, 0);
+   assert_eq!(second_stats.geometry_bytes_copied, 0);
+   assert_eq!(second_stats.buffer_upload_bytes, 0);
+   assert_eq!(second_stats.vb_bytes, 0);
+   assert_eq!(second_stats.ib_bytes, 0);
+   assert_eq!(second_stats.ub_bytes, 4 * 48);
+
+   let mut flat = api::DrawList::default();
+   updated_snapshot.flatten_into(&mut flat).expect("flatten prepared reference");
+   let mut reference = MetalRenderer::new_default().expect("reference metal");
+   reference.resize(width, height, 1.0).expect("reference resize");
+   let reference_image = reference.image_create_rgba8(
+      2,
+      2,
+      &[
+         0, 0, 255, 255, 0, 255, 0, 255,
+         255, 0, 0, 255, 255, 255, 255, 255,
+      ],
+      8,
+   );
+   let reference_atlas = reference.image_create_a8(2, 2, &[255, 255, 255, 255], 2);
+   assert_eq!((reference_image, reference_atlas), (image, atlas));
+   let token = reference.begin_frame(&api::FrameTarget, None);
+   reference.encode_pass(&flat);
+   reference.submit(token).expect("submit flat reference");
+   let (_, _, reference_pixels) = reference.readback_bgra8().expect("read flat reference");
+   assert_eq!(second_pixels, reference_pixels);
+}
+
+#[test]
+fn prepared_opaque_rects_match_fractionally_translated_flat_output()
+{
+   let width = 128_u32;
+   let height = 96_u32;
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(width, height, 1.0).expect("resize");
+   let image = renderer.image_create_rgba8(2, 2, &[255; 16], 8);
+   let snapshot = prepared_fractional_opaque_snapshot(image);
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot).expect("encode fractional prepared snapshot");
+   renderer.submit(token).expect("submit fractional prepared snapshot");
+   let prepared_stats = renderer.last_stats();
+   let (_, _, prepared_pixels) = renderer.readback_bgra8().expect("read fractional prepared snapshot");
+
+   let mut flat = api::DrawList::default();
+   snapshot.flatten_into(&mut flat).expect("flatten fractional reference");
+   let mut reference = MetalRenderer::new_default().expect("reference metal");
+   reference.resize(width, height, 1.0).expect("reference resize");
+   let reference_image = reference.image_create_rgba8(2, 2, &[255; 16], 8);
+   assert_eq!(reference_image, image);
+   let token = reference.begin_frame(&api::FrameTarget, None);
+   reference.encode_pass(&flat);
+   reference.submit(token).expect("submit fractional flat reference");
+   let reference_stats = reference.last_stats();
+   let (_, _, reference_pixels) = reference.readback_bgra8().expect("read fractional flat reference");
+   assert_eq!(prepared_pixels, reference_pixels);
+   assert_eq!((prepared_stats.draws, prepared_stats.instanced), (2, 128));
+   assert_eq!((reference_stats.draws, reference_stats.instanced), (2, 128));
+}
+
+#[test]
+fn prepared_snapshot_rebuilds_only_the_dirty_chunk()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(128, 96, 1.0).expect("resize");
+   let image = renderer.image_create_rgba8(2, 2, &[255; 16], 8);
+   let atlas = renderer.image_create_a8(2, 2, &[255; 4], 2);
+   let warm = prepared_mixed_snapshot(image, atlas, 1);
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&warm).expect("warm prepared snapshot");
+   renderer.submit(token).expect("submit warm snapshot");
+   let _ = renderer.readback_bgra8().expect("drain warm snapshot");
+   assert_eq!(renderer.prepared_cache_entry_count(), 4);
+
+   let dirty = prepared_mixed_snapshot(image, atlas, 2);
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&dirty).expect("encode one dirty chunk");
+   renderer.submit(token).expect("submit one dirty chunk");
+   let stats = renderer.last_stats();
+   let _ = renderer.readback_bgra8().expect("drain dirty snapshot");
+   assert_eq!(stats.backend_cache_hits, 3);
+   assert_eq!(stats.backend_cache_misses, 1);
+   assert_eq!(stats.chunks_prepared, 1);
+   assert_eq!(stats.commands_traversed, 3);
+   assert!(stats.buffer_upload_bytes > 0);
+   assert_eq!(renderer.prepared_cache_entry_count(), 4);
+}
+
+#[test]
+fn prepared_snapshot_byte_budget_evicts_lru_chunks()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(64, 64, 1.0).expect("resize");
+   let first = prepared_rrect_snapshot(911, 4.0);
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&first).expect("prepare first chunk");
+   renderer.submit(token).expect("submit first chunk");
+   let _ = renderer.readback_bgra8().expect("drain first chunk");
+   let one_chunk_bytes = renderer.prepared_cache_resident_bytes();
+   assert!(one_chunk_bytes > 0);
+   renderer.set_prepared_cache_budget_bytes(one_chunk_bytes);
+
+   let second = prepared_rrect_snapshot(912, 24.0);
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&second).expect("prepare second chunk");
+   renderer.submit(token).expect("submit second chunk");
+   let stats = renderer.last_stats();
+   let _ = renderer.readback_bgra8().expect("drain second chunk");
+   assert_eq!(renderer.prepared_cache_entry_count(), 1);
+   assert!(renderer.prepared_cache_resident_bytes() <= one_chunk_bytes);
+   assert_eq!(stats.cache_evictions, 1);
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&first).expect("reprepare evicted first chunk");
+   renderer.submit(token).expect("submit reprepared first chunk");
+   let stats = renderer.last_stats();
+   let _ = renderer.readback_bgra8().expect("drain reprepared first chunk");
+   assert_eq!(stats.backend_cache_hits, 0);
+   assert_eq!(stats.backend_cache_misses, 1);
+   assert_eq!(stats.chunks_prepared, 1);
+   assert_eq!(renderer.prepared_cache_entry_count(), 1);
+
+   renderer.purge_prepared_chunks();
+   assert_eq!(renderer.prepared_cache_entry_count(), 0);
+   assert_eq!(renderer.prepared_cache_resident_bytes(), 0);
+}
+
+#[test]
+fn prepared_snapshot_fallback_reports_exact_flattened_work()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(64, 64, 1.0).expect("resize");
+   let chunk = api::RenderChunk::new(
+      api::RenderChunkId(914),
+      api::RenderChunkRevisions::default(),
+      api::DrawList {
+         items: vec![api::DrawCmd::Spinner { center: [32.0, 32.0], atom: 12.0, alpha: 1.0 }],
+         ..api::DrawList::default()
+      },
+      api::ChunkIndexMode::Local,
+      &[],
+   ).expect("spinner chunk");
+   let snapshot = api::RenderSnapshot::new(
+      vec![api::RenderChunkInstance::new(chunk, [0.0, 0.0])],
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("spinner snapshot");
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot).expect("encode flat fallback");
+   renderer.submit(token).expect("submit flat fallback");
+   let stats = renderer.last_stats();
+   let _ = renderer.readback_bgra8().expect("drain flat fallback");
+   assert_eq!(stats.commands_copied, 1);
+   assert_eq!(stats.geometry_bytes_copied, 0);
+   assert_eq!(stats.backend_cache_hits, 0);
+   assert_eq!(stats.backend_cache_misses, 0);
+   assert_eq!(renderer.prepared_cache_entry_count(), 0);
+}
+
+#[test]
+fn prepared_snapshot_invalidates_referenced_resource_generations()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(64, 64, 1.0).expect("resize");
+   let image = renderer.image_create_rgba8(2, 2, &[255; 16], 8);
+   let first = prepared_image_snapshot(image, 1);
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&first).expect("prepare image generation one");
+   renderer.submit(token).expect("submit generation one");
+   let _ = renderer.readback_bgra8().expect("drain generation one");
+   assert_eq!(renderer.prepared_cache_entry_count(), 1);
+
+   renderer.image_update_rgba8(image, 0, 0, 2, 2, &[0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255], 8);
+   assert_eq!(renderer.image_generation(image), Some(2));
+   assert_eq!(renderer.prepared_cache_entry_count(), 0);
+   assert_eq!(renderer.prepared_cache_resident_bytes(), 0);
+
+   let second = prepared_image_snapshot(image, 2);
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&second).expect("prepare image generation two");
+   renderer.submit(token).expect("submit generation two");
+   let stats = renderer.last_stats();
+   let _ = renderer.readback_bgra8().expect("drain generation two");
+   assert_eq!(stats.backend_cache_hits, 0);
+   assert_eq!(stats.backend_cache_misses, 1);
+   assert_eq!(stats.chunks_prepared, 1);
+   assert_eq!(stats.cache_evictions, 1);
+   assert_eq!(renderer.prepared_cache_entry_count(), 1);
+}
+
+fn prepared_image_snapshot(image: api::ImageHandle, generation: u64) -> api::RenderSnapshot
+{
+   let chunk = api::RenderChunk::new(
+      api::RenderChunkId(913),
+      api::RenderChunkRevisions { resource: generation, ..api::RenderChunkRevisions::default() },
+      api::DrawList {
+         items: vec![api::DrawCmd::Image {
+            tex: image,
+            dst: api::RectF::new(8.0, 8.0, 32.0, 32.0),
+            src: api::RectF::new(0.0, 0.0, 2.0, 2.0),
+            alpha: 1.0,
+         }],
+         ..api::DrawList::default()
+      },
+      api::ChunkIndexMode::Local,
+      &[api::RenderResourceDependency { image, generation }],
+   ).expect("image chunk");
+   api::RenderSnapshot::new(
+      vec![api::RenderChunkInstance::new(chunk, [0.0, 0.0])],
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("image snapshot")
+}
+
+fn prepared_fractional_opaque_snapshot(image: api::ImageHandle) -> api::RenderSnapshot
+{
+   let mut rrects = api::DrawList::default();
+   let mut images = api::DrawList::default();
+   for index in 0..64_u32
+   {
+      let rect = api::RectF::new(index as f32 * 0.75, 0.0, 0.625, 28.0);
+      rrects.items.push(api::DrawCmd::RRect {
+         rect,
+         radii: [0.25; 4],
+         color: api::Color::rgba(0.2, 0.6, 0.9, 1.0),
+      });
+      images.items.push(api::DrawCmd::Image {
+         tex: image,
+         dst: rect,
+         src: api::RectF::new(0.0, 0.0, 2.0, 2.0),
+         alpha: 1.0,
+      });
+   }
+   let rrects = api::RenderChunk::new(
+      api::RenderChunkId(915),
+      api::RenderChunkRevisions::default(),
+      rrects,
+      api::ChunkIndexMode::Local,
+      &[],
+   ).expect("fractional rrect chunk");
+   let images = api::RenderChunk::new(
+      api::RenderChunkId(916),
+      api::RenderChunkRevisions { resource: 1, ..api::RenderChunkRevisions::default() },
+      images,
+      api::ChunkIndexMode::Local,
+      &[api::RenderResourceDependency { image, generation: 1 }],
+   ).expect("fractional image chunk");
+   let mut instances = vec![
+      api::RenderChunkInstance::new(rrects, [8.0, 8.0]),
+      api::RenderChunkInstance::new(images, [8.0, 48.0]),
+   ];
+   for instance in &mut instances
+   {
+      instance.property_slots = vec![api::RenderPropertySlotId(1)].into();
+   }
+   api::RenderSnapshot::new(
+      instances,
+      vec![api::RenderPropertySlot {
+         id: api::RenderPropertySlotId(1),
+         revision: 1,
+         value: api::RenderPropertyValue::Transform([1.0, 0.0, 0.0, 1.0, 0.25, 0.0]),
+      }],
+      api::Damage { rects: Vec::new() },
+   ).expect("fractional opaque snapshot")
+}
+
+fn prepared_rrect_snapshot(id: u64, x: f32) -> api::RenderSnapshot
+{
+   let chunk = api::RenderChunk::new(
+      api::RenderChunkId(id),
+      api::RenderChunkRevisions::default(),
+      api::DrawList {
+         items: vec![api::DrawCmd::RRect {
+            rect: api::RectF::new(x, 8.0, 24.0, 24.0),
+            radii: [4.0; 4],
+            color: api::Color::rgba(0.2, 0.6, 0.9, 1.0),
+         }],
+         ..api::DrawList::default()
+      },
+      api::ChunkIndexMode::Local,
+      &[],
+   ).expect("rrect chunk");
+   api::RenderSnapshot::new(
+      vec![api::RenderChunkInstance::new(chunk, [0.0, 0.0])],
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("rrect snapshot")
+}
+
+fn prepared_mixed_snapshot(image: api::ImageHandle, atlas: api::ImageHandle, geometry_revision: u64) -> api::RenderSnapshot
+{
+   prepared_mixed_snapshot_with_properties(
+      image,
+      atlas,
+      geometry_revision,
+      [1.0, 0.0, 0.0, 1.0, 2.0, 1.0],
+      0.75,
+   )
+}
+
+fn prepared_mixed_snapshot_with_properties(image: api::ImageHandle, atlas: api::ImageHandle, geometry_revision: u64, transform: [f32; 6], opacity: f32) -> api::RenderSnapshot
+{
+   let rrect = api::RenderChunk::new(
+      api::RenderChunkId(901),
+      api::RenderChunkRevisions { geometry: geometry_revision, ..api::RenderChunkRevisions::default() },
+      api::DrawList {
+         items: vec![
+            api::DrawCmd::ClipPush { rect: api::RectI::new(0, 0, 46, 40) },
+            api::DrawCmd::RRect {
+               rect: api::RectF::new(0.0, 0.0, 52.0, 34.0),
+               radii: [6.0; 4],
+               color: api::Color::rgba(0.9, 0.2, 0.1, 1.0),
+            },
+            api::DrawCmd::ClipPop,
+         ],
+         ..api::DrawList::default()
+      },
+      api::ChunkIndexMode::Local,
+      &[],
+   ).expect("rrect chunk");
+   let image_chunk = api::RenderChunk::new(
+      api::RenderChunkId(902),
+      api::RenderChunkRevisions { resource: 1, ..api::RenderChunkRevisions::default() },
+      api::DrawList {
+         items: vec![api::DrawCmd::Image {
+            tex: image,
+            dst: api::RectF::new(50.0, 4.0, 32.0, 32.0),
+            src: api::RectF::new(0.0, 0.0, 2.0, 2.0),
+            alpha: 0.8,
+         }],
+         ..api::DrawList::default()
+      },
+      api::ChunkIndexMode::Local,
+      &[api::RenderResourceDependency { image, generation: 1 }],
+   ).expect("image chunk");
+   let glyph_chunk = api::RenderChunk::new(
+      api::RenderChunkId(903),
+      api::RenderChunkRevisions { resource: 1, geometry: 1, ..api::RenderChunkRevisions::default() },
+      api::DrawList {
+         items: vec![api::DrawCmd::GlyphRun { run: api::GlyphRun {
+            atlas,
+            atlas_revision: 1,
+            vb: api::VertexSpan { offset: 0, len: 4 },
+            ib: api::IndexSpan { offset: 0, len: 6 },
+            sdf: false,
+            color: api::Color::rgba(0.2, 0.8, 1.0, 1.0),
+         }}],
+         vertices: vec![
+            api::Vertex { x: 6.0, y: 50.0, u: 0.0, v: 0.0, rgba: 0 },
+            api::Vertex { x: 38.0, y: 50.0, u: 1.0, v: 0.0, rgba: 0 },
+            api::Vertex { x: 38.0, y: 82.0, u: 1.0, v: 1.0, rgba: 0 },
+            api::Vertex { x: 6.0, y: 82.0, u: 0.0, v: 1.0, rgba: 0 },
+         ],
+         indices: vec![0, 1, 2, 0, 2, 3],
+      },
+      api::ChunkIndexMode::Local,
+      &[api::RenderResourceDependency { image: atlas, generation: 1 }],
+   ).expect("glyph chunk");
+   let solid_chunk = api::RenderChunk::new(
+      api::RenderChunkId(904),
+      api::RenderChunkRevisions { geometry: 1, ..api::RenderChunkRevisions::default() },
+      api::DrawList {
+         items: vec![api::DrawCmd::Solid {
+            vb: api::VertexSpan { offset: 0, len: 3 },
+            ib: api::IndexSpan { offset: 0, len: 3 },
+            color: api::Color::rgba(0.9, 0.8, 0.1, 1.0),
+         }],
+         vertices: vec![
+            api::Vertex { x: 88.0, y: 50.0, u: 0.0, v: 0.0, rgba: 0 },
+            api::Vertex { x: 118.0, y: 82.0, u: 0.0, v: 0.0, rgba: 0 },
+            api::Vertex { x: 82.0, y: 82.0, u: 0.0, v: 0.0, rgba: 0 },
+         ],
+         indices: vec![0, 1, 2],
+      },
+      api::ChunkIndexMode::Local,
+      &[],
+   ).expect("solid chunk");
+   let mut instances = vec![
+      api::RenderChunkInstance::new(rrect, [4.0, 3.0]),
+      api::RenderChunkInstance::new(image_chunk, [0.0, 0.0]),
+      api::RenderChunkInstance::new(glyph_chunk, [0.0, 0.0]),
+      api::RenderChunkInstance::new(solid_chunk, [0.0, 0.0]),
+   ];
+   for instance in &mut instances
+   {
+      instance.property_slots = vec![api::RenderPropertySlotId(1), api::RenderPropertySlotId(2)].into();
+   }
+   api::RenderSnapshot::new(
+      instances,
+      vec![
+         api::RenderPropertySlot {
+            id: api::RenderPropertySlotId(1),
+            revision: u64::from(transform != [1.0, 0.0, 0.0, 1.0, 2.0, 1.0]),
+            value: api::RenderPropertyValue::Transform(transform),
+         },
+         api::RenderPropertySlot {
+            id: api::RenderPropertySlotId(2),
+            revision: u64::from(opacity != 0.75),
+            value: api::RenderPropertyValue::Opacity(opacity),
+         },
+      ],
+      api::Damage { rects: Vec::new() },
+   ).expect("prepared snapshot")
+}
+
+#[test]
 fn snapshot_clip_push_pop_scopes_draws() {
     let mut renderer = MetalRenderer::new_default().expect("metal");
     let width = 128u32;

@@ -253,8 +253,302 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       }
    }
 
+   for dirty in [false, true]
+   {
+      let name = if dirty { "one_dirty" } else { "clean_mixed" };
+      let id = format!("gpu.architecture.prepared_chunks.{name}");
+      if perf_case_allowed(&id)
+      {
+         cases.push(metal_prepared_chunk_case(&id, smoke, dirty)?);
+      }
+   }
+
    push_if_allowed(cases, "cpu.architecture.idle.static_foreground", || idle_case(smoke));
    Ok(())
+}
+
+pub(super) fn metal_prepared_chunk_case(id: &str, smoke: bool, dirty: bool) -> Result<PerfCaseResult>
+{
+   let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
+   renderer.resize(1_200, 800, 1.0).context("resizing Metal renderer")?;
+   let image = renderer.image_create_rgba8(2, 2, &[255; 16], 8);
+   let atlas = renderer.image_create_a8(2, 2, &[255; 4], 2);
+   let snapshot_a = prepared_chunk_snapshot(image, atlas, 1, [0.0, 0.0]);
+   let snapshot_b = prepared_chunk_snapshot(image, atlas, if dirty { 2 } else { 1 }, [0.25, 0.0]);
+   let flat_control = std::env::var_os("OXIDE_C24_FLAT_CONTROL").is_some();
+   let mut flat_a = api::DrawList::default();
+   let mut flat_b = api::DrawList::default();
+   if flat_control
+   {
+      snapshot_a.flatten_into(&mut flat_a).context("flattening C24 control A")?;
+      snapshot_b.flatten_into(&mut flat_b).context("flattening C24 control B")?;
+   }
+   let warmups = std::env::var("OXIDE_ARCHITECTURE_METAL_WARMUPS")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|warmups| *warmups > 0)
+      .unwrap_or(if smoke { 2 } else { 8 });
+   let frames = std::env::var("OXIDE_ARCHITECTURE_METAL_FRAMES")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|frames| *frames > 0)
+      .unwrap_or(if smoke { 4 } else { 24 });
+   let raw_samples = std::env::var_os("OXIDE_C24_RAW_SAMPLES").is_some();
+   let mut warmup_frame_samples = Vec::with_capacity(if raw_samples { warmups } else { 0 });
+   let mut warmup_encode_samples = Vec::with_capacity(if raw_samples { warmups } else { 0 });
+   let mut warmup_gpu_samples = Vec::with_capacity(if raw_samples { warmups } else { 0 });
+   let mut frame_samples = Vec::with_capacity(frames);
+   let mut encode_samples = Vec::with_capacity(frames);
+   let mut gpu_samples = Vec::with_capacity(frames);
+   let mut uploads = 0_u64;
+   let mut dynamic_uniform_uploads = 0_u64;
+   let mut geometry_copied = 0_u64;
+   let mut commands_traversed = 0_u64;
+   let mut draws = 0_u64;
+   let mut binds = 0_u64;
+   let mut hits = 0_u64;
+   let mut misses = 0_u64;
+   let mut prepared = 0_u64;
+   let mut reused = 0_u64;
+   let mut evictions = 0_u64;
+   let mut prepared_bytes_peak = 0_u64;
+   let mut renderer_bytes_peak = 0_u64;
+
+   for frame in 0..(warmups + frames)
+   {
+      let snapshot = if frame & 1 == 0 { &snapshot_a } else { &snapshot_b };
+      let frame_started_at = Instant::now();
+      let token = renderer.begin_frame(&api::FrameTarget, Some(snapshot.damage()));
+      let frame_id = token.0;
+      if flat_control
+      {
+         renderer.encode_pass(if frame & 1 == 0 { &flat_a } else { &flat_b });
+      }
+      else
+      {
+         renderer.encode_snapshot(snapshot).with_context(|| format!("encoding {id}"))?;
+      }
+      renderer.submit(token).with_context(|| format!("submitting {id}"))?;
+      let stats = last_metal_stats_after_submit(&renderer, frame_id);
+      if frame >= warmups
+      {
+         frame_samples.push(frame_started_at.elapsed().as_secs_f64() * 1_000.0);
+         encode_samples.push(stats.encode_ms);
+         gpu_samples.push(stats.gpu_ms);
+         uploads = uploads.saturating_add(stats.buffer_upload_bytes);
+         dynamic_uniform_uploads = dynamic_uniform_uploads.saturating_add(stats.ub_bytes);
+         geometry_copied = geometry_copied.saturating_add(stats.geometry_bytes_copied);
+         commands_traversed = commands_traversed.saturating_add(stats.commands_traversed);
+         draws = draws.saturating_add(u64::from(stats.draws));
+         binds = binds.saturating_add(u64::from(stats.image_argument_binds));
+         hits = hits.saturating_add(stats.backend_cache_hits);
+         misses = misses.saturating_add(stats.backend_cache_misses);
+         prepared = prepared.saturating_add(stats.chunks_prepared);
+         reused = reused.saturating_add(stats.chunks_reused);
+         evictions = evictions.saturating_add(u64::from(stats.cache_evictions));
+         prepared_bytes_peak = prepared_bytes_peak.max(renderer.prepared_cache_resident_bytes());
+         renderer_bytes_peak = renderer_bytes_peak.max(stats.memory.total_bytes);
+      }
+      else if raw_samples
+      {
+         warmup_frame_samples.push(frame_started_at.elapsed().as_secs_f64() * 1_000.0);
+         warmup_encode_samples.push(stats.encode_ms);
+         warmup_gpu_samples.push(stats.gpu_ms);
+      }
+   }
+
+   let summary = summarize(&frame_samples);
+   let (layer, scenario, variant, cache_state, refresh_mode) = perf_case_contract_metadata(id, "architecture");
+   let mut metrics = BTreeMap::new();
+   insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+   insert_distribution_metrics(&mut metrics, "encode_ms", &encode_samples);
+   insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+   insert_frame_pacing_metrics(&mut metrics, &frame_samples);
+   metrics.insert(String::from("chunk_count"), 256.0);
+   metrics.insert(String::from("dirty_chunks_per_frame"), if dirty { 1.0 } else { 0.0 });
+   metrics.insert(String::from("buffer_upload_bytes_avg"), uploads as f64 / frames as f64);
+   metrics.insert(String::from("dynamic_uniform_upload_bytes_avg"), dynamic_uniform_uploads as f64 / frames as f64);
+   metrics.insert(String::from("geometry_bytes_copied_avg"), geometry_copied as f64 / frames as f64);
+   metrics.insert(String::from("commands_traversed_avg"), commands_traversed as f64 / frames as f64);
+   metrics.insert(String::from("draws_avg"), draws as f64 / frames as f64);
+   metrics.insert(String::from("image_argument_binds_avg"), binds as f64 / frames as f64);
+   metrics.insert(String::from("backend_cache_hits_avg"), hits as f64 / frames as f64);
+   metrics.insert(String::from("backend_cache_misses_avg"), misses as f64 / frames as f64);
+   metrics.insert(String::from("chunks_prepared_avg"), prepared as f64 / frames as f64);
+   metrics.insert(String::from("chunks_reused_avg"), reused as f64 / frames as f64);
+   metrics.insert(String::from("cache_evictions_total"), evictions as f64);
+   metrics.insert(String::from("prepared_cache_bytes_peak"), prepared_bytes_peak as f64);
+   metrics.insert(String::from("renderer_bytes_peak"), renderer_bytes_peak as f64);
+   if raw_samples
+   {
+      for (index, value) in warmup_frame_samples.iter().copied().enumerate()
+      {
+         metrics.insert(format!("c24_warmup_frame_ms_{index:04}"), value);
+      }
+      for (index, value) in warmup_encode_samples.iter().copied().enumerate()
+      {
+         metrics.insert(format!("c24_warmup_encode_ms_{index:04}"), value);
+      }
+      for (index, value) in warmup_gpu_samples.iter().copied().enumerate()
+      {
+         metrics.insert(format!("c24_warmup_gpu_ms_{index:04}"), value);
+      }
+      for (index, value) in frame_samples.iter().copied().enumerate()
+      {
+         metrics.insert(format!("c24_raw_frame_ms_{index:04}"), value);
+      }
+      for (index, value) in encode_samples.iter().copied().enumerate()
+      {
+         metrics.insert(format!("c24_raw_encode_ms_{index:04}"), value);
+      }
+      for (index, value) in gpu_samples.iter().copied().enumerate()
+      {
+         metrics.insert(format!("c24_raw_gpu_ms_{index:04}"), value);
+      }
+   }
+
+   Ok(PerfCaseResult {
+      id: String::from(id),
+      family: String::from(if id.contains(".authoring.") { "authoring" } else { "architecture" }),
+      layer: String::from(layer),
+      scenario: String::from(scenario),
+      variant: String::from(variant),
+      cache_state: String::from(cache_state),
+      refresh_mode: String::from(refresh_mode),
+      unit: String::from("ms/frame"),
+      gated: true,
+      threshold_pct: 0.20,
+      median: summary.median,
+      p95: summary.p95,
+      p99: summary.p99,
+      min: summary.min,
+      max: summary.max,
+      mean: summary.mean,
+      samples: frame_samples.len(),
+      ops_per_sample: 1,
+      notes: vec![String::from(if dirty {
+         "Persistent Metal buffers rebuild exactly one alternating geometry revision while the other 255 chunks remain reusable."
+      } else {
+         "Persistent Metal buffers replay 256 mixed immutable chunks while a dynamic transform property changes without geometry uploads."
+      })],
+      metrics,
+   })
+}
+
+fn prepared_chunk_snapshot(image: api::ImageHandle, atlas: api::ImageHandle, dirty_revision: u64, translation: [f32; 2]) -> api::RenderSnapshot
+{
+   let mut instances = Vec::with_capacity(256);
+   for index in 0..256_usize
+   {
+      let column = index % 16;
+      let row = index / 16;
+      let origin = [column as f32 * 72.0 + 8.0, row as f32 * 46.0 + 8.0];
+      let id = api::RenderChunkId(24_000 + index as u64);
+      let geometry = if index == 0 { dirty_revision } else { 1 };
+      let (list, dependencies) = match index & 3
+      {
+         0 =>
+         {
+            let mut list = api::DrawList::default();
+            for offset in 0..64
+            {
+               list.items.push(api::DrawCmd::RRect {
+                  rect: api::RectF::new(offset as f32 * 0.75, 0.0, 0.625, 28.0),
+                  radii: [0.25; 4],
+                  color: api::Color::rgba(0.15 + (offset & 3) as f32 * 0.15, 0.45, 0.85, 1.0),
+               });
+            }
+            (list, Vec::new())
+         }
+         1 =>
+         {
+            let mut list = api::DrawList::default();
+            for offset in 0..64
+            {
+               list.items.push(api::DrawCmd::Image {
+                  tex: image,
+                  dst: api::RectF::new(offset as f32 * 0.75, 0.0, 0.625, 28.0),
+                  src: api::RectF::new(0.0, 0.0, 2.0, 2.0),
+                  alpha: 1.0,
+               });
+            }
+            (list, vec![api::RenderResourceDependency { image, generation: 1 }])
+         }
+         2 =>
+         {
+            let mut vertices = Vec::with_capacity(256);
+            let mut indices = Vec::with_capacity(384);
+            for glyph in 0..64_u16
+            {
+               let x = f32::from(glyph) * 0.75;
+               let base = glyph * 4;
+               vertices.extend_from_slice(&[
+                  api::Vertex { x, y: 0.0, u: 0.0, v: 0.0, rgba: 0 },
+                  api::Vertex { x: x + 0.625, y: 0.0, u: 1.0, v: 0.0, rgba: 0 },
+                  api::Vertex { x: x + 0.625, y: 28.0, u: 1.0, v: 1.0, rgba: 0 },
+                  api::Vertex { x, y: 28.0, u: 0.0, v: 1.0, rgba: 0 },
+               ]);
+               indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+            }
+            (api::DrawList {
+               items: vec![api::DrawCmd::GlyphRun { run: api::GlyphRun {
+                  atlas,
+                  atlas_revision: 1,
+                  vb: api::VertexSpan { offset: 0, len: 256 },
+                  ib: api::IndexSpan { offset: 0, len: 384 },
+                  sdf: false,
+                  color: api::Color::rgba(0.9, 0.9, 1.0, 1.0),
+               }}],
+               vertices,
+               indices,
+            }, vec![api::RenderResourceDependency { image: atlas, generation: 1 }])
+         }
+         _ =>
+         {
+            let mut vertices = Vec::with_capacity(192);
+            let mut indices = Vec::with_capacity(192);
+            for triangle in 0..64_u16
+            {
+               let x = f32::from(triangle) * 0.75;
+               let base = triangle * 3;
+               vertices.extend_from_slice(&[
+                  api::Vertex { x, y: 28.0, u: 0.0, v: 0.0, rgba: 0 },
+                  api::Vertex { x: x + 0.3125, y: 0.0, u: 0.0, v: 0.0, rgba: 0 },
+                  api::Vertex { x: x + 0.625, y: 28.0, u: 0.0, v: 0.0, rgba: 0 },
+               ]);
+               indices.extend_from_slice(&[base, base + 1, base + 2]);
+            }
+            (api::DrawList {
+               items: vec![api::DrawCmd::Solid {
+                  vb: api::VertexSpan { offset: 0, len: 192 },
+                  ib: api::IndexSpan { offset: 0, len: 192 },
+                  color: api::Color::rgba(0.9, 0.55, 0.1, 1.0),
+               }],
+               vertices,
+               indices,
+            }, Vec::new())
+         }
+      };
+      let chunk = api::RenderChunk::new(
+         id,
+         api::RenderChunkRevisions { geometry, resource: u64::from(!dependencies.is_empty()), ..api::RenderChunkRevisions::default() },
+         list,
+         api::ChunkIndexMode::Local,
+         &dependencies,
+      ).expect("prepared perf chunk");
+      let mut instance = api::RenderChunkInstance::new(chunk, origin);
+      instance.property_slots = vec![api::RenderPropertySlotId(1)].into();
+      instances.push(instance);
+   }
+   api::RenderSnapshot::new(
+      instances,
+      vec![api::RenderPropertySlot {
+         id: api::RenderPropertySlotId(1),
+         revision: u64::from(translation != [0.0, 0.0]),
+         value: api::RenderPropertyValue::Transform([1.0, 0.0, 0.0, 1.0, translation[0], translation[1]]),
+      }],
+      api::Damage { rects: Vec::new() },
+   ).expect("prepared perf snapshot")
 }
 
 fn frame_resource_drawlist(quads: usize) -> api::DrawList

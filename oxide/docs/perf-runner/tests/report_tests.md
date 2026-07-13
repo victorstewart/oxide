@@ -12,6 +12,8 @@ This integration suite freezes performance-report schemas, filtered execution, c
 ## Entry points list
 
 - `metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()` verifies three-slot visible no-growth high water and eight-slot offscreen all-slot cold growth followed by zero warm growth/skips.
+- `metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()` requires exact clean and one-dirty prepared-cache work counters, including zero clean immutable upload and one 12,288-byte dynamic uniform-ring slice.
+- `filtered_run_suite_supports_retained_snapshot_authoring_case()` keeps the public retained-snapshot authoring row routable.
 - Other test functions cover report comparison, contract coverage, architecture rows, authoring rows, and persisted baseline requirements.
 
 ## Logic narrative
@@ -23,6 +25,7 @@ Each filtered integration test writes a process-unique temporary report, verifie
 - Real Metal row tests require macOS and are compile-time guarded.
 - Passing C18 coverage proves every configured slot was exercised and warm submissions allocate no replacement ring buffers.
 - Passing C23 coverage proves the hot retained working set is complete, reports a 100% hit rate, and remains within its hard byte budget, while the one-use path retains zero node-cache bytes and records one explicit fallback. The public authoring row must preserve its configured CPU/prepared-GPU budgets on unchanged-policy access.
+- Passing C24 coverage proves clean mixed replay has 256 hits and zero uploads/copies/traversal, while alternating one dirty chunk produces exactly 255 hits, one miss, 64 traversed commands, and 3,072 uploaded bytes per frame.
 
 ## Edge cases and failure modes
 
@@ -51,5 +54,6 @@ Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.frame_resources.` with `--run-sui
 
 ## Changelog
 
+- 2026-07-13: added exact C24 clean/one-dirty Metal prepared-chunk and retained-snapshot authoring report contracts.
 - 2026-07-13: added C23 retained cache-pressure and public cache-policy authoring report contracts.
 - 2026-07-13: added exact visible/offscreen frame-resource report contracts.
