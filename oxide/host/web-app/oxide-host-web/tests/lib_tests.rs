@@ -375,9 +375,31 @@ fn host_installs_browser_ime_bridge() {
 #[test]
 fn host_visual_startup_requires_async_webgpu() {
     let source = include_str!("../src/lib.rs");
-    assert!(source.contains("from_canvas_id_webgpu"));
+    assert!(source.contains("BrowserRenderer::from_canvas_webgpu(canvas).await"));
     assert!(source.contains("webgpu renderer requires async browser initialization"));
     assert!(!source.contains("from_canvas_id_canvas2d"));
+}
+
+#[test]
+fn host_sizes_the_canvas_before_webgpu_renderer_construction() {
+    let source = include_str!("../src/lib.rs");
+    let new_async = source
+        .split("pub async fn new_async")
+        .nth(1)
+        .expect("async WebGPU constructor")
+        .split("fn new_with_renderer")
+        .next()
+        .expect("async WebGPU constructor body");
+    let backing_size = new_async.find("canvas_backing_size(&canvas)").expect("backing size");
+    let set_width = new_async.find("canvas.set_width(physical_w)").expect("canvas width");
+    let set_height = new_async.find("canvas.set_height(physical_h)").expect("canvas height");
+    let renderer = new_async
+        .find("BrowserRenderer::from_canvas_webgpu(canvas).await")
+        .expect("WebGPU renderer construction");
+
+    assert!(backing_size < set_width);
+    assert!(set_width < set_height);
+    assert!(set_height < renderer);
 }
 
 #[test]
@@ -390,6 +412,7 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("pub async fn bench_webgpu_id_mask_current"));
     assert!(source.contains("pub async fn bench_webgpu_upload_current"));
     assert!(source.contains("pub async fn bench_webgpu_atlas_c15"));
+    assert!(source.contains("pub async fn bench_webgpu_targets_c19"));
     assert!(!source.contains("pub async fn bench_webgpu_upload_ab"));
     assert!(source.contains("pub async fn bench_webgpu_upload_scratch_ab"));
     assert!(source.contains("pub async fn bench_webgpu_effect_uniform_ab"));
@@ -1235,6 +1258,33 @@ fn c16_geometry_adapter_covers_compact_and_fallback_streams() {
     assert!(script.contains("bench_webgpu_geometry_c16"));
     assert!(script.contains("warmups: [warmup], samples: [sample], metrics"));
     assert!(script.contains("--use-angle=metal"));
+}
+
+#[test]
+fn c19_target_adapter_covers_construction_resize_and_first_declared_use() {
+    let host = include_str!("../src/lib.rs");
+    let script = include_str!("../../../../scripts/run_webgpu_targets_c19.mjs");
+
+    assert!(host.contains("pub async fn bench_webgpu_targets_c19"));
+    assert!(host.contains("fn c19_direct_frame"));
+    assert!(host.contains("fn c19_backdrop_frame"));
+    assert!(host.contains("fn c19_scene3d_frame"));
+    assert!(host.contains("resize_direct_target_creates="));
+    assert!(host.contains("resize_scene3d_target_creates="));
+    assert!(host.contains("backdrop_prewarm_target_creates="));
+    assert!(host.contains("scene3d_prewarm_target_creates="));
+    assert!(host.contains("backdrop_ready_ms"));
+    assert!(host.contains("scene3d_ready_ms"));
+    assert!(host.contains("direct_transient_target_bytes="));
+    assert!(host.contains("backdrop_transient_target_bytes="));
+    assert!(host.contains("scene3d_depth_target_bytes="));
+    assert!(script.contains("GPUDevice.prototype.createTexture"));
+    assert!(script.contains("GPUDevice.prototype.createBindGroup"));
+    assert!(script.contains("construction_texture_creates"));
+    assert!(script.contains("construction_bind_group_creates"));
+    assert!(script.contains("--force-device-scale-factor=2"));
+    assert!(script.contains("warmups, samples, metrics"));
+    assert!(script.contains("writeFileSync(output, json)"));
 }
 
 #[test]

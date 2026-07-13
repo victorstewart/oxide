@@ -105,6 +105,17 @@ struct GpuLayer {
     scale: f32,
 }
 
+struct GpuColorTarget {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+}
+
+struct GpuDepthTarget {
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
 struct GpuMesh3d {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
@@ -711,6 +722,14 @@ impl BrowserRenderer {
         self.inner.set_memory_stats_enabled_for_benchmark(enabled);
     }
 
+    /// Creates only the auxiliary targets required by the app's declared first-use features.
+    ///
+    /// Apps that need deterministic first-interaction latency may call this outside the frame
+    /// path. Direct UI should leave both flags false and retains no auxiliary targets.
+    pub fn prewarm_auxiliary_targets(&mut self, backdrop: bool, scene3d: bool) {
+        self.inner.prewarm_auxiliary_targets(backdrop, scene3d);
+    }
+
     #[cfg(feature = "snapshot-tests")]
     pub fn begin_id_mask_snapshot_readback(&mut self) -> Result<(), api::RenderError>
     {
@@ -933,14 +952,9 @@ pub struct WebGpuRenderer {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     programs: GpuPrograms,
-    scene_texture: wgpu::Texture,
-    scene_view: wgpu::TextureView,
-    scene_bind_group: wgpu::BindGroup,
-    scene_depth_texture: wgpu::Texture,
-    scene_depth_view: wgpu::TextureView,
-    scratch_texture: wgpu::Texture,
-    scratch_view: wgpu::TextureView,
-    scratch_bind_group: wgpu::BindGroup,
+    scene_target: Option<GpuColorTarget>,
+    scene_depth_target: Option<GpuDepthTarget>,
+    scratch_target: Option<GpuColorTarget>,
     viewport_buffer: wgpu::Buffer,
     viewport_bind_group: wgpu::BindGroup,
     effect_buffer: wgpu::Buffer,
@@ -1126,9 +1140,14 @@ impl WebGpuRenderer {
         let color_bytes = color_texture_bytes_per_pixel(self.config.format);
         let target_bytes =
             saturating_texture_bytes(u64::from(self.width), u64::from(self.height), color_bytes);
-        let transient_target_bytes = target_bytes.saturating_mul(2);
-        let depth_target_bytes =
-            saturating_texture_bytes(u64::from(self.width), u64::from(self.height), 4);
+        let transient_target_count = u64::from(self.scene_target.is_some())
+            .saturating_add(u64::from(self.scratch_target.is_some()));
+        let transient_target_bytes = target_bytes.saturating_mul(transient_target_count);
+        let depth_target_bytes = if self.scene_depth_target.is_some() {
+            saturating_texture_bytes(u64::from(self.width), u64::from(self.height), 4)
+        } else {
+            0
+        };
         let layer_texture_bytes = self.layers.values().fold(0_u64, |total, layer| {
             total.saturating_add(saturating_texture_bytes(
                 u64::from(layer.width),
@@ -1318,25 +1337,8 @@ impl WebGpuRenderer {
         surface.configure(&device, &config);
 
         let programs = create_programs(&device, config.format);
-        let (scene_texture, scene_view, scene_bind_group) = create_target_texture(
-            &device,
-            &programs,
-            "oxide-webgpu-scene",
-            config.format,
-            width,
-            height,
-        );
-        let (scene_depth_texture, scene_depth_view) =
-            create_depth_texture(&device, "oxide-webgpu-scene-depth", width, height);
-        let (scratch_texture, scratch_view, scratch_bind_group) = create_target_texture(
-            &device,
-            &programs,
-            "oxide-webgpu-scratch",
-            config.format,
-            width,
-            height,
-        );
         let (viewport_buffer, viewport_bind_group) = create_viewport_bind_group(&device, &programs);
+        write_viewport_uniform(&queue, &viewport_buffer, width, height, 1.0);
         let effect_uniform_stride = align_to(
             EFFECT_UNIFORM_SIZE,
             device.limits().min_uniform_buffer_offset_alignment.max(EFFECT_UNIFORM_SIZE as u32)
@@ -1364,14 +1366,9 @@ impl WebGpuRenderer {
             queue,
             config,
             programs,
-            scene_texture,
-            scene_view,
-            scene_bind_group,
-            scene_depth_texture,
-            scene_depth_view,
-            scratch_texture,
-            scratch_view,
-            scratch_bind_group,
+            scene_target: None,
+            scene_depth_target: None,
+            scratch_target: None,
             viewport_buffer,
             viewport_bind_group,
             effect_buffer,
@@ -2913,38 +2910,72 @@ impl WebGpuRenderer {
         }
     }
 
-    fn recreate_targets(&mut self) {
-        let (scene_texture, scene_view, scene_bind_group) = create_target_texture(
+    fn ensure_scene_target(&mut self) {
+        if self.scene_target.is_some() {
+            return;
+        }
+        self.scene_target = Some(create_color_target(
             &self.device,
             &self.programs,
             "oxide-webgpu-scene",
             self.config.format,
             self.width,
             self.height,
-        );
-        let (scene_depth_texture, scene_depth_view) =
-            create_depth_texture(&self.device, "oxide-webgpu-scene-depth", self.width, self.height);
-        let (scratch_texture, scratch_view, scratch_bind_group) = create_target_texture(
+        ));
+        self.stats.texture_creates = self.stats.texture_creates.saturating_add(1);
+        self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
+        self.stats.target_texture_creates = self.stats.target_texture_creates.saturating_add(1);
+        self.stats.target_bind_group_creates =
+            self.stats.target_bind_group_creates.saturating_add(1);
+    }
+
+    fn ensure_scene_depth_target(&mut self) {
+        if self.scene_depth_target.is_some() {
+            return;
+        }
+        self.scene_depth_target = Some(create_depth_target(
+            &self.device,
+            "oxide-webgpu-scene-depth",
+            self.width,
+            self.height,
+        ));
+        self.stats.texture_creates = self.stats.texture_creates.saturating_add(1);
+        self.stats.target_texture_creates = self.stats.target_texture_creates.saturating_add(1);
+    }
+
+    fn ensure_scratch_target(&mut self) {
+        if self.scratch_target.is_some() {
+            return;
+        }
+        self.scratch_target = Some(create_color_target(
             &self.device,
             &self.programs,
             "oxide-webgpu-scratch",
             self.config.format,
             self.width,
             self.height,
-        );
-        self.scene_texture = scene_texture;
-        self.scene_view = scene_view;
-        self.scene_bind_group = scene_bind_group;
-        self.scene_depth_texture = scene_depth_texture;
-        self.scene_depth_view = scene_depth_view;
-        self.scratch_texture = scratch_texture;
-        self.scratch_view = scratch_view;
-        self.scratch_bind_group = scratch_bind_group;
-        self.stats.texture_creates = self.stats.texture_creates.saturating_add(3);
-        self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(2);
-        self.stats.target_texture_creates = self.stats.target_texture_creates.saturating_add(3);
+        ));
+        self.stats.texture_creates = self.stats.texture_creates.saturating_add(1);
+        self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
+        self.stats.target_texture_creates = self.stats.target_texture_creates.saturating_add(1);
         self.stats.target_bind_group_creates =
-            self.stats.target_bind_group_creates.saturating_add(2);
+            self.stats.target_bind_group_creates.saturating_add(1);
+    }
+
+    fn prewarm_auxiliary_targets(&mut self, backdrop: bool, scene3d: bool) {
+        if backdrop {
+            self.ensure_scene_target();
+            self.ensure_scratch_target();
+        }
+        if scene3d {
+            self.ensure_scene_depth_target();
+        }
+    }
+
+    fn drop_auxiliary_targets(&mut self) {
+        self.scene_target = None;
+        self.scene_depth_target = None;
+        self.scratch_target = None;
     }
 
     fn upload_frame_buffers(&mut self) {
@@ -3061,15 +3092,6 @@ impl WebGpuRenderer {
                 .buffer_upload_bytes
                 .saturating_add(self.scene3d_uniform_bytes.len() as u64);
         }
-    }
-
-    fn write_viewport_uniform(&mut self) {
-        let logical_w = logical_dimension(self.width, self.scale).max(1.0);
-        let logical_h = logical_dimension(self.height, self.scale).max(1.0);
-        let bytes = f32x4_bytes([logical_w, logical_h, 0.0, 0.0]);
-        self.queue.write_buffer(&self.viewport_buffer, 0, &bytes);
-        self.stats.buffer_upload_bytes =
-            self.stats.buffer_upload_bytes.saturating_add(bytes.len() as u64);
     }
 
     fn write_effect_uniform(&mut self, sigma: f32) {
@@ -3610,7 +3632,6 @@ impl api::Renderer for WebGpuRenderer {
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         self.upload_frame_buffers();
         self.upload_scene3d_uniforms();
-        self.write_viewport_uniform();
         self.prepare_effect_uniforms();
         self.record_submit_allocation_stage(SubmitAllocationStage::Upload, alloc_before);
         cpu_submit_timing_end(&mut self.cpu_submit_timing.upload_ms, timing_before);
@@ -3717,26 +3738,36 @@ impl api::Renderer for WebGpuRenderer {
         let width = width.max(1);
         let height = height.max(1);
         let scale = sanitize_scale(scale);
-        if self.width == width
-            && self.height == height
-            && (self.scale - scale).abs() <= f32::EPSILON
-        {
+        let size_changed = self.width != width || self.height != height;
+        let scale_changed = (self.scale - scale).abs() > f32::EPSILON;
+        if !size_changed && !scale_changed {
             return Ok(());
         }
         self.width = width;
         self.height = height;
         self.scale = scale;
-        self.canvas.set_width(self.width);
-        self.canvas.set_height(self.height);
-        self.config.width = self.width;
-        self.config.height = self.height;
-        self.surface.configure(&self.device, &self.config);
-        self.recreate_targets();
-        self.stats.cache_evictions = self
-            .stats
-            .cache_evictions
-            .saturating_add(self.layers.len().min(u32::MAX as usize) as u32);
-        self.layers.clear();
+        write_viewport_uniform(
+            &self.queue,
+            &self.viewport_buffer,
+            self.width,
+            self.height,
+            self.scale,
+        );
+        if size_changed {
+            self.canvas.set_width(self.width);
+            self.canvas.set_height(self.height);
+            self.config.width = self.width;
+            self.config.height = self.height;
+            self.surface.configure(&self.device, &self.config);
+            self.drop_auxiliary_targets();
+        }
+        if size_changed || scale_changed {
+            self.stats.cache_evictions = self
+                .stats
+                .cache_evictions
+                .saturating_add(self.layers.len().min(u32::MAX as usize) as u32);
+            self.layers.clear();
+        }
         Ok(())
     }
 }
@@ -3965,20 +3996,23 @@ impl WebGpuRenderer {
     }
 
     fn render_scene_with_effects(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        self.ensure_scene_target();
+        let Some(scene_target) = self.scene_target.as_ref() else {
+            return;
+        };
+        let scene_texture = scene_target.texture.clone();
+        let scene_view = scene_target.view.clone();
         if self.scene3d_active {
-            let scene_view = self.scene_view.clone();
             self.render_scene3d(encoder, &scene_view);
         } else {
-            self.clear_scene(encoder);
+            self.clear_target(encoder, &scene_view, "oxide-webgpu-clear-scene");
         }
-        let scene_view = self.scene_view.clone();
         if !self.id_mask_draws.is_empty() {
             self.render_id_mask_compositors(encoder, &scene_view, wgpu::LoadOp::Load);
         }
         if !self.scene3d_overlay_draws.is_empty() {
             self.render_scene3d_overlay(encoder, &scene_view);
         }
-        let scene_texture = self.scene_texture.clone();
         self.render_draw_target_with_effects(
             encoder,
             &scene_texture,
@@ -4019,6 +4053,9 @@ impl WebGpuRenderer {
         start: usize,
         end: usize,
     ) {
+        if self.target_uses_backdrop(target, start, end) {
+            self.ensure_scratch_target();
+        }
         let limit = end.min(self.frame.draws.len());
         let mut start = start.min(limit);
         while start < limit {
@@ -4030,6 +4067,13 @@ impl WebGpuRenderer {
             }
             if let DrawKind::Backdrop { sigma, .. } = self.frame.draws[start].kind {
                 let end = self.backdrop_batch_end(start, target, limit);
+                let Some(scratch_texture) = self
+                    .scratch_target
+                    .as_ref()
+                    .map(|scratch| scratch.texture.clone())
+                else {
+                    return;
+                };
                 encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: target_texture,
@@ -4038,7 +4082,7 @@ impl WebGpuRenderer {
                         aspect: wgpu::TextureAspect::All,
                     },
                     wgpu::TexelCopyTextureInfo {
-                        texture: &self.scratch_texture,
+                        texture: &scratch_texture,
                         mip_level: 0,
                         origin: wgpu::Origin3d::ZERO,
                         aspect: wgpu::TextureAspect::All,
@@ -4091,11 +4135,6 @@ impl WebGpuRenderer {
         }
     }
 
-    fn clear_scene(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        let scene_view = self.scene_view.clone();
-        self.clear_target(encoder, &scene_view, "oxide-webgpu-clear-scene");
-    }
-
     fn clear_target(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -4131,8 +4170,12 @@ impl WebGpuRenderer {
         if self.scene3d_bind_group.is_none() {
             return;
         }
+        self.ensure_scene_depth_target();
         let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Scene3d);
         let timestamp_writes = self.timestamp_writes(timestamp_pair);
+        let Some(depth_target) = self.scene_depth_target.as_ref() else {
+            return;
+        };
         let Some(bind_group) = self.scene3d_bind_group.as_ref() else {
             return;
         };
@@ -4160,7 +4203,7 @@ impl WebGpuRenderer {
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &self.scene_depth_view,
+                view: &depth_target.view,
                 depth_ops: Some(depth_ops),
                 stencil_ops: None,
             }),
@@ -4196,8 +4239,12 @@ impl WebGpuRenderer {
         if self.scene3d_bind_group.is_none() {
             return;
         }
+        self.ensure_scene_depth_target();
         let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Scene3dOverlay);
         let timestamp_writes = self.timestamp_writes(timestamp_pair);
+        let Some(depth_target) = self.scene_depth_target.as_ref() else {
+            return;
+        };
         let Some(bind_group) = self.scene3d_bind_group.as_ref() else {
             return;
         };
@@ -4210,7 +4257,7 @@ impl WebGpuRenderer {
                 ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &self.scene_depth_view,
+                view: &depth_target.view,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
@@ -4580,6 +4627,10 @@ impl WebGpuRenderer {
         let Some(vertex_buffer) = &self.vertex_buffer else {
             return;
         };
+        let scratch_bind_group = self
+            .scratch_target
+            .as_ref()
+            .map(|target| target.bind_group.clone());
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("oxide-webgpu-draw-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -4665,7 +4716,10 @@ impl WebGpuRenderer {
                         draw_bind_group_binds = draw_bind_group_binds.saturating_add(1);
                     }
                     DrawBindKey::Effect { offset } => {
-                        pass.set_bind_group(1, &self.scratch_bind_group, &[]);
+                        let Some(bind_group) = scratch_bind_group.as_ref() else {
+                            continue;
+                        };
+                        pass.set_bind_group(1, bind_group, &[]);
                         pass.set_bind_group(2, &self.effect_bind_group, &[offset]);
                         draw_bind_group_binds = draw_bind_group_binds.saturating_add(2);
                     }
@@ -4730,6 +4784,14 @@ impl WebGpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         surface_view: &wgpu::TextureView,
     ) {
+        self.ensure_scene_target();
+        let Some(scene_bind_group) = self
+            .scene_target
+            .as_ref()
+            .map(|target| target.bind_group.clone())
+        else {
+            return;
+        };
         self.ensure_present_buffers();
         self.stats.render_passes = self.stats.render_passes.saturating_add(1);
         self.stats.present_passes = self.stats.present_passes.saturating_add(1);
@@ -4752,7 +4814,7 @@ impl WebGpuRenderer {
         });
         pass.set_pipeline(self.rgba_pipeline());
         pass.set_bind_group(0, &self.viewport_bind_group, &[]);
-        pass.set_bind_group(1, &self.scene_bind_group, &[]);
+        pass.set_bind_group(1, &scene_bind_group, &[]);
         pass.set_vertex_buffer(0, self.present_vertex_buffer.slice(..));
         pass.set_index_buffer(self.present_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..6, 0, 0..1);
@@ -5623,6 +5685,41 @@ fn effect_uniform_needed_bytes(count: usize, stride: u64) -> u64 {
         return EFFECT_UNIFORM_SIZE;
     }
     (count as u64).saturating_sub(1).saturating_mul(stride).saturating_add(EFFECT_UNIFORM_SIZE)
+}
+
+fn write_viewport_uniform(
+    queue: &wgpu::Queue,
+    buffer: &wgpu::Buffer,
+    width: u32,
+    height: u32,
+    scale: f32,
+) {
+    let logical_w = logical_dimension(width, scale).max(1.0);
+    let logical_h = logical_dimension(height, scale).max(1.0);
+    queue.write_buffer(buffer, 0, &f32x4_bytes([logical_w, logical_h, 0.0, 0.0]));
+}
+
+fn create_color_target(
+    device: &wgpu::Device,
+    programs: &GpuPrograms,
+    label: &'static str,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+) -> GpuColorTarget {
+    let (texture, view, bind_group) =
+        create_target_texture(device, programs, label, format, width, height);
+    GpuColorTarget { texture, view, bind_group }
+}
+
+fn create_depth_target(
+    device: &wgpu::Device,
+    label: &'static str,
+    width: u32,
+    height: u32,
+) -> GpuDepthTarget {
+    let (texture, view) = create_depth_texture(device, label, width, height);
+    GpuDepthTarget { _texture: texture, view }
 }
 
 fn create_target_texture(

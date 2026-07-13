@@ -358,8 +358,11 @@ mod wasm_host {
         #[wasm_bindgen(js_name = newAsync)]
         pub async fn new_async(canvas_id: &str) -> Result<OxideWebApp, JsValue> {
             let _platform = oxide_platform_web::install_current_platform();
-            let renderer =
-                BrowserRenderer::from_canvas_id_webgpu(canvas_id).await.map_err(render_err)?;
+            let canvas = canvas_by_id(canvas_id)?;
+            let (physical_w, physical_h, _) = canvas_backing_size(&canvas);
+            canvas.set_width(physical_w);
+            canvas.set_height(physical_h);
+            let renderer = BrowserRenderer::from_canvas_webgpu(canvas).await.map_err(render_err)?;
             Self::new_with_renderer(renderer)
         }
 
@@ -803,6 +806,166 @@ mod wasm_host {
                 sampled_case_metrics(&images, "images"),
                 sampled_case_metrics(&large_mesh, "large_mesh"),
             ))
+        }
+
+        pub async fn bench_webgpu_targets_c19(&self, repeats: u32) -> Result<String, JsValue> {
+            let repeat_count = repeats.clamp(1, 100);
+            let renderer = self.state.borrow().renderer.clone();
+            renderer.borrow_mut().set_timestamp_readback_interval_for_benchmark(1);
+            renderer.borrow_mut().set_memory_stats_interval_for_benchmark(1);
+            let (back, front) = {
+                let mut renderer = renderer.borrow_mut();
+                (
+                    webgpu_scene3d_create_back_mesh(&mut renderer)?,
+                    webgpu_scene3d_create_front_mesh(&mut renderer)?,
+                )
+            };
+            let mut builder = ui::DrawListBuilder::new();
+            c19_resize(&renderer, 512, 512)?;
+            c19_direct_frame(&renderer, &mut builder)?;
+            wait_renderer_queue_idle(&renderer).await?;
+            renderer.borrow_mut().prewarm_auxiliary_targets(true, false);
+            c19_backdrop_frame(&renderer, &mut builder)?;
+            wait_renderer_queue_idle(&renderer).await?;
+            c19_resize(&renderer, 514, 514)?;
+            renderer.borrow_mut().prewarm_auxiliary_targets(false, true);
+            c19_scene3d_frame(&renderer, back, front)?;
+            wait_renderer_queue_idle(&renderer).await?;
+
+            let mut resize_direct_ms = Vec::with_capacity(repeat_count as usize);
+            let mut direct_first_ms = Vec::with_capacity(repeat_count as usize);
+            let mut direct_ready_ms = Vec::with_capacity(repeat_count as usize);
+            let mut direct_complete_ms = Vec::with_capacity(repeat_count as usize);
+            let mut direct_gpu_ms = Vec::with_capacity(repeat_count as usize);
+            let mut backdrop_prewarm_ms = Vec::with_capacity(repeat_count as usize);
+            let mut backdrop_first_ms = Vec::with_capacity(repeat_count as usize);
+            let mut backdrop_ready_ms = Vec::with_capacity(repeat_count as usize);
+            let mut backdrop_complete_ms = Vec::with_capacity(repeat_count as usize);
+            let mut backdrop_gpu_ms = Vec::with_capacity(repeat_count as usize);
+            let mut resize_scene3d_ms = Vec::with_capacity(repeat_count as usize);
+            let mut scene3d_prewarm_ms = Vec::with_capacity(repeat_count as usize);
+            let mut scene3d_first_ms = Vec::with_capacity(repeat_count as usize);
+            let mut scene3d_ready_ms = Vec::with_capacity(repeat_count as usize);
+            let mut scene3d_complete_ms = Vec::with_capacity(repeat_count as usize);
+            let mut scene3d_gpu_ms = Vec::with_capacity(repeat_count as usize);
+            let mut direct_stats = WebRendererStats::default();
+            let mut backdrop_stats = WebRendererStats::default();
+            let mut scene3d_stats = WebRendererStats::default();
+            let mut resize_direct_target_creates = 0_u64;
+            let mut resize_scene3d_target_creates = 0_u64;
+            let mut backdrop_prewarm_target_creates = 0_u64;
+            let mut scene3d_prewarm_target_creates = 0_u64;
+            for _ in 0..repeat_count {
+                let before = renderer.borrow().last_stats().target_texture_creates;
+                let start = perf_now();
+                c19_resize(&renderer, 512, 512)?;
+                resize_direct_ms.push((perf_now() - start).max(0.0));
+                let after = renderer.borrow().last_stats().target_texture_creates;
+                resize_direct_target_creates = resize_direct_target_creates
+                    .saturating_add(u64::from(after.saturating_sub(before)));
+
+                let start = perf_now();
+                c19_direct_frame(&renderer, &mut builder)?;
+                let direct_first = (perf_now() - start).max(0.0);
+                direct_first_ms.push(direct_first);
+                direct_ready_ms.push(resize_direct_ms.last().copied().unwrap_or(0.0) + direct_first);
+                wait_renderer_queue_idle(&renderer).await?;
+                direct_complete_ms.push((perf_now() - start).max(0.0));
+                direct_stats = renderer.borrow_mut().collect_timestamp_readbacks();
+                direct_gpu_ms.push(direct_stats.gpu_timestamp_total_ns as f64 / 1_000_000.0);
+
+                let before = renderer.borrow().last_stats().target_texture_creates;
+                let prewarm_start = perf_now();
+                renderer.borrow_mut().prewarm_auxiliary_targets(true, false);
+                let backdrop_prewarm = (perf_now() - prewarm_start).max(0.0);
+                backdrop_prewarm_ms.push(backdrop_prewarm);
+                let after = renderer.borrow().last_stats().target_texture_creates;
+                backdrop_prewarm_target_creates = backdrop_prewarm_target_creates
+                    .saturating_add(u64::from(after.saturating_sub(before)));
+                let start = perf_now();
+                c19_backdrop_frame(&renderer, &mut builder)?;
+                let backdrop_first = (perf_now() - start).max(0.0);
+                backdrop_first_ms.push(backdrop_first);
+                backdrop_ready_ms.push(backdrop_prewarm + backdrop_first);
+                wait_renderer_queue_idle(&renderer).await?;
+                backdrop_complete_ms.push((perf_now() - start).max(0.0));
+                backdrop_stats = renderer.borrow_mut().collect_timestamp_readbacks();
+                backdrop_gpu_ms.push(backdrop_stats.gpu_timestamp_total_ns as f64 / 1_000_000.0);
+
+                let before = backdrop_stats.target_texture_creates;
+                let start = perf_now();
+                c19_resize(&renderer, 514, 514)?;
+                resize_scene3d_ms.push((perf_now() - start).max(0.0));
+                let after = renderer.borrow().last_stats().target_texture_creates;
+                resize_scene3d_target_creates = resize_scene3d_target_creates
+                    .saturating_add(u64::from(after.saturating_sub(before)));
+
+                let before = renderer.borrow().last_stats().target_texture_creates;
+                let prewarm_start = perf_now();
+                renderer.borrow_mut().prewarm_auxiliary_targets(false, true);
+                let scene3d_prewarm = (perf_now() - prewarm_start).max(0.0);
+                scene3d_prewarm_ms.push(scene3d_prewarm);
+                let after = renderer.borrow().last_stats().target_texture_creates;
+                scene3d_prewarm_target_creates = scene3d_prewarm_target_creates
+                    .saturating_add(u64::from(after.saturating_sub(before)));
+                let start = perf_now();
+                c19_scene3d_frame(&renderer, back, front)?;
+                let scene3d_first = (perf_now() - start).max(0.0);
+                scene3d_first_ms.push(scene3d_first);
+                scene3d_ready_ms.push(
+                    resize_scene3d_ms.last().copied().unwrap_or(0.0)
+                        + scene3d_prewarm
+                        + scene3d_first,
+                );
+                wait_renderer_queue_idle(&renderer).await?;
+                scene3d_complete_ms.push((perf_now() - start).max(0.0));
+                scene3d_stats = renderer.borrow_mut().collect_timestamp_readbacks();
+                scene3d_gpu_ms.push(scene3d_stats.gpu_timestamp_total_ns as f64 / 1_000_000.0);
+            }
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.mesh3d_release(back);
+                renderer.mesh3d_release(front);
+                renderer.set_timestamp_readback_interval_for_benchmark(8);
+                renderer.set_memory_stats_interval_for_benchmark(60);
+            }
+
+            let mut out = String::new();
+            let _ = write!(out, "repeats={repeat_count}");
+            write_c19_samples(&mut out, "resize_direct_ms", &resize_direct_ms);
+            write_c19_samples(&mut out, "direct_first_ms", &direct_first_ms);
+            write_c19_samples(&mut out, "direct_ready_ms", &direct_ready_ms);
+            write_c19_samples(&mut out, "direct_complete_ms", &direct_complete_ms);
+            write_c19_samples(&mut out, "direct_gpu_ms", &direct_gpu_ms);
+            write_c19_samples(&mut out, "backdrop_prewarm_ms", &backdrop_prewarm_ms);
+            write_c19_samples(&mut out, "backdrop_first_ms", &backdrop_first_ms);
+            write_c19_samples(&mut out, "backdrop_ready_ms", &backdrop_ready_ms);
+            write_c19_samples(&mut out, "backdrop_complete_ms", &backdrop_complete_ms);
+            write_c19_samples(&mut out, "backdrop_gpu_ms", &backdrop_gpu_ms);
+            write_c19_samples(&mut out, "resize_scene3d_ms", &resize_scene3d_ms);
+            write_c19_samples(&mut out, "scene3d_prewarm_ms", &scene3d_prewarm_ms);
+            write_c19_samples(&mut out, "scene3d_first_ms", &scene3d_first_ms);
+            write_c19_samples(&mut out, "scene3d_ready_ms", &scene3d_ready_ms);
+            write_c19_samples(&mut out, "scene3d_complete_ms", &scene3d_complete_ms);
+            write_c19_samples(&mut out, "scene3d_gpu_ms", &scene3d_gpu_ms);
+            let _ = write!(
+                out,
+                ";resize_direct_target_creates={resize_direct_target_creates};resize_scene3d_target_creates={resize_scene3d_target_creates};backdrop_prewarm_target_creates={backdrop_prewarm_target_creates};scene3d_prewarm_target_creates={scene3d_prewarm_target_creates};direct_target_texture_creates={};direct_target_bind_group_creates={};direct_transient_target_bytes={};direct_depth_target_bytes={};direct_buffer_upload_bytes={};backdrop_target_texture_creates={};backdrop_target_bind_group_creates={};backdrop_transient_target_bytes={};backdrop_depth_target_bytes={};scene3d_target_texture_creates={};scene3d_target_bind_group_creates={};scene3d_transient_target_bytes={};scene3d_depth_target_bytes={}",
+                direct_stats.target_texture_creates,
+                direct_stats.target_bind_group_creates,
+                direct_stats.gpu_transient_target_bytes,
+                direct_stats.gpu_depth_target_bytes,
+                direct_stats.buffer_upload_bytes,
+                backdrop_stats.target_texture_creates,
+                backdrop_stats.target_bind_group_creates,
+                backdrop_stats.gpu_transient_target_bytes,
+                backdrop_stats.gpu_depth_target_bytes,
+                scene3d_stats.target_texture_creates,
+                scene3d_stats.target_bind_group_creates,
+                scene3d_stats.gpu_transient_target_bytes,
+                scene3d_stats.gpu_depth_target_bytes,
+            );
+            Ok(out)
         }
 
         pub async fn bench_webgpu_upload_scratch_ab(
@@ -2744,6 +2907,73 @@ mod wasm_host {
         })
     }
 
+    fn c19_resize(
+        renderer: &Rc<RefCell<BrowserRenderer>>,
+        width: u32,
+        height: u32,
+    ) -> Result<(), JsValue> {
+        renderer.borrow_mut().resize(width, height, 2.0).map_err(render_err)
+    }
+
+    fn c19_direct_frame(
+        renderer: &Rc<RefCell<BrowserRenderer>>,
+        builder: &mut ui::DrawListBuilder,
+    ) -> Result<(), JsValue> {
+        let mut renderer = renderer.borrow_mut();
+        let token = renderer.begin_frame(&gfx::FrameTarget, None);
+        builder.clear();
+        builder.rrect(
+            gfx::RectF::new(16.0, 16.0, 220.0, 220.0),
+            [18.0; 4],
+            gfx::Color::rgba(0.08, 0.16, 0.28, 1.0),
+        );
+        renderer.encode_pass(builder.drawlist());
+        renderer.submit(token).map_err(render_err)
+    }
+
+    fn c19_backdrop_frame(
+        renderer: &Rc<RefCell<BrowserRenderer>>,
+        builder: &mut ui::DrawListBuilder,
+    ) -> Result<(), JsValue> {
+        let mut renderer = renderer.borrow_mut();
+        let token = renderer.begin_frame(&gfx::FrameTarget, None);
+        builder.clear();
+        builder.rrect(
+            gfx::RectF::new(0.0, 0.0, 256.0, 256.0),
+            [0.0; 4],
+            gfx::Color::rgba(0.04, 0.10, 0.18, 1.0),
+        );
+        builder.backdrop(
+            gfx::RectF::new(32.0, 32.0, 192.0, 192.0),
+            12.0,
+            gfx::Color::rgba(0.10, 0.16, 0.24, 0.35),
+            1.0,
+        );
+        renderer.encode_pass(builder.drawlist());
+        renderer.submit(token).map_err(render_err)
+    }
+
+    fn c19_scene3d_frame(
+        renderer: &Rc<RefCell<BrowserRenderer>>,
+        back: scene3d::MeshHandle3d,
+        front: scene3d::MeshHandle3d,
+    ) -> Result<(), JsValue> {
+        let mut renderer = renderer.borrow_mut();
+        let token = renderer.begin_frame(&gfx::FrameTarget, None);
+        webgpu_scene3d_encode_handles(&mut renderer, back, front)?;
+        renderer.submit(token).map_err(render_err)
+    }
+
+    fn write_c19_samples(out: &mut String, name: &str, samples: &[f64]) {
+        let _ = write!(out, ";{name}=");
+        for (index, sample) in samples.iter().enumerate() {
+            if index != 0 {
+                out.push(',');
+            }
+            let _ = write!(out, "{sample:.6}");
+        }
+    }
+
     fn sampled_case_metrics(summary: &WebGpuBenchSummary, prefix: &str) -> String {
         let mut out = String::new();
         let _ = write!(
@@ -3973,6 +4203,17 @@ mod wasm_host {
     fn event_point(canvas: &HtmlCanvasElement, client_x: f32, client_y: f32) -> (f32, f32) {
         let rect = canvas.get_bounding_client_rect();
         (client_x - rect.left() as f32, client_y - rect.top() as f32)
+    }
+
+    fn canvas_by_id(id: &str) -> Result<HtmlCanvasElement, JsValue> {
+        let document = web_sys::window()
+            .and_then(|window| window.document())
+            .ok_or_else(|| JsValue::from_str("document is unavailable"))?;
+        document
+            .get_element_by_id(id)
+            .ok_or_else(|| JsValue::from_str("canvas id was not found"))?
+            .dyn_into::<HtmlCanvasElement>()
+            .map_err(|_| JsValue::from_str("element is not a canvas"))
     }
 
     fn canvas_backing_size(canvas: &HtmlCanvasElement) -> (u32, u32, f32) {

@@ -1,4 +1,42 @@
 [[experiments]]
+id = "c19-webgpu-lazy-auxiliary-targets"
+introduced_commit = "C19 staged tree recorded in commit proof"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["renderer-web", "oxide-host-web"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "Direct UI must own no scene/scratch/depth targets; backdrop and Scene3D must own only declared targets; resize must invalidate incompatible targets; parent/candidate app and Scene3D browser captures must pass their exact established visual gates; focused tests and wasm compilation must pass."
+performance_gate = "Fresh-process paired Chrome A/B must cover 50 raw repetitions per pair for direct, selectively prewarmed backdrop, selectively prewarmed Scene3D, and resize; construction/target counts and logical bytes must move as declared; ready/completion/GPU and 50-repeat startup distributions must pass the shared performance or no-material-regression gates."
+decision_state = "accepted"
+decision = "Construct the WebGPU surface at the final canvas backing size, create scene/scratch/depth targets only for declared features, write viewport state only at initialization/resize, and expose selective app-controlled prewarm after first-use A/B proved allocation should move outside latency-sensitive feature frames."
+proof = [
+   "The exact-tree paired reports, source identities, instrumentation hash, binary hashes, raw samples, construction counters, startup distributions, and captures are retained under benchmarks/experiments/c19-webgpu-lazy-targets/raw and summarized in the C19 commit proof.",
+   "Deterministic resource gates require direct scene/scratch/depth bytes of zero, backdrop scene+scratch only, Scene3D depth only, zero resize target creation, exactly two backdrop-prewarm target creations, and exactly one Scene3D-prewarm target creation per measured repetition.",
+   "The initial no-prewarm pilot was rejected for synchronous first-backdrop and first-Scene3D regressions even though completion/GPU distributions were neutral; the retained selective prewarm keeps feature-frame work explicit without restoring unused direct resources.",
+]
+cleanup = [
+   "Deleted eager scene/scratch/depth construction, all-target resize recreation, and per-submit viewport uploads; incompatible optional target handles are dropped on physical resize for completion-safe wgpu reclamation.",
+   "The C19 Chrome adapter is non-default measurement coverage; official latest browser baseline promotion remains deferred to C62.",
+]
+
+[[experiments]]
+id = "c19-webgpu-unannounced-first-use"
+introduced_commit = "rejected during C19"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["renderer-web", "oxide-host-web"]
+required_devices = ["Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "Lazy auxiliary targets must preserve direct, backdrop, Scene3D, resize, and browser pixels without retaining unused resources."
+performance_gate = "Moving target construction to first feature use must not regress first-backdrop or first-Scene3D synchronous submission beyond the shared no-material-regression gate."
+decision_state = "rejected"
+decision = "Rejected unannounced lazy first use as the only policy; retained selective app-controlled prewarm for latency-sensitive backdrop and Scene3D entry."
+proof = [
+   "The 15-pair pilot moved backdrop synchronous first-use p50 from 0.400 to 0.490 ms with a -26.03% paired median and zero pair wins.",
+   "The same population moved Scene3D synchronous first-use p50 from 0.305 to 0.360 ms with a -16.92% paired median and zero pair wins, while completion and GPU distributions stayed effectively flat.",
+]
+cleanup = ["Added one selective prewarm boundary that creates two backdrop targets or one Scene3D depth target; direct UI keeps zero auxiliary targets."]
+
+[[experiments]]
 id = "c18-metal-visible-frame-resources"
 introduced_commit = "C18 staged tree recorded in commit proof"
 introduced_date = "2026-07-13"

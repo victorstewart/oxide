@@ -218,6 +218,70 @@ fn wasm_webgpu_present_quad_uploads_are_cached_across_frames() {
 }
 
 #[test]
+fn wasm_webgpu_auxiliary_targets_are_created_only_for_declared_features() {
+    let source = include_str!("../src/wasm/webgpu.rs");
+    let compact = source_without_whitespace(source);
+    let constructor = source
+        .split("pub async fn from_canvas(canvas: HtmlCanvasElement)")
+        .nth(1)
+        .expect("WebGPU constructor")
+        .split("#[must_use]")
+        .next()
+        .expect("WebGPU constructor body");
+
+    assert!(compact.contains("scene_target:Option<GpuColorTarget>"));
+    assert!(compact.contains("scene_depth_target:Option<GpuDepthTarget>"));
+    assert!(compact.contains("scratch_target:Option<GpuColorTarget>"));
+    assert!(constructor.contains("scene_target: None"));
+    assert!(constructor.contains("scene_depth_target: None"));
+    assert!(constructor.contains("scratch_target: None"));
+    assert!(!constructor.contains("create_target_texture("));
+    assert!(!constructor.contains("create_depth_texture("));
+    assert!(source.contains("fn ensure_scene_target(&mut self)"));
+    assert!(source.contains("fn ensure_scene_depth_target(&mut self)"));
+    assert!(source.contains("fn ensure_scratch_target(&mut self)"));
+    assert!(source.contains(
+        "pub fn prewarm_auxiliary_targets(&mut self, backdrop: bool, scene3d: bool)"
+    ));
+    assert!(source.contains("self.inner.prewarm_auxiliary_targets(backdrop, scene3d);"));
+    assert!(source.contains("fn prewarm_auxiliary_targets(&mut self, backdrop: bool, scene3d: bool)"));
+    assert!(source.contains("fn drop_auxiliary_targets(&mut self)"));
+    assert!(source.contains("self.scene_target = None;"));
+    assert!(source.contains("self.scene_depth_target = None;"));
+    assert!(source.contains("self.scratch_target = None;"));
+}
+
+#[test]
+fn wasm_webgpu_viewport_uniform_is_written_only_during_init_or_resize() {
+    let source = include_str!("../src/wasm/webgpu.rs");
+    let renderer_impl = source
+        .split("impl api::Renderer for WebGpuRenderer")
+        .nth(1)
+        .expect("WebGPU renderer implementation");
+    let submit = renderer_impl
+        .split("fn submit(&mut self")
+        .nth(1)
+        .expect("WebGPU submit")
+        .split("fn resize(&mut self")
+        .next()
+        .expect("WebGPU submit body");
+    let resize = renderer_impl
+        .split("fn resize(&mut self")
+        .nth(1)
+        .expect("WebGPU resize");
+
+    assert!(!submit.contains("write_viewport_uniform"));
+    assert!(resize.contains("write_viewport_uniform("));
+    assert!(source.contains(
+        "write_viewport_uniform(&queue, &viewport_buffer, width, height, 1.0);"
+    ));
+    assert!(resize.contains("if size_changed"));
+    assert!(resize.contains("self.drop_auxiliary_targets();"));
+    assert!(resize.contains("if size_changed || scale_changed"));
+    assert!(resize.contains("self.layers.clear();"));
+}
+
+#[test]
 fn wasm_webgpu_timestamp_samples_are_bounded_and_drainable()
 {
    let source = include_str!("../src/wasm/webgpu.rs");
