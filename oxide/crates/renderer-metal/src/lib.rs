@@ -1032,13 +1032,16 @@ pub struct MetalRenderer {
     eighth_tmp_tex: Option<Texture>,
     scene3d_bloom_tex: Option<Texture>,
     scene3d_bloom_tmp_tex: Option<Texture>,
-    id_mask_targets: alloc::vec::Vec<Option<id_mask_gpu::RenderTargets>>,
+    id_mask_snapshot_target: Option<id_mask_gpu::RenderTargets>,
+    id_mask_in_flight_generations: alloc::vec::Vec<alloc::vec::Vec<id_mask_gpu::IdMaskInFlightGeneration>>,
     id_mask_field_cache: alloc::vec::Vec<id_mask_gpu::IdMaskFieldCacheEntry>,
     id_mask_frame_cache_serials: alloc::vec::Vec<u64>,
     id_mask_cache_budget_bytes: u64,
     id_mask_cache_resident_bytes: u64,
     id_mask_cache_evictions: u64,
     next_id_mask_cache_serial: u64,
+    id_mask_target_peak_bytes: u64,
+    id_mask_target_reuse_blocked: u64,
     id_mask_vertex_caches: alloc::vec::Vec<IdMaskVertexUploadCache>,
     images: HashMap<u32, Texture>,
     image_generations: HashMap<u32, u64>,
@@ -1103,6 +1106,7 @@ pub struct MetalRenderer {
     acc_id_mask_field_seed_passes: u32,
     acc_id_mask_field_jump_passes: u32,
     acc_id_mask_compositor_passes: u32,
+    acc_id_mask_target_creates: u32,
     acc_image_argument_encodes: u32,
     acc_image_argument_binds: u32,
     acc_image_argument_tables_finalized: u32,
@@ -2238,13 +2242,18 @@ impl MetalRenderer {
             eighth_tmp_tex: None,
             scene3d_bloom_tex: None,
             scene3d_bloom_tmp_tex: None,
-            id_mask_targets: (0..frame_resource_depth).map(|_| None).collect(),
+            id_mask_snapshot_target: None,
+            id_mask_in_flight_generations: (0..frame_resource_depth)
+                .map(|_| alloc::vec::Vec::new())
+                .collect(),
             id_mask_field_cache: alloc::vec::Vec::new(),
             id_mask_frame_cache_serials: alloc::vec::Vec::new(),
             id_mask_cache_budget_bytes,
             id_mask_cache_resident_bytes: 0,
             id_mask_cache_evictions: 0,
             next_id_mask_cache_serial: 1,
+            id_mask_target_peak_bytes: 0,
+            id_mask_target_reuse_blocked: 0,
             id_mask_vertex_caches: alloc::vec::Vec::new(),
             images: HashMap::new(),
             image_generations: HashMap::new(),
@@ -2309,6 +2318,7 @@ impl MetalRenderer {
             acc_id_mask_field_seed_passes: 0,
             acc_id_mask_field_jump_passes: 0,
             acc_id_mask_compositor_passes: 0,
+            acc_id_mask_target_creates: 0,
             acc_image_argument_encodes: 0,
             acc_image_argument_binds: 0,
             acc_image_argument_tables_finalized: 0,
@@ -2943,10 +2953,7 @@ impl MetalRenderer {
         self.target_msaa_tex = None;
         self.depth_tex = None;
         self.purge_effect_targets();
-        for targets in &mut self.id_mask_targets
-        {
-            *targets = None;
-        }
+        self.id_mask_snapshot_target = None;
         self.cam_blur_tex = None;
         self.cam_xfade_prev_tex = None;
     }
@@ -3110,16 +3117,112 @@ impl MetalRenderer {
    {
       self.id_mask_field_cache.clear();
       self.id_mask_frame_cache_serials.clear();
-      for targets in &mut self.id_mask_targets
-      {
-         *targets = None;
-      }
+      self.id_mask_snapshot_target = None;
+      let busy_slots = self.frame_in_flight.load(Ordering::Acquire);
+      self.clear_completed_id_mask_generations(busy_slots);
       self.id_mask_cache_resident_bytes = 0;
       self.apply_id_mask_cache_stats();
    }
 
+   #[inline]
+   fn next_id_mask_generation_serial(&mut self) -> u64
+   {
+      let serial = self.next_id_mask_cache_serial;
+      self.next_id_mask_cache_serial = serial.wrapping_add(1).max(1);
+      serial
+   }
+
+   fn clear_completed_id_mask_generations(&mut self, busy_slots: u8)
+   {
+      for (slot, generations) in self.id_mask_in_flight_generations.iter_mut().enumerate()
+      {
+         if busy_slots & frame_slot_bit(slot) == 0
+         {
+            generations.clear();
+         }
+      }
+   }
+
+   fn retain_id_mask_in_flight_generation(&mut self, serial: u64, bytes: u64)
+   {
+      let slot = self.current_frame_slot();
+      let Some(generations) = self.id_mask_in_flight_generations.get_mut(slot) else
+      {
+         return;
+      };
+      if !generations.iter().any(|generation| generation.serial == serial)
+      {
+         generations.push(id_mask_gpu::IdMaskInFlightGeneration { serial, bytes });
+      }
+      self.update_id_mask_target_peak();
+   }
+
+   fn id_mask_generation_in_flight(&self, serial: u64) -> bool
+   {
+      let busy_slots = self.frame_in_flight.load(Ordering::Acquire);
+      self.id_mask_in_flight_generations.iter().enumerate().any(|(slot, generations)| {
+         busy_slots & frame_slot_bit(slot) != 0
+            && generations.iter().any(|generation| generation.serial == serial)
+      })
+   }
+
+   #[inline]
+   fn id_mask_generation_slot_active(&self, slot: usize, busy_slots: u8) -> bool
+   {
+      busy_slots & frame_slot_bit(slot) != 0
+         || (slot == self.current_frame_slot()
+            && self.frames.get(slot).is_some_and(|frame| frame.cmd.is_some()))
+   }
+
+   fn id_mask_target_storage(&self) -> (u32, u64, u64)
+   {
+      let busy_slots = self.frame_in_flight.load(Ordering::Acquire);
+      let mut count = 0_u32;
+      let mut in_flight_bytes = 0_u64;
+      let mut storage_bytes = self.id_mask_cache_resident_bytes;
+      for (slot, generations) in self.id_mask_in_flight_generations.iter().enumerate()
+      {
+         if !self.id_mask_generation_slot_active(slot, busy_slots)
+         {
+            continue;
+         }
+         for (index, generation) in generations.iter().enumerate()
+         {
+            let seen_in_slot = generations[..index].iter()
+               .any(|seen| seen.serial == generation.serial);
+            let seen_in_prior_slot = self.id_mask_in_flight_generations[..slot]
+               .iter()
+               .enumerate()
+               .any(|(prior_slot, prior)| {
+                  self.id_mask_generation_slot_active(prior_slot, busy_slots)
+                     && prior.iter().any(|seen| seen.serial == generation.serial)
+               });
+            if !seen_in_slot && !seen_in_prior_slot
+            {
+               count = count.saturating_add(1);
+               in_flight_bytes = in_flight_bytes.saturating_add(generation.bytes);
+               if !self.id_mask_field_cache.iter()
+                  .any(|entry| entry.serial == generation.serial)
+               {
+                  storage_bytes = storage_bytes.saturating_add(generation.bytes);
+               }
+            }
+         }
+      }
+      (count, in_flight_bytes, storage_bytes)
+   }
+
+   fn update_id_mask_target_peak(&mut self)
+   {
+      self.id_mask_target_peak_bytes = self.id_mask_target_peak_bytes
+         .max(self.id_mask_target_storage().2);
+   }
+
    fn apply_id_mask_cache_stats(&mut self)
    {
+      let (in_flight_generations, in_flight_bytes, target_storage_bytes) =
+         self.id_mask_target_storage();
+      self.id_mask_target_peak_bytes = self.id_mask_target_peak_bytes.max(target_storage_bytes);
       self.last_stats.id_mask_cache_hits = self.acc_id_mask_cache_hits;
       self.last_stats.id_mask_cache_misses = self.acc_id_mask_cache_misses;
       self.last_stats.id_mask_cache_budget_bytes = self.id_mask_cache_budget_bytes;
@@ -3130,9 +3233,15 @@ impl MetalRenderer {
       self.last_stats.id_mask_field_seed_passes = self.acc_id_mask_field_seed_passes;
       self.last_stats.id_mask_field_jump_passes = self.acc_id_mask_field_jump_passes;
       self.last_stats.id_mask_compositor_passes = self.acc_id_mask_compositor_passes;
+      self.last_stats.id_mask_target_creates = self.acc_id_mask_target_creates;
+      self.last_stats.id_mask_in_flight_generations = in_flight_generations;
+      self.last_stats.id_mask_in_flight_target_bytes = in_flight_bytes;
+      self.last_stats.id_mask_target_storage_bytes = target_storage_bytes;
+      self.last_stats.id_mask_target_peak_bytes = self.id_mask_target_peak_bytes;
+      self.last_stats.id_mask_target_reuse_blocked = self.id_mask_target_reuse_blocked;
    }
 
-   fn evict_oldest_id_mask_cache_entry(&mut self) -> Option<id_mask_gpu::RenderTargets>
+   fn evict_oldest_id_mask_cache_entry(&mut self) -> Option<(id_mask_gpu::RenderTargets, bool)>
    {
       let index = self.id_mask_field_cache.iter().enumerate()
          .filter(|(_, entry)| !self.id_mask_frame_cache_serials.contains(&entry.serial))
@@ -3142,7 +3251,8 @@ impl MetalRenderer {
       self.id_mask_cache_resident_bytes = self.id_mask_cache_resident_bytes
          .saturating_sub(entry.bytes);
       self.id_mask_cache_evictions = self.id_mask_cache_evictions.saturating_add(1);
-      Some(entry.targets)
+      let reusable = !self.id_mask_generation_in_flight(entry.serial);
+      Some((entry.targets, reusable))
    }
 
    fn enforce_id_mask_cache_budget(&mut self)
@@ -3161,6 +3271,13 @@ impl MetalRenderer {
    {
       if required > self.id_mask_cache_budget_bytes
       {
+         while !self.id_mask_field_cache.is_empty()
+         {
+            if self.evict_oldest_id_mask_cache_entry().is_none()
+            {
+               break;
+            }
+         }
          return None;
       }
       let mut reusable = None;
@@ -3168,10 +3285,19 @@ impl MetalRenderer {
          || self.id_mask_cache_resident_bytes.saturating_add(required)
             > self.id_mask_cache_budget_bytes
       {
-         let targets = self.evict_oldest_id_mask_cache_entry()?;
-         if reusable.is_none() && targets.width == width && targets.height == height
+         let (targets, synchronization_permits_reuse) =
+            self.evict_oldest_id_mask_cache_entry()?;
+         if targets.width == width && targets.height == height
          {
-            reusable = Some(targets);
+            if reusable.is_none() && synchronization_permits_reuse
+            {
+               reusable = Some(targets);
+            }
+            else if !synchronization_permits_reuse
+            {
+               self.id_mask_target_reuse_blocked = self.id_mask_target_reuse_blocked
+                  .saturating_add(1);
+            }
          }
       }
       Some(reusable)
@@ -4107,6 +4233,7 @@ impl MetalRenderer {
             self.acc_id_mask_field_seed_passes = 0;
             self.acc_id_mask_field_jump_passes = 0;
             self.acc_id_mask_compositor_passes = 0;
+            self.acc_id_mask_target_creates = 0;
             self.acc_image_argument_encodes = 0;
             self.acc_image_argument_binds = 0;
             self.acc_image_argument_tables_finalized = 0;
@@ -5785,6 +5912,7 @@ impl api::Renderer for MetalRenderer {
         let frame_resource_depth = self.frames.len();
         let preferred_slot = self.next_frame_slot();
         let busy_slots = self.frame_in_flight.load(Ordering::Acquire);
+        self.clear_completed_id_mask_generations(busy_slots);
         let mut candidate = preferred_slot;
         let mut slot = None;
         for _ in 0..frame_resource_depth
@@ -5842,6 +5970,7 @@ impl api::Renderer for MetalRenderer {
             self.acc_id_mask_field_seed_passes = 0;
             self.acc_id_mask_field_jump_passes = 0;
             self.acc_id_mask_compositor_passes = 0;
+            self.acc_id_mask_target_creates = 0;
             self.acc_image_argument_encodes = 0;
             self.acc_image_argument_binds = 0;
             self.acc_image_argument_tables_finalized = 0;
@@ -10134,6 +10263,12 @@ pub struct PerfStats {
     pub id_mask_field_seed_passes: u32,
     pub id_mask_field_jump_passes: u32,
     pub id_mask_compositor_passes: u32,
+    pub id_mask_target_creates: u32,
+    pub id_mask_in_flight_generations: u32,
+    pub id_mask_in_flight_target_bytes: u64,
+    pub id_mask_target_storage_bytes: u64,
+    pub id_mask_target_peak_bytes: u64,
+    pub id_mask_target_reuse_blocked: u64,
     pub image_argument_encodes: u32,
     pub image_argument_binds: u32,
     pub image_argument_tables_finalized: u32,
@@ -10365,9 +10500,9 @@ impl MetalRenderer {
                 .map(|tex| tex.as_ref())
                 .chain(self.scene3d_bloom_tmp_tex.iter().map(|tex| tex.as_ref())),
         );
-        let id_mask_target_bytes = Self::unique_texture_category_bytes(
+        let retained_id_mask_target_bytes = Self::unique_texture_category_bytes(
             &mut seen,
-            self.id_mask_targets.iter().filter_map(|targets| targets.as_ref())
+            self.id_mask_snapshot_target.iter()
                 .chain(self.id_mask_field_cache.iter().map(|entry| &entry.targets))
                 .flat_map(|targets| {
                     [Some(targets.city.as_ref()), Some(targets.neighborhood.as_ref())]
@@ -10376,6 +10511,8 @@ impl MetalRenderer {
                         .flatten()
                 }),
         );
+        let id_mask_target_bytes = retained_id_mask_target_bytes
+            .max(self.id_mask_target_storage().2);
         let camera_blur_cache_bytes = Self::unique_texture_category_bytes(
             &mut seen,
             self.cam_blur_tex.iter().map(|tex| tex.as_ref()),
@@ -10500,7 +10637,7 @@ impl MetalRenderer {
                 texture,
             );
         }
-        for targets in self.id_mask_targets.iter().filter_map(|targets| targets.as_ref()) {
+        for targets in self.id_mask_snapshot_target.iter() {
             for texture in [Some(targets.city.as_ref()), Some(targets.neighborhood.as_ref())]
                 .into_iter()
                 .chain(targets.field_texture_refs())

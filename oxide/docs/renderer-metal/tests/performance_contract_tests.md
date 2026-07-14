@@ -32,6 +32,8 @@ This test file protects renderer performance contracts that are easy to regress 
   Confirms command-buffer GPU timestamp support is compiled for macOS and iOS.
 - `completed_gpu_duration_is_attributed_to_frame_id()`
   Confirms completed GPU timing is associated with the frame id that produced it.
+- `auxiliary_encoders_use_the_selected_frame_slot()`
+  Requires ID-mask and neon encoders to use the selected frame slot, rejects the former eight-entry ID-mask target array, and freezes the completion-cleared generation metadata and busy-generation reuse guard.
 - `layer_cache_uses_one_plan_and_reports_single_ownership()`
   Freezes the generation-based plan, nested invalidation, same-size/format texture reuse, separation from prepared-layer keys, one materialization site, and public ownership counters.
 - `layer_cache_clean_and_dirty_frames_have_single_body_owner()`
@@ -67,7 +69,7 @@ Source-contract tests catch forbidden APIs and required guard strings before run
 
 ## Concurrency and memory behavior
 
-The source tests allocate only small strings borrowed from `include_str!`. The frame-resource runtime tests construct fixed-depth vectors once, then mutate one bounded completion bitset while proving saturated selection remains nonblocking. The initializer runtime test constructs and drops one renderer instance. The layer runtime test submits three bounded frames through the production command queue and reuses the same renderer/cache.
+The source tests allocate only small strings borrowed from `include_str!`. The frame-resource runtime tests construct fixed-depth vectors once, then mutate one bounded completion bitset while proving saturated selection remains nonblocking. ID-mask frame slots retain only small generation records; the source contract rejects per-slot large target ownership and requires completion-cleared metadata before reuse. The initializer runtime test constructs and drops one renderer instance. The layer runtime test submits three bounded frames through the production command queue and reuses the same renderer/cache.
 
 ## Performance notes
 
@@ -76,7 +78,7 @@ The debug/capture-name freeze is measurement harness only. It changes no runtime
 
 ## Feature flags and cfgs
 
-- The runtime initializer test is guarded with `#[cfg(target_os = "macos")]`.
+- The runtime initializer test is guarded with `#[cfg(target_os = "macos")]`; frame-slot mutation tests additionally require `snapshot-tests` because their deterministic completion controls are test-only APIs.
 - The source-contract tests run on every target that compiles the crate tests.
 
 ## Testing and benchmarks
@@ -106,6 +108,7 @@ fn initialize_renderer_for_contract_check() -> Result<(), oxide_renderer_metal::
 
 ## Changelog
 
+- 2026-07-14: replaced the ID-mask auxiliary-slot count assertion with C36 single-snapshot-target and completion-safe generation ownership guards.
 - 2026-07-14: added C31 Metal contracts for zero-budget exact inline fallback, allocated-byte bounds, resize pooling, navigation-ID reuse, and memory-warning purge telemetry.
 - 2026-07-13: extended the C05 layer source contract to require format-compatible reuse and separation from C29 prepared-layer ownership.
 - 2026-07-13: added explicit visible/offscreen depth, initial-capacity, completion ownership, saturation skip, and recovery coverage.

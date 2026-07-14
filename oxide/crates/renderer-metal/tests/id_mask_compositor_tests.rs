@@ -89,7 +89,7 @@ fn id_mask_field_cache_hits_final_only_changes_and_evicts_complete_keys() {
         mask_size: usize,
         mask_scale: f32,
         second_revision: Option<u64>,
-    ) {
+    ) -> Vec<u8> {
         let mut projection = IdMaskRasterProjection::world_3d([
             [1.0, 0.0, 0.0, 0.0],
             [0.0, 1.0, 0.0, 0.0],
@@ -131,7 +131,7 @@ fn id_mask_field_cache_hits_final_only_changes_and_evicts_complete_keys() {
             renderer.encode_id_mask_gpu_compositor(&second).expect("encode second ID-mask frame");
         }
         renderer.submit(token).expect("submit ID-mask frame");
-        renderer.readback_bgra8().expect("drain ID-mask frame");
+        renderer.readback_bgra8().expect("drain ID-mask frame").2
     }
 
     let vertices = [
@@ -156,6 +156,10 @@ fn id_mask_field_cache_hits_final_only_changes_and_evicts_complete_keys() {
     assert_eq!(cold.render_passes, 9);
     assert_eq!(cold.id_mask_cache_entries, 1);
     assert!(cold.id_mask_cache_resident_bytes > 0);
+    assert_eq!(cold.id_mask_target_creates, 1);
+    assert_eq!(cold.id_mask_in_flight_generations, 1);
+    assert_eq!(cold.id_mask_in_flight_target_bytes, cold.id_mask_cache_resident_bytes);
+    assert_eq!(cold.id_mask_target_storage_bytes, cold.id_mask_cache_resident_bytes);
 
     render(&mut renderer, &vertices, &chunks, 1, 0.0, true, 64, 1.0, None);
     let final_only = renderer.last_stats();
@@ -165,6 +169,7 @@ fn id_mask_field_cache_hits_final_only_changes_and_evicts_complete_keys() {
     assert_eq!(final_only.id_mask_field_jump_passes, 0);
     assert_eq!(final_only.id_mask_compositor_passes, 1);
     assert_eq!(final_only.render_passes, 1);
+    assert_eq!(final_only.id_mask_target_creates, 0);
 
     render(&mut renderer, &vertices, &chunks, 1, 0.01, false, 64, 1.0, None);
     assert_eq!(renderer.last_stats().id_mask_cache_misses, 1);
@@ -201,7 +206,70 @@ fn id_mask_field_cache_hits_final_only_changes_and_evicts_complete_keys() {
     render(&mut renderer, &vertices, &chunks, 1, 0.0, false, 64, 1.0, None);
     assert_eq!(renderer.last_stats().id_mask_cache_entries, 0);
     assert_eq!(renderer.last_stats().id_mask_cache_resident_bytes, 0);
+    assert_eq!(renderer.last_stats().id_mask_target_creates, 0);
+    assert!(renderer.last_stats().id_mask_in_flight_target_bytes > 0);
+    assert_eq!(
+        renderer.last_stats().id_mask_target_storage_bytes,
+        renderer.last_stats().id_mask_in_flight_target_bytes,
+    );
+    render(&mut renderer, &vertices, &chunks, 2, 0.0, false, 64, 1.0, None);
+    assert_eq!(renderer.last_stats().id_mask_target_creates, 0);
     renderer.purge_id_mask_field_cache();
     assert_eq!(renderer.last_stats().id_mask_cache_entries, 0);
     assert_eq!(renderer.last_stats().id_mask_cache_resident_bytes, 0);
+
+    let mut bounded = MetalRenderer::new_default().expect("create bounded Metal renderer");
+    bounded.resize(64, 64, 1.0).expect("resize bounded Metal renderer");
+    let baseline_pixels = render(
+        &mut bounded,
+        &vertices,
+        &chunks,
+        10,
+        0.0,
+        false,
+        64,
+        1.0,
+        None,
+    );
+    let generation_bytes = bounded.last_stats().id_mask_cache_resident_bytes;
+    bounded.set_id_mask_cache_budget_bytes(generation_bytes);
+    let busy_slot = bounded.current_frame_slot_for_snapshot();
+    bounded.mark_frame_slot_busy_for_snapshot(busy_slot);
+    let busy_pixels = render(
+        &mut bounded,
+        &vertices,
+        &chunks,
+        11,
+        0.0,
+        false,
+        64,
+        1.0,
+        None,
+    );
+    let busy = bounded.last_stats();
+    assert_eq!(busy.id_mask_target_creates, 1, "busy target was overwritten: {busy:?}");
+    assert_eq!(busy.id_mask_target_reuse_blocked, 1);
+    assert_eq!(busy.id_mask_in_flight_generations, 2);
+    assert_eq!(busy.id_mask_target_storage_bytes, generation_bytes.saturating_mul(2));
+    assert_eq!(busy.id_mask_target_peak_bytes, generation_bytes.saturating_mul(2));
+    assert_eq!(busy.frame_backpressure_skipped, 0);
+    assert_eq!(busy_pixels, baseline_pixels);
+
+    bounded.release_frame_slot_for_snapshot(busy_slot);
+    let reusable_pixels = render(
+        &mut bounded,
+        &vertices,
+        &chunks,
+        12,
+        0.0,
+        false,
+        64,
+        1.0,
+        None,
+    );
+    let reusable = bounded.last_stats();
+    assert_eq!(reusable.id_mask_target_creates, 0, "completed target was not recycled: {reusable:?}");
+    assert_eq!(reusable.id_mask_target_reuse_blocked, 1);
+    assert_eq!(reusable.id_mask_target_storage_bytes, generation_bytes);
+    assert_eq!(reusable_pixels, baseline_pixels);
 }

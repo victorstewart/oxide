@@ -166,6 +166,12 @@ pub(super) struct IdMaskFieldCacheEntry {
     pub(super) serial: u64,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct IdMaskInFlightGeneration {
+    pub(super) serial: u64,
+    pub(super) bytes: u64,
+}
+
 impl IdMaskFieldCacheEntry {
     fn matches(&self, key: IdMaskFieldCacheKey, chunks: &[id_mask_compositor::IdMaskRasterChunk]) -> bool {
         self.key == key
@@ -392,8 +398,7 @@ impl MetalRenderer {
     #[cfg(feature = "snapshot-tests")]
     pub fn readback_id_mask_snapshot(&self) -> Option<IdMaskSnapshotReadback>
     {
-        let slot = self.current_frame_slot();
-        let targets = self.id_mask_targets.get(slot)?.as_ref()?;
+        let targets = self.id_mask_snapshot_target.as_ref()?;
         let (_, _, city) = self.readback_texture_bytes(&targets.city, 1)?;
         let (_, _, neighborhood) = self.readback_texture_bytes(&targets.neighborhood, 1)?;
         let (city_field, seam_field) = match targets.final_fields() {
@@ -477,6 +482,7 @@ impl MetalRenderer {
             neighborhood: self.new_r8_mask_render_texture(width, height)?,
             fields,
         };
+        self.acc_id_mask_target_creates = self.acc_id_mask_target_creates.saturating_add(1);
         self.acc_resource_creates = self.acc_resource_creates.saturating_add(2 + field_texture_count);
         Ok(targets)
     }
@@ -582,12 +588,14 @@ impl MetalRenderer {
         let entry = &mut self.id_mask_field_cache[index];
         entry.last_used_frame = self.frame_id;
         let serial = entry.serial;
+        let bytes = entry.bytes;
         let targets = entry.targets.clone();
         if !self.id_mask_frame_cache_serials.contains(&serial) {
             self.id_mask_frame_cache_serials.push(serial);
         }
         self.acc_id_mask_cache_hits = self.acc_id_mask_cache_hits.saturating_add(1);
         self.acc_backend_cache_hits = self.acc_backend_cache_hits.saturating_add(1);
+        self.retain_id_mask_in_flight_generation(serial, bytes);
         Some(targets)
     }
 
@@ -596,22 +604,21 @@ impl MetalRenderer {
         key: IdMaskFieldCacheKey,
         chunks: &[id_mask_compositor::IdMaskRasterChunk],
         targets: &RenderTargets,
-    ) {
+    ) -> bool {
         let bytes = Self::id_mask_render_targets_bytes(targets);
         while self.id_mask_cache_resident_bytes.saturating_add(bytes)
             > self.id_mask_cache_budget_bytes
         {
             if self.evict_oldest_id_mask_cache_entry().is_none() {
-                return;
+                return false;
             }
         }
         if bytes > self.id_mask_cache_budget_bytes
             || self.id_mask_field_cache.len() >= ID_MASK_CACHE_MAX_ENTRIES
         {
-            return;
+            return false;
         }
-        let serial = self.next_id_mask_cache_serial;
-        self.next_id_mask_cache_serial = self.next_id_mask_cache_serial.wrapping_add(1).max(1);
+        let serial = self.next_id_mask_generation_serial();
         self.id_mask_cache_resident_bytes =
             self.id_mask_cache_resident_bytes.saturating_add(bytes);
         self.id_mask_field_cache.push(IdMaskFieldCacheEntry {
@@ -623,6 +630,8 @@ impl MetalRenderer {
             serial,
         });
         self.id_mask_frame_cache_serials.push(serial);
+        self.retain_id_mask_in_flight_generation(serial, bytes);
+        true
     }
 
     fn encode_id_mask_compositor_textures(
@@ -771,7 +780,7 @@ impl MetalRenderer {
         if let Some(targets) = self.id_mask_field_cache_hit(cache_key, pass.raster.chunks) {
             #[cfg(feature = "snapshot-tests")]
             {
-                self.id_mask_targets[slot] = Some(targets.clone());
+                self.id_mask_snapshot_target = Some(targets.clone());
             }
             return self.encode_id_mask_compositor_textures(
                 pass.raster.viewport,
@@ -802,6 +811,22 @@ impl MetalRenderer {
         );
         let cacheable = admission.is_some();
         let reusable = admission.flatten();
+        #[cfg(feature = "snapshot-tests")]
+        let reusable = if !cacheable
+            && self.frame_in_flight.load(Ordering::Acquire) == 0
+            && self.id_mask_in_flight_generations[self.current_frame_slot()].is_empty()
+        {
+            reusable.or_else(|| {
+                self.id_mask_snapshot_target.take().filter(|targets| {
+                    targets.width == pass.raster.mask_width
+                        && targets.height == pass.raster.mask_height
+                })
+            })
+        }
+        else
+        {
+            reusable
+        };
         let targets = self.new_id_mask_render_targets(
             pass.raster.mask_width,
             pass.raster.mask_height,
@@ -809,7 +834,12 @@ impl MetalRenderer {
         )?;
         #[cfg(feature = "snapshot-tests")]
         {
-            self.id_mask_targets[slot] = Some(targets.clone());
+            self.id_mask_snapshot_target = Some(targets.clone());
+        }
+        if !cacheable {
+            let serial = self.next_id_mask_generation_serial();
+            let bytes = Self::id_mask_render_targets_bytes(&targets);
+            self.retain_id_mask_in_flight_generation(serial, bytes);
         }
         for chunk in pass.raster.chunks {
             self.acc_chunks_prepared = self.acc_chunks_prepared.saturating_add(1);
@@ -933,7 +963,11 @@ impl MetalRenderer {
             jump /= 2;
         }
         if cacheable {
-            self.retain_id_mask_field_cache_entry(cache_key, pass.raster.chunks, &targets);
+            if !self.retain_id_mask_field_cache_entry(cache_key, pass.raster.chunks, &targets) {
+                let serial = self.next_id_mask_generation_serial();
+                let bytes = Self::id_mask_render_targets_bytes(&targets);
+                self.retain_id_mask_in_flight_generation(serial, bytes);
+            }
         }
         self.encode_id_mask_compositor_textures(
             pass.raster.viewport,

@@ -32,9 +32,9 @@ Call flow:
 
 The fixed cache key stores mask dimensions, the exact `mask_scale` bits, aggregate vertex revision and count, ordered chunk hashes/ranges, and exact bits for every projection matrix, camera, hemisphere, and normal input consumed by rasterization. Styles, colors, glow, polish, mode, opacity, and viewport placement are absent because they only affect the final compositor.
 
-On a hit, the entry's LRU frame is refreshed, its serial is protected for the current command buffer, and only the final compositor is encoded. On a miss, admission evicts cold unprotected entries until the actual allocated-byte budget and four-entry bound permit the new set. A dimension-compatible evicted set can be rewritten instead of allocating new textures. Raster writes city and neighborhood R8 targets. When each maximum coordinate is below `0xFFFF`, seed and logarithmic JFA passes ping-pong two RGBA16Uint fields: city XY occupies `.xy`, seam XY occupies `.zw`, and `0xFFFF` is invalid. The final compositor recovers city and neighborhood IDs from the authoritative R8 masks at the selected coordinates. Dimensions needing the sentinel coordinate retain two city plus two seam RGBA32Float fields and dedicated prebuilt pipeline states; compile-time assertions pin the selector boundary at 65,535 accepted and 65,536 rejected.
+On a hit, the entry's LRU frame is refreshed, its serial is attached to the current frame slot, and only the final compositor is encoded. On a miss, admission evicts cold unprotected entries until the actual allocated-byte budget and four-entry bound permit the new set. A dimension-compatible evicted set is rewritten only when no submitted slot still references its generation. Oversized transient requests evict every unprotected cached dimension before allocating. Snapshot builds keep one readback target; when no submission is active, a same-size transient reuses it, while a size change drops it before allocating the new dimensions. Raster writes city and neighborhood R8 targets. When each maximum coordinate is below `0xFFFF`, seed and logarithmic JFA passes ping-pong two RGBA16Uint fields: city XY occupies `.xy`, seam XY occupies `.zw`, and `0xFFFF` is invalid. The final compositor recovers city and neighborhood IDs from the authoritative R8 masks at the selected coordinates. Dimensions needing the sentinel coordinate retain two city plus two seam RGBA32Float fields and dedicated prebuilt pipeline states; compile-time assertions pin the selector boundary at 65,535 accepted and 65,536 rejected.
 
-The field set becomes immutable after its miss sequence. The current-frame serial list prevents a later map in the same command buffer from recycling fields already referenced by an earlier compositor. Cross-frame reuse and rewrites stay on the renderer's single command queue with default tracked hazards; command-buffer retention keeps submitted resources alive until Metal completes them.
+The field set becomes immutable after its miss sequence. The current-frame serial list prevents a later map in the same command buffer from recycling fields already referenced by an earlier compositor. Tiny per-slot generation lists associate every cache hit or transient miss with the selected frame slot. Metal's completion handler clears the corresponding in-flight bit, and the next frame clears metadata only for completed slots. Eviction can release its CPU-side cache handle while a command buffer remains active, but it cannot return that texture set for rewriting until the generation is absent from every active slot.
 
 ## Preconditions and postconditions
 
@@ -50,20 +50,20 @@ The field set becomes immutable after its miss sequence. The current-frame seria
 - An entry larger than the budget renders transiently and is not admitted.
 - When every resident entry is protected by the current frame, an additional miss uses transient targets rather than corrupting an earlier map.
 - Exact floating-point bits make NaNs and signed zero conservative cache boundaries instead of approximate matches.
-- Explicit purge clears both cache entries and frame-slot references; already committed command buffers retain only their required in-flight ownership.
+- Explicit purge clears cache and snapshot ownership but preserves generation byte accounting for active command buffers until completion.
 
 ## Concurrency and memory behavior
 
-Renderer mutation is single-owner through `&mut MetalRenderer`. Cache entries clone Metal handles but not texture storage. CPU allocation occurs only on cache misses when an admitted entry copies its bounded ordered chunk key; hits allocate no chunk vector and create no Metal resources. The field budget defaults to one eighth of the device-recommended working set, clamped to 64–512 MiB, and can be overridden through `OXIDE_ID_MASK_CACHE_BUDGET_BYTES` or the public setter.
+Renderer mutation is single-owner through `&mut MetalRenderer`. Cache entries clone Metal handles but not texture storage. The frame ring stores only generation serial/byte metadata, not per-slot texture sets. Those small vectors retain warmed capacity and are cleared after completion. CPU allocation occurs only on cache misses when an admitted entry copies its bounded ordered chunk key or a slot first exceeds its prior generation high-water count; hits create no Metal resources. The field budget defaults to one eighth of the device-recommended working set, clamped to 64–512 MiB, and can be overridden through `OXIDE_ID_MASK_CACHE_BUDGET_BYTES` or the public setter.
 
 ## Performance notes
 
-A cache hit changes a 512-square field build from raster + seed + nine JFA passes + compositor to one compositor pass. Packed field ownership is 16 logical bytes per pixel across both ping-pong textures versus 64 for four wide fields, and each packed JFA candidate read fetches one eight-byte city/seam coordinate record instead of two 16-byte records. Counters expose cache hits/misses, entries, resident/budget bytes, evictions, and raster/seed/jump/compositor pass counts. Target byte accounting uses Metal allocated size, deduplicated by resource identity in renderer memory reports.
+A cache hit changes a 512-square field build from raster + seed + nine JFA passes + compositor to one compositor pass. Packed field ownership is 16 logical bytes per pixel across both ping-pong textures versus 64 for four wide fields, and each packed JFA candidate read fetches one eight-byte city/seam coordinate record instead of two 16-byte records. Counters expose cache hits/misses, entries, resident/budget bytes, evictions, raster/seed/jump/compositor passes, target creates, unique in-flight generations/bytes, cache-plus-in-flight storage, lifetime peak storage, and synchronization-blocked reuse. Allocated target bytes use Metal allocated size and preserve command-buffer-only ownership through generation metadata after cache eviction.
 
 ## Feature flags and cfgs
 
 - The production encoder is available on Apple Metal targets.
-- `snapshot-tests` adds synchronous readback and format-independent decoded field vectors; it does not affect the production path.
+- `snapshot-tests` adds synchronous readback, format-independent decoded field vectors, and a single completion-safe same-dimension readback target pool. Production cache and in-flight synchronization use the same generation rules without retaining snapshot storage.
 
 ## Testing and benchmarks
 
@@ -82,5 +82,6 @@ renderer.submit(token)?;
 
 ## Changelog
 
+- 2026-07-14: bounded target ownership by cache generation and actual in-flight submission, prohibited busy-generation rewrites, reduced snapshot/offscreen transient pooling from eight target sets to one lazy same-size target, and added target-storage telemetry.
 - 2026-07-14: packed city/seam seed coordinates into two RGBA16Uint ping-pong fields, recovered semantic IDs from R8 masks in the compositor, and retained an exact wide-coordinate fallback.
 - 2026-07-14: added complete-key, byte-budgeted immutable raster/JFA field caching with compositor-only hits, compatible target reuse, stage telemetry, and purge behavior.

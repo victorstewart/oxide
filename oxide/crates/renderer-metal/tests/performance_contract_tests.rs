@@ -64,7 +64,7 @@ fn visible_and_offscreen_frame_resource_modes_have_explicit_depths()
    assert!(!source.contains("maximumDrawableCount"));
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "snapshot-tests"))]
 #[test]
 fn visible_frame_resources_cover_measured_high_water_and_skip_only_when_busy()
 {
@@ -91,7 +91,7 @@ fn visible_frame_resources_cover_measured_high_water_and_skip_only_when_busy()
    renderer.submit(resumed).expect("submit resumed empty frame");
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "snapshot-tests"))]
 #[test]
 fn offscreen_frame_resources_retain_deeper_completion_protected_mode()
 {
@@ -288,12 +288,17 @@ fn auxiliary_encoders_use_the_selected_frame_slot()
       assert!(!source.contains("frame_id % FRAME_RING_SIZE as u64"));
    }
    assert!(neon.contains("let slot = self.current_frame_slot();"));
-   assert!(id_mask.matches("let slot = self.current_frame_slot();").count() >= 3);
+   assert_eq!(id_mask.matches("let slot = self.current_frame_slot();").count(), 2);
 
    let renderer = include_str!("../src/lib.rs");
    assert!(renderer.contains("mark_next_preferred_frame_slot_busy_for_snapshot"));
    assert!(renderer.contains("current_frame_command_buffer_slot_for_snapshot"));
    assert!(renderer.contains("frame_slot_has_command_buffer_for_snapshot"));
+   assert!(!renderer.contains("id_mask_targets: alloc::vec::Vec<Option"));
+   assert!(renderer.contains("id_mask_snapshot_target: Option"));
+   assert!(renderer.contains("id_mask_in_flight_generations:"));
+   assert!(renderer.contains("!self.id_mask_generation_in_flight(entry.serial)"));
+   assert!(renderer.contains("self.clear_completed_id_mask_generations(busy_slots)"));
 }
 
 #[cfg(target_os = "macos")]

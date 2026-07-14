@@ -3444,6 +3444,12 @@ fn id_mask_matrix_case(id: &str, smoke: bool, change: &str, size: usize, chunk_c
    let mut id_mask_cache_resident_bytes_peak = 0_u64;
    let mut id_mask_cache_entries_peak = 0_u32;
    let mut id_mask_cache_evictions_peak = 0_u64;
+   let mut id_mask_target_creates_sum = 0_u64;
+   let mut id_mask_in_flight_generations_peak = 0_u32;
+   let mut id_mask_in_flight_target_bytes_peak = 0_u64;
+   let mut id_mask_target_storage_bytes_peak = 0_u64;
+   let mut id_mask_generation_peak_bytes = 0_u64;
+   let mut id_mask_target_reuse_blocked_peak = 0_u64;
    let mut resource_creates_sum = 0_u64;
 
    for frame in 0..(warmups + frames)
@@ -3527,6 +3533,18 @@ fn id_mask_matrix_case(id: &str, smoke: bool, change: &str, size: usize, chunk_c
             .max(stats.id_mask_cache_entries);
          id_mask_cache_evictions_peak = id_mask_cache_evictions_peak
             .max(stats.id_mask_cache_evictions);
+         id_mask_target_creates_sum = id_mask_target_creates_sum
+            .saturating_add(u64::from(stats.id_mask_target_creates));
+         id_mask_in_flight_generations_peak = id_mask_in_flight_generations_peak
+            .max(stats.id_mask_in_flight_generations);
+         id_mask_in_flight_target_bytes_peak = id_mask_in_flight_target_bytes_peak
+            .max(stats.id_mask_in_flight_target_bytes);
+         id_mask_target_storage_bytes_peak = id_mask_target_storage_bytes_peak
+            .max(stats.id_mask_target_storage_bytes);
+         id_mask_generation_peak_bytes = id_mask_generation_peak_bytes
+            .max(stats.id_mask_target_peak_bytes);
+         id_mask_target_reuse_blocked_peak = id_mask_target_reuse_blocked_peak
+            .max(stats.id_mask_target_reuse_blocked);
          resource_creates_sum = resource_creates_sum
             .saturating_add(u64::from(stats.resource_creates));
       }
@@ -3569,6 +3587,12 @@ fn id_mask_matrix_case(id: &str, smoke: bool, change: &str, size: usize, chunk_c
    metrics.insert(String::from("id_mask_cache_resident_bytes_peak"), id_mask_cache_resident_bytes_peak as f64);
    metrics.insert(String::from("id_mask_cache_entries_peak"), f64::from(id_mask_cache_entries_peak));
    metrics.insert(String::from("id_mask_cache_evictions"), id_mask_cache_evictions_peak as f64);
+   metrics.insert(String::from("id_mask_target_creates_avg"), id_mask_target_creates_sum as f64 / frames as f64);
+   metrics.insert(String::from("id_mask_in_flight_generations_peak"), f64::from(id_mask_in_flight_generations_peak));
+   metrics.insert(String::from("id_mask_in_flight_target_bytes_peak"), id_mask_in_flight_target_bytes_peak as f64);
+   metrics.insert(String::from("id_mask_target_storage_bytes_peak"), id_mask_target_storage_bytes_peak as f64);
+   metrics.insert(String::from("id_mask_generation_peak_bytes"), id_mask_generation_peak_bytes as f64);
+   metrics.insert(String::from("id_mask_target_reuse_blocked"), id_mask_target_reuse_blocked_peak as f64);
    metrics.insert(String::from("resource_creates_total"), resource_creates_sum as f64);
    metrics.insert(String::from("frame_backpressure_skips"), skips_sum);
    metrics.insert(String::from("geometry_changes_per_frame"), if matches!(change, "content" | "projection") { 1.0 } else { 0.0 });

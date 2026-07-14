@@ -2,7 +2,7 @@
 
 ## Intention and purpose
 
-These tests freeze ID-mask input validity, chunk-keyed vertex uploads, complete immutable-field cache invalidation, same-frame multi-map safety, bounded eviction, and explicit purge behavior.
+These tests freeze ID-mask input validity, chunk-keyed vertex uploads, complete immutable-field cache invalidation, same-frame multi-map safety, completion-safe target reuse, bounded eviction, and explicit purge behavior.
 
 ## Relation to the rest of the code
 
@@ -28,7 +28,7 @@ Call flow:
 
 The runtime test first populates one 64-square field set and requires one raster, one seed, six JFA, and one compositor pass. A frame changing viewport, styles, colors, polish, mode, glow, and background alpha must hit and encode only the compositor. Projection, vertex revision, ordered chunk hash, mask scale, and dimensions each force a miss. Two already-warm map revisions are then encoded in one command buffer and must produce two hits and two compositor passes without rebuilding fields.
 
-After four equal-size entries are resident, the test lowers the budget to one entry, requires immediate LRU eviction, exercises further misses and compatible storage reuse, and checks residency never exceeds the hard budget. Explicit purge must report zero entries and zero resident bytes.
+After four equal-size entries are resident, the test lowers the budget to one entry, requires immediate LRU eviction, exercises further misses and compatible storage reuse, and checks residency never exceeds the hard budget. A zero-budget snapshot path must reuse one completed same-size transient target without another Metal allocation. A deterministic busy-slot fixture then forces eviction of an active generation: the renderer must allocate a second target, report two unique generations and twice one-generation storage, preserve pixels, and avoid backpressure. Releasing that slot permits the following same-size miss to recycle the completed target with zero creation. Explicit purge must report zero entries and zero resident bytes.
 
 ## Preconditions and postconditions
 
@@ -42,11 +42,11 @@ Empty vertices, partial triangles, out-of-contract chunk coverage, incomplete ke
 
 ## Concurrency and memory behavior
 
-Tests use one renderer and bounded textures. Same-command-buffer dual-map encoding specifically exercises current-frame cache protection; Metal validation is enabled by the verification command.
+Tests use one renderer and bounded textures. Same-command-buffer dual-map encoding exercises current-frame cache protection. Snapshot hooks set and release one completion bit deterministically so the target-reuse test does not depend on timing. Metal validation is enabled by the verification command.
 
 ## Performance notes
 
-The warm hit contract is zero raster, seed, and jump passes. Budget tests validate allocated residency rather than inferring memory from logical dimensions.
+The warm hit contract is zero raster, seed, and jump passes. Budget tests validate allocated residency rather than inferring memory from logical dimensions. Target telemetry must distinguish cache residency, unique in-flight bytes, total cache-plus-in-flight bytes, lifetime peak, target creation, and synchronization-blocked reuse.
 
 ## Feature flags and cfgs
 
@@ -67,4 +67,5 @@ renderer.purge_id_mask_field_cache();
 
 ## Changelog
 
+- 2026-07-14: added C36 zero-budget same-size pooling plus deterministic busy-generation rejection, exact storage/create telemetry, completed reuse, pixel parity, and backpressure coverage.
 - 2026-07-14: added C32 complete-key, final-only, same-frame multi-map, budget/eviction, and purge coverage.

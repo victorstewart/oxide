@@ -4968,6 +4968,12 @@ fn metal_architecture_reports_reconciled_renderer_resource_families()
    assert_eq!(report_f64(id_mask, "id_mask_compositor_passes_avg"), 1.0);
    assert_eq!(report_f64(id_mask, "render_passes_avg"), 1.0);
    assert_eq!(report_f64(id_mask, "id_mask_cache_entries_peak"), 1.0);
+   assert_eq!(report_f64(id_mask, "id_mask_target_creates_avg"), 0.0);
+   assert_eq!(report_f64(id_mask, "id_mask_in_flight_generations_peak"), 1.0);
+   assert!(report_f64(id_mask, "id_mask_in_flight_target_bytes_peak") > 0.0);
+   assert!(report_f64(id_mask, "id_mask_target_storage_bytes_peak") > 0.0);
+   assert!(report_f64(id_mask, "id_mask_generation_peak_bytes") > 0.0);
+   assert_eq!(report_f64(id_mask, "id_mask_target_reuse_blocked"), 0.0);
    assert!(report_f64(id_mask, "id_mask_cache_resident_bytes_peak") > 0.0);
    assert!(report_f64(id_mask, "id_mask_cache_resident_bytes_peak")
       <= report_f64(id_mask, "id_mask_cache_budget_bytes"));
