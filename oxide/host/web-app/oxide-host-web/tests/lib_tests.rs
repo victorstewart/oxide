@@ -87,6 +87,16 @@ fn host_exposes_opt_in_webgpu_architecture_primitive_matrix() {
     assert!(source.contains("wait_animation_frame_once().await?"));
     assert!(page.contains("params.get(\"architecture_matrix\") === \"1\""));
     assert!(page.contains("bench_webgpu_architecture_primitives"));
+    assert!(source.contains("pub async fn bench_webgpu_rrect_architecture"));
+    assert!(method.contains("rrect_pathological_64"));
+    assert!(method.contains("dpr={dpr:.1}"));
+    assert!(page.contains("params.get(\"rrect_architecture_only\") === \"1\""));
+    assert!(page.contains("bench_webgpu_rrect_architecture"));
+    assert!(source.contains("pub fn render_webgpu_rrect_snapshot"));
+    assert!(source.contains("fn rrect_capture_frame"));
+    assert!(page.contains("captureTarget === \"rrect\""));
+    assert!(include_str!("../../../../scripts/check_webgpu_browser_golden.mjs")
+        .contains("--rrect-architecture-only"));
 }
 
 #[test]
@@ -708,6 +718,9 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("WebGPU timestamp readback did not settle for row"));
     assert!(source.contains("collect_timestamp_readbacks"));
     assert!(source.contains("solid_tris={}"));
+    assert!(source.contains("rrect_instances={}"));
+    assert!(source.contains("rrect_triangles={}"));
+    assert!(source.contains("rrect_instance_bytes={}"));
     assert!(source.contains("image_draws={}"));
     assert!(source.contains("image_mesh_draws={}"));
     assert!(source.contains("nine_slice_draws={}"));
@@ -1103,6 +1116,9 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("backend_path_coverage"));
     assert!(script.contains("Backend Path Coverage"));
     assert!(script.contains("solid_tris: numberMetric(metrics, \"solid_tris\")"));
+    assert!(script.contains("rrect_instances: numberMetric(metrics, \"rrect_instances\")"));
+    assert!(script.contains("rrect_triangles: numberMetric(metrics, \"rrect_triangles\")"));
+    assert!(script.contains("rrect_instance_bytes: numberMetric(metrics, \"rrect_instance_bytes\")"));
     assert!(script.contains("draw_items: numberMetric(metrics, \"draw_items\")"));
     assert!(
         script.contains("draw_items_coalesced: numberMetric(metrics, \"draw_items_coalesced\")")

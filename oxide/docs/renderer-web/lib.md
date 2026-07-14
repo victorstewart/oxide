@@ -98,6 +98,8 @@ Draw complexity is linear in draw-list commands plus emitted solid triangles, im
 
 The host script can also write a non-default Canvas indexed-quad diagnostic report for same-workload A/B proof around the shared Canvas fallback quad walker before changing `draw_vertex_quads`.
 
+C37 moves WebGPU rounded rectangles out of the generic scratch-mesh path described above. Each command now appends one 36-byte rect/radii/packed-color instance, adjacent target/clip-compatible instances share one draw, and WGSL expands two analytic triangles with derivative-width edge coverage. The renderer and browser metric surfaces expose RRect instance, triangle, and instance-byte counters for direct and prepared paths.
+
 ## Feature flags and cfgs
 
 The real backend is compiled only on `target_arch = "wasm32"`. Non-wasm builds expose `WebRenderer::new_for_tests` and a `Renderer` implementation that returns `RenderError::Unsupported` from `submit` so native tests can inspect shared helpers without exposing a browser Canvas2D visual path. The native stub mirrors the web `CameraBg` boundary by treating that command as zero draw work.
@@ -124,6 +126,7 @@ pub async fn build_renderer() -> Result<oxide_renderer_web::BrowserRenderer, oxi
 ```
 
 ## Changelog
+- 2026-07-14: exposed the C37 analytic WebGPU RRect instance stream, prepared-path accounting, and instance/triangle/byte telemetry.
 - 2026-07-14: extended C35 snapshot proof to the real-Dawn seven-dimension exact raster/final-field matrix.
 - 2026-07-14: selected capability-validated two-texture `Rgba16Uint` ID-mask fields with exact semantic readback, representation-aware cache budgets, and a four-texture wide fallback.
 - 2026-07-14: exposed C33 ID-mask field-cache hit/miss, budget/residency/entry/eviction/purge telemetry and explicit cache budget/purge controls through `WebRendererStats` and `BrowserRenderer`.

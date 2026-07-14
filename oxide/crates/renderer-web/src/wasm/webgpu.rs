@@ -23,6 +23,7 @@ use web_sys::HtmlCanvasElement;
 
 const VERTEX_STRIDE: wgpu::BufferAddress = PACKED_VERTEX_BYTES as wgpu::BufferAddress;
 const VERTEX_STRIDE_BYTES: usize = PACKED_VERTEX_BYTES;
+const RRECT_INSTANCE_BYTES: usize = 36;
 const SCENE3D_VERTEX_STRIDE: wgpu::BufferAddress = 28;
 const SCENE3D_UNIFORM_STRIDE: usize = 256;
 const SCENE3D_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
@@ -477,9 +478,39 @@ impl IdMaskFieldCacheEntry {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+struct RRectInstance
+{
+   rect: [f32; 4],
+   radii: [f32; 4],
+   rgba: u32,
+}
+
+const _: [(); RRECT_INSTANCE_BYTES] = [(); core::mem::size_of::<RRectInstance>()];
+
+impl RRectInstance
+{
+   fn new(rect: api::RectF, radii: [f32; 4], color: api::Color) -> Option<Self>
+   {
+      let values = [rect.x, rect.y, rect.w, rect.h, radii[0], radii[1], radii[2], radii[3]];
+      if rect.w <= 0.0 || rect.h <= 0.0 || color.a <= 0.0
+         || !values.iter().all(|value| value.is_finite())
+      {
+         return None;
+      }
+      Some(Self {
+         rect: [rect.x, rect.y, rect.w, rect.h],
+         radii,
+         rgba: color.pack_rgba8(),
+      })
+   }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum DrawKind {
     Solid,
+    RRect { first_instance: u32, instance_count: u32 },
     Rgba { image: u32 },
     A8 { image: u32 },
     Sdf { image: u32 },
@@ -490,6 +521,7 @@ enum DrawKind {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DrawPipelineKey {
     Solid,
+    RRect,
     Rgba,
     A8,
     Sdf,
@@ -533,6 +565,7 @@ struct FrameLayerPass {
 #[derive(Default)]
 struct FrameData {
     geometry: PackedGeometry,
+    rrect_instances: Vec<RRectInstance>,
     draws: Vec<GpuDraw>,
     layer_passes: Vec<FrameLayerPass>,
     effect_count: usize,
@@ -956,7 +989,9 @@ fn prepared_intersect_clip(a: api::RectI, b: api::RectI) -> api::RectI
 
 struct PreparedChunk
 {
-   vertex_buffer: wgpu::Buffer,
+   vertex_buffer: Option<wgpu::Buffer>,
+   rrect_instance_buffer: Option<wgpu::Buffer>,
+   rrect_instances: u32,
    index_buffer_u16: Option<wgpu::Buffer>,
    index_buffer_u32: Option<wgpu::Buffer>,
    draws: Vec<GpuDraw>,
@@ -980,6 +1015,7 @@ struct PreparedSnapshotBundle
    keys: Box<[PreparedSnapshotBundleKey]>,
    bundle: wgpu::RenderBundle,
    draws: u32,
+   rrect_instances: u32,
 }
 
 enum PreparedSegment
@@ -1137,6 +1173,7 @@ impl PreparedChunkCache
 impl FrameData {
     fn clear(&mut self) {
         self.geometry.clear();
+        self.rrect_instances.clear();
         self.draws.clear();
         self.layer_passes.clear();
         self.effect_count = 0;
@@ -1164,6 +1201,7 @@ impl FrameData {
 fn coalescible_draw_kind(a: DrawKind, b: DrawKind) -> bool {
     match (a, b) {
         (DrawKind::Solid, DrawKind::Solid) => true,
+        (DrawKind::RRect { .. }, DrawKind::RRect { .. }) => false,
         (DrawKind::Rgba { image: a }, DrawKind::Rgba { image: b }) => a == b,
         (DrawKind::A8 { image: a }, DrawKind::A8 { image: b }) => a == b,
         (DrawKind::Sdf { image: a }, DrawKind::Sdf { image: b }) => a == b,
@@ -1506,6 +1544,7 @@ struct GpuPrograms {
     id_mask_wide: IdMaskVariantPrograms,
     id_mask_packed: Option<IdMaskVariantPrograms>,
     solid_pipeline: wgpu::RenderPipeline,
+    rrect_pipeline: wgpu::RenderPipeline,
     rgba_pipeline: wgpu::RenderPipeline,
     a8_pipeline: wgpu::RenderPipeline,
     sdf_pipeline: wgpu::RenderPipeline,
@@ -1945,6 +1984,8 @@ pub struct WebGpuRenderer {
     effect_uniform_stride: u64,
     vertex_buffer: Option<wgpu::Buffer>,
     vertex_capacity: u64,
+    rrect_instance_buffer: Option<wgpu::Buffer>,
+    rrect_instance_capacity: u64,
     index_buffer_u16: Option<wgpu::Buffer>,
     index_capacity_u16: u64,
     index_buffer_u32: Option<wgpu::Buffer>,
@@ -2011,7 +2052,6 @@ pub struct WebGpuRenderer {
     prepared_bundle_min_draws: usize,
     scratch_vertices: Vec<PackedVertex>,
     scratch_indices: Vec<u32>,
-    scratch_points: Vec<(f32, f32)>,
     image_upload_scratch: Vec<u8>,
     id_mask_uniform_bytes: Vec<u8>,
     id_mask_uniform_offsets: Vec<IdMaskUniformOffsets>,
@@ -2201,6 +2241,9 @@ impl WebGpuRenderer {
             .vertex_buffer
             .as_ref()
             .map_or(0, wgpu::Buffer::size)
+            .saturating_add(
+                self.rrect_instance_buffer.as_ref().map_or(0, wgpu::Buffer::size),
+            )
             .saturating_add(id_mask_vertex_bytes)
             .saturating_add(self.prepared_chunks.vertex_bytes());
         let index_buffer_bytes = self
@@ -2406,6 +2449,8 @@ impl WebGpuRenderer {
             effect_uniform_stride,
             vertex_buffer: None,
             vertex_capacity: 0,
+            rrect_instance_buffer: None,
+            rrect_instance_capacity: 0,
             index_buffer_u16: None,
             index_capacity_u16: 0,
             index_buffer_u32: None,
@@ -2467,6 +2512,7 @@ impl WebGpuRenderer {
             meshes_3d: vec![None],
             frame: FrameData {
                 geometry: PackedGeometry::default(),
+                rrect_instances: Vec::new(),
                 draws: Vec::new(),
                 layer_passes: Vec::new(),
                 effect_count: 0,
@@ -2489,7 +2535,6 @@ impl WebGpuRenderer {
             prepared_bundle_min_draws: PREPARED_BUNDLE_DEFAULT_MIN_DRAWS,
             scratch_vertices: Vec::new(),
             scratch_indices: Vec::new(),
-            scratch_points: Vec::new(),
             image_upload_scratch: Vec::new(),
             id_mask_uniform_bytes: Vec::new(),
             id_mask_uniform_offsets: Vec::new(),
@@ -3107,6 +3152,12 @@ impl WebGpuRenderer {
         );
         capacity.draw = capacity.draw.saturating_add(self.frame.geometry.capacity_bytes());
         capacity.draw = capacity.draw.saturating_add(
+            self.frame
+                .rrect_instances
+                .capacity()
+                .saturating_mul(core::mem::size_of::<RRectInstance>()),
+        );
+        capacity.draw = capacity.draw.saturating_add(
             self.frame.draws.capacity().saturating_mul(core::mem::size_of::<GpuDraw>()),
         );
         capacity.draw = capacity.draw.saturating_add(
@@ -3122,9 +3173,6 @@ impl WebGpuRenderer {
         );
         capacity.draw = capacity.draw.saturating_add(
             self.scratch_indices.capacity().saturating_mul(core::mem::size_of::<u32>()),
-        );
-        capacity.draw = capacity.draw.saturating_add(
-            self.scratch_points.capacity().saturating_mul(core::mem::size_of::<(f32, f32)>()),
         );
         capacity.image_upload =
             capacity.image_upload.saturating_add(self.image_upload_scratch.capacity());
@@ -4001,6 +4049,56 @@ impl WebGpuRenderer {
         self.stats.commands_copied = self.stats.commands_copied.saturating_add(1);
     }
 
+    fn push_rrect(&mut self, instance: RRectInstance)
+    {
+        let Ok(first_instance) = u32::try_from(self.frame.rrect_instances.len()) else
+        {
+            return;
+        };
+        let clip = self.current_clip();
+        let target = self.current_target();
+        self.frame.rrect_instances.push(instance);
+        self.stats.geometry_bytes_copied = self.stats.geometry_bytes_copied
+            .saturating_add(RRECT_INSTANCE_BYTES as u64);
+        self.stats.rrect_instances = self.stats.rrect_instances.saturating_add(1);
+        self.stats.rrect_triangles = self.stats.rrect_triangles.saturating_add(2);
+        self.stats.rrect_instance_bytes = self.stats.rrect_instance_bytes
+            .saturating_add(RRECT_INSTANCE_BYTES as u64);
+        if self.draw_item_coalescing_enabled
+        {
+            if let Some(last) = self.frame.draws.last_mut()
+            {
+                if last.clip == clip && last.target == target
+                {
+                    if let DrawKind::RRect { first_instance: first, instance_count } = last.kind
+                    {
+                        if first.saturating_add(instance_count) == first_instance
+                        {
+                            last.kind = DrawKind::RRect {
+                                first_instance: first,
+                                instance_count: instance_count.saturating_add(1),
+                            };
+                            self.stats.draw_items_coalesced =
+                                self.stats.draw_items_coalesced.saturating_add(1);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        self.frame.draws.push(GpuDraw {
+            kind: DrawKind::RRect { first_instance, instance_count: 1 },
+            index_kind: PackedIndexKind::U16,
+            first_index: 0,
+            index_count: 0,
+            base_vertex: 0,
+            clip,
+            effect_uniform_offset: 0,
+            target,
+        });
+        self.stats.commands_copied = self.stats.commands_copied.saturating_add(1);
+    }
+
     fn local_layer_frame(&self, rect: api::RectF) -> Option<LocalLayerFrame>
     {
        let parent = self.current_target()
@@ -4539,18 +4637,10 @@ impl WebGpuRenderer {
     }
 
     fn encode_rrect(&mut self, rect: api::RectF, radii: [f32; 4], color: api::Color) {
-        self.clear_scratch_draw();
-        rounded_rect_mesh_into(
-            rect,
-            radii,
-            color,
-            &mut self.scratch_points,
-            &mut self.scratch_vertices,
-            &mut self.scratch_indices,
-        );
-        let triangles = self.scratch_indices.len() / 3;
-        self.push_scratch_draw(DrawKind::Solid);
-        self.stats.solid_tris = self.stats.solid_tris.saturating_add(triangles as u32);
+        if let Some(instance) = RRectInstance::new(rect, radii, color)
+        {
+            self.push_rrect(instance);
+        }
     }
 
     fn encode_nine_slice(
@@ -4691,6 +4781,7 @@ impl WebGpuRenderer {
             .geometry_bytes_copied
             .saturating_add(self.frame.geometry.byte_len().saturating_sub(geometry_bytes) as u64);
         let vertex_bytes = bytemuck::cast_slice(&self.frame.geometry.vertices);
+        let rrect_instance_bytes = bytemuck::cast_slice(&self.frame.rrect_instances);
         let index_bytes_u16 = bytemuck::cast_slice(&self.frame.geometry.indices_u16);
         let index_bytes_u32 = bytemuck::cast_slice(&self.frame.geometry.indices_u32);
         if ensure_buffer(
@@ -4700,6 +4791,17 @@ impl WebGpuRenderer {
             vertex_bytes.len() as u64,
             wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             "oxide-webgpu-vertices",
+        ) {
+            self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+            self.stats.draw_buffer_grows = self.stats.draw_buffer_grows.saturating_add(1);
+        }
+        if ensure_buffer(
+            &self.device,
+            &mut self.rrect_instance_buffer,
+            &mut self.rrect_instance_capacity,
+            rrect_instance_bytes.len() as u64,
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            "oxide-webgpu-rrect-instances",
         ) {
             self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
             self.stats.draw_buffer_grows = self.stats.draw_buffer_grows.saturating_add(1);
@@ -4735,6 +4837,15 @@ impl WebGpuRenderer {
                 .stats
                 .buffer_upload_bytes
                 .saturating_add(vertex_bytes.len() as u64);
+        }
+        if !rrect_instance_bytes.is_empty() {
+            if let Some(buffer) = &self.rrect_instance_buffer {
+                self.queue.write_buffer(buffer, 0, rrect_instance_bytes);
+                self.stats.buffer_upload_bytes = self
+                    .stats
+                    .buffer_upload_bytes
+                    .saturating_add(rrect_instance_bytes.len() as u64);
+            }
         }
         if !index_bytes_u16.is_empty() {
             if let Some(buffer) = &self.index_buffer_u16 {
@@ -5733,11 +5844,12 @@ impl WebGpuRenderer
          return None;
       }
 
-      let (reusable_vertex, reusable_u16, reusable_u32, reusable_draws, reusable_generation) = reusable.map_or(
-         (None, None, None, None, 0),
+      let (reusable_vertex, reusable_rrect, reusable_u16, reusable_u32, reusable_draws, reusable_generation) = reusable.map_or(
+         (None, None, None, None, None, 0),
          |prepared| {
             let PreparedChunk {
                vertex_buffer,
+               rrect_instance_buffer,
                index_buffer_u16,
                index_buffer_u32,
                draws,
@@ -5745,7 +5857,8 @@ impl WebGpuRenderer
                ..
             } = prepared;
             (
-               Some(vertex_buffer),
+               vertex_buffer,
+               rrect_instance_buffer,
                index_buffer_u16,
                index_buffer_u32,
                Some(draws),
@@ -5771,16 +5884,41 @@ impl WebGpuRenderer
       }
       lowered.geometry.align_uploads();
       let vertex_bytes = bytemuck::cast_slice(&lowered.geometry.vertices);
+      let rrect_instance_bytes = bytemuck::cast_slice(&lowered.rrect_instances);
       let index_bytes_u16 = bytemuck::cast_slice(&lowered.geometry.indices_u16);
       let index_bytes_u32 = bytemuck::cast_slice(&lowered.geometry.indices_u32);
-      let (vertex_buffer, vertex_created) = create_or_update_prepared_buffer(
-         &self.device,
-         &self.queue,
-         "oxide-webgpu-prepared-vertices",
-         vertex_bytes,
-         wgpu::BufferUsages::VERTEX,
-         reusable_vertex,
-      );
+      let (vertex_buffer, vertex_created) = if vertex_bytes.is_empty()
+      {
+         (None, false)
+      }
+      else
+      {
+         let (buffer, created) = create_or_update_prepared_buffer(
+            &self.device,
+            &self.queue,
+            "oxide-webgpu-prepared-vertices",
+            vertex_bytes,
+            wgpu::BufferUsages::VERTEX,
+            reusable_vertex,
+         );
+         (Some(buffer), created)
+      };
+      let (rrect_instance_buffer, rrect_created) = if rrect_instance_bytes.is_empty()
+      {
+         (None, false)
+      }
+      else
+      {
+         let (buffer, created) = create_or_update_prepared_buffer(
+            &self.device,
+            &self.queue,
+            "oxide-webgpu-prepared-rrect-instances",
+            rrect_instance_bytes,
+            wgpu::BufferUsages::VERTEX,
+            reusable_rrect,
+         );
+         (Some(buffer), created)
+      };
       let (index_buffer_u16, index_u16_created) = if index_bytes_u16.is_empty()
       {
          (None, false)
@@ -5814,7 +5952,8 @@ impl WebGpuRenderer
          (Some(buffer), created)
       };
       let segments = self.create_prepared_segments(
-         &vertex_buffer,
+         vertex_buffer.as_ref(),
+         rrect_instance_buffer.as_ref(),
          index_buffer_u16.as_ref(),
          index_buffer_u32.as_ref(),
          &lowered.draws,
@@ -5823,7 +5962,10 @@ impl WebGpuRenderer
       let bundle_count = segments.iter().filter(|segment| {
          matches!(segment, PreparedSegment::Bundle { .. })
       }).count().min(u32::MAX as usize) as u32;
-      let vertex_bytes = vertex_buffer.size();
+      let vertex_bytes = vertex_buffer.as_ref().map_or(0, wgpu::Buffer::size);
+      let vertex_bytes = vertex_bytes.saturating_add(
+         rrect_instance_buffer.as_ref().map_or(0, wgpu::Buffer::size),
+      );
       let index_bytes = index_buffer_u16.as_ref().map_or(0, wgpu::Buffer::size)
          .saturating_add(index_buffer_u32.as_ref().map_or(0, wgpu::Buffer::size));
       let plan_bytes = (lowered.draws.len() as u64)
@@ -5837,7 +5979,9 @@ impl WebGpuRenderer
          );
       let resident_bytes = vertex_bytes.saturating_add(index_bytes).saturating_add(plan_bytes);
       let upload_bytes = lowered.geometry.byte_len() as u64;
+      let upload_bytes = upload_bytes.saturating_add(rrect_instance_bytes.len() as u64);
       let buffer_count = u32::from(vertex_created)
+         .saturating_add(u32::from(rrect_created))
          .saturating_add(u32::from(index_u16_created))
          .saturating_add(u32::from(index_u32_created));
       let bundle_generation = if buffer_count == 0
@@ -5853,8 +5997,11 @@ impl WebGpuRenderer
       let resources = chunk.resource_dependencies().iter()
          .map(|dependency| dependency.image)
          .collect::<Vec<_>>().into_boxed_slice();
+      let rrect_instances = lowered.rrect_instances.len().min(u32::MAX as usize) as u32;
       Some((PreparedChunk {
          vertex_buffer,
+         rrect_instance_buffer,
+         rrect_instances,
          index_buffer_u16,
          index_buffer_u32,
          draws: lowered.draws,
@@ -5883,7 +6030,8 @@ impl WebGpuRenderer
 
    fn create_prepared_segments(
       &self,
-      vertex_buffer: &wgpu::Buffer,
+      vertex_buffer: Option<&wgpu::Buffer>,
+      rrect_instance_buffer: Option<&wgpu::Buffer>,
       index_buffer_u16: Option<&wgpu::Buffer>,
       index_buffer_u32: Option<&wgpu::Buffer>,
       draws: &[GpuDraw],
@@ -5908,6 +6056,7 @@ impl WebGpuRenderer
          let bundle = compatible
             .then(|| self.create_prepared_bundle(
                vertex_buffer,
+               rrect_instance_buffer,
                index_buffer_u16,
                index_buffer_u32,
                &draws[start..end],
@@ -5931,7 +6080,8 @@ impl WebGpuRenderer
 
    fn create_prepared_bundle(
       &self,
-      vertex_buffer: &wgpu::Buffer,
+      vertex_buffer: Option<&wgpu::Buffer>,
+      rrect_instance_buffer: Option<&wgpu::Buffer>,
       index_buffer_u16: Option<&wgpu::Buffer>,
       index_buffer_u32: Option<&wgpu::Buffer>,
       draws: &[GpuDraw],
@@ -5950,13 +6100,13 @@ impl WebGpuRenderer
          multiview: None,
       });
       encoder.set_bind_group(0, &self.viewport_bind_group, &[0]);
-      encoder.set_vertex_buffer(0, vertex_buffer.slice(..));
       let mut bound_pipeline = None;
       let mut bound_bind = None;
       let mut bound_index = None;
       for draw in draws
       {
-         if bound_index != Some(draw.index_kind)
+         if !matches!(draw.kind, DrawKind::RRect { .. })
+            && bound_index != Some(draw.index_kind)
          {
             match draw.index_kind
             {
@@ -5975,6 +6125,14 @@ impl WebGpuRenderer
          if bound_pipeline != Some(state.pipeline)
          {
             encoder.set_pipeline(self.pipeline_for_draw(state.pipeline)?);
+            if state.pipeline == DrawPipelineKey::RRect
+            {
+               encoder.set_vertex_buffer(0, rrect_instance_buffer?.slice(..));
+            }
+            else
+            {
+               encoder.set_vertex_buffer(0, vertex_buffer?.slice(..));
+            }
             bound_pipeline = Some(state.pipeline);
          }
          if bound_bind != Some(state.bind)
@@ -5985,11 +6143,18 @@ impl WebGpuRenderer
             }
             bound_bind = Some(state.bind);
          }
-         encoder.draw_indexed(
-            draw.first_index..draw.first_index.saturating_add(draw.index_count),
-            draw.base_vertex,
-            0..1,
-         );
+         if let DrawKind::RRect { first_instance, instance_count } = draw.kind
+         {
+            encoder.draw(0..6, first_instance..first_instance.saturating_add(instance_count));
+         }
+         else
+         {
+            encoder.draw_indexed(
+               draw.first_index..draw.first_index.saturating_add(draw.index_count),
+               draw.base_vertex,
+               0..1,
+            );
+         }
       }
       Some(encoder.finish(&wgpu::RenderBundleDescriptor {
          label: Some("oxide-webgpu-prepared-bundle"),
@@ -6014,10 +6179,11 @@ impl WebGpuRenderer
       let mut bound_pipeline = None;
       let mut bound_bind = None;
       let mut draws = 0_u32;
+      let mut rrect_instances = 0_u32;
       for instance in plan
       {
          let chunk = cache.get(instance.key)?;
-         encoder.set_vertex_buffer(0, chunk.vertex_buffer.slice(..));
+         rrect_instances = rrect_instances.saturating_add(chunk.rrect_instances);
          let mut bound_index = None;
          for draw in &chunk.draws
          {
@@ -6025,7 +6191,8 @@ impl WebGpuRenderer
             {
                return None;
             }
-            if bound_index != Some(draw.index_kind)
+            if !matches!(draw.kind, DrawKind::RRect { .. })
+               && bound_index != Some(draw.index_kind)
             {
                match draw.index_kind
                {
@@ -6046,6 +6213,14 @@ impl WebGpuRenderer
                encoder.set_pipeline(self.pipeline_for_draw(state.pipeline)?);
                bound_pipeline = Some(state.pipeline);
             }
+            if state.pipeline == DrawPipelineKey::RRect
+            {
+               encoder.set_vertex_buffer(0, chunk.rrect_instance_buffer.as_ref()?.slice(..));
+            }
+            else
+            {
+               encoder.set_vertex_buffer(0, chunk.vertex_buffer.as_ref()?.slice(..));
+            }
             if bound_bind != Some(state.bind)
             {
                if let DrawBindKey::Texture { image } = state.bind
@@ -6054,11 +6229,18 @@ impl WebGpuRenderer
                }
                bound_bind = Some(state.bind);
             }
-            encoder.draw_indexed(
-               draw.first_index..draw.first_index.saturating_add(draw.index_count),
-               draw.base_vertex,
-               0..1,
-            );
+            if let DrawKind::RRect { first_instance, instance_count } = draw.kind
+            {
+               encoder.draw(0..6, first_instance..first_instance.saturating_add(instance_count));
+            }
+            else
+            {
+               encoder.draw_indexed(
+                  draw.first_index..draw.first_index.saturating_add(draw.index_count),
+                  draw.base_vertex,
+                  0..1,
+               );
+            }
             draws = draws.saturating_add(1);
          }
       }
@@ -6074,6 +6256,7 @@ impl WebGpuRenderer
             label: Some("oxide-webgpu-prepared-snapshot-bundle"),
          }),
          draws,
+         rrect_instances,
       })
    }
 
@@ -6095,6 +6278,7 @@ impl WebGpuRenderer
       match pipeline
       {
          DrawPipelineKey::Solid => Some(self.solid_pipeline()),
+         DrawPipelineKey::RRect => Some(self.rrect_pipeline()),
          DrawPipelineKey::Rgba => Some(self.rgba_pipeline()),
          DrawPipelineKey::A8 => Some(self.a8_pipeline()),
          DrawPipelineKey::Sdf => Some(self.sdf_pipeline()),
@@ -6499,6 +6683,10 @@ impl WebGpuRenderer {
         &self.programs.solid_pipeline
     }
 
+    fn rrect_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.programs.rrect_pipeline
+    }
+
     fn rgba_pipeline(&self) -> &wgpu::RenderPipeline {
         &self.programs.rgba_pipeline
     }
@@ -6638,6 +6826,13 @@ impl WebGpuRenderer {
            }
            self.stats.draws = self.stats.draws.saturating_add(snapshot_bundle.draws);
            self.stats.draw_items = self.stats.draw_items.saturating_add(snapshot_bundle.draws);
+           self.stats.rrect_instances = self.stats.rrect_instances
+              .saturating_add(snapshot_bundle.rrect_instances);
+           self.stats.rrect_triangles = self.stats.rrect_triangles
+              .saturating_add(snapshot_bundle.rrect_instances.saturating_mul(2));
+           self.stats.rrect_instance_bytes = self.stats.rrect_instance_bytes
+              .saturating_add(u64::from(snapshot_bundle.rrect_instances)
+                 .saturating_mul(RRECT_INSTANCE_BYTES as u64));
            self.stats.render_bundle_replays = self.stats.render_bundle_replays.saturating_add(1);
            self.stats.render_bundle_execute_calls = self.stats.render_bundle_execute_calls.saturating_add(1);
            self.stats.render_bundle_draws = self.stats.render_bundle_draws.saturating_add(snapshot_bundle.draws);
@@ -6659,6 +6854,7 @@ impl WebGpuRenderer {
         let mut bundle_execute_calls = 0_u32;
         let mut bundle_draws = 0_u32;
         let mut direct_draws = 0_u32;
+        let mut rrect_instances = 0_u32;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("oxide-webgpu-prepared-pass"),
@@ -6685,6 +6881,7 @@ impl WebGpuRenderer {
                 let chunk_draws = chunk.draws.len().min(u32::MAX as usize) as u32;
                 draw_items = draw_items.saturating_add(chunk_draws);
                 draws = draws.saturating_add(chunk_draws);
+                rrect_instances = rrect_instances.saturating_add(chunk.rrect_instances);
                 if matches!(chunk.segments.as_slice(), [PreparedSegment::Bundle { .. }]) {
                     let start = plan_index;
                     while plan_index < plan.len() {
@@ -6694,6 +6891,7 @@ impl WebGpuRenderer {
                             let chunk_draws = chunk.draws.len().min(u32::MAX as usize) as u32;
                             draw_items = draw_items.saturating_add(chunk_draws);
                             draws = draws.saturating_add(chunk_draws);
+                            rrect_instances = rrect_instances.saturating_add(chunk.rrect_instances);
                         }
                         bundle_replays = bundle_replays.saturating_add(1);
                         bundle_draws = bundle_draws.saturating_add(*segment_draws);
@@ -6738,6 +6936,11 @@ impl WebGpuRenderer {
         self.prepared_frame_plan = plan;
         self.stats.draws = self.stats.draws.saturating_add(draws);
         self.stats.draw_items = self.stats.draw_items.saturating_add(draw_items);
+        self.stats.rrect_instances = self.stats.rrect_instances.saturating_add(rrect_instances);
+        self.stats.rrect_triangles = self.stats.rrect_triangles
+            .saturating_add(rrect_instances.saturating_mul(2));
+        self.stats.rrect_instance_bytes = self.stats.rrect_instance_bytes
+            .saturating_add(u64::from(rrect_instances).saturating_mul(RRECT_INSTANCE_BYTES as u64));
         self.stats.draw_pipeline_binds = self.stats.draw_pipeline_binds.saturating_add(pipeline_binds);
         self.stats.draw_bind_group_binds = self.stats.draw_bind_group_binds.saturating_add(bind_group_binds);
         self.stats.draw_scissor_sets = self.stats.draw_scissor_sets.saturating_add(scissor_sets);
@@ -6763,7 +6966,6 @@ impl WebGpuRenderer {
         {
             pass.set_bind_group(0, &self.viewport_bind_group, &[0]);
         }
-        pass.set_vertex_buffer(0, chunk.vertex_buffer.slice(..));
         let mut pipeline_binds = 0_u32;
         let mut bind_group_binds = 0_u32;
         let mut scissor_sets = 0_u32;
@@ -6772,7 +6974,8 @@ impl WebGpuRenderer {
         let mut bound_clip = None;
         let mut bound_index = None;
         for draw in draws {
-            if bound_index != Some(draw.index_kind) {
+            if !matches!(draw.kind, DrawKind::RRect { .. })
+                && bound_index != Some(draw.index_kind) {
                 match draw.index_kind {
                     PackedIndexKind::U16 => {
                         let Some(buffer) = chunk.index_buffer_u16.as_ref() else { continue };
@@ -6806,6 +7009,16 @@ impl WebGpuRenderer {
             if bound_pipeline != Some(state.pipeline) {
                 let Some(pipeline) = self.pipeline_for_draw(state.pipeline) else { continue };
                 pass.set_pipeline(pipeline);
+                if state.pipeline == DrawPipelineKey::RRect
+                {
+                    let Some(buffer) = chunk.rrect_instance_buffer.as_ref() else { continue };
+                    pass.set_vertex_buffer(0, buffer.slice(..));
+                }
+                else
+                {
+                    let Some(buffer) = chunk.vertex_buffer.as_ref() else { continue };
+                    pass.set_vertex_buffer(0, buffer.slice(..));
+                }
                 pipeline_binds = pipeline_binds.saturating_add(1);
                 bound_pipeline = Some(state.pipeline);
             }
@@ -6817,11 +7030,18 @@ impl WebGpuRenderer {
                 }
                 bound_bind = Some(state.bind);
             }
-            pass.draw_indexed(
-                draw.first_index..draw.first_index.saturating_add(draw.index_count),
-                draw.base_vertex,
-                0..1,
-            );
+            if let DrawKind::RRect { first_instance, instance_count } = draw.kind
+            {
+                pass.draw(0..6, first_instance..first_instance.saturating_add(instance_count));
+            }
+            else
+            {
+                pass.draw_indexed(
+                    draw.first_index..draw.first_index.saturating_add(draw.index_count),
+                    draw.base_vertex,
+                    0..1,
+                );
+            }
         }
         (pipeline_binds, bind_group_binds, scissor_sets)
     }
@@ -7347,6 +7567,7 @@ impl WebGpuRenderer {
     fn draw_state_key(&self, draw: GpuDraw) -> Option<DrawStateKey> {
         let (pipeline, bind) = match draw.kind {
             DrawKind::Solid => (DrawPipelineKey::Solid, DrawBindKey::None),
+            DrawKind::RRect { .. } => (DrawPipelineKey::RRect, DrawBindKey::None),
             DrawKind::Rgba { image } => {
                 self.image(api::ImageHandle(image))?;
                 (DrawPipelineKey::Rgba, DrawBindKey::Texture { image })
@@ -7410,7 +7631,7 @@ impl WebGpuRenderer {
         if start >= end {
             return;
         }
-        if self.vertex_buffer.is_none() {
+        if self.vertex_buffer.is_none() && self.rrect_instance_buffer.is_none() {
             return;
         }
         if !self.frame.draws[start..end].iter().any(|draw| draw.target == target) {
@@ -7426,9 +7647,8 @@ impl WebGpuRenderer {
 
         let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Draw);
         let timestamp_writes = self.timestamp_writes(timestamp_pair);
-        let Some(vertex_buffer) = &self.vertex_buffer else {
-            return;
-        };
+        let vertex_buffer = self.vertex_buffer.clone();
+        let rrect_instance_buffer = self.rrect_instance_buffer.clone();
         let scratch_bind_group = self
             .scratch_target
             .as_ref()
@@ -7446,7 +7666,6 @@ impl WebGpuRenderer {
             occlusion_query_set: None,
         });
         pass.set_bind_group(0, &viewport_bind_group, &[0]);
-        pass.set_vertex_buffer(0, vertex_buffer.slice(..));
 
         let mut encoded_draws = 0_u32;
         let mut draw_items = 0_u32;
@@ -7462,7 +7681,8 @@ impl WebGpuRenderer {
             if draw.target != target {
                 continue;
             }
-            if bound_index != Some(draw.index_kind) {
+            if !matches!(draw.kind, DrawKind::RRect { .. })
+                && bound_index != Some(draw.index_kind) {
                 match draw.index_kind {
                     PackedIndexKind::U16 => {
                         let Some(buffer) = &self.index_buffer_u16 else {
@@ -7501,11 +7721,36 @@ impl WebGpuRenderer {
             }
             if force_bind || bound_pipeline != Some(state.pipeline) {
                 match state.pipeline {
-                    DrawPipelineKey::Solid => pass.set_pipeline(self.solid_pipeline()),
-                    DrawPipelineKey::Rgba => pass.set_pipeline(self.rgba_pipeline()),
-                    DrawPipelineKey::A8 => pass.set_pipeline(self.a8_pipeline()),
-                    DrawPipelineKey::Sdf => pass.set_pipeline(self.sdf_pipeline()),
-                    DrawPipelineKey::Effect => pass.set_pipeline(self.effect_pipeline()),
+                    DrawPipelineKey::RRect => {
+                        let Some(buffer) = rrect_instance_buffer.as_ref() else { continue };
+                        pass.set_pipeline(self.rrect_pipeline());
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                    }
+                    DrawPipelineKey::Solid => {
+                        let Some(buffer) = vertex_buffer.as_ref() else { continue };
+                        pass.set_pipeline(self.solid_pipeline());
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                    }
+                    DrawPipelineKey::Rgba => {
+                        let Some(buffer) = vertex_buffer.as_ref() else { continue };
+                        pass.set_pipeline(self.rgba_pipeline());
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                    }
+                    DrawPipelineKey::A8 => {
+                        let Some(buffer) = vertex_buffer.as_ref() else { continue };
+                        pass.set_pipeline(self.a8_pipeline());
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                    }
+                    DrawPipelineKey::Sdf => {
+                        let Some(buffer) = vertex_buffer.as_ref() else { continue };
+                        pass.set_pipeline(self.sdf_pipeline());
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                    }
+                    DrawPipelineKey::Effect => {
+                        let Some(buffer) = vertex_buffer.as_ref() else { continue };
+                        pass.set_pipeline(self.effect_pipeline());
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                    }
                 }
                 pipeline_binds = pipeline_binds.saturating_add(1);
                 bound_pipeline = Some(state.pipeline);
@@ -7541,11 +7786,18 @@ impl WebGpuRenderer {
             if force_bind && matches!(state.bind, DrawBindKey::None) {
                 bound_bind = None;
             }
-            pass.draw_indexed(
-                draw.first_index..draw.first_index + draw.index_count,
-                draw.base_vertex,
-                0..1,
-            );
+            if let DrawKind::RRect { first_instance, instance_count } = draw.kind {
+                pass.draw(
+                    0..6,
+                    first_instance..first_instance.saturating_add(instance_count),
+                );
+            } else {
+                pass.draw_indexed(
+                    draw.first_index..draw.first_index + draw.index_count,
+                    draw.base_vertex,
+                    0..1,
+                );
+            }
             encoded_draws = encoded_draws.saturating_add(1);
         }
         drop(pass);
@@ -7950,6 +8202,14 @@ fn create_programs(
         &draw_color_target,
         "fs_solid",
     );
+    let rrect_instance_layout = rrect_instance_layout();
+    let rrect_pipeline = create_rrect_pipeline(
+        device,
+        &shader,
+        &solid_pipeline_layout,
+        &rrect_instance_layout,
+        &draw_color_target,
+    );
     let rgba_pipeline = create_pipeline(
         device,
         &shader,
@@ -8102,6 +8362,7 @@ fn create_programs(
         id_mask_wide,
         id_mask_packed,
         solid_pipeline,
+        rrect_pipeline,
         rgba_pipeline,
         a8_pipeline,
         sdf_pipeline,
@@ -8157,6 +8418,45 @@ fn create_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: shader,
             entry_point: Some(fragment),
+            compilation_options: Default::default(),
+            targets: color_target,
+        }),
+        multiview: None,
+        cache: None,
+    })
+}
+
+fn create_rrect_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    instance_layout: &wgpu::VertexBufferLayout<'_>,
+    color_target: &[Option<wgpu::ColorTargetState>],
+) -> wgpu::RenderPipeline {
+    let vertex_buffers = [instance_layout.clone()];
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("oxide-webgpu-rrect"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_rrect"),
+            compilation_options: Default::default(),
+            buffers: &vertex_buffers,
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_rrect"),
             compilation_options: Default::default(),
             targets: color_target,
         }),
@@ -8550,6 +8850,31 @@ fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
     wgpu::VertexBufferLayout {
         array_stride: VERTEX_STRIDE,
         step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &ATTRIBUTES,
+    }
+}
+
+fn rrect_instance_layout() -> wgpu::VertexBufferLayout<'static> {
+    const ATTRIBUTES: [wgpu::VertexAttribute; 3] = [
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x4,
+            offset: 0,
+            shader_location: 0,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x4,
+            offset: 16,
+            shader_location: 1,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Unorm8x4,
+            offset: 32,
+            shader_location: 2,
+        },
+    ];
+    wgpu::VertexBufferLayout {
+        array_stride: RRECT_INSTANCE_BYTES as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Instance,
         attributes: &ATTRIBUTES,
     }
 }
@@ -9647,90 +9972,6 @@ fn quad_vertices(
     ]
 }
 
-fn rounded_rect_mesh_into(
-    rect: api::RectF,
-    radii: [f32; 4],
-    color: api::Color,
-    points: &mut Vec<(f32, f32)>,
-    vertices: &mut Vec<PackedVertex>,
-    indices: &mut Vec<u32>,
-) {
-    points.clear();
-    vertices.clear();
-    indices.clear();
-    if rect.w <= 0.0 || rect.h <= 0.0 || color.a <= 0.0 {
-        return;
-    }
-    let max_r = (rect.w.abs() * 0.5).min(rect.h.abs() * 0.5);
-    let radii = [
-        radii[0].clamp(0.0, max_r),
-        radii[1].clamp(0.0, max_r),
-        radii[2].clamp(0.0, max_r),
-        radii[3].clamp(0.0, max_r),
-    ];
-    append_arc(
-        points,
-        rect.x + radii[0],
-        rect.y + radii[0],
-        radii[0],
-        core::f32::consts::PI,
-        1.5 * core::f32::consts::PI,
-    );
-    append_arc(
-        points,
-        rect.x + rect.w - radii[1],
-        rect.y + radii[1],
-        radii[1],
-        1.5 * core::f32::consts::PI,
-        2.0 * core::f32::consts::PI,
-    );
-    append_arc(
-        points,
-        rect.x + rect.w - radii[2],
-        rect.y + rect.h - radii[2],
-        radii[2],
-        0.0,
-        0.5 * core::f32::consts::PI,
-    );
-    append_arc(
-        points,
-        rect.x + radii[3],
-        rect.y + rect.h - radii[3],
-        radii[3],
-        0.5 * core::f32::consts::PI,
-        core::f32::consts::PI,
-    );
-    if points.len() < 3 {
-        vertices.extend_from_slice(&quad_vertices(rect, 0.0, 0.0, 1.0, 1.0, color));
-        indices.extend_from_slice(&[0, 1, 2, 2, 1, 3]);
-        return;
-    }
-    vertices.reserve(points.len() + 1);
-    vertices.push(gpu_vertex(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5, 0.5, 0.5, 0, color));
-    for (x, y) in points.iter().copied() {
-        vertices.push(gpu_vertex(x, y, 0.0, 0.0, 0, color));
-    }
-    indices.reserve((vertices.len() - 1) * 3);
-    for idx in 1..vertices.len() {
-        indices.push(0);
-        indices.push(idx as u32);
-        indices.push(if idx + 1 < vertices.len() { idx as u32 + 1 } else { 1 });
-    }
-}
-
-fn append_arc(points: &mut Vec<(f32, f32)>, cx: f32, cy: f32, radius: f32, start: f32, end: f32) {
-    if radius <= 0.0 {
-        points.push((cx, cy));
-        return;
-    }
-    const SEGMENTS: usize = 8;
-    for step in 0..=SEGMENTS {
-        let t = step as f32 / SEGMENTS as f32;
-        let angle = start + (end - start) * t;
-        points.push((cx + angle.cos() * radius, cy + angle.sin() * radius));
-    }
-}
-
 fn gpu_vertex(x: f32, y: f32, u: f32, v: f32, rgba: u32, uniform: api::Color) -> PackedVertex {
     PackedVertex::new(x, y, u, v, if rgba == 0 { uniform.pack_rgba8() } else { rgba })
 }
@@ -10149,6 +10390,61 @@ fn vs_main(input: VertexIn) -> VertexOut {
    out.uv = input.uv;
    out.color = vec4<f32>(input.color.rgb, input.color.a * viewport.translation_opacity.z);
    return out;
+}
+
+struct RRectIn {
+   @location(0) rect: vec4<f32>,
+   @location(1) radii: vec4<f32>,
+   @location(2) color: vec4<f32>,
+};
+
+struct RRectOut {
+   @builtin(position) pos: vec4<f32>,
+   @location(0) local_px: vec2<f32>,
+   @location(1) @interpolate(flat) rect_size: vec2<f32>,
+   @location(2) @interpolate(flat) radii: vec4<f32>,
+   @location(3) @interpolate(flat) color: vec4<f32>,
+};
+
+@vertex
+fn vs_rrect(@builtin(vertex_index) vertex_index: u32, input: RRectIn) -> RRectOut {
+   let unit = array<vec2<f32>, 6>(
+      vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
+      vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
+   )[vertex_index];
+   let local_px = unit * input.rect.zw;
+   let dp = input.rect.xy + local_px;
+   let transformed = vec2<f32>(
+      viewport.matrix.x * dp.x + viewport.matrix.z * dp.y + viewport.translation_opacity.x,
+      viewport.matrix.y * dp.x + viewport.matrix.w * dp.y + viewport.translation_opacity.y,
+   );
+   let size = max(viewport.size_origin.xy, vec2<f32>(1.0, 1.0));
+   let local = (transformed - viewport.size_origin.zw) / size;
+   var out: RRectOut;
+   out.pos = vec4<f32>(local.x * 2.0 - 1.0, 1.0 - local.y * 2.0, 0.0, 1.0);
+   out.local_px = local_px;
+   out.rect_size = input.rect.zw;
+   out.radii = input.radii;
+   out.color = vec4<f32>(input.color.rgb, input.color.a * viewport.translation_opacity.z);
+   return out;
+}
+
+@fragment
+fn fs_rrect(input: RRectOut) -> @location(0) vec4<f32> {
+   let center = input.rect_size * 0.5;
+   let right = input.local_px.x >= center.x;
+   let bottom = input.local_px.y >= center.y;
+   let top_radius = select(input.radii.x, input.radii.y, right);
+   let bottom_radius = select(input.radii.w, input.radii.z, right);
+   let radius = clamp(select(top_radius, bottom_radius, bottom), 0.0, min(center.x, center.y));
+   let q = abs(input.local_px - center) - (center - vec2<f32>(radius));
+   let distance = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+   let aa = max(fwidth(distance), 0.0001);
+   let coverage = 1.0 - smoothstep(-aa, aa, distance);
+   if coverage <= 0.0 {
+      discard;
+   }
+   return vec4<f32>(input.color.rgb, input.color.a * coverage);
 }
 
 @fragment

@@ -69,6 +69,9 @@ fn renderer_accounting_schema_defaults_to_explicit_unavailable_allocated_bytes()
    assert_eq!(stats.gpu_logical_total_bytes, 0);
    assert_eq!(stats.gpu_allocated_total_bytes, 0);
    assert!(!stats.gpu_allocated_bytes_available);
+   assert_eq!(stats.rrect_instances, 0);
+   assert_eq!(stats.rrect_triangles, 0);
+   assert_eq!(stats.rrect_instance_bytes, 0);
 
    let source = include_str!("../src/lib.rs");
    let webgpu = include_str!("../src/wasm/webgpu.rs");
@@ -560,7 +563,7 @@ fn wasm_webgpu_draw_encoding_reuses_scratch_storage() {
 
     assert!(source.contains("scratch_vertices: Vec<PackedVertex>"));
     assert!(source.contains("scratch_indices: Vec<u32>"));
-    assert!(source.contains("scratch_points: Vec<(f32, f32)>"));
+    assert!(!source.contains("scratch_points: Vec<(f32, f32)>"));
     assert!(source.contains("fn push_scratch_draw"));
     assert!(source.contains("geometry: PackedGeometry"));
     assert!(!source.contains("vertex_bytes: Vec<u8>"));
@@ -570,12 +573,25 @@ fn wasm_webgpu_draw_encoding_reuses_scratch_storage() {
     assert!(source.contains("wgpu::IndexFormat::Uint32"));
     assert!(!source.contains("fn encode_vertices("));
     assert!(!source.contains("fn encode_indices("));
-    for section in [encode_solid, encode_image_mesh, encode_glyph_vertices, encode_rrect] {
+    for section in [encode_solid, encode_image_mesh, encode_glyph_vertices] {
         assert!(section.contains("self.clear_scratch_draw();"));
         assert!(section.contains("self.push_scratch_draw("));
         assert!(!section.contains("Vec::new()"));
         assert!(!section.contains("Vec::with_capacity"));
     }
+    assert!(source.contains("const RRECT_INSTANCE_BYTES: usize = 36;"));
+    assert!(source.contains("step_mode: wgpu::VertexStepMode::Instance"));
+    assert!(source.contains("entry_point: Some(\"vs_rrect\")"));
+    assert!(source.contains("entry_point: Some(\"fs_rrect\")"));
+    assert!(source.contains("pass.draw(0..6,"));
+    assert!(source.contains("vertex_buffer: Option<wgpu::Buffer>"));
+    assert!(source.contains("rrect_instance_buffer: Option<wgpu::Buffer>"));
+    assert!(encode_rrect.contains("RRectInstance::new(rect, radii, color)"));
+    assert!(encode_rrect.contains("self.push_rrect(instance);"));
+    assert!(!encode_rrect.contains("self.clear_scratch_draw();"));
+    assert!(!encode_rrect.contains("self.push_scratch_draw("));
+    assert!(!source.contains("fn rounded_rect_mesh_into("));
+    assert!(!source.contains("fn append_arc("));
 }
 
 #[test]
@@ -673,7 +689,7 @@ fn wasm_webgpu_backend_packet_vocabulary_is_frozen() {
 
     assert_eq!(
         draw_kind,
-        "enumDrawKind{Solid,Rgba{image:u32},A8{image:u32},Sdf{image:u32},Layer{id:u32},Backdrop{rect:api::RectF,sigma:f32},}"
+        "enumDrawKind{Solid,RRect{first_instance:u32,instance_count:u32},Rgba{image:u32},A8{image:u32},Sdf{image:u32},Layer{id:u32},Backdrop{rect:api::RectF,sigma:f32},}"
     );
     assert_eq!(
         gpu_draw,
@@ -681,6 +697,7 @@ fn wasm_webgpu_backend_packet_vocabulary_is_frozen() {
     );
     for pattern in [
         "(DrawKind::Solid,DrawKind::Solid)=>true",
+        "(DrawKind::RRect{..},DrawKind::RRect{..})=>false",
         "(DrawKind::Rgba{image:a},DrawKind::Rgba{image:b})=>a==b",
         "(DrawKind::A8{image:a},DrawKind::A8{image:b})=>a==b",
         "(DrawKind::Sdf{image:a},DrawKind::Sdf{image:b})=>a==b",
