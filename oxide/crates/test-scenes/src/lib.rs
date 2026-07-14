@@ -718,6 +718,7 @@ impl<U: elements::ImageUploader> Router<U> {
     }
 
     pub fn draw(&mut self, viewport: gfx::RectF, device_scale: f32, b: &mut DrawListBuilder) {
+        self.text.begin_frame();
         // Reset damage for this frame
         self.last_damage.clear();
         b.clip_push(gfx::RectI::new(0, 0, viewport.w.ceil() as i32, viewport.h.ceil() as i32));
@@ -986,6 +987,7 @@ impl<U: elements::ImageUploader> Router<U> {
             self.push_damage(rectf_to_recti(viewport));
             self.force_full_damage_next_frame = false;
         }
+        let _ = self.text.finish_frame(&mut self.uploader, b);
     }
 
     // Camera scene external controls via host (iOS)

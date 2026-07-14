@@ -26,3 +26,4 @@ path = "src/lib.rs"
 [dev-dependencies]
 proptest = "1"
 oxide-test-scenes = { path = "../test-scenes" }
+oxide-wasm-alloc-counter = { path = "../wasm-alloc-counter" }

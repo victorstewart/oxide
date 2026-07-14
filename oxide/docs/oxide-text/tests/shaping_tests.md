@@ -31,6 +31,8 @@
   Verifies constrained atlas pressure evicts a stale slot and renders the current glyph.
 - `atlas_pressure_does_not_evict_glyphs_used_earlier_in_same_run`
   Verifies constrained atlas pressure skips later glyphs instead of evicting glyphs already emitted into the current run.
+- `frame_pin_protects_preexisting_visible_glyphs_from_later_runs`
+  Verifies a frame lock protects glyphs resident before the frame from eviction by later visible runs, then permits deterministic eviction after frame completion.
 - `atlas_too_small_for_glyph_skips_without_eviction_loop`
   Verifies oversize glyphs do not spin through eviction attempts.
 - `cjk_text_shapes_into_atlas`
@@ -56,6 +58,7 @@
 - Atlas pressure is covered without requiring a full atlas reset.
 - Smaller replacement glyphs in larger evicted slots are covered so dirty-rect uploads cannot preserve stale edge pixels.
 - Same-run pressure is covered so a tiny atlas cannot corrupt vertices emitted earlier in the same `GlyphRun`.
+- Whole-frame pressure is covered so later labels cannot overwrite atlas slots referenced by earlier visible labels.
 - Combining-mark prefix boundaries are covered so cursor maps do not split UTF-8 inside a grapheme cluster.
 - ZWJ grapheme boundaries are covered so emoji-style clusters remain one cursor step even when the fixture font lacks a color glyph.
 - Owned-shape prefix parity is covered so UI caches can share shaped label runs with text-input cursor metrics.
@@ -83,6 +86,7 @@ cargo test --locked -p oxide-text --test shaping_tests
 ```
 
 ## Changelog
+- 2026-07-14: added whole-frame pin coverage for pre-existing visible glyph slots.
 - 2026-06-01: added full-slot clear/dirty coverage for smaller replacement glyphs reusing larger evicted atlas slots.
 - 2026-05-31: added shaped cursor-map tests for combining-grapheme byte ranges and ZWJ cluster atomicity.
 - 2026-05-31: added owned-shape prefix-map parity coverage for shared label/cursor shaped-run caches.

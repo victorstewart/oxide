@@ -31,6 +31,12 @@
   Reports LRU slot evictions for tests and perf diagnostics.
 - `oxide_text::Atlas::revision(&self) -> u64`
   Reports the atlas slot-generation counter used to reject retained glyph geometry after eviction or reset.
+- `oxide_text::Atlas::begin_frame(&mut self)` / `oxide_text::Atlas::end_frame(&mut self)`
+  Brackets visible text preparation and prevents slot eviction until every run in that frame has been baked.
+- `oxide_text::Atlas::set_counters_enabled(&mut self, enabled: bool)`
+  Enables or removes boxed glyph-cache and raster counters for explicit diagnostics.
+- `oxide_text::Atlas::glyph_cache_hits`, `glyph_cache_misses`, and `rasterization_count`
+  Report opt-in cumulative atlas work without adding counters to the disabled hot path.
 - `oxide_text::TextShaper::shape(&mut self, font: &Font, font_id: usize, text: &str, px: f32) -> anyhow::Result<ShapeOutput<'_>>`
   Shapes UTF-8 text into glyph ids and advances.
 - `oxide_text::TextShaper::cursor_map_with_fallback_fonts(&mut self, fonts: &FontDb, primary_id: usize, fallback_ids: &[usize], text: &str, px: f32) -> Option<ShapedCursorMap>`
@@ -71,6 +77,7 @@
 - Slot-level eviction avoids clearing the whole atlas, which would invalidate unrelated glyph UVs already held by retained draw lists.
 - Eviction is generation-tracked: retained glyph geometry records the atlas revision it was baked against, and the revision changes on eviction or reset.
 - While baking a single run, eviction is limited to glyphs older than the run's starting atlas clock so pressure cannot overwrite a glyph whose vertices were already emitted earlier in the same run.
+- While a text frame is active, eviction is disabled for the whole atlas so a later run cannot overwrite pre-existing or newly prepared glyphs referenced by an earlier visible run.
 - Evicting into a larger stale slot clears and dirties the full old slot before writing the replacement glyph, so dirty-rect uploads cannot leave stale glyph pixels around smaller replacements.
 - New glyph pixels are unioned into the dirty slot region, so `TextCtx::ensure_gpu` can upload a dirty rectangle instead of the full atlas.
 - Zero-bitmap glyphs such as spaces are cached as no-geometry atlas entries. Warm replay advances the pen without rebuilding raster state or dirtying the atlas.
@@ -93,6 +100,7 @@
 ## Concurrency and memory behavior
 - `Atlas`, `TextShaper`, and `RasterCtx` are caller-owned mutable state and do not synchronize internally.
 - The atlas maintains a `HashMap` of resident glyph keys and a contiguous A8 pixel buffer.
+- Frame-only eviction state and opt-in diagnostics live behind one box; disabled diagnostics retain no counter map and glyph baking uses a const-generic non-counting path.
 - Baking a borrowed `ShapeOutput` materializes a compact glyph vector before rasterization; cached UI paths prefer `OwnedShape`.
 - Baking an `OwnedShape` borrows cached glyph storage when the cached logical order is already visual. RTL cached shapes still allocate a temporary reversed vector only when visual-order correction is required.
 
@@ -105,12 +113,13 @@
 - Fallback shaping emits font-contiguous grapheme runs with global x offsets so visible glyph encoding can batch one mixed-font line into one glyph draw when the combined index span fits.
 - Fallback cursor maps still use the cached `ShapedCursorMap` for hot pointer picking and do not probe fallback fonts per pointer event.
 - Retained draw caches should compare cached glyph-run revisions with the current atlas revision before replaying cached text geometry.
+- Frame pinning adds one predictable branch only on miss/pressure allocation; cache-hit replay remains allocation-free and does not touch diagnostic counters unless profiling is enabled.
 
 ## Feature flags and cfgs
 - No feature-specific atlas behavior.
 
 ## Testing and benchmarks
-- `crates/text/tests/shaping_tests.rs` covers shaping, reset behavior, atlas revisions, dirty rectangles, full-slot dirtying/clearing after atlas eviction, atlas pressure eviction, same-run eviction protection, and oversize glyph skipping.
+- `crates/text/tests/shaping_tests.rs` covers shaping, reset behavior, atlas revisions, dirty rectangles, full-slot dirtying/clearing after atlas eviction, atlas pressure eviction, same-run and whole-frame eviction protection, and oversize glyph skipping.
 - `crates/text/tests/shaping_tests.rs` also covers shaped-run prefix width maps and cursor maps for ASCII prefixes, combining-grapheme boundaries, ZWJ clusters, pure RTL visual order, mixed-bidi caret affinity, configured fallback-font cursor widths and shape runs, and owned-run reuse parity.
 - `crates/text/tests/owned_shape_replay_tests.rs` covers allocation-free warm LTR owned-shape replay and RTL owned-shape visual-order parity against direct shaping.
 - `cpu.system.text_atlas_pressure` exercises constrained atlas pressure in the workspace perf runner.
@@ -123,6 +132,7 @@ assert_eq!(atlas.eviction_count(), 0);
 ```
 
 ## Changelog
+- 2026-07-14: added frame-wide atlas eviction locking and opt-in cache/raster counters for C43 frame-scoped text preparation.
 - 2026-06-02: removed cached `OwnedShape` glyph-vector clones on the common replay path, cached zero-bitmap glyphs as no-geometry entries, and added allocation-free warm replay coverage.
 - 2026-06-01: atlas slot eviction now clears and dirties the full reused slot before writing a smaller replacement glyph, preventing stale dirty-rect-upload pixels around the new glyph.
 - 2026-05-31: added mixed-bidi upstream/downstream caret affinity positions to `ShapedCursorMap`.

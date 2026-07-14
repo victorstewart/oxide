@@ -1135,6 +1135,7 @@ dependencies = [
  "oxide-text",
  "oxide-timing",
  "oxide-utils",
+ "oxide-wasm-alloc-counter",
  "proptest",
  "serde",
  "serde_json",

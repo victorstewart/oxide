@@ -55,6 +55,13 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
    push_if_allowed(cases, "cpu.architecture.text.script_fallback_matrix", || text_script_matrix_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.scale_sdf_matrix", || text_scale_sdf_matrix_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.atlas_eviction", || text_atlas_eviction_case(smoke));
+   let id = "gpu.architecture.text.new_labels_200";
+   if perf_case_allowed(id)
+   {
+      let frame_scoped = std::env::var("OXIDE_C43_TEXT_FRAME_SCOPED")
+         .map_or(true, |value| value != "0");
+      cases.push(metal_text_new_labels_case(id, smoke, frame_scoped)?);
+   }
    push_if_allowed(cases, "cpu.architecture.layers.matrix", || layer_matrix_case(smoke));
 
    for (name, count) in [
@@ -2025,35 +2032,69 @@ fn dynamic_property_surface_case(id: &str, family: &str, smoke: bool) -> PerfCas
 fn text_warm_labels_case(smoke: bool) -> PerfCaseResult
 {
    let mut text = perf_text_ctx();
+   text.set_frame_stats_enabled(true);
    text.set_fallback_fonts(&[1]);
    let mut uploader = CpuUploader::default();
    let mut builder = ui::DrawListBuilder::new();
    let labels = (0..1_000).map(|index| format!("Warm label {index:04}")).collect::<Vec<_>>();
+   text.begin_frame();
    for (index, label) in labels.iter().enumerate()
    {
       encode_matrix_label(label, index, 2.0, 18.0, &mut text, &mut uploader, &mut builder);
    }
+   let _ = text.finish_frame(&mut uploader, &mut builder);
+   let proof_stats = {
+      builder.clear();
+      text.begin_frame();
+      for (index, label) in labels.iter().enumerate()
+      {
+         encode_matrix_label_profiled(label, index, 2.0, 18.0, &mut text, &mut uploader, &mut builder);
+      }
+      text.finish_frame(&mut uploader, &mut builder)
+   };
+   text.set_frame_stats_enabled(false);
+   let frame_scoped = std::env::var("OXIDE_C43_TEXT_FRAME_SCOPED")
+      .map_or(true, |value| value != "0");
    let mut case = measured_architecture_case(
       "cpu.architecture.text.warm_labels_1000",
       smoke,
       "One thousand already-shaped and atlas-resident labels encoded into one warm frame.",
       move || {
          builder.clear();
+         if frame_scoped
+         {
+            text.begin_frame();
+         }
          for (index, label) in labels.iter().enumerate()
          {
             encode_matrix_label(label, index, 2.0, 18.0, &mut text, &mut uploader, &mut builder);
          }
-         builder.drawlist().items.len() as u64 + builder.drawlist().vertices.len() as u64
+         let upload_calls;
+         if frame_scoped
+         {
+            upload_calls = text.finish_frame(&mut uploader, &mut builder).atlas_upload_calls;
+         }
+         else
+         {
+            upload_calls = 0;
+         }
+         builder.drawlist().items.len() as u64
+            + builder.drawlist().vertices.len() as u64
+            + upload_calls
       },
    );
    case.metrics.insert(String::from("warm_labels"), 1_000.0);
    case.metrics.insert(String::from("device_scale"), 2.0);
+   insert_text_frame_metrics(&mut case.metrics, proof_stats);
    case
 }
 
 fn text_new_labels_case(smoke: bool) -> PerfCaseResult
 {
+   let proof_stats = run_new_label_frame(0x43);
    let mut phase = 0_u64;
+   let frame_scoped = std::env::var("OXIDE_C43_TEXT_FRAME_SCOPED")
+      .map_or(true, |value| value != "0");
    let mut case = measured_architecture_case(
       "cpu.architecture.text.new_labels_200",
       smoke,
@@ -2064,17 +2105,320 @@ fn text_new_labels_case(smoke: bool) -> PerfCaseResult
          text.set_fallback_fonts(&[1]);
          let mut uploader = CpuUploader::default();
          let mut builder = ui::DrawListBuilder::new();
+         if frame_scoped
+         {
+            text.begin_frame();
+         }
          for index in 0..200
          {
             let label = format!("New {phase:08x} Latin 漢字 مرحبا 😀 {index:03}");
             encode_matrix_label(&label, index, 3.0, 20.0, &mut text, &mut uploader, &mut builder);
          }
-         builder.drawlist().items.len() as u64 + builder.drawlist().vertices.len() as u64 + text.atlas_revision()
+         let upload_calls;
+         if frame_scoped
+         {
+            upload_calls = text.finish_frame(&mut uploader, &mut builder).atlas_upload_calls;
+         }
+         else
+         {
+            upload_calls = 0;
+         }
+         builder.drawlist().items.len() as u64
+            + builder.drawlist().vertices.len() as u64
+            + text.atlas_revision()
+            + upload_calls
       },
    );
    case.metrics.insert(String::from("new_labels"), 200.0);
    case.metrics.insert(String::from("device_scale"), 3.0);
+   insert_text_frame_metrics(&mut case.metrics, proof_stats);
    case
+}
+
+fn run_new_label_frame(phase: u64) -> ui::elements::TextFrameStats
+{
+   let mut text = perf_text_ctx();
+   text.set_frame_stats_enabled(true);
+   text.set_fallback_fonts(&[1]);
+   let mut uploader = CpuUploader::default();
+   let mut builder = ui::DrawListBuilder::new();
+   text.begin_frame();
+   for index in 0..200
+   {
+      let label = format!("New {phase:08x} Latin 漢字 مرحبا 😀 {index:03}");
+      encode_matrix_label_profiled(&label, index, 3.0, 20.0, &mut text, &mut uploader, &mut builder);
+   }
+   text.finish_frame(&mut uploader, &mut builder)
+}
+
+fn insert_text_frame_metrics(
+   metrics: &mut BTreeMap<String, f64>,
+   stats: ui::elements::TextFrameStats,
+)
+{
+   for (name, value) in [
+      ("visible_labels", stats.visible_labels),
+      ("shaping_calls", stats.shaping_calls),
+      ("rasterizations", stats.rasterizations),
+      ("layout_cache_hits", stats.layout_cache_hits),
+      ("layout_cache_misses", stats.layout_cache_misses),
+      ("glyph_cache_hits", stats.glyph_cache_hits),
+      ("glyph_cache_misses", stats.glyph_cache_misses),
+      ("atlas_upload_calls", stats.atlas_upload_calls),
+      ("atlas_upload_pixels", stats.atlas_upload_pixels),
+      ("atlas_upload_bytes", stats.atlas_upload_bytes),
+      ("atlas_evictions", stats.atlas_evictions),
+      ("invalidated_runs", stats.invalidated_runs),
+   ]
+   {
+      metrics.insert(String::from(name), value as f64);
+   }
+}
+
+struct ArchitectureTextMetalUploader
+{
+   renderer: *mut metal::MetalRenderer,
+   creates: u64,
+   updates: u64,
+   upload_pixels: u64,
+   upload_bytes: u64,
+}
+
+impl ui::elements::ImageUploader for ArchitectureTextMetalUploader
+{
+   fn create_a8(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize) -> api::ImageHandle
+   {
+      let pixels = u64::from(w).saturating_mul(u64::from(h));
+      self.creates = self.creates.saturating_add(1);
+      self.upload_pixels = self.upload_pixels.saturating_add(pixels);
+      self.upload_bytes = self.upload_bytes.saturating_add(pixels);
+      unsafe
+      {
+         (*self.renderer).image_create_a8(w, h, data, row_bytes)
+      }
+   }
+
+   fn update_a8(
+      &mut self,
+      handle: api::ImageHandle,
+      x: u32,
+      y: u32,
+      w: u32,
+      h: u32,
+      data: &[u8],
+      row_bytes: usize,
+   )
+   {
+      let pixels = u64::from(w).saturating_mul(u64::from(h));
+      self.updates = self.updates.saturating_add(1);
+      self.upload_pixels = self.upload_pixels.saturating_add(pixels);
+      self.upload_bytes = self.upload_bytes.saturating_add(pixels);
+      unsafe
+      {
+         (*self.renderer).image_update_a8(handle, x, y, w, h, data, row_bytes)
+      }
+   }
+}
+
+fn metal_text_new_labels_case(id: &str, smoke: bool, frame_scoped: bool) -> Result<PerfCaseResult>
+{
+   let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating text-preparation Metal renderer")?);
+   renderer.resize(1_200, 800, 1.0).context("resizing text-preparation Metal renderer")?;
+   let renderer_ptr: *mut metal::MetalRenderer = &mut *renderer;
+   let font_probe = perf_text_ctx();
+   let mut supported = Vec::new();
+   for scalar in 0x21_u32..0x300
+   {
+      let Some(ch) = char::from_u32(scalar) else
+      {
+         continue;
+      };
+      if ch.is_whitespace()
+      {
+         continue;
+      }
+      let unique = ch.to_string();
+      if font_probe.fonts.font_supports_cluster(0, &unique)
+      {
+         supported.push(unique);
+      }
+   }
+   assert!(!supported.is_empty(), "text-preparation case requires supported glyphs");
+   let mut labels = Vec::with_capacity(200);
+   for font_px in 12_u32..=20
+   {
+      for unique in &supported
+      {
+         labels.push((format!("Item {unique}"), font_px as f32));
+         if labels.len() == 200
+         {
+            break;
+         }
+      }
+      if labels.len() == 200
+      {
+         break;
+      }
+   }
+   assert_eq!(labels.len(), 200, "text-preparation case requires 200 unique glyph/size keys");
+   let proof_stats;
+   if frame_scoped
+   {
+      let mut text = perf_text_ctx();
+      text.set_fallback_fonts(&[1]);
+      text.set_frame_stats_enabled(true);
+      let mut uploader = CpuUploader::default();
+      let mut builder = ui::DrawListBuilder::new();
+      text.begin_frame();
+      for (index, (label, font_px)) in labels.iter().enumerate()
+      {
+         encode_matrix_label_profiled(label, index, 1.0, *font_px, &mut text, &mut uploader, &mut builder);
+      }
+      proof_stats = text.finish_frame(&mut uploader, &mut builder);
+   }
+   else
+   {
+      proof_stats = ui::elements::TextFrameStats::default();
+   }
+   let warmups;
+   let frames;
+   if smoke
+   {
+      warmups = 1_usize;
+      frames = 3_usize;
+   }
+   else
+   {
+      warmups = 3;
+      frames = std::env::var("OXIDE_C43_METAL_FRAMES")
+         .ok()
+         .and_then(|value| value.parse::<usize>().ok())
+         .filter(|frames| *frames >= 16)
+         .unwrap_or(16);
+   }
+   let mut frame_samples = Vec::with_capacity(frames);
+   let mut warmup_frame_samples = Vec::with_capacity(warmups);
+   let mut prepare_samples = Vec::with_capacity(frames);
+   let mut encode_samples = Vec::with_capacity(frames);
+   let mut gpu_samples = Vec::with_capacity(frames);
+   let mut creates = 0_u64;
+   let mut updates = 0_u64;
+   let mut upload_pixels = 0_u64;
+   let mut upload_bytes = 0_u64;
+   let mut draws = 0_u64;
+   let mut buffer_upload_bytes = 0_u64;
+
+   for frame in 0..warmups.saturating_add(frames)
+   {
+      let mut text = perf_text_ctx();
+      text.set_fallback_fonts(&[1]);
+      let mut uploader = ArchitectureTextMetalUploader {
+         renderer: renderer_ptr,
+         creates: 0,
+         updates: 0,
+         upload_pixels: 0,
+         upload_bytes: 0,
+      };
+      let mut builder = ui::DrawListBuilder::new();
+      let frame_started_at = Instant::now();
+      if frame_scoped
+      {
+         text.begin_frame();
+      }
+      for (index, (label, font_px)) in labels.iter().enumerate()
+      {
+         encode_matrix_label(label, index, 1.0, *font_px, &mut text, &mut uploader, &mut builder);
+      }
+      if frame_scoped
+      {
+         let _ = text.finish_frame(&mut uploader, &mut builder);
+      }
+      let prepare_ms = frame_started_at.elapsed().as_secs_f64() * 1_000.0;
+      ui::coalesce_adjacent_draws(builder.drawlist_mut());
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      renderer.encode_pass(builder.drawlist());
+      renderer
+         .submit(token)
+         .with_context(|| format!("submitting {id}"))?;
+      let metal_stats = last_metal_stats_after_submit(&renderer, token.0);
+      let frame_ms = frame_started_at.elapsed().as_secs_f64() * 1_000.0;
+      if frame < warmups
+      {
+         warmup_frame_samples.push(frame_ms);
+         continue;
+      }
+      frame_samples.push(frame_ms);
+      prepare_samples.push(prepare_ms);
+      encode_samples.push(metal_stats.encode_ms);
+      gpu_samples.push(metal_stats.gpu_ms);
+      creates = creates.saturating_add(uploader.creates);
+      updates = updates.saturating_add(uploader.updates);
+      upload_pixels = upload_pixels.saturating_add(uploader.upload_pixels);
+      upload_bytes = upload_bytes.saturating_add(uploader.upload_bytes);
+      draws = draws.saturating_add(u64::from(metal_stats.draws));
+      buffer_upload_bytes = buffer_upload_bytes.saturating_add(metal_stats.buffer_upload_bytes);
+   }
+
+   let summary = summarize(&frame_samples);
+   let measured = frames.max(1) as f64;
+   let mut metrics = BTreeMap::new();
+   insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+   insert_distribution_metrics(&mut metrics, "text_prepare_ms", &prepare_samples);
+   insert_distribution_metrics(&mut metrics, "encode_ms", &encode_samples);
+   insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+   insert_frame_pacing_metrics(&mut metrics, &frame_samples);
+   metrics.insert(String::from("new_labels"), 200.0);
+   metrics.insert(String::from("frame_scoped_preparation"), u8::from(frame_scoped) as f64);
+   metrics.insert(String::from("atlas_create_calls_avg"), creates as f64 / measured);
+   metrics.insert(String::from("atlas_update_calls_avg"), updates as f64 / measured);
+   metrics.insert(String::from("atlas_upload_calls_avg"), creates.saturating_add(updates) as f64 / measured);
+   metrics.insert(String::from("atlas_upload_pixels_avg"), upload_pixels as f64 / measured);
+   metrics.insert(String::from("atlas_upload_bytes_avg"), upload_bytes as f64 / measured);
+   metrics.insert(String::from("draws_avg"), draws as f64 / measured);
+   metrics.insert(String::from("buffer_upload_bytes_avg"), buffer_upload_bytes as f64 / measured);
+   if frame_scoped
+   {
+      insert_text_frame_metrics(&mut metrics, proof_stats);
+   }
+   if std::env::var_os("OXIDE_C43_RAW_SAMPLES").is_some()
+   {
+      insert_indexed_samples(&mut metrics, "c43_warmup_frame_ms", &warmup_frame_samples);
+      insert_indexed_samples(&mut metrics, "c43_frame_ms", &frame_samples);
+      insert_indexed_samples(&mut metrics, "c43_text_prepare_ms", &prepare_samples);
+      insert_indexed_samples(&mut metrics, "c43_encode_ms", &encode_samples);
+      insert_indexed_samples(&mut metrics, "c43_gpu_ms", &gpu_samples);
+   }
+   let note;
+   if frame_scoped
+   {
+      note = "Two hundred new mixed-script labels preflight into one frame-scoped A8 atlas publication before Metal encoding.";
+   }
+   else
+   {
+      note = "Control path: two hundred new mixed-script labels publish dirty A8 atlas state immediately while labels are encoded.";
+   }
+   Ok(PerfCaseResult {
+      id: String::from(id),
+      family: String::from("architecture"),
+      layer: String::from("engine"),
+      scenario: String::from("rendering-architecture"),
+      variant: String::from("oxide"),
+      cache_state: String::from("cold"),
+      refresh_mode: String::from("offscreen"),
+      unit: String::from("ms/frame"),
+      gated: true,
+      threshold_pct: 0.20,
+      median: summary.median,
+      p95: summary.p95,
+      p99: summary.p99,
+      min: summary.min,
+      max: summary.max,
+      mean: summary.mean,
+      samples: frame_samples.len(),
+      ops_per_sample: 1,
+      notes: vec![String::from(note)],
+      metrics,
+   })
 }
 
 fn text_script_matrix_case(smoke: bool) -> PerfCaseResult
@@ -2095,11 +2439,15 @@ fn text_script_matrix_case(smoke: bool) -> PerfCaseResult
          text.set_fallback_fonts(&[1]);
          let mut uploader = CpuUploader::default();
          let mut builder = ui::DrawListBuilder::new();
+         text.begin_frame();
          for (index, value) in strings.iter().enumerate()
          {
             encode_matrix_label(value, index, 3.0, 24.0, &mut text, &mut uploader, &mut builder);
          }
-         builder.drawlist().items.len() as u64 + builder.drawlist().vertices.len() as u64
+         let stats = text.finish_frame(&mut uploader, &mut builder);
+         builder.drawlist().items.len() as u64
+            + builder.drawlist().vertices.len() as u64
+            + stats.atlas_upload_calls
       },
    );
    case.metrics.insert(String::from("script_variants"), strings.len() as f64);
@@ -2121,8 +2469,13 @@ fn text_scale_sdf_matrix_case(smoke: bool) -> PerfCaseResult
             let mut text = perf_text_ctx();
             let mut uploader = CpuUploader::default();
             let mut builder = ui::DrawListBuilder::new();
+            text.begin_frame();
             encode_matrix_label("SDF Scale Matrix", index, scale, font_px, &mut text, &mut uploader, &mut builder);
-            checksum = checksum.wrapping_add(builder.drawlist().vertices.len() as u64).wrapping_add(text.atlas_revision());
+            let stats = text.finish_frame(&mut uploader, &mut builder);
+            checksum = checksum
+               .wrapping_add(builder.drawlist().vertices.len() as u64)
+               .wrapping_add(text.atlas_revision())
+               .wrapping_add(stats.atlas_upload_calls);
          }
          checksum
       },
@@ -2149,17 +2502,42 @@ fn text_atlas_eviction_case(smoke: bool) -> PerfCaseResult
    case
 }
 
-fn encode_matrix_label(
+fn encode_matrix_label<U: ui::elements::ImageUploader>(
    value: &str,
    index: usize,
    scale: f32,
    font_px: f32,
    text: &mut ui::elements::TextCtx,
-   uploader: &mut CpuUploader,
+   uploader: &mut U,
    builder: &mut ui::DrawListBuilder,
 )
 {
    ui::elements::encode_label_text(
+      value,
+      api::Color::rgba(0.1, 0.1, 0.12, 1.0),
+      ui::elements::Align::Left,
+      false,
+      0,
+      font_px,
+      api::RectF::new(0.0, (index % 200) as f32 * (font_px + 2.0), 1_000.0, font_px + 4.0),
+      scale,
+      text,
+      uploader,
+      builder,
+   );
+}
+
+fn encode_matrix_label_profiled<U: ui::elements::ImageUploader>(
+   value: &str,
+   index: usize,
+   scale: f32,
+   font_px: f32,
+   text: &mut ui::elements::TextCtx,
+   uploader: &mut U,
+   builder: &mut ui::DrawListBuilder,
+)
+{
+   ui::elements::encode_label_text_profiled(
       value,
       api::Color::rgba(0.1, 0.1, 0.12, 1.0),
       ui::elements::Align::Left,

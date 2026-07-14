@@ -125,6 +125,57 @@ struct CachedLabelLayout {
     lines: alloc::vec::Vec<CachedLabelLine>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextFrameStats {
+    pub visible_labels: u64,
+    pub shaping_calls: u64,
+    pub rasterizations: u64,
+    pub layout_cache_hits: u64,
+    pub layout_cache_misses: u64,
+    pub glyph_cache_hits: u64,
+    pub glyph_cache_misses: u64,
+    pub atlas_upload_calls: u64,
+    pub atlas_upload_pixels: u64,
+    pub atlas_upload_bytes: u64,
+    pub atlas_evictions: u64,
+    pub invalidated_runs: u64,
+}
+
+#[derive(Clone, Copy, Default)]
+struct TextCounterSnapshot {
+    shaping_calls: u64,
+    rasterizations: u64,
+    layout_cache_hits: u64,
+    layout_cache_misses: u64,
+    glyph_cache_hits: u64,
+    glyph_cache_misses: u64,
+    atlas_upload_calls: u64,
+    atlas_upload_pixels: u64,
+    atlas_upload_bytes: u64,
+    atlas_evictions: u64,
+    invalidated_runs: u64,
+}
+
+#[derive(Default)]
+struct TextProfiler {
+    frame_counters: TextCounterSnapshot,
+    last_frame_stats: TextFrameStats,
+    shaping_calls: u64,
+    layout_cache_hits: u64,
+    layout_cache_misses: u64,
+    atlas_upload_calls: u64,
+    atlas_upload_pixels: u64,
+    atlas_upload_bytes: u64,
+    invalidated_runs: u64,
+}
+
+#[derive(Default)]
+struct TextFrameState {
+    atlas_handle: Option<gfx::ImageHandle>,
+    atlas_revision: u64,
+    profiler: Option<TextProfiler>,
+}
+
 struct CachedLabelLayoutEntry {
     layout: Arc<CachedLabelLayout>,
     last_used: u64,
@@ -194,6 +245,8 @@ pub struct TextCtx {
     text_prefix_len: usize,
     label_layout_clock: u64,
     fallback_fonts: Vec<usize>,
+    frame_active: bool,
+    frame: Box<TextFrameState>,
 }
 
 impl Default for TextCtx {
@@ -211,11 +264,129 @@ impl Default for TextCtx {
             text_prefix_len: 0,
             label_layout_clock: 0,
             fallback_fonts: Vec::new(),
+            frame_active: false,
+            frame: Box::new(TextFrameState::default()),
         }
     }
 }
 
 impl TextCtx {
+    fn counter_snapshot(&self) -> TextCounterSnapshot {
+        let Some(profiler) = self.frame.profiler.as_ref() else {
+            return TextCounterSnapshot::default();
+        };
+        TextCounterSnapshot {
+            shaping_calls: profiler.shaping_calls,
+            rasterizations: self.atlas.rasterization_count(),
+            layout_cache_hits: profiler.layout_cache_hits,
+            layout_cache_misses: profiler.layout_cache_misses,
+            glyph_cache_hits: self.atlas.glyph_cache_hits(),
+            glyph_cache_misses: self.atlas.glyph_cache_misses(),
+            atlas_upload_calls: profiler.atlas_upload_calls,
+            atlas_upload_pixels: profiler.atlas_upload_pixels,
+            atlas_upload_bytes: profiler.atlas_upload_bytes,
+            atlas_evictions: self.atlas.eviction_count(),
+            invalidated_runs: profiler.invalidated_runs,
+        }
+    }
+
+    pub fn begin_frame(&mut self) {
+        if self.frame_active {
+            self.atlas.end_frame();
+        }
+        if self.frame.profiler.is_some() {
+            let counters = self.counter_snapshot();
+            if let Some(profiler) = self.frame.profiler.as_mut() {
+                profiler.frame_counters = counters;
+                profiler.last_frame_stats = TextFrameStats::default();
+            }
+        }
+        self.frame_active = true;
+        self.frame.atlas_handle = self.atlas_handle;
+        self.frame.atlas_revision = self.atlas.revision();
+        self.atlas.begin_frame();
+    }
+
+    pub fn finish_frame<U: ImageUploader>(
+        &mut self,
+        up: &mut U,
+        builder: &mut DrawListBuilder,
+    ) -> TextFrameStats {
+        if !self.frame_active {
+            return self.last_frame_stats();
+        }
+        let handle = if self.atlas.dirty_rect().is_some() {
+            Some(self.publish_gpu(up, true))
+        } else {
+            self.atlas_handle
+        };
+        if let Some(handle) = handle {
+            let atlas_revision = self.atlas.revision();
+            if self.frame.atlas_handle != Some(handle)
+                || self.frame.atlas_revision != atlas_revision
+            {
+                for item in &mut builder.drawlist_mut().items {
+                    if let gfx::DrawCmd::GlyphRun { run } = item {
+                        if run.atlas.0 == 0 || Some(run.atlas) == self.atlas_handle {
+                            if run.atlas_revision != atlas_revision {
+                                if let Some(profiler) = self.frame.profiler.as_mut() {
+                                    profiler.invalidated_runs = profiler.invalidated_runs.wrapping_add(1);
+                                }
+                            }
+                            run.atlas = handle;
+                            run.atlas_revision = atlas_revision;
+                        }
+                    }
+                }
+            }
+        }
+        self.atlas.end_frame();
+        self.frame_active = false;
+        if self.frame.profiler.is_none() {
+            return TextFrameStats::default();
+        }
+        let end = self.counter_snapshot();
+        let Some(profiler) = self.frame.profiler.as_mut() else {
+            return TextFrameStats::default();
+        };
+        let start = profiler.frame_counters;
+        let layout_cache_hits = end.layout_cache_hits.saturating_sub(start.layout_cache_hits);
+        let layout_cache_misses = end.layout_cache_misses.saturating_sub(start.layout_cache_misses);
+        profiler.last_frame_stats = TextFrameStats {
+            visible_labels: layout_cache_hits.saturating_add(layout_cache_misses),
+            shaping_calls: end.shaping_calls.saturating_sub(start.shaping_calls),
+            rasterizations: end.rasterizations.saturating_sub(start.rasterizations),
+            layout_cache_hits,
+            layout_cache_misses,
+            glyph_cache_hits: end.glyph_cache_hits.saturating_sub(start.glyph_cache_hits),
+            glyph_cache_misses: end.glyph_cache_misses.saturating_sub(start.glyph_cache_misses),
+            atlas_upload_calls: end.atlas_upload_calls.saturating_sub(start.atlas_upload_calls),
+            atlas_upload_pixels: end
+                .atlas_upload_pixels
+                .saturating_sub(start.atlas_upload_pixels),
+            atlas_upload_bytes: end.atlas_upload_bytes.saturating_sub(start.atlas_upload_bytes),
+            atlas_evictions: end.atlas_evictions.saturating_sub(start.atlas_evictions),
+            invalidated_runs: end.invalidated_runs.saturating_sub(start.invalidated_runs),
+        };
+        profiler.last_frame_stats
+    }
+
+    #[inline]
+    pub fn last_frame_stats(&self) -> TextFrameStats {
+        self.frame.profiler.as_ref().map_or(TextFrameStats::default(), |profiler| {
+            profiler.last_frame_stats
+        })
+    }
+
+    pub fn set_frame_stats_enabled(&mut self, enabled: bool) {
+        self.atlas.set_counters_enabled(enabled);
+        if enabled {
+            self.frame.profiler.get_or_insert_with(TextProfiler::default);
+        } else {
+            self.frame.profiler = None;
+        }
+    }
+
     #[inline]
     pub fn atlas_revision(&self) -> u64 {
         self.atlas.revision()
@@ -230,28 +401,70 @@ impl TextCtx {
     }
 
     pub fn ensure_gpu<U: ImageUploader>(&mut self, up: &mut U) -> gfx::ImageHandle {
+        self.publish_gpu(up, !self.frame_active)
+    }
+
+    #[inline]
+    fn encoding_atlas_handle<U: ImageUploader>(&mut self, up: &mut U) -> gfx::ImageHandle {
+        if self.frame_active {
+            self.atlas_handle.unwrap_or(gfx::ImageHandle(0))
+        } else {
+            self.ensure_gpu(up)
+        }
+    }
+
+    #[inline]
+    fn flush_after_encoding<U: ImageUploader>(&mut self, up: &mut U) {
+        if !self.frame_active && self.atlas.dirty_rect().is_some() {
+            let _ = self.ensure_gpu(up);
+        }
+    }
+
+    fn publish_gpu<U: ImageUploader>(&mut self, up: &mut U, flush_dirty: bool) -> gfx::ImageHandle {
         let (data, w, h) = self.atlas.image();
         if let Some(hdl) = self.atlas_handle {
             if self.atlas_gpu_size == Some((w, h)) {
-                if let Some(rect) = self.atlas.dirty_rect() {
-                    let offset = (rect.y as usize)
-                        .saturating_mul(w as usize)
-                        .saturating_add(rect.x as usize);
-                    up.update_a8(
-                        hdl,
-                        rect.x,
-                        rect.y,
-                        rect.w,
-                        rect.h,
-                        &data[offset.min(data.len())..],
-                        w as usize,
-                    );
-                    self.atlas.clear_dirty();
+                if flush_dirty {
+                    if let Some(dirty) = self.atlas.dirty_rect() {
+                        let dirty_pixels = u64::from(dirty.w).saturating_mul(u64::from(dirty.h));
+                        let full_pixels = u64::from(w).saturating_mul(u64::from(h));
+                        let rect = if dirty_pixels.saturating_mul(4) >= full_pixels.saturating_mul(3)
+                        {
+                            text::AtlasDirtyRect { x: 0, y: 0, w, h }
+                        } else {
+                            dirty
+                        };
+                        let offset = (rect.y as usize)
+                            .saturating_mul(w as usize)
+                            .saturating_add(rect.x as usize);
+                        up.update_a8(
+                            hdl,
+                            rect.x,
+                            rect.y,
+                            rect.w,
+                            rect.h,
+                            &data[offset.min(data.len())..],
+                            w as usize,
+                        );
+                        let pixels = u64::from(rect.w).saturating_mul(u64::from(rect.h));
+                        if let Some(profiler) = self.frame.profiler.as_mut() {
+                            profiler.atlas_upload_calls = profiler.atlas_upload_calls.saturating_add(1);
+                            profiler.atlas_upload_pixels = profiler.atlas_upload_pixels.saturating_add(pixels);
+                            profiler.atlas_upload_bytes = profiler.atlas_upload_bytes.saturating_add(pixels);
+                        }
+                        self.atlas.clear_dirty();
+                    }
                 }
                 return hdl;
             }
         }
         let hdl = up.create_a8(w, h, data, w as usize);
+        let pixels = u64::from(w).saturating_mul(u64::from(h));
+        if let Some(profiler) = self.frame.profiler.as_mut() {
+            profiler.atlas_upload_calls = profiler.atlas_upload_calls.saturating_add(1);
+            profiler.atlas_upload_pixels = profiler.atlas_upload_pixels.saturating_add(pixels);
+            profiler.atlas_upload_bytes = profiler.atlas_upload_bytes.saturating_add(pixels);
+        }
         self.atlas_handle = Some(hdl);
         self.atlas_gpu_size = Some((w, h));
         self.atlas.clear_dirty();
@@ -259,6 +472,8 @@ impl TextCtx {
     }
 
     pub fn trim_memory(&mut self) {
+        self.frame_active = false;
+        self.atlas.end_frame();
         self.atlas.reset();
         self.atlas_handle = None;
         self.atlas_gpu_size = None;
@@ -267,6 +482,9 @@ impl TextCtx {
         self.text_prefixes.clear();
         self.text_prefix_len = 0;
         self.label_layout_clock = 0;
+        if let Some(profiler) = self.frame.profiler.as_mut() {
+            profiler.last_frame_stats = TextFrameStats::default();
+        }
     }
 
     pub fn set_fallback_fonts(&mut self, font_ids: &[usize]) {
@@ -281,7 +499,7 @@ impl TextCtx {
         self.text_prefix_len = 0;
     }
 
-    fn cached_label_layout(
+    fn cached_label_layout<const COUNT_STATS: bool>(
         &mut self,
         text_value: &str,
         font_id: usize,
@@ -294,10 +512,27 @@ impl TextCtx {
         if let Some(entries) = self.label_layouts.get_mut(&key) {
             if let Some(entry) = entries.get_mut(text_value) {
                 entry.last_used = self.label_layout_clock;
+                if COUNT_STATS {
+                    if let Some(profiler) = self.frame.profiler.as_mut() {
+                        profiler.layout_cache_hits = profiler.layout_cache_hits.wrapping_add(1);
+                    }
+                }
                 return Some(entry.layout.clone());
             }
         }
-        let layout = Arc::new(self.build_label_layout(text_value, font_id, font_px, wrap, max_w)?);
+        if COUNT_STATS {
+            if let Some(profiler) = self.frame.profiler.as_mut() {
+                profiler.layout_cache_misses = profiler.layout_cache_misses.wrapping_add(1);
+            }
+        }
+        let layout = Arc::new(self.build_label_layout(
+            text_value,
+            font_id,
+            font_px,
+            wrap,
+            max_w,
+            COUNT_STATS,
+        )?);
         if self.label_layout_len >= LABEL_LAYOUT_CACHE_CAP {
             self.evict_cold_label_layouts();
         }
@@ -498,15 +733,26 @@ impl TextCtx {
         font_px: f32,
         wrap: bool,
         max_w: f32,
+        count_shapes: bool,
     ) -> Option<CachedLabelLayout> {
         if !wrap {
             return Some(CachedLabelLayout {
-                lines: alloc::vec![self.build_label_line(text_value, font_id, font_px)?],
+                lines: alloc::vec![self.build_label_line(
+                    text_value,
+                    font_id,
+                    font_px,
+                    count_shapes,
+                )?],
             });
         }
         if self.fallback_fonts.is_empty() && text_value.is_ascii() {
-            if let Some(layout) =
-                self.build_primary_ascii_wrapped_label_layout(text_value, font_id, font_px, max_w)
+            if let Some(layout) = self.build_primary_ascii_wrapped_label_layout(
+                text_value,
+                font_id,
+                font_px,
+                max_w,
+                count_shapes,
+            )
             {
                 return Some(layout);
             }
@@ -529,7 +775,7 @@ impl TextCtx {
             }
             cur.push_str(word);
             pending_spaces = trailing_spaces;
-            let Some(line) = self.build_label_line(&cur, font_id, font_px) else {
+            let Some(line) = self.build_label_line(&cur, font_id, font_px, count_shapes) else {
                 cur.truncate(prior_len);
                 continue;
             };
@@ -540,7 +786,7 @@ impl TextCtx {
                 }
                 cur.clear();
                 cur.push_str(word);
-                let Some(line) = self.build_label_line(&cur, font_id, font_px) else {
+                let Some(line) = self.build_label_line(&cur, font_id, font_px, count_shapes) else {
                     cur.clear();
                     pending_spaces = 0;
                     continue;
@@ -564,6 +810,7 @@ impl TextCtx {
         font_id: usize,
         font_px: f32,
         max_w: f32,
+        count_shapes: bool,
     ) -> Option<CachedLabelLayout> {
         if text_value.is_empty() {
             return Some(CachedLabelLayout { lines: Vec::new() });
@@ -571,6 +818,7 @@ impl TextCtx {
         let font = self.fonts.font(font_id)?;
         let whole_shape =
             self.shaper.shape(font, font_id, text_value, font_px).ok()?.to_owned_shape();
+        self.record_shape_calls(count_shapes, 1);
         let words = ascii_wrap_word_ranges(text_value);
         if words.is_empty() {
             return Some(CachedLabelLayout { lines: Vec::new() });
@@ -607,14 +855,24 @@ impl TextCtx {
                 && candidate_width + WRAP_WIDTH_CONFIRM_EPS >= max_w
             {
                 if let Some(line) =
-                    self.build_label_line(&text_value[start..word_end], font_id, font_px)
+                    self.build_label_line(
+                        &text_value[start..word_end],
+                        font_id,
+                        font_px,
+                        count_shapes,
+                    )
                 {
                     should_wrap = line.width > max_w;
                 }
             }
             if should_wrap {
                 if let Some(line) =
-                    self.build_label_line(&text_value[start..line_end], font_id, font_px)
+                    self.build_label_line(
+                        &text_value[start..line_end],
+                        font_id,
+                        font_px,
+                        count_shapes,
+                    )
                 {
                     lines.push(line);
                 }
@@ -631,7 +889,12 @@ impl TextCtx {
                 if lines.is_empty() && start == 0 && line_end == text_value.len() {
                     lines.push(cached_label_line_from_owned_shape(font_id, whole_shape));
                 } else if let Some(line) =
-                    self.build_label_line(&text_value[start..line_end], font_id, font_px)
+                    self.build_label_line(
+                        &text_value[start..line_end],
+                        font_id,
+                        font_px,
+                        count_shapes,
+                    )
                 {
                     lines.push(line);
                 }
@@ -645,6 +908,7 @@ impl TextCtx {
         text_value: &str,
         font_id: usize,
         font_px: f32,
+        count_shapes: bool,
     ) -> Option<CachedLabelLine> {
         if !self.fallback_fonts.is_empty() {
             let fallback = self.shaper.shape_with_fallback_fonts(
@@ -654,12 +918,23 @@ impl TextCtx {
                 text_value,
                 font_px,
             )?;
+            self.record_shape_calls(count_shapes, fallback.shape_run_count() as u64);
             let width = fallback.width();
             return Some(CachedLabelLine { width, shape: CachedLabelShape::Fallback(fallback) });
         }
         let font = self.fonts.font(font_id)?;
         let shape = self.shaper.shape(font, font_id, text_value, font_px).ok()?.to_owned_shape();
+        self.record_shape_calls(count_shapes, 1);
         Some(cached_label_line_from_owned_shape(font_id, shape))
+    }
+
+    #[inline]
+    fn record_shape_calls(&mut self, enabled: bool, calls: u64) {
+        if enabled {
+            if let Some(profiler) = self.frame.profiler.as_mut() {
+                profiler.shaping_calls = profiler.shaping_calls.wrapping_add(calls);
+            }
+        }
     }
 }
 
@@ -694,7 +969,7 @@ impl Default for Label {
     }
 }
 
-fn bake_cached_label_line(
+fn bake_cached_label_line<const COUNT_STATS: bool>(
     line: &CachedLabelLine,
     color: gfx::Color,
     atlas_handle: gfx::ImageHandle,
@@ -710,45 +985,79 @@ fn bake_cached_label_line(
                 return (0, 0);
             };
             let dl = b.drawlist_mut();
-            run.shape.bake_into_with(
-                font,
-                &mut txt.raster,
-                &mut txt.atlas,
-                &mut dl.vertices,
-                &mut dl.indices,
-                color,
-                atlas_handle,
-                origin_x + run.x_offset,
-                origin_y,
-                device_scale,
-            )
+            if COUNT_STATS {
+                run.shape.bake_counted_into_with(
+                    font,
+                    &mut txt.raster,
+                    &mut txt.atlas,
+                    &mut dl.vertices,
+                    &mut dl.indices,
+                    color,
+                    atlas_handle,
+                    origin_x + run.x_offset,
+                    origin_y,
+                    device_scale,
+                )
+            } else {
+                run.shape.bake_into_with(
+                    font,
+                    &mut txt.raster,
+                    &mut txt.atlas,
+                    &mut dl.vertices,
+                    &mut dl.indices,
+                    color,
+                    atlas_handle,
+                    origin_x + run.x_offset,
+                    origin_y,
+                    device_scale,
+                )
+            }
         }
         CachedLabelShape::Fallback(shape) => {
             let dl = b.drawlist_mut();
-            shape.bake_into_with(
-                &txt.fonts,
-                &mut txt.raster,
-                &mut txt.atlas,
-                &mut dl.vertices,
-                &mut dl.indices,
-                color,
-                atlas_handle,
-                origin_x,
-                origin_y,
-                device_scale,
-            )
+            if COUNT_STATS {
+                shape.bake_counted_into_with(
+                    &txt.fonts,
+                    &mut txt.raster,
+                    &mut txt.atlas,
+                    &mut dl.vertices,
+                    &mut dl.indices,
+                    color,
+                    atlas_handle,
+                    origin_x,
+                    origin_y,
+                    device_scale,
+                )
+            } else {
+                shape.bake_into_with(
+                    &txt.fonts,
+                    &mut txt.raster,
+                    &mut txt.atlas,
+                    &mut dl.vertices,
+                    &mut dl.indices,
+                    color,
+                    atlas_handle,
+                    origin_x,
+                    origin_y,
+                    device_scale,
+                )
+            }
         }
     };
     let vertex_count = glyph_run.vb.len;
     let index_count = glyph_run.ib.len;
     if vertex_count > 0 && index_count > 0 {
-        b.glyph_run(glyph_run);
+        if glyph_run.atlas.0 == 0 {
+            b.glyph_run_provisional(glyph_run);
+        } else {
+            b.glyph_run(glyph_run);
+        }
     }
     (vertex_count, index_count)
 }
 
 #[inline]
-fn encode_label_cached<U: ImageUploader>(
+fn encode_label_cached<const COUNT_STATS: bool, U: ImageUploader>(
     text_value: &str,
     color: gfx::Color,
     align: Align,
@@ -768,11 +1077,11 @@ fn encode_label_cached<U: ImageUploader>(
         return;
     }
     let max_w = if wrap { rect.w.max(0.0) } else { f32::INFINITY };
-    let Some(layout) = txt.cached_label_layout(text_value, font_id, font_px, wrap, max_w) else {
+    let Some(layout) = txt.cached_label_layout::<COUNT_STATS>(text_value, font_id, font_px, wrap, max_w) else {
         watch_text_event("label.shape_error", font_id, text_value, "cache_build_failed");
         return;
     };
-    let handle = txt.ensure_gpu(up);
+    let handle = txt.encoding_atlas_handle(up);
     watch_text_event_lazy("label.begin", font_id, text_value, || {
         format!(
             "rect={:.1}x{:.1} font_px={:.1} atlas_handle={}",
@@ -798,7 +1107,7 @@ fn encode_label_cached<U: ImageUploader>(
             Align::Right => rect.w - line.width,
         };
         let (verts, indices) =
-            bake_cached_label_line(line, color, handle, ox + dx, oy, scale, txt, b);
+            bake_cached_label_line::<COUNT_STATS>(line, color, handle, ox + dx, oy, scale, txt, b);
         watch_text_event_lazy("label.glyph_run", font_id, text_value, || {
             format!(
                 "width={:.1} verts={} indices={} atlas_handle={}",
@@ -811,9 +1120,7 @@ fn encode_label_cached<U: ImageUploader>(
         oy += line_h;
     }
 
-    if txt.atlas.dirty_rect().is_some() {
-        let _ = txt.ensure_gpu(up);
-    }
+    txt.flush_after_encoding(up);
 }
 
 #[inline]
@@ -829,7 +1136,7 @@ fn encode_label_unwrapped<U: ImageUploader>(
     up: &mut U,
     b: &mut DrawListBuilder,
 ) {
-    encode_label_cached(
+    encode_label_cached::<false, U>(
         text_value,
         color,
         align,
@@ -858,7 +1165,38 @@ pub fn encode_label_text<U: ImageUploader>(
     up: &mut U,
     b: &mut DrawListBuilder,
 ) {
-    encode_label_cached(
+    encode_label_cached::<false, U>(
+        text_value,
+        color,
+        align,
+        wrap,
+        font_id,
+        font_px,
+        rect,
+        device_scale,
+        txt,
+        up,
+        b,
+    );
+}
+
+#[doc(hidden)]
+#[cold]
+#[inline(never)]
+pub fn encode_label_text_profiled<U: ImageUploader>(
+    text_value: &str,
+    color: gfx::Color,
+    align: Align,
+    wrap: bool,
+    font_id: usize,
+    font_px: f32,
+    rect: gfx::RectF,
+    device_scale: f32,
+    txt: &mut TextCtx,
+    up: &mut U,
+    b: &mut DrawListBuilder,
+) {
+    encode_label_cached::<true, U>(
         text_value,
         color,
         align,
@@ -882,7 +1220,7 @@ impl Label {
         up: &mut U,
         b: &mut DrawListBuilder,
     ) {
-        encode_label_cached(
+        encode_label_cached::<false, U>(
             &self.text,
             self.color,
             self.align,
@@ -2437,7 +2775,7 @@ impl TextInput {
             inner.h - style.padding.top - style.padding.bottom,
         );
 
-        let handle = text_ctx.ensure_gpu(uploader);
+        let handle = text_ctx.encoding_atlas_handle(uploader);
         let display = state.display_text();
 
         if let Some(cfg) = state.otp_config() {
@@ -2453,7 +2791,7 @@ impl TextInput {
                 handle,
                 &display,
             );
-            let _ = text_ctx.ensure_gpu(uploader);
+            text_ctx.flush_after_encoding(uploader);
             return;
         }
 
@@ -2493,7 +2831,7 @@ impl TextInput {
             }
         }
 
-        let Some(layout) = text_ctx.cached_label_layout(
+        let Some(layout) = text_ctx.cached_label_layout::<false>(
             &display,
             style.font_id,
             style.font_px,
@@ -2505,7 +2843,7 @@ impl TextInput {
         let Some(line) = layout.lines.first() else {
             return;
         };
-        let _ = bake_cached_label_line(
+        let _ = bake_cached_label_line::<false>(
             line,
             style.text,
             handle,
@@ -2546,7 +2884,7 @@ impl TextInput {
             );
         }
 
-        let _ = text_ctx.ensure_gpu(uploader);
+        text_ctx.flush_after_encoding(uploader);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3059,7 +3397,7 @@ impl PickerState {
         let highlight = style.center_band_rect(rect);
         builder.rrect(highlight, [style.center_band_radius(rect); 4], style.highlight);
 
-        let handle = text_ctx.ensure_gpu(uploader);
+        let handle = text_ctx.encoding_atlas_handle(uploader);
         if text_ctx.fonts.font(style.font_id).is_none() {
             return;
         }
@@ -3084,7 +3422,7 @@ impl PickerState {
                 if item_rect.y + item_rect.h <= rect.y || item_rect.y >= rect.y + rect.h {
                     continue;
                 }
-                let Some(layout) = text_ctx.cached_label_layout(
+                let Some(layout) = text_ctx.cached_label_layout::<false>(
                     label,
                     style.font_id,
                     style.font_px,
@@ -3099,7 +3437,7 @@ impl PickerState {
                 let text_x = item_rect.x + (item_rect.w - line.width) * 0.50;
                 let text_y =
                     item_rect.y + (item_rect.h - style.font_px) * 0.50 + style.baseline_shift;
-                let _ = bake_cached_label_line(
+                let _ = bake_cached_label_line::<false>(
                     line,
                     style.text_color,
                     handle,
@@ -3113,9 +3451,7 @@ impl PickerState {
         }
 
         builder.clip_pop();
-        if text_ctx.atlas.dirty_rect().is_some() {
-            let _ = text_ctx.ensure_gpu(uploader);
-        }
+        text_ctx.flush_after_encoding(uploader);
     }
 }
 

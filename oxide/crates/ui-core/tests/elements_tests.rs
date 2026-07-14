@@ -4,10 +4,10 @@ use oxide_platform_api::{
 };
 use oxide_renderer_api::{Color, DrawCmd, ImageHandle, RectF};
 use oxide_ui_core::elements::{
-    encode_label_text, Align, Badge, BadgeState, ButtonState, ImageFit, ImageUploader, ImageView,
-    ImageZoomState, Label, Overlay, OverlayState, PickerState, PickerStyle, PopupWindow, SliderState,
-    SlidingSwitchMode, SlidingSwitchState, SlidingSwitchStyle, Spinner, TextCtx, TextInput,
-    TextInputState, TextInputStyle, TextValidation, ToggleState, UICameraView,
+    encode_label_text, encode_label_text_profiled, Align, Badge, BadgeState, ButtonState, ImageFit,
+    ImageUploader, ImageView, ImageZoomState, Label, Overlay, OverlayState, PickerState, PickerStyle,
+    PopupWindow, SliderState, SlidingSwitchMode, SlidingSwitchState, SlidingSwitchStyle, Spinner,
+    TextCtx, TextInput, TextInputState, TextInputStyle, TextValidation, ToggleState, UICameraView,
 };
 use oxide_ui_core::DrawListBuilder;
 use std::sync::{Arc, RwLock};
@@ -580,6 +580,157 @@ fn label_reuses_layout_and_skips_clean_atlas_upload() {
     );
     assert_eq!(uploader.creates, 1);
     assert_eq!(uploader.updates, 1);
+}
+
+#[test]
+fn text_frame_preflights_visible_labels_and_publishes_once() {
+    let mut text = TextCtx::default();
+    text.set_frame_stats_enabled(true);
+    let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let labels = (0..200).map(|index| format!("Prepared label {index:03}")).collect::<Vec<_>>();
+    let mut builder = DrawListBuilder::new();
+    let mut uploader = CountingUploader::default();
+
+    text.begin_frame();
+    for (index, label) in labels.iter().enumerate() {
+        encode_label_text_profiled(
+            label,
+            Color::rgba(0.1, 0.1, 0.1, 1.0),
+            Align::Left,
+            false,
+            0,
+            14.0,
+            RectF::new(0.0, index as f32 * 18.0, 320.0, 18.0),
+            2.0,
+            &mut text,
+            &mut uploader,
+            &mut builder,
+        );
+    }
+    assert_eq!(uploader.creates, 0);
+    assert_eq!(uploader.updates, 0);
+    let cold = text.finish_frame(&mut uploader, &mut builder);
+    assert_eq!(cold.visible_labels, 200);
+    assert_eq!(cold.shaping_calls, 200);
+    assert!(cold.rasterizations > 0);
+    assert_eq!(cold.atlas_upload_calls, 1);
+    assert_eq!(cold.invalidated_runs, 0);
+    assert_eq!(uploader.creates, 1);
+    assert_eq!(uploader.updates, 0);
+    assert_eq!(
+        builder
+            .drawlist()
+            .items
+            .iter()
+            .filter(|item| matches!(item, DrawCmd::GlyphRun { run } if run.vb.len > 0))
+            .count(),
+        200,
+    );
+
+    builder.clear();
+    text.begin_frame();
+    for (index, label) in labels.iter().enumerate() {
+        encode_label_text_profiled(
+            label,
+            Color::rgba(0.1, 0.1, 0.1, 1.0),
+            Align::Left,
+            false,
+            0,
+            14.0,
+            RectF::new(0.0, index as f32 * 18.0, 320.0, 18.0),
+            2.0,
+            &mut text,
+            &mut uploader,
+            &mut builder,
+        );
+    }
+    let warm = text.finish_frame(&mut uploader, &mut builder);
+    assert_eq!(warm.visible_labels, 200);
+    assert_eq!(warm.shaping_calls, 0);
+    assert_eq!(warm.rasterizations, 0);
+    assert_eq!(warm.layout_cache_hits, 200);
+    assert_eq!(warm.layout_cache_misses, 0);
+    assert_eq!(warm.atlas_upload_calls, 0);
+    assert_eq!(warm.atlas_upload_pixels, 0);
+    assert_eq!(warm.atlas_upload_bytes, 0);
+    assert_eq!(warm.atlas_evictions, 0);
+    assert_eq!(warm.invalidated_runs, 0);
+    assert_eq!(uploader.creates, 1);
+    assert_eq!(uploader.updates, 0);
+
+    builder.clear();
+    text.begin_frame();
+    encode_label_text_profiled(
+        "Z",
+        Color::rgba(0.1, 0.1, 0.1, 1.0),
+        Align::Left,
+        false,
+        0,
+        14.0,
+        RectF::new(0.0, 0.0, 32.0, 18.0),
+        2.0,
+        &mut text,
+        &mut uploader,
+        &mut builder,
+    );
+    let incremental = text.finish_frame(&mut uploader, &mut builder);
+    let (_, _, width, height, _) = uploader.last_update.expect("one dirty atlas update");
+    assert_eq!(incremental.atlas_upload_calls, 1);
+    assert_eq!(incremental.atlas_upload_pixels, u64::from(width) * u64::from(height));
+    assert_eq!(incremental.atlas_upload_bytes, incremental.atlas_upload_pixels);
+    assert!(incremental.atlas_upload_pixels < 1024 * 1024);
+    assert_eq!(uploader.creates, 1);
+    assert_eq!(uploader.updates, 1);
+}
+
+#[test]
+fn text_frame_patches_provisional_runs_without_changing_draw_order() {
+    let mut text = TextCtx::default();
+    let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let mut builder = DrawListBuilder::new();
+    let mut uploader = CountingUploader::default();
+    let color = Color::rgba(0.2, 0.3, 0.4, 1.0);
+
+    text.begin_frame();
+    builder.rrect(RectF::new(0.0, 0.0, 120.0, 32.0), [4.0; 4], color);
+    encode_label_text(
+        "first",
+        color,
+        Align::Left,
+        false,
+        0,
+        14.0,
+        RectF::new(4.0, 4.0, 100.0, 20.0),
+        2.0,
+        &mut text,
+        &mut uploader,
+        &mut builder,
+    );
+    builder.rrect(RectF::new(0.0, 40.0, 120.0, 32.0), [4.0; 4], color);
+    encode_label_text(
+        "second",
+        color,
+        Align::Left,
+        false,
+        0,
+        14.0,
+        RectF::new(4.0, 44.0, 100.0, 20.0),
+        2.0,
+        &mut text,
+        &mut uploader,
+        &mut builder,
+    );
+    let _ = text.finish_frame(&mut uploader, &mut builder);
+
+    assert_eq!(builder.drawlist().items.len(), 4);
+    assert!(matches!(builder.drawlist().items[0], DrawCmd::RRect { .. }));
+    assert!(matches!(builder.drawlist().items[1], DrawCmd::GlyphRun { run } if run.atlas.0 == 41));
+    assert!(matches!(builder.drawlist().items[2], DrawCmd::RRect { .. }));
+    assert!(matches!(builder.drawlist().items[3], DrawCmd::GlyphRun { run } if run.atlas.0 == 41));
 }
 
 #[test]

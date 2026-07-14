@@ -490,6 +490,72 @@ fn atlas_pressure_does_not_evict_glyphs_used_earlier_in_same_run() {
 }
 
 #[test]
+fn frame_pin_protects_preexisting_visible_glyphs_from_later_runs() {
+    let mut db = FontDb::default();
+    let latin_id = db.add_font(load_font(LATIN_FONT));
+    let mut shaper = TextShaper::default();
+    let font = db.font(latin_id).expect("latin font");
+    let wide = shaper.shape(font, latin_id, "W", 22.0).expect("shape wide glyph");
+    let small = shaper.shape(font, latin_id, "W", 12.0).expect("shape small glyph");
+    let mut probe = Atlas::new(128, 128);
+    let mut probe_vertices = Vec::new();
+    let mut probe_indices = Vec::new();
+    wide.bake_into(
+        &mut probe,
+        &mut probe_vertices,
+        &mut probe_indices,
+        api::Color::rgba(0.2, 0.3, 0.4, 1.0),
+        api::ImageHandle(7),
+        0.0,
+        0.0,
+        1.0,
+    );
+    let slot = probe.dirty_rect().expect("wide glyph slot");
+    let mut atlas = Atlas::new(slot.w + 2, slot.h + 2);
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    let visible = wide.bake_into(
+        &mut atlas,
+        &mut vertices,
+        &mut indices,
+        api::Color::rgba(0.2, 0.3, 0.4, 1.0),
+        api::ImageHandle(7),
+        0.0,
+        0.0,
+        1.0,
+    );
+
+    atlas.begin_frame();
+    let blocked = small.bake_into(
+        &mut atlas,
+        &mut vertices,
+        &mut indices,
+        api::Color::rgba(0.2, 0.3, 0.4, 1.0),
+        api::ImageHandle(7),
+        0.0,
+        0.0,
+        1.0,
+    );
+    assert!(visible.vb.len > 0);
+    assert_eq!(blocked.vb.len, 0);
+    assert_eq!(atlas.eviction_count(), 0);
+
+    atlas.end_frame();
+    let admitted = small.bake_into(
+        &mut atlas,
+        &mut vertices,
+        &mut indices,
+        api::Color::rgba(0.2, 0.3, 0.4, 1.0),
+        api::ImageHandle(7),
+        0.0,
+        0.0,
+        1.0,
+    );
+    assert!(admitted.vb.len > 0);
+    assert_eq!(atlas.eviction_count(), 1);
+}
+
+#[test]
 fn atlas_too_small_for_glyph_skips_without_eviction_loop() {
     let mut db = FontDb::default();
     let latin_id = db.add_font(load_font(LATIN_FONT));

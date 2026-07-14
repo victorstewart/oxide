@@ -7,7 +7,7 @@
 ## Workload contract
 
 - Retained UI: 1,000 label-shaped nodes, 500 image-shaped nodes, depths 16/32, clean replay, one dirty leaf, a 1,500-node hot working set under a 1 MiB hard cache budget, and a complete one-use invalidation workload under a zero-byte direct policy.
-- Animation/text: a real 300-node `UiSurface` driven by `Animator`, retained glyph/image replay, nested opacity/clips/transforms, hit testing, and accessibility dirtiness; warm/new/script/fallback/atlas/scale/SDF text cases.
+- Animation/text: a real 300-node `UiSurface` driven by `Animator`, retained glyph/image replay, nested opacity/clips/transforms, hit testing, and accessibility dirtiness; warm/new/script/fallback/atlas/scale/SDF text cases plus a 200-new-label production Metal publication row.
 - Dynamic properties: the CPU surface row requires zero chunk/sequence/geometry rebuild after warmup; a 300-instance Metal text/image row alternates full affine and opacity records through the completion-safe property ring.
 - Spatial metadata: CPU architecture/authoring rows query 10,000 alternating glyph/image-mesh instances; Metal small damage selects one instance/command with zero vertex scans, copies, or uploads, while full damage replays all 10,000 draws through one validated static plan.
 - Layers/effects/damage: CPU command-construction rows plus production Metal submissions for 100 × 100 layer caching, invalidation/resize/navigation/nesting/backdrop/memory-pressure rebuilds, effect layouts, direct/prepass/quarter/eighth target plans, and exact 5/25/100 percent damage sequences over up to 10,000 items.
@@ -34,6 +34,8 @@ The C27 rows are `cpu.architecture.spatial_metadata.glyph_mesh_10000`, `gpu.arch
 
 `OXIDE_C24_RAW_SAMPLES=1` persists every C24 warmup and measured frame/encode/GPU observation under indexed metric keys for the shared paired runner. Normal reports omit those keys.
 
+The C43 Metal row is `gpu.architecture.text.new_labels_200`. `OXIDE_C43_TEXT_FRAME_SCOPED=0` selects the immediate-publication control, `OXIDE_C43_METAL_FRAMES` raises the explicit evidence sample count while leaving the default at 16, and `OXIDE_C43_RAW_SAMPLES=1` persists warmup plus whole-frame, preparation, encode, and completed-command-buffer GPU samples. The row uses 200 distinct supported glyph/size keys and reports atlas create/update calls, upload pixels/bytes, geometry upload, draws, and frame-scoped text counters. `scripts/c43_text_paired_adapter.mjs` preserves each complete suite report and exposes those indexed observations as arrays to the shared fresh-process paired runner. Explicit paired runs may set `OXIDE_C43_PAIRED_BLOCKS`; every bounded block then receives the same unmeasured 16-frame immediate-path conditioning workload on both sides, and all declared measured samples remain in the decision.
+
 The C14 rows are selected with `OXIDE_PERF_RUNNER_FILTER=cpu.authoring.image_view_grid.,gpu.authoring.image_view_grid.`. They create unique 29x7 Metal images and encode 24x12 cover cells through the public `ImageView` API, so parent zero-slice nine-slice behavior and candidate source-cropped image behavior share the same authoring and backend path.
 
 `OXIDE_ARCHITECTURE_METAL_WARMUPS` and `OXIDE_ARCHITECTURE_METAL_FRAMES` override the warmup and measured frame counts for non-default statistical runs. When `OXIDE_ARCHITECTURE_METAL_RAW_SAMPLES` is present, each warmup and measured frame/encode/GPU duration is persisted under an indexed metric key. Normal reports omit those raw keys, so the expanded evidence shape is confined to explicit experiment runs.
@@ -56,8 +58,10 @@ The memory-warning layer row invokes the production layer-cache purge hook. All 
 - Prepared report tests require clean 256/0 hit/miss, zero upload/copy/traversal, and one-dirty 255/1 hit/miss with exactly one 64-command, 3,072-byte rebuild. The authoring registry separately exercises the public retained-snapshot Metal entry point.
 - The image-view report test freezes both 100/1,000 authoring rows, zero nine-slices, one crop and quad per image, bounded logical coverage, cross-texture Metal draw-call batching, and total inline-plus-argument parameter bytes.
 - Browser source tests freeze all ten WebGPU primitive IDs, opt-in routing, queue/RAF pacing, timestamp settlement, and counter serialization.
+- C43 report tests require 1,000 warm labels to perform zero shaping/raster/upload work, 200 new labels to publish once, and the production Metal row to preserve 200 draws and identical geometry bytes while removing immediate updates.
 
 ## Changelog
+- 2026-07-14: added C43 warm/cold text counter rows and the production Metal immediate-versus-frame-scoped atlas publication workload with indexed raw samples.
 - 2026-07-14: added C36 target creation, in-flight generation/byte, total/peak storage, and synchronization-blocked reuse metrics to every Metal ID-mask architecture row.
 - 2026-07-14: added C32 content-changing and same-frame two-map Metal ID-mask rows with raw samples and complete cache/stage/residency counters.
 - 2026-07-14: upgraded the 100-layer Metal matrix for C31 with a hard budget, production memory-warning purge, navigation-churn pool reuse, byte/counter telemetry, and a zero-budget-violation metric.

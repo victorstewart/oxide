@@ -40,6 +40,12 @@
   Coalesces adjacent mergeable draw commands with caller-owned scratch storage for hot frame loops that prewarm allocation capacity.
 - `elements::TextCtx::retained_text_atlas_revision`
   Exposes the live text atlas handle and revision only after dirty atlas bytes have been uploaded to the GPU.
+- `elements::TextCtx::begin_frame` / `elements::TextCtx::finish_frame`
+  Bracket visible label preparation, defer dirty atlas publication, patch provisional glyph handles in place, and return the completed frame's text counters.
+- `elements::TextCtx::set_frame_stats_enabled` / `elements::TextCtx::last_frame_stats`
+  Enable opt-in shaping, raster, cache, upload, eviction, and invalidation diagnostics and read the most recently completed frame.
+- `elements::TextFrameStats`
+  Carries the frame-scoped text preparation counters used by tests and performance reports.
 - `elements::TextCtx::set_fallback_fonts`
   Configures fallback font ids used for text-input cursor-prefix metrics when the primary font does not cover a grapheme cluster.
 - `elements::TextInputState::cursor_index`
@@ -125,6 +131,8 @@
 - Cached draw-list replay can reject stale or unknown text atlas revisions before appending glyph geometry, preventing retained text from pointing at an evicted atlas slot.
 - Retained draw-list replay now fails closed when no text-atlas context is supplied, so cached glyph geometry cannot bypass atlas revision checks after atlas eviction, reset, or dirty upload state changes.
 - `TextCtx::retained_text_atlas_revision` keeps surface/router retained text replay on a live atlas by refusing to expose a snapshot while atlas bytes are still dirty.
+- `TextCtx` now defers frame-owned atlas publication until all visible labels are prepared, unions damage under an explicit 75% full-upload threshold, and patches provisional atlas handles without reordering commands.
+- Disabled text diagnostics retain only one direct frame-active branch; boxed counter state is absent from cache-hit glyph baking, and the warm 1,000-label frame remains allocation-free.
 - `TextCtx` builds cached shaped cursor maps from the cached unwrapped owned shape when available, avoiding duplicate shaping between label drawing and text-input cursor metrics.
 - Text-input pointer picking uses the cached `oxide_text::ShapedCursorMap` directly instead of probing every cursor position through repeated cache lookups, including descending visual caret maps for pure RTL runs.
 - When fallback fonts are configured, `TextCtx` builds prefix metrics through `oxide_text::TextShaper::cursor_map_with_fallback_fonts`, so unsupported grapheme clusters contribute the fallback font's shaped advance to caret geometry.
@@ -189,6 +197,8 @@
 - `crates/ui-core/tests/picker_popup_tests.rs` covers the popup-picker interaction surface.
 - `crates/ui-core/tests/emitter_tests.rs` covers the CAEmitter-style burst surface.
 - `crates/ui-core/tests/elements_tests.rs` covers multi-line ASCII wrapped-label cache reuse and clean warm atlas redraws, with `cpu.system.wrapped_label_cached_encode` retained as the gated workspace perf signal after the slower legacy fitting row was retired.
+- `crates/ui-core/tests/elements_tests.rs` covers one-publication cold frames, zero-work warm frames, merged incremental damage, and provisional glyph-run order.
+- `crates/ui-core/tests/text_frame_allocation_tests.rs` proves a warmed 1,000-label frame performs zero allocations, reallocations, shaping, rasterization, or atlas uploads.
 - `crates/ui-core/tests/elements_tests.rs` covers picker label cache reuse and dirty glyph-atlas upload behavior, with `cpu.system.picker_text_cached_encode` retained as the gated workspace perf signal after the slower direct-shape/full-upload row was retired.
 - `crates/ui-core/tests/coalesce_tests.rs` covers adjacency-preserving coalescing and caller-owned scratch reuse.
 
@@ -203,6 +213,7 @@ assert_eq!(text.value(), "");
 ```
 
 ## Changelog
+- 2026-07-14: added C43 frame-scoped text preparation, provisional glyph handles, merged atlas publication, opt-in text counters, and allocation coverage.
 - 2026-07-13: added C26 node-local retained geometry, generation-checked dynamic slots, complete nested affine/opacity composition, and synchronized hit/accessibility geometry.
 - 2026-07-13: Added hard retained CPU/prepared-GPU budgets, generation-aware LRU eviction, hot-entry protection, explicit churn suppression, zero-budget direct rebuild, and complete cache diagnostics for C23.
 

@@ -1,4 +1,101 @@
 [[experiments]]
+id = "c43-text-frame-preparation"
+introduced_commit = "C43 staged tree recorded in commit proof"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-text", "oxide-ui-core", "oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "Warm 1,000-label frames must shape, rasterize, upload, and allocate zero times; cold 200-label, mixed-script/fallback/scale, provisional ordering, eviction locking, and exact text goldens must remain correct."
+performance_gate = "Twenty fixed-seed balanced exact-binary pairs and at least 2,000 production Metal frames per side must pass the no-material-regression p50/p95/p99/peak gates; cold 200-label frames must collapse 18 atlas calls to one without changing draws or geometry bytes, and warm CPU must remain within the predeclared 3% material threshold."
+decision_state = "accepted"
+decision = "Prepared visible text under one frame eviction lock and published one merged A8 atlas update before renderer encoding, accepting a sub-2% allocation-free warm-frame CPU cost for a 94.4% cold atlas-call reduction."
+proof = [
+   "The exact-tree analyzer retained 2,000 production Metal whole-frame samples per side across 20 fixed-seed balanced pairs and accepted every no-material-regression distribution gate.",
+   "The cold 200-label control/candidate paths made 18/1 atlas calls, uploaded 1,051,132/1,048,576 bytes, and preserved 95,200 geometry bytes plus 200 draws per frame.",
+   "Warm 1,000-label frames reported zero shaping, rasterization, atlas upload, and measured-loop allocations; the independent CPU population measured about 1.7% warm overhead and neutral-to-slightly-faster cold behavior.",
+]
+cleanup = [
+   "Removed per-label before/after GPU synchronization from frame-scoped label, text-input, and picker encoding while retaining immediate publication for callers outside a frame.",
+   "Kept optional diagnostics off the normal path and preserved all rejected queue, callback, counter-layout, context-layout, and weak-workload evidence under the ignored raw directory; aggregate baseline promotion remains deferred to C62.",
+]
+
+[[experiments]]
+id = "c43-queued-text-preparation-rejected"
+introduced_commit = "rejected during C43 warm-label timing"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-text", "oxide-ui-core"]
+required_devices = ["Apple M2 Max CPU"]
+correctness_gate = "Any two-phase replacement must preserve mixed-script shaping, draw order, cache keys, and exact text pixels."
+performance_gate = "Warm 1,000-label CPU must remain within 3% of the unchanged parent while cold publication calls are reduced."
+decision_state = "rejected"
+decision = "Rejected queued run discovery, prepared-run replay, and generic callback variants because their extra ownership and lookup work dominated already-warm labels."
+proof = [
+   "Queued designs regressed warm CPU by roughly 41%..89%, the generic callback bridge regressed about 33%, and later fast-path variants still exceeded the warm guardrail.",
+   "Direct draw-list construction with provisional atlas handles achieved the same one-publication contract without a second retained-run representation.",
+]
+cleanup = [
+   "Deleted the queued/prepared-run alternatives and retained one direct frame boundary around existing label encoding.",
+]
+
+[[experiments]]
+id = "c43-always-on-text-diagnostics-rejected"
+introduced_commit = "rejected during C43 counter-layout timing"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-text", "oxide-ui-core"]
+required_devices = ["Apple M2 Max CPU"]
+correctness_gate = "Required shaping, raster, cache, upload, eviction, and invalidation counters must remain exact when explicitly enabled."
+performance_gate = "Disabled diagnostics must add no measured-loop allocations and keep warm 1,000-label CPU within 3% of the unchanged parent."
+decision_state = "rejected"
+decision = "Rejected unconditional hot-path counters and an expanded 712-byte text context; both changed cache behavior even when reports were not consumed."
+proof = [
+   "Always-on counters regressed warm CPU by roughly 5%..7% and cold CPU by about 3.5%; the 712-byte context layout regressed warm CPU by about 4%.",
+   "Boxed opt-in profiling plus one inline frame flag restored the normal-path context to 680 bytes and kept measured warm overhead below 2%.",
+]
+cleanup = [
+   "Moved frame-only profiler state behind an optional box and compiled normal/counting glyph baking as separate const-generic paths.",
+]
+
+[[experiments]]
+id = "c43-shared-alphabet-workload-rejected"
+introduced_commit = "rejected during C43 workload validation"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-text", "oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "The benchmark must draw the same 200 visible labels and preserve exact text output on both paths."
+performance_gate = "The cold workload must create enough distinct glyph/size misses to exercise the per-label publication bottleneck rather than measuring only one incidental atlas update."
+decision_state = "rejected"
+decision = "Rejected the first shared-alphabet workload because it made only two control atlas calls versus one candidate call and could not validate the intended synchronization reduction."
+proof = [
+   "The replacement uses 200 distinct supported glyph/size keys and deterministically produces 18 immediate control calls versus one frame-scoped publication.",
+]
+cleanup = [
+   "Kept the stronger distinct-key workload and all raw weak-workload measurements for auditability.",
+]
+
+[[experiments]]
+id = "c43-unconditioned-long-burst-peak-rejected"
+introduced_commit = "rejected during C43 exact-tree Metal timing"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-text", "oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "The replacement topology must preserve every declared measured frame, the same production text work, fixed-seed order, cache state, and exact binary identity."
+performance_gate = "Whole-frame p50/p95/p99/peak must be measured after symmetric conditioning rather than allowing unequal atlas-publication activity to set CPU/GPU clock state across one long burst."
+decision_state = "rejected"
+decision = "Rejected one uninterrupted 100-frame block because late-burst asymmetric clock state made the decision depend on a preparation peak while the candidate removed 17 upload calls per frame."
+proof = [
+   "The complete 2,000-sample exact-tree population measured control/candidate p50 2.306208/2.305730 ms, p95 2.560398/2.564258 ms, and p99 2.638959/2.676935 ms, but failed peak at 2.740000/2.978667 ms.",
+   "Candidate direct GPU p50/p95/p99 improved slightly and its whole-frame outliers appeared late in the 100-frame block with elevated preparation time, isolating the failure from upload or draw work.",
+]
+cleanup = [
+   "Changed evidence collection to five bounded 20-frame blocks, each preceded by the same unmeasured 16-frame immediate-path conditioning workload on both sides; no measured sample or tail threshold is removed.",
+   "Preserved the failed input, report, full suite reports, indexed phases, hashes, and counter payloads under the ignored raw evidence directory.",
+]
+
+[[experiments]]
 id = "c42-metal-analytic-instance-rings"
 introduced_commit = "C42 staged tree recorded in commit proof"
 introduced_date = "2026-07-14"

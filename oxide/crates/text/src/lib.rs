@@ -79,6 +79,19 @@ struct GlyphAtlasEntry {
     last_used: u64,
 }
 
+#[derive(Default)]
+struct AtlasCounters {
+    glyph_cache_hits: u64,
+    glyph_cache_misses: u64,
+    rasterizations: u64,
+}
+
+#[derive(Default)]
+struct AtlasFrameState {
+    counters: Option<AtlasCounters>,
+    eviction_locked: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AtlasDirtyRect {
     pub x: u32,
@@ -99,6 +112,7 @@ pub struct Atlas {
     dirty: Option<AtlasDirtyRect>,
     evictions: u64,
     revision: u64,
+    frame: Box<AtlasFrameState>,
 }
 
 impl Atlas {
@@ -115,6 +129,7 @@ impl Atlas {
             dirty: None,
             evictions: 0,
             revision: 0,
+            frame: Box::new(AtlasFrameState::default()),
         }
     }
 
@@ -151,6 +166,39 @@ impl Atlas {
     #[inline]
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    #[inline]
+    pub fn glyph_cache_hits(&self) -> u64 {
+        self.frame.counters.as_ref().map_or(0, |counters| counters.glyph_cache_hits)
+    }
+
+    #[inline]
+    pub fn glyph_cache_misses(&self) -> u64 {
+        self.frame.counters.as_ref().map_or(0, |counters| counters.glyph_cache_misses)
+    }
+
+    #[inline]
+    pub fn rasterization_count(&self) -> u64 {
+        self.frame.counters.as_ref().map_or(0, |counters| counters.rasterizations)
+    }
+
+    pub fn set_counters_enabled(&mut self, enabled: bool) {
+        if enabled {
+            self.frame.counters.get_or_insert_with(AtlasCounters::default);
+        } else {
+            self.frame.counters = None;
+        }
+    }
+
+    #[inline]
+    pub fn begin_frame(&mut self) {
+        self.frame.eviction_locked = true;
+    }
+
+    #[inline]
+    pub fn end_frame(&mut self) {
+        self.frame.eviction_locked = false;
     }
 
     fn clear_storage(&mut self) {
@@ -272,6 +320,12 @@ pub struct FallbackShape {
 }
 
 impl FallbackShape {
+    #[doc(hidden)]
+    #[inline]
+    pub fn shape_run_count(&self) -> usize {
+        self.runs.len()
+    }
+
     #[inline]
     pub fn width(&self) -> f32 {
         self.width
@@ -300,6 +354,69 @@ impl FallbackShape {
             let before_v = draw_vertices.len();
             let before_i = draw_indices.len();
             let glyph_run = run.shape.bake_into_with(
+                font,
+                raster,
+                atlas,
+                draw_vertices,
+                draw_indices,
+                color,
+                atlas_handle,
+                origin_x + run.x_offset,
+                origin_y,
+                device_scale,
+            );
+            let base = glyph_run.vb.offset.saturating_sub(v_start);
+            if base.saturating_add(glyph_run.vb.len) > u16::MAX as u32 {
+                draw_vertices.truncate(before_v);
+                draw_indices.truncate(before_i);
+                break;
+            }
+            if base > 0 {
+                let base = base as u16;
+                for index in &mut draw_indices[before_i..] {
+                    *index = index.saturating_add(base);
+                }
+            }
+            sdf = glyph_run.sdf;
+        }
+        let v_end = draw_vertices.len() as u32;
+        let i_end = draw_indices.len() as u32;
+        api::GlyphRun {
+            atlas: atlas_handle,
+            atlas_revision: atlas.revision(),
+            vb: api::VertexSpan { offset: v_start, len: v_end - v_start },
+            ib: api::IndexSpan { offset: i_start, len: i_end - i_start },
+            sdf,
+            color,
+        }
+    }
+
+    #[doc(hidden)]
+    #[cold]
+    #[inline(never)]
+    pub fn bake_counted_into_with(
+        &self,
+        fonts: &FontDb,
+        raster: &mut RasterCtx,
+        atlas: &mut Atlas,
+        draw_vertices: &mut Vec<api::Vertex>,
+        draw_indices: &mut Vec<u16>,
+        color: api::Color,
+        atlas_handle: api::ImageHandle,
+        origin_x: f32,
+        origin_y: f32,
+        device_scale: f32,
+    ) -> api::GlyphRun {
+        let v_start = draw_vertices.len() as u32;
+        let i_start = draw_indices.len() as u32;
+        let mut sdf = false;
+        for run in &self.runs {
+            let Some(font) = fonts.font(run.font_id) else {
+                continue;
+            };
+            let before_v = draw_vertices.len();
+            let before_i = draw_indices.len();
+            let glyph_run = run.shape.bake_counted_into_with(
                 font,
                 raster,
                 atlas,
@@ -808,7 +925,7 @@ impl OwnedShape {
         if self.rtl && !clusters_are_descending(self.glyphs.iter().map(|glyph| glyph.cluster)) {
             let mut glyphs = self.glyphs.clone();
             glyphs.reverse();
-            return bake_glyphs_into(
+            return bake_glyphs_into::<false>(
                 font,
                 self.font_id,
                 self.px,
@@ -824,7 +941,59 @@ impl OwnedShape {
                 device_scale,
             );
         }
-        bake_glyphs_into(
+        bake_glyphs_into::<false>(
+            font,
+            self.font_id,
+            self.px,
+            &self.glyphs,
+            raster,
+            atlas,
+            draw_vertices,
+            draw_indices,
+            color,
+            atlas_handle,
+            origin_x,
+            origin_y,
+            device_scale,
+        )
+    }
+
+    #[doc(hidden)]
+    #[cold]
+    #[inline(never)]
+    pub fn bake_counted_into_with(
+        &self,
+        font: &Font,
+        raster: &mut RasterCtx,
+        atlas: &mut Atlas,
+        draw_vertices: &mut Vec<api::Vertex>,
+        draw_indices: &mut Vec<u16>,
+        color: api::Color,
+        atlas_handle: api::ImageHandle,
+        origin_x: f32,
+        origin_y: f32,
+        device_scale: f32,
+    ) -> api::GlyphRun {
+        if self.rtl && !clusters_are_descending(self.glyphs.iter().map(|glyph| glyph.cluster)) {
+            let mut glyphs = self.glyphs.clone();
+            glyphs.reverse();
+            return bake_glyphs_into::<true>(
+                font,
+                self.font_id,
+                self.px,
+                &glyphs,
+                raster,
+                atlas,
+                draw_vertices,
+                draw_indices,
+                color,
+                atlas_handle,
+                origin_x,
+                origin_y,
+                device_scale,
+            );
+        }
+        bake_glyphs_into::<true>(
             font,
             self.font_id,
             self.px,
@@ -959,7 +1128,7 @@ impl<'a> ShapeOutput<'a> {
         device_scale: f32,
     ) -> api::GlyphRun {
         let glyphs = self.visual_glyphs();
-        bake_glyphs_into(
+        bake_glyphs_into::<false>(
             self.font,
             self.font_id,
             self.px,
@@ -1236,7 +1405,7 @@ fn add_prefix_width(widths: &mut [f32], boundaries: &[usize], end: usize, width:
     widths[bucket] += width;
 }
 
-fn bake_glyphs_into(
+fn bake_glyphs_into<const COUNT_STATS: bool>(
     font: &Font,
     font_id: usize,
     px: f32,
@@ -1263,8 +1432,11 @@ fn bake_glyphs_into(
     let mut scaler = None;
     let mut render = None;
     let protect_after_clock = atlas.clock;
+    let mut glyph_cache_queries = glyphs.len() as u64;
+    let mut glyph_cache_misses = 0_u64;
+    let mut rasterizations = 0_u64;
 
-    for glyph in glyphs.iter().copied() {
+    for (glyph_index, glyph) in glyphs.iter().copied().enumerate() {
         let key =
             GlyphKey { font: font_id, gid: glyph.glyph_id, px: px.round() as u16, sdf: use_sdf };
         let entry = if let Some(e) = atlas.map.get_mut(&key) {
@@ -1272,6 +1444,9 @@ fn bake_glyphs_into(
             atlas.clock = e.last_used;
             e.clone()
         } else {
+            if COUNT_STATS {
+                glyph_cache_misses = glyph_cache_misses.wrapping_add(1);
+            }
             let mut img = Image::new();
             if scaler.is_none() {
                 let Some(fontref) = swash::FontRef::from_index(&font.data, 0) else {
@@ -1287,6 +1462,9 @@ fn bake_glyphs_into(
                 continue;
             };
             let render = render.get_or_insert_with(|| Render::new(&[Source::Outline]));
+            if COUNT_STATS {
+                rasterizations = rasterizations.wrapping_add(1);
+            }
             if !render.render_into(scaler, glyph.glyph_id, &mut img) {
                 cache_empty_glyph_entry(atlas, key, 0, 0);
                 pen_x += glyph.x_advance as f32 / 64.0;
@@ -1309,7 +1487,13 @@ fn bake_glyphs_into(
             let (aw, ah) = (w as u32, h as u32);
             let (ax, ay) = match atlas
                 .alloc_rect(aw, ah)
-                .or_else(|| atlas.evict_rect_for(aw, ah, protect_after_clock))
+                .or_else(|| {
+                    if atlas.frame.eviction_locked {
+                        None
+                    } else {
+                        atlas.evict_rect_for(aw, ah, protect_after_clock)
+                    }
+                })
             {
                 Some(rc) => rc,
                 None => {
@@ -1385,7 +1569,6 @@ fn bake_glyphs_into(
             pen_y += glyph.y_advance as f32 / 64.0;
             continue;
         }
-
         let gx = ox + pen_x + (entry.l as f32);
         let gy = oy + pen_y - (entry.t as f32);
         let gw = entry.w as f32;
@@ -1393,6 +1576,7 @@ fn bake_glyphs_into(
 
         let run_vertex_base = (draw_vertices.len() as u32).saturating_sub(v_start);
         if run_vertex_base.saturating_add(4) > u16::MAX as u32 {
+            glyph_cache_queries = glyph_index.saturating_add(1) as u64;
             break;
         }
 
@@ -1415,6 +1599,15 @@ fn bake_glyphs_into(
         pen_y += glyph.y_advance as f32 / 64.0;
     }
 
+    if COUNT_STATS {
+        if let Some(counters) = atlas.frame.counters.as_mut() {
+            counters.glyph_cache_hits = counters
+                .glyph_cache_hits
+                .wrapping_add(glyph_cache_queries.saturating_sub(glyph_cache_misses));
+            counters.glyph_cache_misses = counters.glyph_cache_misses.wrapping_add(glyph_cache_misses);
+            counters.rasterizations = counters.rasterizations.wrapping_add(rasterizations);
+        }
+    }
     let v_end = draw_vertices.len() as u32;
     let i_end = draw_indices.len() as u32;
     api::GlyphRun {

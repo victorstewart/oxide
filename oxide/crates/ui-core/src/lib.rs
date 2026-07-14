@@ -289,6 +289,16 @@ impl DrawListBuilder {
         self.push_draw_cmd(gfx::DrawCmd::GlyphRun { run });
     }
 
+    pub(crate) fn glyph_run_provisional(&mut self, run: gfx::GlyphRun) {
+        if self.draw_visible()
+            && run.vb.len != 0
+            && run.ib.len != 0
+            && color_visible(run.color)
+        {
+            self.list.items.push(gfx::DrawCmd::GlyphRun { run });
+        }
+    }
+
     pub fn glyph_run_resolved(
         &mut self,
         run: gfx::GlyphRun,

@@ -38,7 +38,7 @@
 
 ## Logic narrative
 
-The router owns one state object per scene and switches between them by `SceneKind`. On-screen benchmarks reuse those scenes instead of introducing benchmark-only renderers. Headline component cases map to the smallest existing scene that renders the target object: text layout for labels, controls for progress/spinner/button/toggle/slider, zoom image for image views, nine-slice for resizable imagery, and collection stress for collection views. Headline animation cases use the controls scene for indeterminate progress, button scale, toggle spring, and slider thumb motion, plus the existing zoom-image and animation-timeline scenes.
+The router owns one state object per scene and switches between them by `SceneKind`. Each draw brackets all scene and overlay text with one `TextCtx` frame, so glyph misses are prepared and one merged atlas publication completes before renderer encoding. On-screen benchmarks reuse those scenes instead of introducing benchmark-only renderers. Headline component cases map to the smallest existing scene that renders the target object: text layout for labels, controls for progress/spinner/button/toggle/slider, zoom image for image views, nine-slice for resizable imagery, and collection stress for collection views. Headline animation cases use the controls scene for indeterminate progress, button scale, toggle spring, and slider thumb motion, plus the existing zoom-image and animation-timeline scenes.
 
 `prepare_onscreen_benchmark` resets state so every measurement pass starts from a known scene. `step_onscreen_benchmark` performs one deterministic mutation, sharing the common button and collection-focus step mechanics while preserving case-specific action labels, then the host renders a real MetalView frame. This keeps product behavior and gesture/control state in Rust while UIKit remains only the host shell.
 
@@ -72,7 +72,7 @@ Raw touch recognition stores a bounded inline set of active contacts with overfl
 
 ## Performance notes
 
-The headline cases deliberately avoid new benchmark-only abstractions. Reusing existing scenes keeps code surface small and ensures the measured cost includes the same draw-list paths app authors use. Damage handoff supports caller-owned vector reuse so browser/host allocation audits can distinguish scene damage content from per-frame storage churn. The default Controls scene keeps static label/button text and overlay status text out of the per-frame allocation path.
+The headline cases deliberately avoid new benchmark-only abstractions. Reusing existing scenes keeps code surface small and ensures the measured cost includes the same draw-list paths app authors use. Damage handoff supports caller-owned vector reuse so browser/host allocation audits can distinguish scene damage content from per-frame storage churn. The default Controls scene keeps static label/button text and overlay status text out of the per-frame allocation path. One router-owned text frame removes per-label atlas synchronization and prevents later scene/overlay labels from evicting glyphs already referenced in the same visible draw list.
 
 ## Testing and benchmarks
 
@@ -90,6 +90,7 @@ assert!(router.step_onscreen_benchmark("component_button_encode", 1));
 ```
 
 ## Changelog
+- 2026-07-14: bracketed each complete router draw with one C43 text-preparation frame and one pre-render atlas publication.
 - 2026-07-13: moved scene animation overrides onto the animator-owned dense C26 slot store instead of copying a per-frame map.
 
 - 2026-06-02: Added router-owned overlay text scratch and warmed overlay draw allocation coverage.
