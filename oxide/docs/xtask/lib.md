@@ -104,6 +104,7 @@ The committed `benchmarks/oxide-device/latest.json` and `benchmarks/uikit-device
 
 ## Changelog
 
+- 2026-07-14: recorded the accepted C33 WebGPU ID-mask field cache and rejected one-entry alternative, bringing the manifest to 165 decided entries with 79 accepted and 86 rejected.
 - 2026-06-23: recorded the accepted permissions manager state fixed-slots cleanup, bringing the manifest to 73 decided entries with 52 accepted and 21 rejected.
 - 2026-06-23: recorded the accepted permissions sensor permission-cache fixed-slots cleanup, bringing the manifest to 72 decided entries with 51 accepted and 21 rejected.
 - 2026-06-23: recorded the accepted permissions Bluetooth discovery cache move, bringing the manifest to 71 decided entries with 50 accepted and 21 rejected.

@@ -62,7 +62,7 @@ They run on native targets against the non-wasm `WebRenderer` stub.
 
 ## Testing and benchmarks
 
-Run with `cargo test --locked -p oxide-renderer-web --test lib_tests`. Compile wasm behavior with `cargo check --locked --target wasm32-unknown-unknown -p oxide-renderer-web`. The local-layer runtime companions are the C30 browser capture and `run_webgpu_local_layers_c30.mjs`; mode `2` exercises the C31 bounded navigation/purge path.
+Run with `cargo test --locked -p oxide-renderer-web --test lib_tests`. Compile wasm behavior with `cargo check --locked --target wasm32-unknown-unknown -p oxide-renderer-web`. The local-layer runtime companions are the C30 browser capture and `run_webgpu_local_layers_c30.mjs`; mode `2` exercises the C31 bounded navigation/purge path. The C33 companion is `check_webgpu_browser_golden.mjs --id-mask-cache-only`, which executes real WebGPU hits, misses, one-entry thrash, bounded LRU reuse, and purge/reentry paths.
 
 ## Examples
 
@@ -75,6 +75,7 @@ pub fn scale() -> f32
 
 ## Changelog
 
+- 2026-07-14: froze the C33 complete ID-mask key, compositor-only pass/uniform path, four-entry byte budget, exact 34-byte-per-pixel logical accounting, and device/memory purge contracts.
 - 2026-07-14: froze C31 hard admission, protected LRU eviction, compatible pooling, absent aging, device/memory purge wiring, and telemetry fields.
 - 2026-07-14: added C30 contracts for generation/resource-complete retained layers, pixel-grid-snapped local textures, inherited nested viewports/scissors, normalized composites, and local effect-copy accounting.
 - 2026-07-13: added the C25 prepared-cache, bundle/direct, aggregate-replay, budget, invalidation, and counter source contract.

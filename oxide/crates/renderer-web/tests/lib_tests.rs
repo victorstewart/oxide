@@ -713,7 +713,7 @@ fn wasm_webgpu_id_mask_uniform_arena_isolates_every_encoded_pass()
       .split("fn prepare_id_mask_uniforms")
       .nth(1)
       .expect("prepare_id_mask_uniforms")
-      .split("fn ensure_id_mask_resources")
+      .split("fn ensure_id_mask_raster_bind_group")
       .next()
       .expect("prepare_id_mask_uniforms end");
    let render = source
@@ -729,12 +729,72 @@ fn wasm_webgpu_id_mask_uniform_arena_isolates_every_encoded_pass()
    assert!(source.contains("min_uniform_buffer_offset_alignment"));
    assert!(prepare.contains("0.0,"));
    assert!(prepare.contains("while jump >= 1"));
+   assert!(prepare.contains("if !cache_hit"));
    assert!(prepare.contains("self.id_mask_field_uniform_offsets.push(offset)"));
    assert_eq!(render.matches("self.queue.write_buffer(").count(), 1);
    assert!(render.contains("&[uniform_offsets.raster]"));
    assert!(render.contains("&[self.id_mask_field_uniform_offsets[field_offset_index]]"));
    assert!(render.contains("&[uniform_offsets.compositor]"));
    assert!(!render.contains("id_mask_field_uniform_bytes("));
+}
+
+#[test]
+fn wasm_webgpu_id_mask_field_cache_is_complete_bounded_and_compositor_only()
+{
+   let source = include_str!("../src/wasm/webgpu.rs");
+   let key = source
+      .split("struct IdMaskFieldCacheKey")
+      .nth(1)
+      .expect("ID-mask field cache key")
+      .split("impl IdMaskFieldCacheKey")
+      .next()
+      .expect("ID-mask field cache key end");
+   let resolve = source
+      .split("fn resolve_id_mask_draws")
+      .nth(1)
+      .expect("resolve ID-mask draws")
+      .split("fn prepare_id_mask_uniforms")
+      .next()
+      .expect("resolve ID-mask draws end");
+   let render = source
+      .split("fn render_id_mask_compositors")
+      .nth(1)
+      .expect("render ID-mask compositors")
+      .split("fn draw_state_key")
+      .next()
+      .expect("render ID-mask compositors end");
+
+   for field in [
+      "mask_width: usize",
+      "mask_height: usize",
+      "mask_scale: u32",
+      "vertex_revision: u64",
+      "vertex_count: usize",
+      "projection: IdMaskProjectionKey",
+   ]
+   {
+      assert!(key.contains(field), "missing ID-mask field key input {field}");
+   }
+   for excluded in ["city_styles", "neighborhood_colors", "glow_enabled", "polish", "viewport"]
+   {
+      assert!(!key.contains(excluded), "compositor-only input leaked into key: {excluded}");
+   }
+   assert!(source.contains("struct IdMaskChunkKey"));
+   assert!(source.contains("content_hash: u64"));
+   assert!(source.contains("first_vertex: usize"));
+   assert!(source.contains("vertex_count: usize"));
+   assert!(source.contains("const ID_MASK_FIELD_CACHE_MAX_ENTRIES: usize = 4"));
+   assert!(source.contains("ID_MASK_FIELD_CACHE_MIN_BUDGET_BYTES"));
+   assert!(source.contains("ID_MASK_FIELD_CACHE_MAX_BUDGET_BYTES"));
+   assert!(resolve.contains("self.id_mask_field_cache_hit"));
+   assert!(resolve.contains("self.prepare_id_mask_cache_admission"));
+   assert!(resolve.contains("self.retain_id_mask_field_cache_entry"));
+   assert!(render.contains("if !cache_hit"));
+   assert!(render.contains("TimestampPassFamily::IdMaskCompositor"));
+   assert!(source.contains("id_mask_target_bytes_per_pixel()"));
+   assert!(source.contains("2 + 4 * color_texture_bytes_per_pixel(ID_MASK_FIELD_FORMAT)"));
+   assert!(source.contains("purge_id_mask_field_cache_for_reason(LAYER_PURGE_DEVICE_LOSS)"));
+   assert!(source.contains("purge_id_mask_field_cache_for_reason(LAYER_PURGE_MEMORY_PRESSURE)"));
 }
 
 #[test]
@@ -837,6 +897,14 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
         "pub gpu_cache_bytes: u64",
         "pub scene3d_draws: u32",
         "pub id_mask_draws: u32",
+        "pub id_mask_cache_hits: u32",
+        "pub id_mask_cache_misses: u32",
+        "pub id_mask_cache_budget_bytes: u64",
+        "pub id_mask_cache_resident_bytes: u64",
+        "pub id_mask_cache_evictions: u64",
+        "pub id_mask_cache_entries: u32",
+        "pub id_mask_cache_purges: u64",
+        "pub id_mask_cache_last_purge_reason: u8",
         "pub backdrop_draws: u32",
         "pub visual_effect_draws: u32",
         "pub effect_uniform_writes: u32",
@@ -1057,6 +1125,10 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(host.contains("{key_prefix}sdf_glyph_quads={}"));
     assert!(host.contains("{key_prefix}scene3d_draws={}"));
     assert!(host.contains("{key_prefix}id_mask_draws={}"));
+    assert!(host.contains("{key_prefix}id_mask_cache_hits={}"));
+    assert!(host.contains("{key_prefix}id_mask_cache_misses={}"));
+    assert!(host.contains("{key_prefix}id_mask_cache_budget_bytes={}"));
+    assert!(host.contains("{key_prefix}id_mask_cache_resident_bytes={}"));
     assert!(host.contains("{key_prefix}backdrop_draws={}"));
     assert!(host.contains("{key_prefix}effect_uniform_writes={}"));
     assert!(host.contains("{key_prefix}effect_uniform_bytes={}"));

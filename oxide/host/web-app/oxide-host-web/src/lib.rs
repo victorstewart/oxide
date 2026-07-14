@@ -855,6 +855,116 @@ mod wasm_host {
             ))
         }
 
+        pub async fn bench_webgpu_id_mask_cache_c33(&self) -> Result<String, JsValue> {
+            let renderer = self.state.borrow().renderer.clone();
+            let vertices = webgpu_id_mask_vertices(WEBGPU_ID_MASK_CELLS, WEBGPU_ID_MASK_EXTENT);
+            let mut changed_vertices = vertices.clone();
+            changed_vertices[0].position_px[0] += 0.25;
+            let default_budget = renderer.borrow().id_mask_cache_budget_bytes();
+            let one_entry_timing = measure_webgpu_id_mask_multi_cache(
+                &renderer,
+                &vertices,
+                512 * 512 * 34,
+                4,
+                16,
+                "one_entry_multi",
+            )
+            .await?;
+            let lru_timing = measure_webgpu_id_mask_multi_cache(
+                &renderer,
+                &vertices,
+                default_budget,
+                4,
+                16,
+                "lru_multi",
+            )
+            .await?;
+
+            let static_stats = {
+                let mut renderer = renderer.borrow_mut();
+                renderer.purge_id_mask_field_cache();
+                webgpu_id_mask_frame(&mut renderer, &vertices, 1, 0.0)?;
+                webgpu_id_mask_frame(&mut renderer, &vertices, 1, 0.0)?;
+                renderer.last_stats()
+            };
+            let style_stats = {
+                let mut renderer = renderer.borrow_mut();
+                webgpu_id_mask_configured_frame(&mut renderer, &vertices, 1, |pass| {
+                    pass.city_styles[0].fill_rgb = [0.31, 0.71, 0.19];
+                })?;
+                renderer.last_stats()
+            };
+            let viewport_stats = {
+                let mut renderer = renderer.borrow_mut();
+                webgpu_id_mask_configured_frame(&mut renderer, &vertices, 1, |pass| {
+                    pass.raster.viewport = gfx::RectF::new(8.0, 6.0, 248.0, 246.0);
+                })?;
+                renderer.last_stats()
+            };
+            let projection_stats = {
+                let mut renderer = renderer.borrow_mut();
+                webgpu_id_mask_configured_frame(&mut renderer, &vertices, 1, |pass| {
+                    pass.raster.projection.world_to_clip[3][0] = 0.125;
+                })?;
+                renderer.last_stats()
+            };
+            let content_stats = {
+                let mut renderer = renderer.borrow_mut();
+                webgpu_id_mask_frame(&mut renderer, &changed_vertices, 2, 0.0)?;
+                renderer.last_stats()
+            };
+            let one_entry_stats = {
+                let mut renderer = renderer.borrow_mut();
+                renderer.purge_id_mask_field_cache();
+                renderer.set_id_mask_cache_budget_bytes(512 * 512 * 34);
+                webgpu_id_mask_two_map_frame(&mut renderer, &vertices)?;
+                webgpu_id_mask_two_map_frame(&mut renderer, &vertices)?;
+                renderer.last_stats()
+            };
+            let lru_stats = {
+                let mut renderer = renderer.borrow_mut();
+                renderer.purge_id_mask_field_cache();
+                renderer.set_id_mask_cache_budget_bytes(default_budget);
+                webgpu_id_mask_two_map_frame(&mut renderer, &vertices)?;
+                webgpu_id_mask_two_map_frame(&mut renderer, &vertices)?;
+                renderer.last_stats()
+            };
+            let memory_pressure = {
+                let mut renderer = renderer.borrow_mut();
+                renderer.purge_id_mask_field_cache_for_memory_pressure();
+                renderer.last_stats()
+            };
+            let reentry = {
+                let mut renderer = renderer.borrow_mut();
+                webgpu_id_mask_frame(&mut renderer, &vertices, 1, 0.0)?;
+                renderer.last_stats()
+            };
+            let device_loss = {
+                let mut renderer = renderer.borrow_mut();
+                renderer.purge_id_mask_field_cache_for_device_loss_for_benchmark();
+                renderer.last_stats()
+            };
+
+            Ok(format!(
+                "{};{};{};{};{};{};{};{};{};memory_pressure_resident_bytes={};memory_pressure_reason={};reentry_misses={};reentry_entries={};device_loss_resident_bytes={};device_loss_reason={}",
+                one_entry_timing,
+                lru_timing,
+                id_mask_cache_case_metrics("static", static_stats),
+                id_mask_cache_case_metrics("style", style_stats),
+                id_mask_cache_case_metrics("viewport", viewport_stats),
+                id_mask_cache_case_metrics("projection", projection_stats),
+                id_mask_cache_case_metrics("content", content_stats),
+                id_mask_cache_case_metrics("one_entry_multi", one_entry_stats),
+                id_mask_cache_case_metrics("lru_multi", lru_stats),
+                memory_pressure.id_mask_cache_resident_bytes,
+                memory_pressure.id_mask_cache_last_purge_reason,
+                reentry.id_mask_cache_misses,
+                reentry.id_mask_cache_entries,
+                device_loss.id_mask_cache_resident_bytes,
+                device_loss.id_mask_cache_last_purge_reason,
+            ))
+        }
+
         pub async fn bench_webgpu_upload_current(
             &self,
             samples: u32,
@@ -2606,6 +2716,8 @@ mod wasm_host {
             };
             {
                 let mut renderer = renderer.borrow_mut();
+                renderer.purge_id_mask_field_cache();
+                webgpu_asymmetric_id_mask_frame(&mut renderer)?;
                 webgpu_asymmetric_id_mask_frame(&mut renderer)?;
                 renderer.begin_id_mask_snapshot_readback().map_err(render_err)?;
             }
@@ -5011,6 +5123,158 @@ mod wasm_host {
         renderer.submit(token).map_err(render_err)
     }
 
+    fn webgpu_id_mask_configured_frame<F>(
+        renderer: &mut BrowserRenderer,
+        vertices: &[id_mask_compositor::IdMaskRasterVertex],
+        revision: u64,
+        configure: F,
+    ) -> Result<(), JsValue>
+    where
+        F: FnOnce(&mut id_mask_compositor::IdMaskGpuCompositorPass<'_>),
+    {
+        renderer.resize(512, 512, 2.0).map_err(render_err)?;
+        let chunks = [id_mask_compositor::IdMaskRasterChunk {
+            content_hash: revision,
+            first_vertex: 0,
+            vertex_count: vertices.len(),
+        }];
+        let mut pass = webgpu_id_mask_pass(vertices, &chunks, revision);
+        configure(&mut pass);
+        let token = renderer.begin_frame(&gfx::FrameTarget, None);
+        renderer.encode_id_mask_gpu_compositor(&pass).map_err(render_err)?;
+        renderer.submit(token).map_err(render_err)
+    }
+
+    fn webgpu_id_mask_two_map_frame(
+        renderer: &mut BrowserRenderer,
+        vertices: &[id_mask_compositor::IdMaskRasterVertex],
+    ) -> Result<(), JsValue> {
+        renderer.resize(512, 512, 2.0).map_err(render_err)?;
+        let chunks_a = [id_mask_compositor::IdMaskRasterChunk {
+            content_hash: 0xC33_A,
+            first_vertex: 0,
+            vertex_count: vertices.len(),
+        }];
+        let chunks_b = [id_mask_compositor::IdMaskRasterChunk {
+            content_hash: 0xC33_B,
+            first_vertex: 0,
+            vertex_count: vertices.len(),
+        }];
+        let pass_a = webgpu_id_mask_pass(vertices, &chunks_a, 0xC33_A);
+        let mut pass_b = webgpu_id_mask_pass(vertices, &chunks_b, 0xC33_B);
+        pass_b.raster.projection.world_to_clip[3][0] = 0.125;
+        let token = renderer.begin_frame(&gfx::FrameTarget, None);
+        renderer.encode_id_mask_gpu_compositor(&pass_a).map_err(render_err)?;
+        renderer.encode_id_mask_gpu_compositor(&pass_b).map_err(render_err)?;
+        renderer.submit(token).map_err(render_err)
+    }
+
+    fn id_mask_cache_case_metrics(name: &str, stats: WebRendererStats) -> String {
+        format!(
+            "{name}_hits={};{name}_misses={};{name}_raster={};{name}_seed={};{name}_jump={};{name}_compositor={};{name}_render_passes={};{name}_texture_creates={};{name}_resident_bytes={};{name}_budget_bytes={};{name}_entries={};{name}_evictions={};{name}_uniform_bytes={};{name}_uniform_slots={}",
+            stats.id_mask_cache_hits,
+            stats.id_mask_cache_misses,
+            stats.id_mask_raster_passes,
+            stats.id_mask_field_seed_passes,
+            stats.id_mask_field_jump_passes,
+            stats.id_mask_compositor_passes,
+            stats.render_passes,
+            stats.id_mask_texture_creates,
+            stats.id_mask_cache_resident_bytes,
+            stats.id_mask_cache_budget_bytes,
+            stats.id_mask_cache_entries,
+            stats.id_mask_cache_evictions,
+            stats.id_mask_uniform_bytes,
+            stats.id_mask_uniform_slots,
+        )
+    }
+
+    async fn measure_webgpu_id_mask_multi_cache(
+        renderer: &Rc<RefCell<BrowserRenderer>>,
+        vertices: &[id_mask_compositor::IdMaskRasterVertex],
+        budget_bytes: u64,
+        samples: u32,
+        frames: u32,
+        name: &str,
+    ) -> Result<String, JsValue> {
+        {
+            let mut renderer = renderer.borrow_mut();
+            renderer.purge_id_mask_field_cache();
+            renderer.set_id_mask_cache_budget_bytes(budget_bytes);
+            renderer.set_timestamp_readback_interval_for_benchmark(1);
+        }
+        for _ in 0..4 {
+            webgpu_id_mask_two_map_frame(&mut renderer.borrow_mut(), vertices)?;
+        }
+        wait_renderer_queue_idle(renderer).await?;
+        {
+            let mut renderer = renderer.borrow_mut();
+            renderer.collect_timestamp_readbacks();
+            renderer.clear_completed_timestamp_samples();
+        }
+
+        let mut cpu_values = Vec::with_capacity(samples as usize);
+        let mut gpu_samples = Vec::with_capacity(samples.saturating_mul(frames) as usize);
+        let mut drained = Vec::with_capacity(frames as usize);
+        for _ in 0..samples {
+            let start = perf_now();
+            for _ in 0..frames {
+                webgpu_id_mask_two_map_frame(&mut renderer.borrow_mut(), vertices)?;
+            }
+            cpu_values.push((perf_now() - start).max(0.0) / frames as f64);
+            wait_renderer_queue_idle(renderer).await?;
+            let mut renderer = renderer.borrow_mut();
+            renderer.collect_timestamp_readbacks();
+            renderer.drain_completed_timestamp_samples_into(&mut drained);
+            gpu_samples.extend_from_slice(&drained);
+        }
+        let expected = samples.saturating_mul(frames) as usize;
+        if gpu_samples.len() != expected {
+            return Err(JsValue::from_str(&format!(
+                "{name} expected {expected} GPU samples, observed {}",
+                gpu_samples.len(),
+            )));
+        }
+        cpu_values.sort_by(|a, b| a.total_cmp(b));
+        let sorted_stage = |value: fn(&WebGpuTimestampSample) -> u64| {
+            let mut values = gpu_samples
+                .iter()
+                .map(|sample| value(sample) as f64 / 1_000_000.0)
+                .collect::<Vec<_>>();
+            values.sort_by(|a, b| a.total_cmp(b));
+            values
+        };
+        let gpu = sorted_stage(|sample| sample.total_ns);
+        let raster = sorted_stage(|sample| sample.id_mask_raster_ns);
+        let seed = sorted_stage(|sample| sample.id_mask_field_seed_ns);
+        let jump = sorted_stage(|sample| sample.id_mask_field_jump_ns);
+        let compositor = sorted_stage(|sample| sample.id_mask_compositor_ns);
+        let stats = renderer.borrow().last_stats();
+        renderer
+            .borrow_mut()
+            .set_timestamp_readback_interval_for_benchmark(8);
+        Ok(format!(
+            "{name}_timing_samples={expected};{name}_cpu_p50_ms={:.6};{name}_cpu_p95_ms={:.6};{name}_cpu_p99_ms={:.6};{name}_cpu_peak_ms={:.6};{name}_gpu_p50_ms={:.6};{name}_gpu_p95_ms={:.6};{name}_gpu_p99_ms={:.6};{name}_gpu_peak_ms={:.6};{name}_gpu_raster_p50_ms={:.6};{name}_gpu_seed_p50_ms={:.6};{name}_gpu_jump_p50_ms={:.6};{name}_gpu_compositor_p50_ms={:.6};{name}_passes={};{name}_hits={};{name}_misses={};{name}_resident_bytes={};{name}_budget_bytes={}",
+            percentile(&cpu_values, 0.50),
+            percentile(&cpu_values, 0.95),
+            percentile(&cpu_values, 0.99),
+            cpu_values.last().copied().unwrap_or(0.0),
+            percentile(&gpu, 0.50),
+            percentile(&gpu, 0.95),
+            percentile(&gpu, 0.99),
+            gpu.last().copied().unwrap_or(0.0),
+            percentile(&raster, 0.50),
+            percentile(&seed, 0.50),
+            percentile(&jump, 0.50),
+            percentile(&compositor, 0.50),
+            stats.render_passes,
+            stats.id_mask_cache_hits,
+            stats.id_mask_cache_misses,
+            stats.id_mask_cache_resident_bytes,
+            stats.id_mask_cache_budget_bytes,
+        ))
+    }
+
     fn webgpu_asymmetric_id_mask_frame(renderer: &mut BrowserRenderer) -> Result<(), JsValue>
     {
         const WIDTH: usize = 17;
@@ -5106,11 +5370,17 @@ mod wasm_host {
         write_field_json(&mut json, &readback.seam_field);
         let _ = write!(
             json,
-            "],\"encoded_id_mask_draws\":{},\"uniform_writes\":{},\"uniform_bytes\":{},\"uniform_slots\":{}}}",
+            "],\"encoded_id_mask_draws\":{},\"uniform_writes\":{},\"uniform_bytes\":{},\"uniform_slots\":{},\"cache_hits\":{},\"cache_misses\":{},\"raster_passes\":{},\"seed_passes\":{},\"jump_passes\":{},\"compositor_passes\":{}}}",
             stats.id_mask_draws,
             stats.id_mask_uniform_writes,
             stats.id_mask_uniform_bytes,
             stats.id_mask_uniform_slots,
+            stats.id_mask_cache_hits,
+            stats.id_mask_cache_misses,
+            stats.id_mask_raster_passes,
+            stats.id_mask_field_seed_passes,
+            stats.id_mask_field_jump_passes,
+            stats.id_mask_compositor_passes,
         );
         json
     }
@@ -6493,6 +6763,18 @@ mod wasm_host {
             stats.gpu_bind_buffer_bytes,
             stats.gpu_frame_ring_bytes,
             stats.gpu_cache_bytes,
+        );
+        let _ = write!(
+            out,
+            ";{key_prefix}id_mask_cache_hits={};{key_prefix}id_mask_cache_misses={};{key_prefix}id_mask_cache_budget_bytes={};{key_prefix}id_mask_cache_resident_bytes={};{key_prefix}id_mask_cache_evictions={};{key_prefix}id_mask_cache_entries={};{key_prefix}id_mask_cache_purges={};{key_prefix}id_mask_cache_last_purge_reason={}",
+            stats.id_mask_cache_hits,
+            stats.id_mask_cache_misses,
+            stats.id_mask_cache_budget_bytes,
+            stats.id_mask_cache_resident_bytes,
+            stats.id_mask_cache_evictions,
+            stats.id_mask_cache_entries,
+            stats.id_mask_cache_purges,
+            stats.id_mask_cache_last_purge_reason,
         );
         out
     }

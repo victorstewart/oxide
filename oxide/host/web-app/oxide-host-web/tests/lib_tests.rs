@@ -498,6 +498,10 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("create_hidden_canvas"));
     assert!(source.contains("pub async fn bench_webgpu_id_mask_ab"));
     assert!(source.contains("pub async fn bench_webgpu_id_mask_current"));
+    assert!(source.contains("pub async fn bench_webgpu_id_mask_cache_c33"));
+    assert!(source.contains("measure_webgpu_id_mask_multi_cache"));
+    assert!(source.contains("one_entry_multi"));
+    assert!(source.contains("lru_multi"));
     assert!(source.contains("pub async fn bench_webgpu_upload_current"));
     assert!(source.contains("pub async fn bench_webgpu_atlas_c15"));
     assert!(source.contains("pub async fn bench_webgpu_targets_c19"));
@@ -666,6 +670,8 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("webgpu_id_mask_frame(&mut renderer, &vertices, 1"));
     assert!(source.contains("renderer.encode_id_mask_gpu_compositor(&distractor)"));
     assert!(source.contains(r#"\"uniform_writes\":{}"#));
+    assert!(source.contains(r#"\"cache_hits\":{}"#));
+    assert!(source.contains(r#"\"raster_passes\":{}"#));
     assert!(source.contains("direct_capture_active"));
     assert!(source.contains("state.direct_capture_active = true"));
     assert!(source.contains("if state.direct_capture_active"));
@@ -2329,4 +2335,44 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
     assert_eq!(report_f64(pixel_check, "mse"), 0.0);
     assert_eq!(report_u64(pixel_check, "pixdiff"), 0);
     assert_eq!(report_u64(pixel_check, "max_err"), 0);
+}
+
+#[test]
+fn c33_id_mask_cache_probe_covers_key_cases_lru_and_valid_gpu_samples()
+{
+   let source = include_str!("../src/lib.rs");
+   let html = include_str!("../../www/index.html");
+   let script = include_str!("../../../../scripts/check_webgpu_browser_golden.mjs");
+
+   for case in [
+      "static",
+      "style",
+      "viewport",
+      "projection",
+      "content",
+      "one_entry_multi",
+      "lru_multi",
+   ]
+   {
+      assert!(source.contains(case), "missing C33 ID-mask case {case}");
+   }
+   assert!(source.contains("expected {expected} GPU samples"));
+   assert!(source.contains("sample.id_mask_raster_ns"));
+   assert!(source.contains("sample.id_mask_field_seed_ns"));
+   assert!(source.contains("sample.id_mask_field_jump_ns"));
+   assert!(source.contains("sample.id_mask_compositor_ns"));
+   assert!(source.contains("purge_id_mask_field_cache_for_memory_pressure"));
+   assert!(source.contains("purge_id_mask_field_cache_for_device_loss_for_benchmark"));
+   assert!(source.contains("id_mask_cache_hits={}"));
+   assert!(source.contains("id_mask_cache_resident_bytes={}"));
+   assert!(html.contains("id_mask_cache_only"));
+   assert!(html.contains("runIdMaskCacheRafHarness"));
+   assert!(html.contains("submissions_per_raf: 1"));
+   assert!(html.contains("id_mask_cache_raf_c33: window.oxideWebGpuIdMaskCacheRafC33"));
+   assert!(html.contains("bench_webgpu_id_mask_cache_c33"));
+   assert!(html.contains("id_mask_cache_c33: window.oxideWebGpuIdMaskCacheC33"));
+   assert!(script.contains("--id-mask-cache-only"));
+   assert!(script.contains("--id-mask-cache-raf-only"));
+   assert!(script.contains("id_mask_cache_raf_frames"));
+   assert!(script.contains("id_mask_cache_only"));
 }

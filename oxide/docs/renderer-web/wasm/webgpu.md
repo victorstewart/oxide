@@ -68,13 +68,15 @@ C30 measures 100 retained 72×40-point cards at physical 1080p and 4K with DPR2.
 
 C31 bounds those local textures with an adaptive logical-byte budget derived from canvas area and a configurable override. Active entries record logical color bytes and last-used frame; compatible cold entries are recycled before allocation, while LRU entries not referenced by the current frame may be evicted. The pool is capped at one quarter of the budget and releases old entries after 60 frames; active layers absent for 120 frames move through the pool. Memory pressure, scale changes, and device loss purge storage and invalidate prepared plans. WebGPU exposes no driver allocation size, so allocated-byte availability remains false while C31 reports logical GPU bytes and exact renderer-owned CPU payload capacity.
 
+C33 retains complete ID-mask raster and RGBA16F jump-flood fields under an adaptive 64–512 MiB logical-byte budget with at most four entries. Its exact key covers mask dimensions/scale, vertex revision/count, ordered chunk hashes/ranges, and every projection value; style, color, glow, polish, mode, opacity, and viewport placement remain compositor-only. Hits write one compositor uniform record and encode one pass. Projection/content changes rebuild all twelve 512-square passes. Queue submission order makes cross-frame target reuse safe, while uniform-arena growth rebuilds every target-specific bind group before reuse. Memory pressure, device loss, and explicit purge release cache ownership.
+
 ## Feature flags and cfgs
 
 Compiled only for `wasm32` with the existing WebGPU and WGSL features.
 
 ## Testing and benchmarks
 
-Native contract tests exercise decoding/source paths and freeze prepared-cache invalidation, aggregate/hybrid bundle ownership, dynamic property-ring ownership, generation/resource-complete local layers, device-bounded target dimensions, flat boundaries, hard admission, pooling, aging, purge paths, and counters; wasm compilation verifies the implementation. The C25 adapter retains static bundle proof, `scripts/run_webgpu_dynamic_c26.mjs` supplies C26 backend CPU/GPU/property and real-RAF samples, and `scripts/run_webgpu_local_layers_c30.mjs` preserves C30 evidence plus its C31 navigation-churn mode.
+Native contract tests exercise decoding/source paths and freeze prepared-cache invalidation, aggregate/hybrid bundle ownership, dynamic property-ring ownership, generation/resource-complete local layers, device-bounded target dimensions, flat boundaries, hard admission, pooling, aging, purge paths, complete ID-mask field keys, compositor-only hits, compact hit uniforms, and counters; wasm compilation verifies the implementation. The C25 adapter retains static bundle proof, `scripts/run_webgpu_dynamic_c26.mjs` supplies C26 backend CPU/GPU/property and real-RAF samples, `scripts/run_webgpu_local_layers_c30.mjs` preserves C30 evidence plus its C31 navigation-churn mode, and `check_webgpu_browser_golden.mjs --id-mask-cache-only` runs the C33 static/invalidation/one-entry/LRU matrix with direct timestamp samples.
 
 ## Examples
 
@@ -82,6 +84,7 @@ Packed `0xFFFF_0000` uploads as opaque blue; packed zero uploads the draw unifor
 
 ## Changelog
 
+- 2026-07-14: added C33 complete WebGPU ID-mask field keys, compact compositor-only hits, bounded compatible LRU storage, direct stage timing, and explicit pressure/device purge behavior.
 - 2026-07-14: added C31 adaptive/configurable logical-byte budgets, protected LRU admission, compatible layer pooling, absent/pool aging, exact over-budget fallback, purge reasons, and storage telemetry.
 - 2026-07-14: added generation-correct retained WebGPU layers backed by physical-grid-snapped local textures, transform-inheriting nested viewports/scissors, local effect copies, exact resource invalidation, compatible resize reuse, and the C30 100-card proof path.
 - 2026-07-13: added full-affine/opacity prepared instances, transform-linked dynamic clips, and a changed-record WebGPU property ring for C26.

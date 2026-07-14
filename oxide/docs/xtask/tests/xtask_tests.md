@@ -68,6 +68,7 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
+- 2026-07-14: froze the accepted C33 WebGPU ID-mask field cache, rejected the one-entry cache after the required multi-map proof, and refreshed the 165-entry, 79-accepted, 86-rejected manifest totals.
 - 2026-07-14: froze the accepted C32 Metal ID-mask field-cache experiment and the resulting 163-entry, 78-accepted, 85-rejected manifest totals.
 - 2026-07-14: froze the C30 accepted local-layer experiment, rejected unsnapped-coordinate, two-pass-key, asymmetric-clock-warmup, single-long-burst, and no-postroll designs, and resulting 160-entry totals.
 - 2026-07-13: froze the C29 accepted prepared-layer experiment, three rejected precision policies, and the resulting 154-entry accepted/rejected totals.

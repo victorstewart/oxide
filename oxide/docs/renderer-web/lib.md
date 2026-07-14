@@ -123,6 +123,7 @@ pub async fn build_renderer() -> Result<oxide_renderer_web::BrowserRenderer, oxi
 ```
 
 ## Changelog
+- 2026-07-14: exposed C33 ID-mask field-cache hit/miss, budget/residency/entry/eviction/purge telemetry and explicit cache budget/purge controls through `WebRendererStats` and `BrowserRenderer`.
 - 2026-07-14: exposed C31 layer-cache budget, resident/pool/CPU bytes, oldest last-use frame, pool reuse, eviction, recreation, purge count, and allocation-free purge-reason telemetry through `WebRendererStats` and `BrowserRenderer` controls.
 - 2026-07-13: exposed C26 property upload/update/ring counters and retained prepared geometry for affine/opacity instances.
 

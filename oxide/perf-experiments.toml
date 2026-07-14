@@ -1,4 +1,46 @@
 [[experiments]]
+id = "c33-webgpu-id-mask-field-cache"
+introduced_commit = "C33 staged tree recorded in commit proof"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-web", "oxide-host-web", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max WebGPU through native-arm64 Chrome"]
+correctness_gate = "Complete dimensions/scale/content/chunk/projection keys, final-only exclusions, same-command-buffer multi-map safety, hard byte-budget eviction, explicit/memory/device purge, stage counters, and exact parent/candidate masks, fields, and presented pixels must remain deterministic."
+performance_gate = "Fifteen balanced fresh-process pairs and at least 2,000 direct WebGPU timestamps per side must reduce warm static 512-square raster+seed+JFA+compositor work to compositor-only, improve GPU time by at least 5% with the generic confidence/win/tail gates, and preserve native RAF pacing."
+decision_state = "accepted"
+decision = "Retained complete immutable WebGPU ID-mask raster/JFA fields under a byte-budgeted small LRU and encoded only the final compositor when geometry and projection were unchanged."
+proof = [
+   "The exact-tree native-arm64 Chrome population collected 2,400 GPU timestamps per side; parent/candidate p50 was about 6.2/0.06 ms and every p50/p95/p99/peak gate accepted.",
+   "Paired median GPU speedup and its 95% confidence lower bound both exceeded 99.0% with 15/15 pair wins; active CPU-submit paired median improved by more than 10% with 15/15 wins, while RAF pacing passed the no-material-regression policy.",
+   "All 2,400 parent samples encoded twelve passes and all 2,400 candidate samples encoded one compositor pass; exact reference fields and presented PNG bytes matched, static/style/viewport hit, projection/content missed, and memory/device purge reentry passed.",
+]
+cleanup = [
+   "Kept full raster/field rebuilding for projection, content, scale, and dimension changes and kept over-budget misses transient rather than weakening key completeness or visual work.",
+   "Deleted the one-entry runtime alternative after the required multi-map proof; aggregate official baseline promotion stays deferred to C62 and the ignored raw directory preserves all acquisition evidence.",
+]
+
+[[experiments]]
+id = "c33-one-entry-id-mask-cache-rejected"
+introduced_commit = "rejected during C33 multi-map measurement"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-web", "oxide-host-web"]
+required_devices = ["Apple M2 Max WebGPU through native-arm64 Chrome"]
+correctness_gate = "One-entry and small-LRU rows must render the same two unchanged 512-square maps, preserve identical field keys and compositor output, and perform zero steady target creation after warmup."
+performance_gate = "The small LRU may replace the required one-entry starting point only if the unchanged alternating two-map workload materially improves direct GPU and CPU distributions and reduces full field rebuild passes."
+decision_state = "rejected"
+decision = "Rejected the one-last-map cache because alternating two-map content thrashed it and rebuilt both complete fields every frame."
+proof = [
+   "The one-entry row recorded zero hits, two misses, 24 passes, 4.231258 ms GPU p50, and 0.140313 ms CPU p50 for the unchanged alternating two-map workload.",
+   "The retained two-entry-capable LRU recorded two hits, zero misses, two compositor passes, 0.047038 ms GPU p50, and 0.032500 ms CPU p50 with exactly 17,825,792 resident bytes.",
+   "Both rows performed zero steady target creation after warmup, so the measured win comes from retaining the second immutable field set rather than hiding allocation work.",
+]
+cleanup = [
+   "Removed the one-entry runtime alternative and retained one byte-budgeted cache with a hard four-entry maximum.",
+   "Preserved the exact matrix and stage distributions under the ignored C33 raw evidence directory.",
+]
+
+[[experiments]]
 id = "c30-terminal-measured-frame-without-postroll-rejected"
 introduced_commit = "rejected during C30 one-dirty timing"
 introduced_date = "2026-07-14"

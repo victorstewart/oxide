@@ -84,6 +84,10 @@ function parseArgs(argv)
       mixedSamples: 6,
       mixedFrames: 24,
       architectureMatrix: false,
+      idMaskCacheC33: false,
+      idMaskCacheOnly: false,
+      idMaskCacheRafOnly: false,
+      idMaskCacheRafFrames: 160,
       preparedFlat: false,
    };
 
@@ -192,6 +196,14 @@ function parseArgs(argv)
          args.mixedFrames = Number(next());
       } else if (arg === "--architecture-matrix") {
          args.architectureMatrix = true;
+      } else if (arg === "--id-mask-cache-c33") {
+         args.idMaskCacheC33 = true;
+      } else if (arg === "--id-mask-cache-only") {
+         args.idMaskCacheOnly = true;
+      } else if (arg === "--id-mask-cache-raf-only") {
+         args.idMaskCacheRafOnly = true;
+      } else if (arg === "--id-mask-cache-raf-frames") {
+         args.idMaskCacheRafFrames = Number(next());
       } else if (arg === "--prepared-flat") {
          args.preparedFlat = true;
       } else {
@@ -267,7 +279,7 @@ function parseArgs(argv)
    args.reportTimeoutMs = Math.trunc(args.reportTimeoutMs);
    args.captureRetries = Math.trunc(args.captureRetries);
    args.traceDurationMs = Math.trunc(args.traceDurationMs);
-   for (let key of ["frameSamples", "framesPerSample", "rafFrames", "idMaskSamples", "idMaskFrames", "uploadSamples", "uploadFrames", "scene3dSamples", "scene3dFrames", "mixedSamples", "mixedFrames", "canvasSamples", "canvasFrames", "canvasQuads"]) {
+   for (let key of ["frameSamples", "framesPerSample", "rafFrames", "idMaskSamples", "idMaskFrames", "idMaskCacheRafFrames", "uploadSamples", "uploadFrames", "scene3dSamples", "scene3dFrames", "mixedSamples", "mixedFrames", "canvasSamples", "canvasFrames", "canvasQuads"]) {
       if (!Number.isFinite(args[key]) || args[key] <= 0) {
          throw new Error(`${key} must be a positive number`);
       }
@@ -543,6 +555,16 @@ function browserUrl(args, baseUrl, reportEndpoint, startupOnly = false, canvasDi
    url.searchParams.set("mixed_frames", String(args.mixedFrames));
    if (args.architectureMatrix) {
       url.searchParams.set("architecture_matrix", "1");
+   }
+   if (args.idMaskCacheC33) {
+      url.searchParams.set("id_mask_cache_c33", "1");
+   }
+   if (args.idMaskCacheOnly) {
+      url.searchParams.set("id_mask_cache_only", "1");
+   }
+   if (args.idMaskCacheRafOnly) {
+      url.searchParams.set("id_mask_cache_raf_only", "1");
+      url.searchParams.set("id_mask_cache_raf_frames", String(args.idMaskCacheRafFrames));
    }
    if (canvasDiag) {
       url.searchParams.set("canvas_diag", "1");

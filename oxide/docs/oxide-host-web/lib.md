@@ -156,6 +156,7 @@ console.log("oxide-webgpu-scene3d-ab", window.oxideWebGpuScene3dAB);
 
 ## Changelog
 
+- 2026-07-14: added the C33 static/style/viewport/projection/content and one-entry-versus-LRU ID-mask cache adapter, direct WebGPU stage samples, compact hit-uniform counters, exact cached-field readback, and purge/reentry evidence.
 - 2026-07-14: added the C31 100-layer navigation-churn adapter with hard-budget, pool-reuse, frame-tail, memory-pressure, device-loss, and reentry evidence.
 - 2026-07-14: added the bounded C30 100-card local-layer CPU/GPU/residency adapter and fractional nested/effect capture target.
 - 2026-07-13: added the non-default C25 prepared-chunk timing, RAF, lifecycle, threshold, and exact-capture host contracts.
