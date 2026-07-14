@@ -3968,7 +3968,7 @@ fn filtered_run_suite_supports_wrapped_label_cached_encode_case() {
     let row = report_case_slice(&report, "cpu.system.wrapped_label_cached_encode");
     assert_eq!(report_f64(row, "wrapped_label_variants"), 4096.0);
     assert_eq!(report_f64(row, "atlas_create_calls"), 1.0);
-    assert!(report_f64(row, "atlas_update_calls") >= 1.0);
+    assert_eq!(report_f64(row, "atlas_update_calls"), 0.0);
     assert!(report_f64(row, "wrapped_label_glyph_runs") > 1.0);
     assert!(report_f64(row, "wrapped_label_vertices") > 0.0);
     assert!(!report.contains("cpu.system.wrapped_label_legacy_fit_shape"));
@@ -4000,11 +4000,68 @@ fn filtered_run_suite_supports_picker_text_cached_encode_case() {
         std::fs::read_to_string(&json_out).expect("read filtered picker text cached report");
     let row = report_case_slice(&report, "cpu.system.picker_text_cached_encode");
     assert_eq!(report_f64(row, "atlas_create_calls"), 1.0);
-    assert_eq!(report_f64(row, "atlas_update_calls"), 1.0);
+    assert_eq!(report_f64(row, "atlas_update_calls"), 0.0);
     assert!(report_f64(row, "picker_glyph_runs") > 0.0);
     assert!(report_f64(row, "picker_vertices") > 0.0);
     assert!(report_f64(row, "dirty_to_full_upload_ratio") < 1.0);
     assert!(!report.contains("cpu.system.picker_text_legacy_shape_upload"));
+    let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
+fn filtered_run_suite_supports_paged_text_atlas_locality_case() {
+    let mut json_out = std::env::temp_dir();
+    json_out.push(format!("oxide-perf-runner-paged-text-atlas-{}.json", std::process::id()));
+    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+        .env("OXIDE_PERF_RUNNER_FILTER", "cpu.architecture.text.paged_atlas_locality")
+        .arg("--run-suite")
+        .arg("--smoke")
+        .arg("--json-out")
+        .arg(&json_out)
+        .output()
+        .expect("run filtered paged text atlas smoke suite");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "filtered suite failed: {stderr}");
+    assert!(stdout.contains("cases=1"), "stdout: {stdout}");
+    let report = std::fs::read_to_string(&json_out).expect("read paged text atlas report");
+    let row = report_case_slice(&report, "cpu.architecture.text.paged_atlas_locality");
+    assert_eq!(report_f64(row, "atlas_pages"), 2.0);
+    assert_eq!(report_f64(row, "atlas_evictions"), 1.0);
+    assert_eq!(report_f64(row, "atlas_release_calls"), 1.0);
+    assert_eq!(report_f64(row, "stable_unrelated_pages"), 1.0);
+    assert_eq!(report_f64(row, "atlas_resident_bytes"), 1_152.0);
+    assert!(report_f64(row, "atlas_fragmentation_bytes") > 0.0);
+    let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
+fn filtered_run_suite_supports_metal_paged_text_atlas_locality_case() {
+    let mut json_out = std::env::temp_dir();
+    json_out.push(format!("oxide-perf-runner-metal-paged-text-{}.json", std::process::id()));
+    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+        .env("OXIDE_PERF_RUNNER_FILTER", "gpu.architecture.text.paged_atlas_locality")
+        .arg("--run-suite")
+        .arg("--smoke")
+        .arg("--json-out")
+        .arg(&json_out)
+        .output()
+        .expect("run filtered Metal paged text atlas smoke suite");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "filtered suite failed: {stderr}");
+    assert!(stdout.contains("cases=1"), "stdout: {stdout}");
+    let report = std::fs::read_to_string(&json_out).expect("read Metal paged text report");
+    let row = report_case_slice(&report, "gpu.architecture.text.paged_atlas_locality");
+    assert_eq!(report_f64(row, "paged_atlas"), 1.0);
+    assert_eq!(report_f64(row, "invalidated_chunks_avg"), 1.0);
+    assert_eq!(report_f64(row, "prepared_cache_hits_avg"), 1.0);
+    assert_eq!(report_f64(row, "chunks_prepared_avg"), 1.0);
+    assert_eq!(report_f64(row, "draws_avg"), 2.0);
+    assert_eq!(report_f64(row, "atlas_resident_bytes"), 8_192.0);
+    assert_eq!(report_f64(row, "atlas_upload_bytes_avg"), 4_096.0);
     let _ = std::fs::remove_file(json_out);
 }
 

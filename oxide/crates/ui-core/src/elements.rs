@@ -89,6 +89,21 @@ pub trait ImageUploader {
         data: &[u8],
         row_bytes: usize,
     );
+
+    fn append_a8(
+        &mut self,
+        handle: gfx::ImageHandle,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        data: &[u8],
+        row_bytes: usize,
+    ) {
+        self.update_a8(handle, x, y, w, h, data, row_bytes);
+    }
+
+    fn release_a8(&mut self, _handle: gfx::ImageHandle) {}
 }
 
 const LABEL_LAYOUT_CACHE_CAP: usize = 2_048;
@@ -171,9 +186,18 @@ struct TextProfiler {
 
 #[derive(Default)]
 struct TextFrameState {
-    atlas_handle: Option<gfx::ImageHandle>,
-    atlas_revision: u64,
+    glyph_runs: Vec<gfx::GlyphRun>,
+    page_generations: Vec<(u32, u64)>,
+    retired_pages: Vec<(gfx::ImageHandle, u32)>,
     profiler: Option<TextProfiler>,
+}
+
+#[derive(Clone, Copy)]
+struct TextGpuPage {
+    id: u32,
+    generation: u64,
+    handle: gfx::ImageHandle,
+    pristine: bool,
 }
 
 struct CachedLabelLayoutEntry {
@@ -234,9 +258,10 @@ pub struct TextCtx {
     pub fonts: text::FontDb,
     pub shaper: text::TextShaper,
     pub raster: text::RasterCtx,
-    pub atlas: text::Atlas,
+    pub atlas: text::PagedAtlas,
     pub atlas_handle: Option<gfx::ImageHandle>,
-    atlas_gpu_size: Option<(u32, u32)>,
+    gpu_pages: Vec<TextGpuPage>,
+    retained_atlas_revisions: Vec<(gfx::ImageHandle, u64)>,
     label_layouts:
         HashMap<LabelLayoutStyleKey, HashMap<alloc::string::String, CachedLabelLayoutEntry>>,
     label_layout_len: usize,
@@ -255,9 +280,11 @@ impl Default for TextCtx {
             fonts: text::FontDb::default(),
             shaper: text::TextShaper::default(),
             raster: text::RasterCtx::default(),
-            atlas: text::Atlas::new(1024, 1024),
+            atlas: text::PagedAtlas::new(1024, 1024, text::DEFAULT_GLYPH_ATLAS_PAGE_COUNT),
             atlas_handle: None,
-            atlas_gpu_size: None,
+            gpu_pages: Vec::with_capacity(text::DEFAULT_GLYPH_ATLAS_PAGE_COUNT),
+            retained_atlas_revisions:
+                Vec::with_capacity(text::DEFAULT_GLYPH_ATLAS_PAGE_COUNT),
             label_layouts: HashMap::new(),
             label_layout_len: 0,
             text_prefixes: HashMap::new(),
@@ -265,7 +292,12 @@ impl Default for TextCtx {
             label_layout_clock: 0,
             fallback_fonts: Vec::new(),
             frame_active: false,
-            frame: Box::new(TextFrameState::default()),
+            frame: Box::new(TextFrameState {
+                glyph_runs: Vec::with_capacity(8),
+                page_generations: Vec::with_capacity(text::DEFAULT_GLYPH_ATLAS_PAGE_COUNT),
+                retired_pages: Vec::with_capacity(text::DEFAULT_GLYPH_ATLAS_PAGE_COUNT),
+                profiler: None,
+            }),
         }
     }
 }
@@ -302,8 +334,10 @@ impl TextCtx {
             }
         }
         self.frame_active = true;
-        self.frame.atlas_handle = self.atlas_handle;
-        self.frame.atlas_revision = self.atlas.revision();
+        self.frame.page_generations.clear();
+        for page in &self.gpu_pages {
+            self.frame.page_generations.push((page.id, page.generation));
+        }
         self.atlas.begin_frame();
     }
 
@@ -315,31 +349,8 @@ impl TextCtx {
         if !self.frame_active {
             return self.last_frame_stats();
         }
-        let handle = if self.atlas.dirty_rect().is_some() {
-            Some(self.publish_gpu(up, true))
-        } else {
-            self.atlas_handle
-        };
-        if let Some(handle) = handle {
-            let atlas_revision = self.atlas.revision();
-            if self.frame.atlas_handle != Some(handle)
-                || self.frame.atlas_revision != atlas_revision
-            {
-                for item in &mut builder.drawlist_mut().items {
-                    if let gfx::DrawCmd::GlyphRun { run } = item {
-                        if run.atlas.0 == 0 || Some(run.atlas) == self.atlas_handle {
-                            if run.atlas_revision != atlas_revision {
-                                if let Some(profiler) = self.frame.profiler.as_mut() {
-                                    profiler.invalidated_runs = profiler.invalidated_runs.wrapping_add(1);
-                                }
-                            }
-                            run.atlas = handle;
-                            run.atlas_revision = atlas_revision;
-                        }
-                    }
-                }
-            }
-        }
+        self.publish_gpu_pages(up, true);
+        self.patch_builder_atlas_pages(builder);
         self.atlas.end_frame();
         self.frame_active = false;
         if self.frame.profiler.is_none() {
@@ -371,6 +382,44 @@ impl TextCtx {
         profiler.last_frame_stats
     }
 
+    fn patch_builder_atlas_pages(&mut self, builder: &mut DrawListBuilder) {
+        let count_invalidations = self.frame_active;
+        let mut invalidated_runs = 0_u64;
+        for item in &mut builder.drawlist_mut().items {
+            let gfx::DrawCmd::GlyphRun { run } = item else {
+                continue;
+            };
+            let (page_id, retired) = if run.atlas.0 == 0 {
+                (run.atlas_revision as u32, false)
+            } else if let Some((_, page_id)) = self
+                .frame
+                .retired_pages
+                .iter()
+                .find(|(handle, _)| *handle == run.atlas)
+            {
+                (*page_id, true)
+            } else {
+                continue;
+            };
+            let Some(page) = self.gpu_pages.iter().find(|page| page.id == page_id) else {
+                continue;
+            };
+            if count_invalidations
+                && (retired
+                    || self.frame.page_generations.iter().any(|(id, generation)| {
+                        *id == page.id && *generation != page.generation
+                    }))
+            {
+                invalidated_runs = invalidated_runs.wrapping_add(1);
+            }
+            run.atlas = page.handle;
+            run.atlas_revision = 1;
+        }
+        if let Some(profiler) = self.frame.profiler.as_mut() {
+            profiler.invalidated_runs = profiler.invalidated_runs.wrapping_add(invalidated_runs);
+        }
+    }
+
     #[inline]
     pub fn last_frame_stats(&self) -> TextFrameStats {
         self.frame.profiler.as_ref().map_or(TextFrameStats::default(), |profiler| {
@@ -389,86 +438,145 @@ impl TextCtx {
 
     #[inline]
     pub fn atlas_revision(&self) -> u64 {
-        self.atlas.revision()
+        self.retained_atlas_revisions
+            .first()
+            .map_or(self.atlas.revision(), |(_, generation)| *generation)
     }
 
     #[inline]
     pub fn retained_text_atlas_revision(&self) -> Option<(gfx::ImageHandle, u64)> {
-        if self.atlas.dirty_rect().is_some() {
+        if self.atlas.has_dirty_pages() {
             return None;
         }
-        self.atlas_handle.map(|handle| (handle, self.atlas.revision()))
+        self.retained_atlas_revisions
+            .first()
+            .copied()
+            .or_else(|| self.atlas_handle.map(|handle| (handle, self.atlas.revision())))
+    }
+
+    #[inline]
+    pub fn retained_text_atlas_revisions(&self) -> Option<&[(gfx::ImageHandle, u64)]> {
+        if self.atlas.has_dirty_pages()
+            || self.retained_atlas_revisions.len() != self.atlas.page_count()
+        {
+            return None;
+        }
+        Some(&self.retained_atlas_revisions)
     }
 
     pub fn ensure_gpu<U: ImageUploader>(&mut self, up: &mut U) -> gfx::ImageHandle {
-        self.publish_gpu(up, !self.frame_active)
+        self.publish_gpu_pages(up, !self.frame_active);
+        self.atlas_handle.unwrap_or(gfx::ImageHandle(0))
     }
 
     #[inline]
-    fn encoding_atlas_handle<U: ImageUploader>(&mut self, up: &mut U) -> gfx::ImageHandle {
+    fn flush_after_encoding<U: ImageUploader>(
+        &mut self,
+        up: &mut U,
+        builder: &mut DrawListBuilder,
+    ) {
         if self.frame_active {
-            self.atlas_handle.unwrap_or(gfx::ImageHandle(0))
-        } else {
-            self.ensure_gpu(up)
+            return;
         }
-    }
-
-    #[inline]
-    fn flush_after_encoding<U: ImageUploader>(&mut self, up: &mut U) {
-        if !self.frame_active && self.atlas.dirty_rect().is_some() {
+        if self.atlas.has_dirty_pages() {
             let _ = self.ensure_gpu(up);
         }
+        self.patch_builder_atlas_pages(builder);
     }
 
-    fn publish_gpu<U: ImageUploader>(&mut self, up: &mut U, flush_dirty: bool) -> gfx::ImageHandle {
-        let (data, w, h) = self.atlas.image();
-        if let Some(hdl) = self.atlas_handle {
-            if self.atlas_gpu_size == Some((w, h)) {
+    fn record_atlas_uploads(&mut self, calls: u64, pixels: u64) {
+        if let Some(profiler) = self.frame.profiler.as_mut() {
+            profiler.atlas_upload_calls = profiler.atlas_upload_calls.saturating_add(calls);
+            profiler.atlas_upload_pixels = profiler.atlas_upload_pixels.saturating_add(pixels);
+            profiler.atlas_upload_bytes = profiler.atlas_upload_bytes.saturating_add(pixels);
+        }
+    }
+
+    fn publish_gpu_pages<U: ImageUploader>(&mut self, up: &mut U, flush_dirty: bool) {
+        let mut upload_calls = 0_u64;
+        let mut upload_pixels = 0_u64;
+        self.frame.retired_pages.clear();
+        let mut gpu_index = 0;
+        while gpu_index < self.gpu_pages.len() {
+            let gpu = self.gpu_pages[gpu_index];
+            let current = (0..self.atlas.page_count()).any(|index| {
+                self.atlas
+                    .page_image(index)
+                    .is_some_and(|(id, generation, ..)| id == gpu.id && generation == gpu.generation)
+            });
+            if current {
+                gpu_index += 1;
+            } else {
+                self.frame.retired_pages.push((gpu.handle, gpu.id));
+                up.release_a8(gpu.handle);
+                self.gpu_pages.remove(gpu_index);
+            }
+        }
+
+        for index in 0..self.atlas.page_count() {
+            let Some((id, generation, data, width, height, _dirty)) = self.atlas.page_image(index)
+            else {
+                continue;
+            };
+            if let Some(gpu_position) = self
+                .gpu_pages
+                .iter()
+                .position(|gpu| gpu.id == id && gpu.generation == generation)
+            {
+                let gpu = self.gpu_pages[gpu_position];
                 if flush_dirty {
-                    if let Some(dirty) = self.atlas.dirty_rect() {
-                        let dirty_pixels = u64::from(dirty.w).saturating_mul(u64::from(dirty.h));
-                        let full_pixels = u64::from(w).saturating_mul(u64::from(h));
-                        let rect = if dirty_pixels.saturating_mul(4) >= full_pixels.saturating_mul(3)
-                        {
-                            text::AtlasDirtyRect { x: 0, y: 0, w, h }
+                    let dirty_count = if gpu.pristine {
+                        usize::from(_dirty.is_some())
+                    } else {
+                        self.atlas.page_dirty_rect_count(index)
+                    };
+                    for dirty_index in 0..dirty_count {
+                        let rect = if gpu.pristine {
+                            _dirty
                         } else {
-                            dirty
+                            self.atlas.page_dirty_rect(index, dirty_index)
                         };
-                        let offset = (rect.y as usize)
-                            .saturating_mul(w as usize)
-                            .saturating_add(rect.x as usize);
-                        up.update_a8(
-                            hdl,
+                        let Some(rect) = rect else { continue; };
+                        let offset = rect.y as usize * width as usize + rect.x as usize;
+                        up.append_a8(
+                            gpu.handle,
                             rect.x,
                             rect.y,
                             rect.w,
                             rect.h,
                             &data[offset.min(data.len())..],
-                            w as usize,
+                            width as usize,
                         );
                         let pixels = u64::from(rect.w).saturating_mul(u64::from(rect.h));
-                        if let Some(profiler) = self.frame.profiler.as_mut() {
-                            profiler.atlas_upload_calls = profiler.atlas_upload_calls.saturating_add(1);
-                            profiler.atlas_upload_pixels = profiler.atlas_upload_pixels.saturating_add(pixels);
-                            profiler.atlas_upload_bytes = profiler.atlas_upload_bytes.saturating_add(pixels);
-                        }
-                        self.atlas.clear_dirty();
+                        upload_calls = upload_calls.saturating_add(1);
+                        upload_pixels = upload_pixels.saturating_add(pixels);
                     }
+                    if dirty_count != 0 {
+                        self.gpu_pages[gpu_position].pristine = false;
+                    }
+                    self.atlas.clear_page_dirty(id);
                 }
-                return hdl;
+                continue;
             }
+            let handle = up.create_a8(width, height, data, width as usize);
+            self.gpu_pages.push(TextGpuPage {
+                id,
+                generation,
+                handle,
+                pristine: _dirty.is_none(),
+            });
+            upload_calls = upload_calls.saturating_add(1);
+            upload_pixels = upload_pixels
+                .saturating_add(u64::from(width).saturating_mul(u64::from(height)));
+            self.atlas.clear_page_dirty(id);
         }
-        let hdl = up.create_a8(w, h, data, w as usize);
-        let pixels = u64::from(w).saturating_mul(u64::from(h));
-        if let Some(profiler) = self.frame.profiler.as_mut() {
-            profiler.atlas_upload_calls = profiler.atlas_upload_calls.saturating_add(1);
-            profiler.atlas_upload_pixels = profiler.atlas_upload_pixels.saturating_add(pixels);
-            profiler.atlas_upload_bytes = profiler.atlas_upload_bytes.saturating_add(pixels);
-        }
-        self.atlas_handle = Some(hdl);
-        self.atlas_gpu_size = Some((w, h));
-        self.atlas.clear_dirty();
-        hdl
+        self.record_atlas_uploads(upload_calls, upload_pixels);
+        self.gpu_pages.sort_unstable_by_key(|page| page.id);
+        self.atlas_handle = self.gpu_pages.first().map(|page| page.handle);
+        self.retained_atlas_revisions.clear();
+        self.retained_atlas_revisions.extend(
+            self.gpu_pages.iter().map(|page| (page.handle, 1)),
+        );
     }
 
     pub fn trim_memory(&mut self) {
@@ -476,7 +584,9 @@ impl TextCtx {
         self.atlas.end_frame();
         self.atlas.reset();
         self.atlas_handle = None;
-        self.atlas_gpu_size = None;
+        self.gpu_pages.clear();
+        self.retained_atlas_revisions.clear();
+        self.frame.retired_pages.clear();
         self.label_layouts.clear();
         self.label_layout_len = 0;
         self.text_prefixes.clear();
@@ -485,6 +595,17 @@ impl TextCtx {
         if let Some(profiler) = self.frame.profiler.as_mut() {
             profiler.last_frame_stats = TextFrameStats::default();
         }
+    }
+
+    pub fn trim_memory_with_uploader<U: ImageUploader>(&mut self, up: &mut U) {
+        for page in self.gpu_pages.iter().copied() {
+            up.release_a8(page.handle);
+        }
+        self.trim_memory();
+    }
+
+    pub fn handle_device_loss(&mut self) {
+        self.trim_memory();
     }
 
     pub fn set_fallback_fonts(&mut self, font_ids: &[usize]) {
@@ -972,87 +1093,89 @@ impl Default for Label {
 fn bake_cached_label_line<const COUNT_STATS: bool>(
     line: &CachedLabelLine,
     color: gfx::Color,
-    atlas_handle: gfx::ImageHandle,
     origin_x: f32,
     origin_y: f32,
     device_scale: f32,
     txt: &mut TextCtx,
     b: &mut DrawListBuilder,
 ) -> (u32, u32) {
-    let glyph_run = match &line.shape {
+    let vertex_start = b.drawlist().vertices.len() as u32;
+    let index_start = b.drawlist().indices.len() as u32;
+    let mut glyph_runs = core::mem::take(&mut txt.frame.glyph_runs);
+    glyph_runs.clear();
+    match &line.shape {
         CachedLabelShape::Single(run) => {
             let Some(font) = txt.fonts.font(run.font_id) else {
+                txt.frame.glyph_runs = glyph_runs;
                 return (0, 0);
             };
             let dl = b.drawlist_mut();
             if COUNT_STATS {
-                run.shape.bake_counted_into_with(
+                run.shape.bake_paged_counted_into_with(
                     font,
                     &mut txt.raster,
                     &mut txt.atlas,
                     &mut dl.vertices,
                     &mut dl.indices,
+                    &mut glyph_runs,
                     color,
-                    atlas_handle,
                     origin_x + run.x_offset,
                     origin_y,
                     device_scale,
-                )
+                );
             } else {
-                run.shape.bake_into_with(
+                run.shape.bake_paged_into_with(
                     font,
                     &mut txt.raster,
                     &mut txt.atlas,
                     &mut dl.vertices,
                     &mut dl.indices,
+                    &mut glyph_runs,
                     color,
-                    atlas_handle,
                     origin_x + run.x_offset,
                     origin_y,
                     device_scale,
-                )
+                );
             }
         }
         CachedLabelShape::Fallback(shape) => {
             let dl = b.drawlist_mut();
             if COUNT_STATS {
-                shape.bake_counted_into_with(
+                shape.bake_paged_counted_into_with(
                     &txt.fonts,
                     &mut txt.raster,
                     &mut txt.atlas,
                     &mut dl.vertices,
                     &mut dl.indices,
+                    &mut glyph_runs,
                     color,
-                    atlas_handle,
                     origin_x,
                     origin_y,
                     device_scale,
-                )
+                );
             } else {
-                shape.bake_into_with(
+                shape.bake_paged_into_with(
                     &txt.fonts,
                     &mut txt.raster,
                     &mut txt.atlas,
                     &mut dl.vertices,
                     &mut dl.indices,
+                    &mut glyph_runs,
                     color,
-                    atlas_handle,
                     origin_x,
                     origin_y,
                     device_scale,
-                )
+                );
             }
         }
-    };
-    let vertex_count = glyph_run.vb.len;
-    let index_count = glyph_run.ib.len;
-    if vertex_count > 0 && index_count > 0 {
-        if glyph_run.atlas.0 == 0 {
-            b.glyph_run_provisional(glyph_run);
-        } else {
-            b.glyph_run(glyph_run);
-        }
     }
+    for run in glyph_runs.iter().copied() {
+        b.glyph_run_provisional(run);
+    }
+    glyph_runs.clear();
+    txt.frame.glyph_runs = glyph_runs;
+    let vertex_count = (b.drawlist().vertices.len() as u32).saturating_sub(vertex_start);
+    let index_count = (b.drawlist().indices.len() as u32).saturating_sub(index_start);
     (vertex_count, index_count)
 }
 
@@ -1081,7 +1204,6 @@ fn encode_label_cached<const COUNT_STATS: bool, U: ImageUploader>(
         watch_text_event("label.shape_error", font_id, text_value, "cache_build_failed");
         return;
     };
-    let handle = txt.encoding_atlas_handle(up);
     watch_text_event_lazy("label.begin", font_id, text_value, || {
         format!(
             "rect={:.1}x{:.1} font_px={:.1} atlas_handle={}",
@@ -1107,7 +1229,7 @@ fn encode_label_cached<const COUNT_STATS: bool, U: ImageUploader>(
             Align::Right => rect.w - line.width,
         };
         let (verts, indices) =
-            bake_cached_label_line::<COUNT_STATS>(line, color, handle, ox + dx, oy, scale, txt, b);
+            bake_cached_label_line::<COUNT_STATS>(line, color, ox + dx, oy, scale, txt, b);
         watch_text_event_lazy("label.glyph_run", font_id, text_value, || {
             format!(
                 "width={:.1} verts={} indices={} atlas_handle={}",
@@ -1120,7 +1242,7 @@ fn encode_label_cached<const COUNT_STATS: bool, U: ImageUploader>(
         oy += line_h;
     }
 
-    txt.flush_after_encoding(up);
+    txt.flush_after_encoding(up, b);
 }
 
 #[inline]
@@ -2775,7 +2897,6 @@ impl TextInput {
             inner.h - style.padding.top - style.padding.bottom,
         );
 
-        let handle = text_ctx.encoding_atlas_handle(uploader);
         let display = state.display_text();
 
         if let Some(cfg) = state.otp_config() {
@@ -2788,10 +2909,9 @@ impl TextInput {
                 text_ctx,
                 uploader,
                 builder,
-                handle,
                 &display,
             );
-            text_ctx.flush_after_encoding(uploader);
+            text_ctx.flush_after_encoding(uploader, builder);
             return;
         }
 
@@ -2846,7 +2966,6 @@ impl TextInput {
         let _ = bake_cached_label_line::<false>(
             line,
             style.text,
-            handle,
             content.x,
             content.y,
             device_scale,
@@ -2884,7 +3003,7 @@ impl TextInput {
             );
         }
 
-        text_ctx.flush_after_encoding(uploader);
+        text_ctx.flush_after_encoding(uploader, builder);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2898,7 +3017,6 @@ impl TextInput {
         text_ctx: &mut TextCtx,
         _uploader: &mut U,
         builder: &mut DrawListBuilder,
-        handle: gfx::ImageHandle,
         display: &str,
     ) {
         if cfg.length == 0 {
@@ -2940,18 +3058,25 @@ impl TextInput {
                     let text_y = inner.y + (inner.h - style.font_px).max(0.0) * 0.5;
                     let color =
                         if chars.get(idx).is_some() { style.text } else { style.placeholder };
+                    let mut runs = core::mem::take(&mut text_ctx.frame.glyph_runs);
+                    runs.clear();
                     let dl = builder.drawlist_mut();
-                    let run = shape.bake_into(
+                    shape.bake_paged_into_with(
+                        &mut text_ctx.raster,
                         &mut text_ctx.atlas,
                         &mut dl.vertices,
                         &mut dl.indices,
+                        &mut runs,
                         color,
-                        handle,
                         text_x,
                         text_y,
                         device_scale,
                     );
-                    builder.glyph_run(run);
+                    for run in runs.iter().copied() {
+                        builder.glyph_run_provisional(run);
+                    }
+                    runs.clear();
+                    text_ctx.frame.glyph_runs = runs;
                 }
             }
 
@@ -3397,7 +3522,6 @@ impl PickerState {
         let highlight = style.center_band_rect(rect);
         builder.rrect(highlight, [style.center_band_radius(rect); 4], style.highlight);
 
-        let handle = text_ctx.encoding_atlas_handle(uploader);
         if text_ctx.fonts.font(style.font_id).is_none() {
             return;
         }
@@ -3440,7 +3564,6 @@ impl PickerState {
                 let _ = bake_cached_label_line::<false>(
                     line,
                     style.text_color,
-                    handle,
                     text_x,
                     text_y,
                     device_scale,
@@ -3451,7 +3574,7 @@ impl PickerState {
         }
 
         builder.clip_pop();
-        text_ctx.flush_after_encoding(uploader);
+        text_ctx.flush_after_encoding(uploader, builder);
     }
 }
 

@@ -380,7 +380,7 @@ impl<U: elements::ImageUploader> Router<U> {
 
     pub fn trim_memory(&mut self) {
         self.last_damage.clear();
-        self.text.trim_memory();
+        self.text.trim_memory_with_uploader(&mut self.uploader);
     }
 
     pub fn permissions_bind(&mut self, manager: &Arc<PermissionManager>) {

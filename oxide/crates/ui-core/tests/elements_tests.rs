@@ -436,6 +436,278 @@ struct CountingUploader {
     last_update: Option<(u32, u32, u32, u32, usize)>,
 }
 
+#[derive(Default)]
+struct PagedUploader {
+    next: u32,
+    creates: usize,
+    appends: usize,
+    releases: Vec<ImageHandle>,
+}
+
+impl ImageUploader for PagedUploader {
+    fn create_a8(
+        &mut self,
+        _w: u32,
+        _h: u32,
+        _data: &[u8],
+        _row_bytes: usize,
+    ) -> ImageHandle {
+        self.next = self.next.saturating_add(1).max(1);
+        self.creates += 1;
+        ImageHandle(self.next)
+    }
+
+    fn update_a8(
+        &mut self,
+        _handle: ImageHandle,
+        _x: u32,
+        _y: u32,
+        _w: u32,
+        _h: u32,
+        _data: &[u8],
+        _row_bytes: usize,
+    ) {
+        panic!("paged atlas must publish append-only updates");
+    }
+
+    fn append_a8(
+        &mut self,
+        _handle: ImageHandle,
+        _x: u32,
+        _y: u32,
+        _w: u32,
+        _h: u32,
+        _data: &[u8],
+        _row_bytes: usize,
+    ) {
+        self.appends += 1;
+    }
+
+    fn release_a8(&mut self, handle: ImageHandle) {
+        self.releases.push(handle);
+    }
+}
+
+#[test]
+fn paged_text_recycles_one_gpu_page_and_preserves_the_other_retained_identity() {
+    let mut text = TextCtx::default();
+    text.atlas = oxide_text::PagedAtlas::new(24, 24, 2);
+    let font_id = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let mut uploader = PagedUploader::default();
+    let mut builder = DrawListBuilder::new();
+    let mut labels = Vec::new();
+
+    text.begin_frame();
+    for ch in 'A'..='Z' {
+        let value = ch.to_string();
+        encode_label_text(
+            &value,
+            Color::rgba(0.1, 0.2, 0.3, 1.0),
+            Align::Left,
+            false,
+            font_id,
+            16.0,
+            RectF::new(0.0, labels.len() as f32 * 20.0, 40.0, 20.0),
+            1.0,
+            &mut text,
+            &mut uploader,
+            &mut builder,
+        );
+        labels.push(value);
+        if text.atlas.page_count() == 2 {
+            break;
+        }
+    }
+    let _ = text.finish_frame(&mut uploader, &mut builder);
+    let first_revisions = text
+        .retained_text_atlas_revisions()
+        .expect("clean first atlas pages")
+        .to_vec();
+    assert_eq!(first_revisions.len(), 2);
+    assert_ne!(first_revisions[0].0, first_revisions[1].0);
+    assert_eq!(uploader.creates, 2);
+
+    let resolved_runs = builder
+        .drawlist()
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            DrawCmd::GlyphRun { run } => Some(*run),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let second_handle = first_revisions[1].0;
+    let pinned_index = resolved_runs
+        .iter()
+        .position(|run| run.atlas == second_handle)
+        .expect("glyph on second page");
+    let pinned_label = labels[pinned_index].clone();
+    let first_handle = first_revisions[0].0;
+
+    builder.clear();
+    text.begin_frame();
+    encode_label_text(
+        &pinned_label,
+        Color::rgba(0.1, 0.2, 0.3, 1.0),
+        Align::Left,
+        false,
+        font_id,
+        16.0,
+        RectF::new(0.0, 0.0, 40.0, 20.0),
+        1.0,
+        &mut text,
+        &mut uploader,
+        &mut builder,
+    );
+    'pressure: for px in 17..=30 {
+        for ch in 'a'..='z' {
+            encode_label_text(
+                &ch.to_string(),
+                Color::rgba(0.1, 0.2, 0.3, 1.0),
+                Align::Left,
+                false,
+                font_id,
+                px as f32,
+                RectF::new(0.0, 0.0, 40.0, 34.0),
+                1.0,
+                &mut text,
+                &mut uploader,
+                &mut builder,
+            );
+            if text.atlas.eviction_count() > 0 {
+                break 'pressure;
+            }
+        }
+    }
+    assert_eq!(text.atlas.eviction_count(), 1);
+    let _ = text.finish_frame(&mut uploader, &mut builder);
+    let second_revisions = text
+        .retained_text_atlas_revisions()
+        .expect("clean recycled atlas pages");
+    assert_eq!(second_revisions.len(), 2);
+    assert!(second_revisions.iter().any(|(handle, _)| *handle == second_handle));
+    assert!(!second_revisions.iter().any(|(handle, _)| *handle == first_handle));
+    assert_eq!(uploader.releases, vec![first_handle]);
+
+    text.trim_memory_with_uploader(&mut uploader);
+    assert_eq!(uploader.releases.len(), 3);
+    assert_eq!(text.atlas.page_count(), 1);
+    assert_eq!(text.retained_text_atlas_revisions(), None);
+}
+
+#[test]
+fn paged_text_recreates_gpu_pages_after_device_loss() {
+   let mut text = TextCtx::default();
+   text.atlas = oxide_text::PagedAtlas::new(64, 64, 2);
+   let font_id = text.fonts.add_font(oxide_text::Font::from_bytes(
+      include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+   ));
+   let mut uploader = PagedUploader::default();
+   let mut builder = DrawListBuilder::new();
+
+   text.begin_frame();
+   encode_label_text(
+      "device loss",
+      Color::rgba(1.0, 1.0, 1.0, 1.0),
+      Align::Left,
+      false,
+      font_id,
+      16.0,
+      RectF::new(0.0, 0.0, 100.0, 24.0),
+      1.0,
+      &mut text,
+      &mut uploader,
+      &mut builder,
+   );
+   let _ = text.finish_frame(&mut uploader, &mut builder);
+   let first_handle = text
+      .retained_text_atlas_revisions()
+      .expect("published atlas page")[0]
+      .0;
+
+   text.handle_device_loss();
+   assert_eq!(text.atlas.page_count(), 1);
+   assert_eq!(text.retained_text_atlas_revisions(), None);
+   assert!(uploader.releases.is_empty());
+
+   builder.clear();
+   text.begin_frame();
+   encode_label_text(
+      "device loss",
+      Color::rgba(1.0, 1.0, 1.0, 1.0),
+      Align::Left,
+      false,
+      font_id,
+      16.0,
+      RectF::new(0.0, 0.0, 100.0, 24.0),
+      1.0,
+      &mut text,
+      &mut uploader,
+      &mut builder,
+   );
+   let _ = text.finish_frame(&mut uploader, &mut builder);
+   let recreated_handle = text
+      .retained_text_atlas_revisions()
+      .expect("recreated atlas page")[0]
+      .0;
+   assert_ne!(recreated_handle, first_handle);
+   assert_eq!(uploader.creates, 2);
+}
+
+#[test]
+fn paged_text_repatches_prior_immediate_runs_after_page_replacement() {
+   let mut text = TextCtx::default();
+   let font_id = text.fonts.add_font(oxide_text::Font::from_bytes(
+      include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+   ));
+   let mut uploader = PagedUploader::default();
+   let mut builder = DrawListBuilder::new();
+
+   encode_label_text(
+      "title",
+      Color::rgba(0.1, 0.1, 0.1, 1.0),
+      Align::Left,
+      false,
+      font_id,
+      15.0,
+      RectF::new(0.0, 0.0, 100.0, 24.0),
+      1.0,
+      &mut text,
+      &mut uploader,
+      &mut builder,
+   );
+   let first_handle = match builder.drawlist().items.first() {
+      Some(DrawCmd::GlyphRun { run }) => run.atlas,
+      _ => panic!("title glyph run"),
+   };
+
+   encode_label_text(
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+      Color::rgba(0.1, 0.1, 0.1, 1.0),
+      Align::Left,
+      false,
+      font_id,
+      28.0,
+      RectF::new(0.0, 30.0, 800.0, 40.0),
+      1.0,
+      &mut text,
+      &mut uploader,
+      &mut builder,
+   );
+
+   assert_eq!(uploader.releases, vec![first_handle]);
+   let current_handle = text
+      .retained_text_atlas_revisions()
+      .expect("replacement atlas page")[0]
+      .0;
+   assert_ne!(current_handle, first_handle);
+   assert!(builder.drawlist().items.iter().all(|item| {
+      !matches!(item, DrawCmd::GlyphRun { run } if run.atlas != current_handle)
+   }));
+}
+
 impl ImageUploader for CountingUploader {
     fn create_a8(
         &mut self,
@@ -464,7 +736,7 @@ impl ImageUploader for CountingUploader {
 }
 
 #[test]
-fn picker_reuses_cached_label_shapes_and_dirty_atlas_uploads() {
+fn picker_reuses_cached_label_shapes_and_skips_clean_atlas_uploads() {
     let picker = PickerState::new(vec![
         "Red".to_string(),
         "Green".to_string(),
@@ -482,19 +754,13 @@ fn picker_reuses_cached_label_shapes_and_dirty_atlas_uploads() {
 
     picker.encode(&style, rect, 2.0, &mut text, &mut uploader, &mut builder);
     assert_eq!(uploader.creates, 1);
-    assert_eq!(uploader.updates, 1);
-    let Some((_, _, w, h, row_bytes)) = uploader.last_update else {
-        panic!("expected dirty picker atlas upload");
-    };
-    assert!(w < 1024);
-    assert!(h < 1024);
-    assert_eq!(row_bytes, 1024);
+    assert_eq!(uploader.updates, 0);
     assert!(builder.drawlist().items.iter().any(|cmd| matches!(cmd, DrawCmd::GlyphRun { .. })));
 
     builder.clear();
     picker.encode(&style, rect, 2.0, &mut text, &mut uploader, &mut builder);
     assert_eq!(uploader.creates, 1);
-    assert_eq!(uploader.updates, 1);
+    assert_eq!(uploader.updates, 0);
     assert!(builder.drawlist().items.iter().any(|cmd| matches!(cmd, DrawCmd::GlyphRun { .. })));
 }
 
@@ -534,7 +800,7 @@ fn label_batches_configured_fallback_font_runs() {
     assert_eq!(glyph_runs, 1);
     assert!(builder.drawlist().vertices.len() >= 12);
     assert_eq!(uploader.creates, 1);
-    assert_eq!(uploader.updates, 1);
+    assert_eq!(uploader.updates, 0);
 }
 
 #[test]
@@ -556,13 +822,7 @@ fn label_reuses_layout_and_skips_clean_atlas_upload() {
 
     label.encode(RectF::new(0.0, 0.0, 160.0, 40.0), 2.0, &mut text, &mut uploader, &mut builder);
     assert_eq!(uploader.creates, 1);
-    assert_eq!(uploader.updates, 1);
-    let Some((_, _, w, h, row_bytes)) = uploader.last_update else {
-        panic!("expected dirty atlas upload");
-    };
-    assert!(w < 1024);
-    assert!(h < 1024);
-    assert_eq!(row_bytes, 1024);
+    assert_eq!(uploader.updates, 0);
 
     builder.clear();
     encode_label_text(
@@ -579,7 +839,10 @@ fn label_reuses_layout_and_skips_clean_atlas_upload() {
         &mut builder,
     );
     assert_eq!(uploader.creates, 1);
-    assert_eq!(uploader.updates, 1);
+    assert_eq!(uploader.updates, 0);
+    assert!(builder.drawlist().items.iter().all(|item| {
+        !matches!(item, DrawCmd::GlyphRun { run } if run.atlas.0 == 0)
+    }));
 }
 
 #[test]
@@ -760,7 +1023,7 @@ fn wrapped_ascii_label_reuses_fast_fit_layout_and_clean_atlas() {
         .count();
     assert!(first_glyph_runs > 1);
     assert_eq!(uploader.creates, 1);
-    assert_eq!(uploader.updates, 1);
+    assert_eq!(uploader.updates, 0);
 
     builder.clear();
     label.encode(rect, 2.0, &mut text, &mut uploader, &mut builder);
@@ -772,7 +1035,7 @@ fn wrapped_ascii_label_reuses_fast_fit_layout_and_clean_atlas() {
         .count();
     assert_eq!(warm_glyph_runs, first_glyph_runs);
     assert_eq!(uploader.creates, 1);
-    assert_eq!(uploader.updates, 1);
+    assert_eq!(uploader.updates, 0);
 }
 
 #[test]
@@ -847,7 +1110,7 @@ fn text_ctx_retained_atlas_snapshot_requires_clean_gpu_upload() {
 }
 
 #[test]
-fn text_input_reuses_shape_cache_and_dirty_atlas_uploads() {
+fn text_input_reuses_shape_cache_and_skips_clean_atlas_uploads() {
     let mut text = TextCtx::default();
     let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
         include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
@@ -868,13 +1131,7 @@ fn text_input_reuses_shape_cache_and_dirty_atlas_uploads() {
         &mut builder,
     );
     assert_eq!(uploader.creates, 1);
-    assert_eq!(uploader.updates, 1);
-    let Some((_, _, w, h, row_bytes)) = uploader.last_update else {
-        panic!("expected dirty text-input atlas upload");
-    };
-    assert!(w < 1024);
-    assert!(h < 1024);
-    assert_eq!(row_bytes, 1024);
+    assert_eq!(uploader.updates, 0);
 
     builder.clear();
     input.encode(
@@ -886,7 +1143,7 @@ fn text_input_reuses_shape_cache_and_dirty_atlas_uploads() {
         &mut builder,
     );
     assert_eq!(uploader.creates, 1);
-    assert_eq!(uploader.updates, 1);
+    assert_eq!(uploader.updates, 0);
 }
 
 #[derive(Default)]

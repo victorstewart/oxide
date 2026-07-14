@@ -1244,6 +1244,23 @@ impl ui::elements::ImageUploader for MtlUploader {
     ) {
         unsafe { (*self.renderer).image_update_a8(handle, x, y, w, h, data, row_bytes) }
     }
+
+    fn append_a8(
+        &mut self,
+        handle: gfx_api::ImageHandle,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        data: &[u8],
+        row_bytes: usize,
+    ) {
+        unsafe { (*self.renderer).image_append_a8(handle, x, y, w, h, data, row_bytes) }
+    }
+
+    fn release_a8(&mut self, handle: gfx_api::ImageHandle) {
+        unsafe { (*self.renderer).image_release(handle) }
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -2285,6 +2302,9 @@ pub extern "C" fn oxide_host_on_memory_warning() {
             renderer.purge_layer_cache_for_memory_warning();
             renderer.purge_id_mask_field_cache();
             renderer.purge_prepared_chunks();
+        }
+        if let Some(router) = app.router.as_mut() {
+            router.trim_memory();
         }
         mark_frame_dirty(app);
         if let Some(ops) = app.telemetry_ops.as_ref() {

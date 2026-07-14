@@ -585,6 +585,65 @@ fn prepared_snapshot_invalidates_referenced_resource_generations()
 }
 
 #[test]
+fn append_only_glyph_upload_preserves_unrelated_prepared_chunks()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(128, 96, 1.0).expect("resize");
+   let image = renderer.image_create_rgba8(2, 2, &[255; 16], 8);
+   let atlas = renderer.image_create_a8(8, 8, &[255; 64], 8);
+   let snapshot = prepared_mixed_snapshot(image, atlas, 1);
+
+   let frame = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot).expect("prepare atlas chunks");
+   renderer.submit(frame).expect("submit atlas chunks");
+   let _ = renderer.readback_bgra8().expect("drain atlas chunks");
+   assert_eq!(renderer.prepared_cache_entry_count(), 4);
+
+   renderer.image_append_a8(atlas, 6, 6, 2, 2, &[192; 4], 2);
+   assert_eq!(renderer.image_generation(atlas), Some(1));
+   assert_eq!(renderer.prepared_cache_entry_count(), 4);
+
+   let frame = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot).expect("reuse append-only atlas chunks");
+   renderer.submit(frame).expect("submit reused atlas chunks");
+   let stats = renderer.last_stats();
+   let _ = renderer.readback_bgra8().expect("drain reused atlas chunks");
+   assert_eq!(stats.backend_cache_hits, 4);
+   assert_eq!(stats.backend_cache_misses, 0);
+   assert_eq!(stats.chunks_prepared, 0);
+}
+
+#[test]
+fn recycling_one_glyph_page_rebuilds_only_its_prepared_chunk()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(96, 64, 1.0).expect("resize");
+   let first_page = renderer.image_create_a8(2, 2, &[255; 4], 2);
+   let stable_page = renderer.image_create_a8(2, 2, &[192; 4], 2);
+   let first = two_glyph_page_snapshot(first_page, stable_page);
+
+   let frame = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&first).expect("prepare two glyph pages");
+   renderer.submit(frame).expect("submit two glyph pages");
+   let _ = renderer.readback_bgra8().expect("drain two glyph pages");
+   assert_eq!(renderer.prepared_cache_entry_count(), 2);
+
+   renderer.image_release(first_page);
+   assert_eq!(renderer.prepared_cache_entry_count(), 1);
+   let replacement_page = renderer.image_create_a8(2, 2, &[128; 4], 2);
+   let recycled = two_glyph_page_snapshot(replacement_page, stable_page);
+   let frame = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&recycled).expect("encode recycled glyph page");
+   renderer.submit(frame).expect("submit recycled glyph page");
+   let stats = renderer.last_stats();
+   let _ = renderer.readback_bgra8().expect("drain recycled glyph page");
+   assert_eq!(stats.backend_cache_hits, 1);
+   assert_eq!(stats.backend_cache_misses, 1);
+   assert_eq!(stats.chunks_prepared, 1);
+   assert_eq!(renderer.prepared_cache_entry_count(), 2);
+}
+
+#[test]
 fn prepared_layer_clean_hit_composites_without_body_work_and_matches_flat_pixels()
 {
    let width = 160_u32;
@@ -1258,6 +1317,44 @@ fn prepared_image_snapshot(image: api::ImageHandle, generation: u64) -> api::Ren
       Vec::new(),
       api::Damage { rects: Vec::new() },
    ).expect("image snapshot")
+}
+
+fn two_glyph_page_snapshot(
+   first_page: api::ImageHandle,
+   second_page: api::ImageHandle,
+) -> api::RenderSnapshot
+{
+   let chunk = |id, atlas, x| api::RenderChunk::new(
+      api::RenderChunkId(id),
+      api::RenderChunkRevisions { resource: 1, geometry: 1, ..api::RenderChunkRevisions::default() },
+      api::DrawList {
+         items: vec![api::DrawCmd::GlyphRun { run: api::GlyphRun {
+            atlas,
+            atlas_revision: 1,
+            vb: api::VertexSpan { offset: 0, len: 4 },
+            ib: api::IndexSpan { offset: 0, len: 6 },
+            sdf: false,
+            color: api::Color::rgba(0.3, 0.8, 1.0, 1.0),
+         }}],
+         vertices: vec![
+            api::Vertex { x, y: 8.0, u: 0.0, v: 0.0, rgba: 0 },
+            api::Vertex { x: x + 24.0, y: 8.0, u: 1.0, v: 0.0, rgba: 0 },
+            api::Vertex { x, y: 32.0, u: 0.0, v: 1.0, rgba: 0 },
+            api::Vertex { x: x + 24.0, y: 32.0, u: 1.0, v: 1.0, rgba: 0 },
+         ],
+         indices: vec![0, 1, 2, 2, 1, 3],
+      },
+      api::ChunkIndexMode::Local,
+      &[api::RenderResourceDependency { image: atlas, generation: 1 }],
+   ).expect("glyph page chunk");
+   api::RenderSnapshot::new(
+      vec![
+         api::RenderChunkInstance::new(chunk(921, first_page, 8.0), [0.0, 0.0]),
+         api::RenderChunkInstance::new(chunk(922, second_page, 48.0), [0.0, 0.0]),
+      ],
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("two glyph page snapshot")
 }
 
 fn prepared_image_mesh_snapshot(image: api::ImageHandle) -> api::RenderSnapshot

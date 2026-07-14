@@ -3641,6 +3641,32 @@ impl MetalRenderer {
         }
     }
 
+    /// Publishes bytes for atlas slots that have never previously been sampled.
+    /// Existing prepared chunks remain valid because prior texels are unchanged.
+    pub fn image_append_a8(
+        &mut self,
+        handle: api::ImageHandle,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        data: &[u8],
+        row_bytes: usize,
+    ) {
+        if let Some(tex) = self.images.get(&handle.0) {
+            let region = MTLRegion {
+                origin: MTLOrigin { x: x as u64, y: y as u64, z: 0 },
+                size: MTLSize { width: w as u64, height: h as u64, depth: 1 },
+            };
+            let bpr = if row_bytes == 0 { w as usize } else { row_bytes } as u64;
+            tex.replace_region(region, 0, data.as_ptr() as *const _, bpr);
+            self.last_stats.texture_upload_bytes = self
+                .last_stats
+                .texture_upload_bytes
+                .saturating_add(u64::from(w).saturating_mul(u64::from(h)));
+        }
+    }
+
     pub fn image_create_rgba8(
         &mut self,
         w: u32,

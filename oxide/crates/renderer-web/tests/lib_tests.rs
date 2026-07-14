@@ -1479,3 +1479,17 @@ fn wasm_webgpu_prepared_chunks_are_budgeted_and_resource_invalidated()
    assert!(source.contains("had_snapshot_bundle"));
    assert!(source.contains("self.purge_prepared_chunks();"));
 }
+
+#[test]
+fn wasm_webgpu_append_only_glyph_upload_keeps_prepared_dependencies_live()
+{
+   let source = include_str!("../src/wasm/webgpu.rs");
+   let append = source_block(
+      source,
+      "pub fn try_image_append_a8",
+      "pub fn try_image_update_rgba8",
+   );
+   assert!(append.contains("write_image_update"));
+   assert!(!append.contains("invalidate_image_dependents"));
+   assert!(source.contains("self.inner.image_append_a8"));
+}

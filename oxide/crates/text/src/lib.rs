@@ -77,6 +77,7 @@ struct GlyphAtlasEntry {
     l: i16,
     t: i16,
     last_used: u64,
+    generation: u64,
 }
 
 #[derive(Default)]
@@ -296,6 +297,339 @@ impl Atlas {
     }
 }
 
+pub const DEFAULT_GLYPH_ATLAS_PAGE_COUNT: usize = 4;
+
+struct PagedAtlasPage {
+    id: u32,
+    generation: u64,
+    next_slot_generation: u64,
+    atlas: Atlas,
+    pinned: bool,
+    last_used: u64,
+    occupied_bytes: u64,
+    fragmentation_bytes: u64,
+    dirty_rects: Vec<AtlasDirtyRect>,
+    full_republish: bool,
+}
+
+impl PagedAtlasPage {
+    fn new(id: u32, generation: u64, width: u32, height: u32) -> Self {
+        Self {
+            id,
+            generation,
+            next_slot_generation: 1,
+            atlas: Atlas::new(width, height),
+            pinned: false,
+            last_used: 0,
+            occupied_bytes: 0,
+            fragmentation_bytes: 0,
+            dirty_rects: Vec::with_capacity(16),
+            full_republish: false,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.generation = self.generation.wrapping_add(1).max(1);
+        self.atlas.clear_storage();
+        self.pinned = false;
+        self.last_used = 0;
+        self.occupied_bytes = 0;
+        self.fragmentation_bytes = 0;
+        self.dirty_rects.clear();
+        self.full_republish = true;
+    }
+
+    fn alloc_rect(&mut self, w: u32, h: u32) -> Option<(u32, u32)> {
+        let prior_x = self.atlas.next_x;
+        let wrapped = prior_x.saturating_add(w).saturating_add(1) > self.atlas.width;
+        let allocation = self.atlas.alloc_rect(w, h)?;
+        if wrapped {
+            self.fragmentation_bytes = self
+                .fragmentation_bytes
+                .saturating_add(u64::from(self.atlas.width.saturating_sub(prior_x)));
+        }
+        let occupied = u64::from(w).saturating_mul(u64::from(h));
+        let reserved = u64::from(w.saturating_add(1)).saturating_mul(u64::from(h.saturating_add(1)));
+        self.occupied_bytes = self.occupied_bytes.saturating_add(occupied);
+        self.fragmentation_bytes = self
+            .fragmentation_bytes
+            .saturating_add(reserved.saturating_sub(occupied));
+        Some(allocation)
+    }
+
+    fn mark_dirty(&mut self, rect: AtlasDirtyRect) {
+        if self.full_republish {
+            return;
+        }
+        if let Some(last) = self.dirty_rects.last_mut() {
+            let same_strip = last.y == rect.y;
+            let touching = rect.x <= last.x.saturating_add(last.w);
+            if same_strip && touching {
+                let end = last.x.saturating_add(last.w).max(rect.x.saturating_add(rect.w));
+                last.x = last.x.min(rect.x);
+                last.w = end.saturating_sub(last.x);
+                last.h = last.h.max(rect.h);
+                return;
+            }
+        }
+        if self.dirty_rects.len() < self.dirty_rects.capacity() {
+            self.dirty_rects.push(rect);
+            return;
+        }
+        self.generation = self.generation.wrapping_add(1).max(1);
+        self.dirty_rects.clear();
+        self.full_republish = true;
+    }
+
+    fn dirty_union(&self) -> Option<AtlasDirtyRect> {
+        if self.full_republish {
+            return Some(AtlasDirtyRect {
+                x: 0,
+                y: 0,
+                w: self.atlas.width,
+                h: self.atlas.height,
+            });
+        }
+        let mut union: Option<AtlasDirtyRect> = None;
+        for rect in self.dirty_rects.iter().copied() {
+            union = Some(match union {
+                Some(old) => {
+                    let x = old.x.min(rect.x);
+                    let y = old.y.min(rect.y);
+                    let end_x = old.x.saturating_add(old.w).max(rect.x.saturating_add(rect.w));
+                    let end_y = old.y.saturating_add(old.h).max(rect.y.saturating_add(rect.h));
+                    AtlasDirtyRect {
+                        x,
+                        y,
+                        w: end_x.saturating_sub(x),
+                        h: end_y.saturating_sub(y),
+                    }
+                }
+                None => rect,
+            });
+        }
+        union
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PagedAtlasStats {
+    pub pages: usize,
+    pub resident_bytes: u64,
+    pub occupied_bytes: u64,
+    pub fragmentation_bytes: u64,
+    pub slot_generation_high_water: u64,
+    pub evictions: u64,
+}
+
+pub struct PagedAtlas {
+    width: u32,
+    height: u32,
+    max_pages: usize,
+    pages: Vec<PagedAtlasPage>,
+    next_page_id: u32,
+    clock: u64,
+    evictions: u64,
+    revision: u64,
+    frame: Box<AtlasFrameState>,
+}
+
+impl PagedAtlas {
+    pub fn new(width: u32, height: u32, max_pages: usize) -> Self {
+        let mut atlas = Self {
+            width,
+            height,
+            max_pages: max_pages.max(1),
+            pages: Vec::with_capacity(max_pages.max(1)),
+            next_page_id: 2,
+            clock: 0,
+            evictions: 0,
+            revision: 0,
+            frame: Box::new(AtlasFrameState::default()),
+        };
+        atlas.pages.push(PagedAtlasPage::new(1, 1, width, height));
+        atlas
+    }
+
+    #[inline]
+    pub fn page_count(&self) -> usize {
+        self.pages.len()
+    }
+
+    #[inline]
+    pub fn glyph_count(&self) -> usize {
+        self.pages.iter().map(|page| page.atlas.glyph_count()).sum()
+    }
+
+    #[inline]
+    pub fn max_pages(&self) -> usize {
+        self.max_pages
+    }
+
+    #[inline]
+    pub fn byte_budget(&self) -> u64 {
+        u64::from(self.width)
+            .saturating_mul(u64::from(self.height))
+            .saturating_mul(self.max_pages as u64)
+    }
+
+    pub fn stats(&self) -> PagedAtlasStats {
+        let page_bytes = u64::from(self.width).saturating_mul(u64::from(self.height));
+        PagedAtlasStats {
+            pages: self.pages.len(),
+            resident_bytes: page_bytes.saturating_mul(self.pages.len() as u64),
+            occupied_bytes: self.pages.iter().map(|page| page.occupied_bytes).sum(),
+            fragmentation_bytes: self.pages.iter().map(|page| page.fragmentation_bytes).sum(),
+            slot_generation_high_water: self
+                .pages
+                .iter()
+                .map(|page| page.next_slot_generation.saturating_sub(1))
+                .max()
+                .unwrap_or(0),
+            evictions: self.evictions,
+        }
+    }
+
+    pub fn page_image(
+        &self,
+        index: usize,
+    ) -> Option<(u32, u64, &[u8], u32, u32, Option<AtlasDirtyRect>)> {
+        let page = self.pages.get(index)?;
+        let (data, width, height) = page.atlas.image();
+        Some((page.id, page.generation, data, width, height, page.dirty_union()))
+    }
+
+    #[inline]
+    pub fn page_dirty_rect_count(&self, index: usize) -> usize {
+        self.pages.get(index).map_or(0, |page| {
+            if page.full_republish { 0 } else { page.dirty_rects.len() }
+        })
+    }
+
+    #[inline]
+    pub fn page_dirty_rect(&self, index: usize, dirty_index: usize) -> Option<AtlasDirtyRect> {
+        self.pages.get(index)?.dirty_rects.get(dirty_index).copied()
+    }
+
+    pub fn clear_page_dirty(&mut self, page_id: u32) {
+        if let Some(page) = self.pages.iter_mut().find(|page| page.id == page_id) {
+            page.atlas.clear_dirty();
+            page.dirty_rects.clear();
+            page.full_republish = false;
+        }
+    }
+
+    #[inline]
+    pub fn has_dirty_pages(&self) -> bool {
+        self.pages.iter().any(|page| page.full_republish || !page.dirty_rects.is_empty())
+    }
+
+    pub fn reset(&mut self) {
+        let mut first = self.pages.drain(..).next().unwrap_or_else(|| {
+            PagedAtlasPage::new(1, 1, self.width, self.height)
+        });
+        first.reset();
+        self.pages.push(first);
+        self.evictions = 0;
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    #[inline]
+    pub fn clear_dirty(&mut self) {
+        for page in &mut self.pages {
+            page.atlas.clear_dirty();
+            page.dirty_rects.clear();
+            page.full_republish = false;
+        }
+    }
+
+    #[inline]
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    #[inline]
+    pub fn eviction_count(&self) -> u64 {
+        self.evictions
+    }
+
+    #[inline]
+    pub fn glyph_cache_hits(&self) -> u64 {
+        self.frame.counters.as_ref().map_or(0, |counters| counters.glyph_cache_hits)
+    }
+
+    #[inline]
+    pub fn glyph_cache_misses(&self) -> u64 {
+        self.frame.counters.as_ref().map_or(0, |counters| counters.glyph_cache_misses)
+    }
+
+    #[inline]
+    pub fn rasterization_count(&self) -> u64 {
+        self.frame.counters.as_ref().map_or(0, |counters| counters.rasterizations)
+    }
+
+    pub fn set_counters_enabled(&mut self, enabled: bool) {
+        if enabled {
+            self.frame.counters.get_or_insert_with(AtlasCounters::default);
+        } else {
+            self.frame.counters = None;
+        }
+    }
+
+    pub fn begin_frame(&mut self) {
+        for page in &mut self.pages {
+            page.pinned = false;
+        }
+        self.frame.eviction_locked = true;
+    }
+
+    #[inline]
+    pub fn end_frame(&mut self) {
+        self.frame.eviction_locked = false;
+    }
+
+    fn add_page(&mut self) -> usize {
+        let id = self.next_page_id;
+        self.next_page_id = self.next_page_id.wrapping_add(1).max(1);
+        self.pages.push(PagedAtlasPage::new(id, 1, self.width, self.height));
+        self.pages.len() - 1
+    }
+
+    fn page_for_rect(&mut self, w: u32, h: u32) -> Option<(usize, u32, u32)> {
+        if w == 0
+            || h == 0
+            || w.saturating_add(2) > self.width
+            || h.saturating_add(2) > self.height
+        {
+            return None;
+        }
+        for index in 0..self.pages.len() {
+            if self.pages[index].atlas.can_fit_rect(w, h) {
+                if let Some((x, y)) = self.pages[index].alloc_rect(w, h) {
+                    return Some((index, x, y));
+                }
+            }
+        }
+        if self.pages.len() < self.max_pages {
+            let index = self.add_page();
+            let (x, y) = self.pages[index].alloc_rect(w, h)?;
+            return Some((index, x, y));
+        }
+        let index = self
+            .pages
+            .iter()
+            .enumerate()
+            .filter(|(_, page)| !page.pinned)
+            .min_by_key(|(_, page)| (page.last_used, page.id))
+            .map(|(index, _)| index)?;
+        self.pages[index].reset();
+        self.evictions = self.evictions.wrapping_add(1);
+        self.revision = self.revision.wrapping_add(1);
+        let (x, y) = self.pages[index].alloc_rect(w, h)?;
+        Some((index, x, y))
+    }
+}
+
 pub struct TextShaper {}
 
 impl Default for TextShaper {
@@ -391,6 +725,40 @@ impl FallbackShape {
         }
     }
 
+    pub fn bake_paged_into_with(
+        &self,
+        fonts: &FontDb,
+        raster: &mut RasterCtx,
+        atlas: &mut PagedAtlas,
+        draw_vertices: &mut Vec<api::Vertex>,
+        draw_indices: &mut Vec<u16>,
+        runs: &mut Vec<api::GlyphRun>,
+        color: api::Color,
+        origin_x: f32,
+        origin_y: f32,
+        device_scale: f32,
+    ) {
+        let run_start = runs.len();
+        for run in &self.runs {
+            let Some(font) = fonts.font(run.font_id) else {
+                continue;
+            };
+            run.shape.bake_paged_into_with(
+                font,
+                raster,
+                atlas,
+                draw_vertices,
+                draw_indices,
+                runs,
+                color,
+                origin_x + run.x_offset,
+                origin_y,
+                device_scale,
+            );
+        }
+        coalesce_paged_runs(runs, run_start, draw_indices);
+    }
+
     #[doc(hidden)]
     #[cold]
     #[inline(never)]
@@ -452,6 +820,43 @@ impl FallbackShape {
             sdf,
             color,
         }
+    }
+
+    #[doc(hidden)]
+    #[cold]
+    #[inline(never)]
+    pub fn bake_paged_counted_into_with(
+        &self,
+        fonts: &FontDb,
+        raster: &mut RasterCtx,
+        atlas: &mut PagedAtlas,
+        draw_vertices: &mut Vec<api::Vertex>,
+        draw_indices: &mut Vec<u16>,
+        runs: &mut Vec<api::GlyphRun>,
+        color: api::Color,
+        origin_x: f32,
+        origin_y: f32,
+        device_scale: f32,
+    ) {
+        let run_start = runs.len();
+        for run in &self.runs {
+            let Some(font) = fonts.font(run.font_id) else {
+                continue;
+            };
+            run.shape.bake_paged_counted_into_with(
+                font,
+                raster,
+                atlas,
+                draw_vertices,
+                draw_indices,
+                runs,
+                color,
+                origin_x + run.x_offset,
+                origin_y,
+                device_scale,
+            );
+        }
+        coalesce_paged_runs(runs, run_start, draw_indices);
     }
 
     pub fn cursor_map_for_text(&self, text: &str) -> ShapedCursorMap {
@@ -958,6 +1363,56 @@ impl OwnedShape {
         )
     }
 
+    pub fn bake_paged_into_with(
+        &self,
+        font: &Font,
+        raster: &mut RasterCtx,
+        atlas: &mut PagedAtlas,
+        draw_vertices: &mut Vec<api::Vertex>,
+        draw_indices: &mut Vec<u16>,
+        runs: &mut Vec<api::GlyphRun>,
+        color: api::Color,
+        origin_x: f32,
+        origin_y: f32,
+        device_scale: f32,
+    ) {
+        if self.rtl && !clusters_are_descending(self.glyphs.iter().map(|glyph| glyph.cluster)) {
+            let mut glyphs = self.glyphs.clone();
+            glyphs.reverse();
+            bake_paged_glyphs_into::<false>(
+                font,
+                self.font_id,
+                self.px,
+                &glyphs,
+                raster,
+                atlas,
+                draw_vertices,
+                draw_indices,
+                runs,
+                color,
+                origin_x,
+                origin_y,
+                device_scale,
+            );
+            return;
+        }
+        bake_paged_glyphs_into::<false>(
+            font,
+            self.font_id,
+            self.px,
+            &self.glyphs,
+            raster,
+            atlas,
+            draw_vertices,
+            draw_indices,
+            runs,
+            color,
+            origin_x,
+            origin_y,
+            device_scale,
+        );
+    }
+
     #[doc(hidden)]
     #[cold]
     #[inline(never)]
@@ -1008,6 +1463,59 @@ impl OwnedShape {
             origin_y,
             device_scale,
         )
+    }
+
+    #[doc(hidden)]
+    #[cold]
+    #[inline(never)]
+    pub fn bake_paged_counted_into_with(
+        &self,
+        font: &Font,
+        raster: &mut RasterCtx,
+        atlas: &mut PagedAtlas,
+        draw_vertices: &mut Vec<api::Vertex>,
+        draw_indices: &mut Vec<u16>,
+        runs: &mut Vec<api::GlyphRun>,
+        color: api::Color,
+        origin_x: f32,
+        origin_y: f32,
+        device_scale: f32,
+    ) {
+        if self.rtl && !clusters_are_descending(self.glyphs.iter().map(|glyph| glyph.cluster)) {
+            let mut glyphs = self.glyphs.clone();
+            glyphs.reverse();
+            bake_paged_glyphs_into::<true>(
+                font,
+                self.font_id,
+                self.px,
+                &glyphs,
+                raster,
+                atlas,
+                draw_vertices,
+                draw_indices,
+                runs,
+                color,
+                origin_x,
+                origin_y,
+                device_scale,
+            );
+            return;
+        }
+        bake_paged_glyphs_into::<true>(
+            font,
+            self.font_id,
+            self.px,
+            &self.glyphs,
+            raster,
+            atlas,
+            draw_vertices,
+            draw_indices,
+            runs,
+            color,
+            origin_x,
+            origin_y,
+            device_scale,
+        );
     }
 }
 
@@ -1143,6 +1651,37 @@ impl<'a> ShapeOutput<'a> {
             origin_y,
             device_scale,
         )
+    }
+
+
+    pub fn bake_paged_into_with(
+        &self,
+        raster: &mut RasterCtx,
+        atlas: &mut PagedAtlas,
+        draw_vertices: &mut Vec<api::Vertex>,
+        draw_indices: &mut Vec<u16>,
+        runs: &mut Vec<api::GlyphRun>,
+        color: api::Color,
+        origin_x: f32,
+        origin_y: f32,
+        device_scale: f32,
+    ) {
+        let glyphs = self.visual_glyphs();
+        bake_paged_glyphs_into::<false>(
+            self.font,
+            self.font_id,
+            self.px,
+            &glyphs,
+            raster,
+            atlas,
+            draw_vertices,
+            draw_indices,
+            runs,
+            color,
+            origin_x,
+            origin_y,
+            device_scale,
+        );
     }
 }
 
@@ -1405,6 +1944,319 @@ fn add_prefix_width(widths: &mut [f32], boundaries: &[usize], end: usize, width:
     widths[bucket] += width;
 }
 
+fn finish_paged_run(
+    runs: &mut Vec<api::GlyphRun>,
+    page_id: u32,
+    v_start: u32,
+    i_start: u32,
+    draw_vertices: &[api::Vertex],
+    draw_indices: &[u16],
+    sdf: bool,
+    color: api::Color,
+) {
+    let v_end = draw_vertices.len() as u32;
+    let i_end = draw_indices.len() as u32;
+    if v_end == v_start || i_end == i_start {
+        return;
+    }
+    runs.push(api::GlyphRun {
+        atlas: api::ImageHandle(0),
+        atlas_revision: u64::from(page_id),
+        vb: api::VertexSpan { offset: v_start, len: v_end - v_start },
+        ib: api::IndexSpan { offset: i_start, len: i_end - i_start },
+        sdf,
+        color,
+    });
+}
+
+fn coalesce_paged_runs(runs: &mut Vec<api::GlyphRun>, start: usize, indices: &mut [u16]) {
+    let mut index = start.saturating_add(1);
+    while index < runs.len() {
+        let prior = runs[index - 1];
+        let current = runs[index];
+        let vertex_base = current.vb.offset.saturating_sub(prior.vb.offset);
+        let compatible = prior.atlas == current.atlas
+            && prior.atlas_revision == current.atlas_revision
+            && prior.sdf == current.sdf
+            && prior.color == current.color
+            && prior.vb.offset.saturating_add(prior.vb.len) == current.vb.offset
+            && prior.ib.offset.saturating_add(prior.ib.len) == current.ib.offset
+            && vertex_base.saturating_add(current.vb.len) <= u16::MAX as u32;
+        if !compatible {
+            index += 1;
+            continue;
+        }
+        let first = current.ib.offset as usize;
+        let end = first.saturating_add(current.ib.len as usize).min(indices.len());
+        let Some(base) = u16::try_from(vertex_base).ok() else {
+            index += 1;
+            continue;
+        };
+        for value in &mut indices[first..end] {
+            *value = value.saturating_add(base);
+        }
+        runs[index - 1].vb.len = prior.vb.len.saturating_add(current.vb.len);
+        runs[index - 1].ib.len = prior.ib.len.saturating_add(current.ib.len);
+        runs.remove(index);
+    }
+}
+
+fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
+    font: &Font,
+    font_id: usize,
+    px: f32,
+    glyphs: &[ShapedGlyph],
+    raster: &mut RasterCtx,
+    atlas: &mut PagedAtlas,
+    draw_vertices: &mut Vec<api::Vertex>,
+    draw_indices: &mut Vec<u16>,
+    runs: &mut Vec<api::GlyphRun>,
+    color: api::Color,
+    origin_x: f32,
+    origin_y: f32,
+    device_scale: f32,
+) {
+    let mut pen_x = 0.0_f32;
+    let mut pen_y = 0.0_f32;
+    let scale = if device_scale > 0.0 { device_scale } else { 1.0 };
+    let ox = (origin_x * scale).round() / scale;
+    let oy = (origin_y * scale).round() / scale;
+    let use_sdf = (px * device_scale) >= 24.0;
+    let mut scaler = None;
+    let mut render = None;
+    let mut current_run: Option<(u32, u32, u32)> = None;
+    let mut glyph_cache_misses = 0_u64;
+    let mut rasterizations = 0_u64;
+    let glyph_cache_queries = glyphs.len() as u64;
+    let rgba = pack_rgba(color);
+
+    for glyph in glyphs.iter().copied() {
+        let key =
+            GlyphKey { font: font_id, gid: glyph.glyph_id, px: px.round() as u16, sdf: use_sdf };
+        let mut cached = None;
+        let next_clock = atlas.clock.wrapping_add(1);
+        for page_index in 0..atlas.pages.len() {
+            let page = &mut atlas.pages[page_index];
+            if let Some(stored) = page.atlas.map.get_mut(&key) {
+                stored.last_used = next_clock;
+                let entry = stored.clone();
+                debug_assert_ne!(entry.generation, 0);
+                page.last_used = next_clock;
+                page.pinned |= entry.w != 0 && entry.h != 0;
+                cached = Some((page_index, entry));
+                break;
+            }
+        }
+
+        let (page_index, entry) = if let Some(cached) = cached {
+            atlas.clock = next_clock;
+            cached
+        } else {
+            glyph_cache_misses = glyph_cache_misses.wrapping_add(1);
+            let mut img = Image::new();
+            if scaler.is_none() {
+                let Some(fontref) = swash::FontRef::from_index(&font.data, 0) else {
+                    pen_x += glyph.x_advance as f32 / 64.0;
+                    pen_y += glyph.y_advance as f32 / 64.0;
+                    continue;
+                };
+                scaler = Some(raster.scale.builder(fontref).size(px).hint(true).build());
+            }
+            let Some(scaler) = scaler.as_mut() else {
+                pen_x += glyph.x_advance as f32 / 64.0;
+                pen_y += glyph.y_advance as f32 / 64.0;
+                continue;
+            };
+            let render = render.get_or_insert_with(|| Render::new(&[Source::Outline]));
+            rasterizations = rasterizations.wrapping_add(1);
+            if !render.render_into(scaler, glyph.glyph_id, &mut img) {
+                let page = &mut atlas.pages[0];
+                atlas.clock = atlas.clock.wrapping_add(1);
+                let generation = page.next_slot_generation;
+                page.next_slot_generation = page.next_slot_generation.wrapping_add(1).max(1);
+                page.atlas.map.insert(key, GlyphAtlasEntry {
+                    u: 0,
+                    v: 0,
+                    w: 0,
+                    h: 0,
+                    l: 0,
+                    t: 0,
+                    last_used: atlas.clock,
+                    generation,
+                });
+                page.last_used = atlas.clock;
+                pen_x += glyph.x_advance as f32 / 64.0;
+                pen_y += glyph.y_advance as f32 / 64.0;
+                continue;
+            }
+            let w = img.placement.width.max(0);
+            let h = img.placement.height.max(0);
+            if w == 0 || h == 0 {
+                let page = &mut atlas.pages[0];
+                atlas.clock = atlas.clock.wrapping_add(1);
+                let generation = page.next_slot_generation;
+                page.next_slot_generation = page.next_slot_generation.wrapping_add(1).max(1);
+                page.atlas.map.insert(key, GlyphAtlasEntry {
+                    u: 0,
+                    v: 0,
+                    w: 0,
+                    h: 0,
+                    l: img.placement.left as i16,
+                    t: img.placement.top as i16,
+                    last_used: atlas.clock,
+                    generation,
+                });
+                page.last_used = atlas.clock;
+                pen_x += glyph.x_advance as f32 / 64.0;
+                pen_y += glyph.y_advance as f32 / 64.0;
+                continue;
+            }
+            let (aw, ah) = (w as u32, h as u32);
+            let Some((page_index, ax, ay)) = atlas.page_for_rect(aw, ah) else {
+                pen_x += glyph.x_advance as f32 / 64.0;
+                pen_y += glyph.y_advance as f32 / 64.0;
+                continue;
+            };
+            let page = &mut atlas.pages[page_index];
+            if use_sdf {
+                let mut sdf_row = vec![0u8; aw as usize];
+                let spread = 8_i32;
+                for yy in 0..ah as i32 {
+                    for xx in 0..aw as i32 {
+                        let idx = (yy as usize) * (aw as usize) + (xx as usize);
+                        let a = img.data[idx] as f32 / 255.0;
+                        let inside = a > 0.5;
+                        let mut min_d2 = (spread + 1) * (spread + 1);
+                        for dy in -spread..=spread {
+                            let y2 = yy + dy;
+                            if y2 < 0 || y2 >= ah as i32 {
+                                continue;
+                            }
+                            for dx in -spread..=spread {
+                                let x2 = xx + dx;
+                                if x2 < 0 || x2 >= aw as i32 {
+                                    continue;
+                                }
+                                let j = (y2 as usize) * (aw as usize) + (x2 as usize);
+                                let inside2 = (img.data[j] as f32 / 255.0) > 0.5;
+                                if inside2 != inside {
+                                    min_d2 = min_d2.min(dx * dx + dy * dy);
+                                }
+                            }
+                        }
+                        let distance = (min_d2 as f32).sqrt();
+                        let signed = if inside { distance } else { -distance };
+                        let value = (0.5 + signed / (2.0 * spread as f32)).clamp(0.0, 1.0);
+                        sdf_row[xx as usize] = (value * 255.0).round() as u8;
+                    }
+                    let offset = (ay as usize + yy as usize) * page.atlas.width as usize
+                        + ax as usize;
+                    page.atlas.data[offset..offset + aw as usize].copy_from_slice(&sdf_row);
+                }
+            } else {
+                for row in 0..ah as usize {
+                    let source = row * aw as usize;
+                    let destination = (ay as usize + row) * page.atlas.width as usize
+                        + ax as usize;
+                    page.atlas.data[destination..destination + aw as usize]
+                        .copy_from_slice(&img.data[source..source + aw as usize]);
+                }
+            }
+            page.mark_dirty(AtlasDirtyRect { x: ax, y: ay, w: aw, h: ah });
+            atlas.clock = atlas.clock.wrapping_add(1);
+            let generation = page.next_slot_generation;
+            page.next_slot_generation = page.next_slot_generation.wrapping_add(1).max(1);
+            let entry = GlyphAtlasEntry {
+                u: ax as u16,
+                v: ay as u16,
+                w: aw as u16,
+                h: ah as u16,
+                l: img.placement.left as i16,
+                t: img.placement.top as i16,
+                last_used: atlas.clock,
+                generation,
+            };
+            page.atlas.map.insert(key, entry.clone());
+            page.last_used = atlas.clock;
+            page.pinned = true;
+            (page_index, entry)
+        };
+
+        if entry.w == 0 || entry.h == 0 {
+            pen_x += glyph.x_advance as f32 / 64.0;
+            pen_y += glyph.y_advance as f32 / 64.0;
+            continue;
+        }
+        let page_id = atlas.pages[page_index].id;
+        let needs_run = current_run.map_or(true, |(current_page, v_start, _)| {
+            current_page != page_id
+                || (draw_vertices.len() as u32)
+                    .saturating_sub(v_start)
+                    .saturating_add(4)
+                    > u16::MAX as u32
+        });
+        if needs_run {
+            if let Some((prior_page, v_start, i_start)) = current_run.take() {
+                finish_paged_run(
+                    runs,
+                    prior_page,
+                    v_start,
+                    i_start,
+                    draw_vertices,
+                    draw_indices,
+                    use_sdf,
+                    color,
+                );
+            }
+            current_run = Some((page_id, draw_vertices.len() as u32, draw_indices.len() as u32));
+        }
+        let Some((_, v_start, _)) = current_run else {
+            continue;
+        };
+        let run_vertex_base = (draw_vertices.len() as u32).saturating_sub(v_start);
+        let gx = ox + pen_x + entry.l as f32;
+        let gy = oy + pen_y - entry.t as f32;
+        let gw = entry.w as f32;
+        let gh = entry.h as f32;
+        let atlas_w = atlas.width.max(1) as f32;
+        let atlas_h = atlas.height.max(1) as f32;
+        let u0 = entry.u as f32 / atlas_w;
+        let v0 = entry.v as f32 / atlas_h;
+        let u1 = (entry.u as f32 + entry.w as f32) / atlas_w;
+        let v1 = (entry.v as f32 + entry.h as f32) / atlas_h;
+        push_v(draw_vertices, gx, gy, u0, v0, rgba);
+        push_v(draw_vertices, gx + gw, gy, u1, v0, rgba);
+        push_v(draw_vertices, gx, gy + gh, u0, v1, rgba);
+        push_v(draw_vertices, gx + gw, gy + gh, u1, v1, rgba);
+        push_i(draw_indices, run_vertex_base, run_vertex_base + 1, run_vertex_base + 2);
+        push_i(draw_indices, run_vertex_base + 2, run_vertex_base + 1, run_vertex_base + 3);
+
+        pen_x += glyph.x_advance as f32 / 64.0;
+        pen_y += glyph.y_advance as f32 / 64.0;
+    }
+    if let Some((page_id, v_start, i_start)) = current_run {
+        finish_paged_run(
+            runs,
+            page_id,
+            v_start,
+            i_start,
+            draw_vertices,
+            draw_indices,
+            use_sdf,
+            color,
+        );
+    }
+    if COUNT_STATS {
+        if let Some(counters) = atlas.frame.counters.as_mut() {
+            counters.glyph_cache_hits = counters
+                .glyph_cache_hits
+                .wrapping_add(glyph_cache_queries.saturating_sub(glyph_cache_misses));
+            counters.glyph_cache_misses = counters.glyph_cache_misses.wrapping_add(glyph_cache_misses);
+            counters.rasterizations = counters.rasterizations.wrapping_add(rasterizations);
+        }
+    }
+}
+
 fn bake_glyphs_into<const COUNT_STATS: bool>(
     font: &Font,
     font_id: usize,
@@ -1559,6 +2411,7 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
                 l: img.placement.left as i16,
                 t: img.placement.top as i16,
                 last_used: atlas.clock.wrapping_add(1),
+                generation: 1,
             };
             atlas.clock = e.last_used;
             atlas.map.insert(key, e.clone());
@@ -1629,6 +2482,7 @@ fn cache_empty_glyph_entry(atlas: &mut Atlas, key: GlyphKey, left: i16, top: i16
         l: left,
         t: top,
         last_used: atlas.clock.wrapping_add(1),
+        generation: 1,
     };
     atlas.clock = e.last_used;
     atlas.map.insert(key, e);

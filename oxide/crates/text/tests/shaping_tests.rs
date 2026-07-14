@@ -1,5 +1,5 @@
 use oxide_renderer_api as api;
-use oxide_text::{Atlas, CaretAffinity, Font, FontDb, TextShaper};
+use oxide_text::{Atlas, CaretAffinity, Font, FontDb, PagedAtlas, RasterCtx, TextShaper};
 
 const LATIN_FONT: &[u8] = include_bytes!("fixtures/test_text_latin.ttf");
 const CJK_FONT: &[u8] = include_bytes!("fixtures/test_text_cjk.ttf");
@@ -11,6 +11,158 @@ fn load_font(data: &[u8]) -> Font {
 
 fn load_macos_hebrew_font() -> Option<Font> {
     std::fs::read(MACOS_HEBREW_FONT).ok().map(Font::from_bytes)
+}
+
+fn bake_paged_text(
+    shaper: &mut TextShaper,
+    font: &Font,
+    font_id: usize,
+    value: &str,
+    px: f32,
+    raster: &mut RasterCtx,
+    atlas: &mut PagedAtlas,
+) -> Vec<api::GlyphRun> {
+    let shaped = shaper.shape(font, font_id, value, px).expect("shape paged text");
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    let mut runs = Vec::new();
+    shaped.bake_paged_into_with(
+        raster,
+        atlas,
+        &mut vertices,
+        &mut indices,
+        &mut runs,
+        api::Color::rgba(0.2, 0.4, 0.8, 1.0),
+        0.0,
+        24.0,
+        1.0,
+    );
+    runs
+}
+
+#[test]
+fn paged_atlas_recycles_only_the_unpinned_page_generation() {
+    let mut db = FontDb::default();
+    let font_id = db.add_font(load_font(LATIN_FONT));
+    let font = db.font(font_id).expect("latin font");
+    let mut shaper = TextShaper::default();
+    let mut raster = RasterCtx::default();
+    let mut atlas = PagedAtlas::new(24, 24, 2);
+    let mut glyph_pages = Vec::new();
+
+    atlas.begin_frame();
+    for ch in 'A'..='Z' {
+        let runs = bake_paged_text(
+            &mut shaper,
+            font,
+            font_id,
+            &ch.to_string(),
+            18.0,
+            &mut raster,
+            &mut atlas,
+        );
+        if let Some(run) = runs.first() {
+            glyph_pages.push((ch, run.atlas_revision as u32));
+        }
+        if atlas.page_count() == 2
+            && glyph_pages.iter().map(|(_, page)| *page).collect::<std::collections::HashSet<_>>().len() == 2
+        {
+            break;
+        }
+    }
+    atlas.end_frame();
+
+    let first_id = atlas.page_image(0).expect("first page").0;
+    let second = atlas.page_image(1).expect("second page");
+    let second_id = second.0;
+    let second_generation = second.1;
+    let pinned_char = glyph_pages
+        .iter()
+        .find(|(_, page)| *page == second_id)
+        .map(|(ch, _)| *ch)
+        .expect("glyph on second page");
+
+    atlas.begin_frame();
+    let _ = bake_paged_text(
+        &mut shaper,
+        font,
+        font_id,
+        &pinned_char.to_string(),
+        18.0,
+        &mut raster,
+        &mut atlas,
+    );
+    for px in 19..=31 {
+        for ch in 'a'..='z' {
+            let _ = bake_paged_text(
+                &mut shaper,
+                font,
+                font_id,
+                &ch.to_string(),
+                px as f32,
+                &mut raster,
+                &mut atlas,
+            );
+            if atlas.eviction_count() > 0 {
+                break;
+            }
+        }
+        if atlas.eviction_count() > 0 {
+            break;
+        }
+    }
+    atlas.end_frame();
+
+    let first = atlas.page_image(0).expect("recycled first page");
+    let second = atlas.page_image(1).expect("pinned second page");
+    assert_eq!(first.0, first_id);
+    assert!(first.1 > 1);
+    assert_eq!((second.0, second.1), (second_id, second_generation));
+    assert_eq!(atlas.page_count(), 2);
+    assert_eq!(atlas.stats().resident_bytes, atlas.byte_budget());
+    assert!(atlas.stats().fragmentation_bytes > 0);
+    assert!(atlas.stats().slot_generation_high_water > 0);
+    assert_eq!(atlas.eviction_count(), 1);
+}
+
+#[test]
+fn paged_atlas_reset_purges_extra_pages_and_advances_the_survivor() {
+    let mut db = FontDb::default();
+    let font_id = db.add_font(load_font(LATIN_FONT));
+    let font = db.font(font_id).expect("latin font");
+    let mut shaper = TextShaper::default();
+    let mut raster = RasterCtx::default();
+    let mut atlas = PagedAtlas::new(24, 24, 3);
+
+    atlas.begin_frame();
+    for ch in 'A'..='Z' {
+        let _ = bake_paged_text(
+            &mut shaper,
+            font,
+            font_id,
+            &ch.to_string(),
+            16.0,
+            &mut raster,
+            &mut atlas,
+        );
+        if atlas.page_count() > 1 {
+            break;
+        }
+    }
+    atlas.end_frame();
+    assert!(atlas.page_count() > 1);
+    let first = atlas.page_image(0).expect("first page before purge");
+    let first_id = first.0;
+    let first_generation = first.1;
+
+    atlas.reset();
+
+    let first = atlas.page_image(0).expect("first page after purge");
+    assert_eq!(atlas.page_count(), 1);
+    assert_eq!(first.0, first_id);
+    assert!(first.1 > first_generation);
+    assert!(first.5.is_some());
+    assert!(atlas.stats().resident_bytes <= atlas.byte_budget());
 }
 
 #[test]

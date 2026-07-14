@@ -60,6 +60,21 @@ impl ui::elements::ImageUploader for MtlUploader {
     ) {
         unsafe { (*self.renderer).image_update_a8(handle, x, y, w, h, data, row_bytes) }
     }
+    fn append_a8(
+        &mut self,
+        handle: gfx_api::ImageHandle,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        data: &[u8],
+        row_bytes: usize,
+    ) {
+        unsafe { (*self.renderer).image_append_a8(handle, x, y, w, h, data, row_bytes) }
+    }
+    fn release_a8(&mut self, handle: gfx_api::ImageHandle) {
+        unsafe { (*self.renderer).image_release(handle) }
+    }
 }
 
 #[derive(Default)]

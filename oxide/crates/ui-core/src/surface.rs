@@ -1324,8 +1324,8 @@ impl UiSurface {
         b: &mut DrawListBuilder,
         text: &TextCtx,
     ) -> RetainedDrawStatus {
-        if let Some(atlas) = text.retained_text_atlas_revision() {
-            self.encode_retained_impl(b, Some(core::slice::from_ref(&atlas)))
+        if let Some(atlases) = text.retained_text_atlas_revisions() {
+            self.encode_retained_impl(b, Some(atlases))
         } else {
             self.encode_retained_impl(b, None)
         }
@@ -1606,12 +1606,12 @@ impl SurfaceRouter {
         builder: &mut DrawListBuilder,
         text: &TextCtx,
     ) {
-        if let Some(atlas) = text.retained_text_atlas_revision() {
+        if let Some(atlases) = text.retained_text_atlas_revisions() {
             self.encode_with_overlays_impl(
                 viewport,
                 device_scale,
                 builder,
-                Some(core::slice::from_ref(&atlas)),
+                Some(atlases),
             );
         } else {
             self.encode_with_overlays_impl(viewport, device_scale, builder, None);

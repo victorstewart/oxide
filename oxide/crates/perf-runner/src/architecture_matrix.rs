@@ -55,12 +55,20 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
    push_if_allowed(cases, "cpu.architecture.text.script_fallback_matrix", || text_script_matrix_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.scale_sdf_matrix", || text_scale_sdf_matrix_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.atlas_eviction", || text_atlas_eviction_case(smoke));
+   push_if_allowed(cases, "cpu.architecture.text.paged_atlas_locality", || {
+      text_paged_atlas_locality_case(smoke)
+   });
    let id = "gpu.architecture.text.new_labels_200";
    if perf_case_allowed(id)
    {
       let frame_scoped = std::env::var("OXIDE_C43_TEXT_FRAME_SCOPED")
          .map_or(true, |value| value != "0");
       cases.push(metal_text_new_labels_case(id, smoke, frame_scoped)?);
+   }
+   let id = "gpu.architecture.text.paged_atlas_locality";
+   if perf_case_allowed(id)
+   {
+      cases.push(metal_text_paged_atlas_locality_case(id, smoke)?);
    }
    push_if_allowed(cases, "cpu.architecture.layers.matrix", || layer_matrix_case(smoke));
 
@@ -2218,6 +2226,35 @@ impl ui::elements::ImageUploader for ArchitectureTextMetalUploader
          (*self.renderer).image_update_a8(handle, x, y, w, h, data, row_bytes)
       }
    }
+
+   fn append_a8(
+      &mut self,
+      handle: api::ImageHandle,
+      x: u32,
+      y: u32,
+      w: u32,
+      h: u32,
+      data: &[u8],
+      row_bytes: usize,
+   )
+   {
+      let pixels = u64::from(w).saturating_mul(u64::from(h));
+      self.updates = self.updates.saturating_add(1);
+      self.upload_pixels = self.upload_pixels.saturating_add(pixels);
+      self.upload_bytes = self.upload_bytes.saturating_add(pixels);
+      unsafe
+      {
+         (*self.renderer).image_append_a8(handle, x, y, w, h, data, row_bytes)
+      }
+   }
+
+   fn release_a8(&mut self, handle: api::ImageHandle)
+   {
+      unsafe
+      {
+         (*self.renderer).image_release(handle)
+      }
+   }
 }
 
 fn metal_text_new_labels_case(id: &str, smoke: bool, frame_scoped: bool) -> Result<PerfCaseResult>
@@ -2421,6 +2458,179 @@ fn metal_text_new_labels_case(id: &str, smoke: bool, frame_scoped: bool) -> Resu
    })
 }
 
+fn glyph_page_snapshot(
+   first_page: api::ImageHandle,
+   first_generation: u64,
+   second_page: api::ImageHandle,
+   second_generation: u64,
+) -> api::RenderSnapshot
+{
+   let chunk = |id, atlas, generation, x| api::RenderChunk::new(
+      api::RenderChunkId(id),
+      api::RenderChunkRevisions { resource: generation, geometry: 1, ..api::RenderChunkRevisions::default() },
+      api::DrawList {
+         items: vec![api::DrawCmd::GlyphRun { run: api::GlyphRun {
+            atlas,
+            atlas_revision: generation,
+            vb: api::VertexSpan { offset: 0, len: 4 },
+            ib: api::IndexSpan { offset: 0, len: 6 },
+            sdf: false,
+            color: api::Color::rgba(0.2, 0.8, 1.0, 1.0),
+         }}],
+         vertices: vec![
+            api::Vertex { x, y: 8.0, u: 0.0, v: 0.0, rgba: 0 },
+            api::Vertex { x: x + 24.0, y: 8.0, u: 1.0, v: 0.0, rgba: 0 },
+            api::Vertex { x, y: 32.0, u: 0.0, v: 1.0, rgba: 0 },
+            api::Vertex { x: x + 24.0, y: 32.0, u: 1.0, v: 1.0, rgba: 0 },
+         ],
+         indices: vec![0, 1, 2, 2, 1, 3],
+      },
+      api::ChunkIndexMode::Local,
+      &[api::RenderResourceDependency { image: atlas, generation }],
+   ).expect("valid glyph page benchmark chunk");
+   api::RenderSnapshot::new(
+      vec![
+         api::RenderChunkInstance::new(chunk(9441, first_page, first_generation, 8.0), [0.0, 0.0]),
+         api::RenderChunkInstance::new(chunk(9442, second_page, second_generation, 48.0), [0.0, 0.0]),
+      ],
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("valid glyph page benchmark snapshot")
+}
+
+fn metal_text_paged_atlas_locality_case(id: &str, smoke: bool) -> Result<PerfCaseResult>
+{
+   let paged = std::env::var("OXIDE_C44_PAGED_ATLAS").map_or(true, |value| value != "0");
+   let mut renderer = metal::MetalRenderer::new_default().context("creating glyph-page Metal renderer")?;
+   renderer.resize(96, 64, 1.0).context("resizing glyph-page Metal renderer")?;
+   let page_bytes = 64_u64 * 64;
+   let mut first_page;
+   let second_page;
+   let mut first_generation = 1_u64;
+   if paged
+   {
+      first_page = renderer.image_create_a8(64, 64, &[255; 64 * 64], 64);
+      second_page = renderer.image_create_a8(64, 64, &[255; 64 * 64], 64);
+   }
+   else
+   {
+      first_page = renderer.image_create_a8(128, 64, &[255; 128 * 64], 128);
+      second_page = first_page;
+   }
+   let warm = glyph_page_snapshot(first_page, first_generation, second_page, first_generation);
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&warm).context("preparing glyph-page benchmark")?;
+   renderer.submit(token).context("submitting glyph-page benchmark warmup")?;
+   let _ = last_metal_stats_after_submit(&renderer, token.0);
+
+   let warmups = if smoke { 1_usize } else { 3 };
+   let frames = if smoke {
+      3_usize
+   } else {
+      std::env::var("OXIDE_C44_METAL_FRAMES")
+         .ok()
+         .and_then(|value| value.parse::<usize>().ok())
+         .filter(|frames| *frames >= 16)
+         .unwrap_or(32)
+   };
+   let mut frame_samples = Vec::with_capacity(frames);
+   let mut warmup_frame_samples = Vec::with_capacity(warmups);
+   let mut encode_samples = Vec::with_capacity(frames);
+   let mut gpu_samples = Vec::with_capacity(frames);
+   let mut cache_hits = 0_u64;
+   let mut cache_misses = 0_u64;
+   let mut chunks_prepared = 0_u64;
+   let mut draws = 0_u64;
+
+   for frame in 0..warmups.saturating_add(frames)
+   {
+      let started_at = Instant::now();
+      if paged
+      {
+         renderer.image_release(first_page);
+         first_page = renderer.image_create_a8(64, 64, &[255; 64 * 64], 64);
+         first_generation = 1;
+      }
+      else
+      {
+         renderer.image_update_a8(first_page, 0, 0, 2, 2, &[255; 4], 2);
+         first_generation = renderer.image_generation(first_page).unwrap_or(first_generation + 1);
+      }
+      let snapshot = glyph_page_snapshot(
+         first_page,
+         first_generation,
+         second_page,
+         if paged { 1 } else { first_generation },
+      );
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      renderer.encode_snapshot(&snapshot).with_context(|| format!("encoding {id}"))?;
+      renderer.submit(token).with_context(|| format!("submitting {id}"))?;
+      let stats = last_metal_stats_after_submit(&renderer, token.0);
+      if frame < warmups
+      {
+         warmup_frame_samples.push(started_at.elapsed().as_secs_f64() * 1_000.0);
+         continue;
+      }
+      frame_samples.push(started_at.elapsed().as_secs_f64() * 1_000.0);
+      encode_samples.push(stats.encode_ms);
+      gpu_samples.push(stats.gpu_ms);
+      cache_hits = cache_hits.saturating_add(stats.backend_cache_hits);
+      cache_misses = cache_misses.saturating_add(stats.backend_cache_misses);
+      chunks_prepared = chunks_prepared.saturating_add(stats.chunks_prepared);
+      draws = draws.saturating_add(u64::from(stats.draws));
+   }
+
+   let summary = summarize(&frame_samples);
+   let measured = frames.max(1) as f64;
+   let mut metrics = BTreeMap::new();
+   insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+   insert_distribution_metrics(&mut metrics, "encode_ms", &encode_samples);
+   insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+   insert_frame_pacing_metrics(&mut metrics, &frame_samples);
+   metrics.insert(String::from("paged_atlas"), u8::from(paged) as f64);
+   metrics.insert(String::from("glyph_pages"), 2.0);
+   metrics.insert(String::from("atlas_resident_bytes"), (page_bytes * 2) as f64);
+   metrics.insert(String::from("atlas_upload_bytes_avg"), if paged { page_bytes as f64 } else { 4.0 });
+   metrics.insert(String::from("invalidated_chunks_avg"), cache_misses as f64 / measured);
+   metrics.insert(String::from("prepared_cache_hits_avg"), cache_hits as f64 / measured);
+   metrics.insert(String::from("prepared_cache_misses_avg"), cache_misses as f64 / measured);
+   metrics.insert(String::from("chunks_prepared_avg"), chunks_prepared as f64 / measured);
+   metrics.insert(String::from("draws_avg"), draws as f64 / measured);
+   if std::env::var_os("OXIDE_C44_RAW_SAMPLES").is_some()
+   {
+      insert_indexed_samples(&mut metrics, "c44_warmup_frame_ms", &warmup_frame_samples);
+      insert_indexed_samples(&mut metrics, "c44_frame_ms", &frame_samples);
+      insert_indexed_samples(&mut metrics, "c44_encode_ms", &encode_samples);
+      insert_indexed_samples(&mut metrics, "c44_gpu_ms", &gpu_samples);
+   }
+   Ok(PerfCaseResult {
+      id: String::from(id),
+      family: String::from("architecture"),
+      layer: String::from("engine"),
+      scenario: String::from("rendering-architecture"),
+      variant: String::from("oxide"),
+      cache_state: String::from("pressure"),
+      refresh_mode: String::from("offscreen"),
+      unit: String::from("ms/frame"),
+      gated: true,
+      threshold_pct: 0.20,
+      median: summary.median,
+      p95: summary.p95,
+      p99: summary.p99,
+      min: summary.min,
+      max: summary.max,
+      mean: summary.mean,
+      samples: frame_samples.len(),
+      ops_per_sample: 1,
+      notes: vec![String::from(if paged {
+         "Two glyph pages: recycle one handle while the unrelated page retains its prepared chunk."
+      } else {
+         "Single global atlas control: one slot update invalidates both retained glyph chunks."
+      })],
+      metrics,
+   })
+}
+
 fn text_script_matrix_case(smoke: bool) -> PerfCaseResult
 {
    let strings = [
@@ -2499,6 +2709,164 @@ fn text_atlas_eviction_case(smoke: bool) -> PerfCaseResult
    case.metrics.insert(String::from("atlas_resident_glyphs"), stats.resident_glyphs as f64);
    case.metrics.insert(String::from("atlas_dirty_pixels"), stats.dirty_pixels as f64);
    case.metrics.insert(String::from("atlas_revision"), stats.revision as f64);
+   case
+}
+
+#[derive(Default)]
+struct PagedAtlasCpuUploader
+{
+   next: u32,
+   creates: u64,
+   appends: u64,
+   releases: u64,
+   upload_bytes: u64,
+}
+
+impl ui::elements::ImageUploader for PagedAtlasCpuUploader
+{
+   fn create_a8(&mut self, w: u32, h: u32, _data: &[u8], _row_bytes: usize) -> api::ImageHandle
+   {
+      self.next = self.next.saturating_add(1).max(1);
+      self.creates = self.creates.saturating_add(1);
+      self.upload_bytes = self.upload_bytes.saturating_add(u64::from(w).saturating_mul(u64::from(h)));
+      api::ImageHandle(self.next)
+   }
+
+   fn update_a8(
+      &mut self,
+      _handle: api::ImageHandle,
+      _x: u32,
+      _y: u32,
+      _w: u32,
+      _h: u32,
+      _data: &[u8],
+      _row_bytes: usize,
+   )
+   {
+      unreachable!("paged atlas locality uses append-only updates")
+   }
+
+   fn append_a8(
+      &mut self,
+      _handle: api::ImageHandle,
+      _x: u32,
+      _y: u32,
+      w: u32,
+      h: u32,
+      _data: &[u8],
+      _row_bytes: usize,
+   )
+   {
+      self.appends = self.appends.saturating_add(1);
+      self.upload_bytes = self.upload_bytes.saturating_add(u64::from(w).saturating_mul(u64::from(h)));
+   }
+
+   fn release_a8(&mut self, _handle: api::ImageHandle)
+   {
+      self.releases = self.releases.saturating_add(1);
+   }
+}
+
+#[derive(Default)]
+struct PagedAtlasLocalityStats
+{
+   checksum: u64,
+   pages: u64,
+   resident_bytes: u64,
+   occupied_bytes: u64,
+   fragmentation_bytes: u64,
+   evictions: u64,
+   creates: u64,
+   appends: u64,
+   releases: u64,
+   upload_bytes: u64,
+   stable_pages: u64,
+}
+
+fn run_paged_atlas_locality() -> PagedAtlasLocalityStats
+{
+   let mut text = perf_text_ctx();
+   text.atlas = oxide_text::PagedAtlas::new(24, 24, 2);
+   let mut uploader = PagedAtlasCpuUploader::default();
+   let mut builder = ui::DrawListBuilder::new();
+   let mut labels = Vec::new();
+
+   text.begin_frame();
+   for ch in 'A'..='Z'
+   {
+      let label = ch.to_string();
+      encode_matrix_label(&label, labels.len(), 1.0, 16.0, &mut text, &mut uploader, &mut builder);
+      labels.push(label);
+   }
+   let _ = text.finish_frame(&mut uploader, &mut builder);
+   let first_revisions = text.retained_text_atlas_revisions().unwrap_or(&[]).to_vec();
+   let second_handle = first_revisions.get(1).map(|(handle, _)| *handle).unwrap_or(api::ImageHandle(0));
+   let pinned_index = builder.drawlist().items.iter().filter_map(|item| {
+      match item
+      {
+         api::DrawCmd::GlyphRun { run } => Some(*run),
+         _ => None,
+      }
+   }).position(|run| run.atlas == second_handle).unwrap_or(0);
+   let pinned_label = labels.get(pinned_index).cloned().unwrap_or_else(|| String::from("A"));
+
+   builder.clear();
+   text.begin_frame();
+   encode_matrix_label(&pinned_label, 0, 1.0, 16.0, &mut text, &mut uploader, &mut builder);
+   'pressure: for label in &labels
+   {
+      encode_matrix_label(label, 0, 2.0, 16.0, &mut text, &mut uploader, &mut builder);
+      if text.atlas.eviction_count() > 0
+      {
+         break 'pressure;
+      }
+   }
+   let _ = text.finish_frame(&mut uploader, &mut builder);
+   let second_revisions = text.retained_text_atlas_revisions().unwrap_or(&[]);
+   let stable_pages = u64::from(second_revisions.iter().any(|(handle, _)| *handle == second_handle));
+   let atlas = text.atlas.stats();
+   PagedAtlasLocalityStats {
+      checksum: builder.drawlist().items.len() as u64
+         + builder.drawlist().vertices.len() as u64
+         + atlas.evictions
+         + stable_pages,
+      pages: atlas.pages as u64,
+      resident_bytes: atlas.resident_bytes,
+      occupied_bytes: atlas.occupied_bytes,
+      fragmentation_bytes: atlas.fragmentation_bytes,
+      evictions: atlas.evictions,
+      creates: uploader.creates,
+      appends: uploader.appends,
+      releases: uploader.releases,
+      upload_bytes: uploader.upload_bytes,
+      stable_pages,
+   }
+}
+
+fn text_paged_atlas_locality_case(smoke: bool) -> PerfCaseResult
+{
+   let mut case = measured_architecture_case(
+      "cpu.architecture.text.paged_atlas_locality",
+      smoke,
+      "Two bounded glyph pages under deterministic pressure while one visible page remains pinned and retains its resource identity.",
+      move || run_paged_atlas_locality().checksum,
+   );
+   let stats = run_paged_atlas_locality();
+   for (name, value) in [
+      ("atlas_pages", stats.pages),
+      ("atlas_resident_bytes", stats.resident_bytes),
+      ("atlas_occupied_bytes", stats.occupied_bytes),
+      ("atlas_fragmentation_bytes", stats.fragmentation_bytes),
+      ("atlas_evictions", stats.evictions),
+      ("atlas_create_calls", stats.creates),
+      ("atlas_append_calls", stats.appends),
+      ("atlas_release_calls", stats.releases),
+      ("atlas_upload_bytes", stats.upload_bytes),
+      ("stable_unrelated_pages", stats.stable_pages),
+   ]
+   {
+      case.metrics.insert(String::from(name), value as f64);
+   }
    case
 }
 

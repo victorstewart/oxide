@@ -873,6 +873,19 @@ mod wasm {
             let _ = self.try_image_update_a8(handle, x, y, width, height, data, row_bytes);
         }
 
+        pub fn image_append_a8(
+            &mut self,
+            handle: api::ImageHandle,
+            x: u32,
+            y: u32,
+            width: u32,
+            height: u32,
+            data: &[u8],
+            row_bytes: usize,
+        ) {
+            let _ = self.try_image_update_a8(handle, x, y, width, height, data, row_bytes);
+        }
+
         pub fn try_image_create_rgba8(
             &mut self,
             width: u32,

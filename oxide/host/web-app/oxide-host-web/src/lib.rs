@@ -142,6 +142,25 @@ mod wasm_host {
                 .borrow_mut()
                 .image_update_a8(handle, x, y, width, height, data, row_bytes);
         }
+
+        fn append_a8(
+            &mut self,
+            handle: gfx::ImageHandle,
+            x: u32,
+            y: u32,
+            width: u32,
+            height: u32,
+            data: &[u8],
+            row_bytes: usize,
+        ) {
+            self.renderer
+                .borrow_mut()
+                .image_append_a8(handle, x, y, width, height, data, row_bytes);
+        }
+
+        fn release_a8(&mut self, handle: gfx::ImageHandle) {
+            let _ = self.renderer.borrow_mut().image_release(handle);
+        }
     }
 
     #[derive(Clone, Copy)]
