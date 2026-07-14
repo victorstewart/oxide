@@ -33,7 +33,7 @@
 - `oxide_host_app_stats(out) -> libc::c_int`
   Exports the host stats ABI consumed by Objective-C and Swift benchmark harnesses.
 - `oxide_host_on_memory_warning()`
-  Purges retained effect/bloom targets and prepared render chunks, marks the frame dirty, and forwards critical pressure to telemetry.
+  Purges retained effect/bloom targets, layer storage, prepared render chunks, and immutable ID-mask fields, marks the frame dirty, and forwards critical pressure to telemetry.
 
 ## Logic narrative
 - Callback registries store plain `extern "C" fn` pointers in `OnceLock<Mutex<Option<_>>>` slots because Objective-C code can install callbacks before the app renderer is active.
@@ -69,7 +69,7 @@
 ## Feature flags and cfgs
 - iOS-only native services are compiled behind `target_os = "ios"` guards.
 - Host unit tests compile the Rust callback bridge on the local host without launching UIKit.
-- Critical memory warnings purge renderer-owned effect/bloom targets, retained and pooled layer textures, and persistent prepared chunks, then mark the frame dirty so visible content rebuilds lazily through the normal Rust render path.
+- Critical memory warnings purge renderer-owned effect/bloom targets, retained and pooled layer textures, persistent prepared chunks, and ID-mask raster/JFA fields, then mark the frame dirty so visible content rebuilds lazily through the normal Rust render path.
 
 ## Testing and benchmarks
 - Covered by `cargo test -p oxide-host-ios --tests --locked`.
@@ -84,6 +84,7 @@ oxide_host_emit_touch(10, 0, 1.0, 2.0, 0.5, 1, 0.0, 0.0, 0, 0, 100);
 ```
 
 ## Changelog
+- 2026-07-14: purged immutable ID-mask raster/JFA fields on critical memory pressure.
 - 2026-07-14: routed critical memory warnings through the production retained-layer storage purge before requesting the rebuild frame.
 - 2026-07-13: purged byte-budgeted prepared Metal chunks alongside effect targets on critical memory pressure.
 - 2026-07-13: selected the three-slot visible Metal frame-resource mode instead of retaining the deeper offscreen/perf allocation.

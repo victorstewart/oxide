@@ -17,6 +17,76 @@ fn mat4_identity() -> scene3d::Mat4 {
 }
 
 #[test]
+fn id_mask_cached_compositor_only_hit_matches_fresh_fields_and_pixels() {
+    use oxide_renderer_metal::id_mask_compositor::{
+        IdMaskCityStyle, IdMaskCompositorMode, IdMaskGpuCompositorPass, IdMaskGpuRasterPass,
+        IdMaskPolishConfig, IdMaskRasterChunk, IdMaskRasterProjection, IdMaskRasterVertex,
+        ID_MASK_MAX_CITY_STYLES, ID_MASK_MAX_NEIGHBORHOOD_COLORS,
+    };
+
+    fn render(
+        renderer: &mut MetalRenderer,
+        vertices: &[IdMaskRasterVertex],
+        chunks: &[IdMaskRasterChunk],
+        red: f32,
+    ) -> Vec<u8> {
+        let mut city_styles = [IdMaskCityStyle::default(); ID_MASK_MAX_CITY_STYLES];
+        city_styles[1].edge_rgb = [red, 0.25, 0.75];
+        let pass = IdMaskGpuCompositorPass {
+            raster: IdMaskGpuRasterPass {
+                viewport: api::RectF::new(0.0, 0.0, 64.0, 64.0),
+                mask_width: 64,
+                mask_height: 64,
+                mask_scale: 1.0,
+                vertex_revision: 9,
+                vertices,
+                chunks,
+                projection: IdMaskRasterProjection::screen_px(),
+            },
+            city_styles,
+            neighborhood_colors: [[0.0; 3]; ID_MASK_MAX_NEIGHBORHOOD_COLORS],
+            mode: IdMaskCompositorMode::CityIdMask,
+            glow_enabled: false,
+            darken_background_alpha: 0.0,
+            polish: IdMaskPolishConfig::default(),
+        };
+        let token = renderer.begin_frame(&api::FrameTarget, None);
+        renderer.encode_id_mask_gpu_compositor(&pass).expect("encode ID-mask snapshot");
+        renderer.submit(token).expect("submit ID-mask snapshot");
+        let (_, _, pixels) = renderer.readback_bgra8().expect("read ID-mask target");
+        pixels
+    }
+
+    let vertices = [
+        IdMaskRasterVertex::new([0.0, 0.0], 1, 2),
+        IdMaskRasterVertex::new([64.0, 0.0], 1, 2),
+        IdMaskRasterVertex::new([0.0, 64.0], 1, 2),
+        IdMaskRasterVertex::new([0.0, 64.0], 1, 2),
+        IdMaskRasterVertex::new([64.0, 0.0], 1, 2),
+        IdMaskRasterVertex::new([64.0, 64.0], 1, 2),
+    ];
+    let chunks = [IdMaskRasterChunk { content_hash: 0x1234, first_vertex: 0, vertex_count: 6 }];
+    let mut cached = MetalRenderer::new_default().expect("create cached renderer");
+    cached.resize(64, 64, 1.0).expect("resize cached renderer");
+    let _ = render(&mut cached, &vertices, &chunks, 0.2);
+    let cached_pixels = render(&mut cached, &vertices, &chunks, 0.9);
+    let cached_fields = cached.readback_id_mask_snapshot().expect("read cached ID-mask fields");
+    assert_eq!(cached.last_stats().id_mask_cache_hits, 1);
+    assert_eq!(cached.last_stats().render_passes, 1);
+
+    let mut fresh = MetalRenderer::new_default().expect("create fresh renderer");
+    fresh.resize(64, 64, 1.0).expect("resize fresh renderer");
+    let fresh_pixels = render(&mut fresh, &vertices, &chunks, 0.9);
+    let fresh_fields = fresh.readback_id_mask_snapshot().expect("read fresh ID-mask fields");
+    assert_eq!(fresh.last_stats().id_mask_cache_misses, 1);
+    assert_eq!(fresh.last_stats().render_passes, 9);
+    assert_eq!(cached_pixels, fresh_pixels);
+    assert_eq!(cached_fields, fresh_fields);
+    cached.purge_id_mask_field_cache();
+    assert!(cached.readback_id_mask_snapshot().is_none());
+}
+
+#[test]
 fn snapshot_rrect_basic() {
     // Arrange
     let mut r = MetalRenderer::new_default().expect("metal");

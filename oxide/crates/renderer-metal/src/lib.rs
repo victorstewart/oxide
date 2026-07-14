@@ -72,6 +72,10 @@ const LAYER_CACHE_POOL_BUDGET_DIVISOR: u64 = 4;
 const LAYER_CACHE_ABSENT_FRAMES: u64 = 120;
 const LAYER_CACHE_POOL_MAX_AGE_FRAMES: u64 = 60;
 
+const ID_MASK_CACHE_MIN_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
+const ID_MASK_CACHE_MAX_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
+const ID_MASK_CACHE_MAX_ENTRIES: usize = 4;
+
 const LAYER_PURGE_NONE: u8 = 0;
 const LAYER_PURGE_EXPLICIT: u8 = 1;
 const LAYER_PURGE_MEMORY_WARNING: u8 = 2;
@@ -1026,6 +1030,12 @@ pub struct MetalRenderer {
     scene3d_bloom_tex: Option<Texture>,
     scene3d_bloom_tmp_tex: Option<Texture>,
     id_mask_targets: alloc::vec::Vec<Option<id_mask_gpu::RenderTargets>>,
+    id_mask_field_cache: alloc::vec::Vec<id_mask_gpu::IdMaskFieldCacheEntry>,
+    id_mask_frame_cache_serials: alloc::vec::Vec<u64>,
+    id_mask_cache_budget_bytes: u64,
+    id_mask_cache_resident_bytes: u64,
+    id_mask_cache_evictions: u64,
+    next_id_mask_cache_serial: u64,
     id_mask_vertex_caches: alloc::vec::Vec<IdMaskVertexUploadCache>,
     images: HashMap<u32, Texture>,
     image_generations: HashMap<u32, u64>,
@@ -1084,6 +1094,12 @@ pub struct MetalRenderer {
     acc_layer_offscreen_draws: u64,
     acc_layer_inline_draws: u64,
     acc_layer_double_render_prevented: u32,
+    acc_id_mask_cache_hits: u32,
+    acc_id_mask_cache_misses: u32,
+    acc_id_mask_raster_passes: u32,
+    acc_id_mask_field_seed_passes: u32,
+    acc_id_mask_field_jump_passes: u32,
+    acc_id_mask_compositor_passes: u32,
     acc_image_argument_encodes: u32,
     acc_image_argument_binds: u32,
     acc_image_argument_tables_finalized: u32,
@@ -2086,6 +2102,15 @@ impl MetalRenderer {
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(adaptive_layer_budget);
+        let adaptive_id_mask_budget = device
+            .recommended_max_working_set_size()
+            .checked_div(8)
+            .unwrap_or(0)
+            .clamp(ID_MASK_CACHE_MIN_BUDGET_BYTES, ID_MASK_CACHE_MAX_BUDGET_BYTES);
+        let id_mask_cache_budget_bytes = std::env::var("OXIDE_ID_MASK_CACHE_BUDGET_BYTES")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(adaptive_id_mask_budget);
 
         Ok(Self {
             device,
@@ -2199,6 +2224,12 @@ impl MetalRenderer {
             scene3d_bloom_tex: None,
             scene3d_bloom_tmp_tex: None,
             id_mask_targets: (0..frame_resource_depth).map(|_| None).collect(),
+            id_mask_field_cache: alloc::vec::Vec::new(),
+            id_mask_frame_cache_serials: alloc::vec::Vec::new(),
+            id_mask_cache_budget_bytes,
+            id_mask_cache_resident_bytes: 0,
+            id_mask_cache_evictions: 0,
+            next_id_mask_cache_serial: 1,
             id_mask_vertex_caches: alloc::vec::Vec::new(),
             images: HashMap::new(),
             image_generations: HashMap::new(),
@@ -2257,6 +2288,12 @@ impl MetalRenderer {
             acc_layer_offscreen_draws: 0,
             acc_layer_inline_draws: 0,
             acc_layer_double_render_prevented: 0,
+            acc_id_mask_cache_hits: 0,
+            acc_id_mask_cache_misses: 0,
+            acc_id_mask_raster_passes: 0,
+            acc_id_mask_field_seed_passes: 0,
+            acc_id_mask_field_jump_passes: 0,
+            acc_id_mask_compositor_passes: 0,
             acc_image_argument_encodes: 0,
             acc_image_argument_binds: 0,
             acc_image_argument_tables_finalized: 0,
@@ -3037,6 +3074,92 @@ impl MetalRenderer {
    pub fn purge_layer_cache_for_memory_warning(&mut self)
    {
       self.purge_layer_cache_for_reason(LAYER_PURGE_MEMORY_WARNING);
+   }
+
+   /// Returns the hard byte budget for immutable ID-mask raster and JFA fields.
+   pub fn id_mask_cache_budget_bytes(&self) -> u64
+   {
+      self.id_mask_cache_budget_bytes
+   }
+
+   /// Applies a hard ID-mask field-cache budget and immediately evicts cold entries.
+   pub fn set_id_mask_cache_budget_bytes(&mut self, budget_bytes: u64)
+   {
+      self.id_mask_cache_budget_bytes = budget_bytes;
+      self.enforce_id_mask_cache_budget();
+      self.apply_id_mask_cache_stats();
+   }
+
+   /// Releases all immutable ID-mask raster and JFA field entries.
+   pub fn purge_id_mask_field_cache(&mut self)
+   {
+      self.id_mask_field_cache.clear();
+      self.id_mask_frame_cache_serials.clear();
+      for targets in &mut self.id_mask_targets
+      {
+         *targets = None;
+      }
+      self.id_mask_cache_resident_bytes = 0;
+      self.apply_id_mask_cache_stats();
+   }
+
+   fn apply_id_mask_cache_stats(&mut self)
+   {
+      self.last_stats.id_mask_cache_hits = self.acc_id_mask_cache_hits;
+      self.last_stats.id_mask_cache_misses = self.acc_id_mask_cache_misses;
+      self.last_stats.id_mask_cache_budget_bytes = self.id_mask_cache_budget_bytes;
+      self.last_stats.id_mask_cache_resident_bytes = self.id_mask_cache_resident_bytes;
+      self.last_stats.id_mask_cache_evictions = self.id_mask_cache_evictions;
+      self.last_stats.id_mask_cache_entries = self.id_mask_field_cache.len() as u32;
+      self.last_stats.id_mask_raster_passes = self.acc_id_mask_raster_passes;
+      self.last_stats.id_mask_field_seed_passes = self.acc_id_mask_field_seed_passes;
+      self.last_stats.id_mask_field_jump_passes = self.acc_id_mask_field_jump_passes;
+      self.last_stats.id_mask_compositor_passes = self.acc_id_mask_compositor_passes;
+   }
+
+   fn evict_oldest_id_mask_cache_entry(&mut self) -> Option<id_mask_gpu::RenderTargets>
+   {
+      let index = self.id_mask_field_cache.iter().enumerate()
+         .filter(|(_, entry)| !self.id_mask_frame_cache_serials.contains(&entry.serial))
+         .min_by_key(|(_, entry)| entry.last_used_frame)
+         .map(|(index, _)| index)?;
+      let entry = self.id_mask_field_cache.swap_remove(index);
+      self.id_mask_cache_resident_bytes = self.id_mask_cache_resident_bytes
+         .saturating_sub(entry.bytes);
+      self.id_mask_cache_evictions = self.id_mask_cache_evictions.saturating_add(1);
+      Some(entry.targets)
+   }
+
+   fn enforce_id_mask_cache_budget(&mut self)
+   {
+      while self.id_mask_field_cache.len() > ID_MASK_CACHE_MAX_ENTRIES
+         || self.id_mask_cache_resident_bytes > self.id_mask_cache_budget_bytes
+      {
+         if self.evict_oldest_id_mask_cache_entry().is_none()
+         {
+            break;
+         }
+      }
+   }
+
+   fn prepare_id_mask_cache_admission(&mut self, required: u64, width: usize, height: usize) -> Option<Option<id_mask_gpu::RenderTargets>>
+   {
+      if required > self.id_mask_cache_budget_bytes
+      {
+         return None;
+      }
+      let mut reusable = None;
+      while self.id_mask_field_cache.len() >= ID_MASK_CACHE_MAX_ENTRIES
+         || self.id_mask_cache_resident_bytes.saturating_add(required)
+            > self.id_mask_cache_budget_bytes
+      {
+         let targets = self.evict_oldest_id_mask_cache_entry()?;
+         if reusable.is_none() && targets.width == width && targets.height == height
+         {
+            reusable = Some(targets);
+         }
+      }
+      Some(reusable)
    }
 
    fn layer_texture_descriptor(format: MTLPixelFormat, width: u32, height: u32) -> TextureDescriptor
@@ -3927,6 +4050,11 @@ impl MetalRenderer {
         let cpu_t0 = collect_stage_stats.then(Instant::now);
         self.frame_id = self.frame_id.wrapping_add(1);
         self.layer_frame_ids.clear();
+        self.id_mask_frame_cache_serials.clear();
+        if self.id_mask_cache_resident_bytes > self.id_mask_cache_budget_bytes
+        {
+            self.enforce_id_mask_cache_budget();
+        }
         self.acc_draws = 0;
         self.acc_flat_instanced_draws = 0;
         self.acc_instanced = 0;
@@ -3958,6 +4086,12 @@ impl MetalRenderer {
             self.acc_layer_offscreen_draws = 0;
             self.acc_layer_inline_draws = 0;
             self.acc_layer_double_render_prevented = 0;
+            self.acc_id_mask_cache_hits = 0;
+            self.acc_id_mask_cache_misses = 0;
+            self.acc_id_mask_raster_passes = 0;
+            self.acc_id_mask_field_seed_passes = 0;
+            self.acc_id_mask_field_jump_passes = 0;
+            self.acc_id_mask_compositor_passes = 0;
             self.acc_image_argument_encodes = 0;
             self.acc_image_argument_binds = 0;
             self.acc_image_argument_tables_finalized = 0;
@@ -5628,6 +5762,11 @@ impl api::Renderer for MetalRenderer {
     ) -> api::FrameToken {
         self.frame_id = self.frame_id.wrapping_add(1);
         self.layer_frame_ids.clear();
+        self.id_mask_frame_cache_serials.clear();
+        if self.id_mask_cache_resident_bytes > self.id_mask_cache_budget_bytes
+        {
+            self.enforce_id_mask_cache_budget();
+        }
         let frame_resource_depth = self.frames.len();
         let preferred_slot = self.next_frame_slot();
         let busy_slots = self.frame_in_flight.load(Ordering::Acquire);
@@ -5682,6 +5821,12 @@ impl api::Renderer for MetalRenderer {
             self.acc_layer_offscreen_draws = 0;
             self.acc_layer_inline_draws = 0;
             self.acc_layer_double_render_prevented = 0;
+            self.acc_id_mask_cache_hits = 0;
+            self.acc_id_mask_cache_misses = 0;
+            self.acc_id_mask_raster_passes = 0;
+            self.acc_id_mask_field_seed_passes = 0;
+            self.acc_id_mask_field_jump_passes = 0;
+            self.acc_id_mask_compositor_passes = 0;
             self.acc_image_argument_encodes = 0;
             self.acc_image_argument_binds = 0;
             self.acc_image_argument_tables_finalized = 0;
@@ -6794,6 +6939,7 @@ impl api::Renderer for MetalRenderer {
                 .memory
                 .layer_cache_bytes
                 .saturating_add(self.last_stats.memory.image_cache_bytes)
+                .saturating_add(self.id_mask_cache_resident_bytes)
                 .saturating_add(self.last_stats.memory.id_mask_vertex_buffer_bytes)
                 .saturating_add(self.last_stats.memory.prepared_cache_bytes);
         }
@@ -6873,6 +7019,7 @@ impl api::Renderer for MetalRenderer {
         let trace_started_at = if trace { Some(Instant::now()) } else { None };
         if self.submit_error_flag.swap(false, Ordering::AcqRel) {
             self.purge_layer_cache_for_reason(LAYER_PURGE_DEVICE_LOSS);
+            self.purge_id_mask_field_cache();
             let detail = self.submit_error_detail.lock().ok().and_then(|mut slot| slot.take());
             if let Some(detail) = detail {
                 return Err(api::RenderError::Io(format!("device lost: {}", detail)));
@@ -6929,6 +7076,7 @@ impl api::Renderer for MetalRenderer {
                 .memory
                 .layer_cache_bytes
                 .saturating_add(self.last_stats.memory.image_cache_bytes)
+                .saturating_add(self.id_mask_cache_resident_bytes)
                 .saturating_add(self.last_stats.memory.id_mask_vertex_buffer_bytes)
                 .saturating_add(self.last_stats.memory.prepared_cache_bytes);
         }
@@ -7077,6 +7225,7 @@ impl api::Renderer for MetalRenderer {
         }
         self.age_layer_cache();
         self.apply_layer_cache_stats();
+        self.apply_id_mask_cache_stats();
         Ok(())
     }
 
@@ -9960,6 +10109,16 @@ pub struct PerfStats {
     pub layer_offscreen_draws: u64,
     pub layer_inline_draws: u64,
     pub layer_double_render_prevented: u32,
+    pub id_mask_cache_hits: u32,
+    pub id_mask_cache_misses: u32,
+    pub id_mask_cache_budget_bytes: u64,
+    pub id_mask_cache_resident_bytes: u64,
+    pub id_mask_cache_evictions: u64,
+    pub id_mask_cache_entries: u32,
+    pub id_mask_raster_passes: u32,
+    pub id_mask_field_seed_passes: u32,
+    pub id_mask_field_jump_passes: u32,
+    pub id_mask_compositor_passes: u32,
     pub image_argument_encodes: u32,
     pub image_argument_binds: u32,
     pub image_argument_tables_finalized: u32,
@@ -10193,8 +10352,9 @@ impl MetalRenderer {
         );
         let id_mask_target_bytes = Self::unique_texture_category_bytes(
             &mut seen,
-            self.id_mask_targets.iter().filter_map(|targets| targets.as_ref()).flat_map(
-                |targets| {
+            self.id_mask_targets.iter().filter_map(|targets| targets.as_ref())
+                .chain(self.id_mask_field_cache.iter().map(|entry| &entry.targets))
+                .flat_map(|targets| {
                     [
                         targets.city.as_ref(),
                         targets.neighborhood.as_ref(),
@@ -10203,8 +10363,7 @@ impl MetalRenderer {
                         targets.seam_field_a.as_ref(),
                         targets.seam_field_b.as_ref(),
                     ]
-                },
-            ),
+                }),
         );
         let camera_blur_cache_bytes = Self::unique_texture_category_bytes(
             &mut seen,
@@ -10338,6 +10497,22 @@ impl MetalRenderer {
                 &targets.city_field_b,
                 &targets.seam_field_a,
                 &targets.seam_field_b,
+            ] {
+                Self::push_unique_texture_logical_bytes(
+                    &mut logical_seen,
+                    &mut logical_total_bytes,
+                    texture,
+                );
+            }
+        }
+        for entry in &self.id_mask_field_cache {
+            for texture in [
+                &entry.targets.city,
+                &entry.targets.neighborhood,
+                &entry.targets.city_field_a,
+                &entry.targets.city_field_b,
+                &entry.targets.seam_field_a,
+                &entry.targets.seam_field_b,
             ] {
                 Self::push_unique_texture_logical_bytes(
                     &mut logical_seen,

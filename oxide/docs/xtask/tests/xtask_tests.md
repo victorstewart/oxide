@@ -18,7 +18,7 @@ Call flow:
 
 ## Entry points list
 
-- `experiment_manifest_checker_accepts_current_manifest()`: validates every committed experiment entry and freezes the current total plus accepted/rejected decision counts, including the accepted C31 bounded-layer storage design and rejected direct-GPU-speedup classification.
+- `experiment_manifest_checker_accepts_current_manifest()`: validates every committed experiment entry and freezes the current total plus accepted/rejected decision counts, including the accepted C32 Metal ID-mask field cache and C31 bounded-layer storage decisions.
 - `experiment_manifest_checker_rejects_expired_undecided_entries()`: rejects an undecided experiment past its expiry.
 - `experiment_manifest_checker_requires_perf_ab_gate_for_undecided_entries()`: requires a concrete A/B gate before an experiment may remain open.
 - `experiment_manifest_checker_requires_proof_for_decided_entries()`: requires persisted proof for accepted and rejected decisions.
@@ -68,6 +68,7 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
+- 2026-07-14: froze the accepted C32 Metal ID-mask field-cache experiment and the resulting 163-entry, 78-accepted, 85-rejected manifest totals.
 - 2026-07-14: froze the C30 accepted local-layer experiment, rejected unsnapped-coordinate, two-pass-key, asymmetric-clock-warmup, single-long-burst, and no-postroll designs, and resulting 160-entry totals.
 - 2026-07-13: froze the C29 accepted prepared-layer experiment, three rejected precision policies, and the resulting 154-entry accepted/rejected totals.
 

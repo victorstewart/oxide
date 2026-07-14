@@ -80,6 +80,27 @@ cleanup = [
 ]
 
 [[experiments]]
+id = "c32-metal-id-mask-field-cache"
+introduced_commit = "C32 staged tree recorded in commit proof"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-metal", "oxide-host-ios", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "Complete dimensions/scale/content/chunk/projection keys, final-only exclusions, same-command-buffer multi-map safety, hard allocated-byte eviction, explicit/memory/device purge, stage counters, and exact fresh-versus-cached masks, fields, and final pixels must remain deterministic under Metal validation."
+performance_gate = "Fifteen balanced fresh-process pairs and at least 2,000 completed Metal timestamps per side must reduce warm static 512-square 16-chunk raster+seed+JFA+compositor work to compositor-only, improve GPU time by at least 5% with the generic confidence/win/tail gates, reduce retained field ownership by at least 10%, and preserve zero steady resource creation."
+decision_state = "accepted"
+decision = "Retained complete immutable Metal ID-mask raster/JFA fields under a bounded LRU and encoded only the final compositor when geometry and projection were unchanged."
+proof = [
+   "The controlled unchanged-parent population collected 2,100 completed GPU samples per side; parent/candidate p50/p95/p99/peak were 1.536042/1.571637/1.641635/2.137958 ms and 0.065625/0.070750/0.072459/0.174417 ms.",
+   "Paired median GPU speedup was 95.653% with 95% CI 95.494%..95.746% and 15/15 pair wins; frame p50/p95/p99 improved 52.077%/54.799%/54.651% and encode p50/p95/p99 improved 93.158%/86.052%/79.375%.",
+   "Measured passes fell from 1,680 to 140, steady ID-mask ownership fell from 139,198,464 to 17,399,808 bytes, resource creation remained zero after warmup, exact cached/fresh pixels and fields matched, and all six invalidation scenarios reported their required stage counts.",
+]
+cleanup = [
+   "Kept full raster/field rebuilding for projection, content, scale, and dimension changes and kept over-budget misses transient rather than weakening key completeness or visual work.",
+   "No losing runtime alternative remained; aggregate official baseline promotion stays deferred to C62 and the ignored raw directory preserves all acquisition evidence.",
+]
+
+[[experiments]]
 id = "c31-bounded-layer-cache-storage"
 introduced_commit = "C31 staged tree recorded in commit proof"
 introduced_date = "2026-07-14"

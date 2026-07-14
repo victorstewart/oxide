@@ -82,6 +82,7 @@ fn memory_warnings_purge_effect_targets_and_request_a_frame() {
     assert!(warning.contains("renderer.purge_effect_targets();"));
     assert!(warning.contains("renderer.purge_layer_cache_for_memory_warning();"));
     assert!(warning.contains("renderer.purge_prepared_chunks();"));
+    assert!(warning.contains("renderer.purge_id_mask_field_cache();"));
     assert!(warning.contains("mark_frame_dirty(app);"));
 }
 

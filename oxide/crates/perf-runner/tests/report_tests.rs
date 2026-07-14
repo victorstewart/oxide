@@ -4959,8 +4959,18 @@ fn metal_architecture_reports_reconciled_renderer_resource_families()
    assert!(report_f64(layer, "warmup_gpu_ms_0001") > 0.0);
    assert!(report_f64(id_mask, "id_mask_target_bytes_peak") > 0.0);
    assert!(report_f64(id_mask, "id_mask_vertex_bytes_peak") > 0.0);
-   assert!(report_f64(id_mask, "chunks_prepared_avg") > 0.0);
-   assert!(report_f64(id_mask, "render_passes_avg") > 0.0);
+   assert_eq!(report_f64(id_mask, "chunks_prepared_avg"), 0.0);
+   assert_eq!(report_f64(id_mask, "id_mask_cache_hits_avg"), 1.0);
+   assert_eq!(report_f64(id_mask, "id_mask_cache_misses_avg"), 0.0);
+   assert_eq!(report_f64(id_mask, "id_mask_raster_passes_avg"), 0.0);
+   assert_eq!(report_f64(id_mask, "id_mask_field_seed_passes_avg"), 0.0);
+   assert_eq!(report_f64(id_mask, "id_mask_field_jump_passes_avg"), 0.0);
+   assert_eq!(report_f64(id_mask, "id_mask_compositor_passes_avg"), 1.0);
+   assert_eq!(report_f64(id_mask, "render_passes_avg"), 1.0);
+   assert_eq!(report_f64(id_mask, "id_mask_cache_entries_peak"), 1.0);
+   assert!(report_f64(id_mask, "id_mask_cache_resident_bytes_peak") > 0.0);
+   assert!(report_f64(id_mask, "id_mask_cache_resident_bytes_peak")
+      <= report_f64(id_mask, "id_mask_cache_budget_bytes"));
    assert!(report_f64(scene3d, "depth_target_bytes_peak") > 0.0);
    assert!(report_f64(scene3d, "bloom_target_bytes_peak") > 0.0);
    assert!(report_f64(scene3d, "mesh_buffer_bytes_peak") > 0.0);

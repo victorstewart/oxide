@@ -234,7 +234,7 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       }
    }
 
-   for change in ["static", "style", "viewport", "projection"]
+   for change in ["static", "style", "viewport", "projection", "content"]
    {
       for size in [512_usize, 1_024, 2_048]
       {
@@ -247,6 +247,11 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
             }
          }
       }
+   }
+   let multiple_map_id = "gpu.architecture.id_mask.multiple_map.size_512.chunks_16";
+   if perf_case_allowed(multiple_map_id)
+   {
+      cases.push(id_mask_matrix_case(multiple_map_id, smoke, "multiple_map", 512, 16)?);
    }
 
    for instances in [96_usize, 1_000, 10_000]
@@ -3395,9 +3400,26 @@ fn id_mask_matrix_case(id: &str, smoke: bool, change: &str, size: usize, chunk_c
          vertex.position_px = [0.0, 0.0];
       }
    }
-   let chunks = id_mask_chunks(vertices.len(), chunk_count);
-   let warmups = if smoke { 1 } else { 3 };
-   let frames = if smoke { 3 } else { 12 };
+   let mut chunks = id_mask_chunks(vertices.len(), chunk_count);
+   let mut alternate_chunks = chunks.clone();
+   for chunk in &mut alternate_chunks
+   {
+      chunk.content_hash ^= 0xa5a5_5a5a_d3c4_b2e1;
+   }
+   let warmups = std::env::var("OXIDE_C32_METAL_WARMUPS")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|value| *value > 0)
+      .unwrap_or(if change == "multiple_map" { 4 } else if smoke { 1 } else { 3 });
+   let frames = std::env::var("OXIDE_C32_METAL_FRAMES")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|value| *value > 0)
+      .unwrap_or(if smoke { 3 } else { 12 });
+   let persist_raw = std::env::var_os("OXIDE_C32_METAL_RAW_SAMPLES").is_some();
+   let mut warmup_frame_samples = Vec::with_capacity(if persist_raw { warmups } else { 0 });
+   let mut warmup_encode_samples = Vec::with_capacity(if persist_raw { warmups } else { 0 });
+   let mut warmup_gpu_samples = Vec::with_capacity(if persist_raw { warmups } else { 0 });
    let mut frame_samples = Vec::with_capacity(frames);
    let mut encode_samples = Vec::with_capacity(frames);
    let mut gpu_samples = Vec::with_capacity(frames);
@@ -3412,11 +3434,31 @@ fn id_mask_matrix_case(id: &str, smoke: bool, change: &str, size: usize, chunk_c
    let mut chunks_rebuilt_sum = 0_u64;
    let mut chunks_prepared_sum = 0_u64;
    let mut render_passes_sum = 0_u64;
+   let mut id_mask_cache_hits_sum = 0_u64;
+   let mut id_mask_cache_misses_sum = 0_u64;
+   let mut id_mask_raster_passes_sum = 0_u64;
+   let mut id_mask_field_seed_passes_sum = 0_u64;
+   let mut id_mask_field_jump_passes_sum = 0_u64;
+   let mut id_mask_compositor_passes_sum = 0_u64;
+   let mut id_mask_cache_budget_bytes = 0_u64;
+   let mut id_mask_cache_resident_bytes_peak = 0_u64;
+   let mut id_mask_cache_entries_peak = 0_u32;
+   let mut id_mask_cache_evictions_peak = 0_u64;
+   let mut resource_creates_sum = 0_u64;
 
    for frame in 0..(warmups + frames)
    {
       let frame_t0 = Instant::now();
-      let revision = if change == "static" || change == "style" { 1 } else { frame as u64 + 1 };
+      if change == "content"
+      {
+         vertices[0].position_px[0] = (frame % size) as f32;
+         chunks[0].content_hash = 0x5f37_2b19_u64.wrapping_mul(frame as u64 + 1);
+      }
+      let revision = match change
+      {
+         "content" => frame as u64 + 1,
+         _ => 1,
+      };
       let mut pass = id_mask_perf_pass(&vertices, &chunks, revision);
       pass.raster.viewport = api::RectF::new(0.0, 0.0, size as f32, size as f32);
       pass.raster.mask_width = size;
@@ -3430,12 +3472,21 @@ fn id_mask_matrix_case(id: &str, smoke: bool, change: &str, size: usize, chunk_c
       {
          "style" => pass.city_styles[0].fill_rgb[0] = 0.45 + (frame & 1) as f32 * 0.35,
          "viewport" => pass.raster.viewport.x = (frame & 1) as f32,
-         "projection" => pass.raster.projection.world_to_clip[3][0] = (frame & 1) as f32 * 0.002,
+         "projection" => pass.raster.projection.world_to_clip[3][0] = frame as f32 * 0.002,
+         "multiple_map" => pass.raster.viewport.w = size as f32 * 0.5,
          _ => {},
       }
       let token = renderer.begin_frame(&api::FrameTarget, None);
       let frame_id = token.0;
       renderer.encode_id_mask_gpu_compositor(&pass).with_context(|| format!("encoding {id}"))?;
+      if change == "multiple_map"
+      {
+         let mut second = pass;
+         second.raster.viewport.x = size as f32 * 0.5;
+         second.raster.vertex_revision = 2;
+         second.raster.chunks = &alternate_chunks;
+         renderer.encode_id_mask_gpu_compositor(&second).with_context(|| format!("encoding second map for {id}"))?;
+      }
       renderer.submit(token).with_context(|| format!("submitting {id}"))?;
       let stats = last_metal_stats_after_submit(&renderer, frame_id);
       if frame >= warmups
@@ -3457,6 +3508,33 @@ fn id_mask_matrix_case(id: &str, smoke: bool, change: &str, size: usize, chunk_c
          chunks_rebuilt_sum = chunks_rebuilt_sum.saturating_add(stats.chunks_rebuilt);
          chunks_prepared_sum = chunks_prepared_sum.saturating_add(stats.chunks_prepared);
          render_passes_sum = render_passes_sum.saturating_add(u64::from(stats.render_passes));
+         id_mask_cache_hits_sum = id_mask_cache_hits_sum
+            .saturating_add(u64::from(stats.id_mask_cache_hits));
+         id_mask_cache_misses_sum = id_mask_cache_misses_sum
+            .saturating_add(u64::from(stats.id_mask_cache_misses));
+         id_mask_raster_passes_sum = id_mask_raster_passes_sum
+            .saturating_add(u64::from(stats.id_mask_raster_passes));
+         id_mask_field_seed_passes_sum = id_mask_field_seed_passes_sum
+            .saturating_add(u64::from(stats.id_mask_field_seed_passes));
+         id_mask_field_jump_passes_sum = id_mask_field_jump_passes_sum
+            .saturating_add(u64::from(stats.id_mask_field_jump_passes));
+         id_mask_compositor_passes_sum = id_mask_compositor_passes_sum
+            .saturating_add(u64::from(stats.id_mask_compositor_passes));
+         id_mask_cache_budget_bytes = stats.id_mask_cache_budget_bytes;
+         id_mask_cache_resident_bytes_peak = id_mask_cache_resident_bytes_peak
+            .max(stats.id_mask_cache_resident_bytes);
+         id_mask_cache_entries_peak = id_mask_cache_entries_peak
+            .max(stats.id_mask_cache_entries);
+         id_mask_cache_evictions_peak = id_mask_cache_evictions_peak
+            .max(stats.id_mask_cache_evictions);
+         resource_creates_sum = resource_creates_sum
+            .saturating_add(u64::from(stats.resource_creates));
+      }
+      else if persist_raw
+      {
+         warmup_frame_samples.push(frame_t0.elapsed().as_secs_f64() * 1_000.0);
+         warmup_encode_samples.push(stats.encode_ms);
+         warmup_gpu_samples.push(stats.gpu_ms);
       }
    }
 
@@ -3481,9 +3559,31 @@ fn id_mask_matrix_case(id: &str, smoke: bool, change: &str, size: usize, chunk_c
    metrics.insert(String::from("chunks_rebuilt_avg"), chunks_rebuilt_sum as f64 / frames as f64);
    metrics.insert(String::from("chunks_prepared_avg"), chunks_prepared_sum as f64 / frames as f64);
    metrics.insert(String::from("render_passes_avg"), render_passes_sum as f64 / frames as f64);
+   metrics.insert(String::from("id_mask_cache_hits_avg"), id_mask_cache_hits_sum as f64 / frames as f64);
+   metrics.insert(String::from("id_mask_cache_misses_avg"), id_mask_cache_misses_sum as f64 / frames as f64);
+   metrics.insert(String::from("id_mask_raster_passes_avg"), id_mask_raster_passes_sum as f64 / frames as f64);
+   metrics.insert(String::from("id_mask_field_seed_passes_avg"), id_mask_field_seed_passes_sum as f64 / frames as f64);
+   metrics.insert(String::from("id_mask_field_jump_passes_avg"), id_mask_field_jump_passes_sum as f64 / frames as f64);
+   metrics.insert(String::from("id_mask_compositor_passes_avg"), id_mask_compositor_passes_sum as f64 / frames as f64);
+   metrics.insert(String::from("id_mask_cache_budget_bytes"), id_mask_cache_budget_bytes as f64);
+   metrics.insert(String::from("id_mask_cache_resident_bytes_peak"), id_mask_cache_resident_bytes_peak as f64);
+   metrics.insert(String::from("id_mask_cache_entries_peak"), f64::from(id_mask_cache_entries_peak));
+   metrics.insert(String::from("id_mask_cache_evictions"), id_mask_cache_evictions_peak as f64);
+   metrics.insert(String::from("resource_creates_total"), resource_creates_sum as f64);
    metrics.insert(String::from("frame_backpressure_skips"), skips_sum);
-   metrics.insert(String::from("geometry_changes_per_frame"), if change == "static" || change == "style" { 0.0 } else { 1.0 });
+   metrics.insert(String::from("geometry_changes_per_frame"), if matches!(change, "content" | "projection") { 1.0 } else { 0.0 });
    metrics.insert(String::from("style_changes_per_frame"), if change == "style" { 1.0 } else { 0.0 });
+   metrics.insert(String::from("viewport_changes_per_frame"), if change == "viewport" { 1.0 } else { 0.0 });
+   metrics.insert(String::from("maps_per_sequence"), if change == "multiple_map" { 2.0 } else { 1.0 });
+   if persist_raw
+   {
+      insert_indexed_samples(&mut metrics, "raw_frame_ms", &frame_samples);
+      insert_indexed_samples(&mut metrics, "raw_encode_ms", &encode_samples);
+      insert_indexed_samples(&mut metrics, "raw_gpu_ms", &gpu_samples);
+      insert_indexed_samples(&mut metrics, "warmup_frame_ms", &warmup_frame_samples);
+      insert_indexed_samples(&mut metrics, "warmup_encode_ms", &warmup_encode_samples);
+      insert_indexed_samples(&mut metrics, "warmup_gpu_ms", &warmup_gpu_samples);
+   }
 
    Ok(PerfCaseResult {
       id: String::from(id),

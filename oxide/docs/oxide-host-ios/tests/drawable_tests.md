@@ -10,7 +10,7 @@ The tests inspect `oxide-host-ios/src/lib.rs` and the Objective-C app shell with
 
 ## Entry points list
 
-- `memory_warnings_purge_effect_targets_and_request_a_frame()` requires critical pressure to purge effect targets and prepared chunks before marking the frame dirty.
+- `memory_warnings_purge_effect_targets_and_request_a_frame()` requires critical pressure to purge effect targets, retained layers, prepared chunks, and immutable ID-mask fields before marking the frame dirty.
 - Other tests freeze late drawable acquisition, prepared-frame cancellation, native coalescing scratch, and reusable damage storage.
 
 ## Logic narrative
@@ -31,7 +31,7 @@ Tests only read compile-time source strings. The production handler runs while h
 
 ## Performance notes
 
-Prepared-cache purge is memory-pressure-only and adds no ordinary frame work.
+Prepared and ID-mask field-cache purges are memory-pressure-only and add no ordinary frame work.
 
 ## Feature flags and cfgs
 
@@ -43,9 +43,10 @@ Run `cargo test --locked -p oxide-host-ios --test drawable_tests`.
 
 ## Examples
 
-The required pressure sequence contains `renderer.purge_effect_targets();`, `renderer.purge_layer_cache_for_memory_warning();`, `renderer.purge_prepared_chunks();`, then `mark_frame_dirty(app);`.
+The required pressure sequence contains `renderer.purge_effect_targets();`, `renderer.purge_layer_cache_for_memory_warning();`, `renderer.purge_prepared_chunks();`, `renderer.purge_id_mask_field_cache();`, then `mark_frame_dirty(app);`.
 
 ## Changelog
 
+- 2026-07-14: required critical memory warnings to purge immutable ID-mask raster/JFA fields.
 - 2026-07-14: required the iOS memory-warning handler to purge retained layer storage alongside effect and prepared caches.
 - 2026-07-13: required critical memory warnings to purge persistent prepared chunks.

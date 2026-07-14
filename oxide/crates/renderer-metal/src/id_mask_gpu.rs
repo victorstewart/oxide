@@ -30,6 +30,106 @@ pub(super) struct RenderTargets {
     pub(super) seam_field_b: Texture,
 }
 
+impl RenderTargets {
+    fn final_fields(&self) -> (&TextureRef, &TextureRef) {
+        let mut src_is_a = true;
+        let mut jump = self.width.max(self.height).next_power_of_two() / 2;
+        while jump >= 1 {
+            src_is_a = !src_is_a;
+            jump /= 2;
+        }
+        if src_is_a {
+            (&self.city_field_a, &self.seam_field_a)
+        } else {
+            (&self.city_field_b, &self.seam_field_b)
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct IdMaskProjectionKey {
+    world_to_clip: [[u32; 4]; 4],
+    model_to_world: [[u32; 4]; 4],
+    camera_eye_unit: [u32; 3],
+    normal_scale: [u32; 3],
+    visible_front_min: u32,
+    use_world_position: bool,
+    visible_hemisphere: bool,
+}
+
+impl From<id_mask_compositor::IdMaskRasterProjection> for IdMaskProjectionKey {
+    fn from(projection: id_mask_compositor::IdMaskRasterProjection) -> Self {
+        Self {
+            world_to_clip: projection.world_to_clip.map(|row| row.map(f32::to_bits)),
+            model_to_world: projection.model_to_world.map(|row| row.map(f32::to_bits)),
+            camera_eye_unit: projection.camera_eye_unit.map(f32::to_bits),
+            normal_scale: projection.normal_scale.map(f32::to_bits),
+            visible_front_min: projection.visible_front_min.to_bits(),
+            use_world_position: projection.use_world_position,
+            visible_hemisphere: projection.visible_hemisphere,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct IdMaskChunkKey {
+    content_hash: u64,
+    first_vertex: usize,
+    vertex_count: usize,
+}
+
+impl From<&id_mask_compositor::IdMaskRasterChunk> for IdMaskChunkKey {
+    fn from(chunk: &id_mask_compositor::IdMaskRasterChunk) -> Self {
+        Self {
+            content_hash: chunk.content_hash,
+            first_vertex: chunk.first_vertex,
+            vertex_count: chunk.vertex_count,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct IdMaskFieldCacheKey {
+    mask_width: usize,
+    mask_height: usize,
+    mask_scale: u32,
+    vertex_revision: u64,
+    vertex_count: usize,
+    projection: IdMaskProjectionKey,
+}
+
+impl IdMaskFieldCacheKey {
+    fn new(raster: &id_mask_compositor::IdMaskGpuRasterPass<'_>) -> Self {
+        Self {
+            mask_width: raster.mask_width,
+            mask_height: raster.mask_height,
+            mask_scale: raster.mask_scale.to_bits(),
+            vertex_revision: raster.vertex_revision,
+            vertex_count: raster.vertices.len(),
+            projection: raster.projection.into(),
+        }
+    }
+}
+
+pub(super) struct IdMaskFieldCacheEntry {
+    key: IdMaskFieldCacheKey,
+    chunks: Vec<IdMaskChunkKey>,
+    pub(super) targets: RenderTargets,
+    pub(super) bytes: u64,
+    pub(super) last_used_frame: u64,
+    pub(super) serial: u64,
+}
+
+impl IdMaskFieldCacheEntry {
+    fn matches(&self, key: IdMaskFieldCacheKey, chunks: &[id_mask_compositor::IdMaskRasterChunk]) -> bool {
+        self.key == key
+            && self.chunks.len() == chunks.len()
+            && self.chunks.iter().zip(chunks).all(|(cached, current)| {
+                *cached == IdMaskChunkKey::from(current)
+            })
+    }
+}
+
 #[cfg(feature = "snapshot-tests")]
 #[derive(Clone, Debug, PartialEq)]
 pub struct IdMaskSnapshotReadback
@@ -154,21 +254,7 @@ impl MetalRenderer {
         let targets = self.id_mask_targets.get(slot)?.as_ref()?;
         let (_, _, city) = self.readback_texture_bytes(&targets.city, 1)?;
         let (_, _, neighborhood) = self.readback_texture_bytes(&targets.neighborhood, 1)?;
-        let mut src_is_a = true;
-        let mut jump = targets.width.max(targets.height).next_power_of_two() / 2;
-        while jump >= 1
-        {
-            src_is_a = !src_is_a;
-            jump /= 2;
-        }
-        let (city_field, seam_field) = if src_is_a
-        {
-            (&targets.city_field_a, &targets.seam_field_a)
-        }
-        else
-        {
-            (&targets.city_field_b, &targets.seam_field_b)
-        };
+        let (city_field, seam_field) = targets.final_fields();
         let (_, _, city_field) = self.readback_texture_bytes(city_field, 16)?;
         let (_, _, seam_field) = self.readback_texture_bytes(seam_field, 16)?;
         Some(IdMaskSnapshotReadback {
@@ -199,39 +285,67 @@ impl MetalRenderer {
         Ok(self.device.new_texture(&desc))
     }
 
-    pub(super) fn ensure_id_mask_render_targets(
+    fn new_id_mask_render_targets(
         &mut self,
-        slot: usize,
         width: usize,
         height: usize,
+        reusable: Option<RenderTargets>,
     ) -> Result<RenderTargets, api::RenderError> {
-        let needs_new = match &self.id_mask_targets[slot] {
-            Some(targets) => targets.width != width || targets.height != height,
-            None => true,
-        };
-        if needs_new {
-            let city = self.new_r8_mask_render_texture(width, height)?;
-            let neighborhood = self.new_r8_mask_render_texture(width, height)?;
-            let city_field_a = self.new_rgba32_float_render_texture(width, height)?;
-            let city_field_b = self.new_rgba32_float_render_texture(width, height)?;
-            let seam_field_a = self.new_rgba32_float_render_texture(width, height)?;
-            let seam_field_b = self.new_rgba32_float_render_texture(width, height)?;
-            self.id_mask_targets[slot] = Some(RenderTargets {
-                width,
-                height,
-                city,
-                neighborhood,
-                city_field_a,
-                city_field_b,
-                seam_field_a,
-                seam_field_b,
-            });
-            self.acc_resource_creates = self.acc_resource_creates.saturating_add(6);
+        if let Some(targets) = reusable.filter(|targets| {
+            targets.width == width && targets.height == height
+        }) {
+            return Ok(targets);
         }
-        let Some(targets) = &self.id_mask_targets[slot] else {
-            return Err(api::RenderError::OutOfMemory);
+        let targets = RenderTargets {
+            width,
+            height,
+            city: self.new_r8_mask_render_texture(width, height)?,
+            neighborhood: self.new_r8_mask_render_texture(width, height)?,
+            city_field_a: self.new_rgba32_float_render_texture(width, height)?,
+            city_field_b: self.new_rgba32_float_render_texture(width, height)?,
+            seam_field_a: self.new_rgba32_float_render_texture(width, height)?,
+            seam_field_b: self.new_rgba32_float_render_texture(width, height)?,
         };
-        Ok(targets.clone())
+        self.acc_resource_creates = self.acc_resource_creates.saturating_add(6);
+        Ok(targets)
+    }
+
+    fn id_mask_render_targets_bytes(targets: &RenderTargets) -> u64 {
+        [
+            &targets.city,
+            &targets.neighborhood,
+            &targets.city_field_a,
+            &targets.city_field_b,
+            &targets.seam_field_a,
+            &targets.seam_field_b,
+        ]
+        .into_iter()
+        .fold(0_u64, |total, texture| {
+            total.saturating_add(Self::texture_allocated_bytes(texture))
+        })
+    }
+
+    fn id_mask_render_targets_required_bytes(&self, width: usize, height: usize) -> u64 {
+        let r8 = TextureDescriptor::new();
+        r8.set_pixel_format(MTLPixelFormat::R8Uint);
+        r8.set_texture_type(MTLTextureType::D2);
+        r8.set_width(width as u64);
+        r8.set_height(height as u64);
+        r8.set_storage_mode(MTLStorageMode::Private);
+        r8.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+        let rgba = TextureDescriptor::new();
+        rgba.set_pixel_format(MTLPixelFormat::RGBA32Float);
+        rgba.set_texture_type(MTLTextureType::D2);
+        rgba.set_width(width as u64);
+        rgba.set_height(height as u64);
+        rgba.set_storage_mode(MTLStorageMode::Private);
+        rgba.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+        (self.device.heap_texture_size_and_align(&r8).size as u64)
+            .saturating_mul(2)
+            .saturating_add(
+                (self.device.heap_texture_size_and_align(&rgba).size as u64)
+                    .saturating_mul(4),
+            )
     }
 
     fn id_mask_vertex_cache_index(
@@ -282,6 +396,61 @@ impl MetalRenderer {
         desc.set_storage_mode(MTLStorageMode::Private);
         desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
         Ok(self.device.new_texture(&desc))
+    }
+
+    fn id_mask_field_cache_hit(
+        &mut self,
+        key: IdMaskFieldCacheKey,
+        chunks: &[id_mask_compositor::IdMaskRasterChunk],
+    ) -> Option<RenderTargets> {
+        let index = self
+            .id_mask_field_cache
+            .iter()
+            .position(|entry| entry.matches(key, chunks))?;
+        let entry = &mut self.id_mask_field_cache[index];
+        entry.last_used_frame = self.frame_id;
+        let serial = entry.serial;
+        let targets = entry.targets.clone();
+        if !self.id_mask_frame_cache_serials.contains(&serial) {
+            self.id_mask_frame_cache_serials.push(serial);
+        }
+        self.acc_id_mask_cache_hits = self.acc_id_mask_cache_hits.saturating_add(1);
+        self.acc_backend_cache_hits = self.acc_backend_cache_hits.saturating_add(1);
+        Some(targets)
+    }
+
+    fn retain_id_mask_field_cache_entry(
+        &mut self,
+        key: IdMaskFieldCacheKey,
+        chunks: &[id_mask_compositor::IdMaskRasterChunk],
+        targets: &RenderTargets,
+    ) {
+        let bytes = Self::id_mask_render_targets_bytes(targets);
+        while self.id_mask_cache_resident_bytes.saturating_add(bytes)
+            > self.id_mask_cache_budget_bytes
+        {
+            if self.evict_oldest_id_mask_cache_entry().is_none() {
+                return;
+            }
+        }
+        if bytes > self.id_mask_cache_budget_bytes
+            || self.id_mask_field_cache.len() >= ID_MASK_CACHE_MAX_ENTRIES
+        {
+            return;
+        }
+        let serial = self.next_id_mask_cache_serial;
+        self.next_id_mask_cache_serial = self.next_id_mask_cache_serial.wrapping_add(1).max(1);
+        self.id_mask_cache_resident_bytes =
+            self.id_mask_cache_resident_bytes.saturating_add(bytes);
+        self.id_mask_field_cache.push(IdMaskFieldCacheEntry {
+            key,
+            chunks: chunks.iter().map(IdMaskChunkKey::from).collect(),
+            targets: targets.clone(),
+            bytes,
+            last_used_frame: self.frame_id,
+            serial,
+        });
+        self.id_mask_frame_cache_serials.push(serial);
     }
 
     fn encode_id_mask_compositor_textures(
@@ -353,6 +522,8 @@ impl MetalRenderer {
         );
 
         self.acc_render_passes = self.acc_render_passes.saturating_add(1);
+        self.acc_id_mask_compositor_passes =
+            self.acc_id_mask_compositor_passes.saturating_add(1);
         let enc = cmd.new_render_command_encoder(&rpd);
         // The compositor shader builds a local full-quad for mask sampling.
         // Hardware viewport/scissor maps that quad into the requested widget
@@ -384,6 +555,7 @@ impl MetalRenderer {
             self.last_stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
         }
         self.last_stats.draws = self.acc_draws;
+        self.apply_id_mask_cache_stats();
         Ok(())
     }
 
@@ -416,11 +588,52 @@ impl MetalRenderer {
 
         self.ensure_target();
         let slot = self.current_frame_slot();
-        let targets = self.ensure_id_mask_render_targets(
-            slot,
+        let cache_key = IdMaskFieldCacheKey::new(&pass.raster);
+        if let Some(targets) = self.id_mask_field_cache_hit(cache_key, pass.raster.chunks) {
+            #[cfg(feature = "snapshot-tests")]
+            {
+                self.id_mask_targets[slot] = Some(targets.clone());
+            }
+            let (city_field_tex, seam_field_tex) = targets.final_fields();
+            return self.encode_id_mask_compositor_textures(
+                pass.raster.viewport,
+                pass.raster.mask_width,
+                pass.raster.mask_height,
+                pass.raster.mask_scale,
+                &targets.city,
+                &targets.neighborhood,
+                city_field_tex,
+                seam_field_tex,
+                &pass.city_styles,
+                &pass.neighborhood_colors,
+                pass.mode,
+                pass.glow_enabled,
+                pass.darken_background_alpha,
+                pass.polish,
+            );
+        }
+        self.acc_id_mask_cache_misses = self.acc_id_mask_cache_misses.saturating_add(1);
+        self.acc_backend_cache_misses = self.acc_backend_cache_misses.saturating_add(1);
+        let required_bytes = self.id_mask_render_targets_required_bytes(
             pass.raster.mask_width,
             pass.raster.mask_height,
+        );
+        let admission = self.prepare_id_mask_cache_admission(
+            required_bytes,
+            pass.raster.mask_width,
+            pass.raster.mask_height,
+        );
+        let cacheable = admission.is_some();
+        let reusable = admission.flatten();
+        let targets = self.new_id_mask_render_targets(
+            pass.raster.mask_width,
+            pass.raster.mask_height,
+            reusable,
         )?;
+        #[cfg(feature = "snapshot-tests")]
+        {
+            self.id_mask_targets[slot] = Some(targets.clone());
+        }
         for chunk in pass.raster.chunks {
             self.acc_chunks_prepared = self.acc_chunks_prepared.saturating_add(1);
             let end = chunk.first_vertex.saturating_add(chunk.vertex_count);
@@ -455,6 +668,7 @@ impl MetalRenderer {
         let rpd = RenderPassDescriptor::new();
         configure_clear_store_attachments(&rpd, &targets.city, &targets.neighborhood);
         self.acc_render_passes = self.acc_render_passes.saturating_add(1);
+        self.acc_id_mask_raster_passes = self.acc_id_mask_raster_passes.saturating_add(1);
         let enc = cmd.new_render_command_encoder(&rpd);
         enc.set_render_pipeline_state(&self.pso_id_mask_raster);
         enc.set_vertex_bytes(
@@ -484,6 +698,8 @@ impl MetalRenderer {
         let rpd = RenderPassDescriptor::new();
         configure_clear_store_attachments(&rpd, &targets.city_field_a, &targets.seam_field_a);
         self.acc_render_passes = self.acc_render_passes.saturating_add(1);
+        self.acc_id_mask_field_seed_passes =
+            self.acc_id_mask_field_seed_passes.saturating_add(1);
         let enc = cmd.new_render_command_encoder(&rpd);
         enc.set_render_pipeline_state(&self.pso_id_mask_field_seed);
         enc.set_fragment_bytes(
@@ -525,6 +741,8 @@ impl MetalRenderer {
             let rpd = RenderPassDescriptor::new();
             configure_clear_store_attachments(&rpd, dst_city, dst_seam);
             self.acc_render_passes = self.acc_render_passes.saturating_add(1);
+            self.acc_id_mask_field_jump_passes =
+                self.acc_id_mask_field_jump_passes.saturating_add(1);
             let enc = cmd.new_render_command_encoder(&rpd);
             enc.set_render_pipeline_state(&self.pso_id_mask_field_jump);
             enc.set_fragment_bytes(
@@ -539,11 +757,10 @@ impl MetalRenderer {
             src_is_a = !src_is_a;
             jump /= 2;
         }
-        let (city_field_tex, seam_field_tex) = if src_is_a {
-            (&targets.city_field_a, &targets.seam_field_a)
-        } else {
-            (&targets.city_field_b, &targets.seam_field_b)
-        };
+        if cacheable {
+            self.retain_id_mask_field_cache_entry(cache_key, pass.raster.chunks, &targets);
+        }
+        let (city_field_tex, seam_field_tex) = targets.final_fields();
 
         self.encode_id_mask_compositor_textures(
             pass.raster.viewport,
