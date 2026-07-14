@@ -394,6 +394,85 @@ fn layer_cache_clean_and_dirty_frames_have_single_body_owner()
 
 #[cfg(target_os = "macos")]
 #[test]
+fn layer_cache_budget_falls_back_exactly_and_recycles_compatible_textures()
+{
+   use oxide_renderer_api::{self as api, Renderer};
+   use oxide_renderer_metal::{MetalInitError, MetalRenderer};
+
+   fn layer_list(id: u32, size: f32) -> api::DrawList
+   {
+      let mut list = api::DrawList::default();
+      list.items.push(api::DrawCmd::LayerBegin {
+         id,
+         rect: api::RectF::new(0.0, 0.0, size, size),
+         dirty: true,
+      });
+      list.items.push(api::DrawCmd::RRect {
+         rect: api::RectF::new(1.0, 1.0, size - 2.0, size - 2.0),
+         radii: [2.0; 4],
+         color: api::Color::rgba(0.2, 0.5, 0.9, 1.0),
+      });
+      list.items.push(api::DrawCmd::LayerEnd);
+      list
+   }
+
+   fn render(renderer: &mut MetalRenderer, list: &api::DrawList)
+   {
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      renderer.encode_pass(list);
+      renderer.submit(token).expect("submit layer budget frame");
+   }
+
+   let mut renderer = match MetalRenderer::new_default()
+   {
+      Ok(renderer) => renderer,
+      Err(MetalInitError::NoDevice) => panic!("macOS layer budget contract requires Metal"),
+      Err(error) => panic!("create Metal renderer: {error}"),
+   };
+   renderer.resize(96, 96, 1.0).expect("resize renderer");
+   renderer.set_layer_cache_budget_bytes(0);
+   render(&mut renderer, &layer_list(70, 32.0));
+   let fallback = renderer.last_stats();
+   assert_eq!(fallback.layer_cache_budget_bytes, 0);
+   assert_eq!(fallback.layer_cache_resident_bytes, 0);
+   assert_eq!(fallback.layer_texture_creates, 0);
+   assert_eq!(fallback.layer_inline_draws, 1);
+
+   renderer.set_layer_cache_budget_bytes(32 * 1024 * 1024);
+   render(&mut renderer, &layer_list(71, 32.0));
+   let first = renderer.last_stats();
+   assert_eq!(first.layer_texture_creates, 1);
+   assert!(first.layer_cache_resident_bytes > 0);
+   assert!(first.layer_cache_resident_bytes + first.layer_cache_pool_bytes
+      <= first.layer_cache_budget_bytes);
+
+   let empty = api::DrawList::default();
+   render(&mut renderer, &empty);
+   render(&mut renderer, &empty);
+   assert_eq!(renderer.last_stats().layer_cache_resident_bytes, first.layer_cache_resident_bytes);
+
+   render(&mut renderer, &layer_list(71, 64.0));
+   let resized = renderer.last_stats();
+   assert_eq!(resized.layer_texture_creates, 1);
+   assert!(resized.layer_cache_pool_bytes > 0);
+   render(&mut renderer, &layer_list(71, 32.0));
+   let recycled = renderer.last_stats();
+   assert_eq!(recycled.layer_texture_creates, 0);
+   assert!(recycled.layer_cache_pool_reuses > resized.layer_cache_pool_reuses);
+   render(&mut renderer, &layer_list(72, 32.0));
+   let navigation = renderer.last_stats();
+   assert_eq!(navigation.layer_texture_creates, 0);
+   assert!(navigation.layer_cache_pool_reuses > recycled.layer_cache_pool_reuses);
+
+   renderer.purge_layer_cache_for_memory_warning();
+   let purged = renderer.last_stats();
+   assert_eq!(purged.layer_cache_resident_bytes, 0);
+   assert_eq!(purged.layer_cache_pool_bytes, 0);
+   assert_eq!(purged.layer_cache_last_purge_reason, 2);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn dirty_nested_child_refreshes_its_cached_parent_once()
 {
    use oxide_renderer_api::{self as api, Renderer};

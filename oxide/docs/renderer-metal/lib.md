@@ -101,6 +101,7 @@ ID-mask composition is GPU-owned. Semantic region/subregion triangles are raster
 
 ## Changelog
 
+- 2026-07-14: bounded retained-layer storage by Metal `allocatedSize`, with adaptive/configurable budgets, protected-frame LRU eviction, compatible whole-texture pooling, absent-layer aging, pool shrink, and scale/device-loss/memory-warning purges. An over-budget frame renders layer bodies inline so budget enforcement cannot change pixels or omit work.
 - 2026-07-13: added C29 prepared snapshot-layer keys, body-free clean texture replay, single-owner dirty refresh, resource/purge invalidation, and adaptive exact parent-layer parity.
 - 2026-07-13: added C27 prepared image meshes, indexed retained damage replay, spatial-query counters, and validated static snapshot-plan reuse.
 - 2026-07-13: added persistent byte-budgeted prepared render chunks, dynamic transform/opacity records, resource-generation invalidation, prepared-cache accounting, and memory-pressure purge.

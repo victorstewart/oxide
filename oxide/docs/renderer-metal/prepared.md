@@ -88,6 +88,8 @@ Clean replay allocates no new Metal buffers and copies no immutable geometry. C2
 
 The C29 cases are `gpu.architecture.prepared_layers.{clean_100x100,one_dirty_100x100}` and `gpu.authoring.retained_snapshot.prepared_layers_clean_100x100`. Clean replay requires 100 texture hits and zero body/offscreen/upload work. The dirty row requires 99 clean hits, one miss, one offscreen body render, one main composite, and no new layer texture after warmup. All rows report frame/encode/GPU distributions, passes, draws, body scans/copies, geometry copies, uploads, texture creates, cache outcomes, prepared chunks, and layer residency.
 
+C31 preflights every unique prepared layer through `heapTextureSizeAndAlign`. If the complete protected set fits, refreshes acquire exact-format compatible textures from the pool before allocating; clean and refreshed composites update their last-used frame. If the set cannot fit, the immutable snapshot takes the existing exact flat path before any layer pass is encoded. This keeps the hard budget authoritative without weakening prepared-layer or resource-generation keys.
+
 ## Feature flags and cfgs
 
 Prepared pipelines are unavailable in the direct-camera-preview-only renderer configuration. Snapshot readback verification uses the existing `snapshot-tests` feature; the prepared production path itself has no feature flag.
@@ -116,6 +118,7 @@ renderer.submit(token)?;
 
 ## Changelog
 
+- 2026-07-14: integrated prepared layers with allocated-byte admission, protected-set budgeting, compatible texture pooling, last-use tracking, and exact over-budget fallback.
 - 2026-07-13: added C29 generation-keyed prepared snapshot layers with body-free clean composite, single-owner dirty refresh, exact resource invalidation, adaptive exact opaque-RRect intermediates, and exact unsupported fallback.
 - 2026-07-13: added C27 prepared image meshes, indexed small-damage replay, zero-vertex-scan accounting, and validated static full-plan reuse.
 - 2026-07-13: added a completion-protected changed-record property ring with separate logical upload/residency counters for C26.

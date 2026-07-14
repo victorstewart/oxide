@@ -66,6 +66,18 @@ use thiserror::Error;
 
 static NEXT_DEVICE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
+const LAYER_CACHE_MIN_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
+const LAYER_CACHE_MAX_BUDGET_BYTES: u64 = 256 * 1024 * 1024;
+const LAYER_CACHE_POOL_BUDGET_DIVISOR: u64 = 4;
+const LAYER_CACHE_ABSENT_FRAMES: u64 = 120;
+const LAYER_CACHE_POOL_MAX_AGE_FRAMES: u64 = 60;
+
+const LAYER_PURGE_NONE: u8 = 0;
+const LAYER_PURGE_EXPLICIT: u8 = 1;
+const LAYER_PURGE_MEMORY_WARNING: u8 = 2;
+const LAYER_PURGE_DEVICE_LOSS: u8 = 3;
+const LAYER_PURGE_SCALE_CHANGE: u8 = 4;
+
 #[cfg(target_os = "ios")]
 extern "C" {
     fn oxide_host_ios_log(ptr: *const core::ffi::c_char, len: usize);
@@ -1031,6 +1043,16 @@ pub struct MetalRenderer {
     meshes_3d: HashMap<u32, Mesh3dGpu>,
     next_mesh3d_id: u32,
     layers: HashMap<u32, LayerEntry>,
+    layer_pool: alloc::vec::Vec<LayerPoolEntry>,
+    layer_frame_ids: HashSet<u32>,
+    layer_cache_budget_bytes: u64,
+    layer_cache_resident_bytes: u64,
+    layer_cache_pool_bytes: u64,
+    layer_cache_pool_reuses: u64,
+    layer_cache_evictions: u64,
+    layer_cache_recreations: u64,
+    layer_cache_purges: u64,
+    layer_cache_last_purge_reason: u8,
     layer_cache_enabled: bool,
     encoding_layer: bool,
     inline_layer_counter_active: bool,
@@ -2055,6 +2077,15 @@ impl MetalRenderer {
         };
         let gpu_stage_timing = GpuStageTimingSupport::new(&device);
         let device_generation = NEXT_DEVICE_GENERATION.fetch_add(1, Ordering::Relaxed);
+        let adaptive_layer_budget = device
+            .recommended_max_working_set_size()
+            .checked_div(16)
+            .unwrap_or(0)
+            .clamp(LAYER_CACHE_MIN_BUDGET_BYTES, LAYER_CACHE_MAX_BUDGET_BYTES);
+        let layer_cache_budget_bytes = std::env::var("OXIDE_LAYER_CACHE_BUDGET_BYTES")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(adaptive_layer_budget);
 
         Ok(Self {
             device,
@@ -2185,6 +2216,16 @@ impl MetalRenderer {
             meshes_3d: HashMap::new(),
             next_mesh3d_id: 1,
             layers: HashMap::new(),
+            layer_pool: alloc::vec::Vec::new(),
+            layer_frame_ids: HashSet::new(),
+            layer_cache_budget_bytes,
+            layer_cache_resident_bytes: 0,
+            layer_cache_pool_bytes: 0,
+            layer_cache_pool_reuses: 0,
+            layer_cache_evictions: 0,
+            layer_cache_recreations: 0,
+            layer_cache_purges: 0,
+            layer_cache_last_purge_reason: LAYER_PURGE_NONE,
             layer_cache_enabled,
             encoding_layer: false,
             inline_layer_counter_active: false,
@@ -2972,6 +3013,272 @@ impl MetalRenderer {
       }
    }
 
+   /// Returns the hard Metal-allocated-byte budget for retained and pooled layers.
+   pub fn layer_cache_budget_bytes(&self) -> u64
+   {
+      self.layer_cache_budget_bytes
+   }
+
+   /// Applies a hard retained-layer budget and immediately releases cold storage.
+   pub fn set_layer_cache_budget_bytes(&mut self, budget_bytes: u64)
+   {
+      self.layer_cache_budget_bytes = budget_bytes;
+      self.enforce_layer_cache_budget();
+      self.apply_layer_cache_stats();
+   }
+
+   /// Releases every retained and pooled layer texture.
+   pub fn purge_layer_cache(&mut self)
+   {
+      self.purge_layer_cache_for_reason(LAYER_PURGE_EXPLICIT);
+   }
+
+   /// Releases every layer texture in response to an operating-system memory warning.
+   pub fn purge_layer_cache_for_memory_warning(&mut self)
+   {
+      self.purge_layer_cache_for_reason(LAYER_PURGE_MEMORY_WARNING);
+   }
+
+   fn layer_texture_descriptor(format: MTLPixelFormat, width: u32, height: u32) -> TextureDescriptor
+   {
+      let descriptor = TextureDescriptor::new();
+      descriptor.set_pixel_format(format);
+      descriptor.set_texture_type(MTLTextureType::D2);
+      descriptor.set_width(width as u64);
+      descriptor.set_height(height as u64);
+      descriptor.set_storage_mode(MTLStorageMode::Private);
+      descriptor.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+      descriptor
+   }
+
+   fn layer_texture_required_bytes(&self, format: MTLPixelFormat, width: u32, height: u32) -> u64
+   {
+      let descriptor = Self::layer_texture_descriptor(format, width, height);
+      self.device.heap_texture_size_and_align(&descriptor).size as u64
+   }
+
+   fn layer_cache_cpu_bytes(&self) -> u64
+   {
+      let active = (self.layers.len() as u64)
+         .saturating_mul(core::mem::size_of::<LayerEntry>() as u64);
+      let pooled = (self.layer_pool.capacity() as u64)
+         .saturating_mul(core::mem::size_of::<LayerPoolEntry>() as u64);
+      let resources = self.layers.values().fold(0_u64, |total, layer| {
+         total.saturating_add(
+            (layer.resources.capacity() as u64)
+               .saturating_mul(core::mem::size_of::<api::RenderResourceDependency>() as u64),
+         )
+      });
+      active.saturating_add(pooled).saturating_add(resources)
+   }
+
+   fn apply_layer_cache_stats(&mut self)
+   {
+      self.last_stats.layer_cache_budget_bytes = self.layer_cache_budget_bytes;
+      self.last_stats.layer_cache_resident_bytes = self.layer_cache_resident_bytes;
+      self.last_stats.layer_cache_pool_bytes = self.layer_cache_pool_bytes;
+      self.last_stats.layer_cache_cpu_bytes = self.layer_cache_cpu_bytes();
+      self.last_stats.layer_cache_oldest_last_used_frame = self.layers
+         .values()
+         .map(|layer| layer.last_used_frame)
+         .min()
+         .unwrap_or(0);
+      self.last_stats.layer_cache_pool_reuses = self.layer_cache_pool_reuses;
+      self.last_stats.layer_cache_evictions = self.layer_cache_evictions;
+      self.last_stats.layer_cache_recreations = self.layer_cache_recreations;
+      self.last_stats.layer_cache_purges = self.layer_cache_purges;
+      self.last_stats.layer_cache_last_purge_reason = self.layer_cache_last_purge_reason;
+   }
+
+   fn purge_layer_cache_for_reason(&mut self, reason: u8)
+   {
+      let removed = self.layers.len().saturating_add(self.layer_pool.len());
+      self.layers.clear();
+      self.layer_pool.clear();
+      self.layer_frame_ids.clear();
+      self.layer_cache_resident_bytes = 0;
+      self.layer_cache_pool_bytes = 0;
+      self.layer_cache_evictions = self.layer_cache_evictions.saturating_add(removed as u64);
+      self.layer_cache_purges = self.layer_cache_purges.saturating_add(1);
+      self.layer_cache_last_purge_reason = reason;
+      self.prepared_frame_snapshot = None;
+      self.prepared_frame_plan.clear();
+      self.prepared_layer_frame_keys.clear();
+      self.apply_layer_cache_stats();
+   }
+
+   fn trim_layer_pool(&mut self, max_bytes: u64)
+   {
+      while self.layer_cache_pool_bytes > max_bytes
+      {
+         let Some(index) = self.layer_pool.iter().enumerate()
+            .min_by_key(|(_, entry)| entry.recycled_frame)
+            .map(|(index, _)| index) else { break };
+         let removed = self.layer_pool.swap_remove(index);
+         self.layer_cache_pool_bytes = self.layer_cache_pool_bytes.saturating_sub(removed.bytes);
+         self.layer_cache_evictions = self.layer_cache_evictions.saturating_add(1);
+      }
+   }
+
+   fn recycle_layer_entry(&mut self, entry: LayerEntry)
+   {
+      self.layer_cache_resident_bytes = self.layer_cache_resident_bytes.saturating_sub(entry.bytes);
+      let pool_budget = self.layer_cache_budget_bytes
+         .checked_div(LAYER_CACHE_POOL_BUDGET_DIVISOR)
+         .unwrap_or(0);
+      if entry.bytes > pool_budget
+      {
+         self.layer_cache_evictions = self.layer_cache_evictions.saturating_add(1);
+         return;
+      }
+      self.layer_cache_pool_bytes = self.layer_cache_pool_bytes.saturating_add(entry.bytes);
+      self.layer_pool.push(LayerPoolEntry {
+         format: entry.tex.pixel_format(),
+         tex: entry.tex,
+         w: entry.w,
+         h: entry.h,
+         bytes: entry.bytes,
+         recycled_frame: self.frame_id,
+      });
+      self.trim_layer_pool(pool_budget);
+   }
+
+   fn evict_oldest_unprotected_layer(&mut self) -> bool
+   {
+      let Some(id) = self.layers.iter()
+         .filter(|(id, _)| !self.layer_frame_ids.contains(id))
+         .min_by_key(|(_, layer)| layer.last_used_frame)
+         .map(|(id, _)| *id) else { return false };
+      if let Some(layer) = self.layers.remove(&id)
+      {
+         self.recycle_layer_entry(layer);
+         self.layer_cache_evictions = self.layer_cache_evictions.saturating_add(1);
+      }
+      true
+   }
+
+   fn enforce_layer_cache_budget(&mut self)
+   {
+      self.trim_layer_pool(self.layer_cache_budget_bytes.saturating_sub(self.layer_cache_resident_bytes));
+      while self.layer_cache_resident_bytes.saturating_add(self.layer_cache_pool_bytes)
+         > self.layer_cache_budget_bytes
+      {
+         if !self.evict_oldest_unprotected_layer()
+         {
+            break;
+         }
+         self.trim_layer_pool(self.layer_cache_budget_bytes.saturating_sub(self.layer_cache_resident_bytes));
+      }
+   }
+
+   fn admit_layer_bytes(&mut self, bytes: u64) -> bool
+   {
+      if bytes > self.layer_cache_budget_bytes
+      {
+         return false;
+      }
+      let retained_limit = self.layer_cache_budget_bytes.saturating_sub(bytes);
+      self.trim_layer_pool(retained_limit.saturating_sub(self.layer_cache_resident_bytes));
+      while self.layer_cache_resident_bytes.saturating_add(self.layer_cache_pool_bytes) > retained_limit
+      {
+         if !self.evict_oldest_unprotected_layer()
+         {
+            return false;
+         }
+         self.trim_layer_pool(retained_limit.saturating_sub(self.layer_cache_resident_bytes));
+      }
+      true
+   }
+
+   fn take_pooled_layer_texture(&mut self, format: MTLPixelFormat, width: u32, height: u32) -> Option<(Texture, u64)>
+   {
+      let index = self.layer_pool.iter().position(|entry| {
+         entry.format == format && entry.w == width && entry.h == height
+      })?;
+      let entry = self.layer_pool.swap_remove(index);
+      self.layer_cache_pool_bytes = self.layer_cache_pool_bytes.saturating_sub(entry.bytes);
+      self.layer_cache_resident_bytes = self.layer_cache_resident_bytes.saturating_add(entry.bytes);
+      self.layer_cache_pool_reuses = self.layer_cache_pool_reuses.saturating_add(1);
+      Some((entry.tex, entry.bytes))
+   }
+
+   fn recycle_compatible_unprotected_layer(&mut self, format: MTLPixelFormat, width: u32, height: u32) -> bool
+   {
+      let Some(id) = self.layers.iter()
+         .find(|(id, layer)| {
+            !self.layer_frame_ids.contains(id)
+               && layer.w == width
+               && layer.h == height
+               && layer.tex.pixel_format() == format
+         })
+         .map(|(id, _)| *id) else { return false };
+      if let Some(layer) = self.layers.remove(&id)
+      {
+         self.recycle_layer_entry(layer);
+         self.layer_cache_evictions = self.layer_cache_evictions.saturating_add(1);
+      }
+      true
+   }
+
+   fn acquire_layer_texture(&mut self, format: MTLPixelFormat, width: u32, height: u32) -> Option<(Texture, u64)>
+   {
+      if let Some(texture) = self.take_pooled_layer_texture(format, width, height)
+      {
+         return Some(texture);
+      }
+      if self.recycle_compatible_unprotected_layer(format, width, height)
+      {
+         if let Some(texture) = self.take_pooled_layer_texture(format, width, height)
+         {
+            return Some(texture);
+         }
+      }
+      let required = self.layer_texture_required_bytes(format, width, height);
+      if !self.admit_layer_bytes(required)
+      {
+         return None;
+      }
+      let descriptor = Self::layer_texture_descriptor(format, width, height);
+      let texture = self.device.new_texture(&descriptor);
+      let bytes = Self::texture_allocated_bytes(&texture);
+      self.layer_cache_resident_bytes = self.layer_cache_resident_bytes.saturating_add(bytes);
+      self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
+      self.acc_layer_texture_creates = self.acc_layer_texture_creates.saturating_add(1);
+      Some((texture, bytes))
+   }
+
+   fn age_layer_cache(&mut self)
+   {
+      if self.frame_id >= LAYER_CACHE_ABSENT_FRAMES
+      {
+         let absent_before = self.frame_id - LAYER_CACHE_ABSENT_FRAMES;
+         loop
+         {
+            let Some(id) = self.layers.iter()
+               .find(|(id, layer)| {
+                  !self.layer_frame_ids.contains(id) && layer.last_used_frame <= absent_before
+               })
+               .map(|(id, _)| *id) else { break };
+            if let Some(layer) = self.layers.remove(&id)
+            {
+               self.recycle_layer_entry(layer);
+            }
+         }
+      }
+      if self.frame_id >= LAYER_CACHE_POOL_MAX_AGE_FRAMES
+      {
+         let pool_before = self.frame_id - LAYER_CACHE_POOL_MAX_AGE_FRAMES;
+         while let Some(index) = self.layer_pool.iter()
+            .position(|entry| entry.recycled_frame <= pool_before)
+         {
+            let removed = self.layer_pool.swap_remove(index);
+            self.layer_cache_pool_bytes = self.layer_cache_pool_bytes.saturating_sub(removed.bytes);
+            self.layer_cache_evictions = self.layer_cache_evictions.saturating_add(1);
+         }
+      }
+      self.enforce_layer_cache_budget();
+   }
+
    /// Returns the current renderer-owned generation for an image or glyph atlas.
    pub fn image_generation(&self, handle: api::ImageHandle) -> Option<u64>
    {
@@ -3619,6 +3926,7 @@ impl MetalRenderer {
 
         let cpu_t0 = collect_stage_stats.then(Instant::now);
         self.frame_id = self.frame_id.wrapping_add(1);
+        self.layer_frame_ids.clear();
         self.acc_draws = 0;
         self.acc_flat_instanced_draws = 0;
         self.acc_instanced = 0;
@@ -5262,6 +5570,30 @@ impl MetalRenderer {
             }
         }
         self.layer_plan_stack.clear();
+        self.layer_frame_ids.clear();
+        let mut required_bytes = 0_u64;
+        for plan in &self.layer_plans
+        {
+            if plan.action != LayerPlanAction::Composite || !self.layer_frame_ids.insert(plan.id)
+            {
+                continue;
+            }
+            let width = (plan.rect.w * self.target_scale.max(1.0)).ceil() as u32;
+            let height = (plan.rect.h * self.target_scale.max(1.0)).ceil() as u32;
+            let descriptor = Self::layer_texture_descriptor(self.color_format, width, height);
+            required_bytes = required_bytes.saturating_add(
+                self.device.heap_texture_size_and_align(&descriptor).size as u64,
+            );
+        }
+        if required_bytes > self.layer_cache_budget_bytes
+        {
+            for plan in &mut self.layer_plans
+            {
+                plan.action = LayerPlanAction::Inline;
+                plan.refresh = false;
+            }
+            self.layer_frame_ids.clear();
+        }
     }
 
     fn layer_plan(&self, id: u32, begin: usize) -> Option<LayerPlan> {
@@ -5295,6 +5627,7 @@ impl api::Renderer for MetalRenderer {
         damage: Option<&api::Damage>,
     ) -> api::FrameToken {
         self.frame_id = self.frame_id.wrapping_add(1);
+        self.layer_frame_ids.clear();
         let frame_resource_depth = self.frames.len();
         let preferred_slot = self.next_frame_slot();
         let busy_slots = self.frame_in_flight.load(Ordering::Acquire);
@@ -5790,19 +6123,26 @@ impl api::Renderer for MetalRenderer {
                         && entry.h == h
                         && entry.tex.pixel_format() == self.color_format
                 })
-                .map(|entry| entry.tex.to_owned());
-            let texture = existing_texture.unwrap_or_else(|| {
-                let descriptor = TextureDescriptor::new();
-                descriptor.set_pixel_format(self.color_format);
-                descriptor.set_texture_type(MTLTextureType::D2);
-                descriptor.set_width(w as u64);
-                descriptor.set_height(h as u64);
-                descriptor.set_storage_mode(MTLStorageMode::Private);
-                descriptor.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
-                self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
-                self.acc_layer_texture_creates = self.acc_layer_texture_creates.saturating_add(1);
-                self.device.new_texture(&descriptor)
-            });
+                .map(|entry| (entry.tex.to_owned(), entry.bytes));
+            let (texture, texture_bytes) = if let Some(texture) = existing_texture
+            {
+                texture
+            }
+            else
+            {
+                if let Some(entry) = self.layers.remove(&plan.id)
+                {
+                    self.layer_cache_recreations = self.layer_cache_recreations.saturating_add(1);
+                    self.recycle_layer_entry(entry);
+                }
+                let Some(texture) = self.acquire_layer_texture(self.color_format, w, h) else
+                {
+                    self.layer_plans[plan_index].action = LayerPlanAction::Inline;
+                    self.layer_plans[plan_index].refresh = false;
+                    continue;
+                };
+                texture
+            };
             let pass_descriptor = RenderPassDescriptor::new();
             let attachment = pass_descriptor.color_attachments().object_at(0).unwrap();
             attachment.set_texture(Some(&texture));
@@ -5854,6 +6194,7 @@ impl api::Renderer for MetalRenderer {
                 entry.generation = plan.generation;
                 entry.prepared_key = None;
                 entry.resources.clear();
+                entry.last_used_frame = self.frame_id;
             } else {
                 self.layers.insert(
                     plan.id,
@@ -5864,6 +6205,8 @@ impl api::Renderer for MetalRenderer {
                         generation: plan.generation,
                         prepared_key: None,
                         resources: alloc::vec::Vec::new(),
+                        bytes: texture_bytes,
+                        last_used_frame: self.frame_id,
                     },
                 );
             }
@@ -6529,6 +6872,7 @@ impl api::Renderer for MetalRenderer {
         let trace = renderer_trace_enabled();
         let trace_started_at = if trace { Some(Instant::now()) } else { None };
         if self.submit_error_flag.swap(false, Ordering::AcqRel) {
+            self.purge_layer_cache_for_reason(LAYER_PURGE_DEVICE_LOSS);
             let detail = self.submit_error_detail.lock().ok().and_then(|mut slot| slot.take());
             if let Some(detail) = detail {
                 return Err(api::RenderError::Io(format!("device lost: {}", detail)));
@@ -6731,6 +7075,8 @@ impl api::Renderer for MetalRenderer {
                 ));
             }
         }
+        self.age_layer_cache();
+        self.apply_layer_cache_stats();
         Ok(())
     }
 
@@ -6746,12 +7092,17 @@ impl api::Renderer for MetalRenderer {
             return Ok(());
         }
         let target_size_changed = self.target_w != next_w || self.target_h != next_h;
+        let target_scale_changed = (self.target_scale - next_scale).abs() > f32::EPSILON;
         self.target_w = next_w;
         self.target_h = next_h;
         self.target_scale = next_scale;
         self.persistent_target_valid = false;
         if target_size_changed {
             self.purge_effect_targets();
+        }
+        if target_scale_changed {
+            self.purge_layer_cache_for_reason(LAYER_PURGE_SCALE_CHANGE);
+            self.purge_prepared_chunks();
         }
         self.ensure_target();
         Ok(())
@@ -6874,18 +7225,22 @@ fn encode_cached_layer(
     rect: api::RectF,
     viewport: [f32; 2],
 ) {
+    r.layer_frame_ids.insert(plan.id);
+    let color_format = r.color_format;
+    let frame_id = r.frame_id;
     let Some(layer) = r
         .layers
-        .get(&plan.id)
+        .get_mut(&plan.id)
         .filter(|entry| {
             entry.generation == plan.generation
-                && entry.tex.pixel_format() == r.color_format
+                && entry.tex.pixel_format() == color_format
                 && entry.prepared_key.is_none()
         })
     else {
         debug_assert!(false, "planned Metal layer generation must exist before composition");
         return;
     };
+    layer.last_used_frame = frame_id;
     let scale = r.target_scale.max(1.0);
     let pixel_aligned = !plan.refresh
         && [rect.x, rect.y, rect.w, rect.h]
@@ -9477,6 +9832,18 @@ struct LayerEntry {
     generation: u64,
     prepared_key: Option<prepared::PreparedLayerKey>,
     resources: alloc::vec::Vec<api::RenderResourceDependency>,
+    bytes: u64,
+    last_used_frame: u64,
+}
+
+#[derive(Debug)]
+struct LayerPoolEntry {
+    tex: Texture,
+    w: u32,
+    h: u32,
+    format: MTLPixelFormat,
+    bytes: u64,
+    recycled_frame: u64,
 }
 
 #[derive(Debug, Default)]
@@ -9533,6 +9900,8 @@ pub struct PerfMemoryStats {
     pub camera_transition_cache_bytes: u64,
     pub benchmark_camera_bytes: u64,
     pub layer_cache_bytes: u64,
+    pub layer_cache_pool_bytes: u64,
+    pub layer_cache_cpu_bytes: u64,
     pub image_cache_bytes: u64,
     pub scene3d_mesh_buffer_bytes: u64,
     pub id_mask_vertex_buffer_bytes: u64,
@@ -9578,6 +9947,16 @@ pub struct PerfStats {
     pub layer_texture_creates: u32,
     pub layer_cache_hits: u32,
     pub layer_cache_misses: u32,
+    pub layer_cache_budget_bytes: u64,
+    pub layer_cache_resident_bytes: u64,
+    pub layer_cache_pool_bytes: u64,
+    pub layer_cache_cpu_bytes: u64,
+    pub layer_cache_oldest_last_used_frame: u64,
+    pub layer_cache_pool_reuses: u64,
+    pub layer_cache_evictions: u64,
+    pub layer_cache_recreations: u64,
+    pub layer_cache_purges: u64,
+    pub layer_cache_last_purge_reason: u8,
     pub layer_offscreen_draws: u64,
     pub layer_inline_draws: u64,
     pub layer_double_render_prevented: u32,
@@ -9854,8 +10233,13 @@ impl MetalRenderer {
         );
         let layer_cache_bytes = Self::unique_texture_category_bytes(
             &mut seen,
-            self.layers.values().map(|entry| entry.tex.as_ref()),
+            self.layers
+                .values()
+                .map(|entry| entry.tex.as_ref())
+                .chain(self.layer_pool.iter().map(|entry| entry.tex.as_ref())),
         );
+        let layer_cache_pool_bytes = self.layer_cache_pool_bytes;
+        let layer_cache_cpu_bytes = self.layer_cache_cpu_bytes();
         let image_cache_bytes = Self::unique_texture_category_bytes(
             &mut seen,
             self.images.values().map(|tex| tex.as_ref()),
@@ -9937,6 +10321,7 @@ impl MetalRenderer {
             .chain(self.bench_cam_uv_tex.iter())
             .chain(self.bench_cam_bgra_tex.iter())
             .chain(self.layers.values().map(|entry| &entry.tex))
+            .chain(self.layer_pool.iter().map(|entry| &entry.tex))
             .chain(self.images.values())
         {
             Self::push_unique_texture_logical_bytes(
@@ -10064,6 +10449,8 @@ impl MetalRenderer {
             camera_transition_cache_bytes,
             benchmark_camera_bytes,
             layer_cache_bytes,
+            layer_cache_pool_bytes,
+            layer_cache_cpu_bytes,
             image_cache_bytes,
             scene3d_mesh_buffer_bytes,
             id_mask_vertex_buffer_bytes,

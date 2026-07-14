@@ -80,6 +80,45 @@ fn renderer_accounting_schema_defaults_to_explicit_unavailable_allocated_bytes()
 }
 
 #[test]
+fn webgpu_layer_cache_has_hard_budget_pool_aging_and_purge_contracts()
+{
+   let source = include_str!("../src/wasm/webgpu.rs");
+   assert!(source.contains("fn admit_layer_bytes(&mut self, bytes: u64) -> bool"));
+   assert!(source.contains("fn evict_oldest_unprotected_layer(&mut self) -> bool"));
+   assert!(source.contains("fn take_pooled_layer(&mut self, width: u32, height: u32)"));
+   assert!(source.contains("const LAYER_CACHE_ABSENT_FRAMES: u64"));
+   assert!(source.contains("if self.frame_id >= LAYER_CACHE_ABSENT_FRAMES"));
+   assert!(source.contains("if self.frame_id >= LAYER_CACHE_POOL_MAX_AGE_FRAMES"));
+   assert!(source.contains("pub fn purge_layer_cache_for_memory_pressure"));
+   assert!(source.contains("self.purge_layer_cache_for_reason(LAYER_PURGE_DEVICE_LOSS)"));
+   assert!(source.contains("required_layer_bytes > self.layer_cache_budget_bytes"));
+
+   let stats = WebRendererStats {
+      layer_cache_budget_bytes: 1,
+      layer_cache_resident_bytes: 2,
+      layer_cache_pool_bytes: 3,
+      layer_cache_cpu_bytes: 4,
+      layer_cache_oldest_last_used_frame: 5,
+      layer_cache_pool_reuses: 6,
+      layer_cache_evictions: 7,
+      layer_cache_recreations: 8,
+      layer_cache_purges: 9,
+      layer_cache_last_purge_reason: 3,
+      ..WebRendererStats::default()
+   };
+   assert_eq!(stats.layer_cache_budget_bytes, 1);
+   assert_eq!(stats.layer_cache_resident_bytes, 2);
+   assert_eq!(stats.layer_cache_pool_bytes, 3);
+   assert_eq!(stats.layer_cache_cpu_bytes, 4);
+   assert_eq!(stats.layer_cache_oldest_last_used_frame, 5);
+   assert_eq!(stats.layer_cache_pool_reuses, 6);
+   assert_eq!(stats.layer_cache_evictions, 7);
+   assert_eq!(stats.layer_cache_recreations, 8);
+   assert_eq!(stats.layer_cache_purges, 9);
+   assert_eq!(stats.layer_cache_last_purge_reason, 3);
+}
+
+#[test]
 fn wasm_snapshot_feature_exposes_exact_id_mask_texture_and_field_readback()
 {
    let source = include_str!("../src/wasm/webgpu.rs");
@@ -279,7 +318,7 @@ fn wasm_webgpu_viewport_uniform_and_size_local_layers_follow_independent_lifetim
     assert!(resize.contains("self.drop_auxiliary_targets();"));
     assert!(resize.contains("if scale_changed"));
     assert!(!resize.contains("if size_changed || scale_changed"));
-    assert!(resize.contains("self.layers.clear();"));
+    assert!(resize.contains("self.purge_layer_cache_for_reason(LAYER_PURGE_SCALE_CHANGE);"));
 }
 
 #[test]

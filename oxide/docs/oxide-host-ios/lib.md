@@ -69,7 +69,7 @@
 ## Feature flags and cfgs
 - iOS-only native services are compiled behind `target_os = "ios"` guards.
 - Host unit tests compile the Rust callback bridge on the local host without launching UIKit.
-- Critical memory warnings purge renderer-owned effect/bloom targets and persistent prepared chunks, then mark the frame dirty so visible content rebuilds through the normal Rust render path.
+- Critical memory warnings purge renderer-owned effect/bloom targets, retained and pooled layer textures, and persistent prepared chunks, then mark the frame dirty so visible content rebuilds lazily through the normal Rust render path.
 
 ## Testing and benchmarks
 - Covered by `cargo test -p oxide-host-ios --tests --locked`.
@@ -84,6 +84,7 @@ oxide_host_emit_touch(10, 0, 1.0, 2.0, 0.5, 1, 0.0, 0.0, 0, 0, 100);
 ```
 
 ## Changelog
+- 2026-07-14: routed critical memory warnings through the production retained-layer storage purge before requesting the rebuild frame.
 - 2026-07-13: purged byte-budgeted prepared Metal chunks alongside effect targets on critical memory pressure.
 - 2026-07-13: selected the three-slot visible Metal frame-resource mode instead of retaining the deeper offscreen/perf allocation.
 - 2026-06-22: froze host stats and camera benchmark snapshot ABI layouts, including Swift benchmark-runtime host-stat mirror fields.

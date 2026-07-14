@@ -2642,6 +2642,14 @@ where
    let mut renderer = Box::new(metal::MetalRenderer::new_with_config(config).context("creating Metal renderer")?);
    renderer.resize(1_200, 800, 1.0).context("resizing Metal renderer")?;
    renderer.set_damage_options(true, DAMAGE_USE_THRESH, DAMAGE_PREFILTER_THRESH);
+   if id.starts_with("gpu.architecture.layers.")
+   {
+      let budget = std::env::var("OXIDE_ARCHITECTURE_LAYER_CACHE_BUDGET_BYTES")
+         .ok()
+         .and_then(|value| value.parse::<u64>().ok())
+         .unwrap_or(16 * 1024 * 1024);
+      renderer.set_layer_cache_budget_bytes(budget);
+   }
    let warmups = std::env::var("OXIDE_ARCHITECTURE_METAL_WARMUPS")
       .ok()
       .and_then(|value| value.parse::<usize>().ok())
@@ -2689,6 +2697,15 @@ where
    let mut layer_offscreen_draws_sum = 0.0;
    let mut layer_inline_draws_sum = 0.0;
    let mut layer_double_render_prevented_sum = 0.0;
+   let mut layer_resident_bytes_peak = 0_u64;
+   let mut layer_pool_bytes_peak = 0_u64;
+   let mut layer_cpu_bytes_peak = 0_u64;
+   let mut layer_budget_bytes = 0_u64;
+   let mut layer_evictions_peak = 0_u64;
+   let mut layer_recreations_peak = 0_u64;
+   let mut layer_pool_reuses_peak = 0_u64;
+   let mut layer_purges_peak = 0_u64;
+   let mut layer_budget_violations = 0_u64;
 
    for frame in 0..(warmups + frames)
    {
@@ -2696,9 +2713,16 @@ where
       let (draws, damage, resize, recreate) = build(frame);
       if recreate
       {
-         renderer = Box::new(metal::MetalRenderer::new_with_config(config).context("recreating Metal renderer after benchmark memory warning")?);
-         renderer.resize(1_200, 800, 1.0).context("resizing recreated Metal renderer")?;
-         renderer.set_damage_options(true, DAMAGE_USE_THRESH, DAMAGE_PREFILTER_THRESH);
+         if id == "gpu.architecture.layers.memory_warning"
+         {
+            renderer.purge_layer_cache_for_memory_warning();
+         }
+         else
+         {
+            renderer = Box::new(metal::MetalRenderer::new_with_config(config).context("recreating Metal renderer after benchmark reset")?);
+            renderer.resize(1_200, 800, 1.0).context("resizing recreated Metal renderer")?;
+            renderer.set_damage_options(true, DAMAGE_USE_THRESH, DAMAGE_PREFILTER_THRESH);
+         }
       }
       if let Some((width, height)) = resize
       {
@@ -2750,6 +2774,19 @@ where
          layer_offscreen_draws_sum += stats.layer_offscreen_draws as f64;
          layer_inline_draws_sum += stats.layer_inline_draws as f64;
          layer_double_render_prevented_sum += stats.layer_double_render_prevented as f64;
+         layer_resident_bytes_peak = layer_resident_bytes_peak.max(stats.layer_cache_resident_bytes);
+         layer_pool_bytes_peak = layer_pool_bytes_peak.max(stats.layer_cache_pool_bytes);
+         layer_cpu_bytes_peak = layer_cpu_bytes_peak.max(stats.layer_cache_cpu_bytes);
+         layer_budget_bytes = stats.layer_cache_budget_bytes;
+         layer_evictions_peak = layer_evictions_peak.max(stats.layer_cache_evictions);
+         layer_recreations_peak = layer_recreations_peak.max(stats.layer_cache_recreations);
+         layer_pool_reuses_peak = layer_pool_reuses_peak.max(stats.layer_cache_pool_reuses);
+         layer_purges_peak = layer_purges_peak.max(stats.layer_cache_purges);
+         if stats.layer_cache_resident_bytes.saturating_add(stats.layer_cache_pool_bytes)
+            > stats.layer_cache_budget_bytes
+         {
+            layer_budget_violations = layer_budget_violations.saturating_add(1);
+         }
       }
       else if persist_raw
       {
@@ -2803,6 +2840,15 @@ where
    metrics.insert(String::from("layer_offscreen_draws_avg"), layer_offscreen_draws_sum / frames as f64);
    metrics.insert(String::from("layer_inline_draws_avg"), layer_inline_draws_sum / frames as f64);
    metrics.insert(String::from("layer_double_render_prevented_avg"), layer_double_render_prevented_sum / frames as f64);
+   metrics.insert(String::from("layer_cache_budget_bytes"), layer_budget_bytes as f64);
+   metrics.insert(String::from("layer_cache_resident_bytes_peak"), layer_resident_bytes_peak as f64);
+   metrics.insert(String::from("layer_cache_pool_bytes_peak"), layer_pool_bytes_peak as f64);
+   metrics.insert(String::from("layer_cache_cpu_bytes_peak"), layer_cpu_bytes_peak as f64);
+   metrics.insert(String::from("layer_cache_evictions"), layer_evictions_peak as f64);
+   metrics.insert(String::from("layer_cache_recreations"), layer_recreations_peak as f64);
+   metrics.insert(String::from("layer_cache_pool_reuses"), layer_pool_reuses_peak as f64);
+   metrics.insert(String::from("layer_cache_purges"), layer_purges_peak as f64);
+   metrics.insert(String::from("layer_cache_budget_violations"), layer_budget_violations as f64);
    if persist_raw
    {
       insert_indexed_samples(&mut metrics, "raw_frame_ms", &frame_samples);
@@ -2889,7 +2935,7 @@ fn metal_layer_case(id: &str, smoke: bool, name: &str) -> Result<PerfCaseResult>
    )?;
    case.metrics.insert(String::from("layers"), 100.0);
    case.metrics.insert(String::from("draws_per_layer"), 100.0);
-   case.metrics.insert(String::from("memory_warning_recreates"), if name == "memory_warning" { case.samples as f64 } else { 0.0 });
+   case.metrics.insert(String::from("memory_warning_purges"), if name == "memory_warning" { case.samples as f64 } else { 0.0 });
    Ok(case)
 }
 

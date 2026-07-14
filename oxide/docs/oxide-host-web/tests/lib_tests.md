@@ -75,6 +75,7 @@ pub fn texture() -> Vec<u8>
 
 ## Changelog
 
+- 2026-07-14: added static C31 coverage for the bounded navigation-churn and purge benchmark route.
 - 2026-07-14: added static C30 coverage for the 100-card local-layer benchmark, raw timestamp cardinality, local/full residency, lifecycle/resource guardrails, and fractional nested/effect capture routing.
 - 2026-07-13: added static C25 coverage for the prepared snapshot workload, exact flat control, lifecycle guardrails, distributions, and cache/bundle/upload counters.
 - 2026-07-13: added static C26 coverage for dynamic property traffic, full-affine rendering, and RAF evidence routing.

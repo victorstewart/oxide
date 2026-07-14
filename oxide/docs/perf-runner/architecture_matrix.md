@@ -41,7 +41,7 @@ The C14 rows are selected with `OXIDE_PERF_RUNNER_FILTER=cpu.authoring.image_vie
 
 The WebGPU matrix is absent from normal page execution. `scripts/check_webgpu_browser_golden.mjs --architecture-matrix` opts in, prewarms resources, runs one submission per RAF, waits for both `GPUQueue.onSubmittedWorkDone` and browser presentation, collects exactly one timestamp per measured frame, rejects missing samples and zero-pass rows, and restores the normal timestamp sampling interval. Every row reports CPU and GPU p50/p95/p99/peak, draw/pass/bind/upload/resource/scratch counters, and allocation attribution.
 
-The current memory-warning layer row recreates the renderer after an explicit benchmark pressure event because the renderer API does not yet expose cache-specific purge. The stable row must move to the production purge hook when that hook lands; until then it measures the complete rebuild boundary without adding a production-only testing branch.
+The memory-warning layer row invokes the production layer-cache purge hook. All Metal layer rows run under a 16 MiB default benchmark budget, overridable with `OXIDE_ARCHITECTURE_LAYER_CACHE_BUDGET_BYTES`, and report resident, pool, CPU metadata, evictions, recreations, pool reuses, purges, and hard-budget violations. Navigation churn changes all 100 layer IDs per frame so allocation reuse and eviction tails are observable instead of allowing unbounded residency.
 
 ## Verification
 
@@ -56,6 +56,7 @@ The current memory-warning layer row recreates the renderer after an explicit be
 - Browser source tests freeze all ten WebGPU primitive IDs, opt-in routing, queue/RAF pacing, timestamp settlement, and counter serialization.
 
 ## Changelog
+- 2026-07-14: upgraded the 100-layer Metal matrix for C31 with a hard budget, production memory-warning purge, navigation-churn pool reuse, byte/counter telemetry, and a zero-budget-violation metric.
 - 2026-07-13: added C29 100 × 100 prepared-layer clean/one-dirty Metal rows, public retained-snapshot authoring coverage, raw evidence controls, and exact work counters.
 - 2026-07-13: added C27 10,000-instance spatial-query and small/full Metal glyph/image-mesh rows plus public retained-snapshot authoring coverage.
 - 2026-07-13: added C26 CPU/authoring zero-geometry animation metrics and the 300-instance Metal property-ring row.

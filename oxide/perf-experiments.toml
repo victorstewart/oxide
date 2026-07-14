@@ -80,6 +80,47 @@ cleanup = [
 ]
 
 [[experiments]]
+id = "c31-bounded-layer-cache-storage"
+introduced_commit = "C31 staged tree recorded in commit proof"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-metal", "oxide-renderer-web", "oxide-host-ios", "oxide-host-web", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal", "Apple M2 Max WebGPU through native-arm64 Chrome"]
+correctness_gate = "Hard admission, exact over-budget fallback, current-frame protection, compatible reuse, LRU and absence aging, resize/scale behavior, explicit/memory/device purge, reentry, actual/logical byte accounting, and exact parent pixels must remain deterministic."
+performance_gate = "Fifteen balanced fresh-process pairs and at least 2,000 completed Metal timestamps per side must reduce navigation-churn layer residency and recurring texture creation by at least 90%, materially improve CPU encode/frame distributions, keep direct GPU p50/p95/p99/peak within the fixed 5% no-material-regression guardrail, and report zero budget violations. Native-arm64 WebGPU must independently prove bounded residency, steady-state reuse, and purge/reentry counters."
+decision_state = "accepted"
+decision = "Bound retained Metal and WebGPU layer storage, protect the current frame, recycle exact-compatible textures, evict cold IDs by LRU/age, and purge storage at explicit lifecycle pressure boundaries."
+proof = [
+   "The exact production-code-tree Metal reports under benchmarks/experiments/c31-layer-cache-storage/raw retain parent/candidate tree, probe binary, instrumentation, balanced order, every CPU/GPU sample, counter, and decision identity.",
+   "Across 2,100 samples per side, peak layer residency fell 99.174%, recurring texture creates fell from 210,000 to zero, frame p50/p95/p99 improved 6.434%/8.468%/20.746%, and encode p50/p95/p99 improved 37.297%/43.703%/60.890%.",
+   "GPU p50/p95/p99/peak changed +0.101%/+0.103%/+0.286%/+1.699%, inside the 5% guardrail; native-arm64 Chrome held 100-card WebGPU residency to 4,608,000 bytes under 6 MiB with 6,000 reuses, zero steady-state creates, zero violations, and zero bytes after both purge paths.",
+]
+cleanup = [
+   "Kept whole-texture pooling instead of heap aliasing because command-buffer lifetime and fence ownership are not yet explicit enough for safe aliases.",
+   "Kept aggregate browser, workspace, and physical-device baseline promotion deferred to C62; ignored raw evidence preserves the full local proof population.",
+]
+
+[[experiments]]
+id = "c31-gpu-speedup-policy-rejected"
+introduced_commit = "rejected during C31 decision review"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "The accepted and rejected analyses must use the identical immutable 2,100-sample-per-side population and artifact identities."
+performance_gate = "A GPU-speedup claim requires at least 5% median improvement, a paired 95% confidence lower bound above 2%, and at least 80% pair wins."
+decision_state = "rejected"
+decision = "Rejected classifying C31 as a direct GPU-speedup experiment; its measured GPU distribution is a no-material-regression guardrail for a residency and CPU-work optimization."
+proof = [
+   "The preserved performance-policy report measured -0.147% GPU median speedup with 2/15 pair wins, so it correctly rejected a GPU-speedup claim.",
+   "Reanalyzing the same samples under the predeclared 5% no-material-regression guardrail accepted p50/p95/p99/peak changes of +0.101%/+0.103%/+0.286%/+1.699%; no sample was removed and no tolerance changed.",
+]
+cleanup = [
+   "Preserved both reports so the distinction between a direct speedup claim and a guardrail is auditable.",
+   "Did not weaken the generic performance policy or describe essentially flat GPU time as a GPU win.",
+]
+
+[[experiments]]
 id = "c30-webgpu-local-layer-textures"
 introduced_commit = "C30 staged tree recorded in commit proof"
 introduced_date = "2026-07-14"

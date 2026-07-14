@@ -156,6 +156,7 @@ console.log("oxide-webgpu-scene3d-ab", window.oxideWebGpuScene3dAB);
 
 ## Changelog
 
+- 2026-07-14: added the C31 100-layer navigation-churn adapter with hard-budget, pool-reuse, frame-tail, memory-pressure, device-loss, and reentry evidence.
 - 2026-07-14: added the bounded C30 100-card local-layer CPU/GPU/residency adapter and fractional nested/effect capture target.
 - 2026-07-13: added the non-default C25 prepared-chunk timing, RAF, lifecycle, threshold, and exact-capture host contracts.
 - 2026-07-13: added the cached 300-instance C26 dynamic-property throughput, full-affine render, event-latency, and RAF contracts.

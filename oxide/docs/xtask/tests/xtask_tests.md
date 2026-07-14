@@ -18,7 +18,7 @@ Call flow:
 
 ## Entry points list
 
-- `experiment_manifest_checker_accepts_current_manifest()`: validates every committed experiment entry and freezes the current total plus accepted/rejected decision counts.
+- `experiment_manifest_checker_accepts_current_manifest()`: validates every committed experiment entry and freezes the current total plus accepted/rejected decision counts, including the accepted C31 bounded-layer storage design and rejected direct-GPU-speedup classification.
 - `experiment_manifest_checker_rejects_expired_undecided_entries()`: rejects an undecided experiment past its expiry.
 - `experiment_manifest_checker_requires_perf_ab_gate_for_undecided_entries()`: requires a concrete A/B gate before an experiment may remain open.
 - `experiment_manifest_checker_requires_proof_for_decided_entries()`: requires persisted proof for accepted and rejected decisions.

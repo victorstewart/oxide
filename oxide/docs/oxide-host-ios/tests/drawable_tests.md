@@ -43,8 +43,9 @@ Run `cargo test --locked -p oxide-host-ios --test drawable_tests`.
 
 ## Examples
 
-The required pressure sequence contains `renderer.purge_effect_targets();`, `renderer.purge_prepared_chunks();`, then `mark_frame_dirty(app);`.
+The required pressure sequence contains `renderer.purge_effect_targets();`, `renderer.purge_layer_cache_for_memory_warning();`, `renderer.purge_prepared_chunks();`, then `mark_frame_dirty(app);`.
 
 ## Changelog
 
+- 2026-07-14: required the iOS memory-warning handler to purge retained layer storage alongside effect and prepared caches.
 - 2026-07-13: required critical memory warnings to purge persistent prepared chunks.

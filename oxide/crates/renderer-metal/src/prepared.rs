@@ -1,9 +1,8 @@
 use metal::{
    ArgumentEncoderRef, Buffer, Device, DeviceRef, Library, MTLClearColor, MTLIndexType,
    MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderStages, MTLResourceOptions,
-   MTLResourceUsage, MTLStorageMode, MTLStoreAction, MTLTexture, MTLTextureType,
-   MTLTextureUsage, RenderCommandEncoderRef, RenderPassDescriptor, RenderPipelineDescriptor,
-   RenderPipelineState, TextureDescriptor, TextureRef,
+   MTLResourceUsage, MTLStoreAction, MTLTexture, RenderCommandEncoderRef,
+   RenderPassDescriptor, RenderPipelineDescriptor, RenderPipelineState, TextureRef,
 };
 use metal::foreign_types::ForeignTypeRef;
 use oxide_renderer_api as api;
@@ -1453,6 +1452,39 @@ impl MetalRenderer
          self.prepared_damage_instances = damage_instances;
          return self.encode_snapshot_flat(snapshot);
       }
+      self.layer_frame_ids.clear();
+      let mut required_layer_bytes = 0_u64;
+      for instance in &plan
+      {
+         let Some(layer) = instance.layer else { continue };
+         if !self.layer_frame_ids.insert(layer.key.id)
+         {
+            continue;
+         }
+         let Some(chunk) = cache.get(instance.key) else { continue };
+         let Some(target) = chunk.layer_target(layer.local_uniform.values[8]) else { continue };
+         let format = if target == PreparedTarget::ExactLayer
+         {
+            MTLPixelFormat::RGBA32Float
+         }
+         else
+         {
+            self.color_format
+         };
+         required_layer_bytes = required_layer_bytes.saturating_add(
+            self.layer_texture_required_bytes(format, layer.width, layer.height),
+         );
+      }
+      if required_layer_bytes > self.layer_cache_budget_bytes
+      {
+         self.layer_frame_ids.clear();
+         self.prepared_chunks = cache;
+         self.prepared_property_cache = property_cache;
+         self.prepared_frame_plan = plan;
+         self.prepared_layer_frame_keys = layer_frame_keys;
+         self.prepared_damage_instances = damage_instances;
+         return self.encode_snapshot_flat(snapshot);
+      }
       self.prepared_layer_frame_keys = layer_frame_keys;
       if !reuse_static_plan && static_instances.is_some()
       {
@@ -1589,25 +1621,34 @@ impl MetalRenderer
          {
             self.color_format
          };
-         let texture = self.layers.get(&layer.key.id)
+         let existing_texture = self.layers.get(&layer.key.id)
             .filter(|entry| {
                entry.w == layer.width
                   && entry.h == layer.height
                   && entry.tex.pixel_format() == layer_format
             })
-            .map(|entry| entry.tex.to_owned())
-            .unwrap_or_else(|| {
-               let descriptor = TextureDescriptor::new();
-               descriptor.set_pixel_format(layer_format);
-               descriptor.set_texture_type(MTLTextureType::D2);
-               descriptor.set_width(layer.width as u64);
-               descriptor.set_height(layer.height as u64);
-               descriptor.set_storage_mode(MTLStorageMode::Private);
-               descriptor.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
-               self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
-               self.acc_layer_texture_creates = self.acc_layer_texture_creates.saturating_add(1);
-               self.device.new_texture(&descriptor)
-            });
+            .map(|entry| (entry.tex.to_owned(), entry.bytes));
+         let (texture, texture_bytes) = if let Some(texture) = existing_texture
+         {
+            texture
+         }
+         else
+         {
+            if let Some(entry) = self.layers.remove(&layer.key.id)
+            {
+               self.layer_cache_recreations = self.layer_cache_recreations.saturating_add(1);
+               self.recycle_layer_entry(entry);
+            }
+            let Some(texture) = self.acquire_layer_texture(
+               layer_format,
+               layer.width,
+               layer.height,
+            ) else
+            {
+               return self.encode_snapshot_flat(snapshot);
+            };
+            texture
+         };
          let layer_descriptor = RenderPassDescriptor::new();
          let Some(layer_attachment) = layer_descriptor.color_attachments().object_at(0) else { continue };
          layer_attachment.set_texture(Some(&texture));
@@ -1665,6 +1706,7 @@ impl MetalRenderer
             entry.prepared_key = Some(layer.key);
             entry.resources.clear();
             entry.resources.extend_from_slice(chunk.source.resource_dependencies());
+            entry.last_used_frame = self.frame_id;
          }
          else
          {
@@ -1675,6 +1717,8 @@ impl MetalRenderer
                generation,
                prepared_key: Some(layer.key),
                resources: chunk.source.resource_dependencies().to_vec(),
+               bytes: texture_bytes,
+               last_used_frame: self.frame_id,
             });
          }
          self.acc_layer_double_render_prevented = self.acc_layer_double_render_prevented.saturating_add(1);
@@ -1846,7 +1890,9 @@ impl MetalRenderer
 
 fn encode_prepared_layer_composite(encoder: &RenderCommandEncoderRef, renderer: &mut MetalRenderer, layer: PreparedLayerFrame)
 {
-   let Some(entry) = renderer.layers.get(&layer.key.id)
+   renderer.layer_frame_ids.insert(layer.key.id);
+   let frame_id = renderer.frame_id;
+   let Some(entry) = renderer.layers.get_mut(&layer.key.id)
       .filter(|entry| {
          entry.w == layer.width
             && entry.h == layer.height
@@ -1857,6 +1903,7 @@ fn encode_prepared_layer_composite(encoder: &RenderCommandEncoderRef, renderer: 
       debug_assert!(false, "prepared Metal layer key must exist before composition");
       return;
    };
+   entry.last_used_frame = frame_id;
    let texture = entry.tex.to_owned();
    let scale = renderer.target_scale.max(1.0);
    let pixel_aligned = [layer.rect.x, layer.rect.y, layer.rect.w, layer.rect.h]

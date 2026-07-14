@@ -106,6 +106,7 @@ fn initialize_renderer_for_contract_check() -> Result<(), oxide_renderer_metal::
 
 ## Changelog
 
+- 2026-07-14: added C31 Metal contracts for zero-budget exact inline fallback, allocated-byte bounds, resize pooling, navigation-ID reuse, and memory-warning purge telemetry.
 - 2026-07-13: extended the C05 layer source contract to require format-compatible reuse and separation from C29 prepared-layer ownership.
 - 2026-07-13: added explicit visible/offscreen depth, initial-capacity, completion ownership, saturation skip, and recovery coverage.
 - 2026-07-12: added real-Metal effect target plan, warm reuse, byte-accounting, and purge coverage.

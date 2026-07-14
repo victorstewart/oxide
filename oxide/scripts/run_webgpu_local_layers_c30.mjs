@@ -12,10 +12,12 @@ const samples = process.argv[5] || "1";
 const frames = process.argv[6] || "150";
 const oneDirty = process.argv[7] === "1";
 const output = process.argv[8] || "";
-const guardrails = process.argv[9] === "1";
+const mode = process.argv[9] || "0";
+const guardrails = mode === "1";
+const c31 = mode === "2";
 if (!root)
 {
-   throw new Error("usage: run_webgpu_local_layers_c30.mjs WEB_ROOT [WIDTH] [HEIGHT] [SAMPLES] [FRAMES] [ONE_DIRTY] [OUTPUT]");
+   throw new Error("usage: run_webgpu_local_layers_c30.mjs WEB_ROOT [WIDTH] [HEIGHT] [SAMPLES] [FRAMES] [ONE_DIRTY] [OUTPUT] [MODE: 0=C30, 1=guardrails, 2=C31]");
 }
 
 const kernelFileCount = () => Number(execFileSync("/usr/sbin/sysctl", ["-n", "kern.num_files"], { encoding: "utf8" }).trim());
@@ -38,7 +40,12 @@ try {
    await init();
    const app = await OxideWebApp.newAsync("oxide-canvas");
    app.prewarm_webgpu_bench_resources();
-   const result = params.get("guardrails") === "1"
+   const result = params.get("c31") === "1"
+      ? await app.bench_webgpu_layer_cache_c31(
+         Number(params.get("samples")),
+         Number(params.get("frames")),
+      )
+      : params.get("guardrails") === "1"
       ? await app.bench_webgpu_local_layer_guardrails_c30()
       : await app.bench_webgpu_local_layers_c30(
          Number(params.get("width")),
@@ -140,7 +147,7 @@ const chromeArgs = [
    "--enable-unsafe-webgpu",
    "--noerrdialogs",
    "--use-angle=metal",
-   `http://127.0.0.1:${port}/c30-local-layers.html?width=${width}&height=${height}&samples=${samples}&frames=${frames}&one_dirty=${oneDirty ? 1 : 0}&guardrails=${guardrails ? 1 : 0}`,
+   `http://127.0.0.1:${port}/c30-local-layers.html?width=${width}&height=${height}&samples=${samples}&frames=${frames}&one_dirty=${oneDirty ? 1 : 0}&guardrails=${guardrails ? 1 : 0}&c31=${c31 ? 1 : 0}`,
 ];
 const child = chromeArch
    ? spawn("arch", [`-${chromeArch}`, chrome, ...chromeArgs])
@@ -193,7 +200,19 @@ const metrics = Object.fromEntries(raw.split(";").map(field => {
       value.includes(",") ? value.split(",").map(Number) : Number(value),
    ];
 }));
-const required = guardrails
+const required = c31
+   ? [
+      "frame_p50_ms",
+      "frame_p95_ms",
+      "frame_p99_ms",
+      "budget_bytes",
+      "resident_bytes_peak",
+      "pool_reuses",
+      "budget_violations",
+      "memory_warning_purge_reason",
+      "device_loss_purge_reason",
+   ]
+   : guardrails
    ? [
       "clean_hits",
       "dirty_misses",
@@ -223,7 +242,7 @@ for (const key of required)
       throw new Error(`missing ${key}: ${raw}`);
    }
 }
-if (!guardrails && (!Array.isArray(metrics.gpu_samples_ms)
+if (!guardrails && !c31 && (!Array.isArray(metrics.gpu_samples_ms)
    || metrics.gpu_samples_ms.length !== Number(metrics.gpu_sample_count)))
 {
    throw new Error(`invalid C30 GPU sample population: ${raw}`);

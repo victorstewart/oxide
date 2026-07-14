@@ -13,7 +13,7 @@ use js_sys::Reflect;
 use oxide_renderer_api as api;
 use oxide_wasm_alloc_counter::AllocationSnapshot;
 use std::cell::Cell;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -52,6 +52,17 @@ const PREPARED_BUNDLE_DEFAULT_MIN_DRAWS: usize = 8;
 const PREPARED_BUNDLE_SCENE_MIN_DRAWS: u64 = 64;
 const PREPARED_PROPERTY_RING_DEPTH: usize = 3;
 const PREPARED_PROPERTY_UNIFORM_SIZE: u64 = 48;
+const LAYER_CACHE_MIN_BUDGET_BYTES: u64 = 16 * 1024 * 1024;
+const LAYER_CACHE_MAX_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
+const LAYER_CACHE_POOL_BUDGET_DIVISOR: u64 = 4;
+const LAYER_CACHE_ABSENT_FRAMES: u64 = 120;
+const LAYER_CACHE_POOL_MAX_AGE_FRAMES: u64 = 60;
+
+const LAYER_PURGE_NONE: u8 = 0;
+const LAYER_PURGE_EXPLICIT: u8 = 1;
+const LAYER_PURGE_MEMORY_PRESSURE: u8 = 2;
+const LAYER_PURGE_DEVICE_LOSS: u8 = 3;
+const LAYER_PURGE_SCALE_CHANGE: u8 = 4;
 
 fn cpu_submit_timing_begin(enabled: bool) -> Option<f64> {
     enabled.then(|| {
@@ -115,6 +126,13 @@ struct GpuLayer {
     scale: f32,
     prepared_key: Option<PreparedLayerKey>,
     resources: Vec<api::RenderResourceDependency>,
+    bytes: u64,
+    last_used_frame: u64,
+}
+
+struct PooledGpuLayer {
+    layer: GpuLayer,
+    recycled_frame: u64,
 }
 
 struct GpuColorTarget {
@@ -1419,6 +1437,27 @@ impl BrowserRenderer {
         self.inner.purge_prepared_chunks();
     }
 
+    #[must_use]
+    pub fn layer_cache_budget_bytes(&self) -> u64 {
+        self.inner.layer_cache_budget_bytes()
+    }
+
+    pub fn set_layer_cache_budget_bytes(&mut self, budget_bytes: u64) {
+        self.inner.set_layer_cache_budget_bytes(budget_bytes);
+    }
+
+    pub fn purge_layer_cache(&mut self) {
+        self.inner.purge_layer_cache();
+    }
+
+    pub fn purge_layer_cache_for_memory_pressure(&mut self) {
+        self.inner.purge_layer_cache_for_memory_pressure();
+    }
+
+    pub fn purge_layer_cache_for_device_loss_for_benchmark(&mut self) {
+        self.inner.purge_layer_cache_for_reason(LAYER_PURGE_DEVICE_LOSS);
+    }
+
     pub fn set_prepared_bundle_min_draws_for_benchmark(&mut self, draws: usize) {
         self.inner.set_prepared_bundle_min_draws_for_benchmark(draws);
     }
@@ -1645,6 +1684,16 @@ pub struct WebGpuRenderer {
     scene3d_active: bool,
     images: ImageSlots<GpuImage>,
     layers: BTreeMap<u32, GpuLayer>,
+    layer_pool: Vec<PooledGpuLayer>,
+    layer_frame_ids: HashSet<u32>,
+    layer_cache_budget_bytes: u64,
+    layer_cache_resident_bytes: u64,
+    layer_cache_pool_bytes: u64,
+    layer_cache_pool_reuses: u64,
+    layer_cache_evictions: u64,
+    layer_cache_recreations: u64,
+    layer_cache_purges: u64,
+    layer_cache_last_purge_reason: u8,
     meshes_3d: Vec<Option<GpuMesh3d>>,
     frame: FrameData,
     prepared_chunks: PreparedChunkCache,
@@ -1796,13 +1845,12 @@ impl WebGpuRenderer {
         } else {
             0
         };
-        let layer_texture_bytes = self.layers.values().fold(0_u64, |total, layer| {
-            total.saturating_add(saturating_texture_bytes(
-                u64::from(layer.width),
-                u64::from(layer.height),
-                color_bytes,
-            ))
-        });
+        let layer_texture_bytes = self
+            .layers
+            .values()
+            .map(|layer| layer.bytes)
+            .chain(self.layer_pool.iter().map(|entry| entry.layer.bytes))
+            .fold(0_u64, u64::saturating_add);
         let mut atlas_texture_bytes = 0_u64;
         let mut image_texture_bytes = 0_u64;
         for image in self.images.values() {
@@ -2011,6 +2059,13 @@ impl WebGpuRenderer {
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let layer_cache_budget_bytes = saturating_texture_bytes(
+            u64::from(width),
+            u64::from(height),
+            color_texture_bytes_per_pixel(config.format),
+        )
+        .saturating_mul(8)
+        .clamp(LAYER_CACHE_MIN_BUDGET_BYTES, LAYER_CACHE_MAX_BUDGET_BYTES);
 
         Ok(Self {
             canvas,
@@ -2077,6 +2132,16 @@ impl WebGpuRenderer {
             scene3d_active: false,
             images: ImageSlots::new(),
             layers: BTreeMap::new(),
+            layer_pool: Vec::new(),
+            layer_frame_ids: HashSet::new(),
+            layer_cache_budget_bytes,
+            layer_cache_resident_bytes: 0,
+            layer_cache_pool_bytes: 0,
+            layer_cache_pool_reuses: 0,
+            layer_cache_evictions: 0,
+            layer_cache_recreations: 0,
+            layer_cache_purges: 0,
+            layer_cache_last_purge_reason: LAYER_PURGE_NONE,
             meshes_3d: vec![None],
             frame: FrameData {
                 geometry: PackedGeometry::default(),
@@ -2259,6 +2324,236 @@ impl WebGpuRenderer {
            layer.prepared_key = None;
            layer.resources.clear();
         }
+    }
+
+    #[must_use]
+    pub fn layer_cache_budget_bytes(&self) -> u64 {
+        self.layer_cache_budget_bytes
+    }
+
+    pub fn set_layer_cache_budget_bytes(&mut self, budget_bytes: u64) {
+        self.layer_cache_budget_bytes = budget_bytes;
+        self.enforce_layer_cache_budget();
+        self.apply_layer_cache_stats();
+    }
+
+    pub fn purge_layer_cache(&mut self) {
+        self.purge_layer_cache_for_reason(LAYER_PURGE_EXPLICIT);
+    }
+
+    pub fn purge_layer_cache_for_memory_pressure(&mut self) {
+        self.purge_layer_cache_for_reason(LAYER_PURGE_MEMORY_PRESSURE);
+    }
+
+    fn layer_cache_cpu_bytes(&self) -> u64 {
+        let active = (self.layers.len() as u64)
+            .saturating_mul(core::mem::size_of::<GpuLayer>() as u64);
+        let pooled = (self.layer_pool.capacity() as u64)
+            .saturating_mul(core::mem::size_of::<PooledGpuLayer>() as u64);
+        let resources = self
+            .layers
+            .values()
+            .map(|layer| layer.resources.capacity())
+            .chain(self.layer_pool.iter().map(|entry| entry.layer.resources.capacity()))
+            .fold(0_u64, |total, capacity| {
+                total.saturating_add(
+                    (capacity as u64)
+                        .saturating_mul(core::mem::size_of::<api::RenderResourceDependency>() as u64),
+                )
+            });
+        active.saturating_add(pooled).saturating_add(resources)
+    }
+
+    fn apply_layer_cache_stats(&mut self) {
+        self.stats.layer_cache_budget_bytes = self.layer_cache_budget_bytes;
+        self.stats.layer_cache_resident_bytes = self.layer_cache_resident_bytes;
+        self.stats.layer_cache_pool_bytes = self.layer_cache_pool_bytes;
+        self.stats.layer_cache_cpu_bytes = self.layer_cache_cpu_bytes();
+        self.stats.layer_cache_oldest_last_used_frame = self
+            .layers
+            .values()
+            .map(|layer| layer.last_used_frame)
+            .min()
+            .unwrap_or(0);
+        self.stats.layer_cache_pool_reuses = self.layer_cache_pool_reuses;
+        self.stats.layer_cache_evictions = self.layer_cache_evictions;
+        self.stats.layer_cache_recreations = self.layer_cache_recreations;
+        self.stats.layer_cache_purges = self.layer_cache_purges;
+        self.stats.layer_cache_last_purge_reason = self.layer_cache_last_purge_reason;
+    }
+
+    fn purge_layer_cache_for_reason(&mut self, reason: u8) {
+        let removed = self.layers.len().saturating_add(self.layer_pool.len());
+        self.layers.clear();
+        self.layer_pool.clear();
+        self.layer_frame_ids.clear();
+        self.layer_cache_resident_bytes = 0;
+        self.layer_cache_pool_bytes = 0;
+        self.layer_cache_evictions = self
+            .layer_cache_evictions
+            .saturating_add(removed as u64);
+        self.layer_cache_purges = self.layer_cache_purges.saturating_add(1);
+        self.layer_cache_last_purge_reason = reason;
+        self.prepared_layer_snapshot = None;
+        self.prepared_layer_plan.clear();
+        self.prepared_layer_key_indices.clear();
+        self.apply_layer_cache_stats();
+    }
+
+    fn trim_layer_pool(&mut self, max_bytes: u64) {
+        while self.layer_cache_pool_bytes > max_bytes {
+            let Some(index) = self
+                .layer_pool
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, entry)| entry.recycled_frame)
+                .map(|(index, _)| index)
+            else {
+                break;
+            };
+            let removed = self.layer_pool.swap_remove(index);
+            self.layer_cache_pool_bytes = self.layer_cache_pool_bytes.saturating_sub(removed.layer.bytes);
+            self.layer_cache_evictions = self.layer_cache_evictions.saturating_add(1);
+        }
+    }
+
+    fn recycle_layer(&mut self, layer: GpuLayer) {
+        self.layer_cache_resident_bytes = self.layer_cache_resident_bytes.saturating_sub(layer.bytes);
+        let pool_budget = self
+            .layer_cache_budget_bytes
+            .checked_div(LAYER_CACHE_POOL_BUDGET_DIVISOR)
+            .unwrap_or(0);
+        if layer.bytes > pool_budget {
+            self.layer_cache_evictions = self.layer_cache_evictions.saturating_add(1);
+            return;
+        }
+        self.layer_cache_pool_bytes = self.layer_cache_pool_bytes.saturating_add(layer.bytes);
+        self.layer_pool.push(PooledGpuLayer {
+            layer,
+            recycled_frame: self.frame_id,
+        });
+        self.trim_layer_pool(pool_budget);
+    }
+
+    fn evict_oldest_unprotected_layer(&mut self) -> bool {
+        let Some(id) = self
+            .layers
+            .iter()
+            .filter(|(id, _)| !self.layer_frame_ids.contains(id))
+            .min_by_key(|(_, layer)| layer.last_used_frame)
+            .map(|(id, _)| *id)
+        else {
+            return false;
+        };
+        if let Some(layer) = self.layers.remove(&id) {
+            self.recycle_layer(layer);
+            self.layer_cache_evictions = self.layer_cache_evictions.saturating_add(1);
+        }
+        true
+    }
+
+    fn enforce_layer_cache_budget(&mut self) {
+        self.trim_layer_pool(self.layer_cache_budget_bytes.saturating_sub(self.layer_cache_resident_bytes));
+        while self
+            .layer_cache_resident_bytes
+            .saturating_add(self.layer_cache_pool_bytes)
+            > self.layer_cache_budget_bytes
+        {
+            if !self.evict_oldest_unprotected_layer() {
+                break;
+            }
+            self.trim_layer_pool(self.layer_cache_budget_bytes.saturating_sub(self.layer_cache_resident_bytes));
+        }
+    }
+
+    fn admit_layer_bytes(&mut self, bytes: u64) -> bool {
+        if bytes > self.layer_cache_budget_bytes {
+            return false;
+        }
+        let retained_limit = self.layer_cache_budget_bytes.saturating_sub(bytes);
+        self.trim_layer_pool(retained_limit.saturating_sub(self.layer_cache_resident_bytes));
+        while self
+            .layer_cache_resident_bytes
+            .saturating_add(self.layer_cache_pool_bytes)
+            > retained_limit
+        {
+            if !self.evict_oldest_unprotected_layer() {
+                return false;
+            }
+            self.trim_layer_pool(retained_limit.saturating_sub(self.layer_cache_resident_bytes));
+        }
+        true
+    }
+
+    fn take_pooled_layer(&mut self, width: u32, height: u32) -> Option<GpuLayer> {
+        let index = self.layer_pool.iter().position(|entry| {
+            entry.layer.width == width
+                && entry.layer.height == height
+                && (entry.layer.scale - self.scale).abs() <= f32::EPSILON
+        })?;
+        let entry = self.layer_pool.swap_remove(index);
+        self.layer_cache_pool_bytes = self.layer_cache_pool_bytes.saturating_sub(entry.layer.bytes);
+        self.layer_cache_resident_bytes = self.layer_cache_resident_bytes.saturating_add(entry.layer.bytes);
+        self.layer_cache_pool_reuses = self.layer_cache_pool_reuses.saturating_add(1);
+        Some(entry.layer)
+    }
+
+    fn recycle_compatible_unprotected_layer(&mut self, width: u32, height: u32) -> bool {
+        let Some(id) = self
+            .layers
+            .iter()
+            .find(|(id, layer)| {
+                !self.layer_frame_ids.contains(id)
+                    && layer.width == width
+                    && layer.height == height
+                    && (layer.scale - self.scale).abs() <= f32::EPSILON
+            })
+            .map(|(id, _)| *id)
+        else {
+            return false;
+        };
+        if let Some(layer) = self.layers.remove(&id) {
+            self.recycle_layer(layer);
+            self.layer_cache_evictions = self.layer_cache_evictions.saturating_add(1);
+        }
+        true
+    }
+
+    fn age_layer_cache(&mut self) {
+        if self.frame_id >= LAYER_CACHE_ABSENT_FRAMES {
+            let absent_before = self.frame_id - LAYER_CACHE_ABSENT_FRAMES;
+            loop {
+                let Some(id) = self
+                    .layers
+                    .iter()
+                    .find(|(id, layer)| {
+                        !self.layer_frame_ids.contains(id)
+                            && layer.last_used_frame <= absent_before
+                    })
+                    .map(|(id, _)| *id)
+                else {
+                    break;
+                };
+                if let Some(layer) = self.layers.remove(&id) {
+                    self.recycle_layer(layer);
+                }
+            }
+        }
+        if self.frame_id >= LAYER_CACHE_POOL_MAX_AGE_FRAMES {
+            let pool_before = self.frame_id - LAYER_CACHE_POOL_MAX_AGE_FRAMES;
+            while let Some(index) = self
+                .layer_pool
+                .iter()
+                .position(|entry| entry.recycled_frame <= pool_before)
+            {
+                let removed = self.layer_pool.swap_remove(index);
+                self.layer_cache_pool_bytes = self
+                    .layer_cache_pool_bytes
+                    .saturating_sub(removed.layer.bytes);
+                self.layer_cache_evictions = self.layer_cache_evictions.saturating_add(1);
+            }
+        }
+        self.enforce_layer_cache_budget();
     }
 
     pub fn set_prepared_bundle_min_draws_for_benchmark(&mut self, draws: usize) {
@@ -3287,7 +3582,14 @@ impl WebGpuRenderer {
        }
     }
 
-    fn ensure_layer(&mut self, id: u32, frame: LocalLayerFrame) {
+    fn touch_layer(&mut self, id: u32) {
+        self.layer_frame_ids.insert(id);
+        if let Some(layer) = self.layers.get_mut(&id) {
+            layer.last_used_frame = self.frame_id;
+        }
+    }
+
+    fn ensure_layer(&mut self, id: u32, frame: LocalLayerFrame) -> bool {
         self.ensure_layer_target(
             id,
             frame.source_rect,
@@ -3298,10 +3600,10 @@ impl WebGpuRenderer {
             frame.viewport,
             None,
             &[],
-        );
+        )
     }
 
-    fn ensure_prepared_layer(&mut self, layer: PreparedLayerFrame, chunk: &api::RenderChunk) {
+    fn ensure_prepared_layer(&mut self, layer: PreparedLayerFrame, chunk: &api::RenderChunk) -> bool {
         self.ensure_layer_target(
             layer.key.id,
             layer.source_rect,
@@ -3312,29 +3614,58 @@ impl WebGpuRenderer {
             layer.viewport,
             Some(layer.key),
             chunk.resource_dependencies(),
-        );
+        )
     }
 
-    fn ensure_layer_target(&mut self, id: u32, source_rect: api::RectF, rect: api::RectF, composite_rect: api::RectF, width: u32, height: u32, viewport: [f32; 12], prepared_key: Option<PreparedLayerKey>, resources: &[api::RenderResourceDependency]) {
+    fn ensure_layer_target(&mut self, id: u32, source_rect: api::RectF, rect: api::RectF, composite_rect: api::RectF, width: u32, height: u32, viewport: [f32; 12], prepared_key: Option<PreparedLayerKey>, resources: &[api::RenderResourceDependency]) -> bool {
         let recreate = self.layers.get(&id).map_or(true, |layer| {
             layer.width != width
                 || layer.height != height
                 || (layer.scale - self.scale).abs() > f32::EPSILON
         });
         if recreate {
-            let (texture, view, bind_group) = create_target_texture(
-                &self.device,
-                &self.programs,
-                "oxide-webgpu-layer",
-                self.config.format,
-                width,
-                height,
+            if let Some(layer) = self.layers.remove(&id) {
+                self.layer_cache_recreations = self.layer_cache_recreations.saturating_add(1);
+                self.recycle_layer(layer);
+            }
+            let bytes = saturating_texture_bytes(
+                u64::from(width),
+                u64::from(height),
+                color_texture_bytes_per_pixel(self.config.format),
             );
-            let (viewport_buffer, viewport_bind_group) =
-                create_viewport_bind_group(&self.device, &self.programs);
-            write_uniform(&self.queue, &viewport_buffer, viewport);
-            self.layers.insert(
-                id,
+            let mut pooled = self.take_pooled_layer(width, height);
+            if pooled.is_none() && self.recycle_compatible_unprotected_layer(width, height) {
+                pooled = self.take_pooled_layer(width, height);
+            }
+            let mut layer = if let Some(layer) = pooled {
+                layer
+            } else {
+                if !self.admit_layer_bytes(bytes) {
+                    return false;
+                }
+                let (texture, view, bind_group) = create_target_texture(
+                    &self.device,
+                    &self.programs,
+                    "oxide-webgpu-layer",
+                    self.config.format,
+                    width,
+                    height,
+                );
+                let (viewport_buffer, viewport_bind_group) =
+                    create_viewport_bind_group(&self.device, &self.programs);
+                self.layer_cache_resident_bytes =
+                    self.layer_cache_resident_bytes.saturating_add(bytes);
+                self.stats.texture_creates = self.stats.texture_creates.saturating_add(1);
+                self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(2);
+                self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+                self.stats.target_texture_creates =
+                    self.stats.target_texture_creates.saturating_add(1);
+                self.stats.target_bind_group_creates =
+                    self.stats.target_bind_group_creates.saturating_add(1);
+                self.stats.layer_texture_creates =
+                    self.stats.layer_texture_creates.saturating_add(1);
+                self.stats.layer_bind_group_creates =
+                    self.stats.layer_bind_group_creates.saturating_add(2);
                 GpuLayer {
                     texture,
                     view,
@@ -3349,18 +3680,22 @@ impl WebGpuRenderer {
                     height,
                     scale: self.scale,
                     prepared_key,
-                    resources: resources.to_vec(),
-                },
-            );
-            self.stats.texture_creates = self.stats.texture_creates.saturating_add(1);
-            self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(2);
-            self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
-            self.stats.target_texture_creates = self.stats.target_texture_creates.saturating_add(1);
-            self.stats.target_bind_group_creates =
-                self.stats.target_bind_group_creates.saturating_add(1);
-            self.stats.layer_texture_creates = self.stats.layer_texture_creates.saturating_add(1);
-            self.stats.layer_bind_group_creates =
-                self.stats.layer_bind_group_creates.saturating_add(2);
+                    resources: Vec::new(),
+                    bytes,
+                    last_used_frame: self.frame_id,
+                }
+            };
+            write_uniform(&self.queue, &layer.viewport_buffer, viewport);
+            layer.viewport = viewport;
+            layer.source_rect = source_rect;
+            layer.rect = rect;
+            layer.composite_rect = composite_rect;
+            layer.scale = self.scale;
+            layer.prepared_key = prepared_key;
+            layer.resources.clear();
+            layer.resources.extend_from_slice(resources);
+            layer.last_used_frame = self.frame_id;
+            self.layers.insert(id, layer);
         } else if let Some(layer) = self.layers.get_mut(&id) {
             write_uniform(&self.queue, &layer.viewport_buffer, viewport);
             layer.viewport = viewport;
@@ -3370,7 +3705,10 @@ impl WebGpuRenderer {
             layer.prepared_key = prepared_key;
             layer.resources.clear();
             layer.resources.extend_from_slice(resources);
+            layer.last_used_frame = self.frame_id;
         }
+        self.layer_frame_ids.insert(id);
+        true
     }
 
     fn push_layer_draw(&mut self, id: u32, rect: api::RectF) {
@@ -3406,6 +3744,7 @@ impl WebGpuRenderer {
         if !dirty {
             let cached_rect = self.cached_layer(id, frame).map(|layer| layer.composite_rect);
             if let Some(cached_rect) = cached_rect {
+                self.touch_layer(id);
                 let skipped = skip_layer_body(list, index);
                 self.stats.layer_cache_hits = self.stats.layer_cache_hits.saturating_add(1);
                 self.stats.layer_cache_skipped_draws =
@@ -3415,7 +3754,10 @@ impl WebGpuRenderer {
             }
         }
 
-        self.ensure_layer(id, frame);
+        if !self.ensure_layer(id, frame) {
+            self.encode_items(list, index, true);
+            return;
+        }
         self.stats.layer_cache_misses = self.stats.layer_cache_misses.saturating_add(1);
         let start = self.frame.draws.len();
         self.target_stack.push(id);
@@ -4516,6 +4858,20 @@ impl WebGpuRenderer
       {
          self.prepared_layer_snapshot = Some(snapshot.clone());
       }
+      let required_layer_bytes = plan.iter().filter(|entry| !entry.duplicate).fold(0_u64, |total, entry| {
+         total.saturating_add(saturating_texture_bytes(
+            u64::from(entry.frame.width),
+            u64::from(entry.frame.height),
+            color_texture_bytes_per_pixel(self.config.format),
+         ))
+      });
+      if required_layer_bytes > self.layer_cache_budget_bytes
+      {
+         self.prepared_layer_key_indices = layer_keys;
+         self.prepared_layer_plan = plan;
+         self.prepared_layer_snapshot = None;
+         return Some(self.encode_snapshot_flat(snapshot));
+      }
       for entry in &plan
       {
          let frame = entry.frame;
@@ -4524,6 +4880,7 @@ impl WebGpuRenderer
             || !frame.force_refresh && self.cached_prepared_layer(frame, &entry.chunk).is_some();
          if hit
          {
+            self.touch_layer(frame.key.id);
             self.stats.layer_cache_hits = self.stats.layer_cache_hits.saturating_add(1);
             self.stats.layer_cache_skipped_draws = self.stats.layer_cache_skipped_draws.saturating_add(
                entry.chunk.draw_list().items.len().min(u32::MAX as usize) as u32,
@@ -4532,7 +4889,15 @@ impl WebGpuRenderer
          else
          {
             self.stats.layer_cache_misses = self.stats.layer_cache_misses.saturating_add(1);
-            self.ensure_prepared_layer(frame, &entry.chunk);
+            if !self.ensure_prepared_layer(frame, &entry.chunk)
+            {
+               self.frame.clear();
+               self.target_stack.clear();
+               self.prepared_layer_key_indices = layer_keys;
+               self.prepared_layer_plan.clear();
+               self.prepared_layer_snapshot = None;
+               return Some(self.encode_snapshot_flat(snapshot));
+            }
             let start = self.frame.draws.len();
             self.target_stack.push(frame.key.id);
             let mut index = 0;
@@ -5204,6 +5569,7 @@ impl api::Renderer for WebGpuRenderer {
         self.scene3d_active = false;
         self.clip_stack.clear();
         self.target_stack.clear();
+        self.layer_frame_ids.clear();
         if let Some(timestamps) = &mut self.timestamp_queries {
             timestamps.harvest();
             timestamps.begin_frame();
@@ -5216,6 +5582,7 @@ impl api::Renderer for WebGpuRenderer {
             damage_rects: damage.map(|d| d.rects.len() as u32).unwrap_or(0),
             ..WebRendererStats::default()
         };
+        self.apply_layer_cache_stats();
         self.apply_memory_stats();
         self.apply_timestamp_stats();
         self.frame_scratch_capacity = self.scratch_capacity_breakdown();
@@ -5254,14 +5621,22 @@ impl api::Renderer for WebGpuRenderer {
             Ok(texture) => texture,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                 self.surface.configure(&self.device, &self.config);
-                self.surface.get_current_texture().map_err(|_| api::RenderError::DeviceLost)?
+                match self.surface.get_current_texture() {
+                    Ok(texture) => texture,
+                    Err(_) => {
+                        self.purge_layer_cache_for_reason(LAYER_PURGE_DEVICE_LOSS);
+                        return Err(api::RenderError::DeviceLost);
+                    }
+                }
             }
             Err(wgpu::SurfaceError::OutOfMemory) => {
                 self.stats.skipped_submissions = self.stats.skipped_submissions.saturating_add(1);
+                self.purge_layer_cache_for_reason(LAYER_PURGE_MEMORY_PRESSURE);
                 return Err(api::RenderError::OutOfMemory);
             }
             Err(_) => {
                 self.stats.skipped_submissions = self.stats.skipped_submissions.saturating_add(1);
+                self.purge_layer_cache_for_reason(LAYER_PURGE_DEVICE_LOSS);
                 return Err(api::RenderError::DeviceLost);
             }
         };
@@ -5345,6 +5720,8 @@ impl api::Renderer for WebGpuRenderer {
         self.stats.cache_evictions = self.stats.cache_evictions.saturating_add(
             self.prepared_chunks.take_evictions().min(u64::from(u32::MAX)) as u32,
         );
+        self.age_layer_cache();
+        self.apply_layer_cache_stats();
         self.stats.render_encoders = self.stats.render_passes;
         Ok(())
     }
@@ -5377,11 +5754,7 @@ impl api::Renderer for WebGpuRenderer {
             self.drop_auxiliary_targets();
         }
         if scale_changed {
-            self.stats.cache_evictions = self
-                .stats
-                .cache_evictions
-                .saturating_add(self.layers.len().min(u32::MAX as usize) as u32);
-            self.layers.clear();
+            self.purge_layer_cache_for_reason(LAYER_PURGE_SCALE_CHANGE);
             self.purge_prepared_chunks();
         }
         Ok(())

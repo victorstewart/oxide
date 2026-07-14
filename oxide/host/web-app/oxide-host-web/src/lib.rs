@@ -2054,6 +2054,91 @@ mod wasm_host {
             ))
         }
 
+        pub async fn bench_webgpu_layer_cache_c31(
+            &self,
+            samples: u32,
+            frames_per_sample: u32,
+        ) -> Result<String, JsValue>
+        {
+            let samples = samples.clamp(1, 30);
+            let frames = frames_per_sample.clamp(1, 160);
+            let renderer = self.ensure_upload_bench_resources()?;
+            let mut snapshots = Vec::with_capacity(4);
+            for phase in 0..4_u32
+            {
+                snapshots.push(webgpu_local_layer_card_snapshots_with_id_base(
+                    31_000 + phase * WEBGPU_LOCAL_LAYER_CARDS as u32,
+                )?.0);
+            }
+            let budget = 6 * 1024 * 1024_u64;
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.resize(1_920, 1_080, 2.0).map_err(render_err)?;
+                renderer.set_memory_stats_interval_for_benchmark(1);
+                renderer.set_layer_cache_budget_bytes(budget);
+                renderer.purge_layer_cache();
+            }
+            webgpu_local_layer_frame(&renderer, &snapshots[0])?;
+            wait_renderer_queue_idle(&renderer).await?;
+
+            let mut frame_values = Vec::with_capacity((samples * frames) as usize);
+            let mut texture_creates = 0_u64;
+            let mut resident_peak = 0_u64;
+            let mut pool_peak = 0_u64;
+            let mut cpu_peak = 0_u64;
+            let mut evictions_peak = 0_u64;
+            let mut reuses_peak = 0_u64;
+            let mut recreations_peak = 0_u64;
+            let mut budget_violations = 0_u64;
+            for frame in 0..samples.saturating_mul(frames)
+            {
+                let snapshot = &snapshots[(frame as usize + 1) % snapshots.len()];
+                let started = perf_now();
+                webgpu_local_layer_frame(&renderer, snapshot)?;
+                frame_values.push((perf_now() - started).max(0.0));
+                let stats = renderer.borrow().last_stats();
+                texture_creates = texture_creates.saturating_add(u64::from(stats.layer_texture_creates));
+                resident_peak = resident_peak.max(stats.layer_cache_resident_bytes);
+                pool_peak = pool_peak.max(stats.layer_cache_pool_bytes);
+                cpu_peak = cpu_peak.max(stats.layer_cache_cpu_bytes);
+                evictions_peak = evictions_peak.max(stats.layer_cache_evictions);
+                reuses_peak = reuses_peak.max(stats.layer_cache_pool_reuses);
+                recreations_peak = recreations_peak.max(stats.layer_cache_recreations);
+                if stats.layer_cache_resident_bytes.saturating_add(stats.layer_cache_pool_bytes)
+                    > stats.layer_cache_budget_bytes
+                {
+                    budget_violations = budget_violations.saturating_add(1);
+                }
+            }
+            wait_renderer_queue_idle(&renderer).await?;
+            frame_values.sort_by(|a, b| a.total_cmp(b));
+
+            renderer.borrow_mut().purge_layer_cache_for_memory_pressure();
+            let memory_warning = renderer.borrow().last_stats();
+            webgpu_local_layer_frame(&renderer, &snapshots[0])?;
+            let reentry = renderer.borrow().last_stats();
+            renderer.borrow_mut().purge_layer_cache_for_device_loss_for_benchmark();
+            let device_loss = renderer.borrow().last_stats();
+            renderer.borrow_mut().set_memory_stats_interval_for_benchmark(60);
+
+            let mut report = format!(
+                "samples={samples};frames_per_sample={frames};layers={WEBGPU_LOCAL_LAYER_CARDS};budget_bytes={budget};frame_p50_ms={:.6};frame_p95_ms={:.6};frame_p99_ms={:.6};frame_peak_ms={:.6};layer_texture_creates={texture_creates};resident_bytes_peak={resident_peak};pool_bytes_peak={pool_peak};cpu_bytes_peak={cpu_peak};evictions={evictions_peak};pool_reuses={reuses_peak};recreations={recreations_peak};budget_violations={budget_violations};memory_warning_resident_bytes={};memory_warning_pool_bytes={};memory_warning_purge_reason={};reentry_texture_creates={};device_loss_resident_bytes={};device_loss_pool_bytes={};device_loss_purge_reason={}",
+                percentile(&frame_values, 0.50),
+                percentile(&frame_values, 0.95),
+                percentile(&frame_values, 0.99),
+                frame_values.last().copied().unwrap_or(0.0),
+                memory_warning.layer_cache_resident_bytes,
+                memory_warning.layer_cache_pool_bytes,
+                memory_warning.layer_cache_last_purge_reason,
+                reentry.layer_texture_creates,
+                device_loss.layer_cache_resident_bytes,
+                device_loss.layer_cache_pool_bytes,
+                device_loss.layer_cache_last_purge_reason,
+            );
+            write_c19_samples(&mut report, "frame_samples_ms", &frame_values);
+            Ok(report)
+        }
+
         pub async fn bench_webgpu_dynamic_properties(
             &self,
             samples: u32,
@@ -3800,6 +3885,11 @@ mod wasm_host {
 
     fn webgpu_local_layer_card_snapshots() -> Result<(gfx::RenderSnapshot, gfx::RenderSnapshot, gfx::RenderSnapshot), JsValue>
     {
+        webgpu_local_layer_card_snapshots_with_id_base(30_000)
+    }
+
+    fn webgpu_local_layer_card_snapshots_with_id_base(id_base: u32) -> Result<(gfx::RenderSnapshot, gfx::RenderSnapshot, gfx::RenderSnapshot), JsValue>
+    {
         let mut instances = Vec::with_capacity(WEBGPU_LOCAL_LAYER_CARDS);
         for index in 0..WEBGPU_LOCAL_LAYER_CARDS
         {
@@ -3836,7 +3926,7 @@ mod wasm_host {
                 indices: Vec::new(),
             };
             let chunk = gfx::RenderChunk::new(
-                gfx::RenderChunkId(30_000 + index as u64),
+                gfx::RenderChunkId(u64::from(id_base) + index as u64),
                 gfx::RenderChunkRevisions {
                     structural: 1,
                     geometry: 1,
@@ -3848,7 +3938,7 @@ mod wasm_host {
             ).map_err(|error| JsValue::from_str(&format!("WebGPU C30 card chunk: {error}")))?;
             let mut instance = gfx::RenderChunkInstance::new(chunk, [0.0, 0.0]);
             instance.layer = Some(gfx::RenderLayerInstance {
-                id: 30_000 + index as u32,
+                id: id_base + index as u32,
                 rect,
                 dirty: false,
             });

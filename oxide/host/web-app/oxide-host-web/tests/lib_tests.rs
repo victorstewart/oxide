@@ -128,6 +128,7 @@ fn host_exposes_local_layer_dimension_benchmark_and_edge_capture()
    assert!(source.contains("WEBGPU_LOCAL_LAYER_GPU_POSTROLL_FRAMES: usize = 1"));
    assert!(source.contains("pub async fn bench_webgpu_local_layers_c30"));
    assert!(source.contains("pub async fn bench_webgpu_local_layer_guardrails_c30"));
+   assert!(source.contains("pub async fn bench_webgpu_layer_cache_c31"));
    assert!(source.contains("pub fn render_webgpu_local_layers_c30"));
    assert!(source.contains("webgpu_local_layer_card_snapshots"));
    assert!(source.contains("webgpu_local_layer_edge_snapshots"));
@@ -144,6 +145,7 @@ fn host_exposes_local_layer_dimension_benchmark_and_edge_capture()
    assert!(page.contains("render_webgpu_local_layers_c30"));
    assert!(runner.contains("bench_webgpu_local_layers_c30"));
    assert!(runner.contains("bench_webgpu_local_layer_guardrails_c30"));
+   assert!(runner.contains("bench_webgpu_layer_cache_c31"));
    assert!(runner.contains("gpu_sample_count"));
    assert!(runner.contains("invalid C30 GPU sample population"));
    assert!(runner.contains("kern_num_files_before"));
