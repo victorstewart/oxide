@@ -78,6 +78,9 @@ fn renderer_accounting_schema_defaults_to_explicit_unavailable_allocated_bytes()
    assert_eq!(stats.nine_slice_instances, 0);
    assert_eq!(stats.nine_slice_triangles, 0);
    assert_eq!(stats.nine_slice_instance_bytes, 0);
+   assert_eq!(stats.spinner_instances, 0);
+   assert_eq!(stats.spinner_triangles, 0);
+   assert_eq!(stats.spinner_instance_bytes, 0);
 
    let source = include_str!("../src/lib.rs");
    let webgpu = include_str!("../src/wasm/webgpu.rs");
@@ -323,7 +326,7 @@ fn wasm_webgpu_viewport_uniform_and_size_local_layers_follow_independent_lifetim
     assert!(!submit.contains("write_viewport_uniform"));
     assert!(resize.contains("write_viewport_uniform("));
     assert!(source.contains(
-        "write_viewport_uniform(&queue, &viewport_buffer, width, height, 1.0);"
+        "write_viewport_uniform(&queue, &viewport_buffer, width, height, 1.0, 0.0);"
     ));
     assert!(resize.contains("if size_changed"));
     assert!(resize.contains("self.drop_auxiliary_targets();"));
@@ -630,6 +633,26 @@ fn wasm_webgpu_draw_encoding_reuses_scratch_storage() {
     assert!(encode_nine_slice.contains("NineSliceInstance::new(rect, image_size, slice, alpha)"));
     assert!(encode_nine_slice.contains("self.push_nine_slice_instance(handle.0, kind, instance);"));
     assert!(!encode_nine_slice.contains("self.encode_image("));
+
+    let encode_spinner = source
+        .split("fn encode_spinner")
+        .nth(1)
+        .expect("encode_spinner")
+        .split("fn ensure_scene_target")
+        .next()
+        .expect("encode_spinner end");
+    assert!(source.contains("const SPINNER_INSTANCE_BYTES: usize = 20;"));
+    assert!(source.contains("const SPINNER_VERTEX_COUNT: u32 = 72;"));
+    assert!(source.contains("\"vs_spinner_instance\","));
+    assert!(source.contains("spinner_instance_buffer: Option<wgpu::Buffer>"));
+    assert!(source.contains("let directions = array<vec2<f32>, 12>("));
+    assert!(source.contains("viewport.translation_opacity.w"));
+    assert!(source.contains("round(clamp(input.alpha, 0.0, 1.0)"));
+    assert!(encode_spinner.contains("SpinnerInstance::new(center, atom, alpha)"));
+    assert!(encode_spinner.contains("self.push_spinner_instance(instance);"));
+    assert!(!encode_spinner.contains(".sin()"));
+    assert!(!encode_spinner.contains(".cos()"));
+    assert!(!encode_spinner.contains("self.encode_rrect("));
 }
 
 #[test]
@@ -727,7 +750,7 @@ fn wasm_webgpu_backend_packet_vocabulary_is_frozen() {
 
     assert_eq!(
         draw_kind,
-        "enumDrawKind{Solid,RRect{first_instance:u32,instance_count:u32},Image{image:u32,kind:GpuImageKind,first_instance:u32,instance_count:u32},NineSlice{image:u32,kind:GpuImageKind,first_instance:u32,instance_count:u32},Rgba{image:u32},A8{image:u32},Sdf{image:u32},Layer{id:u32},Backdrop{rect:api::RectF,sigma:f32},}"
+        "enumDrawKind{Solid,RRect{first_instance:u32,instance_count:u32},Image{image:u32,kind:GpuImageKind,first_instance:u32,instance_count:u32},NineSlice{image:u32,kind:GpuImageKind,first_instance:u32,instance_count:u32},Spinner{first_instance:u32,instance_count:u32},Rgba{image:u32},A8{image:u32},Sdf{image:u32},Layer{id:u32},Backdrop{rect:api::RectF,sigma:f32},}"
     );
     assert_eq!(
         gpu_draw,
@@ -738,6 +761,7 @@ fn wasm_webgpu_backend_packet_vocabulary_is_frozen() {
         "(DrawKind::RRect{..},DrawKind::RRect{..})=>false",
         "(DrawKind::Image{..},DrawKind::Image{..})=>false",
         "(DrawKind::NineSlice{..},DrawKind::NineSlice{..})=>false",
+        "(DrawKind::Spinner{..},DrawKind::Spinner{..})=>false",
         "(DrawKind::Rgba{image:a},DrawKind::Rgba{image:b})=>a==b",
         "(DrawKind::A8{image:a},DrawKind::A8{image:b})=>a==b",
         "(DrawKind::Sdf{image:a},DrawKind::Sdf{image:b})=>a==b",
@@ -935,6 +959,9 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
         "pub nine_slice_instances: u32",
         "pub nine_slice_triangles: u32",
         "pub nine_slice_instance_bytes: u64",
+        "pub spinner_instances: u32",
+        "pub spinner_triangles: u32",
+        "pub spinner_instance_bytes: u64",
         "pub sdf_glyph_quads: u32",
         "pub clip_depth_peak: u32",
         "pub cpu_scratch_bytes: u64",
@@ -1223,6 +1250,9 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(host.contains("{key_prefix}nine_slice_instances={}"));
     assert!(host.contains("{key_prefix}nine_slice_triangles={}"));
     assert!(host.contains("{key_prefix}nine_slice_instance_bytes={}"));
+    assert!(host.contains("{key_prefix}spinner_instances={}"));
+    assert!(host.contains("{key_prefix}spinner_triangles={}"));
+    assert!(host.contains("{key_prefix}spinner_instance_bytes={}"));
     assert!(host.contains("{key_prefix}sdf_glyph_quads={}"));
     assert!(host.contains("{key_prefix}scene3d_draws={}"));
     assert!(host.contains("{key_prefix}id_mask_draws={}"));
@@ -1383,6 +1413,14 @@ fn wasm_webgpu_prepared_chunks_are_budgeted_and_resource_invalidated()
    assert!(source.contains("PreparedPropertyRing"));
    assert!(source.contains("PREPARED_PROPERTY_RING_DEPTH"));
    assert!(source.contains("prepared_dynamic_uniform"));
+   assert!(source.contains("spinner_instance_buffer: Option<wgpu::Buffer>"));
+   assert!(source.contains("spinner_instances: u32"));
+   assert!(source.contains("self.animation_phase"));
+   assert!(source.contains("if snapshot_bundle.spinner_instances != 0"));
+   assert!(source.contains("if spinner_instances != 0"));
+   assert!(source.contains("matches!(command, api::DrawCmd::Spinner { .. })"));
+   assert!(source.contains("entry.frame.viewport[11] = self.animation_phase;"));
+   assert!(source.contains("entry.frame.force_refresh = true;"));
    assert!(source.contains("property_upload_bytes"));
    assert!(source.contains("property_records_updated"));
    assert!(source.contains("property_ring_bytes"));

@@ -88,6 +88,9 @@ function parseArgs(argv)
       rrectArchitectureOnly: false,
       imageArchitectureOnly: false,
       nineSliceArchitectureOnly: false,
+      spinnerArchitectureOnly: false,
+      spinnerPhaseMs: 0,
+      spinnerReference: false,
       idMaskCacheC33: false,
       idMaskCacheOnly: false,
       idMaskCacheRafOnly: false,
@@ -208,6 +211,12 @@ function parseArgs(argv)
          args.imageArchitectureOnly = true;
       } else if (arg === "--nine-slice-architecture-only") {
          args.nineSliceArchitectureOnly = true;
+      } else if (arg === "--spinner-architecture-only") {
+         args.spinnerArchitectureOnly = true;
+      } else if (arg === "--spinner-phase-ms") {
+         args.spinnerPhaseMs = Number(next());
+      } else if (arg === "--spinner-reference") {
+         args.spinnerReference = true;
       } else if (arg === "--id-mask-cache-c33") {
          args.idMaskCacheC33 = true;
       } else if (arg === "--id-mask-cache-only") {
@@ -223,8 +232,8 @@ function parseArgs(argv)
       }
    }
 
-   if (args.target !== "app" && args.target !== "glyph" && args.target !== "id-mask" && args.target !== "scene3d" && args.target !== "prepared" && args.target !== "local-layers" && args.target !== "rrect" && args.target !== "image" && args.target !== "nine-slice") {
-      throw new Error("--target must be app, glyph, id-mask, scene3d, prepared, local-layers, rrect, image, or nine-slice");
+   if (args.target !== "app" && args.target !== "glyph" && args.target !== "id-mask" && args.target !== "scene3d" && args.target !== "prepared" && args.target !== "local-layers" && args.target !== "rrect" && args.target !== "image" && args.target !== "nine-slice" && args.target !== "spinner") {
+      throw new Error("--target must be app, glyph, id-mask, scene3d, prepared, local-layers, rrect, image, nine-slice, or spinner");
    }
    if (!args.golden) {
       args.golden = defaultGoldenForTarget(args.target);
@@ -576,6 +585,15 @@ function browserUrl(args, baseUrl, reportEndpoint, startupOnly = false, canvasDi
    }
    if (args.nineSliceArchitectureOnly) {
       url.searchParams.set("nine_slice_architecture_only", "1");
+   }
+   if (args.spinnerArchitectureOnly) {
+      url.searchParams.set("spinner_architecture_only", "1");
+   }
+   if (args.spinnerPhaseMs !== 0) {
+      url.searchParams.set("spinner_phase_ms", String(args.spinnerPhaseMs));
+   }
+   if (args.spinnerReference) {
+      url.searchParams.set("spinner_reference", "1");
    }
    if (args.idMaskCacheC33) {
       url.searchParams.set("id_mask_cache_c33", "1");
@@ -988,10 +1006,33 @@ function assertRendered(image, target)
       assertLocalLayersRendered(image);
    } else if (target === "rrect") {
       assertRRectRendered(image);
+   } else if (target === "spinner") {
+      assertSpinnerRendered(image);
    } else if (target === "image" || target === "nine-slice") {
       assertImageRendered(image);
    } else {
       assertAppRendered(image);
+   }
+}
+
+function assertSpinnerRendered(image)
+{
+   let atoms = 0;
+   let dark = 0;
+   for (let i = 0; i < image.rgba.length; i += 4)
+   {
+      let r = image.rgba[i];
+      let g = image.rgba[i + 1];
+      let b = image.rgba[i + 2];
+      if (r >= 16 && r <= 96 && Math.abs(r - g) <= 2 && Math.abs(g - b) <= 2) {
+         atoms += 1;
+      }
+      if (r < 16 && g < 16 && b < 16) {
+         dark += 1;
+      }
+   }
+   if (atoms < 1_500 || dark < 50_000) {
+      throw new Error(`capture does not look like the Spinner scene: atoms=${atoms} dark=${dark}`);
    }
 }
 
@@ -1681,6 +1722,9 @@ function cpuSubmitCase(metrics)
       id_mask_uniform_bytes: numberMetric(metrics, "id_mask_uniform_bytes"),
       id_mask_uniform_slots: numberMetric(metrics, "id_mask_uniform_slots"),
       spinner_draws: numberMetric(metrics, "spinner_draws"),
+      spinner_instances: numberMetric(metrics, "spinner_instances"),
+      spinner_triangles: numberMetric(metrics, "spinner_triangles"),
+      spinner_instance_bytes: numberMetric(metrics, "spinner_instance_bytes"),
       camera_bg_draws: numberMetric(metrics, "camera_bg_draws"),
       render_passes: numberMetric(metrics, "render_passes"),
       clear_passes: numberMetric(metrics, "clear_passes"),
@@ -2108,6 +2152,9 @@ function idMaskCase(metrics, id, variant, prefix)
       id_mask_uniform_bytes: numberMetric(metrics, `${prefix}_id_mask_uniform_bytes`),
       id_mask_uniform_slots: numberMetric(metrics, `${prefix}_id_mask_uniform_slots`),
       spinner_draws: numberMetric(metrics, `${prefix}_spinner_draws`),
+      spinner_instances: numberMetric(metrics, `${prefix}_spinner_instances`),
+      spinner_triangles: numberMetric(metrics, `${prefix}_spinner_triangles`),
+      spinner_instance_bytes: numberMetric(metrics, `${prefix}_spinner_instance_bytes`),
       camera_bg_draws: numberMetric(metrics, `${prefix}_camera_bg_draws`),
       render_passes: numberMetric(metrics, `${prefix}_render_passes`),
       clear_passes: numberMetric(metrics, `${prefix}_clear_passes`),
@@ -2196,6 +2243,9 @@ function prefixedBackendCase(metrics, id, variant, prefix, extra)
       id_mask_uniform_bytes: numberMetric(metrics, `${prefix}_id_mask_uniform_bytes`),
       id_mask_uniform_slots: numberMetric(metrics, `${prefix}_id_mask_uniform_slots`),
       spinner_draws: numberMetric(metrics, `${prefix}_spinner_draws`),
+      spinner_instances: numberMetric(metrics, `${prefix}_spinner_instances`),
+      spinner_triangles: numberMetric(metrics, `${prefix}_spinner_triangles`),
+      spinner_instance_bytes: numberMetric(metrics, `${prefix}_spinner_instance_bytes`),
       camera_bg_draws: numberMetric(metrics, `${prefix}_camera_bg_draws`),
       render_passes: numberMetric(metrics, `${prefix}_render_passes`),
       clear_passes: numberMetric(metrics, `${prefix}_clear_passes`),

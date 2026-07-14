@@ -102,6 +102,8 @@ C37 moves WebGPU rounded rectangles out of the generic scratch-mesh path describ
 
 C38 likewise moves ordinary WebGPU images to one 36-byte destination/UV/alpha instance over a renderer-owned static indexed quad. Adjacent commands share a draw only while image, format, target, and clip remain identical, so texture order is unchanged. Image meshes, nine-slices, and SDF glyphs retain generic geometry; direct and prepared reports expose image instance, triangle, and byte totals.
 
+C39 moves nine-slices to one 44-byte instance over a renderer-owned fixed cell grid. C40 moves spinners to one 20-byte instance whose twelve atoms are generated in WGSL; the shared viewport/property uniform carries animation phase, transform, and opacity. `WebRendererStats` exposes spinner instances, triangles, and instance bytes beside the existing logical spinner draw count.
+
 ## Feature flags and cfgs
 
 The real backend is compiled only on `target_arch = "wasm32"`. Non-wasm builds expose `WebRenderer::new_for_tests` and a `Renderer` implementation that returns `RenderError::Unsupported` from `submit` so native tests can inspect shared helpers without exposing a browser Canvas2D visual path. The native stub mirrors the web `CameraBg` boundary by treating that command as zero draw work.
@@ -128,6 +130,8 @@ pub async fn build_renderer() -> Result<oxide_renderer_web::BrowserRenderer, oxi
 ```
 
 ## Changelog
+- 2026-07-14: exposed the C40 compact procedural spinner stream, animation/property uniform ownership, and direct/prepared instance telemetry.
+- 2026-07-14: exposed the C39 compact WebGPU nine-slice instance stream and fixed-grid telemetry.
 - 2026-07-14: exposed the C38 compact WebGPU image instance stream, static indexed quad, ordered batching, and direct/prepared telemetry.
 - 2026-07-14: exposed the C37 analytic WebGPU RRect instance stream, prepared-path accounting, and instance/triangle/byte telemetry.
 - 2026-07-14: extended C35 snapshot proof to the real-Dawn seven-dimension exact raster/final-field matrix.

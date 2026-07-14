@@ -319,6 +319,7 @@ mod wasm_host {
             timing_stage_end(timing_sample.as_deref_mut(), WebGpuFrameStage::DrawCoalesce, timing_before);
 
             let mut renderer = self.renderer.borrow_mut();
+            renderer.set_animation_time_ms(timestamp_ms);
             let stage_before = allocation_stage_begin(allocation_stages.as_deref());
             let timing_before = timing_stage_begin(timing_sample.as_deref());
             let token = renderer.begin_frame(&gfx::FrameTarget, Some(&damage));
@@ -682,6 +683,45 @@ mod wasm_host {
                 stats.nine_slice_instance_bytes,
                 stats.draws,
                 stats.draw_bind_group_binds,
+                stats.frame_id,
+                stats.width,
+                stats.height,
+                dpr,
+            ))
+        }
+
+        pub fn render_webgpu_spinner_snapshot(
+            &self,
+            phase_ms: f64,
+            reference: bool,
+            width: u32,
+            height: u32,
+            dpr: f32,
+        ) -> Result<String, JsValue> {
+            self.state.borrow_mut().direct_capture_active = true;
+            let renderer = self.ensure_upload_bench_resources()?;
+            self.with_upload_bench_resources(|renderer, resources| {
+                resources.spinner_capture_frame(
+                    renderer,
+                    phase_ms,
+                    reference,
+                    width,
+                    height,
+                    dpr,
+                )
+            })?;
+            let stats = renderer.borrow().last_stats();
+            Ok(format!(
+                "reference={};phase_ms={:.3};spinner_instances={};spinner_triangles={};spinner_instance_bytes={};rrect_instances={};rrect_triangles={};rrect_instance_bytes={};draws={};frame_id={};width={};height={};dpr={:.1}",
+                u32::from(reference),
+                phase_ms,
+                stats.spinner_instances,
+                stats.spinner_triangles,
+                stats.spinner_instance_bytes,
+                stats.rrect_instances,
+                stats.rrect_triangles,
+                stats.rrect_instance_bytes,
+                stats.draws,
                 stats.frame_id,
                 stats.width,
                 stats.height,
@@ -1753,6 +1793,20 @@ mod wasm_host {
             ).await
         }
 
+        pub async fn bench_webgpu_spinner_architecture(
+            &self,
+            samples: u32,
+            frames_per_sample: u32,
+            dpr: f32,
+        ) -> Result<String, JsValue> {
+            self.bench_webgpu_architecture_matrix(
+                samples,
+                frames_per_sample,
+                dpr,
+                WebGpuArchitectureMatrixKind::Spinner,
+            ).await
+        }
+
         async fn bench_webgpu_architecture_matrix(
             &self,
             samples: u32,
@@ -1781,6 +1835,12 @@ mod wasm_host {
                     ("nine_slice_64", "nine_slice", 64),
                     ("nine_slice_512", "nine_slice", 512),
                     ("nine_slice_1024", "nine_slice", 1_024),
+                ],
+                WebGpuArchitectureMatrixKind::Spinner => &[
+                    ("spinner_1", "spinner", 1),
+                    ("spinner_64", "spinner", 64),
+                    ("spinner_512", "spinner", 512),
+                    ("spinner_1024", "spinner", 1_024),
                 ],
                 WebGpuArchitectureMatrixKind::Full => &[
                     ("rrect_1", "rrect", 1),
@@ -3332,6 +3392,7 @@ mod wasm_host {
         RRect,
         Image,
         NineSlice,
+        Spinner,
     }
 
     struct WebGpuGeometryBenchResources {
@@ -4067,6 +4128,7 @@ mod wasm_host {
         ) -> Result<(), JsValue> {
             let physical = (256.0 * dpr).round() as u32;
             renderer.resize(physical, physical, dpr).map_err(render_err)?;
+            renderer.set_animation_time_ms(0.0);
             let token = renderer.begin_frame(&gfx::FrameTarget, None);
             if kind == "neon" {
                 for markers in self.architecture_neon_markers[..count]
@@ -4313,6 +4375,69 @@ mod wasm_host {
                     slice,
                     0.55 + (index % 4) as f32 * 0.15,
                 );
+            }
+            self.builder.clip_pop();
+            renderer.encode_pass(self.builder.drawlist());
+            renderer.submit(token).map_err(render_err)
+        }
+
+        fn spinner_capture_frame(
+            &mut self,
+            renderer: &mut BrowserRenderer,
+            phase_ms: f64,
+            reference: bool,
+            width: u32,
+            height: u32,
+            dpr: f32,
+        ) -> Result<(), JsValue> {
+            let dpr = dpr.clamp(1.0, 3.0);
+            let physical_width = (width.max(256) as f32 * dpr).round() as u32;
+            let physical_height = (height.max(256) as f32 * dpr).round() as u32;
+            renderer.resize(physical_width, physical_height, dpr).map_err(render_err)?;
+            renderer.set_animation_time_ms(phase_ms);
+            let token = renderer.begin_frame(&gfx::FrameTarget, None);
+            self.builder.clear();
+            self.builder.clip_push(gfx::RectI::new(4, 4, 248, 248));
+            let phase = (phase_ms.rem_euclid(1_000.0) / 1_000.0) as f32;
+            for index in 0..64
+            {
+                let center = [
+                    (index % 8) as f32 * 32.0 + 16.0,
+                    (index / 8) as f32 * 32.0 + 16.0,
+                ];
+                let atom = 5.0 + (index % 4) as f32 * 0.75;
+                let alpha = 0.55 + (index % 4) as f32 * 0.15;
+                if reference
+                {
+                    let radius = (atom * 1.5).max(1.0);
+                    for atom_index in 0..12
+                    {
+                        let progress = (atom_index as f32 / 12.0 + phase).fract();
+                        let angle = atom_index as f32 / 12.0 * core::f32::consts::TAU;
+                        let x = center[0] + angle.cos() * radius;
+                        let y = center[1] + angle.sin() * radius;
+                        let dot_radius = atom * 0.12;
+                        self.builder.rrect(
+                            gfx::RectF::new(
+                                x - dot_radius,
+                                y - dot_radius,
+                                dot_radius * 2.0,
+                                dot_radius * 2.0,
+                            ),
+                            [dot_radius; 4],
+                            gfx::Color::rgba(
+                                0.15,
+                                0.15,
+                                0.15,
+                                alpha * (0.25 + progress * 0.75),
+                            ),
+                        );
+                    }
+                }
+                else
+                {
+                    self.builder.spinner(center, atom, alpha);
+                }
             }
             self.builder.clip_pop();
             renderer.encode_pass(self.builder.drawlist());
@@ -7121,7 +7246,7 @@ mod wasm_host {
         let key_prefix = if prefix.is_empty() { String::new() } else { format!("{prefix}_") };
         let _ = write!(
             out,
-            ";{key_prefix}draws={};{key_prefix}draw_items={};{key_prefix}draw_items_coalesced={};{key_prefix}draw_pipeline_binds={};{key_prefix}draw_bind_group_binds={};{key_prefix}draw_scissor_sets={};{key_prefix}solid_tris={};{key_prefix}rrect_instances={};{key_prefix}rrect_triangles={};{key_prefix}rrect_instance_bytes={};{key_prefix}image_instances={};{key_prefix}image_triangles={};{key_prefix}image_instance_bytes={};{key_prefix}image_draws={};{key_prefix}image_mesh_draws={};{key_prefix}nine_slice_draws={};{key_prefix}nine_slice_instances={};{key_prefix}nine_slice_triangles={};{key_prefix}nine_slice_instance_bytes={};{key_prefix}glyph_quads={};{key_prefix}sdf_glyph_quads={};{key_prefix}clip_depth_peak={};{key_prefix}damage_rects={};{key_prefix}layer_draws={};{key_prefix}layer_cache_hits={};{key_prefix}layer_cache_misses={};{key_prefix}layer_cache_skipped_draws={};{key_prefix}layer_passes={};{key_prefix}scene3d_draws={};{key_prefix}id_mask_draws={};{key_prefix}backdrop_draws={};{key_prefix}visual_effect_draws={};{key_prefix}effect_uniform_writes={};{key_prefix}effect_uniform_bytes={};{key_prefix}effect_uniform_slots={};{key_prefix}id_mask_uniform_writes={};{key_prefix}id_mask_uniform_bytes={};{key_prefix}id_mask_uniform_slots={};{key_prefix}spinner_draws={};{key_prefix}camera_bg_draws={};{key_prefix}render_passes={};{key_prefix}clear_passes={};{key_prefix}draw_passes={};{key_prefix}scene3d_passes={};{key_prefix}scene3d_overlay_passes={};{key_prefix}id_mask_raster_passes={};{key_prefix}id_mask_field_seed_passes={};{key_prefix}id_mask_field_jump_passes={};{key_prefix}id_mask_compositor_passes={};{key_prefix}present_passes={};{key_prefix}texture_copies={};{key_prefix}command_buffers={};{key_prefix}gpu_timestamp_query_supported={};{key_prefix}gpu_timestamp_frame_id={};{key_prefix}gpu_timestamp_passes={};{key_prefix}gpu_timestamp_total_ns={};{key_prefix}gpu_timestamp_clear_ns={};{key_prefix}gpu_timestamp_draw_ns={};{key_prefix}gpu_timestamp_scene3d_ns={};{key_prefix}gpu_timestamp_scene3d_overlay_ns={};{key_prefix}gpu_timestamp_id_mask_raster_ns={};{key_prefix}gpu_timestamp_id_mask_field_seed_ns={};{key_prefix}gpu_timestamp_id_mask_field_jump_ns={};{key_prefix}gpu_timestamp_id_mask_compositor_ns={};{key_prefix}gpu_timestamp_present_ns={};{key_prefix}gpu_timestamp_max_pass_ns={};{key_prefix}gpu_timestamp_readback_skips={};{key_prefix}gpu_timestamp_readback_interval={};{key_prefix}buffer_upload_bytes={};{key_prefix}texture_upload_bytes={};{key_prefix}buffer_grows={};{key_prefix}texture_creates={};{key_prefix}bind_group_creates={};{key_prefix}pipeline_creates={};{key_prefix}sampler_creates={};{key_prefix}mesh3d_creates={};{key_prefix}draw_buffer_grows={};{key_prefix}image_texture_creates={};{key_prefix}image_bind_group_creates={};{key_prefix}target_texture_creates={};{key_prefix}target_bind_group_creates={};{key_prefix}layer_texture_creates={};{key_prefix}layer_bind_group_creates={};{key_prefix}scene3d_buffer_grows={};{key_prefix}scene3d_bind_group_creates={};{key_prefix}effect_buffer_grows={};{key_prefix}effect_bind_group_creates={};{key_prefix}id_mask_texture_creates={};{key_prefix}id_mask_buffer_grows={};{key_prefix}id_mask_bind_group_creates={};{key_prefix}image_upload_temp_allocs={};{key_prefix}image_upload_temp_bytes={};{key_prefix}image_upload_scratch_bytes={};{key_prefix}image_upload_scratch_grows={};{key_prefix}cpu_scratch_bytes={};{key_prefix}cpu_scratch_grows={};{key_prefix}cpu_scratch_growth_bytes={};{key_prefix}cpu_draw_scratch_bytes={};{key_prefix}cpu_draw_scratch_grows={};{key_prefix}cpu_draw_scratch_growth_bytes={};{key_prefix}cpu_scene3d_scratch_bytes={};{key_prefix}cpu_scene3d_scratch_grows={};{key_prefix}cpu_scene3d_scratch_growth_bytes={};{key_prefix}cpu_effect_scratch_bytes={};{key_prefix}cpu_effect_scratch_grows={};{key_prefix}cpu_effect_scratch_growth_bytes={};{key_prefix}cpu_id_mask_scratch_bytes={};{key_prefix}cpu_id_mask_scratch_grows={};{key_prefix}cpu_id_mask_scratch_growth_bytes={};{key_prefix}cpu_image_upload_scratch_bytes={};{key_prefix}cpu_image_upload_scratch_grows={};{key_prefix}cpu_image_upload_scratch_growth_bytes={};{key_prefix}cpu_resource_table_scratch_bytes={};{key_prefix}cpu_resource_table_scratch_grows={};{key_prefix}cpu_resource_table_scratch_growth_bytes={}",
+            ";{key_prefix}draws={};{key_prefix}draw_items={};{key_prefix}draw_items_coalesced={};{key_prefix}draw_pipeline_binds={};{key_prefix}draw_bind_group_binds={};{key_prefix}draw_scissor_sets={};{key_prefix}solid_tris={};{key_prefix}rrect_instances={};{key_prefix}rrect_triangles={};{key_prefix}rrect_instance_bytes={};{key_prefix}image_instances={};{key_prefix}image_triangles={};{key_prefix}image_instance_bytes={};{key_prefix}image_draws={};{key_prefix}image_mesh_draws={};{key_prefix}nine_slice_draws={};{key_prefix}nine_slice_instances={};{key_prefix}nine_slice_triangles={};{key_prefix}nine_slice_instance_bytes={};{key_prefix}glyph_quads={};{key_prefix}sdf_glyph_quads={};{key_prefix}clip_depth_peak={};{key_prefix}damage_rects={};{key_prefix}layer_draws={};{key_prefix}layer_cache_hits={};{key_prefix}layer_cache_misses={};{key_prefix}layer_cache_skipped_draws={};{key_prefix}layer_passes={};{key_prefix}scene3d_draws={};{key_prefix}id_mask_draws={};{key_prefix}backdrop_draws={};{key_prefix}visual_effect_draws={};{key_prefix}effect_uniform_writes={};{key_prefix}effect_uniform_bytes={};{key_prefix}effect_uniform_slots={};{key_prefix}id_mask_uniform_writes={};{key_prefix}id_mask_uniform_bytes={};{key_prefix}id_mask_uniform_slots={};{key_prefix}spinner_draws={};{key_prefix}spinner_instances={};{key_prefix}spinner_triangles={};{key_prefix}spinner_instance_bytes={};{key_prefix}camera_bg_draws={};{key_prefix}render_passes={};{key_prefix}clear_passes={};{key_prefix}draw_passes={};{key_prefix}scene3d_passes={};{key_prefix}scene3d_overlay_passes={};{key_prefix}id_mask_raster_passes={};{key_prefix}id_mask_field_seed_passes={};{key_prefix}id_mask_field_jump_passes={};{key_prefix}id_mask_compositor_passes={};{key_prefix}present_passes={};{key_prefix}texture_copies={};{key_prefix}command_buffers={};{key_prefix}gpu_timestamp_query_supported={};{key_prefix}gpu_timestamp_frame_id={};{key_prefix}gpu_timestamp_passes={};{key_prefix}gpu_timestamp_total_ns={};{key_prefix}gpu_timestamp_clear_ns={};{key_prefix}gpu_timestamp_draw_ns={};{key_prefix}gpu_timestamp_scene3d_ns={};{key_prefix}gpu_timestamp_scene3d_overlay_ns={};{key_prefix}gpu_timestamp_id_mask_raster_ns={};{key_prefix}gpu_timestamp_id_mask_field_seed_ns={};{key_prefix}gpu_timestamp_id_mask_field_jump_ns={};{key_prefix}gpu_timestamp_id_mask_compositor_ns={};{key_prefix}gpu_timestamp_present_ns={};{key_prefix}gpu_timestamp_max_pass_ns={};{key_prefix}gpu_timestamp_readback_skips={};{key_prefix}gpu_timestamp_readback_interval={};{key_prefix}buffer_upload_bytes={};{key_prefix}texture_upload_bytes={};{key_prefix}buffer_grows={};{key_prefix}texture_creates={};{key_prefix}bind_group_creates={};{key_prefix}pipeline_creates={};{key_prefix}sampler_creates={};{key_prefix}mesh3d_creates={};{key_prefix}draw_buffer_grows={};{key_prefix}image_texture_creates={};{key_prefix}image_bind_group_creates={};{key_prefix}target_texture_creates={};{key_prefix}target_bind_group_creates={};{key_prefix}layer_texture_creates={};{key_prefix}layer_bind_group_creates={};{key_prefix}scene3d_buffer_grows={};{key_prefix}scene3d_bind_group_creates={};{key_prefix}effect_buffer_grows={};{key_prefix}effect_bind_group_creates={};{key_prefix}id_mask_texture_creates={};{key_prefix}id_mask_buffer_grows={};{key_prefix}id_mask_bind_group_creates={};{key_prefix}image_upload_temp_allocs={};{key_prefix}image_upload_temp_bytes={};{key_prefix}image_upload_scratch_bytes={};{key_prefix}image_upload_scratch_grows={};{key_prefix}cpu_scratch_bytes={};{key_prefix}cpu_scratch_grows={};{key_prefix}cpu_scratch_growth_bytes={};{key_prefix}cpu_draw_scratch_bytes={};{key_prefix}cpu_draw_scratch_grows={};{key_prefix}cpu_draw_scratch_growth_bytes={};{key_prefix}cpu_scene3d_scratch_bytes={};{key_prefix}cpu_scene3d_scratch_grows={};{key_prefix}cpu_scene3d_scratch_growth_bytes={};{key_prefix}cpu_effect_scratch_bytes={};{key_prefix}cpu_effect_scratch_grows={};{key_prefix}cpu_effect_scratch_growth_bytes={};{key_prefix}cpu_id_mask_scratch_bytes={};{key_prefix}cpu_id_mask_scratch_grows={};{key_prefix}cpu_id_mask_scratch_growth_bytes={};{key_prefix}cpu_image_upload_scratch_bytes={};{key_prefix}cpu_image_upload_scratch_grows={};{key_prefix}cpu_image_upload_scratch_growth_bytes={};{key_prefix}cpu_resource_table_scratch_bytes={};{key_prefix}cpu_resource_table_scratch_grows={};{key_prefix}cpu_resource_table_scratch_growth_bytes={}",
             stats.draws,
             stats.draw_items,
             stats.draw_items_coalesced,
@@ -7161,6 +7286,9 @@ mod wasm_host {
             stats.id_mask_uniform_bytes,
             stats.id_mask_uniform_slots,
             stats.spinner_draws,
+            stats.spinner_instances,
+            stats.spinner_triangles,
+            stats.spinner_instance_bytes,
             stats.camera_bg_draws,
             stats.render_passes,
             stats.clear_passes,

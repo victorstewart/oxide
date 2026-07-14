@@ -58,6 +58,7 @@
          const rrectArchitectureOnly = params.get("rrect_architecture_only") === "1";
          const imageArchitectureOnly = params.get("image_architecture_only") === "1";
          const nineSliceArchitectureOnly = params.get("nine_slice_architecture_only") === "1";
+         const spinnerArchitectureOnly = params.get("spinner_architecture_only") === "1";
          const idMaskCacheC33 = params.get("id_mask_cache_c33") === "1";
          const idMaskCacheOnly = params.get("id_mask_cache_only") === "1";
          const idMaskCacheRafOnly = params.get("id_mask_cache_raf_only") === "1";
@@ -71,6 +72,8 @@
          const canvasFrames = boundedNumber("canvas_frames", 24, 1, 120);
          const canvasQuads = boundedNumber("canvas_quads", 512, 1, 4096);
          const captureTarget = params.get("capture_target") || "app";
+         const spinnerPhaseMs = boundedNumber("spinner_phase_ms", 0, 0, 999);
+         const spinnerReference = params.get("spinner_reference") === "1";
          const captureOnly = params.get("capture_only") === "1";
          const startupOnly = params.get("startup_only") === "1";
          const idMaskReferenceOnly = params.get("id_mask_reference_only") === "1";
@@ -314,6 +317,70 @@
                last_snapshot: snapshot,
             };
          };
+         const runSpinnerRafHarness = async frameCount => {
+            const warmupCpuSubmitMs = [];
+            const rafTimestampsMs = [];
+            const rafDeltasMs = [];
+            const cpuSubmitMs = [];
+            let previousTimestampMs = await nextAnimationFrame();
+            let snapshot = "";
+            for (let warmup = 0; warmup < 32; warmup += 1) {
+               const timestampMs = await nextAnimationFrame();
+               const startMs = performance.now();
+               snapshot = window.oxideApp.render_webgpu_spinner_snapshot(
+                  timestampMs,
+                  spinnerReference,
+                  256,
+                  256,
+                  window.devicePixelRatio,
+               );
+               warmupCpuSubmitMs.push(performance.now() - startMs);
+               previousTimestampMs = timestampMs;
+            }
+            window.oxideApp.begin_raf_gpu_timestamp_capture();
+            for (let frame = 0; frame < frameCount; frame += 1) {
+               const timestampMs = await nextAnimationFrame();
+               const startMs = performance.now();
+               snapshot = window.oxideApp.render_webgpu_spinner_snapshot(
+                  timestampMs,
+                  spinnerReference,
+                  256,
+                  256,
+                  window.devicePixelRatio,
+               );
+               cpuSubmitMs.push(performance.now() - startMs);
+               rafTimestampsMs.push(timestampMs);
+               rafDeltasMs.push(timestampMs - previousTimestampMs);
+               previousTimestampMs = timestampMs;
+            }
+            const gpuTimestamps = JSON.parse(
+               await window.oxideApp.finish_raf_gpu_timestamp_capture(),
+            );
+            return {
+               classification: "browser-displayed-spinner-frames",
+               renderer_path: "direct-spinner-snapshot",
+               reference_cpu_expansion: spinnerReference ? 1 : 0,
+               submissions_per_raf: 1,
+               viewport_css: `${window.innerWidth}x${window.innerHeight}`,
+               device_pixel_ratio: window.devicePixelRatio,
+               cross_origin_isolated: window.crossOriginIsolated,
+               warmup_frames: 32,
+               warmup_cpu_submit_ms: warmupCpuSubmitMs,
+               frames: frameCount,
+               submissions: frameCount,
+               raf_timestamps_ms: rafTimestampsMs,
+               raf_deltas_ms: rafDeltasMs,
+               cpu_submit_ms: cpuSubmitMs,
+               gpu_timestamp_status: gpuTimestamps.supported ? "collected" : "unsupported",
+               gpu_timestamp_readback_skips: gpuTimestamps.readback_skips,
+               queue_drain_ms: gpuTimestamps.queue_drain_ms,
+               queue_drain_raf_waits: gpuTimestamps.queue_drain_raf_waits,
+               queue_pending_initial: gpuTimestamps.queue_pending_initial,
+               queue_pending_final: gpuTimestamps.queue_pending_final,
+               gpu_timestamp_samples: gpuTimestamps.samples,
+               last_snapshot: snapshot,
+            };
+         };
          const errorDetail = error => {
             if (error && typeof error.message === "string") {
                return error.message;
@@ -500,6 +567,15 @@
                   await nextAnimationFrame();
                }
             }
+         } else if (captureTarget === "spinner") {
+            window.oxideApp = await newMeasuredOxideApp();
+            window.oxideWebGpuAppSnapshot = measureFirstFrame(() => window.oxideApp.render_webgpu_spinner_snapshot(spinnerPhaseMs, spinnerReference, captureWidth, captureHeight, window.devicePixelRatio));
+            console.log("oxide-webgpu-spinner-snapshot", window.oxideWebGpuAppSnapshot);
+            if (captureOnly) {
+               for (let frame = 0; frame < 3; frame += 1) {
+                  await nextAnimationFrame();
+               }
+            }
          } else if (captureTarget === "prepared") {
             window.oxideApp = await newMeasuredOxideApp();
             window.oxideWebGpuPreparedSnapshot = measureFirstFrame(() => window.oxideApp.render_webgpu_prepared_snapshot(preparedFlat));
@@ -585,6 +661,12 @@
             window.oxideApp.prewarm_webgpu_bench_resources();
             window.oxideWebGpuArchitecturePrimitives = await runBench("nine_slice_architecture", () => window.oxideApp.bench_webgpu_nine_slice_architecture(mixedSamples, mixedFrames, window.devicePixelRatio));
             console.log("oxide-webgpu-nine-slice-architecture", window.oxideWebGpuArchitecturePrimitives);
+         } else if (spinnerArchitectureOnly) {
+            window.oxideApp.prewarm_webgpu_bench_resources();
+            window.oxideWebGpuArchitecturePrimitives = await runBench("spinner_architecture", () => window.oxideApp.bench_webgpu_spinner_architecture(mixedSamples, mixedFrames, window.devicePixelRatio));
+            console.log("oxide-webgpu-spinner-architecture", window.oxideWebGpuArchitecturePrimitives);
+            window.oxideWebGpuSpinnerFramePerf = await runBench("spinner_frame_pacing", () => runSpinnerRafHarness(Math.min(rafFrames, 600)));
+            console.log("oxide-webgpu-spinner-frame-pacing", window.oxideWebGpuSpinnerFramePerf);
          } else if (!captureOnly && !startupOnly && !idMaskReferenceOnly && !idMaskMatrixOnly) {
             window.oxideApp.prewarm_webgpu_bench_resources();
             if (architectureMatrix) {
@@ -652,6 +734,7 @@
             neon_marker_ab: window.oxideWebGpuNeonMarkerAB,
             direct_surface_ab: window.oxideWebGpuDirectSurfaceAB,
             architecture_primitives: window.oxideWebGpuArchitecturePrimitives,
+            spinner_frame_perf: window.oxideWebGpuSpinnerFramePerf,
             benchmark_marks: window.oxideWebBenchmarkMarks,
             capture_target: captureTarget,
             browser_environment: {
