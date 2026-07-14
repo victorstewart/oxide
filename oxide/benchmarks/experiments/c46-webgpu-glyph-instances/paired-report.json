@@ -1,0 +1,269 @@
+{
+  "case": "c46-webgpu-glyph-instances",
+  "pair_count": 15,
+  "order": "balanced alternating fresh Chrome processes",
+  "workload": "512 glyphs in 64 source runs; 256 bitmap and 256 SDF glyphs",
+  "metrics": {
+    "cpu_submit_p50_ms": {
+      "parent": {
+        "samples": 15,
+        "p50": 0.05,
+        "p95": 0.053,
+        "p99": 0.073,
+        "min": 0.048,
+        "max": 0.073,
+        "avg": 0.05160000000000001
+      },
+      "candidate": {
+        "samples": 15,
+        "p50": 0.046,
+        "p95": 0.049,
+        "p99": 0.052,
+        "min": 0.041,
+        "max": 0.052,
+        "avg": 0.0456
+      },
+      "paired_speedup_pct": {
+        "samples": 15,
+        "p50": 9.803921568627446,
+        "p95": 17.647058823529402,
+        "p99": 39.726027397260275,
+        "min": 0,
+        "max": 39.726027397260275,
+        "avg": 10.747860100359608
+      },
+      "paired_median_speedup_ci_95_pct": {
+        "iterations": 20000,
+        "low_95": 3.9215686274509705,
+        "high_95": 14.583333333333332
+      },
+      "candidate_wins": 14
+    },
+    "cpu_submit_p95_ms": {
+      "parent": {
+        "samples": 15,
+        "p50": 0.084,
+        "p95": 0.088,
+        "p99": 0.094,
+        "min": 0.078,
+        "max": 0.094,
+        "avg": 0.08446666666666666
+      },
+      "candidate": {
+        "samples": 15,
+        "p50": 0.057,
+        "p95": 0.062,
+        "p99": 0.062,
+        "min": 0.053,
+        "max": 0.062,
+        "avg": 0.057400000000000014
+      },
+      "paired_speedup_pct": {
+        "samples": 15,
+        "p50": 32.558139534883715,
+        "p95": 36.47058823529412,
+        "p99": 39.36170212765957,
+        "min": 25.31645569620254,
+        "max": 39.36170212765957,
+        "avg": 31.94804390936325
+      },
+      "paired_median_speedup_ci_95_pct": {
+        "iterations": 20000,
+        "low_95": 28.735632183908045,
+        "high_95": 36.046511627906966
+      },
+      "candidate_wins": 15
+    },
+    "cpu_submit_p99_ms": {
+      "parent": {
+        "samples": 15,
+        "p50": 0.084,
+        "p95": 0.088,
+        "p99": 0.094,
+        "min": 0.078,
+        "max": 0.094,
+        "avg": 0.08446666666666666
+      },
+      "candidate": {
+        "samples": 15,
+        "p50": 0.057,
+        "p95": 0.062,
+        "p99": 0.062,
+        "min": 0.053,
+        "max": 0.062,
+        "avg": 0.057400000000000014
+      },
+      "paired_speedup_pct": {
+        "samples": 15,
+        "p50": 32.558139534883715,
+        "p95": 36.47058823529412,
+        "p99": 39.36170212765957,
+        "min": 25.31645569620254,
+        "max": 39.36170212765957,
+        "avg": 31.94804390936325
+      },
+      "paired_median_speedup_ci_95_pct": {
+        "iterations": 20000,
+        "low_95": 28.735632183908045,
+        "high_95": 36.046511627906966
+      },
+      "candidate_wins": 15
+    },
+    "cpu_submit_peak_ms": {
+      "parent": {
+        "samples": 15,
+        "p50": 0.084,
+        "p95": 0.088,
+        "p99": 0.094,
+        "min": 0.078,
+        "max": 0.094,
+        "avg": 0.08446666666666666
+      },
+      "candidate": {
+        "samples": 15,
+        "p50": 0.057,
+        "p95": 0.062,
+        "p99": 0.062,
+        "min": 0.053,
+        "max": 0.062,
+        "avg": 0.057400000000000014
+      },
+      "paired_speedup_pct": {
+        "samples": 15,
+        "p50": 32.558139534883715,
+        "p95": 36.47058823529412,
+        "p99": 39.36170212765957,
+        "min": 25.31645569620254,
+        "max": 39.36170212765957,
+        "avg": 31.94804390936325
+      },
+      "paired_median_speedup_ci_95_pct": {
+        "iterations": 20000,
+        "low_95": 28.735632183908045,
+        "high_95": 36.046511627906966
+      },
+      "candidate_wins": 15
+    },
+    "gpu_timestamp_total_ns": {
+      "parent": {
+        "samples": 15,
+        "p50": 49667,
+        "p95": 54458,
+        "p99": 73042,
+        "min": 23625,
+        "max": 73042,
+        "avg": 45836.13333333333
+      },
+      "candidate": {
+        "samples": 15,
+        "p50": 52833,
+        "p95": 53708,
+        "p99": 54208,
+        "min": 25375,
+        "max": 54208,
+        "avg": 46813.6
+      },
+      "paired_speedup_pct": {
+        "samples": 15,
+        "p50": -5.596049382716049,
+        "p95": 48.15471037107134,
+        "p99": 53.40445848176576,
+        "min": -122.38073259765872,
+        "max": 53.40445848176576,
+        "avg": -12.70744338899315
+      },
+      "paired_median_speedup_ci_95_pct": {
+        "iterations": 20000,
+        "low_95": -9.136743728480079,
+        "high_95": 20.381380366268317
+      },
+      "candidate_wins": 4
+    }
+  },
+  "counters": {
+    "parent": {
+      "draws": 65,
+      "draw_items": 65,
+      "glyph_quads": 512,
+      "buffer_upload_bytes": 47140
+    },
+    "candidate": {
+      "draws": 3,
+      "draw_items": 3,
+      "glyph_quads": 512,
+      "glyph_instances": 512,
+      "glyph_instance_bytes": 18432,
+      "buffer_upload_bytes": 18468
+    }
+  },
+  "raf": {
+    "parent": {
+      "raf_ms": {
+        "samples": 2000,
+        "p50": 8.334999999999127,
+        "p95": 9.155000000000655,
+        "p99": 9.319999999999709,
+        "min": 4.774999999999636,
+        "max": 9.335000000000946,
+        "avg": 8.3188725
+      },
+      "cpu_submit_ms": {
+        "samples": 2000,
+        "p50": 0.155,
+        "p95": 0.265,
+        "p99": 0.975,
+        "min": 0.055,
+        "max": 1.435,
+        "avg": 0.1753374999999997
+      },
+      "gpu_ms": {
+        "samples": 2000,
+        "p50": 0.195537,
+        "p95": 0.248331,
+        "p99": 0.402412,
+        "min": 0.069748,
+        "max": 1.197357,
+        "avg": 0.19992344600000003
+      },
+      "missed_frames_120hz": 1081,
+      "hitch_frames_120hz": 0
+    },
+    "candidate": {
+      "raf_ms": {
+        "samples": 2000,
+        "p50": 8.334999999999127,
+        "p95": 9.895000000000437,
+        "p99": 10.30999999999949,
+        "min": 4.694999999999709,
+        "max": 10.354999999999563,
+        "avg": 8.318787500000001
+      },
+      "cpu_submit_ms": {
+        "samples": 2000,
+        "p50": 0.185,
+        "p95": 0.805,
+        "p99": 1.065,
+        "min": 0.06,
+        "max": 1.59,
+        "avg": 0.2800299999999989
+      },
+      "gpu_ms": {
+        "samples": 2000,
+        "p50": 0.192247,
+        "p95": 0.241788,
+        "p99": 0.292786,
+        "min": 0.088874,
+        "max": 2.009052,
+        "avg": 0.19449752249999966
+      },
+      "missed_frames_120hz": 1033,
+      "hitch_frames_120hz": 0
+    },
+    "note": "The production RAF row exercises the normal app text path; the 512-glyph isolated row supplies the controlled lowering A/B."
+  },
+  "policy": {
+    "minimum_paired_median_speedup_pct": 5,
+    "require_ci_low_above_zero": true,
+    "accepted": true
+  }
+}

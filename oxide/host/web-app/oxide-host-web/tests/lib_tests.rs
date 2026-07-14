@@ -159,6 +159,8 @@ fn host_exposes_prepared_chunk_browser_contract()
    assert!(source.contains("webgpu_prepared_structural_snapshot"));
    assert!(source.contains("budget_upload_bytes"));
    assert!(page.contains("params.get(\"prepared_only\") === \"1\""));
+   assert!(page.contains("params.get(\"glyph_matrix_only\") === \"1\""));
+   assert!(page.contains("params.get(\"glyph_run_only\") === \"1\""));
    assert!(page.contains("bench_webgpu_prepared_chunks"));
 }
 
@@ -445,6 +447,7 @@ fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     assert!(html.contains("oxide-webgpu-layer-effects-matrix"));
     assert!(html.contains("oxide-webgpu-command-family-matrix"));
     assert!(html.contains("oxide-webgpu-glyph-run-current"));
+    assert!(html.contains("oxide-webgpu-glyph-language-matrix-current"));
     assert!(html.contains("oxide-webgpu-neon-marker-ab"));
     assert!(html.contains("oxide-webgpu-direct-surface-ab"));
     assert!(html.contains("oxide-webgpu-id-mask-snapshot"));
@@ -473,6 +476,7 @@ fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     assert!(html.contains("bench_webgpu_clean_layer_ab"));
     assert!(html.contains("bench_webgpu_command_family_matrix"));
     assert!(html.contains("bench_webgpu_glyph_run_current"));
+    assert!(html.contains("bench_webgpu_glyph_language_matrix_current"));
     assert!(html.contains("bench_webgpu_neon_marker_ab"));
     assert!(html.contains("bench_webgpu_direct_surface_ab"));
     assert!(html.contains("render_webgpu_app_snapshot"));
@@ -491,6 +495,7 @@ fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     assert!(html.contains("clean_layer_ab"));
     assert!(html.contains("command_family_matrix"));
     assert!(html.contains("glyph_run_current"));
+    assert!(html.contains("glyph_language_matrix_current"));
     assert!(html.contains("neon_marker_ab"));
     assert!(html.contains("direct_surface_ab"));
 }
@@ -565,6 +570,7 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("pub async fn bench_webgpu_clean_layer_ab"));
     assert!(source.contains("pub async fn bench_webgpu_command_family_matrix"));
     assert!(source.contains("pub async fn bench_webgpu_glyph_run_current"));
+    assert!(source.contains("pub async fn bench_webgpu_glyph_language_matrix_current"));
     assert!(source.contains("pub async fn bench_webgpu_neon_marker_ab"));
     assert!(source.contains("pub async fn bench_webgpu_direct_surface_ab"));
     assert!(source.contains("pub async fn bench_webgpu_draw_item_coalescing_ab"));
@@ -637,6 +643,9 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(!source.contains("resources.clean_layer_frame(renderer, true)"));
     assert!(source.contains("resources.command_family_frame(renderer)"));
     assert!(source.contains("resources.glyph_run_frame(renderer)"));
+    assert!(source.contains("WebGpuGlyphMatrixResources"));
+    assert!(source.contains("languages=latin,rtl,cjk,emoji"));
+    assert!(source.contains("text::PagedAtlas::new(128, 128"));
     assert!(source.contains("resources.neon_marker_frame(renderer)"));
     assert!(source.contains("resources.direct_surface_frame(renderer)"));
     assert!(source.contains("resources.draw_state_cache_frame(renderer)"));
@@ -1110,6 +1119,10 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("id_mask_snapshot"));
     assert!(script.contains("--id-mask-reference-out"));
     assert!(script.contains("id_mask_reference_only"));
+    assert!(script.contains("--glyph-matrix-out"));
+    assert!(script.contains("glyph_matrix_only"));
+    assert!(script.contains("--glyph-run-out"));
+    assert!(script.contains("glyph_run_only"));
     assert!(script.contains("upload_current"));
     assert!(script.contains("backdrop_batch_current"));
     assert!(script.contains("scene3d_ab"));

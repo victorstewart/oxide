@@ -592,12 +592,19 @@ fn wasm_webgpu_draw_encoding_reuses_scratch_storage() {
     assert!(source.contains("wgpu::IndexFormat::Uint32"));
     assert!(!source.contains("fn encode_vertices("));
     assert!(!source.contains("fn encode_indices("));
-    for section in [encode_solid, encode_image_mesh, encode_glyph_vertices] {
+    for section in [encode_solid, encode_image_mesh] {
         assert!(section.contains("self.clear_scratch_draw();"));
         assert!(section.contains("self.push_scratch_draw("));
         assert!(!section.contains("Vec::new()"));
         assert!(!section.contains("Vec::with_capacity"));
     }
+    assert!(source.contains("const GLYPH_INSTANCE_BYTES: usize = 36;"));
+    assert!(source.contains("glyph_instances: Vec<GlyphInstance>"));
+    assert!(encode_glyph_vertices.contains("append_glyph_instances("));
+    assert!(encode_glyph_vertices.contains("self.push_glyph_instances("));
+    assert!(encode_glyph_vertices.contains("self.clear_scratch_draw();"));
+    assert!(encode_glyph_vertices.contains("self.push_scratch_draw(fallback_kind);"));
+    assert!(!encode_glyph_vertices.contains("Vec::new()"));
     assert!(source.contains("const RRECT_INSTANCE_BYTES: usize = 36;"));
     assert!(source.contains("step_mode: wgpu::VertexStepMode::Instance"));
     assert!(source.contains("\"vs_rrect\","));
@@ -656,6 +663,30 @@ fn wasm_webgpu_draw_encoding_reuses_scratch_storage() {
     assert!(!encode_spinner.contains(".sin()"));
     assert!(!encode_spinner.contains(".cos()"));
     assert!(!encode_spinner.contains("self.encode_rrect("));
+}
+
+#[test]
+fn webgpu_glyphs_use_compact_ordered_instances_in_dynamic_and_prepared_paths()
+{
+   let source = include_str!("../src/wasm/webgpu.rs");
+   assert!(source.contains("const GLYPH_INSTANCE_BYTES: usize = 36;"));
+   assert!(source.contains("const GLYPH_VERTEX_COUNT: u32 = 4;"));
+   assert!(source.contains("struct GlyphInstance"));
+   assert!(source.contains("rgba: u32"));
+   assert!(source.contains("format: wgpu::VertexFormat::Unorm8x4"));
+   assert!(source.contains("entry_point: Some(\"vs_glyph_instance\")"));
+   assert!(source.contains("topology: wgpu::PrimitiveTopology::TriangleStrip"));
+   assert!(source.contains("[0, 1, 2, 2, 1, 3] => (third, fourth)"));
+   assert!(source.contains("[0, 1, 2, 0, 2, 3] => (fourth, third)"));
+   assert!(source.matches("out.truncate(start);").count() >= 3);
+   assert!(source.contains("append_local_indexed_gpu_vertices("));
+   assert!(source.contains("self.push_scratch_draw(fallback_kind);"));
+   assert!(source.contains("glyph_instance_buffer: Option<wgpu::Buffer>"));
+   assert!(source.contains("\"oxide-webgpu-prepared-glyph-instances\""));
+   assert!(source.contains("chunk.glyph_instance_buffer.as_ref()?.slice(..)"));
+   assert!(source.contains("chunk.glyph_instance_buffer.as_ref() else { continue }"));
+   assert!(source.contains("first.saturating_add(count) == first_instance"));
+   assert!(source.contains("last_image == image && last_kind == kind"));
 }
 
 #[test]
@@ -789,7 +820,7 @@ fn wasm_webgpu_backend_packet_vocabulary_is_frozen() {
 
     assert_eq!(
         draw_kind,
-        "enumDrawKind{Solid,RRect{first_instance:u32,instance_count:u32},Image{image:u32,kind:GpuImageKind,first_instance:u32,instance_count:u32},NineSlice{image:u32,kind:GpuImageKind,first_instance:u32,instance_count:u32},Spinner{first_instance:u32,instance_count:u32},NeonMarker{first_instance:u32,instance_count:u32},Rgba{image:u32},A8{image:u32},Sdf{image:u32},Layer{id:u32},Backdrop{rect:api::RectF,sigma:f32},}"
+        "enumDrawKind{Solid,RRect{first_instance:u32,instance_count:u32},Image{image:u32,kind:GpuImageKind,first_instance:u32,instance_count:u32},NineSlice{image:u32,kind:GpuImageKind,first_instance:u32,instance_count:u32},Spinner{first_instance:u32,instance_count:u32},NeonMarker{first_instance:u32,instance_count:u32},Glyph{image:u32,kind:GlyphPipelineKind,first_instance:u32,instance_count:u32,},Rgba{image:u32},A8{image:u32},Sdf{image:u32},Layer{id:u32},Backdrop{rect:api::RectF,sigma:f32},}"
     );
     assert_eq!(
         gpu_draw,
@@ -802,6 +833,7 @@ fn wasm_webgpu_backend_packet_vocabulary_is_frozen() {
         "(DrawKind::NineSlice{..},DrawKind::NineSlice{..})=>false",
         "(DrawKind::Spinner{..},DrawKind::Spinner{..})=>false",
         "(DrawKind::NeonMarker{..},DrawKind::NeonMarker{..})=>false",
+        "(DrawKind::Glyph{..},DrawKind::Glyph{..})=>false",
         "(DrawKind::Rgba{image:a},DrawKind::Rgba{image:b})=>a==b",
         "(DrawKind::A8{image:a},DrawKind::A8{image:b})=>a==b",
         "(DrawKind::Sdf{image:a},DrawKind::Sdf{image:b})=>a==b",
@@ -1006,6 +1038,10 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
         "pub neon_marker_triangles: u32",
         "pub neon_marker_instance_bytes: u64",
         "pub sdf_glyph_quads: u32",
+        "pub glyph_instances: u32",
+        "pub glyph_triangles: u32",
+        "pub glyph_instance_bytes: u64",
+        "pub glyph_instance_buffer_binds: u32",
         "pub clip_depth_peak: u32",
         "pub cpu_scratch_bytes: u64",
         "pub cpu_scratch_grows: u32",
@@ -1367,6 +1403,9 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(host.contains("{key_prefix}cpu_resource_table_scratch_grows={}"));
     assert!(host.contains("{key_prefix}cpu_resource_table_scratch_growth_bytes={}"));
     assert!(host.contains("{key_prefix}buffer_upload_bytes={}"));
+    assert!(host.contains("{key_prefix}glyph_instances={}"));
+    assert!(host.contains("{key_prefix}glyph_instance_bytes={}"));
+    assert!(host.contains("{key_prefix}glyph_instance_buffer_binds={}"));
     assert!(host.contains("{key_prefix}commands_traversed={}"));
     assert!(host.contains("{key_prefix}geometry_bytes_copied={}"));
     assert!(host.contains("{key_prefix}actual_submissions={}"));
@@ -1406,6 +1445,9 @@ fn wasm_webgpu_static_pipelines_are_created_before_frame_encoding() {
         "rgba_pipeline: wgpu::RenderPipeline",
         "a8_pipeline: wgpu::RenderPipeline",
         "sdf_pipeline: wgpu::RenderPipeline",
+        "glyph_rgba_pipeline: wgpu::RenderPipeline",
+        "glyph_a8_pipeline: wgpu::RenderPipeline",
+        "glyph_sdf_pipeline: wgpu::RenderPipeline",
         "effect_pipeline: wgpu::RenderPipeline",
         "scene3d_color_tri_depth_read_pipeline: wgpu::RenderPipeline",
         "scene3d_color_tri_depth_write_pipeline: wgpu::RenderPipeline",
@@ -1423,6 +1465,9 @@ fn wasm_webgpu_static_pipelines_are_created_before_frame_encoding() {
     for local in [
         "let solid_pipeline = create_pipeline(",
         "let rgba_pipeline = create_pipeline(",
+        "let glyph_rgba_pipeline = create_glyph_pipeline(",
+        "let glyph_a8_pipeline = create_glyph_pipeline(",
+        "let glyph_sdf_pipeline = create_glyph_pipeline(",
         "let a8_pipeline = create_pipeline(",
         "let sdf_pipeline = create_pipeline(",
         "let effect_pipeline = create_pipeline(",

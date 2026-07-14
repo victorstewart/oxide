@@ -57,6 +57,8 @@ function parseArgs(argv)
       rawReport: "",
       idMaskReferenceOut: "",
       idMaskMatrixOut: "",
+      glyphMatrixOut: "",
+      glyphRunOut: "",
       validateRawReport: "",
       selfTestMeasurement: false,
       reportOnly: false,
@@ -150,6 +152,10 @@ function parseArgs(argv)
          args.idMaskReferenceOut = next();
       } else if (arg === "--id-mask-matrix-out") {
          args.idMaskMatrixOut = next();
+      } else if (arg === "--glyph-matrix-out") {
+         args.glyphMatrixOut = next();
+      } else if (arg === "--glyph-run-out") {
+         args.glyphRunOut = next();
       } else if (arg === "--validate-raw-report") {
          args.validateRawReport = next();
       } else if (arg === "--self-test-measurement") {
@@ -5853,6 +5859,40 @@ async function main()
          mkdirSync(dirname(args.idMaskMatrixOut), { recursive: true });
          writeFileSync(args.idMaskMatrixOut, `${JSON.stringify(matrix, null, 2)}\n`);
          console.log(`wrote ${args.idMaskMatrixOut}`);
+         return;
+      }
+      if (args.glyphMatrixOut) {
+         let matrixUrl = new URL(browserUrl(args, url, true));
+         matrixUrl.searchParams.set("glyph_matrix_only", "1");
+         let pageReport = await runChromeForReport(
+            { ...args, traceJson: "" },
+            matrixUrl.toString(),
+            nextReportPromise(),
+         );
+         if (typeof pageReport.glyph_language_matrix_current !== "string"
+            || pageReport.glyph_language_matrix_current.length === 0) {
+            throw new Error("browser report omitted the C46 WebGPU glyph language matrix");
+         }
+         mkdirSync(dirname(args.glyphMatrixOut), { recursive: true });
+         writeFileSync(args.glyphMatrixOut, `${JSON.stringify(pageReport, null, 2)}\n`);
+         console.log(`wrote ${args.glyphMatrixOut}`);
+         return;
+      }
+      if (args.glyphRunOut) {
+         let glyphUrl = new URL(browserUrl(args, url, true));
+         glyphUrl.searchParams.set("glyph_run_only", "1");
+         let pageReport = await runChromeForReport(
+            { ...args, traceJson: "" },
+            glyphUrl.toString(),
+            nextReportPromise(),
+         );
+         if (typeof pageReport.glyph_run_current !== "string"
+            || pageReport.glyph_run_current.length === 0) {
+            throw new Error("browser report omitted the C46 WebGPU glyph run");
+         }
+         mkdirSync(dirname(args.glyphRunOut), { recursive: true });
+         writeFileSync(args.glyphRunOut, `${JSON.stringify(pageReport, null, 2)}\n`);
+         console.log(`wrote ${args.glyphRunOut}`);
          return;
       }
       if (args.reportOnly) {

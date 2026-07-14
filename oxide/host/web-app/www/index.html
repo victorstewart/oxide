@@ -60,6 +60,8 @@
          const nineSliceArchitectureOnly = params.get("nine_slice_architecture_only") === "1";
          const spinnerArchitectureOnly = params.get("spinner_architecture_only") === "1";
          const neonMarkerArchitectureOnly = params.get("neon_marker_architecture_only") === "1";
+         const glyphMatrixOnly = params.get("glyph_matrix_only") === "1";
+         const glyphRunOnly = params.get("glyph_run_only") === "1";
          const idMaskCacheC33 = params.get("id_mask_cache_c33") === "1";
          const idMaskCacheOnly = params.get("id_mask_cache_only") === "1";
          const idMaskCacheRafOnly = params.get("id_mask_cache_raf_only") === "1";
@@ -636,6 +638,7 @@
          window.oxideWebGpuCleanLayerAB = "";
          window.oxideWebGpuCommandFamilyMatrix = "";
          window.oxideWebGpuGlyphRunCurrent = "";
+         window.oxideWebGpuGlyphLanguageMatrixCurrent = "";
          window.oxideWebGpuNeonMarkerAB = "";
          window.oxideWebGpuDirectSurfaceAB = "";
          window.oxideWebGpuArchitecturePrimitives = "";
@@ -659,6 +662,13 @@
             window.oxideApp.prewarm_webgpu_bench_resources();
             window.oxideWebGpuPreparedChunks = await runBench("prepared_chunks", () => window.oxideApp.bench_webgpu_prepared_chunks(mixedSamples, mixedFrames, preparedDirty, preparedFlat, preparedThreshold));
             console.log("oxide-webgpu-prepared-chunks", window.oxideWebGpuPreparedChunks);
+         } else if (glyphRunOnly) {
+            window.oxideApp.prewarm_webgpu_bench_resources();
+            window.oxideWebGpuGlyphRunCurrent = await runBench("glyph_run_current", () => window.oxideApp.bench_webgpu_glyph_run_current(mixedSamples, mixedFrames));
+            console.log("oxide-webgpu-glyph-run-current", window.oxideWebGpuGlyphRunCurrent);
+         } else if (glyphMatrixOnly) {
+            window.oxideWebGpuGlyphLanguageMatrixCurrent = await runBench("glyph_language_matrix_current", () => window.oxideApp.bench_webgpu_glyph_language_matrix_current(mixedSamples, mixedFrames));
+            console.log("oxide-webgpu-glyph-language-matrix-current", window.oxideWebGpuGlyphLanguageMatrixCurrent);
          } else if (rrectArchitectureOnly) {
             window.oxideApp.prewarm_webgpu_bench_resources();
             window.oxideWebGpuArchitecturePrimitives = await runBench("rrect_architecture", () => window.oxideApp.bench_webgpu_rrect_architecture(mixedSamples, mixedFrames, window.devicePixelRatio));
@@ -745,6 +755,7 @@
             clean_layer_ab: window.oxideWebGpuCleanLayerAB,
             command_family_matrix: window.oxideWebGpuCommandFamilyMatrix,
             glyph_run_current: window.oxideWebGpuGlyphRunCurrent,
+            glyph_language_matrix_current: window.oxideWebGpuGlyphLanguageMatrixCurrent,
             neon_marker_ab: window.oxideWebGpuNeonMarkerAB,
             direct_surface_ab: window.oxideWebGpuDirectSurfaceAB,
             architecture_primitives: window.oxideWebGpuArchitecturePrimitives,

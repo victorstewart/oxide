@@ -32,6 +32,8 @@ const SPINNER_INSTANCE_BYTES: usize = 20;
 const SPINNER_VERTEX_COUNT: u32 = 72;
 const NEON_MARKER_INSTANCE_BYTES: usize = 60;
 const NEON_MARKER_VERTEX_COUNT: u32 = 6;
+const GLYPH_INSTANCE_BYTES: usize = 36;
+const GLYPH_VERTEX_COUNT: u32 = 4;
 
 const fn nine_slice_unit_vertices() -> [[u8; 4]; 36]
 {
@@ -669,6 +671,25 @@ struct NeonMarkerInstance
    viewport: [f32; 4],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+struct GlyphInstance
+{
+   rect: [f32; 4],
+   uv: [f32; 4],
+   rgba: u32,
+}
+
+const _: [(); GLYPH_INSTANCE_BYTES] = [(); core::mem::size_of::<GlyphInstance>()];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GlyphPipelineKind
+{
+   Rgba,
+   A8,
+   Sdf,
+}
+
 const _: [(); NEON_MARKER_INSTANCE_BYTES] = [(); core::mem::size_of::<NeonMarkerInstance>()];
 
 impl NeonMarkerInstance
@@ -713,6 +734,12 @@ enum DrawKind {
     NineSlice { image: u32, kind: GpuImageKind, first_instance: u32, instance_count: u32 },
     Spinner { first_instance: u32, instance_count: u32 },
     NeonMarker { first_instance: u32, instance_count: u32 },
+    Glyph {
+        image: u32,
+        kind: GlyphPipelineKind,
+        first_instance: u32,
+        instance_count: u32,
+    },
     Rgba { image: u32 },
     A8 { image: u32 },
     Sdf { image: u32 },
@@ -730,6 +757,9 @@ enum DrawPipelineKey {
     NineSliceA8,
     Spinner,
     NeonMarker,
+    GlyphRgba,
+    GlyphA8,
+    GlyphSdf,
     Rgba,
     A8,
     Sdf,
@@ -778,6 +808,7 @@ struct FrameData {
     nine_slice_instances: Vec<NineSliceInstance>,
     spinner_instances: Vec<SpinnerInstance>,
     neon_marker_instances: Vec<NeonMarkerInstance>,
+    glyph_instances: Vec<GlyphInstance>,
     draws: Vec<GpuDraw>,
     layer_passes: Vec<FrameLayerPass>,
     effect_count: usize,
@@ -1211,6 +1242,9 @@ struct PreparedChunk
    nine_slice_instances: u32,
    spinner_instance_buffer: Option<wgpu::Buffer>,
    spinner_instances: u32,
+   glyph_instance_buffer: Option<wgpu::Buffer>,
+   glyph_instances: u32,
+   sdf_glyph_instances: u32,
    index_buffer_u16: Option<wgpu::Buffer>,
    index_buffer_u32: Option<wgpu::Buffer>,
    draws: Vec<GpuDraw>,
@@ -1238,6 +1272,8 @@ struct PreparedSnapshotBundle
    image_instances: u32,
    nine_slice_instances: u32,
    spinner_instances: u32,
+   glyph_instances: u32,
+   sdf_glyph_instances: u32,
 }
 
 enum PreparedSegment
@@ -1400,6 +1436,7 @@ impl FrameData {
         self.nine_slice_instances.clear();
         self.spinner_instances.clear();
         self.neon_marker_instances.clear();
+        self.glyph_instances.clear();
         self.draws.clear();
         self.layer_passes.clear();
         self.effect_count = 0;
@@ -1432,6 +1469,7 @@ fn coalescible_draw_kind(a: DrawKind, b: DrawKind) -> bool {
         (DrawKind::NineSlice { .. }, DrawKind::NineSlice { .. }) => false,
         (DrawKind::Spinner { .. }, DrawKind::Spinner { .. }) => false,
         (DrawKind::NeonMarker { .. }, DrawKind::NeonMarker { .. }) => false,
+        (DrawKind::Glyph { .. }, DrawKind::Glyph { .. }) => false,
         (DrawKind::Rgba { image: a }, DrawKind::Rgba { image: b }) => a == b,
         (DrawKind::A8 { image: a }, DrawKind::A8 { image: b }) => a == b,
         (DrawKind::Sdf { image: a }, DrawKind::Sdf { image: b }) => a == b,
@@ -1785,6 +1823,9 @@ struct GpuPrograms {
     nine_slice_unit_index_buffer: wgpu::Buffer,
     spinner_pipeline: wgpu::RenderPipeline,
     neon_marker_pipeline: wgpu::RenderPipeline,
+    glyph_rgba_pipeline: wgpu::RenderPipeline,
+    glyph_a8_pipeline: wgpu::RenderPipeline,
+    glyph_sdf_pipeline: wgpu::RenderPipeline,
     rgba_pipeline: wgpu::RenderPipeline,
     a8_pipeline: wgpu::RenderPipeline,
     sdf_pipeline: wgpu::RenderPipeline,
@@ -2252,6 +2293,8 @@ pub struct WebGpuRenderer {
     spinner_instance_capacity: u64,
     neon_marker_instance_buffer: Option<wgpu::Buffer>,
     neon_marker_instance_capacity: u64,
+    glyph_instance_buffer: Option<wgpu::Buffer>,
+    glyph_instance_capacity: u64,
     animation_phase: f32,
     index_buffer_u16: Option<wgpu::Buffer>,
     index_capacity_u16: u64,
@@ -2523,6 +2566,9 @@ impl WebGpuRenderer {
             .saturating_add(
                 self.neon_marker_instance_buffer.as_ref().map_or(0, wgpu::Buffer::size),
             )
+            .saturating_add(
+                self.glyph_instance_buffer.as_ref().map_or(0, wgpu::Buffer::size),
+            )
             .saturating_add(id_mask_vertex_bytes)
             .saturating_add(self.prepared_chunks.vertex_bytes());
         let index_buffer_bytes = self
@@ -2742,6 +2788,8 @@ impl WebGpuRenderer {
             spinner_instance_capacity: 0,
             neon_marker_instance_buffer: None,
             neon_marker_instance_capacity: 0,
+            glyph_instance_buffer: None,
+            glyph_instance_capacity: 0,
             animation_phase: 0.0,
             index_buffer_u16: None,
             index_capacity_u16: 0,
@@ -2809,6 +2857,7 @@ impl WebGpuRenderer {
                 nine_slice_instances: Vec::new(),
                 spinner_instances: Vec::new(),
                 neon_marker_instances: Vec::new(),
+                glyph_instances: Vec::new(),
                 draws: Vec::new(),
                 layer_passes: Vec::new(),
                 effect_count: 0,
@@ -3493,6 +3542,12 @@ impl WebGpuRenderer {
                 .neon_marker_instances
                 .capacity()
                 .saturating_mul(core::mem::size_of::<NeonMarkerInstance>()),
+        );
+        capacity.draw = capacity.draw.saturating_add(
+            self.frame
+                .glyph_instances
+                .capacity()
+                .saturating_mul(core::mem::size_of::<GlyphInstance>()),
         );
         capacity.draw = capacity.draw.saturating_add(
             self.frame.draws.capacity().saturating_mul(core::mem::size_of::<GpuDraw>()),
@@ -4546,6 +4601,67 @@ impl WebGpuRenderer {
         self.stats.commands_copied = self.stats.commands_copied.saturating_add(1);
     }
 
+    fn push_glyph_instances(
+        &mut self,
+        image: u32,
+        kind: GlyphPipelineKind,
+        first_instance: u32,
+        instance_count: u32,
+    )
+    {
+        if instance_count == 0
+        {
+            return;
+        }
+        let clip = self.current_clip();
+        let target = self.current_target();
+        self.stats.geometry_bytes_copied = self.stats.geometry_bytes_copied
+            .saturating_add(u64::from(instance_count).saturating_mul(GLYPH_INSTANCE_BYTES as u64));
+        self.stats.glyph_instances = self.stats.glyph_instances.saturating_add(instance_count);
+        self.stats.glyph_triangles = self.stats.glyph_triangles
+            .saturating_add(instance_count.saturating_mul(2));
+        self.stats.glyph_instance_bytes = self.stats.glyph_instance_bytes
+            .saturating_add(u64::from(instance_count).saturating_mul(GLYPH_INSTANCE_BYTES as u64));
+        if let Some(last) = self.frame.draws.last_mut()
+        {
+            if last.clip == clip && last.target == target
+            {
+                if let DrawKind::Glyph {
+                    image: last_image,
+                    kind: last_kind,
+                    first_instance: first,
+                    instance_count: count,
+                } = last.kind
+                {
+                    if last_image == image && last_kind == kind
+                        && first.saturating_add(count) == first_instance
+                    {
+                        last.kind = DrawKind::Glyph {
+                            image,
+                            kind,
+                            first_instance: first,
+                            instance_count: count.saturating_add(instance_count),
+                        };
+                        self.stats.draw_items_coalesced = self.stats.draw_items_coalesced
+                            .saturating_add(1);
+                        return;
+                    }
+                }
+            }
+        }
+        self.frame.draws.push(GpuDraw {
+            kind: DrawKind::Glyph { image, kind, first_instance, instance_count },
+            index_kind: PackedIndexKind::U16,
+            first_index: 0,
+            index_count: 0,
+            base_vertex: 0,
+            clip,
+            effect_uniform_offset: 0,
+            target,
+        });
+        self.stats.commands_copied = self.stats.commands_copied.saturating_add(1);
+    }
+
     fn push_nine_slice_instance(
         &mut self,
         image: u32,
@@ -5210,41 +5326,64 @@ impl WebGpuRenderer {
         let Some(image) = self.image(run.atlas) else {
             return;
         };
-        let kind = if run.sdf {
-            DrawKind::Sdf { image: run.atlas.0 }
+        let (kind, fallback_kind) = if run.sdf {
+            (GlyphPipelineKind::Sdf, DrawKind::Sdf { image: run.atlas.0 })
         } else {
             match image.kind {
-                GpuImageKind::Rgba => DrawKind::Rgba { image: run.atlas.0 },
-                GpuImageKind::A8 => DrawKind::A8 { image: run.atlas.0 },
+                GpuImageKind::Rgba => (
+                    GlyphPipelineKind::Rgba,
+                    DrawKind::Rgba { image: run.atlas.0 },
+                ),
+                GpuImageKind::A8 => (
+                    GlyphPipelineKind::A8,
+                    DrawKind::A8 { image: run.atlas.0 },
+                ),
             }
         };
-        self.clear_scratch_draw();
-        if !indices.is_empty() {
-            if !append_local_indexed_gpu_vertices(
-                &mut self.scratch_vertices,
-                &mut self.scratch_indices,
-                vertices,
-                indices,
-                run.color,
-                false,
-            ) {
-                self.clear_scratch_draw();
-                return;
+        let Ok(first_instance) = u32::try_from(self.frame.glyph_instances.len()) else {
+            return;
+        };
+        let Some(quads) = append_glyph_instances(
+            vertices,
+            indices,
+            run.color,
+            &mut self.frame.glyph_instances,
+        ) else {
+            self.clear_scratch_draw();
+            if !indices.is_empty() {
+                if !append_local_indexed_gpu_vertices(
+                    &mut self.scratch_vertices,
+                    &mut self.scratch_indices,
+                    vertices,
+                    indices,
+                    run.color,
+                    false,
+                ) {
+                    self.clear_scratch_draw();
+                    return;
+                }
+            } else {
+                append_gpu_vertices(
+                    &mut self.scratch_vertices,
+                    &mut self.scratch_indices,
+                    vertices,
+                    run.color,
+                    false,
+                );
             }
-        } else {
-            append_gpu_vertices(
-                &mut self.scratch_vertices,
-                &mut self.scratch_indices,
-                vertices,
-                run.color,
-                false,
-            );
-        }
-        let quads = self.scratch_indices.len() / 6;
-        self.push_scratch_draw(kind);
-        self.stats.glyph_quads = self.stats.glyph_quads.saturating_add(quads as u32);
+            let quads = self.scratch_indices.len() / 6;
+            self.push_scratch_draw(fallback_kind);
+            self.stats.glyph_quads = self.stats.glyph_quads.saturating_add(quads as u32);
+            if run.sdf {
+                self.stats.sdf_glyph_quads = self.stats.sdf_glyph_quads.saturating_add(quads as u32);
+            }
+            return;
+        };
+        let quads = quads.min(u32::MAX as usize) as u32;
+        self.push_glyph_instances(run.atlas.0, kind, first_instance, quads);
+        self.stats.glyph_quads = self.stats.glyph_quads.saturating_add(quads);
         if run.sdf {
-            self.stats.sdf_glyph_quads = self.stats.sdf_glyph_quads.saturating_add(quads as u32);
+            self.stats.sdf_glyph_quads = self.stats.sdf_glyph_quads.saturating_add(quads);
         }
     }
 
@@ -5378,6 +5517,7 @@ impl WebGpuRenderer {
         let nine_slice_instance_bytes = bytemuck::cast_slice(&self.frame.nine_slice_instances);
         let spinner_instance_bytes = bytemuck::cast_slice(&self.frame.spinner_instances);
         let neon_marker_instance_bytes = bytemuck::cast_slice(&self.frame.neon_marker_instances);
+        let glyph_instance_bytes = bytemuck::cast_slice(&self.frame.glyph_instances);
         if !spinner_instance_bytes.is_empty()
         {
             write_viewport_uniform(
@@ -5461,6 +5601,17 @@ impl WebGpuRenderer {
         }
         if ensure_buffer(
             &self.device,
+            &mut self.glyph_instance_buffer,
+            &mut self.glyph_instance_capacity,
+            glyph_instance_bytes.len() as u64,
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            "oxide-webgpu-glyph-instances",
+        ) {
+            self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+            self.stats.draw_buffer_grows = self.stats.draw_buffer_grows.saturating_add(1);
+        }
+        if ensure_buffer(
+            &self.device,
             &mut self.index_buffer_u16,
             &mut self.index_capacity_u16,
             index_bytes_u16.len() as u64,
@@ -5534,6 +5685,13 @@ impl WebGpuRenderer {
                     .stats
                     .buffer_upload_bytes
                     .saturating_add(neon_marker_instance_bytes.len() as u64);
+            }
+        }
+        if !glyph_instance_bytes.is_empty() {
+            if let Some(buffer) = &self.glyph_instance_buffer {
+                self.queue.write_buffer(buffer, 0, glyph_instance_bytes);
+                self.stats.buffer_upload_bytes = self.stats.buffer_upload_bytes
+                    .saturating_add(glyph_instance_bytes.len() as u64);
             }
         }
         if !index_bytes_u16.is_empty() {
@@ -6546,8 +6704,8 @@ impl WebGpuRenderer
          return None;
       }
 
-      let (reusable_vertex, reusable_rrect, reusable_image, reusable_nine_slice, reusable_spinner, reusable_u16, reusable_u32, reusable_draws, reusable_generation) = reusable.map_or(
-         (None, None, None, None, None, None, None, None, 0),
+      let (reusable_vertex, reusable_rrect, reusable_image, reusable_nine_slice, reusable_spinner, reusable_glyph, reusable_u16, reusable_u32, reusable_draws, reusable_generation) = reusable.map_or(
+         (None, None, None, None, None, None, None, None, None, 0),
          |prepared| {
             let PreparedChunk {
                vertex_buffer,
@@ -6555,6 +6713,7 @@ impl WebGpuRenderer
                image_instance_buffer,
                nine_slice_instance_buffer,
                spinner_instance_buffer,
+               glyph_instance_buffer,
                index_buffer_u16,
                index_buffer_u32,
                draws,
@@ -6567,6 +6726,7 @@ impl WebGpuRenderer
                image_instance_buffer,
                nine_slice_instance_buffer,
                spinner_instance_buffer,
+               glyph_instance_buffer,
                index_buffer_u16,
                index_buffer_u32,
                Some(draws),
@@ -6596,6 +6756,7 @@ impl WebGpuRenderer
       let image_instance_bytes = bytemuck::cast_slice(&lowered.image_instances);
       let nine_slice_instance_bytes = bytemuck::cast_slice(&lowered.nine_slice_instances);
       let spinner_instance_bytes = bytemuck::cast_slice(&lowered.spinner_instances);
+      let glyph_instance_bytes = bytemuck::cast_slice(&lowered.glyph_instances);
       let index_bytes_u16 = bytemuck::cast_slice(&lowered.geometry.indices_u16);
       let index_bytes_u32 = bytemuck::cast_slice(&lowered.geometry.indices_u32);
       let (vertex_buffer, vertex_created) = if vertex_bytes.is_empty()
@@ -6678,6 +6839,22 @@ impl WebGpuRenderer
          );
          (Some(buffer), created)
       };
+      let (glyph_instance_buffer, glyph_created) = if glyph_instance_bytes.is_empty()
+      {
+         (None, false)
+      }
+      else
+      {
+         let (buffer, created) = create_or_update_prepared_buffer(
+            &self.device,
+            &self.queue,
+            "oxide-webgpu-prepared-glyph-instances",
+            glyph_instance_bytes,
+            wgpu::BufferUsages::VERTEX,
+            reusable_glyph,
+         );
+         (Some(buffer), created)
+      };
       let (index_buffer_u16, index_u16_created) = if index_bytes_u16.is_empty()
       {
          (None, false)
@@ -6716,6 +6893,7 @@ impl WebGpuRenderer
          image_instance_buffer.as_ref(),
          nine_slice_instance_buffer.as_ref(),
          spinner_instance_buffer.as_ref(),
+         glyph_instance_buffer.as_ref(),
          index_buffer_u16.as_ref(),
          index_buffer_u32.as_ref(),
          &lowered.draws,
@@ -6737,6 +6915,9 @@ impl WebGpuRenderer
       let vertex_bytes = vertex_bytes.saturating_add(
          spinner_instance_buffer.as_ref().map_or(0, wgpu::Buffer::size),
       );
+      let vertex_bytes = vertex_bytes.saturating_add(
+         glyph_instance_buffer.as_ref().map_or(0, wgpu::Buffer::size),
+      );
       let index_bytes = index_buffer_u16.as_ref().map_or(0, wgpu::Buffer::size)
          .saturating_add(index_buffer_u32.as_ref().map_or(0, wgpu::Buffer::size));
       let plan_bytes = (lowered.draws.len() as u64)
@@ -6754,11 +6935,13 @@ impl WebGpuRenderer
       let upload_bytes = upload_bytes.saturating_add(image_instance_bytes.len() as u64);
       let upload_bytes = upload_bytes.saturating_add(nine_slice_instance_bytes.len() as u64);
       let upload_bytes = upload_bytes.saturating_add(spinner_instance_bytes.len() as u64);
+      let upload_bytes = upload_bytes.saturating_add(glyph_instance_bytes.len() as u64);
       let buffer_count = u32::from(vertex_created)
          .saturating_add(u32::from(rrect_created))
          .saturating_add(u32::from(image_created))
          .saturating_add(u32::from(nine_slice_created))
          .saturating_add(u32::from(spinner_created))
+         .saturating_add(u32::from(glyph_created))
          .saturating_add(u32::from(index_u16_created))
          .saturating_add(u32::from(index_u32_created));
       let bundle_generation = if buffer_count == 0
@@ -6778,6 +6961,15 @@ impl WebGpuRenderer
       let image_instances = lowered.image_instances.len().min(u32::MAX as usize) as u32;
       let nine_slice_instances = lowered.nine_slice_instances.len().min(u32::MAX as usize) as u32;
       let spinner_instances = lowered.spinner_instances.len().min(u32::MAX as usize) as u32;
+      let glyph_instances = lowered.glyph_instances.len().min(u32::MAX as usize) as u32;
+      let sdf_glyph_instances = lowered.draws.iter().fold(0_u32, |total, draw| {
+         match draw.kind
+         {
+            DrawKind::Glyph { kind: GlyphPipelineKind::Sdf, instance_count, .. } =>
+               total.saturating_add(instance_count),
+            _ => total,
+         }
+      });
       Some((PreparedChunk {
          vertex_buffer,
          rrect_instance_buffer,
@@ -6788,6 +6980,9 @@ impl WebGpuRenderer
          nine_slice_instances,
          spinner_instance_buffer,
          spinner_instances,
+         glyph_instance_buffer,
+         glyph_instances,
+         sdf_glyph_instances,
          index_buffer_u16,
          index_buffer_u32,
          draws: lowered.draws,
@@ -6821,6 +7016,7 @@ impl WebGpuRenderer
       image_instance_buffer: Option<&wgpu::Buffer>,
       nine_slice_instance_buffer: Option<&wgpu::Buffer>,
       spinner_instance_buffer: Option<&wgpu::Buffer>,
+      glyph_instance_buffer: Option<&wgpu::Buffer>,
       index_buffer_u16: Option<&wgpu::Buffer>,
       index_buffer_u32: Option<&wgpu::Buffer>,
       draws: &[GpuDraw],
@@ -6849,6 +7045,7 @@ impl WebGpuRenderer
                image_instance_buffer,
                nine_slice_instance_buffer,
                spinner_instance_buffer,
+               glyph_instance_buffer,
                index_buffer_u16,
                index_buffer_u32,
                &draws[start..end],
@@ -6877,6 +7074,7 @@ impl WebGpuRenderer
       image_instance_buffer: Option<&wgpu::Buffer>,
       nine_slice_instance_buffer: Option<&wgpu::Buffer>,
       spinner_instance_buffer: Option<&wgpu::Buffer>,
+      glyph_instance_buffer: Option<&wgpu::Buffer>,
       index_buffer_u16: Option<&wgpu::Buffer>,
       index_buffer_u32: Option<&wgpu::Buffer>,
       draws: &[GpuDraw],
@@ -6900,7 +7098,7 @@ impl WebGpuRenderer
       let mut bound_index = None;
       for draw in draws
       {
-         if !matches!(draw.kind, DrawKind::RRect { .. } | DrawKind::Image { .. } | DrawKind::NineSlice { .. } | DrawKind::Spinner { .. })
+         if !matches!(draw.kind, DrawKind::RRect { .. } | DrawKind::Image { .. } | DrawKind::NineSlice { .. } | DrawKind::Spinner { .. } | DrawKind::Glyph { .. })
             && bound_index != Some(draw.index_kind)
          {
             match draw.index_kind
@@ -6949,6 +7147,11 @@ impl WebGpuRenderer
                encoder.set_vertex_buffer(0, spinner_instance_buffer?.slice(..));
                bound_index = None;
             }
+            else if matches!(state.pipeline, DrawPipelineKey::GlyphRgba | DrawPipelineKey::GlyphA8 | DrawPipelineKey::GlyphSdf)
+            {
+               encoder.set_vertex_buffer(0, glyph_instance_buffer?.slice(..));
+               bound_index = None;
+            }
             else
             {
                encoder.set_vertex_buffer(0, vertex_buffer?.slice(..));
@@ -6990,6 +7193,13 @@ impl WebGpuRenderer
                first_instance..first_instance.saturating_add(instance_count),
             );
          }
+         else if let DrawKind::Glyph { first_instance, instance_count, .. } = draw.kind
+         {
+            encoder.draw(
+               0..GLYPH_VERTEX_COUNT,
+               first_instance..first_instance.saturating_add(instance_count),
+            );
+         }
          else
          {
             encoder.draw_indexed(
@@ -7026,6 +7236,8 @@ impl WebGpuRenderer
       let mut image_instances = 0_u32;
       let mut nine_slice_instances = 0_u32;
       let mut spinner_instances = 0_u32;
+      let mut glyph_instances = 0_u32;
+      let mut sdf_glyph_instances = 0_u32;
       for instance in plan
       {
          let chunk = cache.get(instance.key)?;
@@ -7033,6 +7245,8 @@ impl WebGpuRenderer
          image_instances = image_instances.saturating_add(chunk.image_instances);
          nine_slice_instances = nine_slice_instances.saturating_add(chunk.nine_slice_instances);
          spinner_instances = spinner_instances.saturating_add(chunk.spinner_instances);
+         glyph_instances = glyph_instances.saturating_add(chunk.glyph_instances);
+         sdf_glyph_instances = sdf_glyph_instances.saturating_add(chunk.sdf_glyph_instances);
          let mut bound_index = None;
          for draw in &chunk.draws
          {
@@ -7040,7 +7254,7 @@ impl WebGpuRenderer
             {
                return None;
             }
-            if !matches!(draw.kind, DrawKind::RRect { .. } | DrawKind::Image { .. } | DrawKind::NineSlice { .. } | DrawKind::Spinner { .. })
+            if !matches!(draw.kind, DrawKind::RRect { .. } | DrawKind::Image { .. } | DrawKind::NineSlice { .. } | DrawKind::Spinner { .. } | DrawKind::Glyph { .. })
                && bound_index != Some(draw.index_kind)
             {
                match draw.index_kind
@@ -7091,6 +7305,11 @@ impl WebGpuRenderer
                encoder.set_vertex_buffer(0, chunk.spinner_instance_buffer.as_ref()?.slice(..));
                bound_index = None;
             }
+            else if matches!(state.pipeline, DrawPipelineKey::GlyphRgba | DrawPipelineKey::GlyphA8 | DrawPipelineKey::GlyphSdf)
+            {
+               encoder.set_vertex_buffer(0, chunk.glyph_instance_buffer.as_ref()?.slice(..));
+               bound_index = None;
+            }
             else
             {
                encoder.set_vertex_buffer(0, chunk.vertex_buffer.as_ref()?.slice(..));
@@ -7130,6 +7349,13 @@ impl WebGpuRenderer
                   first_instance..first_instance.saturating_add(instance_count),
                );
             }
+            else if let DrawKind::Glyph { first_instance, instance_count, .. } = draw.kind
+            {
+               encoder.draw(
+                  0..GLYPH_VERTEX_COUNT,
+                  first_instance..first_instance.saturating_add(instance_count),
+               );
+            }
             else
             {
                encoder.draw_indexed(
@@ -7157,6 +7383,8 @@ impl WebGpuRenderer
          image_instances,
          nine_slice_instances,
          spinner_instances,
+         glyph_instances,
+         sdf_glyph_instances,
       })
    }
 
@@ -7185,6 +7413,9 @@ impl WebGpuRenderer
          DrawPipelineKey::NineSliceA8 => Some(self.nine_slice_a8_pipeline()),
          DrawPipelineKey::Spinner => Some(self.spinner_pipeline()),
          DrawPipelineKey::NeonMarker => Some(self.neon_marker_pipeline()),
+         DrawPipelineKey::GlyphRgba => Some(self.glyph_rgba_pipeline()),
+         DrawPipelineKey::GlyphA8 => Some(self.glyph_a8_pipeline()),
+         DrawPipelineKey::GlyphSdf => Some(self.glyph_sdf_pipeline()),
          DrawPipelineKey::Rgba => Some(self.rgba_pipeline()),
          DrawPipelineKey::A8 => Some(self.a8_pipeline()),
          DrawPipelineKey::Sdf => Some(self.sdf_pipeline()),
@@ -7618,6 +7849,18 @@ impl WebGpuRenderer {
         &self.programs.neon_marker_pipeline
     }
 
+    fn glyph_rgba_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.programs.glyph_rgba_pipeline
+    }
+
+    fn glyph_a8_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.programs.glyph_a8_pipeline
+    }
+
+    fn glyph_sdf_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.programs.glyph_sdf_pipeline
+    }
+
     fn rgba_pipeline(&self) -> &wgpu::RenderPipeline {
         &self.programs.rgba_pipeline
     }
@@ -7785,6 +8028,17 @@ impl WebGpuRenderer {
            self.stats.spinner_instance_bytes = self.stats.spinner_instance_bytes
               .saturating_add(u64::from(snapshot_bundle.spinner_instances)
                  .saturating_mul(SPINNER_INSTANCE_BYTES as u64));
+           self.stats.glyph_quads = self.stats.glyph_quads
+              .saturating_add(snapshot_bundle.glyph_instances);
+           self.stats.sdf_glyph_quads = self.stats.sdf_glyph_quads
+              .saturating_add(snapshot_bundle.sdf_glyph_instances);
+           self.stats.glyph_instances = self.stats.glyph_instances
+              .saturating_add(snapshot_bundle.glyph_instances);
+           self.stats.glyph_triangles = self.stats.glyph_triangles
+              .saturating_add(snapshot_bundle.glyph_instances.saturating_mul(2));
+           self.stats.glyph_instance_bytes = self.stats.glyph_instance_bytes
+              .saturating_add(u64::from(snapshot_bundle.glyph_instances)
+                 .saturating_mul(GLYPH_INSTANCE_BYTES as u64));
            if snapshot_bundle.spinner_instances != 0
            {
               write_viewport_uniform(
@@ -7815,6 +8069,7 @@ impl WebGpuRenderer {
         let mut pipeline_binds = 0_u32;
         let mut bind_group_binds = 0_u32;
         let mut scissor_sets = 0_u32;
+        let mut glyph_instance_buffer_binds = 0_u32;
         let mut bundle_replays = 0_u32;
         let mut bundle_execute_calls = 0_u32;
         let mut bundle_draws = 0_u32;
@@ -7823,6 +8078,8 @@ impl WebGpuRenderer {
         let mut image_instances = 0_u32;
         let mut nine_slice_instances = 0_u32;
         let mut spinner_instances = 0_u32;
+        let mut glyph_instances = 0_u32;
+        let mut sdf_glyph_instances = 0_u32;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("oxide-webgpu-prepared-pass"),
@@ -7853,6 +8110,8 @@ impl WebGpuRenderer {
                 image_instances = image_instances.saturating_add(chunk.image_instances);
                 nine_slice_instances = nine_slice_instances.saturating_add(chunk.nine_slice_instances);
                 spinner_instances = spinner_instances.saturating_add(chunk.spinner_instances);
+                glyph_instances = glyph_instances.saturating_add(chunk.glyph_instances);
+                sdf_glyph_instances = sdf_glyph_instances.saturating_add(chunk.sdf_glyph_instances);
                 if matches!(chunk.segments.as_slice(), [PreparedSegment::Bundle { .. }]) {
                     let start = plan_index;
                     while plan_index < plan.len() {
@@ -7866,6 +8125,8 @@ impl WebGpuRenderer {
                             image_instances = image_instances.saturating_add(chunk.image_instances);
                             nine_slice_instances = nine_slice_instances.saturating_add(chunk.nine_slice_instances);
                             spinner_instances = spinner_instances.saturating_add(chunk.spinner_instances);
+                            glyph_instances = glyph_instances.saturating_add(chunk.glyph_instances);
+                            sdf_glyph_instances = sdf_glyph_instances.saturating_add(chunk.sdf_glyph_instances);
                         }
                         bundle_replays = bundle_replays.saturating_add(1);
                         bundle_draws = bundle_draws.saturating_add(*segment_draws);
@@ -7898,6 +8159,8 @@ impl WebGpuRenderer {
                             pipeline_binds = pipeline_binds.saturating_add(counters.0);
                             bind_group_binds = bind_group_binds.saturating_add(counters.1);
                             scissor_sets = scissor_sets.saturating_add(counters.2);
+                            glyph_instance_buffer_binds = glyph_instance_buffer_binds
+                                .saturating_add(counters.3);
                             direct_draws = direct_draws
                                 .saturating_add((*end - *start).min(u32::MAX as usize) as u32);
                         }
@@ -7934,6 +8197,14 @@ impl WebGpuRenderer {
         self.stats.spinner_instance_bytes = self.stats.spinner_instance_bytes
             .saturating_add(u64::from(spinner_instances)
                .saturating_mul(SPINNER_INSTANCE_BYTES as u64));
+        self.stats.glyph_quads = self.stats.glyph_quads.saturating_add(glyph_instances);
+        self.stats.sdf_glyph_quads = self.stats.sdf_glyph_quads
+            .saturating_add(sdf_glyph_instances);
+        self.stats.glyph_instances = self.stats.glyph_instances.saturating_add(glyph_instances);
+        self.stats.glyph_triangles = self.stats.glyph_triangles
+            .saturating_add(glyph_instances.saturating_mul(2));
+        self.stats.glyph_instance_bytes = self.stats.glyph_instance_bytes
+            .saturating_add(u64::from(glyph_instances).saturating_mul(GLYPH_INSTANCE_BYTES as u64));
         if spinner_instances != 0
         {
             write_viewport_uniform(
@@ -7950,6 +8221,8 @@ impl WebGpuRenderer {
         self.stats.draw_pipeline_binds = self.stats.draw_pipeline_binds.saturating_add(pipeline_binds);
         self.stats.draw_bind_group_binds = self.stats.draw_bind_group_binds.saturating_add(bind_group_binds);
         self.stats.draw_scissor_sets = self.stats.draw_scissor_sets.saturating_add(scissor_sets);
+        self.stats.glyph_instance_buffer_binds = self.stats.glyph_instance_buffer_binds
+            .saturating_add(glyph_instance_buffer_binds);
         self.stats.render_bundle_replays = self.stats.render_bundle_replays.saturating_add(bundle_replays);
         self.stats.render_bundle_execute_calls = self.stats.render_bundle_execute_calls.saturating_add(bundle_execute_calls);
         self.stats.render_bundle_draws = self.stats.render_bundle_draws.saturating_add(bundle_draws);
@@ -7963,7 +8236,7 @@ impl WebGpuRenderer {
         draws: &[GpuDraw],
         property_offset: Option<u32>,
         instance_clip: Option<api::RectI>,
-    ) -> (u32, u32, u32) {
+    ) -> (u32, u32, u32, u32) {
         if let Some(offset) = property_offset
         {
             pass.set_bind_group(0, &self.prepared_property_ring.bind_group, &[offset]);
@@ -7975,12 +8248,13 @@ impl WebGpuRenderer {
         let mut pipeline_binds = 0_u32;
         let mut bind_group_binds = 0_u32;
         let mut scissor_sets = 0_u32;
+        let mut glyph_instance_buffer_binds = 0_u32;
         let mut bound_pipeline = None;
         let mut bound_bind = None;
         let mut bound_clip = None;
         let mut bound_index = None;
         for draw in draws {
-            if !matches!(draw.kind, DrawKind::RRect { .. } | DrawKind::Image { .. } | DrawKind::NineSlice { .. } | DrawKind::Spinner { .. })
+            if !matches!(draw.kind, DrawKind::RRect { .. } | DrawKind::Image { .. } | DrawKind::NineSlice { .. } | DrawKind::Spinner { .. } | DrawKind::Glyph { .. })
                 && bound_index != Some(draw.index_kind) {
                 match draw.index_kind {
                     PackedIndexKind::U16 => {
@@ -8048,6 +8322,13 @@ impl WebGpuRenderer {
                     pass.set_vertex_buffer(0, buffer.slice(..));
                     bound_index = None;
                 }
+                else if matches!(state.pipeline, DrawPipelineKey::GlyphRgba | DrawPipelineKey::GlyphA8 | DrawPipelineKey::GlyphSdf)
+                {
+                    let Some(buffer) = chunk.glyph_instance_buffer.as_ref() else { continue };
+                    pass.set_vertex_buffer(0, buffer.slice(..));
+                    glyph_instance_buffer_binds = glyph_instance_buffer_binds.saturating_add(1);
+                    bound_index = None;
+                }
                 else
                 {
                     let Some(buffer) = chunk.vertex_buffer.as_ref() else { continue };
@@ -8091,6 +8372,13 @@ impl WebGpuRenderer {
                    first_instance..first_instance.saturating_add(instance_count),
                 );
             }
+            else if let DrawKind::Glyph { first_instance, instance_count, .. } = draw.kind
+            {
+                pass.draw(
+                   0..GLYPH_VERTEX_COUNT,
+                   first_instance..first_instance.saturating_add(instance_count),
+                );
+            }
             else
             {
                 pass.draw_indexed(
@@ -8100,7 +8388,7 @@ impl WebGpuRenderer {
                 );
             }
         }
-        (pipeline_binds, bind_group_binds, scissor_sets)
+        (pipeline_binds, bind_group_binds, scissor_sets, glyph_instance_buffer_binds)
     }
 
     fn render_scene_with_effects(&mut self, encoder: &mut wgpu::CommandEncoder) {
@@ -8643,6 +8931,15 @@ impl WebGpuRenderer {
             }
             DrawKind::Spinner { .. } => (DrawPipelineKey::Spinner, DrawBindKey::None),
             DrawKind::NeonMarker { .. } => (DrawPipelineKey::NeonMarker, DrawBindKey::None),
+            DrawKind::Glyph { image, kind, .. } => {
+                self.image(api::ImageHandle(image))?;
+                let pipeline = match kind {
+                    GlyphPipelineKind::Rgba => DrawPipelineKey::GlyphRgba,
+                    GlyphPipelineKind::A8 => DrawPipelineKey::GlyphA8,
+                    GlyphPipelineKind::Sdf => DrawPipelineKey::GlyphSdf,
+                };
+                (pipeline, DrawBindKey::Texture { image })
+            }
             DrawKind::Rgba { image } => {
                 self.image(api::ImageHandle(image))?;
                 (DrawPipelineKey::Rgba, DrawBindKey::Texture { image })
@@ -8710,7 +9007,8 @@ impl WebGpuRenderer {
             && self.image_instance_buffer.is_none()
             && self.nine_slice_instance_buffer.is_none()
             && self.spinner_instance_buffer.is_none()
-            && self.neon_marker_instance_buffer.is_none() {
+            && self.neon_marker_instance_buffer.is_none()
+            && self.glyph_instance_buffer.is_none() {
             return;
         }
         if !self.frame.draws[start..end].iter().any(|draw| draw.target == target) {
@@ -8732,6 +9030,7 @@ impl WebGpuRenderer {
         let nine_slice_instance_buffer = self.nine_slice_instance_buffer.clone();
         let spinner_instance_buffer = self.spinner_instance_buffer.clone();
         let neon_marker_instance_buffer = self.neon_marker_instance_buffer.clone();
+        let glyph_instance_buffer = self.glyph_instance_buffer.clone();
         let scratch_bind_group = self
             .scratch_target
             .as_ref()
@@ -8755,6 +9054,7 @@ impl WebGpuRenderer {
         let mut pipeline_binds = 0_u32;
         let mut draw_bind_group_binds = 0_u32;
         let mut scissor_sets = 0_u32;
+        let mut glyph_instance_buffer_binds = 0_u32;
         let mut bound_pipeline: Option<DrawPipelineKey> = None;
         let mut bound_bind: Option<DrawBindKey> = None;
         let mut bound_clip: Option<api::RectI> = None;
@@ -8764,7 +9064,7 @@ impl WebGpuRenderer {
             if draw.target != target {
                 continue;
             }
-            if !matches!(draw.kind, DrawKind::RRect { .. } | DrawKind::Image { .. } | DrawKind::NineSlice { .. } | DrawKind::Spinner { .. } | DrawKind::NeonMarker { .. })
+            if !matches!(draw.kind, DrawKind::RRect { .. } | DrawKind::Image { .. } | DrawKind::NineSlice { .. } | DrawKind::Spinner { .. } | DrawKind::NeonMarker { .. } | DrawKind::Glyph { .. })
                 && bound_index != Some(draw.index_kind) {
                 match draw.index_kind {
                     PackedIndexKind::U16 => {
@@ -8865,6 +9165,27 @@ impl WebGpuRenderer {
                         pass.set_vertex_buffer(0, buffer.slice(..));
                         bound_index = None;
                     }
+                    DrawPipelineKey::GlyphRgba => {
+                        let Some(buffer) = glyph_instance_buffer.as_ref() else { continue };
+                        pass.set_pipeline(self.glyph_rgba_pipeline());
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                        glyph_instance_buffer_binds = glyph_instance_buffer_binds.saturating_add(1);
+                        bound_index = None;
+                    }
+                    DrawPipelineKey::GlyphA8 => {
+                        let Some(buffer) = glyph_instance_buffer.as_ref() else { continue };
+                        pass.set_pipeline(self.glyph_a8_pipeline());
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                        glyph_instance_buffer_binds = glyph_instance_buffer_binds.saturating_add(1);
+                        bound_index = None;
+                    }
+                    DrawPipelineKey::GlyphSdf => {
+                        let Some(buffer) = glyph_instance_buffer.as_ref() else { continue };
+                        pass.set_pipeline(self.glyph_sdf_pipeline());
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                        glyph_instance_buffer_binds = glyph_instance_buffer_binds.saturating_add(1);
+                        bound_index = None;
+                    }
                     DrawPipelineKey::Solid => {
                         let Some(buffer) = vertex_buffer.as_ref() else { continue };
                         pass.set_pipeline(self.solid_pipeline());
@@ -8952,6 +9273,11 @@ impl WebGpuRenderer {
                     0..NEON_MARKER_VERTEX_COUNT,
                     first_instance..first_instance.saturating_add(instance_count),
                 );
+            } else if let DrawKind::Glyph { first_instance, instance_count, .. } = draw.kind {
+                pass.draw(
+                    0..GLYPH_VERTEX_COUNT,
+                    first_instance..first_instance.saturating_add(instance_count),
+                );
             } else {
                 pass.draw_indexed(
                     draw.first_index..draw.first_index + draw.index_count,
@@ -8969,6 +9295,8 @@ impl WebGpuRenderer {
         self.stats.draw_bind_group_binds =
             self.stats.draw_bind_group_binds.saturating_add(draw_bind_group_binds);
         self.stats.draw_scissor_sets = self.stats.draw_scissor_sets.saturating_add(scissor_sets);
+        self.stats.glyph_instance_buffer_binds = self.stats.glyph_instance_buffer_binds
+            .saturating_add(glyph_instance_buffer_binds);
     }
 
     fn ensure_present_buffers(&mut self) {
@@ -9470,6 +9798,35 @@ fn create_programs(
         "fs_neon_marker",
         "oxide-webgpu-neon-marker",
     );
+    let glyph_instance_layout = glyph_instance_layout();
+    let glyph_vertex_layouts = [glyph_instance_layout];
+    let glyph_rgba_pipeline = create_glyph_pipeline(
+        device,
+        &shader,
+        &texture_pipeline_layout,
+        &glyph_vertex_layouts,
+        &draw_color_target,
+        "fs_rgba",
+        "oxide-webgpu-glyph-rgba",
+    );
+    let glyph_a8_pipeline = create_glyph_pipeline(
+        device,
+        &shader,
+        &texture_pipeline_layout,
+        &glyph_vertex_layouts,
+        &draw_color_target,
+        "fs_a8",
+        "oxide-webgpu-glyph-a8",
+    );
+    let glyph_sdf_pipeline = create_glyph_pipeline(
+        device,
+        &shader,
+        &texture_pipeline_layout,
+        &glyph_vertex_layouts,
+        &draw_color_target,
+        "fs_sdf",
+        "oxide-webgpu-glyph-sdf",
+    );
     let rgba_pipeline = create_pipeline(
         device,
         &shader,
@@ -9633,6 +9990,9 @@ fn create_programs(
         nine_slice_unit_index_buffer,
         spinner_pipeline,
         neon_marker_pipeline,
+        glyph_rgba_pipeline,
+        glyph_a8_pipeline,
+        glyph_sdf_pipeline,
         rgba_pipeline,
         a8_pipeline,
         sdf_pipeline,
@@ -9717,6 +10077,46 @@ fn create_instanced_pipeline(
         },
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(fragment),
+            compilation_options: Default::default(),
+            targets: color_target,
+        }),
+        multiview: None,
+        cache: None,
+    })
+}
+
+fn create_glyph_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    vertex_buffers: &[wgpu::VertexBufferLayout<'_>],
+    color_target: &[Option<wgpu::ColorTargetState>],
+    fragment: &'static str,
+    label: &'static str,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_glyph_instance"),
+            compilation_options: Default::default(),
+            buffers: vertex_buffers,
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
             strip_index_format: None,
             front_face: wgpu::FrontFace::Ccw,
             cull_mode: None,
@@ -10301,6 +10701,32 @@ fn neon_marker_instance_layout() -> wgpu::VertexBufferLayout<'static>
    ];
    wgpu::VertexBufferLayout {
       array_stride: NEON_MARKER_INSTANCE_BYTES as wgpu::BufferAddress,
+      step_mode: wgpu::VertexStepMode::Instance,
+      attributes: &ATTRIBUTES,
+   }
+}
+
+fn glyph_instance_layout() -> wgpu::VertexBufferLayout<'static>
+{
+   const ATTRIBUTES: [wgpu::VertexAttribute; 3] = [
+      wgpu::VertexAttribute {
+         format: wgpu::VertexFormat::Float32x4,
+         offset: 0,
+         shader_location: 0,
+      },
+      wgpu::VertexAttribute {
+         format: wgpu::VertexFormat::Float32x4,
+         offset: 16,
+         shader_location: 1,
+      },
+      wgpu::VertexAttribute {
+         format: wgpu::VertexFormat::Unorm8x4,
+         offset: 32,
+         shader_location: 2,
+      },
+   ];
+   wgpu::VertexBufferLayout {
+      array_stride: GLYPH_INSTANCE_BYTES as wgpu::BufferAddress,
       step_mode: wgpu::VertexStepMode::Instance,
       attributes: &ATTRIBUTES,
    }
@@ -11404,6 +11830,76 @@ fn gpu_vertex(x: f32, y: f32, u: f32, v: f32, rgba: u32, uniform: api::Color) ->
     PackedVertex::new(x, y, u, v, if rgba == 0 { uniform.pack_rgba8() } else { rgba })
 }
 
+fn append_glyph_instances(
+    vertices: &[api::Vertex],
+    indices: &[u16],
+    color: api::Color,
+    out: &mut Vec<GlyphInstance>,
+) -> Option<usize>
+{
+    if vertices.len() % 4 != 0
+        || vertices.len() > u16::MAX as usize + 1
+        || indices.len() != vertices.len() / 4 * 6
+    {
+        return None;
+    }
+    let start = out.len();
+    for (glyph, quad) in vertices.chunks_exact(4).enumerate()
+    {
+        let base = (glyph * 4) as u16;
+        let mut topology = [0_u16; 6];
+        for (output, index) in topology.iter_mut().zip(
+            indices[glyph * 6..glyph * 6 + 6].iter().copied(),
+        )
+        {
+            let Some(local) = index.checked_sub(base) else
+            {
+                out.truncate(start);
+                return None;
+            };
+            *output = local;
+        }
+        let [top_left, top_right, third, fourth] = quad else
+        {
+            out.truncate(start);
+            return None;
+        };
+        let (bottom_left, bottom_right) = match topology
+        {
+            [0, 1, 2, 2, 1, 3] => (third, fourth),
+            [0, 1, 2, 0, 2, 3] => (fourth, third),
+            _ =>
+            {
+                out.truncate(start);
+                return None;
+            }
+        };
+        if top_left.y != top_right.y
+            || bottom_left.y != bottom_right.y
+            || top_left.x != bottom_left.x
+            || top_right.x != bottom_right.x
+            || top_left.v != top_right.v
+            || bottom_left.v != bottom_right.v
+            || top_left.u != bottom_left.u
+            || top_right.u != bottom_right.u
+        {
+            out.truncate(start);
+            return None;
+        }
+        out.push(GlyphInstance {
+            rect: [
+                top_left.x,
+                top_left.y,
+                top_right.x - top_left.x,
+                bottom_left.y - top_left.y,
+            ],
+            uv: [top_left.u, top_left.v, top_right.u, bottom_left.v],
+            rgba: color.pack_rgba8(),
+        });
+    }
+    Some(out.len() - start)
+}
+
 fn append_gpu_vertices(
     out: &mut Vec<PackedVertex>,
     idx: &mut Vec<u32>,
@@ -11816,6 +12312,35 @@ fn vs_main(input: VertexIn) -> VertexOut {
    var out: VertexOut;
    out.pos = vec4<f32>(local.x * 2.0 - 1.0, 1.0 - local.y * 2.0, 0.0, 1.0);
    out.uv = input.uv;
+   out.color = vec4<f32>(input.color.rgb, input.color.a * viewport.translation_opacity.z);
+   return out;
+}
+
+struct GlyphInstanceIn {
+   @location(0) rect: vec4<f32>,
+   @location(1) uv_rect: vec4<f32>,
+   @location(2) color: vec4<f32>,
+};
+
+@vertex
+fn vs_glyph_instance(
+   @builtin(vertex_index) vertex_index: u32,
+   input: GlyphInstanceIn,
+) -> VertexOut {
+   let unit = array<vec2<f32>, 4>(
+      vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0),
+      vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 1.0),
+   )[vertex_index];
+   let dp = input.rect.xy + unit * input.rect.zw;
+   let transformed = vec2<f32>(
+      viewport.matrix.x * dp.x + viewport.matrix.z * dp.y + viewport.translation_opacity.x,
+      viewport.matrix.y * dp.x + viewport.matrix.w * dp.y + viewport.translation_opacity.y,
+   );
+   let size = max(viewport.size_origin.xy, vec2<f32>(1.0, 1.0));
+   let local = (transformed - viewport.size_origin.zw) / size;
+   var out: VertexOut;
+   out.pos = vec4<f32>(local.x * 2.0 - 1.0, 1.0 - local.y * 2.0, 0.0, 1.0);
+   out.uv = mix(input.uv_rect.xy, input.uv_rect.zw, unit);
    out.color = vec4<f32>(input.color.rgb, input.color.a * viewport.translation_opacity.z);
    return out;
 }

@@ -50,6 +50,7 @@ mod wasm_host {
     use oxide_ui_core as ui;
     use oxide_wasm_alloc_counter::AllocationSnapshot;
     use std::cell::RefCell;
+    use std::collections::HashSet;
     use std::fmt::Write;
     use std::rc::Rc;
     use std::sync::atomic::Ordering;
@@ -64,6 +65,10 @@ mod wasm_host {
 
     const DEFAULT_FONT_BYTES: &[u8] =
         include_bytes!("../../../../crates/ui-core/assets/Asap-Regular.ttf");
+    const C46_LATIN_FONT_BYTES: &[u8] =
+        include_bytes!("../../../../crates/text/tests/fixtures/test_text_latin.ttf");
+    const C46_CJK_FONT_BYTES: &[u8] =
+        include_bytes!("../../../../crates/text/tests/fixtures/test_text_cjk.ttf");
     const WEBGPU_ID_MASK_CELLS: usize = 40;
     const WEBGPU_ID_MASK_EXTENT: f32 = 512.0;
     const WEBGPU_UPLOAD_ATLAS_SIZE: u32 = 1024;
@@ -117,6 +122,10 @@ mod wasm_host {
         renderer: Rc<RefCell<BrowserRenderer>>,
     }
 
+    struct BorrowedWebUploader<'a> {
+        renderer: &'a mut BrowserRenderer,
+    }
+
     impl ui::elements::ImageUploader for WebUploader {
         fn create_a8(
             &mut self,
@@ -163,6 +172,35 @@ mod wasm_host {
         }
     }
 
+    impl ui::elements::ImageUploader for BorrowedWebUploader<'_> {
+        fn create_a8(
+            &mut self,
+            width: u32,
+            height: u32,
+            data: &[u8],
+            row_bytes: usize,
+        ) -> gfx::ImageHandle {
+            self.renderer.image_create_a8(width, height, data, row_bytes)
+        }
+
+        fn update_a8(
+            &mut self,
+            handle: gfx::ImageHandle,
+            x: u32,
+            y: u32,
+            width: u32,
+            height: u32,
+            data: &[u8],
+            row_bytes: usize,
+        ) {
+            self.renderer.image_update_a8(handle, x, y, width, height, data, row_bytes);
+        }
+
+        fn release_a8(&mut self, handle: gfx::ImageHandle) {
+            let _ = self.renderer.image_release(handle);
+        }
+    }
+
     #[derive(Clone, Copy)]
     struct CanvasMetrics {
         physical_width: u32,
@@ -186,6 +224,7 @@ mod wasm_host {
         coalesce_items: Vec<gfx::DrawCmd>,
         bench_resources: Option<WebGpuUploadBenchResources>,
         geometry_bench_resources: Option<WebGpuGeometryBenchResources>,
+        glyph_matrix_resources: Option<WebGpuGlyphMatrixResources>,
         last_timestamp_ms: f64,
         frame_time_remainder_ms: f64,
         ime_focused: bool,
@@ -478,6 +517,7 @@ mod wasm_host {
                 coalesce_items: Vec::new(),
                 bench_resources: None,
                 geometry_bench_resources: None,
+                glyph_matrix_resources: None,
                 last_timestamp_ms: 0.0,
                 frame_time_remainder_ms: 0.0,
                 ime_focused: false,
@@ -1744,11 +1784,47 @@ mod wasm_host {
             }
             let expected_glyph_quads =
                 WEBGPU_GLYPH_RUN_RUNS.saturating_mul(WEBGPU_GLYPH_RUN_GLYPHS_PER_RUN);
-            let expected_draw_items = WEBGPU_GLYPH_RUN_RUNS.saturating_add(1);
+            let expected_draw_items = 3;
+            let expected_glyph_instance_bytes = expected_glyph_quads.saturating_mul(36);
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames}{};expected_glyph_runs={WEBGPU_GLYPH_RUN_RUNS};expected_glyphs_per_run={WEBGPU_GLYPH_RUN_GLYPHS_PER_RUN};expected_glyph_quads={expected_glyph_quads};expected_sdf_runs={WEBGPU_GLYPH_RUN_SDF_RUNS};expected_sdf_glyph_quads={};expected_draw_items={expected_draw_items};atlas_width={WEBGPU_UPLOAD_ATLAS_SIZE};atlas_height={WEBGPU_UPLOAD_ATLAS_SIZE}",
+                "samples={sample_count};frames_per_sample={frames}{};expected_glyph_runs={WEBGPU_GLYPH_RUN_RUNS};expected_glyphs_per_run={WEBGPU_GLYPH_RUN_GLYPHS_PER_RUN};expected_glyph_quads={expected_glyph_quads};expected_glyph_instance_bytes={expected_glyph_instance_bytes};expected_sdf_runs={WEBGPU_GLYPH_RUN_SDF_RUNS};expected_sdf_glyph_quads={};expected_draw_items={expected_draw_items};atlas_width={WEBGPU_UPLOAD_ATLAS_SIZE};atlas_height={WEBGPU_UPLOAD_ATLAS_SIZE}",
                 sampled_case_metrics(&current, "current"),
                 WEBGPU_GLYPH_RUN_SDF_RUNS.saturating_mul(WEBGPU_GLYPH_RUN_GLYPHS_PER_RUN),
+            ))
+        }
+
+        pub async fn bench_webgpu_glyph_language_matrix_current(
+            &self,
+            samples: u32,
+            frames_per_sample: u32,
+        ) -> Result<String, JsValue> {
+            let sample_count = samples.clamp(1, 30);
+            let frames = frames_per_sample.clamp(1, 120);
+            let renderer = self.ensure_glyph_matrix_resources()?;
+            let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
+            let mut current = self.with_glyph_matrix_resources(|renderer, resources| {
+                bench_webgpu_sampled_case(renderer, sample_count, frames, |renderer, _, _| {
+                    resources.frame(renderer)
+                })
+            })?;
+            current.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            let (atlas_pages, glyph_quads, bitmap_runs, sdf_runs, source_draw_items) = {
+                let state = self.state.borrow();
+                let Some(resources) = state.glyph_matrix_resources.as_ref() else {
+                    return Err(JsValue::from_str("WebGPU glyph matrix resources unavailable"));
+                };
+                (
+                    resources.atlas_pages,
+                    resources.glyph_quads,
+                    resources.bitmap_runs,
+                    resources.sdf_runs,
+                    resources.drawlist.items.len(),
+                )
+            };
+            let expected_glyph_instance_bytes = glyph_quads.saturating_mul(36);
+            Ok(format!(
+                "samples={sample_count};frames_per_sample={frames}{};labels=1000;languages=latin,rtl,cjk,emoji;atlas_pages={atlas_pages};bitmap_runs={bitmap_runs};sdf_runs={sdf_runs};source_draw_items={source_draw_items};expected_glyph_quads={glyph_quads};expected_glyph_instance_bytes={expected_glyph_instance_bytes}",
+                sampled_case_metrics(&current, "current"),
             ))
         }
 
@@ -3197,6 +3273,31 @@ mod wasm_host {
             let mut renderer = renderer.borrow_mut();
             f(&mut renderer, resources)
         }
+
+        fn ensure_glyph_matrix_resources(&self) -> Result<Rc<RefCell<BrowserRenderer>>, JsValue> {
+            let renderer = self.state.borrow().renderer.clone();
+            if self.state.borrow().glyph_matrix_resources.is_none() {
+                let resources = {
+                    let mut renderer = renderer.borrow_mut();
+                    WebGpuGlyphMatrixResources::new(&mut renderer)?
+                };
+                self.state.borrow_mut().glyph_matrix_resources = Some(resources);
+            }
+            Ok(renderer)
+        }
+
+        fn with_glyph_matrix_resources<T>(
+            &self,
+            f: impl FnOnce(&mut BrowserRenderer, &WebGpuGlyphMatrixResources) -> Result<T, JsValue>,
+        ) -> Result<T, JsValue> {
+            let renderer = self.ensure_glyph_matrix_resources()?;
+            let state = self.state.borrow();
+            let Some(resources) = state.glyph_matrix_resources.as_ref() else {
+                return Err(JsValue::from_str("WebGPU glyph matrix resources unavailable"));
+            };
+            let mut renderer = renderer.borrow_mut();
+            f(&mut renderer, resources)
+        }
     }
 
     /// Returns unsupported because WebGPU renderer initialization is asynchronous in browsers.
@@ -3479,6 +3580,107 @@ mod wasm_host {
             renderer.resize(512, 512, 2.0).map_err(render_err)?;
             let token = renderer.begin_frame(&gfx::FrameTarget, None);
             renderer.encode_pass(list);
+            renderer.submit(token).map_err(render_err)
+        }
+    }
+
+    struct WebGpuGlyphMatrixResources {
+        drawlist: gfx::DrawList,
+        atlas_pages: usize,
+        glyph_quads: usize,
+        bitmap_runs: usize,
+        sdf_runs: usize,
+    }
+
+    impl WebGpuGlyphMatrixResources {
+        fn new(renderer: &mut BrowserRenderer) -> Result<Self, JsValue> {
+            let mut text = ui::elements::TextCtx::default();
+            let latin_id = text.fonts.add_font(text::Font::from_bytes(C46_LATIN_FONT_BYTES.to_vec()));
+            let cjk_id = text.fonts.add_font(text::Font::from_bytes(C46_CJK_FONT_BYTES.to_vec()));
+            text.atlas = text::PagedAtlas::new(128, 128, text::DEFAULT_GLYPH_ATLAS_PAGE_COUNT);
+            text.set_fallback_fonts(&[cjk_id]);
+            let mut supported = Vec::new();
+            for scalar in 0x21_u32..0x3000 {
+                let Some(ch) = char::from_u32(scalar) else { continue };
+                if !ch.is_whitespace() && text.fonts.font_supports_cluster(latin_id, &ch.to_string()) {
+                    supported.push(ch);
+                }
+            }
+            if supported.is_empty() {
+                return Err(JsValue::from_str("C46 glyph matrix requires supported Latin glyphs"));
+            }
+            let labels = (0..1_000_usize).map(|index| {
+                let unique = supported[index % supported.len()];
+                match index % 11 {
+                    0 => format!("Wrapped Latin {unique} words {index:04} across a narrow row"),
+                    1 => format!("RTL مرحبا {unique} {index:04}"),
+                    2 => format!("CJK 漢字 {unique} {index:04}"),
+                    3 => format!("Emoji 😀 {unique} {index:04}"),
+                    _ => format!("Glyph {unique} size variant {index:04}"),
+                }
+            }).collect::<Vec<_>>();
+            let palette = [
+                gfx::Color::rgba(0.10, 0.12, 0.16, 1.0),
+                gfx::Color::rgba(0.80, 0.20, 0.12, 0.90),
+                gfx::Color::rgba(0.12, 0.45, 0.85, 0.75),
+                gfx::Color::rgba(0.20, 0.70, 0.35, 1.0),
+            ];
+            let mut builder = ui::DrawListBuilder::new();
+            text.begin_frame();
+            for (index, label) in labels.iter().enumerate() {
+                let font_px = 16.0 + (index % 20) as f32;
+                let wrap = index % 11 == 0;
+                ui::elements::encode_label_text(
+                    label,
+                    palette[index % palette.len()],
+                    ui::elements::Align::Left,
+                    wrap,
+                    latin_id,
+                    font_px,
+                    gfx::RectF::new(
+                        (index % 5) as f32 * 238.0,
+                        (index % 40) as f32 * 20.0,
+                        if wrap { 180.0 } else { 232.0 },
+                        if wrap { 48.0 } else { 40.0 },
+                    ),
+                    1.0,
+                    &mut text,
+                    &mut BorrowedWebUploader { renderer },
+                    &mut builder,
+                );
+            }
+            text.finish_frame(&mut BorrowedWebUploader { renderer }, &mut builder);
+            ui::coalesce_adjacent_draws(builder.drawlist_mut());
+            let mut atlas_pages = HashSet::new();
+            let mut glyph_quads = 0_usize;
+            let mut bitmap_runs = 0_usize;
+            let mut sdf_runs = 0_usize;
+            for item in &builder.drawlist().items {
+                let gfx::DrawCmd::GlyphRun { run } = item else { continue };
+                atlas_pages.insert(run.atlas);
+                glyph_quads = glyph_quads.saturating_add(run.ib.len as usize / 6);
+                if run.sdf {
+                    sdf_runs = sdf_runs.saturating_add(1);
+                } else {
+                    bitmap_runs = bitmap_runs.saturating_add(1);
+                }
+            }
+            if atlas_pages.len() < 2 || bitmap_runs == 0 || sdf_runs == 0 {
+                return Err(JsValue::from_str("C46 glyph matrix requires multiple pages and bitmap/SDF text"));
+            }
+            Ok(Self {
+                drawlist: builder.drawlist().clone(),
+                atlas_pages: atlas_pages.len(),
+                glyph_quads,
+                bitmap_runs,
+                sdf_runs,
+            })
+        }
+
+        fn frame(&self, renderer: &mut BrowserRenderer) -> Result<(), JsValue> {
+            renderer.resize(1_200, 800, 1.0).map_err(render_err)?;
+            let token = renderer.begin_frame(&gfx::FrameTarget, None);
+            renderer.encode_pass(&self.drawlist);
             renderer.submit(token).map_err(render_err)
         }
     }
@@ -7332,7 +7534,7 @@ mod wasm_host {
         let key_prefix = if prefix.is_empty() { String::new() } else { format!("{prefix}_") };
         let _ = write!(
             out,
-            ";{key_prefix}draws={};{key_prefix}draw_items={};{key_prefix}draw_items_coalesced={};{key_prefix}draw_pipeline_binds={};{key_prefix}draw_bind_group_binds={};{key_prefix}draw_scissor_sets={};{key_prefix}solid_tris={};{key_prefix}rrect_instances={};{key_prefix}rrect_triangles={};{key_prefix}rrect_instance_bytes={};{key_prefix}image_instances={};{key_prefix}image_triangles={};{key_prefix}image_instance_bytes={};{key_prefix}image_draws={};{key_prefix}image_mesh_draws={};{key_prefix}nine_slice_draws={};{key_prefix}nine_slice_instances={};{key_prefix}nine_slice_triangles={};{key_prefix}nine_slice_instance_bytes={};{key_prefix}glyph_quads={};{key_prefix}sdf_glyph_quads={};{key_prefix}clip_depth_peak={};{key_prefix}damage_rects={};{key_prefix}layer_draws={};{key_prefix}layer_cache_hits={};{key_prefix}layer_cache_misses={};{key_prefix}layer_cache_skipped_draws={};{key_prefix}layer_passes={};{key_prefix}scene3d_draws={};{key_prefix}id_mask_draws={};{key_prefix}backdrop_draws={};{key_prefix}visual_effect_draws={};{key_prefix}effect_uniform_writes={};{key_prefix}effect_uniform_bytes={};{key_prefix}effect_uniform_slots={};{key_prefix}id_mask_uniform_writes={};{key_prefix}id_mask_uniform_bytes={};{key_prefix}id_mask_uniform_slots={};{key_prefix}spinner_draws={};{key_prefix}spinner_instances={};{key_prefix}spinner_triangles={};{key_prefix}spinner_instance_bytes={};{key_prefix}neon_marker_instances={};{key_prefix}neon_marker_triangles={};{key_prefix}neon_marker_instance_bytes={};{key_prefix}camera_bg_draws={};{key_prefix}render_passes={};{key_prefix}clear_passes={};{key_prefix}draw_passes={};{key_prefix}scene3d_passes={};{key_prefix}scene3d_overlay_passes={};{key_prefix}id_mask_raster_passes={};{key_prefix}id_mask_field_seed_passes={};{key_prefix}id_mask_field_jump_passes={};{key_prefix}id_mask_compositor_passes={};{key_prefix}present_passes={};{key_prefix}texture_copies={};{key_prefix}command_buffers={};{key_prefix}gpu_timestamp_query_supported={};{key_prefix}gpu_timestamp_frame_id={};{key_prefix}gpu_timestamp_passes={};{key_prefix}gpu_timestamp_total_ns={};{key_prefix}gpu_timestamp_clear_ns={};{key_prefix}gpu_timestamp_draw_ns={};{key_prefix}gpu_timestamp_scene3d_ns={};{key_prefix}gpu_timestamp_scene3d_overlay_ns={};{key_prefix}gpu_timestamp_id_mask_raster_ns={};{key_prefix}gpu_timestamp_id_mask_field_seed_ns={};{key_prefix}gpu_timestamp_id_mask_field_jump_ns={};{key_prefix}gpu_timestamp_id_mask_compositor_ns={};{key_prefix}gpu_timestamp_present_ns={};{key_prefix}gpu_timestamp_max_pass_ns={};{key_prefix}gpu_timestamp_readback_skips={};{key_prefix}gpu_timestamp_readback_interval={};{key_prefix}buffer_upload_bytes={};{key_prefix}texture_upload_bytes={};{key_prefix}buffer_grows={};{key_prefix}texture_creates={};{key_prefix}bind_group_creates={};{key_prefix}pipeline_creates={};{key_prefix}sampler_creates={};{key_prefix}mesh3d_creates={};{key_prefix}draw_buffer_grows={};{key_prefix}image_texture_creates={};{key_prefix}image_bind_group_creates={};{key_prefix}target_texture_creates={};{key_prefix}target_bind_group_creates={};{key_prefix}layer_texture_creates={};{key_prefix}layer_bind_group_creates={};{key_prefix}scene3d_buffer_grows={};{key_prefix}scene3d_bind_group_creates={};{key_prefix}effect_buffer_grows={};{key_prefix}effect_bind_group_creates={};{key_prefix}id_mask_texture_creates={};{key_prefix}id_mask_buffer_grows={};{key_prefix}id_mask_bind_group_creates={};{key_prefix}image_upload_temp_allocs={};{key_prefix}image_upload_temp_bytes={};{key_prefix}image_upload_scratch_bytes={};{key_prefix}image_upload_scratch_grows={};{key_prefix}cpu_scratch_bytes={};{key_prefix}cpu_scratch_grows={};{key_prefix}cpu_scratch_growth_bytes={};{key_prefix}cpu_draw_scratch_bytes={};{key_prefix}cpu_draw_scratch_grows={};{key_prefix}cpu_draw_scratch_growth_bytes={};{key_prefix}cpu_scene3d_scratch_bytes={};{key_prefix}cpu_scene3d_scratch_grows={};{key_prefix}cpu_scene3d_scratch_growth_bytes={};{key_prefix}cpu_effect_scratch_bytes={};{key_prefix}cpu_effect_scratch_grows={};{key_prefix}cpu_effect_scratch_growth_bytes={};{key_prefix}cpu_id_mask_scratch_bytes={};{key_prefix}cpu_id_mask_scratch_grows={};{key_prefix}cpu_id_mask_scratch_growth_bytes={};{key_prefix}cpu_image_upload_scratch_bytes={};{key_prefix}cpu_image_upload_scratch_grows={};{key_prefix}cpu_image_upload_scratch_growth_bytes={};{key_prefix}cpu_resource_table_scratch_bytes={};{key_prefix}cpu_resource_table_scratch_grows={};{key_prefix}cpu_resource_table_scratch_growth_bytes={}",
+            ";{key_prefix}draws={};{key_prefix}draw_items={};{key_prefix}draw_items_coalesced={};{key_prefix}draw_pipeline_binds={};{key_prefix}draw_bind_group_binds={};{key_prefix}draw_scissor_sets={};{key_prefix}solid_tris={};{key_prefix}rrect_instances={};{key_prefix}rrect_triangles={};{key_prefix}rrect_instance_bytes={};{key_prefix}image_instances={};{key_prefix}image_triangles={};{key_prefix}image_instance_bytes={};{key_prefix}image_draws={};{key_prefix}image_mesh_draws={};{key_prefix}nine_slice_draws={};{key_prefix}nine_slice_instances={};{key_prefix}nine_slice_triangles={};{key_prefix}nine_slice_instance_bytes={};{key_prefix}glyph_quads={};{key_prefix}sdf_glyph_quads={};{key_prefix}glyph_instances={};{key_prefix}glyph_triangles={};{key_prefix}glyph_instance_bytes={};{key_prefix}glyph_instance_buffer_binds={};{key_prefix}clip_depth_peak={};{key_prefix}damage_rects={};{key_prefix}layer_draws={};{key_prefix}layer_cache_hits={};{key_prefix}layer_cache_misses={};{key_prefix}layer_cache_skipped_draws={};{key_prefix}layer_passes={};{key_prefix}scene3d_draws={};{key_prefix}id_mask_draws={};{key_prefix}backdrop_draws={};{key_prefix}visual_effect_draws={};{key_prefix}effect_uniform_writes={};{key_prefix}effect_uniform_bytes={};{key_prefix}effect_uniform_slots={};{key_prefix}id_mask_uniform_writes={};{key_prefix}id_mask_uniform_bytes={};{key_prefix}id_mask_uniform_slots={};{key_prefix}spinner_draws={};{key_prefix}spinner_instances={};{key_prefix}spinner_triangles={};{key_prefix}spinner_instance_bytes={};{key_prefix}neon_marker_instances={};{key_prefix}neon_marker_triangles={};{key_prefix}neon_marker_instance_bytes={};{key_prefix}camera_bg_draws={};{key_prefix}render_passes={};{key_prefix}clear_passes={};{key_prefix}draw_passes={};{key_prefix}scene3d_passes={};{key_prefix}scene3d_overlay_passes={};{key_prefix}id_mask_raster_passes={};{key_prefix}id_mask_field_seed_passes={};{key_prefix}id_mask_field_jump_passes={};{key_prefix}id_mask_compositor_passes={};{key_prefix}present_passes={};{key_prefix}texture_copies={};{key_prefix}command_buffers={};{key_prefix}gpu_timestamp_query_supported={};{key_prefix}gpu_timestamp_frame_id={};{key_prefix}gpu_timestamp_passes={};{key_prefix}gpu_timestamp_total_ns={};{key_prefix}gpu_timestamp_clear_ns={};{key_prefix}gpu_timestamp_draw_ns={};{key_prefix}gpu_timestamp_scene3d_ns={};{key_prefix}gpu_timestamp_scene3d_overlay_ns={};{key_prefix}gpu_timestamp_id_mask_raster_ns={};{key_prefix}gpu_timestamp_id_mask_field_seed_ns={};{key_prefix}gpu_timestamp_id_mask_field_jump_ns={};{key_prefix}gpu_timestamp_id_mask_compositor_ns={};{key_prefix}gpu_timestamp_present_ns={};{key_prefix}gpu_timestamp_max_pass_ns={};{key_prefix}gpu_timestamp_readback_skips={};{key_prefix}gpu_timestamp_readback_interval={};{key_prefix}buffer_upload_bytes={};{key_prefix}texture_upload_bytes={};{key_prefix}buffer_grows={};{key_prefix}texture_creates={};{key_prefix}bind_group_creates={};{key_prefix}pipeline_creates={};{key_prefix}sampler_creates={};{key_prefix}mesh3d_creates={};{key_prefix}draw_buffer_grows={};{key_prefix}image_texture_creates={};{key_prefix}image_bind_group_creates={};{key_prefix}target_texture_creates={};{key_prefix}target_bind_group_creates={};{key_prefix}layer_texture_creates={};{key_prefix}layer_bind_group_creates={};{key_prefix}scene3d_buffer_grows={};{key_prefix}scene3d_bind_group_creates={};{key_prefix}effect_buffer_grows={};{key_prefix}effect_bind_group_creates={};{key_prefix}id_mask_texture_creates={};{key_prefix}id_mask_buffer_grows={};{key_prefix}id_mask_bind_group_creates={};{key_prefix}image_upload_temp_allocs={};{key_prefix}image_upload_temp_bytes={};{key_prefix}image_upload_scratch_bytes={};{key_prefix}image_upload_scratch_grows={};{key_prefix}cpu_scratch_bytes={};{key_prefix}cpu_scratch_grows={};{key_prefix}cpu_scratch_growth_bytes={};{key_prefix}cpu_draw_scratch_bytes={};{key_prefix}cpu_draw_scratch_grows={};{key_prefix}cpu_draw_scratch_growth_bytes={};{key_prefix}cpu_scene3d_scratch_bytes={};{key_prefix}cpu_scene3d_scratch_grows={};{key_prefix}cpu_scene3d_scratch_growth_bytes={};{key_prefix}cpu_effect_scratch_bytes={};{key_prefix}cpu_effect_scratch_grows={};{key_prefix}cpu_effect_scratch_growth_bytes={};{key_prefix}cpu_id_mask_scratch_bytes={};{key_prefix}cpu_id_mask_scratch_grows={};{key_prefix}cpu_id_mask_scratch_growth_bytes={};{key_prefix}cpu_image_upload_scratch_bytes={};{key_prefix}cpu_image_upload_scratch_grows={};{key_prefix}cpu_image_upload_scratch_growth_bytes={};{key_prefix}cpu_resource_table_scratch_bytes={};{key_prefix}cpu_resource_table_scratch_grows={};{key_prefix}cpu_resource_table_scratch_growth_bytes={}",
             stats.draws,
             stats.draw_items,
             stats.draw_items_coalesced,
@@ -7354,6 +7556,10 @@ mod wasm_host {
             stats.nine_slice_instance_bytes,
             stats.glyph_quads,
             stats.sdf_glyph_quads,
+            stats.glyph_instances,
+            stats.glyph_triangles,
+            stats.glyph_instance_bytes,
+            stats.glyph_instance_buffer_binds,
             stats.clip_depth_peak,
             stats.damage_rects,
             stats.layer_draws,
