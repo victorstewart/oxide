@@ -72,7 +72,7 @@
 
 ## Logic narrative
 - `TextShaper` uses `rustybuzz` to shape text and keeps glyph ids plus advances separate from rasterization.
-- `RasterCtx` wraps `swash` scaling state so repeated baking can reuse raster infrastructure.
+- `RasterCtx` wraps `swash` scaling state, one reusable glyph image, and exact squared-distance-transform scratch so repeated baking reuses raster infrastructure without per-glyph SDF allocation.
 - `Atlas` first attempts monotonic row packing. If there is no free tail space and the new glyph can fit in the atlas, it reuses the least-recently-used resident slot that is large enough for the glyph.
 - Slot-level eviction avoids clearing the whole atlas, which would invalidate unrelated glyph UVs already held by retained draw lists.
 - Eviction is generation-tracked: retained glyph geometry records the atlas revision it was baked against, and the revision changes on eviction or reset.
@@ -84,6 +84,8 @@
 - `ShapeOutput::prefix_widths_for_boundaries` and `OwnedShape::prefix_widths_for_boundaries` map glyph-cluster advances onto caller-provided boundaries, then prefix-sum those advances so UI text inputs can build caret and selection positions without reshaping every prefix.
 - `ShapedCursorMap` combines Unicode grapheme byte boundaries with shaped caret positions, so callers use one artifact for byte ranges, caret positions, and O(log n) x-to-cursor lookup for both ascending LTR and descending pure RTL runs. Mixed LTR/RTL maps keep upstream and downstream x positions at ambiguous run boundaries while preserving the single-position fast path for ordinary text.
 - `TextShaper::cursor_map_with_fallback_fonts` walks grapheme clusters, groups adjacent clusters by the selected font, shapes each run once, and stitches the run prefix widths into one global `ShapedCursorMap`.
+- Fallback preparation keeps bounded coverage and fallback-decision caches for one exact font-database generation, primary font, scale, feature set, and fallback chain. A context change clears the caches before the new context can reuse them.
+- SDF generation runs an exact separable squared Euclidean distance transform for inside and outside coverage, clamps the distance to the established eight-pixel spread, and preserves the prior byte encoding exactly.
 
 ## Preconditions and postconditions
 - Font ids passed to shaping and baking must identify the font used to shape the glyphs.
@@ -100,6 +102,8 @@
 ## Concurrency and memory behavior
 - `Atlas`, `TextShaper`, and `RasterCtx` are caller-owned mutable state and do not synchronize internally.
 - The atlas maintains a `HashMap` of resident glyph keys and a contiguous A8 pixel buffer.
+- `TextShaper` bounds character coverage at 8,192 entries and fallback decisions at 2,048 entries. Scalar decisions do not allocate a string key; multi-codepoint graphemes own their bounded key.
+- `RasterCtx` grows its glyph image, EDT intermediate/distance/axis storage, and SDF output to the largest encountered glyph, then reuses those allocations.
 - Frame-only eviction state and opt-in diagnostics live behind one box; disabled diagnostics retain no counter map and glyph baking uses a const-generic non-counting path.
 - Baking a borrowed `ShapeOutput` materializes a compact glyph vector before rasterization; cached UI paths prefer `OwnedShape`.
 - Baking an `OwnedShape` borrows cached glyph storage when the cached logical order is already visual. RTL cached shapes still allocate a temporary reversed vector only when visual-order correction is required.
@@ -111,6 +115,8 @@
 - The dirty rectangle is unioned across new or overwritten glyph slots until the caller uploads it.
 - Cursor maps reuse the same shaped glyph buffer or owned cached run, replacing O(boundary count) shaping calls on a cache miss with one shape plus a glyph-to-boundary pass and binary-search hit testing.
 - Fallback shaping emits font-contiguous grapheme runs with global x offsets so visible glyph encoding can batch one mixed-font line into one glyph draw when the combined index span fits.
+- Repeated fallback shaping for one context reuses Rustybuzz input storage, cached character coverage, and cached scalar or multi-codepoint fallback decisions. The first call after a font, scale, feature, or fallback-chain change deliberately takes the uncached correctness path.
+- SDF preparation is linear in glyph pixels per inside/outside transform instead of scanning a 17x17 neighborhood for every pixel. Warm SDF generation performs no heap allocation after `RasterCtx` reaches the required capacity.
 - Fallback cursor maps still use the cached `ShapedCursorMap` for hot pointer picking and do not probe fallback fonts per pointer event.
 - Retained draw caches should compare cached glyph-run revisions with the current atlas revision before replaying cached text geometry.
 - Frame pinning adds one predictable branch only on miss/pressure allocation; cache-hit replay remains allocation-free and does not touch diagnostic counters unless profiling is enabled.
@@ -121,6 +127,8 @@
 ## Testing and benchmarks
 - `crates/text/tests/shaping_tests.rs` covers shaping, reset behavior, atlas revisions, dirty rectangles, full-slot dirtying/clearing after atlas eviction, atlas pressure eviction, same-run and whole-frame eviction protection, and oversize glyph skipping.
 - `crates/text/tests/shaping_tests.rs` also covers shaped-run prefix width maps and cursor maps for ASCII prefixes, combining-grapheme boundaries, ZWJ clusters, pure RTL visual order, mixed-bidi caret affinity, configured fallback-font cursor widths and shape runs, and owned-run reuse parity.
+- The `sdf_tests` unit module retains the retired brute-force SDF implementation as a test-only oracle and requires zero byte delta for holes, thin strokes, edges, Latin/CJK glyphs, 2x/3x scale pressure, and 48/96 px raster sizes. It also verifies scale invalidation and hard fallback-cache capacity enforcement.
+- `crates/text/tests/shaping_tests.rs` verifies fallback decisions invalidate when the font database generation or fallback chain changes.
 - `crates/text/tests/owned_shape_replay_tests.rs` covers allocation-free warm LTR owned-shape replay and RTL owned-shape visual-order parity against direct shaping.
 - `cpu.system.text_atlas_pressure` exercises constrained atlas pressure in the workspace perf runner.
 - `cpu.system.text_prefix_width_map` exercises the one-shaped-run cursor prefix map used by text input caches.
@@ -132,6 +140,7 @@ assert_eq!(atlas.eviction_count(), 0);
 ```
 
 ## Changelog
+- 2026-07-14: replaced the per-pixel 17x17 SDF search with an exact separable EDT, reused raster/EDT scratch, cached stable parsed Swash font identity, and added bounded context-invalidated fallback preparation caches.
 - 2026-07-14: added frame-wide atlas eviction locking and opt-in cache/raster counters for C43 frame-scoped text preparation.
 - 2026-06-02: removed cached `OwnedShape` glyph-vector clones on the common replay path, cached zero-bitmap glyphs as no-geometry entries, and added allocation-free warm replay coverage.
 - 2026-06-01: atlas slot eviction now clears and dirties the full reused slot before writing a smaller replacement glyph, preventing stale dirty-rect-upload pixels around the new glyph.

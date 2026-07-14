@@ -397,6 +397,30 @@ fn fallback_shape_runs_use_font_that_covers_each_grapheme() {
 }
 
 #[test]
+fn fallback_decisions_invalidate_for_font_database_and_chain_changes() {
+    let mut db = FontDb::default();
+    let latin_id = db.add_font(load_font(LATIN_FONT));
+    let mut shaper = TextShaper::default();
+
+    let before_add = shaper
+        .shape_with_fallback_fonts(&db, latin_id, &[1], "漢", 22.0)
+        .expect("shape before fallback font exists");
+    assert_eq!(before_add.runs[0].font_id, latin_id);
+
+    let cjk_id = db.add_font(load_font(CJK_FONT));
+    assert_eq!(cjk_id, 1);
+    let after_add = shaper
+        .shape_with_fallback_fonts(&db, latin_id, &[cjk_id], "漢", 22.0)
+        .expect("shape after fallback font add");
+    assert_eq!(after_add.runs[0].font_id, cjk_id);
+
+    let after_chain_change = shaper
+        .shape_with_fallback_fonts(&db, latin_id, &[], "漢", 22.0)
+        .expect("shape after fallback chain change");
+    assert_eq!(after_chain_change.runs[0].font_id, latin_id);
+}
+
+#[test]
 fn fallback_cursor_map_preserves_mixed_bidi_affinity_positions() {
     let Some(hebrew) = load_macos_hebrew_font() else {
         eprintln!(

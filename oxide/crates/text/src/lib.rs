@@ -15,17 +15,30 @@ use rustybuzz::{Face as RbFace, GlyphBuffer as RbGlyphs, UnicodeBuffer};
 use swash::scale::{image::Image, ScaleContext};
 #[allow(unused_imports)]
 use swash::scale::{Render, Source};
+use swash::{CacheKey, FontRef};
 use ttf_parser::Face as TtfFace;
 use unicode_segmentation::UnicodeSegmentation;
 
+#[derive(Clone, Copy)]
+struct ParsedFont
+{
+   swash_offset: u32,
+   swash_key: CacheKey,
+}
+
 pub struct Font {
     data: std::sync::Arc<Vec<u8>>,
+    parsed: Option<ParsedFont>,
 }
 
 impl Font {
     #[must_use]
     pub fn from_bytes(data: Vec<u8>) -> Self {
-        Self { data: std::sync::Arc::new(data) }
+        let parsed = FontRef::from_index(&data, 0).map(|font| ParsedFont {
+            swash_offset: font.offset,
+            swash_key: font.key,
+        });
+        Self { data: std::sync::Arc::new(data), parsed }
     }
 
     #[must_use]
@@ -35,21 +48,33 @@ impl Font {
         };
         cluster.chars().all(|ch| cluster_char_supported(&face, ch))
     }
+
+    fn swash_ref(&self) -> Option<FontRef<'_>>
+    {
+       let parsed = self.parsed?;
+       Some(FontRef {
+          data: &self.data,
+          offset: parsed.swash_offset,
+          key: parsed.swash_key,
+       })
+    }
 }
 
 pub struct FontDb {
     fonts: Vec<Font>,
+    generation: u64,
 }
 
 impl Default for FontDb {
     fn default() -> Self {
-        Self { fonts: Vec::new() }
+        Self { fonts: Vec::new(), generation: 0 }
     }
 }
 
 impl FontDb {
     pub fn add_font(&mut self, f: Font) -> usize {
         self.fonts.push(f);
+        self.generation = self.generation.wrapping_add(1);
         self.fonts.len() - 1
     }
     pub fn font(&self, id: usize) -> Option<&Font> {
@@ -57,6 +82,11 @@ impl FontDb {
     }
     pub fn font_supports_cluster(&self, id: usize, cluster: &str) -> bool {
         self.font(id).map_or(false, |font| font.supports_cluster(cluster))
+    }
+
+    fn generation(&self) -> u64
+    {
+       self.generation
     }
 }
 
@@ -630,11 +660,36 @@ impl PagedAtlas {
     }
 }
 
-pub struct TextShaper {}
+const COVERAGE_CACHE_CAPACITY: usize = 8_192;
+const FALLBACK_CACHE_CAPACITY: usize = 2_048;
+
+struct FallbackCacheContext
+{
+   font_generation: u64,
+   primary_id: usize,
+   scale_bits: u32,
+   feature_key: u64,
+   fallback_ids: Vec<usize>,
+}
+
+pub struct TextShaper
+{
+   unicode_buffer: Option<UnicodeBuffer>,
+   coverage_cache: HashMap<(usize, char), bool>,
+   fallback_scalar_cache: HashMap<char, usize>,
+   fallback_cluster_cache: HashMap<Box<str>, usize>,
+   fallback_context: Option<FallbackCacheContext>,
+}
 
 impl Default for TextShaper {
     fn default() -> Self {
-        Self {}
+        Self {
+            unicode_buffer: Some(UnicodeBuffer::new()),
+            coverage_cache: HashMap::new(),
+            fallback_scalar_cache: HashMap::new(),
+            fallback_cluster_cache: HashMap::new(),
+            fallback_context: None,
+        }
     }
 }
 
@@ -916,6 +971,7 @@ impl TextShaper {
                 rtl: text_base_direction_is_rtl(text),
             });
         }
+        let use_cache = self.fallback_context_matches(fonts, primary_id, fallback_ids, px);
         let boundaries = grapheme_byte_boundaries(text);
         let mut runs = Vec::with_capacity(fallback_ids.len().saturating_add(1));
         let mut run_font = primary_id;
@@ -923,19 +979,28 @@ impl TextShaper {
         let mut pen = 0.0_f32;
         let mut first = true;
 
-        for pair in boundaries.windows(2) {
-            let cluster = &text[pair[0]..pair[1]];
-            let font_id = fallback_font_for_cluster(fonts, primary_id, fallback_ids, cluster);
+        for index in 0..boundaries.len().saturating_sub(1) {
+            let start = boundaries[index];
+            let end = boundaries[index + 1];
+            let cluster = &text[start..end];
+            let font_id = if use_cache
+            {
+               self.fallback_font_for_cluster(fonts, primary_id, fallback_ids, cluster)
+            }
+            else
+            {
+               fallback_font_for_cluster_uncached(fonts, primary_id, fallback_ids, cluster)
+            };
             if first {
                 run_font = font_id;
-                run_start = pair[0];
+                run_start = start;
                 first = false;
             } else if font_id != run_font {
                 pen = self.append_fallback_shape_run(
-                    fonts, run_font, text, run_start, pair[0], px, pen, &mut runs,
+                    fonts, run_font, text, run_start, start, px, pen, use_cache, &mut runs,
                 )?;
                 run_font = font_id;
-                run_start = pair[0];
+                run_start = start;
             }
         }
         let width = self.append_fallback_shape_run(
@@ -946,8 +1011,13 @@ impl TextShaper {
             text.len(),
             px,
             pen,
+            use_cache,
             &mut runs,
         )?;
+        if !use_cache
+        {
+           self.install_fallback_context(fonts, primary_id, fallback_ids, px);
+        }
         Some(FallbackShape { runs, width, rtl: text_base_direction_is_rtl(text) })
     }
 
@@ -974,6 +1044,7 @@ impl TextShaper {
         end: usize,
         px: f32,
         pen: f32,
+        reuse_buffer: bool,
         runs: &mut Vec<FallbackShapeRun>,
     ) -> Option<f32> {
         if start >= end {
@@ -981,20 +1052,309 @@ impl TextShaper {
         }
         let font = fonts.font(font_id)?;
         let run = &text[start..end];
-        let shape = self.shape(font, font_id, run, px).ok()?.to_owned_shape();
+        let shape = if reuse_buffer
+        {
+           self.shape_owned(font, font_id, run, px)?
+        }
+        else
+        {
+           self.shape(font, font_id, run, px).ok()?.to_owned_shape()
+        };
         let width = shape.width();
         runs.push(FallbackShapeRun { font_id, byte_range: start..end, x_offset: pen, shape });
         Some(pen + width)
     }
+
+    fn shape_owned(&mut self, font: &Font, font_id: usize, text: &str, px: f32) -> Option<OwnedShape>
+    {
+       let rb_face = RbFace::from_slice(&font.data, 0)?;
+       let mut buffer = self.unicode_buffer.take().unwrap_or_else(UnicodeBuffer::new);
+       buffer.push_str(text);
+       let glyphs = rustybuzz::shape(&rb_face, &[], buffer);
+       let rtl = text_base_direction_is_rtl(text);
+       let shape = owned_shape_from_glyph_buffer(font_id, px, rtl, &glyphs);
+       self.unicode_buffer = Some(glyphs.clear());
+       Some(shape)
+    }
+
+    fn fallback_context_matches(&self, fonts: &FontDb, primary_id: usize, fallback_ids: &[usize], px: f32) -> bool
+    {
+       const FEATURE_KEY: u64 = 0;
+       self.fallback_context.as_ref().is_some_and(|context| {
+          context.font_generation == fonts.generation()
+             && context.primary_id == primary_id
+             && context.scale_bits == px.to_bits()
+             && context.feature_key == FEATURE_KEY
+             && context.fallback_ids == fallback_ids
+       })
+    }
+
+    fn install_fallback_context(&mut self, fonts: &FontDb, primary_id: usize, fallback_ids: &[usize], px: f32)
+    {
+       const FEATURE_KEY: u64 = 0;
+       self.coverage_cache.clear();
+       self.fallback_scalar_cache.clear();
+       self.fallback_cluster_cache.clear();
+       let context = self.fallback_context.get_or_insert_with(|| FallbackCacheContext {
+          font_generation: fonts.generation(),
+          primary_id,
+          scale_bits: px.to_bits(),
+          feature_key: FEATURE_KEY,
+          fallback_ids: Vec::new(),
+       });
+       context.font_generation = fonts.generation();
+       context.primary_id = primary_id;
+       context.scale_bits = px.to_bits();
+       context.feature_key = FEATURE_KEY;
+       context.fallback_ids.clear();
+       context.fallback_ids.extend_from_slice(fallback_ids);
+    }
+
+    fn fallback_font_for_cluster(&mut self, fonts: &FontDb, primary_id: usize, fallback_ids: &[usize], cluster: &str) -> usize
+    {
+       let mut chars = cluster.chars();
+       let first = chars.next();
+       let scalar = first.filter(|_| chars.next().is_none());
+       let cached = match scalar
+       {
+          Some(ch) => self.fallback_scalar_cache.get(&ch).copied(),
+          None => self.fallback_cluster_cache.get(cluster).copied(),
+       };
+       if let Some(font_id) = cached
+       {
+          return font_id;
+       }
+       let mut font_id = primary_id;
+       if !self.font_supports_cluster_cached(fonts, primary_id, cluster)
+       {
+          for fallback_id in fallback_ids.iter().copied()
+          {
+             if self.font_supports_cluster_cached(fonts, fallback_id, cluster)
+             {
+                font_id = fallback_id;
+                break;
+             }
+          }
+       }
+       if self.fallback_scalar_cache.len().saturating_add(self.fallback_cluster_cache.len()) == FALLBACK_CACHE_CAPACITY
+       {
+          self.fallback_scalar_cache.clear();
+          self.fallback_cluster_cache.clear();
+       }
+       match scalar
+       {
+          Some(ch) => {
+             self.fallback_scalar_cache.insert(ch, font_id);
+          }
+          None => {
+             self.fallback_cluster_cache.insert(Box::from(cluster), font_id);
+          }
+       }
+       font_id
+    }
+
+    fn font_supports_cluster_cached(&mut self, fonts: &FontDb, font_id: usize, cluster: &str) -> bool
+    {
+       let font = match fonts.font(font_id)
+       {
+          Some(font) => font,
+          None => return false,
+       };
+       let mut complete = true;
+       let mut supported = true;
+       for ch in cluster.chars()
+       {
+          match self.coverage_cache.get(&(font_id, ch)).copied()
+          {
+             Some(value) => supported &= value,
+             None => complete = false,
+          }
+       }
+       if complete
+       {
+          return supported;
+       }
+       let Ok(face) = TtfFace::parse(&font.data, 0) else
+       {
+          return false;
+       };
+       let missing = cluster.chars().filter(|ch| !self.coverage_cache.contains_key(&(font_id, *ch))).count();
+       if self.coverage_cache.len().saturating_add(missing) > COVERAGE_CACHE_CAPACITY
+       {
+          self.coverage_cache.clear();
+       }
+       supported = true;
+       for ch in cluster.chars()
+       {
+          let value = match self.coverage_cache.get(&(font_id, ch)).copied()
+          {
+             Some(value) => value,
+             None => {
+                let value = cluster_char_supported(&face, ch);
+                self.coverage_cache.insert((font_id, ch), value);
+                value
+             }
+          };
+          supported &= value;
+       }
+       supported
+    }
+}
+
+const SDF_SPREAD: i32 = 8;
+const EDT_INFINITY: i32 = 1_000_000_000;
+
+#[derive(Default)]
+struct SdfScratch
+{
+   intermediate: Vec<i32>,
+   distances: Vec<i32>,
+   line_input: Vec<i32>,
+   line_output: Vec<i32>,
+   sites: Vec<usize>,
+   edges: Vec<f64>,
+   output: Vec<u8>,
+}
+
+impl SdfScratch
+{
+   fn generate(&mut self, coverage: &[u8], width: usize, height: usize) -> &[u8]
+   {
+      let len = width.saturating_mul(height);
+      self.output.resize(len, 0);
+      if width == 0 || height == 0 || coverage.len() < len
+      {
+         self.output.fill(0);
+         return &self.output;
+      }
+
+      self.distance_transform(coverage, width, height, true);
+      for index in 0..len
+      {
+         if coverage[index] < 128
+         {
+            self.output[index] = sdf_value(-self.distances[index]);
+         }
+      }
+      self.distance_transform(coverage, width, height, false);
+      for index in 0..len
+      {
+         if coverage[index] >= 128
+         {
+            self.output[index] = sdf_value(self.distances[index]);
+         }
+      }
+      &self.output
+   }
+
+   fn distance_transform(&mut self, coverage: &[u8], width: usize, height: usize, feature_inside: bool)
+   {
+      let len = width * height;
+      let axis_len = width.max(height);
+      self.intermediate.resize(len, EDT_INFINITY);
+      self.distances.resize(len, EDT_INFINITY);
+      self.line_input.resize(axis_len, EDT_INFINITY);
+      self.line_output.resize(axis_len, EDT_INFINITY);
+      self.sites.resize(axis_len, 0);
+      self.edges.resize(axis_len.saturating_add(1), f64::INFINITY);
+
+      for x in 0..width
+      {
+         for y in 0..height
+         {
+            let inside = coverage[y * width + x] >= 128;
+            self.line_input[y] = if inside == feature_inside { 0 } else { EDT_INFINITY };
+         }
+         squared_distance_transform_1d(
+            &self.line_input[..height],
+            &mut self.line_output[..height],
+            &mut self.sites[..height],
+            &mut self.edges[..height + 1],
+         );
+         for y in 0..height
+         {
+            self.intermediate[y * width + x] = self.line_output[y];
+         }
+      }
+
+      for y in 0..height
+      {
+         let start = y * width;
+         self.line_input[..width].copy_from_slice(&self.intermediate[start..start + width]);
+         squared_distance_transform_1d(
+            &self.line_input[..width],
+            &mut self.line_output[..width],
+            &mut self.sites[..width],
+            &mut self.edges[..width + 1],
+         );
+         self.distances[start..start + width].copy_from_slice(&self.line_output[..width]);
+      }
+   }
+}
+
+fn squared_distance_transform_1d(input: &[i32], output: &mut [i32], sites: &mut [usize], edges: &mut [f64])
+{
+   if input.is_empty()
+   {
+      return;
+   }
+   let mut envelope = 0usize;
+   sites[0] = 0;
+   edges[0] = f64::NEG_INFINITY;
+   edges[1] = f64::INFINITY;
+   for q in 1..input.len()
+   {
+      let mut intersection = parabola_intersection(input, q, sites[envelope]);
+      while intersection <= edges[envelope]
+      {
+         envelope -= 1;
+         intersection = parabola_intersection(input, q, sites[envelope]);
+      }
+      envelope += 1;
+      sites[envelope] = q;
+      edges[envelope] = intersection;
+      edges[envelope + 1] = f64::INFINITY;
+   }
+
+   envelope = 0;
+   for q in 0..input.len()
+   {
+      while edges[envelope + 1] < q as f64
+      {
+         envelope += 1;
+      }
+      let delta = q as i32 - sites[envelope] as i32;
+      output[q] = delta.saturating_mul(delta).saturating_add(input[sites[envelope]]);
+   }
+}
+
+fn parabola_intersection(input: &[i32], right: usize, left: usize) -> f64
+{
+   let right = right as i64;
+   let left = left as i64;
+   let numerator = input[right as usize] as i64 + right * right
+      - input[left as usize] as i64 - left * left;
+   numerator as f64 / (2 * (right - left)) as f64
+}
+
+fn sdf_value(signed_squared_distance: i32) -> u8
+{
+   let sign = if signed_squared_distance < 0 { -1.0 } else { 1.0 };
+   let squared = signed_squared_distance.unsigned_abs().min(((SDF_SPREAD + 1) * (SDF_SPREAD + 1)) as u32);
+   let signed = sign * (squared as f32).sqrt();
+   let value = (0.5 + signed / (2.0 * SDF_SPREAD as f32)).clamp(0.0, 1.0);
+   (value * 255.0).round() as u8
 }
 
 pub struct RasterCtx {
     scale: ScaleContext,
+    image: Image,
+    sdf: SdfScratch,
 }
 
 impl Default for RasterCtx {
     fn default() -> Self {
-        Self { scale: ScaleContext::new() }
+        Self { scale: ScaleContext::new(), image: Image::new(), sdf: SdfScratch::default() }
     }
 }
 
@@ -1519,6 +1879,28 @@ impl OwnedShape {
     }
 }
 
+fn owned_shape_from_glyph_buffer(font_id: usize, px: f32, rtl: bool, buffer: &RbGlyphs) -> OwnedShape
+{
+   let infos = buffer.glyph_infos();
+   let positions = buffer.glyph_positions();
+   let mut glyphs = Vec::with_capacity(infos.len());
+   for (info, position) in infos.iter().zip(positions.iter())
+   {
+      glyphs.push(ShapedGlyph {
+         glyph_id: info.glyph_id as u16,
+         cluster: info.cluster as usize,
+         x_advance: position.x_advance,
+         y_advance: position.y_advance,
+      });
+   }
+   if rtl && clusters_are_descending(glyphs.iter().map(|glyph| glyph.cluster))
+   {
+      glyphs.reverse();
+   }
+   let width = glyphs.iter().map(|glyph| glyph.x_advance as f32 / 64.0).sum();
+   OwnedShape { font_id, glyphs, px, width, rtl }
+}
+
 pub struct ShapeOutput<'a> {
     font: &'a Font,
     font_id: usize,
@@ -1823,28 +2205,22 @@ fn grapheme_strong_direction(cluster: &str) -> Option<TextDirection> {
     None
 }
 
-fn fallback_font_for_cluster(
-    fonts: &FontDb,
-    primary_id: usize,
-    fallback_ids: &[usize],
-    cluster: &str,
-) -> usize {
-    if fonts.font_supports_cluster(primary_id, cluster) {
-        return primary_id;
-    }
-    for fallback_id in fallback_ids {
-        if fonts.font_supports_cluster(*fallback_id, cluster) {
-            return *fallback_id;
-        }
-    }
-    primary_id
-}
-
 fn cluster_char_supported(face: &TtfFace<'_>, ch: char) -> bool {
     ch.is_control()
         || ch.is_whitespace()
         || matches!(ch as u32, 0x200C..=0x200D | 0xFE00..=0xFE0F)
         || face.glyph_index(ch).is_some()
+}
+
+fn fallback_font_for_cluster_uncached(fonts: &FontDb, primary_id: usize, fallback_ids: &[usize], cluster: &str) -> usize
+{
+   if fonts.font_supports_cluster(primary_id, cluster)
+   {
+      return primary_id;
+   }
+   fallback_ids.iter().copied()
+      .find(|font_id| fonts.font_supports_cluster(*font_id, cluster))
+      .unwrap_or(primary_id)
 }
 
 fn text_base_direction_is_rtl(text: &str) -> bool {
@@ -1921,19 +2297,25 @@ where
 }
 
 fn grapheme_byte_boundaries(text: &str) -> Vec<usize> {
+    let mut boundaries = Vec::new();
+    fill_grapheme_byte_boundaries(text, &mut boundaries);
+    boundaries
+}
+
+fn fill_grapheme_byte_boundaries(text: &str, boundaries: &mut Vec<usize>)
+{
+    boundaries.clear();
     if text.is_ascii() {
-        let mut boundaries = Vec::with_capacity(text.len() + 1);
+        boundaries.reserve(text.len() + 1);
         for index in 0..=text.len() {
             boundaries.push(index);
         }
-        return boundaries;
+        return;
     }
-    let mut boundaries = Vec::new();
     for (index, _) in UnicodeSegmentation::grapheme_indices(text, true) {
         boundaries.push(index);
     }
     boundaries.push(text.len());
-    boundaries
 }
 
 fn add_prefix_width(widths: &mut [f32], boundaries: &[usize], end: usize, width: f32) {
@@ -2029,6 +2411,7 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
     let mut rasterizations = 0_u64;
     let glyph_cache_queries = glyphs.len() as u64;
     let rgba = pack_rgba(color);
+    let RasterCtx { scale: scale_context, image: img, sdf: sdf_scratch } = raster;
 
     for glyph in glyphs.iter().copied() {
         let key =
@@ -2053,14 +2436,14 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
             cached
         } else {
             glyph_cache_misses = glyph_cache_misses.wrapping_add(1);
-            let mut img = Image::new();
+            img.clear();
             if scaler.is_none() {
-                let Some(fontref) = swash::FontRef::from_index(&font.data, 0) else {
+                let Some(fontref) = font.swash_ref() else {
                     pen_x += glyph.x_advance as f32 / 64.0;
                     pen_y += glyph.y_advance as f32 / 64.0;
                     continue;
                 };
-                scaler = Some(raster.scale.builder(fontref).size(px).hint(true).build());
+                scaler = Some(scale_context.builder(fontref).size(px).hint(true).build());
             }
             let Some(scaler) = scaler.as_mut() else {
                 pen_x += glyph.x_advance as f32 / 64.0;
@@ -2069,7 +2452,7 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
             };
             let render = render.get_or_insert_with(|| Render::new(&[Source::Outline]));
             rasterizations = rasterizations.wrapping_add(1);
-            if !render.render_into(scaler, glyph.glyph_id, &mut img) {
+            if !render.render_into(scaler, glyph.glyph_id, img) {
                 let page = &mut atlas.pages[0];
                 atlas.clock = atlas.clock.wrapping_add(1);
                 let generation = page.next_slot_generation;
@@ -2119,39 +2502,13 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
             };
             let page = &mut atlas.pages[page_index];
             if use_sdf {
-                let mut sdf_row = vec![0u8; aw as usize];
-                let spread = 8_i32;
-                for yy in 0..ah as i32 {
-                    for xx in 0..aw as i32 {
-                        let idx = (yy as usize) * (aw as usize) + (xx as usize);
-                        let a = img.data[idx] as f32 / 255.0;
-                        let inside = a > 0.5;
-                        let mut min_d2 = (spread + 1) * (spread + 1);
-                        for dy in -spread..=spread {
-                            let y2 = yy + dy;
-                            if y2 < 0 || y2 >= ah as i32 {
-                                continue;
-                            }
-                            for dx in -spread..=spread {
-                                let x2 = xx + dx;
-                                if x2 < 0 || x2 >= aw as i32 {
-                                    continue;
-                                }
-                                let j = (y2 as usize) * (aw as usize) + (x2 as usize);
-                                let inside2 = (img.data[j] as f32 / 255.0) > 0.5;
-                                if inside2 != inside {
-                                    min_d2 = min_d2.min(dx * dx + dy * dy);
-                                }
-                            }
-                        }
-                        let distance = (min_d2 as f32).sqrt();
-                        let signed = if inside { distance } else { -distance };
-                        let value = (0.5 + signed / (2.0 * spread as f32)).clamp(0.0, 1.0);
-                        sdf_row[xx as usize] = (value * 255.0).round() as u8;
-                    }
-                    let offset = (ay as usize + yy as usize) * page.atlas.width as usize
+                let sdf = sdf_scratch.generate(&img.data, aw as usize, ah as usize);
+                for yy in 0..ah as usize {
+                    let source = yy * aw as usize;
+                    let offset = (ay as usize + yy) * page.atlas.width as usize
                         + ax as usize;
-                    page.atlas.data[offset..offset + aw as usize].copy_from_slice(&sdf_row);
+                    page.atlas.data[offset..offset + aw as usize]
+                        .copy_from_slice(&sdf[source..source + aw as usize]);
                 }
             } else {
                 for row in 0..ah as usize {
@@ -2287,6 +2644,7 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
     let mut glyph_cache_queries = glyphs.len() as u64;
     let mut glyph_cache_misses = 0_u64;
     let mut rasterizations = 0_u64;
+    let RasterCtx { scale: scale_context, image: img, sdf: sdf_scratch } = raster;
 
     for (glyph_index, glyph) in glyphs.iter().copied().enumerate() {
         let key =
@@ -2299,14 +2657,14 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
             if COUNT_STATS {
                 glyph_cache_misses = glyph_cache_misses.wrapping_add(1);
             }
-            let mut img = Image::new();
+            img.clear();
             if scaler.is_none() {
-                let Some(fontref) = swash::FontRef::from_index(&font.data, 0) else {
+                let Some(fontref) = font.swash_ref() else {
                     pen_x += glyph.x_advance as f32 / 64.0;
                     pen_y += glyph.y_advance as f32 / 64.0;
                     continue;
                 };
-                scaler = Some(raster.scale.builder(fontref).size(px).hint(true).build());
+                scaler = Some(scale_context.builder(fontref).size(px).hint(true).build());
             }
             let Some(scaler) = scaler.as_mut() else {
                 pen_x += glyph.x_advance as f32 / 64.0;
@@ -2317,7 +2675,7 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
             if COUNT_STATS {
                 rasterizations = rasterizations.wrapping_add(1);
             }
-            if !render.render_into(scaler, glyph.glyph_id, &mut img) {
+            if !render.render_into(scaler, glyph.glyph_id, img) {
                 cache_empty_glyph_entry(atlas, key, 0, 0);
                 pen_x += glyph.x_advance as f32 / 64.0;
                 pen_y += glyph.y_advance as f32 / 64.0;
@@ -2355,43 +2713,13 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
                 }
             };
             if use_sdf {
-                let mut sdf_row = vec![0u8; aw as usize];
-                let spread: i32 = 8;
-                for yy in 0..ah as i32 {
-                    for xx in 0..aw as i32 {
-                        let idx = (yy as usize) * (aw as usize) + (xx as usize);
-                        let a = img.data[idx] as f32 / 255.0;
-                        let inside = a > 0.5;
-                        let mut min_d2 = ((spread + 1) * (spread + 1)) as i32;
-                        for dy in -spread..=spread {
-                            let y2 = yy + dy;
-                            if y2 < 0 || y2 >= ah as i32 {
-                                continue;
-                            }
-                            for dx in -spread..=spread {
-                                let x2 = xx + dx;
-                                if x2 < 0 || x2 >= aw as i32 {
-                                    continue;
-                                }
-                                let j = (y2 as usize) * (aw as usize) + (x2 as usize);
-                                let a2 = img.data[j] as f32 / 255.0;
-                                let inside2 = a2 > 0.5;
-                                if inside2 != inside {
-                                    let d2 = dx * dx + dy * dy;
-                                    if d2 < min_d2 {
-                                        min_d2 = d2;
-                                    }
-                                }
-                            }
-                        }
-                        let dist = (min_d2 as f32).sqrt();
-                        let sd = if inside { dist } else { -dist };
-                        let v = (0.5 + sd / (2.0 * spread as f32)).clamp(0.0, 1.0);
-                        sdf_row[xx as usize] = (v * 255.0).round() as u8;
-                    }
-                    let dst_y = (ay as usize) + (yy as usize);
+                let sdf = sdf_scratch.generate(&img.data, aw as usize, ah as usize);
+                for yy in 0..ah as usize {
+                    let source = yy * aw as usize;
+                    let dst_y = ay as usize + yy;
                     let dst_off = (dst_y * (atlas.width as usize)) + (ax as usize);
-                    atlas.data[dst_off..dst_off + (aw as usize)].copy_from_slice(&sdf_row);
+                    atlas.data[dst_off..dst_off + aw as usize]
+                        .copy_from_slice(&sdf[source..source + aw as usize]);
                 }
             } else {
                 for row in 0..ah as usize {
@@ -2504,4 +2832,161 @@ fn push_i(indices: &mut Vec<u16>, a: u32, b: u32, c: u32) {
     indices.push(a as u16);
     indices.push(b as u16);
     indices.push(c as u16);
+}
+
+#[cfg(test)]
+mod sdf_tests
+{
+   use super::*;
+
+   const SDF_VALUE_TOLERANCE: u8 = 0;
+   const LATIN_FONT: &[u8] = include_bytes!("../tests/fixtures/test_text_latin.ttf");
+   const CJK_FONT: &[u8] = include_bytes!("../tests/fixtures/test_text_cjk.ttf");
+
+   #[test]
+   fn exact_edt_matches_brute_force_for_holes_thin_strokes_and_edges()
+   {
+      let mut hole = vec![0_u8; 19 * 19];
+      for y in 2..17
+      {
+         for x in 2..17
+         {
+            if !(6..13).contains(&x) || !(6..13).contains(&y)
+            {
+               hole[y * 19 + x] = 255;
+            }
+         }
+      }
+      assert_reference_match(&hole, 19, 19, "hole");
+
+      let mut strokes = vec![0_u8; 23 * 11];
+      for x in 0..23
+      {
+         strokes[5 * 23 + x] = 255;
+         strokes[(x % 11) * 23 + x] = 255;
+      }
+      assert_reference_match(&strokes, 23, 11, "thin strokes");
+   }
+
+   #[test]
+   fn exact_edt_matches_raster_reference_for_script_scale_and_size_matrix()
+   {
+      for (font, text, script) in [
+         (LATIN_FONT, "O8BgjMW", "Latin"),
+         (CJK_FONT, "漢字かな", "CJK"),
+      ]
+      {
+         for (scale, px) in [(2.0_f32, 48.0_f32), (2.0, 96.0), (3.0, 48.0), (3.0, 96.0)]
+         {
+            assert_raster_reference_match(font, text, scale, px, script);
+         }
+      }
+   }
+
+   #[test]
+   fn fallback_cache_invalidates_on_scale_and_stays_bounded()
+   {
+      let mut fonts = FontDb::default();
+      let latin = fonts.add_font(Font::from_bytes(LATIN_FONT.to_vec()));
+      let cjk = fonts.add_font(Font::from_bytes(CJK_FONT.to_vec()));
+      let mut shaper = TextShaper::default();
+      let text = "Latin 漢字";
+
+      let _ = shaper.shape_with_fallback_fonts(&fonts, latin, &[cjk], text, 48.0);
+      let _ = shaper.shape_with_fallback_fonts(&fonts, latin, &[cjk], text, 48.0);
+      assert!(!shaper.coverage_cache.is_empty());
+      assert!(!shaper.fallback_scalar_cache.is_empty());
+
+      let _ = shaper.shape_with_fallback_fonts(&fonts, latin, &[cjk], text, 96.0);
+      assert!(shaper.coverage_cache.is_empty());
+      assert!(shaper.fallback_scalar_cache.is_empty());
+
+      for index in 0..FALLBACK_CACHE_CAPACITY
+      {
+         let ch = char::from_u32(index as u32 + 1).expect("bounded scalar key");
+         shaper.fallback_scalar_cache.insert(ch, latin);
+      }
+      let _ = shaper.fallback_font_for_cluster(&fonts, latin, &[cjk], "漢");
+      assert_eq!(shaper.fallback_scalar_cache.len(), 1);
+      assert!(shaper.fallback_cluster_cache.is_empty());
+   }
+
+   fn assert_raster_reference_match(data: &[u8], text: &str, scale: f32, px: f32, script: &str)
+   {
+      let font = Font::from_bytes(data.to_vec());
+      let mut shaper = TextShaper::default();
+      let shaped = shaper.shape(&font, 0, text, px).expect("shape reference text");
+      let glyphs = shaped.raw_glyphs();
+      let mut scale_context = ScaleContext::new();
+      let font_ref = font.swash_ref().expect("parsed test font");
+      let mut scaler = scale_context.builder(font_ref).size(px).hint(true).build();
+      let render = Render::new(&[Source::Outline]);
+      let mut image = Image::new();
+      for glyph in glyphs
+      {
+         image.clear();
+         assert!(render.render_into(&mut scaler, glyph.glyph_id, &mut image));
+         if image.data.is_empty()
+         {
+            continue;
+         }
+         let label = format!("{script} {scale}x {px}px glyph {}", glyph.glyph_id);
+         assert_reference_match(
+            &image.data,
+            image.placement.width as usize,
+            image.placement.height as usize,
+            &label,
+         );
+      }
+   }
+
+   fn assert_reference_match(coverage: &[u8], width: usize, height: usize, label: &str)
+   {
+      let mut scratch = SdfScratch::default();
+      let exact = scratch.generate(coverage, width, height);
+      let reference = brute_force_sdf(coverage, width, height);
+      assert_eq!(exact.len(), reference.len(), "{label} length");
+      let max_delta = exact.iter().zip(reference.iter())
+         .map(|(left, right)| left.abs_diff(*right))
+         .max()
+         .unwrap_or(0);
+      assert!(max_delta <= SDF_VALUE_TOLERANCE, "{label} SDF delta {max_delta}");
+   }
+
+   fn brute_force_sdf(coverage: &[u8], width: usize, height: usize) -> Vec<u8>
+   {
+      let mut output = vec![0_u8; width * height];
+      for y in 0..height as i32
+      {
+         for x in 0..width as i32
+         {
+            let index = y as usize * width + x as usize;
+            let inside = coverage[index] >= 128;
+            let mut distance = (SDF_SPREAD + 1) * (SDF_SPREAD + 1);
+            for dy in -SDF_SPREAD..=SDF_SPREAD
+            {
+               let sample_y = y + dy;
+               if sample_y < 0 || sample_y >= height as i32
+               {
+                  continue;
+               }
+               for dx in -SDF_SPREAD..=SDF_SPREAD
+               {
+                  let sample_x = x + dx;
+                  if sample_x < 0 || sample_x >= width as i32
+                  {
+                     continue;
+                  }
+                  let sample = sample_y as usize * width + sample_x as usize;
+                  if (coverage[sample] >= 128) != inside
+                  {
+                     distance = distance.min(dx * dx + dy * dy);
+                  }
+               }
+            }
+            output[index] = sdf_value(if inside { distance } else { -distance });
+         }
+      }
+      output
+   }
 }

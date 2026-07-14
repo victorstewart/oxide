@@ -39,9 +39,12 @@
   Shapes CJK text and verifies atlas output.
 - `missing_glyph_is_skipped`
   Verifies whitespace or missing visible glyphs do not create geometry.
+- `fallback_decisions_invalidate_for_font_database_and_chain_changes`
+  Verifies a newly added fallback font and a changed fallback chain cannot reuse stale cached coverage or font decisions.
 
 ## Logic narrative
 - Tests load fixed Latin and CJK fixture fonts to avoid platform font differences.
+- The library's test-only SDF oracle compares the exact EDT with the retired 17x17 search at a predeclared zero-byte tolerance for synthetic holes/thin strokes and the Latin/CJK 2x/3x by 48/96 px glyph matrix.
 - Prefix-width tests derive caret positions from one shaped run, compare the result against repeated prefix shaping where that is a valid ASCII oracle, and verify owned-run cache reuse does not change the cursor map.
 - Cursor-map tests validate both the shaped width table and UTF-8 byte ranges, so text input code cannot split combining or ZWJ clusters while mapping pointer x positions.
 - Atlas-pressure coverage uses a deliberately small atlas and feeds unique glyphs until a stale slot must be reused.
@@ -86,6 +89,7 @@ cargo test --locked -p oxide-text --test shaping_tests
 ```
 
 ## Changelog
+- 2026-07-14: added fallback cache invalidation coverage and documented the exact zero-tolerance SDF reference matrix.
 - 2026-07-14: added whole-frame pin coverage for pre-existing visible glyph slots.
 - 2026-06-01: added full-slot clear/dirty coverage for smaller replacement glyphs reusing larger evicted atlas slots.
 - 2026-05-31: added shaped cursor-map tests for combining-grapheme byte ranges and ZWJ cluster atomicity.
