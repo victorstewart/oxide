@@ -280,6 +280,18 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       }
    }
 
+   for (id, dirty) in [
+      ("gpu.architecture.prepared_layers.clean_100x100", false),
+      ("gpu.architecture.prepared_layers.one_dirty_100x100", true),
+      ("gpu.authoring.retained_snapshot.prepared_layers_clean_100x100", false),
+   ]
+   {
+      if perf_case_allowed(id)
+      {
+         cases.push(metal_prepared_layer_case(id, smoke, dirty)?);
+      }
+   }
+
    let dynamic_property_id = "gpu.architecture.animation.dynamic_properties_300";
    if perf_case_allowed(dynamic_property_id)
    {
@@ -644,6 +656,202 @@ pub(super) fn metal_prepared_chunk_case(id: &str, smoke: bool, dirty: bool) -> R
          "Persistent Metal buffers rebuild exactly one alternating geometry revision while the other 255 chunks remain reusable."
       } else {
          "Persistent Metal buffers replay 256 mixed immutable chunks while a dynamic transform property changes without geometry uploads."
+      })],
+      metrics,
+   })
+}
+
+fn prepared_layer_matrix_snapshot(first_geometry_revision: u64, first_dirty: bool) -> api::RenderSnapshot
+{
+   let mut instances = Vec::with_capacity(100);
+   for layer in 0..100_usize
+   {
+      let mut list = api::DrawList::default();
+      list.items.reserve(100);
+      for draw in 0..100_usize
+      {
+         list.items.push(api::DrawCmd::RRect {
+            rect: api::RectF::new(
+               (draw % 10) as f32 * 9.0 + 2.0,
+               (draw / 10) as f32 * 6.0 + 2.0,
+               7.0,
+               4.0,
+            ),
+            radii: [1.0; 4],
+            color: api::Color::rgba(
+               0.18 + (layer % 5) as f32 * 0.07,
+               0.48,
+               0.88,
+               0.92,
+            ),
+         });
+      }
+      let chunk = api::RenderChunk::new(
+         api::RenderChunkId(29_000 + layer as u64),
+         api::RenderChunkRevisions {
+            structural: 1,
+            geometry: if layer == 0 { first_geometry_revision } else { 1 },
+            resource: 0,
+            dynamic_properties: 0,
+         },
+         list,
+         api::ChunkIndexMode::Local,
+         &[],
+      ).expect("prepared layer benchmark chunk");
+      let mut instance = api::RenderChunkInstance::new(
+         chunk,
+         [
+            (layer % 10) as f32 * 116.0 + 10.0,
+            (layer / 10) as f32 * 76.0 + 10.0,
+         ],
+      );
+      instance.layer = Some(api::RenderLayerInstance {
+         id: 29_000 + layer as u32,
+         rect: api::RectF::new(0.0, 0.0, 96.0, 64.0),
+         dirty: first_dirty && layer == 0,
+      });
+      instances.push(instance);
+   }
+   api::RenderSnapshot::new(
+      instances,
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("prepared layer benchmark snapshot")
+}
+
+fn metal_prepared_layer_case(id: &str, smoke: bool, dirty: bool) -> Result<PerfCaseResult>
+{
+   let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating prepared-layer Metal renderer")?);
+   renderer.resize(1_200, 800, 1.0).context("resizing prepared-layer Metal renderer")?;
+   renderer.set_memory_stats_enabled_for_benchmark(true);
+   let snapshot_a = prepared_layer_matrix_snapshot(1, dirty);
+   let snapshot_b = prepared_layer_matrix_snapshot(1, dirty);
+   let flat_control = std::env::var_os("OXIDE_C29_FLAT_CONTROL").is_some();
+   let mut flat_a = api::DrawList::default();
+   let mut flat_b = api::DrawList::default();
+   if flat_control
+   {
+      snapshot_a.flatten_into(&mut flat_a).context("flattening C29 control A")?;
+      snapshot_b.flatten_into(&mut flat_b).context("flattening C29 control B")?;
+   }
+   let warmups = std::env::var("OXIDE_ARCHITECTURE_METAL_WARMUPS")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|warmups| *warmups > 0)
+      .unwrap_or(if smoke { 2 } else { 8 });
+   let frames = std::env::var("OXIDE_ARCHITECTURE_METAL_FRAMES")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|frames| *frames > 0)
+      .unwrap_or(if smoke { 4 } else { 24 });
+   let raw_samples = std::env::var_os("OXIDE_C29_RAW_SAMPLES").is_some();
+   let mut frame_samples = Vec::with_capacity(frames);
+   let mut encode_samples = Vec::with_capacity(frames);
+   let mut gpu_samples = Vec::with_capacity(frames);
+   let mut body_scans = 0_u64;
+   let mut body_copies = 0_u64;
+   let mut geometry_copies = 0_u64;
+   let mut uploads = 0_u64;
+   let mut texture_creates = 0_u64;
+   let mut cache_hits = 0_u64;
+   let mut cache_misses = 0_u64;
+   let mut offscreen_draws = 0_u64;
+   let mut render_passes = 0_u64;
+   let mut draws = 0_u64;
+   let mut chunks_prepared = 0_u64;
+   let mut layer_bytes_peak = 0_u64;
+
+   for frame in 0..warmups.saturating_add(frames)
+   {
+      let use_b = dirty && frame & 1 == 1;
+      let snapshot = if use_b { &snapshot_b } else { &snapshot_a };
+      let started_at = Instant::now();
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      let frame_id = token.0;
+      if flat_control
+      {
+         renderer.encode_pass(if use_b { &flat_b } else { &flat_a });
+      }
+      else
+      {
+         renderer.encode_snapshot(snapshot).with_context(|| format!("encoding {id}"))?;
+      }
+      renderer.submit(token).with_context(|| format!("submitting {id}"))?;
+      let stats = last_metal_stats_after_submit(&renderer, frame_id);
+      if frame < warmups
+      {
+         continue;
+      }
+      frame_samples.push(started_at.elapsed().as_secs_f64() * 1_000.0);
+      encode_samples.push(stats.encode_ms);
+      gpu_samples.push(stats.gpu_ms);
+      body_scans = body_scans.saturating_add(stats.layer_body_commands_scanned);
+      body_copies = body_copies.saturating_add(stats.layer_body_commands_copied);
+      geometry_copies = geometry_copies.saturating_add(stats.geometry_bytes_copied);
+      uploads = uploads.saturating_add(stats.buffer_upload_bytes);
+      texture_creates = texture_creates.saturating_add(u64::from(stats.layer_texture_creates));
+      cache_hits = cache_hits.saturating_add(u64::from(stats.layer_cache_hits));
+      cache_misses = cache_misses.saturating_add(u64::from(stats.layer_cache_misses));
+      offscreen_draws = offscreen_draws.saturating_add(stats.layer_offscreen_draws);
+      render_passes = render_passes.saturating_add(u64::from(stats.render_passes));
+      draws = draws.saturating_add(u64::from(stats.draws));
+      chunks_prepared = chunks_prepared.saturating_add(stats.chunks_prepared);
+      layer_bytes_peak = layer_bytes_peak.max(stats.memory.layer_cache_bytes);
+   }
+
+   let summary = summarize(&frame_samples);
+   let measured = frames.max(1) as f64;
+   let (layer, scenario, variant, cache_state, refresh_mode) = perf_case_contract_metadata(id, "architecture");
+   let mut metrics = BTreeMap::new();
+   insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+   insert_distribution_metrics(&mut metrics, "encode_ms", &encode_samples);
+   insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+   insert_frame_pacing_metrics(&mut metrics, &frame_samples);
+   metrics.insert(String::from("layers"), 100.0);
+   metrics.insert(String::from("draws_per_layer"), 100.0);
+   metrics.insert(String::from("dirty_layers_per_frame"), if dirty { 1.0 } else { 0.0 });
+   metrics.insert(String::from("layer_body_commands_scanned_avg"), body_scans as f64 / measured);
+   metrics.insert(String::from("layer_body_commands_copied_avg"), body_copies as f64 / measured);
+   metrics.insert(String::from("geometry_bytes_copied_avg"), geometry_copies as f64 / measured);
+   metrics.insert(String::from("buffer_upload_bytes_avg"), uploads as f64 / measured);
+   metrics.insert(String::from("layer_texture_creates_avg"), texture_creates as f64 / measured);
+   metrics.insert(String::from("layer_cache_hits_avg"), cache_hits as f64 / measured);
+   metrics.insert(String::from("layer_cache_misses_avg"), cache_misses as f64 / measured);
+   metrics.insert(String::from("layer_offscreen_draws_avg"), offscreen_draws as f64 / measured);
+   metrics.insert(String::from("render_passes_avg"), render_passes as f64 / measured);
+   metrics.insert(String::from("draws_avg"), draws as f64 / measured);
+   metrics.insert(String::from("chunks_prepared_avg"), chunks_prepared as f64 / measured);
+   metrics.insert(String::from("layer_cache_bytes_peak"), layer_bytes_peak as f64);
+   metrics.insert(String::from("flat_control"), if flat_control { 1.0 } else { 0.0 });
+   if raw_samples
+   {
+      insert_indexed_samples(&mut metrics, "c29_raw_frame_ms", &frame_samples);
+      insert_indexed_samples(&mut metrics, "c29_raw_encode_ms", &encode_samples);
+      insert_indexed_samples(&mut metrics, "c29_raw_gpu_ms", &gpu_samples);
+   }
+   Ok(PerfCaseResult {
+      id: String::from(id),
+      family: String::from(if id.contains(".authoring.") { "authoring" } else { "architecture" }),
+      layer: String::from(layer),
+      scenario: String::from(scenario),
+      variant: String::from(variant),
+      cache_state: String::from(cache_state),
+      refresh_mode: String::from(refresh_mode),
+      unit: String::from("ms/frame"),
+      gated: true,
+      threshold_pct: 0.20,
+      median: summary.median,
+      p95: summary.p95,
+      p99: summary.p99,
+      min: summary.min,
+      max: summary.max,
+      mean: summary.mean,
+      samples: frame_samples.len(),
+      ops_per_sample: 1,
+      notes: vec![String::from(if dirty {
+         "One of one hundred retained layers is explicitly dirty and refreshes once from its prepared body while ninety-nine layers composite body-free."
+      } else {
+         "One hundred retained layers with one hundred draws each composite from generation-keyed Metal textures without body traversal."
       })],
       metrics,
    })

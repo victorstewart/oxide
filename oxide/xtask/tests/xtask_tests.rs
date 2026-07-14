@@ -125,6 +125,10 @@ fn oxide_device_contract_source_lists_canonical_families() {
 fn experiment_manifest_checker_accepts_current_manifest() {
     let text = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../perf-experiments.toml"));
     for id in [
+        "c29-metal-prepared-layers",
+        "c29-main-format-opaque-rrect-layers-rejected",
+        "c29-rgba16-opaque-rrect-layers-rejected",
+        "c29-all-rgba32-layers-rejected",
         "c28-retained-paint-damage",
         "c28-revision-only-paint-state-rejected",
         "native-audit-row-retirement",
@@ -203,7 +207,7 @@ fn experiment_manifest_checker_accepts_current_manifest() {
         check_experiment_manifest_text(text, "2026-06-22").expect("current manifest should pass");
     assert_eq!(
         summary,
-        ExperimentCheckSummary { total: 150, undecided: 0, accepted: 74, rejected: 76 }
+        ExperimentCheckSummary { total: 154, undecided: 0, accepted: 75, rejected: 79 }
     );
 }
 

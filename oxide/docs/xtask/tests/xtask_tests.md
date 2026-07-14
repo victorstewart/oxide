@@ -68,4 +68,6 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
+- 2026-07-13: froze the C29 accepted prepared-layer experiment, three rejected precision policies, and the resulting 154-entry accepted/rejected totals.
+
 - 2026-07-13: refreshed the exact manifest summary after the completed C00--C26 experiment sequence reached 144 entries: 72 accepted and 72 rejected.

@@ -5122,6 +5122,71 @@ fn metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()
 
 #[cfg(target_os = "macos")]
 #[test]
+fn metal_prepared_layer_rows_freeze_body_free_clean_and_single_dirty_contracts()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-prepared-layers-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env(
+         "OXIDE_PERF_RUNNER_FILTER",
+         "gpu.architecture.prepared_layers.,gpu.authoring.retained_snapshot.prepared_layers_",
+      )
+      .env("OXIDE_ARCHITECTURE_METAL_WARMUPS", "2")
+      .env("OXIDE_ARCHITECTURE_METAL_FRAMES", "4")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run Metal prepared-layer smoke suite");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "Metal prepared-layer suite failed: {stderr}");
+   assert!(stdout.contains("cases=3"), "stdout: {stdout}");
+   let report = std::fs::read_to_string(&json_out).expect("read prepared-layer report");
+   let clean = report_case_slice(&report, "gpu.architecture.prepared_layers.clean_100x100");
+   let dirty = report_case_slice(&report, "gpu.architecture.prepared_layers.one_dirty_100x100");
+   let authoring = report_case_slice(
+      &report,
+      "gpu.authoring.retained_snapshot.prepared_layers_clean_100x100",
+   );
+
+   for row in [clean, authoring]
+   {
+      assert_eq!(report_f64(row, "layers"), 100.0);
+      assert_eq!(report_f64(row, "draws_per_layer"), 100.0);
+      assert_eq!(report_f64(row, "layer_body_commands_scanned_avg"), 0.0);
+      assert_eq!(report_f64(row, "layer_body_commands_copied_avg"), 0.0);
+      assert_eq!(report_f64(row, "geometry_bytes_copied_avg"), 0.0);
+      assert_eq!(report_f64(row, "buffer_upload_bytes_avg"), 0.0);
+      assert_eq!(report_f64(row, "layer_texture_creates_avg"), 0.0);
+      assert_eq!(report_f64(row, "layer_cache_hits_avg"), 100.0);
+      assert_eq!(report_f64(row, "layer_cache_misses_avg"), 0.0);
+      assert_eq!(report_f64(row, "layer_offscreen_draws_avg"), 0.0);
+      assert_eq!(report_f64(row, "render_passes_avg"), 1.0);
+      assert_eq!(report_f64(row, "draws_avg"), 100.0);
+      assert_eq!(report_f64(row, "chunks_prepared_avg"), 0.0);
+      assert!(report_f64(row, "layer_cache_bytes_peak") > 0.0);
+   }
+   assert!(authoring.contains("\"family\": \"authoring\""));
+   assert_eq!(report_f64(dirty, "dirty_layers_per_frame"), 1.0);
+   assert_eq!(report_f64(dirty, "layer_body_commands_scanned_avg"), 0.0);
+   assert_eq!(report_f64(dirty, "layer_body_commands_copied_avg"), 0.0);
+   assert_eq!(report_f64(dirty, "geometry_bytes_copied_avg"), 0.0);
+   assert_eq!(report_f64(dirty, "buffer_upload_bytes_avg"), 0.0);
+   assert_eq!(report_f64(dirty, "layer_texture_creates_avg"), 0.0);
+   assert_eq!(report_f64(dirty, "layer_cache_hits_avg"), 99.0);
+   assert_eq!(report_f64(dirty, "layer_cache_misses_avg"), 1.0);
+   assert_eq!(report_f64(dirty, "layer_offscreen_draws_avg"), 1.0);
+   assert_eq!(report_f64(dirty, "render_passes_avg"), 2.0);
+   assert_eq!(report_f64(dirty, "draws_avg"), 101.0);
+   assert_eq!(report_f64(dirty, "chunks_prepared_avg"), 0.0);
+   let _ = std::fs::remove_file(json_out);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn metal_dynamic_property_row_freezes_zero_geometry_upload_contract()
 {
    let mut json_out = std::env::temp_dir();

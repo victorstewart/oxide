@@ -514,6 +514,658 @@ fn prepared_snapshot_invalidates_referenced_resource_generations()
    assert_eq!(renderer.prepared_cache_entry_count(), 1);
 }
 
+#[test]
+fn prepared_layer_clean_hit_composites_without_body_work_and_matches_flat_pixels()
+{
+   let width = 160_u32;
+   let height = 128_u32;
+   let image_pixels = [
+      0, 0, 255, 255, 0, 255, 0, 255,
+      255, 0, 0, 255, 255, 255, 255, 255,
+   ];
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(width, height, 1.0).expect("resize");
+   let image = renderer.image_create_rgba8(2, 2, &image_pixels, 8);
+   let atlas = renderer.image_create_a8(2, 2, &[255; 4], 2);
+   let snapshot = prepared_layer_snapshot(image, atlas, 1, 1, 1, false, true, None);
+
+   let first = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot).expect("encode cold prepared layer");
+   renderer.submit(first).expect("submit cold prepared layer");
+   let first_stats = renderer.last_stats();
+   let _ = renderer.readback_bgra8().expect("complete cold prepared layer");
+   assert_eq!(first_stats.layer_cache_hits, 0);
+   assert_eq!(first_stats.layer_cache_misses, 1);
+   assert_eq!(first_stats.layer_texture_creates, 1);
+   assert_eq!(first_stats.layer_offscreen_draws, 5);
+   assert_eq!(first_stats.layer_body_commands_scanned, 0);
+   assert_eq!(first_stats.layer_body_commands_copied, 0);
+   assert_eq!(first_stats.render_passes, 2);
+
+   let clean = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot).expect("encode clean prepared layer");
+   renderer.submit(clean).expect("submit clean prepared layer");
+   let clean_stats = renderer.last_stats();
+   let (_, _, clean_pixels) = renderer.readback_bgra8().expect("read clean prepared layer");
+   assert_eq!(clean_stats.layer_cache_hits, 1);
+   assert_eq!(clean_stats.layer_cache_misses, 0);
+   assert_eq!(clean_stats.layer_texture_creates, 0);
+   assert_eq!(clean_stats.layer_offscreen_draws, 0);
+   assert_eq!(clean_stats.layer_body_commands_scanned, 0);
+   assert_eq!(clean_stats.layer_body_commands_copied, 0);
+   assert_eq!(clean_stats.commands_traversed, 0);
+   assert_eq!(clean_stats.commands_copied, 0);
+   assert_eq!(clean_stats.geometry_bytes_copied, 0);
+   assert_eq!(clean_stats.buffer_upload_bytes, 0);
+   assert_eq!(clean_stats.render_passes, 1);
+   assert_eq!(clean_stats.draws, 1);
+
+   let mut reference = MetalRenderer::new_default().expect("reference metal");
+   reference.resize(width, height, 1.0).expect("reference resize");
+   let reference_image = reference.image_create_rgba8(2, 2, &image_pixels, 8);
+   let reference_atlas = reference.image_create_a8(2, 2, &[255; 4], 2);
+   assert_eq!((reference_image, reference_atlas), (image, atlas));
+   let baseline = prepared_layer_snapshot(
+      reference_image,
+      reference_atlas,
+      1,
+      1,
+      1,
+      false,
+      true,
+      None,
+   );
+   let mut flat = api::DrawList::default();
+   baseline.flatten_into(&mut flat).expect("flatten layer reference");
+   let frame = reference.begin_frame(&api::FrameTarget, None);
+   reference.encode_pass(&flat);
+   reference.submit(frame).expect("submit flat layer reference");
+   let (_, _, flat_pixels) = reference.readback_bgra8().expect("read flat layer reference");
+   let differences = clean_pixels.iter().zip(&flat_pixels).enumerate()
+      .filter(|(_, (prepared, flat))| prepared != flat)
+      .take(16)
+      .map(|(index, (prepared, flat))| (index, *prepared, *flat))
+      .collect::<Vec<_>>();
+   assert!(differences.is_empty(), "prepared layer pixel differences: {differences:?}");
+}
+
+#[test]
+fn prepared_layer_main_format_matches_flat_translucent_rrect_pixels()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(96, 96, 1.0).expect("resize");
+   let layered = prepared_rrect_layer_snapshot();
+   for label in ["cold", "clean"]
+   {
+      let frame = renderer.begin_frame(&api::FrameTarget, None);
+      renderer.encode_snapshot(&layered).unwrap_or_else(|error| panic!("{label}: {error}"));
+      renderer.submit(frame).unwrap_or_else(|error| panic!("{label}: {error}"));
+      if label == "cold"
+      {
+         let _ = renderer.readback_bgra8().expect("complete cold RRect layer");
+      }
+   }
+   let stats = renderer.last_stats();
+   let (_, _, actual) = renderer.readback_bgra8().expect("read clean RRect layer");
+   assert_eq!(stats.layer_cache_hits, 1);
+   assert_eq!(stats.layer_cache_misses, 0);
+   assert_eq!(stats.layer_offscreen_draws, 0);
+   assert_eq!(stats.buffer_upload_bytes, 0);
+
+   let mut reference = MetalRenderer::new_default().expect("reference metal");
+   reference.resize(96, 96, 1.0).expect("reference resize");
+   let baseline = prepared_rrect_layer_snapshot();
+   let mut flat = api::DrawList::default();
+   baseline.flatten_into(&mut flat).expect("flatten RRect layer reference");
+   let frame = reference.begin_frame(&api::FrameTarget, None);
+   reference.encode_pass(&flat);
+   reference.submit(frame).expect("submit flat RRect layer reference");
+   let (_, _, expected) = reference.readback_bgra8().expect("read flat RRect layer reference");
+   let differences = actual.iter().zip(&expected).enumerate()
+      .filter(|(_, (candidate, reference))| candidate != reference)
+      .take(16)
+      .map(|(offset, (candidate, reference))| (offset, *candidate, *reference))
+      .collect::<Vec<_>>();
+   assert!(differences.is_empty(), "main-format prepared layer pixel differences: {differences:?}");
+}
+
+#[test]
+fn prepared_layer_main_format_image_text_mesh_and_solid_match_flat_pixels()
+{
+   let pixels = [
+      0, 0, 255, 255, 0, 255, 0, 255,
+      255, 0, 0, 255, 255, 255, 255, 255,
+   ];
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(160, 128, 1.0).expect("resize");
+   let image = renderer.image_create_rgba8(2, 2, &pixels, 8);
+   let atlas = renderer.image_create_a8(2, 2, &[255; 4], 2);
+   let snapshot = prepared_layer_snapshot_content(
+      image, atlas, 1, 1, 1, false, true, None, false,
+   );
+   for label in ["cold", "clean"]
+   {
+      let frame = renderer.begin_frame(&api::FrameTarget, None);
+      renderer.encode_snapshot(&snapshot).unwrap_or_else(|error| panic!("{label}: {error}"));
+      renderer.submit(frame).unwrap_or_else(|error| panic!("{label}: {error}"));
+      if label == "cold"
+      {
+         let _ = renderer.readback_bgra8().expect("complete cold non-RRect layer");
+      }
+   }
+   let stats = renderer.last_stats();
+   let (_, _, actual) = renderer.readback_bgra8().expect("read clean non-RRect layer");
+   assert_eq!(stats.layer_cache_hits, 1);
+   assert_eq!(stats.layer_cache_misses, 0);
+   assert_eq!(stats.layer_offscreen_draws, 0);
+   assert_eq!(stats.buffer_upload_bytes, 0);
+
+   let mut reference = MetalRenderer::new_default().expect("reference metal");
+   reference.resize(160, 128, 1.0).expect("reference resize");
+   let reference_image = reference.image_create_rgba8(2, 2, &pixels, 8);
+   let reference_atlas = reference.image_create_a8(2, 2, &[255; 4], 2);
+   assert_eq!((reference_image, reference_atlas), (image, atlas));
+   let baseline = prepared_layer_snapshot_content(
+      reference_image, reference_atlas, 1, 1, 1, false, true, None, false,
+   );
+   let mut flat = api::DrawList::default();
+   baseline.flatten_into(&mut flat).expect("flatten non-RRect layer reference");
+   let frame = reference.begin_frame(&api::FrameTarget, None);
+   reference.encode_pass(&flat);
+   reference.submit(frame).expect("submit flat non-RRect layer reference");
+   let (_, _, expected) = reference.readback_bgra8().expect("read flat non-RRect layer reference");
+   let differences = actual.iter().zip(&expected).enumerate()
+      .filter(|(_, (prepared, flat))| prepared != flat)
+      .take(16)
+      .map(|(offset, (prepared, flat))| (offset, *prepared, *flat))
+      .collect::<Vec<_>>();
+   assert!(differences.is_empty(), "non-RRect prepared layer pixel differences: {differences:?}");
+}
+
+#[test]
+fn prepared_layer_invalidates_once_for_dirty_nested_resource_scale_and_purge_changes()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(160, 128, 1.0).expect("resize");
+   let image = renderer.image_create_rgba8(2, 2, &[255; 16], 8);
+   let atlas = renderer.image_create_a8(2, 2, &[255; 4], 2);
+   let base = prepared_layer_snapshot(image, atlas, 1, 1, 1, false, true, None);
+   let frame = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&base).expect("warm prepared layer");
+   renderer.submit(frame).expect("submit warm prepared layer");
+   let (_, _, base_pixels) = renderer.readback_bgra8().expect("read warm prepared layer");
+
+   let dirty = prepared_layer_snapshot(image, atlas, 1, 1, 1, true, true, None);
+   let frame = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&dirty).expect("encode dirty prepared layer");
+   renderer.submit(frame).expect("submit dirty prepared layer");
+   let dirty_stats = renderer.last_stats();
+   let (_, _, dirty_pixels) = renderer.readback_bgra8().expect("read dirty prepared layer");
+   assert_eq!(dirty_pixels, base_pixels);
+   assert_eq!(dirty_stats.layer_cache_misses, 1);
+   assert_eq!(dirty_stats.layer_cache_hits, 0);
+   assert_eq!(dirty_stats.layer_offscreen_draws, 5);
+   assert_eq!(dirty_stats.layer_texture_creates, 0);
+   assert_eq!(dirty_stats.chunks_prepared, 0);
+   assert_eq!(dirty_stats.commands_traversed, 0);
+   assert_eq!(dirty_stats.render_passes, 2);
+
+   let first_instance = dirty.instance(0).expect("first dirty layer instance");
+   let mut second_instance = first_instance.clone();
+   second_instance.origin = [52.0, 28.0];
+   let duplicated_dirty = api::RenderSnapshot::new(
+      vec![first_instance, second_instance],
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("duplicated dirty layer snapshot");
+   let frame = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&duplicated_dirty).expect("encode duplicated dirty layer");
+   renderer.submit(frame).expect("submit duplicated dirty layer");
+   let duplicated_stats = renderer.last_stats();
+   let _ = renderer.readback_bgra8().expect("read duplicated dirty layer");
+   assert_eq!(duplicated_stats.layer_cache_misses, 1);
+   assert_eq!(duplicated_stats.layer_cache_hits, 1);
+   assert_eq!(duplicated_stats.layer_offscreen_draws, 5);
+   assert_eq!(duplicated_stats.layer_texture_creates, 0);
+   assert_eq!(duplicated_stats.render_passes, 2);
+   assert_eq!(duplicated_stats.draws, 7);
+
+   let translated = prepared_layer_snapshot(
+      image,
+      atlas,
+      1,
+      1,
+      1,
+      false,
+      true,
+      Some([1.0, 0.0, 0.0, 1.0, 8.0, 4.0]),
+   );
+   let frame = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&translated).expect("move clean prepared layer");
+   renderer.submit(frame).expect("submit moved prepared layer");
+   let translated_stats = renderer.last_stats();
+   let _ = renderer.readback_bgra8().expect("read moved prepared layer");
+   assert_eq!(translated_stats.layer_cache_hits, 1);
+   assert_eq!(translated_stats.layer_cache_misses, 0);
+   assert_eq!(translated_stats.layer_offscreen_draws, 0);
+   assert_eq!(translated_stats.buffer_upload_bytes, 0);
+
+   let scaled = prepared_layer_snapshot(
+      image,
+      atlas,
+      1,
+      1,
+      1,
+      false,
+      true,
+      Some([1.5, 0.0, 0.0, 1.25, 0.0, 0.0]),
+   );
+   let frame = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&scaled).expect("scale prepared layer");
+   renderer.submit(frame).expect("submit scaled prepared layer");
+   let scaled_stats = renderer.last_stats();
+   let (_, _, scaled_pixels) = renderer.readback_bgra8().expect("read scaled prepared layer");
+   assert_eq!(scaled_stats.layer_cache_misses, 1);
+   assert_eq!(scaled_stats.layer_offscreen_draws, 5);
+   assert_eq!(scaled_stats.layer_texture_creates, 1);
+
+   let mut reference = MetalRenderer::new_default().expect("scaled reference metal");
+   reference.resize(160, 128, 1.0).expect("scaled reference resize");
+   let reference_image = reference.image_create_rgba8(2, 2, &[255; 16], 8);
+   let reference_atlas = reference.image_create_a8(2, 2, &[255; 4], 2);
+   assert_eq!((reference_image, reference_atlas), (image, atlas));
+   let baseline_scaled = prepared_layer_snapshot(
+      reference_image,
+      reference_atlas,
+      1,
+      1,
+      1,
+      false,
+      false,
+      Some([1.5, 0.0, 0.0, 1.25, 0.0, 0.0]),
+   );
+   let frame = reference.begin_frame(&api::FrameTarget, None);
+   reference.encode_snapshot(&baseline_scaled).expect("encode scaled direct reference");
+   reference.submit(frame).expect("submit scaled direct reference");
+   let (_, _, direct_scaled_pixels) = reference.readback_bgra8().expect("read scaled direct reference");
+   let differences = scaled_pixels.iter().zip(&direct_scaled_pixels).enumerate()
+      .filter(|(_, (prepared, direct))| prepared != direct)
+      .take(16)
+      .map(|(index, (prepared, direct))| (index, *prepared, *direct))
+      .collect::<Vec<_>>();
+   assert!(differences.is_empty(), "scaled prepared layer pixel differences: {differences:?}");
+
+   renderer.resize(192, 160, 1.0).expect("resize same scale");
+   let frame = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&scaled).expect("encode resized prepared layer");
+   renderer.submit(frame).expect("submit resized prepared layer");
+   let resized_stats = renderer.last_stats();
+   let _ = renderer.readback_bgra8().expect("read resized prepared layer");
+   assert_eq!(resized_stats.layer_cache_hits, 1);
+   assert_eq!(resized_stats.layer_cache_misses, 0);
+   assert_eq!(resized_stats.layer_offscreen_draws, 0);
+
+   renderer.resize(384, 320, 2.0).expect("resize target scale");
+   let frame = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&scaled).expect("encode target-scale layer");
+   renderer.submit(frame).expect("submit target-scale layer");
+   let target_scale_stats = renderer.last_stats();
+   let _ = renderer.readback_bgra8().expect("read target-scale layer");
+   assert_eq!(target_scale_stats.layer_cache_hits, 0);
+   assert_eq!(target_scale_stats.layer_cache_misses, 1);
+   assert_eq!(target_scale_stats.layer_offscreen_draws, 5);
+   assert_eq!(target_scale_stats.layer_texture_creates, 1);
+
+   let nested = prepared_layer_snapshot(
+      image,
+      atlas,
+      1,
+      2,
+      1,
+      false,
+      true,
+      Some([1.5, 0.0, 0.0, 1.25, 0.0, 0.0]),
+   );
+   let frame = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&nested).expect("invalidate nested generation");
+   renderer.submit(frame).expect("submit nested generation");
+   let nested_stats = renderer.last_stats();
+   let _ = renderer.readback_bgra8().expect("read nested generation");
+   assert_eq!(nested_stats.layer_cache_misses, 1);
+   assert_eq!(nested_stats.layer_offscreen_draws, 5);
+   assert_eq!(nested_stats.layer_texture_creates, 0);
+   assert_eq!(nested_stats.chunks_prepared, 1);
+
+   renderer.purge_prepared_chunks();
+   let frame = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&nested).expect("encode after purge");
+   renderer.submit(frame).expect("submit after purge");
+   let purge_stats = renderer.last_stats();
+   let _ = renderer.readback_bgra8().expect("read after purge");
+   assert_eq!(purge_stats.layer_cache_misses, 1);
+   assert_eq!(purge_stats.layer_offscreen_draws, 5);
+   assert_eq!(purge_stats.layer_texture_creates, 0);
+   assert_eq!(purge_stats.chunks_prepared, 1);
+
+   renderer.image_update_rgba8(
+      image,
+      0,
+      0,
+      2,
+      2,
+      &[
+         0, 0, 255, 255, 0, 0, 255, 255,
+         0, 0, 255, 255, 0, 0, 255, 255,
+      ],
+      8,
+   );
+   renderer.image_update_a8(atlas, 0, 0, 2, 2, &[192; 4], 2);
+   let resource = prepared_layer_snapshot(
+      image,
+      atlas,
+      1,
+      2,
+      2,
+      false,
+      true,
+      Some([1.5, 0.0, 0.0, 1.25, 0.0, 0.0]),
+   );
+   let frame = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&resource).expect("invalidate layer resource generation");
+   renderer.submit(frame).expect("submit resource generation");
+   let resource_stats = renderer.last_stats();
+   let _ = renderer.readback_bgra8().expect("read resource generation");
+   assert_eq!(resource_stats.layer_cache_misses, 1);
+   assert_eq!(resource_stats.layer_offscreen_draws, 5);
+   assert_eq!(resource_stats.layer_texture_creates, 0);
+   assert_eq!(resource_stats.chunks_prepared, 1);
+
+   let content = prepared_layer_snapshot(
+      image,
+      atlas,
+      2,
+      2,
+      2,
+      false,
+      true,
+      Some([1.5, 0.0, 0.0, 1.25, 0.0, 0.0]),
+   );
+   let frame = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&content).expect("invalidate layer content generation");
+   renderer.submit(frame).expect("submit content generation");
+   let content_stats = renderer.last_stats();
+   let _ = renderer.readback_bgra8().expect("read content generation");
+   assert_eq!(content_stats.layer_cache_misses, 1);
+   assert_eq!(content_stats.layer_offscreen_draws, 5);
+   assert_eq!(content_stats.layer_texture_creates, 0);
+   assert_eq!(content_stats.chunks_prepared, 1);
+}
+
+#[test]
+fn prepared_layer_effect_nested_and_unsupported_content_preserve_flat_fallback_pixels()
+{
+   let cases = [
+      (
+         "effect outset",
+         api::DrawList {
+            items: vec![
+               api::DrawCmd::RRect {
+                  rect: api::RectF::new(8.0, 8.0, 56.0, 56.0),
+                  radii: [8.0; 4],
+                  color: api::Color::rgba(0.2, 0.5, 0.9, 1.0),
+               },
+               api::DrawCmd::VisualEffect {
+                  rect: api::RectF::new(16.0, 16.0, 40.0, 40.0),
+                  effect: api::VisualEffect::DarkPopup {
+                     blur_intensity: 0.25,
+                     tint: api::Color::rgba(0.1, 0.1, 0.1, 0.2),
+                  },
+               },
+            ],
+            ..api::DrawList::default()
+         },
+      ),
+      (
+         "nested layer",
+         api::DrawList {
+            items: vec![
+               api::DrawCmd::LayerBegin {
+                  id: 8_102,
+                  rect: api::RectF::new(12.0, 12.0, 48.0, 48.0),
+                  dirty: false,
+               },
+               api::DrawCmd::RRect {
+                  rect: api::RectF::new(12.0, 12.0, 48.0, 48.0),
+                  radii: [7.0; 4],
+                  color: api::Color::rgba(0.8, 0.3, 0.2, 1.0),
+               },
+               api::DrawCmd::LayerEnd,
+            ],
+            ..api::DrawList::default()
+         },
+      ),
+      (
+         "unsupported spinner",
+         api::DrawList {
+            items: vec![api::DrawCmd::Spinner {
+               center: [36.0, 36.0],
+               atom: 18.0,
+               alpha: 1.0,
+            }],
+            ..api::DrawList::default()
+         },
+      ),
+      (
+         "mixed RRect precision",
+         api::DrawList {
+            items: vec![
+               api::DrawCmd::RRect {
+                  rect: api::RectF::new(8.0, 8.0, 48.0, 40.0),
+                  radii: [7.0; 4],
+                  color: api::Color::rgba(0.9, 0.2, 0.1, 1.0),
+               },
+               api::DrawCmd::RRect {
+                  rect: api::RectF::new(24.0, 20.0, 44.0, 44.0),
+                  radii: [9.0; 4],
+                  color: api::Color::rgba(0.1, 0.7, 0.9, 0.72),
+               },
+            ],
+            ..api::DrawList::default()
+         },
+      ),
+   ];
+   for (index, (label, list)) in cases.into_iter().enumerate()
+   {
+      let snapshot = fallback_layer_snapshot(list, 8_200 + index as u64);
+      let mut renderer = MetalRenderer::new_default().expect("metal");
+      renderer.resize(96, 96, 1.0).expect("resize");
+      let frame = renderer.begin_frame(&api::FrameTarget, None);
+      renderer.encode_snapshot(&snapshot).unwrap_or_else(|error| panic!("{label}: {error}"));
+      renderer.submit(frame).unwrap_or_else(|error| panic!("{label}: {error}"));
+      let stats = renderer.last_stats();
+      let (_, _, actual) = renderer.readback_bgra8().expect("read fallback layer");
+      assert_eq!(stats.chunks_prepared, 0, "{label}: {stats:?}");
+      assert!(stats.commands_copied > 0, "{label}: {stats:?}");
+
+      let mut flat = api::DrawList::default();
+      snapshot.flatten_into(&mut flat).unwrap_or_else(|error| panic!("{label}: {error}"));
+      let mut reference = MetalRenderer::new_default().expect("reference metal");
+      reference.resize(96, 96, 1.0).expect("reference resize");
+      let frame = reference.begin_frame(&api::FrameTarget, None);
+      reference.encode_pass(&flat);
+      reference.submit(frame).unwrap_or_else(|error| panic!("{label}: {error}"));
+      let (_, _, expected) = reference.readback_bgra8().expect("read fallback reference");
+      let differences = actual.iter().zip(&expected).enumerate()
+         .filter(|(_, (candidate, reference))| candidate != reference)
+         .take(16)
+         .map(|(offset, (candidate, reference))| (offset, *candidate, *reference))
+         .collect::<Vec<_>>();
+      assert!(differences.is_empty(), "{label} pixel differences: {differences:?}");
+   }
+}
+
+fn fallback_layer_snapshot(list: api::DrawList, id: u64) -> api::RenderSnapshot
+{
+   let chunk = api::RenderChunk::new(
+      api::RenderChunkId(id),
+      api::RenderChunkRevisions { structural: 1, geometry: 1, ..api::RenderChunkRevisions::default() },
+      list,
+      api::ChunkIndexMode::Local,
+      &[],
+   ).expect("fallback layer chunk");
+   let mut instance = api::RenderChunkInstance::new(chunk, [12.0, 10.0]);
+   instance.layer = Some(api::RenderLayerInstance {
+      id: 8_100 + id as u32,
+      rect: api::RectF::new(0.0, 0.0, 72.0, 72.0),
+      dirty: false,
+   });
+   api::RenderSnapshot::new(
+      vec![instance],
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("fallback layer snapshot")
+}
+
+fn prepared_rrect_layer_snapshot() -> api::RenderSnapshot
+{
+   let chunk = api::RenderChunk::new(
+      api::RenderChunkId(8_300),
+      api::RenderChunkRevisions { structural: 1, geometry: 1, ..api::RenderChunkRevisions::default() },
+      api::DrawList {
+         items: vec![
+            api::DrawCmd::RRect {
+               rect: api::RectF::new(4.0, 4.0, 48.0, 40.0),
+               radii: [7.0; 4],
+               color: api::Color::rgba(0.9, 0.2, 0.1, 0.64),
+            },
+            api::DrawCmd::RRect {
+               rect: api::RectF::new(24.0, 20.0, 44.0, 44.0),
+               radii: [9.0; 4],
+               color: api::Color::rgba(0.1, 0.7, 0.9, 0.72),
+            },
+         ],
+         ..api::DrawList::default()
+      },
+      api::ChunkIndexMode::Local,
+      &[],
+   ).expect("prepared RRect layer chunk");
+   let mut instance = api::RenderChunkInstance::new(chunk, [12.0, 10.0]);
+   instance.layer = Some(api::RenderLayerInstance {
+      id: 8_300,
+      rect: api::RectF::new(0.0, 0.0, 72.0, 72.0),
+      dirty: false,
+   });
+   api::RenderSnapshot::new(
+      vec![instance],
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("prepared RRect layer snapshot")
+}
+
+fn prepared_layer_snapshot(image: api::ImageHandle, atlas: api::ImageHandle, geometry: u64, structural: u64, resource: u64, dirty: bool, layer: bool, transform: Option<[f32; 6]>) -> api::RenderSnapshot
+{
+   prepared_layer_snapshot_content(
+      image, atlas, geometry, structural, resource, dirty, layer, transform, true,
+   )
+}
+
+fn prepared_layer_snapshot_content(image: api::ImageHandle, atlas: api::ImageHandle, geometry: u64, structural: u64, resource: u64, dirty: bool, layer: bool, transform: Option<[f32; 6]>, include_rrect: bool) -> api::RenderSnapshot
+{
+   let vertices = vec![
+      api::Vertex { x: 8.0, y: 52.0, u: 0.0, v: 0.0, rgba: 0 },
+      api::Vertex { x: 28.0, y: 52.0, u: 1.0, v: 0.0, rgba: 0 },
+      api::Vertex { x: 28.0, y: 72.0, u: 1.0, v: 1.0, rgba: 0 },
+      api::Vertex { x: 8.0, y: 72.0, u: 0.0, v: 1.0, rgba: 0 },
+      api::Vertex { x: 38.0, y: 52.0, u: 0.0, v: 0.0, rgba: 0 },
+      api::Vertex { x: 58.0, y: 52.0, u: 1.0, v: 0.0, rgba: 0 },
+      api::Vertex { x: 58.0, y: 72.0, u: 1.0, v: 1.0, rgba: 0 },
+      api::Vertex { x: 38.0, y: 72.0, u: 0.0, v: 1.0, rgba: 0 },
+      api::Vertex { x: 68.0, y: 72.0, u: 0.0, v: 0.0, rgba: 0 },
+      api::Vertex { x: 88.0, y: 52.0, u: 0.0, v: 0.0, rgba: 0 },
+      api::Vertex { x: 88.0, y: 72.0, u: 0.0, v: 0.0, rgba: 0 },
+   ];
+   let mut items = Vec::with_capacity(5);
+   if include_rrect
+   {
+      items.push(api::DrawCmd::RRect {
+         rect: api::RectF::new(8.0, 8.0, 28.0, 28.0),
+         radii: [5.0; 4],
+         color: api::Color::rgba(0.9, 0.2, 0.1, 1.0),
+      });
+   }
+   items.extend([
+      api::DrawCmd::Image {
+         tex: image,
+         dst: api::RectF::new(48.0, 8.0, 28.0, 28.0),
+         src: api::RectF::new(0.0, 0.0, 2.0, 2.0),
+         alpha: 1.0,
+      },
+      api::DrawCmd::GlyphRun { run: api::GlyphRun {
+         atlas,
+         atlas_revision: resource,
+         vb: api::VertexSpan { offset: 0, len: 4 },
+         ib: api::IndexSpan { offset: 0, len: 6 },
+         sdf: false,
+         color: api::Color::rgba(0.2, 0.8, 1.0, 1.0),
+      }},
+      api::DrawCmd::ImageMesh {
+         tex: image,
+         vb: api::VertexSpan { offset: 4, len: 4 },
+         ib: api::IndexSpan { offset: 6, len: 6 },
+         alpha: 1.0,
+      },
+      api::DrawCmd::Solid {
+         vb: api::VertexSpan { offset: 8, len: 3 },
+         ib: api::IndexSpan { offset: 12, len: 3 },
+         color: api::Color::rgba(0.9, 0.8, 0.1, 1.0),
+      },
+   ]);
+   let chunk = api::RenderChunk::new(
+      api::RenderChunkId(929),
+      api::RenderChunkRevisions {
+         structural,
+         geometry,
+         resource,
+         dynamic_properties: 1,
+      },
+      api::DrawList {
+         items,
+         vertices,
+         indices: vec![0, 1, 2, 0, 2, 3, 0, 1, 2, 0, 2, 3, 0, 1, 2],
+      },
+      api::ChunkIndexMode::Local,
+      &[
+         api::RenderResourceDependency { image, generation: resource },
+         api::RenderResourceDependency { image: atlas, generation: resource },
+      ],
+   ).expect("prepared layer chunk");
+   let mut instance = api::RenderChunkInstance::new(chunk, [20.0, 16.0]);
+   if layer
+   {
+      instance.layer = Some(api::RenderLayerInstance {
+         id: 77,
+         rect: api::RectF::new(0.0, 0.0, 96.0, 80.0),
+         dirty,
+      });
+   }
+   let mut properties = Vec::new();
+   if let Some(transform) = transform
+   {
+      let id = api::RenderPropertySlotId::dynamic(1, 1).unwrap();
+      instance.property_slots = vec![id].into();
+      properties.push(api::RenderPropertySlot {
+         id,
+         revision: 1,
+         value: api::RenderPropertyValue::Transform(transform),
+      });
+   }
+   api::RenderSnapshot::new(
+      vec![instance],
+      properties,
+      api::Damage { rects: Vec::new() },
+   ).expect("prepared layer snapshot")
+}
+
 fn prepared_image_snapshot(image: api::ImageHandle, generation: u64) -> api::RenderSnapshot
 {
    let chunk = api::RenderChunk::new(

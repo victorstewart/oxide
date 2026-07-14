@@ -194,7 +194,10 @@ fn layer_cache_uses_one_plan_and_reports_single_ownership()
    assert!(source.contains("entry.generation = plan.generation;"));
    assert!(source.contains("entry.generation == plan.generation"));
    assert!(source.contains("parent.dirty = true;"));
-   assert!(source.contains(".filter(|entry| entry.w == w && entry.h == h)"));
+   assert!(source.contains("entry.w == w"));
+   assert!(source.contains("entry.h == h"));
+   assert!(source.contains("entry.tex.pixel_format() == self.color_format"));
+   assert!(source.contains("entry.prepared_key.is_none()"));
    assert!(source.contains("pso_layer_composite_aligned"));
    assert!(source.contains("let pixel_aligned = !plan.refresh"));
    assert!(source.contains("(pixels - pixels.round()).abs() <= f32::EPSILON"));

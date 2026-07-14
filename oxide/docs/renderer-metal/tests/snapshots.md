@@ -14,6 +14,7 @@ The snapshot tests validate renderer behavior through readback instead of relyin
 - Optimized NV12 camera preview parity against the synthetic BGRA benchmark reference.
 - Persistent prepared-snapshot parity across RRects, images, A8 glyphs, solids, clips, dynamic transform/opacity through the frame uniform ring, opaque fractional raster edges, one-dirty rebuilding, byte-budget eviction, resource generations, explicit purge, and flat fallback accounting.
 - Prepared image-mesh transform/opacity parity and 512-instance alternating glyph/mesh spatial damage with exact full/small pixels, one selected draw, zero vertex scans/copies/uploads, and static full-plan reuse.
+- Prepared retained-layer parity for mixed RRect/image/glyph/image-mesh/Solid bodies, ordinary-format non-RRect bodies, overlapping translucent RRects, and mixed-precision fallback; body-free clean composite; exactly one dirty refresh; same-frame duplicate deduplication; translation reuse; scale/resize/target-scale/nested/resource/purge invalidation; and exact effect/internal-layer/spinner fallback.
 
 The pure 2D tests assert Oxide's default opaque black Metal clear on untouched pixels. Snapshot-runner component goldens that need white backgrounds draw that background explicitly in their own draw lists.
 
@@ -46,7 +47,7 @@ The test submits bounded frames and uses synchronous readback only in the test p
 
 ## Performance notes
 
-Readback is verification-only and never enters the production frame loop. The C27 spatial test requires a full replay to reuse its validated 512-entry plan and each two-pixel damage frame to visit one command, draw once, shade four pixels, and touch zero source vertices or warm geometry bytes.
+Readback is verification-only and never enters the production frame loop. The C27 spatial test requires a full replay to reuse its validated 512-entry plan and each two-pixel damage frame to visit one command, draw once, shade four pixels, and touch zero source vertices or warm geometry bytes. C29 requires clean retained-layer hits to report zero body scans/copies, geometry copies, uploads, texture creates, prepared chunks, and offscreen draws. Its dirty duplicate case refreshes the body once and composites twice.
 
 ## Feature flags and cfgs
 
@@ -57,6 +58,7 @@ The snapshot file requires `snapshot-tests` and macOS or physical iOS Metal supp
 Run the named test with `cargo test --locked -p oxide-renderer-metal --features snapshot-tests --test snapshots`.
 
 ## Changelog
+- 2026-07-13: added C29 exact prepared-layer clean/dirty, duplicate, generation/resource/scale/purge invalidation, and unsupported-fallback coverage.
 - 2026-07-13: added C27 image-mesh parity, static-plan reuse, and exact small-damage glyph/mesh spatial-work coverage.
 - 2026-07-13: added C26 property-ring warmup, unchanged-zero-upload, and one-record-update coverage.
 

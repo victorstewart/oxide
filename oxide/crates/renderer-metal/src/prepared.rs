@@ -1,8 +1,9 @@
 use metal::{
    ArgumentEncoderRef, Buffer, Device, DeviceRef, Library, MTLClearColor, MTLIndexType,
    MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderStages, MTLResourceOptions,
-   MTLResourceUsage, MTLStoreAction, MTLTexture, RenderCommandEncoderRef,
-   RenderPassDescriptor, RenderPipelineDescriptor, RenderPipelineState, TextureRef,
+   MTLResourceUsage, MTLStorageMode, MTLStoreAction, MTLTexture, MTLTextureType,
+   MTLTextureUsage, RenderCommandEncoderRef, RenderPassDescriptor, RenderPipelineDescriptor,
+   RenderPipelineState, TextureDescriptor, TextureRef,
 };
 use metal::foreign_types::ForeignTypeRef;
 use oxide_renderer_api as api;
@@ -10,10 +11,11 @@ use std::collections::{HashMap, HashSet};
 
 use super::{
    api_vertex_descriptor, append_remapped_indices_to_span, apply_scissor_dp,
-   configure_source_alpha_blend, effective_scissor_dp, intersect_scissor_dp,
-   pack_image_params, pack_rrect_params, pipeline_error, pipeline_function, pipeline_state,
-   solid_primitive_for_index_count, solid_primitive_for_vertex_count,
-   transparent_drawable_clear_enabled, MetalInitError, MetalRenderer,
+   configure_layer_source_alpha_blend, configure_source_alpha_blend, effective_scissor_dp,
+   intersect_scissor_dp, pack_image_params, pack_nine_slice_params, pack_rrect_params,
+   pipeline_error, pipeline_function, pipeline_state, solid_primitive_for_index_count,
+   solid_primitive_for_vertex_count, transparent_drawable_clear_enabled, MetalInitError,
+   MetalRenderer, NineSliceGpuParams,
 };
 
 pub const DEFAULT_PREPARED_CACHE_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
@@ -38,27 +40,27 @@ pub(super) struct PreparedPipelines
 
 impl PreparedPipelines
 {
-   pub fn new(device: &Device, library: &Library, format: MTLPixelFormat, sample_count: u32) -> Result<Self, MetalInitError>
+   pub fn new(device: &Device, library: &Library, format: MTLPixelFormat, sample_count: u32, layer: bool) -> Result<Self, MetalInitError>
    {
       Ok(Self {
-         solid: prepared_pipeline(device, library, format, sample_count, "prepared.solid", "v_prepared_solid", "f_solid", true)?,
-         rrect: prepared_pipeline(device, library, format, sample_count, "prepared.rrect", "v_prepared_inst_rect", "f_prepared_rrect", false)?,
-         rrect_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.rrect_opaque", "v_prepared_inst_rect", "f_rrect", false)?,
-         image: prepared_pipeline(device, library, format, sample_count, "prepared.image", "v_prepared_inst_rect", "f_prepared_image", false)?,
-         image_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.image_opaque", "v_prepared_inst_rect", "f_image", false)?,
-         image_single: prepared_pipeline(device, library, format, sample_count, "prepared.image_single", "v_prepared_inst_rect", "f_prepared_image_single", false)?,
-         image_single_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.image_single_opaque", "v_prepared_inst_rect", "f_image_single", false)?,
-         image_mesh: prepared_pipeline(device, library, format, sample_count, "prepared.image_mesh", "v_prepared_text", "f_prepared_image_mesh", true)?,
-         image_mesh_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.image_mesh_opaque", "v_prepared_text", "f_image_mesh", true)?,
-         text: prepared_pipeline(device, library, format, sample_count, "prepared.text", "v_prepared_text", "f_prepared_text", true)?,
-         text_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.text_opaque", "v_prepared_text", "f_text", true)?,
-         text_sdf: prepared_pipeline(device, library, format, sample_count, "prepared.text_sdf", "v_prepared_text", "f_prepared_text_sdf", true)?,
-         text_sdf_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.text_sdf_opaque", "v_prepared_text", "f_text_sdf", true)?,
+         solid: prepared_pipeline(device, library, format, sample_count, layer, "prepared.solid", "v_prepared_solid", "f_solid", true)?,
+         rrect: prepared_pipeline(device, library, format, sample_count, layer, "prepared.rrect", "v_prepared_inst_rect", "f_prepared_rrect", false)?,
+         rrect_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.rrect_opaque", "v_prepared_inst_rect", "f_rrect", false)?,
+         image: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image", "v_prepared_inst_rect", "f_prepared_image", false)?,
+         image_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_opaque", "v_prepared_inst_rect", "f_image", false)?,
+         image_single: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_single", "v_prepared_inst_rect", "f_prepared_image_single", false)?,
+         image_single_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_single_opaque", "v_prepared_inst_rect", "f_image_single", false)?,
+         image_mesh: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_mesh", "v_prepared_text", "f_prepared_image_mesh", true)?,
+         image_mesh_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_mesh_opaque", "v_prepared_text", "f_image_mesh", true)?,
+         text: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text", "v_prepared_text", "f_prepared_text", true)?,
+         text_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text_opaque", "v_prepared_text", "f_text", true)?,
+         text_sdf: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text_sdf", "v_prepared_text", "f_prepared_text_sdf", true)?,
+         text_sdf_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text_sdf_opaque", "v_prepared_text", "f_text_sdf", true)?,
       })
    }
 }
 
-fn prepared_pipeline(device: &Device, library: &Library, format: MTLPixelFormat, sample_count: u32, stage: &str, vertex: &str, fragment: &str, vertex_descriptor: bool) -> Result<RenderPipelineState, MetalInitError>
+fn prepared_pipeline(device: &Device, library: &Library, format: MTLPixelFormat, sample_count: u32, layer: bool, stage: &str, vertex: &str, fragment: &str, vertex_descriptor: bool) -> Result<RenderPipelineState, MetalInitError>
 {
    let vertex = pipeline_function(library, stage, vertex)?;
    let fragment = pipeline_function(library, stage, fragment)?;
@@ -73,7 +75,14 @@ fn prepared_pipeline(device: &Device, library: &Library, format: MTLPixelFormat,
    let attachment = descriptor.color_attachments().object_at(0)
       .ok_or_else(|| pipeline_error(stage, "missing color attachment zero"))?;
    attachment.set_pixel_format(format);
-   configure_source_alpha_blend(attachment);
+   if layer
+   {
+      configure_layer_source_alpha_blend(attachment);
+   }
+   else
+   {
+      configure_source_alpha_blend(attachment);
+   }
    pipeline_state(device, stage, &descriptor)
 }
 
@@ -104,6 +113,149 @@ impl PreparedChunkKey
          sample_count: renderer.sample_count,
       }
    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) struct PreparedLayerKey
+{
+   id: u32,
+   chunk: PreparedChunkKey,
+   content_generation: u64,
+   nested_generation: u64,
+   dynamic_generation: u64,
+   bounds: [u32; 4],
+   scale: [u32; 2],
+   opacity: u32,
+   target_scale: u32,
+   effect_outset: u32,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct PreparedLayerFrame
+{
+   pub key: PreparedLayerKey,
+   pub rect: api::RectF,
+   pub local_uniform: PreparedInstanceUniform,
+   pub width: u32,
+   pub height: u32,
+   pub refresh: bool,
+   pub force_refresh: bool,
+}
+
+fn prepared_layer_frame(renderer: &MetalRenderer, layer: api::RenderLayerInstance, chunk: &api::RenderChunk, uniform: PreparedInstanceUniform, clip: Option<api::RectI>) -> Option<PreparedLayerFrame>
+{
+   if renderer.prepared_layer_pipelines.is_none() || clip.is_some()
+   {
+      return None;
+   }
+   let [scale_x, shear_y, shear_x, scale_y, translate_x, translate_y, ..] = uniform.values;
+   if shear_x != 0.0 || shear_y != 0.0 || scale_x == 0.0 || scale_y == 0.0
+   {
+      return None;
+   }
+   let effect_outset = layer_effect_outset(chunk, layer.rect)?;
+   let local_rect = api::RectF::new(
+      layer.rect.x - effect_outset,
+      layer.rect.y - effect_outset,
+      layer.rect.w + effect_outset * 2.0,
+      layer.rect.h + effect_outset * 2.0,
+   );
+   if ![
+      local_rect.x, local_rect.y, local_rect.w, local_rect.h,
+      scale_x, scale_y, translate_x, translate_y, renderer.target_scale,
+   ].iter().all(|value| value.is_finite()) || local_rect.w <= 0.0 || local_rect.h <= 0.0
+   {
+      return None;
+   }
+   let transformed_x0 = scale_x * local_rect.x;
+   let transformed_x1 = scale_x * (local_rect.x + local_rect.w);
+   let transformed_y0 = scale_y * local_rect.y;
+   let transformed_y1 = scale_y * (local_rect.y + local_rect.h);
+   let min_x = transformed_x0.min(transformed_x1);
+   let min_y = transformed_y0.min(transformed_y1);
+   let width_dp = (transformed_x1 - transformed_x0).abs();
+   let height_dp = (transformed_y1 - transformed_y0).abs();
+   let target_scale = renderer.target_scale.max(1.0);
+   let width = (width_dp * target_scale).ceil();
+   let height = (height_dp * target_scale).ceil();
+   if !width.is_finite() || !height.is_finite()
+      || width < 1.0 || height < 1.0
+      || width > u32::MAX as f32 || height > u32::MAX as f32
+   {
+      return None;
+   }
+   let rect = api::RectF::new(min_x + translate_x, min_y + translate_y, width_dp, height_dp);
+   let opacity = uniform.values[8];
+   let local_uniform = PreparedInstanceUniform {
+      values: [
+         scale_x, 0.0, 0.0, scale_y,
+         -min_x, -min_y, width_dp, height_dp,
+         opacity, if scale_x == 1.0 && scale_y == 1.0 { 1.0 } else { 0.0 }, 0.0, 0.0,
+      ],
+   };
+   let revisions = chunk.revisions();
+   Some(PreparedLayerFrame {
+      key: PreparedLayerKey {
+         id: layer.id,
+         chunk: PreparedChunkKey::new(renderer, chunk),
+         content_generation: revisions.geometry,
+         nested_generation: revisions.structural,
+         dynamic_generation: revisions.dynamic_properties,
+         bounds: [
+            layer.rect.x.to_bits(), layer.rect.y.to_bits(),
+            layer.rect.w.to_bits(), layer.rect.h.to_bits(),
+         ],
+         scale: [scale_x.to_bits(), scale_y.to_bits()],
+         opacity: opacity.to_bits(),
+         target_scale: target_scale.to_bits(),
+         effect_outset: effect_outset.to_bits(),
+      },
+      rect,
+      local_uniform,
+      width: width as u32,
+      height: height as u32,
+      refresh: false,
+      force_refresh: layer.dirty,
+   })
+}
+
+fn layer_effect_outset(chunk: &api::RenderChunk, rect: api::RectF) -> Option<f32>
+{
+   let mut outset = 0.0_f32;
+   for effect in chunk.effect_dependencies()
+   {
+      let bounds = match effect.sample_bounds
+      {
+         api::RenderSpatialBounds::Empty => continue,
+         api::RenderSpatialBounds::Finite(bounds) => bounds,
+         api::RenderSpatialBounds::Unbounded => return None,
+      };
+      outset = outset
+         .max(rect.x - bounds.x)
+         .max(rect.y - bounds.y)
+         .max(bounds.x + bounds.w - (rect.x + rect.w))
+         .max(bounds.y + bounds.h - (rect.y + rect.h));
+   }
+   outset.is_finite().then_some(outset.max(0.0))
+}
+
+fn prepared_layer_matches(renderer: &MetalRenderer, layer: PreparedLayerFrame, chunk: &api::RenderChunk) -> bool
+{
+   renderer.layers.get(&layer.key.id).is_some_and(|entry| {
+      entry.w == layer.width
+         && entry.h == layer.height
+         && entry.prepared_key == Some(layer.key)
+         && entry.resources.as_slice() == chunk.resource_dependencies()
+   })
+}
+
+fn prepared_layer_plan_matches(renderer: &MetalRenderer, layer: PreparedLayerFrame) -> bool
+{
+   !layer.force_refresh && renderer.layers.get(&layer.key.id).is_some_and(|entry| {
+      entry.w == layer.width
+         && entry.h == layer.height
+         && entry.prepared_key == Some(layer.key)
+   })
 }
 
 #[derive(Clone, Copy)]
@@ -376,6 +528,15 @@ pub(super) struct PreparedFrameInstance
    pub uniform: PreparedInstanceUniform,
    pub clip: Option<api::RectI>,
    pub local_damage: Option<api::RectF>,
+   pub layer: Option<PreparedLayerFrame>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PreparedTarget
+{
+   Main,
+   Layer,
+   ExactLayer,
 }
 
 pub(super) struct PreparedPropertyCache
@@ -487,6 +648,8 @@ pub(super) struct PreparedChunk
    pub logical_byte_size: u64,
    pub buffer_count: u32,
    pub command_count: u64,
+   has_opaque_rrect: bool,
+   has_translucent_rrect: bool,
    resources: Vec<api::RenderResourceDependency>,
    last_used_generation: u64,
 }
@@ -509,6 +672,8 @@ impl PreparedChunk
       let mut operations = Vec::new();
       let mut byte_size = 0_u64;
       let mut buffer_count = 0_u32;
+      let mut has_opaque_rrect = false;
+      let mut has_translucent_rrect = false;
       let mut index = 0_usize;
       while index < list.items.len()
       {
@@ -517,8 +682,16 @@ impl PreparedChunk
             api::DrawCmd::RRect { .. } =>
             {
                let start = index;
-               while matches!(list.items.get(index), Some(api::DrawCmd::RRect { .. }))
+               while let Some(api::DrawCmd::RRect { color, .. }) = list.items.get(index)
                {
+                  if color.a == 1.0
+                  {
+                     has_opaque_rrect = true;
+                  }
+                  else
+                  {
+                     has_translucent_rrect = true;
+                  }
                   index += 1;
                }
                let (operation, bytes) = prepare_rrects(
@@ -626,6 +799,8 @@ impl PreparedChunk
          logical_byte_size,
          buffer_count,
          command_count: list.items.len() as u64,
+         has_opaque_rrect,
+         has_translucent_rrect,
          resources: chunk.resource_dependencies().to_vec(),
          last_used_generation: 0,
       })
@@ -645,6 +820,20 @@ impl PreparedChunk
          (operation, &self.operations[operation as usize])
       })
    }
+
+   fn layer_target(&self, opacity: f32) -> Option<PreparedTarget>
+   {
+      if opacity != 1.0 || !self.has_opaque_rrect
+      {
+         return Some(PreparedTarget::Layer);
+      }
+      if self.has_translucent_rrect
+      {
+         return None;
+      }
+      Some(PreparedTarget::ExactLayer)
+   }
+
 }
 
 pub(super) enum PreparedOperation
@@ -986,13 +1175,20 @@ impl MetalRenderer
       let mut cache = core::mem::take(&mut self.prepared_chunks);
       let mut property_cache = core::mem::take(&mut self.prepared_property_cache);
       let mut plan = core::mem::take(&mut self.prepared_frame_plan);
+      let mut layer_frame_keys = core::mem::take(&mut self.prepared_layer_frame_keys);
+      layer_frame_keys.clear();
       let mut damage_instances = core::mem::take(&mut self.prepared_damage_instances);
       let reuse_static_plan = !use_damage
          && static_instances.is_some()
          && self.prepared_frame_snapshot.as_ref().is_some_and(|cached| cached.ptr_eq(snapshot))
          && self.prepared_frame_viewport == viewport
          && plan.len() as u64 == snapshot.instance_count()
-         && self.prepared_frame_keys.iter().all(|key| cache.get(*key).is_some());
+         && plan.iter().all(|instance| {
+            instance.layer.map_or_else(
+               || cache.get(instance.key).is_some(),
+               |layer| prepared_layer_plan_matches(self, layer),
+            )
+         });
       if !reuse_static_plan
       {
          plan.clear();
@@ -1012,9 +1208,21 @@ impl MetalRenderer
       let mut property_upload_bytes = 0_u64;
       let mut property_records_updated = 0_u32;
       let mut resource_creates = 0_u32;
+      let mut chunk_rebuilds = 0_u64;
+      let mut layer_hits = 0_u32;
+      let mut layer_misses = 0_u32;
       if reuse_static_plan
       {
+         for instance in &mut plan
+         {
+            if let Some(layer) = instance.layer.as_mut()
+            {
+               layer.refresh = false;
+            }
+         }
          hits = plan.len() as u64;
+         layer_hits = plan.iter().filter(|instance| instance.layer.is_some()).count()
+            .min(u32::MAX as usize) as u32;
          self.acc_prepared_plan_reuses = self.acc_prepared_plan_reuses.saturating_add(1);
       }
       if use_damage
@@ -1028,9 +1236,70 @@ impl MetalRenderer
          self.acc_damage_instances_matched = self.acc_damage_instances_matched.saturating_add(stats.entries_matched);
       }
       let mut prepare_instance = |instance: &api::RenderChunkInstance, uniform: PreparedInstanceUniform, source_revision: u64, clip: Option<api::RectI>, local_damage: Option<api::RectF>| {
-         if instance.layer.is_some()
+         if let Some(layer) = instance.layer
          {
-            return false;
+            let Some(mut layer) = prepared_layer_frame(self, layer, &instance.chunk, uniform, clip) else
+            {
+               return false;
+            };
+            let duplicate = match layer_frame_keys.insert(layer.key.id, layer.key)
+            {
+               None => false,
+               Some(key) if key == layer.key => true,
+               Some(_) => return false,
+            };
+            let hit = duplicate
+               || !layer.force_refresh && prepared_layer_matches(self, layer, &instance.chunk);
+            layer.refresh = !hit;
+            if hit
+            {
+               hits = hits.saturating_add(1);
+               layer_hits = layer_hits.saturating_add(1);
+            }
+            else
+            {
+               let Some(lookup) = cache.get_or_prepare(self, &instance.chunk) else
+               {
+                  return false;
+               };
+               let Some(layer_target) = cache.get(lookup.key)
+                  .and_then(|chunk| chunk.layer_target(layer.local_uniform.values[8]))
+               else
+               {
+                  return false;
+               };
+               if layer_target == PreparedTarget::ExactLayer
+                  && self.prepared_exact_layer_pipelines.is_none()
+               {
+                  return false;
+               }
+               misses = misses.saturating_add(1);
+               layer_misses = layer_misses.saturating_add(1);
+               if !lookup.hit
+               {
+                  chunk_rebuilds = chunk_rebuilds.saturating_add(1);
+                  commands_lowered = commands_lowered.saturating_add(lookup.command_count);
+                  upload_bytes = upload_bytes.saturating_add(lookup.upload_bytes);
+                  resource_creates = resource_creates.saturating_add(lookup.buffer_count);
+               }
+            }
+            if !write_all_properties
+            {
+               property_cache.resolve(
+                  plan.len(),
+                  uniform,
+                  source_revision,
+                  slot,
+               );
+            }
+            plan.push(PreparedFrameInstance {
+               key: layer.key.chunk,
+               uniform,
+               clip,
+               local_damage,
+               layer: Some(layer),
+            });
+            return true;
          }
          let Some(lookup) = cache.get_or_prepare(self, &instance.chunk) else
          {
@@ -1043,6 +1312,7 @@ impl MetalRenderer
          else
          {
             misses = misses.saturating_add(1);
+            chunk_rebuilds = chunk_rebuilds.saturating_add(1);
             commands_lowered = commands_lowered.saturating_add(lookup.command_count);
             upload_bytes = upload_bytes.saturating_add(lookup.upload_bytes);
             resource_creates = resource_creates.saturating_add(lookup.buffer_count);
@@ -1061,6 +1331,7 @@ impl MetalRenderer
             uniform,
             clip,
             local_damage,
+            layer: None,
          });
          true
       };
@@ -1178,14 +1449,16 @@ impl MetalRenderer
          self.prepared_chunks = cache;
          self.prepared_property_cache = property_cache;
          self.prepared_frame_plan = plan;
+         self.prepared_layer_frame_keys = layer_frame_keys;
          self.prepared_damage_instances = damage_instances;
          return self.encode_snapshot_flat(snapshot);
       }
+      self.prepared_layer_frame_keys = layer_frame_keys;
       if !reuse_static_plan && static_instances.is_some()
       {
          let mut unique = HashSet::with_capacity(cache.len());
          self.prepared_frame_keys.extend(plan.iter().filter_map(|instance| {
-            unique.insert(instance.key).then_some(instance.key)
+            (instance.layer.is_none() && unique.insert(instance.key)).then_some(instance.key)
          }));
          self.prepared_frame_snapshot = Some(snapshot.clone());
          self.prepared_frame_viewport = viewport;
@@ -1194,11 +1467,13 @@ impl MetalRenderer
       self.acc_backend_cache_hits = self.acc_backend_cache_hits.saturating_add(hits);
       self.acc_backend_cache_misses = self.acc_backend_cache_misses.saturating_add(misses);
       self.acc_chunks_reused = self.acc_chunks_reused.saturating_add(hits);
-      self.acc_chunks_rebuilt = self.acc_chunks_rebuilt.saturating_add(misses);
-      self.acc_chunks_prepared = self.acc_chunks_prepared.saturating_add(misses);
+      self.acc_chunks_rebuilt = self.acc_chunks_rebuilt.saturating_add(chunk_rebuilds);
+      self.acc_chunks_prepared = self.acc_chunks_prepared.saturating_add(chunk_rebuilds);
       self.acc_commands_traversed = self.acc_commands_traversed.saturating_add(commands_lowered);
       self.acc_geometry_bytes_copied = self.acc_geometry_bytes_copied.saturating_add(upload_bytes);
       self.acc_resource_creates = self.acc_resource_creates.saturating_add(resource_creates);
+      self.acc_layer_cache_hits = self.acc_layer_cache_hits.saturating_add(layer_hits);
+      self.acc_layer_cache_misses = self.acc_layer_cache_misses.saturating_add(layer_misses);
 
       let pending_present_texture = self.pending_present_texture as *mut MTLTexture;
       let direct_present_texture = if self.sample_count == 1
@@ -1299,6 +1574,111 @@ impl MetalRenderer
       }
       property_cache.truncate(plan.len());
       let command_buffer = self.ensure_frame_command_buffer(slot);
+      let mut clip_stack = self.clip_stack_pool.pop().unwrap_or_default();
+      let mut damage_commands = core::mem::take(&mut self.prepared_damage_commands);
+      for instance in &plan
+      {
+         let Some(layer) = instance.layer.filter(|layer| layer.refresh) else { continue };
+         let Some(chunk) = cache.get(instance.key) else { continue };
+         let Some(layer_target) = chunk.layer_target(layer.local_uniform.values[8]) else { continue };
+         let layer_format = if layer_target == PreparedTarget::ExactLayer
+         {
+            MTLPixelFormat::RGBA32Float
+         }
+         else
+         {
+            self.color_format
+         };
+         let texture = self.layers.get(&layer.key.id)
+            .filter(|entry| {
+               entry.w == layer.width
+                  && entry.h == layer.height
+                  && entry.tex.pixel_format() == layer_format
+            })
+            .map(|entry| entry.tex.to_owned())
+            .unwrap_or_else(|| {
+               let descriptor = TextureDescriptor::new();
+               descriptor.set_pixel_format(layer_format);
+               descriptor.set_texture_type(MTLTextureType::D2);
+               descriptor.set_width(layer.width as u64);
+               descriptor.set_height(layer.height as u64);
+               descriptor.set_storage_mode(MTLStorageMode::Private);
+               descriptor.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+               self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
+               self.acc_layer_texture_creates = self.acc_layer_texture_creates.saturating_add(1);
+               self.device.new_texture(&descriptor)
+            });
+         let layer_descriptor = RenderPassDescriptor::new();
+         let Some(layer_attachment) = layer_descriptor.color_attachments().object_at(0) else { continue };
+         layer_attachment.set_texture(Some(&texture));
+         layer_attachment.set_load_action(MTLLoadAction::Clear);
+         layer_attachment.set_clear_color(MTLClearColor {
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 0.0,
+         });
+         layer_attachment.set_store_action(MTLStoreAction::Store);
+         self.acc_render_passes = self.acc_render_passes.saturating_add(1);
+         let layer_encoder = command_buffer.new_render_command_encoder(&layer_descriptor);
+         layer_encoder.set_vertex_bytes(
+            2,
+            core::mem::size_of::<PreparedInstanceUniform>() as u64,
+            layer.local_uniform.values.as_ptr().cast(),
+         );
+         layer_encoder.set_fragment_bytes(
+            3,
+            core::mem::size_of::<PreparedInstanceUniform>() as u64,
+            layer.local_uniform.values.as_ptr().cast(),
+         );
+         clip_stack.clear();
+         damage_commands.clear();
+         let mut last_applied = None;
+         let draws_before = u64::from(self.acc_draws);
+         encode_prepared_chunk(
+            &layer_encoder,
+            self,
+            chunk,
+            layer.local_uniform,
+            0,
+            None,
+            None,
+            None,
+            layer_target,
+            &mut damage_commands,
+            &mut clip_stack,
+            &mut last_applied,
+         );
+         self.acc_layer_offscreen_draws = self.acc_layer_offscreen_draws
+            .saturating_add(u64::from(self.acc_draws).saturating_sub(draws_before));
+         layer_encoder.end_encoding();
+         let generation = self.layers.get(&layer.key.id)
+            .map_or(1, |entry| entry.generation.wrapping_add(1).max(1));
+         if let Some(entry) = self.layers.get_mut(&layer.key.id)
+            .filter(|entry| {
+               entry.w == layer.width
+                  && entry.h == layer.height
+                  && entry.tex.pixel_format() == layer_format
+            })
+         {
+            entry.generation = generation;
+            entry.prepared_key = Some(layer.key);
+            entry.resources.clear();
+            entry.resources.extend_from_slice(chunk.source.resource_dependencies());
+         }
+         else
+         {
+            self.layers.insert(layer.key.id, super::LayerEntry {
+               tex: texture,
+               w: layer.width,
+               h: layer.height,
+               generation,
+               prepared_key: Some(layer.key),
+               resources: chunk.source.resource_dependencies().to_vec(),
+            });
+         }
+         self.acc_layer_double_render_prevented = self.acc_layer_double_render_prevented.saturating_add(1);
+      }
       if self.sample_count > 1
       {
          if let Some(texture) = self.target_msaa_tex.as_ref()
@@ -1343,12 +1723,16 @@ impl MetalRenderer
       encoder.set_vertex_buffer(2, Some(self.property_ring.buffer(slot)), 0);
       encoder.set_fragment_buffer(3, Some(self.property_ring.buffer(slot)), 0);
       let global_clip = if use_damage { self.frame_scissor_dp } else { None };
-      let mut clip_stack = self.clip_stack_pool.pop().unwrap_or_default();
-      let mut damage_commands = core::mem::take(&mut self.prepared_damage_commands);
       let mut last_applied = None;
       for (index, instance) in plan.iter().enumerate()
       {
          clip_stack.clear();
+         if let Some(layer) = instance.layer
+         {
+            apply_scissor_dp(&encoder, self, global_clip, &mut last_applied);
+            encode_prepared_layer_composite(&encoder, self, layer);
+            continue;
+         }
          if let Some(entry) = cache.get(instance.key)
          {
             encode_prepared_chunk(
@@ -1360,6 +1744,7 @@ impl MetalRenderer
                instance.clip,
                global_clip,
                instance.local_damage,
+               PreparedTarget::Main,
                &mut damage_commands,
                &mut clip_stack,
                &mut last_applied,
@@ -1395,6 +1780,14 @@ impl MetalRenderer
       self.last_stats.damage_commands_matched = self.acc_damage_commands_matched;
       self.last_stats.damage_vertices_visited = self.acc_damage_vertices_visited;
       self.last_stats.damage_query_ms = self.acc_damage_query_ns as f64 / 1_000_000.0;
+      self.last_stats.layer_body_commands_scanned = self.acc_layer_body_commands_scanned;
+      self.last_stats.layer_body_commands_copied = self.acc_layer_body_commands_copied;
+      self.last_stats.layer_texture_creates = self.acc_layer_texture_creates;
+      self.last_stats.layer_cache_hits = self.acc_layer_cache_hits;
+      self.last_stats.layer_cache_misses = self.acc_layer_cache_misses;
+      self.last_stats.layer_offscreen_draws = self.acc_layer_offscreen_draws;
+      self.last_stats.layer_inline_draws = self.acc_layer_inline_draws;
+      self.last_stats.layer_double_render_prevented = self.acc_layer_double_render_prevented;
       self.last_stats.buffer_upload_bytes = upload_bytes;
       self.last_stats.property_upload_bytes = property_upload_bytes;
       self.last_stats.property_records_updated = property_records_updated;
@@ -1451,7 +1844,83 @@ impl MetalRenderer
    }
 }
 
-fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut MetalRenderer, chunk: &PreparedChunk, uniform: PreparedInstanceUniform, uniform_offset: u64, instance_clip: Option<api::RectI>, global_clip: Option<api::RectI>, local_damage: Option<api::RectF>, damage_commands: &mut Vec<u32>, clip_stack: &mut Vec<api::RectI>, last_applied: &mut Option<api::RectI>)
+fn encode_prepared_layer_composite(encoder: &RenderCommandEncoderRef, renderer: &mut MetalRenderer, layer: PreparedLayerFrame)
+{
+   let Some(entry) = renderer.layers.get(&layer.key.id)
+      .filter(|entry| {
+         entry.w == layer.width
+            && entry.h == layer.height
+            && entry.prepared_key == Some(layer.key)
+      })
+   else
+   {
+      debug_assert!(false, "prepared Metal layer key must exist before composition");
+      return;
+   };
+   let texture = entry.tex.to_owned();
+   let scale = renderer.target_scale.max(1.0);
+   let pixel_aligned = [layer.rect.x, layer.rect.y, layer.rect.w, layer.rect.h]
+      .into_iter()
+      .all(|value| {
+         let pixels = value * scale;
+         (pixels - pixels.round()).abs() <= f32::EPSILON
+      })
+      && (layer.rect.w * scale).round() as u32 == entry.w
+      && (layer.rect.h * scale).round() as u32 == entry.h;
+   encoder.set_render_pipeline_state(if pixel_aligned {
+      &renderer.pso_layer_composite_aligned
+   } else {
+      &renderer.pso_layer_composite
+   });
+   if !pixel_aligned
+   {
+      if let Some(sampler) = renderer.sampler.as_ref()
+      {
+         encoder.set_fragment_sampler_state(0, Some(sampler));
+      }
+   }
+   encoder.set_fragment_texture(0, Some(&texture));
+   let viewport = [
+      renderer.target_w as f32 / scale,
+      renderer.target_h as f32 / scale,
+   ];
+   encoder.set_vertex_bytes(
+      1,
+      core::mem::size_of_val(&viewport) as u64,
+      viewport.as_ptr().cast(),
+   );
+   let vertex = [
+      layer.rect.x, layer.rect.y, layer.rect.w, layer.rect.h,
+      viewport[0], viewport[1],
+   ];
+   encoder.set_vertex_bytes(0, core::mem::size_of_val(&vertex) as u64, vertex.as_ptr().cast());
+   let fragment = pack_nine_slice_params(
+      layer.rect,
+      entry.w as f32,
+      entry.h as f32,
+      api::Insets::new(0.0, 0.0, 0.0, 0.0),
+      1.0,
+   );
+   encoder.set_fragment_bytes(
+      1,
+      core::mem::size_of_val(&fragment) as u64,
+      (&fragment as *const NineSliceGpuParams).cast(),
+   );
+   encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
+   renderer.acc_draws = renderer.acc_draws.saturating_add(1);
+}
+
+fn prepared_pipelines_for_target(renderer: &MetalRenderer, target: PreparedTarget) -> &Option<PreparedPipelines>
+{
+   match target
+   {
+      PreparedTarget::Main => &renderer.prepared_pipelines,
+      PreparedTarget::Layer => &renderer.prepared_layer_pipelines,
+      PreparedTarget::ExactLayer => &renderer.prepared_exact_layer_pipelines,
+   }
+}
+
+fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut MetalRenderer, chunk: &PreparedChunk, uniform: PreparedInstanceUniform, uniform_offset: u64, instance_clip: Option<api::RectI>, global_clip: Option<api::RectI>, local_damage: Option<api::RectF>, target: PreparedTarget, damage_commands: &mut Vec<u32>, clip_stack: &mut Vec<api::RectI>, last_applied: &mut Option<api::RectI>)
 {
    let filtered = if let Some(local_damage) = local_damage
    {
@@ -1476,9 +1945,12 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
       effective_scissor_dp(current_clip, global_clip),
       last_applied,
    );
-   encoder.set_vertex_buffer_offset(2, uniform_offset);
+   if target == PreparedTarget::Main
+   {
+      encoder.set_vertex_buffer_offset(2, uniform_offset);
+   }
    let opaque = uniform.values[8] == 1.0;
-   if !opaque
+   if !opaque && target == PreparedTarget::Main
    {
       encoder.set_fragment_buffer_offset(3, uniform_offset);
    }
@@ -1494,7 +1966,8 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
             {
                continue;
             }
-            let Some(pipelines) = renderer.prepared_pipelines.as_ref() else { return };
+            let pipelines = prepared_pipelines_for_target(renderer, target);
+            let Some(pipelines) = pipelines.as_ref() else { return };
             encoder.set_render_pipeline_state(if opaque { &pipelines.rrect_opaque } else { &pipelines.rrect });
             encoder.set_vertex_buffer(0, Some(params), 0);
             encoder.set_fragment_buffer(1, Some(params), 0);
@@ -1510,7 +1983,8 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
             }
             if let Some(argument_buffer) = argument_buffer.as_ref()
             {
-               let Some(pipelines) = renderer.prepared_pipelines.as_ref() else { return };
+               let pipelines = prepared_pipelines_for_target(renderer, target);
+               let Some(pipelines) = pipelines.as_ref() else { return };
                encoder.set_render_pipeline_state(if opaque { &pipelines.image_opaque } else { &pipelines.image });
                encoder.set_vertex_buffer(0, Some(params), 0);
                encoder.set_fragment_buffer(1, Some(params), 0);
@@ -1533,7 +2007,8 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
             }
             else
             {
-               let Some(pipelines) = renderer.prepared_pipelines.as_ref() else { return };
+               let pipelines = prepared_pipelines_for_target(renderer, target);
+               let Some(pipelines) = pipelines.as_ref() else { return };
                encoder.set_render_pipeline_state(if opaque { &pipelines.image_single_opaque } else { &pipelines.image_single });
                if let Some(sampler) = renderer.sampler.as_ref()
                {
@@ -1554,7 +2029,8 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
          PreparedOperation::Glyphs { vertices, indices, uniforms, draws, atlas, sdf } =>
          {
             let Some(texture) = renderer.images.get(&atlas.0) else { continue };
-            let Some(pipelines) = renderer.prepared_pipelines.as_ref() else { return };
+            let pipelines = prepared_pipelines_for_target(renderer, target);
+            let Some(pipelines) = pipelines.as_ref() else { return };
             let pipeline = match (*sdf, opaque)
             {
                (true, true) => &pipelines.text_sdf_opaque,
@@ -1593,7 +2069,8 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
                continue;
             }
             let Some(texture) = renderer.images.get(&texture.0) else { continue };
-            let Some(pipelines) = renderer.prepared_pipelines.as_ref() else { return };
+            let pipelines = prepared_pipelines_for_target(renderer, target);
+            let Some(pipelines) = pipelines.as_ref() else { return };
             encoder.set_render_pipeline_state(if opaque { &pipelines.image_mesh_opaque } else { &pipelines.image_mesh });
             encoder.set_fragment_texture(0, Some(texture));
             if let Some(sampler) = renderer.sampler.as_ref()
@@ -1625,7 +2102,8 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
             {
                continue;
             }
-            let Some(pipelines) = renderer.prepared_pipelines.as_ref() else { return };
+            let pipelines = prepared_pipelines_for_target(renderer, target);
+            let Some(pipelines) = pipelines.as_ref() else { return };
             encoder.set_render_pipeline_state(&pipelines.solid);
             encoder.set_vertex_buffer(0, Some(vertices), 0);
             encoder.set_vertex_buffer(1, Some(color), 0);

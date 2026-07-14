@@ -13,6 +13,7 @@ This integration suite freezes performance-report schemas, filtered execution, c
 
 - `metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()` verifies three-slot visible no-growth high water and eight-slot offscreen all-slot cold growth followed by zero warm growth/skips, including C26's 16 KiB completion-protected property buffer per physical slot.
 - `metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()` requires exact clean and one-dirty prepared-cache work counters, including zero clean immutable upload and one 12,288-byte dynamic uniform-ring slice.
+- `metal_prepared_layer_rows_freeze_body_free_clean_and_single_dirty_contracts()` requires body-free clean architecture/authoring replay and one bounded dirty layer refresh with no new warm texture.
 - `retained_spatial_queries_have_engine_and_authoring_contracts()` freezes 512-instance smoke cardinality, one-entry CPU selection, zero vertex visits, metadata residency, and authoring routing.
 - `metal_spatial_rows_freeze_small_and_full_damage_contracts()` freezes one selected small-damage instance/command/draw, four shaded pixels, zero vertex/copy/upload work, and full linear 512-draw static-plan replay.
 - `filtered_run_suite_supports_retained_snapshot_authoring_case()` keeps the public retained-snapshot authoring row routable.
@@ -29,6 +30,7 @@ Each filtered integration test writes a process-unique temporary report, verifie
 - Passing C23 coverage proves the hot retained working set is complete, reports a 100% hit rate, and remains within its hard byte budget, while the one-use path retains zero node-cache bytes and records one explicit fallback. The public authoring row must preserve its configured CPU/prepared-GPU budgets on unchanged-policy access.
 - Passing C24 coverage proves clean mixed replay has 256 hits and zero uploads/copies/traversal, while alternating one dirty chunk produces exactly 255 hits, one miss, 64 traversed commands, and 3,072 uploaded bytes per frame.
 - Passing C27 coverage proves small damage never scans unrelated glyph/mesh vertices and full damage bypasses querying while reusing the unchanged plan.
+- Passing C29 coverage proves clean layer replay performs 100 composites with zero body/copy/upload/offscreen/preparation work, while the dirty row records exactly one miss, offscreen replay from the prepared body, and additional render pass with zero warm copy/upload/preparation.
 
 ## Edge cases and failure modes
 
@@ -56,6 +58,7 @@ Run `cargo test --locked -p oxide-perf-runner --test report_tests`.
 Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.frame_resources.` with `--run-suite --smoke --json-out <path>` to inspect both C18 rows.
 
 ## Changelog
+- 2026-07-13: added C29 prepared-layer clean/one-dirty and public retained-snapshot authoring work-contract assertions.
 - 2026-07-13: added C27 CPU/authoring spatial-query and Metal small/full damage work-contract assertions.
 - 2026-07-13: added C26 zero-geometry CPU animation and exact Metal property-ring report assertions.
 

@@ -33,7 +33,7 @@ This test file protects renderer performance contracts that are easy to regress 
 - `completed_gpu_duration_is_attributed_to_frame_id()`
   Confirms completed GPU timing is associated with the frame id that produced it.
 - `layer_cache_uses_one_plan_and_reports_single_ownership()`
-  Freezes the generation-based plan, nested invalidation, same-size texture reuse, one materialization site, and public ownership counters.
+  Freezes the generation-based plan, nested invalidation, same-size/format texture reuse, separation from prepared-layer keys, one materialization site, and public ownership counters.
 - `layer_cache_clean_and_dirty_frames_have_single_body_owner()`
   Submits missing, clean, and dirty frames on macOS and proves clean frames only composite while refresh frames render one offscreen body, reuse same-size textures, never inline the same body, and report GPU draw calls separately from instanced primitives.
 - `dirty_nested_child_refreshes_its_cached_parent_once()`
@@ -106,6 +106,7 @@ fn initialize_renderer_for_contract_check() -> Result<(), oxide_renderer_metal::
 
 ## Changelog
 
+- 2026-07-13: extended the C05 layer source contract to require format-compatible reuse and separation from C29 prepared-layer ownership.
 - 2026-07-13: added explicit visible/offscreen depth, initial-capacity, completion ownership, saturation skip, and recovery coverage.
 - 2026-07-12: added real-Metal effect target plan, warm reuse, byte-accounting, and purge coverage.
 - 2026-07-12: added source and real-Metal missing/clean/dirty layer-cache ownership, nested invalidation, and same-size texture-reuse coverage.

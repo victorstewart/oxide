@@ -1,4 +1,82 @@
 [[experiments]]
+id = "c29-metal-prepared-layers"
+introduced_commit = "C29 staged tree recorded in commit proof"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "Clean and dirty retained layers, repeated stable IDs, content/nested/resource generations, translation, scale, resize, target scale, effects, unsupported bodies, purge, ordinary and exact intermediate formats, and exact parent-layer pixels must remain deterministic under Metal validation."
+performance_gate = "Fifteen balanced fresh-process pairs with at least 2,000 completed-command-buffer GPU samples per side must materially improve clean 100x100 retained-layer CPU encode/frame distributions, keep GPU/tails inside the strict guardrail, preserve one dirty refresh, and report zero clean body scans/copies/uploads/texture creates/offscreen draws."
+decision_state = "accepted"
+decision = "Key retained snapshot layers by complete semantic generations and dependencies, composite clean textures without consulting prepared bodies, and refresh a dirty body once through persistent prepared buffers."
+proof = [
+   "The exact-tree clean and one-dirty reports under benchmarks/experiments/c29-metal-prepared-layers/raw retain parent/candidate tree, binary, instrumentation, raw-sample, order, counter, output-hash, and decision identities.",
+   "The permanent clean architecture and authoring rows require 100 layer hits with zero body scans/copies, geometry copies, uploads, texture creates, prepared chunks, or offscreen draws; the dirty row requires 99 hits, one miss, one offscreen replay from the existing prepared body, and no warm copy/upload/preparation/texture creation.",
+   "Metal-validation snapshots freeze parent-format translucent and non-RRect layers, exact opaque-RRect intermediates, mixed-precision fallback, dirty deduplication, translation reuse, scale/resize/target-scale/nested/resource/purge invalidation, and exact effect/internal-layer/spinner fallback.",
+]
+cleanup = [
+   "Kept translation outside the layer key, rejected shear/rotation/instance clips and unsupported bodies to the exact fallback, and retained only complete stable-ID/key duplicates within one frame.",
+   "Used RGBA32Float only for opaque-RRect bodies whose edge bytes require it; mixed opaque/translucent RRect bodies fall back rather than retaining a systematic pixel change. Aggregate baseline promotion remains deferred to C62.",
+]
+
+[[experiments]]
+id = "c29-main-format-opaque-rrect-layers-rejected"
+introduced_commit = "rejected during C29 pixel review"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-metal"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "Prepared opaque-RRect layer output must match the parent C05 flattened-layer BGRA8 bytes exactly."
+performance_gate = "A lower-residency intermediate is eligible only when it preserves exact edge output and does not weaken the clean body-free contract."
+decision_state = "rejected"
+decision = "Rejected using the main layer format for opaque prepared RRects because the prepared vertex path changed antialiased edge alpha bytes."
+proof = [
+   "The mixed retained-layer snapshot reported eight one-byte alpha differences, with candidate edge alpha 223 where the parent flattened-layer path produced 224.",
+   "Switching the opaque-RRect intermediate to RGBA32Float removed every difference while leaving the final composite and clean work contract unchanged.",
+]
+cleanup = [
+   "Removed main-format admission for effective-opacity-one RRects; no tolerance or pixel normalization masks the mismatch.",
+]
+
+[[experiments]]
+id = "c29-rgba16-opaque-rrect-layers-rejected"
+introduced_commit = "rejected during C29 pixel review"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-metal"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "The higher-precision opaque-RRect intermediate must produce zero BGRA8 differences against the parent flattened-layer output."
+performance_gate = "A smaller float intermediate is eligible only if it passes the same exact output gate as RGBA32Float."
+decision_state = "rejected"
+decision = "Rejected RGBA16Float for opaque prepared RRects because its intermediate rounding still changed parent edge bytes."
+proof = [
+   "The focused RGBA16Float trial retained antialiased edge differences under exact readback comparison.",
+   "RGBA32Float was the first tested intermediate to produce a zero-difference mixed retained-layer readback.",
+]
+cleanup = [
+   "Removed the RGBA16Float prepared-layer pipeline trial; only the proven RGBA32Float exact path remains.",
+]
+
+[[experiments]]
+id = "c29-all-rgba32-layers-rejected"
+introduced_commit = "rejected during C29 translucent-layer review"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-metal"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "Overlapping translucent RRects must preserve the parent C05 layer's intermediate quantization and final BGRA8 bytes."
+performance_gate = "High precision may be used only for content classes where it preserves pixels; it must not multiply residency for every cached layer."
+decision_state = "rejected"
+decision = "Rejected RGBA32Float for every prepared layer because overlapping translucent RRects no longer matched the parent main-format layer quantization."
+proof = [
+   "The focused translucent overlap comparison produced systematic one-byte color and alpha differences when the body was forced through RGBA32Float.",
+   "Routing translucent RRects through the parent main format restored zero differences; mixed opaque/translucent RRect bodies now use the exact flat fallback because no single tested format preserves both paths.",
+]
+cleanup = [
+   "Restricted high precision to effective-opacity-one RRect bodies and removed the universal RGBA32Float policy.",
+]
+
+[[experiments]]
 id = "c28-retained-paint-damage"
 introduced_commit = "C28 staged tree recorded in commit proof"
 introduced_date = "2026-07-13"

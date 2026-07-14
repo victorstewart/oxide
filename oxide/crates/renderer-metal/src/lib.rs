@@ -955,6 +955,8 @@ pub struct MetalRenderer {
     depth_state_3d_disabled: DepthStencilState,
     depth_state_3d_read: DepthStencilState,
     depth_state_3d_write: DepthStencilState,
+    prepared_layer_pipelines: Option<prepared::PreparedPipelines>,
+    prepared_exact_layer_pipelines: Option<prepared::PreparedPipelines>,
     // Argument buffer for image textures
     img_arg: Option<ArgumentEncoder>,
     img_arg_bufs: Option<Ring>,
@@ -1022,6 +1024,7 @@ pub struct MetalRenderer {
     prepared_frame_snapshot: Option<api::RenderSnapshot>,
     prepared_frame_viewport: [f32; 2],
     prepared_frame_keys: alloc::vec::Vec<prepared::PreparedChunkKey>,
+    prepared_layer_frame_keys: HashMap<u32, prepared::PreparedLayerKey>,
     prepared_damage_instances: alloc::vec::Vec<u32>,
     prepared_damage_commands: alloc::vec::Vec<u32>,
     prepared_fallback: api::DrawList,
@@ -1897,8 +1900,41 @@ impl MetalRenderer {
                     &library,
                     color_format,
                     sample_count,
+                    false,
                 )
             })?)
+        };
+        let prepared_layer_pipelines = if direct_preview_only {
+            None
+        } else {
+            Some(build_init_stage("pso.prepared_layer", || {
+                prepared::PreparedPipelines::new(
+                    &device,
+                    &library,
+                    color_format,
+                    1,
+                    true,
+                )
+            })?)
+        };
+        let prepared_exact_layer_pipelines = if direct_preview_only {
+            None
+        } else {
+            match build_init_stage("pso.prepared_exact_layer", || {
+                prepared::PreparedPipelines::new(
+                    &device,
+                    &library,
+                    MTLPixelFormat::RGBA32Float,
+                    1,
+                    true,
+                )
+            }) {
+                Ok(pipelines) => Some(pipelines),
+                Err(error) => {
+                    eprintln!("[Oxide] renderer disabling exact prepared layers: {error}");
+                    None
+                }
+            }
         };
         let depth_state_3d_disabled =
             build_depth_stencil_state(&device, false, false, "depth.scene3d.disabled");
@@ -2074,6 +2110,8 @@ impl MetalRenderer {
             depth_state_3d_disabled,
             depth_state_3d_read,
             depth_state_3d_write,
+            prepared_layer_pipelines,
+            prepared_exact_layer_pipelines,
             img_arg,
             img_arg_bufs,
             img_arg_stride,
@@ -2140,6 +2178,7 @@ impl MetalRenderer {
             prepared_frame_snapshot: None,
             prepared_frame_viewport: [0.0, 0.0],
             prepared_frame_keys: alloc::vec::Vec::new(),
+            prepared_layer_frame_keys: HashMap::new(),
             prepared_damage_instances: alloc::vec::Vec::new(),
             prepared_damage_commands: alloc::vec::Vec::new(),
             prepared_fallback: api::DrawList::default(),
@@ -2926,12 +2965,30 @@ impl MetalRenderer {
    pub fn purge_prepared_chunks(&mut self)
    {
       self.prepared_chunks.clear();
+      for layer in self.layers.values_mut()
+      {
+         layer.prepared_key = None;
+         layer.resources.clear();
+      }
    }
 
    /// Returns the current renderer-owned generation for an image or glyph atlas.
    pub fn image_generation(&self, handle: api::ImageHandle) -> Option<u64>
    {
       self.image_generations.get(&handle.0).copied()
+   }
+
+   fn invalidate_prepared_layers_for_resource(&mut self, handle: api::ImageHandle)
+   {
+      for layer in self.layers.values_mut()
+      {
+         if layer.prepared_key.is_some()
+            && layer.resources.iter().any(|dependency| dependency.image == handle)
+         {
+            layer.prepared_key = None;
+            layer.resources.clear();
+         }
+      }
    }
 
     #[allow(dead_code)]
@@ -3033,6 +3090,7 @@ impl MetalRenderer {
                 .texture_upload_bytes
                 .saturating_add(data.len() as u64);
             self.prepared_chunks.invalidate_resource(handle);
+            self.invalidate_prepared_layers_for_resource(handle);
             let generation = self.image_generations.entry(handle.0).or_insert(0);
             *generation = generation.saturating_add(1);
         }
@@ -3093,6 +3151,7 @@ impl MetalRenderer {
                 .texture_upload_bytes
                 .saturating_add(data.len() as u64);
             self.prepared_chunks.invalidate_resource(handle);
+            self.invalidate_prepared_layers_for_resource(handle);
             let generation = self.image_generations.entry(handle.0).or_insert(0);
             *generation = generation.saturating_add(1);
         }
@@ -3101,6 +3160,7 @@ impl MetalRenderer {
     pub fn image_release(&mut self, handle: api::ImageHandle) {
         if self.images.remove(&handle.0).is_some() {
             self.prepared_chunks.invalidate_resource(handle);
+            self.invalidate_prepared_layers_for_resource(handle);
             self.image_generations.remove(&handle.0);
             self.last_stats.cache_evictions = self.last_stats.cache_evictions.saturating_add(1);
         }
@@ -5150,7 +5210,14 @@ impl MetalRenderer {
                         || !pending.rect.w.is_finite()
                         || !pending.rect.h.is_finite();
                     let existing = self.layers.get(&pending.id);
-                    let valid_size = existing.map(|entry| entry.w == w && entry.h == h).unwrap_or(false);
+                    let valid_size = existing
+                        .map(|entry| {
+                            entry.w == w
+                                && entry.h == h
+                                && entry.tex.pixel_format() == self.color_format
+                                && entry.prepared_key.is_none()
+                        })
+                        .unwrap_or(false);
                     let refresh = !pending.unsupported && (pending.dirty || !valid_size);
                     let generation = existing.map_or(1, |entry| {
                         if refresh { entry.generation.wrapping_add(1) } else { entry.generation }
@@ -5718,7 +5785,11 @@ impl api::Renderer for MetalRenderer {
             let existing_texture = self
                 .layers
                 .get(&plan.id)
-                .filter(|entry| entry.w == w && entry.h == h)
+                .filter(|entry| {
+                    entry.w == w
+                        && entry.h == h
+                        && entry.tex.pixel_format() == self.color_format
+                })
                 .map(|entry| entry.tex.to_owned());
             let texture = existing_texture.unwrap_or_else(|| {
                 let descriptor = TextureDescriptor::new();
@@ -5774,13 +5845,26 @@ impl api::Renderer for MetalRenderer {
             if let Some(entry) = self
                 .layers
                 .get_mut(&plan.id)
-                .filter(|entry| entry.w == w && entry.h == h)
+                .filter(|entry| {
+                    entry.w == w
+                        && entry.h == h
+                        && entry.tex.pixel_format() == self.color_format
+                })
             {
                 entry.generation = plan.generation;
+                entry.prepared_key = None;
+                entry.resources.clear();
             } else {
                 self.layers.insert(
                     plan.id,
-                    LayerEntry { tex: texture, w, h, generation: plan.generation },
+                    LayerEntry {
+                        tex: texture,
+                        w,
+                        h,
+                        generation: plan.generation,
+                        prepared_key: None,
+                        resources: alloc::vec::Vec::new(),
+                    },
                 );
             }
             self.acc_layer_double_render_prevented =
@@ -6793,7 +6877,11 @@ fn encode_cached_layer(
     let Some(layer) = r
         .layers
         .get(&plan.id)
-        .filter(|entry| entry.generation == plan.generation)
+        .filter(|entry| {
+            entry.generation == plan.generation
+                && entry.tex.pixel_format() == r.color_format
+                && entry.prepared_key.is_none()
+        })
     else {
         debug_assert!(false, "planned Metal layer generation must exist before composition");
         return;
@@ -9387,6 +9475,8 @@ struct LayerEntry {
     w: u32,
     h: u32,
     generation: u64,
+    prepared_key: Option<prepared::PreparedLayerKey>,
+    resources: alloc::vec::Vec<api::RenderResourceDependency>,
 }
 
 #[derive(Debug, Default)]
