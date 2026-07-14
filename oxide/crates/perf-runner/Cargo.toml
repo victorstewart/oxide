@@ -20,6 +20,7 @@ oxide-test-scenes = { path = "../test-scenes" }
 oxide-text = { path = "../text" }
 oxide-timing = { path = "../timing" }
 oxide-ui-core = { path = "../ui-core" }
+oxide-wasm-alloc-counter = { path = "../wasm-alloc-counter" }
 png = "0.17"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

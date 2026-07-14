@@ -59,6 +59,9 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
    push_if_allowed(cases, "cpu.architecture.text.paged_atlas_locality", || {
       text_paged_atlas_locality_case(smoke)
    });
+   push_if_allowed(cases, "cpu.architecture.text.bitmap_options", || {
+      text_bitmap_options_case(smoke)
+   });
    let id = "gpu.architecture.text.new_labels_200";
    if perf_case_allowed(id)
    {
@@ -2146,6 +2149,130 @@ fn text_new_labels_case(smoke: bool) -> PerfCaseResult
    case.metrics.insert(String::from("new_labels"), 200.0);
    case.metrics.insert(String::from("device_scale"), 3.0);
    insert_text_frame_metrics(&mut case.metrics, proof_stats);
+   case
+}
+
+#[derive(Default)]
+struct BitmapOptionsEncoder
+{
+   solids: u64,
+   rrects: u64,
+   glyph_runs: u64,
+}
+
+impl BitmapOptionsEncoder
+{
+   fn clear(&mut self)
+   {
+      self.solids = 0;
+      self.rrects = 0;
+      self.glyph_runs = 0;
+   }
+
+   fn commands(&self) -> u64
+   {
+      self.solids + self.rrects + self.glyph_runs
+   }
+}
+
+impl api::RenderEncoder for BitmapOptionsEncoder
+{
+   fn set_viewport(&mut self, _vp: api::RectF) {}
+   fn set_clip(&mut self, _scissor: api::RectI) {}
+
+   fn draw_solid(&mut self, _verts: &[api::Vertex], _color: api::Color)
+   {
+      self.solids = self.solids.wrapping_add(1);
+   }
+
+   fn draw_image(&mut self, _img: api::ImageHandle, _dst: api::RectF, _src: api::RectF) {}
+
+   fn draw_rrect(&mut self, _rect: api::RectF, _radii: [f32; 4], _color: api::Color)
+   {
+      self.rrects = self.rrects.wrapping_add(1);
+   }
+
+   fn draw_nine_slice(
+      &mut self,
+      _img: api::ImageHandle,
+      _rect: api::RectF,
+      _slice: api::Insets,
+      _alpha: f32,
+   )
+   {
+   }
+
+   fn draw_backdrop(
+      &mut self,
+      _rect: api::RectF,
+      _sigma: f32,
+      _tint: api::Color,
+      _alpha: f32,
+   )
+   {
+   }
+
+   fn draw_spinner(&mut self, _center: [f32; 2], _atom: f32, _alpha: f32) {}
+
+   fn draw_glyph_run(&mut self, _run: &api::GlyphRun)
+   {
+      self.glyph_runs = self.glyph_runs.wrapping_add(1);
+   }
+}
+
+fn text_bitmap_options_case(smoke: bool) -> PerfCaseResult
+{
+   let layout = ui::text_input_options_layout(
+      api::RectF::new(260.0, 80.0, 120.0, 44.0),
+      api::RectF::new(0.0, 0.0, 640.0, 480.0),
+      1.0,
+      ui::TextInputOptionsConfig::all(),
+      10.6,
+   )
+   .expect("text option layout");
+   let style = ui::TextInputOptionsPopoverStyle {
+      background: api::Color::rgba(0.01, 0.01, 0.01, 0.96),
+      divider: api::Color::rgba(1.0, 1.0, 1.0, 0.78),
+      text: api::Color::rgba(1.0, 1.0, 1.0, 0.96),
+      text_px: 10.6,
+   };
+   let mut atlas = ui::bitmap_text::BitmapTextAtlas::new();
+   atlas.set_handle(api::ImageHandle(1));
+   let mut encoder = BitmapOptionsEncoder::default();
+   assert!(ui::draw_text_input_options_popover(
+      &mut encoder,
+      &mut atlas,
+      2.0,
+      layout,
+      style,
+   ));
+   let glyph_runs = encoder.glyph_runs;
+   let solid_draws = encoder.solids;
+   atlas.clear_dirty();
+
+   let mut case = measured_architecture_case(
+      "cpu.architecture.text.bitmap_options",
+      smoke,
+      "Warm text-field Cut/Copy/Select All/Paste options encoded through one explicit A8 atlas and four GlyphRuns.",
+      move || {
+         encoder.clear();
+         let ready = ui::draw_text_input_options_popover(
+            &mut encoder,
+            &mut atlas,
+            2.0,
+            layout,
+            style,
+         );
+         encoder.commands().wrapping_add(u64::from(ready))
+      },
+   );
+   case.metrics.insert(String::from("option_labels"), 4.0);
+   case.metrics.insert(String::from("glyph_run_draws"), glyph_runs as f64);
+   case.metrics.insert(String::from("non_label_solid_draws"), solid_draws as f64);
+   case.metrics.insert(String::from("label_solid_draws"), 0.0);
+   case.metrics.insert(String::from("global_render_mutex_locks"), 0.0);
+   case.metrics.insert(String::from("warm_atlas_upload_calls"), 0.0);
+   case.metrics.insert(String::from("warm_atlas_upload_bytes"), 0.0);
    case
 }
 

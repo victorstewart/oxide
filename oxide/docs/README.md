@@ -27,6 +27,7 @@ This directory mirrors Rust source units with design notes, entry points, behavi
 - [test-scenes](test-scenes/lib.md)
 - [timing](timing/lib.md)
 - [ui-core](ui-core/lib.md)
+- [ui-core deterministic bitmap text](ui-core/bitmap_text.md)
 - [wasm-alloc-counter](wasm-alloc-counter/lib.md)
 - [xtask](xtask/lib.md)
 

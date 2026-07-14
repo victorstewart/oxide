@@ -4037,6 +4037,38 @@ fn filtered_run_suite_supports_paged_text_atlas_locality_case() {
 }
 
 #[test]
+fn filtered_run_suite_supports_bitmap_text_options_case() {
+    let mut json_out = std::env::temp_dir();
+    json_out.push(format!("oxide-perf-runner-bitmap-options-{}.json", std::process::id()));
+    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+        .env("OXIDE_PERF_RUNNER_FILTER", "cpu.architecture.text.bitmap_options")
+        .arg("--run-suite")
+        .arg("--smoke")
+        .arg("--json-out")
+        .arg(&json_out)
+        .output()
+        .expect("run filtered bitmap options smoke suite");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "filtered suite failed: {stderr}");
+    assert!(stdout.contains("cases=1"), "stdout: {stdout}");
+    assert!(stdout.contains("case=cpu.architecture.text.bitmap_options"), "stdout: {stdout}");
+    assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
+
+    let report = std::fs::read_to_string(&json_out).expect("read bitmap options report");
+    let row = report_case_slice(&report, "cpu.architecture.text.bitmap_options");
+    assert_eq!(report_f64(row, "option_labels"), 4.0);
+    assert_eq!(report_f64(row, "glyph_run_draws"), 4.0);
+    assert_eq!(report_f64(row, "label_solid_draws"), 0.0);
+    assert_eq!(report_f64(row, "non_label_solid_draws"), 2.0);
+    assert_eq!(report_f64(row, "global_render_mutex_locks"), 0.0);
+    assert_eq!(report_f64(row, "warm_atlas_upload_calls"), 0.0);
+    assert_eq!(report_f64(row, "warm_atlas_upload_bytes"), 0.0);
+    let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
 fn filtered_run_suite_supports_metal_paged_text_atlas_locality_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-metal-paged-text-{}.json", std::process::id()));

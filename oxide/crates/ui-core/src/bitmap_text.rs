@@ -1,10 +1,9 @@
-//! Deterministic text renderer for UI overlays and fallback labels.
+//! Deterministic atlas text for UI overlays and fallback labels.
 //!
-//! Preferred path: smooth CPU glyph rasterization from an embedded latin font.
-//! Fallback path: deterministic `font8x8` bitmap rasterization for hosts/configs
-//! where the smooth font path is unavailable.
+//! Rendering is explicitly context-owned: callers upload one A8 atlas and text
+//! emits `GlyphRun` commands. The old per-alpha-run solid renderer is retained
+//! only by tests as a reference.
 
-use font8x8::{UnicodeFonts, BASIC_FONTS};
 use fontdue::{
     layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle as FontdueTextStyle},
     Font, FontSettings,
@@ -69,24 +68,16 @@ impl TextWidthKey {
     }
 }
 
-#[derive(Debug, Clone)]
-struct RasterGlyph {
-    width: usize,
-    height: usize,
-    alpha: Vec<u8>,
-}
-
 struct SmoothTextState {
     regular: Option<Font>,
     bold: Option<Font>,
     italic: Option<Font>,
-    glyphs: HashMap<RasterKey, RasterGlyph>,
 }
 
 impl SmoothTextState {
     fn new() -> Self {
         let (regular, bold, italic) = load_host_fonts();
-        Self { regular, bold, italic, glyphs: HashMap::new() }
+        Self { regular, bold, italic }
     }
 
     fn font_for_face(&self, face: FontFace) -> Option<&Font> {
@@ -201,6 +192,8 @@ pub struct BitmapTextAtlas {
     row_y: u32,
     row_h: u32,
     glyphs: HashMap<RasterKey, BitmapTextAtlasEntry>,
+    smooth: SmoothTextState,
+    layout: Layout,
     scratch_vertices: Vec<Vertex>,
     scratch_indices: Vec<u16>,
 }
@@ -269,6 +262,8 @@ impl BitmapTextAtlas {
             row_y: 1,
             row_h: 0,
             glyphs: HashMap::new(),
+            smooth: SmoothTextState::new(),
+            layout: Layout::new(CoordinateSystem::PositiveYDown),
             scratch_vertices: Vec::with_capacity(256),
             scratch_indices: Vec::with_capacity(384),
         }
@@ -320,56 +315,73 @@ impl BitmapTextAtlas {
         let Some(atlas_handle) = self.handle else {
             return false;
         };
-        let mut state = match SMOOTH_TEXT_STATE.lock() {
-            Ok(state) => state,
-            Err(_) => return false,
-        };
-        if state.font_for_face(style.face).is_none() {
+        if self.smooth.font_for_face(style.face).is_none() {
             return false;
         }
-        let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
         let origin_x = (x * SMOOTH_OVERSAMPLE).round();
         let origin_y = (y * SMOOTH_OVERSAMPLE).round();
-        layout.reset(&LayoutSettings { x: origin_x, y: origin_y, ..LayoutSettings::default() });
+        self.layout.reset(
+            &LayoutSettings { x: origin_x, y: origin_y, ..LayoutSettings::default() },
+        );
         let scaled_px = style.px * SMOOTH_OVERSAMPLE;
         {
-            let font = state.font_for_face(style.face).expect("smooth font for style face");
-            layout.append(&[font], &FontdueTextStyle::new(text, scaled_px, 0));
+            let font =
+                self.smooth.font_for_face(style.face).expect("smooth font for style face");
+            self.layout.append(&[font], &FontdueTextStyle::new(text, scaled_px, 0));
         }
 
         self.scratch_vertices.clear();
         self.scratch_indices.clear();
-        for glyph in layout.glyphs() {
-            let Some(key) = RasterKey::new(style.face, glyph.key.glyph_index, glyph.key.px) else {
+        for index in 0..self.layout.glyphs().len() {
+            let (glyph_index, glyph_px, glyph_x, glyph_y) = {
+                let glyph = &self.layout.glyphs()[index];
+                (glyph.key.glyph_index, glyph.key.px, glyph.x, glyph.y)
+            };
+            let Some(key) = RasterKey::new(style.face, glyph_index, glyph_px) else {
                 continue;
             };
-            if !state.glyphs.contains_key(&key) {
+            let entry = if let Some(entry) = self.glyphs.get(&key).copied() {
+                entry
+            } else {
                 let (metrics, bitmap) = {
-                    let font = state.font_for_face(style.face).expect("smooth font for style face");
-                    font.rasterize_indexed(glyph.key.glyph_index, glyph.key.px)
+                    let font = self
+                        .smooth
+                        .font_for_face(style.face)
+                        .expect("smooth font for style face");
+                    font.rasterize_indexed(glyph_index, glyph_px)
                 };
-                state.glyphs.insert(
+                if metrics.width == 0 || metrics.height == 0 {
+                    self.glyphs.insert(key, BitmapTextAtlasEntry { x: 0, y: 0, w: 0, h: 0 });
+                    continue;
+                }
+                let Some(entry) = ensure_glyph_entry(
+                    &mut self.data,
+                    &mut self.dirty,
+                    &mut self.revision,
+                    &mut self.next_x,
+                    &mut self.row_y,
+                    &mut self.row_h,
+                    &mut self.glyphs,
                     key,
-                    RasterGlyph { width: metrics.width, height: metrics.height, alpha: bitmap },
-                );
-            }
-            let Some(raster) = state.glyphs.get(&key) else {
-                continue;
+                    metrics.width,
+                    metrics.height,
+                    &bitmap,
+                ) else {
+                    return false;
+                };
+                entry
             };
-            if raster.width == 0 || raster.height == 0 {
+            if entry.w == 0 || entry.h == 0 {
                 continue;
             }
-            let Some(entry) = self.ensure_glyph_entry(key, raster) else {
-                return false;
-            };
             if !self.push_glyph_quad(
                 entry,
-                glyph.x.round() / SMOOTH_OVERSAMPLE,
-                glyph.y.round() / SMOOTH_OVERSAMPLE,
-                raster.width as f32 / SMOOTH_OVERSAMPLE,
-                raster.height as f32 / SMOOTH_OVERSAMPLE,
+                glyph_x.round() / SMOOTH_OVERSAMPLE,
+                glyph_y.round() / SMOOTH_OVERSAMPLE,
+                entry.w as f32 / SMOOTH_OVERSAMPLE,
+                entry.h as f32 / SMOOTH_OVERSAMPLE,
             ) {
-                break;
+                return false;
             }
         }
         let run = GlyphRun {
@@ -386,21 +398,7 @@ impl BitmapTextAtlas {
         true
     }
 
-    pub fn draw_text_or_fallback(
-        &mut self,
-        encoder: &mut dyn RenderEncoder,
-        text: &str,
-        x: f32,
-        y: f32,
-        style: TextStyle,
-        device_scale: f32,
-    ) {
-        if !self.draw_text(encoder, text, x, y, style, device_scale) {
-            draw_text(encoder, text, x, y, style);
-        }
-    }
-
-    pub fn draw_text_aligned_or_fallback(
+    pub fn draw_text_aligned(
         &mut self,
         encoder: &mut dyn RenderEncoder,
         text: &str,
@@ -408,49 +406,57 @@ impl BitmapTextAtlas {
         align: TextAlign,
         style: TextStyle,
         device_scale: f32,
-    ) {
-        let x = aligned_x(rect, text_width(text, style), align).max(rect.x);
-        self.draw_text_or_fallback(encoder, text, x, rect.y, style, device_scale);
+    ) -> bool {
+        let x = aligned_x(rect, self.measure_text(text, style), align).max(rect.x);
+        self.draw_text(encoder, text, x, rect.y, style, device_scale)
     }
 
-    pub fn draw_text_spans_or_fallback(
+    pub fn draw_text_spans(
         &mut self,
         encoder: &mut dyn RenderEncoder,
         spans: &[TextSpan<'_>],
         x: f32,
         y: f32,
         device_scale: f32,
-    ) {
+    ) -> bool {
         let mut cursor = x;
         for span in spans {
             if span.text.is_empty() {
                 continue;
             }
-            self.draw_text_or_fallback(
+            if !self.draw_text(
                 encoder,
                 span.text,
                 cursor,
                 y + span.y_offset,
                 span.style,
                 device_scale,
-            );
-            cursor += text_width(span.text, span.style);
+            ) {
+                return false;
+            }
+            cursor += self.measure_text(span.text, span.style);
         }
+        true
     }
 
-    pub fn draw_text_spans_aligned_or_fallback(
+    pub fn draw_text_spans_aligned(
         &mut self,
         encoder: &mut dyn RenderEncoder,
         spans: &[TextSpan<'_>],
         rect: RectF,
         align: TextAlign,
         device_scale: f32,
-    ) {
-        let x = aligned_x(rect, text_width_spans(spans), align).max(rect.x);
-        self.draw_text_spans_or_fallback(encoder, spans, x, rect.y, device_scale);
+    ) -> bool {
+        let width = spans
+            .iter()
+            .filter(|span| !span.text.is_empty())
+            .map(|span| self.measure_text(span.text, span.style))
+            .sum();
+        let x = aligned_x(rect, width, align).max(rect.x);
+        self.draw_text_spans(encoder, spans, x, rect.y, device_scale)
     }
 
-    pub fn draw_multiline_or_fallback(
+    pub fn draw_multiline(
         &mut self,
         encoder: &mut dyn RenderEncoder,
         lines: &[String],
@@ -458,109 +464,56 @@ impl BitmapTextAtlas {
         align: TextAlign,
         style: TextStyle,
         device_scale: f32,
-    ) {
-        let height = line_height(style);
+    ) -> bool {
+        let height = self.line_height(style);
         let mut cursor_y = rect.y;
         for line in lines {
             if cursor_y + height > rect.y + rect.h {
                 break;
             }
-            self.draw_text_aligned_or_fallback(
+            if !self.draw_text_aligned(
                 encoder,
                 line,
                 RectF::new(rect.x, cursor_y, rect.w, height),
                 align,
                 style,
                 device_scale,
-            );
+            ) {
+                return false;
+            }
             cursor_y += height;
         }
+        true
     }
 
-    fn ensure_glyph_entry(
-        &mut self,
-        key: RasterKey,
-        raster: &RasterGlyph,
-    ) -> Option<BitmapTextAtlasEntry> {
-        if let Some(entry) = self.glyphs.get(&key).copied() {
-            return Some(entry);
+    #[must_use]
+    pub fn line_height(&self, style: TextStyle) -> f32 {
+        if style.px >= SMOOTH_MIN_PX && self.smooth.font_for_face(style.face).is_some() {
+            (style.px * 1.20).max(1.0)
+        } else {
+            pixel_size(style) * 10.0
         }
-        let w = u32::try_from(raster.width).ok()?;
-        let h = u32::try_from(raster.height).ok()?;
-        let (x, y) = self.alloc_rect(w, h)?;
-        for row in 0..raster.height {
-            let src = row.saturating_mul(raster.width);
-            let dst = (y as usize)
-                .saturating_add(row)
-                .saturating_mul(BITMAP_TEXT_ATLAS_WIDTH as usize)
-                .saturating_add(x as usize);
-            let end = dst.saturating_add(raster.width).min(self.data.len());
-            if end > dst {
-                self.data[dst..end].copy_from_slice(&raster.alpha[src..src + end - dst]);
-            }
-        }
-        self.mark_dirty(x, y, w, h);
-        self.revision = self.revision.wrapping_add(1);
-        let entry = BitmapTextAtlasEntry { x, y, w, h };
-        self.glyphs.insert(key, entry);
-        Some(entry)
     }
 
-    fn alloc_rect(&mut self, w: u32, h: u32) -> Option<(u32, u32)> {
-        if w == 0 || h == 0 {
-            return None;
+    fn measure_text(&self, text: &str, style: TextStyle) -> f32 {
+        if text.is_empty() {
+            return 0.0;
         }
-        if self.next_x.saturating_add(w).saturating_add(1) > BITMAP_TEXT_ATLAS_WIDTH {
-            self.row_y = self.row_y.saturating_add(self.row_h).saturating_add(1);
-            self.next_x = 1;
-            self.row_h = 0;
+        if style.px < SMOOTH_MIN_PX {
+            return text_width_bitmap(text, style);
         }
-        if self.row_y.saturating_add(h).saturating_add(1) > BITMAP_TEXT_ATLAS_HEIGHT {
-            return None;
-        }
-        let x = self.next_x;
-        let y = self.row_y;
-        self.next_x = self.next_x.saturating_add(w).saturating_add(1);
-        self.row_h = self.row_h.max(h.saturating_add(1));
-        Some((x, y))
-    }
-
-    fn mark_dirty(&mut self, x: u32, y: u32, w: u32, h: u32) {
-        if w == 0 || h == 0 {
-            return;
-        }
-        let x0 = x.min(BITMAP_TEXT_ATLAS_WIDTH);
-        let y0 = y.min(BITMAP_TEXT_ATLAS_HEIGHT);
-        let x1 = x.saturating_add(w).min(BITMAP_TEXT_ATLAS_WIDTH);
-        let y1 = y.saturating_add(h).min(BITMAP_TEXT_ATLAS_HEIGHT);
-        let rect = BitmapTextAtlasDirtyRect {
-            x: x0,
-            y: y0,
-            w: x1.saturating_sub(x0),
-            h: y1.saturating_sub(y0),
+        let Some(font) = self.smooth.font_for_face(style.face) else {
+            return text_width_bitmap(text, style);
         };
-        if rect.w == 0 || rect.h == 0 {
-            return;
-        }
-        self.dirty = Some(match self.dirty {
-            Some(old) => {
-                let min_x = old.x.min(rect.x);
-                let min_y = old.y.min(rect.y);
-                let max_x = old.x.saturating_add(old.w).max(rect.x.saturating_add(rect.w));
-                let max_y = old.y.saturating_add(old.h).max(rect.y.saturating_add(rect.h));
-                BitmapTextAtlasDirtyRect {
-                    x: min_x,
-                    y: min_y,
-                    w: max_x
-                        .saturating_sub(min_x)
-                        .min(BITMAP_TEXT_ATLAS_WIDTH.saturating_sub(min_x)),
-                    h: max_y
-                        .saturating_sub(min_y)
-                        .min(BITMAP_TEXT_ATLAS_HEIGHT.saturating_sub(min_y)),
-                }
-            }
-            None => rect,
-        });
+        let scaled_px = style.px * SMOOTH_OVERSAMPLE;
+        text.chars()
+            .filter(|ch| *ch != '\n')
+            .map(|ch| {
+                let glyph_index = font.lookup_glyph_index(ch);
+                font.metrics_indexed(glyph_index, scaled_px).advance_width
+            })
+            .sum::<f32>()
+            / SMOOTH_OVERSAMPLE
     }
 
     fn push_glyph_quad(
@@ -600,6 +553,112 @@ impl BitmapTextAtlas {
     }
 }
 
+fn ensure_glyph_entry(
+    data: &mut [u8],
+    dirty: &mut Option<BitmapTextAtlasDirtyRect>,
+    revision: &mut u64,
+    next_x: &mut u32,
+    row_y: &mut u32,
+    row_h: &mut u32,
+    glyphs: &mut HashMap<RasterKey, BitmapTextAtlasEntry>,
+    key: RasterKey,
+    width: usize,
+    height: usize,
+    alpha: &[u8],
+) -> Option<BitmapTextAtlasEntry> {
+    if let Some(entry) = glyphs.get(&key).copied() {
+        return Some(entry);
+    }
+    let w = u32::try_from(width).ok()?;
+    let h = u32::try_from(height).ok()?;
+    let (x, y) = alloc_rect(next_x, row_y, row_h, w, h)?;
+    for row in 0..height {
+        let src = row.saturating_mul(width);
+        let dst = (y as usize)
+            .saturating_add(row)
+            .saturating_mul(BITMAP_TEXT_ATLAS_WIDTH as usize)
+            .saturating_add(x as usize);
+        let end = dst.saturating_add(width).min(data.len());
+        if end > dst {
+            data[dst..end].copy_from_slice(&alpha[src..src + end - dst]);
+        }
+    }
+    mark_dirty(dirty, x, y, w, h);
+    *revision = revision.wrapping_add(1);
+    let entry = BitmapTextAtlasEntry { x, y, w, h };
+    glyphs.insert(key, entry);
+    Some(entry)
+}
+
+fn alloc_rect(
+    next_x: &mut u32,
+    row_y: &mut u32,
+    row_h: &mut u32,
+    w: u32,
+    h: u32,
+) -> Option<(u32, u32)> {
+    if w == 0 || h == 0 {
+        return None;
+    }
+    if next_x.saturating_add(w).saturating_add(1) > BITMAP_TEXT_ATLAS_WIDTH {
+        *row_y = row_y.saturating_add(*row_h).saturating_add(1);
+        *next_x = 1;
+        *row_h = 0;
+    }
+    if row_y.saturating_add(h).saturating_add(1) > BITMAP_TEXT_ATLAS_HEIGHT {
+        return None;
+    }
+    let x = *next_x;
+    let y = *row_y;
+    *next_x = next_x.saturating_add(w).saturating_add(1);
+    *row_h = (*row_h).max(h.saturating_add(1));
+    Some((x, y))
+}
+
+fn mark_dirty(
+    dirty: &mut Option<BitmapTextAtlasDirtyRect>,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    let x0 = x.min(BITMAP_TEXT_ATLAS_WIDTH);
+    let y0 = y.min(BITMAP_TEXT_ATLAS_HEIGHT);
+    let x1 = x.saturating_add(w).min(BITMAP_TEXT_ATLAS_WIDTH);
+    let y1 = y.saturating_add(h).min(BITMAP_TEXT_ATLAS_HEIGHT);
+    let rect = BitmapTextAtlasDirtyRect {
+        x: x0,
+        y: y0,
+        w: x1.saturating_sub(x0),
+        h: y1.saturating_sub(y0),
+    };
+    if rect.w == 0 || rect.h == 0 {
+        return;
+    }
+    *dirty = Some(match *dirty {
+        Some(old) => {
+            let min_x = old.x.min(rect.x);
+            let min_y = old.y.min(rect.y);
+            let max_x = old.x.saturating_add(old.w).max(rect.x.saturating_add(rect.w));
+            let max_y = old.y.saturating_add(old.h).max(rect.y.saturating_add(rect.h));
+            BitmapTextAtlasDirtyRect {
+                x: min_x,
+                y: min_y,
+                w: max_x
+                    .saturating_sub(min_x)
+                    .min(BITMAP_TEXT_ATLAS_WIDTH.saturating_sub(min_x)),
+                h: max_y
+                    .saturating_sub(min_y)
+                    .min(BITMAP_TEXT_ATLAS_HEIGHT.saturating_sub(min_y)),
+            }
+        }
+        None => rect,
+    });
+}
+
 #[must_use]
 pub fn line_height(style: TextStyle) -> f32 {
     if smooth_enabled(style) {
@@ -635,38 +694,6 @@ fn text_width_bitmap(text: &str, style: TextStyle) -> f32 {
     glyph * count + spacing * (count - 1.0).max(0.0)
 }
 
-pub fn draw_text(encoder: &mut dyn RenderEncoder, text: &str, x: f32, y: f32, style: TextStyle) {
-    if draw_text_smooth(encoder, text, x, y, style) {
-        return;
-    }
-    draw_text_bitmap(encoder, text, x, y, style);
-}
-
-fn draw_text_bitmap(encoder: &mut dyn RenderEncoder, text: &str, x: f32, y: f32, style: TextStyle) {
-    let pixel = pixel_size(style);
-    let mut cursor = x;
-    let spacing = pixel * 1.4;
-    for ch in text.chars() {
-        if ch == '\n' {
-            continue;
-        }
-        draw_char(encoder, ch, cursor, y, pixel, style.color);
-        cursor += pixel * 8.0 + spacing;
-    }
-}
-
-pub fn draw_text_aligned(
-    encoder: &mut dyn RenderEncoder,
-    text: &str,
-    rect: RectF,
-    align: TextAlign,
-    style: TextStyle,
-) {
-    let width = text_width(text, style);
-    let x = aligned_x(rect, width, align);
-    draw_text(encoder, text, x.max(rect.x), rect.y, style);
-}
-
 #[must_use]
 pub fn text_width_spans(spans: &[TextSpan<'_>]) -> f32 {
     spans
@@ -674,28 +701,6 @@ pub fn text_width_spans(spans: &[TextSpan<'_>]) -> f32 {
         .filter(|span| !span.text.is_empty())
         .map(|span| text_width(span.text, span.style))
         .sum()
-}
-
-pub fn draw_text_spans(encoder: &mut dyn RenderEncoder, spans: &[TextSpan<'_>], x: f32, y: f32) {
-    let mut cursor = x;
-    for span in spans {
-        if span.text.is_empty() {
-            continue;
-        }
-        draw_text(encoder, span.text, cursor, y + span.y_offset, span.style);
-        cursor += text_width(span.text, span.style);
-    }
-}
-
-pub fn draw_text_spans_aligned(
-    encoder: &mut dyn RenderEncoder,
-    spans: &[TextSpan<'_>],
-    rect: RectF,
-    align: TextAlign,
-) {
-    let width = text_width_spans(spans);
-    let x = aligned_x(rect, width, align);
-    draw_text_spans(encoder, spans, x.max(rect.x), rect.y);
 }
 
 #[must_use]
@@ -721,56 +726,6 @@ pub fn text_width_with_placeholder(
 ) -> f32 {
     let span = resolve_text_with_placeholder(text, placeholder, text_style, placeholder_style);
     text_width(span.text, span.style)
-}
-
-pub fn draw_text_with_placeholder(
-    encoder: &mut dyn RenderEncoder,
-    text: &str,
-    placeholder: &str,
-    x: f32,
-    y: f32,
-    text_style: TextStyle,
-    placeholder_style: TextStyle,
-) {
-    let span = resolve_text_with_placeholder(text, placeholder, text_style, placeholder_style);
-    draw_text(encoder, span.text, x, y, span.style);
-}
-
-pub fn draw_text_with_placeholder_aligned(
-    encoder: &mut dyn RenderEncoder,
-    text: &str,
-    placeholder: &str,
-    rect: RectF,
-    align: TextAlign,
-    text_style: TextStyle,
-    placeholder_style: TextStyle,
-) {
-    let span = resolve_text_with_placeholder(text, placeholder, text_style, placeholder_style);
-    draw_text_aligned(encoder, span.text, rect, align, span.style);
-}
-
-pub fn draw_multiline(
-    encoder: &mut dyn RenderEncoder,
-    lines: &[String],
-    rect: RectF,
-    align: TextAlign,
-    style: TextStyle,
-) {
-    let height = line_height(style);
-    let mut cursor_y = rect.y;
-    for line in lines {
-        if cursor_y + height > rect.y + rect.h {
-            break;
-        }
-        draw_text_aligned(
-            encoder,
-            line,
-            RectF::new(rect.x, cursor_y, rect.w, height),
-            align,
-            style,
-        );
-        cursor_y += height;
-    }
 }
 
 fn smooth_enabled(style: TextStyle) -> bool {
@@ -824,192 +779,6 @@ fn smooth_text_width(text: &str, style: TextStyle, pixel_snapped: bool) -> Optio
         cache.insert(key, width);
     }
     Some(width)
-}
-
-fn draw_text_smooth(
-    encoder: &mut dyn RenderEncoder,
-    text: &str,
-    x: f32,
-    y: f32,
-    style: TextStyle,
-) -> bool {
-    if text.is_empty() {
-        return true;
-    }
-    if style.px < SMOOTH_MIN_PX {
-        return false;
-    }
-    let mut state = match SMOOTH_TEXT_STATE.lock() {
-        Ok(state) => state,
-        Err(_) => return false,
-    };
-    if state.font_for_face(style.face).is_none() {
-        return false;
-    }
-    let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
-    let origin_x = (x * SMOOTH_OVERSAMPLE).round();
-    let origin_y = (y * SMOOTH_OVERSAMPLE).round();
-    layout.reset(&LayoutSettings { x: origin_x, y: origin_y, ..LayoutSettings::default() });
-    let scaled_px = style.px * SMOOTH_OVERSAMPLE;
-    {
-        let font = state.font_for_face(style.face).expect("smooth font for style face");
-        layout.append(&[font], &FontdueTextStyle::new(text, scaled_px, 0));
-    }
-
-    for glyph in layout.glyphs() {
-        let Some(key) = RasterKey::new(style.face, glyph.key.glyph_index, glyph.key.px) else {
-            continue;
-        };
-        if !state.glyphs.contains_key(&key) {
-            let (metrics, bitmap) = {
-                let font = state.font_for_face(style.face).expect("smooth font for style face");
-                font.rasterize_indexed(glyph.key.glyph_index, glyph.key.px)
-            };
-            state.glyphs.insert(
-                key,
-                RasterGlyph { width: metrics.width, height: metrics.height, alpha: bitmap },
-            );
-        }
-        let Some(raster) = state.glyphs.get(&key) else {
-            continue;
-        };
-        if raster.width == 0 || raster.height == 0 {
-            continue;
-        }
-        draw_raster_glyph(
-            encoder,
-            raster,
-            glyph.x.round() / SMOOTH_OVERSAMPLE,
-            glyph.y.round() / SMOOTH_OVERSAMPLE,
-            style.color,
-            1.0 / SMOOTH_OVERSAMPLE,
-        );
-    }
-    true
-}
-
-fn draw_raster_glyph(
-    encoder: &mut dyn RenderEncoder,
-    glyph: &RasterGlyph,
-    x: f32,
-    y: f32,
-    color: Color,
-    px_step: f32,
-) {
-    for row in 0..glyph.height {
-        let row_offset = row * glyph.width;
-        let mut run_start: Option<usize> = None;
-        let mut run_alpha = 0_u8;
-        for col in 0..glyph.width {
-            let alpha = quantize_alpha(glyph.alpha[row_offset + col]);
-            match (run_start, alpha) {
-                (None, 0) => {}
-                (None, value) => {
-                    run_start = Some(col);
-                    run_alpha = value;
-                }
-                (Some(start), 0) => {
-                    draw_raster_run(encoder, x, y, row, start, col, run_alpha, color, px_step);
-                    run_start = None;
-                }
-                (Some(start), value) if value != run_alpha => {
-                    draw_raster_run(encoder, x, y, row, start, col, run_alpha, color, px_step);
-                    run_start = Some(col);
-                    run_alpha = value;
-                }
-                _ => {}
-            }
-        }
-        if let Some(start) = run_start {
-            draw_raster_run(encoder, x, y, row, start, glyph.width, run_alpha, color, px_step);
-        }
-    }
-}
-
-fn draw_raster_run(
-    encoder: &mut dyn RenderEncoder,
-    x: f32,
-    y: f32,
-    row: usize,
-    start_col: usize,
-    end_col: usize,
-    alpha: u8,
-    color: Color,
-    px_step: f32,
-) {
-    if end_col <= start_col || alpha == 0 {
-        return;
-    }
-    let left = x + start_col as f32 * px_step;
-    let top = y + row as f32 * px_step;
-    let width = (end_col - start_col) as f32 * px_step;
-    let quantized_alpha = (alpha as f32 / 255.0) * color.a;
-    if quantized_alpha <= 0.0 {
-        return;
-    }
-    draw_rect(
-        encoder,
-        left,
-        top,
-        width,
-        px_step,
-        Color::rgba(color.r, color.g, color.b, quantized_alpha),
-    );
-}
-
-fn quantize_alpha(alpha: u8) -> u8 {
-    alpha
-}
-
-fn draw_char(encoder: &mut dyn RenderEncoder, ch: char, x: f32, y: f32, pixel: f32, color: Color) {
-    let Some(bitmap) = BASIC_FONTS.get(ch) else { return };
-    for (row_index, row_bits) in bitmap.iter().copied().enumerate() {
-        let row_y = y + row_index as f32 * pixel;
-        let mut run_start: Option<usize> = None;
-        for col in 0..8 {
-            // font8x8 stores row bits in low->high order for left->right columns.
-            // Reading high->low mirrors glyphs horizontally.
-            let on = ((row_bits >> col) & 1) == 1;
-            match (run_start, on) {
-                (None, true) => run_start = Some(col),
-                (Some(start), false) => {
-                    draw_run(encoder, x, row_y, start, col, pixel, color);
-                    run_start = None;
-                }
-                _ => {}
-            }
-        }
-        if let Some(start) = run_start {
-            draw_run(encoder, x, row_y, start, 8, pixel, color);
-        }
-    }
-}
-
-fn draw_run(
-    encoder: &mut dyn RenderEncoder,
-    x: f32,
-    y: f32,
-    start_col: usize,
-    end_col: usize,
-    pixel: f32,
-    color: Color,
-) {
-    if end_col <= start_col {
-        return;
-    }
-    let width = (end_col - start_col) as f32 * pixel;
-    let left = x + start_col as f32 * pixel;
-    draw_rect(encoder, left, y, width, pixel, color);
-}
-
-fn draw_rect(encoder: &mut dyn RenderEncoder, x: f32, y: f32, w: f32, h: f32, color: Color) {
-    let verts = [
-        Vertex { x, y, u: 0.0, v: 0.0, rgba: u32::MAX },
-        Vertex { x: x + w, y, u: 1.0, v: 0.0, rgba: u32::MAX },
-        Vertex { x, y: y + h, u: 0.0, v: 1.0, rgba: u32::MAX },
-        Vertex { x: x + w, y: y + h, u: 1.0, v: 1.0, rgba: u32::MAX },
-    ];
-    encoder.draw_solid(&verts, color);
 }
 
 #[must_use]

@@ -6,8 +6,9 @@
 
 ## Relation to the rest of the code
 - Built on top of `elements::CharFilter`, `elements::ShiftingTextInputState`, and `elements::ShiftingTextValidation`.
+- Text-option popovers render their labels through the caller-owned `bitmap_text::BitmapTextAtlas`; the UI module no longer emits one solid command per horizontal alpha run.
 - Re-exported by `ui-core::lib`.
-- Consumed directly by tests in `crates/ui-core/tests/text_fields_tests.rs` and indirectly by Nametag wrappers in `app/crates/ui/src/text_field.rs`, `horizontal_shifting_text.rs`, and `editable_text.rs`.
+- Consumed directly by tests in `crates/ui-core/tests/text_fields_tests.rs` and by application-owned field adapters.
 
 Call flow:
 - `App field taxonomy` -> `TextFieldPolicy`
@@ -30,6 +31,8 @@ Call flow:
   Lightweight non-animated editable text state using the same policy contract.
 - `SecureText::{new, from_horizontal_shifting_text, masked, display_text, display_text_before_caret, value, set, append, apply_commit, focus, blur, is_focused, advance, secure_now, reveal_active, fail_with_message, clear_fail, is_in_fail_mode, can_interact, fail_offset_px, offset, caret_index, set_caret_index, move_caret_left, move_caret_right}`
   Secure-text adapter that layers timed reveal and masking on top of `HorizontalShiftingText`.
+- `draw_text_input_options_popover(encoder, text_atlas, device_scale, layout, style) -> bool`
+  Encodes the popover chrome and one atlas-backed `GlyphRun` per visible option label. The atlas must already have an image handle; `false` means the atlas could not provide a complete label path and no bitmap-solid fallback is attempted.
 
 ## Logic narrative
 - `TextFieldPolicy` is the reusable contract between app taxonomy and generic edit engines. It owns filtering, lowercasing, UTF-8-safe truncation, blur trimming, and the special "first token only on external set" hook needed by legacy username fields.
@@ -40,6 +43,7 @@ Call flow:
 
 ## Preconditions and postconditions
 - Callers must provide a valid `TextFieldPolicy`; all public constructors require one.
+- Before encoding an options popover, callers must upload `BitmapTextAtlas::image()`, assign the resulting handle with `set_handle()`, and publish any reported dirty region before presenting commands that reference newly inserted glyphs.
 - Stored text always satisfies the configured character filter and max length.
 - `sanitize_external_input()` is the only path that applies first-token-only normalization; plain `sanitize()` intentionally does not.
 - `fail_with_message()` requires a non-empty message and asserts that contract.
@@ -60,18 +64,22 @@ Call flow:
 ## Concurrency and memory behavior
 - All types are single-owner state machines with no internal synchronization.
 - Mutating operations allocate only for owned `String` values used for filtered output, candidate edits, or masked display strings.
+- Warm option-label encoding uses the caller-owned atlas, layout, glyph cache, and geometry scratch buffers. It takes no global rendering mutex and performs no heap allocation after the four labels have been warmed.
 
 ## Performance notes
 - Policy filtering and commit application are O(n) over the affected text length.
 - Animation advancement is O(1).
 - Deduplicating these paths into Oxide removes repeated app-side logic without adding dynamic dispatch.
+- A full Cut/Copy/Select All/Paste popover now emits four glyph runs, two arrow solids, and five rounded-rectangle chrome commands. Label rendering emits zero solid alpha-run commands.
 
 ## Feature flags and cfgs
 - No feature-specific behavior.
 
 ## Testing and benchmarks
 - Covered by `crates/ui-core/tests/text_fields_tests.rs`.
-- Downstream compatibility is also exercised by Nametag `crates/ui/tests/components_tests.rs`.
+- Exact option-label raster/geometry parity and command shape are covered by `crates/ui-core/tests/bitmap_text_tests.rs`.
+- Warm allocation behavior is covered by `crates/ui-core/tests/text_frame_allocation_tests.rs`.
+- `cpu.architecture.text.bitmap_options` records the four glyph runs, zero label solids, zero global rendering locks, and zero warm atlas uploads.
 
 ## Examples
 ```rust
@@ -92,4 +100,5 @@ secure.fail_with_message("invalid", FieldFailRestoreMode::Clear);
 ```
 
 ## Changelog
+- 2026-07-14: hard-cut option-popover labels from per-alpha-run bitmap solids to an explicit caller-owned A8 atlas and `GlyphRun` path.
 - 2026-03-13: added Oxide-owned generic text-input primitives and moved app-agnostic editing behavior out of Nametag.

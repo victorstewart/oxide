@@ -84,6 +84,8 @@
   Applies translation during draw encoding and hit testing while keeping logical layout rectangles stable.
 - `pub mod text_fields`
   Exposes the generic policy-driven text-input module.
+- `pub mod bitmap_text`
+  Exposes the explicit caller-owned A8 bitmap-text atlas; production text drawing emits resolved glyph runs and has no per-alpha-run solid fallback.
 - `pub mod picker_popup`
   Exposes the generic popup/legacy-picker interaction module.
 - `pub mod emitter`
@@ -133,6 +135,7 @@
 - `TextCtx::retained_text_atlas_revision` keeps surface/router retained text replay on a live atlas by refusing to expose a snapshot while atlas bytes are still dirty.
 - `TextCtx` now defers frame-owned atlas publication until all visible labels are prepared, unions damage under an explicit 75% full-upload threshold, and patches provisional atlas handles without reordering commands.
 - Disabled text diagnostics retain only one direct frame-active branch; boxed counter state is absent from cache-hit glyph baking, and the warm 1,000-label frame remains allocation-free.
+- `BitmapTextAtlas` keeps deterministic overlay text on a context-owned fontdue cache and reusable geometry scratch, so warm option labels encode as four glyph runs with no rendering mutex, label solids, allocations, or atlas uploads.
 - `TextCtx` builds cached shaped cursor maps from the cached unwrapped owned shape when available, avoiding duplicate shaping between label drawing and text-input cursor metrics.
 - Text-input pointer picking uses the cached `oxide_text::ShapedCursorMap` directly instead of probing every cursor position through repeated cache lookups, including descending visual caret maps for pure RTL runs.
 - When fallback fonts are configured, `TextCtx` builds prefix metrics through `oxide_text::TextShaper::cursor_map_with_fallback_fonts`, so unsupported grapheme clusters contribute the fallback font's shaped advance to caret geometry.
@@ -213,6 +216,7 @@ assert_eq!(text.value(), "");
 ```
 
 ## Changelog
+- 2026-07-14: hard-cut deterministic bitmap-overlay drawing to the explicit A8 `BitmapTextAtlas`/`GlyphRun` path and removed the production solid-alpha-run renderer.
 - 2026-07-14: added C43 frame-scoped text preparation, provisional glyph handles, merged atlas publication, opt-in text counters, and allocation coverage.
 - 2026-07-13: added C26 node-local retained geometry, generation-checked dynamic slots, complete nested affine/opacity composition, and synchronized hit/accessibility geometry.
 - 2026-07-13: Added hard retained CPU/prepared-GPU budgets, generation-aware LRU eviction, hot-entry protection, explicit churn suppression, zero-budget direct rebuild, and complete cache diagnostics for C23.

@@ -1,5 +1,5 @@
 use crate::{
-    bitmap_text::{draw_text_aligned, line_height, text_width, TextAlign, TextStyle},
+    bitmap_text::{line_height, text_width, BitmapTextAtlas, TextAlign, TextStyle},
     elements::{CharFilter, ShiftingTextInputState, ShiftingTextValidation},
     text_boundary,
 };
@@ -442,9 +442,14 @@ pub fn text_input_option_at(
 
 pub fn draw_text_input_options_popover(
     encoder: &mut dyn gfx::RenderEncoder,
+    text_atlas: &mut BitmapTextAtlas,
+    device_scale: f32,
     layout: TextInputOptionsLayout,
     style: TextInputOptionsPopoverStyle,
-) {
+) -> bool {
+    if text_atlas.handle().is_none() {
+        return false;
+    }
     let scale = (layout.bubble_rect.h / TEXT_INPUT_OPTIONS_HEIGHT_PT).max(1.0);
     let outline_w = (TEXT_INPUT_OPTIONS_OUTLINE_PT * scale).clamp(1.0, 2.0);
     let radius = layout.bubble_rect.h * 0.50;
@@ -501,6 +506,7 @@ pub fn draw_text_input_options_popover(
         }
         previous_rect = Some(rect);
     }
+    let mut labels_ready = true;
     if let Some(rect) = layout.cut_rect {
         let label_gap = TEXT_INPUT_OPTIONS_HORIZONTAL_PADDING_PT * scale;
         let label_rect = gfx::RectF::new(
@@ -509,7 +515,14 @@ pub fn draw_text_input_options_popover(
             (rect.w - label_gap * 2.0).max(1.0),
             rect.h,
         );
-        draw_input_option_label(encoder, TextInputOption::Cut.label(), label_rect, text_style);
+        labels_ready &= draw_input_option_label(
+            encoder,
+            text_atlas,
+            device_scale,
+            TextInputOption::Cut.label(),
+            label_rect,
+            text_style,
+        );
     }
     if let Some(rect) = layout.copy_rect {
         let label_gap = TEXT_INPUT_OPTIONS_HORIZONTAL_PADDING_PT * scale;
@@ -519,7 +532,14 @@ pub fn draw_text_input_options_popover(
             (rect.w - label_gap * 2.0).max(1.0),
             rect.h,
         );
-        draw_input_option_label(encoder, TextInputOption::Copy.label(), label_rect, text_style);
+        labels_ready &= draw_input_option_label(
+            encoder,
+            text_atlas,
+            device_scale,
+            TextInputOption::Copy.label(),
+            label_rect,
+            text_style,
+        );
     }
     if let Some(rect) = layout.select_all_rect {
         let label_gap = TEXT_INPUT_OPTIONS_HORIZONTAL_PADDING_PT * scale;
@@ -529,8 +549,10 @@ pub fn draw_text_input_options_popover(
             (rect.w - label_gap * 2.0).max(1.0),
             rect.h,
         );
-        draw_input_option_label(
+        labels_ready &= draw_input_option_label(
             encoder,
+            text_atlas,
+            device_scale,
             TextInputOption::SelectAll.label(),
             label_rect,
             text_style,
@@ -544,8 +566,16 @@ pub fn draw_text_input_options_popover(
             (rect.w - label_gap * 2.0).max(1.0),
             rect.h,
         );
-        draw_input_option_label(encoder, TextInputOption::Paste.label(), label_rect, text_style);
+        labels_ready &= draw_input_option_label(
+            encoder,
+            text_atlas,
+            device_scale,
+            TextInputOption::Paste.label(),
+            label_rect,
+            text_style,
+        );
     }
+    labels_ready
 }
 
 #[must_use]
@@ -1590,13 +1620,22 @@ fn rect_contains(rect: gfx::RectF, x: f32, y: f32) -> bool {
 
 fn draw_input_option_label(
     encoder: &mut dyn gfx::RenderEncoder,
+    text_atlas: &mut BitmapTextAtlas,
+    device_scale: f32,
     label: &str,
     rect: gfx::RectF,
     style: TextStyle,
-) {
-    let line_h = line_height(style);
+) -> bool {
+    let line_h = text_atlas.line_height(style);
     let label_rect = gfx::RectF::new(rect.x, rect.y + (rect.h - line_h) * 0.50, rect.w, line_h);
-    draw_text_aligned(encoder, label, label_rect, TextAlign::Center, style);
+    text_atlas.draw_text_aligned(
+        encoder,
+        label,
+        label_rect,
+        TextAlign::Center,
+        style,
+        device_scale,
+    )
 }
 
 fn vertex(x: f32, y: f32) -> gfx::Vertex {

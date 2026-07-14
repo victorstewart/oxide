@@ -944,6 +944,7 @@ dependencies = [
  "oxide-text",
  "oxide-timing",
  "oxide-ui-core",
+ "oxide-wasm-alloc-counter",
  "png",
  "serde",
  "serde_json",

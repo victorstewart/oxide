@@ -1,4 +1,67 @@
 [[experiments]]
+id = "c48-bitmap-text-atlas-glyph-runs"
+introduced_commit = "C48 staged tree recorded in commit proof"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-ui-core", "oxide-renderer-api", "oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max CPU and Metal"]
+correctness_gate = "The real Cut/Copy/Select All/Paste popover must preserve the existing fontdue glyph coverage and geometry exactly; text-field, picker, selection/caret, fallback, IME marked-text, accessibility, retained-text, atlas lifecycle, and fail-closed tests must pass with no production solid-alpha-run fallback."
+performance_gate = "Fifteen fixed-seed balanced fresh-process pairs and 100,000 bootstrap resamples must improve warm popover CPU time by at least 5% with confidence, pair-win, p95, p99, and peak gates; a tiled eight-popover Metal stress must pass the same GPU gates with at least 2,000 completed timestamps per side; four labels must move from 2,108 label solids and four render-mutex locks to four GlyphRuns, zero label solids, zero render locks, zero warm atlas uploads, and zero measured-loop allocations."
+decision_state = "accepted"
+decision = "Moved deterministic bitmap-overlay rendering into a caller-owned fontdue A8 atlas with reusable layout and geometry scratch, routed text-option labels through one GlyphRun each, and deleted the production per-alpha-run solid renderer and its fallback APIs."
+proof = [
+   "The final implementation-source CPU population retained 465 samples per side: parent/candidate p50 11.976970/1.542175 us, p95 12.252132/1.633700 us, p99 12.393261/1.687987 us, and peak 12.947021/1.752441 us.",
+   "CPU paired median speedup was 87.170% with 95% CI 87.058%..87.200%, 15/15 pair wins, and every strict tail gate accepted.",
+   "The final implementation-source eight-popover Metal population retained 2,100 completed command-buffer timestamps per side: parent/candidate p50 0.335500/0.039333 ms, p95 0.340125/0.040583 ms, p99 0.342042/0.041459 ms, and peak 0.346750/0.067625 ms.",
+   "Metal paired median speedup was 88.259% with 95% CI 66.720%..88.354% and 15/15 pair wins; commands/draws per frame fell from 16,920/16,896 to 88/40.",
+   "The real popover command contract moved from 2,115 commands, 2,108 label solids, four render locks, 16 allocations, 3,286 allocated bytes, and three reallocations per operation to 11 commands, four GlyphRuns, zero label solids/locks/allocations/reallocations, and zero warm atlas uploads.",
+   "An independent test rasterizes the four labels with the unchanged Asap Bold fontdue contract and matches every candidate A8 atlas byte plus glyph-quad origin and extent exactly; the complete ui-core suite covers the required text, picker, IME, fallback, caret, and accessibility paths.",
+]
+cleanup = [
+   "Removed production font8x8 drawing, fontdue alpha-run solids, global-mutex rendering, all bitmap-solid fallback entry points, and the redundant post-atlas raster-byte cache; font8x8 remains dev-only for the independent diagnostic reference.",
+   "Kept measurement-only width helpers separate from rendering and retained the bounded 1024x1024 explicit atlas contract; aggregate workspace/device baseline promotion remains deferred to C62.",
+]
+
+[[experiments]]
+id = "c48-single-popover-metal-tail-rejected"
+introduced_commit = "rejected during C48 Metal measurement review"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "The parent and candidate must render the same one-popover scene from the same layout, fontdue coverage, geometry, colors, scale, and offscreen target with every command-buffer timestamp completed."
+performance_gate = "The 15-pair one-popover GPU population must pass p50, p95, p99, and peak gates before it may serve as tail evidence."
+decision_state = "rejected"
+decision = "Rejected a single-popover Metal population as the authoritative GPU proof because the candidate's roughly 0.03 ms command buffer sat below a stable tail-measurement floor and rare scheduling spikes failed p99 and peak gates."
+proof = [
+   "The one-popover population retained 2,100 completed timestamps per side and improved parent/candidate p50 from 0.096250 to 0.029750 ms with a 68.790% paired median speedup, 95% CI 68.351%..70.013%, and 15/15 pair wins.",
+   "Candidate p99 0.119063 ms exceeded parent 0.111584 ms and candidate peak 0.327125 ms exceeded parent 0.199583 ms, so the shared analyzer rejected the run despite the clear central-tendency win.",
+   "The authoritative follow-up tiled eight identical production popovers without changing either renderer path, lifting steady GPU work above the scheduling floor and passing every distribution gate.",
+]
+cleanup = [
+   "Retained the rejected raw population as evidence and did not weaken tail thresholds or relabel it as accepted.",
+]
+
+[[experiments]]
+id = "c48-primary-textctx-swash-rasterizer-rejected"
+introduced_commit = "rejected during C48 visual-contract review"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-ui-core", "oxide-text"]
+required_devices = ["Apple M2 Max CPU"]
+correctness_gate = "Consolidation must preserve the existing deterministic fontdue raster bytes and glyph geometry exactly; a faster path cannot silently replace the rasterizer or alter option-label pixels."
+performance_gate = "A primary TextCtx path is eligible only after exact visual parity, then the same fresh-process popover timing and allocation gates."
+decision_state = "rejected"
+decision = "Rejected routing these deterministic overlay labels through the primary Swash-backed TextCtx even though an exploratory warm probe was faster, because changing rasterizer changed the pixel contract before performance evidence was admissible."
+proof = [
+   "The exploratory TextCtx path measured about 1.0 us/op versus about 2.05 us/op for the retained explicit fontdue atlas, but it did not reproduce the existing fontdue coverage bytes and therefore carries no eligible performance claim.",
+   "The retained explicit atlas uses the unchanged fontdue layout/raster bytes while still collapsing every label to one resolved GlyphRun and removing the global rendering mutex, solid alpha runs, and warm allocations.",
+]
+cleanup = [
+   "Removed the TextCtx/Swash option-label prototype and retained no alternate rasterizer switch or quality-changing fast path.",
+]
+
+[[experiments]]
 id = "c43-text-frame-preparation"
 introduced_commit = "C43 staged tree recorded in commit proof"
 introduced_date = "2026-07-14"
