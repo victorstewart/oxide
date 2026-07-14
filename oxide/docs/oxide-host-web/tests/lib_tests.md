@@ -43,7 +43,7 @@ C37 source coverage freezes the dedicated RRect count/DPR/pathological matrix, a
 
 C38 source coverage freezes the dedicated 100/1,000 same/mixed-texture image matrix, instance/triangle/byte metrics, isolated page mode, and `image` capture route. The runtime artifacts additionally prove exact DPR and prepared-transform pixels.
 
-C39 coverage freezes the 1/64/512/1,024 nine-slice matrix and capture route. C40 coverage freezes the matching spinner matrix, phased CPU-reference capture, production timestamp handoff, 600-frame browser-displayed animation harness, and raw compact-instance counters.
+C39 coverage freezes the 1/64/512/1,024 nine-slice matrix and capture route. C40 coverage freezes the matching spinner matrix, phased CPU-reference capture, production timestamp handoff, 600-frame browser-displayed animation harness, and raw compact-instance counters. C41 coverage freezes the 64/1,024-marker matrix, analytic capture route, and raw marker instance/triangle/byte counters.
 
 ## Preconditions and postconditions; invariants maintained; unsafe invariants if any
 
@@ -82,6 +82,7 @@ pub fn texture() -> Vec<u8>
 
 ## Changelog
 
+- 2026-07-14: added static coverage for the C41 neon-marker matrix, counters, and capture route.
 - 2026-07-14: added static coverage for the C40 spinner matrix, phased capture, timestamp handoff, and bounded displayed-frame animation evidence.
 - 2026-07-14: added static coverage for the C39 nine-slice matrix and capture route.
 - 2026-07-14: added static coverage for the C38 image matrix, compact-instance counters, and dedicated capture target.

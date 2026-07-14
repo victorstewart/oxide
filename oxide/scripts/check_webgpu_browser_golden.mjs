@@ -89,6 +89,7 @@ function parseArgs(argv)
       imageArchitectureOnly: false,
       nineSliceArchitectureOnly: false,
       spinnerArchitectureOnly: false,
+      neonMarkerArchitectureOnly: false,
       spinnerPhaseMs: 0,
       spinnerReference: false,
       idMaskCacheC33: false,
@@ -213,6 +214,8 @@ function parseArgs(argv)
          args.nineSliceArchitectureOnly = true;
       } else if (arg === "--spinner-architecture-only") {
          args.spinnerArchitectureOnly = true;
+      } else if (arg === "--neon-marker-architecture-only") {
+         args.neonMarkerArchitectureOnly = true;
       } else if (arg === "--spinner-phase-ms") {
          args.spinnerPhaseMs = Number(next());
       } else if (arg === "--spinner-reference") {
@@ -232,8 +235,8 @@ function parseArgs(argv)
       }
    }
 
-   if (args.target !== "app" && args.target !== "glyph" && args.target !== "id-mask" && args.target !== "scene3d" && args.target !== "prepared" && args.target !== "local-layers" && args.target !== "rrect" && args.target !== "image" && args.target !== "nine-slice" && args.target !== "spinner") {
-      throw new Error("--target must be app, glyph, id-mask, scene3d, prepared, local-layers, rrect, image, nine-slice, or spinner");
+   if (args.target !== "app" && args.target !== "glyph" && args.target !== "id-mask" && args.target !== "scene3d" && args.target !== "prepared" && args.target !== "local-layers" && args.target !== "rrect" && args.target !== "image" && args.target !== "nine-slice" && args.target !== "spinner" && args.target !== "neon-marker") {
+      throw new Error("--target must be app, glyph, id-mask, scene3d, prepared, local-layers, rrect, image, nine-slice, spinner, or neon-marker");
    }
    if (!args.golden) {
       args.golden = defaultGoldenForTarget(args.target);
@@ -588,6 +591,9 @@ function browserUrl(args, baseUrl, reportEndpoint, startupOnly = false, canvasDi
    }
    if (args.spinnerArchitectureOnly) {
       url.searchParams.set("spinner_architecture_only", "1");
+   }
+   if (args.neonMarkerArchitectureOnly) {
+      url.searchParams.set("neon_marker_architecture_only", "1");
    }
    if (args.spinnerPhaseMs !== 0) {
       url.searchParams.set("spinner_phase_ms", String(args.spinnerPhaseMs));
@@ -1008,6 +1014,8 @@ function assertRendered(image, target)
       assertRRectRendered(image);
    } else if (target === "spinner") {
       assertSpinnerRendered(image);
+   } else if (target === "neon-marker") {
+      assertNeonMarkerRendered(image);
    } else if (target === "image" || target === "nine-slice") {
       assertImageRendered(image);
    } else {
@@ -1033,6 +1041,25 @@ function assertSpinnerRendered(image)
    }
    if (atoms < 1_500 || dark < 50_000) {
       throw new Error(`capture does not look like the Spinner scene: atoms=${atoms} dark=${dark}`);
+   }
+}
+
+function assertNeonMarkerRendered(image)
+{
+   let colorful = 0;
+   let brightCore = 0;
+   let dark = 0;
+   for (let i = 0; i < image.rgba.length; i += 4)
+   {
+      let r = image.rgba[i];
+      let g = image.rgba[i + 1];
+      let b = image.rgba[i + 2];
+      if (b > r + 12 && g > 40) colorful += 1;
+      if (r > 180 && g > 190 && b > 200) brightCore += 1;
+      if (r < 35 && g < 35 && b < 35) dark += 1;
+   }
+   if (colorful < 1_000 || brightCore < 100 || dark < 20_000) {
+      throw new Error(`capture does not look like the neon-marker scene: colorful=${colorful} bright_core=${brightCore} dark=${dark}`);
    }
 }
 
@@ -1725,6 +1752,9 @@ function cpuSubmitCase(metrics)
       spinner_instances: numberMetric(metrics, "spinner_instances"),
       spinner_triangles: numberMetric(metrics, "spinner_triangles"),
       spinner_instance_bytes: numberMetric(metrics, "spinner_instance_bytes"),
+      neon_marker_instances: numberMetric(metrics, "neon_marker_instances"),
+      neon_marker_triangles: numberMetric(metrics, "neon_marker_triangles"),
+      neon_marker_instance_bytes: numberMetric(metrics, "neon_marker_instance_bytes"),
       camera_bg_draws: numberMetric(metrics, "camera_bg_draws"),
       render_passes: numberMetric(metrics, "render_passes"),
       clear_passes: numberMetric(metrics, "clear_passes"),
@@ -2155,6 +2185,9 @@ function idMaskCase(metrics, id, variant, prefix)
       spinner_instances: numberMetric(metrics, `${prefix}_spinner_instances`),
       spinner_triangles: numberMetric(metrics, `${prefix}_spinner_triangles`),
       spinner_instance_bytes: numberMetric(metrics, `${prefix}_spinner_instance_bytes`),
+      neon_marker_instances: numberMetric(metrics, `${prefix}_neon_marker_instances`),
+      neon_marker_triangles: numberMetric(metrics, `${prefix}_neon_marker_triangles`),
+      neon_marker_instance_bytes: numberMetric(metrics, `${prefix}_neon_marker_instance_bytes`),
       camera_bg_draws: numberMetric(metrics, `${prefix}_camera_bg_draws`),
       render_passes: numberMetric(metrics, `${prefix}_render_passes`),
       clear_passes: numberMetric(metrics, `${prefix}_clear_passes`),
@@ -2246,6 +2279,9 @@ function prefixedBackendCase(metrics, id, variant, prefix, extra)
       spinner_instances: numberMetric(metrics, `${prefix}_spinner_instances`),
       spinner_triangles: numberMetric(metrics, `${prefix}_spinner_triangles`),
       spinner_instance_bytes: numberMetric(metrics, `${prefix}_spinner_instance_bytes`),
+      neon_marker_instances: numberMetric(metrics, `${prefix}_neon_marker_instances`),
+      neon_marker_triangles: numberMetric(metrics, `${prefix}_neon_marker_triangles`),
+      neon_marker_instance_bytes: numberMetric(metrics, `${prefix}_neon_marker_instance_bytes`),
       camera_bg_draws: numberMetric(metrics, `${prefix}_camera_bg_draws`),
       render_passes: numberMetric(metrics, `${prefix}_render_passes`),
       clear_passes: numberMetric(metrics, `${prefix}_clear_passes`),
@@ -2436,7 +2472,7 @@ const WEBGPU_BACKEND_PATHS = [
    {
       id: "neon_marker",
       rows: ["web.wasm.webgpu.neon_marker.current"],
-      counters: ["expected_markers", "expected_draw_items", "draw_items", "solid_tris", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
+      counters: ["expected_markers", "expected_draw_items", "draw_items", "neon_marker_instances", "neon_marker_triangles", "neon_marker_instance_bytes", "draw_pipeline_binds", "draw_bind_group_binds", "draw_scissor_sets", "gpu_timestamp_passes"],
       comparison: "current",
    },
    {
@@ -3446,7 +3482,9 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          id: "web.wasm.webgpu.neon_marker.current",
          current_p50_ms: numberMetric(neonMarkerMetrics, "current_p50_ms"),
          current_draw_items: numberMetric(neonMarkerMetrics, "current_draw_items"),
-         current_solid_tris: numberMetric(neonMarkerMetrics, "current_solid_tris"),
+         current_instances: numberMetric(neonMarkerMetrics, "current_neon_marker_instances"),
+         current_triangles: numberMetric(neonMarkerMetrics, "current_neon_marker_triangles"),
+         current_instance_bytes: numberMetric(neonMarkerMetrics, "current_neon_marker_instance_bytes"),
          current_draw_pipeline_binds: numberMetric(neonMarkerMetrics, "current_draw_pipeline_binds"),
          current_draw_bind_group_binds: numberMetric(
             neonMarkerMetrics,
@@ -3977,9 +4015,9 @@ function renderMarkdown(report)
    lines.push("");
    lines.push("## Neon Marker Summary");
    lines.push("");
-   lines.push("| Row | Current p50 ms | Markers | Current Items | Expected Items | Current Solid Tris | Current Pipeline Binds | Current Bind Groups | Current Scissors |");
-   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
-   lines.push(`| \`${report.neon_marker_summary.id}\` | ${report.neon_marker_summary.current_p50_ms.toFixed(3)} | ${report.neon_marker_summary.expected_markers} | ${report.neon_marker_summary.current_draw_items} | ${report.neon_marker_summary.expected_draw_items} | ${report.neon_marker_summary.current_solid_tris} | ${report.neon_marker_summary.current_draw_pipeline_binds} | ${report.neon_marker_summary.current_draw_bind_group_binds} | ${report.neon_marker_summary.current_draw_scissor_sets} |`);
+   lines.push("| Row | Current p50 ms | Markers | Current Items | Expected Items | Instances | Triangles | Instance Bytes | Current Pipeline Binds | Current Bind Groups | Current Scissors |");
+   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+   lines.push(`| \`${report.neon_marker_summary.id}\` | ${report.neon_marker_summary.current_p50_ms.toFixed(3)} | ${report.neon_marker_summary.expected_markers} | ${report.neon_marker_summary.current_draw_items} | ${report.neon_marker_summary.expected_draw_items} | ${report.neon_marker_summary.current_instances} | ${report.neon_marker_summary.current_triangles} | ${report.neon_marker_summary.current_instance_bytes} | ${report.neon_marker_summary.current_draw_pipeline_binds} | ${report.neon_marker_summary.current_draw_bind_group_binds} | ${report.neon_marker_summary.current_draw_scissor_sets} |`);
    lines.push("");
    lines.push("## Direct Surface Summary");
    lines.push("");
@@ -5406,12 +5444,16 @@ function assertWebReportContract(report)
    }
    if (
       neonMarker.expected_markers <= 0
-      || neonMarker.expected_draw_items !== neonMarker.expected_markers * 3
+      || neonMarker.expected_draw_items !== neonMarker.expected_markers
       || neonMarker.draw_items !== neonMarker.expected_draw_items
-      || neonMarker.solid_tris <= 0
+      || neonMarker.neon_marker_instances !== neonMarker.expected_markers
+      || neonMarker.neon_marker_triangles !== neonMarker.expected_markers * 2
+      || neonMarker.neon_marker_instance_bytes !== neonMarker.expected_markers * 60
+      || neonMarker.solid_tris !== 0
+      || neonMarker.rrect_instances !== 0
       || neonMarker.gpu_timestamp_passes !== neonMarker.render_passes
    ) {
-      throw new Error("neon marker WebGPU current row must cover marker-derived solid draws and timestamped passes");
+      throw new Error("neon marker WebGPU current row must cover compact analytic instances and timestamped passes");
    }
    if (
       neonMarker.draw_pipeline_binds !== 1
@@ -5428,7 +5470,9 @@ function assertWebReportContract(report)
    if (
       report.neon_marker_summary.current_p50_ms !== neonMarker.p50_ms
       || report.neon_marker_summary.current_draw_items !== neonMarker.draw_items
-      || report.neon_marker_summary.current_solid_tris !== neonMarker.solid_tris
+      || report.neon_marker_summary.current_instances !== neonMarker.neon_marker_instances
+      || report.neon_marker_summary.current_triangles !== neonMarker.neon_marker_triangles
+      || report.neon_marker_summary.current_instance_bytes !== neonMarker.neon_marker_instance_bytes
       || report.neon_marker_summary.current_draw_pipeline_binds !== neonMarker.draw_pipeline_binds
       || report.neon_marker_summary.current_draw_bind_group_binds !== neonMarker.draw_bind_group_binds
       || report.neon_marker_summary.current_draw_scissor_sets !== neonMarker.draw_scissor_sets

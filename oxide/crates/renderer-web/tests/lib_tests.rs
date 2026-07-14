@@ -81,6 +81,9 @@ fn renderer_accounting_schema_defaults_to_explicit_unavailable_allocated_bytes()
    assert_eq!(stats.spinner_instances, 0);
    assert_eq!(stats.spinner_triangles, 0);
    assert_eq!(stats.spinner_instance_bytes, 0);
+   assert_eq!(stats.neon_marker_instances, 0);
+   assert_eq!(stats.neon_marker_triangles, 0);
+   assert_eq!(stats.neon_marker_instance_bytes, 0);
 
    let source = include_str!("../src/lib.rs");
    let webgpu = include_str!("../src/wasm/webgpu.rs");
@@ -656,6 +659,42 @@ fn wasm_webgpu_draw_encoding_reuses_scratch_storage() {
 }
 
 #[test]
+fn webgpu_neon_marker_uses_one_compact_analytic_instance_per_marker()
+{
+   let source = include_str!("../src/wasm/webgpu.rs");
+   let metal = include_str!("../../renderer-metal/shaders/neon_marker.metal");
+   let encode_markers = source
+      .rsplit("pub fn encode_neon_markers")
+      .next()
+      .expect("encode_neon_markers")
+      .split("fn push_image")
+      .next()
+      .expect("encode_neon_markers end");
+   assert!(source.contains("const NEON_MARKER_INSTANCE_BYTES: usize = 60;"));
+   assert!(source.contains("const NEON_MARKER_VERTEX_COUNT: u32 = 6;"));
+   assert!(source.contains("const _: [(); NEON_MARKER_INSTANCE_BYTES]"));
+   assert!(source.contains("\"vs_neon_marker_instance\","));
+   assert!(source.contains("\"fs_neon_marker\","));
+   assert!(source.contains("neon_marker_instance_buffer: Option<wgpu::Buffer>"));
+   assert!(source.contains("let ring_alpha = clamp(1.0 - abs(distance - input.shape.y) / ring_width"));
+   assert!(source.contains("let halo_alpha = exp(-(distance * distance) / (2.0 * sigma * sigma))"));
+   assert!(source.contains("let marker_alpha = max(ring_alpha, halo_alpha) * input.ring_color.a;"));
+   for semantic in [
+      "1.0 - edge * 0.08",
+      "1.0 - abs(distance -",
+      "exp(-(distance * distance) / (2.0 * sigma * sigma))",
+      "max(ring_alpha, halo_alpha)",
+   ]
+   {
+      assert!(source.contains(semantic), "missing WebGPU marker semantic {semantic}");
+      assert!(metal.contains(semantic), "missing Metal marker semantic {semantic}");
+   }
+   assert!(encode_markers.contains("NeonMarkerInstance::new(*marker, pass.viewport)"));
+   assert!(encode_markers.contains("self.push_neon_marker_instance(instance);"));
+   assert!(!encode_markers.contains("self.encode_rrect("));
+}
+
+#[test]
 fn wasm_webgpu_effect_path_avoids_redundant_hot_work() {
     let source = include_str!("../src/wasm/webgpu.rs");
     let target_uses_backdrop = source
@@ -750,7 +789,7 @@ fn wasm_webgpu_backend_packet_vocabulary_is_frozen() {
 
     assert_eq!(
         draw_kind,
-        "enumDrawKind{Solid,RRect{first_instance:u32,instance_count:u32},Image{image:u32,kind:GpuImageKind,first_instance:u32,instance_count:u32},NineSlice{image:u32,kind:GpuImageKind,first_instance:u32,instance_count:u32},Spinner{first_instance:u32,instance_count:u32},Rgba{image:u32},A8{image:u32},Sdf{image:u32},Layer{id:u32},Backdrop{rect:api::RectF,sigma:f32},}"
+        "enumDrawKind{Solid,RRect{first_instance:u32,instance_count:u32},Image{image:u32,kind:GpuImageKind,first_instance:u32,instance_count:u32},NineSlice{image:u32,kind:GpuImageKind,first_instance:u32,instance_count:u32},Spinner{first_instance:u32,instance_count:u32},NeonMarker{first_instance:u32,instance_count:u32},Rgba{image:u32},A8{image:u32},Sdf{image:u32},Layer{id:u32},Backdrop{rect:api::RectF,sigma:f32},}"
     );
     assert_eq!(
         gpu_draw,
@@ -762,6 +801,7 @@ fn wasm_webgpu_backend_packet_vocabulary_is_frozen() {
         "(DrawKind::Image{..},DrawKind::Image{..})=>false",
         "(DrawKind::NineSlice{..},DrawKind::NineSlice{..})=>false",
         "(DrawKind::Spinner{..},DrawKind::Spinner{..})=>false",
+        "(DrawKind::NeonMarker{..},DrawKind::NeonMarker{..})=>false",
         "(DrawKind::Rgba{image:a},DrawKind::Rgba{image:b})=>a==b",
         "(DrawKind::A8{image:a},DrawKind::A8{image:b})=>a==b",
         "(DrawKind::Sdf{image:a},DrawKind::Sdf{image:b})=>a==b",
@@ -962,6 +1002,9 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
         "pub spinner_instances: u32",
         "pub spinner_triangles: u32",
         "pub spinner_instance_bytes: u64",
+        "pub neon_marker_instances: u32",
+        "pub neon_marker_triangles: u32",
+        "pub neon_marker_instance_bytes: u64",
         "pub sdf_glyph_quads: u32",
         "pub clip_depth_peak: u32",
         "pub cpu_scratch_bytes: u64",
@@ -1253,6 +1296,9 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(host.contains("{key_prefix}spinner_instances={}"));
     assert!(host.contains("{key_prefix}spinner_triangles={}"));
     assert!(host.contains("{key_prefix}spinner_instance_bytes={}"));
+    assert!(host.contains("{key_prefix}neon_marker_instances={}"));
+    assert!(host.contains("{key_prefix}neon_marker_triangles={}"));
+    assert!(host.contains("{key_prefix}neon_marker_instance_bytes={}"));
     assert!(host.contains("{key_prefix}sdf_glyph_quads={}"));
     assert!(host.contains("{key_prefix}scene3d_draws={}"));
     assert!(host.contains("{key_prefix}id_mask_draws={}"));

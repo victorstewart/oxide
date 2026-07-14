@@ -90,6 +90,9 @@ pub struct WebRendererStats {
     pub spinner_instances: u32,
     pub spinner_triangles: u32,
     pub spinner_instance_bytes: u64,
+    pub neon_marker_instances: u32,
+    pub neon_marker_triangles: u32,
+    pub neon_marker_instance_bytes: u64,
     pub camera_bg_draws: u32,
     pub clip_depth_peak: u32,
     pub damage_rects: u32,
@@ -332,6 +335,9 @@ impl Default for WebRendererStats {
             spinner_instances: 0,
             spinner_triangles: 0,
             spinner_instance_bytes: 0,
+            neon_marker_instances: 0,
+            neon_marker_triangles: 0,
+            neon_marker_instance_bytes: 0,
             camera_bg_draws: 0,
             clip_depth_peak: 0,
             damage_rects: 0,
@@ -1949,7 +1955,7 @@ mod wasm {
 
     fn canvas_stats_metrics(stats: WebRendererStats) -> String {
         format!(
-            ";draws={};draw_items={};draw_items_coalesced={};draw_pipeline_binds={};draw_bind_group_binds={};draw_scissor_sets={};solid_tris={};rrect_instances={};rrect_triangles={};rrect_instance_bytes={};image_instances={};image_triangles={};image_instance_bytes={};image_draws={};image_mesh_draws={};nine_slice_draws={};nine_slice_instances={};nine_slice_triangles={};nine_slice_instance_bytes={};glyph_quads={};sdf_glyph_quads={};clip_depth_peak={};damage_rects={};render_passes={};clear_passes={};draw_passes={};present_passes={};texture_copies={};command_buffers={};id_mask_uniform_writes={};id_mask_uniform_bytes={};id_mask_uniform_slots={};spinner_instances={};spinner_triangles={};spinner_instance_bytes={};buffer_upload_bytes={};property_upload_bytes={};property_records_updated={};property_ring_bytes={};texture_upload_bytes={};buffer_grows={};texture_creates={};bind_group_creates={};pipeline_creates={};sampler_creates={};image_texture_creates={};image_bind_group_creates={};cpu_scratch_bytes={};cpu_scratch_grows={};cpu_scratch_growth_bytes={}",
+            ";draws={};draw_items={};draw_items_coalesced={};draw_pipeline_binds={};draw_bind_group_binds={};draw_scissor_sets={};solid_tris={};rrect_instances={};rrect_triangles={};rrect_instance_bytes={};image_instances={};image_triangles={};image_instance_bytes={};image_draws={};image_mesh_draws={};nine_slice_draws={};nine_slice_instances={};nine_slice_triangles={};nine_slice_instance_bytes={};glyph_quads={};sdf_glyph_quads={};clip_depth_peak={};damage_rects={};render_passes={};clear_passes={};draw_passes={};present_passes={};texture_copies={};command_buffers={};id_mask_uniform_writes={};id_mask_uniform_bytes={};id_mask_uniform_slots={};spinner_instances={};spinner_triangles={};spinner_instance_bytes={};neon_marker_instances={};neon_marker_triangles={};neon_marker_instance_bytes={};buffer_upload_bytes={};property_upload_bytes={};property_records_updated={};property_ring_bytes={};texture_upload_bytes={};buffer_grows={};texture_creates={};bind_group_creates={};pipeline_creates={};sampler_creates={};image_texture_creates={};image_bind_group_creates={};cpu_scratch_bytes={};cpu_scratch_grows={};cpu_scratch_growth_bytes={}",
             stats.draws,
             stats.draw_items,
             stats.draw_items_coalesced,
@@ -1985,6 +1991,9 @@ mod wasm {
             stats.spinner_instances,
             stats.spinner_triangles,
             stats.spinner_instance_bytes,
+            stats.neon_marker_instances,
+            stats.neon_marker_triangles,
+            stats.neon_marker_instance_bytes,
             stats.buffer_upload_bytes,
             stats.property_upload_bytes,
             stats.property_records_updated,

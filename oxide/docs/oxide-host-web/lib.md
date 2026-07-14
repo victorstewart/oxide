@@ -92,7 +92,7 @@ The non-default C37 RRect mode runs only the 1/64/1,024-instance and pathologica
 
 The non-default C38 image mode runs 100/1,000-image same-texture and mixed-texture rows with fractional destinations, source crops, opacity, and an outer clip. It retains CPU and direct GPU distributions plus upload, draw, bind, and instance counters. The `image` capture target renders two textures, four crop shapes, and four opacity levels for exact DPR 1/2/3 comparison without expanding the default battery.
 
-The C39 mode runs 1/64/512/1,024 nine-slices and the `nine-slice` capture target. The C40 mode runs the same spinner counts, then a bounded 600-frame browser-displayed animation population with raw RAF, CPU-submit, direct GPU timestamp, queue-drain, and reference-path evidence. The `spinner` capture target accepts an explicit phase and can select the old CPU-expanded RRect reference for animation parity.
+The C39 mode runs 1/64/512/1,024 nine-slices and the `nine-slice` capture target. The C40 mode runs the same spinner counts, then a bounded 600-frame browser-displayed animation population with raw RAF, CPU-submit, direct GPU timestamp, queue-drain, and reference-path evidence. The `spinner` capture target accepts an explicit phase and can select the old CPU-expanded RRect reference for animation parity. The C41 mode isolates 64/1,024 neon markers and reports compact marker instances, triangles, bytes, CPU submit, and direct GPU timestamp distributions; `neon-marker` captures exercise the analytic shader at browser DPR 1 through 3.
 
 C26 lazily retains two alternating 300-instance snapshots in the existing browser benchmark resources: 200 glyph instances, 100 image instances, and two transform/opacity properties per instance. The throughput adapter warms all property-ring slices before sampling. `scripts/run_webgpu_dynamic_c26.mjs` starts a fresh Chrome process for each side and has a separate one-submit-per-real-RAF mode, including a full-affine guard.
 
@@ -162,6 +162,7 @@ console.log("oxide-webgpu-scene3d-ab", window.oxideWebGpuScene3dAB);
 
 ## Changelog
 
+- 2026-07-14: added the C41 neon-marker architecture and real-Dawn capture adapters.
 - 2026-07-14: added the C40 spinner architecture, phased capture, and bounded displayed-frame animation adapters with compact-instance counters.
 - 2026-07-14: added the C39 nine-slice architecture and exact-capture adapters.
 - 2026-07-14: added the bounded C38 same/mixed-texture image matrix, compact-instance counters, and exact image capture target.

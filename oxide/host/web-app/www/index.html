@@ -59,6 +59,7 @@
          const imageArchitectureOnly = params.get("image_architecture_only") === "1";
          const nineSliceArchitectureOnly = params.get("nine_slice_architecture_only") === "1";
          const spinnerArchitectureOnly = params.get("spinner_architecture_only") === "1";
+         const neonMarkerArchitectureOnly = params.get("neon_marker_architecture_only") === "1";
          const idMaskCacheC33 = params.get("id_mask_cache_c33") === "1";
          const idMaskCacheOnly = params.get("id_mask_cache_only") === "1";
          const idMaskCacheRafOnly = params.get("id_mask_cache_raf_only") === "1";
@@ -576,6 +577,15 @@
                   await nextAnimationFrame();
                }
             }
+         } else if (captureTarget === "neon-marker") {
+            window.oxideApp = await newMeasuredOxideApp();
+            window.oxideWebGpuAppSnapshot = measureFirstFrame(() => window.oxideApp.render_webgpu_neon_marker_snapshot(captureWidth, captureHeight, window.devicePixelRatio));
+            console.log("oxide-webgpu-neon-marker-snapshot", window.oxideWebGpuAppSnapshot);
+            if (captureOnly) {
+               for (let frame = 0; frame < 3; frame += 1) {
+                  await nextAnimationFrame();
+               }
+            }
          } else if (captureTarget === "prepared") {
             window.oxideApp = await newMeasuredOxideApp();
             window.oxideWebGpuPreparedSnapshot = measureFirstFrame(() => window.oxideApp.render_webgpu_prepared_snapshot(preparedFlat));
@@ -667,6 +677,10 @@
             console.log("oxide-webgpu-spinner-architecture", window.oxideWebGpuArchitecturePrimitives);
             window.oxideWebGpuSpinnerFramePerf = await runBench("spinner_frame_pacing", () => runSpinnerRafHarness(Math.min(rafFrames, 600)));
             console.log("oxide-webgpu-spinner-frame-pacing", window.oxideWebGpuSpinnerFramePerf);
+         } else if (neonMarkerArchitectureOnly) {
+            window.oxideApp.prewarm_webgpu_bench_resources();
+            window.oxideWebGpuArchitecturePrimitives = await runBench("neon_marker_architecture", () => window.oxideApp.bench_webgpu_neon_marker_architecture(mixedSamples, mixedFrames, window.devicePixelRatio));
+            console.log("oxide-webgpu-neon-marker-architecture", window.oxideWebGpuArchitecturePrimitives);
          } else if (!captureOnly && !startupOnly && !idMaskReferenceOnly && !idMaskMatrixOnly) {
             window.oxideApp.prewarm_webgpu_bench_resources();
             if (architectureMatrix) {

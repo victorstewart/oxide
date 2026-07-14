@@ -55,7 +55,7 @@ The tests are single-threaded and allocate only small strings/vectors.
 
 These are correctness and contract tests, not benchmark timers. They protect the counters consumed by the browser WebGPU performance report.
 The packet-vocabulary freeze is measurement harness only. It changes no runtime path and does not claim a performance win.
-C30 browser proof complements these structural checks with exact parent/candidate pixels and direct residency/pass counters; source matching does not substitute for runtime evidence. C35 likewise requires real Dawn shader creation, exact decoded field comparison, presented pixels, and paired direct GPU timestamps in addition to the source contract. C37 requires real WGSL pipeline creation, count/DPR timings, and one-pixel-boundary-classified captures beyond the static 36-byte ABI and no-tessellator assertions. C38 and C39 require real indexed pipeline creation, bounded architecture timings, and exact DPR/prepared pixels beyond their static ABI assertions. C40 additionally requires phased animation pixels and displayed-frame CPU/GPU/pacing samples beyond its compact-instance and no-CPU-trigonometry assertions.
+C30 browser proof complements these structural checks with exact parent/candidate pixels and direct residency/pass counters; source matching does not substitute for runtime evidence. C35 likewise requires real Dawn shader creation, exact decoded field comparison, presented pixels, and paired direct GPU timestamps in addition to the source contract. C37 requires real WGSL pipeline creation, count/DPR timings, and one-pixel-boundary-classified captures beyond the static 36-byte ABI and no-tessellator assertions. C38 and C39 require real indexed pipeline creation, bounded architecture timings, and exact DPR/prepared pixels beyond their static ABI assertions. C40 additionally requires phased animation pixels and displayed-frame CPU/GPU/pacing samples beyond its compact-instance and no-CPU-trigonometry assertions. C41 requires real Dawn pipeline creation, 64/1,024-marker CPU/GPU/upload evidence, DPR captures, and source-equivalent Metal/WGSL analytic semantics beyond its static ABI checks.
 
 ## Feature flags and cfgs
 
@@ -63,7 +63,7 @@ They run on native targets against the non-wasm `WebRenderer` stub.
 
 ## Testing and benchmarks
 
-Run with `cargo test --locked -p oxide-renderer-web --test lib_tests`. Compile wasm behavior with `cargo check --locked --target wasm32-unknown-unknown -p oxide-renderer-web`. The local-layer runtime companions are the C30 browser capture and `run_webgpu_local_layers_c30.mjs`; mode `2` exercises the C31 bounded navigation/purge path. The C33 companion is `check_webgpu_browser_golden.mjs --id-mask-cache-only`, which executes real WebGPU hits, misses, one-entry thrash, bounded LRU reuse, and purge/reentry paths. C35 uses `check_webgpu_browser_golden.mjs --id-mask-matrix-out PATH` for the seven-dimension exact raster/final-field matrix, reuses the asymmetric multi-seed readback, and runs the 512-square forced-miss workload against parent and candidate packages. C37 through C40 use the bounded architecture-only and dedicated capture modes for their respective primitive families.
+Run with `cargo test --locked -p oxide-renderer-web --test lib_tests`. Compile wasm behavior with `cargo check --locked --target wasm32-unknown-unknown -p oxide-renderer-web`. The local-layer runtime companions are the C30 browser capture and `run_webgpu_local_layers_c30.mjs`; mode `2` exercises the C31 bounded navigation/purge path. The C33 companion is `check_webgpu_browser_golden.mjs --id-mask-cache-only`, which executes real WebGPU hits, misses, one-entry thrash, bounded LRU reuse, and purge/reentry paths. C35 uses `check_webgpu_browser_golden.mjs --id-mask-matrix-out PATH` for the seven-dimension exact raster/final-field matrix, reuses the asymmetric multi-seed readback, and runs the 512-square forced-miss workload against parent and candidate packages. C37 through C41 use the bounded architecture-only and dedicated capture modes for their respective primitive families.
 
 ## Examples
 
@@ -76,6 +76,7 @@ pub fn scale() -> f32
 
 ## Changelog
 
+- 2026-07-14: froze the C41 60-byte neon-marker ABI, analytic shader semantics, compact counters, and no-RRect-lowering contract.
 - 2026-07-14: froze the C40 20-byte spinner instance ABI, procedural shader atoms, selective animation uniform, prepared ownership, counters, and no-CPU-trigonometry contract.
 - 2026-07-14: froze the C39 44-byte nine-slice ABI and fixed-grid ownership contract.
 - 2026-07-14: froze the C38 36-byte image instance ABI, static indexed unit quad, ordered compatible batching, prepared-buffer ownership, counters, and generic fallback separation.

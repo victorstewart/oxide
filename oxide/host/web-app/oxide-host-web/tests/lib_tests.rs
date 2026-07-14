@@ -129,6 +129,14 @@ fn host_exposes_opt_in_webgpu_architecture_primitive_matrix() {
     assert!(source.contains("renderer.set_animation_time_ms(timestamp_ms);"));
     assert!(include_str!("../../../../scripts/check_webgpu_browser_golden.mjs")
         .contains("--spinner-architecture-only"));
+    assert!(source.contains("pub async fn bench_webgpu_neon_marker_architecture"));
+    assert!(page.contains("params.get(\"neon_marker_architecture_only\") === \"1\""));
+    assert!(page.contains("bench_webgpu_neon_marker_architecture"));
+    assert!(source.contains("pub fn render_webgpu_neon_marker_snapshot"));
+    assert!(source.contains("fn neon_marker_capture_frame"));
+    assert!(page.contains("captureTarget === \"neon-marker\""));
+    assert!(include_str!("../../../../scripts/check_webgpu_browser_golden.mjs")
+        .contains("--neon-marker-architecture-only"));
 }
 
 #[test]
@@ -681,7 +689,7 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("expected_sdf_runs={WEBGPU_GLYPH_RUN_SDF_RUNS}"));
     assert!(source.contains("expected_sdf_glyph_quads={}"));
     assert!(source.contains("expected_markers={WEBGPU_NEON_MARKERS}"));
-    assert!(source.contains("WEBGPU_NEON_MARKERS.saturating_mul(3)"));
+    assert!(!source.contains("WEBGPU_NEON_MARKERS.saturating_mul(3)"));
     assert!(source.contains("expected_image_draws={WEBGPU_DIRECT_SURFACE_DRAWS}"));
     assert!(source.contains("WEBGPU_DIRECT_SURFACE_DRAWS.saturating_add(1)"));
     assert!(source.contains("expected_source_draw_items={WEBGPU_DRAW_STATE_CACHE_DRAWS}"));
@@ -765,6 +773,9 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("spinner_instances={}"));
     assert!(source.contains("spinner_triangles={}"));
     assert!(source.contains("spinner_instance_bytes={}"));
+    assert!(source.contains("neon_marker_instances={}"));
+    assert!(source.contains("neon_marker_triangles={}"));
+    assert!(source.contains("neon_marker_instance_bytes={}"));
     assert!(source.contains("glyph_quads={}"));
     assert!(source.contains("sdf_glyph_quads={}"));
     assert!(source.contains("clip_depth_peak={}"));
@@ -883,6 +894,9 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("{key_prefix}spinner_instances={}"));
     assert!(source.contains("{key_prefix}spinner_triangles={}"));
     assert!(source.contains("{key_prefix}spinner_instance_bytes={}"));
+    assert!(source.contains("{key_prefix}neon_marker_instances={}"));
+    assert!(source.contains("{key_prefix}neon_marker_triangles={}"));
+    assert!(source.contains("{key_prefix}neon_marker_instance_bytes={}"));
     assert!(source.contains("{key_prefix}sdf_glyph_quads={}"));
     assert!(source.contains("{key_prefix}layer_draws={}"));
     assert!(source.contains("{key_prefix}layer_cache_hits={}"));
@@ -1188,6 +1202,9 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("spinner_instances: numberMetric(metrics, \"spinner_instances\")"));
     assert!(script.contains("spinner_triangles: numberMetric(metrics, \"spinner_triangles\")"));
     assert!(script.contains("spinner_instance_bytes: numberMetric(metrics, \"spinner_instance_bytes\")"));
+    assert!(script.contains("neon_marker_instances: numberMetric(metrics, \"neon_marker_instances\")"));
+    assert!(script.contains("neon_marker_triangles: numberMetric(metrics, \"neon_marker_triangles\")"));
+    assert!(script.contains("neon_marker_instance_bytes: numberMetric(metrics, \"neon_marker_instance_bytes\")"));
     assert!(script.contains("glyph_quads: numberMetric(metrics, \"glyph_quads\")"));
     assert!(script.contains("sdf_glyph_quads: numberMetric(metrics, \"sdf_glyph_quads\")"));
     assert!(script.contains("clip_depth_peak: numberMetric(metrics, \"clip_depth_peak\")"));

@@ -30,6 +30,8 @@ const NINE_SLICE_INSTANCE_BYTES: usize = 44;
 const NINE_SLICE_INDEX_COUNT: u32 = 54;
 const SPINNER_INSTANCE_BYTES: usize = 20;
 const SPINNER_VERTEX_COUNT: u32 = 72;
+const NEON_MARKER_INSTANCE_BYTES: usize = 60;
+const NEON_MARKER_VERTEX_COUNT: u32 = 6;
 
 const fn nine_slice_unit_vertices() -> [[u8; 4]; 36]
 {
@@ -655,6 +657,54 @@ impl SpinnerInstance
    }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+struct NeonMarkerInstance
+{
+   center: [f32; 2],
+   shape: [f32; 4],
+   alpha: [f32; 3],
+   core_rgba: u32,
+   ring_rgba: u32,
+   viewport: [f32; 4],
+}
+
+const _: [(); NEON_MARKER_INSTANCE_BYTES] = [(); core::mem::size_of::<NeonMarkerInstance>()];
+
+impl NeonMarkerInstance
+{
+   fn new(marker: neon_marker::NeonMarker, viewport: api::RectF) -> Option<Self>
+   {
+      let values = [
+         marker.center[0], marker.center[1], marker.core_radius_px, marker.ring_radius_px,
+         marker.ring_width_px, marker.halo_radius_px, marker.halo_sigma_px,
+         marker.halo_alpha_max, marker.ring_alpha_max,
+         viewport.x, viewport.y, viewport.w, viewport.h,
+      ];
+      if viewport.w <= 0.0 || viewport.h <= 0.0 || !values.iter().all(|value| value.is_finite())
+      {
+         return None;
+      }
+      Some(Self {
+         center: marker.center,
+         shape: [
+            marker.core_radius_px.max(0.0),
+            marker.ring_radius_px.max(0.0),
+            marker.ring_width_px.max(0.001),
+            marker.halo_radius_px.max(0.0),
+         ],
+         alpha: [
+            marker.halo_sigma_px.max(0.001),
+            marker.halo_alpha_max.clamp(0.0, 1.0),
+            marker.ring_alpha_max.clamp(0.0, 1.0),
+         ],
+         core_rgba: marker.core_color.pack_rgba8(),
+         ring_rgba: marker.ring_color.pack_rgba8(),
+         viewport: [viewport.x, viewport.y, viewport.w, viewport.h],
+      })
+   }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum DrawKind {
     Solid,
@@ -662,6 +712,7 @@ enum DrawKind {
     Image { image: u32, kind: GpuImageKind, first_instance: u32, instance_count: u32 },
     NineSlice { image: u32, kind: GpuImageKind, first_instance: u32, instance_count: u32 },
     Spinner { first_instance: u32, instance_count: u32 },
+    NeonMarker { first_instance: u32, instance_count: u32 },
     Rgba { image: u32 },
     A8 { image: u32 },
     Sdf { image: u32 },
@@ -678,6 +729,7 @@ enum DrawPipelineKey {
     NineSliceRgba,
     NineSliceA8,
     Spinner,
+    NeonMarker,
     Rgba,
     A8,
     Sdf,
@@ -725,6 +777,7 @@ struct FrameData {
     image_instances: Vec<ImageInstance>,
     nine_slice_instances: Vec<NineSliceInstance>,
     spinner_instances: Vec<SpinnerInstance>,
+    neon_marker_instances: Vec<NeonMarkerInstance>,
     draws: Vec<GpuDraw>,
     layer_passes: Vec<FrameLayerPass>,
     effect_count: usize,
@@ -1346,6 +1399,7 @@ impl FrameData {
         self.image_instances.clear();
         self.nine_slice_instances.clear();
         self.spinner_instances.clear();
+        self.neon_marker_instances.clear();
         self.draws.clear();
         self.layer_passes.clear();
         self.effect_count = 0;
@@ -1377,6 +1431,7 @@ fn coalescible_draw_kind(a: DrawKind, b: DrawKind) -> bool {
         (DrawKind::Image { .. }, DrawKind::Image { .. }) => false,
         (DrawKind::NineSlice { .. }, DrawKind::NineSlice { .. }) => false,
         (DrawKind::Spinner { .. }, DrawKind::Spinner { .. }) => false,
+        (DrawKind::NeonMarker { .. }, DrawKind::NeonMarker { .. }) => false,
         (DrawKind::Rgba { image: a }, DrawKind::Rgba { image: b }) => a == b,
         (DrawKind::A8 { image: a }, DrawKind::A8 { image: b }) => a == b,
         (DrawKind::Sdf { image: a }, DrawKind::Sdf { image: b }) => a == b,
@@ -1729,6 +1784,7 @@ struct GpuPrograms {
     nine_slice_unit_vertex_buffer: wgpu::Buffer,
     nine_slice_unit_index_buffer: wgpu::Buffer,
     spinner_pipeline: wgpu::RenderPipeline,
+    neon_marker_pipeline: wgpu::RenderPipeline,
     rgba_pipeline: wgpu::RenderPipeline,
     a8_pipeline: wgpu::RenderPipeline,
     sdf_pipeline: wgpu::RenderPipeline,
@@ -2181,6 +2237,8 @@ pub struct WebGpuRenderer {
     nine_slice_instance_capacity: u64,
     spinner_instance_buffer: Option<wgpu::Buffer>,
     spinner_instance_capacity: u64,
+    neon_marker_instance_buffer: Option<wgpu::Buffer>,
+    neon_marker_instance_capacity: u64,
     animation_phase: f32,
     index_buffer_u16: Option<wgpu::Buffer>,
     index_capacity_u16: u64,
@@ -2449,6 +2507,9 @@ impl WebGpuRenderer {
             .saturating_add(
                 self.spinner_instance_buffer.as_ref().map_or(0, wgpu::Buffer::size),
             )
+            .saturating_add(
+                self.neon_marker_instance_buffer.as_ref().map_or(0, wgpu::Buffer::size),
+            )
             .saturating_add(id_mask_vertex_bytes)
             .saturating_add(self.prepared_chunks.vertex_bytes());
         let index_buffer_bytes = self
@@ -2666,6 +2727,8 @@ impl WebGpuRenderer {
             nine_slice_instance_capacity: 0,
             spinner_instance_buffer: None,
             spinner_instance_capacity: 0,
+            neon_marker_instance_buffer: None,
+            neon_marker_instance_capacity: 0,
             animation_phase: 0.0,
             index_buffer_u16: None,
             index_capacity_u16: 0,
@@ -2732,6 +2795,7 @@ impl WebGpuRenderer {
                 image_instances: Vec::new(),
                 nine_slice_instances: Vec::new(),
                 spinner_instances: Vec::new(),
+                neon_marker_instances: Vec::new(),
                 draws: Vec::new(),
                 layer_passes: Vec::new(),
                 effect_count: 0,
@@ -3412,6 +3476,12 @@ impl WebGpuRenderer {
                 .saturating_mul(core::mem::size_of::<SpinnerInstance>()),
         );
         capacity.draw = capacity.draw.saturating_add(
+            self.frame
+                .neon_marker_instances
+                .capacity()
+                .saturating_mul(core::mem::size_of::<NeonMarkerInstance>()),
+        );
+        capacity.draw = capacity.draw.saturating_add(
             self.frame.draws.capacity().saturating_mul(core::mem::size_of::<GpuDraw>()),
         );
         capacity.draw = capacity.draw.saturating_add(
@@ -4006,37 +4076,10 @@ impl WebGpuRenderer {
         pass: &neon_marker::NeonMarkerPass<'_>,
     ) -> Result<(), api::RenderError> {
         for marker in pass.markers.iter().take(pass.clamped_len()) {
-            let halo = marker.bounds();
-            let halo_color = api::Color::rgba(
-                marker.ring_color.r,
-                marker.ring_color.g,
-                marker.ring_color.b,
-                marker.halo_alpha_max,
-            );
-            self.encode_rrect(halo, [halo.w * 0.5; 4], halo_color);
-            let ring = api::RectF::new(
-                marker.center[0] - marker.ring_radius_px,
-                marker.center[1] - marker.ring_radius_px,
-                marker.ring_radius_px * 2.0,
-                marker.ring_radius_px * 2.0,
-            );
-            self.encode_rrect(
-                ring,
-                [marker.ring_radius_px; 4],
-                api::Color::rgba(
-                    marker.ring_color.r,
-                    marker.ring_color.g,
-                    marker.ring_color.b,
-                    marker.ring_alpha_max,
-                ),
-            );
-            let core = api::RectF::new(
-                marker.center[0] - marker.core_radius_px,
-                marker.center[1] - marker.core_radius_px,
-                marker.core_radius_px * 2.0,
-                marker.core_radius_px * 2.0,
-            );
-            self.encode_rrect(core, [marker.core_radius_px; 4], marker.core_color);
+            if let Some(instance) = NeonMarkerInstance::new(*marker, pass.viewport)
+            {
+                self.push_neon_marker_instance(instance);
+            }
         }
         Ok(())
     }
@@ -4513,6 +4556,56 @@ impl WebGpuRenderer {
         }
         self.frame.draws.push(GpuDraw {
             kind: DrawKind::Spinner { first_instance, instance_count: 1 },
+            index_kind: PackedIndexKind::U16,
+            first_index: 0,
+            index_count: 0,
+            base_vertex: 0,
+            clip,
+            effect_uniform_offset: 0,
+            target,
+        });
+        self.stats.commands_copied = self.stats.commands_copied.saturating_add(1);
+    }
+
+    fn push_neon_marker_instance(&mut self, instance: NeonMarkerInstance)
+    {
+        let Ok(first_instance) = u32::try_from(self.frame.neon_marker_instances.len()) else
+        {
+            return;
+        };
+        let clip = self.current_clip();
+        let target = self.current_target();
+        self.frame.neon_marker_instances.push(instance);
+        self.stats.geometry_bytes_copied = self.stats.geometry_bytes_copied
+            .saturating_add(NEON_MARKER_INSTANCE_BYTES as u64);
+        self.stats.neon_marker_instances = self.stats.neon_marker_instances.saturating_add(1);
+        self.stats.neon_marker_triangles = self.stats.neon_marker_triangles.saturating_add(2);
+        self.stats.neon_marker_instance_bytes = self.stats.neon_marker_instance_bytes
+            .saturating_add(NEON_MARKER_INSTANCE_BYTES as u64);
+        if self.draw_item_coalescing_enabled
+        {
+            if let Some(last) = self.frame.draws.last_mut()
+            {
+                if last.clip == clip && last.target == target
+                {
+                    if let DrawKind::NeonMarker { first_instance: first, instance_count } = last.kind
+                    {
+                        if first.saturating_add(instance_count) == first_instance
+                        {
+                            last.kind = DrawKind::NeonMarker {
+                                first_instance: first,
+                                instance_count: instance_count.saturating_add(1),
+                            };
+                            self.stats.draw_items_coalesced =
+                                self.stats.draw_items_coalesced.saturating_add(1);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        self.frame.draws.push(GpuDraw {
+            kind: DrawKind::NeonMarker { first_instance, instance_count: 1 },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
             index_count: 0,
@@ -5192,6 +5285,7 @@ impl WebGpuRenderer {
         let image_instance_bytes = bytemuck::cast_slice(&self.frame.image_instances);
         let nine_slice_instance_bytes = bytemuck::cast_slice(&self.frame.nine_slice_instances);
         let spinner_instance_bytes = bytemuck::cast_slice(&self.frame.spinner_instances);
+        let neon_marker_instance_bytes = bytemuck::cast_slice(&self.frame.neon_marker_instances);
         if !spinner_instance_bytes.is_empty()
         {
             write_viewport_uniform(
@@ -5264,6 +5358,17 @@ impl WebGpuRenderer {
         }
         if ensure_buffer(
             &self.device,
+            &mut self.neon_marker_instance_buffer,
+            &mut self.neon_marker_instance_capacity,
+            neon_marker_instance_bytes.len() as u64,
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            "oxide-webgpu-neon-marker-instances",
+        ) {
+            self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+            self.stats.draw_buffer_grows = self.stats.draw_buffer_grows.saturating_add(1);
+        }
+        if ensure_buffer(
+            &self.device,
             &mut self.index_buffer_u16,
             &mut self.index_capacity_u16,
             index_bytes_u16.len() as u64,
@@ -5328,6 +5433,15 @@ impl WebGpuRenderer {
                     .stats
                     .buffer_upload_bytes
                     .saturating_add(spinner_instance_bytes.len() as u64);
+            }
+        }
+        if !neon_marker_instance_bytes.is_empty() {
+            if let Some(buffer) = &self.neon_marker_instance_buffer {
+                self.queue.write_buffer(buffer, 0, neon_marker_instance_bytes);
+                self.stats.buffer_upload_bytes = self
+                    .stats
+                    .buffer_upload_bytes
+                    .saturating_add(neon_marker_instance_bytes.len() as u64);
             }
         }
         if !index_bytes_u16.is_empty() {
@@ -6978,6 +7092,7 @@ impl WebGpuRenderer
          DrawPipelineKey::NineSliceRgba => Some(self.nine_slice_rgba_pipeline()),
          DrawPipelineKey::NineSliceA8 => Some(self.nine_slice_a8_pipeline()),
          DrawPipelineKey::Spinner => Some(self.spinner_pipeline()),
+         DrawPipelineKey::NeonMarker => Some(self.neon_marker_pipeline()),
          DrawPipelineKey::Rgba => Some(self.rgba_pipeline()),
          DrawPipelineKey::A8 => Some(self.a8_pipeline()),
          DrawPipelineKey::Sdf => Some(self.sdf_pipeline()),
@@ -7405,6 +7520,10 @@ impl WebGpuRenderer {
 
     fn spinner_pipeline(&self) -> &wgpu::RenderPipeline {
         &self.programs.spinner_pipeline
+    }
+
+    fn neon_marker_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.programs.neon_marker_pipeline
     }
 
     fn rgba_pipeline(&self) -> &wgpu::RenderPipeline {
@@ -8431,6 +8550,7 @@ impl WebGpuRenderer {
                 (pipeline, DrawBindKey::Texture { image })
             }
             DrawKind::Spinner { .. } => (DrawPipelineKey::Spinner, DrawBindKey::None),
+            DrawKind::NeonMarker { .. } => (DrawPipelineKey::NeonMarker, DrawBindKey::None),
             DrawKind::Rgba { image } => {
                 self.image(api::ImageHandle(image))?;
                 (DrawPipelineKey::Rgba, DrawBindKey::Texture { image })
@@ -8497,7 +8617,8 @@ impl WebGpuRenderer {
         if self.vertex_buffer.is_none() && self.rrect_instance_buffer.is_none()
             && self.image_instance_buffer.is_none()
             && self.nine_slice_instance_buffer.is_none()
-            && self.spinner_instance_buffer.is_none() {
+            && self.spinner_instance_buffer.is_none()
+            && self.neon_marker_instance_buffer.is_none() {
             return;
         }
         if !self.frame.draws[start..end].iter().any(|draw| draw.target == target) {
@@ -8518,6 +8639,7 @@ impl WebGpuRenderer {
         let image_instance_buffer = self.image_instance_buffer.clone();
         let nine_slice_instance_buffer = self.nine_slice_instance_buffer.clone();
         let spinner_instance_buffer = self.spinner_instance_buffer.clone();
+        let neon_marker_instance_buffer = self.neon_marker_instance_buffer.clone();
         let scratch_bind_group = self
             .scratch_target
             .as_ref()
@@ -8550,7 +8672,7 @@ impl WebGpuRenderer {
             if draw.target != target {
                 continue;
             }
-            if !matches!(draw.kind, DrawKind::RRect { .. } | DrawKind::Image { .. } | DrawKind::NineSlice { .. } | DrawKind::Spinner { .. })
+            if !matches!(draw.kind, DrawKind::RRect { .. } | DrawKind::Image { .. } | DrawKind::NineSlice { .. } | DrawKind::Spinner { .. } | DrawKind::NeonMarker { .. })
                 && bound_index != Some(draw.index_kind) {
                 match draw.index_kind {
                     PackedIndexKind::U16 => {
@@ -8645,6 +8767,12 @@ impl WebGpuRenderer {
                         pass.set_vertex_buffer(0, buffer.slice(..));
                         bound_index = None;
                     }
+                    DrawPipelineKey::NeonMarker => {
+                        let Some(buffer) = neon_marker_instance_buffer.as_ref() else { continue };
+                        pass.set_pipeline(self.neon_marker_pipeline());
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                        bound_index = None;
+                    }
                     DrawPipelineKey::Solid => {
                         let Some(buffer) = vertex_buffer.as_ref() else { continue };
                         pass.set_pipeline(self.solid_pipeline());
@@ -8725,6 +8853,11 @@ impl WebGpuRenderer {
             } else if let DrawKind::Spinner { first_instance, instance_count } = draw.kind {
                 pass.draw(
                     0..SPINNER_VERTEX_COUNT,
+                    first_instance..first_instance.saturating_add(instance_count),
+                );
+            } else if let DrawKind::NeonMarker { first_instance, instance_count } = draw.kind {
+                pass.draw(
+                    0..NEON_MARKER_VERTEX_COUNT,
                     first_instance..first_instance.saturating_add(instance_count),
                 );
             } else {
@@ -9233,6 +9366,18 @@ fn create_programs(
         "fs_rrect",
         "oxide-webgpu-spinner",
     );
+    let neon_marker_instance_layout = neon_marker_instance_layout();
+    let neon_marker_vertex_layouts = [neon_marker_instance_layout];
+    let neon_marker_pipeline = create_instanced_pipeline(
+        device,
+        &shader,
+        &solid_pipeline_layout,
+        &neon_marker_vertex_layouts,
+        &draw_color_target,
+        "vs_neon_marker_instance",
+        "fs_neon_marker",
+        "oxide-webgpu-neon-marker",
+    );
     let rgba_pipeline = create_pipeline(
         device,
         &shader,
@@ -9395,6 +9540,7 @@ fn create_programs(
         nine_slice_unit_vertex_buffer,
         nine_slice_unit_index_buffer,
         spinner_pipeline,
+        neon_marker_pipeline,
         rgba_pipeline,
         a8_pipeline,
         sdf_pipeline,
@@ -10022,6 +10168,47 @@ fn spinner_instance_layout() -> wgpu::VertexBufferLayout<'static>
    ];
    wgpu::VertexBufferLayout {
       array_stride: SPINNER_INSTANCE_BYTES as wgpu::BufferAddress,
+      step_mode: wgpu::VertexStepMode::Instance,
+      attributes: &ATTRIBUTES,
+   }
+}
+
+fn neon_marker_instance_layout() -> wgpu::VertexBufferLayout<'static>
+{
+   const ATTRIBUTES: [wgpu::VertexAttribute; 6] = [
+      wgpu::VertexAttribute {
+         format: wgpu::VertexFormat::Float32x2,
+         offset: 0,
+         shader_location: 0,
+      },
+      wgpu::VertexAttribute {
+         format: wgpu::VertexFormat::Float32x4,
+         offset: 8,
+         shader_location: 1,
+      },
+      wgpu::VertexAttribute {
+         format: wgpu::VertexFormat::Float32x3,
+         offset: 24,
+         shader_location: 2,
+      },
+      wgpu::VertexAttribute {
+         format: wgpu::VertexFormat::Unorm8x4,
+         offset: 36,
+         shader_location: 3,
+      },
+      wgpu::VertexAttribute {
+         format: wgpu::VertexFormat::Unorm8x4,
+         offset: 40,
+         shader_location: 4,
+      },
+      wgpu::VertexAttribute {
+         format: wgpu::VertexFormat::Float32x4,
+         offset: 44,
+         shader_location: 5,
+      },
+   ];
+   wgpu::VertexBufferLayout {
+      array_stride: NEON_MARKER_INSTANCE_BYTES as wgpu::BufferAddress,
       step_mode: wgpu::VertexStepMode::Instance,
       attributes: &ATTRIBUTES,
    }
@@ -11666,6 +11853,72 @@ fn vs_spinner_instance(
    out.radii = vec4<f32>(dot_radius);
    out.color = vec4<f32>(input.color.rgb, dot_alpha * viewport.translation_opacity.z);
    return out;
+}
+
+struct NeonMarkerIn {
+   @location(0) center: vec2<f32>,
+   @location(1) shape: vec4<f32>,
+   @location(2) alpha: vec3<f32>,
+   @location(3) core_color: vec4<f32>,
+   @location(4) ring_color: vec4<f32>,
+   @location(5) marker_viewport: vec4<f32>,
+};
+
+struct NeonMarkerOut {
+   @builtin(position) pos: vec4<f32>,
+   @location(0) pos_dp: vec2<f32>,
+   @location(1) @interpolate(flat) center: vec2<f32>,
+   @location(2) @interpolate(flat) shape: vec4<f32>,
+   @location(3) @interpolate(flat) alpha: vec3<f32>,
+   @location(4) @interpolate(flat) core_color: vec4<f32>,
+   @location(5) @interpolate(flat) ring_color: vec4<f32>,
+};
+
+@vertex
+fn vs_neon_marker_instance(
+   @builtin(vertex_index) vertex_index: u32,
+   input: NeonMarkerIn,
+) -> NeonMarkerOut {
+   let corners = array<vec2<f32>, 6>(
+      vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, 1.0),
+      vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
+   );
+   let radius = max(max(input.shape.w, input.shape.y + input.shape.z), input.shape.x);
+   let dp = input.center + corners[vertex_index] * radius;
+   let viewport_size = max(input.marker_viewport.zw, vec2<f32>(0.00001));
+   let local = (dp - input.marker_viewport.xy) / viewport_size;
+   var out: NeonMarkerOut;
+   out.pos = vec4<f32>(local.x * 2.0 - 1.0, 1.0 - local.y * 2.0, 0.0, 1.0);
+   out.pos_dp = dp;
+   out.center = input.center;
+   out.shape = input.shape;
+   out.alpha = input.alpha;
+   out.core_color = input.core_color;
+   out.ring_color = input.ring_color;
+   return out;
+}
+
+@fragment
+fn fs_neon_marker(input: NeonMarkerOut) -> @location(0) vec4<f32> {
+   let distance = length(input.pos_dp - input.center);
+   if (distance > input.shape.w) {
+      return vec4<f32>(0.0);
+   }
+   if (distance <= input.shape.x) {
+      let edge = clamp(distance / max(input.shape.x, 0.001), 0.0, 1.0);
+      let core_alpha = input.core_color.a * (1.0 - edge * 0.08);
+      return vec4<f32>(input.core_color.rgb, core_alpha);
+   }
+   let ring_width = max(input.shape.z, 0.001);
+   let ring_alpha = clamp(1.0 - abs(distance - input.shape.y) / ring_width, 0.0, 1.0)
+      * input.alpha.z;
+   let sigma = max(input.alpha.x, 0.001);
+   let halo_alpha = exp(-(distance * distance) / (2.0 * sigma * sigma)) * input.alpha.y;
+   let marker_alpha = max(ring_alpha, halo_alpha) * input.ring_color.a;
+   if (marker_alpha <= 0.001) {
+      return vec4<f32>(0.0);
+   }
+   return vec4<f32>(input.ring_color.rgb, clamp(marker_alpha, 0.0, 1.0));
 }
 
 @vertex
