@@ -32,6 +32,8 @@
   Carry generation-checked transform/opacity identities and transform-linked retained clip metadata without exposing a backend ring.
 - `RenderSnapshot`
   Validates one live generation per dense property index and keeps immutable chunk geometry separate from frame property values.
+- `RenderSpatialBounds`, `RenderCommandSpatial`, `RenderPaintSpan`, and `RenderSpatialQueryStats`
+  Carry conservative bounds, resolved clip state, matched scope endpoints, ordered paint spans, and explicit query work without exposing a backend index implementation.
 
 ## Logic narrative
 - Packed solid color remains part of the existing `Vertex` ABI: backends resolve zero to the draw uniform before interpolation and pass every nonzero value through as final color.
@@ -57,6 +59,7 @@
 ## Performance notes
 - Revision compatibility is a cheap linear scan over retained command metadata and avoids a broader forced redraw when all atlas resources are known unchanged.
 - Dense dynamic IDs sort by index and generation, making stale-generation conflict detection a linear adjacent scan; per-frame property values remain small metadata rather than geometry copies.
+- Retained glyph/mesh bounds are computed once from immutable vertex spans. Ordered chunk and instance queries use those stored bounds without rescanning source geometry.
 - Packed color conversion adds no draw, upload, or renderer object; it is internal renderer data preparation rather than a new authoring or user-journey path.
 
 ## Feature flags and cfgs
@@ -66,13 +69,14 @@
 - `crates/renderer-api/tests/draw_list_tests.rs` covers draw-list structure, `DrawCmd` taxonomy freeze, and stale text-atlas revision detection.
 - The same test file freezes packed byte order, clamping, and non-finite handling.
 - Retained replay integration is covered by `crates/ui-core/tests/draw_builder_tests.rs`.
-- `crates/renderer-api/tests/render_chunk_tests.rs` covers retained chunk identity, sequence sharing, dynamic property generations, clip references, and checked flat fallback.
+- `crates/renderer-api/tests/render_chunk_tests.rs` covers retained chunk identity, sequence sharing, dynamic property generations, clip references, conservative spatial metadata, ordered damage queries, and checked flat fallback.
 
 ## Examples
 
 `Color::rgba(1.0, 0.0, 0.0, 1.0).pack_rgba8()` produces `0xFF00_00FF`.
 
 ## Changelog
+- 2026-07-13: exported C27 conservative spatial bounds, command/span metadata, resolved instances, and query statistics.
 - 2026-07-13: added C26 generation-checked dynamic property slots and transform-linked retained clip metadata.
 - 2026-07-12: added packed `AABBGGRR` conversion and documented solid vertex-color inheritance.
 - 2026-06-22: added a measurement-harness freeze for the `DrawCmd` variant set and declaration order before packed draw-stream work.

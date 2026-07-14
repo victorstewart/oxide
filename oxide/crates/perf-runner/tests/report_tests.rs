@@ -4870,6 +4870,45 @@ fn dynamic_property_animation_has_a_public_authoring_contract()
    let _ = std::fs::remove_file(json_out);
 }
 
+#[test]
+fn retained_spatial_queries_have_engine_and_authoring_contracts()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-spatial-query-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env(
+         "OXIDE_PERF_RUNNER_FILTER",
+         "cpu.architecture.spatial_metadata.glyph_mesh_10000,cpu.authoring.retained_snapshot.spatial_query_10000",
+      )
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run retained spatial-query rows");
+   let stderr = String::from_utf8_lossy(&output.stderr);
+   assert!(output.status.success(), "retained spatial-query rows failed: {stderr}");
+   let report = std::fs::read_to_string(&json_out).expect("read retained spatial-query report");
+   for id in [
+      "cpu.architecture.spatial_metadata.glyph_mesh_10000",
+      "cpu.authoring.retained_snapshot.spatial_query_10000",
+   ]
+   {
+      let row = report_case_slice(&report, id);
+      assert_eq!(report_f64(row, "instance_count"), 512.0);
+      assert_eq!(report_f64(row, "damage_instances_visited"), 1.0);
+      assert_eq!(report_f64(row, "damage_instances_matched"), 1.0);
+      assert_eq!(report_f64(row, "damage_vertices_visited"), 0.0);
+      assert!(report_f64(row, "snapshot_metadata_bytes") > 0.0);
+   }
+   let authoring = report_case_slice(
+      &report,
+      "cpu.authoring.retained_snapshot.spatial_query_10000",
+   );
+   assert!(authoring.contains("\"family\": \"authoring\""));
+   let _ = std::fs::remove_file(json_out);
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn metal_architecture_reports_reconciled_renderer_resource_families()
@@ -5113,6 +5152,54 @@ fn metal_dynamic_property_row_freezes_zero_geometry_upload_contract()
    assert_eq!(report_f64(row, "backend_cache_misses_avg"), 0.0);
    assert_eq!(report_f64(row, "missed_frames_120hz"), 0.0);
    assert!(report_f64(row, "property_ring_bytes_peak") >= 300.0 * 48.0 * 3.0);
+   let _ = std::fs::remove_file(json_out);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn metal_spatial_rows_freeze_small_and_full_damage_contracts()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-spatial-metal-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "gpu.architecture.spatial_metadata.")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run Metal spatial rows");
+   let stderr = String::from_utf8_lossy(&output.stderr);
+   assert!(output.status.success(), "Metal spatial rows failed: {stderr}");
+   let report = std::fs::read_to_string(&json_out).expect("read Metal spatial report");
+   let small = report_case_slice(
+      &report,
+      "gpu.architecture.spatial_metadata.small_damage_glyph_mesh_10000",
+   );
+   let full = report_case_slice(
+      &report,
+      "gpu.architecture.spatial_metadata.full_damage_glyph_mesh_10000",
+   );
+
+   assert_eq!(report_f64(small, "instance_count"), 512.0);
+   assert_eq!(report_f64(small, "damage_instances_visited_avg"), 1.0);
+   assert_eq!(report_f64(small, "damage_instances_matched_avg"), 1.0);
+   assert_eq!(report_f64(small, "damage_commands_visited_avg"), 1.0);
+   assert_eq!(report_f64(small, "damage_commands_matched_avg"), 1.0);
+   assert_eq!(report_f64(small, "damage_vertices_visited_avg"), 0.0);
+   assert_eq!(report_f64(small, "prepared_plan_reuses_avg"), 0.0);
+   assert_eq!(report_f64(small, "draws_avg"), 1.0);
+   assert_eq!(report_f64(small, "geometry_bytes_copied_avg"), 0.0);
+   assert_eq!(report_f64(small, "buffer_upload_bytes_avg"), 0.0);
+   assert_eq!(report_f64(small, "shaded_damage_pixels_avg"), 4.0);
+   assert_eq!(report_f64(full, "damage_instances_visited_avg"), 0.0);
+   assert_eq!(report_f64(full, "damage_commands_visited_avg"), 0.0);
+   assert_eq!(report_f64(full, "damage_vertices_visited_avg"), 0.0);
+   assert_eq!(report_f64(full, "prepared_plan_reuses_avg"), 1.0);
+   assert_eq!(report_f64(full, "draws_avg"), 512.0);
+   assert_eq!(report_f64(full, "geometry_bytes_copied_avg"), 0.0);
+   assert_eq!(report_f64(full, "buffer_upload_bytes_avg"), 0.0);
+   assert_eq!(report_f64(full, "shaded_damage_pixels_avg"), 1_200.0 * 800.0);
    let _ = std::fs::remove_file(json_out);
 }
 

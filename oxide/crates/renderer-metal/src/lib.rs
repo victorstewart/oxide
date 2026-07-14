@@ -1019,6 +1019,11 @@ pub struct MetalRenderer {
     prepared_chunks: prepared::PreparedChunkCache,
     prepared_property_cache: prepared::PreparedPropertyCache,
     prepared_frame_plan: alloc::vec::Vec<prepared::PreparedFrameInstance>,
+    prepared_frame_snapshot: Option<api::RenderSnapshot>,
+    prepared_frame_viewport: [f32; 2],
+    prepared_frame_keys: alloc::vec::Vec<prepared::PreparedChunkKey>,
+    prepared_damage_instances: alloc::vec::Vec<u32>,
+    prepared_damage_commands: alloc::vec::Vec<u32>,
     prepared_fallback: api::DrawList,
     meshes_3d: HashMap<u32, Mesh3dGpu>,
     next_mesh3d_id: u32,
@@ -1037,8 +1042,15 @@ pub struct MetalRenderer {
     acc_chunks_reused: u64,
     acc_chunks_rebuilt: u64,
     acc_chunks_prepared: u64,
+    acc_prepared_plan_reuses: u64,
     acc_backend_cache_hits: u64,
     acc_backend_cache_misses: u64,
+    acc_damage_instances_visited: u64,
+    acc_damage_instances_matched: u64,
+    acc_damage_commands_visited: u64,
+    acc_damage_commands_matched: u64,
+    acc_damage_vertices_visited: u64,
+    acc_damage_query_ns: u64,
     acc_layer_body_commands_scanned: u64,
     acc_layer_body_commands_copied: u64,
     acc_layer_texture_creates: u32,
@@ -2125,6 +2137,11 @@ impl MetalRenderer {
             prepared_chunks: prepared::PreparedChunkCache::default(),
             prepared_property_cache: prepared::PreparedPropertyCache::default(),
             prepared_frame_plan: alloc::vec::Vec::new(),
+            prepared_frame_snapshot: None,
+            prepared_frame_viewport: [0.0, 0.0],
+            prepared_frame_keys: alloc::vec::Vec::new(),
+            prepared_damage_instances: alloc::vec::Vec::new(),
+            prepared_damage_commands: alloc::vec::Vec::new(),
             prepared_fallback: api::DrawList::default(),
             meshes_3d: HashMap::new(),
             next_mesh3d_id: 1,
@@ -2143,8 +2160,15 @@ impl MetalRenderer {
             acc_chunks_reused: 0,
             acc_chunks_rebuilt: 0,
             acc_chunks_prepared: 0,
+            acc_prepared_plan_reuses: 0,
             acc_backend_cache_hits: 0,
             acc_backend_cache_misses: 0,
+            acc_damage_instances_visited: 0,
+            acc_damage_instances_matched: 0,
+            acc_damage_commands_visited: 0,
+            acc_damage_commands_matched: 0,
+            acc_damage_vertices_visited: 0,
+            acc_damage_query_ns: 0,
             acc_layer_body_commands_scanned: 0,
             acc_layer_body_commands_copied: 0,
             acc_layer_texture_creates: 0,
@@ -3549,8 +3573,15 @@ impl MetalRenderer {
             self.acc_chunks_reused = 0;
             self.acc_chunks_rebuilt = 0;
             self.acc_chunks_prepared = 0;
+            self.acc_prepared_plan_reuses = 0;
             self.acc_backend_cache_hits = 0;
             self.acc_backend_cache_misses = 0;
+            self.acc_damage_instances_visited = 0;
+            self.acc_damage_instances_matched = 0;
+            self.acc_damage_commands_visited = 0;
+            self.acc_damage_commands_matched = 0;
+            self.acc_damage_vertices_visited = 0;
+            self.acc_damage_query_ns = 0;
             self.acc_layer_body_commands_scanned = 0;
             self.acc_layer_body_commands_copied = 0;
             self.acc_layer_texture_creates = 0;
@@ -5234,8 +5265,15 @@ impl api::Renderer for MetalRenderer {
             self.acc_chunks_reused = 0;
             self.acc_chunks_rebuilt = 0;
             self.acc_chunks_prepared = 0;
+            self.acc_prepared_plan_reuses = 0;
             self.acc_backend_cache_hits = 0;
             self.acc_backend_cache_misses = 0;
+            self.acc_damage_instances_visited = 0;
+            self.acc_damage_instances_matched = 0;
+            self.acc_damage_commands_visited = 0;
+            self.acc_damage_commands_matched = 0;
+            self.acc_damage_vertices_visited = 0;
+            self.acc_damage_query_ns = 0;
             self.acc_layer_body_commands_scanned = 0;
             self.acc_layer_body_commands_copied = 0;
             self.acc_layer_texture_creates = 0;
@@ -9436,8 +9474,15 @@ pub struct PerfStats {
     pub chunks_reused: u64,
     pub chunks_rebuilt: u64,
     pub chunks_prepared: u64,
+    pub prepared_plan_reuses: u64,
     pub backend_cache_hits: u64,
     pub backend_cache_misses: u64,
+    pub damage_instances_visited: u64,
+    pub damage_instances_matched: u64,
+    pub damage_commands_visited: u64,
+    pub damage_commands_matched: u64,
+    pub damage_vertices_visited: u64,
+    pub damage_query_ms: f64,
     pub layer_body_commands_scanned: u64,
     pub layer_body_commands_copied: u64,
     pub layer_texture_creates: u32,

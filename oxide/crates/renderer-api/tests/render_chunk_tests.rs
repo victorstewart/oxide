@@ -3,9 +3,9 @@ use std::sync::Arc;
 use oxide_renderer_api::{
    ChunkIndexMode, Color, Damage, DrawCmd, DrawList, GlyphRun, ImageHandle, IndexSpan, RectF,
    RectI, RenderChunk, RenderChunkError, RenderChunkId, RenderChunkInstance, RenderChunkSequence,
-   RenderChunkRevisions, RenderDynamicClip, RenderLayerInstance, RenderPropertySlot, RenderPropertySlotId,
-   RenderPropertyValue, RenderResourceDependency, RenderSnapshot, RenderSnapshotError, Vertex,
-   VertexSpan,
+   RenderChunkRevisions, RenderCommandSpatial, RenderDynamicClip, RenderLayerInstance, RenderPaintSpan,
+   RenderPropertySlot, RenderPropertySlotId, RenderPropertyValue, RenderResourceDependency,
+   RenderSnapshot, RenderSnapshotError, RenderSpatialBounds, Vertex, VertexSpan,
 };
 
 fn vertex(x: f32, y: f32) -> Vertex
@@ -153,7 +153,7 @@ fn chunk_canonicalizes_absolute_indices_and_packs_only_referenced_vertices()
    assert_eq!(chunk.id(), RenderChunkId(7));
    assert_eq!(chunk.draw_list().vertices, vec![vertex(10.0, 20.0), vertex(30.0, 20.0), vertex(30.0, 50.0)]);
    assert_eq!(chunk.draw_list().indices, vec![0, 1, 2]);
-   assert_eq!(chunk.bounds(), Some(RectF::new(10.0, 20.0, 20.0, 30.0)));
+   assert_eq!(chunk.bounds(), Some(RectF::new(9.0, 19.0, 22.0, 32.0)));
    match &chunk.draw_list().items[0] {
       DrawCmd::Solid { vb, ib, .. } => {
          assert_eq!(*vb, VertexSpan { offset: 0, len: 3 });
@@ -420,6 +420,141 @@ fn snapshot_rejects_missing_properties_and_flatten_rejects_lossy_transform()
 }
 
 #[test]
+fn chunk_precomputes_clipped_bounds_and_matching_layer_spans()
+{
+   let mut list = DrawList::default();
+   list.vertices.extend([
+      vertex(25.0, 25.0),
+      vertex(35.0, 25.0),
+      vertex(25.0, 35.0),
+   ]);
+   list.indices.extend([0, 1, 2]);
+   list.items.extend([
+      DrawCmd::ClipPush { rect: RectI::new(0, 0, 40, 40) },
+      DrawCmd::RRect {
+         rect: RectF::new(10.0, 10.0, 8.0, 8.0),
+         radii: [2.0; 4],
+         color: Color::rgba(1.0, 0.0, 0.0, 1.0),
+      },
+      DrawCmd::LayerBegin {
+         id: 7,
+         rect: RectF::new(20.0, 20.0, 30.0, 30.0),
+         dirty: true,
+      },
+      DrawCmd::Solid {
+         vb: VertexSpan { offset: 0, len: 3 },
+         ib: IndexSpan { offset: 0, len: 3 },
+         color: Color::rgba(0.0, 1.0, 0.0, 1.0),
+      },
+      DrawCmd::LayerEnd,
+      DrawCmd::ClipPop,
+   ]);
+   let chunk = RenderChunk::new(
+      RenderChunkId(42),
+      RenderChunkRevisions::default(),
+      list,
+      ChunkIndexMode::Local,
+      &[],
+   ).unwrap();
+
+   assert_eq!(chunk.command_spatial()[0].matching_scope, Some(5));
+   assert_eq!(chunk.command_spatial()[2].matching_scope, Some(4));
+   assert_eq!(chunk.command_spatial()[3].resolved_clip, RenderSpatialBounds::Finite(RectF::new(20.0, 20.0, 20.0, 20.0)));
+   assert_eq!(chunk.paint_spans(), [
+      RenderPaintSpan {
+         begin: 1,
+         end: 2,
+         bounds: RenderSpatialBounds::Finite(RectF::new(9.0, 9.0, 10.0, 10.0)),
+         vertex_count: 0,
+      },
+      RenderPaintSpan {
+         begin: 2,
+         end: 5,
+         bounds: RenderSpatialBounds::Finite(RectF::new(19.0, 19.0, 21.0, 21.0)),
+         vertex_count: 3,
+      },
+   ]);
+   let mut commands = Vec::new();
+   let stats = chunk.query_damage_commands(RectF::new(27.0, 27.0, 1.0, 1.0), &mut commands);
+   assert_eq!(commands, [2]);
+   assert_eq!(stats.entries_matched, 1);
+   chunk.query_damage_commands(RectF::new(70.0, 70.0, 1.0, 1.0), &mut commands);
+   assert!(commands.is_empty());
+}
+
+#[test]
+fn snapshot_resolves_affine_bounds_and_queries_only_intersections_in_paint_order()
+{
+   let slot = RenderPropertySlotId::dynamic(1, 1).unwrap();
+   let mut transformed = RenderChunkInstance::new(shape_chunk(80), [100.0, 50.0]);
+   transformed.property_slots = Arc::from([slot]);
+   let clipped = {
+      let mut instance = RenderChunkInstance::new(shape_chunk(81), [400.0, 0.0]);
+      instance.clip = Some(RectI::new(0, 0, 0, 0));
+      instance
+   };
+   let snapshot = RenderSnapshot::new(
+      vec![transformed, RenderChunkInstance::new(shape_chunk(82), [0.0, 0.0]), clipped],
+      vec![RenderPropertySlot {
+         id: slot,
+         revision: 3,
+         value: RenderPropertyValue::Transform([0.0, 2.0, -2.0, 0.0, 5.0, 7.0]),
+      }],
+      Damage { rects: Vec::new() },
+   ).unwrap();
+   assert_eq!(snapshot.resolved_instance(0).unwrap().transform, [0.0, 2.0, -2.0, 0.0, -95.0, 207.0]);
+   assert_eq!(snapshot.resolved_instance(0).unwrap().bounds, RenderSpatialBounds::Finite(RectF::new(-117.0, 205.0, 24.0, 44.0)));
+   assert!(snapshot.resolved_instance(2).unwrap().bounds.is_empty());
+   let mut instances = Vec::new();
+   let stats = snapshot.query_damage_instances(RectI::new(-110, 210, 2, 2), &mut instances);
+   assert_eq!(instances, [0]);
+   assert_eq!(stats.entries_matched, 1);
+   snapshot.query_damage_instances(RectI::new(-200, -200, 500, 500), &mut instances);
+   assert_eq!(instances, [0, 1]);
+}
+
+#[test]
+fn huge_glyph_scene_damage_query_never_revisits_vertex_spans()
+{
+   let mut list = DrawList::default();
+   for glyph in 0..512_u32
+   {
+      let x = glyph as f32 * 20.0;
+      let vertex_offset = list.vertices.len() as u32;
+      let index_offset = list.indices.len() as u32;
+      list.vertices.extend([
+         vertex(x, 0.0),
+         vertex(x + 8.0, 0.0),
+         vertex(x + 8.0, 10.0),
+         vertex(x, 10.0),
+      ]);
+      list.indices.extend([0, 1, 2, 0, 2, 3]);
+      list.items.push(DrawCmd::GlyphRun {
+         run: GlyphRun {
+            atlas: ImageHandle(9),
+            atlas_revision: 1,
+            vb: VertexSpan { offset: vertex_offset, len: 4 },
+            ib: IndexSpan { offset: index_offset, len: 6 },
+            sdf: false,
+            color: Color::rgba(1.0, 1.0, 1.0, 1.0),
+         },
+      });
+   }
+   let chunk = RenderChunk::new(
+      RenderChunkId(83),
+      RenderChunkRevisions::default(),
+      list,
+      ChunkIndexMode::Local,
+      &[],
+   ).unwrap();
+   let mut commands = Vec::new();
+   let stats = chunk.query_damage_commands(RectF::new(5_120.0, 2.0, 2.0, 2.0), &mut commands);
+   assert_eq!(commands, [256]);
+   assert!(stats.entries_visited <= 2, "visited {} spatial entries", stats.entries_visited);
+   assert_eq!(chunk.command_spatial()[256].vertex_count, 4);
+}
+
+#[test]
 fn revisions_identity_byte_size_order_and_damage_are_retained()
 {
    let revisions = RenderChunkRevisions {
@@ -444,7 +579,14 @@ fn revisions_identity_byte_size_order_and_damage_are_retained()
    let clone = chunk.clone();
    assert_eq!(chunk.revisions(), revisions);
    assert!(chunk.ptr_eq(&clone));
-   assert_eq!(chunk.byte_size(), core::mem::size_of::<DrawCmd>() as u64);
+   assert_eq!(chunk.byte_size(), (
+      core::mem::size_of::<DrawCmd>()
+         + core::mem::size_of::<RenderCommandSpatial>()
+         + core::mem::size_of::<RenderPaintSpan>()
+         + core::mem::size_of::<u32>()
+         + core::mem::size_of::<RectF>()
+         + core::mem::size_of::<f32>()
+   ) as u64);
 
    let snapshot = RenderSnapshot::new(
       vec![

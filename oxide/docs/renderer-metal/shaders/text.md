@@ -2,7 +2,7 @@
 
 ## Intention and purpose
 
-Render A8 and SDF glyph geometry plus image meshes. C24 adds prepared glyph transforms and opacity without rewriting immutable vertex, index, or color buffers.
+Render A8 and SDF glyph geometry plus image meshes. C27 lets prepared image meshes share the affine vertex path and apply frame opacity without rewriting immutable geometry.
 
 ## Relation to the rest of the code
 
@@ -13,6 +13,7 @@ Render A8 and SDF glyph geometry plus image meshes. C24 adds prepared glyph tran
 - `v_prepared_text(...) -> TextVSOut`: applies affine transform and viewport mapping to local glyph vertices.
 - `f_prepared_text(...) -> float4`: samples A8 coverage and multiplies run alpha by dynamic opacity.
 - `f_prepared_text_sdf(...) -> float4`: applies the SDF edge function and dynamic opacity.
+- `f_prepared_image_mesh(...) -> float4`: samples an RGBA image mesh and multiplies the immutable mesh alpha by dynamic instance opacity.
 - Existing text and image-mesh entry points preserve flat behavior.
 
 ## Logic narrative
@@ -33,7 +34,7 @@ All shader inputs are read-only. No writable shared state or allocation exists.
 
 ## Performance notes
 
-Clean glyph replay retains vertex/index/color buffers and updates only the small dynamic property record.
+Clean glyph and image-mesh replay retain vertex/index/color buffers. Small retained damage selects the prepared command without scanning those vertex buffers.
 
 ## Feature flags and cfgs
 
@@ -48,5 +49,6 @@ Mixed prepared snapshots include A8 glyphs, transform and opacity changes, exact
 Changing an opacity property from `0.75` to `0.5` reuses the same atlas and glyph buffers.
 
 ## Changelog
+- 2026-07-13: added the C27 prepared image-mesh fragment path with dynamic opacity.
 
 - 2026-07-13: added prepared affine glyph and A8/SDF opacity paths.

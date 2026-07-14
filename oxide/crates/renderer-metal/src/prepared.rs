@@ -6,7 +6,7 @@ use metal::{
 };
 use metal::foreign_types::ForeignTypeRef;
 use oxide_renderer_api as api;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::{
    api_vertex_descriptor, append_remapped_indices_to_span, apply_scissor_dp,
@@ -17,6 +17,7 @@ use super::{
 };
 
 pub const DEFAULT_PREPARED_CACHE_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
+const STATIC_SOURCE_REVISION: u64 = 0xcbf2_9ce4_8422_2325;
 
 pub(super) struct PreparedPipelines
 {
@@ -27,6 +28,8 @@ pub(super) struct PreparedPipelines
    pub image_opaque: RenderPipelineState,
    pub image_single: RenderPipelineState,
    pub image_single_opaque: RenderPipelineState,
+   pub image_mesh: RenderPipelineState,
+   pub image_mesh_opaque: RenderPipelineState,
    pub text: RenderPipelineState,
    pub text_opaque: RenderPipelineState,
    pub text_sdf: RenderPipelineState,
@@ -45,6 +48,8 @@ impl PreparedPipelines
          image_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.image_opaque", "v_prepared_inst_rect", "f_image", false)?,
          image_single: prepared_pipeline(device, library, format, sample_count, "prepared.image_single", "v_prepared_inst_rect", "f_prepared_image_single", false)?,
          image_single_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.image_single_opaque", "v_prepared_inst_rect", "f_image_single", false)?,
+         image_mesh: prepared_pipeline(device, library, format, sample_count, "prepared.image_mesh", "v_prepared_text", "f_prepared_image_mesh", true)?,
+         image_mesh_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.image_mesh_opaque", "v_prepared_text", "f_image_mesh", true)?,
          text: prepared_pipeline(device, library, format, sample_count, "prepared.text", "v_prepared_text", "f_prepared_text", true)?,
          text_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.text_opaque", "v_prepared_text", "f_text", true)?,
          text_sdf: prepared_pipeline(device, library, format, sample_count, "prepared.text_sdf", "v_prepared_text", "f_prepared_text_sdf", true)?,
@@ -168,6 +173,17 @@ impl PreparedInstanceUniform
          dynamic.matrix[0], dynamic.matrix[1], dynamic.matrix[2], dynamic.matrix[3],
          translation[0], translation[1], viewport[0], viewport[1],
          dynamic.opacity, if dynamic.matrix == [1.0, 0.0, 0.0, 1.0] { 1.0 } else { 0.0 }, 0.0, 0.0,
+      ];
+      values.iter().all(|value| value.is_finite()).then_some(Self { values })
+   }
+
+   fn from_resolved(instance: &api::RenderResolvedInstance, viewport: [f32; 2]) -> Option<Self>
+   {
+      let transform = instance.transform;
+      let values = [
+         transform[0], transform[1], transform[2], transform[3],
+         transform[4], transform[5], viewport[0], viewport[1],
+         instance.opacity, if transform[..4] == [1.0, 0.0, 0.0, 1.0] { 1.0 } else { 0.0 }, 0.0, 0.0,
       ];
       values.iter().all(|value| value.is_finite()).then_some(Self { values })
    }
@@ -359,6 +375,7 @@ pub(super) struct PreparedFrameInstance
    pub key: PreparedChunkKey,
    pub uniform: PreparedInstanceUniform,
    pub clip: Option<api::RectI>,
+   pub local_damage: Option<api::RectF>,
 }
 
 pub(super) struct PreparedPropertyCache
@@ -463,7 +480,9 @@ impl PreparedPropertyCache
 
 pub(super) struct PreparedChunk
 {
+   pub source: api::RenderChunk,
    pub operations: Vec<PreparedOperation>,
+   command_operations: Vec<u32>,
    pub byte_size: u64,
    pub logical_byte_size: u64,
    pub buffer_count: u32,
@@ -502,7 +521,11 @@ impl PreparedChunk
                {
                   index += 1;
                }
-               let (operation, bytes) = prepare_rrects(renderer.device.as_ref(), &list.items[start..index])?;
+               let (operation, bytes) = prepare_rrects(
+                  renderer.device.as_ref(),
+                  &list.items[start..index],
+                  start as u32,
+               )?;
                operations.push(operation);
                byte_size = byte_size.saturating_add(bytes);
                buffer_count = buffer_count.saturating_add(1);
@@ -522,6 +545,15 @@ impl PreparedChunk
                byte_size = byte_size.saturating_add(bytes);
                buffer_count = buffer_count.saturating_add(3);
                index = next;
+            }
+            api::DrawCmd::ImageMesh { .. } =>
+            {
+               let (operation, bytes) = prepare_image_mesh(renderer, list, index)?;
+               let has_indices = matches!(operation, PreparedOperation::ImageMesh { indices: Some(_), .. });
+               operations.push(operation);
+               byte_size = byte_size.saturating_add(bytes);
+               buffer_count = buffer_count.saturating_add(2 + u32::from(has_indices));
+               index += 1;
             }
             api::DrawCmd::Solid { .. } =>
             {
@@ -545,12 +577,51 @@ impl PreparedChunk
             _ => return None,
          }
       }
+      let mut command_operations = vec![u32::MAX; list.items.len()];
+      for (operation_index, operation) in operations.iter().enumerate()
+      {
+         let operation_index = operation_index as u32;
+         match operation
+         {
+            PreparedOperation::RRects { first_command, count, .. }
+            | PreparedOperation::Images { first_command, count, .. } =>
+            {
+               let begin = *first_command as usize;
+               let end = begin.saturating_add(*count as usize).min(command_operations.len());
+               command_operations[begin..end].fill(operation_index);
+            }
+            PreparedOperation::Glyphs { draws, .. } =>
+            {
+               for draw in draws
+               {
+                  if let Some(entry) = command_operations.get_mut(draw.command as usize)
+                  {
+                     *entry = operation_index;
+                  }
+               }
+            }
+            PreparedOperation::ImageMesh { command, .. }
+            | PreparedOperation::Solid { command, .. } =>
+            {
+               if let Some(entry) = command_operations.get_mut(*command as usize)
+               {
+                  *entry = operation_index;
+               }
+            }
+            PreparedOperation::ClipPush(_) | PreparedOperation::ClipPop => {}
+         }
+      }
       let logical_byte_size = byte_size;
       byte_size = operations.iter().fold(0_u64, |bytes, operation| {
          bytes.saturating_add(operation_allocated_bytes(operation))
-      });
+      }).saturating_add(
+         (command_operations.capacity() as u64)
+            .saturating_mul(core::mem::size_of::<u32>() as u64),
+      );
       Some(Self {
+         source: chunk.clone(),
          operations,
+         command_operations,
          byte_size,
          logical_byte_size,
          buffer_count,
@@ -566,16 +637,25 @@ impl PreparedChunk
          renderer.image_generations.get(&dependency.image.0).copied() == Some(dependency.generation)
       })
    }
+
+   fn operation_for_command(&self, command: u32) -> Option<(u32, &PreparedOperation)>
+   {
+      let operation = *self.command_operations.get(command as usize)?;
+      (operation != u32::MAX).then(|| {
+         (operation, &self.operations[operation as usize])
+      })
+   }
 }
 
 pub(super) enum PreparedOperation
 {
-   RRects { params: Buffer, count: u64 },
+   RRects { params: Buffer, first_command: u32, count: u64 },
    Images {
       params: Buffer,
       argument_buffer: Option<Buffer>,
       handles: Vec<api::ImageHandle>,
       instance_handles: Vec<api::ImageHandle>,
+      first_command: u32,
       count: u64,
    },
    Glyphs {
@@ -586,10 +666,20 @@ pub(super) enum PreparedOperation
       atlas: api::ImageHandle,
       sdf: bool,
    },
+   ImageMesh {
+      vertices: Buffer,
+      indices: Option<Buffer>,
+      uniform: Buffer,
+      texture: api::ImageHandle,
+      command: u32,
+      vertex_count: u64,
+      index_count: u64,
+   },
    Solid {
       vertices: Buffer,
       indices: Option<Buffer>,
       uniform: Buffer,
+      command: u32,
       vertex_count: u64,
       index_count: u64,
    },
@@ -599,6 +689,7 @@ pub(super) enum PreparedOperation
 
 pub(super) struct PreparedGlyphDraw
 {
+   pub command: u32,
    pub vertex_offset: u64,
    pub index_offset: u64,
    pub uniform_offset: u64,
@@ -616,6 +707,9 @@ fn operation_allocated_bytes(operation: &PreparedOperation) -> u64
       PreparedOperation::Glyphs { vertices, indices, uniforms, .. } => allocated(vertices)
          .saturating_add(allocated(indices))
          .saturating_add(allocated(uniforms)),
+      PreparedOperation::ImageMesh { vertices, indices, uniform, .. } => allocated(vertices)
+         .saturating_add(indices.as_ref().map_or(0, allocated))
+         .saturating_add(allocated(uniform)),
       PreparedOperation::Solid { vertices, indices, uniform, .. } => allocated(vertices)
          .saturating_add(indices.as_ref().map_or(0, allocated))
          .saturating_add(allocated(uniform)),
@@ -623,7 +717,7 @@ fn operation_allocated_bytes(operation: &PreparedOperation) -> u64
    }
 }
 
-fn prepare_rrects(device: &DeviceRef, commands: &[api::DrawCmd]) -> Option<(PreparedOperation, u64)>
+fn prepare_rrects(device: &DeviceRef, commands: &[api::DrawCmd], first_command: u32) -> Option<(PreparedOperation, u64)>
 {
    let mut params = Vec::with_capacity(commands.len());
    for command in commands
@@ -633,7 +727,7 @@ fn prepare_rrects(device: &DeviceRef, commands: &[api::DrawCmd]) -> Option<(Prep
    }
    let params = buffer_from_slice(device, &params)?;
    let bytes = params.length();
-   Some((PreparedOperation::RRects { params, count: commands.len() as u64 }, bytes))
+   Some((PreparedOperation::RRects { params, first_command, count: commands.len() as u64 }, bytes))
 }
 
 fn prepare_images(renderer: &MetalRenderer, list: &api::DrawList, start: usize) -> Option<(PreparedOperation, usize, u64)>
@@ -694,6 +788,7 @@ fn prepare_images(renderer: &MetalRenderer, list: &api::DrawList, start: usize) 
       argument_buffer,
       handles,
       instance_handles,
+      first_command: start as u32,
       count: (index - start) as u64,
    }, index, bytes))
 }
@@ -751,7 +846,13 @@ fn prepare_glyphs(device: &DeviceRef, list: &api::DrawList, start: usize) -> Opt
          &mut indices,
       )? as u64;
       uniforms.push([run.color.r, run.color.g, run.color.b, run.color.a]);
-      draws.push(PreparedGlyphDraw { vertex_offset, index_offset, uniform_offset, index_count });
+      draws.push(PreparedGlyphDraw {
+         command: index as u32,
+         vertex_offset,
+         index_offset,
+         uniform_offset,
+         index_count,
+      });
       index += 1;
    }
    let vertices = buffer_from_slice(device, &vertices)?;
@@ -766,6 +867,38 @@ fn prepare_glyphs(device: &DeviceRef, list: &api::DrawList, start: usize) -> Opt
       atlas: first.atlas,
       sdf: first.sdf,
    }, index, bytes))
+}
+
+fn prepare_image_mesh(renderer: &MetalRenderer, list: &api::DrawList, index: usize) -> Option<(PreparedOperation, u64)>
+{
+   let api::DrawCmd::ImageMesh { tex, vb, ib, alpha } = list.items.get(index)? else { return None };
+   let _ = renderer.images.get(&tex.0)?;
+   let vertices = list.vertices.get(vb.offset as usize..vb.offset as usize + vb.len as usize)?;
+   let source_indices = list.indices.get(ib.offset as usize..ib.offset as usize + ib.len as usize)?;
+   let vertex_buffer = buffer_from_slice(renderer.device.as_ref(), vertices)?;
+   let uniform = buffer_from_slice(renderer.device.as_ref(), &[[1.0_f32, 1.0, 1.0, alpha.clamp(0.0, 1.0)]])?;
+   let index_buffer = if source_indices.is_empty()
+   {
+      None
+   }
+   else
+   {
+      let mut indices = Vec::with_capacity(source_indices.len());
+      append_remapped_indices_to_span(source_indices, vb.offset, vb.len, 0, &mut indices)?;
+      Some(buffer_from_slice(renderer.device.as_ref(), &indices)?)
+   };
+   let bytes = vertex_buffer.length()
+      .saturating_add(uniform.length())
+      .saturating_add(index_buffer.as_ref().map_or(0, |buffer| buffer.length()));
+   Some((PreparedOperation::ImageMesh {
+      vertices: vertex_buffer,
+      indices: index_buffer,
+      uniform,
+      texture: *tex,
+      command: index as u32,
+      vertex_count: vb.len as u64,
+      index_count: ib.len as u64,
+   }, bytes))
 }
 
 fn prepare_solid(device: &DeviceRef, list: &api::DrawList, index: usize) -> Option<(PreparedOperation, u64)>
@@ -792,6 +925,7 @@ fn prepare_solid(device: &DeviceRef, list: &api::DrawList, index: usize) -> Opti
       vertices: vertex_buffer,
       indices: index_buffer,
       uniform,
+      command: index as u32,
       vertex_count: vb.len as u64,
       index_count: ib.len as u64,
    }, bytes))
@@ -835,108 +969,6 @@ impl MetalRenderer
          self.target_w as f32 / self.target_scale.max(1.0),
          self.target_h as f32 / self.target_scale.max(1.0),
       ];
-      let mut cache = core::mem::take(&mut self.prepared_chunks);
-      let mut property_cache = core::mem::take(&mut self.prepared_property_cache);
-      let mut plan = core::mem::take(&mut self.prepared_frame_plan);
-      plan.clear();
-      let write_all_properties = property_cache.begin_frame(
-         snapshot.properties(),
-         snapshot.uniform_property_revision(),
-      );
-      let slot = self.current_frame_slot();
-      let mut supported = true;
-      let mut hits = 0_u64;
-      let mut misses = 0_u64;
-      let mut commands_lowered = 0_u64;
-      let mut upload_bytes = 0_u64;
-      let mut property_upload_bytes = 0_u64;
-      let mut property_records_updated = 0_u32;
-      let mut resource_creates = 0_u32;
-      snapshot.visit_instances(|instance| {
-         if !supported || instance.layer.is_some()
-         {
-            supported = false;
-            return;
-         }
-         let dynamic = if write_all_properties
-         {
-            PreparedInstanceUniform::dynamic::<false>(snapshot, &instance.property_slots)
-         }
-         else
-         {
-            PreparedInstanceUniform::dynamic::<true>(snapshot, &instance.property_slots)
-         };
-         let Some(dynamic) = dynamic else
-         {
-            supported = false;
-            return;
-         };
-         let Some(uniform) = PreparedInstanceUniform::from_dynamic(dynamic, instance.origin, viewport) else
-         {
-            supported = false;
-            return;
-         };
-         let Some(lookup) = cache.get_or_prepare(self, &instance.chunk) else
-         {
-            supported = false;
-            return;
-         };
-         if lookup.hit
-         {
-            hits = hits.saturating_add(1);
-         }
-         else
-         {
-            misses = misses.saturating_add(1);
-            commands_lowered = commands_lowered.saturating_add(lookup.command_count);
-            upload_bytes = upload_bytes.saturating_add(lookup.upload_bytes);
-            resource_creates = resource_creates.saturating_add(lookup.buffer_count);
-         }
-         let mut clip = instance.clip.map(|clip| transform_rect(clip, uniform));
-         for dynamic_clip in instance.dynamic_clips.iter().copied()
-         {
-            let Some(clip_uniform) = PreparedInstanceUniform::dynamic::<false>(
-               snapshot,
-               core::slice::from_ref(&dynamic_clip.transform),
-            ).and_then(|dynamic| PreparedInstanceUniform::from_dynamic(dynamic, [0.0, 0.0], viewport)) else
-            {
-               supported = false;
-               return;
-            };
-            let transformed = transform_rect_f(dynamic_clip.rect, clip_uniform);
-            clip = Some(clip.map_or(transformed, |current| intersect_scissor_dp(current, transformed)));
-         }
-         if !write_all_properties
-         {
-            property_cache.resolve(
-               plan.len(),
-               uniform,
-               dynamic.source_revision,
-               slot,
-            );
-         }
-         plan.push(PreparedFrameInstance {
-            key: lookup.key,
-            uniform,
-            clip,
-         });
-      });
-      if !supported
-      {
-         self.prepared_chunks = cache;
-         self.prepared_property_cache = property_cache;
-         self.prepared_frame_plan = plan;
-         return self.encode_snapshot_flat(snapshot);
-      }
-      self.acc_backend_cache_hits = self.acc_backend_cache_hits.saturating_add(hits);
-      self.acc_backend_cache_misses = self.acc_backend_cache_misses.saturating_add(misses);
-      self.acc_chunks_reused = self.acc_chunks_reused.saturating_add(hits);
-      self.acc_chunks_rebuilt = self.acc_chunks_rebuilt.saturating_add(misses);
-      self.acc_chunks_prepared = self.acc_chunks_prepared.saturating_add(misses);
-      self.acc_commands_traversed = self.acc_commands_traversed.saturating_add(commands_lowered);
-      self.acc_geometry_bytes_copied = self.acc_geometry_bytes_copied.saturating_add(upload_bytes);
-      self.acc_resource_creates = self.acc_resource_creates.saturating_add(resource_creates);
-
       let damage_requested = self.sample_count == 1
          && self.damage_enabled
          && self.frame_scissor_dp.is_some()
@@ -950,6 +982,224 @@ impl MetalRenderer
       {
          self.acc_damage_forced_full_refreshes = self.acc_damage_forced_full_refreshes.saturating_add(1);
       }
+      let static_instances = if use_damage { None } else { snapshot.precomputed_resolved_instances() };
+      let mut cache = core::mem::take(&mut self.prepared_chunks);
+      let mut property_cache = core::mem::take(&mut self.prepared_property_cache);
+      let mut plan = core::mem::take(&mut self.prepared_frame_plan);
+      let mut damage_instances = core::mem::take(&mut self.prepared_damage_instances);
+      let reuse_static_plan = !use_damage
+         && static_instances.is_some()
+         && self.prepared_frame_snapshot.as_ref().is_some_and(|cached| cached.ptr_eq(snapshot))
+         && self.prepared_frame_viewport == viewport
+         && plan.len() as u64 == snapshot.instance_count()
+         && self.prepared_frame_keys.iter().all(|key| cache.get(*key).is_some());
+      if !reuse_static_plan
+      {
+         plan.clear();
+         self.prepared_frame_snapshot = None;
+         self.prepared_frame_keys.clear();
+      }
+      let write_all_properties = property_cache.begin_frame(
+         snapshot.properties(),
+         snapshot.uniform_property_revision(),
+      );
+      let slot = self.current_frame_slot();
+      let mut supported = true;
+      let mut hits = 0_u64;
+      let mut misses = 0_u64;
+      let mut commands_lowered = 0_u64;
+      let mut upload_bytes = 0_u64;
+      let mut property_upload_bytes = 0_u64;
+      let mut property_records_updated = 0_u32;
+      let mut resource_creates = 0_u32;
+      if reuse_static_plan
+      {
+         hits = plan.len() as u64;
+         self.acc_prepared_plan_reuses = self.acc_prepared_plan_reuses.saturating_add(1);
+      }
+      if use_damage
+      {
+         let query_started = std::time::Instant::now();
+         let stats = snapshot.query_damage_instances(self.frame_scissor_dp.unwrap(), &mut damage_instances);
+         self.acc_damage_query_ns = self.acc_damage_query_ns.saturating_add(
+            query_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+         );
+         self.acc_damage_instances_visited = self.acc_damage_instances_visited.saturating_add(stats.entries_visited);
+         self.acc_damage_instances_matched = self.acc_damage_instances_matched.saturating_add(stats.entries_matched);
+      }
+      let mut prepare_instance = |instance: &api::RenderChunkInstance, uniform: PreparedInstanceUniform, source_revision: u64, clip: Option<api::RectI>, local_damage: Option<api::RectF>| {
+         if instance.layer.is_some()
+         {
+            return false;
+         }
+         let Some(lookup) = cache.get_or_prepare(self, &instance.chunk) else
+         {
+            return false;
+         };
+         if lookup.hit
+         {
+            hits = hits.saturating_add(1);
+         }
+         else
+         {
+            misses = misses.saturating_add(1);
+            commands_lowered = commands_lowered.saturating_add(lookup.command_count);
+            upload_bytes = upload_bytes.saturating_add(lookup.upload_bytes);
+            resource_creates = resource_creates.saturating_add(lookup.buffer_count);
+         }
+         if !write_all_properties
+         {
+            property_cache.resolve(
+               plan.len(),
+               uniform,
+               source_revision,
+               slot,
+            );
+         }
+         plan.push(PreparedFrameInstance {
+            key: lookup.key,
+            uniform,
+            clip,
+            local_damage,
+         });
+         true
+      };
+      if !reuse_static_plan && use_damage
+      {
+         for index in damage_instances.iter().copied()
+         {
+            let Some(resolved) = snapshot.resolved_instance(index) else { continue };
+            if resolved.bounds.is_empty()
+            {
+               continue;
+            }
+            let Some(uniform) = PreparedInstanceUniform::from_resolved(&resolved, viewport) else
+            {
+               supported = false;
+               break;
+            };
+            let clip = match resolved.resolved_clip
+            {
+               api::RenderSpatialBounds::Empty => continue,
+               api::RenderSpatialBounds::Finite(_) => resolved.resolved_clip.conservative_rect_i(),
+               api::RenderSpatialBounds::Unbounded => None,
+            };
+            let global = effective_scissor_dp(clip, self.frame_scissor_dp).unwrap();
+            let local_damage = inverse_transform_rect(global, uniform);
+            if !prepare_instance(&resolved.instance, uniform, resolved.source_revision, clip, local_damage)
+            {
+               supported = false;
+               break;
+            }
+         }
+      }
+      else if !reuse_static_plan
+      {
+         if let Some(resolved_instances) = static_instances
+         {
+            for resolved in resolved_instances
+            {
+               let Some(uniform) = PreparedInstanceUniform::from_resolved(resolved, viewport) else
+               {
+                  supported = false;
+                  break;
+               };
+               let clip = match resolved.resolved_clip
+               {
+                  api::RenderSpatialBounds::Empty => continue,
+                  api::RenderSpatialBounds::Finite(_) => resolved.resolved_clip.conservative_rect_i(),
+                  api::RenderSpatialBounds::Unbounded => None,
+               };
+               if !prepare_instance(&resolved.instance, uniform, resolved.source_revision, clip, None)
+               {
+                  supported = false;
+                  break;
+               }
+            }
+         }
+         else
+         {
+            snapshot.visit_instances(|instance| {
+               if !supported
+               {
+                  return;
+               }
+               let dynamic = if write_all_properties
+               {
+                  PreparedInstanceUniform::dynamic::<false>(snapshot, &instance.property_slots)
+               }
+               else
+               {
+                  PreparedInstanceUniform::dynamic::<true>(snapshot, &instance.property_slots)
+               };
+               let Some(dynamic) = dynamic else
+               {
+                  supported = false;
+                  return;
+               };
+               let Some(uniform) = PreparedInstanceUniform::from_dynamic(dynamic, instance.origin, viewport) else
+               {
+                  supported = false;
+                  return;
+               };
+               let mut clip = instance.clip.map(|clip| transform_rect(clip, uniform));
+               for dynamic_clip in instance.dynamic_clips.iter().copied()
+               {
+                  let Some(clip_uniform) = PreparedInstanceUniform::dynamic::<false>(
+                     snapshot,
+                     core::slice::from_ref(&dynamic_clip.transform),
+                  ).and_then(|dynamic| PreparedInstanceUniform::from_dynamic(dynamic, [0.0, 0.0], viewport)) else
+                  {
+                     supported = false;
+                     return;
+                  };
+                  let transformed = transform_rect_f(dynamic_clip.rect, clip_uniform);
+                  clip = Some(clip.map_or(transformed, |current| intersect_scissor_dp(current, transformed)));
+               }
+               supported = prepare_instance(instance, uniform, dynamic.source_revision, clip, None);
+            });
+         }
+      }
+      drop(prepare_instance);
+      if reuse_static_plan
+      {
+         for (index, instance) in plan.iter().enumerate()
+         {
+            property_cache.resolve(
+               index,
+               instance.uniform,
+               STATIC_SOURCE_REVISION,
+               slot,
+            );
+         }
+      }
+      if !supported
+      {
+         self.prepared_chunks = cache;
+         self.prepared_property_cache = property_cache;
+         self.prepared_frame_plan = plan;
+         self.prepared_damage_instances = damage_instances;
+         return self.encode_snapshot_flat(snapshot);
+      }
+      if !reuse_static_plan && static_instances.is_some()
+      {
+         let mut unique = HashSet::with_capacity(cache.len());
+         self.prepared_frame_keys.extend(plan.iter().filter_map(|instance| {
+            unique.insert(instance.key).then_some(instance.key)
+         }));
+         self.prepared_frame_snapshot = Some(snapshot.clone());
+         self.prepared_frame_viewport = viewport;
+      }
+      self.prepared_damage_instances = damage_instances;
+      self.acc_backend_cache_hits = self.acc_backend_cache_hits.saturating_add(hits);
+      self.acc_backend_cache_misses = self.acc_backend_cache_misses.saturating_add(misses);
+      self.acc_chunks_reused = self.acc_chunks_reused.saturating_add(hits);
+      self.acc_chunks_rebuilt = self.acc_chunks_rebuilt.saturating_add(misses);
+      self.acc_chunks_prepared = self.acc_chunks_prepared.saturating_add(misses);
+      self.acc_commands_traversed = self.acc_commands_traversed.saturating_add(commands_lowered);
+      self.acc_geometry_bytes_copied = self.acc_geometry_bytes_copied.saturating_add(upload_bytes);
+      self.acc_resource_creates = self.acc_resource_creates.saturating_add(resource_creates);
+
       let pending_present_texture = self.pending_present_texture as *mut MTLTexture;
       let direct_present_texture = if self.sample_count == 1
          && !damage_requested
@@ -1094,6 +1344,7 @@ impl MetalRenderer
       encoder.set_fragment_buffer(3, Some(self.property_ring.buffer(slot)), 0);
       let global_clip = if use_damage { self.frame_scissor_dp } else { None };
       let mut clip_stack = self.clip_stack_pool.pop().unwrap_or_default();
+      let mut damage_commands = core::mem::take(&mut self.prepared_damage_commands);
       let mut last_applied = None;
       for (index, instance) in plan.iter().enumerate()
       {
@@ -1108,11 +1359,14 @@ impl MetalRenderer
                (index * dynamic_stride) as u64,
                instance.clip,
                global_clip,
+               instance.local_damage,
+               &mut damage_commands,
                &mut clip_stack,
                &mut last_applied,
             );
          }
       }
+      self.prepared_damage_commands = damage_commands;
       self.clip_stack_pool.push(clip_stack);
       encoder.end_encoding();
 
@@ -1132,13 +1386,28 @@ impl MetalRenderer
       self.last_stats.chunks_reused = self.acc_chunks_reused;
       self.last_stats.chunks_rebuilt = self.acc_chunks_rebuilt;
       self.last_stats.chunks_prepared = self.acc_chunks_prepared;
+      self.last_stats.prepared_plan_reuses = self.acc_prepared_plan_reuses;
       self.last_stats.backend_cache_hits = self.acc_backend_cache_hits;
       self.last_stats.backend_cache_misses = self.acc_backend_cache_misses;
+      self.last_stats.damage_instances_visited = self.acc_damage_instances_visited;
+      self.last_stats.damage_instances_matched = self.acc_damage_instances_matched;
+      self.last_stats.damage_commands_visited = self.acc_damage_commands_visited;
+      self.last_stats.damage_commands_matched = self.acc_damage_commands_matched;
+      self.last_stats.damage_vertices_visited = self.acc_damage_vertices_visited;
+      self.last_stats.damage_query_ms = self.acc_damage_query_ns as f64 / 1_000_000.0;
       self.last_stats.buffer_upload_bytes = upload_bytes;
       self.last_stats.property_upload_bytes = property_upload_bytes;
       self.last_stats.property_records_updated = property_records_updated;
       self.last_stats.property_ring_bytes = self.property_ring.cap[..self.frames.len()].iter()
          .fold(0_u64, |bytes, capacity| bytes.saturating_add(*capacity as u64));
+      self.last_stats.shaded_damage_px = if use_damage
+      {
+         self.frame_damage_px
+      }
+      else
+      {
+         u64::from(self.target_w).saturating_mul(u64::from(self.target_h))
+      };
       self.last_stats.cache_evictions = evictions.min(u64::from(u32::MAX)) as u32;
       self.last_stats.resource_creates = self.acc_resource_creates;
       self.last_stats.render_passes = self.acc_render_passes;
@@ -1182,8 +1451,24 @@ impl MetalRenderer
    }
 }
 
-fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut MetalRenderer, chunk: &PreparedChunk, uniform: PreparedInstanceUniform, uniform_offset: u64, instance_clip: Option<api::RectI>, global_clip: Option<api::RectI>, clip_stack: &mut Vec<api::RectI>, last_applied: &mut Option<api::RectI>)
+fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut MetalRenderer, chunk: &PreparedChunk, uniform: PreparedInstanceUniform, uniform_offset: u64, instance_clip: Option<api::RectI>, global_clip: Option<api::RectI>, local_damage: Option<api::RectF>, damage_commands: &mut Vec<u32>, clip_stack: &mut Vec<api::RectI>, last_applied: &mut Option<api::RectI>)
 {
+   let filtered = if let Some(local_damage) = local_damage
+   {
+      let query_started = std::time::Instant::now();
+      let stats = chunk.source.query_damage_commands(local_damage, damage_commands);
+      renderer.acc_damage_query_ns = renderer.acc_damage_query_ns.saturating_add(
+         query_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+      );
+      renderer.acc_damage_commands_visited = renderer.acc_damage_commands_visited.saturating_add(stats.entries_visited);
+      renderer.acc_damage_commands_matched = renderer.acc_damage_commands_matched.saturating_add(stats.entries_matched);
+      true
+   }
+   else
+   {
+      damage_commands.clear();
+      false
+   };
    let mut current_clip = instance_clip;
    apply_scissor_dp(
       encoder,
@@ -1197,12 +1482,18 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
    {
       encoder.set_fragment_buffer_offset(3, uniform_offset);
    }
-   for operation in &chunk.operations
+   macro_rules! encode_operation
    {
-      match operation
-      {
-         PreparedOperation::RRects { params, count } =>
+      ($operation:expr) =>
+      {{
+         match $operation
          {
+         PreparedOperation::RRects { params, first_command, count } =>
+         {
+            if filtered && !selected_range(damage_commands, *first_command, *count)
+            {
+               continue;
+            }
             let Some(pipelines) = renderer.prepared_pipelines.as_ref() else { return };
             encoder.set_render_pipeline_state(if opaque { &pipelines.rrect_opaque } else { &pipelines.rrect });
             encoder.set_vertex_buffer(0, Some(params), 0);
@@ -1211,8 +1502,12 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
             renderer.acc_draws = renderer.acc_draws.saturating_add(1);
             renderer.acc_instanced = renderer.acc_instanced.saturating_add((*count).min(u64::from(u32::MAX)) as u32);
          }
-         PreparedOperation::Images { params, argument_buffer, handles, instance_handles, count } =>
+         PreparedOperation::Images { params, argument_buffer, handles, instance_handles, first_command, count } =>
          {
+            if filtered && !selected_range(damage_commands, *first_command, *count)
+            {
+               continue;
+            }
             if let Some(argument_buffer) = argument_buffer.as_ref()
             {
                let Some(pipelines) = renderer.prepared_pipelines.as_ref() else { return };
@@ -1275,6 +1570,10 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
             }
             for draw in draws
             {
+               if filtered && damage_commands.binary_search(&draw.command).is_err()
+               {
+                  continue;
+               }
                encoder.set_vertex_buffer(0, Some(vertices), draw.vertex_offset);
                encoder.set_fragment_buffer(0, Some(uniforms), draw.uniform_offset);
                encoder.draw_indexed_primitives(
@@ -1287,8 +1586,45 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
                renderer.acc_draws = renderer.acc_draws.saturating_add(1);
             }
          }
-         PreparedOperation::Solid { vertices, indices, uniform: color, vertex_count, index_count } =>
+         PreparedOperation::ImageMesh { vertices, indices, uniform: color, texture, command, vertex_count, index_count } =>
          {
+            if filtered && damage_commands.binary_search(command).is_err()
+            {
+               continue;
+            }
+            let Some(texture) = renderer.images.get(&texture.0) else { continue };
+            let Some(pipelines) = renderer.prepared_pipelines.as_ref() else { return };
+            encoder.set_render_pipeline_state(if opaque { &pipelines.image_mesh_opaque } else { &pipelines.image_mesh });
+            encoder.set_fragment_texture(0, Some(texture));
+            if let Some(sampler) = renderer.sampler.as_ref()
+            {
+               encoder.set_fragment_sampler_state(0, Some(sampler));
+            }
+            encoder.set_vertex_buffer(0, Some(vertices), 0);
+            encoder.set_fragment_buffer(0, Some(color), 0);
+            if let Some(indices) = indices.as_ref()
+            {
+               encoder.draw_indexed_primitives(
+                  MTLPrimitiveType::Triangle,
+                  *index_count,
+                  MTLIndexType::UInt16,
+                  indices,
+                  0,
+               );
+               renderer.acc_draws = renderer.acc_draws.saturating_add(1);
+            }
+            else if let Some(primitive) = solid_primitive_for_vertex_count(*vertex_count as usize)
+            {
+               encoder.draw_primitives(primitive, 0, *vertex_count);
+               renderer.acc_draws = renderer.acc_draws.saturating_add(1);
+            }
+         }
+         PreparedOperation::Solid { vertices, indices, uniform: color, command, vertex_count, index_count } =>
+         {
+            if filtered && damage_commands.binary_search(command).is_err()
+            {
+               continue;
+            }
             let Some(pipelines) = renderer.prepared_pipelines.as_ref() else { return };
             encoder.set_render_pipeline_state(&pipelines.solid);
             encoder.set_vertex_buffer(0, Some(vertices), 0);
@@ -1331,8 +1667,91 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
                last_applied,
             );
          }
+         }
+      }};
+   }
+   if filtered
+   {
+      let mut previous_operation = None;
+      for command in damage_commands.iter().copied()
+      {
+         let Some((operation_index, operation)) = chunk.operation_for_command(command) else { continue };
+         if previous_operation == Some(operation_index)
+         {
+            continue;
+         }
+         previous_operation = Some(operation_index);
+         let Some(spatial) = chunk.source.command_spatial().get(command as usize) else { continue };
+         current_clip = match spatial.resolved_clip
+         {
+            api::RenderSpatialBounds::Empty => continue,
+            api::RenderSpatialBounds::Finite(rect) =>
+            {
+               let transformed = transform_rect_f(rect, uniform);
+               Some(instance_clip.map_or(transformed, |clip| intersect_scissor_dp(clip, transformed)))
+            }
+            api::RenderSpatialBounds::Unbounded => instance_clip,
+         };
+         apply_scissor_dp(
+            encoder,
+            renderer,
+            effective_scissor_dp(current_clip, global_clip),
+            last_applied,
+         );
+         encode_operation!(operation);
       }
    }
+   else
+   {
+      for operation in &chunk.operations
+      {
+         encode_operation!(operation);
+      }
+   }
+}
+
+fn selected_range(commands: &[u32], first: u32, count: u64) -> bool
+{
+   let end = u64::from(first).saturating_add(count).min(u64::from(u32::MAX) + 1);
+   let index = commands.partition_point(|command| *command < first);
+   commands.get(index).is_some_and(|command| u64::from(*command) < end)
+}
+
+fn inverse_transform_rect(rect: api::RectI, uniform: PreparedInstanceUniform) -> Option<api::RectF>
+{
+   let [m11, m12, m21, m22, tx, ty, ..] = uniform.values;
+   let determinant = m11 * m22 - m12 * m21;
+   if !determinant.is_finite() || determinant.abs() <= f32::EPSILON
+   {
+      return None;
+   }
+   let x0 = rect.x as f32;
+   let y0 = rect.y as f32;
+   let x1 = rect.x.saturating_add(rect.w) as f32;
+   let y1 = rect.y.saturating_add(rect.h) as f32;
+   let inverse = |x: f32, y: f32| {
+      let x = x - tx;
+      let y = y - ty;
+      [
+         (m22 * x - m21 * y) / determinant,
+         (-m12 * x + m11 * y) / determinant,
+      ]
+   };
+   let points = [
+      inverse(x0, y0),
+      inverse(x1, y0),
+      inverse(x0, y1),
+      inverse(x1, y1),
+   ];
+   if !points.iter().flatten().all(|value| value.is_finite())
+   {
+      return None;
+   }
+   let min_x = points.iter().map(|point| point[0]).fold(f32::INFINITY, f32::min);
+   let min_y = points.iter().map(|point| point[1]).fold(f32::INFINITY, f32::min);
+   let max_x = points.iter().map(|point| point[0]).fold(f32::NEG_INFINITY, f32::max);
+   let max_y = points.iter().map(|point| point[1]).fold(f32::NEG_INFINITY, f32::max);
+   Some(api::RectF::new(min_x, min_y, max_x - min_x, max_y - min_y))
 }
 
 pub(super) fn transform_rect(rect: api::RectI, uniform: PreparedInstanceUniform) -> api::RectI

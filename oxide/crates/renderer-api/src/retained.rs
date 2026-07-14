@@ -49,6 +49,188 @@ pub struct RenderChunkOrdering
    pub has_layer: bool,
 }
 
+/// Conservative spatial state for retained paint.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RenderSpatialBounds
+{
+   Empty,
+   Finite(RectF),
+   Unbounded,
+}
+
+impl RenderSpatialBounds
+{
+   #[inline]
+   #[must_use]
+   pub const fn rect(self) -> Option<RectF>
+   {
+      match self
+      {
+         Self::Finite(rect) => Some(rect),
+         Self::Empty | Self::Unbounded => None,
+      }
+   }
+
+   #[inline]
+   #[must_use]
+   pub const fn is_empty(self) -> bool
+   {
+      matches!(self, Self::Empty)
+   }
+
+   #[inline]
+   #[must_use]
+   pub const fn is_unbounded(self) -> bool
+   {
+      matches!(self, Self::Unbounded)
+   }
+
+   #[must_use]
+   pub fn conservative_rect_i(self) -> Option<RectI>
+   {
+      let Self::Finite(rect) = self else { return None };
+      let x0 = rect.x.floor();
+      let y0 = rect.y.floor();
+      let x1 = (rect.x + rect.w).ceil();
+      let y1 = (rect.y + rect.h).ceil();
+      Some(RectI::new(
+         x0 as i32,
+         y0 as i32,
+         (x1 - x0) as i32,
+         (y1 - y0) as i32,
+      ))
+   }
+}
+
+/// Immutable spatial facts for one canonical chunk command.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RenderCommandSpatial
+{
+   pub bounds: RenderSpatialBounds,
+   pub resolved_clip: RenderSpatialBounds,
+   pub matching_scope: Option<u32>,
+   pub vertex_count: u32,
+}
+
+/// One top-level paint unit. A layer span includes its matching `LayerEnd`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RenderPaintSpan
+{
+   pub begin: u32,
+   pub end: u32,
+   pub bounds: RenderSpatialBounds,
+   pub vertex_count: u32,
+}
+
+/// Work performed by one compact spatial-index query.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RenderSpatialQueryStats
+{
+   pub entries_visited: u64,
+   pub entries_matched: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SpatialIndexEntry
+{
+   order: u32,
+   bounds: RectF,
+}
+
+#[derive(Debug, Default)]
+struct SpatialIndex
+{
+   by_min_x: Arc<[SpatialIndexEntry]>,
+   prefix_max_x: Arc<[f32]>,
+   unbounded: Arc<[u32]>,
+}
+
+impl SpatialIndex
+{
+   fn new(bounds: impl IntoIterator<Item = (u32, RenderSpatialBounds)>) -> Self
+   {
+      let mut by_min_x = Vec::new();
+      let mut unbounded = Vec::new();
+      for (order, bounds) in bounds
+      {
+         match bounds
+         {
+            RenderSpatialBounds::Finite(rect) if rect.w > 0.0 && rect.h > 0.0 =>
+            {
+               by_min_x.push(SpatialIndexEntry { order, bounds: rect });
+            }
+            RenderSpatialBounds::Unbounded => unbounded.push(order),
+            RenderSpatialBounds::Empty | RenderSpatialBounds::Finite(_) => {}
+         }
+      }
+      by_min_x.sort_unstable_by(|a, b| {
+         a.bounds.x.total_cmp(&b.bounds.x).then_with(|| a.order.cmp(&b.order))
+      });
+      let mut max_x = f32::NEG_INFINITY;
+      let prefix_max_x = by_min_x.iter().map(|entry| {
+         max_x = max_x.max(entry.bounds.x + entry.bounds.w);
+         max_x
+      }).collect::<Vec<_>>();
+      Self {
+         by_min_x: by_min_x.into(),
+         prefix_max_x: prefix_max_x.into(),
+         unbounded: unbounded.into(),
+      }
+   }
+
+   fn byte_size(&self) -> u64
+   {
+      (self.by_min_x.len() as u64)
+         .saturating_mul(mem::size_of::<SpatialIndexEntry>() as u64)
+         .saturating_add(
+            (self.prefix_max_x.len() as u64).saturating_mul(mem::size_of::<f32>() as u64),
+         )
+         .saturating_add(
+            (self.unbounded.len() as u64).saturating_mul(mem::size_of::<u32>() as u64),
+         )
+   }
+
+   fn query(&self, rect: RectF, out: &mut Vec<u32>) -> RenderSpatialQueryStats
+   {
+      out.clear();
+      let Some(rect) = finite_rect(rect) else
+      {
+         out.extend(self.by_min_x.iter().map(|entry| entry.order));
+         out.extend_from_slice(&self.unbounded);
+         out.sort_unstable();
+         out.dedup();
+         return RenderSpatialQueryStats {
+            entries_visited: (self.by_min_x.len() + self.unbounded.len()) as u64,
+            entries_matched: out.len() as u64,
+         };
+      };
+      if rect.w <= 0.0 || rect.h <= 0.0
+      {
+         return RenderSpatialQueryStats::default();
+      }
+      let x1 = rect.x + rect.w;
+      let upper = self.by_min_x.partition_point(|entry| entry.bounds.x < x1);
+      let lower = self.prefix_max_x[..upper].partition_point(|max_x| *max_x <= rect.x);
+      let mut visited = 0_u64;
+      for entry in &self.by_min_x[lower..upper]
+      {
+         visited = visited.saturating_add(1);
+         if rects_intersect(entry.bounds, rect)
+         {
+            out.push(entry.order);
+         }
+      }
+      visited = visited.saturating_add(self.unbounded.len() as u64);
+      out.extend_from_slice(&self.unbounded);
+      out.sort_unstable();
+      out.dedup();
+      RenderSpatialQueryStats {
+         entries_visited: visited,
+         entries_matched: out.len() as u64,
+      }
+   }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderChunkError
 {
@@ -95,7 +277,10 @@ struct RenderChunkData
    id: RenderChunkId,
    revisions: RenderChunkRevisions,
    list: DrawList,
-   bounds: Option<RectF>,
+   bounds: RenderSpatialBounds,
+   commands: Arc<[RenderCommandSpatial]>,
+   paint_spans: Arc<[RenderPaintSpan]>,
+   spatial_index: SpatialIndex,
    resources: Arc<[RenderResourceDependency]>,
    ordering: RenderChunkOrdering,
    byte_size: u64,
@@ -114,14 +299,23 @@ impl RenderChunk
    {
       let (list, ordering) = canonicalize_draw_list(&source, index_mode)?;
       let resources = validate_resource_dependencies(&list, resource_dependencies)?;
-      let bounds = draw_list_bounds(&list);
-      let byte_size = retained_byte_size(&list, resources.len())?;
+      let (bounds, commands, paint_spans, spatial_index) = prepare_spatial_metadata(&list)?;
+      let byte_size = retained_byte_size(
+         &list,
+         resources.len(),
+         commands.len(),
+         paint_spans.len(),
+         spatial_index.byte_size(),
+      )?;
       Ok(Self {
          inner: Arc::new(RenderChunkData {
             id,
             revisions,
             list,
             bounds,
+            commands: commands.into(),
+            paint_spans: paint_spans.into(),
+            spatial_index,
             resources: resources.into(),
             ordering,
             byte_size,
@@ -154,7 +348,38 @@ impl RenderChunk
    #[must_use]
    pub fn bounds(&self) -> Option<RectF>
    {
+      self.inner.bounds.rect()
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn spatial_bounds(&self) -> RenderSpatialBounds
+   {
       self.inner.bounds
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn command_spatial(&self) -> &[RenderCommandSpatial]
+   {
+      &self.inner.commands
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn paint_spans(&self) -> &[RenderPaintSpan]
+   {
+      &self.inner.paint_spans
+   }
+
+   pub fn query_damage_commands(&self, rect: RectF, out: &mut Vec<u32>) -> RenderSpatialQueryStats
+   {
+      let stats = self.inner.spatial_index.query(rect, out);
+      for command in out.iter_mut()
+      {
+         *command = self.inner.paint_spans[*command as usize].begin;
+      }
+      stats
    }
 
    #[inline]
@@ -731,16 +956,40 @@ impl fmt::Display for RenderSnapshotError
 
 impl std::error::Error for RenderSnapshotError {}
 
+/// One ordered snapshot instance with frame properties and clips resolved once.
+#[derive(Debug, Clone)]
+pub struct RenderResolvedInstance
+{
+   pub instance: RenderChunkInstance,
+   /// Column-major local-to-world affine transform.
+   pub transform: [f32; 6],
+   pub opacity: f32,
+   pub source_revision: u64,
+   pub resolved_clip: RenderSpatialBounds,
+   pub bounds: RenderSpatialBounds,
+}
+
 #[derive(Debug)]
 struct RenderSnapshotData
 {
    sequences: Arc<[RenderChunkSequence]>,
+   resolved_spatial: Option<Arc<RenderResolvedSpatialData>>,
    properties: Arc<[RenderPropertySlot]>,
    damage: Damage,
    instance_count: u64,
    uniform_property_revision: Option<u64>,
    metadata_byte_size: u64,
 }
+
+#[derive(Debug)]
+struct RenderResolvedSpatialData
+{
+   instances: Arc<[RenderResolvedInstance]>,
+   spatial_index: SpatialIndex,
+   byte_size: u64,
+}
+
+const SNAPSHOT_SPATIAL_INDEX_MIN_INSTANCES: u64 = 32;
 
 /// Ordered immutable chunk references plus frame-local property and damage metadata.
 #[derive(Debug, Clone)]
@@ -804,6 +1053,10 @@ impl RenderSnapshot
       let instance_count = sequences.iter().fold(0_u64, |count, sequence| {
          count.saturating_add(sequence.instance_count())
       });
+      if instance_count > u64::from(u32::MAX)
+      {
+         return Err(RenderSnapshotError::GeometryTooLarge);
+      }
       let uniform_property_revision = if all_instances_have_transform_opacity
          && instance_count > 0
          && instance_count.checked_mul(2) == Some(properties.len() as u64)
@@ -811,6 +1064,14 @@ impl RenderSnapshot
          properties.first()
             .map(|property| property.revision)
             .filter(|revision| properties.iter().all(|property| property.revision == *revision))
+      }
+      else
+      {
+         None
+      };
+      let resolved_spatial = if properties.is_empty() && instance_count >= SNAPSHOT_SPATIAL_INDEX_MIN_INSTANCES
+      {
+         Some(Arc::new(build_resolved_spatial(&sequences, &properties, instance_count)))
       }
       else
       {
@@ -824,10 +1085,12 @@ impl RenderSnapshot
       )
       .saturating_add(
          (properties.len() as u64).saturating_mul(mem::size_of::<RenderPropertySlot>() as u64),
-      );
+      )
+      .saturating_add(resolved_spatial.as_ref().map_or(0, |spatial| spatial.byte_size));
       Ok(Self {
          inner: Arc::new(RenderSnapshotData {
             sequences: sequences.into(),
+            resolved_spatial,
             properties: properties.into(),
             damage,
             instance_count,
@@ -884,6 +1147,51 @@ impl RenderSnapshot
          index -= sequence.instance_count();
       }
       None
+   }
+
+   pub fn query_damage_instances(&self, rect: RectI, out: &mut Vec<u32>) -> RenderSpatialQueryStats
+   {
+      let query = RectF::new(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32);
+      if let Some(spatial) = self.inner.resolved_spatial.as_ref()
+      {
+         return spatial.spatial_index.query(query, out);
+      }
+      out.clear();
+      let mut visited = 0_u64;
+      let mut order = 0_u32;
+      self.visit_instances(|instance| {
+         visited = visited.saturating_add(1);
+         let resolved = resolve_instance(instance, &self.inner.properties)
+            .expect("validated render instance must resolve");
+         if spatial_intersects_query(resolved.bounds, query)
+         {
+            out.push(order);
+         }
+         order = order.saturating_add(1);
+      });
+      RenderSpatialQueryStats {
+         entries_visited: visited,
+         entries_matched: out.len() as u64,
+      }
+   }
+
+   #[must_use]
+   pub fn resolved_instance(&self, index: u32) -> Option<RenderResolvedInstance>
+   {
+      if let Some(spatial) = self.inner.resolved_spatial.as_ref()
+      {
+         return spatial.instances.get(index as usize).cloned();
+      }
+      self.instance(u64::from(index)).and_then(|instance| {
+         resolve_instance(&instance, &self.inner.properties).ok()
+      })
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn precomputed_resolved_instances(&self) -> Option<&[RenderResolvedInstance]>
+   {
+      self.inner.resolved_spatial.as_ref().map(|spatial| spatial.instances.as_ref())
    }
 
    #[inline]
@@ -1154,56 +1462,219 @@ fn validate_resource_dependencies(list: &DrawList, supplied: &[RenderResourceDep
    Ok(resources)
 }
 
-fn retained_byte_size(list: &DrawList, resources: usize) -> Result<u64, RenderChunkError>
+fn retained_byte_size(list: &DrawList, resources: usize, commands: usize, spans: usize, spatial_bytes: u64) -> Result<u64, RenderChunkError>
 {
-   let commands = list.items.len().checked_mul(mem::size_of::<DrawCmd>()).ok_or(RenderChunkError::GeometryTooLarge)?;
+   let draw_commands = list.items.len().checked_mul(mem::size_of::<DrawCmd>()).ok_or(RenderChunkError::GeometryTooLarge)?;
    let vertices = list.vertices.len().checked_mul(mem::size_of::<Vertex>()).ok_or(RenderChunkError::GeometryTooLarge)?;
    let indices = list.indices.len().checked_mul(mem::size_of::<u16>()).ok_or(RenderChunkError::GeometryTooLarge)?;
    let dependencies = resources.checked_mul(mem::size_of::<RenderResourceDependency>()).ok_or(RenderChunkError::GeometryTooLarge)?;
-   u64::try_from(commands.checked_add(vertices).and_then(|size| size.checked_add(indices)).and_then(|size| size.checked_add(dependencies)).ok_or(RenderChunkError::GeometryTooLarge)?).map_err(|_| RenderChunkError::GeometryTooLarge)
+   let command_spatial = commands.checked_mul(mem::size_of::<RenderCommandSpatial>()).ok_or(RenderChunkError::GeometryTooLarge)?;
+   let paint_spans = spans.checked_mul(mem::size_of::<RenderPaintSpan>()).ok_or(RenderChunkError::GeometryTooLarge)?;
+   let fixed = draw_commands.checked_add(vertices)
+      .and_then(|size| size.checked_add(indices))
+      .and_then(|size| size.checked_add(dependencies))
+      .and_then(|size| size.checked_add(command_spatial))
+      .and_then(|size| size.checked_add(paint_spans))
+      .ok_or(RenderChunkError::GeometryTooLarge)?;
+   u64::try_from(fixed).map_err(|_| RenderChunkError::GeometryTooLarge)?.checked_add(spatial_bytes)
+      .ok_or(RenderChunkError::GeometryTooLarge)
 }
 
-fn draw_list_bounds(list: &DrawList) -> Option<RectF>
+const RASTER_AA_OUTSET_DP: f32 = 1.0;
+const EFFECT_MAX_BLUR_SIGMA_DP: f32 = 72.0;
+
+fn prepare_spatial_metadata(list: &DrawList) -> Result<(RenderSpatialBounds, Vec<RenderCommandSpatial>, Vec<RenderPaintSpan>, SpatialIndex), RenderChunkError>
 {
-   let mut bounds = None;
-   for command in &list.items {
-      let rect = match command {
-         DrawCmd::Solid { vb, .. } | DrawCmd::ImageMesh { vb, .. } => span_bounds(&list.vertices, *vb),
-         DrawCmd::GlyphRun { run } => span_bounds(&list.vertices, run.vb),
-         DrawCmd::LayerBegin { rect, .. }
-         | DrawCmd::Image { dst: rect, .. }
-         | DrawCmd::RRect { rect, .. }
-         | DrawCmd::NineSlice { rect, .. }
-         | DrawCmd::Backdrop { rect, .. }
-         | DrawCmd::VisualEffect { rect, .. }
-         | DrawCmd::CameraBg { rect, .. } => finite_rect(*rect),
-         DrawCmd::Spinner { center, atom, .. } => finite_rect(RectF::new(center[0] - atom, center[1] - atom, atom * 2.0, atom * 2.0)),
-         DrawCmd::LayerEnd | DrawCmd::ClipPush { .. } | DrawCmd::ClipPop => None,
-      };
-      if let Some(rect) = rect {
-         bounds = Some(union_rect(bounds, rect));
+   let empty = RenderCommandSpatial {
+      bounds: RenderSpatialBounds::Empty,
+      resolved_clip: RenderSpatialBounds::Unbounded,
+      matching_scope: None,
+      vertex_count: 0,
+   };
+   let mut commands = vec![empty; list.items.len()];
+   let mut spans = Vec::new();
+   let mut scopes = Vec::<(Scope, usize, RenderSpatialBounds)>::new();
+   let mut current_clip = RenderSpatialBounds::Unbounded;
+   let mut layer_depth = 0_u32;
+   for (index, command) in list.items.iter().enumerate()
+   {
+      let command_index = u32::try_from(index).map_err(|_| RenderChunkError::GeometryTooLarge)?;
+      let vertex_count = command_vertex_count(command);
+      match command
+      {
+         DrawCmd::ClipPush { rect } =>
+         {
+            let previous = current_clip;
+            current_clip = intersect_spatial(current_clip, rect_i_bounds(*rect));
+            commands[index] = RenderCommandSpatial {
+               resolved_clip: current_clip,
+               ..empty
+            };
+            scopes.push((Scope::Clip, index, previous));
+         }
+         DrawCmd::ClipPop =>
+         {
+            let Some((Scope::Clip, begin, previous)) = scopes.pop() else
+            {
+               return Err(RenderChunkError::OrderingMismatch { command: index });
+            };
+            commands[index].resolved_clip = current_clip;
+            commands[index].matching_scope = Some(u32::try_from(begin).map_err(|_| RenderChunkError::GeometryTooLarge)?);
+            commands[begin].matching_scope = Some(command_index);
+            current_clip = previous;
+         }
+         DrawCmd::LayerBegin { rect, .. } =>
+         {
+            let bounds = intersect_spatial(command_spatial_bounds(list, command), current_clip);
+            commands[index] = RenderCommandSpatial {
+               bounds,
+               resolved_clip: current_clip,
+               matching_scope: None,
+               vertex_count,
+            };
+            let previous = current_clip;
+            current_clip = intersect_spatial(current_clip, rect_f_bounds(*rect));
+            scopes.push((Scope::Layer, index, previous));
+            layer_depth = layer_depth.saturating_add(1);
+         }
+         DrawCmd::LayerEnd =>
+         {
+            let Some((Scope::Layer, begin, previous)) = scopes.pop() else
+            {
+               return Err(RenderChunkError::OrderingMismatch { command: index });
+            };
+            commands[index].resolved_clip = current_clip;
+            commands[index].matching_scope = Some(u32::try_from(begin).map_err(|_| RenderChunkError::GeometryTooLarge)?);
+            commands[begin].matching_scope = Some(command_index);
+            current_clip = previous;
+            layer_depth = layer_depth.saturating_sub(1);
+            if layer_depth == 0
+            {
+               spans.push(RenderPaintSpan {
+                  begin: u32::try_from(begin).map_err(|_| RenderChunkError::GeometryTooLarge)?,
+                  end: command_index.saturating_add(1),
+                  bounds: commands[begin].bounds,
+                  vertex_count: 0,
+               });
+            }
+         }
+         _ =>
+         {
+            let bounds = intersect_spatial(command_spatial_bounds(list, command), current_clip);
+            commands[index] = RenderCommandSpatial {
+               bounds,
+               resolved_clip: current_clip,
+               matching_scope: None,
+               vertex_count,
+            };
+            if layer_depth == 0 && !bounds.is_empty()
+            {
+               spans.push(RenderPaintSpan {
+                  begin: command_index,
+                  end: command_index.saturating_add(1),
+                  bounds,
+                  vertex_count,
+               });
+            }
+         }
       }
    }
-   bounds
+   let mut vertex_prefix = Vec::with_capacity(commands.len().saturating_add(1));
+   vertex_prefix.push(0_u64);
+   for command in &commands
+   {
+      vertex_prefix.push(vertex_prefix.last().copied().unwrap_or(0).saturating_add(u64::from(command.vertex_count)));
+   }
+   for span in &mut spans
+   {
+      let begin = span.begin as usize;
+      let end = span.end as usize;
+      span.vertex_count = vertex_prefix.get(end).copied().unwrap_or(u64::MAX)
+         .saturating_sub(vertex_prefix.get(begin).copied().unwrap_or(0))
+         .min(u64::from(u32::MAX)) as u32;
+   }
+   spans.sort_unstable_by_key(|span| span.begin);
+   let bounds = spans.iter().fold(RenderSpatialBounds::Empty, |bounds, span| {
+      union_spatial(bounds, span.bounds)
+   });
+   let spatial_index = SpatialIndex::new(spans.iter().enumerate().map(|(index, span)| {
+      (index as u32, span.bounds)
+   }));
+   Ok((bounds, commands, spans, spatial_index))
 }
 
-fn span_bounds(vertices: &[Vertex], span: VertexSpan) -> Option<RectF>
+fn command_vertex_count(command: &DrawCmd) -> u32
+{
+   match command
+   {
+      DrawCmd::Solid { vb, .. } | DrawCmd::ImageMesh { vb, .. } => vb.len,
+      DrawCmd::GlyphRun { run } => run.vb.len,
+      _ => 0,
+   }
+}
+
+fn command_spatial_bounds(list: &DrawList, command: &DrawCmd) -> RenderSpatialBounds
+{
+   match command
+   {
+      DrawCmd::Solid { vb, .. } | DrawCmd::ImageMesh { vb, .. } =>
+         outset_spatial(span_spatial_bounds(&list.vertices, *vb), RASTER_AA_OUTSET_DP),
+      DrawCmd::GlyphRun { run } =>
+         outset_spatial(span_spatial_bounds(&list.vertices, run.vb), RASTER_AA_OUTSET_DP),
+      DrawCmd::LayerBegin { rect, .. }
+      | DrawCmd::Image { dst: rect, .. }
+      | DrawCmd::RRect { rect, .. }
+      | DrawCmd::NineSlice { rect, .. } =>
+         outset_spatial(rect_f_bounds(*rect), RASTER_AA_OUTSET_DP),
+      DrawCmd::Backdrop { rect, sigma, .. } =>
+         effect_bounds(*rect, *sigma),
+      DrawCmd::VisualEffect { rect, effect } =>
+         effect_bounds(*rect, effect.blur_intensity() * EFFECT_MAX_BLUR_SIGMA_DP),
+      DrawCmd::CameraBg { rect, blur, sigma, .. } =>
+      {
+         effect_bounds(*rect, if *blur { *sigma } else { 0.0 })
+      }
+      DrawCmd::Spinner { center, atom, .. } =>
+      {
+         outset_spatial(
+            rect_f_bounds(RectF::new(center[0] - atom, center[1] - atom, atom * 2.0, atom * 2.0)),
+            RASTER_AA_OUTSET_DP,
+         )
+      }
+      DrawCmd::LayerEnd | DrawCmd::ClipPush { .. } | DrawCmd::ClipPop => RenderSpatialBounds::Empty,
+   }
+}
+
+fn effect_bounds(rect: RectF, sigma: f32) -> RenderSpatialBounds
+{
+   if !sigma.is_finite()
+   {
+      return RenderSpatialBounds::Unbounded;
+   }
+   outset_spatial(rect_f_bounds(rect), RASTER_AA_OUTSET_DP + sigma.abs() * 3.0)
+}
+
+fn span_spatial_bounds(vertices: &[Vertex], span: VertexSpan) -> RenderSpatialBounds
 {
    let start = span.offset as usize;
-   let end = start.checked_add(span.len as usize)?;
-   let mut iter = vertices.get(start..end)?.iter().filter(|vertex| vertex.x.is_finite() && vertex.y.is_finite());
-   let first = iter.next()?;
+   let Some(end) = start.checked_add(span.len as usize) else { return RenderSpatialBounds::Unbounded };
+   let Some(vertices) = vertices.get(start..end) else { return RenderSpatialBounds::Unbounded };
+   let Some(first) = vertices.first() else { return RenderSpatialBounds::Empty };
+   if !vertices.iter().all(|vertex| vertex.x.is_finite() && vertex.y.is_finite())
+   {
+      return RenderSpatialBounds::Unbounded;
+   }
    let mut x0 = first.x;
    let mut y0 = first.y;
    let mut x1 = first.x;
    let mut y1 = first.y;
-   for vertex in iter {
+   for vertex in &vertices[1..] {
       x0 = x0.min(vertex.x);
       y0 = y0.min(vertex.y);
       x1 = x1.max(vertex.x);
       y1 = y1.max(vertex.y);
    }
-   Some(RectF::new(x0, y0, x1 - x0, y1 - y0))
+   RenderSpatialBounds::Finite(RectF::new(x0, y0, x1 - x0, y1 - y0))
 }
 
 fn finite_rect(rect: RectF) -> Option<RectF>
@@ -1219,16 +1690,102 @@ fn finite_rect(rect: RectF) -> Option<RectF>
    Some(RectF::new(rect.x.min(x1), rect.y.min(y1), (rect.x - x1).abs(), (rect.y - y1).abs()))
 }
 
-fn union_rect(bounds: Option<RectF>, rect: RectF) -> RectF
+fn rect_f_bounds(rect: RectF) -> RenderSpatialBounds
 {
-   let Some(bounds) = bounds else {
-      return rect;
-   };
-   let x0 = bounds.x.min(rect.x);
-   let y0 = bounds.y.min(rect.y);
-   let x1 = (bounds.x + bounds.w).max(rect.x + rect.w);
-   let y1 = (bounds.y + bounds.h).max(rect.y + rect.h);
-   RectF::new(x0, y0, x1 - x0, y1 - y0)
+   finite_rect(rect).map_or(RenderSpatialBounds::Unbounded, |rect| {
+      if rect.w <= 0.0 || rect.h <= 0.0
+      {
+         RenderSpatialBounds::Empty
+      }
+      else
+      {
+         RenderSpatialBounds::Finite(rect)
+      }
+   })
+}
+
+fn rect_i_bounds(rect: RectI) -> RenderSpatialBounds
+{
+   rect_f_bounds(RectF::new(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32))
+}
+
+fn outset_spatial(bounds: RenderSpatialBounds, outset: f32) -> RenderSpatialBounds
+{
+   match bounds
+   {
+      RenderSpatialBounds::Empty => RenderSpatialBounds::Empty,
+      RenderSpatialBounds::Unbounded => RenderSpatialBounds::Unbounded,
+      RenderSpatialBounds::Finite(rect) if outset.is_finite() =>
+      {
+         rect_f_bounds(RectF::new(
+            rect.x - outset,
+            rect.y - outset,
+            rect.w + outset * 2.0,
+            rect.h + outset * 2.0,
+         ))
+      }
+      RenderSpatialBounds::Finite(_) => RenderSpatialBounds::Unbounded,
+   }
+}
+
+fn intersect_spatial(a: RenderSpatialBounds, b: RenderSpatialBounds) -> RenderSpatialBounds
+{
+   match (a, b)
+   {
+      (RenderSpatialBounds::Empty, _) | (_, RenderSpatialBounds::Empty) => RenderSpatialBounds::Empty,
+      (RenderSpatialBounds::Unbounded, bounds) | (bounds, RenderSpatialBounds::Unbounded) => bounds,
+      (RenderSpatialBounds::Finite(a), RenderSpatialBounds::Finite(b)) =>
+      {
+         let x0 = a.x.max(b.x);
+         let y0 = a.y.max(b.y);
+         let x1 = (a.x + a.w).min(b.x + b.w);
+         let y1 = (a.y + a.h).min(b.y + b.h);
+         if x1 <= x0 || y1 <= y0
+         {
+            RenderSpatialBounds::Empty
+         }
+         else
+         {
+            RenderSpatialBounds::Finite(RectF::new(x0, y0, x1 - x0, y1 - y0))
+         }
+      }
+   }
+}
+
+fn union_spatial(a: RenderSpatialBounds, b: RenderSpatialBounds) -> RenderSpatialBounds
+{
+   match (a, b)
+   {
+      (RenderSpatialBounds::Unbounded, _) | (_, RenderSpatialBounds::Unbounded) => RenderSpatialBounds::Unbounded,
+      (RenderSpatialBounds::Empty, bounds) | (bounds, RenderSpatialBounds::Empty) => bounds,
+      (RenderSpatialBounds::Finite(a), RenderSpatialBounds::Finite(b)) =>
+      {
+         let x0 = a.x.min(b.x);
+         let y0 = a.y.min(b.y);
+         let x1 = (a.x + a.w).max(b.x + b.w);
+         let y1 = (a.y + a.h).max(b.y + b.h);
+         RenderSpatialBounds::Finite(RectF::new(x0, y0, x1 - x0, y1 - y0))
+      }
+   }
+}
+
+fn rects_intersect(a: RectF, b: RectF) -> bool
+{
+   a.x + a.w > b.x
+      && a.x < b.x + b.w
+      && a.y + a.h > b.y
+      && a.y < b.y + b.h
+}
+
+fn spatial_intersects_query(bounds: RenderSpatialBounds, query: RectF) -> bool
+{
+   let Some(query) = finite_rect(query) else { return !bounds.is_empty() };
+   match bounds
+   {
+      RenderSpatialBounds::Empty => false,
+      RenderSpatialBounds::Unbounded => query.w > 0.0 && query.h > 0.0,
+      RenderSpatialBounds::Finite(bounds) => rects_intersect(bounds, query),
+   }
 }
 
 fn validate_properties(properties: &[RenderPropertySlot]) -> Result<(), RenderSnapshotError>
@@ -1267,6 +1824,137 @@ fn property(properties: &[RenderPropertySlot], id: RenderPropertySlotId) -> Opti
 {
    let index = properties.binary_search_by_key(&id.0, |property| property.id.0).ok()?;
    properties.get(index)
+}
+
+fn resolve_instance(instance: &RenderChunkInstance, properties: &[RenderPropertySlot]) -> Result<RenderResolvedInstance, RenderSnapshotError>
+{
+   let mut matrix = [1.0_f32, 0.0, 0.0, 1.0];
+   let mut translation = [0.0_f32, 0.0];
+   let mut opacity = 1.0_f32;
+   let mut source_revision = 0xcbf2_9ce4_8422_2325_u64;
+   for id in instance.property_slots.iter().copied()
+   {
+      let property = property(properties, id).ok_or(RenderSnapshotError::MissingPropertySlot(id))?;
+      source_revision = source_revision.rotate_left(17) ^ (u64::from(id.0) << 32) ^ property.revision;
+      match property.value
+      {
+         RenderPropertyValue::Transform(transform) =>
+         {
+            let next = [
+               transform[0] * matrix[0] + transform[2] * matrix[1],
+               transform[1] * matrix[0] + transform[3] * matrix[1],
+               transform[0] * matrix[2] + transform[2] * matrix[3],
+               transform[1] * matrix[2] + transform[3] * matrix[3],
+            ];
+            translation = [
+               transform[0] * translation[0] + transform[2] * translation[1] + transform[4],
+               transform[1] * translation[0] + transform[3] * translation[1] + transform[5],
+            ];
+            matrix = next;
+         }
+         RenderPropertyValue::Opacity(value) => opacity *= value,
+      }
+   }
+   translation = [
+      matrix[0] * instance.origin[0] + matrix[2] * instance.origin[1] + translation[0],
+      matrix[1] * instance.origin[0] + matrix[3] * instance.origin[1] + translation[1],
+   ];
+   let transform = [matrix[0], matrix[1], matrix[2], matrix[3], translation[0], translation[1]];
+   let mut resolved_clip = instance.clip.map_or(RenderSpatialBounds::Unbounded, |clip| {
+      transform_spatial(rect_i_bounds(clip), transform)
+   });
+   for clip in instance.dynamic_clips.iter().copied()
+   {
+      let property = property(properties, clip.transform)
+         .ok_or(RenderSnapshotError::MissingPropertySlot(clip.transform))?;
+      let RenderPropertyValue::Transform(transform) = property.value else
+      {
+         return Err(RenderSnapshotError::InvalidClipProperty(clip.transform));
+      };
+      resolved_clip = intersect_spatial(
+         resolved_clip,
+         transform_spatial(rect_f_bounds(clip.rect), transform),
+      );
+   }
+   let local_bounds = instance.layer.map_or(instance.chunk.spatial_bounds(), |layer| {
+      outset_spatial(rect_f_bounds(layer.rect), RASTER_AA_OUTSET_DP)
+   });
+   let bounds = intersect_spatial(transform_spatial(local_bounds, transform), resolved_clip);
+   Ok(RenderResolvedInstance {
+      instance: instance.clone(),
+      transform,
+      opacity: opacity.clamp(0.0, 1.0),
+      source_revision,
+      resolved_clip,
+      bounds,
+   })
+}
+
+fn build_resolved_spatial(sequences: &[RenderChunkSequence], properties: &[RenderPropertySlot], instance_count: u64) -> RenderResolvedSpatialData
+{
+   let mut instances = Vec::with_capacity(instance_count as usize);
+   for sequence in sequences
+   {
+      sequence.visit_instances(|instance| {
+         instances.push(resolve_instance(instance, properties)
+            .expect("validated render instance must resolve"));
+      });
+   }
+   let spatial_index = SpatialIndex::new(instances.iter().enumerate().map(|(order, instance)| {
+      (order as u32, instance.bounds)
+   }));
+   let byte_size = (instances.len() as u64)
+      .saturating_mul(mem::size_of::<RenderResolvedInstance>() as u64)
+      .saturating_add(spatial_index.byte_size());
+   RenderResolvedSpatialData {
+      instances: instances.into(),
+      spatial_index,
+      byte_size,
+   }
+}
+
+fn transform_spatial(bounds: RenderSpatialBounds, transform: [f32; 6]) -> RenderSpatialBounds
+{
+   match bounds
+   {
+      RenderSpatialBounds::Empty => RenderSpatialBounds::Empty,
+      RenderSpatialBounds::Unbounded => RenderSpatialBounds::Unbounded,
+      RenderSpatialBounds::Finite(rect) =>
+      {
+         let x1 = rect.x + rect.w;
+         let y1 = rect.y + rect.h;
+         let points = [
+            transform_point([rect.x, rect.y], transform),
+            transform_point([x1, rect.y], transform),
+            transform_point([rect.x, y1], transform),
+            transform_point([x1, y1], transform),
+         ];
+         if !points.iter().flatten().all(|value| value.is_finite())
+         {
+            return RenderSpatialBounds::Unbounded;
+         }
+         let x0 = points.iter().map(|point| point[0]).fold(f32::INFINITY, f32::min);
+         let y0 = points.iter().map(|point| point[1]).fold(f32::INFINITY, f32::min);
+         let x1 = points.iter().map(|point| point[0]).fold(f32::NEG_INFINITY, f32::max);
+         let y1 = points.iter().map(|point| point[1]).fold(f32::NEG_INFINITY, f32::max);
+         if x1 <= x0 || y1 <= y0
+         {
+            RenderSpatialBounds::Empty
+         }
+         else
+         {
+            RenderSpatialBounds::Finite(RectF::new(x0, y0, x1 - x0, y1 - y0))
+         }
+      }
+   }
+}
+
+fn transform_point(point: [f32; 2], transform: [f32; 6]) -> [f32; 2]
+{
+   [
+      transform[0] * point[0] + transform[2] * point[1] + transform[4],
+      transform[1] * point[0] + transform[3] * point[1] + transform[5],
+   ]
 }
 
 fn flat_instance_properties(instance: &RenderChunkInstance, properties: &[RenderPropertySlot]) -> Result<([f32; 2], f32), RenderSnapshotError>

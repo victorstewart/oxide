@@ -293,6 +293,97 @@ fn prepared_opaque_rects_match_fractionally_translated_flat_output()
 }
 
 #[test]
+fn prepared_image_mesh_matches_flat_transform_opacity_output()
+{
+   let width = 96_u32;
+   let height = 80_u32;
+   let pixels = [
+      0, 0, 255, 255, 0, 255, 0, 255,
+      255, 0, 0, 255, 255, 255, 255, 255,
+   ];
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(width, height, 1.0).expect("resize");
+   let image = renderer.image_create_rgba8(2, 2, &pixels, 8);
+   let snapshot = prepared_image_mesh_snapshot(image);
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot).expect("encode prepared image mesh");
+   renderer.submit(token).expect("submit prepared image mesh");
+   let prepared_stats = renderer.last_stats();
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot).expect("replay prepared image mesh");
+   renderer.submit(token).expect("submit replayed image mesh");
+   let replay_stats = renderer.last_stats();
+   let (_, _, prepared_pixels) = renderer.readback_bgra8().expect("read prepared image mesh");
+
+   let mut flat = api::DrawList::default();
+   snapshot.flatten_into(&mut flat).expect("flatten image mesh reference");
+   let mut reference = MetalRenderer::new_default().expect("reference metal");
+   reference.resize(width, height, 1.0).expect("reference resize");
+   let reference_image = reference.image_create_rgba8(2, 2, &pixels, 8);
+   assert_eq!(reference_image, image);
+   let token = reference.begin_frame(&api::FrameTarget, None);
+   reference.encode_pass(&flat);
+   reference.submit(token).expect("submit flat image mesh");
+   let (_, _, reference_pixels) = reference.readback_bgra8().expect("read flat image mesh");
+   assert_eq!(prepared_pixels, reference_pixels);
+   assert_eq!(prepared_stats.backend_cache_misses, 1);
+   assert_eq!(prepared_stats.commands_copied, 0);
+   assert_eq!(prepared_stats.draws, 1);
+   assert_eq!(replay_stats.backend_cache_hits, 1);
+   assert_eq!(replay_stats.backend_cache_misses, 0);
+   assert_eq!(replay_stats.commands_copied, 0);
+   assert_eq!(replay_stats.buffer_upload_bytes, 0);
+}
+
+#[test]
+fn prepared_small_damage_queries_one_glyph_or_mesh_without_vertex_scans()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(1_024, 64, 1.0).expect("resize");
+   renderer.set_damage_options(true, 0.70, 0.30);
+   let image = renderer.image_create_rgba8(2, 2, &[255; 16], 8);
+   let atlas = renderer.image_create_a8(2, 2, &[255; 4], 2);
+   let snapshot = prepared_spatial_snapshot(image, atlas, 512);
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot).expect("warm spatial snapshot");
+   renderer.submit(token).expect("submit spatial warmup");
+   let (_, _, expected) = renderer.readback_bgra8().expect("read spatial warmup");
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot).expect("replay full spatial snapshot");
+   renderer.submit(token).expect("submit full spatial replay");
+   let full_stats = renderer.last_stats();
+   assert_eq!(full_stats.prepared_plan_reuses, 1);
+   assert_eq!(full_stats.backend_cache_hits, 512);
+   assert_eq!(full_stats.backend_cache_misses, 0);
+   assert_eq!(full_stats.geometry_bytes_copied, 0);
+   assert_eq!(full_stats.buffer_upload_bytes, 0);
+
+   for damage in [api::RectI::new(500, 10, 2, 2), api::RectI::new(520, 10, 2, 2)]
+   {
+      let frame_damage = api::Damage { rects: vec![damage] };
+      let token = renderer.begin_frame(&api::FrameTarget, Some(&frame_damage));
+      renderer.encode_snapshot(&snapshot).expect("encode spatial damage");
+      renderer.submit(token).expect("submit spatial damage");
+      let stats = renderer.last_stats();
+      let (_, _, actual) = renderer.readback_bgra8().expect("read spatial damage");
+      assert_eq!(actual, expected);
+      assert!(stats.damage_instances_visited <= 2, "visited {} instances", stats.damage_instances_visited);
+      assert_eq!(stats.damage_instances_matched, 1);
+      assert_eq!(stats.damage_commands_visited, 1);
+      assert_eq!(stats.damage_commands_matched, 1);
+      assert_eq!(stats.damage_vertices_visited, 0);
+      assert_eq!(stats.draws, 1);
+      assert_eq!(stats.backend_cache_hits, 1);
+      assert_eq!(stats.backend_cache_misses, 0);
+      assert_eq!(stats.geometry_bytes_copied, 0);
+      assert_eq!(stats.buffer_upload_bytes, 0);
+      assert_eq!(stats.shaded_damage_px, 4);
+   }
+}
+
+#[test]
 fn prepared_snapshot_rebuilds_only_the_dirty_chunk()
 {
    let mut renderer = MetalRenderer::new_default().expect("metal");
@@ -445,6 +536,107 @@ fn prepared_image_snapshot(image: api::ImageHandle, generation: u64) -> api::Ren
       Vec::new(),
       api::Damage { rects: Vec::new() },
    ).expect("image snapshot")
+}
+
+fn prepared_image_mesh_snapshot(image: api::ImageHandle) -> api::RenderSnapshot
+{
+   let chunk = api::RenderChunk::new(
+      api::RenderChunkId(917),
+      api::RenderChunkRevisions { resource: 1, geometry: 1, ..api::RenderChunkRevisions::default() },
+      api::DrawList {
+         items: vec![api::DrawCmd::ImageMesh {
+            tex: image,
+            vb: api::VertexSpan { offset: 0, len: 4 },
+            ib: api::IndexSpan { offset: 0, len: 6 },
+            alpha: 0.8,
+         }],
+         vertices: vec![
+            api::Vertex { x: 8.0, y: 8.0, u: 0.0, v: 0.0, rgba: 0 },
+            api::Vertex { x: 40.0, y: 8.0, u: 1.0, v: 0.0, rgba: 0 },
+            api::Vertex { x: 40.0, y: 40.0, u: 1.0, v: 1.0, rgba: 0 },
+            api::Vertex { x: 8.0, y: 40.0, u: 0.0, v: 1.0, rgba: 0 },
+         ],
+         indices: vec![0, 1, 2, 0, 2, 3],
+      },
+      api::ChunkIndexMode::Local,
+      &[api::RenderResourceDependency { image, generation: 1 }],
+   ).expect("image mesh chunk");
+   let transform = api::RenderPropertySlotId::dynamic(1, 1).unwrap();
+   let opacity = api::RenderPropertySlotId::dynamic(2, 1).unwrap();
+   let mut instance = api::RenderChunkInstance::new(chunk, [12.0, 6.0]);
+   instance.property_slots = vec![transform, opacity].into();
+   api::RenderSnapshot::new(
+      vec![instance],
+      vec![
+         api::RenderPropertySlot {
+            id: transform,
+            revision: 1,
+            value: api::RenderPropertyValue::Transform([1.0, 0.0, 0.0, 1.0, 3.0, 2.0]),
+         },
+         api::RenderPropertySlot {
+            id: opacity,
+            revision: 1,
+            value: api::RenderPropertyValue::Opacity(0.7),
+         },
+      ],
+      api::Damage { rects: Vec::new() },
+   ).expect("image mesh snapshot")
+}
+
+fn prepared_spatial_snapshot(image: api::ImageHandle, atlas: api::ImageHandle, count: usize) -> api::RenderSnapshot
+{
+   let vertices = vec![
+      api::Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: 0 },
+      api::Vertex { x: 8.0, y: 0.0, u: 1.0, v: 0.0, rgba: 0 },
+      api::Vertex { x: 8.0, y: 10.0, u: 1.0, v: 1.0, rgba: 0 },
+      api::Vertex { x: 0.0, y: 10.0, u: 0.0, v: 1.0, rgba: 0 },
+   ];
+   let indices = vec![0, 1, 2, 0, 2, 3];
+   let mesh = api::RenderChunk::new(
+      api::RenderChunkId(918),
+      api::RenderChunkRevisions { resource: 1, geometry: 1, ..api::RenderChunkRevisions::default() },
+      api::DrawList {
+         items: vec![api::DrawCmd::ImageMesh {
+            tex: image,
+            vb: api::VertexSpan { offset: 0, len: 4 },
+            ib: api::IndexSpan { offset: 0, len: 6 },
+            alpha: 1.0,
+         }],
+         vertices: vertices.clone(),
+         indices: indices.clone(),
+      },
+      api::ChunkIndexMode::Local,
+      &[api::RenderResourceDependency { image, generation: 1 }],
+   ).expect("spatial mesh chunk");
+   let glyph = api::RenderChunk::new(
+      api::RenderChunkId(919),
+      api::RenderChunkRevisions { resource: 1, geometry: 1, ..api::RenderChunkRevisions::default() },
+      api::DrawList {
+         items: vec![api::DrawCmd::GlyphRun { run: api::GlyphRun {
+            atlas,
+            atlas_revision: 1,
+            vb: api::VertexSpan { offset: 0, len: 4 },
+            ib: api::IndexSpan { offset: 0, len: 6 },
+            sdf: false,
+            color: api::Color::rgba(0.3, 0.7, 1.0, 1.0),
+         }}],
+         vertices,
+         indices,
+      },
+      api::ChunkIndexMode::Local,
+      &[api::RenderResourceDependency { image: atlas, generation: 1 }],
+   ).expect("spatial glyph chunk");
+   let instances = (0..count).map(|index| {
+      api::RenderChunkInstance::new(
+         if index & 1 == 0 { mesh.clone() } else { glyph.clone() },
+         [index as f32 * 20.0, 8.0],
+      )
+   }).collect();
+   api::RenderSnapshot::new(
+      instances,
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("spatial snapshot")
 }
 
 fn prepared_fractional_opaque_snapshot(image: api::ImageHandle) -> api::RenderSnapshot

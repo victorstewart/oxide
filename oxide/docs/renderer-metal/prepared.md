@@ -2,7 +2,7 @@
 
 ## Intention and purpose
 
-`prepared` lowers immutable `RenderChunk` payloads once into persistent Metal buffers and a compact operation plan. Clean `RenderSnapshot` frames reuse those buffers without copying geometry or traversing the chunk's commands again, while transform, opacity, origin, clip, and viewport values remain frame-dynamic.
+`prepared` lowers immutable `RenderChunk` payloads once into persistent Metal buffers and a compact operation plan. C27 adds prepared image meshes and spatially selected retained replay, so small damage touches only intersecting instances/commands and never rescans glyph or mesh vertices.
 
 ## Relation to the rest of the code
 
@@ -43,13 +43,15 @@ RenderSnapshot instance
 
 The cache key contains chunk id, structural revision, geometry revision, resource revision, renderer device generation, target color format, and sample count. A hit also verifies every referenced image or glyph-atlas generation against the renderer's current generation table. An update or release invalidates all dependent entries immediately; a mismatched snapshot dependency falls back rather than sampling stale content.
 
-On a miss, lowering accepts balanced clip operations plus RRects, images, glyph runs, and solids. Consecutive compatible immutable commands become one prepared operation. Buffers use shared storage because the focused same-binary private-buffer comparison regressed one-dirty GPU p50 by 79.1% and every measured tail. Images retain a finalized immutable argument buffer when supported. Glyph vertices, normalized local indices, and draw-color records are persistent. No private staging or indirect command buffer is enabled.
+On a miss, lowering accepts balanced clip operations plus RRects, images, image meshes, glyph runs, and solids. Consecutive compatible immutable commands become one prepared operation. Buffers use shared storage because the focused same-binary private-buffer comparison regressed one-dirty GPU p50 by 79.1% and every measured tail. Images retain a finalized immutable argument buffer when supported. Glyph/mesh vertices, normalized local indices, and draw-color records are persistent. No private staging or indirect command buffer is enabled.
 
 Each snapshot visit resolves property slots into one affine matrix, translation, and opacity value. Those values, an identity-matrix flag, the instance origin, and the current viewport form a 48-byte record sent separately from cached geometry. All frame records are copied once into one contiguous slice of the active frame's completion-protected uniform ring, and draws bind offsets into that slice rather than asking Metal to stage one inline constant block per chunk. Equal adjacent property-slot lists reuse the resolved property value. Translation-only RRect/image vertices preserve flat-path world-coordinate rounding at fragment edges; general affine instances retain local fragment coordinates. Clip rectangles are transformed into conservative integer bounds; nested chunk clips remain ordered and intersect with the instance and damage scissors.
 
+Small damage first queries the snapshot's stable world index, inverse-transforms the resulting scissor into each selected chunk, and queries its prepared paint spans. A prepared command-to-operation map jumps directly to the selected operations in paint order and applies their pre-resolved clips, so command filtering performs no full-list or vertex-span scan. Full damage skips both queries. Large unchanged property-free snapshots retain their backend frame plan and validate its unique prepared keys before linear replay, avoiding a second 10,000-instance planning walk without weakening resource-generation or viewport invalidation.
+
 The cache owns one current prepared version per chunk id. Revision replacement or resource invalidation removes the old version. Admission rejects an entry larger than the hard budget; otherwise generation-aware LRU eviction removes the coldest unprotected entries. Resident accounting uses Metal's allocated buffer sizes, while logical accounting uses payload lengths.
 
-Unsupported layers, effects, spinners, meshes, or malformed resource dependencies use `RenderSnapshot::flatten_into` and the established `encode_pass` path. Flat scratch capacity persists across frames, and fallback accounting reports copied commands and geometry exactly once.
+Unsupported layers, effects, spinners, or malformed resource dependencies use `RenderSnapshot::flatten_into` and the established `encode_pass` path. Flat scratch capacity persists across frames, and fallback accounting reports copied commands and geometry exactly once.
 
 ## Preconditions and postconditions
 
@@ -73,9 +75,9 @@ Unsupported layers, effects, spinners, meshes, or malformed resource dependencie
 
 ## Performance notes
 
-Clean replay performs one bounded cache lookup per instance but allocates no new Metal buffers and copies no immutable geometry. C26 moves dynamic records into a separate completion-protected property ring and tracks the last value revision per physical frame slot, so unchanged records upload zero bytes and changed records copy exactly 48 bytes each. A snapshot whose instances all carry transform/opacity pairs under one newly advanced revision epoch takes a prevalidated all-record path instead of paying sparse-cache bookkeeping. Each physical property buffer is bound once per render pass and instance replay changes only its offset; the 16 KiB initial per-slot capacity covers the representative 300-record workload and grows on demand. The retained frame-plan vector, property cache, and clip-stack pool preserve capacity. Miss cost is proportional only to the changed chunk. The default hard budget is 32 MiB.
+Clean replay allocates no new Metal buffers and copies no immutable geometry. C26 moves dynamic records into a separate completion-protected property ring and tracks the last value revision per physical frame slot, so unchanged records upload zero bytes and changed records copy exactly 48 bytes each. C27's property-free full-damage path reuses the unchanged frame plan after validating unique cache keys; its small-damage path visits only selected indexed entries and records instance/command/vertex query counts plus query CPU. The retained frame-plan vector, property cache, damage scratch, and clip-stack pool preserve capacity. Miss cost is proportional only to the changed chunk. The default hard budget is 32 MiB.
 
-The permanent cases are `gpu.architecture.prepared_chunks.clean_mixed`, `gpu.architecture.prepared_chunks.one_dirty`, `gpu.architecture.animation.dynamic_properties_300`, and `gpu.authoring.retained_snapshot.clean_mixed`. They report encode/GPU/frame distributions, separate property and geometry uploads, command traversal, draws, image-table binds, hit/miss/rebuild counts, eviction count, property-ring bytes, and resident prepared/renderer bytes.
+The C27 cases are `gpu.architecture.spatial_metadata.{small_damage,full_damage}_glyph_mesh_10000` and `gpu.authoring.retained_snapshot.spatial_damage_10000`. They report frame/encode/GPU/query distributions, visited/matched instances and commands, vertex visits, plan reuse, draws, copied/uploaded bytes, and shaded pixels.
 
 ## Feature flags and cfgs
 
@@ -84,6 +86,7 @@ Prepared pipelines are unavailable in the direct-camera-preview-only renderer co
 ## Testing and benchmarks
 
 - `renderer-metal/tests/snapshots.rs` compares prepared and flat mixed/fractional pixels under Metal validation, changes dynamic properties without rebuilding, checks one-dirty behavior, enforces LRU bytes, validates resource generations, exercises purge, and freezes fallback accounting.
+- `prepared_small_damage_queries_one_glyph_or_mesh_without_vertex_scans` freezes exact full/small pixels, one-entry selection, zero vertex/copy/upload work, and full static-plan reuse.
 - `prepared_property_ring_uploads_only_changed_instance_records_after_warmup` warms every physical slot, proves an unchanged frame uploads zero property bytes, then proves one changed instance uploads one 48-byte record and zero geometry.
 - `perf-runner/tests/report_tests.rs` freezes clean zero-upload/zero-traversal and one-dirty exact-work counters.
 - Run `MTL_DEBUG_LAYER=1 cargo test --locked -p oxide-renderer-metal --test snapshots prepared_snapshot --features snapshot-tests`.
@@ -99,5 +102,6 @@ renderer.submit(token)?;
 
 ## Changelog
 
+- 2026-07-13: added C27 prepared image meshes, indexed small-damage replay, zero-vertex-scan accounting, and validated static full-plan reuse.
 - 2026-07-13: added a completion-protected changed-record property ring with separate logical upload/residency counters for C26.
 - 2026-07-13: added byte-budgeted persistent Metal preparation for immutable RRect, image, glyph, solid, and clip chunks with dynamic properties, generation invalidation, exact fallback, memory-pressure purge, and permanent performance contracts.

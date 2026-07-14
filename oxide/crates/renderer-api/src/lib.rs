@@ -16,9 +16,10 @@ mod retained;
 
 pub use retained::{
    ChunkIndexMode, RenderChunk, RenderChunkError, RenderChunkId, RenderChunkInstance,
-   RenderChunkOrdering, RenderChunkRevisions, RenderChunkSequence, RenderFallbackStats,
-   RenderDynamicClip, RenderLayerInstance, RenderPropertySlot, RenderPropertySlotId, RenderPropertyValue,
-   RenderResourceDependency, RenderSnapshot, RenderSnapshotError,
+   RenderChunkOrdering, RenderChunkRevisions, RenderChunkSequence, RenderCommandSpatial,
+   RenderDynamicClip, RenderFallbackStats, RenderLayerInstance, RenderPaintSpan, RenderPropertySlot,
+   RenderPropertySlotId, RenderPropertyValue, RenderResolvedInstance, RenderResourceDependency,
+   RenderSnapshot, RenderSnapshotError, RenderSpatialBounds, RenderSpatialQueryStats,
 };
 
 // Opaque frame target used by Renderer implementations.

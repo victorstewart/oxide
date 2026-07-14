@@ -250,6 +250,10 @@ const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
         name: "Dynamic Property Animation",
     },
     AuthoringPerfSpec {
+        id: "cpu.authoring.retained_snapshot.spatial_query_10000",
+        name: "Retained Snapshot Spatial Query",
+    },
+    AuthoringPerfSpec {
         id: "cpu.authoring.drawlist_text_replay.multi_atlas",
         name: "DrawList Text Replay Multi Atlas",
     },
@@ -276,6 +280,10 @@ const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
     AuthoringPerfSpec {
         id: "gpu.authoring.retained_snapshot.clean_mixed",
         name: "Retained Snapshot Metal Replay",
+    },
+    AuthoringPerfSpec {
+        id: "gpu.authoring.retained_snapshot.spatial_damage_10000",
+        name: "Retained Snapshot Spatial Damage",
     },
     AuthoringPerfSpec { id: "gpu.authoring.scene3d.mixed_frame", name: "Scene3D Mixed Frame" },
 ];
@@ -3340,6 +3348,9 @@ fn push_authoring_cases(
             "cpu.authoring.animation.dynamic_properties_300" => {
                 architecture_matrix::authoring_dynamic_property_surface_case(smoke)
             }
+            "cpu.authoring.retained_snapshot.spatial_query_10000" => {
+                architecture_matrix::retained_spatial_query_case(spec.id, smoke)
+            }
             "cpu.authoring.drawlist_text_replay.multi_atlas" => {
                 authoring_drawlist_text_replay_multi_atlas_case(smoke)
             }
@@ -3360,6 +3371,9 @@ fn push_authoring_cases(
             }
             "gpu.authoring.retained_snapshot.clean_mixed" => {
                 architecture_matrix::metal_prepared_chunk_case(spec.id, smoke, false)?
+            }
+            "gpu.authoring.retained_snapshot.spatial_damage_10000" => {
+                architecture_matrix::metal_spatial_damage_case(spec.id, smoke, false)?
             }
             "gpu.authoring.scene3d.mixed_frame" => authoring_scene3d_mixed_frame_case(smoke)?,
             other => bail!("unknown authoring perf case `{}`", other),

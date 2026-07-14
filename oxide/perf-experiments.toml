@@ -1,4 +1,81 @@
 [[experiments]]
+id = "c27-spatial-metadata"
+introduced_commit = "C27 staged tree recorded in commit proof"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-api", "oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "Conservative AA/effect/glyph/mesh bounds, nested clips, matching scope ranges, affine instance bounds, paint order, image-mesh transform/opacity, full/small output, resource invalidation, and physical property-ring safety must remain exact."
+performance_gate = "Fifteen balanced fresh-process pairs with 250 samples per side after 128 warmups must materially improve the 10,000-instance two-pixel damage frame/encode distributions, protect direct GPU p50/p95/p99/peak, and protect full-damage frame/encode/GPU tails; small damage must visit one instance/command and zero vertices while full damage reuses one validated static plan."
+decision_state = "accepted"
+decision = "Prepare conservative chunk and property-free snapshot spatial metadata once, query it in paint order for small Metal damage, persist image-mesh geometry, and reuse validated unchanged full-frame plans."
+proof = [
+   "The final exact-tree small/full frame, encode, and direct-GPU reports under benchmarks/experiments/c27-spatial-metadata/raw retain parent/candidate tree, binary, instrumentation, raw-sample, order, and decision identities.",
+   "The permanent 10,000-instance small row reports one visited/matched instance and command, zero vertex visits, one draw, zero copied/uploaded geometry, and four shaded pixels; full damage reports zero query visits, 10,000 draws, zero copied/uploaded geometry, and one reused plan.",
+   "Renderer API and Metal snapshot tests freeze conservative outsets, nested scope resolution, affine queries, exact prepared image-mesh pixels, exact full/small spatial pixels, and completion-safe full-plan replay.",
+]
+cleanup = [
+   "Kept the compact x-sweep index only for property-free snapshots with at least 32 instances; dynamic-property snapshots retain the C26 fast construction path and resolve linearly only when explicitly queried.",
+   "Retained the legacy direct draw-list damage filter for compatibility callers; retained snapshot Metal replay no longer performs per-frame glyph/mesh vertex scans, and layer-span consumption remains the C29 cache-owner step.",
+]
+
+[[experiments]]
+id = "c27-eager-dynamic-snapshot-spatial-preparation-rejected"
+introduced_commit = "rejected during C27 C26-guard review"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-api", "oxide-ui-core", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max CPU"]
+correctness_gate = "Any snapshot spatial representation must preserve affine bounds, clip intersections, paint order, and the C26 dynamic property contract."
+performance_gate = "Adding C27 metadata must not materially regress the existing 300-node dynamic-property UiSurface row."
+decision_state = "rejected"
+decision = "Rejected eagerly resolving every instance and building an index for every snapshot because dynamic animation reconstructs snapshots each frame and does not consume the index on full damage."
+proof = [
+   "The C26 guard moved from its committed 26.664 us/op median to about 61.056 us/op with eager per-snapshot resolution, a roughly 129% regression.",
+   "Restricting retained instance indices to large property-free snapshots restored the same row to the 26.9 us/op range in repeated guards.",
+]
+cleanup = [
+   "Removed eager resolved arrays from property-driven snapshots; no runtime switch or alternate eager path remains.",
+]
+
+[[experiments]]
+id = "c27-lazy-once-lock-spatial-preparation-rejected"
+introduced_commit = "rejected during C27 C26-guard review"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-api", "oxide-ui-core", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max CPU"]
+correctness_gate = "Lazy spatial metadata must remain immutable, deterministic, and equivalent to eager conservative resolution."
+performance_gate = "Unused spatial metadata must impose no material construction or access penalty on C26 animation snapshots."
+decision_state = "rejected"
+decision = "Rejected a per-snapshot OnceLock lazy index because its synchronization/layout cost remained on every dynamic snapshot even when no damage query consumed it."
+proof = [
+   "Repeated C26 guards produced approximately 31.630 to 38.019 us/op versus the committed 26.664 us/op median, so laziness did not restore the required boundary.",
+]
+cleanup = [
+   "Removed the OnceLock and retained a plain optional immutable index only where construction-time properties prove it will serve the large static workload.",
+]
+
+[[experiments]]
+id = "c27-rebuild-static-full-plan-every-frame-rejected"
+introduced_commit = "rejected during C27 full-damage review"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "Plan reuse must validate the same immutable snapshot, viewport, and every unique prepared key before replay and must retain completion-safe uniform updates."
+performance_gate = "The 10,000-instance full-damage frame/encode/GPU distributions must remain inside the strict no-material-regression envelope."
+decision_state = "rejected"
+decision = "Rejected rebuilding an identical 10,000-entry property-free frame plan on every full-damage frame after chunk preparation had already stabilized."
+proof = [
+   "Quick parent/candidate reproductions placed rebuilding candidate full-frame medians near 4.94 to 5.02 ms versus parent medians near 4.76 to 4.85 ms and candidate encode medians near 2.34 to 2.35 ms versus parent medians near 2.12 to 2.26 ms.",
+   "Validated static-plan reuse reduced three candidate full-frame medians to 4.53 to 4.59 ms while preserving zero geometry copies/uploads and about 0.533 ms direct GPU time.",
+]
+cleanup = [
+   "Reused only the immediately repeated large property-free snapshot at the same viewport, checked every unique prepared key, and retained ordinary dynamic/damaged planning; no heuristic instance-count fallback or benchmark-only production branch remains.",
+]
+
+[[experiments]]
 id = "c26-dynamic-property-slots"
 introduced_commit = "C26 staged tree recorded in commit proof"
 introduced_date = "2026-07-13"

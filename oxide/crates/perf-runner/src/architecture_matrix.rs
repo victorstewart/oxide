@@ -33,6 +33,9 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
    }
 
    push_if_allowed(cases, "cpu.architecture.animation.surface_300", || animation_surface_case(smoke));
+   push_if_allowed(cases, "cpu.architecture.spatial_metadata.glyph_mesh_10000", || {
+      retained_spatial_query_case("cpu.architecture.spatial_metadata.glyph_mesh_10000", smoke)
+   });
    push_if_allowed(cases, "cpu.architecture.text.warm_labels_1000", || text_warm_labels_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.new_labels_200", || text_new_labels_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.script_fallback_matrix", || text_script_matrix_case(smoke));
@@ -269,8 +272,199 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       cases.push(metal_dynamic_property_case(dynamic_property_id, smoke)?);
    }
 
+   for full_damage in [false, true]
+   {
+      let id = if full_damage
+      {
+         "gpu.architecture.spatial_metadata.full_damage_glyph_mesh_10000"
+      }
+      else
+      {
+         "gpu.architecture.spatial_metadata.small_damage_glyph_mesh_10000"
+      };
+      if perf_case_allowed(id)
+      {
+         cases.push(metal_spatial_damage_case(id, smoke, full_damage)?);
+      }
+   }
+
    push_if_allowed(cases, "cpu.architecture.idle.static_foreground", || idle_case(smoke));
    Ok(())
+}
+
+pub(super) fn retained_spatial_query_case(id: &str, smoke: bool) -> PerfCaseResult
+{
+   let instance_count = if smoke { 512 } else { 10_000 };
+   let instances = spatial_glyph_mesh_instances(api::ImageHandle(1), api::ImageHandle(2), instance_count);
+   let snapshot = api::RenderSnapshot::new(
+      instances,
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("spatial query snapshot");
+   let mut queried = Vec::new();
+   let probe = snapshot.query_damage_instances(api::RectI::new(6_002, 26, 2, 2), &mut queried);
+   let metadata_bytes = snapshot.metadata_byte_size();
+   let family = if id.contains(".authoring.") { "authoring" } else { "architecture" };
+   let mut phase = 0_u32;
+   let mut case = measure_cpu_case(
+      id,
+      family,
+      smoke,
+      true,
+      0.20,
+      1,
+      vec![String::from(
+         "Compact retained-instance spatial queries preserve paint order over ten thousand alternating glyph and image-mesh instances without revisiting geometry.",
+      )],
+      move || {
+         let index = phase as usize % instance_count.min(100);
+         phase = phase.wrapping_add(1);
+         let stats = snapshot.query_damage_instances(
+            api::RectI::new((index * 12 + 2) as i32, 26, 2, 2),
+            &mut queried,
+         );
+         stats.entries_visited
+            .wrapping_add(stats.entries_matched.rotate_left(11))
+            .wrapping_add(queried.first().copied().unwrap_or(0) as u64)
+      },
+   );
+   case.metrics.insert(String::from("instance_count"), instance_count as f64);
+   case.metrics.insert(String::from("damage_instances_visited"), probe.entries_visited as f64);
+   case.metrics.insert(String::from("damage_instances_matched"), probe.entries_matched as f64);
+   case.metrics.insert(String::from("damage_vertices_visited"), 0.0);
+   case.metrics.insert(String::from("snapshot_metadata_bytes"), metadata_bytes as f64);
+   case
+}
+
+pub(super) fn metal_spatial_damage_case(id: &str, smoke: bool, full_damage: bool) -> Result<PerfCaseResult>
+{
+   let instance_count = if smoke { 512 } else { 10_000 };
+   let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating spatial Metal renderer")?);
+   renderer.resize(1_200, 800, 1.0).context("resizing spatial Metal renderer")?;
+   renderer.set_damage_options(true, 0.70, 0.30);
+   let image = renderer.image_create_rgba8(2, 2, &[255; 16], 8);
+   let atlas = renderer.image_create_a8(2, 2, &[255; 4], 2);
+   let snapshot = api::RenderSnapshot::new(
+      spatial_glyph_mesh_instances(image, atlas, instance_count),
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("spatial Metal snapshot");
+   let initial = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot).context("warming spatial Metal snapshot")?;
+   renderer.submit(initial).context("submitting spatial Metal warmup")?;
+   let _ = last_metal_stats_after_submit(&renderer, initial.0);
+
+   let warmups = if smoke { 3 } else { 8 };
+   let frames = if smoke { 4 } else { 24 };
+   let raw_samples = std::env::var_os("OXIDE_C27_RAW_SAMPLES").is_some();
+   let mut frame_samples = Vec::with_capacity(frames);
+   let mut encode_samples = Vec::with_capacity(frames);
+   let mut gpu_samples = Vec::with_capacity(frames);
+   let mut query_samples = Vec::with_capacity(frames);
+   let mut instances_visited = 0_u64;
+   let mut instances_matched = 0_u64;
+   let mut commands_visited = 0_u64;
+   let mut commands_matched = 0_u64;
+   let mut vertices_visited = 0_u64;
+   let mut plan_reuses = 0_u64;
+   let mut draws = 0_u64;
+   let mut geometry_copied = 0_u64;
+   let mut uploads = 0_u64;
+   let mut shaded_pixels = 0_u64;
+   for frame in 0..warmups + frames
+   {
+      let selected = frame % 100;
+      let damage = api::Damage {
+         rects: vec![api::RectI::new((selected * 12 + 2) as i32, 26, 2, 2)],
+      };
+      let started_at = Instant::now();
+      let token = renderer.begin_frame(
+         &api::FrameTarget,
+         if full_damage { None } else { Some(&damage) },
+      );
+      renderer.encode_snapshot(&snapshot).with_context(|| format!("encoding {id}"))?;
+      renderer.submit(token).with_context(|| format!("submitting {id}"))?;
+      let stats = last_metal_stats_after_submit(&renderer, token.0);
+      if frame < warmups
+      {
+         continue;
+      }
+      frame_samples.push(started_at.elapsed().as_secs_f64() * 1_000.0);
+      encode_samples.push(stats.encode_ms);
+      gpu_samples.push(stats.gpu_ms);
+      query_samples.push(stats.damage_query_ms);
+      instances_visited = instances_visited.saturating_add(stats.damage_instances_visited);
+      instances_matched = instances_matched.saturating_add(stats.damage_instances_matched);
+      commands_visited = commands_visited.saturating_add(stats.damage_commands_visited);
+      commands_matched = commands_matched.saturating_add(stats.damage_commands_matched);
+      vertices_visited = vertices_visited.saturating_add(stats.damage_vertices_visited);
+      plan_reuses = plan_reuses.saturating_add(stats.prepared_plan_reuses);
+      draws = draws.saturating_add(u64::from(stats.draws));
+      geometry_copied = geometry_copied.saturating_add(stats.geometry_bytes_copied);
+      uploads = uploads.saturating_add(stats.buffer_upload_bytes);
+      shaded_pixels = shaded_pixels.saturating_add(stats.shaded_damage_px);
+   }
+   let summary = summarize(&frame_samples);
+   let measured = frames as f64;
+   let (layer, scenario, variant, cache_state, refresh_mode) = perf_case_contract_metadata(id, "architecture");
+   let mut metrics = BTreeMap::new();
+   insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+   insert_distribution_metrics(&mut metrics, "encode_ms", &encode_samples);
+   insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+   insert_distribution_metrics(&mut metrics, "damage_query_ms", &query_samples);
+   insert_frame_pacing_metrics(&mut metrics, &frame_samples);
+   metrics.insert(String::from("instance_count"), instance_count as f64);
+   metrics.insert(String::from("damage_instances_visited_avg"), instances_visited as f64 / measured);
+   metrics.insert(String::from("damage_instances_matched_avg"), instances_matched as f64 / measured);
+   metrics.insert(String::from("damage_commands_visited_avg"), commands_visited as f64 / measured);
+   metrics.insert(String::from("damage_commands_matched_avg"), commands_matched as f64 / measured);
+   metrics.insert(String::from("damage_vertices_visited_avg"), vertices_visited as f64 / measured);
+   metrics.insert(String::from("prepared_plan_reuses_avg"), plan_reuses as f64 / measured);
+   metrics.insert(String::from("draws_avg"), draws as f64 / measured);
+   metrics.insert(String::from("geometry_bytes_copied_avg"), geometry_copied as f64 / measured);
+   metrics.insert(String::from("buffer_upload_bytes_avg"), uploads as f64 / measured);
+   metrics.insert(String::from("shaded_damage_pixels_avg"), shaded_pixels as f64 / measured);
+   if raw_samples
+   {
+      for (index, value) in frame_samples.iter().copied().enumerate()
+      {
+         metrics.insert(format!("c27_raw_frame_ms_{index:04}"), value);
+      }
+      for (index, value) in encode_samples.iter().copied().enumerate()
+      {
+         metrics.insert(format!("c27_raw_encode_ms_{index:04}"), value);
+      }
+      for (index, value) in gpu_samples.iter().copied().enumerate()
+      {
+         metrics.insert(format!("c27_raw_gpu_ms_{index:04}"), value);
+      }
+   }
+   Ok(PerfCaseResult {
+      id: String::from(id),
+      family: String::from(if id.contains(".authoring.") { "authoring" } else { "architecture" }),
+      layer: String::from(layer),
+      scenario: String::from(scenario),
+      variant: String::from(variant),
+      cache_state: String::from(cache_state),
+      refresh_mode: String::from(refresh_mode),
+      unit: String::from("ms/frame"),
+      gated: true,
+      threshold_pct: 0.20,
+      median: summary.median,
+      p95: summary.p95,
+      p99: summary.p99,
+      min: summary.min,
+      max: summary.max,
+      mean: summary.mean,
+      samples: frame_samples.len(),
+      ops_per_sample: 1,
+      notes: vec![String::from(if full_damage {
+         "Full retained glyph/image-mesh damage bypasses the spatial query and remains one linear ordered replay."
+      } else {
+         "Two-pixel damage queries compact retained metadata, visit no source vertices, and replay only intersecting glyph/image-mesh instances."
+      })],
+      metrics,
+   })
 }
 
 pub(super) fn metal_prepared_chunk_case(id: &str, smoke: bool, dirty: bool) -> Result<PerfCaseResult>
@@ -647,6 +841,57 @@ fn dynamic_property_snapshot(instances: &[api::RenderChunkInstance], phase: u64)
       properties,
       api::Damage { rects: Vec::new() },
    ).expect("dynamic property snapshot")
+}
+
+fn spatial_glyph_mesh_instances(image: api::ImageHandle, atlas: api::ImageHandle, count: usize) -> Vec<api::RenderChunkInstance>
+{
+   let vertices = vec![
+      api::Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: 0 },
+      api::Vertex { x: 8.0, y: 0.0, u: 1.0, v: 0.0, rgba: 0 },
+      api::Vertex { x: 8.0, y: 10.0, u: 1.0, v: 1.0, rgba: 0 },
+      api::Vertex { x: 0.0, y: 10.0, u: 0.0, v: 1.0, rgba: 0 },
+   ];
+   let indices = vec![0, 1, 2, 0, 2, 3];
+   let mesh = api::RenderChunk::new(
+      api::RenderChunkId(27_000),
+      api::RenderChunkRevisions { resource: 1, geometry: 1, ..api::RenderChunkRevisions::default() },
+      api::DrawList {
+         items: vec![api::DrawCmd::ImageMesh {
+            tex: image,
+            vb: api::VertexSpan { offset: 0, len: 4 },
+            ib: api::IndexSpan { offset: 0, len: 6 },
+            alpha: 1.0,
+         }],
+         vertices: vertices.clone(),
+         indices: indices.clone(),
+      },
+      api::ChunkIndexMode::Local,
+      &[api::RenderResourceDependency { image, generation: 1 }],
+   ).expect("spatial image-mesh chunk");
+   let glyph = api::RenderChunk::new(
+      api::RenderChunkId(27_001),
+      api::RenderChunkRevisions { resource: 1, geometry: 1, ..api::RenderChunkRevisions::default() },
+      api::DrawList {
+         items: vec![api::DrawCmd::GlyphRun { run: api::GlyphRun {
+            atlas,
+            atlas_revision: 1,
+            vb: api::VertexSpan { offset: 0, len: 4 },
+            ib: api::IndexSpan { offset: 0, len: 6 },
+            sdf: false,
+            color: api::Color::rgba(0.3, 0.7, 1.0, 1.0),
+         }}],
+         vertices,
+         indices,
+      },
+      api::ChunkIndexMode::Local,
+      &[api::RenderResourceDependency { image: atlas, generation: 1 }],
+   ).expect("spatial glyph chunk");
+   (0..count).map(|index| {
+      api::RenderChunkInstance::new(
+         if index & 1 == 0 { mesh.clone() } else { glyph.clone() },
+         [index as f32 * 12.0, 24.0],
+      )
+   }).collect()
 }
 
 fn prepared_chunk_snapshot(image: api::ImageHandle, atlas: api::ImageHandle, dirty_revision: u64, translation: [f32; 2]) -> api::RenderSnapshot
