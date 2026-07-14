@@ -20,6 +20,7 @@ Call flow:
 - `checker_texture_has_expected_size_and_alpha()`: verifies byte count and full opacity.
 - `checker_texture_alternates_tiles()`: verifies the generated image is not a flat color.
 - `static_shell_imports_generated_pkg_and_platform_smoke_hook()`: verifies the static page imports `www/pkg`, exposes browser platform/WebGPU smoke reports, runs sampled frame, current ID-mask, current upload, effect-uniform A/B, backdrop-batch current, Scene3D A/B, mixed matrix, layer/effects matrix, clean-layer A/B, command-family matrix, glyph-run current, neon-marker A/B, and direct-surface A/B benchmarks, wraps benchmark families in browser User Timing marks, supports the non-default Canvas indexed-quad diagnostic report path, supports the `capture_target` / `capture_only` browser capture path and startup-only report path, invokes deterministic app and ID-mask snapshot hooks, waits an animation frame after ID-mask capture, and writes the hidden JSON report hook for script capture.
+- `c35_id_mask_probe_reports_selected_field_representation_and_exact_bytes()`: verifies cache budgets follow the selected target bytes instead of the retired 34-byte constant, exact readback JSON exposes packed status plus 16-versus-32-byte field accounting, and the browser-only matrix checks every raster/final-field pixel at 256/512/1024/2048 plus three unusual aspect ratios.
 - `host_exposes_webgpu_id_mask_ab_benchmark()`: verifies the wasm host keeps the current-only default WebGPU ID-mask benchmark, the explicit current-vs-legacy ID-mask diagnostic, upload, upload-scratch, effect-uniform, current backdrop-batch, Scene3D, mixed, layer/effects, clean-layer, command-family, glyph-run, neon-marker, direct-surface, and explicit diagnostic draw-item coalescing and draw-state benchmark exports, verifies the retired clip-state diagnostic export stays deleted, exports p50/p95/p99/peak/avg plus missed-frame/hitch, Rust/WASM allocation fields, and frame-stage allocation fields, exposes the explicit app and ID-mask browser snapshot render hooks, and keeps the direct-capture guard that prevents resize/redraw events from repainting the app over the ID-mask capture.
 - `committed_webgpu_id_mask_golden_is_present_and_sized()`: verifies the committed browser WebGPU ID-mask compositor golden is present at 512x512.
 - `committed_webgpu_id_mask_golden_contains_rendered_pixels()`: decodes the committed browser WebGPU ID-mask compositor golden and checks that it contains a colorful full-mask compositor output instead of the normal app canvas or an untouched surface.
@@ -75,6 +76,8 @@ pub fn texture() -> Vec<u8>
 
 ## Changelog
 
+- 2026-07-14: froze the C35 seven-dimension exact browser field-matrix export and script route.
+- 2026-07-14: added C35 representation-aware cache-budget and packed-field memory-proof contracts.
 - 2026-07-14: added static C33 coverage for the cache-only browser route, complete invalidation matrix, valid direct timestamp samples, one-entry/LRU comparison, and pressure/device purge output.
 - 2026-07-14: added static C31 coverage for the bounded navigation-churn and purge benchmark route.
 - 2026-07-14: added static C30 coverage for the 100-card local-layer benchmark, raw timestamp cardinality, local/full residency, lifecycle/resource guardrails, and fractional nested/effect capture routing.

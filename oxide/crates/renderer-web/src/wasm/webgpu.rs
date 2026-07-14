@@ -38,7 +38,9 @@ const ID_MASK_FIELD_UNIFORM_SIZE: u64 = ID_MASK_FIELD_UNIFORM_SIZE_BYTES as u64;
 const ID_MASK_COMPOSITOR_UNIFORM_SIZE_BYTES: usize =
     16 * (16 + id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS);
 const ID_MASK_COMPOSITOR_UNIFORM_SIZE: u64 = ID_MASK_COMPOSITOR_UNIFORM_SIZE_BYTES as u64;
-const ID_MASK_FIELD_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const ID_MASK_PACKED_FIELD_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Uint;
+const ID_MASK_WIDE_FIELD_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const ID_MASK_PACKED_INVALID: u16 = u16::MAX;
 const ID_MASK_FIELD_CACHE_MIN_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
 const ID_MASK_FIELD_CACHE_MAX_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
 const ID_MASK_FIELD_CACHE_MAX_ENTRIES: usize = 4;
@@ -286,28 +288,171 @@ struct IdMaskRenderTargets {
     height: u32,
     city_texture: wgpu::Texture,
     neighborhood_texture: wgpu::Texture,
-    city_field_a_texture: wgpu::Texture,
-    city_field_b_texture: wgpu::Texture,
-    seam_field_a_texture: wgpu::Texture,
-    seam_field_b_texture: wgpu::Texture,
     city_view: wgpu::TextureView,
     neighborhood_view: wgpu::TextureView,
-    city_field_a_view: wgpu::TextureView,
-    city_field_b_view: wgpu::TextureView,
-    seam_field_a_view: wgpu::TextureView,
-    seam_field_b_view: wgpu::TextureView,
-    field_bind_group_a: wgpu::BindGroup,
-    field_bind_group_b: wgpu::BindGroup,
-    compositor_bind_group_a: wgpu::BindGroup,
-    compositor_bind_group_b: wgpu::BindGroup,
+    fields: IdMaskFieldTargets,
+}
+
+#[derive(Clone)]
+enum IdMaskFieldTargets {
+    Packed {
+        a_texture: wgpu::Texture,
+        b_texture: wgpu::Texture,
+        a_view: wgpu::TextureView,
+        b_view: wgpu::TextureView,
+        field_bind_group_a: wgpu::BindGroup,
+        field_bind_group_b: wgpu::BindGroup,
+        compositor_bind_group_a: wgpu::BindGroup,
+        compositor_bind_group_b: wgpu::BindGroup,
+    },
+    Wide {
+        city_a_texture: wgpu::Texture,
+        city_b_texture: wgpu::Texture,
+        seam_a_texture: wgpu::Texture,
+        seam_b_texture: wgpu::Texture,
+        city_a_view: wgpu::TextureView,
+        city_b_view: wgpu::TextureView,
+        seam_a_view: wgpu::TextureView,
+        seam_b_view: wgpu::TextureView,
+        field_bind_group_a: wgpu::BindGroup,
+        field_bind_group_b: wgpu::BindGroup,
+        compositor_bind_group_a: wgpu::BindGroup,
+        compositor_bind_group_b: wgpu::BindGroup,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum IdMaskFieldPair<'a> {
+    Packed { texture: &'a wgpu::Texture, view: &'a wgpu::TextureView },
+    Wide {
+        city_texture: &'a wgpu::Texture,
+        seam_texture: &'a wgpu::Texture,
+        city_view: &'a wgpu::TextureView,
+        seam_view: &'a wgpu::TextureView,
+    },
 }
 
 impl IdMaskRenderTargets {
-    fn final_textures(&self) -> (&wgpu::Texture, &wgpu::Texture) {
-        if id_mask_final_fields_are_a(self.width, self.height) {
-            (&self.city_field_a_texture, &self.seam_field_a_texture)
-        } else {
-            (&self.city_field_b_texture, &self.seam_field_b_texture)
+    fn packed_fields(&self) -> bool {
+        matches!(self.fields, IdMaskFieldTargets::Packed { .. })
+    }
+
+    fn field_pair(&self, use_a: bool) -> IdMaskFieldPair<'_> {
+        match &self.fields {
+            IdMaskFieldTargets::Packed { a_texture, b_texture, a_view, b_view, .. } => {
+                if use_a {
+                    IdMaskFieldPair::Packed { texture: a_texture, view: a_view }
+                } else {
+                    IdMaskFieldPair::Packed { texture: b_texture, view: b_view }
+                }
+            }
+            IdMaskFieldTargets::Wide {
+                city_a_texture,
+                city_b_texture,
+                seam_a_texture,
+                seam_b_texture,
+                city_a_view,
+                city_b_view,
+                seam_a_view,
+                seam_b_view,
+                ..
+            } => IdMaskFieldPair::Wide {
+                city_texture: if use_a { city_a_texture } else { city_b_texture },
+                seam_texture: if use_a { seam_a_texture } else { seam_b_texture },
+                city_view: if use_a { city_a_view } else { city_b_view },
+                seam_view: if use_a { seam_a_view } else { seam_b_view },
+            },
+        }
+    }
+
+    fn final_fields(&self) -> IdMaskFieldPair<'_> {
+        self.field_pair(id_mask_final_fields_are_a(self.width, self.height))
+    }
+
+    fn field_bind_group(&self, use_a: bool) -> &wgpu::BindGroup {
+        match &self.fields {
+            IdMaskFieldTargets::Packed { field_bind_group_a, field_bind_group_b, .. }
+            | IdMaskFieldTargets::Wide { field_bind_group_a, field_bind_group_b, .. } => {
+                if use_a { field_bind_group_a } else { field_bind_group_b }
+            }
+        }
+    }
+
+    fn compositor_bind_group(&self, use_a: bool) -> &wgpu::BindGroup {
+        match &self.fields {
+            IdMaskFieldTargets::Packed {
+                compositor_bind_group_a,
+                compositor_bind_group_b,
+                ..
+            }
+            | IdMaskFieldTargets::Wide {
+                compositor_bind_group_a,
+                compositor_bind_group_b,
+                ..
+            } => {
+                if use_a { compositor_bind_group_a } else { compositor_bind_group_b }
+            }
+        }
+    }
+}
+
+fn encode_id_mask_field_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    label: &'static str,
+    destination: IdMaskFieldPair<'_>,
+    pipeline: &wgpu::RenderPipeline,
+    bind_group: &wgpu::BindGroup,
+    uniform_offset: u32,
+    timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
+) {
+    let operations = wgpu::Operations {
+        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+        store: wgpu::StoreOp::Store,
+    };
+    match destination {
+        IdMaskFieldPair::Packed { view, .. } => {
+            let color_attachments = [Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: operations,
+            })];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label),
+                color_attachments: &color_attachments,
+                depth_stencil_attachment: None,
+                timestamp_writes,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, bind_group, &[uniform_offset]);
+            pass.draw(0..6, 0..1);
+        }
+        IdMaskFieldPair::Wide { city_view, seam_view, .. } => {
+            let color_attachments = [
+                Some(wgpu::RenderPassColorAttachment {
+                    view: city_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: operations,
+                }),
+                Some(wgpu::RenderPassColorAttachment {
+                    view: seam_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: operations,
+                }),
+            ];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label),
+                color_attachments: &color_attachments,
+                depth_stencil_attachment: None,
+                timestamp_writes,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, bind_group, &[uniform_offset]);
+            pass.draw(0..6, 0..1);
         }
     }
 }
@@ -1358,8 +1503,8 @@ struct GpuPrograms {
     effect_layout: wgpu::BindGroupLayout,
     scene3d_layout: wgpu::BindGroupLayout,
     id_mask_raster_layout: wgpu::BindGroupLayout,
-    id_mask_field_layout: wgpu::BindGroupLayout,
-    id_mask_compositor_layout: wgpu::BindGroupLayout,
+    id_mask_wide: IdMaskVariantPrograms,
+    id_mask_packed: Option<IdMaskVariantPrograms>,
     solid_pipeline: wgpu::RenderPipeline,
     rgba_pipeline: wgpu::RenderPipeline,
     a8_pipeline: wgpu::RenderPipeline,
@@ -1372,10 +1517,15 @@ struct GpuPrograms {
     scene3d_color_tri_add_depth_write_pipeline: wgpu::RenderPipeline,
     scene3d_color_tri_add_pipeline: wgpu::RenderPipeline,
     id_mask_raster_pipeline: wgpu::RenderPipeline,
-    id_mask_field_seed_pipeline: wgpu::RenderPipeline,
-    id_mask_field_jump_pipeline: wgpu::RenderPipeline,
-    id_mask_compositor_pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
+}
+
+struct IdMaskVariantPrograms {
+    field_layout: wgpu::BindGroupLayout,
+    compositor_layout: wgpu::BindGroupLayout,
+    field_seed_pipeline: wgpu::RenderPipeline,
+    field_jump_pipeline: wgpu::RenderPipeline,
+    compositor_pipeline: wgpu::RenderPipeline,
 }
 
 #[cfg(feature = "snapshot-tests")]
@@ -1388,6 +1538,9 @@ pub struct WebIdMaskSnapshotReadback
    pub neighborhood: Vec<u8>,
    pub city_field: Vec<[f32; 4]>,
    pub seam_field: Vec<[f32; 4]>,
+   pub packed_fields: bool,
+   pub field_logical_bytes: u64,
+   pub wide_field_logical_bytes: u64,
 }
 
 #[cfg(feature = "snapshot-tests")]
@@ -1406,7 +1559,8 @@ struct PendingIdMaskReadback
    city: IdMaskReadbackPlane,
    neighborhood: IdMaskReadbackPlane,
    city_field: IdMaskReadbackPlane,
-   seam_field: IdMaskReadbackPlane,
+   seam_field: Option<IdMaskReadbackPlane>,
+   packed_fields: bool,
    remaining: Rc<Cell<u8>>,
    failed: Rc<Cell<bool>>,
 }
@@ -1583,6 +1737,16 @@ impl BrowserRenderer {
     #[must_use]
     pub fn id_mask_cache_budget_bytes(&self) -> u64 {
         self.inner.id_mask_cache_budget_bytes()
+    }
+
+    #[must_use]
+    pub fn id_mask_target_bytes_per_pixel(&self) -> u64 {
+        self.inner.id_mask_target_bytes_per_pixel()
+    }
+
+    #[must_use]
+    pub fn id_mask_packed_fields_supported(&self) -> bool {
+        self.inner.id_mask_packed_fields_supported()
     }
 
     pub fn set_id_mask_cache_budget_bytes(&mut self, budget_bytes: u64) {
@@ -1959,10 +2123,33 @@ fn image_row_bytes(
 
 fn color_texture_bytes_per_pixel(format: wgpu::TextureFormat) -> u64 {
     match format {
-        wgpu::TextureFormat::Rgba16Float => 8,
+        wgpu::TextureFormat::Rgba16Float | wgpu::TextureFormat::Rgba16Uint => 8,
         _ => 4,
     }
 }
+
+fn id_mask_field_texture_usage() -> wgpu::TextureUsages {
+    let mut usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
+    #[cfg(feature = "snapshot-tests")]
+    {
+        usage |= wgpu::TextureUsages::COPY_SRC;
+    }
+    usage
+}
+
+fn id_mask_packed_format_supported(features: wgpu::TextureFormatFeatures) -> bool {
+    features.allowed_usages.contains(id_mask_field_texture_usage())
+}
+
+const fn id_mask_packed_coordinates_fit(width: u32, height: u32) -> bool {
+    width <= u16::MAX as u32 && height <= u16::MAX as u32
+}
+
+const _: () = {
+    assert!(id_mask_packed_coordinates_fit(u16::MAX as u32, u16::MAX as u32));
+    assert!(!id_mask_packed_coordinates_fit(u16::MAX as u32 + 1, 1));
+    assert!(!id_mask_packed_coordinates_fit(1, u16::MAX as u32 + 1));
+};
 
 impl WebGpuRenderer {
     pub async fn from_canvas_id(id: &str) -> Result<Self, api::RenderError> {
@@ -2136,6 +2323,9 @@ impl WebGpuRenderer {
             .map_err(|_| api::RenderError::Unsupported("webgpu adapter unavailable"))?;
         let timestamp_query_supported =
             adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+        let packed_id_mask_fields = id_mask_packed_format_supported(
+            adapter.get_texture_format_features(ID_MASK_PACKED_FIELD_FORMAT),
+        );
         let required_features = if timestamp_query_supported {
             wgpu::Features::TIMESTAMP_QUERY
         } else {
@@ -2167,7 +2357,7 @@ impl WebGpuRenderer {
         config.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
         surface.configure(&device, &config);
 
-        let programs = create_programs(&device, config.format);
+        let programs = create_programs(&device, config.format, packed_id_mask_fields);
         let (viewport_buffer, viewport_bind_group) = create_viewport_bind_group(&device, &programs);
         let prepared_property_ring = PreparedPropertyRing::new(&device, &programs);
         write_viewport_uniform(&queue, &viewport_buffer, width, height, 1.0);
@@ -2241,7 +2431,7 @@ impl WebGpuRenderer {
             id_mask_cache_budget_bytes: saturating_texture_bytes(
                 u64::from(width),
                 u64::from(height),
-                id_mask_target_bytes_per_pixel(),
+                id_mask_target_bytes_per_pixel(packed_id_mask_fields),
             )
             .saturating_mul(8)
             .clamp(
@@ -2482,6 +2672,14 @@ impl WebGpuRenderer {
         self.id_mask_cache_budget_bytes
     }
 
+    fn id_mask_target_bytes_per_pixel(&self) -> u64 {
+        id_mask_target_bytes_per_pixel(self.programs.id_mask_packed.is_some())
+    }
+
+    fn id_mask_packed_fields_supported(&self) -> bool {
+        self.programs.id_mask_packed.is_some()
+    }
+
     pub fn set_id_mask_cache_budget_bytes(&mut self, budget_bytes: u64) {
         self.id_mask_cache_budget_bytes = budget_bytes;
         self.enforce_id_mask_cache_budget();
@@ -2593,7 +2791,11 @@ impl WebGpuRenderer {
         chunk_count: usize,
         targets: &IdMaskRenderTargets,
     ) {
-        let bytes = id_mask_render_targets_bytes(targets.width, targets.height);
+        let bytes = id_mask_render_targets_bytes(
+            targets.width,
+            targets.height,
+            targets.packed_fields(),
+        );
         while self.id_mask_cache_resident_bytes.saturating_add(bytes)
             > self.id_mask_cache_budget_bytes
         {
@@ -4760,7 +4962,9 @@ impl WebGpuRenderer {
                 self.stats.backend_cache_misses.saturating_add(1);
             let width = draw.mask_width.max(1);
             let height = draw.mask_height.max(1);
-            let required = id_mask_render_targets_bytes(width, height);
+            let packed = self.programs.id_mask_packed.is_some()
+                && id_mask_packed_coordinates_fit(width, height);
+            let required = id_mask_render_targets_bytes(width, height, packed);
             let admission = self.prepare_id_mask_cache_admission(required, width, height);
             let cacheable = admission.is_some();
             let reusable = admission.flatten();
@@ -4862,8 +5066,13 @@ impl WebGpuRenderer {
         height: u32,
         reusable: Option<IdMaskRenderTargets>,
     ) -> Option<IdMaskRenderTargets> {
+        let packed = self.programs.id_mask_packed.is_some()
+            && id_mask_packed_coordinates_fit(width, height);
         if let Some(targets) = reusable {
-            if targets.width == width && targets.height == height {
+            if targets.width == width
+                && targets.height == height
+                && targets.packed_fields() == packed
+            {
                 return Some(targets);
             }
         }
@@ -4876,63 +5085,44 @@ impl WebGpuRenderer {
             width,
             height,
         );
-        let city_field_a_texture = create_id_mask_field_texture(
-            &self.device,
-            "oxide-webgpu-id-mask-city-field-a",
-            width,
-            height,
-        );
-        let city_field_b_texture = create_id_mask_field_texture(
-            &self.device,
-            "oxide-webgpu-id-mask-city-field-b",
-            width,
-            height,
-        );
-        let seam_field_a_texture = create_id_mask_field_texture(
-            &self.device,
-            "oxide-webgpu-id-mask-seam-field-a",
-            width,
-            height,
-        );
-        let seam_field_b_texture = create_id_mask_field_texture(
-            &self.device,
-            "oxide-webgpu-id-mask-seam-field-b",
-            width,
-            height,
-        );
         let city_view = city_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let neighborhood_view =
             neighborhood_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let city_field_a_view =
-            city_field_a_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let city_field_b_view =
-            city_field_b_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let seam_field_a_view =
-            seam_field_a_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let seam_field_b_view =
-            seam_field_b_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let targets = create_id_mask_render_targets(
-            &self.device,
-            &self.programs,
-            uniform_buffer,
+        let fields = if packed {
+            let programs = self.programs.id_mask_packed.as_ref()?;
+            create_packed_id_mask_field_targets(
+                &self.device,
+                programs,
+                uniform_buffer,
+                &city_view,
+                &neighborhood_view,
+                width,
+                height,
+            )
+        } else {
+            create_wide_id_mask_field_targets(
+                &self.device,
+                &self.programs.id_mask_wide,
+                uniform_buffer,
+                &city_view,
+                &neighborhood_view,
+                width,
+                height,
+            )
+        };
+        let targets = IdMaskRenderTargets {
             width,
             height,
             city_texture,
             neighborhood_texture,
-            city_field_a_texture,
-            city_field_b_texture,
-            seam_field_a_texture,
-            seam_field_b_texture,
             city_view,
             neighborhood_view,
-            city_field_a_view,
-            city_field_b_view,
-            seam_field_a_view,
-            seam_field_b_view,
-        );
-        self.stats.texture_creates = self.stats.texture_creates.saturating_add(6);
+            fields,
+        };
+        let texture_creates = if packed { 4 } else { 6 };
+        self.stats.texture_creates = self.stats.texture_creates.saturating_add(texture_creates);
         self.stats.id_mask_texture_creates =
-            self.stats.id_mask_texture_creates.saturating_add(6);
+            self.stats.id_mask_texture_creates.saturating_add(texture_creates);
         self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(4);
         self.stats.id_mask_bind_group_creates =
             self.stats.id_mask_bind_group_creates.saturating_add(4);
@@ -4951,7 +5141,8 @@ impl WebGpuRenderer {
         )?;
         let width = targets.width;
         let height = targets.height;
-        let (city_field_texture, seam_field_texture) = targets.final_textures();
+        let final_fields = targets.final_fields();
+        let packed_fields = targets.packed_fields();
         let city = create_id_mask_readback_plane(
             &self.device,
             "oxide-webgpu-id-mask-city-readback",
@@ -4973,13 +5164,17 @@ impl WebGpuRenderer {
             height,
             8,
         );
-        let seam_field = create_id_mask_readback_plane(
-            &self.device,
-            "oxide-webgpu-id-mask-seam-field-readback",
-            width,
-            height,
-            8,
-        );
+        let seam_field = if packed_fields {
+            None
+        } else {
+            Some(create_id_mask_readback_plane(
+                &self.device,
+                "oxide-webgpu-id-mask-seam-field-readback",
+                width,
+                height,
+                8,
+            ))
+        };
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("oxide-webgpu-id-mask-snapshot-readback"),
         });
@@ -4991,28 +5186,52 @@ impl WebGpuRenderer {
             width,
             height,
         );
-        copy_id_mask_texture_to_plane(
-            &mut encoder,
-            city_field_texture,
-            &city_field,
-            width,
-            height,
-        );
-        copy_id_mask_texture_to_plane(
-            &mut encoder,
-            seam_field_texture,
-            &seam_field,
-            width,
-            height,
-        );
+        match final_fields {
+            IdMaskFieldPair::Packed { texture, .. } => {
+                copy_id_mask_texture_to_plane(
+                    &mut encoder,
+                    texture,
+                    &city_field,
+                    width,
+                    height,
+                );
+            }
+            IdMaskFieldPair::Wide { city_texture, seam_texture, .. } => {
+                copy_id_mask_texture_to_plane(
+                    &mut encoder,
+                    city_texture,
+                    &city_field,
+                    width,
+                    height,
+                );
+                if let Some(seam_field) = seam_field.as_ref() {
+                    copy_id_mask_texture_to_plane(
+                        &mut encoder,
+                        seam_texture,
+                        seam_field,
+                        width,
+                        height,
+                    );
+                }
+            }
+        }
         self.queue.submit(Some(encoder.finish()));
-        let remaining = Rc::new(Cell::new(4_u8));
+        let remaining = Rc::new(Cell::new(if packed_fields { 3_u8 } else { 4_u8 }));
         let failed = Rc::new(Cell::new(false));
-        for plane in [&city, &neighborhood, &city_field, &seam_field]
+        for plane in [&city, &neighborhood, &city_field]
         {
             let remaining = Rc::clone(&remaining);
             let failed = Rc::clone(&failed);
             plane.buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+                failed.set(failed.get() || result.is_err());
+                remaining.set(remaining.get().saturating_sub(1));
+            });
+        }
+        if let Some(seam_field) = seam_field.as_ref()
+        {
+            let remaining = Rc::clone(&remaining);
+            let failed = Rc::clone(&failed);
+            seam_field.buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
                 failed.set(failed.get() || result.is_err());
                 remaining.set(remaining.get().saturating_sub(1));
             });
@@ -5024,6 +5243,7 @@ impl WebGpuRenderer {
             neighborhood,
             city_field,
             seam_field,
+            packed_fields,
             remaining,
             failed,
         });
@@ -5040,7 +5260,11 @@ impl WebGpuRenderer {
         {
             return None;
         }
-        let pending = self.id_mask_snapshot_readback.take().unwrap();
+        let pending = match self.id_mask_snapshot_readback.take()
+        {
+            Some(pending) => pending,
+            None => return None,
+        };
         if pending.failed.get()
         {
             return Some(Err(api::RenderError::Io(String::from(
@@ -5049,18 +5273,43 @@ impl WebGpuRenderer {
         }
         let city = read_id_mask_plane(&pending.city, pending.height);
         let neighborhood = read_id_mask_plane(&pending.neighborhood, pending.height);
-        let city_field = decode_web_rgba16_float(&read_id_mask_plane(
-            &pending.city_field,
-            pending.height,
-        ));
-        let seam_field = decode_web_rgba16_float(&read_id_mask_plane(
-            &pending.seam_field,
-            pending.height,
-        ));
+        let packed_field_bytes = read_id_mask_plane(&pending.city_field, pending.height);
+        let (city_field, seam_field) = if pending.packed_fields
+        {
+            decode_web_rgba16_uint_fields(
+                &packed_field_bytes,
+                &city,
+                &neighborhood,
+                pending.width,
+                pending.height,
+            )
+        }
+        else
+        {
+            let seam_field = match pending.seam_field.as_ref()
+            {
+                Some(seam_field) => seam_field,
+                None => {
+                    return Some(Err(api::RenderError::Io(String::from(
+                        "ID-mask wide snapshot seam field unavailable",
+                    ))));
+                }
+            };
+            (
+                decode_web_rgba16_float(&packed_field_bytes),
+                decode_web_rgba16_float(&read_id_mask_plane(seam_field, pending.height)),
+            )
+        };
         pending.city.buffer.unmap();
         pending.neighborhood.buffer.unmap();
         pending.city_field.buffer.unmap();
-        pending.seam_field.buffer.unmap();
+        if let Some(seam_field) = pending.seam_field.as_ref()
+        {
+            seam_field.buffer.unmap();
+        }
+        let pixels = u64::from(pending.width).saturating_mul(u64::from(pending.height));
+        let wide_field_logical_bytes = pixels.saturating_mul(32);
+        let field_logical_bytes = pixels.saturating_mul(if pending.packed_fields { 16 } else { 32 });
         Some(Ok(WebIdMaskSnapshotReadback {
             width: pending.width as usize,
             height: pending.height as usize,
@@ -5068,6 +5317,9 @@ impl WebGpuRenderer {
             neighborhood,
             city_field,
             seam_field,
+            packed_fields: pending.packed_fields,
+            field_logical_bytes,
+            wide_field_logical_bytes,
         }))
     }
 }
@@ -6286,16 +6538,23 @@ impl WebGpuRenderer {
         &self.programs.id_mask_raster_pipeline
     }
 
-    fn id_mask_field_seed_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.id_mask_field_seed_pipeline
+    fn id_mask_programs(&self, packed: bool) -> &IdMaskVariantPrograms {
+        match (packed, self.programs.id_mask_packed.as_ref()) {
+            (true, Some(programs)) => programs,
+            _ => &self.programs.id_mask_wide,
+        }
     }
 
-    fn id_mask_field_jump_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.id_mask_field_jump_pipeline
+    fn id_mask_field_seed_pipeline(&self, packed: bool) -> &wgpu::RenderPipeline {
+        &self.id_mask_programs(packed).field_seed_pipeline
     }
 
-    fn id_mask_compositor_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.id_mask_compositor_pipeline
+    fn id_mask_field_jump_pipeline(&self, packed: bool) -> &wgpu::RenderPipeline {
+        &self.id_mask_programs(packed).field_jump_pipeline
+    }
+
+    fn id_mask_compositor_pipeline(&self, packed: bool) -> &wgpu::RenderPipeline {
+        &self.id_mask_programs(packed).compositor_pipeline
     }
 
     fn render_direct(
@@ -6913,16 +7172,9 @@ impl WebGpuRenderer {
             }
             let city_view = &targets.city_view;
             let neighborhood_view = &targets.neighborhood_view;
-            let city_field_a_view = &targets.city_field_a_view;
-            let city_field_b_view = &targets.city_field_b_view;
-            let seam_field_a_view = &targets.seam_field_a_view;
-            let seam_field_b_view = &targets.seam_field_b_view;
+            let packed_fields = targets.packed_fields();
             let raster_bind_group = self.id_mask_raster_bind_group.clone();
             let Some(raster_bind_group) = raster_bind_group.as_ref() else { continue };
-            let field_bind_group_a = &targets.field_bind_group_a;
-            let field_bind_group_b = &targets.field_bind_group_b;
-            let compositor_bind_group_a = &targets.compositor_bind_group_a;
-            let compositor_bind_group_b = &targets.compositor_bind_group_b;
 
             if !cache_hit {
                 for cache_pos in cache_start..cache_end {
@@ -6996,39 +7248,15 @@ impl WebGpuRenderer {
                 );
                 let timestamp_writes =
                     webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("oxide-webgpu-id-mask-field-seed-pass"),
-                    color_attachments: &[
-                        Some(wgpu::RenderPassColorAttachment {
-                            view: city_field_a_view,
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        }),
-                        Some(wgpu::RenderPassColorAttachment {
-                            view: seam_field_a_view,
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        }),
-                    ],
-                    depth_stencil_attachment: None,
+                encode_id_mask_field_pass(
+                    encoder,
+                    "oxide-webgpu-id-mask-field-seed-pass",
+                    targets.field_pair(true),
+                    self.id_mask_field_seed_pipeline(packed_fields),
+                    targets.field_bind_group(false),
+                    self.id_mask_field_uniform_offsets[field_offset_index],
                     timestamp_writes,
-                    occlusion_query_set: None,
-                });
-                pass.set_pipeline(self.id_mask_field_seed_pipeline());
-                pass.set_bind_group(
-                    0,
-                    field_bind_group_b,
-                    &[self.id_mask_field_uniform_offsets[field_offset_index]],
                 );
-                pass.draw(0..6, 0..1);
             }
             field_offset_index += 1;
             encoded_render_passes = encoded_render_passes.saturating_add(1);
@@ -7038,11 +7266,6 @@ impl WebGpuRenderer {
             let mut src_is_a = true;
             let mut jump = width.max(height).next_power_of_two() / 2;
             while jump >= 1 {
-                let (src_bind_group, dst_city_view, dst_seam_view) = if src_is_a {
-                    (field_bind_group_a, city_field_b_view, seam_field_b_view)
-                } else {
-                    (field_bind_group_b, city_field_a_view, seam_field_a_view)
-                };
                 {
                     let timestamp_pair = reserve_webgpu_timestamp_pass(
                         &mut self.timestamp_queries,
@@ -7050,39 +7273,15 @@ impl WebGpuRenderer {
                     );
                     let timestamp_writes =
                         webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
-                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("oxide-webgpu-id-mask-field-jump-pass"),
-                        color_attachments: &[
-                            Some(wgpu::RenderPassColorAttachment {
-                                view: dst_city_view,
-                                depth_slice: None,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            }),
-                            Some(wgpu::RenderPassColorAttachment {
-                                view: dst_seam_view,
-                                depth_slice: None,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            }),
-                        ],
-                        depth_stencil_attachment: None,
+                    encode_id_mask_field_pass(
+                        encoder,
+                        "oxide-webgpu-id-mask-field-jump-pass",
+                        targets.field_pair(!src_is_a),
+                        self.id_mask_field_jump_pipeline(packed_fields),
+                        targets.field_bind_group(src_is_a),
+                        self.id_mask_field_uniform_offsets[field_offset_index],
                         timestamp_writes,
-                        occlusion_query_set: None,
-                    });
-                    pass.set_pipeline(self.id_mask_field_jump_pipeline());
-                    pass.set_bind_group(
-                        0,
-                        src_bind_group,
-                        &[self.id_mask_field_uniform_offsets[field_offset_index]],
                     );
-                    pass.draw(0..6, 0..1);
                 }
                 field_offset_index += 1;
                 encoded_render_passes = encoded_render_passes.saturating_add(1);
@@ -7096,12 +7295,9 @@ impl WebGpuRenderer {
                 .saturating_add(2)
                 .saturating_add(width.max(height).next_power_of_two().trailing_zeros());
             }
-            let compositor_bind_group =
-                if id_mask_final_fields_are_a(width, height) {
-                    compositor_bind_group_a
-                } else {
-                    compositor_bind_group_b
-                };
+            let compositor_bind_group = targets.compositor_bind_group(
+                id_mask_final_fields_are_a(width, height),
+            );
 
             {
                 let timestamp_pair = reserve_webgpu_timestamp_pass(
@@ -7132,7 +7328,7 @@ impl WebGpuRenderer {
                     self.width,
                     self.height,
                 );
-                pass.set_pipeline(self.id_mask_compositor_pipeline());
+                pass.set_pipeline(self.id_mask_compositor_pipeline(packed_fields));
                 pass.set_bind_group(0, compositor_bind_group, &[uniform_offsets.compositor]);
                 pass.draw(0..6, 0..1);
             }
@@ -7489,7 +7685,11 @@ fn webgpu_timestamp_writes(
     })
 }
 
-fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPrograms {
+fn create_programs(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    packed_id_mask_fields: bool,
+) -> GpuPrograms {
     let viewport_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("oxide-webgpu-viewport-layout"),
         entries: &[wgpu::BindGroupLayoutEntry {
@@ -7563,8 +7763,8 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
             count: None,
         }],
     });
-    let id_mask_field_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("oxide-webgpu-id-mask-field-layout"),
+    let id_mask_wide_field_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("oxide-webgpu-id-mask-wide-field-layout"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -7618,9 +7818,9 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
             },
         ],
     });
-    let id_mask_compositor_layout =
+    let id_mask_wide_compositor_layout =
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("oxide-webgpu-id-mask-compositor-layout"),
+            label: Some("oxide-webgpu-id-mask-wide-compositor-layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -7727,16 +7927,16 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
             bind_group_layouts: &[&id_mask_raster_layout],
             push_constant_ranges: &[],
         });
-    let id_mask_field_pipeline_layout =
+    let id_mask_wide_field_pipeline_layout =
         device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("oxide-webgpu-id-mask-field-pipeline-layout"),
-            bind_group_layouts: &[&id_mask_field_layout],
+            label: Some("oxide-webgpu-id-mask-wide-field-pipeline-layout"),
+            bind_group_layouts: &[&id_mask_wide_field_layout],
             push_constant_ranges: &[],
         });
-    let id_mask_compositor_pipeline_layout =
+    let id_mask_wide_compositor_pipeline_layout =
         device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("oxide-webgpu-id-mask-compositor-pipeline-layout"),
-            bind_group_layouts: &[&id_mask_compositor_layout],
+            label: Some("oxide-webgpu-id-mask-wide-compositor-pipeline-layout"),
+            bind_group_layouts: &[&id_mask_wide_compositor_layout],
             push_constant_ranges: &[],
         });
 
@@ -7856,26 +8056,42 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
         &id_mask_raster_pipeline_layout,
         &id_mask_vertex_layout,
     );
-    let id_mask_field_seed_pipeline = create_id_mask_field_pipeline(
+    let id_mask_wide_field_seed_pipeline = create_id_mask_field_pipeline(
         device,
         &id_mask_field_shader,
-        &id_mask_field_pipeline_layout,
+        &id_mask_wide_field_pipeline_layout,
         "fs_id_mask_field_seed",
-        "oxide-webgpu-id-mask-field-seed",
+        "oxide-webgpu-id-mask-wide-field-seed",
+        ID_MASK_WIDE_FIELD_FORMAT,
+        false,
     );
-    let id_mask_field_jump_pipeline = create_id_mask_field_pipeline(
+    let id_mask_wide_field_jump_pipeline = create_id_mask_field_pipeline(
         device,
         &id_mask_field_shader,
-        &id_mask_field_pipeline_layout,
+        &id_mask_wide_field_pipeline_layout,
         "fs_id_mask_field_jump",
-        "oxide-webgpu-id-mask-field-jump",
+        "oxide-webgpu-id-mask-wide-field-jump",
+        ID_MASK_WIDE_FIELD_FORMAT,
+        false,
     );
-    let id_mask_compositor_pipeline = create_id_mask_compositor_pipeline(
+    let id_mask_wide_compositor_pipeline = create_id_mask_compositor_pipeline(
         device,
         &id_mask_shader,
-        &id_mask_compositor_pipeline_layout,
+        &id_mask_wide_compositor_pipeline_layout,
         format,
+        "fs_id_mask_compositor",
+        "oxide-webgpu-id-mask-wide-compositor",
     );
+    let id_mask_wide = IdMaskVariantPrograms {
+        field_layout: id_mask_wide_field_layout,
+        compositor_layout: id_mask_wide_compositor_layout,
+        field_seed_pipeline: id_mask_wide_field_seed_pipeline,
+        field_jump_pipeline: id_mask_wide_field_jump_pipeline,
+        compositor_pipeline: id_mask_wide_compositor_pipeline,
+    };
+    let id_mask_packed = packed_id_mask_fields.then(|| {
+        create_packed_id_mask_programs(device, &id_mask_field_shader, &id_mask_shader, format)
+    });
 
     GpuPrograms {
         viewport_layout,
@@ -7883,8 +8099,8 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
         effect_layout,
         scene3d_layout,
         id_mask_raster_layout,
-        id_mask_field_layout,
-        id_mask_compositor_layout,
+        id_mask_wide,
+        id_mask_packed,
         solid_pipeline,
         rgba_pipeline,
         a8_pipeline,
@@ -7897,9 +8113,6 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
         scene3d_color_tri_add_depth_write_pipeline,
         scene3d_color_tri_add_pipeline,
         id_mask_raster_pipeline,
-        id_mask_field_seed_pipeline,
-        id_mask_field_jump_pipeline,
-        id_mask_compositor_pipeline,
         sampler,
     }
 }
@@ -8062,6 +8275,8 @@ fn create_id_mask_compositor_pipeline(
     shader: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
     format: wgpu::TextureFormat,
+    fragment: &'static str,
+    label: &'static str,
 ) -> wgpu::RenderPipeline {
     let color_target = [Some(wgpu::ColorTargetState {
         format,
@@ -8069,7 +8284,7 @@ fn create_id_mask_compositor_pipeline(
         write_mask: wgpu::ColorWrites::ALL,
     })];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("oxide-webgpu-id-mask-compositor"),
+        label: Some(label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
@@ -8090,7 +8305,7 @@ fn create_id_mask_compositor_pipeline(
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some("fs_id_mask_compositor"),
+            entry_point: Some(fragment),
             compilation_options: Default::default(),
             targets: &color_target,
         }),
@@ -8105,19 +8320,27 @@ fn create_id_mask_field_pipeline(
     layout: &wgpu::PipelineLayout,
     fragment: &'static str,
     label: &'static str,
+    format: wgpu::TextureFormat,
+    packed: bool,
 ) -> wgpu::RenderPipeline {
-    let color_targets = [
+    let packed_target = [Some(wgpu::ColorTargetState {
+        format,
+        blend: None,
+        write_mask: wgpu::ColorWrites::ALL,
+    })];
+    let wide_targets = [
         Some(wgpu::ColorTargetState {
-            format: ID_MASK_FIELD_FORMAT,
+            format,
             blend: None,
             write_mask: wgpu::ColorWrites::ALL,
         }),
         Some(wgpu::ColorTargetState {
-            format: ID_MASK_FIELD_FORMAT,
+            format,
             blend: None,
             write_mask: wgpu::ColorWrites::ALL,
         }),
     ];
+    let color_targets = if packed { &packed_target[..] } else { &wide_targets[..] };
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),
@@ -8142,11 +8365,153 @@ fn create_id_mask_field_pipeline(
             module: shader,
             entry_point: Some(fragment),
             compilation_options: Default::default(),
-            targets: &color_targets,
+            targets: color_targets,
         }),
         multiview: None,
         cache: None,
     })
+}
+
+fn create_packed_id_mask_programs(
+    device: &wgpu::Device,
+    field_shader: &wgpu::ShaderModule,
+    compositor_shader: &wgpu::ShaderModule,
+    output_format: wgpu::TextureFormat,
+) -> IdMaskVariantPrograms {
+    let field_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("oxide-webgpu-id-mask-packed-field-layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: NonZeroU64::new(ID_MASK_FIELD_UNIFORM_SIZE),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Uint,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Uint,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Uint,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+        ],
+    });
+    let compositor_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("oxide-webgpu-id-mask-packed-compositor-layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: NonZeroU64::new(ID_MASK_COMPOSITOR_UNIFORM_SIZE),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Uint,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Uint,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Uint,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+        ],
+    });
+    let field_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("oxide-webgpu-id-mask-packed-field-pipeline-layout"),
+        bind_group_layouts: &[&field_layout],
+        push_constant_ranges: &[],
+    });
+    let compositor_pipeline_layout =
+        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("oxide-webgpu-id-mask-packed-compositor-pipeline-layout"),
+            bind_group_layouts: &[&compositor_layout],
+            push_constant_ranges: &[],
+        });
+    let field_seed_pipeline = create_id_mask_field_pipeline(
+        device,
+        field_shader,
+        &field_pipeline_layout,
+        "fs_id_mask_field_seed_packed",
+        "oxide-webgpu-id-mask-packed-field-seed",
+        ID_MASK_PACKED_FIELD_FORMAT,
+        true,
+    );
+    let field_jump_pipeline = create_id_mask_field_pipeline(
+        device,
+        field_shader,
+        &field_pipeline_layout,
+        "fs_id_mask_field_jump_packed",
+        "oxide-webgpu-id-mask-packed-field-jump",
+        ID_MASK_PACKED_FIELD_FORMAT,
+        true,
+    );
+    let compositor_pipeline = create_id_mask_compositor_pipeline(
+        device,
+        compositor_shader,
+        &compositor_pipeline_layout,
+        output_format,
+        "fs_id_mask_compositor_packed",
+        "oxide-webgpu-id-mask-packed-compositor",
+    );
+    IdMaskVariantPrograms {
+        field_layout,
+        compositor_layout,
+        field_seed_pipeline,
+        field_jump_pipeline,
+        compositor_pipeline,
+    }
 }
 
 fn additive_blend_state() -> wgpu::BlendState {
@@ -8420,80 +8785,72 @@ fn create_depth_texture(
     (texture, view)
 }
 
-fn create_id_mask_render_targets(
+fn create_packed_id_mask_field_targets(
     device: &wgpu::Device,
-    programs: &GpuPrograms,
+    programs: &IdMaskVariantPrograms,
     uniform_buffer: &wgpu::Buffer,
+    city_view: &wgpu::TextureView,
+    neighborhood_view: &wgpu::TextureView,
     width: u32,
     height: u32,
-    city_texture: wgpu::Texture,
-    neighborhood_texture: wgpu::Texture,
-    city_field_a_texture: wgpu::Texture,
-    city_field_b_texture: wgpu::Texture,
-    seam_field_a_texture: wgpu::Texture,
-    seam_field_b_texture: wgpu::Texture,
-    city_view: wgpu::TextureView,
-    neighborhood_view: wgpu::TextureView,
-    city_field_a_view: wgpu::TextureView,
-    city_field_b_view: wgpu::TextureView,
-    seam_field_a_view: wgpu::TextureView,
-    seam_field_b_view: wgpu::TextureView,
-) -> IdMaskRenderTargets {
-    let field_bind_group_a = create_id_mask_field_bind_group(
+) -> IdMaskFieldTargets {
+    let a_texture = create_id_mask_field_texture(
         device,
-        &programs.id_mask_field_layout,
-        uniform_buffer,
-        &city_view,
-        &neighborhood_view,
-        &city_field_a_view,
-        &seam_field_a_view,
-        "oxide-webgpu-id-mask-field-bind-group-a",
-    );
-    let field_bind_group_b = create_id_mask_field_bind_group(
-        device,
-        &programs.id_mask_field_layout,
-        uniform_buffer,
-        &city_view,
-        &neighborhood_view,
-        &city_field_b_view,
-        &seam_field_b_view,
-        "oxide-webgpu-id-mask-field-bind-group-b",
-    );
-    let compositor_bind_group_a = create_id_mask_compositor_bind_group(
-        device,
-        &programs.id_mask_compositor_layout,
-        uniform_buffer,
-        &city_view,
-        &neighborhood_view,
-        &city_field_a_view,
-        &seam_field_a_view,
-        "oxide-webgpu-id-mask-compositor-bind-group-a",
-    );
-    let compositor_bind_group_b = create_id_mask_compositor_bind_group(
-        device,
-        &programs.id_mask_compositor_layout,
-        uniform_buffer,
-        &city_view,
-        &neighborhood_view,
-        &city_field_b_view,
-        &seam_field_b_view,
-        "oxide-webgpu-id-mask-compositor-bind-group-b",
-    );
-    IdMaskRenderTargets {
+        "oxide-webgpu-id-mask-packed-field-a",
+        ID_MASK_PACKED_FIELD_FORMAT,
         width,
         height,
-        city_texture,
-        neighborhood_texture,
-        city_field_a_texture,
-        city_field_b_texture,
-        seam_field_a_texture,
-        seam_field_b_texture,
+    );
+    let b_texture = create_id_mask_field_texture(
+        device,
+        "oxide-webgpu-id-mask-packed-field-b",
+        ID_MASK_PACKED_FIELD_FORMAT,
+        width,
+        height,
+    );
+    let a_view = a_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let b_view = b_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let field_bind_group_a = create_packed_id_mask_field_bind_group(
+        device,
+        &programs.field_layout,
+        uniform_buffer,
         city_view,
         neighborhood_view,
-        city_field_a_view,
-        city_field_b_view,
-        seam_field_a_view,
-        seam_field_b_view,
+        &a_view,
+        "oxide-webgpu-id-mask-packed-field-bind-group-a",
+    );
+    let field_bind_group_b = create_packed_id_mask_field_bind_group(
+        device,
+        &programs.field_layout,
+        uniform_buffer,
+        city_view,
+        neighborhood_view,
+        &b_view,
+        "oxide-webgpu-id-mask-packed-field-bind-group-b",
+    );
+    let compositor_bind_group_a = create_packed_id_mask_compositor_bind_group(
+        device,
+        &programs.compositor_layout,
+        uniform_buffer,
+        city_view,
+        neighborhood_view,
+        &a_view,
+        "oxide-webgpu-id-mask-packed-compositor-bind-group-a",
+    );
+    let compositor_bind_group_b = create_packed_id_mask_compositor_bind_group(
+        device,
+        &programs.compositor_layout,
+        uniform_buffer,
+        city_view,
+        neighborhood_view,
+        &b_view,
+        "oxide-webgpu-id-mask-packed-compositor-bind-group-b",
+    );
+    IdMaskFieldTargets::Packed {
+        a_texture,
+        b_texture,
+        a_view,
+        b_view,
         field_bind_group_a,
         field_bind_group_b,
         compositor_bind_group_a,
@@ -8501,15 +8858,116 @@ fn create_id_mask_render_targets(
     }
 }
 
-fn id_mask_target_bytes_per_pixel() -> u64 {
-    2 + 4 * color_texture_bytes_per_pixel(ID_MASK_FIELD_FORMAT)
+fn create_wide_id_mask_field_targets(
+    device: &wgpu::Device,
+    programs: &IdMaskVariantPrograms,
+    uniform_buffer: &wgpu::Buffer,
+    city_view: &wgpu::TextureView,
+    neighborhood_view: &wgpu::TextureView,
+    width: u32,
+    height: u32,
+) -> IdMaskFieldTargets {
+    let city_a_texture = create_id_mask_field_texture(
+        device,
+        "oxide-webgpu-id-mask-city-field-a",
+        ID_MASK_WIDE_FIELD_FORMAT,
+        width,
+        height,
+    );
+    let city_b_texture = create_id_mask_field_texture(
+        device,
+        "oxide-webgpu-id-mask-city-field-b",
+        ID_MASK_WIDE_FIELD_FORMAT,
+        width,
+        height,
+    );
+    let seam_a_texture = create_id_mask_field_texture(
+        device,
+        "oxide-webgpu-id-mask-seam-field-a",
+        ID_MASK_WIDE_FIELD_FORMAT,
+        width,
+        height,
+    );
+    let seam_b_texture = create_id_mask_field_texture(
+        device,
+        "oxide-webgpu-id-mask-seam-field-b",
+        ID_MASK_WIDE_FIELD_FORMAT,
+        width,
+        height,
+    );
+    let city_a_view = city_a_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let city_b_view = city_b_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let seam_a_view = seam_a_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let seam_b_view = seam_b_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let field_bind_group_a = create_wide_id_mask_field_bind_group(
+        device,
+        &programs.field_layout,
+        uniform_buffer,
+        city_view,
+        neighborhood_view,
+        &city_a_view,
+        &seam_a_view,
+        "oxide-webgpu-id-mask-wide-field-bind-group-a",
+    );
+    let field_bind_group_b = create_wide_id_mask_field_bind_group(
+        device,
+        &programs.field_layout,
+        uniform_buffer,
+        city_view,
+        neighborhood_view,
+        &city_b_view,
+        &seam_b_view,
+        "oxide-webgpu-id-mask-wide-field-bind-group-b",
+    );
+    let compositor_bind_group_a = create_wide_id_mask_compositor_bind_group(
+        device,
+        &programs.compositor_layout,
+        uniform_buffer,
+        city_view,
+        neighborhood_view,
+        &city_a_view,
+        &seam_a_view,
+        "oxide-webgpu-id-mask-wide-compositor-bind-group-a",
+    );
+    let compositor_bind_group_b = create_wide_id_mask_compositor_bind_group(
+        device,
+        &programs.compositor_layout,
+        uniform_buffer,
+        city_view,
+        neighborhood_view,
+        &city_b_view,
+        &seam_b_view,
+        "oxide-webgpu-id-mask-wide-compositor-bind-group-b",
+    );
+    IdMaskFieldTargets::Wide {
+        city_a_texture,
+        city_b_texture,
+        seam_a_texture,
+        seam_b_texture,
+        city_a_view,
+        city_b_view,
+        seam_a_view,
+        seam_b_view,
+        field_bind_group_a,
+        field_bind_group_b,
+        compositor_bind_group_a,
+        compositor_bind_group_b,
+    }
 }
 
-fn id_mask_render_targets_bytes(width: u32, height: u32) -> u64 {
+fn id_mask_target_bytes_per_pixel(packed: bool) -> u64 {
+    2 + if packed {
+        2 * color_texture_bytes_per_pixel(ID_MASK_PACKED_FIELD_FORMAT)
+    } else {
+        4 * color_texture_bytes_per_pixel(ID_MASK_WIDE_FIELD_FORMAT)
+    }
+}
+
+fn id_mask_render_targets_bytes(width: u32, height: u32, packed: bool) -> u64 {
     saturating_texture_bytes(
         u64::from(width),
         u64::from(height),
-        id_mask_target_bytes_per_pixel(),
+        id_mask_target_bytes_per_pixel(packed),
     )
 }
 
@@ -8529,46 +8987,108 @@ fn rebuild_id_mask_target_bind_groups(
     uniform_buffer: &wgpu::Buffer,
     targets: &mut IdMaskRenderTargets,
 ) {
-    targets.field_bind_group_a = create_id_mask_field_bind_group(
-        device,
-        &programs.id_mask_field_layout,
-        uniform_buffer,
-        &targets.city_view,
-        &targets.neighborhood_view,
-        &targets.city_field_a_view,
-        &targets.seam_field_a_view,
-        "oxide-webgpu-id-mask-field-bind-group-a",
-    );
-    targets.field_bind_group_b = create_id_mask_field_bind_group(
-        device,
-        &programs.id_mask_field_layout,
-        uniform_buffer,
-        &targets.city_view,
-        &targets.neighborhood_view,
-        &targets.city_field_b_view,
-        &targets.seam_field_b_view,
-        "oxide-webgpu-id-mask-field-bind-group-b",
-    );
-    targets.compositor_bind_group_a = create_id_mask_compositor_bind_group(
-        device,
-        &programs.id_mask_compositor_layout,
-        uniform_buffer,
-        &targets.city_view,
-        &targets.neighborhood_view,
-        &targets.city_field_a_view,
-        &targets.seam_field_a_view,
-        "oxide-webgpu-id-mask-compositor-bind-group-a",
-    );
-    targets.compositor_bind_group_b = create_id_mask_compositor_bind_group(
-        device,
-        &programs.id_mask_compositor_layout,
-        uniform_buffer,
-        &targets.city_view,
-        &targets.neighborhood_view,
-        &targets.city_field_b_view,
-        &targets.seam_field_b_view,
-        "oxide-webgpu-id-mask-compositor-bind-group-b",
-    );
+    match &mut targets.fields {
+        IdMaskFieldTargets::Packed {
+            a_view,
+            b_view,
+            field_bind_group_a,
+            field_bind_group_b,
+            compositor_bind_group_a,
+            compositor_bind_group_b,
+            ..
+        } => {
+            let Some(programs) = programs.id_mask_packed.as_ref() else { return };
+            *field_bind_group_a = create_packed_id_mask_field_bind_group(
+                device,
+                &programs.field_layout,
+                uniform_buffer,
+                &targets.city_view,
+                &targets.neighborhood_view,
+                a_view,
+                "oxide-webgpu-id-mask-packed-field-bind-group-a",
+            );
+            *field_bind_group_b = create_packed_id_mask_field_bind_group(
+                device,
+                &programs.field_layout,
+                uniform_buffer,
+                &targets.city_view,
+                &targets.neighborhood_view,
+                b_view,
+                "oxide-webgpu-id-mask-packed-field-bind-group-b",
+            );
+            *compositor_bind_group_a = create_packed_id_mask_compositor_bind_group(
+                device,
+                &programs.compositor_layout,
+                uniform_buffer,
+                &targets.city_view,
+                &targets.neighborhood_view,
+                a_view,
+                "oxide-webgpu-id-mask-packed-compositor-bind-group-a",
+            );
+            *compositor_bind_group_b = create_packed_id_mask_compositor_bind_group(
+                device,
+                &programs.compositor_layout,
+                uniform_buffer,
+                &targets.city_view,
+                &targets.neighborhood_view,
+                b_view,
+                "oxide-webgpu-id-mask-packed-compositor-bind-group-b",
+            );
+        }
+        IdMaskFieldTargets::Wide {
+            city_a_view,
+            city_b_view,
+            seam_a_view,
+            seam_b_view,
+            field_bind_group_a,
+            field_bind_group_b,
+            compositor_bind_group_a,
+            compositor_bind_group_b,
+            ..
+        } => {
+            let programs = &programs.id_mask_wide;
+            *field_bind_group_a = create_wide_id_mask_field_bind_group(
+                device,
+                &programs.field_layout,
+                uniform_buffer,
+                &targets.city_view,
+                &targets.neighborhood_view,
+                city_a_view,
+                seam_a_view,
+                "oxide-webgpu-id-mask-wide-field-bind-group-a",
+            );
+            *field_bind_group_b = create_wide_id_mask_field_bind_group(
+                device,
+                &programs.field_layout,
+                uniform_buffer,
+                &targets.city_view,
+                &targets.neighborhood_view,
+                city_b_view,
+                seam_b_view,
+                "oxide-webgpu-id-mask-wide-field-bind-group-b",
+            );
+            *compositor_bind_group_a = create_wide_id_mask_compositor_bind_group(
+                device,
+                &programs.compositor_layout,
+                uniform_buffer,
+                &targets.city_view,
+                &targets.neighborhood_view,
+                city_a_view,
+                seam_a_view,
+                "oxide-webgpu-id-mask-wide-compositor-bind-group-a",
+            );
+            *compositor_bind_group_b = create_wide_id_mask_compositor_bind_group(
+                device,
+                &programs.compositor_layout,
+                uniform_buffer,
+                &targets.city_view,
+                &targets.neighborhood_view,
+                city_b_view,
+                seam_b_view,
+                "oxide-webgpu-id-mask-wide-compositor-bind-group-b",
+            );
+        }
+    }
 }
 
 fn create_id_mask_texture(
@@ -8595,21 +9115,17 @@ fn create_id_mask_texture(
 fn create_id_mask_field_texture(
     device: &wgpu::Device,
     label: &'static str,
+    format: wgpu::TextureFormat,
     width: u32,
     height: u32,
 ) -> wgpu::Texture {
-    let mut usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
-    #[cfg(feature = "snapshot-tests")]
-    {
-        usage |= wgpu::TextureUsages::COPY_SRC;
-    }
     create_texture_2d(
         device,
         label,
-        ID_MASK_FIELD_FORMAT,
+        format,
         width,
         height,
-        usage,
+        id_mask_field_texture_usage(),
     )
 }
 
@@ -8683,13 +9199,98 @@ fn decode_web_rgba16_float(bytes: &[u8]) -> Vec<[f32; 4]>
         .chunks_exact(8)
         .map(|pixel| {
             [
-                half_to_f32(u16::from_le_bytes(pixel[0..2].try_into().unwrap())),
-                half_to_f32(u16::from_le_bytes(pixel[2..4].try_into().unwrap())),
-                half_to_f32(u16::from_le_bytes(pixel[4..6].try_into().unwrap())),
-                half_to_f32(u16::from_le_bytes(pixel[6..8].try_into().unwrap())),
+                half_to_f32(u16::from_le_bytes([pixel[0], pixel[1]])),
+                half_to_f32(u16::from_le_bytes([pixel[2], pixel[3]])),
+                half_to_f32(u16::from_le_bytes([pixel[4], pixel[5]])),
+                half_to_f32(u16::from_le_bytes([pixel[6], pixel[7]])),
             ]
         })
         .collect()
+}
+
+#[cfg(feature = "snapshot-tests")]
+fn decode_web_rgba16_uint_fields(
+    bytes: &[u8],
+    city: &[u8],
+    neighborhood: &[u8],
+    width: u32,
+    height: u32,
+) -> (Vec<[f32; 4]>, Vec<[f32; 4]>)
+{
+    let pixel_count = width as usize * height as usize;
+    let mut city_field = Vec::with_capacity(pixel_count);
+    let mut seam_field = Vec::with_capacity(pixel_count);
+    for pixel in bytes.chunks_exact(8).take(pixel_count)
+    {
+        let coordinates = [
+            u16::from_le_bytes([pixel[0], pixel[1]]),
+            u16::from_le_bytes([pixel[2], pixel[3]]),
+            u16::from_le_bytes([pixel[4], pixel[5]]),
+            u16::from_le_bytes([pixel[6], pixel[7]]),
+        ];
+        city_field.push(decode_web_packed_seed(
+            coordinates[0],
+            coordinates[1],
+            city,
+            neighborhood,
+            width,
+            height,
+            false,
+        ));
+        seam_field.push(decode_web_packed_seed(
+            coordinates[2],
+            coordinates[3],
+            city,
+            neighborhood,
+            width,
+            height,
+            true,
+        ));
+    }
+    (city_field, seam_field)
+}
+
+#[cfg(feature = "snapshot-tests")]
+fn decode_web_packed_seed(
+    x: u16,
+    y: u16,
+    city: &[u8],
+    neighborhood: &[u8],
+    width: u32,
+    height: u32,
+    seam: bool,
+) -> [f32; 4]
+{
+    if x == ID_MASK_PACKED_INVALID || y == ID_MASK_PACKED_INVALID
+    {
+        return [-1.0, -1.0, 0.0, 0.0];
+    }
+    let x = u32::from(x);
+    let y = u32::from(y);
+    if x >= width || y >= height
+    {
+        return [-1.0, -1.0, 0.0, 0.0];
+    }
+    let index = y as usize * width as usize + x as usize;
+    let seed_city = match city.get(index)
+    {
+        Some(seed_city) => *seed_city,
+        None => 0,
+    };
+    if seed_city == 0
+    {
+        return [-1.0, -1.0, 0.0, 0.0];
+    }
+    let seed_neighborhood = if seam {
+        1
+    } else {
+        match neighborhood.get(index)
+        {
+            Some(seed_neighborhood) => *seed_neighborhood,
+            None => 0,
+        }
+    };
+    [x as f32, y as f32, f32::from(seed_city), f32::from(seed_neighborhood)]
 }
 
 #[cfg(feature = "snapshot-tests")]
@@ -8759,7 +9360,7 @@ fn create_texture_bind_group(
     })
 }
 
-fn create_id_mask_field_bind_group(
+fn create_wide_id_mask_field_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     uniform_buffer: &wgpu::Buffer,
@@ -8797,7 +9398,7 @@ fn create_id_mask_field_bind_group(
     })
 }
 
-fn create_id_mask_compositor_bind_group(
+fn create_wide_id_mask_compositor_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     uniform_buffer: &wgpu::Buffer,
@@ -8830,6 +9431,72 @@ fn create_id_mask_compositor_bind_group(
             wgpu::BindGroupEntry {
                 binding: 4,
                 resource: wgpu::BindingResource::TextureView(seam_field_view),
+            },
+        ],
+    })
+}
+
+fn create_packed_id_mask_field_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    uniform_buffer: &wgpu::Buffer,
+    city_view: &wgpu::TextureView,
+    neighborhood_view: &wgpu::TextureView,
+    field_view: &wgpu::TextureView,
+    label: &'static str,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(label),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_binding(uniform_buffer, ID_MASK_FIELD_UNIFORM_SIZE),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(city_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(neighborhood_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(field_view),
+            },
+        ],
+    })
+}
+
+fn create_packed_id_mask_compositor_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    uniform_buffer: &wgpu::Buffer,
+    city_view: &wgpu::TextureView,
+    neighborhood_view: &wgpu::TextureView,
+    field_view: &wgpu::TextureView,
+    label: &'static str,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(label),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_binding(uniform_buffer, ID_MASK_COMPOSITOR_UNIFORM_SIZE),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(city_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(neighborhood_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(field_view),
             },
         ],
     })
@@ -9573,6 +10240,9 @@ struct IdMaskFieldParams {
 @group(0) @binding(2) var field_neighborhood_tex: texture_2d<u32>;
 @group(0) @binding(3) var field_city_src_tex: texture_2d<f32>;
 @group(0) @binding(4) var field_seam_src_tex: texture_2d<f32>;
+@group(0) @binding(5) var field_packed_src_tex: texture_2d<u32>;
+
+const ID_MASK_PACKED_INVALID: u32 = 0xffffu;
 
 struct IdMaskFieldRaster {
    @builtin(position) position: vec4<f32>,
@@ -9701,6 +10371,78 @@ fn fs_id_mask_field_jump(input: IdMaskFieldRaster) -> IdMaskFieldTargets {
    out.seam = best_jump_seed(field_seam_src_tex, p, size, jump);
    return out;
 }
+
+fn read_packed_seed_field(tex: texture_2d<u32>, p: vec2<i32>, size: vec2<u32>) -> vec4<u32> {
+   if (p.x < 0 || p.y < 0 || p.x >= i32(size.x) || p.y >= i32(size.y)) {
+      return vec4<u32>(ID_MASK_PACKED_INVALID);
+   }
+   return textureLoad(tex, p, 0);
+}
+
+fn packed_seed_valid(seed: vec2<u32>) -> bool {
+   return seed.x != ID_MASK_PACKED_INVALID && seed.y != ID_MASK_PACKED_INVALID;
+}
+
+fn packed_seed_distance2(seed: vec2<u32>, p: vec2<i32>) -> f32 {
+   if (!packed_seed_valid(seed)) {
+      return 1.0e30;
+   }
+   let delta = vec2<f32>(seed) - vec2<f32>(p);
+   return dot(delta, delta);
+}
+
+@fragment
+fn fs_id_mask_field_seed_packed(input: IdMaskFieldRaster) -> @location(0) vec4<u32> {
+   let size = field_size();
+   let p = field_pixel(input.position, size);
+   let city = read_field_mask(field_city_tex, p, size);
+   let invalid = vec2<u32>(ID_MASK_PACKED_INVALID);
+   let coordinate = vec2<u32>(p);
+   let seam = seam_seed(p, size);
+   return vec4<u32>(
+      select(invalid, coordinate, city != 0u),
+      select(invalid, coordinate, valid_seed(seam)),
+   );
+}
+
+fn best_jump_packed(p: vec2<i32>, size: vec2<u32>, jump: i32) -> vec4<u32> {
+   var best = read_packed_seed_field(field_packed_src_tex, p, size);
+   var city_distance = packed_seed_distance2(best.xy, p);
+   var seam_distance = packed_seed_distance2(best.zw, p);
+   for (var oy = -1; oy <= 1; oy = oy + 1) {
+      for (var ox = -1; ox <= 1; ox = ox + 1) {
+         if (ox == 0 && oy == 0) {
+            continue;
+         }
+         let candidate = read_packed_seed_field(
+            field_packed_src_tex,
+            p + vec2<i32>(ox * jump, oy * jump),
+            size,
+         );
+         let candidate_city_distance = packed_seed_distance2(candidate.xy, p);
+         if (candidate_city_distance < city_distance) {
+            best.x = candidate.x;
+            best.y = candidate.y;
+            city_distance = candidate_city_distance;
+         }
+         let candidate_seam_distance = packed_seed_distance2(candidate.zw, p);
+         if (candidate_seam_distance < seam_distance) {
+            best.z = candidate.z;
+            best.w = candidate.w;
+            seam_distance = candidate_seam_distance;
+         }
+      }
+   }
+   return best;
+}
+
+@fragment
+fn fs_id_mask_field_jump_packed(input: IdMaskFieldRaster) -> @location(0) vec4<u32> {
+   let size = field_size();
+   let p = field_pixel(input.position, size);
+   let jump = max(i32(round(field_params.mask_size_jump_pad.z)), 1);
+   return best_jump_packed(p, size, jump);
+}
 "#;
 
 const ID_MASK_WGSL: &str = r#"
@@ -9784,6 +10526,9 @@ struct IdMaskCompositorParams {
 @group(0) @binding(2) var neighborhood_tex: texture_2d<u32>;
 @group(0) @binding(3) var city_field_tex: texture_2d<f32>;
 @group(0) @binding(4) var seam_field_tex: texture_2d<f32>;
+@group(0) @binding(5) var packed_field_tex: texture_2d<u32>;
+
+const ID_MASK_PACKED_INVALID: u32 = 0xffffu;
 
 struct IdMaskCompositorRaster {
    @builtin(position) position: vec4<f32>,
@@ -9828,6 +10573,24 @@ fn read_field(tex: texture_2d<f32>, p: vec2<i32>, size: vec2<u32>) -> vec4<f32> 
       return vec4<f32>(-1.0, -1.0, 0.0, 0.0);
    }
    return textureLoad(tex, p, 0);
+}
+
+fn read_packed_field(tex: texture_2d<u32>, p: vec2<i32>, size: vec2<u32>) -> vec4<u32> {
+   if (p.x < 0 || p.y < 0 || p.x >= i32(size.x) || p.y >= i32(size.y)) {
+      return vec4<u32>(ID_MASK_PACKED_INVALID);
+   }
+   return textureLoad(tex, p, 0);
+}
+
+fn packed_seed_valid(seed: vec2<u32>) -> bool {
+   return seed.x != ID_MASK_PACKED_INVALID && seed.y != ID_MASK_PACKED_INVALID;
+}
+
+fn unpack_seed_coordinate(seed: vec2<u32>) -> vec4<f32> {
+   if (!packed_seed_valid(seed)) {
+      return vec4<f32>(-1.0, -1.0, 0.0, 0.0);
+   }
+   return vec4<f32>(vec2<f32>(seed), 1.0, 0.0);
 }
 
 fn field_valid(field: vec4<f32>) -> bool {
@@ -9933,6 +10696,96 @@ fn fs_id_mask_compositor(input: IdMaskCompositorRaster) -> @location(0) vec4<f32
       let seam_core = gaussian_alpha(seam_distance, mask_scale, 0.27, 0.82, 1.7);
       let seam_alpha = max(seam_halo, seam_core);
       if (seam_alpha > 0.002) {
+         let seam = compositor_params.city_seam_colors[city_index].rgb;
+         fill = mix(fill, seam, clamp(seam_alpha, 0.0, 1.0));
+      }
+   }
+
+   return vec4<f32>(fill, 0.96);
+}
+
+@fragment
+fn fs_id_mask_compositor_packed(input: IdMaskCompositorRaster) -> @location(0) vec4<f32> {
+   let mask_size = max(compositor_params.mask_size_scale_alpha.xy, vec2<f32>(1.0, 1.0));
+   let size = vec2<u32>(u32(mask_size.x), u32(mask_size.y));
+   let p = vec2<i32>(clamp(input.pos_mask, vec2<f32>(0.0, 0.0), mask_size - vec2<f32>(1.0, 1.0)));
+   let mask_scale = max(compositor_params.mask_size_scale_alpha.z, 1.0);
+   let mode = u32(compositor_params.mode_glow_polish_fallback.x);
+   let glow_enabled = compositor_params.mode_glow_polish_fallback.y >= 0.5;
+   let polish_radius = i32(ceil(compositor_params.mode_glow_polish_fallback.z * mask_scale));
+   let fallback_radius = i32(ceil(compositor_params.mode_glow_polish_fallback.w * mask_scale));
+   let packed = read_packed_field(packed_field_tex, p, size);
+   let nearest_city_field = unpack_seed_coordinate(packed.xy);
+   let seam_field = unpack_seed_coordinate(packed.zw);
+   let city_direct = read_mask(city_tex, p, size);
+   let city_distance = field_distance(nearest_city_field, p);
+   var nearest_city = city_direct;
+   if (nearest_city == 0u && field_valid(nearest_city_field)) {
+      nearest_city = read_mask(city_tex, vec2<i32>(nearest_city_field.xy), size);
+   }
+   let city = select(
+      select(0u, nearest_city, city_distance <= f32(polish_radius)),
+      city_direct,
+      city_direct != 0u,
+   );
+   let neighborhood_direct = read_mask(neighborhood_tex, p, size);
+   var neighborhood = 0u;
+   if (city_direct == city && neighborhood_direct != 0u) {
+      neighborhood = neighborhood_direct;
+   } else if (city_distance <= f32(fallback_radius)
+              && nearest_city == city
+              && field_valid(nearest_city_field)) {
+      neighborhood = read_mask(neighborhood_tex, vec2<i32>(nearest_city_field.xy), size);
+   }
+   let city_index = min(city, 3u);
+   let neighborhood_index = min(neighborhood, 31u);
+
+   if (mode == 2u) {
+      return select(vec4<f32>(compositor_params.city_edge_colors[city_index].rgb, 1.0), vec4<f32>(0.0, 0.0, 0.0, 1.0), city == 0u);
+   }
+   if (mode == 3u) {
+      return select(vec4<f32>(compositor_params.neighborhood_colors[neighborhood_index].rgb, 1.0), vec4<f32>(0.0, 0.0, 0.0, 1.0), neighborhood == 0u);
+   }
+
+   if (mode == 1u) {
+      if (city == 0u || !field_valid(seam_field)) {
+         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+      }
+      let seam_distance = field_distance(seam_field, p);
+      let core = gaussian_alpha(seam_distance, mask_scale, 0.42, 1.0, 2.1);
+      if (core <= 0.04 || read_mask(city_tex, vec2<i32>(seam_field.xy), size) != city) {
+         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+      }
+      return vec4<f32>(1.0, 1.0, 1.0, 1.0);
+   }
+
+   let dark_alpha = clamp(compositor_params.mask_size_scale_alpha.w, 0.0, 1.0);
+   if (city == 0u) {
+      if (!glow_enabled || !field_valid(nearest_city_field) || nearest_city == 0u) {
+         return vec4<f32>(0.0, 0.0, 0.0, dark_alpha);
+      }
+      let alpha = max(
+         gaussian_alpha(city_distance, mask_scale, compositor_params.exterior_halo.x, compositor_params.exterior_halo.y, 3.2),
+         gaussian_alpha(city_distance, mask_scale, compositor_params.exterior_halo.z, compositor_params.exterior_halo.w, 3.2),
+      );
+      if (alpha <= 0.002) {
+         return vec4<f32>(0.0, 0.0, 0.0, dark_alpha);
+      }
+      return vec4<f32>(compositor_params.city_edge_colors[min(nearest_city, 3u)].rgb, alpha);
+   }
+
+   let normalized = input.pos_mask / mask_size;
+   let top_left_light = clamp((1.0 - normalized.x) * 0.55 + (1.0 - normalized.y) * 0.45, 0.0, 1.0);
+   let light = 0.92 + 0.08 * top_left_light;
+   var fill = min(compositor_params.neighborhood_colors[neighborhood_index].rgb * light, vec3<f32>(1.0, 1.0, 1.0));
+
+   if (glow_enabled && field_valid(seam_field)) {
+      let seam_distance = field_distance(seam_field, p);
+      let seam_halo = gaussian_alpha(seam_distance, mask_scale, 1.10, 0.22, 2.5);
+      let seam_core = gaussian_alpha(seam_distance, mask_scale, 0.27, 0.82, 1.7);
+      let seam_alpha = max(seam_halo, seam_core);
+      if (seam_alpha > 0.002
+          && read_mask(city_tex, vec2<i32>(seam_field.xy), size) == city) {
          let seam = compositor_params.city_seam_colors[city_index].rgb;
          fill = mix(fill, seam, clamp(seam_alpha, 0.0, 1.0));
       }

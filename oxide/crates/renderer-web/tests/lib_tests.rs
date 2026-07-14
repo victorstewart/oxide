@@ -126,6 +126,8 @@ fn wasm_snapshot_feature_exposes_exact_id_mask_texture_and_field_readback()
    assert!(source.contains("pub fn collect_id_mask_snapshot_readback"));
    assert!(source.contains("copy_id_mask_texture_to_plane"));
    assert!(source.contains("decode_web_rgba16_float"));
+   assert!(source.contains("decode_web_rgba16_uint_fields"));
+   assert!(source.contains("packed_fields: bool"));
    assert!(source.contains("wgpu::TextureUsages::COPY_SRC"));
 }
 
@@ -733,7 +735,7 @@ fn wasm_webgpu_id_mask_uniform_arena_isolates_every_encoded_pass()
    assert!(prepare.contains("self.id_mask_field_uniform_offsets.push(offset)"));
    assert_eq!(render.matches("self.queue.write_buffer(").count(), 1);
    assert!(render.contains("&[uniform_offsets.raster]"));
-   assert!(render.contains("&[self.id_mask_field_uniform_offsets[field_offset_index]]"));
+   assert!(render.contains("self.id_mask_field_uniform_offsets[field_offset_index],"));
    assert!(render.contains("&[uniform_offsets.compositor]"));
    assert!(!render.contains("id_mask_field_uniform_bytes("));
 }
@@ -791,10 +793,46 @@ fn wasm_webgpu_id_mask_field_cache_is_complete_bounded_and_compositor_only()
    assert!(resolve.contains("self.retain_id_mask_field_cache_entry"));
    assert!(render.contains("if !cache_hit"));
    assert!(render.contains("TimestampPassFamily::IdMaskCompositor"));
-   assert!(source.contains("id_mask_target_bytes_per_pixel()"));
-   assert!(source.contains("2 + 4 * color_texture_bytes_per_pixel(ID_MASK_FIELD_FORMAT)"));
+   assert!(source.contains("id_mask_target_bytes_per_pixel(packed"));
+   assert!(source.contains("2 * color_texture_bytes_per_pixel(ID_MASK_PACKED_FIELD_FORMAT)"));
+   assert!(source.contains("4 * color_texture_bytes_per_pixel(ID_MASK_WIDE_FIELD_FORMAT)"));
    assert!(source.contains("purge_id_mask_field_cache_for_reason(LAYER_PURGE_DEVICE_LOSS)"));
    assert!(source.contains("purge_id_mask_field_cache_for_reason(LAYER_PURGE_MEMORY_PRESSURE)"));
+}
+
+#[test]
+fn wasm_webgpu_id_mask_fields_use_exact_packed_targets_with_wide_fallback()
+{
+   let source = include_str!("../src/wasm/webgpu.rs");
+
+   for contract in [
+      "const ID_MASK_PACKED_FIELD_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Uint",
+      "const ID_MASK_WIDE_FIELD_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float",
+      "adapter.get_texture_format_features(ID_MASK_PACKED_FIELD_FORMAT)",
+      "features.allowed_usages.contains(id_mask_field_texture_usage())",
+      "enum IdMaskFieldTargets",
+      "Packed {",
+      "Wide {",
+      "id_mask_packed_coordinates_fit(width, height)",
+      "width <= u16::MAX as u32 && height <= u16::MAX as u32",
+      "create_packed_id_mask_field_targets",
+      "create_wide_id_mask_field_targets",
+      "fs_id_mask_field_seed_packed",
+      "fs_id_mask_field_jump_packed",
+      "fs_id_mask_compositor_packed",
+      "@group(0) @binding(5) var field_packed_src_tex: texture_2d<u32>",
+      "@group(0) @binding(5) var packed_field_tex: texture_2d<u32>",
+      "decode_web_rgba16_uint_fields",
+      "pub field_logical_bytes: u64",
+      "pub wide_field_logical_bytes: u64",
+   ]
+   {
+      assert!(source.contains(contract), "missing packed ID-mask contract {contract}");
+   }
+   assert!(source.contains("assert!(id_mask_packed_coordinates_fit(u16::MAX as u32"));
+   assert!(source.contains("assert!(!id_mask_packed_coordinates_fit(u16::MAX as u32 + 1"));
+   assert!(source.contains("pixels.saturating_mul(if pending.packed_fields { 16 } else { 32 })"));
+   assert!(source.contains("let wide_field_logical_bytes = pixels.saturating_mul(32)"));
 }
 
 #[test]
@@ -1237,9 +1275,9 @@ fn wasm_webgpu_static_pipelines_are_created_before_frame_encoding() {
         "scene3d_color_tri_add_depth_write_pipeline: wgpu::RenderPipeline",
         "scene3d_color_tri_add_pipeline: wgpu::RenderPipeline",
         "id_mask_raster_pipeline: wgpu::RenderPipeline",
-        "id_mask_field_seed_pipeline: wgpu::RenderPipeline",
-        "id_mask_field_jump_pipeline: wgpu::RenderPipeline",
-        "id_mask_compositor_pipeline: wgpu::RenderPipeline",
+        "field_seed_pipeline: wgpu::RenderPipeline",
+        "field_jump_pipeline: wgpu::RenderPipeline",
+        "compositor_pipeline: wgpu::RenderPipeline",
     ] {
         assert!(programs.contains(field), "missing eager pipeline field {field}");
     }
@@ -1256,9 +1294,11 @@ fn wasm_webgpu_static_pipelines_are_created_before_frame_encoding() {
         "let scene3d_color_tri_add_depth_write_pipeline = create_scene3d_pipeline(",
         "let scene3d_color_tri_add_pipeline = create_scene3d_pipeline(",
         "let id_mask_raster_pipeline = create_id_mask_raster_pipeline(",
-        "let id_mask_field_seed_pipeline = create_id_mask_field_pipeline(",
-        "let id_mask_field_jump_pipeline = create_id_mask_field_pipeline(",
-        "let id_mask_compositor_pipeline = create_id_mask_compositor_pipeline(",
+        "let id_mask_wide_field_seed_pipeline = create_id_mask_field_pipeline(",
+        "let id_mask_wide_field_jump_pipeline = create_id_mask_field_pipeline(",
+        "let id_mask_wide_compositor_pipeline = create_id_mask_compositor_pipeline(",
+        "let id_mask_packed = packed_id_mask_fields.then(",
+        "create_packed_id_mask_programs(",
     ] {
         assert!(create_programs.contains(local), "missing eager pipeline creation {local}");
     }

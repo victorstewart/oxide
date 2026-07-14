@@ -16,6 +16,7 @@ Consumes renderer-api values and lowers generic 2D geometry through `packed_geom
 - `BrowserRenderer::set_cpu_submit_timing_enabled_for_benchmark` and `last_cpu_submit_timing` expose bounded, opt-in CPU attribution for upload, surface, command encoding, queue submit, present, and readback bookkeeping; the normal renderer path retains only a disabled branch.
 - `BrowserRenderer::encode_snapshot(&mut self, snapshot: &RenderSnapshot) -> Result<(), RenderSnapshotError>` prepares or replays immutable retained chunks and falls back to exact flattening when an instance or command is not supported by the prepared path.
 - `BrowserRenderer::prepared_cache_resident_bytes(&self) -> u64`, `set_prepared_cache_budget_bytes`, and `purge_prepared_chunks` expose logical residency plus explicit cache policy and invalidation.
+- `BrowserRenderer::id_mask_target_bytes_per_pixel(&self) -> u64` and `id_mask_packed_fields_supported(&self) -> bool` expose the selected ID-mask target representation to the browser benchmark adapter so its cache budgets and memory proof match the adapter's validated format capabilities.
 - `BrowserRenderer::set_prepared_bundle_min_draws_for_benchmark` and `advance_prepared_device_generation_for_benchmark` isolate C25 threshold and device-lifecycle guardrails; production keeps the measured threshold and renderer-owned device lifetime.
 - Retained snapshot layer instances use the internal `PreparedLayerKey` path: clean generation/resource matches composite a persistent local-sized texture without entering the chunk body, while dirty or missing instances refresh that texture once.
 - `encode_solid`, `gpu_vertex`, and the three `append_*gpu_vertices` helpers implement this boundary.
@@ -32,6 +33,8 @@ Immutable zero-origin snapshot chunks are keyed by chunk id, structural/geometry
 
 Retained snapshot layers add stable layer identity, full chunk revisions, content/nested/dynamic generations, bounds, transform scale, opacity, target scale, format/device generation, effect outset, physical pixel phase, and precise resource dependencies to that contract. A validated immutable snapshot retains its resolved layer frames and chunk references, so subsequent frames with the same snapshot identity do not recompute transforms, bounds, phases, duplicate IDs, or keys. Axis-aligned targets snap transformed minimum bounds down and maximum bounds up on the canvas physical-pixel grid, then allocate only that span, bounded by the device limit. The snapping preserves the parent raster sample phase at fractional origins while adding at most one edge pixel per axis. Each target owns a persistent viewport uniform whose origin maps existing coordinates into local pixels; the final composite uses normalized `[0, 1]` UVs. Nested targets inherit their ancestor matrix and translation but not opacity, derive an inverse composite rectangle, and therefore apply the transform and opacity exactly once. Local scissor conversion conservatively transforms internal clips before applying the established negative-origin extent rule, and effect copies move only the visible local target region into the sampling texture. A clean key/resource hit records the skipped body length immediately and emits only its composite. Dirty or missing content clears and redraws once; compatible dimensions reuse the texture and uniform binding. Canvas-size changes preserve compatible local layers, while scale, resource, purge, or device-generation changes invalidate them; plan ownership is also cleared when a lifecycle event can change its key space.
 
+C35 validates `Rgba16Uint` for every usage required by the active build before creating a packed pipeline family. Supported masks store nearest-city XY in `.xy` and nearest-seam XY in `.zw`, with `0xFFFF` as the invalid coordinate, in two ping-ponged eight-byte textures. The compositor recovers city and neighborhood IDs from the authoritative R8 masks only when their distance can affect output. If the adapter lacks any required format usage, or either dimension exceeds 65,535, the renderer selects the prebuilt four-`Rgba16Float` fallback family. Both families preserve the same strict jump-flood candidate order and final ping-pong selection.
+
 ## Preconditions and postconditions
 
 Indexed paths validate or rebase indices first. Generic shader locations remain unchanged; the color location is now `Unorm8x4` at byte 16 with a 20-byte stride. u16 writes are four-byte aligned at the stream tail, and large geometry retains a u32 fallback.
@@ -43,6 +46,8 @@ Invalid spans or indices clear scratch output and emit no draw. Packed zero exac
 An absent or released image dependency rejects preparation before encoding. Resize, scale change, device-generation change, explicit purge, budget eviction, and resource release invalidate affected prepared ownership. A positive budget protects the current plan while evicting least-recently-used unprotected chunks; if that plan cannot fit, the frame falls back instead of replaying a partial snapshot.
 
 Non-finite, empty, rotated/sheared, dynamically clipped, unbounded-effect, or device-limit-exceeding retained layers use exact flattening/inline rendering. Oversized layers are never silently downscaled and never issue an invalid WebGPU texture request.
+
+Packed ID-mask coordinates never alias the invalid sentinel: dimensions through 65,535 have maximum coordinates through 65,534, while 65,536 and larger select the wide representation. Snapshot readback decodes packed coordinates back into the established semantic city/seam field shape before comparison.
 
 ## Concurrency and memory behavior
 
@@ -70,13 +75,15 @@ C31 bounds those local textures with an adaptive logical-byte budget derived fro
 
 C33 retains complete ID-mask raster and RGBA16F jump-flood fields under an adaptive 64–512 MiB logical-byte budget with at most four entries. Its exact key covers mask dimensions/scale, vertex revision/count, ordered chunk hashes/ranges, and every projection value; style, color, glow, polish, mode, opacity, and viewport placement remain compositor-only. Hits write one compositor uniform record and encode one pass. Projection/content changes rebuild all twelve 512-square passes. Queue submission order makes cross-frame target reuse safe, while uniform-arena growth rebuilds every target-specific bind group before reuse. Memory pressure, device loss, and explicit purge release cache ownership.
 
+C35 halves jump-field storage from 32 to 16 logical bytes per pixel relative to four `Rgba16Float` textures, while retaining the two R8 mask bytes. A forced-miss frame still executes one raster, one seed, nine 512-square jump passes, and one compositor; only the field attachment count and bytes transferred by seed/jump change. Pipelines and bind groups are created before interaction, so the selected representation adds no steady-frame resource construction.
+
 ## Feature flags and cfgs
 
 Compiled only for `wasm32` with the existing WebGPU and WGSL features.
 
 ## Testing and benchmarks
 
-Native contract tests exercise decoding/source paths and freeze prepared-cache invalidation, aggregate/hybrid bundle ownership, dynamic property-ring ownership, generation/resource-complete local layers, device-bounded target dimensions, flat boundaries, hard admission, pooling, aging, purge paths, complete ID-mask field keys, compositor-only hits, compact hit uniforms, and counters; wasm compilation verifies the implementation. The C25 adapter retains static bundle proof, `scripts/run_webgpu_dynamic_c26.mjs` supplies C26 backend CPU/GPU/property and real-RAF samples, `scripts/run_webgpu_local_layers_c30.mjs` preserves C30 evidence plus its C31 navigation-churn mode, and `check_webgpu_browser_golden.mjs --id-mask-cache-only` runs the C33 static/invalidation/one-entry/LRU matrix with direct timestamp samples.
+Native contract tests exercise decoding/source paths and freeze prepared-cache invalidation, aggregate/hybrid bundle ownership, dynamic property-ring ownership, generation/resource-complete local layers, device-bounded target dimensions, flat boundaries, hard admission, pooling, aging, purge paths, complete ID-mask field keys, packed capability/coordinate selection, wide fallback ownership, compositor-only hits, compact hit uniforms, and counters; wasm compilation verifies the implementation. The C25 adapter retains static bundle proof, `scripts/run_webgpu_dynamic_c26.mjs` supplies C26 backend CPU/GPU/property and real-RAF samples, `scripts/run_webgpu_local_layers_c30.mjs` preserves C30 evidence plus its C31 navigation-churn mode, and `check_webgpu_browser_golden.mjs --id-mask-cache-only` runs the C33 static/invalidation/one-entry/LRU matrix with direct timestamp samples. C35 uses `--id-mask-matrix-out` for exact real-Dawn raster/final-field comparison at seven contract dimensions, the asymmetric browser readback for the multi-seed/tie schedule, and a forced-miss RAF population for direct WebGPU timestamps and logical memory counters.
 
 ## Examples
 
@@ -84,6 +91,8 @@ Packed `0xFFFF_0000` uploads as opaque blue; packed zero uploads the draw unifor
 
 ## Changelog
 
+- 2026-07-14: added the real-Dawn seven-dimension C35 raster/final-field reference matrix.
+- 2026-07-14: added C35 capability-validated two-texture `Rgba16Uint` ID-mask fields, exact semantic readback, 65,536-boundary wide fallback, and representation-aware cache accounting.
 - 2026-07-14: added C33 complete WebGPU ID-mask field keys, compact compositor-only hits, bounded compatible LRU storage, direct stage timing, and explicit pressure/device purge behavior.
 - 2026-07-14: added C31 adaptive/configurable logical-byte budgets, protected LRU admission, compatible layer pooling, absent/pool aging, exact over-budget fallback, purge reasons, and storage telemetry.
 - 2026-07-14: added generation-correct retained WebGPU layers backed by physical-grid-snapped local textures, transform-inheriting nested viewports/scissors, local effect copies, exact resource invalidation, compatible resize reuse, and the C30 100-card proof path.

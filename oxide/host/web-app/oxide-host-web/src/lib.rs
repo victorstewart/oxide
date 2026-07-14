@@ -861,10 +861,14 @@ mod wasm_host {
             let mut changed_vertices = vertices.clone();
             changed_vertices[0].position_px[0] += 0.25;
             let default_budget = renderer.borrow().id_mask_cache_budget_bytes();
+            let one_entry_budget = renderer
+                .borrow()
+                .id_mask_target_bytes_per_pixel()
+                .saturating_mul(512 * 512);
             let one_entry_timing = measure_webgpu_id_mask_multi_cache(
                 &renderer,
                 &vertices,
-                512 * 512 * 34,
+                one_entry_budget,
                 4,
                 16,
                 "one_entry_multi",
@@ -916,7 +920,7 @@ mod wasm_host {
             let one_entry_stats = {
                 let mut renderer = renderer.borrow_mut();
                 renderer.purge_id_mask_field_cache();
-                renderer.set_id_mask_cache_budget_bytes(512 * 512 * 34);
+                renderer.set_id_mask_cache_budget_bytes(one_entry_budget);
                 webgpu_id_mask_two_map_frame(&mut renderer, &vertices)?;
                 webgpu_id_mask_two_map_frame(&mut renderer, &vertices)?;
                 renderer.last_stats()
@@ -2721,19 +2725,89 @@ mod wasm_host {
                 webgpu_asymmetric_id_mask_frame(&mut renderer)?;
                 renderer.begin_id_mask_snapshot_readback().map_err(render_err)?;
             }
-            for _ in 0..WEBGPU_TIMESTAMP_SETTLE_RAFS
+            let readback = wait_webgpu_id_mask_snapshot(&renderer).await?;
+            let stats = renderer.borrow().last_stats();
+            Ok(id_mask_snapshot_json(&readback, stats))
+        }
+
+        pub async fn read_webgpu_id_mask_field_matrix(&self) -> Result<String, JsValue>
+        {
+            let renderer = {
+                let mut state = self.state.borrow_mut();
+                state.direct_capture_active = true;
+                state.renderer.clone()
+            };
+            let mut json = String::from("{\"cases\":[");
+            for (case_index, (width, height)) in [
+                (256_usize, 256_usize),
+                (512, 512),
+                (1024, 1024),
+                (2048, 2048),
+                (257, 509),
+                (2048, 257),
+                (511, 1024),
+            ].into_iter().enumerate()
             {
-                wait_animation_frame_once().await?;
-                let readback = renderer.borrow_mut().collect_id_mask_snapshot_readback();
-                if let Some(readback) = readback
+                let seed_x = width * 3 / 7;
+                let seed_y = height * 5 / 11;
                 {
-                    let stats = renderer.borrow().last_stats();
-                    return readback
-                        .map(|readback| id_mask_snapshot_json(&readback, stats))
-                        .map_err(render_err);
+                    let mut renderer = renderer.borrow_mut();
+                    renderer.purge_id_mask_field_cache();
+                    webgpu_single_seed_id_mask_frame(
+                        &mut renderer,
+                        width,
+                        height,
+                        seed_x,
+                        seed_y,
+                        case_index as u64 + 1,
+                    )?;
+                    renderer.begin_id_mask_snapshot_readback().map_err(render_err)?;
                 }
+                let readback = wait_webgpu_id_mask_snapshot(&renderer).await?;
+                let pixel_count = width * height;
+                if readback.width != width
+                    || readback.height != height
+                    || readback.city.len() != pixel_count
+                    || readback.neighborhood.len() != pixel_count
+                    || readback.city_field.len() != pixel_count
+                    || readback.seam_field.len() != pixel_count
+                {
+                    return Err(JsValue::from_str("WebGPU ID-mask matrix readback shape mismatch"));
+                }
+                let seed_index = seed_y * width + seed_x;
+                let mut city_mismatches = 0_usize;
+                let mut neighborhood_mismatches = 0_usize;
+                let mut city_field_mismatches = 0_usize;
+                let mut seam_field_mismatches = 0_usize;
+                for index in 0..pixel_count
+                {
+                    let expected_city = if index == seed_index { 2 } else { 0 };
+                    let expected_neighborhood = if index == seed_index { 17 } else { 0 };
+                    city_mismatches += usize::from(readback.city[index] != expected_city);
+                    neighborhood_mismatches +=
+                        usize::from(readback.neighborhood[index] != expected_neighborhood);
+                    city_field_mismatches += usize::from(
+                        readback.city_field[index]
+                            != [seed_x as f32, seed_y as f32, 2.0, 17.0],
+                    );
+                    seam_field_mismatches += usize::from(
+                        readback.seam_field[index] != [-1.0, -1.0, 0.0, 0.0],
+                    );
+                }
+                if case_index != 0
+                {
+                    json.push(',');
+                }
+                let _ = write!(
+                    json,
+                    "{{\"width\":{width},\"height\":{height},\"seed_x\":{seed_x},\"seed_y\":{seed_y},\"packed_fields\":{},\"field_logical_bytes\":{},\"wide_field_logical_bytes\":{},\"city_mismatches\":{city_mismatches},\"neighborhood_mismatches\":{neighborhood_mismatches},\"city_field_mismatches\":{city_field_mismatches},\"seam_field_mismatches\":{seam_field_mismatches}}}",
+                    readback.packed_fields,
+                    readback.field_logical_bytes,
+                    readback.wide_field_logical_bytes,
+                );
             }
-            Err(JsValue::from_str("WebGPU asymmetric ID-mask readback did not settle"))
+            json.push_str("]}");
+            Ok(json)
         }
 
         pub fn set_scene(&self, scene_index: usize) {
@@ -5341,6 +5415,62 @@ mod wasm_host {
         renderer.submit(token).map_err(render_err)
     }
 
+    fn webgpu_single_seed_id_mask_frame(
+        renderer: &mut BrowserRenderer,
+        width: usize,
+        height: usize,
+        seed_x: usize,
+        seed_y: usize,
+        revision: u64,
+    ) -> Result<(), JsValue>
+    {
+        let x0 = seed_x as f32;
+        let y0 = seed_y as f32;
+        let x1 = x0 + 1.0;
+        let y1 = y0 + 1.0;
+        let vertex = |position| {
+            id_mask_compositor::IdMaskRasterVertex::new(position, 2, 17)
+        };
+        let vertices = [
+            vertex([x0, y0]),
+            vertex([x1, y0]),
+            vertex([x0, y1]),
+            vertex([x1, y0]),
+            vertex([x1, y1]),
+            vertex([x0, y1]),
+        ];
+        let chunks = [id_mask_compositor::IdMaskRasterChunk {
+            content_hash: ((width as u64) << 32) | height as u64,
+            first_vertex: 0,
+            vertex_count: vertices.len(),
+        }];
+        let mut pass = webgpu_id_mask_pass(&vertices, &chunks, revision);
+        pass.raster.viewport = gfx::RectF::new(0.0, 0.0, width as f32, height as f32);
+        pass.raster.mask_width = width;
+        pass.raster.mask_height = height;
+        pass.raster.mask_scale = 1.0;
+        renderer.resize(width as u32, height as u32, 1.0).map_err(render_err)?;
+        let token = renderer.begin_frame(&gfx::FrameTarget, None);
+        renderer.encode_id_mask_gpu_compositor(&pass).map_err(render_err)?;
+        renderer.submit(token).map_err(render_err)
+    }
+
+    async fn wait_webgpu_id_mask_snapshot(
+        renderer: &Rc<RefCell<BrowserRenderer>>,
+    ) -> Result<WebIdMaskSnapshotReadback, JsValue>
+    {
+        for _ in 0..WEBGPU_TIMESTAMP_SETTLE_RAFS
+        {
+            wait_animation_frame_once().await?;
+            let readback = renderer.borrow_mut().collect_id_mask_snapshot_readback();
+            if let Some(readback) = readback
+            {
+                return readback.map_err(render_err);
+            }
+        }
+        Err(JsValue::from_str("WebGPU ID-mask readback did not settle"))
+    }
+
     fn id_mask_snapshot_json(readback: &WebIdMaskSnapshotReadback, stats: WebRendererStats) -> String
     {
         let mut json = String::with_capacity(
@@ -5370,7 +5500,10 @@ mod wasm_host {
         write_field_json(&mut json, &readback.seam_field);
         let _ = write!(
             json,
-            "],\"encoded_id_mask_draws\":{},\"uniform_writes\":{},\"uniform_bytes\":{},\"uniform_slots\":{},\"cache_hits\":{},\"cache_misses\":{},\"raster_passes\":{},\"seed_passes\":{},\"jump_passes\":{},\"compositor_passes\":{}}}",
+            "],\"packed_fields\":{},\"field_logical_bytes\":{},\"wide_field_logical_bytes\":{},\"encoded_id_mask_draws\":{},\"uniform_writes\":{},\"uniform_bytes\":{},\"uniform_slots\":{},\"cache_hits\":{},\"cache_misses\":{},\"raster_passes\":{},\"seed_passes\":{},\"jump_passes\":{},\"compositor_passes\":{}}}",
+            readback.packed_fields,
+            readback.field_logical_bytes,
+            readback.wide_field_logical_bytes,
             stats.id_mask_draws,
             stats.id_mask_uniform_writes,
             stats.id_mask_uniform_bytes,

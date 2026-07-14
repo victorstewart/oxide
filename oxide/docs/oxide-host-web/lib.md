@@ -62,7 +62,7 @@ Call flow:
 - `oxide_host_web::OxideWebApp::bench_webgpu_draw_item_coalescing_ab(&self, samples: u32, frames_per_sample: u32) -> Result<String, JsValue>`: runs the same 1024-draw same-texture workload through current adjacent draw-item coalescing and a benchmark-only uncoalesced path while leaving draw-state caching enabled, preserving visible work while reporting encoded draw-item, coalesced-item, draw-call, state-bind, and p50/p95/p99/peak A/B metrics.
 - `oxide_host_web::OxideWebApp::bench_webgpu_draw_state_cache_ab(&self, samples: u32, frames_per_sample: u32) -> Result<String, JsValue>`: runs a 1024-draw same-texture WebGPU workload through the current draw-state cache and a benchmark-only legacy rebind mode, preserving draw count and visual output while comparing redundant pipeline/bind-group/scissor work.
 - `oxide_host_web::OxideWebApp::render_webgpu_id_mask_snapshot(&self) -> Result<String, JsValue>`: renders the deterministic WebGPU ID-mask compositor capture scene into the canvas for browser-backed golden verification.
-- `oxide_host_web::OxideWebApp::read_webgpu_asymmetric_id_mask_fields(&self) -> Result<String, JsValue>`: asynchronously returns exact sparse-fixture R8 raster IDs and final RGBA16F city/seam fields for CPU-reference comparison.
+- `oxide_host_web::OxideWebApp::read_webgpu_asymmetric_id_mask_fields(&self) -> Result<String, JsValue>`: asynchronously returns exact sparse-fixture R8 raster IDs, decoded semantic city/seam fields, selected packed-format status, and 16-versus-32-byte-per-pixel field accounting for CPU-reference comparison.
 - `oxide_host_web::OxideWebApp::set_scene(&self, scene_index: usize)`: switches the test-scene router scene.
 - `oxide_host_web::OxideWebApp::last_draw_count(&self) -> u32`: returns the last renderer draw count.
 - `oxide_host_web::OxideWebApp::renderer_backend(&self) -> String`: returns the active renderer backend name for smoke/perf logging.
@@ -156,6 +156,8 @@ console.log("oxide-webgpu-scene3d-ab", window.oxideWebGpuScene3dAB);
 
 ## Changelog
 
+- 2026-07-14: added the bounded `--id-mask-matrix-out` browser route for C35's seven-dimension exact raster/final-field proof.
+- 2026-07-14: made C33 cache budgets representation-aware and extended the exact ID-mask readback with C35 packed-format and field-byte proof.
 - 2026-07-14: added the C33 static/style/viewport/projection/content and one-entry-versus-LRU ID-mask cache adapter, direct WebGPU stage samples, compact hit-uniform counters, exact cached-field readback, and purge/reentry evidence.
 - 2026-07-14: added the C31 100-layer navigation-churn adapter with hard-budget, pool-reuse, frame-tail, memory-pressure, device-loss, and reentry evidence.
 - 2026-07-14: added the bounded C30 100-card local-layer CPU/GPU/residency adapter and fractional nested/effect capture target.

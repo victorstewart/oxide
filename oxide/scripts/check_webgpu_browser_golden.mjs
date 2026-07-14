@@ -56,6 +56,7 @@ function parseArgs(argv)
       markdownReport: "",
       rawReport: "",
       idMaskReferenceOut: "",
+      idMaskMatrixOut: "",
       validateRawReport: "",
       selfTestMeasurement: false,
       reportOnly: false,
@@ -140,6 +141,8 @@ function parseArgs(argv)
          args.rawReport = next();
       } else if (arg === "--id-mask-reference-out") {
          args.idMaskReferenceOut = next();
+      } else if (arg === "--id-mask-matrix-out") {
+         args.idMaskMatrixOut = next();
       } else if (arg === "--validate-raw-report") {
          args.validateRawReport = next();
       } else if (arg === "--self-test-measurement") {
@@ -5614,6 +5617,50 @@ async function main()
          mkdirSync(dirname(args.idMaskReferenceOut), { recursive: true });
          writeFileSync(args.idMaskReferenceOut, `${JSON.stringify(reference, null, 2)}\n`);
          console.log(`wrote ${args.idMaskReferenceOut}`);
+         return;
+      }
+      if (args.idMaskMatrixOut) {
+         let matrixUrl = new URL(browserUrl(args, url, true));
+         matrixUrl.searchParams.set("id_mask_matrix_only", "1");
+         let pageReport = await runChromeForReport(
+            { ...args, traceJson: "" },
+            matrixUrl.toString(),
+            nextReportPromise(),
+         );
+         if (typeof pageReport.id_mask_matrix !== "string" || pageReport.id_mask_matrix.length === 0) {
+            throw new Error("browser report omitted WebGPU ID-mask field matrix");
+         }
+         let matrix = JSON.parse(pageReport.id_mask_matrix);
+         let expectedDimensions = [
+            [256, 256],
+            [512, 512],
+            [1024, 1024],
+            [2048, 2048],
+            [257, 509],
+            [2048, 257],
+            [511, 1024],
+         ];
+         if (!Array.isArray(matrix.cases) || matrix.cases.length !== expectedDimensions.length) {
+            throw new Error("WebGPU ID-mask field matrix cardinality mismatch");
+         }
+         for (let index = 0; index < expectedDimensions.length; index += 1) {
+            let row = matrix.cases[index];
+            let [width, height] = expectedDimensions[index];
+            let mismatches = row.city_mismatches
+               + row.neighborhood_mismatches
+               + row.city_field_mismatches
+               + row.seam_field_mismatches;
+            if (row.width !== width
+               || row.height !== height
+               || row.packed_fields !== true
+               || row.field_logical_bytes * 2 !== row.wide_field_logical_bytes
+               || mismatches !== 0) {
+               throw new Error(`WebGPU ID-mask field matrix failed at ${width}x${height}`);
+            }
+         }
+         mkdirSync(dirname(args.idMaskMatrixOut), { recursive: true });
+         writeFileSync(args.idMaskMatrixOut, `${JSON.stringify(matrix, null, 2)}\n`);
+         console.log(`wrote ${args.idMaskMatrixOut}`);
          return;
       }
       if (args.reportOnly) {

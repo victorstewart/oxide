@@ -2376,3 +2376,55 @@ fn c33_id_mask_cache_probe_covers_key_cases_lru_and_valid_gpu_samples()
    assert!(script.contains("id_mask_cache_raf_frames"));
    assert!(script.contains("id_mask_cache_only"));
 }
+
+#[test]
+fn c35_id_mask_probe_reports_selected_field_representation_and_exact_bytes()
+{
+   let host = include_str!("../src/lib.rs");
+   let renderer = include_str!("../../../../crates/renderer-web/src/wasm/webgpu.rs");
+   let html = include_str!("../../www/index.html");
+   let script = include_str!("../../../../scripts/check_webgpu_browser_golden.mjs");
+
+   assert!(host.contains("let one_entry_budget = renderer"));
+   assert!(host.contains(".id_mask_target_bytes_per_pixel()"));
+   assert!(!host.contains("512 * 512 * 34"));
+   for field in [
+      "\\\"packed_fields\\\":{}",
+      "\\\"field_logical_bytes\\\":{}",
+      "\\\"wide_field_logical_bytes\\\":{}",
+   ]
+   {
+      assert!(host.contains(field), "missing C35 ID-mask proof field {field}");
+   }
+   assert!(renderer.contains("pub fn id_mask_target_bytes_per_pixel(&self) -> u64"));
+   assert!(renderer.contains("pub fn id_mask_packed_fields_supported(&self) -> bool"));
+   assert!(renderer.contains("2 * color_texture_bytes_per_pixel(ID_MASK_PACKED_FIELD_FORMAT)"));
+   assert!(renderer.contains("4 * color_texture_bytes_per_pixel(ID_MASK_WIDE_FIELD_FORMAT)"));
+   assert!(host.contains("pub async fn read_webgpu_id_mask_field_matrix"));
+   assert!(host.contains("webgpu_single_seed_id_mask_frame"));
+   for dimensions in [
+      "(256_usize, 256_usize)",
+      "(512, 512)",
+      "(1024, 1024)",
+      "(2048, 2048)",
+      "(257, 509)",
+      "(2048, 257)",
+      "(511, 1024)",
+   ]
+   {
+      assert!(host.contains(dimensions), "missing C35 matrix dimensions {dimensions}");
+   }
+   for mismatch in [
+      "city_mismatches",
+      "neighborhood_mismatches",
+      "city_field_mismatches",
+      "seam_field_mismatches",
+   ]
+   {
+      assert!(host.contains(mismatch), "missing C35 matrix counter {mismatch}");
+   }
+   assert!(html.contains("id_mask_matrix_only"));
+   assert!(html.contains("read_webgpu_id_mask_field_matrix"));
+   assert!(script.contains("--id-mask-matrix-out"));
+   assert!(script.contains("browser report omitted WebGPU ID-mask field matrix"));
+}

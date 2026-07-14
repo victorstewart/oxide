@@ -33,6 +33,7 @@ Call flow:
 - `wasm_webgpu_prepared_chunks_are_budgeted_and_resource_invalidated()`: freezes the persistent prepared cache, aggregate and hybrid bundle paths, logical-byte budget, resource/device/resize invalidation, static/dynamic prepared boundaries, and replay counters used by C25/C26 browser proof.
 - The same source contract now freezes C26's three-slice property ring, dynamic uniform resolution, separate property counters, direct dynamic prepared boundary, and transform-linked clip handling while retaining C25 static bundle ownership.
 - `wasm_webgpu_layers_are_generation_keyed_and_local_sized()`: freezes C30's complete retained-layer key, immutable-snapshot plan reuse, dependency invalidation, pixel-grid-snapped local targets, inherited nested viewport/scissor state, normalized UVs, local effect copies, and immediate body skip.
+- `wasm_webgpu_id_mask_fields_use_exact_packed_targets_with_wide_fallback()`: freezes C35's `Rgba16Uint` capability gate, two-texture packed ownership, exact invalid-coordinate bounds, binding/pipeline entry points, semantic readback decoder, 2× field-byte accounting, and four-`Rgba16Float` fallback.
 
 ## Logic narrative
 
@@ -54,7 +55,7 @@ The tests are single-threaded and allocate only small strings/vectors.
 
 These are correctness and contract tests, not benchmark timers. They protect the counters consumed by the browser WebGPU performance report.
 The packet-vocabulary freeze is measurement harness only. It changes no runtime path and does not claim a performance win.
-C30 browser proof complements these structural checks with exact parent/candidate pixels and direct residency/pass counters; source matching does not substitute for runtime evidence.
+C30 browser proof complements these structural checks with exact parent/candidate pixels and direct residency/pass counters; source matching does not substitute for runtime evidence. C35 likewise requires real Dawn shader creation, exact decoded field comparison, presented pixels, and paired direct GPU timestamps in addition to the source contract.
 
 ## Feature flags and cfgs
 
@@ -62,7 +63,7 @@ They run on native targets against the non-wasm `WebRenderer` stub.
 
 ## Testing and benchmarks
 
-Run with `cargo test --locked -p oxide-renderer-web --test lib_tests`. Compile wasm behavior with `cargo check --locked --target wasm32-unknown-unknown -p oxide-renderer-web`. The local-layer runtime companions are the C30 browser capture and `run_webgpu_local_layers_c30.mjs`; mode `2` exercises the C31 bounded navigation/purge path. The C33 companion is `check_webgpu_browser_golden.mjs --id-mask-cache-only`, which executes real WebGPU hits, misses, one-entry thrash, bounded LRU reuse, and purge/reentry paths.
+Run with `cargo test --locked -p oxide-renderer-web --test lib_tests`. Compile wasm behavior with `cargo check --locked --target wasm32-unknown-unknown -p oxide-renderer-web`. The local-layer runtime companions are the C30 browser capture and `run_webgpu_local_layers_c30.mjs`; mode `2` exercises the C31 bounded navigation/purge path. The C33 companion is `check_webgpu_browser_golden.mjs --id-mask-cache-only`, which executes real WebGPU hits, misses, one-entry thrash, bounded LRU reuse, and purge/reentry paths. C35 uses `check_webgpu_browser_golden.mjs --id-mask-matrix-out PATH` for the seven-dimension exact raster/final-field matrix, reuses the asymmetric multi-seed readback, and runs the 512-square forced-miss workload against parent and candidate packages.
 
 ## Examples
 
@@ -75,6 +76,8 @@ pub fn scale() -> f32
 
 ## Changelog
 
+- 2026-07-14: connected C35 source contracts to the real-Dawn seven-dimension exact field matrix.
+- 2026-07-14: froze C35 packed/wide field formats, capability selection, coordinate bounds, shader bindings, semantic decode, and exact 2× field-byte accounting.
 - 2026-07-14: froze the C33 complete ID-mask key, compositor-only pass/uniform path, four-entry byte budget, exact 34-byte-per-pixel logical accounting, and device/memory purge contracts.
 - 2026-07-14: froze C31 hard admission, protected LRU eviction, compatible pooling, absent aging, device/memory purge wiring, and telemetry fields.
 - 2026-07-14: added C30 contracts for generation/resource-complete retained layers, pixel-grid-snapped local textures, inherited nested viewports/scissors, normalized composites, and local effect-copy accounting.

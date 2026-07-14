@@ -26,6 +26,7 @@ Call flow:
 - `oxide_renderer_web::WebGpuRenderer::from_canvas_id(id: &str) -> Future<Result<Self, RenderError>>`: wasm-only WebGPU constructor.
 - `oxide_renderer_web::BrowserRenderer::canvas(&self) -> HtmlCanvasElement`: returns the backing canvas wrapper for host integration.
 - `oxide_renderer_web::BrowserRenderer::last_stats(&self) -> WebRendererStats`: exposes the most recent frame counters.
+- `oxide_renderer_web::BrowserRenderer::id_mask_target_bytes_per_pixel(&self) -> u64` and `id_mask_packed_fields_supported(&self) -> bool`: expose the validated C35 target representation to the browser benchmark and cache-budget adapter.
 - `oxide_renderer_web::WebGpuTimestampSample`: stores one completed frame's pass count and total/per-family WebGPU timestamp durations.
 - `oxide_renderer_web::WebGpuCpuSubmitTimingSample`: stores optional high-resolution upload, surface acquisition, encoder creation, command encoding, timestamp-readback, scratch-accounting, queue-submit, present, and timestamp-map CPU durations for one explicitly profiled WebGPU submit.
 - `oxide_renderer_web::BrowserRenderer::set_timestamp_readback_interval_for_benchmark(&mut self, frames: u64)`: selects bounded timestamp sampling cadence for explicit measurement; normal production cadence remains every eight frames.
@@ -87,7 +88,7 @@ Resident accounting reports declared WebGPU texture extents and buffer sizes as 
 
 Prepared buffers and index streams participate in ordinary vertex/index accounting; their buffer, lowered-plan, segment, and resource-handle bytes also contribute to prepared-cache residency. Render-bundle objects have no portable driver-allocation query, so only their declared logical inputs are counted. Prepared ownership remains single-threaded and lock-free on the browser main thread; cache hits are expected hash lookups, and LRU victim scans occur only while over budget.
 
-The `snapshot-tests` feature adds asynchronous COPY_SRC readback for exact R8 city/neighborhood masks and final RGBA16F city/seam fields. Readback buffers use 256-byte padded rows and are absent from normal renderer builds.
+The `snapshot-tests` feature adds asynchronous COPY_SRC readback for exact R8 city/neighborhood masks and final ID-mask fields. C35 decodes the selected packed `Rgba16Uint` coordinate field back into the established semantic city/seam arrays; the four-`Rgba16Float` fallback keeps its direct decoder. The browser proof checks every raster/final-field pixel at seven 256-through-2048 square and unusual-aspect dimensions. Readback buffers use 256-byte padded rows and are absent from normal renderer builds.
 
 ## Performance notes
 
@@ -123,6 +124,8 @@ pub async fn build_renderer() -> Result<oxide_renderer_web::BrowserRenderer, oxi
 ```
 
 ## Changelog
+- 2026-07-14: extended C35 snapshot proof to the real-Dawn seven-dimension exact raster/final-field matrix.
+- 2026-07-14: selected capability-validated two-texture `Rgba16Uint` ID-mask fields with exact semantic readback, representation-aware cache budgets, and a four-texture wide fallback.
 - 2026-07-14: exposed C33 ID-mask field-cache hit/miss, budget/residency/entry/eviction/purge telemetry and explicit cache budget/purge controls through `WebRendererStats` and `BrowserRenderer`.
 - 2026-07-14: exposed C31 layer-cache budget, resident/pool/CPU bytes, oldest last-use frame, pool reuse, eviction, recreation, purge count, and allocation-free purge-reason telemetry through `WebRendererStats` and `BrowserRenderer` controls.
 - 2026-07-13: exposed C26 property upload/update/ring counters and retained prepared geometry for affine/opacity instances.

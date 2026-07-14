@@ -1,4 +1,25 @@
 [[experiments]]
+id = "c35-webgpu-id-mask-packed-fields"
+introduced_commit = "C35 staged tree recorded in commit proof"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-web", "oxide-host-web", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max WebGPU through native-arm64 Chrome"]
+correctness_gate = "Packed RGBA16Uint capability and coordinate selection, 0xFFFF invalid handling, R8 semantic-ID recovery, deterministic strict-distance ties, exact four-RGBA16Float fallback, asymmetric multi-seed fields, every raster/final-field pixel at 256/512/1024/2048 plus unusual aspect ratios, and presented pixels must match CPU/unchanged-parent references."
+performance_gate = "Fifteen balanced fresh-process pairs and at least 2,000 direct WebGPU timestamps per side must improve forced-miss 512-square GPU time by at least 5% with generic confidence/win/tail gates, reduce supported-dimension field logical bytes exactly 2x, preserve zero steady texture creation and stage counts, and avoid a cached-compositor regression."
+decision_state = "accepted"
+decision = "Packed WebGPU city/seam jump-flood coordinates into two RGBA16Uint ping-pong textures and recovered semantic IDs from the original R8 masks, while retaining the four-RGBA16Float capability and coordinate-overflow fallback."
+proof = [
+   "The controlled native-arm64 Chrome population collected 2,100 direct GPU samples per side; parent/candidate p50/p95/p99/peak were 6.217904/6.503764/6.555864/6.663423 ms and 4.403891/4.647934/4.730555/4.868386 ms.",
+   "Paired median GPU speedup was 29.443% with 95% CI 29.219%..30.013% and 15/15 wins; JFA p50 fell 5.165921 -> 3.643572 ms and compositor p50 fell 0.889403 -> 0.586533 ms.",
+   "Two packed fields use 16 logical bytes/pixel versus 32 for four wide fields; four-entry target ownership fell 35,651,584 -> 18,874,368 bytes, pass counts stayed 1 raster + 1 seed + 9 JFA + 1 compositor, steady texture creation stayed zero, seven size/aspect field matrices and parent/candidate visual bytes matched exactly.",
+]
+cleanup = [
+   "Kept the wide field path and its pipelines prebuilt and selected it when RGBA16Uint usages are unavailable or a dimension would consume the reserved 0xFFFF coordinate.",
+   "Kept semantic IDs authoritative in the R8 masks and retained the snapshot-only full reference matrix; aggregate official baseline promotion remains deferred to C62.",
+]
+
+[[experiments]]
 id = "c34-metal-id-mask-packed-fields"
 introduced_commit = "C34 staged tree recorded in commit proof"
 introduced_date = "2026-07-14"
