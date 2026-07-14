@@ -106,6 +106,15 @@ fn host_exposes_opt_in_webgpu_architecture_primitive_matrix() {
     assert!(page.contains("captureTarget === \"image\""));
     assert!(include_str!("../../../../scripts/check_webgpu_browser_golden.mjs")
         .contains("--image-architecture-only"));
+    assert!(source.contains("pub async fn bench_webgpu_nine_slice_architecture"));
+    assert!(method.contains("nine_slice_1024"));
+    assert!(page.contains("params.get(\"nine_slice_architecture_only\") === \"1\""));
+    assert!(page.contains("bench_webgpu_nine_slice_architecture"));
+    assert!(source.contains("pub fn render_webgpu_nine_slice_snapshot"));
+    assert!(source.contains("fn nine_slice_capture_frame"));
+    assert!(page.contains("captureTarget === \"nine-slice\""));
+    assert!(include_str!("../../../../scripts/check_webgpu_browser_golden.mjs")
+        .contains("--nine-slice-architecture-only"));
 }
 
 #[test]
@@ -736,6 +745,9 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("image_draws={}"));
     assert!(source.contains("image_mesh_draws={}"));
     assert!(source.contains("nine_slice_draws={}"));
+    assert!(source.contains("nine_slice_instances={}"));
+    assert!(source.contains("nine_slice_triangles={}"));
+    assert!(source.contains("nine_slice_instance_bytes={}"));
     assert!(source.contains("glyph_quads={}"));
     assert!(source.contains("sdf_glyph_quads={}"));
     assert!(source.contains("clip_depth_peak={}"));
@@ -848,6 +860,9 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("{key_prefix}gpu_timestamp_readback_interval={}"));
     assert!(source.contains("{key_prefix}image_mesh_draws={}"));
     assert!(source.contains("{key_prefix}nine_slice_draws={}"));
+    assert!(source.contains("{key_prefix}nine_slice_instances={}"));
+    assert!(source.contains("{key_prefix}nine_slice_triangles={}"));
+    assert!(source.contains("{key_prefix}nine_slice_instance_bytes={}"));
     assert!(source.contains("{key_prefix}sdf_glyph_quads={}"));
     assert!(source.contains("{key_prefix}layer_draws={}"));
     assert!(source.contains("{key_prefix}layer_cache_hits={}"));
@@ -1147,6 +1162,9 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("image_tiles"));
     assert!(script.contains("image_mesh_draws: numberMetric(metrics, \"image_mesh_draws\")"));
     assert!(script.contains("nine_slice_draws: numberMetric(metrics, \"nine_slice_draws\")"));
+    assert!(script.contains("nine_slice_instances: numberMetric(metrics, \"nine_slice_instances\")"));
+    assert!(script.contains("nine_slice_triangles: numberMetric(metrics, \"nine_slice_triangles\")"));
+    assert!(script.contains("nine_slice_instance_bytes: numberMetric(metrics, \"nine_slice_instance_bytes\")"));
     assert!(script.contains("glyph_quads: numberMetric(metrics, \"glyph_quads\")"));
     assert!(script.contains("sdf_glyph_quads: numberMetric(metrics, \"sdf_glyph_quads\")"));
     assert!(script.contains("clip_depth_peak: numberMetric(metrics, \"clip_depth_peak\")"));

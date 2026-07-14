@@ -75,6 +75,9 @@ fn renderer_accounting_schema_defaults_to_explicit_unavailable_allocated_bytes()
    assert_eq!(stats.image_instances, 0);
    assert_eq!(stats.image_triangles, 0);
    assert_eq!(stats.image_instance_bytes, 0);
+   assert_eq!(stats.nine_slice_instances, 0);
+   assert_eq!(stats.nine_slice_triangles, 0);
+   assert_eq!(stats.nine_slice_instance_bytes, 0);
 
    let source = include_str!("../src/lib.rs");
    let webgpu = include_str!("../src/wasm/webgpu.rs");
@@ -611,6 +614,22 @@ fn wasm_webgpu_draw_encoding_reuses_scratch_storage() {
     assert!(source.contains("encoder.draw_indexed("));
     assert!(encode_image.contains("ImageInstance::new(dst, [u0, v0, u1, v1], alpha)"));
     assert!(encode_image.contains("self.push_image_instance(handle.0, image.kind, instance);"));
+
+    let encode_nine_slice = source
+        .split("fn encode_nine_slice")
+        .nth(1)
+        .expect("encode_nine_slice")
+        .split("fn encode_backdrop")
+        .next()
+        .expect("encode_nine_slice end");
+    assert!(source.contains("const NINE_SLICE_INSTANCE_BYTES: usize = 44;"));
+    assert!(source.contains("const NINE_SLICE_INDEX_COUNT: u32 = 54;"));
+    assert!(source.contains("nine_slice_unit_vertex_buffer: wgpu::Buffer"));
+    assert!(source.contains("nine_slice_unit_index_buffer: wgpu::Buffer"));
+    assert!(source.contains("\"vs_nine_slice_instance\","));
+    assert!(encode_nine_slice.contains("NineSliceInstance::new(rect, image_size, slice, alpha)"));
+    assert!(encode_nine_slice.contains("self.push_nine_slice_instance(handle.0, kind, instance);"));
+    assert!(!encode_nine_slice.contains("self.encode_image("));
 }
 
 #[test]
@@ -708,7 +727,7 @@ fn wasm_webgpu_backend_packet_vocabulary_is_frozen() {
 
     assert_eq!(
         draw_kind,
-        "enumDrawKind{Solid,RRect{first_instance:u32,instance_count:u32},Image{image:u32,kind:GpuImageKind,first_instance:u32,instance_count:u32},Rgba{image:u32},A8{image:u32},Sdf{image:u32},Layer{id:u32},Backdrop{rect:api::RectF,sigma:f32},}"
+        "enumDrawKind{Solid,RRect{first_instance:u32,instance_count:u32},Image{image:u32,kind:GpuImageKind,first_instance:u32,instance_count:u32},NineSlice{image:u32,kind:GpuImageKind,first_instance:u32,instance_count:u32},Rgba{image:u32},A8{image:u32},Sdf{image:u32},Layer{id:u32},Backdrop{rect:api::RectF,sigma:f32},}"
     );
     assert_eq!(
         gpu_draw,
@@ -718,6 +737,7 @@ fn wasm_webgpu_backend_packet_vocabulary_is_frozen() {
         "(DrawKind::Solid,DrawKind::Solid)=>true",
         "(DrawKind::RRect{..},DrawKind::RRect{..})=>false",
         "(DrawKind::Image{..},DrawKind::Image{..})=>false",
+        "(DrawKind::NineSlice{..},DrawKind::NineSlice{..})=>false",
         "(DrawKind::Rgba{image:a},DrawKind::Rgba{image:b})=>a==b",
         "(DrawKind::A8{image:a},DrawKind::A8{image:b})=>a==b",
         "(DrawKind::Sdf{image:a},DrawKind::Sdf{image:b})=>a==b",
@@ -912,6 +932,9 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
         "pub draw_scissor_sets: u32",
         "pub image_mesh_draws: u32",
         "pub nine_slice_draws: u32",
+        "pub nine_slice_instances: u32",
+        "pub nine_slice_triangles: u32",
+        "pub nine_slice_instance_bytes: u64",
         "pub sdf_glyph_quads: u32",
         "pub clip_depth_peak: u32",
         "pub cpu_scratch_bytes: u64",
@@ -1197,6 +1220,9 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(host.contains("{key_prefix}layer_passes={}"));
     assert!(host.contains("{key_prefix}image_mesh_draws={}"));
     assert!(host.contains("{key_prefix}nine_slice_draws={}"));
+    assert!(host.contains("{key_prefix}nine_slice_instances={}"));
+    assert!(host.contains("{key_prefix}nine_slice_triangles={}"));
+    assert!(host.contains("{key_prefix}nine_slice_instance_bytes={}"));
     assert!(host.contains("{key_prefix}sdf_glyph_quads={}"));
     assert!(host.contains("{key_prefix}scene3d_draws={}"));
     assert!(host.contains("{key_prefix}id_mask_draws={}"));

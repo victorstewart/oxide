@@ -87,6 +87,7 @@ function parseArgs(argv)
       architectureMatrix: false,
       rrectArchitectureOnly: false,
       imageArchitectureOnly: false,
+      nineSliceArchitectureOnly: false,
       idMaskCacheC33: false,
       idMaskCacheOnly: false,
       idMaskCacheRafOnly: false,
@@ -205,6 +206,8 @@ function parseArgs(argv)
          args.rrectArchitectureOnly = true;
       } else if (arg === "--image-architecture-only") {
          args.imageArchitectureOnly = true;
+      } else if (arg === "--nine-slice-architecture-only") {
+         args.nineSliceArchitectureOnly = true;
       } else if (arg === "--id-mask-cache-c33") {
          args.idMaskCacheC33 = true;
       } else if (arg === "--id-mask-cache-only") {
@@ -220,8 +223,8 @@ function parseArgs(argv)
       }
    }
 
-   if (args.target !== "app" && args.target !== "glyph" && args.target !== "id-mask" && args.target !== "scene3d" && args.target !== "prepared" && args.target !== "local-layers" && args.target !== "rrect" && args.target !== "image") {
-      throw new Error("--target must be app, glyph, id-mask, scene3d, prepared, local-layers, rrect, or image");
+   if (args.target !== "app" && args.target !== "glyph" && args.target !== "id-mask" && args.target !== "scene3d" && args.target !== "prepared" && args.target !== "local-layers" && args.target !== "rrect" && args.target !== "image" && args.target !== "nine-slice") {
+      throw new Error("--target must be app, glyph, id-mask, scene3d, prepared, local-layers, rrect, image, or nine-slice");
    }
    if (!args.golden) {
       args.golden = defaultGoldenForTarget(args.target);
@@ -570,6 +573,9 @@ function browserUrl(args, baseUrl, reportEndpoint, startupOnly = false, canvasDi
    }
    if (args.imageArchitectureOnly) {
       url.searchParams.set("image_architecture_only", "1");
+   }
+   if (args.nineSliceArchitectureOnly) {
+      url.searchParams.set("nine_slice_architecture_only", "1");
    }
    if (args.idMaskCacheC33) {
       url.searchParams.set("id_mask_cache_c33", "1");
@@ -982,7 +988,7 @@ function assertRendered(image, target)
       assertLocalLayersRendered(image);
    } else if (target === "rrect") {
       assertRRectRendered(image);
-   } else if (target === "image") {
+   } else if (target === "image" || target === "nine-slice") {
       assertImageRendered(image);
    } else {
       assertAppRendered(image);
@@ -1443,6 +1449,9 @@ function canvasIndexedQuadCase(metrics)
       image_draws: numberMetric(metrics, "image_draws"),
       image_mesh_draws: numberMetric(metrics, "image_mesh_draws"),
       nine_slice_draws: numberMetric(metrics, "nine_slice_draws"),
+      nine_slice_instances: numberMetric(metrics, "nine_slice_instances"),
+      nine_slice_triangles: numberMetric(metrics, "nine_slice_triangles"),
+      nine_slice_instance_bytes: numberMetric(metrics, "nine_slice_instance_bytes"),
       glyph_quads: numberMetric(metrics, "glyph_quads"),
       sdf_glyph_quads: numberMetric(metrics, "sdf_glyph_quads"),
       clip_depth_peak: numberMetric(metrics, "clip_depth_peak"),
@@ -1649,6 +1658,9 @@ function cpuSubmitCase(metrics)
       image_draws: numberMetric(metrics, "image_draws"),
       image_mesh_draws: numberMetric(metrics, "image_mesh_draws"),
       nine_slice_draws: numberMetric(metrics, "nine_slice_draws"),
+      nine_slice_instances: numberMetric(metrics, "nine_slice_instances"),
+      nine_slice_triangles: numberMetric(metrics, "nine_slice_triangles"),
+      nine_slice_instance_bytes: numberMetric(metrics, "nine_slice_instance_bytes"),
       glyph_quads: numberMetric(metrics, "glyph_quads"),
       sdf_glyph_quads: numberMetric(metrics, "sdf_glyph_quads"),
       clip_depth_peak: numberMetric(metrics, "clip_depth_peak"),
@@ -2073,6 +2085,9 @@ function idMaskCase(metrics, id, variant, prefix)
       image_draws: numberMetric(metrics, `${prefix}_image_draws`),
       image_mesh_draws: numberMetric(metrics, `${prefix}_image_mesh_draws`),
       nine_slice_draws: numberMetric(metrics, `${prefix}_nine_slice_draws`),
+      nine_slice_instances: numberMetric(metrics, `${prefix}_nine_slice_instances`),
+      nine_slice_triangles: numberMetric(metrics, `${prefix}_nine_slice_triangles`),
+      nine_slice_instance_bytes: numberMetric(metrics, `${prefix}_nine_slice_instance_bytes`),
       glyph_quads: numberMetric(metrics, `${prefix}_glyph_quads`),
       sdf_glyph_quads: numberMetric(metrics, `${prefix}_sdf_glyph_quads`),
       clip_depth_peak: numberMetric(metrics, `${prefix}_clip_depth_peak`),
@@ -2158,6 +2173,9 @@ function prefixedBackendCase(metrics, id, variant, prefix, extra)
       image_draws: numberMetric(metrics, `${prefix}_image_draws`),
       image_mesh_draws: numberMetric(metrics, `${prefix}_image_mesh_draws`),
       nine_slice_draws: numberMetric(metrics, `${prefix}_nine_slice_draws`),
+      nine_slice_instances: numberMetric(metrics, `${prefix}_nine_slice_instances`),
+      nine_slice_triangles: numberMetric(metrics, `${prefix}_nine_slice_triangles`),
+      nine_slice_instance_bytes: numberMetric(metrics, `${prefix}_nine_slice_instance_bytes`),
       glyph_quads: numberMetric(metrics, `${prefix}_glyph_quads`),
       sdf_glyph_quads: numberMetric(metrics, `${prefix}_sdf_glyph_quads`),
       clip_depth_peak: numberMetric(metrics, `${prefix}_clip_depth_peak`),

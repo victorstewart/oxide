@@ -57,6 +57,7 @@
          const architectureMatrix = params.get("architecture_matrix") === "1";
          const rrectArchitectureOnly = params.get("rrect_architecture_only") === "1";
          const imageArchitectureOnly = params.get("image_architecture_only") === "1";
+         const nineSliceArchitectureOnly = params.get("nine_slice_architecture_only") === "1";
          const idMaskCacheC33 = params.get("id_mask_cache_c33") === "1";
          const idMaskCacheOnly = params.get("id_mask_cache_only") === "1";
          const idMaskCacheRafOnly = params.get("id_mask_cache_raf_only") === "1";
@@ -490,6 +491,15 @@
                   await nextAnimationFrame();
                }
             }
+         } else if (captureTarget === "nine-slice") {
+            window.oxideApp = await newMeasuredOxideApp();
+            window.oxideWebGpuAppSnapshot = measureFirstFrame(() => window.oxideApp.render_webgpu_nine_slice_snapshot(captureWidth, captureHeight, window.devicePixelRatio));
+            console.log("oxide-webgpu-nine-slice-snapshot", window.oxideWebGpuAppSnapshot);
+            if (captureOnly) {
+               for (let frame = 0; frame < 3; frame += 1) {
+                  await nextAnimationFrame();
+               }
+            }
          } else if (captureTarget === "prepared") {
             window.oxideApp = await newMeasuredOxideApp();
             window.oxideWebGpuPreparedSnapshot = measureFirstFrame(() => window.oxideApp.render_webgpu_prepared_snapshot(preparedFlat));
@@ -571,6 +581,10 @@
             window.oxideApp.prewarm_webgpu_bench_resources();
             window.oxideWebGpuArchitecturePrimitives = await runBench("image_architecture", () => window.oxideApp.bench_webgpu_image_architecture(mixedSamples, mixedFrames, window.devicePixelRatio));
             console.log("oxide-webgpu-image-architecture", window.oxideWebGpuArchitecturePrimitives);
+         } else if (nineSliceArchitectureOnly) {
+            window.oxideApp.prewarm_webgpu_bench_resources();
+            window.oxideWebGpuArchitecturePrimitives = await runBench("nine_slice_architecture", () => window.oxideApp.bench_webgpu_nine_slice_architecture(mixedSamples, mixedFrames, window.devicePixelRatio));
+            console.log("oxide-webgpu-nine-slice-architecture", window.oxideWebGpuArchitecturePrimitives);
          } else if (!captureOnly && !startupOnly && !idMaskReferenceOnly && !idMaskMatrixOnly) {
             window.oxideApp.prewarm_webgpu_bench_resources();
             if (architectureMatrix) {

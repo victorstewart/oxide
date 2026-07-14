@@ -663,6 +663,32 @@ mod wasm_host {
             ))
         }
 
+        pub fn render_webgpu_nine_slice_snapshot(
+            &self,
+            width: u32,
+            height: u32,
+            dpr: f32,
+        ) -> Result<String, JsValue> {
+            self.state.borrow_mut().direct_capture_active = true;
+            let renderer = self.ensure_upload_bench_resources()?;
+            self.with_upload_bench_resources(|renderer, resources| {
+                resources.nine_slice_capture_frame(renderer, width, height, dpr)
+            })?;
+            let stats = renderer.borrow().last_stats();
+            Ok(format!(
+                "nine_slice_instances={};nine_slice_triangles={};nine_slice_instance_bytes={};draws={};binds={};frame_id={};width={};height={};dpr={:.1}",
+                stats.nine_slice_instances,
+                stats.nine_slice_triangles,
+                stats.nine_slice_instance_bytes,
+                stats.draws,
+                stats.draw_bind_group_binds,
+                stats.frame_id,
+                stats.width,
+                stats.height,
+                dpr,
+            ))
+        }
+
         pub fn render_webgpu_prepared_snapshot(
             &self,
             flat_control: bool,
@@ -1713,6 +1739,20 @@ mod wasm_host {
             ).await
         }
 
+        pub async fn bench_webgpu_nine_slice_architecture(
+            &self,
+            samples: u32,
+            frames_per_sample: u32,
+            dpr: f32,
+        ) -> Result<String, JsValue> {
+            self.bench_webgpu_architecture_matrix(
+                samples,
+                frames_per_sample,
+                dpr,
+                WebGpuArchitectureMatrixKind::NineSlice,
+            ).await
+        }
+
         async fn bench_webgpu_architecture_matrix(
             &self,
             samples: u32,
@@ -1735,6 +1775,12 @@ mod wasm_host {
                     ("image_1000", "image", 1_000),
                     ("image_mixed_100", "image_mixed", 100),
                     ("image_mixed_1000", "image_mixed", 1_000),
+                ],
+                WebGpuArchitectureMatrixKind::NineSlice => &[
+                    ("nine_slice_1", "nine_slice", 1),
+                    ("nine_slice_64", "nine_slice", 64),
+                    ("nine_slice_512", "nine_slice", 512),
+                    ("nine_slice_1024", "nine_slice", 1_024),
                 ],
                 WebGpuArchitectureMatrixKind::Full => &[
                     ("rrect_1", "rrect", 1),
@@ -3285,6 +3331,7 @@ mod wasm_host {
         Full,
         RRect,
         Image,
+        NineSlice,
     }
 
     struct WebGpuGeometryBenchResources {
@@ -4065,6 +4112,29 @@ mod wasm_host {
                     }
                     self.builder.clip_pop();
                 }
+                else if kind == "nine_slice"
+                {
+                    self.builder.clip_push(gfx::RectI::new(1, 1, 254, 254));
+                    for index in 0..count
+                    {
+                        let x = (index % 32) as f32 * 8.0 + 0.25;
+                        let y = (index / 32) as f32 * 8.0 + 0.5;
+                        let (width, height, slice) = match index % 4
+                        {
+                            0 => (7.5, 7.25, gfx::Insets::new(2.0, 2.0, 2.0, 2.0)),
+                            1 => (3.25, 5.5, gfx::Insets::new(4.0, 3.0, 5.0, 4.0)),
+                            2 => (9.25, 4.75, gfx::Insets::new(0.5, 6.25, 3.75, 7.5)),
+                            _ => (6.5, 8.25, gfx::Insets::new(300.0, -2.0, 300.0, 260.0)),
+                        };
+                        self.builder.nine_slice(
+                            self.image,
+                            gfx::RectF::new(x, y, width, height),
+                            slice,
+                            0.55 + (index % 4) as f32 * 0.15,
+                        );
+                    }
+                    self.builder.clip_pop();
+                }
                 else
                 {
                     for index in 0..count {
@@ -4195,6 +4265,52 @@ mod wasm_host {
                         if index & 2 == 0 { 28.75 } else { 24.5 },
                     ),
                     src,
+                    0.55 + (index % 4) as f32 * 0.15,
+                );
+            }
+            self.builder.clip_pop();
+            renderer.encode_pass(self.builder.drawlist());
+            renderer.submit(token).map_err(render_err)
+        }
+
+        fn nine_slice_capture_frame(
+            &mut self,
+            renderer: &mut BrowserRenderer,
+            width: u32,
+            height: u32,
+            dpr: f32,
+        ) -> Result<(), JsValue> {
+            let dpr = dpr.clamp(1.0, 3.0);
+            let physical_width = (width.max(256) as f32 * dpr).round() as u32;
+            let physical_height = (height.max(256) as f32 * dpr).round() as u32;
+            renderer.resize(physical_width, physical_height, dpr).map_err(render_err)?;
+            let token = renderer.begin_frame(&gfx::FrameTarget, None);
+            self.builder.clear();
+            self.builder.clip_push(gfx::RectI::new(4, 4, 248, 248));
+            for index in 0..64
+            {
+                let column = index % 8;
+                let row = index / 8;
+                let (width, height, slice) = match index % 8
+                {
+                    0 => (29.5, 28.75, gfx::Insets::new(4.0, 5.0, 6.0, 7.0)),
+                    1 => (5.25, 9.5, gfx::Insets::new(8.0, 7.0, 9.0, 6.0)),
+                    2 => (17.75, 4.25, gfx::Insets::new(0.5, 6.25, 3.75, 7.5)),
+                    3 => (3.25, 3.75, gfx::Insets::new(300.0, 300.0, 300.0, 300.0)),
+                    4 => (23.5, 19.25, gfx::Insets::new(-4.0, -2.0, 12.0, 14.0)),
+                    5 => (7.5, 21.75, gfx::Insets::new(128.0, 1.0, 128.0, 1.0)),
+                    6 => (31.25, 6.5, gfx::Insets::new(1.0, 128.0, 1.0, 128.0)),
+                    _ => (11.5, 15.25, gfx::Insets::new(64.5, 32.25, 191.5, 223.75)),
+                };
+                self.builder.nine_slice(
+                    if row & 1 == 0 { self.image } else { self.image_alt },
+                    gfx::RectF::new(
+                        column as f32 * 32.0 + 2.25,
+                        row as f32 * 32.0 + 2.5,
+                        width,
+                        height,
+                    ),
+                    slice,
                     0.55 + (index % 4) as f32 * 0.15,
                 );
             }
@@ -7005,7 +7121,7 @@ mod wasm_host {
         let key_prefix = if prefix.is_empty() { String::new() } else { format!("{prefix}_") };
         let _ = write!(
             out,
-            ";{key_prefix}draws={};{key_prefix}draw_items={};{key_prefix}draw_items_coalesced={};{key_prefix}draw_pipeline_binds={};{key_prefix}draw_bind_group_binds={};{key_prefix}draw_scissor_sets={};{key_prefix}solid_tris={};{key_prefix}rrect_instances={};{key_prefix}rrect_triangles={};{key_prefix}rrect_instance_bytes={};{key_prefix}image_instances={};{key_prefix}image_triangles={};{key_prefix}image_instance_bytes={};{key_prefix}image_draws={};{key_prefix}image_mesh_draws={};{key_prefix}nine_slice_draws={};{key_prefix}glyph_quads={};{key_prefix}sdf_glyph_quads={};{key_prefix}clip_depth_peak={};{key_prefix}damage_rects={};{key_prefix}layer_draws={};{key_prefix}layer_cache_hits={};{key_prefix}layer_cache_misses={};{key_prefix}layer_cache_skipped_draws={};{key_prefix}layer_passes={};{key_prefix}scene3d_draws={};{key_prefix}id_mask_draws={};{key_prefix}backdrop_draws={};{key_prefix}visual_effect_draws={};{key_prefix}effect_uniform_writes={};{key_prefix}effect_uniform_bytes={};{key_prefix}effect_uniform_slots={};{key_prefix}id_mask_uniform_writes={};{key_prefix}id_mask_uniform_bytes={};{key_prefix}id_mask_uniform_slots={};{key_prefix}spinner_draws={};{key_prefix}camera_bg_draws={};{key_prefix}render_passes={};{key_prefix}clear_passes={};{key_prefix}draw_passes={};{key_prefix}scene3d_passes={};{key_prefix}scene3d_overlay_passes={};{key_prefix}id_mask_raster_passes={};{key_prefix}id_mask_field_seed_passes={};{key_prefix}id_mask_field_jump_passes={};{key_prefix}id_mask_compositor_passes={};{key_prefix}present_passes={};{key_prefix}texture_copies={};{key_prefix}command_buffers={};{key_prefix}gpu_timestamp_query_supported={};{key_prefix}gpu_timestamp_frame_id={};{key_prefix}gpu_timestamp_passes={};{key_prefix}gpu_timestamp_total_ns={};{key_prefix}gpu_timestamp_clear_ns={};{key_prefix}gpu_timestamp_draw_ns={};{key_prefix}gpu_timestamp_scene3d_ns={};{key_prefix}gpu_timestamp_scene3d_overlay_ns={};{key_prefix}gpu_timestamp_id_mask_raster_ns={};{key_prefix}gpu_timestamp_id_mask_field_seed_ns={};{key_prefix}gpu_timestamp_id_mask_field_jump_ns={};{key_prefix}gpu_timestamp_id_mask_compositor_ns={};{key_prefix}gpu_timestamp_present_ns={};{key_prefix}gpu_timestamp_max_pass_ns={};{key_prefix}gpu_timestamp_readback_skips={};{key_prefix}gpu_timestamp_readback_interval={};{key_prefix}buffer_upload_bytes={};{key_prefix}texture_upload_bytes={};{key_prefix}buffer_grows={};{key_prefix}texture_creates={};{key_prefix}bind_group_creates={};{key_prefix}pipeline_creates={};{key_prefix}sampler_creates={};{key_prefix}mesh3d_creates={};{key_prefix}draw_buffer_grows={};{key_prefix}image_texture_creates={};{key_prefix}image_bind_group_creates={};{key_prefix}target_texture_creates={};{key_prefix}target_bind_group_creates={};{key_prefix}layer_texture_creates={};{key_prefix}layer_bind_group_creates={};{key_prefix}scene3d_buffer_grows={};{key_prefix}scene3d_bind_group_creates={};{key_prefix}effect_buffer_grows={};{key_prefix}effect_bind_group_creates={};{key_prefix}id_mask_texture_creates={};{key_prefix}id_mask_buffer_grows={};{key_prefix}id_mask_bind_group_creates={};{key_prefix}image_upload_temp_allocs={};{key_prefix}image_upload_temp_bytes={};{key_prefix}image_upload_scratch_bytes={};{key_prefix}image_upload_scratch_grows={};{key_prefix}cpu_scratch_bytes={};{key_prefix}cpu_scratch_grows={};{key_prefix}cpu_scratch_growth_bytes={};{key_prefix}cpu_draw_scratch_bytes={};{key_prefix}cpu_draw_scratch_grows={};{key_prefix}cpu_draw_scratch_growth_bytes={};{key_prefix}cpu_scene3d_scratch_bytes={};{key_prefix}cpu_scene3d_scratch_grows={};{key_prefix}cpu_scene3d_scratch_growth_bytes={};{key_prefix}cpu_effect_scratch_bytes={};{key_prefix}cpu_effect_scratch_grows={};{key_prefix}cpu_effect_scratch_growth_bytes={};{key_prefix}cpu_id_mask_scratch_bytes={};{key_prefix}cpu_id_mask_scratch_grows={};{key_prefix}cpu_id_mask_scratch_growth_bytes={};{key_prefix}cpu_image_upload_scratch_bytes={};{key_prefix}cpu_image_upload_scratch_grows={};{key_prefix}cpu_image_upload_scratch_growth_bytes={};{key_prefix}cpu_resource_table_scratch_bytes={};{key_prefix}cpu_resource_table_scratch_grows={};{key_prefix}cpu_resource_table_scratch_growth_bytes={}",
+            ";{key_prefix}draws={};{key_prefix}draw_items={};{key_prefix}draw_items_coalesced={};{key_prefix}draw_pipeline_binds={};{key_prefix}draw_bind_group_binds={};{key_prefix}draw_scissor_sets={};{key_prefix}solid_tris={};{key_prefix}rrect_instances={};{key_prefix}rrect_triangles={};{key_prefix}rrect_instance_bytes={};{key_prefix}image_instances={};{key_prefix}image_triangles={};{key_prefix}image_instance_bytes={};{key_prefix}image_draws={};{key_prefix}image_mesh_draws={};{key_prefix}nine_slice_draws={};{key_prefix}nine_slice_instances={};{key_prefix}nine_slice_triangles={};{key_prefix}nine_slice_instance_bytes={};{key_prefix}glyph_quads={};{key_prefix}sdf_glyph_quads={};{key_prefix}clip_depth_peak={};{key_prefix}damage_rects={};{key_prefix}layer_draws={};{key_prefix}layer_cache_hits={};{key_prefix}layer_cache_misses={};{key_prefix}layer_cache_skipped_draws={};{key_prefix}layer_passes={};{key_prefix}scene3d_draws={};{key_prefix}id_mask_draws={};{key_prefix}backdrop_draws={};{key_prefix}visual_effect_draws={};{key_prefix}effect_uniform_writes={};{key_prefix}effect_uniform_bytes={};{key_prefix}effect_uniform_slots={};{key_prefix}id_mask_uniform_writes={};{key_prefix}id_mask_uniform_bytes={};{key_prefix}id_mask_uniform_slots={};{key_prefix}spinner_draws={};{key_prefix}camera_bg_draws={};{key_prefix}render_passes={};{key_prefix}clear_passes={};{key_prefix}draw_passes={};{key_prefix}scene3d_passes={};{key_prefix}scene3d_overlay_passes={};{key_prefix}id_mask_raster_passes={};{key_prefix}id_mask_field_seed_passes={};{key_prefix}id_mask_field_jump_passes={};{key_prefix}id_mask_compositor_passes={};{key_prefix}present_passes={};{key_prefix}texture_copies={};{key_prefix}command_buffers={};{key_prefix}gpu_timestamp_query_supported={};{key_prefix}gpu_timestamp_frame_id={};{key_prefix}gpu_timestamp_passes={};{key_prefix}gpu_timestamp_total_ns={};{key_prefix}gpu_timestamp_clear_ns={};{key_prefix}gpu_timestamp_draw_ns={};{key_prefix}gpu_timestamp_scene3d_ns={};{key_prefix}gpu_timestamp_scene3d_overlay_ns={};{key_prefix}gpu_timestamp_id_mask_raster_ns={};{key_prefix}gpu_timestamp_id_mask_field_seed_ns={};{key_prefix}gpu_timestamp_id_mask_field_jump_ns={};{key_prefix}gpu_timestamp_id_mask_compositor_ns={};{key_prefix}gpu_timestamp_present_ns={};{key_prefix}gpu_timestamp_max_pass_ns={};{key_prefix}gpu_timestamp_readback_skips={};{key_prefix}gpu_timestamp_readback_interval={};{key_prefix}buffer_upload_bytes={};{key_prefix}texture_upload_bytes={};{key_prefix}buffer_grows={};{key_prefix}texture_creates={};{key_prefix}bind_group_creates={};{key_prefix}pipeline_creates={};{key_prefix}sampler_creates={};{key_prefix}mesh3d_creates={};{key_prefix}draw_buffer_grows={};{key_prefix}image_texture_creates={};{key_prefix}image_bind_group_creates={};{key_prefix}target_texture_creates={};{key_prefix}target_bind_group_creates={};{key_prefix}layer_texture_creates={};{key_prefix}layer_bind_group_creates={};{key_prefix}scene3d_buffer_grows={};{key_prefix}scene3d_bind_group_creates={};{key_prefix}effect_buffer_grows={};{key_prefix}effect_bind_group_creates={};{key_prefix}id_mask_texture_creates={};{key_prefix}id_mask_buffer_grows={};{key_prefix}id_mask_bind_group_creates={};{key_prefix}image_upload_temp_allocs={};{key_prefix}image_upload_temp_bytes={};{key_prefix}image_upload_scratch_bytes={};{key_prefix}image_upload_scratch_grows={};{key_prefix}cpu_scratch_bytes={};{key_prefix}cpu_scratch_grows={};{key_prefix}cpu_scratch_growth_bytes={};{key_prefix}cpu_draw_scratch_bytes={};{key_prefix}cpu_draw_scratch_grows={};{key_prefix}cpu_draw_scratch_growth_bytes={};{key_prefix}cpu_scene3d_scratch_bytes={};{key_prefix}cpu_scene3d_scratch_grows={};{key_prefix}cpu_scene3d_scratch_growth_bytes={};{key_prefix}cpu_effect_scratch_bytes={};{key_prefix}cpu_effect_scratch_grows={};{key_prefix}cpu_effect_scratch_growth_bytes={};{key_prefix}cpu_id_mask_scratch_bytes={};{key_prefix}cpu_id_mask_scratch_grows={};{key_prefix}cpu_id_mask_scratch_growth_bytes={};{key_prefix}cpu_image_upload_scratch_bytes={};{key_prefix}cpu_image_upload_scratch_grows={};{key_prefix}cpu_image_upload_scratch_growth_bytes={};{key_prefix}cpu_resource_table_scratch_bytes={};{key_prefix}cpu_resource_table_scratch_grows={};{key_prefix}cpu_resource_table_scratch_growth_bytes={}",
             stats.draws,
             stats.draw_items,
             stats.draw_items_coalesced,
@@ -7022,6 +7138,9 @@ mod wasm_host {
             stats.image_draws,
             stats.image_mesh_draws,
             stats.nine_slice_draws,
+            stats.nine_slice_instances,
+            stats.nine_slice_triangles,
+            stats.nine_slice_instance_bytes,
             stats.glyph_quads,
             stats.sdf_glyph_quads,
             stats.clip_depth_peak,
