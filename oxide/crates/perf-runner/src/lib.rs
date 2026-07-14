@@ -254,6 +254,10 @@ const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
         name: "Retained Snapshot Spatial Query",
     },
     AuthoringPerfSpec {
+        id: "cpu.authoring.surface.retained_damage_dirty_leaf_10000",
+        name: "Retained Surface Exact Damage",
+    },
+    AuthoringPerfSpec {
         id: "cpu.authoring.drawlist_text_replay.multi_atlas",
         name: "DrawList Text Replay Multi Atlas",
     },
@@ -3350,6 +3354,9 @@ fn push_authoring_cases(
             }
             "cpu.authoring.retained_snapshot.spatial_query_10000" => {
                 architecture_matrix::retained_spatial_query_case(spec.id, smoke)
+            }
+            "cpu.authoring.surface.retained_damage_dirty_leaf_10000" => {
+                architecture_matrix::retained_surface_dirty_case(spec.id, "authoring", smoke)
             }
             "cpu.authoring.drawlist_text_replay.multi_atlas" => {
                 authoring_drawlist_text_replay_multi_atlas_case(smoke)

@@ -4,7 +4,8 @@ use oxide_timing as timing;
 use oxide_ui_core::{
     elements::TextCtx, Axis, ChromeMetrics, Dim, DirtyClass, DrawListBuilder, Edges, LayoutRect,
     NodeId, NodeStyle, OverlayBehavior, OverlayVisual, PopupSpec, RetainedCachePolicy,
-    RetainedDrawStatus, RetainedInvalidationReason, ScatterSpec, Size2D, SurfaceRouter, UiSurface,
+    RetainedDrawStatus, RetainedInvalidationReason, ScatterSpec, Size2D, SurfaceFrameDemand,
+    SurfaceRouter, UiSurface,
 };
 
 #[test]
@@ -1519,4 +1520,401 @@ fn mixed_surface_snapshot_invalidates_only_dependent_chunks()
    assert!(!surface_identity.ptr_eq(&dirty.snapshot.instance(0).unwrap().chunk));
    assert!(image_identity.ptr_eq(&dirty.snapshot.instance(1).unwrap().chunk));
    assert!(glyph_identity.ptr_eq(&dirty.snapshot.instance(2).unwrap().chunk));
+}
+
+fn c28_render(surface: &mut UiSurface, content: &[gfx::RenderChunkSequence]) -> oxide_ui_core::SurfaceRenderSnapshot
+{
+   surface.render_snapshot_retained(
+      gfx::RenderChunkId(280),
+      content,
+      Vec::new(),
+      gfx::Damage { rects: Vec::new() },
+   ).unwrap()
+}
+
+fn c28_rect_chunk(id: u64, revision: u64, rect: gfx::RectF, color: gfx::Color) -> gfx::RenderChunk
+{
+   gfx::RenderChunk::new(
+      gfx::RenderChunkId(id),
+      gfx::RenderChunkRevisions { geometry: revision, ..gfx::RenderChunkRevisions::default() },
+      gfx::DrawList {
+         items: vec![gfx::DrawCmd::RRect { rect, radii: [0.0; 4], color }],
+         vertices: Vec::new(),
+         indices: Vec::new(),
+      },
+      gfx::ChunkIndexMode::Local,
+      &[],
+   ).unwrap()
+}
+
+#[test]
+fn retained_damage_skips_static_idle_and_tracks_caret_property_damage()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      axis: Axis::Column,
+      size: Size2D { w: Dim::Px(100.0), h: Dim::Px(60.0) },
+      padding: Edges { left: 10.0, top: 10.0, right: 0.0, bottom: 0.0 },
+      background: gfx::Color::rgba(0.1, 0.2, 0.3, 1.0),
+      ..NodeStyle::default()
+   });
+   let root = surface.root();
+   let caret = surface.add_node(root, NodeStyle {
+      size: Size2D { w: Dim::Px(2.0), h: Dim::Px(16.0) },
+      background: gfx::Color::rgba(0.9, 0.9, 0.9, 1.0),
+      ..NodeStyle::default()
+   }).unwrap();
+   surface.layout(100.0, 60.0);
+
+   assert!(surface.needs_frame());
+   let cold = c28_render(&mut surface, &[]);
+   assert_eq!(cold.snapshot.damage().rects, [gfx::RectI::new(0, 0, 100, 60)]);
+   assert!(surface.needs_frame());
+
+   let mut damage = Vec::with_capacity(8);
+   let capacity = damage.capacity();
+   surface.take_damage_into(&mut damage);
+   assert_eq!(damage, [gfx::RectI::new(0, 0, 100, 60)]);
+   assert!(!surface.needs_frame());
+   surface.take_damage_into(&mut damage);
+   assert!(damage.is_empty());
+   assert_eq!(damage.capacity(), capacity);
+
+   let idle = c28_render(&mut surface, &[]);
+   assert!(idle.snapshot.damage().rects.is_empty());
+   assert_eq!(surface.damage_stats().changed_paint_units, 0);
+
+   surface.set_frame_demand(SurfaceFrameDemand {
+      camera: true,
+      timer_due: true,
+      upload: true,
+      async_publication: true,
+   });
+   assert!(surface.needs_frame());
+   surface.set_frame_demand(SurfaceFrameDemand::default());
+   assert!(!surface.needs_frame());
+
+   assert!(surface.edit_style(caret, |style| style.opacity = 0.0));
+   assert!(surface.needs_frame());
+   let blink = c28_render(&mut surface, &[]);
+   assert_eq!(blink.snapshot.damage().rects, [gfx::RectI::new(9, 9, 4, 18)]);
+   assert_eq!(surface.damage_stats().changed_paint_units, 1);
+   assert_eq!(surface.damage_stats().property_only_changes, 1);
+   assert_eq!(surface.damage_stats().damage_pixels, 72);
+   surface.take_damage_into(&mut damage);
+   assert_eq!(damage, blink.snapshot.damage().rects);
+   assert_eq!(damage.capacity(), capacity);
+}
+
+#[test]
+fn retained_damage_unions_move_remove_resize_and_one_dirty_leaf_bounds()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      axis: Axis::Row,
+      size: Size2D { w: Dim::Px(120.0), h: Dim::Px(60.0) },
+      gap: 10.0,
+      ..NodeStyle::default()
+   });
+   let root = surface.root();
+   let moving = surface.add_node(root, NodeStyle {
+      size: Size2D { w: Dim::Px(20.0), h: Dim::Px(20.0) },
+      background: gfx::Color::rgba(0.8, 0.2, 0.1, 1.0),
+      ..NodeStyle::default()
+   }).unwrap();
+   let sibling = surface.add_node(root, NodeStyle {
+      size: Size2D { w: Dim::Px(20.0), h: Dim::Px(20.0) },
+      background: gfx::Color::rgba(0.1, 0.6, 0.3, 1.0),
+      ..NodeStyle::default()
+   }).unwrap();
+   surface.layout(120.0, 60.0);
+   let _ = c28_render(&mut surface, &[]);
+
+   assert!(surface.edit_style(moving, |style| style.transform.tx = 30.0));
+   let moved = c28_render(&mut surface, &[]);
+   assert_eq!(moved.snapshot.damage().rects, [gfx::RectI::new(0, 0, 51, 21)]);
+   assert_eq!(surface.damage_stats().changed_paint_units, 1);
+   assert_eq!(surface.damage_stats().property_only_changes, 1);
+
+   assert!(surface.remove_node(moving));
+   surface.layout(120.0, 60.0);
+   let removed = c28_render(&mut surface, &[]);
+   assert_eq!(removed.snapshot.damage().rects, [gfx::RectI::new(0, 0, 51, 21)]);
+   assert_eq!(surface.damage_stats().changed_paint_units, 2);
+   assert_eq!(surface.damage_stats().layout_changes, 2);
+   assert!(surface.damage_stats().descendant_invalidations >= 1);
+
+   assert!(surface.edit_style(sibling, |style| {
+      style.background = gfx::Color::rgba(0.2, 0.3, 0.9, 1.0);
+   }));
+   let painted = c28_render(&mut surface, &[]);
+   assert_eq!(painted.snapshot.damage().rects, [gfx::RectI::new(0, 0, 21, 21)]);
+   assert_eq!(painted.stats.chunks_rebuilt, 1);
+   assert_eq!(surface.damage_stats().changed_paint_units, 1);
+   assert_eq!(surface.damage_stats().paint_changes, 1);
+
+   assert!(surface.edit_style(sibling, |style| style.size.w = Dim::Px(30.0)));
+   surface.layout(120.0, 60.0);
+   let resized = c28_render(&mut surface, &[]);
+   assert_eq!(resized.snapshot.damage().rects, [gfx::RectI::new(0, 0, 31, 21)]);
+   assert_eq!(surface.damage_stats().changed_paint_units, 1);
+   assert_eq!(surface.damage_stats().layout_changes, 1);
+}
+
+#[test]
+fn retained_damage_propagates_underlay_mutation_through_backdrop_dependency()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      size: Size2D { w: Dim::Px(100.0), h: Dim::Px(100.0) },
+      background: gfx::Color::rgba(0.05, 0.06, 0.07, 1.0),
+      ..NodeStyle::default()
+   });
+   surface.layout(100.0, 100.0);
+   let underlay = c28_rect_chunk(
+      281,
+      1,
+      gfx::RectF::new(20.0, 20.0, 10.0, 10.0),
+      gfx::Color::rgba(0.8, 0.2, 0.1, 1.0),
+   );
+   let effect = gfx::RenderChunk::new(
+      gfx::RenderChunkId(282),
+      gfx::RenderChunkRevisions::default(),
+      gfx::DrawList {
+         items: vec![gfx::DrawCmd::Backdrop {
+            rect: gfx::RectF::new(10.0, 10.0, 40.0, 40.0),
+            sigma: 4.0,
+            tint: gfx::Color::rgba(0.2, 0.3, 0.4, 0.5),
+            alpha: 0.8,
+         }],
+         vertices: Vec::new(),
+         indices: Vec::new(),
+      },
+      gfx::ChunkIndexMode::Local,
+      &[],
+   ).unwrap();
+   let content = [gfx::RenderChunkSequence::new(vec![
+      gfx::RenderChunkInstance::new(underlay, [0.0, 0.0]),
+      gfx::RenderChunkInstance::new(effect.clone(), [0.0, 0.0]),
+   ])];
+   let warm = c28_render(&mut surface, &content);
+   let mut warm_flat = gfx::DrawList::default();
+   warm.snapshot.flatten_into(&mut warm_flat).unwrap();
+
+   let changed_underlay = c28_rect_chunk(
+      281,
+      2,
+      gfx::RectF::new(20.0, 20.0, 10.0, 10.0),
+      gfx::Color::rgba(0.1, 0.7, 0.3, 1.0),
+   );
+   let changed_content = [gfx::RenderChunkSequence::new(vec![
+      gfx::RenderChunkInstance::new(changed_underlay, [0.0, 0.0]),
+      gfx::RenderChunkInstance::new(effect, [0.0, 0.0]),
+   ])];
+   let changed = c28_render(&mut surface, &changed_content);
+   assert_eq!(changed.snapshot.damage().rects, [gfx::RectI::new(9, 9, 42, 42)]);
+   assert_eq!(surface.damage_stats().changed_paint_units, 1);
+   assert_eq!(surface.damage_stats().effect_expansions, 1);
+
+   let mut changed_flat = gfx::DrawList::default();
+   changed.snapshot.flatten_into(&mut changed_flat).unwrap();
+   assert_eq!(changed_flat.items.len(), 3);
+   assert_eq!(changed_flat.items[0], warm_flat.items[0]);
+   assert_ne!(changed_flat.items[1], warm_flat.items[1]);
+   assert_eq!(changed_flat.items[2], warm_flat.items[2]);
+}
+
+#[test]
+fn retained_damage_falls_back_to_full_after_bounded_region_capacity()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      size: Size2D { w: Dim::Px(200.0), h: Dim::Px(20.0) },
+      ..NodeStyle::default()
+   });
+   surface.layout(200.0, 20.0);
+   let make_content = |revision: u64, color: gfx::Color| {
+      gfx::RenderChunkSequence::new((0..9_u64).map(|index| {
+         gfx::RenderChunkInstance::new(
+            c28_rect_chunk(300 + index, revision, gfx::RectF::new(0.0, 0.0, 4.0, 4.0), color),
+            [5.0 + index as f32 * 20.0, 5.0],
+         )
+      }).collect())
+   };
+   let warm_content = [make_content(1, gfx::Color::rgba(0.8, 0.2, 0.1, 1.0))];
+   let _ = c28_render(&mut surface, &warm_content);
+   let changed_content = [make_content(2, gfx::Color::rgba(0.1, 0.7, 0.3, 1.0))];
+   let changed = c28_render(&mut surface, &changed_content);
+
+   assert_eq!(changed.snapshot.damage().rects, [gfx::RectI::new(0, 0, 200, 20)]);
+   assert_eq!(surface.damage_stats().changed_paint_units, 9);
+   assert!(surface.damage_stats().full_damage);
+   assert_eq!(surface.damage_stats().damage_pixels, 4_000);
+}
+
+#[test]
+fn retained_damage_falls_back_to_full_for_unbounded_effect_dependency()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      size: Size2D { w: Dim::Px(80.0), h: Dim::Px(60.0) },
+      ..NodeStyle::default()
+   });
+   surface.layout(80.0, 60.0);
+   let effect = gfx::RenderChunk::new(
+      gfx::RenderChunkId(370),
+      gfx::RenderChunkRevisions::default(),
+      gfx::DrawList {
+         items: vec![gfx::DrawCmd::Backdrop {
+            rect: gfx::RectF::new(10.0, 10.0, 40.0, 30.0),
+            sigma: f32::NAN,
+            tint: gfx::Color::rgba(0.2, 0.3, 0.4, 0.5),
+            alpha: 0.8,
+         }],
+         vertices: Vec::new(),
+         indices: Vec::new(),
+      },
+      gfx::ChunkIndexMode::Local,
+      &[],
+   ).unwrap();
+   let make_content = |revision, color| {
+      [gfx::RenderChunkSequence::new(vec![
+         gfx::RenderChunkInstance::new(
+            c28_rect_chunk(
+               371,
+               revision,
+               gfx::RectF::new(20.0, 20.0, 4.0, 4.0),
+               color,
+            ),
+            [0.0, 0.0],
+         ),
+         gfx::RenderChunkInstance::new(effect.clone(), [0.0, 0.0]),
+      ])]
+   };
+   let warm = make_content(1, gfx::Color::rgba(0.8, 0.2, 0.1, 1.0));
+   let _ = c28_render(&mut surface, &warm);
+   let changed = make_content(2, gfx::Color::rgba(0.1, 0.7, 0.3, 1.0));
+   let rendered = c28_render(&mut surface, &changed);
+
+   assert_eq!(rendered.snapshot.damage().rects, [gfx::RectI::new(0, 0, 80, 60)]);
+   assert!(surface.damage_stats().full_damage);
+   assert_eq!(surface.damage_stats().damage_pixels, 4_800);
+}
+
+#[test]
+fn retained_damage_classifies_resource_and_clip_invalidation()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      size: Size2D { w: Dim::Px(80.0), h: Dim::Px(60.0) },
+      ..NodeStyle::default()
+   });
+   surface.layout(80.0, 60.0);
+   let image_chunk = |generation| {
+      gfx::RenderChunk::new(
+         gfx::RenderChunkId(380),
+         gfx::RenderChunkRevisions { resource: generation, ..gfx::RenderChunkRevisions::default() },
+         gfx::DrawList {
+            items: vec![gfx::DrawCmd::Image {
+               tex: gfx::ImageHandle(7),
+               dst: gfx::RectF::new(10.0, 10.0, 20.0, 20.0),
+               src: gfx::RectF::new(0.0, 0.0, 1.0, 1.0),
+               alpha: 1.0,
+            }],
+            vertices: Vec::new(),
+            indices: Vec::new(),
+         },
+         gfx::ChunkIndexMode::Local,
+         &[gfx::RenderResourceDependency { image: gfx::ImageHandle(7), generation }],
+      ).unwrap()
+   };
+   let sequence = |generation, clip| {
+      let mut instance = gfx::RenderChunkInstance::new(image_chunk(generation), [0.0, 0.0]);
+      instance.clip = clip;
+      [gfx::RenderChunkSequence::new(vec![instance])]
+   };
+   let warm = sequence(1, Some(gfx::RectI::new(0, 0, 40, 40)));
+   let _ = c28_render(&mut surface, &warm);
+
+   let resource = sequence(2, Some(gfx::RectI::new(0, 0, 40, 40)));
+   let resource_changed = c28_render(&mut surface, &resource);
+   assert_eq!(resource_changed.snapshot.damage().rects, [gfx::RectI::new(9, 9, 22, 22)]);
+   assert_eq!(surface.damage_stats().resource_changes, 1);
+   assert_eq!(surface.damage_stats().paint_changes, 0);
+
+   let clipped = sequence(2, Some(gfx::RectI::new(0, 0, 20, 40)));
+   let clip_changed = c28_render(&mut surface, &clipped);
+   assert_eq!(clip_changed.snapshot.damage().rects, [gfx::RectI::new(9, 9, 22, 22)]);
+   assert_eq!(surface.damage_stats().clip_changes, 1);
+   assert_eq!(surface.damage_stats().layout_changes, 0);
+}
+
+#[test]
+fn retained_damage_covers_reordered_overlapping_chunks()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      size: Size2D { w: Dim::Px(80.0), h: Dim::Px(60.0) },
+      ..NodeStyle::default()
+   });
+   surface.layout(80.0, 60.0);
+   let first = c28_rect_chunk(
+      390,
+      1,
+      gfx::RectF::new(10.0, 10.0, 30.0, 30.0),
+      gfx::Color::rgba(0.8, 0.2, 0.1, 1.0),
+   );
+   let second = c28_rect_chunk(
+      391,
+      1,
+      gfx::RectF::new(20.0, 20.0, 30.0, 30.0),
+      gfx::Color::rgba(0.1, 0.7, 0.3, 0.8),
+   );
+   let warm_content = [gfx::RenderChunkSequence::new(vec![
+      gfx::RenderChunkInstance::new(first.clone(), [0.0, 0.0]),
+      gfx::RenderChunkInstance::new(second.clone(), [0.0, 0.0]),
+   ])];
+   let warm = c28_render(&mut surface, &warm_content);
+   let mut warm_flat = gfx::DrawList::default();
+   warm.snapshot.flatten_into(&mut warm_flat).unwrap();
+
+   let reordered_content = [gfx::RenderChunkSequence::new(vec![
+      gfx::RenderChunkInstance::new(second, [0.0, 0.0]),
+      gfx::RenderChunkInstance::new(first, [0.0, 0.0]),
+   ])];
+   let reordered = c28_render(&mut surface, &reordered_content);
+   assert_eq!(reordered.snapshot.damage().rects, [gfx::RectI::new(9, 9, 42, 42)]);
+   assert_eq!(surface.damage_stats().changed_paint_units, 0);
+   assert_eq!(surface.damage_stats().order_changes, 2);
+   let mut reordered_flat = gfx::DrawList::default();
+   reordered.snapshot.flatten_into(&mut reordered_flat).unwrap();
+   assert_eq!(reordered_flat.items[0], warm_flat.items[0]);
+   assert_eq!(reordered_flat.items[1], warm_flat.items[2]);
+   assert_eq!(reordered_flat.items[2], warm_flat.items[1]);
+}
+
+#[test]
+fn retained_damage_memory_warning_purges_cache_and_forces_exact_full_redraw()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      size: Size2D { w: Dim::Px(80.0), h: Dim::Px(60.0) },
+      background: gfx::Color::rgba(0.2, 0.3, 0.4, 1.0),
+      ..NodeStyle::default()
+   });
+   let root = surface.root();
+   surface.add_node(root, NodeStyle {
+      size: Size2D { w: Dim::Px(20.0), h: Dim::Px(20.0) },
+      background: gfx::Color::rgba(0.8, 0.2, 0.1, 1.0),
+      ..NodeStyle::default()
+   }).unwrap();
+   surface.layout(80.0, 60.0);
+   let warm = c28_render(&mut surface, &[]);
+   let mut warm_flat = gfx::DrawList::default();
+   warm.snapshot.flatten_into(&mut warm_flat).unwrap();
+
+   surface.handle_memory_warning();
+   assert!(surface.needs_frame());
+   let rebuilt = c28_render(&mut surface, &[]);
+   assert_eq!(rebuilt.snapshot.damage().rects, [gfx::RectI::new(0, 0, 80, 60)]);
+   assert!(surface.damage_stats().full_damage);
+   assert!(surface.retained_node_stats().cache_evictions >= 2);
+   let mut rebuilt_flat = gfx::DrawList::default();
+   rebuilt.snapshot.flatten_into(&mut rebuilt_flat).unwrap();
+   assert_eq!(rebuilt_flat, warm_flat);
+   let mut damage = Vec::with_capacity(8);
+   surface.take_damage_into(&mut damage);
+   assert!(!surface.needs_frame());
 }

@@ -85,6 +85,46 @@ impl RenderSpatialBounds
       matches!(self, Self::Unbounded)
    }
 
+   #[inline]
+   #[must_use]
+   pub fn union(self, other: Self) -> Self
+   {
+      union_spatial(self, other)
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn intersect(self, other: Self) -> Self
+   {
+      intersect_spatial(self, other)
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn outset(self, amount: f32) -> Self
+   {
+      outset_spatial(self, amount)
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn transformed(self, transform: [f32; 6]) -> Self
+   {
+      transform_spatial(self, transform)
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn intersects(self, other: Self) -> bool
+   {
+      match (self, other)
+      {
+         (Self::Empty, _) | (_, Self::Empty) => false,
+         (Self::Unbounded, _) | (_, Self::Unbounded) => true,
+         (Self::Finite(a), Self::Finite(b)) => rects_intersect(a, b),
+      }
+   }
+
    #[must_use]
    pub fn conservative_rect_i(self) -> Option<RectI>
    {
@@ -120,6 +160,15 @@ pub struct RenderPaintSpan
    pub end: u32,
    pub bounds: RenderSpatialBounds,
    pub vertex_count: u32,
+}
+
+/// Backdrop-like paint whose output depends on pixels sampled beneath it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RenderEffectDependency
+{
+   pub command: u32,
+   pub sample_bounds: RenderSpatialBounds,
+   pub output_bounds: RenderSpatialBounds,
 }
 
 /// Work performed by one compact spatial-index query.
@@ -280,6 +329,7 @@ struct RenderChunkData
    bounds: RenderSpatialBounds,
    commands: Arc<[RenderCommandSpatial]>,
    paint_spans: Arc<[RenderPaintSpan]>,
+   effects: Arc<[RenderEffectDependency]>,
    spatial_index: SpatialIndex,
    resources: Arc<[RenderResourceDependency]>,
    ordering: RenderChunkOrdering,
@@ -299,12 +349,13 @@ impl RenderChunk
    {
       let (list, ordering) = canonicalize_draw_list(&source, index_mode)?;
       let resources = validate_resource_dependencies(&list, resource_dependencies)?;
-      let (bounds, commands, paint_spans, spatial_index) = prepare_spatial_metadata(&list)?;
+      let (bounds, commands, paint_spans, effects, spatial_index) = prepare_spatial_metadata(&list)?;
       let byte_size = retained_byte_size(
          &list,
          resources.len(),
          commands.len(),
          paint_spans.len(),
+         effects.len(),
          spatial_index.byte_size(),
       )?;
       Ok(Self {
@@ -315,6 +366,7 @@ impl RenderChunk
             bounds,
             commands: commands.into(),
             paint_spans: paint_spans.into(),
+            effects: effects.into(),
             spatial_index,
             resources: resources.into(),
             ordering,
@@ -370,6 +422,13 @@ impl RenderChunk
    pub fn paint_spans(&self) -> &[RenderPaintSpan]
    {
       &self.inner.paint_spans
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn effect_dependencies(&self) -> &[RenderEffectDependency]
+   {
+      &self.inner.effects
    }
 
    pub fn query_damage_commands(&self, rect: RectF, out: &mut Vec<u32>) -> RenderSpatialQueryStats
@@ -1137,6 +1196,23 @@ impl RenderSnapshot
       }
    }
 
+   pub fn visit_resolved_instances<F: FnMut(&RenderResolvedInstance)>(&self, mut visit: F)
+   {
+      if let Some(spatial) = self.inner.resolved_spatial.as_ref()
+      {
+         for instance in spatial.instances.iter()
+         {
+            visit(instance);
+         }
+         return;
+      }
+      self.visit_instances(|instance| {
+         let resolved = resolve_instance(instance, &self.inner.properties)
+            .expect("validated render instance must resolve");
+         visit(&resolved);
+      });
+   }
+
    #[must_use]
    pub fn instance(&self, mut index: u64) -> Option<RenderChunkInstance>
    {
@@ -1206,6 +1282,22 @@ impl RenderSnapshot
    pub fn damage(&self) -> &Damage
    {
       &self.inner.damage
+   }
+
+   #[must_use]
+   pub fn with_damage(&self, damage: Damage) -> Self
+   {
+      Self {
+         inner: Arc::new(RenderSnapshotData {
+            sequences: self.inner.sequences.clone(),
+            resolved_spatial: self.inner.resolved_spatial.clone(),
+            properties: self.inner.properties.clone(),
+            damage,
+            instance_count: self.inner.instance_count,
+            uniform_property_revision: self.inner.uniform_property_revision,
+            metadata_byte_size: self.inner.metadata_byte_size,
+         }),
+      }
    }
 
    #[inline]
@@ -1462,7 +1554,7 @@ fn validate_resource_dependencies(list: &DrawList, supplied: &[RenderResourceDep
    Ok(resources)
 }
 
-fn retained_byte_size(list: &DrawList, resources: usize, commands: usize, spans: usize, spatial_bytes: u64) -> Result<u64, RenderChunkError>
+fn retained_byte_size(list: &DrawList, resources: usize, commands: usize, spans: usize, effects: usize, spatial_bytes: u64) -> Result<u64, RenderChunkError>
 {
    let draw_commands = list.items.len().checked_mul(mem::size_of::<DrawCmd>()).ok_or(RenderChunkError::GeometryTooLarge)?;
    let vertices = list.vertices.len().checked_mul(mem::size_of::<Vertex>()).ok_or(RenderChunkError::GeometryTooLarge)?;
@@ -1470,11 +1562,13 @@ fn retained_byte_size(list: &DrawList, resources: usize, commands: usize, spans:
    let dependencies = resources.checked_mul(mem::size_of::<RenderResourceDependency>()).ok_or(RenderChunkError::GeometryTooLarge)?;
    let command_spatial = commands.checked_mul(mem::size_of::<RenderCommandSpatial>()).ok_or(RenderChunkError::GeometryTooLarge)?;
    let paint_spans = spans.checked_mul(mem::size_of::<RenderPaintSpan>()).ok_or(RenderChunkError::GeometryTooLarge)?;
+   let effect_dependencies = effects.checked_mul(mem::size_of::<RenderEffectDependency>()).ok_or(RenderChunkError::GeometryTooLarge)?;
    let fixed = draw_commands.checked_add(vertices)
       .and_then(|size| size.checked_add(indices))
       .and_then(|size| size.checked_add(dependencies))
       .and_then(|size| size.checked_add(command_spatial))
       .and_then(|size| size.checked_add(paint_spans))
+      .and_then(|size| size.checked_add(effect_dependencies))
       .ok_or(RenderChunkError::GeometryTooLarge)?;
    u64::try_from(fixed).map_err(|_| RenderChunkError::GeometryTooLarge)?.checked_add(spatial_bytes)
       .ok_or(RenderChunkError::GeometryTooLarge)
@@ -1483,7 +1577,7 @@ fn retained_byte_size(list: &DrawList, resources: usize, commands: usize, spans:
 const RASTER_AA_OUTSET_DP: f32 = 1.0;
 const EFFECT_MAX_BLUR_SIGMA_DP: f32 = 72.0;
 
-fn prepare_spatial_metadata(list: &DrawList) -> Result<(RenderSpatialBounds, Vec<RenderCommandSpatial>, Vec<RenderPaintSpan>, SpatialIndex), RenderChunkError>
+fn prepare_spatial_metadata(list: &DrawList) -> Result<(RenderSpatialBounds, Vec<RenderCommandSpatial>, Vec<RenderPaintSpan>, Vec<RenderEffectDependency>, SpatialIndex), RenderChunkError>
 {
    let empty = RenderCommandSpatial {
       bounds: RenderSpatialBounds::Empty,
@@ -1493,6 +1587,7 @@ fn prepare_spatial_metadata(list: &DrawList) -> Result<(RenderSpatialBounds, Vec
    };
    let mut commands = vec![empty; list.items.len()];
    let mut spans = Vec::new();
+   let mut effects = Vec::new();
    let mut scopes = Vec::<(Scope, usize, RenderSpatialBounds)>::new();
    let mut current_clip = RenderSpatialBounds::Unbounded;
    let mut layer_depth = 0_u32;
@@ -1567,6 +1662,15 @@ fn prepare_spatial_metadata(list: &DrawList) -> Result<(RenderSpatialBounds, Vec
                matching_scope: None,
                vertex_count,
             };
+            if matches!(command, DrawCmd::Backdrop { .. } | DrawCmd::VisualEffect { .. })
+            {
+               let output_bounds = command_output_bounds(command).intersect(current_clip);
+               effects.push(RenderEffectDependency {
+                  command: command_index,
+                  sample_bounds: bounds,
+                  output_bounds,
+               });
+            }
             if layer_depth == 0 && !bounds.is_empty()
             {
                spans.push(RenderPaintSpan {
@@ -1600,7 +1704,17 @@ fn prepare_spatial_metadata(list: &DrawList) -> Result<(RenderSpatialBounds, Vec
    let spatial_index = SpatialIndex::new(spans.iter().enumerate().map(|(index, span)| {
       (index as u32, span.bounds)
    }));
-   Ok((bounds, commands, spans, spatial_index))
+   Ok((bounds, commands, spans, effects, spatial_index))
+}
+
+fn command_output_bounds(command: &DrawCmd) -> RenderSpatialBounds
+{
+   match command
+   {
+      DrawCmd::Backdrop { rect, .. } | DrawCmd::VisualEffect { rect, .. } =>
+         outset_spatial(rect_f_bounds(*rect), RASTER_AA_OUTSET_DP),
+      _ => RenderSpatialBounds::Empty,
+   }
 }
 
 fn command_vertex_count(command: &DrawCmd) -> u32

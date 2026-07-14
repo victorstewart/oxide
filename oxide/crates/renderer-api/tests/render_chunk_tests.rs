@@ -4,8 +4,9 @@ use oxide_renderer_api::{
    ChunkIndexMode, Color, Damage, DrawCmd, DrawList, GlyphRun, ImageHandle, IndexSpan, RectF,
    RectI, RenderChunk, RenderChunkError, RenderChunkId, RenderChunkInstance, RenderChunkSequence,
    RenderChunkRevisions, RenderCommandSpatial, RenderDynamicClip, RenderLayerInstance, RenderPaintSpan,
-   RenderPropertySlot, RenderPropertySlotId, RenderPropertyValue, RenderResourceDependency,
-   RenderSnapshot, RenderSnapshotError, RenderSpatialBounds, Vertex, VertexSpan,
+   RenderEffectDependency, RenderPropertySlot, RenderPropertySlotId, RenderPropertyValue,
+   RenderResourceDependency, RenderSnapshot, RenderSnapshotError, RenderSpatialBounds, Vertex,
+   VertexSpan,
 };
 
 fn vertex(x: f32, y: f32) -> Vertex
@@ -480,6 +481,38 @@ fn chunk_precomputes_clipped_bounds_and_matching_layer_spans()
    assert_eq!(stats.entries_matched, 1);
    chunk.query_damage_commands(RectF::new(70.0, 70.0, 1.0, 1.0), &mut commands);
    assert!(commands.is_empty());
+}
+
+#[test]
+fn chunk_retains_backdrop_sample_and_output_dependencies()
+{
+   let mut list = DrawList::default();
+   list.items.extend([
+      DrawCmd::ClipPush { rect: RectI::new(0, 0, 60, 60) },
+      DrawCmd::Backdrop {
+         rect: RectF::new(10.0, 10.0, 20.0, 20.0),
+         sigma: 2.0,
+         tint: Color::rgba(0.1, 0.2, 0.3, 0.4),
+         alpha: 0.8,
+      },
+      DrawCmd::ClipPop,
+   ]);
+   let chunk = RenderChunk::new(
+      RenderChunkId(43),
+      RenderChunkRevisions::default(),
+      list,
+      ChunkIndexMode::Local,
+      &[],
+   ).unwrap();
+
+   assert_eq!(chunk.effect_dependencies(), [
+      RenderEffectDependency {
+         command: 1,
+         sample_bounds: RenderSpatialBounds::Finite(RectF::new(3.0, 3.0, 34.0, 34.0)),
+         output_bounds: RenderSpatialBounds::Finite(RectF::new(9.0, 9.0, 22.0, 22.0)),
+      },
+   ]);
+   assert!(chunk.byte_size() >= core::mem::size_of::<RenderEffectDependency>() as u64);
 }
 
 #[test]

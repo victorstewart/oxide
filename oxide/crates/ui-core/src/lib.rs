@@ -59,8 +59,9 @@ pub use sensors::{
 };
 pub use surface::{
     ChromeMetrics, DirtyClass, DirtySet, InteractionBlockGuard, RetainedCompositionStats,
-    RetainedDrawStatus, ScatterSpec, SurfaceRenderChunkStats,
-    SurfaceRenderSnapshot, SurfaceRenderSnapshotError, SurfaceRouter, UiSurface,
+    RetainedDrawStatus, ScatterSpec, SurfaceDamageStats, SurfaceFrameDemand,
+    SurfaceRenderChunkStats, SurfaceRenderSnapshot, SurfaceRenderSnapshotError, SurfaceRouter,
+    UiSurface,
 };
 pub use telemetry::TelemetryView;
 pub use visual_tree::{
@@ -2467,6 +2468,44 @@ impl NodeTree {
          stats.cache_complete = false;
          stats.last_invalidation_reason = RetainedInvalidationReason::Budget;
       }
+   }
+
+   pub fn purge_retained_cache(&mut self) -> (u64, u64)
+   {
+      let mut entries = 0_u64;
+      let mut bytes = 0_u64;
+      for index in 1..self.nodes.len()
+      {
+         let Some(node) = self.nodes[index].as_mut() else { continue };
+         if let Some(chunk) = node.retained_chunk.take()
+         {
+            entries = entries.saturating_add(1);
+            bytes = bytes.saturating_add(chunk.byte_size());
+         }
+         if let Some(sequence) = node.retained_sequence.take()
+         {
+            bytes = bytes.saturating_add(sequence.metadata_byte_size());
+         }
+         node.retained_composition = None;
+         node.chunk_dirty = true;
+         node.sequence_dirty = true;
+         node.all_children_dirty = true;
+         node.dirty_child = None;
+         node.cache_lru_prev = None;
+         node.cache_lru_next = None;
+         node.cache_lru_listed = false;
+         node.cache_hits = 0;
+         node.cache_hit_since_build = false;
+         node.cache_suppressed_until = 0;
+      }
+      self.retained_chunk_bytes = 0;
+      self.retained_sequence_bytes = 0;
+      self.retained_cache_lru_head = None;
+      self.retained_cache_lru_tail = None;
+      self.pending_cache_evictions = self.pending_cache_evictions.saturating_add(entries);
+      self.pending_cache_evicted_bytes = self.pending_cache_evicted_bytes.saturating_add(bytes);
+      self.last_invalidation_reason = RetainedInvalidationReason::Budget;
+      (entries, bytes)
    }
 
     fn build_node_chunk(&mut self, id: NodeId, namespace: u32, style: NodeStyle, layout: LayoutRect, revisions: gfx::RenderChunkRevisions, stats: &mut RetainedNodeStats) -> Result<gfx::RenderChunk, gfx::RenderChunkError> {

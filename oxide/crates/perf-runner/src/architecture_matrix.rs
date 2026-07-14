@@ -36,6 +36,20 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
    push_if_allowed(cases, "cpu.architecture.spatial_metadata.glyph_mesh_10000", || {
       retained_spatial_query_case("cpu.architecture.spatial_metadata.glyph_mesh_10000", smoke)
    });
+   push_if_allowed(cases, "cpu.architecture.damage.retained_surface_idle_10000", || {
+      retained_surface_idle_case(smoke)
+   });
+   push_if_allowed(cases, "cpu.architecture.damage.retained_surface_dirty_leaf_10000", || {
+      retained_surface_dirty_case(
+         "cpu.architecture.damage.retained_surface_dirty_leaf_10000",
+         "architecture",
+         smoke,
+      )
+   });
+   if perf_case_allowed("gpu.architecture.damage.retained_surface_dirty_leaf_10000")
+   {
+      cases.push(metal_retained_surface_dirty_case(smoke)?);
+   }
    push_if_allowed(cases, "cpu.architecture.text.warm_labels_1000", || text_warm_labels_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.new_labels_200", || text_new_labels_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.script_fallback_matrix", || text_script_matrix_case(smoke));
@@ -1360,6 +1374,260 @@ fn build_retained_scenario(depth: usize, dirty: bool) -> RetainedScenario
       api::Damage { rects: Vec::new() },
    );
    RetainedScenario { surface, leaf, mixed_sequences, dirty, phase: 0 }
+}
+
+struct RetainedSurfaceDamageScenario
+{
+   surface: ui::UiSurface,
+   leaf: ui::NodeId,
+   phase: u64,
+   damage: Vec<api::RectI>,
+}
+
+#[derive(Clone, Copy)]
+struct RetainedSurfaceDamageProbe
+{
+   render: ui::SurfaceRenderChunkStats,
+   damage: ui::SurfaceDamageStats,
+   submissions: u64,
+}
+
+fn build_retained_surface_damage_scenario() -> RetainedSurfaceDamageScenario
+{
+   let mut surface = ui::UiSurface::new(ui::NodeStyle {
+      axis: ui::Axis::Column,
+      size: ui::Size2D { w: ui::Dim::Px(1_000.0), h: ui::Dim::Px(700.0) },
+      ..ui::NodeStyle::default()
+   });
+   let root = surface.root();
+   let mut leaf = root;
+   for row_index in 0..100
+   {
+      let row = surface.add_node(root, ui::NodeStyle {
+         axis: ui::Axis::Row,
+         size: ui::Size2D { w: ui::Dim::Px(1_000.0), h: ui::Dim::Px(7.0) },
+         ..ui::NodeStyle::default()
+      }).expect("damage row");
+      for column in 0..100
+      {
+         let node = surface.add_node(row, ui::NodeStyle {
+            size: ui::Size2D { w: ui::Dim::Px(10.0), h: ui::Dim::Px(7.0) },
+            background: api::Color::rgba(0.15, 0.45, 0.85, 1.0),
+            ..ui::NodeStyle::default()
+         }).expect("damage cell");
+         if row_index == 50 && column == 50
+         {
+            leaf = node;
+         }
+      }
+   }
+   assert_ne!(leaf, root);
+   surface.layout(1_000.0, 700.0);
+   let mut damage = Vec::with_capacity(8);
+   for _ in 0..2
+   {
+      let _ = surface.render_snapshot_retained(
+         api::RenderChunkId(28),
+         &[],
+         Vec::new(),
+         api::Damage { rects: Vec::new() },
+      ).expect("warm retained damage snapshot");
+      surface.take_damage_into(&mut damage);
+   }
+   RetainedSurfaceDamageScenario { surface, leaf, phase: 0, damage }
+}
+
+fn run_retained_surface_dirty(scenario: &mut RetainedSurfaceDamageScenario) -> (u64, RetainedSurfaceDamageProbe)
+{
+   let rendered = render_retained_surface_dirty(scenario);
+   let damage = scenario.surface.damage_stats();
+   scenario.surface.take_damage_into(&mut scenario.damage);
+   let checksum = rendered.snapshot.instance_count()
+      .wrapping_add(rendered.stats.chunks_rebuilt)
+      .wrapping_add(u64::from(damage.changed_paint_units))
+      .wrapping_add(damage.damage_pixels);
+   (
+      checksum,
+      RetainedSurfaceDamageProbe {
+         render: rendered.stats,
+         damage,
+         submissions: u64::from(!scenario.damage.is_empty()),
+      },
+   )
+}
+
+fn render_retained_surface_dirty(scenario: &mut RetainedSurfaceDamageScenario) -> ui::SurfaceRenderSnapshot
+{
+   scenario.phase = scenario.phase.wrapping_add(1);
+   let blue = 0.45 + (scenario.phase & 1) as f32 * 0.35;
+   assert!(scenario.surface.edit_style(scenario.leaf, |style| {
+      style.background = api::Color::rgba(0.15, 0.45, blue, 1.0);
+   }));
+   assert!(scenario.surface.needs_frame());
+   scenario.damage.clear();
+   scenario.surface.render_snapshot_retained(
+      api::RenderChunkId(28),
+      &[],
+      Vec::new(),
+      api::Damage { rects: core::mem::take(&mut scenario.damage) },
+   ).expect("dirty retained damage snapshot")
+}
+
+fn retained_surface_idle_case(smoke: bool) -> PerfCaseResult
+{
+   let scenario = build_retained_surface_damage_scenario();
+   assert!(!scenario.surface.needs_frame());
+   let mut case = measured_architecture_case(
+      "cpu.architecture.damage.retained_surface_idle_10000",
+      smoke,
+      "Static retained 10,000-cell UiSurface checks frame demand without constructing a builder, snapshot, backend frame, or submission.",
+      move || u64::from(black_box(scenario.surface.needs_frame())),
+   );
+   case.metrics.insert(String::from("paint_nodes"), 10_000.0);
+   case.metrics.insert(String::from("dirty_nodes"), 0.0);
+   case.metrics.insert(String::from("damage_pixels"), 0.0);
+   case.metrics.insert(String::from("commands_built"), 0.0);
+   case.metrics.insert(String::from("commands_lowered"), 0.0);
+   case.metrics.insert(String::from("submissions"), 0.0);
+   case
+}
+
+pub(super) fn retained_surface_dirty_case(id: &str, family: &str, smoke: bool) -> PerfCaseResult
+{
+   let mut scenario = build_retained_surface_damage_scenario();
+   let (_, probe) = run_retained_surface_dirty(&mut scenario);
+   assert_eq!(probe.render.chunks_rebuilt, 1);
+   assert_eq!(probe.damage.changed_paint_units, 1);
+   assert!(!probe.damage.full_damage);
+   let mut case = measure_cpu_case(
+      id,
+      family,
+      smoke,
+      true,
+      0.20,
+      1,
+      vec![String::from(
+         "One author-visible leaf mutation derives damage from retained old/new paint bounds and rebuilds one immutable chunk in a 10,000-cell surface.",
+      )],
+      move || run_retained_surface_dirty(&mut scenario).0,
+   );
+   case.metrics.insert(String::from("paint_nodes"), 10_000.0);
+   case.metrics.insert(String::from("dirty_nodes"), 1.0);
+   case.metrics.insert(String::from("changed_paint_units"), probe.damage.changed_paint_units as f64);
+   case.metrics.insert(String::from("damage_rects"), probe.damage.damage_rects as f64);
+   case.metrics.insert(String::from("damage_pixels"), probe.damage.damage_pixels as f64);
+   case.metrics.insert(String::from("commands_built"), probe.render.chunks_rebuilt as f64);
+   case.metrics.insert(String::from("commands_lowered_expected"), 1.0);
+   case.metrics.insert(String::from("submissions"), probe.submissions as f64);
+   case
+}
+
+fn metal_retained_surface_dirty_case(smoke: bool) -> Result<PerfCaseResult>
+{
+   let id = "gpu.architecture.damage.retained_surface_dirty_leaf_10000";
+   let mut scenario = build_retained_surface_damage_scenario();
+   let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating retained-damage Metal renderer")?);
+   renderer.resize(1_000, 700, 1.0).context("resizing retained-damage Metal renderer")?;
+   renderer.set_damage_options(true, DAMAGE_USE_THRESH, DAMAGE_PREFILTER_THRESH);
+   scenario.surface.mark_dirty(ui::DirtyClass::Paint);
+   scenario.damage.clear();
+   let initial = scenario.surface.render_snapshot_retained(
+      api::RenderChunkId(28),
+      &[],
+      Vec::new(),
+      api::Damage { rects: core::mem::take(&mut scenario.damage) },
+   ).expect("initial retained-damage snapshot");
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&initial.snapshot).context("encoding initial retained-damage snapshot")?;
+   renderer.submit(token).context("submitting initial retained-damage snapshot")?;
+   let _ = last_metal_stats_after_submit(&renderer, token.0);
+   scenario.surface.take_damage_into(&mut scenario.damage);
+
+   let warmups = if smoke { 1_usize } else { 3 };
+   let frames = if smoke { 3_usize } else { 12 };
+   let mut frame_samples = Vec::with_capacity(frames);
+   let mut encode_samples = Vec::with_capacity(frames);
+   let mut gpu_samples = Vec::with_capacity(frames);
+   let mut event_to_submit_samples = Vec::with_capacity(frames);
+   let mut changed_units_sum = 0_u64;
+   let mut damage_pixels_sum = 0_u64;
+   let mut damage_rects_sum = 0_u64;
+   let mut commands_built_sum = 0_u64;
+   let mut commands_lowered_sum = 0_u64;
+   let mut draws_sum = 0_u64;
+   let mut chunks_reused_sum = 0_u64;
+   let mut chunks_prepared_sum = 0_u64;
+   for frame in 0..warmups.saturating_add(frames)
+   {
+      let started_at = Instant::now();
+      let rendered = render_retained_surface_dirty(&mut scenario);
+      let damage = scenario.surface.damage_stats();
+      let token = renderer.begin_frame(&api::FrameTarget, Some(rendered.snapshot.damage()));
+      renderer.encode_snapshot(&rendered.snapshot).with_context(|| format!("encoding {id}"))?;
+      renderer.submit(token).with_context(|| format!("submitting {id}"))?;
+      let event_to_submit_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+      let stats = last_metal_stats_after_submit(&renderer, token.0);
+      let frame_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+      scenario.surface.take_damage_into(&mut scenario.damage);
+      if frame < warmups
+      {
+         continue;
+      }
+      frame_samples.push(frame_ms);
+      encode_samples.push(stats.encode_ms);
+      gpu_samples.push(stats.gpu_ms);
+      event_to_submit_samples.push(event_to_submit_ms);
+      changed_units_sum = changed_units_sum.saturating_add(u64::from(damage.changed_paint_units));
+      damage_pixels_sum = damage_pixels_sum.saturating_add(damage.damage_pixels);
+      damage_rects_sum = damage_rects_sum.saturating_add(u64::from(damage.damage_rects));
+      commands_built_sum = commands_built_sum.saturating_add(rendered.stats.chunks_rebuilt);
+      commands_lowered_sum = commands_lowered_sum.saturating_add(stats.commands_traversed);
+      draws_sum = draws_sum.saturating_add(u64::from(stats.draws));
+      chunks_reused_sum = chunks_reused_sum.saturating_add(stats.chunks_reused);
+      chunks_prepared_sum = chunks_prepared_sum.saturating_add(stats.chunks_prepared);
+   }
+   let summary = summarize(&frame_samples);
+   let mut metrics = BTreeMap::new();
+   insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+   insert_distribution_metrics(&mut metrics, "encode_ms", &encode_samples);
+   insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+   insert_distribution_metrics(&mut metrics, "event_to_submit_ms", &event_to_submit_samples);
+   insert_frame_pacing_metrics(&mut metrics, &frame_samples);
+   metrics.insert(String::from("paint_nodes"), 10_000.0);
+   metrics.insert(String::from("dirty_nodes_avg"), 1.0);
+   metrics.insert(String::from("changed_paint_units_avg"), changed_units_sum as f64 / frames as f64);
+   metrics.insert(String::from("damage_pixels_avg"), damage_pixels_sum as f64 / frames as f64);
+   metrics.insert(String::from("damage_rects_avg"), damage_rects_sum as f64 / frames as f64);
+   metrics.insert(String::from("commands_built_avg"), commands_built_sum as f64 / frames as f64);
+   metrics.insert(String::from("commands_lowered_avg"), commands_lowered_sum as f64 / frames as f64);
+   metrics.insert(String::from("draws_avg"), draws_sum as f64 / frames as f64);
+   metrics.insert(String::from("submissions"), frames as f64);
+   metrics.insert(String::from("chunks_reused_avg"), chunks_reused_sum as f64 / frames as f64);
+   metrics.insert(String::from("chunks_prepared_avg"), chunks_prepared_sum as f64 / frames as f64);
+   Ok(PerfCaseResult {
+      id: String::from(id),
+      family: String::from("architecture"),
+      layer: String::from("engine"),
+      scenario: String::from("rendering-architecture"),
+      variant: String::from("oxide"),
+      cache_state: String::from("warm"),
+      refresh_mode: String::from("offscreen"),
+      unit: String::from("ms/frame"),
+      gated: true,
+      threshold_pct: 0.20,
+      median: summary.median,
+      p95: summary.p95,
+      p99: summary.p99,
+      min: summary.min,
+      max: summary.max,
+      mean: summary.mean,
+      samples: frame_samples.len(),
+      ops_per_sample: 1,
+      notes: vec![String::from(
+         "One dirty leaf in a retained 10,000-cell UiSurface derives exact damage, rebuilds one chunk, and lowers only intersecting prepared paint into Metal.",
+      )],
+      metrics,
+   })
 }
 
 fn retained_mixed_sequences() -> Vec<api::RenderChunkSequence>
@@ -3205,6 +3473,7 @@ mod tests
          "neon_1024",
          "nine_slice_512",
          "isolated_mutation_10000",
+         "retained_surface_dirty_leaf_10000",
          "[96_usize, 1_000, 10_000]",
          "icons_10000",
          "idle.static_foreground",

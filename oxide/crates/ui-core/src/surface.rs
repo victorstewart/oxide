@@ -14,6 +14,7 @@ use crate::{
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 use core::fmt;
+use std::collections::HashMap;
 
 use oxide_renderer_api as gfx;
 use oxide_timing as timing;
@@ -186,6 +187,363 @@ struct RetainedSnapshotCache
    namespace: u32,
    sequences: Vec<gfx::RenderChunkSequence>,
    snapshot: gfx::RenderSnapshot,
+}
+
+const MAX_SURFACE_DAMAGE_RECTS: usize = 8;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SurfaceFrameDemand
+{
+   pub camera: bool,
+   pub timer_due: bool,
+   pub upload: bool,
+   pub async_publication: bool,
+}
+
+impl SurfaceFrameDemand
+{
+   #[inline]
+   #[must_use]
+   pub const fn any(self) -> bool
+   {
+      self.camera || self.timer_due || self.upload || self.async_publication
+   }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SurfaceDamageStats
+{
+   pub changed_paint_units: u32,
+   pub layout_changes: u32,
+   pub paint_changes: u32,
+   pub property_only_changes: u32,
+   pub resource_changes: u32,
+   pub clip_changes: u32,
+   pub descendant_invalidations: u32,
+   pub order_changes: u32,
+   pub effect_expansions: u32,
+   pub damage_rects: u32,
+   pub damage_pixels: u64,
+   pub full_damage: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct SurfacePaintKey
+{
+   id: gfx::RenderChunkId,
+   occurrence: u32,
+}
+
+#[derive(Clone, Debug)]
+struct SurfacePaintState
+{
+   bounds: gfx::RenderSpatialBounds,
+   origin: [f32; 2],
+   transform: [f32; 6],
+   opacity: f32,
+   resolved_clip: gfx::RenderSpatialBounds,
+   source_revision: u64,
+   revisions: gfx::RenderChunkRevisions,
+   layer: Option<gfx::RenderLayerInstance>,
+   chunk: gfx::RenderChunk,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SurfacePaintChanges
+{
+   changed: bool,
+   layout: bool,
+   paint: bool,
+   property_only: bool,
+   resource: bool,
+   clip: bool,
+   descendant: bool,
+}
+
+impl SurfacePaintChanges
+{
+   fn record(self, stats: &mut SurfaceDamageStats)
+   {
+      stats.changed_paint_units = stats.changed_paint_units.saturating_add(u32::from(self.changed));
+      stats.layout_changes = stats.layout_changes.saturating_add(u32::from(self.layout));
+      stats.paint_changes = stats.paint_changes.saturating_add(u32::from(self.paint));
+      stats.property_only_changes = stats.property_only_changes.saturating_add(u32::from(self.property_only));
+      stats.resource_changes = stats.resource_changes.saturating_add(u32::from(self.resource));
+      stats.clip_changes = stats.clip_changes.saturating_add(u32::from(self.clip));
+      stats.descendant_invalidations = stats.descendant_invalidations.saturating_add(u32::from(self.descendant));
+   }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SurfaceEffectDependency
+{
+   sample_bounds: gfx::RenderSpatialBounds,
+   output_bounds: gfx::RenderSpatialBounds,
+}
+
+#[derive(Clone, Copy)]
+struct SurfaceDamageRegion
+{
+   rects: [gfx::RectI; MAX_SURFACE_DAMAGE_RECTS],
+   len: usize,
+   full: bool,
+   viewport: gfx::RectI,
+}
+
+impl Default for SurfaceDamageRegion
+{
+   fn default() -> Self
+   {
+      Self {
+         rects: [gfx::RectI::new(0, 0, 0, 0); MAX_SURFACE_DAMAGE_RECTS],
+         len: 0,
+         full: false,
+         viewport: gfx::RectI::new(0, 0, 0, 0),
+      }
+   }
+}
+
+impl SurfaceDamageRegion
+{
+   fn begin(&mut self, viewport: gfx::RectI)
+   {
+      self.len = 0;
+      self.full = false;
+      self.viewport = viewport;
+   }
+
+   fn is_empty(&self) -> bool
+   {
+      !self.full && self.len == 0
+   }
+
+   fn force_full(&mut self)
+   {
+      self.len = 0;
+      self.full = true;
+   }
+
+   fn add_spatial(&mut self, bounds: gfx::RenderSpatialBounds)
+   {
+      match bounds
+      {
+         gfx::RenderSpatialBounds::Empty => {}
+         gfx::RenderSpatialBounds::Finite(_) =>
+         {
+            if let Some(rect) = bounds.conservative_rect_i()
+            {
+               self.add(rect);
+            }
+         }
+         gfx::RenderSpatialBounds::Unbounded => self.force_full(),
+      }
+   }
+
+   fn add(&mut self, rect: gfx::RectI)
+   {
+      if self.full
+      {
+         return;
+      }
+      let Some(mut rect) = intersect_damage_rect(rect, self.viewport) else { return };
+      let mut index = 0;
+      while index < self.len
+      {
+         if damage_rects_touch(rect, self.rects[index])
+         {
+            rect = union_damage_rect(rect, self.rects[index]);
+            self.len -= 1;
+            self.rects[index] = self.rects[self.len];
+            index = 0;
+         }
+         else
+         {
+            index += 1;
+         }
+      }
+      if self.len == self.rects.len()
+      {
+         self.force_full();
+         return;
+      }
+      self.rects[self.len] = rect;
+      self.len += 1;
+   }
+
+   fn intersects(&self, bounds: gfx::RenderSpatialBounds) -> bool
+   {
+      if self.full
+      {
+         return !bounds.is_empty();
+      }
+      self.rects[..self.len].iter().copied().any(|rect| {
+         rect_spatial_bounds(rect).intersects(bounds)
+      })
+   }
+
+   fn write_into(&self, out: &mut Vec<gfx::RectI>)
+   {
+      out.clear();
+      if self.full
+      {
+         if self.viewport.w > 0 && self.viewport.h > 0
+         {
+            out.push(self.viewport);
+         }
+      }
+      else
+      {
+         out.extend_from_slice(&self.rects[..self.len]);
+      }
+   }
+
+   fn finish_stats(&self, mut stats: SurfaceDamageStats, effect_expansions: u32) -> SurfaceDamageStats
+   {
+      stats.effect_expansions = effect_expansions;
+      stats.damage_rects = if self.full { u32::from(self.viewport.w > 0 && self.viewport.h > 0) } else { self.len as u32 };
+      stats.damage_pixels = if self.full
+      {
+         damage_rect_pixels(self.viewport)
+      }
+      else
+      {
+         self.rects[..self.len].iter().copied().fold(0_u64, |pixels, rect| {
+            pixels.saturating_add(damage_rect_pixels(rect))
+         })
+      };
+      stats.full_damage = self.full;
+      stats
+   }
+}
+
+fn surface_paint_changes(previous: &SurfacePaintState, next: &SurfacePaintState) -> SurfacePaintChanges
+{
+   let transform = previous.transform != next.transform;
+   let opacity = previous.opacity != next.opacity;
+   let clip = previous.resolved_clip != next.resolved_clip;
+   let bounds = previous.bounds != next.bounds;
+   let same_chunk = previous.chunk.ptr_eq(&next.chunk);
+   let paint = previous.layer != next.layer
+      || !same_chunk && previous.chunk.draw_list() != next.chunk.draw_list();
+   let resource = !same_chunk
+      && previous.chunk.resource_dependencies() != next.chunk.resource_dependencies();
+   let layout = previous.origin != next.origin || bounds && !transform && !clip;
+   let changed = transform || opacity || clip || bounds || paint || resource;
+   SurfacePaintChanges {
+      changed,
+      layout,
+      paint,
+      property_only: (transform || opacity) && !layout && !paint && !resource && !clip,
+      resource,
+      clip,
+      descendant: !changed && (!same_chunk
+         || previous.revisions != next.revisions
+         || previous.source_revision != next.source_revision),
+   }
+}
+
+fn inserted_or_removed_paint_changes() -> SurfacePaintChanges
+{
+   SurfacePaintChanges {
+      changed: true,
+      layout: true,
+      ..SurfacePaintChanges::default()
+   }
+}
+
+fn surface_paint_state(resolved: &gfx::RenderResolvedInstance) -> SurfacePaintState
+{
+   SurfacePaintState {
+      bounds: resolved.bounds,
+      origin: resolved.instance.origin,
+      transform: resolved.transform,
+      opacity: resolved.opacity,
+      resolved_clip: resolved.resolved_clip,
+      source_revision: resolved.source_revision,
+      revisions: resolved.instance.chunk.revisions(),
+      layer: resolved.instance.layer,
+      chunk: resolved.instance.chunk.clone(),
+   }
+}
+
+fn surface_viewport(tree: &NodeTree) -> gfx::RectI
+{
+   tree.layout_rect(tree.root()).map_or(gfx::RectI::new(0, 0, 0, 0), |rect| {
+      gfx::RenderSpatialBounds::Finite(gfx::RectF::new(rect.x, rect.y, rect.w, rect.h))
+         .conservative_rect_i()
+         .unwrap_or(gfx::RectI::new(0, 0, 0, 0))
+   })
+}
+
+fn rect_spatial_bounds(rect: gfx::RectI) -> gfx::RenderSpatialBounds
+{
+   if rect.w <= 0 || rect.h <= 0
+   {
+      gfx::RenderSpatialBounds::Empty
+   }
+   else
+   {
+      gfx::RenderSpatialBounds::Finite(gfx::RectF::new(
+         rect.x as f32,
+         rect.y as f32,
+         rect.w as f32,
+         rect.h as f32,
+      ))
+   }
+}
+
+fn intersect_damage_rect(a: gfx::RectI, b: gfx::RectI) -> Option<gfx::RectI>
+{
+   let ax1 = i64::from(a.x).saturating_add(i64::from(a.w));
+   let ay1 = i64::from(a.y).saturating_add(i64::from(a.h));
+   let bx1 = i64::from(b.x).saturating_add(i64::from(b.w));
+   let by1 = i64::from(b.y).saturating_add(i64::from(b.h));
+   let x0 = i64::from(a.x).max(i64::from(b.x));
+   let y0 = i64::from(a.y).max(i64::from(b.y));
+   let x1 = ax1.min(bx1);
+   let y1 = ay1.min(by1);
+   if x1 <= x0 || y1 <= y0
+   {
+      return None;
+   }
+   Some(gfx::RectI::new(
+      x0.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+      y0.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+      (x1 - x0).min(i64::from(i32::MAX)) as i32,
+      (y1 - y0).min(i64::from(i32::MAX)) as i32,
+   ))
+}
+
+fn damage_rects_touch(a: gfx::RectI, b: gfx::RectI) -> bool
+{
+   let ax1 = i64::from(a.x).saturating_add(i64::from(a.w)).saturating_add(1);
+   let ay1 = i64::from(a.y).saturating_add(i64::from(a.h)).saturating_add(1);
+   let bx1 = i64::from(b.x).saturating_add(i64::from(b.w)).saturating_add(1);
+   let by1 = i64::from(b.y).saturating_add(i64::from(b.h)).saturating_add(1);
+   i64::from(a.x) <= bx1 && i64::from(b.x) <= ax1
+      && i64::from(a.y) <= by1 && i64::from(b.y) <= ay1
+}
+
+fn union_damage_rect(a: gfx::RectI, b: gfx::RectI) -> gfx::RectI
+{
+   let x0 = i64::from(a.x).min(i64::from(b.x));
+   let y0 = i64::from(a.y).min(i64::from(b.y));
+   let x1 = i64::from(a.x).saturating_add(i64::from(a.w))
+      .max(i64::from(b.x).saturating_add(i64::from(b.w)));
+   let y1 = i64::from(a.y).saturating_add(i64::from(a.h))
+      .max(i64::from(b.y).saturating_add(i64::from(b.h)));
+   gfx::RectI::new(
+      x0.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+      y0.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+      (x1 - x0).min(i64::from(i32::MAX)) as i32,
+      (y1 - y0).min(i64::from(i32::MAX)) as i32,
+   )
+}
+
+fn damage_rect_pixels(rect: gfx::RectI) -> u64
+{
+   u64::try_from(rect.w.max(0)).unwrap_or(0)
+      .saturating_mul(u64::try_from(rect.h.max(0)).unwrap_or(0))
 }
 
 fn surface_render_chunk_stats(status: RetainedDrawStatus, node: RetainedNodeStats) -> SurfaceRenderChunkStats
@@ -377,6 +735,16 @@ pub struct UiSurface {
     retained_snapshot: Option<RetainedSnapshotCache>,
     retained_node_stats: RetainedNodeStats,
     last_layout_stats: LayoutStats,
+    frame_demand: SurfaceFrameDemand,
+    paint_states: HashMap<SurfacePaintKey, SurfacePaintState>,
+    paint_order: Vec<SurfacePaintKey>,
+    next_paint_states: HashMap<SurfacePaintKey, SurfacePaintState>,
+    next_paint_order: Vec<SurfacePaintKey>,
+    paint_occurrences: HashMap<gfx::RenderChunkId, u32>,
+    effect_dependencies: Vec<SurfaceEffectDependency>,
+    damage_region: SurfaceDamageRegion,
+    damage_stats: SurfaceDamageStats,
+    force_full_damage: bool,
 }
 
 impl UiSurface {
@@ -394,6 +762,16 @@ impl UiSurface {
             retained_snapshot: None,
             retained_node_stats: RetainedNodeStats::default(),
             last_layout_stats: LayoutStats::default(),
+            frame_demand: SurfaceFrameDemand::default(),
+            paint_states: HashMap::new(),
+            paint_order: Vec::new(),
+            next_paint_states: HashMap::new(),
+            next_paint_order: Vec::new(),
+            paint_occurrences: HashMap::new(),
+            effect_dependencies: Vec::new(),
+            damage_region: SurfaceDamageRegion::default(),
+            damage_stats: SurfaceDamageStats::default(),
+            force_full_damage: true,
         }
     }
 
@@ -430,6 +808,21 @@ impl UiSurface {
       self.retained_node_stats = RetainedNodeStats::default();
    }
 
+   pub fn handle_memory_warning(&mut self)
+   {
+      let _ = self.tree.purge_retained_cache();
+      self.retained_snapshot = None;
+      self.retained_node_stats = RetainedNodeStats::default();
+      self.paint_states.clear();
+      self.paint_order.clear();
+      self.next_paint_states.clear();
+      self.next_paint_order.clear();
+      self.paint_occurrences.clear();
+      self.effect_dependencies.clear();
+      self.dirty.mark(DirtyClass::Paint);
+      self.force_full_damage = true;
+   }
+
     pub fn add_node(&mut self, parent: NodeId, style: NodeStyle) -> Option<NodeId> {
         self.tree.style(parent)?;
         let id = self.tree.add_node(parent, style);
@@ -453,6 +846,43 @@ impl UiSurface {
         self.dirty
     }
 
+   #[inline]
+   #[must_use]
+   pub fn needs_frame(&self) -> bool
+   {
+      !self.damage_region.is_empty()
+         || self.dirty.affects_draw()
+         || self.animator.active_count() != 0
+         || self.layout_worker.has_inflight()
+         || self.frame_demand.any()
+   }
+
+   #[inline]
+   #[must_use]
+   pub const fn frame_demand(&self) -> SurfaceFrameDemand
+   {
+      self.frame_demand
+   }
+
+   #[inline]
+   pub fn set_frame_demand(&mut self, demand: SurfaceFrameDemand)
+   {
+      self.frame_demand = demand;
+   }
+
+   #[inline]
+   #[must_use]
+   pub const fn damage_stats(&self) -> SurfaceDamageStats
+   {
+      self.damage_stats
+   }
+
+   pub fn take_damage_into(&mut self, out: &mut Vec<gfx::RectI>)
+   {
+      self.damage_region.write_into(out);
+      self.damage_region.begin(self.damage_region.viewport);
+   }
+
     #[inline]
     pub fn mark_dirty(&mut self, class: DirtyClass) {
         self.dirty.mark(class);
@@ -462,6 +892,7 @@ impl UiSurface {
         if class.bit() & DRAW_DIRTY_BITS != 0 {
             self.retained_node_stats = RetainedNodeStats::default();
             self.tree.mark_all_draw_dirty();
+            self.force_full_damage = true;
         }
     }
 
@@ -568,6 +999,7 @@ impl UiSurface {
         self.dirty.mark(DirtyClass::Accessibility);
         self.dirty.mark(DirtyClass::HitTest);
         self.tree.mark_layout_dirty(self.tree.root());
+        self.force_full_damage = true;
     }
 
     fn mark_scoped_tree_mutated(&mut self) {
@@ -695,7 +1127,7 @@ impl UiSurface {
         }
     }
 
-   pub fn render_snapshot_retained(&mut self, id: gfx::RenderChunkId, content: &[gfx::RenderChunkSequence], mut properties: Vec<gfx::RenderPropertySlot>, damage: gfx::Damage) -> Result<SurfaceRenderSnapshot, SurfaceRenderSnapshotError>
+   pub fn render_snapshot_retained(&mut self, id: gfx::RenderChunkId, content: &[gfx::RenderChunkSequence], mut properties: Vec<gfx::RenderPropertySlot>, mut damage: gfx::Damage) -> Result<SurfaceRenderSnapshot, SurfaceRenderSnapshotError>
    {
       let namespace = u32::try_from(id.0).map_err(|_| gfx::RenderChunkError::GeometryTooLarge)?;
       let (surface, node_stats) = if self.animator.overrides().is_empty() {
@@ -714,15 +1146,18 @@ impl UiSurface {
             && cached.sequences[0].ptr_eq(&surface)
             && cached.sequences[1..].iter().zip(content).all(|(cached, current)| cached.ptr_eq(current))
             && cached.snapshot.properties() == properties
-            && cached.snapshot.damage() == &damage
       }).map(|cached| cached.snapshot.clone());
-      let snapshot = if let Some(snapshot) = cached {
+      let base_snapshot = if let Some(snapshot) = cached {
          snapshot
       } else {
          let mut sequences = Vec::with_capacity(content.len().saturating_add(1));
          sequences.push(surface);
          sequences.extend(content.iter().cloned());
-         let snapshot = gfx::RenderSnapshot::from_sequences(sequences.clone(), properties, damage)?;
+         let snapshot = gfx::RenderSnapshot::from_sequences(
+            sequences.clone(),
+            properties,
+            gfx::Damage { rects: Vec::new() },
+         )?;
          if node_stats.cache_complete {
             self.retained_snapshot = Some(RetainedSnapshotCache {
                namespace,
@@ -732,6 +1167,9 @@ impl UiSurface {
          }
          snapshot
       };
+      self.derive_damage(&base_snapshot, &damage.rects);
+      self.damage_region.write_into(&mut damage.rects);
+      let snapshot = base_snapshot.with_damage(damage);
       let status = if node_stats.chunks_rebuilt == 0 && node_stats.sequences_rebuilt == 0 {
          RetainedDrawStatus::Reused
       } else {
@@ -741,6 +1179,132 @@ impl UiSurface {
       self.retained_node_stats = node_stats;
       self.dirty.clear_draw_affecting();
       Ok(SurfaceRenderSnapshot { snapshot, stats })
+   }
+
+   fn derive_damage(&mut self, snapshot: &gfx::RenderSnapshot, explicit: &[gfx::RectI])
+   {
+      let viewport = surface_viewport(&self.tree);
+      self.damage_region.begin(viewport);
+      for rect in explicit.iter().copied()
+      {
+         self.damage_region.add(rect);
+      }
+      if self.force_full_damage
+      {
+         self.damage_region.force_full();
+         self.force_full_damage = false;
+      }
+      self.next_paint_states.clear();
+      self.next_paint_order.clear();
+      self.paint_occurrences.clear();
+      self.effect_dependencies.clear();
+      let mut unbounded_effect = false;
+      snapshot.visit_resolved_instances(|resolved| {
+         let id = resolved.instance.chunk.id();
+         let first_key = SurfacePaintKey { id, occurrence: 0 };
+         let mut state = Some(surface_paint_state(resolved));
+         match self.next_paint_states.entry(first_key)
+         {
+            std::collections::hash_map::Entry::Vacant(entry) =>
+            {
+               entry.insert(state.take().expect("new paint state must exist"));
+               self.next_paint_order.push(first_key);
+            }
+            std::collections::hash_map::Entry::Occupied(_) =>
+            {
+               let occurrence = self.paint_occurrences.entry(id).or_insert(1);
+               let key = SurfacePaintKey { id, occurrence: *occurrence };
+               *occurrence = occurrence.saturating_add(1);
+               self.next_paint_states.insert(key, state.take().expect("duplicate paint state must exist"));
+               self.next_paint_order.push(key);
+            }
+         }
+         for effect in resolved.instance.chunk.effect_dependencies()
+         {
+            let sample_bounds = effect.sample_bounds
+               .transformed(resolved.transform)
+               .intersect(resolved.resolved_clip);
+            let output_bounds = effect.output_bounds
+               .transformed(resolved.transform)
+               .intersect(resolved.resolved_clip);
+            unbounded_effect |= sample_bounds.is_unbounded() || output_bounds.is_unbounded();
+            self.effect_dependencies.push(SurfaceEffectDependency {
+               sample_bounds,
+               output_bounds,
+            });
+         }
+      });
+      let mut stats = SurfaceDamageStats::default();
+      for key in self.next_paint_order.iter().copied()
+      {
+         let next = self.next_paint_states.get(&key).expect("ordered paint state must exist");
+         match self.paint_states.get(&key)
+         {
+            Some(previous) =>
+            {
+               let changes = surface_paint_changes(previous, next);
+               changes.record(&mut stats);
+               if changes.changed
+               {
+                  self.damage_region.add_spatial(previous.bounds.union(next.bounds));
+               }
+            }
+            None =>
+            {
+               inserted_or_removed_paint_changes().record(&mut stats);
+               self.damage_region.add_spatial(next.bounds);
+            }
+         }
+      }
+      for key in self.paint_order.iter().copied()
+      {
+         if !self.next_paint_states.contains_key(&key)
+         {
+            let previous = self.paint_states.get(&key).expect("ordered paint state must exist");
+            inserted_or_removed_paint_changes().record(&mut stats);
+            self.damage_region.add_spatial(previous.bounds);
+         }
+      }
+      let order_len = self.paint_order.len().max(self.next_paint_order.len());
+      for index in 0..order_len
+      {
+         let previous = self.paint_order.get(index).copied();
+         let next = self.next_paint_order.get(index).copied();
+         if previous == next
+         {
+            continue;
+         }
+         stats.order_changes = stats.order_changes.saturating_add(1);
+         if let Some(previous) = previous.and_then(|key| self.paint_states.get(&key))
+         {
+            self.damage_region.add_spatial(previous.bounds);
+         }
+         if let Some(next) = next.and_then(|key| self.next_paint_states.get(&key))
+         {
+            self.damage_region.add_spatial(next.bounds);
+         }
+      }
+      let mut effect_expansions = 0_u32;
+      if unbounded_effect && !self.damage_region.is_empty()
+      {
+         self.damage_region.force_full();
+      }
+      else
+      {
+         for effect in &self.effect_dependencies
+         {
+            if self.damage_region.intersects(effect.sample_bounds)
+            {
+               self.damage_region.add_spatial(effect.output_bounds);
+               effect_expansions = effect_expansions.saturating_add(1);
+            }
+         }
+      }
+      core::mem::swap(&mut self.paint_states, &mut self.next_paint_states);
+      core::mem::swap(&mut self.paint_order, &mut self.next_paint_order);
+      self.next_paint_states.clear();
+      self.next_paint_order.clear();
+      self.damage_stats = self.damage_region.finish_stats(stats, effect_expansions);
    }
 
     pub fn encode_retained(&mut self, b: &mut DrawListBuilder) -> RetainedDrawStatus {

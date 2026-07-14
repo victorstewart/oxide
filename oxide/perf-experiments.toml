@@ -1,4 +1,44 @@
 [[experiments]]
+id = "c28-retained-paint-damage"
+introduced_commit = "C28 staged tree recorded in commit proof"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-ui-core", "oxide-renderer-api", "oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "Static idle, caret opacity, move, remove, resize, dirty leaf, resource generation, clip, reordering, repeated chunk identity, backdrop propagation, bounded/full fallback, memory warning, and exact flattened/pixel output must remain conservative and deterministic."
+performance_gate = "Fifteen balanced fresh-process pairs with 140 samples per side after 64 warmups must eliminate static idle submissions, materially improve one-dirty-leaf event-to-submit and direct GPU distributions, preserve p95/p99/peak gates, and reduce damage from the full 700,000-pixel viewport to the exact conservative leaf region."
+decision_state = "accepted"
+decision = "Retain exact old/new ordered paint state per stable chunk occurrence, derive bounded damage and effect propagation in UiSurface, and expose explicit frame demand so static retained surfaces skip construction and submission."
+proof = [
+   "The exact-tree idle-frame, dirty-CPU, and dirty-GPU reports under benchmarks/experiments/c28-retained-damage/raw retain parent/candidate tree, binary, instrumentation, raw-sample, order, counter, output-hash, and decision identities.",
+   "The 10,000-cell static candidate performs zero measured submissions; one dirty leaf rebuilds, prepares, lowers, and submits one chunk while reducing per-frame damage from 700,000 pixels to 108 pixels with the same 1000x700 BGRA8 output fingerprint as the parent.",
+   "Renderer and surface tests freeze conservative effect dependencies, old/new movement and removal unions, property/resource/clip/order classification, backdrop expansion, bounded and unbounded full fallbacks, memory-warning purge, reusable damage storage, and exact flattened command sequences.",
+]
+cleanup = [
+   "Kept the region accumulator fixed at eight deterministic coalesced rectangles and falls back to the viewport when complexity or an unbounded effect makes partial redraw unsafe.",
+   "Retained paint-state maps and order vectors reuse allocation after warmup, release old chunk references after each comparison, and purge all retained references on memory warning; official baseline promotion remains deferred to C62.",
+]
+
+[[experiments]]
+id = "c28-revision-only-paint-state-rejected"
+introduced_commit = "rejected during C28 removal correctness review"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-ui-core", "oxide-renderer-api"]
+required_devices = ["macOS host"]
+correctness_gate = "Damage classification must distinguish an identical ancestor chunk rebuilt only because descendant composition changed from a node whose own visible paint changed."
+performance_gate = "Moving or removing one leaf must not promote conservative damage to the full surface solely because an unchanged ancestor received a new retained chunk allocation or revision."
+decision_state = "rejected"
+decision = "Rejected revision-only paint comparison because descendant cache invalidation can rebuild an ancestor with byte-identical visible output and would incorrectly enlarge localized damage."
+proof = [
+   "The initial focused removal regression promoted a localized 51x21 old/new union to the full 120x60 surface when the unchanged root chunk received a new identity and revision.",
+   "Exact retained draw-list, resource-generation, layer, transform, opacity, clip, and bounds comparison classifies that root as descendant-only while the final move/remove tests retain the localized union.",
+]
+cleanup = [
+   "Removed revision equality as the visible-change decision; immutable chunk pointer equality remains the fast path and exact retained output comparison handles rebuilt identities.",
+]
+
+[[experiments]]
 id = "c27-spatial-metadata"
 introduced_commit = "C27 staged tree recorded in commit proof"
 introduced_date = "2026-07-13"

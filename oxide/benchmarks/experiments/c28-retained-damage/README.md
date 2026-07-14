@@ -1,0 +1,11 @@
+# C28 retained-damage evidence
+
+C28 derives conservative surface damage from retained paint state instead of requiring callers to submit a full or hand-authored region. Each ordered chunk occurrence retains its prior bounds, transform, opacity, resolved clip, resource generations, layer metadata, and exact immutable draw content. Movement and replacement use the union of old and new bounds; removals preserve the old bounds; unchanged ancestor chunks rebuilt only for descendant composition are classified but do not enlarge damage. Reordering damages both affected paint positions.
+
+The region accumulator keeps at most eight deterministic coalesced rectangles and falls back to the full viewport when complexity or unbounded effects make partial redraw unsafe. Backdrop and visual-effect sample/output dependencies are prepared with the chunk's C27 spatial metadata, then expanded when underlying damage intersects a sample region. Memory warnings purge retained chunks and paint-state references before forcing one exact full redraw.
+
+`UiSurface::needs_frame()` covers pending damage, animation, async layout, camera, timer, upload, and async-publication demand. `take_damage_into()` transfers the bounded region into caller-owned reusable storage. Static retained surfaces therefore skip builder construction and renderer submission once their initial damage has been consumed.
+
+The permanent rows are `cpu.architecture.damage.retained_surface_idle_10000`, `cpu.architecture.damage.retained_surface_dirty_leaf_10000`, `gpu.architecture.damage.retained_surface_dirty_leaf_10000`, and `cpu.authoring.surface.retained_damage_dirty_leaf_10000`. The exact probe uses a 10,000-cell surface at 1000x700, one full warmup submission, 64 measured-path warmups, 140 observations per fresh process, 15 balanced pairs, user-interactive QoS, completed-command-buffer GPU timing, and final BGRA8 readback hashing. A shared instrumentation patch contains both compile-time-selected adapters and is applied byte-identically to the clean parent and staged candidate trees.
+
+The locally ignored `raw/` directory retains the instrumentation patch, plans, exact identities, every sample, order, counter result, and decision. Aggregate workspace and physical-device baseline promotion remains deferred to C62.
