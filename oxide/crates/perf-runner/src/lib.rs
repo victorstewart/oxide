@@ -246,6 +246,10 @@ const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
         name: "Surface Retained Cache Policy",
     },
     AuthoringPerfSpec {
+        id: "cpu.authoring.animation.dynamic_properties_300",
+        name: "Dynamic Property Animation",
+    },
+    AuthoringPerfSpec {
         id: "cpu.authoring.drawlist_text_replay.multi_atlas",
         name: "DrawList Text Replay Multi Atlas",
     },
@@ -3332,6 +3336,9 @@ fn push_authoring_cases(
             }
             "cpu.authoring.surface_retained.cache_policy" => {
                 authoring_surface_retained_cache_policy_case(smoke)
+            }
+            "cpu.authoring.animation.dynamic_properties_300" => {
+                architecture_matrix::authoring_dynamic_property_surface_case(smoke)
             }
             "cpu.authoring.drawlist_text_replay.multi_atlas" => {
                 authoring_drawlist_text_replay_multi_atlas_case(smoke)

@@ -50,6 +50,8 @@ const TIMESTAMP_COMPLETED_CAPACITY: usize = 4_096;
 const PREPARED_CACHE_DEFAULT_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
 const PREPARED_BUNDLE_DEFAULT_MIN_DRAWS: usize = 8;
 const PREPARED_BUNDLE_SCENE_MIN_DRAWS: u64 = 64;
+const PREPARED_PROPERTY_RING_DEPTH: usize = 3;
+const PREPARED_PROPERTY_UNIFORM_SIZE: u64 = 48;
 
 fn cpu_submit_timing_begin(enabled: bool) -> Option<f64> {
     enabled.then(|| {
@@ -276,6 +278,223 @@ impl PreparedChunkKey
    }
 }
 
+#[derive(Clone, Copy)]
+struct PreparedFrameInstance
+{
+   key: PreparedChunkKey,
+   property_offset: Option<u32>,
+   clip: Option<api::RectI>,
+}
+
+struct PreparedPropertyRing
+{
+   buffer: wgpu::Buffer,
+   bind_group: wgpu::BindGroup,
+   stride: u64,
+   capacity: usize,
+   uniforms: Vec<[f32; 12]>,
+   revisions: Vec<u64>,
+   ring_revisions: Vec<[u64; PREPARED_PROPERTY_RING_DEPTH]>,
+   pending: Vec<usize>,
+   bytes: Vec<u8>,
+}
+
+impl PreparedPropertyRing
+{
+   fn new(device: &wgpu::Device, programs: &GpuPrograms) -> Self
+   {
+      let stride = align_to(
+         PREPARED_PROPERTY_UNIFORM_SIZE,
+         u64::from(device.limits().min_uniform_buffer_offset_alignment.max(1)),
+      );
+      let capacity = 16;
+      let (buffer, bind_group) = create_prepared_property_buffer(device, programs, stride, capacity);
+      Self {
+         buffer,
+         bind_group,
+         stride,
+         capacity,
+         uniforms: Vec::new(),
+         revisions: Vec::new(),
+         ring_revisions: Vec::new(),
+         pending: Vec::new(),
+         bytes: vec![0; prepared_property_ring_bytes(stride, capacity) as usize],
+      }
+   }
+
+   fn ensure_capacity(&mut self, device: &wgpu::Device, programs: &GpuPrograms, needed: usize) -> bool
+   {
+      if needed <= self.capacity
+      {
+         return false;
+      }
+      let capacity = needed.max(self.capacity + self.capacity / 2);
+      let (buffer, bind_group) = create_prepared_property_buffer(device, programs, self.stride, capacity);
+      self.buffer = buffer;
+      self.bind_group = bind_group;
+      self.capacity = capacity;
+      self.bytes.resize(prepared_property_ring_bytes(self.stride, capacity) as usize, 0);
+      self.bytes.fill(0);
+      for revisions in &mut self.ring_revisions
+      {
+         *revisions = [0; PREPARED_PROPERTY_RING_DEPTH];
+      }
+      true
+   }
+
+   fn begin_frame(&mut self)
+   {
+      self.pending.clear();
+   }
+
+   fn resolve(&mut self, index: usize, slot: usize, uniform: [f32; 12]) -> Option<u32>
+   {
+      while self.uniforms.len() <= index
+      {
+         self.uniforms.push(uniform);
+         self.revisions.push(1);
+         self.ring_revisions.push([0; PREPARED_PROPERTY_RING_DEPTH]);
+      }
+      if self.uniforms[index] != uniform
+      {
+         self.uniforms[index] = uniform;
+         self.revisions[index] = self.revisions[index].wrapping_add(1).max(1);
+      }
+      let dynamic_offset = u32::try_from(self.offset(slot, index)).ok()?;
+      if self.ring_revisions[index][slot] != self.revisions[index]
+      {
+         let offset = self.offset(slot, index) as usize;
+         let values = bytemuck::cast_slice(&uniform);
+         self.bytes[offset..offset + values.len()].copy_from_slice(values);
+         self.pending.push(index);
+      }
+      Some(dynamic_offset)
+   }
+
+   fn upload(&mut self, queue: &wgpu::Queue, slot: usize) -> (u64, u64, u32)
+   {
+      let property_bytes = (self.pending.len() as u64).saturating_mul(PREPARED_PROPERTY_UNIFORM_SIZE);
+      let records = self.pending.len().min(u32::MAX as usize) as u32;
+      let mut upload_bytes = 0_u64;
+      let mut start = 0;
+      while start < self.pending.len()
+      {
+         let mut end = start + 1;
+         while end < self.pending.len() && self.pending[end] == self.pending[end - 1] + 1
+         {
+            end += 1;
+         }
+         let first = self.offset(slot, self.pending[start]) as usize;
+         let last = self.offset(slot, self.pending[end - 1]) as usize + PREPARED_PROPERTY_UNIFORM_SIZE as usize;
+         queue.write_buffer(&self.buffer, first as u64, &self.bytes[first..last]);
+         upload_bytes = upload_bytes.saturating_add((last - first) as u64);
+         start = end;
+      }
+      for index in self.pending.iter().copied()
+      {
+         self.ring_revisions[index][slot] = self.revisions[index];
+      }
+      (upload_bytes, property_bytes, records)
+   }
+
+   fn truncate(&mut self, len: usize)
+   {
+      self.uniforms.truncate(len);
+      self.revisions.truncate(len);
+      self.ring_revisions.truncate(len);
+   }
+
+   #[inline]
+   fn offset(&self, slot: usize, index: usize) -> u64
+   {
+      (slot.saturating_mul(self.capacity).saturating_add(index) as u64).saturating_mul(self.stride)
+   }
+
+   #[inline]
+   fn byte_size(&self) -> u64
+   {
+      prepared_property_ring_bytes(self.stride, self.capacity)
+   }
+}
+
+fn prepared_property_ring_bytes(stride: u64, capacity: usize) -> u64
+{
+   stride
+      .saturating_mul(capacity as u64)
+      .saturating_mul(PREPARED_PROPERTY_RING_DEPTH as u64)
+}
+
+fn prepared_dynamic_uniform(snapshot: &api::RenderSnapshot, property_slots: &[api::RenderPropertySlotId], origin: [f32; 2], viewport: [f32; 2]) -> Option<[f32; 12]>
+{
+   let mut matrix = [1.0_f32, 0.0, 0.0, 1.0];
+   let mut translation = [0.0_f32, 0.0];
+   let mut opacity = 1.0_f32;
+   for id in property_slots.iter().copied()
+   {
+      let index = snapshot.properties().binary_search_by_key(&id.0, |property| property.id.0).ok()?;
+      match snapshot.properties()[index].value
+      {
+         api::RenderPropertyValue::Transform(transform) =>
+         {
+            let next = [
+               transform[0] * matrix[0] + transform[2] * matrix[1],
+               transform[1] * matrix[0] + transform[3] * matrix[1],
+               transform[0] * matrix[2] + transform[2] * matrix[3],
+               transform[1] * matrix[2] + transform[3] * matrix[3],
+            ];
+            translation = [
+               transform[0] * translation[0] + transform[2] * translation[1] + transform[4],
+               transform[1] * translation[0] + transform[3] * translation[1] + transform[5],
+            ];
+            matrix = next;
+         }
+         api::RenderPropertyValue::Opacity(value) => opacity *= value,
+      }
+   }
+   translation = [
+      matrix[0] * origin[0] + matrix[2] * origin[1] + translation[0],
+      matrix[1] * origin[0] + matrix[3] * origin[1] + translation[1],
+   ];
+   let values = [
+      viewport[0], viewport[1], 0.0, 0.0,
+      matrix[0], matrix[1], matrix[2], matrix[3],
+      translation[0], translation[1], opacity.clamp(0.0, 1.0), 0.0,
+   ];
+   values.iter().all(|value| value.is_finite()).then_some(values)
+}
+
+fn prepared_transform_rect(rect: api::RectF, uniform: [f32; 12]) -> api::RectI
+{
+   let [_, _, _, _, m11, m12, m21, m22, tx, ty, ..] = uniform;
+   let x1 = rect.x + rect.w;
+   let y1 = rect.y + rect.h;
+   let points = [
+      [m11 * rect.x + m21 * rect.y + tx, m12 * rect.x + m22 * rect.y + ty],
+      [m11 * x1 + m21 * rect.y + tx, m12 * x1 + m22 * rect.y + ty],
+      [m11 * rect.x + m21 * y1 + tx, m12 * rect.x + m22 * y1 + ty],
+      [m11 * x1 + m21 * y1 + tx, m12 * x1 + m22 * y1 + ty],
+   ];
+   let min_x = points.iter().map(|point| point[0]).fold(f32::INFINITY, f32::min).floor();
+   let min_y = points.iter().map(|point| point[1]).fold(f32::INFINITY, f32::min).floor();
+   let max_x = points.iter().map(|point| point[0]).fold(f32::NEG_INFINITY, f32::max).ceil();
+   let max_y = points.iter().map(|point| point[1]).fold(f32::NEG_INFINITY, f32::max).ceil();
+   api::RectI::new(min_x as i32, min_y as i32, (max_x - min_x) as i32, (max_y - min_y) as i32)
+}
+
+fn prepared_intersect_clip(a: api::RectI, b: api::RectI) -> api::RectI
+{
+   let x0 = i64::from(a.x).max(i64::from(b.x));
+   let y0 = i64::from(a.y).max(i64::from(b.y));
+   let x1 = (i64::from(a.x) + i64::from(a.w)).min(i64::from(b.x) + i64::from(b.w));
+   let y1 = (i64::from(a.y) + i64::from(a.h)).min(i64::from(b.y) + i64::from(b.h));
+   api::RectI::new(
+      x0.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+      y0.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+      (x1 - x0).clamp(0, i64::from(i32::MAX)) as i32,
+      (y1 - y0).clamp(0, i64::from(i32::MAX)) as i32,
+   )
+}
+
 struct PreparedChunk
 {
    vertex_buffer: wgpu::Buffer,
@@ -424,12 +643,12 @@ impl PreparedChunkCache
       });
    }
 
-   fn enforce_budget(&mut self, protected: &[PreparedChunkKey])
+   fn enforce_budget(&mut self, protected: &[PreparedFrameInstance])
    {
       while self.resident_bytes > self.budget_bytes
       {
          let victim = self.entries.iter().filter(|(_, entry)| {
-            !protected.contains(&entry.key)
+            !protected.iter().any(|instance| instance.key == entry.key)
          }).min_by_key(|(_, entry)| entry.last_used).map(|(id, _)| *id);
          let Some(victim) = victim else { break };
          self.evict(victim);
@@ -1255,7 +1474,8 @@ pub struct WebGpuRenderer {
     meshes_3d: Vec<Option<GpuMesh3d>>,
     frame: FrameData,
     prepared_chunks: PreparedChunkCache,
-    prepared_frame_plan: Vec<PreparedChunkKey>,
+    prepared_property_ring: PreparedPropertyRing,
+    prepared_frame_plan: Vec<PreparedFrameInstance>,
     prepared_snapshot_bundle: Option<PreparedSnapshotBundle>,
     prepared_fallback: api::DrawList,
     prepared_frame_active: bool,
@@ -1462,7 +1682,8 @@ impl WebGpuRenderer {
                 self.id_mask_uniform_buffer
                     .as_ref()
                     .map_or(0, wgpu::Buffer::size),
-            );
+            )
+            .saturating_add(self.prepared_property_ring.byte_size());
         let persistent_asset_bytes = self
             .present_vertex_buffer
             .size()
@@ -1509,7 +1730,7 @@ impl WebGpuRenderer {
             scene3d_mesh_bytes,
             staging_buffer_bytes,
             bind_buffer_bytes: 0,
-            frame_ring_bytes: 0,
+            frame_ring_bytes: self.prepared_property_ring.byte_size(),
             cache_bytes,
         };
     }
@@ -1592,6 +1813,7 @@ impl WebGpuRenderer {
 
         let programs = create_programs(&device, config.format);
         let (viewport_buffer, viewport_bind_group) = create_viewport_bind_group(&device, &programs);
+        let prepared_property_ring = PreparedPropertyRing::new(&device, &programs);
         write_viewport_uniform(&queue, &viewport_buffer, width, height, 1.0);
         let effect_uniform_stride = align_to(
             EFFECT_UNIFORM_SIZE,
@@ -1689,6 +1911,7 @@ impl WebGpuRenderer {
                 effect_single_uniform_slot: true,
             },
             prepared_chunks: PreparedChunkCache::default(),
+            prepared_property_ring,
             prepared_frame_plan: Vec::new(),
             prepared_snapshot_bundle: None,
             prepared_fallback: api::DrawList::default(),
@@ -3869,9 +4092,8 @@ impl WebGpuRenderer {
 
 impl WebGpuRenderer
 {
-   /// Encodes immutable static snapshot chunks through persistent buffers and render bundles.
-   /// Instance transforms, properties, layers, and effects remain on the checked flat path until
-   /// their frame-dynamic state has a completion-safe backend ring.
+   /// Encodes immutable snapshot chunks through persistent geometry and a completion-safe
+   /// frame ring for dynamic transform and opacity records.
    pub fn encode_snapshot(&mut self, snapshot: &api::RenderSnapshot) -> Result<(), api::RenderSnapshotError>
    {
       self.prepared_frame_plan.clear();
@@ -3887,13 +4109,16 @@ impl WebGpuRenderer
          && self.id_mask_draws.is_empty()
          && snapshot.instance_count() != 0;
       let mut snapshot_commands = 0_u64;
+      let mut dynamic_snapshot = false;
       snapshot.visit_instances(|instance| {
          supported = supported
-            && instance.origin == [0.0, 0.0]
-            && instance.property_slots.is_empty()
-            && instance.clip.is_none()
             && instance.layer.is_none()
             && self.prepared_chunk_supported(&instance.chunk);
+         dynamic_snapshot = dynamic_snapshot
+            || instance.origin != [0.0, 0.0]
+            || !instance.property_slots.is_empty()
+            || !instance.dynamic_clips.is_empty()
+            || instance.clip.is_some();
          snapshot_commands = snapshot_commands.saturating_add(
             instance.chunk.draw_list().items.len() as u64,
          );
@@ -3902,7 +4127,23 @@ impl WebGpuRenderer
       {
          return self.encode_snapshot_flat(snapshot);
       }
-      let bundles_enabled = snapshot_commands >= PREPARED_BUNDLE_SCENE_MIN_DRAWS;
+      let bundles_enabled = !dynamic_snapshot
+         && snapshot_commands >= PREPARED_BUNDLE_SCENE_MIN_DRAWS;
+      let property_slot = self.frame_id as usize % PREPARED_PROPERTY_RING_DEPTH;
+      self.prepared_property_ring.begin_frame();
+      if dynamic_snapshot && self.prepared_property_ring.ensure_capacity(
+         &self.device,
+         &self.programs,
+         snapshot.instance_count().min(usize::MAX as u64) as usize,
+      )
+      {
+         self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
+         self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
+      }
+      let viewport = [
+         logical_dimension(self.width, self.scale).max(1.0),
+         logical_dimension(self.height, self.scale).max(1.0),
+      ];
 
       let mut cache = core::mem::take(&mut self.prepared_chunks);
       let mut hits = 0_u64;
@@ -3922,10 +4163,54 @@ impl WebGpuRenderer
             self.config.format,
             bundles_enabled,
          );
+         let plan_index = self.prepared_frame_plan.len();
+         let (property_offset, clip) = if dynamic_snapshot
+         {
+            let Some(uniform) = prepared_dynamic_uniform(
+               snapshot,
+               &instance.property_slots,
+               instance.origin,
+               viewport,
+            ) else
+            {
+               supported = false;
+               return;
+            };
+            let mut clip = instance.clip.map(|rect| prepared_transform_rect(
+               api::RectF::new(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32),
+               uniform,
+            ));
+            for dynamic_clip in instance.dynamic_clips.iter().copied()
+            {
+               let Some(clip_uniform) = prepared_dynamic_uniform(
+                  snapshot,
+                  core::slice::from_ref(&dynamic_clip.transform),
+                  [0.0, 0.0],
+                  viewport,
+               ) else
+               {
+                  supported = false;
+                  return;
+               };
+               let transformed = prepared_transform_rect(dynamic_clip.rect, clip_uniform);
+               clip = Some(clip.map_or(transformed, |current| prepared_intersect_clip(current, transformed)));
+            }
+            let Some(property_offset) = self.prepared_property_ring.resolve(plan_index, property_slot, uniform) else
+            {
+               supported = false;
+               return;
+            };
+            (Some(property_offset), clip)
+         }
+         else
+         {
+            (None, None)
+         };
+         let plan = PreparedFrameInstance { key, property_offset, clip };
          if cache.touch(key)
          {
             hits = hits.saturating_add(1);
-            self.prepared_frame_plan.push(key);
+            self.prepared_frame_plan.push(plan);
             return;
          }
          let revision_rebuilds = cache.revision_rebuild_streak(key);
@@ -3947,13 +4232,13 @@ impl WebGpuRenderer
          buffer_creates = buffer_creates.saturating_add(buffers);
          bundle_creates = bundle_creates.saturating_add(bundles);
          cache.insert(key, prepared, revision_rebuilds);
-         self.prepared_frame_plan.push(key);
+         self.prepared_frame_plan.push(plan);
       });
       if supported
       {
          cache.enforce_budget(&self.prepared_frame_plan);
          supported = cache.resident_bytes <= cache.budget_bytes
-            && self.prepared_frame_plan.iter().all(|key| cache.get(*key).is_some());
+            && self.prepared_frame_plan.iter().all(|instance| cache.get(instance.key).is_some());
       }
       if !supported
       {
@@ -3963,6 +4248,15 @@ impl WebGpuRenderer
          self.prepared_frame_plan.clear();
          return self.encode_snapshot_flat(snapshot);
       }
+      let (_property_buffer_upload_bytes, property_upload_bytes, property_records_updated) = if dynamic_snapshot
+      {
+         self.prepared_property_ring.truncate(self.prepared_frame_plan.len());
+         self.prepared_property_ring.upload(&self.queue, property_slot)
+      }
+      else
+      {
+         (0, 0, 0)
+      };
 
       self.stats.backend_cache_hits = self.stats.backend_cache_hits.saturating_add(hits);
       self.stats.backend_cache_misses = self.stats.backend_cache_misses.saturating_add(misses);
@@ -3972,11 +4266,14 @@ impl WebGpuRenderer
       self.stats.commands_traversed = self.stats.commands_traversed.saturating_add(commands_traversed);
       self.stats.geometry_bytes_copied = self.stats.geometry_bytes_copied.saturating_add(upload_bytes);
       self.stats.buffer_upload_bytes = self.stats.buffer_upload_bytes.saturating_add(upload_bytes);
+      self.stats.property_upload_bytes = self.stats.property_upload_bytes.saturating_add(property_upload_bytes);
+      self.stats.property_records_updated = self.stats.property_records_updated.saturating_add(property_records_updated);
+      self.stats.property_ring_bytes = self.prepared_property_ring.byte_size();
       self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(buffer_creates);
       self.stats.draw_buffer_grows = self.stats.draw_buffer_grows.saturating_add(buffer_creates);
       self.stats.render_bundle_creates = self.stats.render_bundle_creates.saturating_add(bundle_creates);
       let snapshot_bundle_eligible = bundles_enabled
-         && self.prepared_frame_plan.iter().all(|key| cache.get(*key).is_some_and(|chunk| {
+         && self.prepared_frame_plan.iter().all(|instance| cache.get(instance.key).is_some_and(|chunk| {
             chunk.draws.len() >= self.prepared_bundle_min_draws
                && chunk.draws.iter().all(|draw| self.prepared_draw_bundle_compatible(*draw))
          }));
@@ -3985,9 +4282,9 @@ impl WebGpuRenderer
          let had_snapshot_bundle = self.prepared_snapshot_bundle.is_some();
          let bundle_matches = self.prepared_snapshot_bundle.as_ref().is_some_and(|bundle| {
             bundle.keys.len() == self.prepared_frame_plan.len()
-               && bundle.keys.iter().zip(&self.prepared_frame_plan).all(|(bundle_key, key)| {
-                  cache.get(*key).is_some_and(|chunk| {
-                     bundle_key.id == key.id && bundle_key.generation == chunk.bundle_generation
+               && bundle.keys.iter().zip(&self.prepared_frame_plan).all(|(bundle_key, instance)| {
+                  cache.get(instance.key).is_some_and(|chunk| {
+                     bundle_key.id == instance.key.id && bundle_key.generation == chunk.bundle_generation
                   })
                })
          });
@@ -4260,7 +4557,7 @@ impl WebGpuRenderer
          sample_count: 1,
          multiview: None,
       });
-      encoder.set_bind_group(0, &self.viewport_bind_group, &[]);
+      encoder.set_bind_group(0, &self.viewport_bind_group, &[0]);
       encoder.set_vertex_buffer(0, vertex_buffer.slice(..));
       let mut bound_pipeline = None;
       let mut bound_bind = None;
@@ -4310,7 +4607,7 @@ impl WebGpuRenderer
    fn create_prepared_snapshot_bundle(
       &self,
       cache: &PreparedChunkCache,
-      plan: &[PreparedChunkKey],
+      plan: &[PreparedFrameInstance],
    ) -> Option<PreparedSnapshotBundle>
    {
       let formats = [Some(self.config.format)];
@@ -4321,13 +4618,13 @@ impl WebGpuRenderer
          sample_count: 1,
          multiview: None,
       });
-      encoder.set_bind_group(0, &self.viewport_bind_group, &[]);
+      encoder.set_bind_group(0, &self.viewport_bind_group, &[0]);
       let mut bound_pipeline = None;
       let mut bound_bind = None;
       let mut draws = 0_u32;
-      for key in plan
+      for instance in plan
       {
-         let chunk = cache.get(*key)?;
+         let chunk = cache.get(instance.key)?;
          encoder.set_vertex_buffer(0, chunk.vertex_buffer.slice(..));
          let mut bound_index = None;
          for draw in &chunk.draws
@@ -4374,10 +4671,10 @@ impl WebGpuRenderer
          }
       }
       Some(PreparedSnapshotBundle {
-         keys: plan.iter().map(|key| {
-            let chunk = cache.get(*key)?;
+         keys: plan.iter().map(|instance| {
+            let chunk = cache.get(instance.key)?;
             Some(PreparedSnapshotBundleKey {
-               id: key.id,
+               id: instance.key.id,
                generation: chunk.bundle_generation,
             })
          }).collect::<Option<Vec<_>>>()?.into_boxed_slice(),
@@ -4932,7 +5229,8 @@ impl WebGpuRenderer {
             });
             let mut plan_index = 0;
             while plan_index < plan.len() {
-                let Some(chunk) = cache.get(plan[plan_index]) else {
+                let instance = plan[plan_index];
+                let Some(chunk) = cache.get(instance.key) else {
                     plan_index += 1;
                     continue;
                 };
@@ -4942,7 +5240,7 @@ impl WebGpuRenderer {
                 if matches!(chunk.segments.as_slice(), [PreparedSegment::Bundle { .. }]) {
                     let start = plan_index;
                     while plan_index < plan.len() {
-                        let Some(chunk) = cache.get(plan[plan_index]) else { break };
+                        let Some(chunk) = cache.get(plan[plan_index].key) else { break };
                         let [PreparedSegment::Bundle { draws: segment_draws, .. }] = chunk.segments.as_slice() else { break };
                         if plan_index != start {
                             let chunk_draws = chunk.draws.len().min(u32::MAX as usize) as u32;
@@ -4953,8 +5251,8 @@ impl WebGpuRenderer {
                         bundle_draws = bundle_draws.saturating_add(*segment_draws);
                         plan_index += 1;
                     }
-                    pass.execute_bundles(plan[start..plan_index].iter().filter_map(|key| {
-                        let chunk = cache.get(*key)?;
+                    pass.execute_bundles(plan[start..plan_index].iter().filter_map(|instance| {
+                        let chunk = cache.get(instance.key)?;
                         let [PreparedSegment::Bundle { bundle, .. }] = chunk.segments.as_slice() else { return None };
                         Some(bundle)
                     }));
@@ -4974,6 +5272,8 @@ impl WebGpuRenderer {
                                 &mut pass,
                                 chunk,
                                 &chunk.draws[*start..*end],
+                                instance.property_offset,
+                                instance.clip,
                             );
                             pipeline_binds = pipeline_binds.saturating_add(counters.0);
                             bind_group_binds = bind_group_binds.saturating_add(counters.1);
@@ -5004,8 +5304,17 @@ impl WebGpuRenderer {
         pass: &mut wgpu::RenderPass<'_>,
         chunk: &PreparedChunk,
         draws: &[GpuDraw],
+        property_offset: Option<u32>,
+        instance_clip: Option<api::RectI>,
     ) -> (u32, u32, u32) {
-        pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+        if let Some(offset) = property_offset
+        {
+            pass.set_bind_group(0, &self.prepared_property_ring.bind_group, &[offset]);
+        }
+        else
+        {
+            pass.set_bind_group(0, &self.viewport_bind_group, &[0]);
+        }
         pass.set_vertex_buffer(0, chunk.vertex_buffer.slice(..));
         let mut pipeline_binds = 0_u32;
         let mut bind_group_binds = 0_u32;
@@ -5029,10 +5338,11 @@ impl WebGpuRenderer {
                 bound_index = Some(draw.index_kind);
             }
             let Some(state) = self.draw_state_key(*draw) else { continue };
-            if bound_clip != Some(state.clip) {
-                set_scissor(pass, state.clip, self.scale, self.width, self.height);
+            let clip = instance_clip.map_or(state.clip, |instance| prepared_intersect_clip(instance, state.clip));
+            if bound_clip != Some(clip) {
+                set_scissor(pass, clip, self.scale, self.width, self.height);
                 scissor_sets = scissor_sets.saturating_add(1);
-                bound_clip = Some(state.clip);
+                bound_clip = Some(clip);
             }
             if bound_pipeline != Some(state.pipeline) {
                 let Some(pipeline) = self.pipeline_for_draw(state.pipeline) else { continue };
@@ -5705,7 +6015,7 @@ impl WebGpuRenderer {
             timestamp_writes,
             occlusion_query_set: None,
         });
-        pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+        pass.set_bind_group(0, &self.viewport_bind_group, &[0]);
         pass.set_vertex_buffer(0, vertex_buffer.slice(..));
 
         let mut encoded_draws = 0_u32;
@@ -5875,7 +6185,7 @@ impl WebGpuRenderer {
             occlusion_query_set: None,
         });
         pass.set_pipeline(self.rgba_pipeline());
-        pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+        pass.set_bind_group(0, &self.viewport_bind_group, &[0]);
         pass.set_bind_group(1, &scene_bind_group, &[]);
         pass.set_vertex_buffer(0, self.present_vertex_buffer.slice(..));
         pass.set_index_buffer(self.present_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
@@ -5943,8 +6253,8 @@ fn create_programs(device: &wgpu::Device, format: wgpu::TextureFormat) -> GpuPro
             visibility: wgpu::ShaderStages::VERTEX,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
+                has_dynamic_offset: true,
+                min_binding_size: NonZeroU64::new(PREPARED_PROPERTY_UNIFORM_SIZE),
             },
             count: None,
         }],
@@ -6691,16 +7001,46 @@ fn create_viewport_bind_group(
 ) -> (wgpu::Buffer, wgpu::BindGroup) {
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("oxide-webgpu-viewport-buffer"),
-        size: 16,
+        size: PREPARED_PROPERTY_UNIFORM_SIZE,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("oxide-webgpu-viewport-bind-group"),
         layout: &programs.viewport_layout,
-        entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: &buffer,
+                offset: 0,
+                size: NonZeroU64::new(PREPARED_PROPERTY_UNIFORM_SIZE),
+            }),
+        }],
     });
     (buffer, bind_group)
+}
+
+fn create_prepared_property_buffer(device: &wgpu::Device, programs: &GpuPrograms, stride: u64, capacity: usize) -> (wgpu::Buffer, wgpu::BindGroup)
+{
+   let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+      label: Some("oxide-webgpu-prepared-property-ring"),
+      size: prepared_property_ring_bytes(stride, capacity),
+      usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+      mapped_at_creation: false,
+   });
+   let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+      label: Some("oxide-webgpu-prepared-property-bind-group"),
+      layout: &programs.viewport_layout,
+      entries: &[wgpu::BindGroupEntry {
+         binding: 0,
+         resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+            buffer: &buffer,
+            offset: 0,
+            size: NonZeroU64::new(PREPARED_PROPERTY_UNIFORM_SIZE),
+         }),
+      }],
+   });
+   (buffer, bind_group)
 }
 
 fn create_effect_bind_group(
@@ -6758,7 +7098,12 @@ fn write_viewport_uniform(
 ) {
     let logical_w = logical_dimension(width, scale).max(1.0);
     let logical_h = logical_dimension(height, scale).max(1.0);
-    queue.write_buffer(buffer, 0, &f32x4_bytes([logical_w, logical_h, 0.0, 0.0]));
+    let values = [
+        logical_w, logical_h, 0.0, 0.0,
+        1.0, 0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0, 0.0,
+    ];
+    queue.write_buffer(buffer, 0, bytemuck::cast_slice(&values));
 }
 
 fn create_color_target(
@@ -7673,6 +8018,8 @@ fn write_u32(out: &mut [u8], offset: &mut usize, value: u32) {
 const WGSL: &str = r#"
 struct Viewport {
    size_origin: vec4<f32>,
+   matrix: vec4<f32>,
+   translation_opacity: vec4<f32>,
 };
 
 struct Effect {
@@ -7700,11 +8047,15 @@ struct VertexOut {
 fn vs_main(input: VertexIn) -> VertexOut {
    let size = max(viewport.size_origin.xy, vec2<f32>(1.0, 1.0));
    let origin = viewport.size_origin.zw;
-   let local = (input.pos - origin) / size;
+   let transformed = vec2<f32>(
+      viewport.matrix.x * input.pos.x + viewport.matrix.z * input.pos.y + viewport.translation_opacity.x,
+      viewport.matrix.y * input.pos.x + viewport.matrix.w * input.pos.y + viewport.translation_opacity.y,
+   );
+   let local = (transformed - origin) / size;
    var out: VertexOut;
    out.pos = vec4<f32>(local.x * 2.0 - 1.0, 1.0 - local.y * 2.0, 0.0, 1.0);
    out.uv = input.uv;
-   out.color = input.color;
+   out.color = vec4<f32>(input.color.rgb, input.color.a * viewport.translation_opacity.z);
    return out;
 }
 

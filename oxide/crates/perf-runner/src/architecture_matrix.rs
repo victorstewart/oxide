@@ -263,6 +263,12 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       }
    }
 
+   let dynamic_property_id = "gpu.architecture.animation.dynamic_properties_300";
+   if perf_case_allowed(dynamic_property_id)
+   {
+      cases.push(metal_dynamic_property_case(dynamic_property_id, smoke)?);
+   }
+
    push_if_allowed(cases, "cpu.architecture.idle.static_foreground", || idle_case(smoke));
    Ok(())
 }
@@ -433,6 +439,214 @@ pub(super) fn metal_prepared_chunk_case(id: &str, smoke: bool, dirty: bool) -> R
       })],
       metrics,
    })
+}
+
+fn metal_dynamic_property_case(id: &str, smoke: bool) -> Result<PerfCaseResult>
+{
+   let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating dynamic-property Metal renderer")?);
+   renderer.resize(1_200, 800, 1.0).context("resizing dynamic-property Metal renderer")?;
+   let image = renderer.image_create_rgba8(2, 2, &[255; 16], 8);
+   let atlas = renderer.image_create_a8(2, 2, &[255; 4], 2);
+   let instances = dynamic_property_instances(image, atlas);
+   let snapshot_a = dynamic_property_snapshot(&instances, 0);
+   let snapshot_b = dynamic_property_snapshot(&instances, 1);
+   let warmups = std::env::var("OXIDE_ARCHITECTURE_METAL_WARMUPS")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|warmups| *warmups >= 3)
+      .unwrap_or(if smoke { 4 } else { 8 });
+   let frames = std::env::var("OXIDE_ARCHITECTURE_METAL_FRAMES")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|frames| *frames > 0)
+      .unwrap_or(if smoke { 4 } else { 24 });
+   let raw_samples = std::env::var_os("OXIDE_C26_RAW_SAMPLES").is_some();
+   let mut frame_samples = Vec::with_capacity(frames);
+   let mut encode_samples = Vec::with_capacity(frames);
+   let mut gpu_samples = Vec::with_capacity(frames);
+   let mut property_upload_bytes = 0_u64;
+   let mut property_records_updated = 0_u64;
+   let mut geometry_upload_bytes = 0_u64;
+   let mut geometry_bytes_copied = 0_u64;
+   let mut commands_traversed = 0_u64;
+   let mut cache_hits = 0_u64;
+   let mut cache_misses = 0_u64;
+   let mut property_ring_bytes_peak = 0_u64;
+
+   for frame in 0..warmups.saturating_add(frames)
+   {
+      let snapshot = if frame & 1 == 0 { &snapshot_a } else { &snapshot_b };
+      let frame_started_at = Instant::now();
+      let token = renderer.begin_frame(&api::FrameTarget, Some(snapshot.damage()));
+      let frame_id = token.0;
+      renderer.encode_snapshot(snapshot).with_context(|| format!("encoding {id}"))?;
+      renderer.submit(token).with_context(|| format!("submitting {id}"))?;
+      let stats = last_metal_stats_after_submit(&renderer, frame_id);
+      if frame < warmups
+      {
+         continue;
+      }
+      frame_samples.push(frame_started_at.elapsed().as_secs_f64() * 1_000.0);
+      encode_samples.push(stats.encode_ms);
+      gpu_samples.push(stats.gpu_ms);
+      property_upload_bytes = property_upload_bytes.saturating_add(stats.property_upload_bytes);
+      property_records_updated = property_records_updated.saturating_add(u64::from(stats.property_records_updated));
+      geometry_upload_bytes = geometry_upload_bytes.saturating_add(stats.buffer_upload_bytes);
+      geometry_bytes_copied = geometry_bytes_copied.saturating_add(stats.geometry_bytes_copied);
+      commands_traversed = commands_traversed.saturating_add(stats.commands_traversed);
+      cache_hits = cache_hits.saturating_add(stats.backend_cache_hits);
+      cache_misses = cache_misses.saturating_add(stats.backend_cache_misses);
+      property_ring_bytes_peak = property_ring_bytes_peak.max(stats.property_ring_bytes);
+   }
+
+   let summary = summarize(&frame_samples);
+   let measured = frames.max(1) as f64;
+   let mut metrics = BTreeMap::new();
+   insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+   insert_distribution_metrics(&mut metrics, "encode_ms", &encode_samples);
+   insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+   insert_frame_pacing_metrics(&mut metrics, &frame_samples);
+   metrics.insert(String::from("animated_nodes"), 300.0);
+   metrics.insert(String::from("text_nodes"), 200.0);
+   metrics.insert(String::from("image_nodes"), 100.0);
+   metrics.insert(String::from("property_records"), 300.0);
+   metrics.insert(String::from("property_upload_bytes_avg"), property_upload_bytes as f64 / measured);
+   metrics.insert(String::from("property_records_updated_avg"), property_records_updated as f64 / measured);
+   metrics.insert(String::from("property_ring_bytes_peak"), property_ring_bytes_peak as f64);
+   metrics.insert(String::from("buffer_upload_bytes_avg"), geometry_upload_bytes as f64 / measured);
+   metrics.insert(String::from("geometry_bytes_copied_avg"), geometry_bytes_copied as f64 / measured);
+   metrics.insert(String::from("commands_traversed_avg"), commands_traversed as f64 / measured);
+   metrics.insert(String::from("backend_cache_hits_avg"), cache_hits as f64 / measured);
+   metrics.insert(String::from("backend_cache_misses_avg"), cache_misses as f64 / measured);
+   if raw_samples
+   {
+      for (index, value) in frame_samples.iter().copied().enumerate()
+      {
+         metrics.insert(format!("c26_raw_frame_ms_{index:04}"), value);
+      }
+      for (index, value) in encode_samples.iter().copied().enumerate()
+      {
+         metrics.insert(format!("c26_raw_encode_ms_{index:04}"), value);
+      }
+      for (index, value) in gpu_samples.iter().copied().enumerate()
+      {
+         metrics.insert(format!("c26_raw_gpu_ms_{index:04}"), value);
+      }
+   }
+   Ok(PerfCaseResult {
+      id: String::from(id),
+      family: String::from("architecture"),
+      layer: String::from("engine"),
+      scenario: String::from("rendering-architecture"),
+      variant: String::from("oxide"),
+      cache_state: String::from("warm"),
+      refresh_mode: String::from("offscreen"),
+      unit: String::from("ms/frame"),
+      gated: true,
+      threshold_pct: 0.20,
+      median: summary.median,
+      p95: summary.p95,
+      p99: summary.p99,
+      min: summary.min,
+      max: summary.max,
+      mean: summary.mean,
+      samples: frame_samples.len(),
+      ops_per_sample: 1,
+      notes: vec![String::from(
+         "Three hundred retained text/image instances alternate full affine and opacity properties through the completion-safe Metal property ring after immutable geometry warmup.",
+      )],
+      metrics,
+   })
+}
+
+fn dynamic_property_instances(image: api::ImageHandle, atlas: api::ImageHandle) -> Vec<api::RenderChunkInstance>
+{
+   let image_list = api::DrawList {
+      items: vec![api::DrawCmd::Image {
+         tex: image,
+         dst: api::RectF::new(0.0, 0.0, 28.0, 28.0),
+         src: api::RectF::new(0.0, 0.0, 2.0, 2.0),
+         alpha: 1.0,
+      }],
+      vertices: Vec::new(),
+      indices: Vec::new(),
+   };
+   let image_chunk = api::RenderChunk::new(
+      api::RenderChunkId(26_000),
+      api::RenderChunkRevisions { resource: 1, ..api::RenderChunkRevisions::default() },
+      image_list,
+      api::ChunkIndexMode::Local,
+      &[api::RenderResourceDependency { image, generation: 1 }],
+   ).expect("dynamic property image chunk");
+   let text_chunk = api::RenderChunk::new(
+      api::RenderChunkId(26_001),
+      api::RenderChunkRevisions { resource: 1, ..api::RenderChunkRevisions::default() },
+      api::DrawList {
+         items: vec![api::DrawCmd::GlyphRun { run: api::GlyphRun {
+            atlas,
+            atlas_revision: 1,
+            vb: api::VertexSpan { offset: 0, len: 4 },
+            ib: api::IndexSpan { offset: 0, len: 6 },
+            sdf: false,
+            color: api::Color::rgba(0.92, 0.94, 1.0, 1.0),
+         }}],
+         vertices: vec![
+            api::Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: 0 },
+            api::Vertex { x: 28.0, y: 0.0, u: 1.0, v: 0.0, rgba: 0 },
+            api::Vertex { x: 28.0, y: 28.0, u: 1.0, v: 1.0, rgba: 0 },
+            api::Vertex { x: 0.0, y: 28.0, u: 0.0, v: 1.0, rgba: 0 },
+         ],
+         indices: vec![0, 1, 2, 0, 2, 3],
+      },
+      api::ChunkIndexMode::Local,
+      &[api::RenderResourceDependency { image: atlas, generation: 1 }],
+   ).expect("dynamic property glyph chunk");
+   (0..300_usize).map(|index| {
+      let chunk = if index < 200 { text_chunk.clone() } else { image_chunk.clone() };
+      let origin = [
+         (index % 20) as f32 * 40.0 + 24.0,
+         (index / 20) as f32 * 40.0 + 24.0,
+      ];
+      let mut instance = api::RenderChunkInstance::new(chunk, origin);
+      instance.property_slots = vec![
+         api::RenderPropertySlotId::dynamic((index * 2 + 1) as u32, 1).expect("dynamic transform slot"),
+         api::RenderPropertySlotId::dynamic((index * 2 + 2) as u32, 1).expect("dynamic opacity slot"),
+      ].into();
+      instance
+   }).collect()
+}
+
+fn dynamic_property_snapshot(instances: &[api::RenderChunkInstance], phase: u64) -> api::RenderSnapshot
+{
+   let mut properties = Vec::with_capacity(instances.len().saturating_mul(2));
+   for index in 0..instances.len()
+   {
+      let angle = if phase & 1 == 0 { -0.035 } else { 0.035 };
+      let scale = if phase & 1 == 0 { 0.96 } else { 1.04 };
+      let (sin, cos) = f32::sin_cos(angle + (index % 7) as f32 * 0.001);
+      properties.push(api::RenderPropertySlot {
+         id: api::RenderPropertySlotId::dynamic((index * 2 + 1) as u32, 1).expect("dynamic transform property"),
+         revision: phase.saturating_add(1),
+         value: api::RenderPropertyValue::Transform([
+            cos * scale,
+            sin * scale,
+            -sin * scale,
+            cos * scale,
+            if phase & 1 == 0 { -1.25 } else { 1.25 },
+            if phase & 1 == 0 { 0.75 } else { -0.75 },
+         ]),
+      });
+      properties.push(api::RenderPropertySlot {
+         id: api::RenderPropertySlotId::dynamic((index * 2 + 2) as u32, 1).expect("dynamic opacity property"),
+         revision: phase.saturating_add(1),
+         value: api::RenderPropertyValue::Opacity(if phase & 1 == 0 { 0.72 } else { 0.96 }),
+      });
+   }
+   api::RenderSnapshot::new(
+      instances.to_vec(),
+      properties,
+      api::Damage { rects: Vec::new() },
+   ).expect("dynamic property snapshot")
 }
 
 fn prepared_chunk_snapshot(image: api::ImageHandle, atlas: api::ImageHandle, dirty_revision: u64, translation: [f32; 2]) -> api::RenderSnapshot
@@ -948,6 +1162,16 @@ fn retained_mixed_sequences() -> Vec<api::RenderChunkSequence>
 
 fn animation_surface_case(smoke: bool) -> PerfCaseResult
 {
+   dynamic_property_surface_case("cpu.architecture.animation.surface_300", "architecture", smoke)
+}
+
+pub(super) fn authoring_dynamic_property_surface_case(smoke: bool) -> PerfCaseResult
+{
+   dynamic_property_surface_case("cpu.authoring.animation.dynamic_properties_300", "authoring", smoke)
+}
+
+fn dynamic_property_surface_case(id: &str, family: &str, smoke: bool) -> PerfCaseResult
+{
    timing::testing::reset();
    let mut surface = ui::UiSurface::new(flat_rect_surface_root_style(1_000.0));
    let nodes = populate_flat_rect_surface(&mut surface, 300, 0).cells;
@@ -960,7 +1184,6 @@ fn animation_surface_case(smoke: bool) -> PerfCaseResult
       });
    }
    surface.layout(1_000.0, 900.0);
-   let mut animator = ui::anim::Animator::new();
    for (index, node) in nodes.iter().copied().enumerate()
    {
       let transform = platform::Transform2D {
@@ -970,7 +1193,7 @@ fn animation_surface_case(smoke: bool) -> PerfCaseResult
          sy: 1.0,
          rot_rad: (index % 13) as f32 * 0.01,
       };
-      animator.start(node, platform::AnimDesc {
+      surface.animator().start(node, platform::AnimDesc {
          id: 0,
          prop: platform::AnimProp::Transform2D,
          from: platform::AnimValue::Xform2D(ui::anim::helpers::identity_transform()),
@@ -980,7 +1203,7 @@ fn animation_surface_case(smoke: bool) -> PerfCaseResult
          delay_ms: (index % 17) as u32,
          repeat: platform::Repeat::Forever,
       });
-      animator.start(node, platform::AnimDesc {
+      surface.animator().start(node, platform::AnimDesc {
          id: 0,
          prop: platform::AnimProp::Opacity,
          from: platform::AnimValue::F32(0.55),
@@ -994,13 +1217,33 @@ fn animation_surface_case(smoke: bool) -> PerfCaseResult
    let start = timing::now_ms();
    let mut frame = 0_u64;
    let mixed_sequences = retained_mixed_sequences();
-   let mut case = measured_architecture_case(
-      "cpu.architecture.animation.surface_300",
+   surface.tick_at(start);
+   let _ = surface.render_snapshot_retained(
+      api::RenderChunkId(10),
+      &mixed_sequences,
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("warm animated mixed snapshot");
+   let mut operations = 0_u64;
+   let mut chunks_rebuilt = 0_u64;
+   let mut sequences_rebuilt = 0_u64;
+   let mut command_bytes_copied = 0_u64;
+   let mut vertex_bytes_copied = 0_u64;
+   let mut index_bytes_copied = 0_u64;
+   let mut property_records = 0_u64;
+   let mut case = measure_cpu_case(
+      id,
+      family,
       smoke,
-      "Real 300-node UiSurface animation with Animator overrides, nested clips/opacity, transforms, retained encoding, hit testing, and accessibility dirtiness.",
-      move || {
+      true,
+      0.20,
+      1,
+      vec![String::from(
+         "Real 300-node UiSurface animation with Animator overrides, nested clips/opacity, transforms, retained encoding, hit testing, and accessibility dirtiness.",
+      )],
+      || {
          frame = frame.wrapping_add(1);
-         *surface.overrides_mut() = animator.step(start.saturating_add(frame * 8));
+         surface.tick_at(start.saturating_add(frame * 8));
          let _ = surface.mark_node_dirty(nodes[frame as usize % nodes.len()], ui::DirtyClass::Accessibility);
          let rendered = surface.render_snapshot_retained(
             api::RenderChunkId(10),
@@ -1008,6 +1251,13 @@ fn animation_surface_case(smoke: bool) -> PerfCaseResult
             Vec::new(),
             api::Damage { rects: Vec::new() },
          ).expect("valid animated mixed snapshot");
+         operations = operations.saturating_add(1);
+         chunks_rebuilt = chunks_rebuilt.saturating_add(rendered.stats.chunks_rebuilt);
+         sequences_rebuilt = sequences_rebuilt.saturating_add(rendered.stats.sequences_rebuilt);
+         command_bytes_copied = command_bytes_copied.saturating_add(rendered.stats.command_bytes_copied);
+         vertex_bytes_copied = vertex_bytes_copied.saturating_add(rendered.stats.vertex_bytes_copied);
+         index_bytes_copied = index_bytes_copied.saturating_add(rendered.stats.index_bytes_copied);
+         property_records = property_records.saturating_add(rendered.snapshot.properties().len() as u64);
          let hit = surface.hit_test((frame % 800) as f32, (frame % 700) as f32).is_some() as u64;
          let mut draw_items = 0_u64;
          rendered.snapshot.visit_instances(|instance| {
@@ -1024,6 +1274,13 @@ fn animation_surface_case(smoke: bool) -> PerfCaseResult
    case.metrics.insert(String::from("accessibility_geometry_nodes"), 300.0);
    case.metrics.insert(String::from("label_nodes"), 200.0);
    case.metrics.insert(String::from("image_nodes"), 100.0);
+   let operations = operations.max(1) as f64;
+   case.metrics.insert(String::from("chunks_rebuilt_avg"), chunks_rebuilt as f64 / operations);
+   case.metrics.insert(String::from("sequences_rebuilt_avg"), sequences_rebuilt as f64 / operations);
+   case.metrics.insert(String::from("command_bytes_copied_avg"), command_bytes_copied as f64 / operations);
+   case.metrics.insert(String::from("vertex_bytes_copied_avg"), vertex_bytes_copied as f64 / operations);
+   case.metrics.insert(String::from("index_bytes_copied_avg"), index_bytes_copied as f64 / operations);
+   case.metrics.insert(String::from("property_records_avg"), property_records as f64 / operations);
    case
 }
 

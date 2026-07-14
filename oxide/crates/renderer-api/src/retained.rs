@@ -201,6 +201,59 @@ impl RenderChunk
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RenderPropertySlotId(pub u32);
 
+impl RenderPropertySlotId
+{
+   const DYNAMIC_BIT: u32 = 1 << 31;
+   const GENERATION_BITS: u32 = 11;
+   const GENERATION_MASK: u32 = (1 << Self::GENERATION_BITS) - 1;
+   const INDEX_MASK: u32 = (1 << (31 - Self::GENERATION_BITS)) - 1;
+
+   #[must_use]
+   pub fn dynamic(index: u32, generation: u32) -> Option<Self>
+   {
+      if index == 0 || index > Self::INDEX_MASK || generation == 0 || generation > Self::GENERATION_MASK
+      {
+         return None;
+      }
+      Some(Self(Self::DYNAMIC_BIT | index << Self::GENERATION_BITS | generation))
+   }
+
+   #[inline]
+   #[must_use]
+   pub const fn is_dynamic(self) -> bool
+   {
+      self.0 & Self::DYNAMIC_BIT != 0
+   }
+
+   #[inline]
+   #[must_use]
+   pub const fn dynamic_index(self) -> Option<u32>
+   {
+      if self.is_dynamic()
+      {
+         Some((self.0 >> Self::GENERATION_BITS) & Self::INDEX_MASK)
+      }
+      else
+      {
+         None
+      }
+   }
+
+   #[inline]
+   #[must_use]
+   pub const fn dynamic_generation(self) -> Option<u32>
+   {
+      if self.is_dynamic()
+      {
+         Some(self.0 & Self::GENERATION_MASK)
+      }
+      else
+      {
+         None
+      }
+   }
+}
+
 /// Dynamic data referenced by chunk instances without modifying immutable commands.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RenderPropertyValue
@@ -226,6 +279,14 @@ pub struct RenderLayerInstance
    pub dirty: bool,
 }
 
+/// One local clip whose affine transform is supplied by a dynamic property slot.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RenderDynamicClip
+{
+   pub rect: RectF,
+   pub transform: RenderPropertySlotId,
+}
+
 /// One ordered use of an immutable chunk in a render snapshot.
 #[derive(Debug, Clone)]
 pub struct RenderChunkInstance
@@ -233,6 +294,7 @@ pub struct RenderChunkInstance
    pub chunk: RenderChunk,
    pub origin: [f32; 2],
    pub property_slots: Arc<[RenderPropertySlotId]>,
+   pub dynamic_clips: Arc<[RenderDynamicClip]>,
    pub clip: Option<RectI>,
    pub layer: Option<RenderLayerInstance>,
 }
@@ -242,7 +304,14 @@ impl RenderChunkInstance
    #[must_use]
    pub fn new(chunk: RenderChunk, origin: [f32; 2]) -> Self
    {
-      Self { chunk, origin, property_slots: Arc::from([]), clip: None, layer: None }
+      Self {
+         chunk,
+         origin,
+         property_slots: Arc::from([]),
+         dynamic_clips: Arc::from([]),
+         clip: None,
+         layer: None,
+      }
    }
 }
 
@@ -305,6 +374,13 @@ impl RenderChunkSequence
             if !property_slots.contains(&slot)
             {
                property_slots.push(slot);
+            }
+         }
+         for clip in instance.dynamic_clips.iter()
+         {
+            if !property_slots.contains(&clip.transform)
+            {
+               property_slots.push(clip.transform);
             }
          }
       }
@@ -384,6 +460,14 @@ impl RenderChunkSequence
       (self.inner.instances.len() as u64)
          .saturating_mul(mem::size_of::<RenderChunkInstance>() as u64)
          .saturating_add(
+            self.inner.instances.iter().fold(0_u64, |bytes, instance| {
+               bytes.saturating_add(
+                  (instance.dynamic_clips.len() as u64)
+                     .saturating_mul(mem::size_of::<RenderDynamicClip>() as u64),
+               )
+            }),
+         )
+         .saturating_add(
             (self.inner.property_slots.len() as u64)
                .saturating_mul(mem::size_of::<RenderPropertySlotId>() as u64),
          )
@@ -417,6 +501,7 @@ impl RenderChunkSequence
       let current = self.inner.instances.get(index)?;
       if current.origin == instance.origin
          && current.property_slots == instance.property_slots
+         && current.dynamic_clips == instance.dynamic_clips
          && instance.origin.iter().all(|value| value.is_finite())
       {
          let mut instances = self.inner.instances.to_vec();
@@ -616,9 +701,11 @@ fn intersect_rect_i(a: RectI, b: RectI) -> RectI
 pub enum RenderSnapshotError
 {
    DuplicatePropertySlot(RenderPropertySlotId),
+   ConflictingPropertyGeneration { index: u32 },
    MissingPropertySlot(RenderPropertySlotId),
    NonFiniteProperty(RenderPropertySlotId),
    InvalidOpacity(RenderPropertySlotId),
+   InvalidClipProperty(RenderPropertySlotId),
    NonFiniteOrigin(RenderChunkId),
    UnsupportedFlatTransform(RenderPropertySlotId),
    GeometryTooLarge,
@@ -630,9 +717,11 @@ impl fmt::Display for RenderSnapshotError
    {
       match self {
          Self::DuplicatePropertySlot(id) => write!(f, "duplicate render property slot {}", id.0),
+         Self::ConflictingPropertyGeneration { index } => write!(f, "dynamic render property index {index} has multiple live generations"),
          Self::MissingPropertySlot(id) => write!(f, "missing render property slot {}", id.0),
          Self::NonFiniteProperty(id) => write!(f, "non-finite render property slot {}", id.0),
          Self::InvalidOpacity(id) => write!(f, "opacity slot {} is outside 0...1", id.0),
+         Self::InvalidClipProperty(id) => write!(f, "dynamic clip slot {} is not a transform", id.0),
          Self::NonFiniteOrigin(id) => write!(f, "chunk {} has a non-finite origin", id.0),
          Self::UnsupportedFlatTransform(id) => write!(f, "flat fallback cannot preserve transform slot {}", id.0),
          Self::GeometryTooLarge => write!(f, "flattened snapshot exceeds renderer span limits"),
@@ -649,6 +738,7 @@ struct RenderSnapshotData
    properties: Arc<[RenderPropertySlot]>,
    damage: Damage,
    instance_count: u64,
+   uniform_property_revision: Option<u64>,
    metadata_byte_size: u64,
 }
 
@@ -683,6 +773,7 @@ impl RenderSnapshot
    {
       properties.sort_unstable_by_key(|property| property.id.0);
       validate_properties(&properties)?;
+      let mut all_instances_have_transform_opacity = true;
       for sequence in &sequences {
          if let Some(id) = sequence.inner.invalid_origin {
             return Err(RenderSnapshotError::NonFiniteOrigin(id));
@@ -692,10 +783,39 @@ impl RenderSnapshot
                return Err(RenderSnapshotError::MissingPropertySlot(slot));
             }
          }
+         let mut clip_validation = Ok(());
+         sequence.visit_instances(|instance| {
+            all_instances_have_transform_opacity &= instance.property_slots.len() == 2;
+            if clip_validation.is_err()
+            {
+               return;
+            }
+            for clip in instance.dynamic_clips.iter()
+            {
+               if !matches!(property(&properties, clip.transform).map(|property| property.value), Some(RenderPropertyValue::Transform(_)))
+               {
+                  clip_validation = Err(RenderSnapshotError::InvalidClipProperty(clip.transform));
+                  return;
+               }
+            }
+         });
+         clip_validation?;
       }
       let instance_count = sequences.iter().fold(0_u64, |count, sequence| {
          count.saturating_add(sequence.instance_count())
       });
+      let uniform_property_revision = if all_instances_have_transform_opacity
+         && instance_count > 0
+         && instance_count.checked_mul(2) == Some(properties.len() as u64)
+      {
+         properties.first()
+            .map(|property| property.revision)
+            .filter(|revision| properties.iter().all(|property| property.revision == *revision))
+      }
+      else
+      {
+         None
+      };
       let metadata_byte_size = sequences.iter().fold(0_u64, |bytes, sequence| {
          bytes.saturating_add(sequence.metadata_byte_size())
       })
@@ -711,6 +831,7 @@ impl RenderSnapshot
             properties: properties.into(),
             damage,
             instance_count,
+            uniform_property_revision,
             metadata_byte_size,
          }),
       })
@@ -728,6 +849,15 @@ impl RenderSnapshot
    pub fn instance_count(&self) -> u64
    {
       self.inner.instance_count
+   }
+
+   /// Returns the shared revision when every instance has one transform and one
+   /// opacity property and every property advanced in the same revision epoch.
+   #[inline]
+   #[must_use]
+   pub fn uniform_property_revision(&self) -> Option<u64>
+   {
+      self.inner.uniform_property_revision
    }
 
    #[inline]
@@ -825,7 +955,8 @@ impl RenderSnapshot
          }
          let list = instance.chunk.draw_list();
          let wrappers = usize::from(instance.layer.is_some()) * 2
-            + usize::from(instance.clip.is_some()) * 2;
+            + usize::from(instance.clip.is_some()) * 2
+            + instance.dynamic_clips.len().saturating_mul(2);
          command_count = match command_count.checked_add(list.items.len()).and_then(|count| count.checked_add(wrappers)) {
             Some(count) => count,
             None => {
@@ -861,7 +992,7 @@ impl RenderSnapshot
          }
          flattened = flat_instance_properties(instance, &self.inner.properties).and_then(
             |(translation, opacity)| {
-               append_flat_instance(instance, translation, opacity, out, &mut stats)
+               append_flat_instance(instance, translation, opacity, &self.inner.properties, out, &mut stats)
             },
          );
       });
@@ -1107,6 +1238,14 @@ fn validate_properties(properties: &[RenderPropertySlot]) -> Result<(), RenderSn
          return Err(RenderSnapshotError::DuplicatePropertySlot(pair[0].id));
       }
    }
+   for pair in properties.windows(2)
+   {
+      let Some(dynamic_index) = pair[0].id.dynamic_index() else { continue };
+      if pair[1].id.dynamic_index() == Some(dynamic_index) && pair[0].id != pair[1].id
+      {
+         return Err(RenderSnapshotError::ConflictingPropertyGeneration { index: dynamic_index });
+      }
+   }
    for property in properties {
       match property.value {
          RenderPropertyValue::Transform(transform) if !transform.iter().all(|value| value.is_finite()) => {
@@ -1147,15 +1286,21 @@ fn flat_instance_properties(instance: &RenderChunkInstance, properties: &[Render
          RenderPropertyValue::Opacity(value) => opacity *= value,
       }
    }
+   for clip in instance.dynamic_clips.iter()
+   {
+      let _ = flat_clip_rect(*clip, properties)?;
+   }
    Ok((translation, opacity))
 }
 
-fn append_flat_instance(instance: &RenderChunkInstance, translation: [f32; 2], opacity: f32, out: &mut DrawList, stats: &mut RenderFallbackStats) -> Result<(), RenderSnapshotError>
+fn append_flat_instance(instance: &RenderChunkInstance, translation: [f32; 2], opacity: f32, properties: &[RenderPropertySlot], out: &mut DrawList, stats: &mut RenderFallbackStats) -> Result<(), RenderSnapshotError>
 {
    let list = instance.chunk.draw_list();
    let vertex_base = u32::try_from(out.vertices.len()).map_err(|_| RenderSnapshotError::GeometryTooLarge)?;
    let index_base = u32::try_from(out.indices.len()).map_err(|_| RenderSnapshotError::GeometryTooLarge)?;
-   let wrapper_commands = u64::from(instance.layer.is_some()) * 2 + u64::from(instance.clip.is_some()) * 2;
+   let wrapper_commands = u64::from(instance.layer.is_some()) * 2
+      + u64::from(instance.clip.is_some()) * 2
+      + (instance.dynamic_clips.len() as u64).saturating_mul(2);
    out.items.reserve(list.items.len() + wrapper_commands as usize);
    out.vertices.reserve(list.vertices.len());
    out.indices.reserve(list.indices.len());
@@ -1169,8 +1314,16 @@ fn append_flat_instance(instance: &RenderChunkInstance, translation: [f32; 2], o
    if let Some(clip) = instance.clip {
       out.items.push(DrawCmd::ClipPush { rect: translate_rect_i(clip, translation) });
    }
+   for clip in instance.dynamic_clips.iter().copied()
+   {
+      out.items.push(DrawCmd::ClipPush { rect: flat_clip_rect(clip, properties)? });
+   }
    for command in &list.items {
       out.items.push(flat_command(command, vertex_base, index_base, translation, opacity)?);
+   }
+   for _ in instance.dynamic_clips.iter()
+   {
+      out.items.push(DrawCmd::ClipPop);
    }
    if instance.clip.is_some() {
       out.items.push(DrawCmd::ClipPop);
@@ -1197,6 +1350,30 @@ fn append_flat_instance(instance: &RenderChunkInstance, translation: [f32; 2], o
    stats.vertex_bytes_copied += vertices * mem::size_of::<Vertex>() as u64;
    stats.index_bytes_copied += indices * mem::size_of::<u16>() as u64;
    Ok(())
+}
+
+fn flat_clip_rect(clip: RenderDynamicClip, properties: &[RenderPropertySlot]) -> Result<RectI, RenderSnapshotError>
+{
+   let property = property(properties, clip.transform)
+      .ok_or(RenderSnapshotError::MissingPropertySlot(clip.transform))?;
+   let RenderPropertyValue::Transform(transform) = property.value else
+   {
+      return Err(RenderSnapshotError::UnsupportedFlatTransform(clip.transform));
+   };
+   if transform[0] != 1.0 || transform[1] != 0.0 || transform[2] != 0.0 || transform[3] != 1.0
+   {
+      return Err(RenderSnapshotError::UnsupportedFlatTransform(clip.transform));
+   }
+   let x0 = clip.rect.x + transform[4];
+   let y0 = clip.rect.y + transform[5];
+   let x1 = x0 + clip.rect.w;
+   let y1 = y0 + clip.rect.h;
+   Ok(RectI::new(
+      x0.min(x1).floor() as i32,
+      y0.min(y1).floor() as i32,
+      (x0 - x1).abs().ceil() as i32,
+      (y0 - y1).abs().ceil() as i32,
+   ))
 }
 
 fn flat_command(command: &DrawCmd, vertex_base: u32, index_base: u32, translation: [f32; 2], opacity: f32) -> Result<DrawCmd, RenderSnapshotError>

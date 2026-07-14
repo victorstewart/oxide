@@ -90,6 +90,7 @@ assert!(router.step_onscreen_benchmark("component_button_encode", 1));
 ```
 
 ## Changelog
+- 2026-07-13: moved scene animation overrides onto the animator-owned dense C26 slot store instead of copying a per-frame map.
 
 - 2026-06-02: Added router-owned overlay text scratch and warmed overlay draw allocation coverage.
 - 2026-06-02: Added `take_damage_into` so allocation-audited hosts can reuse caller-owned damage storage.

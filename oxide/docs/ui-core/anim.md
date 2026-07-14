@@ -9,6 +9,12 @@
 - App crates such as Nametag consume `anim::helpers` for deterministic easing/offset math while keeping their own scene-specific layout and visual styling.
 
 ## Entry points
+- `Animator::step(now_ms) -> &AnimOverrideSlots`
+  Samples active animations, compacts completed entries in one retain pass, and returns renderer-facing dense node-indexed overrides without rebuilding a map.
+- `AnimOverrideSlots::{changed_nodes,paint_changed_nodes}`
+  Separates transform/opacity metadata changes from color/radius/shadow changes that still require a paint chunk rebuild.
+- `Animator::{overrides,overrides_mut}`
+  Exposes animator-owned retained slot storage for `UiSurface` and explicit diagnostic overrides.
 - `anim::helpers::cubic_bezier_ease(progress, x1, y1, x2, y2) -> f32`
   - Solves a cubic-bezier easing curve in Rust and returns the eased y value for the requested progress.
 - `anim::helpers::cubic_bezier_ease_in_out(progress) -> f32`
@@ -22,6 +28,8 @@
   - Export the shared required-field shake timing constants so app crates can align lifecycle state with the same curve they render.
 
 ## Logic narrative
+- At frame start, active and previous node lists swap while entry storage remains allocated. Sampling writes each node directly by `NodeId`; frame finish compares current and previous values once and records precise dirty classes.
+- Completion keeps the final sampled value for that frame, removes finished animations with `retain_mut`, and publishes override removal on the next step.
 - The cubic-bezier helper inverts the x-axis with a bounded Newton iteration and then samples the matching y-axis value.
 - The keyframed-offset helper treats each phase target as the end of a fixed-duration segment and linearly interpolates from the prior target.
 - The required-field shake helper is just a named shared profile on top of that generic sampler.
@@ -37,14 +45,17 @@
 - Negative shake scales clamp to zero movement.
 
 ## Concurrency and memory behavior
-- Pure math helpers only; no allocation, I/O, or synchronization.
+- Animator state is render-thread-owned. Dense entry and work vectors retain capacity across frames; warm stepping performs no map-node allocation, repeated `Vec::remove`, I/O, or synchronization.
 
 ## Performance notes
+- Sampling is linear in active animations plus the nodes active in the previous frame. Dense `NodeId` lookup is O(1).
 - The bezier helper uses six Newton iterations, matching the previous app-local solver without introducing external dependencies.
 - Keyframe sampling is O(1) and slice-based.
 
 ## Testing and benchmarks
+- `crates/ui-core/tests/anim_prop.rs` covers repeats, finite sampling, dense storage reuse, interruption, completion, and override clearing.
 - [`/Users/victorstewart/oxide/oxide/crates/ui-core/tests/anim_helpers.rs`](/Users/victorstewart/oxide/oxide/crates/ui-core/tests/anim_helpers.rs) covers segment construction, bezier non-linearity, keyframe interpolation, and the shared required-field shake profile.
 
 ## Changelog
+- 2026-07-13: replaced per-frame map reconstruction and repeated finished-entry removal with animator-owned dense override slots and one-pass compaction for C26.
 - 2026-03-13: moved shared cubic-bezier easing and required-field shake sampling into `oxide-ui-core` so app crates can drop duplicated animation helpers.

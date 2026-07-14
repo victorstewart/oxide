@@ -17,7 +17,7 @@ mod retained;
 pub use retained::{
    ChunkIndexMode, RenderChunk, RenderChunkError, RenderChunkId, RenderChunkInstance,
    RenderChunkOrdering, RenderChunkRevisions, RenderChunkSequence, RenderFallbackStats,
-   RenderLayerInstance, RenderPropertySlot, RenderPropertySlotId, RenderPropertyValue,
+   RenderDynamicClip, RenderLayerInstance, RenderPropertySlot, RenderPropertySlotId, RenderPropertyValue,
    RenderResourceDependency, RenderSnapshot, RenderSnapshotError,
 };
 

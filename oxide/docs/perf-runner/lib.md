@@ -123,6 +123,7 @@ Persisted report and evidence schemas are part of the performance contract becau
   - Missing metrics default safely through serde so older baselines remain readable while the schema grows.
 
 ## Changelog
+- 2026-07-13: registered the public-authoring C26 300-node dynamic property animation contract.
 - 2026-07-13: Added public retained-snapshot Metal authoring coverage backed by the C24 clean prepared-chunk contract.
 - 2026-07-13: Added C23 retained cache-pressure engine rows and public `UiSurface` cache-policy authoring coverage.
 

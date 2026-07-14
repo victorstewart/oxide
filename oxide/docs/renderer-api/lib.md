@@ -28,6 +28,10 @@
   Backend-facing immediate encoder trait used by replay and test encoders.
 - `RuntimeImageUploader`
   Narrow renderer-owned upload boundary for runtime A8 image resources such as app-generated text/icon atlases. Apps call through this trait instead of constructing backend-specific textures.
+- `RenderPropertySlotId::dynamic` and `RenderDynamicClip`
+  Carry generation-checked transform/opacity identities and transform-linked retained clip metadata without exposing a backend ring.
+- `RenderSnapshot`
+  Validates one live generation per dense property index and keeps immutable chunk geometry separate from frame property values.
 
 ## Logic narrative
 - Packed solid color remains part of the existing `Vertex` ABI: backends resolve zero to the draw uniform before interpolation and pass every nonzero value through as final color.
@@ -52,6 +56,7 @@
 
 ## Performance notes
 - Revision compatibility is a cheap linear scan over retained command metadata and avoids a broader forced redraw when all atlas resources are known unchanged.
+- Dense dynamic IDs sort by index and generation, making stale-generation conflict detection a linear adjacent scan; per-frame property values remain small metadata rather than geometry copies.
 - Packed color conversion adds no draw, upload, or renderer object; it is internal renderer data preparation rather than a new authoring or user-journey path.
 
 ## Feature flags and cfgs
@@ -61,12 +66,14 @@
 - `crates/renderer-api/tests/draw_list_tests.rs` covers draw-list structure, `DrawCmd` taxonomy freeze, and stale text-atlas revision detection.
 - The same test file freezes packed byte order, clamping, and non-finite handling.
 - Retained replay integration is covered by `crates/ui-core/tests/draw_builder_tests.rs`.
+- `crates/renderer-api/tests/render_chunk_tests.rs` covers retained chunk identity, sequence sharing, dynamic property generations, clip references, and checked flat fallback.
 
 ## Examples
 
 `Color::rgba(1.0, 0.0, 0.0, 1.0).pack_rgba8()` produces `0xFF00_00FF`.
 
 ## Changelog
+- 2026-07-13: added C26 generation-checked dynamic property slots and transform-linked retained clip metadata.
 - 2026-07-12: added packed `AABBGGRR` conversion and documented solid vertex-color inheritance.
 - 2026-06-22: added a measurement-harness freeze for the `DrawCmd` variant set and declaration order before packed draw-stream work.
 - 2026-06-06: added `RuntimeImageUploader` so apps can publish runtime A8 atlas resources through a renderer-neutral boundary.

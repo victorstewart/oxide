@@ -41,6 +41,7 @@ Call flow:
 - `oxide_renderer_web::BrowserRenderer::set_prepared_cache_budget_bytes(&mut self, budget_bytes: u64)`: changes the prepared-cache logical-byte budget and immediately evicts unprotected excess residency.
 - `oxide_renderer_web::BrowserRenderer::purge_prepared_chunks(&mut self)`: explicitly releases prepared buffers, plans, and bundles.
 - `oxide_renderer_web::BrowserRenderer::set_prepared_bundle_min_draws_for_benchmark(&mut self, draws: usize)`: selects a measured bundle threshold for explicit C25 sweeps and purges policy-incompatible entries.
+- `WebRendererStats::{property_upload_bytes,property_records_updated,property_ring_bytes}`: separates compact transform/opacity traffic and retained ring residency from immutable geometry uploads.
 - `oxide_renderer_web::BrowserRenderer::advance_prepared_device_generation_for_benchmark(&mut self)`: simulates device replacement and invalidates device-owned prepared resources.
 - `oxide_renderer_web::BrowserRenderer::image_create_rgba8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize) -> ImageHandle`: uploads an RGBA texture to WebGPU.
 - `oxide_renderer_web::BrowserRenderer::image_update_rgba8(&mut self, handle: ImageHandle, x: u32, y: u32, width: u32, height: u32, data: &[u8], row_bytes: usize) -> Result<(), RenderError>`: updates an RGBA texture subrectangle on WebGPU.
@@ -108,6 +109,8 @@ The typed Canvas path enables the `web-sys/CanvasGradient` feature.
 
 C25 adds native source-contract coverage plus a real Chrome adapter for prepared-cache lifecycle guardrails, the 8/16/32/64 threshold sweep, exact flat/prepared captures, 15-pair clean and one-dirty encode distributions, and ten independent displayed-RAF pairs. The committed C25 experiment README and manifest record accepted and rejected branches; aggregate browser-baseline promotion remains assigned to C62.
 
+C26 keeps prepared WebGPU geometry resident for property-driven instances. The renderer resolves complete affine and cumulative opacity values into a dynamic-offset uniform ring, uploads only changed plan records, handles transform-linked clips, and reports property work separately from geometry work. Static C25 bundle eligibility and counters remain unchanged.
+
 The non-default Canvas indexed-quad report path is intentionally separate from the committed WebGPU baseline and exists only to prove Canvas fallback changes on the exact indexed `ImageMesh` workload.
 
 ## Examples
@@ -120,6 +123,7 @@ pub async fn build_renderer() -> Result<oxide_renderer_web::BrowserRenderer, oxi
 ```
 
 ## Changelog
+- 2026-07-13: exposed C26 property upload/update/ring counters and retained prepared geometry for affine/opacity instances.
 
 - 2026-07-13: added persistent prepared WebGPU chunks, ordered bundle/direct plans, aggregate static snapshot replay, lifecycle invalidation, logical-byte LRU accounting, and explanatory counters.
 - 2026-07-13: constructed the WebGPU surface at its final backing size, made scene/scratch/depth targets feature-driven with selective prewarm, and removed per-submit viewport writes.

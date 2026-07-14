@@ -664,6 +664,7 @@ const MAX_FRAME_RESOURCE_DEPTH: usize = OFFSCREEN_FRAME_RESOURCE_DEPTH;
 const INITIAL_VERTEX_BUFFER_BYTES: usize = 512 * 1024;
 const INITIAL_INDEX_BUFFER_BYTES: usize = 64 * 1024;
 const INITIAL_UNIFORM_BUFFER_BYTES: usize = 72 * 1024;
+const INITIAL_PROPERTY_BUFFER_BYTES: usize = 16 * 1024;
 const IMAGE_ARG_TEXTURE_SLOTS: u32 = 128;
 const IMAGE_ARG_SMALL_TABLE_COUNT: usize = 8;
 const LEGACY_SPINNER_LARGE_ATOM: f32 = 37.0;
@@ -976,6 +977,7 @@ pub struct MetalRenderer {
     vb: Ring,
     ib: Ring,
     ub: Ring,
+    property_ring: Ring,
     rrect_vbuf: alloc::vec::Vec<f32>,
     rrect_fbuf: alloc::vec::Vec<RRectGpuParams>,
     nine_slice_vbuf: alloc::vec::Vec<f32>,
@@ -1015,6 +1017,7 @@ pub struct MetalRenderer {
     image_generations: HashMap<u32, u64>,
     next_image_id: u32,
     prepared_chunks: prepared::PreparedChunkCache,
+    prepared_property_cache: prepared::PreparedPropertyCache,
     prepared_frame_plan: alloc::vec::Vec<prepared::PreparedFrameInstance>,
     prepared_fallback: api::DrawList,
     meshes_3d: HashMap<u32, Mesh3dGpu>,
@@ -1934,6 +1937,12 @@ impl MetalRenderer {
             if direct_preview_only { direct_preview_ring_size } else { INITIAL_UNIFORM_BUFFER_BYTES },
             opts,
         );
+        let property_ring = Ring::new(
+            &device,
+            frame_resource_depth,
+            if direct_preview_only { direct_preview_ring_size } else { INITIAL_PROPERTY_BUFFER_BYTES },
+            opts,
+        );
         let damage_enabled = !direct_preview_only
             && apply_simulator_safety_bool(
                 simulator,
@@ -2074,6 +2083,7 @@ impl MetalRenderer {
             vb,
             ib,
             ub,
+            property_ring,
             rrect_vbuf: alloc::vec::Vec::new(),
             rrect_fbuf: alloc::vec::Vec::new(),
             nine_slice_vbuf: alloc::vec::Vec::new(),
@@ -2113,6 +2123,7 @@ impl MetalRenderer {
             image_generations: HashMap::new(),
             next_image_id: 1,
             prepared_chunks: prepared::PreparedChunkCache::default(),
+            prepared_property_cache: prepared::PreparedPropertyCache::default(),
             prepared_frame_plan: alloc::vec::Vec::new(),
             prepared_fallback: api::DrawList::default(),
             meshes_3d: HashMap::new(),
@@ -9448,6 +9459,9 @@ pub struct PerfStats {
     pub texture_copy_pixels: u64,
     pub texture_copy_bytes: u64,
     pub buffer_upload_bytes: u64,
+    pub property_upload_bytes: u64,
+    pub property_records_updated: u32,
+    pub property_ring_bytes: u64,
     pub texture_upload_bytes: u64,
     pub shaded_damage_px: u64,
     pub cache_bytes: u64,
@@ -9724,7 +9738,8 @@ impl MetalRenderer {
         );
         let uniform_buffer_bytes = Self::unique_buffer_category_bytes(
             &mut buffer_seen,
-            self.ub.bufs.iter().take(self.frames.len()).map(|buf| buf.as_ref()),
+            self.ub.bufs.iter().take(self.frames.len()).map(|buf| buf.as_ref())
+                .chain(self.property_ring.bufs.iter().take(self.frames.len()).map(|buf| buf.as_ref())),
         );
         let frame_ring_buffer_bytes = vertex_buffer_bytes
             .saturating_add(index_buffer_bytes)
@@ -9836,6 +9851,7 @@ impl MetalRenderer {
             .take(self.frames.len())
             .chain(self.ib.bufs.iter().take(self.frames.len()))
             .chain(self.ub.bufs.iter().take(self.frames.len()))
+            .chain(self.property_ring.bufs.iter().take(self.frames.len()))
             .chain(
                 self.img_arg_bufs
                     .iter()

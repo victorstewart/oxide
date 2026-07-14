@@ -197,6 +197,70 @@ fn prepared_snapshot_reuses_mixed_buffers_and_matches_flat_output()
 }
 
 #[test]
+fn prepared_property_ring_uploads_only_changed_instance_records_after_warmup()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(96, 96, 1.0).expect("resize");
+   let chunk = api::RenderChunk::new(
+      api::RenderChunkId(990),
+      api::RenderChunkRevisions::default(),
+      api::DrawList {
+         items: vec![api::DrawCmd::RRect {
+            rect: api::RectF::new(0.0, 0.0, 24.0, 24.0),
+            radii: [4.0; 4],
+            color: api::Color::rgba(0.2, 0.5, 0.9, 1.0),
+         }],
+         ..api::DrawList::default()
+      },
+      api::ChunkIndexMode::Local,
+      &[],
+   ).unwrap();
+   let property = api::RenderPropertySlotId::dynamic(1, 1).unwrap();
+   let snapshot = |revision: u64, tx: f32| {
+      let mut instance = api::RenderChunkInstance::new(chunk.clone(), [20.0, 20.0]);
+      instance.property_slots = vec![property].into();
+      api::RenderSnapshot::new(
+         vec![instance],
+         vec![api::RenderPropertySlot {
+            id: property,
+            revision,
+            value: api::RenderPropertyValue::Transform([1.0, 0.0, 0.0, 1.0, tx, 0.0]),
+         }],
+         api::Damage { rects: Vec::new() },
+      ).unwrap()
+   };
+   let depth = renderer.frame_resource_depth_for_snapshot();
+   for frame_index in 0..depth
+   {
+      let frame = renderer.begin_frame(&api::FrameTarget, None);
+      renderer.encode_snapshot(&snapshot(1, 2.0)).unwrap();
+      renderer.submit(frame).unwrap();
+      renderer.readback_bgra8().expect("complete property warmup frame");
+      assert_eq!(renderer.last_stats().property_upload_bytes, 48);
+      assert_eq!(renderer.last_stats().property_records_updated, 1);
+      if frame_index > 0
+      {
+         assert_eq!(renderer.last_stats().geometry_bytes_copied, 0);
+      }
+   }
+   let warm = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot(1, 2.0)).unwrap();
+   renderer.submit(warm).unwrap();
+   renderer.readback_bgra8().expect("complete unchanged property frame");
+   assert_eq!(renderer.last_stats().property_upload_bytes, 0);
+   assert_eq!(renderer.last_stats().property_records_updated, 0);
+   assert_eq!(renderer.last_stats().buffer_upload_bytes, 0);
+
+   let changed = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot(2, 7.0)).unwrap();
+   renderer.submit(changed).unwrap();
+   renderer.readback_bgra8().expect("complete changed property frame");
+   assert_eq!(renderer.last_stats().property_upload_bytes, 48);
+   assert_eq!(renderer.last_stats().property_records_updated, 1);
+   assert_eq!(renderer.last_stats().buffer_upload_bytes, 0);
+}
+
+#[test]
 fn prepared_opaque_rects_match_fractionally_translated_flat_output()
 {
    let width = 128_u32;

@@ -331,7 +331,7 @@ fn wasm_webgpu_solid_vertex_colors_decode_aabbggrr_and_interpolate()
    assert!(solid.matches("color,true").count() >= 3);
    assert!(vertex.contains("ifrgba==0{uniform.pack_rgba8()}else{rgba}"));
    assert!(source.contains("format: wgpu::VertexFormat::Unorm8x4"));
-   assert!(shader.contains("out.color=input.color"));
+   assert!(shader.contains("out.color=vec4<f32>(input.color.rgb,input.color.a*viewport.translation_opacity.z)"));
    assert!(shader.contains("fnfs_solid(input:VertexOut)->@location(0)vec4<f32>{returninput.color;"));
 
    let uniform = api::Color::rgba(0.25, 0.5, 0.75, 1.0);
@@ -1136,8 +1136,14 @@ fn wasm_webgpu_prepared_chunks_are_budgeted_and_resource_invalidated()
    assert!(source.contains("PREPARED_CACHE_DEFAULT_BUDGET_BYTES"));
    assert!(source.contains("self.prepared_chunks.invalidate_resource(handle)"));
    assert!(source.contains("advance_prepared_device_generation_for_benchmark"));
-   assert!(source.contains("instance.origin == [0.0, 0.0]"));
-   assert!(source.contains("instance.property_slots.is_empty()"));
+   assert!(source.contains("PreparedPropertyRing"));
+   assert!(source.contains("PREPARED_PROPERTY_RING_DEPTH"));
+   assert!(source.contains("prepared_dynamic_uniform"));
+   assert!(source.contains("property_upload_bytes"));
+   assert!(source.contains("property_records_updated"));
+   assert!(source.contains("property_ring_bytes"));
+   assert!(source.contains("let bundles_enabled = !dynamic_snapshot"));
+   assert!(source.contains("instance.dynamic_clips"));
    assert!(source.contains("PreparedSegment::Bundle"));
    assert!(source.contains("PreparedSegment::Direct"));
    assert!(source.contains("render_bundle_execute_calls"));

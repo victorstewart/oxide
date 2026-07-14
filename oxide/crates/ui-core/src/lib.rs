@@ -1017,17 +1017,22 @@ struct Node {
     cache_lru_prev: Option<NodeId>,
     cache_lru_next: Option<NodeId>,
     cache_lru_listed: bool,
+    transform_slot: gfx::RenderPropertySlotId,
+    opacity_slot: gfx::RenderPropertySlotId,
+    transform_revision: u64,
+    opacity_revision: u64,
+    world_transform: [f32; 6],
+    world_opacity: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct NodeCompositionState {
     layout: LayoutRect,
-    translation: [f32; 2],
     clip: bool,
 }
 
 impl Node {
-    fn new(id: NodeId, parent: Option<NodeId>, style: NodeStyle) -> Self {
+    fn new(id: NodeId, parent: Option<NodeId>, style: NodeStyle, transform_slot: gfx::RenderPropertySlotId, opacity_slot: gfx::RenderPropertySlotId) -> Self {
         Self {
             id,
             parent,
@@ -1054,8 +1059,59 @@ impl Node {
             cache_lru_prev: None,
             cache_lru_next: None,
             cache_lru_listed: false,
+            transform_slot,
+            opacity_slot,
+            transform_revision: 1,
+            opacity_revision: 1,
+            world_transform: affine_identity(),
+            world_opacity: 1.0,
         }
     }
+}
+
+#[derive(Clone, Default)]
+struct DynamicPropertySlotArena
+{
+   generations: Vec<u32>,
+   free: Vec<u32>,
+}
+
+impl DynamicPropertySlotArena
+{
+   fn allocate(&mut self) -> gfx::RenderPropertySlotId
+   {
+      if let Some(index) = self.free.pop()
+      {
+         let generation = self.generations[index as usize];
+         return gfx::RenderPropertySlotId::dynamic(index, generation)
+            .expect("recycled dynamic property slot is valid");
+      }
+      let index = self.generations.len() as u32;
+      let index = index.max(1);
+      if self.generations.is_empty()
+      {
+         self.generations.push(0);
+      }
+      self.generations.push(1);
+      gfx::RenderPropertySlotId::dynamic(index, 1)
+         .expect("dynamic property slot capacity exceeded")
+   }
+
+   fn release(&mut self, id: gfx::RenderPropertySlotId)
+   {
+      let (Some(index), Some(generation)) = (id.dynamic_index(), id.dynamic_generation()) else { return };
+      let Some(current) = self.generations.get_mut(index as usize) else { return };
+      if *current != generation
+      {
+         return;
+      }
+      *current = current.wrapping_add(1) & 0x7ff;
+      if *current == 0
+      {
+         *current = 1;
+      }
+      self.free.push(index);
+   }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1109,6 +1165,8 @@ pub struct NodeTree {
     last_invalidation_reason: RetainedInvalidationReason,
     retained_cache_lru_head: Option<NodeId>,
     retained_cache_lru_tail: Option<NodeId>,
+    dynamic_slots: DynamicPropertySlotArena,
+    dynamic_properties: Vec<gfx::RenderPropertySlot>,
 }
 
 fn mark_dirty_child(node: &mut Node, index: Option<usize>) {
@@ -1199,9 +1257,12 @@ pub(crate) fn append_retained_drawlist(
 impl NodeTree {
     pub fn new_root(style: NodeStyle) -> Self {
         let root = NodeId(1);
+        let mut dynamic_slots = DynamicPropertySlotArena::default();
+        let transform_slot = dynamic_slots.allocate();
+        let opacity_slot = dynamic_slots.allocate();
         let mut nodes = alloc::vec::Vec::with_capacity(8);
         nodes.push(None); // 0 unused
-        nodes.push(Some(Node::new(root, None, style)));
+        nodes.push(Some(Node::new(root, None, style, transform_slot, opacity_slot)));
         Self {
             nodes,
             root,
@@ -1215,6 +1276,8 @@ impl NodeTree {
             last_invalidation_reason: RetainedInvalidationReason::None,
             retained_cache_lru_head: None,
             retained_cache_lru_tail: None,
+            dynamic_slots,
+            dynamic_properties: Vec::with_capacity(16),
         }
     }
 
@@ -1245,7 +1308,9 @@ impl NodeTree {
     pub fn add_node(&mut self, parent: NodeId, style: NodeStyle) -> NodeId {
         let id = NodeId(self.nodes.len() as u32);
         let child_index = self.get(parent).map_or(0, |node| node.children.len());
-        let mut node = Node::new(id, Some(parent), style);
+        let transform_slot = self.dynamic_slots.allocate();
+        let opacity_slot = self.dynamic_slots.allocate();
+        let mut node = Node::new(id, Some(parent), style, transform_slot, opacity_slot);
         node.index_in_parent = child_index;
         self.nodes.push(Some(node));
         if let Some(p) = self.get_mut(parent) {
@@ -1291,7 +1356,11 @@ impl NodeTree {
    }
 
     pub(crate) fn mark_node_and_ancestors_draw_dirty(&mut self, id: NodeId) {
-        self.record_cache_invalidation(id, RetainedInvalidationReason::Style);
+        self.mark_node_and_ancestors_draw_dirty_for(id, RetainedInvalidationReason::Style);
+    }
+
+    pub(crate) fn mark_node_and_ancestors_draw_dirty_for(&mut self, id: NodeId, reason: RetainedInvalidationReason) {
+        self.record_cache_invalidation(id, reason);
         let mut current = Some(id);
         let mut target = true;
         let mut child_index = None;
@@ -1332,6 +1401,27 @@ impl NodeTree {
 
     pub fn mark_subtree_draw_dirty(&mut self, id: NodeId) {
         self.mark_node_and_ancestors_draw_dirty(id);
+    }
+
+    pub(crate) fn mark_subtree_sequence_dirty(&mut self, id: NodeId)
+    {
+       self.mark_node_and_ancestors_sequence_dirty(id);
+       self.mark_descendant_sequences_dirty(id);
+    }
+
+    fn mark_descendant_sequences_dirty(&mut self, id: NodeId)
+    {
+       let child_count = self.get(id).map_or(0, |node| node.children.len());
+       if let Some(node) = self.get_mut(id)
+       {
+          node.sequence_dirty = true;
+          node.all_children_dirty = true;
+       }
+       for index in 0..child_count
+       {
+          let Some(child) = self.get(id).and_then(|node| node.children.get(index).copied()) else { continue };
+          self.mark_descendant_sequences_dirty(child);
+       }
     }
 
     pub fn mark_layout_dirty(&mut self, id: NodeId) {
@@ -1678,7 +1768,18 @@ impl NodeTree {
     // ---- Hit-testing ----
 
     pub fn hit_test(&self, x: f32, y: f32) -> Option<(NodeId, [f32; 2])> {
-        self.hit_test_node(self.root, x, y, 0.0, 0.0)
+        self.hit_test_node(self.root, x, y, affine_identity(), LayoutRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }, None)
+    }
+
+    pub fn hit_test_with_anims(&self, x: f32, y: f32, over: &crate::anim::AnimOverrideSlots) -> Option<(NodeId, [f32; 2])> {
+        self.hit_test_node(
+            self.root,
+            x,
+            y,
+            affine_identity(),
+            LayoutRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 },
+            Some(over),
+        )
     }
 
     fn hit_test_node(
@@ -1686,23 +1787,87 @@ impl NodeTree {
         id: NodeId,
         x: f32,
         y: f32,
-        parent_tx: f32,
-        parent_ty: f32,
+        parent_world: [f32; 6],
+        parent_layout: LayoutRect,
+        over: Option<&crate::anim::AnimOverrideSlots>,
     ) -> Option<(NodeId, [f32; 2])> {
         let n = self.get(id)?;
-        let tx = parent_tx + n.style.transform.tx;
-        let ty = parent_ty + n.style.transform.ty;
-        let rect = translated_layout_rect(n.layout, tx, ty);
-        if !point_in_rect(x, y, rect) {
+        let transform = over.and_then(|overrides| overrides.get(&id))
+            .and_then(|override_| override_.transform)
+            .unwrap_or(n.style.transform);
+        let world = affine_mul(
+            parent_world,
+            affine_from_transform(
+                n.layout.x - parent_layout.x,
+                n.layout.y - parent_layout.y,
+                transform,
+            ),
+        );
+        let local = affine_inverse_point(world, [x, y])?;
+        if local[0] < 0.0 || local[1] < 0.0 || local[0] >= n.layout.w || local[1] >= n.layout.h {
             return None;
         }
         // Children painted in order; top-most is last child. Search reverse.
         for &kid in n.children.iter().rev() {
-            if let Some(hit) = self.hit_test_node(kid, x, y, tx, ty) {
+            if let Some(hit) = self.hit_test_node(kid, x, y, world, n.layout, over) {
                 return Some(hit);
             }
         }
-        Some((id, [x - rect.x, y - rect.y]))
+        Some((id, local))
+    }
+
+    pub fn accessibility_frame(&self, id: NodeId, over: Option<&crate::anim::AnimOverrideSlots>) -> Option<gfx::RectF>
+    {
+       let (world, layout) = self.node_world_transform(id, over)?;
+       let points = [
+          affine_point(world, [0.0, 0.0]),
+          affine_point(world, [layout.w, 0.0]),
+          affine_point(world, [0.0, layout.h]),
+          affine_point(world, [layout.w, layout.h]),
+       ];
+       let mut x0 = points[0][0];
+       let mut y0 = points[0][1];
+       let mut x1 = x0;
+       let mut y1 = y0;
+       for point in points.iter().skip(1)
+       {
+          x0 = x0.min(point[0]);
+          y0 = y0.min(point[1]);
+          x1 = x1.max(point[0]);
+          y1 = y1.max(point[1]);
+       }
+       Some(gfx::RectF::new(x0, y0, x1 - x0, y1 - y0))
+    }
+
+    fn node_world_transform(&self, id: NodeId, over: Option<&crate::anim::AnimOverrideSlots>) -> Option<([f32; 6], LayoutRect)>
+    {
+       let node = self.get(id)?;
+       let mut lineage = Vec::new();
+       let mut current = Some(id);
+       while let Some(node) = current
+       {
+          lineage.push(node);
+          current = self.get(node).and_then(|node| node.parent);
+       }
+       let mut world = affine_identity();
+       let mut parent_layout = LayoutRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 };
+       for node in lineage.iter().rev().copied()
+       {
+          let current = self.get(node)?;
+          let transform = over.and_then(|overrides| overrides.get(&node))
+             .and_then(|override_| override_.transform)
+             .unwrap_or(current.style.transform);
+          world = affine_mul(
+             world,
+             affine_from_transform(
+                current.layout.x - parent_layout.x,
+                current.layout.y - parent_layout.y,
+                transform,
+             ),
+          );
+          parent_layout = current.layout;
+       }
+       Some((world, node.layout))
     }
 
     pub fn route_pointer<F: FnMut(NodeId, [f32; 2])>(&self, x: f32, y: f32, mut handler: F) {
@@ -1738,12 +1903,13 @@ impl NodeTree {
         self.render_sequence_impl(namespace, None)
     }
 
-    pub fn render_sequence_with_anims(&mut self, namespace: u32, over: &alloc::collections::BTreeMap<NodeId, crate::anim::AnimOverrides>) -> Result<(gfx::RenderChunkSequence, RetainedNodeStats), gfx::RenderChunkError> {
+    pub fn render_sequence_with_anims(&mut self, namespace: u32, over: &crate::anim::AnimOverrideSlots) -> Result<(gfx::RenderChunkSequence, RetainedNodeStats), gfx::RenderChunkError> {
         self.render_sequence_impl(namespace, Some(over))
     }
 
-   fn render_sequence_impl(&mut self, namespace: u32, over: Option<&alloc::collections::BTreeMap<NodeId, crate::anim::AnimOverrides>>) -> Result<(gfx::RenderChunkSequence, RetainedNodeStats), gfx::RenderChunkError>
+   fn render_sequence_impl(&mut self, namespace: u32, over: Option<&crate::anim::AnimOverrideSlots>) -> Result<(gfx::RenderChunkSequence, RetainedNodeStats), gfx::RenderChunkError>
    {
+      self.prepare_dynamic_properties(over);
       self.retained_cache_generation = self.retained_cache_generation.saturating_add(1);
       if self.retained_namespace != Some(namespace)
       {
@@ -1784,7 +1950,92 @@ impl NodeTree {
       Ok((sequence, stats))
    }
 
-   fn render_uncached_sequence(&self, namespace: u32, over: Option<&alloc::collections::BTreeMap<NodeId, crate::anim::AnimOverrides>>, stats: &mut RetainedNodeStats) -> Result<gfx::RenderChunkSequence, gfx::RenderChunkError>
+   #[inline]
+   #[must_use]
+   pub fn dynamic_properties(&self) -> &[gfx::RenderPropertySlot]
+   {
+      &self.dynamic_properties
+   }
+
+   fn prepare_dynamic_properties(&mut self, over: Option<&crate::anim::AnimOverrideSlots>)
+   {
+      self.dynamic_properties.clear();
+      self.prepare_dynamic_node(
+         self.root,
+         affine_identity(),
+         LayoutRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 },
+         1.0,
+         over,
+      );
+   }
+
+   fn prepare_dynamic_node(&mut self, id: NodeId, parent_world: [f32; 6], parent_layout: LayoutRect, parent_opacity: f32, over: Option<&crate::anim::AnimOverrideSlots>)
+   {
+      let Some((style, layout, child_count, transform_slot, opacity_slot, old_transform, old_opacity, transform_revision, opacity_revision)) = self.get(id).map(|node| {
+         (
+            node.style,
+            node.layout,
+            node.children.len(),
+            node.transform_slot,
+            node.opacity_slot,
+            node.world_transform,
+            node.world_opacity,
+            node.transform_revision,
+            node.opacity_revision,
+         )
+      }) else { return };
+      let override_ = over.and_then(|overrides| overrides.get(&id));
+      let transform = override_.and_then(|override_| override_.transform).unwrap_or(style.transform);
+      let local = affine_from_transform(
+         layout.x - parent_layout.x,
+         layout.y - parent_layout.y,
+         transform,
+      );
+      let world = affine_mul(parent_world, local);
+      let property_transform = affine_mul(world, affine_translate(-layout.x, -layout.y));
+      let opacity = parent_opacity
+         * override_.and_then(|override_| override_.opacity).unwrap_or(style.opacity).clamp(0.0, 1.0);
+      let transform_revision = if property_transform == old_transform
+      {
+         transform_revision
+      }
+      else
+      {
+         transform_revision.wrapping_add(1).max(1)
+      };
+      let opacity_revision = if opacity == old_opacity
+      {
+         opacity_revision
+      }
+      else
+      {
+         opacity_revision.wrapping_add(1).max(1)
+      };
+      if let Some(node) = self.get_mut(id)
+      {
+         node.world_transform = property_transform;
+         node.world_opacity = opacity;
+         node.transform_revision = transform_revision;
+         node.opacity_revision = opacity_revision;
+      }
+      self.dynamic_properties.push(gfx::RenderPropertySlot {
+         id: transform_slot,
+         revision: transform_revision,
+         value: gfx::RenderPropertyValue::Transform(property_transform),
+      });
+      self.dynamic_properties.push(gfx::RenderPropertySlot {
+         id: opacity_slot,
+         revision: opacity_revision,
+         value: gfx::RenderPropertyValue::Opacity(opacity),
+      });
+      for index in 0..child_count
+      {
+         let Some(child) = self.get(id).and_then(|node| node.children.get(index).copied()) else { continue };
+         self.prepare_dynamic_node(child, world, layout, opacity, over);
+      }
+   }
+
+   fn render_uncached_sequence(&self, namespace: u32, over: Option<&crate::anim::AnimOverrideSlots>, stats: &mut RetainedNodeStats) -> Result<gfx::RenderChunkSequence, gfx::RenderChunkError>
    {
       let started = timing::now_ns();
       let mut builder = DrawListBuilder::new();
@@ -1823,7 +2074,7 @@ impl NodeTree {
     pub fn encode_draws_with_anims(
         &self,
         b: &mut DrawListBuilder,
-        over: &alloc::collections::BTreeMap<NodeId, crate::anim::AnimOverrides>,
+        over: &crate::anim::AnimOverrideSlots,
     ) {
         self.encode_node(self.root, b, Some(over), 0.0, 0.0);
     }
@@ -1832,7 +2083,7 @@ impl NodeTree {
         &self,
         id: NodeId,
         b: &mut DrawListBuilder,
-        over: Option<&alloc::collections::BTreeMap<NodeId, crate::anim::AnimOverrides>>,
+        over: Option<&crate::anim::AnimOverrideSlots>,
         parent_tx: f32,
         parent_ty: f32,
     ) {
@@ -1846,7 +2097,7 @@ impl NodeTree {
         }
     }
 
-    fn render_node_sequence(&mut self, id: NodeId, namespace: u32, over: Option<&alloc::collections::BTreeMap<NodeId, crate::anim::AnimOverrides>>, stats: &mut RetainedNodeStats) -> Result<(gfx::RenderChunkSequence, bool), gfx::RenderChunkError> {
+    fn render_node_sequence(&mut self, id: NodeId, namespace: u32, over: Option<&crate::anim::AnimOverrideSlots>, stats: &mut RetainedNodeStats) -> Result<(gfx::RenderChunkSequence, bool), gfx::RenderChunkError> {
         if let Some(sequence) = self.get(id).and_then(|node| {
             if node.sequence_dirty { None } else { node.retained_sequence.clone() }
         }) {
@@ -1875,7 +2126,6 @@ impl NodeTree {
         };
         let composition = NodeCompositionState {
             layout,
-            translation: [style.transform.tx, style.transform.ty],
             clip: style.clip,
         };
         if let Some(mut sequence) = retained_sequence.filter(|sequence| {
@@ -1883,18 +2133,14 @@ impl NodeTree {
         }) {
             let mut children_cached = true;
             let chunk = if chunk_dirty {
-                let chunk = self.build_node_chunk(id, namespace, style, layout, revisions, stats)?;
-                let instance = gfx::RenderChunkInstance::new(
-                    chunk.clone(),
-                    [layout.x + style.transform.tx, layout.y + style.transform.ty],
-                );
-                sequence = sequence.replacing_direct_instance(0, instance)
-                    .ok_or(gfx::RenderChunkError::GeometryTooLarge)?;
-                chunk
+                self.build_node_chunk(id, namespace, style, layout, revisions, stats)?
             } else {
                 self.touch_retained_cache(id);
                 retained_chunk.ok_or(gfx::RenderChunkError::GeometryTooLarge)?
             };
+            let instance = self.render_chunk_instance(id, chunk.clone(), layout);
+            sequence = sequence.replacing_direct_instance(0, instance)
+                .ok_or(gfx::RenderChunkError::GeometryTooLarge)?;
             let child_range = if all_children_dirty {
                 0..child_count
             } else if let Some(index) = dirty_child {
@@ -1949,19 +2195,9 @@ impl NodeTree {
             self.build_node_chunk(id, namespace, style, layout, revisions, stats)?
         };
 
-        let instance = gfx::RenderChunkInstance::new(
-            chunk.clone(),
-            [layout.x + style.transform.tx, layout.y + style.transform.ty],
-        );
-        let parent_translation = [style.transform.tx, style.transform.ty];
-        let parent_clip = style.clip.then(|| gfx::RectI::new(
-            (layout.x + style.transform.tx).floor() as i32,
-            (layout.y + style.transform.ty).floor() as i32,
-            layout.w.ceil() as i32,
-            layout.h.ceil() as i32,
-        ));
+        let instance = self.render_chunk_instance(id, chunk.clone(), layout);
         let children = child_sequences.into_iter().map(|sequence| {
-            (sequence, parent_translation, parent_clip)
+            (sequence, [0.0, 0.0], None)
         }).collect();
         let sequence = gfx::RenderChunkSequence::compose(vec![instance], children);
         let cached = self.store_node_sequence(id, chunk, sequence.clone(), composition, children_cached, stats);
@@ -1969,6 +2205,32 @@ impl NodeTree {
         stats.sequences_rebuilt = stats.sequences_rebuilt.saturating_add(1);
         Ok((sequence, cached))
     }
+
+   fn render_chunk_instance(&self, id: NodeId, chunk: gfx::RenderChunk, layout: LayoutRect) -> gfx::RenderChunkInstance
+   {
+      let mut instance = gfx::RenderChunkInstance::new(chunk, [layout.x, layout.y]);
+      if let Some(node) = self.get(id)
+      {
+         instance.property_slots = alloc::sync::Arc::from([node.transform_slot, node.opacity_slot]);
+      }
+      let mut clips = Vec::new();
+      let mut current = self.get(id).and_then(|node| node.parent);
+      while let Some(ancestor) = current
+      {
+         let Some(node) = self.get(ancestor) else { break };
+         if node.style.clip
+         {
+            clips.push(gfx::RenderDynamicClip {
+               rect: gfx::RectF::new(node.layout.x, node.layout.y, node.layout.w, node.layout.h),
+               transform: node.transform_slot,
+            });
+         }
+         current = node.parent;
+      }
+      clips.reverse();
+      instance.dynamic_clips = clips.into();
+      instance
+   }
 
    fn store_node_sequence(&mut self, id: NodeId, chunk: gfx::RenderChunk, sequence: gfx::RenderChunkSequence, composition: NodeCompositionState, children_cached: bool, stats: &mut RetainedNodeStats) -> bool
    {
@@ -2260,6 +2522,70 @@ impl NodeTree {
    }
 }
 
+#[inline]
+const fn affine_identity() -> [f32; 6]
+{
+   [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+}
+
+#[inline]
+const fn affine_translate(x: f32, y: f32) -> [f32; 6]
+{
+   [1.0, 0.0, 0.0, 1.0, x, y]
+}
+
+#[inline]
+fn affine_mul(a: [f32; 6], b: [f32; 6]) -> [f32; 6]
+{
+   [
+      a[0] * b[0] + a[2] * b[1],
+      a[1] * b[0] + a[3] * b[1],
+      a[0] * b[2] + a[2] * b[3],
+      a[1] * b[2] + a[3] * b[3],
+      a[0] * b[4] + a[2] * b[5] + a[4],
+      a[1] * b[4] + a[3] * b[5] + a[5],
+   ]
+}
+
+#[inline]
+fn affine_from_transform(layout_x: f32, layout_y: f32, transform: plat::Transform2D) -> [f32; 6]
+{
+   let (sin, cos) = transform.rot_rad.sin_cos();
+   [
+      cos * transform.sx,
+      sin * transform.sx,
+      -sin * transform.sy,
+      cos * transform.sy,
+      layout_x + transform.tx,
+      layout_y + transform.ty,
+   ]
+}
+
+#[inline]
+fn affine_point(transform: [f32; 6], point: [f32; 2]) -> [f32; 2]
+{
+   [
+      transform[0] * point[0] + transform[2] * point[1] + transform[4],
+      transform[1] * point[0] + transform[3] * point[1] + transform[5],
+   ]
+}
+
+#[inline]
+fn affine_inverse_point(transform: [f32; 6], point: [f32; 2]) -> Option<[f32; 2]>
+{
+   let determinant = transform[0] * transform[3] - transform[1] * transform[2];
+   if !determinant.is_finite() || determinant.abs() <= f32::EPSILON
+   {
+      return None;
+   }
+   let x = point[0] - transform[4];
+   let y = point[1] - transform[5];
+   Some([
+      (transform[3] * x - transform[2] * y) / determinant,
+      (-transform[1] * x + transform[0] * y) / determinant,
+   ])
+}
+
 fn encode_node_local_frame(style: &NodeStyle, layout: LayoutRect, b: &mut DrawListBuilder) {
     if style.shadow_alpha > 0.0 {
         b.rrect(
@@ -2268,27 +2594,18 @@ fn encode_node_local_frame(style: &NodeStyle, layout: LayoutRect, b: &mut DrawLi
             gfx::Color::rgba(0.0, 0.0, 0.0, style.shadow_alpha.clamp(0.0, 1.0)),
         );
     }
-    let mut color = style.background;
-    color.a *= style.opacity.clamp(0.0, 1.0);
-    b.rrect(gfx::RectF::new(0.0, 0.0, layout.w, layout.h), style.corner_radii, color);
+    b.rrect(gfx::RectF::new(0.0, 0.0, layout.w, layout.h), style.corner_radii, style.background);
 }
 
-fn effective_node_style(id: NodeId, mut style: NodeStyle, over: Option<&alloc::collections::BTreeMap<NodeId, crate::anim::AnimOverrides>>) -> NodeStyle {
+fn effective_node_style(id: NodeId, mut style: NodeStyle, over: Option<&crate::anim::AnimOverrideSlots>) -> NodeStyle {
     let Some(override_) = over.and_then(|overrides| overrides.get(&id)) else {
         return style;
     };
-    if let Some(transform) = override_.transform {
-        style.transform.tx += transform.tx;
-        style.transform.ty += transform.ty;
-    }
     if let Some(radii) = override_.corner_radii {
         style.corner_radii = radii;
     }
     if let Some(color) = override_.color {
         style.background = color;
-    }
-    if let Some(opacity) = override_.opacity {
-        style.opacity = opacity;
     }
     if let Some(alpha) = override_.shadow_alpha {
         style.shadow_alpha = alpha;
@@ -2301,7 +2618,7 @@ fn encode_node_frame(
     style: &NodeStyle,
     layout: LayoutRect,
     b: &mut DrawListBuilder,
-    over: Option<&alloc::collections::BTreeMap<NodeId, crate::anim::AnimOverrides>>,
+    over: Option<&crate::anim::AnimOverrideSlots>,
     parent_tx: f32,
     parent_ty: f32,
 ) -> (f32, f32) {
@@ -2408,8 +2725,9 @@ impl NodeTree {
             self.retained_sequence_bytes = self.retained_sequence_bytes.saturating_sub(sequence_bytes);
         }
         if let Some(slot) = self.nodes.get_mut(id.0 as usize) {
-            if slot.is_some() {
-                *slot = None;
+            if let Some(node) = slot.take() {
+                self.dynamic_slots.release(node.transform_slot);
+                self.dynamic_slots.release(node.opacity_slot);
             }
         }
     }
@@ -2444,6 +2762,13 @@ impl NodeTree {
             self.mark_node_and_ancestors_draw_dirty(id);
         }
         Some((before, after))
+    }
+
+    pub(crate) fn edit_style_untracked<F: FnOnce(&mut NodeStyle)>(&mut self, id: NodeId, edit: F) -> Option<(NodeStyle, NodeStyle)>
+    {
+       let before = self.get(id)?.style;
+       edit(&mut self.get_mut(id)?.style);
+       Some((before, self.get(id)?.style))
     }
 
     pub fn root_style_mut(&mut self) -> Option<&mut NodeStyle> {
@@ -2500,6 +2825,8 @@ impl Clone for NodeTree {
             last_invalidation_reason: RetainedInvalidationReason::None,
             retained_cache_lru_head: None,
             retained_cache_lru_tail: None,
+            dynamic_slots: self.dynamic_slots.clone(),
+            dynamic_properties: Vec::with_capacity(self.dynamic_properties.capacity()),
         }
     }
 }
@@ -2511,13 +2838,4 @@ fn content_rect(style: &NodeStyle, layout: &LayoutRect) -> LayoutRect {
         w: (layout.w - style.padding.left - style.padding.right).max(0.0),
         h: (layout.h - style.padding.top - style.padding.bottom).max(0.0),
     }
-}
-
-#[inline]
-fn translated_layout_rect(rect: LayoutRect, tx: f32, ty: f32) -> LayoutRect {
-    LayoutRect { x: rect.x + tx, y: rect.y + ty, w: rect.w, h: rect.h }
-}
-
-fn point_in_rect(x: f32, y: f32, r: LayoutRect) -> bool {
-    x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h
 }

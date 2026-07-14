@@ -41,7 +41,7 @@ Unavailable Metal fails construction; mismatched colors report the observed pixe
 
 ## Concurrency and memory behavior
 
-The test submits one bounded frame and uses synchronous readback only in the test path.
+The test submits bounded frames and uses synchronous readback only in the test path. The C26 property-ring case completes each submission while cycling every physical frame slot, then proves unchanged reuse uploads zero bytes and one changed record uploads exactly 48 bytes without relying on callback timing.
 
 ## Performance notes
 
@@ -56,6 +56,7 @@ The snapshot file requires `snapshot-tests` and macOS or physical iOS Metal supp
 Run the named test with `cargo test --locked -p oxide-renderer-metal --features snapshot-tests --test snapshots`.
 
 ## Changelog
+- 2026-07-13: added C26 property-ring warmup, unchanged-zero-upload, and one-record-update coverage.
 
 - 2026-07-13: added exact prepared-versus-flat mixed and fractional opaque pixels, dynamic-property reuse, one-dirty, LRU/purge, generation invalidation, and fallback-work coverage.
 - 2026-07-12: added packed endpoint/interpolation and zero-rgba byte-identity coverage.

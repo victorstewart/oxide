@@ -15,6 +15,8 @@
 - `UiSurface::retained_cache_policy(&self) -> RetainedCachePolicy`: returns the active tree-owned policy.
 - `UiSurface::set_retained_cache_policy(&mut self, RetainedCachePolicy)`: applies a new policy, enforces reductions immediately, and invalidates the surface-level snapshot cache.
 - `UiSurface::render_snapshot_retained(...) -> Result<SurfaceRenderSnapshot, SurfaceRenderSnapshotError>`: returns an immutable mixed UI/content snapshot plus cache diagnostics.
+- `UiSurface::tick_at(now_ms)`: advances the owned animator, marks transform/opacity property dirtiness without invalidating immutable chunks, and rebuilds only sampled paint values.
+- `UiSurface::accessibility_frame(node)`: returns the affine-transformed accessibility AABB from the same animation overrides used by rendering and hit testing.
 - `SurfaceRenderChunkStats`: keeps the per-snapshot reuse, copy, and retained-byte summary compact. `UiSurface::retained_node_stats` exposes the complete admission, eviction, prepared-byte, build-time, fallback, completeness, and invalidation telemetry on demand so hot snapshot returns do not copy cold diagnostic fields.
 
 ## Logic narrative
@@ -26,6 +28,8 @@ The surface asks `NodeTree` for the current immutable UI sequence, combines it w
 - Chunk namespaces must fit the tree's 32-bit namespace encoding.
 - Returned snapshots preserve caller content order and identity.
 - A completed render reports retained logical bytes at or below the configured CPU budget.
+- Warm transform/opacity animation leaves chunk and sequence rebuild counts plus command/vertex/index copy bytes at zero while publishing sorted property records.
+- Clip changes rebuild sequence metadata for the affected subtree so descendants receive the new ancestor clip chain without rebaking geometry.
 
 ## Edge cases and failure modes
 
@@ -40,6 +44,8 @@ The surface asks `NodeTree` for the current immutable UI sequence, combines it w
 ## Performance notes
 
 Complete hot snapshots clone shared handles and compare sequence identities. Incomplete snapshots rebuild composition without retaining indirect references. Zero-budget one-use churn avoids thousands of per-node/path allocations while keeping external text/image chunks reusable.
+
+C26 keeps retained geometry node-local and reuses clean sequence/chunk `Arc`s while only compact snapshot properties change. `UiSurface` no longer copies an animator-produced map into separate surface storage; paint overrides remain node-scoped because their pixels are part of immutable chunks.
 
 ## Feature flags and cfgs
 
@@ -64,4 +70,5 @@ surface.set_retained_cache_policy(policy);
 
 ## Changelog
 
+- 2026-07-13: routed transform/opacity animation through dense dynamic slots, synchronized affine hit/accessibility geometry, and made clip edits metadata-only for C26.
 - 2026-07-13: Added public retained cache policy configuration and complete C23 cache statistics.

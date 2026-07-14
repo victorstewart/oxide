@@ -47,6 +47,8 @@ Optional auxiliary texture handles retain wgpu's completion-safe internal owners
 
 Prepared entries own their wgpu buffers, render bundles, lowered draw vectors, resource handles, and logical-byte accounting. The cache is browser-main-thread state with no locks; clean lookup is hash-table access per instance, while budget enforcement scans only when residency exceeds the configured limit. Bundle-referenced resources remain alive through cache or aggregate-bundle ownership until explicit invalidation.
 
+C26 adds a three-slice dynamic-uniform property ring. Queue writes and render submissions share the WebGPU queue timeline, so reusing a physical slice remains ordered without a CPU wait. Each plan ordinal retains its last value revision per slice; adjacent changed records coalesce into one `queue.write_buffer` range. Dynamic instances keep persistent chunk buffers but use ordered direct draws because bundle commands cannot change dynamic offsets per replay.
+
 ## Performance notes
 
 Draw count is unchanged. Generic vertex uploads fall from 32 to 20 bytes each, u16-eligible index uploads fall from four to two bytes each, and frame-level vertex/index reserialization is deleted. The C16 browser workload separately measures 10,000 glyph quads, 10,000 image quads, and a 70,002-vertex u32-fallback solid mesh while retaining direct GPU timestamp and visual evidence.
@@ -55,13 +57,15 @@ C19 measures construction resource count, direct/backdrop/Scene3D logical target
 
 C25 measures 256 chunks and 7,680 mixed solid/image/A8/SDF draws. The retained eight-draw threshold plus 64-draw scene floor gives clean frames 256 hits, zero lowering/upload work, and one aggregate bundle execute. One dirty chunk leaves 255 hits and updates only 684 geometry bytes. Persistent residency is bounded by a 32 MiB logical-byte LRU; higher thresholds and recurring bundle/buffer recreation were rejected by the recorded tail gates.
 
+C26 measures 300 retained text/image instances with alternating transform and opacity. After all ring slices warm, the candidate records 300 cache hits, zero command traversal/copy and geometry upload, 300 changed property records, and 14,400 logical property bytes per alternating frame. Full affine snapshots use the same prepared path; dynamic clip metadata resolves against its transform slot before scissor intersection.
+
 ## Feature flags and cfgs
 
 Compiled only for `wasm32` with the existing WebGPU and WGSL features.
 
 ## Testing and benchmarks
 
-Native contract tests exercise decoding/source paths and freeze prepared-cache invalidation, aggregate/hybrid bundle ownership, flat boundaries, and counters; wasm `--lib` compilation verifies the implementation. The C25 browser adapter supplies paired encode and displayed-RAF distributions, lifecycle guardrails, a threshold sweep, and byte-exact flat/prepared captures.
+Native contract tests exercise decoding/source paths and freeze prepared-cache invalidation, aggregate/hybrid bundle ownership, dynamic property-ring ownership, flat boundaries, and counters; wasm compilation verifies the implementation. The C25 adapter retains static bundle proof, while `scripts/run_webgpu_dynamic_c26.mjs` supplies C26 backend CPU/GPU/property and real-RAF samples.
 
 ## Examples
 
@@ -69,6 +73,7 @@ Packed `0xFFFF_0000` uploads as opaque blue; packed zero uploads the draw unifor
 
 ## Changelog
 
+- 2026-07-13: added full-affine/opacity prepared instances, transform-linked dynamic clips, and a changed-record WebGPU property ring for C26.
 - 2026-07-13: added revision/device-aware persistent prepared chunks, ordered bundle/direct segments, an aggregate static snapshot bundle, logical-byte LRU eviction, lifecycle invalidation, and C25 counters.
 - 2026-07-13: made scene, scratch, and depth targets feature-driven; initialized the viewport only at construction/resize; and added selective app-controlled backdrop/Scene3D prewarm.
 - 2026-07-12: replaced generic frame reserialization with directly uploaded 20-byte POD vertices, segmented u16 indices, and a correct u32 large-mesh fallback.

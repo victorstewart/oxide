@@ -165,3 +165,88 @@ fn animator_transform_and_color_are_finite() {
             && c.a <= 1.0
     );
 }
+
+#[test]
+fn animator_compacts_finished_entries_once_and_reuses_dense_override_storage()
+{
+   let mut animator = Animator::new();
+   let desc = api::AnimDesc {
+      id: 0,
+      prop: api::AnimProp::Opacity,
+      from: api::AnimValue::F32(0.0),
+      to: api::AnimValue::F32(1.0),
+      curve: api::AnimCurve::Ease { ease: api::Ease { kind: api::EaseKind::Linear } },
+      duration_ms: 1,
+      delay_ms: 0,
+      repeat: api::Repeat::Once,
+   };
+   for index in 1..=1_024
+   {
+      animator.start(NodeId(index), desc.clone());
+   }
+   let active_capacity = animator.active_storage_capacity();
+   let now = oxide_timing::now_ms();
+   animator.step(now.saturating_add(2));
+   assert_eq!(animator.active_count(), 0);
+   assert_eq!(animator.overrides().len(), 1_024);
+   let slot_capacity = animator.overrides().storage_capacity();
+   animator.step(now.saturating_add(3));
+   assert!(animator.overrides().is_empty());
+   for index in 1..=1_024
+   {
+      animator.start(NodeId(index), desc.clone());
+   }
+   assert_eq!(animator.active_storage_capacity(), active_capacity);
+   animator.step(now.saturating_add(4));
+   assert_eq!(animator.overrides().storage_capacity(), slot_capacity);
+}
+
+#[test]
+fn animator_interruption_replaces_one_property_and_completion_clears_the_dense_slot()
+{
+   let mut animator = Animator::new();
+   let node = NodeId(21);
+   let first = api::AnimDesc {
+      id: 0,
+      prop: api::AnimProp::Opacity,
+      from: api::AnimValue::F32(0.0),
+      to: api::AnimValue::F32(1.0),
+      curve: api::AnimCurve::Ease { ease: api::Ease { kind: api::EaseKind::Linear } },
+      duration_ms: 100,
+      delay_ms: 0,
+      repeat: api::Repeat::Once,
+   };
+   animator.start(node, first);
+   let started = oxide_timing::now_ms();
+   let interrupted = animator.step(started.saturating_add(40))
+      .get(&node)
+      .and_then(|override_| override_.opacity)
+      .expect("interrupted opacity sample");
+   animator.cancel_prop(node, api::AnimProp::Opacity);
+   animator.start(node, api::AnimDesc {
+      id: 0,
+      prop: api::AnimProp::Opacity,
+      from: api::AnimValue::F32(interrupted),
+      to: api::AnimValue::F32(0.25),
+      curve: api::AnimCurve::Ease { ease: api::Ease { kind: api::EaseKind::Linear } },
+      duration_ms: 60,
+      delay_ms: 0,
+      repeat: api::Repeat::Once,
+   });
+   assert_eq!(animator.active_count(), 1);
+   let restarted = oxide_timing::now_ms();
+   let middle = animator.step(restarted.saturating_add(30))
+      .get(&node)
+      .and_then(|override_| override_.opacity)
+      .expect("restarted opacity sample");
+   assert!(middle >= interrupted.min(0.25) && middle <= interrupted.max(0.25));
+   let completed = animator.step(restarted.saturating_add(61))
+      .get(&node)
+      .and_then(|override_| override_.opacity)
+      .expect("completed opacity sample");
+   assert_eq!(animator.active_count(), 0);
+   assert!((completed - 0.25).abs() < 1.0e-3);
+   let cleared = animator.step(restarted.saturating_add(62));
+   assert!(cleared.get(&node).is_none());
+   assert_eq!(cleared.changed_nodes(), &[node]);
+}

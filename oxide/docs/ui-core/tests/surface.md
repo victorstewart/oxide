@@ -39,6 +39,9 @@ Call flow:
 - `retained_cache_budget_never_evicts_caller_owned_text_or_image_chunks()`
   Verifies a zero node-cache budget preserves independent caller-owned chunk identity and exact mixed output.
 - Additional tests in the file cover transform-only motion, opacity/clip dirty classes, content dirty classes, non-draw dirty classes, router retained composition, and hit-test identity.
+- `transform_and_opacity_animation_reuses_all_warm_geometry()` drives 300 nodes and requires zero warm chunk/sequence rebuild and zero command/vertex/index copies while properties continue changing.
+- `nested_animation_keeps_clip_hit_test_and_accessibility_geometry_synchronized()` covers nested scale/rotation/translation, cumulative opacity, retained clip metadata, transformed hit coordinates, and accessibility frames.
+- `removed_node_property_slots_reuse_dense_indices_with_new_generations()` proves logical slot indices are recycled only under a new generation.
 
 ## Logic narrative
 The tests construct small retained trees with known geometry, run a cold layout or encode, mutate one scoped property, then assert both the resulting geometry and the diagnostic counters. The mixed ancestor/descendant test specifically marks an ancestor layout-dirty while a child keeps the same outer rect and a grandchild requires relayout; this locks the skip predicate so `descendant_layout_dirty` prevents an unsafe subtree skip.
@@ -81,6 +84,7 @@ assert!(dirty.visited_nodes < cold.visited_nodes);
 ```
 
 ## Changelog
+- 2026-07-13: added C26 zero-geometry animation, nested transform/clip/hit/accessibility, and slot-generation reuse coverage.
 - 2026-07-13: Added C23 hard-budget, LRU/hot protection, churn suppression/readmission, external identity, and exact zero-budget fallback coverage.
 - 2026-06-01: Added coverage that dirty text atlases are not retained-replay-safe until the dirty upload is cleared.
 - 2026-06-01: Added coverage for ancestor relayout combined with dirty descendants under a stable child rect.

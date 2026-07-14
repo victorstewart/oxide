@@ -68,4 +68,4 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
-- 2026-07-13: refreshed the exact manifest summary after the completed C00--C25 experiment sequence reached 142 entries: 71 accepted and 71 rejected.
+- 2026-07-13: refreshed the exact manifest summary after the completed C00--C26 experiment sequence reached 144 entries: 72 accepted and 72 rejected.

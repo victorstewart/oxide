@@ -112,6 +112,25 @@ fn host_exposes_prepared_chunk_browser_contract()
    assert!(page.contains("bench_webgpu_prepared_chunks"));
 }
 
+#[test]
+fn host_exposes_dynamic_property_browser_contract()
+{
+   let source = include_str!("../src/lib.rs");
+   let runner = include_str!("../../../../scripts/run_webgpu_dynamic_c26.mjs");
+   assert!(source.contains("WEBGPU_DYNAMIC_PROPERTY_NODES: usize = 300"));
+   assert!(source.contains("pub async fn bench_webgpu_dynamic_properties"));
+   assert!(source.contains("pub fn render_webgpu_dynamic_property_snapshot"));
+   assert!(source.contains("webgpu_dynamic_property_instances"));
+   assert!(source.contains("webgpu_dynamic_property_snapshot"));
+   assert!(source.contains("property_upload_bytes_avg"));
+   assert!(source.contains("property_records_updated_avg"));
+   assert!(source.contains("geometry_upload_bytes_avg"));
+   assert!(source.contains("event_to_submit_samples_ms"));
+   assert!(runner.contains("requestAnimationFrame"));
+   assert!(runner.contains("raf_frame_samples_ms"));
+   assert!(runner.contains("render_webgpu_dynamic_property_snapshot"));
+}
+
 fn report_f64(section: &str, key: &str) -> f64 {
     let marker = format!("\"{key}\": ");
     let start =

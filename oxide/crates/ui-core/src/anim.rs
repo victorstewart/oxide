@@ -4,7 +4,6 @@
 use crate::prelude::platform_api as api;
 use crate::prelude::renderer_api as gfx;
 use crate::NodeId;
-use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use oxide_timing as timing;
 
@@ -363,6 +362,167 @@ pub struct AnimOverrides {
     pub shadow_alpha: Option<f32>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct AnimOverrideEntry
+{
+   current: AnimOverrides,
+   previous: AnimOverrides,
+   present: bool,
+   was_present: bool,
+}
+
+/// Dense node-indexed animation overrides with storage retained across frames.
+#[derive(Clone, Debug, Default)]
+pub struct AnimOverrideSlots
+{
+   entries: Vec<AnimOverrideEntry>,
+   active: Vec<NodeId>,
+   previous: Vec<NodeId>,
+   changed: Vec<NodeId>,
+   paint_changed: Vec<NodeId>,
+}
+
+impl AnimOverrideSlots
+{
+   fn begin_frame(&mut self)
+   {
+      core::mem::swap(&mut self.active, &mut self.previous);
+      self.active.clear();
+      self.changed.clear();
+      self.paint_changed.clear();
+      for node in self.previous.iter().copied()
+      {
+         let entry = &mut self.entries[node.0 as usize];
+         entry.previous = core::mem::take(&mut entry.current);
+         entry.present = false;
+         entry.was_present = true;
+      }
+   }
+
+   fn entry_mut(&mut self, node: NodeId) -> &mut AnimOverrides
+   {
+      let index = node.0 as usize;
+      if self.entries.len() <= index
+      {
+         self.entries.resize_with(index + 1, AnimOverrideEntry::default);
+      }
+      if !self.entries[index].present
+      {
+         self.entries[index].present = true;
+         self.active.push(node);
+      }
+      &mut self.entries[index].current
+   }
+
+   fn finish_frame(&mut self)
+   {
+      for node in self.previous.iter().copied()
+      {
+         let entry = &mut self.entries[node.0 as usize];
+         if !entry.present || entry.current != entry.previous
+         {
+            self.changed.push(node);
+            if !paint_overrides_equal(&entry.current, &entry.previous)
+            {
+               self.paint_changed.push(node);
+            }
+         }
+         if !entry.present
+         {
+            entry.previous = AnimOverrides::default();
+            entry.was_present = false;
+         }
+      }
+      for node in self.active.iter().copied()
+      {
+         let entry = &mut self.entries[node.0 as usize];
+         if !entry.was_present
+         {
+            self.changed.push(node);
+            if !paint_overrides_equal(&entry.current, &AnimOverrides::default())
+            {
+               self.paint_changed.push(node);
+            }
+         }
+         entry.previous = AnimOverrides::default();
+         entry.was_present = false;
+      }
+      self.previous.clear();
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn get(&self, node: &NodeId) -> Option<&AnimOverrides>
+   {
+      self.entries.get(node.0 as usize).filter(|entry| entry.present).map(|entry| &entry.current)
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn len(&self) -> usize
+   {
+      self.active.len()
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn is_empty(&self) -> bool
+   {
+      self.active.is_empty()
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn changed_nodes(&self) -> &[NodeId]
+   {
+      &self.changed
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn storage_capacity(&self) -> usize
+   {
+      self.entries.capacity()
+   }
+
+   #[inline]
+   #[must_use]
+   pub fn paint_changed_nodes(&self) -> &[NodeId]
+   {
+      &self.paint_changed
+   }
+
+   pub fn insert(&mut self, node: NodeId, overrides: AnimOverrides) -> Option<AnimOverrides>
+   {
+      let previous = self.get(&node).cloned();
+      *self.entry_mut(node) = overrides;
+      if previous.as_ref() != self.get(&node)
+      {
+         self.changed.push(node);
+      }
+      previous
+   }
+
+   pub fn clear(&mut self)
+   {
+      self.begin_frame();
+      self.finish_frame();
+   }
+
+   pub fn iter(&self) -> impl Iterator<Item = (NodeId, &AnimOverrides)>
+   {
+      self.active.iter().copied().filter_map(|node| self.get(&node).map(|overrides| (node, overrides)))
+   }
+}
+
+#[inline]
+fn paint_overrides_equal(a: &AnimOverrides, b: &AnimOverrides) -> bool
+{
+   a.color == b.color
+      && a.corner_radii == b.corner_radii
+      && a.shadow_alpha == b.shadow_alpha
+}
+
 impl PartialEq for AnimOverrides {
     fn eq(&self, other: &Self) -> bool {
         self.opacity == other.opacity
@@ -399,11 +559,17 @@ pub struct Animator {
     reduce_motion: bool,
     next_id: api::AnimId,
     active: alloc::vec::Vec<Active>,
+    overrides: AnimOverrideSlots,
 }
 
 impl Default for Animator {
     fn default() -> Self {
-        Self { reduce_motion: false, next_id: 1, active: alloc::vec::Vec::new() }
+        Self {
+            reduce_motion: false,
+            next_id: 1,
+            active: alloc::vec::Vec::new(),
+            overrides: AnimOverrideSlots::default(),
+        }
     }
 }
 
@@ -458,21 +624,24 @@ impl Animator {
         self.active.len()
     }
 
-    pub fn step(&mut self, now_ms: u64) -> BTreeMap<NodeId, AnimOverrides> {
-        let mut out: BTreeMap<NodeId, AnimOverrides> = BTreeMap::new();
-        // Walk a copy to allow removal
-        let mut i = 0;
-        while i < self.active.len() {
-            let a = &self.active[i];
+    #[inline]
+    #[must_use]
+    pub fn active_storage_capacity(&self) -> usize {
+        self.active.capacity()
+    }
+
+    pub fn step(&mut self, now_ms: u64) -> &AnimOverrideSlots {
+        self.overrides.begin_frame();
+        let overrides = &mut self.overrides;
+        self.active.retain_mut(|a| {
             let d = &a.desc;
             let t_ms = now_ms.saturating_sub(a.start_ms);
             if t_ms < d.delay_ms as u64 {
-                i += 1;
-                continue;
+                return true;
             }
             let elapsed = (t_ms - d.delay_ms as u64) as u32;
             let val = timing::anim::value_at(d, elapsed);
-            let e = out.entry(a.node).or_default();
+            let e = overrides.entry_mut(a.node);
             match (d.prop, val) {
                 (api::AnimProp::Opacity, api::AnimValue::F32(v)) => e.opacity = Some(v),
                 (api::AnimProp::Transform2D, api::AnimValue::Xform2D(xf)) => e.transform = Some(xf),
@@ -485,34 +654,38 @@ impl Animator {
                 (api::AnimProp::ShadowAlpha, api::AnimValue::F32(v)) => e.shadow_alpha = Some(v),
                 _ => {}
             }
-            // Completion handling
             let done = elapsed >= d.duration_ms;
-            if done {
-                match d.repeat {
-                    api::Repeat::Once => {
-                        self.active.remove(i);
-                        continue;
-                    }
+            if !done {
+                return true;
+            }
+            match d.repeat {
+                    api::Repeat::Once => false,
                     api::Repeat::Count(n) => {
                         if n <= 1 {
-                            self.active.remove(i);
-                            continue;
+                            return false;
                         }
-                        let mut nd = d.clone();
-                        nd.repeat = api::Repeat::Count(n - 1);
-                        self.active[i].desc = nd;
-                        self.active[i].start_ms = now_ms;
-                        i += 1;
+                        a.desc.repeat = api::Repeat::Count(n - 1);
+                        a.start_ms = now_ms;
+                        true
                     }
                     api::Repeat::Forever => {
-                        self.active[i].start_ms = now_ms;
-                        i += 1;
+                        a.start_ms = now_ms;
+                        true
                     }
                 }
-            } else {
-                i += 1;
-            }
-        }
-        out
+        });
+        self.overrides.finish_frame();
+        &self.overrides
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn overrides(&self) -> &AnimOverrideSlots {
+        &self.overrides
+    }
+
+    #[inline]
+    pub fn overrides_mut(&mut self) -> &mut AnimOverrideSlots {
+        &mut self.overrides
     }
 }

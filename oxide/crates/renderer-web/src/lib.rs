@@ -135,6 +135,9 @@ pub struct WebRendererStats {
     pub gpu_timestamp_readback_skips: u32,
     pub gpu_timestamp_readback_interval: u32,
     pub buffer_upload_bytes: u64,
+    pub property_upload_bytes: u64,
+    pub property_records_updated: u32,
+    pub property_ring_bytes: u64,
     pub texture_upload_bytes: u64,
     pub buffer_grows: u32,
     pub texture_creates: u32,
@@ -344,6 +347,9 @@ impl Default for WebRendererStats {
             gpu_timestamp_readback_skips: 0,
             gpu_timestamp_readback_interval: 0,
             buffer_upload_bytes: 0,
+            property_upload_bytes: 0,
+            property_records_updated: 0,
+            property_ring_bytes: 0,
             texture_upload_bytes: 0,
             buffer_grows: 0,
             texture_creates: 0,
@@ -1883,7 +1889,7 @@ mod wasm {
 
     fn canvas_stats_metrics(stats: WebRendererStats) -> String {
         format!(
-            ";draws={};draw_items={};draw_items_coalesced={};draw_pipeline_binds={};draw_bind_group_binds={};draw_scissor_sets={};solid_tris={};image_draws={};image_mesh_draws={};nine_slice_draws={};glyph_quads={};sdf_glyph_quads={};clip_depth_peak={};damage_rects={};render_passes={};clear_passes={};draw_passes={};present_passes={};texture_copies={};command_buffers={};id_mask_uniform_writes={};id_mask_uniform_bytes={};id_mask_uniform_slots={};buffer_upload_bytes={};texture_upload_bytes={};buffer_grows={};texture_creates={};bind_group_creates={};pipeline_creates={};sampler_creates={};image_texture_creates={};image_bind_group_creates={};cpu_scratch_bytes={};cpu_scratch_grows={};cpu_scratch_growth_bytes={}",
+            ";draws={};draw_items={};draw_items_coalesced={};draw_pipeline_binds={};draw_bind_group_binds={};draw_scissor_sets={};solid_tris={};image_draws={};image_mesh_draws={};nine_slice_draws={};glyph_quads={};sdf_glyph_quads={};clip_depth_peak={};damage_rects={};render_passes={};clear_passes={};draw_passes={};present_passes={};texture_copies={};command_buffers={};id_mask_uniform_writes={};id_mask_uniform_bytes={};id_mask_uniform_slots={};buffer_upload_bytes={};property_upload_bytes={};property_records_updated={};property_ring_bytes={};texture_upload_bytes={};buffer_grows={};texture_creates={};bind_group_creates={};pipeline_creates={};sampler_creates={};image_texture_creates={};image_bind_group_creates={};cpu_scratch_bytes={};cpu_scratch_grows={};cpu_scratch_growth_bytes={}",
             stats.draws,
             stats.draw_items,
             stats.draw_items_coalesced,
@@ -1908,6 +1914,9 @@ mod wasm {
             stats.id_mask_uniform_bytes,
             stats.id_mask_uniform_slots,
             stats.buffer_upload_bytes,
+            stats.property_upload_bytes,
+            stats.property_records_updated,
+            stats.property_ring_bytes,
             stats.texture_upload_bytes,
             stats.buffer_grows,
             stats.texture_creates,

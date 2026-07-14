@@ -3,7 +3,7 @@ use std::sync::Arc;
 use oxide_renderer_api::{
    ChunkIndexMode, Color, Damage, DrawCmd, DrawList, GlyphRun, ImageHandle, IndexSpan, RectF,
    RectI, RenderChunk, RenderChunkError, RenderChunkId, RenderChunkInstance, RenderChunkSequence,
-   RenderChunkRevisions, RenderLayerInstance, RenderPropertySlot, RenderPropertySlotId,
+   RenderChunkRevisions, RenderDynamicClip, RenderLayerInstance, RenderPropertySlot, RenderPropertySlotId,
    RenderPropertyValue, RenderResourceDependency, RenderSnapshot, RenderSnapshotError, Vertex,
    VertexSpan,
 };
@@ -11,6 +11,92 @@ use oxide_renderer_api::{
 fn vertex(x: f32, y: f32) -> Vertex
 {
    Vertex { x, y, u: 0.0, v: 0.0, rgba: 0 }
+}
+
+#[test]
+fn dynamic_property_ids_pack_dense_indices_and_generation_checks()
+{
+   let first = RenderPropertySlotId::dynamic(7, 1).expect("valid dynamic slot");
+   let reused = RenderPropertySlotId::dynamic(7, 2).expect("valid reused dynamic slot");
+   assert!(first.is_dynamic());
+   assert_eq!(first.dynamic_index(), Some(7));
+   assert_eq!(first.dynamic_generation(), Some(1));
+   assert_eq!(reused.dynamic_index(), Some(7));
+   assert_eq!(reused.dynamic_generation(), Some(2));
+   assert_ne!(first, reused);
+   assert!(RenderPropertySlotId::dynamic(0, 1).is_none());
+   assert!(RenderPropertySlotId::dynamic(1, 0).is_none());
+   assert!(!RenderPropertySlotId(9).is_dynamic());
+   let error = RenderSnapshot::new(
+      Vec::new(),
+      vec![
+         RenderPropertySlot {
+            id: first,
+            revision: 1,
+            value: RenderPropertyValue::Opacity(1.0),
+         },
+         RenderPropertySlot {
+            id: reused,
+            revision: 2,
+            value: RenderPropertyValue::Opacity(0.5),
+         },
+      ],
+      Damage { rects: Vec::new() },
+   ).expect_err("two generations of one dense slot cannot coexist");
+   assert_eq!(error, RenderSnapshotError::ConflictingPropertyGeneration { index: 7 });
+}
+
+#[test]
+fn snapshot_precomputes_a_uniform_transform_opacity_revision_epoch()
+{
+   let transform = RenderPropertySlotId::dynamic(9, 1).unwrap();
+   let opacity = RenderPropertySlotId::dynamic(10, 1).unwrap();
+   let snapshot = |opacity_revision| {
+      let mut instance = RenderChunkInstance::new(shape_chunk(69), [0.0, 0.0]);
+      instance.property_slots = vec![transform, opacity].into();
+      RenderSnapshot::new(
+         vec![instance],
+         vec![
+            RenderPropertySlot {
+               id: transform,
+               revision: 7,
+               value: RenderPropertyValue::Transform([1.0, 0.0, 0.0, 1.0, 2.0, 3.0]),
+            },
+            RenderPropertySlot {
+               id: opacity,
+               revision: opacity_revision,
+               value: RenderPropertyValue::Opacity(0.8),
+            },
+         ],
+         Damage { rects: Vec::new() },
+      ).unwrap()
+   };
+   assert_eq!(snapshot(7).uniform_property_revision(), Some(7));
+   assert_eq!(snapshot(8).uniform_property_revision(), None);
+}
+
+#[test]
+fn dynamic_clip_uses_its_transform_slot_in_flat_translation_fallback()
+{
+   let slot = RenderPropertySlotId::dynamic(3, 1).unwrap();
+   let mut instance = RenderChunkInstance::new(shape_chunk(70), [0.0, 0.0]);
+   instance.dynamic_clips = Arc::from([RenderDynamicClip {
+      rect: RectF::new(4.0, 5.0, 20.0, 30.0),
+      transform: slot,
+   }]);
+   let snapshot = RenderSnapshot::new(
+      vec![instance],
+      vec![RenderPropertySlot {
+         id: slot,
+         revision: 1,
+         value: RenderPropertyValue::Transform([1.0, 0.0, 0.0, 1.0, 7.0, 9.0]),
+      }],
+      Damage { rects: Vec::new() },
+   ).unwrap();
+   let mut flat = DrawList::default();
+   snapshot.flatten_into(&mut flat).unwrap();
+   assert!(matches!(flat.items.first(), Some(DrawCmd::ClipPush { rect }) if *rect == RectI::new(11, 14, 20, 30)));
+   assert!(matches!(flat.items.last(), Some(DrawCmd::ClipPop)));
 }
 
 fn mesh_list(vertex_offset: u32, indices: &[u16]) -> DrawList

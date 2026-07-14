@@ -10,7 +10,7 @@ mod orchestration;
 mod permissions;
 mod stress_test;
 
-use alloc::collections::{BTreeMap, VecDeque};
+use alloc::collections::VecDeque;
 use alloc::format;
 use core::fmt::Write;
 use oxide_input::{TouchSurfaceEvent, TouchSurfaceRecognizer};
@@ -1331,7 +1331,6 @@ pub struct AnimTimeline {
     pub animator: anim::Animator,
     phase: f32,
     playing: bool,
-    overrides: BTreeMap<NodeId, anim::AnimOverrides>,
     shake_node: NodeId,
     wiggle_node: NodeId,
     scatter_node: NodeId,
@@ -1343,7 +1342,6 @@ impl Default for AnimTimeline {
             animator: anim::Animator::default(),
             phase: 0.0,
             playing: true,
-            overrides: BTreeMap::new(),
             shake_node: NodeId(0x610),
             wiggle_node: NodeId(0x611),
             scatter_node: NodeId(0x612),
@@ -1357,7 +1355,7 @@ impl AnimTimeline {
             self.phase += dt_ms as f32 / 1000.0;
         }
         let now = timing::now_ms();
-        self.overrides = self.animator.step(now);
+        self.animator.step(now);
         if self.playing {
             self.ensure_sequences();
         }
@@ -1432,7 +1430,7 @@ impl AnimTimeline {
     }
 
     fn rect_for(&self, node: NodeId, base: gfx::RectF) -> gfx::RectF {
-        let Some(over) = self.overrides.get(&node) else {
+        let Some(over) = self.animator.overrides().get(&node) else {
             return base;
         };
         let Some(tr) = over.transform else {
@@ -1448,7 +1446,7 @@ impl AnimTimeline {
     }
 
     fn opacity_for(&self, node: NodeId) -> f32 {
-        if let Some(over) = self.overrides.get(&node) {
+        if let Some(over) = self.animator.overrides().get(&node) {
             if let Some(alpha) = over.opacity {
                 return alpha.clamp(0.0, 1.0);
             }
@@ -1745,7 +1743,6 @@ pub struct InputLab {
     picker: elements::PickerState,
     picker_style: elements::PickerStyle,
     animator: anim::Animator,
-    anim_overrides: BTreeMap<NodeId, anim::AnimOverrides>,
     username_node: NodeId,
     password_node: NodeId,
     submit_node: NodeId,
@@ -1802,7 +1799,6 @@ impl Default for InputLab {
             picker: elements::PickerState::new(picker_items),
             picker_style: elements::PickerStyle::default(),
             animator,
-            anim_overrides: BTreeMap::new(),
             username_node: NodeId(0x501),
             password_node: NodeId(0x502),
             submit_node: NodeId(0x503),
@@ -1832,7 +1828,7 @@ impl InputLab {
             self.handle_submit();
         }
         let now = timing::now_ms();
-        self.anim_overrides = self.animator.step(now);
+        self.animator.step(now);
     }
 
     pub fn wants_next_frame(&self) -> bool {
@@ -2191,7 +2187,7 @@ impl InputLab {
     }
 
     fn rect_for_node(&self, base: gfx::RectF, node: NodeId) -> gfx::RectF {
-        let Some(over) = self.anim_overrides.get(&node) else {
+        let Some(over) = self.animator.overrides().get(&node) else {
             return base;
         };
         let Some(tr) = over.transform else {
@@ -2207,7 +2203,7 @@ impl InputLab {
     }
 
     fn offset_for_node(&self, node: NodeId) -> [f32; 2] {
-        if let Some(over) = self.anim_overrides.get(&node) {
+        if let Some(over) = self.animator.overrides().get(&node) {
             if let Some(tr) = over.transform {
                 return [tr.tx, tr.ty];
             }
@@ -2216,7 +2212,7 @@ impl InputLab {
     }
 
     fn node_opacity(&self, node: NodeId) -> f32 {
-        if let Some(over) = self.anim_overrides.get(&node) {
+        if let Some(over) = self.animator.overrides().get(&node) {
             if let Some(alpha) = over.opacity {
                 return alpha.clamp(0.0, 1.0);
             }

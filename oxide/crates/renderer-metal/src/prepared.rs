@@ -102,6 +102,7 @@ impl PreparedChunkKey
 }
 
 #[derive(Clone, Copy)]
+#[repr(transparent)]
 pub(super) struct PreparedInstanceUniform
 {
    pub values: [f32; 12],
@@ -113,19 +114,29 @@ struct PreparedDynamicUniform
    matrix: [f32; 4],
    translation: [f32; 2],
    opacity: f32,
+   source_revision: u64,
 }
 
 impl PreparedInstanceUniform
 {
-   fn dynamic(snapshot: &api::RenderSnapshot, property_slots: &[api::RenderPropertySlotId]) -> Option<PreparedDynamicUniform>
+   fn dynamic<const TRACK_REVISION: bool>(snapshot: &api::RenderSnapshot, property_slots: &[api::RenderPropertySlotId]) -> Option<PreparedDynamicUniform>
    {
       let mut matrix = [1.0_f32, 0.0, 0.0, 1.0];
       let mut translation = [0.0_f32, 0.0];
       let mut opacity = 1.0_f32;
+      let mut source_revision = 0xcbf2_9ce4_8422_2325_u64;
       for id in property_slots.iter().copied()
       {
          let index = snapshot.properties().binary_search_by_key(&id.0, |property| property.id.0).ok()?;
-         match snapshot.properties()[index].value
+         let property = snapshot.properties()[index];
+         if TRACK_REVISION
+         {
+            source_revision = source_revision
+               .rotate_left(17)
+               ^ (u64::from(id.0) << 32)
+               ^ property.revision;
+         }
+         match property.value
          {
             api::RenderPropertyValue::Transform(transform) =>
             {
@@ -144,7 +155,7 @@ impl PreparedInstanceUniform
             api::RenderPropertyValue::Opacity(value) => opacity *= value,
          }
       }
-      Some(PreparedDynamicUniform { matrix, translation, opacity: opacity.clamp(0.0, 1.0) })
+      Some(PreparedDynamicUniform { matrix, translation, opacity: opacity.clamp(0.0, 1.0), source_revision })
    }
 
    fn from_dynamic(dynamic: PreparedDynamicUniform, origin: [f32; 2], viewport: [f32; 2]) -> Option<Self>
@@ -348,6 +359,106 @@ pub(super) struct PreparedFrameInstance
    pub key: PreparedChunkKey,
    pub uniform: PreparedInstanceUniform,
    pub clip: Option<api::RectI>,
+}
+
+pub(super) struct PreparedPropertyCache
+{
+   entries: Vec<PreparedPropertyEntry>,
+   pending_indices: Vec<usize>,
+   pending_uniforms: Vec<PreparedInstanceUniform>,
+   last_properties: Vec<(u32, u64)>,
+   last_uniform_property_revision: Option<u64>,
+}
+
+struct PreparedPropertyEntry
+{
+   uniform: PreparedInstanceUniform,
+   source_revision: u64,
+   revision: u64,
+   ring_revisions: [u64; super::MAX_FRAME_RESOURCE_DEPTH],
+}
+
+impl Default for PreparedPropertyCache
+{
+   fn default() -> Self
+   {
+      Self {
+         entries: Vec::new(),
+         pending_indices: Vec::new(),
+         pending_uniforms: Vec::new(),
+         last_properties: Vec::new(),
+         last_uniform_property_revision: None,
+      }
+   }
+}
+
+impl PreparedPropertyCache
+{
+   fn begin_frame(&mut self, properties: &[api::RenderPropertySlot], uniform_revision: Option<u64>) -> bool
+   {
+      self.pending_indices.clear();
+      self.pending_uniforms.clear();
+      let write_all = matches!(
+         (self.last_uniform_property_revision, uniform_revision),
+         (Some(previous), Some(current)) if previous != current
+      );
+      self.last_uniform_property_revision = uniform_revision;
+      if write_all
+      {
+         self.entries.clear();
+         return true;
+      }
+      if self.last_properties.len() != properties.len()
+      {
+         self.last_properties.clear();
+         self.last_properties.extend(properties.iter().map(|property| (property.id.0, property.revision)));
+         self.entries.clear();
+         return false;
+      }
+      let mut all_changed = !properties.is_empty();
+      let mut layout_matches = true;
+      for (last, property) in self.last_properties.iter_mut().zip(properties)
+      {
+         layout_matches &= last.0 == property.id.0;
+         all_changed &= last.1 != property.revision;
+         *last = (property.id.0, property.revision);
+      }
+      if !layout_matches || all_changed
+      {
+         self.entries.clear();
+      }
+      layout_matches && all_changed
+   }
+
+   fn resolve(&mut self, index: usize, uniform: PreparedInstanceUniform, source_revision: u64, slot: usize)
+   {
+      while self.entries.len() <= index
+      {
+         self.entries.push(PreparedPropertyEntry {
+            uniform,
+            source_revision,
+            revision: 1,
+            ring_revisions: [0; super::MAX_FRAME_RESOURCE_DEPTH],
+         });
+      }
+      let entry = &mut self.entries[index];
+      if entry.source_revision != source_revision || entry.uniform.values != uniform.values
+      {
+         entry.uniform = uniform;
+         entry.source_revision = source_revision;
+         entry.revision = entry.revision.wrapping_add(1).max(1);
+      }
+      if entry.ring_revisions[slot] != entry.revision
+      {
+         self.pending_indices.push(index);
+         self.pending_uniforms.push(uniform);
+      }
+   }
+
+   fn truncate(&mut self, len: usize)
+   {
+      self.entries.truncate(len);
+   }
 }
 
 pub(super) struct PreparedChunk
@@ -725,36 +836,42 @@ impl MetalRenderer
          self.target_h as f32 / self.target_scale.max(1.0),
       ];
       let mut cache = core::mem::take(&mut self.prepared_chunks);
+      let mut property_cache = core::mem::take(&mut self.prepared_property_cache);
       let mut plan = core::mem::take(&mut self.prepared_frame_plan);
       plan.clear();
+      let write_all_properties = property_cache.begin_frame(
+         snapshot.properties(),
+         snapshot.uniform_property_revision(),
+      );
+      let slot = self.current_frame_slot();
       let mut supported = true;
       let mut hits = 0_u64;
       let mut misses = 0_u64;
       let mut commands_lowered = 0_u64;
       let mut upload_bytes = 0_u64;
+      let mut property_upload_bytes = 0_u64;
+      let mut property_records_updated = 0_u32;
       let mut resource_creates = 0_u32;
-      let mut last_property_slots = None;
-      let mut last_dynamic = None;
       snapshot.visit_instances(|instance| {
          if !supported || instance.layer.is_some()
          {
             supported = false;
             return;
          }
-         let dynamic = if last_property_slots.as_deref() == Some(instance.property_slots.as_ref())
+         let dynamic = if write_all_properties
          {
-            last_dynamic
+            PreparedInstanceUniform::dynamic::<false>(snapshot, &instance.property_slots)
          }
          else
          {
-            let dynamic = PreparedInstanceUniform::dynamic(snapshot, &instance.property_slots);
-            last_property_slots = Some(instance.property_slots.clone());
-            last_dynamic = dynamic;
-            dynamic
+            PreparedInstanceUniform::dynamic::<true>(snapshot, &instance.property_slots)
          };
-         let Some(uniform) = dynamic.and_then(|dynamic| {
-            PreparedInstanceUniform::from_dynamic(dynamic, instance.origin, viewport)
-         }) else
+         let Some(dynamic) = dynamic else
+         {
+            supported = false;
+            return;
+         };
+         let Some(uniform) = PreparedInstanceUniform::from_dynamic(dynamic, instance.origin, viewport) else
          {
             supported = false;
             return;
@@ -775,19 +892,42 @@ impl MetalRenderer
             upload_bytes = upload_bytes.saturating_add(lookup.upload_bytes);
             resource_creates = resource_creates.saturating_add(lookup.buffer_count);
          }
+         let mut clip = instance.clip.map(|clip| transform_rect(clip, uniform));
+         for dynamic_clip in instance.dynamic_clips.iter().copied()
+         {
+            let Some(clip_uniform) = PreparedInstanceUniform::dynamic::<false>(
+               snapshot,
+               core::slice::from_ref(&dynamic_clip.transform),
+            ).and_then(|dynamic| PreparedInstanceUniform::from_dynamic(dynamic, [0.0, 0.0], viewport)) else
+            {
+               supported = false;
+               return;
+            };
+            let transformed = transform_rect_f(dynamic_clip.rect, clip_uniform);
+            clip = Some(clip.map_or(transformed, |current| intersect_scissor_dp(current, transformed)));
+         }
+         if !write_all_properties
+         {
+            property_cache.resolve(
+               plan.len(),
+               uniform,
+               dynamic.source_revision,
+               slot,
+            );
+         }
          plan.push(PreparedFrameInstance {
             key: lookup.key,
             uniform,
-            clip: instance.clip.map(|clip| transform_rect(clip, uniform)),
+            clip,
          });
       });
       if !supported
       {
          self.prepared_chunks = cache;
+         self.prepared_property_cache = property_cache;
          self.prepared_frame_plan = plan;
          return self.encode_snapshot_flat(snapshot);
       }
-
       self.acc_backend_cache_hits = self.acc_backend_cache_hits.saturating_add(hits);
       self.acc_backend_cache_misses = self.acc_backend_cache_misses.saturating_add(misses);
       self.acc_chunks_reused = self.acc_chunks_reused.saturating_add(hits);
@@ -838,41 +978,76 @@ impl MetalRenderer
       let Some(attachment) = descriptor.color_attachments().object_at(0) else
       {
          self.prepared_chunks = cache;
+         self.prepared_property_cache = property_cache;
          self.prepared_frame_plan = plan;
          return self.encode_snapshot_flat(snapshot);
       };
-      let slot = self.current_frame_slot();
       let dynamic_stride = core::mem::size_of::<PreparedInstanceUniform>();
-      let dynamic_offset = super::align_up_usize(self.frames[slot].ub_used, core::mem::align_of::<PreparedInstanceUniform>());
       let Some(dynamic_bytes) = plan.len().checked_mul(dynamic_stride) else
       {
          self.prepared_chunks = cache;
+         self.prepared_property_cache = property_cache;
          self.prepared_frame_plan = plan;
          return self.encode_snapshot_flat(snapshot);
       };
-      let Some(dynamic_end) = dynamic_offset.checked_add(dynamic_bytes) else
-      {
-         self.prepared_chunks = cache;
-         self.prepared_frame_plan = plan;
-         return self.encode_snapshot_flat(snapshot);
-      };
-      if self.ub.ensure_capacity(&self.device, slot, dynamic_end)
+      if self.property_ring.ensure_capacity(&self.device, slot, dynamic_bytes)
       {
          self.acc_resource_grows = self.acc_resource_grows.saturating_add(1);
       }
-      for (index, instance) in plan.iter().enumerate()
+      if write_all_properties
       {
-         let offset = dynamic_offset + index * dynamic_stride;
-         unsafe
+         for (index, instance) in plan.iter().enumerate()
          {
-            core::ptr::copy_nonoverlapping(
-               instance.uniform.values.as_ptr().cast::<u8>(),
-               self.ub.contents_ptr(slot).as_ptr().add(offset),
-               dynamic_stride,
+            let offset = index * dynamic_stride;
+            unsafe
+            {
+               core::ptr::copy_nonoverlapping(
+                  instance.uniform.values.as_ptr().cast::<u8>(),
+                  self.property_ring.contents_ptr(slot).as_ptr().add(offset),
+                  dynamic_stride,
+               );
+            }
+         }
+         property_upload_bytes = dynamic_bytes as u64;
+         property_records_updated = plan.len().min(u32::MAX as usize) as u32;
+      }
+      else
+      {
+         let mut pending = 0;
+         while pending < property_cache.pending_indices.len()
+         {
+            let run = pending;
+            let first = property_cache.pending_indices[pending];
+            let mut end = first + 1;
+            pending += 1;
+            while pending < property_cache.pending_indices.len()
+               && property_cache.pending_indices[pending] == end
+            {
+               end += 1;
+               pending += 1;
+            }
+            let offset = first * dynamic_stride;
+            let bytes = (end - first) * dynamic_stride;
+            unsafe
+            {
+               core::ptr::copy_nonoverlapping(
+                  property_cache.pending_uniforms.as_ptr().add(run).cast::<u8>(),
+                  self.property_ring.contents_ptr(slot).as_ptr().add(offset),
+                  bytes,
+               );
+            }
+            for index in first..end
+            {
+               let entry = &mut property_cache.entries[index];
+               entry.ring_revisions[slot] = entry.revision;
+            }
+            property_upload_bytes = property_upload_bytes.saturating_add(bytes as u64);
+            property_records_updated = property_records_updated.saturating_add(
+               (end - first).min(u32::MAX as usize) as u32,
             );
          }
       }
-      self.frames[slot].ub_used = dynamic_end;
+      property_cache.truncate(plan.len());
       let command_buffer = self.ensure_frame_command_buffer(slot);
       if self.sample_count > 1
       {
@@ -915,6 +1090,8 @@ impl MetalRenderer
       self.frame_gpu_trace = frame_gpu_trace;
       self.acc_render_passes = self.acc_render_passes.saturating_add(1);
       let encoder = command_buffer.new_render_command_encoder(&descriptor);
+      encoder.set_vertex_buffer(2, Some(self.property_ring.buffer(slot)), 0);
+      encoder.set_fragment_buffer(3, Some(self.property_ring.buffer(slot)), 0);
       let global_clip = if use_damage { self.frame_scissor_dp } else { None };
       let mut clip_stack = self.clip_stack_pool.pop().unwrap_or_default();
       let mut last_applied = None;
@@ -928,8 +1105,7 @@ impl MetalRenderer
                self,
                entry,
                instance.uniform,
-               slot,
-               (dynamic_offset + index * dynamic_stride) as u64,
+               (index * dynamic_stride) as u64,
                instance.clip,
                global_clip,
                &mut clip_stack,
@@ -941,11 +1117,12 @@ impl MetalRenderer
       encoder.end_encoding();
 
       self.prepared_chunks = cache;
+      self.prepared_property_cache = property_cache;
       self.prepared_frame_plan = plan;
       let evictions = self.prepared_chunks.take_evictions();
       self.last_stats.vb_bytes = 0;
       self.last_stats.ib_bytes = 0;
-      self.last_stats.ub_bytes = self.frames[slot].ub_used as u64;
+      self.last_stats.ub_bytes = dynamic_bytes as u64;
       self.last_stats.draws = self.acc_draws;
       self.last_stats.instanced = self.acc_instanced;
       self.last_stats.icb_cmds = 0;
@@ -958,6 +1135,10 @@ impl MetalRenderer
       self.last_stats.backend_cache_hits = self.acc_backend_cache_hits;
       self.last_stats.backend_cache_misses = self.acc_backend_cache_misses;
       self.last_stats.buffer_upload_bytes = upload_bytes;
+      self.last_stats.property_upload_bytes = property_upload_bytes;
+      self.last_stats.property_records_updated = property_records_updated;
+      self.last_stats.property_ring_bytes = self.property_ring.cap[..self.frames.len()].iter()
+         .fold(0_u64, |bytes, capacity| bytes.saturating_add(*capacity as u64));
       self.last_stats.cache_evictions = evictions.min(u64::from(u32::MAX)) as u32;
       self.last_stats.resource_creates = self.acc_resource_creates;
       self.last_stats.render_passes = self.acc_render_passes;
@@ -1001,7 +1182,7 @@ impl MetalRenderer
    }
 }
 
-fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut MetalRenderer, chunk: &PreparedChunk, uniform: PreparedInstanceUniform, slot: usize, uniform_offset: u64, instance_clip: Option<api::RectI>, global_clip: Option<api::RectI>, clip_stack: &mut Vec<api::RectI>, last_applied: &mut Option<api::RectI>)
+fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut MetalRenderer, chunk: &PreparedChunk, uniform: PreparedInstanceUniform, uniform_offset: u64, instance_clip: Option<api::RectI>, global_clip: Option<api::RectI>, clip_stack: &mut Vec<api::RectI>, last_applied: &mut Option<api::RectI>)
 {
    let mut current_clip = instance_clip;
    apply_scissor_dp(
@@ -1010,11 +1191,11 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
       effective_scissor_dp(current_clip, global_clip),
       last_applied,
    );
-   encoder.set_vertex_buffer(2, Some(renderer.ub.buffer(slot)), uniform_offset);
+   encoder.set_vertex_buffer_offset(2, uniform_offset);
    let opaque = uniform.values[8] == 1.0;
    if !opaque
    {
-      encoder.set_fragment_buffer(3, Some(renderer.ub.buffer(slot)), uniform_offset);
+      encoder.set_fragment_buffer_offset(3, uniform_offset);
    }
    for operation in &chunk.operations
    {
@@ -1161,6 +1342,26 @@ pub(super) fn transform_rect(rect: api::RectI, uniform: PreparedInstanceUniform)
    let y0 = rect.y as f32;
    let x1 = rect.x.saturating_add(rect.w) as f32;
    let y1 = rect.y.saturating_add(rect.h) as f32;
+   let points = [
+      [m11 * x0 + m21 * y0 + tx, m12 * x0 + m22 * y0 + ty],
+      [m11 * x1 + m21 * y0 + tx, m12 * x1 + m22 * y0 + ty],
+      [m11 * x0 + m21 * y1 + tx, m12 * x0 + m22 * y1 + ty],
+      [m11 * x1 + m21 * y1 + tx, m12 * x1 + m22 * y1 + ty],
+   ];
+   let min_x = points.iter().map(|point| point[0]).fold(f32::INFINITY, f32::min).floor();
+   let min_y = points.iter().map(|point| point[1]).fold(f32::INFINITY, f32::min).floor();
+   let max_x = points.iter().map(|point| point[0]).fold(f32::NEG_INFINITY, f32::max).ceil();
+   let max_y = points.iter().map(|point| point[1]).fold(f32::NEG_INFINITY, f32::max).ceil();
+   api::RectI::new(min_x as i32, min_y as i32, (max_x - min_x) as i32, (max_y - min_y) as i32)
+}
+
+fn transform_rect_f(rect: api::RectF, uniform: PreparedInstanceUniform) -> api::RectI
+{
+   let [m11, m12, m21, m22, tx, ty, ..] = uniform.values;
+   let x0 = rect.x;
+   let y0 = rect.y;
+   let x1 = rect.x + rect.w;
+   let y1 = rect.y + rect.h;
    let points = [
       [m11 * x0 + m21 * y0 + tx, m12 * x0 + m22 * y0 + ty],
       [m11 * x1 + m21 * y0 + tx, m12 * x1 + m22 * y0 + ty],

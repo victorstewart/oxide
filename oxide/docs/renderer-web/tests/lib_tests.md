@@ -30,7 +30,8 @@ Call flow:
 - `wasm_webgpu_draw_encoding_reuses_scratch_storage()`: requires retained packed frame streams, reusable primitive scratch, and removal of duplicate frame byte vectors.
 - `webgpu_surface_config_uses_premultiplied_alpha()`: verifies browser WebGPU surfaces request premultiplied alpha for DOM composition.
 - `wasm_webgpu_resource_counters_cover_uploads_and_passes()`: verifies the WebGPU stats struct, renderer source, and web host metric strings keep draw, clip-depth/scissor, pass, timestamp, upload, scratch, Scene3D, ID-mask, effect-uniform, and resource-creation counters synchronized.
-- `wasm_webgpu_prepared_chunks_are_budgeted_and_resource_invalidated()`: freezes the persistent prepared cache, aggregate and hybrid bundle paths, logical-byte budget, resource/device/resize invalidation, dynamic flat boundaries, and replay counters used by C25 browser proof.
+- `wasm_webgpu_prepared_chunks_are_budgeted_and_resource_invalidated()`: freezes the persistent prepared cache, aggregate and hybrid bundle paths, logical-byte budget, resource/device/resize invalidation, static/dynamic prepared boundaries, and replay counters used by C25/C26 browser proof.
+- The same source contract now freezes C26's three-slice property ring, dynamic uniform resolution, separate property counters, direct dynamic prepared boundary, and transform-linked clip handling while retaining C25 static bundle ownership.
 
 ## Logic narrative
 
@@ -73,6 +74,7 @@ pub fn scale() -> f32
 ## Changelog
 
 - 2026-07-13: added the C25 prepared-cache, bundle/direct, aggregate-replay, budget, invalidation, and counter source contract.
+- 2026-07-13: extended the prepared contract with C26 dynamic property-ring and clip assertions.
 - 2026-07-12: updated packet and scratch contracts for direct POD vertices, segmented u16/u32 index streams, and removal of duplicate byte vectors.
 - 2026-07-12: added a source contract requiring one aligned ID-mask uniform arena upload and distinct dynamic offsets for raster, seed, every JFA jump, and compositor records.
 - 2026-07-12: added a source contract for snapshot-only R8/RGBA16F ID-mask readback.

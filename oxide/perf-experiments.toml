@@ -1,4 +1,44 @@
 [[experiments]]
+id = "c26-dynamic-property-slots"
+introduced_commit = "C26 staged tree recorded in commit proof"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-ui-core", "oxide-renderer-api", "oxide-renderer-metal", "oxide-renderer-web", "oxide-host-web", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal", "Chrome WebGPU over ANGLE Metal"]
+correctness_gate = "Nested affine transforms, opacity, clips, retained output, hit testing, accessibility frames, interruption, completion, generation reuse, stale IDs, physical property-ring reuse, and the unchanged static WebGPU bundle boundary must remain exact."
+performance_gate = "Fifteen balanced fresh-process CPU pairs must materially improve the shared 300-node animation case; 15 user-interactive-QoS Metal pairs with 15,000 samples per side after 128 warmup frames must protect encode, event-to-submit, and direct-GPU p50/p95/p99/peak; every candidate frame must reuse all 300 prepared chunks, upload zero geometry, update exactly 300 48-byte property records, and miss zero 120 Hz deadlines; real Chrome must reproduce the zero-geometry contract."
+decision_state = "accepted"
+decision = "Keep retained geometry node-local and patch animation through stable generation-checked transform/opacity slots, dense animator overrides, and separate completion-protected Metal/WebGPU property rings."
+proof = [
+   "The final exact-tree CPU, Metal encode, Metal event-to-submit, and Metal GPU reports under benchmarks/experiments/c26-dynamic-property-slots/raw retain the parent/candidate tree, binary, instrumentation, raw sample, paired-order, and strict decision identities.",
+   "The 300-node candidate contract reports 300 prepared-cache hits, zero misses, zero command traversal, zero geometry copy/upload, exactly 300 property records and 14,400 property bytes per measured frame, and zero missed 120 Hz deadlines; the real Chrome WebGPU guard independently reproduces the zero-geometry boundary.",
+   "Focused Rust tests preserve nested transform/clip/opacity composition, retained equivalence, hit-test and accessibility geometry, animation interruption/completion, dense slot generation reuse, backend completion safety, and static WebGPU aggregate-bundle replay.",
+]
+cleanup = [
+   "Removed the animation-override retained bypass, per-frame BTreeMap rebuild, repeated finished-animation Vec removal, geometry-baked animation transforms, and dynamic values stored in the immutable geometry upload path.",
+   "Kept checked flat/direct boundaries for unsupported effects and layers, retained exact sparse property updates for mixed workloads, and deferred aggregate baseline promotion to C62.",
+]
+
+[[experiments]]
+id = "c26-uniform-epoch-sparse-revision-bookkeeping-rejected"
+introduced_commit = "rejected during C26 Metal tail review"
+introduced_date = "2026-07-13"
+expires = "2027-07-13"
+required_backends = ["oxide-renderer-api", "oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "Any replacement must preserve exact sparse updates for partial property changes, exact all-record updates for a uniform animation epoch, generation validation, and physical-frame-slot completion safety."
+performance_gate = "The 300-record all-changing workload must protect Metal encode p50/p95/p99/peak over 15 balanced pairs while retaining exact property-byte and geometry-zero counters."
+decision_state = "rejected"
+decision = "Rejected per-instance sparse revision hashing and a per-frame property-layout scan for the common uniform animation epoch; precompute the checked epoch once in RenderSnapshot and select the all-record path without sparse-cache bookkeeping."
+proof = [
+   "The rejected 15-pair population at candidate tree 0f1d15b3d18b47ae7203913a30a4eb983f4a3b37 moved encode p50 from 0.134709 to 0.140729 ms and failed p95/p99 at 0.390296/0.823433 versus 0.355361/0.590479 ms; the complete rejected distribution remains in raw/metal-encode-provisional-report.json.",
+   "Temporary phase attribution isolated property-ring copies at about 0.003 ms per 300-record frame and showed no draw-encoding increase, directing the retained fix to plan metadata rather than geometry, shaders, or Metal resource policy.",
+]
+cleanup = [
+   "Replaced the common-case scan with RenderSnapshot::uniform_property_revision and const-specialized uniform preparation; removed all temporary phase timers before final measurement.",
+]
+
+[[experiments]]
 id = "c25-webgpu-persistent-prepared-chunks"
 introduced_commit = "C25 staged tree recorded in commit proof"
 introduced_date = "2026-07-13"

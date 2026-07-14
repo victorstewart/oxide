@@ -11,7 +11,7 @@ use crate::{
     DrawListBuilder, LayoutRect, LayoutStats, NodeId, NodeStyle, NodeTree, RetainedCachePolicy,
     RetainedInvalidationReason, RetainedNodeStats,
 };
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 use core::fmt;
 
@@ -147,6 +147,13 @@ fn style_change_affects_paint(before: &NodeStyle, after: &NodeStyle) -> bool {
         || before.clip != after.clip
 }
 
+fn style_change_rebuilds_node_paint(before: &NodeStyle, after: &NodeStyle) -> bool
+{
+   before.background != after.background
+      || before.corner_radii != after.corner_radii
+      || before.shadow_alpha != after.shadow_alpha
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetainedDrawStatus {
     Rebuilt,
@@ -179,8 +186,6 @@ struct RetainedSnapshotCache
    namespace: u32,
    sequences: Vec<gfx::RenderChunkSequence>,
    snapshot: gfx::RenderSnapshot,
-   hit_node_stats: RetainedNodeStats,
-   hit_surface_stats: SurfaceRenderChunkStats,
 }
 
 fn surface_render_chunk_stats(status: RetainedDrawStatus, node: RetainedNodeStats) -> SurfaceRenderChunkStats
@@ -197,22 +202,6 @@ fn surface_render_chunk_stats(status: RetainedDrawStatus, node: RetainedNodeStat
       retained_bytes: node.retained_chunk_bytes,
       retained_sequence_bytes: node.retained_sequence_bytes,
    }
-}
-
-fn retained_snapshot_hit_stats(instance_count: u64, retained: RetainedNodeStats) -> (RetainedNodeStats, SurfaceRenderChunkStats)
-{
-   let node = RetainedNodeStats {
-      reused_nodes: u32::try_from(instance_count).unwrap_or(u32::MAX),
-      chunks_reused: instance_count,
-      sequences_reused: 1,
-      retained_chunk_bytes: retained.retained_chunk_bytes,
-      retained_sequence_bytes: retained.retained_sequence_bytes,
-      prepared_gpu_bytes: retained.prepared_gpu_bytes,
-      cache_hits: instance_count,
-      cache_complete: true,
-      ..RetainedNodeStats::default()
-   };
-   (node, surface_render_chunk_stats(RetainedDrawStatus::Reused, node))
 }
 
 #[derive(Debug)]
@@ -382,13 +371,11 @@ pub struct UiSurface {
     last_layout_size: Option<(u32, u32)>,
     chrome: ChromeMetrics,
     animator: anim::Animator,
-    overrides: BTreeMap<NodeId, anim::AnimOverrides>,
     gate: InteractionGate,
     scatter: ScatterState,
     dirty: DirtySet,
     retained_snapshot: Option<RetainedSnapshotCache>,
     retained_node_stats: RetainedNodeStats,
-    retained_hit_stats_active: bool,
     last_layout_stats: LayoutStats,
 }
 
@@ -401,13 +388,11 @@ impl UiSurface {
             last_layout_size: None,
             chrome: ChromeMetrics::default(),
             animator: anim::Animator::new(),
-            overrides: BTreeMap::new(),
             gate: InteractionGate::default(),
             scatter: ScatterState::default(),
             dirty: DirtySet::all(),
             retained_snapshot: None,
             retained_node_stats: RetainedNodeStats::default(),
-            retained_hit_stats_active: false,
             last_layout_stats: LayoutStats::default(),
         }
     }
@@ -443,7 +428,6 @@ impl UiSurface {
       self.tree.set_retained_cache_policy(policy);
       self.retained_snapshot = None;
       self.retained_node_stats = RetainedNodeStats::default();
-      self.retained_hit_stats_active = false;
    }
 
     pub fn add_node(&mut self, parent: NodeId, style: NodeStyle) -> Option<NodeId> {
@@ -523,7 +507,7 @@ impl UiSurface {
     }
 
     pub fn edit_style<F: FnOnce(&mut NodeStyle)>(&mut self, id: NodeId, edit: F) -> bool {
-        let Some((before, after)) = self.tree.edit_style(id, edit) else {
+        let Some((before, after)) = self.tree.edit_style_untracked(id, edit) else {
             return false;
         };
         if before == after {
@@ -555,6 +539,11 @@ impl UiSurface {
         if before.clip != after.clip {
             self.dirty.mark(DirtyClass::Clip);
             self.dirty.mark(DirtyClass::HitTest);
+            self.tree.mark_subtree_sequence_dirty(id);
+        }
+        if style_change_rebuilds_node_paint(&before, &after)
+        {
+            self.tree.mark_node_and_ancestors_draw_dirty(id);
         }
         if style_change_affects_paint(&before, &after) {
             self.dirty.mark(DirtyClass::Paint);
@@ -592,7 +581,23 @@ impl UiSurface {
 
     #[inline]
     pub fn hit_test(&self, x: f32, y: f32) -> Option<(NodeId, [f32; 2])> {
-        self.tree.hit_test(x, y)
+        if self.animator.overrides().is_empty()
+        {
+           self.tree.hit_test(x, y)
+        }
+        else
+        {
+           self.tree.hit_test_with_anims(x, y, self.animator.overrides())
+        }
+    }
+
+    #[inline]
+    pub fn accessibility_frame(&self, id: NodeId) -> Option<gfx::RectF>
+    {
+       self.tree.accessibility_frame(
+          id,
+          (!self.animator.overrides().is_empty()).then_some(self.animator.overrides()),
+       )
     }
 
     #[inline]
@@ -683,39 +688,23 @@ impl UiSurface {
 
     #[inline]
     pub fn encode(&self, b: &mut DrawListBuilder) {
-        if self.overrides.is_empty() {
+        if self.animator.overrides().is_empty() {
             self.tree.encode_draws(b);
         } else {
-            self.tree.encode_draws_with_anims(b, &self.overrides);
+            self.tree.encode_draws_with_anims(b, self.animator.overrides());
         }
     }
 
    pub fn render_snapshot_retained(&mut self, id: gfx::RenderChunkId, content: &[gfx::RenderChunkSequence], mut properties: Vec<gfx::RenderPropertySlot>, damage: gfx::Damage) -> Result<SurfaceRenderSnapshot, SurfaceRenderSnapshotError>
    {
       let namespace = u32::try_from(id.0).map_err(|_| gfx::RenderChunkError::GeometryTooLarge)?;
-      properties.sort_unstable_by_key(|property| property.id.0);
-      let cached = (!self.dirty.affects_draw()).then(|| self.retained_snapshot.as_ref()).flatten().filter(|cached| {
-         cached.namespace == namespace
-            && cached.sequences.len() == content.len().saturating_add(1)
-            && cached.sequences[1..].iter().zip(content).all(|(cached, current)| cached.ptr_eq(current))
-            && cached.snapshot.properties() == properties
-            && cached.snapshot.damage() == &damage
-      }).map(|cached| (cached.snapshot.clone(), cached.hit_surface_stats));
-      if let Some((snapshot, stats)) = cached
-      {
-         if !self.retained_hit_stats_active
-         {
-            self.retained_node_stats = self.retained_snapshot.as_ref().unwrap().hit_node_stats;
-            self.retained_hit_stats_active = true;
-         }
-         return Ok(SurfaceRenderSnapshot { snapshot, stats });
-      }
-      self.retained_hit_stats_active = false;
-      let (surface, node_stats) = if self.overrides.is_empty() {
+      let (surface, node_stats) = if self.animator.overrides().is_empty() {
          self.tree.render_sequence(namespace)?
       } else {
-         self.tree.render_sequence_with_anims(namespace, &self.overrides)?
+         self.tree.render_sequence_with_anims(namespace, self.animator.overrides())?
       };
+      properties.extend_from_slice(self.tree.dynamic_properties());
+      properties.sort_unstable_by_key(|property| property.id.0);
       if !node_stats.cache_complete {
          self.retained_snapshot = None;
       }
@@ -730,19 +719,15 @@ impl UiSurface {
       let snapshot = if let Some(snapshot) = cached {
          snapshot
       } else {
-         let surface_instance_count = surface.instance_count();
          let mut sequences = Vec::with_capacity(content.len().saturating_add(1));
          sequences.push(surface);
          sequences.extend(content.iter().cloned());
          let snapshot = gfx::RenderSnapshot::from_sequences(sequences.clone(), properties, damage)?;
          if node_stats.cache_complete {
-            let (hit_node_stats, hit_surface_stats) = retained_snapshot_hit_stats(surface_instance_count, node_stats);
             self.retained_snapshot = Some(RetainedSnapshotCache {
                namespace,
                sequences,
                snapshot: snapshot.clone(),
-               hit_node_stats,
-               hit_surface_stats,
             });
          }
          snapshot
@@ -787,10 +772,10 @@ impl UiSurface {
         b: &mut DrawListBuilder,
         _text_atlases: Option<&[(gfx::ImageHandle, u64)]>,
     ) -> RetainedDrawStatus {
-        let retained = if self.overrides.is_empty() {
+        let retained = if self.animator.overrides().is_empty() {
             self.tree.render_sequence(0)
         } else {
-            self.tree.render_sequence_with_anims(0, &self.overrides)
+            self.tree.render_sequence_with_anims(0, self.animator.overrides())
         };
         let Ok((sequence, mut node_stats)) = retained else {
             self.encode(b);
@@ -798,7 +783,6 @@ impl UiSurface {
                 flat_fallback_uses: 1,
                 ..RetainedNodeStats::default()
             };
-            self.retained_hit_stats_active = false;
             return RetainedDrawStatus::Rebuilt;
         };
         let status = if node_stats.chunks_rebuilt == 0 && node_stats.sequences_rebuilt == 0 {
@@ -808,7 +792,7 @@ impl UiSurface {
         };
         let snapshot = gfx::RenderSnapshot::from_sequences(
             vec![sequence],
-            Vec::new(),
+            self.tree.dynamic_properties().to_vec(),
             gfx::Damage { rects: Vec::new() },
         );
         if let Ok(snapshot) = snapshot {
@@ -820,7 +804,6 @@ impl UiSurface {
         }
         self.dirty.clear_draw_affecting();
         self.retained_node_stats = node_stats;
-        self.retained_hit_stats_active = false;
         status
     }
 
@@ -844,17 +827,17 @@ impl UiSurface {
     }
 
     #[inline]
-    pub fn overrides(&self) -> &BTreeMap<NodeId, anim::AnimOverrides> {
-        &self.overrides
+    pub fn overrides(&self) -> &anim::AnimOverrideSlots {
+        self.animator.overrides()
     }
 
     #[inline]
-    pub fn overrides_mut(&mut self) -> &mut BTreeMap<NodeId, anim::AnimOverrides> {
+    pub fn overrides_mut(&mut self) -> &mut anim::AnimOverrideSlots {
         self.tree.mark_all_draw_dirty_for(RetainedInvalidationReason::Animation);
         self.dirty.mark(DirtyClass::Transform);
         self.dirty.mark(DirtyClass::Opacity);
         self.dirty.mark(DirtyClass::Paint);
-        &mut self.overrides
+        self.animator.overrides_mut()
     }
 
     pub fn tick(&mut self) -> bool {
@@ -863,22 +846,21 @@ impl UiSurface {
     }
 
     pub fn tick_at(&mut self, now_ms: u64) -> bool {
-        let new_overrides = self.animator.step(now_ms);
-        let mut changed = false;
-        if self.animator.active_count() == 0 && new_overrides.is_empty() {
-            if !self.overrides.is_empty() {
-                self.overrides.clear();
-                changed = true;
-            }
-        } else if new_overrides != self.overrides {
-            self.overrides = new_overrides;
-            changed = true;
-        }
+        self.animator.step(now_ms);
+        let changed = !self.animator.overrides().changed_nodes().is_empty();
         if changed {
-            self.tree.mark_all_draw_dirty_for(RetainedInvalidationReason::Animation);
             self.dirty.mark(DirtyClass::Transform);
             self.dirty.mark(DirtyClass::Opacity);
-            self.dirty.mark(DirtyClass::Paint);
+            self.dirty.mark(DirtyClass::Accessibility);
+            self.dirty.mark(DirtyClass::HitTest);
+            for node in self.animator.overrides().paint_changed_nodes().iter().copied()
+            {
+               self.tree.mark_node_and_ancestors_draw_dirty_for(
+                  node,
+                  RetainedInvalidationReason::Animation,
+               );
+               self.dirty.mark(DirtyClass::Paint);
+            }
         }
         self.update_scatter_state();
         changed

@@ -265,16 +265,11 @@ fn opacity_and_clip_edits_skip_layout_and_reuse_retained_subtrees() {
     assert!(!surface.dirty().contains(DirtyClass::Layout));
     assert_eq!(surface.layout(160.0, 80.0), oxide_ui_core::LayoutStats::default());
     let mut opacity_draws = DrawListBuilder::new();
-    assert_eq!(surface.encode_retained(&mut opacity_draws), RetainedDrawStatus::Rebuilt);
+    assert_eq!(surface.encode_retained(&mut opacity_draws), RetainedDrawStatus::Reused);
     let opacity_stats = surface.retained_node_stats();
-    assert!(
-        opacity_stats.rebuilt_nodes >= 2,
-        "root and target should rebuild, got {opacity_stats:?}"
-    );
-    assert!(
-        opacity_stats.reused_nodes >= 2,
-        "leaf and sibling should replay, got {opacity_stats:?}"
-    );
+    assert_eq!(opacity_stats.chunks_rebuilt, 0, "opacity is a dynamic property: {opacity_stats:?}");
+    assert_eq!(opacity_stats.sequences_rebuilt, 0, "opacity keeps retained metadata: {opacity_stats:?}");
+    assert_eq!(opacity_stats.chunks_reused, 4, "every node chunk should replay: {opacity_stats:?}");
 
     assert!(surface.edit_style(target, |style| {
         style.clip = true;
@@ -292,10 +287,8 @@ fn opacity_and_clip_edits_skip_layout_and_reuse_retained_subtrees() {
         clip_stats.rebuilt_nodes >= 2,
         "root and clipped node should rebuild, got {clip_stats:?}"
     );
-    assert!(
-        clip_stats.reused_nodes >= 2,
-        "clipped child and sibling should replay, got {clip_stats:?}"
-    );
+    assert_eq!(clip_stats.chunks_rebuilt, 0, "clip metadata must not rebake geometry: {clip_stats:?}");
+    assert_eq!(clip_stats.chunks_reused, 4, "all clipped geometry should replay: {clip_stats:?}");
     assert!(
         clip_draws.drawlist().items.iter().any(|cmd| matches!(cmd, gfx::DrawCmd::ClipPush { .. })),
         "clip edit should encode a clip command"
@@ -1075,7 +1068,7 @@ fn retained_cache_suppresses_churn_then_readmits_stable_nodes()
    for phase in 0..3
    {
       surface.edit_style(leaf, |style| {
-         style.opacity = 0.6 + phase as f32 * 0.1;
+         style.background = gfx::Color::rgba(0.2 + phase as f32 * 0.1, 0.3, 0.4, 1.0);
       });
       let _ = render(&mut surface);
       rejected |= surface.retained_node_stats().cache_admission_rejections > 0;
@@ -1239,6 +1232,163 @@ fn retained_snapshot_applies_animation_overrides_and_matches_direct_output()
    let mut direct = DrawListBuilder::new();
    surface.encode(&mut direct);
    assert_eq!(retained.drawlist(), direct.drawlist());
+}
+
+#[test]
+fn transform_and_opacity_animation_reuses_all_warm_geometry()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      axis: Axis::Row,
+      size: Size2D { w: Dim::Px(600.0), h: Dim::Px(600.0) },
+      ..NodeStyle::default()
+   });
+   let root = surface.root();
+   let mut nodes = Vec::new();
+   for index in 0..300
+   {
+      nodes.push(surface.tree_mut().add_node(root, NodeStyle {
+         size: Size2D { w: Dim::Px(20.0), h: Dim::Px(20.0) },
+         background: gfx::Color::rgba(0.1 + index as f32 / 2_000.0, 0.3, 0.8, 1.0),
+         ..NodeStyle::default()
+      }));
+   }
+   surface.layout(600.0, 600.0);
+   let warm = surface.render_snapshot_retained(
+      gfx::RenderChunkId(21),
+      &[],
+      Vec::new(),
+      gfx::Damage { rects: Vec::new() },
+   ).unwrap();
+   assert_eq!(warm.stats.chunks_rebuilt, 301);
+   for (index, node) in nodes.iter().copied().enumerate()
+   {
+      surface.animator().start(node, oxide_platform_api::AnimDesc {
+         id: 0,
+         prop: oxide_platform_api::AnimProp::Transform2D,
+         from: oxide_platform_api::AnimValue::Xform2D(Transform2D {
+            tx: 0.0,
+            ty: 0.0,
+            sx: 1.0,
+            sy: 1.0,
+            rot_rad: 0.0,
+         }),
+         to: oxide_platform_api::AnimValue::Xform2D(Transform2D {
+            tx: (index % 7) as f32,
+            ty: (index % 5) as f32,
+            sx: 1.1,
+            sy: 0.9,
+            rot_rad: 0.2,
+         }),
+         curve: oxide_platform_api::AnimCurve::Ease {
+            ease: oxide_platform_api::Ease { kind: oxide_platform_api::EaseKind::Linear },
+         },
+         duration_ms: 1_000,
+         delay_ms: 0,
+         repeat: oxide_platform_api::Repeat::Forever,
+      });
+      surface.animator().start(node, oxide_platform_api::AnimDesc {
+         id: 0,
+         prop: oxide_platform_api::AnimProp::Opacity,
+         from: oxide_platform_api::AnimValue::F32(0.4),
+         to: oxide_platform_api::AnimValue::F32(1.0),
+         curve: oxide_platform_api::AnimCurve::Ease {
+            ease: oxide_platform_api::Ease { kind: oxide_platform_api::EaseKind::Linear },
+         },
+         duration_ms: 1_000,
+         delay_ms: 0,
+         repeat: oxide_platform_api::Repeat::Forever,
+      });
+   }
+   let now = oxide_timing::now_ms();
+   assert!(surface.tick_at(now.saturating_add(500)));
+   let animated = surface.render_snapshot_retained(
+      gfx::RenderChunkId(21),
+      &[],
+      Vec::new(),
+      gfx::Damage { rects: Vec::new() },
+   ).unwrap();
+   assert_eq!(animated.stats.chunks_rebuilt, 0);
+   assert_eq!(animated.stats.sequences_rebuilt, 0);
+   assert_eq!(animated.stats.command_bytes_copied, 0);
+   assert_eq!(animated.stats.vertex_bytes_copied, 0);
+   assert_eq!(animated.stats.index_bytes_copied, 0);
+   assert_eq!(animated.snapshot.properties().len(), 602);
+}
+
+#[test]
+fn nested_animation_keeps_clip_hit_test_and_accessibility_geometry_synchronized()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      size: Size2D { w: Dim::Px(240.0), h: Dim::Px(240.0) },
+      ..NodeStyle::default()
+   });
+   let root = surface.root();
+   let parent = surface.tree_mut().add_node(root, NodeStyle {
+      size: Size2D { w: Dim::Px(120.0), h: Dim::Px(120.0) },
+      padding: oxide_ui_core::Edges { left: 20.0, top: 20.0, right: 0.0, bottom: 0.0 },
+      clip: true,
+      ..NodeStyle::default()
+   });
+   let leaf = surface.tree_mut().add_node(parent, NodeStyle {
+      size: Size2D { w: Dim::Px(40.0), h: Dim::Px(30.0) },
+      background: gfx::Color::rgba(0.9, 0.2, 0.1, 1.0),
+      ..NodeStyle::default()
+   });
+   surface.layout(240.0, 240.0);
+   surface.overrides_mut().insert(parent, oxide_ui_core::anim::AnimOverrides {
+      opacity: Some(0.5),
+      transform: Some(Transform2D { tx: 31.0, ty: 17.0, sx: 1.25, sy: 0.8, rot_rad: 0.3 }),
+      ..oxide_ui_core::anim::AnimOverrides::default()
+   });
+   surface.overrides_mut().insert(leaf, oxide_ui_core::anim::AnimOverrides {
+      opacity: Some(0.6),
+      transform: Some(Transform2D { tx: 5.0, ty: 7.0, sx: 0.9, sy: 1.1, rot_rad: -0.2 }),
+      ..oxide_ui_core::anim::AnimOverrides::default()
+   });
+   let rendered = surface.render_snapshot_retained(
+      gfx::RenderChunkId(22),
+      &[],
+      Vec::new(),
+      gfx::Damage { rects: Vec::new() },
+   ).unwrap();
+   let leaf_instance = rendered.snapshot.instance(2).unwrap();
+   assert_eq!(leaf_instance.dynamic_clips.len(), 1);
+   let frame = surface.accessibility_frame(leaf).unwrap();
+   let center = [frame.x + frame.w * 0.5, frame.y + frame.h * 0.5];
+   let hit = surface.hit_test(center[0], center[1]).unwrap();
+   assert_eq!(hit.0, leaf);
+   assert!(hit.1[0] >= 0.0 && hit.1[0] < 40.0);
+   assert!(hit.1[1] >= 0.0 && hit.1[1] < 30.0);
+   let leaf_opacity = leaf_instance.property_slots.iter().find_map(|id| {
+      rendered.snapshot.properties().iter().find(|property| property.id == *id).and_then(|property| {
+         match property.value {
+            gfx::RenderPropertyValue::Opacity(value) => Some(value),
+            gfx::RenderPropertyValue::Transform(_) => None,
+         }
+      })
+   }).unwrap();
+   assert!((leaf_opacity - 0.3).abs() < 1.0e-5);
+}
+
+#[test]
+fn removed_node_property_slots_reuse_dense_indices_with_new_generations()
+{
+   let mut tree = oxide_ui_core::NodeTree::new_root(NodeStyle::default());
+   let root = tree.root();
+   let first = tree.add_node(root, NodeStyle::default());
+   tree.layout(100.0, 100.0);
+   let (sequence, _) = tree.render_sequence(31).unwrap();
+   let first_slots = sequence.instance(1).unwrap().property_slots;
+   assert!(tree.remove_node(first));
+   let second = tree.add_node(root, NodeStyle::default());
+   tree.layout(100.0, 100.0);
+   let (sequence, _) = tree.render_sequence(31).unwrap();
+   let second_slots = sequence.instance(1).unwrap().property_slots;
+   assert_eq!(first_slots[0].dynamic_index(), second_slots[1].dynamic_index());
+   assert_eq!(first_slots[1].dynamic_index(), second_slots[0].dynamic_index());
+   assert_ne!(first_slots[0].dynamic_generation(), second_slots[1].dynamic_generation());
+   assert_ne!(first_slots[1].dynamic_generation(), second_slots[0].dynamic_generation());
+   assert!(second.0 > first.0);
 }
 
 #[test]

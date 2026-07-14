@@ -4832,9 +4832,42 @@ fn filtered_run_suite_supports_rendering_architecture_contract() {
     assert_eq!(report_f64(churn, "flat_fallback_uses"), 1.0);
     assert_eq!(report_f64(animation, "animated_nodes"), 300.0);
     assert_eq!(report_f64(animation, "active_animations"), 600.0);
+    assert_eq!(report_f64(animation, "chunks_rebuilt_avg"), 0.0);
+    assert_eq!(report_f64(animation, "sequences_rebuilt_avg"), 0.0);
+    assert_eq!(report_f64(animation, "command_bytes_copied_avg"), 0.0);
+    assert_eq!(report_f64(animation, "vertex_bytes_copied_avg"), 0.0);
+    assert_eq!(report_f64(animation, "index_bytes_copied_avg"), 0.0);
+    assert!(report_f64(animation, "property_records_avg") >= 600.0);
     assert_eq!(report_f64(idle, "submissions"), 0.0);
     assert_eq!(report_f64(idle, "wakeups"), 0.0);
     let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
+fn dynamic_property_animation_has_a_public_authoring_contract()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-dynamic-authoring-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.animation.dynamic_properties_300")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run dynamic property authoring row");
+   let stderr = String::from_utf8_lossy(&output.stderr);
+   assert!(output.status.success(), "dynamic property authoring row failed: {stderr}");
+   let report = std::fs::read_to_string(&json_out).expect("read dynamic property authoring report");
+   let row = report_case_slice(&report, "cpu.authoring.animation.dynamic_properties_300");
+   assert!(row.contains("\"family\": \"authoring\""));
+   assert!(row.contains("\"scenario\": \"authoring\""));
+   assert_eq!(report_f64(row, "animated_nodes"), 300.0);
+   assert_eq!(report_f64(row, "chunks_rebuilt_avg"), 0.0);
+   assert_eq!(report_f64(row, "sequences_rebuilt_avg"), 0.0);
+   assert_eq!(report_f64(row, "command_bytes_copied_avg"), 0.0);
+   assert!(report_f64(row, "property_records_avg") >= 600.0);
+   let _ = std::fs::remove_file(json_out);
 }
 
 #[cfg(target_os = "macos")]
@@ -4985,14 +5018,14 @@ fn metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()
    );
 
    assert_eq!(report_f64(visible, "frame_resource_depth"), 3.0);
-   assert_eq!(report_f64(visible, "frame_ring_buffer_bytes_peak"), 2_015_232.0);
+   assert_eq!(report_f64(visible, "frame_ring_buffer_bytes_peak"), 2_064_384.0);
    assert_eq!(report_f64(visible, "cold_resource_grows"), 0.0);
    assert_eq!(report_f64(visible, "warm_resource_grows"), 0.0);
    assert_eq!(report_f64(visible, "vertex_upload_bytes"), 327_680.0);
    assert_eq!(report_f64(visible, "index_upload_bytes"), 49_152.0);
    assert_eq!(report_f64(visible, "uniform_upload_bytes"), 16.0);
    assert_eq!(report_f64(offscreen, "frame_resource_depth"), 8.0);
-   assert_eq!(report_f64(offscreen, "frame_ring_buffer_bytes_peak"), 7_733_248.0);
+   assert_eq!(report_f64(offscreen, "frame_ring_buffer_bytes_peak"), 7_864_320.0);
    assert_eq!(report_f64(offscreen, "cold_resource_grows"), 16.0);
    assert_eq!(report_f64(offscreen, "warm_resource_grows"), 0.0);
    assert_eq!(report_f64(offscreen, "frame_backpressure_skips"), 0.0);
@@ -5048,6 +5081,41 @@ fn metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()
    let _ = std::fs::remove_file(json_out);
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn metal_dynamic_property_row_freezes_zero_geometry_upload_contract()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-dynamic-properties-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "gpu.architecture.animation.dynamic_properties_300")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run Metal dynamic-property smoke row");
+   let stderr = String::from_utf8_lossy(&output.stderr);
+   assert!(output.status.success(), "Metal dynamic-property row failed: {stderr}");
+   let report = std::fs::read_to_string(&json_out).expect("read dynamic-property report");
+   let row = report_case_slice(&report, "gpu.architecture.animation.dynamic_properties_300");
+
+   assert_eq!(report_f64(row, "animated_nodes"), 300.0);
+   assert_eq!(report_f64(row, "text_nodes"), 200.0);
+   assert_eq!(report_f64(row, "image_nodes"), 100.0);
+   assert_eq!(report_f64(row, "property_records"), 300.0);
+   assert_eq!(report_f64(row, "property_records_updated_avg"), 300.0);
+   assert_eq!(report_f64(row, "property_upload_bytes_avg"), 300.0 * 48.0);
+   assert_eq!(report_f64(row, "buffer_upload_bytes_avg"), 0.0);
+   assert_eq!(report_f64(row, "geometry_bytes_copied_avg"), 0.0);
+   assert_eq!(report_f64(row, "commands_traversed_avg"), 0.0);
+   assert_eq!(report_f64(row, "backend_cache_hits_avg"), 300.0);
+   assert_eq!(report_f64(row, "backend_cache_misses_avg"), 0.0);
+   assert_eq!(report_f64(row, "missed_frames_120hz"), 0.0);
+   assert!(report_f64(row, "property_ring_bytes_peak") >= 300.0 * 48.0 * 3.0);
+   let _ = std::fs::remove_file(json_out);
+}
+
 #[test]
 fn filtered_run_suite_supports_gpu_journey_frame_pacing_case() {
     let mut json_out = std::env::temp_dir();
@@ -5080,7 +5148,7 @@ fn filtered_run_suite_supports_gpu_journey_frame_pacing_case() {
     assert_eq!(report_f64(row, "hitch_ratio_120hz"), 0.0);
     assert!(report_f64(row, "navigation_events") > 0.0);
     assert_eq!(report_f64(row, "frame_resource_depth"), 3.0);
-    assert_eq!(report_f64(row, "frame_ring_buffer_bytes_peak"), 2_015_232.0);
+    assert_eq!(report_f64(row, "frame_ring_buffer_bytes_peak"), 2_064_384.0);
     assert_eq!(report_f64(row, "resource_grows_total"), 0.0);
     assert_eq!(report_f64(row, "frame_backpressure_skips"), 0.0);
     let _ = std::fs::remove_file(json_out);

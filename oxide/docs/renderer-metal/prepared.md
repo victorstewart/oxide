@@ -73,9 +73,9 @@ Unsupported layers, effects, spinners, meshes, or malformed resource dependencie
 
 ## Performance notes
 
-Clean replay performs one bounded cache lookup and one dynamic record per instance but allocates no new Metal buffers and copies no immutable geometry. Dynamic records use one existing frame-ring slice; the 256-chunk contract reports exactly 12,288 dynamic uniform bytes separately from zero clean immutable upload. The retained frame-plan vector and clip-stack pool preserve capacity. Miss cost is proportional only to the changed chunk. The default hard budget is 32 MiB.
+Clean replay performs one bounded cache lookup per instance but allocates no new Metal buffers and copies no immutable geometry. C26 moves dynamic records into a separate completion-protected property ring and tracks the last value revision per physical frame slot, so unchanged records upload zero bytes and changed records copy exactly 48 bytes each. A snapshot whose instances all carry transform/opacity pairs under one newly advanced revision epoch takes a prevalidated all-record path instead of paying sparse-cache bookkeeping. Each physical property buffer is bound once per render pass and instance replay changes only its offset; the 16 KiB initial per-slot capacity covers the representative 300-record workload and grows on demand. The retained frame-plan vector, property cache, and clip-stack pool preserve capacity. Miss cost is proportional only to the changed chunk. The default hard budget is 32 MiB.
 
-The permanent cases are `gpu.architecture.prepared_chunks.clean_mixed`, `gpu.architecture.prepared_chunks.one_dirty`, and `gpu.authoring.retained_snapshot.clean_mixed`. They report encode/GPU/frame distributions, upload and geometry-copy bytes, command traversal, draws, image-table binds, hit/miss/rebuild counts, eviction count, and resident prepared/renderer bytes.
+The permanent cases are `gpu.architecture.prepared_chunks.clean_mixed`, `gpu.architecture.prepared_chunks.one_dirty`, `gpu.architecture.animation.dynamic_properties_300`, and `gpu.authoring.retained_snapshot.clean_mixed`. They report encode/GPU/frame distributions, separate property and geometry uploads, command traversal, draws, image-table binds, hit/miss/rebuild counts, eviction count, property-ring bytes, and resident prepared/renderer bytes.
 
 ## Feature flags and cfgs
 
@@ -84,6 +84,7 @@ Prepared pipelines are unavailable in the direct-camera-preview-only renderer co
 ## Testing and benchmarks
 
 - `renderer-metal/tests/snapshots.rs` compares prepared and flat mixed/fractional pixels under Metal validation, changes dynamic properties without rebuilding, checks one-dirty behavior, enforces LRU bytes, validates resource generations, exercises purge, and freezes fallback accounting.
+- `prepared_property_ring_uploads_only_changed_instance_records_after_warmup` warms every physical slot, proves an unchanged frame uploads zero property bytes, then proves one changed instance uploads one 48-byte record and zero geometry.
 - `perf-runner/tests/report_tests.rs` freezes clean zero-upload/zero-traversal and one-dirty exact-work counters.
 - Run `MTL_DEBUG_LAYER=1 cargo test --locked -p oxide-renderer-metal --test snapshots prepared_snapshot --features snapshot-tests`.
 - Run `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.prepared_chunks. cargo run --release --locked -p oxide-perf-runner -- --run-suite`.
@@ -98,4 +99,5 @@ renderer.submit(token)?;
 
 ## Changelog
 
+- 2026-07-13: added a completion-protected changed-record property ring with separate logical upload/residency counters for C26.
 - 2026-07-13: added byte-budgeted persistent Metal preparation for immutable RRect, image, glyph, solid, and clip chunks with dynamic properties, generation invalidation, exact fallback, memory-pressure purge, and permanent performance contracts.

@@ -11,7 +11,7 @@ This integration suite freezes performance-report schemas, filtered execution, c
 
 ## Entry points list
 
-- `metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()` verifies three-slot visible no-growth high water and eight-slot offscreen all-slot cold growth followed by zero warm growth/skips.
+- `metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()` verifies three-slot visible no-growth high water and eight-slot offscreen all-slot cold growth followed by zero warm growth/skips, including C26's 16 KiB completion-protected property buffer per physical slot.
 - `metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()` requires exact clean and one-dirty prepared-cache work counters, including zero clean immutable upload and one 12,288-byte dynamic uniform-ring slice.
 - `filtered_run_suite_supports_retained_snapshot_authoring_case()` keeps the public retained-snapshot authoring row routable.
 - Other test functions cover report comparison, contract coverage, architecture rows, authoring rows, and persisted baseline requirements.
@@ -53,6 +53,7 @@ Run `cargo test --locked -p oxide-perf-runner --test report_tests`.
 Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.frame_resources.` with `--run-suite --smoke --json-out <path>` to inspect both C18 rows.
 
 ## Changelog
+- 2026-07-13: added C26 zero-geometry CPU animation and exact Metal property-ring report assertions.
 
 - 2026-07-13: added exact C24 clean/one-dirty Metal prepared-chunk and retained-snapshot authoring report contracts.
 - 2026-07-13: added C23 retained cache-pressure and public cache-policy authoring report contracts.
