@@ -104,10 +104,17 @@ struct GpuLayer {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
+    viewport_buffer: wgpu::Buffer,
+    viewport_bind_group: wgpu::BindGroup,
+    viewport: [f32; 12],
+    source_rect: api::RectF,
     rect: api::RectF,
+    composite_rect: api::RectF,
     width: u32,
     height: u32,
     scale: f32,
+    prepared_key: Option<PreparedLayerKey>,
+    resources: Vec<api::RenderResourceDependency>,
 }
 
 struct GpuColorTarget {
@@ -276,6 +283,53 @@ impl PreparedChunkKey
          bundles_enabled,
       }
    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PreparedLayerKey
+{
+   id: u32,
+   chunk: PreparedChunkKey,
+   content_generation: u64,
+   nested_generation: u64,
+   dynamic_generation: u64,
+   bounds: [u32; 4],
+   scale: [u32; 2],
+   opacity: u32,
+   target_scale: u32,
+   effect_outset: u32,
+   pixel_phase: [u32; 2],
+}
+
+#[derive(Clone, Copy)]
+struct PreparedLayerFrame
+{
+   key: PreparedLayerKey,
+   source_rect: api::RectF,
+   rect: api::RectF,
+   viewport: [f32; 12],
+   width: u32,
+   height: u32,
+   force_refresh: bool,
+}
+
+#[derive(Clone, Copy)]
+struct LocalLayerFrame
+{
+   source_rect: api::RectF,
+   target_rect: api::RectF,
+   composite_rect: api::RectF,
+   viewport: [f32; 12],
+   width: u32,
+   height: u32,
+}
+
+#[derive(Clone)]
+struct PreparedLayerPlanEntry
+{
+   frame: PreparedLayerFrame,
+   chunk: api::RenderChunk,
+   duplicate: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -461,6 +515,126 @@ fn prepared_dynamic_uniform(snapshot: &api::RenderSnapshot, property_slots: &[ap
       translation[0], translation[1], opacity.clamp(0.0, 1.0), 0.0,
    ];
    values.iter().all(|value| value.is_finite()).then_some(values)
+}
+
+fn prepared_layer_frame(renderer: &WebGpuRenderer, layer: api::RenderLayerInstance, chunk: &api::RenderChunk, uniform: [f32; 12], clip: Option<api::RectI>) -> Option<PreparedLayerFrame>
+{
+   if clip.is_some()
+   {
+      return None;
+   }
+   let [_, _, _, _, scale_x, shear_y, shear_x, scale_y, translate_x, translate_y, opacity, _] = uniform;
+   if shear_x != 0.0 || shear_y != 0.0 || scale_x == 0.0 || scale_y == 0.0
+   {
+      return None;
+   }
+   let effect_outset = layer_effect_outset(chunk, layer.rect)?;
+   let local_rect = api::RectF::new(
+      layer.rect.x - effect_outset,
+      layer.rect.y - effect_outset,
+      layer.rect.w + effect_outset * 2.0,
+      layer.rect.h + effect_outset * 2.0,
+   );
+   if ![
+      local_rect.x, local_rect.y, local_rect.w, local_rect.h,
+      scale_x, scale_y, translate_x, translate_y, renderer.scale,
+   ].iter().all(|value| value.is_finite()) || local_rect.w <= 0.0 || local_rect.h <= 0.0
+   {
+      return None;
+   }
+   let transformed_x0 = scale_x * local_rect.x;
+   let transformed_x1 = scale_x * (local_rect.x + local_rect.w);
+   let transformed_y0 = scale_y * local_rect.y;
+   let transformed_y1 = scale_y * (local_rect.y + local_rect.h);
+   let min_x = transformed_x0.min(transformed_x1);
+   let min_y = transformed_y0.min(transformed_y1);
+   let width_dp = (transformed_x1 - transformed_x0).abs();
+   let height_dp = (transformed_y1 - transformed_y0).abs();
+   let target_scale = sanitize_scale(renderer.scale);
+   let unsnapped_rect = api::RectF::new(min_x + translate_x, min_y + translate_y, width_dp, height_dp);
+   let (rect, width, height) = layer_target_rect(
+      unsnapped_rect,
+      target_scale,
+      renderer.device.limits().max_texture_dimension_2d,
+   )?;
+   let phase_x = (unsnapped_rect.x * target_scale).rem_euclid(1.0);
+   let phase_y = (unsnapped_rect.y * target_scale).rem_euclid(1.0);
+   let revisions = chunk.revisions();
+   Some(PreparedLayerFrame {
+      key: PreparedLayerKey {
+         id: layer.id,
+         chunk: PreparedChunkKey::new(chunk, renderer.prepared_device_generation, renderer.config.format, false),
+         content_generation: revisions.geometry,
+         nested_generation: revisions.structural,
+         dynamic_generation: revisions.dynamic_properties,
+         bounds: [
+            layer.rect.x.to_bits(), layer.rect.y.to_bits(),
+            layer.rect.w.to_bits(), layer.rect.h.to_bits(),
+         ],
+         scale: [scale_x.to_bits(), scale_y.to_bits()],
+         opacity: opacity.to_bits(),
+         target_scale: target_scale.to_bits(),
+         effect_outset: effect_outset.to_bits(),
+         pixel_phase: [phase_x.to_bits(), phase_y.to_bits()],
+      },
+      source_rect: layer.rect,
+      rect,
+      viewport: [
+         rect.w, rect.h, rect.x, rect.y,
+         scale_x, 0.0, 0.0, scale_y,
+         translate_x, translate_y, opacity, 0.0,
+      ],
+      width,
+      height,
+      force_refresh: layer.dirty,
+   })
+}
+
+fn layer_effect_outset(chunk: &api::RenderChunk, rect: api::RectF) -> Option<f32>
+{
+   let mut outset = 0.0_f32;
+   for effect in chunk.effect_dependencies()
+   {
+      let bounds = match effect.sample_bounds
+      {
+         api::RenderSpatialBounds::Empty => continue,
+         api::RenderSpatialBounds::Finite(bounds) => bounds,
+         api::RenderSpatialBounds::Unbounded => return None,
+      };
+      outset = outset
+         .max(rect.x - bounds.x)
+         .max(rect.y - bounds.y)
+         .max(bounds.x + bounds.w - (rect.x + rect.w))
+         .max(bounds.y + bounds.h - (rect.y + rect.h));
+   }
+   outset.is_finite().then_some(outset.max(0.0))
+}
+
+fn layer_target_rect(rect: api::RectF, scale: f32, max_dimension: u32) -> Option<(api::RectF, u32, u32)>
+{
+   if ![rect.x, rect.y, rect.w, rect.h, scale].iter().all(|value| value.is_finite())
+      || rect.w <= 0.0 || rect.h <= 0.0
+   {
+      return None;
+   }
+   let scale = sanitize_scale(scale);
+   let x0 = (rect.x * scale).floor();
+   let y0 = (rect.y * scale).floor();
+   let x1 = ((rect.x + rect.w) * scale).ceil();
+   let y1 = ((rect.y + rect.h) * scale).ceil();
+   let width = x1 - x0;
+   let height = y1 - y0;
+   if !width.is_finite() || !height.is_finite()
+      || width < 1.0 || height < 1.0
+      || width > max_dimension as f32 || height > max_dimension as f32
+   {
+      return None;
+   }
+   Some((
+      api::RectF::new(x0 / scale, y0 / scale, width / scale, height / scale),
+      width as u32,
+      height as u32,
+   ))
 }
 
 fn prepared_transform_rect(rect: api::RectF, uniform: [f32; 12]) -> api::RectI
@@ -1476,6 +1650,9 @@ pub struct WebGpuRenderer {
     prepared_chunks: PreparedChunkCache,
     prepared_property_ring: PreparedPropertyRing,
     prepared_frame_plan: Vec<PreparedFrameInstance>,
+    prepared_layer_key_indices: HashMap<u32, usize>,
+    prepared_layer_plan: Vec<PreparedLayerPlanEntry>,
+    prepared_layer_snapshot: Option<api::RenderSnapshot>,
     prepared_snapshot_bundle: Option<PreparedSnapshotBundle>,
     prepared_fallback: api::DrawList,
     prepared_frame_active: bool,
@@ -1913,6 +2090,9 @@ impl WebGpuRenderer {
             prepared_chunks: PreparedChunkCache::default(),
             prepared_property_ring,
             prepared_frame_plan: Vec::new(),
+            prepared_layer_key_indices: HashMap::new(),
+            prepared_layer_plan: Vec::new(),
+            prepared_layer_snapshot: None,
             prepared_snapshot_bundle: None,
             prepared_fallback: api::DrawList::default(),
             prepared_frame_active: false,
@@ -2068,9 +2248,17 @@ impl WebGpuRenderer {
     pub fn purge_prepared_chunks(&mut self) {
         self.prepared_chunks.clear();
         self.prepared_frame_plan.clear();
+        self.prepared_layer_key_indices.clear();
+        self.prepared_layer_plan.clear();
+        self.prepared_layer_snapshot = None;
         self.prepared_snapshot_bundle = None;
         self.prepared_frame_active = false;
         self.prepared_snapshot_bundle_active = false;
+        for layer in self.layers.values_mut()
+        {
+           layer.prepared_key = None;
+           layer.resources.clear();
+        }
     }
 
     pub fn set_prepared_bundle_min_draws_for_benchmark(&mut self, draws: usize) {
@@ -2478,6 +2666,7 @@ impl WebGpuRenderer {
             data,
             row_bytes,
         );
+        self.invalidate_image_dependents(handle);
         Ok(())
     }
 
@@ -2517,9 +2706,7 @@ impl WebGpuRenderer {
       let released = self.images.remove(handle.0).is_some();
       if released
       {
-         self.prepared_chunks.invalidate_resource(handle);
-         self.prepared_snapshot_bundle = None;
-         self.prepared_snapshot_bundle_active = false;
+         self.invalidate_image_dependents(handle);
       }
       self.stats.cache_evictions = self.stats.cache_evictions.saturating_add(released as u32);
       released
@@ -2853,6 +3040,7 @@ impl WebGpuRenderer {
             &self.image_upload_scratch,
             width.saturating_mul(kind.bytes_per_pixel()),
         );
+        self.invalidate_image_dependents(handle);
         Ok(())
     }
 
@@ -2878,7 +3066,16 @@ impl WebGpuRenderer {
             rgba,
             width.saturating_mul(kind.bytes_per_pixel()),
         );
+        self.invalidate_image_dependents(handle);
         Ok(())
+    }
+
+    fn invalidate_image_dependents(&mut self, handle: api::ImageHandle)
+    {
+       self.prepared_chunks.invalidate_resource(handle);
+       self.invalidate_layers_for_resource(handle);
+       self.prepared_snapshot_bundle = None;
+       self.prepared_snapshot_bundle_active = false;
     }
 
     fn image(&self, handle: api::ImageHandle) -> Option<&GpuImage> {
@@ -2999,12 +3196,66 @@ impl WebGpuRenderer {
         self.stats.commands_copied = self.stats.commands_copied.saturating_add(1);
     }
 
-    fn cached_layer(&self, id: u32, rect: api::RectF) -> Option<&GpuLayer> {
+    fn local_layer_frame(&self, rect: api::RectF) -> Option<LocalLayerFrame>
+    {
+       let parent = self.current_target()
+          .and_then(|id| self.layers.get(&id))
+          .map_or([
+             logical_dimension(self.width, self.scale).max(1.0),
+             logical_dimension(self.height, self.scale).max(1.0),
+             0.0, 0.0,
+             1.0, 0.0, 0.0, 1.0,
+             0.0, 0.0, 1.0, 0.0,
+          ], |layer| layer.viewport);
+       let [_, _, _, _, scale_x, shear_y, shear_x, scale_y, translate_x, translate_y, _, _] = parent;
+       if shear_x != 0.0 || shear_y != 0.0 || scale_x == 0.0 || scale_y == 0.0
+       {
+          return None;
+       }
+       let x0 = scale_x * rect.x + translate_x;
+       let x1 = scale_x * (rect.x + rect.w) + translate_x;
+       let y0 = scale_y * rect.y + translate_y;
+       let y1 = scale_y * (rect.y + rect.h) + translate_y;
+       let unsnapped = api::RectF::new(
+          x0.min(x1), y0.min(y1),
+          (x1 - x0).abs(), (y1 - y0).abs(),
+       );
+       let (target_rect, width, height) = layer_target_rect(
+          unsnapped,
+          self.scale,
+          self.device.limits().max_texture_dimension_2d,
+       )?;
+       let inverse_x0 = (target_rect.x - translate_x) / scale_x;
+       let inverse_x1 = (target_rect.x + target_rect.w - translate_x) / scale_x;
+       let inverse_y0 = (target_rect.y - translate_y) / scale_y;
+       let inverse_y1 = (target_rect.y + target_rect.h - translate_y) / scale_y;
+       let composite_rect = api::RectF::new(
+          inverse_x0.min(inverse_x1), inverse_y0.min(inverse_y1),
+          (inverse_x1 - inverse_x0).abs(), (inverse_y1 - inverse_y0).abs(),
+       );
+       Some(LocalLayerFrame {
+          source_rect: rect,
+          target_rect,
+          composite_rect,
+          viewport: [
+             target_rect.w, target_rect.h, target_rect.x, target_rect.y,
+             scale_x, 0.0, 0.0, scale_y,
+             translate_x, translate_y, 1.0, 0.0,
+          ],
+          width,
+          height,
+       })
+    }
+
+    fn cached_layer(&self, id: u32, frame: LocalLayerFrame) -> Option<&GpuLayer> {
         let layer = self.layers.get(&id)?;
-        if layer.width == self.width
-            && layer.height == self.height
+        if layer.width == frame.width
+            && layer.height == frame.height
             && (layer.scale - self.scale).abs() <= f32::EPSILON
-            && layer.rect == rect
+            && layer.source_rect == frame.source_rect
+            && layer.rect == frame.target_rect
+            && layer.composite_rect == frame.composite_rect
+            && layer.prepared_key.is_none()
         {
             Some(layer)
         } else {
@@ -3012,9 +3263,59 @@ impl WebGpuRenderer {
         }
     }
 
-    fn ensure_layer(&mut self, id: u32, rect: api::RectF) {
-        let width = self.width.max(1);
-        let height = self.height.max(1);
+    fn cached_prepared_layer(&self, layer: PreparedLayerFrame, chunk: &api::RenderChunk) -> Option<&GpuLayer>
+    {
+       self.layers.get(&layer.key.id).filter(|entry| {
+          entry.width == layer.width
+             && entry.height == layer.height
+             && (entry.scale - self.scale).abs() <= f32::EPSILON
+             && entry.prepared_key == Some(layer.key)
+             && entry.resources.as_slice() == chunk.resource_dependencies()
+       })
+    }
+
+    fn invalidate_layers_for_resource(&mut self, handle: api::ImageHandle)
+    {
+       for layer in self.layers.values_mut()
+       {
+          if layer.prepared_key.is_some()
+             && layer.resources.iter().any(|dependency| dependency.image == handle)
+          {
+             layer.prepared_key = None;
+             layer.resources.clear();
+          }
+       }
+    }
+
+    fn ensure_layer(&mut self, id: u32, frame: LocalLayerFrame) {
+        self.ensure_layer_target(
+            id,
+            frame.source_rect,
+            frame.target_rect,
+            frame.composite_rect,
+            frame.width,
+            frame.height,
+            frame.viewport,
+            None,
+            &[],
+        );
+    }
+
+    fn ensure_prepared_layer(&mut self, layer: PreparedLayerFrame, chunk: &api::RenderChunk) {
+        self.ensure_layer_target(
+            layer.key.id,
+            layer.source_rect,
+            layer.rect,
+            layer.rect,
+            layer.width,
+            layer.height,
+            layer.viewport,
+            Some(layer.key),
+            chunk.resource_dependencies(),
+        );
+    }
+
+    fn ensure_layer_target(&mut self, id: u32, source_rect: api::RectF, rect: api::RectF, composite_rect: api::RectF, width: u32, height: u32, viewport: [f32; 12], prepared_key: Option<PreparedLayerKey>, resources: &[api::RenderResourceDependency]) {
         let recreate = self.layers.get(&id).map_or(true, |layer| {
             layer.width != width
                 || layer.height != height
@@ -3029,32 +3330,52 @@ impl WebGpuRenderer {
                 width,
                 height,
             );
+            let (viewport_buffer, viewport_bind_group) =
+                create_viewport_bind_group(&self.device, &self.programs);
+            write_uniform(&self.queue, &viewport_buffer, viewport);
             self.layers.insert(
                 id,
-                GpuLayer { texture, view, bind_group, rect, width, height, scale: self.scale },
+                GpuLayer {
+                    texture,
+                    view,
+                    bind_group,
+                    viewport_buffer,
+                    viewport_bind_group,
+                    viewport,
+                    source_rect,
+                    rect,
+                    composite_rect,
+                    width,
+                    height,
+                    scale: self.scale,
+                    prepared_key,
+                    resources: resources.to_vec(),
+                },
             );
             self.stats.texture_creates = self.stats.texture_creates.saturating_add(1);
-            self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
+            self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(2);
+            self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
             self.stats.target_texture_creates = self.stats.target_texture_creates.saturating_add(1);
             self.stats.target_bind_group_creates =
                 self.stats.target_bind_group_creates.saturating_add(1);
             self.stats.layer_texture_creates = self.stats.layer_texture_creates.saturating_add(1);
             self.stats.layer_bind_group_creates =
-                self.stats.layer_bind_group_creates.saturating_add(1);
+                self.stats.layer_bind_group_creates.saturating_add(2);
         } else if let Some(layer) = self.layers.get_mut(&id) {
+            write_uniform(&self.queue, &layer.viewport_buffer, viewport);
+            layer.viewport = viewport;
+            layer.source_rect = source_rect;
             layer.rect = rect;
+            layer.composite_rect = composite_rect;
+            layer.prepared_key = prepared_key;
+            layer.resources.clear();
+            layer.resources.extend_from_slice(resources);
         }
     }
 
     fn push_layer_draw(&mut self, id: u32, rect: api::RectF) {
-        let logical_w = logical_dimension(self.width, self.scale).max(1.0);
-        let logical_h = logical_dimension(self.height, self.scale).max(1.0);
-        let u0 = rect.x / logical_w;
-        let v0 = rect.y / logical_h;
-        let u1 = (rect.x + rect.w) / logical_w;
-        let v1 = (rect.y + rect.h) / logical_h;
         let color = api::Color::rgba(1.0, 1.0, 1.0, 1.0);
-        let vertices = quad_vertices(rect, u0, v0, u1, v1, color);
+        let vertices = quad_vertices(rect, 0.0, 0.0, 1.0, 1.0, color);
         self.push_draw(DrawKind::Layer { id }, &vertices);
     }
 
@@ -3078,24 +3399,31 @@ impl WebGpuRenderer {
             return;
         }
 
-        if !dirty && self.cached_layer(id, rect).is_some() {
-            let skipped = skip_layer_body(list, index);
-            self.stats.layer_cache_hits = self.stats.layer_cache_hits.saturating_add(1);
-            self.stats.layer_cache_skipped_draws =
-                self.stats.layer_cache_skipped_draws.saturating_add(skipped);
-            self.push_layer_draw(id, rect);
+        let Some(frame) = self.local_layer_frame(rect) else {
+            self.encode_items(list, index, true);
             return;
+        };
+        if !dirty {
+            let cached_rect = self.cached_layer(id, frame).map(|layer| layer.composite_rect);
+            if let Some(cached_rect) = cached_rect {
+                let skipped = skip_layer_body(list, index);
+                self.stats.layer_cache_hits = self.stats.layer_cache_hits.saturating_add(1);
+                self.stats.layer_cache_skipped_draws =
+                    self.stats.layer_cache_skipped_draws.saturating_add(skipped);
+                self.push_layer_draw(id, cached_rect);
+                return;
+            }
         }
 
+        self.ensure_layer(id, frame);
         self.stats.layer_cache_misses = self.stats.layer_cache_misses.saturating_add(1);
-        self.ensure_layer(id, rect);
         let start = self.frame.draws.len();
         self.target_stack.push(id);
         self.encode_items(list, index, true);
         let _ = self.target_stack.pop();
         let end = self.frame.draws.len();
         self.frame.layer_passes.push(FrameLayerPass { id, start, end });
-        self.push_layer_draw(id, rect);
+        self.push_layer_draw(id, frame.composite_rect);
     }
 
     fn encode_items(&mut self, list: &api::DrawList, index: &mut usize, stop_at_layer_end: bool) {
@@ -4092,6 +4420,137 @@ impl WebGpuRenderer {
 
 impl WebGpuRenderer
 {
+   fn encode_snapshot_layers(&mut self, snapshot: &api::RenderSnapshot) -> Option<Result<(), api::RenderSnapshotError>>
+   {
+      let mut all_layers = snapshot.instance_count() != 0;
+      snapshot.visit_instances(|instance| {
+         all_layers = all_layers && instance.layer.is_some();
+      });
+      if !all_layers
+      {
+         return None;
+      }
+      let mut supported = self.frame.draws.is_empty()
+         && self.frame.layer_passes.is_empty()
+         && !self.scene3d_active
+         && self.id_mask_draws.is_empty();
+      let viewport = [
+         logical_dimension(self.width, self.scale).max(1.0),
+         logical_dimension(self.height, self.scale).max(1.0),
+      ];
+      let reuse_plan = self.prepared_layer_snapshot.as_ref().is_some_and(|cached| {
+         cached.ptr_eq(snapshot)
+            && self.prepared_layer_plan.len() as u64 == snapshot.instance_count()
+      });
+      let mut layer_keys = core::mem::take(&mut self.prepared_layer_key_indices);
+      let mut plan = core::mem::take(&mut self.prepared_layer_plan);
+      if !reuse_plan
+      {
+         layer_keys.clear();
+         plan.clear();
+         snapshot.visit_instances(|instance| {
+            if !supported
+            {
+               return;
+            }
+            let Some(layer) = instance.layer else
+            {
+               supported = false;
+               return;
+            };
+            let Some(uniform) = prepared_dynamic_uniform(
+               snapshot,
+               &instance.property_slots,
+               instance.origin,
+               viewport,
+            ) else
+            {
+               supported = false;
+               return;
+            };
+            let Some(frame) = prepared_layer_frame(self, layer, &instance.chunk, uniform, instance.clip) else
+            {
+               supported = false;
+               return;
+            };
+            if layer.id == 0 || !instance.dynamic_clips.is_empty()
+            {
+               supported = false;
+               return;
+            }
+            let duplicate = match layer_keys.get(&layer.id).copied()
+            {
+               None =>
+               {
+                  layer_keys.insert(layer.id, plan.len());
+                  false
+               }
+               Some(index) if plan[index].frame.key == frame.key =>
+               {
+                  plan[index].frame.force_refresh |= frame.force_refresh;
+                  true
+               }
+               Some(_) =>
+               {
+                  supported = false;
+                  return;
+               }
+            };
+            plan.push(PreparedLayerPlanEntry {
+               frame,
+               chunk: instance.chunk.clone(),
+               duplicate,
+            });
+         });
+      }
+      if !supported
+      {
+         layer_keys.clear();
+         plan.clear();
+         self.prepared_layer_key_indices = layer_keys;
+         self.prepared_layer_plan = plan;
+         self.prepared_layer_snapshot = None;
+         return Some(self.encode_snapshot_flat(snapshot));
+      }
+      if !reuse_plan
+      {
+         self.prepared_layer_snapshot = Some(snapshot.clone());
+      }
+      for entry in &plan
+      {
+         let frame = entry.frame;
+         self.stats.layer_draws = self.stats.layer_draws.saturating_add(1);
+         let hit = entry.duplicate
+            || !frame.force_refresh && self.cached_prepared_layer(frame, &entry.chunk).is_some();
+         if hit
+         {
+            self.stats.layer_cache_hits = self.stats.layer_cache_hits.saturating_add(1);
+            self.stats.layer_cache_skipped_draws = self.stats.layer_cache_skipped_draws.saturating_add(
+               entry.chunk.draw_list().items.len().min(u32::MAX as usize) as u32,
+            );
+         }
+         else
+         {
+            self.stats.layer_cache_misses = self.stats.layer_cache_misses.saturating_add(1);
+            self.ensure_prepared_layer(frame, &entry.chunk);
+            let start = self.frame.draws.len();
+            self.target_stack.push(frame.key.id);
+            let mut index = 0;
+            self.encode_items(entry.chunk.draw_list(), &mut index, false);
+            let _ = self.target_stack.pop();
+            let end = self.frame.draws.len();
+            self.frame.layer_passes.push(FrameLayerPass { id: frame.key.id, start, end });
+         }
+         self.push_layer_draw(frame.key.id, frame.rect);
+      }
+      self.prepared_layer_key_indices = layer_keys;
+      self.prepared_layer_plan = plan;
+      self.prepared_frame_active = false;
+      self.prepared_snapshot_bundle = None;
+      self.prepared_snapshot_bundle_active = false;
+      Some(Ok(()))
+   }
+
    /// Encodes immutable snapshot chunks through persistent geometry and a completion-safe
    /// frame ring for dynamic transform and opacity records.
    pub fn encode_snapshot(&mut self, snapshot: &api::RenderSnapshot) -> Result<(), api::RenderSnapshotError>
@@ -4099,6 +4558,10 @@ impl WebGpuRenderer
       self.prepared_frame_plan.clear();
       self.prepared_frame_active = false;
       self.prepared_snapshot_bundle_active = false;
+      if let Some(result) = self.encode_snapshot_layers(snapshot)
+      {
+         return result;
+      }
       if self.prepared_chunks.budget_bytes == 0
       {
          return self.encode_snapshot_flat(snapshot);
@@ -4913,7 +5376,7 @@ impl api::Renderer for WebGpuRenderer {
             self.surface.configure(&self.device, &self.config);
             self.drop_auxiliary_targets();
         }
-        if size_changed || scale_changed {
+        if scale_changed {
             self.stats.cache_evictions = self
                 .stats
                 .cache_evictions
@@ -4984,6 +5447,39 @@ impl WebGpuRenderer {
         self.frame.draws[start.min(end)..end]
             .iter()
             .any(|draw| draw.target == target && matches!(draw.kind, DrawKind::Backdrop { .. }))
+    }
+
+    fn target_copy_region(&self, target: Option<u32>) -> Option<(wgpu::Origin3d, wgpu::Origin3d, wgpu::Extent3d)>
+    {
+       let Some(id) = target else
+       {
+          return Some((
+             wgpu::Origin3d::ZERO,
+             wgpu::Origin3d::ZERO,
+             wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+             },
+          ));
+       };
+       let layer = self.layers.get(&id)?;
+       let scale = f64::from(sanitize_scale(self.scale));
+       let target_x = (f64::from(layer.rect.x) * scale).floor() as i64;
+       let target_y = (f64::from(layer.rect.y) * scale).floor() as i64;
+       let source_x = (-target_x).max(0).min(i64::from(layer.width)) as u32;
+       let source_y = (-target_y).max(0).min(i64::from(layer.height)) as u32;
+       let destination_x = target_x.max(0).min(i64::from(self.width)) as u32;
+       let destination_y = target_y.max(0).min(i64::from(self.height)) as u32;
+       let width = layer.width.saturating_sub(source_x)
+          .min(self.width.saturating_sub(destination_x));
+       let height = layer.height.saturating_sub(source_y)
+          .min(self.height.saturating_sub(destination_y));
+       (width != 0 && height != 0).then_some((
+          wgpu::Origin3d { x: source_x, y: source_y, z: 0 },
+          wgpu::Origin3d { x: destination_x, y: destination_y, z: 0 },
+          wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+       ))
     }
 
     fn backdrop_sample_rect(&self, rect: api::RectF, sigma: f32) -> api::RectF {
@@ -5340,7 +5836,18 @@ impl WebGpuRenderer {
             let Some(state) = self.draw_state_key(*draw) else { continue };
             let clip = instance_clip.map_or(state.clip, |instance| prepared_intersect_clip(instance, state.clip));
             if bound_clip != Some(clip) {
-                set_scissor(pass, clip, self.scale, self.width, self.height);
+                if !set_scissor(
+                    pass,
+                    clip,
+                    self.scale,
+                    [0.0, 0.0],
+                    [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                    self.width,
+                    self.height,
+                )
+                {
+                   continue;
+                }
                 scissor_sets = scissor_sets.saturating_add(1);
                 bound_clip = Some(clip);
             }
@@ -5446,27 +5953,29 @@ impl WebGpuRenderer {
                 else {
                     return;
                 };
+                let Some((source_origin, destination_origin, copy_extent)) =
+                    self.target_copy_region(target)
+                else {
+                    return;
+                };
                 encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: target_texture,
                         mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
+                        origin: source_origin,
                         aspect: wgpu::TextureAspect::All,
                     },
                     wgpu::TexelCopyTextureInfo {
                         texture: &scratch_texture,
                         mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
+                        origin: destination_origin,
                         aspect: wgpu::TextureAspect::All,
                     },
-                    wgpu::Extent3d {
-                        width: self.width,
-                        height: self.height,
-                        depth_or_array_layers: 1,
-                    },
+                    copy_extent,
                 );
                 self.stats.texture_copies = self.stats.texture_copies.saturating_add(1);
-                let copy_pixels = u64::from(self.width).saturating_mul(u64::from(self.height));
+                let copy_pixels = u64::from(copy_extent.width)
+                    .saturating_mul(u64::from(copy_extent.height));
                 self.stats.texture_copy_pixels =
                     self.stats.texture_copy_pixels.saturating_add(copy_pixels);
                 self.stats.texture_copy_bytes = self.stats.texture_copy_bytes.saturating_add(
@@ -5973,6 +6482,33 @@ impl WebGpuRenderer {
         Some(DrawStateKey { pipeline, bind, clip: draw.clip })
     }
 
+    fn draw_target_space(&self, target: Option<u32>) -> Option<(wgpu::BindGroup, [f32; 2], [f32; 6], u32, u32)>
+    {
+       match target
+       {
+          None => Some((
+             self.viewport_bind_group.clone(),
+             [0.0, 0.0],
+             [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+             self.width,
+             self.height,
+          )),
+          Some(id) => self.layers.get(&id).map(|layer| {
+             (
+                layer.viewport_bind_group.clone(),
+                [layer.rect.x, layer.rect.y],
+                [
+                   layer.viewport[4], layer.viewport[5],
+                   layer.viewport[6], layer.viewport[7],
+                   layer.viewport[8], layer.viewport[9],
+                ],
+                layer.width,
+                layer.height,
+             )
+          }),
+       }
+    }
+
     fn render_draw_range(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -5991,6 +6527,11 @@ impl WebGpuRenderer {
         if !self.frame.draws[start..end].iter().any(|draw| draw.target == target) {
             return;
         }
+        let Some((viewport_bind_group, target_origin, target_transform, target_width, target_height)) =
+            self.draw_target_space(target)
+        else {
+            return;
+        };
         self.stats.render_passes = self.stats.render_passes.saturating_add(1);
         self.stats.draw_passes = self.stats.draw_passes.saturating_add(1);
 
@@ -6015,7 +6556,7 @@ impl WebGpuRenderer {
             timestamp_writes,
             occlusion_query_set: None,
         });
-        pass.set_bind_group(0, &self.viewport_bind_group, &[0]);
+        pass.set_bind_group(0, &viewport_bind_group, &[0]);
         pass.set_vertex_buffer(0, vertex_buffer.slice(..));
 
         let mut encoded_draws = 0_u32;
@@ -6055,7 +6596,17 @@ impl WebGpuRenderer {
             let force_bind = !self.draw_state_cache_enabled;
             draw_items = draw_items.saturating_add(1);
             if force_bind || bound_clip != Some(state.clip) {
-                set_scissor(&mut pass, state.clip, self.scale, self.width, self.height);
+                if !set_scissor(
+                    &mut pass,
+                    state.clip,
+                    self.scale,
+                    target_origin,
+                    target_transform,
+                    target_width,
+                    target_height,
+                ) {
+                    continue;
+                }
                 scissor_sets = scissor_sets.saturating_add(1);
                 bound_clip = Some(state.clip);
             }
@@ -7103,7 +7654,12 @@ fn write_viewport_uniform(
         1.0, 0.0, 0.0, 1.0,
         0.0, 0.0, 1.0, 0.0,
     ];
-    queue.write_buffer(buffer, 0, bytemuck::cast_slice(&values));
+    write_uniform(queue, buffer, values);
+}
+
+fn write_uniform(queue: &wgpu::Queue, buffer: &wgpu::Buffer, values: [f32; 12])
+{
+   queue.write_buffer(buffer, 0, bytemuck::cast_slice(&values));
 }
 
 fn create_color_target(
@@ -7503,19 +8059,44 @@ fn set_scissor(
     pass: &mut wgpu::RenderPass<'_>,
     clip: api::RectI,
     scale: f32,
+    origin: [f32; 2],
+    transform: [f32; 6],
     width: u32,
     height: u32,
-) {
-    let scale = sanitize_scale(scale);
-    let x = ((clip.x.max(0) as f32) * scale).floor() as u32;
-    let y = ((clip.y.max(0) as f32) * scale).floor() as u32;
-    let w = ((clip.w.max(0) as f32) * scale).ceil() as u32;
-    let h = ((clip.h.max(0) as f32) * scale).ceil() as u32;
-    let x = x.min(width.saturating_sub(1));
-    let y = y.min(height.saturating_sub(1));
-    let w = w.min(width.saturating_sub(x)).max(1);
-    let h = h.min(height.saturating_sub(y)).max(1);
-    pass.set_scissor_rect(x, y, w, h);
+) -> bool {
+    let scale = f64::from(sanitize_scale(scale));
+    let source_x0 = f64::from(clip.x);
+    let source_y0 = f64::from(clip.y);
+    let source_x1 = f64::from(clip.x.saturating_add(clip.w));
+    let source_y1 = f64::from(clip.y.saturating_add(clip.h));
+    let [m11, m12, m21, m22, tx, ty] = transform.map(f64::from);
+    let points = [
+        [m11 * source_x0 + m21 * source_y0 + tx, m12 * source_x0 + m22 * source_y0 + ty],
+        [m11 * source_x1 + m21 * source_y0 + tx, m12 * source_x1 + m22 * source_y0 + ty],
+        [m11 * source_x0 + m21 * source_y1 + tx, m12 * source_x0 + m22 * source_y1 + ty],
+        [m11 * source_x1 + m21 * source_y1 + tx, m12 * source_x1 + m22 * source_y1 + ty],
+    ];
+    let transformed_x0 = points.iter().map(|point| point[0]).fold(f64::INFINITY, f64::min).floor();
+    let transformed_y0 = points.iter().map(|point| point[1]).fold(f64::INFINITY, f64::min).floor();
+    let transformed_x1 = points.iter().map(|point| point[0]).fold(f64::NEG_INFINITY, f64::max).ceil();
+    let transformed_y1 = points.iter().map(|point| point[1]).fold(f64::NEG_INFINITY, f64::max).ceil();
+    // Preserve the established canvas scissor contract: clamp a negative origin without
+    // shortening the requested extent, then translate that clipped span into target space.
+    let clip_x0 = transformed_x0.max(0.0);
+    let clip_y0 = transformed_y0.max(0.0);
+    let clip_x1 = clip_x0 + (transformed_x1 - transformed_x0).max(0.0);
+    let clip_y1 = clip_y0 + (transformed_y1 - transformed_y0).max(0.0);
+    let x0 = ((clip_x0 - f64::from(origin[0])) * scale).floor().max(0.0);
+    let y0 = ((clip_y0 - f64::from(origin[1])) * scale).floor().max(0.0);
+    let x1 = ((clip_x1 - f64::from(origin[0])) * scale).ceil().min(f64::from(width));
+    let y1 = ((clip_y1 - f64::from(origin[1])) * scale).ceil().min(f64::from(height));
+    if x1 <= x0 || y1 <= y0 {
+        return false;
+    }
+    let x = x0 as u32;
+    let y = y0 as u32;
+    pass.set_scissor_rect(x, y, (x1 as u32).saturating_sub(x), (y1 as u32).saturating_sub(y));
+    true
 }
 
 fn set_viewport_and_scissor_rect(

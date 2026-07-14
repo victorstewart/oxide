@@ -113,6 +113,46 @@ fn host_exposes_prepared_chunk_browser_contract()
 }
 
 #[test]
+fn host_exposes_local_layer_dimension_benchmark_and_edge_capture()
+{
+   let source = include_str!("../src/lib.rs");
+   let page = include_str!("../../www/index.html");
+   let runner = include_str!("../../../../scripts/run_webgpu_local_layers_c30.mjs");
+   let capture = include_str!("../../../../scripts/check_webgpu_browser_golden.mjs");
+
+   assert!(source.contains("WEBGPU_LOCAL_LAYER_CARDS: usize = 100"));
+   assert!(source.contains("WEBGPU_LOCAL_LAYER_WIDTH: f32 = 72.0"));
+   assert!(source.contains("WEBGPU_LOCAL_LAYER_HEIGHT: f32 = 40.0"));
+   assert!(source.contains("WEBGPU_LOCAL_LAYER_CLOCK_WARMUP_DRAWS: usize = 64"));
+   assert!(source.contains("WEBGPU_LOCAL_LAYER_CLOCK_WARMUP_FRAMES: usize = 12"));
+   assert!(source.contains("WEBGPU_LOCAL_LAYER_GPU_POSTROLL_FRAMES: usize = 1"));
+   assert!(source.contains("pub async fn bench_webgpu_local_layers_c30"));
+   assert!(source.contains("pub async fn bench_webgpu_local_layer_guardrails_c30"));
+   assert!(source.contains("pub fn render_webgpu_local_layers_c30"));
+   assert!(source.contains("webgpu_local_layer_card_snapshots"));
+   assert!(source.contains("webgpu_local_layer_edge_snapshots"));
+   assert!(source.contains("webgpu_local_layer_resource_snapshot"));
+   assert!(source.contains("expected_local_layer_bytes"));
+   assert!(source.contains("full_canvas_layer_bytes"));
+   assert!(source.contains("layer_clear_pixels_avg"));
+   assert!(source.contains("gpu_samples_ms"));
+   assert!(source.contains("warmup_samples_ms"));
+   assert!(source.contains("gpu_clock_warmup_frames"));
+   assert!(source.contains("gpu_postroll_frames"));
+   assert!(source.contains("sample.frame_id != postroll_frame_id"));
+   assert!(page.contains("captureTarget === \"local-layers\""));
+   assert!(page.contains("render_webgpu_local_layers_c30"));
+   assert!(runner.contains("bench_webgpu_local_layers_c30"));
+   assert!(runner.contains("bench_webgpu_local_layer_guardrails_c30"));
+   assert!(runner.contains("gpu_sample_count"));
+   assert!(runner.contains("invalid C30 GPU sample population"));
+   assert!(runner.contains("kern_num_files_before"));
+   assert!(runner.contains("a prior C30 Chrome process is still running"));
+   assert!(runner.contains("resource_update_misses"));
+   assert!(capture.contains("assertLocalLayersRendered"));
+}
+
+#[test]
 fn host_exposes_dynamic_property_browser_contract()
 {
    let source = include_str!("../src/lib.rs");

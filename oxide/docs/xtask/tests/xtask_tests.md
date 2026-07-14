@@ -57,7 +57,7 @@ The integration tests run on the native host with the workspace's normal `xtask`
 
 ## Testing and benchmarks
 
-Run the complete unit with `cargo test --locked -p xtask --test xtask_tests`. Run the C25-touched manifest gate with `cargo test --locked -p xtask --test xtask_tests experiment_manifest_checker_accepts_current_manifest`.
+Run the complete unit with `cargo test --locked -p xtask --test xtask_tests`. Run the current manifest gate with `cargo test --locked -p xtask --test xtask_tests experiment_manifest_checker_accepts_current_manifest`.
 
 ## Examples
 
@@ -68,6 +68,7 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
+- 2026-07-14: froze the C30 accepted local-layer experiment, rejected unsnapped-coordinate, two-pass-key, asymmetric-clock-warmup, single-long-burst, and no-postroll designs, and resulting 160-entry totals.
 - 2026-07-13: froze the C29 accepted prepared-layer experiment, three rejected precision policies, and the resulting 154-entry accepted/rejected totals.
 
 - 2026-07-13: refreshed the exact manifest summary after the completed C00--C26 experiment sequence reached 144 entries: 72 accepted and 72 rejected.

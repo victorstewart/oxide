@@ -125,6 +125,12 @@ fn oxide_device_contract_source_lists_canonical_families() {
 fn experiment_manifest_checker_accepts_current_manifest() {
     let text = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../perf-experiments.toml"));
     for id in [
+        "c30-webgpu-local-layer-textures",
+        "c30-unsnapped-local-layer-coordinates-rejected",
+        "c30-two-pass-layer-key-recomputation-rejected",
+        "c30-asymmetric-populate-clock-warmup-rejected",
+        "c30-single-long-burst-terminal-tail-rejected",
+        "c30-terminal-measured-frame-without-postroll-rejected",
         "c29-metal-prepared-layers",
         "c29-main-format-opaque-rrect-layers-rejected",
         "c29-rgba16-opaque-rrect-layers-rejected",
@@ -207,7 +213,7 @@ fn experiment_manifest_checker_accepts_current_manifest() {
         check_experiment_manifest_text(text, "2026-06-22").expect("current manifest should pass");
     assert_eq!(
         summary,
-        ExperimentCheckSummary { total: 154, undecided: 0, accepted: 75, rejected: 79 }
+        ExperimentCheckSummary { total: 160, undecided: 0, accepted: 76, rejected: 84 }
     );
 }
 

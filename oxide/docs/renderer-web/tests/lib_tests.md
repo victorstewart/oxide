@@ -32,10 +32,11 @@ Call flow:
 - `wasm_webgpu_resource_counters_cover_uploads_and_passes()`: verifies the WebGPU stats struct, renderer source, and web host metric strings keep draw, clip-depth/scissor, pass, timestamp, upload, scratch, Scene3D, ID-mask, effect-uniform, and resource-creation counters synchronized.
 - `wasm_webgpu_prepared_chunks_are_budgeted_and_resource_invalidated()`: freezes the persistent prepared cache, aggregate and hybrid bundle paths, logical-byte budget, resource/device/resize invalidation, static/dynamic prepared boundaries, and replay counters used by C25/C26 browser proof.
 - The same source contract now freezes C26's three-slice property ring, dynamic uniform resolution, separate property counters, direct dynamic prepared boundary, and transform-linked clip handling while retaining C25 static bundle ownership.
+- `wasm_webgpu_layers_are_generation_keyed_and_local_sized()`: freezes C30's complete retained-layer key, immutable-snapshot plan reuse, dependency invalidation, pixel-grid-snapped local targets, inherited nested viewport/scissor state, normalized UVs, local effect copies, and immediate body skip.
 
 ## Logic narrative
 
-The tests intentionally avoid browser APIs. Solid-color tests include the crate-private pure Canvas classifier, while packed-geometry unit tests own exact WebGPU color bytes. Source inspection freezes wasm-only lowering and shader interpolation. Color tests clamp overrange and underrange values. Scale tests cover valid, zero, and NaN values. The native stub tests start frames, inspect counters, prove `CameraBg` is zero-work on web, and check that submitting on a non-wasm target returns `RenderError::Unsupported`. Source-inspection tests keep WebGPU production exports, the narrow Canvas indexed-quad diagnostic export, premultiplied-alpha surface setup, generation-checked image release/reuse, typed packed streams, u16/u32 draw packets, hot-path scratch reuse, timestamp-query readbacks, upload-scratch wiring, draw-state caching, clip-depth tracking, effect-uniform batching, prepared chunk/bundle/LRU ownership, and private packet vocabulary visible to native CI.
+The tests intentionally avoid browser APIs. Solid-color tests include the crate-private pure Canvas classifier, while packed-geometry unit tests own exact WebGPU color bytes. Source inspection freezes wasm-only lowering and shader interpolation. Color tests clamp overrange and underrange values. Scale tests cover valid, zero, and NaN values. The native stub tests start frames, inspect counters, prove `CameraBg` is zero-work on web, and check that submitting on a non-wasm target returns `RenderError::Unsupported`. Source-inspection tests keep WebGPU production exports, the narrow Canvas indexed-quad diagnostic export, premultiplied-alpha surface setup, generation-checked image release/reuse, typed packed streams, u16/u32 draw packets, hot-path scratch reuse, timestamp-query readbacks, upload-scratch wiring, draw-state caching, clip-depth tracking, effect-uniform batching, prepared chunk/bundle/LRU ownership, local retained-layer target ownership, and private packet vocabulary visible to native CI.
 
 ## Preconditions and postconditions; invariants maintained; unsafe invariants if any
 
@@ -53,6 +54,7 @@ The tests are single-threaded and allocate only small strings/vectors.
 
 These are correctness and contract tests, not benchmark timers. They protect the counters consumed by the browser WebGPU performance report.
 The packet-vocabulary freeze is measurement harness only. It changes no runtime path and does not claim a performance win.
+C30 browser proof complements these structural checks with exact parent/candidate pixels and direct residency/pass counters; source matching does not substitute for runtime evidence.
 
 ## Feature flags and cfgs
 
@@ -60,7 +62,7 @@ They run on native targets against the non-wasm `WebRenderer` stub.
 
 ## Testing and benchmarks
 
-Run with `cargo test -p oxide-renderer-web --tests`.
+Run with `cargo test --locked -p oxide-renderer-web --test lib_tests`. Compile wasm behavior with `cargo check --locked --target wasm32-unknown-unknown -p oxide-renderer-web`. The C30 runtime companions are the `local-layers` browser capture and `run_webgpu_local_layers_c30.mjs` adapter.
 
 ## Examples
 
@@ -73,6 +75,7 @@ pub fn scale() -> f32
 
 ## Changelog
 
+- 2026-07-14: added C30 contracts for generation/resource-complete retained layers, pixel-grid-snapped local textures, inherited nested viewports/scissors, normalized composites, and local effect-copy accounting.
 - 2026-07-13: added the C25 prepared-cache, bundle/direct, aggregate-replay, budget, invalidation, and counter source contract.
 - 2026-07-13: extended the prepared contract with C26 dynamic property-ring and clip assertions.
 - 2026-07-12: updated packet and scratch contracts for direct POD vertices, segmented u16/u32 index streams, and removal of duplicate byte vectors.

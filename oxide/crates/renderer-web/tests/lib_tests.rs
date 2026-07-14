@@ -252,7 +252,7 @@ fn wasm_webgpu_auxiliary_targets_are_created_only_for_declared_features() {
 }
 
 #[test]
-fn wasm_webgpu_viewport_uniform_is_written_only_during_init_or_resize() {
+fn wasm_webgpu_viewport_uniform_and_size_local_layers_follow_independent_lifetimes() {
     let source = include_str!("../src/wasm/webgpu.rs");
     let renderer_impl = source
         .split("impl api::Renderer for WebGpuRenderer")
@@ -277,8 +277,38 @@ fn wasm_webgpu_viewport_uniform_is_written_only_during_init_or_resize() {
     ));
     assert!(resize.contains("if size_changed"));
     assert!(resize.contains("self.drop_auxiliary_targets();"));
-    assert!(resize.contains("if size_changed || scale_changed"));
+    assert!(resize.contains("if scale_changed"));
+    assert!(!resize.contains("if size_changed || scale_changed"));
     assert!(resize.contains("self.layers.clear();"));
+}
+
+#[test]
+fn wasm_webgpu_layers_are_generation_keyed_and_local_sized()
+{
+   let source = include_str!("../src/wasm/webgpu.rs");
+
+   assert!(source.contains("struct PreparedLayerKey"));
+   assert!(source.contains("struct PreparedLayerPlanEntry"));
+   assert!(source.contains("content_generation: u64"));
+   assert!(source.contains("nested_generation: u64"));
+   assert!(source.contains("dynamic_generation: u64"));
+   assert!(source.contains("effect_outset: u32"));
+   assert!(source.contains("fn layer_target_rect"));
+   assert!(source.contains("renderer.device.limits().max_texture_dimension_2d"));
+   assert!(source.contains("fn cached_prepared_layer"));
+   assert!(source.contains("entry.resources.as_slice() == chunk.resource_dependencies()"));
+   assert!(source.contains("fn invalidate_layers_for_resource"));
+   assert!(source.contains("fn encode_snapshot_layers"));
+   assert!(source.contains("cached.ptr_eq(snapshot)"));
+   assert!(source.contains("self.prepared_layer_snapshot = Some(snapshot.clone())"));
+   assert!(source.contains("self.cached_prepared_layer(frame, &entry.chunk).is_some()"));
+   assert!(source.contains("instance.chunk.draw_list().items.len()"));
+   assert!(source.contains("quad_vertices(rect, 0.0, 0.0, 1.0, 1.0, color)"));
+   assert!(source.contains("viewport_buffer: wgpu::Buffer"));
+   assert!(source.contains("layer.viewport_bind_group.clone()"));
+   assert!(source.contains("target_origin"));
+   assert!(source.contains("target_copy_region"));
+   assert!(source.contains("copy_extent.width"));
 }
 
 #[test]

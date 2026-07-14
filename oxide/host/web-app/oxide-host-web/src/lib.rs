@@ -104,6 +104,14 @@ mod wasm_host {
     const WEBGPU_PREPARED_CHUNKS: usize = 256;
     const WEBGPU_PREPARED_DRAW_COUNTS: [usize; 4] = [8, 16, 32, 64];
     const WEBGPU_DYNAMIC_PROPERTY_NODES: usize = 300;
+    const WEBGPU_LOCAL_LAYER_CARDS: usize = 100;
+    const WEBGPU_LOCAL_LAYER_COLUMNS: usize = 10;
+    const WEBGPU_LOCAL_LAYER_WIDTH: f32 = 72.0;
+    const WEBGPU_LOCAL_LAYER_HEIGHT: f32 = 40.0;
+    const WEBGPU_LOCAL_LAYER_GAP: f32 = 8.0;
+    const WEBGPU_LOCAL_LAYER_CLOCK_WARMUP_DRAWS: usize = 64;
+    const WEBGPU_LOCAL_LAYER_CLOCK_WARMUP_FRAMES: usize = 12;
+    const WEBGPU_LOCAL_LAYER_GPU_POSTROLL_FRAMES: usize = 1;
 
     struct WebUploader {
         renderer: Rc<RefCell<BrowserRenderer>>,
@@ -634,6 +642,31 @@ mod wasm_host {
                 stats.draws,
                 stats.render_bundle_replays,
                 stats.prepared_direct_draws,
+                stats.frame_id,
+                stats.width,
+                stats.height,
+            ))
+        }
+
+        pub fn render_webgpu_local_layers_c30(&self) -> Result<String, JsValue>
+        {
+            self.state.borrow_mut().direct_capture_active = true;
+            let renderer = self.ensure_upload_bench_resources()?;
+            let (dirty, clean) = webgpu_local_layer_edge_snapshots()?;
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.resize(512, 512, 2.0).map_err(render_err)?;
+            }
+            webgpu_local_layer_frame(&renderer, &dirty)?;
+            webgpu_local_layer_frame(&renderer, &clean)?;
+            let stats = renderer.borrow().last_stats();
+            Ok(format!(
+                "layers={};hits={};misses={};passes={};layer_bytes={};frame_id={};width={};height={}",
+                stats.layer_draws,
+                stats.layer_cache_hits,
+                stats.layer_cache_misses,
+                stats.layer_passes,
+                stats.gpu_layer_texture_bytes,
                 stats.frame_id,
                 stats.width,
                 stats.height,
@@ -1743,6 +1776,282 @@ mod wasm_host {
             write_c19_samples(&mut report, "gpu_samples_ms", &gpu_values);
             write_c19_samples(&mut report, "warmup_samples_ms", &warmup_values);
             Ok(report)
+        }
+
+        pub async fn bench_webgpu_local_layers_c30(
+            &self,
+            width: u32,
+            height: u32,
+            samples: u32,
+            frames_per_sample: u32,
+            one_dirty: bool,
+        ) -> Result<String, JsValue>
+        {
+            let width = width.clamp(1, 4_096);
+            let height = height.clamp(1, 4_096);
+            let sample_count = samples.clamp(1, 30);
+            let frames = frames_per_sample.clamp(1, 160);
+            let renderer = self.ensure_upload_bench_resources()?;
+            let (populate, clean, dirty) = webgpu_local_layer_card_snapshots()?;
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.resize(width, height, 2.0).map_err(render_err)?;
+                renderer.set_memory_stats_interval_for_benchmark(1);
+                renderer.set_cpu_submit_timing_enabled_for_benchmark(true);
+            }
+            webgpu_local_layer_frame(&renderer, &populate)?;
+            wait_renderer_queue_idle(&renderer).await?;
+            let clock_warmup = webgpu_local_layer_clock_warmup();
+            for _ in 0..WEBGPU_LOCAL_LAYER_CLOCK_WARMUP_FRAMES
+            {
+                webgpu_local_layer_clock_warmup_frame(&renderer, &clock_warmup)?;
+            }
+            wait_renderer_queue_idle(&renderer).await?;
+            let mut warmup_values = Vec::with_capacity(4);
+            for _ in 0..4
+            {
+                let start = perf_now();
+                webgpu_local_layer_frame(&renderer, if one_dirty { &dirty } else { &clean })?;
+                warmup_values.push((perf_now() - start).max(0.0));
+            }
+            wait_renderer_queue_idle(&renderer).await?;
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.collect_timestamp_readbacks();
+                renderer.clear_completed_timestamp_samples();
+                renderer.set_timestamp_readback_interval_for_benchmark(1);
+            }
+
+            let snapshot = if one_dirty { &dirty } else { &clean };
+            let measured_frames = u64::from(sample_count).saturating_mul(u64::from(frames)).max(1);
+            let mut cpu_values = Vec::with_capacity(sample_count as usize);
+            let mut gpu_samples = Vec::with_capacity(measured_frames as usize);
+            let mut drained = Vec::with_capacity(32);
+            let mut hits = 0_u64;
+            let mut misses = 0_u64;
+            let mut skipped = 0_u64;
+            let mut layer_passes = 0_u64;
+            let mut render_passes = 0_u64;
+            let mut clear_passes = 0_u64;
+            let mut draw_passes = 0_u64;
+            let mut traversed = 0_u64;
+            let mut copied = 0_u64;
+            let mut geometry = 0_u64;
+            let mut uploads = 0_u64;
+            let mut texture_creates = 0_u64;
+            let mut layer_texture_bytes = 0_u64;
+            for sample in 0..sample_count
+            {
+                let mut cpu_ms = 0.0;
+                for frame in 0..frames
+                {
+                    let start = perf_now();
+                    webgpu_local_layer_frame(&renderer, snapshot)?;
+                    cpu_ms += (perf_now() - start).max(0.0);
+                    let stats = renderer.borrow().last_stats();
+                    hits = hits.saturating_add(u64::from(stats.layer_cache_hits));
+                    misses = misses.saturating_add(u64::from(stats.layer_cache_misses));
+                    skipped = skipped.saturating_add(u64::from(stats.layer_cache_skipped_draws));
+                    layer_passes = layer_passes.saturating_add(u64::from(stats.layer_passes));
+                    render_passes = render_passes.saturating_add(u64::from(stats.render_passes));
+                    clear_passes = clear_passes.saturating_add(u64::from(stats.clear_passes));
+                    draw_passes = draw_passes.saturating_add(u64::from(stats.draw_passes));
+                    traversed = traversed.saturating_add(stats.commands_traversed);
+                    copied = copied.saturating_add(stats.commands_copied);
+                    geometry = geometry.saturating_add(stats.geometry_bytes_copied);
+                    uploads = uploads.saturating_add(stats.buffer_upload_bytes);
+                    texture_creates = texture_creates.saturating_add(u64::from(stats.layer_texture_creates));
+                    layer_texture_bytes = layer_texture_bytes.max(stats.gpu_layer_texture_bytes);
+                    if (frame + 1) % 32 == 0
+                    {
+                        wait_renderer_queue_idle(&renderer).await?;
+                        let mut renderer = renderer.borrow_mut();
+                        renderer.collect_timestamp_readbacks();
+                        renderer.drain_completed_timestamp_samples_into(&mut drained);
+                        gpu_samples.extend_from_slice(&drained);
+                    }
+                }
+                let postroll_frame_id = if sample + 1 == sample_count
+                {
+                    webgpu_local_layer_frame(&renderer, snapshot)?;
+                    Some(renderer.borrow().last_stats().frame_id)
+                }
+                else
+                {
+                    None
+                };
+                wait_renderer_queue_idle(&renderer).await?;
+                let mut renderer = renderer.borrow_mut();
+                renderer.collect_timestamp_readbacks();
+                renderer.drain_completed_timestamp_samples_into(&mut drained);
+                if let Some(postroll_frame_id) = postroll_frame_id
+                {
+                    drained.retain(|sample| sample.frame_id != postroll_frame_id);
+                }
+                gpu_samples.extend_from_slice(&drained);
+                cpu_values.push(cpu_ms / frames as f64);
+            }
+            if gpu_samples.len() != measured_frames as usize
+            {
+                return Err(JsValue::from_str(&format!(
+                    "C30 expected {measured_frames} GPU samples, observed {}",
+                    gpu_samples.len(),
+                )));
+            }
+            let mut gpu_values = gpu_samples.iter()
+                .map(|sample| sample.total_ns as f64 / 1_000_000.0)
+                .collect::<Vec<_>>();
+            cpu_values.sort_by(|a, b| a.total_cmp(b));
+            gpu_values.sort_by(|a, b| a.total_cmp(b));
+            let local_layer_bytes = (WEBGPU_LOCAL_LAYER_WIDTH as u64 * 2)
+                .saturating_mul(WEBGPU_LOCAL_LAYER_HEIGHT as u64 * 2)
+                .saturating_mul(4)
+                .saturating_mul(WEBGPU_LOCAL_LAYER_CARDS as u64);
+            let full_canvas_layer_bytes = u64::from(width)
+                .saturating_mul(u64::from(height))
+                .saturating_mul(4)
+                .saturating_mul(WEBGPU_LOCAL_LAYER_CARDS as u64);
+            let target_pixels = layer_texture_bytes
+                .checked_div((WEBGPU_LOCAL_LAYER_CARDS as u64).saturating_mul(4))
+                .unwrap_or(0);
+            let mut report = format!(
+                "width={width};height={height};dpr=2;cards={WEBGPU_LOCAL_LAYER_CARDS};one_dirty={};samples={sample_count};frames_per_sample={frames};gpu_clock_warmup_draws={WEBGPU_LOCAL_LAYER_CLOCK_WARMUP_DRAWS};gpu_clock_warmup_frames={WEBGPU_LOCAL_LAYER_CLOCK_WARMUP_FRAMES};gpu_postroll_frames={WEBGPU_LOCAL_LAYER_GPU_POSTROLL_FRAMES};cpu_p50_ms={:.6};cpu_p95_ms={:.6};cpu_p99_ms={:.6};cpu_peak_ms={:.6};gpu_sample_count={};gpu_p50_ms={:.6};gpu_p95_ms={:.6};gpu_p99_ms={:.6};gpu_peak_ms={:.6};layer_texture_bytes={layer_texture_bytes};expected_local_layer_bytes={local_layer_bytes};full_canvas_layer_bytes={full_canvas_layer_bytes};layer_target_pixels={target_pixels};layer_clear_pixels_avg={:.6};layer_shaded_target_pixels_avg={:.6};layer_cache_hits_avg={:.6};layer_cache_misses_avg={:.6};layer_cache_skipped_draws_avg={:.6};layer_passes_avg={:.6};render_passes_avg={:.6};clear_passes_avg={:.6};draw_passes_avg={:.6};commands_traversed_avg={:.6};commands_copied_avg={:.6};geometry_bytes_copied_avg={:.6};buffer_upload_bytes_avg={:.6};layer_texture_creates_avg={:.6}",
+                u32::from(one_dirty),
+                percentile(&cpu_values, 0.50),
+                percentile(&cpu_values, 0.95),
+                percentile(&cpu_values, 0.99),
+                cpu_values.last().copied().unwrap_or(0.0),
+                gpu_values.len(),
+                percentile(&gpu_values, 0.50),
+                percentile(&gpu_values, 0.95),
+                percentile(&gpu_values, 0.99),
+                gpu_values.last().copied().unwrap_or(0.0),
+                target_pixels as f64 * layer_passes as f64 / measured_frames as f64,
+                target_pixels as f64 * layer_passes as f64 / measured_frames as f64,
+                hits as f64 / measured_frames as f64,
+                misses as f64 / measured_frames as f64,
+                skipped as f64 / measured_frames as f64,
+                layer_passes as f64 / measured_frames as f64,
+                render_passes as f64 / measured_frames as f64,
+                clear_passes as f64 / measured_frames as f64,
+                draw_passes as f64 / measured_frames as f64,
+                traversed as f64 / measured_frames as f64,
+                copied as f64 / measured_frames as f64,
+                geometry as f64 / measured_frames as f64,
+                uploads as f64 / measured_frames as f64,
+                texture_creates as f64 / measured_frames as f64,
+            );
+            write_c19_samples(&mut report, "cpu_samples_ms", &cpu_values);
+            write_c19_samples(&mut report, "gpu_samples_ms", &gpu_values);
+            write_c19_samples(&mut report, "warmup_samples_ms", &warmup_values);
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.set_timestamp_readback_interval_for_benchmark(8);
+                renderer.set_cpu_submit_timing_enabled_for_benchmark(false);
+                renderer.set_memory_stats_interval_for_benchmark(60);
+            }
+            Ok(report)
+        }
+
+        pub async fn bench_webgpu_local_layer_guardrails_c30(&self) -> Result<String, JsValue>
+        {
+            let renderer = self.ensure_upload_bench_resources()?;
+            let (populate, clean, dirty) = webgpu_local_layer_card_snapshots()?;
+            {
+                let mut renderer = renderer.borrow_mut();
+                renderer.resize(640, 480, 2.0).map_err(render_err)?;
+                renderer.set_memory_stats_interval_for_benchmark(1);
+                renderer.purge_prepared_chunks();
+            }
+
+            webgpu_local_layer_frame(&renderer, &populate)?;
+            webgpu_local_layer_frame(&renderer, &clean)?;
+            let clean_stats = renderer.borrow().last_stats();
+            webgpu_local_layer_frame(&renderer, &dirty)?;
+            let dirty_stats = renderer.borrow().last_stats();
+
+            renderer.borrow_mut().resize(800, 600, 2.0).map_err(render_err)?;
+            webgpu_local_layer_frame(&renderer, &clean)?;
+            let resize_stats = renderer.borrow().last_stats();
+
+            renderer.borrow_mut().resize(800, 600, 1.0).map_err(render_err)?;
+            webgpu_local_layer_frame(&renderer, &clean)?;
+            let scale_stats = renderer.borrow().last_stats();
+
+            renderer.borrow_mut().resize(640, 480, 2.0).map_err(render_err)?;
+            webgpu_local_layer_frame(&renderer, &populate)?;
+            renderer.borrow_mut().purge_prepared_chunks();
+            webgpu_local_layer_frame(&renderer, &clean)?;
+            let purge_stats = renderer.borrow().last_stats();
+
+            renderer.borrow_mut().advance_prepared_device_generation_for_benchmark();
+            webgpu_local_layer_frame(&renderer, &clean)?;
+            let device_stats = renderer.borrow().last_stats();
+
+            let pixels_a = [255_u8, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255];
+            let pixels_b = [0_u8, 255, 255, 255, 255, 0, 255, 255, 255, 255, 0, 255, 32, 64, 96, 255];
+            let image = renderer.borrow_mut().image_create_rgba8(2, 2, &pixels_a, 8);
+            let resource = webgpu_local_layer_resource_snapshot(image, 1)?;
+            webgpu_local_layer_frame(&renderer, &resource)?;
+            webgpu_local_layer_frame(&renderer, &resource)?;
+            let resource_clean_stats = renderer.borrow().last_stats();
+            renderer.borrow_mut().image_update_rgba8(image, 0, 0, 2, 2, &pixels_b, 8)
+                .map_err(render_err)?;
+            webgpu_local_layer_frame(&renderer, &resource)?;
+            let resource_update_stats = renderer.borrow().last_stats();
+            let released = renderer.borrow_mut().image_release(image);
+            let recreated = renderer.borrow_mut().image_create_rgba8(2, 2, &pixels_a, 8);
+            let recreated_resource = webgpu_local_layer_resource_snapshot(recreated, 2)?;
+            webgpu_local_layer_frame(&renderer, &recreated_resource)?;
+            let resource_recreate_stats = renderer.borrow().last_stats();
+            let generation_changed = recreated != image;
+            let _ = renderer.borrow_mut().image_release(recreated);
+
+            let (edge_dirty, edge_clean) = webgpu_local_layer_edge_snapshots()?;
+            webgpu_local_layer_frame(&renderer, &edge_dirty)?;
+            webgpu_local_layer_frame(&renderer, &edge_clean)?;
+            let edge_stats = renderer.borrow().last_stats();
+            wait_renderer_queue_idle(&renderer).await?;
+            renderer.borrow_mut().set_memory_stats_interval_for_benchmark(60);
+
+            Ok(format!(
+                "clean_hits={};clean_misses={};clean_traversed={};dirty_hits={};dirty_misses={};dirty_layer_passes={};dirty_texture_creates={};resize_hits={};resize_misses={};resize_texture_creates={};resize_layer_bytes={};scale_hits={};scale_misses={};scale_texture_creates={};purge_hits={};purge_misses={};purge_texture_creates={};device_hits={};device_misses={};device_texture_creates={};resource_clean_hits={};resource_clean_misses={};resource_update_hits={};resource_update_misses={};resource_update_clear_passes={};resource_update_texture_creates={};resource_recreate_hits={};resource_recreate_misses={};resource_recreate_texture_creates={};resource_released={};resource_generation_changed={};edge_hits={};edge_misses={};edge_traversed={};edge_layer_passes={}",
+                clean_stats.layer_cache_hits,
+                clean_stats.layer_cache_misses,
+                clean_stats.commands_traversed,
+                dirty_stats.layer_cache_hits,
+                dirty_stats.layer_cache_misses,
+                dirty_stats.layer_passes,
+                dirty_stats.layer_texture_creates,
+                resize_stats.layer_cache_hits,
+                resize_stats.layer_cache_misses,
+                resize_stats.layer_texture_creates,
+                resize_stats.gpu_layer_texture_bytes,
+                scale_stats.layer_cache_hits,
+                scale_stats.layer_cache_misses,
+                scale_stats.layer_texture_creates,
+                purge_stats.layer_cache_hits,
+                purge_stats.layer_cache_misses,
+                purge_stats.layer_texture_creates,
+                device_stats.layer_cache_hits,
+                device_stats.layer_cache_misses,
+                device_stats.layer_texture_creates,
+                resource_clean_stats.layer_cache_hits,
+                resource_clean_stats.layer_cache_misses,
+                resource_update_stats.layer_cache_hits,
+                resource_update_stats.layer_cache_misses,
+                resource_update_stats.clear_passes,
+                resource_update_stats.layer_texture_creates,
+                resource_recreate_stats.layer_cache_hits,
+                resource_recreate_stats.layer_cache_misses,
+                resource_recreate_stats.layer_texture_creates,
+                u32::from(released),
+                u32::from(generation_changed),
+                edge_stats.layer_cache_hits,
+                edge_stats.layer_cache_misses,
+                edge_stats.commands_traversed,
+                edge_stats.layer_passes,
+            ))
         }
 
         pub async fn bench_webgpu_dynamic_properties(
@@ -3487,6 +3796,228 @@ mod wasm_host {
             renderer.mesh3d_release(front);
             result
         }
+    }
+
+    fn webgpu_local_layer_card_snapshots() -> Result<(gfx::RenderSnapshot, gfx::RenderSnapshot, gfx::RenderSnapshot), JsValue>
+    {
+        let mut instances = Vec::with_capacity(WEBGPU_LOCAL_LAYER_CARDS);
+        for index in 0..WEBGPU_LOCAL_LAYER_CARDS
+        {
+            let column = index % WEBGPU_LOCAL_LAYER_COLUMNS;
+            let row = index / WEBGPU_LOCAL_LAYER_COLUMNS;
+            let x = WEBGPU_LOCAL_LAYER_GAP
+                + column as f32 * (WEBGPU_LOCAL_LAYER_WIDTH + WEBGPU_LOCAL_LAYER_GAP);
+            let y = WEBGPU_LOCAL_LAYER_GAP
+                + row as f32 * (WEBGPU_LOCAL_LAYER_HEIGHT + WEBGPU_LOCAL_LAYER_GAP);
+            let rect = gfx::RectF::new(x, y, WEBGPU_LOCAL_LAYER_WIDTH, WEBGPU_LOCAL_LAYER_HEIGHT);
+            let list = gfx::DrawList {
+                items: vec![
+                    gfx::DrawCmd::ClipPush {
+                        rect: gfx::RectI::new(x as i32, y as i32, WEBGPU_LOCAL_LAYER_WIDTH as i32, WEBGPU_LOCAL_LAYER_HEIGHT as i32),
+                    },
+                    gfx::DrawCmd::RRect {
+                        rect,
+                        radii: [8.0; 4],
+                        color: gfx::Color::rgba(0.05, 0.10 + row as f32 * 0.012, 0.18, 0.94),
+                    },
+                    gfx::DrawCmd::RRect {
+                        rect: gfx::RectF::new(x + 6.0, y + 7.0, 44.0, 7.0),
+                        radii: [3.5; 4],
+                        color: gfx::Color::rgba(0.18, 0.50, 0.96, 0.86),
+                    },
+                    gfx::DrawCmd::RRect {
+                        rect: gfx::RectF::new(x + 6.0, y + 22.0, 58.0, 10.0),
+                        radii: [5.0; 4],
+                        color: gfx::Color::rgba(0.90, 0.42, 0.12, 0.72),
+                    },
+                    gfx::DrawCmd::ClipPop,
+                ],
+                vertices: Vec::new(),
+                indices: Vec::new(),
+            };
+            let chunk = gfx::RenderChunk::new(
+                gfx::RenderChunkId(30_000 + index as u64),
+                gfx::RenderChunkRevisions {
+                    structural: 1,
+                    geometry: 1,
+                    ..gfx::RenderChunkRevisions::default()
+                },
+                list,
+                gfx::ChunkIndexMode::Local,
+                &[],
+            ).map_err(|error| JsValue::from_str(&format!("WebGPU C30 card chunk: {error}")))?;
+            let mut instance = gfx::RenderChunkInstance::new(chunk, [0.0, 0.0]);
+            instance.layer = Some(gfx::RenderLayerInstance {
+                id: 30_000 + index as u32,
+                rect,
+                dirty: false,
+            });
+            instances.push(instance);
+        }
+        let mut populate_instances = instances.clone();
+        for instance in &mut populate_instances
+        {
+            if let Some(layer) = instance.layer.as_mut()
+            {
+                layer.dirty = true;
+            }
+        }
+        let mut dirty_instances = instances.clone();
+        if let Some(layer) = dirty_instances.first_mut().and_then(|instance| instance.layer.as_mut())
+        {
+            layer.dirty = true;
+        }
+        let snapshot = |instances| gfx::RenderSnapshot::new(
+            instances,
+            Vec::new(),
+            gfx::Damage { rects: Vec::new() },
+        ).map_err(|error| JsValue::from_str(&format!("WebGPU C30 card snapshot: {error}")));
+        Ok((
+            snapshot(populate_instances)?,
+            snapshot(instances)?,
+            snapshot(dirty_instances)?,
+        ))
+    }
+
+    fn webgpu_local_layer_clock_warmup() -> gfx::DrawList
+    {
+        let mut items = Vec::with_capacity(WEBGPU_LOCAL_LAYER_CLOCK_WARMUP_DRAWS);
+        for index in 0..WEBGPU_LOCAL_LAYER_CLOCK_WARMUP_DRAWS
+        {
+            let phase = index as f32 / WEBGPU_LOCAL_LAYER_CLOCK_WARMUP_DRAWS as f32;
+            items.push(gfx::DrawCmd::RRect {
+                rect: gfx::RectF::new(0.0, 0.0, 256.0, 256.0),
+                radii: [16.0 + phase * 8.0; 4],
+                color: gfx::Color::rgba(0.08 + phase * 0.12, 0.16, 0.32 - phase * 0.12, 1.0),
+            });
+        }
+        gfx::DrawList { items, vertices: Vec::new(), indices: Vec::new() }
+    }
+
+    fn webgpu_local_layer_clock_warmup_frame(renderer: &Rc<RefCell<BrowserRenderer>>, list: &gfx::DrawList) -> Result<(), JsValue>
+    {
+        let mut renderer = renderer.borrow_mut();
+        let token = renderer.begin_frame(&gfx::FrameTarget, None);
+        renderer.encode_pass(list);
+        renderer.submit(token).map_err(render_err)
+    }
+
+    fn webgpu_local_layer_edge_snapshots() -> Result<(gfx::RenderSnapshot, gfx::RenderSnapshot), JsValue>
+    {
+        let outer = gfx::RectF::new(-12.25, 14.5, 218.5, 204.25);
+        let list = gfx::DrawList {
+            items: vec![
+                gfx::DrawCmd::ClipPush { rect: gfx::RectI::new(-8, 18, 206, 190) },
+                gfx::DrawCmd::RRect {
+                    rect: outer,
+                    radii: [19.5, 8.25, 24.75, 13.5],
+                    color: gfx::Color::rgba(0.04, 0.08, 0.15, 0.96),
+                },
+                gfx::DrawCmd::RRect {
+                    rect: gfx::RectF::new(-2.5, 25.25, 194.75, 164.5),
+                    radii: [14.25; 4],
+                    color: gfx::Color::rgba(0.08, 0.30, 0.70, 0.84),
+                },
+                gfx::DrawCmd::LayerBegin {
+                    id: 30_901,
+                    rect: gfx::RectF::new(34.75, 44.5, 96.25, 72.5),
+                    dirty: true,
+                },
+                gfx::DrawCmd::RRect {
+                    rect: gfx::RectF::new(34.75, 44.5, 96.25, 72.5),
+                    radii: [17.25; 4],
+                    color: gfx::Color::rgba(0.88, 0.28, 0.08, 0.82),
+                },
+                gfx::DrawCmd::RRect {
+                    rect: gfx::RectF::new(45.25, 55.75, 74.5, 49.25),
+                    radii: [11.5; 4],
+                    color: gfx::Color::rgba(0.98, 0.78, 0.22, 0.76),
+                },
+                gfx::DrawCmd::LayerEnd,
+                gfx::DrawCmd::Backdrop {
+                    rect: gfx::RectF::new(118.25, 128.5, 70.5, 48.25),
+                    sigma: 6.0,
+                    tint: gfx::Color::rgba(0.02, 0.04, 0.10, 0.38),
+                    alpha: 1.0,
+                },
+                gfx::DrawCmd::RRect {
+                    rect: gfx::RectF::new(122.5, 133.25, 62.0, 38.75),
+                    radii: [12.25; 4],
+                    color: gfx::Color::rgba(0.92, 0.96, 1.0, 0.28),
+                },
+                gfx::DrawCmd::RRect {
+                    rect: gfx::RectF::new(4.25, 196.0, 46.5, 8.25),
+                    radii: [4.0; 4],
+                    color: gfx::Color::rgba(0.98, 0.99, 1.0, 1.0),
+                },
+                gfx::DrawCmd::ClipPop,
+            ],
+            vertices: Vec::new(),
+            indices: Vec::new(),
+        };
+        let chunk = gfx::RenderChunk::new(
+            gfx::RenderChunkId(30_900),
+            gfx::RenderChunkRevisions {
+                structural: 1,
+                geometry: 1,
+                ..gfx::RenderChunkRevisions::default()
+            },
+            list,
+            gfx::ChunkIndexMode::Local,
+            &[],
+        ).map_err(|error| JsValue::from_str(&format!("WebGPU C30 edge chunk: {error}")))?;
+        let make = |dirty| {
+            let mut instance = gfx::RenderChunkInstance::new(chunk.clone(), [0.375, -0.25]);
+            instance.layer = Some(gfx::RenderLayerInstance { id: 30_900, rect: outer, dirty });
+            gfx::RenderSnapshot::new(
+                vec![instance],
+                Vec::new(),
+                gfx::Damage { rects: Vec::new() },
+            ).map_err(|error| JsValue::from_str(&format!("WebGPU C30 edge snapshot: {error}")))
+        };
+        Ok((make(true)?, make(false)?))
+    }
+
+    fn webgpu_local_layer_resource_snapshot(image: gfx::ImageHandle, generation: u64) -> Result<gfx::RenderSnapshot, JsValue>
+    {
+        let rect = gfx::RectF::new(8.0, 8.0, 32.0, 32.0);
+        let list = gfx::DrawList {
+            items: vec![gfx::DrawCmd::Image {
+                tex: image,
+                dst: rect,
+                src: gfx::RectF::new(0.0, 0.0, 2.0, 2.0),
+                alpha: 1.0,
+            }],
+            vertices: Vec::new(),
+            indices: Vec::new(),
+        };
+        let dependencies = [gfx::RenderResourceDependency { image, generation }];
+        let chunk = gfx::RenderChunk::new(
+            gfx::RenderChunkId(30_950),
+            gfx::RenderChunkRevisions {
+                resource: generation,
+                ..gfx::RenderChunkRevisions::default()
+            },
+            list,
+            gfx::ChunkIndexMode::Local,
+            &dependencies,
+        ).map_err(|error| JsValue::from_str(&format!("WebGPU C30 resource chunk: {error}")))?;
+        let mut instance = gfx::RenderChunkInstance::new(chunk, [0.0, 0.0]);
+        instance.layer = Some(gfx::RenderLayerInstance { id: 30_950, rect, dirty: false });
+        gfx::RenderSnapshot::new(
+            vec![instance],
+            Vec::new(),
+            gfx::Damage { rects: Vec::new() },
+        ).map_err(|error| JsValue::from_str(&format!("WebGPU C30 resource snapshot: {error}")))
+    }
+
+    fn webgpu_local_layer_frame(renderer: &Rc<RefCell<BrowserRenderer>>, snapshot: &gfx::RenderSnapshot) -> Result<(), JsValue>
+    {
+        let mut renderer = renderer.borrow_mut();
+        let token = renderer.begin_frame(&gfx::FrameTarget, Some(snapshot.damage()));
+        renderer.encode_snapshot(snapshot)
+            .map_err(|error| JsValue::from_str(&format!("encoding WebGPU C30 snapshot: {error}")))?;
+        renderer.submit(token).map_err(render_err)
     }
 
     fn webgpu_prepared_snapshot(

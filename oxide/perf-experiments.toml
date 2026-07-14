@@ -1,4 +1,126 @@
 [[experiments]]
+id = "c30-terminal-measured-frame-without-postroll-rejected"
+introduced_commit = "rejected during C30 one-dirty timing"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-web", "oxide-host-web"]
+required_devices = ["Apple M2 Max WebGPU through native-arm64 Chrome"]
+correctness_gate = "A postroll may be excluded only by its predeclared unmeasured frame ID; all 150 declared measured timestamps must remain present and ordered."
+performance_gate = "No measured timestamp may also be the unique process/drain terminal marker that decides the strict peak gate."
+decision_state = "rejected"
+decision = "Rejected ending the process immediately after measured frame 150 because the sole one-dirty GPU peak failure again occurred at global sample 149 despite ten completion-bounded blocks."
+proof = [
+   "The 1080p one-dirty GPU population improved median 3.464%, p95 3.478%, and p99 4.211% with 15/15 pair wins, but failed only peak when candidate sample 149 reached 0.174399 ms versus a 0.140282 ms parent peak.",
+   "Every timestamp above 0.125 ms on both sides in that population occurred at global sample 149, confirming the remaining tail was tied to process termination rather than the repeated 15-frame blocks.",
+]
+cleanup = [
+   "Appended one same-work, explicitly unmeasured postroll frame after the last block and remove only its exact frame ID from collected timestamps.",
+   "Kept all 150 measured CPU/GPU frames and preserved the rejected no-postroll population under the ignored C30 raw evidence directory.",
+]
+
+[[experiments]]
+id = "c30-single-long-burst-terminal-tail-rejected"
+introduced_commit = "rejected during C30 symmetric-warmup timing"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-web", "oxide-host-web"]
+required_devices = ["Apple M2 Max WebGPU through native-arm64 Chrome"]
+correctness_gate = "Collection topology must preserve every measured frame and timestamp, the exact scene/cache state, symmetric warmup, and fresh-process identity."
+performance_gate = "GPU p95, p99, and peak must be representative of repeated bounded submission blocks rather than a unique terminal frame before one long final drain."
+decision_state = "rejected"
+decision = "Rejected collecting all 150 timestamps as one long block because every material outlier on both sides occurred at terminal sample 149 and made the strict peak decision depend on one end-of-run drain boundary."
+proof = [
+   "With symmetric warmup, clean CPU improved 6.388% with paired 95% CI 4.794%..7.595% and 15/15 wins; GPU paired median improved 0.755%, p95 improved 1.420%, and p99 changed only 0.083%.",
+   "The GPU decision failed only because one candidate terminal sample reached 0.230416 ms versus a 0.145526 ms parent peak; every sample above 0.12 ms on both sides was index 149.",
+   "A same-binary 10×15 direct probe retained 150 timestamps and observed parent/candidate peaks of 0.127986/0.095365 ms without filtering or changing measured work.",
+]
+cleanup = [
+   "Changed the workflow to ten 15-frame measured blocks with a completion drain between blocks while preserving 150 timestamps per fresh process and 2,250 per side.",
+   "Preserved the rejected 1×150 raw population and decision reports; no tail threshold, sample, or outlier was removed.",
+]
+
+[[experiments]]
+id = "c30-asymmetric-populate-clock-warmup-rejected"
+introduced_commit = "rejected during C30 retained-plan timing"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-web", "oxide-host-web"]
+required_devices = ["Apple M2 Max WebGPU through native-arm64 Chrome"]
+correctness_gate = "Warmup changes must remain outside measured samples and preserve exact parent/candidate pixels and workload counters."
+performance_gate = "Parent and candidate must enter measured GPU samples after identical fixed work rather than allowing different population clear volume to condition GPU clocks."
+decision_state = "rejected"
+decision = "Rejected using only each side's unequal layer-population work plus four trivial clean frames as GPU warmup because the parent cleared 180x more target bytes and consistently entered a faster clock state."
+proof = [
+   "After immutable-plan reuse, 1080p clean CPU improved 6.121% with paired 95% CI 4.403%..7.533% and 15/15 wins, proving the implementation CPU regression was removed.",
+   "The same run's candidate GPU pair medians alternated between about 0.056 and 0.073 ms while the parent stayed near 0.056 ms after its 829,440,000-byte population clear; the apparent paired GPU regression was 9.807% with 5/15 wins.",
+]
+cleanup = [
+   "Added the same fixed twelve-frame, 64-draw, 256-point-square GPU clock warmup to both instrumented binaries after population and before recorded layer warmups.",
+   "Preserved the asymmetric-warmup raw input, reports, pair order, and all 2,250 timestamps per side under the ignored C30 evidence directory.",
+]
+
+[[experiments]]
+id = "c30-two-pass-layer-key-recomputation-rejected"
+introduced_commit = "rejected during C30 exact-tree timing"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-web", "oxide-host-web"]
+required_devices = ["Apple M2 Max WebGPU through native-arm64 Chrome"]
+correctness_gate = "Any replacement must retain the zero-difference physical-grid, nested-transform, clip, backdrop, resource, and lifecycle contract."
+performance_gate = "Clean local-layer replay must materially improve or preserve parent CPU/GPU distributions rather than spending more CPU to maintain smaller textures."
+decision_state = "rejected"
+decision = "Rejected recomputing every prepared layer frame and generation key in both validation and encoding passes, with separate key and seen hash tables, on every clean snapshot."
+proof = [
+   "The exact-tree 1080p clean CPU population regressed 153.157% with paired 95% CI -158.261%..-147.466%, 0/15 pair wins, p50 0.182533 ms versus 0.072400 ms, and every strict tail gate failed.",
+   "The same 2,250 direct GPU timestamps per side regressed 25.775% at the paired median, so the pixel-correct and memory-efficient design was not eligible for acceptance.",
+]
+cleanup = [
+   "Removed repeated layer-frame/key computation and the second seen-ID hash pass; a validated immutable snapshot now retains one layer plan and reuses it by pointer identity.",
+   "Kept the rejected report and all raw pair evidence under the C30 ignored raw directory; no tolerance or acceptance threshold changed.",
+]
+
+[[experiments]]
+id = "c30-webgpu-local-layer-textures"
+introduced_commit = "C30 staged tree recorded in commit proof"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-web", "oxide-host-web"]
+required_devices = ["Apple M2 Max WebGPU through native-arm64 Chrome"]
+correctness_gate = "Generation/resource invalidation, clean and one-dirty reuse, physical-grid phase, compatible texture reuse, scale/resize/device/purge handling, partly offscreen clips, nested layers, backdrop sampling, unsupported fallback, and exact parent pixels must remain deterministic."
+performance_gate = "At least fifteen balanced fresh-Chrome parent/candidate pairs and 2,000 direct GPU timestamps per side must reduce 100-card layer residency/clear/shaded pixels by at least 90% at physical 1080p and 4K DPR2, materially improve or preserve CPU/GPU distributions, retain 100 clean hits with zero body traversal, and retain exactly one dirty refresh without recurring texture creation."
+decision_state = "accepted"
+decision = "Cache retained WebGPU layers in physical-grid-snapped local textures with generation-complete keys, persistent local viewports, transform-inheriting nested targets, local scissors/effect copies, normalized composites, and immediate clean body skip."
+proof = [
+   "Exact staged-tree reports under benchmarks/experiments/c30-webgpu-local-layers/raw retain parent/candidate tree, wasm, instrumentation, order, raw CPU/GPU sample, health, counter, pixel, and decision identities for both sizes and cache states.",
+   "The 100-card contract requires 4,608,000 local texture bytes at both sizes versus 829,440,000 parent bytes at 1080p and 3,317,760,000 at 4K; clean frames require 100 hits and zero traversal, while one-dirty frames require 99 hits, one miss, five traversed commands, one local pass, and zero texture creates.",
+   "The fractional partly-offscreen nested/clip/backdrop capture matches the unchanged parent exactly with pixel-diff=0, max-error=0, MSE=0, and identical capture SHA-256.",
+]
+cleanup = [
+   "Kept aggregate browser baseline promotion deferred to C62 and left cache byte budgets, pooling, LRU eviction, shrink policy, absent-layer eviction, and purge-reason telemetry to C31.",
+   "Preserved exact fallback for unsupported transforms, dynamic instance clips, unbounded effects, conflicting IDs, missing resources, and device-limit-exceeding targets.",
+]
+
+[[experiments]]
+id = "c30-unsnapped-local-layer-coordinates-rejected"
+introduced_commit = "rejected during C30 pixel review"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-web", "oxide-host-web"]
+required_devices = ["Apple M2 Max WebGPU through native-arm64 Chrome"]
+correctness_gate = "Fractional partly-offscreen nested/clip/backdrop output must exactly match the unchanged parent before any timing population is eligible."
+performance_gate = "A local-texture design is eligible only after exact pixels, complete nested transform ownership, and stale-pixel safety pass."
+decision_state = "rejected"
+decision = "Rejected allocating only ceil(width×DPR) with an unsnapped local origin and identity nested viewport because it shifted raster phase, mis-sized a negative-origin scissor, and failed to inherit the outer transform."
+proof = [
+   "The first exact candidate capture differed from the unchanged parent in 64,410 pixels with maximum channel error 245 and MSE 388.128.",
+   "Preserving the historical negative-origin clip extent alone reduced but did not eliminate the mismatch; snapping min/max bounds to the canvas pixel grid and inheriting nested transform/scissor state produced zero differing pixels.",
+]
+cleanup = [
+   "Removed the unsnapped target-origin path and identity-only nested viewport behavior before timing.",
+   "No tolerance increase, golden update, or reduced edge workload was used to hide the mismatch.",
+]
+
+[[experiments]]
 id = "c29-metal-prepared-layers"
 introduced_commit = "C29 staged tree recorded in commit proof"
 introduced_date = "2026-07-13"

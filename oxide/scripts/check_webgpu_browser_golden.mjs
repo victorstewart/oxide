@@ -199,8 +199,8 @@ function parseArgs(argv)
       }
    }
 
-   if (args.target !== "app" && args.target !== "glyph" && args.target !== "id-mask" && args.target !== "scene3d" && args.target !== "prepared") {
-      throw new Error("--target must be app, glyph, id-mask, scene3d, or prepared");
+   if (args.target !== "app" && args.target !== "glyph" && args.target !== "id-mask" && args.target !== "scene3d" && args.target !== "prepared" && args.target !== "local-layers") {
+      throw new Error("--target must be app, glyph, id-mask, scene3d, prepared, or local-layers");
    }
    if (!args.golden) {
       args.golden = defaultGoldenForTarget(args.target);
@@ -941,8 +941,39 @@ function assertRendered(image, target)
       assertGlyphRendered(image);
    } else if (target === "prepared") {
       assertPreparedRendered(image);
+   } else if (target === "local-layers") {
+      assertLocalLayersRendered(image);
    } else {
       assertAppRendered(image);
+   }
+}
+
+function assertLocalLayersRendered(image)
+{
+   let dark = 0;
+   let colorful = 0;
+   let bright = 0;
+   for (let i = 0; i < image.rgba.length; i += 4)
+   {
+      let r = image.rgba[i];
+      let g = image.rgba[i + 1];
+      let b = image.rgba[i + 2];
+      if (r < 16 && g < 16 && b < 16)
+      {
+         dark += 1;
+      }
+      if (Math.max(r, g, b) - Math.min(r, g, b) > 72)
+      {
+         colorful += 1;
+      }
+      if (r > 210 && g > 210 && b > 210)
+      {
+         bright += 1;
+      }
+   }
+   if (dark < 100000 || colorful < 10000 || bright < 1000)
+   {
+      throw new Error(`capture does not look like the local-layer scene: dark=${dark} colorful=${colorful} bright=${bright}`);
    }
 }
 

@@ -17,6 +17,7 @@ Consumes renderer-api values and lowers generic 2D geometry through `packed_geom
 - `BrowserRenderer::encode_snapshot(&mut self, snapshot: &RenderSnapshot) -> Result<(), RenderSnapshotError>` prepares or replays immutable retained chunks and falls back to exact flattening when an instance or command is not supported by the prepared path.
 - `BrowserRenderer::prepared_cache_resident_bytes(&self) -> u64`, `set_prepared_cache_budget_bytes`, and `purge_prepared_chunks` expose logical residency plus explicit cache policy and invalidation.
 - `BrowserRenderer::set_prepared_bundle_min_draws_for_benchmark` and `advance_prepared_device_generation_for_benchmark` isolate C25 threshold and device-lifecycle guardrails; production keeps the measured threshold and renderer-owned device lifetime.
+- Retained snapshot layer instances use the internal `PreparedLayerKey` path: clean generation/resource matches composite a persistent local-sized texture without entering the chunk body, while dirty or missing instances refresh that texture once.
 - `encode_solid`, `gpu_vertex`, and the three `append_*gpu_vertices` helpers implement this boundary.
 
 ## Logic narrative
@@ -27,7 +28,9 @@ The surface is constructed at the canvas's already-selected physical backing siz
 
 Explicit benchmark capture lazily allocates a 4,096-entry completed-sample FIFO, samples every frame, clears stale completed samples, and drains results into host-owned reusable storage. Normal production timestamp sampling does not allocate or populate that history. When an active capture reaches the bound, the oldest completed sample is discarded; pending GPU readbacks retain their existing completion-safe slot ownership.
 
-Immutable zero-origin snapshot chunks are keyed by chunk id, structural/geometry/resource revisions, device generation, surface format, and bundle policy. A miss lowers only that chunk into persistent vertex/index buffers and an ordered prepared plan; capacity-compatible buffers are queue-updated in place. Full-surface static ranges record bundles, while clipped or otherwise bundle-incompatible ranges remain ordered direct segments over the same buffers. A wholly compatible snapshot additionally retains one aggregate bundle keyed by each chunk's buffer/plan generation, so clean frames issue one replay and one execute call without command traversal, geometry packing, or upload. Effects, layers, camera input, per-instance properties, nonzero origins, missing resources, and zero cache budget use the checked flat path.
+Immutable zero-origin snapshot chunks are keyed by chunk id, structural/geometry/resource revisions, device generation, surface format, and bundle policy. A miss lowers only that chunk into persistent vertex/index buffers and an ordered prepared plan; capacity-compatible buffers are queue-updated in place. Full-surface static ranges record bundles, while clipped or otherwise bundle-incompatible ranges remain ordered direct segments over the same buffers. A wholly compatible snapshot additionally retains one aggregate bundle keyed by each chunk's buffer/plan generation, so clean frames issue one replay and one execute call without command traversal, geometry packing, or upload. Effects, camera input, unsupported mixed snapshots, missing resources, and zero cache budget use the checked flat path.
+
+Retained snapshot layers add stable layer identity, full chunk revisions, content/nested/dynamic generations, bounds, transform scale, opacity, target scale, format/device generation, effect outset, physical pixel phase, and precise resource dependencies to that contract. A validated immutable snapshot retains its resolved layer frames and chunk references, so subsequent frames with the same snapshot identity do not recompute transforms, bounds, phases, duplicate IDs, or keys. Axis-aligned targets snap transformed minimum bounds down and maximum bounds up on the canvas physical-pixel grid, then allocate only that span, bounded by the device limit. The snapping preserves the parent raster sample phase at fractional origins while adding at most one edge pixel per axis. Each target owns a persistent viewport uniform whose origin maps existing coordinates into local pixels; the final composite uses normalized `[0, 1]` UVs. Nested targets inherit their ancestor matrix and translation but not opacity, derive an inverse composite rectangle, and therefore apply the transform and opacity exactly once. Local scissor conversion conservatively transforms internal clips before applying the established negative-origin extent rule, and effect copies move only the visible local target region into the sampling texture. A clean key/resource hit records the skipped body length immediately and emits only its composite. Dirty or missing content clears and redraws once; compatible dimensions reuse the texture and uniform binding. Canvas-size changes preserve compatible local layers, while scale, resource, purge, or device-generation changes invalidate them; plan ownership is also cleared when a lifecycle event can change its key space.
 
 ## Preconditions and postconditions
 
@@ -38,6 +41,8 @@ Indexed paths validate or rebase indices first. Generic shader locations remain 
 Invalid spans or indices clear scratch output and emit no draw. Packed zero exactly inherits the uniform.
 
 An absent or released image dependency rejects preparation before encoding. Resize, scale change, device-generation change, explicit purge, budget eviction, and resource release invalidate affected prepared ownership. A positive budget protects the current plan while evicting least-recently-used unprotected chunks; if that plan cannot fit, the frame falls back instead of replaying a partial snapshot.
+
+Non-finite, empty, rotated/sheared, dynamically clipped, unbounded-effect, or device-limit-exceeding retained layers use exact flattening/inline rendering. Oversized layers are never silently downscaled and never issue an invalid WebGPU texture request.
 
 ## Concurrency and memory behavior
 
@@ -59,13 +64,15 @@ C25 measures 256 chunks and 7,680 mixed solid/image/A8/SDF draws. The retained e
 
 C26 measures 300 retained text/image instances with alternating transform and opacity. After all ring slices warm, the candidate records 300 cache hits, zero command traversal/copy and geometry upload, 300 changed property records, and 14,400 logical property bytes per alternating frame. Full affine snapshots use the same prepared path; dynamic clip metadata resolves against its transform slot before scissor intersection.
 
+C30 measures 100 retained 72×40-point cards at physical 1080p and 4K with DPR2. The expected local residency is 4,608,000 texture bytes at either canvas size, rather than 829,440,000 bytes at 1080p or 3,317,760,000 bytes at 4K for one full-canvas texture per card. Clean frames require 100 hits and zero body traversal; one-dirty frames require 99 hits, one miss, one local clear/draw pass, and no recurring texture creation. The fractional-edge capture combines transformed outer bounds, nested layers, clips, a backdrop effect, and a clean replay for exact parent/candidate pixel proof.
+
 ## Feature flags and cfgs
 
 Compiled only for `wasm32` with the existing WebGPU and WGSL features.
 
 ## Testing and benchmarks
 
-Native contract tests exercise decoding/source paths and freeze prepared-cache invalidation, aggregate/hybrid bundle ownership, dynamic property-ring ownership, flat boundaries, and counters; wasm compilation verifies the implementation. The C25 adapter retains static bundle proof, while `scripts/run_webgpu_dynamic_c26.mjs` supplies C26 backend CPU/GPU/property and real-RAF samples.
+Native contract tests exercise decoding/source paths and freeze prepared-cache invalidation, aggregate/hybrid bundle ownership, dynamic property-ring ownership, generation/resource-complete local layers, device-bounded target dimensions, flat boundaries, and counters; wasm compilation verifies the implementation. The C25 adapter retains static bundle proof, `scripts/run_webgpu_dynamic_c26.mjs` supplies C26 backend CPU/GPU/property and real-RAF samples, and `scripts/run_webgpu_local_layers_c30.mjs` preserves every C30 CPU/GPU sample plus local/full-canvas residency and pass counters.
 
 ## Examples
 
@@ -73,6 +80,7 @@ Packed `0xFFFF_0000` uploads as opaque blue; packed zero uploads the draw unifor
 
 ## Changelog
 
+- 2026-07-14: added generation-correct retained WebGPU layers backed by physical-grid-snapped local textures, transform-inheriting nested viewports/scissors, local effect copies, exact resource invalidation, compatible resize reuse, and the C30 100-card proof path.
 - 2026-07-13: added full-affine/opacity prepared instances, transform-linked dynamic clips, and a changed-record WebGPU property ring for C26.
 - 2026-07-13: added revision/device-aware persistent prepared chunks, ordered bundle/direct segments, an aggregate static snapshot bundle, logical-byte LRU eviction, lifecycle invalidation, and C25 counters.
 - 2026-07-13: made scene, scratch, and depth targets feature-driven; initialized the viewport only at construction/resize; and added selective app-controlled backdrop/Scene3D prewarm.
