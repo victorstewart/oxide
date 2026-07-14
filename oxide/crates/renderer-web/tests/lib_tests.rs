@@ -72,6 +72,9 @@ fn renderer_accounting_schema_defaults_to_explicit_unavailable_allocated_bytes()
    assert_eq!(stats.rrect_instances, 0);
    assert_eq!(stats.rrect_triangles, 0);
    assert_eq!(stats.rrect_instance_bytes, 0);
+   assert_eq!(stats.image_instances, 0);
+   assert_eq!(stats.image_triangles, 0);
+   assert_eq!(stats.image_instance_bytes, 0);
 
    let source = include_str!("../src/lib.rs");
    let webgpu = include_str!("../src/wasm/webgpu.rs");
@@ -539,6 +542,13 @@ fn wasm_webgpu_draw_encoding_reuses_scratch_storage() {
         .split("fn encode_image")
         .next()
         .expect("encode_solid end");
+    let encode_image = source
+        .split("fn encode_image(")
+        .nth(1)
+        .expect("encode_image")
+        .split("fn encode_glyph_run")
+        .next()
+        .expect("encode_image end");
     let encode_image_mesh = source
         .split("fn encode_image_mesh")
         .nth(1)
@@ -581,8 +591,8 @@ fn wasm_webgpu_draw_encoding_reuses_scratch_storage() {
     }
     assert!(source.contains("const RRECT_INSTANCE_BYTES: usize = 36;"));
     assert!(source.contains("step_mode: wgpu::VertexStepMode::Instance"));
-    assert!(source.contains("entry_point: Some(\"vs_rrect\")"));
-    assert!(source.contains("entry_point: Some(\"fs_rrect\")"));
+    assert!(source.contains("\"vs_rrect\","));
+    assert!(source.contains("\"fs_rrect\","));
     assert!(source.contains("pass.draw(0..6,"));
     assert!(source.contains("vertex_buffer: Option<wgpu::Buffer>"));
     assert!(source.contains("rrect_instance_buffer: Option<wgpu::Buffer>"));
@@ -592,6 +602,15 @@ fn wasm_webgpu_draw_encoding_reuses_scratch_storage() {
     assert!(!encode_rrect.contains("self.push_scratch_draw("));
     assert!(!source.contains("fn rounded_rect_mesh_into("));
     assert!(!source.contains("fn append_arc("));
+    assert!(source.contains("const IMAGE_INSTANCE_BYTES: usize = 36;"));
+    assert!(source.contains("\"vs_image_instance\","));
+    assert!(source.contains("image_instance_buffer: Option<wgpu::Buffer>"));
+    assert!(source.contains("image_unit_vertex_buffer: wgpu::Buffer"));
+    assert!(source.contains("image_unit_index_buffer: wgpu::Buffer"));
+    assert!(source.contains("encoder.set_vertex_buffer(1, image_instance_buffer?.slice(..));"));
+    assert!(source.contains("encoder.draw_indexed("));
+    assert!(encode_image.contains("ImageInstance::new(dst, [u0, v0, u1, v1], alpha)"));
+    assert!(encode_image.contains("self.push_image_instance(handle.0, image.kind, instance);"));
 }
 
 #[test]
@@ -689,7 +708,7 @@ fn wasm_webgpu_backend_packet_vocabulary_is_frozen() {
 
     assert_eq!(
         draw_kind,
-        "enumDrawKind{Solid,RRect{first_instance:u32,instance_count:u32},Rgba{image:u32},A8{image:u32},Sdf{image:u32},Layer{id:u32},Backdrop{rect:api::RectF,sigma:f32},}"
+        "enumDrawKind{Solid,RRect{first_instance:u32,instance_count:u32},Image{image:u32,kind:GpuImageKind,first_instance:u32,instance_count:u32},Rgba{image:u32},A8{image:u32},Sdf{image:u32},Layer{id:u32},Backdrop{rect:api::RectF,sigma:f32},}"
     );
     assert_eq!(
         gpu_draw,
@@ -698,6 +717,7 @@ fn wasm_webgpu_backend_packet_vocabulary_is_frozen() {
     for pattern in [
         "(DrawKind::Solid,DrawKind::Solid)=>true",
         "(DrawKind::RRect{..},DrawKind::RRect{..})=>false",
+        "(DrawKind::Image{..},DrawKind::Image{..})=>false",
         "(DrawKind::Rgba{image:a},DrawKind::Rgba{image:b})=>a==b",
         "(DrawKind::A8{image:a},DrawKind::A8{image:b})=>a==b",
         "(DrawKind::Sdf{image:a},DrawKind::Sdf{image:b})=>a==b",

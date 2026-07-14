@@ -41,6 +41,8 @@ The first test checks RGBA buffer shape. The second test samples different tile 
 
 C37 source coverage freezes the dedicated RRect count/DPR/pathological matrix, analytic instance/triangle/byte metrics, isolated page mode, and `rrect` capture route. Real-browser proof remains in the experiment artifacts rather than becoming a new default committed browser row.
 
+C38 source coverage freezes the dedicated 100/1,000 same/mixed-texture image matrix, instance/triangle/byte metrics, isolated page mode, and `image` capture route. The runtime artifacts additionally prove exact DPR and prepared-transform pixels.
+
 ## Preconditions and postconditions; invariants maintained; unsafe invariants if any
 
 The tests require no wasm runtime. Generated images are always RGBA8 and fully opaque.
@@ -78,6 +80,7 @@ pub fn texture() -> Vec<u8>
 
 ## Changelog
 
+- 2026-07-14: added static coverage for the C38 image matrix, compact-instance counters, and dedicated capture target.
 - 2026-07-14: added static coverage for the C37 count/DPR/pathological RRect matrix, analytic counters, and dedicated capture target.
 - 2026-07-14: froze the C35 seven-dimension exact browser field-matrix export and script route.
 - 2026-07-14: added C35 representation-aware cache-budget and packed-field memory-proof contracts.

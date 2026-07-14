@@ -97,6 +97,15 @@ fn host_exposes_opt_in_webgpu_architecture_primitive_matrix() {
     assert!(page.contains("captureTarget === \"rrect\""));
     assert!(include_str!("../../../../scripts/check_webgpu_browser_golden.mjs")
         .contains("--rrect-architecture-only"));
+    assert!(source.contains("pub async fn bench_webgpu_image_architecture"));
+    assert!(method.contains("image_mixed_1000"));
+    assert!(page.contains("params.get(\"image_architecture_only\") === \"1\""));
+    assert!(page.contains("bench_webgpu_image_architecture"));
+    assert!(source.contains("pub fn render_webgpu_image_snapshot"));
+    assert!(source.contains("fn image_capture_frame"));
+    assert!(page.contains("captureTarget === \"image\""));
+    assert!(include_str!("../../../../scripts/check_webgpu_browser_golden.mjs")
+        .contains("--image-architecture-only"));
 }
 
 #[test]
@@ -721,6 +730,9 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("rrect_instances={}"));
     assert!(source.contains("rrect_triangles={}"));
     assert!(source.contains("rrect_instance_bytes={}"));
+    assert!(source.contains("image_instances={}"));
+    assert!(source.contains("image_triangles={}"));
+    assert!(source.contains("image_instance_bytes={}"));
     assert!(source.contains("image_draws={}"));
     assert!(source.contains("image_mesh_draws={}"));
     assert!(source.contains("nine_slice_draws={}"));
@@ -1119,6 +1131,9 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("rrect_instances: numberMetric(metrics, \"rrect_instances\")"));
     assert!(script.contains("rrect_triangles: numberMetric(metrics, \"rrect_triangles\")"));
     assert!(script.contains("rrect_instance_bytes: numberMetric(metrics, \"rrect_instance_bytes\")"));
+    assert!(script.contains("image_instances: numberMetric(metrics, \"image_instances\")"));
+    assert!(script.contains("image_triangles: numberMetric(metrics, \"image_triangles\")"));
+    assert!(script.contains("image_instance_bytes: numberMetric(metrics, \"image_instance_bytes\")"));
     assert!(script.contains("draw_items: numberMetric(metrics, \"draw_items\")"));
     assert!(
         script.contains("draw_items_coalesced: numberMetric(metrics, \"draw_items_coalesced\")")

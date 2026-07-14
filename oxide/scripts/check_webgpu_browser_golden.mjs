@@ -86,6 +86,7 @@ function parseArgs(argv)
       mixedFrames: 24,
       architectureMatrix: false,
       rrectArchitectureOnly: false,
+      imageArchitectureOnly: false,
       idMaskCacheC33: false,
       idMaskCacheOnly: false,
       idMaskCacheRafOnly: false,
@@ -202,6 +203,8 @@ function parseArgs(argv)
          args.architectureMatrix = true;
       } else if (arg === "--rrect-architecture-only") {
          args.rrectArchitectureOnly = true;
+      } else if (arg === "--image-architecture-only") {
+         args.imageArchitectureOnly = true;
       } else if (arg === "--id-mask-cache-c33") {
          args.idMaskCacheC33 = true;
       } else if (arg === "--id-mask-cache-only") {
@@ -217,8 +220,8 @@ function parseArgs(argv)
       }
    }
 
-   if (args.target !== "app" && args.target !== "glyph" && args.target !== "id-mask" && args.target !== "scene3d" && args.target !== "prepared" && args.target !== "local-layers" && args.target !== "rrect") {
-      throw new Error("--target must be app, glyph, id-mask, scene3d, prepared, local-layers, or rrect");
+   if (args.target !== "app" && args.target !== "glyph" && args.target !== "id-mask" && args.target !== "scene3d" && args.target !== "prepared" && args.target !== "local-layers" && args.target !== "rrect" && args.target !== "image") {
+      throw new Error("--target must be app, glyph, id-mask, scene3d, prepared, local-layers, rrect, or image");
    }
    if (!args.golden) {
       args.golden = defaultGoldenForTarget(args.target);
@@ -564,6 +567,9 @@ function browserUrl(args, baseUrl, reportEndpoint, startupOnly = false, canvasDi
    }
    if (args.rrectArchitectureOnly) {
       url.searchParams.set("rrect_architecture_only", "1");
+   }
+   if (args.imageArchitectureOnly) {
+      url.searchParams.set("image_architecture_only", "1");
    }
    if (args.idMaskCacheC33) {
       url.searchParams.set("id_mask_cache_c33", "1");
@@ -976,6 +982,8 @@ function assertRendered(image, target)
       assertLocalLayersRendered(image);
    } else if (target === "rrect") {
       assertRRectRendered(image);
+   } else if (target === "image") {
+      assertImageRendered(image);
    } else {
       assertAppRendered(image);
    }
@@ -998,6 +1006,26 @@ function assertRRectRendered(image)
    }
    if (blue < 12000 || dark < 20000) {
       throw new Error(`capture does not look like the RRect scene: blue=${blue} dark=${dark}`);
+   }
+}
+
+function assertImageRendered(image)
+{
+   let colorful = 0;
+   let dark = 0;
+   for (let i = 0; i < image.rgba.length; i += 4) {
+      let r = image.rgba[i];
+      let g = image.rgba[i + 1];
+      let b = image.rgba[i + 2];
+      if (Math.max(r, g, b) - Math.min(r, g, b) > 48) {
+         colorful += 1;
+      }
+      if (r < 16 && g < 16 && b < 16) {
+         dark += 1;
+      }
+   }
+   if (colorful < 20000 || dark < 15000) {
+      throw new Error(`capture does not look like the Image scene: colorful=${colorful} dark=${dark}`);
    }
 }
 
@@ -1409,6 +1437,9 @@ function canvasIndexedQuadCase(metrics)
       rrect_instances: numberMetric(metrics, "rrect_instances"),
       rrect_triangles: numberMetric(metrics, "rrect_triangles"),
       rrect_instance_bytes: numberMetric(metrics, "rrect_instance_bytes"),
+      image_instances: numberMetric(metrics, "image_instances"),
+      image_triangles: numberMetric(metrics, "image_triangles"),
+      image_instance_bytes: numberMetric(metrics, "image_instance_bytes"),
       image_draws: numberMetric(metrics, "image_draws"),
       image_mesh_draws: numberMetric(metrics, "image_mesh_draws"),
       nine_slice_draws: numberMetric(metrics, "nine_slice_draws"),
@@ -1612,6 +1643,9 @@ function cpuSubmitCase(metrics)
       rrect_instances: numberMetric(metrics, "rrect_instances"),
       rrect_triangles: numberMetric(metrics, "rrect_triangles"),
       rrect_instance_bytes: numberMetric(metrics, "rrect_instance_bytes"),
+      image_instances: numberMetric(metrics, "image_instances"),
+      image_triangles: numberMetric(metrics, "image_triangles"),
+      image_instance_bytes: numberMetric(metrics, "image_instance_bytes"),
       image_draws: numberMetric(metrics, "image_draws"),
       image_mesh_draws: numberMetric(metrics, "image_mesh_draws"),
       nine_slice_draws: numberMetric(metrics, "nine_slice_draws"),
@@ -2033,6 +2067,9 @@ function idMaskCase(metrics, id, variant, prefix)
       rrect_instances: numberMetric(metrics, `${prefix}_rrect_instances`),
       rrect_triangles: numberMetric(metrics, `${prefix}_rrect_triangles`),
       rrect_instance_bytes: numberMetric(metrics, `${prefix}_rrect_instance_bytes`),
+      image_instances: numberMetric(metrics, `${prefix}_image_instances`),
+      image_triangles: numberMetric(metrics, `${prefix}_image_triangles`),
+      image_instance_bytes: numberMetric(metrics, `${prefix}_image_instance_bytes`),
       image_draws: numberMetric(metrics, `${prefix}_image_draws`),
       image_mesh_draws: numberMetric(metrics, `${prefix}_image_mesh_draws`),
       nine_slice_draws: numberMetric(metrics, `${prefix}_nine_slice_draws`),
@@ -2115,6 +2152,9 @@ function prefixedBackendCase(metrics, id, variant, prefix, extra)
       rrect_instances: numberMetric(metrics, `${prefix}_rrect_instances`),
       rrect_triangles: numberMetric(metrics, `${prefix}_rrect_triangles`),
       rrect_instance_bytes: numberMetric(metrics, `${prefix}_rrect_instance_bytes`),
+      image_instances: numberMetric(metrics, `${prefix}_image_instances`),
+      image_triangles: numberMetric(metrics, `${prefix}_image_triangles`),
+      image_instance_bytes: numberMetric(metrics, `${prefix}_image_instance_bytes`),
       image_draws: numberMetric(metrics, `${prefix}_image_draws`),
       image_mesh_draws: numberMetric(metrics, `${prefix}_image_mesh_draws`),
       nine_slice_draws: numberMetric(metrics, `${prefix}_nine_slice_draws`),
