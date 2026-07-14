@@ -5,6 +5,9 @@ using namespace metal;
 struct UIVSOut { float4 position [[position]]; float2 pos_px; float2 rect_origin [[flat]]; uint iid [[flat]]; };
 
 struct VSRectParams { float4 rect; };
+struct RRectParams { float4 rect; float4 radii; float4 color; };
+struct NineSliceParams { float4 rect; float2 texSize; float4 sliceLTRB; float alpha; };
+struct ImageParams { float4 rect; float4 srcRect; float2 texSize; float alpha; uint texIndex; };
 struct UIVPSize { float2 size; };
 struct PreparedInstance { float4 matrix; float2 translation; float2 viewport; float4 opacityAndPadding; };
 
@@ -32,17 +35,13 @@ inline float2 preparedVector(float2 local, constant PreparedInstance& instance)
     );
 }
 
-// Instanced rect vertex: per-instance rect in dp and global viewport dp size
-vertex UIVSOut v_inst_rect(uint vid [[vertex_id]], uint iid [[instance_id]],
-                         const device VSRectParams* inst [[buffer(0)]],
-                         constant UIVPSize& vp [[buffer(1)]])
+inline UIVSOut instancedRectOutput(uint vid, uint iid, float4 rect, constant UIVPSize& vp)
 {
     float2 offs[6] = {
         float2(0.0, 0.0), float2(1.0, 0.0), float2(0.0, 1.0),
         float2(0.0, 1.0), float2(1.0, 0.0), float2(1.0, 1.0)
     };
-    VSRectParams p = inst[iid];
-    float2 dp = p.rect.xy + offs[vid] * p.rect.zw;
+    float2 dp = rect.xy + offs[vid] * rect.zw;
     float2 clip;
     clip.x = (dp.x / max(vp.size.x, 1e-5)) * 2.0 - 1.0;
     // App-space dp uses top-left origin with +Y downward.
@@ -51,9 +50,31 @@ vertex UIVSOut v_inst_rect(uint vid [[vertex_id]], uint iid [[instance_id]],
     UIVSOut o;
     o.position = float4(clip, 0.0, 1.0);
     o.pos_px = dp;
-    o.rect_origin = p.rect.xy;
+    o.rect_origin = rect.xy;
     o.iid = iid;
     return o;
+}
+
+// Instanced rect vertex: per-instance rect in dp and global viewport dp size
+vertex UIVSOut v_inst_rect(uint vid [[vertex_id]], uint iid [[instance_id]],
+                         const device VSRectParams* inst [[buffer(0)]],
+                         constant UIVPSize& vp [[buffer(1)]])
+{
+    return instancedRectOutput(vid, iid, inst[iid].rect, vp);
+}
+
+vertex UIVSOut v_inst_rrect(uint vid [[vertex_id]], uint iid [[instance_id]],
+                           const device RRectParams* inst [[buffer(0)]],
+                           constant UIVPSize& vp [[buffer(1)]])
+{
+    return instancedRectOutput(vid, iid, inst[iid].rect, vp);
+}
+
+vertex UIVSOut v_inst_nine_slice(uint vid [[vertex_id]], uint iid [[instance_id]],
+                                const device NineSliceParams* inst [[buffer(0)]],
+                                constant UIVPSize& vp [[buffer(1)]])
+{
+    return instancedRectOutput(vid, iid, inst[iid].rect, vp);
 }
 
 vertex UIVSOut v_prepared_inst_rect(uint vid [[vertex_id]], uint iid [[instance_id]],
@@ -94,9 +115,7 @@ vertex UIVSOut v_fullscreen_ui(uint vid [[vertex_id]]) {
     return o;
 }
 
-struct RRectParams { float4 rect; float4 radii; float4 color; };
-
-fragment float4 f_rrect(UIVSOut in [[stage_in]], constant RRectParams* parr [[buffer(1)]]) {
+fragment float4 f_rrect(UIVSOut in [[stage_in]], const device RRectParams* parr [[buffer(1)]]) {
     RRectParams p = parr[in.iid];
     float2 xy = in.pos_px - in.rect_origin;
     float2 sz = p.rect.zw;
@@ -126,7 +145,7 @@ fragment float4 f_rrect(UIVSOut in [[stage_in]], constant RRectParams* parr [[bu
 }
 
 fragment float4 f_prepared_rrect(UIVSOut in [[stage_in]],
-                                 constant RRectParams* parr [[buffer(1)]],
+                                 const device RRectParams* parr [[buffer(1)]],
                                  constant PreparedInstance& instance [[buffer(3)]])
 {
     RRectParams p = parr[in.iid];
@@ -146,8 +165,6 @@ fragment float4 f_prepared_rrect(UIVSOut in [[stage_in]],
     return float4(p.color.rgb, p.color.a * alpha * instance.opacityAndPadding.x);
 }
 
-struct NineSliceParams { float4 rect; float2 texSize; float4 sliceLTRB; float alpha; };
-
 float mapNine(float x, float L, float R, float Wt, float Ws)
 {
     if (x < L) return x; // left cap
@@ -158,7 +175,7 @@ float mapNine(float x, float L, float R, float Wt, float Ws)
 
 fragment float4 f_nine_slice(UIVSOut in [[stage_in]],
                              texture2d<float> img [[texture(0)]], sampler s [[sampler(0)]],
-                             constant NineSliceParams* parr [[buffer(1)]])
+                             const device NineSliceParams* parr [[buffer(1)]])
 {
     NineSliceParams p = parr[in.iid];
     float2 xy = in.pos_px - in.rect_origin;
@@ -185,7 +202,7 @@ fragment float4 f_layer_composite_aligned(UIVSOut in [[stage_in]],
 
 struct SpinnerParams { float2 center; float radius; float thickness; float phase; float alpha; };
 
-fragment float4 f_spinner(UIVSOut in [[stage_in]], constant SpinnerParams* sarr [[buffer(1)]])
+fragment float4 f_spinner(UIVSOut in [[stage_in]], const device SpinnerParams* sarr [[buffer(1)]])
 {
     SpinnerParams sp = sarr[in.iid];
     float2 d = in.pos_px - sp.center;
@@ -204,12 +221,11 @@ fragment float4 f_spinner(UIVSOut in [[stage_in]], constant SpinnerParams* sarr 
     return float4(236.0 / 255.0, 240.0 / 255.0, 241.0 / 255.0, alpha);
 }
 
-struct ImageParams { float4 rect; float4 srcRect; float2 texSize; float alpha; uint texIndex; };
 struct ImageArgs { array<texture2d<float>, 128> imgs [[id(0)]]; };
 
 fragment float4 f_image(UIVSOut in [[stage_in]],
                         sampler s [[sampler(0)]],
-                        constant ImageParams* parr [[buffer(1)]],
+                        const device ImageParams* parr [[buffer(1)]],
                         constant ImageArgs& A [[buffer(2)]])
 {
     ImageParams p = parr[in.iid];
@@ -225,7 +241,7 @@ fragment float4 f_image(UIVSOut in [[stage_in]],
 
 fragment float4 f_prepared_image(UIVSOut in [[stage_in]],
                                  sampler s [[sampler(0)]],
-                                 constant ImageParams* parr [[buffer(1)]],
+                                 const device ImageParams* parr [[buffer(1)]],
                                  constant ImageArgs& A [[buffer(2)]],
                                  constant PreparedInstance& instance [[buffer(3)]])
 {
@@ -243,7 +259,7 @@ fragment float4 f_prepared_image(UIVSOut in [[stage_in]],
 fragment float4 f_image_single(UIVSOut in [[stage_in]],
                                texture2d<float> img [[texture(0)]],
                                sampler s [[sampler(0)]],
-                               constant ImageParams* parr [[buffer(1)]])
+                               const device ImageParams* parr [[buffer(1)]])
 {
     ImageParams p = parr[in.iid];
     float2 xy = in.pos_px - in.rect_origin;
@@ -259,7 +275,7 @@ fragment float4 f_image_single(UIVSOut in [[stage_in]],
 fragment float4 f_prepared_image_single(UIVSOut in [[stage_in]],
                                         texture2d<float> img [[texture(0)]],
                                         sampler s [[sampler(0)]],
-                                        constant ImageParams* parr [[buffer(1)]],
+                                        const device ImageParams* parr [[buffer(1)]],
                                         constant PreparedInstance& instance [[buffer(3)]])
 {
     ImageParams p = parr[in.iid];

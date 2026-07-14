@@ -1,4 +1,45 @@
 [[experiments]]
+id = "c42-metal-analytic-instance-rings"
+introduced_commit = "C42 staged tree recorded in commit proof"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "All Metal contract tests and 27 pixel-readback snapshots must pass, including cached-layer images/effects; clips, targets, argument tables, alpha order, and effect barriers must remain unchanged."
+performance_gate = "Twenty fixed-seed balanced pairs and at least 2,000 dense-family encode samples per side must pass the generic speedup, confidence, pair-win, p95, p99, and peak gates; every warm 10,000-instance row must use one draw, two ring binds, and zero ring growth."
+decision_state = "accepted"
+decision = "Streamed scalable Metal analytic primitive arrays through completion-protected frame rings and removed the 4 KiB inline-array draw boundaries."
+proof = [
+   "The exact-tree population retained 8,640 dense-family encode samples per side; parent/candidate p50/p95/p99/peak were 0.207896/0.574811/0.706355/1.519250 ms and 0.152750/0.519642/0.678601/1.151291 ms.",
+   "Paired median encode speedup was 24.541% with 95% CI 13.011%..29.727% and 16/20 wins; all six 10,000-instance families improved whole-frame p50/p95/p99 while their synthetic GPU medians rose 4.0%..11.8%.",
+   "Warm candidate rows made one draw and two analytic buffer binds with zero growing inline-array calls and zero ring growth; frame-ring high-water storage rose from 5,505,024 to 10,092,544 bytes to hold the largest completion-protected arrays.",
+]
+cleanup = [
+   "Removed the artificial 4 KiB scalable-array chunk boundary while retaining the fixed eight-byte viewport inline record.",
+   "Seeded and merged cached-layer scratch offsets across the shared physical frame ring so offscreen and visible encoders cannot overwrite one another's live instance data.",
+]
+
+[[experiments]]
+id = "c42-metal-image-shared-aos-rejected"
+introduced_commit = "rejected during C42 snapshot verification"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-metal"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "The cached-layer image pixel-readback snapshot must remain exact while image instances move to frame-ring storage."
+performance_gate = "A shared image AoS may remain only if it preserves every pixel snapshot and improves the same production image workload over the simpler split vertex/fragment slices."
+decision_state = "rejected"
+decision = "Rejected sharing one combined image record between vertex and fragment stages after the cached-layer image snapshot rendered black during the first implementation."
+proof = [
+   "The exact cached-layer image snapshot exposed live frame-ring storage being overwritten across offscreen and main encoders.",
+   "Fixing shared-ring ownership restored the snapshot, but no independent A/B established that the combined image record beat the simpler warmed split slices.",
+]
+cleanup = [
+   "Retained separate image vertex and fragment slices, built in one warmed CPU pass and bulk-copied once per slice.",
+   "Fixed the root shared-ring offset ownership defect and kept the cached-layer regression snapshot in the required Metal suite.",
+]
+
+[[experiments]]
 id = "c35-webgpu-id-mask-packed-fields"
 introduced_commit = "C35 staged tree recorded in commit proof"
 introduced_date = "2026-07-14"

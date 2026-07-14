@@ -11,6 +11,38 @@ fn renderer_loads_build_time_metallib_instead_of_runtime_source() {
 }
 
 #[test]
+fn analytic_instance_families_stream_through_frame_rings()
+{
+   let source = include_str!("../src/lib.rs");
+   assert!(!source.contains("METAL_SET_BYTES_LIMIT"));
+   assert!(!source.contains("max_instances_per_set_bytes"));
+   assert!(source.contains("reserve_analytic_instance_slice::<RRectGpuParams>"));
+   assert!(source.contains("reserve_analytic_instance_slice::<NineSliceGpuParams>"));
+   assert_eq!(
+      source.matches("reserve_analytic_instance_pair::<[f32; 4], ImageGpuParams>").count(),
+      2,
+   );
+   assert!(source.contains("reserve_analytic_instance_pair::<[f32; 4], SpinnerGpuParams>"));
+   assert_eq!(
+      source.matches("reserve_analytic_instance_slice::<[f32; 8]>").count(),
+      2,
+      "backdrop and visual-effect runs must share one frame-ring record per instance",
+   );
+
+   let ui_shader = include_str!("../shaders/ui.metal");
+   for params in ["RRectParams", "NineSliceParams", "SpinnerParams", "ImageParams"]
+   {
+      assert!(
+         ui_shader.contains(&format!("const device {params}*")),
+         "{params} arrays must support ring slices larger than constant address-space limits",
+      );
+   }
+   let effects_shader = include_str!("../shaders/effects.metal");
+   assert!(effects_shader.contains("const device BackdropParams*"));
+   assert!(effects_shader.contains("const device VisualEffectParams*"));
+}
+
+#[test]
 fn build_script_fails_apple_metallib_generation_instead_of_placeholder_fallback() {
     let source = include_str!("../build.rs");
     assert!(

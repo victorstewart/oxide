@@ -77,6 +77,18 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       }
    }
 
+   for family in ["rrect", "image", "nine_slice", "spinner", "backdrop", "visual_effect"]
+   {
+      for count in [1_usize, 64, 1_024, 10_000]
+      {
+         let id = format!("gpu.architecture.analytic_instances.{family}_{count}");
+         if perf_case_allowed(&id)
+         {
+            cases.push(metal_analytic_instance_case(&id, smoke, family, count)?);
+         }
+      }
+   }
+
    for name in [
       "backdrop_separated_48",
       "backdrop_coalescible_12",
@@ -3028,6 +3040,186 @@ fn metal_effect_case(id: &str, smoke: bool, name: &str) -> Result<PerfCaseResult
    Ok(case)
 }
 
+fn analytic_instance_drawlist(
+   family: &str,
+   count: usize,
+   image: api::ImageHandle,
+) -> api::DrawList
+{
+   let mut builder = ui::DrawListBuilder::new();
+   for index in 0..count
+   {
+      let x = (index % 64) as f32 * 18.0;
+      let y = ((index / 64) % 44) as f32 * 18.0;
+      let rect = api::RectF::new(x, y, 16.0, 16.0);
+      match family
+      {
+         "rrect" => builder.rrect(
+            rect,
+            [3.0; 4],
+            api::Color::rgba(0.2, 0.55, 0.95, 0.9),
+         ),
+         "image" => builder.image(
+            image,
+            rect,
+            api::RectF::new(0.0, 0.0, 4.0, 4.0),
+            0.9,
+         ),
+         "nine_slice" => builder.nine_slice(
+            image,
+            rect,
+            api::Insets::new(1.0, 1.0, 1.0, 1.0),
+            0.9,
+         ),
+         "spinner" => builder.spinner([x + 8.0, y + 8.0], 16.0, 0.9),
+         "backdrop" => builder.backdrop(
+            rect,
+            4.0,
+            api::Color::rgba(0.8, 0.9, 1.0, 1.0),
+            0.35,
+         ),
+         "visual_effect" => builder.visual_effect(
+            rect,
+            api::VisualEffect::DarkPopup {
+               blur_intensity: 0.5,
+               tint: api::Color::rgba(0.08, 0.10, 0.14, 0.8),
+            },
+         ),
+         _ => unreachable!("unknown analytic instance family"),
+      }
+   }
+   builder.into_inner()
+}
+
+fn metal_analytic_instance_case(
+   id: &str,
+   smoke: bool,
+   family: &str,
+   count: usize,
+) -> Result<PerfCaseResult>
+{
+   let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
+   renderer.resize(1_200, 800, 1.0).context("resizing Metal renderer")?;
+   let pixels = [
+      255_u8, 96, 48, 255, 48, 192, 255, 255,
+      80, 255, 120, 255, 255, 220, 64, 255,
+      160, 64, 255, 255, 48, 224, 208, 255,
+      255, 128, 192, 255, 220, 240, 255, 255,
+   ];
+   let image = renderer.image_create_rgba8(4, 2, &pixels, 16);
+   let draws = analytic_instance_drawlist(family, count, image);
+   let warmups = std::env::var("OXIDE_ARCHITECTURE_METAL_WARMUPS")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|warmups| *warmups > 0)
+      .unwrap_or(if smoke { 1 } else { 8 });
+   let frames = std::env::var("OXIDE_ARCHITECTURE_METAL_FRAMES")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|frames| *frames > 0)
+      .unwrap_or(if smoke { 2 } else { 12 });
+   let persist_raw = std::env::var_os("OXIDE_ARCHITECTURE_METAL_RAW_SAMPLES").is_some();
+   let mut frame_samples = Vec::with_capacity(frames);
+   let mut encode_samples = Vec::with_capacity(frames);
+   let mut gpu_samples = Vec::with_capacity(frames);
+   let mut warmup_frame_samples = Vec::with_capacity(if persist_raw { warmups } else { 0 });
+   let mut warmup_encode_samples = Vec::with_capacity(if persist_raw { warmups } else { 0 });
+   let mut warmup_gpu_samples = Vec::with_capacity(if persist_raw { warmups } else { 0 });
+   let mut draws_sum = 0.0;
+   let mut instances_sum = 0.0;
+   let mut upload_bytes_sum = 0.0;
+   let mut analytic_bytes_sum = 0.0;
+   let mut analytic_binds_sum = 0.0;
+   let mut analytic_ring_grows_sum = 0.0;
+   let mut resource_grows_sum = 0.0;
+   let mut frame_ring_bytes_peak = 0_u64;
+
+   for frame in 0..(warmups + frames)
+   {
+      let frame_t0 = Instant::now();
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      let frame_id = token.0;
+      renderer.encode_pass(&draws);
+      renderer.submit(token).with_context(|| format!("submitting {id}"))?;
+      let stats = last_metal_stats_after_submit(&renderer, frame_id);
+      let frame_ms = frame_t0.elapsed().as_secs_f64() * 1_000.0;
+      if frame >= warmups
+      {
+         frame_samples.push(frame_ms);
+         encode_samples.push(stats.encode_ms);
+         gpu_samples.push(stats.gpu_ms);
+         draws_sum += stats.draws as f64;
+         instances_sum += stats.instanced as f64;
+         upload_bytes_sum += stats.buffer_upload_bytes as f64;
+         analytic_bytes_sum += stats.analytic_instance_bytes as f64;
+         analytic_binds_sum += stats.analytic_instance_buffer_binds as f64;
+         analytic_ring_grows_sum += stats.analytic_instance_ring_grows as f64;
+         resource_grows_sum += stats.resource_grows as f64;
+         frame_ring_bytes_peak =
+            frame_ring_bytes_peak.max(stats.memory.frame_ring_buffer_bytes);
+      }
+      else if persist_raw
+      {
+         warmup_frame_samples.push(frame_ms);
+         warmup_encode_samples.push(stats.encode_ms);
+         warmup_gpu_samples.push(stats.gpu_ms);
+      }
+   }
+
+   renderer.image_release(image);
+   let summary = summarize(&frame_samples);
+   let (layer, scenario, variant, cache_state, refresh_mode) =
+      perf_case_contract_metadata(id, "architecture");
+   let mut metrics = BTreeMap::new();
+   insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+   insert_distribution_metrics(&mut metrics, "encode_ms", &encode_samples);
+   insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+   insert_frame_pacing_metrics(&mut metrics, &frame_samples);
+   metrics.insert(String::from("instance_count"), count as f64);
+   metrics.insert(String::from("draws_avg"), draws_sum / frames as f64);
+   metrics.insert(String::from("instances_avg"), instances_sum / frames as f64);
+   metrics.insert(String::from("upload_bytes_avg"), upload_bytes_sum / frames as f64);
+   metrics.insert(String::from("analytic_instance_bytes_avg"), analytic_bytes_sum / frames as f64);
+   metrics.insert(String::from("analytic_instance_buffer_binds_avg"), analytic_binds_sum / frames as f64);
+   metrics.insert(String::from("analytic_instance_ring_grows_avg"), analytic_ring_grows_sum / frames as f64);
+   metrics.insert(String::from("resource_grows_avg"), resource_grows_sum / frames as f64);
+   metrics.insert(String::from("frame_ring_buffer_bytes_peak"), frame_ring_bytes_peak as f64);
+   if persist_raw
+   {
+      insert_indexed_samples(&mut metrics, "raw_frame_ms", &frame_samples);
+      insert_indexed_samples(&mut metrics, "raw_encode_ms", &encode_samples);
+      insert_indexed_samples(&mut metrics, "raw_gpu_ms", &gpu_samples);
+      insert_indexed_samples(&mut metrics, "warmup_frame_ms", &warmup_frame_samples);
+      insert_indexed_samples(&mut metrics, "warmup_encode_ms", &warmup_encode_samples);
+      insert_indexed_samples(&mut metrics, "warmup_gpu_ms", &warmup_gpu_samples);
+   }
+
+   Ok(PerfCaseResult {
+      id: String::from(id),
+      family: String::from("architecture"),
+      layer: String::from(layer),
+      scenario: String::from(scenario),
+      variant: String::from(variant),
+      cache_state: String::from(cache_state),
+      refresh_mode: String::from(refresh_mode),
+      unit: String::from("ms/frame"),
+      gated: true,
+      threshold_pct: 0.20,
+      median: summary.median,
+      p95: summary.p95,
+      p99: summary.p99,
+      min: summary.min,
+      max: summary.max,
+      mean: summary.mean,
+      samples: frame_samples.len(),
+      ops_per_sample: 1,
+      notes: vec![format!(
+         "Metal {family} analytic-instance frame-ring workload with {count} ordered instances.",
+      )],
+      metrics,
+   })
+}
+
 fn damage_drawlist(name: &str, phase: usize) -> api::DrawList
 {
    let mut builder = ui::DrawListBuilder::new();
@@ -3850,6 +4042,8 @@ mod tests
          "spinner_512",
          "neon_1024",
          "nine_slice_512",
+         "gpu.architecture.analytic_instances.{family}_{count}",
+         "[1_usize, 64, 1_024, 10_000]",
          "isolated_mutation_10000",
          "retained_surface_dirty_leaf_10000",
          "[96_usize, 1_000, 10_000]",

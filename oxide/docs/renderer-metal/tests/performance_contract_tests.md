@@ -2,7 +2,7 @@
 
 ## Intention and purpose
 
-This test file protects renderer performance contracts that are easy to regress silently: build-time Metal shader compilation, no runtime Metal source compilation, right-sized completion-protected frame resources, frame-ring reuse without CPU/GPU waits, explicit readback-only blocking waits, direct GPU-duration attribution, and single-owner layer-cache rendering.
+This test file protects renderer performance contracts that are easy to regress silently: build-time Metal shader compilation, no runtime Metal source compilation, right-sized completion-protected frame resources, frame-ring reuse without CPU/GPU waits, scalable analytic instance arrays without `set*Bytes` chunking, explicit readback-only blocking waits, direct GPU-duration attribution, and single-owner layer-cache rendering.
 
 ## Relation to the rest of the code
 

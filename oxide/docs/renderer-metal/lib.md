@@ -56,9 +56,9 @@ Mixed 2D/3D frames share the same frame command buffer and color target. `encode
 
 The 2D encoder validates local or rebased `u16` index spans before upload, then writes normalized indices directly into the frame-local Metal index ring for Solid and GlyphRun draws. This avoids allocating a temporary index `Vec` in the shared renderer hot path while preserving the existing local-index and absolute-index contracts.
 
-Consecutive rounded rectangles are collected into retained scratch buffers and encoded through the instanced UI shader path. The batches preserve draw-list ordering while moving per-rectangle control overhead out of the Metal command stream, with payload chunks kept under Metal's `set*Bytes` limit.
+Consecutive compatible rounded rectangles, nine-slices, images, spinners, backdrop composites, and visual effects reserve aligned slices from the selected completion-protected frame ring. Their growing vertex and fragment arrays bind Metal buffers by offset and issue one draw per ordered run, so instance count is no longer constrained by the 4 KiB `set*Bytes` ceiling. Fixed viewport records remain inline. Image parameter construction retains warmed CPU scratch because the measured single-pass build plus one bulk ring copy beats traversing and resolving the draw list twice; every GPU parameter array is still uploaded once.
 
-The same retained-scratch discipline is used for the other small instanced UI batches: nine-slice images, argument-buffer images, spinners, backdrop composites, visual effects, and grouped glyph-run command metadata reuse renderer-owned buffers instead of allocating fresh temporary vectors on each encode.
+The renderer reports analytic instance bytes, buffer binds, and ring growth separately. Fragment shaders consume scalable arrays from the device address space, while clip, target, texture-table, alpha-order, and effect-prepass boundaries still terminate compatibility runs. Grouped glyph-run command metadata continues to reuse renderer-owned scratch independently.
 
 Solid, image-mesh, text, and SDF text pipelines share the same API vertex descriptor because they all consume `oxide_renderer_api::Vertex` layout: position, UV, and normalized color packed at a 20-byte stride.
 
@@ -117,6 +117,7 @@ Cache telemetry reports hits, misses, entries, resident/budget bytes, evictions,
 - 2026-07-13: added persistent byte-budgeted prepared render chunks, dynamic transform/opacity records, resource-generation invalidation, prepared-cache accounting, and memory-pressure purge.
 - 2026-07-13: matched visible-host frame resources to three completion-protected slots, consolidated completion state into one bounded bitset, removed variable-modulo scanning and redundant per-slot command-buffer retention, retained explicit eight-slot offscreen mode, and replaced unconditional multi-megabyte per-slot rings with measured initial capacities plus retained geometric growth.
 - 2026-07-13: added C26 changed-record transform/opacity property uploads through a separate completion-protected ring and exposed logical property counters.
+- 2026-07-14: streamed scalable flat analytic primitive arrays through completion-protected frame rings, removed 4 KiB draw chunking, and added exact instance-byte/bind/growth telemetry.
 - 2026-07-12: made effect targets pass-plan-lazy, removed the unused full-size blur texture, and added production memory-pressure purging.
 - 2026-07-12: replaced independent layer-cache prescan/lowering decisions with one generation-based plan per nesting range, single-owner body rendering, same-size texture reuse, nested invalidation propagation, and explicit ownership counters.
 - 2026-07-12: added snapshot-feature raw color-target readback for exact BGRA8, 4x MSAA resolve, and packed BGRA10_XR correctness goldens.

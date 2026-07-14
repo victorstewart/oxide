@@ -71,7 +71,7 @@ fragment float4 f_bloom_composite(VSOut in [[stage_in]], texture2d<float> src [[
 }
 
 // Dedicated backdrop rect pipeline I/O. Keep names unique to avoid cross-file collisions.
-struct BackdropRectParams { float4 rect; };
+struct BackdropParams { float4 rect; float4 tint; };
 struct BackdropVPSize { float2 size; };
 struct BackdropVSOut {
     float4 position [[position]];
@@ -81,14 +81,14 @@ struct BackdropVSOut {
 };
 
 vertex BackdropVSOut v_backdrop(uint vid [[vertex_id]], uint iid [[instance_id]],
-                                const device BackdropRectParams* inst [[buffer(0)]],
+                                const device BackdropParams* inst [[buffer(0)]],
                                 constant BackdropVPSize& vp [[buffer(1)]])
 {
     float2 offs[6] = {
         float2(0.0, 0.0), float2(1.0, 0.0), float2(0.0, 1.0),
         float2(0.0, 1.0), float2(1.0, 0.0), float2(1.0, 1.0)
     };
-    BackdropRectParams p = inst[iid];
+    BackdropParams p = inst[iid];
     float2 dp = p.rect.xy + offs[vid] * p.rect.zw;
     float2 clip;
     clip.x = (dp.x / max(vp.size.x, 1e-5)) * 2.0 - 1.0;
@@ -103,12 +103,9 @@ vertex BackdropVSOut v_backdrop(uint vid [[vertex_id]], uint iid [[instance_id]]
     return o;
 }
 
-// rect: (x, y, w, h) in dp space, tint: (r, g, b, alpha)
-struct BackdropParams { float4 rect; float4 tint; };
-
 fragment float4 f_backdrop(BackdropVSOut in [[stage_in]],
                            texture2d<float> src [[texture(0)]], sampler s [[sampler(0)]],
-                           constant BackdropParams* parr [[buffer(1)]])
+                           const device BackdropParams* parr [[buffer(1)]])
 {
     BackdropParams p = parr[in.iid];
     float2 xy_dp = in.pos_dp;
@@ -135,7 +132,7 @@ static inline float3 dark_popup_blur_material(float3 blurred, float3 tint)
 
 fragment float4 f_visual_effect(BackdropVSOut in [[stage_in]],
                                 texture2d<float> src [[texture(0)]], sampler s [[sampler(0)]],
-                                constant VisualEffectParams* parr [[buffer(1)]])
+                                const device VisualEffectParams* parr [[buffer(1)]])
 {
     VisualEffectParams p = parr[in.iid];
     float2 xy_dp = in.pos_dp;

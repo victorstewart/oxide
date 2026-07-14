@@ -18,6 +18,7 @@
 - Prepared Metal layers: 100 retained snapshot layers with 100 RRects each. Clean frames require 100 texture hits with no body/offscreen/upload work; one-dirty frames require 99 hits, one texture miss, one offscreen replay from the existing prepared body, and no warm upload, preparation, or texture creation.
 - Images and idle: CPU construction plus Metal resource/draw rows for 100/1,000/10,000 unique images and policy/churn variants; authoring rows exercise 100/1,000 unique `ImageView` cover cells and persist semantic image/nine-slice, crop, quad, draw-call, parameter-byte, and shaded-pixel counters; a foreground static row proves zero timers, animations, camera frames, network publications, damage, submissions, and wakeups.
 - WebGPU primitives: opt-in browser rows for 1/64/1,024 RRects, 1/64/512 spinners, 64/1,024 neon markers, and 64/512 nine-slices. The 1,024-marker row emits eight production-sized 128-marker passes rather than changing the public per-pass safety limit.
+- Metal analytic instances: physical Metal rows for RRect, image, nine-slice, spinner, backdrop, and visual-effect ordered runs at 1/64/1,024/10,000 instances. Every row persists frame/encode/direct-GPU distributions, draws, instances, upload bytes, analytic ring bytes/binds/growth, total growth, and frame-ring residency.
 
 ## Measurement boundary
 

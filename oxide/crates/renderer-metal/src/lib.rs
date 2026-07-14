@@ -671,9 +671,6 @@ fn glyph_icb_resource_options() -> MTLResourceOptions {
     MTLResourceOptions::StorageModeShared
 }
 
-// Metal `set*Bytes` APIs are limited to 4 KiB payloads per call.
-// Keep instanced parameter uploads under this limit by chunking draws.
-const METAL_SET_BYTES_LIMIT: usize = 4096;
 const VISIBLE_FRAME_RESOURCE_DEPTH: usize = 3;
 const OFFSCREEN_FRAME_RESOURCE_DEPTH: usize = 8;
 const MAX_FRAME_RESOURCE_DEPTH: usize = OFFSCREEN_FRAME_RESOURCE_DEPTH;
@@ -726,21 +723,6 @@ fn legacy_spinner_phase(now_ms: u64) -> f32 {
 fn spinner_now_ms() -> u64 {
     static START: OnceLock<Instant> = OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_millis() as u64
-}
-
-#[inline(always)]
-fn max_instances_per_set_bytes(v_bytes_per_instance: usize, f_bytes_per_instance: usize) -> usize {
-    let v = if v_bytes_per_instance == 0 {
-        usize::MAX
-    } else {
-        METAL_SET_BYTES_LIMIT / v_bytes_per_instance
-    };
-    let f = if f_bytes_per_instance == 0 {
-        usize::MAX
-    } else {
-        METAL_SET_BYTES_LIMIT / f_bytes_per_instance
-    };
-    v.min(f).max(1)
 }
 
 #[derive(Debug, Error)]
@@ -985,6 +967,9 @@ pub struct MetalRenderer {
     image_arg_table_index: HashMap<u64, usize>,
     image_arg_table_count: usize,
     image_arg_handles: alloc::vec::Vec<u32>,
+    image_vbuf: alloc::vec::Vec<f32>,
+    image_fbuf: alloc::vec::Vec<ImageGpuParams>,
+    effect_fbuf: alloc::vec::Vec<f32>,
     sampler: Option<SamplerState>,
     color_format: MTLPixelFormat,
     config: MetalRendererConfig,
@@ -999,18 +984,8 @@ pub struct MetalRenderer {
     ib: Ring,
     ub: Ring,
     property_ring: Ring,
-    rrect_vbuf: alloc::vec::Vec<f32>,
-    rrect_fbuf: alloc::vec::Vec<RRectGpuParams>,
-    nine_slice_vbuf: alloc::vec::Vec<f32>,
-    nine_slice_fbuf: alloc::vec::Vec<NineSliceGpuParams>,
-    image_vbuf: alloc::vec::Vec<f32>,
-    image_fbuf: alloc::vec::Vec<ImageGpuParams>,
     image_tex_map: HashMap<u32, u32>,
     glyph_group: alloc::vec::Vec<GlyphRunGpuOffsets>,
-    spinner_vbuf: alloc::vec::Vec<f32>,
-    spinner_fbuf: alloc::vec::Vec<SpinnerGpuParams>,
-    effect_vbuf: alloc::vec::Vec<f32>,
-    effect_fbuf: alloc::vec::Vec<f32>,
     filtered_prepass: FilteredDrawList,
     filtered_main: FilteredDrawList,
     layer_plans: alloc::vec::Vec<LayerPlan>,
@@ -1076,6 +1051,9 @@ pub struct MetalRenderer {
     acc_draws: u32,
     acc_flat_instanced_draws: u32,
     acc_instanced: u32,
+    acc_analytic_instance_bytes: u64,
+    acc_analytic_instance_buffer_binds: u32,
+    acc_analytic_instance_ring_grows: u32,
     acc_icb_cmds: u32,
     acc_commands_traversed: u64,
     acc_commands_copied: u64,
@@ -2195,6 +2173,9 @@ impl MetalRenderer {
             image_arg_table_index: HashMap::new(),
             image_arg_table_count: 0,
             image_arg_handles: alloc::vec::Vec::new(),
+            image_vbuf: alloc::vec::Vec::new(),
+            image_fbuf: alloc::vec::Vec::new(),
+            effect_fbuf: alloc::vec::Vec::new(),
             sampler,
             color_format,
             config: applied_config,
@@ -2209,18 +2190,8 @@ impl MetalRenderer {
             ib,
             ub,
             property_ring,
-            rrect_vbuf: alloc::vec::Vec::new(),
-            rrect_fbuf: alloc::vec::Vec::new(),
-            nine_slice_vbuf: alloc::vec::Vec::new(),
-            nine_slice_fbuf: alloc::vec::Vec::new(),
-            image_vbuf: alloc::vec::Vec::new(),
-            image_fbuf: alloc::vec::Vec::new(),
             image_tex_map: HashMap::new(),
             glyph_group: alloc::vec::Vec::new(),
-            spinner_vbuf: alloc::vec::Vec::new(),
-            spinner_fbuf: alloc::vec::Vec::new(),
-            effect_vbuf: alloc::vec::Vec::new(),
-            effect_fbuf: alloc::vec::Vec::new(),
             filtered_prepass: FilteredDrawList::default(),
             filtered_main: FilteredDrawList::default(),
             layer_plans: alloc::vec::Vec::new(),
@@ -2288,6 +2259,9 @@ impl MetalRenderer {
             acc_draws: 0,
             acc_flat_instanced_draws: 0,
             acc_instanced: 0,
+            acc_analytic_instance_bytes: 0,
+            acc_analytic_instance_buffer_binds: 0,
+            acc_analytic_instance_ring_grows: 0,
             acc_icb_cmds: 0,
             acc_commands_traversed: 0,
             acc_commands_copied: 0,
@@ -4199,6 +4173,9 @@ impl MetalRenderer {
         self.acc_draws = 0;
         self.acc_flat_instanced_draws = 0;
         self.acc_instanced = 0;
+        self.acc_analytic_instance_bytes = 0;
+        self.acc_analytic_instance_buffer_binds = 0;
+        self.acc_analytic_instance_ring_grows = 0;
         self.acc_icb_cmds = 0;
         self.img_arg_used = 0;
         self.image_arg_table_index.clear();
@@ -5936,6 +5913,9 @@ impl api::Renderer for MetalRenderer {
         self.acc_draws = 0;
         self.acc_flat_instanced_draws = 0;
         self.acc_instanced = 0;
+        self.acc_analytic_instance_bytes = 0;
+        self.acc_analytic_instance_buffer_binds = 0;
+        self.acc_analytic_instance_ring_grows = 0;
         self.acc_icb_cmds = 0;
         self.img_arg_used = 0;
         self.image_arg_table_index.clear();
@@ -6446,7 +6426,9 @@ impl api::Renderer for MetalRenderer {
             self.acc_render_passes = self.acc_render_passes.saturating_add(1);
             let layer_encoder = cmd.new_render_command_encoder(&pass_descriptor);
             let mut layer_frame = self.layer_scratch_frame.take().unwrap_or_else(PerFrame::new);
-            layer_frame.reset();
+            layer_frame.vb_used = self.frames[slot].vb_used;
+            layer_frame.ib_used = self.frames[slot].ib_used;
+            layer_frame.ub_used = self.frames[slot].ub_used;
             layer_frame.cmd = None;
             let old_size = (self.target_w, self.target_h);
             let old_encoding_layer = self.encoding_layer;
@@ -6470,6 +6452,9 @@ impl api::Renderer for MetalRenderer {
             self.target_h = old_size.1;
             self.encoding_layer = old_encoding_layer;
             layer_encoder.end_encoding();
+            self.frames[slot].vb_used = layer_frame.vb_used;
+            self.frames[slot].ib_used = layer_frame.ib_used;
+            self.frames[slot].ub_used = layer_frame.ub_used;
             self.layer_scratch_frame = Some(layer_frame);
             if let Some(entry) = self
                 .layers
@@ -7030,6 +7015,11 @@ impl api::Renderer for MetalRenderer {
         self.last_stats.ib_bytes = self.frames[slot].ib_used as u64;
         self.last_stats.draws = self.acc_draws.saturating_add(self.acc_flat_instanced_draws);
         self.last_stats.instanced = self.acc_instanced;
+        self.last_stats.analytic_instance_bytes = self.acc_analytic_instance_bytes;
+        self.last_stats.analytic_instance_buffer_binds =
+            self.acc_analytic_instance_buffer_binds;
+        self.last_stats.analytic_instance_ring_grows =
+            self.acc_analytic_instance_ring_grows;
         self.last_stats.icb_cmds = self.acc_icb_cmds;
         if self.accounting_stats_enabled {
             self.last_stats.commands_traversed = self.acc_commands_traversed;
@@ -7600,6 +7590,78 @@ fn encode_inline_layer(
     }
 }
 
+#[inline]
+fn analytic_instance_pair_layout<V, F>(start: usize, count: usize) -> (usize, usize, usize)
+{
+    let vertex_offset = align_up_usize(start, 16.max(core::mem::align_of::<V>()));
+    let vertex_bytes = count.saturating_mul(core::mem::size_of::<V>());
+    let fragment_offset = align_up_usize(
+        vertex_offset.saturating_add(vertex_bytes),
+        16.max(core::mem::align_of::<F>()),
+    );
+    let fragment_bytes = count.saturating_mul(core::mem::size_of::<F>());
+    let end = fragment_offset.saturating_add(fragment_bytes);
+    (vertex_offset, fragment_offset, end)
+}
+
+#[inline]
+fn reserve_analytic_instance_pair<V, F>(
+    pf: &mut PerFrame,
+    r: &mut MetalRenderer,
+    count: usize,
+) -> (usize, usize) {
+    let (vertex_offset, fragment_offset, end) =
+        analytic_instance_pair_layout::<V, F>(pf.ub_used, count);
+    let slot = r.current_frame_slot();
+    if r.ub.ensure_capacity(&r.device, slot, end) {
+        r.acc_resource_grows = r.acc_resource_grows.saturating_add(1);
+        r.acc_analytic_instance_ring_grows =
+            r.acc_analytic_instance_ring_grows.saturating_add(1);
+    }
+    pf.ub_used = end;
+    r.acc_analytic_instance_bytes = r
+        .acc_analytic_instance_bytes
+        .saturating_add(
+            count
+                .saturating_mul(core::mem::size_of::<V>() + core::mem::size_of::<F>())
+                as u64,
+        );
+    (vertex_offset, fragment_offset)
+}
+
+#[inline]
+fn reserve_analytic_instance_slice<T>(
+    pf: &mut PerFrame,
+    r: &mut MetalRenderer,
+    count: usize,
+) -> usize {
+    let offset = align_up_usize(pf.ub_used, 16.max(core::mem::align_of::<T>()));
+    let bytes = count.saturating_mul(core::mem::size_of::<T>());
+    let end = offset.saturating_add(bytes);
+    let slot = r.current_frame_slot();
+    if r.ub.ensure_capacity(&r.device, slot, end) {
+        r.acc_resource_grows = r.acc_resource_grows.saturating_add(1);
+        r.acc_analytic_instance_ring_grows =
+            r.acc_analytic_instance_ring_grows.saturating_add(1);
+    }
+    pf.ub_used = end;
+    r.acc_analytic_instance_bytes =
+        r.acc_analytic_instance_bytes.saturating_add(bytes as u64);
+    offset
+}
+
+#[inline]
+unsafe fn write_ring_value<T>(base: NonNull<u8>, offset: usize, index: usize, value: T)
+{
+    unsafe {
+        base.as_ptr()
+            .add(offset)
+            .cast::<T>()
+            .add(index)
+            .write(value);
+    }
+}
+
 fn encode_draws_range(
     enc: &RenderCommandEncoderRef,
     pf: &mut PerFrame,
@@ -7940,60 +8002,36 @@ fn encode_draws_range(
                 let pipeline = if r.encoding_layer { &r.pso_layer_rrect } else { &r.pso_rrect };
                 enc.set_render_pipeline_state(pipeline);
                 let mut j = i;
-                let (emitted, draw_calls) = {
-                    let vbuf = &mut r.rrect_vbuf;
-                    let fbuf = &mut r.rrect_fbuf;
-                    vbuf.clear();
-                    fbuf.clear();
-                    while j < item_end {
-                        if let api::DrawCmd::RRect { rect, radii, color } = &list.items[j] {
-                            vbuf.extend_from_slice(&[rect.x, rect.y, rect.w, rect.h]);
-                            fbuf.push(pack_rrect_params(*rect, *radii, *color));
-                            j += 1;
-                        } else {
-                            break;
-                        }
+                while j < item_end && matches!(list.items[j], api::DrawCmd::RRect { .. }) {
+                    j += 1;
+                }
+                let count = j - i;
+                let instance_offset =
+                    reserve_analytic_instance_slice::<RRectGpuParams>(pf, r, count);
+                let base = r.ub.contents_ptr(slot);
+                for (index, item) in list.items[i..j].iter().enumerate() {
+                    let api::DrawCmd::RRect { rect, radii, color } = item else { unreachable!() };
+                    unsafe {
+                        write_ring_value(
+                            base,
+                            instance_offset,
+                            index,
+                            pack_rrect_params(*rect, *radii, *color),
+                        );
                     }
-
-                    enc.set_vertex_bytes(
-                        1,
-                        core::mem::size_of_val(&vp_dp) as u64,
-                        vp_dp.as_ptr() as *const _,
-                    );
-                    let count = fbuf.len();
-                    let max_batch = max_instances_per_set_bytes(
-                        core::mem::size_of::<[f32; 4]>(),
-                        core::mem::size_of::<RRectGpuParams>(),
-                    );
-                    let mut emitted = 0usize;
-                    let mut start = 0usize;
-                    while start < count {
-                        let end = (start + max_batch).min(count);
-                        let v_slice = &r.rrect_vbuf[(start * 4)..(end * 4)];
-                        let f_slice = &r.rrect_fbuf[start..end];
-                        enc.set_vertex_bytes(
-                            0,
-                            (v_slice.len() * core::mem::size_of::<f32>()) as u64,
-                            v_slice.as_ptr() as *const _,
-                        );
-                        enc.set_fragment_bytes(
-                            1,
-                            (f_slice.len() * core::mem::size_of::<RRectGpuParams>()) as u64,
-                            f_slice.as_ptr() as *const _,
-                        );
-                        enc.draw_primitives_instanced(
-                            MTLPrimitiveType::Triangle,
-                            0,
-                            6,
-                            (end - start) as u64,
-                        );
-                        emitted += end - start;
-                        start = end;
-                    }
-                    (emitted, count.div_ceil(max_batch))
-                };
-                r.acc_flat_instanced_draws = r.acc_flat_instanced_draws.saturating_add(draw_calls as u32);
-                r.acc_instanced = r.acc_instanced.saturating_add(emitted as u32);
+                }
+                enc.set_vertex_buffer(0, Some(r.ub.buffer(slot)), instance_offset as u64);
+                enc.set_vertex_bytes(
+                    1,
+                    core::mem::size_of_val(&vp_dp) as u64,
+                    vp_dp.as_ptr() as *const _,
+                );
+                enc.set_fragment_buffer(1, Some(r.ub.buffer(slot)), instance_offset as u64);
+                enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, count as u64);
+                r.acc_analytic_instance_buffer_binds =
+                    r.acc_analytic_instance_buffer_binds.saturating_add(2);
+                r.acc_flat_instanced_draws = r.acc_flat_instanced_draws.saturating_add(1);
+                r.acc_instanced = r.acc_instanced.saturating_add(count as u32);
                 i = j;
                 continue;
             }
@@ -8011,10 +8049,6 @@ fn encode_draws_range(
                     enc.set_fragment_texture(0, Some(img));
                     let tex_w = img.width() as f32;
                     let tex_h = img.height() as f32;
-                    // Batch consecutive NineSlice with same texture
-                    let mut count = 0usize;
-                    r.nine_slice_vbuf.clear();
-                    r.nine_slice_fbuf.clear();
                     let mut j = i;
                     while j < item_end {
                         if let api::DrawCmd::NineSlice { tex: t2, rect, slice, alpha } =
@@ -8023,50 +8057,42 @@ fn encode_draws_range(
                             if *t2 != *tex {
                                 break;
                             }
-                            r.nine_slice_vbuf.extend_from_slice(&[rect.x, rect.y, rect.w, rect.h]);
-                            r.nine_slice_fbuf
-                                .push(pack_nine_slice_params(*rect, tex_w, tex_h, *slice, *alpha));
-                            count += 1;
                             j += 1;
                         } else {
                             break;
                         }
                     }
+                    let count = j - i;
+                    let instance_offset =
+                        reserve_analytic_instance_slice::<NineSliceGpuParams>(pf, r, count);
+                    let base = r.ub.contents_ptr(slot);
+                    for (index, item) in list.items[i..j].iter().enumerate() {
+                        let api::DrawCmd::NineSlice { rect, slice, alpha, .. } = item
+                        else
+                        {
+                            unreachable!()
+                        };
+                        unsafe {
+                            write_ring_value(
+                                base,
+                                instance_offset,
+                                index,
+                                pack_nine_slice_params(*rect, tex_w, tex_h, *slice, *alpha),
+                            );
+                        }
+                    }
+                    enc.set_vertex_buffer(0, Some(r.ub.buffer(slot)), instance_offset as u64);
                     enc.set_vertex_bytes(
                         1,
                         core::mem::size_of_val(&vp_dp) as u64,
                         vp_dp.as_ptr() as *const _,
                     );
-                    let max_batch = max_instances_per_set_bytes(
-                        core::mem::size_of::<[f32; 4]>(),
-                        core::mem::size_of::<NineSliceGpuParams>(),
-                    );
-                    let mut emitted = 0usize;
-                    let mut start = 0usize;
-                    while start < count {
-                        let end = (start + max_batch).min(count);
-                        let v_slice = &r.nine_slice_vbuf[(start * 4)..(end * 4)];
-                        let f_slice = &r.nine_slice_fbuf[start..end];
-                        enc.set_vertex_bytes(
-                            0,
-                            (v_slice.len() * core::mem::size_of::<f32>()) as u64,
-                            v_slice.as_ptr() as *const _,
-                        );
-                        enc.set_fragment_bytes(
-                            1,
-                            (f_slice.len() * core::mem::size_of::<NineSliceGpuParams>()) as u64,
-                            f_slice.as_ptr() as *const _,
-                        );
-                        enc.draw_primitives_instanced(
-                            MTLPrimitiveType::Triangle,
-                            0,
-                            6,
-                            (end - start) as u64,
-                        );
-                        emitted += end - start;
-                        start = end;
-                    }
-                    r.acc_instanced += emitted as u32;
+                    enc.set_fragment_buffer(1, Some(r.ub.buffer(slot)), instance_offset as u64);
+                    enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, count as u64);
+                    r.acc_analytic_instance_buffer_binds =
+                        r.acc_analytic_instance_buffer_binds.saturating_add(2);
+                    r.acc_flat_instanced_draws = r.acc_flat_instanced_draws.saturating_add(1);
+                    r.acc_instanced = r.acc_instanced.saturating_add(count as u32);
                     i = j;
                     continue;
                 }
@@ -8186,40 +8212,62 @@ fn encode_draws_range(
                         core::mem::size_of_val(&vp_dp) as u64,
                         vp_dp.as_ptr() as *const _,
                     );
-                    let mut emitted = 0usize;
+                    let api::DrawCmd::Image { tex: first_tex, .. } = &list.items[i]
+                    else
+                    {
+                        unreachable!()
+                    };
+                    let Some(texture) = r.get_image_tex(*first_tex).map(Texture::to_owned)
+                    else
+                    {
+                        i += 1;
+                        continue;
+                    };
                     let mut j = i;
                     while j < item_end {
-                        if let api::DrawCmd::Image { tex, dst, src, alpha } = &list.items[j] {
-                            if let Some(tref) = r.get_image_tex(*tex) {
-                                let vparams: [f32; 4] = [dst.x, dst.y, dst.w, dst.h];
-                                let (tw, th) = (tref.width() as f32, tref.height() as f32);
-                                let fparams = pack_image_params(
-                                    *dst,
-                                    *src,
-                                    [tw, th],
-                                    (*alpha).clamp(0.0, 1.0),
-                                    0,
-                                );
-                                enc.set_fragment_texture(0, Some(tref));
-                                enc.set_vertex_bytes(
-                                    0,
-                                    core::mem::size_of_val(&vparams) as u64,
-                                    vparams.as_ptr() as *const _,
-                                );
-                                enc.set_fragment_bytes(
-                                    1,
-                                    core::mem::size_of_val(&fparams) as u64,
-                                    (&fparams as *const ImageGpuParams).cast(),
-                                );
-                                enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
-                                emitted += 1;
+                        if let api::DrawCmd::Image { tex, .. } = &list.items[j] {
+                            if *tex != *first_tex {
+                                break;
                             }
                             j += 1;
                         } else {
                             break;
                         }
                     }
-                    r.acc_draws = r.acc_draws.saturating_add(emitted as u32);
+                    let count = j - i;
+                    let (vertex_offset, fragment_offset) =
+                        reserve_analytic_instance_pair::<[f32; 4], ImageGpuParams>(pf, r, count);
+                    let base = r.ub.contents_ptr(slot);
+                    let texture_size = [texture.width() as f32, texture.height() as f32];
+                    for (index, item) in list.items[i..j].iter().enumerate() {
+                        let api::DrawCmd::Image { dst, src, alpha, .. } = item
+                        else
+                        {
+                            unreachable!()
+                        };
+                        unsafe {
+                            write_ring_value(
+                                base,
+                                vertex_offset,
+                                index,
+                                [dst.x, dst.y, dst.w, dst.h],
+                            );
+                            write_ring_value(
+                                base,
+                                fragment_offset,
+                                index,
+                                pack_image_params(*dst, *src, texture_size, *alpha, 0),
+                            );
+                        }
+                    }
+                    enc.set_fragment_texture(0, Some(&texture));
+                    enc.set_vertex_buffer(0, Some(r.ub.buffer(slot)), vertex_offset as u64);
+                    enc.set_fragment_buffer(1, Some(r.ub.buffer(slot)), fragment_offset as u64);
+                    enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, count as u64);
+                    r.acc_analytic_instance_buffer_binds =
+                        r.acc_analytic_instance_buffer_binds.saturating_add(2);
+                    r.acc_flat_instanced_draws = r.acc_flat_instanced_draws.saturating_add(1);
+                    r.acc_instanced = r.acc_instanced.saturating_add(count as u32);
                     i = j;
                     continue;
                 }
@@ -8229,10 +8277,10 @@ fn encode_draws_range(
                 enc.set_render_pipeline_state(pipeline);
                 // Batch consecutive Images regardless of texture using argument buffer
                 let mut count = 0usize;
-                r.image_vbuf.clear();
-                r.image_fbuf.clear();
                 r.image_tex_map.clear();
                 r.image_arg_handles.clear();
+                r.image_vbuf.clear();
+                r.image_fbuf.clear();
                 let mut next_slot: u32 = 0;
                 let mut j = i;
                 while j < item_end {
@@ -8244,10 +8292,10 @@ fn encode_draws_range(
                             j += 1;
                             continue;
                         };
-                        let (tw, th) = (tref.width() as f32, tref.height() as f32);
+                        let texture_size = [tref.width() as f32, tref.height() as f32];
                         // Map texture handle to slot
-                        let slot_idx = if let Some(s) = existing_slot {
-                            s
+                        let slot_idx = if let Some(slot) = existing_slot {
+                            slot
                         } else {
                             if next_slot >= IMAGE_ARG_TEXTURE_SLOTS {
                                 break;
@@ -8263,14 +8311,12 @@ fn encode_draws_range(
                             r.image_arg_handles.push(tex.0);
                             s
                         };
-                        // Vertex params
                         r.image_vbuf.extend_from_slice(&[dst.x, dst.y, dst.w, dst.h]);
-                        // Fragment params (ImageParams): rect(dp), src(px), tex_size(px), alpha, tex_index
                         r.image_fbuf.push(pack_image_params(
                             *dst,
                             *src,
-                            [tw, th],
-                            (*alpha).clamp(0.0, 1.0),
+                            texture_size,
+                            *alpha,
                             slot_idx,
                         ));
                         count += 1;
@@ -8375,43 +8421,33 @@ fn encode_draws_range(
                     r.image_arg_tables[table_index].offset,
                 );
                 r.acc_image_argument_binds = r.acc_image_argument_binds.saturating_add(1);
-                // Set vp
+                let (vertex_offset, fragment_offset) =
+                    reserve_analytic_instance_pair::<[f32; 4], ImageGpuParams>(pf, r, count);
+                let base = r.ub.contents_ptr(slot);
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        r.image_vbuf.as_ptr().cast::<u8>(),
+                        base.as_ptr().add(vertex_offset),
+                        r.image_vbuf.len() * core::mem::size_of::<f32>(),
+                    );
+                    core::ptr::copy_nonoverlapping(
+                        r.image_fbuf.as_ptr().cast::<u8>(),
+                        base.as_ptr().add(fragment_offset),
+                        r.image_fbuf.len() * core::mem::size_of::<ImageGpuParams>(),
+                    );
+                }
+                enc.set_vertex_buffer(0, Some(r.ub.buffer(slot)), vertex_offset as u64);
                 enc.set_vertex_bytes(
                     1,
                     core::mem::size_of_val(&vp_dp) as u64,
                     vp_dp.as_ptr() as *const _,
                 );
-                let max_batch = max_instances_per_set_bytes(
-                    core::mem::size_of::<[f32; 4]>(),
-                    core::mem::size_of::<ImageGpuParams>(),
-                );
-                let mut emitted = 0usize;
-                let mut start = 0usize;
-                while start < count {
-                    let end = (start + max_batch).min(count);
-                    let v_slice = &r.image_vbuf[(start * 4)..(end * 4)];
-                    let f_slice = &r.image_fbuf[start..end];
-                    enc.set_vertex_bytes(
-                        0,
-                        (v_slice.len() * core::mem::size_of::<f32>()) as u64,
-                        v_slice.as_ptr() as *const _,
-                    );
-                    enc.set_fragment_bytes(
-                        1,
-                        (f_slice.len() * core::mem::size_of::<ImageGpuParams>()) as u64,
-                        f_slice.as_ptr() as *const _,
-                    );
-                    enc.draw_primitives_instanced(
-                        MTLPrimitiveType::Triangle,
-                        0,
-                        6,
-                        (end - start) as u64,
-                    );
-                    emitted += end - start;
-                    start = end;
-                }
-                r.acc_flat_instanced_draws = r.acc_flat_instanced_draws.saturating_add(count.div_ceil(max_batch) as u32);
-                r.acc_instanced += emitted as u32;
+                enc.set_fragment_buffer(1, Some(r.ub.buffer(slot)), fragment_offset as u64);
+                enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, count as u64);
+                r.acc_analytic_instance_buffer_binds =
+                    r.acc_analytic_instance_buffer_binds.saturating_add(2);
+                r.acc_flat_instanced_draws = r.acc_flat_instanced_draws.saturating_add(1);
+                r.acc_instanced = r.acc_instanced.saturating_add(count as u32);
                 i = j;
                 continue;
             }
@@ -8626,65 +8662,47 @@ fn encode_draws_range(
                     if r.encoding_layer { &r.pso_layer_spinner } else { &r.pso_spinner };
                 enc.set_render_pipeline_state(pipeline);
                 let phase = legacy_spinner_phase(spinner_now_ms());
-                // Batch consecutive spinners
-                let mut count = 0usize;
-                r.spinner_vbuf.clear();
-                r.spinner_fbuf.clear();
                 let mut j = i;
-                while j < item_end {
-                    if let api::DrawCmd::Spinner { center, atom, alpha } = &list.items[j] {
+                while j < item_end && matches!(&list.items[j], api::DrawCmd::Spinner { .. }) {
+                    j += 1;
+                }
+                let count = j - i;
+                let (vertex_offset, fragment_offset) =
+                    reserve_analytic_instance_pair::<[f32; 4], SpinnerGpuParams>(pf, r, count);
+                let base = r.ub.contents_ptr(slot);
+                for (index, item) in list.items[i..j].iter().enumerate() {
+                    if let api::DrawCmd::Spinner { center, atom, alpha } = item {
                         let thickness = legacy_spinner_thickness(*atom);
                         let radius = legacy_spinner_radius(*atom);
                         let mm = *atom * 0.5;
-                        r.spinner_vbuf.extend_from_slice(&[
-                            center[0] - mm,
-                            center[1] - mm,
-                            mm * 2.0,
-                            mm * 2.0,
-                        ]);
-                        r.spinner_fbuf
-                            .push(pack_spinner_params(*center, radius, thickness, phase, *alpha));
-                        count += 1;
-                        j += 1;
-                    } else {
-                        break;
+                        unsafe {
+                            write_ring_value(
+                                base,
+                                vertex_offset,
+                                index,
+                                [center[0] - mm, center[1] - mm, mm * 2.0, mm * 2.0],
+                            );
+                            write_ring_value(
+                                base,
+                                fragment_offset,
+                                index,
+                                pack_spinner_params(*center, radius, thickness, phase, *alpha),
+                            );
+                        }
                     }
                 }
+                enc.set_vertex_buffer(0, Some(r.ub.buffer(slot)), vertex_offset as u64);
                 enc.set_vertex_bytes(
                     1,
                     core::mem::size_of_val(&vp_dp) as u64,
                     vp_dp.as_ptr() as *const _,
                 );
-                let max_batch = max_instances_per_set_bytes(
-                    core::mem::size_of::<[f32; 4]>(),
-                    core::mem::size_of::<SpinnerGpuParams>(),
-                );
-                let mut emitted = 0usize;
-                let mut start = 0usize;
-                while start < count {
-                    let end = (start + max_batch).min(count);
-                    let v_slice = &r.spinner_vbuf[(start * 4)..(end * 4)];
-                    let f_slice = &r.spinner_fbuf[start..end];
-                    enc.set_vertex_bytes(
-                        0,
-                        (v_slice.len() * core::mem::size_of::<f32>()) as u64,
-                        v_slice.as_ptr() as *const _,
-                    );
-                    enc.set_fragment_bytes(
-                        1,
-                        (f_slice.len() * core::mem::size_of::<SpinnerGpuParams>()) as u64,
-                        f_slice.as_ptr() as *const _,
-                    );
-                    enc.draw_primitives_instanced(
-                        MTLPrimitiveType::Triangle,
-                        0,
-                        6,
-                        (end - start) as u64,
-                    );
-                    emitted += end - start;
-                    start = end;
-                }
-                r.acc_instanced += emitted as u32;
+                enc.set_fragment_buffer(1, Some(r.ub.buffer(slot)), fragment_offset as u64);
+                enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, count as u64);
+                r.acc_analytic_instance_buffer_binds =
+                    r.acc_analytic_instance_buffer_binds.saturating_add(2);
+                r.acc_flat_instanced_draws = r.acc_flat_instanced_draws.saturating_add(1);
+                r.acc_instanced = r.acc_instanced.saturating_add(count as u32);
                 i = j;
                 continue;
             }
@@ -8699,59 +8717,43 @@ fn encode_draws_range(
                         enc.set_fragment_sampler_state(0, Some(sam));
                     }
                     enc.set_fragment_texture(0, Some(src));
-                    // Batch consecutive backdrops
-                    let mut count = 0usize;
-                    r.effect_vbuf.clear();
                     r.effect_fbuf.clear();
                     let mut j = i;
                     while j < item_end {
-                        if let api::DrawCmd::Backdrop { rect, tint, alpha, .. } = &list.items[j] {
-                            r.effect_vbuf.extend_from_slice(&[rect.x, rect.y, rect.w, rect.h]);
-                            let a = (tint.a * *alpha).clamp(0.0, 1.0);
-                            r.effect_fbuf.extend_from_slice(&[
-                                rect.x, rect.y, rect.w, rect.h, tint.r, tint.g, tint.b, a,
-                            ]);
-                            count += 1;
-                            j += 1;
-                        } else {
+                        let api::DrawCmd::Backdrop { rect, tint, alpha, .. } = &list.items[j]
+                        else
+                        {
                             break;
-                        }
+                        };
+                        let a = (tint.a * *alpha).clamp(0.0, 1.0);
+                        r.effect_fbuf.extend_from_slice(&[
+                            rect.x, rect.y, rect.w, rect.h, tint.r, tint.g, tint.b, a,
+                        ]);
+                        j += 1;
                     }
+                    let count = j - i;
+                    let instance_offset =
+                        reserve_analytic_instance_slice::<[f32; 8]>(pf, r, count);
+                    let base = r.ub.contents_ptr(slot);
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            r.effect_fbuf.as_ptr().cast::<u8>(),
+                            base.as_ptr().add(instance_offset),
+                            r.effect_fbuf.len() * core::mem::size_of::<f32>(),
+                        );
+                    }
+                    enc.set_vertex_buffer(0, Some(r.ub.buffer(slot)), instance_offset as u64);
                     enc.set_vertex_bytes(
                         1,
                         core::mem::size_of_val(&vp_dp) as u64,
                         vp_dp.as_ptr() as *const _,
                     );
-                    let max_batch = max_instances_per_set_bytes(
-                        core::mem::size_of::<[f32; 4]>(),
-                        core::mem::size_of::<[f32; 8]>(),
-                    );
-                    let mut emitted = 0usize;
-                    let mut start = 0usize;
-                    while start < count {
-                        let end = (start + max_batch).min(count);
-                        let v_slice = &r.effect_vbuf[(start * 4)..(end * 4)];
-                        let f_slice = &r.effect_fbuf[(start * 8)..(end * 8)];
-                        enc.set_vertex_bytes(
-                            0,
-                            (v_slice.len() * core::mem::size_of::<f32>()) as u64,
-                            v_slice.as_ptr() as *const _,
-                        );
-                        enc.set_fragment_bytes(
-                            1,
-                            (f_slice.len() * core::mem::size_of::<f32>()) as u64,
-                            f_slice.as_ptr() as *const _,
-                        );
-                        enc.draw_primitives_instanced(
-                            MTLPrimitiveType::Triangle,
-                            0,
-                            6,
-                            (end - start) as u64,
-                        );
-                        emitted += end - start;
-                        start = end;
-                    }
-                    r.acc_instanced += emitted as u32;
+                    enc.set_fragment_buffer(1, Some(r.ub.buffer(slot)), instance_offset as u64);
+                    enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, count as u64);
+                    r.acc_analytic_instance_buffer_binds =
+                        r.acc_analytic_instance_buffer_binds.saturating_add(2);
+                    r.acc_flat_instanced_draws = r.acc_flat_instanced_draws.saturating_add(1);
+                    r.acc_instanced = r.acc_instanced.saturating_add(count as u32);
                     i = j;
                     continue;
                 }
@@ -8768,56 +8770,41 @@ fn encode_draws_range(
                         enc.set_fragment_sampler_state(0, Some(sam));
                     }
                     enc.set_fragment_texture(0, Some(src));
-                    let mut count = 0usize;
-                    r.effect_vbuf.clear();
                     r.effect_fbuf.clear();
                     let mut j = i;
                     while j < item_end {
-                        if let api::DrawCmd::VisualEffect { rect, effect } = &list.items[j] {
-                            r.effect_vbuf.extend_from_slice(&[rect.x, rect.y, rect.w, rect.h]);
-                            r.effect_fbuf
-                                .extend_from_slice(&pack_visual_effect_params(*rect, *effect));
-                            count += 1;
-                            j += 1;
-                        } else {
+                        let api::DrawCmd::VisualEffect { rect, effect } = &list.items[j]
+                        else
+                        {
                             break;
-                        }
+                        };
+                        r.effect_fbuf
+                            .extend_from_slice(&pack_visual_effect_params(*rect, *effect));
+                        j += 1;
                     }
+                    let count = j - i;
+                    let instance_offset =
+                        reserve_analytic_instance_slice::<[f32; 8]>(pf, r, count);
+                    let base = r.ub.contents_ptr(slot);
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            r.effect_fbuf.as_ptr().cast::<u8>(),
+                            base.as_ptr().add(instance_offset),
+                            r.effect_fbuf.len() * core::mem::size_of::<f32>(),
+                        );
+                    }
+                    enc.set_vertex_buffer(0, Some(r.ub.buffer(slot)), instance_offset as u64);
                     enc.set_vertex_bytes(
                         1,
                         core::mem::size_of_val(&vp_dp) as u64,
                         vp_dp.as_ptr() as *const _,
                     );
-                    let max_batch = max_instances_per_set_bytes(
-                        core::mem::size_of::<[f32; 4]>(),
-                        core::mem::size_of::<[f32; 8]>(),
-                    );
-                    let mut emitted = 0usize;
-                    let mut start = 0usize;
-                    while start < count {
-                        let end = (start + max_batch).min(count);
-                        let v_slice = &r.effect_vbuf[(start * 4)..(end * 4)];
-                        let f_slice = &r.effect_fbuf[(start * 8)..(end * 8)];
-                        enc.set_vertex_bytes(
-                            0,
-                            (v_slice.len() * core::mem::size_of::<f32>()) as u64,
-                            v_slice.as_ptr() as *const _,
-                        );
-                        enc.set_fragment_bytes(
-                            1,
-                            (f_slice.len() * core::mem::size_of::<f32>()) as u64,
-                            f_slice.as_ptr() as *const _,
-                        );
-                        enc.draw_primitives_instanced(
-                            MTLPrimitiveType::Triangle,
-                            0,
-                            6,
-                            (end - start) as u64,
-                        );
-                        emitted += end - start;
-                        start = end;
-                    }
-                    r.acc_instanced += emitted as u32;
+                    enc.set_fragment_buffer(1, Some(r.ub.buffer(slot)), instance_offset as u64);
+                    enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, count as u64);
+                    r.acc_analytic_instance_buffer_binds =
+                        r.acc_analytic_instance_buffer_binds.saturating_add(2);
+                    r.acc_flat_instanced_draws = r.acc_flat_instanced_draws.saturating_add(1);
+                    r.acc_instanced = r.acc_instanced.saturating_add(count as u32);
                     i = j;
                     continue;
                 }
@@ -9625,7 +9612,7 @@ fn build_rrect_pso(
     fmt: MTLPixelFormat,
     sample_count: u32,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let v = pipeline_function(lib, "rrect.vertex", "v_inst_rect")?;
+    let v = pipeline_function(lib, "rrect.vertex", "v_inst_rrect")?;
     let f = pipeline_function(lib, "rrect.fragment", "f_rrect")?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
@@ -9643,7 +9630,7 @@ fn build_layer_rrect_pso(
     fmt: MTLPixelFormat,
     sample_count: u32,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let vertex = pipeline_function(lib, "layer_rrect.vertex", "v_inst_rect")?;
+    let vertex = pipeline_function(lib, "layer_rrect.vertex", "v_inst_rrect")?;
     let fragment = pipeline_function(lib, "layer_rrect.fragment", "f_rrect")?;
     let descriptor = RenderPipelineDescriptor::new();
     descriptor.set_vertex_function(Some(&vertex));
@@ -9662,7 +9649,7 @@ fn build_nine_slice_pso(
     sample_count: u32,
     layer: bool,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let v = pipeline_function(lib, "nine_slice.vertex", "v_inst_rect")?;
+    let v = pipeline_function(lib, "nine_slice.vertex", "v_inst_nine_slice")?;
     let f = pipeline_function(lib, "nine_slice.fragment", "f_nine_slice")?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
@@ -10219,6 +10206,9 @@ pub struct PerfStats {
     pub ub_bytes: u64,
     pub draws: u32,
     pub instanced: u32,
+    pub analytic_instance_bytes: u64,
+    pub analytic_instance_buffer_binds: u32,
+    pub analytic_instance_ring_grows: u32,
     pub icb_cmds: u32,
     pub commands_traversed: u64,
     pub commands_copied: u64,
@@ -10711,39 +10701,11 @@ impl MetalRenderer {
             .saturating_add(self.prepared_chunks.logical_resident_bytes());
         let logical_total_bytes = logical_texture_bytes.saturating_add(logical_buffer_bytes);
         drop(logical_buffer_seen);
-        let cpu_staging_bytes = (self.rrect_vbuf.capacity() as u64)
+        let cpu_staging_bytes = (self.image_vbuf.capacity() as u64)
             .saturating_mul(core::mem::size_of::<f32>() as u64)
-            .saturating_add(
-                (self.rrect_fbuf.capacity() as u64)
-                    .saturating_mul(core::mem::size_of::<RRectGpuParams>() as u64),
-            )
-            .saturating_add(
-                (self.nine_slice_vbuf.capacity() as u64)
-                    .saturating_mul(core::mem::size_of::<f32>() as u64),
-            )
-            .saturating_add(
-                (self.nine_slice_fbuf.capacity() as u64)
-                    .saturating_mul(core::mem::size_of::<NineSliceGpuParams>() as u64),
-            )
-            .saturating_add(
-                (self.image_vbuf.capacity() as u64)
-                    .saturating_mul(core::mem::size_of::<f32>() as u64),
-            )
             .saturating_add(
                 (self.image_fbuf.capacity() as u64)
                     .saturating_mul(core::mem::size_of::<ImageGpuParams>() as u64),
-            )
-            .saturating_add(
-                (self.spinner_vbuf.capacity() as u64)
-                    .saturating_mul(core::mem::size_of::<f32>() as u64),
-            )
-            .saturating_add(
-                (self.spinner_fbuf.capacity() as u64)
-                    .saturating_mul(core::mem::size_of::<SpinnerGpuParams>() as u64),
-            )
-            .saturating_add(
-                (self.effect_vbuf.capacity() as u64)
-                    .saturating_mul(core::mem::size_of::<f32>() as u64),
             )
             .saturating_add(
                 (self.effect_fbuf.capacity() as u64)
@@ -10909,18 +10871,14 @@ mod tests {
     }
 
     #[test]
-    fn set_bytes_chunking_respects_metal_limit() {
-        // Image params: 16B vertex rect + 48B fragment params => 85 instances max per chunk.
-        let max = max_instances_per_set_bytes(16, 48);
-        assert_eq!(max, 85);
-        assert!(max.saturating_mul(16) <= METAL_SET_BYTES_LIMIT);
-        assert!(max.saturating_mul(48) <= METAL_SET_BYTES_LIMIT);
-
-        // Spinner params: 16B vertex rect + 24B fragment params => 170 instances max per chunk.
-        let spinner = max_instances_per_set_bytes(16, 24);
-        assert_eq!(spinner, 170);
-        assert!(spinner.saturating_mul(16) <= METAL_SET_BYTES_LIMIT);
-        assert!(spinner.saturating_mul(24) <= METAL_SET_BYTES_LIMIT);
+    fn analytic_instance_pair_layout_supports_large_aligned_runs() {
+        let (vertex_offset, fragment_offset, end) =
+            analytic_instance_pair_layout::<[f32; 4], ImageGpuParams>(7, 10_000);
+        assert_eq!(vertex_offset, 16);
+        assert_eq!(fragment_offset, 160_016);
+        assert_eq!(end, 640_016);
+        assert_eq!(vertex_offset % 16, 0);
+        assert_eq!(fragment_offset % core::mem::align_of::<ImageGpuParams>(), 0);
     }
 
     #[test]
