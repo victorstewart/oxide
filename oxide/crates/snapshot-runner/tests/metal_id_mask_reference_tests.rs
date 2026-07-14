@@ -111,6 +111,8 @@ fn metal_asymmetric_id_mask_raster_and_final_fields_match_cpu_reference()
    assert_eq!((readback.width, readback.height), (width, height));
    assert_eq!(readback.city, city);
    assert_eq!(readback.neighborhood, neighborhood);
+   assert!(readback.packed_fields);
+   assert_eq!(readback.field_logical_bytes.saturating_mul(4), readback.wide_field_logical_bytes);
    let mut reference = id_mask_seed_fields(width, height, &city, &neighborhood);
    for jump in id_mask_jump_schedule(width, height)
    {
@@ -118,4 +120,80 @@ fn metal_asymmetric_id_mask_raster_and_final_fields_match_cpu_reference()
    }
    assert_eq!(readback.city_field.into_iter().map(field_seed).collect::<Vec<_>>(), reference.city);
    assert_eq!(readback.seam_field.into_iter().map(field_seed).collect::<Vec<_>>(), reference.seam);
+}
+
+#[test]
+#[ignore = "C34 exhaustive Metal/CPU field matrix; run explicitly in release mode"]
+fn metal_packed_id_mask_fields_match_cpu_reference_at_contract_dimensions()
+{
+   for (width, height) in [
+      (256, 256),
+      (512, 512),
+      (1024, 1024),
+      (2048, 2048),
+      (257, 509),
+      (2048, 257),
+      (511, 1024),
+   ]
+   {
+      assert_single_seed_fields(width, height);
+   }
+}
+
+fn assert_single_seed_fields(width: usize, height: usize)
+{
+   let seed_x = width * 3 / 7;
+   let seed_y = height * 5 / 11;
+   let mut city = vec![0_u8; width * height];
+   let mut neighborhood = vec![0_u8; city.len()];
+   city[seed_y * width + seed_x] = 2;
+   neighborhood[seed_y * width + seed_x] = 17;
+   let vertices = mask_vertices(width, height, &city, &neighborhood);
+   let chunks = [IdMaskRasterChunk {
+      content_hash: ((width as u64) << 32) | height as u64,
+      first_vertex: 0,
+      vertex_count: vertices.len(),
+   }];
+   let pass = IdMaskGpuCompositorPass {
+      raster: IdMaskGpuRasterPass {
+         viewport: api::RectF::new(0.0, 0.0, width as f32, height as f32),
+         mask_width: width,
+         mask_height: height,
+         mask_scale: 1.0,
+         vertex_revision: 1,
+         vertices: &vertices,
+         chunks: &chunks,
+         projection: IdMaskRasterProjection::screen_px(),
+      },
+      city_styles: [IdMaskCityStyle::default(); 4],
+      neighborhood_colors: [[1.0; 3]; ID_MASK_MAX_NEIGHBORHOOD_COLORS],
+      mode: IdMaskCompositorMode::Beauty,
+      glow_enabled: true,
+      darken_background_alpha: 0.2,
+      polish: IdMaskPolishConfig::default(),
+   };
+   let mut renderer = MetalRenderer::new_default().expect("create Metal renderer");
+   renderer.resize(width as u32, height as u32, 1.0).expect("resize Metal renderer");
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_id_mask_gpu_compositor(&pass).expect("encode packed ID mask");
+   renderer.submit(token).expect("submit packed ID mask");
+   let readback = renderer.readback_id_mask_snapshot().expect("read packed ID-mask fields");
+
+   assert!(readback.packed_fields, "{width}x{height} did not select packed fields");
+   assert_eq!(readback.field_logical_bytes, (width * height * 16) as u64);
+   assert_eq!(readback.wide_field_logical_bytes, (width * height * 64) as u64);
+   let expected_city = IdMaskFieldSeed {
+      x: seed_x as i16,
+      y: seed_y as i16,
+      city: 2,
+      neighborhood: 17,
+   };
+   for (index, pixel) in readback.city_field.into_iter().enumerate()
+   {
+      assert_eq!(field_seed(pixel), expected_city, "city field mismatch at {width}x{height} pixel {index}");
+   }
+   for (index, pixel) in readback.seam_field.into_iter().enumerate()
+   {
+      assert_eq!(field_seed(pixel), IdMaskFieldSeed::INVALID, "seam field mismatch at {width}x{height} pixel {index}");
+   }
 }

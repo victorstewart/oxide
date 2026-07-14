@@ -965,8 +965,11 @@ pub struct MetalRenderer {
     pso_bloom_composite: RenderPipelineState,
     pso_id_mask_raster: RenderPipelineState,
     pso_id_mask_field_seed: RenderPipelineState,
+    pso_id_mask_field_seed_wide: RenderPipelineState,
     pso_id_mask_field_jump: RenderPipelineState,
+    pso_id_mask_field_jump_wide: RenderPipelineState,
     pso_id_mask_compositor: RenderPipelineState,
+    pso_id_mask_compositor_wide: RenderPipelineState,
     pso_neon_marker: RenderPipelineState,
     depth_state_3d_disabled: DepthStencilState,
     depth_state_3d_read: DepthStencilState,
@@ -1920,11 +1923,20 @@ impl MetalRenderer {
         let pso_id_mask_field_seed = build_init_stage("pso.id_mask_field_seed", || {
             id_mask_gpu::build_field_seed_pso(&device, &library)
         })?;
+        let pso_id_mask_field_seed_wide = build_init_stage("pso.id_mask_field_seed_wide", || {
+            id_mask_gpu::build_field_seed_wide_pso(&device, &library)
+        })?;
         let pso_id_mask_field_jump = build_init_stage("pso.id_mask_field_jump", || {
             id_mask_gpu::build_field_jump_pso(&device, &library)
         })?;
+        let pso_id_mask_field_jump_wide = build_init_stage("pso.id_mask_field_jump_wide", || {
+            id_mask_gpu::build_field_jump_wide_pso(&device, &library)
+        })?;
         let pso_id_mask_compositor = build_init_stage("pso.id_mask_compositor", || {
             id_mask_gpu::build_compositor_pso(&device, &library, color_format)
+        })?;
+        let pso_id_mask_compositor_wide = build_init_stage("pso.id_mask_compositor_wide", || {
+            id_mask_gpu::build_compositor_wide_pso(&device, &library, color_format)
         })?;
         let pso_neon_marker = build_init_stage("pso.neon_marker", || {
             neon_marker_gpu::build_pso(&device, &library, color_format)
@@ -2160,8 +2172,11 @@ impl MetalRenderer {
             pso_bloom_composite,
             pso_id_mask_raster,
             pso_id_mask_field_seed,
+            pso_id_mask_field_seed_wide,
             pso_id_mask_field_jump,
+            pso_id_mask_field_jump_wide,
             pso_id_mask_compositor,
+            pso_id_mask_compositor_wide,
             pso_neon_marker,
             depth_state_3d_disabled,
             depth_state_3d_read,
@@ -10230,7 +10245,7 @@ impl MetalRenderer {
             MTLPixelFormat::RG8Unorm => 2,
             MTLPixelFormat::BGRA8Unorm_sRGB | MTLPixelFormat::BGRA10_XR
                 | MTLPixelFormat::Depth32Float => 4,
-            MTLPixelFormat::RGBA16Float => 8,
+            MTLPixelFormat::RGBA16Float | MTLPixelFormat::RGBA16Uint => 8,
             MTLPixelFormat::RGBA32Float => 16,
             _ => return Self::texture_allocated_bytes(tex),
         };
@@ -10355,14 +10370,10 @@ impl MetalRenderer {
             self.id_mask_targets.iter().filter_map(|targets| targets.as_ref())
                 .chain(self.id_mask_field_cache.iter().map(|entry| &entry.targets))
                 .flat_map(|targets| {
-                    [
-                        targets.city.as_ref(),
-                        targets.neighborhood.as_ref(),
-                        targets.city_field_a.as_ref(),
-                        targets.city_field_b.as_ref(),
-                        targets.seam_field_a.as_ref(),
-                        targets.seam_field_b.as_ref(),
-                    ]
+                    [Some(targets.city.as_ref()), Some(targets.neighborhood.as_ref())]
+                        .into_iter()
+                        .chain(targets.field_texture_refs())
+                        .flatten()
                 }),
         );
         let camera_blur_cache_bytes = Self::unique_texture_category_bytes(
@@ -10490,14 +10501,11 @@ impl MetalRenderer {
             );
         }
         for targets in self.id_mask_targets.iter().filter_map(|targets| targets.as_ref()) {
-            for texture in [
-                &targets.city,
-                &targets.neighborhood,
-                &targets.city_field_a,
-                &targets.city_field_b,
-                &targets.seam_field_a,
-                &targets.seam_field_b,
-            ] {
+            for texture in [Some(targets.city.as_ref()), Some(targets.neighborhood.as_ref())]
+                .into_iter()
+                .chain(targets.field_texture_refs())
+                .flatten()
+            {
                 Self::push_unique_texture_logical_bytes(
                     &mut logical_seen,
                     &mut logical_total_bytes,
@@ -10507,13 +10515,13 @@ impl MetalRenderer {
         }
         for entry in &self.id_mask_field_cache {
             for texture in [
-                &entry.targets.city,
-                &entry.targets.neighborhood,
-                &entry.targets.city_field_a,
-                &entry.targets.city_field_b,
-                &entry.targets.seam_field_a,
-                &entry.targets.seam_field_b,
-            ] {
+                Some(entry.targets.city.as_ref()),
+                Some(entry.targets.neighborhood.as_ref()),
+            ]
+            .into_iter()
+            .chain(entry.targets.field_texture_refs())
+            .flatten()
+            {
                 Self::push_unique_texture_logical_bytes(
                     &mut logical_seen,
                     &mut logical_total_bytes,

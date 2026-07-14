@@ -125,6 +125,10 @@ fn oxide_device_contract_source_lists_canonical_families() {
 fn experiment_manifest_checker_accepts_current_manifest() {
     let text = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../perf-experiments.toml"));
     for id in [
+        "c34-metal-id-mask-packed-fields",
+        "c34-eager-seam-id-recovery-rejected",
+        "c34-single-compositor-peak-floor-rejected",
+        "c34-32-compositor-peak-floor-rejected",
         "c33-webgpu-id-mask-field-cache",
         "c33-one-entry-id-mask-cache-rejected",
         "c32-metal-id-mask-field-cache",
@@ -218,7 +222,7 @@ fn experiment_manifest_checker_accepts_current_manifest() {
         check_experiment_manifest_text(text, "2026-06-22").expect("current manifest should pass");
     assert_eq!(
         summary,
-        ExperimentCheckSummary { total: 165, undecided: 0, accepted: 79, rejected: 86 }
+        ExperimentCheckSummary { total: 169, undecided: 0, accepted: 80, rejected: 89 }
     );
 }
 

@@ -76,11 +76,13 @@ struct IdMaskFieldRaster
   float4 position [[position]];
 };
 
-struct IdMaskFieldTargets
+struct IdMaskWideFieldTargets
 {
   float4 city [[color(0)]];
   float4 seam [[color(1)]];
 };
+
+constant uint ID_MASK_PACKED_INVALID = 0xffffu;
 
 vertex IdMaskRasterOut v_id_mask_raster(uint vid [[vertex_id]],
                                         const device IdMaskRasterVertexIn *vertices [[buffer(0)]],
@@ -156,6 +158,27 @@ inline float4 read_field(texture2d<float, access::read> tex, int2 p, uint2 size)
   return tex.read(uint2(p));
 }
 
+inline uint4 read_packed_field(texture2d<uint, access::read> tex, int2 p, uint2 size)
+{
+  if (p.x < 0 || p.y < 0 || p.x >= int(size.x) || p.y >= int(size.y)) {
+    return uint4(ID_MASK_PACKED_INVALID);
+  }
+  return tex.read(uint2(p));
+}
+
+inline bool packed_seed_valid(uint2 seed)
+{
+  return seed.x != ID_MASK_PACKED_INVALID && seed.y != ID_MASK_PACKED_INVALID;
+}
+
+inline float4 unpack_seed_coordinate(uint2 seed)
+{
+  if (!packed_seed_valid(seed)) {
+    return float4(-1.0, -1.0, 0.0, 0.0);
+  }
+  return float4(float2(seed), 1.0, 0.0);
+}
+
 inline bool field_valid(float4 field)
 {
   return field.x >= -0.5 && field.y >= -0.5 && field.z >= 0.5;
@@ -177,6 +200,29 @@ inline uint field_city(float4 field)
 inline uint field_neighborhood(float4 field)
 {
   return uint(round(clamp(field.w, 0.0, 255.0)));
+}
+
+inline uint resolved_field_city(float4 field,
+                                texture2d<uint, access::read> city_tex,
+                                uint2 size,
+                                bool recover_ids)
+{
+  if (!field_valid(field)) {
+    return 0u;
+  }
+  return recover_ids ? read_mask(city_tex, int2(field.xy), size) : field_city(field);
+}
+
+inline uint resolved_field_neighborhood(float4 field,
+                                        texture2d<uint, access::read> neighborhood_tex,
+                                        uint2 size,
+                                        bool recover_ids)
+{
+  if (!field_valid(field)) {
+    return 0u;
+  }
+  return recover_ids ? read_mask(neighborhood_tex, int2(field.xy), size)
+                     : field_neighborhood(field);
 }
 
 vertex IdMaskFieldRaster v_id_mask_field(uint vid [[vertex_id]])
@@ -208,15 +254,15 @@ inline float seed_distance2(float4 seed, int2 p)
   return dot(delta, delta);
 }
 
-inline float4 seam_seed(texture2d<uint, access::read> city_tex,
-                        texture2d<uint, access::read> neighborhood_tex,
-                        int2 p,
-                        uint2 size)
+inline bool is_seam_seed(texture2d<uint, access::read> city_tex,
+                         texture2d<uint, access::read> neighborhood_tex,
+                         int2 p,
+                         uint2 size)
 {
   uint city = read_mask(city_tex, p, size);
   uint neighborhood = read_mask(neighborhood_tex, p, size);
   if (city == 0u || neighborhood == 0u) {
-    return float4(-1.0, -1.0, 0.0, 0.0);
+    return false;
   }
   for (int oy = -1; oy <= 1; ++oy) {
     for (int ox = -1; ox <= 1; ++ox) {
@@ -227,27 +273,44 @@ inline float4 seam_seed(texture2d<uint, access::read> city_tex,
       if (read_mask(city_tex, q, size) == city) {
         uint other = read_mask(neighborhood_tex, q, size);
         if (other != 0u && other != neighborhood) {
-          return float4(float2(p), float(city), 1.0);
+          return true;
         }
       }
     }
   }
-  return float4(-1.0, -1.0, 0.0, 0.0);
+  return false;
 }
 
-fragment IdMaskFieldTargets f_id_mask_field_seed(IdMaskFieldRaster in [[stage_in]],
-                                                 texture2d<uint, access::read> city_tex [[texture(0)]],
-                                                 texture2d<uint, access::read> neighborhood_tex [[texture(1)]],
-                                                 constant IdMaskFieldParams &params [[buffer(0)]])
+fragment uint4 f_id_mask_field_seed(IdMaskFieldRaster in [[stage_in]],
+                                    texture2d<uint, access::read> city_tex [[texture(0)]],
+                                    texture2d<uint, access::read> neighborhood_tex [[texture(1)]],
+                                    constant IdMaskFieldParams &params [[buffer(0)]])
+{
+  uint2 size = field_size(params);
+  int2 p = field_pixel(in.position, size);
+  uint city = read_mask(city_tex, p, size);
+  uint2 invalid = uint2(ID_MASK_PACKED_INVALID);
+  uint2 coordinate = uint2(p);
+  return uint4(city == 0u ? invalid : coordinate,
+               is_seam_seed(city_tex, neighborhood_tex, p, size) ? coordinate : invalid);
+}
+
+fragment IdMaskWideFieldTargets f_id_mask_field_seed_wide(
+    IdMaskFieldRaster in [[stage_in]],
+    texture2d<uint, access::read> city_tex [[texture(0)]],
+    texture2d<uint, access::read> neighborhood_tex [[texture(1)]],
+    constant IdMaskFieldParams &params [[buffer(0)]])
 {
   uint2 size = field_size(params);
   int2 p = field_pixel(in.position, size);
   uint city = read_mask(city_tex, p, size);
   uint neighborhood = read_mask(neighborhood_tex, p, size);
-  IdMaskFieldTargets out;
+  IdMaskWideFieldTargets out;
   out.city = city == 0u ? float4(-1.0, -1.0, 0.0, 0.0)
                         : float4(float2(p), float(city), float(neighborhood));
-  out.seam = seam_seed(city_tex, neighborhood_tex, p, size);
+  out.seam = is_seam_seed(city_tex, neighborhood_tex, p, size)
+      ? float4(float2(p), float(city), 1.0)
+      : float4(-1.0, -1.0, 0.0, 0.0);
   return out;
 }
 
@@ -277,15 +340,63 @@ inline float4 best_jump_seed(texture2d<float, access::read> src,
   return best;
 }
 
-fragment IdMaskFieldTargets f_id_mask_field_jump(IdMaskFieldRaster in [[stage_in]],
-                                                 texture2d<float, access::read> city_src [[texture(0)]],
-                                                 texture2d<float, access::read> seam_src [[texture(1)]],
-                                                 constant IdMaskFieldParams &params [[buffer(0)]])
+inline float packed_seed_distance2(uint2 seed, int2 p)
+{
+  if (!packed_seed_valid(seed)) {
+    return 1.0e30;
+  }
+  float2 delta = float2(seed) - float2(p);
+  return dot(delta, delta);
+}
+
+inline uint4 best_jump_packed(texture2d<uint, access::read> src,
+                              int2 p,
+                              uint2 size,
+                              int jump)
+{
+  uint4 best = read_packed_field(src, p, size);
+  float city_distance = packed_seed_distance2(best.xy, p);
+  float seam_distance = packed_seed_distance2(best.zw, p);
+  for (int oy = -1; oy <= 1; ++oy) {
+    for (int ox = -1; ox <= 1; ++ox) {
+      if (ox == 0 && oy == 0) {
+        continue;
+      }
+      uint4 candidate = read_packed_field(src, p + int2(ox * jump, oy * jump), size);
+      float candidate_city_distance = packed_seed_distance2(candidate.xy, p);
+      if (candidate_city_distance < city_distance) {
+        best.xy = candidate.xy;
+        city_distance = candidate_city_distance;
+      }
+      float candidate_seam_distance = packed_seed_distance2(candidate.zw, p);
+      if (candidate_seam_distance < seam_distance) {
+        best.zw = candidate.zw;
+        seam_distance = candidate_seam_distance;
+      }
+    }
+  }
+  return best;
+}
+
+fragment uint4 f_id_mask_field_jump(IdMaskFieldRaster in [[stage_in]],
+                                    texture2d<uint, access::read> src [[texture(0)]],
+                                    constant IdMaskFieldParams &params [[buffer(0)]])
+{
+  uint2 size = field_size(params);
+  int2 p = field_pixel(in.position, size);
+  return best_jump_packed(src, p, size, max(int(round(params.jump)), 1));
+}
+
+fragment IdMaskWideFieldTargets f_id_mask_field_jump_wide(
+    IdMaskFieldRaster in [[stage_in]],
+    texture2d<float, access::read> city_src [[texture(0)]],
+    texture2d<float, access::read> seam_src [[texture(1)]],
+    constant IdMaskFieldParams &params [[buffer(0)]])
 {
   uint2 size = field_size(params);
   int2 p = field_pixel(in.position, size);
   int jump = max(int(round(params.jump)), 1);
-  IdMaskFieldTargets out;
+  IdMaskWideFieldTargets out;
   out.city = best_jump_seed(city_src, p, size, jump);
   out.seam = best_jump_seed(seam_src, p, size, jump);
   return out;
@@ -305,27 +416,30 @@ inline float gaussian_alpha(float distance_mask_px,
   return clamp(max_alpha * exp(-(distance_px * distance_px) / (2.0 * sigma * sigma)), 0.0, 1.0);
 }
 
-fragment float4 f_id_mask_compositor(IdMaskCompositorRaster in [[stage_in]],
-                                     texture2d<uint, access::read> city_tex [[texture(0)]],
-                                     texture2d<uint, access::read> neighborhood_tex [[texture(1)]],
-                                     texture2d<float, access::read> city_field_tex [[texture(2)]],
-                                     texture2d<float, access::read> seam_field_tex [[texture(3)]],
-                                     constant IdMaskCompositorParams &params [[buffer(0)]])
+inline float4 composite_id_mask(IdMaskCompositorRaster in,
+                                texture2d<uint, access::read> city_tex,
+                                texture2d<uint, access::read> neighborhood_tex,
+                                constant IdMaskCompositorParams &params,
+                                float4 nearest_city_field,
+                                float4 seam_field,
+                                bool recover_ids)
 {
   uint2 size = uint2(uint(max(params.mask_size.x, 1.0)), uint(max(params.mask_size.y, 1.0)));
   int2 p = int2(clamp(in.pos_mask, float2(0.0), params.mask_size - float2(1.0)));
   int polish_radius = int(ceil(params.polish_radius_px * params.mask_scale));
   int fallback_radius = int(ceil(params.fallback_radius_px * params.mask_scale));
-  float4 nearest_city_field = read_field(city_field_tex, p, size);
   uint city_direct = read_mask(city_tex, p, size);
   float city_distance = field_distance(nearest_city_field, p);
+  uint nearest_city = city_direct != 0u
+      ? city_direct
+      : resolved_field_city(nearest_city_field, city_tex, size, recover_ids);
   uint city = city_direct != 0u ? city_direct
-                                : (city_distance <= float(polish_radius) ? field_city(nearest_city_field) : 0u);
+                                : (city_distance <= float(polish_radius) ? nearest_city : 0u);
   uint neighborhood_direct = read_mask(neighborhood_tex, p, size);
   uint neighborhood = (city_direct == city && neighborhood_direct != 0u)
       ? neighborhood_direct
-      : ((city_distance <= float(fallback_radius) && field_city(nearest_city_field) == city)
-             ? field_neighborhood(nearest_city_field)
+      : ((city_distance <= float(fallback_radius) && nearest_city == city)
+             ? resolved_field_neighborhood(nearest_city_field, neighborhood_tex, size, recover_ids)
              : 0u);
   uint city_index = min(city, 3u);
   uint neighborhood_index = min(neighborhood, 31u);
@@ -337,21 +451,23 @@ fragment float4 f_id_mask_compositor(IdMaskCompositorRaster in [[stage_in]],
     return neighborhood == 0 ? float4(0.0, 0.0, 0.0, 1.0) : float4(params.neighborhood_colors[neighborhood_index].rgb, 1.0);
   }
 
-  float4 seam_field = read_field(seam_field_tex, p, size);
-  float seam_distance = field_valid(seam_field) && field_city(seam_field) == city
-      ? field_distance(seam_field, p)
-      : float(int(ceil(5.0 * params.mask_scale)) + 1);
   if (params.mode == 1u) {
+    if (city == 0u || !field_valid(seam_field)) {
+      return float4(0.0, 0.0, 0.0, 1.0);
+    }
+    float seam_distance = field_distance(seam_field, p);
     float core = gaussian_alpha(seam_distance, params.mask_scale, 0.42, 1.0, 2.1);
-    return core > 0.04 && city != 0 ? float4(1.0, 1.0, 1.0, 1.0)
-                                    : float4(0.0, 0.0, 0.0, 1.0);
+    if (core <= 0.04 || resolved_field_city(seam_field, city_tex, size, recover_ids) != city) {
+      return float4(0.0, 0.0, 0.0, 1.0);
+    }
+    return float4(1.0, 1.0, 1.0, 1.0);
   }
 
   if (city == 0) {
     if (params.glow_enabled == 0u) {
       return float4(0.0, 0.0, 0.0, clamp(params.darken_background_alpha, 0.0, 1.0));
     }
-    uint halo_city = field_city(nearest_city_field);
+    uint halo_city = nearest_city;
     if (!field_valid(nearest_city_field) || halo_city == 0u) {
       return float4(0.0, 0.0, 0.0, clamp(params.darken_background_alpha, 0.0, 1.0));
     }
@@ -370,15 +486,46 @@ fragment float4 f_id_mask_compositor(IdMaskCompositorRaster in [[stage_in]],
   float light = 0.92 + 0.08 * top_left_light;
   float3 fill = min(params.neighborhood_colors[neighborhood_index].rgb * light, float3(1.0));
 
-  if (params.glow_enabled != 0u) {
+  if (params.glow_enabled != 0u && field_valid(seam_field)) {
+    float seam_distance = field_distance(seam_field, p);
     float seam_halo = gaussian_alpha(seam_distance, params.mask_scale, 1.10, 0.22, 2.5);
     float seam_core = gaussian_alpha(seam_distance, params.mask_scale, 0.27, 0.82, 1.7);
     float seam_alpha = max(seam_halo, seam_core);
-    if (seam_alpha > 0.002) {
+    if (seam_alpha > 0.002
+        && resolved_field_city(seam_field, city_tex, size, recover_ids) == city) {
       float3 seam = params.city_seam_colors[city_index].rgb;
       fill = mix(fill, seam, clamp(seam_alpha, 0.0, 1.0));
     }
   }
 
   return float4(fill, 0.96);
+}
+
+fragment float4 f_id_mask_compositor(IdMaskCompositorRaster in [[stage_in]],
+                                     texture2d<uint, access::read> city_tex [[texture(0)]],
+                                     texture2d<uint, access::read> neighborhood_tex [[texture(1)]],
+                                     texture2d<uint, access::read> field_tex [[texture(2)]],
+                                     constant IdMaskCompositorParams &params [[buffer(0)]])
+{
+  uint2 size = uint2(uint(max(params.mask_size.x, 1.0)), uint(max(params.mask_size.y, 1.0)));
+  int2 p = int2(clamp(in.pos_mask, float2(0.0), params.mask_size - float2(1.0)));
+  uint4 packed = read_packed_field(field_tex, p, size);
+  return composite_id_mask(in, city_tex, neighborhood_tex, params,
+                           unpack_seed_coordinate(packed.xy),
+                           unpack_seed_coordinate(packed.zw), true);
+}
+
+fragment float4 f_id_mask_compositor_wide(
+    IdMaskCompositorRaster in [[stage_in]],
+    texture2d<uint, access::read> city_tex [[texture(0)]],
+    texture2d<uint, access::read> neighborhood_tex [[texture(1)]],
+    texture2d<float, access::read> city_field_tex [[texture(2)]],
+    texture2d<float, access::read> seam_field_tex [[texture(3)]],
+    constant IdMaskCompositorParams &params [[buffer(0)]])
+{
+  uint2 size = uint2(uint(max(params.mask_size.x, 1.0)), uint(max(params.mask_size.y, 1.0)));
+  int2 p = int2(clamp(in.pos_mask, float2(0.0), params.mask_size - float2(1.0)));
+  return composite_id_mask(in, city_tex, neighborhood_tex, params,
+                           read_field(city_field_tex, p, size),
+                           read_field(seam_field_tex, p, size), false);
 }

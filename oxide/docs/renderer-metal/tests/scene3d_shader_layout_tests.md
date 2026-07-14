@@ -12,7 +12,7 @@ The renderer builds a `Scene3dGpuMaterial` in `oxide_renderer_metal::MetalRender
 
 - `scene3d_material_shader_matches_cpu_set_bytes_layout()` verifies the 48-byte CPU layout and checks the shader source uses `packed_float3 _pad;`.
 - `scene3d_bloom_payload_reaches_bloom_encoder()` verifies `encode_scene3d()` calls the bloom encoder and does not collapse bloom layers into one main-pass strength.
-- `id_mask_compositor_is_renderer_owned_shader_path()` verifies the renderer module, encode entry point, PSO field, and ID-mask shader helpers remain connected.
+- `id_mask_compositor_is_renderer_owned_shader_path()` verifies the renderer module, encode entry point, packed `0xFFFF` sentinel/XY decode, wide fallback, PSO field, and ID-mask shader helpers remain connected.
 
 ## Logic narrative
 
@@ -55,6 +55,7 @@ assert!(shader.contains("packed_float3 _pad;"));
 
 ## Changelog
 
+- 2026-07-14: froze the packed RGBA16Uint city/seam coordinate decode, 65,535/65,536 selector boundary, and wide-compositor fallback contracts.
 - 2026-04-30: Added ABI regression coverage for Scene3D material shader padding.
 - 2026-04-30: Added regression coverage for routing `Pass3d::bloom` through the offscreen bloom encoder.
 - 2026-05-13: Kept ID-mask compositor shader-path coverage aligned with the compact shared nearest-city helper.

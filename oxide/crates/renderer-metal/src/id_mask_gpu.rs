@@ -24,27 +24,73 @@ pub(super) struct RenderTargets {
     pub(super) height: usize,
     pub(super) city: Texture,
     pub(super) neighborhood: Texture,
-    pub(super) city_field_a: Texture,
-    pub(super) city_field_b: Texture,
-    pub(super) seam_field_a: Texture,
-    pub(super) seam_field_b: Texture,
+    fields: FieldTextures,
+}
+
+#[derive(Clone)]
+enum FieldTextures {
+    Packed { a: Texture, b: Texture },
+    Wide {
+        city_a: Texture,
+        city_b: Texture,
+        seam_a: Texture,
+        seam_b: Texture,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum FieldPair<'a> {
+    Packed(&'a TextureRef),
+    Wide { city: &'a TextureRef, seam: &'a TextureRef },
 }
 
 impl RenderTargets {
-    fn final_fields(&self) -> (&TextureRef, &TextureRef) {
+    fn field_pair(&self, use_a: bool) -> FieldPair<'_> {
+        match &self.fields {
+            FieldTextures::Packed { a, b } => FieldPair::Packed(if use_a { a } else { b }),
+            FieldTextures::Wide { city_a, city_b, seam_a, seam_b } => FieldPair::Wide {
+                city: if use_a { city_a } else { city_b },
+                seam: if use_a { seam_a } else { seam_b },
+            },
+        }
+    }
+
+    fn final_fields(&self) -> FieldPair<'_> {
         let mut src_is_a = true;
         let mut jump = self.width.max(self.height).next_power_of_two() / 2;
         while jump >= 1 {
             src_is_a = !src_is_a;
             jump /= 2;
         }
-        if src_is_a {
-            (&self.city_field_a, &self.seam_field_a)
-        } else {
-            (&self.city_field_b, &self.seam_field_b)
+        self.field_pair(src_is_a)
+    }
+
+    pub(super) fn field_texture_refs(&self) -> [Option<&TextureRef>; 4] {
+        match &self.fields {
+            FieldTextures::Packed { a, b } => [Some(a), Some(b), None, None],
+            FieldTextures::Wide { city_a, city_b, seam_a, seam_b } => {
+                [Some(city_a), Some(city_b), Some(seam_a), Some(seam_b)]
+            }
         }
     }
+
+    #[cfg(feature = "snapshot-tests")]
+    fn packed_fields(&self) -> bool {
+        matches!(self.fields, FieldTextures::Packed { .. })
+    }
 }
+
+#[inline]
+const fn packed_field_coordinates_fit(width: usize, height: usize) -> bool {
+    width <= u16::MAX as usize && height <= u16::MAX as usize
+}
+
+const _: () = {
+    assert!(packed_field_coordinates_fit(1, 1));
+    assert!(packed_field_coordinates_fit(u16::MAX as usize, u16::MAX as usize));
+    assert!(!packed_field_coordinates_fit(u16::MAX as usize + 1, 1));
+    assert!(!packed_field_coordinates_fit(1, u16::MAX as usize + 1));
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct IdMaskProjectionKey {
@@ -140,6 +186,9 @@ pub struct IdMaskSnapshotReadback
    pub neighborhood: Vec<u8>,
    pub city_field: Vec<[f32; 4]>,
    pub seam_field: Vec<[f32; 4]>,
+   pub packed_fields: bool,
+   pub field_logical_bytes: u64,
+   pub wide_field_logical_bytes: u64,
 }
 
 #[inline]
@@ -154,6 +203,25 @@ fn configure_clear_store_attachments(
         ca.set_load_action(MTLLoadAction::Clear);
         ca.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0 });
         ca.set_store_action(MTLStoreAction::Store);
+    }
+}
+
+#[inline]
+fn configure_clear_store_fields(rpd: &RenderPassDescriptorRef, fields: FieldPair<'_>) {
+    match fields {
+        FieldPair::Packed(field) => {
+            let ca = rpd.color_attachments().object_at(0).unwrap();
+            ca.set_texture(Some(field));
+            ca.set_load_action(MTLLoadAction::Clear);
+            ca.set_clear_color(MTLClearColor {
+                red: u16::MAX as f64,
+                green: u16::MAX as f64,
+                blue: u16::MAX as f64,
+                alpha: u16::MAX as f64,
+            });
+            ca.set_store_action(MTLStoreAction::Store);
+        }
+        FieldPair::Wide { city, seam } => configure_clear_store_attachments(rpd, city, seam),
     }
 }
 
@@ -182,8 +250,38 @@ pub(super) fn build_compositor_pso(
     lib: &Library,
     fmt: MTLPixelFormat,
 ) -> Result<RenderPipelineState, MetalInitError> {
+    build_compositor_variant_pso(
+        device,
+        lib,
+        fmt,
+        "f_id_mask_compositor",
+        "pso.id_mask_compositor.create",
+    )
+}
+
+pub(super) fn build_compositor_wide_pso(
+    device: &Device,
+    lib: &Library,
+    fmt: MTLPixelFormat,
+) -> Result<RenderPipelineState, MetalInitError> {
+    build_compositor_variant_pso(
+        device,
+        lib,
+        fmt,
+        "f_id_mask_compositor_wide",
+        "pso.id_mask_compositor_wide.create",
+    )
+}
+
+fn build_compositor_variant_pso(
+    device: &Device,
+    lib: &Library,
+    fmt: MTLPixelFormat,
+    fragment_name: &str,
+    label: &str,
+) -> Result<RenderPipelineState, MetalInitError> {
     let v = pipeline_function(lib, "id_mask_compositor.vertex", "v_id_mask_compositor")?;
-    let f = pipeline_function(lib, "id_mask_compositor.fragment", "f_id_mask_compositor")?;
+    let f = pipeline_function(lib, "id_mask_compositor.fragment", fragment_name)?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
@@ -191,7 +289,7 @@ pub(super) fn build_compositor_pso(
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
     configure_source_alpha_blend(ca);
-    pipeline_state(device, "pso.id_mask_compositor.create", &desc)
+    pipeline_state(device, label, &desc)
 }
 
 pub(super) fn build_raster_pso(
@@ -216,14 +314,56 @@ pub(super) fn build_field_seed_pso(
     device: &Device,
     lib: &Library,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    build_field_pso(device, lib, "f_id_mask_field_seed", "pso.id_mask_field_seed.create")
+    build_field_pso(
+        device,
+        lib,
+        "f_id_mask_field_seed",
+        "pso.id_mask_field_seed.create",
+        MTLPixelFormat::RGBA16Uint,
+        1,
+    )
 }
 
 pub(super) fn build_field_jump_pso(
     device: &Device,
     lib: &Library,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    build_field_pso(device, lib, "f_id_mask_field_jump", "pso.id_mask_field_jump.create")
+    build_field_pso(
+        device,
+        lib,
+        "f_id_mask_field_jump",
+        "pso.id_mask_field_jump.create",
+        MTLPixelFormat::RGBA16Uint,
+        1,
+    )
+}
+
+pub(super) fn build_field_seed_wide_pso(
+    device: &Device,
+    lib: &Library,
+) -> Result<RenderPipelineState, MetalInitError> {
+    build_field_pso(
+        device,
+        lib,
+        "f_id_mask_field_seed_wide",
+        "pso.id_mask_field_seed_wide.create",
+        MTLPixelFormat::RGBA32Float,
+        2,
+    )
+}
+
+pub(super) fn build_field_jump_wide_pso(
+    device: &Device,
+    lib: &Library,
+) -> Result<RenderPipelineState, MetalInitError> {
+    build_field_pso(
+        device,
+        lib,
+        "f_id_mask_field_jump_wide",
+        "pso.id_mask_field_jump_wide.create",
+        MTLPixelFormat::RGBA32Float,
+        2,
+    )
 }
 
 fn build_field_pso(
@@ -231,6 +371,8 @@ fn build_field_pso(
     lib: &Library,
     fragment_name: &str,
     label: &str,
+    format: MTLPixelFormat,
+    attachment_count: u64,
 ) -> Result<RenderPipelineState, MetalInitError> {
     let v = pipeline_function(lib, "id_mask_field.vertex", "v_id_mask_field")?;
     let f = pipeline_function(lib, "id_mask_field.fragment", fragment_name)?;
@@ -238,9 +380,9 @@ fn build_field_pso(
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
     desc.set_sample_count(1);
-    for index in 0..2 {
+    for index in 0..attachment_count {
         let ca = desc.color_attachments().object_at(index).unwrap();
-        ca.set_pixel_format(MTLPixelFormat::RGBA32Float);
+        ca.set_pixel_format(format);
         ca.set_blending_enabled(false);
     }
     pipeline_state(device, label, &desc)
@@ -254,16 +396,34 @@ impl MetalRenderer {
         let targets = self.id_mask_targets.get(slot)?.as_ref()?;
         let (_, _, city) = self.readback_texture_bytes(&targets.city, 1)?;
         let (_, _, neighborhood) = self.readback_texture_bytes(&targets.neighborhood, 1)?;
-        let (city_field, seam_field) = targets.final_fields();
-        let (_, _, city_field) = self.readback_texture_bytes(city_field, 16)?;
-        let (_, _, seam_field) = self.readback_texture_bytes(seam_field, 16)?;
+        let (city_field, seam_field) = match targets.final_fields() {
+            FieldPair::Packed(field) => {
+                let (_, _, bytes) = self.readback_texture_bytes(field, 8)?;
+                decode_rgba16_uint_fields(
+                    &bytes,
+                    &city,
+                    &neighborhood,
+                    targets.width,
+                    targets.height,
+                )
+            }
+            FieldPair::Wide { city, seam } => {
+                let (_, _, city) = self.readback_texture_bytes(city, 16)?;
+                let (_, _, seam) = self.readback_texture_bytes(seam, 16)?;
+                (decode_rgba32_float(&city), decode_rgba32_float(&seam))
+            }
+        };
+        let pixels = targets.width.saturating_mul(targets.height) as u64;
         Some(IdMaskSnapshotReadback {
             width: targets.width,
             height: targets.height,
             city,
             neighborhood,
-            city_field: decode_rgba32_float(&city_field),
-            seam_field: decode_rgba32_float(&seam_field),
+            city_field,
+            seam_field,
+            packed_fields: targets.packed_fields(),
+            field_logical_bytes: pixels.saturating_mul(if targets.packed_fields() { 16 } else { 64 }),
+            wide_field_logical_bytes: pixels.saturating_mul(64),
         })
     }
 
@@ -296,30 +456,36 @@ impl MetalRenderer {
         }) {
             return Ok(targets);
         }
+        let fields = if packed_field_coordinates_fit(width, height) {
+            FieldTextures::Packed {
+                a: self.new_id_mask_field_texture(width, height, MTLPixelFormat::RGBA16Uint)?,
+                b: self.new_id_mask_field_texture(width, height, MTLPixelFormat::RGBA16Uint)?,
+            }
+        } else {
+            FieldTextures::Wide {
+                city_a: self.new_id_mask_field_texture(width, height, MTLPixelFormat::RGBA32Float)?,
+                city_b: self.new_id_mask_field_texture(width, height, MTLPixelFormat::RGBA32Float)?,
+                seam_a: self.new_id_mask_field_texture(width, height, MTLPixelFormat::RGBA32Float)?,
+                seam_b: self.new_id_mask_field_texture(width, height, MTLPixelFormat::RGBA32Float)?,
+            }
+        };
+        let field_texture_count = if matches!(&fields, FieldTextures::Packed { .. }) { 2 } else { 4 };
         let targets = RenderTargets {
             width,
             height,
             city: self.new_r8_mask_render_texture(width, height)?,
             neighborhood: self.new_r8_mask_render_texture(width, height)?,
-            city_field_a: self.new_rgba32_float_render_texture(width, height)?,
-            city_field_b: self.new_rgba32_float_render_texture(width, height)?,
-            seam_field_a: self.new_rgba32_float_render_texture(width, height)?,
-            seam_field_b: self.new_rgba32_float_render_texture(width, height)?,
+            fields,
         };
-        self.acc_resource_creates = self.acc_resource_creates.saturating_add(6);
+        self.acc_resource_creates = self.acc_resource_creates.saturating_add(2 + field_texture_count);
         Ok(targets)
     }
 
     fn id_mask_render_targets_bytes(targets: &RenderTargets) -> u64 {
-        [
-            &targets.city,
-            &targets.neighborhood,
-            &targets.city_field_a,
-            &targets.city_field_b,
-            &targets.seam_field_a,
-            &targets.seam_field_b,
-        ]
+        [Some(targets.city.as_ref()), Some(targets.neighborhood.as_ref())]
         .into_iter()
+        .chain(targets.field_texture_refs())
+        .flatten()
         .fold(0_u64, |total, texture| {
             total.saturating_add(Self::texture_allocated_bytes(texture))
         })
@@ -333,18 +499,23 @@ impl MetalRenderer {
         r8.set_height(height as u64);
         r8.set_storage_mode(MTLStorageMode::Private);
         r8.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
-        let rgba = TextureDescriptor::new();
-        rgba.set_pixel_format(MTLPixelFormat::RGBA32Float);
-        rgba.set_texture_type(MTLTextureType::D2);
-        rgba.set_width(width as u64);
-        rgba.set_height(height as u64);
-        rgba.set_storage_mode(MTLStorageMode::Private);
-        rgba.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+        let field = TextureDescriptor::new();
+        let packed = packed_field_coordinates_fit(width, height);
+        field.set_pixel_format(if packed {
+            MTLPixelFormat::RGBA16Uint
+        } else {
+            MTLPixelFormat::RGBA32Float
+        });
+        field.set_texture_type(MTLTextureType::D2);
+        field.set_width(width as u64);
+        field.set_height(height as u64);
+        field.set_storage_mode(MTLStorageMode::Private);
+        field.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
         (self.device.heap_texture_size_and_align(&r8).size as u64)
             .saturating_mul(2)
             .saturating_add(
-                (self.device.heap_texture_size_and_align(&rgba).size as u64)
-                    .saturating_mul(4),
+                (self.device.heap_texture_size_and_align(&field).size as u64)
+                    .saturating_mul(if packed { 2 } else { 4 }),
             )
     }
 
@@ -380,16 +551,17 @@ impl MetalRenderer {
         Ok(self.id_mask_vertex_caches.len() - 1)
     }
 
-    fn new_rgba32_float_render_texture(
+    fn new_id_mask_field_texture(
         &self,
         width: usize,
         height: usize,
+        format: MTLPixelFormat,
     ) -> Result<Texture, api::RenderError> {
         if width == 0 || height == 0 {
             return Err(api::RenderError::InvalidOperation("id-mask field target has zero size"));
         }
         let desc = TextureDescriptor::new();
-        desc.set_pixel_format(MTLPixelFormat::RGBA32Float);
+        desc.set_pixel_format(format);
         desc.set_texture_type(MTLTextureType::D2);
         desc.set_width(width as u64);
         desc.set_height(height as u64);
@@ -461,8 +633,7 @@ impl MetalRenderer {
         mask_scale: f32,
         city_tex: &TextureRef,
         neighborhood_tex: &TextureRef,
-        city_field_tex: &TextureRef,
-        seam_field_tex: &TextureRef,
+        fields: FieldPair<'_>,
         city_styles: &[id_mask_compositor::IdMaskCityStyle;
              id_mask_compositor::ID_MASK_MAX_CITY_STYLES],
         neighborhood_colors_src: &[[f32; 3]; id_mask_compositor::ID_MASK_MAX_NEIGHBORHOOD_COLORS],
@@ -530,7 +701,10 @@ impl MetalRenderer {
         // rect so embedded map renderers do not leak fullscreen pixels or shade
         // outside the visible surface.
         set_viewport_and_scissor_dp(&enc, self, viewport);
-        enc.set_render_pipeline_state(&self.pso_id_mask_compositor);
+        enc.set_render_pipeline_state(match fields {
+            FieldPair::Packed(_) => &self.pso_id_mask_compositor,
+            FieldPair::Wide { .. } => &self.pso_id_mask_compositor_wide,
+        });
         enc.set_vertex_bytes(
             0,
             core::mem::size_of_val(&params) as u64,
@@ -543,8 +717,13 @@ impl MetalRenderer {
         );
         enc.set_fragment_texture(0, Some(city_tex));
         enc.set_fragment_texture(1, Some(neighborhood_tex));
-        enc.set_fragment_texture(2, Some(city_field_tex));
-        enc.set_fragment_texture(3, Some(seam_field_tex));
+        match fields {
+            FieldPair::Packed(field) => enc.set_fragment_texture(2, Some(field)),
+            FieldPair::Wide { city, seam } => {
+                enc.set_fragment_texture(2, Some(city));
+                enc.set_fragment_texture(3, Some(seam));
+            }
+        }
         enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
         enc.end_encoding();
 
@@ -594,7 +773,6 @@ impl MetalRenderer {
             {
                 self.id_mask_targets[slot] = Some(targets.clone());
             }
-            let (city_field_tex, seam_field_tex) = targets.final_fields();
             return self.encode_id_mask_compositor_textures(
                 pass.raster.viewport,
                 pass.raster.mask_width,
@@ -602,8 +780,7 @@ impl MetalRenderer {
                 pass.raster.mask_scale,
                 &targets.city,
                 &targets.neighborhood,
-                city_field_tex,
-                seam_field_tex,
+                targets.final_fields(),
                 &pass.city_styles,
                 &pass.neighborhood_colors,
                 pass.mode,
@@ -696,12 +873,15 @@ impl MetalRenderer {
             _pad: 0.0,
         };
         let rpd = RenderPassDescriptor::new();
-        configure_clear_store_attachments(&rpd, &targets.city_field_a, &targets.seam_field_a);
+        configure_clear_store_fields(&rpd, targets.field_pair(true));
         self.acc_render_passes = self.acc_render_passes.saturating_add(1);
         self.acc_id_mask_field_seed_passes =
             self.acc_id_mask_field_seed_passes.saturating_add(1);
         let enc = cmd.new_render_command_encoder(&rpd);
-        enc.set_render_pipeline_state(&self.pso_id_mask_field_seed);
+        enc.set_render_pipeline_state(match &targets.fields {
+            FieldTextures::Packed { .. } => &self.pso_id_mask_field_seed,
+            FieldTextures::Wide { .. } => &self.pso_id_mask_field_seed_wide,
+        });
         enc.set_fragment_bytes(
             0,
             core::mem::size_of_val(&field_params) as u64,
@@ -723,35 +903,30 @@ impl MetalRenderer {
                 jump: jump as f32,
                 _pad: 0.0,
             };
-            let (src_city, src_seam, dst_city, dst_seam) = if src_is_a {
-                (
-                    &targets.city_field_a,
-                    &targets.seam_field_a,
-                    &targets.city_field_b,
-                    &targets.seam_field_b,
-                )
-            } else {
-                (
-                    &targets.city_field_b,
-                    &targets.seam_field_b,
-                    &targets.city_field_a,
-                    &targets.seam_field_a,
-                )
-            };
+            let source = targets.field_pair(src_is_a);
+            let destination = targets.field_pair(!src_is_a);
             let rpd = RenderPassDescriptor::new();
-            configure_clear_store_attachments(&rpd, dst_city, dst_seam);
+            configure_clear_store_fields(&rpd, destination);
             self.acc_render_passes = self.acc_render_passes.saturating_add(1);
             self.acc_id_mask_field_jump_passes =
                 self.acc_id_mask_field_jump_passes.saturating_add(1);
             let enc = cmd.new_render_command_encoder(&rpd);
-            enc.set_render_pipeline_state(&self.pso_id_mask_field_jump);
+            enc.set_render_pipeline_state(match source {
+                FieldPair::Packed(_) => &self.pso_id_mask_field_jump,
+                FieldPair::Wide { .. } => &self.pso_id_mask_field_jump_wide,
+            });
             enc.set_fragment_bytes(
                 0,
                 core::mem::size_of_val(&params) as u64,
                 (&params as *const FieldGpuParams).cast(),
             );
-            enc.set_fragment_texture(0, Some(src_city));
-            enc.set_fragment_texture(1, Some(src_seam));
+            match source {
+                FieldPair::Packed(field) => enc.set_fragment_texture(0, Some(field)),
+                FieldPair::Wide { city, seam } => {
+                    enc.set_fragment_texture(0, Some(city));
+                    enc.set_fragment_texture(1, Some(seam));
+                }
+            }
             enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
             enc.end_encoding();
             src_is_a = !src_is_a;
@@ -760,8 +935,6 @@ impl MetalRenderer {
         if cacheable {
             self.retain_id_mask_field_cache_entry(cache_key, pass.raster.chunks, &targets);
         }
-        let (city_field_tex, seam_field_tex) = targets.final_fields();
-
         self.encode_id_mask_compositor_textures(
             pass.raster.viewport,
             pass.raster.mask_width,
@@ -769,8 +942,7 @@ impl MetalRenderer {
             pass.raster.mask_scale,
             &targets.city,
             &targets.neighborhood,
-            city_field_tex,
-            seam_field_tex,
+            targets.final_fields(),
             &pass.city_styles,
             &pass.neighborhood_colors,
             pass.mode,
@@ -795,4 +967,49 @@ fn decode_rgba32_float(bytes: &[u8]) -> Vec<[f32; 4]>
          ]
       })
       .collect()
+}
+
+#[cfg(feature = "snapshot-tests")]
+fn decode_rgba16_uint_fields(
+   bytes: &[u8],
+   city: &[u8],
+   neighborhood: &[u8],
+   width: usize,
+   height: usize,
+) -> (Vec<[f32; 4]>, Vec<[f32; 4]>)
+{
+   debug_assert_eq!(bytes.len(), width.saturating_mul(height).saturating_mul(8));
+   let mut city_field = Vec::with_capacity(width.saturating_mul(height));
+   let mut seam_field = Vec::with_capacity(width.saturating_mul(height));
+   for pixel in bytes.chunks_exact(8)
+   {
+      let component = |offset| u16::from_ne_bytes(pixel[offset..offset + 2].try_into().unwrap());
+      let city_seed = [component(0), component(2)];
+      let seam_seed = [component(4), component(6)];
+      city_field.push(decode_packed_seed(city_seed, city, neighborhood, width, true));
+      seam_field.push(decode_packed_seed(seam_seed, city, neighborhood, width, false));
+   }
+   (city_field, seam_field)
+}
+
+#[cfg(feature = "snapshot-tests")]
+fn decode_packed_seed(
+   seed: [u16; 2],
+   city: &[u8],
+   neighborhood: &[u8],
+   width: usize,
+   include_neighborhood: bool,
+) -> [f32; 4]
+{
+   if seed[0] == u16::MAX || seed[1] == u16::MAX
+   {
+      return [-1.0, -1.0, 0.0, 0.0];
+   }
+   let index = seed[1] as usize * width + seed[0] as usize;
+   [
+      seed[0] as f32,
+      seed[1] as f32,
+      city[index] as f32,
+      if include_neighborhood { neighborhood[index] as f32 } else { 1.0 },
+   ]
 }

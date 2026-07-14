@@ -26,7 +26,7 @@
 - `MetalRenderer::encode_id_mask_gpu_compositor(pass) -> Result<(), RenderError>`
   - Rasterizes semantic region/subregion ID triangles into renderer-owned R8 targets before running the compositor shader. Implementation lives in `id_mask_gpu.rs`.
 - `MetalRenderer::readback_id_mask_snapshot()` (`snapshot-tests`)
-  - Reads exact raster IDs and the final city/seam RGBA32F fields for CPU-reference parity tests.
+  - Reads exact raster IDs and format-independent decoded final city/seam seeds for CPU-reference parity tests.
 - `MetalRenderer::set_memory_stats_enabled_for_benchmark(enabled)`
   - Enables or disables sampled resident-resource scans for explicit accounting-overhead controls; rendering behavior is unchanged.
 - `MetalRenderer::set_accounting_stats_enabled_for_benchmark(enabled)`
@@ -88,7 +88,7 @@ Synthetic camera benchmark textures keep the BGRA reference and optimized NV12 s
 
 Scene3D bloom uses the same persistent-object discipline: additive bloom PSOs are created once, bloom textures are reused across frames at a bounded downsample size, and `encode_scene3d()` routes `Pass3d::bloom` through the dedicated blur/composite encoder after the main 3D pass has initialized the target.
 
-ID-mask composition is GPU-owned. Semantic region/subregion triangles are rasterized into private R8 targets, seeded into RGBA32F nearest-feature fields, propagated by jump flooding, and sampled by the final compositor. A complete immutable-field key contains dimensions, exact mask-scale bits, aggregate vertex/chunk content generations and ranges, and every projection value consumed by rasterization. Final-only style, color, glow, polish, mode, opacity, and viewport placement are deliberately excluded. A hit therefore encodes only the compositor; a content, dimension, scale, or projection change reruns raster, seed, and every jump pass.
+ID-mask composition is GPU-owned. Semantic region/subregion triangles are rasterized into private R8 targets. Supported dimensions pack city-seed XY and seam-seed XY into two ping-ponged RGBA16Uint fields with `0xFFFF` invalid, reducing field logical ownership from 64 to 16 bytes per pixel; the compositor recovers semantic IDs from the original R8 masks. A dedicated four-RGBA32Float path preserves larger coordinates when the sentinel would collide. Both representations use the same strict-distance update order and final composition logic. A complete immutable-field key contains dimensions, exact mask-scale bits, aggregate vertex/chunk content generations and ranges, and every projection value consumed by rasterization. Final-only style, color, glow, polish, mode, opacity, and viewport placement are deliberately excluded. A hit therefore encodes only the compositor; a content, dimension, scale, or projection change reruns raster, seed, and every jump pass.
 
 Cached field sets are immutable while admitted. The renderer retains at most four sets under an adaptive 64–512 MiB allocated-byte budget, evicts the least-recently used set, and may recycle a compatible evicted set for a later miss. Entries referenced earlier in the current command buffer are protected from recycling. Across frames, the single Metal command queue and tracked resource hazards order any later rewrite after earlier reads, while committed command buffers retain their resources through completion. Cache telemetry reports hits, misses, entries, resident/budget bytes, evictions, and each ID-mask stage count. Explicit purge, iOS memory pressure, and device loss release cache and frame-slot references; committed in-flight command buffers remain Metal-owned until completion.
 
@@ -106,6 +106,7 @@ Cached field sets are immutable while admitted. The renderer retains at most fou
 
 ## Changelog
 
+- 2026-07-14: packed Metal ID-mask city/seam coordinates into two RGBA16Uint fields with R8 ID recovery and an exact wide-coordinate fallback.
 - 2026-07-14: cached complete Metal ID-mask raster and JFA fields under an allocated-byte LRU budget, skipped all field-building passes for final-only changes, added pass/cache telemetry, and wired memory-pressure/device-loss purge.
 - 2026-07-14: bounded retained-layer storage by Metal `allocatedSize`, with adaptive/configurable budgets, protected-frame LRU eviction, compatible whole-texture pooling, absent-layer aging, pool shrink, and scale/device-loss/memory-warning purges. An over-budget frame renders layer bodies inline so budget enforcement cannot change pixels or omit work.
 - 2026-07-13: added C29 prepared snapshot-layer keys, body-free clean texture replay, single-owner dirty refresh, resource/purge invalidation, and adaptive exact parent-layer parity.

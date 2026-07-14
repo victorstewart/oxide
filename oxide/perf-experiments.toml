@@ -1,4 +1,85 @@
 [[experiments]]
+id = "c34-metal-id-mask-packed-fields"
+introduced_commit = "C34 staged tree recorded in commit proof"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-metal", "oxide-snapshot-runner", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "Packed RGBA16Uint city/seam coordinates, 0xFFFF invalid handling, R8 semantic-ID recovery, deterministic strict-distance ties, exact wide-coordinate fallback, all compositor modes/polish/glow variants, and every final field pixel at 256/512/1024/2048 plus unusual aspect ratios must match the CPU/unchanged-parent references."
+performance_gate = "Fifteen balanced fresh-process pairs and at least 2,000 completed Metal timestamps per side must improve forced-miss 512-square GPU time by at least 5% with generic confidence/win/tail gates, reduce supported-dimension field logical bytes exactly 4x, preserve zero steady resource creation and stage counts, and keep compositor-only p50/p95/p99/peak within the 5% no-material-regression guardrail."
+decision_state = "accepted"
+decision = "Packed Metal city/seam jump-flood coordinates into two RGBA16Uint ping-pong textures and recovered semantic IDs lazily from the original R8 masks, while retaining the four-RGBA32Float coordinate-overflow path."
+proof = [
+   "The exact production-source population collected 2,100 forced-miss GPU samples per side; parent/candidate p50/p95/p99/peak were 1.535188/1.571794/1.611076/1.797125 ms and 0.851250/0.881877/0.902752/1.121250 ms.",
+   "Paired median forced-miss GPU speedup was 44.686% with 95% CI 44.511%..45.041% and 15/15 wins; the independent 512-compositor guardrail accepted p50/p95/p99/peak changes of -1.451%/+0.633%/+0.424%/+0.424%.",
+   "Two packed fields use 16 logical bytes/pixel versus 64 for four wide fields; four-entry measured target ownership fell from 69,599,232 to 19,136,512 bytes, pass counts stayed 1 raster + 1 seed + 9 JFA + 1 compositor, resource creation stayed zero, seven size/aspect field matrices and ten parent/candidate visual variants matched exactly.",
+]
+cleanup = [
+   "Kept the wide-coordinate pipeline prebuilt and selected only when a dimension would consume the reserved 0xFFFF coordinate; no per-frame pipeline or resource construction was added.",
+   "Kept final IDs authoritative in the R8 masks and lazy so direct city/neighborhood pixels do not pay unnecessary recovery reads; aggregate official baseline promotion remains deferred to C62.",
+]
+
+[[experiments]]
+id = "c34-eager-seam-id-recovery-rejected"
+introduced_commit = "rejected during C34 exact-tree compositor timing"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "Every unchanged-parent compositor mode, glow state, and polish capture must remain byte-identical while semantic IDs continue to come from the authoritative R8 masks."
+performance_gate = "Packed compositor-only p50/p95/p99/peak must remain within the fixed 5% no-material-regression guardrail before the packed field path is accepted."
+decision_state = "rejected"
+decision = "Rejected resolving every valid seam seed's city ID before determining whether its Gaussian contribution could affect the final pixel."
+proof = [
+   "The 2,100-sample exact-tree single-compositor population measured parent/candidate p50/p95/p99 of 0.071583/0.074750/0.075709 and 0.073417/0.076417/0.077125 ms, while candidate peak 0.107542 ms exceeded parent 0.097292 ms by more than 5%.",
+   "The forced-miss path still improved materially, so the failed guardrail isolated final-compositor ID recovery rather than field packing or JFA bandwidth.",
+]
+cleanup = [
+   "Moved the exact seam Gaussian influence test ahead of R8 city recovery so invisible seeds perform no semantic-ID texture read.",
+   "Retained the failed single-compositor population without dropping its peak or weakening the guardrail.",
+]
+
+[[experiments]]
+id = "c34-single-compositor-peak-floor-rejected"
+introduced_commit = "rejected during C34 optimized compositor timing"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "The measurement replacement must execute unchanged production compositor work with identical cache state and preserve every collected sample."
+performance_gate = "A sub-millisecond one-draw guardrail may remain only if its raw peak is not dominated by fixed GPU preemption relative to a roughly 0.07 ms median."
+decision_state = "rejected"
+decision = "Rejected one compositor per measured submission as the final peak guardrail because fixed GPU preemption dominated the sub-millisecond workload."
+proof = [
+   "After lazy recovery, parent/candidate p50/p95/p99 improved from 0.070979/0.074625/0.075792 to 0.066167/0.070375/0.071084 ms with 15/15 pair wins and a 6.510% paired median speedup.",
+   "One candidate preemption sample reached 0.593000 ms versus a 0.189625 ms parent peak, failing only the raw peak gate despite improved p50/p95/p99.",
+]
+cleanup = [
+   "Amplified identical cached compositor work per command buffer instead of filtering samples or changing the 5% threshold.",
+   "Preserved the complete failed population and its exact source/binary identities under the ignored C34 raw directory.",
+]
+
+[[experiments]]
+id = "c34-32-compositor-peak-floor-rejected"
+introduced_commit = "rejected during C34 compositor batch refinement"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max Metal"]
+correctness_gate = "The larger batch must repeat the same cached compositor, retain all 2,100 submissions per side, and preserve exact pass/resource counters."
+performance_gate = "The compositor batch is large enough only when fixed GPU preemption cannot move raw peak beyond the unchanged 5% guardrail."
+decision_state = "rejected"
+decision = "Rejected a 32-compositor batch because its roughly 1.4 ms duration still left raw peak dominated by fixed GPU preemption."
+proof = [
+   "The 2,100-sample population improved paired median 9.514% with 95% CI 8.314%..10.899% and 15/15 wins, but one candidate peak reached 2.573000 ms versus 1.665500 ms on the parent.",
+   "Both sides encoded exactly 4,480 compositor passes per process with zero steady resource creation, so the failure was not hidden work or asymmetric batching.",
+]
+cleanup = [
+   "Raised the identical fixed batch to 512 compositors, where p50/p95/p99/peak all remained within 5% without removing any sample.",
+   "Kept the 32-compositor results and counter payloads as rejected evidence.",
+]
+
+[[experiments]]
 id = "c33-webgpu-id-mask-field-cache"
 introduced_commit = "C33 staged tree recorded in commit proof"
 introduced_date = "2026-07-14"

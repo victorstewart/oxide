@@ -15,7 +15,7 @@ The snapshot tests validate renderer behavior through readback instead of relyin
 - Persistent prepared-snapshot parity across RRects, images, A8 glyphs, solids, clips, dynamic transform/opacity through the frame uniform ring, opaque fractional raster edges, one-dirty rebuilding, byte-budget eviction, resource generations, explicit purge, and flat fallback accounting.
 - Prepared image-mesh transform/opacity parity and 512-instance alternating glyph/mesh spatial damage with exact full/small pixels, one selected draw, zero vertex scans/copies/uploads, and static full-plan reuse.
 - Prepared retained-layer parity for mixed RRect/image/glyph/image-mesh/Solid bodies, ordinary-format non-RRect bodies, overlapping translucent RRects, and mixed-precision fallback; body-free clean composite; exactly one dirty refresh; same-frame duplicate deduplication; translation reuse; scale/resize/target-scale/nested/resource/purge invalidation; and exact effect/internal-layer/spinner fallback.
-- Cached Metal ID-mask parity between a compositor-only style hit and a fresh raster/seed/JFA render, including exact final BGRA bytes, R8 IDs, RGBA32F city/seam fields, stage counts, and explicit purge.
+- Cached Metal ID-mask parity between a compositor-only style hit and a fresh raster/seed/JFA render, including exact final BGRA bytes, R8 IDs, format-independent decoded city/seam fields, stage counts, and explicit purge.
 
 The pure 2D tests assert Oxide's default opaque black Metal clear on untouched pixels. Snapshot-runner component goldens that need white backgrounds draw that background explicitly in their own draw lists.
 
@@ -59,6 +59,7 @@ The snapshot file requires `snapshot-tests` and macOS or physical iOS Metal supp
 Run the named test with `cargo test --locked -p oxide-renderer-metal --features snapshot-tests --test snapshots`.
 
 ## Changelog
+- 2026-07-14: kept cached/fresh final-pixel and decoded-field parity across packed Metal ID-mask storage.
 - 2026-07-14: added exact cached-versus-fresh ID-mask field and final-pixel parity plus purge coverage.
 - 2026-07-13: added C29 exact prepared-layer clean/dirty, duplicate, generation/resource/scale/purge invalidation, and unsupported-fallback coverage.
 - 2026-07-13: added C27 image-mesh parity, static-plan reuse, and exact small-damage glyph/mesh spatial-work coverage.
