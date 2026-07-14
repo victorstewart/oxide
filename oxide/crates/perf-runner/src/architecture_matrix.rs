@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 
 struct RetainedScenario
 {
@@ -69,6 +70,11 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
    if perf_case_allowed(id)
    {
       cases.push(metal_text_paged_atlas_locality_case(id, smoke)?);
+   }
+   let id = "gpu.architecture.text.glyph_instances_1000";
+   if perf_case_allowed(id)
+   {
+      cases.push(metal_text_glyph_instances_case(id, smoke)?);
    }
    push_if_allowed(cases, "cpu.architecture.layers.matrix", || layer_matrix_case(smoke));
 
@@ -2454,6 +2460,196 @@ fn metal_text_new_labels_case(id: &str, smoke: bool, frame_scoped: bool) -> Resu
       samples: frame_samples.len(),
       ops_per_sample: 1,
       notes: vec![String::from(note)],
+      metrics,
+   })
+}
+
+fn metal_text_glyph_instances_case(id: &str, smoke: bool) -> Result<PerfCaseResult>
+{
+   let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating glyph-instance Metal renderer")?);
+   renderer.resize(1_200, 800, 1.0).context("resizing glyph-instance Metal renderer")?;
+   let renderer_ptr: *mut metal::MetalRenderer = &mut *renderer;
+   let mut text = perf_text_ctx();
+   text.atlas = oxide_text::PagedAtlas::new(128, 128, oxide_text::DEFAULT_GLYPH_ATLAS_PAGE_COUNT);
+   text.set_fallback_fonts(&[1]);
+   text.set_frame_stats_enabled(true);
+   let mut supported = Vec::new();
+   for scalar in 0x21_u32..0x3000
+   {
+      let Some(ch) = char::from_u32(scalar) else { continue };
+      if !ch.is_whitespace() && text.fonts.font_supports_cluster(0, &ch.to_string())
+      {
+         supported.push(ch);
+      }
+   }
+   assert!(!supported.is_empty(), "glyph-instance case requires supported glyphs");
+   let labels = (0..1_000_usize).map(|index| {
+      let unique = supported[index % supported.len()];
+      match index % 11
+      {
+         0 => format!("Wrapped Latin {unique} words {index:04} across a narrow row"),
+         1 => format!("RTL مرحبا {unique} {index:04}"),
+         2 => format!("CJK 漢字 {unique} {index:04}"),
+         3 => format!("Emoji 😀 {unique} {index:04}"),
+         _ => format!("Glyph {unique} size variant {index:04}"),
+      }
+   }).collect::<Vec<_>>();
+   let palette = [
+      api::Color::rgba(0.10, 0.12, 0.16, 1.0),
+      api::Color::rgba(0.80, 0.20, 0.12, 0.90),
+      api::Color::rgba(0.12, 0.45, 0.85, 0.75),
+      api::Color::rgba(0.20, 0.70, 0.35, 1.0),
+   ];
+   let mut uploader = ArchitectureTextMetalUploader {
+      renderer: renderer_ptr,
+      creates: 0,
+      updates: 0,
+      upload_pixels: 0,
+      upload_bytes: 0,
+   };
+   let mut builder = ui::DrawListBuilder::new();
+   text.begin_frame();
+   for (index, label) in labels.iter().enumerate()
+   {
+      let font_px = 16.0 + (index % 20) as f32;
+      let wrap = index % 11 == 0;
+      ui::elements::encode_label_text(
+         label,
+         palette[index % palette.len()],
+         ui::elements::Align::Left,
+         wrap,
+         0,
+         font_px,
+         api::RectF::new(
+            (index % 5) as f32 * 238.0,
+            (index % 40) as f32 * 20.0,
+            if wrap { 180.0 } else { 232.0 },
+            if wrap { 48.0 } else { 40.0 },
+         ),
+         1.0,
+         &mut text,
+         &mut uploader,
+         &mut builder,
+      );
+   }
+   let proof = text.finish_frame(&mut uploader, &mut builder);
+   ui::coalesce_adjacent_draws(builder.drawlist_mut());
+   let mut atlas_pages = HashSet::new();
+   let mut has_bitmap = false;
+   let mut has_sdf = false;
+   for item in &builder.drawlist().items
+   {
+      if let api::DrawCmd::GlyphRun { run } = item
+      {
+         atlas_pages.insert(run.atlas);
+         has_sdf |= run.sdf;
+         has_bitmap |= !run.sdf;
+      }
+   }
+   assert!(
+      atlas_pages.len() >= 2,
+      "glyph-instance case requires multiple atlas pages: referenced={} resident={} glyphs={} items={} rasterizations={}",
+      atlas_pages.len(),
+      text.atlas.page_count(),
+      text.atlas.glyph_count(),
+      builder.drawlist().items.len(),
+      proof.rasterizations,
+   );
+   assert!(has_bitmap && has_sdf, "glyph-instance case requires bitmap and SDF text");
+
+   let warmups = if smoke { 1_usize } else { 3 };
+   let frames = if smoke { 3_usize } else {
+      std::env::var("OXIDE_C45_METAL_FRAMES")
+         .ok()
+         .and_then(|value| value.parse::<usize>().ok())
+         .filter(|frames| *frames >= 16)
+         .unwrap_or(32)
+   };
+   let mut frame_samples = Vec::with_capacity(frames);
+   let mut encode_samples = Vec::with_capacity(frames);
+   let mut gpu_samples = Vec::with_capacity(frames);
+   let mut warmup_samples = Vec::with_capacity(warmups);
+   let mut draws = 0_u64;
+   let mut buffer_upload_bytes = 0_u64;
+   let mut glyph_instance_bytes = 0_u64;
+   let mut glyph_instance_binds = 0_u64;
+   let mut glyph_instances = 0_u64;
+   for frame in 0..warmups.saturating_add(frames)
+   {
+      let started_at = Instant::now();
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      renderer.encode_pass(builder.drawlist());
+      renderer.submit(token).with_context(|| format!("submitting {id}"))?;
+      let stats = last_metal_stats_after_submit(&renderer, token.0);
+      let frame_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+      if frame < warmups
+      {
+         warmup_samples.push(frame_ms);
+         continue;
+      }
+      frame_samples.push(frame_ms);
+      encode_samples.push(stats.encode_ms);
+      gpu_samples.push(stats.gpu_ms);
+      draws = draws.saturating_add(u64::from(stats.draws));
+      buffer_upload_bytes = buffer_upload_bytes.saturating_add(stats.buffer_upload_bytes);
+      glyph_instance_bytes = glyph_instance_bytes.saturating_add(stats.glyph_instance_bytes);
+      glyph_instance_binds = glyph_instance_binds.saturating_add(u64::from(stats.glyph_instance_buffer_binds));
+      glyph_instances = glyph_instances.saturating_add(u64::from(stats.glyph_instances));
+   }
+   let summary = summarize(&frame_samples);
+   let measured = frames.max(1) as f64;
+   let average_instances = glyph_instances as f64 / measured;
+   let mut metrics = BTreeMap::new();
+   insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+   insert_distribution_metrics(&mut metrics, "encode_ms", &encode_samples);
+   insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+   insert_frame_pacing_metrics(&mut metrics, &frame_samples);
+   metrics.insert(String::from("labels"), labels.len() as f64);
+   metrics.insert(String::from("atlas_pages"), atlas_pages.len() as f64);
+   metrics.insert(String::from("bitmap_and_sdf"), 1.0);
+   metrics.insert(String::from("draws_avg"), draws as f64 / measured);
+   metrics.insert(String::from("buffer_upload_bytes_avg"), buffer_upload_bytes as f64 / measured);
+   metrics.insert(String::from("glyph_instance_bytes_avg"), glyph_instance_bytes as f64 / measured);
+   metrics.insert(String::from("glyph_instance_buffer_binds_avg"), glyph_instance_binds as f64 / measured);
+   metrics.insert(String::from("glyph_instances_avg"), average_instances);
+   metrics.insert(
+      String::from("bytes_per_glyph_instance"),
+      if average_instances == 0.0 { 0.0 } else { glyph_instance_bytes as f64 / measured / average_instances },
+   );
+   metrics.insert(
+      String::from("glyph_buffer_upload_bytes_per_instance"),
+      if average_instances == 0.0 { 0.0 } else { buffer_upload_bytes as f64 / measured / average_instances },
+   );
+   insert_text_frame_metrics(&mut metrics, proof);
+   if std::env::var_os("OXIDE_C45_RAW_SAMPLES").is_some()
+   {
+      insert_indexed_samples(&mut metrics, "c45_warmup_frame_ms", &warmup_samples);
+      insert_indexed_samples(&mut metrics, "c45_frame_ms", &frame_samples);
+      insert_indexed_samples(&mut metrics, "c45_encode_ms", &encode_samples);
+      insert_indexed_samples(&mut metrics, "c45_gpu_ms", &gpu_samples);
+   }
+   Ok(PerfCaseResult {
+      id: String::from(id),
+      family: String::from("architecture"),
+      layer: String::from("engine"),
+      scenario: String::from("rendering-architecture"),
+      variant: String::from("oxide"),
+      cache_state: String::from("warm"),
+      refresh_mode: String::from("offscreen"),
+      unit: String::from("ms/frame"),
+      gated: true,
+      threshold_pct: 0.20,
+      median: summary.median,
+      p95: summary.p95,
+      p99: summary.p99,
+      min: summary.min,
+      max: summary.max,
+      mean: summary.mean,
+      samples: frame_samples.len(),
+      ops_per_sample: 1,
+      notes: vec![String::from(
+         "One thousand wrapped, mixed-color, mixed-page bitmap/SDF labels with Latin, RTL, CJK, and emoji content encoded through the Metal glyph path.",
+      )],
       metrics,
    })
 }

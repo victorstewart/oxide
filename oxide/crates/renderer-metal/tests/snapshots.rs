@@ -666,7 +666,7 @@ fn prepared_layer_clean_hit_composites_without_body_work_and_matches_flat_pixels
    assert_eq!(first_stats.layer_cache_hits, 0);
    assert_eq!(first_stats.layer_cache_misses, 1);
    assert_eq!(first_stats.layer_texture_creates, 1);
-   assert_eq!(first_stats.layer_offscreen_draws, 5);
+   assert_eq!(first_stats.layer_offscreen_draws, 4);
    assert_eq!(first_stats.layer_body_commands_scanned, 0);
    assert_eq!(first_stats.layer_body_commands_copied, 0);
    assert_eq!(first_stats.render_passes, 2);
@@ -833,7 +833,7 @@ fn prepared_layer_invalidates_once_for_dirty_nested_resource_scale_and_purge_cha
    assert_eq!(dirty_pixels, base_pixels);
    assert_eq!(dirty_stats.layer_cache_misses, 1);
    assert_eq!(dirty_stats.layer_cache_hits, 0);
-   assert_eq!(dirty_stats.layer_offscreen_draws, 5);
+   assert_eq!(dirty_stats.layer_offscreen_draws, 4);
    assert_eq!(dirty_stats.layer_texture_creates, 0);
    assert_eq!(dirty_stats.chunks_prepared, 0);
    assert_eq!(dirty_stats.commands_traversed, 0);
@@ -854,7 +854,7 @@ fn prepared_layer_invalidates_once_for_dirty_nested_resource_scale_and_purge_cha
    let _ = renderer.readback_bgra8().expect("read duplicated dirty layer");
    assert_eq!(duplicated_stats.layer_cache_misses, 1);
    assert_eq!(duplicated_stats.layer_cache_hits, 1);
-   assert_eq!(duplicated_stats.layer_offscreen_draws, 5);
+   assert_eq!(duplicated_stats.layer_offscreen_draws, 4);
    assert_eq!(duplicated_stats.layer_texture_creates, 0);
    assert_eq!(duplicated_stats.render_passes, 2);
    assert_eq!(duplicated_stats.draws, 7);
@@ -895,7 +895,7 @@ fn prepared_layer_invalidates_once_for_dirty_nested_resource_scale_and_purge_cha
    let scaled_stats = renderer.last_stats();
    let (_, _, scaled_pixels) = renderer.readback_bgra8().expect("read scaled prepared layer");
    assert_eq!(scaled_stats.layer_cache_misses, 1);
-   assert_eq!(scaled_stats.layer_offscreen_draws, 5);
+   assert_eq!(scaled_stats.layer_offscreen_draws, 4);
    assert_eq!(scaled_stats.layer_texture_creates, 1);
 
    let mut reference = MetalRenderer::new_default().expect("scaled reference metal");
@@ -942,7 +942,7 @@ fn prepared_layer_invalidates_once_for_dirty_nested_resource_scale_and_purge_cha
    let _ = renderer.readback_bgra8().expect("read target-scale layer");
    assert_eq!(target_scale_stats.layer_cache_hits, 0);
    assert_eq!(target_scale_stats.layer_cache_misses, 1);
-   assert_eq!(target_scale_stats.layer_offscreen_draws, 5);
+   assert_eq!(target_scale_stats.layer_offscreen_draws, 4);
    assert_eq!(target_scale_stats.layer_texture_creates, 1);
 
    let nested = prepared_layer_snapshot(
@@ -961,7 +961,7 @@ fn prepared_layer_invalidates_once_for_dirty_nested_resource_scale_and_purge_cha
    let nested_stats = renderer.last_stats();
    let _ = renderer.readback_bgra8().expect("read nested generation");
    assert_eq!(nested_stats.layer_cache_misses, 1);
-   assert_eq!(nested_stats.layer_offscreen_draws, 5);
+   assert_eq!(nested_stats.layer_offscreen_draws, 4);
    assert_eq!(nested_stats.layer_texture_creates, 0);
    assert_eq!(nested_stats.chunks_prepared, 1);
 
@@ -972,7 +972,7 @@ fn prepared_layer_invalidates_once_for_dirty_nested_resource_scale_and_purge_cha
    let purge_stats = renderer.last_stats();
    let _ = renderer.readback_bgra8().expect("read after purge");
    assert_eq!(purge_stats.layer_cache_misses, 1);
-   assert_eq!(purge_stats.layer_offscreen_draws, 5);
+   assert_eq!(purge_stats.layer_offscreen_draws, 4);
    assert_eq!(purge_stats.layer_texture_creates, 0);
    assert_eq!(purge_stats.chunks_prepared, 1);
 
@@ -1005,7 +1005,7 @@ fn prepared_layer_invalidates_once_for_dirty_nested_resource_scale_and_purge_cha
    let resource_stats = renderer.last_stats();
    let _ = renderer.readback_bgra8().expect("read resource generation");
    assert_eq!(resource_stats.layer_cache_misses, 1);
-   assert_eq!(resource_stats.layer_offscreen_draws, 5);
+   assert_eq!(resource_stats.layer_offscreen_draws, 4);
    assert_eq!(resource_stats.layer_texture_creates, 0);
    assert_eq!(resource_stats.chunks_prepared, 1);
 
@@ -1025,7 +1025,7 @@ fn prepared_layer_invalidates_once_for_dirty_nested_resource_scale_and_purge_cha
    let content_stats = renderer.last_stats();
    let _ = renderer.readback_bgra8().expect("read content generation");
    assert_eq!(content_stats.layer_cache_misses, 1);
-   assert_eq!(content_stats.layer_offscreen_draws, 5);
+   assert_eq!(content_stats.layer_offscreen_draws, 4);
    assert_eq!(content_stats.layer_texture_creates, 0);
    assert_eq!(content_stats.chunks_prepared, 1);
 }

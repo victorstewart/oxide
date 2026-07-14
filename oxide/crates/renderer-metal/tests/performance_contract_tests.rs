@@ -43,6 +43,23 @@ fn analytic_instance_families_stream_through_frame_rings()
 }
 
 #[test]
+fn glyphs_use_compact_instances_without_per_frame_indirect_commands()
+{
+   let renderer = include_str!("../src/lib.rs");
+   let prepared = include_str!("../src/prepared.rs");
+   let shader = include_str!("../shaders/text.metal");
+   assert!(renderer.contains("size_of::<GlyphGpuInstance>() == 48"));
+   assert!(renderer.contains("draw_primitives_instanced"));
+   assert!(renderer.contains("MTLPrimitiveType::TriangleStrip"));
+   assert!(prepared.contains("draw_primitives_instanced_base_instance"));
+   assert!(!renderer.contains("new_indirect_command_buffer_with_descriptor"));
+   assert!(!renderer.contains("OXIDE_GLYPH_USE_ICB"));
+   assert!(shader.contains("struct GlyphGpuInstance"));
+   assert!(shader.contains("vertex GlyphVSOut v_glyph"));
+   assert!(shader.contains("vertex GlyphVSOut v_prepared_glyph"));
+}
+
+#[test]
 fn build_script_fails_apple_metallib_generation_instead_of_placeholder_fallback() {
     let source = include_str!("../build.rs");
     assert!(

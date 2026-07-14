@@ -9,7 +9,7 @@ use oxide_renderer_api as api;
 use std::collections::{HashMap, HashSet};
 
 use super::{
-   api_vertex_descriptor, append_remapped_indices_to_span, apply_scissor_dp,
+   api_vertex_descriptor, append_glyph_instances, append_remapped_indices_to_span, apply_scissor_dp,
    configure_layer_source_alpha_blend, configure_source_alpha_blend, effective_scissor_dp,
    intersect_scissor_dp, pack_image_params, pack_nine_slice_params, pack_rrect_params,
    pipeline_error, pipeline_function, pipeline_state, solid_primitive_for_index_count,
@@ -51,10 +51,10 @@ impl PreparedPipelines
          image_single_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_single_opaque", "v_prepared_inst_rect", "f_image_single", false)?,
          image_mesh: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_mesh", "v_prepared_text", "f_prepared_image_mesh", true)?,
          image_mesh_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_mesh_opaque", "v_prepared_text", "f_image_mesh", true)?,
-         text: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text", "v_prepared_text", "f_prepared_text", true)?,
-         text_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text_opaque", "v_prepared_text", "f_text", true)?,
-         text_sdf: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text_sdf", "v_prepared_text", "f_prepared_text_sdf", true)?,
-         text_sdf_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text_sdf_opaque", "v_prepared_text", "f_text_sdf", true)?,
+         text: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text", "v_prepared_glyph", "f_prepared_glyph", false)?,
+         text_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text_opaque", "v_prepared_glyph", "f_glyph", false)?,
+         text_sdf: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text_sdf", "v_prepared_glyph", "f_prepared_glyph_sdf", false)?,
+         text_sdf_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text_sdf_opaque", "v_prepared_glyph", "f_glyph_sdf", false)?,
       })
    }
 }
@@ -715,7 +715,7 @@ impl PreparedChunk
                let (operation, next, bytes) = prepare_glyphs(renderer.device.as_ref(), list, index)?;
                operations.push(operation);
                byte_size = byte_size.saturating_add(bytes);
-               buffer_count = buffer_count.saturating_add(3);
+               buffer_count = buffer_count.saturating_add(1);
                index = next;
             }
             api::DrawCmd::ImageMesh { .. } =>
@@ -847,9 +847,7 @@ pub(super) enum PreparedOperation
       count: u64,
    },
    Glyphs {
-      vertices: Buffer,
-      indices: Buffer,
-      uniforms: Buffer,
+      instances: Buffer,
       draws: Vec<PreparedGlyphDraw>,
       atlas: api::ImageHandle,
       sdf: bool,
@@ -878,10 +876,8 @@ pub(super) enum PreparedOperation
 pub(super) struct PreparedGlyphDraw
 {
    pub command: u32,
-   pub vertex_offset: u64,
-   pub index_offset: u64,
-   pub uniform_offset: u64,
-   pub index_count: u64,
+   pub first_instance: u64,
+   pub instance_count: u64,
 }
 
 fn operation_allocated_bytes(operation: &PreparedOperation) -> u64
@@ -892,9 +888,7 @@ fn operation_allocated_bytes(operation: &PreparedOperation) -> u64
       PreparedOperation::RRects { params, .. } => allocated(params),
       PreparedOperation::Images { params, argument_buffer, .. } => allocated(params)
          .saturating_add(argument_buffer.as_ref().map_or(0, allocated)),
-      PreparedOperation::Glyphs { vertices, indices, uniforms, .. } => allocated(vertices)
-         .saturating_add(allocated(indices))
-         .saturating_add(allocated(uniforms)),
+      PreparedOperation::Glyphs { instances, .. } => allocated(instances),
       PreparedOperation::ImageMesh { vertices, indices, uniform, .. } => allocated(vertices)
          .saturating_add(indices.as_ref().map_or(0, allocated))
          .saturating_add(allocated(uniform)),
@@ -1009,9 +1003,7 @@ fn prepare_glyphs(device: &DeviceRef, list: &api::DrawList, start: usize) -> Opt
       api::DrawCmd::GlyphRun { run } => *run,
       _ => return None,
    };
-   let mut vertices = Vec::<api::Vertex>::new();
-   let mut indices = Vec::<u16>::new();
-   let mut uniforms = Vec::<[f32; 4]>::new();
+   let mut instances = Vec::new();
    let mut draws = Vec::new();
    let mut index = start;
    while let Some(api::DrawCmd::GlyphRun { run }) = list.items.get(index)
@@ -1020,37 +1012,24 @@ fn prepare_glyphs(device: &DeviceRef, list: &api::DrawList, start: usize) -> Opt
       {
          break;
       }
-      let source_vertices = list.vertices.get(run.vb.offset as usize..run.vb.offset as usize + run.vb.len as usize)?;
-      let source_indices = list.indices.get(run.ib.offset as usize..run.ib.offset as usize + run.ib.len as usize)?;
-      let vertex_offset = vertices.len().saturating_mul(core::mem::size_of::<api::Vertex>()) as u64;
-      let index_offset = indices.len().saturating_mul(core::mem::size_of::<u16>()) as u64;
-      let uniform_offset = uniforms.len().saturating_mul(core::mem::size_of::<[f32; 4]>()) as u64;
-      vertices.extend_from_slice(source_vertices);
-      let index_count = append_remapped_indices_to_span(
-         source_indices,
-         run.vb.offset,
-         run.vb.len,
-         0,
-         &mut indices,
+      let first_instance = instances.len() as u64;
+      let instance_count = append_glyph_instances(
+         &list.vertices,
+         &list.indices,
+         *run,
+         &mut instances,
       )? as u64;
-      uniforms.push([run.color.r, run.color.g, run.color.b, run.color.a]);
       draws.push(PreparedGlyphDraw {
          command: index as u32,
-         vertex_offset,
-         index_offset,
-         uniform_offset,
-         index_count,
+         first_instance,
+         instance_count,
       });
       index += 1;
    }
-   let vertices = buffer_from_slice(device, &vertices)?;
-   let indices = buffer_from_slice(device, &indices)?;
-   let uniforms = buffer_from_slice(device, &uniforms)?;
-   let bytes = vertices.length().saturating_add(indices.length()).saturating_add(uniforms.length());
+   let instances = buffer_from_slice(device, &instances)?;
+   let bytes = instances.length();
    Some((PreparedOperation::Glyphs {
-      vertices,
-      indices,
-      uniforms,
+      instances,
       draws,
       atlas: first.atlas,
       sdf: first.sdf,
@@ -1806,8 +1785,11 @@ impl MetalRenderer
       self.last_stats.vb_bytes = 0;
       self.last_stats.ib_bytes = 0;
       self.last_stats.ub_bytes = dynamic_bytes as u64;
-      self.last_stats.draws = self.acc_draws;
+      self.last_stats.draws = self.acc_draws.saturating_add(self.acc_flat_instanced_draws);
       self.last_stats.instanced = self.acc_instanced;
+      self.last_stats.glyph_instance_bytes = self.acc_glyph_instance_bytes;
+      self.last_stats.glyph_instance_buffer_binds = self.acc_glyph_instance_buffer_binds;
+      self.last_stats.glyph_instances = self.acc_glyph_instances;
       self.last_stats.icb_cmds = 0;
       self.last_stats.commands_traversed = self.acc_commands_traversed;
       self.last_stats.commands_copied = self.acc_commands_copied;
@@ -2073,7 +2055,7 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
                }
             }
          }
-         PreparedOperation::Glyphs { vertices, indices, uniforms, draws, atlas, sdf } =>
+         PreparedOperation::Glyphs { instances, draws, atlas, sdf } =>
          {
             let Some(texture) = renderer.images.get(&atlas.0) else { continue };
             let pipelines = prepared_pipelines_for_target(renderer, target);
@@ -2091,22 +2073,47 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
             {
                encoder.set_fragment_sampler_state(0, Some(sampler));
             }
+            encoder.set_vertex_buffer(0, Some(instances), 0);
+            renderer.acc_glyph_instance_buffer_binds =
+               renderer.acc_glyph_instance_buffer_binds.saturating_add(1);
+            let mut pending_first = None;
+            let mut pending_count = 0_u64;
             for draw in draws
             {
                if filtered && damage_commands.binary_search(&draw.command).is_err()
                {
                   continue;
                }
-               encoder.set_vertex_buffer(0, Some(vertices), draw.vertex_offset);
-               encoder.set_fragment_buffer(0, Some(uniforms), draw.uniform_offset);
-               encoder.draw_indexed_primitives(
-                  MTLPrimitiveType::Triangle,
-                  draw.index_count,
-                  MTLIndexType::UInt16,
-                  indices,
-                  draw.index_offset,
+               if pending_first.is_some_and(|first| first + pending_count != draw.first_instance)
+               {
+                  encoder.draw_primitives_instanced_base_instance(
+                     MTLPrimitiveType::TriangleStrip,
+                     0,
+                     4,
+                     pending_count,
+                     pending_first.unwrap_or(0),
+                  );
+                  renderer.acc_flat_instanced_draws = renderer.acc_flat_instanced_draws.saturating_add(1);
+                  renderer.acc_instanced = renderer.acc_instanced.saturating_add(pending_count.min(u64::from(u32::MAX)) as u32);
+                  renderer.acc_glyph_instances = renderer.acc_glyph_instances.saturating_add(pending_count.min(u64::from(u32::MAX)) as u32);
+                  pending_first = None;
+                  pending_count = 0;
+               }
+               pending_first.get_or_insert(draw.first_instance);
+               pending_count = pending_count.saturating_add(draw.instance_count);
+            }
+            if let Some(first_instance) = pending_first
+            {
+               encoder.draw_primitives_instanced_base_instance(
+                  MTLPrimitiveType::TriangleStrip,
+                  0,
+                  4,
+                  pending_count,
+                  first_instance,
                );
-               renderer.acc_draws = renderer.acc_draws.saturating_add(1);
+               renderer.acc_flat_instanced_draws = renderer.acc_flat_instanced_draws.saturating_add(1);
+               renderer.acc_instanced = renderer.acc_instanced.saturating_add(pending_count.min(u64::from(u32::MAX)) as u32);
+               renderer.acc_glyph_instances = renderer.acc_glyph_instances.saturating_add(pending_count.min(u64::from(u32::MAX)) as u32);
             }
          }
          PreparedOperation::ImageMesh { vertices, indices, uniform: color, texture, command, vertex_count, index_count } =>

@@ -643,18 +643,6 @@ fn apply_simulator_hdr(simulator: bool, wants_hdr: bool) -> bool {
 }
 
 #[inline(always)]
-fn glyph_icb_enabled_default() -> bool {
-    // iOS Simulator has shown unstable glyph command execution with ICB in parity runs.
-    // Prefer deterministic direct draws there unless explicitly re-enabled.
-    if running_on_ios_simulator() {
-        return false;
-    }
-    // The current glyph ICB path is not yet production-safe on device either.
-    // Keep the default on the direct draw path until the ICB pipeline is fixed.
-    false
-}
-
-#[inline(always)]
 fn layer_cache_enabled_default() -> bool {
     // Layer texture caching has exhibited stale/blank composition on Simulator.
     // Prefer deterministic inline layer rendering there unless explicitly enabled.
@@ -662,13 +650,6 @@ fn layer_cache_enabled_default() -> bool {
         return false;
     }
     true
-}
-
-#[inline(always)]
-fn glyph_icb_resource_options() -> MTLResourceOptions {
-    // ICB recording calls `indirect_render_command_at_index`, which is CPU access.
-    // Private storage faults under Metal validation and can surface as submit errors.
-    MTLResourceOptions::StorageModeShared
 }
 
 const VISIBLE_FRAME_RESOURCE_DEPTH: usize = 3;
@@ -772,16 +753,6 @@ fn build_init_stage<T>(
         ios_log(&format!("oxide.renderer-metal: init failed stage={} err={}", stage, err));
     }
     result
-}
-
-#[inline(always)]
-fn pipeline_mentions_indirect_command_buffers(err: &MetalInitError) -> bool {
-    match err {
-        MetalInitError::Pipeline(message) => {
-            message.to_ascii_lowercase().contains("indirect command buffers")
-        }
-        _ => false,
-    }
 }
 
 const DEFAULT_METALLIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/default.metallib"));
@@ -890,13 +861,16 @@ struct Scene3dGpuMaterial {
     params: [f32; 4],
 }
 
-#[derive(Clone, Copy, Debug)]
-struct GlyphRunGpuOffsets {
-    vb_off: u64,
-    ib_off: u64,
-    idx_count: u64,
-    ub_off: u64,
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct GlyphGpuInstance
+{
+   dst: [f32; 4],
+   uv: [f32; 4],
+   color: [f32; 4],
 }
+
+const _: () = assert!(core::mem::size_of::<GlyphGpuInstance>() == 48);
 
 #[allow(dead_code)]
 pub struct MetalRenderer {
@@ -985,7 +959,7 @@ pub struct MetalRenderer {
     ub: Ring,
     property_ring: Ring,
     image_tex_map: HashMap<u32, u32>,
-    glyph_group: alloc::vec::Vec<GlyphRunGpuOffsets>,
+    glyph_instances: alloc::vec::Vec<GlyphGpuInstance>,
     filtered_prepass: FilteredDrawList,
     filtered_main: FilteredDrawList,
     layer_plans: alloc::vec::Vec<LayerPlan>,
@@ -1054,6 +1028,9 @@ pub struct MetalRenderer {
     acc_analytic_instance_bytes: u64,
     acc_analytic_instance_buffer_binds: u32,
     acc_analytic_instance_ring_grows: u32,
+    acc_glyph_instance_bytes: u64,
+    acc_glyph_instance_buffer_binds: u32,
+    acc_glyph_instances: u32,
     acc_icb_cmds: u32,
     acc_commands_traversed: u64,
     acc_commands_copied: u64,
@@ -1098,7 +1075,6 @@ pub struct MetalRenderer {
     acc_texture_copy_bytes: u64,
     acc_resource_creates: u32,
     acc_resource_grows: u32,
-    use_glyph_icb: bool,
     // Damage rendering flag and per-frame scissor (dp) if provided
     damage_enabled: bool,
     frame_scissor_dp: Option<api::RectI>,
@@ -1545,15 +1521,8 @@ impl MetalRenderer {
         let mut color_format =
             if hdr_enabled { MTLPixelFormat::BGRA10_XR } else { MTLPixelFormat::BGRA8Unorm_sRGB };
 
-        let mut use_glyph_icb = apply_simulator_safety_bool(
-            simulator,
-            env_flag("OXIDE_GLYPH_USE_ICB").unwrap_or_else(glyph_icb_enabled_default),
-        );
-
         let direct_preview_only = config.direct_preview_only;
-        let build_pipelines = |fmt: MTLPixelFormat,
-                               supports_glyph_icb: bool|
-         -> Result<_, MetalInitError> {
+        let build_pipelines = |fmt: MTLPixelFormat| -> Result<_, MetalInitError> {
             let pso_camera = build_init_stage("pso.camera_nv12", || {
                 build_camera_pso(&device, &library, fmt, sample_count, "f_camera_nv12")
             })?;
@@ -1639,24 +1608,10 @@ impl MetalRenderer {
                 build_spinner_pso(&device, &library, fmt, sample_count, false)
             })?;
             let pso_text = build_init_stage("pso.text", || {
-                build_text_pso(
-                    &device,
-                    &library,
-                    fmt,
-                    sample_count,
-                    supports_glyph_icb,
-                    false,
-                )
+                build_text_pso(&device, &library, fmt, sample_count, false)
             })?;
             let pso_text_sdf = build_init_stage("pso.text_sdf", || {
-                build_text_sdf_pso(
-                    &device,
-                    &library,
-                    fmt,
-                    sample_count,
-                    supports_glyph_icb,
-                    false,
-                )
+                build_text_sdf_pso(&device, &library, fmt, sample_count, false)
             })?;
             Ok((
                 pso_solid,
@@ -1702,19 +1657,12 @@ impl MetalRenderer {
             pso_camera_preview_fast_video,
             pso_camera_bgra,
         ) = loop {
-            match build_pipelines(color_format, use_glyph_icb) {
+            match build_pipelines(color_format) {
                 Ok(pipelines) => break pipelines,
                 Err(err) => {
                     if hdr_enabled {
                         hdr_enabled = false;
                         color_format = MTLPixelFormat::BGRA8Unorm_sRGB;
-                        continue;
-                    }
-                    if use_glyph_icb && pipeline_mentions_indirect_command_buffers(&err) {
-                        eprintln!(
-                            "[Oxide] renderer disabling glyph ICB after pipeline rejection: {err}"
-                        );
-                        use_glyph_icb = false;
                         continue;
                     }
                     return Err(err);
@@ -1783,7 +1731,6 @@ impl MetalRenderer {
                         &library,
                         color_format,
                         sample_count,
-                        use_glyph_icb,
                         true,
                     )
                 })?,
@@ -1793,7 +1740,6 @@ impl MetalRenderer {
                         &library,
                         color_format,
                         sample_count,
-                        use_glyph_icb,
                         true,
                     )
                 })?,
@@ -2042,9 +1988,6 @@ impl MetalRenderer {
                 simulator,
                 env_flag("OXIDE_ENABLE_IMAGE_ARG_BUFFER").unwrap_or(true),
             );
-        if !use_glyph_icb {
-            ios_log("oxide.renderer-metal: glyph ICB path disabled");
-        }
         if !layer_cache_enabled {
             ios_log("oxide.renderer-metal: layer cache path disabled");
         }
@@ -2191,7 +2134,7 @@ impl MetalRenderer {
             ub,
             property_ring,
             image_tex_map: HashMap::new(),
-            glyph_group: alloc::vec::Vec::new(),
+            glyph_instances: alloc::vec::Vec::new(),
             filtered_prepass: FilteredDrawList::default(),
             filtered_main: FilteredDrawList::default(),
             layer_plans: alloc::vec::Vec::new(),
@@ -2262,6 +2205,9 @@ impl MetalRenderer {
             acc_analytic_instance_bytes: 0,
             acc_analytic_instance_buffer_binds: 0,
             acc_analytic_instance_ring_grows: 0,
+            acc_glyph_instance_bytes: 0,
+            acc_glyph_instance_buffer_binds: 0,
+            acc_glyph_instances: 0,
             acc_icb_cmds: 0,
             acc_commands_traversed: 0,
             acc_commands_copied: 0,
@@ -2306,7 +2252,6 @@ impl MetalRenderer {
             acc_texture_copy_bytes: 0,
             acc_resource_creates: 0,
             acc_resource_grows: 0,
-            use_glyph_icb,
             damage_enabled,
             frame_scissor_dp: None,
             frame_damage_rects: 0,
@@ -4202,6 +4147,9 @@ impl MetalRenderer {
         self.acc_analytic_instance_bytes = 0;
         self.acc_analytic_instance_buffer_binds = 0;
         self.acc_analytic_instance_ring_grows = 0;
+        self.acc_glyph_instance_bytes = 0;
+        self.acc_glyph_instance_buffer_binds = 0;
+        self.acc_glyph_instances = 0;
         self.acc_icb_cmds = 0;
         self.img_arg_used = 0;
         self.image_arg_table_index.clear();
@@ -5942,6 +5890,9 @@ impl api::Renderer for MetalRenderer {
         self.acc_analytic_instance_bytes = 0;
         self.acc_analytic_instance_buffer_binds = 0;
         self.acc_analytic_instance_ring_grows = 0;
+        self.acc_glyph_instance_bytes = 0;
+        self.acc_glyph_instance_buffer_binds = 0;
+        self.acc_glyph_instances = 0;
         self.acc_icb_cmds = 0;
         self.img_arg_used = 0;
         self.image_arg_table_index.clear();
@@ -7046,6 +6997,9 @@ impl api::Renderer for MetalRenderer {
             self.acc_analytic_instance_buffer_binds;
         self.last_stats.analytic_instance_ring_grows =
             self.acc_analytic_instance_ring_grows;
+        self.last_stats.glyph_instance_bytes = self.acc_glyph_instance_bytes;
+        self.last_stats.glyph_instance_buffer_binds = self.acc_glyph_instance_buffer_binds;
+        self.last_stats.glyph_instances = self.acc_glyph_instances;
         self.last_stats.icb_cmds = self.acc_icb_cmds;
         if self.accounting_stats_enabled {
             self.last_stats.commands_traversed = self.acc_commands_traversed;
@@ -8478,207 +8432,108 @@ fn encode_draws_range(
                 continue;
             }
             api::DrawCmd::GlyphRun { .. } => {
-                // Group consecutive GlyphRun with same atlas and sdf flag, and record into ICB
-                let mut count = 0usize;
-                let mut group_atlas = None;
-                let mut group_sdf = false;
-                // Pre-scan to determine group and upload VB/UB/IB, collecting offsets
-                r.glyph_group.clear();
+                let api::DrawCmd::GlyphRun { run: first } = list.items[i] else {
+                    unreachable!();
+                };
+                let group_atlas = first.atlas;
+                let group_sdf = first.sdf;
+                r.glyph_instances.clear();
                 let mut j = i;
-                while j < item_end {
-                    if let api::DrawCmd::GlyphRun { run } = &list.items[j] {
-                        if group_atlas.is_none() {
-                            group_atlas = Some(run.atlas);
-                            group_sdf = run.sdf;
-                        } else if group_atlas != Some(run.atlas) || group_sdf != run.sdf {
-                            break;
-                        }
-                        // Upload VB
-                        let v_count = run.vb.len as usize;
-                        let v_bytes = v_count * core::mem::size_of::<api::Vertex>();
-                        if r.vb.ensure_capacity(&r.device, slot, pf.vb_used + v_bytes) {
-                            r.acc_resource_grows = r.acc_resource_grows.saturating_add(1);
-                        }
-                        let dst = unsafe {
-                            core::slice::from_raw_parts_mut(
-                                r.vb.contents_ptr(slot).as_ptr().add(pf.vb_used),
-                                v_bytes,
-                            )
-                        };
-                        let src_slice = &list.vertices
-                            [(run.vb.offset as usize)..(run.vb.offset as usize + v_count)];
-                        let src_bytes: &[u8] = unsafe {
-                            core::slice::from_raw_parts(src_slice.as_ptr() as *const u8, v_bytes)
-                        };
-                        dst.copy_from_slice(src_bytes);
-                        let vb_off = pf.vb_used as u64;
-                        pf.vb_used += v_bytes;
-                        // Upload color UB
-                        let rgba = [run.color.r, run.color.g, run.color.b, run.color.a];
-                        let ub_off = pf.ub_used as u64;
-                        let u_bytes = core::mem::size_of_val(&rgba);
-                        if r.ub.ensure_capacity(&r.device, slot, pf.ub_used + u_bytes) {
-                            r.acc_resource_grows = r.acc_resource_grows.saturating_add(1);
-                        }
-                        unsafe {
-                            core::ptr::copy_nonoverlapping(
-                                rgba.as_ptr() as *const u8,
-                                r.ub.contents_ptr(slot).as_ptr().add(pf.ub_used),
-                                u_bytes,
-                            );
-                        }
-                        pf.ub_used += u_bytes;
-                        // Upload IB
-                        let idx_count = run.ib.len as usize;
-                        let mut ib_off = 0u64;
-                        let mut local_idx_count = 0u64;
-                        if idx_count > 0 {
-                            let isrc_slice = &list.indices
-                                [(run.ib.offset as usize)..(run.ib.offset as usize + idx_count)];
-                            let i_bytes = isrc_slice.len() * core::mem::size_of::<u16>();
-                            if r.ib.ensure_capacity(&r.device, slot, pf.ib_used + i_bytes) {
-                                r.acc_resource_grows = r.acc_resource_grows.saturating_add(1);
-                            }
-                            let idst = unsafe {
-                                core::slice::from_raw_parts_mut(
-                                    r.ib.contents_ptr(slot).as_ptr().add(pf.ib_used),
-                                    i_bytes,
-                                )
-                            };
-                            if let Some(uploaded_idx_count) =
-                                copy_normalized_indices_for_local_vertex_span(
-                                    isrc_slice,
-                                    run.vb.offset,
-                                    run.vb.len,
-                                    idst,
-                                )
-                            {
-                                ib_off = pf.ib_used as u64;
-                                pf.ib_used += i_bytes;
-                                local_idx_count = uploaded_idx_count as u64;
-                            }
-                        }
-                        r.glyph_group.push(GlyphRunGpuOffsets {
-                            vb_off,
-                            ib_off,
-                            idx_count: local_idx_count,
-                            ub_off,
-                        });
-                        count += 1;
-                        j += 1;
-                    } else {
+                while let Some(api::DrawCmd::GlyphRun { run }) = list.items.get(j) {
+                    if j >= item_end
+                        || run.atlas != group_atlas
+                        || run.sdf != group_sdf
+                    {
                         break;
                     }
+                    if append_glyph_instances(
+                        list.vertices,
+                        list.indices,
+                        *run,
+                        &mut r.glyph_instances,
+                    )
+                    .is_none()
+                    {
+                        break;
+                    }
+                    j += 1;
                 }
-                // Bind atlas + sampler and vp
+                let count = r.glyph_instances.len();
                 if ios_log_enabled() {
                     ios_log(&format!(
-                        "oxide.renderer-metal: glyph group count={} atlas_handle={} sdf={}",
+                        "oxide.renderer-metal: glyph group instances={} atlas_handle={} sdf={}",
                         count,
-                        group_atlas.map(|handle| handle.0).unwrap_or(0),
+                        group_atlas.0,
                         group_sdf
                     ));
                 }
-                if let Some(atlas) = group_atlas.and_then(|h| r.get_image_tex(h)) {
-                    if ios_log_enabled() {
+                if count > 0 {
+                    let byte_count = count * core::mem::size_of::<GlyphGpuInstance>();
+                    let instance_offset = align_up_usize(pf.ub_used, 16);
+                    if r.ub.ensure_capacity(&r.device, slot, instance_offset + byte_count) {
+                        r.acc_resource_grows = r.acc_resource_grows.saturating_add(1);
+                    }
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            r.glyph_instances.as_ptr().cast::<u8>(),
+                            r.ub.contents_ptr(slot).as_ptr().add(instance_offset),
+                            byte_count,
+                        );
+                    }
+                    pf.ub_used = instance_offset + byte_count;
+                    if let Some(atlas) = r.get_image_tex(group_atlas) {
+                        if ios_log_enabled() {
+                            ios_log(&format!(
+                                "oxide.renderer-metal: glyph atlas bound={}x{}",
+                                atlas.width(),
+                                atlas.height()
+                            ));
+                        }
+                        if group_sdf {
+                            let pipeline = if r.encoding_layer {
+                                &r.pso_layer_text_sdf
+                            } else {
+                                &r.pso_text_sdf
+                            };
+                            enc.set_render_pipeline_state(pipeline);
+                        } else {
+                            let pipeline =
+                                if r.encoding_layer { &r.pso_layer_text } else { &r.pso_text };
+                            enc.set_render_pipeline_state(pipeline);
+                        }
+                        if let Some(sam) = &r.sampler {
+                            enc.set_fragment_sampler_state(0, Some(sam));
+                        }
+                        enc.set_fragment_texture(0, Some(atlas));
+                        enc.set_vertex_buffer(0, Some(r.ub.buffer(slot)), instance_offset as u64);
+                        enc.set_vertex_bytes(
+                            1,
+                            core::mem::size_of_val(&vp_dp) as u64,
+                            vp_dp.as_ptr() as *const _,
+                        );
+                        enc.draw_primitives_instanced(
+                            MTLPrimitiveType::TriangleStrip,
+                            0,
+                            4,
+                            count as u64,
+                        );
+                        r.acc_flat_instanced_draws = r.acc_flat_instanced_draws.saturating_add(1);
+                        r.acc_instanced = r.acc_instanced.saturating_add(count as u32);
+                        r.acc_glyph_instance_bytes = r
+                            .acc_glyph_instance_bytes
+                            .saturating_add(byte_count as u64);
+                        r.acc_glyph_instance_buffer_binds =
+                            r.acc_glyph_instance_buffer_binds.saturating_add(1);
+                        r.acc_glyph_instances = r.acc_glyph_instances.saturating_add(count as u32);
+                    } else if ios_log_enabled() {
                         ios_log(&format!(
-                            "oxide.renderer-metal: glyph atlas bound={}x{}",
-                            atlas.width(),
-                            atlas.height()
+                            "oxide.renderer-metal: glyph atlas missing for handle={}",
+                            group_atlas.0
                         ));
                     }
-                    if group_sdf {
-                        let pipeline = if r.encoding_layer {
-                            &r.pso_layer_text_sdf
-                        } else {
-                            &r.pso_text_sdf
-                        };
-                        enc.set_render_pipeline_state(pipeline);
-                    } else {
-                        let pipeline =
-                            if r.encoding_layer { &r.pso_layer_text } else { &r.pso_text };
-                        enc.set_render_pipeline_state(pipeline);
-                    }
-                    if let Some(sam) = &r.sampler {
-                        enc.set_fragment_sampler_state(0, Some(sam));
-                    }
-                    enc.set_fragment_texture(0, Some(atlas));
-                    enc.set_vertex_bytes(
-                        1,
-                        core::mem::size_of_val(&vp_dp) as u64,
-                        vp_dp.as_ptr() as *const _,
-                    );
-
-                    if r.use_glyph_icb {
-                        // Create ICB and record commands
-                        let desc = IndirectCommandBufferDescriptor::new();
-                        desc.set_command_types(MTLIndirectCommandType::DrawIndexed);
-                        desc.set_inherit_pipeline_state(false);
-                        desc.set_max_vertex_buffer_bind_count(1);
-                        desc.set_max_fragment_buffer_bind_count(2);
-                        let icb = r.device.new_indirect_command_buffer_with_descriptor(
-                            &desc,
-                            count as u64,
-                            glyph_icb_resource_options(),
-                        );
-                        for (ci, gr) in r.glyph_group.iter().enumerate() {
-                            let cmd_i = icb.indirect_render_command_at_index(ci as u64);
-                            if group_sdf {
-                                let pipeline = if r.encoding_layer {
-                                    &r.pso_layer_text_sdf
-                                } else {
-                                    &r.pso_text_sdf
-                                };
-                                cmd_i.set_render_pipeline_state(pipeline);
-                            } else {
-                                let pipeline = if r.encoding_layer {
-                                    &r.pso_layer_text
-                                } else {
-                                    &r.pso_text
-                                };
-                                cmd_i.set_render_pipeline_state(pipeline);
-                            }
-                            cmd_i.set_vertex_buffer(0, Some(r.vb.buffer(slot)), gr.vb_off);
-                            cmd_i.set_fragment_buffer(0, Some(r.ub.buffer(slot)), gr.ub_off);
-                            if gr.idx_count > 0 {
-                                cmd_i.draw_indexed_primitives(
-                                    MTLPrimitiveType::Triangle,
-                                    gr.idx_count,
-                                    MTLIndexType::UInt16,
-                                    r.ib.buffer(slot),
-                                    gr.ib_off,
-                                    1,
-                                    0,
-                                    0,
-                                );
-                            }
-                        }
-                        enc.execute_commands_in_buffer(
-                            &icb,
-                            NSRange { location: 0, length: count as u64 },
-                        );
-                        r.acc_icb_cmds += count as u32;
-                    } else {
-                        for gr in &r.glyph_group {
-                            enc.set_vertex_buffer(0, Some(r.vb.buffer(slot)), gr.vb_off);
-                            enc.set_fragment_buffer(0, Some(r.ub.buffer(slot)), gr.ub_off);
-                            if gr.idx_count > 0 {
-                                enc.draw_indexed_primitives(
-                                    MTLPrimitiveType::Triangle,
-                                    gr.idx_count,
-                                    MTLIndexType::UInt16,
-                                    r.ib.buffer(slot),
-                                    gr.ib_off,
-                                );
-                                r.acc_draws = r.acc_draws.saturating_add(1);
-                            }
-                        }
-                    }
-                } else if ios_log_enabled() && group_atlas.is_some() {
-                    ios_log(&format!(
-                        "oxide.renderer-metal: glyph atlas missing for handle={}",
-                        group_atlas.map(|handle| handle.0).unwrap_or(0)
-                    ));
+                }
+                if j == i {
+                    j += 1;
                 }
                 i = j;
                 continue;
@@ -9230,6 +9085,90 @@ fn normalized_index_mode(
 }
 
 #[inline]
+fn glyph_local_index(index: u16, mode: NormalizedIndexMode) -> Option<u16>
+{
+   match mode
+   {
+      NormalizedIndexMode::Local => Some(index),
+      NormalizedIndexMode::Rebase { vertex_base } =>
+      {
+         u16::try_from(u32::from(index).checked_sub(vertex_base)?).ok()
+      }
+   }
+}
+
+fn append_glyph_instances(
+   list_vertices: &[api::Vertex],
+   list_indices: &[u16],
+   run: api::GlyphRun,
+   out: &mut alloc::vec::Vec<GlyphGpuInstance>,
+) -> Option<usize>
+{
+   let vertices = list_vertices.get(
+      run.vb.offset as usize..run.vb.offset as usize + run.vb.len as usize,
+   )?;
+   let indices = list_indices.get(
+      run.ib.offset as usize..run.ib.offset as usize + run.ib.len as usize,
+   )?;
+   if vertices.len() % 4 != 0 || indices.len() != vertices.len() / 4 * 6
+   {
+      return None;
+   }
+   let mode = normalized_index_mode(indices, run.vb.offset, run.vb.len)?;
+   let start = out.len();
+   for (glyph, quad) in vertices.chunks_exact(4).enumerate()
+   {
+      let index_start = glyph * 6;
+      let mut topology = [0_u16; 6];
+      for (output, index) in topology.iter_mut().zip(
+         indices[index_start..index_start + 6].iter().copied(),
+      )
+      {
+         let local = glyph_local_index(index, mode)?;
+         *output = local.checked_sub(glyph as u16 * 4)?;
+      }
+      let [top_left, top_right, third, fourth] = quad else
+      {
+         out.truncate(start);
+         return None;
+      };
+      let (bottom_left, bottom_right) = match topology
+      {
+         [0, 1, 2, 2, 1, 3] => (third, fourth),
+         [0, 1, 2, 0, 2, 3] => (fourth, third),
+         _ =>
+         {
+            out.truncate(start);
+            return None;
+         }
+      };
+      if top_left.y != top_right.y
+         || bottom_left.y != bottom_right.y
+         || top_left.x != bottom_left.x
+         || top_right.x != bottom_right.x
+         || top_left.v != top_right.v
+         || bottom_left.v != bottom_right.v
+         || top_left.u != bottom_left.u
+         || top_right.u != bottom_right.u
+      {
+         out.truncate(start);
+         return None;
+      }
+      out.push(GlyphGpuInstance {
+         dst: [
+            top_left.x,
+            top_left.y,
+            top_right.x - top_left.x,
+            bottom_left.y - top_left.y,
+         ],
+         uv: [top_left.u, top_left.v, top_right.u, bottom_left.v],
+         color: [run.color.r, run.color.g, run.color.b, run.color.a],
+      });
+   }
+   Some(out.len() - start)
+}
+
+#[inline]
 fn copy_normalized_indices_for_local_vertex_span(
     source: &[u16],
     vertex_base: u32,
@@ -9762,21 +9701,14 @@ fn build_text_pso(
     lib: &Library,
     fmt: MTLPixelFormat,
     sample_count: u32,
-    supports_icb: bool,
     layer: bool,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let v = pipeline_function(lib, "text.vertex", "v_text")?;
-    let f = pipeline_function(lib, "text.fragment", "f_text")?;
+    let v = pipeline_function(lib, "text.vertex", "v_glyph")?;
+    let f = pipeline_function(lib, "text.fragment", "f_glyph")?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
-    let vdesc = api_vertex_descriptor();
-    desc.set_vertex_descriptor(Some(vdesc));
     desc.set_sample_count(sample_count as u64);
-    #[cfg(target_os = "ios")]
-    if supports_icb {
-        desc.set_support_indirect_command_buffers(true);
-    }
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
     configure_ui_source_alpha_blend(ca, layer);
@@ -9789,21 +9721,14 @@ fn build_text_sdf_pso(
     lib: &Library,
     fmt: MTLPixelFormat,
     sample_count: u32,
-    supports_icb: bool,
     layer: bool,
 ) -> Result<RenderPipelineState, MetalInitError> {
-    let v = pipeline_function(lib, "text_sdf.vertex", "v_text")?;
-    let f = pipeline_function(lib, "text_sdf.fragment", "f_text_sdf")?;
+    let v = pipeline_function(lib, "text_sdf.vertex", "v_glyph")?;
+    let f = pipeline_function(lib, "text_sdf.fragment", "f_glyph_sdf")?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
-    let vdesc = api_vertex_descriptor();
-    desc.set_vertex_descriptor(Some(vdesc));
     desc.set_sample_count(sample_count as u64);
-    #[cfg(target_os = "ios")]
-    if supports_icb {
-        desc.set_support_indirect_command_buffers(true);
-    }
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
     configure_ui_source_alpha_blend(ca, layer);
@@ -10235,6 +10160,9 @@ pub struct PerfStats {
     pub analytic_instance_bytes: u64,
     pub analytic_instance_buffer_binds: u32,
     pub analytic_instance_ring_grows: u32,
+    pub glyph_instance_bytes: u64,
+    pub glyph_instance_buffer_binds: u32,
+    pub glyph_instances: u32,
     pub icb_cmds: u32,
     pub commands_traversed: u64,
     pub commands_copied: u64,
@@ -10785,6 +10713,88 @@ impl MetalRenderer {
 mod tests {
     use super::*;
 
+    fn glyph_test_run(vertex_len: u32, index_len: u32, sdf: bool) -> api::GlyphRun
+    {
+        api::GlyphRun {
+            atlas: api::ImageHandle(7),
+            atlas_revision: 1,
+            vb: api::VertexSpan { offset: 0, len: vertex_len },
+            ib: api::IndexSpan { offset: 0, len: index_len },
+            sdf,
+            color: api::Color::rgba(0.25, 0.5, 0.75, 1.0),
+        }
+    }
+
+    #[test]
+    fn glyph_instance_abi_is_compact_and_converts_both_supported_quad_topologies()
+    {
+        assert_eq!(core::mem::size_of::<GlyphGpuInstance>(), 48);
+        assert_eq!(core::mem::align_of::<GlyphGpuInstance>(), 4);
+        let vertices = [
+            api::Vertex { x: 2.0, y: 3.0, u: 0.1, v: 0.2, rgba: 0 },
+            api::Vertex { x: 7.0, y: 3.0, u: 0.6, v: 0.2, rgba: 0 },
+            api::Vertex { x: 2.0, y: 11.0, u: 0.1, v: 0.9, rgba: 0 },
+            api::Vertex { x: 7.0, y: 11.0, u: 0.6, v: 0.9, rgba: 0 },
+        ];
+        let mut instances = Vec::new();
+        assert_eq!(
+            append_glyph_instances(
+                &vertices,
+                &[0, 1, 2, 2, 1, 3],
+                glyph_test_run(4, 6, true),
+                &mut instances,
+            ),
+            Some(1),
+        );
+        assert_eq!(instances[0], GlyphGpuInstance {
+            dst: [2.0, 3.0, 5.0, 8.0],
+            uv: [0.1, 0.2, 0.6, 0.9],
+            color: [0.25, 0.5, 0.75, 1.0],
+        });
+
+        let conventional = [vertices[0], vertices[1], vertices[3], vertices[2]];
+        instances.clear();
+        assert_eq!(
+            append_glyph_instances(
+                &conventional,
+                &[0, 1, 2, 0, 2, 3],
+                glyph_test_run(4, 6, false),
+                &mut instances,
+            ),
+            Some(1),
+        );
+        assert_eq!(instances[0].dst, [2.0, 3.0, 5.0, 8.0]);
+        assert_eq!(instances[0].uv, [0.1, 0.2, 0.6, 0.9]);
+        assert_eq!(instances[0].color, [0.25, 0.5, 0.75, 1.0]);
+    }
+
+    #[test]
+    fn malformed_glyph_geometry_does_not_partially_append_instances()
+    {
+        let vertices = [
+            api::Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: 0 },
+            api::Vertex { x: 1.0, y: 0.0, u: 1.0, v: 0.0, rgba: 0 },
+            api::Vertex { x: 0.0, y: 1.0, u: 0.0, v: 1.0, rgba: 0 },
+            api::Vertex { x: 1.0, y: 1.0, u: 1.0, v: 1.0, rgba: 0 },
+        ];
+        let sentinel = GlyphGpuInstance {
+            dst: [9.0; 4],
+            uv: [8.0; 4],
+            color: [7.0; 4],
+        };
+        let mut instances = vec![sentinel];
+        assert_eq!(
+            append_glyph_instances(
+                &vertices,
+                &[0, 1, 2, 0, 3, 2],
+                glyph_test_run(4, 6, false),
+                &mut instances,
+            ),
+            None,
+        );
+        assert_eq!(instances, [sentinel]);
+    }
+
     #[test]
     fn gpu_param_layouts_match_metal_contracts() {
         use core::mem::{align_of, size_of};
@@ -10996,30 +11006,22 @@ mod tests {
 
     #[cfg(all(target_os = "ios", target_abi = "sim"))]
     #[test]
-    fn simulator_defaults_disable_icb_and_layer_cache() {
-        assert!(!glyph_icb_enabled_default());
+    fn simulator_defaults_disable_layer_cache() {
         assert!(!layer_cache_enabled_default());
-    }
-
-    #[test]
-    fn glyph_icb_cpu_recording_uses_shared_storage() {
-        assert_eq!(glyph_icb_resource_options(), MTLResourceOptions::StorageModeShared);
     }
 
     #[cfg(all(target_os = "ios", not(target_abi = "sim")))]
     #[test]
-    fn ios_device_defaults_enable_icb_and_layer_cache_without_simulator_udid() {
+    fn ios_device_defaults_enable_layer_cache_without_simulator_udid() {
         if std::env::var_os("SIMULATOR_UDID").is_some() {
             return;
         }
-        assert!(glyph_icb_enabled_default());
         assert!(layer_cache_enabled_default());
     }
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_defaults_disable_icb_but_keep_layer_cache() {
-        assert!(!glyph_icb_enabled_default());
+    fn macos_defaults_keep_layer_cache() {
         assert!(layer_cache_enabled_default());
     }
 
