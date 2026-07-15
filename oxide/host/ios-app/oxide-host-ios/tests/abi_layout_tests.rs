@@ -40,7 +40,7 @@ fn ios_host_stats_layout_is_frozen()
    assert!(app.contains("_Static_assert(_Alignof(oxide_host_stats_t) == 8"));
    assert!(app.contains("_Static_assert(sizeof(oxide_host_camera_tick_perf_t) == 48"));
    assert!(app.contains("_Static_assert(_Alignof(oxide_host_camera_tick_perf_t) == 8"));
-   assert!(app.contains("_Static_assert(sizeof(oxide_host_app_debug_perf_t) == 60"));
+   assert!(app.contains("_Static_assert(sizeof(oxide_host_app_debug_perf_t) == 76"));
    assert!(app.contains("_Static_assert(_Alignof(oxide_host_app_debug_perf_t) == 4"));
 
    let swift = include_str!(concat!(
@@ -52,6 +52,20 @@ fn ios_host_stats_layout_is_frozen()
    assert!(stats.contains("var hostSubmittedFrames: UInt64 = 0"));
    assert!(stats.contains("var hostFrameDirty: UInt8 = 0"));
    assert!(stats.contains("var hostSettleFramesRemaining: UInt8 = 0"));
+   let debug = source_between(
+      swift,
+      "private struct OxideHostAppDebugPerf",
+      "struct OxideStageMetricSummary",
+   );
+   for field in [
+      "var displayLinkIdlePauses: UInt32 = 0",
+      "var displayLinkWakeRequests: UInt32 = 0",
+      "var displayLinkWakeTransitions: UInt32 = 0",
+      "var displayLinkMissedWakeups: UInt32 = 0",
+   ]
+   {
+      assert!(debug.contains(field), "missing Swift debug ABI field `{field}`");
+   }
 }
 
 #[test]

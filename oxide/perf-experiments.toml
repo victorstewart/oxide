@@ -1,4 +1,27 @@
 [[experiments]]
+id = "c54-ios-demand-display-link"
+introduced_commit = "C54 staged tree recorded in commit proof"
+introduced_date = "2026-07-15"
+expires = "2027-07-15"
+required_backends = ["oxide-host-ios", "oxide-renderer-metal", "oxide-xtask"]
+required_devices = ["iPhone 17 Pro Max (iPhone18,2), iOS 26.5.1"]
+correctness_gate = "Static foreground idle must stop display callbacks, Rust render-plan checks, drawable acquisition, and submission after settlement; explicit, input, animation, async, camera, lifecycle, resize, resource, and memory wake sources must retain work without missed generations; focused host and xtask tests plus physical-device active-path runs must pass."
+performance_gate = "Five interleaved physical-device launches per side must reduce settled-idle display callbacks and Rust plan checks to exact zero without adding a submission, drawable, missed wakeup, material event-to-visible tail regression, camera hitch, or missed frame."
+decision_state = "accepted"
+decision = "Paused the foreground CADisplayLink after Oxide reaches a clean settled state and added a lock-free generation wake bridge so dirty sources resume it without polling or locking Rust app state while idle."
+proof = [
+   "Five interleaved physical-iPhone A/B launches each measured about 100 ms of settled foreground idle: the parent executed exactly six CADisplayLink callbacks and six Rust render-plan checks in every launch, while the candidate executed zero callbacks, checks, drawables, command buffers, submissions, and missed wakeups in every launch, a deterministic 100% idle-callback/check reduction with 5/5 wins.",
+   "Two independent physical-device button traces retained 256 event-to-visible samples per side: p50 was neutral in both pairs, candidate p99 and peak improved in both, and p95 was mixed across the two noisy launches rather than a repeatable regression.",
+   "The physical-camera guard processed 120 real 1280x720 NV12 frames at 30 fps with zero missed frames; candidate/parent custom-preview GPU p99 was 1.354/1.448 ms and host-tick p99 was 0.341/0.311 ms.",
+   "Physical animation, repeated input, lifecycle, and camera workloads completed; focused host tests, 129 xtask tests, and the aarch64-apple-ios build passed without deprecation warnings.",
+   "Automatic Power Profiler recording produced an empty trace with Document Missing Template Error on Xcode 26.6 and this device; no energy proxy was substituted, per the device-report contract.",
+]
+cleanup = [
+   "Kept camera frame-driven mode and background/resign/disconnect behavior, coalesced cross-thread wakes on the main queue, and made idle-pause, wake-transition, and missed-wakeup counters observable.",
+   "Extended the static-idle device report to require exact zero callback/check/submission activity and to report in-process physical footprint without treating system compositor traffic as Oxide work.",
+]
+
+[[experiments]]
 id = "c49-webgpu-regional-backdrop-copies"
 introduced_commit = "C49 staged tree recorded in commit proof"
 introduced_date = "2026-07-14"

@@ -1047,6 +1047,10 @@ private struct OxideHostAppDebugPerf
     var planSkips: UInt32 = 0
     var drawablesAcquired: UInt32 = 0
     var commandBuffersCommitted: UInt32 = 0
+    var displayLinkIdlePauses: UInt32 = 0
+    var displayLinkWakeRequests: UInt32 = 0
+    var displayLinkWakeTransitions: UInt32 = 0
+    var displayLinkMissedWakeups: UInt32 = 0
     var runningUiTest: UInt8 = 0
     var runningPerfBenchmarkHost: UInt8 = 0
     var shouldRender: UInt8 = 0
@@ -1143,6 +1147,10 @@ private struct OxideAppHostDebugSummaryPayload: Codable
     let planSkips: UInt32
     let drawablesAcquired: UInt32
     let commandBuffersCommitted: UInt32
+    let displayLinkIdlePauses: UInt32
+    let displayLinkWakeRequests: UInt32
+    let displayLinkWakeTransitions: UInt32
+    let displayLinkMissedWakeups: UInt32
     let previewSubmissionDepth: UInt32
     let presentedFrameAgeMs: Double
     let samplesReceived: UInt32
@@ -1932,7 +1940,10 @@ private func snapshotOxideAppDebugPerf() -> OxideHostAppDebugPerf?
 private func formatOxideAppDebugPerf(_ debugPerf: OxideHostAppDebugPerf) -> String
 {
     "drawables=\(debugPerf.drawablesAcquired) commits=\(debugPerf.commandBuffersCommitted) " +
-    "ticks=\(debugPerf.onTickCalls) hostReady=\(debugPerf.hostReady) " +
+    "ticks=\(debugPerf.onTickCalls) idlePauses=\(debugPerf.displayLinkIdlePauses) " +
+    "wakeRequests=\(debugPerf.displayLinkWakeRequests) " +
+    "wakeTransitions=\(debugPerf.displayLinkWakeTransitions) " +
+    "missedWakeups=\(debugPerf.displayLinkMissedWakeups) hostReady=\(debugPerf.hostReady) " +
     "shouldRender=\(debugPerf.shouldRender) perfHost=\(debugPerf.runningPerfBenchmarkHost)"
 }
 
@@ -4545,6 +4556,10 @@ private final class OxideRealAppCameraBenchmarkHarness
                 planSkips: debugPerf.planSkips,
                 drawablesAcquired: debugPerf.drawablesAcquired,
                 commandBuffersCommitted: debugPerf.commandBuffersCommitted,
+                displayLinkIdlePauses: debugPerf.displayLinkIdlePauses,
+                displayLinkWakeRequests: debugPerf.displayLinkWakeRequests,
+                displayLinkWakeTransitions: debugPerf.displayLinkWakeTransitions,
+                displayLinkMissedWakeups: debugPerf.displayLinkMissedWakeups,
                 previewSubmissionDepth: stats.rendererPreviewSubmissionDepth,
                 presentedFrameAgeMs: Double(stats.rendererPreviewSubmissionFrameAgeMs),
                 samplesReceived: stats.camSamplesReceived,

@@ -1,0 +1,42 @@
+{
+  "experiment": "c54-ios-demand-display-link",
+  "parent_commit": "5576b3ca9abbe5fa436d2f4b761e9f82205506f5",
+  "device": {
+    "model": "iPhone 17 Pro Max",
+    "identifier": "iPhone18,2",
+    "os": "iOS 26.5.1 (23F81)",
+    "xcode": "26.6 (17F113)"
+  },
+  "static_idle": {
+    "order": ["parent-1", "candidate-1", "candidate-2", "parent-2", "parent-3", "candidate-3", "candidate-4", "parent-4", "parent-5", "candidate-5"],
+    "parent": [
+      {"window_ms": 101.324917, "display_callbacks": 6, "rust_plan_checks": 6, "drawables": 0, "command_buffers": 0, "submissions": 0},
+      {"window_ms": 101.867417, "display_callbacks": 6, "rust_plan_checks": 6, "drawables": 0, "command_buffers": 0, "submissions": 0},
+      {"window_ms": 101.619208, "display_callbacks": 6, "rust_plan_checks": 6, "drawables": 0, "command_buffers": 0, "submissions": 0},
+      {"window_ms": 101.447000, "display_callbacks": 6, "rust_plan_checks": 6, "drawables": 0, "command_buffers": 0, "submissions": 0},
+      {"window_ms": 101.921417, "display_callbacks": 6, "rust_plan_checks": 6, "drawables": 0, "command_buffers": 0, "submissions": 0}
+    ],
+    "candidate": [
+      {"window_ms": 100.084042, "display_callbacks": 0, "rust_plan_checks": 0, "drawables": 0, "command_buffers": 0, "submissions": 0, "missed_wakeups": 0},
+      {"window_ms": 102.529917, "display_callbacks": 0, "rust_plan_checks": 0, "drawables": 0, "command_buffers": 0, "submissions": 0, "missed_wakeups": 0},
+      {"window_ms": 101.433458, "display_callbacks": 0, "rust_plan_checks": 0, "drawables": 0, "command_buffers": 0, "submissions": 0, "missed_wakeups": 0},
+      {"window_ms": 101.018125, "display_callbacks": 0, "rust_plan_checks": 0, "drawables": 0, "command_buffers": 0, "submissions": 0, "missed_wakeups": 0},
+      {"window_ms": 117.005083, "display_callbacks": 0, "rust_plan_checks": 0, "drawables": 0, "command_buffers": 0, "submissions": 0, "missed_wakeups": 0}
+    ]
+  },
+  "button_event_to_visible_ms": [
+    {"run": 1, "samples_per_side": 128, "parent": {"p50": 16.659958, "p95": 17.013634, "p99": 23.157736, "peak": 28.890334}, "candidate": {"p50": 16.657667, "p95": 19.517408, "p99": 22.275705, "peak": 29.064583}},
+    {"run": 2, "samples_per_side": 128, "parent": {"p50": 16.654688, "p95": 18.833700, "p99": 27.873897, "peak": 29.819167}, "candidate": {"p50": 16.655271, "p95": 17.091598, "p99": 23.925426, "peak": 28.939541}}
+  ],
+  "camera_guard": {
+    "frames_per_side": 120,
+    "format": "NV12 1280x720@30",
+    "parent": {"missed_frames": 0, "hitch_ms_per_s": 0.000688, "host_tick_p99_ms": 0.311426, "custom_preview_gpu_p99_ms": 1.448239},
+    "candidate": {"missed_frames": 0, "hitch_ms_per_s": 0.000692, "host_tick_p99_ms": 0.340857, "custom_preview_gpu_p99_ms": 1.353983}
+  },
+  "energy": {
+    "status": "automatic-capture-unavailable",
+    "reason": "Power Profiler produced an empty trace; export failed with Document Missing Template Error",
+    "proxy_substituted": false
+  }
+}

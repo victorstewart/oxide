@@ -31,7 +31,14 @@ use oxide_test_scenes as test_scenes;
 use oxide_text as text;
 use oxide_timing as timing;
 use oxide_ui_core as ui;
-use std::{fs::File, io::Write, sync::Arc};
+use std::{
+    fs::File,
+    io::Write,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 #[cfg(target_os = "ios")]
 use std::sync::Weak;
@@ -55,6 +62,7 @@ extern "C" {
     fn oxide_cam_start_default_preview_only() -> ::libc::c_int;
     fn oxide_cam_stop();
     fn oxide_cam_set_preview_pixel_format(format: i32) -> ::libc::c_int;
+    fn oxide_host_request_display_link_wake(generation: u64);
 }
 
 #[cfg(target_os = "ios")]
@@ -655,6 +663,7 @@ impl NetworkRuntime {
                 if let Some(hub) = tel.upgrade() {
                     hub.update_reachability(snapshot);
                 }
+                request_frame_wake();
             }
         });
         let session = QuicSessionManager::with_default_clock();
@@ -1035,6 +1044,7 @@ fn install_permission_subscriptions(manager: Arc<PermissionManager>) {
                 if let Some(telemetry) = app.telemetry.as_ref() {
                     telemetry.update_permissions(app.permission_states.clone());
                 }
+                mark_frame_dirty(app);
             });
         });
         handles.push(handle);
@@ -1420,6 +1430,8 @@ struct AppState {
     settle_frames_remaining: u8,
     idle_skipped_frames: u64,
     submitted_frames: u64,
+    pending_wake_generation: u64,
+    presented_wake_generation: u64,
 }
 
 impl Default for AppState {
@@ -1468,11 +1480,14 @@ impl Default for AppState {
             settle_frames_remaining: IDLE_SETTLE_FRAMES,
             idle_skipped_frames: 0,
             submitted_frames: 0,
+            pending_wake_generation: 0,
+            presented_wake_generation: 0,
         }
     }
 }
 
 static APP_STATE: std::sync::OnceLock<std::sync::Mutex<AppState>> = std::sync::OnceLock::new();
+static FRAME_WAKE_GENERATION: AtomicU64 = AtomicU64::new(0);
 static PERF_REPORT_JSON: std::sync::OnceLock<std::sync::Mutex<Option<Vec<u8>>>> =
     std::sync::OnceLock::new();
 static PERF_REPORT_ERROR: std::sync::OnceLock<std::sync::Mutex<Option<Vec<u8>>>> =
@@ -1496,9 +1511,20 @@ fn with_app_mut<R>(f: impl FnOnce(&mut AppState) -> R) -> Option<R> {
 
 const IDLE_SETTLE_FRAMES: u8 = 2;
 
+fn request_frame_wake() {
+    let generation = FRAME_WAKE_GENERATION.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+    #[cfg(not(target_os = "ios"))]
+    let _ = generation;
+    #[cfg(target_os = "ios")]
+    unsafe {
+        oxide_host_request_display_link_wake(generation);
+    }
+}
+
 fn mark_frame_dirty(app: &mut AppState) {
     app.frame_dirty = true;
     app.settle_frames_remaining = IDLE_SETTLE_FRAMES;
+    request_frame_wake();
 }
 
 fn process_telemetry_commands_locked(app: &mut AppState) {
@@ -1924,11 +1950,23 @@ pub extern "C" fn oxide_host_app_should_render() -> u8 {
     }
     let router_wants_frame =
         app.router.as_ref().map_or(false, test_scenes::Router::wants_next_frame);
-    if app.frame_dirty || app.settle_frames_remaining > 0 || router_wants_frame {
+    let wake_pending = FRAME_WAKE_GENERATION.load(Ordering::Acquire)
+        != app.presented_wake_generation;
+    if app.frame_dirty || app.settle_frames_remaining > 0 || router_wants_frame || wake_pending {
         return 1;
     }
     app.idle_skipped_frames = app.idle_skipped_frames.saturating_add(1);
     0
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_app_wake_generation() -> u64 {
+    FRAME_WAKE_GENERATION.load(Ordering::Acquire)
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_app_request_redraw() {
+    let _ = with_app_mut(mark_frame_dirty);
 }
 
 #[no_mangle]
@@ -1985,6 +2023,7 @@ pub extern "C" fn oxide_host_app_prepare_frame(w: u32, h: u32, scale: f32) -> ::
     if !app.inited {
         return -1;
     }
+    app.pending_wake_generation = FRAME_WAKE_GENERATION.load(Ordering::Acquire);
     if benchmark_camera_fast_path_active(&app) {
         app.pending_frame_w = w;
         app.pending_frame_h = h;
@@ -2235,6 +2274,7 @@ pub extern "C" fn oxide_host_app_submit_prepared_frame_with_drawable(
     }
     app.last_stats = stats;
     app.submitted_frames = app.submitted_frames.saturating_add(1);
+    app.presented_wake_generation = app.pending_wake_generation;
     if app.settle_frames_remaining > 0 {
         app.settle_frames_remaining -= 1;
     }
@@ -2276,6 +2316,7 @@ pub extern "C" fn oxide_host_app_did_enter_background() {
 #[no_mangle]
 pub extern "C" fn oxide_host_app_will_enter_foreground() {
     with_app_mut(|app| {
+        mark_frame_dirty(app);
         if let Some(ops) = app.telemetry_ops.as_ref() {
             ops.handle_foreground(timing::now_ms());
         }
@@ -2668,6 +2709,8 @@ pub extern "C" fn oxide_host_app_shutdown() {
         app.settle_frames_remaining = IDLE_SETTLE_FRAMES;
         app.idle_skipped_frames = 0;
         app.submitted_frames = 0;
+        app.pending_wake_generation = 0;
+        app.presented_wake_generation = 0;
     }
 }
 

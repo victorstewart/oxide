@@ -122,6 +122,22 @@ fn oxide_device_contract_source_lists_canonical_families() {
 }
 
 #[test]
+fn console_capture_terminates_completed_app_before_waiting_for_console_exit() {
+    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+    let start = source
+        .find("fn run_uikit_device_case_console_capture(")
+        .expect("console capture function");
+    let body = &source[start..];
+    let terminate = body
+        .find("let terminate_result = terminate_uikit_device_process")
+        .expect("device process termination");
+    let wait = body
+        .find("let launch_result = wait_for_console_launch_with_output_paths")
+        .expect("console child wait");
+    assert!(terminate < wait, "waiting before termination deadlocks devicectl --console");
+}
+
+#[test]
 fn experiment_manifest_checker_accepts_current_manifest() {
     let text = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../perf-experiments.toml"));
     for id in [
@@ -223,7 +239,7 @@ fn experiment_manifest_checker_accepts_current_manifest() {
         check_experiment_manifest_text(text, "2026-06-22").expect("current manifest should pass");
     assert_eq!(
         summary,
-        ExperimentCheckSummary { total: 170, undecided: 0, accepted: 81, rejected: 89 }
+        ExperimentCheckSummary { total: 184, undecided: 0, accepted: 86, rejected: 98 }
     );
 }
 
@@ -893,7 +909,7 @@ fn parse_oxide_app_host_debug_summary_surfaces_actual_app_counters() {
 fn parse_oxide_static_idle_summary_surfaces_no_redraw_contract() {
     let stdout = concat!(
         "OXIDE_READY testOxideStaticIdleNoRedraw\n",
-        "OXIDE_STATIC_IDLE_SUMMARY {\"contractPassed\":true,\"deltaCommandBuffersCommitted\":0,\"deltaDisplayLinkCallbacks\":12,\"deltaDrawablesAcquired\":0,\"deltaHostIdleSkippedFrames\":12,\"deltaHostSubmittedFrames\":0,\"deltaPlanSkips\":12,\"endCommandBuffersCommitted\":2,\"endDisplayLinkCallbacks\":18,\"endDrawablesAcquired\":2,\"endHostFrameDirty\":0,\"endHostIdleSkippedFrames\":14,\"endHostSettleFramesRemaining\":0,\"endHostSubmittedFrames\":2,\"endPlanSkips\":14,\"startCommandBuffersCommitted\":2,\"startDisplayLinkCallbacks\":6,\"startDrawablesAcquired\":2,\"startHostIdleSkippedFrames\":2,\"startHostSubmittedFrames\":2,\"startPlanSkips\":2,\"windowMs\":116.7}\n",
+        "OXIDE_STATIC_IDLE_SUMMARY {\"contractPassed\":true,\"deltaCommandBuffersCommitted\":0,\"deltaDisplayLinkCallbacks\":0,\"deltaDisplayLinkIdlePauses\":0,\"deltaDisplayLinkMissedWakeups\":0,\"deltaDisplayLinkWakeRequests\":0,\"deltaDisplayLinkWakeTransitions\":0,\"deltaDrawablesAcquired\":0,\"deltaHostIdleSkippedFrames\":0,\"deltaHostSubmittedFrames\":0,\"deltaPlanSkips\":0,\"endCommandBuffersCommitted\":2,\"endDisplayLinkCallbacks\":6,\"endDisplayLinkIdlePauses\":1,\"endDisplayLinkMissedWakeups\":0,\"endDisplayLinkWakeRequests\":4,\"endDisplayLinkWakeTransitions\":2,\"endDrawablesAcquired\":2,\"endHostFrameDirty\":0,\"endHostIdleSkippedFrames\":2,\"endHostSettleFramesRemaining\":0,\"endHostSubmittedFrames\":2,\"endPlanSkips\":2,\"endProcessResidentBytes\":33554432,\"startCommandBuffersCommitted\":2,\"startDisplayLinkCallbacks\":6,\"startDisplayLinkIdlePauses\":1,\"startDisplayLinkMissedWakeups\":0,\"startDisplayLinkWakeRequests\":4,\"startDisplayLinkWakeTransitions\":2,\"startDrawablesAcquired\":2,\"startHostIdleSkippedFrames\":2,\"startHostSubmittedFrames\":2,\"startPlanSkips\":2,\"startProcessResidentBytes\":32505856,\"windowMs\":116.7}\n",
         "OXIDE_COMPLETE testOxideStaticIdleNoRedraw\n"
     );
 
@@ -904,7 +920,11 @@ fn parse_oxide_static_idle_summary_surfaces_no_redraw_contract() {
     assert_eq!(payload.delta_host_submitted_frames, 0);
     assert_eq!(payload.end_host_frame_dirty, 0);
     assert_eq!(payload.end_host_settle_frames_remaining, 0);
-    assert_eq!(payload.delta_host_idle_skipped_frames, 12);
+    assert_eq!(payload.delta_display_link_callbacks, 0);
+    assert_eq!(payload.delta_display_link_wake_requests, 0);
+    assert_eq!(payload.delta_display_link_missed_wakeups, 0);
+    assert_eq!(payload.delta_host_idle_skipped_frames, 0);
+    assert_eq!(payload.end_process_resident_bytes, 33_554_432);
     assert_eq!(payload.window_ms, 116.7);
 }
 

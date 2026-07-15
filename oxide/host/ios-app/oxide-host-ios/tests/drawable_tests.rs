@@ -1,8 +1,104 @@
-use oxide_host_ios::oxide_host_app_frame_with_drawable;
+use oxide_host_ios::{
+    oxide_host_app_frame_with_drawable, oxide_host_app_request_redraw,
+    oxide_host_app_wake_generation,
+};
 
 #[test]
 fn frame_with_drawable_stub() {
     assert_eq!(oxide_host_app_frame_with_drawable(1, 1, 1.0, core::ptr::null_mut()), -1);
+}
+
+#[test]
+fn explicit_redraw_advances_the_lock_free_wake_generation() {
+    let before = oxide_host_app_wake_generation();
+    oxide_host_app_request_redraw();
+    assert!(oxide_host_app_wake_generation() > before);
+}
+
+#[test]
+fn rapid_redraw_requests_are_not_lost_before_the_host_can_coalesce_them() {
+    let before = oxide_host_app_wake_generation();
+    for _ in 0..256 {
+        oxide_host_app_request_redraw();
+    }
+    let advanced = oxide_host_app_wake_generation().wrapping_sub(before);
+    assert!(advanced >= 256, "only {advanced} of 256 redraw generations were retained");
+}
+
+#[test]
+fn ios_frame_wake_matrix_covers_host_owned_publication_paths() {
+    let rust = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+    let objc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/ios/app.m"));
+    for marker in [
+        "hub.update_reachability(snapshot);",
+        "telemetry.update_permissions(app.permission_states.clone());",
+        "pub extern \"C\" fn oxide_host_app_request_redraw()",
+        "pub extern \"C\" fn oxide_host_app_will_enter_foreground()",
+        "pub extern \"C\" fn oxide_host_on_memory_warning()",
+        "pub extern \"C\" fn oxide_host_set_anim_play(play: u8)",
+        "fn window_resized_cb(",
+        "fn pointer_cb(",
+        "fn touch_cb(",
+    ] {
+        assert!(rust.contains(marker), "missing wake source `{marker}`");
+    }
+    assert!(rust.contains("test_scenes::Router::wants_next_frame"));
+    assert!(objc.contains("OxideCameraPreviewPublishDidAdvance"));
+    assert!(objc.contains("[delegate updateDisplayLinkDemandState];"));
+}
+
+#[test]
+fn ios_display_link_has_explicit_idle_pause_and_wake_ownership() {
+    let objc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/ios/app.m"));
+    let rust = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+    let tick = objc.split("- (void)onTick:").nth(1).expect("display-link tick");
+    let wake = objc
+        .rsplit("- (void)requestDisplayLinkWake:")
+        .next()
+        .expect("display-link wake method")
+        .split("- (void)pauseDisplayLinkForIdle")
+        .next()
+        .expect("wake method end");
+
+    assert!(rust.contains("static FRAME_WAKE_GENERATION: AtomicU64"));
+    assert!(rust.contains("fn request_frame_wake()"));
+    assert!(rust.contains("oxide_host_request_display_link_wake(generation)"));
+    assert!(rust.contains("fn mark_frame_dirty(app: &mut AppState)"));
+    assert!(rust.contains("app.presented_wake_generation"));
+    assert!(rust.contains("let wake_pending = FRAME_WAKE_GENERATION.load(Ordering::Acquire)"));
+    assert!(objc.contains("gDisplayLinkWakeDispatchPending"));
+    assert!(objc.contains("[self pauseDisplayLinkForIdle];"));
+    assert!(tick.contains("[self updateDisplayLinkDemandState];"));
+    assert!(wake.contains("self.displayLink.paused = NO;"));
+    assert!(!wake.contains("oxide_host_app_should_render"));
+}
+
+#[test]
+fn ios_display_link_observes_missed_wakes_and_preserves_lifecycle_pauses() {
+    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/ios/app.m"));
+    let tick = source.split("- (void)onTick:").nth(1).expect("display-link tick");
+    let resign = source
+        .split("- (void)sceneWillResignActive:")
+        .nth(1)
+        .expect("resign handler")
+        .split("- (void)sceneDidEnterBackground:")
+        .next()
+        .expect("resign handler end");
+    let background = source
+        .split("- (void)sceneDidEnterBackground:")
+        .nth(1)
+        .expect("background handler")
+        .split("- (void)sceneWillEnterForeground:")
+        .next()
+        .expect("background handler end");
+
+    assert!(tick.contains("display_link_missed_wakeups += 1"));
+    assert!(tick.contains("wakeGeneration > self.displayLinkWakeGeneration"));
+    assert!(source.contains("@\"displayLinkMissedWakeups\""));
+    assert!(resign.contains("self.displayLinkForegroundActive = NO;"));
+    assert!(resign.contains("self.displayLink.paused = YES;"));
+    assert!(background.contains("self.displayLinkForegroundActive = NO;"));
+    assert!(background.contains("oxide_host_app_did_enter_background();"));
 }
 
 #[test]

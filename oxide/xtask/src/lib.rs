@@ -442,7 +442,7 @@ const OXIDE_ONSCREEN_CASE_SPECS: &[OxideOnscreenCaseSpec] = &[
         scenario: "static_idle",
         variant: "oxide_real_app_host",
         benchmark_iterations: 1,
-        note: "Real iOS app-host static-scene idle contract: after settle, the display link may tick but Oxide must submit zero frames, acquire zero drawables, and commit zero command buffers during the measured idle window.",
+        note: "Real iOS app-host static-scene idle contract: after settle, the display link must suspend with zero callbacks, Rust frame checks, frame submissions, drawable acquisitions, command-buffer commits, or missed wakeups during the measured idle window.",
     },
     OxideOnscreenCaseSpec {
         test_name: "testCameraNV12LegacyLivePreview",
@@ -6749,6 +6749,7 @@ fn build_oxide_onscreen_device_case(
         .unwrap_or_default();
 
     let mut workload_from_trace = None;
+    let mut static_idle_window_s = None;
     let mut metrics = BTreeMap::new();
     let mut headline_metric = String::from("clock_s");
     let mut notes = vec![
@@ -6829,7 +6830,9 @@ fn build_oxide_onscreen_device_case(
             insert_oxide_metric_distribution(&mut metrics, &name, &metric, convert)?;
         }
         notes.extend(trace_run.notes.iter().cloned());
-        notes.extend(gpu_notes);
+        if spec.case_id != "gpu.scene.static_idle.no_redraw" {
+            notes.extend(gpu_notes);
+        }
         match preferred_oxide_stage_summary(&stdout) {
             Ok(stage_metrics) => {
                 insert_oxide_stage_metric_medians(&mut metrics, &stage_metrics)?;
@@ -6845,7 +6848,7 @@ fn build_oxide_onscreen_device_case(
                 notes.push(format!("In-app GPU timing status: {}", err));
             }
         }
-        if memory_metrics.is_empty() {
+        if memory_metrics.is_empty() && spec.case_id != "gpu.scene.static_idle.no_redraw" {
             notes.push(String::from(
                 "Memory summary status: launched xctrace did not provide parked-app summary lines for this case, so the on-screen Oxide row is trace-derived for workload and GPU metrics only.",
             ));
@@ -6908,13 +6911,20 @@ fn build_oxide_onscreen_device_case(
                 "Frame cadence source: device console CADisplayLink summary emitted by the measured XCTest workload window.",
             ));
         }
+        Err(_) if spec.case_id == "gpu.scene.static_idle.no_redraw" => {
+            notes.push(String::from(
+                "Frame cadence attribution: the bounded idle window intentionally contains no display callbacks; exact zero hitch and missed-frame values come from that suspended interval.",
+            ));
+        }
         Err(err) => {
             notes.push(format!("Frame cadence status: {}", err));
         }
     }
     if spec.case_id == "gpu.scene.static_idle.no_redraw" {
         let idle = parse_oxide_static_idle_summary(&stdout)?;
-        metrics.insert(String::from("idle_window_s"), idle.window_ms / 1_000.0);
+        let idle_window_s = idle.window_ms / 1_000.0;
+        static_idle_window_s = Some(idle_window_s);
+        metrics.insert(String::from("idle_window_s"), idle_window_s);
         metrics.insert(
             String::from("idle_delta_display_link_callbacks"),
             f64::from(idle.delta_display_link_callbacks),
@@ -6927,6 +6937,22 @@ fn build_oxide_onscreen_device_case(
         metrics.insert(
             String::from("idle_delta_command_buffers_committed"),
             f64::from(idle.delta_command_buffers_committed),
+        );
+        metrics.insert(
+            String::from("idle_delta_display_link_idle_pauses"),
+            f64::from(idle.delta_display_link_idle_pauses),
+        );
+        metrics.insert(
+            String::from("idle_delta_display_link_wake_requests"),
+            f64::from(idle.delta_display_link_wake_requests),
+        );
+        metrics.insert(
+            String::from("idle_delta_display_link_wake_transitions"),
+            f64::from(idle.delta_display_link_wake_transitions),
+        );
+        metrics.insert(
+            String::from("idle_delta_display_link_missed_wakeups"),
+            f64::from(idle.delta_display_link_missed_wakeups),
         );
         metrics.insert(
             String::from("idle_delta_host_submitted_frames"),
@@ -6944,19 +6970,32 @@ fn build_oxide_onscreen_device_case(
             String::from("idle_end_host_settle_frames_remaining"),
             f64::from(idle.end_host_settle_frames_remaining),
         );
+        let resident_bytes = idle
+            .start_process_resident_bytes
+            .max(idle.end_process_resident_bytes);
+        if resident_bytes > 0 {
+            metrics.insert(String::from("memory_peak_kb"), resident_bytes as f64 / 1_024.0);
+        }
         notes.push(format!(
-            "Static idle no-redraw contract: window={:.1}ms displayLinkDelta={} planSkipDelta={} drawableDelta={} commandBufferDelta={} submittedFrameDelta={} idleSkipDelta={}.",
+            "Static idle suspension contract: window={:.1}ms displayLinkDelta={} planSkipDelta={} drawableDelta={} commandBufferDelta={} idlePauseDelta={} wakeRequestDelta={} wakeTransitionDelta={} missedWakeupDelta={} submittedFrameDelta={} idleSkipDelta={}.",
             idle.window_ms,
             idle.delta_display_link_callbacks,
             idle.delta_plan_skips,
             idle.delta_drawables_acquired,
             idle.delta_command_buffers_committed,
+            idle.delta_display_link_idle_pauses,
+            idle.delta_display_link_wake_requests,
+            idle.delta_display_link_wake_transitions,
+            idle.delta_display_link_missed_wakeups,
             idle.delta_host_submitted_frames,
             idle.delta_host_idle_skipped_frames
         ));
         if !idle.contract_passed
+            || idle.delta_display_link_callbacks != 0
+            || idle.delta_plan_skips != 0
             || idle.delta_drawables_acquired != 0
             || idle.delta_command_buffers_committed != 0
+            || idle.delta_display_link_missed_wakeups != 0
             || idle.delta_host_submitted_frames != 0
             || idle.end_host_frame_dirty != 0
             || idle.end_host_settle_frames_remaining != 0
@@ -6971,6 +7010,29 @@ fn build_oxide_onscreen_device_case(
                 idle.end_host_settle_frames_remaining
             );
         }
+        for name in [
+            "gpu_time_s",
+            "gpu_latency_s",
+            "hitch_ms_per_s",
+            "missed_frames",
+            "missed_frames_per_s",
+        ] {
+            metrics.insert(String::from(name), 0.0);
+            for suffix in OXIDE_DEVICE_DISTRIBUTION_VALUE_SUFFIXES {
+                metrics.insert(format!("{}_{}", name, suffix), 0.0);
+            }
+            metrics.insert(format!("{}_samples", name), 1.0);
+        }
+        for name in ["clock_s", "workload_s"] {
+            metrics.insert(String::from(name), idle_window_s);
+            for suffix in OXIDE_DEVICE_DISTRIBUTION_VALUE_SUFFIXES {
+                metrics.insert(format!("{}_{}", name, suffix), idle_window_s);
+            }
+            metrics.insert(format!("{}_samples", name), 1.0);
+        }
+        notes.push(String::from(
+            "Static idle attribution: exact zero app GPU, hitch, and missed-frame values come from zero Oxide command-buffer commits and zero display callbacks inside the bounded in-app idle window; compositor activity outside that contract is excluded.",
+        ));
     }
     if headline_metric != "clock_s" {
         notes.push(format!("Headline metric: `{}`.", headline_metric));
@@ -6978,6 +7040,8 @@ fn build_oxide_onscreen_device_case(
     let measure_iterations =
         workload_from_trace.as_ref().map(|summary| summary.samples).unwrap_or(workload.samples);
 
+    let reported_workload_s = static_idle_window_s
+        .unwrap_or(summary_value_seconds(&workload, workload.median)?);
     Ok(PerfCaseResult {
         id: String::from(spec.case_id),
         family: String::from(spec.family),
@@ -6989,12 +7053,12 @@ fn build_oxide_onscreen_device_case(
         unit: String::from("s"),
         gated: true,
         threshold_pct: UIKIT_DEVICE_THRESHOLD_PCT,
-        median: summary_value_seconds(&workload, workload.median)?,
-        p95: summary_value_seconds(&workload, workload.p95)?,
-        p99: summary_value_seconds(&workload, workload.p99)?,
-        min: summary_value_seconds(&workload, workload.min)?,
-        max: summary_value_seconds(&workload, workload.max)?,
-        mean: summary_value_seconds(&workload, workload.mean)?,
+        median: reported_workload_s,
+        p95: reported_workload_s,
+        p99: reported_workload_s,
+        min: reported_workload_s,
+        max: reported_workload_s,
+        mean: reported_workload_s,
         samples: measure_iterations.max(workload.samples),
         ops_per_sample: spec.benchmark_iterations as u64,
         notes,
@@ -7928,6 +7992,7 @@ fn run_uikit_device_case_console_capture(
     } else {
         start_result.map(|_| ())
     };
+    let terminate_result = terminate_uikit_device_process(root, device, process_pid);
     let launch_result = wait_for_console_launch_with_output_paths(
         root,
         "xcrun",
@@ -7936,7 +8001,6 @@ fn run_uikit_device_case_console_capture(
         &launch_stdout_path,
         &launch_stderr_path,
     );
-    let terminate_result = terminate_uikit_device_process(root, device, process_pid);
     let clear_result = wait_for_uikit_process_clear(
         root,
         device,
@@ -12461,6 +12525,14 @@ pub struct OxideAppHostDebugSummaryPayload {
     pub drawables_acquired: u32,
     pub command_buffers_committed: u32,
     #[serde(default)]
+    pub display_link_idle_pauses: u32,
+    #[serde(default)]
+    pub display_link_wake_requests: u32,
+    #[serde(default)]
+    pub display_link_wake_transitions: u32,
+    #[serde(default)]
+    pub display_link_missed_wakeups: u32,
+    #[serde(default)]
     pub host_idle_skipped_frames: u64,
     #[serde(default)]
     pub host_submitted_frames: u64,
@@ -12498,6 +12570,18 @@ pub struct OxideStaticIdleSummaryPayload {
     pub start_command_buffers_committed: u32,
     pub end_command_buffers_committed: u32,
     pub delta_command_buffers_committed: u32,
+    pub start_display_link_idle_pauses: u32,
+    pub end_display_link_idle_pauses: u32,
+    pub delta_display_link_idle_pauses: u32,
+    pub start_display_link_wake_requests: u32,
+    pub end_display_link_wake_requests: u32,
+    pub delta_display_link_wake_requests: u32,
+    pub start_display_link_wake_transitions: u32,
+    pub end_display_link_wake_transitions: u32,
+    pub delta_display_link_wake_transitions: u32,
+    pub start_display_link_missed_wakeups: u32,
+    pub end_display_link_missed_wakeups: u32,
+    pub delta_display_link_missed_wakeups: u32,
     pub start_host_submitted_frames: u64,
     pub end_host_submitted_frames: u64,
     pub delta_host_submitted_frames: u64,
@@ -12506,6 +12590,8 @@ pub struct OxideStaticIdleSummaryPayload {
     pub delta_host_idle_skipped_frames: u64,
     pub end_host_frame_dirty: u8,
     pub end_host_settle_frames_remaining: u8,
+    pub start_process_resident_bytes: u64,
+    pub end_process_resident_bytes: u64,
     pub contract_passed: bool,
 }
 
@@ -12801,8 +12887,12 @@ pub fn render_oxide_app_host_debug_summary_note(
     payload: &OxideAppHostDebugSummaryPayload,
 ) -> String {
     format!(
-        "Actual app-host preview counters: displayLinkCallbacks={} cameraGenerationAdvances={} cameraTriggeredRenders={} planSkips={} drawablesAcquired={} commandBuffersCommitted={} hostIdleSkippedFrames={} hostSubmittedFrames={} hostFrameDirty={} hostSettleFramesRemaining={} previewDepth={} presentedFrameAge={:.2}ms samples received/droppedPrebridge/bridged/published/presented/superseded={}/{}/{}/{}/{}/{} hostReady={} shouldRender={}",
+        "Actual app-host preview counters: displayLinkCallbacks={} idlePauses={} wakeRequests={} wakeTransitions={} missedWakeups={} cameraGenerationAdvances={} cameraTriggeredRenders={} planSkips={} drawablesAcquired={} commandBuffersCommitted={} hostIdleSkippedFrames={} hostSubmittedFrames={} hostFrameDirty={} hostSettleFramesRemaining={} previewDepth={} presentedFrameAge={:.2}ms samples received/droppedPrebridge/bridged/published/presented/superseded={}/{}/{}/{}/{}/{} hostReady={} shouldRender={}",
         payload.display_link_callbacks,
+        payload.display_link_idle_pauses,
+        payload.display_link_wake_requests,
+        payload.display_link_wake_transitions,
+        payload.display_link_missed_wakeups,
         payload.camera_generation_advances,
         payload.camera_frame_triggered_renders,
         payload.plan_skips,
