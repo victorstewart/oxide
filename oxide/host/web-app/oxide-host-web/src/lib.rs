@@ -8060,6 +8060,26 @@ mod wasm_host {
         );
         let _ = write!(
             out,
+            ";{key_prefix}effect_graph_effects={};{key_prefix}effect_graph_captures={};{key_prefix}effect_graph_pyramids={};{key_prefix}effect_graph_pyramid_reuses={};{key_prefix}effect_graph_plan_reuses={};{key_prefix}effect_graph_capture_passes={};{key_prefix}effect_graph_downsample_passes={};{key_prefix}effect_graph_blur_horizontal_passes={};{key_prefix}effect_graph_blur_vertical_passes={};{key_prefix}effect_graph_composite_passes={};{key_prefix}effect_graph_max_lifetime_commands={};{key_prefix}effect_graph_resources={};{key_prefix}effect_graph_alias_slots={};{key_prefix}effect_graph_logical_bytes={};{key_prefix}effect_graph_physical_bytes={};{key_prefix}effect_graph_aliased_bytes={}",
+            stats.effect_graph_effects,
+            stats.effect_graph_captures,
+            stats.effect_graph_pyramids,
+            stats.effect_graph_pyramid_reuses,
+            stats.effect_graph_plan_reuses,
+            stats.effect_graph_capture_passes,
+            stats.effect_graph_downsample_passes,
+            stats.effect_graph_blur_horizontal_passes,
+            stats.effect_graph_blur_vertical_passes,
+            stats.effect_graph_composite_passes,
+            stats.effect_graph_max_lifetime_commands,
+            stats.effect_graph_resources,
+            stats.effect_graph_alias_slots,
+            stats.effect_graph_logical_bytes,
+            stats.effect_graph_physical_bytes,
+            stats.effect_graph_aliased_bytes,
+        );
+        let _ = write!(
+            out,
             ";{key_prefix}commands_traversed={};{key_prefix}commands_copied={};{key_prefix}geometry_bytes_copied={};{key_prefix}chunks_reused={};{key_prefix}chunks_rebuilt={};{key_prefix}chunks_prepared={};{key_prefix}backend_cache_hits={};{key_prefix}backend_cache_misses={};{key_prefix}render_encoders={};{key_prefix}render_bundle_creates={};{key_prefix}render_bundle_replays={};{key_prefix}render_bundle_execute_calls={};{key_prefix}render_bundle_draws={};{key_prefix}prepared_direct_draws={};{key_prefix}property_upload_bytes={};{key_prefix}property_records_updated={};{key_prefix}property_ring_bytes={};{key_prefix}texture_copy_pixels={};{key_prefix}texture_copy_bytes={};{key_prefix}shaded_damage_pixels={};{key_prefix}cache_evictions={};{key_prefix}wakeups={};{key_prefix}skipped_submissions={};{key_prefix}actual_submissions={};{key_prefix}gpu_allocated_bytes_available={};{key_prefix}gpu_logical_total_bytes={};{key_prefix}gpu_allocated_total_bytes={};{key_prefix}gpu_vertex_buffer_bytes={};{key_prefix}gpu_index_buffer_bytes={};{key_prefix}gpu_uniform_buffer_bytes={};{key_prefix}gpu_persistent_asset_bytes={};{key_prefix}gpu_transient_target_bytes={};{key_prefix}gpu_depth_target_bytes={};{key_prefix}gpu_bloom_target_bytes={};{key_prefix}gpu_layer_texture_bytes={};{key_prefix}gpu_id_mask_texture_bytes={};{key_prefix}gpu_atlas_texture_bytes={};{key_prefix}gpu_image_texture_bytes={};{key_prefix}gpu_scene3d_mesh_bytes={};{key_prefix}gpu_staging_buffer_bytes={};{key_prefix}gpu_bind_buffer_bytes={};{key_prefix}gpu_frame_ring_bytes={};{key_prefix}gpu_cache_bytes={}",
             stats.commands_traversed,
             stats.commands_copied,

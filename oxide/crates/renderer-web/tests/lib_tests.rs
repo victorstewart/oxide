@@ -761,12 +761,16 @@ fn wasm_webgpu_effect_path_avoids_redundant_hot_work() {
     assert!(source.contains("Backdrop { rect: api::RectF, sigma: f32 }"));
     assert!(source.contains("fn backdrop_sample_rect("));
     assert!(source.contains("backdrop_sample_bounds(rect, draw.clip"));
+    assert!(source.contains("fn prepare_effect_graph("));
+    assert!(source.contains("entry.plan.build(&self.effect_graph_events);"));
+    assert!(source.contains("EFFECT_GRAPH_CACHE_CAPACITY"));
+    assert!(source.contains("effect_graph_plan_reuses"));
     assert!(source.contains("fn prepare_backdrop_batch("));
-    assert!(source.contains("self.backdrop_copy_regions.push(region);"));
+    assert!(source.contains("for effect in plan.effects()"));
+    assert!(source.contains("self.backdrop_copy_regions.push(PhysicalCopyRegion"));
     assert!(source.contains("copy_pixels.saturating_mul("));
     assert!(source.contains("wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)"));
     assert!(source.contains("oxide-webgpu-clear-before-backdrop"));
-    assert!(source.contains("copy_regions_overlap(*prior, region)"));
     assert!(source.contains("self.backdrop_batch_enabled"));
     assert!(source.contains("fn render_draw_target_with_effects("));
     assert!(source_without_whitespace(source)

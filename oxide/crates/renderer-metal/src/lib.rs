@@ -944,6 +944,9 @@ pub struct MetalRenderer {
     image_vbuf: alloc::vec::Vec<f32>,
     image_fbuf: alloc::vec::Vec<ImageGpuParams>,
     effect_fbuf: alloc::vec::Vec<f32>,
+    effect_graph_events: alloc::vec::Vec<api::EffectGraphEvent>,
+    effect_graph_plan: api::EffectGraphPlan,
+    effect_graph_key: u64,
     sampler: Option<SamplerState>,
     color_format: MTLPixelFormat,
     config: MetalRendererConfig,
@@ -2119,6 +2122,9 @@ impl MetalRenderer {
             image_vbuf: alloc::vec::Vec::new(),
             image_fbuf: alloc::vec::Vec::new(),
             effect_fbuf: alloc::vec::Vec::new(),
+            effect_graph_events: alloc::vec::Vec::new(),
+            effect_graph_plan: api::EffectGraphPlan::default(),
+            effect_graph_key: 0,
             sampler,
             color_format,
             config: applied_config,
@@ -5379,14 +5385,116 @@ fn visual_effect_blur_plan(effect: api::VisualEffect) -> VisualEffectBlurPlan {
     VisualEffectBlurPlan { sigma_dp, downsample_divisor, pass_scale, pass_sigma, pass_radius }
 }
 
-fn draw_cmd_blur_rect_and_sigma(cmd: &api::DrawCmd) -> Option<(&api::RectF, f32)> {
-    match cmd {
-        api::DrawCmd::Backdrop { rect, sigma, .. } => Some((rect, sigma.max(0.0))),
-        api::DrawCmd::VisualEffect { rect, effect } => {
-            Some((rect, visual_effect_blur_plan(*effect).sigma_dp))
+fn metal_effect_graph_region(
+    rect: api::RectF,
+    sigma: f32,
+    width: u32,
+    height: u32,
+    scale: f32,
+) -> api::EffectGraphRegion {
+    let scale = scale.max(1.0);
+    let margin = (3.0 * sigma.max(0.0)).ceil();
+    let x0 = ((rect.x - margin) * scale).floor().max(0.0).min(width as f32) as u32;
+    let y0 = ((rect.y - margin) * scale).floor().max(0.0).min(height as f32) as u32;
+    let x1 = ((rect.x + rect.w + margin) * scale).ceil().max(0.0).min(width as f32) as u32;
+    let y1 = ((rect.y + rect.h + margin) * scale).ceil().max(0.0).min(height as f32) as u32;
+    api::EffectGraphRegion::new(x0, y0, x1.saturating_sub(x0), y1.saturating_sub(y0))
+}
+
+fn metal_effect_graph_output_region(
+    rect: api::RectF,
+    width: u32,
+    height: u32,
+    scale: f32,
+) -> api::EffectGraphRegion {
+    let scale = scale.max(1.0);
+    let x0 = (rect.x * scale).floor().max(0.0).min(width as f32) as u32;
+    let y0 = (rect.y * scale).floor().max(0.0).min(height as f32) as u32;
+    let x1 = ((rect.x + rect.w) * scale).ceil().max(0.0).min(width as f32) as u32;
+    let y1 = ((rect.y + rect.h) * scale).ceil().max(0.0).min(height as f32) as u32;
+    api::EffectGraphRegion::new(x0, y0, x1.saturating_sub(x0), y1.saturating_sub(y0))
+}
+
+#[inline]
+fn effect_graph_hash_mix(hash: &mut u64, value: u64) {
+    *hash ^= value;
+    *hash = hash.wrapping_mul(0x100000001b3);
+}
+
+fn build_metal_effect_graph(
+    events: &mut alloc::vec::Vec<api::EffectGraphEvent>,
+    plan: &mut api::EffectGraphPlan,
+    list: DrawListView<'_>,
+    width: u32,
+    height: u32,
+    scale: f32,
+    sample_count: u32,
+    bytes_per_pixel: u8,
+) {
+    events.clear();
+    let target = api::EffectGraphTarget {
+        id: 0,
+        format: 0,
+        sample_count: sample_count.min(u32::from(u8::MAX)) as u8,
+        bytes_per_pixel,
+        storage: api::EffectGraphStorage::Transient,
+    };
+    let mut effect_seen = false;
+    let mut barrier_pending = false;
+    for (command, item) in list.items.iter().enumerate() {
+        let effect = match item {
+            api::DrawCmd::Backdrop { rect, sigma, .. } => Some((
+                *rect,
+                sigma.max(0.0),
+                api::EffectGraphPyramidSpec {
+                    sigma_bits: sigma.max(0.0).to_bits(),
+                    quality: 1,
+                    downsample_levels: 2,
+                    blur_passes: 2,
+                    materialized: *sigma > 0.0,
+                },
+            )),
+            api::DrawCmd::VisualEffect { rect, effect } => {
+                let blur = visual_effect_blur_plan(*effect);
+                Some((
+                    *rect,
+                    blur.sigma_dp,
+                    api::EffectGraphPyramidSpec {
+                        sigma_bits: blur.sigma_dp.to_bits(),
+                        quality: 2,
+                        downsample_levels: if blur.uses_eighth_downsample() { 3 } else { 2 },
+                        blur_passes: 2,
+                        materialized: blur.sigma_dp > 0.0,
+                    },
+                ))
+            }
+            _ => None,
+        };
+        let Some((rect, sigma, pyramid)) = effect else {
+            barrier_pending |= effect_seen;
+            continue;
+        };
+        if barrier_pending {
+            events.push(api::EffectGraphEvent {
+                command: command as u32,
+                target,
+                kind: api::EffectGraphEventKind::Write,
+            });
+            barrier_pending = false;
         }
-        _ => None,
+        effect_seen = true;
+        let kind = {
+            let region = metal_effect_graph_region(rect, sigma, width, height, scale);
+            api::EffectGraphEventKind::Effect {
+                source: region,
+                destination: region,
+                output: metal_effect_graph_output_region(rect, width, height, scale),
+                pyramid,
+            }
+        };
+        events.push(api::EffectGraphEvent { command: command as u32, target, kind });
     }
+    plan.build(events);
 }
 
 #[derive(Clone, Copy)]
@@ -6066,9 +6174,50 @@ impl api::Renderer for MetalRenderer {
         let mut has_backdrop = false;
         let mut has_visual_effect = false;
         let mut has_layer_commands = false;
-        let mut max_effect_sigma = 0.0f32;
         let mut visual_effect_plan = VisualEffectBlurPlan::OFF;
-        for it in &list.items {
+        let effect_bytes_per_pixel = match self.color_format {
+            MTLPixelFormat::RGBA16Float | MTLPixelFormat::BGRA10_XR => 8,
+            _ => 4,
+        };
+        let mut effect_graph_key = 0xcbf29ce484222325_u64;
+        for value in [
+            u64::from(self.target_w),
+            u64::from(self.target_h),
+            u64::from(self.target_scale.to_bits()),
+            u64::from(self.sample_count),
+            u64::from(effect_bytes_per_pixel),
+        ] {
+            effect_graph_hash_mix(&mut effect_graph_key, value);
+        }
+        let mut effect_seen = false;
+        let mut barrier_pending = false;
+        for (command, it) in list.items.iter().enumerate() {
+            let effect = match it {
+                api::DrawCmd::Backdrop { rect, sigma, .. } => {
+                    Some((1_u64, *rect, sigma.max(0.0)))
+                }
+                api::DrawCmd::VisualEffect { rect, effect } => {
+                    Some((2, *rect, visual_effect_blur_plan(*effect).sigma_dp))
+                }
+                _ => None,
+            };
+            if let Some((kind, rect, sigma)) = effect {
+                if barrier_pending {
+                    effect_graph_hash_mix(&mut effect_graph_key, 0xff);
+                    barrier_pending = false;
+                }
+                effect_seen = true;
+                let signature = kind.wrapping_mul(0x9e3779b185ebca87)
+                    ^ (command as u64).wrapping_mul(0xc2b2ae3d27d4eb4f)
+                    ^ u64::from(rect.x.to_bits()).rotate_left(7)
+                    ^ u64::from(rect.y.to_bits()).rotate_left(19)
+                    ^ u64::from(rect.w.to_bits()).rotate_left(31)
+                    ^ u64::from(rect.h.to_bits()).rotate_left(43)
+                    ^ u64::from(sigma.to_bits()).rotate_left(53);
+                effect_graph_hash_mix(&mut effect_graph_key, signature);
+            } else {
+                barrier_pending |= effect_seen;
+            }
             match it {
                 api::DrawCmd::CameraBg { rect, blur, sigma, .. } => {
                     let a = (rect.w.max(0.0) * rect.h.max(0.0)).min(vp_area_dp);
@@ -6078,15 +6227,13 @@ impl api::Renderer for MetalRenderer {
                         requested_cam_blur_sigma = requested_cam_blur_sigma.max(*sigma);
                     }
                 }
-                api::DrawCmd::Backdrop { sigma, .. } => {
+                api::DrawCmd::Backdrop { .. } => {
                     has_backdrop = true;
-                    max_effect_sigma = max_effect_sigma.max(sigma.max(0.0));
                 }
                 api::DrawCmd::VisualEffect { effect, .. } => {
                     has_backdrop = true;
                     has_visual_effect = true;
                     let plan = visual_effect_blur_plan(*effect);
-                    max_effect_sigma = max_effect_sigma.max(plan.sigma_dp);
                     if plan.sigma_dp > visual_effect_plan.sigma_dp {
                         visual_effect_plan = plan;
                     }
@@ -6097,6 +6244,55 @@ impl api::Renderer for MetalRenderer {
                 _ => {}
             }
         }
+        effect_graph_key = if effect_seen { effect_graph_key.max(1) } else { 0 };
+        let mut effect_graph_events = core::mem::take(&mut self.effect_graph_events);
+        let mut effect_graph_plan = core::mem::take(&mut self.effect_graph_plan);
+        let effect_graph_reused = effect_graph_key != 0 && effect_graph_key == self.effect_graph_key;
+        if effect_graph_key != 0 && !effect_graph_reused {
+            build_metal_effect_graph(
+                &mut effect_graph_events,
+                &mut effect_graph_plan,
+                DrawListView::from_draw_list(list),
+                self.target_w,
+                self.target_h,
+                self.target_scale,
+                self.sample_count,
+                effect_bytes_per_pixel,
+            );
+        } else if effect_graph_key == 0 && self.effect_graph_key != 0 {
+            effect_graph_events.clear();
+            effect_graph_plan.build(&effect_graph_events);
+        }
+        self.effect_graph_key = effect_graph_key;
+        let effect_graph_stats = effect_graph_plan.stats();
+        let max_effect_sigma = effect_graph_plan.pyramids().iter().fold(0.0f32, |sigma, pyramid| {
+            sigma.max(f32::from_bits(pyramid.spec.sigma_bits))
+        });
+        let effect_capture_region = effect_graph_plan.captures().iter().fold(
+            api::EffectGraphRegion::default(),
+            |region, capture| region.union(capture.destination),
+        );
+        self.effect_graph_events = effect_graph_events;
+        self.effect_graph_plan = effect_graph_plan;
+        self.last_stats.effect_graph_effects = effect_graph_stats.effects;
+        self.last_stats.effect_graph_captures = effect_graph_stats.captures;
+        self.last_stats.effect_graph_pyramids = effect_graph_stats.pyramids;
+        self.last_stats.effect_graph_pyramid_reuses = effect_graph_stats.pyramid_reuses;
+        self.last_stats.effect_graph_plan_reuses = effect_graph_reused as u32;
+        self.last_stats.effect_graph_capture_passes = effect_graph_stats.capture_passes;
+        self.last_stats.effect_graph_downsample_passes = effect_graph_stats.downsample_passes;
+        self.last_stats.effect_graph_blur_horizontal_passes =
+            effect_graph_stats.blur_horizontal_passes;
+        self.last_stats.effect_graph_blur_vertical_passes =
+            effect_graph_stats.blur_vertical_passes;
+        self.last_stats.effect_graph_composite_passes = effect_graph_stats.composite_passes;
+        self.last_stats.effect_graph_max_lifetime_commands =
+            effect_graph_stats.max_lifetime_commands;
+        self.last_stats.effect_graph_resources = effect_graph_stats.resources;
+        self.last_stats.effect_graph_alias_slots = effect_graph_stats.alias_slots;
+        self.last_stats.effect_graph_logical_bytes = effect_graph_stats.logical_bytes;
+        self.last_stats.effect_graph_physical_bytes = effect_graph_stats.physical_bytes;
+        self.last_stats.effect_graph_aliased_bytes = effect_graph_stats.aliased_bytes;
         let cam_coverage =
             if vp_area_dp > 0.0 { (cam_area / vp_area_dp).clamp(0.0, 1.0) } else { 0.0 };
         #[cfg(target_os = "ios")]
@@ -6489,27 +6685,12 @@ impl api::Renderer for MetalRenderer {
             let mut prepass_scissor_dp: Option<api::RectI> = None;
             {
                 let s = self.target_scale.max(1.0);
-                let mut x0 = self.target_w as i32;
-                let mut y0 = self.target_h as i32;
-                let mut x1 = 0i32;
-                let mut y1 = 0i32;
-                let mut found_any = false;
-                for c in &list.items {
-                    let Some((rect, effect_sigma)) = draw_cmd_blur_rect_and_sigma(c) else {
-                        continue;
-                    };
-                    let margin = (3.0 * effect_sigma).ceil();
-                    let rx0 = (rect.x - margin).floor() as i32;
-                    let ry0 = (rect.y - margin).floor() as i32;
-                    let rx1 = (rect.x + rect.w + margin).ceil() as i32;
-                    let ry1 = (rect.y + rect.h + margin).ceil() as i32;
-                    x0 = x0.min(rx0);
-                    y0 = y0.min(ry0);
-                    x1 = x1.max(rx1);
-                    y1 = y1.max(ry1);
-                    found_any = true;
-                }
-                if found_any {
+                let region = effect_capture_region;
+                if !region.is_empty() {
+                    let x0 = (region.x as f32 / s).floor() as i32;
+                    let y0 = (region.y as f32 / s).floor() as i32;
+                    let x1 = (region.x.saturating_add(region.w) as f32 / s).ceil() as i32;
+                    let y1 = (region.y.saturating_add(region.h) as f32 / s).ceil() as i32;
                     // Clamp to framebuffer dp bounds
                     let x0c = x0.clamp(0, (self.target_w as f32 / s) as i32);
                     let y0c = y0.clamp(0, (self.target_h as f32 / s) as i32);
@@ -6568,39 +6749,12 @@ impl api::Renderer for MetalRenderer {
             enc0.end_encoding();
 
             // Determine blur kernel and union scissor in pixel coords for all Backdrop rects
-            let mut sigma = 0.0f32;
-            let mut u_x0: i32 = self.target_w as i32;
-            let mut u_y0: i32 = self.target_h as i32;
-            let mut u_x1: i32 = 0;
-            let mut u_y1: i32 = 0;
-            let scale = self.target_scale.max(1.0);
-            let mut found_any = false;
-            for c in &list.items {
-                let Some((rect, effect_sigma)) = draw_cmd_blur_rect_and_sigma(c) else {
-                    continue;
-                };
-                if effect_sigma > sigma {
-                    sigma = effect_sigma;
-                }
-                // Expand by ~3*sigma kernel radius, convert to px then clamp
-                let margin = (3.0 * effect_sigma).ceil();
-                let x0 = ((rect.x - margin) * scale).floor() as i32;
-                let y0 = ((rect.y - margin) * scale).floor() as i32;
-                let x1 = ((rect.x + rect.w + margin) * scale).ceil() as i32;
-                let y1 = ((rect.y + rect.h + margin) * scale).ceil() as i32;
-                u_x0 = u_x0.min(x0);
-                u_y0 = u_y0.min(y0);
-                u_x1 = u_x1.max(x1);
-                u_y1 = u_y1.max(y1);
-                found_any = true;
-            }
-            if !found_any {
-                sigma = 0.0;
-                u_x0 = 0;
-                u_y0 = 0;
-                u_x1 = self.target_w as i32;
-                u_y1 = self.target_h as i32;
-            }
+            let sigma = max_effect_sigma;
+            let region = effect_capture_region;
+            let u_x0 = region.x as i32;
+            let u_y0 = region.y as i32;
+            let u_x1 = region.x.saturating_add(region.w) as i32;
+            let u_y1 = region.y.saturating_add(region.h) as i32;
             // Clamp to framebuffer bounds and ensure non-negative width/height
             let x0c = u_x0.clamp(0, self.target_w as i32);
             let y0c = u_y0.clamp(0, self.target_h as i32);
@@ -10160,6 +10314,22 @@ pub struct PerfStats {
     pub analytic_instance_bytes: u64,
     pub analytic_instance_buffer_binds: u32,
     pub analytic_instance_ring_grows: u32,
+    pub effect_graph_effects: u32,
+    pub effect_graph_captures: u32,
+    pub effect_graph_pyramids: u32,
+    pub effect_graph_pyramid_reuses: u32,
+    pub effect_graph_plan_reuses: u32,
+    pub effect_graph_capture_passes: u32,
+    pub effect_graph_downsample_passes: u32,
+    pub effect_graph_blur_horizontal_passes: u32,
+    pub effect_graph_blur_vertical_passes: u32,
+    pub effect_graph_composite_passes: u32,
+    pub effect_graph_max_lifetime_commands: u32,
+    pub effect_graph_resources: u32,
+    pub effect_graph_alias_slots: u32,
+    pub effect_graph_logical_bytes: u64,
+    pub effect_graph_physical_bytes: u64,
+    pub effect_graph_aliased_bytes: u64,
     pub glyph_instance_bytes: u64,
     pub glyph_instance_buffer_binds: u32,
     pub glyph_instances: u32,
@@ -10976,6 +11146,46 @@ mod tests {
         });
         assert_eq!(EffectTargetPlan::for_effects(low.sigma_dp, low), EffectTargetPlan::Quarter);
         assert_eq!(EffectTargetPlan::for_effects(high.sigma_dp, high), EffectTargetPlan::Eighth);
+    }
+
+    #[test]
+    fn metal_effect_graph_reuses_only_compatible_snapshot_epochs() {
+        let backdrop = |x, sigma| api::DrawCmd::Backdrop {
+            rect: api::RectF::new(x, 20.0, 24.0, 24.0),
+            sigma,
+            tint: api::Color::rgba(1.0, 1.0, 1.0, 0.2),
+            alpha: 1.0,
+        };
+        let items = [
+            backdrop(20.0, 12.0),
+            backdrop(140.0, 12.0),
+            api::DrawCmd::RRect {
+                rect: api::RectF::new(0.0, 0.0, 8.0, 8.0),
+                radii: [2.0; 4],
+                color: api::Color::rgba(1.0, 0.0, 0.0, 1.0),
+            },
+            backdrop(220.0, 12.0),
+            backdrop(360.0, 24.0),
+        ];
+        let mut events = alloc::vec::Vec::new();
+        let mut plan = api::EffectGraphPlan::default();
+        build_metal_effect_graph(
+            &mut events,
+            &mut plan,
+            DrawListView { items: &items, vertices: &[], indices: &[] },
+            500,
+            200,
+            1.0,
+            1,
+            4,
+        );
+        assert_eq!(plan.effects().len(), 4);
+        assert_eq!(plan.captures().len(), 2);
+        assert_eq!(plan.pyramids().len(), 3);
+        assert_eq!(plan.stats().pyramid_reuses, 1);
+        assert_eq!(plan.effects()[0].capture, plan.effects()[1].capture);
+        assert_ne!(plan.effects()[1].capture, plan.effects()[2].capture);
+        assert_ne!(plan.effects()[2].pyramid, plan.effects()[3].pyramid);
     }
 
     #[test]

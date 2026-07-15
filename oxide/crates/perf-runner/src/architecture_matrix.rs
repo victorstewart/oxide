@@ -3792,6 +3792,22 @@ where
    let mut layer_pool_reuses_peak = 0_u64;
    let mut layer_purges_peak = 0_u64;
    let mut layer_budget_violations = 0_u64;
+   let mut effect_graph_effects_sum = 0.0;
+   let mut effect_graph_captures_sum = 0.0;
+   let mut effect_graph_pyramids_sum = 0.0;
+   let mut effect_graph_pyramid_reuses_sum = 0.0;
+   let mut effect_graph_plan_reuses_sum = 0.0;
+   let mut effect_graph_capture_passes_sum = 0.0;
+   let mut effect_graph_downsample_passes_sum = 0.0;
+   let mut effect_graph_blur_horizontal_passes_sum = 0.0;
+   let mut effect_graph_blur_vertical_passes_sum = 0.0;
+   let mut effect_graph_composite_passes_sum = 0.0;
+   let mut effect_graph_max_lifetime_commands_peak = 0_u32;
+   let mut effect_graph_resources_sum = 0.0;
+   let mut effect_graph_alias_slots_sum = 0.0;
+   let mut effect_graph_logical_bytes_peak = 0_u64;
+   let mut effect_graph_physical_bytes_peak = 0_u64;
+   let mut effect_graph_aliased_bytes_peak = 0_u64;
 
    for frame in 0..(warmups + frames)
    {
@@ -3873,6 +3889,28 @@ where
          {
             layer_budget_violations = layer_budget_violations.saturating_add(1);
          }
+         effect_graph_effects_sum += stats.effect_graph_effects as f64;
+         effect_graph_captures_sum += stats.effect_graph_captures as f64;
+         effect_graph_pyramids_sum += stats.effect_graph_pyramids as f64;
+         effect_graph_pyramid_reuses_sum += stats.effect_graph_pyramid_reuses as f64;
+         effect_graph_plan_reuses_sum += stats.effect_graph_plan_reuses as f64;
+         effect_graph_capture_passes_sum += stats.effect_graph_capture_passes as f64;
+         effect_graph_downsample_passes_sum += stats.effect_graph_downsample_passes as f64;
+         effect_graph_blur_horizontal_passes_sum +=
+            stats.effect_graph_blur_horizontal_passes as f64;
+         effect_graph_blur_vertical_passes_sum +=
+            stats.effect_graph_blur_vertical_passes as f64;
+         effect_graph_composite_passes_sum += stats.effect_graph_composite_passes as f64;
+         effect_graph_max_lifetime_commands_peak = effect_graph_max_lifetime_commands_peak
+            .max(stats.effect_graph_max_lifetime_commands);
+         effect_graph_resources_sum += stats.effect_graph_resources as f64;
+         effect_graph_alias_slots_sum += stats.effect_graph_alias_slots as f64;
+         effect_graph_logical_bytes_peak = effect_graph_logical_bytes_peak
+            .max(stats.effect_graph_logical_bytes);
+         effect_graph_physical_bytes_peak = effect_graph_physical_bytes_peak
+            .max(stats.effect_graph_physical_bytes);
+         effect_graph_aliased_bytes_peak = effect_graph_aliased_bytes_peak
+            .max(stats.effect_graph_aliased_bytes);
       }
       else if persist_raw
       {
@@ -3935,6 +3973,22 @@ where
    metrics.insert(String::from("layer_cache_pool_reuses"), layer_pool_reuses_peak as f64);
    metrics.insert(String::from("layer_cache_purges"), layer_purges_peak as f64);
    metrics.insert(String::from("layer_cache_budget_violations"), layer_budget_violations as f64);
+   metrics.insert(String::from("effect_graph_effects_avg"), effect_graph_effects_sum / frames as f64);
+   metrics.insert(String::from("effect_graph_captures_avg"), effect_graph_captures_sum / frames as f64);
+   metrics.insert(String::from("effect_graph_pyramids_avg"), effect_graph_pyramids_sum / frames as f64);
+   metrics.insert(String::from("effect_graph_pyramid_reuses_avg"), effect_graph_pyramid_reuses_sum / frames as f64);
+   metrics.insert(String::from("effect_graph_plan_reuses_avg"), effect_graph_plan_reuses_sum / frames as f64);
+   metrics.insert(String::from("effect_graph_capture_passes_avg"), effect_graph_capture_passes_sum / frames as f64);
+   metrics.insert(String::from("effect_graph_downsample_passes_avg"), effect_graph_downsample_passes_sum / frames as f64);
+   metrics.insert(String::from("effect_graph_blur_horizontal_passes_avg"), effect_graph_blur_horizontal_passes_sum / frames as f64);
+   metrics.insert(String::from("effect_graph_blur_vertical_passes_avg"), effect_graph_blur_vertical_passes_sum / frames as f64);
+   metrics.insert(String::from("effect_graph_composite_passes_avg"), effect_graph_composite_passes_sum / frames as f64);
+   metrics.insert(String::from("effect_graph_max_lifetime_commands_peak"), effect_graph_max_lifetime_commands_peak as f64);
+   metrics.insert(String::from("effect_graph_resources_avg"), effect_graph_resources_sum / frames as f64);
+   metrics.insert(String::from("effect_graph_alias_slots_avg"), effect_graph_alias_slots_sum / frames as f64);
+   metrics.insert(String::from("effect_graph_logical_bytes_peak"), effect_graph_logical_bytes_peak as f64);
+   metrics.insert(String::from("effect_graph_physical_bytes_peak"), effect_graph_physical_bytes_peak as f64);
+   metrics.insert(String::from("effect_graph_aliased_bytes_peak"), effect_graph_aliased_bytes_peak as f64);
    if persist_raw
    {
       insert_indexed_samples(&mut metrics, "raw_frame_ms", &frame_samples);

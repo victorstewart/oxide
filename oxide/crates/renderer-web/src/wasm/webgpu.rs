@@ -4,8 +4,8 @@ use super::{
     vertex_slice,
 };
 use crate::backdrop_region::{
-   backdrop_sample_bounds, coalesce_copy_regions_within, copy_regions_overlap,
-   physical_copy_region, PhysicalCopyRegion,
+   backdrop_sample_bounds, coalesce_copy_regions_within, physical_copy_region,
+   PhysicalCopyRegion,
 };
 use crate::image_slots::ImageSlots;
 use crate::packed_geometry::{
@@ -38,6 +38,14 @@ const NEON_MARKER_INSTANCE_BYTES: usize = 60;
 const NEON_MARKER_VERTEX_COUNT: u32 = 6;
 const GLYPH_INSTANCE_BYTES: usize = 36;
 const GLYPH_VERTEX_COUNT: u32 = 4;
+const EFFECT_GRAPH_CACHE_CAPACITY: usize = 8;
+
+#[inline]
+fn web_effect_graph_hash_mix(hash: &mut u64, value: u64)
+{
+   *hash ^= value;
+   *hash = hash.wrapping_mul(0x100000001b3);
+}
 
 const fn nine_slice_unit_vertices() -> [[u8; 4]; 36]
 {
@@ -819,6 +827,7 @@ struct FrameData {
     effect_first_sigma_bits: u32,
     effect_shared_sigma: f32,
     effect_single_uniform_slot: bool,
+    effect_graph_signature: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1447,6 +1456,37 @@ impl FrameData {
         self.effect_first_sigma_bits = 0;
         self.effect_shared_sigma = 0.0;
         self.effect_single_uniform_slot = true;
+        self.effect_graph_signature = 0xcbf29ce484222325;
+    }
+
+    fn push_gpu_draw(&mut self, draw: GpuDraw) {
+        if self.effect_graph_signature == 0 {
+            self.effect_graph_signature = 0xcbf29ce484222325;
+        }
+        web_effect_graph_hash_mix(
+            &mut self.effect_graph_signature,
+            draw.target.map_or(0, |id| u64::from(id) + 1),
+        );
+        match draw.kind {
+            DrawKind::Backdrop { rect, sigma } => {
+                web_effect_graph_hash_mix(&mut self.effect_graph_signature, 1);
+                for value in [
+                    rect.x.to_bits(),
+                    rect.y.to_bits(),
+                    rect.w.to_bits(),
+                    rect.h.to_bits(),
+                    sigma.to_bits(),
+                    draw.clip.x as u32,
+                    draw.clip.y as u32,
+                    draw.clip.w as u32,
+                    draw.clip.h as u32,
+                ] {
+                    web_effect_graph_hash_mix(&mut self.effect_graph_signature, u64::from(value));
+                }
+            }
+            _ => web_effect_graph_hash_mix(&mut self.effect_graph_signature, 0),
+        }
+        self.draws.push(draw);
     }
 
     fn record_draw_kind(&mut self, kind: DrawKind) {
@@ -1852,6 +1892,13 @@ struct GpuPrograms {
     scene3d_color_tri_add_pipeline: wgpu::RenderPipeline,
     id_mask_raster_pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
+}
+
+struct CachedEffectGraph
+{
+    key: u64,
+    last_used_frame: u64,
+    plan: api::EffectGraphPlan,
 }
 
 struct IdMaskVariantPrograms {
@@ -2329,6 +2376,9 @@ pub struct WebGpuRenderer {
     scene3d_uniform_bytes: Vec<u8>,
     effect_uniform_bytes: Vec<u8>,
     backdrop_copy_regions: Vec<PhysicalCopyRegion>,
+    effect_graph_events: Vec<api::EffectGraphEvent>,
+    effect_graph_cache: Vec<CachedEffectGraph>,
+    active_effect_graph: usize,
     scene3d_draws: Vec<Scene3dDraw>,
     scene3d_overlay_draws: Vec<Scene3dDraw>,
     id_mask_draws: Vec<IdMaskDraw>,
@@ -2837,6 +2887,9 @@ impl WebGpuRenderer {
             scene3d_uniform_bytes: Vec::new(),
             effect_uniform_bytes: Vec::new(),
             backdrop_copy_regions: Vec::new(),
+            effect_graph_events: Vec::new(),
+            effect_graph_cache: Vec::new(),
+            active_effect_graph: usize::MAX,
             scene3d_draws: Vec::new(),
             scene3d_overlay_draws: Vec::new(),
             id_mask_draws: Vec::new(),
@@ -2896,6 +2949,7 @@ impl WebGpuRenderer {
                 effect_first_sigma_bits: 0,
                 effect_shared_sigma: 0.0,
                 effect_single_uniform_slot: true,
+                effect_graph_signature: 0xcbf29ce484222325,
             },
             prepared_chunks: PreparedChunkCache::default(),
             prepared_property_ring,
@@ -3501,6 +3555,18 @@ impl WebGpuRenderer {
                 .capacity()
                 .saturating_mul(core::mem::size_of::<PhysicalCopyRegion>()),
         );
+        capacity.effect = capacity.effect.saturating_add(
+            self.effect_graph_events
+                .capacity()
+                .saturating_mul(core::mem::size_of::<api::EffectGraphEvent>()),
+        );
+        capacity.effect = capacity.effect.saturating_add(
+            self.effect_graph_cache.capacity()
+                .saturating_mul(core::mem::size_of::<CachedEffectGraph>()),
+        );
+        capacity.effect = self.effect_graph_cache.iter().fold(capacity.effect, |bytes, entry| {
+            bytes.saturating_add(entry.plan.scratch_capacity_bytes())
+        });
         capacity.scene3d = capacity.scene3d.saturating_add(
             self.scene3d_draws.capacity().saturating_mul(core::mem::size_of::<Scene3dDraw>()),
         );
@@ -4526,7 +4592,7 @@ impl WebGpuRenderer {
         if self.try_coalesce_draw_item(kind, range, clip, target) {
             return;
         }
-        self.frame.draws.push(GpuDraw {
+        self.frame.push_gpu_draw(GpuDraw {
             kind,
             index_kind: range.kind,
             first_index: range.first_index,
@@ -4567,7 +4633,7 @@ impl WebGpuRenderer {
         if self.try_coalesce_draw_item(kind, range, clip, target) {
             return;
         }
-        self.frame.draws.push(GpuDraw {
+        self.frame.push_gpu_draw(GpuDraw {
             kind,
             index_kind: range.kind,
             first_index: range.first_index,
@@ -4617,7 +4683,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.draws.push(GpuDraw {
+        self.frame.push_gpu_draw(GpuDraw {
             kind: DrawKind::RRect { first_instance, instance_count: 1 },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -4675,7 +4741,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.draws.push(GpuDraw {
+        self.frame.push_gpu_draw(GpuDraw {
             kind: DrawKind::Image { image, kind, first_instance, instance_count: 1 },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -4736,7 +4802,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.draws.push(GpuDraw {
+        self.frame.push_gpu_draw(GpuDraw {
             kind: DrawKind::Glyph { image, kind, first_instance, instance_count },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -4799,7 +4865,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.draws.push(GpuDraw {
+        self.frame.push_gpu_draw(GpuDraw {
             kind: DrawKind::NineSlice { image, kind, first_instance, instance_count: 1 },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -4849,7 +4915,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.draws.push(GpuDraw {
+        self.frame.push_gpu_draw(GpuDraw {
             kind: DrawKind::Spinner { first_instance, instance_count: 1 },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -4899,7 +4965,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.draws.push(GpuDraw {
+        self.frame.push_gpu_draw(GpuDraw {
             kind: DrawKind::NeonMarker { first_instance, instance_count: 1 },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -7832,31 +7898,34 @@ impl WebGpuRenderer {
         let DrawKind::Backdrop { .. } = first.kind else {
             return start + 1;
         };
-        let mut end = start;
-        let limit = if self.backdrop_batch_enabled {
-            limit.min(self.frame.draws.len())
-        } else {
-            start.saturating_add(1).min(self.frame.draws.len())
+        let Some(entry) = self.effect_graph_cache.get(self.active_effect_graph) else {
+            return start + 1;
         };
-        while end < limit {
-            let draw = self.frame.draws[end];
-            if draw.target != target {
-                end += 1;
+        let plan = &entry.plan;
+        let Some(capture_index) = plan.effects().iter()
+            .find(|effect| effect.command == start as u32)
+            .map(|effect| effect.capture)
+        else {
+            return start + 1;
+        };
+        let capture = plan.captures()[capture_index as usize];
+        let end = (capture.last_command as usize).saturating_add(1)
+            .min(limit)
+            .min(self.frame.draws.len());
+        for effect in plan.effects()
+        {
+            if effect.capture != capture_index
+            {
                 continue;
             }
-            let DrawKind::Backdrop { .. } = draw.kind else {
-                break;
-            };
-            let Some(region) = self.backdrop_copy_region(draw, target) else {
-                end += 1;
-                continue;
-            };
-            if self.backdrop_copy_regions.iter()
-                .any(|prior| copy_regions_overlap(*prior, region)) {
-                break;
-            }
-            self.backdrop_copy_regions.push(region);
-            end += 1;
+            self.backdrop_copy_regions.push(PhysicalCopyRegion {
+                source_x: effect.source.x,
+                source_y: effect.source.y,
+                destination_x: effect.destination.x,
+                destination_y: effect.destination.y,
+                width: effect.source.w,
+                height: effect.source.h,
+            });
         }
         let maximum_pixels = self.target_copy_space(target).map_or(0, |(x, y, width, height)| {
             let x0 = x.max(0).min(i64::from(self.width));
@@ -7890,6 +7959,201 @@ impl WebGpuRenderer {
           target_width,
           target_height,
        )
+    }
+
+    fn backdrop_output_region(
+        &self,
+        draw: GpuDraw,
+        target: Option<u32>,
+    ) -> Option<api::EffectGraphRegion>
+    {
+       let DrawKind::Backdrop { rect, .. } = draw.kind else
+       {
+          return None;
+       };
+       let clip_x1 = draw.clip.x.saturating_add(draw.clip.w) as f32;
+       let clip_y1 = draw.clip.y.saturating_add(draw.clip.h) as f32;
+       let x0 = rect.x.max(draw.clip.x as f32);
+       let y0 = rect.y.max(draw.clip.y as f32);
+       let x1 = (rect.x + rect.w).min(clip_x1);
+       let y1 = (rect.y + rect.h).min(clip_y1);
+       if x1 <= x0 || y1 <= y0
+       {
+          return None;
+       }
+       let (target_x, target_y, target_width, target_height) = self.target_copy_space(target)?;
+       let region = physical_copy_region(
+          api::RectF::new(x0, y0, x1 - x0, y1 - y0),
+          sanitize_scale(self.scale),
+          self.width,
+          self.height,
+          target_x,
+          target_y,
+          target_width,
+          target_height,
+       )?;
+       Some(api::EffectGraphRegion::new(
+          region.source_x,
+          region.source_y,
+          region.width,
+          region.height,
+       ))
+    }
+
+    fn effect_graph_key(&self, target: Option<u32>, start: usize, end: usize) -> u64
+    {
+       let mut hash = 0xcbf29ce484222325_u64;
+       for value in [
+          self.frame.effect_graph_signature,
+          target.map_or(0, |id| u64::from(id) + 1),
+          u64::from(self.width),
+          u64::from(self.height),
+          u64::from(self.scale.to_bits()),
+          self.backdrop_batch_enabled as u64,
+          start as u64,
+          end as u64,
+       ]
+       {
+          web_effect_graph_hash_mix(&mut hash, value);
+       }
+       hash.max(1)
+    }
+
+    fn record_effect_graph_stats(&mut self, stats: api::EffectGraphStats, reused: bool)
+    {
+       self.stats.effect_graph_effects = self.stats.effect_graph_effects.saturating_add(stats.effects);
+       self.stats.effect_graph_captures = self.stats.effect_graph_captures.saturating_add(stats.captures);
+       self.stats.effect_graph_pyramids = self.stats.effect_graph_pyramids.saturating_add(stats.pyramids);
+       self.stats.effect_graph_pyramid_reuses = self.stats.effect_graph_pyramid_reuses
+          .saturating_add(stats.pyramid_reuses);
+       self.stats.effect_graph_plan_reuses = self.stats.effect_graph_plan_reuses
+          .saturating_add(reused as u32);
+       self.stats.effect_graph_capture_passes = self.stats.effect_graph_capture_passes
+          .saturating_add(stats.capture_passes);
+       self.stats.effect_graph_downsample_passes = self.stats.effect_graph_downsample_passes
+          .saturating_add(stats.downsample_passes);
+       self.stats.effect_graph_blur_horizontal_passes = self.stats.effect_graph_blur_horizontal_passes
+          .saturating_add(stats.blur_horizontal_passes);
+       self.stats.effect_graph_blur_vertical_passes = self.stats.effect_graph_blur_vertical_passes
+          .saturating_add(stats.blur_vertical_passes);
+       self.stats.effect_graph_composite_passes = self.stats.effect_graph_composite_passes
+          .saturating_add(stats.composite_passes);
+       self.stats.effect_graph_max_lifetime_commands = self.stats.effect_graph_max_lifetime_commands
+          .max(stats.max_lifetime_commands);
+       self.stats.effect_graph_resources = self.stats.effect_graph_resources.saturating_add(stats.resources);
+       self.stats.effect_graph_alias_slots = self.stats.effect_graph_alias_slots.saturating_add(stats.alias_slots);
+       self.stats.effect_graph_logical_bytes = self.stats.effect_graph_logical_bytes
+          .saturating_add(stats.logical_bytes);
+       self.stats.effect_graph_physical_bytes = self.stats.effect_graph_physical_bytes
+          .saturating_add(stats.physical_bytes);
+       self.stats.effect_graph_aliased_bytes = self.stats.effect_graph_aliased_bytes
+          .saturating_add(stats.aliased_bytes);
+    }
+
+    fn prepare_effect_graph(&mut self, target: Option<u32>, start: usize, end: usize)
+    {
+       let key = self.effect_graph_key(target, start, end);
+       if let Some(index) = self.effect_graph_cache.iter().position(|entry| entry.key == key)
+       {
+          self.effect_graph_cache[index].last_used_frame = self.frame_id;
+          self.active_effect_graph = index;
+          let stats = self.effect_graph_cache[index].plan.stats();
+          self.record_effect_graph_stats(stats, true);
+          return;
+       }
+       self.effect_graph_events.clear();
+       let graph_target = api::EffectGraphTarget {
+          id: target.map_or(0, |id| u64::from(id) + 1),
+          format: 0,
+          sample_count: 1,
+          bytes_per_pixel: color_texture_bytes_per_pixel(self.config.format) as u8,
+          storage: api::EffectGraphStorage::Transient,
+       };
+       let limit = end.min(self.frame.draws.len());
+       let mut effect_seen = false;
+       let mut barrier_pending = false;
+       for draw_index in start.min(limit)..limit
+       {
+          let draw = self.frame.draws[draw_index];
+          if draw.target != target
+          {
+             continue;
+          }
+          if let DrawKind::Backdrop { sigma, .. } = draw.kind
+          {
+             if let Some(region) = self.backdrop_copy_region(draw, target)
+             {
+                if barrier_pending
+                {
+                   self.effect_graph_events.push(api::EffectGraphEvent {
+                      command: draw_index as u32,
+                      target: graph_target,
+                      kind: api::EffectGraphEventKind::Write,
+                   });
+                   barrier_pending = false;
+                }
+                let source = api::EffectGraphRegion::new(
+                   region.source_x,
+                   region.source_y,
+                   region.width,
+                   region.height,
+                );
+                let destination = api::EffectGraphRegion::new(
+                   region.destination_x,
+                   region.destination_y,
+                   region.width,
+                   region.height,
+                );
+                self.effect_graph_events.push(api::EffectGraphEvent {
+                   command: draw_index as u32,
+                   target: graph_target,
+                   kind: api::EffectGraphEventKind::Effect {
+                      source,
+                      destination,
+                      output: self.backdrop_output_region(draw, target).unwrap_or(source),
+                      pyramid: api::EffectGraphPyramidSpec {
+                         sigma_bits: sigma.to_bits(),
+                         quality: 1,
+                         downsample_levels: 0,
+                         blur_passes: 0,
+                         materialized: false,
+                      },
+                   },
+                });
+                effect_seen = true;
+                if !self.backdrop_batch_enabled
+                {
+                   barrier_pending = true;
+                }
+             }
+          }
+          else
+          {
+             barrier_pending |= effect_seen;
+          }
+       }
+       let index = if self.effect_graph_cache.len() < EFFECT_GRAPH_CACHE_CAPACITY
+       {
+          self.effect_graph_cache.push(CachedEffectGraph {
+             key,
+             last_used_frame: self.frame_id,
+             plan: api::EffectGraphPlan::default(),
+          });
+          self.effect_graph_cache.len() - 1
+       }
+       else
+       {
+          self.effect_graph_cache.iter().enumerate()
+             .min_by_key(|(_, entry)| entry.last_used_frame)
+             .map_or(0, |(index, _)| index)
+       };
+       let entry = &mut self.effect_graph_cache[index];
+       entry.key = key;
+       entry.last_used_frame = self.frame_id;
+       entry.plan.build(&self.effect_graph_events);
+       self.active_effect_graph = index;
+       let stats = entry.plan.stats();
+       self.record_effect_graph_stats(stats, false);
     }
 
     fn solid_pipeline(&self) -> &wgpu::RenderPipeline {
@@ -8533,6 +8797,7 @@ impl WebGpuRenderer {
     ) {
         if self.target_uses_backdrop(target, start, end) {
             self.ensure_scratch_target();
+            self.prepare_effect_graph(target, start, end);
         }
         let limit = end.min(self.frame.draws.len());
         let mut start = start.min(limit);

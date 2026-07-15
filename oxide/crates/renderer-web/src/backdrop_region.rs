@@ -93,16 +93,6 @@ pub(crate) fn physical_copy_region(
    })
 }
 
-pub(crate) fn copy_regions_overlap(a: PhysicalCopyRegion, b: PhysicalCopyRegion) -> bool
-{
-   let ax1 = a.destination_x.saturating_add(a.width);
-   let ay1 = a.destination_y.saturating_add(a.height);
-   let bx1 = b.destination_x.saturating_add(b.width);
-   let by1 = b.destination_y.saturating_add(b.height);
-   a.destination_x < bx1 && ax1 > b.destination_x
-      && a.destination_y < by1 && ay1 > b.destination_y
-}
-
 pub(crate) fn coalesce_copy_regions_within(
    regions: &mut Vec<PhysicalCopyRegion>,
    minimum_regions: usize,
@@ -229,28 +219,6 @@ mod tests
    }
 
    #[test]
-   fn physical_overlap_is_strict_and_uses_global_destination_space()
-   {
-      let a = PhysicalCopyRegion {
-         source_x: 0,
-         source_y: 0,
-         destination_x: 20,
-         destination_y: 10,
-         width: 20,
-         height: 20,
-      };
-      assert!(!copy_regions_overlap(a, PhysicalCopyRegion {
-         destination_x: 40,
-         ..a
-      }));
-      assert!(copy_regions_overlap(a, PhysicalCopyRegion {
-         source_x: 19,
-         destination_x: 39,
-         ..a
-      }));
-   }
-
-   #[test]
    fn epoch_union_requires_enough_regions_and_stays_smaller_than_the_full_copy()
    {
       let region = |x| PhysicalCopyRegion {
@@ -275,5 +243,67 @@ mod tests
       let mut regions = vec![region(10), region(30), region(50), region(70)];
       coalesce_copy_regions_within(&mut regions, 4, 700);
       assert_eq!(regions.len(), 4);
+   }
+
+   #[test]
+   fn coalescible_grid_is_one_snapshot_epoch()
+   {
+      let target = api::EffectGraphTarget {
+         id: 0,
+         format: 0,
+         sample_count: 1,
+         bytes_per_pixel: 4,
+         storage: api::EffectGraphStorage::Transient,
+      };
+      let mut events = Vec::new();
+      for index in 0..12_u32
+      {
+         let x = 18.0 + (index % 4) as f32 * 58.0;
+         let y = 24.0 + (index / 4) as f32 * 58.0;
+         let rect = api::RectF::new(x, y, 30.0, 30.0);
+         let sample = backdrop_sample_bounds(
+            rect,
+            api::RectI::new(0, 0, 512, 512),
+            6.0,
+            2.0,
+         ).unwrap();
+         let copy = physical_copy_region(sample, 2.0, 512, 512, 0, 0, 512, 512)
+            .unwrap();
+         let output = physical_copy_region(rect, 2.0, 512, 512, 0, 0, 512, 512)
+            .unwrap();
+         events.push(api::EffectGraphEvent {
+            command: index,
+            target,
+            kind: api::EffectGraphEventKind::Effect {
+               source: api::EffectGraphRegion::new(
+                  copy.source_x,
+                  copy.source_y,
+                  copy.width,
+                  copy.height,
+               ),
+               destination: api::EffectGraphRegion::new(
+                  copy.destination_x,
+                  copy.destination_y,
+                  copy.width,
+                  copy.height,
+               ),
+               output: api::EffectGraphRegion::new(
+                  output.source_x,
+                  output.source_y,
+                  output.width,
+                  output.height,
+               ),
+               pyramid: api::EffectGraphPyramidSpec::default(),
+            },
+         });
+      }
+      let mut plan = api::EffectGraphPlan::default();
+      plan.build(&events);
+      assert_eq!(
+         plan.effects().iter().map(|effect| effect.capture).collect::<Vec<_>>(),
+         vec![0; 12],
+      );
+      assert_eq!(plan.captures().len(), 1);
+      assert_eq!(plan.captures()[0].effect_count, 12);
    }
 }
