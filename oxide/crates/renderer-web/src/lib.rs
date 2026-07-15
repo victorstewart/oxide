@@ -12,6 +12,8 @@
 
 use oxide_renderer_api as api;
 
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+mod backdrop_region;
 mod solid_color;
 
 pub mod id_mask_compositor;
@@ -159,6 +161,7 @@ pub struct WebRendererStats {
     pub gpu_timestamp_frame_id: u64,
     pub gpu_timestamp_passes: u32,
     pub gpu_timestamp_total_ns: u64,
+    pub gpu_timestamp_backdrop_copy_ns: u64,
     pub gpu_timestamp_clear_ns: u64,
     pub gpu_timestamp_draw_ns: u64,
     pub gpu_timestamp_scene3d_ns: u64,
@@ -248,6 +251,7 @@ pub struct WebGpuTimestampSample {
     pub frame_id: u64,
     pub passes: u32,
     pub total_ns: u64,
+    pub backdrop_copy_ns: u64,
     pub clear_ns: u64,
     pub draw_ns: u64,
     pub scene3d_ns: u64,
@@ -408,6 +412,7 @@ impl Default for WebRendererStats {
             gpu_timestamp_frame_id: 0,
             gpu_timestamp_passes: 0,
             gpu_timestamp_total_ns: 0,
+            gpu_timestamp_backdrop_copy_ns: 0,
             gpu_timestamp_clear_ns: 0,
             gpu_timestamp_draw_ns: 0,
             gpu_timestamp_scene3d_ns: 0,

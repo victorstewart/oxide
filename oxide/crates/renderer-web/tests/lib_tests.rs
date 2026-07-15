@@ -363,8 +363,9 @@ fn wasm_webgpu_layers_are_generation_keyed_and_local_sized()
    assert!(source.contains("viewport_buffer: wgpu::Buffer"));
    assert!(source.contains("layer.viewport_bind_group.clone()"));
    assert!(source.contains("target_origin"));
-   assert!(source.contains("target_copy_region"));
-   assert!(source.contains("copy_extent.width"));
+   assert!(source.contains("target_copy_space"));
+   assert!(source.contains("region.source_x"));
+   assert!(source.contains("region.destination_x"));
 }
 
 #[test]
@@ -759,8 +760,13 @@ fn wasm_webgpu_effect_path_avoids_redundant_hot_work() {
     assert!(!single_uniform_slot.contains("self.effect_uniform_bytes.extend_from_slice"));
     assert!(source.contains("Backdrop { rect: api::RectF, sigma: f32 }"));
     assert!(source.contains("fn backdrop_sample_rect("));
-    assert!(source
-        .contains("fn backdrop_batch_end(&self, start: usize, target: Option<u32>, limit: usize)"));
+    assert!(source.contains("backdrop_sample_bounds(rect, draw.clip"));
+    assert!(source.contains("fn prepare_backdrop_batch("));
+    assert!(source.contains("self.backdrop_copy_regions.push(region);"));
+    assert!(source.contains("copy_pixels.saturating_mul("));
+    assert!(source.contains("wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)"));
+    assert!(source.contains("oxide-webgpu-clear-before-backdrop"));
+    assert!(source.contains("copy_regions_overlap(*prior, region)"));
     assert!(source.contains("self.backdrop_batch_enabled"));
     assert!(source.contains("fn render_draw_target_with_effects("));
     assert!(source_without_whitespace(source)
@@ -1133,6 +1139,7 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
         "pub gpu_timestamp_frame_id: u64",
         "pub gpu_timestamp_passes: u32",
         "pub gpu_timestamp_total_ns: u64",
+        "pub gpu_timestamp_backdrop_copy_ns: u64",
         "pub gpu_timestamp_clear_ns: u64",
         "pub gpu_timestamp_draw_ns: u64",
         "pub gpu_timestamp_scene3d_ns: u64",
@@ -1149,8 +1156,11 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     }
 
     assert!(source.contains("wgpu::Features::TIMESTAMP_QUERY"));
+    assert!(source.contains("wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS"));
     assert!(source.contains("wgpu::QueryType::Timestamp"));
     assert!(source.contains("wgpu::RenderPassTimestampWrites"));
+    assert!(source.contains("wgpu::ComputePassTimestampWrites"));
+    assert!(source.contains("oxide-webgpu-backdrop-copy-timestamp-fence"));
     assert!(source.contains("encoder.resolve_query_set"));
     assert!(source.contains("encoder.copy_buffer_to_buffer"));
     assert!(source.contains("slot.buffer.map_async"));
@@ -1375,6 +1385,7 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(host.contains("{key_prefix}texture_copies={}"));
     assert!(host.contains("{key_prefix}gpu_timestamp_query_supported={}"));
     assert!(host.contains("{key_prefix}gpu_timestamp_total_ns={}"));
+    assert!(host.contains("{key_prefix}gpu_timestamp_backdrop_copy_ns={}"));
     assert!(host.contains("{key_prefix}gpu_timestamp_id_mask_field_jump_ns={}"));
     assert!(host.contains("settle_renderer_timestamps"));
     assert!(host.contains("fn timestamp_stats_cover_row"));

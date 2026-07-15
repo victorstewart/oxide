@@ -3,6 +3,10 @@ use super::{
     normalized_index_mode, resolve_index, sanitize_scale, source_rect, saturating_texture_bytes,
     vertex_slice,
 };
+use crate::backdrop_region::{
+   backdrop_sample_bounds, coalesce_copy_regions_within, copy_regions_overlap,
+   physical_copy_region, PhysicalCopyRegion,
+};
 use crate::image_slots::ImageSlots;
 use crate::packed_geometry::{
     PackedGeometry, PackedIndexKind, PackedIndexRange, PackedVertex, PACKED_VERTEX_BYTES,
@@ -102,7 +106,7 @@ const ID_MASK_FIELD_CACHE_MAX_ENTRIES: usize = 4;
 const EFFECT_UNIFORM_SIZE_BYTES: usize = 16;
 const EFFECT_UNIFORM_SIZE: u64 = EFFECT_UNIFORM_SIZE_BYTES as u64;
 const MAX_BLUR_SIGMA: f32 = 96.0;
-const TIMESTAMP_MAX_PASSES: u32 = 64;
+const TIMESTAMP_MAX_PASSES: u32 = 128;
 const TIMESTAMP_QUERY_COUNT: u32 = TIMESTAMP_MAX_PASSES * 2;
 const TIMESTAMP_READBACK_SLOTS: usize = 48;
 const TIMESTAMP_READBACK_INTERVAL_FRAMES: u64 = 8;
@@ -1480,6 +1484,7 @@ fn coalescible_draw_kind(a: DrawKind, b: DrawKind) -> bool {
 
 #[derive(Clone, Copy)]
 enum TimestampPassFamily {
+    BackdropCopy,
     Clear,
     Draw,
     Scene3d,
@@ -1503,6 +1508,7 @@ struct TimestampSummary {
     frame_id: u64,
     passes: u32,
     total_ns: u64,
+    backdrop_copy_ns: u64,
     clear_ns: u64,
     draw_ns: u64,
     scene3d_ns: u64,
@@ -1556,14 +1562,17 @@ struct WebGpuTimestampQueries {
     completed: Option<Box<VecDeque<WebGpuTimestampSample>>>,
     readback_interval_frames: u64,
     readback_skips: u32,
+    encoder_writes_supported: bool,
 }
 
 impl TimestampSummary {
     fn add(&mut self, family: TimestampPassFamily, ns: u64) {
-        self.passes = self.passes.saturating_add(1);
         self.total_ns = self.total_ns.saturating_add(ns);
         self.max_pass_ns = self.max_pass_ns.max(ns);
         match family {
+            TimestampPassFamily::BackdropCopy => {
+                self.backdrop_copy_ns = self.backdrop_copy_ns.saturating_add(ns);
+            }
             TimestampPassFamily::Clear => self.clear_ns = self.clear_ns.saturating_add(ns),
             TimestampPassFamily::Draw => self.draw_ns = self.draw_ns.saturating_add(ns),
             TimestampPassFamily::Scene3d => self.scene3d_ns = self.scene3d_ns.saturating_add(ns),
@@ -1584,6 +1593,9 @@ impl TimestampSummary {
             }
             TimestampPassFamily::Present => self.present_ns = self.present_ns.saturating_add(ns),
         }
+        if !matches!(family, TimestampPassFamily::BackdropCopy) {
+            self.passes = self.passes.saturating_add(1);
+        }
     }
 
     fn sample(self) -> WebGpuTimestampSample {
@@ -1591,6 +1603,7 @@ impl TimestampSummary {
             frame_id: self.frame_id,
             passes: self.passes,
             total_ns: self.total_ns,
+            backdrop_copy_ns: self.backdrop_copy_ns,
             clear_ns: self.clear_ns,
             draw_ns: self.draw_ns,
             scene3d_ns: self.scene3d_ns,
@@ -1606,7 +1619,7 @@ impl TimestampSummary {
 }
 
 impl WebGpuTimestampQueries {
-    fn new(device: &wgpu::Device, timestamp_period_ns: f64) -> Self {
+    fn new(device: &wgpu::Device, timestamp_period_ns: f64, encoder_writes_supported: bool) -> Self {
         let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
             label: Some("oxide-webgpu-timestamp-queries"),
             ty: wgpu::QueryType::Timestamp,
@@ -1647,6 +1660,7 @@ impl WebGpuTimestampQueries {
             completed: None,
             readback_interval_frames: TIMESTAMP_READBACK_INTERVAL_FRAMES,
             readback_skips: 0,
+            encoder_writes_supported,
         }
     }
 
@@ -1932,6 +1946,10 @@ impl BrowserRenderer {
 
     pub fn set_timestamp_readback_interval_for_benchmark(&mut self, frames: u64) {
         self.inner.set_timestamp_readback_interval_for_benchmark(frames);
+    }
+
+    pub fn set_backdrop_copy_timestamp_fences_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.inner.set_backdrop_copy_timestamp_fences_enabled_for_benchmark(enabled);
     }
 
     pub fn set_memory_stats_interval_for_benchmark(&mut self, frames: u64) {
@@ -2310,6 +2328,7 @@ pub struct WebGpuRenderer {
     present_scale: f32,
     scene3d_uniform_bytes: Vec<u8>,
     effect_uniform_bytes: Vec<u8>,
+    backdrop_copy_regions: Vec<PhysicalCopyRegion>,
     scene3d_draws: Vec<Scene3dDraw>,
     scene3d_overlay_draws: Vec<Scene3dDraw>,
     id_mask_draws: Vec<IdMaskDraw>,
@@ -2383,6 +2402,7 @@ pub struct WebGpuRenderer {
     effect_uniform_batch_enabled: bool,
     backdrop_batch_enabled: bool,
     direct_surface_enabled: bool,
+    backdrop_copy_timestamp_fences_enabled: bool,
     cpu_submit_timing_enabled: bool,
     cpu_submit_timing: WebGpuCpuSubmitTimingSample,
     memory_stats_interval: u64,
@@ -2693,13 +2713,20 @@ impl WebGpuRenderer {
             })
             .await
             .map_err(|_| api::RenderError::Unsupported("webgpu adapter unavailable"))?;
-        let timestamp_query_supported =
-            adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+        let adapter_features = adapter.features();
+        let timestamp_query_supported = adapter_features.contains(wgpu::Features::TIMESTAMP_QUERY);
+        let timestamp_encoder_writes_supported = timestamp_query_supported
+            && adapter_features.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS);
         let packed_id_mask_fields = id_mask_packed_format_supported(
             adapter.get_texture_format_features(ID_MASK_PACKED_FIELD_FORMAT),
         );
         let required_features = if timestamp_query_supported {
             wgpu::Features::TIMESTAMP_QUERY
+                | if timestamp_encoder_writes_supported {
+                    wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
+                } else {
+                    wgpu::Features::empty()
+                }
         } else {
             wgpu::Features::empty()
         };
@@ -2713,7 +2740,11 @@ impl WebGpuRenderer {
             .await
             .map_err(|err| api::RenderError::Io(format!("webgpu device unavailable: {err}")))?;
         let timestamp_queries = if timestamp_query_supported {
-            Some(WebGpuTimestampQueries::new(&device, queue.get_timestamp_period() as f64))
+            Some(WebGpuTimestampQueries::new(
+                &device,
+                queue.get_timestamp_period() as f64,
+                timestamp_encoder_writes_supported,
+            ))
         } else {
             None
         };
@@ -2805,6 +2836,7 @@ impl WebGpuRenderer {
             present_scale: 0.0,
             scene3d_uniform_bytes: Vec::new(),
             effect_uniform_bytes: Vec::new(),
+            backdrop_copy_regions: Vec::new(),
             scene3d_draws: Vec::new(),
             scene3d_overlay_draws: Vec::new(),
             id_mask_draws: Vec::new(),
@@ -2901,6 +2933,7 @@ impl WebGpuRenderer {
             effect_uniform_batch_enabled: true,
             backdrop_batch_enabled: true,
             direct_surface_enabled: true,
+            backdrop_copy_timestamp_fences_enabled: false,
             cpu_submit_timing_enabled: false,
             cpu_submit_timing: WebGpuCpuSubmitTimingSample::default(),
             memory_stats_interval: 60,
@@ -2936,6 +2969,10 @@ impl WebGpuRenderer {
         if let Some(timestamps) = &mut self.timestamp_queries {
             timestamps.set_readback_interval_for_benchmark(frames);
         }
+    }
+
+    pub fn set_backdrop_copy_timestamp_fences_enabled_for_benchmark(&mut self, enabled: bool) {
+        self.backdrop_copy_timestamp_fences_enabled = enabled;
     }
 
     pub fn set_memory_stats_interval_for_benchmark(&mut self, frames: u64) {
@@ -3459,6 +3496,11 @@ impl WebGpuRenderer {
         let mut capacity = ScratchCapacityBreakdown::default();
         capacity.scene3d = capacity.scene3d.saturating_add(self.scene3d_uniform_bytes.capacity());
         capacity.effect = capacity.effect.saturating_add(self.effect_uniform_bytes.capacity());
+        capacity.effect = capacity.effect.saturating_add(
+            self.backdrop_copy_regions
+                .capacity()
+                .saturating_mul(core::mem::size_of::<PhysicalCopyRegion>()),
+        );
         capacity.scene3d = capacity.scene3d.saturating_add(
             self.scene3d_draws.capacity().saturating_mul(core::mem::size_of::<Scene3dDraw>()),
         );
@@ -3668,6 +3710,7 @@ impl WebGpuRenderer {
         self.stats.gpu_timestamp_frame_id = latest.frame_id;
         self.stats.gpu_timestamp_passes = latest.passes;
         self.stats.gpu_timestamp_total_ns = latest.total_ns;
+        self.stats.gpu_timestamp_backdrop_copy_ns = latest.backdrop_copy_ns;
         self.stats.gpu_timestamp_clear_ns = latest.clear_ns;
         self.stats.gpu_timestamp_draw_ns = latest.draw_ns;
         self.stats.gpu_timestamp_scene3d_ns = latest.scene3d_ns;
@@ -3686,6 +3729,50 @@ impl WebGpuRenderer {
 
     fn reserve_timestamp_pass(&mut self, family: TimestampPassFamily) -> Option<(u32, u32)> {
         self.timestamp_queries.as_mut().and_then(|timestamps| timestamps.reserve(family))
+    }
+
+    fn write_encoder_timestamp(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pair: Option<(u32, u32)>,
+        end: bool,
+    )
+    {
+       let Some((begin_query, end_query)) = pair else
+       {
+          return;
+       };
+       let Some(timestamps) = self.timestamp_queries.as_ref() else
+       {
+          return;
+       };
+       encoder.write_timestamp(
+          &timestamps.query_set,
+          if end { end_query } else { begin_query },
+       );
+    }
+
+    fn write_backdrop_copy_timestamp_fence(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pair: Option<(u32, u32)>,
+        after_copy: bool,
+    ) {
+        let Some((begin_query, end_query)) = pair else {
+            return;
+        };
+        let Some(timestamps) = self.timestamp_queries.as_ref() else {
+            return;
+        };
+        let timestamp_writes = wgpu::ComputePassTimestampWrites {
+            query_set: &timestamps.query_set,
+            beginning_of_pass_write_index: after_copy.then_some(end_query),
+            end_of_pass_write_index: (!after_copy).then_some(begin_query),
+        };
+        let _pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("oxide-webgpu-backdrop-copy-timestamp-fence"),
+            timestamp_writes: Some(timestamp_writes),
+        });
     }
 
     fn timestamp_writes(
@@ -7716,105 +7803,93 @@ impl WebGpuRenderer {
             .any(|draw| draw.target == target && matches!(draw.kind, DrawKind::Backdrop { .. }))
     }
 
-    fn target_copy_region(&self, target: Option<u32>) -> Option<(wgpu::Origin3d, wgpu::Origin3d, wgpu::Extent3d)>
+    fn target_copy_space(&self, target: Option<u32>) -> Option<(i64, i64, u32, u32)>
     {
        let Some(id) = target else
        {
-          return Some((
-             wgpu::Origin3d::ZERO,
-             wgpu::Origin3d::ZERO,
-             wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
-                depth_or_array_layers: 1,
-             },
-          ));
+          return Some((0, 0, self.width, self.height));
        };
        let layer = self.layers.get(&id)?;
        let scale = f64::from(sanitize_scale(self.scale));
        let target_x = (f64::from(layer.rect.x) * scale).floor() as i64;
        let target_y = (f64::from(layer.rect.y) * scale).floor() as i64;
-       let source_x = (-target_x).max(0).min(i64::from(layer.width)) as u32;
-       let source_y = (-target_y).max(0).min(i64::from(layer.height)) as u32;
-       let destination_x = target_x.max(0).min(i64::from(self.width)) as u32;
-       let destination_y = target_y.max(0).min(i64::from(self.height)) as u32;
-       let width = layer.width.saturating_sub(source_x)
-          .min(self.width.saturating_sub(destination_x));
-       let height = layer.height.saturating_sub(source_y)
-          .min(self.height.saturating_sub(destination_y));
-       (width != 0 && height != 0).then_some((
-          wgpu::Origin3d { x: source_x, y: source_y, z: 0 },
-          wgpu::Origin3d { x: destination_x, y: destination_y, z: 0 },
-          wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-       ))
+       Some((target_x, target_y, layer.width, layer.height))
     }
 
-    fn backdrop_sample_rect(&self, rect: api::RectF, sigma: f32) -> api::RectF {
-        let radius = sigma.clamp(0.0, MAX_BLUR_SIGMA);
-        let sample_step = (radius * 0.35).max(1.0) / self.scale.max(1.0);
-        api::RectF::new(
-            rect.x - sample_step,
-            rect.y - sample_step,
-            rect.w + sample_step * 2.0,
-            rect.h + sample_step * 2.0,
-        )
+    fn backdrop_sample_rect(&self, draw: GpuDraw) -> Option<api::RectF> {
+        let DrawKind::Backdrop { rect, sigma } = draw.kind else {
+            return None;
+        };
+        backdrop_sample_bounds(rect, draw.clip, sigma, sanitize_scale(self.scale))
     }
 
-    fn backdrop_sample_rects_overlap(&self, a: api::RectF, b: api::RectF) -> bool {
-        let ax1 = a.x + a.w;
-        let ay1 = a.y + a.h;
-        let bx1 = b.x + b.w;
-        let by1 = b.y + b.h;
-        a.x < bx1 && ax1 > b.x && a.y < by1 && ay1 > b.y
-    }
-
-    fn backdrop_batch_end(&self, start: usize, target: Option<u32>, limit: usize) -> usize {
-        if !self.backdrop_batch_enabled {
-            return start + 1;
-        }
+    fn prepare_backdrop_batch(&mut self, start: usize, target: Option<u32>, limit: usize) -> usize {
+        self.backdrop_copy_regions.clear();
         let first = self.frame.draws[start];
         if first.target != target {
             return start + 1;
         }
-        let DrawKind::Backdrop { rect, sigma } = first.kind else {
+        let DrawKind::Backdrop { .. } = first.kind else {
             return start + 1;
         };
-        let mut end = start + 1;
-        let first_sample = self.backdrop_sample_rect(rect, sigma);
-        let limit = limit.min(self.frame.draws.len());
+        let mut end = start;
+        let limit = if self.backdrop_batch_enabled {
+            limit.min(self.frame.draws.len())
+        } else {
+            start.saturating_add(1).min(self.frame.draws.len())
+        };
         while end < limit {
             let draw = self.frame.draws[end];
             if draw.target != target {
                 end += 1;
                 continue;
             }
-            let DrawKind::Backdrop { rect, sigma } = draw.kind else {
+            let DrawKind::Backdrop { .. } = draw.kind else {
                 break;
             };
-            let candidate = self.backdrop_sample_rect(rect, sigma);
-            let mut overlaps = self.backdrop_sample_rects_overlap(first_sample, candidate);
-            let mut prior = start + 1;
-            while !overlaps && prior < end {
-                let prior_draw = self.frame.draws[prior];
-                if prior_draw.target != target {
-                    prior += 1;
-                    continue;
-                }
-                let DrawKind::Backdrop { rect, sigma } = prior_draw.kind else {
-                    break;
-                };
-                overlaps = self.backdrop_sample_rects_overlap(
-                    self.backdrop_sample_rect(rect, sigma),
-                    candidate,
-                );
-                prior += 1;
-            }
-            if overlaps {
+            let Some(region) = self.backdrop_copy_region(draw, target) else {
+                end += 1;
+                continue;
+            };
+            if self.backdrop_copy_regions.iter()
+                .any(|prior| copy_regions_overlap(*prior, region)) {
                 break;
             }
+            self.backdrop_copy_regions.push(region);
             end += 1;
         }
-        end
+        let maximum_pixels = self.target_copy_space(target).map_or(0, |(x, y, width, height)| {
+            let x0 = x.max(0).min(i64::from(self.width));
+            let y0 = y.max(0).min(i64::from(self.height));
+            let x1 = x.saturating_add(i64::from(width)).max(0).min(i64::from(self.width));
+            let y1 = y.saturating_add(i64::from(height)).max(0).min(i64::from(self.height));
+            x1.saturating_sub(x0) as u64 * y1.saturating_sub(y0) as u64
+        });
+        // Dawn's per-copy overhead dominates dense epochs. A same-epoch bounding copy is safe,
+        // and retained only while it still moves fewer bytes than the old full-target snapshot.
+        coalesce_copy_regions_within(&mut self.backdrop_copy_regions, 2, maximum_pixels);
+        end.max(start + 1)
+    }
+
+    fn backdrop_copy_region(&self, draw: GpuDraw, target: Option<u32>) -> Option<PhysicalCopyRegion>
+    {
+       let Some((target_x, target_y, target_width, target_height)) =
+          self.target_copy_space(target)
+       else
+       {
+          return None;
+       };
+       let sample = self.backdrop_sample_rect(draw)?;
+       physical_copy_region(
+          sample,
+          sanitize_scale(self.scale),
+          self.width,
+          self.height,
+          target_x,
+          target_y,
+          target_width,
+          target_height,
+       )
     }
 
     fn solid_pipeline(&self) -> &wgpu::RenderPipeline {
@@ -8398,10 +8473,15 @@ impl WebGpuRenderer {
         };
         let scene_texture = scene_target.texture.clone();
         let scene_view = scene_target.view.clone();
+        let auxiliary_draws = !self.id_mask_draws.is_empty()
+            || !self.scene3d_overlay_draws.is_empty();
+        let mut clear_pending = !self.scene3d_active;
         if self.scene3d_active {
             self.render_scene3d(encoder, &scene_view);
-        } else {
+            clear_pending = false;
+        } else if auxiliary_draws {
             self.clear_target(encoder, &scene_view, "oxide-webgpu-clear-scene");
+            clear_pending = false;
         }
         if !self.id_mask_draws.is_empty() {
             self.render_id_mask_compositors(encoder, &scene_view, wgpu::LoadOp::Load);
@@ -8416,6 +8496,7 @@ impl WebGpuRenderer {
             None,
             0,
             self.frame.draws.len(),
+            clear_pending,
         );
     }
 
@@ -8427,7 +8508,6 @@ impl WebGpuRenderer {
             };
             let texture = layer.texture.clone();
             let view = layer.view.clone();
-            self.clear_target(encoder, &view, "oxide-webgpu-clear-layer");
             self.render_draw_target_with_effects(
                 encoder,
                 &texture,
@@ -8435,6 +8515,7 @@ impl WebGpuRenderer {
                 Some(layer_pass.id),
                 layer_pass.start,
                 layer_pass.end,
+                true,
             );
             self.stats.layer_passes = self.stats.layer_passes.saturating_add(1);
         }
@@ -8448,6 +8529,7 @@ impl WebGpuRenderer {
         target: Option<u32>,
         start: usize,
         end: usize,
+        mut clear_pending: bool,
     ) {
         if self.target_uses_backdrop(target, start, end) {
             self.ensure_scratch_target();
@@ -8462,7 +8544,10 @@ impl WebGpuRenderer {
                 break;
             }
             if let DrawKind::Backdrop { sigma, .. } = self.frame.draws[start].kind {
-                let end = self.backdrop_batch_end(start, target, limit);
+                let end = self.prepare_backdrop_batch(start, target, limit);
+                if clear_pending {
+                    self.clear_target(encoder, target_view, "oxide-webgpu-clear-before-backdrop");
+                }
                 let Some(scratch_texture) = self
                     .scratch_target
                     .as_ref()
@@ -8470,34 +8555,63 @@ impl WebGpuRenderer {
                 else {
                     return;
                 };
-                let Some((source_origin, destination_origin, copy_extent)) =
-                    self.target_copy_region(target)
-                else {
-                    return;
-                };
-                encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: target_texture,
-                        mip_level: 0,
-                        origin: source_origin,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &scratch_texture,
-                        mip_level: 0,
-                        origin: destination_origin,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    copy_extent,
-                );
-                self.stats.texture_copies = self.stats.texture_copies.saturating_add(1);
-                let copy_pixels = u64::from(copy_extent.width)
-                    .saturating_mul(u64::from(copy_extent.height));
-                self.stats.texture_copy_pixels =
-                    self.stats.texture_copy_pixels.saturating_add(copy_pixels);
-                self.stats.texture_copy_bytes = self.stats.texture_copy_bytes.saturating_add(
-                    copy_pixels.saturating_mul(color_texture_bytes_per_pixel(self.config.format)),
-                );
+                let encoder_timestamp_writes = self.timestamp_queries.as_ref()
+                    .is_some_and(|timestamps| timestamps.encoder_writes_supported);
+                let fence_timestamp_writes = !encoder_timestamp_writes
+                    && self.backdrop_copy_timestamp_fences_enabled;
+                let copy_timestamp_pair = (!self.backdrop_copy_regions.is_empty()
+                    && (encoder_timestamp_writes || fence_timestamp_writes))
+                    .then(|| self.reserve_timestamp_pass(TimestampPassFamily::BackdropCopy))
+                    .flatten();
+                if encoder_timestamp_writes {
+                    self.write_encoder_timestamp(encoder, copy_timestamp_pair, false);
+                } else if fence_timestamp_writes {
+                    self.write_backdrop_copy_timestamp_fence(encoder, copy_timestamp_pair, false);
+                }
+                for region_index in 0..self.backdrop_copy_regions.len() {
+                    let region = self.backdrop_copy_regions[region_index];
+                    encoder.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: target_texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d {
+                                x: region.source_x,
+                                y: region.source_y,
+                                z: 0,
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &scratch_texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d {
+                                x: region.destination_x,
+                                y: region.destination_y,
+                                z: 0,
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d {
+                            width: region.width,
+                            height: region.height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    self.stats.texture_copies = self.stats.texture_copies.saturating_add(1);
+                    let copy_pixels = region.pixels();
+                    self.stats.texture_copy_pixels =
+                        self.stats.texture_copy_pixels.saturating_add(copy_pixels);
+                    self.stats.texture_copy_bytes = self.stats.texture_copy_bytes.saturating_add(
+                        copy_pixels.saturating_mul(
+                            color_texture_bytes_per_pixel(self.config.format),
+                        ),
+                    );
+                }
+                if encoder_timestamp_writes {
+                    self.write_encoder_timestamp(encoder, copy_timestamp_pair, true);
+                } else if fence_timestamp_writes {
+                    self.write_backdrop_copy_timestamp_fence(encoder, copy_timestamp_pair, true);
+                }
                 if !self.effect_uniform_batch_enabled {
                     self.write_effect_uniform(sigma);
                     self.frame.draws[start].effect_uniform_offset = 0;
@@ -8510,6 +8624,7 @@ impl WebGpuRenderer {
                     target,
                     wgpu::LoadOp::Load,
                 );
+                clear_pending = false;
                 start = end;
             } else {
                 let mut end = start + 1;
@@ -8526,10 +8641,18 @@ impl WebGpuRenderer {
                     start,
                     end,
                     target,
-                    wgpu::LoadOp::Load,
+                    if clear_pending {
+                        wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                    } else {
+                        wgpu::LoadOp::Load
+                    },
                 );
+                clear_pending = false;
                 start = end;
             }
+        }
+        if clear_pending {
+            self.clear_target(encoder, target_view, "oxide-webgpu-clear-empty-target");
         }
     }
 

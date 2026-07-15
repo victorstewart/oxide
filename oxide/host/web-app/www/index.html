@@ -62,6 +62,11 @@
          const neonMarkerArchitectureOnly = params.get("neon_marker_architecture_only") === "1";
          const glyphMatrixOnly = params.get("glyph_matrix_only") === "1";
          const glyphRunOnly = params.get("glyph_run_only") === "1";
+         const backdropRegionOnly = params.get("backdrop_region_only") === "1";
+         const backdropRegionCase = params.has("backdrop_region_case")
+            ? boundedNumber("backdrop_region_case", 0, 0, 5)
+            : -1;
+         const backdropRegionGpuFrames = boundedNumber("backdrop_region_gpu_frames", 0, 0, 4096);
          const idMaskCacheC33 = params.get("id_mask_cache_c33") === "1";
          const idMaskCacheOnly = params.get("id_mask_cache_only") === "1";
          const idMaskCacheRafOnly = params.get("id_mask_cache_raf_only") === "1";
@@ -617,6 +622,17 @@
                }
                await nextAnimationFrame();
             }
+         } else if (captureTarget === "backdrop-region") {
+            window.oxideApp = await newMeasuredOxideApp();
+            window.oxideWebGpuAppSnapshot = measureFirstFrame(
+               () => window.oxideApp.render_webgpu_backdrop_region_case(
+                  Math.max(0, backdropRegionCase),
+               ),
+            );
+            console.log("oxide-webgpu-backdrop-region-snapshot", window.oxideWebGpuAppSnapshot);
+            for (let frame = 0; frame < 3; frame += 1) {
+               await nextAnimationFrame();
+            }
          } else {
             window.oxideApp = await newMeasuredOxideApp();
             if (params.get("report_endpoint") !== "1") {
@@ -632,6 +648,7 @@
          window.oxideWebGpuUploadCurrent = "";
          window.oxideWebGpuEffectUniformAB = "";
          window.oxideWebGpuBackdropBatchAB = "";
+         window.oxideWebGpuBackdropRegionMatrix = "";
          window.oxideWebGpuScene3dAB = "";
          window.oxideWebGpuMixedMatrix = "";
          window.oxideWebGpuLayerEffectsMatrix = "";
@@ -658,6 +675,33 @@
             window.oxideWebGpuIdMaskCacheC33 = await runBench("id_mask_cache_c33", () => window.oxideApp.bench_webgpu_id_mask_cache_c33());
             console.log("oxide-webgpu-id-mask-current", window.oxideWebGpuIdMaskCurrent);
             console.log("oxide-webgpu-id-mask-cache-c33", window.oxideWebGpuIdMaskCacheC33);
+         } else if (backdropRegionOnly) {
+            window.oxideApp.prewarm_webgpu_bench_resources();
+            if (backdropRegionGpuFrames > 0) {
+               window.oxideWebGpuBackdropRegionGpuPopulation = await runBench(
+                  "backdrop_region_gpu_population",
+                  () => window.oxideApp.bench_webgpu_backdrop_region_gpu_population(
+                     Math.max(0, backdropRegionCase),
+                     backdropRegionGpuFrames,
+                  ),
+               );
+               console.log("oxide-webgpu-backdrop-region-gpu-population", window.oxideWebGpuBackdropRegionGpuPopulation);
+            } else {
+               window.oxideWebGpuBackdropRegionMatrix = await runBench(
+                  "backdrop_region_matrix",
+                  () => backdropRegionCase >= 0
+                  ? window.oxideApp.bench_webgpu_backdrop_region_case(
+                     backdropRegionCase,
+                     mixedSamples,
+                     mixedFrames,
+                  )
+                  : window.oxideApp.bench_webgpu_backdrop_region_matrix(
+                     mixedSamples,
+                     mixedFrames,
+                  ),
+               );
+               console.log("oxide-webgpu-backdrop-region-matrix", window.oxideWebGpuBackdropRegionMatrix);
+            }
          } else if (preparedOnly) {
             window.oxideApp.prewarm_webgpu_bench_resources();
             window.oxideWebGpuPreparedChunks = await runBench("prepared_chunks", () => window.oxideApp.bench_webgpu_prepared_chunks(mixedSamples, mixedFrames, preparedDirty, preparedFlat, preparedThreshold));
@@ -749,6 +793,8 @@
             upload_current: window.oxideWebGpuUploadCurrent,
             effect_uniform_ab: window.oxideWebGpuEffectUniformAB,
             backdrop_batch_current: window.oxideWebGpuBackdropBatchCurrent,
+            backdrop_region_matrix: window.oxideWebGpuBackdropRegionMatrix,
+            backdrop_region_gpu_population: window.oxideWebGpuBackdropRegionGpuPopulation,
             scene3d_ab: window.oxideWebGpuScene3dAB,
             mixed_matrix: window.oxideWebGpuMixedMatrix,
             layer_effects_matrix: window.oxideWebGpuLayerEffectsMatrix,

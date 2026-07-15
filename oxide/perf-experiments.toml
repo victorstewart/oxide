@@ -1,4 +1,65 @@
 [[experiments]]
+id = "c49-webgpu-regional-backdrop-copies"
+introduced_commit = "C49 staged tree recorded in commit proof"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-web", "oxide-host-web", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max WebGPU through arm64 Chrome"]
+correctness_gate = "Separated-48, coalescible-12, fullscreen, edges/corners, nested-layer, and mixed-sigma parent/candidate/frozen-golden captures must remain exact; focused renderer/host tests, wasm checks, script syntax, and diff checks must pass."
+performance_gate = "Fifteen fixed-seed balanced fresh-process pairs must reduce copied bytes by at least 5% with confidence and pass browser CPU plus whole-frame GPU no-material-regression gates with at least 2,000 timestamps per side; the coalescible control must not regress from copy fan-out."
+decision_state = "accepted"
+decision = "Copied only clipped physical backdrop sample regions, bounded compatible safe epochs to one smaller-than-full copy, and folded legal initial clears after exact visuals, 95.5% separated-byte reduction, neutral whole-frame GPU, and accepted CPU tails."
+proof = [
+   "The final 15-pair separated-48 byte decision reduced 45,088,768 to 2,010,432 copied bytes per frame (95.541%), passed 15/15 pairs, and retained 43 copies while removing one render pass.",
+   "The strengthened 12x64 fresh-process CPU population passed: parent/candidate p50 0.260/0.260 ms, p95 0.273/0.267 ms, p99 0.274/0.268 ms, peak 0.274/0.268 ms, and paired median change -0.392% with 95% CI -0.772%..0.769%.",
+   "The final 2,010-sample-per-side whole-frame GPU population passed no-material-regression: parent/candidate p50 1.526553/1.537563 ms, p95 2.256552/2.163079 ms, p99 2.475006/2.450269 ms, peak 3.279872/2.877082 ms, and paired median change -0.053%.",
+   "Coalescible-12 kept one copy while reducing 262,144 to 124,800 pixels and four to three passes; its 500-frame whole-GPU control improved p50 from 0.176736 to 0.154035 ms.",
+   "All six required 512x512 parent, candidate, and frozen-golden PNGs were byte-identical; focused 13+5+37 renderer tests, 27 host tests, wasm checks, and JavaScript syntax validation passed.",
+]
+cleanup = [
+   "Replaced full-target backdrop snapshots with clipped source/destination regions and explicit pixel/byte accounting while preserving layer-local/global mapping and snapshot barriers.",
+   "Folded legal initial clears into the first ordinary pass and retained explicit clear-before-sample and clear-only paths; aggregate web baseline promotion remains deferred to C62.",
+]
+
+[[experiments]]
+id = "c49-strict-per-region-copy-fanout-rejected"
+introduced_commit = "rejected during C49 coalescible control review"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-web", "oxide-host-web"]
+required_devices = ["Apple M2 Max WebGPU through arm64 Chrome"]
+correctness_gate = "The strict regional variant must preserve exact pixels and snapshot barriers before performance is considered."
+performance_gate = "Coalescible-12 must beat the retained one-copy baseline in whole-frame GPU time rather than trading fewer bytes for excessive copy-command overhead."
+decision_state = "rejected"
+decision = "Rejected one copy command per disjoint regional sample and retained a byte-bounded same-epoch union because Dawn copy-command overhead overwhelmed the additional byte reduction."
+proof = [
+   "The strict variant reduced coalescible copied pixels from 262,144 to 55,488 but expanded one copy to 12 and raised whole-frame GPU p50 from 0.186686 to 0.337923 ms, about an 81% regression.",
+   "The retained same-epoch bounding copy uses one copy for 124,800 pixels and measured 0.163457 ms in the matching preliminary control while preserving exact pixels.",
+]
+cleanup = [
+   "Removed strict per-region fan-out and kept only the safe, same-mapping, same-epoch union when its bounding area remains smaller than the old full-target snapshot.",
+]
+
+[[experiments]]
+id = "c49-copy-fence-timing-primary-proof-rejected"
+introduced_commit = "rejected during C49 timestamp attribution review"
+introduced_date = "2026-07-14"
+expires = "2027-07-14"
+required_backends = ["oxide-renderer-web", "oxide-host-web", "oxide-perf-runner"]
+required_devices = ["Apple M2 Max WebGPU through arm64 Chrome"]
+correctness_gate = "Benchmark timestamp fences must reconcile copy plus render-family durations to total GPU duration and remain disabled outside the opt-in benchmark."
+performance_gate = "An isolated copy-stage timing population may be authoritative only with at least 15 balanced pairs, 2,000 samples per side, at least 80% pair wins, median speedup at least 5%, and 95% CI lower bound at least 2%."
+decision_state = "rejected"
+decision = "Rejected Chrome compute-fence copy attribution as the primary C49 timing proof because process-level timestamp quantization and GPU clock state failed confidence and pair-win gates; retained it only as opt-in diagnostics."
+proof = [
+   "The 2,010-sample-per-side stage population reported 24.282% paired median speedup but only 9/15 pair wins and 95% CI -18.168%..31.948%, so the shared analyzer rejected it.",
+   "The production path keeps the fallback fences disabled; the accepted decision instead combines deterministic copy-byte reduction with accepted whole-frame GPU and strengthened browser CPU guardrails.",
+]
+cleanup = [
+   "Kept direct command-encoder writes for adapters that expose them and an explicit benchmark-only compute-fence fallback for Chrome attribution without adding production passes.",
+]
+
+[[experiments]]
 id = "c48-bitmap-text-atlas-glyph-runs"
 introduced_commit = "C48 staged tree recorded in commit proof"
 introduced_date = "2026-07-14"

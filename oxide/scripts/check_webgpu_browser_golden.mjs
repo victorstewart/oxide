@@ -59,6 +59,10 @@ function parseArgs(argv)
       idMaskMatrixOut: "",
       glyphMatrixOut: "",
       glyphRunOut: "",
+      backdropRegionOut: "",
+      backdropRegionGpuOut: "",
+      backdropRegionCase: -1,
+      backdropRegionGpuFrames: 0,
       validateRawReport: "",
       selfTestMeasurement: false,
       reportOnly: false,
@@ -156,6 +160,14 @@ function parseArgs(argv)
          args.glyphMatrixOut = next();
       } else if (arg === "--glyph-run-out") {
          args.glyphRunOut = next();
+      } else if (arg === "--backdrop-region-out") {
+         args.backdropRegionOut = next();
+      } else if (arg === "--backdrop-region-gpu-out") {
+         args.backdropRegionGpuOut = next();
+      } else if (arg === "--backdrop-region-case") {
+         args.backdropRegionCase = Number(next());
+      } else if (arg === "--backdrop-region-gpu-frames") {
+         args.backdropRegionGpuFrames = Number(next());
       } else if (arg === "--validate-raw-report") {
          args.validateRawReport = next();
       } else if (arg === "--self-test-measurement") {
@@ -1022,10 +1034,28 @@ function assertRendered(image, target)
       assertSpinnerRendered(image);
    } else if (target === "neon-marker") {
       assertNeonMarkerRendered(image);
+   } else if (target === "backdrop-region") {
+      assertBackdropRegionRendered(image);
    } else if (target === "image" || target === "nine-slice") {
       assertImageRendered(image);
    } else {
       assertAppRendered(image);
+   }
+}
+
+function assertBackdropRegionRendered(image)
+{
+   let saturated = 0;
+   let neutral = 0;
+   for (let i = 0; i < image.rgba.length; i += 4) {
+      let r = image.rgba[i];
+      let g = image.rgba[i + 1];
+      let b = image.rgba[i + 2];
+      if (Math.max(r, g, b) - Math.min(r, g, b) > 40) saturated += 1;
+      if (Math.max(r, g, b) - Math.min(r, g, b) < 12 && r > 80 && r < 230) neutral += 1;
+   }
+   if (saturated < 10_000 || neutral < 10_000) {
+      throw new Error(`capture does not look like the backdrop-region scene: saturated=${saturated} neutral=${neutral}`);
    }
 }
 
@@ -1928,6 +1958,7 @@ function timestampMetricFields(metrics, prefix)
       gpu_timestamp_frame_id: numberMetric(metrics, key("gpu_timestamp_frame_id")),
       gpu_timestamp_passes: numberMetric(metrics, key("gpu_timestamp_passes")),
       gpu_timestamp_total_ns: numberMetric(metrics, key("gpu_timestamp_total_ns")),
+      gpu_timestamp_backdrop_copy_ns: numberMetric(metrics, key("gpu_timestamp_backdrop_copy_ns")),
       gpu_timestamp_clear_ns: numberMetric(metrics, key("gpu_timestamp_clear_ns")),
       gpu_timestamp_draw_ns: numberMetric(metrics, key("gpu_timestamp_draw_ns")),
       gpu_timestamp_scene3d_ns: numberMetric(metrics, key("gpu_timestamp_scene3d_ns")),
@@ -2654,6 +2685,7 @@ function gpuTimestampStageBreakdownSummary(cases)
    let totalRenderPasses = 0;
    let totalTimestampPasses = 0;
    let totalTimestampNs = 0;
+   let totalBackdropCopyNs = 0;
    let totalFamilyPasses = 0;
    let totalFamilyTimestampNs = 0;
    for (let row of cases) {
@@ -2683,6 +2715,7 @@ function gpuTimestampStageBreakdownSummary(cases)
       totalRenderPasses += row.render_passes;
       totalTimestampPasses += row.gpu_timestamp_passes;
       totalTimestampNs += row.gpu_timestamp_total_ns;
+      totalBackdropCopyNs += row.gpu_timestamp_backdrop_copy_ns;
       totalFamilyPasses += familyPasses;
       totalFamilyTimestampNs += familyTimestampNs;
       rowDetails.push({
@@ -2690,6 +2723,7 @@ function gpuTimestampStageBreakdownSummary(cases)
          render_passes: row.render_passes,
          gpu_timestamp_passes: row.gpu_timestamp_passes,
          gpu_timestamp_total_ns: row.gpu_timestamp_total_ns,
+         gpu_timestamp_backdrop_copy_ns: row.gpu_timestamp_backdrop_copy_ns,
          family_passes: familyPasses,
          family_timestamp_ns: familyTimestampNs,
          stages: detailStages,
@@ -2704,6 +2738,7 @@ function gpuTimestampStageBreakdownSummary(cases)
       total_render_passes: totalRenderPasses,
       total_timestamp_passes: totalTimestampPasses,
       total_timestamp_ns: totalTimestampNs,
+      total_backdrop_copy_ns: totalBackdropCopyNs,
       total_family_passes: totalFamilyPasses,
       total_family_timestamp_ns: totalFamilyTimestampNs,
       stages,
@@ -4175,6 +4210,7 @@ function assertGpuTimestampStageBreakdown(report, byId)
    let totalRenderPasses = 0;
    let totalTimestampPasses = 0;
    let totalTimestampNs = 0;
+   let totalBackdropCopyNs = 0;
    let totalFamilyPasses = 0;
    let totalFamilyTimestampNs = 0;
    for (let detail of rowDetails) {
@@ -4187,6 +4223,7 @@ function assertGpuTimestampStageBreakdown(report, byId)
          detail.render_passes !== source.render_passes
          || detail.gpu_timestamp_passes !== source.gpu_timestamp_passes
          || detail.gpu_timestamp_total_ns !== source.gpu_timestamp_total_ns
+         || detail.gpu_timestamp_backdrop_copy_ns !== source.gpu_timestamp_backdrop_copy_ns
       ) {
          throw new Error(`web report contract GPU timestamp row detail mismatch ${detail.id}`);
       }
@@ -4217,13 +4254,15 @@ function assertGpuTimestampStageBreakdown(report, byId)
          detail.family_passes !== familyPasses
          || detail.family_timestamp_ns !== familyTimestampNs
          || familyPasses !== source.render_passes
-         || familyTimestampNs !== source.gpu_timestamp_total_ns
+         || familyTimestampNs + source.gpu_timestamp_backdrop_copy_ns
+            !== source.gpu_timestamp_total_ns
       ) {
          throw new Error(`web report contract GPU timestamp family mismatch ${detail.id}`);
       }
       totalRenderPasses += source.render_passes;
       totalTimestampPasses += source.gpu_timestamp_passes;
       totalTimestampNs += source.gpu_timestamp_total_ns;
+      totalBackdropCopyNs += source.gpu_timestamp_backdrop_copy_ns;
       totalFamilyPasses += familyPasses;
       totalFamilyTimestampNs += familyTimestampNs;
    }
@@ -4231,10 +4270,13 @@ function assertGpuTimestampStageBreakdown(report, byId)
       summary.total_render_passes !== totalRenderPasses
       || summary.total_timestamp_passes !== totalTimestampPasses
       || summary.total_timestamp_ns !== totalTimestampNs
+      || summary.total_backdrop_copy_ns !== totalBackdropCopyNs
       || summary.total_family_passes !== totalFamilyPasses
       || summary.total_family_timestamp_ns !== totalFamilyTimestampNs
       || summary.total_family_passes !== totalStagePasses
       || summary.total_family_timestamp_ns !== totalStageTimestampNs
+      || summary.total_family_timestamp_ns + summary.total_backdrop_copy_ns
+         !== summary.total_timestamp_ns
    ) {
       throw new Error("web report contract GPU timestamp stage totals do not reconcile");
    }
@@ -4987,6 +5029,7 @@ function assertWebReportContract(report)
          "gpu_timestamp_frame_id",
          "gpu_timestamp_passes",
          "gpu_timestamp_total_ns",
+         "gpu_timestamp_backdrop_copy_ns",
          "gpu_timestamp_clear_ns",
          "gpu_timestamp_draw_ns",
          "gpu_timestamp_scene3d_ns",
@@ -5587,10 +5630,10 @@ function assertWebReportContract(report)
       || backdropBatchCurrent.effect_uniform_slots !== backdropBatchCurrent.expected_backdrops
       || backdropBatchCurrent.effect_uniform_writes !== 1
       || backdropBatchCurrent.texture_copies !== 1
-      || backdropBatchCurrent.render_passes !== 4
+      || backdropBatchCurrent.render_passes !== 3
       || backdropBatchCurrent.gpu_timestamp_passes !== backdropBatchCurrent.render_passes
    ) {
-      throw new Error("backdrop-batch WebGPU current row must cover batched effects, one texture copy, four render passes, and timestamped passes");
+      throw new Error("backdrop-batch WebGPU current row must cover batched effects, one bounded regional copy, three render passes, and timestamped passes");
    }
    if (
       report.backdrop_batch_summary.current_p50_ms !== backdropBatchCurrent.p50_ms
@@ -5638,7 +5681,10 @@ async function captureAndCompare(args, captureUrl, out)
          }
          await runChrome(args, captureUrl, out);
          let capture = loadPngRgba(out);
-         assertRendered(capture, args.target);
+         assertRendered(
+            capture,
+            args.backdropRegionCase >= 0 ? "backdrop-region" : args.target,
+         );
          if (args.update) {
             mkdirSync(dirname(args.golden), { recursive: true });
             writeFileSync(args.golden, readFileSync(out));
@@ -5791,6 +5837,17 @@ async function main()
    let url = `http://127.0.0.1:${address.port}/`;
    let captureUrl = browserUrl(args, url, false);
    let browserReportUrl = browserUrl(args, url, true);
+   if (Number.isInteger(args.backdropRegionCase) && args.backdropRegionCase >= 0) {
+      let backdropCaptureUrl = new URL(captureUrl);
+      backdropCaptureUrl.searchParams.set("backdrop_region_only", "1");
+      backdropCaptureUrl.searchParams.set("backdrop_region_case", String(args.backdropRegionCase));
+      backdropCaptureUrl.searchParams.set("capture_target", "backdrop-region");
+      captureUrl = backdropCaptureUrl.toString();
+      let backdropReportUrl = new URL(browserReportUrl);
+      backdropReportUrl.searchParams.set("backdrop_region_only", "1");
+      backdropReportUrl.searchParams.set("backdrop_region_case", String(args.backdropRegionCase));
+      browserReportUrl = backdropReportUrl.toString();
+   }
    try {
       if (args.startupReport) {
          await writeStartupReport(args, url, nextReportPromise);
@@ -5893,6 +5950,65 @@ async function main()
          mkdirSync(dirname(args.glyphRunOut), { recursive: true });
          writeFileSync(args.glyphRunOut, `${JSON.stringify(pageReport, null, 2)}\n`);
          console.log(`wrote ${args.glyphRunOut}`);
+         return;
+      }
+      if (args.backdropRegionOut) {
+         let matrixUrl = new URL(browserUrl(args, url, true));
+         matrixUrl.searchParams.set("backdrop_region_only", "1");
+         if (Number.isInteger(args.backdropRegionCase) && args.backdropRegionCase >= 0) {
+            matrixUrl.searchParams.set("backdrop_region_case", String(args.backdropRegionCase));
+         }
+         let pageReport = await runChromeForReport(
+            { ...args, traceJson: "" },
+            matrixUrl.toString(),
+            nextReportPromise(),
+         );
+         if (typeof pageReport.backdrop_region_matrix !== "string"
+            || pageReport.backdrop_region_matrix.length === 0) {
+            let detail = pageReport?.benchmark_error
+               ? `: ${JSON.stringify(pageReport.benchmark_error)}`
+               : "";
+            throw new Error(`browser report omitted the C49 WebGPU backdrop-region matrix${detail}`);
+         }
+         mkdirSync(dirname(args.backdropRegionOut), { recursive: true });
+         writeFileSync(args.backdropRegionOut, `${JSON.stringify(pageReport, null, 2)}\n`);
+         console.log(`wrote ${args.backdropRegionOut}`);
+         return;
+      }
+      if (args.backdropRegionGpuOut) {
+         let gpuUrl = new URL(browserUrl(args, url, true));
+         gpuUrl.searchParams.set("backdrop_region_only", "1");
+         gpuUrl.searchParams.set(
+            "backdrop_region_case",
+            String(Number.isInteger(args.backdropRegionCase) && args.backdropRegionCase >= 0
+               ? args.backdropRegionCase
+               : 0),
+         );
+         gpuUrl.searchParams.set(
+            "backdrop_region_gpu_frames",
+            String(Math.max(1, Math.min(4096, Math.trunc(args.backdropRegionGpuFrames)))),
+         );
+         let pageReport = await runChromeForReport(
+            { ...args, traceJson: "" },
+            gpuUrl.toString(),
+            nextReportPromise(),
+         );
+         if (typeof pageReport.backdrop_region_gpu_population !== "string"
+            || pageReport.backdrop_region_gpu_population.length === 0) {
+            let detail = pageReport?.benchmark_error
+               ? `: ${JSON.stringify(pageReport.benchmark_error)}`
+               : "";
+            throw new Error(`browser report omitted the C49 WebGPU backdrop-region GPU population${detail}`);
+         }
+         let population = JSON.parse(pageReport.backdrop_region_gpu_population);
+         if (population.measured_frames !== args.backdropRegionGpuFrames
+            || population.cpu_submit_ms.length !== population.measured_frames
+            || population.gpu_timestamp.samples.length !== population.measured_frames) {
+            throw new Error("C49 WebGPU backdrop-region GPU population is incomplete");
+         }
+         mkdirSync(dirname(args.backdropRegionGpuOut), { recursive: true });
+         writeFileSync(args.backdropRegionGpuOut, `${JSON.stringify(pageReport, null, 2)}\n`);
+         console.log(`wrote ${args.backdropRegionGpuOut}`);
          return;
       }
       if (args.reportOnly) {
