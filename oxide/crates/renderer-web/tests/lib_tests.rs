@@ -204,7 +204,7 @@ fn wasm_webgpu_runtime_images_are_explicitly_reclaimable_without_arena_tombstone
       2
    );
    assert!(compact.contains("self.inner.image_release(handle)"));
-   assert!(compact.contains("images:ImageSlots<GpuImage>"));
+   assert!(compact.contains("images:GenerationSlots<GpuImage>"));
    assert!(compact.contains("self.images.remove(handle.0).is_some()"));
    assert!(compact.contains("self.images.get(handle.0)"));
    assert!(slots.contains("slots:Vec<Slot<T>>"));
@@ -802,6 +802,31 @@ fn wasm_webgpu_scene3d_render_does_not_clone_draw_lists() {
     assert!(
         render_scene3d_overlay.contains("for draw_index in 0..self.scene3d_overlay_draws.len()")
     );
+}
+
+#[test]
+fn wasm_webgpu_scene3d_uses_compact_order_safe_instances_and_generation_slots()
+{
+   let source = include_str!("../src/wasm/webgpu.rs");
+   let compact = source_without_whitespace(source);
+
+   assert!(source.contains("const SCENE3D_INSTANCE_STRIDE: usize = 80;"));
+   assert!(source.contains("wgpu::BufferBindingType::Storage { read_only: true }"));
+   assert!(source.contains("@builtin(instance_index) instance_index: u32"));
+   assert!(source.contains("draw.first_instance..draw.first_instance + draw.instance_count"));
+   assert!(source.contains("fn append_scene3d_draw("));
+   assert!(compact.contains("previous.mesh==draw.mesh"));
+   assert!(compact.contains("previous.pipeline==draw.pipeline"));
+   assert!(compact.contains("previous.cull==draw.cull"));
+   assert!(compact.contains("previous.material==draw.material"));
+   assert!(compact.contains("previous.viewport==draw.viewport"));
+   assert!(compact.contains("matches!(instance.blend,scene3d::BlendMode3d::Alpha)"));
+   assert!(source.contains("Some(wgpu::Face::Front)"));
+   assert!(source.contains("Some(wgpu::Face::Back)"));
+   assert!(source.contains("pass.set_scissor_rect(viewport.x, viewport.y"));
+   assert!(source.contains("meshes_3d: GenerationSlots<GpuMesh3d>"));
+   assert!(source.contains("self.meshes_3d.remove(handle.0)"));
+   assert!(!source.contains("scene3d web path does not support per-instance culling yet"));
 }
 
 #[test]
@@ -1464,12 +1489,14 @@ fn wasm_webgpu_static_pipelines_are_created_before_frame_encoding() {
         "glyph_a8_pipeline: wgpu::RenderPipeline",
         "glyph_sdf_pipeline: wgpu::RenderPipeline",
         "effect_pipeline: wgpu::RenderPipeline",
-        "scene3d_color_tri_depth_read_pipeline: wgpu::RenderPipeline",
-        "scene3d_color_tri_depth_write_pipeline: wgpu::RenderPipeline",
-        "scene3d_color_tri_pipeline: wgpu::RenderPipeline",
-        "scene3d_color_tri_add_depth_read_pipeline: wgpu::RenderPipeline",
-        "scene3d_color_tri_add_depth_write_pipeline: wgpu::RenderPipeline",
-        "scene3d_color_tri_add_pipeline: wgpu::RenderPipeline",
+        "scene3d_color_tri_depth_read_pipelines: [wgpu::RenderPipeline; 3]",
+        "scene3d_color_tri_depth_write_pipelines: [wgpu::RenderPipeline; 3]",
+        "scene3d_color_tri_no_test_depth_write_pipelines: [wgpu::RenderPipeline; 3]",
+        "scene3d_color_tri_pipelines: [wgpu::RenderPipeline; 3]",
+        "scene3d_color_tri_add_depth_read_pipelines: [wgpu::RenderPipeline; 3]",
+        "scene3d_color_tri_add_depth_write_pipelines: [wgpu::RenderPipeline; 3]",
+        "scene3d_color_tri_add_no_test_depth_write_pipelines: [wgpu::RenderPipeline; 3]",
+        "scene3d_color_tri_add_pipelines: [wgpu::RenderPipeline; 3]",
         "id_mask_raster_pipeline: wgpu::RenderPipeline",
         "field_seed_pipeline: wgpu::RenderPipeline",
         "field_jump_pipeline: wgpu::RenderPipeline",
@@ -1486,12 +1513,14 @@ fn wasm_webgpu_static_pipelines_are_created_before_frame_encoding() {
         "let a8_pipeline = create_pipeline(",
         "let sdf_pipeline = create_pipeline(",
         "let effect_pipeline = create_pipeline(",
-        "let scene3d_color_tri_depth_read_pipeline = create_scene3d_pipeline(",
-        "let scene3d_color_tri_depth_write_pipeline = create_scene3d_pipeline(",
-        "let scene3d_color_tri_pipeline = create_scene3d_pipeline(",
-        "let scene3d_color_tri_add_depth_read_pipeline = create_scene3d_pipeline(",
-        "let scene3d_color_tri_add_depth_write_pipeline = create_scene3d_pipeline(",
-        "let scene3d_color_tri_add_pipeline = create_scene3d_pipeline(",
+        "let scene3d_color_tri_depth_read_pipelines = create_scene3d_pipeline_variants(",
+        "let scene3d_color_tri_depth_write_pipelines = create_scene3d_pipeline_variants(",
+        "let scene3d_color_tri_no_test_depth_write_pipelines = create_scene3d_pipeline_variants(",
+        "let scene3d_color_tri_pipelines = create_scene3d_pipeline_variants(",
+        "let scene3d_color_tri_add_depth_read_pipelines = create_scene3d_pipeline_variants(",
+        "let scene3d_color_tri_add_depth_write_pipelines = create_scene3d_pipeline_variants(",
+        "let scene3d_color_tri_add_no_test_depth_write_pipelines = create_scene3d_pipeline_variants(",
+        "let scene3d_color_tri_add_pipelines = create_scene3d_pipeline_variants(",
         "let id_mask_raster_pipeline = create_id_mask_raster_pipeline(",
         "let id_mask_wide_field_seed_pipeline = create_id_mask_field_pipeline(",
         "let id_mask_wide_field_jump_pipeline = create_id_mask_field_pipeline(",

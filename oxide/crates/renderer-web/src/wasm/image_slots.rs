@@ -7,13 +7,13 @@ struct Slot<T>
    generation: u16,
 }
 
-pub(crate) struct ImageSlots<T>
+pub(crate) struct GenerationSlots<T>
 {
    slots: Vec<Slot<T>>,
    free: Vec<u16>,
 }
 
-impl<T> ImageSlots<T>
+impl<T> GenerationSlots<T>
 {
    pub(crate) const fn new() -> Self
    {

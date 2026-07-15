@@ -203,3 +203,85 @@ pub struct Pass3d<'a> {
     pub instances: &'a [Instance3d],
     pub bloom: Option<()>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) struct PhysicalViewport {
+    pub(crate) x: u32,
+    pub(crate) y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn physical_viewport(
+    viewport: Option<api::RectF>,
+    scale: f32,
+    width: u32,
+    height: u32,
+) -> Option<PhysicalViewport> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let Some(rect) = viewport else {
+        return Some(PhysicalViewport { x: 0, y: 0, width, height });
+    };
+    if !rect.x.is_finite()
+        || !rect.y.is_finite()
+        || !rect.w.is_finite()
+        || !rect.h.is_finite()
+        || rect.w <= 0.0
+        || rect.h <= 0.0
+    {
+        return None;
+    }
+    let scale = f64::from(crate::sanitize_scale(scale));
+    let x0 = (f64::from(rect.x) * scale).floor().clamp(0.0, f64::from(width));
+    let y0 = (f64::from(rect.y) * scale).floor().clamp(0.0, f64::from(height));
+    let x1 = ((f64::from(rect.x) + f64::from(rect.w)) * scale)
+        .ceil()
+        .clamp(0.0, f64::from(width));
+    let y1 = ((f64::from(rect.y) + f64::from(rect.h)) * scale)
+        .ceil()
+        .clamp(0.0, f64::from(height));
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some(PhysicalViewport {
+        x: x0 as u32,
+        y: y0 as u32,
+        width: (x1 - x0) as u32,
+        height: (y1 - y0) as u32,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{physical_viewport, PhysicalViewport};
+    use oxide_renderer_api::RectF;
+
+    #[test]
+    fn physical_viewport_scales_and_clips_to_the_render_target() {
+        assert_eq!(
+            physical_viewport(Some(RectF::new(-4.25, 3.25, 20.5, 12.5)), 2.0, 30, 24),
+            Some(PhysicalViewport { x: 0, y: 6, width: 30, height: 18 })
+        );
+        assert_eq!(
+            physical_viewport(None, 3.0, 90, 60),
+            Some(PhysicalViewport { x: 0, y: 0, width: 90, height: 60 })
+        );
+    }
+
+    #[test]
+    fn physical_viewport_rejects_empty_invalid_and_offscreen_rectangles() {
+        assert_eq!(physical_viewport(Some(RectF::new(0.0, 0.0, 0.0, 2.0)), 2.0, 20, 20), None);
+        assert_eq!(
+            physical_viewport(Some(RectF::new(f32::NAN, 0.0, 2.0, 2.0)), 2.0, 20, 20),
+            None
+        );
+        assert_eq!(
+            physical_viewport(Some(RectF::new(30.0, 30.0, 2.0, 2.0)), 1.0, 20, 20),
+            None
+        );
+    }
+}

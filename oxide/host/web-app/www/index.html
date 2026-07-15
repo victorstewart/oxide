@@ -52,6 +52,8 @@
          const uploadFrames = boundedNumber("upload_frames", 24, 1, 120);
          const scene3dSamples = boundedNumber("scene3d_samples", 6, 1, 30);
          const scene3dFrames = boundedNumber("scene3d_frames", 24, 1, 120);
+         const scene3dStressInstances = boundedNumber("scene3d_instances", 96, 1, 10000);
+         const scene3dStressMode = boundedNumber("scene3d_mode", 0, 0, 3);
          const mixedSamples = boundedNumber("mixed_samples", 6, 1, 30);
          const mixedFrames = boundedNumber("mixed_frames", 24, 1, 120);
          const architectureMatrix = params.get("architecture_matrix") === "1";
@@ -62,6 +64,7 @@
          const neonMarkerArchitectureOnly = params.get("neon_marker_architecture_only") === "1";
          const glyphMatrixOnly = params.get("glyph_matrix_only") === "1";
          const glyphRunOnly = params.get("glyph_run_only") === "1";
+         const scene3dOnly = params.get("scene3d_only") === "1";
          const backdropRegionOnly = params.get("backdrop_region_only") === "1";
          const backdropRegionCase = params.has("backdrop_region_case")
             ? boundedNumber("backdrop_region_case", 0, 0, 5)
@@ -710,6 +713,9 @@
             window.oxideApp.prewarm_webgpu_bench_resources();
             window.oxideWebGpuGlyphRunCurrent = await runBench("glyph_run_current", () => window.oxideApp.bench_webgpu_glyph_run_current(mixedSamples, mixedFrames));
             console.log("oxide-webgpu-glyph-run-current", window.oxideWebGpuGlyphRunCurrent);
+         } else if (scene3dOnly) {
+            window.oxideWebGpuScene3dAB = await runBench("scene3d_ab", () => window.oxideApp.bench_webgpu_scene3d_ab(scene3dSamples, scene3dFrames, scene3dStressInstances, scene3dStressMode));
+            console.log("oxide-webgpu-scene3d-ab", window.oxideWebGpuScene3dAB);
          } else if (glyphMatrixOnly) {
             window.oxideWebGpuGlyphLanguageMatrixCurrent = await runBench("glyph_language_matrix_current", () => window.oxideApp.bench_webgpu_glyph_language_matrix_current(mixedSamples, mixedFrames));
             console.log("oxide-webgpu-glyph-language-matrix-current", window.oxideWebGpuGlyphLanguageMatrixCurrent);
@@ -757,7 +763,7 @@
             console.log("oxide-webgpu-effect-uniform-ab", window.oxideWebGpuEffectUniformAB);
             window.oxideWebGpuBackdropBatchCurrent = await runBench("backdrop_batch_current", () => window.oxideApp.bench_webgpu_backdrop_batch_current(mixedSamples, mixedFrames));
             console.log("oxide-webgpu-backdrop-batch-current", window.oxideWebGpuBackdropBatchCurrent);
-            window.oxideWebGpuScene3dAB = await runBench("scene3d_ab", () => window.oxideApp.bench_webgpu_scene3d_ab(scene3dSamples, scene3dFrames));
+            window.oxideWebGpuScene3dAB = await runBench("scene3d_ab", () => window.oxideApp.bench_webgpu_scene3d_ab(scene3dSamples, scene3dFrames, scene3dStressInstances, scene3dStressMode));
             console.log("oxide-webgpu-scene3d-ab", window.oxideWebGpuScene3dAB);
             window.oxideWebGpuMixedMatrix = await runBench("mixed_matrix", () => window.oxideApp.bench_webgpu_mixed_matrix(mixedSamples, mixedFrames));
             console.log("oxide-webgpu-mixed-matrix", window.oxideWebGpuMixedMatrix);

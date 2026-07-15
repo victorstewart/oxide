@@ -25,6 +25,7 @@ Call flow:
 - `native_stub_tracks_frame_shape_and_reports_unsupported_submit()`: verifies native frame counters and unsupported submit behavior.
 - `native_stub_ignores_web_camera_background_commands()`: verifies unsupported web `CameraBg` commands do not count as web draw work.
 - `wasm_webgpu_runtime_images_are_explicitly_reclaimable_without_arena_tombstones()`: verifies the production wrapper delegates image release and the WebGPU resource table recycles generation-checked slots without append-only tombstones or stale-handle ABA.
+- `wasm_webgpu_scene3d_uses_compact_order_safe_instances_and_generation_slots()`: freezes C56's 80-byte storage records, exact adjacent grouping key, transparent boundary, cull variants, viewport/scissor state, instanced draw range, and generation-checked mesh ownership.
 - `wasm_public_exports_are_webgpu_only()`: verifies wasm public exports remain limited to WebGPU production renderer types plus the narrow Canvas indexed-quad diagnostic helper, without exposing the raw Canvas renderer type.
 - `wasm_webgpu_backend_packet_vocabulary_is_frozen()`: freezes private WebGPU `DrawKind`, `GpuDraw`, coalescing, and `DrawCmd` lowering vocabulary before backend packet migrations.
 - `wasm_webgpu_draw_encoding_reuses_scratch_storage()`: requires retained packed frame streams, reusable primitive scratch, and removal of duplicate frame byte vectors.
@@ -58,6 +59,8 @@ These are correctness and contract tests, not benchmark timers. They protect the
 The packet-vocabulary freeze is measurement harness only. It changes no runtime path and does not claim a performance win.
 C30 browser proof complements these structural checks with exact parent/candidate pixels and direct residency/pass counters; source matching does not substitute for runtime evidence. C35 likewise requires real Dawn shader creation, exact decoded field comparison, presented pixels, and paired direct GPU timestamps in addition to the source contract. C37 requires real WGSL pipeline creation, count/DPR timings, and one-pixel-boundary-classified captures beyond the static 36-byte ABI and no-tessellator assertions. C38 and C39 require real indexed pipeline creation, bounded architecture timings, and exact DPR/prepared pixels beyond their static ABI assertions. C40 additionally requires phased animation pixels and displayed-frame CPU/GPU/pacing samples beyond its compact-instance and no-CPU-trigonometry assertions. C41 requires real Dawn pipeline creation, 64/1,024-marker CPU/GPU/upload evidence, DPR captures, and source-equivalent Metal/WGSL analytic semantics beyond its static ABI checks.
 
+C56 requires real Dawn 96/1,000/10,000-instance timing, mixed/transparent/subviewport controls, create/release endurance, and parent/candidate pixels beyond the static grouping and shader checks.
+
 ## Feature flags and cfgs
 
 They run on native targets against the non-wasm `WebRenderer` stub.
@@ -65,6 +68,8 @@ They run on native targets against the non-wasm `WebRenderer` stub.
 ## Testing and benchmarks
 
 Run with `cargo test --locked -p oxide-renderer-web --test lib_tests`. Compile wasm behavior with `cargo check --locked --target wasm32-unknown-unknown -p oxide-renderer-web`. The local-layer runtime companions are the C30 browser capture and `run_webgpu_local_layers_c30.mjs`; mode `2` exercises the C31 bounded navigation/purge path. The C33 companion is `check_webgpu_browser_golden.mjs --id-mask-cache-only`, which executes real WebGPU hits, misses, one-entry thrash, bounded LRU reuse, and purge/reentry paths. C35 uses `check_webgpu_browser_golden.mjs --id-mask-matrix-out PATH` for the seven-dimension exact raster/final-field matrix, reuses the asymmetric multi-seed readback, and runs the 512-square forced-miss workload against parent and candidate packages. C37 through C41 use the bounded architecture-only and dedicated capture modes for their respective primitive families. C46 uses `--glyph-run-out` for the isolated 512-glyph row and `--glyph-matrix-out` for the Metal-equivalent language/page/SDF matrix.
+
+C56 uses `--scene3d-out PATH --scene3d-instances COUNT --scene3d-mode MODE`, where modes 0–3 select compatible, mixed, transparent, and subviewport workloads.
 
 ## Examples
 
@@ -77,6 +82,7 @@ pub fn scale() -> f32
 
 ## Changelog
 
+- 2026-07-15: froze C56 compact Scene3D instances, exact order-safe grouping, cull/viewport state, instanced draws, and generation-checked mesh recycling.
 - 2026-07-14: froze the C41 60-byte neon-marker ABI, analytic shader semantics, compact counters, and no-RRect-lowering contract.
 - 2026-07-14: froze the C40 20-byte spinner instance ABI, procedural shader atoms, selective animation uniform, prepared ownership, counters, and no-CPU-trigonometry contract.
 - 2026-07-14: froze the C39 44-byte nine-slice ABI and fixed-grid ownership contract.

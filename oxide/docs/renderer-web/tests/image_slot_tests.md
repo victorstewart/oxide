@@ -2,13 +2,13 @@
 
 ## Intention and purpose
 
-These external tests execute the exact production `ImageSlots` source on the native test target so
+These external tests execute the exact production `GenerationSlots` source on the native test target so
 resource-lifetime edge cases do not depend on source-string assertions or browser GPU availability.
 
 ## Relation to the rest of the code
 
-The test crate includes `src/wasm/image_slots.rs` by path. WebGPU uses the same file for image
-creation, update, draw, bind, and release handle validation.
+The test crate includes `src/wasm/image_slots.rs` by path. WebGPU uses the same file for image and
+Scene3D mesh creation, update/draw lookup, bind, memory accounting, and release validation.
 
 ## Entry points list
 
@@ -61,4 +61,5 @@ cargo test --locked -p oxide-renderer-web --test image_slot_tests
 
 ## Changelog
 
+- 2026-07-15: extended the same executable lifecycle contract to WebGPU Scene3D mesh slots.
 - 2026-07-10: added executable stale-handle, retirement, capacity, and churn coverage.

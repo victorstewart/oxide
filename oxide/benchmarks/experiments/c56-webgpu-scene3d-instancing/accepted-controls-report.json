@@ -1,0 +1,59 @@
+{
+  "case": "c56-webgpu-scene3d-instancing-controls",
+  "decision": "accepted",
+  "protocol": {
+    "samples": 15,
+    "frames_per_sample": 24,
+    "gpu_source": "WebGPU timestamp-query distribution drained after each case"
+  },
+  "controls": [
+    {
+      "name": "mixed-mesh-state",
+      "instances": 1000,
+      "cpu_submit_ms": { "p50": 0.099, "p95": 0.130, "p99": 0.130, "peak": 0.130 },
+      "gpu_timestamp_ns": { "samples": 23, "p50": 30000, "p95": 34250, "p99": 35000, "peak": 35000 },
+      "draws": 670,
+      "pipeline_binds": 12,
+      "bind_group_binds": 1,
+      "mesh_buffer_binds": 12,
+      "viewport_sets": 1,
+      "instance_upload_bytes": 80000,
+      "cpu_scene3d_scratch_bytes": 163840,
+      "coverage": "two meshes, materials, alpha/additive blends, front/back/none culls, and tested/untested depth variants"
+    },
+    {
+      "name": "transparent-order",
+      "instances": 96,
+      "cpu_submit_ms": { "p50": 0.026, "p95": 0.046, "p99": 0.046, "peak": 0.046 },
+      "gpu_timestamp_ns": { "samples": 45, "p50": 10541, "p95": 16874, "p99": 75242, "peak": 75242 },
+      "draws": 96,
+      "pipeline_binds": 1,
+      "bind_group_binds": 1,
+      "mesh_buffer_binds": 1,
+      "viewport_sets": 1,
+      "instance_upload_bytes": 7680,
+      "result": "all 96 draws remained individually ordered; no transparent batching or sorting"
+    },
+    {
+      "name": "subviewport",
+      "instances": 96,
+      "cpu_submit_ms": { "p50": 0.026, "p95": 0.041, "p99": 0.041, "peak": 0.041 },
+      "gpu_timestamp_ns": { "samples": 45, "p50": 10081, "p95": 20498, "p99": 23956, "peak": 23956 },
+      "draws": 2,
+      "pipeline_binds": 1,
+      "bind_group_binds": 1,
+      "mesh_buffer_binds": 2,
+      "viewport_sets": 1,
+      "instance_upload_bytes": 7680,
+      "result": "logical viewport was clipped, converted to physical pixels, and applied as viewport plus scissor"
+    }
+  ],
+  "visual": {
+    "parent_sha256": "f7b9a187792f891758861aebd95f14264eabc579393ce3debbf78185be6796d2",
+    "candidate_sha256": "f7b9a187792f891758861aebd95f14264eabc579393ce3debbf78185be6796d2",
+    "committed_golden_sha256": "f7b9a187792f891758861aebd95f14264eabc579393ce3debbf78185be6796d2",
+    "pixel_diff": 0,
+    "max_channel_error": 0,
+    "mse": 0.0
+  }
+}

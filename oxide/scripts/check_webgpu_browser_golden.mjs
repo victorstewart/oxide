@@ -59,6 +59,7 @@ function parseArgs(argv)
       idMaskMatrixOut: "",
       glyphMatrixOut: "",
       glyphRunOut: "",
+      scene3dOut: "",
       backdropRegionOut: "",
       backdropRegionGpuOut: "",
       backdropRegionCase: -1,
@@ -88,6 +89,8 @@ function parseArgs(argv)
       uploadFrames: 24,
       scene3dSamples: 6,
       scene3dFrames: 24,
+      scene3dInstances: 96,
+      scene3dMode: 0,
       mixedSamples: 6,
       mixedFrames: 24,
       architectureMatrix: false,
@@ -160,6 +163,8 @@ function parseArgs(argv)
          args.glyphMatrixOut = next();
       } else if (arg === "--glyph-run-out") {
          args.glyphRunOut = next();
+      } else if (arg === "--scene3d-out") {
+         args.scene3dOut = next();
       } else if (arg === "--backdrop-region-out") {
          args.backdropRegionOut = next();
       } else if (arg === "--backdrop-region-gpu-out") {
@@ -218,6 +223,10 @@ function parseArgs(argv)
          args.scene3dSamples = Number(next());
       } else if (arg === "--scene3d-frames") {
          args.scene3dFrames = Number(next());
+      } else if (arg === "--scene3d-instances") {
+         args.scene3dInstances = Number(next());
+      } else if (arg === "--scene3d-mode") {
+         args.scene3dMode = Number(next());
       } else if (arg === "--mixed-samples") {
          args.mixedSamples = Number(next());
       } else if (arg === "--mixed-frames") {
@@ -321,11 +330,18 @@ function parseArgs(argv)
    args.reportTimeoutMs = Math.trunc(args.reportTimeoutMs);
    args.captureRetries = Math.trunc(args.captureRetries);
    args.traceDurationMs = Math.trunc(args.traceDurationMs);
-   for (let key of ["frameSamples", "framesPerSample", "rafFrames", "idMaskSamples", "idMaskFrames", "idMaskCacheRafFrames", "uploadSamples", "uploadFrames", "scene3dSamples", "scene3dFrames", "mixedSamples", "mixedFrames", "canvasSamples", "canvasFrames", "canvasQuads"]) {
+   for (let key of ["frameSamples", "framesPerSample", "rafFrames", "idMaskSamples", "idMaskFrames", "idMaskCacheRafFrames", "uploadSamples", "uploadFrames", "scene3dSamples", "scene3dFrames", "scene3dInstances", "mixedSamples", "mixedFrames", "canvasSamples", "canvasFrames", "canvasQuads"]) {
       if (!Number.isFinite(args[key]) || args[key] <= 0) {
          throw new Error(`${key} must be a positive number`);
       }
       args[key] = Math.trunc(args[key]);
+   }
+   if (!Number.isFinite(args.scene3dMode) || args.scene3dMode < 0 || args.scene3dMode > 3) {
+      throw new Error("scene3dMode must be between 0 and 3");
+   }
+   args.scene3dMode = Math.trunc(args.scene3dMode);
+   if (args.scene3dInstances > 10000) {
+      throw new Error("scene3dInstances must not exceed 10000");
    }
    if (args.rafFrames < 2000) {
       throw new Error("rafFrames must be at least 2000 for displayed-frame reports");
@@ -593,6 +609,8 @@ function browserUrl(args, baseUrl, reportEndpoint, startupOnly = false, canvasDi
    url.searchParams.set("upload_frames", String(args.uploadFrames));
    url.searchParams.set("scene3d_samples", String(args.scene3dSamples));
    url.searchParams.set("scene3d_frames", String(args.scene3dFrames));
+   url.searchParams.set("scene3d_instances", String(args.scene3dInstances));
+   url.searchParams.set("scene3d_mode", String(args.scene3dMode));
    url.searchParams.set("mixed_samples", String(args.mixedSamples));
    url.searchParams.set("mixed_frames", String(args.mixedFrames));
    if (args.architectureMatrix) {
@@ -655,7 +673,7 @@ function browserUrl(args, baseUrl, reportEndpoint, startupOnly = false, canvasDi
 
 function persistedBrowserUrl(args)
 {
-   return `http://127.0.0.1:<ephemeral>/?frame_samples=${args.frameSamples}&frames_per_sample=${args.framesPerSample}&raf_frames=${args.rafFrames}&raf_resize_every=${args.rafResizeEvery}&raf_scene=${args.rafScene}&id_mask_samples=${args.idMaskSamples}&id_mask_frames=${args.idMaskFrames}&upload_samples=${args.uploadSamples}&upload_frames=${args.uploadFrames}&scene3d_samples=${args.scene3dSamples}&scene3d_frames=${args.scene3dFrames}&mixed_samples=${args.mixedSamples}&mixed_frames=${args.mixedFrames}&capture_target=${args.target}&capture_width=${args.width}&capture_height=${args.height}&report_endpoint=1`;
+   return `http://127.0.0.1:<ephemeral>/?frame_samples=${args.frameSamples}&frames_per_sample=${args.framesPerSample}&raf_frames=${args.rafFrames}&raf_resize_every=${args.rafResizeEvery}&raf_scene=${args.rafScene}&id_mask_samples=${args.idMaskSamples}&id_mask_frames=${args.idMaskFrames}&upload_samples=${args.uploadSamples}&upload_frames=${args.uploadFrames}&scene3d_samples=${args.scene3dSamples}&scene3d_frames=${args.scene3dFrames}&scene3d_instances=${args.scene3dInstances}&scene3d_mode=${args.scene3dMode}&mixed_samples=${args.mixedSamples}&mixed_frames=${args.mixedFrames}&capture_target=${args.target}&capture_width=${args.width}&capture_height=${args.height}&report_endpoint=1`;
 }
 
 function persistedCanvasBrowserUrl(args)
@@ -1775,6 +1793,12 @@ function cpuSubmitCase(metrics)
       layer_cache_skipped_draws: numberMetric(metrics, "layer_cache_skipped_draws"),
       layer_passes: numberMetric(metrics, "layer_passes"),
       scene3d_draws: numberMetric(metrics, "scene3d_draws"),
+      scene3d_instances: numberMetric(metrics, "scene3d_instances"),
+      scene3d_instance_bytes: numberMetric(metrics, "scene3d_instance_bytes"),
+      scene3d_pipeline_binds: numberMetric(metrics, "scene3d_pipeline_binds"),
+      scene3d_bind_group_binds: numberMetric(metrics, "scene3d_bind_group_binds"),
+      scene3d_mesh_buffer_binds: numberMetric(metrics, "scene3d_mesh_buffer_binds"),
+      scene3d_viewport_sets: numberMetric(metrics, "scene3d_viewport_sets"),
       id_mask_draws: numberMetric(metrics, "id_mask_draws"),
       backdrop_draws: numberMetric(metrics, "backdrop_draws"),
       visual_effect_draws: numberMetric(metrics, "visual_effect_draws"),
@@ -2209,6 +2233,12 @@ function idMaskCase(metrics, id, variant, prefix)
       layer_cache_skipped_draws: numberMetric(metrics, `${prefix}_layer_cache_skipped_draws`),
       layer_passes: numberMetric(metrics, `${prefix}_layer_passes`),
       scene3d_draws: numberMetric(metrics, `${prefix}_scene3d_draws`),
+      scene3d_instances: numberMetric(metrics, `${prefix}_scene3d_instances`),
+      scene3d_instance_bytes: numberMetric(metrics, `${prefix}_scene3d_instance_bytes`),
+      scene3d_pipeline_binds: numberMetric(metrics, `${prefix}_scene3d_pipeline_binds`),
+      scene3d_bind_group_binds: numberMetric(metrics, `${prefix}_scene3d_bind_group_binds`),
+      scene3d_mesh_buffer_binds: numberMetric(metrics, `${prefix}_scene3d_mesh_buffer_binds`),
+      scene3d_viewport_sets: numberMetric(metrics, `${prefix}_scene3d_viewport_sets`),
       id_mask_draws: numberMetric(metrics, `${prefix}_id_mask_draws`),
       backdrop_draws: numberMetric(metrics, `${prefix}_backdrop_draws`),
       visual_effect_draws: numberMetric(metrics, `${prefix}_visual_effect_draws`),
@@ -2303,6 +2333,12 @@ function prefixedBackendCase(metrics, id, variant, prefix, extra)
       layer_cache_skipped_draws: numberMetric(metrics, `${prefix}_layer_cache_skipped_draws`),
       layer_passes: numberMetric(metrics, `${prefix}_layer_passes`),
       scene3d_draws: numberMetric(metrics, `${prefix}_scene3d_draws`),
+      scene3d_instances: numberMetric(metrics, `${prefix}_scene3d_instances`),
+      scene3d_instance_bytes: numberMetric(metrics, `${prefix}_scene3d_instance_bytes`),
+      scene3d_pipeline_binds: numberMetric(metrics, `${prefix}_scene3d_pipeline_binds`),
+      scene3d_bind_group_binds: numberMetric(metrics, `${prefix}_scene3d_bind_group_binds`),
+      scene3d_mesh_buffer_binds: numberMetric(metrics, `${prefix}_scene3d_mesh_buffer_binds`),
+      scene3d_viewport_sets: numberMetric(metrics, `${prefix}_scene3d_viewport_sets`),
       id_mask_draws: numberMetric(metrics, `${prefix}_id_mask_draws`),
       backdrop_draws: numberMetric(metrics, `${prefix}_backdrop_draws`),
       visual_effect_draws: numberMetric(metrics, `${prefix}_visual_effect_draws`),
@@ -2473,13 +2509,13 @@ const WEBGPU_BACKEND_PATHS = [
    {
       id: "scene3d_mesh_reuse",
       rows: ["web.wasm.webgpu.scene3d.reused_mesh", "web.wasm.webgpu.scene3d.recreate_mesh"],
-      counters: ["scene3d_draws", "mesh3d_creates", "buffer_grows", "cpu_scratch_grows", "gpu_timestamp_passes"],
+      counters: ["scene3d_draws", "scene3d_instances", "scene3d_instance_bytes", "scene3d_pipeline_binds", "scene3d_bind_group_binds", "scene3d_mesh_buffer_binds", "scene3d_viewport_sets", "mesh3d_creates", "buffer_grows", "cpu_scratch_grows", "gpu_timestamp_passes"],
       comparison: "current_vs_legacy",
    },
    {
       id: "scene3d_stress_mesh_reuse",
       rows: ["web.wasm.webgpu.scene3d.stress_reused_mesh", "web.wasm.webgpu.scene3d.stress_recreate_mesh"],
-      counters: ["scene3d_draws", "mesh3d_creates", "buffer_grows", "cpu_scratch_grows", "gpu_timestamp_passes"],
+      counters: ["scene3d_draws", "scene3d_instances", "scene3d_instance_bytes", "scene3d_pipeline_binds", "scene3d_bind_group_binds", "scene3d_mesh_buffer_binds", "scene3d_viewport_sets", "mesh3d_creates", "buffer_grows", "cpu_scratch_grows", "gpu_timestamp_passes"],
       comparison: "current_vs_legacy",
    },
    {
@@ -3107,6 +3143,11 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          {
             meshes: numberMetric(scene3dMetrics, "meshes"),
             instances: numberMetric(scene3dMetrics, "instances"),
+            gpu_samples: numberMetric(scene3dMetrics, "reused_gpu_samples"),
+            gpu_p50_ns: numberMetric(scene3dMetrics, "reused_gpu_p50_ns"),
+            gpu_p95_ns: numberMetric(scene3dMetrics, "reused_gpu_p95_ns"),
+            gpu_p99_ns: numberMetric(scene3dMetrics, "reused_gpu_p99_ns"),
+            gpu_peak_ns: numberMetric(scene3dMetrics, "reused_gpu_peak_ns"),
          },
       ),
       prefixedBackendCase(
@@ -3117,6 +3158,11 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          {
             meshes: numberMetric(scene3dMetrics, "meshes"),
             instances: numberMetric(scene3dMetrics, "instances"),
+            gpu_samples: numberMetric(scene3dMetrics, "recreate_gpu_samples"),
+            gpu_p50_ns: numberMetric(scene3dMetrics, "recreate_gpu_p50_ns"),
+            gpu_p95_ns: numberMetric(scene3dMetrics, "recreate_gpu_p95_ns"),
+            gpu_p99_ns: numberMetric(scene3dMetrics, "recreate_gpu_p99_ns"),
+            gpu_peak_ns: numberMetric(scene3dMetrics, "recreate_gpu_peak_ns"),
          },
       ),
       prefixedBackendCase(
@@ -3127,6 +3173,12 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          {
             meshes: numberMetric(scene3dMetrics, "stress_meshes"),
             instances: numberMetric(scene3dMetrics, "stress_instances"),
+            stress_mode: stringMetric(scene3dMetrics, "stress_mode"),
+            gpu_samples: numberMetric(scene3dMetrics, "stress_reused_gpu_samples"),
+            gpu_p50_ns: numberMetric(scene3dMetrics, "stress_reused_gpu_p50_ns"),
+            gpu_p95_ns: numberMetric(scene3dMetrics, "stress_reused_gpu_p95_ns"),
+            gpu_p99_ns: numberMetric(scene3dMetrics, "stress_reused_gpu_p99_ns"),
+            gpu_peak_ns: numberMetric(scene3dMetrics, "stress_reused_gpu_peak_ns"),
          },
       ),
       prefixedBackendCase(
@@ -3137,6 +3189,12 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          {
             meshes: numberMetric(scene3dMetrics, "stress_meshes"),
             instances: numberMetric(scene3dMetrics, "stress_instances"),
+            stress_mode: stringMetric(scene3dMetrics, "stress_mode"),
+            gpu_samples: numberMetric(scene3dMetrics, "stress_recreate_gpu_samples"),
+            gpu_p50_ns: numberMetric(scene3dMetrics, "stress_recreate_gpu_p50_ns"),
+            gpu_p95_ns: numberMetric(scene3dMetrics, "stress_recreate_gpu_p95_ns"),
+            gpu_p99_ns: numberMetric(scene3dMetrics, "stress_recreate_gpu_p99_ns"),
+            gpu_peak_ns: numberMetric(scene3dMetrics, "stress_recreate_gpu_peak_ns"),
          },
       ),
       prefixedBackendCase(
@@ -3407,6 +3465,14 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          recreate_cpu_scratch_grows: numberMetric(scene3dMetrics, "recreate_cpu_scratch_grows"),
          reused_cpu_scratch_growth_bytes: numberMetric(scene3dMetrics, "reused_cpu_scratch_growth_bytes"),
          recreate_cpu_scratch_growth_bytes: numberMetric(scene3dMetrics, "recreate_cpu_scratch_growth_bytes"),
+         reused_gpu_p50_ns: numberMetric(scene3dMetrics, "reused_gpu_p50_ns"),
+         reused_gpu_p95_ns: numberMetric(scene3dMetrics, "reused_gpu_p95_ns"),
+         reused_gpu_p99_ns: numberMetric(scene3dMetrics, "reused_gpu_p99_ns"),
+         reused_gpu_peak_ns: numberMetric(scene3dMetrics, "reused_gpu_peak_ns"),
+         recreate_gpu_p50_ns: numberMetric(scene3dMetrics, "recreate_gpu_p50_ns"),
+         recreate_gpu_p95_ns: numberMetric(scene3dMetrics, "recreate_gpu_p95_ns"),
+         recreate_gpu_p99_ns: numberMetric(scene3dMetrics, "recreate_gpu_p99_ns"),
+         recreate_gpu_peak_ns: numberMetric(scene3dMetrics, "recreate_gpu_peak_ns"),
          meshes: numberMetric(scene3dMetrics, "meshes"),
          instances: numberMetric(scene3dMetrics, "instances"),
       },
@@ -3423,8 +3489,17 @@ function buildWebReport(args, url, pageReport, pixelReport, traceSummary)
          recreate_cpu_scratch_grows: numberMetric(scene3dMetrics, "stress_recreate_cpu_scratch_grows"),
          reused_cpu_scratch_growth_bytes: numberMetric(scene3dMetrics, "stress_reused_cpu_scratch_growth_bytes"),
          recreate_cpu_scratch_growth_bytes: numberMetric(scene3dMetrics, "stress_recreate_cpu_scratch_growth_bytes"),
+         reused_gpu_p50_ns: numberMetric(scene3dMetrics, "stress_reused_gpu_p50_ns"),
+         reused_gpu_p95_ns: numberMetric(scene3dMetrics, "stress_reused_gpu_p95_ns"),
+         reused_gpu_p99_ns: numberMetric(scene3dMetrics, "stress_reused_gpu_p99_ns"),
+         reused_gpu_peak_ns: numberMetric(scene3dMetrics, "stress_reused_gpu_peak_ns"),
+         recreate_gpu_p50_ns: numberMetric(scene3dMetrics, "stress_recreate_gpu_p50_ns"),
+         recreate_gpu_p95_ns: numberMetric(scene3dMetrics, "stress_recreate_gpu_p95_ns"),
+         recreate_gpu_p99_ns: numberMetric(scene3dMetrics, "stress_recreate_gpu_p99_ns"),
+         recreate_gpu_peak_ns: numberMetric(scene3dMetrics, "stress_recreate_gpu_peak_ns"),
          meshes: numberMetric(scene3dMetrics, "stress_meshes"),
          instances: numberMetric(scene3dMetrics, "stress_instances"),
+         stress_mode: stringMetric(scene3dMetrics, "stress_mode"),
       },
       mixed_summary: {
          id: "web.wasm.webgpu.mixed_text_image_effects.current",
@@ -5005,6 +5080,12 @@ function assertWebReportContract(report)
          "layer_cache_skipped_draws",
          "layer_passes",
          "scene3d_draws",
+         "scene3d_instances",
+         "scene3d_instance_bytes",
+         "scene3d_pipeline_binds",
+         "scene3d_bind_group_binds",
+         "scene3d_mesh_buffer_binds",
+         "scene3d_viewport_sets",
          "id_mask_draws",
          "backdrop_draws",
          "visual_effect_draws",
@@ -5288,17 +5369,31 @@ function assertWebReportContract(report)
    if (byId.get("web.wasm.webgpu.scene3d.recreate_mesh").mesh3d_creates <= 0) {
       throw new Error("recreate Scene3D row must expose mesh churn");
    }
-   if (byId.get("web.wasm.webgpu.scene3d.stress_reused_mesh").scene3d_draws < 64) {
-      throw new Error("stress Scene3D reused row must cover many Scene3D draws");
+   let stressReused = byId.get("web.wasm.webgpu.scene3d.stress_reused_mesh");
+   let stressRecreate = byId.get("web.wasm.webgpu.scene3d.stress_recreate_mesh");
+   if (stressReused.scene3d_instances < 64) {
+      throw new Error("stress Scene3D reused row must cover many Scene3D instances");
    }
-   if (byId.get("web.wasm.webgpu.scene3d.stress_reused_mesh").mesh3d_creates !== 0) {
+   if (stressReused.scene3d_instance_bytes !== stressReused.scene3d_instances * 80) {
+      throw new Error("stress Scene3D reused row must upload compact 80-byte instances");
+   }
+   if (stressReused.mesh3d_creates !== 0) {
       throw new Error("stress reused Scene3D row must not create meshes after warmup");
    }
-   if (byId.get("web.wasm.webgpu.scene3d.stress_recreate_mesh").mesh3d_creates <= 0) {
+   if (stressRecreate.mesh3d_creates <= 0) {
       throw new Error("stress recreate Scene3D row must expose mesh churn");
    }
-   if (byId.get("web.wasm.webgpu.scene3d.stress_recreate_mesh").scene3d_draws < 64) {
-      throw new Error("stress recreate Scene3D row must cover many Scene3D draws");
+   if (stressRecreate.scene3d_instances < 64) {
+      throw new Error("stress recreate Scene3D row must cover many Scene3D instances");
+   }
+   if (stressReused.stress_mode === "compatible" && stressReused.scene3d_draws >= stressReused.scene3d_instances) {
+      throw new Error("compatible Scene3D instances must collapse into fewer draws");
+   }
+   if (stressReused.stress_mode === "transparent" && stressReused.scene3d_draws !== stressReused.scene3d_instances) {
+      throw new Error("transparent Scene3D control must preserve one ordered draw per instance");
+   }
+   if (stressReused.stress_mode === "subviewport" && stressReused.scene3d_viewport_sets !== 1) {
+      throw new Error("Scene3D subviewport control must set one viewport/scissor pair");
    }
    let mixed = byId.get("web.wasm.webgpu.mixed_text_image_effects");
    if (byId.has("web.wasm.webgpu.mixed_text_image_effects.legacy_rebind_unbatched")) {
@@ -5950,6 +6045,23 @@ async function main()
          mkdirSync(dirname(args.glyphRunOut), { recursive: true });
          writeFileSync(args.glyphRunOut, `${JSON.stringify(pageReport, null, 2)}\n`);
          console.log(`wrote ${args.glyphRunOut}`);
+         return;
+      }
+      if (args.scene3dOut) {
+         let scene3dUrl = new URL(browserUrl(args, url, true));
+         scene3dUrl.searchParams.set("scene3d_only", "1");
+         let pageReport = await runChromeForReport(
+            { ...args, traceJson: "" },
+            scene3dUrl.toString(),
+            nextReportPromise(),
+         );
+         if (typeof pageReport.scene3d_ab !== "string"
+            || pageReport.scene3d_ab.length === 0) {
+            throw new Error("browser report omitted the C56 WebGPU Scene3D matrix");
+         }
+         mkdirSync(dirname(args.scene3dOut), { recursive: true });
+         writeFileSync(args.scene3dOut, `${JSON.stringify(pageReport, null, 2)}\n`);
+         console.log(`wrote ${args.scene3dOut}`);
          return;
       }
       if (args.backdropRegionOut) {

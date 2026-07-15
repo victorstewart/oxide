@@ -7,7 +7,7 @@ use crate::backdrop_region::{
    backdrop_sample_bounds, coalesce_copy_regions_within, physical_copy_region,
    PhysicalCopyRegion,
 };
-use crate::image_slots::ImageSlots;
+use crate::image_slots::GenerationSlots;
 use crate::packed_geometry::{
     PackedGeometry, PackedIndexKind, PackedIndexRange, PackedVertex, PACKED_VERTEX_BYTES,
 };
@@ -91,7 +91,7 @@ const NINE_SLICE_UNIT_VERTICES: [[u8; 4]; 36] = nine_slice_unit_vertices();
 const NINE_SLICE_UNIT_INDICES: [u16; NINE_SLICE_INDEX_COUNT as usize] =
    nine_slice_unit_indices();
 const SCENE3D_VERTEX_STRIDE: wgpu::BufferAddress = 28;
-const SCENE3D_UNIFORM_STRIDE: usize = 256;
+const SCENE3D_INSTANCE_STRIDE: usize = 80;
 const SCENE3D_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 const ID_MASK_VERTEX_STRIDE: wgpu::BufferAddress = 32;
 const ID_MASK_RASTER_UNIFORM_SIZE_BYTES: usize = 176;
@@ -223,23 +223,31 @@ struct GpuMesh3d {
     index_buffer: wgpu::Buffer,
     index_count: u32,
     topology: scene3d::MeshTopology,
+    opaque: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Scene3dPipelineKind {
     AlphaDepthRead,
     AlphaDepthWrite,
+    AlphaNoTestDepthWrite,
     AlphaNoDepth,
     AdditiveDepthRead,
     AdditiveDepthWrite,
+    AdditiveNoTestDepthWrite,
     AdditiveNoDepth,
 }
 
 #[derive(Clone, Copy)]
 struct Scene3dDraw {
-    mesh: usize,
-    uniform_offset: u32,
+    mesh: u32,
+    first_instance: u32,
+    instance_count: u32,
     pipeline: Scene3dPipelineKind,
+    cull: scene3d::CullMode3d,
+    material: scene3d::Material3d,
+    viewport: scene3d::PhysicalViewport,
+    batchable: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1884,12 +1892,14 @@ struct GpuPrograms {
     a8_pipeline: wgpu::RenderPipeline,
     sdf_pipeline: wgpu::RenderPipeline,
     effect_pipeline: wgpu::RenderPipeline,
-    scene3d_color_tri_depth_read_pipeline: wgpu::RenderPipeline,
-    scene3d_color_tri_depth_write_pipeline: wgpu::RenderPipeline,
-    scene3d_color_tri_pipeline: wgpu::RenderPipeline,
-    scene3d_color_tri_add_depth_read_pipeline: wgpu::RenderPipeline,
-    scene3d_color_tri_add_depth_write_pipeline: wgpu::RenderPipeline,
-    scene3d_color_tri_add_pipeline: wgpu::RenderPipeline,
+    scene3d_color_tri_depth_read_pipelines: [wgpu::RenderPipeline; 3],
+    scene3d_color_tri_depth_write_pipelines: [wgpu::RenderPipeline; 3],
+    scene3d_color_tri_no_test_depth_write_pipelines: [wgpu::RenderPipeline; 3],
+    scene3d_color_tri_pipelines: [wgpu::RenderPipeline; 3],
+    scene3d_color_tri_add_depth_read_pipelines: [wgpu::RenderPipeline; 3],
+    scene3d_color_tri_add_depth_write_pipelines: [wgpu::RenderPipeline; 3],
+    scene3d_color_tri_add_no_test_depth_write_pipelines: [wgpu::RenderPipeline; 3],
+    scene3d_color_tri_add_pipelines: [wgpu::RenderPipeline; 3],
     id_mask_raster_pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
 }
@@ -2365,15 +2375,15 @@ pub struct WebGpuRenderer {
     index_capacity_u16: u64,
     index_buffer_u32: Option<wgpu::Buffer>,
     index_capacity_u32: u64,
-    scene3d_uniform_buffer: Option<wgpu::Buffer>,
-    scene3d_uniform_capacity: u64,
+    scene3d_instance_buffer: Option<wgpu::Buffer>,
+    scene3d_instance_capacity: u64,
     scene3d_bind_group: Option<wgpu::BindGroup>,
     present_vertex_buffer: wgpu::Buffer,
     present_index_buffer: wgpu::Buffer,
     present_width: u32,
     present_height: u32,
     present_scale: f32,
-    scene3d_uniform_bytes: Vec<u8>,
+    scene3d_instance_bytes: Vec<u8>,
     effect_uniform_bytes: Vec<u8>,
     backdrop_copy_regions: Vec<PhysicalCopyRegion>,
     effect_graph_events: Vec<api::EffectGraphEvent>,
@@ -2402,7 +2412,7 @@ pub struct WebGpuRenderer {
     scene3d_clear_color: Option<api::Color>,
     scene3d_clear_depth: bool,
     scene3d_active: bool,
-    images: ImageSlots<GpuImage>,
+    images: GenerationSlots<GpuImage>,
     layers: BTreeMap<u32, GpuLayer>,
     layer_pool: Vec<PooledGpuLayer>,
     layer_frame_ids: HashSet<u32>,
@@ -2414,7 +2424,7 @@ pub struct WebGpuRenderer {
     layer_cache_recreations: u64,
     layer_cache_purges: u64,
     layer_cache_last_purge_reason: u8,
-    meshes_3d: Vec<Option<GpuMesh3d>>,
+    meshes_3d: GenerationSlots<GpuMesh3d>,
     frame: FrameData,
     prepared_chunks: PreparedChunkCache,
     prepared_property_ring: PreparedPropertyRing,
@@ -2461,7 +2471,7 @@ pub struct WebGpuRenderer {
 }
 
 fn image_for_update<'a>(
-    images: &'a ImageSlots<GpuImage>,
+    images: &'a GenerationSlots<GpuImage>,
     handle: api::ImageHandle,
     x: u32,
     y: u32,
@@ -2656,9 +2666,6 @@ impl WebGpuRenderer {
             .size()
             .saturating_add(self.effect_buffer.size())
             .saturating_add(
-                self.scene3d_uniform_buffer.as_ref().map_or(0, wgpu::Buffer::size),
-            )
-            .saturating_add(
                 self.id_mask_uniform_buffer
                     .as_ref()
                     .map_or(0, wgpu::Buffer::size),
@@ -2672,7 +2679,9 @@ impl WebGpuRenderer {
             .saturating_add(self.programs.image_unit_index_buffer.size())
             .saturating_add(self.programs.nine_slice_unit_vertex_buffer.size())
             .saturating_add(self.programs.nine_slice_unit_index_buffer.size());
-        let scene3d_mesh_bytes = self.meshes_3d.iter().flatten().fold(0_u64, |total, mesh| {
+        let bind_buffer_bytes =
+            self.scene3d_instance_buffer.as_ref().map_or(0, wgpu::Buffer::size);
+        let scene3d_mesh_bytes = self.meshes_3d.values().fold(0_u64, |total, mesh| {
             total
                 .saturating_add(mesh.vertex_buffer.size())
                 .saturating_add(mesh.index_buffer.size())
@@ -2698,7 +2707,8 @@ impl WebGpuRenderer {
             .saturating_add(atlas_texture_bytes)
             .saturating_add(image_texture_bytes)
             .saturating_add(scene3d_mesh_bytes)
-            .saturating_add(staging_buffer_bytes);
+            .saturating_add(staging_buffer_bytes)
+            .saturating_add(bind_buffer_bytes);
         self.memory_snapshot = WebGpuMemorySnapshot {
             logical_total_bytes,
             vertex_buffer_bytes,
@@ -2714,7 +2724,7 @@ impl WebGpuRenderer {
             image_texture_bytes,
             scene3d_mesh_bytes,
             staging_buffer_bytes,
-            bind_buffer_bytes: 0,
+            bind_buffer_bytes,
             frame_ring_bytes: self.prepared_property_ring.byte_size(),
             cache_bytes,
         };
@@ -2876,15 +2886,15 @@ impl WebGpuRenderer {
             index_capacity_u16: 0,
             index_buffer_u32: None,
             index_capacity_u32: 0,
-            scene3d_uniform_buffer: None,
-            scene3d_uniform_capacity: 0,
+            scene3d_instance_buffer: None,
+            scene3d_instance_capacity: 0,
             scene3d_bind_group: None,
             present_vertex_buffer,
             present_index_buffer,
             present_width: 0,
             present_height: 0,
             present_scale: 0.0,
-            scene3d_uniform_bytes: Vec::new(),
+            scene3d_instance_bytes: Vec::new(),
             effect_uniform_bytes: Vec::new(),
             backdrop_copy_regions: Vec::new(),
             effect_graph_events: Vec::new(),
@@ -2922,7 +2932,7 @@ impl WebGpuRenderer {
             scene3d_clear_color: None,
             scene3d_clear_depth: true,
             scene3d_active: false,
-            images: ImageSlots::new(),
+            images: GenerationSlots::new(),
             layers: BTreeMap::new(),
             layer_pool: Vec::new(),
             layer_frame_ids: HashSet::new(),
@@ -2934,7 +2944,7 @@ impl WebGpuRenderer {
             layer_cache_recreations: 0,
             layer_cache_purges: 0,
             layer_cache_last_purge_reason: LAYER_PURGE_NONE,
-            meshes_3d: vec![None],
+            meshes_3d: GenerationSlots::new(),
             frame: FrameData {
                 geometry: PackedGeometry::default(),
                 rrect_instances: Vec::new(),
@@ -3548,7 +3558,7 @@ impl WebGpuRenderer {
 
     fn scratch_capacity_breakdown(&self) -> ScratchCapacityBreakdown {
         let mut capacity = ScratchCapacityBreakdown::default();
-        capacity.scene3d = capacity.scene3d.saturating_add(self.scene3d_uniform_bytes.capacity());
+        capacity.scene3d = capacity.scene3d.saturating_add(self.scene3d_instance_bytes.capacity());
         capacity.effect = capacity.effect.saturating_add(self.effect_uniform_bytes.capacity());
         capacity.effect = capacity.effect.saturating_add(
             self.backdrop_copy_regions
@@ -3618,7 +3628,7 @@ impl WebGpuRenderer {
             self.images.storage_capacity_bytes(),
         );
         capacity.resource_table = capacity.resource_table.saturating_add(
-            self.meshes_3d.capacity().saturating_mul(core::mem::size_of::<Option<GpuMesh3d>>()),
+            self.meshes_3d.storage_capacity_bytes(),
         );
         capacity.draw = capacity.draw.saturating_add(self.frame.geometry.capacity_bytes());
         capacity.draw = capacity.draw.saturating_add(
@@ -4185,6 +4195,11 @@ impl WebGpuRenderer {
         &mut self,
         data: &scene3d::MeshColor3dData<'_>,
     ) -> Result<scene3d::MeshHandle3d, api::RenderError> {
+        if !self.meshes_3d.has_capacity() {
+            return Err(api::RenderError::InvalidOperation(
+                "mesh3d resource table exhausted",
+            ));
+        }
         if data.vertices.is_empty() {
             return Err(api::RenderError::InvalidOperation(
                 "mesh3d_create_colored requires vertices",
@@ -4237,20 +4252,21 @@ impl WebGpuRenderer {
             .stats
             .buffer_upload_bytes
             .saturating_add(vertex_bytes.len().saturating_add(index_bytes.len()) as u64);
-        let handle = scene3d::MeshHandle3d(self.meshes_3d.len() as u32);
-        self.meshes_3d.push(Some(GpuMesh3d {
+        let mesh = GpuMesh3d {
             vertex_buffer,
             index_buffer,
             index_count: data.indices.len() as u32,
             topology: data.topology,
-        }));
-        Ok(handle)
+            opaque: data.vertices.iter().all(|vertex| vertex.color[3] >= 1.0),
+        };
+        self.meshes_3d
+            .insert(mesh)
+            .map(scene3d::MeshHandle3d)
+            .map_err(|_| api::RenderError::InvalidOperation("mesh3d resource table exhausted"))
     }
 
     pub fn mesh3d_release(&mut self, handle: scene3d::MeshHandle3d) {
-        if let Some(slot) = self.meshes_3d.get_mut(handle.0 as usize) {
-            *slot = None;
-        }
+        let _ = self.meshes_3d.remove(handle.0);
     }
 
     pub fn encode_scene3d(&mut self, pass: &scene3d::Pass3d<'_>) -> Result<(), api::RenderError> {
@@ -4259,10 +4275,18 @@ impl WebGpuRenderer {
             self.scene3d_clear_depth = pass.clear_depth;
             self.scene3d_active = true;
         }
+        let Some(viewport) = scene3d::physical_viewport(
+            pass.viewport,
+            self.scale,
+            self.width,
+            self.height,
+        )
+        else {
+            return Ok(());
+        };
 
         for instance in pass.instances {
-            let Some(mesh) = self.meshes_3d.get(instance.mesh.0 as usize).and_then(Option::as_ref)
-            else {
+            let Some(mesh) = self.meshes_3d.get(instance.mesh.0) else {
                 return Err(api::RenderError::ResourceNotFound("mesh3d handle"));
             };
             if !matches!(mesh.topology, scene3d::MeshTopology::Triangles) {
@@ -4270,24 +4294,30 @@ impl WebGpuRenderer {
                     "scene3d web path only supports triangle meshes",
                 ));
             }
-            if !matches!(instance.cull, scene3d::CullMode3d::None) {
-                return Err(api::RenderError::Unsupported(
-                    "scene3d web path does not support per-instance culling yet",
-                ));
-            }
+            let mesh_opaque = mesh.opaque;
             if !instance.color_write {
                 continue;
             }
-            self.stats.scene3d_draws = self.stats.scene3d_draws.saturating_add(1);
-            let uniform_offset = push_scene3d_uniform(
-                &mut self.scene3d_uniform_bytes,
+            let first_instance = u32::try_from(
+                self.scene3d_instance_bytes.len() / SCENE3D_INSTANCE_STRIDE,
+            )
+            .map_err(|_| api::RenderError::InvalidOperation("scene3d instance limit exceeded"))?;
+            push_scene3d_instance(
+                &mut self.scene3d_instance_bytes,
                 scene3d::mat4_mul(&pass.view_proj, &instance.transform),
                 instance.color,
             );
+            self.stats.scene3d_instances = self.stats.scene3d_instances.saturating_add(1);
+            self.stats.scene3d_instance_bytes = self
+                .stats
+                .scene3d_instance_bytes
+                .saturating_add(SCENE3D_INSTANCE_STRIDE as u64);
             let pipeline = match (instance.blend, instance.depth_test, instance.depth_write) {
-                (scene3d::BlendMode3d::Additive, true, true)
-                | (scene3d::BlendMode3d::Additive, false, true) => {
+                (scene3d::BlendMode3d::Additive, true, true) => {
                     Scene3dPipelineKind::AdditiveDepthWrite
+                }
+                (scene3d::BlendMode3d::Additive, false, true) => {
+                    Scene3dPipelineKind::AdditiveNoTestDepthWrite
                 }
                 (scene3d::BlendMode3d::Additive, true, false) => {
                     Scene3dPipelineKind::AdditiveDepthRead
@@ -4295,18 +4325,36 @@ impl WebGpuRenderer {
                 (scene3d::BlendMode3d::Additive, false, false) => {
                     Scene3dPipelineKind::AdditiveNoDepth
                 }
-                (scene3d::BlendMode3d::Alpha, true, true)
-                | (scene3d::BlendMode3d::Alpha, false, true) => {
+                (scene3d::BlendMode3d::Alpha, true, true) => {
                     Scene3dPipelineKind::AlphaDepthWrite
+                }
+                (scene3d::BlendMode3d::Alpha, false, true) => {
+                    Scene3dPipelineKind::AlphaNoTestDepthWrite
                 }
                 (scene3d::BlendMode3d::Alpha, true, false) => Scene3dPipelineKind::AlphaDepthRead,
                 (scene3d::BlendMode3d::Alpha, false, _) => Scene3dPipelineKind::AlphaNoDepth,
             };
-            let draw = Scene3dDraw { mesh: instance.mesh.0 as usize, uniform_offset, pipeline };
-            if self.id_mask_draws.is_empty() {
-                self.scene3d_draws.push(draw);
+            let draw = Scene3dDraw {
+                mesh: instance.mesh.0,
+                first_instance,
+                instance_count: 1,
+                pipeline,
+                cull: instance.cull,
+                material: instance.material,
+                viewport,
+                batchable: mesh_opaque
+                    && instance.color.a >= 1.0
+                    && matches!(instance.blend, scene3d::BlendMode3d::Alpha)
+                    && instance.depth_test
+                    && instance.depth_write,
+            };
+            let appended = if self.id_mask_draws.is_empty() {
+                append_scene3d_draw(&mut self.scene3d_draws, draw)
             } else {
-                self.scene3d_overlay_draws.push(draw);
+                append_scene3d_draw(&mut self.scene3d_overlay_draws, draw)
+            };
+            if appended {
+                self.stats.scene3d_draws = self.stats.scene3d_draws.saturating_add(1);
             }
         }
         Ok(())
@@ -5867,17 +5915,17 @@ impl WebGpuRenderer {
         }
     }
 
-    fn upload_scene3d_uniforms(&mut self) {
-        if self.scene3d_uniform_bytes.is_empty() {
+    fn upload_scene3d_instances(&mut self) {
+        if self.scene3d_instance_bytes.is_empty() {
             return;
         }
-        let needed = self.scene3d_uniform_bytes.len() as u64;
-        if self.scene3d_uniform_buffer.is_none() || self.scene3d_uniform_capacity < needed {
-            let next = needed.next_power_of_two().max(SCENE3D_UNIFORM_STRIDE as u64);
+        let needed = self.scene3d_instance_bytes.len() as u64;
+        if self.scene3d_instance_buffer.is_none() || self.scene3d_instance_capacity < needed {
+            let next = needed.next_power_of_two().max(SCENE3D_INSTANCE_STRIDE as u64);
             let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("oxide-webgpu-scene3d-uniforms"),
+                label: Some("oxide-webgpu-scene3d-instances"),
                 size: next,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
             let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -5885,28 +5933,24 @@ impl WebGpuRenderer {
                 layout: &self.programs.scene3d_layout,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &buffer,
-                        offset: 0,
-                        size: core::num::NonZeroU64::new(SCENE3D_UNIFORM_STRIDE as u64),
-                    }),
+                    resource: buffer.as_entire_binding(),
                 }],
             });
-            self.scene3d_uniform_buffer = Some(buffer);
+            self.scene3d_instance_buffer = Some(buffer);
             self.scene3d_bind_group = Some(bind_group);
-            self.scene3d_uniform_capacity = next;
+            self.scene3d_instance_capacity = next;
             self.stats.buffer_grows = self.stats.buffer_grows.saturating_add(1);
             self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
             self.stats.scene3d_buffer_grows = self.stats.scene3d_buffer_grows.saturating_add(1);
             self.stats.scene3d_bind_group_creates =
                 self.stats.scene3d_bind_group_creates.saturating_add(1);
         }
-        if let Some(buffer) = &self.scene3d_uniform_buffer {
-            self.queue.write_buffer(buffer, 0, &self.scene3d_uniform_bytes);
+        if let Some(buffer) = &self.scene3d_instance_buffer {
+            self.queue.write_buffer(buffer, 0, &self.scene3d_instance_bytes);
             self.stats.buffer_upload_bytes = self
                 .stats
                 .buffer_upload_bytes
-                .saturating_add(self.scene3d_uniform_bytes.len() as u64);
+                .saturating_add(self.scene3d_instance_bytes.len() as u64);
         }
     }
 
@@ -7597,7 +7641,7 @@ impl api::Renderer for WebGpuRenderer {
         self.prepared_frame_plan.clear();
         self.prepared_frame_active = false;
         self.prepared_snapshot_bundle_active = false;
-        self.scene3d_uniform_bytes.clear();
+        self.scene3d_instance_bytes.clear();
         self.scene3d_draws.clear();
         self.scene3d_overlay_draws.clear();
         self.id_mask_draws.clear();
@@ -7651,7 +7695,7 @@ impl api::Renderer for WebGpuRenderer {
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         self.upload_frame_buffers();
-        self.upload_scene3d_uniforms();
+        self.upload_scene3d_instances();
         self.prepare_effect_uniforms();
         self.record_submit_allocation_stage(SubmitAllocationStage::Upload, alloc_before);
         cpu_submit_timing_end(&mut self.cpu_submit_timing.upload_ms, timing_before);
@@ -8216,22 +8260,37 @@ impl WebGpuRenderer {
         &self.programs.effect_pipeline
     }
 
-    fn scene3d_pipeline(&self, kind: Scene3dPipelineKind) -> &wgpu::RenderPipeline {
+    fn scene3d_pipeline(
+        &self,
+        kind: Scene3dPipelineKind,
+        cull: scene3d::CullMode3d,
+    ) -> &wgpu::RenderPipeline {
+        let index = scene3d_cull_index(cull);
         match kind {
             Scene3dPipelineKind::AlphaDepthRead => {
-                &self.programs.scene3d_color_tri_depth_read_pipeline
+                &self.programs.scene3d_color_tri_depth_read_pipelines[index]
             }
             Scene3dPipelineKind::AlphaDepthWrite => {
-                &self.programs.scene3d_color_tri_depth_write_pipeline
+                &self.programs.scene3d_color_tri_depth_write_pipelines[index]
             }
-            Scene3dPipelineKind::AlphaNoDepth => &self.programs.scene3d_color_tri_pipeline,
+            Scene3dPipelineKind::AlphaNoTestDepthWrite => {
+                &self.programs.scene3d_color_tri_no_test_depth_write_pipelines[index]
+            }
+            Scene3dPipelineKind::AlphaNoDepth => {
+                &self.programs.scene3d_color_tri_pipelines[index]
+            }
             Scene3dPipelineKind::AdditiveDepthRead => {
-                &self.programs.scene3d_color_tri_add_depth_read_pipeline
+                &self.programs.scene3d_color_tri_add_depth_read_pipelines[index]
             }
             Scene3dPipelineKind::AdditiveDepthWrite => {
-                &self.programs.scene3d_color_tri_add_depth_write_pipeline
+                &self.programs.scene3d_color_tri_add_depth_write_pipelines[index]
             }
-            Scene3dPipelineKind::AdditiveNoDepth => &self.programs.scene3d_color_tri_add_pipeline,
+            Scene3dPipelineKind::AdditiveNoTestDepthWrite => {
+                &self.programs.scene3d_color_tri_add_no_test_depth_write_pipelines[index]
+            }
+            Scene3dPipelineKind::AdditiveNoDepth => {
+                &self.programs.scene3d_color_tri_add_pipelines[index]
+            }
         }
     }
 
@@ -8953,18 +9012,16 @@ impl WebGpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         target_view: &wgpu::TextureView,
     ) {
-        if self.scene3d_bind_group.is_none() {
-            return;
-        }
         self.ensure_scene_depth_target();
         let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Scene3d);
         let timestamp_writes = self.timestamp_writes(timestamp_pair);
         let Some(depth_target) = self.scene_depth_target.as_ref() else {
             return;
         };
-        let Some(bind_group) = self.scene3d_bind_group.as_ref() else {
+        let bind_group = self.scene3d_bind_group.as_ref();
+        if !self.scene3d_draws.is_empty() && bind_group.is_none() {
             return;
-        };
+        }
         let clear =
             self.scene3d_clear_color.unwrap_or_else(|| api::Color::rgba(0.0, 0.0, 0.0, 0.0));
         let depth_ops = if self.scene3d_clear_depth {
@@ -8997,22 +9054,57 @@ impl WebGpuRenderer {
             occlusion_query_set: None,
         });
 
+        if let Some(bind_group) = bind_group {
+            pass.set_bind_group(0, bind_group, &[]);
+        }
+        let mut active_pipeline = None;
+        let mut active_mesh = None;
+        let mut active_viewport = None;
         let mut encoded_draws = 0_u32;
+        let mut pipeline_binds = 0_u32;
+        let mut mesh_buffer_binds = 0_u32;
+        let mut viewport_sets = 0_u32;
         for draw_index in 0..self.scene3d_draws.len() {
             let draw = self.scene3d_draws[draw_index];
-            let Some(mesh) = self.meshes_3d.get(draw.mesh).and_then(Option::as_ref) else {
+            let Some(mesh) = self.meshes_3d.get(draw.mesh) else {
                 continue;
             };
-            let pipeline = self.scene3d_pipeline(draw.pipeline);
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, bind_group, &[draw.uniform_offset]);
-            pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-            pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            let pipeline_key = (draw.pipeline, draw.cull);
+            if active_pipeline != Some(pipeline_key) {
+                pass.set_pipeline(self.scene3d_pipeline(draw.pipeline, draw.cull));
+                active_pipeline = Some(pipeline_key);
+                pipeline_binds = pipeline_binds.saturating_add(1);
+            }
+            if active_viewport != Some(draw.viewport) {
+                set_scene3d_viewport(&mut pass, draw.viewport);
+                active_viewport = Some(draw.viewport);
+                viewport_sets = viewport_sets.saturating_add(1);
+            }
+            if active_mesh != Some(draw.mesh) {
+                pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                active_mesh = Some(draw.mesh);
+                mesh_buffer_binds = mesh_buffer_binds.saturating_add(1);
+            }
+            pass.draw_indexed(
+                0..mesh.index_count,
+                0,
+                draw.first_instance..draw.first_instance + draw.instance_count,
+            );
             encoded_draws = encoded_draws.saturating_add(1);
         }
         drop(pass);
         self.stats.draws = self.stats.draws.saturating_add(encoded_draws);
+        self.stats.scene3d_bind_group_binds = self
+            .stats
+            .scene3d_bind_group_binds
+            .saturating_add(u32::from(bind_group.is_some()));
+        self.stats.scene3d_pipeline_binds =
+            self.stats.scene3d_pipeline_binds.saturating_add(pipeline_binds);
+        self.stats.scene3d_mesh_buffer_binds =
+            self.stats.scene3d_mesh_buffer_binds.saturating_add(mesh_buffer_binds);
+        self.stats.scene3d_viewport_sets =
+            self.stats.scene3d_viewport_sets.saturating_add(viewport_sets);
         self.stats.render_passes = self.stats.render_passes.saturating_add(1);
         self.stats.scene3d_passes = self.stats.scene3d_passes.saturating_add(1);
     }
@@ -9054,22 +9146,53 @@ impl WebGpuRenderer {
             occlusion_query_set: None,
         });
 
+        pass.set_bind_group(0, bind_group, &[]);
+        let mut active_pipeline = None;
+        let mut active_mesh = None;
+        let mut active_viewport = None;
         let mut encoded_draws = 0_u32;
+        let mut pipeline_binds = 0_u32;
+        let mut mesh_buffer_binds = 0_u32;
+        let mut viewport_sets = 0_u32;
         for draw_index in 0..self.scene3d_overlay_draws.len() {
             let draw = self.scene3d_overlay_draws[draw_index];
-            let Some(mesh) = self.meshes_3d.get(draw.mesh).and_then(Option::as_ref) else {
+            let Some(mesh) = self.meshes_3d.get(draw.mesh) else {
                 continue;
             };
-            let pipeline = self.scene3d_pipeline(draw.pipeline);
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, bind_group, &[draw.uniform_offset]);
-            pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-            pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            let pipeline_key = (draw.pipeline, draw.cull);
+            if active_pipeline != Some(pipeline_key) {
+                pass.set_pipeline(self.scene3d_pipeline(draw.pipeline, draw.cull));
+                active_pipeline = Some(pipeline_key);
+                pipeline_binds = pipeline_binds.saturating_add(1);
+            }
+            if active_viewport != Some(draw.viewport) {
+                set_scene3d_viewport(&mut pass, draw.viewport);
+                active_viewport = Some(draw.viewport);
+                viewport_sets = viewport_sets.saturating_add(1);
+            }
+            if active_mesh != Some(draw.mesh) {
+                pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                active_mesh = Some(draw.mesh);
+                mesh_buffer_binds = mesh_buffer_binds.saturating_add(1);
+            }
+            pass.draw_indexed(
+                0..mesh.index_count,
+                0,
+                draw.first_instance..draw.first_instance + draw.instance_count,
+            );
             encoded_draws = encoded_draws.saturating_add(1);
         }
         drop(pass);
         self.stats.draws = self.stats.draws.saturating_add(encoded_draws);
+        self.stats.scene3d_bind_group_binds =
+            self.stats.scene3d_bind_group_binds.saturating_add(1);
+        self.stats.scene3d_pipeline_binds =
+            self.stats.scene3d_pipeline_binds.saturating_add(pipeline_binds);
+        self.stats.scene3d_mesh_buffer_binds =
+            self.stats.scene3d_mesh_buffer_binds.saturating_add(mesh_buffer_binds);
+        self.stats.scene3d_viewport_sets =
+            self.stats.scene3d_viewport_sets.saturating_add(viewport_sets);
         self.stats.render_passes = self.stats.render_passes.saturating_add(1);
         self.stats.scene3d_overlay_passes = self.stats.scene3d_overlay_passes.saturating_add(1);
     }
@@ -9870,11 +9993,11 @@ fn create_programs(
         label: Some("oxide-webgpu-scene3d-layout"),
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+            visibility: wgpu::ShaderStages::VERTEX,
             ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: true,
-                min_binding_size: None,
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: NonZeroU64::new(SCENE3D_INSTANCE_STRIDE as u64),
             },
             count: None,
         }],
@@ -10248,7 +10371,7 @@ fn create_programs(
         "fs_backdrop",
     );
     let scene3d_vertex_layout = scene3d_color_vertex_layout();
-    let scene3d_color_tri_depth_read_pipeline = create_scene3d_pipeline(
+    let scene3d_color_tri_depth_read_pipelines = create_scene3d_pipeline_variants(
         device,
         &scene3d_shader,
         &scene3d_pipeline_layout,
@@ -10259,7 +10382,7 @@ fn create_programs(
         false,
         "oxide-webgpu-scene3d-color-tri-depth-read",
     );
-    let scene3d_color_tri_depth_write_pipeline = create_scene3d_pipeline(
+    let scene3d_color_tri_depth_write_pipelines = create_scene3d_pipeline_variants(
         device,
         &scene3d_shader,
         &scene3d_pipeline_layout,
@@ -10270,7 +10393,18 @@ fn create_programs(
         true,
         "oxide-webgpu-scene3d-color-tri-depth-write",
     );
-    let scene3d_color_tri_pipeline = create_scene3d_pipeline(
+    let scene3d_color_tri_no_test_depth_write_pipelines = create_scene3d_pipeline_variants(
+        device,
+        &scene3d_shader,
+        &scene3d_pipeline_layout,
+        &scene3d_vertex_layout,
+        format,
+        Some(wgpu::BlendState::ALPHA_BLENDING),
+        false,
+        true,
+        "oxide-webgpu-scene3d-color-tri-no-test-depth-write",
+    );
+    let scene3d_color_tri_pipelines = create_scene3d_pipeline_variants(
         device,
         &scene3d_shader,
         &scene3d_pipeline_layout,
@@ -10281,7 +10415,7 @@ fn create_programs(
         false,
         "oxide-webgpu-scene3d-color-tri",
     );
-    let scene3d_color_tri_add_depth_read_pipeline = create_scene3d_pipeline(
+    let scene3d_color_tri_add_depth_read_pipelines = create_scene3d_pipeline_variants(
         device,
         &scene3d_shader,
         &scene3d_pipeline_layout,
@@ -10292,7 +10426,7 @@ fn create_programs(
         false,
         "oxide-webgpu-scene3d-color-tri-add-depth-read",
     );
-    let scene3d_color_tri_add_depth_write_pipeline = create_scene3d_pipeline(
+    let scene3d_color_tri_add_depth_write_pipelines = create_scene3d_pipeline_variants(
         device,
         &scene3d_shader,
         &scene3d_pipeline_layout,
@@ -10303,7 +10437,18 @@ fn create_programs(
         true,
         "oxide-webgpu-scene3d-color-tri-add-depth-write",
     );
-    let scene3d_color_tri_add_pipeline = create_scene3d_pipeline(
+    let scene3d_color_tri_add_no_test_depth_write_pipelines = create_scene3d_pipeline_variants(
+        device,
+        &scene3d_shader,
+        &scene3d_pipeline_layout,
+        &scene3d_vertex_layout,
+        format,
+        Some(additive_blend_state()),
+        false,
+        true,
+        "oxide-webgpu-scene3d-color-tri-add-no-test-depth-write",
+    );
+    let scene3d_color_tri_add_pipelines = create_scene3d_pipeline_variants(
         device,
         &scene3d_shader,
         &scene3d_pipeline_layout,
@@ -10385,12 +10530,14 @@ fn create_programs(
         a8_pipeline,
         sdf_pipeline,
         effect_pipeline,
-        scene3d_color_tri_depth_read_pipeline,
-        scene3d_color_tri_depth_write_pipeline,
-        scene3d_color_tri_pipeline,
-        scene3d_color_tri_add_depth_read_pipeline,
-        scene3d_color_tri_add_depth_write_pipeline,
-        scene3d_color_tri_add_pipeline,
+        scene3d_color_tri_depth_read_pipelines,
+        scene3d_color_tri_depth_write_pipelines,
+        scene3d_color_tri_no_test_depth_write_pipelines,
+        scene3d_color_tri_pipelines,
+        scene3d_color_tri_add_depth_read_pipelines,
+        scene3d_color_tri_add_depth_write_pipelines,
+        scene3d_color_tri_add_no_test_depth_write_pipelines,
+        scene3d_color_tri_add_pipelines,
         id_mask_raster_pipeline,
         sampler,
     }
@@ -10525,6 +10672,57 @@ fn create_glyph_pipeline(
     })
 }
 
+fn create_scene3d_pipeline_variants(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    vertex_layout: &wgpu::VertexBufferLayout<'_>,
+    format: wgpu::TextureFormat,
+    blend: Option<wgpu::BlendState>,
+    depth_test: bool,
+    depth_write: bool,
+    label: &'static str,
+) -> [wgpu::RenderPipeline; 3] {
+    [
+        create_scene3d_pipeline(
+            device,
+            shader,
+            layout,
+            vertex_layout,
+            format,
+            blend,
+            depth_test,
+            depth_write,
+            None,
+            label,
+        ),
+        create_scene3d_pipeline(
+            device,
+            shader,
+            layout,
+            vertex_layout,
+            format,
+            blend,
+            depth_test,
+            depth_write,
+            Some(wgpu::Face::Front),
+            label,
+        ),
+        create_scene3d_pipeline(
+            device,
+            shader,
+            layout,
+            vertex_layout,
+            format,
+            blend,
+            depth_test,
+            depth_write,
+            Some(wgpu::Face::Back),
+            label,
+        ),
+    ]
+}
+
 fn create_scene3d_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
@@ -10534,6 +10732,7 @@ fn create_scene3d_pipeline(
     blend: Option<wgpu::BlendState>,
     depth_test: bool,
     depth_write: bool,
+    cull_mode: Option<wgpu::Face>,
     label: &'static str,
 ) -> wgpu::RenderPipeline {
     let vertex_buffers = [vertex_layout.clone()];
@@ -10552,7 +10751,7 @@ fn create_scene3d_pipeline(
             topology: wgpu::PrimitiveTopology::TriangleList,
             strip_index_format: None,
             front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
+            cull_mode,
             unclipped_depth: false,
             polygon_mode: wgpu::PolygonMode::Fill,
             conservative: false,
@@ -12583,11 +12782,49 @@ fn write_id_mask_compositor_uniform_bytes(out: &mut Vec<u8>, draw: &IdMaskDraw) 
     debug_assert_eq!(out.len() - start, ID_MASK_COMPOSITOR_UNIFORM_SIZE_BYTES);
 }
 
-fn push_scene3d_uniform(out: &mut Vec<u8>, mvp: scene3d::Mat4, color: api::Color) -> u32 {
-    let aligned = align_usize(out.len(), SCENE3D_UNIFORM_STRIDE);
-    if out.len() < aligned {
-        out.resize(aligned, 0);
+fn append_scene3d_draw(draws: &mut Vec<Scene3dDraw>, draw: Scene3dDraw) -> bool {
+    if let Some(previous) = draws.last_mut() {
+        if previous.batchable
+            && draw.batchable
+            && previous.mesh == draw.mesh
+            && previous.pipeline == draw.pipeline
+            && previous.cull == draw.cull
+            && previous.material == draw.material
+            && previous.viewport == draw.viewport
+            && previous.first_instance + previous.instance_count == draw.first_instance
+        {
+            previous.instance_count = previous.instance_count.saturating_add(1);
+            return false;
+        }
     }
+    draws.push(draw);
+    true
+}
+
+fn scene3d_cull_index(cull: scene3d::CullMode3d) -> usize {
+    match cull {
+        scene3d::CullMode3d::None => 0,
+        scene3d::CullMode3d::Front => 1,
+        scene3d::CullMode3d::Back => 2,
+    }
+}
+
+fn set_scene3d_viewport(
+    pass: &mut wgpu::RenderPass<'_>,
+    viewport: scene3d::PhysicalViewport,
+) {
+    pass.set_viewport(
+        viewport.x as f32,
+        viewport.y as f32,
+        viewport.width as f32,
+        viewport.height as f32,
+        0.0,
+        1.0,
+    );
+    pass.set_scissor_rect(viewport.x, viewport.y, viewport.width, viewport.height);
+}
+
+fn push_scene3d_instance(out: &mut Vec<u8>, mvp: scene3d::Mat4, color: api::Color) {
     let offset = out.len();
     for column in mvp {
         for value in column {
@@ -12598,8 +12835,7 @@ fn push_scene3d_uniform(out: &mut Vec<u8>, mvp: scene3d::Mat4, color: api::Color
     push_f32(out, color.g);
     push_f32(out, color.b);
     push_f32(out, color.a);
-    out.resize(offset + SCENE3D_UNIFORM_STRIDE, 0);
-    offset as u32
+    debug_assert_eq!(out.len() - offset, SCENE3D_INSTANCE_STRIDE);
 }
 
 fn align_usize(value: usize, alignment: usize) -> usize {
@@ -13011,12 +13247,12 @@ fn fs_backdrop(input: VertexOut) -> @location(0) vec4<f32> {
 "#;
 
 const SCENE3D_WGSL: &str = r#"
-struct Scene3dUniforms {
+struct Scene3dInstance {
    mvp: mat4x4<f32>,
    color: vec4<f32>,
 };
 
-@group(0) @binding(0) var<uniform> scene3d: Scene3dUniforms;
+@group(0) @binding(0) var<storage, read> scene3d_instances: array<Scene3dInstance>;
 
 struct Scene3dColorVertexIn {
    @location(0) position: vec3<f32>,
@@ -13029,17 +13265,20 @@ struct Scene3dColorVertexOut {
 };
 
 @vertex
-fn vs_scene3d_color(input: Scene3dColorVertexIn) -> Scene3dColorVertexOut {
-   let clip = scene3d.mvp * vec4<f32>(input.position, 1.0);
+fn vs_scene3d_color(
+   input: Scene3dColorVertexIn,
+   @builtin(instance_index) instance_index: u32,
+) -> Scene3dColorVertexOut {
+   let clip = scene3d_instances[instance_index].mvp * vec4<f32>(input.position, 1.0);
    var out: Scene3dColorVertexOut;
    out.position = vec4<f32>(clip.x, clip.y, clip.z * 0.5 + clip.w * 0.5, clip.w);
-   out.color = input.color;
+   out.color = input.color * scene3d_instances[instance_index].color;
    return out;
 }
 
 @fragment
 fn fs_scene3d_color(input: Scene3dColorVertexOut) -> @location(0) vec4<f32> {
-   return input.color * scene3d.color;
+   return input.color;
 }
 "#;
 

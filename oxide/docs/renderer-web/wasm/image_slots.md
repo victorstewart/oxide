@@ -2,36 +2,39 @@
 
 ## Intention and purpose
 
-`ImageSlots` owns the renderer's bounded generation-checked image table. It reuses constant-time
-vector slots after explicit release without allowing a stale `ImageHandle` to resolve to a later
-GPU image and without retaining one tombstone for every historical image.
+`GenerationSlots` owns the renderer's bounded generation-checked resource tables. It reuses
+constant-time vector slots after explicit release without allowing a stale image or mesh handle
+to resolve to a later GPU resource and without retaining one tombstone for every historical
+resource.
 
 ## Relation to the rest of the code
 
-The WebGPU renderer checks capacity before GPU creation, inserts each `GpuImage` into this table,
-and stores the returned packed `u32` in backend draw packets. Update, draw-state, bind, and release
-paths resolve the same table. The flow is:
+The WebGPU renderer checks capacity before GPU creation and uses independent `GenerationSlots`
+tables for `GpuImage` and `GpuMesh3d` values. It stores the returned packed `u32` in public handles
+and backend draw packets. Update, draw-state, bind, and release paths resolve the owning table. The
+flow is:
 
-- WebGPU image creation
-- `ImageSlots::has_capacity`
-- GPU texture and bind-group creation
-- `ImageSlots::insert`
-- update/draw/bind through `ImageSlots::get`
-- explicit release through `ImageSlots::remove`
+- WebGPU image or Scene3D mesh creation
+- `GenerationSlots::has_capacity`
+- GPU texture/bind-group or vertex/index-buffer creation
+- `GenerationSlots::insert`
+- update/draw/bind through `GenerationSlots::get`
+- explicit release through `GenerationSlots::remove`
 - generation advance and free-slot reuse, or retirement at generation exhaustion
 
 ## Entry points list
 
 The type is crate-private and introduces no author-facing API.
 
-- `ImageSlots::new() -> Self`: creates an empty table.
-- `ImageSlots::has_capacity(&self) -> bool`: reports whether insert can use a free or new slot.
-- `ImageSlots::insert(&mut self, value: T) -> Result<u32, T>`: stores one value and returns its
+- `GenerationSlots::new() -> Self`: creates an empty table.
+- `GenerationSlots::has_capacity(&self) -> bool`: reports whether insert can use a free or new slot.
+- `GenerationSlots::insert(&mut self, value: T) -> Result<u32, T>`: stores one value and returns its
   packed nonzero handle, returning ownership unchanged at the hard live-slot bound.
-- `ImageSlots::get(&self, handle: u32) -> Option<&T>`: resolves only an exact live generation.
-- `ImageSlots::remove(&mut self, handle: u32) -> Option<T>`: removes one exact live value,
+- `GenerationSlots::get(&self, handle: u32) -> Option<&T>`: resolves only an exact live generation.
+- `GenerationSlots::remove(&mut self, handle: u32) -> Option<T>`: removes one exact live value,
   invalidates its handle, and recycles or retires the slot.
-- `ImageSlots::storage_capacity_bytes(&self) -> usize`: reports allocated vector payload capacity.
+- `GenerationSlots::storage_capacity_bytes(&self) -> usize`: reports allocated vector payload capacity.
+- `GenerationSlots::values(&self)`: iterates live values for exact resource-memory accounting.
 
 ## Logic narrative
 
@@ -81,12 +84,14 @@ native external test so the lifecycle algorithm executes without requiring a bro
 
 `oxide/crates/renderer-web/tests/image_slot_tests.rs` executes malformed/stale handles, reuse,
 double release, all 65,535 generations, the 65,535-live hard bound, and repeated churn capacity.
-Browser A/B runs cover the existing image-upload and 97-image mixed draw workloads.
+Browser A/B runs cover the existing image-upload and 97-image mixed draw workloads. C56 adds
+more than 14,000 Scene3D mesh release/create operations in one renderer lifetime plus stable live
+GPU mesh-byte and resource-table-capacity assertions.
 
 ## Examples
 
 ```rust
-let mut slots = ImageSlots::new();
+let mut slots = GenerationSlots::new();
 let handle = slots.insert(bytes).map_err(|_| "image table full")?;
 assert!(slots.get(handle).is_some());
 let bytes = slots.remove(handle).ok_or("image missing")?;
@@ -94,4 +99,5 @@ let bytes = slots.remove(handle).ok_or("image missing")?;
 
 ## Changelog
 
+- 2026-07-15: generalized the table name and added generation-checked WebGPU Scene3D mesh ownership.
 - 2026-07-10: introduced bounded generation-checked slot reuse for WebGPU images.

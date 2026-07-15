@@ -1,0 +1,114 @@
+{
+  "case": "c56-webgpu-scene3d-instancing-compatible",
+  "decision": "accepted",
+  "parent_commit": "bf0ffb07f140c82ba9cb0bae3072dd65d1963c21",
+  "browser": "Google Chrome 150.0.7871.124, native arm64",
+  "host": "Mac14,6, Apple M2 Max, 96 GB, macOS 26.5.2 (25F84)",
+  "protocol": {
+    "samples": 15,
+    "frames_per_sample": 24,
+    "surface_pixels": 262144,
+    "workload": "adjacent opaque instances split evenly across two immutable meshes",
+    "gpu_source": "WebGPU timestamp-query distribution drained after each case"
+  },
+  "cases": [
+    {
+      "instances": 96,
+      "parent": {
+        "cpu_submit_ms": { "p50": 0.059, "p95": 0.074, "p99": 0.074, "peak": 0.074 },
+        "gpu_timestamp_ns": { "samples": 45, "p50": 11416, "p95": 20998, "p99": 22372, "peak": 22372 },
+        "draws": 96,
+        "bind_group_binds": 96,
+        "mesh_buffer_binds": 96,
+        "uniform_upload_bytes": 24576,
+        "cpu_scene3d_scratch_bytes": 34304,
+        "gpu_logical_total_bytes": 2513744,
+        "shaded_pixels": 262144
+      },
+      "candidate": {
+        "cpu_submit_ms": { "p50": 0.022, "p95": 0.037, "p99": 0.037, "peak": 0.037 },
+        "gpu_timestamp_ns": { "samples": 45, "p50": 10498, "p95": 21706, "p99": 25872, "peak": 25872 },
+        "draws": 2,
+        "bind_group_binds": 1,
+        "mesh_buffer_binds": 2,
+        "instance_upload_bytes": 7680,
+        "cpu_scene3d_scratch_bytes": 8320,
+        "gpu_logical_total_bytes": 2489168,
+        "shaded_pixels": 262144
+      },
+      "change": {
+        "cpu_p50_percent": -62.7,
+        "gpu_p50_percent": -8.0,
+        "draws_percent": -97.9,
+        "upload_bytes_percent": -68.8
+      }
+    },
+    {
+      "instances": 1000,
+      "parent": {
+        "cpu_submit_ms": { "p50": 0.393, "p95": 0.468, "p99": 0.468, "peak": 0.468 },
+        "gpu_timestamp_ns": { "samples": 23, "p50": 46079, "p95": 55119, "p99": 75492, "peak": 75492 },
+        "draws": 1000,
+        "bind_group_binds": 1000,
+        "mesh_buffer_binds": 1000,
+        "uniform_upload_bytes": 256000,
+        "cpu_scene3d_scratch_bytes": 274432,
+        "gpu_logical_total_bytes": 2743120,
+        "shaded_pixels": 262144
+      },
+      "candidate": {
+        "cpu_submit_ms": { "p50": 0.086, "p95": 0.132, "p99": 0.132, "peak": 0.132 },
+        "gpu_timestamp_ns": { "samples": 23, "p50": 21125, "p95": 35125, "p99": 38500, "peak": 38500 },
+        "draws": 2,
+        "bind_group_binds": 1,
+        "mesh_buffer_binds": 2,
+        "instance_upload_bytes": 80000,
+        "cpu_scene3d_scratch_bytes": 131200,
+        "gpu_logical_total_bytes": 2612048,
+        "shaded_pixels": 262144
+      },
+      "change": {
+        "cpu_p50_percent": -78.1,
+        "gpu_p50_percent": -54.2,
+        "draws_percent": -99.8,
+        "upload_bytes_percent": -68.8
+      }
+    },
+    {
+      "instances": 10000,
+      "parent": {
+        "cpu_submit_ms": { "p50": 3.836, "p95": 4.483, "p99": 4.483, "peak": 4.483 },
+        "gpu_timestamp_ns": { "samples": 8, "p50": 427704, "p95": 437058, "p99": 437058, "peak": 437058 },
+        "draws": 10000,
+        "bind_group_binds": 10000,
+        "mesh_buffer_binds": 10000,
+        "uniform_upload_bytes": 2560000,
+        "cpu_scene3d_scratch_bytes": 4390912,
+        "gpu_logical_total_bytes": 6675280,
+        "shaded_pixels": 262144
+      },
+      "candidate": {
+        "cpu_submit_ms": { "p50": 0.625, "p95": 0.708, "p99": 0.708, "peak": 0.708 },
+        "gpu_timestamp_ns": { "samples": 8, "p50": 79000, "p95": 174833, "p99": 174833, "peak": 174833 },
+        "draws": 2,
+        "bind_group_binds": 1,
+        "mesh_buffer_binds": 2,
+        "instance_upload_bytes": 800000,
+        "cpu_scene3d_scratch_bytes": 1048704,
+        "gpu_logical_total_bytes": 3529552,
+        "shaded_pixels": 262144
+      },
+      "change": {
+        "cpu_p50_percent": -83.7,
+        "gpu_p50_percent": -81.5,
+        "draws_percent": -100.0,
+        "upload_bytes_percent": -68.8
+      }
+    }
+  ],
+  "notes": [
+    "Parent bind counts are exact structural counts: the parent loop issued one pipeline, dynamic bind-group, vertex-buffer, index-buffer, and draw call per instance.",
+    "The 96-instance GPU p50 improved by 0.918 microseconds while p95/p99 varied by only 0.708/3.500 microseconds; that GPU row is treated as neutral rather than a material win.",
+    "The 1,000- and 10,000-instance GPU distributions improved at every recorded percentile."
+  ]
+}

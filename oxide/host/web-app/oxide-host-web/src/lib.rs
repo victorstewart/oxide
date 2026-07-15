@@ -1749,9 +1749,18 @@ mod wasm_host {
             &self,
             samples: u32,
             frames_per_sample: u32,
+            stress_instances: u32,
+            stress_mode: u32,
         ) -> Result<String, JsValue> {
             let sample_count = samples.clamp(1, 30);
             let frames = frames_per_sample.clamp(1, 120);
+            let stress_instances = if stress_instances == 0 {
+                WEBGPU_SCENE3D_STRESS_INSTANCES
+            } else {
+                stress_instances.clamp(1, 10_000) as usize
+            };
+            let stress_mode = WebGpuScene3dStressMode::from_u32(stress_mode)
+                .ok_or_else(|| JsValue::from_str("unknown WebGPU Scene3D stress mode"))?;
             let renderer = self.state.borrow().renderer.clone();
             let mut resources = {
                 let mut renderer = renderer.borrow_mut();
@@ -1759,9 +1768,15 @@ mod wasm_host {
             };
             let mut stress_resources = {
                 let mut renderer = renderer.borrow_mut();
-                WebGpuScene3dStressBenchResources::new(&mut renderer)?
+                WebGpuScene3dStressBenchResources::new(
+                    &mut renderer,
+                    stress_instances,
+                    stress_mode,
+                )?
             };
-            let mut stress_recreate = WebGpuScene3dStressRecreateResources::new();
+            let mut stress_recreate =
+                WebGpuScene3dStressRecreateResources::new(stress_instances, stress_mode);
+            renderer.borrow_mut().clear_completed_timestamp_samples();
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
             let mut reused = {
                 let mut renderer = renderer.borrow_mut();
@@ -1770,6 +1785,8 @@ mod wasm_host {
                 })?
             };
             reused.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            let reused_gpu = drain_scene3d_gpu_distribution(&mut renderer.borrow_mut());
+            renderer.borrow_mut().clear_completed_timestamp_samples();
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
             let mut recreate = {
                 let mut renderer = renderer.borrow_mut();
@@ -1778,6 +1795,8 @@ mod wasm_host {
                 })?
             };
             recreate.stats = settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            let recreate_gpu = drain_scene3d_gpu_distribution(&mut renderer.borrow_mut());
+            renderer.borrow_mut().clear_completed_timestamp_samples();
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
             let mut stress_reused = {
                 let mut renderer = renderer.borrow_mut();
@@ -1787,6 +1806,9 @@ mod wasm_host {
             };
             stress_reused.stats =
                 settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            let stress_reused_gpu =
+                drain_scene3d_gpu_distribution(&mut renderer.borrow_mut());
+            renderer.borrow_mut().clear_completed_timestamp_samples();
             let timestamp_after_frame = renderer.borrow().last_stats().frame_id;
             let mut stress_recreate_summary = {
                 let mut renderer = renderer.borrow_mut();
@@ -1796,6 +1818,8 @@ mod wasm_host {
             };
             stress_recreate_summary.stats =
                 settle_renderer_timestamps(&renderer, timestamp_after_frame).await?;
+            let stress_recreate_gpu =
+                drain_scene3d_gpu_distribution(&mut renderer.borrow_mut());
             let ratio = if reused.p50_ms > 0.0 { recreate.p50_ms / reused.p50_ms } else { 0.0 };
             let stress_ratio = if stress_reused.p50_ms > 0.0 {
                 stress_recreate_summary.p50_ms / stress_reused.p50_ms
@@ -1803,11 +1827,16 @@ mod wasm_host {
                 0.0
             };
             Ok(format!(
-                "samples={sample_count};frames_per_sample={frames}{}{}{}{};recreate_over_reused={ratio:.3};stress_recreate_over_reused={stress_ratio:.3};meshes=2;instances=2;stress_meshes=2;stress_instances={WEBGPU_SCENE3D_STRESS_INSTANCES}",
+                "samples={sample_count};frames_per_sample={frames}{}{}{}{}{}{}{}{};recreate_over_reused={ratio:.3};stress_recreate_over_reused={stress_ratio:.3};meshes=2;instances=2;stress_meshes=2;stress_instances={stress_instances};stress_mode={}",
                 sampled_case_metrics(&reused, "reused"),
+                scene3d_gpu_distribution_metrics(reused_gpu, "reused"),
                 sampled_case_metrics(&recreate, "recreate"),
+                scene3d_gpu_distribution_metrics(recreate_gpu, "recreate"),
                 sampled_case_metrics(&stress_reused, "stress_reused"),
+                scene3d_gpu_distribution_metrics(stress_reused_gpu, "stress_reused"),
                 sampled_case_metrics(&stress_recreate_summary, "stress_recreate"),
+                scene3d_gpu_distribution_metrics(stress_recreate_gpu, "stress_recreate"),
+                stress_mode.name(),
             ))
         }
 
@@ -3689,6 +3718,49 @@ mod wasm_host {
     }
 
     #[derive(Clone, Copy, Default)]
+    struct Scene3dGpuDistribution {
+        samples: usize,
+        p50_ns: f64,
+        p95_ns: f64,
+        p99_ns: f64,
+        peak_ns: f64,
+    }
+
+    fn drain_scene3d_gpu_distribution(
+        renderer: &mut BrowserRenderer,
+    ) -> Scene3dGpuDistribution {
+        let mut completed = Vec::new();
+        renderer.drain_completed_timestamp_samples_into(&mut completed);
+        let mut values = completed
+            .into_iter()
+            .map(|sample| sample.scene3d_ns.saturating_add(sample.scene3d_overlay_ns) as f64)
+            .filter(|value| *value > 0.0)
+            .collect::<Vec<_>>();
+        values.sort_by(f64::total_cmp);
+        Scene3dGpuDistribution {
+            samples: values.len(),
+            p50_ns: percentile(&values, 0.50),
+            p95_ns: percentile(&values, 0.95),
+            p99_ns: percentile(&values, 0.99),
+            peak_ns: values.last().copied().unwrap_or(0.0),
+        }
+    }
+
+    fn scene3d_gpu_distribution_metrics(
+        distribution: Scene3dGpuDistribution,
+        prefix: &str,
+    ) -> String {
+        format!(
+            ";{prefix}_gpu_samples={};{prefix}_gpu_p50_ns={:.0};{prefix}_gpu_p95_ns={:.0};{prefix}_gpu_p99_ns={:.0};{prefix}_gpu_peak_ns={:.0}",
+            distribution.samples,
+            distribution.p50_ns,
+            distribution.p95_ns,
+            distribution.p99_ns,
+            distribution.peak_ns,
+        )
+    }
+
+    #[derive(Clone, Copy, Default)]
     struct WebGpuAllocationSummary {
         alloc_count: u64,
         alloc_bytes: u64,
@@ -5208,38 +5280,96 @@ mod wasm_host {
         }
     }
 
+    #[derive(Clone, Copy)]
+    enum WebGpuScene3dStressMode {
+        Compatible,
+        Mixed,
+        Transparent,
+        Subviewport,
+    }
+
+    impl WebGpuScene3dStressMode {
+        fn from_u32(value: u32) -> Option<Self> {
+            match value {
+                0 => Some(Self::Compatible),
+                1 => Some(Self::Mixed),
+                2 => Some(Self::Transparent),
+                3 => Some(Self::Subviewport),
+                _ => None,
+            }
+        }
+
+        fn name(self) -> &'static str {
+            match self {
+                Self::Compatible => "compatible",
+                Self::Mixed => "mixed",
+                Self::Transparent => "transparent",
+                Self::Subviewport => "subviewport",
+            }
+        }
+
+        fn viewport(self) -> Option<gfx::RectF> {
+            matches!(self, Self::Subviewport)
+                .then(|| gfx::RectF::new(56.0, 40.0, 144.0, 168.0))
+        }
+    }
+
     struct WebGpuScene3dStressBenchResources {
         back: scene3d::MeshHandle3d,
         front: scene3d::MeshHandle3d,
         instances: Vec<scene3d::Instance3d>,
+        instance_count: usize,
+        mode: WebGpuScene3dStressMode,
     }
 
     impl WebGpuScene3dStressBenchResources {
-        fn new(renderer: &mut BrowserRenderer) -> Result<Self, JsValue> {
+        fn new(
+            renderer: &mut BrowserRenderer,
+            instance_count: usize,
+            mode: WebGpuScene3dStressMode,
+        ) -> Result<Self, JsValue> {
             renderer.resize(512, 512, 2.0).map_err(render_err)?;
             let back = webgpu_scene3d_create_back_mesh(renderer)?;
             let front = webgpu_scene3d_create_front_mesh(renderer)?;
-            let mut instances = Vec::with_capacity(WEBGPU_SCENE3D_STRESS_INSTANCES);
-            webgpu_scene3d_fill_stress_instances(&mut instances, back, front);
-            Ok(Self { back, front, instances })
+            let mut instances = Vec::with_capacity(instance_count);
+            webgpu_scene3d_fill_stress_instances(
+                &mut instances,
+                back,
+                front,
+                instance_count,
+                mode,
+            );
+            Ok(Self { back, front, instances, instance_count, mode })
         }
 
         fn frame(&mut self, renderer: &mut BrowserRenderer) -> Result<(), JsValue> {
             renderer.resize(512, 512, 2.0).map_err(render_err)?;
-            webgpu_scene3d_fill_stress_instances(&mut self.instances, self.back, self.front);
+            webgpu_scene3d_fill_stress_instances(
+                &mut self.instances,
+                self.back,
+                self.front,
+                self.instance_count,
+                self.mode,
+            );
             let token = renderer.begin_frame(&gfx::FrameTarget, None);
-            webgpu_scene3d_encode_instances(renderer, &self.instances)
+            webgpu_scene3d_encode_instances_in_viewport(
+                renderer,
+                &self.instances,
+                self.mode.viewport(),
+            )
                 .and_then(|_| renderer.submit(token).map_err(render_err))
         }
     }
 
     struct WebGpuScene3dStressRecreateResources {
         instances: Vec<scene3d::Instance3d>,
+        instance_count: usize,
+        mode: WebGpuScene3dStressMode,
     }
 
     impl WebGpuScene3dStressRecreateResources {
-        fn new() -> Self {
-            Self { instances: Vec::with_capacity(WEBGPU_SCENE3D_STRESS_INSTANCES) }
+        fn new(instance_count: usize, mode: WebGpuScene3dStressMode) -> Self {
+            Self { instances: Vec::with_capacity(instance_count), instance_count, mode }
         }
 
         fn frame(&mut self, renderer: &mut BrowserRenderer) -> Result<(), JsValue> {
@@ -5247,8 +5377,18 @@ mod wasm_host {
             let token = renderer.begin_frame(&gfx::FrameTarget, None);
             let back = webgpu_scene3d_create_back_mesh(renderer)?;
             let front = webgpu_scene3d_create_front_mesh(renderer)?;
-            webgpu_scene3d_fill_stress_instances(&mut self.instances, back, front);
-            let result = webgpu_scene3d_encode_instances(renderer, &self.instances)
+            webgpu_scene3d_fill_stress_instances(
+                &mut self.instances,
+                back,
+                front,
+                self.instance_count,
+                self.mode,
+            );
+            let result = webgpu_scene3d_encode_instances_in_viewport(
+                renderer,
+                &self.instances,
+                self.mode.viewport(),
+            )
                 .and_then(|_| renderer.submit(token).map_err(render_err));
             renderer.mesh3d_release(back);
             renderer.mesh3d_release(front);
@@ -6295,26 +6435,72 @@ mod wasm_host {
         out: &mut Vec<scene3d::Instance3d>,
         back: scene3d::MeshHandle3d,
         front: scene3d::MeshHandle3d,
+        instance_count: usize,
+        mode: WebGpuScene3dStressMode,
     ) {
         out.clear();
-        out.reserve(WEBGPU_SCENE3D_STRESS_INSTANCES);
-        let scale = scene3d::scale_xyz(0.105);
-        for index in 0..WEBGPU_SCENE3D_STRESS_INSTANCES {
-            let col = index % 12;
-            let row = index / 12;
-            let x = -0.88 + col as f32 * 0.16;
-            let y = -0.76 + row as f32 * 0.22;
+        out.reserve(instance_count);
+        let columns = (instance_count as f32).sqrt().ceil().max(1.0) as usize;
+        let rows = instance_count.saturating_add(columns - 1) / columns;
+        let step_x = 1.82 / columns as f32;
+        let step_y = 1.64 / rows.max(1) as f32;
+        let scale = scene3d::scale_xyz(step_x.min(step_y) * 0.72);
+        for index in 0..instance_count {
+            let col = index % columns;
+            let row = index / columns;
+            let x = -0.91 + (col as f32 + 0.5) * step_x;
+            let y = -0.82 + (row as f32 + 0.5) * step_y;
             let translate = scene3d::clip_space_translate(x, y);
             let transform = scene3d::mat4_mul(&translate, &scale);
-            let mesh = if (col + row) & 1 == 0 { back } else { front };
-            let tint = if (col + row) & 1 == 0 {
-                gfx::Color::rgba(0.70, 0.86, 1.0, 0.96)
+            let group = index.saturating_mul(12) / instance_count.max(1);
+            let use_front = match mode {
+                WebGpuScene3dStressMode::Compatible
+                | WebGpuScene3dStressMode::Subviewport => index >= instance_count / 2,
+                WebGpuScene3dStressMode::Mixed => group & 1 != 0,
+                WebGpuScene3dStressMode::Transparent => false,
+            };
+            let mesh = if use_front { front } else { back };
+            let alpha = if matches!(mode, WebGpuScene3dStressMode::Transparent) {
+                0.52
             } else {
-                gfx::Color::rgba(1.0, 0.82, 0.44, 0.96)
+                1.0
+            };
+            let tint = if use_front {
+                gfx::Color::rgba(1.0, 0.82, 0.44, alpha)
+            } else {
+                gfx::Color::rgba(0.70, 0.86, 1.0, alpha)
             };
             let mut instance = scene3d::Instance3d::new(mesh, transform, tint);
-            instance.cull = scene3d::CullMode3d::None;
-            instance.depth_write = row % 2 == 0;
+            match mode {
+                WebGpuScene3dStressMode::Compatible
+                | WebGpuScene3dStressMode::Subviewport => {
+                    instance.cull = scene3d::CullMode3d::None;
+                }
+                WebGpuScene3dStressMode::Transparent => {
+                    instance.cull = scene3d::CullMode3d::None;
+                    instance.depth_write = false;
+                }
+                WebGpuScene3dStressMode::Mixed => {
+                    instance.cull = match group % 3 {
+                        0 => scene3d::CullMode3d::None,
+                        1 => scene3d::CullMode3d::Front,
+                        _ => scene3d::CullMode3d::Back,
+                    };
+                    instance.depth_test = group & 2 == 0;
+                    instance.depth_write = group & 4 == 0;
+                    instance.blend = if group & 3 == 3 {
+                        scene3d::BlendMode3d::Additive
+                    } else {
+                        scene3d::BlendMode3d::Alpha
+                    };
+                    instance.material = match group % 3 {
+                        0 => scene3d::Material3d::Flat,
+                        1 => scene3d::Material3d::NeighborhoodFill,
+                        _ => scene3d::Material3d::Emissive,
+                    };
+                    instance.params = [group as f32, 0.25, 0.5, 1.0];
+                }
+            }
             out.push(instance);
         }
     }
@@ -6351,12 +6537,13 @@ mod wasm_host {
         }
     }
 
-    fn webgpu_scene3d_encode_instances(
+    fn webgpu_scene3d_encode_instances_in_viewport(
         renderer: &mut BrowserRenderer,
         instances: &[scene3d::Instance3d],
+        viewport: Option<gfx::RectF>,
     ) -> Result<(), JsValue> {
         let pass = scene3d::Pass3d {
-            viewport: None,
+            viewport,
             clear_color: Some(gfx::Color::rgba(0.022, 0.028, 0.045, 1.0)),
             clear_depth: true,
             view_proj: scene3d::identity_mat4(),
@@ -7930,7 +8117,7 @@ mod wasm_host {
         let key_prefix = if prefix.is_empty() { String::new() } else { format!("{prefix}_") };
         let _ = write!(
             out,
-            ";{key_prefix}draws={};{key_prefix}draw_items={};{key_prefix}draw_items_coalesced={};{key_prefix}draw_pipeline_binds={};{key_prefix}draw_bind_group_binds={};{key_prefix}draw_scissor_sets={};{key_prefix}solid_tris={};{key_prefix}rrect_instances={};{key_prefix}rrect_triangles={};{key_prefix}rrect_instance_bytes={};{key_prefix}image_instances={};{key_prefix}image_triangles={};{key_prefix}image_instance_bytes={};{key_prefix}image_draws={};{key_prefix}image_mesh_draws={};{key_prefix}nine_slice_draws={};{key_prefix}nine_slice_instances={};{key_prefix}nine_slice_triangles={};{key_prefix}nine_slice_instance_bytes={};{key_prefix}glyph_quads={};{key_prefix}sdf_glyph_quads={};{key_prefix}glyph_instances={};{key_prefix}glyph_triangles={};{key_prefix}glyph_instance_bytes={};{key_prefix}glyph_instance_buffer_binds={};{key_prefix}clip_depth_peak={};{key_prefix}damage_rects={};{key_prefix}layer_draws={};{key_prefix}layer_cache_hits={};{key_prefix}layer_cache_misses={};{key_prefix}layer_cache_skipped_draws={};{key_prefix}layer_passes={};{key_prefix}scene3d_draws={};{key_prefix}id_mask_draws={};{key_prefix}backdrop_draws={};{key_prefix}visual_effect_draws={};{key_prefix}effect_uniform_writes={};{key_prefix}effect_uniform_bytes={};{key_prefix}effect_uniform_slots={};{key_prefix}id_mask_uniform_writes={};{key_prefix}id_mask_uniform_bytes={};{key_prefix}id_mask_uniform_slots={};{key_prefix}spinner_draws={};{key_prefix}spinner_instances={};{key_prefix}spinner_triangles={};{key_prefix}spinner_instance_bytes={};{key_prefix}neon_marker_instances={};{key_prefix}neon_marker_triangles={};{key_prefix}neon_marker_instance_bytes={};{key_prefix}camera_bg_draws={};{key_prefix}render_passes={};{key_prefix}clear_passes={};{key_prefix}draw_passes={};{key_prefix}scene3d_passes={};{key_prefix}scene3d_overlay_passes={};{key_prefix}id_mask_raster_passes={};{key_prefix}id_mask_field_seed_passes={};{key_prefix}id_mask_field_jump_passes={};{key_prefix}id_mask_compositor_passes={};{key_prefix}present_passes={};{key_prefix}texture_copies={};{key_prefix}command_buffers={};{key_prefix}gpu_timestamp_query_supported={};{key_prefix}gpu_timestamp_frame_id={};{key_prefix}gpu_timestamp_passes={};{key_prefix}gpu_timestamp_total_ns={};{key_prefix}gpu_timestamp_backdrop_copy_ns={};{key_prefix}gpu_timestamp_clear_ns={};{key_prefix}gpu_timestamp_draw_ns={};{key_prefix}gpu_timestamp_scene3d_ns={};{key_prefix}gpu_timestamp_scene3d_overlay_ns={};{key_prefix}gpu_timestamp_id_mask_raster_ns={};{key_prefix}gpu_timestamp_id_mask_field_seed_ns={};{key_prefix}gpu_timestamp_id_mask_field_jump_ns={};{key_prefix}gpu_timestamp_id_mask_compositor_ns={};{key_prefix}gpu_timestamp_present_ns={};{key_prefix}gpu_timestamp_max_pass_ns={};{key_prefix}gpu_timestamp_readback_skips={};{key_prefix}gpu_timestamp_readback_interval={};{key_prefix}buffer_upload_bytes={};{key_prefix}texture_upload_bytes={};{key_prefix}buffer_grows={};{key_prefix}texture_creates={};{key_prefix}bind_group_creates={};{key_prefix}pipeline_creates={};{key_prefix}sampler_creates={};{key_prefix}mesh3d_creates={};{key_prefix}draw_buffer_grows={};{key_prefix}image_texture_creates={};{key_prefix}image_bind_group_creates={};{key_prefix}target_texture_creates={};{key_prefix}target_bind_group_creates={};{key_prefix}layer_texture_creates={};{key_prefix}layer_bind_group_creates={};{key_prefix}scene3d_buffer_grows={};{key_prefix}scene3d_bind_group_creates={};{key_prefix}effect_buffer_grows={};{key_prefix}effect_bind_group_creates={};{key_prefix}id_mask_texture_creates={};{key_prefix}id_mask_buffer_grows={};{key_prefix}id_mask_bind_group_creates={};{key_prefix}image_upload_temp_allocs={};{key_prefix}image_upload_temp_bytes={};{key_prefix}image_upload_scratch_bytes={};{key_prefix}image_upload_scratch_grows={};{key_prefix}cpu_scratch_bytes={};{key_prefix}cpu_scratch_grows={};{key_prefix}cpu_scratch_growth_bytes={};{key_prefix}cpu_draw_scratch_bytes={};{key_prefix}cpu_draw_scratch_grows={};{key_prefix}cpu_draw_scratch_growth_bytes={};{key_prefix}cpu_scene3d_scratch_bytes={};{key_prefix}cpu_scene3d_scratch_grows={};{key_prefix}cpu_scene3d_scratch_growth_bytes={};{key_prefix}cpu_effect_scratch_bytes={};{key_prefix}cpu_effect_scratch_grows={};{key_prefix}cpu_effect_scratch_growth_bytes={};{key_prefix}cpu_id_mask_scratch_bytes={};{key_prefix}cpu_id_mask_scratch_grows={};{key_prefix}cpu_id_mask_scratch_growth_bytes={};{key_prefix}cpu_image_upload_scratch_bytes={};{key_prefix}cpu_image_upload_scratch_grows={};{key_prefix}cpu_image_upload_scratch_growth_bytes={};{key_prefix}cpu_resource_table_scratch_bytes={};{key_prefix}cpu_resource_table_scratch_grows={};{key_prefix}cpu_resource_table_scratch_growth_bytes={}",
+            ";{key_prefix}draws={};{key_prefix}draw_items={};{key_prefix}draw_items_coalesced={};{key_prefix}draw_pipeline_binds={};{key_prefix}draw_bind_group_binds={};{key_prefix}draw_scissor_sets={};{key_prefix}solid_tris={};{key_prefix}rrect_instances={};{key_prefix}rrect_triangles={};{key_prefix}rrect_instance_bytes={};{key_prefix}image_instances={};{key_prefix}image_triangles={};{key_prefix}image_instance_bytes={};{key_prefix}image_draws={};{key_prefix}image_mesh_draws={};{key_prefix}nine_slice_draws={};{key_prefix}nine_slice_instances={};{key_prefix}nine_slice_triangles={};{key_prefix}nine_slice_instance_bytes={};{key_prefix}glyph_quads={};{key_prefix}sdf_glyph_quads={};{key_prefix}glyph_instances={};{key_prefix}glyph_triangles={};{key_prefix}glyph_instance_bytes={};{key_prefix}glyph_instance_buffer_binds={};{key_prefix}clip_depth_peak={};{key_prefix}damage_rects={};{key_prefix}layer_draws={};{key_prefix}layer_cache_hits={};{key_prefix}layer_cache_misses={};{key_prefix}layer_cache_skipped_draws={};{key_prefix}layer_passes={};{key_prefix}scene3d_draws={};{key_prefix}scene3d_instances={};{key_prefix}scene3d_instance_bytes={};{key_prefix}scene3d_pipeline_binds={};{key_prefix}scene3d_bind_group_binds={};{key_prefix}scene3d_mesh_buffer_binds={};{key_prefix}scene3d_viewport_sets={};{key_prefix}id_mask_draws={};{key_prefix}backdrop_draws={};{key_prefix}visual_effect_draws={};{key_prefix}effect_uniform_writes={};{key_prefix}effect_uniform_bytes={};{key_prefix}effect_uniform_slots={};{key_prefix}id_mask_uniform_writes={};{key_prefix}id_mask_uniform_bytes={};{key_prefix}id_mask_uniform_slots={};{key_prefix}spinner_draws={};{key_prefix}spinner_instances={};{key_prefix}spinner_triangles={};{key_prefix}spinner_instance_bytes={};{key_prefix}neon_marker_instances={};{key_prefix}neon_marker_triangles={};{key_prefix}neon_marker_instance_bytes={};{key_prefix}camera_bg_draws={};{key_prefix}render_passes={};{key_prefix}clear_passes={};{key_prefix}draw_passes={};{key_prefix}scene3d_passes={};{key_prefix}scene3d_overlay_passes={};{key_prefix}id_mask_raster_passes={};{key_prefix}id_mask_field_seed_passes={};{key_prefix}id_mask_field_jump_passes={};{key_prefix}id_mask_compositor_passes={};{key_prefix}present_passes={};{key_prefix}texture_copies={};{key_prefix}command_buffers={};{key_prefix}gpu_timestamp_query_supported={};{key_prefix}gpu_timestamp_frame_id={};{key_prefix}gpu_timestamp_passes={};{key_prefix}gpu_timestamp_total_ns={};{key_prefix}gpu_timestamp_backdrop_copy_ns={};{key_prefix}gpu_timestamp_clear_ns={};{key_prefix}gpu_timestamp_draw_ns={};{key_prefix}gpu_timestamp_scene3d_ns={};{key_prefix}gpu_timestamp_scene3d_overlay_ns={};{key_prefix}gpu_timestamp_id_mask_raster_ns={};{key_prefix}gpu_timestamp_id_mask_field_seed_ns={};{key_prefix}gpu_timestamp_id_mask_field_jump_ns={};{key_prefix}gpu_timestamp_id_mask_compositor_ns={};{key_prefix}gpu_timestamp_present_ns={};{key_prefix}gpu_timestamp_max_pass_ns={};{key_prefix}gpu_timestamp_readback_skips={};{key_prefix}gpu_timestamp_readback_interval={};{key_prefix}buffer_upload_bytes={};{key_prefix}texture_upload_bytes={};{key_prefix}buffer_grows={};{key_prefix}texture_creates={};{key_prefix}bind_group_creates={};{key_prefix}pipeline_creates={};{key_prefix}sampler_creates={};{key_prefix}mesh3d_creates={};{key_prefix}draw_buffer_grows={};{key_prefix}image_texture_creates={};{key_prefix}image_bind_group_creates={};{key_prefix}target_texture_creates={};{key_prefix}target_bind_group_creates={};{key_prefix}layer_texture_creates={};{key_prefix}layer_bind_group_creates={};{key_prefix}scene3d_buffer_grows={};{key_prefix}scene3d_bind_group_creates={};{key_prefix}effect_buffer_grows={};{key_prefix}effect_bind_group_creates={};{key_prefix}id_mask_texture_creates={};{key_prefix}id_mask_buffer_grows={};{key_prefix}id_mask_bind_group_creates={};{key_prefix}image_upload_temp_allocs={};{key_prefix}image_upload_temp_bytes={};{key_prefix}image_upload_scratch_bytes={};{key_prefix}image_upload_scratch_grows={};{key_prefix}cpu_scratch_bytes={};{key_prefix}cpu_scratch_grows={};{key_prefix}cpu_scratch_growth_bytes={};{key_prefix}cpu_draw_scratch_bytes={};{key_prefix}cpu_draw_scratch_grows={};{key_prefix}cpu_draw_scratch_growth_bytes={};{key_prefix}cpu_scene3d_scratch_bytes={};{key_prefix}cpu_scene3d_scratch_grows={};{key_prefix}cpu_scene3d_scratch_growth_bytes={};{key_prefix}cpu_effect_scratch_bytes={};{key_prefix}cpu_effect_scratch_grows={};{key_prefix}cpu_effect_scratch_growth_bytes={};{key_prefix}cpu_id_mask_scratch_bytes={};{key_prefix}cpu_id_mask_scratch_grows={};{key_prefix}cpu_id_mask_scratch_growth_bytes={};{key_prefix}cpu_image_upload_scratch_bytes={};{key_prefix}cpu_image_upload_scratch_grows={};{key_prefix}cpu_image_upload_scratch_growth_bytes={};{key_prefix}cpu_resource_table_scratch_bytes={};{key_prefix}cpu_resource_table_scratch_grows={};{key_prefix}cpu_resource_table_scratch_growth_bytes={}",
             stats.draws,
             stats.draw_items,
             stats.draw_items_coalesced,
@@ -7964,6 +8151,12 @@ mod wasm_host {
             stats.layer_cache_skipped_draws,
             stats.layer_passes,
             stats.scene3d_draws,
+            stats.scene3d_instances,
+            stats.scene3d_instance_bytes,
+            stats.scene3d_pipeline_binds,
+            stats.scene3d_bind_group_binds,
+            stats.scene3d_mesh_buffer_binds,
+            stats.scene3d_viewport_sets,
             stats.id_mask_draws,
             stats.backdrop_draws,
             stats.visual_effect_draws,

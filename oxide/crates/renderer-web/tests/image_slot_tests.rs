@@ -1,12 +1,12 @@
 #[path = "../src/wasm/image_slots.rs"]
 mod image_slots;
 
-use image_slots::ImageSlots;
+use image_slots::GenerationSlots;
 
 #[test]
 fn released_and_malformed_handles_never_resolve_after_slot_reuse()
 {
-   let mut slots = ImageSlots::new();
+   let mut slots = GenerationSlots::new();
    assert!(slots.get(0).is_none());
    assert!(slots.get(1).is_none());
    assert!(slots.get(1 << u16::BITS).is_none());
@@ -28,7 +28,7 @@ fn released_and_malformed_handles_never_resolve_after_slot_reuse()
 #[test]
 fn double_release_cannot_duplicate_a_free_slot()
 {
-   let mut slots = ImageSlots::new();
+   let mut slots = GenerationSlots::new();
    let released = slots.insert(1_u8).expect("released slot");
    assert_eq!(slots.remove(released), Some(1));
    assert!(slots.remove(released).is_none());
@@ -43,7 +43,7 @@ fn double_release_cannot_duplicate_a_free_slot()
 #[test]
 fn generation_exhaustion_retires_instead_of_wrapping_a_slot()
 {
-   let mut slots = ImageSlots::new();
+   let mut slots = GenerationSlots::new();
    let mut handle = slots.insert(0_u16).expect("initial slot");
    let original_slot = handle & u32::from(u16::MAX);
    for generation in 1..=u16::MAX
@@ -66,7 +66,7 @@ fn generation_exhaustion_retires_instead_of_wrapping_a_slot()
 #[test]
 fn live_capacity_is_hard_bounded_and_recoverable_after_release()
 {
-   let mut slots = ImageSlots::new();
+   let mut slots = GenerationSlots::new();
    let mut handles = Vec::with_capacity(u16::MAX as usize);
    for value in 0..u16::MAX
    {
@@ -87,7 +87,7 @@ fn live_capacity_is_hard_bounded_and_recoverable_after_release()
 #[test]
 fn repeated_churn_keeps_resource_table_capacity_at_warm_peak()
 {
-   let mut slots = ImageSlots::new();
+   let mut slots = GenerationSlots::new();
    let handle = slots.insert(1_u32).expect("warm slot");
    assert_eq!(slots.remove(handle), Some(1));
    let warm_capacity = slots.storage_capacity_bytes();
