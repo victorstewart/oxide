@@ -1,0 +1,845 @@
+{
+  "schema_version": 1,
+  "experiment_id": "c55-macos-pointer-wake-resident-memory-validation",
+  "workload": "workspace-cpu",
+  "metric": "peak resident bytes during 15 pointer wake events",
+  "acceptance_policy": "no-material-regression",
+  "seed": 55,
+  "bootstrap_resamples": 100000,
+  "identity": {
+    "baseline_sha": "8f1135fd5c69c16b0d5ae0957e6e383802aa4c4f",
+    "candidate_tree_sha": "d7917f254f0a79fead761d03fadc887913222880",
+    "instrumentation_sha256": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+    "baseline_binary_sha256": "2ae1472bbb0474a16e41139819f0b2b14ef59ec6dfe366e81b65e60dd5d0d64a",
+    "candidate_binary_sha256": "4e05bacccde41c9aa44bac50b8481cb0238157a359e1a70f3cd94b02b1c03ce9"
+  },
+  "baseline_sample_count": 15,
+  "candidate_sample_count": 15,
+  "baseline": {
+    "p50": 73925448.0,
+    "p95": 74734858.4,
+    "p99": 75083496.48,
+    "peak": 75170656.0,
+    "median_absolute_deviation": 229376.0,
+    "coefficient_of_variation": 0.0056878045723915025
+  },
+  "candidate": {
+    "p50": 75449184.0,
+    "p95": 78167296.8,
+    "p99": 78194835.36,
+    "peak": 78201720.0,
+    "median_absolute_deviation": 1261568.0,
+    "coefficient_of_variation": 0.020587081902343957
+  },
+  "decision": {
+    "accepted": false,
+    "median_speedup_pct": -2.038531464506382,
+    "confidence_interval_95_pct": [
+      -4.835075045787895,
+      -0.8472916486353048
+    ],
+    "pair_wins": 1,
+    "valid_pairs": 15,
+    "reasons": [
+      "candidate p95 regresses by more than 3%",
+      "candidate p99 regresses by more than 3%"
+    ]
+  },
+  "pairs": [
+    {
+      "index": 0,
+      "order": "ba",
+      "warmup_samples_a": [
+        224.0
+      ],
+      "warmup_samples_b": [
+        28.0
+      ],
+      "samples_a": [
+        74335048.0
+      ],
+      "samples_b": [
+        75252552.0
+      ],
+      "invalid_reason": null,
+      "environment_a": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "environment_b": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "artifact_hashes_a": {
+        "binary": "2ae1472bbb0474a16e41139819f0b2b14ef59ec6dfe366e81b65e60dd5d0d64a",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "114bb656b4e95441e96bf49b97287208705eae21974b566f7e74f92d34f6a765"
+      },
+      "artifact_hashes_b": {
+        "binary": "4e05bacccde41c9aa44bac50b8481cb0238157a359e1a70f3cd94b02b1c03ce9",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "5305647c716e086eed3e9d5d6f283c0bf844cc376f3b8a1e9b0b54010d3a7e35"
+      }
+    },
+    {
+      "index": 1,
+      "order": "ab",
+      "warmup_samples_a": [
+        208.0
+      ],
+      "warmup_samples_b": [
+        27.0
+      ],
+      "samples_a": [
+        75170656.0
+      ],
+      "samples_b": [
+        76301128.0
+      ],
+      "invalid_reason": null,
+      "environment_a": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "environment_b": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "artifact_hashes_a": {
+        "binary": "2ae1472bbb0474a16e41139819f0b2b14ef59ec6dfe366e81b65e60dd5d0d64a",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "5468aea4f0535d12ca7daacd64b736ed0c0881c109d544eb25080ab7b5226c6b"
+      },
+      "artifact_hashes_b": {
+        "binary": "4e05bacccde41c9aa44bac50b8481cb0238157a359e1a70f3cd94b02b1c03ce9",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "b2c6c531efa2cc2080ed8fb3f0512c344143d1d77a1f500a75edf172422f0e79"
+      }
+    },
+    {
+      "index": 2,
+      "order": "ab",
+      "warmup_samples_a": [
+        224.0
+      ],
+      "warmup_samples_b": [
+        28.0
+      ],
+      "samples_a": [
+        73646920.0
+      ],
+      "samples_b": [
+        77890376.0
+      ],
+      "invalid_reason": null,
+      "environment_a": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "environment_b": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "artifact_hashes_a": {
+        "binary": "2ae1472bbb0474a16e41139819f0b2b14ef59ec6dfe366e81b65e60dd5d0d64a",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "89baf2516fa2ec2bbd39b4fcd16ca7573ecafdbe667a637cd9b49a22e2c0370f"
+      },
+      "artifact_hashes_b": {
+        "binary": "4e05bacccde41c9aa44bac50b8481cb0238157a359e1a70f3cd94b02b1c03ce9",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "eacbd100dab50ad267026eebd42a27de9ddce1f2040b9a7d54b07d7c2c83273d"
+      }
+    },
+    {
+      "index": 3,
+      "order": "ba",
+      "warmup_samples_a": [
+        225.0
+      ],
+      "warmup_samples_b": [
+        24.0
+      ],
+      "samples_a": [
+        73925448.0
+      ],
+      "samples_b": [
+        78201720.0
+      ],
+      "invalid_reason": null,
+      "environment_a": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "environment_b": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "artifact_hashes_a": {
+        "binary": "2ae1472bbb0474a16e41139819f0b2b14ef59ec6dfe366e81b65e60dd5d0d64a",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "774259876091bd3b1aaa03fce805804a7c744aca59abbc6963485b24dab72e81"
+      },
+      "artifact_hashes_b": {
+        "binary": "4e05bacccde41c9aa44bac50b8481cb0238157a359e1a70f3cd94b02b1c03ce9",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "5b6244b7454c9b95dcf5913b3deda81b0828e55f501aad680b6dd9fc22be9af0"
+      }
+    },
+    {
+      "index": 4,
+      "order": "ab",
+      "warmup_samples_a": [
+        224.0
+      ],
+      "warmup_samples_b": [
+        28.0
+      ],
+      "samples_a": [
+        73925448.0
+      ],
+      "samples_b": [
+        75072328.0
+      ],
+      "invalid_reason": null,
+      "environment_a": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "environment_b": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "artifact_hashes_a": {
+        "binary": "2ae1472bbb0474a16e41139819f0b2b14ef59ec6dfe366e81b65e60dd5d0d64a",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "a06aafc3c2f4dcb4ffcfd124758f8bed50f3abe1c2b1c3ff164d8dc13a609571"
+      },
+      "artifact_hashes_b": {
+        "binary": "4e05bacccde41c9aa44bac50b8481cb0238157a359e1a70f3cd94b02b1c03ce9",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "db4a6b205d26575f1e85dc6d3c85be0b03f6ea04886b40184281819928ae6b06"
+      }
+    },
+    {
+      "index": 5,
+      "order": "ba",
+      "warmup_samples_a": [
+        225.0
+      ],
+      "warmup_samples_b": [
+        27.0
+      ],
+      "samples_a": [
+        73696072.0
+      ],
+      "samples_b": [
+        75383648.0
+      ],
+      "invalid_reason": null,
+      "environment_a": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "environment_b": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "artifact_hashes_a": {
+        "binary": "2ae1472bbb0474a16e41139819f0b2b14ef59ec6dfe366e81b65e60dd5d0d64a",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "e4e8d0d5bd03bcf8bdc50c007aa6690a0d7d1503f60028a42500985489dba2a1"
+      },
+      "artifact_hashes_b": {
+        "binary": "4e05bacccde41c9aa44bac50b8481cb0238157a359e1a70f3cd94b02b1c03ce9",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "7603ed391d1542e820600f6dc4c48fda232eefb2a82c22d3c4550528c28666c9"
+      }
+    },
+    {
+      "index": 6,
+      "order": "ba",
+      "warmup_samples_a": [
+        226.0
+      ],
+      "warmup_samples_b": [
+        28.0
+      ],
+      "samples_a": [
+        74548088.0
+      ],
+      "samples_b": [
+        78152544.0
+      ],
+      "invalid_reason": null,
+      "environment_a": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "environment_b": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "artifact_hashes_a": {
+        "binary": "2ae1472bbb0474a16e41139819f0b2b14ef59ec6dfe366e81b65e60dd5d0d64a",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "dfb645c6140ebf1a2832e71146834ff38a1c0870eb2b377a4ef181858b338d86"
+      },
+      "artifact_hashes_b": {
+        "binary": "4e05bacccde41c9aa44bac50b8481cb0238157a359e1a70f3cd94b02b1c03ce9",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "8c4f293350b4ad4edfbf9cc8f0aac97ff628d60c9070000ffde885ae65db7d1e"
+      }
+    },
+    {
+      "index": 7,
+      "order": "ab",
+      "warmup_samples_a": [
+        224.0
+      ],
+      "warmup_samples_b": [
+        28.0
+      ],
+      "samples_a": [
+        73483080.0
+      ],
+      "samples_b": [
+        74105696.0
+      ],
+      "invalid_reason": null,
+      "environment_a": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "environment_b": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "artifact_hashes_a": {
+        "binary": "2ae1472bbb0474a16e41139819f0b2b14ef59ec6dfe366e81b65e60dd5d0d64a",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "21533782cc30d24a57fd344389582bbfa0712b9a4476aa38917ad77ab538d137"
+      },
+      "artifact_hashes_b": {
+        "binary": "4e05bacccde41c9aa44bac50b8481cb0238157a359e1a70f3cd94b02b1c03ce9",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "954634ca4ac106f6be56575572140def097bbc965a04c981b79c7c0f6850b6db"
+      }
+    },
+    {
+      "index": 8,
+      "order": "ba",
+      "warmup_samples_a": [
+        222.0
+      ],
+      "warmup_samples_b": [
+        27.0
+      ],
+      "samples_a": [
+        73646920.0
+      ],
+      "samples_b": [
+        73745248.0
+      ],
+      "invalid_reason": null,
+      "environment_a": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "environment_b": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "artifact_hashes_a": {
+        "binary": "2ae1472bbb0474a16e41139819f0b2b14ef59ec6dfe366e81b65e60dd5d0d64a",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "bd6e85e723882fc2bdc89a4c66833d9bde2f075c936f44d54d15d5e197399f21"
+      },
+      "artifact_hashes_b": {
+        "binary": "4e05bacccde41c9aa44bac50b8481cb0238157a359e1a70f3cd94b02b1c03ce9",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "86ab36d73a2e149d087f904534bb43e359b9d25a33c49af9a285eae4ad6afd1f"
+      }
+    },
+    {
+      "index": 9,
+      "order": "ab",
+      "warmup_samples_a": [
+        224.0
+      ],
+      "warmup_samples_b": [
+        28.0
+      ],
+      "samples_a": [
+        73941856.0
+      ],
+      "samples_b": [
+        75449184.0
+      ],
+      "invalid_reason": null,
+      "environment_a": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "environment_b": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "artifact_hashes_a": {
+        "binary": "2ae1472bbb0474a16e41139819f0b2b14ef59ec6dfe366e81b65e60dd5d0d64a",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "0eeb010b2ae5a81ae597c885395f3807e4ea82d38a6c58809a2024de1cf88c2b"
+      },
+      "artifact_hashes_b": {
+        "binary": "4e05bacccde41c9aa44bac50b8481cb0238157a359e1a70f3cd94b02b1c03ce9",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "ba9962d2ef80a1d17c0da49286c785d75c16701b2bb7da4918436a5464557eaf"
+      }
+    },
+    {
+      "index": 10,
+      "order": "ab",
+      "warmup_samples_a": [
+        225.0
+      ],
+      "warmup_samples_b": [
+        28.0
+      ],
+      "samples_a": [
+        73728840.0
+      ],
+      "samples_b": [
+        73466696.0
+      ],
+      "invalid_reason": null,
+      "environment_a": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "environment_b": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "artifact_hashes_a": {
+        "binary": "2ae1472bbb0474a16e41139819f0b2b14ef59ec6dfe366e81b65e60dd5d0d64a",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "66208fd32206e1d7bb537c9ccf11ece5df0e2204028907b3ced5dbc559c16cfb"
+      },
+      "artifact_hashes_b": {
+        "binary": "4e05bacccde41c9aa44bac50b8481cb0238157a359e1a70f3cd94b02b1c03ce9",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "824f218321c8a264c9c71454247a51d6d4fda32f42f9e676663e7abbfb97d971"
+      }
+    },
+    {
+      "index": 11,
+      "order": "ba",
+      "warmup_samples_a": [
+        226.0
+      ],
+      "warmup_samples_b": [
+        25.0
+      ],
+      "samples_a": [
+        73990984.0
+      ],
+      "samples_b": [
+        76497760.0
+      ],
+      "invalid_reason": null,
+      "environment_a": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "environment_b": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "artifact_hashes_a": {
+        "binary": "2ae1472bbb0474a16e41139819f0b2b14ef59ec6dfe366e81b65e60dd5d0d64a",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "59321bd6f6838490863575d134bb20950eec7835bf888c15dad287cb611086a4"
+      },
+      "artifact_hashes_b": {
+        "binary": "4e05bacccde41c9aa44bac50b8481cb0238157a359e1a70f3cd94b02b1c03ce9",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "e25270205d818afd609d67348b27d67f84993eae89b9becf1e7ef8425ec1ffd2"
+      }
+    },
+    {
+      "index": 12,
+      "order": "ab",
+      "warmup_samples_a": [
+        225.0
+      ],
+      "warmup_samples_b": [
+        26.0
+      ],
+      "samples_a": [
+        73827144.0
+      ],
+      "samples_b": [
+        75645768.0
+      ],
+      "invalid_reason": null,
+      "environment_a": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "environment_b": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "artifact_hashes_a": {
+        "binary": "2ae1472bbb0474a16e41139819f0b2b14ef59ec6dfe366e81b65e60dd5d0d64a",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "b8d0c03601b75d00160466bbd43e164a19e448bff2b9ff0e80dc8770a5af2aa5"
+      },
+      "artifact_hashes_b": {
+        "binary": "4e05bacccde41c9aa44bac50b8481cb0238157a359e1a70f3cd94b02b1c03ce9",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "fd6ef8c4266f99e4f782750cc030ed8a216d3d1af3597275c198ad187a997d9d"
+      }
+    },
+    {
+      "index": 13,
+      "order": "ba",
+      "warmup_samples_a": [
+        225.0
+      ],
+      "warmup_samples_b": [
+        27.0
+      ],
+      "samples_a": [
+        74023776.0
+      ],
+      "samples_b": [
+        77759304.0
+      ],
+      "invalid_reason": null,
+      "environment_a": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "environment_b": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "artifact_hashes_a": {
+        "binary": "2ae1472bbb0474a16e41139819f0b2b14ef59ec6dfe366e81b65e60dd5d0d64a",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "43645b7fe54113901f9de9be430a6cebfed29bf9b6d4ee2c6d8c0111742c8d1d"
+      },
+      "artifact_hashes_b": {
+        "binary": "4e05bacccde41c9aa44bac50b8481cb0238157a359e1a70f3cd94b02b1c03ce9",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "f895fba2a95afcf9742e1360660f20f5cdc1a261ead535d3773a9cd4bd926731"
+      }
+    },
+    {
+      "index": 14,
+      "order": "ba",
+      "warmup_samples_a": [
+        223.0
+      ],
+      "warmup_samples_b": [
+        28.0
+      ],
+      "samples_a": [
+        73597768.0
+      ],
+      "samples_b": [
+        74187616.0
+      ],
+      "invalid_reason": null,
+      "environment_a": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "environment_b": {
+        "hardware": "Mac14,6 Apple M2 Max 38-core GPU 96 GB",
+        "os": "macOS 26.5.2 build 25F84",
+        "toolchain": "Xcode 26.6 build 17F113; rustc/cargo 1.89.0",
+        "browser_or_device": "built-in 3456x2234 ProMotion display; signed AppKit host",
+        "viewport": "800x600 points",
+        "scale": "2",
+        "refresh_mode": "native adaptive refresh; observed approximately 120 Hz",
+        "cache_state": "fresh process; static TextLayout scene; 15 independent pointer wake events after settlement",
+        "build_flags": "cargo build --release --locked -j12 -p oxide-macos-app --features host-testing; ad-hoc signed .app",
+        "instrumentation_enabled": true,
+        "production_path": false
+      },
+      "artifact_hashes_a": {
+        "binary": "2ae1472bbb0474a16e41139819f0b2b14ef59ec6dfe366e81b65e60dd5d0d64a",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "81938d50edc44b15aa7439ff6aa77af197abab58964ce55882f4aacf777ca904"
+      },
+      "artifact_hashes_b": {
+        "binary": "4e05bacccde41c9aa44bac50b8481cb0238157a359e1a70f3cd94b02b1c03ce9",
+        "instrumentation": "87f519788eb979a9aec713341e2240c4e12ed65714061101dda9b0e6f71bfe28",
+        "result": "f305c4eaa0a9a5ca5212a62af86a19929979e2283f1949055230efba58eece10"
+      }
+    }
+  ]
+}

@@ -2,7 +2,8 @@
 mod harness {
     use oxide_host_macos::{
         host_harness_reset, host_harness_snapshot, macos_app_frame, macos_app_frame_with_drawable,
-        macos_app_init, macos_emit_key, macos_emit_pinch, macos_emit_pointer, macos_emit_rotate,
+        macos_app_init, macos_app_request_redraw, macos_app_should_render,
+        macos_app_wake_generation, macos_emit_key, macos_emit_pinch, macos_emit_pointer, macos_emit_rotate,
         macos_emit_text_commit, macos_emit_text_composition, macos_emit_text_selection,
         macos_emit_touch, macos_set_key_callback, macos_set_pinch_callback,
         macos_set_pointer_callback, macos_set_rotate_callback, macos_set_text_commit_callback,
@@ -234,9 +235,13 @@ mod harness {
             "telemetry lifecycle should be foreground after init"
         );
 
+        let mut saw_draw_work = false;
         for _ in 0..5 {
             let frame = macos_app_frame(W, H, SCALE);
             assert_eq!(frame, 0, "macos_app_frame should succeed");
+            let snapshot = host_harness_snapshot();
+            saw_draw_work |= snapshot.draws.unwrap_or_default() > 0 ||
+                snapshot.instanced.unwrap_or_default() > 0;
         }
         assert_eq!(
             macos_app_frame_with_drawable(W, H, SCALE, core::ptr::null_mut()),
@@ -246,14 +251,7 @@ mod harness {
 
         let after = host_harness_snapshot();
         assert!(after.inited, "app should remain initialised");
-        let draws = after.draws.unwrap_or_default();
-        let instanced = after.instanced.unwrap_or_default();
-        assert!(
-            draws > 0 || instanced > 0,
-            "renderer should record draw commands; draws={} instanced={}",
-            draws,
-            instanced
-        );
+        assert!(saw_draw_work, "renderer should record draw commands during the frame sequence");
         assert!(after.last_ms >= baseline.last_ms, "frame clock should advance");
         assert_eq!(
             after.telemetry_lifecycle,
@@ -266,6 +264,60 @@ mod harness {
             oxide_platform_api::current_platform_if_registered().is_none(),
             "reset should clear the process-global platform after the smoke test"
         );
+    }
+
+    #[test]
+    fn demand_driven_scheduler_reaches_idle_and_exercises_the_wake_matrix() {
+        let _guard = test_lock();
+        host_harness_reset();
+        assert_eq!(macos_app_init(800, 600, 2.0), 0);
+        macos_emit_key(0, b"2".as_ptr(), 1, 0, 0, 0);
+        for _ in 0..3 {
+            assert_eq!(macos_app_frame(800, 600, 2.0), 0);
+        }
+        assert_eq!(macos_app_should_render(), 0, "settled static host should become idle");
+
+        let before = macos_app_wake_generation();
+        for _ in 0..256 {
+            macos_app_request_redraw();
+        }
+        assert!(
+            macos_app_wake_generation().wrapping_sub(before) >= 256,
+            "coalescing must not lose wake generations"
+        );
+        assert_eq!(macos_app_should_render(), 1, "explicit redraw must wake the host");
+        assert_eq!(macos_app_frame(800, 600, 2.0), 0);
+
+        macos_emit_pointer(400.0, 300.0, 1.0, 0.0, 0, 0, 1);
+        assert_eq!(macos_app_should_render(), 1, "raw input must wake the host");
+        for _ in 0..2 {
+            assert_eq!(macos_app_frame(800, 600, 2.0), 0);
+        }
+
+        let (published, received) = mpsc::channel();
+        let publisher = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(2));
+            macos_app_request_redraw();
+            published.send(()).expect("publish delayed async redraw");
+        });
+        received.recv_timeout(Duration::from_secs(1)).expect("receive delayed async redraw");
+        publisher.join().expect("join delayed async publisher");
+        assert_eq!(macos_app_should_render(), 1, "delayed async work must wake the host");
+        for _ in 0..2 {
+            assert_eq!(macos_app_frame(820, 620, 2.0), 0);
+        }
+
+        macos_emit_key(0, b"4".as_ptr(), 1, 0, 0, 2);
+        assert_eq!(macos_app_should_render(), 1, "animation start must wake the host");
+        assert_eq!(macos_app_frame(820, 620, 2.0), 0);
+        assert_eq!(macos_app_should_render(), 1, "active animation must retain frame demand");
+
+        macos_emit_key(0, b"2".as_ptr(), 1, 0, 0, 3);
+        for _ in 0..3 {
+            assert_eq!(macos_app_frame(800, 600, 2.0), 0);
+        }
+        assert_eq!(macos_app_should_render(), 0, "static scene must settle after the wake matrix");
+        host_harness_reset();
     }
 
     #[test]

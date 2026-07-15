@@ -1,4 +1,67 @@
 [[experiments]]
+id = "c55-macos-demand-display-link"
+introduced_commit = "C55 staged tree recorded in commit proof"
+introduced_date = "2026-07-15"
+expires = "2027-07-15"
+required_backends = ["oxide-host-macos", "oxide-renderer-metal", "oxide-perf-runner", "oxide-xtask"]
+required_devices = ["Mac14,6 Apple M2 Max, built-in ProMotion display, macOS 26.5.2"]
+correctness_gate = "Static foreground idle must stop modern/legacy display activity only after damage and settlement are clean; explicit, raw-input, delayed async/timer, animation, resize, lifecycle, memory, and rapid publications must retain generation-acknowledged work; focused host/xtask tests and the signed foreground app must complete with zero missed wakeups."
+performance_gate = "Fifteen fixed-seed fresh-process pairs must remove at least 10% of settled-idle display callbacks, improve idle CPU by at least 5% with confidence, and pass wake-latency, wake-CPU, resident-memory, submission, and missed-wakeup gates across at least 200 independent events per side."
+decision_state = "accepted"
+decision = "Paused macOS display links after clean settlement and used a persistent allocation-free main-run-loop source for immediate first-response frames plus a refresh-delayed reusable settlement timer."
+proof = [
+   "Fifteen 525 ms idle pairs reduced callbacks from parent p50/p95/p99/peak 63/63/63/63 to exact zero, a 100.000% paired reduction with 95% CI 100.000%..100.000% and 15/15 wins.",
+   "Idle process CPU fell from p50/p95/p99/peak 5981/7383/8178/8377 us to 367/595/625/633 us; paired median reduction was 93.101% with 95% CI 92.696%..94.096% and 15/15 wins.",
+   "The strengthened 64-event population retained 960 pointer-to-successful-Metal-submission samples per side and improved p50/p95/p99/peak from 3.595/4.986/5.444/9.308 ms to 0.436/0.672/0.981/9.057 ms; paired median reduction was 86.509% with 95% CI 83.916%..90.287% and 15/15 wins.",
+   "Wake CPU passed no-material-regression with improved p95/p99/peak, idle and wake resident-memory reports passed, both sides submitted exactly 127 frames per 64-event launch, and all rows reported zero missed wakeups.",
+   "Fresh 1600x1264 parent/candidate foreground-window captures were byte-identical with zero differing pixels, max channel error 0, MSE 0, and matching SHA-256 031b5c4036d05b2c7ea8e9246bdc389bc5fbfcdcdeebe4e01ce612c7779f1d40.",
+   "The headless matrix covered static settlement, 256 rapid generations, raw input, delayed background publication, resize-sized rendering, and continuing animation demand; focused host/xtask tests and both release build modes passed without deprecation warnings.",
+]
+cleanup = [
+   "Removed idle polling and the redundant modern pre-render Rust lock while retaining the legacy off-main precheck, lifecycle teardown, poison-recovering FFI locks, prepared-damage retry, and successful-submission generation acknowledgment.",
+   "Kept benchmark counters and native-input quarantine behind host-testing; production wake and settlement reuse process-lifetime run-loop objects with no per-wake allocation.",
+]
+
+[[experiments]]
+id = "c55-unpause-only-wake-rejected"
+introduced_commit = "rejected during C55 wake-tail review"
+introduced_date = "2026-07-15"
+expires = "2027-07-15"
+required_backends = ["oxide-host-macos", "oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["Mac14,6 Apple M2 Max, built-in ProMotion display, macOS 26.5.2"]
+correctness_gate = "A suspended generation must wake the signed foreground app, submit every requested event response, and report zero missed wakeups before latency is considered."
+performance_gate = "First-event wake p95/p99/peak and workload CPU tails must pass the shared no-material-regression thresholds while idle callbacks remain zero."
+decision_state = "rejected"
+decision = "Rejected merely unpausing CADisplayLink because the first post-idle event sometimes waited almost one additional display period."
+proof = [
+   "The design removed idle callbacks, but pointer wake candidate p99/peak regressed from 5.510/5.674 ms to 7.939/9.460 ms; paired median change was -0.628% with 95% CI -2.055%..0.568% and only 6/15 wins.",
+   "Wake CPU also failed p99 and peak: candidate 56,892/58,032 us versus parent 53,711/53,960 us.",
+   "The winning replacement dispatches the first suspended frame from a persistent main-run-loop source and measured 0.981 ms p99 in the strengthened final population.",
+]
+cleanup = [
+   "Removed the unpause-only wake path and retained its paired reports as rejected evidence.",
+]
+
+[[experiments]]
+id = "c55-overlapping-settlement-rejected"
+introduced_commit = "rejected during C55 resident-memory review"
+introduced_date = "2026-07-15"
+expires = "2027-07-15"
+required_backends = ["oxide-host-macos", "oxide-renderer-metal", "oxide-perf-runner"]
+required_devices = ["Mac14,6 Apple M2 Max, built-in ProMotion display, macOS 26.5.2"]
+correctness_gate = "Immediate first-response rendering must preserve the two-frame settlement contract, drawable retry, successful-submission acknowledgment, and zero missed wakeups."
+performance_gate = "The first-response latency win must not expand p95/p99 resident footprint beyond the shared no-material-regression thresholds."
+decision_state = "rejected"
+decision = "Rejected immediately resuming CADisplayLink after the first wake frame because a near-simultaneous settlement frame expanded drawable-backed resident memory."
+proof = [
+   "The short wake population's resident p50 rose from 73,925,448 to 75,449,184 bytes and p95 from 74,734,858 to 78,167,297 bytes, failing p95 and p99 gates.",
+   "The retained reusable timer defers only settlement by one target refresh period; the final 64-event report passed with parent/candidate resident p50 73,827,144/73,876,296 bytes and p95 74,122,063/74,241,659 bytes.",
+]
+cleanup = [
+   "Removed per-wake dispatch blocks and immediate settlement overlap; one persistent run-loop source and timer now own coalescing and pacing.",
+]
+
+[[experiments]]
 id = "c54-ios-demand-display-link"
 introduced_commit = "C54 staged tree recorded in commit proof"
 introduced_date = "2026-07-15"

@@ -17,6 +17,8 @@
   Initializes renderer, test-scene router, telemetry, callbacks, and process-global platform state.
 - `macos_app_frame(...)` and `macos_app_frame_with_drawable(...)`
   Drive frame rendering for headless and drawable-backed paths.
+- `macos_app_should_render() -> u8`, `macos_app_wake_generation() -> u64`, and `macos_app_request_redraw()`
+  Publish and query the explicit needs-frame contract shared with the AppKit display-link owner.
 - `host_harness_reset()` and `host_harness_snapshot()`
   Test-only state reset and inspection helpers.
 - `oxide_platform_api::current_platform_if_registered().secure_storage()`
@@ -30,6 +32,8 @@
 
 ## Logic narrative
 - Initialization creates a stable boxed Metal renderer and router, then registers raw input callbacks.
+- Every host-owned dirty source advances one lock-free wake generation. Frame preparation captures that generation, and only a successful submission acknowledges it, so a wake racing with an in-flight frame remains pending.
+- Once frame dirtiness, settlement, router animation demand, and the wake generation are all clean, `macos_app_should_render` lets AppKit stop its display link without polling this app-state mutex while idle.
 - Touch callbacks decode raw phases through `oxide-input`, feed raw touch events into the router, and synthesize primary pointer/double-tap events from the shared tracker.
 - Host lifecycle and callback registries use poison-recovering mutex locks because these entry points are called from native AppKit/FFI boundaries where a panic would be harder to contain than recovering the last known state.
 - Input, text, pinch, and rotate emitters copy the registered function pointer while holding the callback mutex, then invoke the function pointer after the lock is released by value-copying the `extern "C" fn` option.
@@ -62,6 +66,7 @@
 
 ## Concurrency and memory behavior
 - App state is guarded by one process-global mutex and recovered on poison at every host entry point.
+- Wake publication is an allocation-free atomic increment followed by the native coalescing bridge; it never needs to acquire the app-state mutex solely to resume the display link.
 - The visible Metal renderer owns three completion-protected frame slots; it skips/coalesces when all remain in flight rather than waiting or reusing a busy slot.
 - Callback slots are `OnceLock<Mutex<Option<extern "C" fn(...)>>>` values; emitters copy function pointers out of the lock before dispatch.
 - Callback tests serialize access to global callback slots so parallel test execution cannot race the smoke harness.
@@ -72,8 +77,10 @@
 - `tests/headless_harness.rs` verifies host initialization, frame routing, platform installation, live Keychain secure-storage round-trip/delete, native loopback HTTP GET, installed-platform TCP/UDP loopback networking, installed-platform TCP keepalive, installed-platform unsupported transport rejection, and callback fanout for touch, pointer, key, text, pinch, and rotate paths.
 - `tests/web_view_harness.rs` verifies installed-platform basic services, permission-status snapshots, network-status snapshots/subscription callbacks, no-prompt location/motion/camera/push/media-library behavior, opt-in live location updates on pre-authorized Location Services, opt-in live camera frame/photo/recording behavior on pre-authorized hardware, opt-in live media image/video extraction on pre-authorized Photos libraries, and WebView lifecycle/script behavior through live hidden `WKWebView` instances.
 - `tests/metal_drawable_lifetime_tests.rs` statically verifies late drawable acquisition, timeout-capable `nextDrawable`, cancellation, and pending-damage retention after skipped prepared frames.
+- `tests/display_scheduling_tests.rs` and the headless demand test verify generation retention, host-owned wake sources, idle settlement, and the native pause/resume contract.
 
 ## Changelog
+- 2026-07-15: added generation-acknowledged demand scheduling so settled macOS scenes stop display callbacks and Rust app-state polling until a dirty source wakes them.
 - 2026-07-13: selected the three-slot visible Metal frame-resource mode while leaving eight-slot depth explicit for offscreen/perf construction.
 - 2026-06-01: retained prepared-frame damage across macOS drawable timeout or submit failure so dirty regions retry after pressure.
 - 2026-05-19: moved the macOS secure-storage host ABI to the shared Apple native Keychain bridge.

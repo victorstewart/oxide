@@ -9,7 +9,9 @@
 
 ## Entry points list
 - `macos_host_start()`
-  Starts the AppKit application shell.
+  Retains the delegate, completes the nib-less AppKit launch, constructs the host idempotently, and starts the application shell.
+- `macos_host_request_display_link_wake(generation)` and `macos_request_redraw()`
+  Signal one persistent main-run-loop source for every generation publication, render the first suspended wake immediately, and route explicit platform redraws through Rust's needs-frame contract.
 - `macos_open_system_settings()` and `macos_open_external_url(...)`
   Bridge platform URL actions into `NSWorkspace`.
 - `macos_clipboard_get(...)`, `macos_clipboard_set(...)`, and `macos_free(...)`
@@ -52,7 +54,12 @@
 - WebView create returns busy for duplicate view IDs, script execution returns not-found for missing handles, and script-result copy allocation failures return I/O so Rust does not confuse them with JavaScript `undefined`.
 - Permissions map Oxide domains onto macOS frameworks: UserNotifications, CoreLocation, AVFoundation, Contacts, CoreBluetooth, and Photos. Requests emit callback snapshots through the shared Apple permission raw-code ABI.
 - Haptics use `NSHapticFeedbackManager` on the main queue instead of silently dropping feedback requests.
+- The nib-less Rust runner explicitly calls the idempotent host launch method because it does not enter through `NSApplicationMain`; ordinary AppKit launch notification delivery reaches the same method.
+- `MetalView` supplies a real `CAMetalLayer` through AppKit's `makeBackingLayer` override. Display-link ticks call one shared render method directly instead of depending on deferred `drawRect:` invalidation, while `drawRect:` remains a valid fallback entry.
 - The Metal view prepares the Rust/Oxide frame before acquiring a `CAMetalDrawable`, then uses timeout-capable late drawable acquisition and cancels the prepared frame when no drawable is available so drawable pressure skips a frame instead of blocking indefinitely. The Rust host retains the prepared damage on that skip so the next drawable-backed submit retries the same dirty region.
+- A successful submission immediately rechecks demand: clean settled state pauses `CADisplayLink` or stops legacy `CVDisplayLink`, while dirty generations resume it on the main queue. Legacy callbacks recheck on the main queue before stopping so a racing publication cannot be lost.
+- A wake for a suspended display link always passes through one persistent main-run-loop source before rendering. This prevents re-entering Rust while the publisher still owns the app-state mutex, coalesces concurrent publications without per-wake block allocation, and renders the first event response without waiting for a newly resumed display-link phase. A persistent one-shot settlement timer then resumes the display link no sooner than one target refresh period later, avoiding a near-simultaneous second drawable while preserving the required settlement frame. If immediate preparation or drawable acquisition fails, that settlement wake also provides the retry.
+- Modern `CADisplayLink` callbacks render directly because an unpaused link already represents published demand; the single post-submit demand check owns the next pause decision. Legacy `CVDisplayLink` retains its pre-dispatch Rust check because that callback runs off the main thread and can otherwise queue stale work.
 
 ## Preconditions and postconditions
 - AppKit, AVFoundation, Contacts, CoreBluetooth, CoreLocation, CoreMedia, Network.framework, Photos, Security.framework, UserNotifications.framework, and WebKit.framework must be linked by `build.rs`.
@@ -75,6 +82,7 @@
 - WebView create rejects empty or scheme-less URLs, unavailable WebKit setup, and duplicate view IDs distinctly. Script execution reports missing handles after close, JavaScript evaluation failures, and result-copy I/O failures distinctly.
 - If Network.framework monitor creation fails, `macos_network_status` reports failure to Rust.
 - If `CAMetalLayer.nextDrawable` times out under drawable pressure, the host cancels the prepared frame and returns without submitting stale work. The dirty region remains pending and `frame_dirty` is rearmed for retry.
+- Background/resign-active teardown still invalidates or stops the display link. A wake received while inactive remains represented by Rust's generation and is rendered after foreground activation recreates the display link.
 
 ## Testing and benchmarks
 - Linkage and host lifecycle are covered by `cargo check -p oxide-host-macos --features host-testing --tests --locked` and `cargo test -p oxide-host-macos --features host-testing --tests --locked`.
@@ -82,8 +90,12 @@
 - Keychain save/load/delete behavior is covered by the host harness through the installed macOS platform, shared Apple secure-storage wrapper, and shared Apple native Keychain bridge.
 - Permission status snapshots, network status snapshots/subscription callbacks, no-prompt location/motion/camera/push behavior, and live hidden-WebView local navigation/script execution are covered by the main-thread WebView harness.
 - `metal_drawable_lifetime_tests.rs` statically enforces late drawable acquisition, timeout-capable `nextDrawable`, cancellation of prepared frames when acquisition fails, and pending-damage retention for the retry frame.
+- `display_scheduling_tests.rs` verifies idle pause ownership, wake-source coverage, launch/layer correctness, counter gating, and the environment-gated real-process scheduler benchmark. C55 builds that foreground `.app` with the explicit `host-testing` feature, completes a bounded AppKit activation handshake without restarting an already-settled display link, records warmup callbacks/submissions, measures settled idle and a bounded 1–256 pointer-callback wake sequence, reports the completed/target wake counts, and quarantines unrelated native input without letting it mutate Oxide or pass through the benchmark window; ordinary release artifacts omit the harness, input quarantine, and counter writes.
 
 ## Changelog
+- 2026-07-15: routed suspended wakes through a persistent main-run-loop source, rendered their first frame immediately, and deferred only the settlement frame by one target refresh period, avoiding Rust mutex re-entry, per-wake allocation, an extra event-latency tail, and overlapping drawable-pool pressure.
+- 2026-07-15: removed the redundant modern pre-render demand lock; unpaused modern callbacks now render once and use the post-submit check to decide whether another callback is needed.
+- 2026-07-15: fixed the nib-less AppKit boot and backing-layer contracts, moved display ticks to a deterministic shared Metal render entry, and suspended modern/legacy display links while Oxide is clean and settled.
 - 2026-06-01: retained prepared-frame damage across macOS drawable timeout or submit failure so dirty regions retry after pressure.
 - 2026-06-01: made macOS drawable acquisition timeout-capable and documented the skip-on-pressure frame contract.
 - 2026-05-19: moved the native Keychain secure-storage bridge out of `app.m` and into shared `oxide-platform-apple`.

@@ -24,6 +24,8 @@
   <string>12.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSPrincipalClass</key>
+  <string>NSApplication</string>
   <key>NSBluetoothAlwaysUsageDescription</key>
   <string>Connect to nearby accessories when an Oxide app enables Bluetooth features.</string>
   <key>NSCameraUsageDescription</key>

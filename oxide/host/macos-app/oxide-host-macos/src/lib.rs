@@ -5,6 +5,7 @@
 #[cfg(target_os = "macos")]
 extern "C" {
     fn macos_host_start() -> ::core::ffi::c_int;
+    fn macos_host_request_display_link_wake(generation: u64);
 }
 
 #[no_mangle]
@@ -36,7 +37,10 @@ use oxide_test_scenes as test_scenes;
 use oxide_text as text;
 use oxide_timing as timing;
 use oxide_ui_core as ui;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex, MutexGuard, OnceLock,
+};
 
 struct MtlUploader {
     renderer: *mut metal::MetalRenderer,
@@ -99,9 +103,12 @@ struct AppState {
     settle_frames_remaining: u8,
     idle_skipped_frames: u64,
     submitted_frames: u64,
+    pending_wake_generation: u64,
+    presented_wake_generation: u64,
 }
 
 static APP: OnceLock<Mutex<AppState>> = OnceLock::new();
+static FRAME_WAKE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 fn app_state() -> &'static Mutex<AppState> {
     APP.get_or_init(|| Mutex::new(AppState::default()))
@@ -124,9 +131,20 @@ fn callback_value<T: Copy>(cell: &OnceLock<Mutex<Option<T>>>) -> Option<T> {
 
 const IDLE_SETTLE_FRAMES: u8 = 2;
 
+fn request_frame_wake() {
+    let generation = FRAME_WAKE_GENERATION.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+    #[cfg(not(target_os = "macos"))]
+    let _ = generation;
+    #[cfg(target_os = "macos")]
+    unsafe {
+        macos_host_request_display_link_wake(generation);
+    }
+}
+
 fn mark_frame_dirty(app: &mut AppState) {
     app.frame_dirty = true;
     app.settle_frames_remaining = IDLE_SETTLE_FRAMES;
+    request_frame_wake();
 }
 
 fn retain_pending_damage_for_retry(
@@ -293,6 +311,8 @@ pub fn host_harness_reset() {
     app.settle_frames_remaining = IDLE_SETTLE_FRAMES;
     app.idle_skipped_frames = 0;
     app.submitted_frames = 0;
+    app.pending_wake_generation = 0;
+    app.presented_wake_generation = 0;
     platform_api::clear_current_platform_for_tests();
     unsafe {
         macos_set_idle_timer_disabled(0);
@@ -358,11 +378,27 @@ pub extern "C" fn macos_app_should_render() -> u8 {
     }
     let router_wants_frame =
         app.router.as_ref().map_or(false, test_scenes::Router::wants_next_frame);
-    if app.frame_dirty || app.settle_frames_remaining > 0 || router_wants_frame {
+    let wake_pending = FRAME_WAKE_GENERATION.load(Ordering::Acquire)
+        != app.presented_wake_generation;
+    if app.frame_dirty || app.settle_frames_remaining > 0 || router_wants_frame || wake_pending {
         return 1;
     }
     app.idle_skipped_frames = app.idle_skipped_frames.saturating_add(1);
     0
+}
+
+#[no_mangle]
+pub extern "C" fn macos_app_wake_generation() -> u64 {
+    FRAME_WAKE_GENERATION.load(Ordering::Acquire)
+}
+
+#[no_mangle]
+pub extern "C" fn macos_app_request_redraw() {
+    let _ = with_app_mut(|app| {
+        app.frame_dirty = true;
+        app.settle_frames_remaining = IDLE_SETTLE_FRAMES;
+    });
+    request_frame_wake();
 }
 
 #[no_mangle]
@@ -385,6 +421,7 @@ pub extern "C" fn macos_app_prepare_frame(w: u32, h: u32, scale: f32) -> ::libc:
     if !app.inited {
         return -1;
     }
+    app.pending_wake_generation = FRAME_WAKE_GENERATION.load(Ordering::Acquire);
     process_telemetry_commands(&mut app);
     let now = timing::now_ms();
     let dt_ms = (now.saturating_sub(app.last_ms)) as u32;
@@ -471,6 +508,7 @@ pub extern "C" fn macos_app_submit_prepared_frame_with_drawable(
     damage_rects.clear();
     app.damage_rects = damage_rects;
     app.submitted_frames = app.submitted_frames.saturating_add(1);
+    app.presented_wake_generation = app.pending_wake_generation;
     if app.settle_frames_remaining > 0 {
         app.settle_frames_remaining -= 1;
     }
@@ -502,6 +540,7 @@ fn macos_app_frame_inner(
 #[no_mangle]
 pub extern "C" fn macos_app_did_become_active() {
     with_app_mut(|app| {
+        mark_frame_dirty(app);
         if let Some(ops) = app.telemetry_ops.as_ref() {
             ops.handle_foreground(timing::now_ms());
         }
@@ -541,6 +580,7 @@ pub extern "C" fn macos_app_on_memory_pressure(level: u32) {
             ops.handle_memory_pressure(timing::now_ms(), mapped);
         }
         process_telemetry_commands(app);
+        mark_frame_dirty(app);
     });
 }
 

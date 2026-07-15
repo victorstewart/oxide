@@ -13,10 +13,20 @@
 #import <UserNotifications/UserNotifications.h>
 #import <WebKit/WebKit.h>
 #import <dispatch/dispatch.h>
+#if defined(OXIDE_HOST_TESTING)
+#import <mach/mach.h>
+#endif
 #import <math.h>
+#import <stdatomic.h>
+#import <stdlib.h>
 #import <string.h>
+#if defined(OXIDE_HOST_TESTING)
+#import <sys/resource.h>
+#endif
 
-static __weak NSView *gMetalView = nil;
+@class MetalView;
+static MetalView *gMetalView = nil;
+static id<NSApplicationDelegate> gApplicationDelegate = nil;
 static CVDisplayLinkRef gDisplayLinkLegacy = NULL;
 static CADisplayLink *gDisplayLink = nil;
 static BOOL gHighRefresh = YES;
@@ -27,15 +37,91 @@ static uint64_t gFrameCounter = 0;
 static CFTimeInterval gLastSample = 0.0;
 static unsigned gFpsCount = 0;
 static CATextLayer *gFpsLayer = nil;
+static _Atomic(uint64_t) gDisplayLinkWakeGeneration = 0;
+static _Atomic(CFRunLoopSourceRef) gDisplayLinkWakeSource = NULL;
+static _Atomic(CFRunLoopRef) gDisplayLinkWakeRunLoop = NULL;
+static CFRunLoopTimerRef gDisplayLinkSettlementTimer = NULL;
+static _Atomic(uint8_t) gLegacyIdleStopDispatchPending = 0;
+static BOOL gDisplayLinkApplicationActive = NO;
+static BOOL gDisplayLinkSuspendedForIdle = NO;
+static BOOL gDisplayLinkImmediateWakeFrame = NO;
+static uint64_t gDisplayLinkObservedWakeGeneration = 0;
+#if defined(OXIDE_HOST_TESTING)
+static _Atomic(uint64_t) gDisplayLinkCallbacks = 0;
+static _Atomic(uint64_t) gDisplayLinkRenderChecks = 0;
+static _Atomic(uint64_t) gDisplayLinkIdlePauses = 0;
+static _Atomic(uint64_t) gDisplayLinkWakeRequests = 0;
+static _Atomic(uint64_t) gDisplayLinkWakeTransitions = 0;
+static _Atomic(uint64_t) gDisplayLinkMissedWakeups = 0;
+static _Atomic(uint64_t) gFrameDispatches = 0;
+static _Atomic(uint64_t) gRenderCalls = 0;
+static _Atomic(uint64_t) gFrameSubmissions = 0;
+static _Atomic(uint64_t) gSchedulerBenchmarkInputEvents = 0;
+static _Atomic(uint8_t) gSchedulerBenchmarkCountersEnabled = 0;
+static BOOL gSchedulerBenchmarkIgnoresNativeInput = NO;
+static const char *gSchedulerBenchmarkMode = NULL;
+static uint64_t gSchedulerBenchmarkStartCallbacks = 0;
+static uint64_t gSchedulerBenchmarkStartChecks = 0;
+static uint64_t gSchedulerBenchmarkStartDispatches = 0;
+static uint64_t gSchedulerBenchmarkStartDraws = 0;
+static uint64_t gSchedulerBenchmarkStartSubmissions = 0;
+static uint64_t gSchedulerBenchmarkStartInputEvents = 0;
+static uint64_t gSchedulerBenchmarkStartIdlePauses = 0;
+static uint64_t gSchedulerBenchmarkStartWakeRequests = 0;
+static uint64_t gSchedulerBenchmarkStartWakeTransitions = 0;
+static uint64_t gSchedulerBenchmarkStartMissedWakeups = 0;
+static uint64_t gSchedulerBenchmarkStartCpuUs = 0;
+static uint64_t gSchedulerBenchmarkStartResidentBytes = 0;
+static CFTimeInterval gSchedulerBenchmarkStartTime = 0.0;
+static CFTimeInterval gSchedulerBenchmarkWakeRequestTime = 0.0;
+static BOOL gSchedulerBenchmarkWakeOutstanding = NO;
+static BOOL gSchedulerBenchmarkFinished = NO;
+static BOOL gSchedulerBenchmarkForegroundValid = NO;
+static id gSchedulerBenchmarkActivity = nil;
+static uint32_t gSchedulerBenchmarkWakeSamples = 0;
+static uint32_t gSchedulerBenchmarkWakeTarget = 256;
+static uint32_t gSchedulerBenchmarkActivationAttempts = 0;
+static CFTimeInterval gSchedulerBenchmarkActiveSince = 0.0;
+static double gSchedulerBenchmarkWakeLatencyMs[256] = {0};
+
+static inline void SchedulerCounterIncrement(_Atomic(uint64_t) *counter)
+{
+    if (atomic_load_explicit(&gSchedulerBenchmarkCountersEnabled,
+                             memory_order_relaxed) == 0) return;
+    atomic_fetch_add_explicit(counter, 1, memory_order_relaxed);
+}
+
+static inline BOOL SchedulerBenchmarkShouldIgnoreNativeInput(void)
+{
+    return gSchedulerBenchmarkIgnoresNativeInput;
+}
+#else
+#define SchedulerCounterIncrement(counter) ((void)0)
+#define SchedulerBenchmarkShouldIgnoreNativeInput() NO
+#endif
 
 static BOOL ShouldRenderFrame(void);
 static void DispatchFrameTick(void);
+static void UpdateDisplayLinkDemandState(void);
+static void PauseDisplayLinkForIdle(void);
+static void HandleDisplayLinkWake(void);
+static void InstallDisplayLinkWakeSource(void);
+static void ScheduleDisplayLinkSettlement(void);
+static void RequestLegacyIdleStop(void);
+#if defined(OXIDE_HOST_TESTING)
+static void StartSchedulerBenchmarkIfRequested(void);
+static void BeginSchedulerBenchmarkMeasurement(void);
+static void RecordSchedulerBenchmarkFrame(void);
+#endif
+static void ActivateApplication(void);
 
 void macos_app_did_become_active(void);
 void macos_app_will_resign_active(void);
 void macos_app_will_terminate(void);
 void macos_app_on_memory_pressure(uint32_t level);
 uint8_t macos_app_should_render(void);
+uint64_t macos_app_wake_generation(void);
+void macos_app_request_redraw(void);
 int32_t macos_app_init(uint32_t w, uint32_t h, float scale);
 int32_t macos_app_prepare_frame(uint32_t w, uint32_t h, float scale);
 int32_t macos_app_submit_prepared_frame_with_drawable(void *drawable_ptr);
@@ -49,10 +135,11 @@ void macos_app_cancel_prepared_frame(void);
     NSMutableAttributedString *_marked;
     NSRange _selected;
 }
+- (void)renderOxideFrame;
 @end
 
 @implementation MetalView
-+ (Class)layerClass { return [CAMetalLayer class]; }
+- (CALayer *)makeBackingLayer { return [CAMetalLayer layer]; }
 - (instancetype)initWithFrame:(NSRect)frameRect
 {
     self = [super initWithFrame:frameRect];
@@ -80,6 +167,12 @@ void macos_app_cancel_prepared_frame(void);
 - (void)drawRect:(NSRect)dirtyRect
 {
     (void)dirtyRect;
+    [self renderOxideFrame];
+}
+
+- (void)renderOxideFrame
+{
+    SchedulerCounterIncrement(&gRenderCalls);
     CAMetalLayer *layer = (CAMetalLayer *)self.layer;
     CGSize ds = layer.drawableSize;
     CGFloat scale = layer.contentsScale;
@@ -93,7 +186,13 @@ void macos_app_cancel_prepared_frame(void);
         macos_app_cancel_prepared_frame();
         return;
     }
-    macos_app_submit_prepared_frame_with_drawable((__bridge void*)drawable);
+    if (macos_app_submit_prepared_frame_with_drawable((__bridge void*)drawable) == 0) {
+        SchedulerCounterIncrement(&gFrameSubmissions);
+#if defined(OXIDE_HOST_TESTING)
+        RecordSchedulerBenchmarkFrame();
+#endif
+        UpdateDisplayLinkDemandState();
+    }
 }
 
 - (BOOL)acceptsFirstResponder { return YES; }
@@ -122,6 +221,8 @@ extern void macos_emit_rotate(float cx, float cy, float radians, uint64_t ts);
 
 - (void)mouseDown:(NSEvent *)event
 {
+    SchedulerCounterIncrement(&gSchedulerBenchmarkInputEvents);
+    if (SchedulerBenchmarkShouldIgnoreNativeInput()) return;
     _activeTouchId = _nextTouchId++;
     NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
     _lastPointer = p;
@@ -129,12 +230,16 @@ extern void macos_emit_rotate(float cx, float cy, float radians, uint64_t ts);
 }
 - (void)mouseDragged:(NSEvent *)event
 {
+    SchedulerCounterIncrement(&gSchedulerBenchmarkInputEvents);
+    if (SchedulerBenchmarkShouldIgnoreNativeInput()) return;
     if (_activeTouchId == 0) return;
     NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
     macos_emit_touch(_activeTouchId, 1, p.x, p.y, ts_now_ns());
 }
 - (void)mouseUp:(NSEvent *)event
 {
+    SchedulerCounterIncrement(&gSchedulerBenchmarkInputEvents);
+    if (SchedulerBenchmarkShouldIgnoreNativeInput()) return;
     if (_activeTouchId == 0) return;
     NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
     macos_emit_touch(_activeTouchId, 2, p.x, p.y, ts_now_ns());
@@ -142,6 +247,8 @@ extern void macos_emit_rotate(float cx, float cy, float radians, uint64_t ts);
 }
 - (void)mouseMoved:(NSEvent *)event
 {
+    SchedulerCounterIncrement(&gSchedulerBenchmarkInputEvents);
+    if (SchedulerBenchmarkShouldIgnoreNativeInput()) return;
     NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
     float dx = p.x - _lastPointer.x; float dy = p.y - _lastPointer.y;
     _lastPointer = p;
@@ -149,28 +256,38 @@ extern void macos_emit_rotate(float cx, float cy, float radians, uint64_t ts);
 }
 - (void)scrollWheel:(NSEvent *)event
 {
+    SchedulerCounterIncrement(&gSchedulerBenchmarkInputEvents);
+    if (SchedulerBenchmarkShouldIgnoreNativeInput()) return;
     NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
     float dx = (float)event.scrollingDeltaX; float dy = (float)event.scrollingDeltaY;
     macos_emit_pointer(p.x, p.y, dx, dy, (uint32_t)[NSEvent pressedMouseButtons], map_mods(event.modifierFlags), ts_now_ns());
 }
 - (void)magnifyWithEvent:(NSEvent *)event
 {
+    SchedulerCounterIncrement(&gSchedulerBenchmarkInputEvents);
+    if (SchedulerBenchmarkShouldIgnoreNativeInput()) return;
     NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
     macos_emit_pinch(p.x, p.y, (float)event.magnification, ts_now_ns());
 }
 - (void)rotateWithEvent:(NSEvent *)event
 {
+    SchedulerCounterIncrement(&gSchedulerBenchmarkInputEvents);
+    if (SchedulerBenchmarkShouldIgnoreNativeInput()) return;
     NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
     macos_emit_rotate(p.x, p.y, (float)event.rotation, ts_now_ns());
 }
 - (void)keyDown:(NSEvent *)event
 {
+    SchedulerCounterIncrement(&gSchedulerBenchmarkInputEvents);
+    if (SchedulerBenchmarkShouldIgnoreNativeInput()) return;
     NSString *cs = event.charactersIgnoringModifiers ?: @"";
     NSData *d = [cs dataUsingEncoding:NSUTF8StringEncoding];
     macos_emit_key((uint32_t)event.keyCode, d.bytes, d.length, event.isARepeat ? 1 : 0, map_mods(event.modifierFlags), ts_now_ns());
 }
 - (void)keyUp:(NSEvent *)event
 {
+    SchedulerCounterIncrement(&gSchedulerBenchmarkInputEvents);
+    if (SchedulerBenchmarkShouldIgnoreNativeInput()) return;
     NSString *cs = event.charactersIgnoringModifiers ?: @"";
     NSData *d = [cs dataUsingEncoding:NSUTF8StringEncoding];
     // Use repeat=2 to indicate key-up to the Rust handler
@@ -229,6 +346,8 @@ extern void macos_emit_rotate(float cx, float cy, float radians, uint64_t ts);
 @interface AppDelegate : NSObject <NSApplicationDelegate, UNUserNotificationCenterDelegate>
 @property (strong) NSWindow *window;
 @property (nonatomic) dispatch_source_t memorySource;
+- (void)launchHost;
+- (void)startDisplayLink;
 @end
 
 static void MacEmitPermission(uint32_t domain, uint32_t status);
@@ -1180,6 +1299,12 @@ didFailNavigation:(WKNavigation *)navigation
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
     (void)notification;
+    [self launchHost];
+}
+
+- (void)launchHost
+{
+    if (self.window != nil) return;
     NSRect frame = NSMakeRect(100, 100, 800, 600);
     self.window = [[NSWindow alloc] initWithContentRect:frame
                                               styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable)
@@ -1204,11 +1329,13 @@ didFailNavigation:(WKNavigation *)navigation
     [view.layer addSublayer:gFpsLayer];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onWindowResize:) name:NSWindowDidResizeNotification object:self.window];
     [self.window makeKeyAndOrderFront:nil];
-    [NSApp activateIgnoringOtherApps:YES];
+    ActivateApplication();
     NSLog(@"[Oxide] App launched; window ready");
     // Power state change for LPM handling
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onPowerStateChanged:) name:NSProcessInfoPowerStateDidChangeNotification object:nil];
+    InstallDisplayLinkWakeSource();
     [self startDisplayLink];
+    [view renderOxideFrame];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppDidBecomeActive:) name:NSApplicationDidBecomeActiveNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppWillResignActive:) name:NSApplicationWillResignActiveNotification object:nil];
     UNUserNotificationCenter *notificationCenter = MacNotificationCenter();
@@ -1310,9 +1437,114 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
 // C bridge for platform-macos
 void macos_request_redraw(void)
 {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (gMetalView) { [gMetalView setNeedsDisplay:YES]; }
-    });
+    macos_app_request_redraw();
+}
+
+static void ResumeDisplayLinkForWake(void)
+{
+    if (!gDisplayLinkApplicationActive) return;
+    BOOL transitioned = NO;
+    if (@available(macOS 15.0, *)) {
+        if (gDisplayLink && gDisplayLink.paused) {
+            gDisplayLink.paused = NO;
+            transitioned = YES;
+        }
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    if (gDisplayLinkLegacy && !CVDisplayLinkIsRunning(gDisplayLinkLegacy)) {
+        CVDisplayLinkStart(gDisplayLinkLegacy);
+        transitioned = YES;
+    }
+#pragma clang diagnostic pop
+    if (transitioned) SchedulerCounterIncrement(&gDisplayLinkWakeTransitions);
+    gDisplayLinkSuspendedForIdle = NO;
+}
+
+static void HandleDisplayLinkWake(void)
+{
+    if (!gDisplayLinkApplicationActive) return;
+    if (gDisplayLinkSuspendedForIdle) {
+        gDisplayLinkSuspendedForIdle = NO;
+        gDisplayLinkImmediateWakeFrame = YES;
+        DispatchFrameTick();
+        gDisplayLinkImmediateWakeFrame = NO;
+        if (!gDisplayLinkSuspendedForIdle) ScheduleDisplayLinkSettlement();
+        return;
+    }
+    ResumeDisplayLinkForWake();
+}
+
+static void DisplayLinkWakeSourcePerform(void *info)
+{
+    (void)info;
+    uint64_t latest = atomic_load_explicit(&gDisplayLinkWakeGeneration,
+                                           memory_order_acquire);
+    if (latest > gDisplayLinkObservedWakeGeneration) {
+        gDisplayLinkObservedWakeGeneration = latest;
+    }
+    HandleDisplayLinkWake();
+}
+
+static void DisplayLinkSettlementTimerFire(CFRunLoopTimerRef timer, void *info)
+{
+    (void)info;
+    CFRunLoopTimerSetNextFireDate(timer, CFAbsoluteTimeGetCurrent() + 86400.0);
+    ResumeDisplayLinkForWake();
+}
+
+static void InstallDisplayLinkWakeSource(void)
+{
+    if (atomic_load_explicit(&gDisplayLinkWakeSource,
+                             memory_order_acquire) != NULL) return;
+    CFRunLoopSourceContext context = {0};
+    context.perform = DisplayLinkWakeSourcePerform;
+    CFRunLoopSourceRef source = CFRunLoopSourceCreate(NULL, 0, &context);
+    if (source == NULL) return;
+    CFRunLoopRef runLoop = CFRunLoopGetMain();
+    CFRunLoopAddSource(runLoop, source, kCFRunLoopCommonModes);
+    CFRunLoopTimerContext timerContext = {0};
+    gDisplayLinkSettlementTimer = CFRunLoopTimerCreate(
+        NULL, CFAbsoluteTimeGetCurrent() + 86400.0, 86400.0, 0, 0,
+        DisplayLinkSettlementTimerFire, &timerContext);
+    if (gDisplayLinkSettlementTimer != NULL) {
+        CFRunLoopAddTimer(runLoop, gDisplayLinkSettlementTimer,
+                          kCFRunLoopCommonModes);
+    }
+    atomic_store_explicit(&gDisplayLinkWakeRunLoop, runLoop,
+                          memory_order_release);
+    atomic_store_explicit(&gDisplayLinkWakeSource, source,
+                          memory_order_release);
+}
+
+static void ScheduleDisplayLinkSettlement(void)
+{
+    if (gDisplayLinkSettlementTimer == NULL) {
+        ResumeDisplayLinkForWake();
+        return;
+    }
+    double refreshHz = gTargetHz > 0 ? (double)gTargetHz : 60.0;
+    CFRunLoopTimerSetNextFireDate(gDisplayLinkSettlementTimer,
+                                 CFAbsoluteTimeGetCurrent() + 1.0 / refreshHz);
+}
+
+void macos_host_request_display_link_wake(uint64_t generation)
+{
+    SchedulerCounterIncrement(&gDisplayLinkWakeRequests);
+    uint64_t current = atomic_load_explicit(&gDisplayLinkWakeGeneration,
+                                            memory_order_acquire);
+    while (current < generation &&
+           !atomic_compare_exchange_weak_explicit(
+               &gDisplayLinkWakeGeneration, &current, generation,
+               memory_order_acq_rel, memory_order_acquire)) {
+    }
+    CFRunLoopSourceRef source = atomic_load_explicit(&gDisplayLinkWakeSource,
+                                                     memory_order_acquire);
+    CFRunLoopRef runLoop = atomic_load_explicit(&gDisplayLinkWakeRunLoop,
+                                                memory_order_acquire);
+    if (source == NULL || runLoop == NULL) return;
+    CFRunLoopSourceSignal(source);
+    CFRunLoopWakeUp(runLoop);
 }
 
 // Forward declaration for display link callback used below
@@ -2661,24 +2893,32 @@ void * macos_resource_read(const char *name_utf8, size_t *out_len)
     if (!gMetalView) return;
     NSView *v = gMetalView;
     gFpsLayer.frame = CGRectMake(8, v.bounds.size.height - 24, 80, 16);
+    macos_app_request_redraw();
 }
 
 - (void)onPowerStateChanged:(NSNotification *)note
 {
     (void)note;
     [self updateTargetRate];
+    UpdateDisplayLinkDemandState();
 }
 
 - (void)startDisplayLink
 {
+    gDisplayLinkApplicationActive = YES;
+    gDisplayLinkObservedWakeGeneration = macos_app_wake_generation();
     if (@available(macOS 15.0, *)) {
-        if (gDisplayLink) { return; }
+        if (gDisplayLink) {
+            ResumeDisplayLinkForWake();
+            return;
+        }
         NSView *view = gMetalView;
         if (view) {
             gDisplayLink = [view displayLinkWithTarget:self selector:@selector(handleDisplayLink:)];
-        } else {
-            NSScreen *screen = NSScreen.mainScreen;
-            if (!screen) { return; }
+        }
+        if (!gDisplayLink) {
+            NSScreen *screen = view.window.screen ?: NSScreen.mainScreen;
+            if (!screen) return;
             gDisplayLink = [screen displayLinkWithTarget:self selector:@selector(handleDisplayLink:)];
         }
         if (!gDisplayLink) { return; }
@@ -2702,6 +2942,8 @@ void * macos_resource_read(const char *name_utf8, size_t *out_len)
 
 - (void)stopDisplayLink
 {
+    gDisplayLinkApplicationActive = NO;
+    gDisplayLinkSuspendedForIdle = NO;
     if (@available(macOS 15.0, *)) {
         if (gDisplayLink) {
             [gDisplayLink invalidate];
@@ -2768,7 +3010,6 @@ void * macos_resource_read(const char *name_utf8, size_t *out_len)
             range.maximum = (float)gTargetHz;
             range.preferred = (float)gTargetHz;
             gDisplayLink.preferredFrameRateRange = range;
-            gDisplayLink.paused = NO;
             gDropEvery = 1;
         }
     }
@@ -2776,7 +3017,14 @@ void * macos_resource_read(const char *name_utf8, size_t *out_len)
 
 - (void)handleDisplayLink:(CADisplayLink *)link API_AVAILABLE(macos(15.0))
 {
-    if (!ShouldRenderFrame()) { return; }
+    SchedulerCounterIncrement(&gDisplayLinkCallbacks);
+    uint64_t wakeGeneration = macos_app_wake_generation();
+    if (gDisplayLinkSuspendedForIdle) {
+        if (wakeGeneration <= gDisplayLinkObservedWakeGeneration) return;
+        SchedulerCounterIncrement(&gDisplayLinkMissedWakeups);
+        gDisplayLinkObservedWakeGeneration = wakeGeneration;
+        gDisplayLinkSuspendedForIdle = NO;
+    }
     double duration = link.duration;
     if (duration > 0.0) {
         int measured = (int)round(1.0 / duration);
@@ -2789,12 +3037,325 @@ void * macos_resource_read(const char *name_utf8, size_t *out_len)
 }
 @end
 
+static void PauseDisplayLinkForIdle(void)
+{
+    if (!gDisplayLinkApplicationActive) return;
+    gDisplayLinkObservedWakeGeneration = macos_app_wake_generation();
+    BOOL transitioned = NO;
+    if (@available(macOS 15.0, *)) {
+        if (gDisplayLink && !gDisplayLink.paused) {
+            gDisplayLink.paused = YES;
+            transitioned = YES;
+        }
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    if (gDisplayLinkLegacy && CVDisplayLinkIsRunning(gDisplayLinkLegacy)) {
+        CVDisplayLinkStop(gDisplayLinkLegacy);
+        transitioned = YES;
+    }
+#pragma clang diagnostic pop
+    if (transitioned) SchedulerCounterIncrement(&gDisplayLinkIdlePauses);
+    gDisplayLinkSuspendedForIdle = YES;
+}
+
+static void UpdateDisplayLinkDemandState(void)
+{
+    if (!gDisplayLinkApplicationActive) return;
+    SchedulerCounterIncrement(&gDisplayLinkRenderChecks);
+    if (macos_app_should_render()) {
+        if (!gDisplayLinkImmediateWakeFrame) ResumeDisplayLinkForWake();
+    } else {
+        PauseDisplayLinkForIdle();
+    }
+}
+
+static void RequestLegacyIdleStop(void)
+{
+    if (atomic_exchange_explicit(&gLegacyIdleStopDispatchPending, 1,
+                                 memory_order_acq_rel) != 0) {
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        atomic_store_explicit(&gLegacyIdleStopDispatchPending, 0,
+                              memory_order_release);
+        UpdateDisplayLinkDemandState();
+    });
+}
+
+#if defined(OXIDE_HOST_TESTING)
+static uint64_t SchedulerBenchmarkCpuUs(void)
+{
+    struct rusage usage = {0};
+    if (getrusage(RUSAGE_SELF, &usage) != 0) return 0;
+    uint64_t user = (uint64_t)usage.ru_utime.tv_sec * 1000000u +
+                    (uint64_t)usage.ru_utime.tv_usec;
+    uint64_t system = (uint64_t)usage.ru_stime.tv_sec * 1000000u +
+                      (uint64_t)usage.ru_stime.tv_usec;
+    return user + system;
+}
+
+static uint64_t SchedulerBenchmarkResidentBytes(void)
+{
+    task_vm_info_data_t info = {0};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    kern_return_t result = task_info(mach_task_self(), TASK_VM_INFO,
+                                     (task_info_t)&info, &count);
+    return result == KERN_SUCCESS ? info.phys_footprint : 0;
+}
+
+static uint64_t SchedulerCounterValue(_Atomic(uint64_t) *counter)
+{
+    return atomic_load_explicit(counter, memory_order_relaxed);
+}
+
+static void CaptureSchedulerBenchmarkStart(void)
+{
+    gSchedulerBenchmarkStartCallbacks = SchedulerCounterValue(&gDisplayLinkCallbacks);
+    gSchedulerBenchmarkStartChecks = SchedulerCounterValue(&gDisplayLinkRenderChecks);
+    gSchedulerBenchmarkStartDispatches = SchedulerCounterValue(&gFrameDispatches);
+    gSchedulerBenchmarkStartDraws = SchedulerCounterValue(&gRenderCalls);
+    gSchedulerBenchmarkStartSubmissions = SchedulerCounterValue(&gFrameSubmissions);
+    gSchedulerBenchmarkStartInputEvents = SchedulerCounterValue(&gSchedulerBenchmarkInputEvents);
+    gSchedulerBenchmarkStartIdlePauses = SchedulerCounterValue(&gDisplayLinkIdlePauses);
+    gSchedulerBenchmarkStartWakeRequests = SchedulerCounterValue(&gDisplayLinkWakeRequests);
+    gSchedulerBenchmarkStartWakeTransitions = SchedulerCounterValue(&gDisplayLinkWakeTransitions);
+    gSchedulerBenchmarkStartMissedWakeups = SchedulerCounterValue(&gDisplayLinkMissedWakeups);
+    gSchedulerBenchmarkStartCpuUs = SchedulerBenchmarkCpuUs();
+    gSchedulerBenchmarkStartResidentBytes = SchedulerBenchmarkResidentBytes();
+    gSchedulerBenchmarkStartTime = CACurrentMediaTime();
+    gSchedulerBenchmarkForegroundValid = NSApp.active &&
+        gMetalView.window.visible &&
+        (gDisplayLink != nil || gDisplayLinkLegacy != NULL);
+}
+
+static void EmitSchedulerBenchmarkSummary(void)
+{
+    if (gSchedulerBenchmarkFinished) return;
+    gSchedulerBenchmarkFinished = YES;
+    double windowMs = (CACurrentMediaTime() - gSchedulerBenchmarkStartTime) * 1000.0;
+    uint64_t endResidentBytes = SchedulerBenchmarkResidentBytes();
+    uint64_t peakResidentBytes = MAX(gSchedulerBenchmarkStartResidentBytes,
+                                     endResidentBytes);
+    uint64_t externalInputEvents = SchedulerCounterValue(&gSchedulerBenchmarkInputEvents) -
+                                   gSchedulerBenchmarkStartInputEvents;
+    BOOL validForeground = gSchedulerBenchmarkForegroundValid &&
+                           NSApp.active;
+    fprintf(stdout,
+            "OXIDE_MACOS_SCHEDULER_SUMMARY {\"mode\":\"%s\","
+            "\"windowMs\":%.6f,\"warmupDisplayCallbacks\":%llu,"
+            "\"warmupSubmissions\":%llu,\"displayCallbacks\":%llu,"
+            "\"rustRenderChecks\":%llu,\"frameDispatches\":%llu,"
+            "\"renderCalls\":%llu,\"submissions\":%llu,"
+            "\"externalInputEvents\":%llu,"
+            "\"idlePauses\":%llu,\"wakeRequests\":%llu,"
+            "\"wakeTransitions\":%llu,\"wakeSamples\":%u,"
+            "\"wakeTarget\":%u,"
+            "\"missedWakeups\":%llu,"
+            "\"cpuUs\":%llu,\"peakResidentBytes\":%llu,"
+            "\"applicationActive\":%s,\"windowVisible\":%s,"
+            "\"displayLinkApplicationActive\":%s,"
+            "\"displayLinkSuspendedForIdle\":%s,"
+            "\"modernDisplayLinkPresent\":%s,"
+            "\"modernDisplayLinkPaused\":%s,"
+            "\"legacyDisplayLinkPresent\":%s,"
+            "\"validForeground\":%s,"
+            "\"wakeLatenciesMs\":[",
+            gSchedulerBenchmarkMode,
+            windowMs,
+            (unsigned long long)gSchedulerBenchmarkStartCallbacks,
+            (unsigned long long)gSchedulerBenchmarkStartSubmissions,
+            (unsigned long long)(SchedulerCounterValue(&gDisplayLinkCallbacks) -
+                                 gSchedulerBenchmarkStartCallbacks),
+            (unsigned long long)(SchedulerCounterValue(&gDisplayLinkRenderChecks) -
+                                 gSchedulerBenchmarkStartChecks),
+            (unsigned long long)(SchedulerCounterValue(&gFrameDispatches) -
+                                 gSchedulerBenchmarkStartDispatches),
+            (unsigned long long)(SchedulerCounterValue(&gRenderCalls) -
+                                 gSchedulerBenchmarkStartDraws),
+            (unsigned long long)(SchedulerCounterValue(&gFrameSubmissions) -
+                                 gSchedulerBenchmarkStartSubmissions),
+            (unsigned long long)externalInputEvents,
+            (unsigned long long)(SchedulerCounterValue(&gDisplayLinkIdlePauses) -
+                                 gSchedulerBenchmarkStartIdlePauses),
+            (unsigned long long)(SchedulerCounterValue(&gDisplayLinkWakeRequests) -
+                                 gSchedulerBenchmarkStartWakeRequests),
+            (unsigned long long)(SchedulerCounterValue(&gDisplayLinkWakeTransitions) -
+                                 gSchedulerBenchmarkStartWakeTransitions),
+            gSchedulerBenchmarkWakeSamples,
+            gSchedulerBenchmarkWakeTarget,
+            (unsigned long long)(SchedulerCounterValue(&gDisplayLinkMissedWakeups) -
+                                 gSchedulerBenchmarkStartMissedWakeups),
+            (unsigned long long)(SchedulerBenchmarkCpuUs() -
+                                 gSchedulerBenchmarkStartCpuUs),
+            (unsigned long long)peakResidentBytes,
+            NSApp.active ? "true" : "false",
+            gMetalView.window.visible ? "true" : "false",
+            gDisplayLinkApplicationActive ? "true" : "false",
+            gDisplayLinkSuspendedForIdle ? "true" : "false",
+            gDisplayLink != nil ? "true" : "false",
+            gDisplayLink != nil && gDisplayLink.paused ? "true" : "false",
+            gDisplayLinkLegacy != NULL ? "true" : "false",
+            validForeground ? "true" : "false");
+    for (uint32_t index = 0; index < gSchedulerBenchmarkWakeSamples; index += 1) {
+        fprintf(stdout, index == 0 ? "%.6f" : ",%.6f",
+                gSchedulerBenchmarkWakeLatencyMs[index]);
+    }
+    fprintf(stdout, "]}\n");
+    fflush(stdout);
+    if (gSchedulerBenchmarkActivity != nil) {
+        [[NSProcessInfo processInfo] endActivity:gSchedulerBenchmarkActivity];
+        gSchedulerBenchmarkActivity = nil;
+    }
+    [NSApp terminate:nil];
+}
+
+static void ScheduleSchedulerBenchmarkWake(void)
+{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        gSchedulerBenchmarkWakeOutstanding = YES;
+        gSchedulerBenchmarkWakeRequestTime = CACurrentMediaTime();
+        macos_emit_pointer(400.0f, 300.0f, 1.0f, 0.0f, 0, 0, ts_now_ns());
+    });
+}
+
+static void RecordSchedulerBenchmarkFrame(void)
+{
+    if (gSchedulerBenchmarkMode == NULL ||
+        strcmp(gSchedulerBenchmarkMode, "wake") != 0 ||
+        !gSchedulerBenchmarkWakeOutstanding) {
+        return;
+    }
+    gSchedulerBenchmarkWakeOutstanding = NO;
+    uint32_t index = gSchedulerBenchmarkWakeSamples;
+    if (index >= 256) return;
+    gSchedulerBenchmarkWakeLatencyMs[index] =
+        (CACurrentMediaTime() - gSchedulerBenchmarkWakeRequestTime) * 1000.0;
+    gSchedulerBenchmarkWakeSamples = index + 1;
+    if (gSchedulerBenchmarkWakeSamples == gSchedulerBenchmarkWakeTarget) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            EmitSchedulerBenchmarkSummary();
+        });
+    } else {
+        ScheduleSchedulerBenchmarkWake();
+    }
+}
+
+static void BeginSchedulerBenchmarkMeasurement(void)
+{
+    if (!NSApp.active) {
+        gSchedulerBenchmarkActiveSince = 0.0;
+        ActivateApplication();
+        [gMetalView.window makeKeyAndOrderFront:nil];
+        [gMetalView.window orderFrontRegardless];
+    }
+    gSchedulerBenchmarkActivationAttempts += 1;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (NSApp.active && gSchedulerBenchmarkActiveSince == 0.0) {
+        gSchedulerBenchmarkActiveSince = now;
+    }
+    BOOL foregroundStable = NSApp.active &&
+        now - gSchedulerBenchmarkActiveSince >= 1.0;
+    if (!foregroundStable && gSchedulerBenchmarkActivationAttempts < 50) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
+                       dispatch_get_main_queue(), ^{
+            BeginSchedulerBenchmarkMeasurement();
+        });
+        return;
+    }
+    CaptureSchedulerBenchmarkStart();
+    if (!gSchedulerBenchmarkForegroundValid) {
+        EmitSchedulerBenchmarkSummary();
+        return;
+    }
+    if (strcmp(gSchedulerBenchmarkMode, "wake") == 0) {
+        ScheduleSchedulerBenchmarkWake();
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC),
+                       dispatch_get_main_queue(), ^{
+            EmitSchedulerBenchmarkSummary();
+        });
+        return;
+    }
+    uint64_t windowMs = 500;
+    const char *windowValue = getenv("OXIDE_MACOS_SCHEDULER_WINDOW_MS");
+    if (windowValue != NULL) {
+        unsigned long long parsed = strtoull(windowValue, NULL, 10);
+        if (parsed >= 100 && parsed <= 10000) windowMs = parsed;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 (int64_t)windowMs * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        EmitSchedulerBenchmarkSummary();
+    });
+}
+
+static void StartSchedulerBenchmarkIfRequested(void)
+{
+    const char *mode = gSchedulerBenchmarkMode;
+    if (mode == NULL) return;
+    gSchedulerBenchmarkIgnoresNativeInput = YES;
+    const char *wakeTargetValue = getenv("OXIDE_MACOS_SCHEDULER_WAKE_SAMPLES");
+    if (wakeTargetValue != NULL) {
+        unsigned long long parsed = strtoull(wakeTargetValue, NULL, 10);
+        if (parsed >= 1 && parsed <= 256) {
+            gSchedulerBenchmarkWakeTarget = (uint32_t)parsed;
+        }
+    }
+    gSchedulerBenchmarkActivity = [[NSProcessInfo processInfo]
+        beginActivityWithOptions:(NSActivityUserInitiated |
+                                  NSActivityLatencyCritical)
+                        reason:@"Oxide macOS scheduler benchmark"];
+    fprintf(stdout, "OXIDE_MACOS_SCHEDULER_READY %s\n", mode);
+    fflush(stdout);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        const uint8_t staticScene = '2';
+        macos_emit_key(0, &staticScene, 1, 0, 0, 0);
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 800 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        BeginSchedulerBenchmarkMeasurement();
+    });
+}
+#endif
+
+static void ActivateApplication(void)
+{
+    if (@available(macOS 14.0, *)) {
+        [NSApp activate];
+        return;
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    [NSApp activateIgnoringOtherApps:YES];
+#pragma clang diagnostic pop
+}
+
 int macos_host_start(void)
 {
     @autoreleasepool {
         [NSApplication sharedApplication];
-        AppDelegate *delegate = [AppDelegate new];
-        [NSApp setDelegate:delegate];
+        gApplicationDelegate = [AppDelegate new];
+        [NSApp setDelegate:gApplicationDelegate];
+#if defined(OXIDE_HOST_TESTING)
+        const char *benchmarkMode = getenv("OXIDE_MACOS_SCHEDULER_BENCH");
+        BOOL benchmarkRequested = benchmarkMode != NULL &&
+            (strcmp(benchmarkMode, "idle") == 0 ||
+             strcmp(benchmarkMode, "wake") == 0);
+#endif
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [(AppDelegate *)gApplicationDelegate launchHost];
+#if defined(OXIDE_HOST_TESTING)
+            if (benchmarkRequested) {
+                gSchedulerBenchmarkMode = benchmarkMode;
+                atomic_store_explicit(&gSchedulerBenchmarkCountersEnabled, 1,
+                                      memory_order_release);
+            }
+            StartSchedulerBenchmarkIfRequested();
+#endif
+        });
         [NSApp run];
         return 0;
     }
@@ -2802,6 +3363,7 @@ int macos_host_start(void)
 
 static BOOL ShouldRenderFrame(void)
 {
+    SchedulerCounterIncrement(&gDisplayLinkRenderChecks);
     if (!macos_app_should_render()) { return NO; }
     if (gDropEvery <= 1) { return YES; }
     uint64_t idx = __atomic_add_fetch(&gFrameCounter, 1, __ATOMIC_RELAXED);
@@ -2810,6 +3372,7 @@ static BOOL ShouldRenderFrame(void)
 
 static void DispatchFrameTick(void)
 {
+    SchedulerCounterIncrement(&gFrameDispatches);
     gFpsCount += 1;
     CFTimeInterval now = CACurrentMediaTime();
     if (now - gLastSample >= 1.0) {
@@ -2817,7 +3380,9 @@ static void DispatchFrameTick(void)
         gLastSample = now; gFpsCount = 0;
         if (gFpsLayer) { gFpsLayer.string = [NSString stringWithFormat:@"%3.0f fps", fps]; }
     }
-    if (gMetalView) { [gMetalView setNeedsDisplay:YES]; }
+    if (gMetalView) {
+        [(MetalView *)gMetalView renderOxideFrame];
+    }
 }
 
 static CVReturn DisplayLinkCallback(CVDisplayLinkRef link,
@@ -2828,7 +3393,11 @@ static CVReturn DisplayLinkCallback(CVDisplayLinkRef link,
                                     void *displayLinkContext)
 {
     (void)link; (void)inNow; (void)inOutputTime; (void)flagsIn; (void)flagsOut; (void)displayLinkContext;
-    if (!ShouldRenderFrame()) { return kCVReturnSuccess; }
+    SchedulerCounterIncrement(&gDisplayLinkCallbacks);
+    if (!ShouldRenderFrame()) {
+        RequestLegacyIdleStop();
+        return kCVReturnSuccess;
+    }
     // Dispatch to main
     dispatch_async(dispatch_get_main_queue(), ^{
         DispatchFrameTick();

@@ -26,6 +26,8 @@
   Initializes the macOS host platform, binds a shared Apple UDP socket through `MacPlatform::networking()`, sends to a loopback UDP echo server, and verifies the response packet.
 - `host_networking_rejects_unsupported_transport_options()`
   Initializes the macOS host platform and verifies raw TCP TLS, TCP Fast Open, and QUIC requests return `PlatformError::Unsupported` through `MacPlatform::networking()`.
+- `demand_driven_scheduler_reaches_idle_and_exercises_the_wake_matrix()`
+  Settles a static scene, publishes 256 redraw generations, and proves explicit redraw, raw pointer input, delayed background publication, resize-sized rendering, animation start/continuation, and return to static idle without losing a coalesced wake.
 
 ## Logic narrative
 - The smoke test starts from a clean harness state and asserts no process-global platform is registered before initialization.
@@ -36,6 +38,7 @@
 - The TCP tests serve one response from a local `TcpListener`, write through the installed platform's shared Apple connection object, and wait for a connection callback carrying the response bytes. The keepalive variant enables Apple socket keepalive options before the connection is handed to the reader thread.
 - The UDP test binds a local echo socket, sends through the installed platform's shared Apple UDP object, and waits for a packet callback carrying the response bytes.
 - The unsupported transport test builds options that would otherwise target loopback addresses, then verifies unsupported semantics are rejected before creating a connection.
+- The demand-scheduler test runs enough successful frames to clear the two-frame settlement window, then compares generation deltas rather than native callback count so it remains deterministic without AppKit.
 - A process-local test mutex serializes the harness tests because the host callback slots and current-platform registry are process-global.
 
 ## Preconditions and postconditions
@@ -49,6 +52,7 @@
 
 ## Edge cases and failure modes
 - The smoke test verifies the no-drawable path remains valid.
+- The demand-scheduler test verifies the lock-free publication and Rust needs-frame state; the separate real-process C55 harness verifies actual `CADisplayLink`/`CVDisplayLink` suspension and wake latency.
 - Callback fanout is checked independently from the scene router so registration bugs are visible even if the router is not active.
 - Secure-storage verification reaches the same installed platform object app code uses, not test-local secure-storage stubs.
 - HTTP verification reaches the same installed platform object app code uses, not test-local HTTP stubs.
@@ -80,6 +84,7 @@ macos_emit_touch(7, 0, 12.0, 13.0, 100);
 ```
 
 ## Changelog
+- 2026-07-15: added deterministic idle settlement and rapid generation-retention coverage for demand-driven macOS scheduling.
 - 2026-05-19: added installed-platform TCP keepalive loopback coverage through the shared Apple socket backend.
 - 2026-05-19: added installed-platform unsupported transport coverage for raw TCP TLS, TCP Fast Open, and QUIC.
 - 2026-05-19: added installed-platform TCP/UDP loopback coverage through the shared Apple socket backend.

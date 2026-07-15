@@ -10,6 +10,9 @@ fn main() {
             .file("../../../crates/platform-apple/src/apple/bluetooth.m")
             .file("../../../crates/platform-apple/src/apple/secure_storage.m")
             .flag("-fobjc-arc");
+        if std::env::var_os("CARGO_FEATURE_HOST_TESTING").is_some() {
+            b.define("OXIDE_HOST_TESTING", None);
+        }
         b.compile("oxide_host_macos_app");
         println!("cargo:rustc-link-lib=framework=AppKit");
         println!("cargo:rustc-link-lib=framework=AVFoundation");

@@ -7,6 +7,9 @@ edition = "2021"
 oxide_host_macos = { package = "oxide-host-macos", path = "../oxide-host-macos" }
 libc = "0.2"
 
+[features]
+host-testing = ["oxide_host_macos/host-testing"]
+
 [[bin]]
 name = "oxide-macos-app"
 path = "src/main.rs"
