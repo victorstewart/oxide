@@ -130,6 +130,14 @@ pub(super) struct PreparedLayerKey
    effect_outset: u32,
 }
 
+impl PreparedLayerKey
+{
+   pub(super) const fn chunk_id(self) -> api::RenderChunkId
+   {
+      self.chunk.id
+   }
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct PreparedLayerFrame
 {
@@ -431,6 +439,14 @@ impl PreparedChunkCache
       self.resident_bytes = self.resident_bytes.saturating_sub(removed_bytes);
       self.logical_resident_bytes = self.logical_resident_bytes.saturating_sub(removed_logical_bytes);
       self.evictions = self.evictions.saturating_add(removed);
+   }
+
+   pub fn invalidate_chunks(&mut self, chunks: &[api::RenderChunkId])
+   {
+      for chunk in chunks
+      {
+         self.remove_chunk_id(*chunk);
+      }
    }
 
    pub fn get_or_prepare(&mut self, renderer: &MetalRenderer, chunk: &api::RenderChunk) -> Option<PreparedLookup>

@@ -59,6 +59,9 @@
          const architectureMatrix = params.get("architecture_matrix") === "1";
          const rrectArchitectureOnly = params.get("rrect_architecture_only") === "1";
          const imageArchitectureOnly = params.get("image_architecture_only") === "1";
+         const imageStoreOnly = params.get("image_store_only") === "1";
+         const imageStoreCount = boundedNumber("image_store_count", 100, 1, 10000);
+         const imageStoreStandalone = params.get("image_store_standalone") === "1";
          const nineSliceArchitectureOnly = params.get("nine_slice_architecture_only") === "1";
          const spinnerArchitectureOnly = params.get("spinner_architecture_only") === "1";
          const neonMarkerArchitectureOnly = params.get("neon_marker_architecture_only") === "1";
@@ -662,6 +665,7 @@
          window.oxideWebGpuNeonMarkerAB = "";
          window.oxideWebGpuDirectSurfaceAB = "";
          window.oxideWebGpuArchitecturePrimitives = "";
+         window.oxideWebGpuImageStore = "";
          window.oxideWebGpuPreparedChunks = "";
          window.oxideWebGpuDrawItemCoalescingAB = "";
          window.oxideWebGpuDrawStateCacheAB = "";
@@ -723,6 +727,12 @@
             window.oxideApp.prewarm_webgpu_bench_resources();
             window.oxideWebGpuArchitecturePrimitives = await runBench("rrect_architecture", () => window.oxideApp.bench_webgpu_rrect_architecture(mixedSamples, mixedFrames, window.devicePixelRatio));
             console.log("oxide-webgpu-rrect-architecture", window.oxideWebGpuArchitecturePrimitives);
+         } else if (imageStoreOnly) {
+            window.oxideWebGpuImageStore = await runBench(
+               "image_store",
+               () => window.oxideApp.bench_webgpu_image_store(imageStoreCount, imageStoreStandalone),
+            );
+            console.log("oxide-webgpu-image-store", window.oxideWebGpuImageStore);
          } else if (imageArchitectureOnly) {
             window.oxideApp.prewarm_webgpu_bench_resources();
             window.oxideWebGpuArchitecturePrimitives = await runBench("image_architecture", () => window.oxideApp.bench_webgpu_image_architecture(mixedSamples, mixedFrames, window.devicePixelRatio));
@@ -812,6 +822,7 @@
             direct_surface_ab: window.oxideWebGpuDirectSurfaceAB,
             architecture_primitives: window.oxideWebGpuArchitecturePrimitives,
             spinner_frame_perf: window.oxideWebGpuSpinnerFramePerf,
+            image_store_perf: window.oxideWebGpuImageStore,
             benchmark_marks: window.oxideWebBenchmarkMarks,
             capture_target: captureTarget,
             browser_environment: {

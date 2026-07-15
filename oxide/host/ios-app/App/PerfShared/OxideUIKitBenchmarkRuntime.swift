@@ -6987,6 +6987,276 @@ private final class CollectionBenchView: UIView, UICollectionViewDataSource
     }
 }
 
+private func makeImageRegionGridIcons() -> [UIImage]
+{
+    let sourceSize = 64
+    let displaySize = 28
+    return (0..<1_000).map
+    {
+        seed in
+        let low = UInt8(truncatingIfNeeded: seed)
+        let high = UInt8(truncatingIfNeeded: seed >> 8)
+        var source = [UInt8](repeating: 0, count: sourceSize * sourceSize * 4)
+        for y in 0..<sourceSize
+        {
+            for x in 0..<sourceSize
+            {
+                let checker = UInt8(((x / 8) ^ (y / 8)) & 1)
+                let index = (y * sourceSize + x) * 4
+                source[index] = low &* 17 &+ UInt8(x) &* 3
+                source[index + 1] = high &* 29 &+ UInt8(y) &* 5
+                source[index + 2] = 72 &+ checker &* 108 &+ low &* 7
+                source[index + 3] = 255
+            }
+        }
+        var pixels = [UInt8](repeating: 0, count: displaySize * displaySize * 4)
+        for y in 0..<displaySize
+        {
+            let sourceY0 = y * sourceSize / displaySize
+            let sourceY1 = min(
+                max(((y + 1) * sourceSize + displaySize - 1) / displaySize, sourceY0 + 1),
+                sourceSize
+            )
+            for x in 0..<displaySize
+            {
+                let sourceX0 = x * sourceSize / displaySize
+                let sourceX1 = min(
+                    max(((x + 1) * sourceSize + displaySize - 1) / displaySize, sourceX0 + 1),
+                    sourceSize
+                )
+                var red = 0
+                var green = 0
+                var blue = 0
+                var alpha = 0
+                var samples = 0
+                for sourceY in sourceY0..<sourceY1
+                {
+                    for sourceX in sourceX0..<sourceX1
+                    {
+                        let sourceIndex = (sourceY * sourceSize + sourceX) * 4
+                        red += Int(source[sourceIndex])
+                        green += Int(source[sourceIndex + 1])
+                        blue += Int(source[sourceIndex + 2])
+                        alpha += Int(source[sourceIndex + 3])
+                        samples += 1
+                    }
+                }
+                let targetIndex = (y * displaySize + x) * 4
+                pixels[targetIndex] = UInt8((red + samples / 2) / samples)
+                pixels[targetIndex + 1] = UInt8((green + samples / 2) / samples)
+                pixels[targetIndex + 2] = UInt8((blue + samples / 2) / samples)
+                pixels[targetIndex + 3] = UInt8((alpha + samples / 2) / samples)
+            }
+        }
+        let data = Data(pixels) as CFData
+        guard let provider = CGDataProvider(data: data),
+              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let image = CGImage(
+                  width: displaySize,
+                  height: displaySize,
+                  bitsPerComponent: 8,
+                  bitsPerPixel: 32,
+                  bytesPerRow: displaySize * 4,
+                  space: colorSpace,
+                  bitmapInfo: CGBitmapInfo(
+                      rawValue: CGImageAlphaInfo.premultipliedLast.rawValue |
+                          CGBitmapInfo.byteOrder32Big.rawValue
+                  ),
+                  provider: provider,
+                  decode: nil,
+                  shouldInterpolate: true,
+                  intent: .defaultIntent
+              ) else
+        {
+            preconditionFailure("failed to create image-region grid icon")
+        }
+        return UIImage(cgImage: image, scale: 1.0, orientation: .up)
+    }
+}
+
+private func makeImageRegionGridImage(icons: [UIImage], size: CGSize, columns: Int, itemSize: CGFloat) -> UIImage
+{
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1.0
+    format.opaque = true
+    return UIGraphicsImageRenderer(size: size, format: format).image
+    {
+        context in
+        UIColor.white.setFill()
+        context.fill(CGRect(origin: .zero, size: size))
+        for (index, icon) in icons.enumerated()
+        {
+            icon.draw(
+                in: CGRect(
+                    x: 12.0 + CGFloat(index % columns) * itemSize,
+                    y: CGFloat(index / columns) * itemSize,
+                    width: itemSize,
+                    height: itemSize
+                )
+            )
+        }
+    }
+}
+
+private final class ImageRegionGridCell: UICollectionViewCell
+{
+    static let reuseID = "ImageRegionGridCell"
+    private let imageView = UIImageView(frame: .zero)
+
+    override init(frame: CGRect)
+    {
+        super.init(frame: frame)
+        imageView.contentMode = .scaleAspectFill
+        imageView.clipsToBounds = true
+        contentView.addSubview(imageView)
+    }
+
+    required init?(coder: NSCoder)
+    {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews()
+    {
+        super.layoutSubviews()
+        imageView.frame = contentView.bounds
+    }
+
+    func configure(image: UIImage)
+    {
+        imageView.image = image
+    }
+}
+
+private final class ImageRegionGridBenchView: UIView, UICollectionViewDataSource
+{
+    private static let itemCount = 1_000
+    private let icons = makeImageRegionGridIcons()
+    private let layout = UICollectionViewFlowLayout()
+    private lazy var collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
+
+    override init(frame: CGRect)
+    {
+        super.init(frame: frame)
+        layout.itemSize = CGSize(width: 28.0, height: 28.0)
+        layout.minimumLineSpacing = 0.0
+        layout.minimumInteritemSpacing = 0.0
+        layout.sectionInset = UIEdgeInsets(top: 0.0, left: 12.0, bottom: 0.0, right: 12.0)
+        collectionView.backgroundColor = .white
+        collectionView.dataSource = self
+        collectionView.register(
+            ImageRegionGridCell.self,
+            forCellWithReuseIdentifier: ImageRegionGridCell.reuseID
+        )
+        addSubview(collectionView)
+    }
+
+    required init?(coder: NSCoder)
+    {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews()
+    {
+        super.layoutSubviews()
+        collectionView.frame = bounds
+    }
+
+    func scroll(to phase: CGFloat)
+    {
+        let maxOffset = max(collectionView.contentSize.height - collectionView.bounds.height, 0.0)
+        collectionView.contentOffset = CGPoint(x: 0.0, y: maxOffset * phase)
+        collectionView.layoutIfNeeded()
+    }
+
+    func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int
+    {
+        Self.itemCount
+    }
+
+    func collectionView(
+        _ collectionView: UICollectionView,
+        cellForItemAt indexPath: IndexPath
+    ) -> UICollectionViewCell
+    {
+        let cell = collectionView.dequeueReusableCell(
+            withReuseIdentifier: ImageRegionGridCell.reuseID,
+            for: indexPath
+        ) as! ImageRegionGridCell
+        cell.configure(image: icons[indexPath.item])
+        return cell
+    }
+}
+
+private final class OptimizedImageRegionGridBenchView: UIView
+{
+    private static let itemCount = 1_000
+    private static let columns = 12
+    private static let itemSize = CGFloat(28.0)
+    private static let contentHeight = CGFloat(
+        (itemCount + columns - 1) / columns
+    ) * itemSize
+    private let contentLayer = CALayer()
+    private var phase: CGFloat = 0.0
+
+    override init(frame: CGRect)
+    {
+        let icons = makeImageRegionGridIcons()
+        let gridImage = makeImageRegionGridImage(
+            icons: icons,
+            size: CGSize(width: 360.0, height: Self.contentHeight),
+            columns: Self.columns,
+            itemSize: Self.itemSize
+        )
+        super.init(frame: frame)
+        isOpaque = true
+        backgroundColor = .white
+        clipsToBounds = true
+        contentLayer.contents = gridImage.cgImage
+        contentLayer.contentsGravity = .resize
+        contentLayer.contentsScale = 1.0
+        contentLayer.magnificationFilter = .linear
+        contentLayer.minificationFilter = .linear
+        contentLayer.actions = [
+            "bounds": NSNull(),
+            "position": NSNull()
+        ]
+        layer.addSublayer(contentLayer)
+    }
+
+    required init?(coder: NSCoder)
+    {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func scroll(to phase: CGFloat)
+    {
+        self.phase = min(max(phase, 0.0), 1.0)
+        updateContentLayer()
+    }
+
+    override func layoutSubviews()
+    {
+        super.layoutSubviews()
+        contentLayer.bounds = CGRect(
+            x: 0.0,
+            y: 0.0,
+            width: bounds.width,
+            height: Self.contentHeight
+        )
+        updateContentLayer()
+    }
+
+    private func updateContentLayer()
+    {
+        let offset = max(Self.contentHeight - bounds.height, 0.0) * phase
+        contentLayer.position = CGPoint(
+            x: bounds.midX,
+            y: Self.contentHeight * 0.5 - offset
+        )
+    }
+}
+
 private final class OptimizedCollectionJourneyBenchView: UIView
 {
     private let mode: CollectionBenchMode
@@ -12920,6 +13190,34 @@ enum OxideUIKitBenchmarkCatalog
                 phases: [CGFloat(0.0), 0.18, 0.42, 0.88, 0.52, 0.10],
                 host: host
             )
+        case "testImageRegionGridScrollJourney":
+            let view = ImageRegionGridBenchView(frame: .zero)
+            host.mount(view, size: CGSize(width: 360, height: 640))
+            return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 12)
+            {
+                withPerfSignpost("scroll")
+                {
+                    for phase in [CGFloat(0.0), 0.18, 0.42, 0.88, 0.52, 0.10]
+                    {
+                        view.scroll(to: phase)
+                        host.commit(view, awaitDisplayPresentation: true)
+                    }
+                }
+            }
+        case "testOptimizedImageRegionGridScrollJourney":
+            let view = OptimizedImageRegionGridBenchView(frame: .zero)
+            host.mount(view, size: CGSize(width: 360, height: 640))
+            return OxideUIKitBenchmark(testName: normalizedTestName, iterations: 12)
+            {
+                withPerfSignpost("scroll")
+                {
+                    for phase in [CGFloat(0.0), 0.18, 0.42, 0.88, 0.52, 0.10]
+                    {
+                        view.scroll(to: phase)
+                        host.commit(view, awaitDisplayPresentation: true)
+                    }
+                }
+            }
         case "testChatThreadScrollJourney":
             let view = CollectionBenchView(frame: .zero, mode: .chat)
             host.mount(view, size: CGSize(width: 360, height: 640))

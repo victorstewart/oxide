@@ -6,6 +6,7 @@ license = "MIT OR Apache-2.0"
 description = "Metal renderer implementation for Oxide"
 
 [dependencies]
+oxide-image-store = { path = "../image-store" }
 oxide-renderer-api = { path = "../renderer-api" }
 libc = "0.2"
 thiserror = "1.0"

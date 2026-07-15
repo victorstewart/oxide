@@ -44,6 +44,8 @@ RenderSnapshot instance
 
 The cache key contains chunk id, structural revision, geometry revision, resource revision, renderer device generation, target color format, and sample count. A hit also verifies every referenced image or glyph-atlas generation against the renderer's current generation table. An update or release invalidates all dependent entries immediately; a mismatched snapshot dependency falls back rather than sampling stale content.
 
+C60 atlas publication does not change the page handle or generation, so adding a previously unsampled cell preserves every unrelated prepared entry. Slot release hands the store's exact `RenderChunkId` references through the private backend hook; the matching prepared chunk and any retained layer built from it are invalidated without disturbing unrelated chunks or layers.
+
 On a miss, lowering accepts balanced clip operations plus RRects, images, image meshes, glyph runs, and solids. Consecutive compatible immutable commands become one prepared operation. Buffers use shared storage because the focused same-binary private-buffer comparison regressed one-dirty GPU p50 by 79.1% and every measured tail. Images retain a finalized immutable argument buffer when supported. Glyph/mesh vertices, normalized local indices, and draw-color records are persistent. No private staging or indirect command buffer is enabled.
 
 Each snapshot visit resolves property slots into one affine matrix, translation, and opacity value. Those values, an identity-matrix flag, the instance origin, and the current viewport form a 48-byte record sent separately from cached geometry. All frame records are copied once into one contiguous slice of the active frame's completion-protected uniform ring, and draws bind offsets into that slice rather than asking Metal to stage one inline constant block per chunk. Equal adjacent property-slot lists reuse the resolved property value. Translation-only RRect/image vertices preserve flat-path world-coordinate rounding at fragment edges; general affine instances retain local fragment coordinates. Clip rectangles are transformed into conservative integer bounds; nested chunk clips remain ordered and intersect with the instance and damage scissors.
@@ -118,6 +120,7 @@ renderer.submit(token)?;
 
 ## Changelog
 
+- 2026-07-15: exposed exact prepared-chunk invalidation for generation-safe atlas slot eviction without page-wide cache loss.
 - 2026-07-14: integrated prepared layers with allocated-byte admission, protected-set budgeting, compatible texture pooling, last-use tracking, and exact over-budget fallback.
 - 2026-07-13: added C29 generation-keyed prepared snapshot layers with body-free clean composite, single-owner dirty refresh, exact resource invalidation, adaptive exact opaque-RRect intermediates, and exact unsupported fallback.
 - 2026-07-13: added C27 prepared image meshes, indexed small-damage replay, zero-vertex-scan accounting, and validated static full-plan reuse.

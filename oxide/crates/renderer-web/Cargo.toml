@@ -7,6 +7,7 @@ description = "WebAssembly canvas renderer implementation for Oxide"
 
 [dependencies]
 bytemuck = { version = "1.23.2", features = ["derive"] }
+oxide-image-store = { path = "../image-store" }
 oxide-renderer-api = { path = "../renderer-api" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

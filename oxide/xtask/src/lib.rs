@@ -1256,6 +1256,18 @@ const UIKIT_CASE_SPECS: &[UIKitCaseSpec] = &[
         note: "Hand-tuned custom-draw thumbnail grid scroll matrix parity.",
     },
     UIKitCaseSpec {
+        test_name: "testImageRegionGridScrollJourney",
+        case_id: "uikit.journey.image_region_grid_scroll",
+        oxide_case_id: "gpu.authoring.image_store.atlas_grid_1000",
+        note: "Idiomatic UIImageView image-region grid scroll parity.",
+    },
+    UIKitCaseSpec {
+        test_name: "testOptimizedImageRegionGridScrollJourney",
+        case_id: "uikit.optimized.journey.image_region_grid_scroll",
+        oxide_case_id: "gpu.authoring.image_store.atlas_grid_1000",
+        note: "Hand-tuned visible-row custom-draw image-region grid scroll parity.",
+    },
+    UIKitCaseSpec {
         test_name: "testChatThreadScrollJourney",
         case_id: "uikit.journey.chat_thread_scroll_matrix",
         oxide_case_id: "cpu.journey.chat_thread_scroll_matrix",
@@ -6342,7 +6354,7 @@ fn capture_uikit_device_report(
         } else {
             None
         };
-        let gpu_run = if trace_enabled {
+        let mut gpu_run = if trace_enabled {
             if let Some(existing_run) =
                 load_resumable_uikit_device_trace_run(root, spec, &case_dir)?
             {
@@ -6375,6 +6387,25 @@ fn capture_uikit_device_report(
                 watch_capture,
             )?
         };
+        if trace_enabled
+            && fs::read_to_string(&gpu_run.launch_stdout_path)
+                .map(|stdout| !stdout.contains(OXIDE_FRAME_CADENCE_SUMMARY_PREFIX))
+                .unwrap_or(true)
+        {
+            let console_run = run_uikit_device_case_console_capture(
+                root,
+                device,
+                &prepared_build.built_app,
+                spec,
+                refresh_mode,
+                &case_dir,
+                watch_capture,
+            )?;
+            gpu_run.launch_stdout_path = console_run.launch_stdout_path;
+            gpu_run.notes.push(String::from(
+                "Frame cadence source: collected through a separate console-summary pass because xctrace did not preserve the launched target's stdout.",
+            ));
+        }
         if watch_capture {
             copy_device_app_capture_dir(
                 root,

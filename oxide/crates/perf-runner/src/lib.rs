@@ -290,6 +290,10 @@ const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
         name: "Retained Snapshot Spatial Damage",
     },
     AuthoringPerfSpec { id: "gpu.authoring.scene3d.mixed_frame", name: "Scene3D Mixed Frame" },
+    AuthoringPerfSpec {
+        id: "gpu.authoring.image_store.atlas_grid_1000",
+        name: "Image Store Atlas Grid",
+    },
 ];
 
 const PERF_LAUNCH_SPECS: &[LaunchPerfSpec] = &[
@@ -3400,6 +3404,9 @@ fn push_authoring_cases(
                 architecture_matrix::metal_spatial_damage_case(spec.id, smoke, false)?
             }
             "gpu.authoring.scene3d.mixed_frame" => authoring_scene3d_mixed_frame_case(smoke)?,
+            "gpu.authoring.image_store.atlas_grid_1000" => {
+                architecture_matrix::metal_image_store_case(spec.id, smoke, 1_000, true)?
+            }
             other => bail!("unknown authoring perf case `{}`", other),
         };
         cases.push(case);

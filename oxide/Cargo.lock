@@ -889,7 +889,9 @@ dependencies = [
 name = "oxide-host-web"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "js-sys",
+ "oxide-image-store",
  "oxide-platform-api",
  "oxide-platform-web",
  "oxide-renderer-api",
@@ -898,6 +900,18 @@ dependencies = [
  "oxide-text",
  "oxide-ui-core",
  "oxide-wasm-alloc-counter",
+ "png",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "oxide-image-store"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "oxide-renderer-api",
  "png",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -936,6 +950,7 @@ dependencies = [
  "foreign-types",
  "metal",
  "oxide-harness-registry",
+ "oxide-image-store",
  "oxide-input",
  "oxide-permissions",
  "oxide-platform-api",
@@ -1041,6 +1056,7 @@ dependencies = [
  "mach2",
  "metal",
  "objc",
+ "oxide-image-store",
  "oxide-renderer-api",
  "png",
  "thiserror 1.0.69",
@@ -1052,6 +1068,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "js-sys",
+ "oxide-image-store",
  "oxide-renderer-api",
  "oxide-wasm-alloc-counter",
  "wasm-bindgen",

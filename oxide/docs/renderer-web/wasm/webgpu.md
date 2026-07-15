@@ -87,6 +87,8 @@ C39 replaces each WebGPU nine-slice's per-cell image expansion with one 44-byte 
 
 C56 reduces compatible Scene3D runs from one draw and one 256-byte dynamic-uniform slot per instance to one draw per exact mesh/state run and one compact 80-byte record per instance. The isolated browser matrix selects 96, 1,000, or 10,000 instances and compatible, mixed-state, transparent-order, or subviewport modes while reporting CPU distributions, direct Scene3D GPU timestamps, draw/bind/viewport counts, upload bytes, scratch capacity, and logical GPU memory. The create/release population exercises more than 14,000 mesh creations in one renderer lifetime; generation-slot storage remains at its warm peak.
 
+C60 implements `oxide_image_store::ImageResidencyBackend` for both browser renderer layers. Store textures use `Rgba8UnormSrgb`; empty atlas pages allocate without a zero-filled upload, tightly packed cell and standalone publication writes directly without a second row copy, and standalone minified variants build the complete CPU mip chain in linear sRGB before linear-mip sampling. Each WebGPU device receives a unique store generation, while exact chunk invalidation removes only prepared work and retained layers that referenced an evicted placement.
+
 ## Feature flags and cfgs
 
 Compiled only for `wasm32` with the existing WebGPU and WGSL features.
@@ -97,12 +99,15 @@ Native contract tests exercise decoding/source paths and freeze prepared-cache i
 
 C56 additionally freezes the Scene3D instance ABI, exact grouping key, transparent boundary, cull/depth matrix, viewport/scissor state, and generation-slot ownership. Run its real-Dawn workload with `--scene3d-out PATH --scene3d-instances COUNT --scene3d-mode MODE`; modes 0–3 select compatible, mixed, transparent, and subviewport cases.
 
+C60 native source tests freeze the sRGB empty-page, subregion append, complete-mip, device-generation, and exact-invalidation hooks. The displayed browser timing/pixel matrix is run by the C60 host export and promoted through C61/C62.
+
 ## Examples
 
 Packed `0xFFFF_0000` uploads as opaque blue; packed zero uploads the draw uniform.
 
 ## Changelog
 
+- 2026-07-15: implemented the C60 image-store backend with sRGB empty atlas pages, append-only cell uploads, linear-sRGB standalone mip generation, device generations, and exact prepared invalidation.
 - 2026-07-15: added compact, adjacent order-safe Scene3D instancing, complete cull/depth variants, physical viewport/scissor ownership, generation-checked mesh recycling, and the C56 browser matrix.
 - 2026-07-14: replaced three-RRect WebGPU neon markers with one compact analytic instance matching corrected Metal semantics.
 - 2026-07-14: replaced WebGPU spinner CPU trigonometry and twelve-RRect expansion with one compact procedural instance, shared animation/property uniforms, prepared-path ownership, and displayed-frame proof.

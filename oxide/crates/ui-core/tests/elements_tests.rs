@@ -5,7 +5,8 @@ use oxide_platform_api::{
 use oxide_renderer_api::{Color, DrawCmd, ImageHandle, RectF};
 use oxide_ui_core::elements::{
     encode_label_text, encode_label_text_profiled, Align, Badge, BadgeState, ButtonState, ImageFit,
-    ImageUploader, ImageView, ImageZoomState, Label, Overlay, OverlayState, PickerState, PickerStyle,
+    ImageRegionView, ImageUploader, ImageView, ImageZoomState, Label, Overlay, OverlayState,
+    PickerState, PickerStyle,
     PopupWindow, SliderState, SlidingSwitchMode, SlidingSwitchState, SlidingSwitchStyle, Spinner,
     TextCtx, TextInput, TextInputState, TextInputStyle, TextValidation, ToggleState, UICameraView,
 };
@@ -24,6 +25,18 @@ fn image_draw(image: &ImageView, rect: RectF, zoom: Option<&ImageZoomState>) -> 
         DrawCmd::Image { dst, src, alpha, .. } => (dst, src, alpha),
         ref other => panic!("expected image draw, got {other:?}"),
     }
+}
+
+fn image_region_draw(image: &ImageRegionView, rect: RectF) -> (RectF, RectF, f32)
+{
+   let mut builder = DrawListBuilder::new();
+   image.encode(rect, &mut builder);
+   assert_eq!(builder.drawlist().items.len(), 1);
+   match builder.drawlist().items[0]
+   {
+      DrawCmd::Image { dst, src, alpha, .. } => (dst, src, alpha),
+      ref other => panic!("expected image draw, got {other:?}"),
+   }
 }
 
 fn assert_rect_close(actual: RectF, expected: RectF) {
@@ -81,6 +94,22 @@ fn image_view_cover_bounds_destination_and_crops_source_pixels() {
     let (dst, src, _) = image_draw(&image, rect, None);
     assert_rect_close(dst, rect);
     assert_rect_close(src, RectF::new(37.5, 0.0, 125.0, 100.0));
+}
+
+#[test]
+fn image_region_view_cover_keeps_crop_inside_atlas_slot()
+{
+   let image = ImageRegionView {
+      image: ImageHandle(9),
+      source: RectF::new(130.0, 66.0, 80.0, 40.0),
+      fit: ImageFit::Cover,
+      alpha: 0.75,
+   };
+   let rect = RectF::new(10.0, 20.0, 50.0, 50.0);
+   let (dst, src, alpha) = image_region_draw(&image, rect);
+   assert_rect_close(dst, rect);
+   assert_rect_close(src, RectF::new(150.0, 66.0, 40.0, 40.0));
+   assert_eq!(alpha, 0.75);
 }
 
 #[test]

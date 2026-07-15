@@ -3210,6 +3210,20 @@ impl MetalRenderer {
       }
    }
 
+   fn invalidate_prepared_chunks(&mut self, chunks: &[api::RenderChunkId])
+   {
+      self.prepared_chunks.invalidate_chunks(chunks);
+      self.prepared_layer_frame_keys.retain(|_, key| !chunks.contains(&key.chunk_id()));
+      for layer in self.layers.values_mut()
+      {
+         if layer.prepared_key.is_some_and(|key| chunks.contains(&key.chunk_id()))
+         {
+            layer.prepared_key = None;
+            layer.resources.clear();
+         }
+      }
+   }
+
    /// Returns the hard Metal-allocated-byte budget for retained and pooled layers.
    pub fn layer_cache_budget_bytes(&self) -> u64
    {
@@ -3995,6 +4009,11 @@ impl MetalRenderer {
       self.image_residency
    }
 
+   const fn image_device_generation(&self) -> u64
+   {
+      self.device_generation
+   }
+
    pub fn image_create_a8(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize) -> api::ImageHandle
    {
       let bpr = if row_bytes == 0 { w as usize } else { row_bytes } as u64;
@@ -4124,6 +4143,76 @@ impl MetalRenderer {
       api::ImageHandle(id)
    }
 
+   fn image_create_store_rgba8(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize, mipmapped: bool) -> api::ImageHandle
+   {
+      let Some(tight_row) = (w as usize).checked_mul(4) else
+      {
+         return api::ImageHandle(0);
+      };
+      let bpr = if row_bytes == 0 { tight_row } else { row_bytes };
+      let Some(required) = (h as usize).checked_sub(1)
+         .and_then(|rows| rows.checked_mul(bpr))
+         .and_then(|bytes| bytes.checked_add(tight_row)) else
+      {
+         return api::ImageHandle(0);
+      };
+      if w == 0 || h == 0 || bpr < tight_row || data.len() < required
+      {
+         return api::ImageHandle(0);
+      }
+      let image = if mipmapped
+      {
+         self.shared_image_texture_with_mips(
+            MTLPixelFormat::RGBA8Unorm_sRGB,
+            w,
+            h,
+            data,
+            bpr as u64,
+            true,
+         )
+      }
+      else
+      {
+         self.shared_image_texture(MTLPixelFormat::RGBA8Unorm_sRGB, w, h, data, bpr as u64)
+      };
+      self.last_stats.texture_upload_bytes = self
+         .last_stats
+         .texture_upload_bytes
+         .saturating_add(data.len() as u64);
+      let id = self.next_image_id;
+      self.next_image_id = self.next_image_id.wrapping_add(1).max(1);
+      self.insert_image_texture(id, image);
+      api::ImageHandle(id)
+   }
+
+   fn image_create_store_rgba8_empty(&mut self, w: u32, h: u32) -> api::ImageHandle
+   {
+      if w == 0 || h == 0
+      {
+         return api::ImageHandle(0);
+      }
+      let descriptor = TextureDescriptor::new();
+      descriptor.set_pixel_format(MTLPixelFormat::RGBA8Unorm_sRGB);
+      descriptor.set_texture_type(MTLTextureType::D2);
+      descriptor.set_width(w as u64);
+      descriptor.set_height(h as u64);
+      descriptor.set_storage_mode(MTLStorageMode::Shared);
+      descriptor.set_usage(MTLTextureUsage::ShaderRead);
+      let texture = self.device.new_texture(&descriptor);
+      self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
+      let image = ImageTexture {
+         allocated_bytes: Self::texture_allocated_bytes(&texture),
+         texture,
+         storage: ImageStorage::Shared,
+         mipmapped: false,
+         mip_levels: 1,
+      };
+      let id = self.next_image_id;
+      self.next_image_id = self.next_image_id.wrapping_add(1).max(1);
+      self.insert_image_texture(id, image);
+      api::ImageHandle(id)
+   }
+
    pub fn image_update_rgba8(&mut self, handle: api::ImageHandle, x: u32, y: u32, w: u32, h: u32, data: &[u8], row_bytes: usize)
    {
       let image = self.images.get(&handle.0).map(|image| {
@@ -4173,6 +4262,50 @@ impl MetalRenderer {
          let generation = self.image_generations.entry(handle.0).or_insert(0);
          *generation = generation.saturating_add(1);
       }
+   }
+
+   /// Publishes a previously unsampled RGBA8 atlas slot without invalidating
+   /// prepared chunks that reference other slots on the same page.
+   fn image_append_rgba8(&mut self, handle: api::ImageHandle, x: u32, y: u32, w: u32, h: u32, data: &[u8], row_bytes: usize)
+   {
+      let Some(image) = self.images.get(&handle.0) else
+      {
+         return;
+      };
+      if image.storage != ImageStorage::Shared || image.mipmapped
+      {
+         return;
+      }
+      let Some(tight_row) = (w as usize).checked_mul(4) else
+      {
+         return;
+      };
+      let bpr = if row_bytes == 0 { tight_row } else { row_bytes };
+      let Some(required) = (h as usize).checked_sub(1)
+         .and_then(|rows| rows.checked_mul(bpr))
+         .and_then(|bytes| bytes.checked_add(tight_row)) else
+      {
+         return;
+      };
+      if w == 0 || h == 0
+         || bpr < tight_row
+         || data.len() < required
+         || u64::from(x).saturating_add(u64::from(w)) > image.texture.width()
+         || u64::from(y).saturating_add(u64::from(h)) > image.texture.height()
+      {
+         return;
+      }
+      let region = MTLRegion {
+         origin: MTLOrigin { x: x as u64, y: y as u64, z: 0 },
+         size: MTLSize { width: w as u64, height: h as u64, depth: 1 },
+      };
+      image
+         .texture
+         .replace_region(region, 0, data.as_ptr() as *const _, bpr as u64);
+      self.last_stats.texture_upload_bytes = self
+         .last_stats
+         .texture_upload_bytes
+         .saturating_add(u64::from(w).saturating_mul(u64::from(h)).saturating_mul(4));
    }
 
    pub fn image_release(&mut self, handle: api::ImageHandle)
@@ -7195,6 +7328,39 @@ impl Drop for MetalRenderer {
     fn drop(&mut self) {
         self.release_live_camera_frame();
     }
+}
+
+impl oxide_image_store::ImageResidencyBackend for MetalRenderer
+{
+   fn image_device_generation(&self) -> u64
+   {
+      self.image_device_generation()
+   }
+
+   fn image_create_rgba8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize, mipmapped: bool) -> api::ImageHandle
+   {
+      self.image_create_store_rgba8(width, height, data, row_bytes, mipmapped)
+   }
+
+   fn image_create_rgba8_empty(&mut self, width: u32, height: u32) -> api::ImageHandle
+   {
+      self.image_create_store_rgba8_empty(width, height)
+   }
+
+   fn image_append_rgba8(&mut self, handle: api::ImageHandle, x: u32, y: u32, width: u32, height: u32, data: &[u8], row_bytes: usize)
+   {
+      self.image_append_rgba8(handle, x, y, width, height, data, row_bytes);
+   }
+
+   fn image_release(&mut self, handle: api::ImageHandle)
+   {
+      self.image_release(handle);
+   }
+
+   fn image_invalidate_chunks(&mut self, chunks: &[api::RenderChunkId])
+   {
+      self.invalidate_prepared_chunks(chunks);
+   }
 }
 
 impl api::Renderer for MetalRenderer {

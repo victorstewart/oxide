@@ -26,6 +26,7 @@ Call flow:
 - `native_stub_ignores_web_camera_background_commands()`: verifies unsupported web `CameraBg` commands do not count as web draw work.
 - `wasm_webgpu_runtime_images_are_explicitly_reclaimable_without_arena_tombstones()`: verifies the production wrapper delegates image release and the WebGPU resource table recycles generation-checked slots without append-only tombstones or stale-handle ABA.
 - `wasm_webgpu_scene3d_uses_compact_order_safe_instances_and_generation_slots()`: freezes C56's 80-byte storage records, exact adjacent grouping key, transparent boundary, cull variants, viewport/scissor state, instanced draw range, and generation-checked mesh ownership.
+- `wasm_webgpu_image_store_uses_append_only_srgb_pages_and_complete_mips()`: freezes C60's portable image-store backend hooks, direct tight uploads, formats, and chunk/layer invalidation.
 - `wasm_public_exports_are_webgpu_only()`: verifies wasm public exports remain limited to WebGPU production renderer types plus the narrow Canvas indexed-quad diagnostic helper, without exposing the raw Canvas renderer type.
 - `wasm_webgpu_backend_packet_vocabulary_is_frozen()`: freezes private WebGPU `DrawKind`, `GpuDraw`, coalescing, and `DrawCmd` lowering vocabulary before backend packet migrations.
 - `wasm_webgpu_draw_encoding_reuses_scratch_storage()`: requires retained packed frame streams, reusable primitive scratch, and removal of duplicate frame byte vectors.
@@ -61,6 +62,8 @@ C30 browser proof complements these structural checks with exact parent/candidat
 
 C56 requires real Dawn 96/1,000/10,000-instance timing, mixed/transparent/subviewport controls, create/release endurance, and parent/candidate pixels beyond the static grouping and shader checks.
 
+C60 source coverage is a compile-time contract, not displayed proof. C61 runs the real-Dawn image-store matrix when a controlled browser session is available.
+
 ## Feature flags and cfgs
 
 They run on native targets against the non-wasm `WebRenderer` stub.
@@ -82,6 +85,7 @@ pub fn scale() -> f32
 
 ## Changelog
 
+- 2026-07-15: froze C60 sRGB image-store pages, empty creation, append-only publication, complete standalone mips, unique device generation, and exact invalidation hooks.
 - 2026-07-15: froze C56 compact Scene3D instances, exact order-safe grouping, cull/viewport state, instanced draws, and generation-checked mesh recycling.
 - 2026-07-14: froze the C41 60-byte neon-marker ABI, analytic shader semantics, compact counters, and no-RRect-lowering contract.
 - 2026-07-14: froze the C40 20-byte spinner instance ABI, procedural shader atoms, selective animation uniform, prepared ownership, counters, and no-CPU-trigonometry contract.

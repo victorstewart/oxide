@@ -37,6 +37,8 @@ static OXIDE_WASM_ALLOCATOR: oxide_wasm_alloc_counter::CountingAllocator<std::al
 #[cfg(target_arch = "wasm32")]
 mod wasm_host {
     use super::generate_checker_rgba;
+    use futures_util::future::join_all;
+    use oxide_image_store as images;
     use oxide_platform_api as platform_api;
     use oxide_platform_api::Platform;
     use oxide_renderer_api as gfx;
@@ -54,6 +56,7 @@ mod wasm_host {
     use std::fmt::Write;
     use std::rc::Rc;
     use std::sync::atomic::Ordering;
+    use std::sync::Arc;
     use wasm_bindgen::prelude::*;
     use wasm_bindgen::{closure::Closure, JsCast};
     use wasm_bindgen_futures::JsFuture;
@@ -2126,6 +2129,133 @@ mod wasm_host {
                 dpr,
                 WebGpuArchitectureMatrixKind::Image,
             ).await
+        }
+
+        pub async fn bench_webgpu_image_store(
+            &self,
+            requested_count: u32,
+            standalone: bool,
+        ) -> Result<String, JsValue> {
+            let count = requested_count.clamp(1, 10_000) as usize;
+            let encoded: Vec<_> = (0..count)
+                .map(|seed| c60_web_icon_png(seed as u64, 64))
+                .collect::<Result<_, _>>()?;
+            let usage = if standalone {
+                images::ImageUsage::Standalone
+            } else {
+                images::ImageUsage::Static
+            };
+            let mut store = images::ImageStore::new(images::ImageStoreConfig {
+                decoded_budget_bytes: 64 * 1024 * 1024,
+                gpu_budget_bytes: 64 * 1024 * 1024,
+                atlas_width: 512,
+                atlas_height: 512,
+                max_atlas_image_dimension: 128,
+                gutter: 2,
+            })
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+            let setup_started = perf_now();
+            let ids: Vec<_> = (0..count)
+                .map(|index| {
+                    store.request(images::ImageRequest {
+                        variant: images::ImageVariant {
+                            source: index as u64 + 1,
+                            revision: 1,
+                            display_width: 28,
+                            display_height: 28,
+                        },
+                        encoded: encoded[index].clone(),
+                        usage,
+                    })
+                })
+                .collect();
+            let decode_started = perf_now();
+            loop {
+                let jobs: Vec<_> = (0..32).filter_map(|_| store.take_decode_job()).collect();
+                if jobs.is_empty() {
+                    break;
+                }
+                for completion in join_all(
+                    jobs.into_iter().map(images::decode_image_at_display_size_browser),
+                )
+                .await
+                {
+                    store.complete_decode(completion);
+                }
+            }
+            let decode_wall_ms = (perf_now() - decode_started).max(0.0);
+            let renderer = self.state.borrow().renderer.clone();
+            let upload_started = perf_now();
+            let uploaded = store.upload_ready(&mut *renderer.borrow_mut());
+            let upload_wall_ms = (perf_now() - upload_started).max(0.0);
+            let mut builder = ui::DrawListBuilder::new();
+            for (index, image) in ids.iter().filter_map(|id| store.resolve(*id)).enumerate() {
+                builder.image(
+                    image.texture,
+                    gfx::RectF::new(
+                        (index % 43) as f32 * 28.0,
+                        (index / 43) as f32 * 28.0,
+                        28.0,
+                        28.0,
+                    ),
+                    image.source,
+                    1.0,
+                );
+            }
+            let setup_ms = (perf_now() - setup_started).max(0.0);
+            let timestamp_start_frame_id = renderer.borrow().last_stats().frame_id;
+            {
+                let mut renderer = renderer.borrow_mut();
+                let token = renderer.begin_frame(&gfx::FrameTarget, None);
+                renderer.encode_pass(builder.drawlist());
+                renderer.submit(token).map_err(render_err)?;
+            }
+            wait_renderer_queue_idle(&renderer).await?;
+            wait_animation_frame_once().await?;
+            let first_displayed_ms = (perf_now() - setup_started).max(0.0);
+            let mut submit_ms = Vec::with_capacity(20);
+            for _ in 0..20 {
+                let started = perf_now();
+                let mut renderer = renderer.borrow_mut();
+                let token = renderer.begin_frame(&gfx::FrameTarget, None);
+                renderer.encode_pass(builder.drawlist());
+                renderer.submit(token).map_err(render_err)?;
+                drop(renderer);
+                submit_ms.push((perf_now() - started).max(0.0));
+            }
+            submit_ms.sort_by(f64::total_cmp);
+            let backend = settle_renderer_timestamps(&renderer, timestamp_start_frame_id).await?;
+            let stats = store.stats();
+            let publication_ms = stats.request_to_first_publication_ns as f64
+                / stats.first_publication_count.max(1) as f64
+                / 1_000_000.0;
+            for id in ids {
+                store.release(id, &mut *renderer.borrow_mut());
+            }
+            store.purge_for_memory_warning(&mut *renderer.borrow_mut());
+            Ok(format!(
+                "count={count};variant={};setup_ms={setup_ms:.6};request_to_first_displayed_frame_ms={first_displayed_ms:.6};store_request_to_first_publication_ms_avg={publication_ms:.6};submit_p50_ms={:.6};submit_p95_ms={:.6};submit_p99_ms={:.6};submit_peak_ms={:.6};decoded_output_bytes={};decoded_peak_bytes={};decode_time_ms={:.6};decode_wall_ms={decode_wall_ms:.6};upload_wall_ms={upload_wall_ms:.6};upload_bytes={};page_clear_bytes={};gpu_resident_bytes={};gpu_peak_bytes={};texture_creates={};atlas_pages={};atlas_slots={};standalone_images={};first_publications={};uploaded={uploaded};draws={};bind_group_binds={};gpu_timestamp_total_ns={}",
+                if standalone { "standalone" } else { "atlas" },
+                percentile(&submit_ms, 0.50),
+                percentile(&submit_ms, 0.95),
+                percentile(&submit_ms, 0.99),
+                submit_ms.last().copied().unwrap_or(0.0),
+                stats.decoded_output_bytes,
+                stats.decoded_peak_bytes,
+                stats.decode_time_ns as f64 / 1_000_000.0,
+                stats.upload_bytes,
+                stats.atlas_page_clear_bytes,
+                stats.gpu_resident_bytes,
+                stats.gpu_peak_bytes,
+                stats.texture_creates,
+                stats.atlas_pages,
+                stats.atlas_slots,
+                stats.standalone_images,
+                stats.first_publication_count,
+                backend.draws,
+                backend.draw_bind_group_binds,
+                backend.gpu_timestamp_total_ns,
+            ))
         }
 
         pub async fn bench_webgpu_nine_slice_architecture(
@@ -7776,6 +7906,38 @@ mod wasm_host {
             left: rect.left() as f32,
             top: rect.top() as f32,
         }
+    }
+
+    fn c60_web_icon_png(seed: u64, size: u32) -> Result<Arc<[u8]>, JsValue> {
+        let low = seed as u8;
+        let high = (seed >> 8) as u8;
+        let mut pixels = Vec::with_capacity(size as usize * size as usize * 4);
+        for y in 0..size {
+            for x in 0..size {
+                let checker = (((x / 8) ^ (y / 8)) & 1) as u8;
+                pixels.extend_from_slice(&[
+                    low.wrapping_mul(17).wrapping_add((x as u8).wrapping_mul(3)),
+                    high.wrapping_mul(29).wrapping_add((y as u8).wrapping_mul(5)),
+                    72_u8
+                        .wrapping_add(checker.wrapping_mul(108))
+                        .wrapping_add(low.wrapping_mul(7)),
+                    255,
+                ]);
+            }
+        }
+        let mut encoded = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut encoded, size, size);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder
+                .write_header()
+                .map_err(|error| JsValue::from_str(&format!("encoding C60 PNG header: {error}")))?;
+            writer
+                .write_image_data(&pixels)
+                .map_err(|error| JsValue::from_str(&format!("encoding C60 PNG pixels: {error}")))?;
+        }
+        Ok(encoded.into())
     }
 
     fn render_err(err: gfx::RenderError) -> JsValue {

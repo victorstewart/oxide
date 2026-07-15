@@ -20,7 +20,7 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::num::NonZeroU64;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::HtmlCanvasElement;
@@ -39,6 +39,7 @@ const NEON_MARKER_VERTEX_COUNT: u32 = 6;
 const GLYPH_INSTANCE_BYTES: usize = 36;
 const GLYPH_VERTEX_COUNT: u32 = 4;
 const EFFECT_GRAPH_CACHE_CAPACITY: usize = 8;
+static NEXT_WEBGPU_DEVICE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 #[inline]
 fn web_effect_graph_hash_mix(hash: &mut u64, value: u64)
@@ -181,6 +182,82 @@ struct GpuImage {
     width: u32,
     height: u32,
     kind: GpuImageKind,
+}
+
+struct RgbaMipLevel
+{
+   width: u32,
+   height: u32,
+   rgba: Vec<u8>,
+}
+
+fn srgb_channel_to_linear(value: u8) -> f32
+{
+   let value = f32::from(value) / 255.0;
+   if value <= 0.04045
+   {
+      value / 12.92
+   }
+   else
+   {
+      ((value + 0.055) / 1.055).powf(2.4)
+   }
+}
+
+fn linear_channel_to_srgb(value: f32) -> u8
+{
+   let value = value.clamp(0.0, 1.0);
+   let encoded = if value <= 0.0031308
+   {
+      value * 12.92
+   }
+   else
+   {
+      1.055 * value.powf(1.0 / 2.4) - 0.055
+   };
+   (encoded * 255.0).round() as u8
+}
+
+fn rgba8_mip_chain(width: u32, height: u32, rgba: Vec<u8>) -> Vec<RgbaMipLevel>
+{
+   let mut levels = vec![RgbaMipLevel { width, height, rgba }];
+   while levels.last().is_some_and(|level| level.width > 1 || level.height > 1)
+   {
+      let source = levels.last().expect("mip chain has a base level");
+      let next_width = (source.width / 2).max(1);
+      let next_height = (source.height / 2).max(1);
+      let mut next = vec![0_u8; next_width as usize * next_height as usize * 4];
+      for y in 0..next_height
+      {
+         for x in 0..next_width
+         {
+            let mut color_sums = [0.0_f32; 3];
+            let mut alpha_sum = 0_u32;
+            let mut samples = 0_u32;
+            for source_y in y * 2..(y * 2 + 2).min(source.height)
+            {
+               for source_x in x * 2..(x * 2 + 2).min(source.width)
+               {
+                  let index = (source_y as usize * source.width as usize + source_x as usize) * 4;
+                  for channel in 0..3
+                  {
+                     color_sums[channel] += srgb_channel_to_linear(source.rgba[index + channel]);
+                  }
+                  alpha_sum = alpha_sum.saturating_add(u32::from(source.rgba[index + 3]));
+                  samples += 1;
+               }
+            }
+            let index = (y as usize * next_width as usize + x as usize) * 4;
+            for channel in 0..3
+            {
+               next[index + channel] = linear_channel_to_srgb(color_sums[channel] / samples as f32);
+            }
+            next[index + 3] = ((alpha_sum + samples / 2) / samples) as u8;
+         }
+      }
+      levels.push(RgbaMipLevel { width: next_width, height: next_height, rgba: next });
+   }
+   levels
 }
 
 struct GpuLayer {
@@ -2297,6 +2374,39 @@ impl api::Renderer for BrowserRenderer {
     }
 }
 
+impl oxide_image_store::ImageResidencyBackend for BrowserRenderer
+{
+   fn image_device_generation(&self) -> u64
+   {
+      self.inner.image_device_generation()
+   }
+
+   fn image_create_rgba8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize, mipmapped: bool) -> api::ImageHandle
+   {
+      self.inner.image_create_store_rgba8(width, height, data, row_bytes, mipmapped)
+   }
+
+   fn image_create_rgba8_empty(&mut self, width: u32, height: u32) -> api::ImageHandle
+   {
+      self.inner.image_create_store_rgba8_empty(width, height)
+   }
+
+   fn image_append_rgba8(&mut self, handle: api::ImageHandle, x: u32, y: u32, width: u32, height: u32, data: &[u8], row_bytes: usize)
+   {
+      self.inner.image_append_rgba8(handle, x, y, width, height, data, row_bytes);
+   }
+
+   fn image_release(&mut self, handle: api::ImageHandle)
+   {
+      let _ = self.image_release(handle);
+   }
+
+   fn image_invalidate_chunks(&mut self, chunks: &[api::RenderChunkId])
+   {
+      self.inner.invalidate_prepared_chunks(chunks);
+   }
+}
+
 #[derive(Clone, Copy, Default)]
 struct ScratchCapacityBreakdown {
     draw: usize,
@@ -2971,7 +3081,7 @@ impl WebGpuRenderer {
             prepared_fallback: api::DrawList::default(),
             prepared_frame_active: false,
             prepared_snapshot_bundle_active: false,
-            prepared_device_generation: 1,
+            prepared_device_generation: NEXT_WEBGPU_DEVICE_GENERATION.fetch_add(1, Ordering::Relaxed),
             prepared_bundle_generation: 1,
             prepared_bundle_min_draws: PREPARED_BUNDLE_DEFAULT_MIN_DRAWS,
             scratch_vertices: Vec::new(),
@@ -3033,6 +3143,58 @@ impl WebGpuRenderer {
         if let Some(timestamps) = &mut self.timestamp_queries {
             timestamps.set_readback_interval_for_benchmark(frames);
         }
+    }
+
+    #[must_use]
+    fn image_create_store_rgba8(
+        &mut self,
+        width: u32,
+        height: u32,
+        data: &[u8],
+        row_bytes: usize,
+        mipmapped: bool,
+    ) -> api::ImageHandle {
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let Some(tight_row) = width.checked_mul(4) else {
+            return api::ImageHandle(0);
+        };
+        let Some(tight_len) = (tight_row as usize).checked_mul(height as usize) else {
+            return api::ImageHandle(0);
+        };
+        let result = if !mipmapped && row_bytes == tight_row as usize && data.len() >= tight_len {
+            self.push_image_with_format(
+                width,
+                height,
+                GpuImageKind::Rgba,
+                &data[..tight_len],
+                tight_row,
+                format,
+            )
+        } else {
+            let Some(rgba) = copy_rgba_rows(width, height, data, row_bytes) else {
+                return api::ImageHandle(0);
+            };
+            if mipmapped {
+                self.push_mipmapped_rgba_image(width, height, rgba, format)
+            } else {
+                self.push_image_with_format(width, height, GpuImageKind::Rgba, &rgba, tight_row, format)
+            }
+        };
+        result.unwrap_or(api::ImageHandle(0))
+    }
+
+    fn image_create_store_rgba8_empty(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> api::ImageHandle {
+        self.push_empty_image_with_format(
+            width,
+            height,
+            GpuImageKind::Rgba,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+        )
+        .unwrap_or(api::ImageHandle(0))
     }
 
     pub fn set_backdrop_copy_timestamp_fences_enabled_for_benchmark(&mut self, enabled: bool) {
@@ -3154,6 +3316,27 @@ impl WebGpuRenderer {
            layer.prepared_key = None;
            layer.resources.clear();
         }
+    }
+
+    fn invalidate_prepared_chunks(&mut self, chunks: &[api::RenderChunkId]) {
+        for chunk in chunks {
+            self.prepared_chunks.evict(*chunk);
+        }
+        let mut invalidated_layer = false;
+        for layer in self.layers.values_mut() {
+            if layer.prepared_key.is_some_and(|key| chunks.contains(&key.chunk.id)) {
+                layer.prepared_key = None;
+                layer.resources.clear();
+                invalidated_layer = true;
+            }
+        }
+        if invalidated_layer {
+            self.prepared_layer_key_indices.clear();
+            self.prepared_layer_plan.clear();
+            self.prepared_layer_snapshot = None;
+        }
+        self.prepared_snapshot_bundle = None;
+        self.prepared_snapshot_bundle_active = false;
     }
 
     #[must_use]
@@ -3552,8 +3735,13 @@ impl WebGpuRenderer {
     }
 
     pub fn advance_prepared_device_generation_for_benchmark(&mut self) {
-        self.prepared_device_generation = self.prepared_device_generation.wrapping_add(1).max(1);
+        self.prepared_device_generation =
+            NEXT_WEBGPU_DEVICE_GENERATION.fetch_add(1, Ordering::Relaxed);
         self.purge_prepared_chunks();
+    }
+
+    const fn image_device_generation(&self) -> u64 {
+        self.prepared_device_generation
     }
 
     fn scratch_capacity_breakdown(&self) -> ScratchCapacityBreakdown {
@@ -3993,6 +4181,19 @@ impl WebGpuRenderer {
         let _ = self.try_image_append_a8(handle, x, y, width, height, data, row_bytes);
     }
 
+    fn image_append_rgba8(
+        &mut self,
+        handle: api::ImageHandle,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        data: &[u8],
+        row_bytes: usize,
+    ) {
+        let _ = self.try_image_append_rgba8(handle, x, y, width, height, data, row_bytes);
+    }
+
     pub fn try_image_create_rgba8(
         &mut self,
         width: u32,
@@ -4177,6 +4378,77 @@ impl WebGpuRenderer {
             .ok_or(api::RenderError::InvalidOperation("invalid rgba update rows"))?;
         self.record_image_upload_temp(rgba.len(), 1);
         self.update_image(handle, x, y, width, height, GpuImageKind::Rgba, &rgba)
+    }
+
+    pub fn try_image_append_rgba8(
+        &mut self,
+        handle: api::ImageHandle,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        data: &[u8],
+        row_bytes: usize,
+    ) -> Result<(), api::RenderError> {
+        let tight_row = width
+            .checked_mul(4)
+            .ok_or(api::RenderError::InvalidOperation("invalid rgba append width"))?;
+        let tight_len = (tight_row as usize)
+            .checked_mul(height as usize)
+            .ok_or(api::RenderError::InvalidOperation("invalid rgba append size"))?;
+        if row_bytes == tight_row as usize && data.len() >= tight_len {
+            let image = image_for_update(
+                &self.images,
+                handle,
+                x,
+                y,
+                width,
+                height,
+                GpuImageKind::Rgba,
+            )?;
+            write_image_update(
+                &self.queue,
+                &mut self.stats,
+                image,
+                x,
+                y,
+                width,
+                height,
+                &data[..tight_len],
+                tight_row,
+            );
+            return Ok(());
+        }
+        let grew = copy_rgba_rows_into(
+            &mut self.image_upload_scratch,
+            width,
+            height,
+            data,
+            row_bytes,
+        )
+        .ok_or(api::RenderError::InvalidOperation("invalid rgba append rows"))?;
+        self.record_image_upload_scratch(grew);
+        let image = image_for_update(
+            &self.images,
+            handle,
+            x,
+            y,
+            width,
+            height,
+            GpuImageKind::Rgba,
+        )?;
+        write_image_update(
+            &self.queue,
+            &mut self.stats,
+            image,
+            x,
+            y,
+            width,
+            height,
+            &self.image_upload_scratch,
+            tight_row,
+        );
+        Ok(())
     }
 
    /// Releases a renderer-owned image and returns whether the handle was live.
@@ -4443,9 +4715,133 @@ impl WebGpuRenderer {
         if !self.images.has_capacity() {
             return Err(api::RenderError::InvalidOperation("gpu image slot capacity exhausted"));
         }
-        let image = self.create_image(width, height, kind, data, row_bytes)?;
+        let image = self.create_image(width, height, kind, data, row_bytes, kind.format())?;
         self.images
             .insert(image)
+            .map(api::ImageHandle)
+            .map_err(|_| api::RenderError::InvalidOperation("gpu image slot capacity exhausted"))
+    }
+
+    fn push_mipmapped_rgba_image(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+        format: wgpu::TextureFormat,
+    ) -> Result<api::ImageHandle, api::RenderError> {
+        if !self.images.has_capacity() {
+            return Err(api::RenderError::InvalidOperation("gpu image slot capacity exhausted"));
+        }
+        if width == 0 || height == 0 {
+            return Err(api::RenderError::InvalidOperation("zero-sized gpu image"));
+        }
+        let levels = rgba8_mip_chain(width, height, rgba);
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("oxide-webgpu-mipmapped-image"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: levels.len() as u32,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.stats.texture_creates = self.stats.texture_creates.saturating_add(1);
+        self.stats.image_texture_creates = self.stats.image_texture_creates.saturating_add(1);
+        let mut upload_bytes = 0_u64;
+        for (level, mip) in levels.iter().enumerate() {
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: level as u32,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &mip.rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(mip.width.saturating_mul(4)),
+                    rows_per_image: Some(mip.height),
+                },
+                wgpu::Extent3d {
+                    width: mip.width,
+                    height: mip.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            upload_bytes = upload_bytes.saturating_add(mip.rgba.len() as u64);
+        }
+        self.stats.texture_upload_bytes = self.stats.texture_upload_bytes.saturating_add(upload_bytes);
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group =
+            create_texture_bind_group(&self.device, &self.programs, &view, &self.programs.sampler);
+        self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
+        self.stats.image_bind_group_creates = self.stats.image_bind_group_creates.saturating_add(1);
+        drop(view);
+        self.images
+            .insert(GpuImage {
+                texture,
+                bind_group,
+                width,
+                height,
+                kind: GpuImageKind::Rgba,
+            })
+            .map(api::ImageHandle)
+            .map_err(|_| api::RenderError::InvalidOperation("gpu image slot capacity exhausted"))
+    }
+
+    fn push_image_with_format(
+        &mut self,
+        width: u32,
+        height: u32,
+        kind: GpuImageKind,
+        data: &[u8],
+        row_bytes: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<api::ImageHandle, api::RenderError> {
+        if !self.images.has_capacity() {
+            return Err(api::RenderError::InvalidOperation("gpu image slot capacity exhausted"));
+        }
+        let image = self.create_image(width, height, kind, data, row_bytes, format)?;
+        self.images
+            .insert(image)
+            .map(api::ImageHandle)
+            .map_err(|_| api::RenderError::InvalidOperation("gpu image slot capacity exhausted"))
+    }
+
+    fn push_empty_image_with_format(
+        &mut self,
+        width: u32,
+        height: u32,
+        kind: GpuImageKind,
+        format: wgpu::TextureFormat,
+    ) -> Result<api::ImageHandle, api::RenderError> {
+        if !self.images.has_capacity() {
+            return Err(api::RenderError::InvalidOperation("gpu image slot capacity exhausted"));
+        }
+        if width == 0 || height == 0 {
+            return Err(api::RenderError::InvalidOperation("zero-sized gpu image"));
+        }
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("oxide-webgpu-empty-image-page"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.stats.texture_creates = self.stats.texture_creates.saturating_add(1);
+        self.stats.image_texture_creates = self.stats.image_texture_creates.saturating_add(1);
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group =
+            create_texture_bind_group(&self.device, &self.programs, &view, &self.programs.sampler);
+        self.stats.bind_group_creates = self.stats.bind_group_creates.saturating_add(1);
+        self.stats.image_bind_group_creates = self.stats.image_bind_group_creates.saturating_add(1);
+        drop(view);
+        self.images
+            .insert(GpuImage { texture, bind_group, width, height, kind })
             .map(api::ImageHandle)
             .map_err(|_| api::RenderError::InvalidOperation("gpu image slot capacity exhausted"))
     }
@@ -4457,6 +4853,7 @@ impl WebGpuRenderer {
         kind: GpuImageKind,
         data: &[u8],
         row_bytes: u32,
+        format: wgpu::TextureFormat,
     ) -> Result<GpuImage, api::RenderError> {
         if width == 0 || height == 0 {
             return Err(api::RenderError::InvalidOperation("zero-sized gpu image"));
@@ -4467,7 +4864,7 @@ impl WebGpuRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: kind.format(),
+            format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -7621,6 +8018,39 @@ impl WebGpuRenderer
    }
 }
 
+impl oxide_image_store::ImageResidencyBackend for WebGpuRenderer
+{
+   fn image_device_generation(&self) -> u64
+   {
+      self.image_device_generation()
+   }
+
+   fn image_create_rgba8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize, mipmapped: bool) -> api::ImageHandle
+   {
+      self.image_create_store_rgba8(width, height, data, row_bytes, mipmapped)
+   }
+
+   fn image_create_rgba8_empty(&mut self, width: u32, height: u32) -> api::ImageHandle
+   {
+      self.image_create_store_rgba8_empty(width, height)
+   }
+
+   fn image_append_rgba8(&mut self, handle: api::ImageHandle, x: u32, y: u32, width: u32, height: u32, data: &[u8], row_bytes: usize)
+   {
+      self.image_append_rgba8(handle, x, y, width, height, data, row_bytes);
+   }
+
+   fn image_release(&mut self, handle: api::ImageHandle)
+   {
+      let _ = self.image_release(handle);
+   }
+
+   fn image_invalidate_chunks(&mut self, chunks: &[api::RenderChunkId])
+   {
+      self.invalidate_prepared_chunks(chunks);
+   }
+}
+
 impl api::Renderer for WebGpuRenderer {
     fn device_caps(&self) -> api::DeviceCaps {
         api::DeviceCaps {
@@ -10133,7 +10563,7 @@ fn create_programs(
         address_mode_w: wgpu::AddressMode::ClampToEdge,
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::FilterMode::Nearest,
+        mipmap_filter: wgpu::FilterMode::Linear,
         ..Default::default()
     });
 

@@ -140,6 +140,30 @@ fn host_exposes_opt_in_webgpu_architecture_primitive_matrix() {
 }
 
 #[test]
+fn host_image_store_benchmark_uses_unique_sources_and_honest_timing_boundaries() {
+    let source = include_str!("../src/lib.rs");
+    let page = include_str!("../../www/index.html");
+    let method = source_fn_slice(
+        source,
+        "pub async fn bench_webgpu_image_store",
+        "pub async fn bench_webgpu_nine_slice_architecture",
+    );
+
+    assert!(source.contains("fn c60_web_icon_png"));
+    assert!(method.contains("c60_web_icon_png(seed as u64, 64)"));
+    assert!(method.contains("wait_renderer_queue_idle(&renderer).await?"));
+    assert!(method.contains("wait_animation_frame_once().await?"));
+    assert!(method.contains("settle_renderer_timestamps"));
+    assert!(method.contains("request_to_first_displayed_frame_ms"));
+    assert!(method.contains("store_request_to_first_publication_ms_avg"));
+    assert!(method.contains("submit_p50_ms"));
+    assert!(!method.contains("event_to_first_visible_ms"));
+    assert!(!method.contains("frame_p50_ms"));
+    assert!(page.contains("params.get(\"image_store_only\") === \"1\""));
+    assert!(page.contains("bench_webgpu_image_store"));
+}
+
+#[test]
 fn host_exposes_prepared_chunk_browser_contract()
 {
    let source = include_str!("../src/lib.rs");

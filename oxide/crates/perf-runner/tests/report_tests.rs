@@ -5609,6 +5609,64 @@ fn metal_immutable_image_rows_freeze_residency_mip_and_quality_contracts()
    let _ = std::fs::remove_file(json_out);
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn metal_image_store_rows_freeze_scaling_completion_and_reuse_contracts()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-image-store-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env(
+         "OXIDE_PERF_RUNNER_FILTER",
+         "gpu.architecture.images.icons_100,gpu.architecture.images.icons_1000,gpu.architecture.images.icons_10000,gpu.authoring.image_store.atlas_grid_1000",
+      )
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run image-store Metal rows");
+   let stderr = String::from_utf8_lossy(&output.stderr);
+   assert!(output.status.success(), "image-store rows failed: {stderr}");
+   let report = std::fs::read_to_string(&json_out).expect("read image-store report");
+   for (id, count, pages) in [
+      ("gpu.architecture.images.icons_100", 100.0, 1.0),
+      ("gpu.architecture.images.icons_1000", 1_000.0, 4.0),
+      ("gpu.architecture.images.icons_10000", 10_000.0, 40.0),
+   ]
+   {
+      let row = report_case_slice(&report, id);
+      assert_eq!(report_f64(row, "unique_images"), count);
+      assert_eq!(report_f64(row, "display_decode_bytes"), count * 28.0 * 28.0 * 4.0);
+      assert_eq!(report_f64(row, "first_publications"), count);
+      assert_eq!(report_f64(row, "uploaded_images"), count);
+      assert_eq!(report_f64(row, "atlas_pages"), pages);
+      assert_eq!(report_f64(row, "texture_creates"), pages);
+      assert_eq!(report_f64(row, "gpu_resident_bytes"), pages * 512.0 * 512.0 * 4.0);
+      assert_eq!(report_f64(row, "atlas_slots"), count);
+      assert_eq!(report_f64(row, "standalone_images"), 0.0);
+      assert_eq!(report_f64(row, "atlas_page_clear_bytes"), 0.0);
+      assert_eq!(report_f64(row, "draws_avg"), 1.0);
+      assert!(report_f64(row, "request_to_first_completed_frame_ms") > 0.0);
+      assert!(report_f64(row, "store_request_to_first_publication_ms_avg") > 0.0);
+      assert!(report_f64(row, "first_visible_gpu_ms") > 0.0);
+      assert!(report_f64(row, "first_completed_frame_spatial_variance") > 0.0);
+      assert!(report_f64(row, "decoded_peak_bytes") <= 64.0 * 1024.0 * 1024.0);
+      assert!(report_f64(row, "gpu_peak_bytes") <= 64.0 * 1024.0 * 1024.0);
+      assert!(!row.contains("event_to_first_visible_ms"));
+   }
+
+   let authoring = report_case_slice(
+      &report,
+      "gpu.authoring.image_store.atlas_grid_1000",
+   );
+   assert!(authoring.contains("\"family\": \"authoring\""));
+   assert_eq!(report_f64(authoring, "release_reuse_uploaded"), 64.0);
+   assert_eq!(report_f64(authoring, "prepared_chunk_invalidations"), 64.0);
+   assert_eq!(report_f64(authoring, "slot_generation_changes"), 64.0);
+   let _ = std::fs::remove_file(json_out);
+}
+
 #[test]
 fn filtered_run_suite_supports_gpu_journey_frame_pacing_case() {
     let mut json_out = std::env::temp_dir();

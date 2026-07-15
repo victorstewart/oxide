@@ -3,6 +3,7 @@ members = [
     "crates/platform-api",
     "crates/platform-android",
     "crates/renderer-api",
+    "crates/image-store",
     "crates/ui-core",
     "crates/platform-apple",
     "crates/platform-ios",

@@ -1242,7 +1242,9 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     assert!(!source.contains("copy_a8_rows_to_rgba_into"));
     assert!(!compact_source.contains("GpuImageKind::A8,&a8_to_rgba"));
     assert!(compact_source.contains("Self::A8=>wgpu::TextureFormat::R8Unorm"));
-    assert!(compact_source.contains("format:kind.format()"));
+    assert!(compact_source.contains(
+        "self.create_image(width,height,kind,data,row_bytes,kind.format())"
+    ));
     assert!(compact_source.contains("ifrow_bytes==width{returnself.push_image"));
     assert!(compact_source.contains("copy_a8_rows_into(&mutself.image_upload_scratch"));
     assert!(compact_source.contains("letcoverage=textureSample(source_tex,source_sampler,input.uv).r"));
@@ -1581,4 +1583,35 @@ fn wasm_webgpu_append_only_glyph_upload_keeps_prepared_dependencies_live()
    assert!(append.contains("write_image_update"));
    assert!(!append.contains("invalidate_image_dependents"));
    assert!(source.contains("self.inner.image_append_a8"));
+}
+
+#[test]
+fn wasm_webgpu_image_store_uses_append_only_srgb_pages_and_complete_mips()
+{
+   let source = include_str!("../src/wasm/webgpu.rs");
+   let compact = source_without_whitespace(source);
+   let append = source_block(
+      source,
+      "pub fn try_image_append_rgba8",
+      "/// Releases a renderer-owned image",
+   );
+   assert!(append.contains("write_image_update"));
+   assert!(append.contains("row_bytes == tight_row as usize"));
+   assert!(append.contains("&data[..tight_len]"));
+   assert!(!append.contains("invalidate_image_dependents"));
+   assert!(compact.contains("imploxide_image_store::ImageResidencyBackendforWebGpuRenderer"));
+   assert!(compact.contains("imploxide_image_store::ImageResidencyBackendforBrowserRenderer"));
+   assert!(compact.contains("fnimage_invalidate_chunks(&mutself,chunks:&[api::RenderChunkId])"));
+   assert!(compact.contains("self.prepared_chunks.evict(*chunk);"));
+   assert!(compact.contains("chunks.contains(&key.chunk.id)"));
+   assert!(compact.contains("layer.prepared_key=None;"));
+   assert!(compact.contains("wgpu::TextureFormat::Rgba8UnormSrgb"));
+   assert!(compact.contains("fnimage_create_rgba8_empty(&mutself,width:u32,height:u32)"));
+   assert!(compact.contains("self.inner.image_create_store_rgba8_empty(width,height)"));
+   assert!(compact.contains("self.push_empty_image_with_format("));
+   assert!(compact.contains("letlevels=rgba8_mip_chain(width,height,rgba);"));
+   assert!(compact.contains("mip_level_count:levels.len()asu32"));
+   assert!(compact.contains("mipmap_filter:wgpu::FilterMode::Linear"));
+   assert!(compact.contains("srgb_channel_to_linear(source.rgba[index+channel])"));
+   assert!(compact.contains("NEXT_WEBGPU_DEVICE_GENERATION.fetch_add(1,Ordering::Relaxed)"));
 }

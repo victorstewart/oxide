@@ -1,4 +1,66 @@
 [[experiments]]
+id = "c60-image-store-atlas"
+introduced_commit = "C60 staged tree recorded in commit proof"
+introduced_date = "2026-07-15"
+expires = "2027-07-15"
+required_backends = ["oxide-image-store", "oxide-ui-core", "oxide-renderer-metal", "oxide-renderer-web", "oxide-perf-runner", "oxide-host-web", "oxide-host-ios", "oxide-xtask"]
+required_devices = ["Mac14,6 Apple M2 Max", "physical iPhone18,2 iOS 26.5.1", "Chrome/WebGPU during C61"]
+correctness_gate = "Stable logical and atlas-slot generations, request serial rejection, cancellation, display-size pixels, repeated-edge gutters, standalone/mip fallbacks, exact prepared-chunk invalidation, hard decoded/GPU budgets, memory warning, device loss, physical-device pixels, wasm contracts, and UIKit display presentation must pass."
+performance_gate = "Same-pixel atlas/standalone A/B at 100/1,000/10,000 icons must disclose p50/p95/p99/peak frame, encode, direct GPU and request-to-completed-frame distributions plus decode/upload/residency/draw/bind/invalidation counters; dense populations must materially reduce CPU/frame work without hiding GPU or memory tradeoffs."
+decision_state = "accepted"
+decision = "Accepted generation-safe display-size decode and bounded size-classed paging for suitable small static-image collections; retained standalone residency for unsuitable variants and sparse/dense policy evidence."
+proof = [
+   "Final-tree physical-iPhone 10,000-icon atlas versus standalone improved frame p50 12.4370 -> 1.3896 ms, encode p50 1.1350 -> 0.2522 ms, request-to-completed-frame 221.6631 -> 172.4578 ms, and upload 39.8393 -> 12.7049 ms while draws fell 79 -> 1.",
+   "The same 10,000-icon row disclosed direct GPU p50 0.4131 -> 0.4199 ms and GPU resident bytes 31,360,000 -> 41,943,040; sparse 100-icon atlas residency was 1,048,576 versus 313,600 bytes, so the policy is not represented as a universal memory/GPU win.",
+   "Three alternating macOS repetitions kept 100 icons neutral, improved 1,000 icons roughly 4-5%, and improved 10,000 icons 89.3-89.5% in frame p50 with identical generated pixels and zero atlas-page clear uploads.",
+   "Final-tree physical authoring scroll/release/reuse invalidated exactly 64 referencing chunks, changed exactly 64 atlas slot generations, improved request-to-completed-frame 41.7836 -> 17.9244 ms and upload 4.1838 -> 1.2488 ms, improved p95, and disclosed slightly worse frame and direct-GPU p50.",
+   "Fifteen store tests, Metal pixel/exact-invalidation tests, UI crop tests, WebGPU source contracts, wasm builds, report tests, physical Oxide runs, physical UIKit tests, and the strict process-scoped device report passed; direct energy is manual-pending and displayed browser timing remains C61 work.",
+]
+cleanup = [
+   "Dropped encoded source allocations after decode completion; moved instead of cloned decoded RGBA during publication; reused atlas patch scratch; separated decoded/GPU hard budgets; used intrusive LRUs, bounded queues, generation slots, deduplicated invalidation, append-only publication, and exact in-place same-class slot reuse.",
+   "Kept standalone/mip policy for repeatedly minified, oversized, rapidly changing, video, compressed-incompatible, and explicit standalone variants instead of forcing every image through a page.",
+   "Kept official latest baselines unchanged until C62 and isolated the benchmark-only standalone selector from production policy.",
+]
+
+[[experiments]]
+id = "c60-uikit-custom-draw-rejected"
+introduced_commit = "rejected during C60 physical-device parity review"
+introduced_date = "2026-07-15"
+expires = "2027-07-15"
+required_backends = ["oxide-host-ios", "oxide-xtask"]
+required_devices = ["physical iPhone18,2 iOS 26.5.1"]
+correctness_gate = "The idiomatic and optimized UIKit variants must draw the same 1,000 unique 28-square image grid, exercise six visible scroll phases, and await display presentation on the physical device."
+performance_gate = "The optimized UIKit comparator must beat the idiomatic path in valid display-presented timing without substituting state-only work or silently drawing fewer pixels."
+decision_state = "rejected"
+decision = "Rejected the initial custom-draw UIKit comparator because physical-device timing was slower than the idiomatic image-view control."
+proof = [
+   "The exploratory custom-draw path measured roughly 0.759 ms versus 0.416 ms for its idiomatic control on the physical iPhone.",
+   "The replacement uses one warm precomposed immutable grid layer and awaits every display presentation; the final-tree physical run improves clock p50 747.936 -> 588.011 ms and CPU 423.411 -> 45.142 ms while disclosing bounded GPU time and memory costs.",
+]
+cleanup = [
+   "Removed the slower custom draw implementation from the final UIKit parity case.",
+]
+
+[[experiments]]
+id = "c60-uikit-state-only-precompose-rejected"
+introduced_commit = "rejected during C60 physical-device proof validation"
+introduced_date = "2026-07-15"
+expires = "2027-07-15"
+required_backends = ["oxide-host-ios", "oxide-xtask"]
+required_devices = ["physical iPhone18,2 iOS 26.5.1"]
+correctness_gate = "Every measured scroll phase must reach physical display presentation and process-scoped GPU attribution before timing is valid."
+performance_gate = "A state mutation without corresponding displayed work cannot be used as UIKit parity performance evidence."
+decision_state = "rejected"
+decision = "Rejected the first precomposed UIKit measurement because it moved layer state without awaiting the physical display."
+proof = [
+   "The invalid run reported roughly 5 ms total and zero GPU work, revealing a state-only measurement boundary.",
+   "The corrected implementation awaits display presentation for all six phases and reports nonzero process-scoped GPU time, frame-presentation latency, clock/CPU distributions, hitch/missed-frame metrics, and memory.",
+]
+cleanup = [
+   "Added a display-presentation wait to every idiomatic and optimized image-grid scroll phase.",
+]
+
+[[experiments]]
 id = "c55-macos-demand-display-link"
 introduced_commit = "C55 staged tree recorded in commit proof"
 introduced_date = "2026-07-15"

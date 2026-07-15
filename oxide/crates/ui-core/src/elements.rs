@@ -1965,50 +1965,14 @@ impl ImageView {
         let iw = self.natural_w.max(1) as f32;
         let ih = self.natural_h.max(1) as f32;
         if zoom.is_none() {
-            let view_cross = rect.w * ih;
-            let image_cross = rect.h * iw;
-            if !view_cross.is_finite() || !image_cross.is_finite() {
-                return;
-            }
-            match self.fit {
-                ImageFit::Contain => {
-                    let (dw, dh) = if view_cross >= image_cross {
-                        (rect.h * iw / ih, rect.h)
-                    } else {
-                        (rect.w, rect.w * ih / iw)
-                    };
-                    let dst = gfx::RectF::new(
-                        rect.x + (rect.w - dw) * 0.5,
-                        rect.y + (rect.h - dh) * 0.5,
-                        dw,
-                        dh,
-                    );
-                    b.image_prevalidated(
-                        self.image,
-                        dst,
-                        gfx::RectF::new(0.0, 0.0, iw, ih),
-                        alpha,
-                    );
-                }
-                ImageFit::Cover => {
-                    let src = if view_cross >= image_cross {
-                        let src_h = rect.h * iw / rect.w;
-                        gfx::RectF::new(0.0, (ih - src_h) * 0.5, iw, src_h)
-                    } else {
-                        let src_w = rect.w * ih / rect.h;
-                        gfx::RectF::new((iw - src_w) * 0.5, 0.0, src_w, ih)
-                    };
-                    b.image_prevalidated(self.image, rect, src, alpha);
-                }
-                ImageFit::Stretch => {
-                    b.image_prevalidated(
-                        self.image,
-                        rect,
-                        gfx::RectF::new(0.0, 0.0, iw, ih),
-                        alpha,
-                    );
-                }
-            }
+            encode_image_region(
+               self.image,
+               rect,
+               gfx::RectF::new(0.0, 0.0, iw, ih),
+               self.fit,
+               alpha,
+               b,
+            );
             return;
         }
         let sx = rect.w / iw;
@@ -2040,6 +2004,94 @@ impl ImageView {
         };
         b.image_prevalidated(self.image, dst, src, alpha);
     }
+}
+
+/// An image view whose pixels occupy a subregion of a shared texture page.
+pub struct ImageRegionView
+{
+   /// Renderer texture containing the resolved image region.
+   pub image: gfx::ImageHandle,
+   /// Pixel bounds of the image inside the texture.
+   pub source: gfx::RectF,
+   /// Contain, cover, or stretch policy applied within the destination.
+   pub fit: ImageFit,
+   /// Additional image opacity, clamped to `[0, 1]`.
+   pub alpha: f32,
+}
+
+impl ImageRegionView
+{
+   /// Encodes one fitted image draw whose source remains inside `source`.
+   pub fn encode(&self, rect: gfx::RectF, b: &mut DrawListBuilder)
+   {
+      encode_image_region(self.image, rect, self.source, self.fit, self.alpha, b);
+   }
+}
+
+#[inline]
+fn encode_image_region(image: gfx::ImageHandle, rect: gfx::RectF, source: gfx::RectF, fit: ImageFit, alpha: f32, b: &mut DrawListBuilder)
+{
+   let alpha = alpha.clamp(0.0, 1.0);
+   if image.0 == 0
+      || !rect_finite_positive(rect)
+      || !rect_finite_positive(source)
+      || !alpha.is_finite()
+      || alpha <= 0.0
+   {
+      return;
+   }
+   let view_cross = rect.w * source.h;
+   let image_cross = rect.h * source.w;
+   if !view_cross.is_finite() || !image_cross.is_finite()
+   {
+      return;
+   }
+   match fit
+   {
+      ImageFit::Contain =>
+      {
+         let (dw, dh) = if view_cross >= image_cross
+         {
+            (rect.h * source.w / source.h, rect.h)
+         }
+         else
+         {
+            (rect.w, rect.w * source.h / source.w)
+         };
+         let dst = gfx::RectF::new(
+            rect.x + (rect.w - dw) * 0.5,
+            rect.y + (rect.h - dh) * 0.5,
+            dw,
+            dh,
+         );
+         b.image_prevalidated(image, dst, source, alpha);
+      }
+      ImageFit::Cover =>
+      {
+         let source = if view_cross >= image_cross
+         {
+            let height = rect.h * source.w / rect.w;
+            gfx::RectF::new(
+               source.x,
+               source.y + (source.h - height) * 0.5,
+               source.w,
+               height,
+            )
+         }
+         else
+         {
+            let width = rect.w * source.h / rect.h;
+            gfx::RectF::new(
+               source.x + (source.w - width) * 0.5,
+               source.y,
+               width,
+               source.h,
+            )
+         };
+         b.image_prevalidated(image, rect, source, alpha);
+      }
+      ImageFit::Stretch => b.image_prevalidated(image, rect, source, alpha),
+   }
 }
 
 fn cropped_image_mapping(bounds: gfx::RectF, fitted: gfx::RectF, image_w: f32, image_h: f32) -> Option<(gfx::RectF, gfx::RectF)> {

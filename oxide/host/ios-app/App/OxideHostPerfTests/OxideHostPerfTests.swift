@@ -1178,6 +1178,16 @@ final class OxideHostPerfTests: XCTestCase
         measureBenchmark(named: #function)
     }
 
+    func testImageRegionGridScrollJourney()
+    {
+        measureBenchmark(named: #function)
+    }
+
+    func testOptimizedImageRegionGridScrollJourney()
+    {
+        measureBenchmark(named: #function)
+    }
+
     func testChatThreadScrollJourney()
     {
         measureBenchmark(named: #function)

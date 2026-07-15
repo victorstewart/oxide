@@ -2,7 +2,9 @@ use super::*;
 use core_graphics_types::geometry::CGSize;
 use foreign_types::ForeignTypeRef;
 use metal_rs::{Device, MetalLayer, MTLPixelFormat};
+use oxide_image_store as images;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 struct RetainedScenario
 {
@@ -4617,8 +4619,343 @@ fn metal_damage_case(id: &str, smoke: bool, name: &str) -> Result<PerfCaseResult
    Ok(case)
 }
 
+fn c60_icon_pixels(seed: u64, size: u32) -> Vec<u8>
+{
+   let low = seed as u8;
+   let high = (seed >> 8) as u8;
+   let mut pixels = Vec::with_capacity(size as usize * size as usize * 4);
+   for y in 0..size
+   {
+      for x in 0..size
+      {
+         let checker = (((x / 8) ^ (y / 8)) & 1) as u8;
+         pixels.extend_from_slice(&[
+            low.wrapping_mul(17).wrapping_add((x as u8).wrapping_mul(3)),
+            high.wrapping_mul(29).wrapping_add((y as u8).wrapping_mul(5)),
+            72_u8.wrapping_add(checker.wrapping_mul(108)).wrapping_add(low.wrapping_mul(7)),
+            255,
+         ]);
+      }
+   }
+   pixels
+}
+
+fn c60_icon_png(seed: u64, size: u32) -> Result<Arc<[u8]>>
+{
+   let pixels = c60_icon_pixels(seed, size);
+   let mut encoded = Vec::new();
+   {
+      let mut encoder = png::Encoder::new(&mut encoded, size, size);
+      encoder.set_color(png::ColorType::Rgba);
+      encoder.set_depth(png::BitDepth::Eight);
+      let mut writer = encoder.write_header().context("encoding C60 PNG header")?;
+      writer.write_image_data(&pixels).context("encoding C60 PNG pixels")?;
+   }
+   Ok(encoded.into())
+}
+
+pub(super) fn metal_image_store_case(id: &str, smoke: bool, count: usize, authoring: bool) -> Result<PerfCaseResult>
+{
+   let standalone = std::env::var_os("OXIDE_C60_STANDALONE_IMAGES").is_some();
+   let usage = if standalone { images::ImageUsage::Standalone } else { images::ImageUsage::Static };
+   let source_size = 64_u32;
+   let display_size = 28_u32;
+   let encoded: Vec<_> = (0..count)
+      .map(|seed| c60_icon_png(seed as u64, source_size))
+      .collect::<Result<_>>()?;
+   let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating C60 Metal renderer")?);
+   let (target_width, target_height) = if authoring { (360, 640) } else { (1_200, 800) };
+   renderer.resize(target_width, target_height, 1.0).context("resizing C60 Metal renderer")?;
+   let mut store = images::ImageStore::new(images::ImageStoreConfig {
+      decoded_budget_bytes: 64 * 1024 * 1024,
+      gpu_budget_bytes: 64 * 1024 * 1024,
+      atlas_width: 512,
+      atlas_height: 512,
+      max_atlas_image_dimension: 128,
+      gutter: 2,
+   }).context("creating C60 image store")?;
+   let first_visible_started = Instant::now();
+   let ids: Vec<_> = (0..count)
+      .map(|index| {
+         store.request(images::ImageRequest {
+            variant: images::ImageVariant {
+               source: index as u64 + 1,
+               revision: 1,
+               display_width: display_size,
+               display_height: display_size,
+            },
+            encoded: encoded[index].clone(),
+            usage,
+         })
+      })
+      .collect();
+   let pool = images::NativeDecodePool::new(4);
+   let decode_started = Instant::now();
+   let dispatched = pool.dispatch(&mut store, count);
+   let mut completions = 0;
+   while completions < dispatched
+   {
+      completions += pool.collect(&mut store);
+      if completions < dispatched
+      {
+         std::thread::yield_now();
+      }
+   }
+   let decode_wall_ms = decode_started.elapsed().as_secs_f64() * 1_000.0;
+   let upload_started = Instant::now();
+   let uploaded = store.upload_ready(renderer.as_mut());
+   let upload_wall_ms = upload_started.elapsed().as_secs_f64() * 1_000.0;
+   let scroll_phases = [0.0_f32, 0.18, 0.42, 0.88, 0.52, 0.10];
+   let mut drawlists = Vec::with_capacity(if authoring { scroll_phases.len() } else { 1 });
+   if authoring
+   {
+      let columns = 12_usize;
+      let rows = count.div_ceil(columns);
+      let content_height = rows as f32 * display_size as f32;
+      let max_offset = (content_height - target_height as f32).max(0.0);
+      for phase in scroll_phases
+      {
+         let offset = max_offset * phase;
+         let first_row = (offset / display_size as f32).floor() as usize;
+         let last_row = (((offset + target_height as f32) / display_size as f32).ceil() as usize + 1).min(rows);
+         let mut drawlist = ui::DrawListBuilder::new();
+         for row in first_row..last_row
+         {
+            for column in 0..columns
+            {
+               let index = row * columns + column;
+               let Some(id) = ids.get(index).copied() else
+               {
+                  break;
+               };
+               let Some(image) = store.resolve_for_chunk(id, api::RenderChunkId(index as u64 + 1)) else
+               {
+                  continue;
+               };
+               ui::elements::ImageRegionView {
+                  image: image.texture,
+                  source: image.source,
+                  fit: ui::elements::ImageFit::Cover,
+                  alpha: 1.0,
+               }
+               .encode(
+                  api::RectF::new(
+                     column as f32 * display_size as f32,
+                     row as f32 * display_size as f32 - offset,
+                     display_size as f32,
+                     display_size as f32,
+                  ),
+                  &mut drawlist,
+               );
+            }
+         }
+         drawlists.push(drawlist.into_inner());
+      }
+   }
+   else
+   {
+      let mut drawlist = ui::DrawListBuilder::new();
+      for (index, image) in ids.iter().filter_map(|id| store.resolve(*id)).enumerate()
+      {
+         drawlist.image(
+            image.texture,
+            api::RectF::new(
+               (index % 43) as f32 * display_size as f32,
+               (index / 43) as f32 * display_size as f32,
+               display_size as f32,
+               display_size as f32,
+            ),
+            image.source,
+            1.0,
+         );
+      }
+      drawlists.push(drawlist.into_inner());
+   }
+   let first = renderer.begin_frame(&api::FrameTarget, None);
+   let first_frame_id = first.0;
+   renderer.encode_pass(&drawlists[0]);
+   renderer.submit(first).with_context(|| format!("submitting first completed-frame candidate {id}"))?;
+   let (_, _, first_pixels) = renderer
+      .readback_bgra8()
+      .with_context(|| format!("reading first-completed frame {id}"))?;
+   let first_visible_ms = first_visible_started.elapsed().as_secs_f64() * 1_000.0;
+   let first_stats = last_metal_stats_after_submit(&renderer, first_frame_id);
+
+   let warmups = if smoke { 1 } else { 5 };
+   let frames = if smoke { 2 } else { 20 };
+   let raw_samples = std::env::var_os("OXIDE_C60_RAW_SAMPLES").is_some()
+      || std::env::var_os("OXIDE_ARCHITECTURE_METAL_RAW_SAMPLES").is_some();
+   let mut frame_samples = Vec::with_capacity(frames);
+   let mut encode_samples = Vec::with_capacity(frames);
+   let mut gpu_samples = Vec::with_capacity(frames);
+   let mut binds = 0_u64;
+   let mut draws = 0_u64;
+   let mut image_argument_bytes = 0_u64;
+   let mut image_cache_bytes_peak = first_stats.memory.image_cache_bytes;
+   for frame in 0..warmups + frames
+   {
+      let started = Instant::now();
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      let frame_id = token.0;
+      renderer.encode_pass(&drawlists[frame % drawlists.len()]);
+      renderer.submit(token).with_context(|| format!("submitting {id}"))?;
+      let stats = last_metal_stats_after_submit(&renderer, frame_id);
+      if frame >= warmups
+      {
+         frame_samples.push(started.elapsed().as_secs_f64() * 1_000.0);
+         encode_samples.push(stats.encode_ms);
+         gpu_samples.push(stats.gpu_ms);
+         binds = binds.saturating_add(u64::from(stats.image_argument_binds));
+         draws = draws.saturating_add(u64::from(stats.draws));
+         image_argument_bytes = image_argument_bytes.saturating_add(stats.image_argument_bytes);
+         image_cache_bytes_peak = image_cache_bytes_peak.max(stats.memory.image_cache_bytes);
+      }
+   }
+   let steady_store_stats = store.stats();
+   let mut replacement_ids = Vec::new();
+   let mut release_reuse_uploaded = 0_usize;
+   let mut slot_generation_changes = 0_usize;
+   if authoring
+   {
+      let released: Vec<_> = ids.iter().take(64).copied().collect();
+      let previous: Vec<_> = released.iter().filter_map(|id| {
+         store.resolve(*id).map(|image| (image.texture, image.slot_generation))
+      }).collect();
+      for id in &released
+      {
+         store.release(*id, renderer.as_mut());
+      }
+      replacement_ids = (0..released.len()).map(|index| {
+         store.request(images::ImageRequest {
+            variant: images::ImageVariant {
+               source: count as u64 + index as u64 + 1,
+               revision: 1,
+               display_width: display_size,
+               display_height: display_size,
+            },
+            encoded: encoded[index % encoded.len()].clone(),
+            usage,
+         })
+      }).collect();
+      let dispatched = pool.dispatch(&mut store, replacement_ids.len());
+      let mut completed = 0;
+      while completed < dispatched
+      {
+         completed += pool.collect(&mut store);
+         if completed < dispatched
+         {
+            std::thread::yield_now();
+         }
+      }
+      release_reuse_uploaded = store.upload_ready(renderer.as_mut());
+      slot_generation_changes = previous.iter().zip(&replacement_ids).filter(|((texture, generation), id)| {
+         store.resolve(**id).is_some_and(|image| {
+            !image.standalone && image.texture == *texture && image.slot_generation != *generation
+         })
+      }).count();
+   }
+   let proof_store_stats = store.stats();
+   let summary = summarize(&frame_samples);
+   let family = if authoring { "authoring" } else { "architecture" };
+   let (layer, scenario, variant, cache_state, refresh_mode) = perf_case_contract_metadata(id, family);
+   let mut metrics = BTreeMap::new();
+   insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+   insert_distribution_metrics(&mut metrics, "encode_ms", &encode_samples);
+   insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+   insert_distribution_metrics(&mut metrics, "first_visible_ms", &[first_visible_ms]);
+   insert_frame_pacing_metrics(&mut metrics, &frame_samples);
+   metrics.insert(String::from("unique_images"), count as f64);
+   metrics.insert(String::from("source_bytes"), count as f64 * source_size as f64 * source_size as f64 * 4.0);
+   metrics.insert(String::from("encoded_input_bytes"), steady_store_stats.encoded_input_bytes as f64);
+   metrics.insert(String::from("display_decode_bytes"), steady_store_stats.decoded_output_bytes as f64);
+   metrics.insert(String::from("decoded_resident_bytes"), steady_store_stats.decoded_resident_bytes as f64);
+   metrics.insert(String::from("decoded_peak_bytes"), steady_store_stats.decoded_peak_bytes as f64);
+   metrics.insert(String::from("decode_time_ms"), steady_store_stats.decode_time_ns as f64 / 1_000_000.0);
+   metrics.insert(String::from("decode_wall_ms"), decode_wall_ms);
+   metrics.insert(String::from("upload_wall_ms"), upload_wall_ms);
+   metrics.insert(String::from("upload_bytes"), steady_store_stats.upload_bytes as f64);
+   metrics.insert(String::from("atlas_page_clear_bytes"), steady_store_stats.atlas_page_clear_bytes as f64);
+   metrics.insert(String::from("gpu_resident_bytes"), steady_store_stats.gpu_resident_bytes as f64);
+   metrics.insert(String::from("gpu_peak_bytes"), steady_store_stats.gpu_peak_bytes as f64);
+   metrics.insert(String::from("texture_creates"), steady_store_stats.texture_creates as f64);
+   metrics.insert(String::from("atlas_pages"), steady_store_stats.atlas_pages as f64);
+   metrics.insert(String::from("atlas_slots"), steady_store_stats.atlas_slots as f64);
+   metrics.insert(String::from("standalone_images"), steady_store_stats.standalone_images as f64);
+   metrics.insert(String::from("decode_jobs"), steady_store_stats.decode_jobs as f64);
+   metrics.insert(String::from("decode_completions"), steady_store_stats.decode_completions as f64);
+   metrics.insert(String::from("canceled_jobs"), steady_store_stats.canceled_jobs as f64);
+   metrics.insert(
+      String::from("first_publications"),
+      steady_store_stats.first_publication_count as f64,
+   );
+   metrics.insert(String::from("prepared_chunk_invalidations"), proof_store_stats.invalidated_chunks as f64);
+   metrics.insert(String::from("release_reuse_uploaded"), release_reuse_uploaded as f64);
+   metrics.insert(String::from("slot_generation_changes"), slot_generation_changes as f64);
+   metrics.insert(String::from("request_to_first_completed_frame_ms"), first_visible_ms);
+   metrics.insert(
+      String::from("store_request_to_first_publication_ms_avg"),
+      steady_store_stats.request_to_first_publication_ns as f64
+         / steady_store_stats.first_publication_count.max(1) as f64
+         / 1_000_000.0,
+   );
+   metrics.insert(String::from("uploaded_images"), uploaded as f64);
+   metrics.insert(String::from("draws_avg"), draws as f64 / frames as f64);
+   metrics.insert(String::from("image_argument_binds_avg"), binds as f64 / frames as f64);
+   metrics.insert(String::from("image_argument_bytes_avg"), image_argument_bytes as f64 / frames as f64);
+   metrics.insert(String::from("image_cache_bytes_peak"), image_cache_bytes_peak as f64);
+   metrics.insert(String::from("first_visible_gpu_ms"), first_stats.gpu_ms);
+   metrics.insert(
+      String::from("first_completed_frame_spatial_variance"),
+      image_spatial_variance(&first_pixels),
+   );
+   if raw_samples
+   {
+      insert_indexed_samples(&mut metrics, "c60_frame_ms", &frame_samples);
+      insert_indexed_samples(&mut metrics, "c60_encode_ms", &encode_samples);
+      insert_indexed_samples(&mut metrics, "c60_gpu_ms", &gpu_samples);
+   }
+   for image in ids
+   {
+      store.release(image, renderer.as_mut());
+   }
+   for image in replacement_ids
+   {
+      store.release(image, renderer.as_mut());
+   }
+   store.purge_for_memory_warning(renderer.as_mut());
+   Ok(PerfCaseResult {
+      id: String::from(id),
+      family: String::from(family),
+      layer: String::from(layer),
+      scenario: String::from(scenario),
+      variant: String::from(if standalone { "standalone" } else { variant }),
+      cache_state: String::from(cache_state),
+      refresh_mode: String::from(refresh_mode),
+      unit: String::from("ms/frame"),
+      gated: true,
+      threshold_pct: 0.20,
+      median: summary.median,
+      p95: summary.p95,
+      p99: summary.p99,
+      min: summary.min,
+      max: summary.max,
+      mean: summary.mean,
+      samples: frame_samples.len(),
+      ops_per_sample: 1,
+      notes: vec![format!(
+         "C60 {} display-sized async image grid with {count} generation-safe logical images and exact bounded residency counters.",
+         if standalone { "standalone control" } else { "size-classed atlas" },
+      )],
+      metrics,
+   })
+}
+
 fn metal_image_case(id: &str, smoke: bool, name: &str, count: usize) -> Result<PerfCaseResult>
 {
+   if name.starts_with("icons_")
+   {
+      return metal_image_store_case(id, smoke, count, false);
+   }
    let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
    renderer.resize(1_200, 800, 1.0).context("resizing Metal renderer")?;
    let mut handles = Vec::with_capacity(count);

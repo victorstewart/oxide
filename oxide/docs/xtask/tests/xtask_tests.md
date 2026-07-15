@@ -18,7 +18,7 @@ Call flow:
 
 ## Entry points list
 
-- `experiment_manifest_checker_accepts_current_manifest()`: validates every committed experiment entry and freezes the current total plus accepted/rejected decision counts, including the accepted C35 WebGPU and C34 Metal ID-mask field packing decisions.
+- `experiment_manifest_checker_accepts_current_manifest()`: validates every committed experiment entry and freezes the current total plus accepted/rejected decision counts, including C60's accepted image-store policy and two rejected UIKit proof paths.
 - `experiment_manifest_checker_rejects_expired_undecided_entries()`: rejects an undecided experiment past its expiry.
 - `experiment_manifest_checker_requires_perf_ab_gate_for_undecided_entries()`: requires a concrete A/B gate before an experiment may remain open.
 - `experiment_manifest_checker_requires_proof_for_decided_entries()`: requires persisted proof for accepted and rejected decisions.
@@ -68,6 +68,7 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
+- 2026-07-15: froze C60's accepted image-store experiment, two rejected UIKit proof paths, and the 190-entry, 88-accepted, 102-rejected manifest totals.
 - 2026-07-14: froze the accepted C35 WebGPU ID-mask field packing and the 170-entry, 81-accepted, 89-rejected manifest totals.
 - 2026-07-14: froze the accepted C34 Metal ID-mask field packing, three rejected compositor guardrail refinements, and the 169-entry, 80-accepted, 89-rejected manifest totals.
 - 2026-07-14: froze the accepted C33 WebGPU ID-mask field cache, rejected the one-entry cache after the required multi-map proof, and refreshed the 165-entry, 79-accepted, 86-rejected manifest totals.

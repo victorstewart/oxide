@@ -1,0 +1,29 @@
+[package]
+name = "oxide-image-store"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Generation-safe asynchronous image decoding and bounded cross-backend residency for Oxide"
+
+[dependencies]
+oxide-renderer-api = { path = "../renderer-api" }
+png = "0.17"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3.98"
+wasm-bindgen = "0.2.121"
+wasm-bindgen-futures = "0.4.71"
+web-sys = { version = "0.3.98", features = [
+   "Blob",
+   "CanvasRenderingContext2d",
+   "Document",
+   "HtmlCanvasElement",
+   "ImageBitmap",
+   "ImageBitmapOptions",
+   "ImageData",
+   "ResizeQuality",
+   "Window",
+] }
+
+[lib]
+path = "src/lib.rs"
