@@ -1,0 +1,103 @@
+{
+  "device": "iPhone 17 Pro Max (iPhone18,2), iOS 26.5.1",
+  "warmups": 8,
+  "samples": 30,
+  "storage_comparisons": [
+    {
+      "workload": "large_static",
+      "shared": {
+        "frame_ms_p50": 0.035208,
+        "frame_ms_p95": 0.10931874999999999,
+        "frame_ms_p99": 0.16514125000000007,
+        "encode_ms_p50": 0.029729000000000002,
+        "gpu_ms_p50": 0.29952081968076527,
+        "gpu_ms_p95": 0.8792687382083382,
+        "creation_cpu_ms": 1.0970419999999999,
+        "first_visible_ms": 8.524833000000001,
+        "creation_peak_texture_bytes": 4227072
+      },
+      "private": {
+        "frame_ms_p50": 0.0482705,
+        "frame_ms_p95": 0.11968779999999998,
+        "frame_ms_p99": 0.1873846400000001,
+        "encode_ms_p50": 0.041479,
+        "gpu_ms_p50": 0.2949166519101709,
+        "gpu_ms_p95": 0.6498249626019952,
+        "creation_cpu_ms": 1.5784589999999998,
+        "first_visible_ms": 6.965332999999999,
+        "creation_peak_texture_bytes": 8454144
+      },
+      "decision": "shared_accepted_private_rejected"
+    },
+    {
+      "workload": "minified_1089_draws_11_mips",
+      "shared": {
+        "frame_ms_p50": 0.0891875,
+        "frame_ms_p95": 0.19248139999999997,
+        "frame_ms_p99": 0.24161982000000007,
+        "encode_ms_p50": 0.08349999999999999,
+        "gpu_ms_p50": 0.36302083753980696,
+        "gpu_ms_p95": 0.7219375111162645,
+        "gpu_ms_p99": 1.187793738790788,
+        "creation_cpu_ms": 2.215708,
+        "first_visible_ms": 6.122125,
+        "creation_peak_texture_bytes": 5652480,
+        "spatial_variance": 0
+      },
+      "private": {
+        "frame_ms_p50": 0.1338335,
+        "frame_ms_p95": 0.1780875,
+        "frame_ms_p99": 0.2543125000000001,
+        "encode_ms_p50": 0.12579200000000001,
+        "gpu_ms_p50": 0.36358332727104425,
+        "gpu_ms_p95": 0.7901249919086673,
+        "gpu_ms_p99": 1.2152854411397132,
+        "creation_cpu_ms": 2.362917,
+        "first_visible_ms": 7.039667000000001,
+        "creation_peak_texture_bytes": 9879552,
+        "spatial_variance": 0
+      },
+      "decision": "shared_mips_accepted_private_rejected"
+    },
+    {
+      "workload": "small_one_use",
+      "shared": {
+        "creation_cpu_ms_p50": 0.024958,
+        "creation_cpu_ms_p95": 0.04508954999999999,
+        "first_visible_ms_p50": 0.631896,
+        "first_visible_ms_p95": 1.2244088499999997,
+        "encode_ms_p50": 0.030125,
+        "gpu_ms_p50": 0.02606248017400503,
+        "sampled_resident_bytes_peak": 32768,
+        "creation_peak_texture_bytes": 32768
+      },
+      "private": {
+        "creation_cpu_ms_p50": 0.058812500000000004,
+        "creation_cpu_ms_p95": 0.0931731,
+        "first_visible_ms_p50": 0.6105625,
+        "first_visible_ms_p95": 1.2425810999999993,
+        "encode_ms_p50": 0.040166499999999994,
+        "gpu_ms_p50": 0.05358335329219699,
+        "sampled_resident_bytes_peak": 32768,
+        "creation_peak_texture_bytes": 65536
+      },
+      "decision": "shared_accepted_private_rejected"
+    }
+  ],
+  "production_guards": {
+    "large_auto_storage": "shared",
+    "large_auto_staging_upload_bytes": 0,
+    "small_auto_storage": "shared",
+    "small_auto_staging_upload_bytes": 0,
+    "small_auto_resident_textures_after_release": 0,
+    "minified_auto_storage": "shared",
+    "minified_auto_mip_levels": 11,
+    "minified_auto_staging_upload_bytes": 0,
+    "authoring_image_view_encodes": 1089
+  },
+  "quality": {
+    "shared_no_mip_spatial_variance": 947.0060063614194,
+    "shared_mip_spatial_variance": 0,
+    "private_mip_spatial_variance": 0
+  }
+}

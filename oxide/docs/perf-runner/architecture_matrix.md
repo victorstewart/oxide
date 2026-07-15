@@ -4,6 +4,26 @@
 
 `architecture_matrix` owns the deterministic rendering workloads used by the renderer architecture program. It keeps workload construction and measurement out of production UI paths while giving later changes fixed case IDs, scaling points, cache states, latency distributions, direct GPU timings, and explanatory counters.
 
+## Relation to the rest of the code
+
+- `perf-runner::run_suite` calls `architecture_matrix::push_architecture_matrix_cases` after global case filtering is configured.
+- CPU rows exercise `ui-core`, `renderer-api`, text, and retained structures directly; GPU rows own a real `renderer-metal` instance and use its production frame APIs.
+- `tests/report_tests.rs` launches the runner as a child process and freezes the emitted report contract.
+
+## Entry points list
+
+- `architecture_matrix::push_architecture_matrix_cases(cases, smoke) -> Result<()>` (`pub(super)`) appends every selected architecture and authoring case, preserving stable IDs and smoke/full workload semantics for `perf-runner::run_suite`.
+
+## Logic narrative
+
+Call flow:
+
+- suite filter -> stable case registry -> deterministic workload construction
+- warmup population -> measured CPU/encode/completed-GPU samples -> explanatory counters
+- `PerfCaseResult` -> JSON/Markdown report -> integration-test and experiment review
+
+Each row constructs inputs outside its measured loop, unless creation/first-visible behavior is the declared workload. GPU rows submit production draw lists, wait only through the existing evidence completion helper or explicit readback boundary, and summarize every retained observation without dropping tails.
+
 ## Workload contract
 
 - Retained UI: 1,000 label-shaped nodes, 500 image-shaped nodes, depths 16/32, clean replay, one dirty leaf, a 1,500-node hot working set under a 1 MiB hard cache budget, and a complete one-use invalidation workload under a zero-byte direct policy.
@@ -16,7 +36,7 @@
 - Frame resources: a three-slot visible 4,096-quad row freezes no-growth 327,680/49,152/16-byte VB/IB/UB high water, while an eight-slot 8,192-quad offscreen stress row grows every slot once and requires zero warm growth or backpressure skips.
 - Prepared Metal chunks: 256 mixed immutable chunks, each carrying 64 RRects, images, glyph quads, or solid triangles. Clean frames change only a dynamic transform and require 256 hits with zero upload/traversal; the one-dirty row alternates only chunk zero's geometry revision and requires 255 hits plus one bounded rebuild.
 - Prepared Metal layers: 100 retained snapshot layers with 100 RRects each. Clean frames require 100 texture hits with no body/offscreen/upload work; one-dirty frames require 99 hits, one texture miss, one offscreen replay from the existing prepared body, and no warm upload, preparation, or texture creation.
-- Images and idle: CPU construction plus Metal resource/draw rows for 100/1,000/10,000 unique images and policy/churn variants; authoring rows exercise 100/1,000 unique `ImageView` cover cells and persist semantic image/nine-slice, crop, quad, draw-call, parameter-byte, and shaded-pixel counters; a foreground static row proves zero timers, animations, camera frames, network publications, damage, submissions, and wakeups.
+- Images and idle: CPU construction plus Metal resource/draw rows for 100/1,000/10,000 unique images and policy/churn variants; C59 adds large static, minified-grid, small one-use, and public-authoring Shared/Private/mip controls with upload, startup, steady-sampling, memory, and output-quality evidence; authoring rows exercise 100/1,000 unique `ImageView` cover cells and persist semantic image/nine-slice, crop, quad, draw-call, parameter-byte, and shaded-pixel counters; a foreground static row proves zero timers, animations, camera frames, network publications, damage, submissions, and wakeups.
 - WebGPU primitives: opt-in browser rows for 1/64/1,024 RRects, 1/64/512 spinners, 64/1,024 neon markers, and 64/512 nine-slices. The 1,024-marker row emits eight production-sized 128-marker passes rather than changing the public per-pass safety limit.
 - Metal analytic instances: physical Metal rows for RRect, image, nine-slice, spinner, backdrop, and visual-effect ordered runs at 1/64/1,024/10,000 instances. Every row persists frame/encode/direct-GPU distributions, draws, instances, upload bytes, analytic ring bytes/binds/growth, total growth, and frame-ring residency.
 
@@ -40,6 +60,8 @@ The C48 row is `cpu.architecture.text.bitmap_options`. It measures the real Cut/
 
 The C14 rows are selected with `OXIDE_PERF_RUNNER_FILTER=cpu.authoring.image_view_grid.,gpu.authoring.image_view_grid.`. They create unique 29x7 Metal images and encode 24x12 cover cells through the public `ImageView` API, so parent zero-slice nine-slice behavior and candidate source-cropped image behavior share the same authoring and backend path.
 
+The C59 rows are `gpu.architecture.images.immutable_large_{shared,private,auto}`, `gpu.architecture.images.immutable_minified_{shared,private_nomip,shared_mipmapped,mipmapped,auto}`, `gpu.architecture.images.immutable_small_one_use_{shared,private,auto}`, and `gpu.authoring.image_view_grid.immutable_minified`. Large-static rows sample one 1,024-square source at one-to-one scale. Minified rows draw that identical checkerboard 1,089 times into 31-square cells so aliasing and mip bandwidth are visible; the authoring row emits the same square geometry through public `ImageView::encode`. Small one-use rows include creation, first render, explicit completion/readback, and release in each sample. Every row reports p50/p95/p99/peak frame or first-visible latency, encode and completed-command-buffer GPU time, source and retained bytes, current residency, per-create staging and sampled-plus-staging creation peak, upload/mip work, and output variance. `OXIDE_C59_METAL_WARMUPS`, `OXIDE_C59_METAL_FRAMES`, and `OXIDE_C59_RAW_SAMPLES` control explicit evidence runs without changing production rendering.
+
 `OXIDE_ARCHITECTURE_METAL_WARMUPS` and `OXIDE_ARCHITECTURE_METAL_FRAMES` override the warmup and measured frame counts for non-default statistical runs. When `OXIDE_ARCHITECTURE_METAL_RAW_SAMPLES` is present, each warmup and measured frame/encode/GPU duration is persisted under an indexed metric key. Normal reports omit those raw keys, so the expanded evidence shape is confined to explicit experiment runs.
 
 `OXIDE_ARCHITECTURE_EFFECT_COLD_FIRST_USE=1` is confined to the `target_plan_*` Metal rows. It recreates and resizes the renderer before every post-initial frame, labels the row cold, and turns the raw encode distribution into repeated first-use effect-target samples. Without the flag, the permanent rows retain their normal warm-reuse behavior.
@@ -50,7 +72,31 @@ The WebGPU matrix is absent from normal page execution. `scripts/check_webgpu_br
 
 The memory-warning layer row invokes the production layer-cache purge hook. All Metal layer rows run under a 16 MiB default benchmark budget, overridable with `OXIDE_ARCHITECTURE_LAYER_CACHE_BUDGET_BYTES`, and report resident, pool, CPU metadata, evictions, recreations, pool reuses, purges, and hard-budget violations. Navigation churn changes all 100 layer IDs per frame so allocation reuse and eviction tails are observable instead of allowing unbounded residency.
 
-## Verification
+## Preconditions and postconditions
+
+- The selected backend and target must be available; Metal cases return an error when renderer creation, resize, submission, timing, or readback fails.
+- Case IDs, workload cardinality, visible content, cache state, and measured phase remain stable between controls.
+- Successful rows contain non-empty distributions plus the counters required to prove equivalent work.
+
+## Edge cases and failure modes
+
+- Smoke mode reduces repetitions but never workload geometry or semantic coverage.
+- Missing GPU timestamps, malformed output, zero required work, wrong storage policy, or changed quality counters fail report tests.
+- Explicit raw-sample flags enlarge only experiment reports; ordinary report shape remains compact.
+
+## Concurrency and memory behavior
+
+Cases execute serially in one runner process. Each Metal row owns its renderer and completion-protected resources; sample vectors reserve their final capacity before measurement. Child-process report tests use process-unique temporary paths, and browser rows remain separately opt-in.
+
+## Performance notes
+
+Workload construction is deliberately outside steady loops. Warmups cover configured frame slots and cache states before samples are retained. Reports preserve p50/p95/p99/peak, hitch/missed-frame signals where relevant, direct GPU time, uploads, draws, passes, residency, and subsystem-specific counters so a timing change cannot hide reduced work.
+
+## Feature flags and cfgs
+
+Metal rows compile on macOS and physical iOS; browser/WebGPU architecture rows are opt-in through the browser harness. Environment variables named in the measurement boundary select sample populations or evidence controls without changing ordinary production policy.
+
+## Testing and benchmarks
 
 - Unit tests freeze required scaling points, exact damage percentages, and gap-free 1/16/256 chunk coverage.
 - Report tests require the hot retained row to be complete, hit at 100%, and remain within budget; the churn row must retain zero bytes and record one explicit fallback. A separate authoring row covers unchanged-policy hot access through the public `UiSurface` policy API.
@@ -64,8 +110,16 @@ The memory-warning layer row invokes the production layer-cache purge hook. All 
 - Browser source tests freeze all ten WebGPU primitive IDs, opt-in routing, queue/RAF pacing, timestamp settlement, and counter serialization.
 - C43 report tests require 1,000 warm labels to perform zero shaping/raster/upload work, 200 new labels to publish once, and the production Metal row to preserve 200 draws and identical geometry bytes while removing immediate updates.
 - C48 bitmap-text tests require exact independent fontdue raster-byte and glyph-geometry parity, one glyph run per option label, zero label-solid commands, and zero warm allocations.
+- C59 report tests require production large and small-one-use images to avoid Private staging; both Shared and Private complete-mip controls must reduce checkerboard variance identically by at least four times; all mip/residency/upload counters and the public-authoring route are frozen.
+
+Run `cargo test --locked -p oxide-perf-runner --test report_tests`. Explicit C59 evidence selects its exact case IDs with `OXIDE_PERF_RUNNER_FILTER` and writes a reviewed JSON report.
+
+## Examples
+
+Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.images.immutable_minified_shared_mipmapped` and run the suite to isolate one C59 policy without executing unrelated rows.
 
 ## Changelog
+- 2026-07-15: added C59 immutable-image Shared/Private/mip policy controls, large/minified/one-use/public-authoring rows, direct GPU and startup distributions, residency/upload counters, indexed samples, and output-quality evidence.
 - 2026-07-15: added C58 Scene3D bloom graph integration, single-source extraction, aliased intermediates, conservative viewport/overlay rows, and graph/pass/bandwidth telemetry.
 - 2026-07-15: added C57 compatible Scene3D instancing, compact Metal instance-ring and state-call counters, indexed raw samples, and mesh create/release endurance.
 - 2026-07-14: added the C52 local/full-screen sigma sweep and paired-kernel sample, ALU-proxy, and table-memory telemetry.

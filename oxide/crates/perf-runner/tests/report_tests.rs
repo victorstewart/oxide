@@ -4839,7 +4839,7 @@ fn filtered_run_suite_supports_image_view_crop_authoring_cases()
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env(
             "OXIDE_PERF_RUNNER_FILTER",
-            "cpu.authoring.image_view_grid.,gpu.authoring.image_view_grid.",
+            "cpu.authoring.image_view_grid.cover_,gpu.authoring.image_view_grid.cover_",
         )
         .arg("--run-suite")
         .arg("--smoke")
@@ -5515,6 +5515,97 @@ fn metal_spatial_rows_freeze_small_and_full_damage_contracts()
    assert_eq!(report_f64(full, "geometry_bytes_copied_avg"), 0.0);
    assert_eq!(report_f64(full, "buffer_upload_bytes_avg"), 0.0);
    assert_eq!(report_f64(full, "shaded_damage_pixels_avg"), 1_200.0 * 800.0);
+   let _ = std::fs::remove_file(json_out);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn metal_immutable_image_rows_freeze_residency_mip_and_quality_contracts()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-immutable-images-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env(
+         "OXIDE_PERF_RUNNER_FILTER",
+         "gpu.architecture.images.immutable_large_auto,gpu.architecture.images.immutable_minified_shared,gpu.architecture.images.immutable_minified_shared_mipmapped,gpu.architecture.images.immutable_minified_mipmapped,gpu.architecture.images.immutable_small_one_use_auto,gpu.authoring.image_view_grid.immutable_minified",
+      )
+      .env("OXIDE_C59_METAL_WARMUPS", "1")
+      .env("OXIDE_C59_METAL_FRAMES", "2")
+      .env("OXIDE_C59_RAW_SAMPLES", "1")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run immutable-image Metal rows");
+   let stderr = String::from_utf8_lossy(&output.stderr);
+   assert!(output.status.success(), "immutable-image rows failed: {stderr}");
+   let report = std::fs::read_to_string(&json_out).expect("read immutable-image report");
+   let large = report_case_slice(&report, "gpu.architecture.images.immutable_large_auto");
+   let shared = report_case_slice(&report, "gpu.architecture.images.immutable_minified_shared");
+   let mipmapped = report_case_slice(
+      &report,
+      "gpu.architecture.images.immutable_minified_mipmapped",
+   );
+   let shared_mipmapped = report_case_slice(
+      &report,
+      "gpu.architecture.images.immutable_minified_shared_mipmapped",
+   );
+   let small = report_case_slice(
+      &report,
+      "gpu.architecture.images.immutable_small_one_use_auto",
+   );
+   let authoring = report_case_slice(
+      &report,
+      "gpu.authoring.image_view_grid.immutable_minified",
+   );
+
+   assert_eq!(report_f64(large, "shared_textures"), 1.0);
+   assert_eq!(report_f64(large, "private_textures"), 0.0);
+   assert_eq!(report_f64(large, "mipmapped_textures"), 0.0);
+   assert_eq!(report_f64(large, "upload_command_buffers"), 0.0);
+   assert_eq!(
+      report_f64(large, "creation_peak_texture_bytes"),
+      report_f64(large, "shared_bytes"),
+   );
+   assert!(report_f64(large, "first_visible_ms") > 0.0);
+   assert_eq!(report_f64(shared, "shared_textures"), 1.0);
+   assert_eq!(report_f64(shared, "mip_levels"), 1.0);
+   assert_eq!(report_f64(shared_mipmapped, "shared_textures"), 1.0);
+   assert_eq!(report_f64(shared_mipmapped, "private_textures"), 0.0);
+   assert_eq!(report_f64(shared_mipmapped, "mip_levels"), 11.0);
+   assert_eq!(report_f64(shared_mipmapped, "mipmap_generations"), 1.0);
+   assert_eq!(report_f64(mipmapped, "private_textures"), 1.0);
+   assert_eq!(report_f64(mipmapped, "mip_levels"), 11.0);
+   assert_eq!(report_f64(mipmapped, "mipmap_generations"), 1.0);
+   assert!(
+      report_f64(mipmapped, "first_visible_spatial_variance") * 4.0
+         < report_f64(shared, "first_visible_spatial_variance"),
+   );
+   assert!(
+      report_f64(shared_mipmapped, "first_visible_spatial_variance") * 4.0
+         < report_f64(shared, "first_visible_spatial_variance"),
+   );
+   assert_eq!(
+      report_f64(shared_mipmapped, "first_visible_spatial_variance"),
+      report_f64(mipmapped, "first_visible_spatial_variance"),
+   );
+   assert_eq!(report_f64(small, "private_uploads"), 0.0);
+   assert_eq!(report_f64(small, "resident_shared_textures_after_release"), 0.0);
+   assert_eq!(report_f64(small, "resident_private_textures_after_release"), 0.0);
+   assert_eq!(report_f64(small, "staging_upload_bytes_per_create"), 0.0);
+   assert_eq!(
+      report_f64(small, "creation_peak_texture_bytes"),
+      report_f64(small, "sampled_resident_bytes_peak"),
+   );
+   assert!(report_f64(small, "first_visible_ms_p50") > 0.0);
+   assert!(report_f64(mipmapped, "c59_frame_ms_0001") > 0.0);
+   assert!(report_f64(mipmapped, "c59_gpu_ms_0001") > 0.0);
+   assert!(authoring.contains("\"family\": \"authoring\""));
+   assert_eq!(report_f64(authoring, "image_view_encodes"), 1_089.0);
+   assert_eq!(report_f64(authoring, "shared_textures"), 1.0);
+   assert_eq!(report_f64(authoring, "private_textures"), 0.0);
+   assert_eq!(report_f64(authoring, "mip_levels"), 11.0);
    let _ = std::fs::remove_file(json_out);
 }
 

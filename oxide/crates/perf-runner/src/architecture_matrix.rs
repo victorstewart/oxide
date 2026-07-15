@@ -263,6 +263,27 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       }
    }
 
+   for name in [
+      "immutable_large_shared",
+      "immutable_large_private",
+      "immutable_large_auto",
+      "immutable_minified_shared",
+      "immutable_minified_private_nomip",
+      "immutable_minified_shared_mipmapped",
+      "immutable_minified_mipmapped",
+      "immutable_minified_auto",
+      "immutable_small_one_use_shared",
+      "immutable_small_one_use_private",
+      "immutable_small_one_use_auto",
+   ]
+   {
+      let id = format!("gpu.architecture.images.{name}");
+      if perf_case_allowed(&id)
+      {
+         cases.push(metal_immutable_image_case(&id, smoke, name)?);
+      }
+   }
+
    for count in [100_usize, 1_000]
    {
       let name = format!("image_view_cover_grid_{count}");
@@ -276,6 +297,15 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       {
          cases.push(metal_image_case(&gpu_id, smoke, &name, count)?);
       }
+   }
+   let immutable_authoring_id = "gpu.authoring.image_view_grid.immutable_minified";
+   if perf_case_allowed(immutable_authoring_id)
+   {
+      cases.push(metal_immutable_image_case(
+         immutable_authoring_id,
+         smoke,
+         "immutable_minified_auto",
+      )?);
    }
 
    for count in [1_usize, 51, 52, 60, 61, 128, 1_024]
@@ -4789,6 +4819,451 @@ fn metal_image_case(id: &str, smoke: bool, name: &str, count: usize) -> Result<P
       samples: frame_samples.len(),
       ops_per_sample: 1,
       notes: vec![format!("Metal {name} image-residency workload with {count} unique {source_dimensions} source resources and production image draws.")],
+      metrics,
+   })
+}
+
+#[derive(Clone, Copy)]
+enum ImmutableImageCasePolicy
+{
+   Auto,
+   Shared,
+   Private,
+   SharedMipmapped,
+   PrivateMipmapped,
+}
+
+fn immutable_image_case_policy(name: &str) -> ImmutableImageCasePolicy
+{
+   if name.ends_with("_shared_mipmapped")
+   {
+      ImmutableImageCasePolicy::SharedMipmapped
+   }
+   else if name.ends_with("_shared")
+   {
+      ImmutableImageCasePolicy::Shared
+   }
+   else if name.ends_with("_private") || name.ends_with("_private_nomip")
+   {
+      ImmutableImageCasePolicy::Private
+   }
+   else if name.ends_with("_mipmapped")
+   {
+      ImmutableImageCasePolicy::PrivateMipmapped
+   }
+   else
+   {
+      ImmutableImageCasePolicy::Auto
+   }
+}
+
+fn create_immutable_case_image(renderer: &mut metal::MetalRenderer, size: u32, pixels: &[u8], policy: ImmutableImageCasePolicy, repeatedly_minified: bool) -> api::ImageHandle
+{
+   match policy
+   {
+      ImmutableImageCasePolicy::Auto => renderer.image_create_rgba8_immutable(
+         size,
+         size,
+         pixels,
+         size as usize * 4,
+         repeatedly_minified,
+      ),
+      ImmutableImageCasePolicy::Shared => renderer.image_create_rgba8_immutable_for_benchmark(
+         size,
+         size,
+         pixels,
+         size as usize * 4,
+         false,
+         false,
+      ),
+      ImmutableImageCasePolicy::Private => renderer.image_create_rgba8_immutable_for_benchmark(
+         size,
+         size,
+         pixels,
+         size as usize * 4,
+         true,
+         false,
+      ),
+      ImmutableImageCasePolicy::SharedMipmapped => renderer.image_create_rgba8_immutable_for_benchmark(
+         size,
+         size,
+         pixels,
+         size as usize * 4,
+         false,
+         true,
+      ),
+      ImmutableImageCasePolicy::PrivateMipmapped => renderer.image_create_rgba8_immutable_for_benchmark(
+         size,
+         size,
+         pixels,
+         size as usize * 4,
+         true,
+         true,
+      ),
+   }
+}
+
+fn immutable_image_case_pixels(size: u32, checker: bool) -> Vec<u8>
+{
+   let mut pixels = Vec::with_capacity(size as usize * size as usize * 4);
+   for y in 0..size
+   {
+      for x in 0..size
+      {
+         if checker
+         {
+            let value = if (x + y) & 1 == 0 { 0 } else { 255 };
+            pixels.extend_from_slice(&[value, value, value, 255]);
+         }
+         else
+         {
+            pixels.extend_from_slice(&[
+               (x.wrapping_mul(17) ^ y.wrapping_mul(3)) as u8,
+               (x.wrapping_mul(5) ^ y.wrapping_mul(29)) as u8,
+               (x.wrapping_mul(11) ^ y.wrapping_mul(7)) as u8,
+               255,
+            ]);
+         }
+      }
+   }
+   pixels
+}
+
+fn image_spatial_variance(pixels: &[u8]) -> f64
+{
+   let count = pixels.len() / 4;
+   if count == 0
+   {
+      return 0.0;
+   }
+   let mean = pixels.chunks_exact(4).map(|pixel| f64::from(pixel[0])).sum::<f64>()
+      / count as f64;
+   pixels
+      .chunks_exact(4)
+      .map(|pixel| {
+         let distance = f64::from(pixel[0]) - mean;
+         distance * distance
+      })
+      .sum::<f64>()
+      / count as f64
+}
+
+fn immutable_image_drawlist(image: api::ImageHandle, source_size: u32, minified: bool, authoring: bool) -> api::DrawList
+{
+   let mut builder = ui::DrawListBuilder::new();
+   if minified
+   {
+      let image_view = ui::elements::ImageView {
+         image,
+         natural_w: source_size,
+         natural_h: source_size,
+         fit: ui::elements::ImageFit::Cover,
+         alpha: 1.0,
+      };
+      for index in 0..1_089_usize
+      {
+         let x = (index % 33) as f32 * 31.0;
+         let y = (index / 33) as f32 * 31.0;
+         let rect = api::RectF::new(x, y, 31.0, 31.0);
+         if authoring
+         {
+            image_view.encode(rect, None, &mut builder);
+         }
+         else
+         {
+            builder.image(
+               image,
+               rect,
+               api::RectF::new(0.0, 0.0, source_size as f32, source_size as f32),
+               1.0,
+            );
+         }
+      }
+   }
+   else
+   {
+      builder.image(
+         image,
+         api::RectF::new(0.0, 0.0, source_size as f32, source_size as f32),
+         api::RectF::new(0.0, 0.0, source_size as f32, source_size as f32),
+         1.0,
+      );
+   }
+   builder.into_inner()
+}
+
+fn metal_immutable_image_case(id: &str, smoke: bool, name: &str) -> Result<PerfCaseResult>
+{
+   let policy = immutable_image_case_policy(name);
+   if name.contains("small_one_use")
+   {
+      return metal_immutable_one_use_image_case(id, smoke, policy);
+   }
+
+   let minified = name.contains("minified");
+   let authoring = id.contains(".authoring.");
+   let size = 1_024_u32;
+   let pixels = immutable_image_case_pixels(size, minified);
+   let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
+   let target_size = if minified { 1_023 } else { 1_024 };
+   renderer.resize(target_size, target_size, 1.0).context("resizing Metal renderer")?;
+   let creation_start = Instant::now();
+   let image = create_immutable_case_image(&mut renderer, size, &pixels, policy, minified);
+   let creation_ms = creation_start.elapsed().as_secs_f64() * 1_000.0;
+   let residency = renderer.image_residency_stats();
+   let draws = immutable_image_drawlist(image, size, minified, authoring);
+
+   let first_visible_start = Instant::now();
+   let first = renderer.begin_frame(&api::FrameTarget, None);
+   let first_frame_id = first.0;
+   renderer.encode_pass(&draws);
+   renderer.submit(first).with_context(|| format!("submitting first-visible {id}"))?;
+   let (_, _, first_pixels) = renderer
+      .readback_bgra8()
+      .with_context(|| format!("reading first-visible {id}"))?;
+   let first_visible_ms = first_visible_start.elapsed().as_secs_f64() * 1_000.0;
+   let first_stats = last_metal_stats_after_submit(&renderer, first_frame_id);
+
+   let warmups = std::env::var("OXIDE_C59_METAL_WARMUPS")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|warmups| *warmups > 0)
+      .unwrap_or(if smoke { 1 } else { 8 });
+   let frames = std::env::var("OXIDE_C59_METAL_FRAMES")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|frames| *frames > 0)
+      .unwrap_or(if smoke { 2 } else { 30 });
+   let raw_samples = std::env::var_os("OXIDE_C59_RAW_SAMPLES").is_some()
+      || std::env::var_os("OXIDE_ARCHITECTURE_METAL_RAW_SAMPLES").is_some();
+   let mut frame_samples = Vec::with_capacity(frames);
+   let mut encode_samples = Vec::with_capacity(frames);
+   let mut gpu_samples = Vec::with_capacity(frames);
+   let mut warmup_frame_samples = Vec::with_capacity(if raw_samples { warmups } else { 0 });
+   let mut warmup_encode_samples = Vec::with_capacity(if raw_samples { warmups } else { 0 });
+   let mut warmup_gpu_samples = Vec::with_capacity(if raw_samples { warmups } else { 0 });
+   let mut draws_sum = 0.0;
+   let mut instances_sum = 0.0;
+   let mut image_bytes_peak = first_stats.memory.image_cache_bytes;
+   let mut total_bytes_peak = first_stats.memory.total_bytes;
+
+   for frame in 0..(warmups + frames)
+   {
+      let frame_start = Instant::now();
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      let frame_id = token.0;
+      renderer.encode_pass(&draws);
+      renderer.submit(token).with_context(|| format!("submitting {id}"))?;
+      let frame_ms = frame_start.elapsed().as_secs_f64() * 1_000.0;
+      let stats = last_metal_stats_after_submit(&renderer, frame_id);
+      if frame >= warmups
+      {
+         frame_samples.push(frame_ms);
+         encode_samples.push(stats.encode_ms);
+         gpu_samples.push(stats.gpu_ms);
+         draws_sum += stats.draws as f64;
+         instances_sum += stats.instanced as f64;
+         image_bytes_peak = image_bytes_peak.max(stats.memory.image_cache_bytes);
+         total_bytes_peak = total_bytes_peak.max(stats.memory.total_bytes);
+      }
+      else if raw_samples
+      {
+         warmup_frame_samples.push(frame_ms);
+         warmup_encode_samples.push(stats.encode_ms);
+         warmup_gpu_samples.push(stats.gpu_ms);
+      }
+   }
+
+   renderer.image_release(image);
+   let summary = summarize(&frame_samples);
+   let family = if id.contains(".authoring.") { "authoring" } else { "architecture" };
+   let (layer, scenario, variant, cache_state, refresh_mode) = perf_case_contract_metadata(id, family);
+   let mut metrics = BTreeMap::new();
+   insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
+   insert_distribution_metrics(&mut metrics, "encode_ms", &encode_samples);
+   insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+   insert_distribution_metrics(&mut metrics, "creation_cpu_ms", &[creation_ms]);
+   insert_distribution_metrics(&mut metrics, "first_visible_ms", &[first_visible_ms]);
+   insert_frame_pacing_metrics(&mut metrics, &frame_samples);
+   metrics.insert(String::from("creation_cpu_ms"), creation_ms);
+   metrics.insert(String::from("first_visible_ms"), first_visible_ms);
+   metrics.insert(String::from("first_visible_gpu_ms"), first_stats.gpu_ms);
+   metrics.insert(String::from("source_width"), size as f64);
+   metrics.insert(String::from("source_height"), size as f64);
+   metrics.insert(String::from("source_bytes"), pixels.len() as f64);
+   metrics.insert(String::from("image_draws"), if minified { 1_089.0 } else { 1.0 });
+   metrics.insert(String::from("image_view_encodes"), if authoring { 1_089.0 } else { 0.0 });
+   metrics.insert(String::from("draws_avg"), draws_sum / frames as f64);
+   metrics.insert(String::from("instances_avg"), instances_sum / frames as f64);
+   metrics.insert(String::from("image_cache_bytes_peak"), image_bytes_peak as f64);
+   metrics.insert(String::from("renderer_bytes_peak"), total_bytes_peak as f64);
+   metrics.insert(String::from("shared_textures"), residency.shared_textures as f64);
+   metrics.insert(String::from("private_textures"), residency.private_textures as f64);
+   metrics.insert(String::from("mipmapped_textures"), residency.mipmapped_textures as f64);
+   metrics.insert(String::from("mip_levels"), residency.mip_levels as f64);
+   metrics.insert(String::from("shared_bytes"), residency.shared_bytes as f64);
+   metrics.insert(String::from("private_bytes"), residency.private_bytes as f64);
+   metrics.insert(String::from("staging_upload_bytes"), residency.staging_upload_bytes as f64);
+   metrics.insert(
+      String::from("creation_peak_texture_bytes"),
+      residency.shared_bytes.saturating_add(residency.private_bytes)
+         .saturating_add(residency.staging_upload_bytes) as f64,
+   );
+   metrics.insert(String::from("private_uploads"), residency.private_uploads as f64);
+   metrics.insert(String::from("mipmap_generations"), residency.mipmap_generations as f64);
+   metrics.insert(String::from("upload_command_buffers"), residency.upload_command_buffers as f64);
+   metrics.insert(String::from("first_visible_spatial_variance"), image_spatial_variance(&first_pixels));
+   if raw_samples
+   {
+      insert_indexed_samples(&mut metrics, "c59_warmup_frame_ms", &warmup_frame_samples);
+      insert_indexed_samples(&mut metrics, "c59_warmup_encode_ms", &warmup_encode_samples);
+      insert_indexed_samples(&mut metrics, "c59_warmup_gpu_ms", &warmup_gpu_samples);
+      insert_indexed_samples(&mut metrics, "c59_frame_ms", &frame_samples);
+      insert_indexed_samples(&mut metrics, "c59_encode_ms", &encode_samples);
+      insert_indexed_samples(&mut metrics, "c59_gpu_ms", &gpu_samples);
+   }
+
+   Ok(PerfCaseResult {
+      id: String::from(id),
+      family: String::from(family),
+      layer: String::from(layer),
+      scenario: String::from(scenario),
+      variant: String::from(variant),
+      cache_state: String::from(cache_state),
+      refresh_mode: String::from(refresh_mode),
+      unit: String::from("ms/frame"),
+      gated: true,
+      threshold_pct: 0.20,
+      median: summary.median,
+      p95: summary.p95,
+      p99: summary.p99,
+      min: summary.min,
+      max: summary.max,
+      mean: summary.mean,
+      samples: frame_samples.len(),
+      ops_per_sample: 1,
+      notes: vec![format!(
+         "Metal {name} immutable-image workload with explicit upload/startup, steady sampling, residency, mip, memory, and output-variance evidence.",
+      )],
+      metrics,
+   })
+}
+
+fn metal_immutable_one_use_image_case(id: &str, smoke: bool, policy: ImmutableImageCasePolicy) -> Result<PerfCaseResult>
+{
+   let size = 64_u32;
+   let pixels = immutable_image_case_pixels(size, false);
+   let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
+   renderer.resize(size, size, 1.0).context("resizing Metal renderer")?;
+   let warmups = std::env::var("OXIDE_C59_METAL_WARMUPS")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|warmups| *warmups > 0)
+      .unwrap_or(if smoke { 1 } else { 4 });
+   let frames = std::env::var("OXIDE_C59_METAL_FRAMES")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|frames| *frames > 0)
+      .unwrap_or(if smoke { 2 } else { 30 });
+   let raw_samples = std::env::var_os("OXIDE_C59_RAW_SAMPLES").is_some()
+      || std::env::var_os("OXIDE_ARCHITECTURE_METAL_RAW_SAMPLES").is_some();
+   let mut first_visible_samples = Vec::with_capacity(frames);
+   let mut creation_samples = Vec::with_capacity(frames);
+   let mut encode_samples = Vec::with_capacity(frames);
+   let mut gpu_samples = Vec::with_capacity(frames);
+   let mut output_checksum = 0_u64;
+   let mut sampled_resident_bytes_peak = 0_u64;
+
+   for frame in 0..(warmups + frames)
+   {
+      let first_visible_start = Instant::now();
+      let creation_start = Instant::now();
+      let image = create_immutable_case_image(&mut renderer, size, &pixels, policy, false);
+      let creation_ms = creation_start.elapsed().as_secs_f64() * 1_000.0;
+      let live_residency = renderer.image_residency_stats();
+      sampled_resident_bytes_peak = sampled_resident_bytes_peak.max(
+         live_residency.shared_bytes.saturating_add(live_residency.private_bytes),
+      );
+      let draws = immutable_image_drawlist(image, size, false, false);
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      renderer.encode_pass(&draws);
+      renderer.submit(token).with_context(|| format!("submitting {id}"))?;
+      let (_, _, output) = renderer
+         .readback_bgra8()
+         .with_context(|| format!("reading one-use {id}"))?;
+      let first_visible_ms = first_visible_start.elapsed().as_secs_f64() * 1_000.0;
+      let stats = renderer.last_stats();
+      renderer.image_release(image);
+      if frame >= warmups
+      {
+         first_visible_samples.push(first_visible_ms);
+         creation_samples.push(creation_ms);
+         encode_samples.push(stats.encode_ms);
+         gpu_samples.push(stats.gpu_ms);
+         output_checksum = output_checksum.wrapping_add(
+            output.iter().copied().map(u64::from).sum::<u64>(),
+         );
+      }
+   }
+
+   let residency = renderer.image_residency_stats();
+   let summary = summarize(&first_visible_samples);
+   let (layer, scenario, variant, cache_state, refresh_mode) =
+      perf_case_contract_metadata(id, "architecture");
+   let mut metrics = BTreeMap::new();
+   insert_distribution_metrics(&mut metrics, "first_visible_ms", &first_visible_samples);
+   insert_distribution_metrics(&mut metrics, "creation_cpu_ms", &creation_samples);
+   insert_distribution_metrics(&mut metrics, "encode_ms", &encode_samples);
+   insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
+   metrics.insert(String::from("source_width"), size as f64);
+   metrics.insert(String::from("source_height"), size as f64);
+   metrics.insert(String::from("source_bytes"), pixels.len() as f64);
+   metrics.insert(String::from("output_checksum"), output_checksum as f64);
+   metrics.insert(String::from("resident_shared_textures_after_release"), residency.shared_textures as f64);
+   metrics.insert(String::from("resident_private_textures_after_release"), residency.private_textures as f64);
+   metrics.insert(String::from("private_uploads"), residency.private_uploads as f64);
+   metrics.insert(String::from("mipmap_generations"), residency.mipmap_generations as f64);
+   metrics.insert(String::from("staging_upload_bytes"), residency.staging_upload_bytes as f64);
+   metrics.insert(String::from("sampled_resident_bytes_peak"), sampled_resident_bytes_peak as f64);
+   let staging_bytes_per_create = residency.staging_upload_bytes
+      .checked_div(residency.private_uploads)
+      .unwrap_or(0);
+   metrics.insert(String::from("staging_upload_bytes_per_create"), staging_bytes_per_create as f64);
+   metrics.insert(
+      String::from("creation_peak_texture_bytes"),
+      sampled_resident_bytes_peak.saturating_add(staging_bytes_per_create) as f64,
+   );
+   metrics.insert(String::from("upload_command_buffers"), residency.upload_command_buffers as f64);
+   if raw_samples
+   {
+      insert_indexed_samples(&mut metrics, "c59_first_visible_ms", &first_visible_samples);
+      insert_indexed_samples(&mut metrics, "c59_creation_cpu_ms", &creation_samples);
+      insert_indexed_samples(&mut metrics, "c59_encode_ms", &encode_samples);
+      insert_indexed_samples(&mut metrics, "c59_gpu_ms", &gpu_samples);
+   }
+
+   Ok(PerfCaseResult {
+      id: String::from(id),
+      family: String::from("architecture"),
+      layer: String::from(layer),
+      scenario: String::from(scenario),
+      variant: String::from(variant),
+      cache_state: String::from(cache_state),
+      refresh_mode: String::from(refresh_mode),
+      unit: String::from("ms/first-visible"),
+      gated: true,
+      threshold_pct: 0.20,
+      median: summary.median,
+      p95: summary.p95,
+      p99: summary.p99,
+      min: summary.min,
+      max: summary.max,
+      mean: summary.mean,
+      samples: first_visible_samples.len(),
+      ops_per_sample: 1,
+      notes: vec![String::from(
+         "Cold small one-use immutable image creation, first render, explicit readback completion, and release guardrail.",
+      )],
       metrics,
    })
 }

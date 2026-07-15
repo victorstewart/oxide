@@ -45,12 +45,30 @@
   - Inspect, resize, or release the hard-budgeted cache of immutable ID-mask raster/JFA fields.
 - `MetalRenderer::image_generation(handle) -> Option<u64>`
   - Returns the explicit generation required by image and glyph-atlas chunk dependencies.
+- `MetalRenderer::image_create_rgba8_immutable(w, h, data, row_bytes, repeatedly_minified) -> ImageHandle`
+  - Declares stable RGBA8 source bytes and opts repeatedly minified images into the measured complete-mip policy while preserving the direct Shared path for non-minified assets.
+- `ImageResidencyStats`
+  - Exposes current Shared/Private texture counts, mip levels, and retained bytes plus cumulative staging, Private-upload, mip-generation, and upload-command-buffer counters to tests and perf reports.
+- `MetalRenderer::image_residency_stats() -> ImageResidencyStats`
+  - Reports current Shared/Private texture counts and bytes plus cumulative staging, mip-generation, and upload-command-buffer work.
+- `MetalRenderer::image_create_rgba8_immutable_for_benchmark(w, h, data, row_bytes, private, mipmapped) -> ImageHandle` (`doc(hidden)`)
+  - Selects one isolated storage/mip combination for same-build evidence controls; production callers use the measured immutable entry point.
 
 ## Logic narrative
 
 Solid draws keep their existing vertex and uniform ring uploads. The solid command color is now bound at vertex buffer index 1 so the shader can replace packed zero before interpolation; nonzero vertex colors pass through without another pipeline, draw, or resource.
 
 The renderer keeps long-lived GPU resources resident and reuses them across frames. Static textures and scene3d meshes are uploaded once, while frame-local rings handle transient 2D geometry and uniforms. Visible hosts allocate three frame slots, matching their normal safe in-flight limit, while offscreen/perf construction explicitly retains eight slots for deeper stress. The ring's fixed direct-access cells avoid a branch on every bind; inactive cells alias the current slot-zero buffer, refresh that alias if slot zero grows, and are excluded from active-depth accounting, so they do not retain hidden Metal storage. Slot selection loads one bounded completion bitset and scans from the next slot without division; the completion handler clears only its submitted slot. If every configured bit remains set, selection skips nonblockingly. Drawable count is not used as a proxy for command-buffer lifetime. Metal retains committed command buffers until completion, so a frame slot does not take a second command-buffer reference solely for reuse tracking.
+
+C59 makes image residency an explicit ownership decision. Dynamic RGBA8, glyph A8, video, and camera resources remain Shared so updates do not acquire a staging texture and copy submission. Non-minified immutable images also remain Shared because physical-iPhone large-static and small-one-use controls rejected staged Private storage. Repeatedly minified immutable images remain Shared and allocate a complete mip chain: isolated physical-iPhone Shared/Private-mip sampling tied at 0.3630/0.3636 ms GPU p50, while Private increased frame and encode p50 about 50%, first-visible time 15.0%, and creation peak 74.8%. The Mac cross-check also tied, so Shared won the simpler ownership and 42.8%-lower creation-peak tie-break. The renderer generates the chain once on its serial queue and samples with linear mip filtering plus clamp-to-edge addressing; standalone textures therefore need no atlas gutter. Partial updates regenerate an existing chain before later queue submissions can sample it. The hidden benchmark selector retains Shared/Private and mip/no-mip controls but does not alter the production policy.
+
+Image ownership remains with the caller rather than a speculative renderer-side source cache. Memory-pressure purges release derived effect, layer, ID-mask, and prepared data but preserve app-owned image textures. Replacing the Metal renderer drops every old-device handle; the owning image layer must replay its source bytes into the new renderer. C59 verifies that replay exactly, while C60 adds the cross-backend decoded-source store and bounded residency policy that automates it.
+
+Image call flow:
+
+- caller bytes -> dynamic or immutable creation -> Shared upload or optional Shared staging/Private copy
+- optional mip generation -> retained `ImageTexture` metadata -> ordinary argument-table/prepared sampling
+- update/release -> resource-generation invalidation -> prepared chunk/layer refresh or residency decrement
 
 Each slot starts with 512 KiB of vertex storage, 64 KiB of index storage, and 72 KiB of uniform storage. Those values cover both the measured 4,096-quad visible workload (327,680/49,152/16 bytes) and the existing 1,024-marker workload's 73,728 uniform bytes without growth. Larger stress frames grow only the active slot geometrically and retain that high-water capacity, replacing the previous unconditional 4/2/2 MiB allocation on all eight slots. Growth, prefix copying, and inactive-alias refresh live in one cold non-inlined path, leaving the ordinary capacity-hit check compact.
 
@@ -106,12 +124,44 @@ Cache telemetry reports hits, misses, entries, resident/budget bytes, evictions,
   - `encode_scene3d()` must run before `encode_pass()` within a frame.
   - ID-mask compositor dimensions must be non-zero, and GPU raster input must be a non-empty triangle list.
   - Stable ID-mask vertex revisions and chunk content hashes must change whenever their covered geometry changes.
+  - Image dimensions, row stride, and source byte coverage must describe a valid Metal upload region.
 - Postconditions:
   - Uploaded `MeshHandle3d` values stay valid until `mesh3d_release()` or renderer drop.
   - A mixed 3D/2D frame reuses one frame command buffer and one color target initialization path.
+  - Image updates increment resource generations and invalidate prepared dependents; release removes current residency.
+
+## Edge cases and failure modes
+
+- Non-power-of-two immutable textures receive the complete floor-halved mip chain down to one texel.
+- A non-minified immutable asset takes the same direct Shared path as a dynamic image, so small/one-use resources cannot accidentally acquire staging work.
+- Partial updates to a mipmapped image regenerate the full chain; callers that update frequently should use the non-mip dynamic API.
+- Unknown image handles remain no-ops under the pre-existing update/release contract.
+- Device replacement invalidates every Metal handle; source replay belongs to the owning image layer rather than hidden renderer recovery state.
+
+## Concurrency and memory behavior
+
+`MetalRenderer` image mutation requires exclusive `&mut self`. Upload, copy, mip-generation, render, and readback command buffers share one serial Metal queue, so later sampling observes committed upload work without a CPU wait. Metal's default retained-reference command-buffer behavior owns transient staging textures through completion. Current residency counters decrement on release; cumulative staging/upload counters intentionally remain monotonic for attribution.
+
+## Performance notes
+
+Ordinary image sampling retains the existing hash lookup, texture bind, argument-table, and prepared-render paths; residency metadata is read only during creation, mutation, release, or reporting. A complete RGBA8 mip chain adds about one third over level-zero allocated bytes. Private controls add one Shared staging allocation and one copy submission, so they are accepted only when device sampling wins enough to repay startup and memory costs. The common sampler is created once and applies linear mip filtering; one-level textures do not create per-draw policy branches.
+
+## Feature flags and cfgs
+
+The backend is available on Apple Metal targets. Raw color readback and the focused image-residency integration suite require `snapshot-tests`; the production immutable APIs and counters do not.
+
+## Testing and benchmarks
+
+- `tests/image_residency_tests.rs` freezes storage, mip updates, quality, release, cache pressure, and renderer recreation.
+- `oxide-perf-runner` C59 rows measure large static, minified-grid, small one-use, and public-`ImageView` paths on macOS and the physical iPhone.
+
+## Examples
+
+Stable assets that are repeatedly sampled below source resolution call `image_create_rgba8_immutable(..., true)`. Dynamic atlases, camera/video surfaces, and frequently updated images continue to call `image_create_rgba8`.
 
 ## Changelog
 
+- 2026-07-15: added C59 explicit immutable-image residency, complete mip generation and regeneration, storage/upload telemetry, memory-pressure ownership, and renderer-recreation semantics.
 - 2026-07-14: added the C52 exact/paired blur quality ladder, dedicated persistent pipeline states, lazy 1/16-sigma kernels, sample/ALU/table telemetry, and snapshot-only exact control.
 - 2026-07-14: replaced the eight-entry snapshot ID-mask target array with one completion-safe reusable target, tracked cache/transient generations by actual in-flight slots, blocked unsafe eviction reuse, evicted stale dimensions for oversized transient work, and exposed generation-aware target bytes and creation/reuse counters.
 - 2026-07-14: packed Metal ID-mask city/seam coordinates into two RGBA16Uint fields with R8 ID recovery and an exact wide-coordinate fallback.

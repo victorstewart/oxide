@@ -928,6 +928,47 @@ struct Scene3dBloomCounters {
     plan_reuses: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ImageStorage
+{
+   Shared,
+   Private,
+}
+
+struct ImageTexture
+{
+   texture: Texture,
+   storage: ImageStorage,
+   mipmapped: bool,
+   mip_levels: u32,
+   allocated_bytes: u64,
+}
+
+impl core::ops::Deref for ImageTexture
+{
+   type Target = TextureRef;
+
+   fn deref(&self) -> &Self::Target
+   {
+      self.texture.as_ref()
+   }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ImageResidencyStats
+{
+   pub shared_textures: u32,
+   pub private_textures: u32,
+   pub mipmapped_textures: u32,
+   pub mip_levels: u32,
+   pub shared_bytes: u64,
+   pub private_bytes: u64,
+   pub staging_upload_bytes: u64,
+   pub private_uploads: u64,
+   pub mipmap_generations: u64,
+   pub upload_command_buffers: u64,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct GlyphGpuInstance
@@ -1073,8 +1114,9 @@ pub struct MetalRenderer {
     id_mask_target_peak_bytes: u64,
     id_mask_target_reuse_blocked: u64,
     id_mask_vertex_caches: alloc::vec::Vec<IdMaskVertexUploadCache>,
-    images: HashMap<u32, Texture>,
+    images: HashMap<u32, ImageTexture>,
     image_generations: HashMap<u32, u64>,
+    image_residency: ImageResidencyStats,
     next_image_id: u32,
     prepared_chunks: prepared::PreparedChunkCache,
     prepared_property_cache: prepared::PreparedPropertyCache,
@@ -2334,6 +2376,7 @@ impl MetalRenderer {
             id_mask_vertex_caches: alloc::vec::Vec::new(),
             images: HashMap::new(),
             image_generations: HashMap::new(),
+            image_residency: ImageResidencyStats::default(),
             next_image_id: 1,
             prepared_chunks: prepared::PreparedChunkCache::default(),
             prepared_property_cache: prepared::PreparedPropertyCache::default(),
@@ -3713,166 +3756,435 @@ impl MetalRenderer {
         }
     }
 
-    fn get_image_tex(&self, h: api::ImageHandle) -> Option<&Texture> {
-        self.images.get(&h.0)
-    }
+   fn get_image_tex(&self, h: api::ImageHandle) -> Option<&Texture>
+   {
+      self.images.get(&h.0).map(|image| &image.texture)
+   }
 
-    pub fn image_create_a8(
-        &mut self,
-        w: u32,
-        h: u32,
-        data: &[u8],
-        row_bytes: usize,
-    ) -> api::ImageHandle {
-        let desc = TextureDescriptor::new();
-        desc.set_pixel_format(MTLPixelFormat::R8Unorm);
-        desc.set_texture_type(MTLTextureType::D2);
-        desc.set_width(w as u64);
-        desc.set_height(h as u64);
-        desc.set_storage_mode(MTLStorageMode::Shared);
-        desc.set_usage(MTLTextureUsage::ShaderRead);
-        let tex = self.device.new_texture(&desc);
-        let region = MTLRegion {
-            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+   fn insert_image_texture(&mut self, id: u32, image: ImageTexture)
+   {
+      match image.storage
+      {
+         ImageStorage::Shared =>
+         {
+            self.image_residency.shared_textures =
+               self.image_residency.shared_textures.saturating_add(1);
+            self.image_residency.shared_bytes = self
+               .image_residency
+               .shared_bytes
+               .saturating_add(image.allocated_bytes);
+         }
+         ImageStorage::Private =>
+         {
+            self.image_residency.private_textures =
+               self.image_residency.private_textures.saturating_add(1);
+            self.image_residency.private_bytes = self
+               .image_residency
+               .private_bytes
+               .saturating_add(image.allocated_bytes);
+         }
+      }
+      if image.mipmapped
+      {
+         self.image_residency.mipmapped_textures =
+            self.image_residency.mipmapped_textures.saturating_add(1);
+      }
+      self.image_residency.mip_levels =
+         self.image_residency.mip_levels.saturating_add(image.mip_levels);
+      self.images.insert(id, image);
+      self.image_generations.insert(id, 1);
+   }
+
+   fn remove_image_texture(&mut self, id: u32) -> Option<ImageTexture>
+   {
+      let image = self.images.remove(&id)?;
+      match image.storage
+      {
+         ImageStorage::Shared =>
+         {
+            self.image_residency.shared_textures =
+               self.image_residency.shared_textures.saturating_sub(1);
+            self.image_residency.shared_bytes = self
+               .image_residency
+               .shared_bytes
+               .saturating_sub(image.allocated_bytes);
+         }
+         ImageStorage::Private =>
+         {
+            self.image_residency.private_textures =
+               self.image_residency.private_textures.saturating_sub(1);
+            self.image_residency.private_bytes = self
+               .image_residency
+               .private_bytes
+               .saturating_sub(image.allocated_bytes);
+         }
+      }
+      if image.mipmapped
+      {
+         self.image_residency.mipmapped_textures =
+            self.image_residency.mipmapped_textures.saturating_sub(1);
+      }
+      self.image_residency.mip_levels =
+         self.image_residency.mip_levels.saturating_sub(image.mip_levels);
+      Some(image)
+   }
+
+   fn shared_image_texture(&mut self, format: MTLPixelFormat, w: u32, h: u32, data: &[u8], row_bytes: u64) -> ImageTexture
+   {
+      self.shared_image_texture_with_mips(format, w, h, data, row_bytes, false)
+   }
+
+   #[inline]
+   fn image_mip_level_count(w: u32, h: u32, mipmapped: bool) -> u32
+   {
+      if mipmapped
+      {
+         u32::BITS - w.max(h).max(1).leading_zeros()
+      }
+      else
+      {
+         1
+      }
+   }
+
+   fn shared_image_texture_with_mips(&mut self, format: MTLPixelFormat, w: u32, h: u32, data: &[u8], row_bytes: u64, mipmapped: bool) -> ImageTexture
+   {
+      let descriptor = TextureDescriptor::new();
+      descriptor.set_pixel_format(format);
+      descriptor.set_texture_type(MTLTextureType::D2);
+      descriptor.set_width(w as u64);
+      descriptor.set_height(h as u64);
+      descriptor.set_storage_mode(MTLStorageMode::Shared);
+      descriptor.set_usage(MTLTextureUsage::ShaderRead);
+      let mip_levels = Self::image_mip_level_count(w, h, mipmapped);
+      descriptor.set_mipmap_level_count(mip_levels as u64);
+      let texture = self.device.new_texture(&descriptor);
+      let region = MTLRegion {
+         origin: MTLOrigin { x: 0, y: 0, z: 0 },
+         size: MTLSize { width: w as u64, height: h as u64, depth: 1 },
+      };
+      texture.replace_region(region, 0, data.as_ptr() as *const _, row_bytes);
+      if mipmapped
+      {
+         self.regenerate_image_mipmaps(&texture);
+      }
+      self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
+      ImageTexture {
+         allocated_bytes: Self::texture_allocated_bytes(&texture),
+         texture,
+         storage: ImageStorage::Shared,
+         mipmapped,
+         mip_levels,
+      }
+   }
+
+   fn regenerate_image_mipmaps(&mut self, texture: &Texture)
+   {
+      let command_buffer = self.queue.new_command_buffer();
+      let blit = command_buffer.new_blit_command_encoder();
+      blit.generate_mipmaps(texture);
+      blit.end_encoding();
+      command_buffer.commit();
+      self.image_residency.mipmap_generations = self
+         .image_residency
+         .mipmap_generations
+         .saturating_add(1);
+      self.image_residency.upload_command_buffers = self
+         .image_residency
+         .upload_command_buffers
+         .saturating_add(1);
+   }
+
+   fn private_image_texture(&mut self, format: MTLPixelFormat, w: u32, h: u32, data: &[u8], row_bytes: u64, mipmapped: bool) -> ImageTexture
+   {
+      let staging = self.shared_image_texture(format, w, h, data, row_bytes);
+      let descriptor = TextureDescriptor::new();
+      descriptor.set_pixel_format(format);
+      descriptor.set_texture_type(MTLTextureType::D2);
+      descriptor.set_width(w as u64);
+      descriptor.set_height(h as u64);
+      descriptor.set_storage_mode(MTLStorageMode::Private);
+      descriptor.set_usage(MTLTextureUsage::ShaderRead);
+      let mip_levels = Self::image_mip_level_count(w, h, mipmapped);
+      descriptor.set_mipmap_level_count(mip_levels as u64);
+      let texture = self.device.new_texture(&descriptor);
+      let command_buffer = self.queue.new_command_buffer();
+      let blit = command_buffer.new_blit_command_encoder();
+      let origin = MTLOrigin { x: 0, y: 0, z: 0 };
+      let size = MTLSize { width: w as u64, height: h as u64, depth: 1 };
+      blit.copy_from_texture(&staging.texture, 0, 0, origin, size, &texture, 0, 0, origin);
+      if mipmapped
+      {
+         blit.generate_mipmaps(&texture);
+      }
+      blit.end_encoding();
+      command_buffer.commit();
+      self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
+      self.image_residency.staging_upload_bytes = self
+         .image_residency
+         .staging_upload_bytes
+         .saturating_add(staging.allocated_bytes);
+      self.image_residency.private_uploads =
+         self.image_residency.private_uploads.saturating_add(1);
+      self.image_residency.mipmap_generations = self
+         .image_residency
+         .mipmap_generations
+         .saturating_add(u64::from(mipmapped));
+      self.image_residency.upload_command_buffers = self
+         .image_residency
+         .upload_command_buffers
+         .saturating_add(1);
+      ImageTexture {
+         allocated_bytes: Self::texture_allocated_bytes(&texture),
+         texture,
+         storage: ImageStorage::Private,
+         mipmapped,
+         mip_levels,
+      }
+   }
+
+   fn update_private_rgba8_image(&mut self, texture: &Texture, mipmapped: bool, x: u32, y: u32, w: u32, h: u32, data: &[u8], row_bytes: u64)
+   {
+      let staging = self.shared_image_texture(
+         MTLPixelFormat::BGRA8Unorm_sRGB,
+         w,
+         h,
+         data,
+         row_bytes,
+      );
+      let command_buffer = self.queue.new_command_buffer();
+      let blit = command_buffer.new_blit_command_encoder();
+      let source_origin = MTLOrigin { x: 0, y: 0, z: 0 };
+      let destination_origin = MTLOrigin { x: x as u64, y: y as u64, z: 0 };
+      let size = MTLSize { width: w as u64, height: h as u64, depth: 1 };
+      blit.copy_from_texture(
+         &staging.texture,
+         0,
+         0,
+         source_origin,
+         size,
+         texture,
+         0,
+         0,
+         destination_origin,
+      );
+      if mipmapped
+      {
+         blit.generate_mipmaps(texture);
+      }
+      blit.end_encoding();
+      command_buffer.commit();
+      self.image_residency.staging_upload_bytes = self
+         .image_residency
+         .staging_upload_bytes
+         .saturating_add(staging.allocated_bytes);
+      self.image_residency.private_uploads =
+         self.image_residency.private_uploads.saturating_add(1);
+      self.image_residency.mipmap_generations = self
+         .image_residency
+         .mipmap_generations
+         .saturating_add(u64::from(mipmapped));
+      self.image_residency.upload_command_buffers = self
+         .image_residency
+         .upload_command_buffers
+         .saturating_add(1);
+   }
+
+   pub fn image_residency_stats(&self) -> ImageResidencyStats
+   {
+      self.image_residency
+   }
+
+   pub fn image_create_a8(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize) -> api::ImageHandle
+   {
+      let bpr = if row_bytes == 0 { w as usize } else { row_bytes } as u64;
+      let image = self.shared_image_texture(MTLPixelFormat::R8Unorm, w, h, data, bpr);
+      self.last_stats.texture_upload_bytes = self
+         .last_stats
+         .texture_upload_bytes
+         .saturating_add(data.len() as u64);
+      let id = self.next_image_id;
+      self.next_image_id = self.next_image_id.wrapping_add(1).max(1);
+      self.insert_image_texture(id, image);
+      api::ImageHandle(id)
+   }
+
+   pub fn image_update_a8(&mut self, handle: api::ImageHandle, x: u32, y: u32, w: u32, h: u32, data: &[u8], row_bytes: usize)
+   {
+      if let Some(image) = self.images.get(&handle.0)
+      {
+         let region = MTLRegion {
+            origin: MTLOrigin { x: x as u64, y: y as u64, z: 0 },
             size: MTLSize { width: w as u64, height: h as u64, depth: 1 },
-        };
-        let bpr = if row_bytes == 0 { w as usize } else { row_bytes } as u64;
-        tex.replace_region(region, 0, data.as_ptr() as *const _, bpr);
-        self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
-        self.last_stats.texture_upload_bytes = self
+         };
+         let bpr = if row_bytes == 0 { w as usize } else { row_bytes } as u64;
+         image
+            .texture
+            .replace_region(region, 0, data.as_ptr() as *const _, bpr);
+         self.last_stats.texture_upload_bytes = self
             .last_stats
             .texture_upload_bytes
             .saturating_add(data.len() as u64);
-        let id = self.next_image_id;
-        self.next_image_id = self.next_image_id.wrapping_add(1).max(1);
-        self.images.insert(id, tex);
-        self.image_generations.insert(id, 1);
-        api::ImageHandle(id)
-    }
+         self.prepared_chunks.invalidate_resource(handle);
+         self.invalidate_prepared_layers_for_resource(handle);
+         let generation = self.image_generations.entry(handle.0).or_insert(0);
+         *generation = generation.saturating_add(1);
+      }
+   }
 
-    pub fn image_update_a8(
-        &mut self,
-        handle: api::ImageHandle,
-        x: u32,
-        y: u32,
-        w: u32,
-        h: u32,
-        data: &[u8],
-        row_bytes: usize,
-    ) {
-        if let Some(tex) = self.images.get(&handle.0) {
-            let region = MTLRegion {
-                origin: MTLOrigin { x: x as u64, y: y as u64, z: 0 },
-                size: MTLSize { width: w as u64, height: h as u64, depth: 1 },
-            };
-            let bpr = if row_bytes == 0 { w as usize } else { row_bytes } as u64;
-            tex.replace_region(region, 0, data.as_ptr() as *const _, bpr);
-            self.last_stats.texture_upload_bytes = self
-                .last_stats
-                .texture_upload_bytes
-                .saturating_add(data.len() as u64);
-            self.prepared_chunks.invalidate_resource(handle);
-            self.invalidate_prepared_layers_for_resource(handle);
-            let generation = self.image_generations.entry(handle.0).or_insert(0);
-            *generation = generation.saturating_add(1);
-        }
-    }
-
-    /// Publishes bytes for atlas slots that have never previously been sampled.
-    /// Existing prepared chunks remain valid because prior texels are unchanged.
-    pub fn image_append_a8(
-        &mut self,
-        handle: api::ImageHandle,
-        x: u32,
-        y: u32,
-        w: u32,
-        h: u32,
-        data: &[u8],
-        row_bytes: usize,
-    ) {
-        if let Some(tex) = self.images.get(&handle.0) {
-            let region = MTLRegion {
-                origin: MTLOrigin { x: x as u64, y: y as u64, z: 0 },
-                size: MTLSize { width: w as u64, height: h as u64, depth: 1 },
-            };
-            let bpr = if row_bytes == 0 { w as usize } else { row_bytes } as u64;
-            tex.replace_region(region, 0, data.as_ptr() as *const _, bpr);
-            self.last_stats.texture_upload_bytes = self
-                .last_stats
-                .texture_upload_bytes
-                .saturating_add(u64::from(w).saturating_mul(u64::from(h)));
-        }
-    }
-
-    pub fn image_create_rgba8(
-        &mut self,
-        w: u32,
-        h: u32,
-        data: &[u8],
-        row_bytes: usize,
-    ) -> api::ImageHandle {
-        let desc = TextureDescriptor::new();
-        desc.set_pixel_format(MTLPixelFormat::BGRA8Unorm_sRGB);
-        desc.set_texture_type(MTLTextureType::D2);
-        desc.set_width(w as u64);
-        desc.set_height(h as u64);
-        desc.set_storage_mode(MTLStorageMode::Shared);
-        desc.set_usage(MTLTextureUsage::ShaderRead);
-        let tex = self.device.new_texture(&desc);
-        let region = MTLRegion {
-            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+   /// Publishes bytes for atlas slots that have never previously been sampled.
+   /// Existing prepared chunks remain valid because prior texels are unchanged.
+   pub fn image_append_a8(&mut self, handle: api::ImageHandle, x: u32, y: u32, w: u32, h: u32, data: &[u8], row_bytes: usize)
+   {
+      if let Some(image) = self.images.get(&handle.0)
+      {
+         let region = MTLRegion {
+            origin: MTLOrigin { x: x as u64, y: y as u64, z: 0 },
             size: MTLSize { width: w as u64, height: h as u64, depth: 1 },
-        };
-        let bpr = if row_bytes == 0 { (w as usize) * 4 } else { row_bytes } as u64;
-        tex.replace_region(region, 0, data.as_ptr() as *const _, bpr);
-        self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
-        self.last_stats.texture_upload_bytes = self
+         };
+         let bpr = if row_bytes == 0 { w as usize } else { row_bytes } as u64;
+         image
+            .texture
+            .replace_region(region, 0, data.as_ptr() as *const _, bpr);
+         self.last_stats.texture_upload_bytes = self
+            .last_stats
+            .texture_upload_bytes
+            .saturating_add(u64::from(w).saturating_mul(u64::from(h)));
+      }
+   }
+
+   pub fn image_create_rgba8(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize) -> api::ImageHandle
+   {
+      self.image_create_rgba8_with_policy(w, h, data, row_bytes, false, false)
+   }
+
+   /// Creates an immutable image using the measured static-asset residency policy.
+   /// `repeatedly_minified` requests a complete mip chain for stable minification.
+   pub fn image_create_rgba8_immutable(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize, repeatedly_minified: bool) -> api::ImageHandle
+   {
+      self.image_create_rgba8_with_policy(
+         w,
+         h,
+         data,
+         row_bytes,
+         false,
+         repeatedly_minified,
+      )
+   }
+
+   #[doc(hidden)]
+   pub fn image_create_rgba8_immutable_for_benchmark(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize, private: bool, mipmapped: bool) -> api::ImageHandle
+   {
+      self.image_create_rgba8_with_policy(
+         w,
+         h,
+         data,
+         row_bytes,
+         private,
+         mipmapped,
+      )
+   }
+
+   fn image_create_rgba8_with_policy(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize, private: bool, mipmapped: bool) -> api::ImageHandle
+   {
+      let bpr = if row_bytes == 0 { (w as usize) * 4 } else { row_bytes } as u64;
+      let image = if private
+      {
+         self.private_image_texture(
+            MTLPixelFormat::BGRA8Unorm_sRGB,
+            w,
+            h,
+            data,
+            bpr,
+            mipmapped,
+         )
+      }
+      else if mipmapped
+      {
+         self.shared_image_texture_with_mips(
+            MTLPixelFormat::BGRA8Unorm_sRGB,
+            w,
+            h,
+            data,
+            bpr,
+            true,
+         )
+      }
+      else
+      {
+         self.shared_image_texture(MTLPixelFormat::BGRA8Unorm_sRGB, w, h, data, bpr)
+      };
+      self.last_stats.texture_upload_bytes = self
+         .last_stats
+         .texture_upload_bytes
+         .saturating_add(data.len() as u64);
+      let id = self.next_image_id;
+      self.next_image_id = self.next_image_id.wrapping_add(1).max(1);
+      self.insert_image_texture(id, image);
+      api::ImageHandle(id)
+   }
+
+   pub fn image_update_rgba8(&mut self, handle: api::ImageHandle, x: u32, y: u32, w: u32, h: u32, data: &[u8], row_bytes: usize)
+   {
+      let image = self.images.get(&handle.0).map(|image| {
+         (
+            image.texture.to_owned(),
+            image.storage,
+            image.mipmapped,
+         )
+      });
+      if let Some((texture, storage, mipmapped)) = image
+      {
+         let region = MTLRegion {
+            origin: MTLOrigin { x: x as u64, y: y as u64, z: 0 },
+            size: MTLSize { width: w as u64, height: h as u64, depth: 1 },
+         };
+         let bpr = if row_bytes == 0 { (w as usize) * 4 } else { row_bytes } as u64;
+         match storage
+         {
+            ImageStorage::Shared =>
+            {
+               texture.replace_region(region, 0, data.as_ptr() as *const _, bpr);
+               if mipmapped
+               {
+                  self.regenerate_image_mipmaps(&texture);
+               }
+            }
+            ImageStorage::Private =>
+            {
+               self.update_private_rgba8_image(
+                  &texture,
+                  mipmapped,
+                  x,
+                  y,
+                  w,
+                  h,
+                  data,
+                  bpr,
+               );
+            }
+         }
+         self.last_stats.texture_upload_bytes = self
             .last_stats
             .texture_upload_bytes
             .saturating_add(data.len() as u64);
-        let id = self.next_image_id;
-        self.next_image_id = self.next_image_id.wrapping_add(1).max(1);
-        self.images.insert(id, tex);
-        self.image_generations.insert(id, 1);
-        api::ImageHandle(id)
-    }
+         self.prepared_chunks.invalidate_resource(handle);
+         self.invalidate_prepared_layers_for_resource(handle);
+         let generation = self.image_generations.entry(handle.0).or_insert(0);
+         *generation = generation.saturating_add(1);
+      }
+   }
 
-    pub fn image_update_rgba8(
-        &mut self,
-        handle: api::ImageHandle,
-        x: u32,
-        y: u32,
-        w: u32,
-        h: u32,
-        data: &[u8],
-        row_bytes: usize,
-    ) {
-        if let Some(tex) = self.images.get(&handle.0) {
-            let region = MTLRegion {
-                origin: MTLOrigin { x: x as u64, y: y as u64, z: 0 },
-                size: MTLSize { width: w as u64, height: h as u64, depth: 1 },
-            };
-            let bpr = if row_bytes == 0 { (w as usize) * 4 } else { row_bytes } as u64;
-            tex.replace_region(region, 0, data.as_ptr() as *const _, bpr);
-            self.last_stats.texture_upload_bytes = self
-                .last_stats
-                .texture_upload_bytes
-                .saturating_add(data.len() as u64);
-            self.prepared_chunks.invalidate_resource(handle);
-            self.invalidate_prepared_layers_for_resource(handle);
-            let generation = self.image_generations.entry(handle.0).or_insert(0);
-            *generation = generation.saturating_add(1);
-        }
-    }
-
-    pub fn image_release(&mut self, handle: api::ImageHandle) {
-        if self.images.remove(&handle.0).is_some() {
-            self.prepared_chunks.invalidate_resource(handle);
-            self.invalidate_prepared_layers_for_resource(handle);
-            self.image_generations.remove(&handle.0);
-            self.last_stats.cache_evictions = self.last_stats.cache_evictions.saturating_add(1);
-        }
-    }
+   pub fn image_release(&mut self, handle: api::ImageHandle)
+   {
+      if self.remove_image_texture(handle.0).is_some()
+      {
+         self.prepared_chunks.invalidate_resource(handle);
+         self.invalidate_prepared_layers_for_resource(handle);
+         self.image_generations.remove(&handle.0);
+         self.last_stats.cache_evictions = self.last_stats.cache_evictions.saturating_add(1);
+      }
+   }
 
     fn ensure_benchmark_camera_textures(&mut self) {
         if self.bench_cam_y_tex.is_some()
@@ -9562,9 +9874,12 @@ fn encode_draws_range(
                     argument_encoder.set_argument_buffer(buffer, offset as u64);
                     for (texture_index, handle) in r.image_arg_handles.iter().copied().enumerate()
                     {
-                        if let Some(texture) = r.images.get(&handle)
+                        if let Some(image) = r.images.get(&handle)
                         {
-                            argument_encoder.set_texture(texture_index as u64, texture);
+                            argument_encoder.set_texture(
+                                texture_index as u64,
+                                &image.texture,
+                            );
                         }
                     }
                     let table = &mut r.image_arg_tables[index];
@@ -11200,6 +11515,7 @@ fn build_sampler(device: &Device) -> Option<SamplerState> {
     let desc = SamplerDescriptor::new();
     desc.set_min_filter(MTLSamplerMinMagFilter::Linear);
     desc.set_mag_filter(MTLSamplerMinMagFilter::Linear);
+    desc.set_mip_filter(MTLSamplerMipFilter::Linear);
     // Clamp-to-edge on S/T
     desc.set_address_mode_s(MTLSamplerAddressMode::ClampToEdge);
     desc.set_address_mode_t(MTLSamplerAddressMode::ClampToEdge);
@@ -11835,7 +12151,7 @@ impl MetalRenderer {
         let layer_cache_cpu_bytes = self.layer_cache_cpu_bytes();
         let image_cache_bytes = Self::unique_texture_category_bytes(
             &mut seen,
-            self.images.values().map(|tex| tex.as_ref()),
+            self.images.values().map(|image| image.texture.as_ref()),
         );
         drop(seen);
         let mut buffer_seen = self.memory_buffer_seen.borrow_mut();
@@ -11916,7 +12232,7 @@ impl MetalRenderer {
             .chain(self.bench_cam_bgra_tex.iter())
             .chain(self.layers.values().map(|entry| &entry.tex))
             .chain(self.layer_pool.iter().map(|entry| &entry.tex))
-            .chain(self.images.values())
+            .chain(self.images.values().map(|image| &image.texture))
         {
             Self::push_unique_texture_logical_bytes(
                 &mut logical_seen,
