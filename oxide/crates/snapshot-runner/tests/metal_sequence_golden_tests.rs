@@ -181,6 +181,28 @@ fn renderer(width: u32, height: u32) -> MetalRenderer
    renderer
 }
 
+#[test]
+fn auxiliary_effect_layer_and_camera_frame_can_render_directly()
+{
+   let (width, height) = (96, 80);
+   let mut list = noop_ordering_scene(false);
+   list.items.insert(0, api::DrawCmd::CameraBg {
+      rect: api::RectF::new(0.0, 0.0, width as f32, height as f32),
+      tint: api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+      alpha: 1.0,
+      grayscale: false,
+      blur: true,
+      sigma: 8.0,
+   });
+   let mut offscreen = renderer(width, height);
+   let expected = render(&mut offscreen, &list, None);
+   let mut direct = renderer(width, height);
+   let actual = render_direct(&mut direct, &list);
+   assert_eq!(actual, expected);
+   assert_eq!(direct.last_stats().persistent_target_valid, 0);
+   assert_eq!(direct.last_stats().memory.draw_target_main_bytes, 0);
+}
+
 fn glyph_list(atlas: api::ImageHandle) -> api::DrawList
 {
    let mut list = api::DrawList::default();

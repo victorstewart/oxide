@@ -80,5 +80,7 @@ are not automatically found; prefer bundling for resource loading.
 
 ## Notes
 
-- Presentation path is offscreen render + blit to the window drawable (late acquire) with triple buffering.
+- Presentation renders the final main pass directly to the late-acquired window drawable when
+  persistence is unnecessary. Partial damage, readback, MSAA resolve, or earlier retained target
+  content selects the persistent offscreen path.
 - Resources are optional at dev time; if `images/sample.png` is missing, a procedural checkerboard is used; if `fonts/Inter-Regular.ttf` is missing, labels may fall back depending on your font setup.

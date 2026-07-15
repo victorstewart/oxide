@@ -932,6 +932,9 @@ name = "oxide-perf-runner"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "core-graphics-types",
+ "foreign-types",
+ "metal",
  "oxide-harness-registry",
  "oxide-input",
  "oxide-permissions",

@@ -5100,21 +5100,21 @@ fn metal_effect_target_plan_reports_first_use_and_exact_residency()
    let quarter = report_case_slice(&report, "gpu.architecture.effects.target_plan_quarter");
    let eighth = report_case_slice(&report, "gpu.architecture.effects.target_plan_eighth");
 
-   assert_eq!(report_f64(direct, "first_resource_creates"), 0.0);
-   assert_eq!(report_f64(direct, "resource_creates_total"), 0.0);
+   assert_eq!(report_f64(direct, "first_resource_creates"), 1.0);
+   assert_eq!(report_f64(direct, "resource_creates_total"), 1.0);
    assert_eq!(report_f64(direct, "effect_targets_bytes_peak"), 0.0);
    assert_eq!(report_f64(direct, "bloom_targets_bytes_peak"), 0.0);
-   assert_eq!(report_f64(prepass, "first_resource_creates"), 1.0);
-   assert_eq!(report_f64(prepass, "resource_creates_total"), 1.0);
+   assert_eq!(report_f64(prepass, "first_resource_creates"), 2.0);
+   assert_eq!(report_f64(prepass, "resource_creates_total"), 2.0);
    assert_eq!(report_f64(prepass, "effect_blur_chain_bytes_peak"), 0.0);
    assert_eq!(
       report_f64(prepass, "effect_targets_bytes_peak"),
       report_f64(prepass, "effect_prepass_bytes_peak"),
    );
-   assert_eq!(report_f64(quarter, "first_resource_creates"), 4.0);
-   assert_eq!(report_f64(quarter, "resource_creates_total"), 4.0);
-   assert_eq!(report_f64(eighth, "first_resource_creates"), 5.0);
-   assert_eq!(report_f64(eighth, "resource_creates_total"), 5.0);
+   assert_eq!(report_f64(quarter, "first_resource_creates"), 5.0);
+   assert_eq!(report_f64(quarter, "resource_creates_total"), 5.0);
+   assert_eq!(report_f64(eighth, "first_resource_creates"), 6.0);
+   assert_eq!(report_f64(eighth, "resource_creates_total"), 6.0);
    assert_eq!(
       report_f64(quarter, "effect_prepass_bytes_peak"),
       report_f64(eighth, "effect_prepass_bytes_peak"),
@@ -5129,6 +5129,51 @@ fn metal_effect_target_plan_reports_first_use_and_exact_residency()
       assert!(report_f64(row, "first_encode_ms") > 0.0);
       assert!(report_f64(row, "first_gpu_ms") > 0.0);
    }
+   let _ = std::fs::remove_file(json_out);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn metal_final_target_rows_freeze_direct_and_persistent_paths()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-final-target-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "gpu.architecture.final_target.")
+      .env("OXIDE_ARCHITECTURE_METAL_FRAMES", "2")
+      .env("OXIDE_ARCHITECTURE_METAL_WARMUPS", "1")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run Metal final-target smoke suite");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "Metal final-target suite failed: {stderr}");
+   assert!(stdout.contains("cases=2"), "stdout: {stdout}");
+   let report = std::fs::read_to_string(&json_out).expect("read final-target report");
+   let direct = report_case_slice(
+      &report,
+      "gpu.architecture.final_target.auxiliary_direct",
+   );
+   let partial = report_case_slice(
+      &report,
+      "gpu.architecture.final_target.partial_damage",
+   );
+
+   assert!(direct.contains("\"refresh_mode\": \"drawable-unthrottled\""));
+   assert_eq!(report_f64(direct, "blit_passes_avg"), 0.0);
+   assert_eq!(report_f64(direct, "texture_copies_avg"), 0.0);
+   assert_eq!(report_f64(direct, "texture_copy_bytes_avg"), 0.0);
+   assert_eq!(report_f64(direct, "persistent_target_frames"), 0.0);
+   assert_eq!(report_f64(direct, "draw_target_main_bytes_peak"), 0.0);
+   assert_eq!(report_f64(partial, "blit_passes_avg"), 1.0);
+   assert_eq!(report_f64(partial, "texture_copies_avg"), 1.0);
+   assert_eq!(report_f64(partial, "texture_copy_bytes_avg"), 3_840_000.0);
+   assert_eq!(report_f64(partial, "persistent_target_frames"), 2.0);
+   assert!(report_f64(partial, "draw_target_main_bytes_peak") >= 3_840_000.0);
    let _ = std::fs::remove_file(json_out);
 }
 

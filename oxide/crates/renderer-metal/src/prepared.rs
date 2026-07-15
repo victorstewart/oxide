@@ -11,7 +11,8 @@ use std::collections::{HashMap, HashSet};
 use super::{
    api_vertex_descriptor, append_glyph_instances, append_remapped_indices_to_span, apply_scissor_dp,
    configure_layer_source_alpha_blend, configure_source_alpha_blend, effective_scissor_dp,
-   intersect_scissor_dp, pack_image_params, pack_nine_slice_params, pack_rrect_params,
+   final_target_plan, intersect_scissor_dp, pack_image_params, pack_nine_slice_params,
+   pack_rrect_params,
    pipeline_error, pipeline_function, pipeline_state, solid_primitive_for_index_count,
    solid_primitive_for_vertex_count, transparent_drawable_clear_enabled, MetalInitError,
    MetalRenderer, NineSliceGpuParams,
@@ -1122,7 +1123,7 @@ impl MetalRenderer
       {
          return self.encode_snapshot_flat(snapshot);
       }
-      if self.frame_backpressure_skipped || self.target_tex.is_none()
+      if self.frame_backpressure_skipped
       {
          return Ok(());
       }
@@ -1487,10 +1488,7 @@ impl MetalRenderer
       self.acc_layer_cache_misses = self.acc_layer_cache_misses.saturating_add(layer_misses);
 
       let pending_present_texture = self.pending_present_texture as *mut MTLTexture;
-      let direct_present_texture = if self.sample_count == 1
-         && !damage_requested
-         && !self.frame_color_initialized
-         && !pending_present_texture.is_null()
+      let compatible_present_texture = if !pending_present_texture.is_null()
       {
          // SAFETY: the host retains the pending drawable texture until frame submission,
          // and this branch only borrows it while constructing this frame's render pass.
@@ -1504,7 +1502,30 @@ impl MetalRenderer
       {
          None
       };
-      self.frame_present_direct_to_drawable = direct_present_texture.is_some();
+      let final_target_plan = final_target_plan(
+         self.sample_count,
+         damage_requested,
+         self.frame_color_initialized,
+         required_layer_bytes > 0,
+         compatible_present_texture.is_some(),
+      );
+      if final_target_plan.needs_persistent_final_target
+      {
+         self.ensure_target();
+         if self.target_tex.is_none()
+         {
+            return Ok(());
+         }
+      }
+      let direct_present_texture = if final_target_plan.direct_present
+      {
+         compatible_present_texture
+      }
+      else
+      {
+         None
+      };
+      self.frame_present_direct_to_drawable = final_target_plan.direct_present;
       if self.frame_present_direct_to_drawable
       {
          self.persistent_target_valid = false;

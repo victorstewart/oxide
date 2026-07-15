@@ -5355,6 +5355,32 @@ struct VisualEffectBlurPlan {
     pass_radius: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FinalTargetPlan {
+    needs_auxiliary_textures: bool,
+    needs_persistent_final_target: bool,
+    direct_present: bool,
+}
+
+#[inline]
+fn final_target_plan(
+    sample_count: u32,
+    damage_requested: bool,
+    frame_color_initialized: bool,
+    needs_auxiliary_textures: bool,
+    has_compatible_present_texture: bool,
+) -> FinalTargetPlan {
+    let needs_persistent_final_target = sample_count > 1
+        || damage_requested
+        || frame_color_initialized
+        || !has_compatible_present_texture;
+    FinalTargetPlan {
+        needs_auxiliary_textures,
+        needs_persistent_final_target,
+        direct_present: !needs_persistent_final_target,
+    }
+}
+
 impl VisualEffectBlurPlan {
     const OFF: Self = Self {
         sigma_dp: 0.0,
@@ -6148,9 +6174,6 @@ impl api::Renderer for MetalRenderer {
                 .saturating_add(list.items.len() as u64);
         }
         if self.frame_backpressure_skipped {
-            return;
-        }
-        if self.target_tex.is_none() {
             return;
         }
         if self.submit_error_flag.load(Ordering::Acquire) {
@@ -7051,15 +7074,7 @@ impl api::Renderer for MetalRenderer {
                 self.acc_damage_forced_full_refreshes.saturating_add(1);
         }
         let pending_present_texture = self.pending_present_texture as *mut MTLTexture;
-        let direct_present_texture = if self.sample_count == 1
-            && !damage_requested
-            && !self.frame_color_initialized
-            && !has_backdrop
-            && !has_visual_effect
-            && !need_cam_blur
-            && !has_layer_commands
-            && !pending_present_texture.is_null()
-        {
+        let compatible_present_texture = if !pending_present_texture.is_null() {
             let dst = unsafe { TextureRef::from_ptr(pending_present_texture) };
             if dst.width() as u32 == self.target_w
                 && dst.height() as u32 == self.target_h
@@ -7072,7 +7087,29 @@ impl api::Renderer for MetalRenderer {
         } else {
             None
         };
-        self.frame_present_direct_to_drawable = direct_present_texture.is_some();
+        let needs_auxiliary_textures = has_backdrop
+            || has_visual_effect
+            || need_cam_blur
+            || has_layer_commands;
+        let final_target_plan = final_target_plan(
+            self.sample_count,
+            damage_requested,
+            self.frame_color_initialized,
+            needs_auxiliary_textures,
+            compatible_present_texture.is_some(),
+        );
+        if final_target_plan.needs_persistent_final_target {
+            self.ensure_target();
+            if self.target_tex.is_none() {
+                return;
+            }
+        }
+        let direct_present_texture = if final_target_plan.direct_present {
+            compatible_present_texture
+        } else {
+            None
+        };
+        self.frame_present_direct_to_drawable = final_target_plan.direct_present;
         if self.frame_present_direct_to_drawable {
             self.persistent_target_valid = false;
         }
@@ -7252,7 +7289,7 @@ impl api::Renderer for MetalRenderer {
         }
         if renderer_trace_enabled() {
             renderer_trace_log(&format!(
-                "OXIDE_METAL_TRACE phase=encode frame={} total_ms={:.3} draws={} instanced={} icb_cmds={} items={} vb_bytes={} ib_bytes={} ub_bytes={} damage_enabled={} use_damage={} damage_rects={} damage_pct={:.3} culled={} used_filtered_main={} direct_present={} backdrop={} visual_effect={} camera_blur={} layer_commands={} scissor_changes={} main_shaded_px={} prepass_shaded_px={} gpu_ms={:.3} gpu_render_ms={:.3}",
+                "OXIDE_METAL_TRACE phase=encode frame={} total_ms={:.3} draws={} instanced={} icb_cmds={} items={} vb_bytes={} ib_bytes={} ub_bytes={} damage_enabled={} use_damage={} damage_rects={} damage_pct={:.3} culled={} used_filtered_main={} direct_present={} auxiliary_textures={} persistent_final_target={} backdrop={} visual_effect={} camera_blur={} layer_commands={} scissor_changes={} main_shaded_px={} prepass_shaded_px={} gpu_ms={:.3} gpu_render_ms={:.3}",
                 self.frame_id,
                 self.last_stats.encode_ms,
                 self.last_stats.draws,
@@ -7269,6 +7306,8 @@ impl api::Renderer for MetalRenderer {
                 self.last_stats.culled,
                 used_filtered_main,
                 self.frame_present_direct_to_drawable,
+                final_target_plan.needs_auxiliary_textures,
+                final_target_plan.needs_persistent_final_target,
                 has_backdrop,
                 has_visual_effect,
                 need_cam_blur,
@@ -7504,7 +7543,6 @@ impl api::Renderer for MetalRenderer {
         if self.target_w == next_w
             && self.target_h == next_h
             && (self.target_scale - next_scale).abs() <= f32::EPSILON
-            && self.target_tex.is_some()
         {
             return Ok(());
         }
@@ -7515,13 +7553,15 @@ impl api::Renderer for MetalRenderer {
         self.target_scale = next_scale;
         self.persistent_target_valid = false;
         if target_size_changed {
+            self.target_tex = None;
+            self.target_msaa_tex = None;
+            self.depth_tex = None;
             self.purge_effect_targets();
         }
         if target_scale_changed {
             self.purge_layer_cache_for_reason(LAYER_PURGE_SCALE_CHANGE);
             self.purge_prepared_chunks();
         }
-        self.ensure_target();
         Ok(())
     }
 }
@@ -10882,6 +10922,26 @@ impl MetalRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auxiliary_textures_do_not_force_persistent_final_color()
+    {
+        let direct = final_target_plan(1, false, false, true, true);
+        assert!(direct.needs_auxiliary_textures);
+        assert!(!direct.needs_persistent_final_target);
+        assert!(direct.direct_present);
+
+        for persistent in [
+            final_target_plan(4, false, false, true, true),
+            final_target_plan(1, true, false, true, true),
+            final_target_plan(1, false, true, true, true),
+            final_target_plan(1, false, false, true, false),
+        ] {
+            assert!(persistent.needs_auxiliary_textures);
+            assert!(persistent.needs_persistent_final_target);
+            assert!(!persistent.direct_present);
+        }
+    }
 
     fn glyph_test_run(vertex_len: u32, index_len: u32, sdf: bool) -> api::GlyphRun
     {

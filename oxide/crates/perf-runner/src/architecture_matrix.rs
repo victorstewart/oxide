@@ -1,4 +1,7 @@
 use super::*;
+use core_graphics_types::geometry::CGSize;
+use foreign_types::ForeignTypeRef;
+use metal_rs::{Device, MetalLayer, MTLPixelFormat};
 use std::collections::HashSet;
 
 struct RetainedScenario
@@ -126,6 +129,15 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       if perf_case_allowed(&id)
       {
          cases.push(effect_case(&id, smoke, name));
+      }
+   }
+
+   for name in ["auxiliary_direct", "partial_damage"]
+   {
+      let id = format!("gpu.architecture.final_target.{name}");
+      if perf_case_allowed(&id)
+      {
+         cases.push(metal_final_target_case(&id, smoke, name)?);
       }
    }
 
@@ -3728,6 +3740,22 @@ where
    let mut renderer = Box::new(metal::MetalRenderer::new_with_config(config).context("creating Metal renderer")?);
    renderer.resize(1_200, 800, 1.0).context("resizing Metal renderer")?;
    renderer.set_damage_options(true, DAMAGE_USE_THRESH, DAMAGE_PREFILTER_THRESH);
+   let present_layer = if id.starts_with("gpu.architecture.final_target.")
+   {
+      let device = Device::system_default().context("creating final-target benchmark device")?;
+      let layer = MetalLayer::new();
+      layer.set_device(&device);
+      layer.set_pixel_format(MTLPixelFormat::BGRA8Unorm_sRGB);
+      layer.set_drawable_size(CGSize::new(1_200.0, 800.0));
+      layer.set_maximum_drawable_count(3);
+      layer.set_display_sync_enabled(false);
+      layer.set_framebuffer_only(true);
+      Some(layer)
+   }
+   else
+   {
+      None
+   };
    if id.starts_with("gpu.architecture.layers.")
    {
       let budget = std::env::var("OXIDE_ARCHITECTURE_LAYER_CACHE_BUDGET_BYTES")
@@ -3808,6 +3836,11 @@ where
    let mut effect_graph_logical_bytes_peak = 0_u64;
    let mut effect_graph_physical_bytes_peak = 0_u64;
    let mut effect_graph_aliased_bytes_peak = 0_u64;
+   let mut blit_passes_sum = 0_u64;
+   let mut texture_copies_sum = 0_u64;
+   let mut texture_copy_bytes_sum = 0_u64;
+   let mut persistent_target_frames = 0_u64;
+   let mut draw_target_main_bytes_peak = 0_u64;
 
    for frame in 0..(warmups + frames)
    {
@@ -3829,6 +3862,20 @@ where
       if let Some((width, height)) = resize
       {
          renderer.resize(width, height, 1.0).with_context(|| format!("resizing for {id}"))?;
+         if let Some(layer) = present_layer.as_ref()
+         {
+            layer.set_drawable_size(CGSize::new(width as f64, height as f64));
+         }
+      }
+      if let Some(layer) = present_layer.as_ref()
+      {
+         let drawable = layer.next_drawable().context("acquiring final-target benchmark drawable")?;
+         unsafe
+         {
+            renderer
+               .prepare_present_drawable(drawable.as_ptr().cast())
+               .with_context(|| format!("preparing drawable for {id}"))?;
+         }
       }
       let token = renderer.begin_frame(&api::FrameTarget, damage.as_ref());
       let frame_id = token.0;
@@ -3911,6 +3958,14 @@ where
             .max(stats.effect_graph_physical_bytes);
          effect_graph_aliased_bytes_peak = effect_graph_aliased_bytes_peak
             .max(stats.effect_graph_aliased_bytes);
+         blit_passes_sum = blit_passes_sum.saturating_add(stats.blit_passes as u64);
+         texture_copies_sum = texture_copies_sum.saturating_add(stats.texture_copies as u64);
+         texture_copy_bytes_sum =
+            texture_copy_bytes_sum.saturating_add(stats.texture_copy_bytes);
+         persistent_target_frames = persistent_target_frames
+            .saturating_add(stats.persistent_target_valid as u64);
+         draw_target_main_bytes_peak = draw_target_main_bytes_peak
+            .max(stats.memory.draw_target_main_bytes);
       }
       else if persist_raw
       {
@@ -3989,6 +4044,20 @@ where
    metrics.insert(String::from("effect_graph_logical_bytes_peak"), effect_graph_logical_bytes_peak as f64);
    metrics.insert(String::from("effect_graph_physical_bytes_peak"), effect_graph_physical_bytes_peak as f64);
    metrics.insert(String::from("effect_graph_aliased_bytes_peak"), effect_graph_aliased_bytes_peak as f64);
+   metrics.insert(String::from("blit_passes_avg"), blit_passes_sum as f64 / frames as f64);
+   metrics.insert(String::from("texture_copies_avg"), texture_copies_sum as f64 / frames as f64);
+   metrics.insert(
+      String::from("texture_copy_bytes_avg"),
+      texture_copy_bytes_sum as f64 / frames as f64,
+   );
+   metrics.insert(
+      String::from("persistent_target_frames"),
+      persistent_target_frames as f64,
+   );
+   metrics.insert(
+      String::from("draw_target_main_bytes_peak"),
+      draw_target_main_bytes_peak as f64,
+   );
    if persist_raw
    {
       insert_indexed_samples(&mut metrics, "raw_frame_ms", &frame_samples);
@@ -4160,6 +4229,54 @@ fn metal_effect_case(id: &str, smoke: bool, name: &str) -> Result<PerfCaseResult
          "Renderer recreation before every post-initial frame isolates cold target first use.",
       ));
    }
+   Ok(case)
+}
+
+fn metal_final_target_case(id: &str, smoke: bool, name: &str) -> Result<PerfCaseResult>
+{
+   let partial_damage = name == "partial_damage";
+   let mut case = measured_metal_drawlist_case(
+      id,
+      smoke,
+      format!(
+         "Metal final-target {name} workload through a real CAMetalLayer drawable with effect, layer, and camera auxiliary textures."
+      ),
+      move |_| {
+         let mut builder = ui::DrawListBuilder::new();
+         builder.rrect(
+            api::RectF::new(0.0, 0.0, 1_200.0, 800.0),
+            [0.0; 4],
+            api::Color::rgba(0.08, 0.10, 0.14, 1.0),
+         );
+         builder.camera_bg(
+            api::RectF::new(40.0, 40.0, 420.0, 300.0),
+            api::Color::rgba(0.92, 0.96, 1.0, 1.0),
+            0.8,
+            false,
+            true,
+            12.0,
+         );
+         builder.layer_begin(51, api::RectF::new(500.0, 80.0, 560.0, 560.0), true);
+         builder.rrect(
+            api::RectF::new(520.0, 100.0, 520.0, 520.0),
+            [28.0; 4],
+            api::Color::rgba(0.18, 0.48, 0.92, 0.92),
+         );
+         builder.layer_end();
+         builder.visual_effect(
+            api::RectF::new(120.0, 420.0, 860.0, 260.0),
+            api::VisualEffect::DarkPopup {
+               blur_intensity: 0.75,
+               tint: api::Color::rgba(0.08, 0.09, 0.12, 0.80),
+            },
+         );
+         let damage = partial_damage.then(|| api::Damage {
+            rects: vec![api::RectI::new(720, 500, 96, 72)],
+         });
+         (builder.into_inner(), damage, None, false)
+      },
+   )?;
+   case.refresh_mode = String::from("drawable-unthrottled");
    Ok(case)
 }
 
