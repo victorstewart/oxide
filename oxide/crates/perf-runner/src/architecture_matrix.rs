@@ -309,7 +309,7 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
 
    for instances in [96_usize, 1_000, 10_000]
    {
-      for feature in ["one_mesh", "many_meshes", "alpha_order", "viewport_25pct", "culling", "bloom_1", "bloom_3"]
+      for feature in ["compatible", "one_mesh", "many_meshes", "alpha_order", "viewport_25pct", "culling", "bloom_1", "bloom_3"]
       {
          let id = format!("gpu.architecture.scene3d.instances_{instances}.{feature}");
          if perf_case_allowed(&id)
@@ -317,6 +317,11 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
             cases.push(scene3d_matrix_case(&id, smoke, instances, feature)?);
          }
       }
+   }
+   let scene3d_endurance_id = "gpu.architecture.scene3d.create_release_endurance";
+   if perf_case_allowed(scene3d_endurance_id)
+   {
+      cases.push(scene3d_create_release_endurance_case(scene3d_endurance_id, smoke)?);
    }
 
    for name in ["visible_high_water", "offscreen_growth_stress"]
@@ -5151,6 +5156,89 @@ fn scene3d_transform(index: usize) -> metal::scene3d::Mat4
    [[0.025, 0.0, 0.0, 0.0], [0.0, 0.025, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [x, y, z, 1.0]]
 }
 
+fn scene3d_create_release_endurance_case(id: &str, smoke: bool) -> Result<PerfCaseResult>
+{
+   let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
+   renderer.resize(16, 16, 1.0).context("resizing Metal renderer")?;
+   let vertices = [
+      metal::scene3d::Vertex3d { position: [-0.8, -0.7, 0.0] },
+      metal::scene3d::Vertex3d { position: [0.8, -0.7, 0.0] },
+      metal::scene3d::Vertex3d { position: [0.0, 0.8, 0.0] },
+   ];
+   let indices = [0_u32, 1, 2];
+   let mesh_data = metal::scene3d::Mesh3dData {
+      vertices: &vertices,
+      indices: &indices,
+      topology: metal::scene3d::MeshTopology::Triangles,
+   };
+   let sample_count = if smoke { 2 } else { 30 };
+   let cycles_per_sample = if smoke { 4 } else { 120 };
+   let mut meshes = Vec::with_capacity(2);
+   for _ in 0..2
+   {
+      meshes.push(renderer.mesh3d_create(&mesh_data).context("creating endurance mesh")?);
+   }
+   let mut samples = Vec::with_capacity(sample_count);
+   for _ in 0..sample_count
+   {
+      let start = Instant::now();
+      for _ in 0..cycles_per_sample
+      {
+         for mesh in meshes.drain(..) { renderer.mesh3d_release(mesh); }
+         for _ in 0..2
+         {
+            meshes.push(renderer.mesh3d_create(&mesh_data).context("recreating endurance mesh")?);
+         }
+      }
+      samples.push(start.elapsed().as_secs_f64() * 1_000.0);
+   }
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.submit(token).context("submitting endurance accounting frame")?;
+   let stats = renderer.last_stats();
+   for mesh in meshes { renderer.mesh3d_release(mesh); }
+
+   let summary = summarize(&samples);
+   let (layer, scenario, variant, cache_state, refresh_mode) =
+      perf_case_contract_metadata(id, "architecture");
+   let mut metrics = BTreeMap::new();
+   insert_distribution_metrics(&mut metrics, "create_release_ms", &samples);
+   metrics.insert(String::from("samples"), sample_count as f64);
+   metrics.insert(String::from("cycles_per_sample"), cycles_per_sample as f64);
+   metrics.insert(
+      String::from("release_create_operations"),
+      (sample_count * cycles_per_sample * 4) as f64,
+   );
+   metrics.insert(
+      String::from("live_mesh_buffer_bytes_after_endurance"),
+      stats.memory.scene3d_mesh_buffer_bytes as f64,
+   );
+
+   Ok(PerfCaseResult {
+      id: String::from(id),
+      family: String::from("architecture"),
+      layer: String::from(layer),
+      scenario: String::from(scenario),
+      variant: String::from(variant),
+      cache_state: String::from(cache_state),
+      refresh_mode: String::from(refresh_mode),
+      unit: format!("ms/{cycles_per_sample} cycles"),
+      gated: true,
+      threshold_pct: 0.20,
+      median: summary.median,
+      p95: summary.p95,
+      p99: summary.p99,
+      min: summary.min,
+      max: summary.max,
+      mean: summary.mean,
+      samples: samples.len(),
+      ops_per_sample: (cycles_per_sample * 4) as u64,
+      notes: vec![String::from(
+         "Metal Scene3D repeated two-mesh release/create endurance with live GPU bytes checked after churn.",
+      )],
+      metrics,
+   })
+}
+
 fn scene3d_matrix_case(id: &str, smoke: bool, instance_count: usize, feature: &str) -> Result<PerfCaseResult>
 {
    let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating Metal renderer")?);
@@ -5181,15 +5269,21 @@ fn scene3d_matrix_case(id: &str, smoke: bool, instance_count: usize, feature: &s
       instance.cull = if index & 1 == 0 { metal::scene3d::CullMode3d::Back } else { metal::scene3d::CullMode3d::None };
       instances.push(instance);
    }
-   let mut one_mesh = instances.clone();
+   let mut compatible = instances.clone();
+   for (index, instance) in compatible.iter_mut().enumerate()
+   {
+      instance.mesh = if index < instance_count / 2 { meshes[0] } else { meshes[1] };
+      instance.cull = metal::scene3d::CullMode3d::Back;
+   }
+   let mut one_mesh = compatible.clone();
    for instance in &mut one_mesh { instance.mesh = meshes[0]; }
-   let mut alpha = instances.clone();
+   let mut alpha = compatible.clone();
    for (index, instance) in alpha.iter_mut().enumerate()
    {
       instance.color.a = 0.25 + (index % 4) as f32 * 0.15;
       instance.depth_write = false;
    }
-   let mut no_cull = instances.clone();
+   let mut no_cull = compatible.clone();
    for instance in &mut no_cull { instance.cull = metal::scene3d::CullMode3d::None; }
    let bloom_one = [metal::scene3d::BloomLayer3d { sigma_px: 6.0, strength: 0.55 }];
    let bloom_three = [
@@ -5198,8 +5292,20 @@ fn scene3d_matrix_case(id: &str, smoke: bool, instance_count: usize, feature: &s
       metal::scene3d::BloomLayer3d { sigma_px: 16.0, strength: 0.18 },
    ];
    let identity = authoring_scene3d_identity();
-   let warmups = if smoke { 1 } else { 2 };
-   let frames = if smoke { 2 } else { 8 };
+   let warmups = std::env::var("OXIDE_C57_METAL_WARMUPS")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|warmups| *warmups > 0)
+      .unwrap_or(if smoke { 1 } else { 8 });
+   let frames = std::env::var("OXIDE_C57_METAL_FRAMES")
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|frames| *frames > 0)
+      .unwrap_or(if smoke { 2 } else { 24 });
+   let raw_samples = std::env::var_os("OXIDE_C57_RAW_SAMPLES").is_some();
+   let mut warmup_frame_samples = Vec::with_capacity(if raw_samples { warmups } else { 0 });
+   let mut warmup_encode_samples = Vec::with_capacity(if raw_samples { warmups } else { 0 });
+   let mut warmup_gpu_samples = Vec::with_capacity(if raw_samples { warmups } else { 0 });
    let mut frame_samples = Vec::with_capacity(frames);
    let mut encode_samples = Vec::with_capacity(frames);
    let mut gpu_samples = Vec::with_capacity(frames);
@@ -5210,12 +5316,23 @@ fn scene3d_matrix_case(id: &str, smoke: bool, instance_count: usize, feature: &s
    let mut bloom_target_bytes_peak = 0_u64;
    let mut mesh_buffer_bytes_peak = 0_u64;
    let mut render_passes_sum = 0_u64;
+   let mut scene3d_draws_sum = 0_u64;
+   let mut scene3d_instances_sum = 0_u64;
+   let mut scene3d_instance_bytes_sum = 0_u64;
+   let mut scene3d_pipeline_binds_sum = 0_u64;
+   let mut scene3d_depth_state_binds_sum = 0_u64;
+   let mut scene3d_cull_sets_sum = 0_u64;
+   let mut scene3d_mesh_buffer_binds_sum = 0_u64;
+   let mut scene3d_instance_buffer_binds_sum = 0_u64;
+   let mut scene3d_instance_ring_grows_sum = 0_u64;
+   let mut scene3d_viewport_sets_sum = 0_u64;
 
    for frame in 0..(warmups + frames)
    {
       let frame_t0 = Instant::now();
       let variant_instances = match feature
       {
+         "compatible" | "viewport_25pct" => &compatible[..],
          "one_mesh" => &one_mesh[..],
          "alpha_order" => &alpha[..],
          "culling" => &no_cull[..],
@@ -5256,6 +5373,22 @@ fn scene3d_matrix_case(id: &str, smoke: bool, instance_count: usize, feature: &s
          mesh_buffer_bytes_peak =
             mesh_buffer_bytes_peak.max(stats.memory.scene3d_mesh_buffer_bytes);
          render_passes_sum = render_passes_sum.saturating_add(u64::from(stats.render_passes));
+         scene3d_draws_sum = scene3d_draws_sum.saturating_add(u64::from(stats.scene3d_draws));
+         scene3d_instances_sum = scene3d_instances_sum.saturating_add(u64::from(stats.scene3d_instances));
+         scene3d_instance_bytes_sum = scene3d_instance_bytes_sum.saturating_add(stats.scene3d_instance_bytes);
+         scene3d_pipeline_binds_sum = scene3d_pipeline_binds_sum.saturating_add(u64::from(stats.scene3d_pipeline_binds));
+         scene3d_depth_state_binds_sum = scene3d_depth_state_binds_sum.saturating_add(u64::from(stats.scene3d_depth_state_binds));
+         scene3d_cull_sets_sum = scene3d_cull_sets_sum.saturating_add(u64::from(stats.scene3d_cull_sets));
+         scene3d_mesh_buffer_binds_sum = scene3d_mesh_buffer_binds_sum.saturating_add(u64::from(stats.scene3d_mesh_buffer_binds));
+         scene3d_instance_buffer_binds_sum = scene3d_instance_buffer_binds_sum.saturating_add(u64::from(stats.scene3d_instance_buffer_binds));
+         scene3d_instance_ring_grows_sum = scene3d_instance_ring_grows_sum.saturating_add(u64::from(stats.scene3d_instance_ring_grows));
+         scene3d_viewport_sets_sum = scene3d_viewport_sets_sum.saturating_add(u64::from(stats.scene3d_viewport_sets));
+      }
+      else if raw_samples
+      {
+         warmup_frame_samples.push(frame_t0.elapsed().as_secs_f64() * 1_000.0);
+         warmup_encode_samples.push(stats.encode_ms);
+         warmup_gpu_samples.push(stats.gpu_ms);
       }
    }
 
@@ -5268,7 +5401,15 @@ fn scene3d_matrix_case(id: &str, smoke: bool, instance_count: usize, feature: &s
    insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
    insert_frame_pacing_metrics(&mut metrics, &frame_samples);
    metrics.insert(String::from("instances"), instance_count as f64);
-   metrics.insert(String::from("mesh_count"), if feature == "one_mesh" { 1.0 } else { 16.0 });
+   metrics.insert(
+      String::from("mesh_count"),
+      match feature
+      {
+         "one_mesh" => 1.0,
+         "compatible" | "alpha_order" | "viewport_25pct" | "culling" => 2.0,
+         _ => 16.0,
+      },
+   );
    metrics.insert(String::from("alpha_order_control"), if feature == "alpha_order" { 1.0 } else { 0.0 });
    metrics.insert(String::from("viewport_fraction"), if feature == "viewport_25pct" { 0.25 } else { 1.0 });
    metrics.insert(String::from("culling_variant"), if feature == "culling" { 1.0 } else { 0.0 });
@@ -5280,6 +5421,25 @@ fn scene3d_matrix_case(id: &str, smoke: bool, instance_count: usize, feature: &s
    metrics.insert(String::from("bloom_target_bytes_peak"), bloom_target_bytes_peak as f64);
    metrics.insert(String::from("mesh_buffer_bytes_peak"), mesh_buffer_bytes_peak as f64);
    metrics.insert(String::from("render_passes_avg"), render_passes_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_draws_avg"), scene3d_draws_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_instances_avg"), scene3d_instances_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_instance_bytes_avg"), scene3d_instance_bytes_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_pipeline_binds_avg"), scene3d_pipeline_binds_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_depth_state_binds_avg"), scene3d_depth_state_binds_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_cull_sets_avg"), scene3d_cull_sets_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_mesh_buffer_binds_avg"), scene3d_mesh_buffer_binds_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_instance_buffer_binds_avg"), scene3d_instance_buffer_binds_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_instance_ring_grows_avg"), scene3d_instance_ring_grows_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_viewport_sets_avg"), scene3d_viewport_sets_sum as f64 / frames as f64);
+   if raw_samples
+   {
+      insert_indexed_samples(&mut metrics, "c57_warmup_frame_ms", &warmup_frame_samples);
+      insert_indexed_samples(&mut metrics, "c57_warmup_encode_ms", &warmup_encode_samples);
+      insert_indexed_samples(&mut metrics, "c57_warmup_gpu_ms", &warmup_gpu_samples);
+      insert_indexed_samples(&mut metrics, "c57_frame_ms", &frame_samples);
+      insert_indexed_samples(&mut metrics, "c57_encode_ms", &encode_samples);
+      insert_indexed_samples(&mut metrics, "c57_gpu_ms", &gpu_samples);
+   }
 
    Ok(PerfCaseResult {
       id: String::from(id),

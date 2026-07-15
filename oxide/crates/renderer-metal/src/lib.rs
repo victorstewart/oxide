@@ -844,6 +844,7 @@ struct Mesh3dGpu {
     index_count: u64,
     topology: scene3d::MeshTopology,
     format: MeshFormat3d,
+    opaque: bool,
 }
 
 #[repr(C)]
@@ -859,6 +860,43 @@ struct Scene3dGpuMaterial {
     material: u32,
     _pad: [f32; 3],
     params: [f32; 4],
+}
+
+const _: () = assert!(core::mem::size_of::<Scene3dGpuUniforms>() == 64);
+const _: () = assert!(core::mem::size_of::<Scene3dGpuMaterial>() == 48);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scene3dPipelineKind {
+    PositionTriAlpha,
+    PositionTriAdditive,
+    PositionTriDepth,
+    PositionTriBloom,
+    PositionLineAlpha,
+    PositionLineAdditive,
+    PositionLineDepth,
+    PositionLineBloom,
+    ColorTriAlpha,
+    ColorTriAdditive,
+    ColorTriDepth,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scene3dDepthKind {
+    Disabled,
+    Read,
+    Write,
+    WriteNoTest,
+}
+
+#[derive(Clone, Copy)]
+struct Scene3dDraw {
+    mesh: u32,
+    first_instance: u32,
+    instance_count: u32,
+    pipeline: Scene3dPipelineKind,
+    depth: Scene3dDepthKind,
+    cull: scene3d::CullMode3d,
+    batchable: bool,
 }
 
 #[repr(C)]
@@ -914,6 +952,7 @@ pub struct MetalRenderer {
     pso_scene3d_tri_add_bloom: RenderPipelineState,
     pso_scene3d_color_tri: RenderPipelineState,
     pso_scene3d_color_tri_add: RenderPipelineState,
+    pso_scene3d_color_tri_depth: RenderPipelineState,
     pso_scene3d_line: RenderPipelineState,
     pso_scene3d_line_depth: RenderPipelineState,
     pso_scene3d_line_add: RenderPipelineState,
@@ -932,6 +971,7 @@ pub struct MetalRenderer {
     depth_state_3d_disabled: DepthStencilState,
     depth_state_3d_read: DepthStencilState,
     depth_state_3d_write: DepthStencilState,
+    depth_state_3d_write_no_test: DepthStencilState,
     prepared_layer_pipelines: Option<prepared::PreparedPipelines>,
     prepared_exact_layer_pipelines: Option<prepared::PreparedPipelines>,
     // Argument buffer for image textures
@@ -1014,6 +1054,7 @@ pub struct MetalRenderer {
     prepared_fallback: api::DrawList,
     meshes_3d: HashMap<u32, Mesh3dGpu>,
     next_mesh3d_id: u32,
+    scene3d_draws: alloc::vec::Vec<Scene3dDraw>,
     layers: HashMap<u32, LayerEntry>,
     layer_pool: alloc::vec::Vec<LayerPoolEntry>,
     layer_frame_ids: HashSet<u32>,
@@ -1035,6 +1076,16 @@ pub struct MetalRenderer {
     acc_analytic_instance_bytes: u64,
     acc_analytic_instance_buffer_binds: u32,
     acc_analytic_instance_ring_grows: u32,
+    acc_scene3d_draws: u32,
+    acc_scene3d_instances: u32,
+    acc_scene3d_instance_bytes: u64,
+    acc_scene3d_pipeline_binds: u32,
+    acc_scene3d_depth_state_binds: u32,
+    acc_scene3d_cull_sets: u32,
+    acc_scene3d_mesh_buffer_binds: u32,
+    acc_scene3d_instance_buffer_binds: u32,
+    acc_scene3d_instance_ring_grows: u32,
+    acc_scene3d_viewport_sets: u32,
     acc_glyph_instance_bytes: u64,
     acc_glyph_instance_buffer_binds: u32,
     acc_glyph_instances: u32,
@@ -1811,10 +1862,31 @@ impl MetalRenderer {
             )
         })?;
         let pso_scene3d_color_tri = build_init_stage("pso.scene3d.color_tri", || {
-            build_scene3d_color_pso(&device, &library, color_format, scene3d::BlendMode3d::Alpha)
+            build_scene3d_color_pso(
+                &device,
+                &library,
+                color_format,
+                scene3d::BlendMode3d::Alpha,
+                true,
+            )
         })?;
         let pso_scene3d_color_tri_add = build_init_stage("pso.scene3d.color_tri_add", || {
-            build_scene3d_color_pso(&device, &library, color_format, scene3d::BlendMode3d::Additive)
+            build_scene3d_color_pso(
+                &device,
+                &library,
+                color_format,
+                scene3d::BlendMode3d::Additive,
+                true,
+            )
+        })?;
+        let pso_scene3d_color_tri_depth = build_init_stage("pso.scene3d.color_tri_depth", || {
+            build_scene3d_color_pso(
+                &device,
+                &library,
+                color_format,
+                scene3d::BlendMode3d::Alpha,
+                false,
+            )
         })?;
         let pso_scene3d_line = build_init_stage("pso.scene3d.line", || {
             build_scene3d_pso(
@@ -1960,6 +2032,8 @@ impl MetalRenderer {
             build_depth_stencil_state(&device, true, false, "depth.scene3d.read");
         let depth_state_3d_write =
             build_depth_stencil_state(&device, true, true, "depth.scene3d.write");
+        let depth_state_3d_write_no_test =
+            build_depth_stencil_state(&device, false, true, "depth.scene3d.write_no_test");
         // Prepare argument encoder for image textures
         let (img_arg, img_arg_bufs, img_arg_stride) = if direct_preview_only {
             (None, None, 0)
@@ -2130,6 +2204,7 @@ impl MetalRenderer {
             pso_scene3d_tri_add_bloom,
             pso_scene3d_color_tri,
             pso_scene3d_color_tri_add,
+            pso_scene3d_color_tri_depth,
             pso_scene3d_line,
             pso_scene3d_line_depth,
             pso_scene3d_line_add,
@@ -2148,6 +2223,7 @@ impl MetalRenderer {
             depth_state_3d_disabled,
             depth_state_3d_read,
             depth_state_3d_write,
+            depth_state_3d_write_no_test,
             prepared_layer_pipelines,
             prepared_exact_layer_pipelines,
             img_arg,
@@ -2231,6 +2307,7 @@ impl MetalRenderer {
             prepared_fallback: api::DrawList::default(),
             meshes_3d: HashMap::new(),
             next_mesh3d_id: 1,
+            scene3d_draws: alloc::vec::Vec::new(),
             layers: HashMap::new(),
             layer_pool: alloc::vec::Vec::new(),
             layer_frame_ids: HashSet::new(),
@@ -2252,6 +2329,16 @@ impl MetalRenderer {
             acc_analytic_instance_bytes: 0,
             acc_analytic_instance_buffer_binds: 0,
             acc_analytic_instance_ring_grows: 0,
+            acc_scene3d_draws: 0,
+            acc_scene3d_instances: 0,
+            acc_scene3d_instance_bytes: 0,
+            acc_scene3d_pipeline_binds: 0,
+            acc_scene3d_depth_state_binds: 0,
+            acc_scene3d_cull_sets: 0,
+            acc_scene3d_mesh_buffer_binds: 0,
+            acc_scene3d_instance_buffer_binds: 0,
+            acc_scene3d_instance_ring_grows: 0,
+            acc_scene3d_viewport_sets: 0,
             acc_glyph_instance_bytes: 0,
             acc_glyph_instance_buffer_binds: 0,
             acc_glyph_instances: 0,
@@ -4211,6 +4298,16 @@ impl MetalRenderer {
         self.acc_analytic_instance_bytes = 0;
         self.acc_analytic_instance_buffer_binds = 0;
         self.acc_analytic_instance_ring_grows = 0;
+        self.acc_scene3d_draws = 0;
+        self.acc_scene3d_instances = 0;
+        self.acc_scene3d_instance_bytes = 0;
+        self.acc_scene3d_pipeline_binds = 0;
+        self.acc_scene3d_depth_state_binds = 0;
+        self.acc_scene3d_cull_sets = 0;
+        self.acc_scene3d_mesh_buffer_binds = 0;
+        self.acc_scene3d_instance_buffer_binds = 0;
+        self.acc_scene3d_instance_ring_grows = 0;
+        self.acc_scene3d_viewport_sets = 0;
         self.acc_glyph_instance_bytes = 0;
         self.acc_glyph_instance_buffer_binds = 0;
         self.acc_glyph_instances = 0;
@@ -5005,11 +5102,19 @@ impl MetalRenderer {
         index_count: usize,
         topology: scene3d::MeshTopology,
         format: MeshFormat3d,
+        opaque: bool,
     ) -> scene3d::MeshHandle3d {
         let id = self.next_mesh3d_id;
         self.next_mesh3d_id = self.next_mesh3d_id.wrapping_add(1).max(1);
         self.meshes_3d
-            .insert(id, Mesh3dGpu { vb, ib, index_count: index_count as u64, topology, format });
+            .insert(id, Mesh3dGpu {
+                vb,
+                ib,
+                index_count: index_count as u64,
+                topology,
+                format,
+                opaque,
+            });
         scene3d::MeshHandle3d(id)
     }
 
@@ -5026,7 +5131,14 @@ impl MetalRenderer {
             .buffer_upload_bytes
             .saturating_add(vb.length())
             .saturating_add(ib.length());
-        Ok(self.insert_mesh3d(vb, ib, data.indices.len(), data.topology, MeshFormat3d::Position))
+        Ok(self.insert_mesh3d(
+            vb,
+            ib,
+            data.indices.len(),
+            data.topology,
+            MeshFormat3d::Position,
+            true,
+        ))
     }
 
     /// Uploads a static indexed colored 3D mesh into persistent Metal buffers.
@@ -5048,6 +5160,7 @@ impl MetalRenderer {
             data.indices.len(),
             data.topology,
             MeshFormat3d::PositionColor,
+            data.vertices.iter().all(|vertex| vertex.color[3] >= 1.0),
         ))
     }
 
@@ -5086,6 +5199,21 @@ impl MetalRenderer {
         let Some(depth_tex) = self.depth_tex.as_ref().map(Texture::to_owned) else {
             return Err(api::RenderError::InvalidOperation("scene3d depth texture unavailable"));
         };
+        let mut pf = core::mem::take(&mut self.frames[slot]);
+        let prepared = self.prepare_scene3d_draws(
+            &mut pf,
+            pass.view_proj,
+            pass.instances,
+            1.0,
+            false,
+        );
+        let (uniform_offset, material_offset) = match prepared {
+            Ok(offsets) => offsets,
+            Err(error) => {
+                self.frames[slot] = pf;
+                return Err(error);
+            }
+        };
         let rpd = RenderPassDescriptor::new();
         let ca0 = rpd.color_attachments().object_at(0).unwrap();
         ca0.set_texture(Some(&target_tex));
@@ -5120,21 +5248,35 @@ impl MetalRenderer {
         enc.set_front_facing_winding(MTLWinding::CounterClockwise);
         if let Some(viewport) = pass.viewport {
             set_viewport_and_scissor_dp(&enc, self, viewport);
+            self.acc_scene3d_viewport_sets = self.acc_scene3d_viewport_sets.saturating_add(1);
         }
-        for instance in pass.instances {
-            self.encode_scene3d_instance(&enc, pass.view_proj, instance, 1.0, false)?;
-        }
+        self.encode_prepared_scene3d_draws(&enc, uniform_offset, material_offset);
         enc.end_encoding();
-        if let Some(bloom) = pass.bloom {
-            self.encode_scene3d_bloom(&cmd, &target_tex, pass.view_proj, bloom)?;
-        }
+        let bloom_result = if let Some(bloom) = pass.bloom {
+            self.encode_scene3d_bloom(&cmd, &target_tex, &mut pf, pass.view_proj, bloom)
+        } else {
+            Ok(())
+        };
+        self.frames[slot] = pf;
+        bloom_result?;
         self.frame_color_initialized = true;
         self.persistent_target_valid = true;
         self.frame_depth_initialized = true;
         if let Some(t0) = self.frame_encode_started_at {
             self.last_stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
         }
-        self.last_stats.draws = self.acc_draws;
+        self.last_stats.draws = self.acc_draws.saturating_add(self.acc_flat_instanced_draws);
+        self.last_stats.instanced = self.acc_instanced;
+        self.last_stats.scene3d_draws = self.acc_scene3d_draws;
+        self.last_stats.scene3d_instances = self.acc_scene3d_instances;
+        self.last_stats.scene3d_instance_bytes = self.acc_scene3d_instance_bytes;
+        self.last_stats.scene3d_pipeline_binds = self.acc_scene3d_pipeline_binds;
+        self.last_stats.scene3d_depth_state_binds = self.acc_scene3d_depth_state_binds;
+        self.last_stats.scene3d_cull_sets = self.acc_scene3d_cull_sets;
+        self.last_stats.scene3d_mesh_buffer_binds = self.acc_scene3d_mesh_buffer_binds;
+        self.last_stats.scene3d_instance_buffer_binds = self.acc_scene3d_instance_buffer_binds;
+        self.last_stats.scene3d_instance_ring_grows = self.acc_scene3d_instance_ring_grows;
+        self.last_stats.scene3d_viewport_sets = self.acc_scene3d_viewport_sets;
         Ok(())
     }
 
@@ -5142,10 +5284,13 @@ impl MetalRenderer {
         &mut self,
         cmd: &CommandBuffer,
         target_tex: &Texture,
+        pf: &mut PerFrame,
         view_proj: scene3d::Mat4,
         bloom: scene3d::Bloom3d<'_>,
     ) -> Result<(), api::RenderError> {
-        if bloom.emissive_instances.is_empty() || bloom.layers.is_empty() {
+        if bloom.emissive_instances.is_empty()
+            || !bloom.layers.iter().any(|layer| layer.strength > 0.0 && layer.sigma_px > 0.0)
+        {
             return Ok(());
         }
         let divisor = bloom.downsample_divisor.clamp(1, 8);
@@ -5156,7 +5301,13 @@ impl MetalRenderer {
         let Some(bloom_tmp_tex) = self.scene3d_bloom_tmp_tex.as_ref().map(Texture::to_owned) else {
             return Ok(());
         };
-
+        let (uniform_offset, material_offset) = self.prepare_scene3d_draws(
+            pf,
+            view_proj,
+            bloom.emissive_instances,
+            1.0,
+            true,
+        )?;
         for layer in bloom.layers {
             if layer.strength <= 0.0 || layer.sigma_px <= 0.0 {
                 continue;
@@ -5170,9 +5321,7 @@ impl MetalRenderer {
             self.acc_render_passes = self.acc_render_passes.saturating_add(1);
             let enc = cmd.new_render_command_encoder(&rpd);
             enc.set_front_facing_winding(MTLWinding::CounterClockwise);
-            for instance in bloom.emissive_instances {
-                self.encode_scene3d_instance(&enc, view_proj, instance, 1.0, true)?;
-            }
+            self.encode_prepared_scene3d_draws(&enc, uniform_offset, material_offset);
             enc.end_encoding();
 
             let pass_sigma = (layer.sigma_px / divisor as f32).max(0.75);
@@ -5255,106 +5404,179 @@ impl MetalRenderer {
         self.acc_draws = self.acc_draws.saturating_add(1);
     }
 
-    fn encode_scene3d_instance(
+    fn prepare_scene3d_draws(
         &mut self,
-        enc: &RenderCommandEncoderRef,
+        pf: &mut PerFrame,
         view_proj: scene3d::Mat4,
-        instance: &scene3d::Instance3d,
+        instances: &[scene3d::Instance3d],
         intensity: f32,
         bloom_target: bool,
-    ) -> Result<(), api::RenderError> {
-        let Some(mesh) = self.meshes_3d.get(&instance.mesh.0) else {
-            return Err(api::RenderError::ResourceNotFound("mesh3d handle"));
-        };
-        let mvp = scene3d::mat4_mul(&view_proj, &instance.transform);
-        let uniforms = Scene3dGpuUniforms { mvp };
+    ) -> Result<(usize, usize), api::RenderError> {
+        self.scene3d_draws.clear();
+        if instances.is_empty() {
+            return Ok((0, 0));
+        }
+        let count = instances.len();
+        let _ = u32::try_from(count).map_err(|_| {
+            api::RenderError::InvalidOperation("scene3d instance count exceeds Metal limits")
+        })?;
+        let (uniform_offset, material_offset, end) =
+            analytic_instance_pair_layout::<Scene3dGpuUniforms, Scene3dGpuMaterial>(
+                pf.ub_used,
+                count,
+            );
+        let slot = self.current_frame_slot();
+        if self.ub.ensure_capacity(&self.device, slot, end) {
+            self.acc_resource_grows = self.acc_resource_grows.saturating_add(1);
+            self.acc_scene3d_instance_ring_grows =
+                self.acc_scene3d_instance_ring_grows.saturating_add(1);
+        }
+        pf.ub_used = end;
+        self.acc_scene3d_instance_bytes = self.acc_scene3d_instance_bytes.saturating_add(
+            count.saturating_mul(
+                core::mem::size_of::<Scene3dGpuUniforms>()
+                    + core::mem::size_of::<Scene3dGpuMaterial>(),
+            ) as u64,
+        );
+
+        let base = self.ub.contents_ptr(slot);
         let color_scale = intensity.max(0.0);
-        let material = Scene3dGpuMaterial {
-            color: [
-                instance.color.r * color_scale,
-                instance.color.g * color_scale,
-                instance.color.b * color_scale,
-                instance.color.a,
-            ],
-            material: scene3d_material_id(instance.material),
-            _pad: [0.0; 3],
-            params: instance.params,
-        };
-        let pso = if mesh.format == MeshFormat3d::PositionColor {
-            if bloom_target {
-                return Err(api::RenderError::InvalidOperation(
-                    "colored scene3d mesh bloom target is not supported",
-                ));
+        for (index, instance) in instances.iter().enumerate() {
+            let Some(mesh) = self.meshes_3d.get(&instance.mesh.0) else {
+                return Err(api::RenderError::ResourceNotFound("mesh3d handle"));
+            };
+            let (pipeline, depth, batchable) =
+                scene3d_draw_configuration(mesh, instance, bloom_target)?;
+            let uniforms = Scene3dGpuUniforms {
+                mvp: scene3d::mat4_mul(&view_proj, &instance.transform),
+            };
+            let material = Scene3dGpuMaterial {
+                color: [
+                    instance.color.r * color_scale,
+                    instance.color.g * color_scale,
+                    instance.color.b * color_scale,
+                    instance.color.a,
+                ],
+                material: scene3d_material_id(instance.material),
+                _pad: [0.0; 3],
+                params: instance.params,
+            };
+            unsafe {
+                write_ring_value(base, uniform_offset, index, uniforms);
+                write_ring_value(base, material_offset, index, material);
             }
-            match (mesh.topology, instance.blend) {
-                (scene3d::MeshTopology::Triangles, scene3d::BlendMode3d::Alpha) => {
-                    &self.pso_scene3d_color_tri
-                }
-                (scene3d::MeshTopology::Triangles, scene3d::BlendMode3d::Additive) => {
-                    &self.pso_scene3d_color_tri_add
-                }
-                _ => {
-                    return Err(api::RenderError::InvalidOperation(
-                        "colored scene3d mesh only supports triangles",
-                    ));
-                }
+
+            let first_instance = index as u32;
+            if batchable
+                && self.scene3d_draws.last().is_some_and(|draw| {
+                    draw.batchable
+                        && draw.mesh == instance.mesh.0
+                        && draw.pipeline == pipeline
+                        && draw.depth == depth
+                        && draw.cull == instance.cull
+                        && draw.first_instance.saturating_add(draw.instance_count)
+                            == first_instance
+                })
+            {
+                let draw = self.scene3d_draws.last_mut().unwrap();
+                draw.instance_count = draw.instance_count.saturating_add(1);
+            } else {
+                self.scene3d_draws.push(Scene3dDraw {
+                    mesh: instance.mesh.0,
+                    first_instance,
+                    instance_count: 1,
+                    pipeline,
+                    depth,
+                    cull: instance.cull,
+                    batchable,
+                });
             }
-        } else if bloom_target {
-            match mesh.topology {
-                scene3d::MeshTopology::Triangles => &self.pso_scene3d_tri_add_bloom,
-                scene3d::MeshTopology::Lines => &self.pso_scene3d_line_add_bloom,
+        }
+        Ok((uniform_offset, material_offset))
+    }
+
+    fn encode_prepared_scene3d_draws(
+        &mut self,
+        enc: &RenderCommandEncoderRef,
+        uniform_offset: usize,
+        material_offset: usize,
+    ) {
+        if self.scene3d_draws.is_empty() {
+            return;
+        }
+        let slot = self.current_frame_slot();
+        enc.set_vertex_buffer(1, Some(self.ub.buffer(slot)), uniform_offset as u64);
+        enc.set_fragment_buffer(0, Some(self.ub.buffer(slot)), material_offset as u64);
+        self.acc_scene3d_instance_buffer_binds =
+            self.acc_scene3d_instance_buffer_binds.saturating_add(2);
+
+        let mut active_pipeline = None;
+        let mut active_depth = None;
+        let mut active_cull = None;
+        let mut active_mesh = None;
+        for index in 0..self.scene3d_draws.len() {
+            let draw = self.scene3d_draws[index];
+            if active_pipeline != Some(draw.pipeline) {
+                let pipeline = match draw.pipeline {
+                    Scene3dPipelineKind::PositionTriAlpha => &self.pso_scene3d_tri,
+                    Scene3dPipelineKind::PositionTriAdditive => &self.pso_scene3d_tri_add,
+                    Scene3dPipelineKind::PositionTriDepth => &self.pso_scene3d_tri_depth,
+                    Scene3dPipelineKind::PositionTriBloom => &self.pso_scene3d_tri_add_bloom,
+                    Scene3dPipelineKind::PositionLineAlpha => &self.pso_scene3d_line,
+                    Scene3dPipelineKind::PositionLineAdditive => &self.pso_scene3d_line_add,
+                    Scene3dPipelineKind::PositionLineDepth => &self.pso_scene3d_line_depth,
+                    Scene3dPipelineKind::PositionLineBloom => &self.pso_scene3d_line_add_bloom,
+                    Scene3dPipelineKind::ColorTriAlpha => &self.pso_scene3d_color_tri,
+                    Scene3dPipelineKind::ColorTriAdditive => &self.pso_scene3d_color_tri_add,
+                    Scene3dPipelineKind::ColorTriDepth => &self.pso_scene3d_color_tri_depth,
+                };
+                enc.set_render_pipeline_state(pipeline);
+                self.acc_scene3d_pipeline_binds =
+                    self.acc_scene3d_pipeline_binds.saturating_add(1);
+                active_pipeline = Some(draw.pipeline);
             }
-        } else {
-            match (mesh.topology, instance.color_write, instance.blend) {
-                (scene3d::MeshTopology::Triangles, true, scene3d::BlendMode3d::Alpha) => {
-                    &self.pso_scene3d_tri
-                }
-                (scene3d::MeshTopology::Triangles, true, scene3d::BlendMode3d::Additive) => {
-                    &self.pso_scene3d_tri_add
-                }
-                (scene3d::MeshTopology::Triangles, false, _) => &self.pso_scene3d_tri_depth,
-                (scene3d::MeshTopology::Lines, true, scene3d::BlendMode3d::Alpha) => {
-                    &self.pso_scene3d_line
-                }
-                (scene3d::MeshTopology::Lines, true, scene3d::BlendMode3d::Additive) => {
-                    &self.pso_scene3d_line_add
-                }
-                (scene3d::MeshTopology::Lines, false, _) => &self.pso_scene3d_line_depth,
+            if active_depth != Some(draw.depth) {
+                let depth = match draw.depth {
+                    Scene3dDepthKind::Disabled => &self.depth_state_3d_disabled,
+                    Scene3dDepthKind::Read => &self.depth_state_3d_read,
+                    Scene3dDepthKind::Write => &self.depth_state_3d_write,
+                    Scene3dDepthKind::WriteNoTest => &self.depth_state_3d_write_no_test,
+                };
+                enc.set_depth_stencil_state(depth);
+                self.acc_scene3d_depth_state_binds =
+                    self.acc_scene3d_depth_state_binds.saturating_add(1);
+                active_depth = Some(draw.depth);
             }
-        };
-        let depth_state = if bloom_target {
-            &self.depth_state_3d_disabled
-        } else {
-            match (instance.depth_test, instance.depth_write) {
-                (false, false) => &self.depth_state_3d_disabled,
-                (true, false) => &self.depth_state_3d_read,
-                (true, true) => &self.depth_state_3d_write,
-                (false, true) => &self.depth_state_3d_write,
+            if active_cull != Some(draw.cull) {
+                enc.set_cull_mode(scene3d_cull_mode(draw.cull));
+                self.acc_scene3d_cull_sets = self.acc_scene3d_cull_sets.saturating_add(1);
+                active_cull = Some(draw.cull);
             }
-        };
-        enc.set_render_pipeline_state(pso);
-        enc.set_depth_stencil_state(depth_state);
-        enc.set_cull_mode(scene3d_cull_mode(instance.cull));
-        enc.set_vertex_buffer(0, Some(&mesh.vb), 0);
-        enc.set_vertex_bytes(
-            1,
-            core::mem::size_of::<Scene3dGpuUniforms>() as u64,
-            (&uniforms as *const Scene3dGpuUniforms).cast(),
-        );
-        enc.set_fragment_bytes(
-            0,
-            core::mem::size_of::<Scene3dGpuMaterial>() as u64,
-            (&material as *const Scene3dGpuMaterial).cast(),
-        );
-        enc.draw_indexed_primitives(
-            scene3d_primitive(mesh.topology),
-            mesh.index_count,
-            MTLIndexType::UInt32,
-            &mesh.ib,
-            0,
-        );
-        self.acc_draws = self.acc_draws.saturating_add(1);
-        Ok(())
+            let Some(mesh) = self.meshes_3d.get(&draw.mesh) else {
+                continue;
+            };
+            if active_mesh != Some(draw.mesh) {
+                enc.set_vertex_buffer(0, Some(&mesh.vb), 0);
+                self.acc_scene3d_mesh_buffer_binds =
+                    self.acc_scene3d_mesh_buffer_binds.saturating_add(1);
+                active_mesh = Some(draw.mesh);
+            }
+            enc.draw_indexed_primitives_instanced_base_instance(
+                scene3d_primitive(mesh.topology),
+                mesh.index_count,
+                MTLIndexType::UInt32,
+                &mesh.ib,
+                0,
+                draw.instance_count as u64,
+                0,
+                draw.first_instance as u64,
+            );
+            self.acc_flat_instanced_draws = self.acc_flat_instanced_draws.saturating_add(1);
+            self.acc_instanced = self.acc_instanced.saturating_add(draw.instance_count);
+            self.acc_scene3d_draws = self.acc_scene3d_draws.saturating_add(1);
+            self.acc_scene3d_instances =
+                self.acc_scene3d_instances.saturating_add(draw.instance_count);
+        }
     }
 }
 
@@ -6250,6 +6472,16 @@ impl api::Renderer for MetalRenderer {
         self.acc_analytic_instance_bytes = 0;
         self.acc_analytic_instance_buffer_binds = 0;
         self.acc_analytic_instance_ring_grows = 0;
+        self.acc_scene3d_draws = 0;
+        self.acc_scene3d_instances = 0;
+        self.acc_scene3d_instance_bytes = 0;
+        self.acc_scene3d_pipeline_binds = 0;
+        self.acc_scene3d_depth_state_binds = 0;
+        self.acc_scene3d_cull_sets = 0;
+        self.acc_scene3d_mesh_buffer_binds = 0;
+        self.acc_scene3d_instance_buffer_binds = 0;
+        self.acc_scene3d_instance_ring_grows = 0;
+        self.acc_scene3d_viewport_sets = 0;
         self.acc_glyph_instance_bytes = 0;
         self.acc_glyph_instance_buffer_binds = 0;
         self.acc_glyph_instances = 0;
@@ -7422,6 +7654,16 @@ impl api::Renderer for MetalRenderer {
             self.acc_analytic_instance_buffer_binds;
         self.last_stats.analytic_instance_ring_grows =
             self.acc_analytic_instance_ring_grows;
+        self.last_stats.scene3d_draws = self.acc_scene3d_draws;
+        self.last_stats.scene3d_instances = self.acc_scene3d_instances;
+        self.last_stats.scene3d_instance_bytes = self.acc_scene3d_instance_bytes;
+        self.last_stats.scene3d_pipeline_binds = self.acc_scene3d_pipeline_binds;
+        self.last_stats.scene3d_depth_state_binds = self.acc_scene3d_depth_state_binds;
+        self.last_stats.scene3d_cull_sets = self.acc_scene3d_cull_sets;
+        self.last_stats.scene3d_mesh_buffer_binds = self.acc_scene3d_mesh_buffer_binds;
+        self.last_stats.scene3d_instance_buffer_binds = self.acc_scene3d_instance_buffer_binds;
+        self.last_stats.scene3d_instance_ring_grows = self.acc_scene3d_instance_ring_grows;
+        self.last_stats.scene3d_viewport_sets = self.acc_scene3d_viewport_sets;
         self.last_stats.glyph_instance_bytes = self.acc_glyph_instance_bytes;
         self.last_stats.glyph_instance_buffer_binds = self.acc_glyph_instance_buffer_binds;
         self.last_stats.glyph_instances = self.acc_glyph_instances;
@@ -10255,6 +10497,7 @@ fn build_scene3d_color_pso(
     lib: &Library,
     fmt: MTLPixelFormat,
     blend: scene3d::BlendMode3d,
+    color_write: bool,
 ) -> Result<RenderPipelineState, MetalInitError> {
     let v = pipeline_function(lib, "scene3d_color.vertex", "v_scene3d_color")?;
     let f = pipeline_function(lib, "scene3d_color.fragment", "f_scene3d_color")?;
@@ -10287,10 +10530,14 @@ fn build_scene3d_color_pso(
             configure_blend(ca, MTLBlendFactor::SourceAlpha, MTLBlendFactor::One);
         }
     }
+    if !color_write {
+        ca.set_write_mask(MTLColorWriteMask::empty());
+    }
 
-    let stage = match blend {
-        scene3d::BlendMode3d::Alpha => "pso.scene3d.color_tri.create",
-        scene3d::BlendMode3d::Additive => "pso.scene3d.color_tri_add.create",
+    let stage = match (blend, color_write) {
+        (_, false) => "pso.scene3d.color_tri_depth.create",
+        (scene3d::BlendMode3d::Alpha, true) => "pso.scene3d.color_tri.create",
+        (scene3d::BlendMode3d::Additive, true) => "pso.scene3d.color_tri_add.create",
     };
     pipeline_state(device, stage, &desc)
 }
@@ -10317,6 +10564,94 @@ fn scene3d_primitive(topology: scene3d::MeshTopology) -> MTLPrimitiveType {
         scene3d::MeshTopology::Triangles => MTLPrimitiveType::Triangle,
         scene3d::MeshTopology::Lines => MTLPrimitiveType::Line,
     }
+}
+
+fn scene3d_draw_configuration(
+    mesh: &Mesh3dGpu,
+    instance: &scene3d::Instance3d,
+    bloom_target: bool,
+) -> Result<(Scene3dPipelineKind, Scene3dDepthKind, bool), api::RenderError> {
+    let pipeline = match (mesh.format, mesh.topology, instance.color_write, instance.blend) {
+        (MeshFormat3d::PositionColor, _, _, _) if bloom_target => {
+            return Err(api::RenderError::InvalidOperation(
+                "colored scene3d mesh bloom target is not supported",
+            ));
+        }
+        (MeshFormat3d::PositionColor, scene3d::MeshTopology::Lines, _, _) => {
+            return Err(api::RenderError::InvalidOperation(
+                "colored scene3d mesh only supports triangles",
+            ));
+        }
+        (MeshFormat3d::PositionColor, scene3d::MeshTopology::Triangles, false, _) => {
+            Scene3dPipelineKind::ColorTriDepth
+        }
+        (
+            MeshFormat3d::PositionColor,
+            scene3d::MeshTopology::Triangles,
+            true,
+            scene3d::BlendMode3d::Alpha,
+        ) => Scene3dPipelineKind::ColorTriAlpha,
+        (
+            MeshFormat3d::PositionColor,
+            scene3d::MeshTopology::Triangles,
+            true,
+            scene3d::BlendMode3d::Additive,
+        ) => Scene3dPipelineKind::ColorTriAdditive,
+        (MeshFormat3d::Position, scene3d::MeshTopology::Triangles, _, _) if bloom_target => {
+            Scene3dPipelineKind::PositionTriBloom
+        }
+        (MeshFormat3d::Position, scene3d::MeshTopology::Lines, _, _) if bloom_target => {
+            Scene3dPipelineKind::PositionLineBloom
+        }
+        (MeshFormat3d::Position, scene3d::MeshTopology::Triangles, false, _) => {
+            Scene3dPipelineKind::PositionTriDepth
+        }
+        (
+            MeshFormat3d::Position,
+            scene3d::MeshTopology::Triangles,
+            true,
+            scene3d::BlendMode3d::Alpha,
+        ) => Scene3dPipelineKind::PositionTriAlpha,
+        (
+            MeshFormat3d::Position,
+            scene3d::MeshTopology::Triangles,
+            true,
+            scene3d::BlendMode3d::Additive,
+        ) => Scene3dPipelineKind::PositionTriAdditive,
+        (MeshFormat3d::Position, scene3d::MeshTopology::Lines, false, _) => {
+            Scene3dPipelineKind::PositionLineDepth
+        }
+        (
+            MeshFormat3d::Position,
+            scene3d::MeshTopology::Lines,
+            true,
+            scene3d::BlendMode3d::Alpha,
+        ) => Scene3dPipelineKind::PositionLineAlpha,
+        (
+            MeshFormat3d::Position,
+            scene3d::MeshTopology::Lines,
+            true,
+            scene3d::BlendMode3d::Additive,
+        ) => Scene3dPipelineKind::PositionLineAdditive,
+    };
+    let depth = if bloom_target {
+        Scene3dDepthKind::Disabled
+    } else {
+        match (instance.depth_test, instance.depth_write) {
+            (false, false) => Scene3dDepthKind::Disabled,
+            (true, false) => Scene3dDepthKind::Read,
+            (true, true) => Scene3dDepthKind::Write,
+            (false, true) => Scene3dDepthKind::WriteNoTest,
+        }
+    };
+    let batchable = !bloom_target
+        && mesh.opaque
+        && instance.color.a >= 1.0
+        && instance.color_write
+        && instance.blend == scene3d::BlendMode3d::Alpha
+        && instance.depth_test
+        && instance.depth_write;
+    Ok((pipeline, depth, batchable))
 }
 
 fn scene3d_cull_mode(cull: scene3d::CullMode3d) -> MTLCullMode {
@@ -10590,6 +10925,16 @@ pub struct PerfStats {
     pub analytic_instance_bytes: u64,
     pub analytic_instance_buffer_binds: u32,
     pub analytic_instance_ring_grows: u32,
+    pub scene3d_draws: u32,
+    pub scene3d_instances: u32,
+    pub scene3d_instance_bytes: u64,
+    pub scene3d_pipeline_binds: u32,
+    pub scene3d_depth_state_binds: u32,
+    pub scene3d_cull_sets: u32,
+    pub scene3d_mesh_buffer_binds: u32,
+    pub scene3d_instance_buffer_binds: u32,
+    pub scene3d_instance_ring_grows: u32,
+    pub scene3d_viewport_sets: u32,
     pub effect_graph_effects: u32,
     pub effect_graph_captures: u32,
     pub effect_graph_pyramids: u32,
@@ -11116,6 +11461,10 @@ impl MetalRenderer {
             .saturating_add(
                 (self.effect_fbuf.capacity() as u64)
                     .saturating_mul(core::mem::size_of::<f32>() as u64),
+            )
+            .saturating_add(
+                (self.scene3d_draws.capacity() as u64)
+                    .saturating_mul(core::mem::size_of::<Scene3dDraw>() as u64),
             );
         PerfMemoryStats {
             logical_total_bytes,

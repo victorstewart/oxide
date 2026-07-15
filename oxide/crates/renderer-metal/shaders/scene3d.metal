@@ -29,32 +29,37 @@ struct Scene3dRaster
 {
    float4 position [[position]];
    float3 local_position;
+   uint instance_id [[flat]];
 };
 
 struct Scene3dColorRaster
 {
    float4 position [[position]];
    float4 color;
+   uint instance_id [[flat]];
 };
 
-vertex Scene3dRaster v_scene3d(Scene3dVertex in_vertex [[stage_in]], constant Scene3dUniforms &uniforms [[buffer(1)]])
+vertex Scene3dRaster v_scene3d(Scene3dVertex in_vertex [[stage_in]], uint instance_id [[instance_id]], device const Scene3dUniforms *uniforms [[buffer(1)]])
 {
    Scene3dRaster raster;
-   raster.position = uniforms.mvp * float4(in_vertex.position, 1.0);
+   raster.position = uniforms[instance_id].mvp * float4(in_vertex.position, 1.0);
    raster.local_position = in_vertex.position;
+   raster.instance_id = instance_id;
    return raster;
 }
 
-vertex Scene3dColorRaster v_scene3d_color(Scene3dColorVertex in_vertex [[stage_in]], constant Scene3dUniforms &uniforms [[buffer(1)]])
+vertex Scene3dColorRaster v_scene3d_color(Scene3dColorVertex in_vertex [[stage_in]], uint instance_id [[instance_id]], device const Scene3dUniforms *uniforms [[buffer(1)]])
 {
    Scene3dColorRaster raster;
-   raster.position = uniforms.mvp * float4(in_vertex.position, 1.0);
+   raster.position = uniforms[instance_id].mvp * float4(in_vertex.position, 1.0);
    raster.color = in_vertex.color;
+   raster.instance_id = instance_id;
    return raster;
 }
 
-fragment float4 f_scene3d(Scene3dRaster raster [[stage_in]], constant Scene3dMaterial &mat [[buffer(0)]])
+fragment float4 f_scene3d(Scene3dRaster raster [[stage_in]], device const Scene3dMaterial *materials [[buffer(0)]])
 {
+   device const Scene3dMaterial &mat = materials[raster.instance_id];
    float4 c = mat.color;
    if (mat.material == 1) {
       float radius = max(mat.params.x, 0.001);
@@ -78,8 +83,9 @@ fragment float4 f_scene3d(Scene3dRaster raster [[stage_in]], constant Scene3dMat
    return c;
 }
 
-fragment float4 f_scene3d_color(Scene3dColorRaster raster [[stage_in]], constant Scene3dMaterial &mat [[buffer(0)]])
+fragment float4 f_scene3d_color(Scene3dColorRaster raster [[stage_in]], device const Scene3dMaterial *materials [[buffer(0)]])
 {
+   device const Scene3dMaterial &mat = materials[raster.instance_id];
    float4 c = raster.color;
    c.rgb *= mat.color.rgb;
    c.a *= mat.color.a;

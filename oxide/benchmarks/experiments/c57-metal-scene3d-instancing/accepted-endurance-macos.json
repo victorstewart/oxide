@@ -1,0 +1,262 @@
+{
+  "version": 1,
+  "suite": "full",
+  "generated_label": null,
+  "cases": [
+    {
+      "id": "gpu.architecture.scene3d.create_release_endurance",
+      "family": "architecture",
+      "layer": "engine",
+      "scenario": "rendering-architecture",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "ms/120 cycles",
+      "gated": true,
+      "threshold_pct": 0.2,
+      "median": 1.151354,
+      "p95": 1.30664115,
+      "p99": 1.33378564,
+      "min": 1.13825,
+      "max": 1.3370000000000002,
+      "mean": 1.1713290666666671,
+      "samples": 30,
+      "ops_per_sample": 480,
+      "notes": [
+        "Metal Scene3D repeated two-mesh release/create endurance with live GPU bytes checked after churn."
+      ],
+      "metrics": {
+        "create_release_ms_p50": 1.151354,
+        "create_release_ms_p95": 1.30664115,
+        "create_release_ms_p99": 1.33378564,
+        "create_release_ms_peak": 1.3370000000000002,
+        "cycles_per_sample": 120.0,
+        "live_mesh_buffer_bytes_after_endurance": 96.0,
+        "release_create_operations": 14400.0,
+        "samples": 30.0
+      }
+    }
+  ],
+  "coverage": {
+    "components_total": 9,
+    "components_covered": [],
+    "animations_total": 7,
+    "animations_covered": [],
+    "launch_total": 5,
+    "launch_covered": [],
+    "primitive_lifecycle_total": 25,
+    "primitive_lifecycle_covered": [],
+    "scenes_cpu_total": 17,
+    "scenes_cpu_covered": [],
+    "scenes_gpu_total": 17,
+    "scenes_gpu_covered": [],
+    "journeys_total": 8,
+    "journeys_covered": [],
+    "authoring_total": 20,
+    "authoring_covered": [],
+    "layout_total": 10,
+    "layout_covered": [],
+    "text_input_total": 8,
+    "text_input_covered": [],
+    "image_pipeline_total": 3,
+    "image_pipeline_covered": [],
+    "navigation_total": 3,
+    "navigation_covered": [],
+    "reconcile_total": 4,
+    "reconcile_covered": [],
+    "endurance_total": 3,
+    "endurance_covered": [],
+    "stress_total": 3,
+    "stress_covered": [],
+    "bridges_total": 9,
+    "bridges_covered": []
+  },
+  "contract": {
+    "layers": [
+      {
+        "id": "engine",
+        "label": "Engine Microbenchmarks",
+        "status": "partial",
+        "notes": [
+          "Engine coverage currently spans system hot paths, primitive views, animations, primitive lifecycle slices, and author-facing APIs."
+        ]
+      },
+      {
+        "id": "flow",
+        "label": "Representative Screen Flows",
+        "status": "partial",
+        "notes": [
+          "Flow coverage now spans offscreen launch/lifecycle, router scenes, explicit CPU user journeys, and a macOS Metal collection-navigation journey frame-pacing row, but physical-device refresh-mode batteries remain incomplete."
+        ]
+      },
+      {
+        "id": "os-bridge",
+        "label": "OS-Bridge Benchmarks",
+        "status": "missing",
+        "notes": [
+          "Bridge coverage currently measures only app-owned wrapper overhead, not system-owned surface cost as a renderer win."
+        ]
+      }
+    ],
+    "battery": [
+      {
+        "id": "launch-lifecycle",
+        "label": "Launch & Lifecycle",
+        "status": "partial",
+        "notes": [
+          "No dedicated cold launch, warm resume, deep-link launch, or foreground-after-background battery is wired into oxide-perf-runner yet."
+        ]
+      },
+      {
+        "id": "primitive-lifecycle",
+        "label": "Primitive Mount / Update / Destroy",
+        "status": "partial",
+        "notes": [
+          "Flat rects, labels, cards, and images cover mount plus mutate, but the empty-root, shared control-set, and retained-tree remove-all/remount slices are still incomplete."
+        ]
+      },
+      {
+        "id": "layout-invalidation",
+        "label": "Layout & Invalidation",
+        "status": "partial",
+        "notes": [
+          "Dedicated relayout batteries now exist, but not every required flat/deep/grid invalidation slice is present yet."
+        ]
+      },
+      {
+        "id": "text-input",
+        "label": "Text & Text Input",
+        "status": "partial",
+        "notes": [
+          "Text fields, wrapped labels, and the input-form journey are covered, but the full large-editor, IME composition, atlas eviction, and dirty-rect upload battery is still incomplete."
+        ]
+      },
+      {
+        "id": "image-pipeline",
+        "label": "Image Pipeline",
+        "status": "partial",
+        "notes": [
+          "Image view and zoom workloads exist, but decode, upload, and first-visible phases are not yet split into separate benchmark metrics."
+        ]
+      },
+      {
+        "id": "lists-grids-chat",
+        "label": "Lists, Grids, & Chat",
+        "status": "partial",
+        "notes": [
+          "Collection encode and collection-navigation journey coverage exist, but the full feed/grid/chat scroll matrices are still incomplete."
+        ]
+      },
+      {
+        "id": "navigation-input",
+        "label": "Navigation & Input Latency",
+        "status": "partial",
+        "notes": [
+          "Navigation, orchestration, and zoom journeys exist, but direct event-to-first-response latency batteries are still missing."
+        ]
+      },
+      {
+        "id": "animation-effects",
+        "label": "Animation & Visual Effects",
+        "status": "missing",
+        "notes": [
+          "Representative animations exist, but the dedicated hitch-ratio and refresh-mode matrix is absent."
+        ]
+      },
+      {
+        "id": "state-reconcile",
+        "label": "State Mutation & Reconciliation",
+        "status": "partial",
+        "notes": [
+          "Primitive mutations and surface-router composition exist, but there is no dedicated diff/apply battery for 1 percent, 10 percent, or full-theme tree mutation yet."
+        ]
+      },
+      {
+        "id": "os-bridge",
+        "label": "OS Bridge Overhead",
+        "status": "partial",
+        "notes": [
+          "Permission, location, and Bluetooth wrappers are covered, but photo import, file import, share sheet, and transport/decode/render bridge batteries remain missing."
+        ]
+      },
+      {
+        "id": "endurance-thermal",
+        "label": "Endurance, Memory, & Thermal Drift",
+        "status": "partial",
+        "notes": [
+          "There is still not a complete long-run open/close, tab-switch, and idle-animation endurance battery in the current Oxide suite."
+        ]
+      },
+      {
+        "id": "stress-pathological",
+        "label": "Stress & Pathological Regressions",
+        "status": "partial",
+        "notes": [
+          "The router stress scene exists, but the explicit 10k-node, 300-animation, and 100 Hz ticker traps are still incomplete."
+        ]
+      }
+    ],
+    "notes": [
+      "The Oxide report is intentionally explicit about missing contract families so the battery does not over-claim comprehensiveness.",
+      "Current Oxide coverage now spans engine hot paths, launch/lifecycle, representative scenes, and bridge slices; the biggest remaining gaps are hitch-oriented flow metrics and real-device refresh-mode coverage."
+    ]
+  },
+  "findings": [
+    {
+      "status": "fixed",
+      "summary": "DrawListBuilder::clear now clears retained vertex and index storage, eliminating stale geometry accumulation when builders are reused across frames."
+    },
+    {
+      "status": "fixed",
+      "summary": "ui-core::prepare_draws now keeps cumulative clip intersections on the stack instead of rebuilding the full stack on every ClipPop."
+    },
+    {
+      "status": "fixed",
+      "summary": "ui-core::coalesce_adjacent_draws now uses a single linear compaction pass instead of Vec::remove-based quadratic merging."
+    },
+    {
+      "status": "fixed",
+      "summary": "oxide-input::TouchSurfaceRecognizer now keeps common active touches inline and derives the active one/two-touch frame with a deterministic scan instead of hashing, allocating, and sorting on every raw touch event."
+    },
+    {
+      "status": "fixed",
+      "summary": "oxide-input::GestureRecognizer now keeps common active tracks inline and writes event-only and feedback outputs through monomorphized sinks, removing hashing and the second vector path from common touch handling."
+    },
+    {
+      "status": "fixed",
+      "summary": "oxide-timing timers now use atomic id generation and drain due callbacks before execution, reducing scheduler overhead while avoiding callback execution under the timer map lock."
+    },
+    {
+      "status": "fixed",
+      "summary": "oxide-timing animation start now uses atomic reduce-motion state and a consistent RUNNING_PROP-to-ANIMS lock order, reducing property-animation replacement overhead."
+    },
+    {
+      "status": "fixed",
+      "summary": "oxide-ui-core label encoding now avoids non-wrapped internal label clones, skips disabled diagnostic string formatting on the hot path, and preallocates the common wrapped-line buffers."
+    },
+    {
+      "status": "fixed",
+      "summary": "oxide-ui-core ASCII wrapped labels now shape once for break decisions on cache misses; the slower legacy wrapped-label audit row was retired after same-workload A/B proof."
+    },
+    {
+      "status": "fixed",
+      "summary": "CollectionView variable measurement caches are now bounded and prune cold key/constraint/revision entries under large churn while preserving prefix-repair A/B coverage."
+    },
+    {
+      "status": "fixed",
+      "summary": "renderer-metal now batches consecutive rounded rectangles through the instanced shader path, reducing per-rect command encoding and parameter binding."
+    },
+    {
+      "status": "fixed",
+      "summary": "renderer-metal now reuses retained scratch buffers across the remaining small batch encode paths instead of allocating per-frame vectors for each batch group."
+    },
+    {
+      "status": "fixed",
+      "summary": "renderer-metal damage prefiltering now borrows source geometry backing storage, preserving small-damage culling without cloning full vertex and index arrays."
+    },
+    {
+      "status": "candidate",
+      "summary": "The macOS glyph indirect-command-buffer path is now default-disabled because Metal validation exposed CPU access to private ICB storage and an invalid ICB pipeline configuration; restoring it with a truly valid text ICB path remains a high-value GPU follow-up."
+    }
+  ]
+}

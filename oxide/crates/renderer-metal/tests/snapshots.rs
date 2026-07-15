@@ -1892,6 +1892,88 @@ fn snapshot_scene3d_mixes_with_2d_overlay() {
     );
 }
 
+#[test]
+fn scene3d_instances_batch_only_opaque_order_safe_runs()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(128, 128, 1.0).expect("resize");
+   let vertices = [
+      Vertex3d { position: [-0.7, -0.6, 0.0] },
+      Vertex3d { position: [0.7, -0.6, 0.0] },
+      Vertex3d { position: [0.0, 0.7, 0.0] },
+   ];
+   let indices = [0_u32, 1, 2];
+   let mesh = renderer
+      .mesh3d_create(&Mesh3dData {
+         vertices: &vertices,
+         indices: &indices,
+         topology: scene3d::MeshTopology::Triangles,
+      })
+      .expect("create proof mesh");
+   let opaque = (0..96)
+      .map(|_| Instance3d::new(mesh, mat4_identity(), api::Color::rgba(0.2, 0.7, 1.0, 1.0)))
+      .collect::<Vec<_>>();
+   let opaque_pass = Pass3d {
+      viewport: Some(api::RectF::new(0.0, 0.0, 96.0, 96.0)),
+      clear_color: Some(api::Color::rgba(0.02, 0.02, 0.04, 1.0)),
+      clear_depth: true,
+      view_proj: mat4_identity(),
+      instances: &opaque,
+      bloom: None,
+   };
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_scene3d(&opaque_pass).expect("encode opaque instances");
+   renderer.submit(token).expect("submit opaque instances");
+   let opaque_stats = renderer.last_stats();
+   assert_eq!(opaque_stats.scene3d_draws, 1, "opaque instances did not batch: {opaque_stats:?}");
+   assert_eq!(opaque_stats.scene3d_instances, 96);
+   assert_eq!(opaque_stats.scene3d_instance_bytes, 96 * 112);
+   assert_eq!(opaque_stats.scene3d_pipeline_binds, 1);
+   assert_eq!(opaque_stats.scene3d_depth_state_binds, 1);
+   assert_eq!(opaque_stats.scene3d_cull_sets, 1);
+   assert_eq!(opaque_stats.scene3d_mesh_buffer_binds, 1);
+   assert_eq!(opaque_stats.scene3d_instance_buffer_binds, 2);
+   assert_eq!(opaque_stats.scene3d_viewport_sets, 1);
+
+   let mut transparent = opaque.clone();
+   for instance in &mut transparent
+   {
+      instance.color.a = 0.5;
+      instance.depth_write = false;
+   }
+   let transparent_pass = Pass3d { instances: &transparent, viewport: None, ..opaque_pass };
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer
+      .encode_scene3d(&transparent_pass)
+      .expect("encode transparent instances");
+   renderer.submit(token).expect("submit transparent instances");
+   let transparent_stats = renderer.last_stats();
+   assert_eq!(
+      transparent_stats.scene3d_draws,
+      96,
+      "transparent order was collapsed: {transparent_stats:?}",
+   );
+   assert_eq!(transparent_stats.scene3d_instances, 96);
+   assert_eq!(transparent_stats.scene3d_instance_buffer_binds, 2);
+
+   let mut additive = opaque.clone();
+   for instance in &mut additive
+   {
+      instance.blend = scene3d::BlendMode3d::Additive;
+   }
+   let additive_pass = Pass3d { instances: &additive, viewport: None, ..opaque_pass };
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_scene3d(&additive_pass).expect("encode additive instances");
+   renderer.submit(token).expect("submit additive instances");
+   let additive_stats = renderer.last_stats();
+   assert_eq!(
+      additive_stats.scene3d_draws,
+      96,
+      "additive order was collapsed: {additive_stats:?}",
+   );
+   assert_eq!(additive_stats.scene3d_instances, 96);
+}
+
 fn render_camera_preview(mode: CameraRenderMode) -> Vec<u8> {
     let mut renderer = MetalRenderer::new_default().expect("metal");
     let width = 128u32;

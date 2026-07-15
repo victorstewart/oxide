@@ -13,7 +13,7 @@ fn field_offset<T, F>(base: &T, field: &F) -> usize {
 }
 
 #[test]
-fn scene3d_material_shader_matches_cpu_set_bytes_layout() {
+fn scene3d_instance_arrays_match_cpu_ring_layout() {
     let cpu =
         Scene3dMaterialCpuLayout { color: [0.0; 4], material: 0, _pad: [0.0; 3], params: [0.0; 4] };
 
@@ -25,15 +25,37 @@ fn scene3d_material_shader_matches_cpu_set_bytes_layout() {
     let shader_lines = shader.lines().map(str::trim).collect::<Vec<_>>();
     assert!(shader_lines.contains(&"packed_float3 _pad;"));
     assert!(!shader_lines.contains(&"float3 _pad;"));
+    assert!(shader.contains("uint instance_id [[instance_id]]"));
+    assert!(shader.contains("device const Scene3dUniforms *uniforms [[buffer(1)]]"));
+    assert!(shader.contains("device const Scene3dMaterial *materials [[buffer(0)]]"));
+    assert!(shader.contains("materials[raster.instance_id]"));
 }
 
 #[test]
 fn scene3d_bloom_payload_reaches_bloom_encoder() {
     let renderer_source = include_str!("../src/lib.rs");
 
-    assert!(renderer_source
-        .contains("self.encode_scene3d_bloom(&cmd, &target_tex, pass.view_proj, bloom)?;"));
+    assert!(renderer_source.contains(
+        "self.encode_scene3d_bloom(&cmd, &target_tex, &mut pf, pass.view_proj, bloom)"
+    ));
+    assert!(renderer_source.contains("self.encode_prepared_scene3d_draws("));
     assert!(!renderer_source.contains("bloom.layers.iter().map(|layer| layer.strength"));
+}
+
+#[test]
+fn scene3d_draws_use_compact_instance_rings_and_order_safe_runs() {
+    let renderer_source = include_str!("../src/lib.rs");
+
+    assert!(renderer_source.contains(
+        "analytic_instance_pair_layout::<Scene3dGpuUniforms, Scene3dGpuMaterial>"
+    ));
+    assert!(renderer_source.contains("draw_indexed_primitives_instanced_base_instance"));
+    assert!(renderer_source.contains("draw.batchable"));
+    assert!(renderer_source.contains("instance.blend == scene3d::BlendMode3d::Alpha"));
+    assert!(renderer_source.contains("instance.color.a >= 1.0"));
+    assert!(!renderer_source.contains("fn encode_scene3d_instance("));
+    assert!(!renderer_source.contains("set_vertex_bytes(\n            1,"));
+    assert!(!renderer_source.contains("set_fragment_bytes(\n            0,"));
 }
 
 #[test]
