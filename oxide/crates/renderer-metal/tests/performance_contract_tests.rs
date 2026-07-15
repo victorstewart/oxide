@@ -751,7 +751,7 @@ fn effect_targets_follow_the_declared_pass_plan_and_purge()
 
    let direct = render(None);
    assert_eq!(direct.effect_target_presence_for_snapshot(), [false; 8]);
-   assert_eq!(direct.last_stats().resource_creates, 0);
+   assert_eq!(direct.last_stats().resource_creates, 1);
    assert_eq!(direct.last_stats().memory.effect_targets_bytes, 0);
    assert_eq!(direct.last_stats().memory.bloom_targets_bytes, 0);
 
@@ -765,7 +765,7 @@ fn effect_targets_follow_the_declared_pass_plan_and_purge()
       zero.effect_target_presence_for_snapshot(),
       [true, false, false, false, false, false, false, false],
    );
-   assert_eq!(zero.last_stats().resource_creates, 1);
+   assert_eq!(zero.last_stats().resource_creates, 2);
    assert!(zero.last_stats().memory.effect_prepass_bytes > 0);
    assert_eq!(zero.last_stats().memory.effect_blur_chain_bytes, 0);
 
@@ -781,9 +781,29 @@ fn effect_targets_follow_the_declared_pass_plan_and_purge()
       quarter.effect_target_presence_for_snapshot(),
       [true, true, true, true, false, false, false, false],
    );
-   assert_eq!(quarter.last_stats().resource_creates, 4);
+   assert_eq!(quarter.last_stats().resource_creates, 5);
    assert!(quarter.last_stats().memory.effect_blur_chain_bytes > 0);
+   assert_eq!(quarter.last_stats().blur_kernel_paired_passes, 2);
+   assert_eq!(quarter.last_stats().blur_kernel_exact_passes, 0);
+   assert_eq!(quarter.last_stats().blur_kernel_source_samples, 110);
+   assert_eq!(quarter.last_stats().blur_kernel_encoded_samples, 58);
+   assert_eq!(quarter.last_stats().blur_kernel_runtime_exp_taps, 0);
+   assert!(quarter.last_stats().blur_kernel_table_bytes >= 112);
+   let blur_kernel_table_bytes = quarter.last_stats().blur_kernel_table_bytes;
    let quarter_bytes = quarter.last_stats().memory.effect_targets_bytes;
+
+   let narrow = render(Some(api::DrawCmd::Backdrop {
+      rect: api::RectF::new(200.0, 160.0, 800.0, 480.0),
+      sigma: 8.0,
+      tint: api::Color::rgba(0.2, 0.2, 0.2, 0.3),
+      alpha: 1.0,
+   }));
+   assert_eq!(narrow.last_stats().blur_kernel_paired_passes, 2);
+   assert_eq!(narrow.last_stats().blur_kernel_exact_passes, 0);
+   assert_eq!(narrow.last_stats().blur_kernel_source_samples, 26);
+   assert_eq!(narrow.last_stats().blur_kernel_encoded_samples, 14);
+   assert_eq!(narrow.last_stats().blur_kernel_runtime_exp_taps, 0);
+   assert!(narrow.last_stats().blur_kernel_table_bytes >= blur_kernel_table_bytes);
 
    let mut warm = api::DrawList::default();
    warm.items.push(api::DrawCmd::RRect {
@@ -808,7 +828,7 @@ fn effect_targets_follow_the_declared_pass_plan_and_purge()
       eighth.effect_target_presence_for_snapshot(),
       [true, true, true, false, true, true, false, false],
    );
-   assert_eq!(eighth.last_stats().resource_creates, 5);
+   assert_eq!(eighth.last_stats().resource_creates, 6);
    assert!(eighth.last_stats().memory.effect_targets_bytes < quarter_bytes);
 
    let mut high = api::DrawList::default();

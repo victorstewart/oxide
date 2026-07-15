@@ -885,6 +885,7 @@ pub struct MetalRenderer {
     pso_image_mesh: RenderPipelineState,
     pso_layer_image_mesh: RenderPipelineState,
     pso_blur: RenderPipelineState,
+    pso_blur_paired: RenderPipelineState,
     pso_downsample: RenderPipelineState,
     pso_upsample: RenderPipelineState,
     pso_backdrop: RenderPipelineState,
@@ -918,6 +919,7 @@ pub struct MetalRenderer {
     pso_scene3d_line_add: RenderPipelineState,
     pso_scene3d_line_add_bloom: RenderPipelineState,
     pso_bloom_blur: RenderPipelineState,
+    pso_bloom_blur_paired: RenderPipelineState,
     pso_bloom_composite: RenderPipelineState,
     pso_id_mask_raster: RenderPipelineState,
     pso_id_mask_field_seed: RenderPipelineState,
@@ -947,6 +949,8 @@ pub struct MetalRenderer {
     effect_graph_events: alloc::vec::Vec<api::EffectGraphEvent>,
     effect_graph_plan: api::EffectGraphPlan,
     effect_graph_key: u64,
+    #[cfg(feature = "snapshot-tests")]
+    force_exact_blur_for_snapshot: bool,
     sampler: Option<SamplerState>,
     color_format: MTLPixelFormat,
     config: MetalRendererConfig,
@@ -1571,6 +1575,7 @@ impl MetalRenderer {
                     pso_camera.to_owned(),
                     pso_camera.to_owned(),
                     pso_camera.to_owned(),
+                    pso_camera.to_owned(),
                     pso_camera,
                     pso_camera_legacy,
                     pso_camera_preview_fast_full,
@@ -1590,7 +1595,18 @@ impl MetalRenderer {
             let pso_image_mesh = build_init_stage("pso.image_mesh", || {
                 build_image_mesh_pso(&device, &library, fmt, sample_count, false)
             })?;
-            let pso_blur = build_init_stage("pso.blur", || build_blur_pso(&device, &library, fmt))?;
+            let pso_blur = build_init_stage("pso.blur", || {
+                build_blur_pso(&device, &library, fmt, "f_blur", "pso.blur.create")
+            })?;
+            let pso_blur_paired = build_init_stage("pso.blur_paired", || {
+                build_blur_pso(
+                    &device,
+                    &library,
+                    fmt,
+                    "f_blur_paired",
+                    "pso.blur_paired.create",
+                )
+            })?;
             let pso_downsample = build_init_stage("pso.downsample", || {
                 build_downsample_pso(&device, &library, fmt)
             })?;
@@ -1622,6 +1638,7 @@ impl MetalRenderer {
                 pso_image_single,
                 pso_image_mesh,
                 pso_blur,
+                pso_blur_paired,
                 pso_downsample,
                 pso_upsample,
                 pso_backdrop,
@@ -1645,6 +1662,7 @@ impl MetalRenderer {
             pso_image_single,
             pso_image_mesh,
             pso_blur,
+            pso_blur_paired,
             pso_downsample,
             pso_upsample,
             pso_backdrop,
@@ -1843,8 +1861,27 @@ impl MetalRenderer {
             )
         })?;
         let pso_bloom_blur = build_init_stage("pso.bloom.blur", || {
-            build_blur_pso(&device, &library, MTLPixelFormat::RGBA16Float)
+            build_blur_pso(
+                &device,
+                &library,
+                MTLPixelFormat::RGBA16Float,
+                "f_blur",
+                "pso.bloom.blur.create",
+            )
         })?;
+        let pso_bloom_blur_paired = if direct_preview_only {
+            pso_bloom_blur.to_owned()
+        } else {
+            build_init_stage("pso.bloom.blur_paired", || {
+                build_blur_pso(
+                    &device,
+                    &library,
+                    MTLPixelFormat::RGBA16Float,
+                    "f_blur_paired",
+                    "pso.bloom.blur_paired.create",
+                )
+            })?
+        };
         let pso_bloom_composite = build_init_stage("pso.bloom.composite", || {
             build_bloom_composite_pso(&device, &library, color_format)
         })?;
@@ -2064,6 +2101,7 @@ impl MetalRenderer {
             pso_image_mesh,
             pso_layer_image_mesh,
             pso_blur,
+            pso_blur_paired,
             pso_downsample,
             pso_upsample,
             pso_backdrop,
@@ -2097,6 +2135,7 @@ impl MetalRenderer {
             pso_scene3d_line_add,
             pso_scene3d_line_add_bloom,
             pso_bloom_blur,
+            pso_bloom_blur_paired,
             pso_bloom_composite,
             pso_id_mask_raster,
             pso_id_mask_field_seed,
@@ -2125,6 +2164,8 @@ impl MetalRenderer {
             effect_graph_events: alloc::vec::Vec::new(),
             effect_graph_plan: api::EffectGraphPlan::default(),
             effect_graph_key: 0,
+            #[cfg(feature = "snapshot-tests")]
+            force_exact_blur_for_snapshot: false,
             sampler,
             color_format,
             config: applied_config,
@@ -4108,6 +4149,23 @@ impl MetalRenderer {
         self.frame_present_direct_to_drawable
     }
 
+    #[cfg(feature = "snapshot-tests")]
+    pub fn set_force_exact_blur_for_snapshot(&mut self, force_exact: bool)
+    {
+        self.force_exact_blur_for_snapshot = force_exact;
+    }
+
+    #[inline(always)]
+    fn paired_blur_allowed(&self) -> bool
+    {
+        #[cfg(feature = "snapshot-tests")]
+        {
+            return !self.force_exact_blur_for_snapshot;
+        }
+        #[cfg(not(feature = "snapshot-tests"))]
+        true
+    }
+
     pub fn cancel_present_drawable(&mut self) -> *mut core::ffi::c_void {
         let drawable = self.pending_present_drawable as *mut core::ffi::c_void;
         self.pending_present_drawable = 0;
@@ -5150,16 +5208,18 @@ impl MetalRenderer {
         ca.set_store_action(MTLStoreAction::Store);
         self.acc_render_passes = self.acc_render_passes.saturating_add(1);
         let enc = cmd.new_render_command_encoder(&rpd);
-        enc.set_render_pipeline_state(&self.pso_bloom_blur);
         if let Some(sam) = &self.sampler {
             enc.set_fragment_sampler_state(0, Some(sam));
         }
         enc.set_fragment_texture(0, Some(src));
-        enc.set_fragment_bytes(
-            1,
-            core::mem::size_of_val(&params) as u64,
-            params.as_ptr() as *const _,
+        let kernel = bind_blur_kernel(
+            &enc,
+            params,
+            self.paired_blur_allowed(),
+            &self.pso_bloom_blur,
+            &self.pso_bloom_blur_paired,
         );
+        record_blur_kernel_use(&mut self.last_stats, kernel);
         enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
         enc.end_encoding();
         self.acc_draws = self.acc_draws.saturating_add(1);
@@ -5302,6 +5362,172 @@ impl MetalRenderer {
 // intersects the provided dp scissor. Vertices/indices stay borrowed from the
 // source DrawList, so command spans remain valid.
 const DARK_POPUP_MAX_BLUR_SIGMA_DP: f32 = 72.0;
+// Subthreshold and noncanonical kernels retain the exact shader. Canonical
+// kernels use the paired path only when sigma and ceil(3*sigma) match a table
+// bucket exactly; the snapshot sweep bounds resulting quantization to 1/255.
+const BLUR_KERNEL_BUCKETS_PER_SIGMA: f32 = 16.0;
+const BLUR_KERNEL_MAX_SIGMA: f32 = 64.0;
+const BLUR_KERNEL_MIN_PAIRED_SIGMA: f32 = 2.0;
+const BLUR_KERNEL_MAX_RADIUS: u32 = 192;
+const BLUR_KERNEL_BUCKET_COUNT: usize =
+    (BLUR_KERNEL_MAX_SIGMA * BLUR_KERNEL_BUCKETS_PER_SIGMA) as usize;
+static BLUR_KERNEL_DYNAMIC_BYTES: AtomicU64 = AtomicU64::new(0);
+
+struct BlurKernelEntry {
+    radius: u32,
+    horizontal: alloc::vec::Vec<f32>,
+    vertical: alloc::vec::Vec<f32>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct BlurKernelUse {
+    paired: bool,
+    source_samples: u32,
+    encoded_samples: u32,
+    runtime_exp_taps: u32,
+    table_bytes: u64,
+}
+
+fn effective_blur_radius(radius: f32) -> u32 {
+    if radius.is_finite() {
+        radius.round().clamp(2.0, BLUR_KERNEL_MAX_RADIUS as f32) as u32
+    } else {
+        2
+    }
+}
+
+fn build_blur_kernel(bucket: usize) -> BlurKernelEntry {
+    let sigma = bucket as f32 / BLUR_KERNEL_BUCKETS_PER_SIGMA;
+    let radius = effective_blur_radius((sigma * 3.0).ceil());
+    let mut norm = 1.0f32;
+    for tap in 1..=radius {
+        let x = tap as f32 / sigma;
+        norm += 2.0 * (-0.5 * x * x).exp();
+    }
+    let pair_count = radius.div_ceil(2) as usize;
+    let mut horizontal = alloc::vec::Vec::with_capacity(6 + pair_count * 2);
+    horizontal.extend_from_slice(&[1.0, 0.0, sigma, radius as f32, 1.0 / norm, pair_count as f32]);
+    let mut tap = 1;
+    while tap <= radius {
+        let x0 = tap as f32 / sigma;
+        let weight0 = (-0.5 * x0 * x0).exp();
+        let weight1 = if tap < radius {
+            let x1 = (tap + 1) as f32 / sigma;
+            (-0.5 * x1 * x1).exp()
+        } else {
+            0.0
+        };
+        let weight = weight0 + weight1;
+        horizontal.extend_from_slice(&[tap as f32 + weight1 / weight, weight / norm]);
+        tap += 2;
+    }
+    let mut vertical = horizontal.clone();
+    vertical[0] = 0.0;
+    vertical[1] = 1.0;
+    BLUR_KERNEL_DYNAMIC_BYTES.fetch_add(
+        ((horizontal.capacity() + vertical.capacity()) * core::mem::size_of::<f32>()) as u64,
+        Ordering::Relaxed,
+    );
+    BlurKernelEntry { radius, horizontal, vertical }
+}
+
+fn blur_kernel_table_bytes() -> u64 {
+    let dynamic = BLUR_KERNEL_DYNAMIC_BYTES.load(Ordering::Relaxed);
+    if dynamic == 0 {
+        return 0;
+    }
+    core::mem::size_of::<[OnceLock<BlurKernelEntry>; BLUR_KERNEL_BUCKET_COUNT + 1]>() as u64
+        + dynamic
+}
+
+fn paired_blur_kernel(sigma: f32, radius: f32, direction: [f32; 2]) -> Option<(&'static [f32], u32)> {
+    if !sigma.is_finite() || sigma < BLUR_KERNEL_MIN_PAIRED_SIGMA || sigma > BLUR_KERNEL_MAX_SIGMA {
+        return None;
+    }
+    let scaled = sigma * BLUR_KERNEL_BUCKETS_PER_SIGMA;
+    let bucket = scaled.round();
+    if (scaled - bucket).abs() > 1.0e-4 {
+        return None;
+    }
+    static TABLE: OnceLock<[OnceLock<BlurKernelEntry>; BLUR_KERNEL_BUCKET_COUNT + 1]> = OnceLock::new();
+    let table = TABLE.get_or_init(|| core::array::from_fn(|_| OnceLock::new()));
+    let bucket = bucket as usize;
+    let entry = table.get(bucket)?.get_or_init(|| build_blur_kernel(bucket));
+    if entry.radius != effective_blur_radius(radius) {
+        return None;
+    }
+    let kernel = match direction
+    {
+        [1.0, 0.0] => entry.horizontal.as_slice(),
+        [0.0, 1.0] => entry.vertical.as_slice(),
+        _ => return None,
+    };
+    Some((kernel, ((kernel.len() - 6) / 2) as u32))
+}
+
+fn bind_blur_kernel(
+    encoder: &RenderCommandEncoderRef,
+    params: [f32; 4],
+    paired_allowed: bool,
+    exact_pso: &RenderPipelineState,
+    paired_pso: &RenderPipelineState,
+) -> BlurKernelUse {
+    let radius = effective_blur_radius(params[3]);
+    let paired_kernel = if paired_allowed {
+        paired_blur_kernel(params[2], params[3], [params[0], params[1]])
+    } else {
+        None
+    };
+    if let Some((kernel, pair_count)) = paired_kernel {
+        encoder.set_render_pipeline_state(paired_pso);
+        encoder.set_fragment_bytes(
+            1,
+            core::mem::size_of_val(kernel) as u64,
+            kernel.as_ptr().cast(),
+        );
+        return BlurKernelUse {
+            paired: true,
+            source_samples: 1 + radius * 2,
+            encoded_samples: 1 + pair_count * 2,
+            runtime_exp_taps: 0,
+            table_bytes: blur_kernel_table_bytes(),
+        };
+    }
+    encoder.set_render_pipeline_state(exact_pso);
+    encoder.set_fragment_bytes(
+        1,
+        core::mem::size_of_val(&params) as u64,
+        params.as_ptr().cast(),
+    );
+    BlurKernelUse {
+        paired: false,
+        source_samples: 1 + radius * 2,
+        encoded_samples: 1 + radius * 2,
+        runtime_exp_taps: radius,
+        table_bytes: blur_kernel_table_bytes(),
+    }
+}
+
+fn record_blur_kernel_use(stats: &mut PerfStats, kernel: BlurKernelUse) {
+    stats.blur_kernel_paired_passes = stats
+        .blur_kernel_paired_passes
+        .saturating_add(kernel.paired as u32);
+    stats.blur_kernel_exact_passes = stats
+        .blur_kernel_exact_passes
+        .saturating_add((!kernel.paired) as u32);
+    stats.blur_kernel_source_samples = stats
+        .blur_kernel_source_samples
+        .saturating_add(u64::from(kernel.source_samples));
+    stats.blur_kernel_encoded_samples = stats
+        .blur_kernel_encoded_samples
+        .saturating_add(u64::from(kernel.encoded_samples));
+    stats.blur_kernel_runtime_exp_taps = stats
+        .blur_kernel_runtime_exp_taps
+        .saturating_add(u64::from(kernel.runtime_exp_taps));
+    stats.blur_kernel_table_bytes = stats
+        .blur_kernel_table_bytes
+        .max(kernel.table_bytes);
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EffectTargetPlan {
@@ -6495,7 +6721,6 @@ impl api::Renderer for MetalRenderer {
                         ca.set_store_action(MTLStoreAction::Store);
                         self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                         let enc = cmd.new_render_command_encoder(&rpd);
-                        enc.set_render_pipeline_state(&self.pso_blur);
                         if let Some(sam) = &self.sampler {
                             enc.set_fragment_sampler_state(0, Some(sam));
                         }
@@ -6511,11 +6736,14 @@ impl api::Renderer for MetalRenderer {
                             core::mem::size_of_val(&rect_dp) as u64,
                             rect_dp.as_ptr() as *const _,
                         );
-                        enc.set_fragment_bytes(
-                            1,
-                            core::mem::size_of_val(&params_h) as u64,
-                            params_h.as_ptr() as *const _,
+                        let kernel = bind_blur_kernel(
+                            &enc,
+                            params_h,
+                            self.paired_blur_allowed(),
+                            &self.pso_blur,
+                            &self.pso_blur_paired,
                         );
+                        record_blur_kernel_use(&mut self.last_stats, kernel);
                         enc.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
                         enc.end_encoding();
                         let rpd2 = RenderPassDescriptor::new();
@@ -6525,7 +6753,6 @@ impl api::Renderer for MetalRenderer {
                         ca2.set_store_action(MTLStoreAction::Store);
                         self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                         let enc2 = cmd.new_render_command_encoder(&rpd2);
-                        enc2.set_render_pipeline_state(&self.pso_blur);
                         if let Some(sam) = &self.sampler {
                             enc2.set_fragment_sampler_state(0, Some(sam));
                         }
@@ -6541,11 +6768,14 @@ impl api::Renderer for MetalRenderer {
                             core::mem::size_of_val(&rect_dp) as u64,
                             rect_dp.as_ptr() as *const _,
                         );
-                        enc2.set_fragment_bytes(
-                            1,
-                            core::mem::size_of_val(&params_v) as u64,
-                            params_v.as_ptr() as *const _,
+                        let kernel = bind_blur_kernel(
+                            &enc2,
+                            params_v,
+                            self.paired_blur_allowed(),
+                            &self.pso_blur,
+                            &self.pso_blur_paired,
                         );
+                        record_blur_kernel_use(&mut self.last_stats, kernel);
                         enc2.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
                         enc2.end_encoding();
                     }
@@ -6895,7 +7125,6 @@ impl api::Renderer for MetalRenderer {
                 ca_blur_h.set_store_action(MTLStoreAction::Store);
                 self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                 let enc1 = cmd.new_render_command_encoder(&rpd1);
-                enc1.set_render_pipeline_state(&self.pso_blur);
                 if let Some(sam) = &self.sampler {
                     enc1.set_fragment_sampler_state(0, Some(sam));
                 }
@@ -6908,10 +7137,12 @@ impl api::Renderer for MetalRenderer {
                 }
                 enc1.set_scissor_rect(effect_scissor);
                 let params_h: [f32; 4] = [1.0, 0.0, effect_pass_sigma, effect_pass_radius];
-                enc1.set_fragment_bytes(
-                    1,
-                    core::mem::size_of_val(&params_h) as u64,
-                    params_h.as_ptr() as *const _,
+                let kernel_h = bind_blur_kernel(
+                    &enc1,
+                    params_h,
+                    self.paired_blur_allowed(),
+                    &self.pso_blur,
+                    &self.pso_blur_paired,
                 );
                 enc1.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
                 self.prepass_shaded_px = self
@@ -6932,7 +7163,6 @@ impl api::Renderer for MetalRenderer {
                 ca_blur_v.set_store_action(MTLStoreAction::Store);
                 self.acc_render_passes = self.acc_render_passes.saturating_add(1);
                 let enc2 = cmd.new_render_command_encoder(&rpd2);
-                enc2.set_render_pipeline_state(&self.pso_blur);
                 if let Some(sam) = &self.sampler {
                     enc2.set_fragment_sampler_state(0, Some(sam));
                 }
@@ -6945,16 +7175,20 @@ impl api::Renderer for MetalRenderer {
                 }
                 enc2.set_scissor_rect(effect_scissor);
                 let params_v: [f32; 4] = [0.0, 1.0, effect_pass_sigma, effect_pass_radius];
-                enc2.set_fragment_bytes(
-                    1,
-                    core::mem::size_of_val(&params_v) as u64,
-                    params_v.as_ptr() as *const _,
+                let kernel_v = bind_blur_kernel(
+                    &enc2,
+                    params_v,
+                    self.paired_blur_allowed(),
+                    &self.pso_blur,
+                    &self.pso_blur_paired,
                 );
                 enc2.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
                 self.prepass_shaded_px = self
                     .prepass_shaded_px
                     .saturating_add(effect_scissor.width.saturating_mul(effect_scissor.height));
                 enc2.end_encoding();
+                record_blur_kernel_use(&mut self.last_stats, kernel_h);
+                record_blur_kernel_use(&mut self.last_stats, kernel_v);
 
                 if visual_effect_uses_eighth {
                     let rpd_us0 = RenderPassDescriptor::new();
@@ -9607,16 +9841,18 @@ fn build_blur_pso(
     device: &Device,
     lib: &Library,
     fmt: MTLPixelFormat,
+    fragment: &str,
+    create_stage: &'static str,
 ) -> Result<RenderPipelineState, MetalInitError> {
     let v = pipeline_function(lib, "blur.vertex", "v_fullscreen")?;
-    let f = pipeline_function(lib, "blur.fragment", "f_blur")?;
+    let f = pipeline_function(lib, "blur.fragment", fragment)?;
     let desc = RenderPipelineDescriptor::new();
     desc.set_vertex_function(Some(&v));
     desc.set_fragment_function(Some(&f));
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
     ca.set_blending_enabled(false);
-    pipeline_state(device, "pso.blur.create", &desc)
+    pipeline_state(device, create_stage, &desc)
 }
 
 fn build_downsample_pso(
@@ -10370,6 +10606,12 @@ pub struct PerfStats {
     pub effect_graph_logical_bytes: u64,
     pub effect_graph_physical_bytes: u64,
     pub effect_graph_aliased_bytes: u64,
+    pub blur_kernel_paired_passes: u32,
+    pub blur_kernel_exact_passes: u32,
+    pub blur_kernel_source_samples: u64,
+    pub blur_kernel_encoded_samples: u64,
+    pub blur_kernel_runtime_exp_taps: u64,
+    pub blur_kernel_table_bytes: u64,
     pub glyph_instance_bytes: u64,
     pub glyph_instance_buffer_binds: u32,
     pub glyph_instances: u32,
@@ -10941,6 +11183,51 @@ mod tests {
             assert!(persistent.needs_persistent_final_target);
             assert!(!persistent.direct_present);
         }
+    }
+
+    #[test]
+    fn paired_blur_kernel_preserves_normalized_gaussian_weights()
+    {
+        let sigma = 8.0;
+        let radius = 24.0;
+        let (kernel, pair_count) = paired_blur_kernel(sigma, radius, [1.0, 0.0])
+            .expect("paired wide kernel");
+        assert_eq!(pair_count, 12);
+        assert_eq!(kernel.len(), 30);
+        assert_eq!(&kernel[..4], &[1.0, 0.0, sigma, radius]);
+
+        let mut norm = 1.0f32;
+        for tap in 1..=24
+        {
+            let x = tap as f32 / sigma;
+            norm += 2.0 * (-0.5 * x * x).exp();
+        }
+        let mut paired_norm = kernel[4];
+        for (pair_index, pair) in kernel[6..].chunks_exact(2).enumerate()
+        {
+            let [offset, weight] = [pair[0], pair[1]];
+            let first_tap = (pair_index * 2 + 1) as f32;
+            let fraction = offset - first_tap;
+            let first_weight = weight * (1.0 - fraction);
+            let second_weight = weight * fraction;
+            let first_x = first_tap / sigma;
+            let second_x = (first_tap + 1.0) / sigma;
+            assert!((first_weight - (-0.5 * first_x * first_x).exp() / norm).abs() < 1.0e-6);
+            assert!((second_weight - (-0.5 * second_x * second_x).exp() / norm).abs() < 1.0e-6);
+            paired_norm += 2.0 * weight;
+        }
+        assert!((paired_norm - 1.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn paired_blur_kernel_keeps_subthreshold_and_non_bucket_inputs_exact()
+    {
+        assert!(paired_blur_kernel(1.5, 5.0, [1.0, 0.0]).is_none());
+        assert!(paired_blur_kernel(4.01, 13.0, [1.0, 0.0]).is_none());
+        assert!(paired_blur_kernel(8.0, 23.0, [1.0, 0.0]).is_none());
+        assert!(paired_blur_kernel(8.0, 24.0, [0.5, 0.5]).is_none());
+        assert!(paired_blur_kernel(f32::NAN, 24.0, [1.0, 0.0]).is_none());
+        assert!(paired_blur_kernel(f32::INFINITY, 24.0, [1.0, 0.0]).is_none());
     }
 
     fn glyph_test_run(vertex_len: u32, index_len: u32, sdf: bool) -> api::GlyphRun

@@ -16,14 +16,15 @@ They use the production `MetalRenderer` API and committed images under `goldens/
 - `device_loss_recreation_preserves_visible_golden`
 - `atlas_eviction_and_recreation_preserve_glyph_golden`
 - `effect_target_plans_preserve_direct_prepass_quarter_and_eighth_goldens`
+- `paired_blur_sigma_sweep_stays_within_exact_image_error_policy`
 
 ## Logic narrative
 
-The damage case freezes both the retained full-direct then partial-damage parent output and a fresh complete-scene reference. It explicitly proves the known parent mismatch that C10 must remove. Resize compares a retained resized target with a fresh target. Memory-warning and device-loss controls destroy and recreate the renderer, preserving visible state before later work adds narrower production recovery hooks. Atlas eviction releases and recreates the A8 atlas texture, then verifies rebuilt and warm glyph frames. Effect-target coverage renders the direct, zero-blur prepass, quarter-resolution blur, and eighth-resolution blur plans on fresh renderers so target-lifetime changes cannot alter the visible result.
+The damage case freezes both the retained full-direct then partial-damage parent output and a fresh complete-scene reference. It explicitly proves the known parent mismatch that C10 must remove. Resize compares a retained resized target with a fresh target. Memory-warning and device-loss controls destroy and recreate the renderer, preserving visible state before later work adds narrower production recovery hooks. Atlas eviction releases and recreates the A8 atlas texture, then verifies rebuilt and warm glyph frames. Effect-target coverage renders the direct, zero-blur prepass, quarter-resolution blur, and eighth-resolution blur plans on fresh renderers so target-lifetime changes cannot alter the visible result. The C52 sweep renders sigma 2/8/16/32/64 twice through identical renderers: an exact snapshot-only control and the default policy. Sigma 2 must be byte-identical; sigma 8/16/32/64 must remain within the explicit error bounds while reducing encoded samples.
 
 ## Preconditions and postconditions
 
-The tests require macOS Metal. All simple-scene and A8 sequence images compare exactly, with no tolerance.
+The tests require macOS Metal. Simple-scene, subthreshold-blur, and A8 sequence images compare exactly. Paired blur is bounded to 1/255 maximum channel error, MAE 0.002, and 0.6% changed pixels against its exact control; the committed quarter/eighth golden guard permits MAE 0.003 and 1% changed pixels while retaining the same 1/255 maximum.
 
 ## Edge cases and failure modes
 
@@ -51,5 +52,6 @@ Set `UPDATE_GOLDENS=1` only for intentional reviewed golden updates.
 
 ## Changelog
 
+- 2026-07-14: added exact-versus-paired C52 sigma sweep and explicit channel/MAE/changed-pixel error policy.
 - 2026-07-12: added direct/prepass/quarter/eighth effect-target plan goldens.
 - 2026-07-12: added exact damage, recreate, resize, device-loss, and atlas-eviction sequence goldens.

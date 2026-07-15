@@ -20,6 +20,7 @@ This directory mirrors Rust source units with design notes, entry points, behavi
 - [oxide-text](oxide-text/lib.md)
 - [renderer-api](renderer-api/lib.md)
 - [renderer-metal](renderer-metal/lib.md)
+- [renderer-metal effects shader](renderer-metal/shaders/effects.md)
 - [renderer-metal ID-mask GPU path](renderer-metal/id_mask_gpu.md)
 - [renderer-metal prepared chunks](renderer-metal/prepared.md)
 - [renderer-web](renderer-web/lib.md)

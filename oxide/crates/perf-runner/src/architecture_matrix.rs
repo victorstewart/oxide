@@ -157,6 +157,11 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       "blur_mixed_sigma",
       "blur_edges_corners",
       "nested_layer_effects",
+      "blur_sigma_2_local",
+      "blur_sigma_8_local",
+      "blur_sigma_16_fullscreen",
+      "blur_sigma_32_fullscreen",
+      "blur_sigma_64_fullscreen",
       "target_plan_direct",
       "target_plan_prepass",
       "target_plan_quarter",
@@ -3414,6 +3419,19 @@ fn effect_region_count(name: &str) -> usize
    }
 }
 
+fn blur_sweep_spec(name: &str) -> Option<(f32, bool)>
+{
+   match name
+   {
+      "blur_sigma_2_local" => Some((2.0, true)),
+      "blur_sigma_8_local" => Some((8.0, true)),
+      "blur_sigma_16_fullscreen" => Some((16.0, false)),
+      "blur_sigma_32_fullscreen" => Some((32.0, false)),
+      "blur_sigma_64_fullscreen" => Some((64.0, false)),
+      _ => None,
+   }
+}
+
 fn damage_case(id: &str, smoke: bool, name: &str) -> PerfCaseResult
 {
    let kind = String::from(name);
@@ -3836,6 +3854,12 @@ where
    let mut effect_graph_logical_bytes_peak = 0_u64;
    let mut effect_graph_physical_bytes_peak = 0_u64;
    let mut effect_graph_aliased_bytes_peak = 0_u64;
+   let mut blur_kernel_paired_passes_sum = 0_u64;
+   let mut blur_kernel_exact_passes_sum = 0_u64;
+   let mut blur_kernel_source_samples_sum = 0_u64;
+   let mut blur_kernel_encoded_samples_sum = 0_u64;
+   let mut blur_kernel_runtime_exp_taps_sum = 0_u64;
+   let mut blur_kernel_table_bytes_peak = 0_u64;
    let mut blit_passes_sum = 0_u64;
    let mut texture_copies_sum = 0_u64;
    let mut texture_copy_bytes_sum = 0_u64;
@@ -3958,6 +3982,18 @@ where
             .max(stats.effect_graph_physical_bytes);
          effect_graph_aliased_bytes_peak = effect_graph_aliased_bytes_peak
             .max(stats.effect_graph_aliased_bytes);
+         blur_kernel_paired_passes_sum = blur_kernel_paired_passes_sum
+            .saturating_add(stats.blur_kernel_paired_passes as u64);
+         blur_kernel_exact_passes_sum = blur_kernel_exact_passes_sum
+            .saturating_add(stats.blur_kernel_exact_passes as u64);
+         blur_kernel_source_samples_sum = blur_kernel_source_samples_sum
+            .saturating_add(stats.blur_kernel_source_samples);
+         blur_kernel_encoded_samples_sum = blur_kernel_encoded_samples_sum
+            .saturating_add(stats.blur_kernel_encoded_samples);
+         blur_kernel_runtime_exp_taps_sum = blur_kernel_runtime_exp_taps_sum
+            .saturating_add(stats.blur_kernel_runtime_exp_taps);
+         blur_kernel_table_bytes_peak = blur_kernel_table_bytes_peak
+            .max(stats.blur_kernel_table_bytes);
          blit_passes_sum = blit_passes_sum.saturating_add(stats.blit_passes as u64);
          texture_copies_sum = texture_copies_sum.saturating_add(stats.texture_copies as u64);
          texture_copy_bytes_sum =
@@ -4044,6 +4080,21 @@ where
    metrics.insert(String::from("effect_graph_logical_bytes_peak"), effect_graph_logical_bytes_peak as f64);
    metrics.insert(String::from("effect_graph_physical_bytes_peak"), effect_graph_physical_bytes_peak as f64);
    metrics.insert(String::from("effect_graph_aliased_bytes_peak"), effect_graph_aliased_bytes_peak as f64);
+   metrics.insert(String::from("blur_kernel_paired_passes_avg"), blur_kernel_paired_passes_sum as f64 / frames as f64);
+   metrics.insert(String::from("blur_kernel_exact_passes_avg"), blur_kernel_exact_passes_sum as f64 / frames as f64);
+   metrics.insert(String::from("blur_kernel_source_samples_avg"), blur_kernel_source_samples_sum as f64 / frames as f64);
+   metrics.insert(String::from("blur_kernel_encoded_samples_avg"), blur_kernel_encoded_samples_sum as f64 / frames as f64);
+   metrics.insert(String::from("blur_kernel_runtime_exp_taps_avg"), blur_kernel_runtime_exp_taps_sum as f64 / frames as f64);
+   metrics.insert(String::from("blur_kernel_table_bytes_peak"), blur_kernel_table_bytes_peak as f64);
+   let sample_reduction_pct = if blur_kernel_source_samples_sum == 0
+   {
+      0.0
+   }
+   else
+   {
+      100.0 * (1.0 - blur_kernel_encoded_samples_sum as f64 / blur_kernel_source_samples_sum as f64)
+   };
+   metrics.insert(String::from("blur_kernel_sample_reduction_pct"), sample_reduction_pct);
    metrics.insert(String::from("blit_passes_avg"), blit_passes_sum as f64 / frames as f64);
    metrics.insert(String::from("texture_copies_avg"), texture_copies_sum as f64 / frames as f64);
    metrics.insert(
@@ -4190,6 +4241,25 @@ fn effect_drawlist(name: &str) -> api::DrawList
    {
       builder.backdrop(api::RectF::new(0.0, 0.0, 1_200.0, 800.0), 32.0, api::Color::rgba(1.0, 1.0, 1.0, 1.0), 0.2);
    }
+   else if let Some((sigma, local)) = blur_sweep_spec(name)
+   {
+      let rect = if local
+      {
+         if sigma >= 8.0
+         {
+            api::RectF::new(200.0, 160.0, 800.0, 480.0)
+         }
+         else
+         {
+            api::RectF::new(420.0, 300.0, 360.0, 200.0)
+         }
+      }
+      else
+      {
+         api::RectF::new(0.0, 0.0, 1_200.0, 800.0)
+      };
+      builder.backdrop(rect, sigma, api::Color::rgba(1.0, 1.0, 1.0, 1.0), 0.2);
+   }
    else if name == "blur_mixed_sigma"
    {
       for index in 0..16 { builder.backdrop(api::RectF::new(index as f32 * 30.0, 20.0, 120.0, 80.0), 2.0 + index as f32 * 3.0, api::Color::rgba(0.9, 0.95, 1.0, 1.0), 0.35); }
@@ -4222,6 +4292,14 @@ fn metal_effect_case(id: &str, smoke: bool, name: &str) -> Result<PerfCaseResult
       move |frame| (effect_drawlist(&kind), None, None, cold_first_use && frame > 0),
    )?;
    case.metrics.insert(String::from("effect_regions"), effect_region_count(name) as f64);
+   if let Some((sigma, local)) = blur_sweep_spec(name)
+   {
+      let pass_sigma = sigma / 4.0;
+      case.metrics.insert(String::from("blur_source_sigma_dp"), sigma as f64);
+      case.metrics.insert(String::from("blur_pass_sigma_px"), pass_sigma as f64);
+      case.metrics.insert(String::from("blur_pass_radius_px"), (pass_sigma * 3.0).ceil() as f64);
+      case.metrics.insert(String::from("blur_local_region"), local as u8 as f64);
+   }
    if cold_first_use
    {
       case.cache_state = String::from("cold");

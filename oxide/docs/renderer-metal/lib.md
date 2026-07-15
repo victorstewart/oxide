@@ -27,6 +27,8 @@
   - Rasterizes semantic region/subregion ID triangles into renderer-owned R8 targets before running the compositor shader. Implementation lives in `id_mask_gpu.rs`.
 - `MetalRenderer::readback_id_mask_snapshot()` (`snapshot-tests`)
   - Reads exact raster IDs and format-independent decoded final city/seam seeds for CPU-reference parity tests.
+- `MetalRenderer::set_force_exact_blur_for_snapshot(force_exact)` (`snapshot-tests`)
+  - Selects the exact Gaussian control only in snapshot-feature builds so paired-kernel image error can be measured against the identical renderer path.
 - `MetalRenderer::set_memory_stats_enabled_for_benchmark(enabled)`
   - Enables or disables sampled resident-resource scans for explicit accounting-overhead controls; rendering behavior is unchanged.
 - `MetalRenderer::set_accounting_stats_enabled_for_benchmark(enabled)`
@@ -82,6 +84,8 @@ Frame-level camera/effect metadata is gathered in one draw-list scan. Camera cov
 
 Effect target ownership follows that declared plan. A zero-blur backdrop allocates only the full-resolution prepass; ordinary blur adds half/quarter targets and one quarter ping-pong target; strong visual blur substitutes the declared eighth-resolution pair without retaining an unused full-resolution temporary. Compatible textures persist across warm frames. Resize invalidates incompatible targets, while the production memory-warning hook purges both effect and bloom targets and requests a replacement frame. `resource_creates` records first-use construction and the effect/bloom memory categories include every retained target.
 
+The blur quality ladder keeps pass sigma below 2 on the exact per-tap Gaussian path. Canonical kernels at or above 2 whose sigma lands on the 1/16 bucket grid and whose radius remains exactly `ceil(3 * sigma)` use lazily generated, process-reused paired bilinear offsets and normalized weights inside the existing quarter/eighth render-graph chain. Horizontal and vertical records are prepacked so paired encoding retains one constant-data binding per pass. Other radii and non-finite or non-bucket sigma values fall back to exact evaluation. Separate persistent exact and paired pipeline states keep the runtime Gaussian loop out of paired-shader occupancy. The paired path removes runtime exponential evaluation and almost halves texture samples without changing pass count or target residency. `PerfStats` reports exact/paired passes, source and encoded samples, runtime exponential taps, and total process-resident kernel-table bytes after first use.
+
 Camera preview rendering remains Oxide-owned. The renderer consumes `CameraBg` frame data and no longer accepts a native visible-preview draw marker in the product draw-list path.
 
 Synthetic camera benchmark textures keep the BGRA reference and optimized NV12 shader on the same BT.709 full-range contract. The optimized shader uses normalized chroma offsets directly, while the legacy shader intentionally preserves its older divergent full-range conversion so the snapshot benchmark can detect regressions against the BGRA reference.
@@ -108,6 +112,7 @@ Cache telemetry reports hits, misses, entries, resident/budget bytes, evictions,
 
 ## Changelog
 
+- 2026-07-14: added the C52 exact/paired blur quality ladder, dedicated persistent pipeline states, lazy 1/16-sigma kernels, sample/ALU/table telemetry, and snapshot-only exact control.
 - 2026-07-14: replaced the eight-entry snapshot ID-mask target array with one completion-safe reusable target, tracked cache/transient generations by actual in-flight slots, blocked unsafe eviction reuse, evicted stale dimensions for oversized transient work, and exposed generation-aware target bytes and creation/reuse counters.
 - 2026-07-14: packed Metal ID-mask city/seam coordinates into two RGBA16Uint fields with R8 ID recovery and an exact wide-coordinate fallback.
 - 2026-07-14: cached complete Metal ID-mask raster and JFA fields under an allocated-byte LRU budget, skipped all field-building passes for final-only changes, added pass/cache telemetry, and wired memory-pressure/device-loss purge.

@@ -25,12 +25,12 @@ fragment float4 f_blur(VSOut in [[stage_in]], texture2d<float> src [[texture(0)]
     int radius = clamp(int(round(params.w)), 2, 192);
     float2 inv_size = float2(1.0 / src.get_width(), 1.0 / src.get_height());
     float2 uv = in.uv;
+    float2 step = dir * inv_size;
 
     // Wider separable Gaussian. The effect prepass runs at quarter resolution,
     // so each radius texel covers roughly four framebuffer pixels. Backdrop
     // effects pass a wider radius than camera blur to match UIKit's material.
     float w0 = 1.0 / (sqrt(2.0 * M_PI_F) * sigma);
-    float2 step = dir * inv_size;
     float4 c = src.sample(s, uv) * w0;
     float norm = w0;
     for (int i = 1; i <= 192; ++i) {
@@ -43,6 +43,23 @@ fragment float4 f_blur(VSOut in [[stage_in]], texture2d<float> src [[texture(0)]
         norm += 2.0 * w;
     }
     return c / max(norm, 1e-6);
+}
+
+// Precomputed paired kernels bind one normalized (offset, weight) record per
+// bilinear sample pair. A separate pipeline keeps the exact Gaussian loop and
+// its runtime exponentials out of paired-kernel shader occupancy.
+fragment float4 f_blur_paired(VSOut in [[stage_in]], texture2d<float> src [[texture(0)]], sampler s [[sampler(0)]], constant float* packed_kernel [[buffer(1)]]) {
+    float2 inv_size = float2(1.0 / src.get_width(), 1.0 / src.get_height());
+    float2 step = float2(packed_kernel[0], packed_kernel[1]) * inv_size;
+    float4 c = src.sample(s, in.uv) * packed_kernel[4];
+    uint pair_count = uint(packed_kernel[5]);
+    for (uint pair = 0; pair < pair_count; ++pair) {
+        uint base = 6 + pair * 2;
+        float2 offset_weight = float2(packed_kernel[base], packed_kernel[base + 1]);
+        float2 delta = step * offset_weight.x;
+        c += (src.sample(s, in.uv + delta) + src.sample(s, in.uv - delta)) * offset_weight.y;
+    }
+    return c;
 }
 
 // Downsample by 2x: sample at center of 2x2 block (simple bilinear is sufficient)

@@ -15,6 +15,7 @@ This integration suite freezes performance-report schemas, filtered execution, c
 - `metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()` requires exact clean and one-dirty prepared-cache work counters, including zero clean immutable upload and one 12,288-byte dynamic uniform-ring slice.
 - `metal_prepared_layer_rows_freeze_body_free_clean_and_single_dirty_contracts()` requires body-free clean architecture/authoring replay and one bounded dirty layer refresh with no new warm texture.
 - `metal_architecture_reports_reconciled_renderer_resource_families()` requires the warm static ID-mask row to hit once, skip raster/seed/JFA, encode one compositor pass, retain one cache/in-flight generation, create no target, report nonzero in-flight/total/peak bytes and zero blocked reuse, and stay within its byte budget while preserving the broader resource-family accounting contract.
+- `metal_blur_sigma_sweep_freezes_quality_ladder_work()` requires sigma 2 to retain exact samples and exponential taps, sigma 8/16/32/64 to select two paired passes with zero runtime exponentials, and process-resident table bytes to grow only after paired first use.
 - `retained_spatial_queries_have_engine_and_authoring_contracts()` freezes 512-instance smoke cardinality, one-entry CPU selection, zero vertex visits, metadata residency, and authoring routing.
 - `metal_spatial_rows_freeze_small_and_full_damage_contracts()` freezes one selected small-damage instance/command/draw, four shaded pixels, zero vertex/copy/upload work, and full linear 512-draw static-plan replay.
 - `filtered_run_suite_supports_retained_snapshot_authoring_case()` keeps the public retained-snapshot authoring row routable.
@@ -33,6 +34,7 @@ Each filtered integration test writes a process-unique temporary report, verifie
 - Passing C27 coverage proves small damage never scans unrelated glyph/mesh vertices and full damage bypasses querying while reusing the unchanged plan.
 - Passing C29 coverage proves clean layer replay performs 100 composites with zero body/copy/upload/offscreen/preparation work, while the dirty row records exactly one miss, offscreen replay from the prepared body, and additional render pass with zero warm copy/upload/preparation.
 - Passing C32/C36 accounting coverage proves the warm static ID-mask row performs no chunk preparation, field-building pass, or target creation; retains one in-flight generation; reports its actual storage; and cannot silently exceed its field-cache budget or recycle a busy generation.
+- Passing C52 coverage proves the production quarter-resolution sweep preserves its declared sigma/radius, exact subthreshold branch, 46–49% paired sample reduction, zero paired runtime exponential taps, unchanged pass count, and bounded lazy kernel-table residency.
 
 ## Edge cases and failure modes
 
@@ -60,6 +62,7 @@ Run `cargo test --locked -p oxide-perf-runner --test report_tests`.
 Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.frame_resources.` with `--run-suite --smoke --json-out <path>` to inspect both C18 rows.
 
 ## Changelog
+- 2026-07-14: froze C52 sigma/radius, exact/paired selection, sample reduction, exponential-tap, and lazy table-memory report counters.
 - 2026-07-14: froze C36 warm ID-mask generation, creation, in-flight/total/peak byte, and blocked-reuse report counters.
 - 2026-07-14: froze C32 warm ID-mask hit, stage-pass, entry, residency, and budget report counters.
 - 2026-07-13: added C29 prepared-layer clean/one-dirty and public retained-snapshot authoring work-contract assertions.

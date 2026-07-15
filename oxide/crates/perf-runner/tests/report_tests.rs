@@ -5134,6 +5134,61 @@ fn metal_effect_target_plan_reports_first_use_and_exact_residency()
 
 #[cfg(target_os = "macos")]
 #[test]
+fn metal_blur_sigma_sweep_freezes_quality_ladder_work()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-blur-sweep-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "gpu.architecture.effects.blur_sigma_")
+      .env("OXIDE_ARCHITECTURE_METAL_FRAMES", "2")
+      .env("OXIDE_ARCHITECTURE_METAL_WARMUPS", "1")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run Metal blur sigma sweep");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "Metal blur sigma sweep failed: {stderr}");
+   assert!(stdout.contains("cases=5"), "stdout: {stdout}");
+   let report = std::fs::read_to_string(&json_out).expect("read blur sigma report");
+   let sigma2 = report_case_slice(&report, "gpu.architecture.effects.blur_sigma_2_local");
+   let sigma8 = report_case_slice(&report, "gpu.architecture.effects.blur_sigma_8_local");
+   let sigma16 = report_case_slice(&report, "gpu.architecture.effects.blur_sigma_16_fullscreen");
+   let sigma32 = report_case_slice(&report, "gpu.architecture.effects.blur_sigma_32_fullscreen");
+   let sigma64 = report_case_slice(&report, "gpu.architecture.effects.blur_sigma_64_fullscreen");
+
+   for (row, sigma, radius, source_samples, encoded_samples, exp_taps, paired, exact) in [
+      (sigma2, 2.0, 2.0, 10.0, 10.0, 4.0, 0.0, 2.0),
+      (sigma8, 8.0, 6.0, 26.0, 14.0, 0.0, 2.0, 0.0),
+      (sigma16, 16.0, 12.0, 50.0, 26.0, 0.0, 2.0, 0.0),
+      (sigma32, 32.0, 24.0, 98.0, 50.0, 0.0, 2.0, 0.0),
+      (sigma64, 64.0, 48.0, 194.0, 98.0, 0.0, 2.0, 0.0),
+   ]
+   {
+      assert_eq!(report_f64(row, "blur_source_sigma_dp"), sigma);
+      assert_eq!(report_f64(row, "blur_pass_radius_px"), radius);
+      assert_eq!(report_f64(row, "blur_kernel_source_samples_avg"), source_samples);
+      assert_eq!(report_f64(row, "blur_kernel_encoded_samples_avg"), encoded_samples);
+      assert_eq!(report_f64(row, "blur_kernel_runtime_exp_taps_avg"), exp_taps);
+      assert_eq!(report_f64(row, "blur_kernel_paired_passes_avg"), paired);
+      assert_eq!(report_f64(row, "blur_kernel_exact_passes_avg"), exact);
+   }
+   assert_eq!(report_f64(sigma2, "blur_kernel_sample_reduction_pct"), 0.0);
+   assert!(report_f64(sigma8, "blur_kernel_sample_reduction_pct") >= 46.0);
+   assert!(report_f64(sigma16, "blur_kernel_sample_reduction_pct") >= 48.0);
+   assert!(report_f64(sigma64, "blur_kernel_sample_reduction_pct") >= 49.0);
+   assert!(report_f64(sigma8, "blur_kernel_table_bytes_peak") > 0.0);
+   assert!(report_f64(sigma16, "blur_kernel_table_bytes_peak") > 0.0);
+   assert!(report_f64(sigma64, "blur_kernel_table_bytes_peak")
+      > report_f64(sigma16, "blur_kernel_table_bytes_peak"));
+   let _ = std::fs::remove_file(json_out);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn metal_final_target_rows_freeze_direct_and_persistent_paths()
 {
    let mut json_out = std::env::temp_dir();

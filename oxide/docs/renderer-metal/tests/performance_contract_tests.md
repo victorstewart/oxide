@@ -46,6 +46,8 @@ This test file protects renderer performance contracts that are easy to regress 
   Constructs the default macOS Metal renderer, proving the embedded metallib and default PSO set initialize at runtime.
 - `disabled_accounting_path_keeps_new_stats_zero()`
   Submits a real Metal frame with accounting disabled and verifies every new work and memory statistic remains zero.
+- `effect_targets_follow_the_declared_pass_plan_and_purge()`
+  Freezes effect-target ownership and first-use counts, then proves source sigma 8 uses 26 source/14 encoded samples while the current wide visual kernel records 110 source samples, 58 encoded samples, and zero runtime exponential taps.
 
 ## Logic narrative
 
@@ -93,7 +95,7 @@ Related local Metal evidence is produced by the perf-runner filtered GPU row `gp
 
 The accounting schema test constructs the public stats value, freezes the previously omitted depth, bloom, ID-mask, Scene3D mesh, and layer fields, and source-checks saturating arithmetic plus separate retained texture/buffer identity sets whose capacity survives each scan. The disabled-path runtime test proves a real submission leaves the new fields zero. Actual nonzero resource ownership is verified by the filtered architecture report test.
 
-The effect-target runtime contract renders direct, zero-blur prepass, quarter-resolution blur, and eighth-resolution blur frames on fresh Metal renderers. It freezes exact target presence, first-use creation counts, memory-category movement, warm reuse, and explicit purge behavior.
+The effect-target runtime contract renders direct, zero-blur prepass, quarter-resolution blur, and eighth-resolution blur frames on fresh Metal renderers. It freezes exact target presence, lazy final-target-inclusive first-use creation counts, memory-category movement, warm reuse, explicit purge behavior, and exact-versus-paired blur work counters.
 
 ## Examples
 
@@ -108,6 +110,7 @@ fn initialize_renderer_for_contract_check() -> Result<(), oxide_renderer_metal::
 
 ## Changelog
 
+- 2026-07-14: added C52 subthreshold exact and sigma-8-plus paired blur sample, exponential-tap, and table-byte contracts; corrected first-use counts to include C51's lazily allocated offscreen final target.
 - 2026-07-14: replaced the ID-mask auxiliary-slot count assertion with C36 single-snapshot-target and completion-safe generation ownership guards.
 - 2026-07-14: added C31 Metal contracts for zero-budget exact inline fallback, allocated-byte bounds, resize pooling, navigation-ID reuse, and memory-warning purge telemetry.
 - 2026-07-13: extended the C05 layer source contract to require format-compatible reuse and separation from C29 prepared-layer ownership.

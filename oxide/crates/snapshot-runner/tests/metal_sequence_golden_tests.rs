@@ -51,6 +51,47 @@ fn assert_golden(name: &str, width: u32, height: u32, rgba: &[u8])
    assert_eq!(golden_rgba, rgba, "sequence golden mismatch for {name}");
 }
 
+fn assert_blur_error(name: &str, expected: &[u8], actual: &[u8], max_channel_error: u8, max_mae: f64, max_changed_pixel_ratio: f64)
+{
+   assert_eq!(expected.len(), actual.len());
+   let mut absolute_error = 0_u64;
+   let mut squared_error = 0_u64;
+   let mut observed_max = 0_u8;
+   let mut changed_pixels = 0_u64;
+   for (expected, actual) in expected.chunks_exact(4).zip(actual.chunks_exact(4))
+   {
+      let mut changed = false;
+      for channel in 0..4
+      {
+         let error = expected[channel].abs_diff(actual[channel]);
+         absolute_error = absolute_error.saturating_add(u64::from(error));
+         squared_error = squared_error.saturating_add(u64::from(error) * u64::from(error));
+         observed_max = observed_max.max(error);
+         changed |= error != 0;
+      }
+      changed_pixels = changed_pixels.saturating_add(changed as u64);
+   }
+   let channels = actual.len() as f64;
+   let pixels = (actual.len() / 4) as f64;
+   let mae = absolute_error as f64 / channels;
+   let rmse = (squared_error as f64 / channels).sqrt();
+   let changed_pixel_ratio = changed_pixels as f64 / pixels;
+   eprintln!(
+      "{name}: max_channel_error={observed_max} mae={mae:.6} rmse={rmse:.6} changed_pixel_ratio={changed_pixel_ratio:.6}"
+   );
+   assert!(observed_max <= max_channel_error, "{name} max channel error {observed_max} > {max_channel_error}");
+   assert!(mae <= max_mae, "{name} MAE {mae} > {max_mae}");
+   assert!(changed_pixel_ratio <= max_changed_pixel_ratio, "{name} changed-pixel ratio {changed_pixel_ratio} > {max_changed_pixel_ratio}");
+}
+
+fn assert_blur_golden_error(name: &str, width: u32, height: u32, rgba: &[u8], max_channel_error: u8, max_mae: f64, max_changed_pixel_ratio: f64)
+{
+   let path = golden_dir().join(format!("{name}.png"));
+   let (golden_width, golden_height, golden_rgba) = read_png(&path);
+   assert_eq!((golden_width, golden_height), (width, height));
+   assert_blur_error(name, &golden_rgba, rgba, max_channel_error, max_mae, max_changed_pixel_ratio);
+}
+
 fn scene(width: u32, height: u32, accent: api::Color) -> api::DrawList
 {
    let mut list = api::DrawList::default();
@@ -475,6 +516,50 @@ fn effect_target_plans_preserve_direct_prepass_quarter_and_eighth_goldens()
       }
       let mut renderer = renderer(width, height);
       let pixels = render(&mut renderer, &list, None);
-      assert_golden(name, width, height, &pixels);
+      if name == "effect_target_quarter" || name == "effect_target_eighth"
+      {
+         assert_blur_golden_error(name, width, height, &pixels, 1, 0.003, 0.01);
+      }
+      else
+      {
+         assert_golden(name, width, height, &pixels);
+      }
+   }
+}
+
+#[test]
+fn paired_blur_sigma_sweep_stays_within_exact_image_error_policy()
+{
+   let (width, height) = (192, 128);
+   for sigma in [2.0_f32, 8.0, 16.0, 32.0, 64.0]
+   {
+      let mut list = scene(width, height, api::Color::rgba(0.94, 0.42, 0.18, 1.0));
+      list.items.push(api::DrawCmd::Backdrop {
+         rect: api::RectF::new(0.0, 0.0, width as f32, height as f32),
+         sigma,
+         tint: api::Color::rgba(0.12, 0.10, 0.18, 0.24),
+         alpha: 1.0,
+      });
+
+      let mut exact_renderer = renderer(width, height);
+      exact_renderer.set_force_exact_blur_for_snapshot(true);
+      let exact = render(&mut exact_renderer, &list, None);
+      let mut paired_renderer = renderer(width, height);
+      let paired = render(&mut paired_renderer, &list, None);
+      let name = format!("blur_sigma_{sigma:.0}");
+      if sigma < 8.0
+      {
+         assert_eq!(paired, exact, "{name} must stay on the exact narrow path");
+         assert_eq!(paired_renderer.last_stats().blur_kernel_paired_passes, 0);
+         assert_eq!(paired_renderer.last_stats().blur_kernel_exact_passes, 2);
+      }
+      else
+      {
+         assert_blur_error(&name, &exact, &paired, 1, 0.002, 0.006);
+         assert_eq!(paired_renderer.last_stats().blur_kernel_paired_passes, 2);
+         assert_eq!(paired_renderer.last_stats().blur_kernel_exact_passes, 0);
+         assert!(paired_renderer.last_stats().blur_kernel_encoded_samples
+            < paired_renderer.last_stats().blur_kernel_source_samples);
+      }
    }
 }
