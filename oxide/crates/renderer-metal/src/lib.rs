@@ -899,6 +899,35 @@ struct Scene3dDraw {
     batchable: bool,
 }
 
+#[derive(Clone, Copy)]
+struct Scene3dBloomLayer {
+    sigma: f32,
+    radius: f32,
+    strength: f32,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Scene3dBloomCounters {
+    layers: u32,
+    source_passes: u32,
+    source_draws: u32,
+    extract_passes: u32,
+    downsample_passes: u32,
+    blur_horizontal_passes: u32,
+    blur_vertical_passes: u32,
+    upsample_passes: u32,
+    composite_passes: u32,
+    resources: u32,
+    alias_slots: u32,
+    logical_bytes: u64,
+    physical_bytes: u64,
+    aliased_bytes: u64,
+    bandwidth_bytes: u64,
+    region_pixels: u64,
+    plan_builds: u32,
+    plan_reuses: u32,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct GlyphGpuInstance
@@ -989,6 +1018,10 @@ pub struct MetalRenderer {
     effect_graph_events: alloc::vec::Vec<api::EffectGraphEvent>,
     effect_graph_plan: api::EffectGraphPlan,
     effect_graph_key: u64,
+    scene3d_bloom_graph_events: alloc::vec::Vec<api::EffectGraphEvent>,
+    scene3d_bloom_graph_plan: api::EffectGraphPlan,
+    scene3d_bloom_graph_key: u64,
+    scene3d_bloom_layers: alloc::vec::Vec<Scene3dBloomLayer>,
     #[cfg(feature = "snapshot-tests")]
     force_exact_blur_for_snapshot: bool,
     sampler: Option<SamplerState>,
@@ -1028,6 +1061,7 @@ pub struct MetalRenderer {
     eighth_tmp_tex: Option<Texture>,
     scene3d_bloom_tex: Option<Texture>,
     scene3d_bloom_tmp_tex: Option<Texture>,
+    scene3d_bloom_out_tex: Option<Texture>,
     id_mask_snapshot_target: Option<id_mask_gpu::RenderTargets>,
     id_mask_in_flight_generations: alloc::vec::Vec<alloc::vec::Vec<id_mask_gpu::IdMaskInFlightGeneration>>,
     id_mask_field_cache: alloc::vec::Vec<id_mask_gpu::IdMaskFieldCacheEntry>,
@@ -1086,6 +1120,7 @@ pub struct MetalRenderer {
     acc_scene3d_instance_buffer_binds: u32,
     acc_scene3d_instance_ring_grows: u32,
     acc_scene3d_viewport_sets: u32,
+    acc_scene3d_bloom: Scene3dBloomCounters,
     acc_glyph_instance_bytes: u64,
     acc_glyph_instance_buffer_binds: u32,
     acc_glyph_instances: u32,
@@ -2240,6 +2275,10 @@ impl MetalRenderer {
             effect_graph_events: alloc::vec::Vec::new(),
             effect_graph_plan: api::EffectGraphPlan::default(),
             effect_graph_key: 0,
+            scene3d_bloom_graph_events: alloc::vec::Vec::new(),
+            scene3d_bloom_graph_plan: api::EffectGraphPlan::default(),
+            scene3d_bloom_graph_key: 0,
+            scene3d_bloom_layers: alloc::vec::Vec::new(),
             #[cfg(feature = "snapshot-tests")]
             force_exact_blur_for_snapshot: false,
             sampler,
@@ -2279,6 +2318,7 @@ impl MetalRenderer {
             eighth_tmp_tex: None,
             scene3d_bloom_tex: None,
             scene3d_bloom_tmp_tex: None,
+            scene3d_bloom_out_tex: None,
             id_mask_snapshot_target: None,
             id_mask_in_flight_generations: (0..frame_resource_depth)
                 .map(|_| alloc::vec::Vec::new())
@@ -2339,6 +2379,7 @@ impl MetalRenderer {
             acc_scene3d_instance_buffer_binds: 0,
             acc_scene3d_instance_ring_grows: 0,
             acc_scene3d_viewport_sets: 0,
+            acc_scene3d_bloom: Scene3dBloomCounters::default(),
             acc_glyph_instance_bytes: 0,
             acc_glyph_instance_buffer_binds: 0,
             acc_glyph_instances: 0,
@@ -3088,6 +3129,7 @@ impl MetalRenderer {
         self.eighth_tmp_tex = None;
         self.scene3d_bloom_tex = None;
         self.scene3d_bloom_tmp_tex = None;
+        self.scene3d_bloom_out_tex = None;
     }
 
    /// Returns the hard allocated-byte budget for persistent prepared chunks.
@@ -3615,8 +3657,7 @@ impl MetalRenderer {
       }
    }
 
-    #[allow(dead_code)]
-    fn ensure_scene3d_bloom_targets(&mut self, downsample_divisor: u32) {
+    fn ensure_scene3d_bloom_targets(&mut self, downsample_divisor: u32, alias_slots: usize) {
         if self.target_w == 0 || self.target_h == 0 {
             return;
         }
@@ -3628,6 +3669,10 @@ impl MetalRenderer {
             None => true,
         };
         let need_tmp = match &self.scene3d_bloom_tmp_tex {
+            Some(tex) => tex.width() != w || tex.height() != h,
+            None => true,
+        };
+        let need_out = alias_slots > 2 && match &self.scene3d_bloom_out_tex {
             Some(tex) => tex.width() != w || tex.height() != h,
             None => true,
         };
@@ -3652,6 +3697,19 @@ impl MetalRenderer {
             d.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
             self.scene3d_bloom_tmp_tex = Some(self.device.new_texture(&d));
             self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
+        }
+        if need_out {
+            let d = TextureDescriptor::new();
+            d.set_pixel_format(MTLPixelFormat::RGBA16Float);
+            d.set_texture_type(MTLTextureType::D2);
+            d.set_width(w);
+            d.set_height(h);
+            d.set_storage_mode(MTLStorageMode::Private);
+            d.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+            self.scene3d_bloom_out_tex = Some(self.device.new_texture(&d));
+            self.acc_resource_creates = self.acc_resource_creates.saturating_add(1);
+        } else if alias_slots <= 2 {
+            self.scene3d_bloom_out_tex = None;
         }
     }
 
@@ -4308,6 +4366,7 @@ impl MetalRenderer {
         self.acc_scene3d_instance_buffer_binds = 0;
         self.acc_scene3d_instance_ring_grows = 0;
         self.acc_scene3d_viewport_sets = 0;
+        self.acc_scene3d_bloom = Scene3dBloomCounters::default();
         self.acc_glyph_instance_bytes = 0;
         self.acc_glyph_instance_buffer_binds = 0;
         self.acc_glyph_instances = 0;
@@ -5183,12 +5242,6 @@ impl MetalRenderer {
                 "scene3d currently requires MetalRenderer sample_count == 1",
             ));
         }
-        if pass.viewport.is_some() && pass.bloom.is_some() {
-            return Err(api::RenderError::Unsupported(
-                "scene3d viewport clipping is not implemented for bloom",
-            ));
-        }
-
         self.ensure_target();
         self.ensure_depth_target();
         let slot = self.current_frame_slot();
@@ -5253,7 +5306,14 @@ impl MetalRenderer {
         self.encode_prepared_scene3d_draws(&enc, uniform_offset, material_offset);
         enc.end_encoding();
         let bloom_result = if let Some(bloom) = pass.bloom {
-            self.encode_scene3d_bloom(&cmd, &target_tex, &mut pf, pass.view_proj, bloom)
+            self.encode_scene3d_bloom(
+                &cmd,
+                &target_tex,
+                &mut pf,
+                pass.view_proj,
+                pass.viewport,
+                bloom,
+            )
         } else {
             Ok(())
         };
@@ -5277,6 +5337,7 @@ impl MetalRenderer {
         self.last_stats.scene3d_instance_buffer_binds = self.acc_scene3d_instance_buffer_binds;
         self.last_stats.scene3d_instance_ring_grows = self.acc_scene3d_instance_ring_grows;
         self.last_stats.scene3d_viewport_sets = self.acc_scene3d_viewport_sets;
+        self.snapshot_scene3d_bloom_stats();
         Ok(())
     }
 
@@ -5286,21 +5347,63 @@ impl MetalRenderer {
         target_tex: &Texture,
         pf: &mut PerFrame,
         view_proj: scene3d::Mat4,
+        viewport: Option<api::RectF>,
         bloom: scene3d::Bloom3d<'_>,
     ) -> Result<(), api::RenderError> {
-        if bloom.emissive_instances.is_empty()
-            || !bloom.layers.iter().any(|layer| layer.strength > 0.0 && layer.sigma_px > 0.0)
-        {
+        self.scene3d_bloom_layers.clear();
+        if bloom.emissive_instances.is_empty() {
             return Ok(());
         }
         let divisor = bloom.downsample_divisor.clamp(1, 8);
-        self.ensure_scene3d_bloom_targets(divisor);
-        let Some(bloom_tex) = self.scene3d_bloom_tex.as_ref().map(Texture::to_owned) else {
+        for layer in bloom.layers {
+            if layer.strength <= 0.0 || layer.sigma_px <= 0.0 {
+                continue;
+            }
+            let sigma = (layer.sigma_px / divisor as f32).max(0.75);
+            self.scene3d_bloom_layers.push(Scene3dBloomLayer {
+                sigma,
+                radius: (sigma * 3.0).ceil().clamp(2.0, 192.0),
+                strength: layer.strength,
+            });
+        }
+        if self.scene3d_bloom_layers.is_empty() {
             return Ok(());
-        };
-        let Some(bloom_tmp_tex) = self.scene3d_bloom_tmp_tex.as_ref().map(Texture::to_owned) else {
+        }
+
+        let graph_key = scene3d_bloom_graph_key(
+            self.target_w,
+            self.target_h,
+            self.target_scale,
+            divisor,
+            viewport,
+            &self.scene3d_bloom_layers,
+        );
+        let graph_reused = graph_key == self.scene3d_bloom_graph_key;
+        if !graph_reused {
+            let mut events = core::mem::take(&mut self.scene3d_bloom_graph_events);
+            let mut plan = core::mem::take(&mut self.scene3d_bloom_graph_plan);
+            build_scene3d_bloom_graph(
+                &mut events,
+                &mut plan,
+                self.target_w,
+                self.target_h,
+                self.target_scale,
+                divisor,
+                viewport,
+                &self.scene3d_bloom_layers,
+            );
+            self.scene3d_bloom_graph_events = events;
+            self.scene3d_bloom_graph_plan = plan;
+            self.scene3d_bloom_graph_key = graph_key;
+        }
+        let graph_stats = self.scene3d_bloom_graph_plan.stats();
+        if graph_stats.extract_passes == 0 {
             return Ok(());
-        };
+        }
+        self.ensure_scene3d_bloom_targets(
+            divisor,
+            self.scene3d_bloom_graph_plan.alias_slot_count(),
+        );
         let (uniform_offset, material_offset) = self.prepare_scene3d_draws(
             pf,
             view_proj,
@@ -5308,39 +5411,231 @@ impl MetalRenderer {
             1.0,
             true,
         )?;
-        for layer in bloom.layers {
-            if layer.strength <= 0.0 || layer.sigma_px <= 0.0 {
-                continue;
-            }
-            let rpd = RenderPassDescriptor::new();
-            let ca = rpd.color_attachments().object_at(0).unwrap();
-            ca.set_texture(Some(&bloom_tex));
-            ca.set_load_action(MTLLoadAction::Clear);
-            ca.set_store_action(MTLStoreAction::Store);
-            ca.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0 });
-            self.acc_render_passes = self.acc_render_passes.saturating_add(1);
-            let enc = cmd.new_render_command_encoder(&rpd);
-            enc.set_front_facing_winding(MTLWinding::CounterClockwise);
-            self.encode_prepared_scene3d_draws(&enc, uniform_offset, material_offset);
-            enc.end_encoding();
 
-            let pass_sigma = (layer.sigma_px / divisor as f32).max(0.75);
-            let pass_radius = (pass_sigma * 3.0).ceil().clamp(2.0, 192.0);
-            self.encode_scene3d_bloom_blur_pass(
-                cmd,
-                &bloom_tex,
-                &bloom_tmp_tex,
-                [1.0, 0.0, pass_sigma, pass_radius],
-            );
-            self.encode_scene3d_bloom_blur_pass(
-                cmd,
-                &bloom_tmp_tex,
-                &bloom_tex,
-                [0.0, 1.0, pass_sigma, pass_radius],
-            );
-            self.encode_scene3d_bloom_composite(cmd, &bloom_tex, target_tex, layer.strength);
+        self.acc_scene3d_bloom.layers = self.acc_scene3d_bloom.layers
+            .saturating_add(self.scene3d_bloom_layers.len() as u32);
+        self.acc_scene3d_bloom.extract_passes = self.acc_scene3d_bloom.extract_passes
+            .saturating_add(graph_stats.extract_passes);
+        self.acc_scene3d_bloom.downsample_passes = self.acc_scene3d_bloom.downsample_passes
+            .saturating_add(graph_stats.downsample_passes);
+        self.acc_scene3d_bloom.blur_horizontal_passes = self
+            .acc_scene3d_bloom
+            .blur_horizontal_passes
+            .saturating_add(graph_stats.blur_horizontal_passes);
+        self.acc_scene3d_bloom.blur_vertical_passes = self
+            .acc_scene3d_bloom
+            .blur_vertical_passes
+            .saturating_add(graph_stats.blur_vertical_passes);
+        self.acc_scene3d_bloom.upsample_passes = self.acc_scene3d_bloom.upsample_passes
+            .saturating_add(graph_stats.upsample_passes);
+        self.acc_scene3d_bloom.composite_passes = self.acc_scene3d_bloom.composite_passes
+            .saturating_add(graph_stats.composite_passes);
+        self.acc_scene3d_bloom.resources = self.acc_scene3d_bloom.resources
+            .saturating_add(graph_stats.resources);
+        self.acc_scene3d_bloom.alias_slots = self.acc_scene3d_bloom.alias_slots
+            .saturating_add(graph_stats.alias_slots);
+        self.acc_scene3d_bloom.logical_bytes = self.acc_scene3d_bloom.logical_bytes
+            .saturating_add(graph_stats.logical_bytes);
+        self.acc_scene3d_bloom.physical_bytes = self.acc_scene3d_bloom.physical_bytes
+            .saturating_add(graph_stats.physical_bytes);
+        self.acc_scene3d_bloom.aliased_bytes = self.acc_scene3d_bloom.aliased_bytes
+            .saturating_add(graph_stats.aliased_bytes);
+        if graph_reused {
+            self.acc_scene3d_bloom.plan_reuses =
+                self.acc_scene3d_bloom.plan_reuses.saturating_add(1);
+        } else {
+            self.acc_scene3d_bloom.plan_builds =
+                self.acc_scene3d_bloom.plan_builds.saturating_add(1);
+        }
+
+        for pass_index in 0..self.scene3d_bloom_graph_plan.passes().len() {
+            let pass = self.scene3d_bloom_graph_plan.passes()[pass_index];
+            self.acc_scene3d_bloom.region_pixels = self
+                .acc_scene3d_bloom
+                .region_pixels
+                .saturating_add(pass.region.pixels());
+            match pass.reason {
+                api::EffectGraphPassReason::Extract
+                | api::EffectGraphPassReason::ExtractDownsample => {
+                    let Some(dst) = self.scene3d_bloom_graph_texture(pass.write_resource) else {
+                        return Err(api::RenderError::InvalidOperation(
+                            "scene3d bloom graph extraction target unavailable",
+                        ));
+                    };
+                    self.encode_scene3d_bloom_source_pass(
+                        cmd,
+                        &dst,
+                        uniform_offset,
+                        material_offset,
+                        viewport,
+                        divisor,
+                    );
+                    self.acc_scene3d_bloom.bandwidth_bytes = self
+                        .acc_scene3d_bloom
+                        .bandwidth_bytes
+                        .saturating_add(pass.region.pixels().saturating_mul(8));
+                }
+                api::EffectGraphPassReason::Downsample => {
+                    let Some(src) = self.scene3d_bloom_graph_texture(pass.read_resource) else {
+                        return Err(api::RenderError::InvalidOperation(
+                            "scene3d bloom graph downsample source unavailable",
+                        ));
+                    };
+                    let Some(dst) = self.scene3d_bloom_graph_texture(pass.write_resource) else {
+                        return Err(api::RenderError::InvalidOperation(
+                            "scene3d bloom graph downsample target unavailable",
+                        ));
+                    };
+                    self.encode_scene3d_bloom_downsample_pass(cmd, &src, &dst, pass.region);
+                    self.acc_scene3d_bloom.bandwidth_bytes = self
+                        .acc_scene3d_bloom
+                        .bandwidth_bytes
+                        .saturating_add(pass.region.pixels().saturating_mul(16));
+                }
+                api::EffectGraphPassReason::BlurHorizontal
+                | api::EffectGraphPassReason::BlurVertical => {
+                    let Some(layer) = pass.first_command.checked_sub(1)
+                        .and_then(|index| self.scene3d_bloom_layers.get(index as usize))
+                        .copied()
+                    else {
+                        return Err(api::RenderError::InvalidOperation(
+                            "scene3d bloom graph layer unavailable",
+                        ));
+                    };
+                    let Some(src) = self.scene3d_bloom_graph_texture(pass.read_resource) else {
+                        return Err(api::RenderError::InvalidOperation(
+                            "scene3d bloom graph blur source unavailable",
+                        ));
+                    };
+                    let Some(dst) = self.scene3d_bloom_graph_texture(pass.write_resource) else {
+                        return Err(api::RenderError::InvalidOperation(
+                            "scene3d bloom graph blur target unavailable",
+                        ));
+                    };
+                    let direction = if pass.reason == api::EffectGraphPassReason::BlurHorizontal {
+                        [1.0, 0.0]
+                    } else {
+                        [0.0, 1.0]
+                    };
+                    self.encode_scene3d_bloom_blur_pass(
+                        cmd,
+                        &src,
+                        &dst,
+                        [direction[0], direction[1], layer.sigma, layer.radius],
+                        pass.region,
+                    );
+                    self.acc_scene3d_bloom.bandwidth_bytes = self
+                        .acc_scene3d_bloom
+                        .bandwidth_bytes
+                        .saturating_add(pass.region.pixels().saturating_mul(16));
+                }
+                api::EffectGraphPassReason::Composite
+                | api::EffectGraphPassReason::UpsampleComposite => {
+                    let Some(layer) = pass.first_command.checked_sub(1)
+                        .and_then(|index| self.scene3d_bloom_layers.get(index as usize))
+                        .copied()
+                    else {
+                        return Err(api::RenderError::InvalidOperation(
+                            "scene3d bloom graph composite layer unavailable",
+                        ));
+                    };
+                    let Some(src) = self.scene3d_bloom_graph_texture(pass.read_resource) else {
+                        return Err(api::RenderError::InvalidOperation(
+                            "scene3d bloom graph composite source unavailable",
+                        ));
+                    };
+                    self.encode_scene3d_bloom_composite(
+                        cmd,
+                        &src,
+                        target_tex,
+                        layer.strength,
+                        pass.region,
+                    );
+                    let target_bytes_per_pixel: u64 = match self.color_format {
+                        MTLPixelFormat::RGBA16Float | MTLPixelFormat::BGRA10_XR => 8,
+                        _ => 4,
+                    };
+                    self.acc_scene3d_bloom.bandwidth_bytes = self
+                        .acc_scene3d_bloom
+                        .bandwidth_bytes
+                        .saturating_add(pass.region.pixels().saturating_mul(
+                            8 + target_bytes_per_pixel * 2,
+                        ));
+                }
+                api::EffectGraphPassReason::Capture => {
+                    return Err(api::RenderError::InvalidOperation(
+                        "scene3d bloom graph cannot capture the final target",
+                    ));
+                }
+            }
         }
         Ok(())
+    }
+
+    fn scene3d_bloom_graph_texture(&self, resource: Option<u32>) -> Option<Texture> {
+        let resource = self.scene3d_bloom_graph_plan.resources().get(resource? as usize)?;
+        match resource.alias_slot {
+            0 => self.scene3d_bloom_tex.as_ref().map(Texture::to_owned),
+            1 => self.scene3d_bloom_tmp_tex.as_ref().map(Texture::to_owned),
+            2 => self.scene3d_bloom_out_tex.as_ref().map(Texture::to_owned),
+            _ => None,
+        }
+    }
+
+    fn encode_scene3d_bloom_source_pass(
+        &mut self,
+        cmd: &CommandBuffer,
+        dst: &Texture,
+        uniform_offset: usize,
+        material_offset: usize,
+        viewport: Option<api::RectF>,
+        divisor: u32,
+    ) {
+        let rpd = RenderPassDescriptor::new();
+        let ca = rpd.color_attachments().object_at(0).unwrap();
+        ca.set_texture(Some(dst));
+        ca.set_load_action(MTLLoadAction::Clear);
+        ca.set_store_action(MTLStoreAction::Store);
+        ca.set_clear_color(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0 });
+        self.acc_render_passes = self.acc_render_passes.saturating_add(1);
+        self.acc_scene3d_bloom.source_passes =
+            self.acc_scene3d_bloom.source_passes.saturating_add(1);
+        let draws_before = self.acc_scene3d_draws;
+        let enc = cmd.new_render_command_encoder(&rpd);
+        enc.set_front_facing_winding(MTLWinding::CounterClockwise);
+        if let Some(viewport) = viewport {
+            set_scene3d_bloom_viewport_and_scissor(&enc, self, viewport, divisor, dst);
+            self.acc_scene3d_viewport_sets = self.acc_scene3d_viewport_sets.saturating_add(1);
+        }
+        self.encode_prepared_scene3d_draws(&enc, uniform_offset, material_offset);
+        enc.end_encoding();
+        self.acc_scene3d_bloom.source_draws = self.acc_scene3d_bloom.source_draws
+            .saturating_add(self.acc_scene3d_draws.saturating_sub(draws_before));
+    }
+
+    fn encode_scene3d_bloom_downsample_pass(
+        &mut self,
+        cmd: &CommandBuffer,
+        src: &Texture,
+        dst: &Texture,
+        region: api::EffectGraphRegion,
+    ) {
+        let rpd = RenderPassDescriptor::new();
+        let ca = rpd.color_attachments().object_at(0).unwrap();
+        ca.set_texture(Some(dst));
+        ca.set_load_action(MTLLoadAction::DontCare);
+        ca.set_store_action(MTLStoreAction::Store);
+        self.acc_render_passes = self.acc_render_passes.saturating_add(1);
+        let enc = cmd.new_render_command_encoder(&rpd);
+        enc.set_render_pipeline_state(&self.pso_downsample);
+        if let Some(sam) = &self.sampler {
+            enc.set_fragment_sampler_state(0, Some(sam));
+        }
+        enc.set_fragment_texture(0, Some(src));
+        set_effect_graph_scissor(&enc, region, dst.width() as u32, dst.height() as u32);
+        enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+        enc.end_encoding();
+        self.acc_draws = self.acc_draws.saturating_add(1);
     }
 
     fn encode_scene3d_bloom_blur_pass(
@@ -5349,6 +5644,7 @@ impl MetalRenderer {
         src: &Texture,
         dst: &Texture,
         params: [f32; 4],
+        region: api::EffectGraphRegion,
     ) {
         let rpd = RenderPassDescriptor::new();
         let ca = rpd.color_attachments().object_at(0).unwrap();
@@ -5361,6 +5657,7 @@ impl MetalRenderer {
             enc.set_fragment_sampler_state(0, Some(sam));
         }
         enc.set_fragment_texture(0, Some(src));
+        set_effect_graph_scissor(&enc, region, dst.width() as u32, dst.height() as u32);
         let kernel = bind_blur_kernel(
             &enc,
             params,
@@ -5380,6 +5677,7 @@ impl MetalRenderer {
         src: &Texture,
         dst: &Texture,
         strength: f32,
+        region: api::EffectGraphRegion,
     ) {
         let rpd = RenderPassDescriptor::new();
         let ca = rpd.color_attachments().object_at(0).unwrap();
@@ -5394,6 +5692,7 @@ impl MetalRenderer {
         }
         let strength = strength.max(0.0);
         enc.set_fragment_texture(0, Some(src));
+        set_effect_graph_scissor(&enc, region, dst.width() as u32, dst.height() as u32);
         enc.set_fragment_bytes(
             1,
             core::mem::size_of_val(&strength) as u64,
@@ -5402,6 +5701,30 @@ impl MetalRenderer {
         enc.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
         enc.end_encoding();
         self.acc_draws = self.acc_draws.saturating_add(1);
+    }
+
+    fn snapshot_scene3d_bloom_stats(&mut self) {
+        let counters = self.acc_scene3d_bloom;
+        self.last_stats.scene3d_bloom_layers = counters.layers;
+        self.last_stats.scene3d_bloom_source_passes = counters.source_passes;
+        self.last_stats.scene3d_bloom_source_draws = counters.source_draws;
+        self.last_stats.scene3d_bloom_extract_passes = counters.extract_passes;
+        self.last_stats.scene3d_bloom_downsample_passes = counters.downsample_passes;
+        self.last_stats.scene3d_bloom_blur_horizontal_passes =
+            counters.blur_horizontal_passes;
+        self.last_stats.scene3d_bloom_blur_vertical_passes =
+            counters.blur_vertical_passes;
+        self.last_stats.scene3d_bloom_upsample_passes = counters.upsample_passes;
+        self.last_stats.scene3d_bloom_composite_passes = counters.composite_passes;
+        self.last_stats.scene3d_bloom_graph_resources = counters.resources;
+        self.last_stats.scene3d_bloom_graph_alias_slots = counters.alias_slots;
+        self.last_stats.scene3d_bloom_graph_plan_builds = counters.plan_builds;
+        self.last_stats.scene3d_bloom_graph_plan_reuses = counters.plan_reuses;
+        self.last_stats.scene3d_bloom_graph_logical_bytes = counters.logical_bytes;
+        self.last_stats.scene3d_bloom_graph_physical_bytes = counters.physical_bytes;
+        self.last_stats.scene3d_bloom_graph_aliased_bytes = counters.aliased_bytes;
+        self.last_stats.scene3d_bloom_bandwidth_bytes = counters.bandwidth_bytes;
+        self.last_stats.scene3d_bloom_region_pixels = counters.region_pixels;
     }
 
     fn prepare_scene3d_draws(
@@ -5893,6 +6216,148 @@ fn metal_effect_graph_output_region(
 fn effect_graph_hash_mix(hash: &mut u64, value: u64) {
     *hash ^= value;
     *hash = hash.wrapping_mul(0x100000001b3);
+}
+
+fn scene3d_bloom_graph_key(
+    width: u32,
+    height: u32,
+    scale: f32,
+    divisor: u32,
+    viewport: Option<api::RectF>,
+    layers: &[Scene3dBloomLayer],
+) -> u64 {
+    let mut key = 0xcbf29ce484222325_u64;
+    for value in [
+        u64::from(width),
+        u64::from(height),
+        u64::from(scale.to_bits()),
+        u64::from(divisor),
+        layers.len() as u64,
+    ] {
+        effect_graph_hash_mix(&mut key, value);
+    }
+    if let Some(viewport) = viewport {
+        for value in [viewport.x, viewport.y, viewport.w, viewport.h] {
+            effect_graph_hash_mix(&mut key, u64::from(value.to_bits()));
+        }
+    } else {
+        effect_graph_hash_mix(&mut key, u64::MAX);
+    }
+    for layer in layers {
+        effect_graph_hash_mix(&mut key, u64::from(layer.sigma.to_bits()));
+        effect_graph_hash_mix(&mut key, u64::from(layer.radius.to_bits()));
+    }
+    key.max(1)
+}
+
+fn scene3d_bloom_downsampled_region(
+    region: api::EffectGraphRegion,
+    divisor: u32,
+) -> api::EffectGraphRegion {
+    let divisor = divisor.max(1);
+    let x1 = region.x.saturating_add(region.w).saturating_add(divisor - 1) / divisor;
+    let y1 = region.y.saturating_add(region.h).saturating_add(divisor - 1) / divisor;
+    let x0 = region.x / divisor;
+    let y0 = region.y / divisor;
+    api::EffectGraphRegion::new(x0, y0, x1.saturating_sub(x0), y1.saturating_sub(y0))
+}
+
+fn scene3d_bloom_expanded_region(
+    region: api::EffectGraphRegion,
+    radius: f32,
+    width: u32,
+    height: u32,
+) -> api::EffectGraphRegion {
+    let radius = radius.ceil().max(0.0) as u32;
+    let x = region.x.saturating_sub(radius);
+    let y = region.y.saturating_sub(radius);
+    let x1 = region.x.saturating_add(region.w).saturating_add(radius).min(width);
+    let y1 = region.y.saturating_add(region.h).saturating_add(radius).min(height);
+    api::EffectGraphRegion::new(x, y, x1.saturating_sub(x), y1.saturating_sub(y))
+}
+
+fn build_scene3d_bloom_graph(
+    events: &mut alloc::vec::Vec<api::EffectGraphEvent>,
+    plan: &mut api::EffectGraphPlan,
+    target_width: u32,
+    target_height: u32,
+    target_scale: f32,
+    divisor: u32,
+    viewport: Option<api::RectF>,
+    layers: &[Scene3dBloomLayer],
+) {
+    events.clear();
+    let divisor = divisor.max(1);
+    let bloom_width = (target_width / divisor).max(1);
+    let bloom_height = (target_height / divisor).max(1);
+    let output = viewport.map_or(
+        api::EffectGraphRegion::new(0, 0, target_width, target_height),
+        |viewport| {
+            metal_effect_graph_output_region(
+                viewport,
+                target_width,
+                target_height,
+                target_scale,
+            )
+        },
+    );
+    let base = scene3d_bloom_downsampled_region(output, divisor);
+    let base = api::EffectGraphRegion::new(
+        base.x.min(bloom_width),
+        base.y.min(bloom_height),
+        base.x.saturating_add(base.w).min(bloom_width).saturating_sub(base.x.min(bloom_width)),
+        base.y.saturating_add(base.h).min(bloom_height).saturating_sub(base.y.min(bloom_height)),
+    );
+    if base.is_empty() || layers.is_empty() {
+        plan.build(events);
+        return;
+    }
+    let source = layers.iter().fold(base, |region, layer| {
+        region.union(scene3d_bloom_expanded_region(
+            base,
+            layer.radius,
+            bloom_width,
+            bloom_height,
+        ))
+    });
+    let target = api::EffectGraphTarget {
+        id: 0x5343_3344_424c_4f4f,
+        format: MTLPixelFormat::RGBA16Float as u32,
+        sample_count: 1,
+        bytes_per_pixel: 8,
+        storage: api::EffectGraphStorage::Transient,
+    };
+    events.push(api::EffectGraphEvent {
+        command: 0,
+        target,
+        kind: api::EffectGraphEventKind::Extract {
+            region: source,
+            downsampled: divisor > 1,
+        },
+    });
+    for (index, layer) in layers.iter().enumerate() {
+        events.push(api::EffectGraphEvent {
+            command: index as u32 + 1,
+            target,
+            kind: api::EffectGraphEventKind::Filter {
+                region: scene3d_bloom_expanded_region(
+                    base,
+                    layer.radius,
+                    bloom_width,
+                    bloom_height,
+                ),
+                output,
+                pyramid: api::EffectGraphPyramidSpec {
+                    sigma_bits: layer.sigma.to_bits(),
+                    quality: 2,
+                    downsample_levels: 0,
+                    blur_passes: 2,
+                    materialized: true,
+                },
+            },
+        });
+    }
+    plan.build(events);
 }
 
 fn build_metal_effect_graph(
@@ -6482,6 +6947,7 @@ impl api::Renderer for MetalRenderer {
         self.acc_scene3d_instance_buffer_binds = 0;
         self.acc_scene3d_instance_ring_grows = 0;
         self.acc_scene3d_viewport_sets = 0;
+        self.acc_scene3d_bloom = Scene3dBloomCounters::default();
         self.acc_glyph_instance_bytes = 0;
         self.acc_glyph_instance_buffer_binds = 0;
         self.acc_glyph_instances = 0;
@@ -7664,6 +8130,7 @@ impl api::Renderer for MetalRenderer {
         self.last_stats.scene3d_instance_buffer_binds = self.acc_scene3d_instance_buffer_binds;
         self.last_stats.scene3d_instance_ring_grows = self.acc_scene3d_instance_ring_grows;
         self.last_stats.scene3d_viewport_sets = self.acc_scene3d_viewport_sets;
+        self.snapshot_scene3d_bloom_stats();
         self.last_stats.glyph_instance_bytes = self.acc_glyph_instance_bytes;
         self.last_stats.glyph_instance_buffer_binds = self.acc_glyph_instance_buffer_binds;
         self.last_stats.glyph_instances = self.acc_glyph_instances;
@@ -8137,6 +8604,65 @@ pub(crate) fn set_viewport_and_scissor_dp(
         y: y1 as u64,
         width: width as u64,
         height: height as u64,
+    });
+}
+
+fn set_effect_graph_scissor(
+    enc: &RenderCommandEncoderRef,
+    region: api::EffectGraphRegion,
+    target_width: u32,
+    target_height: u32,
+) {
+    let x = region.x.min(target_width);
+    let y = region.y.min(target_height);
+    let x1 = region.x.saturating_add(region.w).min(target_width);
+    let y1 = region.y.saturating_add(region.h).min(target_height);
+    enc.set_scissor_rect(MTLScissorRect {
+        x: u64::from(x),
+        y: u64::from(y),
+        width: u64::from(x1.saturating_sub(x)),
+        height: u64::from(y1.saturating_sub(y)),
+    });
+}
+
+fn set_scene3d_bloom_viewport_and_scissor(
+    enc: &RenderCommandEncoderRef,
+    renderer: &MetalRenderer,
+    rect: api::RectF,
+    divisor: u32,
+    target: &TextureRef,
+) {
+    let scale = renderer.target_scale.max(1.0);
+    let x = (rect.x * scale).floor().max(0.0) as f64;
+    let y = (rect.y * scale).floor().max(0.0) as f64;
+    let w = (rect.w * scale).ceil().max(0.0) as f64;
+    let h = (rect.h * scale).ceil().max(0.0) as f64;
+    let x1 = x.clamp(0.0, renderer.target_w as f64);
+    let y1 = y.clamp(0.0, renderer.target_h as f64);
+    let x2 = (x + w).clamp(0.0, renderer.target_w as f64);
+    let y2 = (y + h).clamp(0.0, renderer.target_h as f64);
+    let divisor = f64::from(divisor.max(1));
+    let bx1 = (x1 / divisor).clamp(0.0, target.width() as f64);
+    let by1 = (y1 / divisor).clamp(0.0, target.height() as f64);
+    let bx2 = (x2 / divisor).clamp(0.0, target.width() as f64);
+    let by2 = (y2 / divisor).clamp(0.0, target.height() as f64);
+    enc.set_viewport(MTLViewport {
+        originX: bx1,
+        originY: by1,
+        width: (bx2 - bx1).max(0.0),
+        height: (by2 - by1).max(0.0),
+        znear: 0.0,
+        zfar: 1.0,
+    });
+    let sx1 = bx1.floor() as u64;
+    let sy1 = by1.floor() as u64;
+    let sx2 = bx2.ceil().min(target.width() as f64) as u64;
+    let sy2 = by2.ceil().min(target.height() as f64) as u64;
+    enc.set_scissor_rect(MTLScissorRect {
+        x: sx1,
+        y: sy1,
+        width: sx2.saturating_sub(sx1),
+        height: sy2.saturating_sub(sy1),
     });
 }
 
@@ -10935,6 +11461,24 @@ pub struct PerfStats {
     pub scene3d_instance_buffer_binds: u32,
     pub scene3d_instance_ring_grows: u32,
     pub scene3d_viewport_sets: u32,
+    pub scene3d_bloom_layers: u32,
+    pub scene3d_bloom_source_passes: u32,
+    pub scene3d_bloom_source_draws: u32,
+    pub scene3d_bloom_extract_passes: u32,
+    pub scene3d_bloom_downsample_passes: u32,
+    pub scene3d_bloom_blur_horizontal_passes: u32,
+    pub scene3d_bloom_blur_vertical_passes: u32,
+    pub scene3d_bloom_upsample_passes: u32,
+    pub scene3d_bloom_composite_passes: u32,
+    pub scene3d_bloom_graph_resources: u32,
+    pub scene3d_bloom_graph_alias_slots: u32,
+    pub scene3d_bloom_graph_plan_builds: u32,
+    pub scene3d_bloom_graph_plan_reuses: u32,
+    pub scene3d_bloom_graph_logical_bytes: u64,
+    pub scene3d_bloom_graph_physical_bytes: u64,
+    pub scene3d_bloom_graph_aliased_bytes: u64,
+    pub scene3d_bloom_bandwidth_bytes: u64,
+    pub scene3d_bloom_region_pixels: u64,
     pub effect_graph_effects: u32,
     pub effect_graph_captures: u32,
     pub effect_graph_pyramids: u32,
@@ -11239,7 +11783,8 @@ impl MetalRenderer {
             self.scene3d_bloom_tex
                 .iter()
                 .map(|tex| tex.as_ref())
-                .chain(self.scene3d_bloom_tmp_tex.iter().map(|tex| tex.as_ref())),
+                .chain(self.scene3d_bloom_tmp_tex.iter().map(|tex| tex.as_ref()))
+                .chain(self.scene3d_bloom_out_tex.iter().map(|tex| tex.as_ref())),
         );
         let retained_id_mask_target_bytes = Self::unique_texture_category_bytes(
             &mut seen,
@@ -11363,6 +11908,7 @@ impl MetalRenderer {
             .chain(self.eighth_tmp_tex.iter())
             .chain(self.scene3d_bloom_tex.iter())
             .chain(self.scene3d_bloom_tmp_tex.iter())
+            .chain(self.scene3d_bloom_out_tex.iter())
             .chain(self.cam_blur_tex.iter())
             .chain(self.cam_xfade_prev_tex.iter())
             .chain(self.bench_cam_y_tex.iter())
@@ -11465,6 +12011,15 @@ impl MetalRenderer {
             .saturating_add(
                 (self.scene3d_draws.capacity() as u64)
                     .saturating_mul(core::mem::size_of::<Scene3dDraw>() as u64),
+            )
+            .saturating_add(
+                (self.scene3d_bloom_layers.capacity() as u64)
+                    .saturating_mul(core::mem::size_of::<Scene3dBloomLayer>() as u64),
+            )
+            .saturating_add(self.scene3d_bloom_graph_plan.scratch_capacity_bytes() as u64)
+            .saturating_add(
+                (self.scene3d_bloom_graph_events.capacity() as u64)
+                    .saturating_mul(core::mem::size_of::<api::EffectGraphEvent>() as u64),
             );
         PerfMemoryStats {
             logical_total_bytes,

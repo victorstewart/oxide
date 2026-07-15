@@ -29,11 +29,12 @@ The API is intentionally narrow for performance and surface-area control:
 - Per-frame changes are limited to transforms, colors, and pass parameters.
 - There is no CPU-side tessellation or per-frame reprojection in the hot path.
 - Only triangle and line topologies are exposed because they cover solid land fills plus wire/grid overlays efficiently.
-- Bloom is encoded as a bounded offscreen emissive pass: draw emissive instances into a downsampled RGBA16Float target, run separable blur, then additively composite back into the main scene target.
+- Bloom is encoded as a bounded graph: extract emissive instances once into a downsampled RGBA16Float source, derive each separable-blur layer serially through aliased intermediates, then additively composite it back into the main scene target. A pass viewport constrains extraction, filtering, and composite regions.
 
 This is the right shape for the standalone globe app: an ellipsoid depth shell, a triangulated land mesh, and line meshes for borders and grid.
 
 ## Changelog
 
+- 2026-07-15: documented single-source graph bloom, aliased layer intermediates, and viewport-constrained processing.
 - 2026-04-23: Added the initial retained mesh API used by the standalone globe study and the authoring perf contract.
 - 2026-04-25: Documented scene3d material, additive blend, and bounded bloom payloads.

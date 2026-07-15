@@ -16,7 +16,8 @@ mod effect_graph;
 mod retained;
 
 pub use effect_graph::{
-   EffectGraphCapture, EffectGraphEffect, EffectGraphEvent, EffectGraphEventKind,
+   EffectGraphCapture, EffectGraphCaptureKind, EffectGraphEffect, EffectGraphEvent,
+   EffectGraphEventKind,
    EffectGraphLoadAction, EffectGraphPass, EffectGraphPassReason, EffectGraphPlan,
    EffectGraphPyramid, EffectGraphPyramidSpec, EffectGraphRegion, EffectGraphResource,
    EffectGraphResourceKind, EffectGraphStats, EffectGraphStorage, EffectGraphStoreAction,

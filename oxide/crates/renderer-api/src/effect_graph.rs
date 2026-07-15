@@ -32,6 +32,15 @@ impl EffectGraphRegion
       self.x < other_x1 && x1 > other.x && self.y < other_y1 && y1 > other.y
    }
 
+   pub fn contains(self, other: Self) -> bool
+   {
+      let x1 = self.x.saturating_add(self.w);
+      let y1 = self.y.saturating_add(self.h);
+      let other_x1 = other.x.saturating_add(other.w);
+      let other_y1 = other.y.saturating_add(other.h);
+      self.x <= other.x && self.y <= other.y && x1 >= other_x1 && y1 >= other_y1
+   }
+
    pub fn union(self, other: Self) -> Self
    {
       if self.is_empty()
@@ -90,6 +99,15 @@ pub struct EffectGraphPyramidSpec
 pub enum EffectGraphEventKind
 {
    Write,
+   Extract {
+      region: EffectGraphRegion,
+      downsampled: bool,
+   },
+   Filter {
+      region: EffectGraphRegion,
+      output: EffectGraphRegion,
+      pyramid: EffectGraphPyramidSpec,
+   },
    Effect {
       source: EffectGraphRegion,
       destination: EffectGraphRegion,
@@ -118,8 +136,17 @@ pub struct EffectGraphEffect
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EffectGraphCaptureKind
+{
+   Snapshot,
+   Extraction,
+   ExtractionDownsample,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EffectGraphCapture
 {
+   pub kind: EffectGraphCaptureKind,
    pub target: EffectGraphTarget,
    pub first_command: u32,
    pub last_command: u32,
@@ -173,10 +200,13 @@ pub enum EffectGraphStoreAction
 pub enum EffectGraphPassReason
 {
    Capture,
+   Extract,
+   ExtractDownsample,
    Downsample,
    BlurHorizontal,
    BlurVertical,
    Composite,
+   UpsampleComposite,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -212,9 +242,11 @@ pub struct EffectGraphStats
    pub pyramids: u32,
    pub pyramid_reuses: u32,
    pub capture_passes: u32,
+   pub extract_passes: u32,
    pub downsample_passes: u32,
    pub blur_horizontal_passes: u32,
    pub blur_vertical_passes: u32,
+   pub upsample_passes: u32,
    pub composite_passes: u32,
    pub max_lifetime_commands: u32,
    pub resources: u32,
@@ -258,26 +290,73 @@ impl EffectGraphPlan
       let mut active_capture: Option<usize> = None;
       for event in events
       {
-         let EffectGraphEventKind::Effect {
-            source,
-            destination,
-            output,
-            pyramid,
-         } = event.kind else
+         let (source, destination, output, pyramid, extracted) = match event.kind
          {
-            active_capture = None;
-            continue;
+            EffectGraphEventKind::Write =>
+            {
+               active_capture = None;
+               continue;
+            }
+            EffectGraphEventKind::Extract { region, downsampled } =>
+            {
+               active_capture = None;
+               if region.is_empty()
+               {
+                  continue;
+               }
+               let index = self.captures.len();
+               self.captures.push(EffectGraphCapture {
+                  kind: if downsampled {
+                     EffectGraphCaptureKind::ExtractionDownsample
+                  } else {
+                     EffectGraphCaptureKind::Extraction
+                  },
+                  target: event.target,
+                  first_command: event.command,
+                  last_command: event.command,
+                  effect_start: self.effects.len() as u32,
+                  effect_count: 0,
+                  source: region,
+                  destination: region,
+                  output: EffectGraphRegion::default(),
+                  resource: u32::MAX,
+               });
+               active_capture = Some(index);
+               continue;
+            }
+            EffectGraphEventKind::Filter { region, output, pyramid } =>
+            {
+               let Some(index) = active_capture.filter(|index| {
+                  let capture = self.captures[*index];
+                  capture.target == event.target
+                     && capture.kind != EffectGraphCaptureKind::Snapshot
+                     && capture.destination.contains(region)
+               }) else
+               {
+                  active_capture = None;
+                  continue;
+               };
+               active_capture = Some(index);
+               (region, region, output, pyramid, true)
+            }
+            EffectGraphEventKind::Effect {
+               source,
+               destination,
+               output,
+               pyramid,
+            } => (source, destination, output, pyramid, false),
          };
          if source.is_empty() || destination.is_empty() || output.is_empty()
          {
             continue;
          }
-         let compatible = active_capture.is_some_and(|index| {
+         let compatible = extracted || active_capture.is_some_and(|index| {
             let capture = self.captures[index];
             let output_overlap = source.intersects(capture.output)
                && self.effects[capture.effect_start as usize..].iter()
                   .any(|effect| source.intersects(effect.output));
-            capture.target == event.target
+            capture.kind == EffectGraphCaptureKind::Snapshot
+               && capture.target == event.target
                && mapping_delta(capture.source, capture.destination)
                   == mapping_delta(source, destination)
                && !output_overlap
@@ -290,6 +369,7 @@ impl EffectGraphPlan
          {
             let index = self.captures.len();
             self.captures.push(EffectGraphCapture {
+               kind: EffectGraphCaptureKind::Snapshot,
                target: event.target,
                first_command: event.command,
                last_command: event.command,
@@ -304,7 +384,13 @@ impl EffectGraphPlan
             index
          };
          let pyramid_index = pyramid.materialized.then(|| {
-            self.find_or_add_pyramid(capture_index, event.command, output, pyramid)
+            self.find_or_add_pyramid(
+               capture_index,
+               event.command,
+               if extracted { destination } else { output },
+               pyramid,
+               extracted,
+            )
          });
          self.effects.push(EffectGraphEffect {
             command: event.command,
@@ -332,10 +418,13 @@ impl EffectGraphPlan
       command: u32,
       region: EffectGraphRegion,
       spec: EffectGraphPyramidSpec,
+      contiguous_only: bool,
    ) -> usize
    {
       if let Some(index) = self.pyramids.iter().position(|pyramid| {
-         pyramid.capture == capture as u32 && pyramid.spec == spec
+         pyramid.capture == capture as u32
+            && pyramid.spec == spec
+            && (!contiguous_only || pyramid.last_command.saturating_add(1) == command)
       })
       {
          let pyramid = &mut self.pyramids[index];
@@ -364,7 +453,7 @@ impl EffectGraphPlan
    {
       for capture_index in 0..self.captures.len()
       {
-         let capture = self.captures[capture_index];
+         let mut capture = self.captures[capture_index];
          let resource = self.push_resource(
             EffectGraphResourceKind::Capture,
             capture.target,
@@ -373,6 +462,7 @@ impl EffectGraphPlan
             capture.last_command,
          );
          self.captures[capture_index].resource = resource;
+         capture.resource = resource;
          for pyramid_index in 0..self.pyramids.len()
          {
             let pyramid = self.pyramids[pyramid_index];
@@ -381,9 +471,15 @@ impl EffectGraphPlan
                continue;
             }
             let mut level_region = pyramid.region;
-            let mut final_resource = u32::MAX;
             let resource_start = self.resources.len() as u32;
-            for level in 1..=pyramid.spec.downsample_levels.max(1)
+            let extracted = capture.kind != EffectGraphCaptureKind::Snapshot;
+            let first_use = if extracted {
+               pyramid.first_command
+            } else {
+               capture.first_command
+            };
+            let mut final_resource = capture.resource;
+            for level in 1..=pyramid.spec.downsample_levels
             {
                level_region = downsampled(level_region);
                final_resource = self.push_resource(
@@ -393,8 +489,27 @@ impl EffectGraphPlan
                   },
                   capture.target,
                   level_region,
-                  capture.first_command,
+                  first_use,
                   pyramid.last_command,
+               );
+            }
+            if pyramid.spec.downsample_levels == 0 && pyramid.spec.blur_passes > 0
+            {
+               let alias_slot = (extracted
+                  && capture.effect_count == 1
+                  && pyramid.effect_count == 1
+                  && pyramid.spec.blur_passes > 1)
+                  .then_some(self.resources[capture.resource as usize].alias_slot);
+               final_resource = self.push_resource_with_alias(
+                  EffectGraphResourceKind::PyramidLevel {
+                     pyramid: pyramid_index as u32,
+                     level: 0,
+                  },
+                  capture.target,
+                  level_region,
+                  first_use,
+                  pyramid.last_command,
+                  alias_slot,
                );
             }
             let scratch_resource = if pyramid.spec.blur_passes > 1
@@ -431,30 +546,50 @@ impl EffectGraphPlan
       last_use: u32,
    ) -> u32
    {
-      let alias_slot = (target.storage == EffectGraphStorage::Transient).then(|| {
-         self.alias_slots.iter().enumerate().filter(|(_, slot)| {
-            slot.target.format == target.format
-               && slot.target.sample_count == target.sample_count
-               && slot.target.bytes_per_pixel == target.bytes_per_pixel
-               && slot.target.storage == target.storage
-               && slot.last_use < first_use
-         }).min_by_key(|(_, slot)| {
-            let current = u64::from(slot.width).saturating_mul(u64::from(slot.height));
-            let grown = u64::from(slot.width.max(region.w))
-               .saturating_mul(u64::from(slot.height.max(region.h)));
-            grown.saturating_sub(current)
-         }).map(|(index, _)| index)
-      }).flatten().unwrap_or_else(|| {
-         self.alias_slots.push(AliasSlot {
-            target,
-            width: region.w,
-            height: region.h,
-            last_use,
-         });
-         self.alias_slots.len() - 1
-      });
+      self.push_resource_with_alias(kind, target, region, first_use, last_use, None)
+   }
+
+   fn push_resource_with_alias(
+      &mut self,
+      kind: EffectGraphResourceKind,
+      target: EffectGraphTarget,
+      region: EffectGraphRegion,
+      first_use: u32,
+      last_use: u32,
+      forced_alias_slot: Option<u32>,
+   ) -> u32
+   {
+      let alias_slot = if let Some(alias_slot) = forced_alias_slot
+      {
+         alias_slot as usize
+      }
+      else
+      {
+         (target.storage == EffectGraphStorage::Transient).then(|| {
+            self.alias_slots.iter().enumerate().filter(|(_, slot)| {
+               slot.target.format == target.format
+                  && slot.target.sample_count == target.sample_count
+                  && slot.target.bytes_per_pixel == target.bytes_per_pixel
+                  && slot.target.storage == target.storage
+                  && slot.last_use < first_use
+            }).min_by_key(|(_, slot)| {
+               let current = u64::from(slot.width).saturating_mul(u64::from(slot.height));
+               let grown = u64::from(slot.width.max(region.w))
+                  .saturating_mul(u64::from(slot.height.max(region.h)));
+               grown.saturating_sub(current)
+            }).map(|(index, _)| index)
+         }).flatten().unwrap_or_else(|| {
+            self.alias_slots.push(AliasSlot {
+               target,
+               width: region.w,
+               height: region.h,
+               last_use,
+            });
+            self.alias_slots.len() - 1
+         })
+      };
       let slot = &mut self.alias_slots[alias_slot];
-      slot.last_use = last_use;
+      slot.last_use = slot.last_use.max(last_use);
       slot.width = slot.width.max(region.w);
       slot.height = slot.height.max(region.h);
       let resource = self.resources.len() as u32;
@@ -471,88 +606,151 @@ impl EffectGraphPlan
 
    fn assign_passes(&mut self)
    {
-      for (capture_index, capture) in self.captures.iter().enumerate()
+      for capture_index in 0..self.captures.len()
       {
+         let capture = self.captures[capture_index];
          self.passes.push(EffectGraphPass {
-            reason: EffectGraphPassReason::Capture,
+            reason: match capture.kind {
+               EffectGraphCaptureKind::Snapshot => EffectGraphPassReason::Capture,
+               EffectGraphCaptureKind::Extraction => EffectGraphPassReason::Extract,
+               EffectGraphCaptureKind::ExtractionDownsample => {
+                  EffectGraphPassReason::ExtractDownsample
+               }
+            },
             target: capture.target,
             region: capture.destination,
             first_command: capture.first_command,
             last_command: capture.last_command,
             read_resource: None,
             write_resource: Some(capture.resource),
-            load: EffectGraphLoadAction::DontCare,
+            load: if capture.kind == EffectGraphCaptureKind::Snapshot {
+               EffectGraphLoadAction::DontCare
+            } else {
+               EffectGraphLoadAction::Clear
+            },
             store: EffectGraphStoreAction::Store,
          });
-         for pyramid in self.pyramids.iter()
-            .filter(|pyramid| pyramid.capture == capture_index as u32)
+         if capture.kind == EffectGraphCaptureKind::Snapshot
          {
-            let mut read_resource = capture.resource;
-            for level in 1..=pyramid.spec.downsample_levels.max(1)
+            for pyramid_index in 0..self.pyramids.len()
             {
-               let write_resource = pyramid.resource_start + u32::from(level) - 1;
-               self.passes.push(EffectGraphPass {
-                  reason: EffectGraphPassReason::Downsample,
-                  target: capture.target,
-                  region: pyramid.region,
-                  first_command: pyramid.first_command,
-                  last_command: pyramid.last_command,
-                  read_resource: Some(read_resource),
-                  write_resource: Some(write_resource),
-                  load: EffectGraphLoadAction::DontCare,
-                  store: EffectGraphStoreAction::Store,
-               });
-               read_resource = write_resource;
-            }
-            if pyramid.spec.blur_passes > 0
-            {
-               let scratch = pyramid.scratch_resource.unwrap_or(pyramid.resource);
-               self.passes.push(EffectGraphPass {
-                  reason: EffectGraphPassReason::BlurHorizontal,
-                  target: capture.target,
-                  region: pyramid.region,
-                  first_command: pyramid.first_command,
-                  last_command: pyramid.last_command,
-                  read_resource: Some(pyramid.resource),
-                  write_resource: Some(scratch),
-                  load: EffectGraphLoadAction::DontCare,
-                  store: EffectGraphStoreAction::Store,
-               });
-               if pyramid.spec.blur_passes > 1
+               let pyramid = self.pyramids[pyramid_index];
+               if pyramid.capture == capture_index as u32
                {
-                  self.passes.push(EffectGraphPass {
-                     reason: EffectGraphPassReason::BlurVertical,
-                     target: capture.target,
-                     region: pyramid.region,
-                     first_command: pyramid.first_command,
-                     last_command: pyramid.last_command,
-                     read_resource: Some(scratch),
-                     write_resource: Some(pyramid.resource),
-                     load: EffectGraphLoadAction::DontCare,
-                     store: EffectGraphStoreAction::Store,
-                  });
+                  self.push_pyramid_passes(capture, pyramid);
+               }
+            }
+            for effect_index in 0..self.effects.len()
+            {
+               let effect = self.effects[effect_index];
+               if effect.capture == capture_index as u32
+               {
+                  self.push_composite_pass(capture, effect);
                }
             }
          }
-         for effect in self.effects.iter().filter(|effect| {
-            effect.capture == capture_index as u32
-         })
+         else
          {
-            let read_resource = effect.pyramid
-               .map_or(capture.resource, |pyramid| self.pyramids[pyramid as usize].resource);
-            self.passes.push(EffectGraphPass {
-               reason: EffectGraphPassReason::Composite,
-               target: capture.target,
-               region: effect.output,
-               first_command: effect.command,
-               last_command: effect.command,
-               read_resource: Some(read_resource),
-               write_resource: None,
-               load: EffectGraphLoadAction::Load,
-               store: EffectGraphStoreAction::Store,
-            });
+            let mut emitted_pyramid = None;
+            for effect_index in 0..self.effects.len()
+            {
+               let effect = self.effects[effect_index];
+               if effect.capture != capture_index as u32
+               {
+                  continue;
+               }
+               if effect.pyramid != emitted_pyramid
+               {
+                  if let Some(pyramid) = effect.pyramid
+                  {
+                     self.push_pyramid_passes(capture, self.pyramids[pyramid as usize]);
+                  }
+                  emitted_pyramid = effect.pyramid;
+               }
+               self.push_composite_pass(capture, effect);
+            }
          }
       }
+   }
+
+   fn push_pyramid_passes(
+      &mut self,
+      capture: EffectGraphCapture,
+      pyramid: EffectGraphPyramid,
+   )
+   {
+      let mut read_resource = capture.resource;
+      for level in 1..=pyramid.spec.downsample_levels
+      {
+         let write_resource = pyramid.resource_start + u32::from(level) - 1;
+         self.passes.push(EffectGraphPass {
+            reason: EffectGraphPassReason::Downsample,
+            target: capture.target,
+            region: pyramid.region,
+            first_command: pyramid.first_command,
+            last_command: pyramid.last_command,
+            read_resource: Some(read_resource),
+            write_resource: Some(write_resource),
+            load: EffectGraphLoadAction::DontCare,
+            store: EffectGraphStoreAction::Store,
+         });
+         read_resource = write_resource;
+      }
+      if pyramid.spec.blur_passes == 0
+      {
+         return;
+      }
+      let scratch = pyramid.scratch_resource.unwrap_or(pyramid.resource);
+      self.passes.push(EffectGraphPass {
+         reason: EffectGraphPassReason::BlurHorizontal,
+         target: capture.target,
+         region: pyramid.region,
+         first_command: pyramid.first_command,
+         last_command: pyramid.last_command,
+         read_resource: Some(read_resource),
+         write_resource: Some(scratch),
+         load: EffectGraphLoadAction::DontCare,
+         store: EffectGraphStoreAction::Store,
+      });
+      if pyramid.spec.blur_passes > 1
+      {
+         self.passes.push(EffectGraphPass {
+            reason: EffectGraphPassReason::BlurVertical,
+            target: capture.target,
+            region: pyramid.region,
+            first_command: pyramid.first_command,
+            last_command: pyramid.last_command,
+            read_resource: Some(scratch),
+            write_resource: Some(pyramid.resource),
+            load: EffectGraphLoadAction::DontCare,
+            store: EffectGraphStoreAction::Store,
+         });
+      }
+   }
+
+   fn push_composite_pass(
+      &mut self,
+      capture: EffectGraphCapture,
+      effect: EffectGraphEffect,
+   )
+   {
+      let read_resource = effect.pyramid
+         .map_or(capture.resource, |pyramid| self.pyramids[pyramid as usize].resource);
+      self.passes.push(EffectGraphPass {
+         reason: if capture.kind == EffectGraphCaptureKind::ExtractionDownsample {
+            EffectGraphPassReason::UpsampleComposite
+         } else {
+            EffectGraphPassReason::Composite
+         },
+         target: capture.target,
+         region: effect.output,
+         first_command: effect.command,
+         last_command: effect.command,
+         read_resource: Some(read_resource),
+         write_resource: None,
+         load: EffectGraphLoadAction::Load,
+         store: EffectGraphStoreAction::Store,
+      });
    }
 
    pub fn effects(&self) -> &[EffectGraphEffect]
@@ -620,19 +818,30 @@ impl EffectGraphPlan
          )
       });
       let mut capture_passes = 0_u32;
+      let mut extract_passes = 0_u32;
       let mut downsample_passes = 0_u32;
       let mut blur_horizontal_passes = 0_u32;
       let mut blur_vertical_passes = 0_u32;
+      let mut upsample_passes = 0_u32;
       let mut composite_passes = 0_u32;
       for pass in &self.passes
       {
          match pass.reason
          {
             EffectGraphPassReason::Capture => capture_passes += 1,
+            EffectGraphPassReason::Extract => extract_passes += 1,
+            EffectGraphPassReason::ExtractDownsample => {
+               extract_passes += 1;
+               downsample_passes += 1;
+            }
             EffectGraphPassReason::Downsample => downsample_passes += 1,
             EffectGraphPassReason::BlurHorizontal => blur_horizontal_passes += 1,
             EffectGraphPassReason::BlurVertical => blur_vertical_passes += 1,
             EffectGraphPassReason::Composite => composite_passes += 1,
+            EffectGraphPassReason::UpsampleComposite => {
+               upsample_passes += 1;
+               composite_passes += 1;
+            }
          }
       }
       let max_lifetime_commands = self.resources.iter().map(|resource| {
@@ -648,9 +857,11 @@ impl EffectGraphPlan
             })
          }).count() as u32,
          capture_passes,
+         extract_passes,
          downsample_passes,
          blur_horizontal_passes,
          blur_vertical_passes,
+         upsample_passes,
          composite_passes,
          max_lifetime_commands,
          resources: self.resources.len() as u32,
@@ -721,6 +932,120 @@ mod tests
             },
          },
       }
+   }
+
+   fn extracted_filter(command: u32, sigma: f32) -> EffectGraphEvent
+   {
+      EffectGraphEvent {
+         command,
+         target: target(0),
+         kind: EffectGraphEventKind::Filter {
+            region: EffectGraphRegion::new(0, 0, 100, 100),
+            output: EffectGraphRegion::new(0, 0, 200, 200),
+            pyramid: EffectGraphPyramidSpec {
+               sigma_bits: sigma.to_bits(),
+               quality: 1,
+               downsample_levels: 0,
+               blur_passes: 2,
+               materialized: true,
+            },
+         },
+      }
+   }
+
+   #[test]
+   fn terminal_extracted_filter_aliases_output_back_to_source()
+   {
+      let mut plan = EffectGraphPlan::default();
+      plan.build(&[
+         EffectGraphEvent {
+            command: 0,
+            target: target(0),
+            kind: EffectGraphEventKind::Extract {
+               region: EffectGraphRegion::new(0, 0, 100, 100),
+               downsampled: true,
+            },
+         },
+         extracted_filter(1, 8.0),
+      ]);
+      assert_eq!(plan.captures()[0].kind, EffectGraphCaptureKind::ExtractionDownsample);
+      assert_eq!(plan.resources().len(), 3);
+      assert_eq!(plan.alias_slot_count(), 2);
+      assert_eq!(
+         plan.passes().iter().map(|pass| pass.reason).collect::<Vec<_>>(),
+         vec![
+            EffectGraphPassReason::ExtractDownsample,
+            EffectGraphPassReason::BlurHorizontal,
+            EffectGraphPassReason::BlurVertical,
+            EffectGraphPassReason::UpsampleComposite,
+         ],
+      );
+      let stats = plan.stats();
+      assert_eq!((stats.extract_passes, stats.downsample_passes), (1, 1));
+      assert_eq!((stats.blur_horizontal_passes, stats.blur_vertical_passes), (1, 1));
+      assert_eq!((stats.upsample_passes, stats.composite_passes), (1, 1));
+      assert_eq!((stats.resources, stats.alias_slots), (3, 2));
+      assert_eq!((stats.logical_bytes, stats.physical_bytes, stats.aliased_bytes), (120_000, 80_000, 40_000));
+   }
+
+   #[test]
+   fn extracted_filter_must_stay_inside_the_extracted_region()
+   {
+      let mut plan = EffectGraphPlan::default();
+      let mut outside = extracted_filter(1, 8.0);
+      outside.kind = EffectGraphEventKind::Filter {
+         region: EffectGraphRegion::new(50, 0, 75, 100),
+         output: EffectGraphRegion::new(0, 0, 200, 200),
+         pyramid: EffectGraphPyramidSpec {
+            sigma_bits: 8.0_f32.to_bits(),
+            quality: 1,
+            downsample_levels: 0,
+            blur_passes: 2,
+            materialized: true,
+         },
+      };
+      plan.build(&[
+         EffectGraphEvent {
+            command: 0,
+            target: target(0),
+            kind: EffectGraphEventKind::Extract {
+               region: EffectGraphRegion::new(0, 0, 100, 100),
+               downsampled: true,
+            },
+         },
+         outside,
+      ]);
+      assert!(plan.effects().is_empty());
+      assert_eq!(plan.passes().len(), 1);
+   }
+
+   #[test]
+   fn extracted_multi_filter_graph_preserves_source_and_aliases_layer_intermediates()
+   {
+      let mut plan = EffectGraphPlan::default();
+      plan.build(&[
+         EffectGraphEvent {
+            command: 0,
+            target: target(0),
+            kind: EffectGraphEventKind::Extract {
+               region: EffectGraphRegion::new(0, 0, 100, 100),
+               downsampled: true,
+            },
+         },
+         extracted_filter(1, 3.0),
+         extracted_filter(2, 8.0),
+         extracted_filter(3, 16.0),
+      ]);
+      assert_eq!((plan.effects().len(), plan.pyramids().len()), (3, 3));
+      assert_eq!(plan.resources().len(), 7);
+      assert_eq!(plan.alias_slot_count(), 3);
+      assert_eq!(plan.passes().len(), 10);
+      let stats = plan.stats();
+      assert_eq!((stats.extract_passes, stats.downsample_passes), (1, 1));
+      assert_eq!((stats.blur_horizontal_passes, stats.blur_vertical_passes), (3, 3));
+      assert_eq!((stats.upsample_passes, stats.composite_passes), (3, 3));
+      assert_eq!((stats.resources, stats.alias_slots), (7, 3));
+      assert!(stats.aliased_bytes > 0);
    }
 
    #[test]

@@ -1893,6 +1893,156 @@ fn snapshot_scene3d_mixes_with_2d_overlay() {
 }
 
 #[test]
+fn scene3d_bloom_graph_extracts_once_reuses_plan_and_preserves_viewport_overlay()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   let width = 128_u32;
+   let height = 128_u32;
+   renderer.resize(width, height, 1.0).expect("resize");
+   let vertices = [
+      Vertex3d { position: [-0.75, -0.65, 0.0] },
+      Vertex3d { position: [0.75, -0.65, 0.0] },
+      Vertex3d { position: [0.0, 0.75, 0.0] },
+   ];
+   let indices = [0_u32, 1, 2];
+   let mesh = renderer
+      .mesh3d_create(&Mesh3dData {
+         vertices: &vertices,
+         indices: &indices,
+         topology: scene3d::MeshTopology::Triangles,
+      })
+      .expect("create bloom mesh");
+   let mut emissive = Instance3d::new(
+      mesh,
+      mat4_identity(),
+      api::Color::rgba(0.12, 0.65, 1.0, 1.0),
+   );
+   emissive.material = scene3d::Material3d::Emissive;
+   emissive.params[0] = 1.8;
+   let instances = [emissive];
+   let layers = [
+      scene3d::BloomLayer3d { sigma_px: 3.0, strength: 0.35 },
+      scene3d::BloomLayer3d { sigma_px: 8.0, strength: 0.25 },
+      scene3d::BloomLayer3d { sigma_px: 16.0, strength: 0.18 },
+   ];
+   let scene = Pass3d {
+      viewport: Some(api::RectF::new(16.0, 16.0, 96.0, 96.0)),
+      clear_color: Some(api::Color::rgba(0.02, 0.025, 0.04, 1.0)),
+      clear_depth: true,
+      view_proj: mat4_identity(),
+      instances: &instances,
+      bloom: Some(scene3d::Bloom3d {
+         emissive_instances: &instances,
+         layers: &layers,
+         downsample_divisor: 2,
+      }),
+   };
+   let mut overlay = api::DrawList::default();
+   overlay.items.push(api::DrawCmd::RRect {
+      rect: api::RectF::new(20.0, 20.0, 28.0, 18.0),
+      radii: [4.0; 4],
+      color: api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+   });
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_scene3d(&scene).expect("encode scene3d bloom");
+   renderer.encode_pass(&overlay);
+   renderer.submit(token).expect("submit scene3d bloom");
+   let stats = renderer.last_stats();
+   assert_eq!(stats.scene3d_bloom_layers, 3);
+   assert_eq!(stats.scene3d_bloom_source_passes, 1);
+   assert_eq!(stats.scene3d_bloom_source_draws, 1);
+   assert_eq!(stats.scene3d_bloom_extract_passes, 1);
+   assert_eq!(stats.scene3d_bloom_downsample_passes, 1);
+   assert_eq!(stats.scene3d_bloom_blur_horizontal_passes, 3);
+   assert_eq!(stats.scene3d_bloom_blur_vertical_passes, 3);
+   assert_eq!(stats.scene3d_bloom_upsample_passes, 3);
+   assert_eq!(stats.scene3d_bloom_composite_passes, 3);
+   assert_eq!(stats.scene3d_bloom_graph_resources, 7);
+   assert_eq!(stats.scene3d_bloom_graph_alias_slots, 3);
+   assert_eq!(stats.scene3d_bloom_graph_plan_builds, 1);
+   assert_eq!(stats.scene3d_bloom_graph_plan_reuses, 0);
+   assert!(stats.scene3d_bloom_graph_aliased_bytes > 0);
+   assert!(stats.scene3d_bloom_bandwidth_bytes > 0);
+   assert!(stats.scene3d_bloom_region_pixels > 0);
+   assert!(stats.memory.bloom_targets_bytes >= 3 * 64 * 64 * 8);
+   assert_eq!(stats.memory.bloom_targets_bytes % 3, 0);
+
+   let (_, _, bgra) = renderer.readback_bgra8().expect("readback scene3d bloom");
+   let pixel = |x: u32, y: u32| -> [u8; 4] {
+      let index = ((y * width + x) * 4) as usize;
+      [bgra[index], bgra[index + 1], bgra[index + 2], bgra[index + 3]]
+   };
+   let overlay_pixel = pixel(30, 28);
+   assert!(
+      overlay_pixel[0] > 235 && overlay_pixel[1] > 235 && overlay_pixel[2] > 235,
+      "expected overlay above bloom, got {overlay_pixel:?}",
+   );
+   let scene_pixel = pixel(64, 70);
+   assert!(
+      scene_pixel[0] > 150 && scene_pixel[1] > 80,
+      "expected emissive scene inside bloom viewport, got {scene_pixel:?}",
+   );
+   let outside_pixel = pixel(120, 120);
+   assert!(
+      outside_pixel[0] < 70 && outside_pixel[1] < 60 && outside_pixel[2] < 55,
+      "bloom escaped its viewport: {outside_pixel:?}",
+   );
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_scene3d(&scene).expect("reuse scene3d bloom graph");
+   renderer.submit(token).expect("submit reused scene3d bloom graph");
+   let reused = renderer.last_stats();
+   assert_eq!(reused.scene3d_bloom_graph_plan_builds, 0);
+   assert_eq!(reused.scene3d_bloom_graph_plan_reuses, 1);
+}
+
+#[test]
+fn scene3d_one_layer_bloom_uses_two_physical_intermediates()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(128, 128, 1.0).expect("resize");
+   let vertices = [
+      Vertex3d { position: [-0.7, -0.6, 0.0] },
+      Vertex3d { position: [0.7, -0.6, 0.0] },
+      Vertex3d { position: [0.0, 0.7, 0.0] },
+   ];
+   let indices = [0_u32, 1, 2];
+   let mesh = renderer
+      .mesh3d_create(&Mesh3dData {
+         vertices: &vertices,
+         indices: &indices,
+         topology: scene3d::MeshTopology::Triangles,
+      })
+      .expect("create bloom mesh");
+   let instances = [Instance3d::new(
+      mesh,
+      mat4_identity(),
+      api::Color::rgba(0.2, 0.7, 1.0, 1.0),
+   )];
+   let layers = [scene3d::BloomLayer3d { sigma_px: 8.0, strength: 0.4 }];
+   let pass = Pass3d {
+      viewport: None,
+      clear_color: Some(api::Color::rgba(0.02, 0.02, 0.04, 1.0)),
+      clear_depth: true,
+      view_proj: mat4_identity(),
+      instances: &instances,
+      bloom: Some(scene3d::Bloom3d {
+         emissive_instances: &instances,
+         layers: &layers,
+         downsample_divisor: 2,
+      }),
+   };
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_scene3d(&pass).expect("encode one-layer bloom");
+   renderer.submit(token).expect("submit one-layer bloom");
+   let stats = renderer.last_stats();
+   assert_eq!((stats.scene3d_bloom_graph_resources, stats.scene3d_bloom_graph_alias_slots), (3, 2));
+   assert!(stats.memory.bloom_targets_bytes >= 2 * 64 * 64 * 8);
+   assert_eq!(stats.memory.bloom_targets_bytes % 2, 0);
+}
+
+#[test]
 fn scene3d_instances_batch_only_opaque_order_safe_runs()
 {
    let mut renderer = MetalRenderer::new_default().expect("metal");

@@ -34,6 +34,8 @@
   Validates one live generation per dense property index and keeps immutable chunk geometry separate from frame property values.
 - `RenderSpatialBounds`, `RenderCommandSpatial`, `RenderPaintSpan`, and `RenderSpatialQueryStats`
   Carry conservative bounds, resolved clip state, matched scope endpoints, ordered paint spans, and explicit query work without exposing a backend index implementation.
+- `EffectGraphEvent`, `EffectGraphPlan`, and related graph records
+  Describe renderer-neutral snapshot, extraction, filter, downsample, blur, and composite dependencies with transient-resource lifetimes and alias slots.
 
 ## Logic narrative
 - Packed solid color remains part of the existing `Vertex` ABI: backends resolve zero to the draw uniform before interpolation and pass every nonzero value through as final color.
@@ -41,6 +43,7 @@
 - Text atlas revision is part of `GlyphRun` because atlas slot eviction can make old UVs point at different glyph pixels while the texture handle stays the same.
 - Cached draw-list replay rejects stale or unknown text geometry while preserving normal replay for non-text commands.
 - Runtime image uploads stay outside draw commands: app code publishes changed atlas bytes to the renderer, then emits normal `ImageHandle`/`GlyphRun` draw work for the frame.
+- Explicit extraction events let backend-owned effects render one reusable source, derive ordered filter layers from contained subregions, and schedule each composite without making backend textures part of the shared API.
 
 ## Preconditions and postconditions
 - Span offsets and lengths must address the `DrawList` backing arrays.
@@ -61,6 +64,7 @@
 - Dense dynamic IDs sort by index and generation, making stale-generation conflict detection a linear adjacent scan; per-frame property values remain small metadata rather than geometry copies.
 - Retained glyph/mesh bounds are computed once from immutable vertex spans. Ordered chunk and instance queries use those stored bounds without rescanning source geometry.
 - Packed color conversion adds no draw, upload, or renderer object; it is internal renderer data preparation rather than a new authoring or user-journey path.
+- Effect graph plans report logical and physical transient bytes. A terminal single filter can alias its vertical output back onto a dead extraction source, while multiple filters retain the source and reuse two serial filter slots.
 
 ## Feature flags and cfgs
 - No feature-specific draw-list behavior.
@@ -76,6 +80,7 @@
 `Color::rgba(1.0, 0.0, 0.0, 1.0).pack_rgba8()` produces `0xFF00_00FF`.
 
 ## Changelog
+- 2026-07-15: extended the common effect graph with explicit extraction/filter events, fused extraction-downsample and upsample-composite pass reasons, contained-region validation, and terminal-output aliasing.
 - 2026-07-13: exported C27 conservative spatial bounds, command/span metadata, resolved instances, and query statistics.
 - 2026-07-13: added C26 generation-checked dynamic property slots and transform-linked retained clip metadata.
 - 2026-07-12: added packed `AABBGGRR` conversion and documented solid vertex-color inheritance.

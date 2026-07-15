@@ -35,10 +35,10 @@ fn scene3d_instance_arrays_match_cpu_ring_layout() {
 fn scene3d_bloom_payload_reaches_bloom_encoder() {
     let renderer_source = include_str!("../src/lib.rs");
 
-    assert!(renderer_source.contains(
-        "self.encode_scene3d_bloom(&cmd, &target_tex, &mut pf, pass.view_proj, bloom)"
-    ));
+    assert!(renderer_source.contains("pass.view_proj,\n                pass.viewport,\n                bloom,"));
     assert!(renderer_source.contains("self.encode_prepared_scene3d_draws("));
+    assert!(renderer_source.contains("build_scene3d_bloom_graph("));
+    assert!(renderer_source.contains("EffectGraphPassReason::ExtractDownsample"));
     assert!(!renderer_source.contains("bloom.layers.iter().map(|layer| layer.strength"));
 }
 

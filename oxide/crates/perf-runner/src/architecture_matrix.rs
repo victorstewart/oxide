@@ -318,6 +318,14 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
          }
       }
    }
+   for feature in ["bloom_viewport_25pct", "bloom_overlay"]
+   {
+      let id = format!("gpu.architecture.scene3d.instances_96.{feature}");
+      if perf_case_allowed(&id)
+      {
+         cases.push(scene3d_matrix_case(&id, smoke, 96, feature)?);
+      }
+   }
    let scene3d_endurance_id = "gpu.architecture.scene3d.create_release_endurance";
    if perf_case_allowed(scene3d_endurance_id)
    {
@@ -5292,17 +5300,20 @@ fn scene3d_matrix_case(id: &str, smoke: bool, instance_count: usize, feature: &s
       metal::scene3d::BloomLayer3d { sigma_px: 16.0, strength: 0.18 },
    ];
    let identity = authoring_scene3d_identity();
-   let warmups = std::env::var("OXIDE_C57_METAL_WARMUPS")
+   let warmups = std::env::var("OXIDE_C58_METAL_WARMUPS")
+      .or_else(|_| std::env::var("OXIDE_C57_METAL_WARMUPS"))
       .ok()
       .and_then(|value| value.parse::<usize>().ok())
       .filter(|warmups| *warmups > 0)
       .unwrap_or(if smoke { 1 } else { 8 });
-   let frames = std::env::var("OXIDE_C57_METAL_FRAMES")
+   let frames = std::env::var("OXIDE_C58_METAL_FRAMES")
+      .or_else(|_| std::env::var("OXIDE_C57_METAL_FRAMES"))
       .ok()
       .and_then(|value| value.parse::<usize>().ok())
       .filter(|frames| *frames > 0)
       .unwrap_or(if smoke { 2 } else { 24 });
-   let raw_samples = std::env::var_os("OXIDE_C57_RAW_SAMPLES").is_some();
+   let raw_samples = std::env::var_os("OXIDE_C58_RAW_SAMPLES").is_some()
+      || std::env::var_os("OXIDE_C57_RAW_SAMPLES").is_some();
    let mut warmup_frame_samples = Vec::with_capacity(if raw_samples { warmups } else { 0 });
    let mut warmup_encode_samples = Vec::with_capacity(if raw_samples { warmups } else { 0 });
    let mut warmup_gpu_samples = Vec::with_capacity(if raw_samples { warmups } else { 0 });
@@ -5326,6 +5337,30 @@ fn scene3d_matrix_case(id: &str, smoke: bool, instance_count: usize, feature: &s
    let mut scene3d_instance_buffer_binds_sum = 0_u64;
    let mut scene3d_instance_ring_grows_sum = 0_u64;
    let mut scene3d_viewport_sets_sum = 0_u64;
+   let mut bloom_source_passes_sum = 0_u64;
+   let mut bloom_source_draws_sum = 0_u64;
+   let mut bloom_extract_passes_sum = 0_u64;
+   let mut bloom_downsample_passes_sum = 0_u64;
+   let mut bloom_blur_horizontal_passes_sum = 0_u64;
+   let mut bloom_blur_vertical_passes_sum = 0_u64;
+   let mut bloom_upsample_passes_sum = 0_u64;
+   let mut bloom_composite_passes_sum = 0_u64;
+   let mut bloom_graph_resources_sum = 0_u64;
+   let mut bloom_graph_alias_slots_sum = 0_u64;
+   let mut bloom_graph_plan_builds_sum = 0_u64;
+   let mut bloom_graph_plan_reuses_sum = 0_u64;
+   let mut bloom_graph_logical_bytes_sum = 0_u64;
+   let mut bloom_graph_physical_bytes_sum = 0_u64;
+   let mut bloom_graph_aliased_bytes_sum = 0_u64;
+   let mut bloom_bandwidth_bytes_sum = 0_u64;
+   let mut bloom_region_pixels_sum = 0_u64;
+
+   let mut overlay = api::DrawList::default();
+   overlay.items.push(api::DrawCmd::RRect {
+      rect: api::RectF::new(24.0, 24.0, 120.0, 48.0),
+      radii: [8.0; 4],
+      color: api::Color::rgba(0.95, 0.96, 1.0, 0.92),
+   });
 
    for frame in 0..(warmups + frames)
    {
@@ -5338,11 +5373,11 @@ fn scene3d_matrix_case(id: &str, smoke: bool, instance_count: usize, feature: &s
          "culling" => &no_cull[..],
          _ => &instances[..],
       };
-      let viewport = if feature == "viewport_25pct" { Some(api::RectF::new(0.0, 0.0, 256.0, 256.0)) } else { None };
+      let viewport = if matches!(feature, "viewport_25pct" | "bloom_viewport_25pct") { Some(api::RectF::new(0.0, 0.0, 256.0, 256.0)) } else { None };
       let bloom = match feature
       {
          "bloom_1" => Some(metal::scene3d::Bloom3d { emissive_instances: variant_instances, layers: &bloom_one, downsample_divisor: 2 }),
-         "bloom_3" => Some(metal::scene3d::Bloom3d { emissive_instances: variant_instances, layers: &bloom_three, downsample_divisor: 2 }),
+         "bloom_3" | "bloom_viewport_25pct" | "bloom_overlay" => Some(metal::scene3d::Bloom3d { emissive_instances: variant_instances, layers: &bloom_three, downsample_divisor: 2 }),
          _ => None,
       };
       let pass = metal::scene3d::Pass3d {
@@ -5356,6 +5391,10 @@ fn scene3d_matrix_case(id: &str, smoke: bool, instance_count: usize, feature: &s
       let token = renderer.begin_frame(&api::FrameTarget, None);
       let frame_id = token.0;
       renderer.encode_scene3d(&pass).with_context(|| format!("encoding {id}"))?;
+      if feature == "bloom_overlay"
+      {
+         renderer.encode_pass(&overlay);
+      }
       renderer.submit(token).with_context(|| format!("submitting {id}"))?;
       let stats = last_metal_stats_after_submit(&renderer, frame_id);
       if frame >= warmups
@@ -5383,6 +5422,23 @@ fn scene3d_matrix_case(id: &str, smoke: bool, instance_count: usize, feature: &s
          scene3d_instance_buffer_binds_sum = scene3d_instance_buffer_binds_sum.saturating_add(u64::from(stats.scene3d_instance_buffer_binds));
          scene3d_instance_ring_grows_sum = scene3d_instance_ring_grows_sum.saturating_add(u64::from(stats.scene3d_instance_ring_grows));
          scene3d_viewport_sets_sum = scene3d_viewport_sets_sum.saturating_add(u64::from(stats.scene3d_viewport_sets));
+         bloom_source_passes_sum = bloom_source_passes_sum.saturating_add(u64::from(stats.scene3d_bloom_source_passes));
+         bloom_source_draws_sum = bloom_source_draws_sum.saturating_add(u64::from(stats.scene3d_bloom_source_draws));
+         bloom_extract_passes_sum = bloom_extract_passes_sum.saturating_add(u64::from(stats.scene3d_bloom_extract_passes));
+         bloom_downsample_passes_sum = bloom_downsample_passes_sum.saturating_add(u64::from(stats.scene3d_bloom_downsample_passes));
+         bloom_blur_horizontal_passes_sum = bloom_blur_horizontal_passes_sum.saturating_add(u64::from(stats.scene3d_bloom_blur_horizontal_passes));
+         bloom_blur_vertical_passes_sum = bloom_blur_vertical_passes_sum.saturating_add(u64::from(stats.scene3d_bloom_blur_vertical_passes));
+         bloom_upsample_passes_sum = bloom_upsample_passes_sum.saturating_add(u64::from(stats.scene3d_bloom_upsample_passes));
+         bloom_composite_passes_sum = bloom_composite_passes_sum.saturating_add(u64::from(stats.scene3d_bloom_composite_passes));
+         bloom_graph_resources_sum = bloom_graph_resources_sum.saturating_add(u64::from(stats.scene3d_bloom_graph_resources));
+         bloom_graph_alias_slots_sum = bloom_graph_alias_slots_sum.saturating_add(u64::from(stats.scene3d_bloom_graph_alias_slots));
+         bloom_graph_plan_builds_sum = bloom_graph_plan_builds_sum.saturating_add(u64::from(stats.scene3d_bloom_graph_plan_builds));
+         bloom_graph_plan_reuses_sum = bloom_graph_plan_reuses_sum.saturating_add(u64::from(stats.scene3d_bloom_graph_plan_reuses));
+         bloom_graph_logical_bytes_sum = bloom_graph_logical_bytes_sum.saturating_add(stats.scene3d_bloom_graph_logical_bytes);
+         bloom_graph_physical_bytes_sum = bloom_graph_physical_bytes_sum.saturating_add(stats.scene3d_bloom_graph_physical_bytes);
+         bloom_graph_aliased_bytes_sum = bloom_graph_aliased_bytes_sum.saturating_add(stats.scene3d_bloom_graph_aliased_bytes);
+         bloom_bandwidth_bytes_sum = bloom_bandwidth_bytes_sum.saturating_add(stats.scene3d_bloom_bandwidth_bytes);
+         bloom_region_pixels_sum = bloom_region_pixels_sum.saturating_add(stats.scene3d_bloom_region_pixels);
       }
       else if raw_samples
       {
@@ -5411,9 +5467,10 @@ fn scene3d_matrix_case(id: &str, smoke: bool, instance_count: usize, feature: &s
       },
    );
    metrics.insert(String::from("alpha_order_control"), if feature == "alpha_order" { 1.0 } else { 0.0 });
-   metrics.insert(String::from("viewport_fraction"), if feature == "viewport_25pct" { 0.25 } else { 1.0 });
+   metrics.insert(String::from("viewport_fraction"), if matches!(feature, "viewport_25pct" | "bloom_viewport_25pct") { 0.25 } else { 1.0 });
    metrics.insert(String::from("culling_variant"), if feature == "culling" { 1.0 } else { 0.0 });
-   metrics.insert(String::from("bloom_layers"), if feature == "bloom_1" { 1.0 } else if feature == "bloom_3" { 3.0 } else { 0.0 });
+   metrics.insert(String::from("bloom_layers"), if feature == "bloom_1" { 1.0 } else if matches!(feature, "bloom_3" | "bloom_viewport_25pct" | "bloom_overlay") { 3.0 } else { 0.0 });
+   metrics.insert(String::from("overlay_control"), if feature == "bloom_overlay" { 1.0 } else { 0.0 });
    metrics.insert(String::from("draws_avg"), draws_sum / frames as f64);
    metrics.insert(String::from("upload_bytes_avg"), upload_sum / frames as f64);
    metrics.insert(String::from("renderer_bytes_peak"), renderer_bytes_peak as f64);
@@ -5431,14 +5488,31 @@ fn scene3d_matrix_case(id: &str, smoke: bool, instance_count: usize, feature: &s
    metrics.insert(String::from("scene3d_instance_buffer_binds_avg"), scene3d_instance_buffer_binds_sum as f64 / frames as f64);
    metrics.insert(String::from("scene3d_instance_ring_grows_avg"), scene3d_instance_ring_grows_sum as f64 / frames as f64);
    metrics.insert(String::from("scene3d_viewport_sets_avg"), scene3d_viewport_sets_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_bloom_source_passes_avg"), bloom_source_passes_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_bloom_source_draws_avg"), bloom_source_draws_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_bloom_extract_passes_avg"), bloom_extract_passes_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_bloom_downsample_passes_avg"), bloom_downsample_passes_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_bloom_blur_horizontal_passes_avg"), bloom_blur_horizontal_passes_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_bloom_blur_vertical_passes_avg"), bloom_blur_vertical_passes_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_bloom_upsample_passes_avg"), bloom_upsample_passes_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_bloom_composite_passes_avg"), bloom_composite_passes_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_bloom_graph_resources_avg"), bloom_graph_resources_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_bloom_graph_alias_slots_avg"), bloom_graph_alias_slots_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_bloom_graph_plan_builds_avg"), bloom_graph_plan_builds_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_bloom_graph_plan_reuses_avg"), bloom_graph_plan_reuses_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_bloom_graph_logical_bytes_avg"), bloom_graph_logical_bytes_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_bloom_graph_physical_bytes_avg"), bloom_graph_physical_bytes_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_bloom_graph_aliased_bytes_avg"), bloom_graph_aliased_bytes_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_bloom_bandwidth_bytes_avg"), bloom_bandwidth_bytes_sum as f64 / frames as f64);
+   metrics.insert(String::from("scene3d_bloom_region_pixels_avg"), bloom_region_pixels_sum as f64 / frames as f64);
    if raw_samples
    {
-      insert_indexed_samples(&mut metrics, "c57_warmup_frame_ms", &warmup_frame_samples);
-      insert_indexed_samples(&mut metrics, "c57_warmup_encode_ms", &warmup_encode_samples);
-      insert_indexed_samples(&mut metrics, "c57_warmup_gpu_ms", &warmup_gpu_samples);
-      insert_indexed_samples(&mut metrics, "c57_frame_ms", &frame_samples);
-      insert_indexed_samples(&mut metrics, "c57_encode_ms", &encode_samples);
-      insert_indexed_samples(&mut metrics, "c57_gpu_ms", &gpu_samples);
+      insert_indexed_samples(&mut metrics, "c58_warmup_frame_ms", &warmup_frame_samples);
+      insert_indexed_samples(&mut metrics, "c58_warmup_encode_ms", &warmup_encode_samples);
+      insert_indexed_samples(&mut metrics, "c58_warmup_gpu_ms", &warmup_gpu_samples);
+      insert_indexed_samples(&mut metrics, "c58_frame_ms", &frame_samples);
+      insert_indexed_samples(&mut metrics, "c58_encode_ms", &encode_samples);
+      insert_indexed_samples(&mut metrics, "c58_gpu_ms", &gpu_samples);
    }
 
    Ok(PerfCaseResult {

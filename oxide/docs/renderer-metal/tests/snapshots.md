@@ -11,6 +11,7 @@ The snapshot tests validate renderer behavior through readback instead of relyin
 - Invalid solid-mesh index rejection.
 - Solid packed red/blue endpoints, midpoint interpolation, and byte-identical zero-rgba uniform inheritance.
 - Mixed `scene3d` plus 2D overlay composition in the same frame.
+- Scene3D bloom single-source extraction, one-/three-layer graph resource counts, warm plan reuse, clipped viewport output, and later 2D overlay visibility.
 - Optimized NV12 camera preview parity against the synthetic BGRA benchmark reference.
 - Persistent prepared-snapshot parity across RRects, images, A8 glyphs, solids, clips, dynamic transform/opacity through the frame uniform ring, opaque fractional raster edges, one-dirty rebuilding, byte-budget eviction, resource generations, explicit purge, and flat fallback accounting.
 - Prepared image-mesh transform/opacity parity and 512-instance alternating glyph/mesh spatial damage with exact full/small pixels, one selected draw, zero vertex scans/copies/uploads, and static full-plan reuse.
@@ -59,6 +60,7 @@ The snapshot file requires `snapshot-tests` and macOS or physical iOS Metal supp
 Run the named test with `cargo test --locked -p oxide-renderer-metal --features snapshot-tests --test snapshots`.
 
 ## Changelog
+- 2026-07-15: added C58 one-/three-layer Scene3D bloom graph, viewport, overlay, alias-count, and plan-reuse coverage.
 - 2026-07-14: kept cached/fresh final-pixel and decoded-field parity across packed Metal ID-mask storage.
 - 2026-07-14: added exact cached-versus-fresh ID-mask field and final-pixel parity plus purge coverage.
 - 2026-07-13: added C29 exact prepared-layer clean/dirty, duplicate, generation/resource/scale/purge invalidation, and unsupported-fallback coverage.

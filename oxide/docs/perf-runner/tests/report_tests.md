@@ -14,7 +14,7 @@ This integration suite freezes performance-report schemas, filtered execution, c
 - `metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()` verifies three-slot visible no-growth high water and eight-slot offscreen all-slot cold growth followed by zero warm growth/skips, including C26's 16 KiB completion-protected property buffer per physical slot.
 - `metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()` requires exact clean and one-dirty prepared-cache work counters, including zero clean immutable upload and one 12,288-byte dynamic uniform-ring slice.
 - `metal_prepared_layer_rows_freeze_body_free_clean_and_single_dirty_contracts()` requires body-free clean architecture/authoring replay and one bounded dirty layer refresh with no new warm texture.
-- `metal_architecture_reports_reconciled_renderer_resource_families()` requires the warm static ID-mask row to hit once, skip raster/seed/JFA, encode one compositor pass, retain one cache/in-flight generation, create no target, report nonzero in-flight/total/peak bytes and zero blocked reuse, and stay within its byte budget while preserving the broader resource-family accounting contract.
+- `metal_architecture_reports_reconciled_renderer_resource_families()` requires the warm static ID-mask row to hit once, skip raster/seed/JFA, encode one compositor pass, retain one cache/in-flight generation, create no target, report nonzero in-flight/total/peak bytes and zero blocked reuse, and stay within its byte budget while preserving the broader resource-family accounting contract. It also freezes C58 no-bloom, one-/three-layer, clipped-viewport, and overlay rows; source/pass/resource/alias/plan counters; indexed raw samples; and reduced conservative-region work.
 - `metal_blur_sigma_sweep_freezes_quality_ladder_work()` requires sigma 2 to retain exact samples and exponential taps, sigma 8/16/32/64 to select two paired passes with zero runtime exponentials, and process-resident table bytes to grow only after paired first use.
 - `retained_spatial_queries_have_engine_and_authoring_contracts()` freezes 512-instance smoke cardinality, one-entry CPU selection, zero vertex visits, metadata residency, and authoring routing.
 - `metal_spatial_rows_freeze_small_and_full_damage_contracts()` freezes one selected small-damage instance/command/draw, four shaded pixels, zero vertex/copy/upload work, and full linear 512-draw static-plan replay.
@@ -62,6 +62,7 @@ Run `cargo test --locked -p oxide-perf-runner --test report_tests`.
 Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.frame_resources.` with `--run-suite --smoke --json-out <path>` to inspect both C18 rows.
 
 ## Changelog
+- 2026-07-15: froze C58 Scene3D bloom graph rows, raw samples, source/pass/resource/alias/reuse counters, no-bloom guardrail, viewport work reduction, and overlay pass.
 - 2026-07-14: froze C52 sigma/radius, exact/paired selection, sample reduction, exponential-tap, and lazy table-memory report counters.
 - 2026-07-14: froze C36 warm ID-mask generation, creation, in-flight/total/peak byte, and blocked-reuse report counters.
 - 2026-07-14: froze C32 warm ID-mask hit, stage-pass, entry, residency, and budget report counters.

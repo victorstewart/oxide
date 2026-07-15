@@ -5007,11 +5007,14 @@ fn metal_architecture_reports_reconciled_renderer_resource_families()
    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
       .env(
          "OXIDE_PERF_RUNNER_FILTER",
-         "gpu.architecture.layers.clean_100x100,gpu.architecture.id_mask.static.size_512.chunks_1,gpu.architecture.scene3d.instances_96.bloom_1",
+         "gpu.architecture.layers.clean_100x100,gpu.architecture.id_mask.static.size_512.chunks_1,gpu.architecture.scene3d.instances_96.compatible,gpu.architecture.scene3d.instances_96.bloom_1,gpu.architecture.scene3d.instances_96.bloom_3,gpu.architecture.scene3d.instances_96.bloom_viewport_25pct,gpu.architecture.scene3d.instances_96.bloom_overlay",
       )
       .env("OXIDE_ARCHITECTURE_METAL_FRAMES", "4")
       .env("OXIDE_ARCHITECTURE_METAL_WARMUPS", "2")
       .env("OXIDE_ARCHITECTURE_METAL_RAW_SAMPLES", "1")
+      .env("OXIDE_C58_METAL_FRAMES", "4")
+      .env("OXIDE_C58_METAL_WARMUPS", "2")
+      .env("OXIDE_C58_RAW_SAMPLES", "1")
       .arg("--run-suite")
       .arg("--smoke")
       .arg("--json-out")
@@ -5022,13 +5025,23 @@ fn metal_architecture_reports_reconciled_renderer_resource_families()
    let stderr = String::from_utf8_lossy(&output.stderr);
 
    assert!(output.status.success(), "Metal accounting suite failed: {stderr}");
-   assert!(stdout.contains("cases=4"), "stdout: {stdout}");
+   assert!(stdout.contains("cases=8"), "stdout: {stdout}");
    let report = std::fs::read_to_string(&json_out).expect("read Metal accounting report");
    let layer = report_case_slice(&report, "gpu.architecture.layers.clean_100x100");
    let id_mask =
       report_case_slice(&report, "gpu.architecture.id_mask.static.size_512.chunks_1");
    let scene3d =
       report_case_slice(&report, "gpu.architecture.scene3d.instances_96.bloom_1");
+   let scene3d_three =
+      report_case_slice(&report, "gpu.architecture.scene3d.instances_96.bloom_3");
+   let scene3d_viewport = report_case_slice(
+      &report,
+      "gpu.architecture.scene3d.instances_96.bloom_viewport_25pct",
+   );
+   let scene3d_overlay =
+      report_case_slice(&report, "gpu.architecture.scene3d.instances_96.bloom_overlay");
+   let scene3d_guard =
+      report_case_slice(&report, "gpu.architecture.scene3d.instances_96.compatible");
    assert!(report_f64(layer, "layer_cache_bytes_peak") > 0.0);
    assert!(report_f64(layer, "layer_body_commands_scanned_avg") > 0.0);
    assert_eq!(report_f64(layer, "layer_body_commands_copied_avg"), 0.0);
@@ -5069,7 +5082,39 @@ fn metal_architecture_reports_reconciled_renderer_resource_families()
    assert!(report_f64(scene3d, "depth_target_bytes_peak") > 0.0);
    assert!(report_f64(scene3d, "bloom_target_bytes_peak") > 0.0);
    assert!(report_f64(scene3d, "mesh_buffer_bytes_peak") > 0.0);
-   assert!(report_f64(scene3d, "render_passes_avg") > 0.0);
+   assert_eq!(report_f64(scene3d, "render_passes_avg"), 5.0);
+   assert_eq!(report_f64(scene3d, "scene3d_bloom_source_passes_avg"), 1.0);
+   assert_eq!(report_f64(scene3d, "scene3d_bloom_source_draws_avg"), 96.0);
+   assert_eq!(report_f64(scene3d, "scene3d_bloom_graph_resources_avg"), 3.0);
+   assert_eq!(report_f64(scene3d, "scene3d_bloom_graph_alias_slots_avg"), 2.0);
+   assert_eq!(report_f64(scene3d, "scene3d_bloom_graph_plan_builds_avg"), 0.0);
+   assert_eq!(report_f64(scene3d, "scene3d_bloom_graph_plan_reuses_avg"), 1.0);
+   assert!(report_f64(scene3d, "c58_frame_ms_0003") > 0.0);
+   assert!(report_f64(scene3d, "c58_encode_ms_0003") > 0.0);
+   assert!(report_f64(scene3d, "c58_gpu_ms_0003") > 0.0);
+   assert_eq!(report_f64(scene3d_three, "render_passes_avg"), 11.0);
+   assert_eq!(report_f64(scene3d_three, "scene3d_bloom_source_passes_avg"), 1.0);
+   assert_eq!(report_f64(scene3d_three, "scene3d_bloom_source_draws_avg"), 96.0);
+   assert_eq!(report_f64(scene3d_three, "scene3d_bloom_extract_passes_avg"), 1.0);
+   assert_eq!(report_f64(scene3d_three, "scene3d_bloom_downsample_passes_avg"), 1.0);
+   assert_eq!(report_f64(scene3d_three, "scene3d_bloom_blur_horizontal_passes_avg"), 3.0);
+   assert_eq!(report_f64(scene3d_three, "scene3d_bloom_blur_vertical_passes_avg"), 3.0);
+   assert_eq!(report_f64(scene3d_three, "scene3d_bloom_upsample_passes_avg"), 3.0);
+   assert_eq!(report_f64(scene3d_three, "scene3d_bloom_composite_passes_avg"), 3.0);
+   assert_eq!(report_f64(scene3d_three, "scene3d_bloom_graph_resources_avg"), 7.0);
+   assert_eq!(report_f64(scene3d_three, "scene3d_bloom_graph_alias_slots_avg"), 3.0);
+   assert!(report_f64(scene3d_three, "scene3d_bloom_graph_aliased_bytes_avg") > 0.0);
+   assert!(report_f64(scene3d_three, "scene3d_bloom_bandwidth_bytes_avg") > 0.0);
+   assert!(report_f64(scene3d_three, "scene3d_bloom_region_pixels_avg") > 0.0);
+   assert!(report_f64(scene3d_viewport, "scene3d_bloom_bandwidth_bytes_avg")
+      < report_f64(scene3d_three, "scene3d_bloom_bandwidth_bytes_avg"));
+   assert!(report_f64(scene3d_viewport, "scene3d_bloom_region_pixels_avg")
+      < report_f64(scene3d_three, "scene3d_bloom_region_pixels_avg"));
+   assert_eq!(report_f64(scene3d_overlay, "overlay_control"), 1.0);
+   assert_eq!(report_f64(scene3d_overlay, "render_passes_avg"), 12.0);
+   assert_eq!(report_f64(scene3d_guard, "render_passes_avg"), 1.0);
+   assert_eq!(report_f64(scene3d_guard, "scene3d_bloom_source_passes_avg"), 0.0);
+   assert_eq!(report_f64(scene3d_guard, "scene3d_bloom_graph_resources_avg"), 0.0);
    let _ = std::fs::remove_file(json_out);
 }
 
