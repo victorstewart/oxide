@@ -1,6 +1,6 @@
 # C60 — Cache decoded and GPU-resident image variants
 
-Status: accepted for suitable small static-image populations. Standalone residency remains the required policy for repeatedly minified, oversized, rapidly changing, video, compressed-incompatible, and explicit standalone variants. Browser display proof is deferred to C61 because the controlled in-app browser runtime was unavailable; wasm build and source contracts passed.
+Status: accepted for suitable small static-image populations. Standalone residency remains the required policy for repeatedly minified, oversized, rapidly changing, video, compressed-incompatible, and explicit standalone variants. Physical-device and optimized Chrome/WebGPU display proof both pass.
 
 ## Hypothesis and design
 
@@ -34,6 +34,23 @@ Three alternating macOS repetitions agree: 100 icons are neutral, 1,000 improve 
 
 On iPhone, that authoring journey had atlas/standalone frame p50 1.2126/1.1928 ms (+1.7%), p95 1.2256/1.2436 ms (-1.4%), request-to-completed-frame 17.9244/41.7836 ms (-57.1%), upload 1.2488/4.1838 ms (-70.2%), and direct GPU p50 0.0999/0.0966 ms (+3.4%). Both sides invalidated exactly 64 referencing chunks; atlas reuse changed exactly 64 slot generations.
 
+## Optimized Chrome/WebGPU A/B
+
+The current arm64 Chrome runner used the same optimized WASM package for both variants. Browser decode uses display-sized `createImageBitmap`; the first-display boundary waits for queue completion and a browser animation frame. All six image-store marks reported zero WASM memory growth.
+
+| Icons | Variant | Setup | First displayed | Submit p50 | Submit p95 | Upload | Textures/draws |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | atlas | 84.610 ms | 104.115 ms | 0.025 ms | 0.155 ms | 0.880 ms | 1 / 1 |
+| 100 | standalone | 81.510 ms | 105.620 ms | 0.050 ms | 0.385 ms | 1.315 ms | 100 / 100 |
+| 1,000 | atlas | 701.885 ms | 728.215 ms | 0.050 ms | 0.190 ms | 4.670 ms | 4 / 4 |
+| 1,000 | standalone | 714.475 ms | 744.965 ms | 0.165 ms | 0.385 ms | 8.265 ms | 1,000 / 1,000 |
+| 10,000 | atlas | 7,279.210 ms | 7,320.485 ms | 0.250 ms | 0.420 ms | 54.170 ms | 40 / 40 |
+| 10,000 | standalone | 7,281.645 ms | 7,376.800 ms | 1.090 ms | 5.080 ms | 83.130 ms | 10,000 / 10,000 |
+
+At 10,000 images, atlas submit p50/p95 improve 77.1%/91.7%, first displayed improves 0.8%, upload improves 34.8%, and texture/draw count falls 99.6%. Atlas logical GPU residency remains 41,943,040 bytes versus 31,360,000 standalone (+33.7%), matching the native page-granularity tradeoff.
+
+The first C61 browser rerun exposed that `std::time::Instant::now()` panics on `wasm32-unknown-unknown`; all image-store cardinalities failed immediately with a named WASM stack. C60 now uses global `performance.now()` for its store clock on WASM and native `Instant` elsewhere. The optimized browser matrix above is the regression proof; the initial failing reports are retained as rejected diagnostic evidence under `/tmp/oxide-c61/browser/image-store/`.
+
 ## UIKit parity
 
 The final-tree physical-device UIKit battery uses the same 1,000 unique 28-square pixels and six visible scroll phases. The idiomatic `UICollectionView`/`UIImageView` path measured 747.936 ms clock p50, 423.411 ms CPU, 90.961 ms bounded process-scoped GPU time, 76.191 ms/s hitch time, 4 missed frames, and 25,215.824 kB peak memory. The accepted hand-optimized UIKit comparator precomposes one immutable 360x2352 layer and moves it once per phase: 588.011 ms clock p50 (-21.4%), 45.142 ms CPU (-89.3%), 86.591 ms bounded GPU time (-4.8%), effectively zero hitch time, zero missed frames, and 48,333.672 kB peak memory (+91.7%, about 22.6 MiB).
@@ -46,7 +63,7 @@ The strict device report retained process-scoped Metal System Trace GPU interval
 
 - Fifteen image-store tests cover typed configuration rejection, display-size decode, source release, cancellation/stale/malformed completion, gutters, exact/deduplicated invalidation, standalone/mip policy, queued-work cancellation under pressure, device loss, generation reuse, native workers, scrolling churn, and 10,000-request slot reuse within hard budgets.
 - Metal integration tests prove atlas/standalone pixels match with no neighbor bleed and one slot eviction invalidates only its referencing prepared chunk.
-- Web source tests freeze sRGB empty pages, append-only publication, complete standalone mips, unique device generations, and exact invalidation; wasm builds pass.
+- Web source tests freeze sRGB empty pages, append-only publication, complete standalone mips, unique device generations, and exact invalidation; the image store and host compile for WASM and the optimized browser matrix executes without the unsupported native clock.
 - `ImageRegionView` cover fitting stays inside the resolved atlas source rectangle.
 - Physical Oxide and UIKit cases ran on the attached real iPhone; simulator numbers are not used.
 
@@ -54,4 +71,4 @@ The locally retained `raw/` directory contains macOS reports, physical-device re
 
 ## Decision
 
-Accept C60's store and atlas policy for eligible small static collections. Keep the standalone path as a first-class fallback/control, disclose sparse-page memory and small direct-GPU regressions, and require C61 to complete the displayed browser matrix. Reject the initial custom-draw UIKit implementation and the state-only precompose measurement. No camera architecture changes are part of C60.
+Accept C60's store and atlas policy for eligible small static collections. Keep the standalone path as a first-class fallback/control and disclose sparse-page memory and small direct-GPU regressions. Reject the initial custom-draw UIKit implementation, the state-only precompose measurement, and the unsupported native clock on WASM. No camera architecture changes are part of C60.

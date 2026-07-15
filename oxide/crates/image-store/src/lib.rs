@@ -6,9 +6,54 @@ use std::fmt;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::wasm_bindgen;
 
 const RGBA_BYTES_PER_PIXEL: u64 = 4;
+
+#[cfg(not(target_arch = "wasm32"))]
+type StoreInstant = std::time::Instant;
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy)]
+struct StoreInstant(f64);
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+extern "C"
+{
+   #[wasm_bindgen(js_namespace = performance, js_name = now)]
+   fn browser_performance_now() -> f64;
+}
+
+#[cfg(target_arch = "wasm32")]
+impl StoreInstant
+{
+   fn now() -> Self
+   {
+      Self(browser_performance_now())
+   }
+
+   fn elapsed(self) -> Duration
+   {
+      Self::now().saturating_duration_since(self)
+   }
+
+   fn saturating_duration_since(self, earlier: Self) -> Duration
+   {
+      let elapsed_ms = self.0 - earlier.0;
+      if elapsed_ms.is_finite()
+      {
+         Duration::from_secs_f64(elapsed_ms.max(0.0) / 1_000.0)
+      }
+      else
+      {
+         Duration::ZERO
+      }
+   }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 /// Opaque logical image identity containing a reusable slot and generation.
@@ -287,7 +332,7 @@ pub struct DecodeJob
    display_width: u32,
    display_height: u32,
    canceled: Arc<AtomicBool>,
-   started: Instant,
+   started: StoreInstant,
 }
 
 impl DecodeJob
@@ -319,7 +364,7 @@ impl DecodeJob
    /// Resets decode timing at the actual execution boundary.
    pub fn mark_started(&mut self)
    {
-      self.started = Instant::now();
+      self.started = StoreInstant::now();
    }
 
    /// Consumes the job and packages its result for store-thread publication.
@@ -431,7 +476,7 @@ struct Entry
    variant: ImageVariant,
    usage: ImageUsage,
    request_serial: u64,
-   requested_at: Instant,
+   requested_at: StoreInstant,
    cancel: Arc<AtomicBool>,
    pending: bool,
    canceled: bool,
@@ -617,7 +662,7 @@ impl ImageStore
       self.tick = self.tick.wrapping_add(1).max(1);
       let serial = self.next_serial();
       let cancel = Arc::new(AtomicBool::new(false));
-      let requested_at = Instant::now();
+      let requested_at = StoreInstant::now();
       self.slots[slot_index].entry = Some(Entry {
          variant: request.variant,
          usage: request.usage,
@@ -1008,7 +1053,7 @@ impl ImageStore
       self.stats.device_loss_purges = self.stats.device_loss_purges.saturating_add(1);
    }
 
-   fn queue_decode_job(&mut self, id: ImageId, serial: u64, encoded: Arc<[u8]>, canceled: Arc<AtomicBool>, started: Instant)
+   fn queue_decode_job(&mut self, id: ImageId, serial: u64, encoded: Arc<[u8]>, canceled: Arc<AtomicBool>, started: StoreInstant)
    {
       let Some(entry) = self.entry(id) else
       {
@@ -1030,7 +1075,7 @@ impl ImageStore
    {
       let serial = self.next_serial();
       let cancel = Arc::new(AtomicBool::new(false));
-      let started = Instant::now();
+      let started = StoreInstant::now();
       let Some(entry) = self.entry_mut(id) else
       {
          return;
@@ -1065,7 +1110,7 @@ impl ImageStore
       {
          self.upload_standalone(id, &decoded, usage, backend)
       };
-      let now = Instant::now();
+      let now = StoreInstant::now();
       let first_publication = {
          let Some(entry) = self.entry_mut(id) else
          {
