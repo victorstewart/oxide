@@ -1271,6 +1271,45 @@ fn prepare_resumable_uikit_device_result_root_keeps_matching_checkpoints() {
 }
 
 #[test]
+fn prepare_resumable_uikit_device_result_root_promotes_matching_staged_proof()
+{
+   let dir = tempdir().expect("tempdir");
+   let result_root = dir.path().join("result-root");
+   let derived_data = result_root.join("derived-data");
+   let case_dir = result_root.join("family/component/uikit/testLabelEncode-native");
+   fs::create_dir_all(&derived_data).expect("create derived-data");
+   fs::create_dir_all(&case_dir).expect("create staged case dir");
+   fs::write(case_dir.join("case.json"), "{}").expect("write staged case checkpoint");
+   let stamp = UIKitHostBuildStamp
+   {
+      destination: String::from("platform=iOS,id=device"),
+      development_team: String::from("TEAM123456"),
+      source_fingerprint: 1,
+   };
+   let proof = CompareDeviceProofStatus
+   {
+      build_stamp: stamp.clone(),
+      families: BTreeMap::new(),
+   };
+   fs::write(
+      result_root.join("proof-status.json"),
+      serde_json::to_string_pretty(&proof).expect("serialize proof status"),
+   )
+   .expect("write proof status");
+
+   prepare_resumable_uikit_device_result_root(
+      &result_root,
+      &[derived_data.as_path()],
+      &stamp,
+      "combined device",
+   )
+   .expect("reuse matching staged proof root");
+
+   assert!(case_dir.join("case.json").is_file());
+   assert!(result_root.join(".oxide-device-result-root-stamp.json").is_file());
+}
+
+#[test]
 fn prepare_resumable_uikit_device_result_root_clears_stale_checkpoints_on_stamp_change() {
     let dir = tempdir().expect("tempdir");
     let result_root = dir.path().join("result-root");

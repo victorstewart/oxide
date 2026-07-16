@@ -5249,33 +5249,48 @@ fn write_uikit_result_root_build_stamp(
     fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
 }
 
-pub fn prepare_resumable_uikit_device_result_root(
-    result_root: &Path,
-    preserved_paths: &[&Path],
-    expected_stamp: &UIKitHostBuildStamp,
-    label: &str,
-) -> Result<()> {
-    let has_resumable_artifacts = result_root_has_resumable_device_artifacts(result_root)?;
-    let saved_stamp = load_uikit_result_root_build_stamp(result_root)?;
-    if has_resumable_artifacts && saved_stamp.as_ref() == Some(expected_stamp) {
-        println!("Resuming existing {} result root at {}.", label, result_root.display());
-        return Ok(());
-    }
-    if has_resumable_artifacts {
-        let reason = if saved_stamp.is_some() {
-            "the host build fingerprint changed"
-        } else {
-            "it predates resumable build fingerprinting"
-        };
-        println!(
-            "Discarding stale {} result root at {} because {}.",
-            label,
-            result_root.display(),
-            reason
-        );
-    }
-    prepare_result_root(result_root, preserved_paths)?;
-    write_uikit_result_root_build_stamp(result_root, expected_stamp)
+pub fn prepare_resumable_uikit_device_result_root(result_root: &Path, preserved_paths: &[&Path], expected_stamp: &UIKitHostBuildStamp, label: &str) -> Result<()>
+{
+   let has_resumable_artifacts = result_root_has_resumable_device_artifacts(result_root)?;
+   let saved_stamp = load_uikit_result_root_build_stamp(result_root)?;
+   let proof_stamp = if saved_stamp.is_none()
+   {
+      load_compare_device_proof_status(result_root)?.map(|status| status.build_stamp)
+   }
+   else
+   {
+      None
+   };
+   if has_resumable_artifacts
+      && (saved_stamp.as_ref() == Some(expected_stamp)
+         || proof_stamp.as_ref() == Some(expected_stamp))
+   {
+      if saved_stamp.is_none()
+      {
+         write_uikit_result_root_build_stamp(result_root, expected_stamp)?;
+      }
+      println!("Resuming existing {} result root at {}.", label, result_root.display());
+      return Ok(());
+   }
+   if has_resumable_artifacts
+   {
+      let reason = if saved_stamp.is_some()
+      {
+         "the host build fingerprint changed"
+      }
+      else
+      {
+         "it predates resumable build fingerprinting"
+      };
+      println!(
+         "Discarding stale {} result root at {} because {}.",
+         label,
+         result_root.display(),
+         reason
+      );
+   }
+   prepare_result_root(result_root, preserved_paths)?;
+   write_uikit_result_root_build_stamp(result_root, expected_stamp)
 }
 
 fn result_root_has_resumable_device_artifacts(result_root: &Path) -> Result<bool> {
