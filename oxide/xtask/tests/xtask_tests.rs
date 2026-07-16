@@ -239,7 +239,7 @@ fn experiment_manifest_checker_accepts_current_manifest() {
         check_experiment_manifest_text(text, "2026-06-22").expect("current manifest should pass");
     assert_eq!(
         summary,
-        ExperimentCheckSummary { total: 190, undecided: 0, accepted: 88, rejected: 102 }
+        ExperimentCheckSummary { total: 191, undecided: 0, accepted: 89, rejected: 102 }
     );
 }
 

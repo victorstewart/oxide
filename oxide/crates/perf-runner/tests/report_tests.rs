@@ -286,14 +286,6 @@ fn assert_all_report_cases_match_keys(report: &Value, name: &str, expected: &[&s
     }
 }
 
-fn assert_all_report_cases_have_keys(report: &Value, name: &str, expected: &[&str]) {
-    for case in report_cases(report, name) {
-        let id = case["id"].as_str().unwrap_or("<missing id>");
-        assert_json_object_has_keys(case, expected);
-        assert!(case["id"].as_str().is_some(), "{name} case {id} has non-string id");
-    }
-}
-
 fn sample_report(cases: Vec<PerfCaseResult>) -> PerfReport {
     PerfReport {
         version: 1,
@@ -408,6 +400,7 @@ fn persisted_report_root_and_case_schemas_are_frozen() {
         "backend_path_coverage",
         "backdrop_batch_summary",
         "benchmark_marks",
+        "browser_environment",
         "browser_startup",
         "browser_target",
         "browser_trace",
@@ -444,10 +437,49 @@ fn persisted_report_root_and_case_schemas_are_frozen() {
     let web_case_required_keys = [
         "avg_ms",
         "cache_state",
+        "frames",
+        "frames_per_sample",
+        "id",
+        "layer",
+        "p50_ms",
+        "p95_ms",
+        "p99_ms",
+        "peak_ms",
+        "refresh_mode",
+        "samples",
+        "scenario",
+        "unit",
+        "variant",
+    ];
+    let web_cpu_submit_required_keys = [
+        "cpu_submit_avg_ms",
+        "cpu_submit_p50_ms",
+        "cpu_submit_p95_ms",
+        "cpu_submit_p99_ms",
+        "cpu_submit_peak_ms",
+        "frames",
+        "frames_per_sample",
+        "id",
+        "layer",
+        "refresh_mode",
+        "samples",
+        "scenario",
+        "unit",
+        "variant",
+    ];
+    let web_raf_required_keys = [
+        "avg_ms",
+        "cache_state",
+        "canvas_css",
+        "canvas_physical",
+        "device_pixel_ratio",
         "frame_budget_120hz_ms",
         "frame_budget_60hz_ms",
         "frames",
-        "frames_per_sample",
+        "gpu_ms_p50",
+        "gpu_ms_p95",
+        "gpu_ms_p99",
+        "gpu_ms_peak",
         "hitch_frames_120hz",
         "hitch_frames_60hz",
         "hitch_ratio_120hz",
@@ -465,27 +497,42 @@ fn persisted_report_root_and_case_schemas_are_frozen() {
         "refresh_mode",
         "samples",
         "scenario",
+        "submissions",
         "unit",
         "variant",
     ];
     let web = persisted_report_json("benchmarks/web/latest.json");
     assert_json_object_keys(&web, &web_report_keys);
-    assert_all_report_cases_have_keys(&web, "web latest", &web_case_required_keys);
+    for case in report_cases(&web, "web latest")
+    {
+       if case["id"].as_str() == Some("web.wasm.webgpu.cpu_submit_throughput")
+       {
+          assert_json_object_has_keys(case, &web_cpu_submit_required_keys);
+       }
+       else if case["id"].as_str() == Some("web.wasm.webgpu.raf_frame_loop")
+       {
+          assert_json_object_has_keys(case, &web_raf_required_keys);
+       }
+       else
+       {
+          assert_json_object_has_keys(case, &web_case_required_keys);
+       }
+    }
 }
 
 #[test]
 fn persisted_report_case_id_sets_are_frozen() {
     let workspace = persisted_report_json("benchmarks/workspace/latest.json");
-    assert_report_case_id_set(&workspace, "workspace latest", 161, 0x1b7d422a664150bb);
+    assert_report_case_id_set(&workspace, "workspace latest", 399, 0x0a3d9230959bfc6d);
 
     let oxide_device = persisted_report_json("benchmarks/oxide-device/latest.json");
-    assert_report_case_id_set(&oxide_device, "oxide device latest", 10, 0xcb10a27114bd9462);
+    assert_report_case_id_set(&oxide_device, "oxide device latest", 23, 0x80168fb31ce042ff);
 
     let uikit_device = persisted_report_json("benchmarks/uikit-device/latest.json");
-    assert_report_case_id_set(&uikit_device, "uikit device latest", 20, 0x77c06ccfd9913732);
+    assert_report_case_id_set(&uikit_device, "uikit device latest", 38, 0x753034922b773608);
 
     let web = persisted_report_json("benchmarks/web/latest.json");
-    assert_report_case_id_set(&web, "web latest", 17, 0x4bec2e7846d4212e);
+    assert_report_case_id_set(&web, "web latest", 18, 0x9fc864e451bf9432);
 }
 
 #[test]
@@ -501,7 +548,7 @@ fn persisted_web_report_subobject_schemas_are_frozen() {
         ("upload_summary", 11, 0x34860398c8ab5645),
         ("wasm_allocation_audit", 17, 0xeb32f3145ec864fc),
         ("warm_resource_churn", 45, 0x64e334f4ac8907c0),
-        ("gpu_timestamp_stage_breakdown", 12, 0x2b9d3fb86b59127b),
+        ("gpu_timestamp_stage_breakdown", 13, 0x65908b3e662b7aca),
     ];
     for (section, expected_count, expected_digest) in sections {
         assert_json_object_key_digest(&web[section], section, expected_count, expected_digest);
@@ -524,14 +571,14 @@ fn persisted_report_nested_key_sets_are_frozen()
    assert_json_array_entry_key_digest(&oxide_device["contract"]["battery"], "oxide device contract battery", 4, 0x0ab7b204885807d9);
    assert_json_array_entry_key_digest(&oxide_device["contract"]["layers"], "oxide device contract layers", 4, 0x0ab7b204885807d9);
    assert_json_array_entry_key_digest(&oxide_device["findings"], "oxide device findings", 2, 0x4c30c261b26d2ea9);
-   assert_report_metric_key_class_digest(&oxide_device, "oxide device latest", 10, 0x14bd01548791efcb);
+   assert_report_metric_key_class_digest(&oxide_device, "oxide device latest", 23, 0x6c582bb7208d4962);
 
    let uikit_device = persisted_report_json("benchmarks/uikit-device/latest.json");
    assert_json_object_key_digest(&uikit_device["contract"], "uikit device contract", 4, 0x92feb47c0d2e7b8b);
    assert_json_array_entry_key_digest(&uikit_device["contract"]["battery"], "uikit device contract battery", 4, 0x0ab7b204885807d9);
    assert_json_array_entry_key_digest(&uikit_device["contract"]["layers"], "uikit device contract layers", 4, 0x0ab7b204885807d9);
    assert_json_array_entry_key_digest(&uikit_device["contract"]["styles"], "uikit device contract styles", 4, 0x0ab7b204885807d9);
-   assert_report_metric_key_class_digest(&uikit_device, "uikit device latest", 20, 0xb834f51066ddf5a4);
+   assert_report_metric_key_class_digest(&uikit_device, "uikit device latest", 38, 0xebd1e83cc68ec4de);
 
    let web = persisted_report_json("benchmarks/web/latest.json");
    let web_sections = [
@@ -544,12 +591,12 @@ fn persisted_report_nested_key_sets_are_frozen()
       ("effect_uniform_summary", 11, 0x6902916d38ce7681),
       ("frame_loop_wasm_allocation_stages", 15, 0x3a59951e69ac9007),
       ("frame_loop_wasm_submit_allocation_stages", 15, 0xd29637cda982c8f4),
-      ("id_mask_summary", 6, 0x1cd348e7263b1b0b),
+      ("id_mask_summary", 9, 0x67e29d57f1316766),
       ("mixed_summary", 16, 0xbc967663981e0eb8),
-      ("neon_marker_summary", 9, 0x97f9e418b55a6e7f),
+      ("neon_marker_summary", 11, 0x7c34a247e845acd5),
       ("pixel_check", 7, 0x7654c15d62e216ec),
-      ("scene3d_stress_summary", 14, 0x4673178e05f0fb21),
-      ("scene3d_summary", 14, 0x4673178e05f0fb21),
+      ("scene3d_stress_summary", 23, 0x63a387ee9ca1bd4d),
+      ("scene3d_summary", 22, 0x7bc41f1ab93ecf65),
       ("smoke", 21, 0x3c3ab7a93b727e37),
       ("wasm_allocation_invariance", 12, 0x25a587bf2e40a76f),
    ];
@@ -558,7 +605,7 @@ fn persisted_report_nested_key_sets_are_frozen()
       assert_json_object_key_digest(&web[section], section, expected_count, expected_digest);
    }
    assert_json_array_entry_key_digest(&web["browser_startup"]["files"], "web browser package files", 3, 0x16e32dc2a4132de1);
-   assert_report_case_key_class_digest(&web, "web latest", 17, 0x66b9437558fbaa09);
+   assert_report_case_key_class_digest(&web, "web latest", 18, 0xd0842a5f22773fe7);
 }
 
 #[test]
@@ -573,14 +620,14 @@ fn persisted_workspace_native_renderer_metric_keys_are_frozen() {
     assert_workspace_case_metric_key_digest(
         &report,
         "gpu.animation.effects.refresh_matrix",
-        28,
-        0xf417d36ac84d78b0,
+        32,
+        0x12223d95b0c97df8,
     );
     assert_workspace_case_metric_key_digest(
         &report,
         "gpu.journey.collection_navigation.frame_pacing",
-        31,
-        0xd02fcb3ebb794756,
+        34,
+        0x6c24fadfa02d6f63,
     );
     assert_workspace_case_metric_key_digest(
         &report,
@@ -615,7 +662,7 @@ fn persisted_workspace_native_renderer_metric_keys_are_frozen() {
         "gpu.scene.stress.frame",
     ];
     for id in scene_rows {
-        assert_workspace_case_metric_key_digest(&report, id, 27, 0x5381c846d128d9bf);
+        assert_workspace_case_metric_key_digest(&report, id, 31, 0xf2dee20e9220b171);
     }
 }
 
@@ -1516,7 +1563,7 @@ fn workspace_latest_gates_text_cache_atlas_and_cursor_rows() {
     let picker = workspace_case(&report, "cpu.system.picker_text_cached_encode");
     assert_workspace_cpu_row(picker, "system", "system");
     assert_eq!(workspace_metric(picker, "atlas_create_calls"), 1.0);
-    assert_eq!(workspace_metric(picker, "atlas_update_calls"), 1.0);
+    assert_eq!(workspace_metric(picker, "atlas_update_calls"), 0.0);
     assert!(workspace_metric(picker, "picker_glyph_runs") > 0.0);
     assert!(workspace_metric(picker, "picker_vertices") > 0.0);
     assert!(workspace_metric(picker, "dirty_to_full_upload_ratio") < 0.01);
@@ -1626,10 +1673,10 @@ fn assert_web_report_zero_resource_churn(case: &Value, allow_buffer_grows: bool)
     }
 }
 
-fn assert_web_frame_case_contract(case: &Value) {
-    assert_eq!(case["unit"].as_str(), Some("ms/frame"));
+fn assert_web_renderer_case_contract(case: &Value) {
+    assert_eq!(case["unit"].as_str(), Some("ms/cpu-submit"));
     assert_eq!(case["cache_state"].as_str(), Some("warm"));
-    assert_eq!(case["refresh_mode"].as_str(), Some("browser-main-thread"));
+    assert_eq!(case["refresh_mode"].as_str(), Some("unpaced-tight-loop"));
     assert!(web_report_number(case, "samples") > 0.0);
     assert!(web_report_number(case, "frames_per_sample") > 0.0);
     assert!(web_report_number(case, "frames") > 0.0);
@@ -1640,15 +1687,6 @@ fn assert_web_frame_case_contract(case: &Value) {
     assert!(web_report_number(case, "p95_ms") >= web_report_number(case, "p50_ms"));
     assert!(web_report_number(case, "p99_ms") >= web_report_number(case, "p95_ms"));
     assert!(web_report_number(case, "peak_ms") >= web_report_number(case, "p99_ms"));
-    for hz in ["60hz", "120hz"] {
-        assert!(web_report_number(case, &format!("frame_budget_{hz}_ms")) > 0.0);
-        assert!(web_report_number(case, &format!("missed_frames_{hz}")) >= 0.0);
-        assert!(web_report_number(case, &format!("hitch_frames_{hz}")) >= 0.0);
-        let missed = web_report_number(case, &format!("missed_frame_ratio_{hz}"));
-        let hitch = web_report_number(case, &format!("hitch_ratio_{hz}"));
-        assert!((0.0..=1.0).contains(&missed), "missed ratio {hz} out of range: {missed}");
-        assert!((0.0..=1.0).contains(&hitch), "hitch ratio {hz} out of range: {hitch}");
-    }
     for key in [
         "draws",
         "draw_items",
@@ -1822,7 +1860,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     let report: Value = serde_json::from_slice(&bytes)
         .unwrap_or_else(|err| panic!("parse {}: {err}", path.display()));
 
-    assert_eq!(report["version"].as_u64(), Some(5));
+    assert_eq!(report["version"].as_u64(), Some(6));
     assert_eq!(report["suite"].as_str(), Some("web-wasm"));
     assert_eq!(report["status"].as_str(), Some("browser-baseline"));
     assert_eq!(report["smoke"]["webgpu"].as_str(), Some("webgpu=device-ok"));
@@ -1881,7 +1919,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     );
 
     let expected_benchmark_marks = [
-        "frame_loop",
+        "cpu_submit_throughput",
+        "raf_frame_loop",
         "id_mask_current",
         "upload_current",
         "effect_uniform_ab",
@@ -2009,7 +2048,6 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     }
 
     let expected_ids = [
-        "web.wasm.webgpu.frame_loop",
         "web.wasm.webgpu.id_mask_compositor.current",
         "web.wasm.webgpu.glyph_atlas_upload.current_dirty",
         "web.wasm.webgpu.image_upload.current_dirty",
@@ -2029,11 +2067,39 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     ];
     assert_eq!(
         report["cases"].as_array().expect("web cases").len(),
-        expected_ids.len(),
+        expected_ids.len() + 2,
         "unexpected WebGPU browser report case count",
     );
+    let cpu_submit = web_report_case(&report, "web.wasm.webgpu.cpu_submit_throughput");
+    assert!(web_report_number(cpu_submit, "cpu_submit_p50_ms") > 0.0);
+    assert!(web_report_number(cpu_submit, "cpu_submit_p95_ms") > 0.0);
+    assert!(web_report_number(cpu_submit, "cpu_submit_p99_ms") > 0.0);
+    assert!(web_report_number(cpu_submit, "cpu_submit_peak_ms") > 0.0);
+    let raf = web_report_case(&report, "web.wasm.webgpu.raf_frame_loop");
+    assert_eq!(raf["unit"].as_str(), Some("ms/displayed-frame"));
+    assert_eq!(web_report_number(raf, "samples"), 2_000.0);
+    assert_eq!(web_report_number(raf, "frames"), 2_000.0);
+    assert_eq!(web_report_number(raf, "submissions"), 2_000.0);
+    assert_eq!(
+        raf["gpu_timestamp_samples"].as_array().expect("RAF GPU timestamp samples").len(),
+        2_000,
+    );
+    assert_eq!(web_report_number(raf, "queue_pending_final"), 0.0);
+    assert!(web_report_number(raf, "p50_ms") > 0.0);
+    assert!(web_report_number(raf, "p95_ms") >= web_report_number(raf, "p50_ms"));
+    assert!(web_report_number(raf, "p99_ms") >= web_report_number(raf, "p95_ms"));
+    assert!(web_report_number(raf, "peak_ms") >= web_report_number(raf, "p99_ms"));
+    for hz in ["60hz", "120hz"] {
+        assert!(web_report_number(raf, &format!("frame_budget_{hz}_ms")) > 0.0);
+        assert!(web_report_number(raf, &format!("missed_frames_{hz}")) >= 0.0);
+        assert!(web_report_number(raf, &format!("hitch_frames_{hz}")) >= 0.0);
+        let missed = web_report_number(raf, &format!("missed_frame_ratio_{hz}"));
+        let hitch = web_report_number(raf, &format!("hitch_ratio_{hz}"));
+        assert!((0.0..=1.0).contains(&missed), "missed ratio {hz} out of range: {missed}");
+        assert!((0.0..=1.0).contains(&hitch), "hitch ratio {hz} out of range: {hitch}");
+    }
     for id in expected_ids {
-        assert_web_frame_case_contract(web_report_case(&report, id));
+        assert_web_renderer_case_contract(web_report_case(&report, id));
     }
 
     let gpu_timestamp_stage_breakdown = &report["gpu_timestamp_stage_breakdown"];
@@ -2045,7 +2111,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     assert_eq!(web_report_number(gpu_timestamp_stage_breakdown, "collected_rows"), 17.0);
     assert_eq!(web_report_number(gpu_timestamp_stage_breakdown, "stage_count"), 9.0);
     assert_eq!(web_report_number(gpu_timestamp_stage_breakdown, "row_detail_count"), 17.0);
-    assert_eq!(web_report_number(gpu_timestamp_stage_breakdown, "total_render_passes"), 98.0);
+    assert_eq!(web_report_number(gpu_timestamp_stage_breakdown, "total_render_passes"), 82.0);
     assert_eq!(
         web_report_number(gpu_timestamp_stage_breakdown, "total_render_passes"),
         web_report_number(gpu_timestamp_stage_breakdown, "total_timestamp_passes"),
@@ -2079,16 +2145,16 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         gpu_timestamp_stage_breakdown["row_details"].as_array().expect("gpu timestamp row details");
     let frame_loop_timestamp_row = gpu_timestamp_rows
         .iter()
-        .find(|row| row["id"].as_str() == Some("web.wasm.webgpu.frame_loop"))
-        .expect("frame-loop gpu timestamp detail");
+        .find(|row| row["id"].as_str() == Some("web.wasm.webgpu.cpu_submit_throughput"))
+        .expect("CPU-submit gpu timestamp detail");
     assert_eq!(
         web_report_number(frame_loop_timestamp_row, "family_passes"),
-        web_report_number(web_report_case(&report, "web.wasm.webgpu.frame_loop"), "render_passes"),
+        web_report_number(cpu_submit, "render_passes"),
     );
     assert_eq!(
         web_report_number(frame_loop_timestamp_row, "family_timestamp_ns"),
         web_report_number(
-            web_report_case(&report, "web.wasm.webgpu.frame_loop"),
+            cpu_submit,
             "gpu_timestamp_total_ns"
         ),
     );
@@ -2099,7 +2165,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         Some("web.wasm.webgpu.warm_resource_churn.current_rows"),
     );
     assert_eq!(web_report_number(warm_resource_churn, "checked_rows"), 15.0);
-    assert_eq!(web_report_number(warm_resource_churn, "excluded_rows"), 2.0);
+    assert_eq!(web_report_number(warm_resource_churn, "excluded_rows"), 3.0);
     let warm_rows: Vec<&str> = warm_resource_churn["rows"]
         .as_array()
         .expect("warm resource churn rows")
@@ -2120,7 +2186,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     assert_eq!(web_report_number(warm_resource_churn, "row_detail_count"), warm_rows.len() as f64,);
     assert_eq!(warm_row_details.len(), warm_rows.len());
     for id in [
-        "web.wasm.webgpu.frame_loop",
+        "web.wasm.webgpu.cpu_submit_throughput",
         "web.wasm.webgpu.id_mask_compositor.current",
         "web.wasm.webgpu.glyph_atlas_upload.current_dirty",
         "web.wasm.webgpu.image_upload.current_dirty",
@@ -2132,12 +2198,14 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "web.wasm.webgpu.layer_damage_effects",
         "web.wasm.webgpu.clean_layer.clean_reuse",
         "web.wasm.webgpu.command_family_matrix",
+        "web.wasm.webgpu.glyph_run.current",
         "web.wasm.webgpu.neon_marker.current",
         "web.wasm.webgpu.direct_surface.current",
     ] {
         assert!(warm_rows.contains(&id), "warm resource churn missing checked row {id}");
    }
    for id in [
+       "web.wasm.webgpu.raf_frame_loop",
        "web.wasm.webgpu.scene3d.recreate_mesh",
        "web.wasm.webgpu.scene3d.stress_recreate_mesh",
     ] {
@@ -2210,7 +2278,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
    );
    assert_eq!(wasm_allocation_audit["status"].as_str(), Some("measured"));
    assert_eq!(web_report_number(wasm_allocation_audit, "checked_count"), 15.0);
-   assert_eq!(web_report_number(wasm_allocation_audit, "excluded_count"), 2.0);
+   assert_eq!(web_report_number(wasm_allocation_audit, "excluded_count"), 3.0);
    assert_eq!(
        web_report_number(wasm_allocation_audit, "row_detail_count"),
        web_report_number(wasm_allocation_audit, "checked_count"),
@@ -2237,7 +2305,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         .collect();
     let wasm_allocation_details =
         wasm_allocation_audit["row_details"].as_array().expect("wasm allocation row details");
-    assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.frame_loop"));
+    assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.cpu_submit_throughput"));
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.id_mask_compositor.current"));
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.glyph_run.current"));
     assert!(wasm_allocation_rows.contains(&"web.wasm.webgpu.neon_marker.current"));
@@ -2266,7 +2334,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         );
     }
 
-    let frame_loop = web_report_case(&report, "web.wasm.webgpu.frame_loop");
+    let frame_loop = web_report_case(&report, "web.wasm.webgpu.cpu_submit_throughput");
     let wasm_allocation_invariance = &report["wasm_allocation_invariance"];
     assert_eq!(
         wasm_allocation_invariance["id"].as_str(),
@@ -2274,17 +2342,17 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     );
     assert_eq!(
         wasm_allocation_invariance["status"].as_str(),
-        Some("shared-submit-boundary-profile"),
+        Some("path-specific-allocations"),
     );
     assert_eq!(
         wasm_allocation_invariance["reference_row"].as_str(),
-        Some("web.wasm.webgpu.frame_loop"),
+        Some("web.wasm.webgpu.cpu_submit_throughput"),
     );
     assert_eq!(
         web_report_number(wasm_allocation_invariance, "checked_count"),
         web_report_number(wasm_allocation_audit, "checked_count"),
     );
-    assert_eq!(web_report_number(wasm_allocation_invariance, "unique_signature_count"), 1.0,);
+    assert_eq!(web_report_number(wasm_allocation_invariance, "unique_signature_count"), 6.0,);
     assert_eq!(
         web_report_number(wasm_allocation_invariance, "shared_wasm_alloc_count"),
         web_report_number(frame_loop, "wasm_alloc_count"),
@@ -2303,7 +2371,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
             .as_array()
             .expect("wasm allocation invariance signature rows")
             .len(),
-        1,
+        6,
     );
 
     let frame_stage_allocations = &report["frame_loop_wasm_allocation_stages"];
@@ -2311,7 +2379,10 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         frame_stage_allocations["id"].as_str(),
         Some("web.wasm.webgpu.frame_loop_wasm_allocation_stages"),
     );
-    assert_eq!(frame_stage_allocations["row_id"].as_str(), Some("web.wasm.webgpu.frame_loop"),);
+    assert_eq!(
+        frame_stage_allocations["row_id"].as_str(),
+        Some("web.wasm.webgpu.cpu_submit_throughput"),
+    );
     assert_eq!(web_report_number(frame_stage_allocations, "stage_count"), 11.0);
     assert_eq!(
         web_report_number(frame_stage_allocations, "total_stage_wasm_alloc_count"),
@@ -2358,7 +2429,10 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         submit_stage_allocations["id"].as_str(),
         Some("web.wasm.webgpu.frame_loop_wasm_submit_allocation_stages"),
     );
-    assert_eq!(submit_stage_allocations["row_id"].as_str(), Some("web.wasm.webgpu.frame_loop"),);
+    assert_eq!(
+        submit_stage_allocations["row_id"].as_str(),
+        Some("web.wasm.webgpu.cpu_submit_throughput"),
+    );
     assert_eq!(web_report_number(submit_stage_allocations, "stage_count"), 9.0);
     assert_eq!(
         web_report_number(submit_stage_allocations, "total_stage_wasm_alloc_count"),
@@ -2389,12 +2463,12 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         "submit_timestamp_alloc_count",
         "submit_scratch_stats_alloc_count",
         "submit_present_alloc_count",
+        "submit_timestamp_map_alloc_count",
     ] {
         assert_eq!(web_report_number(frame_loop, field), 0.0);
     }
     assert!(web_report_number(frame_loop, "submit_surface_alloc_count") > 0.0);
     assert!(web_report_number(frame_loop, "submit_finish_queue_alloc_count") > 0.0);
-    assert!(web_report_number(frame_loop, "submit_timestamp_map_alloc_count") > 0.0);
     assert_eq!(submit_stage_allocations["dominant_stage"].as_str(), Some("surface"));
     let submit_stage_details = submit_stage_allocations["stages"]
         .as_array()
@@ -2424,8 +2498,8 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     assert_eq!(backend_path_coverage["id"].as_str(), Some("web.wasm.webgpu.backend_path_coverage"),);
     let expected_backend_paths: &[(&str, &[&str], &[&str])] = &[
         (
-            "frame_loop",
-            &["web.wasm.webgpu.frame_loop"],
+            "cpu_submit_throughput",
+            &["web.wasm.webgpu.cpu_submit_throughput"],
             &[
                 "draws",
                 "draw_items",
@@ -2436,10 +2510,18 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
             ],
         ),
         (
+            "raf_frame_loop",
+            &["web.wasm.webgpu.raf_frame_loop"],
+            &["frames", "submissions", "p50_ms", "p95_ms", "p99_ms", "peak_ms"],
+        ),
+        (
             "id_mask_compositor",
             &["web.wasm.webgpu.id_mask_compositor.current"],
             &[
                 "id_mask_draws",
+                "id_mask_uniform_writes",
+                "id_mask_uniform_bytes",
+                "id_mask_uniform_slots",
                 "id_mask_raster_passes",
                 "id_mask_field_seed_passes",
                 "id_mask_field_jump_passes",
@@ -2488,6 +2570,12 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
             &["web.wasm.webgpu.scene3d.reused_mesh", "web.wasm.webgpu.scene3d.recreate_mesh"],
             &[
                 "scene3d_draws",
+                "scene3d_instances",
+                "scene3d_instance_bytes",
+                "scene3d_pipeline_binds",
+                "scene3d_bind_group_binds",
+                "scene3d_mesh_buffer_binds",
+                "scene3d_viewport_sets",
                 "mesh3d_creates",
                 "buffer_grows",
                 "cpu_scratch_grows",
@@ -2502,6 +2590,12 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
             ],
             &[
                 "scene3d_draws",
+                "scene3d_instances",
+                "scene3d_instance_bytes",
+                "scene3d_pipeline_binds",
+                "scene3d_bind_group_binds",
+                "scene3d_mesh_buffer_binds",
+                "scene3d_viewport_sets",
                 "mesh3d_creates",
                 "buffer_grows",
                 "cpu_scratch_grows",
@@ -2608,7 +2702,9 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
                 "expected_markers",
                 "expected_draw_items",
                 "draw_items",
-                "solid_tris",
+                "neon_marker_instances",
+                "neon_marker_triangles",
+                "neon_marker_instance_bytes",
                 "draw_pipeline_binds",
                 "draw_bind_group_binds",
                 "draw_scissor_sets",
@@ -2663,7 +2759,18 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
                 .find(|value| value["id"].as_str() == Some(*row_id))
                 .unwrap_or_else(|| panic!("missing backend path row detail {path_id}.{row_id}"));
             for field in ["p50_ms", "p95_ms", "p99_ms", "peak_ms"] {
-                assert_eq!(web_report_number(detail, field), web_report_number(source, field));
+                let source_field = if *row_id == "web.wasm.webgpu.cpu_submit_throughput"
+                {
+                   format!("cpu_submit_{field}")
+                }
+                else
+                {
+                   String::from(field)
+                };
+                assert_eq!(
+                    web_report_number(detail, field),
+                    web_report_number(source, &source_field),
+                );
             }
             for field in *counters {
                 assert_eq!(
@@ -2675,7 +2782,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         }
     }
 
-    let frame = web_report_case(&report, "web.wasm.webgpu.frame_loop");
+    let frame = web_report_case(&report, "web.wasm.webgpu.cpu_submit_throughput");
     let current = web_report_case(&report, "web.wasm.webgpu.id_mask_compositor.current");
     let glyph_current =
         web_report_case(&report, "web.wasm.webgpu.glyph_atlas_upload.current_dirty");
@@ -2750,11 +2857,15 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         assert!(web_report_number(case, "vertices") > 0.0);
         assert!(web_report_number(case, "vertex_bytes") > 0.0);
         assert!(web_report_number(case, "id_mask_draws") > 0.0);
-        assert!(web_report_number(case, "id_mask_raster_passes") > 0.0);
-        assert!(web_report_number(case, "id_mask_field_jump_passes") > 0.0);
+        assert!(web_report_number(case, "id_mask_uniform_writes") > 0.0);
+        assert!(web_report_number(case, "id_mask_uniform_bytes") > 0.0);
+        assert!(web_report_number(case, "id_mask_uniform_slots") > 0.0);
+        assert_eq!(web_report_number(case, "id_mask_raster_passes"), 0.0);
+        assert_eq!(web_report_number(case, "id_mask_field_seed_passes"), 0.0);
+        assert_eq!(web_report_number(case, "id_mask_field_jump_passes"), 0.0);
         assert!(web_report_number(case, "id_mask_compositor_passes") > 0.0);
     }
-    assert!(web_report_number(frame, "solid_tris") > 0.0);
+    assert!(web_report_number(frame, "draw_items") > 0.0);
     assert!(web_report_number(frame, "draw_passes") > 0.0);
     assert!(web_report_number(frame, "glyph_quads") > 0.0);
     assert!(web_report_number(glyph_current, "glyph_quads") > 0.0);
@@ -2794,7 +2905,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         web_report_number(backdrop_batch_current, "expected_backdrops"),
     );
     assert_eq!(web_report_number(backdrop_batch_current, "texture_copies"), 1.0);
-    assert_eq!(web_report_number(backdrop_batch_current, "render_passes"), 4.0);
+    assert_eq!(web_report_number(backdrop_batch_current, "render_passes"), 3.0);
     assert_eq!(
         web_report_number(backdrop_batch_current, "gpu_timestamp_passes"),
         web_report_number(backdrop_batch_current, "render_passes"),
@@ -2803,8 +2914,10 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     assert!(web_report_number(scene3d_reused, "scene3d_draws") > 0.0);
     assert!(web_report_number(scene3d_reused, "scene3d_passes") > 0.0);
     assert_eq!(web_report_number(scene3d_stress_reused, "mesh3d_creates"), 0.0);
-    assert!(web_report_number(scene3d_stress_reused, "scene3d_draws") >= 64.0);
-    assert!(web_report_number(scene3d_stress_recreate, "scene3d_draws") >= 64.0);
+    assert!(web_report_number(scene3d_stress_reused, "scene3d_draws") > 0.0);
+    assert!(web_report_number(scene3d_stress_recreate, "scene3d_draws") > 0.0);
+    assert!(web_report_number(scene3d_stress_reused, "scene3d_instances") >= 64.0);
+    assert!(web_report_number(scene3d_stress_recreate, "scene3d_instances") >= 64.0);
     assert!(web_report_number(mixed, "backdrop_draws") > 0.0);
     assert!(web_report_number(mixed, "visual_effect_draws") > 0.0);
     assert!(web_report_number(mixed, "layer_draws") > 0.0);
@@ -2943,7 +3056,7 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
     assert_eq!(web_report_number(glyph_run_current, "expected_glyph_quads"), 512.0);
     assert_eq!(web_report_number(glyph_run_current, "expected_sdf_runs"), 32.0);
     assert_eq!(web_report_number(glyph_run_current, "expected_sdf_glyph_quads"), 256.0);
-    assert_eq!(web_report_number(glyph_run_current, "expected_draw_items"), 65.0);
+    assert_eq!(web_report_number(glyph_run_current, "expected_draw_items"), 3.0);
     assert_eq!(
         web_report_number(glyph_run_current, "draw_items"),
         web_report_number(glyph_run_current, "expected_draw_items"),
@@ -2981,12 +3094,15 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         web_report_number(glyph_run_current, "draw_items"),
     );
     assert_eq!(web_report_number(neon_marker_current, "expected_markers"), 64.0);
-    assert_eq!(web_report_number(neon_marker_current, "expected_draw_items"), 192.0);
+    assert_eq!(web_report_number(neon_marker_current, "expected_draw_items"), 64.0);
     assert_eq!(
         web_report_number(neon_marker_current, "draw_items"),
         web_report_number(neon_marker_current, "expected_draw_items"),
     );
-    assert!(web_report_number(neon_marker_current, "solid_tris") > 0.0);
+    assert_eq!(web_report_number(neon_marker_current, "solid_tris"), 0.0);
+    assert_eq!(web_report_number(neon_marker_current, "neon_marker_instances"), 64.0);
+    assert_eq!(web_report_number(neon_marker_current, "neon_marker_triangles"), 128.0);
+    assert!(web_report_number(neon_marker_current, "neon_marker_instance_bytes") > 0.0);
     assert_eq!(web_report_number(neon_marker_current, "draw_pipeline_binds"), 1.0);
     assert_eq!(web_report_number(neon_marker_current, "draw_bind_group_binds"), 0.0);
     assert_eq!(web_report_number(neon_marker_current, "draw_scissor_sets"), 1.0);
@@ -3007,8 +3123,16 @@ fn web_latest_report_satisfies_webgpu_distribution_and_pacing_contract() {
         web_report_number(neon_marker_current, "draw_items"),
     );
     assert_eq!(
-        web_report_number(&report["neon_marker_summary"], "current_solid_tris"),
-        web_report_number(neon_marker_current, "solid_tris"),
+        web_report_number(&report["neon_marker_summary"], "current_instances"),
+        web_report_number(neon_marker_current, "neon_marker_instances"),
+    );
+    assert_eq!(
+        web_report_number(&report["neon_marker_summary"], "current_triangles"),
+        web_report_number(neon_marker_current, "neon_marker_triangles"),
+    );
+    assert_eq!(
+        web_report_number(&report["neon_marker_summary"], "current_instance_bytes"),
+        web_report_number(neon_marker_current, "neon_marker_instance_bytes"),
     );
     assert_eq!(
         web_report_number(&report["neon_marker_summary"], "current_draw_pipeline_binds"),
