@@ -5313,6 +5313,10 @@ fn metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()
    assert_eq!(report_f64(visible, "vertex_upload_bytes"), 327_680.0);
    assert_eq!(report_f64(visible, "index_upload_bytes"), 49_152.0);
    assert_eq!(report_f64(visible, "uniform_upload_bytes"), 16.0);
+   assert!(report_f64(visible, "gpu_ms_p50") > 0.0);
+   assert!(report_f64(visible, "gpu_ms_p95") > 0.0);
+   assert!(report_f64(visible, "gpu_ms_p99") > 0.0);
+   assert!(report_f64(visible, "gpu_ms_peak") > 0.0);
    assert_eq!(report_f64(offscreen, "frame_resource_depth"), 8.0);
    assert_eq!(report_f64(offscreen, "frame_ring_buffer_bytes_peak"), 7_864_320.0);
    assert_eq!(report_f64(offscreen, "cold_resource_grows"), 16.0);
@@ -5321,6 +5325,10 @@ fn metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()
    assert_eq!(report_f64(offscreen, "vertex_upload_bytes"), 655_360.0);
    assert_eq!(report_f64(offscreen, "index_upload_bytes"), 98_304.0);
    assert_eq!(report_f64(offscreen, "uniform_upload_bytes"), 16.0);
+   assert!(report_f64(offscreen, "gpu_ms_p50") > 0.0);
+   assert!(report_f64(offscreen, "gpu_ms_p95") > 0.0);
+   assert!(report_f64(offscreen, "gpu_ms_p99") > 0.0);
+   assert!(report_f64(offscreen, "gpu_ms_peak") > 0.0);
    let _ = std::fs::remove_file(json_out);
 }
 

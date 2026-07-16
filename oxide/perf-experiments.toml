@@ -1,4 +1,29 @@
 [[experiments]]
+id = "c61-final-rendering-proof"
+introduced_commit = "C61 staged tree recorded in commit proof"
+introduced_date = "2026-07-15"
+expires = "2027-07-15"
+required_backends = ["oxide-perf-runner", "oxide-renderer-metal", "oxide-renderer-web", "oxide-host-web", "oxide-host-ios", "oxide-xtask"]
+required_devices = ["Mac14,6 Apple M2 Max", "physical iPhone18,2 iOS 26.5.1", "Chrome arm64 150 WebGPU"]
+correctness_gate = "The optimized 399-case workspace battery, strict Chrome report/golden and supported scale matrix, and same-build physical-iPhone watchable plus component/animation/navigation/journey/camera matrices must pass before C62 promotion."
+performance_gate = "Performance claim: none. Current final-tree distributions, direct in-app GPU timing, process-scoped Metal traces, memory, cadence, startup/cache-state, scale, and unsupported/manual-pending dimensions must be reported without promoting stale or partial baselines."
+decision_state = "accepted"
+decision = "Accepted the refreshed final-tree workspace, browser, and complete physical-iPhone evidence as the measurement foundation for C62; no renderer speedup is attributed to this harness/evidence commit."
+proof = [
+   "The locked optimized workspace battery completed all 399 cases and passed the current report contract; comparison correctly identified the July 9 baseline as stale rather than promoting it under C61.",
+   "Chrome arm64 completed 2,000 displayed frames with RAF p50/p95/p99/peak 8.335/9.585/10.245/10.320 ms and direct WebGPU command-buffer p50/p95/p99/peak 0.160/0.202/0.223/0.384 ms; the exact golden had pixel diff, maximum channel error, and MSE all zero.",
+   "DPR 2, DPR 3, 1080p, and 4K controls each retained 2,000 RAF/GPU samples with exact requested backing dimensions; 18 architecture cases and 25 fresh-profile startup launches passed. Unsupported alternate browsers and 90 Hz automation remain explicit.",
+   "The unchanged physical-iPhone build passed 9 UIKit plus 5 unique Oxide watchable cases and 38 UIKit plus 23 Oxide family cases across component, animation, navigation, journey, and camera; proof-status marks every same-root family green and the result root retains 75 process trace bundles.",
+   "Optional Metal GPU Counters were unavailable on affected Xcode launches, so the accepted report uses Oxide's in-app Metal timing plus process-scoped Metal System Trace; automatic direct energy remains manual-pending per user instruction and no proxy is substituted.",
+]
+cleanup = [
+   "Persisted C18 GPU distributions that were previously collected but omitted from report rows.",
+   "Made the Chrome harness enforce CSS-times-DPR drawable identity, restore the production surface after isolated microbenchmarks, terminate bounded captures, and retain useful failure stacks.",
+   "Updated the Zoom Image regression test from the retired NineSlice representation to current Image source/destination invariants without changing production rendering behavior.",
+   "Kept official latest and dated report promotion deferred to C62.",
+]
+
+[[experiments]]
 id = "c60-image-store-atlas"
 introduced_commit = "C60 staged tree recorded in commit proof"
 introduced_date = "2026-07-15"

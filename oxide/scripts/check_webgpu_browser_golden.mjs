@@ -94,6 +94,9 @@ function parseArgs(argv)
       mixedSamples: 6,
       mixedFrames: 24,
       architectureMatrix: false,
+      imageStoreOnly: false,
+      imageStoreCount: 100,
+      imageStoreStandalone: false,
       rrectArchitectureOnly: false,
       imageArchitectureOnly: false,
       nineSliceArchitectureOnly: false,
@@ -233,6 +236,12 @@ function parseArgs(argv)
          args.mixedFrames = Number(next());
       } else if (arg === "--architecture-matrix") {
          args.architectureMatrix = true;
+      } else if (arg === "--image-store-only") {
+         args.imageStoreOnly = true;
+      } else if (arg === "--image-store-count") {
+         args.imageStoreCount = Number(next());
+      } else if (arg === "--image-store-standalone") {
+         args.imageStoreStandalone = true;
       } else if (arg === "--rrect-architecture-only") {
          args.rrectArchitectureOnly = true;
       } else if (arg === "--image-architecture-only") {
@@ -330,7 +339,7 @@ function parseArgs(argv)
    args.reportTimeoutMs = Math.trunc(args.reportTimeoutMs);
    args.captureRetries = Math.trunc(args.captureRetries);
    args.traceDurationMs = Math.trunc(args.traceDurationMs);
-   for (let key of ["frameSamples", "framesPerSample", "rafFrames", "idMaskSamples", "idMaskFrames", "idMaskCacheRafFrames", "uploadSamples", "uploadFrames", "scene3dSamples", "scene3dFrames", "scene3dInstances", "mixedSamples", "mixedFrames", "canvasSamples", "canvasFrames", "canvasQuads"]) {
+   for (let key of ["frameSamples", "framesPerSample", "rafFrames", "idMaskSamples", "idMaskFrames", "idMaskCacheRafFrames", "uploadSamples", "uploadFrames", "scene3dSamples", "scene3dFrames", "scene3dInstances", "mixedSamples", "mixedFrames", "canvasSamples", "canvasFrames", "canvasQuads", "imageStoreCount"]) {
       if (!Number.isFinite(args[key]) || args[key] <= 0) {
          throw new Error(`${key} must be a positive number`);
       }
@@ -342,6 +351,9 @@ function parseArgs(argv)
    args.scene3dMode = Math.trunc(args.scene3dMode);
    if (args.scene3dInstances > 10000) {
       throw new Error("scene3dInstances must not exceed 10000");
+   }
+   if (args.imageStoreCount > 10000) {
+      throw new Error("imageStoreCount must not exceed 10000");
    }
    if (args.rafFrames < 2000) {
       throw new Error("rafFrames must be at least 2000 for displayed-frame reports");
@@ -438,6 +450,7 @@ function startServer()
 function runChrome(args, url, out)
 {
    return new Promise((resolvePromise, rejectPromise) => {
+      rmSync(out, { force: true });
       let chromeArgs = [
          "--headless=new",
          "--no-first-run",
@@ -468,15 +481,76 @@ function runChrome(args, url, out)
       }
       let { command, commandArgs } = chromeCommand(args, chromeArgs);
       let child = spawn(command, commandArgs, { stdio: "inherit" });
+      let settled = false;
+      let screenshotReady = false;
+      let lastSize = 0;
+      let stableChecks = 0;
+      let forceKillTimer = null;
+      let screenshotPoll = null;
+      let screenshotTimeout = null;
+      let terminateChild = () => {
+         if (child.exitCode !== null || child.signalCode !== null) {
+            return;
+         }
+         child.kill("SIGTERM");
+         if (!forceKillTimer) {
+            forceKillTimer = setTimeout(() => {
+               if (child.exitCode === null && child.signalCode === null) {
+                  child.kill("SIGKILL");
+               }
+            }, 3000);
+            forceKillTimer.unref();
+         }
+      };
+      let finish = err => {
+         if (settled) {
+            return;
+         }
+         settled = true;
+         clearInterval(screenshotPoll);
+         clearTimeout(screenshotTimeout);
+         if (err) {
+            rejectPromise(err);
+         } else {
+            resolvePromise();
+         }
+      };
+      screenshotPoll = setInterval(() => {
+         let size = 0;
+         try {
+            size = statSync(out).size;
+         } catch (_err) {
+            return;
+         }
+         if (size === 0 || size !== lastSize) {
+            lastSize = size;
+            stableChecks = 0;
+            return;
+         }
+         stableChecks += 1;
+         if (stableChecks < 2) {
+            return;
+         }
+         screenshotReady = true;
+         clearInterval(screenshotPoll);
+         terminateChild();
+      }, 50);
+      screenshotTimeout = setTimeout(() => {
+         terminateChild();
+         finish(new Error(`Chrome did not write a screenshot within ${args.reportTimeoutMs} ms`));
+      }, args.reportTimeoutMs);
 
       child.once("error", err => {
-         rejectPromise(err);
+         finish(err);
       });
       child.once("exit", code => {
-         if (code === 0) {
-            resolvePromise();
+         if (forceKillTimer) {
+            clearTimeout(forceKillTimer);
+         }
+         if (screenshotReady || code === 0) {
+            finish(null);
          } else {
-            rejectPromise(new Error(`Chrome exited with status ${code}`));
+            finish(new Error(`Chrome exited before writing a screenshot with status ${code}`));
          }
       });
    });
@@ -615,6 +689,13 @@ function browserUrl(args, baseUrl, reportEndpoint, startupOnly = false, canvasDi
    url.searchParams.set("mixed_frames", String(args.mixedFrames));
    if (args.architectureMatrix) {
       url.searchParams.set("architecture_matrix", "1");
+   }
+   if (args.imageStoreOnly) {
+      url.searchParams.set("image_store_only", "1");
+      url.searchParams.set("image_store_count", String(args.imageStoreCount));
+      if (args.imageStoreStandalone) {
+         url.searchParams.set("image_store_standalone", "1");
+      }
    }
    if (args.rrectArchitectureOnly) {
       url.searchParams.set("rrect_architecture_only", "1");
@@ -1968,6 +2049,8 @@ function rafFrameCase(raw)
       scene_index: Number(raw.scene_index),
       resize_every_frames: Number(raw.resize_every_frames),
       viewport_css: String(raw.viewport_css),
+      canvas_css: String(raw.canvas_css),
+      canvas_physical: String(raw.canvas_physical),
       device_pixel_ratio: Number(raw.device_pixel_ratio),
       cross_origin_isolated: Boolean(raw.cross_origin_isolated),
       unit: "ms/displayed-frame",
@@ -3644,6 +3727,16 @@ function renderMarkdown(report)
    lines.push("");
    lines.push("Status: browser-baseline. This is the browser-specific WebGPU/WebAssembly baseline for the current web backend. It is not an official device parity report.");
    lines.push("");
+   lines.push("## Browser Environment");
+   lines.push("");
+   lines.push("| Field | Value |");
+   lines.push("| --- | --- |");
+   lines.push(`| Window viewport CSS | \`${report.browser_environment.viewport_css}\` |`);
+   lines.push(`| Benchmark canvas CSS | \`${report.browser_environment.canvas_css}\` |`);
+   lines.push(`| Benchmark canvas physical | \`${report.browser_environment.canvas_physical}\` |`);
+   lines.push(`| Device pixel ratio | ${report.browser_environment.device_pixel_ratio} |`);
+   lines.push(`| Cross-origin isolated | ${report.browser_environment.cross_origin_isolated} |`);
+   lines.push("");
    lines.push("## Smoke");
    lines.push("");
    lines.push("| Check | Result |");
@@ -4942,6 +5035,17 @@ function assertBenchmarkMarks(report)
 
 function assertWebReportContract(report)
 {
+   let expectedCanvasCss = `${report.pixel_check.width}x${report.pixel_check.height}`;
+   let expectedCanvasPhysical =
+      `${Math.round(report.pixel_check.width * report.browser_environment.device_pixel_ratio)}x`
+      + `${Math.round(report.pixel_check.height * report.browser_environment.device_pixel_ratio)}`;
+   if (report.browser_environment.canvas_css !== expectedCanvasCss
+      || report.browser_environment.canvas_physical !== expectedCanvasPhysical) {
+      throw new Error(
+         `browser canvas size mismatch: css=${report.browser_environment.canvas_css}/${expectedCanvasCss} `
+         + `physical=${report.browser_environment.canvas_physical}/${expectedCanvasPhysical}`,
+      );
+   }
    let expected = new Set([
       "web.wasm.webgpu.cpu_submit_throughput",
       "web.wasm.webgpu.raf_frame_loop",
@@ -4998,6 +5102,10 @@ function assertWebReportContract(report)
          continue;
       }
       if (row.id === "web.wasm.webgpu.raf_frame_loop") {
+         if (row.canvas_css !== expectedCanvasCss
+            || row.canvas_physical !== expectedCanvasPhysical) {
+            throw new Error("RAF frame-loop canvas dimensions do not match the requested browser workload");
+         }
          for (let key of [
             "samples",
             "frames",
@@ -5857,6 +5965,8 @@ function selfTestMeasurementContract()
       scene_index: 0,
       resize_every_frames: 0,
       viewport_css: "1920x1080",
+      canvas_css: "1920x1080",
+      canvas_physical: "1920x1080",
       device_pixel_ratio: 1,
       cross_origin_isolated: true,
    };

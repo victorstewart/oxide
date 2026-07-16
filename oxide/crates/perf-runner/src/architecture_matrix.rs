@@ -1381,6 +1381,7 @@ fn metal_frame_resource_case(id: &str, smoke: bool, name: &str) -> Result<PerfCa
    let mut skips = 0_u64;
    let mut ring_bytes_peak = 0_u64;
    let mut encode_samples = Vec::with_capacity(frames);
+   let mut gpu_samples = Vec::with_capacity(frames);
    let mut frame_samples = Vec::with_capacity(frames);
    let mut vb_bytes = 0_u64;
    let mut ib_bytes = 0_u64;
@@ -1403,6 +1404,7 @@ fn metal_frame_resource_case(id: &str, smoke: bool, name: &str) -> Result<PerfCa
       {
          frame_samples.push(frame_t0.elapsed().as_secs_f64() * 1_000.0);
          encode_samples.push(stats.encode_ms);
+         gpu_samples.push(stats.gpu_ms);
          warm_growths = warm_growths.saturating_add(stats.resource_grows as u64);
          skips = skips.saturating_add(stats.frame_backpressure_skipped as u64);
          vb_bytes = stats.vb_bytes;
@@ -1415,6 +1417,7 @@ fn metal_frame_resource_case(id: &str, smoke: bool, name: &str) -> Result<PerfCa
    let mut metrics = BTreeMap::new();
    insert_distribution_metrics(&mut metrics, "frame_ms", &frame_samples);
    insert_distribution_metrics(&mut metrics, "encode_ms", &encode_samples);
+   insert_distribution_metrics(&mut metrics, "gpu_ms", &gpu_samples);
    insert_frame_pacing_metrics(&mut metrics, &frame_samples);
    metrics.insert(String::from("frame_resource_depth"), config.frame_resource_depth as f64);
    metrics.insert(String::from("frame_ring_buffer_bytes_peak"), ring_bytes_peak as f64);

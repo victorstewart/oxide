@@ -251,6 +251,7 @@ mod wasm_host {
         direct_capture_active: bool,
         raf_gpu_start_frame_id: u64,
         timestamp_samples: Vec<WebGpuTimestampSample>,
+        timestamp_json: String,
     }
 
     impl AppState {
@@ -544,6 +545,7 @@ mod wasm_host {
                 direct_capture_active: false,
                 raf_gpu_start_frame_id: 0,
                 timestamp_samples: Vec::new(),
+                timestamp_json: String::new(),
             }));
             install_event_listeners(&state)?;
             Ok(OxideWebApp { state })
@@ -584,8 +586,26 @@ mod wasm_host {
             self.ensure_upload_bench_resources().map(|_| ())
         }
 
+        pub fn prewarm_webgpu_id_mask_bench_resources(&self) -> Result<(), JsValue> {
+            let renderer = self.state.borrow().renderer.clone();
+            let vertices = webgpu_id_mask_vertices(WEBGPU_ID_MASK_CELLS, WEBGPU_ID_MASK_EXTENT);
+            let result = webgpu_id_mask_frame(
+                &mut renderer.borrow_mut(),
+                &vertices,
+                1,
+                perf_now(),
+            );
+            result
+        }
+
         pub fn frame(&self) -> Result<(), JsValue> {
             self.state.borrow_mut().frame_at(perf_now())
+        }
+
+        pub fn sync_canvas_metrics_for_benchmark(&self) -> Result<(), JsValue> {
+            let mut state = self.state.borrow_mut();
+            state.canvas_metrics_dirty = true;
+            state.refresh_canvas_metrics()
         }
 
         pub fn frame_at_timestamp_unprofiled(&self, timestamp_ms: f64) -> Result<(), JsValue> {
@@ -602,7 +622,22 @@ mod wasm_host {
             Ok(frame_stage_timing_metrics(&timing))
         }
 
-        pub fn begin_raf_gpu_timestamp_capture(&self) {
+        pub fn prewarm_raf_gpu_timestamp_capture_buffers(&self, expected_samples: u32) {
+            let mut state = self.state.borrow_mut();
+            state.timestamp_samples.clear();
+            let expected_samples = expected_samples.clamp(1, 20_000) as usize;
+            if state.timestamp_samples.capacity() < expected_samples {
+                state.timestamp_samples.reserve(expected_samples);
+            }
+            state.timestamp_json.clear();
+            let expected_json_bytes = expected_samples.saturating_mul(320).saturating_add(256);
+            if state.timestamp_json.capacity() < expected_json_bytes {
+                state.timestamp_json.reserve(expected_json_bytes);
+            }
+        }
+
+        pub fn begin_raf_gpu_timestamp_capture(&self, expected_samples: u32) {
+            self.prewarm_raf_gpu_timestamp_capture_buffers(expected_samples);
             let renderer = self.state.borrow().renderer.clone();
             let mut renderer = renderer.borrow_mut();
             renderer.collect_timestamp_readbacks();
@@ -612,13 +647,9 @@ mod wasm_host {
             drop(renderer);
             let mut state = self.state.borrow_mut();
             state.raf_gpu_start_frame_id = frame_id;
-            state.timestamp_samples.clear();
-            if state.timestamp_samples.capacity() < 2_048 {
-                state.timestamp_samples.reserve(2_048);
-            }
         }
 
-        pub async fn finish_raf_gpu_timestamp_capture(&self) -> Result<String, JsValue> {
+        pub async fn finish_raf_gpu_timestamp_capture(&self) -> Result<JsValue, JsValue> {
             let renderer = self.state.borrow().renderer.clone();
             let start_frame_id = self.state.borrow().raf_gpu_start_frame_id;
             let settle = settle_renderer_timestamps_diagnostic(&renderer, start_frame_id).await?;
@@ -629,7 +660,9 @@ mod wasm_host {
                 renderer.set_timestamp_readback_interval_for_benchmark(8);
             }
             state.timestamp_samples.retain(|sample| sample.frame_id > start_frame_id);
-            Ok(timestamp_samples_json(&state.timestamp_samples, settle))
+            let state = &mut *state;
+            timestamp_samples_json_into(&mut state.timestamp_json, &state.timestamp_samples, settle);
+            Ok(JsValue::from_str(&state.timestamp_json))
         }
 
         pub fn render_webgpu_app_snapshot(&self) -> Result<String, JsValue> {
@@ -8220,8 +8253,20 @@ mod wasm_host {
         samples: &[WebGpuTimestampSample],
         settle: TimestampSettleDiagnostics,
     ) -> String {
+        let mut out = String::new();
+        timestamp_samples_json_into(&mut out, samples, settle);
+        out
+    }
+
+    fn timestamp_samples_json_into(
+        out: &mut String,
+        samples: &[WebGpuTimestampSample],
+        settle: TimestampSettleDiagnostics,
+    ) {
         let stats = settle.stats;
-        let mut out = format!(
+        out.clear();
+        let _ = write!(
+            out,
             "{{\"supported\":{},\"readback_skips\":{},\"queue_drain_ms\":{:.6},\"queue_drain_raf_waits\":{},\"queue_pending_initial\":{},\"queue_pending_final\":{},\"samples\":[",
             stats.gpu_timestamp_query_supported,
             stats.gpu_timestamp_readback_skips,
@@ -8254,7 +8299,6 @@ mod wasm_host {
             );
         }
         out.push_str("]}");
-        out
     }
 
     fn frame_stage_allocation_metrics(stages: &WebGpuFrameStageAllocationSummary) -> String {

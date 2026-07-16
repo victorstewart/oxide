@@ -11,7 +11,7 @@ This integration suite freezes performance-report schemas, filtered execution, c
 
 ## Entry points list
 
-- `metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()` verifies three-slot visible no-growth high water and eight-slot offscreen all-slot cold growth followed by zero warm growth/skips, including C26's 16 KiB completion-protected property buffer per physical slot.
+- `metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()` verifies three-slot visible no-growth high water and eight-slot offscreen all-slot cold growth followed by zero warm growth/skips, including C26's 16 KiB completion-protected property buffer per physical slot and nonzero direct-GPU distributions for both frame rows.
 - `metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()` requires exact clean and one-dirty prepared-cache work counters, including zero clean immutable upload and one 12,288-byte dynamic uniform-ring slice.
 - `metal_prepared_layer_rows_freeze_body_free_clean_and_single_dirty_contracts()` requires body-free clean architecture/authoring replay and one bounded dirty layer refresh with no new warm texture.
 - `metal_architecture_reports_reconciled_renderer_resource_families()` requires the warm static ID-mask row to hit once, skip raster/seed/JFA, encode one compositor pass, retain one cache/in-flight generation, create no target, report nonzero in-flight/total/peak bytes and zero blocked reuse, and stay within its byte budget while preserving the broader resource-family accounting contract. It also freezes C58 no-bloom, one-/three-layer, clipped-viewport, and overlay rows; source/pass/resource/alias/plan counters; indexed raw samples; and reduced conservative-region work.
@@ -67,6 +67,7 @@ Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.frame_resources.` with `--run-sui
 
 ## Changelog
 - 2026-07-15: froze C60 image-store scaling, completed-frame readback, exact page/draw/budget counters, and authoring release/reuse invalidation.
+- 2026-07-15: required C18 frame-resource rows to retain their completed-command-buffer GPU distributions so the complete C61 report satisfies the frame metric contract.
 - 2026-07-15: froze C59 large-static, minified, small-one-use, and public-authoring image policy rows; residency/upload/mip counters; release; indexed samples; and output-quality equivalence.
 - 2026-07-15: froze C58 Scene3D bloom graph rows, raw samples, source/pass/resource/alias/reuse counters, no-bloom guardrail, viewport work reduction, and overlay pass.
 - 2026-07-14: froze C52 sigma/radius, exact/paired selection, sample reduction, exponential-tap, and lazy table-memory report counters.

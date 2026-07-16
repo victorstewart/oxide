@@ -377,6 +377,7 @@ fn checker_texture_alternates_tiles() {
 #[test]
 fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     let html = include_str!("../../www/index.html");
+    let source = include_str!("../src/lib.rs");
     assert!(html.contains("./pkg/oxide_host_web.js"));
     assert!(html.contains("OxideWebApp"));
     assert!(html.contains("platform_smoke_report"));
@@ -400,6 +401,7 @@ fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     assert!(html.contains("window.oxideWebGpuClipStateAB"));
     assert!(html.contains("window.oxideWebGpuEffectUniformAB"));
     assert!(html.contains("prewarm_webgpu_bench_resources"));
+    assert!(html.contains("prewarm_webgpu_id_mask_bench_resources"));
     assert!(html.contains("oxide-webgpu-bench"));
     assert!(html.contains("oxide-canvas-bench"));
     assert!(html.contains("window.oxideCanvasIndexedQuads"));
@@ -410,6 +412,7 @@ fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     assert!(html.contains("performance.measure(measure, start, end)"));
     assert!(html.contains("bench_timeout_ms"));
     assert!(html.contains("benchmark_error"));
+    assert!(html.contains("typeof error.stack === \"string\""));
     assert!(html.contains("postErrorReport"));
     assert!(html.contains("wasmMemoryBytes"));
     assert!(html.contains("jsHeapSupported"));
@@ -454,6 +457,12 @@ fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     assert!(html.contains("capture_target"));
     assert!(html.contains("capture_width"));
     assert!(html.contains("capture_height"));
+    assert!(html.contains("benchmarkCanvas.style.width = `${captureWidth}px`"));
+    assert!(html.contains("benchmarkCanvas.style.height = `${captureHeight}px`"));
+    assert!(html.contains("canvas_css"));
+    assert!(html.contains("canvas_physical"));
+    assert!(html.contains("window.oxideApp.sync_canvas_metrics_for_benchmark();"));
+    assert!(source.contains("pub fn sync_canvas_metrics_for_benchmark"));
     assert!(html.contains("capture_only"));
     assert!(html.contains("captureTarget === \"scene3d\""));
     assert!(html.contains("captureTarget === \"glyph\""));
@@ -484,6 +493,10 @@ fn static_shell_imports_generated_pkg_and_platform_smoke_hook() {
     assert!(html.contains("raf_deltas_ms"));
     assert!(html.contains("cpu_stages_ms"));
     assert!(html.contains("begin_raf_gpu_timestamp_capture"));
+    assert!(html.contains("begin_raf_gpu_timestamp_capture(frameCount)"));
+    assert!(html.contains("prewarm_raf_gpu_timestamp_capture_buffers(rafFrames)"));
+    assert!(html.contains("prewarm_raf_gpu_timestamp_capture_buffers(idMaskCacheRafFrames)"));
+    assert!(html.contains("prewarm_raf_gpu_timestamp_capture_buffers(Math.min(rafFrames, 600))"));
     assert!(html.contains("finish_raf_gpu_timestamp_capture"));
     assert!(html.contains("gpu_timestamp_samples"));
     assert!(html.contains("renderer_backend"));
@@ -581,6 +594,8 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("oxide_renderer_web::bench_canvas_indexed_quads"));
     assert!(source.contains("create_hidden_canvas"));
     assert!(source.contains("pub async fn bench_webgpu_id_mask_ab"));
+    assert!(source.contains("pub fn prewarm_webgpu_id_mask_bench_resources"));
+    assert!(source.contains("let result = webgpu_id_mask_frame("));
     assert!(source.contains("pub async fn bench_webgpu_id_mask_current"));
     assert!(source.contains("pub async fn bench_webgpu_id_mask_cache_c33"));
     assert!(source.contains("measure_webgpu_id_mask_multi_cache"));
@@ -774,8 +789,13 @@ fn host_exposes_webgpu_id_mask_ab_benchmark() {
     assert!(source.contains("pub async fn bench_cpu_submit_samples"));
     assert!(source.contains("pub fn frame_at_timestamp_profiled"));
     assert!(source.contains("pub fn begin_raf_gpu_timestamp_capture"));
+    assert!(source.contains("pub fn prewarm_raf_gpu_timestamp_capture_buffers"));
     assert!(source.contains("pub async fn finish_raf_gpu_timestamp_capture"));
     assert!(source.contains("timestamp_samples_json"));
+    assert!(source.contains("timestamp_json: String"));
+    assert!(source.contains("expected_samples.saturating_mul(320)"));
+    assert!(source.contains("timestamp_samples_json_into"));
+    assert!(source.contains("JsValue::from_str(&state.timestamp_json)"));
     assert!(!source.contains("{backend_stats}{pacing}{allocations}"));
     assert!(source.contains("pub async fn bench_webgpu_id_mask_ab"));
     assert!(source.contains("pub async fn bench_webgpu_id_mask_current"));
@@ -1031,26 +1051,34 @@ fn committed_webgpu_browser_golden_contains_rendered_pixels() {
     let mut blue_pixels = 0usize;
     let mut dark_pixels = 0usize;
     let mut background_pixels = 0usize;
+    let mut opaque_pixels = 0usize;
+    let mut transparent_pixels = 0usize;
     for pixel in rgba.chunks_exact(4) {
         let r = pixel[0];
         let g = pixel[1];
         let b = pixel[2];
         let a = pixel[3];
-        assert_eq!(a, 255);
-        if b > 180 && r < 120 && g > 80 {
+        if a == 255 {
+            opaque_pixels += 1;
+        } else if a == 0 {
+            transparent_pixels += 1;
+        }
+        if a == 255 && b > 180 && r < 120 && g > 80 {
             blue_pixels += 1;
         }
-        if r < 16 && g < 16 && b < 16 {
+        if a > 0 && r < 64 && g < 64 && b < 64 {
             dark_pixels += 1;
         }
-        if r > 235 && g > 235 && b > 235 {
+        if a == 255 && r > 235 && g > 235 && b > 235 {
             background_pixels += 1;
         }
     }
 
     assert!(blue_pixels > 4000, "WebGPU golden is missing the blue control surfaces");
-    assert!(dark_pixels > 3000, "WebGPU golden is missing the captured page bounds");
+    assert!(dark_pixels > 20, "WebGPU golden is missing dark text and control details");
     assert!(background_pixels > 20000, "WebGPU golden is missing the light scene background");
+    assert!(opaque_pixels > 40000, "WebGPU golden is missing the opaque rendered scene");
+    assert!(transparent_pixels > 3000, "WebGPU golden is missing the transparent page exterior");
 }
 
 #[test]
@@ -1116,6 +1144,10 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("--capture-retries"));
     assert!(script.contains("captureAndCompare"));
     assert!(script.contains("retrying WebGPU browser capture attempt"));
+    assert!(script.contains("rmSync(out, { force: true })"));
+    assert!(script.contains("stableChecks < 2"));
+    assert!(script.contains("child.kill(\"SIGTERM\")"));
+    assert!(script.contains("Chrome did not write a screenshot within"));
     assert!(script.contains("webgpu_timing"));
     assert!(script.contains("gpu_stage_attribution"));
     assert!(script.contains("--trace-json"));
@@ -1132,6 +1164,12 @@ fn webgpu_browser_capture_script_compares_pixels_against_golden() {
     assert!(script.contains("function webPackageStats"));
     assert!(script.contains("--startup-report"));
     assert!(script.contains("--startup-repeats"));
+    assert!(script.contains("--image-store-only"));
+    assert!(script.contains("--image-store-count"));
+    assert!(script.contains("--image-store-standalone"));
+    assert!(script.contains("image_store_only"));
+    assert!(script.contains("image_store_count"));
+    assert!(script.contains("image_store_standalone"));
     assert!(script.contains("startup_only"));
     assert!(script.contains("--canvas-report"));
     assert!(script.contains("--canvas-repeats"));

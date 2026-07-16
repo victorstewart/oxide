@@ -94,6 +94,18 @@
          const idMaskMatrixOnly = params.get("id_mask_matrix_only") === "1";
          const captureWidth = boundedNumber("capture_width", Math.max(1, Math.trunc(window.innerWidth || 512)), 1, 4096);
          const captureHeight = boundedNumber("capture_height", Math.max(1, Math.trunc(window.innerHeight || 512)), 1, 4096);
+         const benchmarkCanvas = document.getElementById("oxide-canvas");
+         if (params.has("capture_width") && params.has("capture_height")) {
+            benchmarkCanvas.style.width = `${captureWidth}px`;
+            benchmarkCanvas.style.height = `${captureHeight}px`;
+         }
+         const canvasEnvironment = () => {
+            const bounds = benchmarkCanvas.getBoundingClientRect();
+            return {
+               canvas_css: `${Math.round(bounds.width)}x${Math.round(bounds.height)}`,
+               canvas_physical: `${benchmarkCanvas.width}x${benchmarkCanvas.height}`,
+            };
+         };
          const benchTimeoutMs = boundedNumber("bench_timeout_ms", 60000, 1000, 300000);
          const nextAnimationFrame = () => new Promise(resolve => requestAnimationFrame(resolve));
          const benchMarkPrefix = canvasDiag ? "oxide-canvas-bench" : "oxide-webgpu-bench";
@@ -155,6 +167,7 @@
                }),
          );
          const runRafFrameHarness = async frameCount => {
+            window.oxideApp.sync_canvas_metrics_for_benchmark();
             const stageNames = [
                "event_update",
                "layout",
@@ -211,7 +224,7 @@
                }
                previousTimestampMs = timestampMs;
             }
-            window.oxideApp.begin_raf_gpu_timestamp_capture();
+            window.oxideApp.begin_raf_gpu_timestamp_capture(frameCount);
             for (let frame = 0; frame < frameCount; frame += 1) {
                if (rafResizeEvery > 0 && frame > 0 && frame % rafResizeEvery === 0) {
                   const inset = (frame / rafResizeEvery) % 2;
@@ -245,6 +258,7 @@
                scene_index: rafScene,
                resize_every_frames: rafResizeEvery,
                viewport_css: `${window.innerWidth}x${window.innerHeight}`,
+               ...canvasEnvironment(),
                device_pixel_ratio: window.devicePixelRatio,
                cross_origin_isolated: window.crossOriginIsolated,
                warmup_frames: 64,
@@ -294,7 +308,7 @@
                warmupCpuSubmitMs.push(performance.now() - startMs);
                previousTimestampMs = timestampMs;
             }
-            window.oxideApp.begin_raf_gpu_timestamp_capture();
+            window.oxideApp.begin_raf_gpu_timestamp_capture(frameCount);
             for (let frame = 0; frame < frameCount; frame += 1) {
                const timestampMs = await nextAnimationFrame();
                const startMs = performance.now();
@@ -351,7 +365,7 @@
                warmupCpuSubmitMs.push(performance.now() - startMs);
                previousTimestampMs = timestampMs;
             }
-            window.oxideApp.begin_raf_gpu_timestamp_capture();
+            window.oxideApp.begin_raf_gpu_timestamp_capture(frameCount);
             for (let frame = 0; frame < frameCount; frame += 1) {
                const timestampMs = await nextAnimationFrame();
                const startMs = performance.now();
@@ -410,6 +424,7 @@
                benchmark_error: {
                   id,
                   detail: errorDetail(error),
+                  stack: error && typeof error.stack === "string" ? error.stack : "",
                },
                browser_startup: finalizeBrowserStartup(),
                benchmark_marks: benchMarks,
@@ -674,10 +689,12 @@
          window.oxideWebGpuIdMaskCacheRafC33 = null;
          window.oxideWebBenchmarkMarks = benchMarks;
          if (idMaskCacheRafOnly) {
+            window.oxideApp.prewarm_raf_gpu_timestamp_capture_buffers(idMaskCacheRafFrames);
             window.oxideWebGpuIdMaskCacheRafC33 = await runBench("id_mask_cache_raf_c33", () => runIdMaskCacheRafHarness(idMaskCacheRafFrames));
             console.log("oxide-webgpu-id-mask-cache-raf-c33", window.oxideWebGpuIdMaskCacheRafC33);
          } else if (idMaskCacheOnly) {
             window.oxideApp.prewarm_webgpu_bench_resources();
+            window.oxideApp.prewarm_webgpu_id_mask_bench_resources();
             window.oxideWebGpuIdMaskCurrent = await runBench("id_mask_current", () => window.oxideApp.bench_webgpu_id_mask_current(idMaskSamples, idMaskFrames));
             window.oxideWebGpuIdMaskCacheC33 = await runBench("id_mask_cache_c33", () => window.oxideApp.bench_webgpu_id_mask_cache_c33());
             console.log("oxide-webgpu-id-mask-current", window.oxideWebGpuIdMaskCurrent);
@@ -745,6 +762,7 @@
             window.oxideApp.prewarm_webgpu_bench_resources();
             window.oxideWebGpuArchitecturePrimitives = await runBench("spinner_architecture", () => window.oxideApp.bench_webgpu_spinner_architecture(mixedSamples, mixedFrames, window.devicePixelRatio));
             console.log("oxide-webgpu-spinner-architecture", window.oxideWebGpuArchitecturePrimitives);
+            window.oxideApp.prewarm_raf_gpu_timestamp_capture_buffers(Math.min(rafFrames, 600));
             window.oxideWebGpuSpinnerFramePerf = await runBench("spinner_frame_pacing", () => runSpinnerRafHarness(Math.min(rafFrames, 600)));
             console.log("oxide-webgpu-spinner-frame-pacing", window.oxideWebGpuSpinnerFramePerf);
          } else if (neonMarkerArchitectureOnly) {
@@ -759,8 +777,10 @@
             }
             window.oxideWebPerf = await runBench("cpu_submit_throughput", () => window.oxideApp.bench_cpu_submit_samples(frameSamples, framesPerSample));
             console.log("oxide-web-cpu-submit-throughput", window.oxideWebPerf);
+            window.oxideApp.prewarm_raf_gpu_timestamp_capture_buffers(rafFrames);
             window.oxideWebRafPerf = await runBench("raf_frame_loop", () => runRafFrameHarness(rafFrames));
             console.log("oxide-web-raf-frame-perf", window.oxideWebRafPerf);
+            window.oxideApp.prewarm_webgpu_id_mask_bench_resources();
             window.oxideWebGpuIdMaskCurrent = await runBench("id_mask_current", () => window.oxideApp.bench_webgpu_id_mask_current(idMaskSamples, idMaskFrames));
             console.log("oxide-webgpu-id-mask-current", window.oxideWebGpuIdMaskCurrent);
             if (idMaskCacheC33) {
@@ -794,6 +814,7 @@
                console.log("oxide-webgpu-id-mask-snapshot", window.oxideWebGpuIdMaskSnapshot);
             }
          }
+         window.oxideApp.sync_canvas_metrics_for_benchmark();
          const report = {
             browser_startup: finalizeBrowserStartup(),
             platform: window.oxidePlatformSmoke,
@@ -827,6 +848,7 @@
             capture_target: captureTarget,
             browser_environment: {
                viewport_css: `${window.innerWidth}x${window.innerHeight}`,
+               ...canvasEnvironment(),
                device_pixel_ratio: window.devicePixelRatio,
                cross_origin_isolated: window.crossOriginIsolated,
                raf_frames: rafFrames,
