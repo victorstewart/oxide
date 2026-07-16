@@ -8,10 +8,10 @@
 
 - Upstream callers:
   - `oxide/crates/perf-runner/src/main.rs` invokes `run_from_env()`.
-  - CI and local commands route through `cargo run -p oxide-perf-runner -- --run-suite ...`.
+  - Local verification commands route through `cargo run -p oxide-perf-runner -- --run-suite ...`.
 - Downstream dependencies:
   - `oxide_ui_core`, `oxide_renderer_metal`, `oxide_test_scenes`, `oxide_platform_api`, `oxide_platform_web`, and related crates provide the actual workload surfaces being measured.
-  - `oxide/benchmarks/workspace/latest.json` and `oxide/benchmarks/workspace/latest.md` are the persisted outputs consumed by review and CI.
+  - `oxide/benchmarks/workspace/latest.json` and `oxide/benchmarks/workspace/latest.md` are the persisted outputs consumed by local comparison and review.
 
 ## Entry points list
 

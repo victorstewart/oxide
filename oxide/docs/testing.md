@@ -32,7 +32,7 @@ This document captures the current state of automated testing across the Oxide w
 | `oxide-harness-registry` | `crates/harness-registry` | lib | compile-time registry of components and animations | No automated tests yet | add compile-time completeness tests, ensure IDs stay synchronized with scenes |
 | `xtask` | `xtask` | bin | iOS project preparation (capabilities, shader bundling) | Unit tests around entitlements merge | extend with workspace test runner, add tests for argument parsing |
 | `host/macos-app/Resources` | `host/macos-app/Resources` | assets | fonts/images consumed in tests | N/A | ensure fixture availability documented |
-| `tools/*` | `tools/anim_agg`, `tools/snap_agg`, `tools/sweep_agg` | bins | aggregation utilities for perf/snapshot data | Not exercised in CI | add unit/CLI tests once stabilized |
+| `tools/*` | `tools/anim_agg`, `tools/snap_agg`, `tools/sweep_agg` | bins | aggregation utilities for perf/snapshot data | Not exercised by the default local matrix | add unit/CLI tests once stabilized |
 
 ## Current Coverage Notes
 
@@ -46,10 +46,10 @@ These gaps inform the follow-on phases outlined in the broader test plan.
 
 ## Continuous Integration
 
-The repository ships the macOS GitHub Actions workflow at `.github/workflows/ci.yml`.
-It runs focused Rust tests, the workspace perf comparison, sweep aggregation, static
-goldens, and animation frame generation on every push/PR. This repository intentionally
-does not run `cargo fmt` or `cargo clippy`; the project style is maintained manually.
+GitHub Actions CI is intentionally disabled. Verification is run locally before review
+and merge using the command surface above and the focused gates required by `AGENTS.md`.
+This repository intentionally does not run `cargo fmt` or `cargo clippy`; the project
+style is maintained manually.
 
 Device-authoritative Oxide/UIKit performance remains a reviewed physical-iPhone flow
 through the `Justfile` device targets and the checked-in `benchmarks/oxide-device` and

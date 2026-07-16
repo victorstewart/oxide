@@ -9,7 +9,7 @@
 - Upstream callers:
   - `cargo run -p xtask -- ios device-perf ...`
   - `cargo run -p xtask -- ios oxide-device-perf ...`
-  - CI jobs and local `Justfile` shortcuts.
+  - Local verification commands and `Justfile` shortcuts.
 - Downstream dependencies:
   - `oxide/host/ios-app/App/OxideHostPerfTests` provides the XCTest/UIKit workload harness.
   - `oxide/host/ios-app/App/OxidePerfParkedApp.swift` provides the parked Oxide host path that can run the in-process Rust perf suite on the phone and emit the JSON payload over the device console.
