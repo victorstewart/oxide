@@ -24,7 +24,7 @@ Call flow:
 - `sanitize_scale_rejects_invalid_values()`: verifies invalid scale fallback.
 - `native_stub_tracks_frame_shape_and_reports_unsupported_submit()`: verifies native frame counters and unsupported submit behavior.
 - `native_stub_ignores_web_camera_background_commands()`: verifies unsupported web `CameraBg` commands do not count as web draw work.
-- `wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()`: freezes the cross-WASM JavaScript coordinator, unchanged Rust constructors, route-local lease ownership, compatible request reuse, terminal pagehide destroy, and stable read-only counters.
+- `wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()`: freezes the cross-WASM JavaScript coordinator, unchanged Rust constructors, renderer-owned instance lifetime and teardown order, route-local lease ownership, compatible request reuse, terminal pagehide destroy, and stable read-only counters.
 - `wasm_webgpu_runtime_images_are_explicitly_reclaimable_without_arena_tombstones()`: verifies the production wrapper delegates image release and the WebGPU resource table recycles generation-checked slots without append-only tombstones or stale-handle ABA.
 - `wasm_webgpu_scene3d_uses_compact_order_safe_instances_and_generation_slots()`: freezes C56's 80-byte storage records, exact adjacent grouping key, transparent boundary, cull variants, viewport/scissor state, instanced draw range, and generation-checked mesh ownership.
 - `wasm_webgpu_image_store_uses_append_only_srgb_pages_and_complete_mips()`: freezes C60's portable image-store backend hooks, direct tight uploads, formats, and chunk/layer invalidation.
@@ -58,7 +58,7 @@ The tests are single-threaded and allocate only small strings/vectors.
 ## Performance notes
 
 These are correctness and contract tests, not benchmark timers. They protect the counters consumed by the browser WebGPU performance report.
-`webgpu_device_session_tests.mjs` is a categorical lifecycle-work benchmark as well as a regression test: two separately evaluated module copies plus 128 alternating route leases must issue one native Oxide device request and retain one live page device until one terminal destroy. No frame path is exercised or changed.
+`webgpu_device_session_tests.mjs` is a categorical lifecycle-work benchmark as well as a regression test: two separately evaluated module copies plus 128 alternating route leases must issue one native Oxide device request and retain one live page device until one terminal destroy. The Rust source contract additionally requires the originating `wgpu::Instance` to remain owned after dependent resources and before the JavaScript session lease so destruction follows resource, instance, lease order. No frame path is exercised or changed.
 The packet-vocabulary freeze is measurement harness only. It changes no runtime path and does not claim a performance win.
 C30 browser proof complements these structural checks with exact parent/candidate pixels and direct residency/pass counters; source matching does not substitute for runtime evidence. C35 likewise requires real Dawn shader creation, exact decoded field comparison, presented pixels, and paired direct GPU timestamps in addition to the source contract. C37 requires real WGSL pipeline creation, count/DPR timings, and one-pixel-boundary-classified captures beyond the static 36-byte ABI and no-tessellator assertions. C38 and C39 require real indexed pipeline creation, bounded architecture timings, and exact DPR/prepared pixels beyond their static ABI assertions. C40 additionally requires phased animation pixels and displayed-frame CPU/GPU/pacing samples beyond its compact-instance and no-CPU-trigonometry assertions. C41 requires real Dawn pipeline creation, 64/1,024-marker CPU/GPU/upload evidence, DPR captures, and source-equivalent Metal/WGSL analytic semantics beyond its static ABI checks.
 
@@ -87,6 +87,7 @@ pub fn scale() -> f32
 
 ## Changelog
 
+- 2026-07-23: froze renderer-owned wgpu instance lifetime and dependent-resource teardown order.
 - 2026-07-22: froze the JavaScript-realm shared-device protocol, observable counters, 128-transition one-request contract, incompatible requirement rejection, and terminal pagehide destruction.
 - 2026-07-15: froze C60 sRGB image-store pages, empty creation, append-only publication, complete standalone mips, unique device generation, and exact invalidation hooks.
 - 2026-07-15: froze C56 compact Scene3D instances, exact order-safe grouping, cull/viewport state, instanced draws, and generation-checked mesh recycling.

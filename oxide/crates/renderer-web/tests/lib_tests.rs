@@ -204,13 +204,13 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
       "pubstructBrowserRenderer{inner:WebGpuRenderer,}"
    ));
    assert!(compact_rust.contains(
-      "memory_snapshot:WebGpuMemorySnapshot,_device_session:BrowserWebGpuDeviceSessionLease,}"
+      "memory_snapshot:WebGpuMemorySnapshot,_instance:wgpu::Instance,_device_session:BrowserWebGpuDeviceSessionLease,}"
    ));
    assert!(compact_rust.contains(
       "pubasyncfnfrom_canvas(canvas:HtmlCanvasElement)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire()?;letinstance=wgpu::Instance::new"
    ));
    assert!(compact_rust.contains(
-      "memory_snapshot:WebGpuMemorySnapshot::default(),_device_session:device_session,})"
+      "memory_snapshot:WebGpuMemorySnapshot::default(),_instance:instance,_device_session:device_session,})"
    ));
    assert!(rust.contains("label: Some(\"oxide-webgpu-shared-device-v1\")"));
    assert!(!rust.contains("thread_local!"));
