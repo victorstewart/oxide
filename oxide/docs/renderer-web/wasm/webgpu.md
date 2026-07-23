@@ -10,6 +10,7 @@ Consumes renderer-api values and lowers generic 2D geometry through `packed_geom
 
 ## Entry points list
 
+- `BrowserRenderer::from_canvas_id_webgpu` and `from_canvas_webgpu` acquire a renderer lease from the JavaScript-realm page session before wgpu initialization; their signatures are unchanged.
 - `BrowserRenderer::prewarm_auxiliary_targets` lets an app move the allocation of only its declared backdrop and/or Scene3D targets outside a latency-sensitive first frame.
 - `BrowserRenderer::set_timestamp_readback_interval_for_benchmark`, `clear_completed_timestamp_samples`, and `drain_completed_timestamp_samples_into` control and collect bounded C00 GPU timestamp distributions without changing the normal eight-frame production sampling cadence.
 - `BrowserRenderer::queue_completion_flag_for_benchmark` registers a benchmark-only completion fence used to serialize C01 primitive submissions before the next presented drawable.
@@ -26,6 +27,8 @@ Consumes renderer-api values and lowers generic 2D geometry through `packed_geom
 Solid lowering passes `preserve_vertex_color = true` for local-indexed, rebased-indexed, and unindexed spans. Image meshes and glyph paths pass false to retain existing tint semantics. Nonzero API `AABBGGRR` bits are copied unchanged; zero inherits one quantized uniform color. Generic frame geometry is retained as 20-byte POD vertices plus segmented u16 and fallback u32 indices, exposed to `Queue::write_buffer` by checked `bytemuck` slice views without a second serialization vector. Each draw packet records its index format and base vertex, so adjacent compatible ranges coalesce only inside the same segment. Rounded rectangles instead append one 36-byte rect/radii/packed-color instance. A dedicated analytic WGSL pipeline expands six immutable unit corners from `vertex_index`, applies the active viewport/property transform, and evaluates the proven corner-selected signed-distance function with derivative-width antialiasing. Ordinary images append one 36-byte destination/UV/alpha instance and reuse one persistent four-vertex, six-index unit quad; the texture handle and format remain ordered draw metadata rather than duplicated instance fields. Adjacent instances coalesce only across an uninterrupted run with the same target, clip, image, and texture kind. Prepared chunks retain the same instance bytes while their existing property record supplies transform/opacity.
 
 The surface is constructed at the canvas's already-selected physical backing size. Scene color, backdrop scratch, and Scene3D depth targets begin absent, are created by the first declared feature or explicit app prewarm, and are dropped when a physical resize invalidates their dimensions. Direct 2D surface rendering therefore owns none of those full-size targets. The viewport uniform is written at construction and when size or scale changes, not on every submission.
+
+`webgpu_device_session.js` owns one native `GPUDevice` per JavaScript page realm so independently compiled Oxide WASM modules share the same device. It wraps the actual `navigator.gpu` request-adapter prototype and patches each returned adapter prototype before wgpu receives it. The request-device wrapper intercepts only the versioned Oxide device label, canonicalizes requested features, limits, and queue label, and rejects an incompatible second request instead of creating another Oxide device. Each `BrowserRenderer` still owns and immediately drops its surface, pipelines, buffers, textures, and wgpu wrappers. The page coordinator retains the native device across zero-lease route handoffs and destroys it exactly once on a terminal, non-persisted `pagehide` or the explicit shutdown symbol. Persisted pagehide keeps the device for browser back-forward-cache restoration.
 
 Scene3D stores one 80-byte MVP/color record per visible instance in a persistent storage buffer. Adjacent opaque, depth-tested, depth-writing alpha instances collapse only when mesh generation, pipeline, material layout, cull/depth state, physical viewport/scissor, and target match exactly. Transparent and additive instances remain in API order as separate draws. The render pass binds the instance table once, caches adjacent pipeline/mesh/viewport state, and uses `first_instance..first_instance + instance_count`; front, back, and no-cull pipelines are prebuilt for every depth/blend combination. Meshes share the generation-checked free-slot table used by runtime images, so stale handles cannot alias recycled GPU buffers and create/release churn remains bounded.
 
@@ -51,9 +54,13 @@ Non-finite, empty, rotated/sheared, dynamically clipped, unbounded-effect, or de
 
 Packed ID-mask coordinates never alias the invalid sentinel: dimensions through 65,535 have maximum coordinates through 65,534, while 65,536 and larger select the wide representation. Snapshot readback decodes packed coordinates back into the established semantic city/seam field shape before comparison.
 
+The page session fails closed when the WebGPU adapter prototype is unavailable, its patched method is replaced, the session is already shut down, or another Oxide module asks for incompatible device requirements. Device loss clears the current live generation so a later renderer may acquire one replacement generation. The session does not intercept devices requested by non-Oxide labels.
+
 ## Concurrency and memory behavior
 
 Frame scratch vectors and typed packed streams retain capacity across frames. RRect and image instances retain their CPU vectors and persistent vertex-buffer capacities; prepared chunks own their immutable instance buffers. The image unit vertex/index buffers and both image pipelines are created once with the renderer programs. The change adds no resource or synchronization work after warmup and contains no handwritten unsafe cast.
+
+The shared-device coordinator runs only during renderer construction, renderer destruction, device loss, and page shutdown. It performs no per-frame calls, locks, or allocations. The stable read-only browser diagnostic is `globalThis[Symbol.for("oxide.renderer-web.webgpu-device-session.snapshot.v1")]()`; it reports device requests, live devices, renderer leases, device destroys, incompatible acquisition failures, generation, and shutdown state without production logging. `globalThis[Symbol.for("oxide.renderer-web.webgpu-device-session.shutdown.v1")]()` performs explicit terminal shutdown.
 
 Optional auxiliary texture handles retain wgpu's completion-safe internal ownership when the renderer drops or explicitly destroys its current resize-invalidated handle.
 
@@ -64,6 +71,8 @@ C26 adds a three-slice dynamic-uniform property ring. Queue writes and render su
 ## Performance notes
 
 Draw count is unchanged. Generic vertex uploads fall from 32 to 20 bytes each, u16-eligible index uploads fall from four to two bytes each, and frame-level vertex/index reserialization is deleted. The C16 browser workload separately measures 10,000 glyph quads, 10,000 image quads, and a 70,002-vertex u32-fallback solid mesh while retaining direct GPU timestamp and visual evidence.
+
+The page-session lifecycle contract reduces native Oxide `requestDevice` work from one call per route renderer to one call per page generation. Its focused cross-module test executes 128 alternating route acquisitions after the initial two-renderer overlap and requires one native request, one live device, zero live renderer leases between routes, no destruction before terminal pagehide, and exactly one destruction at pagehide. Renderer frame work and visuals are unchanged because surfaces and renderer resources remain route-owned.
 
 C19 measures construction resource count, direct/backdrop/Scene3D logical target bytes, resize creation work, explicit prewarm cost, first-feature submission, queue completion, and GPU time across fresh Chrome processes. A simple direct app leaves prewarm disabled and retains zero auxiliary-target bytes.
 
@@ -107,6 +116,7 @@ Packed `0xFFFF_0000` uploads as opaque blue; packed zero uploads the draw unifor
 
 ## Changelog
 
+- 2026-07-22: shared one page-session WebGPU device across independently compiled Oxide WASM modules, retained route-local renderer resource ownership, added deterministic pagehide shutdown, and exposed a read-only lifecycle snapshot.
 - 2026-07-15: implemented the C60 image-store backend with sRGB empty atlas pages, append-only cell uploads, linear-sRGB standalone mip generation, device generations, and exact prepared invalidation.
 - 2026-07-15: added compact, adjacent order-safe Scene3D instancing, complete cull/depth variants, physical viewport/scissor ownership, generation-checked mesh recycling, and the C56 browser matrix.
 - 2026-07-14: replaced three-RRect WebGPU neon markers with one compact analytic instance matching corrected Metal semantics.

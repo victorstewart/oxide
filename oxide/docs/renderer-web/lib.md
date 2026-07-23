@@ -21,9 +21,9 @@ Call flow:
 
 ## Entry points list
 
-- `oxide_renderer_web::BrowserRenderer::from_canvas_id_webgpu(id: &str) -> Future<Result<Self, RenderError>>`: async production constructor that initializes WebGPU and returns `Unsupported` if the browser cannot provide it.
+- `oxide_renderer_web::BrowserRenderer::from_canvas_id_webgpu(id: &str) -> Future<Result<Self, RenderError>>`: async production constructor that joins the JavaScript-realm page device session, initializes route-local WebGPU resources, and returns `Unsupported` if the browser cannot provide WebGPU.
 - `oxide_renderer_web::BrowserRenderer::backend_name(&self) -> &'static str`: returns `webgpu` for browser smoke/perf reports.
-- `oxide_renderer_web::WebGpuRenderer::from_canvas_id(id: &str) -> Future<Result<Self, RenderError>>`: wasm-only WebGPU constructor.
+- `oxide_renderer_web::WebGpuRenderer::from_canvas_id(id: &str) -> Future<Result<Self, RenderError>>`: wasm-only WebGPU constructor that joins the same page device session as `BrowserRenderer`.
 - `oxide_renderer_web::BrowserRenderer::canvas(&self) -> HtmlCanvasElement`: returns the backing canvas wrapper for host integration.
 - `oxide_renderer_web::BrowserRenderer::last_stats(&self) -> WebRendererStats`: exposes the most recent frame counters.
 - `oxide_renderer_web::BrowserRenderer::id_mask_target_bytes_per_pixel(&self) -> u64` and `id_mask_packed_fields_supported(&self) -> bool`: expose the validated C35 target representation to the browser benchmark and cache-budget adapter.
@@ -82,7 +82,7 @@ Invalid scales collapse to `1.0`. Invalid image rows return `RenderError::Invali
 
 ## Concurrency and memory behavior
 
-Browser renderers are intended for the browser main thread and store DOM/GPU handles only on wasm32. Native builds expose a small stub so macOS workspace checks can compile. The production WebGPU renderer reuses prebuilt pipelines, its sampler, texture bind groups, present buffers, any feature-created scene/scratch/depth targets, timestamp query/readback resources, ID-mask vertex-cache slots, generation-checked image slots, and grow-only frame vertex/index/glyph-instance buffers after warmup. Releasing an uploaded image or resize-invalidated auxiliary target drops the current handle without waiting on the CPU; wgpu retains any internal ownership needed by already submitted GPU work. Free-slot lookup and draw-time handle validation are constant-time vector operations without locks or hashing.
+Browser renderers are intended for the browser main thread and store DOM/GPU handles only on wasm32. Independently compiled Oxide WASM modules coordinate through one JavaScript-realm page session: renderer leases retain route-local surfaces and resources while the compatible native device remains live across zero-lease route handoffs and is destroyed on terminal pagehide. Native builds expose a small stub so macOS workspace checks can compile. The production WebGPU renderer reuses prebuilt pipelines, its sampler, texture bind groups, present buffers, any feature-created scene/scratch/depth targets, timestamp query/readback resources, ID-mask vertex-cache slots, generation-checked image slots, and grow-only frame vertex/index/glyph-instance buffers after warmup. Releasing an uploaded image or resize-invalidated auxiliary target drops the current handle without waiting on the CPU; wgpu retains any internal ownership needed by already submitted GPU work. Free-slot lookup and draw-time handle validation are constant-time vector operations without locks or hashing.
 
 Resident accounting reports declared WebGPU texture extents and buffer sizes as logical bytes. Allocated bytes stay explicitly unavailable and zero because wgpu does not expose driver allocation, heap padding, or residency. Vertex/index/uniform buffers, present assets, transient color/depth targets, retained layers, ID-mask fields, atlas/image textures, Scene3D meshes, and timestamp staging buffers reconcile into one saturating logical total. Resource-table scans are sampled once every 60 frames and the cached snapshot is copied into ordinary frame stats in constant time; benchmark controls can select a one-frame cadence or disable the scan. Frame-work counters separately expose command traversal/copying, copied geometry, ID-mask chunk reuse/rebuild, cache outcomes, pass/encoder counts, texture-copy pixels/bytes, uploads, shaded pixels, submissions, evictions, and resource creation/growth.
 
@@ -132,6 +132,7 @@ pub async fn build_renderer() -> Result<oxide_renderer_web::BrowserRenderer, oxi
 ```
 
 ## Changelog
+- 2026-07-22: made `BrowserRenderer` constructors join one observable JavaScript page-session WebGPU device across independently compiled WASM modules, with route-local resources and terminal pagehide destruction.
 - 2026-07-14: exposed the C41 compact analytic neon-marker stream and instance/triangle/byte telemetry.
 - 2026-07-14: exposed the C40 compact procedural spinner stream, animation/property uniform ownership, and direct/prepared instance telemetry.
 - 2026-07-14: exposed the C39 compact WebGPU nine-slice instance stream and fixed-grid telemetry.

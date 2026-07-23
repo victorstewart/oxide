@@ -191,6 +191,65 @@ fn webgpu_surface_config_uses_premultiplied_alpha() {
 }
 
 #[test]
+fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
+{
+   let rust = include_str!("../src/wasm/webgpu.rs");
+   let compact_rust = source_without_whitespace(rust);
+   let javascript = include_str!("../src/wasm/webgpu_device_session.js");
+
+   assert!(rust.contains(
+      "#[wasm_bindgen(module = \"/src/wasm/webgpu_device_session.js\")]"
+   ));
+   assert!(compact_rust.contains(
+      "pubstructBrowserRenderer{inner:WebGpuRenderer,}"
+   ));
+   assert!(compact_rust.contains(
+      "memory_snapshot:WebGpuMemorySnapshot,_device_session:BrowserWebGpuDeviceSessionLease,}"
+   ));
+   assert!(compact_rust.contains(
+      "pubasyncfnfrom_canvas(canvas:HtmlCanvasElement)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire()?;letinstance=wgpu::Instance::new"
+   ));
+   assert!(compact_rust.contains(
+      "memory_snapshot:WebGpuMemorySnapshot::default(),_device_session:device_session,})"
+   ));
+   assert!(rust.contains("label: Some(\"oxide-webgpu-shared-device-v1\")"));
+   assert!(!rust.contains("thread_local!"));
+   assert!(!rust.contains("impl Drop for BrowserRenderer"));
+
+   assert!(javascript.contains(
+      "Symbol.for(\"oxide.renderer-web.webgpu-device-session.state\")"
+   ));
+   assert!(javascript.contains(
+      "Symbol.for(\"oxide.renderer-web.webgpu-device-session.snapshot.v1\")"
+   ));
+   assert!(javascript.contains(
+      "Symbol.for(\"oxide.renderer-web.webgpu-device-session.shutdown.v1\")"
+   ));
+   assert!(javascript.contains("const gpu = globalThis.navigator?.gpu"));
+   assert!(javascript.contains("const adapterPrototype = Object.getPrototypeOf(adapter)"));
+   assert!(javascript.contains("adapterPrototype.requestDevice === installed.patched"));
+   assert!(javascript.contains("gpuPrototype.requestAdapter !== state.patchedRequestAdapter"));
+   assert!(javascript.contains("generation.devicePromise"));
+   assert!(javascript.contains("state.incompatibleAcquireFailureCount += 1"));
+   assert!(javascript.contains("state.rendererLeaseCount += 1"));
+   assert!(javascript.contains("state.rendererLeaseCount = Math.max(0"));
+   assert!(javascript.contains("globalThis.addEventListener(\"pagehide\""));
+   assert!(javascript.contains("if (!event.persisted)"));
+   assert!(javascript.contains("generation.device.destroy()"));
+   assert!(javascript.contains("return Object.freeze({"));
+   assert!(!javascript.contains("console."));
+
+   let release = javascript
+      .split("export function releaseOxideWebGpuDeviceSession")
+      .nth(1)
+      .expect("device-session release")
+      .split('}')
+      .next()
+      .expect("device-session release body");
+   assert!(!release.contains("destroyGeneration"));
+}
+
+#[test]
 fn wasm_webgpu_runtime_images_are_explicitly_reclaimable_without_arena_tombstones()
 {
    let source = include_str!("../src/wasm/webgpu.rs");

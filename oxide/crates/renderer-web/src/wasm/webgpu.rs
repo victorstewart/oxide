@@ -22,9 +22,19 @@ use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::HtmlCanvasElement;
 use wgpu::util::DeviceExt;
+
+#[wasm_bindgen(module = "/src/wasm/webgpu_device_session.js")]
+extern "C" {
+   #[wasm_bindgen(catch, js_name = acquireOxideWebGpuDeviceSession)]
+   fn acquire_webgpu_device_session() -> Result<JsValue, JsValue>;
+
+   #[wasm_bindgen(js_name = releaseOxideWebGpuDeviceSession)]
+   fn release_webgpu_device_session(lease: &JsValue);
+}
 
 const VERTEX_STRIDE: wgpu::BufferAddress = PACKED_VERTEX_BYTES as wgpu::BufferAddress;
 const VERTEX_STRIDE_BYTES: usize = PACKED_VERTEX_BYTES;
@@ -2036,23 +2046,29 @@ struct PendingIdMaskReadback
 /// Browser renderer for production WebAssembly hosts.
 ///
 /// WebGPU device creation is asynchronous in browsers. If WebGPU is unavailable, construction
-/// returns `RenderError::Unsupported` instead of falling back to a CPU/Canvas2D visual path.
+/// returns `RenderError::Unsupported` instead of falling back to a CPU/Canvas2D visual path. All
+/// renderers in one JavaScript page realm share one page-session device while retaining distinct
+/// surfaces and renderer-owned resources.
 pub struct BrowserRenderer {
-    inner: WebGpuRenderer,
+   inner: WebGpuRenderer,
 }
 
 impl BrowserRenderer {
-    pub async fn from_canvas_id_webgpu(id: &str) -> Result<Self, api::RenderError> {
-        let canvas = canvas_by_id(id)?;
-        Self::from_canvas_webgpu(canvas).await
-    }
+   pub async fn from_canvas_id_webgpu(id: &str) -> Result<Self, api::RenderError>
+   {
+      let canvas = canvas_by_id(id)?;
+      Self::from_canvas_webgpu(canvas).await
+   }
 
-    pub async fn from_canvas_webgpu(canvas: HtmlCanvasElement) -> Result<Self, api::RenderError> {
-        if !browser_webgpu_present() {
-            return Err(api::RenderError::Unsupported("webgpu unavailable"));
-        }
-        WebGpuRenderer::from_canvas(canvas).await.map(|inner| Self { inner })
-    }
+   pub async fn from_canvas_webgpu(canvas: HtmlCanvasElement) -> Result<Self, api::RenderError>
+   {
+      if !browser_webgpu_present()
+      {
+         return Err(api::RenderError::Unsupported("webgpu unavailable"));
+      }
+      let inner = WebGpuRenderer::from_canvas(canvas).await?;
+      Ok(Self { inner })
+   }
 
     #[must_use]
     pub fn backend_name(&self) -> &'static str {
@@ -2348,6 +2364,32 @@ impl BrowserRenderer {
     }
 }
 
+struct BrowserWebGpuDeviceSessionLease
+{
+   lease: JsValue,
+}
+
+impl BrowserWebGpuDeviceSessionLease
+{
+   fn acquire() -> Result<Self, api::RenderError>
+   {
+      acquire_webgpu_device_session()
+         .map(|lease| Self { lease })
+         .map_err(|error| {
+            let message = error.as_string().unwrap_or_else(|| format!("{error:?}"));
+            api::RenderError::Io(format!("webgpu page session unavailable: {message}"))
+         })
+   }
+}
+
+impl Drop for BrowserWebGpuDeviceSessionLease
+{
+   fn drop(&mut self)
+   {
+      release_webgpu_device_session(&self.lease);
+   }
+}
+
 impl api::Renderer for BrowserRenderer {
     fn device_caps(&self) -> api::DeviceCaps {
         self.inner.device_caps()
@@ -2578,6 +2620,7 @@ pub struct WebGpuRenderer {
     memory_stats_interval: u64,
     memory_stats_enabled: bool,
     memory_snapshot: WebGpuMemorySnapshot,
+    _device_session: BrowserWebGpuDeviceSessionLease,
 }
 
 fn image_for_update<'a>(
@@ -2864,6 +2907,7 @@ impl WebGpuRenderer {
     }
 
     pub async fn from_canvas(canvas: HtmlCanvasElement) -> Result<Self, api::RenderError> {
+        let device_session = BrowserWebGpuDeviceSessionLease::acquire()?;
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
             ..Default::default()
@@ -2902,7 +2946,7 @@ impl WebGpuRenderer {
         };
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
-                label: Some("oxide-webgpu-device"),
+                label: Some("oxide-webgpu-shared-device-v1"),
                 required_features,
                 required_limits: wgpu::Limits::default(),
                 ..Default::default()
@@ -3113,6 +3157,7 @@ impl WebGpuRenderer {
             memory_stats_interval: 60,
             memory_stats_enabled: true,
             memory_snapshot: WebGpuMemorySnapshot::default(),
+            _device_session: device_session,
         })
     }
 
