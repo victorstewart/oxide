@@ -183,6 +183,53 @@ static NSArray *copy_trust_anchors(const struct OxideQuicTlsConfig *tls)
    return anchors.count > 0 ? anchors : nil;
 }
 
+static BOOL evaluate_peer_trust(sec_trust_t trust_ref, NSArray *anchors,
+                                size_t configured_anchor_count,
+                                BOOL enforce_hostname)
+{
+   if (trust_ref == NULL ||
+       configured_anchor_count != (size_t)anchors.count)
+   {
+      return NO;
+   }
+
+   SecTrustRef trust = sec_trust_copy_ref(trust_ref);
+   if (trust == NULL)
+   {
+      return NO;
+   }
+
+   OSStatus status = errSecSuccess;
+   if (!enforce_hostname)
+   {
+      // Hostname suppression changes only identity matching; TLS server usage
+      // and the certificate chain remain mandatory.
+      SecPolicyRef policy = SecPolicyCreateSSL(true, NULL);
+      if (policy == NULL)
+      {
+         CFRelease(trust);
+         return NO;
+      }
+      status = SecTrustSetPolicies(trust, policy);
+      CFRelease(policy);
+   }
+
+   if (status == errSecSuccess && configured_anchor_count > 0)
+   {
+      CFArrayRef anchor_array = (__bridge CFArrayRef)anchors;
+      status = SecTrustSetAnchorCertificates(trust, anchor_array);
+      if (status == errSecSuccess)
+      {
+         status = SecTrustSetAnchorCertificatesOnly(trust, true);
+      }
+   }
+
+   BOOL ok =
+       status == errSecSuccess && SecTrustEvaluateWithError(trust, NULL);
+   CFRelease(trust);
+   return ok;
+}
+
 static SecIdentityRef copy_identity(const struct OxideQuicTlsConfig *tls)
 {
    if (tls == NULL || tls->identity_der == NULL || tls->identity_der_len == 0
@@ -266,12 +313,6 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
           sec_options, tls_protocol_version_TLSv13);
    }
 
-   if (tls != NULL && !tls->enforce_hostname)
-   {
-      sec_protocol_options_set_peer_authentication_required(sec_options,
-                                                            false);
-   }
-
    SecIdentityRef identity_ref = copy_identity(tls);
    if (identity_ref != NULL)
    {
@@ -283,8 +324,11 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
       }
    }
 
+   const BOOL enforce_hostname = tls == NULL || tls->enforce_hostname;
+   const size_t configured_anchor_count =
+       tls == NULL ? 0 : tls->trust_anchor_count;
    NSArray *anchors = copy_trust_anchors(tls);
-   if (anchors.count > 0)
+   if (!enforce_hostname || configured_anchor_count > 0)
    {
       NSArray *anchors_copy = [anchors copy];
       sec_protocol_options_set_verify_block(
@@ -292,29 +336,9 @@ static void configure_sec_options(sec_protocol_options_t sec_options,
           ^(sec_protocol_metadata_t metadata, sec_trust_t trust_ref,
             sec_protocol_verify_complete_t complete) {
             (void)metadata;
-            BOOL ok = NO;
-            if (trust_ref != NULL)
-            {
-               SecTrustRef trust = sec_trust_copy_ref(trust_ref);
-               if (trust != NULL)
-               {
-                  CFArrayRef anchor_array = (__bridge CFArrayRef)anchors_copy;
-                  OSStatus status =
-                      SecTrustSetAnchorCertificates(trust, anchor_array);
-                  if (status == errSecSuccess)
-                  {
-                     status =
-                         SecTrustSetAnchorCertificatesOnly(trust, true);
-                     if (status == errSecSuccess &&
-                         SecTrustEvaluateWithError(trust, NULL))
-                     {
-                        ok = YES;
-                     }
-                  }
-                  CFRelease(trust);
-               }
-            }
-            complete(ok);
+            complete(evaluate_peer_trust(trust_ref, anchors_copy,
+                                         configured_anchor_count,
+                                         enforce_hostname));
           },
           dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0));
    }

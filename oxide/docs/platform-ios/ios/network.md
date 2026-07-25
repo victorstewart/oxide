@@ -20,6 +20,8 @@
   Maps active Network.framework interfaces to Oxide's Apple path-kind constants.
 - `configure_sec_options(sec_options, tls, server_name, alpn, tls13Only)`
   Configures the shared TLS state for QUIC and TCP/TLS attempts, including ALPN, optional local identity, trust anchors, session tickets, session resumption, and TCP/TLS-only TLS 1.3 min/max enforcement.
+- `evaluate_peer_trust(trust_ref, anchors, configured_anchor_count, enforce_hostname)`
+  Validates every configured DER anchor, optionally replaces only the hostname-bearing SSL policy, and evaluates the mandatory TLS server chain.
 - `OxideQuicConnection::configureReadyKeepalive()`
   Applies the configured QUIC keepalive interval after Network.framework has established the connection and made QUIC metadata available.
 - `quic_sync(block)`
@@ -44,6 +46,8 @@
 - Endpoint parsing accepts DNS/IPv4 `host:port` and bracketed IPv6 `[address]:port` forms. Ports contain ASCII digits only and must fall in `1...65535`; missing ports, suffix junk, zero, overflow, and ambiguous unbracketed IPv6 fail closed.
 - QUIC connections are created with `nw_parameters_create_quic`, then the bridge configures the underlying Security options and applies the Rust-provided idle timeout and UDP payload size to the `nw_protocol_options_t`.
 - TLS session tickets and TLS resumption are enabled through public Security.framework APIs so Network.framework can cache resumable TLS state in the process privacy context.
+- Hostname suppression replaces Network.framework's hostname-bearing policy with `SecPolicyCreateSSL(true, NULL)` while retaining TLS server usage and chain validation. It never disables peer authentication.
+- A caller-provided anchor list is exact: every byte slice must decode as one DER certificate. The custom verifier rejects the handshake if even one configured anchor fails to materialize, and valid custom anchors replace rather than augment the system roots.
 - TCP/TLS fallback constrains Security.framework to TLS 1.3 by setting both the minimum and maximum TLS protocol version to `tls_protocol_version_TLSv13`.
 - TCP/TLS fallback enables TCP Fast Open on the TCP options and top-level Network.framework fast-open on the TLS parameters. Apple documents that top-level flag as the public way to permit fast open or TLS early data for protocols in the stack, so the first TCP/TLS fallback write can run while the queue-confined exact connection is in its starting state, before `ready`.
 - The Rust keepalive interval is rounded to seconds before crossing FFI. TCP/TLS fallback receives TCP keepalive options before connect, while QUIC receives `nw_quic_set_keepalive_interval` from `configureReadyKeepalive()` after `nw_connection_state_ready`.
@@ -65,6 +69,7 @@
 ## Preconditions and postconditions
 - Network.framework must be available and linked by the platform-iOS build.
 - The endpoint passed to `oxide_ios_quic_connect` must include a valid port, connection/retry pointers must be non-null, and `max_attempts` must be nonzero; the optional TLS pointer may be null.
+- Every configured trust anchor must contain exactly one DER certificate. Hostname suppression changes only leaf-name matching and never permits an untrusted, non-server, expired, or otherwise invalid chain.
 - Rust callbacks must remain ABI-compatible with `(uint32_t status, uint32_t iface, uint8_t expensive)`.
 - `queuedReceiveBytes` equals the sum of frame lengths currently held by `receiveBuffer`; retry reset, admission, and removal update both together on the connection's serial queue.
 - Every queue removal is preceded by a successful wait on `receiveSignal`.
@@ -75,6 +80,7 @@
 ## Edge cases and failure modes
 - Missing connection/retry policy, a zero attempt budget, or an endpoint without a valid explicit port fails before native session allocation rather than substituting application-specific defaults.
 - Port parsing rejects numeric-prefix coercion, so strings such as `443junk` cannot silently select port 443.
+- A null trust object, failed SSL-policy replacement, or mismatch between configured and parsed anchor counts rejects the handshake. An empty custom-anchor list uses system roots; it never turns verification off.
 - Unknown interface types map to the `Other` path kind.
 - A stopped monitor releases native ownership and future starts allocate a fresh monitor.
 - Invalid frames and receive-queue overflow fail closed. Already queued valid frames remain available, while the rejected frame is discarded and no further network input is accepted on that connection.
@@ -91,6 +97,7 @@
 
 ## Performance notes
 - Deadline reads, state snapshots, and receive accounting are constant-time. No renderer or frame-loop path is involved.
+- Custom trust policy and anchor evaluation occur once per TLS handshake and add no steady-state frame or packet-path work.
 - Frame removal remains bounded by the 64-frame array limit, and overflow closes before copying the rejected frame out of `incomingBytes`.
 
 ## Feature flags and cfgs
@@ -100,7 +107,7 @@
 ## Testing and benchmarks
 - Compiled by `cargo check -p oxide-platform-ios --locked`.
 - Transport retry and generic-ABI ownership invariants are covered by `crates/platform-ios/tests/network_bridge_tests.rs`.
-- Ticket/resumption, TLS 1.3-only TCP/TLS, public-API-only early-data handling, QUIC option application, keepalive, path/cache unpinning, receive permit accounting, queue budgets, malformed-frame closure, exact callback identity, queue-confined session state, serialized send timeout arbitration, and tri-state polling are guarded by `network_bridge_tests.rs` source-level assertions.
+- Hostname-off chain validation, malformed-anchor rejection, ticket/resumption, TLS 1.3-only TCP/TLS, public-API-only early-data handling, QUIC option application, keepalive, path/cache unpinning, receive permit accounting, queue budgets, malformed-frame closure, exact callback identity, queue-confined session state, serialized send timeout arbitration, and tri-state polling are guarded by `network_bridge_tests.rs` source-level assertions.
 
 ## Examples
 ```c
@@ -118,6 +125,7 @@ else if (status == OXIDE_IOS_QUIC_POLL_TERMINAL)
 ```
 
 ## Changelog
+- 2026-07-25: made hostname suppression replace only the SSL hostname policy, retained mandatory server-chain evaluation, and rejected any configured anchor set that does not decode completely.
 - 2026-07-11: hard-cut all public and implementation transport/reachability names from product-owned Nametag identifiers to Oxide identifiers, moved the complete ABI into `network.h`, removed hidden retry defaults, and removed the process-global forced-transport override.
 - 2026-07-10: confined retained-session state and send outcomes to the Network.framework queue, rejected send admission after deadline/state changes, canceled exact timed-out sends, handled invalid connection states, ignored stale receive callbacks, and closed terminally on malformed frame lengths.
 - 2026-07-10: exposed nonblocking frame/idle/terminal polling and made exhausted failures plus receive EOF/error observable as terminal retained sessions.
