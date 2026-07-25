@@ -5,9 +5,11 @@
 #import <Security/SecProtocolOptions.h>
 #import <Security/SecProtocolTypes.h>
 #import <dispatch/dispatch.h>
+#import <limits.h>
 #import <math.h>
 #import <stdbool.h>
 #import <stdint.h>
+#import <string.h>
 #import <time.h>
 
 #import "network.h"
@@ -166,21 +168,41 @@ static NSArray *copy_trust_anchors(const struct OxideQuicTlsConfig *tls)
    for (size_t index = 0; index < tls->trust_anchor_count; index++)
    {
       const struct OxideTlsTrustAnchor anchor = tls->trust_anchors[index];
+      if (anchor.data == NULL || anchor.len == 0 ||
+          anchor.len > (size_t)LONG_MAX)
+      {
+         return nil;
+      }
       CFDataRef data =
           CFDataCreate(kCFAllocatorDefault, anchor.data, (CFIndex)anchor.len);
       if (data == NULL)
       {
-         continue;
+         return nil;
       }
       SecCertificateRef certificate =
           SecCertificateCreateWithData(kCFAllocatorDefault, data);
       CFRelease(data);
-      if (certificate != NULL)
+      if (certificate == NULL)
       {
-         [anchors addObject:(__bridge_transfer id)certificate];
+         return nil;
       }
+      CFDataRef canonical = SecCertificateCopyData(certificate);
+      BOOL exact = canonical != NULL &&
+                   (size_t)CFDataGetLength(canonical) == anchor.len &&
+                   memcmp(CFDataGetBytePtr(canonical), anchor.data,
+                          anchor.len) == 0;
+      if (canonical != NULL)
+      {
+         CFRelease(canonical);
+      }
+      if (!exact)
+      {
+         CFRelease(certificate);
+         return nil;
+      }
+      [anchors addObject:(__bridge_transfer id)certificate];
    }
-   return anchors.count > 0 ? anchors : nil;
+   return anchors;
 }
 
 static BOOL evaluate_peer_trust(sec_trust_t trust_ref, NSArray *anchors,

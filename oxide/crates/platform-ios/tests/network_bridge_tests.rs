@@ -238,17 +238,44 @@ fn network_bridge_hostname_suppression_preserves_server_trust()
 }
 
 #[test]
-fn network_bridge_rejects_unparseable_configured_trust_anchors()
+fn network_bridge_requires_exact_atomic_custom_trust_anchors()
 {
    let source = include_str!("../src/ios/network.m");
-   let body = source_between(
+   let parse_body = source_between(
+      source,
+      "static NSArray *copy_trust_anchors(",
+      "static BOOL evaluate_peer_trust(",
+   );
+   let evaluate_body = source_between(
       source,
       "static BOOL evaluate_peer_trust(",
       "static SecIdentityRef copy_identity(",
    );
-   let count_check = body.find("configured_anchor_count != (size_t)anchors.count").expect("anchor parse count");
-   let trust_copy = body.find("sec_trust_copy_ref(trust_ref)").expect("trust copy");
+   let canonical_copy = parse_body
+      .find("SecCertificateCopyData(certificate)")
+      .expect("canonical DER copy");
+   let exact_compare = parse_body
+      .find("memcmp(CFDataGetBytePtr(canonical), anchor.data,")
+      .expect("exact DER comparison");
+   let exact_reject = parse_body.find("if (!exact)").expect("non-exact DER rejection");
+   let anchor_add = parse_body
+      .find("[anchors addObject:(__bridge_transfer id)certificate]")
+      .expect("validated anchor insertion");
+   let count_check = evaluate_body
+      .find("configured_anchor_count != (size_t)anchors.count")
+      .expect("anchor parse count");
+   let trust_copy = evaluate_body
+      .find("sec_trust_copy_ref(trust_ref)")
+      .expect("trust copy");
 
+   assert!(parse_body.contains("anchor.data == NULL || anchor.len == 0 ||"));
+   assert!(parse_body.contains("anchor.len > (size_t)LONG_MAX"));
+   assert!(parse_body.contains("(size_t)CFDataGetLength(canonical) == anchor.len"));
+   assert!(parse_body.contains("CFRelease(certificate);\n         return nil;"));
+   assert!(!parse_body.contains("continue;"));
+   assert!(canonical_copy < exact_compare);
+   assert!(exact_compare < exact_reject);
+   assert!(exact_reject < anchor_add);
    assert!(count_check < trust_copy);
    assert!(source.contains("const size_t configured_anchor_count ="));
    assert!(source.contains("complete(evaluate_peer_trust(trust_ref, anchors_copy,"));
