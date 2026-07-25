@@ -220,6 +220,41 @@ fn network_bridge_enables_ticket_resumption_on_public_security_options() {
 }
 
 #[test]
+fn network_bridge_hostname_suppression_preserves_server_trust()
+{
+   let source = include_str!("../src/ios/network.m");
+   let body = source_between(
+      source,
+      "static BOOL evaluate_peer_trust(",
+      "static SecIdentityRef copy_identity(",
+   );
+   let policy = body.find("SecTrustSetPolicies(trust, policy)").expect("hostname-free SSL policy");
+   let evaluate = body.find("SecTrustEvaluateWithError(trust, NULL)").expect("trust evaluation");
+
+   assert!(body.contains("SecPolicyCreateSSL(true, NULL)"));
+   assert!(policy < evaluate);
+   assert!(source.contains("if (!enforce_hostname || configured_anchor_count > 0)"));
+   assert!(!source.contains("sec_protocol_options_set_peer_authentication_required"));
+}
+
+#[test]
+fn network_bridge_rejects_unparseable_configured_trust_anchors()
+{
+   let source = include_str!("../src/ios/network.m");
+   let body = source_between(
+      source,
+      "static BOOL evaluate_peer_trust(",
+      "static SecIdentityRef copy_identity(",
+   );
+   let count_check = body.find("configured_anchor_count != (size_t)anchors.count").expect("anchor parse count");
+   let trust_copy = body.find("sec_trust_copy_ref(trust_ref)").expect("trust copy");
+
+   assert!(count_check < trust_copy);
+   assert!(source.contains("const size_t configured_anchor_count ="));
+   assert!(source.contains("complete(evaluate_peer_trust(trust_ref, anchors_copy,"));
+}
+
+#[test]
 fn network_bridge_configures_tcp_tls13_fast_open_and_early_writes() {
     let source = include_str!("../src/ios/network.m");
     let tcp_body = source_between(
