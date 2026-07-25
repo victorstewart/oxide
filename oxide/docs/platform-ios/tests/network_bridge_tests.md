@@ -22,8 +22,8 @@
   Verifies that the Objective-C bridge enables TLS tickets, TLS resumption, and the TLS 1.3 min/max setters while avoiding private early-data setters.
 - `network_bridge_hostname_suppression_preserves_server_trust()`
   Verifies that hostname suppression replaces only the leaf-name policy before mandatory chain evaluation and never disables peer authentication.
-- `network_bridge_rejects_unparseable_configured_trust_anchors()`
-  Verifies that every configured anchor must materialize as a certificate before the native trust object can be evaluated.
+- `network_bridge_requires_exact_atomic_custom_trust_anchors()`
+  Verifies that every configured anchor is nonempty, length-safe, and byte-for-byte identical after Security.framework parsing before the complete set can be evaluated.
 - `network_bridge_configures_tcp_tls13_fast_open_and_early_writes()`
   Verifies that the TCP/TLS fallback path asks for TLS 1.3 only, enables public Network.framework fast-open eligibility, enables TCP Fast Open, and routes sends through the writable-connection wait path instead of requiring `ready` first.
 - `network_bridge_consumes_one_receive_permit_before_each_frame_pop()`
@@ -62,7 +62,7 @@
 - The strict-port test isolates `parse_endpoint`, requires digit-by-digit bounded accumulation, and rejects Foundation's permissive numeric-prefix coercion.
 - The ticket/resumption test extracts `configure_sec_options` and checks only public Security.framework options.
 - The hostname-policy test extracts `evaluate_peer_trust`, requires `SecPolicyCreateSSL(true, NULL)` to replace the name-bearing policy before `SecTrustEvaluateWithError`, and rejects the former peer-authentication bypass.
-- The anchor test requires the configured/parsed count comparison to precede `sec_trust_copy_ref`, so a malformed certificate cannot silently shrink the trusted set or disable the custom verifier.
+- The anchor test requires null/empty/oversized input rejection, canonical DER round-trip comparison before insertion, no skip-and-continue path, and the configured/parsed count comparison before `sec_trust_copy_ref`, so malformed or trailing bytes cannot silently shrink or broaden the trusted set.
 - The TCP/TLS fast-open test extracts the secure-TCP parameter block and send method to make sure early-data eligibility is not configured without a matching pre-ready write path.
 - The receive-permit test proves the semaphore wait text precedes the only `firstObject` removal in `popReceived`, preventing a second call from consuming an old permit after a fast-path pop.
 - The queue-budget test proves both limits are checked before the frame copy and append, byte accounting grows and shrinks with the queue, and overflow reaches the connection close path.
@@ -81,7 +81,7 @@
 - A passing test means the source keeps forced TCP/TLS retries on TLS parameters before any generic QUIC retry can run.
 - Passing ABI and policy tests mean consumers can bind one Oxide-owned header and native code cannot silently substitute application transport policy.
 - A passing ticket/resumption test means the bridge keeps asking Security.framework to issue/cache resumable TLS sessions for future QUIC/TCP-TLS connections and keeps the TLS 1.3 protocol setters in the shared security-options path.
-- Passing trust-policy tests mean hostname suppression still requires a valid TLS server chain and every configured custom anchor parses successfully before evaluation.
+- Passing trust-policy tests mean hostname suppression still requires a valid TLS server chain and every configured custom anchor round-trips as exact DER before the set is accepted atomically for evaluation.
 - A passing TCP/TLS fast-open test means the fallback path remains TLS 1.3-only and keeps the public Network.framework hooks required for TCP Fast Open and TLS early-data attempts.
 - Passing receive-accounting tests mean complete frames cannot grow the queue beyond either budget and each normal queue removal consumes the permit emitted for that frame.
 - A passing deadline test means readiness and completion cannot each consume the caller's entire timeout.
@@ -118,7 +118,7 @@ cargo test -p oxide-platform-ios --test network_bridge_tests --locked
 ```
 
 ## Changelog
-- 2026-07-25: added hostname-off server-chain and exact custom-anchor parsing guards.
+- 2026-07-25: added hostname-off server-chain guards plus byte-exact, length-safe, atomic custom-anchor parsing guards.
 - 2026-07-11: added complete Oxide ABI ownership and explicit caller-policy guards while removing the process-global forced-transport contract.
 - 2026-07-10: added actual-handler, malformed-frame terminal closure, stale receive identity, queue-confinement, and serialized send timeout/completion coverage.
 - 2026-07-10: added tri-state receive ABI and terminal connection-state contract coverage.
