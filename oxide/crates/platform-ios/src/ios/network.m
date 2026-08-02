@@ -205,18 +205,12 @@ static NSArray *copy_trust_anchors(const struct OxideQuicTlsConfig *tls)
    return anchors;
 }
 
-static BOOL evaluate_peer_trust(sec_trust_t trust_ref, NSArray *anchors,
-                                size_t configured_anchor_count,
-                                BOOL enforce_hostname)
+static BOOL evaluate_sec_trust(SecTrustRef trust, NSArray *anchors,
+                               size_t configured_anchor_count,
+                               BOOL enforce_hostname)
 {
-   if (trust_ref == NULL ||
+   if (trust == NULL ||
        configured_anchor_count != (size_t)anchors.count)
-   {
-      return NO;
-   }
-
-   SecTrustRef trust = sec_trust_copy_ref(trust_ref);
-   if (trust == NULL)
    {
       return NO;
    }
@@ -229,7 +223,6 @@ static BOOL evaluate_peer_trust(sec_trust_t trust_ref, NSArray *anchors,
       SecPolicyRef policy = SecPolicyCreateSSL(true, NULL);
       if (policy == NULL)
       {
-         CFRelease(trust);
          return NO;
       }
       status = SecTrustSetPolicies(trust, policy);
@@ -246,8 +239,24 @@ static BOOL evaluate_peer_trust(sec_trust_t trust_ref, NSArray *anchors,
       }
    }
 
-   BOOL ok =
-       status == errSecSuccess && SecTrustEvaluateWithError(trust, NULL);
+   return status == errSecSuccess && SecTrustEvaluateWithError(trust, NULL);
+}
+
+static BOOL evaluate_peer_trust(sec_trust_t trust_ref, NSArray *anchors,
+                                size_t configured_anchor_count,
+                                BOOL enforce_hostname)
+{
+   if (trust_ref == NULL)
+   {
+      return NO;
+   }
+   SecTrustRef trust = sec_trust_copy_ref(trust_ref);
+   if (trust == NULL)
+   {
+      return NO;
+   }
+   BOOL ok = evaluate_sec_trust(trust, anchors, configured_anchor_count,
+                                enforce_hostname);
    CFRelease(trust);
    return ok;
 }

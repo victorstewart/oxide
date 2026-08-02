@@ -24,6 +24,8 @@
   Materializes the complete custom-anchor set only when every nonempty input is representable as `CFIndex`, parses as one certificate, and round-trips to the exact DER bytes supplied by Rust.
 - `evaluate_peer_trust(trust_ref, anchors, configured_anchor_count, enforce_hostname)`
   Validates every configured DER anchor, optionally replaces only the hostname-bearing SSL policy, and evaluates the mandatory TLS server chain.
+- `evaluate_sec_trust(trust, anchors, configured_anchor_count, enforce_hostname)`
+  Owns the testable Security.framework policy and chain evaluation while `evaluate_peer_trust` only converts Network.framework's retained trust object.
 - `OxideQuicConnection::configureReadyKeepalive()`
   Applies the configured QUIC keepalive interval after Network.framework has established the connection and made QUIC metadata available.
 - `quic_sync(block)`
@@ -109,7 +111,7 @@
 ## Testing and benchmarks
 - Compiled by `cargo check -p oxide-platform-ios --locked`.
 - Transport retry and generic-ABI ownership invariants are covered by `crates/platform-ios/tests/network_bridge_tests.rs`.
-- Hostname-off chain validation, exact atomic anchor rejection, ticket/resumption, TLS 1.3-only TCP/TLS, public-API-only early-data handling, QUIC option application, keepalive, path/cache unpinning, receive permit accounting, queue budgets, malformed-frame closure, exact callback identity, queue-confined session state, serialized send timeout arbitration, and tri-state polling are guarded by `network_bridge_tests.rs` source-level assertions.
+- Hostname-off chain validation and exact atomic anchor rejection are exercised against Security.framework by `tls_trust_native_tests.rs`; call wiring plus ticket/resumption, TLS 1.3-only TCP/TLS, public-API-only early-data handling, QUIC option application, keepalive, path/cache unpinning, receive permit accounting, queue budgets, malformed-frame closure, exact callback identity, queue-confined session state, serialized send timeout arbitration, and tri-state polling are guarded by `network_bridge_tests.rs` source-level assertions.
 
 ## Examples
 ```c
@@ -127,6 +129,7 @@ else if (status == OXIDE_IOS_QUIC_POLL_TERMINAL)
 ```
 
 ## Changelog
+- 2026-08-02: added native Security.framework coverage for matching/wrong/suppressed hostnames, trusted/untrusted chains, and exact atomic anchor rejection.
 - 2026-07-25: made hostname suppression replace only the SSL hostname policy, retained mandatory server-chain evaluation, and required every custom anchor to round-trip as exact DER before atomically accepting the set.
 - 2026-07-11: hard-cut all public and implementation transport/reachability names from product-owned Nametag identifiers to Oxide identifiers, moved the complete ABI into `network.h`, removed hidden retry defaults, and removed the process-global forced-transport override.
 - 2026-07-10: confined retained-session state and send outcomes to the Network.framework queue, rejected send admission after deadline/state changes, canceled exact timed-out sends, handled invalid connection states, ignored stale receive callbacks, and closed terminally on malformed frame lengths.

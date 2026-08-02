@@ -225,6 +225,11 @@ fn network_bridge_hostname_suppression_preserves_server_trust()
    let source = include_str!("../src/ios/network.m");
    let body = source_between(
       source,
+      "static BOOL evaluate_sec_trust(",
+      "static BOOL evaluate_peer_trust(",
+   );
+   let bridge = source_between(
+      source,
       "static BOOL evaluate_peer_trust(",
       "static SecIdentityRef copy_identity(",
    );
@@ -233,6 +238,7 @@ fn network_bridge_hostname_suppression_preserves_server_trust()
 
    assert!(body.contains("SecPolicyCreateSSL(true, NULL)"));
    assert!(policy < evaluate);
+   assert!(bridge.contains("evaluate_sec_trust(trust, anchors, configured_anchor_count,"));
    assert!(source.contains("if (!enforce_hostname || configured_anchor_count > 0)"));
    assert!(!source.contains("sec_protocol_options_set_peer_authentication_required"));
 }
@@ -244,12 +250,12 @@ fn network_bridge_requires_exact_atomic_custom_trust_anchors()
    let parse_body = source_between(
       source,
       "static NSArray *copy_trust_anchors(",
-      "static BOOL evaluate_peer_trust(",
+      "static BOOL evaluate_sec_trust(",
    );
    let evaluate_body = source_between(
       source,
+      "static BOOL evaluate_sec_trust(",
       "static BOOL evaluate_peer_trust(",
-      "static SecIdentityRef copy_identity(",
    );
    let canonical_copy = parse_body
       .find("SecCertificateCopyData(certificate)")
@@ -264,9 +270,9 @@ fn network_bridge_requires_exact_atomic_custom_trust_anchors()
    let count_check = evaluate_body
       .find("configured_anchor_count != (size_t)anchors.count")
       .expect("anchor parse count");
-   let trust_copy = evaluate_body
-      .find("sec_trust_copy_ref(trust_ref)")
-      .expect("trust copy");
+   let evaluate = evaluate_body
+      .find("SecTrustEvaluateWithError(trust, NULL)")
+      .expect("trust evaluation");
 
    assert!(parse_body.contains("anchor.data == NULL || anchor.len == 0 ||"));
    assert!(parse_body.contains("anchor.len > (size_t)LONG_MAX"));
@@ -276,7 +282,7 @@ fn network_bridge_requires_exact_atomic_custom_trust_anchors()
    assert!(canonical_copy < exact_compare);
    assert!(exact_compare < exact_reject);
    assert!(exact_reject < anchor_add);
-   assert!(count_check < trust_copy);
+   assert!(count_check < evaluate);
    assert!(source.contains("const size_t configured_anchor_count ="));
    assert!(source.contains("complete(evaluate_peer_trust(trust_ref, anchors_copy,"));
 }

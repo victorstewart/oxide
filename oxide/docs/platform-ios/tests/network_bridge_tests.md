@@ -94,7 +94,7 @@
 ## Edge cases and failure modes
 - If the bridge method is renamed or moved, the test fails at marker lookup so the invariant must be revalidated.
 - The test does not prove a real Network.framework connection succeeds; it only guards the retry state transition in source.
-- Source assertions prove the intended Security.framework call ordering; the focused Simulator A/B remains the runtime proof for wrong-host and malformed-anchor handshakes.
+- Source assertions prove Network.framework installs the intended verifier; `tls_trust_native_tests.rs` compiles the same Objective-C implementation and executes wrong-host, hostname-suppressed, trusted/untrusted-chain, malformed, trailing, oversized, and mixed-anchor cases against Security.framework.
 - Source-contract tests do not exercise scheduler timing or live overflow; the Objective-C syntax build provides the native compile gate while higher-level transport integration exercises live request/response behavior.
 - The early-data guard stays negative for `sec_protocol_options_set_tls_early_data_enabled` because the installed public SDK headers do not expose that Security.framework setter; the supported TCP/TLS route is guarded through Network.framework fast-open APIs instead.
 
@@ -118,6 +118,7 @@ cargo test -p oxide-platform-ios --test network_bridge_tests --locked
 ```
 
 ## Changelog
+- 2026-08-02: paired the source contract with native Security.framework behavior coverage.
 - 2026-07-25: added hostname-off server-chain guards plus byte-exact, length-safe, atomic custom-anchor parsing guards.
 - 2026-07-11: added complete Oxide ABI ownership and explicit caller-policy guards while removing the process-global forced-transport contract.
 - 2026-07-10: added actual-handler, malformed-frame terminal closure, stale receive identity, queue-confinement, and serialized send timeout/completion coverage.
