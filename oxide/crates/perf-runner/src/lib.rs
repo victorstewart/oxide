@@ -807,6 +807,26 @@ struct TextAtlasPressureStats {
     indices: u64,
 }
 
+struct TextSdfBakeBench
+{
+   fonts: text::FontDb,
+   shapes: Vec<(usize, text::OwnedShape)>,
+   raster: text::RasterCtx,
+   atlas: text::Atlas,
+   vertices: Vec<api::Vertex>,
+   indices: Vec<u16>,
+}
+
+#[derive(Default)]
+struct TextSdfBakeStats
+{
+   checksum: u64,
+   glyph_runs: u64,
+   vertices: u64,
+   indices: u64,
+   dirty_pixels: u64,
+}
+
 #[derive(Default)]
 struct TextFallbackLabelStats {
     checksum: u64,
@@ -2884,6 +2904,10 @@ fn push_system_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) -> Result<()>
             vec![String::from("Mixed Latin+CJK shaping and atlas bake.")],
             move || run_text_shape_bake(),
         ));
+    }
+
+    if perf_case_allowed("cpu.system.text_sdf_bake") {
+        cases.push(text_sdf_bake_case(smoke, text_loops));
     }
 
     if perf_case_allowed("cpu.system.text_prefix_width_map") {
@@ -10224,6 +10248,108 @@ fn run_text_shape_bake() -> u64 {
         1.0,
     );
     (run_latin.vb.len + run_cjk.vb.len + indices.len() as u32) as u64
+}
+
+fn text_sdf_bake_case(smoke: bool, text_loops: u64) -> PerfCaseResult
+{
+   let mut bench = TextSdfBakeBench::new();
+   let mut case = measure_cpu_case(
+      "cpu.system.text_sdf_bake",
+      "system",
+      smoke,
+      true,
+      0.12,
+      text_loops,
+      vec![String::from(
+         "Cold glyph-atlas SDF population from pre-shaped representative Latin and CJK outlines at 96 logical pixels, reusing warmed raster and output scratch.",
+      )],
+      move || bench.run().checksum,
+   );
+   case.cache_state = String::from("cold");
+   let stats = TextSdfBakeBench::new().run();
+   case.metrics.insert(String::from("sdf_glyph_runs"), stats.glyph_runs as f64);
+   case.metrics.insert(String::from("sdf_vertices"), stats.vertices as f64);
+   case.metrics.insert(String::from("sdf_indices"), stats.indices as f64);
+   case.metrics.insert(String::from("sdf_dirty_pixels"), stats.dirty_pixels as f64);
+   case
+}
+
+impl TextSdfBakeBench
+{
+   fn new() -> Self
+   {
+      let mut fonts = text::FontDb::default();
+      let latin_id = fonts.add_font(text::Font::from_bytes(LATIN_FONT.to_vec()));
+      let cjk_id = fonts.add_font(text::Font::from_bytes(CJK_FONT.to_vec()));
+      let mut shaper = text::TextShaper::default();
+      let shapes = [
+         (latin_id, "O8BgjMW@"),
+         (cjk_id, "漢字かな"),
+      ]
+      .into_iter()
+      .map(|(font_id, value)| {
+         let font = fonts.font(font_id).expect("embedded SDF benchmark font must exist");
+         let shape = shaper
+            .shape(font, font_id, value, 96.0)
+            .expect("representative SDF benchmark text must shape");
+         (font_id, shape.to_owned_shape())
+      })
+      .collect();
+      Self {
+         fonts,
+         shapes,
+         raster: text::RasterCtx::default(),
+         atlas: text::Atlas::new(768, 384),
+         vertices: Vec::with_capacity(64),
+         indices: Vec::with_capacity(96),
+      }
+   }
+
+   fn run(&mut self) -> TextSdfBakeStats
+   {
+      self.atlas.reset();
+      self.atlas.clear_dirty();
+      self.vertices.clear();
+      self.indices.clear();
+      let mut glyph_runs = 0_u64;
+      let mut checksum = 0_u64;
+      for (index, (font_id, shape)) in self.shapes.iter().enumerate()
+      {
+         let font = self.fonts.font(*font_id)
+            .expect("prepared SDF benchmark font must remain registered");
+         let run = shape.bake_into_with(
+            font,
+            &mut self.raster,
+            &mut self.atlas,
+            &mut self.vertices,
+            &mut self.indices,
+            api::Color::rgba(0.2, 0.3, 0.4, 1.0),
+            api::ImageHandle(1),
+            0.0,
+            index as f32 * 120.0,
+            2.0,
+         );
+         glyph_runs = glyph_runs.saturating_add(u64::from(run.vb.len > 0));
+         checksum = checksum
+            .wrapping_add(*font_id as u64)
+            .wrapping_add(run.vb.len as u64)
+            .wrapping_add(run.ib.len as u64);
+      }
+      let dirty_pixels = self.atlas.dirty_rect().map_or(0, |rect| {
+         u64::from(rect.w).saturating_mul(u64::from(rect.h))
+      });
+      let (pixels, _, _) = self.atlas.image();
+      checksum = pixels.iter().step_by(257).fold(checksum, |sum, value| {
+         sum.wrapping_add(u64::from(*value))
+      });
+      TextSdfBakeStats {
+         checksum: checksum.wrapping_add(dirty_pixels),
+         glyph_runs,
+         vertices: self.vertices.len() as u64,
+         indices: self.indices.len() as u64,
+         dirty_pixels,
+      }
+   }
 }
 
 fn text_prefix_width_map_case(smoke: bool, text_loops: u64) -> PerfCaseResult {

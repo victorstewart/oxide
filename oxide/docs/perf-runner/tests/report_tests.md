@@ -21,6 +21,9 @@ This integration suite freezes performance-report schemas, filtered execution, c
 - `retained_spatial_queries_have_engine_and_authoring_contracts()` freezes 512-instance smoke cardinality, one-entry CPU selection, zero vertex visits, metadata residency, and authoring routing.
 - `metal_spatial_rows_freeze_small_and_full_damage_contracts()` freezes one selected small-damage instance/command/draw, four shaded pixels, zero vertex/copy/upload work, and full linear 512-draw static-plan replay.
 - `filtered_run_suite_supports_retained_snapshot_authoring_case()` keeps the public retained-snapshot authoring row routable.
+- `filtered_run_suite_supports_text_sdf_bake_metrics()` requires the focused
+  SDF row to declare a cold cache state, execute both pre-shaped Latin and CJK
+  glyph runs, and publish nonzero geometry and dirty-pixel counters.
 - Other test functions cover report comparison, contract coverage, architecture rows, authoring rows, and persisted baseline requirements.
 
 ## Logic narrative
@@ -39,6 +42,9 @@ Each filtered integration test writes a process-unique temporary report, verifie
 - Passing C52 coverage proves the production quarter-resolution sweep preserves its declared sigma/radius, exact subthreshold branch, 46–49% paired sample reduction, zero paired runtime exponential taps, unchanged pass count, and bounded lazy kernel-table residency.
 - Passing C59 coverage proves large-static and small-one-use auto policy avoid Private staging, both complete-mip storage modes materially suppress minification aliasing with identical output variance, released resources leave zero current residency, and the public authoring path selects the same mip contract.
 - Passing C60 coverage proves all scaling rows publish every requested image at display size, allocate exactly 1/4/40 bounded pages, render nonblank completed pixels, and keep the offscreen completion metric distinct from host-owned display latency. The authoring row must invalidate and republish exactly the 64 released slots.
+- Passing the focused SDF coverage proves both required representative runs were
+  baked; font registration or shaping failure aborts the benchmark instead of
+  silently shrinking its workload.
 
 ## Edge cases and failure modes
 

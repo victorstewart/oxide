@@ -4032,6 +4032,38 @@ fn filtered_run_suite_supports_text_atlas_pressure_metrics() {
 }
 
 #[test]
+fn filtered_run_suite_supports_text_sdf_bake_metrics()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-text-sdf-bake-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.system.text_sdf_bake")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run filtered text SDF bake smoke suite");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "filtered suite failed: {stderr}");
+   assert!(stdout.contains("cases=1"), "stdout: {stdout}");
+   assert!(stdout.contains("case=cpu.system.text_sdf_bake"), "stdout: {stdout}");
+   assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
+
+   let report = std::fs::read_to_string(&json_out).expect("read filtered text SDF report");
+   let row = report_case_slice(&report, "cpu.system.text_sdf_bake");
+   let parsed: PerfReport = serde_json::from_str(&report).expect("parse filtered text SDF report");
+   assert_eq!(workspace_case(&parsed, "cpu.system.text_sdf_bake").cache_state, "cold");
+   assert_eq!(report_f64(row, "sdf_glyph_runs"), 2.0);
+   assert!(report_f64(row, "sdf_vertices") > 0.0);
+   assert!(report_f64(row, "sdf_indices") > 0.0);
+   assert!(report_f64(row, "sdf_dirty_pixels") > 0.0);
+   let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
 fn filtered_run_suite_supports_text_fallback_label_encode_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-text-fallback-label-{}.json", std::process::id()));
