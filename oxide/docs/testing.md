@@ -4,6 +4,11 @@ This document captures the current state of automated testing across the Oxide w
 
 ## Command Surface
 
+- `cargo test --locked` – tests the production library crates selected by the
+  workspace `default-members` list.
+- `cargo test --workspace --all-targets --all-features --locked` – runs the
+  full local gate, including hosts, test scenes, snapshot/performance tools,
+  and allocation instrumentation.
 - `cargo xtask ios prepare` – prepares the iOS host project (capabilities, entitlements, shaders).
 - `scripts/ios-test.sh` – convenience wrapper that prepares the project, builds iOS staticlibs, and runs the Xcode UI test target.
 - `cargo test -p oxide-ui-core` – runs CPU layout/collection simulation property tests.
@@ -16,6 +21,7 @@ This document captures the current state of automated testing across the Oxide w
 | --- | --- | --- | --- | --- | --- |
 | `oxide-platform-api` | `crates/platform-api` | lib | app/renderer contracts, update contexts, device caps, animation descriptors, pointer & keyboard events, haptics | Unit tests for modifiers, input events, animation descriptors | extend to cover update-context behaviours and serialization for FFI bindings |
 | `oxide-renderer-api` | `crates/renderer-api` | lib | draw list types, geometry structs, color math, renderer trait, resource handles | Draw list invariant tests (layer/clip), damage/vertex storage checks | add validation for glyph spans vs vertex storage and error type conversions |
+| `oxide-image-store` | `crates/image-store` | lib | decoded-image ownership, residency decisions, atlas publication, and renderer-resource eviction | Deterministic residency, atlas, invalidation, and eviction tests | add device-backed pressure and eviction journeys |
 | `oxide-utils` | `crates/utils` | lib | canvas metrics, pixel snapping helpers, stroke width math | Inline unit tests + property tests (canvas/snap) | still need stress tests for complex transforms and device-scale fuzzing |
 | `oxide-timing` | `crates/timing` | lib | monotonic clock, timer wheel, global animation manager (`anim` module) | Unit tests for eases + deterministic integration tests (timers/reduce motion) | add fake-clock harness for long-running animation scenarios and multi-threaded timer stress |
 | `oxide-input` | `crates/input` | lib | gesture recognizer (tap/long/drag), gesture config handling | Deterministic gesture unit tests (tap/long/pan/cancel/velocity) | extend to cover multi-touch interactions and scroll accumulator edge cases |

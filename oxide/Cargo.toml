@@ -28,6 +28,26 @@ members = [
     "crates/harness-registry",
     "xtask", "crates/test-scenes",
 ]
+default-members = [
+    "crates/platform-api",
+    "crates/platform-android",
+    "crates/renderer-api",
+    "crates/image-store",
+    "crates/ui-core",
+    "crates/platform-apple",
+    "crates/platform-ios",
+    "crates/platform-macos",
+    "crates/platform-web",
+    "crates/networking",
+    "crates/telemetry",
+    "crates/permissions",
+    "crates/renderer-metal",
+    "crates/renderer-web",
+    "crates/text",
+    "crates/input",
+    "crates/timing",
+    "crates/utils",
+]
 resolver = "2"
 
 [workspace.package]

@@ -2,9 +2,14 @@
 name = "oxide-perf-runner"
 version = "0.1.0"
 edition = "2021"
+autobins = false
 
 [lib]
 path = "src/lib.rs"
+
+[[bin]]
+name = "oxide-perf-runner"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"
