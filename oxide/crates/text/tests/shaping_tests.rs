@@ -1,5 +1,6 @@
 use oxide_renderer_api as api;
 use oxide_text::{Atlas, CaretAffinity, Font, FontDb, PagedAtlas, RasterCtx, TextShaper};
+use rustybuzz::{Face as RbFace, UnicodeBuffer};
 
 const LATIN_FONT: &[u8] = include_bytes!("fixtures/test_text_latin.ttf");
 const CJK_FONT: &[u8] = include_bytes!("fixtures/test_text_cjk.ttf");
@@ -218,6 +219,141 @@ fn shaped_prefix_widths_match_ascii_prefix_shapes() {
 }
 
 #[test]
+fn shaped_positions_scale_from_font_units()
+{
+   let text = "Atlas";
+   let px = 20.0;
+   let face = RbFace::from_slice(LATIN_FONT, 0).expect("Rustybuzz face");
+   let mut buffer = UnicodeBuffer::new();
+   buffer.push_str(text);
+   let direct = rustybuzz::shape(&face, &[], buffer);
+   let expected = direct.glyph_positions().iter()
+      .map(|position| position.x_advance as f32)
+      .sum::<f32>() * px / face.units_per_em() as f32;
+
+   let mut db = FontDb::default();
+   let latin_id = db.add_font(load_font(LATIN_FONT));
+   let mut shaper = TextShaper::default();
+   let font = db.font(latin_id).expect("latin font");
+   let shaped = shaper.shape(font, latin_id, text, px).expect("shape at requested size");
+   let half = shaper.shape(font, latin_id, text, px * 0.5).expect("shape at half size");
+
+   assert!((shaped.width() - expected).abs() < 0.001, "actual={} expected={expected}", shaped.width());
+   assert!((shaped.width() - half.width() * 2.0).abs() < 0.001);
+   assert!((shaped.to_owned_shape().width() - expected).abs() < 0.001);
+}
+
+#[test]
+fn baked_glyphs_apply_shaped_offsets()
+{
+   let text = "A\u{301}";
+   let mark = "\u{301}";
+   let px = 20.0;
+   let face = RbFace::from_slice(LATIN_FONT, 0).expect("Rustybuzz face");
+   let mut combined_buffer = UnicodeBuffer::new();
+   combined_buffer.push_str(text);
+   let combined_direct = rustybuzz::shape(&face, &[], combined_buffer);
+   let mut mark_buffer = UnicodeBuffer::new();
+   mark_buffer.push_str(mark);
+   let mark_direct = rustybuzz::shape(&face, &[], mark_buffer);
+   let combined_positions = combined_direct.glyph_positions();
+   let mark_positions = mark_direct.glyph_positions();
+
+   assert_eq!(combined_positions.len(), 2);
+   assert_eq!(mark_positions.len(), 1);
+   assert_eq!(combined_direct.glyph_infos()[1].glyph_id, mark_direct.glyph_infos()[0].glyph_id);
+   assert!(combined_positions[1].x_offset != 0 || combined_positions[1].y_offset != 0);
+
+   let scale = px / face.units_per_em() as f32;
+   let expected_x = (combined_positions[0].x_advance
+      + combined_positions[1].x_offset
+      - mark_positions[0].x_offset) as f32 * scale;
+   let expected_y = -(combined_positions[0].y_advance
+      + combined_positions[1].y_offset
+      - mark_positions[0].y_offset) as f32 * scale;
+
+   let mut db = FontDb::default();
+   let latin_id = db.add_font(load_font(LATIN_FONT));
+   let mut shaper = TextShaper::default();
+   let font = db.font(latin_id).expect("latin font");
+   let combined = shaper.shape(font, latin_id, text, px).expect("shape positioned mark");
+   let standalone = shaper.shape(font, latin_id, mark, px).expect("shape standalone mark");
+   let mut combined_atlas = Atlas::new(128, 128);
+   let mut combined_vertices = Vec::new();
+   let mut combined_indices = Vec::new();
+   combined.bake_into(
+      &mut combined_atlas,
+      &mut combined_vertices,
+      &mut combined_indices,
+      api::Color::rgba(0.7, 0.2, 0.1, 1.0),
+      api::ImageHandle(1),
+      0.0,
+      100.0,
+      1.0,
+   );
+   let mut mark_atlas = Atlas::new(128, 128);
+   let mut mark_vertices = Vec::new();
+   let mut mark_indices = Vec::new();
+   standalone.bake_into(
+      &mut mark_atlas,
+      &mut mark_vertices,
+      &mut mark_indices,
+      api::Color::rgba(0.7, 0.2, 0.1, 1.0),
+      api::ImageHandle(1),
+      0.0,
+      100.0,
+      1.0,
+   );
+
+   assert_eq!(combined_vertices.len(), 8);
+   assert_eq!(mark_vertices.len(), 4);
+   let actual_x = combined_vertices[4].x - mark_vertices[0].x;
+   let actual_y = combined_vertices[4].y - mark_vertices[0].y;
+   assert!((actual_x - expected_x).abs() < 0.001, "actual={actual_x} expected={expected_x}");
+   assert!((actual_y - expected_y).abs() < 0.001, "actual={actual_y} expected={expected_y}");
+
+   let mut combined_raster = RasterCtx::default();
+   let mut combined_atlas = PagedAtlas::new(128, 128, 2);
+   let mut combined_vertices = Vec::new();
+   let mut combined_indices = Vec::new();
+   let mut combined_runs = Vec::new();
+   combined.bake_paged_into_with(
+      &mut combined_raster,
+      &mut combined_atlas,
+      &mut combined_vertices,
+      &mut combined_indices,
+      &mut combined_runs,
+      api::Color::rgba(0.7, 0.2, 0.1, 1.0),
+      0.0,
+      100.0,
+      1.0,
+   );
+   let mut mark_raster = RasterCtx::default();
+   let mut mark_atlas = PagedAtlas::new(128, 128, 2);
+   let mut mark_vertices = Vec::new();
+   let mut mark_indices = Vec::new();
+   let mut mark_runs = Vec::new();
+   standalone.bake_paged_into_with(
+      &mut mark_raster,
+      &mut mark_atlas,
+      &mut mark_vertices,
+      &mut mark_indices,
+      &mut mark_runs,
+      api::Color::rgba(0.7, 0.2, 0.1, 1.0),
+      0.0,
+      100.0,
+      1.0,
+   );
+
+   assert_eq!(combined_vertices.len(), 8);
+   assert_eq!(mark_vertices.len(), 4);
+   let actual_x = combined_vertices[4].x - mark_vertices[0].x;
+   let actual_y = combined_vertices[4].y - mark_vertices[0].y;
+   assert!((actual_x - expected_x).abs() < 0.001, "paged actual={actual_x} expected={expected_x}");
+   assert!((actual_y - expected_y).abs() < 0.001, "paged actual={actual_y} expected={expected_y}");
+}
+
+#[test]
 fn owned_shape_prefix_widths_match_shaped_output() {
     let mut db = FontDb::default();
     let latin_id = db.add_font(load_font(LATIN_FONT));
@@ -394,6 +530,12 @@ fn fallback_shape_runs_use_font_that_covers_each_grapheme() {
     assert_eq!(shaped.runs[2].byte_range, "A漢".len()..text.len());
     assert!((shaped.runs[1].x_offset - shaped.runs[0].shape.width()).abs() < 0.001);
     assert!((shaped.width() - expected).abs() < 0.001);
+
+   let reused = shaper
+      .shape_with_fallback_fonts(&db, latin_id, &[cjk_id], text, 22.0)
+      .expect("fallback shape with reused buffer");
+   assert!((reused.width() - expected).abs() < 0.001);
+   assert!((reused.runs[1].x_offset - shaped.runs[1].x_offset).abs() < 0.001);
 }
 
 #[test]

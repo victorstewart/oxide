@@ -13,6 +13,10 @@
   Shapes Latin text and verifies glyph vertices, indices, and atlas pixels.
 - `shaped_prefix_widths_match_ascii_prefix_shapes`
   Verifies one shaped-run prefix widths match repeated prefix shaping for simple ASCII text.
+- `shaped_positions_scale_from_font_units`
+  Verifies fixture design-unit advances scale by requested pixels divided by units-per-em, including borrowed/owned parity and proportional sizes.
+- `baked_glyphs_apply_shaped_offsets`
+  Verifies a positioned combining mark uses Rustybuzz x/y offsets when emitting screen-space glyph quads.
 - `shaped_prefix_widths_follow_combining_grapheme_boundaries`
   Verifies shaped cluster advances land on grapheme boundaries for combining-mark text.
 - `shaped_cursor_map_tracks_combining_grapheme_boundaries`
@@ -45,6 +49,7 @@
 ## Logic narrative
 - Tests load fixed Latin and CJK fixture fonts to avoid platform font differences.
 - The library's test-only SDF oracle compares the exact EDT with the retired 17x17 search at a predeclared zero-byte tolerance for synthetic holes/thin strokes and the Latin/CJK 2x/3x by 48/96 px glyph matrix.
+- The font-unit test computes its oracle directly from the fixture Rustybuzz face rather than comparing two Oxide paths that could share the same scaling defect.
 - Prefix-width tests derive caret positions from one shaped run, compare the result against repeated prefix shaping where that is a valid ASCII oracle, and verify owned-run cache reuse does not change the cursor map.
 - Cursor-map tests validate both the shaped width table and UTF-8 byte ranges, so text input code cannot split combining or ZWJ clusters while mapping pointer x positions.
 - Atlas-pressure coverage uses a deliberately small atlas and feeds unique glyphs until a stale slot must be reused.
@@ -89,6 +94,7 @@ cargo test --locked -p oxide-text --test shaping_tests
 ```
 
 ## Changelog
+- 2026-08-02: added direct units-per-em and positioned-glyph-offset oracles for shaping and baking.
 - 2026-07-14: added fallback cache invalidation coverage and documented the exact zero-tolerance SDF reference matrix.
 - 2026-07-14: added whole-frame pin coverage for pre-existing visible glyph slots.
 - 2026-06-01: added full-slot clear/dirty coverage for smaller replacement glyphs reusing larger evicted atlas slots.

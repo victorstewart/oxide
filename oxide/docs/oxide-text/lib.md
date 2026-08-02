@@ -71,7 +71,7 @@
   Reuses owned shaped glyphs and caller-owned raster state to append glyph geometry without cloning cached glyph storage on the common LTR path.
 
 ## Logic narrative
-- `TextShaper` uses `rustybuzz` to shape text and keeps glyph ids plus advances separate from rasterization.
+- `TextShaper` uses `rustybuzz` to shape text, converts design-unit advances and offsets to logical pixels with `requested_px / units_per_em`, and keeps positioned glyphs separate from rasterization.
 - `RasterCtx` wraps `swash` scaling state, one reusable glyph image, and exact squared-distance-transform scratch so repeated baking reuses raster infrastructure without per-glyph SDF allocation.
 - `Atlas` first attempts monotonic row packing. If there is no free tail space and the new glyph can fit in the atlas, it reuses the least-recently-used resident slot that is large enough for the glyph.
 - Slot-level eviction avoids clearing the whole atlas, which would invalidate unrelated glyph UVs already held by retained draw lists.
@@ -126,6 +126,7 @@
 
 ## Testing and benchmarks
 - `crates/text/tests/shaping_tests.rs` covers shaping, reset behavior, atlas revisions, dirty rectangles, full-slot dirtying/clearing after atlas eviction, atlas pressure eviction, same-run and whole-frame eviction protection, and oversize glyph skipping.
+- `crates/text/tests/shaping_tests.rs` anchors logical width to the fixture face's units-per-em and verifies nonzero Rustybuzz x/y offsets move baked glyph quads in screen coordinates.
 - `crates/text/tests/shaping_tests.rs` also covers shaped-run prefix width maps and cursor maps for ASCII prefixes, combining-grapheme boundaries, ZWJ clusters, pure RTL visual order, mixed-bidi caret affinity, configured fallback-font cursor widths and shape runs, and owned-run reuse parity.
 - The `sdf_tests` unit module retains the retired brute-force SDF implementation as a test-only oracle and requires zero byte delta for holes, thin strokes, edges, Latin/CJK glyphs, 2x/3x scale pressure, and 48/96 px raster sizes. It also verifies scale invalidation and hard fallback-cache capacity enforcement.
 - `crates/text/tests/shaping_tests.rs` verifies fallback decisions invalidate when the font database generation or fallback chain changes.
@@ -140,6 +141,7 @@ assert_eq!(atlas.eviction_count(), 0);
 ```
 
 ## Changelog
+- 2026-08-02: corrected Rustybuzz design-unit scaling and applied shaped x/y offsets consistently to borrowed, owned, cursor, fallback, and atlas-baking paths.
 - 2026-07-14: replaced the per-pixel 17x17 SDF search with an exact separable EDT, reused raster/EDT scratch, cached stable parsed Swash font identity, and added bounded context-invalidated fallback preparation caches.
 - 2026-07-14: added frame-wide atlas eviction locking and opt-in cache/raster counters for C43 frame-scoped text preparation.
 - 2026-06-02: removed cached `OwnedShape` glyph-vector clones on the common replay path, cached zero-bitmap glyphs as no-geometry entries, and added allocation-free warm replay coverage.

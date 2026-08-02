@@ -942,19 +942,22 @@ impl FallbackShape {
 }
 
 impl TextShaper {
-    pub fn shape<'a>(
-        &mut self,
-        font: &'a Font,
-        font_id: usize,
-        text: &str,
-        px: f32,
-    ) -> anyhow::Result<ShapeOutput<'a>> {
-        let rb_face = RbFace::from_slice(&font.data, 0).ok_or_else(|| anyhow::anyhow!("face"))?;
-        let mut buf = UnicodeBuffer::new();
-        buf.push_str(text);
-        let glyphs = rustybuzz::shape(&rb_face, &[], buf);
-        Ok(ShapeOutput { font, font_id, glyphs, px, rtl: text_base_direction_is_rtl(text) })
-    }
+   pub fn shape<'a>(&mut self, font: &'a Font, font_id: usize, text: &str, px: f32) -> anyhow::Result<ShapeOutput<'a>>
+   {
+      let rb_face = RbFace::from_slice(&font.data, 0).ok_or_else(|| anyhow::anyhow!("face"))?;
+      let position_scale = shaped_position_scale(px, rb_face.units_per_em());
+      let mut buf = UnicodeBuffer::new();
+      buf.push_str(text);
+      let glyphs = rustybuzz::shape(&rb_face, &[], buf);
+      Ok(ShapeOutput {
+         font,
+         font_id,
+         glyphs,
+         px,
+         position_scale,
+         rtl: text_base_direction_is_rtl(text),
+      })
+   }
 
     pub fn shape_with_fallback_fonts(
         &mut self,
@@ -1065,17 +1068,18 @@ impl TextShaper {
         Some(pen + width)
     }
 
-    fn shape_owned(&mut self, font: &Font, font_id: usize, text: &str, px: f32) -> Option<OwnedShape>
-    {
-       let rb_face = RbFace::from_slice(&font.data, 0)?;
-       let mut buffer = self.unicode_buffer.take().unwrap_or_else(UnicodeBuffer::new);
-       buffer.push_str(text);
-       let glyphs = rustybuzz::shape(&rb_face, &[], buffer);
-       let rtl = text_base_direction_is_rtl(text);
-       let shape = owned_shape_from_glyph_buffer(font_id, px, rtl, &glyphs);
-       self.unicode_buffer = Some(glyphs.clear());
-       Some(shape)
-    }
+   fn shape_owned(&mut self, font: &Font, font_id: usize, text: &str, px: f32) -> Option<OwnedShape>
+   {
+      let rb_face = RbFace::from_slice(&font.data, 0)?;
+      let position_scale = shaped_position_scale(px, rb_face.units_per_em());
+      let mut buffer = self.unicode_buffer.take().unwrap_or_else(UnicodeBuffer::new);
+      buffer.push_str(text);
+      let glyphs = rustybuzz::shape(&rb_face, &[], buffer);
+      let rtl = text_base_direction_is_rtl(text);
+      let shape = owned_shape_from_glyph_buffer(font_id, px, position_scale, rtl, &glyphs);
+      self.unicode_buffer = Some(glyphs.clear());
+      Some(shape)
+   }
 
     fn fallback_context_matches(&self, fonts: &FontDb, primary_id: usize, fallback_ids: &[usize], px: f32) -> bool
     {
@@ -1361,9 +1365,11 @@ impl Default for RasterCtx {
 #[derive(Clone, Copy, Debug)]
 pub struct ShapedGlyph {
     glyph_id: u16,
-    cluster: usize,
-    x_advance: i32,
-    y_advance: i32,
+    cluster: u32,
+    x_advance: f32,
+    y_advance: f32,
+    x_offset: f32,
+    y_offset: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -1654,7 +1660,7 @@ impl OwnedShape {
     pub fn prefix_widths_for_boundaries(&self, boundaries: &[usize]) -> Vec<f32> {
         prefix_widths_from_clusters(
             boundaries,
-            self.glyphs.iter().map(|glyph| (glyph.cluster, glyph.x_advance as f32 / 64.0)),
+            self.glyphs.iter().map(|glyph| (glyph.cluster as usize, glyph.x_advance)),
         )
     }
 
@@ -1879,7 +1885,7 @@ impl OwnedShape {
     }
 }
 
-fn owned_shape_from_glyph_buffer(font_id: usize, px: f32, rtl: bool, buffer: &RbGlyphs) -> OwnedShape
+fn owned_shape_from_glyph_buffer(font_id: usize, px: f32, position_scale: f32, rtl: bool, buffer: &RbGlyphs) -> OwnedShape
 {
    let infos = buffer.glyph_infos();
    let positions = buffer.glyph_positions();
@@ -1888,16 +1894,18 @@ fn owned_shape_from_glyph_buffer(font_id: usize, px: f32, rtl: bool, buffer: &Rb
    {
       glyphs.push(ShapedGlyph {
          glyph_id: info.glyph_id as u16,
-         cluster: info.cluster as usize,
-         x_advance: position.x_advance,
-         y_advance: position.y_advance,
+         cluster: info.cluster,
+         x_advance: position.x_advance as f32 * position_scale,
+         y_advance: position.y_advance as f32 * position_scale,
+         x_offset: position.x_offset as f32 * position_scale,
+         y_offset: position.y_offset as f32 * position_scale,
       });
    }
    if rtl && clusters_are_descending(glyphs.iter().map(|glyph| glyph.cluster))
    {
       glyphs.reverse();
    }
-   let width = glyphs.iter().map(|glyph| glyph.x_advance as f32 / 64.0).sum();
+   let width = glyphs.iter().map(|glyph| glyph.x_advance).sum();
    OwnedShape { font_id, glyphs, px, width, rtl }
 }
 
@@ -1906,6 +1914,7 @@ pub struct ShapeOutput<'a> {
     font_id: usize,
     glyphs: RbGlyphs,
     px: f32,
+    position_scale: f32,
     rtl: bool,
 }
 
@@ -1914,7 +1923,7 @@ impl<'a> ShapeOutput<'a> {
     pub fn width(&self) -> f32 {
         let mut width = 0.0_f32;
         for p in self.glyphs.glyph_positions() {
-            width += p.x_advance as f32 / 64.0;
+            width += p.x_advance as f32 * self.position_scale;
         }
         width
     }
@@ -1923,7 +1932,7 @@ impl<'a> ShapeOutput<'a> {
         let glyphs = self.logical_glyphs();
         prefix_widths_from_clusters(
             boundaries,
-            glyphs.iter().map(|glyph| (glyph.cluster, glyph.x_advance as f32 / 64.0)),
+            glyphs.iter().map(|glyph| (glyph.cluster as usize, glyph.x_advance)),
         )
     }
 
@@ -1945,7 +1954,7 @@ impl<'a> ShapeOutput<'a> {
 
     pub fn to_owned_shape(&self) -> OwnedShape {
         let glyphs = self.logical_glyphs();
-        let width = glyphs.iter().map(|glyph| glyph.x_advance as f32 / 64.0).sum();
+        let width = glyphs.iter().map(|glyph| glyph.x_advance).sum();
         OwnedShape { font_id: self.font_id, glyphs, px: self.px, width, rtl: self.rtl }
     }
 
@@ -1956,9 +1965,11 @@ impl<'a> ShapeOutput<'a> {
         for (info, pos) in infos.iter().zip(poss.iter()) {
             glyphs.push(ShapedGlyph {
                 glyph_id: (info.glyph_id as u32) as u16,
-                cluster: info.cluster as usize,
-                x_advance: pos.x_advance,
-                y_advance: pos.y_advance,
+                cluster: info.cluster,
+                x_advance: pos.x_advance as f32 * self.position_scale,
+                y_advance: pos.y_advance as f32 * self.position_scale,
+                x_offset: pos.x_offset as f32 * self.position_scale,
+                y_offset: pos.y_offset as f32 * self.position_scale,
             });
         }
         glyphs
@@ -2069,7 +2080,7 @@ impl<'a> ShapeOutput<'a> {
 
 fn clusters_are_descending<I>(clusters: I) -> bool
 where
-    I: IntoIterator<Item = usize>,
+    I: IntoIterator<Item = u32>,
 {
     let mut prior = None;
     let mut descending = false;
@@ -2085,6 +2096,19 @@ where
         prior = Some(cluster);
     }
     descending
+}
+
+#[inline]
+fn shaped_position_scale(px: f32, units_per_em: i32) -> f32
+{
+   if px.is_finite() && px > 0.0
+   {
+      px / units_per_em.max(1) as f32
+   }
+   else
+   {
+      0.0
+   }
 }
 
 fn caret_positions_from_prefix_widths(mut widths: Vec<f32>, rtl: bool) -> Vec<f32> {
@@ -2439,15 +2463,15 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
             img.clear();
             if scaler.is_none() {
                 let Some(fontref) = font.swash_ref() else {
-                    pen_x += glyph.x_advance as f32 / 64.0;
-                    pen_y += glyph.y_advance as f32 / 64.0;
+                    pen_x += glyph.x_advance;
+                    pen_y -= glyph.y_advance;
                     continue;
                 };
                 scaler = Some(scale_context.builder(fontref).size(px).hint(true).build());
             }
             let Some(scaler) = scaler.as_mut() else {
-                pen_x += glyph.x_advance as f32 / 64.0;
-                pen_y += glyph.y_advance as f32 / 64.0;
+                pen_x += glyph.x_advance;
+                pen_y -= glyph.y_advance;
                 continue;
             };
             let render = render.get_or_insert_with(|| Render::new(&[Source::Outline]));
@@ -2468,8 +2492,8 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
                     generation,
                 });
                 page.last_used = atlas.clock;
-                pen_x += glyph.x_advance as f32 / 64.0;
-                pen_y += glyph.y_advance as f32 / 64.0;
+                pen_x += glyph.x_advance;
+                pen_y -= glyph.y_advance;
                 continue;
             }
             let w = img.placement.width.max(0);
@@ -2490,14 +2514,14 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
                     generation,
                 });
                 page.last_used = atlas.clock;
-                pen_x += glyph.x_advance as f32 / 64.0;
-                pen_y += glyph.y_advance as f32 / 64.0;
+                pen_x += glyph.x_advance;
+                pen_y -= glyph.y_advance;
                 continue;
             }
             let (aw, ah) = (w as u32, h as u32);
             let Some((page_index, ax, ay)) = atlas.page_for_rect(aw, ah) else {
-                pen_x += glyph.x_advance as f32 / 64.0;
-                pen_y += glyph.y_advance as f32 / 64.0;
+                pen_x += glyph.x_advance;
+                pen_y -= glyph.y_advance;
                 continue;
             };
             let page = &mut atlas.pages[page_index];
@@ -2540,8 +2564,8 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
         };
 
         if entry.w == 0 || entry.h == 0 {
-            pen_x += glyph.x_advance as f32 / 64.0;
-            pen_y += glyph.y_advance as f32 / 64.0;
+            pen_x += glyph.x_advance;
+            pen_y -= glyph.y_advance;
             continue;
         }
         let page_id = atlas.pages[page_index].id;
@@ -2571,8 +2595,8 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
             continue;
         };
         let run_vertex_base = (draw_vertices.len() as u32).saturating_sub(v_start);
-        let gx = ox + pen_x + entry.l as f32;
-        let gy = oy + pen_y - entry.t as f32;
+        let gx = ox + pen_x + glyph.x_offset + entry.l as f32;
+        let gy = oy + pen_y - glyph.y_offset - entry.t as f32;
         let gw = entry.w as f32;
         let gh = entry.h as f32;
         let atlas_w = atlas.width.max(1) as f32;
@@ -2588,8 +2612,8 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
         push_i(draw_indices, run_vertex_base, run_vertex_base + 1, run_vertex_base + 2);
         push_i(draw_indices, run_vertex_base + 2, run_vertex_base + 1, run_vertex_base + 3);
 
-        pen_x += glyph.x_advance as f32 / 64.0;
-        pen_y += glyph.y_advance as f32 / 64.0;
+        pen_x += glyph.x_advance;
+        pen_y -= glyph.y_advance;
     }
     if let Some((page_id, v_start, i_start)) = current_run {
         finish_paged_run(
@@ -2660,15 +2684,15 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
             img.clear();
             if scaler.is_none() {
                 let Some(fontref) = font.swash_ref() else {
-                    pen_x += glyph.x_advance as f32 / 64.0;
-                    pen_y += glyph.y_advance as f32 / 64.0;
+                    pen_x += glyph.x_advance;
+                    pen_y -= glyph.y_advance;
                     continue;
                 };
                 scaler = Some(scale_context.builder(fontref).size(px).hint(true).build());
             }
             let Some(scaler) = scaler.as_mut() else {
-                pen_x += glyph.x_advance as f32 / 64.0;
-                pen_y += glyph.y_advance as f32 / 64.0;
+                pen_x += glyph.x_advance;
+                pen_y -= glyph.y_advance;
                 continue;
             };
             let render = render.get_or_insert_with(|| Render::new(&[Source::Outline]));
@@ -2677,8 +2701,8 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
             }
             if !render.render_into(scaler, glyph.glyph_id, img) {
                 cache_empty_glyph_entry(atlas, key, 0, 0);
-                pen_x += glyph.x_advance as f32 / 64.0;
-                pen_y += glyph.y_advance as f32 / 64.0;
+                pen_x += glyph.x_advance;
+                pen_y -= glyph.y_advance;
                 continue;
             }
             let w = img.placement.width.max(0);
@@ -2690,8 +2714,8 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
                     img.placement.left as i16,
                     img.placement.top as i16,
                 );
-                pen_x += glyph.x_advance as f32 / 64.0;
-                pen_y += glyph.y_advance as f32 / 64.0;
+                pen_x += glyph.x_advance;
+                pen_y -= glyph.y_advance;
                 continue;
             }
             let (aw, ah) = (w as u32, h as u32);
@@ -2707,8 +2731,8 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
             {
                 Some(rc) => rc,
                 None => {
-                    pen_x += glyph.x_advance as f32 / 64.0;
-                    pen_y += glyph.y_advance as f32 / 64.0;
+                    pen_x += glyph.x_advance;
+                    pen_y -= glyph.y_advance;
                     continue;
                 }
             };
@@ -2746,12 +2770,13 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
             e
         };
         if entry.w == 0 || entry.h == 0 {
-            pen_x += glyph.x_advance as f32 / 64.0;
-            pen_y += glyph.y_advance as f32 / 64.0;
+            pen_x += glyph.x_advance;
+            pen_y -= glyph.y_advance;
             continue;
         }
-        let gx = ox + pen_x + (entry.l as f32);
-        let gy = oy + pen_y - (entry.t as f32);
+
+        let gx = ox + pen_x + glyph.x_offset + (entry.l as f32);
+        let gy = oy + pen_y - glyph.y_offset - (entry.t as f32);
         let gw = entry.w as f32;
         let gh = entry.h as f32;
 
@@ -2776,8 +2801,8 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
         push_i(draw_indices, run_vertex_base + 0, run_vertex_base + 1, run_vertex_base + 2);
         push_i(draw_indices, run_vertex_base + 2, run_vertex_base + 1, run_vertex_base + 3);
 
-        pen_x += glyph.x_advance as f32 / 64.0;
-        pen_y += glyph.y_advance as f32 / 64.0;
+        pen_x += glyph.x_advance;
+        pen_y -= glyph.y_advance;
     }
 
     if COUNT_STATS {
