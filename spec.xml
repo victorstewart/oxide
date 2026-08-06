@@ -13,8 +13,9 @@ U)
 V)
 
 -->
-<spec app="Oxide" version="1.2">
-  <section number="0" title="Scope and assumptions">
+<spec app="Oxide" version="1.2" status="historical-draft">
+  <section number="0" title="Historical draft scope and assumptions">
+    <item>Status: non-authoritative historical design draft. Current Rust source, crate documentation, and build manifests define shipped contracts; this file does not declare stable APIs or release requirements.</item>
     <item>Goal: Rust-first iOS UI runtime with a Metal renderer and a thin UIKit shell. Zero Swift. Android deferred but anticipated by all abstractions.</item>
     <item>Current build minimum iOS: 18.0. Targets: aarch64-apple-ios (device) and aarch64-apple-ios-sim (simulator).</item>
     <item>UIKit is used only for lifecycle, surface hosting, input/IME. All layout, state, and rendering live in Rust.</item>
@@ -109,7 +110,7 @@ V)
     </reproducibility>
   </section>
 
-  <section number="2" title="Public API surface (stable)">
+  <section number="2" title="Historical API sketch (non-authoritative)">
     <traits>
       <code language="rust"><![CDATA[
 pub trait App
