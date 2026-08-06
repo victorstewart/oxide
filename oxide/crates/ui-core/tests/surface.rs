@@ -1317,7 +1317,7 @@ fn transform_and_opacity_animation_reuses_all_warm_geometry()
 }
 
 #[test]
-fn nested_animation_keeps_clip_hit_test_and_accessibility_geometry_synchronized()
+fn nested_animation_keeps_clip_and_hit_test_geometry_synchronized()
 {
    let mut surface = UiSurface::new(NodeStyle {
       size: Size2D { w: Dim::Px(240.0), h: Dim::Px(240.0) },
@@ -1354,8 +1354,20 @@ fn nested_animation_keeps_clip_hit_test_and_accessibility_geometry_synchronized(
    ).unwrap();
    let leaf_instance = rendered.snapshot.instance(2).unwrap();
    assert_eq!(leaf_instance.dynamic_clips.len(), 1);
-   let frame = surface.accessibility_frame(leaf).unwrap();
-   let center = [frame.x + frame.w * 0.5, frame.y + frame.h * 0.5];
+   let leaf_transform = leaf_instance.property_slots.iter().find_map(|id| {
+      rendered.snapshot.properties().iter().find(|property| property.id == *id).and_then(|property| {
+         match property.value {
+            gfx::RenderPropertyValue::Transform(value) => Some(value),
+            gfx::RenderPropertyValue::Opacity(_) => None,
+         }
+      })
+   }).unwrap();
+   let layout = surface.tree().layout_rect(leaf).unwrap();
+   let local_center = [layout.x + layout.w * 0.5, layout.y + layout.h * 0.5];
+   let center = [
+      leaf_transform[0] * local_center[0] + leaf_transform[2] * local_center[1] + leaf_transform[4],
+      leaf_transform[1] * local_center[0] + leaf_transform[3] * local_center[1] + leaf_transform[5],
+   ];
    let hit = surface.hit_test(center[0], center[1]).unwrap();
    assert_eq!(hit.0, leaf);
    assert!(hit.1[0] >= 0.0 && hit.1[0] < 40.0);

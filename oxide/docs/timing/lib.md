@@ -22,7 +22,6 @@ Call flow:
 - `oxide_timing::now_ms() -> u64`: returns monotonic milliseconds since an arbitrary target-specific origin.
 - `oxide_timing::schedule_after(delay_ms: u64, f: F) -> TimerId`: stores a callback for a future timer tick.
 - `oxide_timing::advance_timers(now_ms_val: u64)`: drains and runs due timer callbacks.
-- `oxide_timing::set_reduce_motion(enabled: bool)`: toggles global animation duration reduction.
 - `oxide_timing::testing::*`: test-only reset and inspection helpers.
 - `oxide_timing::anim::start(desc: &AnimDesc) -> AnimId`: starts an animation descriptor.
 - `oxide_timing::anim::cancel(id: AnimId)`: cancels an animation by id.
@@ -68,5 +67,6 @@ pub fn frame_delta(previous: u64) -> u64
 ```
 
 ## Changelog
+- 2026-08-06: removed the global platform motion-preference switch; authored animation durations now pass through unchanged.
 
 - Added a wasm32 browser monotonic clock backed by `performance.now()`.

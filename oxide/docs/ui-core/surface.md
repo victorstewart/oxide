@@ -16,7 +16,6 @@
 - `UiSurface::set_retained_cache_policy(&mut self, RetainedCachePolicy)`: applies a new policy, enforces reductions immediately, and invalidates the surface-level snapshot cache.
 - `UiSurface::render_snapshot_retained(...) -> Result<SurfaceRenderSnapshot, SurfaceRenderSnapshotError>`: returns an immutable mixed UI/content snapshot plus cache diagnostics.
 - `UiSurface::tick_at(now_ms)`: advances the owned animator, marks transform/opacity property dirtiness without invalidating immutable chunks, and rebuilds only sampled paint values.
-- `UiSurface::accessibility_frame(node)`: returns the affine-transformed accessibility AABB from the same animation overrides used by rendering and hit testing.
 - `SurfaceRenderChunkStats`: keeps the per-snapshot reuse, copy, and retained-byte summary compact. `UiSurface::retained_node_stats` exposes the complete admission, eviction, prepared-byte, build-time, fallback, completeness, and invalidation telemetry on demand so hot snapshot returns do not copy cold diagnostic fields.
 
 ## Logic narrative
@@ -70,5 +69,5 @@ surface.set_retained_cache_policy(policy);
 
 ## Changelog
 
-- 2026-07-13: routed transform/opacity animation through dense dynamic slots, synchronized affine hit/accessibility geometry, and made clip edits metadata-only for C26.
+- 2026-07-13: routed transform/opacity animation through dense dynamic slots, synchronized affine hit-test geometry, and made clip edits metadata-only for C26.
 - 2026-07-13: Added public retained cache policy configuration and complete C23 cache statistics.

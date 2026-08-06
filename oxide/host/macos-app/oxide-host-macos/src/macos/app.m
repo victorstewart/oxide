@@ -1680,15 +1680,6 @@ uint8_t macos_supports_edr(void)
     return 0;
 }
 
-uint8_t macos_reduce_motion_enabled(void)
-{
-    NSWorkspace *workspace = [NSWorkspace sharedWorkspace];
-    if ([workspace respondsToSelector:@selector(accessibilityDisplayShouldReduceMotion)]) {
-        return workspace.accessibilityDisplayShouldReduceMotion ? 1 : 0;
-    }
-    return 0;
-}
-
 uint8_t macos_camera_available(void)
 {
     return MacCameraDeviceForPosition(0) != nil ? 1 : 0;

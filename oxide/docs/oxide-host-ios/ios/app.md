@@ -19,6 +19,7 @@
 
 ## Logic narrative
 - The host installs UIKit objects and forwards raw input, lifecycle, and service events into Rust without owning product gesture state.
+- The Metal surface and camera benchmark state label do not opt into UIKit accessibility elements, labels, or values. The host adds no automation identifiers, exposes no Reduce Motion control, and the compact XCUI smoke queries only the app window.
 - Camera perf hooks translate AVFoundation sample/event data into compact C typedefs before invoking Rust callbacks.
 - `_Static_assert` guards freeze the host-local camera typedef size/alignment so changes are caught before callbacks decode incompatible payloads.
 - Additional `_Static_assert` guards freeze `oxide_host_stats_t`, `oxide_host_camera_tick_perf_t`, and `oxide_host_app_debug_perf_t`, because those structs are read by benchmark harnesses and feed persisted device evidence.
@@ -47,5 +48,6 @@
 - Host camera typedef, host stats, tick perf, debug perf, and Swift mirror guard retention are covered by `cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-host-ios --test abi_layout_tests`.
 
 ## Changelog
+- 2026-08-06: removed explicit UIKit accessibility semantics and automation identifiers, deleted the Reduce Motion debug control and display-rate override, and replaced the flaky 283-line scene traversal with a 32-line window launch smoke.
 - 2026-06-22: added host stats, camera tick perf, and app debug perf ABI layout guards.
 - 2026-06-22: added and documented host camera callback typedef ABI layout guards.

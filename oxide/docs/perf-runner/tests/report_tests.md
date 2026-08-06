@@ -72,6 +72,7 @@ Run `cargo test --locked -p oxide-perf-runner --test report_tests`.
 Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.frame_resources.` with `--run-suite --smoke --json-out <path>` to inspect both C18 rows.
 
 ## Changelog
+- 2026-08-06: froze the 401-row workspace case set after the SDF addition and semantic cutover to hit-test-only dynamic-animation row IDs.
 - 2026-07-15: froze C60 image-store scaling, completed-frame readback, exact page/draw/budget counters, and authoring release/reuse invalidation.
 - 2026-07-15: required C18 frame-resource rows to retain their completed-command-buffer GPU distributions so the complete C61 report satisfies the frame metric contract.
 - 2026-07-15: froze C59 large-static, minified, small-one-use, and public-authoring image policy rows; residency/upload/mip counters; release; indexed samples; and output-quality equivalence.

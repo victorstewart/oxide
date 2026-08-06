@@ -129,6 +129,7 @@ Persisted report and evidence schemas are part of the performance contract becau
 
 ## Changelog
 
+- 2026-08-06: hard-cut the two CPU dynamic-animation workloads to `cpu.architecture.animation.surface_hit_test_300` and `cpu.authoring.animation.dynamic_properties_hit_test_300`; the old IDs and their unsupported extra dirty operation were retired so prior samples cannot be compared as the new workload.
 - 2026-08-05: made the perf runner an explicit `oxide-renderer-web/diagnostic-instrumentation` consumer.
 - 2026-08-05: Added the public WebGPU pipeline-profile authoring case and persisted exact eager construction workloads for the full, two-draw, and mixed profiles (`43`, `2`, and `9`).
 - 2026-07-15: registered C60 image-store 100/1,000/10,000 architecture rows and the 1,000-icon public authoring journey.

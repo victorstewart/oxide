@@ -556,7 +556,6 @@ struct Active {
 
 /// Animator manages many node property animations and produces per-frame overrides.
 pub struct Animator {
-    reduce_motion: bool,
     next_id: api::AnimId,
     active: alloc::vec::Vec<Active>,
     overrides: AnimOverrideSlots,
@@ -565,7 +564,6 @@ pub struct Animator {
 impl Default for Animator {
     fn default() -> Self {
         Self {
-            reduce_motion: false,
             next_id: 1,
             active: alloc::vec::Vec::new(),
             overrides: AnimOverrideSlots::default(),
@@ -577,10 +575,6 @@ impl Animator {
     pub fn new() -> Self {
         Self::default()
     }
-    pub fn set_reduce_motion(&mut self, on: bool) {
-        self.reduce_motion = on;
-        timing::set_reduce_motion(on);
-    }
 
     fn alloc_id(&mut self) -> api::AnimId {
         let id = self.next_id;
@@ -589,11 +583,6 @@ impl Animator {
     }
 
     pub fn start(&mut self, node: NodeId, mut desc: api::AnimDesc) -> api::AnimId {
-        // Honor reduce motion by collapsing duration/delay unless essential
-        if self.reduce_motion {
-            desc.duration_ms = 0;
-            desc.delay_ms = 0;
-        }
         let id = self.alloc_id();
         desc.id = id;
         let st = Active { node, desc: desc.clone(), start_ms: timing::now_ms() };

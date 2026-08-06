@@ -532,7 +532,7 @@ fn persisted_report_root_and_case_schemas_are_frozen() {
 #[test]
 fn persisted_report_case_id_sets_are_frozen() {
     let workspace = persisted_report_json("benchmarks/workspace/latest.json");
-    assert_report_case_id_set(&workspace, "workspace latest", 401, 0xc82b5b0fb748dfdd);
+    assert_report_case_id_set(&workspace, "workspace latest", 401, 0x523d28514fcde0bd);
 
     let oxide_device = persisted_report_json("benchmarks/oxide-device/latest.json");
     assert_report_case_id_set(&oxide_device, "oxide device latest", 23, 0x80168fb31ce042ff);
@@ -5058,7 +5058,7 @@ fn filtered_run_suite_supports_rendering_architecture_contract() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env(
             "OXIDE_PERF_RUNNER_FILTER",
-            "cpu.architecture.retained.depth_16.clean,cpu.architecture.retained.cache_pressure,cpu.architecture.animation.surface_300,cpu.architecture.idle.static_foreground",
+            "cpu.architecture.retained.depth_16.clean,cpu.architecture.retained.cache_pressure,cpu.architecture.animation.surface_hit_test_300,cpu.architecture.idle.static_foreground",
         )
         .arg("--run-suite")
         .arg("--smoke")
@@ -5076,7 +5076,7 @@ fn filtered_run_suite_supports_rendering_architecture_contract() {
     let retained = report_case_slice(&report, "cpu.architecture.retained.depth_16.clean");
     let hot = report_case_slice(&report, "cpu.architecture.retained.cache_pressure.hot_reuse");
     let churn = report_case_slice(&report, "cpu.architecture.retained.cache_pressure.one_use_churn");
-    let animation = report_case_slice(&report, "cpu.architecture.animation.surface_300");
+    let animation = report_case_slice(&report, "cpu.architecture.animation.surface_hit_test_300");
     let idle = report_case_slice(&report, "cpu.architecture.idle.static_foreground");
     for row in [retained, hot, churn, animation, idle] {
         assert!(row.contains("\"family\": \"architecture\""));
@@ -5143,7 +5143,7 @@ fn dynamic_property_animation_has_a_public_authoring_contract()
    let mut json_out = std::env::temp_dir();
    json_out.push(format!("oxide-perf-runner-dynamic-authoring-{}.json", std::process::id()));
    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.animation.dynamic_properties_300")
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.animation.dynamic_properties_hit_test_300")
       .arg("--run-suite")
       .arg("--smoke")
       .arg("--json-out")
@@ -5153,10 +5153,11 @@ fn dynamic_property_animation_has_a_public_authoring_contract()
    let stderr = String::from_utf8_lossy(&output.stderr);
    assert!(output.status.success(), "dynamic property authoring row failed: {stderr}");
    let report = std::fs::read_to_string(&json_out).expect("read dynamic property authoring report");
-   let row = report_case_slice(&report, "cpu.authoring.animation.dynamic_properties_300");
+   let row = report_case_slice(&report, "cpu.authoring.animation.dynamic_properties_hit_test_300");
    assert!(row.contains("\"family\": \"authoring\""));
    assert!(row.contains("\"scenario\": \"authoring\""));
    assert_eq!(report_f64(row, "animated_nodes"), 300.0);
+   assert_eq!(report_f64(row, "hit_test_geometry_nodes"), 300.0);
    assert_eq!(report_f64(row, "chunks_rebuilt_avg"), 0.0);
    assert_eq!(report_f64(row, "sequences_rebuilt_avg"), 0.0);
    assert_eq!(report_f64(row, "command_bytes_copied_avg"), 0.0);

@@ -239,7 +239,7 @@ introduced_date = "2026-07-14"
 expires = "2027-07-14"
 required_backends = ["oxide-ui-core", "oxide-renderer-api", "oxide-renderer-metal", "oxide-perf-runner"]
 required_devices = ["Apple M2 Max CPU and Metal"]
-correctness_gate = "The real Cut/Copy/Select All/Paste popover must preserve the existing fontdue glyph coverage and geometry exactly; text-field, picker, selection/caret, fallback, IME marked-text, accessibility, retained-text, atlas lifecycle, and fail-closed tests must pass with no production solid-alpha-run fallback."
+correctness_gate = "The real Cut/Copy/Select All/Paste popover must preserve the existing fontdue glyph coverage and geometry exactly; text-field, picker, selection/caret, fallback, IME marked-text, retained-text, atlas lifecycle, and fail-closed tests must pass with no production solid-alpha-run fallback."
 performance_gate = "Fifteen fixed-seed balanced fresh-process pairs and 100,000 bootstrap resamples must improve warm popover CPU time by at least 5% with confidence, pair-win, p95, p99, and peak gates; a tiled eight-popover Metal stress must pass the same GPU gates with at least 2,000 completed timestamps per side; four labels must move from 2,108 label solids and four render-mutex locks to four GlyphRuns, zero label solids, zero render locks, zero warm atlas uploads, and zero measured-loop allocations."
 decision_state = "accepted"
 decision = "Moved deterministic bitmap-overlay rendering into a caller-owned fontdue A8 atlas with reusable layout and geometry scratch, routed text-option labels through one GlyphRun each, and deleted the production per-alpha-run solid renderer and its fallback APIs."
@@ -249,7 +249,7 @@ proof = [
    "The final implementation-source eight-popover Metal population retained 2,100 completed command-buffer timestamps per side: parent/candidate p50 0.335500/0.039333 ms, p95 0.340125/0.040583 ms, p99 0.342042/0.041459 ms, and peak 0.346750/0.067625 ms.",
    "Metal paired median speedup was 88.259% with 95% CI 66.720%..88.354% and 15/15 pair wins; commands/draws per frame fell from 16,920/16,896 to 88/40.",
    "The real popover command contract moved from 2,115 commands, 2,108 label solids, four render locks, 16 allocations, 3,286 allocated bytes, and three reallocations per operation to 11 commands, four GlyphRuns, zero label solids/locks/allocations/reallocations, and zero warm atlas uploads.",
-   "An independent test rasterizes the four labels with the unchanged Asap Bold fontdue contract and matches every candidate A8 atlas byte plus glyph-quad origin and extent exactly; the complete ui-core suite covers the required text, picker, IME, fallback, caret, and accessibility paths.",
+   "An independent test rasterizes the four labels with the unchanged Asap Bold fontdue contract and matches every candidate A8 atlas byte plus glyph-quad origin and extent exactly; the complete ui-core suite covers the required text, picker, IME, fallback, and caret paths.",
 ]
 cleanup = [
    "Removed production font8x8 drawing, fontdue alpha-run solids, global-mutex rendering, all bitmap-solid fallback entry points, and the redundant post-atlas raster-byte cache; font8x8 remains dev-only for the independent diagnostic reference.",
@@ -963,14 +963,14 @@ introduced_date = "2026-07-13"
 expires = "2027-07-13"
 required_backends = ["oxide-ui-core", "oxide-renderer-api", "oxide-renderer-metal", "oxide-renderer-web", "oxide-host-web", "oxide-perf-runner"]
 required_devices = ["Apple M2 Max Metal", "Chrome WebGPU over ANGLE Metal"]
-correctness_gate = "Nested affine transforms, opacity, clips, retained output, hit testing, accessibility frames, interruption, completion, generation reuse, stale IDs, physical property-ring reuse, and the unchanged static WebGPU bundle boundary must remain exact."
+correctness_gate = "Nested affine transforms, opacity, clips, retained output, hit testing, interruption, completion, generation reuse, stale IDs, physical property-ring reuse, and the unchanged static WebGPU bundle boundary must remain exact."
 performance_gate = "Fifteen balanced fresh-process CPU pairs must materially improve the shared 300-node animation case; 15 user-interactive-QoS Metal pairs with 15,000 samples per side after 128 warmup frames must protect encode, event-to-submit, and direct-GPU p50/p95/p99/peak; every candidate frame must reuse all 300 prepared chunks, upload zero geometry, update exactly 300 48-byte property records, and miss zero 120 Hz deadlines; real Chrome must reproduce the zero-geometry contract."
 decision_state = "accepted"
 decision = "Keep retained geometry node-local and patch animation through stable generation-checked transform/opacity slots, dense animator overrides, and separate completion-protected Metal/WebGPU property rings."
 proof = [
    "The final exact-tree CPU, Metal encode, Metal event-to-submit, and Metal GPU reports under benchmarks/experiments/c26-dynamic-property-slots/raw retain the parent/candidate tree, binary, instrumentation, raw sample, paired-order, and strict decision identities.",
    "The 300-node candidate contract reports 300 prepared-cache hits, zero misses, zero command traversal, zero geometry copy/upload, exactly 300 property records and 14,400 property bytes per measured frame, and zero missed 120 Hz deadlines; the real Chrome WebGPU guard independently reproduces the zero-geometry boundary.",
-   "Focused Rust tests preserve nested transform/clip/opacity composition, retained equivalence, hit-test and accessibility geometry, animation interruption/completion, dense slot generation reuse, backend completion safety, and static WebGPU aggregate-bundle replay.",
+   "Focused Rust tests preserve nested transform/clip/opacity composition, retained equivalence, hit-test geometry, animation interruption/completion, dense slot generation reuse, backend completion safety, and static WebGPU aggregate-bundle replay.",
 ]
 cleanup = [
    "Removed the animation-override retained bypass, per-frame BTreeMap rebuild, repeated finished-animation Vec removal, geometry-baked animation transforms, and dynamic values stored in the immutable geometry upload path.",

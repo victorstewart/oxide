@@ -62,6 +62,12 @@ Oxide and UIKit cases must share the same:
 
 Faster is invalid if it silently renders fewer pixels, weaker effects, or lower-quality text.
 
+## Unsupported Accessibility
+
+Accessibility is intentionally outside the Oxide product and comparison contract. Do not add OS accessibility trees, VoiceOver behavior, accessibility metadata, roles/actions, dynamic-type policy, parity workloads, admission gates, report metrics, or optimization constraints.
+
+Do not add platform accessibility or automation identifiers to new benchmark code. Use app/window queries, raw coordinates, and non-accessibility lifecycle signals instead. Existing identifier-based harness controls are cleanup candidates and must not expand. Released accessibility-named API slots may remain for compatibility, but they are not benchmark workloads and new cases must not depend on them.
+
 ## Shared Phases
 
 Use the same phase names whenever the workload exposes them:

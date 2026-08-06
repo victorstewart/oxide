@@ -42,6 +42,7 @@
 - Fallback logging for text, key, and push payloads validates null/length pairs before constructing slices; a null pointer with zero length is treated as an empty payload.
 - Renderer and app lifecycle behavior remains unchanged by callback hardening.
 - The drawable-backed iOS path now mirrors macOS: prepare Rust frame work first, acquire `nextDrawable` late with timeout enabled in Objective-C or the Swift perf runtime, then submit the prepared frame to Metal or cancel it if no drawable is returned.
+- The host exposes no platform motion-preference state, control, or ABI; authored Oxide animation durations pass through unchanged.
 - Compile-time layout assertions freeze `OxideHostStats` and the private camera perf/contract snapshot mirrors so benchmark out-parameters cannot silently drift from their native or Swift consumers.
 
 ## Preconditions and postconditions
@@ -84,6 +85,7 @@ oxide_host_emit_touch(10, 0, 1.0, 2.0, 0.5, 1, 0.0, 0.0, 0, 0, 100);
 ```
 
 ## Changelog
+- 2026-08-06: removed the product motion toggle and the obsolete motion-preference host state and ABI.
 - 2026-07-14: purged immutable ID-mask raster/JFA fields on critical memory pressure.
 - 2026-07-14: routed critical memory warnings through the production retained-layer storage purge before requesting the rebuild frame.
 - 2026-07-13: purged byte-budgeted prepared Metal chunks alongside effect targets on critical memory pressure.

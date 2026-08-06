@@ -183,17 +183,3 @@ fn starting_animation_replaces_previous_prop() {
     anim::cancel(id2);
     assert_eq!(testing::active_anims(), 0);
 }
-
-#[test]
-fn reduce_motion_zeroes_duration() {
-    let _guard = TEST_LOCK.lock().unwrap();
-    testing::reset();
-    oxide_timing::set_reduce_motion(true);
-    let id = anim::start(&sample_anim(3));
-    let stored = testing::anim_desc(id).expect("anim stored");
-    assert_eq!(stored.duration_ms, 0);
-    assert_eq!(stored.delay_ms, 0);
-    oxide_timing::set_reduce_motion(false);
-    anim::cancel(id);
-    assert_eq!(testing::active_anims(), 0);
-}

@@ -2,7 +2,7 @@
 
 ## Intention and purpose
 - Verify iOS host callback bridge behavior without launching UIKit.
-- Keep callback registration, callback fanout, fallback null handling, overlay state, and reduce-motion state covered through exported Rust host APIs.
+- Keep callback registration, callback fanout, fallback null handling, and overlay state covered through exported Rust host APIs.
 
 ## Relation to the rest of the code
 - Exercises the callback bridge entry points in `oxide-host-ios/src/lib.rs`.
@@ -24,8 +24,6 @@
   Verifies keyboard shown/hidden callback forwarding.
 - `overlay_toggle_succeeds_without_router()`
   Verifies overlay state can be toggled without an initialized router.
-- `reduce_motion_toggle_succeeds_without_router()`
-  Verifies reduce-motion state can be toggled without an initialized router.
 
 ## Logic narrative
 - The tests install one callback family at a time, emit a host event, assert the recorded payload, then unregister callbacks.
@@ -40,7 +38,7 @@
 ## Edge cases and failure modes
 - Null payload plus zero length is accepted in fallback paths.
 - Registered callbacks receive the original raw pointers and lengths so native ownership semantics are unchanged.
-- Overlay and reduce-motion tests start from `oxide_host_app_shutdown()` to avoid depending on router initialization.
+- Overlay tests start from `oxide_host_app_shutdown()` to avoid depending on router initialization.
 
 ## Concurrency and memory behavior
 - Test observation state is protected by mutexes or atomics.
@@ -63,4 +61,5 @@ oxide_host_emit_perm(4, 2);
 ```
 
 ## Changelog
+- 2026-08-06: removed the obsolete platform motion-preference ABI test.
 - 2026-05-19: added permission/input callback coverage and null/empty fallback payload coverage.

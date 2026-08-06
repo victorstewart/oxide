@@ -517,8 +517,6 @@ uint32_t oxide_host_current_scene(void);
 int32_t oxide_host_set_scene(uint32_t idx);
 uint8_t oxide_host_is_overlay_visible(void);
 int32_t oxide_host_set_overlay_visible(uint8_t on);
-uint8_t oxide_host_is_reduce_motion(void);
-int32_t oxide_host_set_reduce_motion(uint8_t on);
 void oxide_host_app_did_enter_background(void);
 void oxide_host_app_will_enter_foreground(void);
 void oxide_host_app_will_terminate(void);
@@ -1284,7 +1282,7 @@ static int DeviceMaxFPS(void) {
 }
 
 static int CurrentTargetFPS(void) {
-  return oxide_host_is_reduce_motion() ? 60 : DeviceMaxFPS();
+  return DeviceMaxFPS();
 }
 
 static void dispatch_on_main(void (^block)(void)) {
@@ -2976,9 +2974,6 @@ int32_t oxide_host_thermal_state(void) {
   self.multipleTouchEnabled = YES;
   self.opaque = YES;
   self.backgroundColor = [UIColor whiteColor];
-  self.isAccessibilityElement = YES;
-  self.accessibilityIdentifier = @"metalView";
-  self.accessibilityLabel = @"Oxide Metal View";
   self.keyboardType = UIKeyboardTypeDefault;
   self.textContentType = nil;
   self.autocorrectionType = UITextAutocorrectionTypeDefault;
@@ -3163,9 +3158,6 @@ int32_t oxide_host_thermal_state(void) {
 
 - (BOOL)canBecomeFirstResponder {
   return YES;
-}
-- (NSString *)accessibilityValue {
-  return @"";
 }
 - (BOOL)hasText {
   return NO;
@@ -3487,7 +3479,6 @@ int32_t oxide_host_thermal_state(void) {
 @property(nonatomic) NSUInteger fpsCount;
 @property(nonatomic, strong) UISegmentedControl *sceneControl;
 @property(nonatomic, strong) UISwitch *overlaySwitch;
-@property(nonatomic, strong) UISwitch *reduceSwitch;
 @property(nonatomic, strong) UISwitch *camBlurSwitch;
 @property(nonatomic, strong) UISwitch *camGraySwitch;
 @property(nonatomic, strong) UISwitch *camAnimSwitch;
@@ -3548,7 +3539,6 @@ int32_t oxide_host_thermal_state(void) {
 @property(nonatomic, strong) id<UIWindowSceneDelegate> parkedPerfSceneDelegate;
 - (IBAction)sceneChanged:(UISegmentedControl *)control;
 - (IBAction)onOverlaySwitch:(UISwitch *)sw;
-- (IBAction)onReduceMotionSwitch:(UISwitch *)sw;
 - (void)updateDisplayLinkRange;
 - (IBAction)onCamBlur:(UISwitch *)sw;
 - (IBAction)onCamGray:(UISwitch *)sw;
@@ -3624,8 +3614,6 @@ static NSString *const kOxidePerfReadyNotification = @"com.oxide.perf.ready";
 static NSString *const kOxidePerfCompleteNotification =
     @"com.oxide.perf.complete";
 static NSString *const kOxidePerfFailedNotification = @"com.oxide.perf.failed";
-static NSString *const kOxidePerfBenchmarkStateLabelIdentifier =
-    @"perfCameraBenchmarkStateLabel";
 static NSString *const kOxidePerfCameraContractSummaryPrefix =
     @"OXIDE_CAMERA_CONTRACT_SUMMARY ";
 static NSString *const kOxidePerfAppHostDebugSummaryPrefix =
@@ -3824,8 +3812,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
     return;
   }
   label.text = state ?: @"";
-  label.accessibilityLabel = state ?: @"";
-  label.accessibilityValue = state ?: @"";
 }
 
 - (void)installPerfBenchmarkStateLabelIfNeededInView:(UIView *)parentView {
@@ -3838,9 +3824,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   }
   UILabel *benchmarkLabel = [UILabel new];
   benchmarkLabel.translatesAutoresizingMaskIntoConstraints = NO;
-  benchmarkLabel.accessibilityIdentifier =
-      kOxidePerfBenchmarkStateLabelIdentifier;
-  benchmarkLabel.isAccessibilityElement = YES;
   benchmarkLabel.hidden = NO;
   benchmarkLabel.alpha = 1.0;
   benchmarkLabel.textColor = [UIColor blackColor];
@@ -4635,14 +4618,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   }
 }
 
-- (IBAction)onReduceMotionSwitch:(UISwitch *)sw {
-  uint8_t desired = sw.isOn ? 1 : 0;
-  if (oxide_host_set_reduce_motion(desired) != 0) {
-    [sw setOn:!sw.isOn animated:NO];
-  }
-  [self updateDisplayLinkRange];
-}
-
 - (void)pushImeStatus:(NSString *)message {
   if (!message) {
     return;
@@ -5170,7 +5145,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
                   action:@selector(sceneChanged:)
         forControlEvents:UIControlEventValueChanged];
   }
-  seg.accessibilityIdentifier = @"sceneControl";
   self.sceneControl = seg;
 
   UILabel *overlayLabel = [UILabel new];
@@ -5181,29 +5155,12 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [overlaySwitch addTarget:self
                     action:@selector(onOverlaySwitch:)
           forControlEvents:UIControlEventValueChanged];
-  overlaySwitch.accessibilityIdentifier = @"overlaySwitch";
   self.overlaySwitch = overlaySwitch;
-
-  UILabel *reduceLabel = [UILabel new];
-  reduceLabel.text = @"Reduce Motion";
-  reduceLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightRegular];
-  UISwitch *reduceSwitch = [UISwitch new];
-  reduceSwitch.on = NO;
-  [reduceSwitch addTarget:self
-                   action:@selector(onReduceMotionSwitch:)
-         forControlEvents:UIControlEventValueChanged];
-  reduceSwitch.accessibilityIdentifier = @"reduceMotionSwitch";
-  self.reduceSwitch = reduceSwitch;
 
   UIStackView *overlayRow = [[UIStackView alloc]
       initWithArrangedSubviews:@[ overlayLabel, overlaySwitch ]];
   overlayRow.axis = UILayoutConstraintAxisHorizontal;
   overlayRow.spacing = 6.0;
-
-  UIStackView *reduceRow = [[UIStackView alloc]
-      initWithArrangedSubviews:@[ reduceLabel, reduceSwitch ]];
-  reduceRow.axis = UILayoutConstraintAxisHorizontal;
-  reduceRow.spacing = 6.0;
 
   UILabel *inputLabel = [UILabel new];
   inputLabel.text = @"IME Text";
@@ -5214,7 +5171,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   imeView.layer.borderWidth = 1.0;
   imeView.layer.borderColor = [UIColor colorWithWhite:0.8 alpha:1.0].CGColor;
   imeView.layer.cornerRadius = 4.0;
-  imeView.accessibilityIdentifier = @"imeTextView";
   imeView.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.95];
   imeView.text = @"";
   imeView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -5223,35 +5179,30 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 
   UIButton *imeFocus = [UIButton buttonWithType:UIButtonTypeSystem];
   [imeFocus setTitle:@"Focus" forState:UIControlStateNormal];
-  imeFocus.accessibilityIdentifier = @"imeFocusButton";
   [imeFocus addTarget:self
                 action:@selector(onImeFocus:)
       forControlEvents:UIControlEventTouchUpInside];
 
   UIButton *imeBlur = [UIButton buttonWithType:UIButtonTypeSystem];
   [imeBlur setTitle:@"Blur" forState:UIControlStateNormal];
-  imeBlur.accessibilityIdentifier = @"imeBlurButton";
   [imeBlur addTarget:self
                 action:@selector(onImeBlur:)
       forControlEvents:UIControlEventTouchUpInside];
 
   UIButton *imeCopy = [UIButton buttonWithType:UIButtonTypeSystem];
   [imeCopy setTitle:@"Copy" forState:UIControlStateNormal];
-  imeCopy.accessibilityIdentifier = @"imeCopyButton";
   [imeCopy addTarget:self
                 action:@selector(onImeCopy:)
       forControlEvents:UIControlEventTouchUpInside];
 
   UIButton *imePaste = [UIButton buttonWithType:UIButtonTypeSystem];
   [imePaste setTitle:@"Paste" forState:UIControlStateNormal];
-  imePaste.accessibilityIdentifier = @"imePasteButton";
   [imePaste addTarget:self
                 action:@selector(onImePaste:)
       forControlEvents:UIControlEventTouchUpInside];
 
   UIButton *imeHaptic = [UIButton buttonWithType:UIButtonTypeSystem];
   [imeHaptic setTitle:@"Haptic" forState:UIControlStateNormal];
-  imeHaptic.accessibilityIdentifier = @"imeHapticButton";
   [imeHaptic addTarget:self
                 action:@selector(onImeHaptic:)
       forControlEvents:UIControlEventTouchUpInside];
@@ -5276,7 +5227,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [animPlay addTarget:self
                 action:@selector(onAnimPlay:)
       forControlEvents:UIControlEventValueChanged];
-  animPlay.accessibilityIdentifier = @"animationPlaySwitch";
   self.animPlaySwitch = animPlay;
 
   UILabel *animPhaseLabel = [UILabel new];
@@ -5289,7 +5239,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [animPhase addTarget:self
                 action:@selector(onAnimPhase:)
       forControlEvents:UIControlEventValueChanged];
-  animPhase.accessibilityIdentifier = @"animationPhaseSlider";
   self.animPhaseSlider = animPhase;
 
   UIStackView *animRow1 = [[UIStackView alloc]
@@ -5310,7 +5259,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [damageSwitch addTarget:self
                    action:@selector(onDamageEnable:)
          forControlEvents:UIControlEventValueChanged];
-  damageSwitch.accessibilityIdentifier = @"damageEnableSwitch";
   self.damageEnableSwitch = damageSwitch;
 
   UILabel *damageUseLabel = [UILabel new];
@@ -5323,7 +5271,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [damageUse addTarget:self
                 action:@selector(onDamageUse:)
       forControlEvents:UIControlEventValueChanged];
-  damageUse.accessibilityIdentifier = @"damageUseSlider";
   self.damageUseSlider = damageUse;
 
   UILabel *damagePrefLabel = [UILabel new];
@@ -5337,7 +5284,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [damagePref addTarget:self
                  action:@selector(onDamagePref:)
        forControlEvents:UIControlEventValueChanged];
-  damagePref.accessibilityIdentifier = @"damagePrefSlider";
   self.damagePrefSlider = damagePref;
 
   UIStackView *damageRow0 = [[UIStackView alloc]
@@ -5365,7 +5311,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [nineSlice addTarget:self
                 action:@selector(onNineSlice:)
       forControlEvents:UIControlEventValueChanged];
-  nineSlice.accessibilityIdentifier = @"nineSliceSlider";
   self.nineSliceSlider = nineSlice;
 
   UILabel *nineAlphaLabel = [UILabel new];
@@ -5378,7 +5323,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [nineAlpha addTarget:self
                 action:@selector(onNineAlpha:)
       forControlEvents:UIControlEventValueChanged];
-  nineAlpha.accessibilityIdentifier = @"nineAlphaSlider";
   self.nineAlphaSlider = nineAlpha;
 
   UIStackView *nineRow1 =
@@ -5401,7 +5345,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [sdfSlider addTarget:self
                 action:@selector(onSdfFont:)
       forControlEvents:UIControlEventValueChanged];
-  sdfSlider.accessibilityIdentifier = @"sdfFontSlider";
   self.sdfSlider = sdfSlider;
 
   UIStackView *sdfRow =
@@ -5411,7 +5354,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 
   UIButton *snapshotButton = [UIButton buttonWithType:UIButtonTypeSystem];
   [snapshotButton setTitle:@"Capture Snapshot" forState:UIControlStateNormal];
-  snapshotButton.accessibilityIdentifier = @"snapshotButton";
   [snapshotButton addTarget:self
                      action:@selector(onSnapshotButton:)
            forControlEvents:UIControlEventTouchUpInside];
@@ -5431,28 +5373,24 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [camBlur addTarget:self
                 action:@selector(onCamBlur:)
       forControlEvents:UIControlEventValueChanged];
-  camBlur.accessibilityIdentifier = @"cameraBlurSwitch";
   self.camBlurSwitch = camBlur;
   UISwitch *camGray = [UISwitch new];
   camGray.on = NO;
   [camGray addTarget:self
                 action:@selector(onCamGray:)
       forControlEvents:UIControlEventValueChanged];
-  camGray.accessibilityIdentifier = @"cameraGraySwitch";
   self.camGraySwitch = camGray;
   UISwitch *camAnim = [UISwitch new];
   camAnim.on = YES;
   [camAnim addTarget:self
                 action:@selector(onCamAnim:)
       forControlEvents:UIControlEventValueChanged];
-  camAnim.accessibilityIdentifier = @"cameraAnimateSwitch";
   self.camAnimSwitch = camAnim;
   UISwitch *camCapture = [UISwitch new];
   camCapture.on = YES;
   [camCapture addTarget:self
                  action:@selector(onCamCapture:)
        forControlEvents:UIControlEventValueChanged];
-  camCapture.accessibilityIdentifier = @"cameraCaptureSwitch";
   self.camCaptureSwitch = camCapture;
   UILabel *sigmaLbl = [UILabel new];
   sigmaLbl.text = @"Sigma";
@@ -5464,7 +5402,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [sigma addTarget:self
                 action:@selector(onCamSigma:)
       forControlEvents:UIControlEventValueChanged];
-  sigma.accessibilityIdentifier = @"cameraSigmaSlider";
   self.camSigmaSlider = sigma;
 
   UIStackView *camRow1 = [[UIStackView alloc] initWithArrangedSubviews:@[
@@ -5482,7 +5419,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   camMetrics.textColor = [UIColor colorWithWhite:0.15 alpha:1.0];
   camMetrics.numberOfLines = 2;
   camMetrics.text = @"Cam 0x0 bd=0 mx=709 rng=full cov=0% fps=0.0 paused=yes";
-  camMetrics.accessibilityIdentifier = @"cameraMetricsLabel";
   self.camMetricsLabel = camMetrics;
   UIStackView *camMetricsRow =
       [[UIStackView alloc] initWithArrangedSubviews:@[ camMetrics ]];
@@ -5490,7 +5426,7 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   camMetricsRow.spacing = 0.0;
 
   UIStackView *controls = [[UIStackView alloc] initWithArrangedSubviews:@[
-    seg, overlayRow, reduceRow, inputGroup, animRow1, animRow2, damageRow0,
+    seg, overlayRow, inputGroup, animRow1, animRow2, damageRow0,
     damageRow1, damageRow2, nineRow1, nineRow2, sdfRow, snapshotRow, camRow1,
     camRow2, camMetricsRow
   ]];
@@ -5516,7 +5452,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   status.textColor = [UIColor colorWithWhite:0.15 alpha:1.0];
   status.text = @"";
   status.numberOfLines = 2;
-  status.accessibilityIdentifier = @"statusLabel";
   [vc.view addSubview:status];
   [NSLayoutConstraint activateConstraints:@[
     [status.topAnchor constraintEqualToAnchor:controls.bottomAnchor
@@ -5609,7 +5544,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
     EnsureHostInitialized(gMetalView);
     [self configureActualAppCameraBenchmarkIfNeeded];
     self.overlaySwitch.on = oxide_host_is_overlay_visible() != 0;
-    self.reduceSwitch.on = oxide_host_is_reduce_motion() != 0;
     [self updateDisplayLinkRange];
     [self updateDisplayLinkDemandState];
   } else {

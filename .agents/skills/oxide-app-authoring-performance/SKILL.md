@@ -1,6 +1,6 @@
 ---
 name: oxide-app-authoring-performance
-description: "Use when building, reviewing, or optimizing applications, demos, examples, documentation, or sample UI code that uses Oxide as a library without modifying Oxide internals. Covers UI tree shape, state updates, layout invalidation, lists, text, images, animation, Scene3D usage, input latency, accessibility, and app-level performance discipline."
+description: "Use when building, reviewing, or optimizing applications, demos, examples, documentation, or sample UI code that uses Oxide as a library without modifying Oxide internals. Covers UI tree shape, state updates, layout invalidation, lists, text, images, animation, Scene3D usage, input latency, and app-level performance discipline."
 ---
 
 # Oxide App Authoring Performance Skill
@@ -204,7 +204,7 @@ Prefer:
 - Animating the smallest subtree that visually changes.
 - Keeping animation clocks deterministic and frame-rate independent.
 - Coalescing multiple animation state updates per frame.
-- Respecting reduce-motion or accessibility preferences when the app exposes them.
+- Respecting an app's explicitly supported motion preferences.
 - Measuring hitch ratio and p95/p99 frame time, not only mean FPS.
 
 Avoid:
@@ -223,7 +223,7 @@ Prefer:
 - Stable gesture state owned by Rust/Oxide app code.
 - Small state updates on pointer/touch movement.
 - Preserving raw input timing and identity when building custom interactions.
-- Testing real host input paths for touch, pointer, scroll wheel/trackpad, keyboard, IME, and accessibility actions.
+- Testing real host input paths for touch, pointer, scroll wheel/trackpad, keyboard, and IME.
 - Measuring event-to-visible-response for latency-sensitive surfaces.
 
 Avoid:
@@ -253,19 +253,20 @@ Avoid:
 - Full-screen post effects under translucent UI without a strong reason.
 - Hidden 3D scenes that continue rendering.
 
-## Accessibility and correctness
+## Correctness
 
 Performance optimizations must preserve correctness.
 
 Keep:
 
-- Accessibility labels, roles, focus order, actions, and hit regions aligned with visual UI.
 - Keyboard navigation and IME composition behavior for text entry.
-- Dynamic text/font scaling support where the app promises it.
-- Reduced motion and high-contrast behavior where supported.
+- Text/font scaling behavior where the app explicitly promises it.
+- Motion and contrast behavior where explicitly supported.
 - Snapshot or manual evidence for visual changes.
 
-Never count a speedup as valid if it drops text correctness, hit testing, accessibility semantics, image quality, animation semantics, or input behavior.
+Oxide intentionally does not support OS accessibility trees or platform accessibility bridges. Never add accessibility roles, actions, authoring requirements, benchmark gates, or new platform accessibility/automation identifiers. Prefer app/window queries, raw coordinates, and non-accessibility lifecycle signals in harnesses.
+
+Never count a speedup as valid if it drops text correctness, hit testing, image quality, animation semantics, or input behavior.
 
 ## App-level benchmarking policy
 
@@ -307,7 +308,6 @@ Before considering app authoring work complete, answer:
 - Does any animation force layout unnecessarily?
 - Are expensive effects scoped to small regions?
 - Is input latency preserved?
-- Are accessibility semantics still correct?
 - Is there a benchmark, snapshot, device run, or manual evidence for the user-visible path?
 - Did the work avoid changing Oxide internals? If not, was `$oxide-internals-performance` used?
 

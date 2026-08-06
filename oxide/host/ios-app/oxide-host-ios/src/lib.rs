@@ -1404,8 +1404,6 @@ struct AppState {
     last_stats: StatsSnapshot,
     window: WindowMetrics,
     space_down: bool,
-    reduce_motion_on: bool,
-    reduce_motion_dirty: bool,
     touch: PrimaryTouchTracker,
     memory_warnings: u32,
     overlay_visible: bool,
@@ -1454,8 +1452,6 @@ impl Default for AppState {
             last_stats: StatsSnapshot::default(),
             window: WindowMetrics::default(),
             space_down: false,
-            reduce_motion_on: false,
-            reduce_motion_dirty: false,
             touch: PrimaryTouchTracker::default(),
             memory_warnings: 0,
             overlay_visible: true,
@@ -1894,15 +1890,6 @@ pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_i
     }
     app.overlay_visible = desired_overlay;
     app.overlay_dirty = false;
-
-    let desired_reduce = if app.reduce_motion_dirty { app.reduce_motion_on } else { false };
-    if desired_reduce {
-        if let Some(router) = router.as_mut() {
-            router.set_reduce_motion(true);
-        }
-    }
-    app.reduce_motion_on = desired_reduce;
-    app.reduce_motion_dirty = false;
     app.snapshot_status.clear();
     app.camera_running = false;
     app.router = router;
@@ -2687,8 +2674,6 @@ pub extern "C" fn oxide_host_app_shutdown() {
         app.last_ms = 0;
         app.overlay_visible = true;
         app.overlay_dirty = false;
-        app.reduce_motion_on = false;
-        app.reduce_motion_dirty = false;
         app.space_down = false;
         app.camera_running = false;
         app.sensors = None;
@@ -2863,13 +2848,6 @@ extern "C" fn key_cb(
                             router.toggle_overlay();
                             app.overlay_visible = !app.overlay_visible;
                             app.overlay_dirty = false;
-                        }
-                    }
-                    'm' | 'M' => {
-                        if !is_up {
-                            app.reduce_motion_on = !app.reduce_motion_on;
-                            router.set_reduce_motion(app.reduce_motion_on);
-                            app.reduce_motion_dirty = false;
                         }
                     }
                     'z' | 'Z' => {
@@ -3421,31 +3399,6 @@ pub extern "C" fn oxide_host_set_overlay_visible(on: u8) -> ::libc::c_int {
 #[no_mangle]
 pub extern "C" fn oxide_host_is_overlay_visible() -> u8 {
     app_state().lock().map(|app| if app.overlay_visible { 1 } else { 0 }).unwrap_or(0)
-}
-
-#[no_mangle]
-pub extern "C" fn oxide_host_set_reduce_motion(on: u8) -> ::libc::c_int {
-    let desired = on != 0;
-    with_app_mut(|app| {
-        let prev = app.reduce_motion_on;
-        app.reduce_motion_on = desired;
-        if let Some(router) = app.router.as_mut() {
-            if prev != desired {
-                router.set_reduce_motion(desired);
-            }
-            app.reduce_motion_dirty = false;
-        } else if prev != desired {
-            app.reduce_motion_dirty = true;
-        }
-        mark_frame_dirty(app);
-        0
-    })
-    .unwrap_or(-1)
-}
-
-#[no_mangle]
-pub extern "C" fn oxide_host_is_reduce_motion() -> u8 {
-    app_state().lock().map(|app| if app.reduce_motion_on { 1 } else { 0 }).unwrap_or(0)
 }
 
 #[no_mangle]

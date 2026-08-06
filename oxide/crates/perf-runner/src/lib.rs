@@ -247,7 +247,7 @@ const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
         name: "Surface Retained Cache Policy",
     },
     AuthoringPerfSpec {
-        id: "cpu.authoring.animation.dynamic_properties_300",
+        id: "cpu.authoring.animation.dynamic_properties_hit_test_300",
         name: "Dynamic Property Animation",
     },
     AuthoringPerfSpec {
@@ -3335,7 +3335,7 @@ fn push_authoring_cases(
             "cpu.authoring.surface_retained.cache_policy" => {
                 authoring_surface_retained_cache_policy_case(smoke)
             }
-            "cpu.authoring.animation.dynamic_properties_300" => {
+            "cpu.authoring.animation.dynamic_properties_hit_test_300" => {
                 architecture_matrix::authoring_dynamic_property_surface_case(smoke)
             }
             "cpu.authoring.retained_snapshot.spatial_query_10000" => {

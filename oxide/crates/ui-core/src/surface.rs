@@ -905,13 +905,11 @@ impl UiSurface {
         match class {
             DirtyClass::Layout => {
                 self.tree.mark_layout_dirty(id);
-                self.dirty.mark(DirtyClass::Accessibility);
                 self.dirty.mark(DirtyClass::HitTest);
             }
             DirtyClass::Transform => {
                 self.tree.mark_subtree_draw_dirty(id);
                 self.dirty.mark(DirtyClass::Paint);
-                self.dirty.mark(DirtyClass::Accessibility);
                 self.dirty.mark(DirtyClass::HitTest);
             }
             DirtyClass::Clip => {
@@ -920,7 +918,6 @@ impl UiSurface {
             }
             DirtyClass::Text => {
                 self.tree.mark_node_and_ancestors_draw_dirty(id);
-                self.dirty.mark(DirtyClass::Accessibility);
             }
             DirtyClass::Style
             | DirtyClass::Paint
@@ -950,17 +947,14 @@ impl UiSurface {
         if style_change_affects_parent_layout(&before, &after) {
             self.tree.mark_layout_dirty(id);
             self.dirty.mark(DirtyClass::Layout);
-            self.dirty.mark(DirtyClass::Accessibility);
             self.dirty.mark(DirtyClass::HitTest);
         } else if style_change_affects_content_layout(&before, &after) {
             self.tree.mark_node_layout_dirty(id);
             self.dirty.mark(DirtyClass::Layout);
-            self.dirty.mark(DirtyClass::Accessibility);
             self.dirty.mark(DirtyClass::HitTest);
         }
         if transform_changed(&before, &after) {
             self.dirty.mark(DirtyClass::Transform);
-            self.dirty.mark(DirtyClass::Accessibility);
             self.dirty.mark(DirtyClass::HitTest);
             self.tree.mark_subtree_draw_dirty(id);
         }
@@ -996,7 +990,6 @@ impl UiSurface {
         self.dirty.mark(DirtyClass::Style);
         self.dirty.mark(DirtyClass::Layout);
         self.dirty.mark(DirtyClass::Paint);
-        self.dirty.mark(DirtyClass::Accessibility);
         self.dirty.mark(DirtyClass::HitTest);
         self.tree.mark_layout_dirty(self.tree.root());
         self.force_full_damage = true;
@@ -1007,7 +1000,6 @@ impl UiSurface {
         self.dirty.mark(DirtyClass::Style);
         self.dirty.mark(DirtyClass::Layout);
         self.dirty.mark(DirtyClass::Paint);
-        self.dirty.mark(DirtyClass::Accessibility);
         self.dirty.mark(DirtyClass::HitTest);
     }
 
@@ -1024,15 +1016,6 @@ impl UiSurface {
     }
 
     #[inline]
-    pub fn accessibility_frame(&self, id: NodeId) -> Option<gfx::RectF>
-    {
-       self.tree.accessibility_frame(
-          id,
-          (!self.animator.overrides().is_empty()).then_some(self.animator.overrides()),
-       )
-    }
-
-    #[inline]
     pub fn chrome_metrics(&self) -> ChromeMetrics {
         self.chrome
     }
@@ -1044,7 +1027,6 @@ impl UiSurface {
         self.chrome = metrics;
         self.dirty.mark(DirtyClass::Layout);
         self.dirty.mark(DirtyClass::Paint);
-        self.dirty.mark(DirtyClass::Accessibility);
         self.dirty.mark(DirtyClass::HitTest);
     }
 
@@ -1067,7 +1049,6 @@ impl UiSurface {
             style.padding.bottom = self.chrome.safe_insets.bottom;
             self.dirty.mark(DirtyClass::Layout);
             self.dirty.mark(DirtyClass::Paint);
-            self.dirty.mark(DirtyClass::Accessibility);
             self.dirty.mark(DirtyClass::HitTest);
         }
     }
@@ -1105,7 +1086,6 @@ impl UiSurface {
             self.last_layout_stats = LayoutStats::default();
             self.dirty.clear(DirtyClass::Layout);
             self.dirty.mark(DirtyClass::Paint);
-            self.dirty.mark(DirtyClass::Accessibility);
             self.dirty.mark(DirtyClass::HitTest);
             true
         } else {
@@ -1415,7 +1395,6 @@ impl UiSurface {
         if changed {
             self.dirty.mark(DirtyClass::Transform);
             self.dirty.mark(DirtyClass::Opacity);
-            self.dirty.mark(DirtyClass::Accessibility);
             self.dirty.mark(DirtyClass::HitTest);
             for node in self.animator.overrides().paint_changed_nodes().iter().copied()
             {

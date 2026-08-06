@@ -38,7 +38,7 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       }
    }
 
-   push_if_allowed(cases, "cpu.architecture.animation.surface_300", || animation_surface_case(smoke));
+   push_if_allowed(cases, "cpu.architecture.animation.surface_hit_test_300", || animation_surface_case(smoke));
    push_if_allowed(cases, "cpu.architecture.spatial_metadata.glyph_mesh_10000", || {
       retained_spatial_query_case("cpu.architecture.spatial_metadata.glyph_mesh_10000", smoke)
    });
@@ -1989,12 +1989,12 @@ fn retained_mixed_sequences() -> Vec<api::RenderChunkSequence>
 
 fn animation_surface_case(smoke: bool) -> PerfCaseResult
 {
-   dynamic_property_surface_case("cpu.architecture.animation.surface_300", "architecture", smoke)
+   dynamic_property_surface_case("cpu.architecture.animation.surface_hit_test_300", "architecture", smoke)
 }
 
 pub(super) fn authoring_dynamic_property_surface_case(smoke: bool) -> PerfCaseResult
 {
-   dynamic_property_surface_case("cpu.authoring.animation.dynamic_properties_300", "authoring", smoke)
+   dynamic_property_surface_case("cpu.authoring.animation.dynamic_properties_hit_test_300", "authoring", smoke)
 }
 
 fn dynamic_property_surface_case(id: &str, family: &str, smoke: bool) -> PerfCaseResult
@@ -2066,12 +2066,11 @@ fn dynamic_property_surface_case(id: &str, family: &str, smoke: bool) -> PerfCas
       0.20,
       1,
       vec![String::from(
-         "Real 300-node UiSurface animation with Animator overrides, nested clips/opacity, transforms, retained encoding, hit testing, and accessibility dirtiness.",
+         "Real 300-node UiSurface animation with Animator overrides, nested clips/opacity, transforms, retained encoding, and hit testing.",
       )],
       || {
          frame = frame.wrapping_add(1);
          surface.tick_at(start.saturating_add(frame * 8));
-         let _ = surface.mark_node_dirty(nodes[frame as usize % nodes.len()], ui::DirtyClass::Accessibility);
          let rendered = surface.render_snapshot_retained(
             api::RenderChunkId(10),
             &mixed_sequences,
@@ -2098,7 +2097,7 @@ fn dynamic_property_surface_case(id: &str, family: &str, smoke: bool) -> PerfCas
    case.metrics.insert(String::from("animated_nodes"), 300.0);
    case.metrics.insert(String::from("active_animations"), 600.0);
    case.metrics.insert(String::from("hit_tests_per_op"), 1.0);
-   case.metrics.insert(String::from("accessibility_geometry_nodes"), 300.0);
+   case.metrics.insert(String::from("hit_test_geometry_nodes"), 300.0);
    case.metrics.insert(String::from("label_nodes"), 200.0);
    case.metrics.insert(String::from("image_nodes"), 100.0);
    let operations = operations.max(1) as f64;

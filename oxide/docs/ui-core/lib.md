@@ -65,15 +65,15 @@
 - `UiSurface::remove_node`
   Removes a non-root node through the surface-owned mutation path, detaching from the known parent and keeping clean sibling branches eligible for layout skip and retained replay.
 - `UiSurface::mark_node_dirty`
-  Marks one node with a dirty class so content-only text/image/camera updates can rebuild the affected retained path, while accessibility/hit-test metadata updates keep renderer-facing draw caches intact.
+  Marks one node with a dirty class so content-only text/image/camera updates can rebuild the affected retained path, while hit-test metadata updates keep renderer-facing draw caches intact. The released `DirtyClass::Accessibility` value is inert and reserved only for compatibility.
 - `RetainedCachePolicy`
   Configures hard logical CPU and future prepared-GPU retained-byte budgets, recent-hit protection, and optional repeated-invalidation suppression.
 - `NodeTree::retained_cache_policy` / `NodeTree::set_retained_cache_policy`
   Reads or replaces the tree-owned retained-cache policy; reducing the CPU budget evicts immediately through the same generation-aware LRU used after rendering.
 - `UiSurface::retained_cache_policy` / `UiSurface::set_retained_cache_policy`
   Exposes the same policy at the public surface boundary and clears an incompatible whole-snapshot cache after a policy change.
-- `UiSurface::tick_at` / `UiSurface::accessibility_frame`
-  Advance animator-owned dense overrides and query the same fully composed affine geometry used for retained rendering and hit testing.
+- `UiSurface::tick_at`
+  Advances animator-owned dense overrides used by retained rendering and hit testing.
 - `AnimOverrideSlots`
   Stores node-indexed transform, opacity, and paint overrides with retained capacity plus exact changed/paint-changed lists.
 - `RetainedNodeStats`
@@ -142,13 +142,13 @@
 - Text-input filtering, secure masking, and legacy editable backspace now count grapheme clusters instead of Unicode scalar values.
 - `UiSurface::encode_retained` now tracks bounded, replay-safe retained draw lists per `NodeTree` node so dirty leaf paint/style changes rebuild the leaf and ancestors while replaying clean sibling subtrees.
 - `NodeTree` assigns every live node stable generation-checked transform and opacity slots, keeps chunks in node-local coordinates, and emits complete nested affine/cumulative-opacity values without invalidating geometry.
-- Ancestor clip changes rebuild descendant instance metadata only; transform/opacity animation changes snapshot properties only. Hit testing and accessibility frames use the identical nested transform composition.
+- Ancestor clip changes rebuild descendant instance metadata only; transform/opacity animation changes snapshot properties only. Hit testing uses the identical nested transform composition.
 - Retained node chunks and persistent sequence metadata are governed by exact logical-byte accounting instead of an item-count cutoff. Eviction removes the selected chunk and every ancestor sequence that indirectly references it before the next render.
 - The cache uses intrusive LRU links in existing nodes, generation windows, and cumulative hit counts to prefer cold eviction without allocating an auxiliary map or queue. Optional invalidation-streak suppression is explicit because enabling it by default regressed ordinary dirty-leaf rendering.
 - A zero CPU budget takes a direct one-chunk UI rebuild path. It retains no node-cache bytes, leaves caller-owned text/image sequences untouched, and prevents one-use trees from constructing thousands of persistent node/path allocations.
 - `UiSurface::edit_style` lets paint-only authoring changes dirty retained draw state without forcing a same-size layout pass.
 - `UiSurface::mark_node_dirty` keeps text/image/camera content dirtiness node-scoped, avoiding full-surface retained invalidation when layout and hit-test geometry are unchanged.
-- `UiSurface::mark_node_dirty` treats accessibility-only and hit-test-only dirtiness as non-draw metadata updates, preserving clean retained draw-list reuse.
+- `UiSurface::mark_node_dirty` treats hit-test-only dirtiness as a non-draw metadata update, preserving clean retained draw-list reuse. The compatibility-reserved `DirtyClass::Accessibility` value is an inert no-op.
 - `ImageView::encode` uses aspect cross-products on the no-zoom contain/cover path, avoiding redundant scale divisions while emitting bounded source-cropped image draws. Transformed views use the general fitted-rectangle intersection only when zoom or pan requires it.
 - `UiSurface::add_node` and `UiSurface::remove_node` cover common structural edits without falling back to `tree_mut()`'s whole-tree dirtiness. Existing direct `tree_mut()` access remains the conservative escape hatch.
 - `SurfaceRouter::encode_with_overlays` reuses retained draw lists for the current surface, overlays, and popups while keeping capture paths as fresh non-retained encodes for diagnostics.
@@ -186,7 +186,7 @@
 - `crates/ui-core/tests/elements_tests.rs` covers the live `TextCtx` retained atlas snapshot guard.
 - `crates/ui-core/tests/elements_tests.rs` covers text-input cache and atlas upload paths that consume cached shaped cursor maps, batched visible fallback-font label encoding, plus pointer cursor picking across combining, ZWJ, pure RTL, and configured fallback-font grapheme-cluster boundaries.
 - `crates/ui-core/tests/surface.rs` covers dirty leaf retained encoding, live `TextCtx` atlas context routing, clean sibling subtree replay through `RetainedNodeStats`, and retained current/overlay/popup router composition stats.
-- `crates/ui-core/tests/surface.rs` also covers 300-node zero-geometry animation, nested affine clip/hit/accessibility synchronization, and generation-safe slot reuse; `anim_prop.rs` covers dense compaction and interruption/completion.
+- `crates/ui-core/tests/surface.rs` also covers 300-node zero-geometry animation, nested affine clip/hit-test synchronization, and generation-safe slot reuse; `anim_prop.rs` covers dense compaction and interruption/completion.
 - `crates/ui-core/tests/surface.rs` also covers hard byte enforcement, exact output after eviction, hot-entry protection, explicit churn suppression/readmission, zero-budget direct fallback, and caller-owned text/image chunk identity.
 - `crates/ui-core/tests/surface.rs` covers layout dirty-subtree skipping, descendant-only layout traversal, opacity/clip paint-only dirty-class edits, node-scoped content dirty-class edits, and validates `LayoutStats` visit/skip/measurement counters.
 - `crates/ui-core/tests/surface.rs` also covers the mixed ancestor-layout plus descendant-dirty case where a stable child rect must not hide dirty grandchildren.
@@ -216,9 +216,10 @@ assert_eq!(text.value(), "");
 ```
 
 ## Changelog
+- 2026-08-06: removed the accessibility-frame API and active dirty-bit writes while retaining only the inert released dirty-class value.
 - 2026-07-14: hard-cut deterministic bitmap-overlay drawing to the explicit A8 `BitmapTextAtlas`/`GlyphRun` path and removed the production solid-alpha-run renderer.
 - 2026-07-14: added C43 frame-scoped text preparation, provisional glyph handles, merged atlas publication, opt-in text counters, and allocation coverage.
-- 2026-07-13: added C26 node-local retained geometry, generation-checked dynamic slots, complete nested affine/opacity composition, and synchronized hit/accessibility geometry.
+- 2026-07-13: added C26 node-local retained geometry, generation-checked dynamic slots, complete nested affine/opacity composition, and synchronized hit-test geometry.
 - 2026-07-13: Added hard retained CPU/prepared-GPU budgets, generation-aware LRU eviction, hot-entry protection, explicit churn suppression, zero-budget direct rebuild, and complete cache diagnostics for C23.
 
 - 2026-07-13: changed `ImageView` to emit bounded `Image` commands with natural-pixel source crops; zero-inset `NineSlice` remains removed from the image-view path.
@@ -244,7 +245,7 @@ assert_eq!(text.value(), "");
 - 2026-05-31: keyed collection focus and hover now reconcile through `Measure::item_key` during layout so focus survives data reorders and navigation materializes the actual new item key instead of an index-derived placeholder.
 - 2026-05-31: added live `TextCtx` retained atlas snapshot helpers for `UiSurface` and `SurfaceRouter`, guarded so cached glyph replay only sees an uploaded atlas.
 - 2026-05-31: direct-clean child layout skipping now avoids entering unchanged child subtrees during dirty relayout parent loops.
-- 2026-05-31: added non-draw dirty-class coverage so accessibility/hit-test metadata updates preserve clean retained draw-list reuse.
+- 2026-05-31: added non-draw dirty-class coverage so the inert compatibility value and hit-test metadata updates preserve clean retained draw-list reuse.
 - 2026-05-31: added opacity/clip dirty-class coverage so paint-only retained edits skip layout while reusing cached descendants and siblings.
 - 2026-05-31: added per-node layout dirtiness and `LayoutStats` so clean sibling subtrees can be skipped during incremental relayout.
 - 2026-05-31: added multi-atlas retained text replay checking so cached glyph drawlists require explicit revisions for every atlas they reference.

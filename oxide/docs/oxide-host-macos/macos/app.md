@@ -60,6 +60,7 @@
 - A successful submission immediately rechecks demand: clean settled state pauses `CADisplayLink` or stops legacy `CVDisplayLink`, while dirty generations resume it on the main queue. Legacy callbacks recheck on the main queue before stopping so a racing publication cannot be lost.
 - A wake for a suspended display link always passes through one persistent main-run-loop source before rendering. This prevents re-entering Rust while the publisher still owns the app-state mutex, coalesces concurrent publications without per-wake block allocation, and renders the first event response without waiting for a newly resumed display-link phase. A persistent one-shot settlement timer then resumes the display link no sooner than one target refresh period later, avoiding a near-simultaneous second drawable while preserving the required settlement frame. If immediate preparation or drawable acquisition fails, that settlement wake also provides the retry.
 - Modern `CADisplayLink` callbacks render directly because an unpaused link already represents published demand; the single post-submit demand check owns the next pause decision. Legacy `CVDisplayLink` retains its pre-dispatch Rust check because that callback runs off the main thread and can otherwise queue stale work.
+- The native host does not query a platform motion preference; authored Oxide animation durations pass through unchanged.
 
 ## Preconditions and postconditions
 - AppKit, AVFoundation, Contacts, CoreBluetooth, CoreLocation, CoreMedia, Network.framework, Photos, Security.framework, UserNotifications.framework, and WebKit.framework must be linked by `build.rs`.
@@ -93,6 +94,7 @@
 - `display_scheduling_tests.rs` verifies idle pause ownership, wake-source coverage, launch/layer correctness, counter gating, and the environment-gated real-process scheduler benchmark. C55 builds that foreground `.app` with the explicit `host-testing` feature, completes a bounded AppKit activation handshake without restarting an already-settled display link, records warmup callbacks/submissions, measures settled idle and a bounded 1–256 pointer-callback wake sequence, reports the completed/target wake counts, and quarantines unrelated native input without letting it mutate Oxide or pass through the benchmark window; ordinary release artifacts omit the harness, input quarantine, and counter writes.
 
 ## Changelog
+- 2026-08-06: removed the native platform motion-preference query.
 - 2026-07-15: routed suspended wakes through a persistent main-run-loop source, rendered their first frame immediately, and deferred only the settlement frame by one target refresh period, avoiding Rust mutex re-entry, per-wake allocation, an extra event-latency tail, and overlapping drawable-pool pressure.
 - 2026-07-15: removed the redundant modern pre-render demand lock; unpaused modern callbacks now render once and use the post-submit check to decide whether another callback is needed.
 - 2026-07-15: fixed the nib-less AppKit boot and backing-layer contracts, moved display ticks to a deterministic shared Metal render entry, and suspended modern/legacy display links while Oxide is clean and settled.

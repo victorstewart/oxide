@@ -40,7 +40,7 @@ Call flow:
   Verifies a zero node-cache budget preserves independent caller-owned chunk identity and exact mixed output.
 - Additional tests in the file cover transform-only motion, opacity/clip dirty classes, content dirty classes, non-draw dirty classes, router retained composition, and hit-test identity.
 - `transform_and_opacity_animation_reuses_all_warm_geometry()` drives 300 nodes and requires zero warm chunk/sequence rebuild and zero command/vertex/index copies while properties continue changing.
-- `nested_animation_keeps_clip_hit_test_and_accessibility_geometry_synchronized()` covers nested scale/rotation/translation, cumulative opacity, retained clip metadata, transformed hit coordinates, and accessibility frames.
+- `nested_animation_keeps_clip_and_hit_test_geometry_synchronized()` covers nested scale/rotation/translation, cumulative opacity, retained clip metadata, and transformed hit coordinates.
 - `removed_node_property_slots_reuse_dense_indices_with_new_generations()` proves logical slot indices are recycled only under a new generation.
 
 ## Logic narrative
@@ -52,7 +52,7 @@ The tests construct small retained trees with known geometry, run a cold layout 
 
 ## Edge cases and failure modes
 - A paint-only mutation must rebuild draw caches without setting layout dirtiness.
-- Compatibility-reserved accessibility and hit-test metadata dirtiness must not rebuild renderer-facing draws; this unit contract does not imply an OS accessibility tree.
+- Hit-test metadata dirtiness and the inert compatibility-reserved `DirtyClass::Accessibility` value must not rebuild renderer-facing draws.
 - A stable child rect is not enough to skip layout if `descendant_layout_dirty` is still set.
 - Missing node ids must return false instead of dirtying the surface.
 - Budget eviction must invalidate ancestor sequence references so no supposedly evicted descendant remains indirectly retained.
@@ -84,7 +84,7 @@ assert!(dirty.visited_nodes < cold.visited_nodes);
 ```
 
 ## Changelog
-- 2026-07-13: added C26 zero-geometry animation, nested transform/clip/hit/accessibility, and slot-generation reuse coverage.
+- 2026-07-13: added C26 zero-geometry animation, nested transform/clip/hit-test, and slot-generation reuse coverage.
 - 2026-07-13: Added C23 hard-budget, LRU/hot protection, churn suppression/readmission, external identity, and exact zero-budget fallback coverage.
 - 2026-06-01: Added coverage that dirty text atlases are not retained-replay-safe until the dirty upload is cleared.
 - 2026-06-01: Added coverage for ancestor relayout combined with dirty descendants under a stable child rect.

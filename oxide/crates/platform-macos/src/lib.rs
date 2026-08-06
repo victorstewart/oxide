@@ -25,7 +25,6 @@ extern "C" {
     fn macos_max_framerate_hz() -> u32;
     fn macos_native_scale() -> f32;
     fn macos_supports_edr() -> u8;
-    fn macos_reduce_motion_enabled() -> u8;
     fn macos_camera_available() -> u8;
     fn macos_network_status(out_connected: *mut u8, out_interfaces: *mut u32) -> ::libc::c_int;
     fn macos_set_network_status_callback(cb: Option<extern "C" fn(u8, u32)>);
@@ -160,7 +159,7 @@ impl api::Platform for MacPlatform {
             supports_msaa4x: true,
             native_scale,
             color_space: api::ColorSpace::Srgb,
-            a11y_reduce_motion: unsafe { macos_reduce_motion_enabled() != 0 },
+            a11y_reduce_motion: false,
         }
     }
     fn haptics(&self) -> std::sync::Arc<dyn api::Haptics + Send + Sync> {

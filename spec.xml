@@ -204,7 +204,7 @@ pub struct DeviceCaps
    pub supports_msaa4x: bool,
    pub native_scale: f32,
    pub color_space: ColorSpace, // see ColorSpace
-   pub a11y_reduce_motion: bool,
+   pub a11y_reduce_motion: bool, // compatibility-reserved; do not use in new code
 }
 pub enum ColorSpace
 {
@@ -477,9 +477,9 @@ pub fn compute_canvas(view_w: f32, view_h: f32, design_w: f32, design_h: f32, de
       <item>platform-ios owns all Objective‑C and UIKit/QuartzCore interactions.</item>
     </rules>
     <modules>
-      <module name="ui-core">Widget tree, layout, event routing, draw list builder, text layout, a11y mapping.</module>
+      <module name="ui-core">Widget tree, layout, event routing, draw list builder, text layout.</module>
       <module name="platform-api">Traits, events, units, feature flags, error enums, device caps.</module>
-      <module name="platform-ios">Delegates, MetalView, DisplayLink, IME, a11y, clipboard, haptics, memory warnings.</module>
+      <module name="platform-ios">Delegates, MetalView, DisplayLink, IME, clipboard, haptics, memory warnings.</module>
       <module name="renderer-api">Renderer trait, RenderEncoder, DrawList, resource handles.</module>
       <module name="renderer-metal">Device/queue/pipelines, parallel encoding, atlases, present, EDR.</module>
       <module name="text">rustybuzz, swash, SDF/MSDF bake, atlas, bidi, grapheme clusters.</module>
@@ -690,19 +690,13 @@ pub trait RenderEncoder
     </dragDrop>
   </section>
 
-  <section number="11" title="Accessibility">
-    <container>
-      <item>MetalView conforms to UIAccessibilityContainer.</item>
-      <nodeProps>label, traits, value?, hint?, activation point, frame (screen coords), enabled, selected</nodeProps>
-      <item>platform-ios creates/updates UIAccessibilityElement objects per frame; updates frames on layout/scale changes.</item>
-      <activation>Activation invokes ui-core callback to perform action.</activation>
-    </container>
-    <dynamicType>
-      <item>Observe UIContentSizeCategoryDidChange; expose category to ui-core; app decides scaling policy.</item>
-    </dynamicType>
-    <focus>
-      <item>Maintain focused node id across layout changes where frame intersection remains.</item>
-    </focus>
+  <section number="11" title="Explicitly unsupported platform surfaces">
+    <accessibility supported="false">
+      <item>Oxide does not build or export an OS accessibility tree, VoiceOver elements, accessibility roles/actions, or a platform accessibility bridge.</item>
+      <item>Accessibility must not be added to product requirements, authoring guidance, native parity workloads, visual admission, or performance gates.</item>
+      <item>New Oxide code must not add host accessibility or automation identifiers. Harnesses use app/window queries, raw coordinates, and non-accessibility lifecycle signals; existing identifier-based controls are legacy cleanup candidates and must not expand.</item>
+      <compatibility>Released accessibility-named fields and dirty-state variants may remain solely for public-contract compatibility until an explicitly authorized breaking release. They may retain only behavior required by that contract; new code must not depend on or expand them.</compatibility>
+    </accessibility>
   </section>
 
   <section number="12" title="Text system">
@@ -750,7 +744,7 @@ pub trait RenderEncoder
       <item>No panics cross FFI. FFI functions return int codes; errors logged via tracing.</item>
     </ffi>
     <logging>
-      <item>TRACE/DEBUG/INFO/WARN/ERROR levels. Env filter OXIDE_LOG. Redact PII in a11y logs.</item>
+      <item>TRACE/DEBUG/INFO/WARN/ERROR levels. Env filter OXIDE_LOG. Redact PII in logs.</item>
     </logging>
   </section>
 
@@ -780,7 +774,6 @@ pub trait RenderEncoder
       <item>Device and simulator builds succeed. No Swift. One staticlib exports rust_entry.</item>
       <item>Host app renders a test scene at device max Hz with on‑screen frame counter.</item>
       <item>Input: multi‑touch, hover (iPad), hardware keys, IME composition, clipboard verified.</item>
-      <item>Accessibility: ≥ 5 interactive nodes traversable and activatable by VoiceOver.</item>
       <item>Performance: 1000‑rect stress scene without present stalls; CPU &lt; 6 ms/frame on A15.</item>
     </deliverables>
   </section>
@@ -930,10 +923,9 @@ fn main()
     <item>High‑refresh: ≥ 118 fps on ProMotion trivial scene.</item>
     <item>No present stalls with CPU 5 ms/frame and 3 drawables.</item>
     <item>Five concurrent touches tracked with stable ids and correct phases.</item>
-    <item>Animation: button press/release timings 80 ms down, 120 ms up within ±8 ms; toggle spring settles &lt; 220 ms without overshoot in Reduce Motion ON.</item>
+    <item>Animation: button press/release timings 80 ms down, 120 ms up within ±8 ms; toggle spring settles &lt; 220 ms without overshoot.</item>
     <item>IME: marked text displayed; commit/selection delivered; keyboard rect correct.</item>
     <item>Hardware keys: modifiers and repeats handled.</item>
-    <item>Accessibility: rotor enumerates elements; activate triggers Rust handler.</item>
     <item>Snapshots: 1000‑rect scene within 1 LSB tolerance to baseline.</item>
     <item>Memory warning: atlases flushed; app remains responsive; rebuild on demand.</item>
     <item>Push: PushToken present and stable across launches; foreground notification delivered to PushManager subscriber.</item>
@@ -1009,7 +1001,7 @@ fn main()
     </lifecycle>
     <defaults>
       <item>Default ease: CubicOut, duration=150 ms, delay=0, repeat=Once.</item>
-      <item>Respect motion reduction: if device_caps.a11y_reduce_motion, durations become 0 except essential affordances (focus, text caret).</item>
+      <item>Animations use the authored duration unchanged. The released DeviceCaps compatibility slot does not define a requirement for new code.</item>
     </defaults>
     <mapping>
       <item>ui-core applies animated values to node styles before building DrawList.</item>
@@ -1021,13 +1013,11 @@ fn main()
   <section number="28" title="Base UI elements (ui-core)">
     <label>
       <props>text:String, font:FontRef, color:Color, align:{Start,Center,End}, wrap:{NoWrap,Word,Char}</props>
-      <a11y>Static text; exposes label; no action.</a11y>
     </label>
     <button>
       <props>content:Node, on_tap:Callback, disabled:bool=false</props>
       <states>normal, pressed, disabled</states>
       <animations>press down: Transform2D scale 0.98 for 80 ms Ease(CubicOut); release to 1.0 for 120 ms Ease(CubicOut)</animations>
-      <a11y>Trait=button; activates on double‑tap.</a11y>
     </button>
     <imageView>
       <props>image:ImageHandle, fit:{Contain,Cover,Stretch}, nine_slice:Option&lt;Insets&gt;</props>
@@ -1036,17 +1026,14 @@ fn main()
         <gestures>pinch to zoom (scale up/down), two-finger double-tap zoom out, pan when zoomed</gestures>
       </zoom>
       <render>Image/NineSlice DrawCmd; zoom uses container Transform2D + clip.</render>
-      <a11y>Trait=image; zoom not exposed to VoiceOver.</a11y>
     </imageView>
     <progressBar>
       <props>value:Option&lt;f32&gt; // None = indeterminate</props>
       <render>Determinate: filled track; Indeterminate: looping bar</render>
-      <a11y>Announces percentage or “in progress”.</a11y>
     </progressBar>
     <spinner>
       <props>size:f32=20.0, thickness:f32=2.0, alpha:f32=1.0</props>
       <render>DrawCmd::Spinner with phase advanced per tick</render>
-      <a11y>Trait=progress indicator</a11y>
     </spinner>
     <collectionView>
       <axis>{Vertical, Horizontal}</axis>
@@ -1056,24 +1043,20 @@ fn main()
       </layout>
       <cells>Reusable cell type: <cell id="CollectionCell">content:Node</cell></cells>
       <virtualization>measurement + culling; stable IDs; diff-driven updates</virtualization>
-      <a11y>Scrollable container exposes cells in order</a11y>
     </collectionView>
     <toggle>
       <props>value:bool, on_change:Callback</props>
       <gestures>tap toggles; drag along track snaps at 0.5</gestures>
       <animations>knob spring to target with SpringParams { stiffness: 280.0, damping: 26.0, mass: 1.0, eps: 0.001 }</animations>
-      <a11y>Trait=switch; adjustable.</a11y>
     </toggle>
     <slider>
       <props>value:f32 in [0,1], on_change:Callback, step:Option&lt;f32&gt;</props>
       <gestures>drag horizontal; keyboard arrows adjust by step or 0.01</gestures>
-      <a11y>Trait=adjustable; increments/decrements via rotor.</a11y>
     </slider>
     <textField>
       <props>text:String, on_change:Callback, placeholder:String?, secure:bool=false, style:{Inline, Floating}</props>
       <ime>Uses UITextInput; caret + marked underline. Platform keyboard shown on focus; Platform::ime_show/ime_hide available.</ime>
       <animations>Floating: placeholder animates to label above on first input; Ease(CubicOut) 120 ms</animations>
-      <a11y>Trait=textfield; selection announced.</a11y>
     </textField>
     <stack>
       <kinds>HStack, VStack, ZStack</kinds>
@@ -1083,7 +1066,6 @@ fn main()
       <axes>{Vertical, Horizontal}</axes>
       <physics>deceleration with velocity carry; bounds clamped; overscroll glow optional</physics>
       <virtualization>child measurement + culling when children &gt; 200</virtualization>
-      <a11y>Scrollable container; exposes children in order; adjustable actions for page up/down.</a11y>
     </scrollView>
     <panel>
       <props>background:Color, corner_radii:[f32;4], shadow_alpha:f32</props>
@@ -1092,7 +1074,6 @@ fn main()
     <backdrop>
       <props>rect:RectF, blur_sigma:f32, tint:Color, alpha:f32</props>
       <render>DrawCmd::Backdrop; uses renderer backdrop pass; tint overlays blur</render>
-      <a11y>Decorative; no trait</a11y>
     </backdrop>
     <haptics>
       <props>pattern:{ImpactLight,ImpactMedium,ImpactHeavy,Selection,NotificationSuccess,NotificationWarning,NotificationError}</props>
@@ -1103,7 +1084,6 @@ fn main()
       <item>Button/toggle/slider respond at 120 Hz with no dropped frames in test scenes.</item>
       <item>TextField supports selection, composition, delete, and paste; caret blinks at 0.5 Hz.</item>
       <item>ScrollView maintains ≥ 58 fps with 1k virtualized children on A15‑class devices.</item>
-      <item>All controls expose correct accessibility traits and labels.</item>
     </acceptance>
   </section>
   <section number="29" title="Camera (AVFoundation)">
