@@ -1,3 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
 <!-- 
 
 A) will Tokio be able to compile and run on iOS though?
@@ -12,7 +13,6 @@ U)
 V)
 
 -->
-<?xml version="1.0" encoding="UTF-8"?>
 <spec app="Oxide" version="1.2">
   <section number="0" title="Scope and assumptions">
     <item>Goal: Rust-first iOS UI runtime with a Metal renderer and a thin UIKit shell. Zero Swift. Android deferred but anticipated by all abstractions.</item>
@@ -1030,7 +1030,7 @@ fn main()
       <a11y>Trait=button; activates on double‑tap.</a11y>
     </button>
     <imageView>
-      <props>image:ImageHandle, fit:{Contain,Cover,Stretch}, nine_slice:Option<Insets></props>
+      <props>image:ImageHandle, fit:{Contain,Cover,Stretch}, nine_slice:Option&lt;Insets&gt;</props>
       <zoom enabled="true">
         <props>min=1.0, max=4.0, doubleTapStep=2.0, decel=enabled</props>
         <gestures>pinch to zoom (scale up/down), two-finger double-tap zoom out, pan when zoomed</gestures>
@@ -1039,7 +1039,7 @@ fn main()
       <a11y>Trait=image; zoom not exposed to VoiceOver.</a11y>
     </imageView>
     <progressBar>
-      <props>value:Option<f32> // None = indeterminate</props>
+      <props>value:Option&lt;f32&gt; // None = indeterminate</props>
       <render>Determinate: filled track; Indeterminate: looping bar</render>
       <a11y>Announces percentage or “in progress”.</a11y>
     </progressBar>
