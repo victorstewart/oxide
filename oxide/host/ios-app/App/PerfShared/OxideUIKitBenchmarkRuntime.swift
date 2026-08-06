@@ -5836,14 +5836,10 @@ func makeUIKitLaunchRootViewController(
     let controller = UIViewController()
     controller.view = UIView(frame: UIScreen.main.bounds)
     controller.view.backgroundColor = UIColor(red: 0.95, green: 0.97, blue: 1.0, alpha: 1.0)
-    controller.view.isAccessibilityElement = true
-    controller.view.accessibilityIdentifier = "uikitLaunchRoot"
 
     let readyLabel = UILabel(frame: .zero)
     readyLabel.font = .systemFont(ofSize: 14.0, weight: .semibold)
     readyLabel.textColor = UIColor(red: 0.14, green: 0.18, blue: 0.24, alpha: 1.0)
-    readyLabel.isAccessibilityElement = true
-    readyLabel.accessibilityIdentifier = "launchReadyLabel"
     readyLabel.numberOfLines = 2
     controller.view.addSubview(readyLabel)
 

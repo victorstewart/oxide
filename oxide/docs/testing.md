@@ -30,7 +30,7 @@ This document captures the current state of automated testing across the Oxide w
 | `oxide-renderer-metal` | `crates/renderer-metal` | lib | Metal command encoding, resource rings, shader PSOs, damage tracking | macOS-only snapshot test (`tests/snapshots.rs`) + CPU-only ring/renderer sanity tests | expand snapshot suite, add headless validation and simulator coverage |
 | `oxide-platform-ios` | `crates/platform-ios` | lib | UIKit/AVFoundation shims, camera capability selection, IME bridges | Unit tests around camera capability heuristics (`tests/lib_tests.rs`) | needs lifecycle/IME tests, bridging safety checks, tokio integration gates |
 | `oxide-host-ios` | `host/ios-app/oxide-host-ios` | staticlib | UIApplication bridge, renderer/bootstrap glue, callback registries, push/IME hooks | Unit tests for callback bridges plus the actual-app camera frame-driven scheduling hook | add integration tests via simulator harness, renderer lifecycle coverage |
-| `oxide/host/ios-app/App` | `oxide/host/ios-app/App` | Xcode proj | Obj-C app shell, XCUI tests (currently scene toggle sanity) | `OxideHostUITests` sanity check | needs exhaustive scene traversal, screenshot diffs, accessibility assertions |
+| `oxide/host/ios-app/App` | `oxide/host/ios-app/App` | Xcode proj | Obj-C app shell plus one window-level launch smoke | `OxideHostUITests` window existence and one startup screenshot | scene and gesture behavior belongs in focused OS-level journeys, not one accessibility-tree traversal battery |
 | `oxide-host-macos` | `host/macos-app/oxide-host-macos` | staticlib | CAMetalLayer host, event routing, resource loading, keyboard/mouse bridge | None | add scripted host harness tests, renderer state assertions |
 | `host/macos-app/app-runner` | `host/macos-app/app-runner` | bin | launches macOS host staticlib for local smoke | None | add smoke/integration test that validates exit codes, logging |
 | `oxide-perf-runner` | `crates/perf-runner` | bin | automated perf sweeps over scenes with configurable thresholds | No automated tests yet | needs CLI arg tests, deterministic stats fixtures |
@@ -44,7 +44,7 @@ This document captures the current state of automated testing across the Oxide w
 
 - Property-based tests in `crates/ui-core/tests` run with fixed RNG seeds and persist prior failure cases under `*.proptest-regressions`.
 - GPU snapshot coverage is limited to a single rounded-rect draw; there is no end-to-end coverage for full scenes, HDR/MSAA variants, or damage-based rendering.
-- Integration/UI automation currently consists of a single XCUITest (`testSceneSwitcherAndToggles`) that verifies the host can launch, toggle scenes, and flip switches. No screenshots or assertions on draw output are captured.
+- The default host UI automation is one bounded XCUITest (`testWindowLaunchSmoke`) that verifies a window launches and retains one startup screenshot. Scene and gesture behavior belongs in focused OS-level journeys rather than a broad repeated traversal battery.
 - No automated smoke tests exist for the macOS host runner or the CLI harnesses (`perf-runner`, `snapshot-runner`).
 
 These gaps inform the follow-on phases outlined in the broader test plan.

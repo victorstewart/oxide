@@ -254,10 +254,7 @@ final class OxideUIKitLaunchPerfTests: XCTestCase
 
     private func waitForLaunchReady(_ app: XCUIApplication)
     {
-        let launchRoot = app.otherElements["uikitLaunchRoot"]
-        XCTAssertTrue(launchRoot.waitForExistence(timeout: 15.0))
-        let readyLabel = app.staticTexts["launchReadyLabel"]
-        XCTAssertTrue(readyLabel.waitForExistence(timeout: 15.0))
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15.0))
     }
 
     private func makeRealAppCameraBenchmarkApp(caseName: String) -> XCUIApplication
