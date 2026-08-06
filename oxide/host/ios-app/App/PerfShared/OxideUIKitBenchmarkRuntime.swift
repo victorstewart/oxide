@@ -846,9 +846,6 @@ private func oxideHostSetScene(_ index: UInt32) -> Int32
 @_silgen_name("oxide_host_set_overlay_visible")
 private func oxideHostSetOverlayVisible(_ on: UInt8) -> Int32
 
-@_silgen_name("oxide_host_set_reduce_motion")
-private func oxideHostSetReduceMotion(_ on: UInt8) -> Int32
-
 @_silgen_name("oxide_host_set_camera_options")
 private func oxideHostSetCameraOptions(
     _ blur: UInt8,
@@ -4093,7 +4090,6 @@ private final class OxideOnscreenBenchmarkHarness
             return false
         }
         _ = oxideHostSetOverlayVisible(0)
-        _ = oxideHostSetReduceMotion(0)
         emitPerfTraceDebugStage("onscreen.install.prepare \(benchmarkKey)")
         guard prepareForMeasuredPass() else
         {

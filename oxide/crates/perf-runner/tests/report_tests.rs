@@ -532,7 +532,7 @@ fn persisted_report_root_and_case_schemas_are_frozen() {
 #[test]
 fn persisted_report_case_id_sets_are_frozen() {
     let workspace = persisted_report_json("benchmarks/workspace/latest.json");
-    assert_report_case_id_set(&workspace, "workspace latest", 400, 0x72bfe57a606612a3);
+    assert_report_case_id_set(&workspace, "workspace latest", 401, 0xc82b5b0fb748dfdd);
 
     let oxide_device = persisted_report_json("benchmarks/oxide-device/latest.json");
     assert_report_case_id_set(&oxide_device, "oxide device latest", 23, 0x80168fb31ce042ff);
@@ -1468,14 +1468,13 @@ fn workspace_latest_gates_retained_layout_dirty_class_rows() {
     assert!(workspace_metric(content, "retained_reused_nodes_per_op") > 0.0);
     assert!(workspace_metric(content, "retained_rebuilt_nodes_per_op") > 0.0);
 
-    let non_draw = workspace_case(&report, "cpu.layout.non_draw_dirty.retained_reuse");
-    assert_workspace_zero_layout_dirty_row(non_draw);
-    assert_eq!(workspace_metric(non_draw, "retained_rebuilt_nodes_per_op"), 0.0);
-    assert_eq!(workspace_metric(non_draw, "retained_rebuilt_ops"), 0.0);
-    assert!(workspace_metric(non_draw, "retained_reused_nodes_per_op") > 0.0);
-    assert!(workspace_metric(non_draw, "retained_reused_ops") > 0.0);
-    assert!(workspace_metric(non_draw, "accessibility_dirty_ops") > 0.0);
-    assert!(workspace_metric(non_draw, "hit_test_dirty_ops") > 0.0);
+    let hit_test = workspace_case(&report, "cpu.layout.hit_test_dirty.retained_reuse");
+    assert_workspace_zero_layout_dirty_row(hit_test);
+    assert_eq!(workspace_metric(hit_test, "retained_rebuilt_nodes_per_op"), 0.0);
+    assert_eq!(workspace_metric(hit_test, "retained_rebuilt_ops"), 0.0);
+    assert!(workspace_metric(hit_test, "retained_reused_nodes_per_op") > 0.0);
+    assert!(workspace_metric(hit_test, "retained_reused_ops") > 0.0);
+    assert!(workspace_metric(hit_test, "hit_test_dirty_ops") > 0.0);
 }
 
 #[test]
@@ -4725,32 +4724,31 @@ fn filtered_run_suite_supports_node_content_dirty_layout_case() {
 }
 
 #[test]
-fn filtered_run_suite_supports_non_draw_dirty_layout_case() {
+fn filtered_run_suite_supports_hit_test_dirty_layout_case() {
     let mut json_out = std::env::temp_dir();
-    json_out.push(format!("oxide-perf-runner-non-draw-dirty-{}.json", std::process::id()));
+    json_out.push(format!("oxide-perf-runner-hit-test-dirty-{}.json", std::process::id()));
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-        .env("OXIDE_PERF_RUNNER_FILTER", "cpu.layout.non_draw_dirty.retained_reuse")
+        .env("OXIDE_PERF_RUNNER_FILTER", "cpu.layout.hit_test_dirty.retained_reuse")
         .arg("--run-suite")
         .arg("--smoke")
         .arg("--json-out")
         .arg(&json_out)
         .output()
-        .expect("run filtered non-draw dirty layout smoke suite");
+        .expect("run filtered hit-test dirty layout smoke suite");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(output.status.success(), "filtered suite failed: {stderr}");
     assert!(stdout.contains("cases=1"), "stdout: {stdout}");
-    assert!(stdout.contains("case=cpu.layout.non_draw_dirty.retained_reuse"), "stdout: {stdout}",);
+    assert!(stdout.contains("case=cpu.layout.hit_test_dirty.retained_reuse"), "stdout: {stdout}",);
     assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
 
-    let report = std::fs::read_to_string(&json_out).expect("read filtered non-draw report");
-    let row = report_case_slice(&report, "cpu.layout.non_draw_dirty.retained_reuse");
+    let report = std::fs::read_to_string(&json_out).expect("read filtered hit-test report");
+    let row = report_case_slice(&report, "cpu.layout.hit_test_dirty.retained_reuse");
     assert_eq!(report_f64(row, "layout_visited_nodes_per_op"), 0.0);
     assert_eq!(report_f64(row, "layout_measured_children_per_op"), 0.0);
     assert_eq!(report_f64(row, "retained_rebuilt_nodes_per_op"), 0.0);
     assert_eq!(report_f64(row, "retained_rebuilt_ops"), 0.0);
-    assert!(report_f64(row, "accessibility_dirty_ops") > 0.0);
     assert!(report_f64(row, "hit_test_dirty_ops") > 0.0);
     assert!(report_f64(row, "retained_reused_nodes_per_op") > 0.0);
     assert!(report_f64(row, "retained_reused_ops") > 0.0);

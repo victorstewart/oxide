@@ -334,8 +334,8 @@ const PERF_LAYOUT_SPECS: &[NamedPerfSpec] = &[
         name: "Node Content Dirty Retained Replay",
     },
     NamedPerfSpec {
-        id: "cpu.layout.non_draw_dirty.retained_reuse",
-        name: "Non-Draw Dirty Retained Reuse",
+        id: "cpu.layout.hit_test_dirty.retained_reuse",
+        name: "Hit-Test Dirty Retained Reuse",
     },
     NamedPerfSpec {
         id: "cpu.layout.scoped_tree_mutation.add_remove",
@@ -2493,12 +2493,6 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
       AuditFinding {
          status: String::from("fixed"),
          summary: String::from(
-            "oxide-timing animation start now uses atomic reduce-motion state and a consistent RUNNING_PROP-to-ANIMS lock order, reducing property-animation replacement overhead.",
-         ),
-      },
-      AuditFinding {
-         status: String::from("fixed"),
-         summary: String::from(
             "oxide-ui-core label encoding now avoids non-wrapped internal label clones, skips disabled diagnostic string formatting on the hot path, and preallocates the common wrapped-line buffers.",
          ),
       },
@@ -2629,10 +2623,10 @@ fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageRe
                 "cpu.layout.transform_only.reposition",
                 "cpu.layout.paint_only.opacity_clip",
                 "cpu.layout.node_content_dirty.retained_replay",
-                "cpu.layout.non_draw_dirty.retained_reuse",
+                "cpu.layout.hit_test_dirty.retained_reuse",
                 "cpu.layout.scoped_tree_mutation.add_remove",
             ]),
-            "Flat-grid rotation, deep-stack theme swap, safe-area inset relayout, dirty-subtree relayout, descendant-only relayout, transform-only reposition, paint-only opacity/clip, node content-dirty retained-replay, non-draw dirty retained-reuse, and scoped tree add/remove batteries are all implemented.",
+            "Flat-grid rotation, deep-stack theme swap, safe-area inset relayout, dirty-subtree relayout, descendant-only relayout, transform-only reposition, paint-only opacity/clip, node content-dirty retained-replay, hit-test dirty retained-reuse, and scoped tree add/remove batteries are all implemented.",
             "Dedicated relayout batteries now exist, but not every required flat/deep/grid invalidation slice is present yet.",
         ),
         contract_battery_entry(
@@ -3413,8 +3407,8 @@ fn push_layout_cases(
             "cpu.layout.node_content_dirty.retained_replay" => {
                 layout_node_content_dirty_retained_replay_case(smoke)
             }
-            "cpu.layout.non_draw_dirty.retained_reuse" => {
-                layout_non_draw_dirty_retained_reuse_case(smoke)
+            "cpu.layout.hit_test_dirty.retained_reuse" => {
+                layout_hit_test_dirty_retained_reuse_case(smoke)
             }
             "cpu.layout.scoped_tree_mutation.add_remove" => {
                 layout_scoped_tree_mutation_add_remove_case(smoke)
@@ -6971,15 +6965,13 @@ fn layout_node_content_dirty_retained_replay_case(smoke: bool) -> PerfCaseResult
     case
 }
 
-fn layout_non_draw_dirty_retained_reuse_case(smoke: bool) -> PerfCaseResult {
+fn layout_hit_test_dirty_retained_reuse_case(smoke: bool) -> PerfCaseResult {
     let loops = layout_case_iterations(smoke);
     let (mut surface, target) = descendant_only_layout_surface();
     let cold = surface.layout(420.0, 160.0);
     let mut builder = ui::DrawListBuilder::new();
     let _ = surface.encode_retained(&mut builder);
-    let mut step = 0usize;
     let mut ops = 0u64;
-    let mut accessibility_ops = 0u64;
     let mut hit_test_ops = 0u64;
     let mut retained_reused_ops = 0u64;
     let mut retained_rebuilt_ops = 0u64;
@@ -6990,25 +6982,18 @@ fn layout_non_draw_dirty_retained_reuse_case(smoke: bool) -> PerfCaseResult {
     let mut reused_nodes = 0u64;
     let mut rebuilt_nodes = 0u64;
     let mut case = measure_cpu_case(
-        "cpu.layout.non_draw_dirty.retained_reuse",
+        "cpu.layout.hit_test_dirty.retained_reuse",
         "layout",
         smoke,
         true,
         0.18,
         loops,
         vec![String::from(
-            "Node-scoped accessibility and hit-test dirtying over a retained row; layout and draw caches should stay reusable.",
+            "Node-scoped hit-test dirtying over a retained row; layout and draw caches should stay reusable.",
         )],
         || {
-            let class = if step & 1 == 0 {
-                accessibility_ops = accessibility_ops.saturating_add(1);
-                ui::DirtyClass::Accessibility
-            } else {
-                hit_test_ops = hit_test_ops.saturating_add(1);
-                ui::DirtyClass::HitTest
-            };
-            step = step.wrapping_add(1);
-            let _ = surface.mark_node_dirty(target, class);
+            hit_test_ops = hit_test_ops.saturating_add(1);
+            let _ = surface.mark_node_dirty(target, ui::DirtyClass::HitTest);
             let stats = surface.layout(420.0, 160.0);
             builder.clear();
             let status = surface.encode_retained(&mut builder);
@@ -7039,7 +7024,6 @@ fn layout_non_draw_dirty_retained_reuse_case(smoke: bool) -> PerfCaseResult {
     case.metrics.insert(String::from("dirty_nodes"), 1.0);
     case.metrics.insert(String::from("layout_passes"), 0.0);
     case.metrics.insert(String::from("layout_ops_sampled"), ops as f64);
-    case.metrics.insert(String::from("accessibility_dirty_ops"), accessibility_ops as f64);
     case.metrics.insert(String::from("hit_test_dirty_ops"), hit_test_ops as f64);
     case.metrics.insert(String::from("retained_reused_ops"), retained_reused_ops as f64);
     case.metrics.insert(String::from("retained_rebuilt_ops"), retained_rebuilt_ops as f64);

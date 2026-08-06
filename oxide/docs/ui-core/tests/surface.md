@@ -52,7 +52,7 @@ The tests construct small retained trees with known geometry, run a cold layout 
 
 ## Edge cases and failure modes
 - A paint-only mutation must rebuild draw caches without setting layout dirtiness.
-- Accessibility and hit-test metadata dirtiness must not rebuild renderer-facing draws.
+- Compatibility-reserved accessibility and hit-test metadata dirtiness must not rebuild renderer-facing draws; this unit contract does not imply an OS accessibility tree.
 - A stable child rect is not enough to skip layout if `descendant_layout_dirty` is still set.
 - Missing node ids must return false instead of dirtying the surface.
 - Budget eviction must invalidate ancestor sequence references so no supposedly evicted descendant remains indirectly retained.
@@ -74,7 +74,7 @@ Run with:
 cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-ui-core --test surface
 ```
 
-Related perf rows live in `oxide-perf-runner`: `cpu.layout.dirty_subtree.incremental_relayout`, `cpu.layout.descendant_only.incremental_relayout`, `cpu.layout.node_content_dirty.retained_replay`, `cpu.layout.non_draw_dirty.retained_reuse`, `cpu.architecture.retained.cache_pressure.hot_reuse`, and `cpu.architecture.retained.cache_pressure.one_use_churn`.
+Related perf rows live in `oxide-perf-runner`: `cpu.layout.dirty_subtree.incremental_relayout`, `cpu.layout.descendant_only.incremental_relayout`, `cpu.layout.node_content_dirty.retained_replay`, `cpu.layout.hit_test_dirty.retained_reuse`, `cpu.architecture.retained.cache_pressure.hot_reuse`, and `cpu.architecture.retained.cache_pressure.one_use_churn`.
 
 ## Examples
 ```rust
