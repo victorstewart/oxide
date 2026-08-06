@@ -16,7 +16,7 @@ V)
 <spec app="Oxide" version="1.2">
   <section number="0" title="Scope and assumptions">
     <item>Goal: Rust-first iOS UI runtime with a Metal renderer and a thin UIKit shell. Zero Swift. Android deferred but anticipated by all abstractions.</item>
-    <item>Minimum iOS: 25.0. Targets: aarch64-apple-ios (device), aarch64-apple-ios-sim and x86_64-apple-ios (sim).</item>
+    <item>Current build minimum iOS: 18.0. Targets: aarch64-apple-ios (device) and aarch64-apple-ios-sim (simulator).</item>
     <item>UIKit is used only for lifecycle, surface hosting, input/IME. All layout, state, and rendering live in Rust.</item>
     <item>Mandatory: multithreaded command encoding, triple buffering, high‑refresh on ProMotion, full IME composition.</item>
     <item>Security: no private APIs, no background clipboard reads, no network IO in the runtime.</item>

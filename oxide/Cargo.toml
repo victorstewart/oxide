@@ -56,7 +56,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.metadata.oxide]
 rust_version = "1.80"
-os_targets = ["aarch64-apple-ios", "aarch64-apple-ios-sim", "x86_64-apple-ios"]
+os_targets = ["aarch64-apple-ios", "aarch64-apple-ios-sim"]
 
 [profile.dev]
 debug-assertions = true

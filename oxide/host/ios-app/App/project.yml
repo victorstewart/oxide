@@ -5,6 +5,7 @@ options:
     iOS: 18.0
 settings:
   base:
+    "ARCHS[sdk=iphonesimulator*]": arm64
     IPHONEOS_DEPLOYMENT_TARGET: 18.0
 schemes:
   OxideUIKitPerf:
@@ -84,7 +85,8 @@ targets:
           set -euo pipefail
           PROJECT_DIR="${PROJECT_DIR}"
           REPO_ROOT="$(cd "${PROJECT_DIR}/../../.." && pwd)"
-          export CARGO_TARGET_DIR="${REPO_ROOT}/target"
+          CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${REPO_ROOT}/target}"
+          export CARGO_TARGET_DIR
           # Determine Rust target triple from SDK
           case "${PLATFORM_NAME}" in
             iphoneos)
@@ -94,6 +96,7 @@ targets:
               RUST_TARGET="aarch64-apple-ios-sim"
               ;;
           esac
+          mkdir -p "${CARGO_TARGET_DIR}"
           HOST_LINKER_WRAPPER="${CARGO_TARGET_DIR}/xcode-host-clang.sh"
           cat > "${HOST_LINKER_WRAPPER}" <<'EOF'
           #!/bin/sh

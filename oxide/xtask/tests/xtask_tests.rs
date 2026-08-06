@@ -138,6 +138,35 @@ fn console_capture_terminates_completed_app_before_waiting_for_console_exit() {
 }
 
 #[test]
+fn ios_host_simulator_architecture_contract_is_arm64_only()
+{
+   let project_spec = include_str!(concat!(
+      env!("CARGO_MANIFEST_DIR"),
+      "/../host/ios-app/App/project.yml"
+   ));
+   let generated_project = include_str!(concat!(
+      env!("CARGO_MANIFEST_DIR"),
+      "/../host/ios-app/App/OxideHost.xcodeproj/project.pbxproj"
+   ));
+   let ios_test = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/ios-test.sh"));
+   let workspace = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../Cargo.toml"));
+   let specification = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../spec.xml"));
+
+   let project_setting = "\"ARCHS[sdk=iphonesimulator*]\": arm64";
+   assert_eq!(project_spec.matches(project_setting).count(), 1);
+   assert_eq!(
+      generated_project
+         .matches("\"ARCHS[sdk=iphonesimulator*]\" = arm64;")
+         .count(),
+      2
+   );
+   assert!(project_spec.contains("RUST_TARGET=\"aarch64-apple-ios-sim\""));
+   assert!(ios_test.contains("--target aarch64-apple-ios-sim"));
+   assert!(!workspace.contains("x86_64-apple-ios"));
+   assert!(!specification.contains("x86_64-apple-ios"));
+}
+
+#[test]
 fn experiment_manifest_checker_accepts_current_manifest() {
     let text = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../perf-experiments.toml"));
     for id in [

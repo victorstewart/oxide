@@ -86,6 +86,8 @@ The committed `benchmarks/oxide-device/latest.json` and `benchmarks/uikit-device
 
 - Preconditions:
   - The Xcode project and schemes must build.
+  - iOS device and Apple-silicon Simulator builds are arm64-only; generic
+    Simulator destinations must not request an x86_64 slice.
   - Required Apple command-line tools must be installed and resolvable through `xcrun`.
   - The requested physical-device destination must exist for the official workflow.
   - Imported power traces, when supplied, must correspond to the same workload/device/build being compared.
