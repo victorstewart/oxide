@@ -8,6 +8,7 @@ use oxide_platform_web as platform_web;
 use oxide_renderer_api as api;
 use oxide_renderer_api::Renderer;
 use oxide_renderer_metal as metal;
+use oxide_renderer_web as web;
 use oxide_test_scenes as scenes;
 use oxide_text as text;
 use oxide_timing as timing;
@@ -280,6 +281,10 @@ const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
     AuthoringPerfSpec {
         id: "cpu.authoring.collection_prefix_update.full_scan",
         name: "Collection Prefix Update Full Scan",
+    },
+    AuthoringPerfSpec {
+        id: "cpu.authoring.webgpu_pipeline_profile.compose",
+        name: "WebGPU Pipeline Profile",
     },
     AuthoringPerfSpec {
         id: "gpu.authoring.retained_snapshot.clean_mixed",
@@ -3397,6 +3402,9 @@ fn push_authoring_cases(
             "cpu.authoring.collection_prefix_update.full_scan" => {
                 authoring_collection_prefix_update_case(smoke, false)
             }
+            "cpu.authoring.webgpu_pipeline_profile.compose" => {
+                authoring_webgpu_pipeline_profile_case(smoke)
+            }
             "gpu.authoring.retained_snapshot.clean_mixed" => {
                 architecture_matrix::metal_prepared_chunk_case(spec.id, smoke, false)?
             }
@@ -5268,6 +5276,82 @@ fn authoring_text_fields_case(smoke: bool) -> PerfCaseResult {
                 + secure.caret_index() as u64
         },
     )
+}
+
+fn authoring_webgpu_pipeline_profile_case(smoke: bool) -> PerfCaseResult
+{
+   let loops = if smoke { 256 } else { 1_024 };
+   let full_pipeline_count = web::BrowserRendererPipelineProfile::full()
+      .declared_pipeline_count();
+   let minimal_pipeline_count = web::BrowserRendererPipelineProfile::empty()
+      .with_draw(web::BrowserDrawPipeline::Solid)
+      .with_draw(web::BrowserDrawPipeline::RRect)
+      .declared_pipeline_count();
+   let mixed_pipeline_count = web::BrowserRendererPipelineProfile::empty()
+      .with_draw(web::BrowserDrawPipeline::RRect)
+      .with_draw(web::BrowserDrawPipeline::NeonMarker)
+      .with_scene3d(
+         web::BrowserScene3dPipeline::AlphaDepthRead,
+         web::scene3d::CullMode3d::None,
+      )
+      .with_scene3d(
+         web::BrowserScene3dPipeline::AlphaDepthWrite,
+         web::scene3d::CullMode3d::None,
+      )
+      .with_scene3d(
+         web::BrowserScene3dPipeline::AdditiveDepthRead,
+         web::scene3d::CullMode3d::None,
+      )
+      .with_id_mask_compositor()
+      .declared_pipeline_count();
+   let mut case = measure_cpu_case(
+      "cpu.authoring.webgpu_pipeline_profile.compose",
+      "authoring",
+      smoke,
+      true,
+      0.15,
+      loops,
+      vec![String::from(
+         "Public construction-time WebGPU profile composition; deterministic metrics record the exact eager pipeline workload selected by representative profiles.",
+      )],
+      move ||
+      {
+         let minimal = black_box(web::BrowserRendererPipelineProfile::empty())
+            .with_draw(black_box(web::BrowserDrawPipeline::Solid))
+            .with_draw(black_box(web::BrowserDrawPipeline::RRect));
+         let mixed = black_box(web::BrowserRendererPipelineProfile::empty())
+            .with_draw(black_box(web::BrowserDrawPipeline::RRect))
+            .with_draw(black_box(web::BrowserDrawPipeline::NeonMarker))
+            .with_scene3d(
+               black_box(web::BrowserScene3dPipeline::AlphaDepthRead),
+               black_box(web::scene3d::CullMode3d::None),
+            )
+            .with_scene3d(
+               black_box(web::BrowserScene3dPipeline::AlphaDepthWrite),
+               black_box(web::scene3d::CullMode3d::None),
+            )
+            .with_scene3d(
+               black_box(web::BrowserScene3dPipeline::AdditiveDepthRead),
+               black_box(web::scene3d::CullMode3d::None),
+            )
+            .with_id_mask_compositor();
+         u64::from(black_box(web::BrowserRendererPipelineProfile::full()).declared_pipeline_count())
+            + u64::from(black_box(minimal).declared_pipeline_count())
+            + u64::from(black_box(mixed).declared_pipeline_count())
+      },
+   );
+   case.metrics.insert(String::from("full_declared_pipelines"), f64::from(full_pipeline_count));
+   case.metrics.insert(String::from("minimal_declared_pipelines"), f64::from(minimal_pipeline_count));
+   case.metrics.insert(String::from("mixed_declared_pipelines"), f64::from(mixed_pipeline_count));
+   case.metrics.insert(
+      String::from("minimal_pipelines_avoided"),
+      f64::from(full_pipeline_count - minimal_pipeline_count),
+   );
+   case.metrics.insert(
+      String::from("mixed_pipelines_avoided"),
+      f64::from(full_pipeline_count - mixed_pipeline_count),
+   );
+   case
 }
 
 fn authoring_popup_wheel_picker_case(smoke: bool) -> PerfCaseResult {

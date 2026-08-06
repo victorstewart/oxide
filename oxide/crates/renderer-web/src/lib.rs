@@ -20,6 +20,214 @@ pub mod id_mask_compositor;
 pub mod neon_marker;
 pub mod scene3d;
 
+/// Static 2D pipeline families a browser renderer may construct.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrowserDrawPipeline
+{
+   Solid,
+   RRect,
+   ImageRgba,
+   ImageA8,
+   NineSliceRgba,
+   NineSliceA8,
+   Spinner,
+   NeonMarker,
+   GlyphRgba,
+   GlyphA8,
+   GlyphSdf,
+   Rgba,
+   A8,
+   Sdf,
+   Effect,
+}
+
+/// Static Scene3D blend/depth pipeline families a browser renderer may construct.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrowserScene3dPipeline
+{
+   AlphaDepthRead,
+   AlphaDepthWrite,
+   AlphaNoTestDepthWrite,
+   AlphaNoDepth,
+   AdditiveDepthRead,
+   AdditiveDepthWrite,
+   AdditiveNoTestDepthWrite,
+   AdditiveNoDepth,
+}
+
+impl BrowserScene3dPipeline
+{
+   /// Resolves the pipeline family used by one Scene3D instance state.
+   #[must_use]
+   pub const fn from_state(
+      blend: scene3d::BlendMode3d,
+      depth_test: bool,
+      depth_write: bool,
+   ) -> Self
+   {
+      match (blend, depth_test, depth_write)
+      {
+         (scene3d::BlendMode3d::Additive, true, true) => Self::AdditiveDepthWrite,
+         (scene3d::BlendMode3d::Additive, false, true) => Self::AdditiveNoTestDepthWrite,
+         (scene3d::BlendMode3d::Additive, true, false) => Self::AdditiveDepthRead,
+         (scene3d::BlendMode3d::Additive, false, false) => Self::AdditiveNoDepth,
+         (scene3d::BlendMode3d::Alpha, true, true) => Self::AlphaDepthWrite,
+         (scene3d::BlendMode3d::Alpha, false, true) => Self::AlphaNoTestDepthWrite,
+         (scene3d::BlendMode3d::Alpha, true, false) => Self::AlphaDepthRead,
+         (scene3d::BlendMode3d::Alpha, false, false) => Self::AlphaNoDepth,
+      }
+   }
+}
+
+const BROWSER_DRAW_PIPELINE_COUNT: u32 = BrowserDrawPipeline::Effect as u32 + 1;
+const BROWSER_SCENE3D_PIPELINE_COUNT: u32 =
+   (BrowserScene3dPipeline::AdditiveNoDepth as u32 + 1) * 3;
+const BROWSER_DRAW_PIPELINES_ALL: u16 = (1_u16 << BROWSER_DRAW_PIPELINE_COUNT) - 1;
+const BROWSER_SCENE3D_PIPELINES_ALL: u32 = (1_u32 << BROWSER_SCENE3D_PIPELINE_COUNT) - 1;
+
+const fn browser_scene3d_cull_index(cull: scene3d::CullMode3d) -> u32
+{
+   match cull
+   {
+      scene3d::CullMode3d::None => 0,
+      scene3d::CullMode3d::Front => 1,
+      scene3d::CullMode3d::Back => 2,
+   }
+}
+
+/// Construction-time declaration of every static WebGPU pipeline a renderer may use.
+///
+/// Declared pipelines are created eagerly by the constructor. Undeclared pipelines are never
+/// created later; attempting to use one fails the frame before GPU work begins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BrowserRendererPipelineProfile
+{
+   draw: u16,
+   scene3d: u32,
+   id_mask_compositor: bool,
+}
+
+impl BrowserRendererPipelineProfile
+{
+   /// Declares no pipelines. Add the exact families the renderer will use.
+   #[must_use]
+   pub const fn empty() -> Self
+   {
+      Self { draw: 0, scene3d: 0, id_mask_compositor: false }
+   }
+
+   /// Declares every renderer pipeline while selecting only one supported ID-mask backend.
+   #[must_use]
+   pub const fn full() -> Self
+   {
+      Self {
+         draw: BROWSER_DRAW_PIPELINES_ALL,
+         scene3d: BROWSER_SCENE3D_PIPELINES_ALL,
+         id_mask_compositor: true,
+      }
+   }
+
+   /// Adds one 2D pipeline family.
+   #[must_use]
+   pub const fn with_draw(mut self, pipeline: BrowserDrawPipeline) -> Self
+   {
+      self.draw |= 1_u16 << pipeline as u8;
+      self
+   }
+
+   /// Adds one exact Scene3D blend/depth/cull pipeline.
+   #[must_use]
+   pub const fn with_scene3d(
+      mut self,
+      pipeline: BrowserScene3dPipeline,
+      cull: scene3d::CullMode3d,
+   ) -> Self
+   {
+      let bit = pipeline as u32 * 3 + browser_scene3d_cull_index(cull);
+      self.scene3d |= 1_u32 << bit;
+      self
+   }
+
+   /// Adds the ID-mask raster, field seed/jump, and compositor pipelines.
+   #[must_use]
+   pub const fn with_id_mask_compositor(mut self) -> Self
+   {
+      self.id_mask_compositor = true;
+      self
+   }
+
+   #[must_use]
+   pub const fn contains_draw(self, pipeline: BrowserDrawPipeline) -> bool
+   {
+      self.draw & (1_u16 << pipeline as u8) != 0
+   }
+
+   #[must_use]
+   pub const fn contains_scene3d(
+      self,
+      pipeline: BrowserScene3dPipeline,
+      cull: scene3d::CullMode3d,
+   ) -> bool
+   {
+      let bit = pipeline as u32 * 3 + browser_scene3d_cull_index(cull);
+      self.scene3d & (1_u32 << bit) != 0
+   }
+
+   #[must_use]
+   pub const fn includes_id_mask_compositor(self) -> bool
+   {
+      self.id_mask_compositor
+   }
+
+   #[cfg(target_arch = "wasm32")]
+   pub(crate) const fn has_draw_pipelines(self) -> bool
+   {
+      self.draw != 0
+   }
+
+   /// Exact number of render pipelines the profile constructs on a compatible adapter.
+   #[must_use]
+   pub const fn declared_pipeline_count(self) -> u32
+   {
+      self.draw.count_ones()
+         + self.scene3d.count_ones()
+         + if self.id_mask_compositor { 4 } else { 0 }
+   }
+
+   #[cfg(target_arch = "wasm32")]
+   pub(crate) const fn has_scene3d_pipelines(self) -> bool
+   {
+      self.scene3d != 0
+   }
+}
+
+impl Default for BrowserRendererPipelineProfile
+{
+   fn default() -> Self
+   {
+      Self::full()
+   }
+}
+
+const _: () =
+{
+   assert!(BrowserRendererPipelineProfile::full().declared_pipeline_count() == 43);
+   assert!(BrowserRendererPipelineProfile::empty()
+      .with_draw(BrowserDrawPipeline::Solid)
+      .with_draw(BrowserDrawPipeline::RRect)
+      .declared_pipeline_count() == 2);
+   assert!(BrowserRendererPipelineProfile::empty()
+      .with_draw(BrowserDrawPipeline::RRect)
+      .with_draw(BrowserDrawPipeline::NeonMarker)
+      .with_scene3d(BrowserScene3dPipeline::AlphaDepthRead, scene3d::CullMode3d::None)
+      .with_scene3d(BrowserScene3dPipeline::AlphaDepthWrite, scene3d::CullMode3d::None)
+      .with_scene3d(BrowserScene3dPipeline::AdditiveDepthRead, scene3d::CullMode3d::None)
+      .with_id_mask_compositor()
+      .declared_pipeline_count() == 9);
+};
+
 const MAX_LAYER_DIMENSION: u32 = 16_384;
 
 #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]

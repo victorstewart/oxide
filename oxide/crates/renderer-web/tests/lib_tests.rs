@@ -2,6 +2,7 @@ use oxide_renderer_api as api;
 use oxide_renderer_api::Renderer;
 use oxide_renderer_web::{
     color_cache_key, color_to_css, layer_physical_dimension, packed_rgba_to_css, sanitize_scale,
+    BrowserDrawPipeline, BrowserRendererPipelineProfile, BrowserScene3dPipeline,
     WebGpuTimestampSample, WebRenderer, WebRendererStats,
 };
 
@@ -36,6 +37,37 @@ fn sanitize_scale_rejects_invalid_values() {
     assert_eq!(sanitize_scale(2.0), 2.0);
     assert_eq!(sanitize_scale(0.0), 1.0);
     assert_eq!(sanitize_scale(f32::NAN), 1.0);
+}
+
+#[test]
+fn browser_pipeline_profiles_count_exact_eager_pipeline_sets() {
+    let minimal = BrowserRendererPipelineProfile::empty()
+        .with_draw(BrowserDrawPipeline::Solid)
+        .with_draw(BrowserDrawPipeline::RRect);
+    let mixed = BrowserRendererPipelineProfile::empty()
+        .with_draw(BrowserDrawPipeline::RRect)
+        .with_draw(BrowserDrawPipeline::NeonMarker)
+        .with_scene3d(
+            BrowserScene3dPipeline::AlphaDepthRead,
+            oxide_renderer_web::scene3d::CullMode3d::None,
+        )
+        .with_scene3d(
+            BrowserScene3dPipeline::AlphaDepthWrite,
+            oxide_renderer_web::scene3d::CullMode3d::None,
+        )
+        .with_scene3d(
+            BrowserScene3dPipeline::AdditiveDepthRead,
+            oxide_renderer_web::scene3d::CullMode3d::None,
+        )
+        .with_id_mask_compositor();
+
+    assert_eq!(BrowserRendererPipelineProfile::full().declared_pipeline_count(), 43);
+    assert_eq!(BrowserRendererPipelineProfile::default().declared_pipeline_count(), 43);
+    assert_eq!(minimal.declared_pipeline_count(), 2);
+    assert_eq!(mixed.declared_pipeline_count(), 9);
+    assert!(minimal.contains_draw(BrowserDrawPipeline::Solid));
+    assert!(!minimal.contains_draw(BrowserDrawPipeline::Effect));
+    assert!(mixed.includes_id_mask_compositor());
 }
 
 #[test]
@@ -207,7 +239,10 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
       "memory_snapshot:WebGpuMemorySnapshot,_device_session:BrowserWebGpuDeviceSessionLease,}"
    ));
    assert!(compact_rust.contains(
-      "pubasyncfnfrom_canvas(canvas:HtmlCanvasElement)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire()?;letinstance=wgpu::Instance::new"
+      "pubasyncfnfrom_canvas_with_profile(canvas:HtmlCanvasElement,pipeline_profile:BrowserRendererPipelineProfile,)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire()?;letinstance=wgpu::Instance::new"
+   ));
+   assert!(compact_rust.contains(
+      "pubasyncfnfrom_canvas(canvas:HtmlCanvasElement)->Result<Self,api::RenderError>{Self::from_canvas_with_profile(canvas,BrowserRendererPipelineProfile::full()).await}"
    ));
    assert!(compact_rust.contains(
       "memory_snapshot:WebGpuMemorySnapshot::default(),_device_session:device_session,})"
@@ -284,7 +319,12 @@ fn wasm_webgpu_runtime_images_are_explicitly_reclaimable_without_arena_tombstone
 #[test]
 fn wasm_public_exports_are_webgpu_only() {
     let source = include_str!("../src/lib.rs");
-    assert!(source.contains("pub use wasm::{bench_canvas_indexed_quads, BrowserRenderer, WebGpuRenderer};"));
+    assert!(source.contains("pub enum BrowserDrawPipeline"));
+    assert!(source.contains("pub enum BrowserScene3dPipeline"));
+    assert!(source.contains("pub struct BrowserRendererPipelineProfile"));
+    assert!(source.contains(
+        "pub use wasm::{bench_canvas_indexed_quads, BrowserRenderer, WebGpuRenderer};"
+    ));
     assert!(!source.contains("pub use wasm::{BrowserRenderer, WebGpuRenderer, WebRenderer};"));
     assert!(source.contains("pub fn bench_canvas_indexed_quads("));
     assert!(source.contains("fn canvas_indexed_quad_draw_list"));
@@ -899,7 +939,7 @@ fn wasm_webgpu_backend_packet_vocabulary_is_frozen() {
     let draw_kind = compact_source_block(
         source,
         "enum DrawKind {",
-        "#[derive(Clone, Copy, PartialEq, Eq)]\nenum DrawPipelineKey",
+        "#[derive(Clone, Copy, PartialEq, Eq)]\nenum DrawBindKey",
     );
     let gpu_draw = compact_source_block(
         source,
@@ -1053,7 +1093,7 @@ fn wasm_webgpu_id_mask_field_cache_is_complete_bounded_and_compositor_only()
 }
 
 #[test]
-fn wasm_webgpu_id_mask_fields_use_exact_packed_targets_with_wide_fallback()
+fn wasm_webgpu_id_mask_fields_use_one_construction_selected_exact_backend()
 {
    let source = include_str!("../src/wasm/webgpu.rs");
 
@@ -1065,7 +1105,11 @@ fn wasm_webgpu_id_mask_fields_use_exact_packed_targets_with_wide_fallback()
       "enum IdMaskFieldTargets",
       "Packed {",
       "Wide {",
-      "id_mask_packed_coordinates_fit(width, height)",
+      "!id_mask_packed_coordinates_fit(mask_width, mask_height)",
+      "enum IdMaskPrograms",
+      "IdMaskPrograms::Packed",
+      "IdMaskPrograms::Wide",
+      "IdMaskPrograms::Disabled",
       "width <= u16::MAX as u32 && height <= u16::MAX as u32",
       "create_packed_id_mask_field_targets",
       "create_wide_id_mask_field_targets",
@@ -1522,8 +1566,9 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
 }
 
 #[test]
-fn wasm_webgpu_static_pipelines_are_created_before_frame_encoding() {
+fn wasm_webgpu_pipeline_profiles_bound_cold_start_work_without_runtime_creation() {
     let source = include_str!("../src/wasm/webgpu.rs");
+    let public_api = include_str!("../src/lib.rs");
     let programs = source
         .split("struct GpuPrograms")
         .nth(1)
@@ -1538,6 +1583,18 @@ fn wasm_webgpu_static_pipelines_are_created_before_frame_encoding() {
         .split("fn alpha_color_target")
         .next()
         .expect("create_programs end");
+    let renderer = source
+        .split("impl api::Renderer for WebGpuRenderer")
+        .nth(1)
+        .expect("WebGPU renderer implementation");
+    let frame_path = renderer
+        .split("fn resize(&mut self")
+        .next()
+        .expect("WebGPU frame path");
+    let submit = frame_path
+        .split("fn submit(&mut self")
+        .nth(1)
+        .expect("WebGPU submit path");
 
     assert!(!source.contains("Option<wgpu::RenderPipeline>"));
     assert!(!source.contains("fn ensure_solid_pipeline"));
@@ -1547,38 +1604,67 @@ fn wasm_webgpu_static_pipelines_are_created_before_frame_encoding() {
     assert!(!source.contains("fn ensure_draw_pipeline"));
     assert!(!source.contains("self.stats.pipeline_creates"));
     for field in [
-        "solid_pipeline: wgpu::RenderPipeline",
-        "rgba_pipeline: wgpu::RenderPipeline",
-        "a8_pipeline: wgpu::RenderPipeline",
-        "sdf_pipeline: wgpu::RenderPipeline",
-        "glyph_rgba_pipeline: wgpu::RenderPipeline",
-        "glyph_a8_pipeline: wgpu::RenderPipeline",
-        "glyph_sdf_pipeline: wgpu::RenderPipeline",
-        "effect_pipeline: wgpu::RenderPipeline",
-        "scene3d_color_tri_depth_read_pipelines: [wgpu::RenderPipeline; 3]",
-        "scene3d_color_tri_depth_write_pipelines: [wgpu::RenderPipeline; 3]",
-        "scene3d_color_tri_no_test_depth_write_pipelines: [wgpu::RenderPipeline; 3]",
-        "scene3d_color_tri_pipelines: [wgpu::RenderPipeline; 3]",
-        "scene3d_color_tri_add_depth_read_pipelines: [wgpu::RenderPipeline; 3]",
-        "scene3d_color_tri_add_depth_write_pipelines: [wgpu::RenderPipeline; 3]",
-        "scene3d_color_tri_add_no_test_depth_write_pipelines: [wgpu::RenderPipeline; 3]",
-        "scene3d_color_tri_add_pipelines: [wgpu::RenderPipeline; 3]",
-        "id_mask_raster_pipeline: wgpu::RenderPipeline",
+        "solid_pipeline: PipelineSlot",
+        "rgba_pipeline: PipelineSlot",
+        "a8_pipeline: PipelineSlot",
+        "sdf_pipeline: PipelineSlot",
+        "glyph_rgba_pipeline: PipelineSlot",
+        "glyph_a8_pipeline: PipelineSlot",
+        "glyph_sdf_pipeline: PipelineSlot",
+        "effect_pipeline: PipelineSlot",
+        "scene3d_color_tri_depth_read_pipelines: [PipelineSlot; 3]",
+        "scene3d_color_tri_depth_write_pipelines: [PipelineSlot; 3]",
+        "scene3d_color_tri_no_test_depth_write_pipelines: [PipelineSlot; 3]",
+        "scene3d_color_tri_pipelines: [PipelineSlot; 3]",
+        "scene3d_color_tri_add_depth_read_pipelines: [PipelineSlot; 3]",
+        "scene3d_color_tri_add_depth_write_pipelines: [PipelineSlot; 3]",
+        "scene3d_color_tri_add_no_test_depth_write_pipelines: [PipelineSlot; 3]",
+        "scene3d_color_tri_add_pipelines: [PipelineSlot; 3]",
+        "id_mask_raster_pipeline: PipelineSlot",
+        "id_mask: IdMaskPrograms",
         "field_seed_pipeline: wgpu::RenderPipeline",
         "field_jump_pipeline: wgpu::RenderPipeline",
         "compositor_pipeline: wgpu::RenderPipeline",
     ] {
         assert!(programs.contains(field), "missing eager pipeline field {field}");
     }
+    for contract in [
+        "pub struct BrowserRendererPipelineProfile",
+        "pub const fn empty() -> Self",
+        "pub const fn full() -> Self",
+        "pub const fn with_draw",
+        "pub const fn with_scene3d",
+        "pub const fn with_id_mask_compositor",
+        "pub const fn declared_pipeline_count",
+        "BrowserRendererPipelineProfile::full().declared_pipeline_count() == 43",
+        ".declared_pipeline_count() == 2",
+        ".declared_pipeline_count() == 9",
+    ] {
+        assert!(public_api.contains(contract), "missing pipeline profile contract {contract}");
+    }
+    for contract in [
+        "Self::from_canvas_webgpu_with_profile(canvas, BrowserRendererPipelineProfile::full())",
+        "Self::from_canvas_with_profile(canvas, BrowserRendererPipelineProfile::full()).await",
+        "pipeline_profile_violation",
+        "fn record_pipeline_profile_violation",
+        "fn record_profiled_draw_kind",
+        "fn preflight_draw_list_profile",
+        "fn push_profiled_draw",
+        "draw pipeline was not declared at renderer construction",
+        "scene3d pipeline was not declared at renderer construction",
+        "ID-mask compositor pipelines were not declared at renderer construction",
+    ] {
+        assert!(source.contains(contract), "missing WebGPU profile contract {contract}");
+    }
     for local in [
-        "let solid_pipeline = create_pipeline(",
-        "let rgba_pipeline = create_pipeline(",
-        "let glyph_rgba_pipeline = create_glyph_pipeline(",
-        "let glyph_a8_pipeline = create_glyph_pipeline(",
-        "let glyph_sdf_pipeline = create_glyph_pipeline(",
-        "let a8_pipeline = create_pipeline(",
-        "let sdf_pipeline = create_pipeline(",
-        "let effect_pipeline = create_pipeline(",
+        "let solid_pipeline = PipelineSlot::create_with(",
+        "let rgba_pipeline = PipelineSlot::create_with(",
+        "let glyph_rgba_pipeline = PipelineSlot::create_with(",
+        "let glyph_a8_pipeline = PipelineSlot::create_with(",
+        "let glyph_sdf_pipeline = PipelineSlot::create_with(",
+        "let a8_pipeline = PipelineSlot::create_with(",
+        "let sdf_pipeline = PipelineSlot::create_with(",
+        "let effect_pipeline = PipelineSlot::create_with(",
         "let scene3d_color_tri_depth_read_pipelines = create_scene3d_pipeline_variants(",
         "let scene3d_color_tri_depth_write_pipelines = create_scene3d_pipeline_variants(",
         "let scene3d_color_tri_no_test_depth_write_pipelines = create_scene3d_pipeline_variants(",
@@ -1587,15 +1673,36 @@ fn wasm_webgpu_static_pipelines_are_created_before_frame_encoding() {
         "let scene3d_color_tri_add_depth_write_pipelines = create_scene3d_pipeline_variants(",
         "let scene3d_color_tri_add_no_test_depth_write_pipelines = create_scene3d_pipeline_variants(",
         "let scene3d_color_tri_add_pipelines = create_scene3d_pipeline_variants(",
-        "let id_mask_raster_pipeline = create_id_mask_raster_pipeline(",
-        "let id_mask_wide_field_seed_pipeline = create_id_mask_field_pipeline(",
-        "let id_mask_wide_field_jump_pipeline = create_id_mask_field_pipeline(",
-        "let id_mask_wide_compositor_pipeline = create_id_mask_compositor_pipeline(",
-        "let id_mask_packed = packed_id_mask_fields.then(",
+        "let id_mask_raster_pipeline = match (",
+        "IdMaskPrograms::Packed(create_packed_id_mask_programs(",
+        "IdMaskPrograms::Wide(IdMaskVariantPrograms {",
         "create_packed_id_mask_programs(",
     ] {
         assert!(create_programs.contains(local), "missing eager pipeline creation {local}");
     }
+    assert!(create_programs.contains("profile.has_draw_pipelines().then(||"));
+    assert!(create_programs.contains("profile.has_scene3d_pipelines().then(||"));
+    assert!(create_programs.contains("profile.includes_id_mask_compositor().then(||"));
+    assert!(create_programs.contains("&& !packed_id_mask_fields).then(||"));
+    assert_eq!(source.matches("create_programs(").count(), 2);
+    assert_eq!(source.matches("self.frame.push_gpu_draw(").count(), 1);
+    assert!(!source.contains(".expect("));
+    assert!(!source.contains(".unwrap("));
+    assert!(!source.contains("self.pipeline_profile_violation = None"));
+    assert!(!frame_path.contains("create_render_pipeline"));
+    assert!(!frame_path.contains("create_programs("));
+    assert!(submit.find("self.pipeline_profile_violation()").unwrap()
+        < submit.find("self.upload_frame_buffers()").unwrap());
+
+    let layer = source_block(source, "fn encode_layer", "fn encode_items");
+    assert!(layer.find("self.preflight_draw_list_profile").unwrap()
+        < layer.find("self.ensure_layer(").unwrap());
+    let snapshot_layers = source_block(source, "fn encode_snapshot_layers", "pub fn encode_snapshot");
+    assert!(snapshot_layers.find("self.preflight_draw_list_profile").unwrap()
+        < snapshot_layers.find("self.ensure_prepared_layer(").unwrap());
+    let prepare_chunk = source_block(source, "fn prepare_chunk", "fn prepared_chunk_supported");
+    assert!(prepare_chunk.find("self.pipeline_profile_violation.is_some()").unwrap()
+        < prepare_chunk.find("create_or_update_prepared_buffer(").unwrap());
 }
 
 #[test]

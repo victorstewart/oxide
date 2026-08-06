@@ -523,7 +523,7 @@ fn persisted_report_root_and_case_schemas_are_frozen() {
 #[test]
 fn persisted_report_case_id_sets_are_frozen() {
     let workspace = persisted_report_json("benchmarks/workspace/latest.json");
-    assert_report_case_id_set(&workspace, "workspace latest", 399, 0x0a3d9230959bfc6d);
+    assert_report_case_id_set(&workspace, "workspace latest", 400, 0x72bfe57a606612a3);
 
     let oxide_device = persisted_report_json("benchmarks/oxide-device/latest.json");
     assert_report_case_id_set(&oxide_device, "oxide device latest", 23, 0x80168fb31ce042ff);
@@ -1307,6 +1307,20 @@ fn workspace_latest_frame_rows_satisfy_metric_contract() {
     assert!(report.cases.iter().any(|case| case.unit == "ms/frame"));
     assert_case_metric_contract(&report.cases)
         .unwrap_or_else(|err| panic!("workspace latest frame metric contract failed: {err}"));
+}
+
+#[test]
+fn workspace_latest_keeps_webgpu_pipeline_profile_counts()
+{
+   let report = workspace_latest_report();
+   let case = workspace_case(&report, "cpu.authoring.webgpu_pipeline_profile.compose");
+   assert_eq!(case.family, "authoring");
+   assert_eq!(case.scenario, "authoring");
+   assert_eq!(workspace_metric(case, "full_declared_pipelines"), 43.0);
+   assert_eq!(workspace_metric(case, "minimal_declared_pipelines"), 2.0);
+   assert_eq!(workspace_metric(case, "mixed_declared_pipelines"), 9.0);
+   assert_eq!(workspace_metric(case, "minimal_pipelines_avoided"), 41.0);
+   assert_eq!(workspace_metric(case, "mixed_pipelines_avoided"), 34.0);
 }
 
 fn assert_workspace_metal_pacing_row(case: &PerfCaseResult, family: &str, scenario: &str) {
@@ -5054,6 +5068,34 @@ fn filtered_run_suite_supports_rendering_architecture_contract() {
     assert_eq!(report_f64(idle, "submissions"), 0.0);
     assert_eq!(report_f64(idle, "wakeups"), 0.0);
     let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
+fn webgpu_pipeline_profiles_have_a_public_authoring_contract()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-webgpu-profile-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.webgpu_pipeline_profile.compose")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run WebGPU pipeline-profile authoring row");
+   let stderr = String::from_utf8_lossy(&output.stderr);
+   assert!(output.status.success(), "WebGPU pipeline-profile authoring row failed: {stderr}");
+   let report = std::fs::read_to_string(&json_out)
+      .expect("read WebGPU pipeline-profile authoring report");
+   let row = report_case_slice(&report, "cpu.authoring.webgpu_pipeline_profile.compose");
+   assert!(row.contains("\"family\": \"authoring\""));
+   assert!(row.contains("\"scenario\": \"authoring\""));
+   assert_eq!(report_f64(row, "full_declared_pipelines"), 43.0);
+   assert_eq!(report_f64(row, "minimal_declared_pipelines"), 2.0);
+   assert_eq!(report_f64(row, "mixed_declared_pipelines"), 9.0);
+   assert_eq!(report_f64(row, "minimal_pipelines_avoided"), 41.0);
+   assert_eq!(report_f64(row, "mixed_pipelines_avoided"), 34.0);
+   let _ = std::fs::remove_file(json_out);
 }
 
 #[test]

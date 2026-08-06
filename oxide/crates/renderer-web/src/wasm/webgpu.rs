@@ -11,7 +11,10 @@ use crate::image_slots::GenerationSlots;
 use crate::packed_geometry::{
     PackedGeometry, PackedIndexKind, PackedIndexRange, PackedVertex, PACKED_VERTEX_BYTES,
 };
-use crate::{id_mask_compositor, neon_marker, scene3d};
+use crate::{
+   id_mask_compositor, neon_marker, scene3d, BrowserDrawPipeline,
+   BrowserRendererPipelineProfile, BrowserScene3dPipeline,
+};
 use crate::{NormalizedIndexMode, WebGpuCpuSubmitTimingSample, WebGpuTimestampSample, WebRendererStats};
 use js_sys::Reflect;
 use oxide_renderer_api as api;
@@ -233,7 +236,7 @@ fn rgba8_mip_chain(width: u32, height: u32, rgba: Vec<u8>) -> Vec<RgbaMipLevel>
    let mut levels = vec![RgbaMipLevel { width, height, rgba }];
    while levels.last().is_some_and(|level| level.width > 1 || level.height > 1)
    {
-      let source = levels.last().expect("mip chain has a base level");
+      let Some(source) = levels.last() else { break };
       let next_width = (source.width / 2).max(1);
       let next_height = (source.height / 2).max(1);
       let mut next = vec![0_u8; next_width as usize * next_height as usize * 4];
@@ -313,17 +316,9 @@ struct GpuMesh3d {
     opaque: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Scene3dPipelineKind {
-    AlphaDepthRead,
-    AlphaDepthWrite,
-    AlphaNoTestDepthWrite,
-    AlphaNoDepth,
-    AdditiveDepthRead,
-    AdditiveDepthWrite,
-    AdditiveNoTestDepthWrite,
-    AdditiveNoDepth,
-}
+type DrawPipelineKey = BrowserDrawPipeline;
+
+type Scene3dPipelineKind = BrowserScene3dPipeline;
 
 #[derive(Clone, Copy)]
 struct Scene3dDraw {
@@ -852,25 +847,6 @@ enum DrawKind {
     Sdf { image: u32 },
     Layer { id: u32 },
     Backdrop { rect: api::RectF, sigma: f32 },
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum DrawPipelineKey {
-    Solid,
-    RRect,
-    ImageRgba,
-    ImageA8,
-    NineSliceRgba,
-    NineSliceA8,
-    Spinner,
-    NeonMarker,
-    GlyphRgba,
-    GlyphA8,
-    GlyphSdf,
-    Rgba,
-    A8,
-    Sdf,
-    Effect,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1952,42 +1928,106 @@ impl WebGpuTimestampQueries {
     }
 }
 
+enum PipelineSlot
+{
+   Enabled(wgpu::RenderPipeline),
+   Disabled,
+}
+
+impl PipelineSlot
+{
+   fn create(enabled: bool, create: impl FnOnce() -> wgpu::RenderPipeline) -> Self
+   {
+      if enabled { Self::Enabled(create()) } else { Self::Disabled }
+   }
+
+   fn create_with<T>(
+      enabled: bool,
+      dependency: Option<T>,
+      create: impl FnOnce(T) -> wgpu::RenderPipeline,
+   ) -> Self
+   {
+      match (enabled, dependency)
+      {
+         (true, Some(dependency)) => Self::Enabled(create(dependency)),
+         _ => Self::Disabled,
+      }
+   }
+
+   fn get(&self) -> Option<&wgpu::RenderPipeline>
+   {
+      match self
+      {
+         Self::Enabled(pipeline) => Some(pipeline),
+         Self::Disabled => None,
+      }
+   }
+}
+
+enum IdMaskPrograms
+{
+   Disabled,
+   Wide(IdMaskVariantPrograms),
+   Packed(IdMaskVariantPrograms),
+}
+
+impl IdMaskPrograms
+{
+   fn get(&self) -> Option<&IdMaskVariantPrograms>
+   {
+      match self
+      {
+         Self::Wide(programs) | Self::Packed(programs) => Some(programs),
+         Self::Disabled => None,
+      }
+   }
+
+   fn packed(&self) -> bool
+   {
+      matches!(self, Self::Packed(_))
+   }
+
+   fn enabled(&self) -> bool
+   {
+      !matches!(self, Self::Disabled)
+   }
+}
+
 struct GpuPrograms {
     viewport_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
     effect_layout: wgpu::BindGroupLayout,
     scene3d_layout: wgpu::BindGroupLayout,
     id_mask_raster_layout: wgpu::BindGroupLayout,
-    id_mask_wide: IdMaskVariantPrograms,
-    id_mask_packed: Option<IdMaskVariantPrograms>,
-    solid_pipeline: wgpu::RenderPipeline,
-    rrect_pipeline: wgpu::RenderPipeline,
-    image_rgba_pipeline: wgpu::RenderPipeline,
-    image_a8_pipeline: wgpu::RenderPipeline,
+    id_mask: IdMaskPrograms,
+    solid_pipeline: PipelineSlot,
+    rrect_pipeline: PipelineSlot,
+    image_rgba_pipeline: PipelineSlot,
+    image_a8_pipeline: PipelineSlot,
     image_unit_vertex_buffer: wgpu::Buffer,
     image_unit_index_buffer: wgpu::Buffer,
-    nine_slice_rgba_pipeline: wgpu::RenderPipeline,
-    nine_slice_a8_pipeline: wgpu::RenderPipeline,
+    nine_slice_rgba_pipeline: PipelineSlot,
+    nine_slice_a8_pipeline: PipelineSlot,
     nine_slice_unit_vertex_buffer: wgpu::Buffer,
     nine_slice_unit_index_buffer: wgpu::Buffer,
-    spinner_pipeline: wgpu::RenderPipeline,
-    neon_marker_pipeline: wgpu::RenderPipeline,
-    glyph_rgba_pipeline: wgpu::RenderPipeline,
-    glyph_a8_pipeline: wgpu::RenderPipeline,
-    glyph_sdf_pipeline: wgpu::RenderPipeline,
-    rgba_pipeline: wgpu::RenderPipeline,
-    a8_pipeline: wgpu::RenderPipeline,
-    sdf_pipeline: wgpu::RenderPipeline,
-    effect_pipeline: wgpu::RenderPipeline,
-    scene3d_color_tri_depth_read_pipelines: [wgpu::RenderPipeline; 3],
-    scene3d_color_tri_depth_write_pipelines: [wgpu::RenderPipeline; 3],
-    scene3d_color_tri_no_test_depth_write_pipelines: [wgpu::RenderPipeline; 3],
-    scene3d_color_tri_pipelines: [wgpu::RenderPipeline; 3],
-    scene3d_color_tri_add_depth_read_pipelines: [wgpu::RenderPipeline; 3],
-    scene3d_color_tri_add_depth_write_pipelines: [wgpu::RenderPipeline; 3],
-    scene3d_color_tri_add_no_test_depth_write_pipelines: [wgpu::RenderPipeline; 3],
-    scene3d_color_tri_add_pipelines: [wgpu::RenderPipeline; 3],
-    id_mask_raster_pipeline: wgpu::RenderPipeline,
+    spinner_pipeline: PipelineSlot,
+    neon_marker_pipeline: PipelineSlot,
+    glyph_rgba_pipeline: PipelineSlot,
+    glyph_a8_pipeline: PipelineSlot,
+    glyph_sdf_pipeline: PipelineSlot,
+    rgba_pipeline: PipelineSlot,
+    a8_pipeline: PipelineSlot,
+    sdf_pipeline: PipelineSlot,
+    effect_pipeline: PipelineSlot,
+    scene3d_color_tri_depth_read_pipelines: [PipelineSlot; 3],
+    scene3d_color_tri_depth_write_pipelines: [PipelineSlot; 3],
+    scene3d_color_tri_no_test_depth_write_pipelines: [PipelineSlot; 3],
+    scene3d_color_tri_pipelines: [PipelineSlot; 3],
+    scene3d_color_tri_add_depth_read_pipelines: [PipelineSlot; 3],
+    scene3d_color_tri_add_depth_write_pipelines: [PipelineSlot; 3],
+    scene3d_color_tri_add_no_test_depth_write_pipelines: [PipelineSlot; 3],
+    scene3d_color_tri_add_pipelines: [PipelineSlot; 3],
+    id_mask_raster_pipeline: PipelineSlot,
     sampler: wgpu::Sampler,
 }
 
@@ -2056,17 +2096,34 @@ pub struct BrowserRenderer {
 impl BrowserRenderer {
    pub async fn from_canvas_id_webgpu(id: &str) -> Result<Self, api::RenderError>
    {
-      let canvas = canvas_by_id(id)?;
-      Self::from_canvas_webgpu(canvas).await
+      Self::from_canvas_id_webgpu_with_profile(id, BrowserRendererPipelineProfile::full()).await
+   }
+
+   /// Creates a WebGPU renderer with only the statically declared pipeline set.
+   pub async fn from_canvas_id_webgpu_with_profile(
+      id: &str,
+      profile: BrowserRendererPipelineProfile,
+   ) -> Result<Self, api::RenderError>
+   {
+      Self::from_canvas_webgpu_with_profile(canvas_by_id(id)?, profile).await
    }
 
    pub async fn from_canvas_webgpu(canvas: HtmlCanvasElement) -> Result<Self, api::RenderError>
+   {
+      Self::from_canvas_webgpu_with_profile(canvas, BrowserRendererPipelineProfile::full()).await
+   }
+
+   /// Creates a WebGPU renderer with only the statically declared pipeline set.
+   pub async fn from_canvas_webgpu_with_profile(
+      canvas: HtmlCanvasElement,
+      profile: BrowserRendererPipelineProfile,
+   ) -> Result<Self, api::RenderError>
    {
       if !browser_webgpu_present()
       {
          return Err(api::RenderError::Unsupported("webgpu unavailable"));
       }
-      let inner = WebGpuRenderer::from_canvas(canvas).await?;
+      let inner = WebGpuRenderer::from_canvas_with_profile(canvas, profile).await?;
       Ok(Self { inner })
    }
 
@@ -2498,6 +2555,8 @@ pub struct WebGpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    pipeline_profile: BrowserRendererPipelineProfile,
+    pipeline_profile_violation: Option<&'static str>,
     programs: GpuPrograms,
     scene_target: Option<GpuColorTarget>,
     scene_depth_target: Option<GpuDepthTarget>,
@@ -2736,7 +2795,14 @@ const _: () = {
 
 impl WebGpuRenderer {
     pub async fn from_canvas_id(id: &str) -> Result<Self, api::RenderError> {
-        Self::from_canvas(canvas_by_id(id)?).await
+        Self::from_canvas_id_with_profile(id, BrowserRendererPipelineProfile::full()).await
+    }
+
+    pub async fn from_canvas_id_with_profile(
+        id: &str,
+        profile: BrowserRendererPipelineProfile,
+    ) -> Result<Self, api::RenderError> {
+        Self::from_canvas_with_profile(canvas_by_id(id)?, profile).await
     }
 
     fn sample_memory_stats(&mut self) {
@@ -2907,6 +2973,13 @@ impl WebGpuRenderer {
     }
 
     pub async fn from_canvas(canvas: HtmlCanvasElement) -> Result<Self, api::RenderError> {
+        Self::from_canvas_with_profile(canvas, BrowserRendererPipelineProfile::full()).await
+    }
+
+    pub async fn from_canvas_with_profile(
+        canvas: HtmlCanvasElement,
+        pipeline_profile: BrowserRendererPipelineProfile,
+    ) -> Result<Self, api::RenderError> {
         let device_session = BrowserWebGpuDeviceSessionLease::acquire()?;
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
@@ -2974,7 +3047,12 @@ impl WebGpuRenderer {
         config.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
         surface.configure(&device, &config);
 
-        let programs = create_programs(&device, config.format, packed_id_mask_fields);
+        let programs = create_programs(
+            &device,
+            config.format,
+            packed_id_mask_fields,
+            pipeline_profile,
+        );
         let (viewport_buffer, viewport_bind_group) = create_viewport_bind_group(&device, &programs);
         let prepared_property_ring = PreparedPropertyRing::new(&device, &programs);
         write_viewport_uniform(&queue, &viewport_buffer, width, height, 1.0, 0.0);
@@ -3004,6 +3082,20 @@ impl WebGpuRenderer {
         )
         .saturating_mul(8)
         .clamp(LAYER_CACHE_MIN_BUDGET_BYTES, LAYER_CACHE_MAX_BUDGET_BYTES);
+        let id_mask_cache_budget_bytes = if pipeline_profile.includes_id_mask_compositor() {
+            saturating_texture_bytes(
+                u64::from(width),
+                u64::from(height),
+                id_mask_target_bytes_per_pixel(packed_id_mask_fields),
+            )
+            .saturating_mul(8)
+            .clamp(
+                ID_MASK_FIELD_CACHE_MIN_BUDGET_BYTES,
+                ID_MASK_FIELD_CACHE_MAX_BUDGET_BYTES,
+            )
+        } else {
+            0
+        };
 
         Ok(Self {
             canvas,
@@ -3011,6 +3103,8 @@ impl WebGpuRenderer {
             device,
             queue,
             config,
+            pipeline_profile,
+            pipeline_profile_violation: None,
             programs,
             scene_target: None,
             scene_depth_target: None,
@@ -3062,16 +3156,7 @@ impl WebGpuRenderer {
             id_mask_vertex_caches: Vec::new(),
             id_mask_field_cache: Vec::new(),
             id_mask_resolved_draws: Vec::new(),
-            id_mask_cache_budget_bytes: saturating_texture_bytes(
-                u64::from(width),
-                u64::from(height),
-                id_mask_target_bytes_per_pixel(packed_id_mask_fields),
-            )
-            .saturating_mul(8)
-            .clamp(
-                ID_MASK_FIELD_CACHE_MIN_BUDGET_BYTES,
-                ID_MASK_FIELD_CACHE_MAX_BUDGET_BYTES,
-            ),
+            id_mask_cache_budget_bytes,
             id_mask_cache_resident_bytes: 0,
             id_mask_cache_evictions: 0,
             id_mask_cache_purges: 0,
@@ -3409,11 +3494,15 @@ impl WebGpuRenderer {
     }
 
     fn id_mask_target_bytes_per_pixel(&self) -> u64 {
-        id_mask_target_bytes_per_pixel(self.programs.id_mask_packed.is_some())
+        if self.programs.id_mask.enabled() {
+            id_mask_target_bytes_per_pixel(self.programs.id_mask.packed())
+        } else {
+            0
+        }
     }
 
     fn id_mask_packed_fields_supported(&self) -> bool {
-        self.programs.id_mask_packed.is_some()
+        self.programs.id_mask.packed()
     }
 
     pub fn set_id_mask_cache_budget_bytes(&mut self, budget_bytes: u64) {
@@ -4587,6 +4676,19 @@ impl WebGpuRenderer {
     }
 
     pub fn encode_scene3d(&mut self, pass: &scene3d::Pass3d<'_>) -> Result<(), api::RenderError> {
+        if pass.instances.iter().filter(|instance| instance.color_write).any(|instance| {
+            let pipeline = BrowserScene3dPipeline::from_state(
+                instance.blend,
+                instance.depth_test,
+                instance.depth_write,
+            );
+            !self.pipeline_profile.contains_scene3d(pipeline, instance.cull)
+                || self.scene3d_pipeline(pipeline, instance.cull).is_none()
+        }) {
+            let violation = "scene3d pipeline was not declared at renderer construction";
+            self.record_pipeline_profile_violation(violation);
+            return Err(api::RenderError::InvalidOperation(violation));
+        }
         if !self.scene3d_active {
             self.scene3d_clear_color = pass.clear_color;
             self.scene3d_clear_depth = pass.clear_depth;
@@ -4615,6 +4717,11 @@ impl WebGpuRenderer {
             if !instance.color_write {
                 continue;
             }
+            let pipeline = BrowserScene3dPipeline::from_state(
+                instance.blend,
+                instance.depth_test,
+                instance.depth_write,
+            );
             let first_instance = u32::try_from(
                 self.scene3d_instance_bytes.len() / SCENE3D_INSTANCE_STRIDE,
             )
@@ -4629,28 +4736,6 @@ impl WebGpuRenderer {
                 .stats
                 .scene3d_instance_bytes
                 .saturating_add(SCENE3D_INSTANCE_STRIDE as u64);
-            let pipeline = match (instance.blend, instance.depth_test, instance.depth_write) {
-                (scene3d::BlendMode3d::Additive, true, true) => {
-                    Scene3dPipelineKind::AdditiveDepthWrite
-                }
-                (scene3d::BlendMode3d::Additive, false, true) => {
-                    Scene3dPipelineKind::AdditiveNoTestDepthWrite
-                }
-                (scene3d::BlendMode3d::Additive, true, false) => {
-                    Scene3dPipelineKind::AdditiveDepthRead
-                }
-                (scene3d::BlendMode3d::Additive, false, false) => {
-                    Scene3dPipelineKind::AdditiveNoDepth
-                }
-                (scene3d::BlendMode3d::Alpha, true, true) => {
-                    Scene3dPipelineKind::AlphaDepthWrite
-                }
-                (scene3d::BlendMode3d::Alpha, false, true) => {
-                    Scene3dPipelineKind::AlphaNoTestDepthWrite
-                }
-                (scene3d::BlendMode3d::Alpha, true, false) => Scene3dPipelineKind::AlphaDepthRead,
-                (scene3d::BlendMode3d::Alpha, false, _) => Scene3dPipelineKind::AlphaNoDepth,
-            };
             let draw = Scene3dDraw {
                 mesh: instance.mesh.0,
                 first_instance,
@@ -4681,6 +4766,15 @@ impl WebGpuRenderer {
         &mut self,
         pass: &id_mask_compositor::IdMaskGpuCompositorPass<'_>,
     ) -> Result<(), api::RenderError> {
+        if !self.pipeline_profile.includes_id_mask_compositor()
+            || !self.programs.id_mask.enabled()
+            || self.programs.id_mask_raster_pipeline.get().is_none()
+        {
+            let violation =
+                "ID-mask compositor pipelines were not declared at renderer construction";
+            self.record_pipeline_profile_violation(violation);
+            return Err(api::RenderError::InvalidOperation(violation));
+        }
         if pass.raster.mask_width == 0 || pass.raster.mask_height == 0 {
             return Err(api::RenderError::InvalidOperation(
                 "id-mask GPU raster has zero dimensions",
@@ -4697,6 +4791,13 @@ impl WebGpuRenderer {
         let mask_height = u32::try_from(pass.raster.mask_height).map_err(|_| {
             api::RenderError::InvalidOperation("id-mask GPU raster height exceeds WebGPU limits")
         })?;
+        if self.programs.id_mask.packed()
+            && !id_mask_packed_coordinates_fit(mask_width, mask_height)
+        {
+            return Err(api::RenderError::InvalidOperation(
+                "ID-mask dimensions exceed the construction-selected packed backend",
+            ));
+        }
         self.stats.id_mask_draws = self.stats.id_mask_draws.saturating_add(1);
         let vertex_cache_first = self.id_mask_draw_chunk_indices.len() as u32;
         let mut vertex_count = 0usize;
@@ -4740,6 +4841,14 @@ impl WebGpuRenderer {
         &mut self,
         pass: &neon_marker::NeonMarkerPass<'_>,
     ) -> Result<(), api::RenderError> {
+        if pass.clamped_len() != 0
+            && (!self.pipeline_profile.contains_draw(BrowserDrawPipeline::NeonMarker)
+                || self.pipeline_for_draw(DrawPipelineKey::NeonMarker).is_none())
+        {
+            let violation = "neon-marker pipeline was not declared at renderer construction";
+            self.record_pipeline_profile_violation(violation);
+            return Err(api::RenderError::InvalidOperation(violation));
+        }
         for marker in pass.markers.iter().take(pass.clamped_len()) {
             if let Some(instance) = NeonMarkerInstance::new(*marker, pass.viewport)
             {
@@ -5066,6 +5175,83 @@ impl WebGpuRenderer {
         }
     }
 
+    fn record_pipeline_profile_violation(&mut self, violation: &'static str)
+    {
+        if self.pipeline_profile_violation.is_none()
+        {
+            self.pipeline_profile_violation = Some(violation);
+        }
+    }
+
+    fn record_profiled_draw_kind(&mut self, kind: DrawKind)
+    {
+        if self.pipeline_profile_violation.is_none()
+        {
+            let pipeline = Self::draw_pipeline_for_kind(kind);
+            if !self.pipeline_profile.contains_draw(pipeline)
+                || self.pipeline_for_draw(pipeline).is_none()
+            {
+                self.record_pipeline_profile_violation(
+                    "draw pipeline was not declared at renderer construction",
+                );
+            }
+            else if matches!(kind, DrawKind::Backdrop { .. })
+                && (!self.pipeline_profile.contains_draw(BrowserDrawPipeline::Rgba)
+                    || self.pipeline_for_draw(DrawPipelineKey::Rgba).is_none())
+            {
+                self.record_pipeline_profile_violation(
+                    "RGBA present pipeline was not declared at renderer construction",
+                );
+            }
+        }
+    }
+
+    fn push_profiled_draw(&mut self, draw: GpuDraw)
+    {
+        self.record_profiled_draw_kind(draw.kind);
+        self.frame.push_gpu_draw(draw);
+    }
+
+    fn preflight_draw_list_profile(
+        &mut self,
+        list: &api::DrawList,
+        start: usize,
+        stop_at_layer_end: bool,
+    ) -> usize
+    {
+        let saved_stats = self.stats;
+        let saved_frame = core::mem::take(&mut self.frame);
+        let saved_clip_stack = core::mem::take(&mut self.clip_stack);
+        let mut index = start;
+        let mut layer_depth = 0usize;
+        while index < list.items.len()
+        {
+            match &list.items[index]
+            {
+                api::DrawCmd::LayerBegin { id, .. } =>
+                {
+                    self.record_profiled_draw_kind(DrawKind::Layer { id: *id });
+                    layer_depth = layer_depth.saturating_add(1);
+                }
+                api::DrawCmd::LayerEnd if stop_at_layer_end && layer_depth == 0 =>
+                {
+                    index += 1;
+                    break;
+                }
+                api::DrawCmd::LayerEnd =>
+                {
+                    layer_depth = layer_depth.saturating_sub(1);
+                }
+                item => self.encode_draw_cmd(list, item),
+            }
+            index += 1;
+        }
+        self.frame = saved_frame;
+        self.clip_stack = saved_clip_stack;
+        self.stats = saved_stats;
+        index
+    }
+
     fn push_draw(&mut self, kind: DrawKind, vertices: &[PackedVertex; 4]) {
         let clip = self.current_clip();
         let target = self.current_target();
@@ -5082,7 +5268,7 @@ impl WebGpuRenderer {
         if self.try_coalesce_draw_item(kind, range, clip, target) {
             return;
         }
-        self.frame.push_gpu_draw(GpuDraw {
+        self.push_profiled_draw(GpuDraw {
             kind,
             index_kind: range.kind,
             first_index: range.first_index,
@@ -5123,7 +5309,7 @@ impl WebGpuRenderer {
         if self.try_coalesce_draw_item(kind, range, clip, target) {
             return;
         }
-        self.frame.push_gpu_draw(GpuDraw {
+        self.push_profiled_draw(GpuDraw {
             kind,
             index_kind: range.kind,
             first_index: range.first_index,
@@ -5173,7 +5359,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.push_gpu_draw(GpuDraw {
+        self.push_profiled_draw(GpuDraw {
             kind: DrawKind::RRect { first_instance, instance_count: 1 },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -5231,7 +5417,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.push_gpu_draw(GpuDraw {
+        self.push_profiled_draw(GpuDraw {
             kind: DrawKind::Image { image, kind, first_instance, instance_count: 1 },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -5292,7 +5478,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.push_gpu_draw(GpuDraw {
+        self.push_profiled_draw(GpuDraw {
             kind: DrawKind::Glyph { image, kind, first_instance, instance_count },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -5355,7 +5541,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.push_gpu_draw(GpuDraw {
+        self.push_profiled_draw(GpuDraw {
             kind: DrawKind::NineSlice { image, kind, first_instance, instance_count: 1 },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -5405,7 +5591,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.push_gpu_draw(GpuDraw {
+        self.push_profiled_draw(GpuDraw {
             kind: DrawKind::Spinner { first_instance, instance_count: 1 },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -5455,7 +5641,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.push_gpu_draw(GpuDraw {
+        self.push_profiled_draw(GpuDraw {
             kind: DrawKind::NeonMarker { first_instance, instance_count: 1 },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -5718,6 +5904,16 @@ impl WebGpuRenderer {
             self.encode_items(list, index, true);
             return;
         };
+        if self.pipeline_profile != BrowserRendererPipelineProfile::full()
+        {
+            self.record_profiled_draw_kind(DrawKind::Layer { id });
+            let body_end = self.preflight_draw_list_profile(list, *index, true);
+            if self.pipeline_profile_violation.is_some()
+            {
+                *index = body_end;
+                return;
+            }
+        }
         if !dirty {
             let cached_rect = self.cached_layer(id, frame).map(|layer| layer.composite_rect);
             if let Some(cached_rect) = cached_rect {
@@ -6495,7 +6691,7 @@ impl WebGpuRenderer {
         }));
         self.id_mask_uniform_capacity = capacity;
         self.id_mask_raster_bind_group = None;
-        let uniform_buffer = self.id_mask_uniform_buffer.as_ref().unwrap();
+        let Some(uniform_buffer) = self.id_mask_uniform_buffer.as_ref() else { return };
         for entry in &mut self.id_mask_field_cache {
             rebuild_id_mask_target_bind_groups(
                 &self.device,
@@ -6559,8 +6755,7 @@ impl WebGpuRenderer {
                 self.stats.backend_cache_misses.saturating_add(1);
             let width = draw.mask_width.max(1);
             let height = draw.mask_height.max(1);
-            let packed = self.programs.id_mask_packed.is_some()
-                && id_mask_packed_coordinates_fit(width, height);
+            let packed = self.programs.id_mask.packed();
             let required = id_mask_render_targets_bytes(width, height, packed);
             let admission = self.prepare_id_mask_cache_admission(required, width, height);
             let cacheable = admission.is_some();
@@ -6663,8 +6858,7 @@ impl WebGpuRenderer {
         height: u32,
         reusable: Option<IdMaskRenderTargets>,
     ) -> Option<IdMaskRenderTargets> {
-        let packed = self.programs.id_mask_packed.is_some()
-            && id_mask_packed_coordinates_fit(width, height);
+        let packed = self.programs.id_mask.packed();
         if let Some(targets) = reusable {
             if targets.width == width
                 && targets.height == height
@@ -6685,27 +6879,26 @@ impl WebGpuRenderer {
         let city_view = city_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let neighborhood_view =
             neighborhood_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let fields = if packed {
-            let programs = self.programs.id_mask_packed.as_ref()?;
-            create_packed_id_mask_field_targets(
-                &self.device,
-                programs,
-                uniform_buffer,
-                &city_view,
-                &neighborhood_view,
-                width,
-                height,
-            )
-        } else {
-            create_wide_id_mask_field_targets(
-                &self.device,
-                &self.programs.id_mask_wide,
-                uniform_buffer,
-                &city_view,
-                &neighborhood_view,
-                width,
-                height,
-            )
+        let fields = match &self.programs.id_mask {
+            IdMaskPrograms::Packed(programs) => create_packed_id_mask_field_targets(
+               &self.device,
+               programs,
+               uniform_buffer,
+               &city_view,
+               &neighborhood_view,
+               width,
+               height,
+            ),
+            IdMaskPrograms::Wide(programs) => create_wide_id_mask_field_targets(
+               &self.device,
+               programs,
+               uniform_buffer,
+               &city_view,
+               &neighborhood_view,
+               width,
+               height,
+            ),
+            IdMaskPrograms::Disabled => return None,
         };
         let targets = IdMaskRenderTargets {
             width,
@@ -7024,6 +7217,25 @@ impl WebGpuRenderer
       if !reuse_plan
       {
          self.prepared_layer_snapshot = Some(snapshot.clone());
+      }
+      if self.pipeline_profile != BrowserRendererPipelineProfile::full()
+      {
+         for entry in &plan
+         {
+            self.record_profiled_draw_kind(DrawKind::Layer { id: entry.frame.key.id });
+            self.preflight_draw_list_profile(entry.chunk.draw_list(), 0, false);
+            if self.pipeline_profile_violation.is_some()
+            {
+               break;
+            }
+         }
+         if self.pipeline_profile_violation.is_some()
+         {
+            self.prepared_layer_key_indices = layer_keys;
+            self.prepared_layer_plan = plan;
+            self.prepared_layer_snapshot = None;
+            return Some(Ok(()));
+         }
       }
       let required_layer_bytes = plan.iter().filter(|entry| !entry.duplicate).fold(0_u64, |total, entry| {
          total.saturating_add(saturating_texture_bytes(
@@ -7385,6 +7597,10 @@ impl WebGpuRenderer
       self.clip_stack = saved_clip_stack;
       self.target_stack = saved_target_stack;
       self.stats = saved_stats;
+      if self.pipeline_profile_violation.is_some()
+      {
+         return None;
+      }
       if !lowered.layer_passes.is_empty() || lowered.effect_count != 0 || lowered.draws.is_empty()
       {
          return None;
@@ -8044,22 +8260,59 @@ impl WebGpuRenderer
    {
       match pipeline
       {
-         DrawPipelineKey::Solid => Some(self.solid_pipeline()),
-         DrawPipelineKey::RRect => Some(self.rrect_pipeline()),
-         DrawPipelineKey::ImageRgba => Some(self.image_rgba_pipeline()),
-         DrawPipelineKey::ImageA8 => Some(self.image_a8_pipeline()),
-         DrawPipelineKey::NineSliceRgba => Some(self.nine_slice_rgba_pipeline()),
-         DrawPipelineKey::NineSliceA8 => Some(self.nine_slice_a8_pipeline()),
-         DrawPipelineKey::Spinner => Some(self.spinner_pipeline()),
-         DrawPipelineKey::NeonMarker => Some(self.neon_marker_pipeline()),
-         DrawPipelineKey::GlyphRgba => Some(self.glyph_rgba_pipeline()),
-         DrawPipelineKey::GlyphA8 => Some(self.glyph_a8_pipeline()),
-         DrawPipelineKey::GlyphSdf => Some(self.glyph_sdf_pipeline()),
-         DrawPipelineKey::Rgba => Some(self.rgba_pipeline()),
-         DrawPipelineKey::A8 => Some(self.a8_pipeline()),
-         DrawPipelineKey::Sdf => Some(self.sdf_pipeline()),
-         DrawPipelineKey::Effect => None,
+         DrawPipelineKey::Solid => self.programs.solid_pipeline.get(),
+         DrawPipelineKey::RRect => self.programs.rrect_pipeline.get(),
+         DrawPipelineKey::ImageRgba => self.programs.image_rgba_pipeline.get(),
+         DrawPipelineKey::ImageA8 => self.programs.image_a8_pipeline.get(),
+         DrawPipelineKey::NineSliceRgba => self.programs.nine_slice_rgba_pipeline.get(),
+         DrawPipelineKey::NineSliceA8 => self.programs.nine_slice_a8_pipeline.get(),
+         DrawPipelineKey::Spinner => self.programs.spinner_pipeline.get(),
+         DrawPipelineKey::NeonMarker => self.programs.neon_marker_pipeline.get(),
+         DrawPipelineKey::GlyphRgba => self.programs.glyph_rgba_pipeline.get(),
+         DrawPipelineKey::GlyphA8 => self.programs.glyph_a8_pipeline.get(),
+         DrawPipelineKey::GlyphSdf => self.programs.glyph_sdf_pipeline.get(),
+         DrawPipelineKey::Rgba => self.programs.rgba_pipeline.get(),
+         DrawPipelineKey::A8 => self.programs.a8_pipeline.get(),
+         DrawPipelineKey::Sdf => self.programs.sdf_pipeline.get(),
+         DrawPipelineKey::Effect => self.programs.effect_pipeline.get(),
       }
+   }
+
+   fn draw_pipeline_for_kind(kind: DrawKind) -> DrawPipelineKey
+   {
+      match kind
+      {
+         DrawKind::Solid => DrawPipelineKey::Solid,
+         DrawKind::RRect { .. } => DrawPipelineKey::RRect,
+         DrawKind::Image { kind: GpuImageKind::Rgba, .. } => DrawPipelineKey::ImageRgba,
+         DrawKind::Image { kind: GpuImageKind::A8, .. } => DrawPipelineKey::ImageA8,
+         DrawKind::NineSlice { kind: GpuImageKind::Rgba, .. } => DrawPipelineKey::NineSliceRgba,
+         DrawKind::NineSlice { kind: GpuImageKind::A8, .. } => DrawPipelineKey::NineSliceA8,
+         DrawKind::Spinner { .. } => DrawPipelineKey::Spinner,
+         DrawKind::NeonMarker { .. } => DrawPipelineKey::NeonMarker,
+         DrawKind::Glyph { kind: GlyphPipelineKind::Rgba, .. } => DrawPipelineKey::GlyphRgba,
+         DrawKind::Glyph { kind: GlyphPipelineKind::A8, .. } => DrawPipelineKey::GlyphA8,
+         DrawKind::Glyph { kind: GlyphPipelineKind::Sdf, .. } => DrawPipelineKey::GlyphSdf,
+         DrawKind::Rgba { .. } | DrawKind::Layer { .. } => DrawPipelineKey::Rgba,
+         DrawKind::A8 { .. } => DrawPipelineKey::A8,
+         DrawKind::Sdf { .. } => DrawPipelineKey::Sdf,
+         DrawKind::Backdrop { .. } => DrawPipelineKey::Effect,
+      }
+   }
+
+   fn pipeline_profile_violation(&self) -> Option<&'static str>
+   {
+      if self.pipeline_profile_violation.is_some()
+      {
+         return self.pipeline_profile_violation;
+      }
+      if !self.direct_surface_enabled
+         && (!self.pipeline_profile.contains_draw(BrowserDrawPipeline::Rgba)
+            || self.pipeline_for_draw(DrawPipelineKey::Rgba).is_none())
+      {
+         return Some("RGBA present pipeline was not declared at renderer construction");
+      }
+      None
    }
 }
 
@@ -8162,6 +8415,11 @@ impl api::Renderer for WebGpuRenderer {
         if self.active_token != Some(token) {
             self.stats.skipped_submissions = self.stats.skipped_submissions.saturating_add(1);
             return Err(api::RenderError::InvalidOperation("frame token mismatch"));
+        }
+        if let Some(violation) = self.pipeline_profile_violation() {
+            self.active_token = None;
+            self.stats.skipped_submissions = self.stats.skipped_submissions.saturating_add(1);
+            return Err(api::RenderError::InvalidOperation(violation));
         }
         self.active_token = None;
         if self.cpu_submit_timing_enabled {
@@ -8675,73 +8933,13 @@ impl WebGpuRenderer {
        self.record_effect_graph_stats(stats, false);
     }
 
-    fn solid_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.solid_pipeline
-    }
-
-    fn rrect_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.rrect_pipeline
-    }
-
-    fn image_rgba_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.image_rgba_pipeline
-    }
-
-    fn image_a8_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.image_a8_pipeline
-    }
-
-    fn nine_slice_rgba_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.nine_slice_rgba_pipeline
-    }
-
-    fn nine_slice_a8_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.nine_slice_a8_pipeline
-    }
-
-    fn spinner_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.spinner_pipeline
-    }
-
-    fn neon_marker_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.neon_marker_pipeline
-    }
-
-    fn glyph_rgba_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.glyph_rgba_pipeline
-    }
-
-    fn glyph_a8_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.glyph_a8_pipeline
-    }
-
-    fn glyph_sdf_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.glyph_sdf_pipeline
-    }
-
-    fn rgba_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.rgba_pipeline
-    }
-
-    fn a8_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.a8_pipeline
-    }
-
-    fn sdf_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.sdf_pipeline
-    }
-
-    fn effect_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.effect_pipeline
-    }
-
     fn scene3d_pipeline(
         &self,
         kind: Scene3dPipelineKind,
         cull: scene3d::CullMode3d,
-    ) -> &wgpu::RenderPipeline {
+    ) -> Option<&wgpu::RenderPipeline> {
         let index = scene3d_cull_index(cull);
-        match kind {
+        let slot = match kind {
             Scene3dPipelineKind::AlphaDepthRead => {
                 &self.programs.scene3d_color_tri_depth_read_pipelines[index]
             }
@@ -8766,30 +8964,29 @@ impl WebGpuRenderer {
             Scene3dPipelineKind::AdditiveNoDepth => {
                 &self.programs.scene3d_color_tri_add_pipelines[index]
             }
-        }
+        };
+        slot.get()
     }
 
-    fn id_mask_raster_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.id_mask_raster_pipeline
+    fn id_mask_raster_pipeline(&self) -> Option<&wgpu::RenderPipeline> {
+        self.programs.id_mask_raster_pipeline.get()
     }
 
-    fn id_mask_programs(&self, packed: bool) -> &IdMaskVariantPrograms {
-        match (packed, self.programs.id_mask_packed.as_ref()) {
-            (true, Some(programs)) => programs,
-            _ => &self.programs.id_mask_wide,
-        }
+    fn id_mask_programs(&self, packed: bool) -> Option<&IdMaskVariantPrograms> {
+        debug_assert_eq!(packed, self.programs.id_mask.packed());
+        self.programs.id_mask.get()
     }
 
-    fn id_mask_field_seed_pipeline(&self, packed: bool) -> &wgpu::RenderPipeline {
-        &self.id_mask_programs(packed).field_seed_pipeline
+    fn id_mask_field_seed_pipeline(&self, packed: bool) -> Option<&wgpu::RenderPipeline> {
+        Some(&self.id_mask_programs(packed)?.field_seed_pipeline)
     }
 
-    fn id_mask_field_jump_pipeline(&self, packed: bool) -> &wgpu::RenderPipeline {
-        &self.id_mask_programs(packed).field_jump_pipeline
+    fn id_mask_field_jump_pipeline(&self, packed: bool) -> Option<&wgpu::RenderPipeline> {
+        Some(&self.id_mask_programs(packed)?.field_jump_pipeline)
     }
 
-    fn id_mask_compositor_pipeline(&self, packed: bool) -> &wgpu::RenderPipeline {
-        &self.id_mask_programs(packed).compositor_pipeline
+    fn id_mask_compositor_pipeline(&self, packed: bool) -> Option<&wgpu::RenderPipeline> {
+        Some(&self.id_mask_programs(packed)?.compositor_pipeline)
     }
 
     fn render_direct(
@@ -9546,7 +9743,10 @@ impl WebGpuRenderer {
             };
             let pipeline_key = (draw.pipeline, draw.cull);
             if active_pipeline != Some(pipeline_key) {
-                pass.set_pipeline(self.scene3d_pipeline(draw.pipeline, draw.cull));
+                let Some(pipeline) = self.scene3d_pipeline(draw.pipeline, draw.cull) else {
+                    continue;
+                };
+                pass.set_pipeline(pipeline);
                 active_pipeline = Some(pipeline_key);
                 pipeline_binds = pipeline_binds.saturating_add(1);
             }
@@ -9636,7 +9836,10 @@ impl WebGpuRenderer {
             };
             let pipeline_key = (draw.pipeline, draw.cull);
             if active_pipeline != Some(pipeline_key) {
-                pass.set_pipeline(self.scene3d_pipeline(draw.pipeline, draw.cull));
+                let Some(pipeline) = self.scene3d_pipeline(draw.pipeline, draw.cull) else {
+                    continue;
+                };
+                pass.set_pipeline(pipeline);
                 active_pipeline = Some(pipeline_key);
                 pipeline_binds = pipeline_binds.saturating_add(1);
             }
@@ -9745,6 +9948,7 @@ impl WebGpuRenderer {
                 );
                 let timestamp_writes =
                     webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
+                let Some(pipeline) = self.id_mask_raster_pipeline() else { return };
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("oxide-webgpu-id-mask-raster-pass"),
                     color_attachments: &[
@@ -9771,7 +9975,7 @@ impl WebGpuRenderer {
                     timestamp_writes,
                     occlusion_query_set: None,
                 });
-                pass.set_pipeline(self.id_mask_raster_pipeline());
+                pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, raster_bind_group, &[uniform_offsets.raster]);
                 for cache_pos in cache_start..cache_end {
                     let cache_index = self.id_mask_draw_chunk_indices[cache_pos];
@@ -9799,11 +10003,14 @@ impl WebGpuRenderer {
                 );
                 let timestamp_writes =
                     webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
+                let Some(pipeline) = self.id_mask_field_seed_pipeline(packed_fields) else {
+                    return;
+                };
                 encode_id_mask_field_pass(
                     encoder,
                     "oxide-webgpu-id-mask-field-seed-pass",
                     targets.field_pair(true),
-                    self.id_mask_field_seed_pipeline(packed_fields),
+                    pipeline,
                     targets.field_bind_group(false),
                     self.id_mask_field_uniform_offsets[field_offset_index],
                     timestamp_writes,
@@ -9824,11 +10031,14 @@ impl WebGpuRenderer {
                     );
                     let timestamp_writes =
                         webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
+                    let Some(pipeline) = self.id_mask_field_jump_pipeline(packed_fields) else {
+                        return;
+                    };
                     encode_id_mask_field_pass(
                         encoder,
                         "oxide-webgpu-id-mask-field-jump-pass",
                         targets.field_pair(!src_is_a),
-                        self.id_mask_field_jump_pipeline(packed_fields),
+                        pipeline,
                         targets.field_bind_group(src_is_a),
                         self.id_mask_field_uniform_offsets[field_offset_index],
                         timestamp_writes,
@@ -9857,6 +10067,9 @@ impl WebGpuRenderer {
                 );
                 let timestamp_writes =
                     webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
+                let Some(pipeline) = self.id_mask_compositor_pipeline(packed_fields) else {
+                    return;
+                };
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("oxide-webgpu-id-mask-compositor-pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -9879,7 +10092,7 @@ impl WebGpuRenderer {
                     self.width,
                     self.height,
                 );
-                pass.set_pipeline(self.id_mask_compositor_pipeline(packed_fields));
+                pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, compositor_bind_group, &[uniform_offsets.compositor]);
                 pass.draw(0..6, 0..1);
             }
@@ -10089,15 +10302,16 @@ impl WebGpuRenderer {
                 bound_clip = Some(state.clip);
             }
             if force_bind || bound_pipeline != Some(state.pipeline) {
+                let Some(pipeline) = self.pipeline_for_draw(state.pipeline) else { continue };
                 match state.pipeline {
                     DrawPipelineKey::RRect => {
                         let Some(buffer) = rrect_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.rrect_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                     }
                     DrawPipelineKey::ImageRgba => {
                         let Some(buffer) = image_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.image_rgba_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, self.programs.image_unit_vertex_buffer.slice(..));
                         pass.set_vertex_buffer(1, buffer.slice(..));
                         pass.set_index_buffer(
@@ -10108,7 +10322,7 @@ impl WebGpuRenderer {
                     }
                     DrawPipelineKey::ImageA8 => {
                         let Some(buffer) = image_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.image_a8_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, self.programs.image_unit_vertex_buffer.slice(..));
                         pass.set_vertex_buffer(1, buffer.slice(..));
                         pass.set_index_buffer(
@@ -10119,7 +10333,7 @@ impl WebGpuRenderer {
                     }
                     DrawPipelineKey::NineSliceRgba => {
                         let Some(buffer) = nine_slice_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.nine_slice_rgba_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, self.programs.nine_slice_unit_vertex_buffer.slice(..));
                         pass.set_vertex_buffer(1, buffer.slice(..));
                         pass.set_index_buffer(
@@ -10130,7 +10344,7 @@ impl WebGpuRenderer {
                     }
                     DrawPipelineKey::NineSliceA8 => {
                         let Some(buffer) = nine_slice_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.nine_slice_a8_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, self.programs.nine_slice_unit_vertex_buffer.slice(..));
                         pass.set_vertex_buffer(1, buffer.slice(..));
                         pass.set_index_buffer(
@@ -10141,60 +10355,60 @@ impl WebGpuRenderer {
                     }
                     DrawPipelineKey::Spinner => {
                         let Some(buffer) = spinner_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.spinner_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                         bound_index = None;
                     }
                     DrawPipelineKey::NeonMarker => {
                         let Some(buffer) = neon_marker_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.neon_marker_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                         bound_index = None;
                     }
                     DrawPipelineKey::GlyphRgba => {
                         let Some(buffer) = glyph_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.glyph_rgba_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                         glyph_instance_buffer_binds = glyph_instance_buffer_binds.saturating_add(1);
                         bound_index = None;
                     }
                     DrawPipelineKey::GlyphA8 => {
                         let Some(buffer) = glyph_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.glyph_a8_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                         glyph_instance_buffer_binds = glyph_instance_buffer_binds.saturating_add(1);
                         bound_index = None;
                     }
                     DrawPipelineKey::GlyphSdf => {
                         let Some(buffer) = glyph_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.glyph_sdf_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                         glyph_instance_buffer_binds = glyph_instance_buffer_binds.saturating_add(1);
                         bound_index = None;
                     }
                     DrawPipelineKey::Solid => {
                         let Some(buffer) = vertex_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.solid_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                     }
                     DrawPipelineKey::Rgba => {
                         let Some(buffer) = vertex_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.rgba_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                     }
                     DrawPipelineKey::A8 => {
                         let Some(buffer) = vertex_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.a8_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                     }
                     DrawPipelineKey::Sdf => {
                         let Some(buffer) = vertex_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.sdf_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                     }
                     DrawPipelineKey::Effect => {
                         let Some(buffer) = vertex_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.effect_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                     }
                 }
@@ -10336,6 +10550,7 @@ impl WebGpuRenderer {
         self.stats.present_passes = self.stats.present_passes.saturating_add(1);
         let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Present);
         let timestamp_writes = self.timestamp_writes(timestamp_pair);
+        let Some(pipeline) = self.pipeline_for_draw(DrawPipelineKey::Rgba) else { return };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("oxide-webgpu-present-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -10351,7 +10566,7 @@ impl WebGpuRenderer {
             timestamp_writes,
             occlusion_query_set: None,
         });
-        pass.set_pipeline(self.rgba_pipeline());
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &self.viewport_bind_group, &[0]);
         pass.set_bind_group(1, &scene_bind_group, &[]);
         pass.set_vertex_buffer(0, self.present_vertex_buffer.slice(..));
@@ -10416,6 +10631,7 @@ fn create_programs(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
     packed_id_mask_fields: bool,
+    profile: BrowserRendererPipelineProfile,
 ) -> GpuPrograms {
     let viewport_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("oxide-webgpu-viewport-layout"),
@@ -10490,7 +10706,8 @@ fn create_programs(
             count: None,
         }],
     });
-    let id_mask_wide_field_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+    let id_mask_wide_field_layout = (profile.includes_id_mask_compositor()
+        && !packed_id_mask_fields).then(|| device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("oxide-webgpu-id-mask-wide-field-layout"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
@@ -10544,8 +10761,9 @@ fn create_programs(
                 count: None,
             },
         ],
-    });
-    let id_mask_wide_compositor_layout =
+    }));
+    let id_mask_wide_compositor_layout = (profile.includes_id_mask_compositor()
+        && !packed_id_mask_fields).then(|| {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("oxide-webgpu-id-mask-wide-compositor-layout"),
             entries: &[
@@ -10600,7 +10818,8 @@ fn create_programs(
                     count: None,
                 },
             ],
-        });
+        })
+    });
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("oxide-webgpu-linear-sampler"),
         address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -10612,21 +10831,29 @@ fn create_programs(
         ..Default::default()
     });
 
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("oxide-webgpu-shader"),
-        source: wgpu::ShaderSource::Wgsl(WGSL.into()),
+    let shader = profile.has_draw_pipelines().then(|| {
+        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("oxide-webgpu-shader"),
+            source: wgpu::ShaderSource::Wgsl(WGSL.into()),
+        })
     });
-    let scene3d_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("oxide-webgpu-scene3d-shader"),
-        source: wgpu::ShaderSource::Wgsl(SCENE3D_WGSL.into()),
+    let scene3d_shader = profile.has_scene3d_pipelines().then(|| {
+        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("oxide-webgpu-scene3d-shader"),
+            source: wgpu::ShaderSource::Wgsl(SCENE3D_WGSL.into()),
+        })
     });
-    let id_mask_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("oxide-webgpu-id-mask-shader"),
-        source: wgpu::ShaderSource::Wgsl(ID_MASK_WGSL.into()),
+    let id_mask_shader = profile.includes_id_mask_compositor().then(|| {
+        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("oxide-webgpu-id-mask-shader"),
+            source: wgpu::ShaderSource::Wgsl(ID_MASK_WGSL.into()),
+        })
     });
-    let id_mask_field_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("oxide-webgpu-id-mask-field-shader"),
-        source: wgpu::ShaderSource::Wgsl(ID_MASK_FIELD_WGSL.into()),
+    let id_mask_field_shader = profile.includes_id_mask_compositor().then(|| {
+        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("oxide-webgpu-id-mask-field-shader"),
+            source: wgpu::ShaderSource::Wgsl(ID_MASK_FIELD_WGSL.into()),
+        })
     });
     let solid_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("oxide-webgpu-solid-pipeline-layout"),
@@ -10654,62 +10881,81 @@ fn create_programs(
             bind_group_layouts: &[&id_mask_raster_layout],
             push_constant_ranges: &[],
         });
-    let id_mask_wide_field_pipeline_layout =
+    let id_mask_wide_field_pipeline_layout = id_mask_wide_field_layout.as_ref().map(|layout| {
         device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("oxide-webgpu-id-mask-wide-field-pipeline-layout"),
-            bind_group_layouts: &[&id_mask_wide_field_layout],
+            bind_group_layouts: &[layout],
             push_constant_ranges: &[],
-        });
+        })
+    });
     let id_mask_wide_compositor_pipeline_layout =
+        id_mask_wide_compositor_layout.as_ref().map(|layout| {
         device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("oxide-webgpu-id-mask-wide-compositor-pipeline-layout"),
-            bind_group_layouts: &[&id_mask_wide_compositor_layout],
+            bind_group_layouts: &[layout],
             push_constant_ranges: &[],
-        });
+        })
+    });
 
     let draw_vertex_layout = vertex_layout();
     let draw_color_target = alpha_color_target(format);
-    let solid_pipeline = create_pipeline(
-        device,
-        &shader,
-        &solid_pipeline_layout,
-        &draw_vertex_layout,
-        &draw_color_target,
-        "fs_solid",
+    let solid_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::Solid),
+        shader.as_ref(),
+        |shader| create_pipeline(
+            device,
+            shader,
+            &solid_pipeline_layout,
+            &draw_vertex_layout,
+            &draw_color_target,
+            "fs_solid",
+        ),
     );
     let rrect_instance_layout = rrect_instance_layout();
     let rrect_vertex_layouts = [rrect_instance_layout];
-    let rrect_pipeline = create_instanced_pipeline(
-        device,
-        &shader,
-        &solid_pipeline_layout,
-        &rrect_vertex_layouts,
-        &draw_color_target,
-        "vs_rrect",
-        "fs_rrect",
-        "oxide-webgpu-rrect",
+    let rrect_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::RRect),
+        shader.as_ref(),
+        |shader| create_instanced_pipeline(
+            device,
+            shader,
+            &solid_pipeline_layout,
+            &rrect_vertex_layouts,
+            &draw_color_target,
+            "vs_rrect",
+            "fs_rrect",
+            "oxide-webgpu-rrect",
+        ),
     );
     let image_instance_layout = image_instance_layout();
     let image_vertex_layouts = [image_unit_vertex_layout(), image_instance_layout];
-    let image_rgba_pipeline = create_instanced_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &image_vertex_layouts,
-        &draw_color_target,
-        "vs_image_instance",
-        "fs_rgba",
-        "oxide-webgpu-image-rgba",
+    let image_rgba_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::ImageRgba),
+        shader.as_ref(),
+        |shader| create_instanced_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &image_vertex_layouts,
+            &draw_color_target,
+            "vs_image_instance",
+            "fs_rgba",
+            "oxide-webgpu-image-rgba",
+        ),
     );
-    let image_a8_pipeline = create_instanced_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &image_vertex_layouts,
-        &draw_color_target,
-        "vs_image_instance",
-        "fs_a8",
-        "oxide-webgpu-image-a8",
+    let image_a8_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::ImageA8),
+        shader.as_ref(),
+        |shader| create_instanced_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &image_vertex_layouts,
+            &draw_color_target,
+            "vs_image_instance",
+            "fs_a8",
+            "oxide-webgpu-image-a8",
+        ),
     );
     let image_unit_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("oxide-webgpu-image-unit-vertices"),
@@ -10728,25 +10974,33 @@ fn create_programs(
     });
     let nine_slice_instance_layout = nine_slice_instance_layout();
     let nine_slice_vertex_layouts = [nine_slice_unit_vertex_layout(), nine_slice_instance_layout];
-    let nine_slice_rgba_pipeline = create_instanced_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &nine_slice_vertex_layouts,
-        &draw_color_target,
-        "vs_nine_slice_instance",
-        "fs_rgba",
-        "oxide-webgpu-nine-slice-rgba",
+    let nine_slice_rgba_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::NineSliceRgba),
+        shader.as_ref(),
+        |shader| create_instanced_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &nine_slice_vertex_layouts,
+            &draw_color_target,
+            "vs_nine_slice_instance",
+            "fs_rgba",
+            "oxide-webgpu-nine-slice-rgba",
+        ),
     );
-    let nine_slice_a8_pipeline = create_instanced_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &nine_slice_vertex_layouts,
-        &draw_color_target,
-        "vs_nine_slice_instance",
-        "fs_a8",
-        "oxide-webgpu-nine-slice-a8",
+    let nine_slice_a8_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::NineSliceA8),
+        shader.as_ref(),
+        |shader| create_instanced_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &nine_slice_vertex_layouts,
+            &draw_color_target,
+            "vs_nine_slice_instance",
+            "fs_a8",
+            "oxide-webgpu-nine-slice-a8",
+        ),
     );
     let nine_slice_unit_vertex_buffer =
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -10762,93 +11016,131 @@ fn create_programs(
         });
     let spinner_instance_layout = spinner_instance_layout();
     let spinner_vertex_layouts = [spinner_instance_layout];
-    let spinner_pipeline = create_instanced_pipeline(
-        device,
-        &shader,
-        &solid_pipeline_layout,
-        &spinner_vertex_layouts,
-        &draw_color_target,
-        "vs_spinner_instance",
-        "fs_rrect",
-        "oxide-webgpu-spinner",
+    let spinner_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::Spinner),
+        shader.as_ref(),
+        |shader| create_instanced_pipeline(
+            device,
+            shader,
+            &solid_pipeline_layout,
+            &spinner_vertex_layouts,
+            &draw_color_target,
+            "vs_spinner_instance",
+            "fs_rrect",
+            "oxide-webgpu-spinner",
+        ),
     );
     let neon_marker_instance_layout = neon_marker_instance_layout();
     let neon_marker_vertex_layouts = [neon_marker_instance_layout];
-    let neon_marker_pipeline = create_instanced_pipeline(
-        device,
-        &shader,
-        &solid_pipeline_layout,
-        &neon_marker_vertex_layouts,
-        &draw_color_target,
-        "vs_neon_marker_instance",
-        "fs_neon_marker",
-        "oxide-webgpu-neon-marker",
+    let neon_marker_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::NeonMarker),
+        shader.as_ref(),
+        |shader| create_instanced_pipeline(
+            device,
+            shader,
+            &solid_pipeline_layout,
+            &neon_marker_vertex_layouts,
+            &draw_color_target,
+            "vs_neon_marker_instance",
+            "fs_neon_marker",
+            "oxide-webgpu-neon-marker",
+        ),
     );
     let glyph_instance_layout = glyph_instance_layout();
     let glyph_vertex_layouts = [glyph_instance_layout];
-    let glyph_rgba_pipeline = create_glyph_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &glyph_vertex_layouts,
-        &draw_color_target,
-        "fs_rgba",
-        "oxide-webgpu-glyph-rgba",
+    let glyph_rgba_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::GlyphRgba),
+        shader.as_ref(),
+        |shader| create_glyph_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &glyph_vertex_layouts,
+            &draw_color_target,
+            "fs_rgba",
+            "oxide-webgpu-glyph-rgba",
+        ),
     );
-    let glyph_a8_pipeline = create_glyph_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &glyph_vertex_layouts,
-        &draw_color_target,
-        "fs_a8",
-        "oxide-webgpu-glyph-a8",
+    let glyph_a8_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::GlyphA8),
+        shader.as_ref(),
+        |shader| create_glyph_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &glyph_vertex_layouts,
+            &draw_color_target,
+            "fs_a8",
+            "oxide-webgpu-glyph-a8",
+        ),
     );
-    let glyph_sdf_pipeline = create_glyph_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &glyph_vertex_layouts,
-        &draw_color_target,
-        "fs_sdf",
-        "oxide-webgpu-glyph-sdf",
+    let glyph_sdf_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::GlyphSdf),
+        shader.as_ref(),
+        |shader| create_glyph_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &glyph_vertex_layouts,
+            &draw_color_target,
+            "fs_sdf",
+            "oxide-webgpu-glyph-sdf",
+        ),
     );
-    let rgba_pipeline = create_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &draw_vertex_layout,
-        &draw_color_target,
-        "fs_rgba",
+    let rgba_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::Rgba),
+        shader.as_ref(),
+        |shader| create_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &draw_vertex_layout,
+            &draw_color_target,
+            "fs_rgba",
+        ),
     );
-    let a8_pipeline = create_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &draw_vertex_layout,
-        &draw_color_target,
-        "fs_a8",
+    let a8_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::A8),
+        shader.as_ref(),
+        |shader| create_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &draw_vertex_layout,
+            &draw_color_target,
+            "fs_a8",
+        ),
     );
-    let sdf_pipeline = create_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &draw_vertex_layout,
-        &draw_color_target,
-        "fs_sdf",
+    let sdf_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::Sdf),
+        shader.as_ref(),
+        |shader| create_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &draw_vertex_layout,
+            &draw_color_target,
+            "fs_sdf",
+        ),
     );
-    let effect_pipeline = create_pipeline(
-        device,
-        &shader,
-        &effect_pipeline_layout,
-        &draw_vertex_layout,
-        &draw_color_target,
-        "fs_backdrop",
+    let effect_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::Effect),
+        shader.as_ref(),
+        |shader| create_pipeline(
+            device,
+            shader,
+            &effect_pipeline_layout,
+            &draw_vertex_layout,
+            &draw_color_target,
+            "fs_backdrop",
+        ),
     );
     let scene3d_vertex_layout = scene3d_color_vertex_layout();
     let scene3d_color_tri_depth_read_pipelines = create_scene3d_pipeline_variants(
         device,
-        &scene3d_shader,
+        scene3d_shader.as_ref(),
+        profile,
+        BrowserScene3dPipeline::AlphaDepthRead,
         &scene3d_pipeline_layout,
         &scene3d_vertex_layout,
         format,
@@ -10859,7 +11151,9 @@ fn create_programs(
     );
     let scene3d_color_tri_depth_write_pipelines = create_scene3d_pipeline_variants(
         device,
-        &scene3d_shader,
+        scene3d_shader.as_ref(),
+        profile,
+        BrowserScene3dPipeline::AlphaDepthWrite,
         &scene3d_pipeline_layout,
         &scene3d_vertex_layout,
         format,
@@ -10870,7 +11164,9 @@ fn create_programs(
     );
     let scene3d_color_tri_no_test_depth_write_pipelines = create_scene3d_pipeline_variants(
         device,
-        &scene3d_shader,
+        scene3d_shader.as_ref(),
+        profile,
+        BrowserScene3dPipeline::AlphaNoTestDepthWrite,
         &scene3d_pipeline_layout,
         &scene3d_vertex_layout,
         format,
@@ -10881,7 +11177,9 @@ fn create_programs(
     );
     let scene3d_color_tri_pipelines = create_scene3d_pipeline_variants(
         device,
-        &scene3d_shader,
+        scene3d_shader.as_ref(),
+        profile,
+        BrowserScene3dPipeline::AlphaNoDepth,
         &scene3d_pipeline_layout,
         &scene3d_vertex_layout,
         format,
@@ -10892,7 +11190,9 @@ fn create_programs(
     );
     let scene3d_color_tri_add_depth_read_pipelines = create_scene3d_pipeline_variants(
         device,
-        &scene3d_shader,
+        scene3d_shader.as_ref(),
+        profile,
+        BrowserScene3dPipeline::AdditiveDepthRead,
         &scene3d_pipeline_layout,
         &scene3d_vertex_layout,
         format,
@@ -10903,7 +11203,9 @@ fn create_programs(
     );
     let scene3d_color_tri_add_depth_write_pipelines = create_scene3d_pipeline_variants(
         device,
-        &scene3d_shader,
+        scene3d_shader.as_ref(),
+        profile,
+        BrowserScene3dPipeline::AdditiveDepthWrite,
         &scene3d_pipeline_layout,
         &scene3d_vertex_layout,
         format,
@@ -10914,7 +11216,9 @@ fn create_programs(
     );
     let scene3d_color_tri_add_no_test_depth_write_pipelines = create_scene3d_pipeline_variants(
         device,
-        &scene3d_shader,
+        scene3d_shader.as_ref(),
+        profile,
+        BrowserScene3dPipeline::AdditiveNoTestDepthWrite,
         &scene3d_pipeline_layout,
         &scene3d_vertex_layout,
         format,
@@ -10925,7 +11229,9 @@ fn create_programs(
     );
     let scene3d_color_tri_add_pipelines = create_scene3d_pipeline_variants(
         device,
-        &scene3d_shader,
+        scene3d_shader.as_ref(),
+        profile,
+        BrowserScene3dPipeline::AdditiveNoDepth,
         &scene3d_pipeline_layout,
         &scene3d_vertex_layout,
         format,
@@ -10934,49 +11240,81 @@ fn create_programs(
         false,
         "oxide-webgpu-scene3d-color-tri-add",
     );
-    let id_mask_vertex_layout = id_mask_raster_vertex_layout();
-    let id_mask_raster_pipeline = create_id_mask_raster_pipeline(
-        device,
-        &id_mask_shader,
-        &id_mask_raster_pipeline_layout,
-        &id_mask_vertex_layout,
-    );
-    let id_mask_wide_field_seed_pipeline = create_id_mask_field_pipeline(
-        device,
-        &id_mask_field_shader,
-        &id_mask_wide_field_pipeline_layout,
-        "fs_id_mask_field_seed",
-        "oxide-webgpu-id-mask-wide-field-seed",
-        ID_MASK_WIDE_FIELD_FORMAT,
-        false,
-    );
-    let id_mask_wide_field_jump_pipeline = create_id_mask_field_pipeline(
-        device,
-        &id_mask_field_shader,
-        &id_mask_wide_field_pipeline_layout,
-        "fs_id_mask_field_jump",
-        "oxide-webgpu-id-mask-wide-field-jump",
-        ID_MASK_WIDE_FIELD_FORMAT,
-        false,
-    );
-    let id_mask_wide_compositor_pipeline = create_id_mask_compositor_pipeline(
-        device,
-        &id_mask_shader,
-        &id_mask_wide_compositor_pipeline_layout,
-        format,
-        "fs_id_mask_compositor",
-        "oxide-webgpu-id-mask-wide-compositor",
-    );
-    let id_mask_wide = IdMaskVariantPrograms {
-        field_layout: id_mask_wide_field_layout,
-        compositor_layout: id_mask_wide_compositor_layout,
-        field_seed_pipeline: id_mask_wide_field_seed_pipeline,
-        field_jump_pipeline: id_mask_wide_field_jump_pipeline,
-        compositor_pipeline: id_mask_wide_compositor_pipeline,
+    let id_mask_raster_pipeline = match (
+        profile.includes_id_mask_compositor(),
+        id_mask_shader.as_ref(),
+    )
+    {
+        (true, Some(shader)) => PipelineSlot::Enabled(create_id_mask_raster_pipeline(
+            device,
+            shader,
+            &id_mask_raster_pipeline_layout,
+            &id_mask_raster_vertex_layout(),
+        )),
+        _ => PipelineSlot::Disabled,
     };
-    let id_mask_packed = packed_id_mask_fields.then(|| {
-        create_packed_id_mask_programs(device, &id_mask_field_shader, &id_mask_shader, format)
-    });
+    let id_mask = match (
+        profile.includes_id_mask_compositor(),
+        packed_id_mask_fields,
+        id_mask_field_shader.as_ref(),
+        id_mask_shader.as_ref(),
+        id_mask_wide_field_layout,
+        id_mask_wide_compositor_layout,
+        id_mask_wide_field_pipeline_layout,
+        id_mask_wide_compositor_pipeline_layout,
+    )
+    {
+        (true, true, Some(field_shader), Some(compositor_shader), _, _, _, _) => {
+            IdMaskPrograms::Packed(create_packed_id_mask_programs(
+                device,
+                field_shader,
+                compositor_shader,
+                format,
+            ))
+        }
+        (
+            true,
+            false,
+            Some(field_shader),
+            Some(compositor_shader),
+            Some(field_layout),
+            Some(compositor_layout),
+            Some(field_pipeline_layout),
+            Some(compositor_pipeline_layout),
+        ) => {
+            IdMaskPrograms::Wide(IdMaskVariantPrograms {
+                field_layout,
+                compositor_layout,
+                field_seed_pipeline: create_id_mask_field_pipeline(
+                    device,
+                    field_shader,
+                    &field_pipeline_layout,
+                    "fs_id_mask_field_seed",
+                    "oxide-webgpu-id-mask-wide-field-seed",
+                    ID_MASK_WIDE_FIELD_FORMAT,
+                    false,
+                ),
+                field_jump_pipeline: create_id_mask_field_pipeline(
+                    device,
+                    field_shader,
+                    &field_pipeline_layout,
+                    "fs_id_mask_field_jump",
+                    "oxide-webgpu-id-mask-wide-field-jump",
+                    ID_MASK_WIDE_FIELD_FORMAT,
+                    false,
+                ),
+                compositor_pipeline: create_id_mask_compositor_pipeline(
+                    device,
+                    compositor_shader,
+                    &compositor_pipeline_layout,
+                    format,
+                    "fs_id_mask_compositor",
+                    "oxide-webgpu-id-mask-wide-compositor",
+                ),
+            })
+        }
+        _ => IdMaskPrograms::Disabled,
+    };
 
     GpuPrograms {
         viewport_layout,
@@ -10984,8 +11322,7 @@ fn create_programs(
         effect_layout,
         scene3d_layout,
         id_mask_raster_layout,
-        id_mask_wide,
-        id_mask_packed,
+        id_mask,
         solid_pipeline,
         rrect_pipeline,
         image_rgba_pipeline,
@@ -11149,7 +11486,9 @@ fn create_glyph_pipeline(
 
 fn create_scene3d_pipeline_variants(
     device: &wgpu::Device,
-    shader: &wgpu::ShaderModule,
+    shader: Option<&wgpu::ShaderModule>,
+    profile: BrowserRendererPipelineProfile,
+    pipeline: BrowserScene3dPipeline,
     layout: &wgpu::PipelineLayout,
     vertex_layout: &wgpu::VertexBufferLayout<'_>,
     format: wgpu::TextureFormat,
@@ -11157,45 +11496,31 @@ fn create_scene3d_pipeline_variants(
     depth_test: bool,
     depth_write: bool,
     label: &'static str,
-) -> [wgpu::RenderPipeline; 3] {
-    [
-        create_scene3d_pipeline(
-            device,
-            shader,
-            layout,
-            vertex_layout,
-            format,
-            blend,
-            depth_test,
-            depth_write,
-            None,
-            label,
-        ),
-        create_scene3d_pipeline(
-            device,
-            shader,
-            layout,
-            vertex_layout,
-            format,
-            blend,
-            depth_test,
-            depth_write,
-            Some(wgpu::Face::Front),
-            label,
-        ),
-        create_scene3d_pipeline(
-            device,
-            shader,
-            layout,
-            vertex_layout,
-            format,
-            blend,
-            depth_test,
-            depth_write,
-            Some(wgpu::Face::Back),
-            label,
-        ),
-    ]
+) -> [PipelineSlot; 3] {
+    let Some(shader) = shader else {
+        return core::array::from_fn(|_| PipelineSlot::Disabled);
+    };
+    core::array::from_fn(|index| {
+        let (cull, cull_mode) = match index {
+            0 => (scene3d::CullMode3d::None, None),
+            1 => (scene3d::CullMode3d::Front, Some(wgpu::Face::Front)),
+            _ => (scene3d::CullMode3d::Back, Some(wgpu::Face::Back)),
+        };
+        PipelineSlot::create(profile.contains_scene3d(pipeline, cull), || {
+            create_scene3d_pipeline(
+                device,
+                shader,
+                layout,
+                vertex_layout,
+                format,
+                blend,
+                depth_test,
+                depth_write,
+                cull_mode,
+                label,
+            )
+        })
+    })
 }
 
 fn create_scene3d_pipeline(
@@ -12238,7 +12563,7 @@ fn rebuild_id_mask_target_bind_groups(
             compositor_bind_group_b,
             ..
         } => {
-            let Some(programs) = programs.id_mask_packed.as_ref() else { return };
+            let IdMaskPrograms::Packed(programs) = &programs.id_mask else { return };
             *field_bind_group_a = create_packed_id_mask_field_bind_group(
                 device,
                 &programs.field_layout,
@@ -12287,7 +12612,7 @@ fn rebuild_id_mask_target_bind_groups(
             compositor_bind_group_b,
             ..
         } => {
-            let programs = &programs.id_mask_wide;
+            let IdMaskPrograms::Wide(programs) = &programs.id_mask else { return };
             *field_bind_group_a = create_wide_id_mask_field_bind_group(
                 device,
                 &programs.field_layout,
@@ -13276,7 +13601,7 @@ fn append_scene3d_draw(draws: &mut Vec<Scene3dDraw>, draw: Scene3dDraw) -> bool 
     true
 }
 
-fn scene3d_cull_index(cull: scene3d::CullMode3d) -> usize {
+const fn scene3d_cull_index(cull: scene3d::CullMode3d) -> usize {
     match cull {
         scene3d::CullMode3d::None => 0,
         scene3d::CullMode3d::Front => 1,
@@ -13321,7 +13646,11 @@ fn align_usize(value: usize, alignment: usize) -> usize {
 fn align_uniform_bytes(out: &mut Vec<u8>, alignment: usize) -> u32 {
     let offset = align_usize(out.len(), alignment);
     out.resize(offset, 0);
-    u32::try_from(offset).expect("ID-mask uniform arena exceeds dynamic-offset range")
+    match u32::try_from(offset)
+    {
+       Ok(offset) => offset,
+       Err(_) => u32::MAX - u32::MAX % alignment as u32,
+    }
 }
 
 fn f32x4_bytes(values: [f32; 4]) -> [u8; 16] {
