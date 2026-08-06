@@ -71,6 +71,24 @@ fn browser_pipeline_profiles_count_exact_eager_pipeline_sets() {
 }
 
 #[test]
+fn diagnostic_instrumentation_is_explicit_and_snapshot_tests_stay_independent()
+{
+   let manifest = include_str!("../Cargo.toml");
+   let source = include_str!("../src/wasm/webgpu.rs");
+
+   assert!(manifest.contains("default = []"));
+   assert!(manifest.contains("diagnostic-instrumentation = ["));
+   assert!(manifest.contains("\"dep:oxide-wasm-alloc-counter\""));
+   assert!(manifest.contains("\"web-sys/Performance\""));
+   assert!(manifest.contains("oxide-wasm-alloc-counter = { path = \"../wasm-alloc-counter\", optional = true }"));
+   assert!(manifest.contains("snapshot-tests = []"));
+   assert!(source.contains("#[cfg(feature = \"diagnostic-instrumentation\")]\nstruct WebGpuTimestampQueries"));
+   assert!(source.contains("#[cfg(not(feature = \"diagnostic-instrumentation\"))]\n        let required_features = wgpu::Features::empty();"));
+   assert!(source.contains("pub fn collect_timestamp_readbacks(&mut self) -> WebRendererStats"));
+   assert!(source.contains("WebGpuCpuSubmitTimingSample::default()"));
+}
+
+#[test]
 fn layer_physical_dimension_is_bounded_and_positive() {
     assert_eq!(layer_physical_dimension(12.25, 2.0), 25);
     assert_eq!(layer_physical_dimension(0.0, 2.0), 1);

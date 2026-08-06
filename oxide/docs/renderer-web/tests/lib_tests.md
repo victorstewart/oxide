@@ -23,6 +23,7 @@ Call flow:
 - `color_conversion_clamps_channels()`: verifies CSS color conversion and packed color cache keys.
 - `sanitize_scale_rejects_invalid_values()`: verifies invalid scale fallback.
 - `native_stub_tracks_frame_shape_and_reports_unsupported_submit()`: verifies native frame counters and unsupported submit behavior.
+- `diagnostic_instrumentation_is_explicit_and_snapshot_tests_stay_independent()`: freezes the empty default feature set, optional allocator dependency, independent snapshot feature, feature-gated timestamp machinery, and default compatibility API.
 - `native_stub_ignores_web_camera_background_commands()`: verifies unsupported web `CameraBg` commands do not count as web draw work.
 - `wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()`: freezes the cross-WASM JavaScript coordinator, unchanged Rust constructors, route-local lease ownership, compatible adapter/device request reuse, rejected-adapter retry, incompatible option rejection, terminal pagehide destroy, and stable read-only counters.
 - `wasm_webgpu_runtime_images_are_explicitly_reclaimable_without_arena_tombstones()`: verifies the production wrapper delegates image release and the WebGPU resource table recycles generation-checked slots without append-only tombstones or stale-handle ABA.
@@ -68,11 +69,11 @@ C60 source coverage is a compile-time contract, not displayed proof. C61 runs th
 
 ## Feature flags and cfgs
 
-They run on native targets against the non-wasm `WebRenderer` stub.
+They run on native targets against the non-wasm `WebRenderer` stub. WASM checks compile default, `diagnostic-instrumentation`, `snapshot-tests`, and combined feature graphs separately.
 
 ## Testing and benchmarks
 
-Run with `cargo test --locked -p oxide-renderer-web --test lib_tests`. Run the cross-module page-session lifecycle contract with `node --test oxide/crates/renderer-web/tests/webgpu_device_session_tests.mjs`. Compile wasm behavior with `cargo check --locked --target wasm32-unknown-unknown -p oxide-renderer-web`. The local-layer runtime companions are the C30 browser capture and `run_webgpu_local_layers_c30.mjs`; mode `2` exercises the C31 bounded navigation/purge path. The C33 companion is `check_webgpu_browser_golden.mjs --id-mask-cache-only`, which executes real WebGPU hits, misses, one-entry thrash, bounded LRU reuse, and purge/reentry paths. C35 uses `check_webgpu_browser_golden.mjs --id-mask-matrix-out PATH` for the seven-dimension exact raster/final-field matrix, reuses the asymmetric multi-seed readback, and runs the 512-square forced-miss workload against parent and candidate packages. C37 through C41 use the bounded architecture-only and dedicated capture modes for their respective primitive families. C46 uses `--glyph-run-out` for the isolated 512-glyph row and `--glyph-matrix-out` for the Metal-equivalent language/page/SDF matrix.
+Run with `cargo test --locked -p oxide-renderer-web --test lib_tests`. Run the cross-module page-session lifecycle contract with `node --test oxide/crates/renderer-web/tests/webgpu_device_session_tests.mjs`. Compile product WASM with `cargo check --locked --target wasm32-unknown-unknown -p oxide-renderer-web --no-default-features`, then compile diagnostic, snapshot-only, and combined graphs explicitly. The local-layer runtime companions are the C30 browser capture and `run_webgpu_local_layers_c30.mjs`; mode `2` exercises the C31 bounded navigation/purge path. The C33 companion is `check_webgpu_browser_golden.mjs --id-mask-cache-only`, which executes real WebGPU hits, misses, one-entry thrash, bounded LRU reuse, and purge/reentry paths. C35 uses `check_webgpu_browser_golden.mjs --id-mask-matrix-out PATH` for the seven-dimension exact raster/final-field matrix, reuses the asymmetric multi-seed readback, and runs the 512-square forced-miss workload against parent and candidate packages. C37 through C41 use the bounded architecture-only and dedicated capture modes for their respective primitive families. C46 uses `--glyph-run-out` for the isolated 512-glyph row and `--glyph-matrix-out` for the Metal-equivalent language/page/SDF matrix.
 
 C56 uses `--scene3d-out PATH --scene3d-instances COUNT --scene3d-mode MODE`, where modes 0–3 select compatible, mixed, transparent, and subviewport workloads.
 
@@ -87,6 +88,7 @@ pub fn scale() -> f32
 
 ## Changelog
 
+- 2026-08-05: froze explicit diagnostic feature ownership, independent snapshot compilation, and default public diagnostic compatibility.
 - 2026-08-05: froze one compatible native adapter request across two WASM modules and 128 route transitions, plus fail-closed adapter-option and device-requirement mismatches.
 - 2026-07-22: froze the JavaScript-realm shared-device protocol, observable counters, 128-transition one-request contract, incompatible requirement rejection, and terminal pagehide destruction.
 - 2026-07-15: froze C60 sRGB image-store pages, empty creation, append-only publication, complete standalone mips, unique device generation, and exact invalidation hooks.

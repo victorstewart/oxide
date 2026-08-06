@@ -11,6 +11,7 @@
   - Local verification commands route through `cargo run -p oxide-perf-runner -- --run-suite ...`.
 - Downstream dependencies:
   - `oxide_ui_core`, `oxide_renderer_metal`, `oxide_test_scenes`, `oxide_platform_api`, `oxide_platform_web`, and related crates provide the actual workload surfaces being measured.
+  - `oxide_renderer_web` is consumed with `diagnostic-instrumentation` explicitly enabled because persisted browser/perf contracts exercise allocator, timestamp, CPU-submit, and memory instrumentation that product-default renderer builds omit.
   - `oxide/benchmarks/workspace/latest.json` and `oxide/benchmarks/workspace/latest.md` are the persisted outputs consumed by local comparison and review.
 
 ## Entry points list
@@ -127,6 +128,8 @@ Persisted report and evidence schemas are part of the performance contract becau
   - Missing metrics default safely through serde so older baselines remain readable while the schema grows.
 
 ## Changelog
+
+- 2026-08-05: made the perf runner an explicit `oxide-renderer-web/diagnostic-instrumentation` consumer.
 - 2026-08-05: Added the public WebGPU pipeline-profile authoring case and persisted exact eager construction workloads for the full, two-draw, and mixed profiles (`43`, `2`, and `9`).
 - 2026-07-15: registered C60 image-store 100/1,000/10,000 architecture rows and the 1,000-icon public authoring journey.
 - 2026-07-13: registered C27 retained-snapshot spatial-query and Metal spatial-damage authoring contracts.

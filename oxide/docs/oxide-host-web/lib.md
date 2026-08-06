@@ -6,7 +6,7 @@
 
 ## Relation to the rest of the code
 
-The host depends on `oxide-platform-web`, `oxide-renderer-web`, `oxide-ui-core`, `oxide-test-scenes`, and `oxide-text`. It does not define a separate UI model; it uses the same scene router and draw-list builder as the iOS/macOS hosts.
+The host depends on `oxide-platform-web`, `oxide-renderer-web`, `oxide-ui-core`, `oxide-test-scenes`, and `oxide-text`. This benchmark/browser-proof host explicitly enables the renderer's independent `diagnostic-instrumentation` and `snapshot-tests` features because its exported reports exercise both contracts; product consumers do not inherit either feature. It does not define a separate UI model; it uses the same scene router and draw-list builder as the iOS/macOS hosts.
 
 Call flow:
 
@@ -128,7 +128,7 @@ C30 expects exactly 4,608,000 resident layer-texture bytes at both physical 1080
 
 ## Feature flags and cfgs
 
-Browser exports compile only for `target_arch = "wasm32"`. Native builds expose only `generate_checker_rgba` and `host_web_requires_wasm32` so workspace tests can run on macOS.
+Browser exports compile only for `target_arch = "wasm32"`. The host manifest explicitly opts into `oxide-renderer-web/diagnostic-instrumentation` for its benchmark APIs and separately opts into `snapshot-tests` for exact browser proof. Native builds expose only `generate_checker_rgba` and `host_web_requires_wasm32` so workspace tests can run on macOS.
 
 ## Testing and benchmarks
 
@@ -173,6 +173,8 @@ console.log("oxide-webgpu-scene3d-ab", window.oxideWebGpuScene3dAB);
 ```
 
 ## Changelog
+
+- 2026-08-05: explicitly enabled renderer diagnostics alongside the independent snapshot-test feature for this benchmark host.
 
 - 2026-07-15: made C61 browser proof validate the requested canvas CSS and physical CSS×DPR dimensions and restore those dimensions before displayed-frame measurement.
 - 2026-07-15: added explicit C61 CLI routing for the C60 100/1,000/10,000 atlas and standalone image-store browser matrix.

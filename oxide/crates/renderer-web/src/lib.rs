@@ -994,8 +994,10 @@ mod wasm {
     };
     use crate::solid_color::colored_quad;
     use oxide_renderer_api as api;
+    #[cfg(feature = "diagnostic-instrumentation")]
     use oxide_renderer_api::Renderer;
     use std::collections::BTreeMap;
+    #[cfg(feature = "diagnostic-instrumentation")]
     use std::fmt::Write;
     use wasm_bindgen::{Clamped, JsCast, JsValue};
     use web_sys::{CanvasRenderingContext2d, Document, HtmlCanvasElement, ImageData};
@@ -2042,6 +2044,7 @@ mod wasm {
         }
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     struct CanvasAllocationSummary {
         alloc_count: u64,
         alloc_bytes: u64,
@@ -2055,6 +2058,7 @@ mod wasm {
     }
 
     /// Runs the non-default Canvas2D indexed-quad diagnostic workload on the supplied canvas.
+    #[cfg(feature = "diagnostic-instrumentation")]
     pub fn bench_canvas_indexed_quads(
         canvas: HtmlCanvasElement,
         samples: u32,
@@ -2118,6 +2122,18 @@ mod wasm {
         ))
     }
 
+    /// Reports that the Canvas2D benchmark is absent from product builds.
+    #[cfg(not(feature = "diagnostic-instrumentation"))]
+    pub fn bench_canvas_indexed_quads(
+        _canvas: HtmlCanvasElement,
+        _samples: u32,
+        _frames_per_sample: u32,
+        _quads: u32,
+    ) -> Result<String, api::RenderError> {
+        Err(api::RenderError::Unsupported("diagnostic instrumentation unavailable"))
+    }
+
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn canvas_checker_rgba(width: u32, height: u32) -> Vec<u8> {
         let mut rgba =
             vec![0_u8; (width as usize).saturating_mul(height as usize).saturating_mul(4)];
@@ -2137,6 +2153,7 @@ mod wasm {
         rgba
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn canvas_indexed_quad_draw_list(tex: api::ImageHandle, quads: u32) -> api::DrawList {
         let quad_count = quads.clamp(1, 4096) as usize;
         let mut list = api::DrawList::default();
@@ -2167,6 +2184,7 @@ mod wasm {
         list
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn add_canvas_allocation_frame(
         summary: &mut CanvasAllocationSummary,
         before: oxide_wasm_alloc_counter::AllocationSnapshot,
@@ -2197,6 +2215,7 @@ mod wasm {
         summary.peak_frame_alloc_bytes = summary.peak_frame_alloc_bytes.max(frame_alloc_bytes);
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn canvas_allocation_metrics(summary: &CanvasAllocationSummary) -> String {
         format!(
             ";wasm_alloc_count={};wasm_alloc_bytes={};wasm_dealloc_count={};wasm_dealloc_bytes={};wasm_realloc_count={};wasm_realloc_grow_bytes={};wasm_realloc_shrink_bytes={};wasm_allocating_frames={};wasm_peak_frame_alloc_bytes={}",
@@ -2212,6 +2231,7 @@ mod wasm {
         )
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn frame_pacing_metrics(frame_values_ms: &[f64]) -> String {
         let mut out = String::new();
         let denom = frame_values_ms.len().max(1) as f64;
@@ -2231,6 +2251,7 @@ mod wasm {
         out
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn canvas_stats_metrics(stats: WebRendererStats) -> String {
         format!(
             ";draws={};draw_items={};draw_items_coalesced={};draw_pipeline_binds={};draw_bind_group_binds={};draw_scissor_sets={};solid_tris={};rrect_instances={};rrect_triangles={};rrect_instance_bytes={};image_instances={};image_triangles={};image_instance_bytes={};image_draws={};image_mesh_draws={};nine_slice_draws={};nine_slice_instances={};nine_slice_triangles={};nine_slice_instance_bytes={};glyph_quads={};sdf_glyph_quads={};clip_depth_peak={};damage_rects={};render_passes={};clear_passes={};draw_passes={};present_passes={};texture_copies={};command_buffers={};id_mask_uniform_writes={};id_mask_uniform_bytes={};id_mask_uniform_slots={};spinner_instances={};spinner_triangles={};spinner_instance_bytes={};neon_marker_instances={};neon_marker_triangles={};neon_marker_instance_bytes={};buffer_upload_bytes={};property_upload_bytes={};property_records_updated={};property_ring_bytes={};texture_upload_bytes={};buffer_grows={};texture_creates={};bind_group_creates={};pipeline_creates={};sampler_creates={};image_texture_creates={};image_bind_group_creates={};cpu_scratch_bytes={};cpu_scratch_grows={};cpu_scratch_growth_bytes={}",
@@ -2290,6 +2311,7 @@ mod wasm {
         )
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn average(values: &[f64]) -> f64 {
         if values.is_empty() {
             return 0.0;
@@ -2297,6 +2319,7 @@ mod wasm {
         values.iter().copied().sum::<f64>() / values.len() as f64
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn percentile(sorted_values: &[f64], percentile: f64) -> f64 {
         if sorted_values.is_empty() {
             return 0.0;
@@ -2307,6 +2330,7 @@ mod wasm {
         sorted_values[index]
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn perf_now() -> f64 {
         web_sys::window()
             .and_then(|window| window.performance())

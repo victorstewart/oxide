@@ -18,10 +18,15 @@ use crate::{
 use crate::{NormalizedIndexMode, WebGpuCpuSubmitTimingSample, WebGpuTimestampSample, WebRendererStats};
 use js_sys::Reflect;
 use oxide_renderer_api as api;
+#[cfg(feature = "diagnostic-instrumentation")]
 use oxide_wasm_alloc_counter::AllocationSnapshot;
+#[cfg(any(feature = "diagnostic-instrumentation", feature = "snapshot-tests"))]
 use std::cell::Cell;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet};
+#[cfg(feature = "diagnostic-instrumentation")]
+use std::collections::VecDeque;
 use std::num::NonZeroU64;
+#[cfg(any(feature = "diagnostic-instrumentation", feature = "snapshot-tests"))]
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -128,10 +133,15 @@ const ID_MASK_FIELD_CACHE_MAX_ENTRIES: usize = 4;
 const EFFECT_UNIFORM_SIZE_BYTES: usize = 16;
 const EFFECT_UNIFORM_SIZE: u64 = EFFECT_UNIFORM_SIZE_BYTES as u64;
 const MAX_BLUR_SIGMA: f32 = 96.0;
+#[cfg(feature = "diagnostic-instrumentation")]
 const TIMESTAMP_MAX_PASSES: u32 = 128;
+#[cfg(feature = "diagnostic-instrumentation")]
 const TIMESTAMP_QUERY_COUNT: u32 = TIMESTAMP_MAX_PASSES * 2;
+#[cfg(feature = "diagnostic-instrumentation")]
 const TIMESTAMP_READBACK_SLOTS: usize = 48;
+#[cfg(feature = "diagnostic-instrumentation")]
 const TIMESTAMP_READBACK_INTERVAL_FRAMES: u64 = 8;
+#[cfg(feature = "diagnostic-instrumentation")]
 const TIMESTAMP_COMPLETED_CAPACITY: usize = 4_096;
 const PREPARED_CACHE_DEFAULT_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
 const PREPARED_BUNDLE_DEFAULT_MIN_DRAWS: usize = 8;
@@ -150,6 +160,7 @@ const LAYER_PURGE_MEMORY_PRESSURE: u8 = 2;
 const LAYER_PURGE_DEVICE_LOSS: u8 = 3;
 const LAYER_PURGE_SCALE_CHANGE: u8 = 4;
 
+#[cfg(feature = "diagnostic-instrumentation")]
 fn cpu_submit_timing_begin(enabled: bool) -> Option<f64> {
     enabled.then(|| {
         web_sys::window()
@@ -158,6 +169,7 @@ fn cpu_submit_timing_begin(enabled: bool) -> Option<f64> {
     })
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 fn cpu_submit_timing_end(output: &mut f64, before_ms: Option<f64>) {
     if let Some(before_ms) = before_ms {
         let after_ms = web_sys::window()
@@ -165,6 +177,36 @@ fn cpu_submit_timing_end(output: &mut f64, before_ms: Option<f64>) {
             .map_or(before_ms, |performance| performance.now());
         *output = (after_ms - before_ms).max(0.0);
     }
+}
+
+#[cfg(feature = "diagnostic-instrumentation")]
+macro_rules! diagnostic_timestamp_writes
+{
+   ($renderer:expr, $family:expr) => {{
+      let pair = $renderer.reserve_timestamp_pass($family);
+      $renderer.timestamp_writes(pair)
+   }};
+}
+
+#[cfg(not(feature = "diagnostic-instrumentation"))]
+macro_rules! diagnostic_timestamp_writes
+{
+   ($renderer:expr, $family:expr) => { None };
+}
+
+#[cfg(feature = "diagnostic-instrumentation")]
+macro_rules! diagnostic_query_timestamp_writes
+{
+   ($queries_mut:expr, $queries:expr, $family:expr) => {{
+      let pair = reserve_webgpu_timestamp_pass($queries_mut, $family);
+      webgpu_timestamp_writes($queries, pair)
+   }};
+}
+
+#[cfg(not(feature = "diagnostic-instrumentation"))]
+macro_rules! diagnostic_query_timestamp_writes
+{
+   ($queries_mut:expr, $queries:expr, $family:expr) => { None };
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1334,7 +1376,9 @@ struct PreparedChunk
    draws: Vec<GpuDraw>,
    segments: Vec<PreparedSegment>,
    resources: Box<[api::ImageHandle]>,
+   #[cfg(feature = "diagnostic-instrumentation")]
    vertex_bytes: u64,
+   #[cfg(feature = "diagnostic-instrumentation")]
    index_bytes: u64,
    resident_bytes: u64,
    bundle_generation: u64,
@@ -1497,6 +1541,7 @@ impl PreparedChunkCache
       core::mem::take(&mut self.evictions)
    }
 
+   #[cfg(feature = "diagnostic-instrumentation")]
    fn vertex_bytes(&self) -> u64
    {
       self.entries.values().fold(0, |total, entry| {
@@ -1504,6 +1549,7 @@ impl PreparedChunkCache
       })
    }
 
+   #[cfg(feature = "diagnostic-instrumentation")]
    fn index_bytes(&self) -> u64
    {
       self.entries.values().fold(0, |total, entry| {
@@ -1593,6 +1639,7 @@ fn coalescible_draw_kind(a: DrawKind, b: DrawKind) -> bool {
     }
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 #[derive(Clone, Copy)]
 enum TimestampPassFamily {
     BackdropCopy,
@@ -1607,6 +1654,7 @@ enum TimestampPassFamily {
     Present,
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 #[derive(Clone, Copy)]
 struct TimestampPassRecord {
     family: TimestampPassFamily,
@@ -1614,6 +1662,7 @@ struct TimestampPassRecord {
     end_query: u32,
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 #[derive(Clone, Copy, Default)]
 struct TimestampSummary {
     frame_id: u64,
@@ -1632,12 +1681,14 @@ struct TimestampSummary {
     max_pass_ns: u64,
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TimestampReadbackState {
     Idle,
     Pending,
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 #[derive(Clone, Copy)]
 enum SubmitAllocationStage {
     Upload,
@@ -1651,6 +1702,7 @@ enum SubmitAllocationStage {
     TimestampMap,
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 struct TimestampReadbackSlot {
     buffer: wgpu::Buffer,
     mapped: Rc<Cell<bool>>,
@@ -1661,6 +1713,7 @@ struct TimestampReadbackSlot {
     records: Vec<TimestampPassRecord>,
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 struct WebGpuTimestampQueries {
     query_set: wgpu::QuerySet,
     resolve_buffer: wgpu::Buffer,
@@ -1676,6 +1729,7 @@ struct WebGpuTimestampQueries {
     encoder_writes_supported: bool,
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 impl TimestampSummary {
     fn add(&mut self, family: TimestampPassFamily, ns: u64) {
         self.total_ns = self.total_ns.saturating_add(ns);
@@ -1729,6 +1783,7 @@ impl TimestampSummary {
     }
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 impl WebGpuTimestampQueries {
     fn new(device: &wgpu::Device, timestamp_period_ns: f64, encoder_writes_supported: bool) -> Self {
         let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
@@ -2516,6 +2571,7 @@ struct ScratchCapacityBreakdown {
     resource_table: usize,
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 #[derive(Clone, Copy, Default)]
 struct WebGpuMemorySnapshot {
     logical_total_bytes: u64,
@@ -2666,6 +2722,7 @@ pub struct WebGpuRenderer {
     frame_scratch_capacity_bytes: usize,
     active_token: Option<api::FrameToken>,
     stats: WebRendererStats,
+    #[cfg(feature = "diagnostic-instrumentation")]
     timestamp_queries: Option<WebGpuTimestampQueries>,
     draw_state_cache_enabled: bool,
     draw_item_coalescing_enabled: bool,
@@ -2673,11 +2730,17 @@ pub struct WebGpuRenderer {
     effect_uniform_batch_enabled: bool,
     backdrop_batch_enabled: bool,
     direct_surface_enabled: bool,
+    #[cfg(feature = "diagnostic-instrumentation")]
     backdrop_copy_timestamp_fences_enabled: bool,
+    #[cfg(feature = "diagnostic-instrumentation")]
     cpu_submit_timing_enabled: bool,
+    #[cfg(feature = "diagnostic-instrumentation")]
     cpu_submit_timing: WebGpuCpuSubmitTimingSample,
+    #[cfg(feature = "diagnostic-instrumentation")]
     memory_stats_interval: u64,
+    #[cfg(feature = "diagnostic-instrumentation")]
     memory_stats_enabled: bool,
+    #[cfg(feature = "diagnostic-instrumentation")]
     memory_snapshot: WebGpuMemorySnapshot,
     _device_session: BrowserWebGpuDeviceSessionLease,
 }
@@ -2805,6 +2868,7 @@ impl WebGpuRenderer {
         Self::from_canvas_with_profile(canvas_by_id(id)?, profile).await
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn sample_memory_stats(&mut self) {
         let color_bytes = color_texture_bytes_per_pixel(self.config.format);
         let target_bytes =
@@ -2949,6 +3013,7 @@ impl WebGpuRenderer {
         };
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn apply_memory_stats(&mut self) {
         let memory = self.memory_snapshot;
         self.stats.gpu_allocated_bytes_available = false;
@@ -3000,13 +3065,17 @@ impl WebGpuRenderer {
             })
             .await
             .map_err(|_| api::RenderError::Unsupported("webgpu adapter unavailable"))?;
+        #[cfg(feature = "diagnostic-instrumentation")]
         let adapter_features = adapter.features();
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timestamp_query_supported = adapter_features.contains(wgpu::Features::TIMESTAMP_QUERY);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timestamp_encoder_writes_supported = timestamp_query_supported
             && adapter_features.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS);
         let packed_id_mask_fields = id_mask_packed_format_supported(
             adapter.get_texture_format_features(ID_MASK_PACKED_FIELD_FORMAT),
         );
+        #[cfg(feature = "diagnostic-instrumentation")]
         let required_features = if timestamp_query_supported {
             wgpu::Features::TIMESTAMP_QUERY
                 | if timestamp_encoder_writes_supported {
@@ -3017,6 +3086,8 @@ impl WebGpuRenderer {
         } else {
             wgpu::Features::empty()
         };
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
+        let required_features = wgpu::Features::empty();
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("oxide-webgpu-shared-device-v1"),
@@ -3026,6 +3097,7 @@ impl WebGpuRenderer {
             })
             .await
             .map_err(|err| api::RenderError::Io(format!("webgpu device unavailable: {err}")))?;
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timestamp_queries = if timestamp_query_supported {
             Some(WebGpuTimestampQueries::new(
                 &device,
@@ -3229,6 +3301,7 @@ impl WebGpuRenderer {
             frame_scratch_capacity_bytes: 0,
             active_token: None,
             stats: WebRendererStats::default(),
+            #[cfg(feature = "diagnostic-instrumentation")]
             timestamp_queries,
             draw_state_cache_enabled: true,
             draw_item_coalescing_enabled: true,
@@ -3236,11 +3309,17 @@ impl WebGpuRenderer {
             effect_uniform_batch_enabled: true,
             backdrop_batch_enabled: true,
             direct_surface_enabled: true,
+            #[cfg(feature = "diagnostic-instrumentation")]
             backdrop_copy_timestamp_fences_enabled: false,
+            #[cfg(feature = "diagnostic-instrumentation")]
             cpu_submit_timing_enabled: false,
+            #[cfg(feature = "diagnostic-instrumentation")]
             cpu_submit_timing: WebGpuCpuSubmitTimingSample::default(),
+            #[cfg(feature = "diagnostic-instrumentation")]
             memory_stats_interval: 60,
+            #[cfg(feature = "diagnostic-instrumentation")]
             memory_stats_enabled: true,
+            #[cfg(feature = "diagnostic-instrumentation")]
             memory_snapshot: WebGpuMemorySnapshot::default(),
             _device_session: device_session,
         })
@@ -3257,22 +3336,35 @@ impl WebGpuRenderer {
     }
 
     pub fn collect_timestamp_readbacks(&mut self) -> WebRendererStats {
-        if let Some(timestamps) = &mut self.timestamp_queries {
-            timestamps.harvest();
+        #[cfg(feature = "diagnostic-instrumentation")]
+        {
+           if let Some(timestamps) = &mut self.timestamp_queries {
+              timestamps.harvest();
+           }
+           self.apply_timestamp_stats();
         }
-        self.apply_timestamp_stats();
         self.stats
     }
 
     #[must_use]
     pub fn pending_timestamp_readbacks(&self) -> u32 {
-        self.timestamp_queries.as_ref().map_or(0, WebGpuTimestampQueries::pending_count)
+        #[cfg(feature = "diagnostic-instrumentation")]
+        {
+           return self.timestamp_queries.as_ref().map_or(0, WebGpuTimestampQueries::pending_count);
+        }
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
+        {
+           0
+        }
     }
 
     pub fn set_timestamp_readback_interval_for_benchmark(&mut self, frames: u64) {
+        #[cfg(feature = "diagnostic-instrumentation")]
         if let Some(timestamps) = &mut self.timestamp_queries {
             timestamps.set_readback_interval_for_benchmark(frames);
         }
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
+        let _ = frames;
     }
 
     #[must_use]
@@ -3328,19 +3420,34 @@ impl WebGpuRenderer {
     }
 
     pub fn set_backdrop_copy_timestamp_fences_enabled_for_benchmark(&mut self, enabled: bool) {
-        self.backdrop_copy_timestamp_fences_enabled = enabled;
+        #[cfg(feature = "diagnostic-instrumentation")]
+        {
+           self.backdrop_copy_timestamp_fences_enabled = enabled;
+        }
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
+        let _ = enabled;
     }
 
     pub fn set_memory_stats_interval_for_benchmark(&mut self, frames: u64) {
-        self.memory_stats_interval = frames.max(1);
+        #[cfg(feature = "diagnostic-instrumentation")]
+        {
+           self.memory_stats_interval = frames.max(1);
+        }
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
+        let _ = frames;
     }
 
     pub fn set_memory_stats_enabled_for_benchmark(&mut self, enabled: bool) {
-        self.memory_stats_enabled = enabled;
-        if !enabled {
-            self.memory_snapshot = WebGpuMemorySnapshot::default();
-            self.apply_memory_stats();
+        #[cfg(feature = "diagnostic-instrumentation")]
+        {
+           self.memory_stats_enabled = enabled;
+           if !enabled {
+              self.memory_snapshot = WebGpuMemorySnapshot::default();
+              self.apply_memory_stats();
+           }
         }
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
+        let _ = enabled;
     }
 
     pub fn queue_completion_flag_for_benchmark(&self) -> Arc<AtomicBool> {
@@ -3353,6 +3460,7 @@ impl WebGpuRenderer {
     }
 
     pub fn clear_completed_timestamp_samples(&mut self) {
+        #[cfg(feature = "diagnostic-instrumentation")]
         if let Some(timestamps) = &mut self.timestamp_queries {
             timestamps.clear_completed();
         }
@@ -3362,16 +3470,24 @@ impl WebGpuRenderer {
         &mut self,
         output: &mut Vec<WebGpuTimestampSample>,
     ) {
+        #[cfg(feature = "diagnostic-instrumentation")]
         if let Some(timestamps) = &mut self.timestamp_queries {
             timestamps.harvest();
             timestamps.drain_completed_into(output);
         } else {
             output.clear();
         }
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
+        output.clear();
     }
 
     pub fn set_cpu_submit_timing_enabled_for_benchmark(&mut self, enabled: bool) {
-        self.cpu_submit_timing_enabled = enabled;
+        #[cfg(feature = "diagnostic-instrumentation")]
+        {
+           self.cpu_submit_timing_enabled = enabled;
+        }
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
+        let _ = enabled;
     }
 
     pub fn set_animation_time_ms(&mut self, time_ms: f64)
@@ -3393,7 +3509,14 @@ impl WebGpuRenderer {
 
     #[must_use]
     pub fn last_cpu_submit_timing(&self) -> WebGpuCpuSubmitTimingSample {
-        self.cpu_submit_timing
+        #[cfg(feature = "diagnostic-instrumentation")]
+        {
+           return self.cpu_submit_timing;
+        }
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
+        {
+           WebGpuCpuSubmitTimingSample::default()
+        }
     }
 
     pub fn set_draw_state_cache_enabled_for_benchmark(&mut self, enabled: bool) {
@@ -4098,6 +4221,7 @@ impl WebGpuRenderer {
         );
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn apply_timestamp_stats(&mut self) {
         let Some(timestamps) = &self.timestamp_queries else {
             self.stats.gpu_timestamp_query_supported = false;
@@ -4125,10 +4249,12 @@ impl WebGpuRenderer {
             .min(u32::MAX as u64) as u32;
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn reserve_timestamp_pass(&mut self, family: TimestampPassFamily) -> Option<(u32, u32)> {
         self.timestamp_queries.as_mut().and_then(|timestamps| timestamps.reserve(family))
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn write_encoder_timestamp(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -4150,6 +4276,7 @@ impl WebGpuRenderer {
        );
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn write_backdrop_copy_timestamp_fence(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -4173,6 +4300,7 @@ impl WebGpuRenderer {
         });
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn timestamp_writes(
         &self,
         pair: Option<(u32, u32)>,
@@ -4186,6 +4314,7 @@ impl WebGpuRenderer {
         })
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn prepare_timestamp_readback(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -4195,12 +4324,14 @@ impl WebGpuRenderer {
             .and_then(|timestamps| timestamps.prepare_readback(encoder, self.frame_id))
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn map_timestamp_readback(&mut self, slot_index: usize, bytes: u64) {
         if let Some(timestamps) = &mut self.timestamp_queries {
             timestamps.map_readback(slot_index, bytes);
         }
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn record_submit_allocation_stage(
         &mut self,
         stage: SubmitAllocationStage,
@@ -7843,7 +7974,9 @@ impl WebGpuRenderer
          draws: lowered.draws,
          segments,
          resources,
+         #[cfg(feature = "diagnostic-instrumentation")]
          vertex_bytes,
+         #[cfg(feature = "diagnostic-instrumentation")]
          index_bytes,
          resident_bytes,
          bundle_generation,
@@ -8382,6 +8515,7 @@ impl api::Renderer for WebGpuRenderer {
         self.clip_stack.clear();
         self.target_stack.clear();
         self.layer_frame_ids.clear();
+        #[cfg(feature = "diagnostic-instrumentation")]
         if let Some(timestamps) = &mut self.timestamp_queries {
             timestamps.harvest();
             timestamps.begin_frame();
@@ -8396,7 +8530,9 @@ impl api::Renderer for WebGpuRenderer {
         };
         self.apply_layer_cache_stats();
         self.apply_id_mask_cache_stats();
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.apply_memory_stats();
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.apply_timestamp_stats();
         self.frame_scratch_capacity = self.scratch_capacity_breakdown();
         self.frame_scratch_capacity_bytes = self.frame_scratch_capacity.total();
@@ -8422,18 +8558,25 @@ impl api::Renderer for WebGpuRenderer {
             return Err(api::RenderError::InvalidOperation(violation));
         }
         self.active_token = None;
+        #[cfg(feature = "diagnostic-instrumentation")]
         if self.cpu_submit_timing_enabled {
             self.cpu_submit_timing = WebGpuCpuSubmitTimingSample::default();
         }
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         self.upload_frame_buffers();
         self.upload_scene3d_instances();
         self.prepare_effect_uniforms();
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::Upload, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.upload_ms, timing_before);
 
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         let surface_texture = match self.surface.get_current_texture() {
             Ok(texture) => texture,
@@ -8463,19 +8606,27 @@ impl api::Renderer for WebGpuRenderer {
         };
         let surface_view =
             surface_texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::Surface, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.surface_ms, timing_before);
 
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("oxide-webgpu-frame"),
         });
         self.stats.command_buffers = self.stats.command_buffers.saturating_add(1);
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::Encoder, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.encoder_create_ms, timing_before);
 
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         self.render_layer_passes(&mut encoder);
         if self.target_uses_backdrop(None, 0, self.frame.draws.len())
@@ -8486,44 +8637,69 @@ impl api::Renderer for WebGpuRenderer {
         } else {
             self.render_direct(&mut encoder, &surface_view);
         }
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::Render, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.command_encoding_ms, timing_before);
 
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timestamp_readback = self.prepare_timestamp_readback(&mut encoder);
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::Timestamp, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.timestamp_readback_ms, timing_before);
 
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         self.record_scratch_growth_stats();
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::ScratchStats, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.scratch_stats_ms, timing_before);
 
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         let command_buffer = encoder.finish();
         self.queue.submit(core::iter::once(command_buffer));
         self.stats.actual_submissions = self.stats.actual_submissions.saturating_add(1);
         self.stats.shaded_damage_pixels = u64::from(self.width).saturating_mul(u64::from(self.height));
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::FinishQueue, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.queue_submit_ms, timing_before);
 
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         surface_texture.present();
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::Present, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.present_ms, timing_before);
 
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
+        #[cfg(feature = "diagnostic-instrumentation")]
         if let Some((slot_index, bytes)) = timestamp_readback {
             self.map_timestamp_readback(slot_index, bytes);
             self.apply_timestamp_stats();
         }
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::TimestampMap, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.timestamp_map_ms, timing_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         if self.memory_stats_enabled
             && self.frame_id.saturating_sub(1) % self.memory_stats_interval == 0
         {
@@ -9048,8 +9224,8 @@ impl WebGpuRenderer {
            };
            self.stats.render_passes = self.stats.render_passes.saturating_add(1);
            self.stats.draw_passes = self.stats.draw_passes.saturating_add(1);
-           let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Draw);
-           let timestamp_writes = self.timestamp_writes(timestamp_pair);
+           let timestamp_writes =
+              diagnostic_timestamp_writes!(self, TimestampPassFamily::Draw);
            {
               let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                  label: Some("oxide-webgpu-prepared-snapshot-pass"),
@@ -9132,8 +9308,7 @@ impl WebGpuRenderer {
         self.stats.draw_passes = self.stats.draw_passes.saturating_add(1);
         let cache = core::mem::take(&mut self.prepared_chunks);
         let plan = core::mem::take(&mut self.prepared_frame_plan);
-        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Draw);
-        let timestamp_writes = self.timestamp_writes(timestamp_pair);
+        let timestamp_writes = diagnostic_timestamp_writes!(self, TimestampPassFamily::Draw);
         let mut draws = 0_u32;
         let mut draw_items = 0_u32;
         let mut pipeline_binds = 0_u32;
@@ -9551,14 +9726,18 @@ impl WebGpuRenderer {
                 else {
                     return;
                 };
+                #[cfg(feature = "diagnostic-instrumentation")]
                 let encoder_timestamp_writes = self.timestamp_queries.as_ref()
                     .is_some_and(|timestamps| timestamps.encoder_writes_supported);
+                #[cfg(feature = "diagnostic-instrumentation")]
                 let fence_timestamp_writes = !encoder_timestamp_writes
                     && self.backdrop_copy_timestamp_fences_enabled;
+                #[cfg(feature = "diagnostic-instrumentation")]
                 let copy_timestamp_pair = (!self.backdrop_copy_regions.is_empty()
                     && (encoder_timestamp_writes || fence_timestamp_writes))
                     .then(|| self.reserve_timestamp_pass(TimestampPassFamily::BackdropCopy))
                     .flatten();
+                #[cfg(feature = "diagnostic-instrumentation")]
                 if encoder_timestamp_writes {
                     self.write_encoder_timestamp(encoder, copy_timestamp_pair, false);
                 } else if fence_timestamp_writes {
@@ -9603,6 +9782,7 @@ impl WebGpuRenderer {
                         ),
                     );
                 }
+                #[cfg(feature = "diagnostic-instrumentation")]
                 if encoder_timestamp_writes {
                     self.write_encoder_timestamp(encoder, copy_timestamp_pair, true);
                 } else if fence_timestamp_writes {
@@ -9660,8 +9840,7 @@ impl WebGpuRenderer {
     ) {
         self.stats.render_passes = self.stats.render_passes.saturating_add(1);
         self.stats.clear_passes = self.stats.clear_passes.saturating_add(1);
-        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Clear);
-        let timestamp_writes = self.timestamp_writes(timestamp_pair);
+        let timestamp_writes = diagnostic_timestamp_writes!(self, TimestampPassFamily::Clear);
         let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some(label),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -9685,8 +9864,7 @@ impl WebGpuRenderer {
         target_view: &wgpu::TextureView,
     ) {
         self.ensure_scene_depth_target();
-        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Scene3d);
-        let timestamp_writes = self.timestamp_writes(timestamp_pair);
+        let timestamp_writes = diagnostic_timestamp_writes!(self, TimestampPassFamily::Scene3d);
         let Some(depth_target) = self.scene_depth_target.as_ref() else {
             return;
         };
@@ -9793,8 +9971,8 @@ impl WebGpuRenderer {
             return;
         }
         self.ensure_scene_depth_target();
-        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Scene3dOverlay);
-        let timestamp_writes = self.timestamp_writes(timestamp_pair);
+        let timestamp_writes =
+            diagnostic_timestamp_writes!(self, TimestampPassFamily::Scene3dOverlay);
         let Some(depth_target) = self.scene_depth_target.as_ref() else {
             return;
         };
@@ -9942,12 +10120,11 @@ impl WebGpuRenderer {
                 }
 
             {
-                let timestamp_pair = reserve_webgpu_timestamp_pass(
+                let timestamp_writes = diagnostic_query_timestamp_writes!(
                     &mut self.timestamp_queries,
-                    TimestampPassFamily::IdMaskRaster,
+                    &self.timestamp_queries,
+                    TimestampPassFamily::IdMaskRaster
                 );
-                let timestamp_writes =
-                    webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
                 let Some(pipeline) = self.id_mask_raster_pipeline() else { return };
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("oxide-webgpu-id-mask-raster-pass"),
@@ -9997,12 +10174,11 @@ impl WebGpuRenderer {
             // scheduling stalls this path was built to remove.
             let mut field_offset_index = uniform_offsets.field_first;
             {
-                let timestamp_pair = reserve_webgpu_timestamp_pass(
+                let timestamp_writes = diagnostic_query_timestamp_writes!(
                     &mut self.timestamp_queries,
-                    TimestampPassFamily::IdMaskFieldSeed,
+                    &self.timestamp_queries,
+                    TimestampPassFamily::IdMaskFieldSeed
                 );
-                let timestamp_writes =
-                    webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
                 let Some(pipeline) = self.id_mask_field_seed_pipeline(packed_fields) else {
                     return;
                 };
@@ -10025,12 +10201,11 @@ impl WebGpuRenderer {
             let mut jump = width.max(height).next_power_of_two() / 2;
             while jump >= 1 {
                 {
-                    let timestamp_pair = reserve_webgpu_timestamp_pass(
+                    let timestamp_writes = diagnostic_query_timestamp_writes!(
                         &mut self.timestamp_queries,
-                        TimestampPassFamily::IdMaskFieldJump,
+                        &self.timestamp_queries,
+                        TimestampPassFamily::IdMaskFieldJump
                     );
-                    let timestamp_writes =
-                        webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
                     let Some(pipeline) = self.id_mask_field_jump_pipeline(packed_fields) else {
                         return;
                     };
@@ -10061,12 +10236,11 @@ impl WebGpuRenderer {
             );
 
             {
-                let timestamp_pair = reserve_webgpu_timestamp_pass(
+                let timestamp_writes = diagnostic_query_timestamp_writes!(
                     &mut self.timestamp_queries,
-                    TimestampPassFamily::IdMaskCompositor,
+                    &self.timestamp_queries,
+                    TimestampPassFamily::IdMaskCompositor
                 );
-                let timestamp_writes =
-                    webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
                 let Some(pipeline) = self.id_mask_compositor_pipeline(packed_fields) else {
                     return;
                 };
@@ -10221,8 +10395,7 @@ impl WebGpuRenderer {
         self.stats.render_passes = self.stats.render_passes.saturating_add(1);
         self.stats.draw_passes = self.stats.draw_passes.saturating_add(1);
 
-        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Draw);
-        let timestamp_writes = self.timestamp_writes(timestamp_pair);
+        let timestamp_writes = diagnostic_timestamp_writes!(self, TimestampPassFamily::Draw);
         let vertex_buffer = self.vertex_buffer.clone();
         let rrect_instance_buffer = self.rrect_instance_buffer.clone();
         let image_instance_buffer = self.image_instance_buffer.clone();
@@ -10548,8 +10721,7 @@ impl WebGpuRenderer {
         self.ensure_present_buffers();
         self.stats.render_passes = self.stats.render_passes.saturating_add(1);
         self.stats.present_passes = self.stats.present_passes.saturating_add(1);
-        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Present);
-        let timestamp_writes = self.timestamp_writes(timestamp_pair);
+        let timestamp_writes = diagnostic_timestamp_writes!(self, TimestampPassFamily::Present);
         let Some(pipeline) = self.pipeline_for_draw(DrawPipelineKey::Rgba) else { return };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("oxide-webgpu-present-pass"),
@@ -10595,10 +10767,12 @@ fn browser_webgpu_present() -> bool {
         .is_some()
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 fn timestamp_readback_bytes(query_count: u32) -> u64 {
     u64::from(query_count).saturating_mul(u64::from(wgpu::QUERY_SIZE))
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 fn timestamp_sample(data: &[u8], query_index: u32) -> Option<u64> {
     let start = (query_index as usize).checked_mul(wgpu::QUERY_SIZE as usize)?;
     let bytes = data.get(start..start.checked_add(8)?)?;
@@ -10607,6 +10781,7 @@ fn timestamp_sample(data: &[u8], query_index: u32) -> Option<u64> {
     ]))
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 fn reserve_webgpu_timestamp_pass(
     timestamps: &mut Option<WebGpuTimestampQueries>,
     family: TimestampPassFamily,
@@ -10614,6 +10789,7 @@ fn reserve_webgpu_timestamp_pass(
     timestamps.as_mut().and_then(|timestamps| timestamps.reserve(family))
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 fn webgpu_timestamp_writes(
     timestamps: &Option<WebGpuTimestampQueries>,
     pair: Option<(u32, u32)>,

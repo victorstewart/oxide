@@ -8,6 +8,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::process::Command;
 
+#[test]
+fn perf_runner_explicitly_enables_renderer_diagnostics()
+{
+   let manifest = include_str!("../Cargo.toml");
+   assert!(manifest.contains(
+      "oxide-renderer-web = { path = \"../renderer-web\", features = [\"diagnostic-instrumentation\"] }",
+   ));
+}
+
 fn sample_case(id: &str, median: f64, threshold_pct: f64, gated: bool) -> PerfCaseResult {
     PerfCaseResult {
         id: id.to_string(),

@@ -5,6 +5,14 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "WebAssembly canvas renderer implementation for Oxide"
 
+[features]
+default = []
+diagnostic-instrumentation = [
+   "dep:oxide-wasm-alloc-counter",
+   "web-sys/Performance",
+]
+snapshot-tests = []
+
 [dependencies]
 bytemuck = { version = "1.23.2", features = ["derive"] }
 oxide-image-store = { path = "../image-store" }
@@ -12,7 +20,7 @@ oxide-renderer-api = { path = "../renderer-api" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3.98"
-oxide-wasm-alloc-counter = { path = "../wasm-alloc-counter" }
+oxide-wasm-alloc-counter = { path = "../wasm-alloc-counter", optional = true }
 wasm-bindgen = "0.2.121"
 wasm-bindgen-futures = "0.4.71"
 web-sys = { version = "0.3.98", features = [
@@ -24,7 +32,6 @@ web-sys = { version = "0.3.98", features = [
    "HtmlCanvasElement",
    "ImageData",
    "Navigator",
-   "Performance",
    "Window",
 ] }
 wgpu = { version = "=26.0.1", default-features = false, features = ["std", "webgpu", "wgsl"] }
@@ -32,6 +39,3 @@ wgpu = { version = "=26.0.1", default-features = false, features = ["std", "webg
 [lib]
 path = "src/lib.rs"
 crate-type = ["rlib"]
-
-[features]
-snapshot-tests = []

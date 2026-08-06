@@ -8,13 +8,15 @@ Lower Oxide draw lists into persistent wgpu/WebGPU buffers, pipelines, passes, a
 
 Consumes renderer-api values and lowers generic 2D geometry through `packed_geometry`; embedded WGSL interpolates the normalized packed vertex color.
 
+The default product build contains ordinary renderer counters but no diagnostic allocator snapshots, CPU submit timing, memory scans, timestamp feature requests, query set, resolve buffer, or 48-slot readback ring. `diagnostic-instrumentation` restores that measurement path without changing rendering semantics.
+
 ## Entry points list
 
 - `BrowserRenderer::from_canvas_id_webgpu` and `from_canvas_webgpu` acquire a renderer lease from the JavaScript-realm page session before wgpu initialization; their signatures are unchanged.
 - `BrowserRenderer::prewarm_auxiliary_targets` lets an app move the allocation of only its declared backdrop and/or Scene3D targets outside a latency-sensitive first frame.
-- `BrowserRenderer::set_timestamp_readback_interval_for_benchmark`, `clear_completed_timestamp_samples`, and `drain_completed_timestamp_samples_into` control and collect bounded C00 GPU timestamp distributions without changing the normal eight-frame production sampling cadence.
+- `BrowserRenderer::set_timestamp_readback_interval_for_benchmark`, `clear_completed_timestamp_samples`, and `drain_completed_timestamp_samples_into` control and collect bounded C00 GPU timestamp distributions in `diagnostic-instrumentation` builds; default builds preserve the calls as zero/unavailable compatibility APIs.
 - `BrowserRenderer::queue_completion_flag_for_benchmark` registers a benchmark-only completion fence used to serialize C01 primitive submissions before the next presented drawable.
-- `BrowserRenderer::set_cpu_submit_timing_enabled_for_benchmark` and `last_cpu_submit_timing` expose bounded, opt-in CPU attribution for upload, surface, command encoding, queue submit, present, and readback bookkeeping; the normal renderer path retains only a disabled branch.
+- `BrowserRenderer::set_cpu_submit_timing_enabled_for_benchmark` and `last_cpu_submit_timing` expose bounded CPU attribution for upload, surface, command encoding, queue submit, present, and readback bookkeeping when diagnostics are compiled in; default submission contains none of those timer calls.
 - `BrowserRenderer::encode_snapshot(&mut self, snapshot: &RenderSnapshot) -> Result<(), RenderSnapshotError>` prepares or replays immutable retained chunks and falls back to exact flattening when an instance or command is not supported by the prepared path.
 - `BrowserRenderer::prepared_cache_resident_bytes(&self) -> u64`, `set_prepared_cache_budget_bytes`, and `purge_prepared_chunks` expose logical residency plus explicit cache policy and invalidation.
 - `BrowserRenderer::id_mask_target_bytes_per_pixel(&self) -> u64` and `id_mask_packed_fields_supported(&self) -> bool` expose the selected ID-mask target representation to the browser benchmark adapter so its cache budgets and memory proof match the adapter's validated format capabilities.
@@ -32,7 +34,7 @@ The surface is constructed at the canvas's already-selected physical backing siz
 
 Scene3D stores one 80-byte MVP/color record per visible instance in a persistent storage buffer. Adjacent opaque, depth-tested, depth-writing alpha instances collapse only when mesh generation, pipeline, material layout, cull/depth state, physical viewport/scissor, and target match exactly. Transparent and additive instances remain in API order as separate draws. The render pass binds the instance table once, caches adjacent pipeline/mesh/viewport state, and uses `first_instance..first_instance + instance_count`; front, back, and no-cull pipelines are prebuilt for every depth/blend combination. Meshes share the generation-checked free-slot table used by runtime images, so stale handles cannot alias recycled GPU buffers and create/release churn remains bounded.
 
-Explicit benchmark capture lazily allocates a 4,096-entry completed-sample FIFO, samples every frame, clears stale completed samples, and drains results into host-owned reusable storage. Normal production timestamp sampling does not allocate or populate that history. When an active capture reaches the bound, the oldest completed sample is discarded; pending GPU readbacks retain their existing completion-safe slot ownership.
+With `diagnostic-instrumentation`, ordinary diagnostic sampling resolves every eight frames and explicit benchmark capture lazily allocates a 4,096-entry completed-sample FIFO, samples every frame, clears stale completed samples, and drains results into host-owned reusable storage. When an active capture reaches the bound, the oldest completed sample is discarded; pending GPU readbacks retain their existing completion-safe slot ownership. Default builds compile out both paths and request an empty WebGPU feature set.
 
 Immutable zero-origin snapshot chunks are keyed by chunk id, structural/geometry/resource revisions, device generation, surface format, and bundle policy. A miss lowers only that chunk into persistent vertex/index buffers and an ordered prepared plan; capacity-compatible buffers are queue-updated in place. Full-surface static ranges record bundles, while clipped or otherwise bundle-incompatible ranges remain ordered direct segments over the same buffers. A wholly compatible snapshot additionally retains one aggregate bundle keyed by each chunk's buffer/plan generation, so clean frames issue one replay and one execute call without command traversal, geometry packing, or upload. Effects, camera input, unsupported mixed snapshots, missing resources, and zero cache budget use the checked flat path.
 
@@ -100,7 +102,7 @@ C60 implements `oxide_image_store::ImageResidencyBackend` for both browser rende
 
 ## Feature flags and cfgs
 
-Compiled only for `wasm32` with the existing WebGPU and WGSL features.
+Compiled only for `wasm32` with the existing WebGPU and WGSL features. `diagnostic-instrumentation` owns timestamp queries/readbacks, allocation snapshots, CPU submit timing, and memory scans. `snapshot-tests` separately owns exact ID-mask readback and does not imply diagnostics.
 
 ## Testing and benchmarks
 
@@ -116,6 +118,7 @@ Packed `0xFFFF_0000` uploads as opaque blue; packed zero uploads the draw unifor
 
 ## Changelog
 
+- 2026-08-05: removed diagnostic timestamp resources, allocator snapshots, submit timers, and memory scans from default product builds behind `diagnostic-instrumentation`.
 - 2026-08-05: deduplicated compatible page-session adapter discovery across independently compiled WASM modules while rejecting adapter-option mismatches before shared-device reuse.
 - 2026-07-22: shared one page-session WebGPU device across independently compiled Oxide WASM modules, retained route-local renderer resource ownership, added deterministic pagehide shutdown, and exposed a read-only lifecycle snapshot.
 - 2026-07-15: implemented the C60 image-store backend with sRGB empty atlas pages, append-only cell uploads, linear-sRGB standalone mip generation, device generations, and exact prepared invalidation.

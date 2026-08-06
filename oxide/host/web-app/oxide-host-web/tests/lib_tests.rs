@@ -1,6 +1,15 @@
 use oxide_host_web::generate_checker_rgba;
 use std::io::Cursor;
 
+#[test]
+fn browser_benchmark_host_explicitly_enables_renderer_diagnostics_and_snapshots()
+{
+   let manifest = include_str!("../Cargo.toml");
+   assert!(manifest.contains(
+      "features = [\"diagnostic-instrumentation\", \"snapshot-tests\"]",
+   ));
+}
+
 fn decode_png_rgba(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
     let decoder = png::Decoder::new(Cursor::new(bytes));
     let mut reader = decoder.read_info().expect("decode PNG header");
