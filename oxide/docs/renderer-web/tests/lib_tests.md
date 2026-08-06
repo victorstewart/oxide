@@ -26,6 +26,7 @@ Call flow:
 - `diagnostic_instrumentation_is_explicit_and_snapshot_tests_stay_independent()`: freezes the empty default feature set, optional allocator dependency, independent snapshot feature, feature-gated timestamp machinery, and default compatibility API.
 - `native_stub_ignores_web_camera_background_commands()`: verifies unsupported web `CameraBg` commands do not count as web draw work.
 - `wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()`: freezes the cross-WASM JavaScript coordinator, unchanged Rust constructors, route-local lease ownership, compatible adapter/device request reuse, rejected-adapter retry, incompatible option rejection, terminal pagehide destroy, and stable read-only counters.
+- `wasm_webgpu_profiled_clean_layers_skip_body_preflight_before_resource_mutation()`: freezes body-free custom-profile cache hits for retained and prepared layers while keeping composite/body profile violations ahead of cache touches and target allocation.
 - `wasm_webgpu_runtime_images_are_explicitly_reclaimable_without_arena_tombstones()`: verifies the production wrapper delegates image release and the WebGPU resource table recycles generation-checked slots without append-only tombstones or stale-handle ABA.
 - `wasm_webgpu_scene3d_uses_compact_order_safe_instances_and_generation_slots()`: freezes C56's 80-byte storage records, exact adjacent grouping key, transparent boundary, cull variants, viewport/scissor state, instanced draw range, and generation-checked mesh ownership.
 - `wasm_webgpu_image_store_uses_append_only_srgb_pages_and_complete_mips()`: freezes C60's portable image-store backend hooks, direct tight uploads, formats, and chunk/layer invalidation.
@@ -88,6 +89,7 @@ pub fn scale() -> f32
 
 ## Changelog
 
+- 2026-08-06: froze body-free custom-profile clean-layer reuse and fail-closed miss preflight before target mutation.
 - 2026-08-05: froze explicit diagnostic feature ownership, independent snapshot compilation, and default public diagnostic compatibility.
 - 2026-08-05: froze one compatible native adapter request across two WASM modules and 128 route transitions, plus fail-closed adapter-option and device-requirement mismatches.
 - 2026-07-22: froze the JavaScript-realm shared-device protocol, observable counters, 128-transition one-request contract, incompatible requirement rejection, and terminal pagehide destruction.

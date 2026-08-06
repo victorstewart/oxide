@@ -6038,10 +6038,9 @@ impl WebGpuRenderer {
         if self.pipeline_profile != BrowserRendererPipelineProfile::full()
         {
             self.record_profiled_draw_kind(DrawKind::Layer { id });
-            let body_end = self.preflight_draw_list_profile(list, *index, true);
             if self.pipeline_profile_violation.is_some()
             {
-                *index = body_end;
+                let _ = skip_layer_body(list, index);
                 return;
             }
         }
@@ -6054,6 +6053,15 @@ impl WebGpuRenderer {
                 self.stats.layer_cache_skipped_draws =
                     self.stats.layer_cache_skipped_draws.saturating_add(skipped);
                 self.push_layer_draw(id, cached_rect);
+                return;
+            }
+        }
+        if self.pipeline_profile != BrowserRendererPipelineProfile::full()
+        {
+            let body_end = self.preflight_draw_list_profile(list, *index, true);
+            if self.pipeline_profile_violation.is_some()
+            {
+                *index = body_end;
                 return;
             }
         }
@@ -7349,25 +7357,6 @@ impl WebGpuRenderer
       {
          self.prepared_layer_snapshot = Some(snapshot.clone());
       }
-      if self.pipeline_profile != BrowserRendererPipelineProfile::full()
-      {
-         for entry in &plan
-         {
-            self.record_profiled_draw_kind(DrawKind::Layer { id: entry.frame.key.id });
-            self.preflight_draw_list_profile(entry.chunk.draw_list(), 0, false);
-            if self.pipeline_profile_violation.is_some()
-            {
-               break;
-            }
-         }
-         if self.pipeline_profile_violation.is_some()
-         {
-            self.prepared_layer_key_indices = layer_keys;
-            self.prepared_layer_plan = plan;
-            self.prepared_layer_snapshot = None;
-            return Some(Ok(()));
-         }
-      }
       let required_layer_bytes = plan.iter().filter(|entry| !entry.duplicate).fold(0_u64, |total, entry| {
          total.saturating_add(saturating_texture_bytes(
             u64::from(entry.frame.width),
@@ -7389,6 +7378,38 @@ impl WebGpuRenderer
             entry.frame.viewport[11] = self.animation_phase;
             entry.frame.force_refresh = true;
          }
+      }
+      if self.pipeline_profile != BrowserRendererPipelineProfile::full()
+      {
+         for entry in &plan
+         {
+            self.record_profiled_draw_kind(DrawKind::Layer { id: entry.frame.key.id });
+            if self.pipeline_profile_violation.is_some()
+            {
+               break;
+            }
+            let frame = entry.frame;
+            let hit = entry.duplicate
+               || !frame.force_refresh && self.cached_prepared_layer(frame, &entry.chunk).is_some();
+            if !hit
+            {
+               self.preflight_draw_list_profile(entry.chunk.draw_list(), 0, false);
+               if self.pipeline_profile_violation.is_some()
+               {
+                  break;
+               }
+            }
+         }
+         if self.pipeline_profile_violation.is_some()
+         {
+            self.prepared_layer_key_indices = layer_keys;
+            self.prepared_layer_plan = plan;
+            self.prepared_layer_snapshot = None;
+            return Some(Ok(()));
+         }
+      }
+      for entry in &mut plan
+      {
          let frame = entry.frame;
          self.stats.layer_draws = self.stats.layer_draws.saturating_add(1);
          let hit = entry.duplicate

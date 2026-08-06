@@ -1724,6 +1724,45 @@ fn wasm_webgpu_pipeline_profiles_bound_cold_start_work_without_runtime_creation(
 }
 
 #[test]
+fn wasm_webgpu_profiled_clean_layers_skip_body_preflight_before_resource_mutation()
+{
+   let source = include_str!("../src/wasm/webgpu.rs");
+   let layer = source_block(source, "fn encode_layer", "fn encode_items");
+   let profile_check = layer.find("self.record_profiled_draw_kind(DrawKind::Layer").unwrap();
+   let clean_cache_check = layer.find("if !dirty").unwrap();
+   let clean_cache_touch = layer.find("self.touch_layer(id)").unwrap();
+   let body_preflight = layer.find("self.preflight_draw_list_profile").unwrap();
+   let layer_allocation = layer.find("self.ensure_layer(").unwrap();
+
+   assert!(profile_check < clean_cache_check);
+   assert!(profile_check < clean_cache_touch);
+   assert!(clean_cache_check < body_preflight);
+   assert!(clean_cache_touch < body_preflight);
+   assert!(body_preflight < layer_allocation);
+   let clean_cache_path = &layer[clean_cache_check..body_preflight];
+   assert!(clean_cache_path.contains("skip_layer_body(list, index)"));
+   assert!(clean_cache_path.contains("return;"));
+   let undeclared_layer_path = &layer[profile_check..clean_cache_check];
+   assert!(undeclared_layer_path.contains("self.pipeline_profile_violation.is_some()"));
+   assert!(undeclared_layer_path.contains("skip_layer_body(list, index)"));
+
+   let snapshot_layers = source_block(source, "fn encode_snapshot_layers", "pub fn encode_snapshot");
+   let prepared_hit_check = snapshot_layers.find("let hit = entry.duplicate").unwrap();
+   let prepared_preflight = snapshot_layers.find("self.preflight_draw_list_profile").unwrap();
+   let prepared_touch = snapshot_layers.find("self.touch_layer(frame.key.id)").unwrap();
+   let prepared_allocation = snapshot_layers.find("self.ensure_prepared_layer(").unwrap();
+
+   assert!(prepared_hit_check < prepared_preflight);
+   assert!(prepared_preflight < prepared_touch);
+   assert!(prepared_preflight < prepared_allocation);
+   let prepared_miss_path = &snapshot_layers[prepared_hit_check..prepared_preflight];
+   assert!(prepared_miss_path.contains("if !hit"));
+   let prepared_failure_path = &snapshot_layers[prepared_preflight..prepared_touch];
+   assert!(prepared_failure_path.contains("self.pipeline_profile_violation.is_some()"));
+   assert!(prepared_failure_path.contains("return Some(Ok(()))"));
+}
+
+#[test]
 fn wasm_webgpu_prepared_chunks_are_budgeted_and_resource_invalidated()
 {
    let source = include_str!("../src/wasm/webgpu.rs");
