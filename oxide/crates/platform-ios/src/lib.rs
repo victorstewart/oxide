@@ -12,7 +12,7 @@
 use oxide_networking::ReachabilityManager;
 #[cfg(feature = "tokio-runtime")]
 use oxide_platform_api::runtime;
-use oxide_platform_api::telephony::{normalize_country_iso, TelephonyService};
+use oxide_platform_api::telephony::TelephonyService;
 use oxide_platform_api::{HapticPattern, Haptics as HapticsTrait};
 use oxide_platform_api::{PermissionDomain, PermissionStatus, Permissions};
 use oxide_platform_api::{PlatformError, TimeService};
@@ -36,25 +36,63 @@ extern "C" {
     fn oxide_host_net_stop_reachability();
 }
 
-pub mod clipboard {
-    use super::*;
+pub mod clipboard
+{
+   use super::*;
 
-    pub fn set(s: &str) {
-        unsafe { oxide_host_clipboard_set(s.as_ptr(), s.len()) };
-    }
+   pub fn set(s: &str)
+   {
+      unsafe
+      {
+         oxide_host_clipboard_set(s.as_ptr(), s.len());
+      }
+   }
 
-    pub fn get() -> Option<String> {
-        let mut ptr: *mut u8 = core::ptr::null_mut();
-        let mut len: usize = 0;
-        let ok = unsafe { oxide_host_clipboard_get(&mut ptr, &mut len) };
-        if ok == 0 || ptr.is_null() || len == 0 {
-            return None;
-        }
-        let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
-        let out = String::from_utf8_lossy(slice).into_owned();
-        unsafe { oxide_host_string_free(ptr) };
-        Some(out)
-    }
+   pub fn get() -> Option<String>
+   {
+      let mut ptr: *mut u8 = core::ptr::null_mut();
+      let mut len: usize = 0;
+      let ok = unsafe
+      {
+         oxide_host_clipboard_get(&mut ptr, &mut len)
+      };
+      if ok == 0
+      {
+         if !ptr.is_null()
+         {
+            unsafe
+            {
+               oxide_host_string_free(ptr);
+            }
+         }
+         return None;
+      }
+      if len == 0
+      {
+         if !ptr.is_null()
+         {
+            unsafe
+            {
+               oxide_host_string_free(ptr);
+            }
+         }
+         return Some(String::new());
+      }
+      if ptr.is_null()
+      {
+         return None;
+      }
+      let slice = unsafe
+      {
+         core::slice::from_raw_parts(ptr, len)
+      };
+      let out = String::from_utf8_lossy(slice).into_owned();
+      unsafe
+      {
+         oxide_host_string_free(ptr);
+      }
+      Some(out)
+   }
 }
 
 pub struct IosHaptics;
@@ -154,7 +192,7 @@ pub use oxide_platform_apple::{
 
 // ===== HTTP =====
 
-pub use oxide_platform_apple::AppleHttpClient as IosHttpClient;
+pub use oxide_platform_apple::{AppleHttpClient as IosHttpClient, AppleSocketNetworking as IosNetworking};
 
 // ===== Reachability =====
 
@@ -470,25 +508,11 @@ pub use oxide_platform_apple::{
 
 // ===== Telephony =====
 
-extern "C" {
-    fn oxide_telephony_home_country_iso(
-        buffer: *mut std::os::raw::c_char,
-        buffer_len: usize,
-    ) -> bool;
-}
-
 pub struct IosTelephonyService;
 
 impl TelephonyService for IosTelephonyService {
     fn home_country_iso_code(&self) -> Option<String> {
-        let mut buffer = [0 as std::os::raw::c_char; 8];
-        let ok = unsafe { oxide_telephony_home_country_iso(buffer.as_mut_ptr(), buffer.len()) };
-        if !ok {
-            return None;
-        }
-        let value = unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) };
-        let as_str = value.to_str().ok()?;
-        normalize_country_iso(as_str)
+        None
     }
 }
 
