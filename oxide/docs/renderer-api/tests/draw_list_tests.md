@@ -28,6 +28,8 @@
   Verifies backing geometry arrays are writable caller-owned storage.
 - `optional_rgba_runtime_upload_reports_unsupported_without_panicking`
   Verifies both linear and nearest optional RGBA requests fail cleanly and the default release hook remains a no-op when an uploader supports only A8 images.
+- `runtime_a8_append_and_release_preserve_legacy_uploader_compatibility`
+  Verifies the default append hook delegates to an ordinary A8 update and the default A8 release remains a no-op.
 - `sampled_rgba_runtime_upload_preserves_legacy_linear_default_and_input_bytes`
   Verifies linear remains the compatibility default, source RGBA bytes and row stride are unchanged, nearest sampling never silently degrades to linear, and an RGBA-capable uploader receives release for its owned handle.
 
@@ -39,6 +41,7 @@
 - The representative capture fixture builds a valid `DrawList` with backing vertices/indices, clips, layer markers, primitive/image/text/effect/camera/spinner commands, then records both capture rows and replay callback rows.
 - Text atlas compatibility is checked by matching an atlas handle and revision against cached `GlyphRun` metadata.
 - Sampled RGBA coverage uses a recording uploader to prove the default method forwards only compatible linear uploads, leaves unsupported nearest requests explicit, and preserves an explicit create/release lifecycle without breaking A8-only implementors.
+- Runtime A8 lifecycle coverage freezes source compatibility for existing uploaders while allowing dependency-aware hosts to override append and release behavior.
 
 ## Preconditions and postconditions
 - Passing tests mean retained draw caches can distinguish current text geometry from geometry baked before an atlas eviction or reset.
@@ -67,6 +70,7 @@
 The expected `0xBF40_80FF` value documents alpha, blue, green, and red byte positions.
 
 ## Changelog
+- 2026-08-07: covered the compatibility defaults for runtime A8 append-only publication and release.
 - 2026-08-06: covered source-compatible RGBA release for unsupported and resource-owning uploaders.
 - 2026-08-06: added sampled-RGBA compatibility, byte-preservation, and unsupported-nearest coverage.
 - 2026-07-12: added packed-color byte-order and invalid-channel coverage.

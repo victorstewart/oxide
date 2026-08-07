@@ -54,6 +54,9 @@ fn runtime_image_upload_maps_invalid_handles_and_releases_owned_resources()
       "both RGBA create paths must map the renderer's invalid zero sentinel to None",
    );
    assert!(uploader.contains("fn release_rgba8(&mut self, handle: gfx_api::ImageHandle)"));
+   assert!(uploader.contains("fn append_a8("));
+   assert!(uploader.contains("(*self.renderer).image_append_a8(handle, x, y, w, h, data, row_bytes)"));
+   assert!(uploader.contains("fn release_a8(&mut self, handle: gfx_api::ImageHandle)"));
    assert!(uploader.contains("(*self.renderer).image_release(handle)"));
    assert!(!uploader.contains("to_vec()") && !uploader.contains("swap("));
 }

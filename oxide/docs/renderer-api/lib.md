@@ -31,7 +31,7 @@
 - `ImageSampling`
   Declares immutable `Linear` or `Nearest` filtering for a runtime image resource.
 - `RuntimeImageUploader`
-  Narrow renderer-owned create/release boundary for runtime A8 resources and optional sRGB RGBA8 resources. Apps call through this trait instead of constructing backend-specific textures.
+  Narrow renderer-owned create/append/update/release boundary for runtime A8 resources and optional sRGB RGBA8 resources. Apps call through this trait instead of constructing backend-specific textures.
 - `RenderPropertySlotId::dynamic` and `RenderDynamicClip`
   Carry generation-checked transform/opacity identities and transform-linked retained clip metadata without exposing a backend ring.
 - `RenderSnapshot`
@@ -47,6 +47,7 @@
 - Text atlas revision is part of `GlyphRun` because atlas slot eviction can make old UVs point at different glyph pixels while the texture handle stays the same.
 - Cached draw-list replay rejects stale or unknown text geometry while preserving normal replay for non-text commands.
 - Runtime image uploads stay outside draw commands: app code publishes changed atlas bytes to the renderer, then emits normal `ImageHandle`/`GlyphRun` draw work for the frame.
+- `append_a8` distinguishes never-before-sampled atlas texels from destructive updates, so dependency-aware prepared caches can preserve existing users. Its compatibility default delegates to `update_a8`; `release_a8` defaults to a no-op for legacy uploaders.
 - `try_create_rgba8_sampled` keeps linear filtering as the compatibility default. A backend that does not implement nearest filtering returns `None` instead of silently producing different pixels; a successful backend stores the selected mode with the image handle.
 - The default sampled-upload method forwards RGBA bytes and `row_bytes`
   unchanged to the legacy linear method.
@@ -64,13 +65,14 @@
 - A successful optional RGBA upload returns a non-zero handle. Callers release
   that handle when it is no longer used; invalid backend sentinels are reported
   as `None`, never `Some(ImageHandle(0))`.
+- An A8 append may cover only texels that no previously issued draw can reference. Replacing existing texels requires `update_a8` and its normal dependency invalidation.
 
 ## Edge cases and failure modes
 - `Color::pack_rgba8` clamps negative and above-one channels; NaN and infinities pack as zero.
 - Backends that ignore glyph atlas revisions still receive the same geometry, but retained caches should check compatibility before replaying cached glyph runs.
 - A draw list with glyph runs for an atlas absent from the supplied revision set is incompatible. A draw list with no glyph runs remains compatible.
 - Unsupported optional RGBA uploads return `None`. In particular, the default sampled method refuses `Nearest` unless the backend explicitly implements it.
-- Releasing a handle through an uploader without RGBA support is a no-op.
+- Releasing a handle through an uploader without the corresponding owned runtime resource is a no-op.
 
 ## Concurrency and memory behavior
 - `DrawList` is caller-owned data with no synchronization.
@@ -85,6 +87,7 @@
 - Packed color conversion adds no draw, upload, or renderer object; it is internal renderer data preparation rather than a new authoring or user-journey path.
 - Effect graph plans report logical and physical transient bytes. A terminal single filter can alias its vertical output back onto a dead extraction source, while multiple filters retain the source and reuse two serial filter slots.
 - Runtime-image filtering is selected from immutable resource metadata, so backends can prebuild sampler state and preserve same-mode batches without per-frame sampler creation.
+- Append-only A8 publication lets prepared text users survive atlas growth without weakening destructive-update invalidation or retaining retired pages.
 
 ## Feature flags and cfgs
 - No feature-specific draw-list behavior.
@@ -100,6 +103,7 @@
 `Color::rgba(1.0, 0.0, 0.0, 1.0).pack_rgba8()` produces `0xFF00_00FF`.
 
 ## Changelog
+- 2026-08-07: added explicit append-only publication and release hooks for runtime A8 resources while preserving update/no-op compatibility defaults.
 - 2026-08-06: added explicit owner-driven RGBA release with a source-compatible no-op default for unsupported uploaders.
 - 2026-08-06: added immutable runtime-image sampling with no silent nearest-to-linear fallback.
 - 2026-08-06: added an explicit optional sRGB RGBA8 upload boundary.

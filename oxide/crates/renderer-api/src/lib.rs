@@ -218,12 +218,39 @@ impl Default for ImageSampling
    }
 }
 
-pub trait RuntimeImageUploader {
-    fn create_a8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize) -> ImageHandle;
+pub trait RuntimeImageUploader
+{
+   fn create_a8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize) -> ImageHandle;
 
-    /// Attempts to create an sRGB texture from row-major RGBA8 bytes.
-    ///
-    /// Renderers without RGBA runtime uploads return `None`.
+   /// Publishes A8 texels that no previously issued draw can reference.
+   ///
+   /// The compatibility implementation uses a normal update. Backends with
+   /// dependency-aware prepared caches can override this to preserve users of
+   /// all previously published texels.
+   fn append_a8(
+      &mut self,
+      handle: ImageHandle,
+      x: u32,
+      y: u32,
+      width: u32,
+      height: u32,
+      data: &[u8],
+      row_bytes: usize,
+   )
+   {
+      self.update_a8(handle, x, y, width, height, data, row_bytes);
+   }
+
+   /// Releases a runtime A8 resource previously returned by this uploader.
+   ///
+   /// Uploaders without owned runtime resources retain a no-op implementation.
+   fn release_a8(&mut self, _handle: ImageHandle)
+   {
+   }
+
+   /// Attempts to create an sRGB texture from row-major RGBA8 bytes.
+   ///
+   /// Renderers without RGBA runtime uploads return `None`.
    fn try_create_rgba8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize) -> Option<ImageHandle>
    {
       let _ = (width, height, data, row_bytes);
@@ -252,16 +279,16 @@ pub trait RuntimeImageUploader {
    {
    }
 
-    fn update_a8(
-        &mut self,
-        handle: ImageHandle,
-        x: u32,
-        y: u32,
-        width: u32,
-        height: u32,
-        data: &[u8],
-        row_bytes: usize,
-    );
+   fn update_a8(
+      &mut self,
+      handle: ImageHandle,
+      x: u32,
+      y: u32,
+      width: u32,
+      height: u32,
+      data: &[u8],
+      row_bytes: usize,
+   );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

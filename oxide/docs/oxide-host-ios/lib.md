@@ -48,7 +48,7 @@
 - Fallback logging for text, key, and push payloads validates null/length pairs before constructing slices; a null pointer with zero length is treated as an empty payload.
 - Renderer and app lifecycle behavior remains unchanged by callback hardening.
 - The drawable-backed iOS path now mirrors macOS: prepare Rust frame work first, acquire `nextDrawable` late with timeout enabled in Objective-C or the Swift perf runtime, then submit the prepared frame to Metal or cancel it if no drawable is returned.
-- The runtime-image uploader forwards row-major RGBA bytes and immutable nearest-or-linear sampling directly into the Metal resource owner. It maps Metal's invalid zero-handle sentinel to `None` and releases successful handles through the same owner. The host performs no channel conversion, staging copy, or per-draw sampling decision.
+- The runtime-image uploader forwards A8 create/append/update/release operations plus row-major RGBA bytes and immutable nearest-or-linear sampling directly into the Metal resource owner. Append-only atlas growth preserves prepared users of earlier texels; destructive updates retain normal invalidation. It maps Metal's invalid zero-handle sentinel to `None` and releases successful handles through the same owner. The host performs no channel conversion, staging copy, or per-draw sampling decision.
 - Apps that use the original `App::draw` contract can render through one persistent host-owned `DrawListBuilder` adapter. `RenderContext` borrows it for the draw callback, and the host clears and reuses its storage rather than allocating an intermediate command graph each frame.
 - Apps with an owned `PreparedFrame` submit that draw list directly. The host only copies damage into reusable scratch and preserves the prepared frame across a generation-bound retry when drawable acquisition, Metal backpressure, or submission fails.
 - Frame wake generations are acknowledged only after a successful Metal submit. A newer wake or changed drawable geometry invalidates a retained retry, while `FrameDemand::NextVsync` continues scheduling without legacy settle frames.
@@ -110,6 +110,7 @@ oxide_host_emit_touch(10, 0, 1.0, 2.0, 0.5, 1, 0.0, 0.0, 0, 0, 100);
 ```
 
 ## Changelog
+- 2026-08-07: forwarded append-only A8 atlas publication and page release through the production app uploader instead of degrading both to generic update/no-op behavior.
 - 2026-08-06: isolated legacy dependencies, state, exports, native services, and test suites behind `test-scenes-entrypoint`; made Tokio support independently additive.
 - 2026-08-06: added the bounded product Objective-C shell, exact native frame/input timing, idle display-link scheduling, and thread-safe display-link range observation.
 - 2026-08-06: added explicit production app injection, app-owned prepared frames with a persistent legacy fallback encoder, display-link timing, wake-generation retry scheduling, direct event delivery, and renderer feedback.

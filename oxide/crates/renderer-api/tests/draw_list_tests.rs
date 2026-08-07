@@ -788,6 +788,40 @@ impl RuntimeImageUploader for A8OnlyUploader
 }
 
 #[derive(Default)]
+struct CompatibleA8Uploader
+{
+   updates: usize,
+}
+
+impl RuntimeImageUploader for CompatibleA8Uploader
+{
+   fn create_a8(
+      &mut self,
+      _width: u32,
+      _height: u32,
+      _data: &[u8],
+      _row_bytes: usize,
+   ) -> ImageHandle
+   {
+      ImageHandle(1)
+   }
+
+   fn update_a8(
+      &mut self,
+      _handle: ImageHandle,
+      _x: u32,
+      _y: u32,
+      _width: u32,
+      _height: u32,
+      _data: &[u8],
+      _row_bytes: usize,
+   )
+   {
+      self.updates = self.updates.saturating_add(1);
+   }
+}
+
+#[derive(Default)]
 struct LegacyRgbaUploader
 {
    calls: u32,
@@ -857,6 +891,15 @@ fn optional_rgba_runtime_upload_reports_unsupported_without_panicking()
       None,
    );
    uploader.release_rgba8(ImageHandle(7));
+}
+
+#[test]
+fn runtime_a8_append_and_release_preserve_legacy_uploader_compatibility()
+{
+   let mut uploader = CompatibleA8Uploader::default();
+   uploader.append_a8(ImageHandle(1), 2, 3, 1, 1, &[255], 1);
+   assert_eq!(uploader.updates, 1, "the default append path must remain a normal update");
+   uploader.release_a8(ImageHandle(1));
 }
 
 #[test]
