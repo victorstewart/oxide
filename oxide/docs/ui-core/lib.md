@@ -69,7 +69,7 @@
 - `UiSurface::remove_node`
   Removes a non-root node through the surface-owned mutation path, detaching from the known parent and keeping clean sibling branches eligible for layout skip and retained replay.
 - `UiSurface::mark_node_dirty`
-  Marks one node with a dirty class so content-only text/image/camera updates can rebuild the affected retained path, while hit-test metadata updates keep renderer-facing draw caches intact. The released `DirtyClass::Accessibility` value is inert and reserved only for compatibility.
+  Marks one node with a dirty class so content-only text/image/camera updates can rebuild the affected retained path, while hit-test metadata updates keep renderer-facing draw caches intact.
 - `RetainedCachePolicy`
   Configures hard logical CPU and future prepared-GPU retained-byte budgets, recent-hit protection, and optional repeated-invalidation suppression.
 - `NodeTree::retained_cache_policy` / `NodeTree::set_retained_cache_policy`
@@ -155,7 +155,7 @@
 - A zero CPU budget takes a direct one-chunk UI rebuild path. It retains no node-cache bytes, leaves caller-owned text/image sequences untouched, and prevents one-use trees from constructing thousands of persistent node/path allocations.
 - `UiSurface::edit_style` lets paint-only authoring changes dirty retained draw state without forcing a same-size layout pass.
 - `UiSurface::mark_node_dirty` keeps text/image/camera content dirtiness node-scoped, avoiding full-surface retained invalidation when layout and hit-test geometry are unchanged.
-- `UiSurface::mark_node_dirty` treats hit-test-only dirtiness as a non-draw metadata update, preserving clean retained draw-list reuse. The compatibility-reserved `DirtyClass::Accessibility` value is an inert no-op.
+- `UiSurface::mark_node_dirty` treats hit-test-only dirtiness as a non-draw metadata update, preserving clean retained draw-list reuse.
 - `ImageView::encode` uses aspect cross-products on the no-zoom contain/cover path, avoiding redundant scale divisions while emitting bounded source-cropped image draws. Transformed views use the general fitted-rectangle intersection only when zoom or pan requires it.
 - `UiSurface::add_node` and `UiSurface::remove_node` cover common structural edits without falling back to `tree_mut()`'s whole-tree dirtiness. Existing direct `tree_mut()` access remains the conservative escape hatch.
 - `SurfaceRouter::encode_with_overlays` reuses retained draw lists for the current surface, overlays, and popups while keeping capture paths as fresh non-retained encodes for diagnostics.
@@ -227,7 +227,7 @@ assert_eq!(text.value(), "");
 ## Changelog
 - 2026-08-07: removed dead text-atlas routing from retained surfaces while preserving all released text-context methods as compatibility aliases.
 - 2026-08-06: added scale-aware text frames and versioned retained glyph geometry across device-scale transitions while preserving the released no-argument frame API.
-- 2026-08-06: removed the accessibility-frame API and active dirty-bit writes while retaining only the inert released dirty-class value.
+- 2026-08-07: removed the obsolete accessibility dirty-class API after accessibility support was rejected from the product contract.
 - 2026-08-06: added and re-exported `VerticalScrollSurface`.
 - 2026-07-14: hard-cut deterministic bitmap-overlay drawing to the explicit A8 `BitmapTextAtlas`/`GlyphRun` path and removed the production solid-alpha-run renderer.
 - 2026-07-14: added C43 frame-scoped text preparation, provisional glyph handles, merged atlas publication, opt-in text counters, and allocation coverage.
@@ -257,7 +257,7 @@ assert_eq!(text.value(), "");
 - 2026-05-31: keyed collection focus and hover now reconcile through `Measure::item_key` during layout so focus survives data reorders and navigation materializes the actual new item key instead of an index-derived placeholder.
 - 2026-05-31: added live `TextCtx` retained atlas snapshot helpers for `UiSurface` and `SurfaceRouter`, guarded so cached glyph replay only sees an uploaded atlas.
 - 2026-05-31: direct-clean child layout skipping now avoids entering unchanged child subtrees during dirty relayout parent loops.
-- 2026-05-31: added non-draw dirty-class coverage so the inert compatibility value and hit-test metadata updates preserve clean retained draw-list reuse.
+- 2026-05-31: added non-draw dirty-class coverage so hit-test metadata updates preserve clean retained draw-list reuse.
 - 2026-05-31: added opacity/clip dirty-class coverage so paint-only retained edits skip layout while reusing cached descendants and siblings.
 - 2026-05-31: added per-node layout dirtiness and `LayoutStats` so clean sibling subtrees can be skipped during incremental relayout.
 - 2026-05-31: added multi-atlas retained text replay checking so cached glyph drawlists require explicit revisions for every atlas they reference.

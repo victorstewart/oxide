@@ -378,7 +378,7 @@ fn node_content_dirty_classes_skip_layout_and_reuse_retained_subtrees() {
 }
 
 #[test]
-fn non_draw_dirty_classes_skip_layout_and_reuse_retained_drawlist() {
+fn hit_test_dirty_skips_layout_and_reuses_retained_drawlist() {
     let mut surface = UiSurface::new(NodeStyle {
         axis: Axis::Row,
         size: Size2D { w: Dim::Px(180.0), h: Dim::Px(80.0) },
@@ -419,26 +419,21 @@ fn non_draw_dirty_classes_skip_layout_and_reuse_retained_drawlist() {
     let mut warm = DrawListBuilder::new();
     assert_eq!(surface.encode_retained(&mut warm), RetainedDrawStatus::Rebuilt);
     let warm_draws = warm.drawlist().items.clone();
-    for class in [DirtyClass::Accessibility, DirtyClass::HitTest] {
-        assert!(surface.mark_node_dirty(leaf, class));
-        assert!(surface.dirty().contains(class));
-        assert!(!surface.dirty().contains(DirtyClass::Layout));
-        assert!(!surface.dirty().affects_draw());
-        assert_eq!(surface.layout(180.0, 80.0), oxide_ui_core::LayoutStats::default());
-        assert_eq!(surface.tree().layout_rect(leaf), Some(leaf_layout));
-        assert_eq!(surface.tree().layout_rect(sibling), Some(sibling_layout));
+    assert!(surface.mark_node_dirty(leaf, DirtyClass::HitTest));
+    assert!(surface.dirty().contains(DirtyClass::HitTest));
+    assert!(!surface.dirty().contains(DirtyClass::Layout));
+    assert!(!surface.dirty().affects_draw());
+    assert_eq!(surface.layout(180.0, 80.0), oxide_ui_core::LayoutStats::default());
+    assert_eq!(surface.tree().layout_rect(leaf), Some(leaf_layout));
+    assert_eq!(surface.tree().layout_rect(sibling), Some(sibling_layout));
 
-        let mut dirty = DrawListBuilder::new();
-        assert_eq!(surface.encode_retained(&mut dirty), RetainedDrawStatus::Reused);
-        assert_eq!(dirty.drawlist().items, warm_draws);
-        let stats = surface.retained_node_stats();
-        assert_eq!(
-            stats.rebuilt_nodes, 0,
-            "non-draw dirty class should not rebuild, got {stats:?}"
-        );
-        assert_eq!(stats.reused_nodes, 1, "non-draw dirty class should reuse cached draw list");
-    }
-    assert!(!surface.mark_node_dirty(NodeId(99), DirtyClass::Accessibility));
+    let mut dirty = DrawListBuilder::new();
+    assert_eq!(surface.encode_retained(&mut dirty), RetainedDrawStatus::Reused);
+    assert_eq!(dirty.drawlist().items, warm_draws);
+    let stats = surface.retained_node_stats();
+    assert_eq!(stats.rebuilt_nodes, 0, "hit-test dirtiness should not rebuild, got {stats:?}");
+    assert_eq!(stats.reused_nodes, 1, "hit-test dirtiness should reuse cached draw list");
+    assert!(!surface.mark_node_dirty(NodeId(99), DirtyClass::HitTest));
 }
 
 #[test]

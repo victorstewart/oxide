@@ -42,7 +42,7 @@ Call flow:
   Verifies a zero node-cache budget preserves independent caller-owned chunk identity and exact mixed output.
 - `mixed_surface_snapshot_invalidates_only_dependent_chunks()`
   Verifies caller-owned glyph chunks retain exact atlas-generation invalidation independently of primitive-only surface chunks.
-- Additional tests in the file cover transform-only motion, opacity/clip dirty classes, content dirty classes, non-draw dirty classes, router retained composition, and hit-test identity.
+- Additional tests in the file cover transform-only motion, opacity/clip dirty classes, content dirty classes, hit-test dirtiness, router retained composition, and hit-test identity.
 - `transform_and_opacity_animation_reuses_all_warm_geometry()` drives 300 nodes and requires zero warm chunk/sequence rebuild and zero command/vertex/index copies while properties continue changing.
 - `nested_animation_keeps_clip_and_hit_test_geometry_synchronized()` covers nested scale/rotation/translation, cumulative opacity, retained clip metadata, and transformed hit coordinates.
 - `removed_node_property_slots_reuse_dense_indices_with_new_generations()` proves logical slot indices are recycled only under a new generation.
@@ -56,7 +56,7 @@ The tests construct small retained trees with known geometry, run a cold layout 
 
 ## Edge cases and failure modes
 - A paint-only mutation must rebuild draw caches without setting layout dirtiness.
-- Hit-test metadata dirtiness and the inert compatibility-reserved `DirtyClass::Accessibility` value must not rebuild renderer-facing draws.
+- Hit-test metadata dirtiness must not rebuild renderer-facing draws.
 - A stable child rect is not enough to skip layout if `descendant_layout_dirty` is still set.
 - Missing node ids must return false instead of dirtying the surface.
 - Budget eviction must invalidate ancestor sequence references so no supposedly evicted descendant remains indirectly retained.

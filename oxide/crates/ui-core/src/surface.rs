@@ -44,8 +44,7 @@ pub enum DirtyClass {
     Clip = 6,
     ImageContent = 7,
     CameraFrame = 8,
-    Accessibility = 9,
-    HitTest = 10,
+    HitTest = 9,
 }
 
 impl DirtyClass {
@@ -65,8 +64,7 @@ const DRAW_DIRTY_BITS: u16 = DirtyClass::Style.bit()
     | DirtyClass::ImageContent.bit()
     | DirtyClass::CameraFrame.bit();
 
-const ALL_DIRTY_BITS: u16 =
-    DRAW_DIRTY_BITS | DirtyClass::Accessibility.bit() | DirtyClass::HitTest.bit();
+const ALL_DIRTY_BITS: u16 = DRAW_DIRTY_BITS | DirtyClass::HitTest.bit();
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DirtySet {
@@ -926,7 +924,7 @@ impl UiSurface {
             | DirtyClass::CameraFrame => {
                 self.tree.mark_node_and_ancestors_draw_dirty(id);
             }
-            DirtyClass::Accessibility | DirtyClass::HitTest => {}
+            DirtyClass::HitTest => {}
         }
         if class.bit() & DRAW_DIRTY_BITS != 0 {
             self.retained_node_stats = RetainedNodeStats::default();

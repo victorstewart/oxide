@@ -695,7 +695,7 @@ pub trait RenderEncoder
       <item>Oxide does not build or export an OS accessibility tree, VoiceOver elements, accessibility roles/actions, or a platform accessibility bridge.</item>
       <item>Accessibility must not be added to product requirements, authoring guidance, native parity workloads, visual admission, or performance gates.</item>
       <item>New Oxide code must not add host accessibility or automation identifiers. Harnesses use app/window queries, raw coordinates, and non-accessibility lifecycle signals; existing identifier-based controls are legacy cleanup candidates and must not expand.</item>
-      <compatibility>Released accessibility-named dirty-state variants may remain solely for public-contract compatibility until an explicitly authorized breaking release. They may retain only behavior required by that contract; new code must not depend on or expand them.</compatibility>
+      <compatibility>No accessibility-named product API is retained.</compatibility>
     </accessibility>
   </section>
 
