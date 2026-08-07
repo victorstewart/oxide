@@ -204,6 +204,64 @@ fn snapshot_source_over_keeps_an_opaque_destination_opaque()
 }
 
 #[test]
+fn snapshot_sdf_edge_width_stays_bounded_at_device_scale()
+{
+   fn partial_edge_pixels(scale: u32) -> usize
+   {
+      let width = 32 * scale;
+      let height = 32 * scale;
+      let mut renderer = MetalRenderer::new_default().expect("metal");
+      renderer.resize(width, height, scale as f32).expect("resize");
+      let atlas_row = [80_u8, 96, 112, 143, 143, 112, 96, 80];
+      let mut atlas_bytes = Vec::with_capacity(atlas_row.len() * 4);
+      for _ in 0 .. 4
+      {
+         atlas_bytes.extend_from_slice(&atlas_row);
+      }
+      let atlas = renderer.image_create_a8(8, 4, &atlas_bytes, 8);
+      let list = api::DrawList {
+         items: vec![
+            api::DrawCmd::RRect {
+               rect: api::RectF::new(0.0, 0.0, 32.0, 32.0),
+               radii: [0.0; 4],
+               color: api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+            },
+            api::DrawCmd::GlyphRun { run: api::GlyphRun {
+               atlas,
+               atlas_revision: 1,
+               vb: api::VertexSpan { offset: 0, len: 4 },
+               ib: api::IndexSpan { offset: 0, len: 6 },
+               sdf: true,
+               color: api::Color::rgba(0.0, 0.0, 0.0, 1.0),
+            }},
+         ],
+         vertices: vec![
+            api::Vertex { x: 8.0, y: 8.0, u: 0.0, v: 0.0, rgba: 0 },
+            api::Vertex { x: 16.0, y: 8.0, u: 1.0, v: 0.0, rgba: 0 },
+            api::Vertex { x: 8.0, y: 24.0, u: 0.0, v: 1.0, rgba: 0 },
+            api::Vertex { x: 16.0, y: 24.0, u: 1.0, v: 1.0, rgba: 0 },
+         ],
+         indices: vec![0, 1, 2, 2, 1, 3],
+      };
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      renderer.encode_pass(&list);
+      renderer.submit(token).expect("submit");
+      let (_, _, bgra) = renderer.readback_bgra8().expect("readback");
+      let y = 16 * scale;
+      (8 * scale..16 * scale).filter(|x| {
+         let red = bgra[((y * width + *x) * 4 + 2) as usize];
+         (4..=250).contains(&red)
+      }).count()
+   }
+
+   let scale_one = partial_edge_pixels(1);
+   let scale_three = partial_edge_pixels(3);
+   assert!(scale_one > 0);
+   assert!(scale_three > 0);
+   assert!(scale_three <= scale_one + 2, "partial SDF edge grew from {scale_one} px at 1x to {scale_three} px at 3x");
+}
+
+#[test]
 fn snapshot_rrect_instanced_batch_draws_consecutive_rects() {
     let mut renderer = MetalRenderer::new_default().expect("metal");
     let width = 128u32;
