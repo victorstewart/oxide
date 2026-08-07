@@ -2468,6 +2468,12 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
    Ok(report)
 }
 
+pub fn reduce(paths: &ReducePaths) -> Result<(), String>
+{
+   let report = evaluate(paths, Population::Full)?;
+   write_report(paths, &report)
+}
+
 pub fn verify_smoke(run_root: &Path) -> Result<(), String>
 {
    let paths = ReducePaths {
@@ -2484,6 +2490,197 @@ pub fn verify_smoke(run_root: &Path) -> Result<(), String>
    {
       Err(format!("smoke verification blocked:\n{}", report.blockers.join("\n")))
    }
+}
+
+fn write_report(paths: &ReducePaths, report: &Report) -> Result<(), String>
+{
+   let mut json = serde_json::to_vec_pretty(report).map_err(|error| format!("serialize report: {error}"))?;
+   json.push(b'\n');
+   write_atomic(&paths.output_json, &json)?;
+   let markdown = render_markdown(report);
+   write_atomic(&paths.output_markdown, markdown.as_bytes())
+}
+
+fn render_markdown(report: &Report) -> String
+{
+   let mut output = String::new();
+   output.push_str("# feed-v1 physical-device evidence\n\n");
+   output.push_str(&format!("- Status: `{}`\n", report.status));
+   output.push_str(&format!("- Decision: `{}`\n", report.decision));
+   output.push_str(&format!("- Fixture: `{}` ({} bytes)\n", report.fixture_sha256, report.fixture_byte_count));
+   if let Some(device) = &report.device
+   {
+      output.push_str(&format!(
+         "- Device: {} (`{}`), iOS {} (`{}`), CPU `{}`\n",
+         device.marketing_name,
+         device.product_type,
+         device.os_version,
+         device.os_build,
+         device.cpu
+      ));
+   }
+   else
+   {
+      output.push_str("- Device: `missing or inadmissible`\n");
+   }
+   output.push_str(&format!("- Visual gate: `{}`\n", report.visual_gate_id));
+   output.push_str(&format!("- Runs: {} total, {} primary\n", report.run_count_total, report.run_count_primary));
+   output.push_str(&format!(
+      "- Repository: `{}` at commit `{}` (tree `{}`)\n",
+      report.repository_ref.as_deref().unwrap_or("missing"),
+      report.repository_head_commit.as_deref().unwrap_or("missing"),
+      report.repository_tree.as_deref().unwrap_or("missing")
+   ));
+   if !report.blockers.is_empty()
+   {
+      output.push_str("\n## Blockers\n\n");
+      for blocker in &report.blockers
+      {
+         output.push_str(&format!("- {blocker}\n"));
+      }
+   }
+   if !report.visual_treatments.is_empty()
+   {
+      output.push_str("\n## Visual admission\n\n");
+      output.push_str("| State | Treatment | SSIM | Worst 48x48 RGB MAE | Full-surface RGB MAE | Pass |\n");
+      output.push_str("|---|---|---:|---:|---:|---:|\n");
+      for visual in &report.visual_treatments
+      {
+         output.push_str(&format!(
+            "| {} | {} | {:.6} | {:.3} | {:.3} | {} |\n",
+            visual.state,
+            visual.treatment,
+            visual.metrics.ssim,
+            visual.metrics.worst_tile_rgb_mae,
+            visual.metrics.exact_rgb_mae,
+            if visual.metrics.passes { "yes" } else { "no" }
+         ));
+      }
+   }
+   if !report.travel_equivalence.is_empty()
+   {
+      output.push_str("\n## Travel equivalence\n\n");
+      output.push_str("| Treatment | Direction | Pairs | Median relative delta | 95% interval | Frozen median/CI margins | Pass |\n");
+      output.push_str("|---|---|---:|---:|---:|---:|---:|\n");
+      for result in &report.travel_equivalence
+      {
+         output.push_str(&format!(
+            "| {} | {} | {} | {:+.3}% | {:+.3}% to {:+.3}% | +/-{:.1}% / +/-{:.1}% | {} |\n",
+            result.treatment,
+            result.direction,
+            result.pair_count,
+            result.median_relative_delta * 100.0,
+            result.confidence_95_lower * 100.0,
+            result.confidence_95_upper * 100.0,
+            result.median_margin * 100.0,
+            result.confidence_margin * 100.0,
+            if result.passes { "yes" } else { "no" }
+         ));
+      }
+   }
+   if !report.treatments.is_empty()
+   {
+      output.push_str("\n## Callback pacing\n\n");
+      output.push_str("| Treatment | Runs | p50 ms | p95 ms | p99 ms | Peak ms | Missed deadlines | Hitch ms/s |\n");
+      output.push_str("|---|---:|---:|---:|---:|---:|---:|---:|\n");
+      for treatment in &report.treatments
+      {
+         output.push_str(&format!(
+            "| {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3}% | {:.3} |\n",
+            treatment.treatment,
+            treatment.run_count,
+            treatment.interval_p50_ms,
+            treatment.interval_p95_ms,
+            treatment.interval_p99_ms,
+            treatment.interval_peak_ms,
+            treatment.missed_callback_deadline_ratio * 100.0,
+            treatment.callback_hitch_ms_per_elapsed_second
+         ));
+      }
+   }
+   if !report.comparisons.is_empty()
+   {
+      output.push_str("\n## Oxide comparisons\n\n");
+      output.push_str("| Comparator | Classification | Median pair p95 delta | 95% interval | p50 ms O/C | p95 ms O/C | Missed O/C | Hitch ms/s O/C |\n");
+      output.push_str("|---|---|---:|---:|---:|---:|---:|---:|\n");
+      for comparison in &report.comparisons
+      {
+         output.push_str(&format!(
+            "| {} | {} | {:+.3}% | {:+.3}% to {:+.3}% | {:.3}/{:.3} | {:.3}/{:.3} | {:.3}%/{:.3}% | {:.3}/{:.3} |\n",
+            comparison.comparator,
+            comparison.classification,
+            comparison.median_pair_relative_p95_delta * 100.0,
+            comparison.confidence_95_lower * 100.0,
+            comparison.confidence_95_upper * 100.0,
+            comparison.oxide_interval_p50_ms,
+            comparison.comparator_interval_p50_ms,
+            comparison.oxide_interval_p95_ms,
+            comparison.comparator_interval_p95_ms,
+            comparison.oxide_missed_deadline_ratio * 100.0,
+            comparison.comparator_missed_deadline_ratio * 100.0,
+            comparison.oxide_hitch_ms_per_second,
+            comparison.comparator_hitch_ms_per_second
+         ));
+      }
+   }
+   if !report.runs.is_empty()
+   {
+      output.push_str("\n## Per-run callback evidence\n\n");
+      output.push_str("| Phase | S/P/O | Treatment | Direction | Gesture s | Inertia | Env transitions T/P | Signed/absolute travel pt | Callbacks | Cadence Hz | p50/p95/p99/peak ms | Missed/Expected | Missed | Hitch ms/s | Target-period admission | Nonce |\n");
+      output.push_str("|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n");
+      for run in &report.runs
+      {
+         output.push_str(&format!(
+            "| {} | {}/{}/{} | {} | {} | {:.6} | {} | {}/{} | {:+.3}/{:.3} | {} | {:.3} | {:.3}/{:.3}/{:.3}/{:.3} | {}/{} | {:.3}% | {:.3} | {:.3}% | `{}` |\n",
+            run.phase,
+            run.session_index,
+            run.pair_index,
+            run.order_index,
+            run.treatment,
+            run.direction,
+            run.gesture_duration_seconds,
+            if run.inertia_observed { "yes" } else { "no" },
+            run.thermal_state_change_count,
+            run.low_power_mode_change_count,
+            run.signed_travel_points,
+            run.travel_distance_points,
+            run.callback_count,
+            run.achieved_cadence_hz,
+            run.interval_p50_ms,
+            run.interval_p95_ms,
+            run.interval_p99_ms,
+            run.interval_peak_ms,
+            run.missed_callback_deadlines,
+            run.expected_callbacks,
+            run.missed_callback_deadline_ratio * 100.0,
+            run.callback_hitch_ms_per_elapsed_second,
+            run.target_period_admission_ratio * 100.0,
+            run.nonce
+         ));
+      }
+   }
+   output.push_str("\n## Evidence and limitations\n\n");
+   output.push_str(&format!("- Visual-gate specification SHA-256: `{}`\n", report.visual_gate_spec_sha256));
+   output.push_str(&format!(
+      "- Visual-gate source SHA-256: `{}`\n",
+      report.visual_gate_source_sha256.as_deref().unwrap_or("missing")
+   ));
+   output.push_str(&format!(
+      "- Evidence manifest SHA-256: `{}`\n",
+      report.evidence_manifest_sha256.as_deref().unwrap_or("missing")
+   ));
+   output.push_str(&format!("- Retained reducer input: {} bytes\n", report.retained_input_bytes));
+   if let Some(comparison) = report.comparisons.first()
+   {
+      output.push_str(&format!(
+         "- Bootstrap: {} clustered resamples, seed `{}`\n",
+         comparison.bootstrap_resamples,
+         comparison.bootstrap_seed_hex
+      ));
+   }
+   output.push_str(&format!("- Missing metrics: {}\n", report.missing_metrics.join(", ")));
+   output.push_str("\nThese figures are display-link callback pacing only. They make no presented-frame, visible-frame, or photon-latency claim.\n");
+   output
 }
 
 pub fn verify_attachment_export(root: &Path) -> Result<(), String>
