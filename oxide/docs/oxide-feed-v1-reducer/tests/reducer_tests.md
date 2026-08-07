@@ -1,0 +1,83 @@
+# oxide-feed-v1-reducer `tests/reducer_tests.rs`
+
+## Intention and purpose
+
+Protect the feed-v1 publication boundary with deterministic host-side regressions. The suite exercises reducer kernels and a complete synthetic smoke evidence package without launching UIKit, Oxide, Xcode, or a device.
+
+## Relation to the rest of the code
+
+- Calls public testable kernels from `benchmarks/pilots/feed-v1/reducer/src/lib.rs`.
+- Reconstructs strict run, device, evidence, cleanup, and full-screen PNG inputs in temporary directories.
+- Complements, but does not replace, the signed physical-iPhone smoke and full runs.
+
+## Entry points list
+
+- `strict_success_schema_round_trips_and_rejects_unknown_fields` admits the exact success schema and rejects missing/foreign fields.
+- `strict_failure_schema_round_trips_and_rejects_unknown_fields` does the same for non-measurable app failures.
+- `travel_equivalence_decision_honors_both_inclusive_frozen_boundaries` covers exact admission boundaries plus isolated median and confidence-interval violations through the production decision kernel.
+- `frozen_recipe_matches_contract_extent_and_component_states` checks both endpoint component manifests against the reducer-owned 2,000-row recipe.
+- `visual_gate_rejects_one_corrupt_48_pixel_tile` proves localized corruption cannot hide behind whole-image averaging.
+- `clustered_bootstrap_is_seeded_and_deterministic` freezes the confidence kernel and ordering.
+- `frozen_order_maps_each_treatment_and_both_directions_share_it` checks the smoke/primary rotation contract.
+- `deadline_formula_uses_previous_callback_target_period` protects aligned missed-callback accounting.
+- `callback_admission_rejects_nonfinite_and_terminal_invalid_targets` rejects NaN, a bad final target, and an observed 60 Hz sequence outside `7.5 .. 9.2 ms`.
+- `reducer_hard_blocks_failure_and_malformed_controlled_records` proves controlled-name failure/malformed JSON cannot be ignored.
+- `reducer_emits_only_admitted_nonsecret_device_identity` admits matching physical-device evidence while excluding device IDs from the report.
+- `attachment_export_verifier_requires_one_complete_manifest` rejects incomplete, unreferenced, or canonical-path-aliased XCTest export trees.
+- `attachment_export_rejects_hard_link_file_identity_aliases` rejects two capture names backed by the same Unix file identity.
+- `evidence_manifest_excludes_stale_reports_results_and_build_outputs` proves only protocol/iOS/reducer source enters `source_files`, while stale latest reports, evidence JSON, targets, raw results, and XCTest result bundles cannot contaminate it; it also proves the clean named Git commit/tree and compiled controller hashes are present.
+- `six_valid_smoke_tuples_pass_smoke_but_not_full_publication` builds the complete synthetic six-tuple package, proves smoke admission, proves no report was written, and proves full reduction remains blocked until the complete 60-record evidence population is present.
+- `smoke_admits_named_output_placeholders_as_evidence` proves smoke verification cannot hide an evidence record whose path happens to equal its internal no-write output placeholder.
+- `smoke_scans_build_and_target_named_directories` proves evidence discovery exempts neither conventional output-directory name.
+- `smoke_rejects_symlink_roots_entries_and_nonregular_files` proves Unix evidence discovery rejects root aliases, nested symlinks, and socket entries instead of silently omitting them.
+- `smoke_rejects_cleanup_and_artifact_provenance_mutations` rejects false Xcode/attachment/source-snapshot/result-root cleanup proof, controller runtime beyond the frozen caps, app-record container swapping, screenshot attachment substitution, and duplicate authority records.
+- `full_reduction_is_byte_identical_when_repeated` builds six smoke diagnostics plus the one 54-run primary block, verifies the exact six-PNG export and full-screen dimensions, requires all 54 primary timing/inertia summaries, and proves a second reduction over the exact same output paths is byte-identical.
+- `full_reduction_rejects_systematic_primary_travel_mismatch` proves a repeatable six-percent Oxide workload mismatch blocks both direction comparisons even though each confidence interval remains inside the wider ten-percent bound.
+
+## Logic narrative
+
+Tests construct only the minimum fixture needed for the contract under review. The end-to-end helper writes strict run JSON for the selected population, one deterministic `1320 x 2868` PNG for each of the six smoke tuples, physical-device/lock evidence, the source/app evidence manifest, and a successful cleanup proof. Focused hostile cases then mutate one invariant at a time, including replacement with an already-cropped `1170 x 2532` image.
+
+## Preconditions and postconditions
+
+- Temporary roots are unique and remain outside the repository.
+- A passing suite means deterministic reducer logic accepts the valid synthetic smoke population and rejects every represented hostile condition.
+- Passing does not claim real device rendering, gesture delivery, or timing evidence.
+
+## Edge cases and failure modes
+
+- The suite includes non-finite callback data and a terminal invalid target so validation cannot stop after only the intervals it consumes.
+- Neither a syntactically controlled filename nor the smoke verifier's internal output-placeholder names can bypass malformed/failure record blocking.
+- The smoke regression forbids accidental publication from a cheap six-run check.
+- The strict run regression rejects all three treatments below the 524-point travel floor, a transient environment notification despite equal endpoints, and drag-only motion without inertial entry.
+
+## Concurrency and memory behavior
+
+Tests are independent and use unique temporary directories. Each integration test removes its synthetic evidence root; callers keep Cargo output external to the repository.
+
+## Performance notes
+
+- Population admission precedes expensive image/adversarial work, keeping malformed or incomplete test cases cheap.
+- The two full-image synthetic tests exercise streamed hostile mutations, shared RGB accumulation, and exact identity rows over the frozen 3 MP surface.
+- The bootstrap test uses the production fixed seed; there is no unbounded randomized soak loop.
+- The full synthetic population contains exactly one 54-run primary block and nine paired clusters; no second block is generated.
+
+## Feature flags and cfgs
+
+No feature flags or device cfg branches.
+
+## Testing and benchmarks
+
+```sh
+CARGO_TARGET_DIR=/tmp/oxide-feed-v1-reducer-test \
+  cargo test --locked --manifest-path oxide/benchmarks/pilots/feed-v1/reducer/Cargo.toml
+```
+
+Expected integration result: every focused integration case passes.
+
+## Changelog
+
+- 2026-08-06: Reduced synthetic smoke evidence to six full-screen PNGs, added pre-cropped-input rejection, and limited full-report assertions to the 54 primary rows.
+- 2026-08-06: Added cleanup, provenance, transition/inertia, full-population per-run, and byte-identical rerun regressions.
+- 2026-08-06: Added source-manifest contamination coverage for stale reports, results, evidence, targets, and XCTest artifacts.
+- 2026-08-06: Added strict schema, fixture, visual, callback, device, attachment, cleanup, and synthetic smoke/full-boundary coverage.

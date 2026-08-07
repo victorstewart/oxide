@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use oxide_feed_v1_reducer::{
-   build_evidence_manifest, callback_deadline_counts, deterministic_bootstrap_interval,
-   frozen_components, frozen_order_index, strict_validate_failure_json, strict_validate_run_json,
+   callback_deadline_counts, deterministic_bootstrap_interval, frozen_components,
+   frozen_order_index, reduce, strict_validate_failure_json, strict_validate_run_json,
    travel_equivalence_passes, verify_attachment_export, verify_smoke, visual_metrics,
-   RgbaImage,
+   ReducePaths, RgbaImage,
 };
 use serde_json::{json, Value};
 
@@ -202,6 +202,111 @@ fn callback_admission_rejects_nonfinite_and_terminal_invalid_targets()
    let error = callback_deadline_counts(&sixty_hz).unwrap_err();
    assert!(error.contains("inside 7.5-9.2 ms"));
 }
+
+#[test]
+fn reducer_hard_blocks_failure_and_malformed_controlled_records() -> Result<(), String>
+{
+   let root = temporary_root("failure-block")?;
+   fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+   let failure = json!({
+      "schema": "oxide.feed-v1.failure",
+      "schema_revision": 1,
+      "fixture": {
+         "schema": "oxide.feed-v1.fixture",
+         "revision": 1,
+         "canonical_sha256": "a1de9b4a914734fe21d21e9b6f8a9b61970f7e22e0fa4ef0103031e399881473",
+         "canonical_byte_count": 717745
+      },
+      "nonce": "smoke-s00-p00-o0-oxide-forward-test",
+      "treatment": "oxide",
+      "stage": "launch",
+      "message": "deliberate test failure"
+   });
+   fs::write(
+      root.join("oxide-feed-v1-failure.json"),
+      serde_json::to_vec(&failure).map_err(|error| error.to_string())?,
+   ).map_err(|error| error.to_string())?;
+   fs::write(root.join("oxide-feed-v1-malformed.json"), b"{").map_err(|error| error.to_string())?;
+   fs::write(root.join("oxide-feed-v1-missing-schema.json"), b"{}").map_err(|error| error.to_string())?;
+   fs::write(root.join("feed-v1-foreign-schema.json"), br#"{"schema":"other"}"#)
+      .map_err(|error| error.to_string())?;
+   let paths = ReducePaths {
+      run_root: root.clone(),
+      output_json: root.join("latest.json"),
+      output_markdown: root.join("latest.md"),
+   };
+   reduce(&paths)?;
+   let report: Value = serde_json::from_slice(&fs::read(&paths.output_json).map_err(|error| error.to_string())?)
+      .map_err(|error| error.to_string())?;
+   assert_eq!(report["status"], "blocked");
+   let blockers = report["blockers"].as_array().ok_or_else(|| "report blockers are not an array".to_string())?;
+   assert!(blockers.iter().any(|blocker| blocker.as_str().is_some_and(|text| text.contains("app failure"))));
+   assert!(blockers.iter().any(|blocker| blocker.as_str().is_some_and(|text| text.contains("malformed controlled JSON"))));
+   assert!(blockers.iter().any(|blocker| blocker.as_str().is_some_and(|text| {
+      text.contains("unrecognized controlled schema missing")
+   })));
+   assert!(blockers.iter().any(|blocker| blocker.as_str().is_some_and(|text| {
+      text.contains("unrecognized controlled schema other")
+   })));
+   fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+   Ok(())
+}
+
+#[test]
+fn reducer_emits_only_admitted_nonsecret_device_identity() -> Result<(), String>
+{
+   let root = temporary_root("device-identity")?;
+   let raw = root.join("raw");
+   fs::create_dir_all(&raw).map_err(|error| error.to_string())?;
+   let details = json!({
+      "result": {
+         "identifier": "private-core-device-id",
+         "hardwareProperties": {
+            "marketingName": "iPhone 17 Pro Max",
+            "productType": "iPhone18,2",
+            "reality": "physical",
+            "platform": "iOS",
+            "deviceType": "iPhone",
+            "cpuType": { "name": "arm64e" },
+            "supportedCPUTypes": [{ "name": "arm64e" }, { "name": "arm64" }]
+         },
+         "deviceProperties": {
+            "osVersionNumber": "26.5.2",
+            "osBuildUpdate": "23F84",
+            "bootState": "booted"
+         }
+      }
+   });
+   let lock = json!({
+      "result": {
+         "deviceIdentifier": "private-core-device-id",
+         "passcodeRequired": false
+      }
+   });
+   let detail_bytes = serde_json::to_vec(&details).map_err(|error| error.to_string())?;
+   let lock_bytes = serde_json::to_vec(&lock).map_err(|error| error.to_string())?;
+   fs::write(raw.join("device-before.json"), &detail_bytes).map_err(|error| error.to_string())?;
+   fs::write(raw.join("device-after.json"), &detail_bytes).map_err(|error| error.to_string())?;
+   fs::write(raw.join("lock-before-build.json"), &lock_bytes).map_err(|error| error.to_string())?;
+   fs::write(raw.join("lock-before-test.json"), &lock_bytes).map_err(|error| error.to_string())?;
+   let paths = ReducePaths {
+      run_root: root.clone(),
+      output_json: root.join("latest.json"),
+      output_markdown: root.join("latest.md"),
+   };
+   reduce(&paths)?;
+   let report: Value = serde_json::from_slice(&fs::read(&paths.output_json).map_err(|error| error.to_string())?)
+      .map_err(|error| error.to_string())?;
+   assert_eq!(report["device"]["marketing_name"], "iPhone 17 Pro Max");
+   assert_eq!(report["device"]["product_type"], "iPhone18,2");
+   assert_eq!(report["device"]["cpu"], "arm64e");
+   assert!(report["retained_input_bytes"].as_u64().is_some_and(|bytes| bytes > 0));
+   assert!(!serde_json::to_string(&report["device"]).map_err(|error| error.to_string())?
+      .contains("private-core-device-id"));
+   fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+   Ok(())
+}
+
 #[test]
 fn attachment_export_verifier_requires_one_complete_manifest() -> Result<(), String>
 {
@@ -403,6 +508,40 @@ fn evidence_manifest_excludes_stale_reports_results_and_build_outputs() -> Resul
    fs::remove_dir_all(output_root).map_err(|error| error.to_string())?;
    Ok(())
 }
+
+#[test]
+fn six_valid_smoke_tuples_pass_smoke_but_not_full_publication() -> Result<(), String>
+{
+   let root = temporary_root("valid-smoke")?;
+   write_valid_smoke_root(&root)?;
+   verify_attachment_export(&root.join("raw/attachments"))?;
+   verify_smoke(&root)?;
+   rewrite_travel(
+      &root.join("raw/uikit-documents/oxide-feed-v1-smoke-s00-p00-o1-uikit-optimized-forward-test.json"),
+      2_140.0,
+   )?;
+   verify_smoke(&root)?;
+   assert!(!root.join("latest.json").exists());
+   assert!(!root.join("latest.md").exists());
+
+   let paths = ReducePaths {
+      run_root: root.clone(),
+      output_json: root.join("full.json"),
+      output_markdown: root.join("full.md"),
+   };
+   reduce(&paths)?;
+   let report: Value = serde_json::from_slice(&fs::read(&paths.output_json).map_err(|error| error.to_string())?)
+      .map_err(|error| error.to_string())?;
+   assert_eq!(report["status"], "blocked");
+   assert!(report["comparisons"].as_array().is_some_and(Vec::is_empty));
+   assert!(report["runs"].as_array().is_some_and(Vec::is_empty));
+   assert!(report["blockers"].as_array().is_some_and(|blockers| blockers.iter().any(|blocker| {
+      blocker.as_str().is_some_and(|text| text.contains("run population is 6, expected 60"))
+   })));
+   fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+   Ok(())
+}
+
 #[test]
 fn smoke_admits_named_output_placeholders_as_evidence() -> Result<(), String>
 {
@@ -552,6 +691,112 @@ fn smoke_rejects_cleanup_and_artifact_provenance_mutations() -> Result<(), Strin
    fs::remove_dir_all(root).map_err(|error| error.to_string())?;
    Ok(())
 }
+
+#[test]
+fn full_reduction_is_byte_identical_when_repeated() -> Result<(), String>
+{
+   let root = temporary_root("valid-full-idempotence")?;
+   write_valid_full_root(&root)?;
+   verify_attachment_export(&root.join("raw/attachments"))?;
+   let paths = ReducePaths {
+      run_root: root.clone(),
+      output_json: root.join("latest.json"),
+      output_markdown: root.join("latest.md"),
+   };
+   reduce(&paths)?;
+   let first_json = fs::read(&paths.output_json).map_err(|error| error.to_string())?;
+   let first_markdown = fs::read(&paths.output_markdown).map_err(|error| error.to_string())?;
+   let report: Value = serde_json::from_slice(&first_json).map_err(|error| error.to_string())?;
+   assert_eq!(report["status"], "complete");
+   assert_eq!(report["schema_revision"], 3);
+   assert_eq!(report["run_count_total"], 60);
+   assert_eq!(report["run_count_primary"], 54);
+   let travel = report["travel_equivalence"].as_array()
+      .ok_or_else(|| "report travel equivalence is not an array".to_string())?;
+   assert_eq!(travel.len(), 4);
+   assert!(travel.iter().all(|result| {
+      matches!(result["treatment"].as_str(), Some("uikit-optimized" | "oxide"))
+         && matches!(result["direction"].as_str(), Some("forward" | "reverse"))
+         && result["pair_count"] == 9
+         && result["median_relative_delta"].as_f64().is_some()
+         && result["confidence_95_lower"].as_f64().is_some()
+         && result["confidence_95_upper"].as_f64().is_some()
+         && result["median_margin"] == 0.05
+         && result["confidence_margin"] == 0.10
+         && result["passes"] == true
+   }));
+   let runs = report["runs"].as_array().ok_or_else(|| "report runs are not an array".to_string())?;
+   assert_eq!(runs.len(), 54);
+   assert!(runs.iter().all(|run| {
+      run["inertia_observed"] == true
+         && run["thermal_state_change_count"] == 0
+         && run["low_power_mode_change_count"] == 0
+         && run["callback_count"].as_u64().is_some_and(|count| count >= 2)
+         && run["interval_p50_ms"].as_f64().is_some()
+         && run["interval_p95_ms"].as_f64().is_some()
+         && run["interval_p99_ms"].as_f64().is_some()
+         && run["interval_peak_ms"].as_f64().is_some()
+   }));
+   let markdown = String::from_utf8_lossy(&first_markdown);
+   assert!(markdown.contains("## Travel equivalence"));
+   assert!(markdown.contains("| oxide | forward | 9 |"));
+   assert!(markdown.contains("## Per-run callback evidence"));
+
+   reduce(&paths)?;
+   assert_eq!(first_json, fs::read(&paths.output_json).map_err(|error| error.to_string())?);
+   assert_eq!(first_markdown, fs::read(&paths.output_markdown).map_err(|error| error.to_string())?);
+   fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+   Ok(())
+}
+
+#[test]
+fn full_reduction_rejects_systematic_primary_travel_mismatch() -> Result<(), String>
+{
+   let root = temporary_root("full-travel-mismatch")?;
+   write_valid_full_root(&root)?;
+   for session in 0 .. 3
+   {
+      for pair in 0 .. 3
+      {
+         let rotation = (session + pair) % 3;
+         let order = (2 + 3 - rotation) % 3;
+         for direction in ["forward", "reverse"]
+         {
+            let nonce = format!("primary-s{session:02}-p{pair:02}-o{order}-oxide-{direction}-test");
+            rewrite_travel(
+               &root.join("raw/oxide-documents").join(format!("oxide-feed-v1-{nonce}.json")),
+               2_120.0,
+            )?;
+         }
+      }
+   }
+
+   let paths = ReducePaths {
+      run_root: root.clone(),
+      output_json: root.join("latest.json"),
+      output_markdown: root.join("latest.md"),
+   };
+   reduce(&paths)?;
+   let report: Value = serde_json::from_slice(&fs::read(&paths.output_json).map_err(|error| error.to_string())?)
+      .map_err(|error| error.to_string())?;
+   assert_eq!(report["status"], "blocked");
+   assert!(report["blockers"].as_array().is_some_and(|blockers| blockers.iter().any(|blocker| {
+      blocker.as_str().is_some_and(|text| text.contains("primary travel equivalence oxide"))
+   })));
+   let travel = report["travel_equivalence"].as_array()
+      .ok_or_else(|| "blocked report travel equivalence is not an array".to_string())?;
+   let oxide_results: Vec<&Value> = travel.iter().filter(|result| result["treatment"] == "oxide").collect();
+   assert_eq!(oxide_results.len(), 2);
+   assert!(oxide_results.iter().all(|result| {
+      result["median_relative_delta"].as_f64().is_some_and(|delta| (delta - 0.06).abs() < 1e-12)
+         && result["confidence_95_lower"].as_f64().is_some_and(|lower| lower > 0.05)
+         && result["confidence_95_upper"].as_f64().is_some_and(|upper| upper < 0.10)
+         && result["passes"] == false
+   }));
+   fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+   Ok(())
+}
+
 fn write_valid_smoke_root(root: &Path) -> Result<(), String>
 {
    write_valid_root(root, false)
