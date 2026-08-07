@@ -224,6 +224,28 @@ struct FailureRecord
    message: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EvidenceManifest
+{
+   schema: String,
+   schema_revision: u32,
+   fixture_sha256: String,
+   repository_ref: String,
+   repository_head_commit: String,
+   repository_tree: String,
+   source_files: BTreeMap<String, String>,
+   uikit_app_sha256: String,
+   oxide_app_sha256: String,
+   controller_runner_sha256: String,
+   controller_runner_binary_sha256: String,
+   controller_xctest_sha256: String,
+   controller_xctest_binary_sha256: String,
+   reducer_binary_sha256: String,
+   regular_font_sha256: String,
+   bold_font_sha256: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct VisualMetrics
 {
@@ -368,6 +390,23 @@ struct AdversarialResult
    rejected: bool,
    ssim: f64,
    worst_tile_rgb_mae: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct DeviceSummary
+{
+   marketing_name: String,
+   product_type: String,
+   os_version: String,
+   os_build: String,
+   cpu: String,
+}
+
+#[derive(Clone, Debug)]
+struct DeviceEvidence
+{
+   identifier: String,
+   summary: DeviceSummary,
 }
 
 pub fn visual_metrics(reference: &RgbaImage, candidate: &RgbaImage) -> Result<VisualMetrics, String>
@@ -1702,3 +1741,656 @@ fn expected_order_index(phase: &str, session: u32, pair: u32, treatment: &str) -
    Ok((treatment_index + 3 - rotation) % 3)
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CleanupProof
+{
+   schema: String,
+   schema_revision: u32,
+   test_succeeded: bool,
+   verified_attachment_count: usize,
+   apps_uninstalled: bool,
+   controller_uninstalled: bool,
+   controller_process_absent: bool,
+   source_snapshot_preserved: bool,
+   external_build_removed: bool,
+   result_bundle_removed: bool,
+   reducer_binary_absent_from_result_root: bool,
+   raw_evidence_bytes: u64,
+   runtime_seconds: f64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ControllerRuntimeProof
+{
+   schema: String,
+   schema_revision: u32,
+   mode: String,
+   total_runtime_seconds: f64,
+   uikit_idiomatic_runtime_seconds: f64,
+   uikit_optimized_runtime_seconds: f64,
+   oxide_runtime_seconds: f64,
+}
+
+fn validate_controller_runtime(proof: &ControllerRuntimeProof, population: Population) -> Result<(), String>
+{
+   let expected_mode = if population == Population::Full { "full" } else { "smoke" };
+   let runtimes = [
+      proof.total_runtime_seconds,
+      proof.uikit_idiomatic_runtime_seconds,
+      proof.uikit_optimized_runtime_seconds,
+      proof.oxide_runtime_seconds,
+   ];
+   finite(&runtimes, "controller runtime proof")?;
+   let treatment_total = proof.uikit_idiomatic_runtime_seconds
+      + proof.uikit_optimized_runtime_seconds
+      + proof.oxide_runtime_seconds;
+   if proof.schema != "oxide.feed-v1.controller-runtime"
+      || proof.schema_revision != 1
+      || proof.mode != expected_mode
+      || runtimes.iter().any(|runtime| *runtime <= 0.0)
+      || proof.total_runtime_seconds > 20.0 * 60.0
+      || proof.uikit_idiomatic_runtime_seconds > 10.0 * 60.0
+      || proof.uikit_optimized_runtime_seconds > 10.0 * 60.0
+      || proof.oxide_runtime_seconds > 10.0 * 60.0
+      || treatment_total > proof.total_runtime_seconds + 1.0
+   {
+      return Err("controller runtime proof violates the frozen 20/10-minute limits".to_string());
+   }
+   Ok(())
+}
+
+fn required_json_string(value: &serde_json::Value, pointer: &str, field: &str) -> Result<String, String>
+{
+   value.pointer(pointer).and_then(serde_json::Value::as_str)
+      .filter(|value| !value.is_empty())
+      .map(str::to_string)
+      .ok_or_else(|| format!("device evidence is missing {field}"))
+}
+
+fn parse_device_details(path: &Path) -> Result<DeviceEvidence, String>
+{
+   let bytes = fs::read(path).map_err(|error| format!("read device evidence {}: {error}", path.display()))?;
+   let value: serde_json::Value = serde_json::from_slice(&bytes)
+      .map_err(|error| format!("parse device evidence {}: {error}", path.display()))?;
+   let identifier = required_json_string(&value, "/result/identifier", "identifier")?;
+   let marketing_name = required_json_string(&value, "/result/hardwareProperties/marketingName", "marketing name")?;
+   let product_type = required_json_string(&value, "/result/hardwareProperties/productType", "product type")?;
+   let reality = required_json_string(&value, "/result/hardwareProperties/reality", "hardware reality")?;
+   let platform = required_json_string(&value, "/result/hardwareProperties/platform", "platform")?;
+   let device_type = required_json_string(&value, "/result/hardwareProperties/deviceType", "device type")?;
+   let cpu = required_json_string(&value, "/result/hardwareProperties/cpuType/name", "CPU type")?;
+   let os_version = required_json_string(&value, "/result/deviceProperties/osVersionNumber", "OS version")?;
+   let os_build = required_json_string(&value, "/result/deviceProperties/osBuildUpdate", "OS build")?;
+   let boot_state = required_json_string(&value, "/result/deviceProperties/bootState", "boot state")?;
+   let supported_cpus = value.pointer("/result/hardwareProperties/supportedCPUTypes")
+      .and_then(serde_json::Value::as_array)
+      .ok_or_else(|| "device evidence is missing supported CPU types".to_string())?;
+   let supports_arm64 = supported_cpus.iter().any(|entry| {
+      entry.get("name").and_then(serde_json::Value::as_str) == Some("arm64")
+   });
+   if reality != "physical"
+      || platform != "iOS"
+      || device_type != "iPhone"
+      || boot_state != "booted"
+      || !cpu.starts_with("arm64")
+      || !supports_arm64
+   {
+      return Err("device evidence is not a booted physical arm64 iPhone".to_string());
+   }
+   Ok(DeviceEvidence {
+      identifier,
+      summary: DeviceSummary {
+         marketing_name,
+         product_type,
+         os_version,
+         os_build,
+         cpu,
+      },
+   })
+}
+
+fn validate_lock_state(path: &Path, expected_identifier: &str) -> Result<(), String>
+{
+   let bytes = fs::read(path).map_err(|error| format!("read lock-state evidence {}: {error}", path.display()))?;
+   let value: serde_json::Value = serde_json::from_slice(&bytes)
+      .map_err(|error| format!("parse lock-state evidence {}: {error}", path.display()))?;
+   let identifier = required_json_string(&value, "/result/deviceIdentifier", "lock-state device identifier")?;
+   let passcode_required = value.pointer("/result/passcodeRequired").and_then(serde_json::Value::as_bool)
+      .ok_or_else(|| "lock-state evidence is missing passcodeRequired".to_string())?;
+   if identifier != expected_identifier || passcode_required
+   {
+      return Err("lock-state evidence does not prove the admitted device was unlocked".to_string());
+   }
+   Ok(())
+}
+
+fn admit_device(run_root: &Path) -> Result<DeviceSummary, String>
+{
+   let raw = run_root.join("raw");
+   let before = parse_device_details(&raw.join("device-before.json"))?;
+   let after = parse_device_details(&raw.join("device-after.json"))?;
+   if before.identifier != after.identifier || before.summary != after.summary
+   {
+      return Err("physical device identity or OS changed across the pilot".to_string());
+   }
+   validate_lock_state(&raw.join("lock-before-build.json"), &before.identifier)?;
+   validate_lock_state(&raw.join("lock-before-test.json"), &before.identifier)?;
+   Ok(before.summary)
+}
+
+fn same_path(left: &Path, right: &Path) -> bool
+{
+   left == right || match (fs::canonicalize(left), fs::canonicalize(right))
+   {
+      (Ok(left), Ok(right)) => left == right,
+      _ => false,
+   }
+}
+
+fn validate_run_record_source(run_root: &Path, path: &Path, record: &RunRecord) -> Result<(), String>
+{
+   let document_directory = match record.run.treatment.as_str()
+   {
+      "oxide" => run_root.join("raw/oxide-documents"),
+      "uikit-idiomatic" | "uikit-optimized" => run_root.join("raw/uikit-documents"),
+      treatment => return Err(format!("unknown treatment {treatment} in run-record source")),
+   };
+   let expected_name = format!("oxide-feed-v1-{}.json", record.run.nonce);
+   if path.file_name().and_then(|name| name.to_str()) != Some(expected_name.as_str())
+   {
+      return Err(format!("run {} has a noncanonical record filename", record.run.nonce));
+   }
+   let canonical_directory = fs::canonicalize(&document_directory)
+      .map_err(|error| format!("canonicalize run-record directory {}: {error}", document_directory.display()))?;
+   let canonical_path = fs::canonicalize(path)
+      .map_err(|error| format!("canonicalize run record {}: {error}", path.display()))?;
+   if !canonical_path.starts_with(&canonical_directory)
+   {
+      return Err(format!("run {} came from the wrong app container", record.run.nonce));
+   }
+   Ok(())
+}
+
+pub fn verify_attachment_export(root: &Path) -> Result<(), String>
+{
+   if !root.is_dir()
+   {
+      return Err(format!("attachment export {} is not a directory", root.display()));
+   }
+   let files = collect_files(root)?;
+   let manifest_count = files.iter().filter(|path| {
+      path.file_name().and_then(|name| name.to_str()) == Some("manifest.json")
+   }).count();
+   if manifest_count != 1
+   {
+      return Err(format!("attachment export has {manifest_count} manifests, expected 1"));
+   }
+   let attachments = attachment_export_map(&files)?;
+   if attachments.len() != ATTACHMENT_COUNT
+   {
+      return Err(format!(
+         "attachment export has {} referenced files, expected {ATTACHMENT_COUNT}",
+         attachments.len()
+      ));
+   }
+   if files.len() != ATTACHMENT_COUNT + 1
+   {
+      return Err(format!(
+         "attachment export has {} total files, expected {} referenced files plus one manifest",
+         files.len(),
+         ATTACHMENT_COUNT
+      ));
+   }
+   let canonical_root = fs::canonicalize(root)
+      .map_err(|error| format!("canonicalize attachment root {}: {error}", root.display()))?;
+   for (name, path) in attachments
+   {
+      if !name.starts_with("feed-v1-")
+      {
+         return Err(format!("attachment export contains unexpected name {name}"));
+      }
+      let canonical_path = fs::canonicalize(&path)
+         .map_err(|error| format!("canonicalize attachment {}: {error}", path.display()))?;
+      if !canonical_path.starts_with(&canonical_root)
+      {
+         return Err(format!("attachment {name} leaves the export root"));
+      }
+      let size = fs::metadata(&canonical_path)
+         .map_err(|error| format!("read attachment metadata {}: {error}", canonical_path.display()))?.len();
+      if size == 0
+      {
+         return Err(format!("attachment {name} is empty"));
+      }
+   }
+   Ok(())
+}
+
+pub fn build_evidence_manifest(source_root: &Path, repository_root: &Path, uikit_app: &Path, oxide_app: &Path, controller_runner: &Path, controller_xctest: &Path, output: &Path) -> Result<(), String>
+{
+   if !source_root.is_dir()
+      || !repository_root.is_dir()
+      || !uikit_app.is_dir()
+      || !oxide_app.is_dir()
+      || !controller_runner.is_dir()
+      || !controller_xctest.is_dir()
+   {
+      return Err("manifest inputs must be existing directories".to_string());
+   }
+   let controller_runner_binary = controller_runner.join("FeedV1Controller-Runner");
+   let controller_xctest_binary = controller_xctest.join("FeedV1Controller");
+   if !controller_runner_binary.is_file() || !controller_xctest_binary.is_file()
+   {
+      return Err("controller products do not contain the frozen executables".to_string());
+   }
+   let (repository_ref, repository_head_commit, repository_tree) = repository_snapshot(repository_root)?;
+   let source_files = collect_evidence_source_files(source_root)?;
+   let mut hashes = BTreeMap::new();
+   for path in source_files
+   {
+      let relative = path.strip_prefix(source_root)
+         .map_err(|error| format!("manifest relative path {}: {error}", path.display()))?;
+      hashes.insert(relative.to_string_lossy().replace('\\', "/"), sha256_file(&path)?);
+   }
+   let regular_font = source_root.join("../../../crates/ui-core/assets/Asap-Regular.ttf");
+   let bold_font = source_root.join("../../../crates/ui-core/assets/Asap-Bold.ttf");
+   let reducer_binary = env::current_exe().map_err(|error| format!("resolve reducer executable: {error}"))?;
+   let manifest = EvidenceManifest {
+      schema: "oxide.feed-v1.evidence-manifest".to_string(),
+      schema_revision: 2,
+      fixture_sha256: FIXTURE_SHA256.to_string(),
+      repository_ref,
+      repository_head_commit,
+      repository_tree,
+      source_files: hashes,
+      uikit_app_sha256: hash_directory(uikit_app)?,
+      oxide_app_sha256: hash_directory(oxide_app)?,
+      controller_runner_sha256: hash_directory(controller_runner)?,
+      controller_runner_binary_sha256: sha256_file(&controller_runner_binary)?,
+      controller_xctest_sha256: hash_directory(controller_xctest)?,
+      controller_xctest_binary_sha256: sha256_file(&controller_xctest_binary)?,
+      reducer_binary_sha256: sha256_file(&reducer_binary)?,
+      regular_font_sha256: sha256_file(&regular_font)?,
+      bold_font_sha256: sha256_file(&bold_font)?,
+   };
+   let mut json = serde_json::to_vec_pretty(&manifest).map_err(|error| format!("serialize evidence manifest: {error}"))?;
+   json.push(b'\n');
+   write_atomic(output, &json)
+}
+
+fn repository_snapshot(root: &Path) -> Result<(String, String, String), String>
+{
+   let status = git_output(root, &["status", "--porcelain=v1", "--untracked-files=all"])?;
+   if !status.is_empty()
+   {
+      return Err("repository worktree is not clean at evidence capture".to_string());
+   }
+   let repository_ref = git_output(root, &["symbolic-ref", "--quiet", "HEAD"])?;
+   if !repository_ref.starts_with("refs/heads/")
+   {
+      return Err("repository HEAD is not on a named branch".to_string());
+   }
+   let head = git_output(root, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+   let tree = git_output(root, &["rev-parse", "--verify", "HEAD^{tree}"])?;
+   if !is_git_object_id(&head) || !is_git_object_id(&tree)
+   {
+      return Err("repository commit or tree identity is malformed".to_string());
+   }
+   Ok((repository_ref, head, tree))
+}
+
+fn git_output(root: &Path, args: &[&str]) -> Result<String, String>
+{
+   let output = Command::new("git").arg("-C").arg(root).args(args).output()
+      .map_err(|error| format!("run git {}: {error}", args.join(" ")))?;
+   if !output.status.success()
+   {
+      return Err(format!(
+         "git {} failed: {}",
+         args.join(" "),
+         String::from_utf8_lossy(&output.stderr).trim()
+      ));
+   }
+   let text = String::from_utf8(output.stdout).map_err(|error| format!("git output is not UTF-8: {error}"))?;
+   Ok(text.trim().to_string())
+}
+
+fn is_git_object_id(value: &str) -> bool
+{
+   matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn collect_evidence_source_files(root: &Path) -> Result<Vec<PathBuf>, String>
+{
+   let root_metadata = fs::symlink_metadata(root)
+      .map_err(|error| format!("read evidence source root {}: {error}", root.display()))?;
+   if root_metadata.file_type().is_symlink() || !root_metadata.is_dir()
+   {
+      return Err(format!("evidence source root is not a real directory: {}", root.display()));
+   }
+   let protocol = root.join("protocol.md");
+   let protocol_metadata = fs::symlink_metadata(&protocol)
+      .map_err(|error| format!("read evidence protocol {}: {error}", protocol.display()))?;
+   if protocol_metadata.file_type().is_symlink() || !protocol_metadata.is_file()
+   {
+      return Err(format!("evidence protocol is not a real file: {}", protocol.display()));
+   }
+   let mut files = vec![protocol];
+   for name in ["ios", "reducer"]
+   {
+      let tree = root.join(name);
+      let tree_metadata = fs::symlink_metadata(&tree)
+         .map_err(|error| format!("read evidence source tree {}: {error}", tree.display()))?;
+      if tree_metadata.file_type().is_symlink() || !tree_metadata.is_dir()
+      {
+         return Err(format!("evidence source tree is not a real directory: {}", tree.display()));
+      }
+      collect_evidence_source_tree(root, &tree, &mut files)?;
+   }
+   files.sort();
+   Ok(files)
+}
+
+fn collect_evidence_source_tree(root: &Path, directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String>
+{
+   let entries = fs::read_dir(directory).map_err(|error| format!("read source directory {}: {error}", directory.display()))?;
+   for entry in entries
+   {
+      let entry = entry.map_err(|error| format!("read source directory entry {}: {error}", directory.display()))?;
+      let path = entry.path();
+      let relative = path.strip_prefix(root)
+         .map_err(|error| format!("source relative path {}: {error}", path.display()))?;
+      let file_type = entry.file_type().map_err(|error| format!("source file type {}: {error}", path.display()))?;
+      if file_type.is_symlink()
+      {
+         return Err(format!("evidence source path is a symlink: {}", relative.display()));
+      }
+      if evidence_runtime_path(relative)
+      {
+         continue;
+      }
+      if file_type.is_dir()
+      {
+         collect_evidence_source_tree(root, &path, files)?;
+      }
+      else if file_type.is_file()
+      {
+         if evidence_runtime_file(relative)
+         {
+            continue;
+         }
+         if evidence_source_file(relative)
+         {
+            files.push(path);
+         }
+         else
+         {
+            return Err(format!("unclassified evidence source file: {}", relative.display()));
+         }
+      }
+   }
+   Ok(())
+}
+
+fn evidence_runtime_path(relative: &Path) -> bool
+{
+   relative.components().any(|component| {
+      let name = component.as_os_str().to_string_lossy();
+      matches!(name.as_ref(),
+         "target" | "build" | "DerivedData" | "tools" | "raw" | "result" | "results"
+         | "evidence" | "artifacts" | "attachments" | "uikit-documents" | "oxide-documents"
+         | "xcuserdata"
+      ) || name.ends_with(".xcresult")
+         || name.starts_with("oxide-feed-v1-result")
+         || name.starts_with("feed-v1-result")
+   })
+}
+
+fn evidence_source_file(relative: &Path) -> bool
+{
+   let name = relative.file_name().and_then(|name| name.to_str()).unwrap_or("");
+   if name == ".gitignore"
+   {
+      return true;
+   }
+   matches!(relative.extension().and_then(|extension| extension.to_str()),
+      Some("rs" | "swift" | "m" | "h" | "plist" | "yml" | "yaml" | "md" | "sh"
+         | "pbxproj" | "xcworkspacedata" | "xcscheme" | "xcconfig" | "toml" | "lock" | "resolved"
+         | "json" | "png" | "ttf")
+   )
+}
+
+fn evidence_runtime_file(relative: &Path) -> bool
+{
+   let name = relative.file_name().and_then(|name| name.to_str()).unwrap_or("");
+   name == ".DS_Store"
+      || name == "latest.json"
+      || name == "latest.md"
+      || name == "evidence-manifest.json"
+      || name == "cleanup.json"
+      || name == "device-before.json"
+      || name == "device-after.json"
+      || name == "lock-before-build.json"
+      || name == "lock-before-test.json"
+      || name == "xcode-destinations.txt"
+      || name.starts_with("oxide-feed-v1-")
+      || name.starts_with("feed-v1-")
+      || matches!(relative.extension().and_then(|extension| extension.to_str()),
+         Some("log" | "trace" | "atrc")
+      )
+}
+
+fn collect_files(root: &Path) -> Result<Vec<PathBuf>, String>
+{
+   let root_type = fs::symlink_metadata(root)
+      .map_err(|error| format!("read evidence root metadata {}: {error}", root.display()))?
+      .file_type();
+   if root_type.is_symlink()
+   {
+      return Err(format!("evidence root is a symlink: {}", root.display()));
+   }
+   if !root_type.is_dir()
+   {
+      return Err(format!("evidence root is not a directory: {}", root.display()));
+   }
+   let mut pending = vec![root.to_path_buf()];
+   let mut files = Vec::new();
+   while let Some(directory) = pending.pop()
+   {
+      let entries = fs::read_dir(&directory).map_err(|error| format!("read directory {}: {error}", directory.display()))?;
+      for entry in entries
+      {
+         let entry = entry.map_err(|error| format!("read directory entry {}: {error}", directory.display()))?;
+         let path = entry.path();
+         let file_type = entry.file_type().map_err(|error| format!("file type {}: {error}", path.display()))?;
+         if file_type.is_symlink()
+         {
+            return Err(format!("evidence path is a symlink: {}", path.display()));
+         }
+         if file_type.is_dir()
+         {
+            pending.push(path);
+         }
+         else if file_type.is_file()
+         {
+            files.push(path);
+         }
+         else
+         {
+            return Err(format!("evidence path is not a regular file or directory: {}", path.display()));
+         }
+      }
+   }
+   files.sort();
+   Ok(files)
+}
+
+fn attachment_export_map(files: &[PathBuf]) -> Result<BTreeMap<String, PathBuf>, String>
+{
+   let mut output = BTreeMap::new();
+   let mut exported_paths = BTreeSet::new();
+   #[cfg(unix)]
+   let mut exported_identities = BTreeSet::new();
+   for manifest in files.iter().filter(|path| path.file_name().and_then(|name| name.to_str()) == Some("manifest.json"))
+   {
+      let bytes = fs::read(manifest).map_err(|error| format!("read attachment manifest {}: {error}", manifest.display()))?;
+      let value: serde_json::Value = serde_json::from_slice(&bytes)
+         .map_err(|error| format!("parse attachment manifest {}: {error}", manifest.display()))?;
+      let test_details = value.as_array()
+         .ok_or_else(|| format!("attachment manifest {} is not an array", manifest.display()))?;
+      if test_details.len() != 1
+      {
+         return Err(format!(
+            "attachment manifest {} has {} test details, expected 1",
+            manifest.display(),
+            test_details.len()
+         ));
+      }
+      let detail = &test_details[0];
+      let identifier = detail.get("testIdentifier").and_then(serde_json::Value::as_str)
+         .ok_or_else(|| format!("attachment manifest {} has no test identifier", manifest.display()))?;
+      if identifier != ATTACHMENT_TEST_IDENTIFIER
+      {
+         return Err(format!(
+            "attachment manifest {} test identifier {identifier} differs from {ATTACHMENT_TEST_IDENTIFIER}",
+            manifest.display()
+         ));
+      }
+      let attachments = detail.get("attachments").and_then(serde_json::Value::as_array)
+         .ok_or_else(|| format!("attachment manifest {} has no attachment array", manifest.display()))?;
+      if attachments.len() != ATTACHMENT_COUNT
+      {
+         return Err(format!(
+            "attachment manifest {} has {} attachments, expected {ATTACHMENT_COUNT}",
+            manifest.display(),
+            attachments.len()
+         ));
+      }
+      for attachment in attachments
+      {
+         let suggested = attachment.get("suggestedHumanReadableName").and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("attachment manifest {} contains an attachment without a suggested name", manifest.display()))?;
+         let exported = attachment.get("exportedFileName").and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("attachment manifest {} contains an attachment without an exported filename", manifest.display()))?;
+         let canonical_name = canonical_attachment_name(suggested)?;
+         let path = manifest.parent().unwrap_or(Path::new("")).join(exported);
+         if !path.is_file()
+         {
+            return Err(format!("attachment manifest references missing {}", path.display()));
+         }
+         let canonical_path = fs::canonicalize(&path)
+            .map_err(|error| format!("canonicalize attachment {}: {error}", path.display()))?;
+         if !exported_paths.insert(canonical_path.clone())
+         {
+            return Err(format!("multiple attachment names alias {}", canonical_path.display()));
+         }
+         #[cfg(unix)]
+         {
+            let metadata = fs::metadata(&canonical_path)
+               .map_err(|error| format!("read attachment metadata {}: {error}", canonical_path.display()))?;
+            if !exported_identities.insert((metadata.dev(), metadata.ino()))
+            {
+               return Err(format!("multiple attachment names alias one file identity at {}", canonical_path.display()));
+            }
+         }
+         if output.insert(canonical_name.clone(), canonical_path).is_some()
+         {
+            return Err(format!("duplicate canonical exported attachment name {canonical_name}"));
+         }
+      }
+   }
+   Ok(output)
+}
+
+fn canonical_attachment_name(suggested: &str) -> Result<String, String>
+{
+   let Some(stem) = suggested.strip_suffix(".png") else
+   {
+      return Err(format!("exported attachment name {suggested} is not a PNG"));
+   };
+   let Some((canonical, suffix)) = stem.rsplit_once("_0_") else
+   {
+      return Ok(suggested.to_string());
+   };
+   if !uuid_is_valid(suffix)
+   {
+      return Err(format!("exported attachment name {suggested} has a malformed Xcode suffix"));
+   }
+   Ok(format!("{canonical}.png"))
+}
+
+fn uuid_is_valid(value: &str) -> bool
+{
+   value.len() == 36 && value.bytes().enumerate().all(|(index, byte)| {
+      if matches!(index, 8 | 13 | 18 | 23)
+      {
+         byte == b'-'
+      }
+      else
+      {
+         byte.is_ascii_hexdigit()
+      }
+   })
+}
+
+fn hash_directory(root: &Path) -> Result<String, String>
+{
+   let files = collect_files(root)?;
+   let mut digest = Sha256::new();
+   for path in files
+   {
+      let relative = path.strip_prefix(root)
+         .map_err(|error| format!("artifact relative path {}: {error}", path.display()))?;
+      let relative_bytes = relative.to_string_lossy();
+      digest.update((relative_bytes.len() as u64).to_le_bytes());
+      digest.update(relative_bytes.as_bytes());
+      let bytes = fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
+      digest.update((bytes.len() as u64).to_le_bytes());
+      digest.update(&bytes);
+   }
+   Ok(hex(&digest.finalize()))
+}
+
+fn sha256_file(path: &Path) -> Result<String, String>
+{
+   let bytes = fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
+   Ok(sha256_bytes(&bytes))
+}
+
+fn is_sha256(value: &str) -> bool
+{
+   value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a' ..= b'f').contains(&byte))
+}
+
+fn sha256_bytes(bytes: &[u8]) -> String
+{
+   let mut digest = Sha256::new();
+   digest.update(bytes);
+   hex(&digest.finalize())
+}
+
+fn hex(bytes: &[u8]) -> String
+{
+   const DIGITS: &[u8; 16] = b"0123456789abcdef";
+   let mut output = String::with_capacity(bytes.len() * 2);
+   for &byte in bytes
+   {
+      output.push(DIGITS[(byte >> 4) as usize] as char);
+      output.push(DIGITS[(byte & 15) as usize] as char);
+   }
+   output
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String>
+{
+   let parent = path.parent().ok_or_else(|| format!("output {} has no parent", path.display()))?;
+   fs::create_dir_all(parent).map_err(|error| format!("create output directory {}: {error}", parent.display()))?;
+   let file_name = path.file_name().and_then(|name| name.to_str())
+      .ok_or_else(|| format!("output {} has a non-UTF8 filename", path.display()))?;
+   let temporary = parent.join(format!(".{file_name}.tmp"));
+   let mut file = File::create(&temporary).map_err(|error| format!("create {}: {error}", temporary.display()))?;
+   file.write_all(bytes).map_err(|error| format!("write {}: {error}", temporary.display()))?;
+   file.sync_all().map_err(|error| format!("sync {}: {error}", temporary.display()))?;
+   fs::rename(&temporary, path).map_err(|error| format!("rename {} to {}: {error}", temporary.display(), path.display()))
+}
