@@ -4191,7 +4191,10 @@ fn filtered_run_suite_supports_paged_text_atlas_locality_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-paged-text-atlas-{}.json", std::process::id()));
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-        .env("OXIDE_PERF_RUNNER_FILTER", "cpu.architecture.text.paged_atlas_locality")
+        .env(
+            "OXIDE_PERF_RUNNER_FILTER",
+            "cpu.architecture.text.paged_atlas_locality.single_scale",
+        )
         .arg("--run-suite")
         .arg("--smoke")
         .arg("--json-out")
@@ -4204,7 +4207,10 @@ fn filtered_run_suite_supports_paged_text_atlas_locality_case() {
     assert!(output.status.success(), "filtered suite failed: {stderr}");
     assert!(stdout.contains("cases=1"), "stdout: {stdout}");
     let report = std::fs::read_to_string(&json_out).expect("read paged text atlas report");
-    let row = report_case_slice(&report, "cpu.architecture.text.paged_atlas_locality");
+    let row = report_case_slice(
+        &report,
+        "cpu.architecture.text.paged_atlas_locality.single_scale",
+    );
     assert_eq!(report_f64(row, "atlas_pages"), 2.0);
     assert_eq!(report_f64(row, "atlas_evictions"), 1.0);
     assert_eq!(report_f64(row, "atlas_release_calls"), 1.0);

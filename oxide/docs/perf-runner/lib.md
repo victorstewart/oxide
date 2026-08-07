@@ -137,6 +137,7 @@ Persisted report and evidence schemas are part of the performance contract becau
 
 ## Changelog
 
+- 2026-08-07: renamed the corrected paged-atlas locality workload to `cpu.architecture.text.paged_atlas_locality.single_scale`; its deterministic pressure stays at 1x instead of mixing scale-driven glyph variants into the eviction signal.
 - 2026-08-06: added one compact warmed authoring row for the app-owned prepared-frame boundary.
 - 2026-08-06: Added warmed `VerticalScrollSurface` input/advance authoring coverage and one canonical 2,000-row raw-touch feed journey through explicit 120 Hz settlement; retained the feed offset matrix with corrected programmatic-transition semantics.
 - 2026-08-06: retained the existing linear PNG first-visible workload identity and added one focused nearest-sampled RGBA row; both classify the freshly published texture as cold and time only begin, encode, and submit over a prebuilt draw list, without a count/style permutation matrix.

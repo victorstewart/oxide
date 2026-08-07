@@ -61,7 +61,7 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
    push_if_allowed(cases, "cpu.architecture.text.script_fallback_matrix", || text_script_matrix_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.scale_sdf_matrix", || text_scale_sdf_matrix_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.atlas_eviction", || text_atlas_eviction_case(smoke));
-   push_if_allowed(cases, "cpu.architecture.text.paged_atlas_locality", || {
+   push_if_allowed(cases, "cpu.architecture.text.paged_atlas_locality.single_scale", || {
       text_paged_atlas_locality_case(smoke)
    });
    push_if_allowed(cases, "cpu.architecture.text.bitmap_options", || {
@@ -3200,12 +3200,17 @@ fn run_paged_atlas_locality() -> PagedAtlasLocalityStats
    builder.clear();
    text.begin_frame();
    encode_matrix_label(&pinned_label, 0, 1.0, 16.0, &mut text, &mut uploader, &mut builder);
-   'pressure: for label in &labels
+   'pressure: for font_px in (17..=23).rev()
    {
-      encode_matrix_label(label, 0, 2.0, 16.0, &mut text, &mut uploader, &mut builder);
-      if text.atlas.eviction_count() > 0
+      for label in &labels
       {
-         break 'pressure;
+         encode_matrix_label(
+            label, 0, 1.0, font_px as f32, &mut text, &mut uploader, &mut builder,
+         );
+         if text.atlas.eviction_count() > 0
+         {
+            break 'pressure;
+         }
       }
    }
    let _ = text.finish_frame(&mut uploader, &mut builder);
@@ -3233,7 +3238,7 @@ fn run_paged_atlas_locality() -> PagedAtlasLocalityStats
 fn text_paged_atlas_locality_case(smoke: bool) -> PerfCaseResult
 {
    let mut case = measured_architecture_case(
-      "cpu.architecture.text.paged_atlas_locality",
+      "cpu.architecture.text.paged_atlas_locality.single_scale",
       smoke,
       "Two bounded glyph pages under deterministic pressure while one visible page remains pinned and retains its resource identity.",
       move || run_paged_atlas_locality().checksum,
