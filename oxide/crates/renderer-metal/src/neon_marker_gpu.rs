@@ -50,7 +50,7 @@ pub(super) fn build_pso(
     desc.set_fragment_function(Some(&f));
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_source_alpha_blend(ca);
+    configure_straight_alpha_source_over_blend(ca);
     pipeline_state(device, "pso.neon_marker.create", &desc)
 }
 

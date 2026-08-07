@@ -10,9 +10,8 @@ use std::collections::{HashMap, HashSet};
 
 use super::{
    api_vertex_descriptor, append_glyph_instances, append_remapped_indices_to_span, apply_scissor_dp,
-   configure_layer_source_alpha_blend, configure_source_alpha_blend, effective_scissor_dp,
-   final_target_plan, intersect_scissor_dp, pack_image_params, pack_nine_slice_params,
-   pack_rrect_params,
+   configure_straight_alpha_source_over_blend, effective_scissor_dp, final_target_plan,
+   intersect_scissor_dp, pack_image_params, pack_nine_slice_params, pack_rrect_params,
    pipeline_error, pipeline_function, pipeline_state, solid_primitive_for_index_count,
    solid_primitive_for_vertex_count, transparent_drawable_clear_enabled, MetalInitError,
    MetalRenderer, NineSliceGpuParams,
@@ -40,27 +39,27 @@ pub(super) struct PreparedPipelines
 
 impl PreparedPipelines
 {
-   pub fn new(device: &Device, library: &Library, format: MTLPixelFormat, sample_count: u32, layer: bool) -> Result<Self, MetalInitError>
+   pub fn new(device: &Device, library: &Library, format: MTLPixelFormat, sample_count: u32) -> Result<Self, MetalInitError>
    {
       Ok(Self {
-         solid: prepared_pipeline(device, library, format, sample_count, layer, "prepared.solid", "v_prepared_solid", "f_solid", true)?,
-         rrect: prepared_pipeline(device, library, format, sample_count, layer, "prepared.rrect", "v_prepared_inst_rect", "f_prepared_rrect", false)?,
-         rrect_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.rrect_opaque", "v_prepared_inst_rect", "f_rrect", false)?,
-         image: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image", "v_prepared_inst_rect", "f_prepared_image", false)?,
-         image_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_opaque", "v_prepared_inst_rect", "f_image", false)?,
-         image_single: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_single", "v_prepared_inst_rect", "f_prepared_image_single", false)?,
-         image_single_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_single_opaque", "v_prepared_inst_rect", "f_image_single", false)?,
-         image_mesh: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_mesh", "v_prepared_text", "f_prepared_image_mesh", true)?,
-         image_mesh_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_mesh_opaque", "v_prepared_text", "f_image_mesh", true)?,
-         text: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text", "v_prepared_glyph", "f_prepared_glyph", false)?,
-         text_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text_opaque", "v_prepared_glyph", "f_glyph", false)?,
-         text_sdf: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text_sdf", "v_prepared_glyph", "f_prepared_glyph_sdf", false)?,
-         text_sdf_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text_sdf_opaque", "v_prepared_glyph", "f_glyph_sdf", false)?,
+         solid: prepared_pipeline(device, library, format, sample_count, "prepared.solid", "v_prepared_solid", "f_solid", true)?,
+         rrect: prepared_pipeline(device, library, format, sample_count, "prepared.rrect", "v_prepared_inst_rect", "f_prepared_rrect", false)?,
+         rrect_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.rrect_opaque", "v_prepared_inst_rect", "f_rrect", false)?,
+         image: prepared_pipeline(device, library, format, sample_count, "prepared.image", "v_prepared_inst_rect", "f_prepared_image", false)?,
+         image_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.image_opaque", "v_prepared_inst_rect", "f_image", false)?,
+         image_single: prepared_pipeline(device, library, format, sample_count, "prepared.image_single", "v_prepared_inst_rect", "f_prepared_image_single", false)?,
+         image_single_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.image_single_opaque", "v_prepared_inst_rect", "f_image_single", false)?,
+         image_mesh: prepared_pipeline(device, library, format, sample_count, "prepared.image_mesh", "v_prepared_text", "f_prepared_image_mesh", true)?,
+         image_mesh_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.image_mesh_opaque", "v_prepared_text", "f_image_mesh", true)?,
+         text: prepared_pipeline(device, library, format, sample_count, "prepared.text", "v_prepared_glyph", "f_prepared_glyph", false)?,
+         text_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.text_opaque", "v_prepared_glyph", "f_glyph", false)?,
+         text_sdf: prepared_pipeline(device, library, format, sample_count, "prepared.text_sdf", "v_prepared_glyph", "f_prepared_glyph_sdf", false)?,
+         text_sdf_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.text_sdf_opaque", "v_prepared_glyph", "f_glyph_sdf", false)?,
       })
    }
 }
 
-fn prepared_pipeline(device: &Device, library: &Library, format: MTLPixelFormat, sample_count: u32, layer: bool, stage: &str, vertex: &str, fragment: &str, vertex_descriptor: bool) -> Result<RenderPipelineState, MetalInitError>
+fn prepared_pipeline(device: &Device, library: &Library, format: MTLPixelFormat, sample_count: u32, stage: &str, vertex: &str, fragment: &str, vertex_descriptor: bool) -> Result<RenderPipelineState, MetalInitError>
 {
    let vertex = pipeline_function(library, stage, vertex)?;
    let fragment = pipeline_function(library, stage, fragment)?;
@@ -75,14 +74,7 @@ fn prepared_pipeline(device: &Device, library: &Library, format: MTLPixelFormat,
    let attachment = descriptor.color_attachments().object_at(0)
       .ok_or_else(|| pipeline_error(stage, "missing color attachment zero"))?;
    attachment.set_pixel_format(format);
-   if layer
-   {
-      configure_layer_source_alpha_blend(attachment);
-   }
-   else
-   {
-      configure_source_alpha_blend(attachment);
-   }
+   configure_straight_alpha_source_over_blend(attachment);
    pipeline_state(device, stage, &descriptor)
 }
 

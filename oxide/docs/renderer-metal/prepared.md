@@ -56,7 +56,7 @@ An eligible `RenderLayerInstance` gets a complete layer key containing the stabl
 
 On a clean hit, the frame plan records only the existing texture composite. It does not consult the prepared-body cache, so body-buffer eviction does not turn clean replay into hidden body work. A miss or dirty key prepares the body if necessary, renders it once into a compatible private texture on the frame command buffer, then composites once into the main target. Repeated occurrences of the same stable layer key in one frame share that one refresh. Same-size compatible textures survive refresh and prepared-cache purge; resource update or release invalidates every dependent prepared-layer key before reuse.
 
-Prepared layers preserve the parent C05 layer blending/composite contract. Translucent-RRect and image/glyph/image-mesh/Solid bodies use the main layer format. Opaque RRect antialiasing uses an RGBA32Float intermediate because main-format and RGBA16Float trials each changed eight edge-alpha bytes; RGBA32Float matches the parent pixels exactly. A body mixing opaque and translucent RRects uses the exact flat fallback because neither single intermediate precision reproduces both parent quantization paths. The exact pipeline family is optional at initialization, so devices that cannot build it fall back rather than changing pixels.
+Prepared layers preserve the parent C05 layer blending/composite contract. Their ordinary body fragments emit straight RGB and coverage alpha, so the body pipelines use straight-alpha source-over and preserve opaque destination alpha. The final cached-layer composite remains premultiplied source-over. Translucent-RRect and image/glyph/image-mesh/Solid bodies use the main layer format. Opaque RRect antialiasing uses an RGBA32Float intermediate because main-format and RGBA16Float trials each changed eight edge-alpha bytes; RGBA32Float matches the parent pixels exactly. A body mixing opaque and translucent RRects uses the exact flat fallback because neither single intermediate precision reproduces both parent quantization paths. The exact pipeline family is optional at initialization, so devices that cannot build it fall back rather than changing pixels.
 
 The cache owns one current prepared version per chunk id. Revision replacement or resource invalidation removes the old version. Admission rejects an entry larger than the hard budget; otherwise generation-aware LRU eviction removes the coldest unprotected entries. Resident accounting uses Metal's allocated buffer sizes, while logical accounting uses payload lengths.
 
@@ -122,6 +122,7 @@ renderer.submit(token)?;
 
 ## Changelog
 
+- 2026-08-07: aligned prepared body pipelines with straight-alpha source-over while retaining premultiplied cached-layer composites.
 - 2026-08-06: retained immutable runtime-image sampling in prepared Images and ImageMesh operations and split batches only at sampling changes.
 - 2026-07-15: exposed exact prepared-chunk invalidation for generation-safe atlas slot eviction without page-wide cache loss.
 - 2026-07-14: integrated prepared layers with allocated-byte admission, protected-set budgeting, compatible texture pooling, last-use tracking, and exact over-budget fallback.

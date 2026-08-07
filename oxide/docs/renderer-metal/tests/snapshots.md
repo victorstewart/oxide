@@ -7,6 +7,7 @@ The snapshot tests validate renderer behavior through readback instead of relyin
 ## Notable coverage
 
 - Rounded-rect raster output and antialiasing.
+- Straight-alpha source-over preserves opaque target alpha across flat, prepared, retained-layer, and neon-marker paths.
 - Clip-stack behavior.
 - Invalid solid-mesh index rejection.
 - Solid packed red/blue endpoints, midpoint interpolation, and byte-identical zero-rgba uniform inheritance.
@@ -69,6 +70,7 @@ The snapshot file requires `snapshot-tests` and macOS or physical iOS Metal supp
 Run the named test with `cargo test --locked -p oxide-renderer-metal --features snapshot-tests --test snapshots`.
 
 ## Changelog
+- 2026-08-07: added opaque-destination source-over alpha coverage across ordinary and prepared Metal pipelines.
 - 2026-08-06: added RGBA channel-order and flat/prepared linear-versus-nearest runtime-image readback coverage.
 - 2026-07-15: added C58 one-/three-layer Scene3D bloom graph, viewport, overlay, alias-count, and plan-reuse coverage.
 - 2026-07-14: kept cached/fresh final-pixel and decoded-field parity across packed Metal ID-mask storage.

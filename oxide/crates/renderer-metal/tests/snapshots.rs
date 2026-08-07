@@ -134,12 +134,73 @@ fn snapshot_rrect_basic() {
         if r > 200 && g < 80 && b < 80 {
             red_pixels += 1;
         }
-        if a > 0 && a < 255 {
+        if r > 0 && r < 255 && g < 8 && b < 8 {
             soft_edge_found = true;
         }
+        assert_eq!(a, 255, "opaque target gained an alpha hole");
     }
     assert!(soft_edge_found, "expected antialiased edge pixels");
     assert!(red_pixels > 2800 && red_pixels < 4500, "unexpected red area: {red_pixels}");
+}
+
+#[test]
+fn snapshot_source_over_keeps_an_opaque_destination_opaque()
+{
+   let width = 120_u32;
+   let height = 120_u32;
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(width, height, 3.0).expect("resize");
+
+   let mut list = api::DrawList::default();
+   list.items.push(api::DrawCmd::RRect {
+      rect: api::RectF::new(0.0, 0.0, 40.0, 40.0),
+      radii: [0.0; 4],
+      color: api::Color::rgba(0.930, 0.905, 0.855, 1.0),
+   });
+   list.items.push(api::DrawCmd::ClipPush { rect: api::RectI::new(5, 5, 30, 30) });
+   list.items.push(api::DrawCmd::RRect {
+      rect: api::RectF::new(10.0, 10.0, 12.0, 12.0),
+      radii: [2.0; 4],
+      color: api::Color::rgba(0.019, 0.024, 0.032, 0.4),
+   });
+   list.items.push(api::DrawCmd::ClipPop);
+   list.items.push(api::DrawCmd::ClipPush { rect: api::RectI::new(5, 5, 30, 30) });
+   list.items.push(api::DrawCmd::RRect {
+      rect: api::RectF::new(5.0, 30.0, 30.0, 1.0),
+      radii: [0.0; 4],
+      color: api::Color::rgba(0.680, 0.638, 0.575, 1.0),
+   });
+   list.items.push(api::DrawCmd::ClipPop);
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_pass(&list);
+   renderer.submit(token).expect("submit");
+   let (_, _, bgra) = renderer.readback_bgra8().expect("readback");
+   let pixel = |x: u32, y: u32| {
+      let index = ((y * width + x) * 4) as usize;
+      [bgra[index + 2], bgra[index + 1], bgra[index], bgra[index + 3]]
+   };
+   let background = pixel(6, 6);
+   let shadow = pixel(36, 36);
+   let separator = pixel(60, 91);
+
+   for (label, actual, expected) in [
+      ("background", background, [247, 244, 238, 255]),
+      ("shadow", shadow, [198, 196, 192, 255]),
+      ("separator", separator, [215, 209, 199, 255]),
+   ]
+   {
+      for channel in 0 .. 3
+      {
+         assert!(
+            actual[channel].abs_diff(expected[channel]) <= 1,
+            "{label} RGB channel {channel}: expected {} +/- 1, got {}",
+            expected[channel],
+            actual[channel],
+         );
+      }
+      assert_eq!(actual[3], expected[3], "{label} alpha");
+   }
 }
 
 #[test]
@@ -234,6 +295,10 @@ fn prepared_snapshot_reuses_mixed_buffers_and_matches_flat_output()
    let second_stats = renderer.last_stats();
    let (_, _, second_pixels) = renderer.readback_bgra8().expect("read clean prepared snapshot");
    assert_ne!(first_pixels, second_pixels);
+   assert!(
+      second_pixels.chunks_exact(4).all(|pixel| pixel[3] == 255),
+      "prepared source-over introduced alpha holes in an opaque target",
+   );
    assert_eq!(second_stats.backend_cache_hits, 4);
    assert_eq!(second_stats.backend_cache_misses, 0);
    assert_eq!(second_stats.chunks_prepared, 0);
@@ -736,6 +801,10 @@ fn prepared_layer_main_format_matches_flat_translucent_rrect_pixels()
    }
    let stats = renderer.last_stats();
    let (_, _, actual) = renderer.readback_bgra8().expect("read clean RRect layer");
+   assert!(
+      actual.chunks_exact(4).all(|pixel| pixel[3] == 255),
+      "retained-layer source-over introduced alpha holes in an opaque target",
+   );
    assert_eq!(stats.layer_cache_hits, 1);
    assert_eq!(stats.layer_cache_misses, 0);
    assert_eq!(stats.layer_offscreen_draws, 0);
@@ -2562,13 +2631,13 @@ fn snapshot_neon_marker_instance_arrays_match_distinctive_colors()
    let height = 112_u32;
    renderer.resize(width, height, 1.0).expect("resize");
    let colors = [
-      (api::Color::rgba(1.0, 0.0, 0.0, 1.0), [0, 0, 252, 249]),
-      (api::Color::rgba(0.0, 1.0, 0.0, 1.0), [0, 252, 0, 249]),
-      (api::Color::rgba(0.0, 0.0, 1.0, 1.0), [252, 0, 0, 249]),
-      (api::Color::rgba(1.0, 1.0, 0.0, 1.0), [0, 252, 252, 249]),
-      (api::Color::rgba(1.0, 0.0, 1.0, 1.0), [252, 0, 252, 249]),
-      (api::Color::rgba(0.0, 1.0, 1.0, 1.0), [252, 252, 0, 249]),
-      (api::Color::rgba(1.0, 1.0, 1.0, 1.0), [252, 252, 252, 249]),
+      (api::Color::rgba(1.0, 0.0, 0.0, 1.0), [0, 0, 252, 255]),
+      (api::Color::rgba(0.0, 1.0, 0.0, 1.0), [0, 252, 0, 255]),
+      (api::Color::rgba(0.0, 0.0, 1.0, 1.0), [252, 0, 0, 255]),
+      (api::Color::rgba(1.0, 1.0, 0.0, 1.0), [0, 252, 252, 255]),
+      (api::Color::rgba(1.0, 0.0, 1.0, 1.0), [252, 0, 252, 255]),
+      (api::Color::rgba(0.0, 1.0, 1.0, 1.0), [252, 252, 0, 255]),
+      (api::Color::rgba(1.0, 1.0, 1.0, 1.0), [252, 252, 252, 255]),
    ];
 
    for count in [1_usize, 2, 51, 52, 60, 61, 128]
@@ -2639,14 +2708,14 @@ fn snapshot_neon_marker_batches_keep_nonoverlapping_ring_slices()
    let size = 260_u32;
    renderer.resize(size, size, 1.0).expect("resize");
    let colors = [
-      (api::Color::rgba(1.0, 0.0, 0.0, 1.0), [0, 0, 252, 249]),
-      (api::Color::rgba(0.0, 1.0, 0.0, 1.0), [0, 252, 0, 249]),
-      (api::Color::rgba(0.0, 0.0, 1.0, 1.0), [252, 0, 0, 249]),
-      (api::Color::rgba(1.0, 1.0, 0.0, 1.0), [0, 252, 252, 249]),
-      (api::Color::rgba(1.0, 0.0, 1.0, 1.0), [252, 0, 252, 249]),
-      (api::Color::rgba(0.0, 1.0, 1.0, 1.0), [252, 252, 0, 249]),
-      (api::Color::rgba(1.0, 1.0, 1.0, 1.0), [252, 252, 252, 249]),
-      (api::Color::rgba(1.0, 0.0, 0.0, 1.0), [0, 0, 252, 249]),
+      (api::Color::rgba(1.0, 0.0, 0.0, 1.0), [0, 0, 252, 255]),
+      (api::Color::rgba(0.0, 1.0, 0.0, 1.0), [0, 252, 0, 255]),
+      (api::Color::rgba(0.0, 0.0, 1.0, 1.0), [252, 0, 0, 255]),
+      (api::Color::rgba(1.0, 1.0, 0.0, 1.0), [0, 252, 252, 255]),
+      (api::Color::rgba(1.0, 0.0, 1.0, 1.0), [252, 0, 252, 255]),
+      (api::Color::rgba(0.0, 1.0, 1.0, 1.0), [252, 252, 0, 255]),
+      (api::Color::rgba(1.0, 1.0, 1.0, 1.0), [252, 252, 252, 255]),
+      (api::Color::rgba(1.0, 0.0, 0.0, 1.0), [0, 0, 252, 255]),
    ];
    let markers = (0..1_024_usize)
       .map(|index| {

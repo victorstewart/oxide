@@ -2095,7 +2095,6 @@ impl MetalRenderer {
                     &library,
                     color_format,
                     sample_count,
-                    false,
                 )
             })?)
         };
@@ -2108,7 +2107,6 @@ impl MetalRenderer {
                     &library,
                     color_format,
                     1,
-                    true,
                 )
             })?)
         };
@@ -2121,7 +2119,6 @@ impl MetalRenderer {
                     &library,
                     MTLPixelFormat::RGBA32Float,
                     1,
-                    true,
                 )
             }) {
                 Ok(pipelines) => Some(pipelines),
@@ -11059,7 +11056,7 @@ fn build_solid_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_source_alpha_blend(ca);
+    configure_straight_alpha_source_over_blend(ca);
     pipeline_state(device, "pso.solid.create", &desc)
 }
 
@@ -11098,31 +11095,27 @@ fn configure_blend(
 }
 
 #[inline]
-fn configure_source_alpha_blend(ca: &RenderPipelineColorAttachmentDescriptorRef) {
-    configure_blend(ca, MTLBlendFactor::SourceAlpha, MTLBlendFactor::OneMinusSourceAlpha);
+fn configure_straight_alpha_source_over_blend(ca: &RenderPipelineColorAttachmentDescriptorRef)
+{
+   ca.set_blending_enabled(true);
+   ca.set_rgb_blend_operation(MTLBlendOperation::Add);
+   ca.set_alpha_blend_operation(MTLBlendOperation::Add);
+   ca.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
+   ca.set_source_alpha_blend_factor(MTLBlendFactor::One);
+   ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+   ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
 }
 
 #[inline]
-fn configure_layer_source_alpha_blend(ca: &RenderPipelineColorAttachmentDescriptorRef) {
-    ca.set_blending_enabled(true);
-    ca.set_rgb_blend_operation(MTLBlendOperation::Add);
-    ca.set_alpha_blend_operation(MTLBlendOperation::Add);
-    ca.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
-    ca.set_source_alpha_blend_factor(MTLBlendFactor::One);
-    ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-    ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-}
-
-#[inline]
-fn configure_ui_source_alpha_blend(
-    ca: &RenderPipelineColorAttachmentDescriptorRef,
-    layer: bool,
-) {
-    if layer {
-        configure_layer_source_alpha_blend(ca);
-    } else {
-        configure_source_alpha_blend(ca);
-    }
+fn configure_premultiplied_source_over_blend(ca: &RenderPipelineColorAttachmentDescriptorRef)
+{
+   ca.set_blending_enabled(true);
+   ca.set_rgb_blend_operation(MTLBlendOperation::Add);
+   ca.set_alpha_blend_operation(MTLBlendOperation::Add);
+   ca.set_source_rgb_blend_factor(MTLBlendFactor::One);
+   ca.set_source_alpha_blend_factor(MTLBlendFactor::One);
+   ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+   ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
 }
 
 #[inline]
@@ -11224,7 +11217,7 @@ fn build_backdrop_pso(
     desc.set_fragment_function(Some(&f));
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_source_alpha_blend(ca);
+    configure_straight_alpha_source_over_blend(ca);
     pipeline_state(device, "pso.backdrop.create", &desc)
 }
 
@@ -11259,7 +11252,7 @@ fn build_image_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_ui_source_alpha_blend(ca, layer);
+    configure_straight_alpha_source_over_blend(ca);
     let stage = if layer { "pso.layer_image.create" } else { "pso.image.create" };
     pipeline_state(device, stage, &desc)
 }
@@ -11279,7 +11272,7 @@ fn build_image_single_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_ui_source_alpha_blend(ca, layer);
+    configure_straight_alpha_source_over_blend(ca);
     let stage = if layer {
         "pso.layer_image_single.create"
     } else {
@@ -11305,7 +11298,7 @@ fn build_image_mesh_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_ui_source_alpha_blend(ca, layer);
+    configure_straight_alpha_source_over_blend(ca);
     let stage = if layer { "pso.layer_image_mesh.create" } else { "pso.image_mesh.create" };
     pipeline_state(device, stage, &desc)
 }
@@ -11324,7 +11317,7 @@ fn build_rrect_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_source_alpha_blend(ca);
+    configure_straight_alpha_source_over_blend(ca);
     pipeline_state(device, "pso.rrect.create", &desc)
 }
 
@@ -11342,7 +11335,7 @@ fn build_layer_rrect_pso(
     descriptor.set_sample_count(sample_count as u64);
     let attachment = descriptor.color_attachments().object_at(0).unwrap();
     attachment.set_pixel_format(fmt);
-    configure_layer_source_alpha_blend(attachment);
+    configure_straight_alpha_source_over_blend(attachment);
     pipeline_state(device, "pso.layer_rrect.create", &descriptor)
 }
 
@@ -11361,7 +11354,7 @@ fn build_nine_slice_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_ui_source_alpha_blend(ca, layer);
+    configure_straight_alpha_source_over_blend(ca);
     let stage = if layer { "pso.layer_nine_slice.create" } else { "pso.nine_slice.create" };
     pipeline_state(device, stage, &desc)
 }
@@ -11380,13 +11373,7 @@ fn build_layer_composite_pso(
     descriptor.set_sample_count(sample_count as u64);
     let attachment = descriptor.color_attachments().object_at(0).unwrap();
     attachment.set_pixel_format(fmt);
-    attachment.set_blending_enabled(true);
-    attachment.set_rgb_blend_operation(MTLBlendOperation::Add);
-    attachment.set_alpha_blend_operation(MTLBlendOperation::Add);
-    attachment.set_source_rgb_blend_factor(MTLBlendFactor::One);
-    attachment.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
-    attachment.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-    attachment.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+    configure_premultiplied_source_over_blend(attachment);
     pipeline_state(device, "pso.layer_composite.create", &descriptor)
 }
 
@@ -11405,13 +11392,7 @@ fn build_layer_composite_aligned_pso(
     descriptor.set_sample_count(sample_count as u64);
     let attachment = descriptor.color_attachments().object_at(0).unwrap();
     attachment.set_pixel_format(fmt);
-    attachment.set_blending_enabled(true);
-    attachment.set_rgb_blend_operation(MTLBlendOperation::Add);
-    attachment.set_alpha_blend_operation(MTLBlendOperation::Add);
-    attachment.set_source_rgb_blend_factor(MTLBlendFactor::One);
-    attachment.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
-    attachment.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-    attachment.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+    configure_premultiplied_source_over_blend(attachment);
     pipeline_state(device, "pso.layer_composite_aligned.create", &descriptor)
 }
 
@@ -11430,7 +11411,7 @@ fn build_spinner_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_ui_source_alpha_blend(ca, layer);
+    configure_straight_alpha_source_over_blend(ca);
     let stage = if layer { "pso.layer_spinner.create" } else { "pso.spinner.create" };
     pipeline_state(device, stage, &desc)
 }
@@ -11450,7 +11431,7 @@ fn build_text_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_ui_source_alpha_blend(ca, layer);
+    configure_straight_alpha_source_over_blend(ca);
     let stage = if layer { "pso.layer_text.create" } else { "pso.text.create" };
     pipeline_state(device, stage, &desc)
 }
@@ -11470,7 +11451,7 @@ fn build_text_sdf_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_ui_source_alpha_blend(ca, layer);
+    configure_straight_alpha_source_over_blend(ca);
     let stage = if layer { "pso.layer_text_sdf.create" } else { "pso.text_sdf.create" };
     pipeline_state(device, stage, &desc)
 }
@@ -11530,7 +11511,7 @@ fn build_scene3d_pso(
     ca.set_pixel_format(fmt);
     match blend {
         scene3d::BlendMode3d::Alpha => {
-            configure_source_alpha_blend(ca);
+            configure_straight_alpha_source_over_blend(ca);
         }
         scene3d::BlendMode3d::Additive => {
             configure_blend(ca, MTLBlendFactor::SourceAlpha, MTLBlendFactor::One);
@@ -11591,7 +11572,7 @@ fn build_scene3d_color_pso(
     ca.set_pixel_format(fmt);
     match blend {
         scene3d::BlendMode3d::Alpha => {
-            configure_source_alpha_blend(ca);
+            configure_straight_alpha_source_over_blend(ca);
         }
         scene3d::BlendMode3d::Additive => {
             configure_blend(ca, MTLBlendFactor::SourceAlpha, MTLBlendFactor::One);
