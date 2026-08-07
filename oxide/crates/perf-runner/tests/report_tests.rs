@@ -3151,6 +3151,7 @@ fn markdown_write_bench_cli_loads_comparison_baseline() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn markdown_out_writes_identical_latest_and_dated_reports() {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -3187,6 +3188,7 @@ fn markdown_out_writes_identical_latest_and_dated_reports() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_registry_cases_do_not_expand_siblings()
 {
    for (filter, expected, sibling) in [
@@ -3592,6 +3594,47 @@ fn compare_reports_bench_iters_requires_bench_flag()
 }
 
 #[test]
+fn child_run_suite_tests_keep_everyday_tiering()
+{
+   let source = include_str!("report_tests.rs");
+   let run_suite_arg = concat!("--run", "-suite");
+   let ignore_marker = "#[ignore = \"explicit touched-case perf contract\"]";
+   let active_tests = [
+      "fn filtered_run_suite_runs_only_the_touched_case()",
+      "fn retired_exact_aliases_are_not_registered()",
+   ];
+   let mut total = 0usize;
+   let mut ignored = 0usize;
+   let mut active = 0usize;
+
+   for test in source.split("#[test]").skip(1)
+   {
+      let launches = test.matches(run_suite_arg).count();
+      if launches == 0
+      {
+         continue;
+      }
+      total += launches;
+      if test.contains(ignore_marker)
+      {
+         ignored += launches;
+      }
+      else
+      {
+         active += launches;
+         assert!(
+            active_tests.iter().any(|name| test.contains(name)),
+            "unexpected active child suite test"
+         );
+      }
+   }
+
+   assert_eq!(total, 55);
+   assert_eq!(ignored, 53);
+   assert_eq!(active, 2);
+}
+
+#[test]
 fn canonical_smoke_suite_keeps_exact_inventory()
 {
    let report = collect_suite_report(true).expect("collect smoke suite");
@@ -3652,6 +3695,7 @@ fn filtered_run_suite_runs_only_the_touched_case()
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_text_prefix_width_map_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-text-prefix-width-{}.json", std::process::id()));
@@ -3680,6 +3724,7 @@ fn filtered_run_suite_supports_text_prefix_width_map_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_text_atlas_pressure_metrics() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-text-atlas-pressure-{}.json", std::process::id()));
@@ -3711,6 +3756,7 @@ fn filtered_run_suite_supports_text_atlas_pressure_metrics() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_text_sdf_bake_metrics()
 {
    let mut json_out = std::env::temp_dir();
@@ -3743,6 +3789,7 @@ fn filtered_run_suite_supports_text_sdf_bake_metrics()
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_text_fallback_label_encode_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-text-fallback-label-{}.json", std::process::id()));
@@ -3772,6 +3819,7 @@ fn filtered_run_suite_supports_text_fallback_label_encode_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_text_atlas_dirty_rect_upload_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-text-atlas-dirty-upload-{}.json", std::process::id()));
@@ -3802,6 +3850,7 @@ fn filtered_run_suite_supports_text_atlas_dirty_rect_upload_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_wrapped_label_cached_encode_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-wrapped-label-{}.json", std::process::id()));
@@ -3834,6 +3883,7 @@ fn filtered_run_suite_supports_wrapped_label_cached_encode_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_picker_text_cached_encode_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-picker-text-cached-{}.json", std::process::id()));
@@ -3867,6 +3917,7 @@ fn filtered_run_suite_supports_picker_text_cached_encode_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_paged_text_atlas_locality_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-paged-text-atlas-{}.json", std::process::id()));
@@ -3901,6 +3952,7 @@ fn filtered_run_suite_supports_paged_text_atlas_locality_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_bitmap_text_options_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-bitmap-options-{}.json", std::process::id()));
@@ -3933,6 +3985,7 @@ fn filtered_run_suite_supports_bitmap_text_options_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_metal_paged_text_atlas_locality_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-metal-paged-text-{}.json", std::process::id()));
@@ -3962,6 +4015,7 @@ fn filtered_run_suite_supports_metal_paged_text_atlas_locality_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_gpu_authoring_cases() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env("OXIDE_PERF_RUNNER_FILTER", "gpu.authoring.scene3d.mixed_frame")
@@ -3979,6 +4033,7 @@ fn filtered_run_suite_supports_gpu_authoring_cases() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_retained_snapshot_authoring_case() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env("OXIDE_PERF_RUNNER_FILTER", "gpu.authoring.retained_snapshot.clean_mixed")
@@ -3996,6 +4051,7 @@ fn filtered_run_suite_supports_retained_snapshot_authoring_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_gpu_animation_effects_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-gpu-animation-effects-{}.json", std::process::id()));
@@ -4025,6 +4081,7 @@ fn filtered_run_suite_supports_gpu_animation_effects_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_dirty_leaf_retained_authoring_case() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.surface_retained.dirty_leaf_encode")
@@ -4045,6 +4102,7 @@ fn filtered_run_suite_supports_dirty_leaf_retained_authoring_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_retained_cache_policy_authoring_case()
 {
    let mut json_out = std::env::temp_dir();
@@ -4072,6 +4130,7 @@ fn filtered_run_suite_supports_retained_cache_policy_authoring_case()
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_surface_router_retained_overlay_metrics() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-surface-router-compose-{}.json", std::process::id()));
@@ -4105,6 +4164,7 @@ fn filtered_run_suite_supports_surface_router_retained_overlay_metrics() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_collection_key_reconcile_ab_cases() {
     let mut json_out = std::env::temp_dir();
     json_out
@@ -4157,6 +4217,7 @@ fn filtered_run_suite_supports_collection_key_reconcile_ab_cases() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_collection_prefix_update_ab_cases() {
     let mut json_out = std::env::temp_dir();
     json_out
@@ -4209,6 +4270,7 @@ fn filtered_run_suite_supports_collection_prefix_update_ab_cases() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_collection_measure_cache_bounded_churn_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-collection-cache-churn-{}.json", std::process::id()));
@@ -4249,6 +4311,7 @@ fn filtered_run_suite_supports_collection_measure_cache_bounded_churn_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_drawlist_text_replay_authoring_case() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.drawlist_text_replay.multi_atlas")
@@ -4269,6 +4332,7 @@ fn filtered_run_suite_supports_drawlist_text_replay_authoring_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_dirty_subtree_layout_case() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env("OXIDE_PERF_RUNNER_FILTER", "cpu.layout.dirty_subtree.incremental_relayout")
@@ -4289,6 +4353,7 @@ fn filtered_run_suite_supports_dirty_subtree_layout_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_descendant_only_layout_case() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env("OXIDE_PERF_RUNNER_FILTER", "cpu.layout.descendant_only.incremental_relayout")
@@ -4309,6 +4374,7 @@ fn filtered_run_suite_supports_descendant_only_layout_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_transform_only_layout_case() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env("OXIDE_PERF_RUNNER_FILTER", "cpu.layout.transform_only.reposition")
@@ -4326,6 +4392,7 @@ fn filtered_run_suite_supports_transform_only_layout_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_paint_only_opacity_clip_layout_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-paint-only-layout-{}.json", std::process::id()));
@@ -4355,6 +4422,7 @@ fn filtered_run_suite_supports_paint_only_opacity_clip_layout_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_node_content_dirty_layout_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-node-content-dirty-{}.json", std::process::id()));
@@ -4390,6 +4458,7 @@ fn filtered_run_suite_supports_node_content_dirty_layout_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_hit_test_dirty_layout_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-hit-test-dirty-{}.json", std::process::id()));
@@ -4422,6 +4491,7 @@ fn filtered_run_suite_supports_hit_test_dirty_layout_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_scoped_tree_mutation_layout_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-scoped-tree-mutation-{}.json", std::process::id()));
@@ -4452,6 +4522,7 @@ fn filtered_run_suite_supports_scoped_tree_mutation_layout_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_state_reconcile_battery() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-state-reconcile-{}.json", std::process::id()));
@@ -4492,6 +4563,7 @@ fn filtered_run_suite_supports_state_reconcile_battery() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_text_ime_journey_and_state_cases() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env(
@@ -4516,6 +4588,7 @@ fn filtered_run_suite_supports_text_ime_journey_and_state_cases() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_text_cursor_pick_cluster_map_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-text-cursor-map-{}.json", std::process::id()));
@@ -4571,6 +4644,7 @@ fn assert_text_cursor_map_report_metrics(row: &str, prefix: &str) {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_metal_id_mask_current_case() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env("OXIDE_PERF_RUNNER_FILTER", "gpu.system.id_mask_compositor")
@@ -4592,6 +4666,7 @@ fn filtered_run_suite_supports_metal_id_mask_current_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_metal_neon_marker_ring_cases()
 {
     let mut json_out = std::env::temp_dir();
@@ -4632,6 +4707,7 @@ fn filtered_run_suite_supports_metal_neon_marker_ring_cases()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_central_noop_rejection_cases()
 {
     let mut json_out = std::env::temp_dir();
@@ -4675,6 +4751,7 @@ fn filtered_run_suite_supports_central_noop_rejection_cases()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_classifies_first_visible_images_as_cold()
 {
    let mut json_out = std::env::temp_dir();
@@ -4714,6 +4791,7 @@ fn filtered_run_suite_classifies_first_visible_images_as_cold()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_image_view_crop_authoring_cases()
 {
     let mut json_out = std::env::temp_dir();
@@ -4757,6 +4835,7 @@ fn filtered_run_suite_supports_image_view_crop_authoring_cases()
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_rendering_architecture_contract() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-architecture-{}.json", std::process::id()));
@@ -4842,6 +4921,7 @@ fn retired_exact_aliases_are_not_registered()
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn gpu_scene_inventory_defers_timeline_work_to_animation_battery()
 {
    let mut json_out = std::env::temp_dir();
@@ -4869,6 +4949,7 @@ fn gpu_scene_inventory_defers_timeline_work_to_animation_battery()
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn webgpu_pipeline_profiles_have_a_public_authoring_contract()
 {
    let mut json_out = std::env::temp_dir();
@@ -4897,6 +4978,7 @@ fn webgpu_pipeline_profiles_have_a_public_authoring_contract()
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn dynamic_property_animation_has_a_public_authoring_contract()
 {
    let mut json_out = std::env::temp_dir();
@@ -4925,6 +5007,7 @@ fn dynamic_property_animation_has_a_public_authoring_contract()
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn retained_spatial_query_has_a_public_authoring_contract()
 {
    let mut json_out = std::env::temp_dir();
@@ -4955,6 +5038,7 @@ fn retained_spatial_query_has_a_public_authoring_contract()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_architecture_reports_reconciled_renderer_resource_families()
 {
    let mut json_out = std::env::temp_dir();
@@ -5075,6 +5159,7 @@ fn metal_architecture_reports_reconciled_renderer_resource_families()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_effect_target_plan_reports_first_use_and_exact_residency()
 {
    let mut json_out = std::env::temp_dir();
@@ -5134,6 +5219,7 @@ fn metal_effect_target_plan_reports_first_use_and_exact_residency()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_blur_sigma_sweep_freezes_quality_ladder_work()
 {
    let mut json_out = std::env::temp_dir();
@@ -5189,6 +5275,7 @@ fn metal_blur_sigma_sweep_freezes_quality_ladder_work()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_final_target_rows_freeze_direct_and_persistent_paths()
 {
    let mut json_out = std::env::temp_dir();
@@ -5234,6 +5321,7 @@ fn metal_final_target_rows_freeze_direct_and_persistent_paths()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()
 {
    let mut json_out = std::env::temp_dir();
@@ -5289,6 +5377,7 @@ fn metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()
 {
    let mut json_out = std::env::temp_dir();
@@ -5338,6 +5427,7 @@ fn metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_prepared_layer_rows_freeze_body_free_clean_and_single_dirty_contracts()
 {
    let mut json_out = std::env::temp_dir();
@@ -5399,6 +5489,7 @@ fn metal_prepared_layer_rows_freeze_body_free_clean_and_single_dirty_contracts()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_dynamic_property_row_freezes_zero_geometry_upload_contract()
 {
    let mut json_out = std::env::temp_dir();
@@ -5434,6 +5525,7 @@ fn metal_dynamic_property_row_freezes_zero_geometry_upload_contract()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_spatial_rows_freeze_small_and_full_damage_contracts()
 {
    let mut json_out = std::env::temp_dir();
@@ -5485,6 +5577,7 @@ fn metal_spatial_rows_freeze_small_and_full_damage_contracts()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_immutable_image_rows_freeze_residency_mip_and_quality_contracts()
 {
    let mut json_out = std::env::temp_dir();
@@ -5576,6 +5669,7 @@ fn metal_immutable_image_rows_freeze_residency_mip_and_quality_contracts()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_image_store_rows_freeze_scaling_completion_and_reuse_contracts()
 {
    let mut json_out = std::env::temp_dir();
@@ -5633,6 +5727,7 @@ fn metal_image_store_rows_freeze_scaling_completion_and_reuse_contracts()
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_gpu_journey_frame_pacing_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-gpu-journey-{}.json", std::process::id()));

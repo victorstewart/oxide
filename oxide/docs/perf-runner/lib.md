@@ -71,8 +71,8 @@ silently expanding into every registered permutation.
   - Test-only report gate that validates `benchmarks/workspace/latest.json` keeps the macOS Metal animation refresh-matrix and collection-navigation frame-pacing rows populated with direct GPU distributions, frame distributions, missed-frame/hitch metrics, refresh-mode metadata, and workload diagnostics.
 - `workspace_latest_gates_canonical_retained_and_layout_rows`
   - Test-only report gate that validates the canonical retained dirty-leaf row keeps node reuse/rebuild counters and the canonical incremental dirty-subtree row proves bounded work relative to cold layout in `benchmarks/workspace/latest.json`.
-- Focused collection, text-cache, atlas, cursor-map, and WebGPU-profile tests
-  - Explicit filters keep their detailed work contracts runnable without requiring those diagnostic rows in the canonical persisted baseline.
+- Explicitly invoked focused collection, text-cache, atlas, cursor-map, and WebGPU-profile tests
+  - Their named ignored tests keep detailed work contracts runnable one at a time without requiring those diagnostic rows in the everyday test tier or canonical persisted baseline.
 
 ## Logic narrative
 
@@ -105,7 +105,7 @@ The non-default distribution metrics harness repeatedly inserts representative `
 
 The committed workspace baseline is guarded for the macOS Metal animation refresh-matrix and collection-navigation frame-pacing rows, so local animation hitch proof cannot silently degrade into CPU-only or metadata-only coverage.
 Retained and layout coverage is guarded at the persisted-report level through the canonical dirty-leaf retained encode and incremental dirty-subtree relayout rows. Their counters prove high retained reuse and bounded incremental layout work relative to the same surface's cold layout.
-Collection reconciliation, prefix repair, text-cache, atlas, wrapped/picker, and cursor-map diagnostics are guarded by focused explicit-filter tests. They remain available as touched-case evidence without becoming canonical persisted rows.
+Collection reconciliation, prefix repair, text-cache, atlas, wrapped/picker, and cursor-map diagnostics are guarded by named, explicitly ignored filter tests. They remain available one at a time as touched-case evidence without becoming everyday or canonical persisted rows.
 Contract coverage battery entries share one status-and-note helper so each required canonical case set is evaluated once, then rendered consistently into the persisted report. The canonical native text rows cover shaping and SDF generation; diagnostic text variants remain explicit-filter-only.
 
 ### Schema versioning rules
@@ -139,7 +139,7 @@ Persisted report and evidence schemas are part of the performance contract becau
   - The raw-touch feed journey cannot pass its focused contract test unless all 2,000 rows remain represented, every journey reaches settlement within the bounded simulated 120 Hz advance loop, and encoded-frame accounting matches touch plus inertial updates.
   - The programmatic feed matrix remains a direct viewport-transition workload and cannot describe its large offset jumps as a fling.
   - Canonical retained and layout rows cannot pass persisted-report tests without retained node reuse/rebuild counters and bounded incremental dirty-subtree work relative to cold layout.
-  - Focused collection/text rows cannot pass their explicit-filter tests without diagnostics that distinguish indexed versus scan reconciliation, incremental versus full prefix repair, cached text shaping/upload, atlas evictions, atlas dirty updates, fallback fonts, bidi boundaries, cursor maps, and absence of retired text audit rows.
+  - Focused collection/text rows cannot pass their explicitly invoked filter tests without diagnostics that distinguish indexed versus scan reconciliation, incremental versus full prefix repair, cached text shaping/upload, atlas evictions, atlas dirty updates, fallback fonts, bidi boundaries, cursor maps, and absence of retired text audit rows.
   - Browser WebGPU report rows cannot pass the report tests without browser startup timing and package byte evidence, p50/p95/p99/peak, missed-frame, hitch, pixel-check, draw-family counters, layer cache counters, pass-family counters that sum to total render passes, resource-lifetime counters, image-upload temp/scratch counters, current upload fields plus direct glyph/RGBA timestamp totals, current effect-uniform counters plus direct GPU timestamp totals, current retained clean-layer summary fields, current direct-surface one-pass/timestamp fields, explicit backend-path coverage rows tying every important default WebGPU path family to distributions and explanatory counters, report-level and per-row warm-resource-churn zero-growth summaries including family-level GPU resource and CPU scratch growth totals, current-row Rust/WASM allocation counters with bounded per-frame budgets and zero reallocations, frame-loop allocation stage attribution with no unattributed allocations, renderer submit sub-stage allocation attribution with no unattributed parent-submit allocations, zero WASM memory growth across benchmark marks after prewarm, Chrome JS heap sampling/GC support and finite heap growth fields for each benchmark mark, Chrome browser trace event counts with `capture_phase=benchmark-report` and `timing_source=untraced-baseline-report`, traced browser User Timing labels and positive trace intervals for every benchmark family, timestamp-query attribution status, GPU timestamp stage breakdown totals reconciled to every row, and collected timestamp pass counts that match render-pass counts when timestamp queries are supported.
   - Coverage counts and covered-name inventories stay synchronized with the registered case inventory.
   - Persisted report case-id sets cannot change without updating the corresponding count and digest gate.
@@ -149,6 +149,7 @@ Persisted report and evidence schemas are part of the performance contract becau
 
 ## Changelog
 
+- 2026-08-07: tiered deep touched-case child suites behind named ignored tests while retaining canonical inventory, baseline-write safety, persisted gates, one representative touched-case child route, and the zero-work retired-alias guard in ordinary workspace tests.
 - 2026-08-07: replaced the exhaustive workspace run with an exact 23-row canonical battery plus explicit touched-case filters, removed the full-coverage gate, and named the repeated flat-rect teardown workload as a remove/rebuild cycle.
 - 2026-08-07: removed eight exact duplicate architecture/scene case aliases; the public authoring IDs now solely own their identical CPU query, retained damage, dynamic-property, clean prepared-chunk/layer, small spatial-damage, and automatic immutable-image workloads, while `gpu.animation.effects.refresh_matrix` solely owns the duplicate GPU timeline scene workload.
 - 2026-08-07: retired `cpu.authoring.surface_retained.text_atlas_context` because it encoded text into a detached builder and measured only primitive surface replay; the real multi-atlas retained draw-list case remains.

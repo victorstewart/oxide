@@ -8,9 +8,11 @@ This integration suite freezes performance-report schemas, filtered execution, c
 
 - Tests launch the `oxide-perf-runner` binary and parse its JSON reports.
 - The C18 frame-resource test exercises the production Metal renderer through architecture-matrix cases.
+- Ordinary workspace tests keep the canonical inventory, baseline-write rejections, persisted artifact gates, one representative touched-case child route, and the zero-work retired-alias guard active. Deep touched-case child suites remain compiled but explicitly ignored.
 
 ## Entry points list
 
+- `child_run_suite_tests_keep_everyday_tiering()` freezes all 55 literal child `--run-suite` sites: 53 must carry `#[ignore = "explicit touched-case perf contract"]`; only `filtered_run_suite_runs_only_the_touched_case()` and the zero-case `retired_exact_aliases_are_not_registered()` guard remain active.
 - `metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()` verifies three-slot visible no-growth high water and eight-slot offscreen all-slot cold growth followed by zero warm growth/skips, including C26's 16 KiB completion-protected property buffer per physical slot and nonzero direct-GPU distributions for both frame rows.
 - `metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()` requires exact clean and one-dirty prepared-cache work counters, including zero clean immutable upload and one 12,288-byte dynamic uniform-ring slice.
 - `metal_prepared_layer_rows_freeze_body_free_clean_and_single_dirty_contracts()` requires body-free clean public-authoring replay and one bounded architecture-control dirty refresh with no new warm texture.
@@ -32,17 +34,19 @@ This integration suite freezes performance-report schemas, filtered execution, c
 - `persisted_workspace_canonical_renderer_metric_keys_are_frozen()` freezes metric keys only for canonical native renderer rows.
 - `workspace_latest_gates_canonical_retained_and_layout_rows()` requires retained dirty-leaf reuse/rebuild evidence and incremental dirty-subtree work bounded below cold layout.
 - `filtered_run_suite_runs_only_the_touched_case()` proves an explicit filter executes and validates only its requested noncanonical row.
-- Focused collection, text-cache, atlas, wrapped/picker, cursor-map, and WebGPU-profile tests preserve noncanonical work contracts without adding persisted workspace rows.
+- Explicitly ignored focused collection, text-cache, atlas, wrapped/picker, cursor-map, renderer, and WebGPU-profile tests preserve noncanonical work contracts without adding them to the everyday battery or persisted workspace rows.
 - `baseline_write_rejects_smoke_sampling()` and `baseline_write_rejects_touched_filter()` prevent sampled or touched-only runs from replacing the canonical baseline.
 - Other test functions cover report comparison, contract coverage, architecture rows, authoring rows, and persisted baseline requirements.
 
 ## Logic narrative
 
-Each filtered integration test writes a process-unique temporary report, verifies the child process succeeded, isolates the requested rows, and asserts exact semantic counters before deleting the artifact. The frame-resource row asserts exact ring residency and upload bytes so a timing-only result cannot hide reduced depth, omitted stress, or unexercised growth.
+Each deep filtered integration test remains independently runnable: it writes a process-unique temporary report, verifies the child process succeeded, isolates the requested rows, and asserts exact semantic counters before deleting the artifact. These tests are explicitly ignored by default so their workload coverage remains available without multiplying ordinary workspace-test execution. The frame-resource row still asserts exact ring residency and upload bytes so a timing-only result cannot hide reduced depth, omitted stress, or unexercised growth.
 
 Unfiltered smoke freezes the minimal canonical inventory. Diagnostic matrices
 remain reachable through explicit touched filters, and no integration path
 requests every registered case at once.
+
+The everyday tier keeps the in-process canonical smoke inventory, both baseline-write rejection tests, persisted report gates, one noncanonical child routing/runtime test, and the zero-work retired-alias guard active. A source-structure test prevents a new literal child suite launch from silently joining that tier.
 
 ## Preconditions and postconditions
 
@@ -67,7 +71,7 @@ requests every registered case at once.
 
 ## Concurrency and memory behavior
 
-Child processes own independent renderer instances. Large draw lists are built once per row and reused across frames.
+Child processes own independent renderer instances. The everyday tier launches only the representative touched-case suite plus the zero-work retired-alias check; explicitly selected deep contracts build their large draw lists once per row and reuse them across frames.
 
 ## Performance notes
 
@@ -79,13 +83,16 @@ Metal-specific report tests use `#[cfg(target_os = "macos")]`.
 
 ## Testing and benchmarks
 
-Run `cargo test --locked -p oxide-perf-runner --test report_tests`.
+Run `cargo test --locked -p oxide-perf-runner --test report_tests` for the everyday tier. Run one deep touched-case contract explicitly, never the ignored set as a batch:
+
+`cargo test --locked -p oxide-perf-runner --test report_tests filtered_run_suite_supports_text_sdf_bake_metrics -- --ignored --exact`
 
 ## Examples
 
 Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.frame_resources.` with `--run-suite --smoke --json-out <path>` to inspect both C18 rows.
 
 ## Changelog
+- 2026-08-07: kept one representative touched-case child route and the zero-work retired-alias guard active; marked the other 53 literal child suite contracts plus the implicit filtered-registry suite explicitly ignored for one-by-one execution.
 - 2026-08-07: froze the exact 23-row canonical smoke inventory and explicit touched-only execution after retiring the exhaustive workspace mode.
 - 2026-08-07: retired eight exact duplicate IDs, kept their canonical public rows, and froze the 16-row GPU scene inventory after timeline GPU work moved solely to the animation battery.
 - 2026-08-06: required linear and nearest first-visible image rows to report cold resource state and an explicit begin/encode/submit timing boundary.
