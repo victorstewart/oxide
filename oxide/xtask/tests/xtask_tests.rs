@@ -198,6 +198,10 @@ fn ios_host_simulator_architecture_contract_is_arm64_only()
       env!("CARGO_MANIFEST_DIR"),
       "/../host/ios-app/App/OxideHost.xcodeproj/project.pbxproj"
    ));
+   let react_native_project = include_str!(concat!(
+      env!("CARGO_MANIFEST_DIR"),
+      "/../host/react-native-camera-bench/ios/ReactNativeCameraBench.xcodeproj/project.pbxproj"
+   ));
    let ios_test = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/ios-test.sh"));
    let workspace = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../Cargo.toml"));
    let specification = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../spec.xml"));
@@ -210,6 +214,20 @@ fn ios_host_simulator_architecture_contract_is_arm64_only()
          .count(),
       2
    );
+   assert_eq!(
+      react_native_project
+         .matches("\"ARCHS[sdk=iphoneos*]\" = arm64;")
+         .count(),
+      2
+   );
+   assert_eq!(
+      react_native_project
+         .matches("\"ARCHS[sdk=iphonesimulator*]\" = arm64;")
+         .count(),
+      2
+   );
+   assert!(!react_native_project.contains("EXCLUDED_ARCHS"));
+   assert!(!react_native_project.contains("x86_64"));
    assert!(project_spec.contains("RUST_TARGET=\"aarch64-apple-ios-sim\""));
    assert_eq!(project_spec.matches("cargo build --locked").count(), 1);
    assert_eq!(generated_project.matches("cargo build --locked").count(), 1);

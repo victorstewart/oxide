@@ -33,7 +33,7 @@ Call flow:
 - `compare_device_watchable_smoke_is_the_six_row_visual_subset()`: freezes the six UIKit visual-QA rows and their five deduplicated Oxide mappings.
 - `compare_device_promotion_validates_before_committed_baseline_writes()`: keeps report-contract and requested-comparison failures ahead of both committed baseline writes and rejects the removed proof-status gate.
 - `compare_device_promotion_rejects_partial_case_selection()`: prevents `--write-baseline --case ...` from replacing the canonical committed reports with a partial selection.
-- `ios_host_simulator_architecture_contract_is_arm64_only()`: freezes the arm64-only Simulator target in source and generated Xcode projects and requires every scripted Rust build to honor the workspace lockfile.
+- `ios_host_simulator_architecture_contract_is_arm64_only()`: freezes arm64-only device and Simulator settings in the Oxide host and React Native camera benchmark projects and requires every scripted Rust build to honor the workspace lockfile.
 - UIKit and Oxide report-parser tests exercise JSON extraction, case classification, stage/memory/cadence/camera summaries, sharded merge behavior, and strict metric contracts.
 - Device-runner tests exercise xctestrun environment generation, resumable result roots, launch/camera/watch controls, console markers, lock/display state, retry classification, process discovery, and case selection.
 - Comparison tests exercise simulator-noise allowances, physical-device CPU/GPU/memory/cadence/energy gates, refresh-mode keys, case-set reuse, pre-write promotion gates, and committed-baseline status.
@@ -84,6 +84,7 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
+- 2026-08-07: extended the iOS architecture contract to pin the React Native camera benchmark to arm64 for device and retained Simulator builds.
 - 2026-08-07: froze the exact ten-row UIKit and five-row Oxide canonical device inventories, pair metadata, and explicit-only access for noncanonical cases.
 - 2026-08-07: Required `test-all` to compile, rather than rerun, the featureless workspace test graph.
 - 2026-07-15: froze C60's accepted image-store experiment, two rejected UIKit proof paths, and the 190-entry, 88-accepted, 102-rejected manifest totals.
