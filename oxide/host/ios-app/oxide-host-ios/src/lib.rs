@@ -1273,6 +1273,237 @@ impl ui::elements::ImageUploader for MtlUploader {
     }
 }
 
+impl gfx_api::RuntimeImageUploader for MtlUploader
+{
+   fn create_a8(
+      &mut self,
+      w: u32,
+      h: u32,
+      data: &[u8],
+      row_bytes: usize,
+   ) -> gfx_api::ImageHandle
+   {
+      unsafe { (*self.renderer).image_create_a8(w, h, data, row_bytes) }
+   }
+
+   fn try_create_rgba8(
+      &mut self,
+      w: u32,
+      h: u32,
+      data: &[u8],
+      row_bytes: usize,
+   ) -> Option<gfx_api::ImageHandle>
+   {
+      let handle = unsafe { (*self.renderer).image_create_rgba8(w, h, data, row_bytes) };
+      (handle.0 != 0).then_some(handle)
+   }
+
+   fn try_create_rgba8_sampled(
+      &mut self,
+      w: u32,
+      h: u32,
+      data: &[u8],
+      row_bytes: usize,
+      sampling: gfx_api::ImageSampling,
+   ) -> Option<gfx_api::ImageHandle>
+   {
+      let handle = unsafe {
+         (*self.renderer).image_create_rgba8_sampled(w, h, data, row_bytes, sampling)
+      };
+      (handle.0 != 0).then_some(handle)
+   }
+
+   fn release_rgba8(&mut self, handle: gfx_api::ImageHandle)
+   {
+      unsafe { (*self.renderer).image_release(handle) }
+   }
+
+   fn update_a8(
+      &mut self,
+      handle: gfx_api::ImageHandle,
+      x: u32,
+      y: u32,
+      w: u32,
+      h: u32,
+      data: &[u8],
+      row_bytes: usize,
+   )
+   {
+      unsafe { (*self.renderer).image_update_a8(handle, x, y, w, h, data, row_bytes) }
+   }
+}
+
+struct LegacyDrawEncoder
+{
+   builder: ui::DrawListBuilder,
+   clip_active: bool,
+}
+
+impl LegacyDrawEncoder
+{
+   fn new() -> Self
+   {
+      Self { builder: ui::DrawListBuilder::new(), clip_active: false }
+   }
+
+   fn begin_frame(&mut self)
+   {
+      self.builder.clear();
+      self.clip_active = false;
+   }
+
+   fn finish_frame(&mut self)
+   {
+      if self.clip_active
+      {
+         self.builder.clip_pop();
+         self.clip_active = false;
+      }
+   }
+
+   fn draw_list(&self) -> &gfx_api::DrawList
+   {
+      self.builder.drawlist()
+   }
+}
+
+impl gfx_api::RenderEncoder for LegacyDrawEncoder
+{
+   fn set_viewport(&mut self, _viewport: gfx_api::RectF)
+   {
+   }
+
+   fn set_clip(&mut self, scissor: gfx_api::RectI)
+   {
+      if self.clip_active
+      {
+         self.builder.clip_pop();
+      }
+      self.builder.clip_push(scissor);
+      self.clip_active = true;
+   }
+
+   fn draw_solid(&mut self, vertices: &[gfx_api::Vertex], color: gfx_api::Color)
+   {
+      let Ok(offset) = u32::try_from(self.builder.drawlist().vertices.len()) else {
+         return;
+      };
+      let Ok(len) = u32::try_from(vertices.len()) else {
+         return;
+      };
+      if len < 3 || (len != 4 && len % 3 != 0)
+      {
+         return;
+      }
+      self.builder.drawlist_mut().vertices.extend_from_slice(vertices);
+      self.builder.solid(
+         gfx_api::VertexSpan { offset, len },
+         gfx_api::IndexSpan {
+            offset: self.builder.drawlist().indices.len() as u32,
+            len: 0,
+         },
+         color,
+      );
+   }
+
+   fn draw_image(
+      &mut self,
+      image: gfx_api::ImageHandle,
+      dst: gfx_api::RectF,
+      src: gfx_api::RectF,
+   )
+   {
+      self.builder.image(image, dst, src, 1.0);
+   }
+
+   fn draw_image_mesh(
+      &mut self,
+      image: gfx_api::ImageHandle,
+      vertices: &[gfx_api::Vertex],
+      indices: &[u16],
+      alpha: f32,
+   )
+   {
+      self.builder.image_mesh(image, vertices, indices, alpha);
+   }
+
+   fn draw_rrect(
+      &mut self,
+      rect: gfx_api::RectF,
+      radii: [f32; 4],
+      color: gfx_api::Color,
+   )
+   {
+      self.builder.rrect(rect, radii, color);
+   }
+
+   fn draw_nine_slice(
+      &mut self,
+      image: gfx_api::ImageHandle,
+      rect: gfx_api::RectF,
+      slice: gfx_api::Insets,
+      alpha: f32,
+   )
+   {
+      self.builder.nine_slice(image, rect, slice, alpha);
+   }
+
+   fn draw_backdrop(
+      &mut self,
+      rect: gfx_api::RectF,
+      sigma: f32,
+      tint: gfx_api::Color,
+      alpha: f32,
+   )
+   {
+      self.builder.backdrop(rect, sigma, tint, alpha);
+   }
+
+   fn draw_visual_effect(&mut self, rect: gfx_api::RectF, effect: gfx_api::VisualEffect)
+   {
+      self.builder.visual_effect(rect, effect);
+   }
+
+   fn draw_camera_bg(
+      &mut self,
+      rect: gfx_api::RectF,
+      tint: gfx_api::Color,
+      alpha: f32,
+      grayscale: bool,
+      blur: bool,
+      sigma: f32,
+   )
+   {
+      self.builder.camera_bg(rect, tint, alpha, grayscale, blur, sigma);
+   }
+
+   fn draw_spinner(&mut self, center: [f32; 2], atom: f32, alpha: f32)
+   {
+      self.builder.spinner(center, atom, alpha);
+   }
+
+   fn draw_glyph_run(&mut self, run: &gfx_api::GlyphRun)
+   {
+      let vertex_end = run.vb.offset.saturating_add(run.vb.len) as usize;
+      let index_end = run.ib.offset.saturating_add(run.ib.len) as usize;
+      if vertex_end <= self.builder.drawlist().vertices.len()
+         && index_end <= self.builder.drawlist().indices.len()
+      {
+         self.builder.glyph_run(*run);
+      }
+   }
+
+   fn draw_glyph_run_resolved(
+      &mut self,
+      run: &gfx_api::GlyphRun,
+      vertices: &[gfx_api::Vertex],
+      indices: &[u16],
+   )
+   {
+      self.builder.glyph_run_resolved(*run, vertices, indices);
+   }
+}
+
 #[derive(Clone, Copy, Default)]
 struct StatsSnapshot {
     fps: f32,
@@ -3481,6 +3712,9 @@ fn gen_checker_rgba(w: u32, h: u32) -> (u32, u32, Vec<u8>) {
 #[cfg(test)]
 #[path = "../tests/unit/internal_camera_render_mode.rs"]
 mod internal_camera_render_mode_tests;
+#[cfg(test)]
+#[path = "../tests/unit/internal_injected_app.rs"]
+mod internal_injected_app_tests;
 #[cfg(target_os = "ios")]
 extern "C" {
     fn oxide_host_ios_log(ptr: *const ::libc::c_char, len: usize);

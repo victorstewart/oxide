@@ -42,6 +42,8 @@
 - Fallback logging for text, key, and push payloads validates null/length pairs before constructing slices; a null pointer with zero length is treated as an empty payload.
 - Renderer and app lifecycle behavior remains unchanged by callback hardening.
 - The drawable-backed iOS path now mirrors macOS: prepare Rust frame work first, acquire `nextDrawable` late with timeout enabled in Objective-C or the Swift perf runtime, then submit the prepared frame to Metal or cancel it if no drawable is returned.
+- The runtime-image uploader forwards row-major RGBA bytes and immutable nearest-or-linear sampling directly into the Metal resource owner. It maps Metal's invalid zero-handle sentinel to `None` and releases successful handles through the same owner. The host performs no channel conversion, staging copy, or per-draw sampling decision.
+- Apps that use the original `App::draw` contract can render through one persistent host-owned `DrawListBuilder` adapter. `RenderContext` borrows it for the draw callback, and the host clears and reuses its storage rather than allocating an intermediate command graph each frame.
 - The host exposes no platform motion-preference state, control, or ABI; authored Oxide animation durations pass through unchanged.
 - Compile-time layout assertions freeze `OxideHostStats` and the private camera perf/contract snapshot mirrors so benchmark out-parameters cannot silently drift from their native or Swift consumers.
 
@@ -61,6 +63,7 @@
 - The hot input callback path performs a mutex lock to copy the callback pointer, then releases it before dispatch.
 - Raw touch callbacks preserve the OS sample timestamp in `TouchEvent::timestamp_ns` before routing through `oxide-input`.
 - No heap allocation is added to the callback-installed input path; fallback logging may format strings only when no callback is registered.
+- The compatibility draw adapter retains its draw-list capacities across frames.
 
 ## Performance notes
 - Renderer construction selects the normal three-slot visible-host resource mode; actual Metal command-buffer completion still protects reuse and saturated frames coalesce without blocking.
@@ -77,6 +80,7 @@
 - Device-target compile coverage uses `cargo check -p oxide-host-ios --target aarch64-apple-ios --tests --locked`.
 - Host camera typedef, stats, tick/debug perf, and camera snapshot ABI guard retention is covered by [abi_layout_tests.md](tests/abi_layout_tests.md).
 - Camera benchmark contract coverage lives in [camera_benchmark_tests.md](tests/camera_benchmark_tests.md); it statically gates `AVCaptureVideoPreviewLayer` to explicit baseline or diagnostic-only paths.
+- [injected_app_tests.md](tests/injected_app_tests.md) freezes direct sampled-RGBA uploader wiring, invalid-handle mapping, and renderer-owned release.
 
 ## Examples
 ```rust
@@ -85,6 +89,7 @@ oxide_host_emit_touch(10, 0, 1.0, 2.0, 0.5, 1, 0.0, 0.0, 0, 0, 100);
 ```
 
 ## Changelog
+- 2026-08-06: adapted app draw commands to reusable host draw-list storage and wired sampled runtime images directly into Metal-owned resources.
 - 2026-08-06: removed the product motion toggle and the obsolete motion-preference host state and ABI.
 - 2026-07-14: purged immutable ID-mask raster/JFA fields on critical memory pressure.
 - 2026-07-14: routed critical memory warnings through the production retained-layer storage purge before requesting the rebuild frame.
