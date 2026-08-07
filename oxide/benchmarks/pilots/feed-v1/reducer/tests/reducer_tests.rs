@@ -1,7 +1,11 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
 use oxide_feed_v1_reducer::{
-   callback_deadline_counts, deterministic_bootstrap_interval, frozen_components,
-   frozen_order_index, strict_validate_failure_json, strict_validate_run_json,
-   travel_equivalence_passes, visual_metrics, RgbaImage,
+   build_evidence_manifest, callback_deadline_counts, deterministic_bootstrap_interval,
+   frozen_components, frozen_order_index, strict_validate_failure_json, strict_validate_run_json,
+   travel_equivalence_passes, verify_attachment_export, visual_metrics, RgbaImage,
 };
 use serde_json::{json, Value};
 
@@ -197,6 +201,207 @@ fn callback_admission_rejects_nonfinite_and_terminal_invalid_targets()
    let error = callback_deadline_counts(&sixty_hz).unwrap_err();
    assert!(error.contains("inside 7.5-9.2 ms"));
 }
+#[test]
+fn attachment_export_verifier_requires_one_complete_manifest() -> Result<(), String>
+{
+   let root = temporary_root("attachment-export")?;
+   fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+   let mut attachments = Vec::new();
+   for index in 0 .. 6
+   {
+      let export = format!("exported-{index}.png");
+      fs::write(root.join(&export), format!("png-{index}")).map_err(|error| error.to_string())?;
+      attachments.push(json!({
+         "suggestedHumanReadableName": format!("feed-v1-test-{index}_0_01234567-89AB-CDEF-0123-456789ABCDEF.png"),
+         "exportedFileName": export
+      }));
+   }
+   let manifest = json!([{
+      "testIdentifier": "FeedV1ControllerTests/testFeedV1PhysicalDevicePilot()",
+      "attachments": attachments
+   }]);
+   fs::write(
+      root.join("manifest.json"),
+      serde_json::to_vec(&manifest).map_err(|error| error.to_string())?,
+   ).map_err(|error| error.to_string())?;
+   verify_attachment_export(&root)?;
+
+   let mut malformed = manifest.clone();
+   malformed[0]["attachments"][0]["suggestedHumanReadableName"] = json!("feed-v1-test-0_0_not-a-uuid.png");
+   fs::write(
+      root.join("manifest.json"),
+      serde_json::to_vec(&malformed).map_err(|error| error.to_string())?,
+   ).map_err(|error| error.to_string())?;
+   assert!(verify_attachment_export(&root).unwrap_err().contains("malformed Xcode suffix"));
+
+   let mut duplicate_canonical = manifest.clone();
+   duplicate_canonical[0]["attachments"][1]["suggestedHumanReadableName"] =
+      json!("feed-v1-test-0.png");
+   fs::write(
+      root.join("manifest.json"),
+      serde_json::to_vec(&duplicate_canonical).map_err(|error| error.to_string())?,
+   ).map_err(|error| error.to_string())?;
+   assert!(verify_attachment_export(&root).unwrap_err().contains("duplicate canonical"));
+
+   let mut aliased = manifest.clone();
+   aliased[0]["attachments"][1]["exportedFileName"] = json!("exported-0.png");
+   fs::write(
+      root.join("manifest.json"),
+      serde_json::to_vec(&aliased).map_err(|error| error.to_string())?,
+   ).map_err(|error| error.to_string())?;
+   assert!(verify_attachment_export(&root).unwrap_err().contains("alias"));
+
+   let mut foreign = manifest.clone();
+   foreign[0]["testIdentifier"] = json!("ForeignTests/testUnexpected()");
+   fs::write(
+      root.join("manifest.json"),
+      serde_json::to_vec(&foreign).map_err(|error| error.to_string())?,
+   ).map_err(|error| error.to_string())?;
+   assert!(verify_attachment_export(&root).unwrap_err().contains("test identifier"));
+
+   let mut multiple_details = manifest.as_array().cloned()
+      .ok_or_else(|| "test attachment manifest is not an array".to_string())?;
+   multiple_details.push(manifest[0].clone());
+   fs::write(
+      root.join("manifest.json"),
+      serde_json::to_vec(&multiple_details).map_err(|error| error.to_string())?,
+   ).map_err(|error| error.to_string())?;
+   assert!(verify_attachment_export(&root).unwrap_err().contains("2 test details, expected 1"));
+
+   let escape = root.with_file_name(format!(
+      "{}-escape.png",
+      root.file_name().and_then(|name| name.to_str()).ok_or_else(|| "test root has no name".to_string())?
+   ));
+   fs::write(&escape, b"escape").map_err(|error| error.to_string())?;
+   let escape_name = format!("../{}", escape.file_name().and_then(|name| name.to_str())
+      .ok_or_else(|| "escape file has no name".to_string())?);
+   let mut escaped = manifest.clone();
+   escaped[0]["attachments"][0]["exportedFileName"] = json!(escape_name);
+   fs::write(
+      root.join("manifest.json"),
+      serde_json::to_vec(&escaped).map_err(|error| error.to_string())?,
+   ).map_err(|error| error.to_string())?;
+   assert!(verify_attachment_export(&root).unwrap_err().contains("leaves the export root"));
+   fs::remove_file(escape).map_err(|error| error.to_string())?;
+   fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+   Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn attachment_export_rejects_hard_link_file_identity_aliases() -> Result<(), String>
+{
+   let root = temporary_root("attachment-hard-link")?;
+   fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+   fs::write(root.join("exported-0.png"), b"png-0").map_err(|error| error.to_string())?;
+   fs::hard_link(root.join("exported-0.png"), root.join("exported-1.png"))
+      .map_err(|error| error.to_string())?;
+   let mut attachments = Vec::new();
+   for index in 0 .. 6
+   {
+      if index >= 2
+      {
+         fs::write(root.join(format!("exported-{index}.png")), format!("png-{index}"))
+            .map_err(|error| error.to_string())?;
+      }
+      attachments.push(json!({
+         "suggestedHumanReadableName": format!("feed-v1-hard-link-{index}.png"),
+         "exportedFileName": format!("exported-{index}.png")
+      }));
+   }
+   fs::write(
+      root.join("manifest.json"),
+      serde_json::to_vec(&json!([{
+         "testIdentifier": "FeedV1ControllerTests/testFeedV1PhysicalDevicePilot()",
+         "attachments": attachments
+      }])).map_err(|error| error.to_string())?,
+   ).map_err(|error| error.to_string())?;
+   assert!(verify_attachment_export(&root).unwrap_err().contains("file identity"));
+   fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+   Ok(())
+}
+
+#[test]
+fn evidence_manifest_excludes_stale_reports_results_and_build_outputs() -> Result<(), String>
+{
+   let root = temporary_root("manifest-allowlist")?;
+   let output_root = temporary_root("manifest-output")?;
+   let source = root.join("oxide/benchmarks/pilots/feed-v1");
+   let font_root = root.join("oxide/crates/ui-core/assets");
+   let uikit_app = root.join("apps/UIKit.app");
+   let oxide_app = root.join("apps/Oxide.app");
+   let controller_runner = root.join("apps/FeedV1Controller-Runner.app");
+   let controller_xctest = controller_runner.join("PlugIns/FeedV1Controller.xctest");
+   fs::create_dir_all(source.join("ios/target")).map_err(|error| error.to_string())?;
+   fs::create_dir_all(source.join("ios/raw")).map_err(|error| error.to_string())?;
+   fs::create_dir_all(source.join("ios/feed-v1-smoke.xcresult")).map_err(|error| error.to_string())?;
+   fs::create_dir_all(source.join("reducer/src")).map_err(|error| error.to_string())?;
+   fs::create_dir_all(source.join("reducer/target")).map_err(|error| error.to_string())?;
+   fs::create_dir_all(&font_root).map_err(|error| error.to_string())?;
+   fs::create_dir_all(&uikit_app).map_err(|error| error.to_string())?;
+   fs::create_dir_all(&oxide_app).map_err(|error| error.to_string())?;
+   fs::create_dir_all(&controller_xctest).map_err(|error| error.to_string())?;
+   fs::create_dir_all(&output_root).map_err(|error| error.to_string())?;
+
+   fs::write(source.join("protocol.md"), b"protocol").map_err(|error| error.to_string())?;
+   fs::write(source.join("ios/source.swift"), b"source").map_err(|error| error.to_string())?;
+   fs::write(source.join("reducer/Cargo.toml"), b"[package]").map_err(|error| error.to_string())?;
+   fs::write(source.join("reducer/src/lib.rs"), b"source").map_err(|error| error.to_string())?;
+   fs::write(source.join("latest.json"), b"stale").map_err(|error| error.to_string())?;
+   fs::write(source.join("latest.md"), b"stale").map_err(|error| error.to_string())?;
+   fs::write(source.join("ios/latest.md"), b"stale").map_err(|error| error.to_string())?;
+   fs::write(source.join("ios/evidence-manifest.json"), b"stale").map_err(|error| error.to_string())?;
+   fs::write(source.join("ios/target/poison.rs"), b"stale").map_err(|error| error.to_string())?;
+   fs::write(source.join("reducer/target/poison.rs"), b"stale").map_err(|error| error.to_string())?;
+   fs::write(source.join("ios/raw/README.md"), b"stale").map_err(|error| error.to_string())?;
+   fs::write(source.join("ios/feed-v1-smoke.xcresult/poison.rs"), b"stale").map_err(|error| error.to_string())?;
+   fs::write(&uikit_app.join("UIKit"), b"uikit").map_err(|error| error.to_string())?;
+   fs::write(&oxide_app.join("Oxide"), b"oxide").map_err(|error| error.to_string())?;
+   fs::write(controller_runner.join("FeedV1Controller-Runner"), b"runner")
+      .map_err(|error| error.to_string())?;
+   fs::write(controller_xctest.join("FeedV1Controller"), b"xctest")
+      .map_err(|error| error.to_string())?;
+
+   let repository_fonts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../crates/ui-core/assets");
+   fs::copy(repository_fonts.join("Asap-Regular.ttf"), font_root.join("Asap-Regular.ttf"))
+      .map_err(|error| error.to_string())?;
+   fs::copy(repository_fonts.join("Asap-Bold.ttf"), font_root.join("Asap-Bold.ttf"))
+      .map_err(|error| error.to_string())?;
+
+   git(&root, &["init", "-b", "main"])?;
+   git(&root, &["config", "user.name", "Feed V1 Test"])?;
+   git(&root, &["config", "user.email", "feed-v1-test@example.invalid"])?;
+   git(&root, &["add", "-f", "."])?;
+   git(&root, &["commit", "-m", "frozen feed-v1 test source"])?;
+
+   let output = output_root.join("evidence-manifest.json");
+   oxide_feed_v1_reducer::build_evidence_manifest(
+      &source,
+      &root,
+      &uikit_app,
+      &oxide_app,
+      &controller_runner,
+      &controller_xctest,
+      &output,
+   )?;
+   let manifest: Value = serde_json::from_slice(&fs::read(&output).map_err(|error| error.to_string())?)
+      .map_err(|error| error.to_string())?;
+   assert_eq!(manifest["schema_revision"], 2);
+   assert_eq!(manifest["repository_ref"], "refs/heads/main");
+   assert!(manifest["repository_head_commit"].as_str().is_some_and(|value| value.len() == 40));
+   assert!(manifest["repository_tree"].as_str().is_some_and(|value| value.len() == 40));
+   assert!(manifest["controller_runner_sha256"].as_str().is_some_and(|value| value.len() == 64));
+   assert!(manifest["controller_runner_binary_sha256"].as_str().is_some_and(|value| value.len() == 64));
+   assert!(manifest["controller_xctest_sha256"].as_str().is_some_and(|value| value.len() == 64));
+   assert!(manifest["controller_xctest_binary_sha256"].as_str().is_some_and(|value| value.len() == 64));
+   let source_files = manifest["source_files"].as_object()
+      .ok_or_else(|| "manifest has no source_files object".to_string())?;
+   let paths: Vec<&str> = source_files.keys().map(String::as_str).collect();
+   assert_eq!(paths, vec!["ios/source.swift", "protocol.md", "reducer/Cargo.toml", "reducer/src/lib.rs"]);
+   fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+   fs::remove_dir_all(output_root).map_err(|error| error.to_string())?;
+   Ok(())
+}
 fn run_json(nonce: &str, phase: &str, session_index: u32, pair_index: u32, treatment: &str, direction: &str, order_index: u32) -> Result<Value, String>
 {
    let start_state = if direction == "forward" { "top" } else { "bottom" };
@@ -287,3 +492,24 @@ fn solid_rgba_image(width: u32, height: u32, rgba: [u8; 4]) -> RgbaImage
    RgbaImage { width, height, pixels }
 }
 
+fn git(root: &Path, arguments: &[&str]) -> Result<(), String>
+{
+   let output = Command::new("git").arg("-C").arg(root).args(arguments).output()
+      .map_err(|error| format!("run git {}: {error}", arguments.join(" ")))?;
+   if !output.status.success()
+   {
+      return Err(format!(
+         "git {} failed: {}",
+         arguments.join(" "),
+         String::from_utf8_lossy(&output.stderr).trim()
+      ));
+   }
+   Ok(())
+}
+
+fn temporary_root(label: &str) -> Result<PathBuf, String>
+{
+   let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+      .map_err(|error| error.to_string())?.as_nanos();
+   Ok(std::env::temp_dir().join(format!("oxide-feed-v1-{label}-{}-{nanos}", std::process::id())))
+}
