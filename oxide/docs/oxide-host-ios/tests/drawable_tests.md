@@ -2,7 +2,7 @@
 
 ## Intention and purpose
 
-These source-contract tests keep iOS drawable acquisition, frame preparation, retained scratch, damage handoff, and memory-pressure behavior aligned with the Rust-owned rendering lifecycle.
+These source-contract tests keep iOS drawable acquisition, frame preparation, injected-app retry ownership, retained scratch, damage handoff, and memory-pressure behavior aligned with the Rust-owned rendering lifecycle.
 
 ## Relation to the rest of the code
 
@@ -12,6 +12,8 @@ The tests inspect `oxide-host-ios/src/lib.rs` and the Objective-C app shell with
 
 - `memory_warnings_purge_effect_targets_and_request_a_frame()` requires critical pressure to purge effect targets, retained layers, prepared chunks, and immutable ID-mask fields before marking the frame dirty.
 - Other tests freeze late drawable acquisition, prepared-frame cancellation, native coalescing scratch, and reusable damage storage.
+- `injected_frame_demand_is_acknowledged_only_after_submit()` protects retry and wake-generation semantics, including rejection before a backpressure-skipped frame can emit successful renderer feedback.
+- `injected_lifecycle_resets_display_timing_after_suspension()` prevents a background interval from becoming the next frame's delta.
 
 ## Logic narrative
 
@@ -23,7 +25,7 @@ The source markers used to isolate handlers must remain present. Passing proves 
 
 ## Edge cases and failure modes
 
-A renamed or removed purge call fails explicitly. Missing handler boundaries fail before substring assertions can pass accidentally against unrelated code.
+A renamed or removed purge call fails explicitly. Missing handler boundaries fail before substring assertions can pass accidentally against unrelated code. The suite rejects injected paths that acknowledge a wake before submit or clear a prepared frame instead of retrying it.
 
 ## Concurrency and memory behavior
 
@@ -47,6 +49,7 @@ The required pressure sequence contains `renderer.purge_effect_targets();`, `ren
 
 ## Changelog
 
+- 2026-08-06: added injected-app wake acknowledgement, retry/backpressure, renderer-feedback, and lifecycle timing gates.
 - 2026-07-14: required critical memory warnings to purge immutable ID-mask raster/JFA fields.
 - 2026-07-14: required the iOS memory-warning handler to purge retained layer storage alongside effect and prepared caches.
 - 2026-07-13: required critical memory warnings to purge persistent prepared chunks.

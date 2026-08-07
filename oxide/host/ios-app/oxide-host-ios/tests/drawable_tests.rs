@@ -1,5 +1,5 @@
 use oxide_host_ios::{
-    oxide_host_app_frame_with_drawable, oxide_host_app_request_redraw,
+    oxide_host_app_frame_with_drawable, oxide_host_request_redraw,
     oxide_host_app_wake_generation,
 };
 
@@ -11,7 +11,7 @@ fn frame_with_drawable_stub() {
 #[test]
 fn explicit_redraw_advances_the_lock_free_wake_generation() {
     let before = oxide_host_app_wake_generation();
-    oxide_host_app_request_redraw();
+    oxide_host_request_redraw();
     assert!(oxide_host_app_wake_generation() > before);
 }
 
@@ -19,7 +19,7 @@ fn explicit_redraw_advances_the_lock_free_wake_generation() {
 fn rapid_redraw_requests_are_not_lost_before_the_host_can_coalesce_them() {
     let before = oxide_host_app_wake_generation();
     for _ in 0..256 {
-        oxide_host_app_request_redraw();
+        oxide_host_request_redraw();
     }
     let advanced = oxide_host_app_wake_generation().wrapping_sub(before);
     assert!(advanced >= 256, "only {advanced} of 256 redraw generations were retained");
@@ -61,7 +61,7 @@ fn ios_display_link_has_explicit_idle_pause_and_wake_ownership() {
         .expect("wake method end");
 
     assert!(rust.contains("static FRAME_WAKE_GENERATION: AtomicU64"));
-    assert!(rust.contains("fn request_frame_wake()"));
+    assert!(rust.contains("fn request_frame_wake() -> u64"));
     assert!(rust.contains("oxide_host_request_display_link_wake(generation)"));
     assert!(rust.contains("fn mark_frame_dirty(app: &mut AppState)"));
     assert!(rust.contains("app.presented_wake_generation"));
@@ -124,6 +124,78 @@ fn ios_metal_layer_uses_timeout_capable_drawable_acquisition() {
         source.contains("layer.allowsNextDrawableTimeout = YES;"),
         "iOS host must allow nextDrawable timeout so a prepared frame can be canceled instead of blocking indefinitely"
     );
+}
+
+#[test]
+fn injected_frame_demand_is_acknowledged_only_after_submit()
+{
+   let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+   let prepare = source
+      .split("pub extern \"C\" fn oxide_host_app_prepare_frame_timed")
+      .nth(1)
+      .expect("timed prepare body")
+      .split("pub extern \"C\" fn oxide_host_app_submit_prepared_frame_with_drawable")
+      .next()
+      .expect("timed prepare end");
+   let submit = source
+      .split("pub extern \"C\" fn oxide_host_app_submit_prepared_frame_with_drawable")
+      .nth(1)
+      .expect("submit body")
+      .split("pub extern \"C\" fn oxide_host_app_cancel_prepared_frame")
+      .next()
+      .expect("submit end");
+   let cancel = source
+      .split("pub extern \"C\" fn oxide_host_app_cancel_prepared_frame")
+      .nth(1)
+      .expect("cancel body")
+      .split("fn oxide_host_app_frame_inner")
+      .next()
+      .expect("cancel end");
+
+   assert!(prepare.contains("let wake_generation = FRAME_WAKE_GENERATION.load"));
+   assert!(prepare.contains("app.pending_wake_generation = wake_generation"));
+   assert!(!prepare.contains("presented_wake_generation ="));
+   assert!(prepare.contains("reuse_injected_prepared_frame"));
+   assert!(submit.contains("app.presented_wake_generation = app.pending_wake_generation"));
+   let backpressure = submit
+      .find("if renderer.last_stats().frame_backpressure_skipped != 0")
+      .expect("backpressure admission");
+   let encode = submit.find("renderer.encode_pass(frame.draw_list)").expect("encode pass");
+   let cancel_drawable = submit
+      .find("renderer.cancel_present_drawable()")
+      .expect("backpressure drawable cancellation");
+   let feedback = submit
+      .find("observe_injected_renderer_stats(&mut app, renderer_stats)")
+      .expect("successful submit feedback");
+   assert!(backpressure < encode);
+   assert!(backpressure < cancel_drawable && cancel_drawable < feedback);
+   assert!(submit.contains("Err(-9)"));
+   assert!(!cancel.contains("presented_wake_generation ="));
+   assert!(cancel.contains("if app.injected.is_some()"));
+   assert!(cancel.contains("request_injected_frame_retry(&mut app)"));
+}
+
+#[test]
+fn injected_lifecycle_resets_display_timing_after_suspension()
+{
+   let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+   let background = source
+      .split("pub extern \"C\" fn oxide_host_app_did_enter_background")
+      .nth(1)
+      .expect("background lifecycle body")
+      .split("pub extern \"C\" fn oxide_host_app_will_enter_foreground")
+      .next()
+      .expect("background lifecycle end");
+   let foreground = source
+      .split("pub extern \"C\" fn oxide_host_app_will_enter_foreground")
+      .nth(1)
+      .expect("foreground lifecycle body")
+      .split("pub extern \"C\" fn oxide_host_app_will_terminate")
+      .next()
+      .expect("foreground lifecycle end");
+
+   assert!(background.contains("injected.last_target_timestamp_ns = 0"));
+   assert!(foreground.contains("injected.last_target_timestamp_ns = 0"));
 }
 
 #[test]
