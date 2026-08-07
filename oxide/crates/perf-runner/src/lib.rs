@@ -10073,44 +10073,10 @@ fn render_markdown(report: &PerfReport, comparison: Option<&PerfComparison>) -> 
     if let Some(label) = report.generated_label.as_ref() {
         let _ = std::fmt::Write::write_fmt(&mut out, format_args!("- Label: `{}`\n", label));
     }
-    let _ = std::fmt::Write::write_fmt(
-        &mut out,
-        format_args!(
-            "- Coverage: {}/{} components, {}/{} animations, {}/{} launch cases, {}/{} primitive lifecycle cases, {}/{} CPU scenes, {}/{} GPU scenes, {}/{} journeys, {}/{} authoring APIs, {}/{} layout cases, {}/{} text-input cases, {}/{} image pipeline cases, {}/{} navigation cases, {}/{} reconcile cases, {}/{} endurance cases, {}/{} stress cases, {}/{} bridge paths\n",
-            report.coverage.components_covered.len(),
-            report.coverage.components_total,
-            report.coverage.animations_covered.len(),
-            report.coverage.animations_total,
-            report.coverage.launch_covered.len(),
-            report.coverage.launch_total,
-            report.coverage.primitive_lifecycle_covered.len(),
-            report.coverage.primitive_lifecycle_total,
-            report.coverage.scenes_cpu_covered.len(),
-            report.coverage.scenes_cpu_total,
-            report.coverage.scenes_gpu_covered.len(),
-            report.coverage.scenes_gpu_total,
-            report.coverage.journeys_covered.len(),
-            report.coverage.journeys_total,
-            report.coverage.authoring_covered.len(),
-            report.coverage.authoring_total,
-            report.coverage.layout_covered.len(),
-            report.coverage.layout_total,
-            report.coverage.text_input_covered.len(),
-            report.coverage.text_input_total,
-            report.coverage.image_pipeline_covered.len(),
-            report.coverage.image_pipeline_total,
-            report.coverage.navigation_covered.len(),
-            report.coverage.navigation_total,
-            report.coverage.reconcile_covered.len(),
-            report.coverage.reconcile_total,
-            report.coverage.endurance_covered.len(),
-            report.coverage.endurance_total,
-            report.coverage.stress_covered.len(),
-            report.coverage.stress_total,
-            report.coverage.bridges_covered.len(),
-            report.coverage.bridges_total
-        )
-    );
+   let _ = std::fmt::Write::write_fmt(
+      &mut out,
+      format_args!("- Cases: `{}`\n", report.cases.len())
+   );
     if let Some(comp) = comparison {
         let _ = std::fmt::Write::write_fmt(
             &mut out,

@@ -93,6 +93,7 @@ The canonical workspace bridge signal is the app-owned permission callback fanou
 ### Current persisted-report contract
 
 The canonical workspace report is serialized to JSON and Markdown, compared by gated median, and frozen by schema, case-ID, metric-key, and workload-contract tests. Serializer and comparison harnesses derive capacity and dispatch from the report they load; no historical byte count, metric-key count, or latest-versus-CI row pairing defines the current report shape.
+The publication header reports the selected suite and exact case count. It does not print catalog-wide covered/total fractions, because touched and canonical runs deliberately select only the cases they own; the contract table below the header is the authoritative coverage statement.
 
 ### Historical implementation evidence
 

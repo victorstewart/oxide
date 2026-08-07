@@ -888,6 +888,16 @@ fn markdown_metric_summary_preserves_priority_order_and_limit()
 }
 
 #[test]
+fn markdown_reports_selected_case_count_without_catalog_fractions()
+{
+   let report = sample_report(vec![sample_case("cpu.report.selected", 1.0, 0.10, true)]);
+   let markdown = render_report_markdown(&report, None);
+
+   assert!(markdown.contains("- Cases: `1`"), "{markdown}");
+   assert!(!markdown.contains("- Coverage:"), "{markdown}");
+}
+
+#[test]
 fn compare_reports_flags_regressions_and_missing_baselines() {
     let current = sample_report(vec![
         sample_case("cpu.component.button.encode", 12.5, 0.10, true),
