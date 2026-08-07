@@ -1,5 +1,7 @@
 use std::ffi::OsString;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use oxide_feed_v1_app::contract::{self, StartState};
@@ -12,6 +14,7 @@ use oxide_platform_api::{
    HapticPattern,
    Haptics,
    InputEvent,
+   Lifecycle,
    RendererStats,
    Timers,
    TouchEvent,
@@ -27,8 +30,10 @@ use oxide_renderer_api::{
    RectF,
    RuntimeImageUploader,
 };
+use serde_json::Value;
 
 static ENVIRONMENT_LOCK: Mutex<()> = Mutex::new(());
+static TEMPORARY_HOME_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RgbaUpload
@@ -137,6 +142,38 @@ impl Drop for EnvironmentScope
             std::env::remove_var(name);
          }
       }
+   }
+}
+
+struct TemporaryHome
+{
+   path: PathBuf,
+}
+
+impl TemporaryHome
+{
+   fn new() -> Self
+   {
+      let sequence = TEMPORARY_HOME_COUNTER.fetch_add(1, Ordering::Relaxed);
+      let path = std::env::temp_dir().join(format!(
+         "oxide-feed-v1-app-tests-{}-{sequence}",
+         std::process::id(),
+      ));
+      assert!(fs::create_dir(&path).is_ok(), "could not create isolated test HOME");
+      Self { path }
+   }
+
+   fn path(&self) -> &Path
+   {
+      &self.path
+   }
+}
+
+impl Drop for TemporaryHome
+{
+   fn drop(&mut self)
+   {
+      let _ = fs::remove_dir_all(&self.path);
    }
 }
 
@@ -369,6 +406,120 @@ fn settlement_waits_for_a_closing_frame_and_retries_its_exact_submit()
    assert_eq!(prepared_draw_list(&app), closing_frame);
 }
 
+#[test]
+fn completed_inertial_run_requires_zero_environment_transition_deltas()
+{
+   let _lock = lock_environment();
+   let home = TemporaryHome::new();
+   let nonce = "test-zero-environment-transitions";
+   let _environment = EnvironmentScope::new(StartState::Top, nonce, Some(home.path()));
+   let mut app = FeedV1App::from_environment();
+   let mut uploader = UploadProbe::default();
+   admit_ready(&mut app, &mut uploader);
+   begin_inertial_drag(&mut app);
+
+   let completion_frame_id = prepare_until_completion_submit(&mut app, &mut uploader);
+   dispatch(&mut app, AppEvent::RendererStats(renderer_stats(completion_frame_id)));
+   assert_eq!(app.status().phase, FeedV1Phase::Finished);
+
+   let record = persisted_record(home.path(), nonce);
+   assert_eq!(record["gesture"]["inertia_observed"], true);
+   assert_eq!(record["environment"]["thermal_state_change_count"], 0);
+   assert_eq!(record["environment"]["low_power_mode_change_count"], 0);
+}
+
+#[test]
+fn noninertial_drag_cannot_emit_a_complete_record()
+{
+   let _lock = lock_environment();
+   let home = TemporaryHome::new();
+   let nonce = "test-noninertial-rejected";
+   let _environment = EnvironmentScope::new(StartState::Top, nonce, Some(home.path()));
+   let mut app = FeedV1App::from_environment();
+   let mut uploader = UploadProbe::default();
+   admit_ready(&mut app, &mut uploader);
+   begin_short_settled_drag(&mut app);
+
+   assert_eq!(App::prepare_frame(&mut app, frame(3, 1_400_000_000), &mut uploader), FrameDemand::NextVsync);
+   assert_eq!(App::prepare_frame(&mut app, frame(4, 1_408_333_333), &mut uploader), FrameDemand::Idle);
+   dispatch(&mut app, AppEvent::RendererStats(renderer_stats(4)));
+   assert_eq!(app.status().phase, FeedV1Phase::Finished);
+   assert_eq!(failure_stage(home.path(), nonce), "gesture");
+}
+
+#[test]
+fn render_failures_are_labeled_by_the_phase_that_observed_them()
+{
+   let _lock = lock_environment();
+   let home = TemporaryHome::new();
+   let _initial_environment = EnvironmentScope::new(
+      StartState::Top,
+      "test-initial-render-failure",
+      Some(home.path()),
+   );
+   let mut initial = FeedV1App::from_environment();
+   let mut uploader = UploadProbe::default();
+   assert_eq!(
+      App::prepare_frame(&mut initial, mismatched_frame(1, 1_000_000_000), &mut uploader),
+      FrameDemand::Idle,
+   );
+   assert_eq!(initial.status().phase, FeedV1Phase::Finished);
+   assert_eq!(failure_stage(home.path(), "test-initial-render-failure"), "initial-admission");
+   drop(_initial_environment);
+
+   let _gesture_environment = EnvironmentScope::new(
+      StartState::Top,
+      "test-gesture-render-failure",
+      Some(home.path()),
+   );
+   let mut gesture = FeedV1App::from_environment();
+   let mut uploader = UploadProbe::default();
+   admit_ready(&mut gesture, &mut uploader);
+   begin_short_settled_drag(&mut gesture);
+   assert_eq!(
+      App::prepare_frame(&mut gesture, mismatched_frame(3, 1_400_000_000), &mut uploader),
+      FrameDemand::NextVsync,
+   );
+   assert_eq!(
+      App::prepare_frame(&mut gesture, frame(4, 1_408_333_333), &mut uploader),
+      FrameDemand::Idle,
+   );
+   dispatch(&mut gesture, AppEvent::RendererStats(renderer_stats(4)));
+   assert_eq!(gesture.status().phase, FeedV1Phase::Finished);
+   assert_eq!(failure_stage(home.path(), "test-gesture-render-failure"), "gesture");
+}
+
+#[test]
+fn lifecycle_exit_is_stage_correct_while_waiting_for_submit_or_drag()
+{
+   let _lock = lock_environment();
+   let home = TemporaryHome::new();
+   let _ready_environment = EnvironmentScope::new(
+      StartState::Top,
+      "test-ready-lifecycle-exit",
+      Some(home.path()),
+   );
+   let mut ready = FeedV1App::from_environment();
+   let mut uploader = UploadProbe::default();
+   assert_eq!(App::prepare_frame(&mut ready, frame(1, 1_000_000_000), &mut uploader), FrameDemand::NextVsync);
+   assert_eq!(App::prepare_frame(&mut ready, frame(2, 1_008_333_333), &mut uploader), FrameDemand::Idle);
+   dispatch(&mut ready, AppEvent::Lifecycle(Lifecycle::WillTerminate));
+   assert_eq!(failure_stage(home.path(), "test-ready-lifecycle-exit"), "initial-admission");
+   drop(_ready_environment);
+
+   let _drag_environment = EnvironmentScope::new(
+      StartState::Top,
+      "test-drag-lifecycle-exit",
+      Some(home.path()),
+   );
+   let mut drag = FeedV1App::from_environment();
+   let mut uploader = UploadProbe::default();
+   admit_ready(&mut drag, &mut uploader);
+   dispatch(&mut drag, AppEvent::Input(InputEvent::Touch(touch(TouchPhase::Start, 1_000_000_000, 700.0))));
+   dispatch(&mut drag, AppEvent::Lifecycle(Lifecycle::DidEnterBackground));
+   assert_eq!(failure_stage(home.path(), "test-drag-lifecycle-exit"), "gesture");
+}
+
 fn lock_environment() -> MutexGuard<'static, ()>
 {
    ENVIRONMENT_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -391,6 +542,35 @@ fn begin_short_settled_drag(app: &mut FeedV1App)
    dispatch(app, AppEvent::Input(InputEvent::Touch(touch(TouchPhase::End, 1_300_000_000, 690.0))));
    assert_eq!(app.status().phase, FeedV1Phase::Gesture);
    assert!(!app.status().inertia_observed);
+}
+
+fn begin_inertial_drag(app: &mut FeedV1App)
+{
+   dispatch(app, AppEvent::Input(InputEvent::Touch(touch(TouchPhase::Start, 1_100_000_000, 700.0))));
+   dispatch(app, AppEvent::Input(InputEvent::Touch(touch(TouchPhase::Move, 1_110_000_000, 690.0))));
+   dispatch(app, AppEvent::Input(InputEvent::Touch(touch(TouchPhase::Move, 1_120_000_000, 680.0))));
+   dispatch(app, AppEvent::Input(InputEvent::Touch(touch(TouchPhase::End, 1_130_000_000, 670.0))));
+   assert_eq!(app.status().phase, FeedV1Phase::Gesture);
+   assert!(app.status().inertia_observed);
+}
+
+fn prepare_until_completion_submit(app: &mut FeedV1App, uploader: &mut UploadProbe) -> u64
+{
+   let mut frame_id = 3_u64;
+   let mut timestamp_ns = 1_140_000_000_u64;
+   for _ in 0..768
+   {
+      let demand = App::prepare_frame(app, frame(frame_id, timestamp_ns), uploader);
+      if app.status().phase == FeedV1Phase::AwaitingCompletionSubmit
+      {
+         assert_eq!(demand, FrameDemand::Idle);
+         return frame_id;
+      }
+      assert_eq!(demand, FrameDemand::NextVsync);
+      frame_id = frame_id.saturating_add(1);
+      timestamp_ns = timestamp_ns.saturating_add(8_333_333);
+   }
+   panic!("inertial feed gesture did not reach its completion submit boundary");
 }
 
 fn dispatch(app: &mut FeedV1App, event: AppEvent)
@@ -431,6 +611,13 @@ fn frame(frame_id: u64, timestamp_ns: u64) -> FrameContext
       ),
       scale: contract::SURFACE_SCALE as f32,
    }
+}
+
+fn mismatched_frame(frame_id: u64, timestamp_ns: u64) -> FrameContext
+{
+   let mut frame = frame(frame_id, timestamp_ns);
+   frame.viewport.w -= 1.0;
+   frame
 }
 
 fn touch(phase: TouchPhase, timestamp_ns: u64, y: f32) -> TouchEvent
@@ -506,4 +693,27 @@ fn prepared_draw_list(app: &FeedV1App) -> oxide_renderer_api::DrawList
       panic!("feed app did not expose its prepared frame");
    };
    prepared.draw_list.clone()
+}
+
+fn failure_stage(home: &Path, nonce: &str) -> String
+{
+   persisted_record(home, nonce)["stage"].as_str().unwrap_or("").to_owned()
+}
+
+fn persisted_record(home: &Path, nonce: &str) -> Value
+{
+   let path = home
+      .join(contract::RESULT_DIRECTORY_NAME)
+      .join(format!("{}{}{}", contract::RESULT_FILE_PREFIX, nonce, contract::RESULT_FILE_SUFFIX));
+   let bytes = match fs::read(&path)
+   {
+      Ok(bytes) => bytes,
+      Err(error) => panic!("could not read {}: {error}", path.display()),
+   };
+   let value: Value = match serde_json::from_slice(&bytes)
+   {
+      Ok(value) => value,
+      Err(error) => panic!("could not parse {}: {error}", path.display()),
+   };
+   value
 }
