@@ -392,6 +392,14 @@ struct AdversarialResult
    worst_tile_rgb_mae: f64,
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct VisualTreatmentResult
+{
+   state: String,
+   treatment: String,
+   metrics: VisualMetrics,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct DeviceSummary
 {
@@ -407,6 +415,36 @@ struct DeviceEvidence
 {
    identifier: String,
    summary: DeviceSummary,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct Report
+{
+   schema: &'static str,
+   schema_revision: u32,
+   fixture_sha256: &'static str,
+   fixture_byte_count: u64,
+   device: Option<DeviceSummary>,
+   status: String,
+   decision: String,
+   blockers: Vec<String>,
+   visual_gate_id: &'static str,
+   visual_gate_spec_sha256: String,
+   visual_gate_source_sha256: Option<String>,
+   repository_ref: Option<String>,
+   repository_head_commit: Option<String>,
+   repository_tree: Option<String>,
+   visual_treatments: Vec<VisualTreatmentResult>,
+   adversarial_results: Vec<AdversarialResult>,
+   travel_equivalence: Vec<TravelEquivalenceResult>,
+   treatments: Vec<TreatmentSummary>,
+   comparisons: Vec<Comparison>,
+   runs: Vec<RunSummary>,
+   missing_metrics: Vec<&'static str>,
+   evidence_manifest_sha256: Option<String>,
+   retained_input_bytes: u64,
+   run_count_total: usize,
+   run_count_primary: usize,
 }
 
 pub fn visual_metrics(reference: &RgbaImage, candidate: &RgbaImage) -> Result<VisualMetrics, String>
@@ -1911,6 +1949,541 @@ fn validate_run_record_source(run_root: &Path, path: &Path, record: &RunRecord) 
       return Err(format!("run {} came from the wrong app container", record.run.nonce));
    }
    Ok(())
+}
+
+fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, String>
+{
+   if !paths.run_root.is_dir()
+   {
+      return Err(format!("run root {} is not a directory", paths.run_root.display()));
+   }
+   let files: Vec<PathBuf> = collect_files(&paths.run_root)?.into_iter().filter(|path| {
+      population == Population::Smoke
+         || (!same_path(path, &paths.output_json) && !same_path(path, &paths.output_markdown))
+   }).collect();
+   let retained_input_bytes = files.iter().try_fold(0_u64, |total, path| {
+      let bytes = fs::metadata(path).map_err(|error| format!("read retained metadata {}: {error}", path.display()))?.len();
+      total.checked_add(bytes).ok_or_else(|| "retained evidence byte count overflowed".to_string())
+   })?;
+   let mut run_records = Vec::new();
+   let mut failure_records = Vec::new();
+   let mut blockers = Vec::new();
+   let attachment_exports = match attachment_export_map(&files)
+   {
+      Ok(attachments) => attachments,
+      Err(error) =>
+      {
+         blockers.push(format!("attachment map: {error}"));
+         BTreeMap::new()
+      }
+   };
+   let mut cleanup: Option<CleanupProof> = None;
+   let mut controller_runtime: Option<ControllerRuntimeProof> = None;
+   let mut evidence_manifest_path: Option<PathBuf> = None;
+   let mut visual_gate_source_sha256: Option<String> = None;
+   let mut repository_ref: Option<String> = None;
+   let mut repository_head_commit: Option<String> = None;
+   let mut repository_tree: Option<String> = None;
+   if let Err(error) = verify_attachment_export(&paths.run_root.join("raw/attachments"))
+   {
+      blockers.push(format!("attachment admission: {error}"));
+   }
+   if retained_input_bytes > 512 * 1024 * 1024
+   {
+      blockers.push(format!("retained reducer input is {retained_input_bytes} bytes, above 512 MiB"));
+   }
+   let device = match admit_device(&paths.run_root)
+   {
+      Ok(device) => Some(device),
+      Err(error) =>
+      {
+         blockers.push(error);
+         None
+      }
+   };
+   if paths.run_root.join("tools").exists()
+      || files.iter().any(|path| {
+         path.components().any(|component| component.as_os_str().to_string_lossy().ends_with(".xcresult"))
+            || path.file_name().and_then(|name| name.to_str()) == Some("oxide-feed-v1-reducer")
+      })
+   {
+      blockers.push("retained package contains a result bundle or reducer executable".to_string());
+   }
+
+   for path in files.iter().filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("json"))
+   {
+      let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+      let controlled_name = name.starts_with("oxide-feed-v1-") || name.starts_with("feed-v1-");
+      let bytes = match fs::read(path)
+      {
+         Ok(bytes) => bytes,
+         Err(error) =>
+         {
+            blockers.push(format!("read {}: {error}", path.display()));
+            continue;
+         }
+      };
+      let value: serde_json::Value = match serde_json::from_slice(&bytes)
+      {
+         Ok(value) => value,
+         Err(error) =>
+         {
+            if controlled_name
+            {
+               blockers.push(format!("malformed controlled JSON {}: {error}", path.display()));
+            }
+            continue;
+         }
+      };
+      let schema = value.get("schema").and_then(serde_json::Value::as_str);
+      match schema
+      {
+         Some(RUN_SCHEMA) => match serde_json::from_value::<RunRecord>(value)
+         {
+            Ok(record) =>
+            {
+               if let Err(error) = validate_run_record_source(&paths.run_root, path, &record)
+               {
+                  blockers.push(error);
+               }
+               run_records.push(record);
+            }
+            Err(error) => blockers.push(format!("strict run schema {}: {error}", path.display())),
+         },
+         Some("oxide.feed-v1.failure") => match serde_json::from_value::<FailureRecord>(value)
+         {
+            Ok(record) => failure_records.push(record),
+            Err(error) => blockers.push(format!("strict failure schema {}: {error}", path.display())),
+         },
+         Some("oxide.feed-v1.cleanup") => match serde_json::from_value::<CleanupProof>(value)
+         {
+            Ok(proof) =>
+            {
+               if !same_path(path, &paths.run_root.join("raw/cleanup.json"))
+               {
+                  blockers.push(format!("cleanup proof is outside raw/cleanup.json: {}", path.display()));
+               }
+               if cleanup.replace(proof).is_some()
+               {
+                  blockers.push("multiple cleanup proofs".to_string());
+               }
+            }
+            Err(error) => blockers.push(format!("strict cleanup schema {}: {error}", path.display())),
+         },
+         Some("oxide.feed-v1.controller-runtime") => match serde_json::from_value::<ControllerRuntimeProof>(value)
+         {
+            Ok(proof) =>
+            {
+               let expected_name = "oxide-feed-v1-controller-runtime.json";
+               let controller_documents = paths.run_root.join("raw/controller-documents");
+               let canonical_documents = fs::canonicalize(&controller_documents);
+               let canonical_path = fs::canonicalize(path);
+               if path.file_name().and_then(|name| name.to_str()) != Some(expected_name)
+                  || !matches!((canonical_documents, canonical_path),
+                     (Ok(documents), Ok(path)) if path.starts_with(&documents))
+               {
+                  blockers.push(format!("controller runtime proof has a noncanonical source: {}", path.display()));
+               }
+               if controller_runtime.replace(proof).is_some()
+               {
+                  blockers.push("multiple controller runtime proofs".to_string());
+               }
+            }
+            Err(error) => blockers.push(format!("strict controller runtime schema {}: {error}", path.display())),
+         },
+         Some("oxide.feed-v1.evidence-manifest") => match serde_json::from_value::<EvidenceManifest>(value)
+         {
+            Ok(manifest) if manifest.schema == "oxide.feed-v1.evidence-manifest"
+               && manifest.schema_revision == 2
+               && manifest.fixture_sha256 == FIXTURE_SHA256
+               && manifest.repository_ref.starts_with("refs/heads/")
+               && is_git_object_id(&manifest.repository_head_commit)
+               && is_git_object_id(&manifest.repository_tree)
+               && manifest.regular_font_sha256 == "7d494f276293fb0a8e2aab1fc0e386baa3e8a1d90927f518abb152b5c73e29f9"
+               && manifest.bold_font_sha256 == "7f4feacd835eed23e104413f800a74b9f0270ce8c754c990bfc09b796a3ca628"
+               && is_sha256(&manifest.uikit_app_sha256)
+               && is_sha256(&manifest.oxide_app_sha256)
+               && is_sha256(&manifest.controller_runner_sha256)
+               && is_sha256(&manifest.controller_runner_binary_sha256)
+               && is_sha256(&manifest.controller_xctest_sha256)
+               && is_sha256(&manifest.controller_xctest_binary_sha256)
+               && is_sha256(&manifest.reducer_binary_sha256)
+               && manifest.source_files.keys().any(|name| name == "reducer/src/lib.rs") =>
+            {
+               if !same_path(path, &paths.run_root.join("raw/evidence-manifest.json"))
+               {
+                  blockers.push(format!("evidence manifest is outside raw/evidence-manifest.json: {}", path.display()));
+               }
+               if evidence_manifest_path.is_some()
+               {
+                  blockers.push("multiple evidence manifests".to_string());
+               }
+               visual_gate_source_sha256 = manifest.source_files.get("reducer/src/lib.rs").cloned();
+               repository_ref = Some(manifest.repository_ref);
+               repository_head_commit = Some(manifest.repository_head_commit);
+               repository_tree = Some(manifest.repository_tree);
+               evidence_manifest_path = Some(path.clone());
+            }
+            Ok(_) => blockers.push(format!("evidence manifest identity mismatch in {}", path.display())),
+            Err(error) => blockers.push(format!("strict evidence manifest {}: {error}", path.display())),
+         },
+         Some(schema) if schema.starts_with("oxide.feed-v1.") =>
+         {
+            blockers.push(format!("unknown controlled schema {schema} in {}", path.display()));
+         }
+         schema if controlled_name =>
+         {
+            blockers.push(format!(
+               "unrecognized controlled schema {} in {}",
+               schema.unwrap_or("missing"),
+               path.display()
+            ));
+         }
+         _ => {}
+      }
+   }
+
+   for failure in failure_records
+   {
+      if failure.schema != "oxide.feed-v1.failure" || failure.schema_revision != 1
+      {
+         blockers.push("failure record schema identity mismatch".to_string());
+      }
+      if let Err(error) = validate_fixture(&failure.fixture)
+      {
+         blockers.push(format!("failure record fixture: {error}"));
+      }
+      blockers.push(format!(
+         "app failure nonce={} treatment={} stage={}: {}",
+         failure.nonce.as_deref().unwrap_or("missing"),
+         failure.treatment.as_deref().unwrap_or("missing"),
+         failure.stage,
+         failure.message
+      ));
+   }
+
+   match controller_runtime
+   {
+      Some(proof) =>
+      {
+         if let Err(error) = validate_controller_runtime(&proof, population)
+         {
+            blockers.push(error);
+         }
+      }
+      None => blockers.push("missing controller runtime proof".to_string()),
+   }
+
+   let mut nonces = BTreeSet::new();
+   let mut measured_runs = Vec::new();
+   for record in run_records
+   {
+      if !nonces.insert(record.run.nonce.clone())
+      {
+         blockers.push(format!("duplicate run nonce {}", record.run.nonce));
+         continue;
+      }
+      if let Err(error) = validate_run(&record)
+      {
+         blockers.push(format!("run {}: {error}", record.run.nonce));
+         continue;
+      }
+      match callback_metrics(&record.display_link.samples)
+      {
+         Ok((intervals, metrics)) => measured_runs.push(MeasuredRun { record, intervals, metrics }),
+         Err(error) => blockers.push(format!("callback admission {}: {error}", record.run.nonce)),
+      }
+   }
+
+   let smoke_runs: Vec<&MeasuredRun> = measured_runs.iter()
+      .filter(|run| run.record.run.phase == "smoke")
+      .collect();
+   let expected_attachment_names: BTreeSet<String> = smoke_runs.iter()
+      .map(|run| format!("feed-v1-{}.png", run.record.run.nonce))
+      .collect();
+   let actual_attachment_names: BTreeSet<String> = attachment_exports.keys().cloned().collect();
+   if actual_attachment_names != expected_attachment_names
+   {
+      blockers.push("attachment manifest names are not exactly the six frozen smoke captures".to_string());
+   }
+   let population_blockers = validate_population(&measured_runs, population);
+   blockers.extend(population_blockers);
+   let travel_validation = validate_travel(&measured_runs, population);
+   blockers.extend(travel_validation.blockers);
+   let travel_equivalence = travel_validation.results;
+   let population_admitted = blockers.is_empty();
+
+   let mut visual_treatments = Vec::new();
+   let mut adversarial_results = Vec::new();
+   if population_admitted
+   {
+      let mut canonical_images: BTreeMap<(String, String), RgbaImage> = BTreeMap::new();
+      for run in &smoke_runs
+      {
+         let capture_name = format!("feed-v1-{}.png", run.record.run.nonce);
+         let Some(capture_path) = attachment_exports.get(&capture_name).map(PathBuf::as_path) else
+         {
+            blockers.push(format!("missing smoke capture {capture_name}"));
+            continue;
+         };
+         let capture = match decode_png(capture_path).and_then(|image| crop_surface(&image))
+         {
+            Ok(capture) => capture,
+            Err(error) =>
+            {
+               blockers.push(format!("capture decode/crop failed for {}: {error}", run.record.run.nonce));
+               continue;
+            }
+         };
+         let key = (
+            run.record.run.treatment.clone(),
+            run.record.run.start_state.clone(),
+         );
+         if canonical_images.insert(key, capture).is_some()
+         {
+            blockers.push(format!(
+               "duplicate smoke capture for {} {}",
+               run.record.run.treatment,
+               run.record.run.start_state
+            ));
+         }
+      }
+
+      for state in ["top", "bottom"]
+      {
+         let reference_key = ("uikit-idiomatic".to_string(), state.to_string());
+         let Some(reference) = canonical_images.get(&reference_key) else
+         {
+            blockers.push(format!("missing idiomatic UIKit {state} visual reference"));
+            continue;
+         };
+         for treatment in ["uikit-idiomatic", "uikit-optimized", "oxide"]
+         {
+            let key = (treatment.to_string(), state.to_string());
+            let Some(candidate) = canonical_images.get(&key) else
+            {
+               blockers.push(format!("missing {treatment} {state} visual"));
+               continue;
+            };
+            let metrics = if treatment == "uikit-idiomatic"
+            {
+               Ok(VisualMetrics {
+                  ssim: 1.0,
+                  worst_tile_rgb_mae: 0.0,
+                  exact_rgb_mae: 0.0,
+                  passes: true,
+               })
+            }
+            else
+            {
+               visual_metrics(reference, candidate)
+            };
+            match metrics
+            {
+               Ok(metrics) =>
+               {
+                  if !metrics.passes
+                  {
+                     blockers.push(format!(
+                        "visual gate failed for {treatment} {state}: SSIM {:.6}, worst tile MAE {:.6}",
+                        metrics.ssim,
+                        metrics.worst_tile_rgb_mae
+                     ));
+                  }
+                  visual_treatments.push(VisualTreatmentResult {
+                     state: state.to_string(),
+                     treatment: treatment.to_string(),
+                     metrics,
+                  });
+               }
+               Err(error) => blockers.push(format!("visual metrics {treatment} {state}: {error}")),
+            }
+         }
+      }
+
+      for state in ["top", "bottom"]
+      {
+         let references: Vec<&MeasuredRun> = measured_runs.iter().filter(|run| {
+            run.record.run.treatment == "uikit-idiomatic"
+               && run.record.run.start_state == state
+         }).collect();
+         let Some(reference) = references.first() else
+         {
+            continue;
+         };
+         for run in &measured_runs
+         {
+            if run.record.run.start_state == state && !geometry_matches(&reference.record.geometry, &run.record.geometry)
+            {
+               blockers.push(format!("cross-treatment observed geometry mismatch for {}", run.record.run.nonce));
+            }
+         }
+      }
+
+      if let (Some(reference), Some(reference_run)) = (
+         canonical_images.get(&("uikit-idiomatic".to_string(), "top".to_string())),
+         measured_runs.iter().find(|run| run.record.run.treatment == "uikit-idiomatic" && run.record.run.start_state == "top"),
+      )
+      {
+         match adversarial_gate(reference, &reference_run.record.geometry.visible_components)
+         {
+            Ok(results) =>
+            {
+               for result in &results
+               {
+                  if !result.rejected
+                  {
+                     blockers.push(format!("visual gate admitted hostile mutation {}", result.mutation));
+                  }
+               }
+               adversarial_results = results;
+            }
+            Err(error) => blockers.push(format!("hostile mutation suite: {error}")),
+         }
+      }
+      else
+      {
+         blockers.push("missing actual idiomatic UIKit top capture for hostile mutation suite".to_string());
+      }
+   }
+
+   match cleanup
+   {
+      Some(proof) =>
+      {
+         if proof.schema != "oxide.feed-v1.cleanup"
+            || proof.schema_revision != 2
+            || !proof.test_succeeded
+            || proof.verified_attachment_count != ATTACHMENT_COUNT
+            || !proof.apps_uninstalled
+            || !proof.controller_uninstalled
+            || !proof.controller_process_absent
+            || !proof.source_snapshot_preserved
+            || !proof.external_build_removed
+            || !proof.result_bundle_removed
+            || !proof.reducer_binary_absent_from_result_root
+            || proof.raw_evidence_bytes > 512 * 1024 * 1024
+            || !proof.runtime_seconds.is_finite()
+            || proof.runtime_seconds < 0.0
+            || proof.runtime_seconds > 20.0 * 60.0
+         {
+            blockers.push("cleanup/runtime/cap proof failed".to_string());
+         }
+      }
+      None => blockers.push("missing cleanup proof".to_string()),
+   }
+
+   let evidence_manifest_sha256 = match evidence_manifest_path
+   {
+      Some(path) => match sha256_file(&path)
+      {
+         Ok(hash) => Some(hash),
+         Err(error) =>
+         {
+            blockers.push(error);
+            None
+         }
+      },
+      None =>
+      {
+         blockers.push("missing evidence manifest".to_string());
+         None
+      }
+   };
+
+   blockers.sort();
+   blockers.dedup();
+   let primary: Vec<&MeasuredRun> = measured_runs.iter().filter(|run| run.record.run.phase == "primary").collect();
+   let mut summaries = Vec::new();
+   let mut comparisons = Vec::new();
+   let mut runs = Vec::new();
+   if blockers.is_empty() && population == Population::Full
+   {
+      for treatment in ["uikit-idiomatic", "uikit-optimized", "oxide"]
+      {
+         let selected: Vec<&MeasuredRun> = primary.iter().copied().filter(|run| run.record.run.treatment == treatment).collect();
+         summaries.push(treatment_summary(&selected, treatment)?);
+      }
+      comparisons.push(comparison(&primary, &summaries, "uikit-idiomatic")?);
+      comparisons.push(comparison(&primary, &summaries, "uikit-optimized")?);
+      runs = primary.iter().map(|run| run_summary(run)).collect();
+      runs.sort_by(|left, right| {
+         left.session_index.cmp(&right.session_index)
+            .then(left.pair_index.cmp(&right.pair_index))
+            .then(left.order_index.cmp(&right.order_index))
+            .then(left.treatment.cmp(&right.treatment))
+            .then(left.direction.cmp(&right.direction))
+            .then(left.nonce.cmp(&right.nonce))
+      });
+   }
+   let status = if blockers.is_empty() { "complete" } else { "blocked" };
+   let decision = if population == Population::Smoke
+   {
+      "smoke-verification-only-no-publication"
+   }
+   else if blockers.is_empty()
+   {
+      "single-workload-evidence-is-trustworthy-enough-for-a-separately-authorized-second-workload"
+   }
+   else
+   {
+      "single-workload-evidence-is-not-admissible-and-does-not-justify-a-second-workload"
+   };
+   let report = Report {
+      schema: "oxide.feed-v1.report",
+      schema_revision: 3,
+      fixture_sha256: FIXTURE_SHA256,
+      fixture_byte_count: FIXTURE_BYTE_COUNT,
+      device,
+      status: status.to_string(),
+      decision: decision.to_string(),
+      blockers,
+      visual_gate_id: VISUAL_GATE_ID,
+      visual_gate_spec_sha256: sha256_bytes(VISUAL_GATE_ID.as_bytes()),
+      visual_gate_source_sha256,
+      repository_ref,
+      repository_head_commit,
+      repository_tree,
+      visual_treatments,
+      adversarial_results,
+      travel_equivalence,
+      treatments: summaries,
+      comparisons,
+      runs,
+      missing_metrics: vec![
+         "presented-frame pacing",
+         "visible-frame pacing",
+         "input-to-visible latency",
+         "main-thread CPU",
+         "process CPU",
+         "resident memory",
+         "symmetric direct GPU time",
+         "direct energy",
+      ],
+      evidence_manifest_sha256,
+      retained_input_bytes,
+      run_count_total: measured_runs.len(),
+      run_count_primary: primary.len(),
+   };
+   Ok(report)
+}
+
+pub fn verify_smoke(run_root: &Path) -> Result<(), String>
+{
+   let paths = ReducePaths {
+      run_root: run_root.to_path_buf(),
+      output_json: run_root.join("unused-smoke-report.json"),
+      output_markdown: run_root.join("unused-smoke-report.md"),
+   };
+   let report = evaluate(&paths, Population::Smoke)?;
+   if report.blockers.is_empty()
+   {
+      Ok(())
+   }
+   else
+   {
+      Err(format!("smoke verification blocked:\n{}", report.blockers.join("\n")))
+   }
 }
 
 pub fn verify_attachment_export(root: &Path) -> Result<(), String>
