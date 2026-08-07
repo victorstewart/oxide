@@ -3,8 +3,22 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 use oxide_feed_v1_app::contract::{self, StartState};
-use oxide_feed_v1_app::FeedV1App;
-use oxide_platform_api::{App, FrameContext, FrameDemand};
+use oxide_feed_v1_app::{FeedV1App, FeedV1Phase};
+use oxide_platform_api::{
+   App,
+   AppEvent,
+   FrameContext,
+   FrameDemand,
+   HapticPattern,
+   Haptics,
+   InputEvent,
+   RendererStats,
+   Timers,
+   TouchEvent,
+   TouchId,
+   TouchPhase,
+   UpdateContext,
+};
 use oxide_renderer_api::{
    Color,
    DrawCmd,
@@ -63,6 +77,15 @@ impl UploadProbe
    {
       self.next_handle = self.next_handle.saturating_add(1);
       ImageHandle(self.next_handle)
+   }
+}
+
+struct NoHaptics;
+
+impl Haptics for NoHaptics
+{
+   fn play(&self, _pattern: HapticPattern)
+   {
    }
 }
 
@@ -132,6 +155,47 @@ fn frozen_app_starts_at_each_exact_contract_offset()
       bottom.status().content_offset_points,
       contract::MAXIMUM_CONTENT_OFFSET_POINTS as f32,
    );
+}
+
+#[test]
+fn measurement_begins_at_the_first_drag_offset_change()
+{
+   let _lock = lock_environment();
+   let _environment = EnvironmentScope::new(StartState::Top, "test-drag-boundary", None);
+   let mut app = FeedV1App::from_environment();
+   let mut uploader = UploadProbe::default();
+   admit_ready(&mut app, &mut uploader);
+
+   dispatch(&mut app, AppEvent::Input(InputEvent::Touch(touch(TouchPhase::Start, 1_000_000_000, 700.0))));
+   assert_eq!(app.status().phase, FeedV1Phase::TouchPending);
+   assert_eq!(app.status().gesture_start_timestamp_ns, 0);
+
+   dispatch(&mut app, AppEvent::Input(InputEvent::Touch(touch(TouchPhase::Move, 1_010_000_000, 697.0))));
+   assert_eq!(app.status().phase, FeedV1Phase::TouchPending);
+   assert_eq!(app.status().content_offset_points, 0.0);
+
+   dispatch(&mut app, AppEvent::Input(InputEvent::Touch(touch(TouchPhase::Move, 1_020_000_000, 693.0))));
+   let status = app.status();
+   assert_eq!(status.phase, FeedV1Phase::Gesture);
+   assert_eq!(status.gesture_start_timestamp_ns, 1_020_000_000);
+   assert_eq!(status.callback_sample_count, 0);
+   assert!(status.content_offset_points > 0.0);
+}
+
+#[test]
+fn a_touch_that_never_drags_returns_to_ready()
+{
+   let _lock = lock_environment();
+   let _environment = EnvironmentScope::new(StartState::Top, "test-tap-ready", None);
+   let mut app = FeedV1App::from_environment();
+   let mut uploader = UploadProbe::default();
+   admit_ready(&mut app, &mut uploader);
+
+   dispatch(&mut app, AppEvent::Input(InputEvent::Touch(touch(TouchPhase::Start, 1_000_000_000, 700.0))));
+   dispatch(&mut app, AppEvent::Input(InputEvent::Touch(touch(TouchPhase::End, 1_050_000_000, 700.0))));
+   assert_eq!(app.status().phase, FeedV1Phase::Ready);
+   assert_eq!(app.status().gesture_start_timestamp_ns, 0);
+   assert_eq!(app.status().content_offset_points, 0.0);
 }
 
 #[test]
@@ -261,9 +325,95 @@ fn ready_frame_exposes_frozen_damage_clip_and_image_geometry()
    );
 }
 
+#[test]
+fn failed_submissions_retry_the_immutable_frame_under_the_latest_frame_id()
+{
+   let _lock = lock_environment();
+   let _environment = EnvironmentScope::new(StartState::Top, "test-ready-retry", None);
+   let mut app = FeedV1App::from_environment();
+   let mut uploader = UploadProbe::default();
+   assert_eq!(App::prepare_frame(&mut app, frame(1, 1_000_000_000), &mut uploader), FrameDemand::NextVsync);
+   assert_eq!(App::prepare_frame(&mut app, frame(2, 1_008_333_333), &mut uploader), FrameDemand::Idle);
+   assert_eq!(app.status().phase, FeedV1Phase::AwaitingReadySubmit);
+   assert_eq!(app.status().pending_submit_frame_id, Some(2));
+   let before = prepared_draw_list(&app);
+
+   assert_eq!(App::prepare_frame(&mut app, frame(3, 1_016_666_666), &mut uploader), FrameDemand::Idle);
+   assert_eq!(app.status().pending_submit_frame_id, Some(3));
+   assert_eq!(prepared_draw_list(&app), before);
+   dispatch(&mut app, AppEvent::RendererStats(renderer_stats(3)));
+   assert_eq!(app.status().phase, FeedV1Phase::Ready);
+}
+
+#[test]
+fn settlement_waits_for_a_closing_frame_and_retries_its_exact_submit()
+{
+   let _lock = lock_environment();
+   let _environment = EnvironmentScope::new(StartState::Top, "test-settlement-submit", None);
+   let mut app = FeedV1App::from_environment();
+   let mut uploader = UploadProbe::default();
+   admit_ready(&mut app, &mut uploader);
+   begin_short_settled_drag(&mut app);
+
+   assert_eq!(App::prepare_frame(&mut app, frame(3, 1_400_000_000), &mut uploader), FrameDemand::NextVsync);
+   assert_eq!(app.status().phase, FeedV1Phase::SettledFramePrepared);
+   assert_eq!(app.status().callback_sample_count, 1);
+   assert_eq!(App::prepare_frame(&mut app, frame(4, 1_408_333_333), &mut uploader), FrameDemand::Idle);
+   assert_eq!(app.status().phase, FeedV1Phase::AwaitingCompletionSubmit);
+   assert_eq!(app.status().callback_sample_count, 2);
+   assert_eq!(app.status().pending_submit_frame_id, Some(4));
+   let closing_frame = prepared_draw_list(&app);
+
+   assert_eq!(App::prepare_frame(&mut app, frame(5, 1_416_666_666), &mut uploader), FrameDemand::Idle);
+   assert_eq!(app.status().pending_submit_frame_id, Some(5));
+   assert_eq!(prepared_draw_list(&app), closing_frame);
+}
+
 fn lock_environment() -> MutexGuard<'static, ()>
 {
    ENVIRONMENT_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn admit_ready(app: &mut FeedV1App, uploader: &mut UploadProbe)
+{
+   assert_eq!(App::prepare_frame(app, frame(1, 1_000_000_000), uploader), FrameDemand::NextVsync);
+   assert_eq!(App::prepare_frame(app, frame(2, 1_008_333_333), uploader), FrameDemand::Idle);
+   assert_eq!(app.status().pending_submit_frame_id, Some(2));
+   dispatch(app, AppEvent::RendererStats(renderer_stats(2)));
+   assert_eq!(app.status().phase, FeedV1Phase::Ready);
+   assert!(!app.status().inertia_observed);
+}
+
+fn begin_short_settled_drag(app: &mut FeedV1App)
+{
+   dispatch(app, AppEvent::Input(InputEvent::Touch(touch(TouchPhase::Start, 1_100_000_000, 700.0))));
+   dispatch(app, AppEvent::Input(InputEvent::Touch(touch(TouchPhase::Move, 1_110_000_000, 690.0))));
+   dispatch(app, AppEvent::Input(InputEvent::Touch(touch(TouchPhase::End, 1_300_000_000, 690.0))));
+   assert_eq!(app.status().phase, FeedV1Phase::Gesture);
+   assert!(!app.status().inertia_observed);
+}
+
+fn dispatch(app: &mut FeedV1App, event: AppEvent)
+{
+   let mut context = UpdateContext {
+      post_task: Box::new(|_| {}),
+      timers: Timers,
+      haptics: Box::new(NoHaptics),
+   };
+   App::event(app, event, &mut context);
+}
+
+fn renderer_stats(frame_id: u64) -> RendererStats
+{
+   RendererStats {
+      frame_id,
+      encode_ms: 0.0,
+      damage_pct: 100.0,
+      damage_rects: 1,
+      draws: 1,
+      sample_count: 1,
+      hdr: false,
+   }
 }
 
 fn frame(frame_id: u64, timestamp_ns: u64) -> FrameContext
@@ -280,6 +430,20 @@ fn frame(frame_id: u64, timestamp_ns: u64) -> FrameContext
          contract::HOST_HEIGHT_POINTS as f32,
       ),
       scale: contract::SURFACE_SCALE as f32,
+   }
+}
+
+fn touch(phase: TouchPhase, timestamp_ns: u64, y: f32) -> TouchEvent
+{
+   TouchEvent {
+      id: TouchId(1),
+      phase,
+      timestamp_ns,
+      x: contract::SURFACE_ORIGIN_X_POINTS as f32 + 20.0,
+      y,
+      pressure: None,
+      tilt: None,
+      device: oxide_platform_api::PointerDevice::Finger,
    }
 }
 
@@ -333,4 +497,13 @@ fn vertex_bounds(vertices: &[oxide_renderer_api::Vertex]) -> RectF
       bottom = bottom.max(vertex.y);
    }
    RectF::new(left, top, right - left, bottom - top)
+}
+
+fn prepared_draw_list(app: &FeedV1App) -> oxide_renderer_api::DrawList
+{
+   let Some(prepared) = App::prepared_frame(app) else
+   {
+      panic!("feed app did not expose its prepared frame");
+   };
+   prepared.draw_list.clone()
 }
