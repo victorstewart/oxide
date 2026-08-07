@@ -167,6 +167,29 @@ fn ios_host_simulator_architecture_contract_is_arm64_only()
 }
 
 #[test]
+fn xcui_smoke_runs_only_the_launch_test_and_reuses_derived_data()
+{
+   let script = include_str!(concat!(
+      env!("CARGO_MANIFEST_DIR"),
+      "/../../scripts/run_xcui_smoke.sh"
+   ));
+
+   assert_eq!(
+      script
+         .matches("-only-testing:OxideHostUITests/OxideHostUITests/testWindowLaunchSmoke")
+         .count(),
+      1
+   );
+   assert!(!script.contains("OXIDE_UI_EXPORT"));
+   assert!(
+      script
+         .lines()
+         .filter(|line| line.contains("rm -rf"))
+         .all(|line| !line.contains("DERIVED_DATA"))
+   );
+}
+
+#[test]
 fn experiment_manifest_checker_accepts_current_manifest() {
     let text = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../perf-experiments.toml"));
     for id in [
