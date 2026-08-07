@@ -406,7 +406,7 @@ private final class FeedV1UIKitRunRecorder: NSObject, FeedV1UIKitObservationSink
 
       for path in paths
       {
-         guard fixture.rows.indices.contains(path.item), let cell = collection.cellForItem(at: path) else
+         guard let row = fixture.row(at: path.item), let cell = collection.cellForItem(at: path) else
          {
             throw FeedV1ContractError.invariant("visible UIKit row has no realized cell")
          }
@@ -436,7 +436,7 @@ private final class FeedV1UIKitRunRecorder: NSObject, FeedV1UIKitObservationSink
                continue
             }
             components.append(FeedV1RunComponent(
-               id: fixture.rows[path.item].componentID(kind),
+               id: row.componentID(kind),
                kind: kind.rawValue,
                rowIndex: path.item,
                contentRectPx: contentRect,
@@ -446,8 +446,8 @@ private final class FeedV1UIKitRunRecorder: NSObject, FeedV1UIKitObservationSink
       }
 
       return FeedV1RunGeometry(
-         rowCount: fixture.rows.count,
-         manifestComponentCount: fixture.rows.count * FeedV1ComponentKind.allCases.count,
+         rowCount: fixture.rowCount,
+         manifestComponentCount: fixture.rowCount * FeedV1ComponentKind.allCases.count,
          contentExtentPoints: state.contentExtentPoints,
          maximumContentOffsetPoints: state.maximumContentOffsetPoints,
          capturedContentOffsetPoints: state.contentOffsetPoints,

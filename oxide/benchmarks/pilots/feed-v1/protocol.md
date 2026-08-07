@@ -94,11 +94,13 @@ direction's frozen start offset, load only naturally requested visible text and
 image resources, and reach the same app-owned ready-admission boundary. Reading
 the frozen geometry is workload input, not resource warming. Do not
 programmatically shape, decode, render, or scroll through offscreen content.
-The six smoke treatment/direction tuples take one full-canvas screenshot before
-their gesture. The 54 primary tuples take no screenshots and begin the gesture
-immediately after ready admission, so every
-measured treatment has the same visible warmup and naturally encounters
-uncached offscreen resources during travel.
+Every treatment retains the compact deterministic recipe and height prefix, not
+a pre-expanded 2,000-row string table; it derives equivalent row strings only
+when the collection or renderer requests visible content. The six smoke
+treatment/direction tuples take one full-canvas screenshot before their gesture.
+The 54 primary tuples take no screenshots and begin the gesture immediately
+after ready admission, so every measured treatment has the same visible warmup
+and naturally encounters uncached offscreen resources during travel.
 
 Freeze that gesture before observing results: use the center x coordinate and
 drag from normalized y `0.82` to `0.18` for forward or `0.18` to `0.82` for

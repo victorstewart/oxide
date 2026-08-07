@@ -13,13 +13,16 @@ enum FeedV1ContractCheckMain
       let first = try FeedV1Contract.materialize()
       let second = try FeedV1Contract.materialize()
 #endif
-      try require(first.rows == second.rows, "repeat materialization changed row content")
       try require(first.rowHeightPrefixPoints == second.rowHeightPrefixPoints, "repeat materialization changed prefix geometry")
       try require(first.canonicalSHA256 == second.canonicalSHA256, "repeat materialization changed the canonical hash")
       try require(first.canonicalByteCount == second.canonicalByteCount, "repeat materialization changed canonical byte length")
-      try require(first.rows.count == FeedV1Contract.rowCount, "row count mismatch")
+      try require(first.rowCount == FeedV1Contract.rowCount, "row count mismatch")
       try require(first.rowHeightPrefixPoints.count == FeedV1Contract.rowCount + 1, "prefix count mismatch")
       try require(first.rowHeightPrefixPoints[0] == 0, "prefix origin is not zero")
+      try require(first.row(at: -1) == nil, "negative row index was accepted")
+      try require(first.row(at: first.rowCount) == nil, "row-count index was accepted")
+      try require(first.rowHeightPoints(at: -1) == nil, "negative row-height index was accepted")
+      try require(first.rowHeightPoints(at: first.rowCount) == nil, "row-count height index was accepted")
       try require(FeedV1Contract.completionNonceIsValid("primary-s00-p00-o0-oxide-forward-test"), "valid completion nonce was rejected")
       try require(FeedV1Contract.completionNonceIsValid(String(repeating: "a", count: 128)), "128-byte completion nonce was rejected")
       try require(!FeedV1Contract.completionNonceIsValid(""), "empty completion nonce was accepted")
@@ -43,19 +46,21 @@ enum FeedV1ContractCheckMain
       try require(admissionOrder == ["snapshot", "environment"], "environment admission did not snapshot transitions before querying the endpoint")
       try require(admission?.snapshot == 7 && admission?.environment == "nominal", "environment admission changed captured values")
 
-      for index in 0 ..< first.rows.count
-      {
-         let delta = first.rowHeightPrefixPoints[index + 1] - first.rowHeightPrefixPoints[index]
-         try require(delta == first.rows[index].heightPoints, "prefix delta mismatch at row \(index)")
-      }
-
       var componentIDs = Set<String>()
-      componentIDs.reserveCapacity(first.rows.count * FeedV1ComponentKind.allCases.count)
-      for index in first.rows.indices
+      componentIDs.reserveCapacity(first.rowCount * FeedV1ComponentKind.allCases.count)
+      for index in 0 ..< first.rowCount
       {
+         guard let firstRow = first.row(at: index), let secondRow = second.row(at: index) else
+         {
+            throw FeedV1ContractError.invariant("valid row index \(index) was rejected")
+         }
+         try require(firstRow == secondRow, "repeat materialization changed row content at row \(index)")
+         let delta = first.rowHeightPrefixPoints[index + 1] - first.rowHeightPrefixPoints[index]
+         try require(delta == firstRow.heightPoints, "prefix delta mismatch at row \(index)")
+         try require(first.rowHeightPoints(at: index) == firstRow.heightPoints, "row height lookup mismatch at row \(index)")
          for kind in FeedV1ComponentKind.allCases
          {
-            let id = first.rows[index].componentID(kind)
+            let id = firstRow.componentID(kind)
             try require(componentIDs.insert(id).inserted, "duplicate component ID \(id)")
             let rect = try first.componentRectPhysicalPixels(rowIndex: index, kind: kind)
             try require(rect.width > 0 && rect.height > 0, "empty component bounds for \(id)")

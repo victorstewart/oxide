@@ -302,45 +302,23 @@ public enum FeedV1Contract
 
    static func materializeUnchecked() throws -> FeedV1Fixture
    {
-      var rows = [FeedV1Row]()
       var prefix = [Int]()
-      rows.reserveCapacity(rowCount)
       prefix.reserveCapacity(rowCount + 1)
       prefix.append(0)
 
       for index in 0 ..< rowCount
       {
-         let row = FeedV1Recipe.row(at: index)
-         guard FeedV1Recipe.rowHeightPoints.contains(row.heightPoints) else
-         {
-            throw FeedV1ContractError.invariant("row \(index) has an unknown height")
-         }
-         guard row.caption.split(separator: "\n", omittingEmptySubsequences: false).count == FeedV1Recipe.lineCount(forHeight: row.heightPoints) else
-         {
-            throw FeedV1ContractError.invariant("row \(index) caption line count does not match its height")
-         }
-         guard (0 ..< FeedV1Recipe.checkerVariantCount).contains(row.checkerVariant) else
-         {
-            throw FeedV1ContractError.invariant("row \(index) checker variant is out of range")
-         }
-
-         rows.append(row)
-         prefix.append(prefix[index] + row.heightPoints)
+         prefix.append(prefix[index] + FeedV1Recipe.rowHeightPoints(at: index))
       }
 
       guard prefix.count == rowCount + 1 else
       {
          throw FeedV1ContractError.invariant("prefix table length is not row count plus one")
       }
-      guard Set(rows.map(\.id)).count == rowCount else
-      {
-         throw FeedV1ContractError.invariant("row identities are not unique")
-      }
 
-      let canonicalBytes = FeedV1CanonicalEncoder.encode(rows: rows, prefix: prefix)
+      let canonicalBytes = FeedV1CanonicalEncoder.encode(prefix: prefix)
       let canonicalSHA256 = FeedV1Hash.sha256Hex(canonicalBytes)
       return FeedV1Fixture(
-         rows: rows,
          rowHeightPrefixPoints: prefix,
          canonicalSHA256: canonicalSHA256,
          canonicalByteCount: canonicalBytes.count
@@ -359,19 +337,38 @@ public enum FeedV1Contract
    public static func canonicalBytesForAudit() throws -> Data
    {
       let fixture = try materialize()
-      return FeedV1CanonicalEncoder.encode(
-         rows: fixture.rows,
-         prefix: fixture.rowHeightPrefixPoints
-      )
+      return FeedV1CanonicalEncoder.encode(prefix: fixture.rowHeightPrefixPoints)
    }
 }
 
 public struct FeedV1Fixture: Sendable
 {
-   public let rows: [FeedV1Row]
    public let rowHeightPrefixPoints: [Int]
    public let canonicalSHA256: String
    public let canonicalByteCount: Int
+
+   public var rowCount: Int
+   {
+      FeedV1Contract.rowCount
+   }
+
+   public func row(at index: Int) -> FeedV1Row?
+   {
+      guard (0 ..< rowCount).contains(index) else
+      {
+         return nil
+      }
+      return FeedV1Recipe.row(at: index)
+   }
+
+   public func rowHeightPoints(at index: Int) -> Int?
+   {
+      guard (0 ..< rowCount).contains(index) else
+      {
+         return nil
+      }
+      return rowHeightPrefixPoints[index + 1] - rowHeightPrefixPoints[index]
+   }
 
    public var contentExtentPoints: Int
    {
@@ -398,7 +395,7 @@ public struct FeedV1Fixture: Sendable
    {
       let clampedY = min(max(contentY, 0), max(contentExtentPoints - 1, 0))
       var lower = 0
-      var upper = rows.count
+      var upper = rowCount
       while lower < upper
       {
          let middle = lower + ((upper - lower) / 2)
@@ -411,27 +408,26 @@ public struct FeedV1Fixture: Sendable
             upper = middle
          }
       }
-      return min(lower, max(rows.count - 1, 0))
+      return min(lower, max(rowCount - 1, 0))
    }
 
    public func componentRectPhysicalPixels(rowIndex: Int, kind: FeedV1ComponentKind) throws -> FeedV1PhysicalRect
    {
-      guard rows.indices.contains(rowIndex) else
+      guard let rowHeight = rowHeightPoints(at: rowIndex) else
       {
          throw FeedV1ContractError.invariant("component row index \(rowIndex) is out of range")
       }
       let scale = FeedV1Contract.surfaceScale
-      let row = rows[rowIndex]
       let rowY = rowHeightPrefixPoints[rowIndex]
       let textX = FeedV1Contract.rowLeadingPoints + FeedV1Contract.imageSidePoints + FeedV1Contract.imageTextGapPoints
       let textWidth = FeedV1Contract.surfaceWidthPoints - textX - FeedV1Contract.rowTrailingPoints
-      let captionHeight = FeedV1Recipe.lineCount(forHeight: row.heightPoints) * FeedV1Contract.captionLineHeightPoints
+      let captionHeight = FeedV1Recipe.lineCount(forHeight: rowHeight) * FeedV1Contract.captionLineHeightPoints
       let metadataY = FeedV1Contract.captionTopPoints + captionHeight + FeedV1Contract.metadataGapPoints
 
       switch kind
       {
          case .row:
-            return FeedV1PhysicalRect(x: 0, y: rowY * scale, width: FeedV1Contract.surfaceWidthPoints * scale, height: row.heightPoints * scale)
+            return FeedV1PhysicalRect(x: 0, y: rowY * scale, width: FeedV1Contract.surfaceWidthPoints * scale, height: rowHeight * scale)
          case .image:
             return FeedV1PhysicalRect(
                x: FeedV1Contract.rowLeadingPoints * scale,
@@ -463,7 +459,7 @@ public struct FeedV1Fixture: Sendable
          case .separator:
             return FeedV1PhysicalRect(
                x: 0,
-               y: ((rowY + row.heightPoints) * scale) - FeedV1Contract.separatorPhysicalPixels,
+               y: ((rowY + rowHeight) * scale) - FeedV1Contract.separatorPhysicalPixels,
                width: FeedV1Contract.surfaceWidthPoints * scale,
                height: FeedV1Contract.separatorPhysicalPixels
             )
@@ -489,7 +485,10 @@ public struct FeedV1Fixture: Sendable
 
       for rowIndex in first ... last
       {
-         let row = rows[rowIndex]
+         guard let row = row(at: rowIndex) else
+         {
+            throw FeedV1ContractError.invariant("visible component row index \(rowIndex) is out of range")
+         }
          for kind in FeedV1ComponentKind.allCases
          {
             let rect = try componentRectPhysicalPixels(rowIndex: rowIndex, kind: kind)
@@ -552,6 +551,12 @@ enum FeedV1Recipe
       CheckerPalette(FeedV1RGBA(67, 160, 71), FeedV1RGBA(236, 103, 65)),
       CheckerPalette(FeedV1RGBA(36, 106, 115), FeedV1RGBA(232, 164, 74))
    ]
+
+   static func rowHeightPoints(at index: Int) -> Int
+   {
+      let mixed = mix32(UInt32(index))
+      return rowHeightPoints[Int((mixed >> 5) & 3)]
+   }
 
    static func row(at index: Int) -> FeedV1Row
    {
@@ -649,7 +654,7 @@ private struct CheckerPalette
 
 private enum FeedV1CanonicalEncoder
 {
-   static func encode(rows: [FeedV1Row], prefix: [Int]) -> Data
+   static func encode(prefix: [Int]) -> Data
    {
       var bytes = Data()
       bytes.reserveCapacity(320_000)
@@ -763,9 +768,10 @@ private enum FeedV1CanonicalEncoder
          bytes.append(checkerBytes)
       }
 
-      bytes.appendUInt32(UInt32(rows.count))
-      for row in rows
+      bytes.appendUInt32(UInt32(FeedV1Contract.rowCount))
+      for index in 0 ..< FeedV1Contract.rowCount
       {
+         let row = FeedV1Recipe.row(at: index)
          bytes.appendString(row.id)
          bytes.appendString(row.title)
          bytes.appendString(row.caption)

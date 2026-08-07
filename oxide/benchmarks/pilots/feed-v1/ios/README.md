@@ -8,8 +8,11 @@ orchestration. None of these files belong in a production host target.
 
 ## Frozen fixture
 
-`FeedV1Contract.materialize()` expands one deterministic recipe into 2,000
-stable rows and rejects any output whose complete canonical SHA-256 is not:
+`FeedV1Contract.materialize()` returns a fixture that retains only the
+deterministic recipe's 2,001-entry height prefix and canonical identity. Startup
+admission derives the 2,000 rows sequentially for canonical verification and
+then discards their materialized strings. It rejects any output whose complete
+canonical SHA-256 is not:
 
 ```text
 a1de9b4a914734fe21d21e9b6f8a9b61970f7e22e0fa4ef0103031e399881473
@@ -23,8 +26,10 @@ by UTF-8, and checker payloads are raw RGBA8 bytes in declared variant order.
 The hash covers every generated ID and string, all 2,000 integer row heights,
 the complete 2,001-entry prefix table, the final content extent, every checker
 RGBA byte, font references and hashes, colors, geometry, placement, and launch
-transport names. The compact source recipe is the fixture; no 2,000-row dump is
-checked in.
+transport names. The compact source recipe is the live fixture; neither UIKit
+treatment retains a 2,000-row string table and no such dump is checked in.
+`FeedV1Fixture.row(at:)` materializes one bounded row only when a data source
+needs that visible cell, matching Oxide's recipe-owned, on-demand row content.
 
 Each row has six deterministic manifest IDs: `/row`, `/image`, `/title`,
 `/caption`, `/metadata`, and `/separator` beneath its stable row ID.
@@ -73,8 +78,9 @@ hashes before registering the faces with Core Text.
 
 Both paths disable collection prefetching so a fresh process warms only the
 initially visible resources. Checker images are generated and cached lazily on
-first naturally visible use. Neither path logs or appends samples during frame
-callbacks.
+first naturally visible use. Their shared fixture retains only prefix geometry
+and identity; row strings are generated as cells are requested. Neither path
+logs or appends samples during frame callbacks.
 
 `FeedV1RootFactory.make(variant:resourceBundle:)` creates exactly one root and
 one feed surface. The controller chooses `.idiomatic` or `.optimized` once per

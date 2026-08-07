@@ -52,7 +52,7 @@ public final class FeedV1OptimizedUIKitView: NSObject, FeedV1UIKitSurface, UICol
 
    public func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int
    {
-      fixture.rows.count
+      fixture.rowCount
    }
 
    public func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell
@@ -63,10 +63,15 @@ public final class FeedV1OptimizedUIKitView: NSObject, FeedV1UIKitSurface, UICol
          renderingErrorDescription = "feed-v1 optimized reuse returned an unexpected cell class"
          return dequeued
       }
+      guard let row = fixture.row(at: indexPath.item) else
+      {
+         renderingErrorDescription = "feed-v1 optimized data source requested an out-of-range row"
+         return cell
+      }
 
       do
       {
-         try cell.apply(row: fixture.rows[indexPath.item], resources: resources)
+         try cell.apply(row: row, resources: resources)
       }
       catch
       {
@@ -244,21 +249,22 @@ private final class FeedV1CachedCollectionLayout: UICollectionViewLayout
 
    private func buildCache()
    {
-      itemAttributes.reserveCapacity(fixture.rows.count)
-      for index in fixture.rows.indices
+      itemAttributes.reserveCapacity(fixture.rowCount)
+      for index in 0 ..< fixture.rowCount
       {
+         let rowHeight = fixture.rowHeightPrefixPoints[index + 1] - fixture.rowHeightPrefixPoints[index]
          let attributes = UICollectionViewLayoutAttributes(forCellWith: IndexPath(item: index, section: 0))
          attributes.frame = CGRect(
             x: 0,
             y: fixture.rowHeightPrefixPoints[index],
             width: FeedV1Contract.surfaceWidthPoints,
-            height: fixture.rows[index].heightPoints
+            height: rowHeight
          )
          itemAttributes.append(attributes)
       }
 
-      cachedVisibleRanges.reserveCapacity(fixture.rows.count * 4)
-      for first in fixture.rows.indices
+      cachedVisibleRanges.reserveCapacity(fixture.rowCount * 4)
+      for first in 0 ..< fixture.rowCount
       {
          let firstStart = fixture.rowHeightPrefixPoints[first]
          let firstEnd = fixture.rowHeightPrefixPoints[first + 1] - 1

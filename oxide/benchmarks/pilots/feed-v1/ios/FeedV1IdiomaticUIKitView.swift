@@ -58,7 +58,7 @@ public final class FeedV1IdiomaticUIKitView: NSObject, FeedV1UIKitSurface, UICol
 
    public func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int
    {
-      fixture.rows.count
+      fixture.rowCount
    }
 
    public func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell
@@ -69,10 +69,15 @@ public final class FeedV1IdiomaticUIKitView: NSObject, FeedV1UIKitSurface, UICol
          renderingErrorDescription = "feed-v1 idiomatic reuse returned an unexpected cell class"
          return dequeued
       }
+      guard let row = fixture.row(at: indexPath.item) else
+      {
+         renderingErrorDescription = "feed-v1 idiomatic data source requested an out-of-range row"
+         return cell
+      }
 
       do
       {
-         try cell.apply(row: fixture.rows[indexPath.item], resources: resources)
+         try cell.apply(row: row, resources: resources)
       }
       catch
       {
@@ -83,9 +88,14 @@ public final class FeedV1IdiomaticUIKitView: NSObject, FeedV1UIKitSurface, UICol
 
    public func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> CGSize
    {
-      CGSize(
+      guard let rowHeight = fixture.rowHeightPoints(at: indexPath.item) else
+      {
+         renderingErrorDescription = "feed-v1 idiomatic layout requested an out-of-range row"
+         return .zero
+      }
+      return CGSize(
          width: FeedV1Contract.surfaceWidthPoints,
-         height: fixture.rows[indexPath.item].heightPoints
+         height: rowHeight
       )
    }
 
