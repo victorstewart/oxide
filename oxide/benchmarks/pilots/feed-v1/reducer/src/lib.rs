@@ -224,6 +224,63 @@ struct FailureRecord
    message: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct VisualMetrics
+{
+   pub ssim: f64,
+   pub worst_tile_rgb_mae: f64,
+   pub exact_rgb_mae: f64,
+   pub passes: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct RgbaImage
+{
+   pub width: u32,
+   pub height: u32,
+   pub pixels: Vec<u8>,
+}
+
+impl RgbaImage
+{
+   fn validate(&self) -> Result<(), String>
+   {
+      let expected = self.width as usize * self.height as usize * 4;
+      if self.pixels.len() != expected
+      {
+         return Err(format!("RGBA byte count {} does not match {expected}", self.pixels.len()));
+      }
+      Ok(())
+   }
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct AdversarialResult
+{
+   mutation: String,
+   rejected: bool,
+   ssim: f64,
+   worst_tile_rgb_mae: f64,
+}
+
+pub fn visual_metrics(reference: &RgbaImage, candidate: &RgbaImage) -> Result<VisualMetrics, String>
+{
+   reference.validate()?;
+   candidate.validate()?;
+   if reference.width != candidate.width || reference.height != candidate.height
+   {
+      return Err("visual inputs have different dimensions".to_string());
+   }
+   let ssim = windowed_luma_ssim(reference, candidate, 8)?;
+   let (worst_tile_rgb_mae, exact_rgb_mae) = tile_rgb_mae(reference, candidate, TILE_SIDE)?;
+   Ok(VisualMetrics {
+      ssim,
+      worst_tile_rgb_mae,
+      exact_rgb_mae,
+      passes: ssim >= SSIM_THRESHOLD && worst_tile_rgb_mae <= TILE_MAE_THRESHOLD,
+   })
+}
+
 pub fn strict_validate_run_json(bytes: &[u8]) -> Result<(), String>
 {
    let record: RunRecord = serde_json::from_slice(bytes).map_err(|error| format!("strict run schema: {error}"))?;
@@ -248,6 +305,219 @@ pub fn frozen_components(start_state: &str) -> Result<Vec<Component>, String>
 pub fn frozen_order_index(phase: &str, session: u32, pair: u32, treatment: &str) -> Result<u32, String>
 {
    expected_order_index(phase, session, pair, treatment)
+}
+
+fn windowed_luma_ssim(reference: &RgbaImage, candidate: &RgbaImage, side: u32) -> Result<f64, String>
+{
+   if side == 0
+   {
+      return Err("SSIM window side is zero".to_string());
+   }
+   let c1 = (0.01_f64 * 255.0).powi(2);
+   let c2 = (0.03_f64 * 255.0).powi(2);
+   let mut total = 0.0;
+   let mut windows = 0_u64;
+   let mut y = 0;
+   while y < reference.height
+   {
+      let max_y = (y + side).min(reference.height);
+      let mut x = 0;
+      while x < reference.width
+      {
+         let max_x = (x + side).min(reference.width);
+         let count = (max_x - x) as f64 * (max_y - y) as f64;
+         let mut reference_mean = 0.0;
+         let mut candidate_mean = 0.0;
+         for py in y .. max_y
+         {
+            for px in x .. max_x
+            {
+               reference_mean += luma(reference, px, py);
+               candidate_mean += luma(candidate, px, py);
+            }
+         }
+         reference_mean /= count;
+         candidate_mean /= count;
+
+         let mut reference_variance = 0.0;
+         let mut candidate_variance = 0.0;
+         let mut covariance = 0.0;
+         for py in y .. max_y
+         {
+            for px in x .. max_x
+            {
+               let reference_delta = luma(reference, px, py) - reference_mean;
+               let candidate_delta = luma(candidate, px, py) - candidate_mean;
+               reference_variance += reference_delta * reference_delta;
+               candidate_variance += candidate_delta * candidate_delta;
+               covariance += reference_delta * candidate_delta;
+            }
+         }
+         let denominator = (count - 1.0).max(1.0);
+         reference_variance /= denominator;
+         candidate_variance /= denominator;
+         covariance /= denominator;
+         total += ((2.0 * reference_mean * candidate_mean + c1) * (2.0 * covariance + c2))
+            / ((reference_mean.powi(2) + candidate_mean.powi(2) + c1)
+               * (reference_variance + candidate_variance + c2));
+         windows += 1;
+         x += side;
+      }
+      y += side;
+   }
+   if windows == 0
+   {
+      return Err("SSIM received an empty image".to_string());
+   }
+   Ok(total / windows as f64)
+}
+
+fn luma(image: &RgbaImage, x: u32, y: u32) -> f64
+{
+   let index = ((y * image.width + x) * 4) as usize;
+   0.2126 * f64::from(image.pixels[index])
+      + 0.7152 * f64::from(image.pixels[index + 1])
+      + 0.0722 * f64::from(image.pixels[index + 2])
+}
+
+fn tile_rgb_mae(reference: &RgbaImage, candidate: &RgbaImage, side: u32) -> Result<(f64, f64), String>
+{
+   if side == 0
+   {
+      return Err("tile side is zero".to_string());
+   }
+   let mut worst: f64 = 0.0;
+   let mut total_error = 0_u64;
+   let mut total_channels = 0_u64;
+   let mut y = 0;
+   while y < reference.height
+   {
+      let mut x = 0;
+      while x < reference.width
+      {
+         let (error, channels) = rgb_error(reference, candidate, Rect {
+            x: x as i32,
+            y: y as i32,
+            width: side.min(reference.width - x) as i32,
+            height: side.min(reference.height - y) as i32,
+         })?;
+         worst = worst.max(error as f64 / channels as f64);
+         total_error = total_error.checked_add(error)
+            .ok_or_else(|| "RGB MAE error sum overflowed".to_string())?;
+         total_channels = total_channels.checked_add(channels)
+            .ok_or_else(|| "RGB MAE channel count overflowed".to_string())?;
+         x += side;
+      }
+      y += side;
+   }
+   Ok((worst, total_error as f64 / total_channels as f64))
+}
+
+fn rgb_error(reference: &RgbaImage, candidate: &RgbaImage, rect: Rect) -> Result<(u64, u64), String>
+{
+   let rect = bounded_rect(rect, reference.width, reference.height)?;
+   let mut error = 0_u64;
+   let mut channels = 0_u64;
+   for y in rect.y as u32 .. (rect.y + rect.height) as u32
+   {
+      for x in rect.x as u32 .. (rect.x + rect.width) as u32
+      {
+         let index = ((y * reference.width + x) * 4) as usize;
+         for channel in 0 .. 3
+         {
+            error += u64::from(reference.pixels[index + channel].abs_diff(candidate.pixels[index + channel]));
+            channels += 1;
+         }
+      }
+   }
+   if channels == 0
+   {
+      return Err("RGB MAE received an empty rectangle".to_string());
+   }
+   Ok((error, channels))
+}
+
+fn bounded_rect(rect: Rect, width: u32, height: u32) -> Result<Rect, String>
+{
+   let min_x = rect.x.max(0).min(width as i32);
+   let min_y = rect.y.max(0).min(height as i32);
+   let max_x = rect.x.saturating_add(rect.width).max(0).min(width as i32);
+   let max_y = rect.y.saturating_add(rect.height).max(0).min(height as i32);
+   if min_x >= max_x || min_y >= max_y
+   {
+      return Err("rectangle does not intersect the image".to_string());
+   }
+   Ok(Rect { x: min_x, y: min_y, width: max_x - min_x, height: max_y - min_y })
+}
+
+fn decode_png(path: &Path) -> Result<RgbaImage, String>
+{
+   let file = File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
+   let mut decoder = png::Decoder::new(BufReader::new(file));
+   decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+   let mut reader = decoder.read_info().map_err(|error| format!("decode {}: {error}", path.display()))?;
+   let mut bytes = vec![0; reader.output_buffer_size()];
+   let info = reader.next_frame(&mut bytes).map_err(|error| format!("read {}: {error}", path.display()))?;
+   let source = &bytes[.. info.buffer_size()];
+   let pixel_count = info.width as usize * info.height as usize;
+   let mut rgba = Vec::with_capacity(pixel_count * 4);
+   match info.color_type
+   {
+      png::ColorType::Rgba => rgba.extend_from_slice(source),
+      png::ColorType::Rgb =>
+      {
+         for pixel in source.chunks_exact(3)
+         {
+            rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+         }
+      }
+      png::ColorType::Grayscale =>
+      {
+         for &value in source
+         {
+            rgba.extend_from_slice(&[value, value, value, 255]);
+         }
+      }
+      png::ColorType::GrayscaleAlpha =>
+      {
+         for pixel in source.chunks_exact(2)
+         {
+            rgba.extend_from_slice(&[pixel[0], pixel[0], pixel[0], pixel[1]]);
+         }
+      }
+      png::ColorType::Indexed => return Err(format!("{} remained indexed after PNG expansion", path.display())),
+   }
+   let image = RgbaImage { width: info.width, height: info.height, pixels: rgba };
+   image.validate()?;
+   Ok(image)
+}
+
+fn crop_surface(image: &RgbaImage) -> Result<RgbaImage, String>
+{
+   let surface_width = SURFACE_WIDTH_POINTS * SCALE;
+   let surface_height = SURFACE_HEIGHT_POINTS * SCALE;
+   let host_width = HOST_WIDTH_POINTS * SCALE;
+   let host_height = HOST_HEIGHT_POINTS * SCALE;
+   if image.width != host_width || image.height != host_height
+   {
+      return Err(format!(
+         "capture is {}x{}, expected full XCUIScreen canvas {}x{}",
+         image.width,
+         image.height,
+         host_width,
+         host_height
+      ));
+   }
+   let origin_x = SURFACE_ORIGIN_X_POINTS * SCALE;
+   let origin_y = SURFACE_ORIGIN_Y_POINTS * SCALE;
+   let mut pixels = Vec::with_capacity(surface_width as usize * surface_height as usize * 4);
+   for y in origin_y .. origin_y + surface_height
+   {
+      let start = ((y * image.width + origin_x) * 4) as usize;
+      let end = start + surface_width as usize * 4;
+      pixels.extend_from_slice(&image.pixels[start .. end]);
+   }
+   Ok(RgbaImage { width: surface_width, height: surface_height, pixels })
 }
 
 fn validate_run(record: &RunRecord) -> Result<(), String>
@@ -638,6 +908,167 @@ fn rect_within(left: Rect, right: Rect, tolerance: i32) -> bool
       && (left.y - right.y).abs() <= tolerance
       && (left.x + left.width - right.x - right.width).abs() <= tolerance
       && (left.y + left.height - right.y - right.height).abs() <= tolerance
+}
+
+fn fill(image: &mut RgbaImage, rect: Rect, rgba: [u8; 4]) -> Result<(), String>
+{
+   let rect = bounded_rect(rect, image.width, image.height)?;
+   for y in rect.y as u32 .. (rect.y + rect.height) as u32
+   {
+      for x in rect.x as u32 .. (rect.x + rect.width) as u32
+      {
+         let index = ((y * image.width + x) * 4) as usize;
+         image.pixels[index .. index + 4].copy_from_slice(&rgba);
+      }
+   }
+   Ok(())
+}
+
+fn component_rect<'a>(components: &'a [Component], kind: &str, from_end: bool) -> Result<Rect, String>
+{
+   let mut matches = components.iter().filter(|component| component.kind == kind);
+   if from_end
+   {
+      matches.next_back().map(|component| component.viewport_clip_px)
+   }
+   else
+   {
+      matches.next().map(|component| component.viewport_clip_px)
+   }
+   .ok_or_else(|| format!("reference geometry has no visible {kind}"))
+}
+
+fn mutate_missing_row(reference: &RgbaImage, components: &[Component]) -> Result<RgbaImage, String>
+{
+   let mut image = reference.clone();
+   fill(&mut image, component_rect(components, "row", false)?, [247, 244, 238, 255])?;
+   Ok(image)
+}
+
+fn mutate_missing_caption(reference: &RgbaImage, components: &[Component]) -> Result<RgbaImage, String>
+{
+   let mut image = reference.clone();
+   fill(&mut image, component_rect(components, "caption", false)?, [247, 244, 238, 255])?;
+   Ok(image)
+}
+
+fn mutate_checker(reference: &RgbaImage, components: &[Component], missing: bool) -> Result<RgbaImage, String>
+{
+   let mut image = reference.clone();
+   let color = if missing { [247, 244, 238, 255] } else { [16, 225, 237, 255] };
+   fill(&mut image, component_rect(components, "image", false)?, color)?;
+   Ok(image)
+}
+
+fn mutate_wrong_color(reference: &RgbaImage, components: &[Component]) -> Result<RgbaImage, String>
+{
+   let mut image = reference.clone();
+   fill(&mut image, component_rect(components, "title", false)?, [210, 32, 190, 255])?;
+   Ok(image)
+}
+
+fn mutate_shifted_image(reference: &RgbaImage, components: &[Component]) -> Result<RgbaImage, String>
+{
+   let source_rect = bounded_rect(component_rect(components, "image", false)?, reference.width, reference.height)?;
+   let mut image = reference.clone();
+   fill(&mut image, source_rect, [247, 244, 238, 255])?;
+   let shift = 24_i32;
+   for y in 0 .. source_rect.height
+   {
+      for x in 0 .. source_rect.width
+      {
+         let destination_x = source_rect.x + x + shift;
+         if destination_x >= image.width as i32
+         {
+            continue;
+         }
+         let source_index = (((source_rect.y + y) as u32 * image.width + (source_rect.x + x) as u32) * 4) as usize;
+         let destination_index = (((source_rect.y + y) as u32 * image.width + destination_x as u32) * 4) as usize;
+         image.pixels[destination_index .. destination_index + 4]
+            .copy_from_slice(&reference.pixels[source_index .. source_index + 4]);
+      }
+   }
+   Ok(image)
+}
+
+fn mutate_half_image(reference: &RgbaImage, components: &[Component]) -> Result<RgbaImage, String>
+{
+   let rect = bounded_rect(component_rect(components, "image", false)?, reference.width, reference.height)?;
+   let mut image = reference.clone();
+   fill(&mut image, rect, [247, 244, 238, 255])?;
+   let half_width = rect.width / 2;
+   let half_height = rect.height / 2;
+   for y in 0 .. half_height
+   {
+      for x in 0 .. half_width
+      {
+         let source_x = rect.x + x * 2;
+         let source_y = rect.y + y * 2;
+         let source_index = ((source_y as u32 * image.width + source_x as u32) * 4) as usize;
+         let destination_index = (((rect.y + y) as u32 * image.width + (rect.x + x) as u32) * 4) as usize;
+         image.pixels[destination_index .. destination_index + 4]
+            .copy_from_slice(&reference.pixels[source_index .. source_index + 4]);
+      }
+   }
+   Ok(image)
+}
+
+fn mutate_bad_clipping(reference: &RgbaImage, components: &[Component]) -> Result<RgbaImage, String>
+{
+   let mut image = reference.clone();
+   let rect = component_rect(components, "row", true)?;
+   let corrupt = Rect {
+      x: rect.x,
+      y: (rect.y + rect.height - 48).max(rect.y),
+      width: rect.width,
+      height: 48.min(rect.height),
+   };
+   fill(&mut image, corrupt, [1, 1, 1, 255])?;
+   Ok(image)
+}
+
+fn mutate_corrupt_tile(reference: &RgbaImage) -> Result<RgbaImage, String>
+{
+   let mut image = reference.clone();
+   let origin_x = (image.width / 2 / TILE_SIDE) * TILE_SIDE;
+   let origin_y = (image.height / 2 / TILE_SIDE) * TILE_SIDE;
+   for y in origin_y .. (origin_y + TILE_SIDE).min(image.height)
+   {
+      for x in origin_x .. (origin_x + TILE_SIDE).min(image.width)
+      {
+         let index = ((y * image.width + x) * 4) as usize;
+         image.pixels[index] = 255 - image.pixels[index];
+         image.pixels[index + 1] = 255 - image.pixels[index + 1];
+         image.pixels[index + 2] = 255 - image.pixels[index + 2];
+      }
+   }
+   Ok(image)
+}
+
+fn adversarial_gate(reference: &RgbaImage, components: &[Component]) -> Result<Vec<AdversarialResult>, String>
+{
+   let mut results = Vec::with_capacity(9);
+   results.push(adversarial_result("missing-row", reference, mutate_missing_row(reference, components)?)?);
+   results.push(adversarial_result("sparse-missing-caption", reference, mutate_missing_caption(reference, components)?)?);
+   results.push(adversarial_result("wrong-checker-variant", reference, mutate_checker(reference, components, false)?)?);
+   results.push(adversarial_result("missing-image", reference, mutate_checker(reference, components, true)?)?);
+   results.push(adversarial_result("wrong-color", reference, mutate_wrong_color(reference, components)?)?);
+   results.push(adversarial_result("shifted-image", reference, mutate_shifted_image(reference, components)?)?);
+   results.push(adversarial_result("half-sized-image", reference, mutate_half_image(reference, components)?)?);
+   results.push(adversarial_result("bad-clipping", reference, mutate_bad_clipping(reference, components)?)?);
+   results.push(adversarial_result("localized-corrupt-tile", reference, mutate_corrupt_tile(reference)?)?);
+   Ok(results)
+}
+
+fn adversarial_result(name: &str, reference: &RgbaImage, mutation: RgbaImage) -> Result<AdversarialResult, String>
+{
+   let metrics = visual_metrics(reference, &mutation)?;
+   Ok(AdversarialResult {
+      mutation: name.to_string(),
+      rejected: !metrics.passes,
+      ssim: metrics.ssim,
+      worst_tile_rgb_mae: metrics.worst_tile_rgb_mae,
+   })
 }
 
 fn expected_order_index(phase: &str, session: u32, pair: u32, treatment: &str) -> Result<u32, String>
