@@ -2,7 +2,7 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const PAIRED_EXPERIMENT_SCHEMA_VERSION: u32 = 2;
+pub const PAIRED_EXPERIMENT_SCHEMA_VERSION: u32 = 3;
 pub const PAIRED_CONFIDENCE_TARGET_COVERAGE: f64 = 0.95;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -42,6 +42,7 @@ pub enum AcceptancePolicy
 {
    Performance,
    NoMaterialRegression,
+   NoiseControl,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -68,10 +69,10 @@ impl WorkloadKind
    {
       match self
       {
-         Self::WorkspaceCpu | Self::BrowserThroughput | Self::GpuTimestamps | Self::InputJourney => 15,
+         Self::WorkspaceCpu | Self::PhysicalDeviceFrames => 6,
+         Self::BrowserThroughput | Self::GpuTimestamps | Self::InputJourney => 15,
          Self::BrowserDisplayedFrames => 10,
          Self::BrowserStartup => 25,
-         Self::PhysicalDeviceFrames => 6,
       }
    }
 
@@ -262,52 +263,79 @@ pub fn analyze_paired_experiment(input: PairedExperimentInput) -> Result<PairedE
          reasons.push(String::from("candidate wins fewer than 80% of valid pairs"));
       }
    }
-   else if median_speedup_pct < -3.0
+   else if input.acceptance_policy == AcceptancePolicy::NoMaterialRegression
    {
-      reasons.push(String::from("candidate median regresses by more than 3%"));
+      if median_speedup_pct < -3.0
+      {
+         reasons.push(String::from("candidate median regresses by more than 3%"));
+      }
    }
-   let (baseline_adverse_tails, candidate_adverse_tails, adverse_tail_labels) = if input.lower_is_better
+   else if confidence_interval.bounds_pct[0] < -2.0 || confidence_interval.bounds_pct[1] > 2.0
    {
-      (
-         [baseline.p95, baseline.p99, baseline.peak],
-         [candidate.p95, candidate.p99, candidate.peak],
-         ["p95", "p99", "peak"],
-      )
+      reasons.push(String::from("noise-control exact interval leaves the -2%..2% range"));
+   }
+   if input.acceptance_policy == AcceptancePolicy::NoiseControl
+   {
+      for (label, baseline_value, candidate_value) in [
+         ("p95", baseline.p95, candidate.p95),
+         ("p99", baseline.p99, candidate.p99),
+      ]
+      {
+         if changes_by_fraction(baseline_value, candidate_value, 0.03)
+         {
+            reasons.push(format!("noise-control {label} moves by more than 3%"));
+         }
+      }
+      if changes_by_fraction(baseline.peak, candidate.peak, 0.05)
+      {
+         reasons.push(String::from("noise-control peak moves by more than 5%"));
+      }
    }
    else
    {
-      (
-         [baseline.p05, baseline.p01, baseline.minimum],
-         [candidate.p05, candidate.p01, candidate.minimum],
-         ["p05", "p01", "minimum"],
+      let (baseline_adverse_tails, candidate_adverse_tails, adverse_tail_labels) = if input.lower_is_better
+      {
+         (
+            [baseline.p95, baseline.p99, baseline.peak],
+            [candidate.p95, candidate.p99, candidate.peak],
+            ["p95", "p99", "peak"],
+         )
+      }
+      else
+      {
+         (
+            [baseline.p05, baseline.p01, baseline.minimum],
+            [candidate.p05, candidate.p01, candidate.minimum],
+            ["p05", "p01", "minimum"],
+         )
+      };
+      if regresses_by_fraction(
+         baseline_adverse_tails[0],
+         candidate_adverse_tails[0],
+         input.lower_is_better,
+         0.03,
       )
-   };
-   if regresses_by_fraction(
-      baseline_adverse_tails[0],
-      candidate_adverse_tails[0],
-      input.lower_is_better,
-      0.03,
-   )
-   {
-      reasons.push(format!("candidate {} regresses by more than 3%", adverse_tail_labels[0]));
-   }
-   if regresses_by_fraction(
-      baseline_adverse_tails[1],
-      candidate_adverse_tails[1],
-      input.lower_is_better,
-      0.03,
-   )
-   {
-      reasons.push(format!("candidate {} regresses by more than 3%", adverse_tail_labels[1]));
-   }
-   if regresses_by_fraction(
-      baseline_adverse_tails[2],
-      candidate_adverse_tails[2],
-      input.lower_is_better,
-      0.05,
-   )
-   {
-      reasons.push(format!("candidate {} regresses by more than 5%", adverse_tail_labels[2]));
+      {
+         reasons.push(format!("candidate {} regresses by more than 3%", adverse_tail_labels[0]));
+      }
+      if regresses_by_fraction(
+         baseline_adverse_tails[1],
+         candidate_adverse_tails[1],
+         input.lower_is_better,
+         0.03,
+      )
+      {
+         reasons.push(format!("candidate {} regresses by more than 3%", adverse_tail_labels[1]));
+      }
+      if regresses_by_fraction(
+         baseline_adverse_tails[2],
+         candidate_adverse_tails[2],
+         input.lower_is_better,
+         0.05,
+      )
+      {
+         reasons.push(format!("candidate {} regresses by more than 5%", adverse_tail_labels[2]));
+      }
    }
 
    Ok(PairedExperimentReport {
@@ -506,6 +534,18 @@ fn regresses_by_fraction(baseline: f64, candidate: f64, lower_is_better: bool, a
 {
    let regression = if lower_is_better { candidate - baseline } else { baseline - candidate };
    regression / baseline > allowed_fraction
+}
+
+fn changes_by_fraction(baseline: f64, candidate: f64, allowed_fraction: f64) -> bool
+{
+   if baseline == 0.0
+   {
+      candidate != 0.0
+   }
+   else
+   {
+      ((candidate - baseline) / baseline).abs() > allowed_fraction
+   }
 }
 
 fn exact_median_confidence_interval(speedups: &[f64]) -> Result<(f64, MedianConfidenceInterval)>

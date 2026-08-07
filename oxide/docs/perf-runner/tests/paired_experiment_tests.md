@@ -34,8 +34,8 @@ Call graph:
 - `valid_pairs_require_equal_sample_counts` requires symmetric A/B measured and
   required-warmup populations within each valid pair.
 - `capped_diagnostic_invalidation_preserves_balanced_publication` admits one
-  genuine environment-mismatch diagnostic while retaining the minimum
-  population and balanced survivors.
+  genuine environment-mismatch diagnostic while retaining balanced survivors
+  above the minimum population.
 - `invalid_pairs_do_not_bypass_evidence_validation` rejects malformed samples,
   environments, and artifact identities even when the pair has a genuine
   invalidation condition.
@@ -43,15 +43,18 @@ Call graph:
   free-text reasons and parses a persisted all-valid v1 pair whose reason is
   null.
 - `decisive_improvement_passes_statistical_gates` verifies all performance-policy gates and serialized direction for a clear lower-is-better win.
-- `exact_median_interval_reports_conservative_rank_coverage` requires a
-  15-pair population to report exact ranks 4 through 12 and 96.484375 percent
-  achieved coverage.
+- `workspace_cpu_minimum_supports_a_finite_exact_interval` rejects five
+  workspace pairs and requires the requirement-minimal six-pair population to
+  report exact ranks 1 through 6 and 96.875 percent achieved coverage.
 - `physical_device_minimum_supports_a_finite_exact_interval` rejects five
   physical-device pairs and proves the requirement-minimal six-pair population
   reports conservative ranks 1 through 6 with 96.875 percent coverage.
 - `ties_and_regressions_are_rejected` checks pair-win and median-speedup rejection.
 - `insufficient_and_mixed_inputs_are_rejected` rejects insufficient populations, environment drift, and stale binaries.
 - `no_material_regression_policy_accepts_ties_but_not_tail_regressions` protects lower-is-better upper-tail admission.
+- `noise_control_requires_symmetric_interval_and_pooled_tails` accepts bounded
+  current/current movement, then independently rejects an exact interval beyond
+  2%, pooled p95/p99 movement beyond 3%, and peak movement beyond 5%.
 - `higher_is_better_tail_direction_is_respected` requires p05, p01, and minimum reasons for a uniform throughput regression.
 - `higher_is_better_low_tail_regression_blocks_publication` keeps median and reported upper summaries identical while degrading only low samples, then requires publication rejection and exact JSON p05/p01/minimum/direction evidence.
 - `zero_baseline_median_is_rejected_before_report_serialization` rejects undefined relative speedup.
@@ -63,8 +66,9 @@ Call graph:
 
 ## Logic narrative
 
-The common fixture builds 15 balanced pairs with three measured samples on each
-side. Most tests scale complete distributions, while the isolated lower-tail
+The common fixture lists the requirement-minimal six-pair order explicitly as
+`AB`, `BA`, `BA`, `AB`, `AB`, `BA`, with three measured samples on each side.
+Most tests scale complete distributions, while the isolated lower-tail
 test changes only the lowest candidate sample in three pairs. Their medians do
 not move, and the combined candidate p50, p95, p99, and maximum remain identical
 to baseline. A rejection therefore proves that higher-is-better publication is
@@ -78,11 +82,17 @@ The boundary test uses constant distributions so a value exactly at the 3% or
 selects p95/p99/maximum reason names for lower-is-better and
 p05/p01/minimum names for higher-is-better.
 
-The exact-interval fixtures assign ordered one-through-fifteen percent pair
-speedups so their rank bounds are directly observable. The physical-device
-fixture supplies the required 2,000 raw samples per side across six independent
-pairs. It demonstrates why six is admitted as the smallest finite at-least-95
-percent interval while five is rejected, without claiming that the resulting
+The noise-control fixture uses the explicit six-pair schedule and twelve raw
+samples per side. Its accepted case spans negative and positive pair movement
+inside 2%. Separate cases keep pair medians fixed while moving pooled p95/p99 or
+one isolated peak, proving the symmetric current/current gate cannot be replaced
+by a one-sided no-regression decision.
+
+The exact-interval fixtures assign ordered one-through-six percent pair speedups
+so their rank bounds are directly observable. The physical-device fixture
+supplies the required 2,000 raw samples per side across six independent pairs.
+Both demonstrate why six is admitted as the smallest finite at-least-95 percent
+interval while five is rejected, without claiming that the resulting
 minimum-to-maximum interval is narrow.
 
 The invalidation tests expand the same deterministic fixture to 16 or 30 pairs.
@@ -91,8 +101,8 @@ pair, proving that typed reasons alone cannot authorize an order-selected
 result. Separate cases freeze the 10% ceiling, at-most-one survivor-order
 difference, equal within-pair sample populations, and validation of evidence
 that does not contribute to statistics. A 16-pair case invalidates one genuine
-environment mismatch and still publishes from 15 survivors, proving that the
-guardrails retain the intended diagnostic path. The schema test parses an
+environment mismatch and still publishes from 15 balanced survivors, proving
+that the guardrails retain the intended diagnostic path. The schema test parses an
 existing experiment-report pair to freeze null compatibility without rewriting
 historical reports.
 
@@ -154,6 +164,9 @@ cargo test --locked -p oxide-perf-runner --test paired_experiment_tests \
 
 ## Changelog
 
+- 2026-08-07: reduced the common workspace fixture to the explicit
+  requirement-minimal six-pair schedule and froze ranks 1 through 6 at 96.875
+  percent exact coverage, including symmetric current/current noise admission.
 - 2026-08-07: replaced simulated bootstrap coverage with exact 15-pair and
   minimum six-pair rank/coverage assertions and removed the final 100,000-draw
   CLI test path.

@@ -35,6 +35,8 @@ oxide-perf-runner --paired-analyze INPUT --paired-json-out OUTPUT
 - `PairInvalidationReason` is a closed, kebab-case JSON vocabulary:
   `missing-warmup-samples`, `missing-measured-samples`,
   `unequal-measured-sample-counts`, or `environment-mismatch`.
+- `AcceptancePolicy` is a closed, kebab-case JSON vocabulary: `performance`,
+  `no-material-regression`, or `noise-control`.
 - `DistributionSummary` serializes p50, p95, p99, peak, p05, p01, minimum,
   median absolute deviation, and coefficient of variation from one sorted raw
   population. `PairedExperimentReport.lower_is_better` preserves the direction
@@ -87,14 +89,19 @@ distribution-free for independent pairs from a continuous population; ties
 make its coverage conservative rather than invalid. There is no random seed,
 Monte Carlo approximation, or resampling loop in the confidence calculation.
 
-Fifteen valid pairs select ranks 4 through 12 with 96.484375 percent achieved
-coverage. The physical-device minimum is six pairs because ranks 1 through 6
-then provide 96.875 percent coverage, the smallest population with any finite
-two-sided interval at or above 95 percent. That requirement-minimal interval is
-deliberately conservative and spans the entire six-pair population; callers
-that need useful exclusion power must collect more independent pairs. Five
-pairs would cover only 93.75 percent even from minimum through maximum and are
-therefore rejected.
+Workspace CPU and physical-device studies use the requirement-minimal six valid
+pairs. Ranks 1 through 6 provide 96.875 percent coverage, the smallest
+population with any finite two-sided interval at or above 95 percent. The
+interval is deliberately conservative and spans the entire six-pair population:
+a performance claim must therefore improve by at least 2 percent in every pair
+to satisfy the confidence lower-bound gate. Five pairs would cover only 93.75
+percent even from minimum through maximum and are rejected. Higher-variance
+browser, GPU-timestamp, and input-journey workloads retain their larger minima.
+
+The six-pair workspace evidence manifest freezes its order explicitly as `AB`,
+`BA`, `BA`, `AB`, `AB`, `BA`. The retained seed field exists for schema and
+schedule-validation compatibility; neither acquisition nor the exact interval
+performs runtime randomization or resampling.
 
 Reported p50, p95, p99, peak, p05, p01, minimum, median absolute deviation, and
 coefficient of variation use all valid raw samples. Those report fields remain
@@ -105,9 +112,17 @@ quantiles/minimum.
 `Performance` acceptance requires at least 5% median speedup, a paired 95%
 confidence lower bound of at least 2%, and candidate wins in at least 80% of
 valid pairs. `NoMaterialRegression` permits median movement down to -3%.
-Both policies also enforce direction-correct adverse-tail regression limits.
+Both promotion policies also enforce direction-correct adverse-tail regression
+limits.
 
-Metric direction applies to every gate:
+`NoiseControl` is the mandatory current/current admission gate, not a promotion
+policy. The entire exact paired interval must stay within -2% through 2%, pooled
+p95 and p99 may move by at most 3% in either direction, and pooled peak may move
+by at most 5% in either direction. A zero baseline tail accepts only an equal
+zero candidate tail. These symmetric checks prevent an apparently favorable
+same-binary drift from authorizing a later A/B claim.
+
+Metric direction applies to every promotion-policy tail gate:
 
 - with `lower_is_better = true`, larger candidate p95, p99, or maximum values
   are regressions;
@@ -128,13 +143,14 @@ Direction and boundary behavior are covered externally because a
 higher-is-better candidate can retain identical median and upper-tail summaries
 while its lower service tail materially collapses.
 
-Schema version 2 hard-cuts the unpublished report from Monte Carlo bootstrap
-metadata to the exact median interval. There is no compatibility reader or
-migration path for the earlier unpublished input shape. Historical version-1
-reports remain unchanged as evidence of the method used when they were created;
-they are not rewritten or treated as version-2 output. Existing all-valid pair
-JSON remains readable in isolation because `"invalid_reason": null` still maps
-to no invalidation; arbitrary free-text reasons are rejected.
+Schema version 3 changes the workspace CPU admission minimum from fifteen pairs
+to the smallest population that supplies a finite exact interval at the 95
+percent target. There is no compatibility reader or migration path for earlier
+unpublished input shapes. Historical reports remain unchanged as evidence of
+the method used when they were created; they are not rewritten or treated as
+version-3 output. Existing all-valid pair JSON remains readable in isolation
+because `"invalid_reason": null` still maps to no invalidation; arbitrary
+free-text reasons are rejected.
 
 ## Runtime behavior
 
@@ -146,9 +162,9 @@ benchmark tooling and is not reachable from a shipping host or renderer path.
 ## Tests
 
 `oxide/crates/perf-runner/tests/paired_experiment_tests.rs` exercises the public
-reducer API for exact 15-pair ranks and coverage, the minimum finite six-pair
-physical-device interval, balanced ordering, improvement and regression decisions,
-no-material-regression tails,
+reducer API for the minimum finite six-pair workspace and physical-device
+intervals, balanced ordering, improvement and regression decisions,
+no-material-regression tails, symmetric current/current noise admission,
 both metric directions, an isolated higher-is-better lower-tail collapse with
 unchanged p50/p95/p99/maximum summaries, typed and bounded invalidation,
 survivor-order balance, equal per-pair sample counts, invalid-pair evidence
@@ -160,6 +176,10 @@ Tests are kept outside production source and documented in
 
 ## Changelog
 
+- 2026-08-07: advanced the unpublished schema to version 3, reduced workspace
+  CPU studies to the requirement-minimal six balanced pairs, froze the explicit
+  three-AB/three-BA evidence order without resampling, and added symmetric
+  current/current noise admission.
 - 2026-08-07: replaced the fixed-seed 100,000-resample approximation with an
   exact binomial median interval, persisted achieved coverage and rank bounds,
   raised physical-device evidence from five to the requirement-minimal six

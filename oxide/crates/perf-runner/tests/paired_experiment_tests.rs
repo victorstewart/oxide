@@ -13,6 +13,14 @@ const TREE_SHA: &str = "2222222222222222222222222222222222222222";
 const INSTRUMENTATION_SHA: &str = "3333333333333333333333333333333333333333333333333333333333333333";
 const BINARY_A_SHA: &str = "4444444444444444444444444444444444444444444444444444444444444444";
 const BINARY_B_SHA: &str = "5555555555555555555555555555555555555555555555555555555555555555";
+const REQUIREMENT_MINIMAL_SCHEDULE: [PairOrder; 6] = [
+   PairOrder::Ab,
+   PairOrder::Ba,
+   PairOrder::Ba,
+   PairOrder::Ab,
+   PairOrder::Ab,
+   PairOrder::Ba,
+];
 
 fn environment() -> EnvironmentFingerprint
 {
@@ -34,8 +42,7 @@ fn environment() -> EnvironmentFingerprint
 fn input(candidate_factor: f64) -> PairedExperimentInput
 {
    let seed = 0x5eed_u64;
-   let orders = balanced_pair_order(seed, 15);
-   let pairs = orders
+   let pairs = REQUIREMENT_MINIMAL_SCHEDULE
       .into_iter()
       .enumerate()
       .map(|(index, order)| SamplePair {
@@ -102,6 +109,21 @@ fn constant_input(baseline: f64, candidate: f64, lower_is_better: bool) -> Paire
    input
 }
 
+fn noise_input(speedups: [f64; 6]) -> PairedExperimentInput
+{
+   let mut input = input(1.0);
+   input.acceptance_policy = AcceptancePolicy::NoiseControl;
+   for (pair, speedup) in input.pairs.iter_mut().zip(speedups)
+   {
+      let candidate = 100.0 - speedup;
+      pair.warmup_samples_a = vec![100.0];
+      pair.warmup_samples_b = vec![candidate];
+      pair.samples_a = vec![100.0; 12];
+      pair.samples_b = vec![candidate; 12];
+   }
+   input
+}
+
 fn input_with_pair_count(candidate_factor: f64, pair_count: usize) -> PairedExperimentInput
 {
    let mut expanded = input(candidate_factor);
@@ -150,6 +172,7 @@ fn balanced_order_is_deterministic_and_balanced()
    assert_eq!(first, second);
    assert_eq!(first.iter().filter(|order| **order == PairOrder::Ab).count(), 8);
    assert_eq!(first.iter().filter(|order| **order == PairOrder::Ba).count(), 8);
+   assert_eq!(balanced_pair_order(0x5eed, 6), REQUIREMENT_MINIMAL_SCHEDULE);
 }
 
 #[test]
@@ -295,27 +318,31 @@ fn decisive_improvement_passes_statistical_gates()
    let report = analyze_paired_experiment(input(0.90)).expect("analyze decisive improvement");
    assert!(report.decision.accepted, "{:?}", report.decision.reasons);
    assert!(report.lower_is_better);
-   assert_eq!(report.decision.pair_wins, 15);
+   assert_eq!(report.decision.pair_wins, 6);
    assert!(report.decision.median_speedup_pct > 9.9);
    assert!(report.decision.confidence_interval.bounds_pct[0] > 9.9);
-   assert_eq!(report.baseline_sample_count, 45);
-   assert_eq!(report.candidate_sample_count, 45);
-   assert!((report.baseline.p50 - 11.07).abs() < f64::EPSILON);
+   assert_eq!(report.baseline_sample_count, 18);
+   assert_eq!(report.candidate_sample_count, 18);
+   assert!((report.baseline.p50 - 11.025).abs() < 1e-12);
 }
 
 #[test]
-fn exact_median_interval_reports_conservative_rank_coverage()
+fn workspace_cpu_minimum_supports_a_finite_exact_interval()
 {
+   let too_short = ranked_speedup_input(5, WorkloadKind::WorkspaceCpu, 1);
+   let error = analyze_paired_experiment(too_short).expect_err("reject five-pair workspace CPU interval");
+   assert_eq!(error.to_string(), "5 valid pairs are below the WorkspaceCpu minimum of 6");
+
    let report = analyze_paired_experiment(
-      ranked_speedup_input(15, WorkloadKind::WorkspaceCpu, 1),
-   ).expect("analyze exact 15-pair confidence interval");
+      ranked_speedup_input(6, WorkloadKind::WorkspaceCpu, 1),
+   ).expect("analyze minimum workspace CPU interval");
    let interval = report.decision.confidence_interval;
    assert_eq!(interval.method, ConfidenceIntervalMethod::ExactBinomialMedian);
    assert_eq!(interval.target_coverage, 0.95);
-   assert_eq!(interval.achieved_coverage, 0.964_843_75);
-   assert_eq!([interval.lower_rank, interval.upper_rank], [4, 12]);
-   assert!((interval.bounds_pct[0] - 4.0).abs() < 1e-12);
-   assert!((interval.bounds_pct[1] - 12.0).abs() < 1e-12);
+   assert_eq!(interval.achieved_coverage, 0.968_75);
+   assert_eq!([interval.lower_rank, interval.upper_rank], [1, 6]);
+   assert!((interval.bounds_pct[0] - 1.0).abs() < 1e-12);
+   assert!((interval.bounds_pct[1] - 6.0).abs() < 1e-12);
 }
 
 #[test]
@@ -379,10 +406,43 @@ fn no_material_regression_policy_accepts_ties_but_not_tail_regressions()
 
    let mut regression = input(1.0);
    regression.acceptance_policy = AcceptancePolicy::NoMaterialRegression;
-   regression.pairs[14].samples_b[2] *= 2.0;
+   regression.pairs[5].samples_b[2] *= 2.0;
    let report = analyze_paired_experiment(regression).expect("analyze tail regression");
    assert!(!report.decision.accepted);
    assert!(report.decision.reasons.iter().any(|reason| reason.contains("p99") || reason.contains("peak")));
+}
+
+#[test]
+fn noise_control_requires_symmetric_interval_and_pooled_tails()
+{
+   let bounded = analyze_paired_experiment(noise_input([-1.5, -1.0, -0.5, 0.5, 1.0, 1.5]))
+      .expect("analyze bounded current/current noise");
+   assert!(bounded.decision.accepted, "{:?}", bounded.decision.reasons);
+   assert_eq!(bounded.acceptance_policy, AcceptancePolicy::NoiseControl);
+
+   let outside = analyze_paired_experiment(noise_input([-2.01, 0.0, 0.0, 0.0, 0.0, 0.0]))
+      .expect("analyze out-of-range paired noise");
+   assert!(!outside.decision.accepted);
+   assert!(outside.decision.reasons.iter().any(|reason| reason.contains("exact interval")));
+
+   let mut tails = noise_input([0.0; 6]);
+   for pair in &mut tails.pairs
+   {
+      pair.samples_b[11] = 104.0;
+   }
+   let tails = analyze_paired_experiment(tails).expect("analyze pooled tail noise");
+   assert!(!tails.decision.accepted);
+   assert!(tails.decision.reasons.iter().any(|reason| reason.contains("p95")));
+   assert!(tails.decision.reasons.iter().any(|reason| reason.contains("p99")));
+   assert!(!tails.decision.reasons.iter().any(|reason| reason.contains("peak")));
+
+   let mut peak = noise_input([0.0; 6]);
+   peak.pairs[0].samples_b[11] = 106.0;
+   let peak = analyze_paired_experiment(peak).expect("analyze isolated peak noise");
+   assert!(!peak.decision.accepted);
+   assert!(peak.decision.reasons.iter().any(|reason| reason.contains("peak")));
+   assert!(!peak.decision.reasons.iter().any(|reason| reason.contains("p95")));
+   assert!(!peak.decision.reasons.iter().any(|reason| reason.contains("p99")));
 }
 
 #[test]
@@ -544,7 +604,7 @@ fn shared_cli_analyzes_and_persists_raw_evidence()
    assert_eq!(report["decision"]["accepted"].as_bool(), Some(true));
    assert!(report["pairs"][0]["warmup_samples_a"].is_array());
    assert_eq!(report["decision"]["confidence_interval"]["method"], "exact-binomial-median");
-   assert_eq!(report["decision"]["confidence_interval"]["achieved_coverage"], 0.964_843_75);
+   assert_eq!(report["decision"]["confidence_interval"]["achieved_coverage"], 0.968_75);
    assert!(report.get("bootstrap_resamples").is_none());
    fs::remove_dir_all(root).expect("remove temp root");
 }
